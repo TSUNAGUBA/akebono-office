@@ -1,0 +1,211 @@
+@import "tailwindcss";
+
+/* =========================================================
+   AKEBONO Office デザイントークン（唯一の CSS SoT）
+   設計: .ai-native/outputs/phase5/screen-design.md §3
+   方針: 白ベース + 低彩度グレー + 単一ブランドアクセント。
+        色数を増やさない。影より罫線で面を区切る。
+   ========================================================= */
+:root {
+  /* 面 */
+  --c-page: #f6f7f8;
+  --c-surface: #ffffff;
+  --c-surface-soft: #fafbfc;
+
+  /* 文字 */
+  --c-ink: #111418;
+  --c-sub: #4b5563;
+  --c-muted: #9aa1ab;
+
+  /* 罫線 */
+  --c-line: #e5e7eb;
+  --c-line-strong: #d3d7dd;
+
+  /* ブランド（akebono = 夜明けの青） */
+  --c-brand: #0f6bd7;
+  --c-brand-dark: #0b54aa;
+  --c-brand-soft: #e8f1fc;
+
+  /* ステータス（系列色への転用禁止） */
+  --c-ok: #12915b;
+  --c-ok-soft: #e3f4ec;
+  --c-warn: #c77d00;
+  --c-warn-soft: #fdf3e0;
+  --c-serious: #d96038;
+  --c-serious-soft: #fcece5;
+  --c-crit: #cf3341;
+  --c-crit-soft: #fbe8ea;
+  --c-info: #4c66c4;
+  --c-info-soft: #eaeefa;
+
+  /* チャート系列（固定順。循環生成禁止） */
+  --series-1: #2a78d6;
+  --series-2: #1baf7a;
+  --series-3: #eda100;
+  --series-4: #7a5af5;
+  --series-5: #e2647f;
+  --series-6: #4fb3c9;
+
+  /* レイアウト */
+  --sidebar-w: 232px;
+  --sidebar-w-slim: 56px;
+  --header-h: 52px;
+  --bottomnav-h: 56px;
+  --radius-card: 10px;
+  --radius-ctl: 8px;
+}
+
+/* Tailwind v4 ユーティリティへのブリッジ（text-ink, bg-surface 等） */
+@theme inline {
+  --color-page: var(--c-page);
+  --color-surface: var(--c-surface);
+  --color-surface-soft: var(--c-surface-soft);
+  --color-ink: var(--c-ink);
+  --color-sub: var(--c-sub);
+  --color-muted: var(--c-muted);
+  --color-line: var(--c-line);
+  --color-line-strong: var(--c-line-strong);
+  --color-brand: var(--c-brand);
+  --color-brand-dark: var(--c-brand-dark);
+  --color-brand-soft: var(--c-brand-soft);
+  --color-ok: var(--c-ok);
+  --color-ok-soft: var(--c-ok-soft);
+  --color-warn: var(--c-warn);
+  --color-warn-soft: var(--c-warn-soft);
+  --color-serious: var(--c-serious);
+  --color-serious-soft: var(--c-serious-soft);
+  --color-crit: var(--c-crit);
+  --color-crit-soft: var(--c-crit-soft);
+  --color-info: var(--c-info);
+  --color-info-soft: var(--c-info-soft);
+}
+
+html {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Hiragino Kaku Gothic ProN", "Noto Sans JP", Meiryo, sans-serif;
+  font-feature-settings: 'palt';
+  color: var(--c-ink);
+  background: var(--c-page);
+}
+
+body {
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+/* ---------- 共通コンポーネントクラス ---------- */
+
+.card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-line);
+  border-radius: var(--radius-card);
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: var(--radius-ctl);
+  border: 1px solid var(--c-line-strong);
+  background: var(--c-surface);
+  color: var(--c-ink);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.12s, border-color 0.12s;
+  white-space: nowrap;
+}
+.btn:hover { background: var(--c-surface-soft); border-color: var(--c-muted); }
+.btn:focus-visible { outline: 2px solid var(--c-brand); outline-offset: 1px; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.btn-primary {
+  background: var(--c-brand);
+  border-color: var(--c-brand);
+  color: #fff;
+}
+.btn-primary:hover { background: var(--c-brand-dark); border-color: var(--c-brand-dark); }
+
+.btn-danger {
+  background: var(--c-crit);
+  border-color: var(--c-crit);
+  color: #fff;
+}
+.btn-danger:hover { background: #b02836; border-color: #b02836; }
+
+.btn-ghost {
+  border-color: transparent;
+  background: transparent;
+}
+.btn-ghost:hover { background: var(--c-brand-soft); border-color: transparent; }
+
+.btn-lg { height: 44px; padding: 0 20px; font-size: 14px; }
+.btn-sm { height: 26px; padding: 0 8px; font-size: 12px; }
+
+.input, .select, .textarea {
+  width: 100%;
+  border: 1px solid var(--c-line-strong);
+  border-radius: var(--radius-ctl);
+  background: var(--c-surface);
+  color: var(--c-ink);
+  font-size: 13px;
+  padding: 6px 10px;
+  min-height: 32px;
+}
+.input:focus-visible, .select:focus-visible, .textarea:focus-visible {
+  outline: 2px solid var(--c-brand);
+  outline-offset: -1px;
+}
+.input::placeholder, .textarea::placeholder { color: var(--c-muted); }
+.textarea { resize: vertical; min-height: 72px; }
+
+.label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-sub);
+  margin-bottom: 4px;
+}
+
+.link { color: var(--c-brand); }
+.link:hover { text-decoration: underline; }
+
+/* テーブル（UiDataTable の PC 表示） */
+.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+.tbl th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--c-muted);
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--c-line);
+  background: var(--c-surface-soft);
+  position: sticky;
+  top: 0;
+  white-space: nowrap;
+  z-index: 1;
+}
+.tbl td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--c-line);
+  vertical-align: middle;
+}
+.tbl tbody tr { height: 36px; }
+.tbl tbody tr:hover { background: var(--c-brand-soft); }
+.tbl tbody tr.is-clickable { cursor: pointer; }
+
+/* スクロールバー（内部スクロール領域） */
+.scroll-slim { scrollbar-width: thin; }
+
+/* フォーカスの既定可視化 */
+:focus-visible { outline: 2px solid var(--c-brand); outline-offset: 1px; }
+
+/* 画面遷移のちらつき防止 */
+.page-enter-active, .page-leave-active { transition: opacity 0.1s; }
+.page-enter-from, .page-leave-to { opacity: 0; }

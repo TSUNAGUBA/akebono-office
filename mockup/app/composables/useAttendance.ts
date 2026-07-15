@@ -1,0 +1,208 @@
+/**
+ * 勤怠（打刻・日次/月次集計・36 協定アラート・修正申請）
+ * 集計ロジックは utils/attendance-calc.ts の純粋関数に委譲する。
+ */
+import type { PunchKind, PunchRecord, Result } from '~/types/domain'
+import {
+  calcWorkedMinutes, judgeArticle36, requiredBreakMinutes, splitBuckets,
+  type Article36Alert, type MonthOtRecord,
+} from '~/utils/attendance-calc'
+import { addDays, daysInMonth, toDateKey, weekdayOf } from '~/utils/format'
+import { PUNCH_KIND_LABELS } from '~/utils/labels'
+
+export type PunchState = 'before' | 'working' | 'breaking' | 'done'
+
+export interface DaySummary {
+  date: string
+  workMinutes: number
+  breakMinutes: number
+  nightMinutes: number
+  buckets: ReturnType<typeof splitBuckets>
+  breakShortage: number
+  punches: PunchRecord[]
+}
+
+export function useAttendance() {
+  const { tbl, commit, nextId } = useMockDb()
+  const { currentUser } = useCurrentUser()
+  const { notifyAdmins } = useNotifications()
+  const punches = tbl('punches')
+  const fixRequests = tbl('attendanceFixRequests')
+  const rules = tbl('attendanceRules')
+
+  function ruleFor(memberId: string) {
+    const members = tbl('members')
+    const m = members.value.find(x => x.id === memberId)
+    return rules.value.find(r => r.active && m && r.appliesTo.includes(m.employmentType)) ?? rules.value[0]
+  }
+
+  function punchesOf(memberId: string, date: string): PunchRecord[] {
+    return punches.value
+      .filter(p => p.memberId === memberId && p.date === date)
+      .sort((a, b) => a.at.localeCompare(b.at))
+  }
+
+  /** 打刻の状態機械（未出勤→勤務中⇄休憩中→退勤済） */
+  function punchState(memberId: string, date: string): PunchState {
+    const rows = punchesOf(memberId, date)
+    const last = rows[rows.length - 1]
+    if (!last) return 'before'
+    if (last.kind === 'out') return 'done'
+    if (last.kind === 'break_start') return 'breaking'
+    return 'working'
+  }
+
+  const ALLOWED: Record<PunchState, PunchKind[]> = {
+    before: ['in'],
+    working: ['break_start', 'out'],
+    breaking: ['break_end'],
+    done: [],
+  }
+
+  /** 打刻する（状態機械ガード付き。二重打刻は no-op エラー） */
+  function punch(kind: PunchKind, source: 'web' | 'mobile' = 'web'): Result {
+    const memberId = currentUser.value.id
+    const date = toDateKey(new Date())
+    const state = punchState(memberId, date)
+    if (!ALLOWED[state].includes(kind)) {
+      return { ok: false, error: { code: 'AKO-ATT-001', message: `現在の状態では「${PUNCH_KIND_LABELS[kind]}」はできません` } }
+    }
+    const id = nextId('punches', 'pch-u')
+    punches.value = [...punches.value, {
+      id, memberId, date, kind,
+      at: new Date().toISOString(),
+      source, fixedFrom: null, fixReason: null, approvedBy: null,
+    }]
+    commit()
+    return { ok: true, id }
+  }
+
+  /** 日次サマリ（6 バケット分解） */
+  function daySummary(memberId: string, date: string, monthOtSoFar = 0): DaySummary {
+    const rows = punchesOf(memberId, date)
+    const { workMinutes, breakMinutes, nightMinutes } = calcWorkedMinutes(rows)
+    const rule = ruleFor(memberId)
+    const scheduled = rule ? Math.max(0, toMin(rule.workEnd) - toMin(rule.workStart) - rule.breakMinutes) : 480
+    const isLegalHoliday = weekdayOf(date) === (rule?.legalHolidayWeekday ?? 0)
+    const buckets = splitBuckets({
+      workMinutes, scheduledMinutes: scheduled, nightMinutes, isLegalHoliday,
+      monthNonStatutoryOtSoFar: monthOtSoFar,
+    })
+    const required = requiredBreakMinutes(workMinutes)
+    return {
+      date, workMinutes, breakMinutes, nightMinutes, buckets,
+      breakShortage: Math.max(0, required - breakMinutes),
+      punches: rows,
+    }
+  }
+
+  /** 月次サマリ（日別 + 合計） */
+  function monthSummary(memberId: string, month: string) {
+    const [y, m] = [Number(month.slice(0, 4)), Number(month.slice(5, 7))]
+    const days: DaySummary[] = []
+    let otSoFar = 0
+    for (let d = 1; d <= daysInMonth(y, m); d++) {
+      const date = `${month}-${String(d).padStart(2, '0')}`
+      const s = daySummary(memberId, date, otSoFar)
+      otSoFar += s.buckets.nonStatutoryOt + s.buckets.over60Ot
+      days.push(s)
+    }
+    const total = days.reduce((acc, s) => ({
+      scheduled: acc.scheduled + s.buckets.scheduled,
+      statutoryOt: acc.statutoryOt + s.buckets.statutoryOt,
+      nonStatutoryOt: acc.nonStatutoryOt + s.buckets.nonStatutoryOt,
+      over60Ot: acc.over60Ot + s.buckets.over60Ot,
+      night: acc.night + s.buckets.night,
+      legalHoliday: acc.legalHoliday + s.buckets.legalHoliday,
+    }), { scheduled: 0, statutoryOt: 0, nonStatutoryOt: 0, over60Ot: 0, night: 0, legalHoliday: 0 })
+    return { days, total, workDays: days.filter(s => s.workMinutes > 0).length }
+  }
+
+  /** 36 協定アラート（直近 6 ヶ月） */
+  function alerts(memberId: string): Article36Alert[] {
+    const now = new Date()
+    const months: MonthOtRecord[] = []
+    let over45 = 0
+    for (let back = 5; back >= 0; back--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - back, 1)
+      const month = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+      const s = monthSummary(memberId, month)
+      const rec = {
+        month,
+        nonStatutoryOtMin: s.total.nonStatutoryOt + s.total.over60Ot,
+        legalHolidayMin: s.total.legalHoliday,
+      }
+      months.push(rec)
+      if (rec.nonStatutoryOtMin >= 45 * 60) over45++
+    }
+    return judgeArticle36(months, over45)
+  }
+
+  /** 残業アラートをエスカレーションへ連携（補助処理・冪等） */
+  function raiseOvertimeEscalations(memberId: string): void {
+    const found = alerts(memberId)
+    if (found.length === 0) return
+    const { raise } = useEscalations()
+    const month = toDateKey(new Date()).slice(0, 7)
+    raise({
+      reason: 'overtime_alert',
+      targetMemberId: memberId,
+      context: `36協定アラート: ${found.map(a => a.message).join(' / ')}`,
+      dedupeKey: `overtime:${memberId}:${month}`,
+    })
+  }
+
+  /** 打刻修正申請（理由必須・承認後に反映） */
+  function requestFix(input: { date: string; kind: PunchKind; requestedAt: string; reason: string }): Result {
+    if (!input.reason.trim()) {
+      return { ok: false, error: { code: 'AKO-ATT-002', message: '修正理由を入力してください（客観的記録の担保）' } }
+    }
+    const id = nextId('attendanceFixRequests', 'fix')
+    fixRequests.value = [...fixRequests.value, {
+      id, memberId: currentUser.value.id,
+      date: input.date, kind: input.kind, requestedAt: input.requestedAt,
+      reason: input.reason, status: 'pending', decidedBy: null,
+    }]
+    commit()
+    notifyAdmins('approval', '打刻修正申請', `${currentUser.value.name} さんから ${input.date} の修正申請`, '/attendance')
+    return { ok: true, id }
+  }
+
+  /** 修正申請の承認/却下（管理者）。承認時に修正打刻を追記（元打刻は保全） */
+  function decideFix(fixId: string, action: 'approved' | 'rejected'): Result {
+    const req = fixRequests.value.find(f => f.id === fixId)
+    if (!req || req.status !== 'pending') {
+      return { ok: false, error: { code: 'AKO-ATT-003', message: 'この申請は処理済みです' } }
+    }
+    if (action === 'approved') {
+      const existing = punchesOf(req.memberId, req.date).find(p => p.kind === req.kind)
+      punches.value = [...punches.value, {
+        id: nextId('punches', 'pch-u'),
+        memberId: req.memberId, date: req.date, kind: req.kind,
+        at: req.requestedAt, source: 'fix',
+        fixedFrom: existing?.at ?? null, fixReason: req.reason,
+        approvedBy: currentUser.value.id,
+      }]
+      // 修正打刻が追加された場合、旧打刻は履歴として残し、集計は最新の同種打刻を採用しない
+      // （モック簡略化: fix は同日同種の打刻を置換扱いにするため旧レコードを除外）
+      if (existing) {
+        punches.value = punches.value.filter(p => p.id !== existing.id)
+      }
+    }
+    fixRequests.value = fixRequests.value.map(f => f.id === fixId
+      ? { ...f, status: action, decidedBy: currentUser.value.id }
+      : f)
+    commit()
+    return { ok: true, id: fixId }
+  }
+
+  return {
+    punches, fixRequests, ruleFor, punchesOf, punchState, punch,
+    daySummary, monthSummary, alerts, raiseOvertimeEscalations, requestFix, decideFix,
+  }
+}
+
+function toMin(hhmm: string): number {
+  const [h, m] = hhmm.split(':').map(Number)
+  return (h ?? 0) * 60 + (m ?? 0)
+}

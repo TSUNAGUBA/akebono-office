@@ -1,0 +1,88 @@
+import { describe, expect, it } from 'vitest'
+import {
+  judgeArticle36, leaveGrantDays, requiredBreakMinutes, splitBuckets,
+} from '~/utils/attendance-calc'
+
+describe('splitBuckets（6 バケット分解）', () => {
+  it('所定内のみ（8h 勤務・所定 8h）', () => {
+    const b = splitBuckets({ workMinutes: 480, scheduledMinutes: 480, nightMinutes: 0, isLegalHoliday: false, monthNonStatutoryOtSoFar: 0 })
+    expect(b).toEqual({ scheduled: 480, statutoryOt: 0, nonStatutoryOt: 0, over60Ot: 0, night: 0, legalHoliday: 0 })
+  })
+
+  it('法定内残業（所定 7h・勤務 8h → 1h は割増なし残業）', () => {
+    const b = splitBuckets({ workMinutes: 480, scheduledMinutes: 420, nightMinutes: 0, isLegalHoliday: false, monthNonStatutoryOtSoFar: 0 })
+    expect(b.scheduled).toBe(420)
+    expect(b.statutoryOt).toBe(60)
+    expect(b.nonStatutoryOt).toBe(0)
+  })
+
+  it('法定外残業（所定 8h・勤務 10h → 2h が 25% 残業）', () => {
+    const b = splitBuckets({ workMinutes: 600, scheduledMinutes: 480, nightMinutes: 0, isLegalHoliday: false, monthNonStatutoryOtSoFar: 0 })
+    expect(b.nonStatutoryOt).toBe(120)
+    expect(b.over60Ot).toBe(0)
+  })
+
+  it('月 60h 超過分は 50% バケットへ振り分ける', () => {
+    const b = splitBuckets({ workMinutes: 600, scheduledMinutes: 480, nightMinutes: 0, isLegalHoliday: false, monthNonStatutoryOtSoFar: 59 * 60 })
+    expect(b.nonStatutoryOt).toBe(60) // 60h までの残り 1h
+    expect(b.over60Ot).toBe(60) // 超過 1h
+  })
+
+  it('法定休日は全時間が休日労働（時間外の概念なし）', () => {
+    const b = splitBuckets({ workMinutes: 540, scheduledMinutes: 480, nightMinutes: 30, isLegalHoliday: true, monthNonStatutoryOtSoFar: 0 })
+    expect(b.legalHoliday).toBe(540)
+    expect(b.nonStatutoryOt).toBe(0)
+    expect(b.night).toBe(30)
+  })
+})
+
+describe('requiredBreakMinutes（労基法 34 条）', () => {
+  it('6h ちょうどは休憩不要', () => expect(requiredBreakMinutes(360)).toBe(0))
+  it('6h 超は 45 分', () => expect(requiredBreakMinutes(361)).toBe(45))
+  it('8h 超は 60 分', () => expect(requiredBreakMinutes(481)).toBe(60))
+})
+
+describe('judgeArticle36（36 協定判定）', () => {
+  const month = (m: string, otH: number, holH = 0) => ({
+    month: m, nonStatutoryOtMin: otH * 60, legalHolidayMin: holH * 60,
+  })
+
+  it('45h の 80% で警告', () => {
+    const alerts = judgeArticle36([month('2026-07', 37)], 0)
+    expect(alerts.some(a => a.code === 'AKO-ATT-A45W')).toBe(true)
+  })
+
+  it('45h 超で重大アラート', () => {
+    const alerts = judgeArticle36([month('2026-07', 46)], 1)
+    expect(alerts.some(a => a.code === 'AKO-ATT-A45')).toBe(true)
+  })
+
+  it('時間外+休日の単月 100h 到達で違反', () => {
+    const alerts = judgeArticle36([month('2026-07', 80, 20)], 1)
+    expect(alerts.some(a => a.code === 'AKO-ATT-A100')).toBe(true)
+  })
+
+  it('2〜6 ヶ月平均 80h 超を全組み合わせで検出（2 ヶ月平均のケース）', () => {
+    const alerts = judgeArticle36([month('2026-06', 90), month('2026-07', 75)], 2)
+    expect(alerts.some(a => a.code === 'AKO-ATT-A80')).toBe(true)
+  })
+
+  it('平均 80h 以下なら平均アラートなし', () => {
+    const alerts = judgeArticle36([month('2026-06', 40), month('2026-07', 40)], 0)
+    expect(alerts.some(a => a.code === 'AKO-ATT-A80')).toBe(false)
+  })
+
+  it('45h 超が年 6 回で上限アラート', () => {
+    const alerts = judgeArticle36([month('2026-07', 10)], 6)
+    expect(alerts.some(a => a.code === 'AKO-ATT-A6C')).toBe(true)
+  })
+})
+
+describe('leaveGrantDays（労基法 39 条 付与テーブル）', () => {
+  it('週 5 日・勤続 0.5 年 → 10 日', () => expect(leaveGrantDays(5, 40, 0.5)).toBe(10))
+  it('週 5 日・勤続 6.5 年以上 → 20 日', () => expect(leaveGrantDays(5, 40, 7.5)).toBe(20))
+  it('週 4 日でも週 30h 以上なら通常付与（判定は 30h が先）', () => expect(leaveGrantDays(4, 32, 0.5)).toBe(10))
+  it('週 3 日・週 18h・勤続 0.5 年 → 比例付与 5 日', () => expect(leaveGrantDays(3, 18, 0.5)).toBe(5))
+  it('週 1 日・勤続 4.5 年 → 3 日', () => expect(leaveGrantDays(1, 6, 4.5)).toBe(3))
+  it('勤続 0.5 年未満は 0 日', () => expect(leaveGrantDays(5, 40, 0.4)).toBe(0))
+})
