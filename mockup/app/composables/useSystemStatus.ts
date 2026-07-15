@@ -127,7 +127,7 @@ export function useSystemStatus() {
     if (!input.title.trim()) {
       return { ok: false, error: { code: 'AKO-STS-002', message: 'タイトルを入力してください' } }
     }
-    const now = new Date().toISOString()
+    const now = nowJstIso()
     const id = nextId('serviceIncidents', 'inc')
     incidents.value = [...incidents.value, {
       id,
@@ -167,7 +167,7 @@ export function useSystemStatus() {
     if (!body.trim()) {
       return { ok: false, error: { code: 'AKO-STS-005', message: '状況の説明を入力してください' } }
     }
-    const now = new Date().toISOString()
+    const now = nowJstIso()
     incidents.value = incidents.value.map(i => i.id === id
       ? {
           ...i,

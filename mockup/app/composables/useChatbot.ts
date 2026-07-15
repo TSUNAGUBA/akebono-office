@@ -40,7 +40,7 @@ export function useChatbot() {
     messages.value = [...messages.value, {
       ...msg,
       id: nextId('chatMessages', 'ch'),
-      at: new Date().toISOString(),
+      at: nowJstIso(),
     }]
     commit()
   }
@@ -100,7 +100,7 @@ export function useChatbot() {
       reason: 'low_confidence',
       targetMemberId: currentUser.value.id,
       context: `チャットボットが回答できなかった質問: 「${question}」`,
-      dedupeKey: `chatbot:${currentUser.value.id}:${toDateKey(new Date())}`,
+      dedupeKey: `chatbot:${currentUser.value.id}:${todayJst()}`,
     })
   }
 
@@ -134,7 +134,7 @@ export function useChatbot() {
       }
     }
 
-    const today = toDateKey(new Date())
+    const today = todayJst()
     const grants = tbl('leaveGrants').value
       .filter(g => g.memberId === currentUser.value.id && g.grantDate <= today && g.expireDate >= today)
       .sort((a, b) => a.expireDate.localeCompare(b.expireDate))
@@ -168,7 +168,7 @@ export function useChatbot() {
 
   /** b) 残業・勤怠: useAttendance().monthSummary で当月実績を要約 */
   function answerOvertime(): BotAnswer {
-    const month = toDateKey(new Date()).slice(0, 7)
+    const month = todayJst().slice(0, 7)
     const s = monthSummary(currentUser.value.id, month)
     const otMin = s.total.statutoryOt + s.total.nonStatutoryOt + s.total.over60Ot
     const alertMin = s.total.nonStatutoryOt + s.total.over60Ot

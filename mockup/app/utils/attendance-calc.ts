@@ -63,39 +63,49 @@ export function calcWorkedMinutes(punches: PunchRecord[]): { workMinutes: number
   let night = 0
   let outSeen = false
 
-  const nightOverlap = (from: Date, to: Date): number => {
-    // 22:00-24:00 と 0:00-5:00 の重なりを分で返す
+  // 深夜帯（22:00-24:00 / 0:00-5:00）との重なりを分で返す。
+  // 打刻はウォールクロック（+09:00 の壁時計時刻）が正のため、
+  // 実行環境の TZ に依存する Date#getHours ではなく文字列の時刻を使う。
+  const clockMinOf = (iso: string): number => {
+    const m = iso.match(/T(\d{2}):(\d{2})/)
+    return m ? Number(m[1]) * 60 + Number(m[2]) : 0
+  }
+  const nightOverlap = (fromIso: string, durationMin: number): number => {
+    const start = clockMinOf(fromIso)
     let total = 0
-    const cur = new Date(from)
-    while (cur < to) {
-      const h = cur.getHours()
+    for (let i = 0; i < durationMin; i++) {
+      const h = Math.floor(((start + i) % 1440) / 60)
       if (h >= NIGHT_START_HOUR || h < NIGHT_END_HOUR) total++
-      cur.setMinutes(cur.getMinutes() + 1)
     }
     return total
   }
 
+  let inIso: string | null = null
   for (const p of sorted) {
     const at = new Date(p.at)
     if (p.kind === 'in') {
       inAt = at
+      inIso = p.at
       outSeen = false
     } else if (p.kind === 'break_start' && inAt && !breakStart) {
-      work += Math.max(0, Math.round((at.getTime() - inAt.getTime()) / 60000))
-      night += nightOverlap(inAt, at)
+      const seg = Math.max(0, Math.round((at.getTime() - inAt.getTime()) / 60000))
+      work += seg
+      if (inIso) night += nightOverlap(inIso, seg)
       breakStart = at
     } else if (p.kind === 'break_end' && breakStart) {
       brk += Math.max(0, Math.round((at.getTime() - breakStart.getTime()) / 60000))
       inAt = at
+      inIso = p.at
       breakStart = null
     } else if (p.kind === 'out' && inAt && !outSeen) {
-      const from = breakStart ?? inAt
       if (!breakStart) {
-        work += Math.max(0, Math.round((at.getTime() - from.getTime()) / 60000))
-        night += nightOverlap(from, at)
+        const seg = Math.max(0, Math.round((at.getTime() - inAt.getTime()) / 60000))
+        work += seg
+        if (inIso) night += nightOverlap(inIso, seg)
       }
       breakStart = null
       inAt = null
+      inIso = null
       outSeen = true
     }
   }

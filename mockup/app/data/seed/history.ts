@@ -11,7 +11,7 @@ import { seedCompanies, seedMembers, seedProjects, seedSystemServices } from './
 
 /** シード生成の基準日（実行日の 0:00） */
 export function seedToday(): string {
-  return toDateKey(new Date())
+  return todayJst()
 }
 
 /** 過去 N 日分の打刻履歴（今日は含めない = 今日はユーザーが操作する） */

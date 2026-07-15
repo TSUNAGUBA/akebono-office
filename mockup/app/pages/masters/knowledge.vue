@@ -202,7 +202,7 @@ function save(): void {
     title: String(form.value.title ?? '').trim(),
     body: String(form.value.body ?? ''),
     tags: splitTags(String(form.value.tagsText ?? '')),
-    updatedAt: new Date().toISOString(),
+    updatedAt: nowJstIso(),
   }
   if (mode.value === 'edit' && selectedId.value) {
     payload.id = selectedId.value

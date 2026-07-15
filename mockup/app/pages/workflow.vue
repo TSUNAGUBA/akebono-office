@@ -378,8 +378,8 @@ function onRouteSave(): void {
 
 const delegateForm = reactive({
   delegateMemberId: '',
-  from: toDateKey(new Date()),
-  to: addDays(toDateKey(new Date()), 7),
+  from: todayJst(),
+  to: addDays(todayJst(), 7),
 })
 
 const delegateOptions = computed(() =>

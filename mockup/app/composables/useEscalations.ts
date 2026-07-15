@@ -44,12 +44,12 @@ export function useEscalations() {
         return { ok: false, error: { code: 'AKO-ESC-002', message: 'このシグナルは設定で無効化されています' } }
       }
       const cooldownDays = rule?.cooldownDays ?? 3
-      const since = new Date()
-      since.setDate(since.getDate() - cooldownDays)
+      // JST の日付キーで比較（raisedAt は "YYYY-MM-DD..." 形式のため辞書順比較で日単位判定できる）
+      const cutoff = addDays(todayJst(), -cooldownDays)
       const dup = escalations.value.find(e =>
         e.dedupeKey.split(':').slice(0, 2).join(':') === signal.dedupeKey.split(':').slice(0, 2).join(':')
         && e.reason === signal.reason
-        && e.raisedAt >= since.toISOString())
+        && e.raisedAt >= cutoff)
       if (dup) {
         return { ok: false, error: { code: 'AKO-ESC-001', message: 'クールダウン期間中のため重複起票をスキップしました' } }
       }
@@ -64,7 +64,7 @@ export function useEscalations() {
         resolution: null,
         knowledgeReflected: false,
         dedupeKey: signal.dedupeKey,
-        raisedAt: new Date().toISOString(),
+        raisedAt: nowJstIso(),
       }]
       commit()
       // 管理者への暗黙の情報共有（通知失敗は起票を巻き戻さない）
@@ -92,7 +92,7 @@ export function useEscalations() {
     if ((type === 'answer' || type === 'ruling') && !body.trim()) {
       return { ok: false, error: { code: 'AKO-GEN-001', message: '内容を入力してください' } }
     }
-    const resolvedAt = new Date().toISOString()
+    const resolvedAt = nowJstIso()
     let knowledgeReflected = false
 
     // 裁定のナレッジ還流（補助処理・非ブロッキング）

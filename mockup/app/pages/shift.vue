@@ -20,7 +20,7 @@ const { staffMembers, sortedPeriods } = shifts
 const { show } = useToast()
 const { ask } = useConfirm()
 
-const today = toDateKey(new Date())
+const today = todayJst()
 const WEEKDAY_JP = ['日', '月', '火', '水', '木', '金', '土'] as const
 const WISH_KINDS: ShiftWishKind[] = ['want', 'ng', 'either']
 

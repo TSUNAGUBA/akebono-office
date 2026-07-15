@@ -137,7 +137,7 @@ export function useDecision() {
       chosenSlot: slot,
       reason: reason.trim(),
       decidedBy: currentUser.value.id,
-      at: new Date().toISOString(),
+      at: nowJstIso(),
     }]
     commit()
     return { ok: true, id }

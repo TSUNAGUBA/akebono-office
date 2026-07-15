@@ -86,7 +86,7 @@ export function useWorkflow() {
 
   /** 期間が今日を含む有効な代理設定か */
   function isDelegateActive(d: DelegateSetting): boolean {
-    const t = toDateKey(new Date())
+    const t = todayJst()
     return d.active && d.from <= t && t <= d.to
   }
 
@@ -198,7 +198,7 @@ export function useWorkflow() {
       delegateForId,
       action,
       comment,
-      at: new Date().toISOString(),
+      at: nowJstIso(),
     }]
   }
 
@@ -235,7 +235,7 @@ export function useWorkflow() {
       status: 'draft',
       currentStep: 0,
       routeSnapshot: [],
-      createdAt: new Date().toISOString(),
+      createdAt: nowJstIso(),
     }]
     commit()
     return { ok: true, id }
@@ -273,7 +273,7 @@ export function useWorkflow() {
         status: 'in_review',
         currentStep: 1,
         routeSnapshot: route,
-        createdAt: new Date().toISOString(),
+        createdAt: nowJstIso(),
       }]
     }
     appendLog(id, 0, 'submit', '')

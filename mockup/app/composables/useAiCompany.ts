@@ -167,7 +167,7 @@ export function useAiCompany() {
     aiActivityLogs.value = [...aiActivityLogs.value, {
       id: nextId('aiActivityLogs', 'aal'),
       aiEmployeeId, taskId, kind, summary, tokens, costUsd,
-      at: new Date().toISOString(),
+      at: nowJstIso(),
     }]
   }
 
@@ -194,7 +194,7 @@ export function useAiCompany() {
       status: 'proposed',
       dueDate: null,
       confidence,
-      createdAt: new Date().toISOString(),
+      createdAt: nowJstIso(),
     }]
     addLog(aiEmployeeId, id, 'plan', `「${title.trim()}」の分解案を作成し承認待ち`)
     syncEmployeeStatus(aiEmployeeId)
@@ -202,7 +202,7 @@ export function useAiCompany() {
 
     // 補助処理: 低確信度エスカレーション（失敗しても主フローは成立）
     if (confidence === 'low') {
-      const date = new Date().toISOString().slice(0, 10)
+      const date = nowJstIso().slice(0, 10)
       raise({
         reason: 'low_confidence',
         targetAiEmployeeId: aiEmployeeId,

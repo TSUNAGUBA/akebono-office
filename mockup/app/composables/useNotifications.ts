@@ -24,7 +24,7 @@ export function useNotifications() {
         id: nextId('notifications', 'nt'),
         memberId, kind, title, body, link,
         read: false,
-        at: new Date().toISOString(),
+        at: nowJstIso(),
       }]
       commit()
     } catch {

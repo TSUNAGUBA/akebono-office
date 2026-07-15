@@ -86,7 +86,7 @@ export function useDocuments() {
       kind: 'file',
       name,
       tags: input.tags,
-      updatedAt: new Date().toISOString(),
+      updatedAt: nowJstIso(),
       updatedBy: currentUser.value.id,
       size: kb >= 1000 ? `${(kb / 1000).toFixed(1)}MB` : `${kb}KB`,
       summary: input.summary.trim(),
@@ -104,7 +104,7 @@ export function useDocuments() {
       kind: 'folder',
       name: trimmed,
       tags: [],
-      updatedAt: new Date().toISOString(),
+      updatedAt: nowJstIso(),
       updatedBy: currentUser.value.id,
       size: null,
       summary: '',
@@ -119,7 +119,7 @@ export function useDocuments() {
     // undefined のキーで既存値を潰さないよう、指定されたキーのみ明示的に組み立てる
     const clean: Partial<DocumentNode> & { id: string } = {
       id,
-      updatedAt: new Date().toISOString(),
+      updatedAt: nowJstIso(),
       updatedBy: currentUser.value.id,
     }
     if (patch.name !== undefined) clean.name = patch.name.trim()

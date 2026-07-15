@@ -115,7 +115,7 @@ function bucketValueClass(key: keyof AttendanceBuckets, value: number): string {
 
 // ---------- 日次タブ ----------
 
-const todayKey = toDateKey(new Date())
+const todayKey = todayJst()
 const selDate = ref(todayKey)
 
 // date input をクリアされた場合は今日へ戻す（NaN 表示の防止）

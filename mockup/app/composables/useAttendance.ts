@@ -62,7 +62,7 @@ export function useAttendance() {
   /** 打刻する（状態機械ガード付き。二重打刻は no-op エラー） */
   function punch(kind: PunchKind, source: 'web' | 'mobile' = 'web'): Result {
     const memberId = currentUser.value.id
-    const date = toDateKey(new Date())
+    const date = todayJst()
     const state = punchState(memberId, date)
     if (!ALLOWED[state].includes(kind)) {
       return { ok: false, error: { code: 'AKO-ATT-001', message: `現在の状態では「${PUNCH_KIND_LABELS[kind]}」はできません` } }
@@ -70,7 +70,7 @@ export function useAttendance() {
     const id = nextId('punches', 'pch-u')
     punches.value = [...punches.value, {
       id, memberId, date, kind,
-      at: new Date().toISOString(),
+      at: nowJstIso(),
       source, fixedFrom: null, fixReason: null, approvedBy: null,
     }]
     commit()
@@ -143,7 +143,7 @@ export function useAttendance() {
     const found = alerts(memberId)
     if (found.length === 0) return
     const { raise } = useEscalations()
-    const month = toDateKey(new Date()).slice(0, 7)
+    const month = todayJst().slice(0, 7)
     raise({
       reason: 'overtime_alert',
       targetMemberId: memberId,

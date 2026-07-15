@@ -126,7 +126,7 @@ async function onCancel(taskId: string): Promise<void> {
 
 // ---------- 日次報告 ----------
 
-const reportDate = ref(toDateKey(new Date()))
+const reportDate = ref(todayJst())
 const aiReports = computed(() => aiReportsOn(reportDate.value))
 
 function onGenerateReports(): void {

@@ -138,7 +138,7 @@ export function useShifts() {
 
   /** 締切超過か（締切日当日までは提出可） */
   function wishDeadlinePassed(p: ShiftPeriod): boolean {
-    return toDateKey(new Date()) > p.wishDeadline
+    return todayJst() > p.wishDeadline
   }
 
   // ---------- 期間管理 ----------
@@ -442,7 +442,7 @@ export function useShifts() {
       return { ok: false, error: { code: 'AKO-SFT-006', message: 'シフト変更への合意は本人のみ行えます（労務上の本人合意）' } }
     }
     assignments.value = assignments.value.map(x =>
-      x.id === assignmentId ? { ...x, status: 'confirmed' as const, consentAt: new Date().toISOString() } : x)
+      x.id === assignmentId ? { ...x, status: 'confirmed' as const, consentAt: nowJstIso() } : x)
     commit()
     notifyAdmins('system', 'シフト変更に本人が合意',
       `${currentUser.value.name} さんが ${fmtDateLong(a.date)} のシフト変更（${a.from}〜${a.to}）に合意しました`, '/shift')

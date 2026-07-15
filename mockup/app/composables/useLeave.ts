@@ -115,7 +115,7 @@ export function useLeave() {
    * approved 消化を付与へ FIFO（古い付与から）で引当て、失効超過分を除いた残数を返す。
    */
   function balance(memberId: string): LeaveBalance {
-    const today = toDateKey(new Date())
+    const today = todayJst()
     const gs = grantsOf(memberId)
     const consumptions = requests.value
       .filter(r => r.memberId === memberId && r.status === 'approved')
@@ -165,7 +165,7 @@ export function useLeave() {
 
   /** 年 5 日取得義務（年 10 日以上付与された直近付与日から 1 年以内に 5 日以上） */
   function obligation(memberId: string): LeaveObligation {
-    const today = toDateKey(new Date())
+    const today = todayJst()
     const target = grantsOf(memberId)
       .filter(g => g.days >= OBLIGATION_MIN_GRANT_DAYS && g.grantDate <= today)
       .sort((a, b) => b.grantDate.localeCompare(a.grantDate))[0]

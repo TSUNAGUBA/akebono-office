@@ -60,7 +60,7 @@ function submitWish(): void {
     id: nextId('akebonoWishes', 'aw'),
     memberId: currentUser.value.id,
     body: wishBody.value.trim(),
-    at: new Date().toISOString(),
+    at: nowJstIso(),
   }]
   commit()
   wishBody.value = ''

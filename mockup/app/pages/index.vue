@@ -27,13 +27,13 @@ const { services, stateOf, uptimePctOf, openIncidentsOf } = useSystemStatus()
 
 // ---------- 挨拶 ----------
 const greeting = computed(() => {
-  const h = new Date().getHours()
+  const h = Number(jstClock().h)
   if (h < 5) return 'お疲れさまです'
   if (h < 11) return 'おはようございます'
   if (h < 18) return 'こんにちは'
   return 'こんばんは'
 })
-const todayLong = computed(() => fmtDateLong(new Date().toISOString()))
+const todayLong = computed(() => fmtDateLong(nowJstIso()))
 
 // ---------- 承認待ち件数（自分が承認者の申請） ----------
 function isApproverOf(step: WorkflowRouteStep, m: Member): boolean {

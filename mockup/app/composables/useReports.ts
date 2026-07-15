@@ -89,7 +89,7 @@ export function useReports() {
   /** 直近 n 営業日（土日除外・今日を含む・昇順） */
   function recentBusinessDays(n = 7): string[] {
     const days: string[] = []
-    let d = toDateKey(new Date())
+    let d = todayJst()
     while (days.length < n) {
       const w = weekdayOf(d)
       if (w !== 0 && w !== 6) days.unshift(d)
@@ -166,7 +166,7 @@ export function useReports() {
         return err('AKO-GEN-001', '各エントリのプロジェクトと作業内容を入力してください')
       }
     }
-    const submittedAt = status === 'submitted' ? new Date().toISOString() : null
+    const submittedAt = status === 'submitted' ? nowJstIso() : null
     if (existing) {
       dailyReports.value = dailyReports.value.map(r => r.id === existing.id
         ? { ...r, entries, reflection: input.reflection, issues: input.issues, tomorrow: input.tomorrow, status, submittedAt }
@@ -245,7 +245,7 @@ export function useReports() {
       reportId,
       memberId: currentUser.value.id,
       body: text,
-      at: new Date().toISOString(),
+      at: nowJstIso(),
       reactions: [],
     }]
     commit()

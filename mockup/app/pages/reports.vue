@@ -64,7 +64,7 @@ const activeProjects = computed(() =>
 
 // ---------- 自分の日報タブ ----------
 
-const selDate = ref(toDateKey(new Date()))
+const selDate = ref(todayJst())
 const myReport = computed(() => reports.myReportOn(selDate.value))
 
 const editEntries = ref<ReportEntry[]>([])
@@ -229,7 +229,7 @@ async function remindAll(): Promise<void> {
 
 // ---------- 週報タブ ----------
 
-const thisWeekStart = computed(() => reports.weekStartOf(toDateKey(new Date())))
+const thisWeekStart = computed(() => reports.weekStartOf(todayJst()))
 const myCurrentWeekly = computed(() => reports.myWeeklyOn(thisWeekStart.value))
 
 const wkGoal = ref('')
@@ -304,7 +304,7 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
         <button type="button" class="btn btn-sm" aria-label="翌日へ" @click="selDate = addDays(selDate, 1)">
           <ChevronRight class="h-4 w-4" aria-hidden="true" />
         </button>
-        <button type="button" class="btn btn-sm" @click="selDate = toDateKey(new Date())">今日</button>
+        <button type="button" class="btn btn-sm" @click="selDate = todayJst()">今日</button>
         <template #trailing>
           <UiStatusBadge :tone="mineStatus.tone" :label="mineStatus.label" dot />
         </template>

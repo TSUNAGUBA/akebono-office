@@ -50,7 +50,7 @@ function auditDelete(entity: string, entityId: string, detail: string): void {
       entity,
       entityId,
       detail,
-      at: new Date().toISOString(),
+      at: nowJstIso(),
     }]
   } catch {
     // 監査ログ失敗は主フローを止めない

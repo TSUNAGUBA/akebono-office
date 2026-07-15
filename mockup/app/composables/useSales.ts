@@ -16,7 +16,7 @@ export function useSales() {
   const fiscalStartMonth = computed(() =>
     companies.value.find(c => c.kind === 'self')?.fiscalStartMonth ?? 4)
 
-  const todayKey = toDateKey(new Date())
+  const todayKey = todayJst()
   /** 当月（YYYY-MM） */
   const currentMonth = todayKey.slice(0, 7)
 

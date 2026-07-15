@@ -38,7 +38,7 @@ export function useMasterCrud<K extends MasterCollections>(name: K, idPrefix: st
         entity: String(name),
         entityId,
         detail,
-        at: new Date().toISOString(),
+        at: nowJstIso(),
       }]
     } catch {
       // 監査ログ失敗は主フローを止めない

@@ -2,26 +2,26 @@
 /** 打刻ウィジェット（ダッシュボード・モバイルで共用。状態機械は useAttendance が SoT） */
 import { Coffee, LogIn, LogOut, Play } from 'lucide-vue-next'
 import type { PunchKind } from '~/types/domain'
-import { fmtTime, toDateKey } from '~/utils/format'
+import { fmtTime, jstClock, todayJst } from '~/utils/format'
 import { PUNCH_KIND_LABELS } from '~/utils/labels'
 
 const { currentUser } = useCurrentUser()
 const { punch, punchState, punchesOf } = useAttendance()
 const { show } = useToast()
 
-const now = ref(new Date())
+// 業務時刻は JST ウォールクロック（閲覧環境の TZ に依存させない）
+const tick = ref(0)
 let timer: ReturnType<typeof setInterval> | null = null
-onMounted(() => { timer = setInterval(() => { now.value = new Date() }, 1000) })
+onMounted(() => { timer = setInterval(() => { tick.value++ }, 1000) })
 onBeforeUnmount(() => { if (timer) clearInterval(timer) })
 
-const today = computed(() => toDateKey(now.value))
+const today = computed(() => { void tick.value; return todayJst() })
 const state = computed(() => punchState(currentUser.value.id, today.value))
 const todayPunches = computed(() => punchesOf(currentUser.value.id, today.value))
 
 const clock = computed(() => {
-  const h = String(now.value.getHours()).padStart(2, '0')
-  const m = String(now.value.getMinutes()).padStart(2, '0')
-  const s = String(now.value.getSeconds()).padStart(2, '0')
+  void tick.value
+  const { h, m, s } = jstClock()
   return `${h}:${m}:${s}`
 })
 

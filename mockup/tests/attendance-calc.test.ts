@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import type { PunchRecord } from '~/types/domain'
 import {
-  judgeArticle36, leaveGrantDays, requiredBreakMinutes, splitBuckets,
+  calcWorkedMinutes, judgeArticle36, leaveGrantDays, requiredBreakMinutes, splitBuckets,
 } from '~/utils/attendance-calc'
 
 describe('splitBuckets（6 バケット分解）', () => {
@@ -33,6 +34,43 @@ describe('splitBuckets（6 バケット分解）', () => {
     expect(b.legalHoliday).toBe(540)
     expect(b.nonStatutoryOt).toBe(0)
     expect(b.night).toBe(30)
+  })
+})
+
+describe('calcWorkedMinutes（打刻列の集計。実行環境の TZ に依存しない）', () => {
+  const punch = (kind: PunchRecord['kind'], at: string): PunchRecord => ({
+    id: `t-${kind}-${at}`, memberId: 'm-99', date: '2026-07-01', kind, at,
+    source: 'web', fixedFrom: null, fixReason: null, approvedBy: null,
+  })
+
+  it('出勤→休憩→退勤で実労働と休憩を分離する', () => {
+    const r = calcWorkedMinutes([
+      punch('in', '2026-07-01T09:00:00+09:00'),
+      punch('break_start', '2026-07-01T12:00:00+09:00'),
+      punch('break_end', '2026-07-01T13:00:00+09:00'),
+      punch('out', '2026-07-01T18:00:00+09:00'),
+    ])
+    expect(r.workMinutes).toBe(480)
+    expect(r.breakMinutes).toBe(60)
+    expect(r.nightMinutes).toBe(0) // 日中勤務に深夜は発生しない（UTC 環境でも 0 であること）
+  })
+
+  it('深夜帯（22-5時）の重なりは壁時計（+09:00 の時刻文字列）で判定する', () => {
+    const r = calcWorkedMinutes([
+      punch('in', '2026-07-01T20:00:00+09:00'),
+      punch('out', '2026-07-01T23:30:00+09:00'),
+    ])
+    expect(r.workMinutes).toBe(210)
+    expect(r.nightMinutes).toBe(90) // 22:00-23:30
+  })
+
+  it('二重の退勤打刻は無視される（状態機械ガード）', () => {
+    const r = calcWorkedMinutes([
+      punch('in', '2026-07-01T09:00:00+09:00'),
+      punch('out', '2026-07-01T18:00:00+09:00'),
+      punch('out', '2026-07-01T19:00:00+09:00'),
+    ])
+    expect(r.workMinutes).toBe(540)
   })
 })
 

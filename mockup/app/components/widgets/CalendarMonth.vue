@@ -31,7 +31,7 @@ const emit = defineEmits<{ select: [date: string] }>()
 
 const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土']
 
-const todayKey = toDateKey(new Date())
+const todayKey = todayJst()
 const leadingBlanks = computed(() => weekdayOf(`${props.month}-01`))
 
 function dayNum(date: string): number {
