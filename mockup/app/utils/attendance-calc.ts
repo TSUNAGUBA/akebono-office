@@ -17,20 +17,22 @@ export const NIGHT_END_HOUR = 5
 
 /**
  * 有効打刻の射影（修正打刻による置換の解決）。
- * fix レコードの fixedFrom は「置換した旧打刻の at」を保持しており、
- * 同種・同時刻の打刻を無効化する。fix 自身が後続の fix に置換される連鎖にも対応する。
- * 自己置換（at === fixedFrom の修正）で自分自身を除外しないよう、置換元 id でガードする。
+ * fix レコードの fixedFrom は「置換した旧打刻の at」を保持する。
+ * fix を追記順（= 承認順）に適用し、その時点で未置換の同種・同時刻レコードを
+ * 1 件だけ無効化する（レコード id 単位の解決）。これにより
+ * 通常の連鎖（fix の fix）だけでなく、元の時刻へ戻す差戻し連鎖
+ * （at の再利用でキーが衝突するケース）でも最新の fix だけが有効になる。
  */
 export function effectivePunches(rows: PunchRecord[]): PunchRecord[] {
-  const supersededBy = new Map<string, string>() // `${kind}|${at}` → 置換した fix の id
+  const superseded = new Set<string>() // 置換された（無効化された）レコードの id
   for (const p of rows) {
-    if (p.source === 'fix' && p.fixedFrom) supersededBy.set(`${p.kind}|${p.fixedFrom}`, p.id)
+    if (p.source !== 'fix' || !p.fixedFrom) continue
+    const target = rows.find(q =>
+      q.id !== p.id && !superseded.has(q.id) && q.kind === p.kind && q.at === p.fixedFrom)
+    if (target) superseded.add(target.id)
   }
   return rows
-    .filter((p) => {
-      const by = supersededBy.get(`${p.kind}|${p.at}`)
-      return !by || by === p.id
-    })
+    .filter(p => !superseded.has(p.id))
     .sort((a, b) => a.at.localeCompare(b.at))
 }
 

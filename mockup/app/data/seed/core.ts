@@ -143,9 +143,9 @@ export const seedCustomFieldDefs: CustomFieldDef[] = [
 ]
 
 export const seedExternalLinks: ExternalLink[] = [
-  { id: 'el-01', title: 'サポート管理表', url: 'https://example.com/support-sheet', description: '顧客サポートの起票・対応状況管理（スプレッドシート）', icon: 'Table2', displayOrder: 1, active: true },
-  { id: 'el-02', title: '経費精算 SaaS', url: 'https://example.com/expense', description: '立替経費の精算はこちら（稟議の経費承認と連動）', icon: 'Receipt', displayOrder: 2, active: true },
-  { id: 'el-03', title: '社内 Wiki（旧）', url: 'https://example.com/wiki', description: '移行中の旧ナレッジベース', icon: 'BookOpen', displayOrder: 3, active: true },
+  { id: 'el-01', title: 'サポート管理表', url: 'https://www.google.com/', description: '顧客サポートの起票・対応状況管理（スプレッドシート）', icon: 'Table2', displayOrder: 1, active: true },
+  { id: 'el-02', title: '経費精算 SaaS', url: 'https://www.google.com/', description: '立替経費の精算はこちら（稟議の経費承認と連動）', icon: 'Receipt', displayOrder: 2, active: true },
+  { id: 'el-03', title: '社内 Wiki（旧）', url: 'https://www.google.com/', description: '移行中の旧ナレッジベース', icon: 'BookOpen', displayOrder: 3, active: true },
 ]
 
 export const seedWorkflowRoutes: WorkflowRoute[] = [

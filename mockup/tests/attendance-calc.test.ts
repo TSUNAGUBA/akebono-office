@@ -98,6 +98,15 @@ describe('effectivePunches（修正打刻による置換の解決）', () => {
     expect(eff.map(p => p.id)).toEqual(['c'])
   })
 
+  it('元の時刻へ戻す差戻し連鎖（at の再利用）でも最新の fix だけが有効になる', () => {
+    const eff = effectivePunches([
+      rec('a', 'in', '2026-07-01T09:00:00+09:00'),
+      rec('b', 'in', '2026-07-01T09:30:00+09:00', '2026-07-01T09:00:00+09:00'),
+      rec('c', 'in', '2026-07-01T09:00:00+09:00', '2026-07-01T09:30:00+09:00'),
+    ])
+    expect(eff.map(p => p.id)).toEqual(['c'])
+  })
+
   it('自己置換（at === fixedFrom）でも自分自身は除外しない', () => {
     const eff = effectivePunches([
       rec('a', 'in', '2026-07-01T09:00:00+09:00'),

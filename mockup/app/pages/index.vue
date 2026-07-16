@@ -112,14 +112,22 @@ const menuSections = computed<MenuSection[]>(() => {
       cards: [{ id: 'ai-company', title: 'AIネイティブカンパニー', description: 'AI 社員の執務室。タスク依頼と活動モニタリング', icon: 'Building2', to: '/ai-company' }],
     })
   }
-  sections.push({
-    id: 'support', label: '業務支援ツール',
-    cards: [{ id: 'support', title: '業務支援ツール', description: 'AI チャットボット・ドキュメント管理・外部ツール', icon: 'Wrench', to: '/support' }],
-  })
+  // サイドメニュー廃止に伴い、全遷移先をカードメニューで網羅する
+  const supportCards: MenuCard[] = [
+    { id: 'support', title: '業務支援ツール', description: 'AI チャットボット・ドキュメント管理・外部ツール', icon: 'Wrench', to: '/support' },
+    { id: 'inbox', title: '通知・エスカレーション', description: '通知の確認と、現場からの暗黙の情報共有への対応', icon: 'Inbox', to: '/inbox', badge: unreadCount.value },
+  ]
+  if (isEnabled('status')) {
+    supportCards.splice(1, 0, { id: 'status', title: '稼働状況', description: '提供システムの現在状態・稼働率・インシデント履歴', icon: 'Activity', to: '/status' })
+  }
+  sections.push({ id: 'support', label: '業務支援・状況', cards: supportCards })
   if (isAdmin.value) {
     sections.push({
-      id: 'masters', label: 'マスタメンテナンス',
-      cards: [{ id: 'masters', title: 'マスタメンテナンス', description: 'メンバー・顧客・案件・ナレッジ等の基礎データ管理', icon: 'Database', to: '/masters' }],
+      id: 'admin', label: '管理',
+      cards: [
+        { id: 'masters', title: 'マスタメンテナンス', description: 'メンバー・顧客・案件・ナレッジ等の基礎データ管理', icon: 'Database', to: '/masters' },
+        { id: 'settings', title: '設定', description: 'カスタム項目・汎用区分・外部リンク・機能トグル・監査ログ', icon: 'Settings', to: '/settings' },
+      ],
     })
   }
   return sections
@@ -171,7 +179,9 @@ function openNotification(n: AppNotification): void {
       <section class="order-5 grid gap-2 lg:order-3 lg:col-span-8 xl:col-span-9" aria-label="売上サマリ">
         <div class="flex flex-wrap items-center justify-end gap-2">
           <span class="text-[11px] font-bold text-muted">表示年度</span>
-          <UiSelect v-model="fyModel" :options="fyOptions" aria-label="売上サマリの表示年度" />
+          <div class="w-32">
+            <UiSelect v-model="fyModel" :options="fyOptions" aria-label="売上サマリの表示年度" />
+          </div>
         </div>
         <div class="grid gap-3 lg:grid-cols-5">
           <ChartsLineChartCard
