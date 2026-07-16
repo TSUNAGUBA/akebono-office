@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import * as icons from 'lucide-vue-next'
+// resolveComponent('NuxtLink') は本番ビルドで解決されないため実体を import する
+import { NuxtLink } from '#components'
 import type { Tone } from '~/types/ui'
 
 const props = withDefaults(defineProps<{
@@ -35,7 +37,7 @@ const deltaText = computed(() => {
 
 <template>
   <component
-    :is="to ? resolveComponent('NuxtLink') : 'div'"
+    :is="to ? NuxtLink : 'div'"
     :to="to || undefined"
     class="card block px-3 py-2.5"
     :class="to ? 'transition-colors hover:border-brand cursor-pointer' : ''"
