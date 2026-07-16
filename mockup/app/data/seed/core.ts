@@ -10,18 +10,18 @@ import type {
 } from '~/types/domain'
 
 export const seedMembers: Member[] = [
-  { id: 'm-01', name: '山下 誠', email: 'yamashita@tsunaguba.co.jp', employmentType: 'director', dept: '経営管理部', title: '代表取締役', role: 'admin', hireDate: '2018-04-01', weeklyDays: 5, weeklyHours: 40, punchRequired: false, birthDate: '1980-06-15', active: true, custom: {} },
-  { id: 'm-02', name: '佐伯 玲子', email: 'saeki@tsunaguba.co.jp', employmentType: 'director', dept: '経営管理部', title: '取締役', role: 'admin', hireDate: '2018-04-01', weeklyDays: 5, weeklyHours: 40, punchRequired: false, birthDate: '1983-11-02', active: true, custom: {} },
-  { id: 'm-03', name: '葛西 大輔', email: 'kasai@tsunaguba.co.jp', employmentType: 'employee', dept: 'コンサルティング部', title: 'マネージャー', role: 'admin', hireDate: '2019-07-01', weeklyDays: 5, weeklyHours: 40, punchRequired: true, birthDate: '1987-03-21', active: true, custom: {} },
-  { id: 'm-04', name: '三浦 彩', email: 'miura@tsunaguba.co.jp', employmentType: 'employee', dept: 'コンサルティング部', title: 'リーダー', role: 'member', hireDate: '2020-04-01', weeklyDays: 5, weeklyHours: 40, punchRequired: true, birthDate: '1991-08-09', active: true, custom: {} },
-  { id: 'm-05', name: '小野寺 岳', email: 'onodera@tsunaguba.co.jp', employmentType: 'employee', dept: 'システム開発部', title: 'リーダー', role: 'member', hireDate: '2020-10-01', weeklyDays: 5, weeklyHours: 40, punchRequired: true, birthDate: '1990-01-30', active: true, custom: {} },
-  { id: 'm-06', name: '澤村 拓海', email: 'sawamura@tsunaguba.co.jp', employmentType: 'employee', dept: 'システム開発部', title: 'メンバー', role: 'member', hireDate: '2022-04-01', weeklyDays: 5, weeklyHours: 40, punchRequired: true, birthDate: '1996-12-05', active: true, custom: {} },
-  { id: 'm-07', name: '井関 美咲', email: 'iseki@tsunaguba.co.jp', employmentType: 'employee', dept: '運用部', title: 'メンバー', role: 'member', hireDate: '2023-04-01', weeklyDays: 5, weeklyHours: 40, punchRequired: true, birthDate: '1998-05-18', active: true, custom: {} },
-  { id: 'm-08', name: '玉井 蓮', email: 'tamai@tsunaguba.co.jp', employmentType: 'employee', dept: '運用部', title: 'メンバー', role: 'member', hireDate: '2024-04-01', weeklyDays: 5, weeklyHours: 40, punchRequired: true, birthDate: '2000-02-27', active: true, custom: {} },
-  { id: 'm-09', name: '深田 遥', email: 'fukada@tsunaguba.co.jp', employmentType: 'contract', dept: 'システム開発部', title: 'メンバー', role: 'member', hireDate: '2024-01-01', weeklyDays: 5, weeklyHours: 37.5, punchRequired: true, birthDate: '1993-09-14', active: true, custom: {} },
-  { id: 'm-10', name: '村瀬 光', email: 'murase@tsunaguba.co.jp', employmentType: 'parttime', dept: '経営管理部', title: 'アシスタント', role: 'member', hireDate: '2024-09-01', weeklyDays: 3, weeklyHours: 18, punchRequired: true, birthDate: '2003-04-22', active: true, custom: {} },
-  { id: 'm-11', name: '有田 望', email: 'arita@tsunaguba.co.jp', employmentType: 'parttime', dept: '運用部', title: 'アシスタント', role: 'member', hireDate: '2025-11-01', weeklyDays: 2, weeklyHours: 12, punchRequired: true, birthDate: '2008-10-03', active: true, custom: {} },
-  { id: 'm-12', name: '外川 亘', email: 'togawa@partner.example.com', employmentType: 'outsource', dept: 'システム開発部', title: 'パートナー', role: 'member', hireDate: '2025-05-01', weeklyDays: 5, weeklyHours: 40, punchRequired: false, birthDate: '1985-07-07', active: true, custom: {} },
+  { id: 'm-01', name: '山下 誠', email: 'yamashita@tsunaguba.co.jp', employmentType: 'director', dept: '経営管理部', title: '代表取締役', role: 'admin', hireDate: '2018-04-01', weeklyDays: 5, weeklyHours: 40, punchRequired: false, attendanceRuleId: null, birthDate: '1980-06-15', active: true, custom: {} },
+  { id: 'm-02', name: '佐伯 玲子', email: 'saeki@tsunaguba.co.jp', employmentType: 'director', dept: '経営管理部', title: '取締役', role: 'admin', hireDate: '2018-04-01', weeklyDays: 5, weeklyHours: 40, punchRequired: false, attendanceRuleId: null, birthDate: '1983-11-02', active: true, custom: {} },
+  { id: 'm-03', name: '葛西 大輔', email: 'kasai@tsunaguba.co.jp', employmentType: 'employee', dept: 'コンサルティング部', title: 'マネージャー', role: 'admin', hireDate: '2019-07-01', weeklyDays: 5, weeklyHours: 40, punchRequired: true, attendanceRuleId: null, birthDate: '1987-03-21', active: true, custom: {} },
+  { id: 'm-04', name: '三浦 彩', email: 'miura@tsunaguba.co.jp', employmentType: 'employee', dept: 'コンサルティング部', title: 'リーダー', role: 'member', hireDate: '2020-04-01', weeklyDays: 5, weeklyHours: 30, punchRequired: true, attendanceRuleId: 'ar-04', birthDate: '1991-08-09', active: true, custom: {} },
+  { id: 'm-05', name: '小野寺 岳', email: 'onodera@tsunaguba.co.jp', employmentType: 'employee', dept: 'システム開発部', title: 'リーダー', role: 'member', hireDate: '2020-10-01', weeklyDays: 5, weeklyHours: 40, punchRequired: true, attendanceRuleId: null, birthDate: '1990-01-30', active: true, custom: {} },
+  { id: 'm-06', name: '澤村 拓海', email: 'sawamura@tsunaguba.co.jp', employmentType: 'employee', dept: 'システム開発部', title: 'メンバー', role: 'member', hireDate: '2022-04-01', weeklyDays: 5, weeklyHours: 40, punchRequired: true, attendanceRuleId: null, birthDate: '1996-12-05', active: true, custom: {} },
+  { id: 'm-07', name: '井関 美咲', email: 'iseki@tsunaguba.co.jp', employmentType: 'employee', dept: '運用部', title: 'メンバー', role: 'member', hireDate: '2023-04-01', weeklyDays: 5, weeklyHours: 40, punchRequired: true, attendanceRuleId: null, birthDate: '1998-05-18', active: true, custom: {} },
+  { id: 'm-08', name: '玉井 蓮', email: 'tamai@tsunaguba.co.jp', employmentType: 'employee', dept: '運用部', title: 'メンバー', role: 'member', hireDate: '2024-04-01', weeklyDays: 5, weeklyHours: 40, punchRequired: true, attendanceRuleId: null, birthDate: '2000-02-27', active: true, custom: {} },
+  { id: 'm-09', name: '深田 遥', email: 'fukada@tsunaguba.co.jp', employmentType: 'contract', dept: 'システム開発部', title: 'メンバー', role: 'member', hireDate: '2024-01-01', weeklyDays: 5, weeklyHours: 37.5, punchRequired: true, attendanceRuleId: null, birthDate: '1993-09-14', active: true, custom: {} },
+  { id: 'm-10', name: '村瀬 光', email: 'murase@tsunaguba.co.jp', employmentType: 'parttime', dept: '経営管理部', title: 'アシスタント', role: 'member', hireDate: '2024-09-01', weeklyDays: 3, weeklyHours: 18, punchRequired: true, attendanceRuleId: null, birthDate: '2003-04-22', active: true, custom: {} },
+  { id: 'm-11', name: '有田 望', email: 'arita@tsunaguba.co.jp', employmentType: 'parttime', dept: '運用部', title: 'アシスタント', role: 'member', hireDate: '2025-11-01', weeklyDays: 2, weeklyHours: 12, punchRequired: true, attendanceRuleId: null, birthDate: '2008-10-03', active: true, custom: {} },
+  { id: 'm-12', name: '外川 亘', email: 'togawa@partner.example.com', employmentType: 'outsource', dept: 'システム開発部', title: 'パートナー', role: 'member', hireDate: '2025-05-01', weeklyDays: 5, weeklyHours: 40, punchRequired: false, attendanceRuleId: null, birthDate: '1985-07-07', active: true, custom: {} },
 ]
 
 export const seedIndustries: Industry[] = [
@@ -162,9 +162,10 @@ export const seedWorkflowRoutes: WorkflowRoute[] = [
 ]
 
 export const seedAttendanceRules: AttendanceRule[] = [
-  { id: 'ar-01', name: '正社員（フレックス）', appliesTo: ['employee'], workStart: '09:00', workEnd: '18:00', breakMinutes: 60, flex: { enabled: true, coreStart: '10:00', coreEnd: '15:00', settlementMonths: 1 }, closingDay: 31, legalHolidayWeekday: 0, active: true },
-  { id: 'ar-02', name: '契約社員（固定時間）', appliesTo: ['contract'], workStart: '09:30', workEnd: '18:00', breakMinutes: 60, flex: null, closingDay: 31, legalHolidayWeekday: 0, active: true },
-  { id: 'ar-03', name: 'アルバイト（シフト制）', appliesTo: ['parttime'], workStart: '10:00', workEnd: '17:00', breakMinutes: 45, flex: null, closingDay: 31, legalHolidayWeekday: 0, active: true },
+  { id: 'ar-01', name: '正社員（フレックス）', appliesTo: ['employee'], defaultFor: ['employee'], workStart: '09:00', workEnd: '18:00', breakMinutes: 60, flex: { enabled: true, coreStart: '10:00', coreEnd: '15:00', settlementMonths: 1 }, closingDay: 31, legalHolidayWeekday: 0, active: true },
+  { id: 'ar-02', name: '契約社員（固定時間）', appliesTo: ['contract'], defaultFor: ['contract'], workStart: '09:30', workEnd: '18:00', breakMinutes: 60, flex: null, closingDay: 31, legalHolidayWeekday: 0, active: true },
+  { id: 'ar-03', name: 'アルバイト（シフト制）', appliesTo: ['parttime'], defaultFor: ['parttime'], workStart: '10:00', workEnd: '17:00', breakMinutes: 45, flex: null, closingDay: 31, legalHolidayWeekday: 0, active: true },
+  { id: 'ar-04', name: '正社員（時短・9:30〜16:30）', appliesTo: ['employee'], defaultFor: [], workStart: '09:30', workEnd: '16:30', breakMinutes: 60, flex: null, closingDay: 31, legalHolidayWeekday: 0, active: true },
 ]
 
 export const seedSystemServices: SystemService[] = [

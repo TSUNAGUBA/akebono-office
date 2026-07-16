@@ -8,11 +8,12 @@ import { Plus } from 'lucide-vue-next'
 import {
   ACTIVE_FILTER_OPTIONS, fmtCustomValue, matchesActiveFilter,
 } from '~/components/masters/MasterShell.vue'
-import type { CustomValues, Member } from '~/types/domain'
+import type { AttendanceRule, CustomValues, EmploymentType, Member } from '~/types/domain'
 import type { FieldDef, TableColumn } from '~/types/ui'
 import { EMPLOYMENT_TYPE_LABELS } from '~/utils/labels'
 
 const crud = useMasterCrud('members', 'm')
+const rulesCrud = useMasterCrud('attendanceRules', 'ar')
 const { itemsOf } = useCodeMaster()
 const { defsFor, formSchemaFor } = useCustomFields()
 const toast = useToast()
@@ -74,12 +75,40 @@ const drawerTitle = computed(() =>
   mode.value === 'create' ? 'メンバーを追加' : mode.value === 'edit' ? 'メンバーを編集' : 'メンバー詳細',
 )
 
+// ---------- 勤務体系（勤怠ルール）の選択肢 ----------
+
+/** 「既定を適用」を表すフォーム用センチネル（保存時に null へ変換） */
+const DEFAULT_RULE_VALUE = '__default__'
+
+/** 指定雇用区分で選択可能な有効ルール（appliesTo で絞り込み） */
+function applicableRules(employmentType: string): AttendanceRule[] {
+  return (rulesCrud.activeList.value as AttendanceRule[])
+    .filter(r => r.appliesTo.includes(employmentType as EmploymentType))
+}
+
+/** 指定雇用区分の既定ルール名（defaultFor → appliesTo 先頭 の順で解決） */
+function defaultRuleNameFor(employmentType: string): string {
+  const rules = rulesCrud.activeList.value as AttendanceRule[]
+  const def = rules.find(r => r.defaultFor.includes(employmentType as EmploymentType))
+    ?? rules.find(r => r.appliesTo.includes(employmentType as EmploymentType))
+  return def?.name ?? '未設定'
+}
+
 const formFields = computed<FieldDef[]>(() => [
   { key: 'name', label: '氏名', type: 'text', required: true, placeholder: '例）曙 太郎' },
   { key: 'email', label: 'メールアドレス', type: 'text', placeholder: 'user@tsunaguba.co.jp' },
   {
     key: 'employmentType', label: '雇用区分', type: 'select', required: true,
     options: Object.entries(EMPLOYMENT_TYPE_LABELS).map(([value, label]) => ({ value, label })),
+  },
+  {
+    key: 'attendanceRuleId', label: '勤務体系（勤怠ルール）', type: 'select',
+    options: [
+      { value: DEFAULT_RULE_VALUE, label: `既定（${defaultRuleNameFor(String(form.value.employmentType ?? 'employee'))}）` },
+      ...applicableRules(String(form.value.employmentType ?? 'employee'))
+        .map(r => ({ value: r.id, label: r.name })),
+    ],
+    hint: '同一雇用区分でも固定時間・フレックス・時短等を個別に指定できます。「既定」は雇用区分の既定ルールを適用',
   },
   { key: 'dept', label: '部門', type: 'select', options: itemsOf('dept') },
   { key: 'title', label: '役職', type: 'select', options: itemsOf('title') },
@@ -103,6 +132,12 @@ const detailRows = computed(() => {
     { label: '氏名', value: m.name },
     { label: 'メール', value: m.email || '—' },
     { label: '雇用区分', value: EMPLOYMENT_TYPE_LABELS[m.employmentType] ?? m.employmentType },
+    {
+      label: '勤務体系',
+      value: m.attendanceRuleId
+        ? `${(rulesCrud.byId(m.attendanceRuleId) as AttendanceRule | undefined)?.name ?? m.attendanceRuleId}（個別指定）`
+        : `既定（${defaultRuleNameFor(m.employmentType)}）`,
+    },
     { label: '部門', value: m.dept || '—' },
     { label: '役職', value: m.title || '—' },
     { label: 'ロール', value: ROLE_LABELS[m.role] ?? m.role },
@@ -127,7 +162,8 @@ function openDetail(row: Record<string, unknown>): void {
 function openCreate(): void {
   selectedId.value = null
   form.value = {
-    name: '', email: '', employmentType: 'employee', dept: '', title: '', role: 'member',
+    name: '', email: '', employmentType: 'employee', attendanceRuleId: DEFAULT_RULE_VALUE,
+    dept: '', title: '', role: 'member',
     weeklyDays: 5, weeklyHours: 40, punchRequired: true, hireDate: '', birthDate: '', custom: {},
   }
   errors.value = {}
@@ -138,6 +174,8 @@ function openCreate(): void {
 function openEdit(): void {
   if (!selected.value) return
   form.value = JSON.parse(JSON.stringify(selected.value)) as Record<string, unknown>
+  // null（既定適用）はフォーム上のセンチネル値へ変換（保存時に戻す）
+  form.value.attendanceRuleId = selected.value.attendanceRuleId ?? DEFAULT_RULE_VALUE
   errors.value = {}
   mode.value = 'edit'
 }
@@ -151,6 +189,13 @@ function validate(): boolean {
   const e: Record<string, string> = {}
   if (!String(form.value.name ?? '').trim()) e.name = '氏名は必須です'
   if (!String(form.value.employmentType ?? '')) e.employmentType = '雇用区分は必須です'
+  const ruleId = String(form.value.attendanceRuleId ?? '')
+  if (ruleId && ruleId !== DEFAULT_RULE_VALUE) {
+    // 雇用区分を変更した後に、旧区分向けの勤務体系が残るのを防ぐ
+    if (!applicableRules(String(form.value.employmentType ?? '')).some(r => r.id === ruleId)) {
+      e.attendanceRuleId = 'この雇用区分では選択できない勤務体系です。「既定」に戻すか選択し直してください'
+    }
+  }
   if (!String(form.value.role ?? '')) e.role = 'ロールは必須です'
   const custom = (form.value.custom ?? {}) as CustomValues
   for (const d of defsFor('member')) {
@@ -174,6 +219,9 @@ function save(): void {
     name: String(f.name ?? '').trim(),
     email: String(f.email ?? '').trim(),
     employmentType: f.employmentType as Member['employmentType'],
+    attendanceRuleId: f.attendanceRuleId && f.attendanceRuleId !== DEFAULT_RULE_VALUE
+      ? String(f.attendanceRuleId)
+      : null,
     dept: String(f.dept ?? ''),
     title: String(f.title ?? ''),
     role: f.role as Member['role'],
