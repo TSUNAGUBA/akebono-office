@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   GitHub Actions デプロイ（.github/workflows/deploy.yml）が参照する
   Repository secrets を PowerShell だけで設定するスクリプト。
@@ -86,7 +86,8 @@ if ($sa.project_id -and $sa.project_id -ne $ProjectId) {
 # ---------- Secrets 設定（冪等: 再実行すると同名 secret を上書き更新） ----------
 
 Write-Step "Repository secrets を設定: $Repo"
-$saRaw | gh secret set FIREBASE_SERVICE_ACCOUNT --repo $Repo
+# PS 5.1 のパイプは $OutputEncoding（既定 ASCII）で送られるため、引数渡しにする
+gh secret set FIREBASE_SERVICE_ACCOUNT --repo $Repo --body $saRaw
 if ($LASTEXITCODE -ne 0) { throw 'FIREBASE_SERVICE_ACCOUNT の設定に失敗しました。' }
 Write-Host '  ✓ FIREBASE_SERVICE_ACCOUNT'
 

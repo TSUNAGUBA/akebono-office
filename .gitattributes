@@ -1,0 +1,3 @@
+# PowerShell スクリプトは Windows PowerShell 5.1 互換のため CRLF を維持する
+# （ファイル本体は UTF-8 BOM 付きで保存すること。BOM なしだと 5.1 が ANSI として読み文字化けする）
+*.ps1 text eol=crlf
