@@ -12,6 +12,12 @@ const userMenuOpen = ref(false)
 /** タイムカードモーダル（ヘッダーからどの画面でも打刻できる） */
 const punchModalOpen = ref(false)
 
+// モーダル内のリンク（勤怠管理へ等）で遷移したら閉じる（開いたまま画面を覆わない）
+watch(() => route.path, () => {
+  punchModalOpen.value = false
+  userMenuOpen.value = false
+})
+
 function iconOf(name: string) {
   return (icons as Record<string, unknown>)[name] ?? icons.Circle
 }
