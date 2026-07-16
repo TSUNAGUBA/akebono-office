@@ -104,14 +104,17 @@ export function useReportAssist() {
     return q.question.includes('|') ? q.question.split('|').slice(1).join('|') : q.question
   }
 
-  /** 回答を記録する（追記のみ・答え直しは新しい回答が優先される） */
-  function recordAnswer(q: AssistQuestion, answer: string): Result {
+  /**
+   * 回答を記録する（追記のみ・答え直しは新しい回答が優先される）
+   * @param date 記録対象日（省略時は本日。過去日の日報を書くケースに対応）
+   */
+  function recordAnswer(q: AssistQuestion, answer: string, date?: string): Result {
     const text = answer.trim()
     if (!text) return { ok: false, error: { code: 'AKO-RAS-001', message: '回答を入力してください' } }
     hearingLogs.value = [...hearingLogs.value, {
       id: nextId('hearingLogs', 'hl'),
       memberId: currentUser.value.id,
-      date: todayJst(),
+      date: date ?? todayJst(),
       kind: 'qa',
       calendarEventId: q.calendarEventId,
       question: q.question,
@@ -122,14 +125,17 @@ export function useReportAssist() {
     return { ok: true }
   }
 
-  /** ぽいぽいメモ（低摩擦の断片投稿。tokutake ぽいぽいポスト方式） */
-  function poipoiMemo(text: string): Result {
+  /**
+   * ぽいぽいメモ（低摩擦の断片投稿。tokutake ぽいぽいポスト方式）
+   * @param date 記録対象日（省略時は本日）
+   */
+  function poipoiMemo(text: string, date?: string): Result {
     const t = text.trim().slice(0, 2000)
     if (!t) return { ok: false, error: { code: 'AKO-RAS-002', message: 'メモを入力してください' } }
     hearingLogs.value = [...hearingLogs.value, {
       id: nextId('hearingLogs', 'hl'),
       memberId: currentUser.value.id,
-      date: todayJst(),
+      date: date ?? todayJst(),
       kind: 'memo',
       calendarEventId: null,
       question: '',

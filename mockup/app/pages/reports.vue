@@ -263,7 +263,7 @@ const dayMemos = computed(() =>
   assist.logsOf(currentUserId.value, selDate.value).filter(l => l.kind === 'memo'))
 
 function onPoipoi(): void {
-  const res = assist.poipoiMemo(memoText.value)
+  const res = assist.poipoiMemo(memoText.value, selDate.value)
   if (!res.ok) {
     show(res.error.message, 'warn')
     return
@@ -290,7 +290,7 @@ function lastAnswerOf(q: AssistQuestion): string {
 }
 
 function submitAnswer(q: AssistQuestion, text: string): void {
-  const res = assist.recordAnswer(q, text)
+  const res = assist.recordAnswer(q, text, selDate.value)
   if (!res.ok) {
     show(res.error.message, 'warn')
     return
@@ -601,9 +601,6 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
         <!-- ぽいぽいメモ -->
         <UiSectionCard title="ぽいぽいメモ" description="気づいたこと・やったことを一言でぽいっと。日報ドラフトの材料になります">
           <div class="grid gap-2">
-            <p v-if="selDate !== todayJst()" class="text-[11px] text-warn">
-              ※ 新しいメモは本日（{{ fmtDate(todayJst()) }}）の日付で記録されます（モック）
-            </p>
             <div class="flex gap-1.5">
               <input
                 v-model="memoText"
@@ -634,9 +631,6 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
             <span class="num whitespace-nowrap text-xs font-semibold text-sub">回答 {{ answeredCount }}/{{ questions.length }}</span>
           </template>
           <div class="grid gap-2">
-            <p v-if="selDate !== todayJst()" class="text-[11px] text-warn">
-              ※ 新しい回答は本日（{{ fmtDate(todayJst()) }}）の日付で記録されます（モック）
-            </p>
             <div
               v-for="q in questions"
               :key="q.key"
