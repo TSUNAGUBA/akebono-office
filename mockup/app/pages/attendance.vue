@@ -1,11 +1,12 @@
 <script setup lang="ts">
 /**
- * F-04 勤怠管理（タブ: 日次 / 月次 / 有給 / 申請 / 設定※管理者）
+ * F-04 勤怠管理（タブ: 日次 / 週次 / 月次 / 有給 / 申請 / 設定※管理者）
  * 集計・状態機械は useAttendance / useLeave が SoT。この画面は表示と操作フローのみを持つ。
  * ?tab=settings 等のクエリで初期タブを指定できる。
  */
 import { CalendarPlus, Check, ChevronLeft, ChevronRight, FilePen, Plus, X } from 'lucide-vue-next'
 import type { CalendarDayCell } from '~/components/widgets/CalendarMonth.vue'
+import type { DaySummary } from '~/composables/useAttendance'
 import {
   LEAVE_REQUEST_STATUS_LABELS, LEAVE_REQUEST_STATUS_TONES, LEAVE_UNIT_LABELS, useLeave,
 } from '~/composables/useLeave'
@@ -13,8 +14,8 @@ import type {
   AttendanceBuckets, AttendanceRule, EmploymentType, LeaveRequest, PunchKind,
 } from '~/types/domain'
 import type { TableColumn, TabItem, Tone } from '~/types/ui'
-import { OT_MONTHLY_LIMIT_MIN } from '~/utils/attendance-calc'
-import { addDays, fmtDateLong, fmtHours, fmtMinutes, fmtTime, toDateKey, weekdayOf } from '~/utils/format'
+import { LEGAL_WEEKLY_MIN, OT_MONTHLY_LIMIT_MIN } from '~/utils/attendance-calc'
+import { addDays, fmtDate, fmtDateLong, fmtHours, fmtMinutes, fmtTime, weekdayOf } from '~/utils/format'
 import { EMPLOYMENT_TYPE_LABELS, PUNCH_KIND_LABELS } from '~/utils/labels'
 
 const route = useRoute()
@@ -22,7 +23,7 @@ const router = useRouter()
 const { tbl } = useMockDb()
 const { currentUser, isAdmin } = useCurrentUser()
 const {
-  fixRequests, ruleFor, daySummary, monthSummary, alerts,
+  fixRequests, ruleFor, punchesRawOf, daySummary, monthSummary, alerts,
   raiseOvertimeEscalations, requestFix, decideFix,
 } = useAttendance()
 const leave = useLeave()
@@ -37,7 +38,7 @@ function memberName(id: string): string {
 
 // ---------- タブ（route.query.tab で初期化・同期） ----------
 
-const VALID_TABS = ['daily', 'monthly', 'leave', 'requests', 'settings']
+const VALID_TABS = ['daily', 'weekly', 'monthly', 'leave', 'requests', 'settings']
 
 function normalizeTab(v: unknown): string {
   const s = String(v ?? '')
@@ -70,6 +71,7 @@ const pendingCount = computed(() =>
 const tabs = computed<TabItem[]>(() => {
   const t: TabItem[] = [
     { key: 'daily', label: '日次' },
+    { key: 'weekly', label: '週次' },
     { key: 'monthly', label: '月次' },
     { key: 'leave', label: '有給' },
     { key: 'requests', label: '申請', badge: isAdmin.value ? pendingCount.value : undefined },
@@ -78,7 +80,7 @@ const tabs = computed<TabItem[]>(() => {
   return t
 })
 
-// ---------- 対象メンバー（日次・月次で共有。管理者のみ他メンバーを閲覧可） ----------
+// ---------- 対象メンバー（日次・週次・月次で共有。管理者のみ他メンバーを閲覧可） ----------
 
 const punchTargets = computed(() => members.value.filter(m => m.active && m.punchRequired))
 const memberOptions = computed(() =>
@@ -138,6 +140,22 @@ const dayPendingFixes = computed(() =>
   fixRequests.value.filter(f =>
     f.memberId === selMemberId.value && f.date === selDate.value && f.status === 'pending'))
 
+/**
+ * 修正履歴を含むタイムライン（F-04-6 修正履歴）。
+ * punchesOf は置換済みの旧打刻を返さないため、生列（punchesRawOf）を使い、
+ * fix レコードの fixedFrom と kind が一致する旧打刻（source!=='fix'）を「修正前」として注釈する。
+ * 集計値は daySummary（有効打刻ベース）のままで変えない。
+ */
+const dailyTimeline = computed(() => {
+  const rows = punchesRawOf(selMemberId.value, selDate.value)
+  const superseded = new Set(
+    rows.filter(p => p.source === 'fix' && p.fixedFrom).map(p => `${p.kind}|${p.fixedFrom}`))
+  return rows.map(p => ({
+    ...p,
+    superseded: p.source !== 'fix' && superseded.has(`${p.kind}|${p.at}`),
+  }))
+})
+
 function punchDotClass(kind: PunchKind): string {
   if (kind === 'in') return 'bg-ok'
   if (kind === 'out') return 'bg-info'
@@ -175,6 +193,47 @@ function submitFix(): void {
   fixOpen.value = false
   show('打刻修正を申請しました（承認後に反映されます）', 'ok', { label: '申請状況', to: '/attendance?tab=requests' })
 }
+
+// ---------- 週次タブ（F-04-2 週 40h 判定含む週間グリッド） ----------
+
+/** 週の起点は日曜（法定休日曜日に合わせる）。todayJst() 起点のため TZ 非依存 */
+function startOfWeek(dateKey: string): string {
+  return addDays(dateKey, -weekdayOf(dateKey))
+}
+
+const selWeekStart = ref(startOfWeek(todayKey))
+
+function shiftWeek(delta: number): void {
+  selWeekStart.value = addDays(selWeekStart.value, delta * 7)
+}
+
+const weekLabel = computed(() =>
+  `${fmtDateLong(selWeekStart.value)} 〜 ${fmtDateLong(addDays(selWeekStart.value, 6))}`)
+
+/** 日曜〜土曜の 7 日分。60h 超判定を保つため、月をまたぐ週も monthSummary から日を取り出す */
+const weekDays = computed<DaySummary[]>(() => {
+  const dates = Array.from({ length: 7 }, (_, i) => addDays(selWeekStart.value, i))
+  const byDate = new Map<string, DaySummary>()
+  for (const month of new Set(dates.map(d => d.slice(0, 7)))) {
+    for (const s of monthSummary(selMemberId.value, month).days) byDate.set(s.date, s)
+  }
+  return dates.map(date => byDate.get(date) ?? daySummary(selMemberId.value, date))
+})
+
+const weekLegalWd = computed(() => ruleFor(selMemberId.value)?.legalHolidayWeekday ?? 0)
+
+function dayOtMinutes(d: DaySummary): number {
+  return d.buckets.nonStatutoryOt + d.buckets.over60Ot
+}
+
+// 週 40h（法定労働時間）に対する進捗（80% で警告・超過で重大）
+const weekTotalWork = computed(() => weekDays.value.reduce((s, d) => s + d.workMinutes, 0))
+const weekRatio = computed(() => weekTotalWork.value / LEGAL_WEEKLY_MIN)
+const weekGaugeFillClass = computed(() => {
+  if (weekRatio.value > 1) return 'bg-crit'
+  if (weekRatio.value >= 0.8) return 'bg-warn'
+  return 'bg-brand'
+})
 
 // ---------- 月次タブ ----------
 
@@ -215,8 +274,8 @@ function openDaily(date: string): void {
   tab.value = 'daily'
 }
 
-// 36 協定アラート + 45h 進捗ゲージ
-const a36 = computed(() => alerts(selMemberId.value))
+// 36 協定アラート + 45h 進捗ゲージ（アラートはゲージと同じく選択月を最終月として判定）
+const a36 = computed(() => alerts(selMemberId.value, selMonth.value))
 const otMinutes = computed(() =>
   monthData.value.total.nonStatutoryOt + monthData.value.total.over60Ot)
 const otRatio = computed(() => otMinutes.value / OT_MONTHLY_LIMIT_MIN)
@@ -543,20 +602,29 @@ function submitRule(): void {
         <!-- タイムライン -->
         <UiSectionCard
           title="タイムライン"
-          :description="viewingSelf ? '打刻を時刻順に表示' : `${memberName(selMemberId)} さんの打刻を閲覧中（修正申請は本人のみ）`"
+          :description="viewingSelf ? '打刻を時刻順に表示（修正前の打刻も履歴として保全）' : `${memberName(selMemberId)} さんの打刻を閲覧中（修正申請は本人のみ）`"
         >
           <UiEmptyState
-            v-if="dailyData.punches.length === 0"
+            v-if="dailyTimeline.length === 0"
             icon="CalendarOff"
             title="この日の打刻はありません"
             :hint="!currentUser.punchRequired && viewingSelf ? `${currentUser.name} さんは打刻対象外です` : '休日または未出勤の日です'"
           />
           <ol v-else class="grid gap-2">
-            <li v-for="p in dailyData.punches" :key="p.id" class="flex flex-wrap items-center gap-2">
-              <span class="h-2 w-2 shrink-0 rounded-full" :class="punchDotClass(p.kind)" aria-hidden="true" />
-              <span class="num w-12 text-[13px] font-bold">{{ fmtTime(p.at) }}</span>
-              <span class="text-[13px]">{{ PUNCH_KIND_LABELS[p.kind] }}</span>
-              <UiStatusBadge v-if="p.source === 'fix'" tone="info" label="修正反映" />
+            <li v-for="p in dailyTimeline" :key="p.id" class="flex flex-wrap items-center gap-2">
+              <span
+                class="h-2 w-2 shrink-0 rounded-full"
+                :class="p.superseded ? 'bg-line-strong' : punchDotClass(p.kind)"
+                aria-hidden="true"
+              />
+              <span class="num w-12 text-[13px] font-bold" :class="p.superseded ? 'text-muted line-through' : ''">
+                {{ fmtTime(p.at) }}
+              </span>
+              <span class="text-[13px]" :class="p.superseded ? 'text-muted line-through' : ''">
+                {{ PUNCH_KIND_LABELS[p.kind] }}
+              </span>
+              <UiStatusBadge v-if="p.superseded" tone="neutral" label="修正前" />
+              <UiStatusBadge v-else-if="p.source === 'fix'" tone="info" label="修正反映" />
               <span v-if="p.fixReason" class="text-[11px] text-muted">（{{ p.fixReason }}）</span>
             </li>
           </ol>
@@ -590,6 +658,94 @@ function submitRule(): void {
               </dd>
             </div>
           </dl>
+        </UiSectionCard>
+      </div>
+    </div>
+
+    <!-- ================= 週次 ================= -->
+    <div v-else-if="tab === 'weekly'" role="tabpanel" aria-label="週次" class="mt-3">
+      <UiFilterBar>
+        <button type="button" class="btn" aria-label="前週" @click="shiftWeek(-1)">
+          <ChevronLeft class="h-4 w-4" /> 前週
+        </button>
+        <button type="button" class="btn" @click="selWeekStart = startOfWeek(todayKey)">今週</button>
+        <button type="button" class="btn" aria-label="翌週" @click="shiftWeek(1)">
+          翌週 <ChevronRight class="h-4 w-4" />
+        </button>
+        <span class="text-[13px] font-semibold text-sub">{{ weekLabel }}</span>
+        <template #trailing>
+          <UiSelect
+            v-if="isAdmin"
+            v-model="selMemberId"
+            :options="memberOptions"
+            aria-label="表示メンバー"
+          />
+        </template>
+      </UiFilterBar>
+
+      <div class="grid gap-3 lg:grid-cols-2">
+        <!-- 週間グリッド（日曜起点） -->
+        <UiSectionCard title="週間グリッド" description="日曜〜土曜の実労働と法定外残業。日をクリックするとその日の日次を表示します">
+          <ol class="grid gap-1.5">
+            <li v-for="d in weekDays" :key="d.date">
+              <button
+                type="button"
+                class="flex min-h-[44px] w-full flex-wrap items-center gap-x-3 gap-y-0.5 rounded-lg border border-line px-3 py-2 text-left transition-colors hover:border-brand"
+                :class="weekdayOf(d.date) === weekLegalWd ? 'bg-page' : 'bg-surface'"
+                :aria-label="`${fmtDateLong(d.date)} の日次を表示`"
+                @click="openDaily(d.date)"
+              >
+                <span class="w-16 shrink-0">
+                  <span class="text-[11px] font-semibold" :class="weekdayOf(d.date) === 0 ? 'text-serious' : 'text-muted'">
+                    {{ WEEKDAYS[weekdayOf(d.date)] }}
+                  </span>
+                  <span class="num ml-1 text-[13px] font-bold">{{ fmtDate(d.date) }}</span>
+                </span>
+                <span class="text-[12px] text-sub">
+                  実労働 <b class="num" :class="d.workMinutes > 0 ? 'text-ink' : 'text-muted'">{{ fmtMinutes(d.workMinutes) }}</b>
+                </span>
+                <span class="text-[12px] text-sub">
+                  法定外 <b class="num" :class="dayOtMinutes(d) > 0 ? 'text-warn' : 'text-muted'">{{ fmtMinutes(dayOtMinutes(d)) }}</b>
+                </span>
+                <UiStatusBadge v-if="weekdayOf(d.date) === weekLegalWd" tone="neutral" label="法定休日" />
+              </button>
+            </li>
+          </ol>
+        </UiSectionCard>
+
+        <!-- 週間合計 + 週 40h 進捗 -->
+        <UiSectionCard title="週間合計" description="法定労働時間（週40時間・労基法32条）に対する実労働の進捗">
+          <div class="flex items-baseline justify-between text-[12px]">
+            <span class="font-semibold text-sub">実労働合計（週40時間に対する進捗）</span>
+            <span class="num font-bold" :class="weekRatio > 1 ? 'text-crit' : weekRatio >= 0.8 ? 'text-warn' : 'text-ink'">
+              {{ fmtMinutes(weekTotalWork) }} / {{ fmtMinutes(LEGAL_WEEKLY_MIN) }}
+            </span>
+          </div>
+          <div
+            class="mt-1 h-2 overflow-hidden rounded-full border border-line bg-page"
+            role="progressbar"
+            aria-label="週40時間に対する実労働の進捗"
+            :aria-valuenow="Math.min(100, Math.round(weekRatio * 100))"
+            aria-valuemin="0"
+            aria-valuemax="100"
+          >
+            <div
+              class="h-full rounded-full transition-all"
+              :class="weekGaugeFillClass"
+              :style="{ width: `${Math.min(100, weekRatio * 100)}%` }"
+            />
+          </div>
+          <p v-if="weekTotalWork > LEGAL_WEEKLY_MIN" class="mt-2 flex flex-wrap items-center gap-1.5 text-[12px]">
+            <UiStatusBadge tone="crit" label="週40時間超過" />
+            <span class="text-sub">超過 <b class="num text-crit">{{ fmtMinutes(weekTotalWork - LEGAL_WEEKLY_MIN) }}</b>（法定外残業として月次・36協定判定に反映されます）</span>
+          </p>
+          <p v-else-if="weekRatio >= 0.8" class="mt-2 flex flex-wrap items-center gap-1.5 text-[12px]">
+            <UiStatusBadge tone="warn" label="警告" />
+            <span class="text-sub">週40時間の{{ Math.round(weekRatio * 100) }}%に達しています</span>
+          </p>
+          <p v-else class="mt-2 flex items-center gap-1.5 text-[12px] text-sub">
+            <UiStatusBadge tone="ok" label="良好" dot /> 週40時間の範囲内です
+          </p>
         </UiSectionCard>
       </div>
     </div>
@@ -680,7 +836,7 @@ function submitRule(): void {
               </li>
             </ul>
             <p v-else class="flex items-center gap-1.5 text-[12px] text-sub">
-              <UiStatusBadge tone="ok" label="良好" dot /> 直近6ヶ月に36協定アラートはありません
+              <UiStatusBadge tone="ok" label="良好" dot /> {{ monthLabel }}までの直近6ヶ月に36協定アラートはありません
             </p>
           </UiSectionCard>
         </div>
