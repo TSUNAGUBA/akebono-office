@@ -59,15 +59,16 @@
 | `AuditLog` | id, actorId, action, entity, entityId, detail, at | C3 |
 | `SalesMonthly`（モック） | month, projectType, companyId, amount, cost | C2 |
 
-### 1.x 日報 AI アシスト関連（F-06-7/8）
+### 1.3 日報 AI アシスト関連（F-06-7/8）
 
-| エンティティ | 主なフィールド | 機密度 |
-|---|---|---|
-| `CalendarEvent` | id, memberId, date, from, to, title, source(`google`/`app`), syncedToGoogle, projectId（タイトルから推定 or 手動） | C2 |
-| `HearingLog` | id, memberId, date, kind(`qa`=ヒアリング回答/`memo`=ぽいぽいメモ), calendarEventId, question, answer, at | C2 |
-| `AppConfigItem` | key, value（例: reportInputMode = `form`/`assist`/`both`） | C1 |
+| エンティティ | 主なフィールド | 分類 | 機密度 |
+|---|---|---|---|
+| `CalendarEvent`（google 発） | id(決定的 `gcal-…`), memberId, date, from, to, title, source=`google`, projectId（タイトルから推定 or 手動） | 外部キャッシュ（SoT は Google。編集・削除不可） | C2 |
+| `CalendarEvent`（app 発） | id, memberId, date, from, to, title, source=`app`, syncedToGoogle, projectId | 本人管理のタスク（編集・削除可。SoT は本アプリ） | C2 |
+| `HearingLog` | id, memberId, date, kind(`qa`=ヒアリング回答/`memo`=ぽいぽいメモ), calendarEventId, question, answer, at | 記録系（追記のみ・巻き戻し禁止） | C3（課題回答を含み `DailyReport` と同水準） |
+| `AppConfigItem` | key, value（例: reportInputMode = `form`/`assist`/`both`） | 設定系（upsert 更新可。SoT は本アプリ） | C1 |
 
-> **SoT 宣言（カレンダー）:** `source='google'` の予定は **Google カレンダーが SoT**（本アプリはキャッシュ。編集・削除不可、決定的 id によるべき等 upsert で同期）。`source='app'` の予定は**本アプリが SoT**（`syncedToGoogle` で Google への反映状態を持つ）。HearingLog は記録系（追記のみ）。日報ドラフトは保存せずフォームへ流し込むのみで、**提出済み日報は再生成で上書きしない**（ai-manager の confirmed 保護と同型）。
+> **SoT 宣言（カレンダー）:** `source='google'` の予定は **Google カレンダーが SoT**（本アプリはキャッシュ。編集・削除不可、決定的 id によるべき等 upsert で同期）。`source='app'` の予定は**本アプリが SoT**（`syncedToGoogle` で Google への反映状態を持つ）。連携解除後もキャッシュは表示用に保持し、**未連携メンバーには初期キャッシュを投入しない**（連携＝同意して初めて同期される、を再現）。HearingLog は記録系（追記のみ）。日報ドラフトは保存せずフォームへ流し込むのみで、**提出済み日報は再生成で上書きしない**（ai-manager の confirmed 保護と同型）。
 
 ## 2. スタースキーマ接続（akebono-scm-platform `mart` 規約準拠）
 
@@ -101,6 +102,8 @@
 | `fact_service_uptime` | 日 × サービス | down_minutes, uptime_ratio | additive（down_minutes）/ non_additive（ratio） |
 
 売上は既存 `fact_sales`（役務売上として dim_product をサービス品目に転用）または `fact_billing` を利用し、新設しない（開発原則 3）。
+
+日報 AI アシスト関連（`CalendarEvent` / `HearingLog` / `AppConfigItem`）は **mart 対象外**とする（設計判断として明示）: カレンダー予定・ヒアリングログは日報ドラフトの入力材料（原文系）であり、分析価値は `fact_effort`（日報工数）に集約済み。原文を mart に載せない原則（§2.1）にも従う。設定値（AppConfig）は分析対象外。
 
 ### 2.4 マッピング表（アプリ SoT → mart）
 

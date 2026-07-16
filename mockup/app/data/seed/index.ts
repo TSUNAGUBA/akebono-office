@@ -125,7 +125,12 @@ export function buildSeed(): MockDbShape {
     chatMessages: [],
     akebonoWishes: misc.seedAkebonoWishes,
     auditLogs: misc.seedAuditLogs,
-    calendarEvents: buildCalendarEvents(),
+    // google 発予定のキャッシュは「連携済みメンバー」の分だけ初期投入する。
+    // 未連携の m-03（葛西）は連携フロー体験用: 連携（擬似 OAuth）→ 初回同期で初めてキャッシュに入る
+    calendarEvents: buildCalendarEvents().filter((e) => {
+      if (e.source !== 'google') return true
+      return core.seedMembers.find(m => m.id === e.memberId)?.googleCalendarConnected === true
+    }),
     hearingLogs: [],
     appConfigs: [{ key: 'reportInputMode', value: 'both' }],
     salesMonthly: buildSalesMonthly(),

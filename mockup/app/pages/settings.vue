@@ -90,7 +90,7 @@ const reportInputMode = computed({
   get: () => getConfig('reportInputMode', 'both'),
   set: (v: string) => {
     setConfig('reportInputMode', v)
-    toast.show('日報の入力方式を変更しました（日報・週報の画面に即時反映されます）')
+    toast.show('日報の入力方式を変更しました（日報画面に即時反映されます）')
   },
 })
 

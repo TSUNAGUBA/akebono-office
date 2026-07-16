@@ -1,5 +1,5 @@
 /**
- * カレンダー連携（F-06-7・モック）
+ * カレンダー連携（F-06-8・モック）
  * - source='google' の予定は Google が SoT（本アプリはキャッシュ）。同期で upsert、アプリ側からは編集・削除しない
  * - source='app' の予定は本アプリが SoT。pushToGoogle で Google へ反映（モックではフラグ更新+トースト）
  * - 同期はべき等: 決定的 id（gcal-…）による upsert で、再実行してもアプリ発予定・ヒアリングログを壊さない
@@ -18,7 +18,10 @@ export function useCalendar() {
   /** 現在ユーザーが Google カレンダー連携済みか */
   const isConnected = computed(() => currentUser.value.googleCalendarConnected)
 
-  /** 連携する（擬似 OAuth 同意後に呼ぶ）。連携直後に当日分を初回同期する */
+  /**
+   * 連携する（擬似 OAuth 同意後に呼ぶ）。連携直後に当日分を初回同期する。
+   * 過去日・未来日は各日付のスケジュールカードの「Google から同期」で個別に取得できるため、初回は当日のみで足りる
+   */
   function connect(): Result & { synced?: number } {
     members.value = members.value.map(m =>
       m.id === currentUser.value.id ? { ...m, googleCalendarConnected: true } : m)
@@ -108,8 +111,8 @@ export function useCalendar() {
     }
   }
 
-  /** アプリ発予定を後から Google へ反映（モック: フラグ更新のみ） */
-  function pushToGoogle(eventId: string): Result {
+  /** アプリ発予定を後から Google へ反映（モック: フラグ更新のみ）。反映済みへの再実行は no-op + warning（冪等） */
+  function pushToGoogle(eventId: string): Result & { warning?: string } {
     if (!isConnected.value) {
       return { ok: false, error: { code: 'AKO-CAL-007', message: 'Google カレンダーが未連携です。連携してから反映してください' } }
     }
@@ -118,7 +121,8 @@ export function useCalendar() {
       return { ok: false, error: { code: 'AKO-CAL-004', message: 'アプリで登録したタスクのみ Google へ反映できます' } }
     }
     if (target.syncedToGoogle) {
-      return { ok: false, error: { code: 'AKO-CAL-005', message: 'すでに Google へ反映済みです' } }
+      // AKO-CAL-005 は欠番（反映済みへの再実行はエラーではなく no-op に変更）
+      return { ok: true, id: eventId, warning: 'すでに Google へ反映済みです（変更はありません）' }
     }
     events.value = events.value.map(e => e.id === eventId ? { ...e, syncedToGoogle: true } : e)
     commit()
@@ -136,17 +140,8 @@ export function useCalendar() {
     return { ok: true, id: eventId }
   }
 
-  /** 予定の合計時間（分） */
-  function totalMinutesOf(memberId: string, date: string): number {
-    return eventsOf(memberId, date).reduce((s, e) => {
-      const from = Number(e.from.slice(0, 2)) * 60 + Number(e.from.slice(3, 5))
-      const to = Number(e.to.slice(0, 2)) * 60 + Number(e.to.slice(3, 5))
-      return s + Math.max(0, to - from)
-    }, 0)
-  }
-
   return {
-    events, eventsOf, syncFromGoogle, addTask, pushToGoogle, removeTask, totalMinutesOf,
+    events, eventsOf, syncFromGoogle, addTask, pushToGoogle, removeTask,
     isConnected, connect, disconnect,
   }
 }

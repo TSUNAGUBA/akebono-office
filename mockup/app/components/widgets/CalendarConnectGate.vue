@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * Google カレンダー連携ゲート（F-06-7・擬似 OAuth）
+ * Google カレンダー連携ゲート（F-06-8・擬似 OAuth）
  * 未連携時: 連携の案内カード + 「Google アカウントを連携」→ 擬似 OAuth 同意モーダル → 許可で連携+初回同期。
  * 連携済み: 小さな状態表示 + 連携解除。
  * 本実装では Google OAuth 2.0（calendar.readonly / calendar.events スコープ）の

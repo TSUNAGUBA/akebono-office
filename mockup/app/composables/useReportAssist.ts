@@ -1,14 +1,15 @@
 /**
- * 日報 AI アシスト（F-06-6・モック）
+ * 日報 AI アシスト（F-06-7・モック）
  * 参照設計:
  * - tokutake ぽいぽいポスト: 低摩擦の断片投稿（ぽいぽいメモ）で日中に材料をためる
  * - akebono-ai-manager: テンプレ＋文脈のヒアリング（checkin 方式）→ ログ集約 → ドラフト生成 →
  *   「確認するだけ」フロー（本モックでは既存フォームへ流し込み、確認・修正して提出）
  * 原則:
  * - ヒアリングログは記録系（追記のみ）。ドラフト生成は何度でも再実行可能（フォームを埋めるだけで保存しない）
- * - 提出済みの日報は上書きしない（ai-manager の confirmed_by_user 保護と同型）
+ * - 提出済みの日報は上書きしない（ai-manager の confirmed_by_user 保護と同型。
+ *   判定は useReports.reportOn の結果を用い、呼び出し側（reports.vue）で生成 UI を無効化する）
  */
-import type { CalendarEvent, DailyReport, HearingLog, ReportEntry, ReportInputMode, Result } from '~/types/domain'
+import type { CalendarEvent, HearingLog, ReportEntry, ReportInputMode, Result } from '~/types/domain'
 
 export interface AssistQuestion {
   key: string
@@ -161,9 +162,7 @@ export function useReportAssist() {
   }
 
   function eventMinutes(e: CalendarEvent): number {
-    const from = Number(e.from.slice(0, 2)) * 60 + Number(e.from.slice(3, 5))
-    const to = Number(e.to.slice(0, 2)) * 60 + Number(e.to.slice(3, 5))
-    return Math.max(0, to - from)
+    return Math.max(0, hhmmToMin(e.to) - hhmmToMin(e.from))
   }
 
   /** 0.25h 刻みへ丸め */
@@ -230,15 +229,8 @@ export function useReportAssist() {
     }
   }
 
-  /** その日の提出済み日報（提出済みならドラフト再生成でフォームを上書きしない） */
-  function submittedReportOf(memberId: string, date: string): DailyReport | undefined {
-    const reports = tbl('dailyReports')
-    return reports.value.find(r =>
-      r.authorKind === 'human' && r.memberId === memberId && r.date === date && r.status === 'submitted')
-  }
-
   return {
     inputMode, logsOf, questionsFor, displayQuestion, recordAnswer, poipoiMemo,
-    generateDraft, submittedReportOf,
+    generateDraft,
   }
 }

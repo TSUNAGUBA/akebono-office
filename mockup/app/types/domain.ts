@@ -354,7 +354,7 @@ export interface ShiftDemand {
   required: number
 }
 
-// ---------- 日報 AI アシスト（F-06-6/7） ----------
+// ---------- 日報 AI アシスト（F-06-7/8） ----------
 
 export type CalendarEventSource = 'google' | 'app'
 

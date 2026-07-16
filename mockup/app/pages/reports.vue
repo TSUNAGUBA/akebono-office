@@ -167,7 +167,7 @@ function onSubmit(): void {
   }
 }
 
-// ---------- AI アシスト入力（F-06-6/7） ----------
+// ---------- AI アシスト入力（F-06-7/8） ----------
 
 const assist = useReportAssist()
 const cal = useCalendar()
@@ -179,7 +179,10 @@ const entryMethod = ref<'form' | 'assist'>('assist')
 const assistActive = computed(() =>
   inputMode.value === 'assist' || (inputMode.value === 'both' && entryMethod.value === 'assist'))
 
-const isSubmittedDay = computed(() => myReport.value?.status === 'submitted')
+/** この日の自分の日報（提出済みのときのみ）。提出済み保護（ドラフト再生成不可）の唯一の判定元 */
+const submittedForDate = computed(() =>
+  myReport.value?.status === 'submitted' ? myReport.value : undefined)
+const isSubmittedDay = computed(() => !!submittedForDate.value)
 
 /** AI アシスト時、編集フォームはドラフトの確認・修正ステップとしてのみ表示する */
 const confirmStep = ref(false)
@@ -217,9 +220,13 @@ function onSyncGoogle(): void {
 
 function onPushToGoogle(e: CalendarEvent): void {
   const res = cal.pushToGoogle(e.id)
+  if (!res.ok) {
+    show(res.error.message, 'crit')
+    return
+  }
   show(
-    res.ok ? `「${e.title}」を Google カレンダーへ反映しました（モック）` : res.error.message,
-    res.ok ? 'ok' : 'crit',
+    res.warning ?? `「${e.title}」を Google カレンダーへ反映しました（モック）`,
+    res.warning ? 'warn' : 'ok',
   )
 }
 
@@ -307,15 +314,17 @@ function onAnswerKeydown(e: KeyboardEvent, q: AssistQuestion): void {
 
 // -- ドラフト生成 → 確認・修正ステップ --
 
-const submittedForDate = computed(() =>
-  assist.submittedReportOf(currentUserId.value, selDate.value))
-
 function scrollToEditor(): void {
   void nextTick(() => editorWrap.value?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
 }
 
-function onGenerateDraft(): void {
+async function onGenerateDraft(): Promise<void> {
   if (submittedForDate.value) return // 提出済みの日報は上書きしない
+  if (confirmStep.value) {
+    // 確認・修正中の手直しを黙って捨てない
+    const okAsk = await ask('ドラフトの再生成', '生成し直すと、確認・修正中の内容を新しいドラフトで置き換えます。よろしいですか？', { confirmLabel: '再生成' })
+    if (!okAsk) return
+  }
   const d = assist.generateDraft(currentUserId.value, selDate.value)
   editEntries.value = d.entries.map(e => ({ ...e }))
   editReflection.value = d.reflection
@@ -551,23 +560,29 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
         </div>
       </UiSectionCard>
 
-      <!-- ================= AI アシスト入力（F-06-6/7） ================= -->
+      <!-- ================= AI アシスト入力（F-06-7/8） ================= -->
       <template v-if="assistActive">
         <!-- Google カレンダー連携ゲート（未連携: 連携プロンプト+擬似 OAuth / 連携済み: 状態バー+解除） -->
         <WidgetsCalendarConnectGate />
 
-        <!-- スケジュール & タスク（カレンダー連携済みのときのみ） -->
-        <UiSectionCard v-if="calConnected" title="スケジュール & タスク" description="この日の予定とタスク">
+        <!-- スケジュール & タスク（タスク追加は未連携でも可能。Google 同期は連携済みのみ） -->
+        <UiSectionCard title="スケジュール & タスク" description="この日の予定とタスク">
           <template #actions>
-            <button type="button" class="btn btn-sm" @click="onSyncGoogle">Google から同期</button>
+            <button v-if="calConnected" type="button" class="btn btn-sm" @click="onSyncGoogle">Google から同期</button>
             <button type="button" class="btn btn-sm" @click="openTaskModal">タスクを追加</button>
           </template>
-          <UiEmptyState v-if="dayEvents.length === 0" icon="CalendarDays" title="予定がありません" hint="Google カレンダーから同期するか、タスクを追加してください">
+          <UiEmptyState
+            v-if="dayEvents.length === 0"
+            icon="CalendarDays"
+            title="予定がありません"
+            :hint="calConnected ? 'Google カレンダーから同期するか、タスクを追加してください' : 'タスクを追加してください（Google 連携すると予定も同期できます）'"
+          >
             <template #action>
-              <button type="button" class="btn btn-sm" @click="onSyncGoogle">
+              <button v-if="calConnected" type="button" class="btn btn-sm" @click="onSyncGoogle">
                 <RefreshCw class="h-3.5 w-3.5" aria-hidden="true" />
                 Google から同期
               </button>
+              <button v-else type="button" class="btn btn-sm" @click="openTaskModal">タスクを追加</button>
             </template>
           </UiEmptyState>
           <ul v-else class="grid gap-2">
@@ -598,8 +613,8 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
           </ul>
         </UiSectionCard>
 
-        <!-- ぽいぽいメモ -->
-        <UiSectionCard title="ぽいぽいメモ" description="気づいたこと・やったことを一言でぽいっと。日報ドラフトの材料になります">
+        <!-- ぽいぽいメモ（提出済みの日は材料が使われないため入力を閉じる） -->
+        <UiSectionCard v-if="!isSubmittedDay" title="ぽいぽいメモ" description="気づいたこと・やったことを一言でぽいっと。日報ドラフトの材料になります">
           <div class="grid gap-2">
             <div class="flex gap-1.5">
               <input
@@ -625,8 +640,8 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
           </div>
         </UiSectionCard>
 
-        <!-- AI ヒアリング -->
-        <UiSectionCard title="AI ヒアリング" description="予定の進み具合と今日のまとめを一問ずつ">
+        <!-- AI ヒアリング（提出済みの日は回答が使われないため入力を閉じる） -->
+        <UiSectionCard v-if="!isSubmittedDay" title="AI ヒアリング" description="予定の進み具合と今日のまとめを一問ずつ">
           <template #actions>
             <span class="num whitespace-nowrap text-xs font-semibold text-sub">回答 {{ answeredCount }}/{{ questions.length }}</span>
           </template>

@@ -89,7 +89,7 @@ mockup/
 | `UiAvatar` | `name, kind(human/ai), size` | メンバー/AI社員の表示統一 |
 | `UiSectionCard` | `title, description` + slots | セクション枠 |
 
-widgets（業務部品・組み合わせ自由）: `PunchClock`（打刻）、`ApprovalFlow`（承認経路の可視化）、`ApprovalActionBar`（承認/却下/差戻し）、`CalendarMonth`（月次カレンダー）、`WeekGrid`（週別グリッド: 勤怠・シフト共用）、`CommentThread`（コメント+リアクション）、`NotificationList`、`EscalationCard`、`UptimeBar`（90 日稼働率）、`RelationGraph`（顧客関係グラフ）、`KnowledgeCard`。
+widgets（業務部品・組み合わせ自由）: `PunchClock`（打刻）、`ApprovalFlow`（承認経路の可視化）、`ApprovalActionBar`（承認/却下/差戻し）、`CalendarMonth`（月次カレンダー）、`WeekGrid`（週別グリッド: 勤怠・シフト共用）、`CommentThread`（コメント+リアクション）、`NotificationList`、`EscalationCard`、`UptimeBar`（90 日稼働率）、`RelationGraph`（顧客関係グラフ）、`KnowledgeCard`、`CalendarConnectGate`（Google カレンダー連携ゲート: 擬似 OAuth 同意フロー + 連携状態バー）。
 
 charts: `LineChartCard` / `BarChartCard` / `DonutChartCard`（Chart.js。undeux パターン）。
 
@@ -108,6 +108,8 @@ office: `IsometricOffice`（アイソメトリック空間）、`AiEmployeeCard`
 | `useLeave` | 有給付与・残数・申請・年 5 日義務判定 |
 | `useShifts` | 募集期間・希望・割当・確定・バリデーション |
 | `useReports` | 日報/週報 CRUD・提出状況・コメント・AI 報告の合流 |
+| `useCalendar` | Google カレンダー連携（擬似 OAuth・べき等同期・タスク追加/反映/削除。F-06-8） |
+| `useReportAssist` | 日報 AI アシスト（入力方式設定・ヒアリング・ぽいぽいメモ・ドラフト生成。F-06-7） |
 | `useWorkflow` | 稟議 CRUD・承認経路解決・承認操作・代理設定 |
 | `useAiCompany` | AI 社員・ロール・タスク・活動ログ・日次報告生成 |
 | `useDecision` | 判断テーマ・オントロジー・シナリオ・判断ログ |
@@ -118,7 +120,7 @@ office: `IsometricOffice`（アイソメトリック空間）、`AiEmployeeCard`
 | `useChatbot` | シナリオベース応答・出典解決・擬似ストリーミング |
 | `useDocuments` | ドキュメントツリー・タグ・検索 |
 | `useToast` / `useConfirm` | UI フィードバック |
-| `useAppSettings` | 外部リンク・機能トグル・各種ルール設定・デモリセット |
+| `useAppSettings` | 外部リンク・機能トグル・各種ルール設定・汎用設定（`appConfigs` の getConfig/setConfig）・デモリセット |
 
 ## 5. 横断設計ルール
 

@@ -4,12 +4,10 @@
  * リロードしても同じ日なら同じ世界が再現される。
  */
 import type { CalendarEvent, LeaveGrant, PunchRecord, SalesMonthly, UptimeDaily } from '~/types/domain'
-import { addDays, toDateKey, weekdayOf } from '~/utils/format'
+import { addDays, hhmmToMin, toDateKey, weekdayOf } from '~/utils/format'
 import { leaveGrantDays } from '~/utils/attendance-calc'
 import { irange, pick, unit } from '~/utils/rng'
 import { seedAttendanceRules, seedCompanies, seedMembers, seedProjects, seedSystemServices } from './core'
-
-const toMinutes = (hhmm: string): number => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5))
 
 /** シード生成の基準日（実行日の 0:00） */
 export function seedToday(): string {
@@ -38,10 +36,10 @@ export function buildPunchHistory(days = 45): PunchRecord[] {
       const startHour = isParttime
         ? 10
         : assignedRule
-          ? Math.floor(toMinutes(assignedRule.workStart) / 60)
+          ? Math.floor(hhmmToMin(assignedRule.workStart) / 60)
           : 9 + (unit(`${m.id}:${date}:st`) > 0.6 ? 1 : 0)
       const startMin = assignedRule
-        ? toMinutes(assignedRule.workStart) % 60
+        ? hhmmToMin(assignedRule.workStart) % 60
         : irange(`${m.id}:${date}:sm`, 0, 25)
       // 忙しいメンバー（開発部）はやや残業が多い分布にする。時短者の残業は控えめに
       const busy = m.dept === 'システム開発部' ? 1.5 : 1
@@ -53,7 +51,7 @@ export function buildPunchHistory(days = 45): PunchRecord[] {
       const workHours = isParttime
         ? irange(`${m.id}:${date}:wh`, 4, 6)
         : assignedRule
-          ? (toMinutes(assignedRule.workEnd) - toMinutes(assignedRule.workStart) - assignedRule.breakMinutes) / 60
+          ? (hhmmToMin(assignedRule.workEnd) - hhmmToMin(assignedRule.workStart) - assignedRule.breakMinutes) / 60
           : 8
       const breakMin = isParttime ? (workHours > 6 ? 60 : 0) : (assignedRule ? assignedRule.breakMinutes : 60)
 
@@ -136,9 +134,11 @@ export function buildSalesMonthly(): SalesMonthly[] {
 
 
 /**
- * Google カレンダー予定（モック・決定的生成）。
- * 昨日〜明日+1 の平日に、メンバーの参加プロジェクトから定例・作業ブロックを生成する。
+ * Google カレンダー予定（モック・決定的生成）= 「Google 側の真実」役。
+ * 一昨日〜明後日（offset -2..+2）の平日に、メンバーの参加プロジェクトから定例・作業ブロックを生成する。
  * id は決定的（gcal-{member}-{date}-{n}）で、再同期時のべき等 upsert キーになる。
+ * 注意: ここでは連携状態でフィルタしない（未連携メンバーが後から連携→同期しても取得できる必要がある）。
+ * キャッシュへの初期投入時のフィルタはシード統合側（seed/index.ts）で行う。
  */
 export function buildCalendarEvents(): CalendarEvent[] {
   const rows: CalendarEvent[] = []
