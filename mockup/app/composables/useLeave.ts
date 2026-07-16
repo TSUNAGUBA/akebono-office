@@ -231,6 +231,9 @@ export function useLeave() {
 
   /** 有給申請の承認/却下（管理者）。pending ガード + decidedBy 記録 + 申請者へ通知 */
   function decide(requestId: string, action: 'approved' | 'rejected'): Result {
+    if (currentUser.value.role !== 'admin') {
+      return { ok: false, error: { code: 'AKO-LEV-003', message: 'この操作には管理者権限が必要です' } }
+    }
     const req = requests.value.find(r => r.id === requestId)
     if (!req || req.status !== 'pending') {
       return { ok: false, error: { code: 'AKO-LEV-002', message: 'この申請は処理済みです' } }

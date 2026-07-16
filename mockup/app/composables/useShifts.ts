@@ -13,7 +13,7 @@ import type { Tone } from '~/types/ui'
 import {
   LEGAL_WEEKLY_MIN, NIGHT_END_HOUR, NIGHT_START_HOUR, requiredBreakMinutes,
 } from '~/utils/attendance-calc'
-import { addDays, fmtDate, fmtDateLong, fmtHours, toDateKey, weekdayOf } from '~/utils/format'
+import { addDays, fmtDate, fmtDateLong, fmtHours, weekdayOf } from '~/utils/format'
 import { SHIFT_PERIOD_STATUS_LABELS, SHIFT_WISH_LABELS } from '~/utils/labels'
 
 // ---------- 定数（区分ラベルは labels.ts が SoT。ここは F-05 固有の補完分のみ） ----------
@@ -127,6 +127,14 @@ export function useShifts() {
   const sortedPeriods = computed<ShiftPeriod[]>(() =>
     [...periods.value].sort((a, b) => b.startDate.localeCompare(a.startDate)))
 
+  /** 管理系操作の権限ガード（UI の v-if だけに頼らず composable 層でも防ぐ） */
+  function requireAdmin(): Result | null {
+    if (currentUser.value.role !== 'admin') {
+      return { ok: false, error: { code: 'AKO-SFT-008', message: 'この操作には管理者権限が必要です' } }
+    }
+    return null
+  }
+
   function periodById(id: string): ShiftPeriod | undefined {
     return periods.value.find(p => p.id === id)
   }
@@ -145,6 +153,8 @@ export function useShifts() {
 
   /** 状態機械: draft→open→closed→adjusting→published の正順のみ許可 */
   function transition(periodId: string, next: ShiftPeriodStatus): Result {
+    const denied = requireAdmin()
+    if (denied) return denied
     const p = periodById(periodId)
     if (!p) {
       return { ok: false, error: { code: 'AKO-SFT-005', message: '対象の募集期間が見つかりません' } }
@@ -165,6 +175,8 @@ export function useShifts() {
   }
 
   function createPeriod(input: { label: string; startDate: string; endDate: string; wishDeadline: string }): Result {
+    const denied = requireAdmin()
+    if (denied) return denied
     if (!input.label.trim()) {
       return { ok: false, error: { code: 'AKO-SFT-007', message: '期間名を入力してください' } }
     }
@@ -267,7 +279,7 @@ export function useShifts() {
     date: string,
     from: string,
     to: string,
-    opts?: { excludeAssignmentId?: string },
+    opts?: { excludeAssignmentId?: string; periodId?: string },
   ): ShiftWarning[] {
     if (!from || !to || from === to) {
       return [{ code: 'AKO-SFT-007', level: 'error', message: '開始・終了時刻を正しく入力してください' }]
@@ -311,8 +323,9 @@ export function useShifts() {
       })
     }
 
-    // d) 本人希望 NG との衝突
-    const w = wishes.value.find(x => x.memberId === memberId && x.date === date)
+    // d) 本人希望 NG との衝突（期間指定時は同一期間の希望のみ参照。期間重複作成時の誤警告防止）
+    const w = wishes.value.find(x => x.memberId === memberId && x.date === date
+      && (!opts?.periodId || x.periodId === opts.periodId))
     if (w?.wish === 'ng') {
       list.push({
         code: 'AKO-SFT-W03',
@@ -331,6 +344,8 @@ export function useShifts() {
 
   /** 割当の作成・更新。エラー級バリデーション（18歳未満深夜）に該当する場合は書き込まない */
   function assign(input: { periodId: string; memberId: string; date: string; from: string; to: string }): Result {
+    const denied = requireAdmin()
+    if (denied) return denied
     const p = periodById(input.periodId)
     if (!p) {
       return { ok: false, error: { code: 'AKO-SFT-005', message: '対象の募集期間が見つかりません' } }
@@ -342,7 +357,7 @@ export function useShifts() {
       return { ok: false, error: { code: 'AKO-SFT-007', message: '期間外の日付には割当できません' } }
     }
     const existing = assignmentAt(input.periodId, input.memberId, input.date)
-    const fatal = validateAssign(input.memberId, input.date, input.from, input.to, { excludeAssignmentId: existing?.id })
+    const fatal = validateAssign(input.memberId, input.date, input.from, input.to, { excludeAssignmentId: existing?.id, periodId: input.periodId })
       .find(x => x.level === 'error')
     if (fatal) {
       return { ok: false, error: { code: fatal.code, message: fatal.message } }
@@ -363,6 +378,8 @@ export function useShifts() {
   }
 
   function unassign(assignmentId: string): Result {
+    const denied = requireAdmin()
+    if (denied) return denied
     const a = assignments.value.find(x => x.id === assignmentId)
     if (!a) {
       return { ok: false, error: { code: 'AKO-SFT-005', message: '対象の割当が見つかりません' } }
@@ -405,6 +422,8 @@ export function useShifts() {
 
   /** 確定済み割当の時間変更を申請する（本人合意が得られるまで change_requested） */
   function requestChange(assignmentId: string, from: string, to: string): Result {
+    const denied = requireAdmin()
+    if (denied) return denied
     const a = assignments.value.find(x => x.id === assignmentId)
     if (!a) {
       return { ok: false, error: { code: 'AKO-SFT-005', message: '対象の割当が見つかりません' } }
@@ -416,7 +435,7 @@ export function useShifts() {
     if (a.status !== 'confirmed') {
       return { ok: false, error: { code: 'AKO-SFT-006', message: 'この割当は確定状態ではないため変更申請できません' } }
     }
-    const fatal = validateAssign(a.memberId, a.date, from, to, { excludeAssignmentId: a.id })
+    const fatal = validateAssign(a.memberId, a.date, from, to, { excludeAssignmentId: a.id, periodId: a.periodId })
       .find(x => x.level === 'error')
     if (fatal) {
       return { ok: false, error: { code: fatal.code, message: fatal.message } }
@@ -457,6 +476,8 @@ export function useShifts() {
 
   /** 必要人数の設定（日別 1 スロットの簡易編集。0 人で削除 = 設定系データ） */
   function setDemand(periodId: string, date: string, from: string, to: string, required: number): Result {
+    const denied = requireAdmin()
+    if (denied) return denied
     const p = periodById(periodId)
     if (!p) {
       return { ok: false, error: { code: 'AKO-SFT-005', message: '対象の募集期間が見つかりません' } }

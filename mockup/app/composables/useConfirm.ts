@@ -16,6 +16,8 @@ export function useConfirm() {
 
   function ask(title: string, message: string, opts?: { confirmLabel?: string; danger?: boolean }): Promise<boolean> {
     return new Promise((resolve) => {
+      // 多重呼び出し時は前の確認をキャンセル扱いで解決してから上書き（await が宙に浮くのを防ぐ）
+      if (state.value.open) state.value.resolve?.(false)
       state.value = {
         open: true,
         title,

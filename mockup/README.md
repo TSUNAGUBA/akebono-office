@@ -41,8 +41,25 @@ npm run build
 ## データについて
 
 - モックデータは**決定的シード**で生成され、ブラウザの localStorage にのみ保存されます（サーバー送信なし）
-- 「設定 → デモデータをリセット」でシード状態に戻せます
+- **日付が変わると自動的にシード状態へ戻ります**（打刻履歴・売上等を「今日」基準で新鮮に保つデモ仕様。前日の操作内容は翌日に持ち越されません）
+- 「設定 → デモデータをリセット」でいつでもシード状態に戻せます
 - 蓄積対象データは akebono-scm-platform のスタースキーマへ写像可能な構造で設計されています（`../.ai-native/outputs/phase5/data-design.md`）
+
+## デプロイ（Firebase Hosting）
+
+`main` へのプッシュ（`mockup/` 配下の変更時）または手動実行で、GitHub Actions が自動デプロイします（`.github/workflows/deploy.yml`）。テスト → 型チェック → `nuxt generate` → Firebase Hosting の順で実行されます。
+
+### 初回セットアップ（PowerShell で完結）
+
+1. Firebase プロジェクトを用意し、デプロイ用サービスアカウント鍵 JSON を作成する（作成コマンドは `../scripts/setup-deploy-secrets.ps1` のヘッダーコメント参照）
+2. Repository secrets を設定する:
+
+```powershell
+./scripts/setup-deploy-secrets.ps1 -ProjectId <FirebaseプロジェクトID> -ServiceAccountJsonPath ./firebase-sa.json
+# 設定後すぐデプロイする場合は -TriggerDeploy を付ける
+```
+
+設定される secrets: `FIREBASE_SERVICE_ACCOUNT`（鍵 JSON）/ `FIREBASE_PROJECT_ID`。ワークフローはこの 2 つを実行時に読み取ります。鍵ファイルはコミットしないでください。
 
 ## ディレクトリ
 

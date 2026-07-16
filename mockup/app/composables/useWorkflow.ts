@@ -10,7 +10,7 @@ import type {
   WorkflowRequest, WorkflowRouteStep,
 } from '~/types/domain'
 import { resolveRoute } from '~/utils/approval-route'
-import { fmtYen, toDateKey } from '~/utils/format'
+import { fmtYen } from '~/utils/format'
 import { APPROVAL_ACTION_LABELS, WORKFLOW_CATEGORY_LABELS } from '~/utils/labels'
 
 /** 承認ロール → 日本語ラベル（本領域固有の区分値。共有 labels.ts は編集不可のためここが SoT） */

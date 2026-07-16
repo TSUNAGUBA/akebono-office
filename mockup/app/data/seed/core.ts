@@ -85,7 +85,7 @@ export const seedCompanyRelations: CompanyRelation[] = [
 
 export const seedContactRelations: ContactRelation[] = [
   { id: 'pr-01', fromContactId: 'p-01', toContactId: 'p-02', relationTypeId: 'rt-boss', notes: '曙氏が春日氏の上長' },
-  { id: 'pr-02', fromContactId: 'p-02', toContactId: 'p-03', relationTypeId: 'rt-decision-line', notes: 'システム選定は春日氏→現場确认は夏木氏' },
+  { id: 'pr-02', fromContactId: 'p-02', toContactId: 'p-03', relationTypeId: 'rt-decision-line', notes: 'システム選定は春日氏→現場確認は夏木氏' },
   { id: 'pr-03', fromContactId: 'p-01', toContactId: 'p-11', relationTypeId: 'rt-referral', notes: '曙氏がシーサイド汐見氏を紹介（DX 構想案件の起点）' },
 ]
 
@@ -108,7 +108,7 @@ export const seedKnowledge: KnowledgeArticle[] = [
   { id: 'k-05', domain: 'project', targetId: 'pj-01', title: 'SCM 導入 Phase2 の合意事項', body: '2026/06 の定例で在庫スナップショットの粒度を「日次×SKU×拠点」で合意。棚卸月（2 月・8 月）はバッチ停止枠を設ける。', tags: ['合意事項'], source: 'manual', sourceRefId: null, updatedAt: '2026-06-30T09:00:00+09:00', active: true },
   { id: 'k-06', domain: 'industry', targetId: 'ind-09', title: '介護業界の購買特性', body: '介護施設の購買は 4 月の年度予算執行が中心。ケアマネジャー経由の推奨が個人購買に効く。', tags: ['商習慣'], source: 'manual', sourceRefId: null, updatedAt: '2026-05-15T09:00:00+09:00', active: true },
   { id: 'k-07', domain: 'company', targetId: 'c-03', title: 'トクタケ製靴の現場文化', body: '現場の職人気質が強く、ツール導入は「入力の手間を増やさない」ことが絶対条件。桜井主任が現場の信頼を得ている。', tags: ['文化'], source: 'manual', sourceRefId: null, updatedAt: '2026-06-05T09:00:00+09:00', active: true },
-  { id: 'k-08', domain: 'project', targetId: 'pj-04', title: '物流改善の裁定: KPI は 5 個まで', body: 'KPI 乱立の相談に対し「現場ボードに載せる KPI は 5 個まで、それ以外は月次レビューで見る」と裁定。', tags: ['裁定'], source: 'escalation', sourceRefId: 'esc-sample', updatedAt: '2026-07-05T09:00:00+09:00', active: true },
+  { id: 'k-08', domain: 'project', targetId: 'pj-04', title: '物流改善の裁定: KPI は 5 個まで', body: 'KPI 乱立の相談に対し「現場ボードに載せる KPI は 5 個まで、それ以外は月次レビューで見る」と裁定。', tags: ['裁定'], source: 'escalation', sourceRefId: 'esc-0003', updatedAt: '2026-07-05T09:00:00+09:00', active: true },
 ]
 
 export const seedCodeMaster: CodeMasterItem[] = [

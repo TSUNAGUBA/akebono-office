@@ -142,7 +142,8 @@ export function judgeArticle36(months: MonthOtRecord[], over45CountThisYear: num
   const curOt = cur.nonStatutoryOtMin
   const curTotal = cur.nonStatutoryOtMin + cur.legalHolidayMin
 
-  if (curOt >= OT_MONTHLY_LIMIT_MIN) {
+  // 月 45h ちょうどは「以内」で適法のため、超過判定は厳密に「>」
+  if (curOt > OT_MONTHLY_LIMIT_MIN) {
     alerts.push({ level: 'crit', code: 'AKO-ATT-A45', message: `時間外労働が月45時間を超過しています（${Math.floor(curOt / 60)}h）` })
   } else if (curOt >= OT_MONTHLY_LIMIT_MIN * 0.8) {
     alerts.push({ level: 'warn', code: 'AKO-ATT-A45W', message: `時間外労働が月45時間の80%に達しています（${Math.floor(curOt / 60)}h）` })

@@ -19,7 +19,7 @@ export interface CalendarDayCell {
  * 表示専用: 集計は親（useAttendance.monthSummary）が SoT。
  * モバイルではコンテナ内横スクロール（ページ全体は横スクロールさせない）。
  */
-import { fmtMinutes, toDateKey, weekdayOf } from '~/utils/format'
+import { fmtMinutes, weekdayOf } from '~/utils/format'
 
 const props = withDefaults(defineProps<{
   month: string // YYYY-MM

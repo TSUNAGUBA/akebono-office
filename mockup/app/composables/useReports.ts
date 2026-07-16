@@ -7,7 +7,7 @@
 import type {
   DailyReport, ReportComment, ReportEntry, Result, WeeklyReport,
 } from '~/types/domain'
-import { addDays, toDateKey, weekdayOf } from '~/utils/format'
+import { addDays, weekdayOf } from '~/utils/format'
 
 export interface DailyReportInput {
   date: string

@@ -39,7 +39,8 @@
 
 ## インフラ・将来構成（宣言のみ）
 
-- 本番想定: Firebase Hosting または S3+CDN で静的配信 + API バックエンド（.NET or Node/Cloud Run。Phase 7 で確定）+ PostgreSQL（`app_office` 業務スキーマ + `mart` 分析スキーマ）
+- 本番想定: 静的配信 + API バックエンド（.NET or Node/Cloud Run。Phase 7 で確定）+ PostgreSQL（`app_office` 業務スキーマ + `mart` 分析スキーマ）
+- **モックアップの配信基盤（決定 2026-07-16・オペレーター承認）:** Firebase Hosting。GitHub Actions（`.github/workflows/deploy.yml`）で main への push 時に自動デプロイ。認証情報は Repository secrets（`FIREBASE_SERVICE_ACCOUNT` / `FIREBASE_PROJECT_ID`）で管理し、設定は `scripts/setup-deploy-secrets.ps1` で完結する
 - 分析基盤: akebono-scm-platform の `mart` スキーマ規約に準拠（phase5/data-design.md）
 
 ## ゲート判定（Phase 4）

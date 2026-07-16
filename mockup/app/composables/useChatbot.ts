@@ -5,7 +5,7 @@
  * - 擬似ストリーミング: 30-50 文字ずつ setInterval で流す。unmount 時は finalize() で確定保存
  */
 import type { ChatMessage, Result } from '~/types/domain'
-import { fmtDateLong, fmtHours, toDateKey } from '~/utils/format'
+import { fmtDateLong, fmtHours } from '~/utils/format'
 import { PROJECT_STATUS_LABELS } from '~/utils/labels'
 import { irange } from '~/utils/rng'
 
@@ -134,30 +134,23 @@ export function useChatbot() {
       }
     }
 
-    const today = todayJst()
-    const grants = tbl('leaveGrants').value
-      .filter(g => g.memberId === currentUser.value.id && g.grantDate <= today && g.expireDate >= today)
-      .sort((a, b) => a.expireDate.localeCompare(b.expireDate))
-    if (grants.length === 0) {
+    // 残数計算は useLeave.balance が SoT（FIFO 引当・失効・保有上限を含む）。二重実装しない
+    const bal = useLeave().balance(currentUser.value.id)
+    if (bal.allocations.length === 0) {
       return {
         content: `${surname}さんに現在有効な有給付与が見つかりませんでした。付与状況は /attendance の「有給」タブ、または管理者に確認してください。`,
         sources: ['勤怠データ'],
         suggestions: ['有給を申請するには？', '今月の残業時間は？'],
       }
     }
-    const granted = grants.reduce((s, g) => s + g.days, 0)
-    const oldestGrantDate = grants.reduce((min, g) => (g.grantDate < min ? g.grantDate : min), grants[0]!.grantDate)
-    const requests = tbl('leaveRequests').value
-      .filter(r => r.memberId === currentUser.value.id && r.date >= oldestGrantDate)
-    const used = requests.filter(r => r.status === 'approved')
-      .reduce((s, r) => s + (r.unit === 'half' ? 0.5 : 1), 0)
-    const pending = requests.filter(r => r.status === 'pending').length
-    const remaining = Math.max(0, granted - used)
-    const nearest = grants[0]!
+    const pending = tbl('leaveRequests').value
+      .filter(r => r.memberId === currentUser.value.id && r.status === 'pending').length
 
     const lines = [
-      `${surname}さんの有給残は ${remaining} 日です（付与 ${granted} 日・取得済 ${used} 日${pending > 0 ? `・申請中 ${pending} 件` : ''}）。`,
-      `直近の失効予定は ${fmtDateLong(nearest.expireDate)} の ${nearest.days} 日分です。計画的な取得をおすすめします。`,
+      `${surname}さんの有給残は ${bal.remaining} 日です（今年度取得 ${bal.usedThisFiscalYear} 日${pending > 0 ? `・申請中 ${pending} 件` : ''}）。`,
+      bal.nextExpire
+        ? `直近の失効予定は ${fmtDateLong(bal.nextExpire.date)} の ${bal.nextExpire.days} 日分です。計画的な取得をおすすめします。`
+        : '現在、失効が近い付与はありません。',
     ]
     return {
       content: lines.join('\n'),

@@ -53,15 +53,15 @@ export function useMasterCrud<K extends MasterCollections>(name: K, idPrefix: st
       if (idx < 0) return { ok: false, error: { code: 'AKO-GEN-002', message: '対象が見つかりません' } }
       const updated = { ...all[idx], ...entity } as Row
       rows.value = [...all.slice(0, idx), updated, ...all.slice(idx + 1)] as MockDbShape[K]
-      commit()
       audit('update', entity.id, `${String(name)} を更新`)
+      commit()
       return { ok: true, id: entity.id }
     }
     const id = nextId(name, idPrefix)
     const created = { active: true, ...entity, id } as Row
     rows.value = [...all, created] as MockDbShape[K]
-    commit()
     audit('create', id, `${String(name)} を追加`)
+    commit()
     return { ok: true, id }
   }
 
@@ -72,8 +72,9 @@ export function useMasterCrud<K extends MasterCollections>(name: K, idPrefix: st
     if (idx < 0) return { ok: false, error: { code: 'AKO-GEN-002', message: '対象が見つかりません' } }
     const updated = { ...all[idx], active: false } as Row
     rows.value = [...all.slice(0, idx), updated, ...all.slice(idx + 1)] as MockDbShape[K]
-    commit()
+    // 監査ログは commit 前に追記する（commit 後だとリロードで監査証跡だけが消える）
     audit('archive', id, `${String(name)} を無効化`)
+    commit()
     return { ok: true, id }
   }
 
@@ -84,8 +85,8 @@ export function useMasterCrud<K extends MasterCollections>(name: K, idPrefix: st
     if (idx < 0) return { ok: false, error: { code: 'AKO-GEN-002', message: '対象が見つかりません' } }
     const updated = { ...all[idx], active: true } as Row
     rows.value = [...all.slice(0, idx), updated, ...all.slice(idx + 1)] as MockDbShape[K]
-    commit()
     audit('restore', id, `${String(name)} を再有効化`)
+    commit()
     return { ok: true, id }
   }
 
