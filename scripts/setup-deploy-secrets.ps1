@@ -86,10 +86,18 @@ if ($sa.project_id -and $sa.project_id -ne $ProjectId) {
 # ---------- Secrets 設定（冪等: 再実行すると同名 secret を上書き更新） ----------
 
 Write-Step "Repository secrets を設定: $Repo"
-# 鍵 JSON はファイルから直接読ませる（--body-file）。
-# PS 5.1 は引数内の二重引用符を正しくエスケープできず argv が分割され、
-# パイプは $OutputEncoding（既定 ASCII）で壊れるため、どちらも使わない
-gh secret set FIREBASE_SERVICE_ACCOUNT --repo $Repo --body-file $ServiceAccountJsonPath
+# 鍵 JSON は stdin パイプで渡す（gh は -b 未指定時に標準入力を読む）。
+# ・--body 引数渡しは PS 5.1 が引数内の二重引用符を正しくエスケープできず argv 分割される
+# ・--body-file は古い gh CLI に存在しない
+# ため、全バージョンで動く stdin 経路を採用し、$OutputEncoding を UTF-8 に明示して送る
+$prevOutputEncoding = $OutputEncoding
+try {
+  $OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+  $saRaw | gh secret set FIREBASE_SERVICE_ACCOUNT --repo $Repo
+}
+finally {
+  $OutputEncoding = $prevOutputEncoding
+}
 if ($LASTEXITCODE -ne 0) { throw 'FIREBASE_SERVICE_ACCOUNT の設定に失敗しました。' }
 Write-Host '  ✓ FIREBASE_SERVICE_ACCOUNT'
 
