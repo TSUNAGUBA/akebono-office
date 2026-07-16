@@ -22,7 +22,7 @@
 punch(kind: PunchKind): Result            // 状態機械ガード付き打刻
 daySummary(memberId, date): AttendanceDaySummary   // 6 バケット集計
 monthSummary(memberId, month): MonthSummary        // 月次 + アラート
-alerts(memberId): Article36Alert[]                 // 36 協定判定
+alerts(memberId, endMonth?): Article36Alert[]  // endMonth（YYYY-MM）を最終月とする直近6ヶ月。省略時は JST の当月                 // 36 協定判定
 requestFix(input: FixRequestInput): Result         // 修正申請（理由必須）
 
 // useLeave

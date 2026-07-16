@@ -15,6 +15,25 @@ export const OVER60_THRESHOLD_MIN = 60 * 60 // 割増50%の閾値（月60h超）
 export const NIGHT_START_HOUR = 22
 export const NIGHT_END_HOUR = 5
 
+/**
+ * 有効打刻の射影（修正打刻による置換の解決）。
+ * fix レコードの fixedFrom は「置換した旧打刻の at」を保持しており、
+ * 同種・同時刻の打刻を無効化する。fix 自身が後続の fix に置換される連鎖にも対応する。
+ * 自己置換（at === fixedFrom の修正）で自分自身を除外しないよう、置換元 id でガードする。
+ */
+export function effectivePunches(rows: PunchRecord[]): PunchRecord[] {
+  const supersededBy = new Map<string, string>() // `${kind}|${at}` → 置換した fix の id
+  for (const p of rows) {
+    if (p.source === 'fix' && p.fixedFrom) supersededBy.set(`${p.kind}|${p.fixedFrom}`, p.id)
+  }
+  return rows
+    .filter((p) => {
+      const by = supersededBy.get(`${p.kind}|${p.at}`)
+      return !by || by === p.id
+    })
+    .sort((a, b) => a.at.localeCompare(b.at))
+}
+
 export interface DayWorkInput {
   /** 実労働分（休憩除く） */
   workMinutes: number

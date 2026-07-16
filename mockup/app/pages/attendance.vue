@@ -14,7 +14,7 @@ import type {
   AttendanceBuckets, AttendanceRule, EmploymentType, LeaveRequest, PunchKind,
 } from '~/types/domain'
 import type { TableColumn, TabItem, Tone } from '~/types/ui'
-import { LEGAL_WEEKLY_MIN, OT_MONTHLY_LIMIT_MIN } from '~/utils/attendance-calc'
+import { effectivePunches, LEGAL_WEEKLY_MIN, OT_MONTHLY_LIMIT_MIN } from '~/utils/attendance-calc'
 import { addDays, fmtDate, fmtDateLong, fmtHours, fmtMinutes, fmtTime, weekdayOf } from '~/utils/format'
 import { EMPLOYMENT_TYPE_LABELS, PUNCH_KIND_LABELS } from '~/utils/labels'
 
@@ -143,16 +143,16 @@ const dayPendingFixes = computed(() =>
 /**
  * 修正履歴を含むタイムライン（F-04-6 修正履歴）。
  * punchesOf は置換済みの旧打刻を返さないため、生列（punchesRawOf）を使い、
- * fix レコードの fixedFrom と kind が一致する旧打刻（source!=='fix'）を「修正前」として注釈する。
+ * 有効打刻の判定は集計と同じ effectivePunches（fix の連鎖対応）に委譲して
+ * 有効セットに含まれない打刻を「修正前」として注釈する。
  * 集計値は daySummary（有効打刻ベース）のままで変えない。
  */
 const dailyTimeline = computed(() => {
   const rows = punchesRawOf(selMemberId.value, selDate.value)
-  const superseded = new Set(
-    rows.filter(p => p.source === 'fix' && p.fixedFrom).map(p => `${p.kind}|${p.fixedFrom}`))
+  const effectiveIds = new Set(effectivePunches(rows).map(p => p.id))
   return rows.map(p => ({
     ...p,
-    superseded: p.source !== 'fix' && superseded.has(`${p.kind}|${p.at}`),
+    superseded: !effectiveIds.has(p.id),
   }))
 })
 

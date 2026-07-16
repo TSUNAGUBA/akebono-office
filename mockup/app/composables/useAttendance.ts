@@ -4,7 +4,7 @@
  */
 import type { PunchKind, PunchRecord, Result } from '~/types/domain'
 import {
-  calcWorkedMinutes, judgeArticle36, requiredBreakMinutes, splitBuckets,
+  calcWorkedMinutes, effectivePunches, judgeArticle36, requiredBreakMinutes, splitBuckets,
   type Article36Alert, type MonthOtRecord,
 } from '~/utils/attendance-calc'
 import { daysInMonth, weekdayOf } from '~/utils/format'
@@ -39,17 +39,10 @@ export function useAttendance() {
   /**
    * その日の有効な打刻列を返す（表示射影）。
    * 修正打刻（source==='fix'）が承認された場合、元レコードは削除せず保全し、
-   * fix の fixedFrom と一致する同種の旧打刻をここで除外する（記録系は追記のみ）。
+   * 置換の解決は effectivePunches（純粋関数・fix の連鎖対応）に委譲する（記録系は追記のみ）。
    */
   function punchesOf(memberId: string, date: string): PunchRecord[] {
-    const rows = punches.value.filter(p => p.memberId === memberId && p.date === date)
-    const superseded = new Set(
-      rows.filter(p => p.source === 'fix' && p.fixedFrom)
-        .map(p => `${p.kind}|${p.fixedFrom}`),
-    )
-    return rows
-      .filter(p => p.source === 'fix' || !superseded.has(`${p.kind}|${p.at}`))
-      .sort((a, b) => a.at.localeCompare(b.at))
+    return effectivePunches(punches.value.filter(p => p.memberId === memberId && p.date === date))
   }
 
   /** 修正で置換された旧打刻も含む生の打刻列（履歴表示用） */
@@ -154,7 +147,8 @@ export function useAttendance() {
         legalHolidayMin: s.total.legalHoliday,
       }
       months.push(rec)
-      if (rec.nonStatutoryOtMin >= 45 * 60) over45++
+      // 45h ちょうどは「以内」で適法のため、年 6 回カウントも厳密に「超」のみ（judgeArticle36 と統一）
+      if (rec.nonStatutoryOtMin > 45 * 60) over45++
     }
     return judgeArticle36(months, over45)
   }
