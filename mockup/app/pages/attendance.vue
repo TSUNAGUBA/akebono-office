@@ -8,7 +8,8 @@ import { CalendarPlus, Check, ChevronLeft, ChevronRight, FilePen, Plus, X } from
 import type { CalendarDayCell } from '~/components/widgets/CalendarMonth.vue'
 import type { DaySummary } from '~/composables/useAttendance'
 import {
-  LEAVE_REQUEST_STATUS_LABELS, LEAVE_REQUEST_STATUS_TONES, LEAVE_UNIT_LABELS, useLeave,
+  LEAVE_REQUEST_STATUS_LABELS, LEAVE_REQUEST_STATUS_TONES, LEAVE_UNIT_LABELS,
+  PAID_LEAVE_TYPE_ID, useLeave,
 } from '~/composables/useLeave'
 import type {
   AttendanceBuckets, AttendanceRule, EmploymentType, LeaveRequest, PunchKind,
@@ -21,7 +22,7 @@ import { EMPLOYMENT_TYPE_LABELS, PUNCH_KIND_LABELS } from '~/utils/labels'
 const route = useRoute()
 const router = useRouter()
 const { tbl } = useMockDb()
-const { currentUser, isAdmin } = useCurrentUser()
+const { currentUser, isAdmin, isHrOrAdmin } = useCurrentUser()
 const {
   fixRequests, ruleFor, punchesRawOf, daySummary, monthSummary, alerts,
   raiseOvertimeEscalations, requestFix, decideFix,
@@ -29,6 +30,7 @@ const {
 const leave = useLeave()
 const { show } = useToast()
 const { ask } = useConfirm()
+const { nameOf: deptName, options: deptOptions } = useDepartments()
 
 const members = tbl('members')
 
@@ -38,12 +40,13 @@ function memberName(id: string): string {
 
 // ---------- タブ（route.query.tab で初期化・同期） ----------
 
-const VALID_TABS = ['daily', 'weekly', 'monthly', 'leave', 'requests', 'settings']
+const VALID_TABS = ['daily', 'weekly', 'monthly', 'leave', 'requests', 'timecard', 'leave-admin', 'settings']
 
 function normalizeTab(v: unknown): string {
   const s = String(v ?? '')
   if (!VALID_TABS.includes(s)) return 'daily'
   if (s === 'settings' && !isAdmin.value) return 'daily'
+  if ((s === 'timecard' || s === 'leave-admin') && !isHrOrAdmin.value) return 'daily'
   return s
 }
 
@@ -64,6 +67,9 @@ watch(() => route.query.tab, (v) => {
 watch(isAdmin, (v) => {
   if (!v && tab.value === 'settings') tab.value = 'daily'
 })
+watch(isHrOrAdmin, (v) => {
+  if (!v && (tab.value === 'timecard' || tab.value === 'leave-admin')) tab.value = 'daily'
+})
 
 const pendingCount = computed(() =>
   fixRequests.value.filter(f => f.status === 'pending').length + leave.pendingRequests.value.length)
@@ -73,9 +79,12 @@ const tabs = computed<TabItem[]>(() => {
     { key: 'daily', label: '日次' },
     { key: 'weekly', label: '週次' },
     { key: 'monthly', label: '月次' },
-    { key: 'leave', label: '有給' },
-    { key: 'requests', label: '申請', badge: isAdmin.value ? pendingCount.value : undefined },
+    { key: 'leave', label: '休暇' },
+    { key: 'requests', label: '申請', badge: isHrOrAdmin.value ? pendingCount.value : undefined },
   ]
+  if (isHrOrAdmin.value) {
+    t.push({ key: 'timecard', label: 'タイムカード' }, { key: 'leave-admin', label: '休暇管理' })
+  }
   if (isAdmin.value) t.push({ key: 'settings', label: '設定' })
   return t
 })
@@ -84,7 +93,7 @@ const tabs = computed<TabItem[]>(() => {
 
 const punchTargets = computed(() => members.value.filter(m => m.active && m.punchRequired))
 const memberOptions = computed(() =>
-  punchTargets.value.map(m => ({ value: m.id, label: `${m.name}（${m.dept}）` })))
+  punchTargets.value.map(m => ({ value: m.id, label: `${m.name}（${deptName(m.departmentId)}）` })))
 
 function defaultMemberId(): string {
   if (currentUser.value.punchRequired) return currentUser.value.id
@@ -292,10 +301,17 @@ watch([tab, selMemberId], () => {
   }
 }, { immediate: true })
 
-// ---------- 有給タブ ----------
+// ---------- 休暇タブ（本人ビュー: 有給 + 特別休暇） ----------
 
 const leaveBalance = computed(() => leave.balance(currentUser.value.id))
 const leaveObligation = computed(() => leave.obligation(currentUser.value.id))
+
+/** 特別休暇（有給以外）の残数チップ。付与実績のある種別のみ表示 */
+const specialBalances = computed(() =>
+  leave.activeLeaveTypes.value
+    .filter(t => t.id !== PAID_LEAVE_TYPE_ID)
+    .map(t => ({ type: t, balance: leave.balance(currentUser.value.id, t.id) }))
+    .filter(x => x.balance.allocations.length > 0))
 
 function fmtDays(n: number): string {
   return Number.isInteger(n) ? String(n) : n.toFixed(1)
@@ -311,21 +327,23 @@ const leaveHistoryColumns: TableColumn[] = [
 
 const leaveHistoryRows = computed(() => {
   const me = currentUser.value.id
-  const grantRows = leave.grantsOf(me).map(g => ({
-    id: g.id,
-    date: g.grantDate,
-    rowKind: 'grant',
-    kindLabel: '付与',
-    detail: `${g.kind === 'normal' ? '通常' : '比例'}付与（失効 ${g.expireDate}）`,
-    status: '',
-    days: `+${fmtDays(g.days)}`,
-  }))
+  const grantRows = leave.grants.value
+    .filter(g => g.memberId === me)
+    .map(g => ({
+      id: g.id,
+      date: g.grantDate,
+      rowKind: 'grant',
+      kindLabel: '付与',
+      detail: `${leave.leaveTypeName(g.leaveTypeId)}: ${g.kind === 'normal' ? '通常付与' : g.kind === 'proportional' ? '比例付与' : `${memberName(g.grantedBy ?? '')} が付与`}（失効 ${g.expireDate === '9999-12-31' ? 'なし' : g.expireDate}）`,
+      status: '',
+      days: `+${fmtDays(g.days)}`,
+    }))
   const reqRows = leave.requestsOf(me).map(r => ({
     id: r.id,
     date: r.date,
     rowKind: 'request',
     kindLabel: '取得',
-    detail: `${LEAVE_UNIT_LABELS[r.unit]}${r.reason ? `・${r.reason}` : ''}`,
+    detail: `${leave.leaveTypeName(r.leaveTypeId)}: ${LEAVE_UNIT_LABELS[r.unit]}${r.reason ? `・${r.reason}` : ''}`,
     status: r.status,
     days: r.status === 'approved' ? `-${fmtDays(r.unit === 'half' ? 0.5 : 1)}` : '—',
   }))
@@ -339,14 +357,22 @@ function leaveStatusTone(s: unknown): Tone {
   return LEAVE_REQUEST_STATUS_TONES[s as LeaveRequest['status']] ?? 'neutral'
 }
 
-// 有給申請モーダル
+// 休暇申請モーダル（種別選択つき。取得可能 = 残数のある種別 + 有給）
 const leaveOpen = ref(false)
-const leaveForm = ref({ date: '', unit: 'full', reason: '' })
+const leaveForm = ref({ leaveTypeId: PAID_LEAVE_TYPE_ID, date: '', unit: 'full', reason: '' })
 const leaveError = ref('')
 const leaveUnitOptions = Object.entries(LEAVE_UNIT_LABELS).map(([value, label]) => ({ value, label }))
 
+const leaveTypeOptions = computed(() =>
+  leave.activeLeaveTypes.value
+    .filter(t => t.id === PAID_LEAVE_TYPE_ID || leave.balance(currentUser.value.id, t.id).remaining > 0)
+    .map(t => ({
+      value: t.id,
+      label: `${t.name}（残 ${fmtDays(leave.balance(currentUser.value.id, t.id).remaining)} 日）`,
+    })))
+
 function openLeaveModal(): void {
-  leaveForm.value = { date: '', unit: 'full', reason: '' }
+  leaveForm.value = { leaveTypeId: PAID_LEAVE_TYPE_ID, date: '', unit: 'full', reason: '' }
   leaveError.value = ''
   leaveOpen.value = true
 }
@@ -354,6 +380,7 @@ function openLeaveModal(): void {
 function submitLeave(): void {
   leaveError.value = ''
   const r = leave.request({
+    leaveTypeId: leaveForm.value.leaveTypeId,
     date: leaveForm.value.date,
     unit: leaveForm.value.unit as LeaveRequest['unit'],
     reason: leaveForm.value.reason,
@@ -363,7 +390,7 @@ function submitLeave(): void {
     return
   }
   leaveOpen.value = false
-  show('有給申請を送信しました（管理者へ通知済み）', 'ok', { label: '申請状況', to: '/attendance?tab=requests' })
+  show(`${leave.leaveTypeName(leaveForm.value.leaveTypeId)}申請を送信しました（管理者へ通知済み）`, 'ok', { label: '申請状況', to: '/attendance?tab=requests' })
 }
 
 // ---------- 申請タブ ----------
@@ -394,7 +421,7 @@ const myRequestRows = computed(() => {
   const lvRows = leave.requestsOf(me).map(r => ({
     id: r.id,
     reqKind: 'leave',
-    type: '有給休暇',
+    type: leave.leaveTypeName(r.leaveTypeId),
     date: r.date,
     detail: LEAVE_UNIT_LABELS[r.unit],
     reason: r.reason,
@@ -429,7 +456,7 @@ const pendingRows = computed(() => {
     id: r.id,
     reqKind: 'leave',
     member: memberName(r.memberId),
-    type: '有給休暇',
+    type: leave.leaveTypeName(r.leaveTypeId),
     date: r.date,
     detail: LEAVE_UNIT_LABELS[r.unit],
     reason: r.reason,
@@ -453,6 +480,237 @@ async function onDecide(row: Record<string, unknown>, action: 'approved' | 'reje
   } else {
     show(r.error.message, 'warn')
   }
+}
+
+// ---------- タイムカードタブ（F-04-8。管理者/人事） ----------
+
+const tcFilterOpen = ref(true)
+const tcFrom = ref(addDays(todayKey, -6))
+const tcTo = ref(todayKey)
+const tcDeptId = ref('')
+const tcName = ref('')
+
+const tcDeptOptions = computed(() => [
+  { value: '', label: 'すべての部署' },
+  ...deptOptions.value,
+])
+
+/** 氏名 autocomplete の候補（datalist） */
+const tcNameCandidates = computed(() =>
+  punchTargets.value.map(m => m.name))
+
+const timecardColumns: TableColumn[] = [
+  { key: 'date', label: '日付', width: '110px', primary: true },
+  { key: 'name', label: '名前', primary: true },
+  { key: 'inTime', label: '出勤時間', width: '90px', align: 'right', primary: true },
+  { key: 'outTime', label: '退勤時間', width: '90px', align: 'right', primary: true },
+  { key: 'workHours', label: '労働時間', width: '90px', align: 'right', primary: true },
+]
+
+const TIMECARD_MAX_DAYS = 62
+
+/** 期間（from〜to）の日付リスト（降順・上限あり） */
+const tcDates = computed(() => {
+  let from = tcFrom.value || todayKey
+  let to = tcTo.value || todayKey
+  if (from > to) [from, to] = [to, from]
+  const dates: string[] = []
+  for (let d = to; d >= from && dates.length < TIMECARD_MAX_DAYS; d = addDays(d, -1)) dates.push(d)
+  return dates
+})
+
+const tcTruncated = computed(() => {
+  if (!tcFrom.value || !tcTo.value) return false
+  let from = tcFrom.value
+  let to = tcTo.value
+  if (from > to) [from, to] = [to, from]
+  let count = 0
+  for (let d = to; d >= from; d = addDays(d, -1)) {
+    count++
+    if (count > TIMECARD_MAX_DAYS) return true
+  }
+  return false
+})
+
+const tcMembers = computed(() => {
+  const q = tcName.value.trim().toLowerCase()
+  return punchTargets.value.filter(m =>
+    (!tcDeptId.value || m.departmentId === tcDeptId.value)
+    && (!q || m.name.toLowerCase().includes(q)))
+})
+
+/** 打刻のある日×メンバーの行のみ表示（出勤/退勤は有効打刻の先頭 in・末尾 out） */
+const timecardRows = computed(() =>
+  tcDates.value.flatMap(date =>
+    tcMembers.value.flatMap((m) => {
+      const punches = effectivePunches(punchesRawOf(m.id, date))
+      if (punches.length === 0) return []
+      const firstIn = punches.find(p => p.kind === 'in')
+      const lastOut = [...punches].reverse().find(p => p.kind === 'out')
+      return [{
+        id: `${m.id}-${date}`,
+        memberId: m.id,
+        date,
+        name: m.name,
+        inTime: firstIn ? fmtTime(firstIn.at) : '—',
+        outTime: lastOut ? fmtTime(lastOut.at) : '—',
+        workHours: fmtMinutes(daySummary(m.id, date).workMinutes),
+      }]
+    })))
+
+/** タイムカードの行クリック → 日次タブでその日・そのメンバーを開く */
+function openTimecardRow(row: Record<string, unknown>): void {
+  selMemberId.value = String(row.memberId)
+  selDate.value = String(row.date)
+  tab.value = 'daily'
+}
+
+// ---------- 休暇管理タブ（F-04-9。管理者/人事） ----------
+
+const laMode = ref<'summary' | 'detail'>('summary')
+
+const leaveMembers = computed(() => members.value.filter(m => m.active && m.employmentType !== 'outsource'))
+
+const laSummaryColumns: TableColumn[] = [
+  { key: 'name', label: '名前', primary: true },
+  { key: 'typeName', label: '休暇種別', primary: true },
+  { key: 'granted', label: '有給日', width: '80px', align: 'right', primary: true },
+  { key: 'taken', label: '取得日', width: '80px', align: 'right' },
+  { key: 'remaining', label: '残日', width: '80px', align: 'right', primary: true },
+  { key: 'lastGrant', label: '設定日', width: '110px' },
+]
+
+/** 一覧モード: メンバー × 休暇種別（付与実績のある組み合わせ）の残数サマリ */
+const laSummaryRows = computed(() =>
+  leaveMembers.value.flatMap(m =>
+    leave.activeLeaveTypes.value.flatMap((t) => {
+      const bal = leave.balance(m.id, t.id)
+      if (bal.allocations.length === 0) return []
+      const granted = bal.allocations.reduce((s, a) => s + a.grant.days, 0)
+      const taken = bal.allocations.reduce((s, a) => s + a.consumed, 0)
+      const lastGrant = bal.allocations[bal.allocations.length - 1]?.grant.grantDate ?? '—'
+      return [{
+        id: `${m.id}-${t.id}`,
+        name: m.name,
+        typeName: t.name,
+        granted: fmtDays(granted),
+        taken: fmtDays(taken),
+        remaining: fmtDays(bal.remaining),
+        lastGrant,
+      }]
+    })))
+
+const laDetailColumns: TableColumn[] = [
+  { key: 'date', label: '取得日付', width: '110px', primary: true },
+  { key: 'name', label: '名前', primary: true },
+  { key: 'typeName', label: '休暇種別', primary: true },
+]
+
+/** 明細モード: 承認済みの取得明細（新しい順） */
+const laDetailRows = computed(() =>
+  leave.requests.value
+    .filter(r => r.status === 'approved')
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .map(r => ({
+      id: r.id,
+      date: r.date,
+      name: memberName(r.memberId),
+      typeName: `${leave.leaveTypeName(r.leaveTypeId)}（${LEAVE_UNIT_LABELS[r.unit]}）`,
+    })))
+
+// 個別付与モーダル
+const grantOpen = ref(false)
+const grantForm = ref({ memberId: '', leaveTypeId: '', days: 1 })
+const grantError = ref('')
+
+const manualLeaveTypes = computed(() =>
+  leave.activeLeaveTypes.value.filter(t => t.grantMethod === 'manual'))
+
+function openGrantModal(): void {
+  grantForm.value = { memberId: '', leaveTypeId: manualLeaveTypes.value[0]?.id ?? '', days: 1 }
+  grantError.value = ''
+  grantOpen.value = true
+}
+
+function submitGrant(): void {
+  grantError.value = ''
+  if (!grantForm.value.memberId) {
+    grantError.value = '付与するメンバーを選択してください'
+    return
+  }
+  const r = leave.grant({
+    memberId: grantForm.value.memberId,
+    leaveTypeId: grantForm.value.leaveTypeId,
+    days: Number(grantForm.value.days),
+  })
+  if (!r.ok) {
+    grantError.value = r.error.message
+    return
+  }
+  grantOpen.value = false
+  show(r.skipped
+    ? '本日同一種別の付与が既に存在するためスキップしました（重複防止）'
+    : `${memberName(grantForm.value.memberId)} さんへ ${leave.leaveTypeName(grantForm.value.leaveTypeId)}を付与しました`,
+  r.skipped ? 'warn' : 'ok')
+}
+
+// 一括付与モーダル（対象: 全員 / 雇用区分 / 部署）
+const bulkOpen = ref(false)
+const bulkForm = ref({ leaveTypeId: '', days: 3, targetKind: 'all', employmentType: 'employee', departmentId: '' })
+const bulkError = ref('')
+
+const BULK_TARGET_OPTIONS = [
+  { value: 'all', label: '全員（在籍・外注以外）' },
+  { value: 'employment', label: '雇用区分で指定' },
+  { value: 'department', label: '部署で指定' },
+]
+
+const bulkTargets = computed(() => {
+  const f = bulkForm.value
+  return leaveMembers.value.filter((m) => {
+    if (f.targetKind === 'employment') return m.employmentType === f.employmentType
+    if (f.targetKind === 'department') return m.departmentId === f.departmentId
+    return true
+  })
+})
+
+function openBulkModal(): void {
+  bulkForm.value = {
+    leaveTypeId: manualLeaveTypes.value[0]?.id ?? '',
+    days: 3,
+    targetKind: 'all',
+    employmentType: 'employee',
+    departmentId: deptOptions.value[0]?.value ?? '',
+  }
+  bulkError.value = ''
+  bulkOpen.value = true
+}
+
+async function submitBulk(): Promise<void> {
+  bulkError.value = ''
+  const targets = bulkTargets.value
+  if (targets.length === 0) {
+    bulkError.value = '対象メンバーが 0 名です。条件を見直してください'
+    return
+  }
+  const typeName = leave.leaveTypeName(bulkForm.value.leaveTypeId)
+  const ok = await ask(
+    '休暇の一括付与',
+    `${targets.length} 名へ ${typeName}を ${bulkForm.value.days} 日ずつ付与します。よろしいですか？`,
+    { confirmLabel: '一括付与' },
+  )
+  if (!ok) return
+  const r = leave.bulkGrant({
+    memberIds: targets.map(m => m.id),
+    leaveTypeId: bulkForm.value.leaveTypeId,
+    days: Number(bulkForm.value.days),
+  })
+  if (!r.ok) {
+    bulkError.value = r.error.message
+    return
+  }
+  bulkOpen.value = false
+  show(`${typeName}を ${r.granted ?? 0} 名へ一括付与しました${(r.skipped ?? 0) > 0 ? `（${r.skipped} 名は本日付与済みのためスキップ）` : ''}`)
 }
 
 // ---------- 設定タブ（管理者・attendanceRules） ----------
@@ -866,12 +1124,12 @@ function submitRule(): void {
     </div>
 
     <!-- ================= 有給 ================= -->
-    <div v-else-if="tab === 'leave'" role="tabpanel" aria-label="有給" class="mt-3">
+    <div v-else-if="tab === 'leave'" role="tabpanel" aria-label="休暇" class="mt-3">
       <UiFilterBar>
-        <span class="text-[12px] text-sub">{{ currentUser.name }} さんの有給休暇</span>
+        <span class="text-[12px] text-sub">{{ currentUser.name }} さんの休暇（有給・特別休暇）</span>
         <template #trailing>
           <button type="button" class="btn btn-primary" @click="openLeaveModal">
-            <CalendarPlus class="h-4 w-4" /> 有給を申請
+            <CalendarPlus class="h-4 w-4" /> 休暇を申請
           </button>
         </template>
       </UiFilterBar>
@@ -897,6 +1155,27 @@ function submitRule(): void {
             icon="History"
           />
         </div>
+
+        <UiSectionCard
+          v-if="specialBalances.length > 0"
+          title="特別休暇の残数"
+          description="夏季休暇・結婚特休等。付与・使用期限は休暇種別マスタの設定に基づきます"
+        >
+          <ul class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            <li v-for="sb in specialBalances" :key="sb.type.id" class="rounded-lg border border-line p-2.5">
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-[13px] font-bold">{{ sb.type.name }}</span>
+                <span class="num text-[15px] font-bold" :class="sb.balance.remaining > 0 ? 'text-brand' : 'text-muted'">
+                  残 {{ fmtDays(sb.balance.remaining) }} 日
+                </span>
+              </div>
+              <p v-if="sb.balance.nextExpire" class="mt-0.5 text-[11px] text-muted">
+                {{ sb.balance.nextExpire.date }} に {{ fmtDays(sb.balance.nextExpire.days) }} 日が失効予定
+              </p>
+              <p v-else class="mt-0.5 text-[11px] text-muted">失効予定はありません</p>
+            </li>
+          </ul>
+        </UiSectionCard>
 
         <UiSectionCard
           title="年5日取得義務トラッカー"
@@ -960,9 +1239,9 @@ function submitRule(): void {
     <!-- ================= 申請 ================= -->
     <div v-else-if="tab === 'requests'" role="tabpanel" aria-label="申請" class="mt-3 grid gap-3">
       <UiSectionCard
-        v-if="isAdmin"
+        v-if="isHrOrAdmin"
         title="承認待ち"
-        :description="`打刻修正・有給休暇の承認待ち ${pendingRows.length} 件`"
+        :description="`打刻修正・休暇の承認待ち ${pendingRows.length} 件`"
         flush
       >
         <UiDataTable
@@ -983,17 +1262,131 @@ function submitRule(): void {
         </UiDataTable>
       </UiSectionCard>
 
-      <UiSectionCard title="自分の申請" description="打刻修正と有給休暇の申請状況" flush>
+      <UiSectionCard title="自分の申請" description="打刻修正と休暇の申請状況" flush>
         <UiDataTable
           :columns="myRequestColumns"
           :rows="myRequestRows"
           empty-title="申請はまだありません"
-          empty-hint="日次タブの「打刻修正を申請」、有給タブの「有給を申請」から作成できます"
+          empty-hint="日次タブの「打刻修正を申請」、休暇タブの「休暇を申請」から作成できます"
         >
           <template #cell-status="{ value }">
             <UiStatusBadge :tone="leaveStatusTone(value)" :label="leaveStatusLabel(value)" />
           </template>
         </UiDataTable>
+      </UiSectionCard>
+    </div>
+
+    <!-- ================= タイムカード（管理者/人事 F-04-8） ================= -->
+    <div v-else-if="tab === 'timecard' && isHrOrAdmin" role="tabpanel" aria-label="タイムカード" class="mt-3 grid gap-3">
+      <UiSectionCard title="タイムカード" description="全メンバーの出退勤・労働時間の一覧（管理者/人事向け）。行クリックで日次詳細へ">
+        <template #actions>
+          <button
+            type="button"
+            class="btn btn-sm"
+            :aria-expanded="tcFilterOpen"
+            aria-controls="tc-filter-panel"
+            @click="tcFilterOpen = !tcFilterOpen"
+          >
+            <ChevronRight class="h-3.5 w-3.5 transition-transform" :class="tcFilterOpen ? 'rotate-90' : ''" aria-hidden="true" />
+            フィルター
+          </button>
+        </template>
+
+        <div v-show="tcFilterOpen" id="tc-filter-panel" class="mb-3 grid gap-2 rounded-lg border border-line bg-surface-soft p-3 sm:grid-cols-2 lg:grid-cols-4">
+          <UiFormField label="日付（から）">
+            <input v-model="tcFrom" type="date" class="input" aria-label="日付フィルター（開始）">
+          </UiFormField>
+          <UiFormField label="日付（まで）">
+            <input v-model="tcTo" type="date" class="input" aria-label="日付フィルター（終了）">
+          </UiFormField>
+          <UiFormField label="部署">
+            <UiSelect v-model="tcDeptId" :options="tcDeptOptions" aria-label="部署フィルター" />
+          </UiFormField>
+          <UiFormField label="氏名">
+            <input
+              v-model="tcName"
+              type="text"
+              class="input"
+              list="tc-name-list"
+              placeholder="名前で絞り込み"
+              aria-label="氏名フィルター（入力補完つき）"
+            >
+            <datalist id="tc-name-list">
+              <option v-for="n in tcNameCandidates" :key="n" :value="n" />
+            </datalist>
+          </UiFormField>
+        </div>
+
+        <p v-if="tcTruncated" class="mb-2 text-[11px] text-warn">
+          期間が長いため直近 {{ TIMECARD_MAX_DAYS }} 日分のみ表示しています。期間を狭めてください。
+        </p>
+
+        <UiDataTable
+          :columns="timecardColumns"
+          :rows="timecardRows"
+          clickable
+          empty-title="該当する打刻がありません"
+          empty-hint="日付・部署・氏名のフィルターを見直してください"
+          @row-click="openTimecardRow"
+        />
+      </UiSectionCard>
+    </div>
+
+    <!-- ================= 休暇管理（管理者/人事 F-04-9） ================= -->
+    <div v-else-if="tab === 'leave-admin' && isHrOrAdmin" role="tabpanel" aria-label="休暇管理" class="mt-3 grid gap-3">
+      <UiFilterBar>
+        <div class="inline-flex items-center gap-1 rounded-lg border border-line bg-surface p-1" role="group" aria-label="表示モード">
+          <button
+            type="button"
+            class="btn btn-sm"
+            :class="laMode === 'summary' ? 'btn-primary' : 'btn-ghost'"
+            :aria-pressed="laMode === 'summary'"
+            @click="laMode = 'summary'"
+          >
+            一覧
+          </button>
+          <button
+            type="button"
+            class="btn btn-sm"
+            :class="laMode === 'detail' ? 'btn-primary' : 'btn-ghost'"
+            :aria-pressed="laMode === 'detail'"
+            @click="laMode = 'detail'"
+          >
+            明細
+          </button>
+        </div>
+        <template #trailing>
+          <NuxtLink to="/masters/leave-types" class="btn btn-sm">休暇種別マスタ</NuxtLink>
+          <button type="button" class="btn" @click="openGrantModal">個別付与</button>
+          <button type="button" class="btn btn-primary" @click="openBulkModal">一括付与</button>
+        </template>
+      </UiFilterBar>
+
+      <UiSectionCard
+        v-if="laMode === 'summary'"
+        title="休暇残数一覧"
+        description="メンバー × 休暇種別の付与・取得・残数（設定日 = 直近の付与日）"
+        flush
+      >
+        <UiDataTable
+          :columns="laSummaryColumns"
+          :rows="laSummaryRows"
+          empty-title="付与実績がありません"
+          empty-hint="「個別付与」「一括付与」から休暇を付与できます"
+        />
+      </UiSectionCard>
+
+      <UiSectionCard
+        v-else
+        title="休暇取得明細"
+        description="承認済みの取得記録（新しい順）"
+        flush
+      >
+        <UiDataTable
+          :columns="laDetailColumns"
+          :rows="laDetailRows"
+          empty-title="取得明細がありません"
+        />
       </UiSectionCard>
     </div>
 
@@ -1051,12 +1444,12 @@ function submitRule(): void {
       </template>
     </UiModal>
 
-    <!-- ================= モーダル: 有給申請 ================= -->
-    <UiModal :open="leaveOpen" title="有給を申請" @close="leaveOpen = false">
+    <!-- ================= モーダル: 休暇申請 ================= -->
+    <UiModal :open="leaveOpen" title="休暇を申請" @close="leaveOpen = false">
       <div class="grid gap-3">
-        <p class="text-[12px] text-sub">
-          現在の残数: <b class="num">{{ fmtDays(leaveBalance.remaining) }}日</b>（承認後に消化されます）
-        </p>
+        <UiFormField label="休暇種別" required hint="残数のある種別のみ選択できます（承認後に消化されます）">
+          <UiSelect v-model="leaveForm.leaveTypeId" :options="leaveTypeOptions" aria-label="休暇種別" />
+        </UiFormField>
         <UiFormField label="取得日" required>
           <input v-model="leaveForm.date" type="date" class="input" >
         </UiFormField>
@@ -1071,6 +1464,72 @@ function submitRule(): void {
       <template #footer>
         <button type="button" class="btn" @click="leaveOpen = false">キャンセル</button>
         <button type="button" class="btn btn-primary" @click="submitLeave">申請する</button>
+      </template>
+    </UiModal>
+
+    <!-- ================= モーダル: 休暇の個別付与（管理者/人事） ================= -->
+    <UiModal :open="grantOpen" title="休暇の個別付与" @close="grantOpen = false">
+      <div class="grid gap-3">
+        <UiFormField label="対象メンバー" required>
+          <select v-model="grantForm.memberId" class="select" aria-label="付与対象メンバー">
+            <option value="" disabled>メンバーを選択</option>
+            <option v-for="m in leaveMembers" :key="m.id" :value="m.id">
+              {{ m.name }}（{{ deptName(m.departmentId) }}）
+            </option>
+          </select>
+        </UiFormField>
+        <UiFormField label="休暇種別" required hint="手動付与の種別のみ。使用期限は種別マスタの設定から自動算出">
+          <select v-model="grantForm.leaveTypeId" class="select" aria-label="付与する休暇種別">
+            <option v-for="t in manualLeaveTypes" :key="t.id" :value="t.id">
+              {{ t.name }}（期限 {{ t.expiryMonths == null ? 'なし' : `${t.expiryMonths} ヶ月` }}）
+            </option>
+          </select>
+        </UiFormField>
+        <UiFormField label="付与日数" required>
+          <input v-model.number="grantForm.days" type="number" min="0.5" max="40" step="0.5" class="input num" >
+        </UiFormField>
+        <p v-if="grantError" class="text-[12px] font-medium text-crit" role="alert">{{ grantError }}</p>
+      </div>
+      <template #footer>
+        <button type="button" class="btn" @click="grantOpen = false">キャンセル</button>
+        <button type="button" class="btn btn-primary" @click="submitGrant">付与する</button>
+      </template>
+    </UiModal>
+
+    <!-- ================= モーダル: 休暇の一括付与（管理者/人事） ================= -->
+    <UiModal :open="bulkOpen" title="休暇の一括付与" @close="bulkOpen = false">
+      <div class="grid gap-3">
+        <UiFormField label="休暇種別" required>
+          <select v-model="bulkForm.leaveTypeId" class="select" aria-label="一括付与する休暇種別">
+            <option v-for="t in manualLeaveTypes" :key="t.id" :value="t.id">
+              {{ t.name }}（期限 {{ t.expiryMonths == null ? 'なし' : `${t.expiryMonths} ヶ月` }}）
+            </option>
+          </select>
+        </UiFormField>
+        <UiFormField label="付与日数" required>
+          <input v-model.number="bulkForm.days" type="number" min="0.5" max="40" step="0.5" class="input num" >
+        </UiFormField>
+        <UiFormField label="対象" required>
+          <UiSelect v-model="bulkForm.targetKind" :options="BULK_TARGET_OPTIONS" aria-label="一括付与の対象" />
+        </UiFormField>
+        <UiFormField v-if="bulkForm.targetKind === 'employment'" label="雇用区分">
+          <UiSelect v-model="bulkForm.employmentType" :options="employmentOptions" aria-label="対象の雇用区分" />
+        </UiFormField>
+        <UiFormField v-if="bulkForm.targetKind === 'department'" label="部署">
+          <UiSelect v-model="bulkForm.departmentId" :options="deptOptions" aria-label="対象の部署" />
+        </UiFormField>
+        <p class="rounded-lg bg-surface-soft px-3 py-2 text-[12px] text-sub">
+          対象: <b class="num">{{ bulkTargets.length }}</b> 名
+          <span v-if="bulkTargets.length > 0" class="text-muted">
+            （{{ bulkTargets.slice(0, 5).map(m => m.name).join('・') }}{{ bulkTargets.length > 5 ? ' ほか' : '' }}）
+          </span>
+          / 同日に同一種別を付与済みのメンバーは自動でスキップされます（重複防止）
+        </p>
+        <p v-if="bulkError" class="text-[12px] font-medium text-crit" role="alert">{{ bulkError }}</p>
+      </div>
+      <template #footer>
+        <button type="button" class="btn" @click="bulkOpen = false">キャンセル</button>
+        <button type="button" class="btn btn-primary" @click="submitBulk">一括付与する</button>
       </template>
     </UiModal>
 

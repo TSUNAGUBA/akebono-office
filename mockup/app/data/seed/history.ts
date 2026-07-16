@@ -3,7 +3,7 @@
  * 「今日」を基準に過去分を生成するが、内容は rng（キー付きハッシュ）で決定的。
  * リロードしても同じ日なら同じ世界が再現される。
  */
-import type { CalendarEvent, LeaveGrant, PunchRecord, SalesMonthly, UptimeDaily } from '~/types/domain'
+import type { CalendarEvent, LeaveGrant, PunchRecord, SalesMonthly, TaskPlan, UptimeDaily } from '~/types/domain'
 import { addDays, hhmmToMin, toDateKey, weekdayOf } from '~/utils/format'
 import { leaveGrantDays } from '~/utils/attendance-calc'
 import { irange, pick, unit } from '~/utils/rng'
@@ -42,7 +42,7 @@ export function buildPunchHistory(days = 45): PunchRecord[] {
         ? hhmmToMin(assignedRule.workStart) % 60
         : irange(`${m.id}:${date}:sm`, 0, 25)
       // 忙しいメンバー（開発部）はやや残業が多い分布にする。時短者の残業は控えめに
-      const busy = m.dept === 'システム開発部' ? 1.5 : 1
+      const busy = m.departmentId === 'dp-04' ? 1.5 : 1 // システム開発部はやや残業多め
       const otMin = isParttime
         ? 0
         : assignedRule
@@ -96,13 +96,57 @@ export function buildLeaveGrants(): LeaveGrant[] {
       rows.push({
         id: `lg-${m.id}-${grantAtYears}`,
         memberId: m.id,
+        leaveTypeId: 'lt-paid',
         grantDate: toDateKey(grantDate),
         days,
         kind: m.weeklyHours >= 30 || m.weeklyDays >= 5 ? 'normal' : 'proportional',
         expireDate: toDateKey(expire),
+        grantedBy: null, // 周期自動付与
       })
     }
   }
+  return rows
+}
+
+/**
+ * 特別休暇の付与（F-04-9 の一括付与・個別付与デモ）。
+ * 実行日基準の相対日付で生成する（シードは日次で再生成されるため、固定日付だと季節によって
+ * 申請シードとの整合が崩れる）。
+ * - 夏季休暇: 人事（m-10）が対象者（在籍・外注以外）へ 20 日前に一括付与（3 日・3 ヶ月期限）
+ * - 結婚特休: 人事が m-06 へ 5 日前に個別付与（5 日・6 ヶ月期限）
+ */
+export function buildSpecialLeaveGrants(): LeaveGrant[] {
+  const today = seedToday()
+  const rows: LeaveGrant[] = []
+  const summerDate = addDays(today, -20)
+  const addMonths = (dateKey: string, months: number): string => {
+    const d = new Date(`${dateKey}T00:00:00`)
+    d.setMonth(d.getMonth() + months)
+    return toDateKey(d)
+  }
+  for (const m of seedMembers.filter(x => x.active && x.employmentType !== 'outsource')) {
+    rows.push({
+      id: `lg-summer-${m.id}`,
+      memberId: m.id,
+      leaveTypeId: 'lt-summer',
+      grantDate: summerDate,
+      days: 3,
+      kind: 'special',
+      expireDate: addMonths(summerDate, 3),
+      grantedBy: 'm-10',
+    })
+  }
+  const weddingDate = addDays(today, -5)
+  rows.push({
+    id: 'lg-wedding-m-06',
+    memberId: 'm-06',
+    leaveTypeId: 'lt-wedding',
+    grantDate: weddingDate,
+    days: 5,
+    kind: 'special',
+    expireDate: addMonths(weddingDate, 6),
+    grantedBy: 'm-10',
+  })
   return rows
 }
 
@@ -175,6 +219,69 @@ export function buildCalendarEvents(): CalendarEvent[] {
     }
   }
   return rows
+}
+
+/**
+ * タスク計画（AI業務アシスタント F-14 のデモ）。
+ * 昨日（直近の過去平日）分は結果記録済み（done）、今日分は計画済み（planned）で生成し、
+ * 「前日に計画 → 当日に振り返り → 日報へ反映」の一連の流れを最初から体感できるようにする。
+ */
+export function buildTaskPlans(): TaskPlan[] {
+  const today = seedToday()
+  let yesterday = addDays(today, -1)
+  while (weekdayOf(yesterday) === 0 || weekdayOf(yesterday) === 6) yesterday = addDays(yesterday, -1)
+  const at = (date: string, hhmm: string): string => `${date}T${hhmm}:00+09:00`
+  const plan = (
+    n: number, memberId: string, date: string, title: string, purpose: string,
+    doneCriteria: string, approach: string, aiComment: string,
+    result?: { outcome: string; reflection: string },
+  ): TaskPlan => ({
+    id: `tp-seed-${memberId}-${n}`,
+    memberId, date, calendarEventId: null,
+    title, purpose, doneCriteria, approach,
+    aiComment, aiCommentAt: aiComment ? at(addDays(date, -1), '18:10') : null,
+    status: result ? 'done' : 'planned',
+    outcome: result?.outcome ?? '',
+    reflection: result?.reflection ?? '',
+    resultAt: result ? at(date, '18:40') : null,
+    createdAt: at(addDays(date, -1), '18:00'),
+    updatedAt: result ? at(date, '18:40') : at(addDays(date, -1), '18:15'),
+  })
+  return [
+    plan(1, 'm-03', yesterday,
+      'アケボノ商事 定例の論点整理', '在庫精度の改善方針を合意する',
+      '改善案 2 案の比較表を提示し、次回までの検証項目が決まっている',
+      '①現状データの確認 ②2 案の比較表作成 ③定例で提示・議論',
+      '達成条件が測定可能で良い計画です。比較表の評価軸（コスト・期間・精度改善幅）を事前に先方と揃えておくと、当日の合意形成が速くなります。',
+      { outcome: '比較表を提示し A 案ベースで合意。検証項目 3 件を次回までに実施することが決定', reflection: '評価軸を事前共有していたため議論がスムーズだった' }),
+    plan(2, 'm-03', yesterday,
+      '北都物流 KPI 体系のドラフト作成', '庫内オペレーション KPI の初版を作る',
+      'KPI ツリーのドラフトが完成しレビュー依頼を出せている',
+      '①既存レポートの棚卸し ②KPI ツリー案作成 ③三浦さんへレビュー依頼',
+      '段取りが明確です。②では「計測できない KPI を入れない」を制約に置くと手戻りが減ります。',
+      { outcome: 'KPI ツリー初版を作成しレビュー依頼済み', reflection: '計測可否の観点を先に入れたことで案が絞れた' }),
+    plan(3, 'm-03', today,
+      'みなみ食品 受発注フロー現状整理', '標準化対象の業務範囲を確定する',
+      '現状フロー図が完成し、標準化対象・対象外の線引きが文書化されている',
+      '①ヒアリングメモの整理 ②現状フロー図作成 ③対象範囲の線引き案作成',
+      '目的と達成条件の対応が明確です。③の線引きは「例外頻度」を判断基準に入れると説得力が上がります。'),
+    plan(4, 'm-03', today,
+      'シーサイドホテルズ DX 構想の骨子検討', '提案骨子の方向性を固める',
+      '骨子 3 章立てのアウトラインができている',
+      '①経営課題の整理 ②類似事例の収集 ③アウトライン作成',
+      ''),
+    plan(5, 'm-05', yesterday,
+      'トクタケ 分析基盤のデータマート設計', 'マート層のテーブル設計を確定する',
+      'テーブル定義書がレビュー可能な状態になっている',
+      '①要件の再確認 ②テーブル定義書作成 ③セルフレビュー',
+      '達成条件が具体的で良いです。冪等キーの設計を定義書に含めると運用時の障害が減ります。',
+      { outcome: 'テーブル定義書を作成。冪等キー設計も盛り込みレビュー依頼済み', reflection: 'AI コメントの指摘が有効だった' }),
+    plan(6, 'm-05', today,
+      'SCM プラットフォーム 性能試験の準備', '負荷試験のシナリオを確定する',
+      '試験シナリオ 3 本と合格基準が文書化されている',
+      '①ピーク時間帯のアクセスパターン分析 ②シナリオ作成 ③合格基準の設定',
+      ''),
+  ]
 }
 
 /** サービス別の日次稼働状況（過去 90 日。決定的モック） */

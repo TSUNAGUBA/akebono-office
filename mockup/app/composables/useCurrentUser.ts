@@ -28,6 +28,9 @@ export function useCurrentUser() {
   })
 
   const isAdmin = computed(() => currentUser.value.role === 'admin')
+  /** 人事ロール（タイムカード・休暇管理・休暇付与の権限。管理者は常に含む） */
+  const isHrOrAdmin = computed(() =>
+    currentUser.value.role === 'admin' || currentUser.value.role === 'hr')
 
   /** 切替可能なデモユーザー（外注以外の在籍者） */
   const switchableUsers = computed(() =>
@@ -42,5 +45,5 @@ export function useCurrentUser() {
     }
   }
 
-  return { currentUser, currentUserId, isAdmin, switchableUsers, switchUser }
+  return { currentUser, currentUserId, isAdmin, isHrOrAdmin, switchableUsers, switchUser }
 }

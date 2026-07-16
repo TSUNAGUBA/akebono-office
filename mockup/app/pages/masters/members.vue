@@ -10,17 +10,15 @@ import {
 } from '~/components/masters/MasterShell.vue'
 import type { AttendanceRule, CustomValues, EmploymentType, Member } from '~/types/domain'
 import type { FieldDef, TableColumn } from '~/types/ui'
-import { EMPLOYMENT_TYPE_LABELS } from '~/utils/labels'
+import { EMPLOYMENT_TYPE_LABELS, MEMBER_ROLE_LABELS } from '~/utils/labels'
 
 const crud = useMasterCrud('members', 'm')
 const rulesCrud = useMasterCrud('attendanceRules', 'ar')
 const { itemsOf } = useCodeMaster()
 const { defsFor, formSchemaFor } = useCustomFields()
+const departments = useDepartments()
 const toast = useToast()
 const confirm = useConfirm()
-
-/** 画面固有の固定区分（labels.ts は共有ファイルのためページ内定義） */
-const ROLE_LABELS: Record<string, string> = { admin: '管理者', member: '一般' }
 
 const EMPLOYMENT_TYPE_TONES: Record<string, 'brand' | 'info' | 'ok' | 'warn' | 'neutral'> = {
   director: 'brand',
@@ -40,11 +38,15 @@ const filtered = computed(() =>
     if (!matchesActiveFilter(m, statusFilter.value)) return false
     const q = search.value.trim().toLowerCase()
     if (!q) return true
-    return [m.name, m.email, m.dept, m.title].some(v => v.toLowerCase().includes(q))
+    return [m.name, m.email, departments.nameOf(m.departmentId), m.title].some(v => v.toLowerCase().includes(q))
   }),
 )
 
-const tableRows = computed(() => filtered.value as unknown as Record<string, unknown>[])
+const tableRows = computed(() =>
+  filtered.value.map(m => ({
+    ...m,
+    dept: departments.nameOf(m.departmentId), // 表示用（列キー dept）
+  })) as unknown as Record<string, unknown>[])
 
 const columns: TableColumn[] = [
   { key: 'name', label: '氏名', primary: true },
@@ -110,12 +112,16 @@ const formFields = computed<FieldDef[]>(() => [
     ],
     hint: '同一雇用区分でも固定時間・フレックス・時短等を個別に指定できます。「既定」は雇用区分の既定ルールを適用',
   },
-  { key: 'dept', label: '部門', type: 'select', options: itemsOf('dept') },
+  {
+    key: 'departmentId', label: '部署', type: 'select', required: true,
+    options: departments.options.value,
+    hint: '部署の追加・階層の変更は 部署マスタ（組織図）で行います',
+  },
   { key: 'title', label: '役職', type: 'select', options: itemsOf('title') },
   {
     key: 'role', label: 'ロール', type: 'select', required: true,
-    options: Object.entries(ROLE_LABELS).map(([value, label]) => ({ value, label })),
-    hint: '管理者はマスタ・設定・承認系の操作が可能',
+    options: Object.entries(MEMBER_ROLE_LABELS).map(([value, label]) => ({ value, label })),
+    hint: '管理者はマスタ・設定・承認系の操作が可能。人事はタイムカード・休暇管理（付与含む）が可能',
   },
   { key: 'weeklyDays', label: '週所定日数', type: 'number', min: 1, max: 7, step: 1, hint: '有給の比例付与判定に使用' },
   { key: 'weeklyHours', label: '週所定時間', type: 'number', min: 1, max: 60, step: 0.5, hint: '有給の比例付与判定に使用' },
@@ -138,9 +144,9 @@ const detailRows = computed(() => {
         ? `${(rulesCrud.byId(m.attendanceRuleId) as AttendanceRule | undefined)?.name ?? m.attendanceRuleId}（個別指定）`
         : `既定（${defaultRuleNameFor(m.employmentType)}）`,
     },
-    { label: '部門', value: m.dept || '—' },
+    { label: '部署', value: departments.nameOf(m.departmentId) },
     { label: '役職', value: m.title || '—' },
-    { label: 'ロール', value: ROLE_LABELS[m.role] ?? m.role },
+    { label: 'ロール', value: MEMBER_ROLE_LABELS[m.role] ?? m.role },
     { label: '週所定', value: `${m.weeklyDays}日 / ${m.weeklyHours}h` },
     { label: '打刻対象', value: m.punchRequired ? '対象' : '対象外' },
     { label: '入社日', value: m.hireDate || '—' },
@@ -163,7 +169,7 @@ function openCreate(): void {
   selectedId.value = null
   form.value = {
     name: '', email: '', employmentType: 'employee', attendanceRuleId: DEFAULT_RULE_VALUE,
-    dept: '', title: '', role: 'member',
+    departmentId: departments.options.value[0]?.value ?? '', title: '', role: 'member',
     weeklyDays: 5, weeklyHours: 40, punchRequired: true, hireDate: '', birthDate: '', custom: {},
   }
   errors.value = {}
@@ -197,6 +203,7 @@ function validate(): boolean {
     }
   }
   if (!String(form.value.role ?? '')) e.role = 'ロールは必須です'
+  if (!String(form.value.departmentId ?? '')) e.departmentId = '部署は必須です'
   const custom = (form.value.custom ?? {}) as CustomValues
   for (const d of defsFor('member')) {
     const v = custom[d.key]
@@ -222,7 +229,7 @@ function save(): void {
     attendanceRuleId: f.attendanceRuleId && f.attendanceRuleId !== DEFAULT_RULE_VALUE
       ? String(f.attendanceRuleId)
       : null,
-    dept: String(f.dept ?? ''),
+    departmentId: String(f.departmentId ?? ''),
     title: String(f.title ?? ''),
     role: f.role as Member['role'],
     weeklyDays: Number(f.weeklyDays ?? 5),

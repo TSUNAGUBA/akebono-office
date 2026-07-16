@@ -1,29 +1,19 @@
 <script setup lang="ts">
 /**
  * ダッシュボード（F-01）
- * 挨拶+打刻 / KPI / 売上サマリ / 稼働状況サマリ / カード型メニュー / 通知フィード。
- * モバイル（<768px）は 打刻 → KPI(2列) → メニュー → 通知 の縦積み順（order 制御）。
+ * カード型メニュー + 通知フィードのみを配置する（2026-07-16 オペレーター指示）。
+ * - 打刻はヘッダーの「タイムカード」ボタン → モーダル（layouts/default.vue）
+ * - 売上サマリは 売上管理（/sales）、稼働状況サマリは 提供システム稼働状況（/status）へ独立
  */
-import { ArrowRight, ChevronRight } from 'lucide-vue-next'
 import type { AppNotification } from '~/types/domain'
 import type { MenuCard } from '~/types/ui'
-import { fmtDateLong, fmtDateTime, fmtPct, fmtYenCompact } from '~/utils/format'
-import {
-  NOTIFICATION_KIND_LABELS, SERVICE_STATE_LABELS, SERVICE_STATE_TONES,
-} from '~/utils/labels'
+import { fmtDateLong, fmtDateTime } from '~/utils/format'
+import { NOTIFICATION_KIND_LABELS } from '~/utils/labels'
 
 const { currentUser, currentUserId, isAdmin } = useCurrentUser()
 const { mine, unreadCount, markRead } = useNotifications()
 const { isEnabled } = useAppSettings()
 const { pendingFor } = useWorkflow()
-
-const {
-  fiscalMonthLabels, currentFySeries, previousFySeries,
-  currentMonthSales, currentMonthYoY, currentMonthMarginRate, marginYoYDiff,
-  typeBreakdown, customerBreakdown, selectedFy, fiscalYearOptions,
-} = useSales()
-
-const { services, stateOf, uptimePctOf, openIncidentsOf } = useSystemStatus()
 
 // ---------- 挨拶 ----------
 const greeting = computed(() => {
@@ -38,47 +28,7 @@ const todayLong = computed(() => fmtDateLong(nowJstIso()))
 // ---------- 承認待ち件数（useWorkflow.pendingFor が SoT。代理承認・個人指定も考慮済み） ----------
 const pendingApprovals = computed(() => pendingFor(currentUserId.value).length)
 
-// ---------- KPI ----------
-const kpiSales = computed(() => fmtYenCompact(currentMonthSales.value))
-const kpiMargin = computed(() =>
-  currentMonthMarginRate.value === null ? '—' : fmtPct(currentMonthMarginRate.value))
-
-// ---------- 売上チャート ----------
-const salesSeries = computed(() => [
-  { label: `${selectedFy.value}年度`, data: currentFySeries.value },
-  { label: `${selectedFy.value - 1}年度`, data: previousFySeries.value },
-])
-
-// 年度セレクタ（UiSelect は string モデルのため変換）
-const fyModel = computed({
-  get: () => String(selectedFy.value),
-  set: (v: string) => { selectedFy.value = Number(v) },
-})
-const fyOptions = computed(() =>
-  fiscalYearOptions.value.map(fy => ({ value: String(fy), label: `${fy}年度` })))
-
-// 顧客別内訳（Top5 + その他。横棒チャート用の射影）
-const customerLabels = computed(() => customerBreakdown.value.map(c => c.label))
-const customerSeries = computed(() => [
-  { label: '売上', data: customerBreakdown.value.map(c => c.value) },
-])
-
-// ---------- 提供システム稼働状況 ----------
-const serviceRows = computed(() => services.value.map((s) => {
-  const state = stateOf(s.id)
-  return {
-    id: s.id,
-    name: s.name,
-    description: s.description,
-    state,
-    stateLabel: SERVICE_STATE_LABELS[state] ?? state,
-    stateTone: SERVICE_STATE_TONES[state] ?? 'neutral',
-    uptime: fmtPct(uptimePctOf(s.id), 2),
-    openIncident: openIncidentsOf(s.id)[0]?.title ?? '',
-  }
-}))
-
-// ---------- カード型メニュー（要件の 6 カテゴリ） ----------
+// ---------- カード型メニュー ----------
 interface MenuSection { id: string; label: string; cards: MenuCard[] }
 
 const menuSections = computed<MenuSection[]>(() => {
@@ -96,13 +46,14 @@ const menuSections = computed<MenuSection[]>(() => {
     })
   }
   const work: MenuCard[] = [
-    { id: 'attendance', title: '勤怠管理', description: '打刻・月次集計・36 協定アラート・有給', icon: 'Clock', to: '/attendance' },
+    { id: 'attendance', title: '勤怠管理', description: '打刻・月次集計・36 協定アラート・休暇', icon: 'Clock', to: '/attendance' },
   ]
   if (isEnabled('shift')) {
     work.push({ id: 'shift', title: 'シフト表', description: '希望提出・調整・確定シフトの確認', icon: 'CalendarRange', to: '/shift' })
   }
   work.push(
     { id: 'reports', title: '日報・週報', description: '日々の報告とチームの提出状況', icon: 'NotebookPen', to: '/reports' },
+    { id: 'ai-assistant', title: 'AI業務アシスタント', description: '明日の計画と当日の振り返りを AI と。日報へ自動反映', icon: 'Sparkles', to: '/ai-assistant' },
     { id: 'workflow', title: 'ワークフロー', description: '稟議の申請・承認（職務権限マトリクス準拠）', icon: 'GitPullRequestArrow', to: '/workflow', badge: pendingApprovals.value },
   )
   sections.push({ id: 'work', label: '業務ツール', cards: work })
@@ -112,20 +63,27 @@ const menuSections = computed<MenuSection[]>(() => {
       cards: [{ id: 'ai-company', title: 'AIネイティブカンパニー', description: 'AI 社員の執務室。タスク依頼と活動モニタリング', icon: 'Building2', to: '/ai-company' }],
     })
   }
-  // サイドメニュー廃止に伴い、全遷移先をカードメニューで網羅する
-  const supportCards: MenuCard[] = [
-    { id: 'support', title: '業務支援ツール', description: 'AI チャットボット・ドキュメント管理・外部ツール', icon: 'Wrench', to: '/support' },
-    { id: 'inbox', title: '通知・エスカレーション', description: '通知の確認と、現場からの暗黙の情報共有への対応', icon: 'Inbox', to: '/inbox', badge: unreadCount.value },
+  // 経営・状況（売上管理 / 提供システム稼働状況 は独立ページ）
+  const insightCards: MenuCard[] = [
+    { id: 'sales', title: '売上管理', description: '月次売上の推移・前年比・事業種別/顧客別の内訳', icon: 'TrendingUp', to: '/sales' },
   ]
   if (isEnabled('status')) {
-    supportCards.splice(1, 0, { id: 'status', title: '稼働状況', description: '提供システムの現在状態・稼働率・インシデント履歴', icon: 'Activity', to: '/status' })
+    insightCards.push({ id: 'status', title: '提供システム稼働状況', description: '提供システムの現在状態・稼働率・インシデント履歴', icon: 'Activity', to: '/status' })
   }
-  sections.push({ id: 'support', label: '業務支援・状況', cards: supportCards })
+  sections.push({ id: 'insights', label: '経営・状況', cards: insightCards })
+  // サイドメニュー廃止に伴い、全遷移先をカードメニューで網羅する
+  sections.push({
+    id: 'support', label: '業務支援',
+    cards: [
+      { id: 'support', title: '業務支援ツール', description: 'AI チャットボット・ドキュメント管理・外部ツール', icon: 'Wrench', to: '/support' },
+      { id: 'inbox', title: '通知・エスカレーション', description: '通知の確認と、現場からの暗黙の情報共有への対応', icon: 'Inbox', to: '/inbox', badge: unreadCount.value },
+    ],
+  })
   if (isAdmin.value) {
     sections.push({
       id: 'admin', label: '管理',
       cards: [
-        { id: 'masters', title: 'マスタメンテナンス', description: 'メンバー・顧客・案件・ナレッジ等の基礎データ管理', icon: 'Database', to: '/masters' },
+        { id: 'masters', title: 'マスタメンテナンス', description: 'メンバー・部署・顧客・案件・休暇種別等の基礎データ管理', icon: 'Database', to: '/masters' },
         { id: 'settings', title: '設定', description: 'カスタム項目・汎用区分・外部リンク・機能トグル・監査ログ', icon: 'Settings', to: '/settings' },
       ],
     })
@@ -149,113 +107,17 @@ function openNotification(n: AppNotification): void {
       :description="todayLong"
     />
 
-    <div class="grid gap-3 lg:grid-cols-12">
-      <!-- 打刻（左カラム / モバイル 1 番目） -->
-      <div class="order-1 self-start lg:col-span-4 lg:row-span-2 xl:col-span-3">
-        <WidgetsPunchClock />
-      </div>
-
-      <!-- KPI 行（モバイル 2 番目・2 列） -->
-      <div class="order-2 grid grid-cols-2 gap-2 md:grid-cols-4 lg:col-span-8 xl:col-span-9">
-        <UiKpiCard
-          label="今月売上" :value="kpiSales" :delta="currentMonthYoY" sub="前年同月比"
-          icon="TrendingUp" to="/decision"
-        />
-        <UiKpiCard
-          label="粗利率（今月）" :value="kpiMargin" :delta="marginYoYDiff" sub="前年同月差"
-          icon="Percent" to="/decision"
-        />
-        <UiKpiCard
-          label="承認待ち" :value="`${pendingApprovals}件`" sub="あなたの承認待ち"
-          icon="GitPullRequestArrow" to="/workflow"
-        />
-        <UiKpiCard
-          label="未読通知" :value="`${unreadCount}件`" sub="通知センターへ"
-          icon="Bell" to="/inbox"
-        />
-      </div>
-
-      <!-- 売上サマリ（モバイルでは通知の後ろ。モバイルはチャート縦積み） -->
-      <section class="order-5 grid gap-2 lg:order-3 lg:col-span-8 xl:col-span-9" aria-label="売上サマリ">
-        <div class="flex flex-wrap items-center justify-end gap-2">
-          <span class="text-[11px] font-bold text-muted">表示年度</span>
-          <div class="w-32">
-            <UiSelect v-model="fyModel" :options="fyOptions" aria-label="売上サマリの表示年度" />
-          </div>
-        </div>
-        <div class="grid gap-3 lg:grid-cols-5">
-          <ChartsLineChartCard
-            class="lg:col-span-3"
-            :title="`月次売上（${selectedFy}年度 vs ${selectedFy - 1}年度）`"
-            :labels="fiscalMonthLabels"
-            :series="salesSeries"
-            :y-formatter="fmtYenCompact"
-          />
-          <ChartsDonutChartCard
-            class="lg:col-span-2"
-            :title="`事業種別内訳（${selectedFy}年度）`"
-            :items="typeBreakdown"
-            :value-formatter="fmtYenCompact"
-          />
-          <ChartsBarChartCard
-            class="lg:col-span-5"
-            :title="`顧客別内訳（${selectedFy}年度）`"
-            :labels="customerLabels"
-            :series="customerSeries"
-            horizontal
-            :height="200"
-            :y-formatter="fmtYenCompact"
-          />
-        </div>
-        <div class="flex justify-end">
-          <NuxtLink to="/decision" class="btn btn-sm">
-            意思決定支援で深掘る <ArrowRight class="h-3.5 w-3.5" aria-hidden="true" />
-          </NuxtLink>
-        </div>
-      </section>
-
-      <!-- 提供システム稼働状況 -->
-      <UiSectionCard
-        v-if="isEnabled('status')"
-        class="order-6 lg:order-4 lg:col-span-12"
-        title="提供システム稼働状況"
-        description="現在状態のサマリ。クリックで詳細へ"
-        flush
-      >
-        <template #actions>
-          <NuxtLink to="/status" class="link text-xs font-semibold">稼働状況ページへ</NuxtLink>
-        </template>
-        <ul class="divide-y divide-[var(--c-line)]">
-          <li v-for="s in serviceRows" :key="s.id">
-            <NuxtLink
-              :to="`/status/${s.id}`"
-              class="flex min-h-11 items-center gap-3 px-3 py-2 transition-colors hover:bg-brand-soft"
-            >
-              <span class="min-w-0 flex-1">
-                <span class="block truncate text-[13px] font-semibold">{{ s.name }}</span>
-                <span class="block truncate text-[11px] text-muted">
-                  {{ s.openIncident || s.description }}
-                </span>
-              </span>
-              <span class="num hidden text-[11px] text-muted sm:block">90日 {{ s.uptime }}</span>
-              <UiStatusBadge :label="s.stateLabel" :tone="s.stateTone" dot />
-              <ChevronRight class="h-4 w-4 shrink-0 text-muted" aria-hidden="true" />
-            </NuxtLink>
-          </li>
-        </ul>
-      </UiSectionCard>
-
-      <!-- カード型メニュー（モバイル 3 番目） -->
-      <section class="order-3 grid gap-3 lg:order-5 lg:col-span-12" aria-label="メニュー">
+    <div class="grid gap-3">
+      <!-- カード型メニュー -->
+      <section class="grid gap-3" aria-label="メニュー">
         <div v-for="sec in menuSections" :key="sec.id">
           <p class="mb-1.5 text-[11px] font-bold text-muted">{{ sec.label }}</p>
           <UiCardMenu :items="sec.cards" />
         </div>
       </section>
 
-      <!-- 通知フィード（モバイル 4 番目） -->
+      <!-- 通知フィード -->
       <UiSectionCard
-        class="order-4 lg:order-6 lg:col-span-12"
         title="通知"
         description="直近 5 件。クリックで既読にしてリンク先へ"
         flush

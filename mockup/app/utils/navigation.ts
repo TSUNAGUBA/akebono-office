@@ -38,6 +38,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { path: '/attendance', label: '勤怠管理', icon: 'Clock' },
       { path: '/shift', label: 'シフト表', icon: 'CalendarRange', featureKey: 'shift' },
       { path: '/reports', label: '日報・週報', icon: 'NotebookPen' },
+      { path: '/ai-assistant', label: 'AI業務アシスタント', icon: 'Sparkles' },
       { path: '/workflow', label: 'ワークフロー', icon: 'GitPullRequestArrow' },
     ],
   },
@@ -55,7 +56,8 @@ export const NAV_GROUPS: NavGroup[] = [
     label: '支援・状況',
     items: [
       { path: '/support', label: '業務支援ツール', icon: 'Wrench', matchPrefix: true },
-      { path: '/status', label: '稼働状況', icon: 'Activity', featureKey: 'status', matchPrefix: true },
+      { path: '/sales', label: '売上管理', icon: 'TrendingUp' },
+      { path: '/status', label: '提供システム稼働状況', icon: 'Activity', featureKey: 'status', matchPrefix: true },
     ],
   },
   {

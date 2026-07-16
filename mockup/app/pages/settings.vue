@@ -203,7 +203,8 @@ function toggleCfActive(def: CustomFieldDef): void {
 
 // ---------- d) 汎用区分マスタ ----------
 const cm = useCodeMaster()
-const cmCategory = ref('dept')
+// 部署は Department マスタ（F-10-9）へ昇格したため、汎用区分の既定カテゴリは title
+const cmCategory = ref('title')
 const cmItems = computed(() =>
   cm.list.value
     .filter(i => i.category === cmCategory.value)

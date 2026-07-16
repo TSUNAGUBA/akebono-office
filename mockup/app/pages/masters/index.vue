@@ -8,6 +8,8 @@ import type { MenuCard } from '~/types/ui'
 const { tbl } = useMockDb()
 
 const members = tbl('members')
+const departments = tbl('departments')
+const leaveTypes = tbl('leaveTypes')
 const industries = tbl('industries')
 const companies = tbl('companies')
 const contacts = tbl('contacts')
@@ -28,6 +30,22 @@ const cards = computed<MenuCard[]>(() => [
     icon: 'Users',
     to: '/masters/members',
     badge: activeCount(members.value),
+  },
+  {
+    id: 'departments',
+    title: '部署・組織図',
+    description: '部署の階層・責任者・メンバーの所属。組織図の表示',
+    icon: 'Network',
+    to: '/masters/departments',
+    badge: activeCount(departments.value),
+  },
+  {
+    id: 'leave-types',
+    title: '休暇種別',
+    description: '有給・夏季休暇・結婚特休等の種別と付与方式・使用期限',
+    icon: 'CalendarHeart',
+    to: '/masters/leave-types',
+    badge: activeCount(leaveTypes.value),
   },
   {
     id: 'industries',

@@ -43,6 +43,7 @@ export function useReportAssist() {
   const { currentUser } = useCurrentUser()
   const { eventsOf } = useCalendar()
   const hearingLogs = tbl('hearingLogs')
+  const taskPlans = tbl('taskPlans')
   const projects = tbl('projects')
   const companies = tbl('companies')
 
@@ -149,16 +150,21 @@ export function useReportAssist() {
 
   // ---------- ドラフト生成（モック LLM: 決定的ヒューリスティック整形） ----------
 
-  /** 予定タイトルからプロジェクトを推定（projectId 明示 → PJ 名/会社名・エイリアスのタイトル一致） */
-  function inferProjectId(e: CalendarEvent): string | null {
-    if (e.projectId) return e.projectId
-    const title = e.title.toLowerCase()
+  /** テキスト（予定タイトル・タスク名）からプロジェクトを推定（PJ 名/会社名・エイリアスの一致） */
+  function inferProjectIdFromText(text: string): string | null {
+    const title = text.toLowerCase()
     for (const p of projects.value.filter(x => x.active)) {
       if (title.includes(p.name.slice(0, 8).toLowerCase())) return p.id
       const company = companies.value.find(c => c.id === p.companyId)
       if (company && [company.name, ...company.aliases].some(n => n && title.includes(n.toLowerCase()))) return p.id
     }
     return null
+  }
+
+  /** 予定からのプロジェクト推定（projectId 明示 → タイトル一致） */
+  function inferProjectId(e: CalendarEvent): string | null {
+    if (e.projectId) return e.projectId
+    return inferProjectIdFromText(e.title)
   }
 
   function eventMinutes(e: CalendarEvent): number {
@@ -171,20 +177,29 @@ export function useReportAssist() {
   }
 
   /**
-   * 蓄積ログ + カレンダー予定から日報ドラフトを生成する（保存しない = 何度でも再生成可）。
+   * 蓄積ログ + カレンダー予定 + タスク計画の結果（AI業務アシスタント F-14）から
+   * 日報ドラフトを生成する（保存しない = 何度でも再生成可）。
    * 本実装では LLM（構造化出力）に置き換え、失敗時は本ヒューリスティックへフォールバックする。
    */
   function generateDraft(memberId: string, date: string): ReportDraft {
     const events = eventsOf(memberId, date)
     const logs = logsOf(memberId, date)
+    const dayPlans = taskPlans.value
+      .filter(p => p.memberId === memberId && p.date === date)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    const donePlans = dayPlans.filter(p => p.status === 'done')
+    const planByEventId = new Map(dayPlans.filter(p => p.calendarEventId).map(p => [p.calendarEventId, p]))
     const basis: string[] = []
 
-    // entries: 予定 → プロジェクト推定 + 工数（予定時間） + 回答による進捗推定
+    // entries: 予定 → プロジェクト推定 + 工数（予定時間） + 回答/計画結果による進捗推定
     const entries: ReportEntry[] = events.map((e) => {
       const pid = inferProjectId(e)
-      const ans = [...logs].reverse().find(l => l.kind === 'qa' && l.calendarEventId === e.id)?.answer ?? ''
+      const plan = planByEventId.get(e.id)
+      const ans = plan?.status === 'done'
+        ? plan.outcome
+        : [...logs].reverse().find(l => l.kind === 'qa' && l.calendarEventId === e.id)?.answer ?? ''
       const negative = NEGATIVE_HINTS.some(h => ans.includes(h))
-      const done = /完了|予定どおり/.test(ans)
+      const done = plan?.status === 'done' || /完了|予定どおり/.test(ans)
       if (pid && !e.projectId) basis.push(`「${e.title}」→ タイトルからプロジェクトを推定`)
       return {
         projectId: pid ?? '',
@@ -195,16 +210,33 @@ export function useReportAssist() {
     })
     if (events.length > 0) basis.push(`工数はカレンダー予定の時間から算出（${events.length} 件）`)
 
-    // 所感: イベント回答の肯定的な内容 + フォーカス回答 + ぽいぽいメモ
+    // 予定に紐付かない完了タスク（手動計画）もエントリへ（工数は既定 1h → 確認・修正で調整）
+    for (const p of donePlans.filter(x => !x.calendarEventId)) {
+      const negative = NEGATIVE_HINTS.some(h => p.outcome.includes(h))
+      entries.push({
+        projectId: inferProjectIdFromText(p.title) ?? '',
+        task: `${p.title}（${p.outcome.slice(0, 40)}）`,
+        hours: 1,
+        progress: negative ? 50 : 100,
+      })
+    }
+    if (donePlans.length > 0) basis.push(`タスク計画の結果 ${donePlans.length} 件を反映（AI業務アシスタント）`)
+
+    // 所感: 計画の所感 + フォーカス回答 + ぽいぽいメモ
     const focus = [...logs].reverse().find(l => l.kind === 'qa' && l.question.startsWith(WRAPUP_KEYS.focus))?.answer
     const memos = logs.filter(l => l.kind === 'memo').map(l => l.answer)
+    const planReflections = donePlans
+      .filter(p => p.reflection)
+      .map(p => `${p.title}: ${p.reflection}`)
     const reflectionParts = [
+      ...planReflections,
       focus ? `今日は${focus}に注力した。` : '',
       ...memos.map(m => `メモ: ${m}`),
     ].filter(Boolean)
+    if (planReflections.length > 0) basis.push(`タスクの所感 ${planReflections.length} 件を所感へ反映`)
     if (memos.length > 0) basis.push(`ぽいぽいメモ ${memos.length} 件を所感へ反映`)
 
-    // 課題: 課題回答（「特になし」以外） + イベント回答のネガティブ表現
+    // 課題: 課題回答（「特になし」以外） + イベント回答/計画結果のネガティブ表現
     const issueAns = [...logs].reverse().find(l => l.kind === 'qa' && l.question.startsWith(WRAPUP_KEYS.issue))?.answer ?? ''
     const negatives = logs
       .filter(l => l.kind === 'qa' && l.calendarEventId && NEGATIVE_HINTS.some(h => l.answer.includes(h)))
@@ -212,13 +244,28 @@ export function useReportAssist() {
         const ev = events.find(e => e.id === l.calendarEventId)
         return ev ? `${ev.title}: ${l.answer}` : l.answer
       })
+    const planNegatives = donePlans
+      .filter(p => NEGATIVE_HINTS.some(h => p.outcome.includes(h)))
+      .map(p => `${p.title}: ${p.outcome}`)
     const issues = [
       issueAns && issueAns !== '特になし' ? issueAns : '',
       ...negatives,
+      ...planNegatives,
     ].filter(Boolean).join('\n')
-    if (issues) basis.push('課題はヒアリング回答から抽出（提出時に管理者へ共有）')
+    if (issues) basis.push('課題はヒアリング回答・タスク結果から抽出（提出時に管理者へ共有）')
 
-    const tomorrow = [...logs].reverse().find(l => l.kind === 'qa' && l.question.startsWith(WRAPUP_KEYS.tomorrow))?.answer ?? ''
+    // 明日の予定: まとめ回答 → なければ翌営業日のタスク計画から
+    const tomorrowAns = [...logs].reverse().find(l => l.kind === 'qa' && l.question.startsWith(WRAPUP_KEYS.tomorrow))?.answer ?? ''
+    let tomorrow = tomorrowAns
+    if (!tomorrow) {
+      let next = addDays(date, 1)
+      while (weekdayOf(next) === 0 || weekdayOf(next) === 6) next = addDays(next, 1)
+      const nextPlans = taskPlans.value.filter(p => p.memberId === memberId && p.date === next)
+      if (nextPlans.length > 0) {
+        tomorrow = nextPlans.map(p => p.title).join(' / ')
+        basis.push('明日の予定は翌営業日のタスク計画から生成')
+      }
+    }
 
     return {
       entries: entries.length > 0 ? entries : [{ projectId: '', task: '', hours: 1, progress: 0 }],
