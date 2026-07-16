@@ -15,7 +15,7 @@ const toneClass = computed(() => ({
   crit: 'bg-crit-soft text-crit',
   info: 'bg-info-soft text-info',
   brand: 'bg-brand-soft text-brand',
-  neutral: 'bg-[#eef0f2] text-sub',
+  neutral: 'bg-neutral-soft text-sub',
 }[props.tone]))
 </script>
 

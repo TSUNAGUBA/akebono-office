@@ -9,7 +9,7 @@ import type {
   ApprovalAction, DelegateSetting, WorkflowCategory, WorkflowRequest,
   WorkflowRoute, WorkflowRouteStep,
 } from '~/types/domain'
-import { addDays, fmtDateTime, fmtYen, toDateKey } from '~/utils/format'
+import { addDays, fmtDateTime, fmtYen } from '~/utils/format'
 import {
   APPROVAL_ACTION_LABELS, WORKFLOW_CATEGORY_LABELS, WORKFLOW_STATUS_LABELS,
   WORKFLOW_STATUS_TONES,
@@ -251,12 +251,14 @@ function wfPayload() {
 }
 
 function onModalSubmit(): void {
+  // submit() が status を書き換える前に元の状態を退避（再申請判定は元 status で行う）
+  const wasRemanded = editingReq.value?.status === 'remanded'
   const res = wf.submit(wfPayload(), editingId.value ?? undefined)
   if (!res.ok) {
     show(res.error.message, 'warn')
     return
   }
-  show(editingReq.value?.status === 'remanded' ? '再申請しました' : '申請を提出しました')
+  show(wasRemanded ? '再申請しました' : '申請を提出しました')
   modalOpen.value = false
   selectedId.value = res.id ?? null
 }

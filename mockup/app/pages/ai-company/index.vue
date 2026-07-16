@@ -6,15 +6,25 @@
  */
 import { Settings2, Sparkles } from 'lucide-vue-next'
 import type { AiTask } from '~/types/domain'
-import { toDateKey } from '~/utils/format'
 import { AI_EMPLOYEE_STATUS_LABELS, AI_TASK_STATUS_LABELS } from '~/utils/labels'
 
 const {
   employees, roleOf, employeeById, tasks, tasksOf, logs, aiReportsOn,
   requestTask, approveTask, progressTask, blockTask, cancelTask, generateDailyReports,
+  evaluateWorkloadSignals,
 } = useAiCompany()
 const { show } = useToast()
 const { ask } = useConfirm()
+
+// ---------- シグナル検知（stalled_task / overload） ----------
+
+// 補助処理: 画面表示後に非ブロッキングで検知する（evaluateWorkloadSignals は内部で例外を握りつぶす）
+onMounted(() => {
+  const { raised } = evaluateWorkloadSignals()
+  if (raised > 0) {
+    show(`${raised}件のシグナルをエスカレーションしました`, 'warn', { label: '確認する', to: '/inbox' })
+  }
+})
 
 // ---------- オフィス + 詳細ドロワー ----------
 

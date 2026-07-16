@@ -126,6 +126,7 @@ function onKey(e: KeyboardEvent, id: string): void {
       <ellipse :cx="rug.cx" :cy="rug.cy" :rx="TILE_W / 2 * 0.36" :ry="TILE_H / 2 * 0.36" fill="none" stroke="var(--c-brand)" stroke-width="1" opacity="0.25" />
 
       <!-- 観葉植物（装飾） -->
+      <!-- 装飾固有色（鉢 #c98d5f）: UI トークンの対象外（この部品専用パレット） -->
       <g v-for="p in plants" :key="p.key" aria-hidden="true">
         <ellipse :cx="p.cx" :cy="p.cy + 6" rx="16" ry="7" fill="var(--c-line)" />
         <polygon :points="`${p.cx - 10},${p.cy} ${p.cx + 10},${p.cy} ${p.cx + 6},${p.cy - 16} ${p.cx - 6},${p.cy - 16}`" fill="#c98d5f" />
@@ -155,6 +156,7 @@ function onKey(e: KeyboardEvent, id: string): void {
         />
 
         <!-- デスク（アイソメの箱） -->
+        <!-- 装飾固有色（デスク側面 #b9c0c9 / #cdd3da）: UI トークンの対象外（この部品専用パレット） -->
         <polygon :points="boxLeft(d.cx, d.cy, DW2, DH2, DESK_Z)" fill="#b9c0c9" />
         <polygon :points="boxRight(d.cx, d.cy, DW2, DH2, DESK_Z)" fill="#cdd3da" />
         <polygon :points="diamond(d.cx, d.cy, DW2, DH2, DESK_Z)" fill="var(--c-line)" stroke="var(--c-line-strong)" stroke-width="0.5" />

@@ -2,7 +2,7 @@
 /** ドーナツチャートカード（構成比。9 系列以上は「その他」に畳む） */
 import type { ChartData, ChartOptions } from 'chart.js'
 import { Doughnut } from 'vue-chartjs'
-import { SERIES_COLORS } from '~/utils/chart-theme'
+import { CHART_BORDER, CHART_MUTED_SLICE, SERIES_COLORS } from '~/utils/chart-theme'
 
 const props = withDefaults(defineProps<{
   title: string
@@ -25,9 +25,9 @@ const data = computed<ChartData<'doughnut'>>(() => ({
   labels: folded.value.map(i => i.label),
   datasets: [{
     data: folded.value.map(i => i.value),
-    backgroundColor: folded.value.map((_, i) => i === MAX_SLICES - 1 && folded.value[i]?.label === 'その他' ? '#c8ccd2' : SERIES_COLORS[i % SERIES_COLORS.length]),
+    backgroundColor: folded.value.map((_, i) => i === MAX_SLICES - 1 && folded.value[i]?.label === 'その他' ? CHART_MUTED_SLICE : SERIES_COLORS[i % SERIES_COLORS.length]),
     borderWidth: 1,
-    borderColor: '#ffffff',
+    borderColor: CHART_BORDER,
   }],
 }))
 

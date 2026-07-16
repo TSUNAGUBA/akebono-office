@@ -4,7 +4,7 @@
  * - 起票は dedupeKey + クールダウンで冪等
  * - 起票・還流は補助処理: 失敗しても主フローを止めない
  */
-import type { Escalation, EscalationReason, Result } from '~/types/domain'
+import type { Escalation, EscalationReason, KnowledgeDomain, Result } from '~/types/domain'
 import { ESCALATION_REASON_LABELS } from '~/utils/labels'
 
 export interface EscalationSignal {
@@ -78,12 +78,14 @@ export function useEscalations() {
   /**
    * 管理者アクション（回答送信 / 裁定記録 / 対応不要）
    * open → resolved のガードで二重解決を防止（クレームファースト）。
+   * @param knowledgeTarget 裁定のナレッジ還流先（domain + targetId）。省略時はフォールバック先へ還流する
    */
   function resolve(
     id: string,
     type: 'answer' | 'ruling' | 'no_action',
     body: string,
     reflectToKnowledge = false,
+    knowledgeTarget?: { domain: KnowledgeDomain; targetId: string },
   ): Result {
     const target = escalations.value.find(e => e.id === id)
     if (!target || target.status !== 'open') {
@@ -97,12 +99,14 @@ export function useEscalations() {
 
     // 裁定のナレッジ還流（補助処理・非ブロッキング）
     if (type === 'ruling' && reflectToKnowledge) {
+      // 還流先が未指定の呼び出し元（旧 I/F）向けフォールバック: 自社 PJ「AKEBONO Office 開発」へ還流する
+      const reflectTarget = knowledgeTarget ?? { domain: 'project' as const, targetId: 'pj-08' }
       try {
         const knowledge = tbl('knowledge')
         knowledge.value = [...knowledge.value, {
           id: nextId('knowledge', 'k'),
-          domain: 'project',
-          targetId: 'pj-08',
+          domain: reflectTarget.domain,
+          targetId: reflectTarget.targetId,
           title: `裁定: ${target.context.slice(0, 24)}${target.context.length > 24 ? '…' : ''}`,
           body,
           tags: ['裁定'],

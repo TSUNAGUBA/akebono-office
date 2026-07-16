@@ -8,6 +8,7 @@ const props = withDefaults(defineProps<{
   size?: 'sm' | 'md' | 'lg'
 }>(), { kind: 'human', size: 'md' })
 
+/** 装飾固有色: UI トークンの対象外（この部品専用のアバターパステルパレット。名前ハッシュで決定的に割当） */
 const AVATAR_BG = ['#dbe7f6', '#dcf1e7', '#faeeda', '#e8e3fa', '#fae3ea', '#dff0f4'] as const
 
 const bg = computed(() => AVATAR_BG[hashStr(props.name) % AVATAR_BG.length])

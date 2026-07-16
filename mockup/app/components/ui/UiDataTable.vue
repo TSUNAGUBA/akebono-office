@@ -55,6 +55,21 @@ const primaryCols = computed(() => {
 function keyOf(row: Record<string, unknown>, idx: number): string {
   return String(row[props.rowKey] ?? idx)
 }
+
+/** ソート状態 → aria-sort 値（ソート可能な th 全てに付与） */
+function ariaSortOf(key: string): 'ascending' | 'descending' | 'none' {
+  if (sortKey.value !== key) return 'none'
+  return sortDir.value === 1 ? 'ascending' : 'descending'
+}
+
+/** クリック可能行のキーボード操作（Enter / Space で row-click。セル内の対話要素からのバブリングは無視） */
+function onRowKeydown(e: KeyboardEvent, row: Record<string, unknown>): void {
+  if (!props.clickable) return
+  if (e.target !== e.currentTarget) return
+  if (e.key !== 'Enter' && e.key !== ' ') return
+  e.preventDefault()
+  emit('row-click', row)
+}
 </script>
 
 <template>
@@ -79,6 +94,7 @@ function keyOf(row: Record<string, unknown>, idx: number): string {
                 :key="c.key"
                 :style="c.width ? { width: c.width } : {}"
                 :class="c.align === 'right' ? '!text-right' : c.align === 'center' ? '!text-center' : ''"
+                :aria-sort="ariaSortOf(c.key)"
               >
                 <button
                   type="button"
@@ -96,7 +112,9 @@ function keyOf(row: Record<string, unknown>, idx: number): string {
               v-for="(row, idx) in sortedRows"
               :key="keyOf(row, idx)"
               :class="clickable ? 'is-clickable' : ''"
+              :tabindex="clickable ? 0 : undefined"
               @click="clickable && emit('row-click', row)"
+              @keydown="onRowKeydown($event, row)"
             >
               <td
                 v-for="c in columns"
@@ -121,7 +139,9 @@ function keyOf(row: Record<string, unknown>, idx: number): string {
           :key="keyOf(row, idx)"
           class="card p-3"
           :class="clickable ? 'cursor-pointer active:bg-brand-soft' : ''"
+          :tabindex="clickable ? 0 : undefined"
           @click="clickable && emit('row-click', row)"
+          @keydown="onRowKeydown($event, row)"
         >
           <dl class="grid gap-1">
             <div
