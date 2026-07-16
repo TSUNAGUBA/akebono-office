@@ -233,6 +233,8 @@ function save(): void {
     custom: (f.custom ?? {}) as CustomValues,
   }
   if (mode.value === 'edit' && selectedId.value) payload.id = selectedId.value
+  // 新規メンバーはカレンダー未連携から開始（連携は本人の擬似 OAuth 同意で行う）
+  if (mode.value === 'create') payload.googleCalendarConnected = false
   const res = crud.save(payload)
   if (!res.ok) {
     toast.show(`${res.error.code}: ${res.error.message}`, 'crit')

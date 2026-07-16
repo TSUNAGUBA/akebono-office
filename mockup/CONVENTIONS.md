@@ -61,7 +61,13 @@ useEscalations().raise({ reason: 'issue_reported', targetMemberId, context, dedu
 const { formSchemaFor } = useCustomFields()   // → FieldDef[] を UiSchemaForm に渡す
 
 // 設定
-const { isEnabled } = useAppSettings()
+const { isEnabled, getConfig, setConfig } = useAppSettings()
+
+// カレンダー連携（F-06-8。google 発の SoT は Google・アプリ発の SoT は本アプリ）
+const cal = useCalendar()   // isConnected / connect / syncFromGoogle / addTask / pushToGoogle
+
+// 日報 AI アシスト（F-06-7。ログは追記のみ・ドラフトは保存せずフォームへ流し込む）
+const assist = useReportAssist()   // inputMode / questionsFor / recordAnswer / poipoiMemo / generateDraft
 ```
 
 ## UI コンポーネント在庫（新規に作る前にここを見る）
@@ -85,6 +91,7 @@ const { isEnabled } = useAppSettings()
 | `UiEmptyState` | icon, title, hint + #action |
 | `ChartsLineChartCard` / `ChartsBarChartCard` / `ChartsDonutChartCard` | title, labels/series or items, yFormatter |
 | `WidgetsPunchClock` | 打刻（props なし） |
+| `WidgetsCalendarConnectGate` | Google カレンダー連携ゲート（擬似 OAuth 同意・props なし） |
 
 コンポーネントはディレクトリプレフィックス付きで自動インポートされる（例: `components/widgets/ApprovalFlow.vue` → `<WidgetsApprovalFlow>`）。
 

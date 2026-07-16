@@ -62,12 +62,31 @@ valueOf(entity, id, key): unknown
 formSchemaFor(entity): FieldDef[]       // UiSchemaForm に直結
 ```
 
+```ts
+// useCalendar（F-06-8）
+isConnected: ComputedRef<boolean>                    // 擬似 OAuth 連携状態（本実装: トークン有無）
+connect() / disconnect(): Result                     // 画面上の同意フローで完結。connect は当日分を初回同期
+syncFromGoogle(memberId, date): Result & { synced }  // google 発のみべき等 upsert（アプリ発に触れない）
+addTask({date, from, to, title, projectId, pushToGoogle}): Result & { warning? }  // 反映は補助処理（未連携でも作成は成立）
+pushToGoogle(eventId) / removeTask(eventId): Result  // アプリ発のみ操作可
+
+// useReportAssist（F-06-7）
+inputMode: ComputedRef<'form'|'assist'|'both'>       // 設定（appConfigs.reportInputMode）
+questionsFor(memberId, date): AssistQuestion[]       // 予定 1 件 1 問 + まとめ 3 問（テンプレ+文脈）
+recordAnswer(q, answer) / poipoiMemo(text): Result   // 蓄積ログ（追記のみ）
+generateDraft(memberId, date): ReportDraft           // 保存しない（フォームへ流し込み→確認・修正→既存 submit）
+submittedReportOf(memberId, date)                    // 提出済み保護の判定
+
+```
+
 ## 3. 将来 API 移行マッピング
 
 | composable | 将来のエンドポイント（例） |
 |---|---|
 | useAttendance.punch | `POST /api/attendance/punches`（冪等キー付き） |
 | useWorkflow.act | `POST /api/workflows/{id}/actions`（クレームファースト: 条件付き UPDATE） |
+| useCalendar.syncFromGoogle | Google Calendar API（OAuth 2.0 増分認可・calendar.readonly/events スコープ。Webhook push + 手動再同期の両立） |
+| useReportAssist.generateDraft | LLM 構造化出力（responseSchema）+ 失敗時は本ヒューリスティックへフォールバック（ai-manager 方式） |
 | useEscalations.resolve | `POST /api/escalations/{id}/resolution`（ai-manager 方式: open→resolved のアトミッククレーム→失敗時補償） |
 | useMasterCrud | `GET/POST/PATCH /api/masters/{entity}` |
 | 参照系 computed | `GET` + クライアントキャッシュ（表示射影はフロント純粋関数のまま維持） |

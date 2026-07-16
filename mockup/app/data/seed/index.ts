@@ -4,10 +4,10 @@
  */
 import type {
   AiActivityLog, AiEmployee, AiRole, AiTask, AkebonoWish, ApprovalLog,
-  AppNotification, AttendanceFixRequest, AttendanceRule, AuditLog, ChatMessage,
+  AppConfigItem, AppNotification, AttendanceFixRequest, AttendanceRule, AuditLog, CalendarEvent, ChatMessage,
   CodeMasterItem, Company, CompanyRelation, Contact, ContactRelation,
   CustomFieldDef, DailyReport, DecisionLog, DecisionTheme, DelegateSetting,
-  DocumentNode, Escalation, EscalationRule, ExternalLink, FeatureToggle,
+  DocumentNode, Escalation, EscalationRule, ExternalLink, FeatureToggle, HearingLog,
   Industry, KnowledgeArticle, LeaveGrant, LeaveRequest, Member, Project,
   PunchRecord, RelationType, ReportComment, SalesMonthly, ServiceIncident,
   ShiftAssignment, ShiftDemand, ShiftPeriod, ShiftWish, SystemService,
@@ -24,7 +24,7 @@ import * as status from './status'
 import * as decision from './decision'
 import * as support from './support'
 import * as misc from './misc'
-import { buildLeaveGrants, buildPunchHistory, buildSalesMonthly, buildUptimeDaily } from './history'
+import { buildCalendarEvents, buildLeaveGrants, buildPunchHistory, buildSalesMonthly, buildUptimeDaily } from './history'
 
 export interface MockDbShape {
   members: Member[]
@@ -72,6 +72,9 @@ export interface MockDbShape {
   chatMessages: ChatMessage[]
   akebonoWishes: AkebonoWish[]
   auditLogs: AuditLog[]
+  calendarEvents: CalendarEvent[]
+  hearingLogs: HearingLog[]
+  appConfigs: AppConfigItem[]
   salesMonthly: SalesMonthly[]
 }
 
@@ -122,6 +125,9 @@ export function buildSeed(): MockDbShape {
     chatMessages: [],
     akebonoWishes: misc.seedAkebonoWishes,
     auditLogs: misc.seedAuditLogs,
+    calendarEvents: buildCalendarEvents(),
+    hearingLogs: [],
+    appConfigs: [{ key: 'reportInputMode', value: 'both' }],
     salesMonthly: buildSalesMonthly(),
   }
 }

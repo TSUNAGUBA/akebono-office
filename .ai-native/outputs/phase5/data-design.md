@@ -10,7 +10,7 @@
 
 | エンティティ | 主要属性 | 機密度 |
 |---|---|---|
-| `Member` | id, name, email, employmentType(`director`/`employee`/`contract`/`parttime`/`outsource`), attendanceRuleId（勤務体系の個別指定。null=雇用区分の既定を適用）, dept, title, role(`admin`/`member`), hireDate, weeklyDays, weeklyHours, punchRequired, birthDate（18 歳未満深夜判定用）, active, custom | C2 |
+| `Member` | id, name, email, employmentType(`director`/`employee`/`contract`/`parttime`/`outsource`), googleCalendarConnected（カレンダー連携状態。本実装では OAuth トークンの有無）, attendanceRuleId（勤務体系の個別指定。null=雇用区分の既定を適用）, dept, title, role(`admin`/`member`), hireDate, weeklyDays, weeklyHours, punchRequired, birthDate（18 歳未満深夜判定用）, active, custom | C2 |
 | `Industry` | id, name, displayOrder, active（直交軸・複合値禁止） | C1 |
 | `Company` | id, kind(`self`/`customer`), name, aliases[], industryIds[], primaryIndustryId, size, location, description, ownerMemberId, fiscalStartMonth(自社), active, custom | C2 |
 | `Contact` | id, companyId, name, dept, title, keyPerson(1-3), email, phone, notes, active, custom | C2 |
@@ -58,6 +58,16 @@
 | `DecisionLog` | id, themeId, chosenSlot, reason, decidedBy, at | C2 |
 | `AuditLog` | id, actorId, action, entity, entityId, detail, at | C3 |
 | `SalesMonthly`（モック） | month, projectType, companyId, amount, cost | C2 |
+
+### 1.x 日報 AI アシスト関連（F-06-7/8）
+
+| エンティティ | 主なフィールド | 機密度 |
+|---|---|---|
+| `CalendarEvent` | id, memberId, date, from, to, title, source(`google`/`app`), syncedToGoogle, projectId（タイトルから推定 or 手動） | C2 |
+| `HearingLog` | id, memberId, date, kind(`qa`=ヒアリング回答/`memo`=ぽいぽいメモ), calendarEventId, question, answer, at | C2 |
+| `AppConfigItem` | key, value（例: reportInputMode = `form`/`assist`/`both`） | C1 |
+
+> **SoT 宣言（カレンダー）:** `source='google'` の予定は **Google カレンダーが SoT**（本アプリはキャッシュ。編集・削除不可、決定的 id によるべき等 upsert で同期）。`source='app'` の予定は**本アプリが SoT**（`syncedToGoogle` で Google への反映状態を持つ）。HearingLog は記録系（追記のみ）。日報ドラフトは保存せずフォームへ流し込むのみで、**提出済み日報は再生成で上書きしない**（ai-manager の confirmed 保護と同型）。
 
 ## 2. スタースキーマ接続（akebono-scm-platform `mart` 規約準拠）
 
