@@ -2,6 +2,9 @@
 /** カード型メニュー（ダッシュボード・業務支援ツールハブ共用。内部遷移/外部リンク混在対応） */
 import * as icons from 'lucide-vue-next'
 import { ExternalLink as ExternalLinkIcon } from 'lucide-vue-next'
+// resolveComponent('NuxtLink') は本番ビルドで解決できず <nuxtlink> 要素になり
+// クリック無反応になるため、#components から実体を import して :is に渡す
+import { NuxtLink } from '#components'
 import type { MenuCard } from '~/types/ui'
 
 defineProps<{
@@ -19,7 +22,7 @@ function iconOf(name: string) {
   <ul class="grid grid-cols-1 gap-2 sm:grid-cols-2" :class="cols === 2 ? 'lg:grid-cols-2' : 'lg:grid-cols-3'">
     <li v-for="item in items" :key="item.id">
       <component
-        :is="item.href ? 'a' : resolveComponent('NuxtLink')"
+        :is="item.href ? 'a' : NuxtLink"
         :to="item.href ? undefined : item.to"
         :href="item.href || undefined"
         :target="item.href ? '_blank' : undefined"
