@@ -31,6 +31,8 @@ export interface Member {
   weeklyDays: number
   weeklyHours: number
   punchRequired: boolean
+  /** Google カレンダー連携済みか（本実装では OAuth トークンの有無。モックでは同意フローで切替） */
+  googleCalendarConnected: boolean
   /**
    * 勤務体系（勤怠ルール）の個別指定。
    * null = 雇用区分に合致する既定ルールを自動適用（正社員でも固定時間/フレックス/時短が
@@ -351,6 +353,53 @@ export interface ShiftDemand {
   to: string
   required: number
 }
+
+// ---------- 日報 AI アシスト（F-06-7/8） ----------
+
+export type CalendarEventSource = 'google' | 'app'
+
+/**
+ * カレンダー予定（モック）。
+ * SoT: source='google' の予定は Google カレンダーが正（本アプリはキャッシュ。編集・削除不可、同期で更新）。
+ *      source='app' の予定は本アプリが正（syncedToGoogle=true で Google へ反映済みを表す）。
+ */
+export interface CalendarEvent {
+  id: string
+  memberId: string
+  date: string // YYYY-MM-DD
+  from: string // HH:mm
+  to: string
+  title: string
+  source: CalendarEventSource
+  syncedToGoogle: boolean
+  /** タイトルから推定 or 手動指定したプロジェクト（AI ドラフトの工数振り分けに使用） */
+  projectId: string | null
+}
+
+/**
+ * AI アシストの蓄積ログ（記録系・追記のみ。日報ドラフトの材料になる）
+ * kind='qa'  : AI ヒアリングへの回答（ai-manager の checkin 方式）
+ * kind='memo': ぽいぽいメモ（tokutake ぽいぽいポスト方式の低摩擦断片投稿）
+ */
+export interface HearingLog {
+  id: string
+  memberId: string
+  date: string
+  kind: 'qa' | 'memo'
+  calendarEventId: string | null
+  question: string // memo の場合は空文字
+  answer: string
+  at: string
+}
+
+/** アプリ全体設定（キー・バリュー。日報入力方式などの少数の設定を保持） */
+export interface AppConfigItem {
+  key: string
+  value: string
+}
+
+/** 日報の入力方式（設定 F-13）: 通常フォーム / AI アシスト / 両方 */
+export type ReportInputMode = 'form' | 'assist' | 'both'
 
 export interface ReportEntry {
   projectId: string

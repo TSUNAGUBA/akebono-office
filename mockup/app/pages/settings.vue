@@ -76,7 +76,23 @@ function toggleLinkActive(link: ExternalLink): void {
 }
 
 // ---------- b) 機能トグル / e) エスカレーションルール ----------
-const { featureToggles, escalationRules, setToggle, updateEscalationRule, resetDemo } = useAppSettings()
+const { featureToggles, escalationRules, setToggle, updateEscalationRule, getConfig, setConfig, resetDemo } = useAppSettings()
+
+// ---------- 日報の入力方式（F-13-7。F-06-7 のオプション設定） ----------
+
+const REPORT_INPUT_MODE_OPTIONS = [
+  { value: 'form', label: '通常フォーム入力のみ' },
+  { value: 'assist', label: 'AI アシスト入力のみ' },
+  { value: 'both', label: '両方（メンバーが切替可能）' },
+]
+
+const reportInputMode = computed({
+  get: () => getConfig('reportInputMode', 'both'),
+  set: (v: string) => {
+    setConfig('reportInputMode', v)
+    toast.show('日報の入力方式を変更しました（日報画面に即時反映されます）')
+  },
+})
 
 function onToggleFeature(t: FeatureToggle): void {
   setToggle(t.key, !t.enabled)
@@ -393,6 +409,19 @@ async function onResetDemo(): Promise<void> {
               </button>
             </li>
           </ul>
+        </UiSectionCard>
+
+        <!-- b2) 日報の入力方式（F-13-7） -->
+        <UiSectionCard
+          title="日報の入力方式"
+          description="AI アシスト入力はオプション機能です。カレンダー予定・ぽいぽいメモ・AI ヒアリングから日報ドラフトを生成し、本人が確認・修正してから提出します"
+        >
+          <div class="max-w-xs">
+            <UiSelect v-model="reportInputMode" :options="REPORT_INPUT_MODE_OPTIONS" aria-label="日報の入力方式" />
+          </div>
+          <p class="mt-2 text-[11px] text-muted">
+            「AI アシスト入力のみ」でも、生成されたドラフトの確認・修正は通常フォームで行います（AI の出力をそのまま提出することはありません）
+          </p>
         </UiSectionCard>
 
         <!-- c) カスタム項目 -->

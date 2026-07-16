@@ -4,10 +4,11 @@
  * タブ: 自分の日報 / チーム（管理者のみ・提出状況マトリクス+タイムライン） / 週報
  */
 import {
-  BellRing, Check, ChevronLeft, ChevronRight, Minus, Plus, Send, Sparkles, Trash2,
+  BellRing, Check, ChevronLeft, ChevronRight, Minus, Plus, RefreshCw, Send, Sparkles, Trash2, Zap,
 } from 'lucide-vue-next'
-import type { DailyReport, ReportEntry, WeeklyReport } from '~/types/domain'
+import type { CalendarEvent, DailyReport, ReportEntry, WeeklyReport } from '~/types/domain'
 import { REPORT_STATUS_LABELS } from '~/composables/useReports'
+import type { AssistQuestion } from '~/composables/useReportAssist'
 import { addDays, fmtDate, fmtDateLong, fmtMinutes, fmtTime, weekdayOf } from '~/utils/format'
 import type { TabItem } from '~/types/ui'
 
@@ -166,6 +167,182 @@ function onSubmit(): void {
   }
 }
 
+// ---------- AI アシスト入力（F-06-7/8） ----------
+
+const assist = useReportAssist()
+const cal = useCalendar()
+const inputMode = assist.inputMode
+const calConnected = cal.isConnected
+
+/** 入力方式が 'both' のときの切替（既定は AI アシスト） */
+const entryMethod = ref<'form' | 'assist'>('assist')
+const assistActive = computed(() =>
+  inputMode.value === 'assist' || (inputMode.value === 'both' && entryMethod.value === 'assist'))
+
+/** この日の自分の日報（提出済みのときのみ）。提出済み保護（ドラフト再生成不可）の唯一の判定元 */
+const submittedForDate = computed(() =>
+  myReport.value?.status === 'submitted' ? myReport.value : undefined)
+const isSubmittedDay = computed(() => !!submittedForDate.value)
+
+/** AI アシスト時、編集フォームはドラフトの確認・修正ステップとしてのみ表示する */
+const confirmStep = ref(false)
+/** 直近生成した AI ドラフトの根拠（null = AI 生成のドラフトではない） */
+const draftBasis = ref<string[] | null>(null)
+const editorWrap = ref<HTMLElement | null>(null)
+const showEditor = computed(() => !assistActive.value || confirmStep.value)
+
+// -- ぽいぽいメモ / ヒアリングの画面状態（日付・ユーザー切替でリセット） --
+
+const memoText = ref('')
+const qaText = ref<Record<string, string>>({})
+const reanswering = ref<Record<string, boolean>>({})
+
+watch([selDate, currentUserId], () => {
+  confirmStep.value = false
+  draftBasis.value = null
+  memoText.value = ''
+  qaText.value = {}
+  reanswering.value = {}
+})
+
+// -- スケジュール & タスク --
+
+const dayEvents = computed(() => cal.eventsOf(currentUserId.value, selDate.value))
+
+function onSyncGoogle(): void {
+  const res = cal.syncFromGoogle(currentUserId.value, selDate.value)
+  if (!res.ok) {
+    show(res.error.message, 'crit')
+    return
+  }
+  show(`${res.synced ?? 0} 件を同期しました（モック）`)
+}
+
+function onPushToGoogle(e: CalendarEvent): void {
+  const res = cal.pushToGoogle(e.id)
+  if (!res.ok) {
+    show(res.error.message, 'crit')
+    return
+  }
+  show(
+    res.warning ?? `「${e.title}」を Google カレンダーへ反映しました（モック）`,
+    res.warning ? 'warn' : 'ok',
+  )
+}
+
+async function askRemoveTask(e: CalendarEvent): Promise<void> {
+  const ok = await ask('タスクの削除', `「${e.title}」（${e.from}〜${e.to}）を削除しますか？`, { confirmLabel: '削除', danger: true })
+  if (!ok) return
+  const res = cal.removeTask(e.id)
+  show(res.ok ? 'タスクを削除しました' : res.error.message, res.ok ? 'ok' : 'crit')
+}
+
+const taskModal = ref(false)
+const taskForm = ref({ title: '', from: '09:00', to: '10:00', projectId: '', pushToGoogle: false })
+
+function openTaskModal(): void {
+  taskForm.value = { title: '', from: '09:00', to: '10:00', projectId: '', pushToGoogle: calConnected.value }
+  taskModal.value = true
+}
+
+function onAddTask(): void {
+  const f = taskForm.value
+  const res = cal.addTask({
+    date: selDate.value,
+    from: f.from,
+    to: f.to,
+    title: f.title,
+    projectId: f.projectId || null,
+    pushToGoogle: f.pushToGoogle,
+  })
+  if (!res.ok) {
+    show(res.error.message, 'crit')
+    return
+  }
+  taskModal.value = false
+  show(f.pushToGoogle && !res.warning ? 'タスクを追加し、Google カレンダーへ反映しました（モック）' : 'タスクを追加しました')
+  if (res.warning) show(res.warning, 'warn')
+}
+
+// -- ぽいぽいメモ --
+
+const dayMemos = computed(() =>
+  assist.logsOf(currentUserId.value, selDate.value).filter(l => l.kind === 'memo'))
+
+function onPoipoi(): void {
+  const res = assist.poipoiMemo(memoText.value, selDate.value)
+  if (!res.ok) {
+    show(res.error.message, 'warn')
+    return
+  }
+  memoText.value = ''
+  show('記録しました')
+}
+
+function onMemoKeydown(e: KeyboardEvent): void {
+  if (e.isComposing) return // IME 変換確定の Enter では送信しない
+  onPoipoi()
+}
+
+// -- AI ヒアリング --
+
+const questions = computed(() => assist.questionsFor(currentUserId.value, selDate.value))
+const answeredCount = computed(() => questions.value.filter(q => q.answered).length)
+
+/** 回答済み設問の最後の回答テキスト（答え直しは新しい回答が優先） */
+function lastAnswerOf(q: AssistQuestion): string {
+  const found = [...assist.logsOf(currentUserId.value, selDate.value)].reverse().find(l =>
+    l.kind === 'qa' && (q.calendarEventId ? l.calendarEventId === q.calendarEventId : l.question === q.question))
+  return found?.answer ?? ''
+}
+
+function submitAnswer(q: AssistQuestion, text: string): void {
+  const res = assist.recordAnswer(q, text, selDate.value)
+  if (!res.ok) {
+    show(res.error.message, 'warn')
+    return
+  }
+  qaText.value[q.key] = ''
+  reanswering.value[q.key] = false
+  show('回答を記録しました')
+}
+
+function onAnswerKeydown(e: KeyboardEvent, q: AssistQuestion): void {
+  if (e.isComposing) return
+  submitAnswer(q, qaText.value[q.key] ?? '')
+}
+
+// -- ドラフト生成 → 確認・修正ステップ --
+
+function scrollToEditor(): void {
+  void nextTick(() => editorWrap.value?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+}
+
+async function onGenerateDraft(): Promise<void> {
+  if (submittedForDate.value) return // 提出済みの日報は上書きしない
+  if (confirmStep.value) {
+    // 確認・修正中の手直しを黙って捨てない
+    const okAsk = await ask('ドラフトの再生成', '生成し直すと、確認・修正中の内容を新しいドラフトで置き換えます。よろしいですか？', { confirmLabel: '再生成' })
+    if (!okAsk) return
+  }
+  const d = assist.generateDraft(currentUserId.value, selDate.value)
+  editEntries.value = d.entries.map(e => ({ ...e }))
+  editReflection.value = d.reflection
+  editIssues.value = d.issues
+  editTomorrow.value = d.tomorrow
+  draftBasis.value = d.basis
+  confirmStep.value = true
+  show('AI ドラフトを生成しました。内容を確認・修正して提出してください')
+  scrollToEditor()
+}
+
+/** 保存済みの下書きを（AI 生成なしで）確認・修正ステップで開く */
+function openSavedDraft(): void {
+  draftBasis.value = null
+  confirmStep.value = true
+  scrollToEditor()
+}
+
 // ---------- チームタブ（管理者） ----------
 
 const matrixDays = computed(() => reports.recentBusinessDays(7))
@@ -308,6 +485,34 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
         </template>
       </UiFilterBar>
 
+      <!-- 入力方式の切替（設定が 'both' のとき） -->
+      <div
+        v-if="inputMode === 'both'"
+        class="inline-flex items-center gap-1 justify-self-start rounded-lg border border-line bg-surface p-1"
+        role="group"
+        aria-label="日報の入力方式"
+      >
+        <button
+          type="button"
+          class="btn btn-sm"
+          :class="entryMethod === 'form' ? 'btn-primary' : 'btn-ghost'"
+          :aria-pressed="entryMethod === 'form'"
+          @click="entryMethod = 'form'"
+        >
+          通常入力
+        </button>
+        <button
+          type="button"
+          class="btn btn-sm"
+          :class="entryMethod === 'assist' ? 'btn-primary' : 'btn-ghost'"
+          :aria-pressed="entryMethod === 'assist'"
+          @click="entryMethod = 'assist'"
+        >
+          <Sparkles class="h-3.5 w-3.5" aria-hidden="true" />
+          AI アシスト
+        </button>
+      </div>
+
       <!-- 提出済み: 読み取り表示 + コメントスレッド -->
       <UiSectionCard v-if="myReport && myReport.status === 'submitted'" :title="`${fmtDateLong(selDate)} の日報`">
         <div class="grid gap-4">
@@ -355,9 +560,179 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
         </div>
       </UiSectionCard>
 
-      <!-- 未提出: エディタ -->
-      <UiSectionCard v-else :title="`${fmtDateLong(selDate)} の日報を書く`" description="プロジェクト別に作業内容と工数（0.25h 刻み）を記録します">
+      <!-- ================= AI アシスト入力（F-06-7/8） ================= -->
+      <template v-if="assistActive">
+        <!-- Google カレンダー連携ゲート（未連携: 連携プロンプト+擬似 OAuth / 連携済み: 状態バー+解除） -->
+        <WidgetsCalendarConnectGate />
+
+        <!-- スケジュール & タスク（タスク追加は未連携でも可能。Google 同期は連携済みのみ） -->
+        <UiSectionCard title="スケジュール & タスク" description="この日の予定とタスク">
+          <template #actions>
+            <button v-if="calConnected" type="button" class="btn btn-sm" @click="onSyncGoogle">Google から同期</button>
+            <button type="button" class="btn btn-sm" @click="openTaskModal">タスクを追加</button>
+          </template>
+          <UiEmptyState
+            v-if="dayEvents.length === 0"
+            icon="CalendarDays"
+            title="予定がありません"
+            :hint="calConnected ? 'Google カレンダーから同期するか、タスクを追加してください' : 'タスクを追加してください（Google 連携すると予定も同期できます）'"
+          >
+            <template #action>
+              <button v-if="calConnected" type="button" class="btn btn-sm" @click="onSyncGoogle">
+                <RefreshCw class="h-3.5 w-3.5" aria-hidden="true" />
+                Google から同期
+              </button>
+              <button v-else type="button" class="btn btn-sm" @click="openTaskModal">タスクを追加</button>
+            </template>
+          </UiEmptyState>
+          <ul v-else class="grid gap-2">
+            <li v-for="e in dayEvents" :key="e.id" class="rounded-lg border border-line p-2.5">
+              <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span class="num text-xs font-semibold text-sub">{{ e.from }}〜{{ e.to }}</span>
+                <span class="min-w-0 flex-1 text-[13px] font-semibold">{{ e.title }}</span>
+                <UiStatusBadge
+                  :tone="e.source === 'google' ? 'info' : 'brand'"
+                  :label="e.source === 'google' ? 'Google' : 'アプリ'"
+                />
+              </div>
+              <div class="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1.5">
+                <span v-if="e.projectId" class="text-xs text-sub">{{ projectName(e.projectId) }}</span>
+                <span v-else class="text-xs text-muted">未推定</span>
+                <span v-if="e.source === 'app' && e.syncedToGoogle" class="text-[11px] text-muted">Google 反映済み</span>
+                <span v-if="e.source === 'app'" class="ml-auto flex flex-wrap justify-end gap-1.5">
+                  <button v-if="!e.syncedToGoogle" type="button" class="btn btn-sm" @click="onPushToGoogle(e)">
+                    Google へ反映
+                  </button>
+                  <button type="button" class="btn btn-sm text-crit" :aria-label="`「${e.title}」を削除`" @click="askRemoveTask(e)">
+                    <Trash2 class="h-3.5 w-3.5" aria-hidden="true" />
+                    削除
+                  </button>
+                </span>
+              </div>
+            </li>
+          </ul>
+        </UiSectionCard>
+
+        <!-- ぽいぽいメモ（提出済みの日は材料が使われないため入力を閉じる） -->
+        <UiSectionCard v-if="!isSubmittedDay" title="ぽいぽいメモ" description="気づいたこと・やったことを一言でぽいっと。日報ドラフトの材料になります">
+          <div class="grid gap-2">
+            <div class="flex gap-1.5">
+              <input
+                v-model="memoText"
+                type="text"
+                class="input min-w-0 flex-1"
+                placeholder="例: 見積の前提を確認済み"
+                aria-label="ぽいぽいメモ"
+                @keydown.enter="onMemoKeydown"
+              >
+              <button type="button" class="btn btn-primary shrink-0" @click="onPoipoi">
+                <Zap class="h-3.5 w-3.5" aria-hidden="true" />
+                ぽいっと記録
+              </button>
+            </div>
+            <ul v-if="dayMemos.length > 0" class="grid gap-1">
+              <li v-for="m in dayMemos" :key="m.id" class="flex items-start gap-2 rounded-lg bg-surface-soft px-2.5 py-1.5">
+                <span class="num shrink-0 text-[11px] text-muted">{{ fmtTime(m.at) }}</span>
+                <span class="min-w-0 text-[13px]">{{ m.answer }}</span>
+              </li>
+            </ul>
+            <p v-else class="text-xs text-muted">この日のメモはまだありません</p>
+          </div>
+        </UiSectionCard>
+
+        <!-- AI ヒアリング（提出済みの日は回答が使われないため入力を閉じる） -->
+        <UiSectionCard v-if="!isSubmittedDay" title="AI ヒアリング" description="予定の進み具合と今日のまとめを一問ずつ">
+          <template #actions>
+            <span class="num whitespace-nowrap text-xs font-semibold text-sub">回答 {{ answeredCount }}/{{ questions.length }}</span>
+          </template>
+          <div class="grid gap-2">
+            <div
+              v-for="q in questions"
+              :key="q.key"
+              class="rounded-lg border border-line p-2.5"
+              :class="q.answered ? 'bg-surface-soft' : ''"
+            >
+              <p class="text-[13px] font-semibold">{{ assist.displayQuestion(q) }}</p>
+              <!-- 回答済み -->
+              <div v-if="q.answered && !reanswering[q.key]" class="mt-1.5 flex flex-wrap items-center gap-2">
+                <UiStatusBadge tone="ok" label="回答済み" dot />
+                <span class="min-w-0 flex-1 text-xs text-muted">{{ lastAnswerOf(q) }}</span>
+                <button type="button" class="btn btn-sm" @click="reanswering[q.key] = true">答え直す</button>
+              </div>
+              <!-- 未回答 / 答え直し -->
+              <div v-else class="mt-1.5 grid gap-1.5">
+                <div v-if="q.chips.length > 0" class="flex flex-wrap gap-1.5">
+                  <button v-for="c in q.chips" :key="c" type="button" class="btn btn-sm" @click="submitAnswer(q, c)">
+                    {{ c }}
+                  </button>
+                </div>
+                <div class="flex gap-1.5">
+                  <input
+                    v-model="qaText[q.key]"
+                    type="text"
+                    class="input min-w-0 flex-1"
+                    placeholder="自由記述で回答"
+                    :aria-label="`「${assist.displayQuestion(q)}」への回答`"
+                    @keydown.enter="onAnswerKeydown($event, q)"
+                  >
+                  <button type="button" class="btn shrink-0" @click="submitAnswer(q, qaText[q.key] ?? '')">記録</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </UiSectionCard>
+
+        <!-- ドラフト生成 -->
+        <UiSectionCard title="日報ドラフト生成" description="スケジュール・回答・メモを材料に AI が下書きを作ります">
+          <div class="grid gap-2">
+            <button
+              type="button"
+              class="btn btn-primary btn-lg w-full justify-center"
+              :disabled="!!submittedForDate"
+              @click="onGenerateDraft"
+            >
+              <Sparkles class="h-4 w-4" aria-hidden="true" />
+              AI で日報ドラフトを生成
+            </button>
+            <p v-if="submittedForDate" class="text-center text-xs text-muted">
+              この日の日報は提出済みです（提出済みの日報は上書きしません）
+            </p>
+            <p v-else class="text-center text-[11px] text-muted">
+              生成後、フォームで内容を確認・修正してから提出します（何度でも生成し直せます）
+            </p>
+            <button
+              v-if="!submittedForDate && myReport && myReport.status === 'draft' && !confirmStep"
+              type="button"
+              class="btn btn-sm justify-self-center"
+              @click="openSavedDraft"
+            >
+              保存済みの下書きを開いて修正
+            </button>
+          </div>
+        </UiSectionCard>
+      </template>
+
+      <!-- 未提出: エディタ（AI アシスト時はドラフトの確認・修正ステップとしてのみ表示） -->
+      <div v-if="!isSubmittedDay && showEditor" ref="editorWrap">
+      <UiSectionCard :title="`${fmtDateLong(selDate)} の日報を書く`" description="プロジェクト別に作業内容と工数（0.25h 刻み）を記録します">
         <div class="grid gap-3">
+          <!-- AI ドラフトバナー（生成根拠つき） -->
+          <div v-if="assistActive && draftBasis" class="rounded-lg bg-brand-soft p-3">
+            <p class="flex items-start gap-1.5 text-[13px] font-bold text-brand">
+              <Sparkles class="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+              AI ドラフトです。内容を確認・修正してから提出してください
+            </p>
+            <template v-if="draftBasis.length > 0">
+              <p class="label mt-1.5 !mb-1">生成根拠</p>
+              <ul class="grid gap-0.5">
+                <li v-for="(b, i) in draftBasis" :key="i" class="flex items-start gap-1 text-xs text-sub">
+                  <span aria-hidden="true">・</span>
+                  <span>{{ b }}</span>
+                </li>
+              </ul>
+            </template>
+          </div>
+
           <div v-for="(e, i) in editEntries" :key="i" class="rounded-lg border border-line p-2.5">
             <div class="grid gap-2 md:grid-cols-[minmax(0,1.1fr)_minmax(0,1.6fr)]">
               <UiFormField label="プロジェクト" required>
@@ -427,6 +802,7 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
           </div>
         </div>
       </UiSectionCard>
+      </div>
     </div>
 
     <!-- ================= チーム（管理者） ================= -->
@@ -654,5 +1030,40 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
         <div><p class="label">来週の予定</p><p class="whitespace-pre-wrap text-[13px]">{{ weeklyDrawer.nextWeek || '—' }}</p></div>
       </div>
     </UiDrawer>
+
+    <!-- タスク追加モーダル（AI アシスト: スケジュール & タスク） -->
+    <UiModal :open="taskModal" title="タスクを追加" width="440px" @close="taskModal = false">
+      <div class="grid gap-3">
+        <UiFormField label="タスク名" required>
+          <input v-model="taskForm.title" type="text" class="input" placeholder="例: 提案書ドラフト作成">
+        </UiFormField>
+        <div class="grid grid-cols-2 gap-2">
+          <UiFormField label="開始" required>
+            <input v-model="taskForm.from" type="time" class="input" aria-label="開始時刻">
+          </UiFormField>
+          <UiFormField label="終了" required>
+            <input v-model="taskForm.to" type="time" class="input" aria-label="終了時刻">
+          </UiFormField>
+        </div>
+        <UiFormField label="プロジェクト">
+          <select v-model="taskForm.projectId" class="select" aria-label="タスクのプロジェクト">
+            <option value="">未選択</option>
+            <option v-for="p in activeProjects" :key="p.value" :value="p.value">{{ p.label }}</option>
+          </select>
+        </UiFormField>
+        <label class="flex items-center gap-2 text-[13px]">
+          <input v-model="taskForm.pushToGoogle" type="checkbox" class="h-4 w-4 accent-[var(--c-brand)]">
+          Google カレンダーにも反映する
+        </label>
+        <p class="text-[11px] text-muted">対象日: {{ fmtDateLong(selDate) }}</p>
+      </div>
+      <template #footer>
+        <button type="button" class="btn" @click="taskModal = false">キャンセル</button>
+        <button type="button" class="btn btn-primary" @click="onAddTask">
+          <Plus class="h-3.5 w-3.5" aria-hidden="true" />
+          追加
+        </button>
+      </template>
+    </UiModal>
   </div>
 </template>

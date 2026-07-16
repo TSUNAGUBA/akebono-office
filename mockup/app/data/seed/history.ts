@@ -3,13 +3,11 @@
  * 「今日」を基準に過去分を生成するが、内容は rng（キー付きハッシュ）で決定的。
  * リロードしても同じ日なら同じ世界が再現される。
  */
-import type { LeaveGrant, PunchRecord, SalesMonthly, UptimeDaily } from '~/types/domain'
-import { addDays, toDateKey, weekdayOf } from '~/utils/format'
+import type { CalendarEvent, LeaveGrant, PunchRecord, SalesMonthly, UptimeDaily } from '~/types/domain'
+import { addDays, hhmmToMin, toDateKey, weekdayOf } from '~/utils/format'
 import { leaveGrantDays } from '~/utils/attendance-calc'
 import { irange, pick, unit } from '~/utils/rng'
 import { seedAttendanceRules, seedCompanies, seedMembers, seedProjects, seedSystemServices } from './core'
-
-const toMinutes = (hhmm: string): number => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5))
 
 /** シード生成の基準日（実行日の 0:00） */
 export function seedToday(): string {
@@ -38,10 +36,10 @@ export function buildPunchHistory(days = 45): PunchRecord[] {
       const startHour = isParttime
         ? 10
         : assignedRule
-          ? Math.floor(toMinutes(assignedRule.workStart) / 60)
+          ? Math.floor(hhmmToMin(assignedRule.workStart) / 60)
           : 9 + (unit(`${m.id}:${date}:st`) > 0.6 ? 1 : 0)
       const startMin = assignedRule
-        ? toMinutes(assignedRule.workStart) % 60
+        ? hhmmToMin(assignedRule.workStart) % 60
         : irange(`${m.id}:${date}:sm`, 0, 25)
       // 忙しいメンバー（開発部）はやや残業が多い分布にする。時短者の残業は控えめに
       const busy = m.dept === 'システム開発部' ? 1.5 : 1
@@ -53,7 +51,7 @@ export function buildPunchHistory(days = 45): PunchRecord[] {
       const workHours = isParttime
         ? irange(`${m.id}:${date}:wh`, 4, 6)
         : assignedRule
-          ? (toMinutes(assignedRule.workEnd) - toMinutes(assignedRule.workStart) - assignedRule.breakMinutes) / 60
+          ? (hhmmToMin(assignedRule.workEnd) - hhmmToMin(assignedRule.workStart) - assignedRule.breakMinutes) / 60
           : 8
       const breakMin = isParttime ? (workHours > 6 ? 60 : 0) : (assignedRule ? assignedRule.breakMinutes : 60)
 
@@ -129,6 +127,51 @@ export function buildSalesMonthly(): SalesMonthly[] {
       const costRate = 0.55 + unit(`cost:${pj.id}:${month}`) * 0.15
       const company = customers.find(c => c.id === pj.companyId)
       rows.push({ month, projectType: pj.type, companyId: company?.id ?? pj.companyId, amount, cost: Math.round(amount * costRate) })
+    }
+  }
+  return rows
+}
+
+
+/**
+ * Google カレンダー予定（モック・決定的生成）= 「Google 側の真実」役。
+ * 一昨日〜明後日（offset -2..+2）の平日に、メンバーの参加プロジェクトから定例・作業ブロックを生成する。
+ * id は決定的（gcal-{member}-{date}-{n}）で、再同期時のべき等 upsert キーになる。
+ * 注意: ここでは連携状態でフィルタしない（未連携メンバーが後から連携→同期しても取得できる必要がある）。
+ * キャッシュへの初期投入時のフィルタはシード統合側（seed/index.ts）で行う。
+ */
+export function buildCalendarEvents(): CalendarEvent[] {
+  const rows: CalendarEvent[] = []
+  const today = seedToday()
+  const targets = seedMembers.filter(m => m.active && m.employmentType !== 'outsource' && m.employmentType !== 'parttime')
+  for (let offset = -2; offset <= 2; offset++) {
+    const date = addDays(today, offset)
+    const dow = weekdayOf(date)
+    if (dow === 0 || dow === 6) continue
+    for (const m of targets) {
+      const myProjects = seedProjects.filter(p => p.active && p.status === 'active' && p.memberIds.includes(m.id))
+      let n = 0
+      const push = (from: string, to: string, title: string, projectId: string | null): void => {
+        rows.push({
+          id: `gcal-${m.id}-${date}-${n++}`,
+          memberId: m.id, date, from, to, title,
+          source: 'google', syncedToGoogle: true, projectId,
+        })
+      }
+      // 定例（プロジェクト起点。日によって 1 件目 or 2 件目を選ぶ）
+      const pj = myProjects[irange(`cal:${m.id}:${date}:pj`, 0, Math.max(0, myProjects.length - 1))]
+      if (pj && unit(`cal:${m.id}:${date}:mtg`) > 0.25) {
+        const company = seedCompanies.find(c => c.id === pj.companyId)
+        push('10:00', '11:00', `${company?.name ?? '社内'} 定例`, pj.id)
+      }
+      // 作業ブロック（タイトルにプロジェクト名を含める = AI のタイトル推定デモ用に projectId は持たせない）
+      if (pj) {
+        push('13:00', unit(`cal:${m.id}:${date}:long`) > 0.5 ? '16:00' : '15:00', `${pj.name.slice(0, 12)} 作業`, null)
+      }
+      // 社内予定
+      if (unit(`cal:${m.id}:${date}:internal`) > 0.6) {
+        push('17:00', '17:30', '社内共有会', null)
+      }
     }
   }
   return rows

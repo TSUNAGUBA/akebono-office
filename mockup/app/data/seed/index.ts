@@ -4,10 +4,10 @@
  */
 import type {
   AiActivityLog, AiEmployee, AiRole, AiTask, AkebonoWish, ApprovalLog,
-  AppNotification, AttendanceFixRequest, AttendanceRule, AuditLog, ChatMessage,
+  AppConfigItem, AppNotification, AttendanceFixRequest, AttendanceRule, AuditLog, CalendarEvent, ChatMessage,
   CodeMasterItem, Company, CompanyRelation, Contact, ContactRelation,
   CustomFieldDef, DailyReport, DecisionLog, DecisionTheme, DelegateSetting,
-  DocumentNode, Escalation, EscalationRule, ExternalLink, FeatureToggle,
+  DocumentNode, Escalation, EscalationRule, ExternalLink, FeatureToggle, HearingLog,
   Industry, KnowledgeArticle, LeaveGrant, LeaveRequest, Member, Project,
   PunchRecord, RelationType, ReportComment, SalesMonthly, ServiceIncident,
   ShiftAssignment, ShiftDemand, ShiftPeriod, ShiftWish, SystemService,
@@ -24,7 +24,7 @@ import * as status from './status'
 import * as decision from './decision'
 import * as support from './support'
 import * as misc from './misc'
-import { buildLeaveGrants, buildPunchHistory, buildSalesMonthly, buildUptimeDaily } from './history'
+import { buildCalendarEvents, buildLeaveGrants, buildPunchHistory, buildSalesMonthly, buildUptimeDaily } from './history'
 
 export interface MockDbShape {
   members: Member[]
@@ -72,6 +72,9 @@ export interface MockDbShape {
   chatMessages: ChatMessage[]
   akebonoWishes: AkebonoWish[]
   auditLogs: AuditLog[]
+  calendarEvents: CalendarEvent[]
+  hearingLogs: HearingLog[]
+  appConfigs: AppConfigItem[]
   salesMonthly: SalesMonthly[]
 }
 
@@ -122,6 +125,14 @@ export function buildSeed(): MockDbShape {
     chatMessages: [],
     akebonoWishes: misc.seedAkebonoWishes,
     auditLogs: misc.seedAuditLogs,
+    // google 発予定のキャッシュは「連携済みメンバー」の分だけ初期投入する。
+    // 未連携の m-03（葛西）は連携フロー体験用: 連携（擬似 OAuth）→ 初回同期で初めてキャッシュに入る
+    calendarEvents: buildCalendarEvents().filter((e) => {
+      if (e.source !== 'google') return true
+      return core.seedMembers.find(m => m.id === e.memberId)?.googleCalendarConnected === true
+    }),
+    hearingLogs: [],
+    appConfigs: [{ key: 'reportInputMode', value: 'both' }],
     salesMonthly: buildSalesMonthly(),
   }
 }

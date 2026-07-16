@@ -62,12 +62,32 @@ valueOf(entity, id, key): unknown
 formSchemaFor(entity): FieldDef[]       // UiSchemaForm に直結
 ```
 
+```ts
+// useCalendar（F-06-8）
+isConnected: ComputedRef<boolean>                    // 擬似 OAuth 連携状態（本実装: トークン有無）
+connect(): Result & { synced? } / disconnect(): Result  // 画面上の同意フローで完結。connect は当日分を初回同期
+syncFromGoogle(memberId, date): Result & { synced }  // google 発のみべき等 upsert（アプリ発に触れない）
+addTask({date, from, to, title, projectId, pushToGoogle}): Result & { warning? }  // 反映は補助処理（未連携でも作成は成立）
+pushToGoogle(eventId): Result & { warning? }         // アプリ発のみ。反映済みへの再実行は no-op + warning（冪等）
+removeTask(eventId): Result                          // アプリ発のみ削除可（google 発は Google 側で変更→同期）
+
+// useReportAssist（F-06-7）
+inputMode: ComputedRef<'form'|'assist'|'both'>       // 設定（appConfigs.reportInputMode）
+questionsFor(memberId, date): AssistQuestion[]       // 予定 1 件 1 問 + まとめ 3 問（テンプレ+文脈）
+recordAnswer(q, answer, date?) / poipoiMemo(text, date?): Result  // 蓄積ログ（追記のみ）。date 省略時は本日（過去日の日報にも対応）
+generateDraft(memberId, date): ReportDraft           // 保存しない（フォームへ流し込み→確認・修正→既存 submit）
+// 提出済み保護: useReports.reportOn の結果（status='submitted'）で呼び出し側が生成 UI を無効化する
+
+```
+
 ## 3. 将来 API 移行マッピング
 
 | composable | 将来のエンドポイント（例） |
 |---|---|
 | useAttendance.punch | `POST /api/attendance/punches`（冪等キー付き） |
 | useWorkflow.act | `POST /api/workflows/{id}/actions`（クレームファースト: 条件付き UPDATE） |
+| useCalendar.syncFromGoogle | Google Calendar API（OAuth 2.0 増分認可・calendar.readonly/events スコープ。Webhook push + 手動再同期の両立）。トークンはサーバー側で暗号化保管（C3 相当・クライアントへ出さない）。アプリの連携解除時はトークン破棄 + Google 側 revoke を呼び、Google 側での取消は次回 API 401 で検知して連携状態へ反映する |
+| useReportAssist.generateDraft | LLM 構造化出力（responseSchema）+ 失敗時は本ヒューリスティックへフォールバック（ai-manager 方式） |
 | useEscalations.resolve | `POST /api/escalations/{id}/resolution`（ai-manager 方式: open→resolved のアトミッククレーム→失敗時補償） |
 | useMasterCrud | `GET/POST/PATCH /api/masters/{entity}` |
 | 参照系 computed | `GET` + クライアントキャッシュ（表示射影はフロント純粋関数のまま維持） |
@@ -84,3 +104,12 @@ formSchemaFor(entity): FieldDef[]       // UiSchemaForm に直結
 | AKO-SFT-001 | シフトバリデーション違反（休憩/深夜/週40h） |
 | AKO-ESC-001 | クールダウン中の重複起票（no-op 情報） |
 | AKO-GEN-001 | 必須項目未入力 |
+| AKO-CAL-001 | カレンダー同期の失敗 |
+| AKO-CAL-002 | タスク名未入力 |
+| AKO-CAL-003 | タスク時刻の不正（開始 >= 終了） |
+| AKO-CAL-004 | google 発予定への反映操作（アプリ発のみ可） |
+| AKO-CAL-005 | 欠番（反映済みへの再実行は no-op + warning に変更） |
+| AKO-CAL-006 | google 発予定の削除操作（Google 側で変更→同期） |
+| AKO-CAL-007 | 未連携での同期・反映操作 |
+| AKO-RAS-001 | ヒアリング回答が空 |
+| AKO-RAS-002 | ぽいぽいメモが空 |

@@ -48,6 +48,11 @@ export function fmtPct(ratio: number, digits = 1): string {
   return `${(ratio * 100).toFixed(digits)}%`
 }
 
+/** 'HH:mm' → 0:00 からの分数（カレンダー予定・勤務時間帯などの壁時計計算用） */
+export function hhmmToMin(hhmm: string): number {
+  return Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5))
+}
+
 /** 分 → 「8:15」形式 */
 export function fmtMinutes(min: number): string {
   const sign = min < 0 ? '-' : ''
