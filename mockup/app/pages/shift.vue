@@ -7,7 +7,7 @@
 import { ArrowRight, CircleCheck, Info, Plus, TriangleAlert, Users } from 'lucide-vue-next'
 import type { ShiftPeriod, ShiftPeriodStatus, ShiftWishKind } from '~/types/domain'
 import type { TabItem, TableColumn } from '~/types/ui'
-import { addDays, fmtDate, fmtDateLong, fmtDateTime, toDateKey, weekdayOf } from '~/utils/format'
+import { addDays, fmtDate, fmtDateLong, fmtDateTime, weekdayOf } from '~/utils/format'
 import { SHIFT_PERIOD_STATUS_LABELS, SHIFT_WISH_LABELS } from '~/utils/labels'
 import {
   periodDates, SHIFT_ASSIGNMENT_STATUS_LABELS, SHIFT_ASSIGNMENT_STATUS_TONES,
@@ -179,7 +179,7 @@ const modalDemands = computed(() => adjustPeriod.value
   ? shifts.demandFor(adjustPeriod.value.id, assignModal.date)
   : [])
 const modalWarnings = computed(() => (assignModal.open && assignModal.memberId)
-  ? shifts.validateAssign(assignModal.memberId, assignModal.date, assignModal.from, assignModal.to, { excludeAssignmentId: modalExisting.value?.id })
+  ? shifts.validateAssign(assignModal.memberId, assignModal.date, assignModal.from, assignModal.to, { excludeAssignmentId: modalExisting.value?.id, periodId: adjustPeriod.value?.id })
   : [])
 const modalHasError = computed(() => modalWarnings.value.some(w => w.level === 'error'))
 const modalMode = computed<'assign' | 'change' | 'readonly'>(() => {

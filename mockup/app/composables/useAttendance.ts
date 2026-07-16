@@ -4,10 +4,10 @@
  */
 import type { PunchKind, PunchRecord, Result } from '~/types/domain'
 import {
-  calcWorkedMinutes, judgeArticle36, requiredBreakMinutes, splitBuckets,
+  calcWorkedMinutes, effectivePunches, judgeArticle36, requiredBreakMinutes, splitBuckets,
   type Article36Alert, type MonthOtRecord,
 } from '~/utils/attendance-calc'
-import { addDays, daysInMonth, toDateKey, weekdayOf } from '~/utils/format'
+import { daysInMonth, weekdayOf } from '~/utils/format'
 import { PUNCH_KIND_LABELS } from '~/utils/labels'
 
 export type PunchState = 'before' | 'working' | 'breaking' | 'done'
@@ -36,7 +36,17 @@ export function useAttendance() {
     return rules.value.find(r => r.active && m && r.appliesTo.includes(m.employmentType)) ?? rules.value[0]
   }
 
+  /**
+   * その日の有効な打刻列を返す（表示射影）。
+   * 修正打刻（source==='fix'）が承認された場合、元レコードは削除せず保全し、
+   * 置換の解決は effectivePunches（純粋関数・fix の連鎖対応）に委譲する（記録系は追記のみ）。
+   */
   function punchesOf(memberId: string, date: string): PunchRecord[] {
+    return effectivePunches(punches.value.filter(p => p.memberId === memberId && p.date === date))
+  }
+
+  /** 修正で置換された旧打刻も含む生の打刻列（履歴表示用） */
+  function punchesRawOf(memberId: string, date: string): PunchRecord[] {
     return punches.value
       .filter(p => p.memberId === memberId && p.date === date)
       .sort((a, b) => a.at.localeCompare(b.at))
@@ -118,14 +128,18 @@ export function useAttendance() {
     return { days, total, workDays: days.filter(s => s.workMinutes > 0).length }
   }
 
-  /** 36 協定アラート（直近 6 ヶ月） */
-  function alerts(memberId: string): Article36Alert[] {
-    const now = new Date()
+  /**
+   * 36 協定アラート（endMonth を最終月とする直近 6 ヶ月）
+   * @param endMonth YYYY-MM。省略時は JST の当月（閲覧環境の TZ に依存させない）
+   */
+  function alerts(memberId: string, endMonth?: string): Article36Alert[] {
+    const base = endMonth ?? todayJst().slice(0, 7)
+    const [ey, em] = [Number(base.slice(0, 4)), Number(base.slice(5, 7))]
     const months: MonthOtRecord[] = []
     let over45 = 0
     for (let back = 5; back >= 0; back--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - back, 1)
-      const month = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+      const idx = ey * 12 + (em - 1) - back
+      const month = `${Math.floor(idx / 12)}-${String((idx % 12) + 1).padStart(2, '0')}`
       const s = monthSummary(memberId, month)
       const rec = {
         month,
@@ -133,7 +147,8 @@ export function useAttendance() {
         legalHolidayMin: s.total.legalHoliday,
       }
       months.push(rec)
-      if (rec.nonStatutoryOtMin >= 45 * 60) over45++
+      // 45h ちょうどは「以内」で適法のため、年 6 回カウントも厳密に「超」のみ（judgeArticle36 と統一）
+      if (rec.nonStatutoryOtMin > 45 * 60) over45++
     }
     return judgeArticle36(months, over45)
   }
@@ -168,13 +183,21 @@ export function useAttendance() {
     return { ok: true, id }
   }
 
-  /** 修正申請の承認/却下（管理者）。承認時に修正打刻を追記（元打刻は保全） */
+  /**
+   * 修正申請の承認/却下（管理者）。
+   * 承認時は修正打刻を追記するのみで元打刻は削除しない（記録系は追記のみ）。
+   * 集計・表示への反映は punchesOf の射影（fixedFrom 一致の旧打刻を除外）が担う。
+   */
   function decideFix(fixId: string, action: 'approved' | 'rejected'): Result {
+    if (currentUser.value.role !== 'admin') {
+      return { ok: false, error: { code: 'AKO-ATT-004', message: 'この操作には管理者権限が必要です' } }
+    }
     const req = fixRequests.value.find(f => f.id === fixId)
     if (!req || req.status !== 'pending') {
       return { ok: false, error: { code: 'AKO-ATT-003', message: 'この申請は処理済みです' } }
     }
     if (action === 'approved') {
+      // 置換対象 = 現在有効な同種打刻（fix の連鎖時も punchesOf が最新のみを返すため正しく繋がる）
       const existing = punchesOf(req.memberId, req.date).find(p => p.kind === req.kind)
       punches.value = [...punches.value, {
         id: nextId('punches', 'pch-u'),
@@ -183,11 +206,6 @@ export function useAttendance() {
         fixedFrom: existing?.at ?? null, fixReason: req.reason,
         approvedBy: currentUser.value.id,
       }]
-      // 修正打刻が追加された場合、旧打刻は履歴として残し、集計は最新の同種打刻を採用しない
-      // （モック簡略化: fix は同日同種の打刻を置換扱いにするため旧レコードを除外）
-      if (existing) {
-        punches.value = punches.value.filter(p => p.id !== existing.id)
-      }
     }
     fixRequests.value = fixRequests.value.map(f => f.id === fixId
       ? { ...f, status: action, decidedBy: currentUser.value.id }
@@ -197,7 +215,7 @@ export function useAttendance() {
   }
 
   return {
-    punches, fixRequests, ruleFor, punchesOf, punchState, punch,
+    punches, fixRequests, ruleFor, punchesOf, punchesRawOf, punchState, punch,
     daySummary, monthSummary, alerts, raiseOvertimeEscalations, requestFix, decideFix,
   }
 }

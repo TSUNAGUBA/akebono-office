@@ -48,7 +48,7 @@ mockup/
 ├── app/
 │   ├── app.vue                  # NuxtLayout + NuxtPage
 │   ├── assets/css/main.css      # デザイントークン + 共通クラス（唯一の CSS SoT）
-│   ├── layouts/default.vue      # AppShell（サイドバー + ヘッダー + モバイル下部ナビ）
+│   ├── layouts/default.vue      # AppShell（ヘッダー + モバイル下部ナビ。PC サイドメニューなし・カードメニュー起点）
 │   ├── pages/                   # 画面（screen-design.md のサイトマップと 1:1）
 │   ├── components/
 │   │   ├── ui/                  # 汎用 UI（接頭辞 Ui）

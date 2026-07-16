@@ -22,29 +22,33 @@
 punch(kind: PunchKind): Result            // 状態機械ガード付き打刻
 daySummary(memberId, date): AttendanceDaySummary   // 6 バケット集計
 monthSummary(memberId, month): MonthSummary        // 月次 + アラート
-alerts(memberId): Article36Alert[]                 // 36 協定判定
+alerts(memberId, endMonth?): Article36Alert[]      // 36協定判定。endMonth（YYYY-MM）を最終月とする直近6ヶ月。省略時は JST の当月
 requestFix(input: FixRequestInput): Result         // 修正申請（理由必須）
 
 // useLeave
 balance(memberId): LeaveBalance          // 残数・失効予定・義務進捗
 request(input: LeaveRequestInput): Result
-decide(requestId, action: 'approved'|'rejected', comment?): Result
+decide(requestId, action: 'approved'|'rejected'): Result
 
 // useWorkflow
-resolveRoute(category, amount): RouteStep[]        // 職務権限マトリクス解決（純粋関数を内包）
+resolveRouteFor(category, amount): WorkflowRouteStep[] | null
+   // 職務権限マトリクス解決。純粋関数 resolveRoute(routes, category, amount)
+   //（app/utils/approval-route.ts）を内包。該当経路なしは null（AKO-WFL-003）
 submit(input: WorkflowInput): Result               // 採番 + routeSnapshot 凍結
-act(requestId, action: ApprovalAction, comment?): Result  // 承認/却下/差戻し/取下げ
-pendingFor(memberId): ComputedRef<WorkflowRequest[]>      // 代理設定を考慮
+act(requestId, action: Exclude<ApprovalAction, 'submit'>, comment?): Result  // 承認/却下/差戻し/取下げ
+pendingFor(memberId): WorkflowRequest[]                   // 代理設定を考慮（呼び出し側の computed 内で使用）
 
 // useAiCompany
-requestTask(aiEmployeeId, description): { taskId, decomposition[] } // 分解案を即時返す（モック生成）
+requestTask(aiEmployeeId, title, description): { ok, id, confidence } // 分解案を決定的モックで生成し proposed で登録（低確信度はエスカレーション起票）
 approveTask(taskId): Result             // 承認 → 実行開始（活動ログ生成）
-dailyDigest(date): AiDailyReport[]      // 日次報告（useReports が合流表示）
+generateDailyReports(date): { created, skipped } // 日次報告を UPSERT 生成（既存分はスキップ = 冪等）
+aiReportsOn(date): DailyReport[]        // 指定日の AI 日次報告を参照（useReports が合流表示）
 
 // useEscalations
 raise(signal: EscalationSignal): Result // dedupeKey + クールダウンで冪等。失敗しても呼び出し元は継続
-resolve(id, action: 'answer'|'ruling'|'no_action', body, reflectToKnowledge?): Result
-   // ruling + reflect → useKnowledge.addFromEscalation() を非ブロッキング呼び出し
+resolve(id, type: 'answer'|'ruling'|'no_action', body, reflectToKnowledge?, knowledgeTarget?): Result
+   // 裁定のナレッジ還流は resolve 内で非ブロッキング実施（専用の useKnowledge は設けない）。
+   // knowledgeTarget = { domain, targetId } で還流先を指定。省略時は自社PJ
 
 // useMasterCrud<T>(collectionName)
 list(filter?): ComputedRef<T[]>

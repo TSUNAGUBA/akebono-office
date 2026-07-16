@@ -5,9 +5,10 @@
     { "phase": 1, "gate": "PASS(AI判定・オペレーター承認待ち)", "output": ".ai-native/outputs/phase1/" },
     { "phase": 2, "gate": "PASS(AI判定・オペレーター承認待ち)", "output": ".ai-native/outputs/phase2/" },
     { "phase": 3, "gate": "PASS(AI判定・オペレーター承認待ち)", "output": ".ai-native/outputs/phase3/" },
-    { "phase": 4, "gate": "PASS(AI判定・オペレーター承認待ち)", "output": ".ai-native/outputs/phase4/" }
+    { "phase": 4, "gate": "PASS(AI判定・オペレーター承認待ち)", "output": ".ai-native/outputs/phase4/" },
+    { "phase": 5, "gate": "IN_PROGRESS(モックアップ実装・レビュー反復中)", "output": ".ai-native/outputs/phase5/ + mockup/" }
   ],
-  "lastUpdated": "2026-07-15",
+  "lastUpdated": "2026-07-16",
   "lastGate": "phase4: PASS(AI判定・オペレーター承認待ち)",
   "note": "スコープ分類: Medium。Phase 5 = モックアップ構築中（mockup/）。設計成果物は .ai-native/outputs/phase5/"
 }

@@ -21,6 +21,9 @@
   --c-line: #e5e7eb;
   --c-line-strong: #d3d7dd;
 
+  /* ニュートラル淡色面（バッジ・トラック等の控えめな背景） */
+  --c-neutral-soft: #eef0f2;
+
   /* ブランド（akebono = 夜明けの青） */
   --c-brand: #0f6bd7;
   --c-brand-dark: #0b54aa;
@@ -47,8 +50,6 @@
   --series-6: #4fb3c9;
 
   /* レイアウト */
-  --sidebar-w: 232px;
-  --sidebar-w-slim: 56px;
   --header-h: 52px;
   --bottomnav-h: 56px;
   --radius-card: 10px;
@@ -65,6 +66,7 @@
   --color-muted: var(--c-muted);
   --color-line: var(--c-line);
   --color-line-strong: var(--c-line-strong);
+  --color-neutral-soft: var(--c-neutral-soft);
   --color-brand: var(--c-brand);
   --color-brand-dark: var(--c-brand-dark);
   --color-brand-soft: var(--c-brand-soft);

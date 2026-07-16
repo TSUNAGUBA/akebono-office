@@ -1,13 +1,12 @@
 <script setup lang="ts">
 import * as icons from 'lucide-vue-next'
-import { Bell, ChevronDown, Sunrise } from 'lucide-vue-next'
+import { Bell, ChevronDown, House, Sunrise } from 'lucide-vue-next'
 import { EMPLOYMENT_TYPE_LABELS } from '~/utils/labels'
 import { isActivePath, MOBILE_NAV, NAV_GROUPS } from '~/utils/navigation'
 
 const route = useRoute()
-const { currentUser, isAdmin, switchableUsers, switchUser } = useCurrentUser()
+const { currentUser, switchableUsers, switchUser } = useCurrentUser()
 const { unreadCount } = useNotifications()
-const { isEnabled } = useAppSettings()
 
 const userMenuOpen = ref(false)
 
@@ -15,24 +14,13 @@ function iconOf(name: string) {
   return (icons as Record<string, unknown>)[name] ?? icons.Circle
 }
 
-const visibleGroups = computed(() =>
-  NAV_GROUPS
-    .map(g => ({
-      ...g,
-      items: g.items.filter(i =>
-        (!i.adminOnly || isAdmin.value) && (!i.featureKey || isEnabled(i.featureKey)),
-      ),
-    }))
-    .filter(g => g.items.length > 0),
-)
-
 const pageTitle = computed(() => {
   for (const g of NAV_GROUPS) {
     for (const i of g.items) {
       if (isActivePath(route.path, i)) return i.label
     }
   }
-  return 'AKEBONO Office'
+  return '' // ナビ定義にないルート（404 等）はタイトル非表示
 })
 
 function onSwitchUser(id: string): void {
@@ -43,46 +31,27 @@ function onSwitchUser(id: string): void {
 
 <template>
   <div class="flex min-h-dvh">
-    <!-- サイドバー（PC） -->
-    <aside class="fixed inset-y-0 left-0 z-30 hidden w-[var(--sidebar-w)] flex-col border-r border-line bg-surface md:flex">
-      <NuxtLink to="/" class="flex h-[var(--header-h)] items-center gap-2 border-b border-line px-4">
-        <Sunrise class="h-5 w-5 text-brand" aria-hidden="true" />
-        <span class="text-[15px] font-bold tracking-tight">AKEBONO Office</span>
-      </NuxtLink>
-      <nav class="flex-1 overflow-y-auto px-2 py-3 scroll-slim" aria-label="メインナビゲーション">
-        <div v-for="g in visibleGroups" :key="g.id" class="mb-3">
-          <p class="px-2 pb-1 text-[10px] font-bold uppercase tracking-wider text-muted">{{ g.label }}</p>
-          <NuxtLink
-            v-for="item in g.items"
-            :key="item.path"
-            :to="item.path"
-            class="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-[13px] font-medium transition-colors"
-            :class="isActivePath(route.path, item)
-              ? 'bg-brand-soft text-brand'
-              : 'text-sub hover:bg-surface-soft hover:text-ink'"
-          >
-            <component :is="iconOf(item.icon)" class="h-4 w-4 shrink-0" aria-hidden="true" />
-            <span class="flex-1">{{ item.label }}</span>
-            <span
-              v-if="item.path === '/inbox' && unreadCount > 0"
-              class="num rounded-full bg-crit px-1.5 text-[10px] font-bold leading-4 text-white"
-            >{{ unreadCount }}</span>
-          </NuxtLink>
-        </div>
-      </nav>
-      <div class="border-t border-line px-3 py-2 text-[10px] text-muted">
-        モックアップ v0.1 / データはブラウザ内のみ
-      </div>
-    </aside>
-
-    <!-- メイン -->
-    <div class="flex min-w-0 flex-1 flex-col md:pl-[var(--sidebar-w)]">
+    <!-- メイン（サイドメニューは廃止: 遷移はダッシュボードのカード型メニュー起点） -->
+    <div class="flex min-w-0 flex-1 flex-col">
       <!-- ヘッダー -->
       <header class="sticky top-0 z-20 flex h-[var(--header-h)] items-center gap-3 border-b border-line bg-surface px-3 md:px-5">
-        <NuxtLink to="/" class="flex items-center gap-1.5 md:hidden">
+        <NuxtLink to="/" class="flex shrink-0 items-center gap-2" aria-label="ダッシュボードへ戻る">
           <Sunrise class="h-5 w-5 text-brand" aria-hidden="true" />
+          <span class="hidden text-[15px] font-bold tracking-tight sm:block">AKEBONO Office</span>
         </NuxtLink>
-        <h1 class="min-w-0 flex-1 truncate text-[15px] font-bold">{{ pageTitle }}</h1>
+        <template v-if="route.path !== '/' && pageTitle">
+          <span class="hidden text-line-strong sm:block" aria-hidden="true">/</span>
+          <h1 class="min-w-0 flex-1 truncate text-[15px] font-bold">{{ pageTitle }}</h1>
+        </template>
+        <div v-else class="flex-1" />
+
+        <NuxtLink
+          v-if="route.path !== '/'"
+          to="/"
+          class="btn btn-ghost btn-sm hidden md:inline-flex"
+        >
+          <House class="h-4 w-4" aria-hidden="true" /> ホーム
+        </NuxtLink>
 
         <NuxtLink to="/inbox" class="btn btn-ghost btn-sm relative" aria-label="通知">
           <Bell class="h-4 w-4" />

@@ -141,13 +141,14 @@ function memberName(id: string): string {
             :class="a.status === 'ng' ? 'opacity-50' : ''"
           >
             <div class="flex items-center gap-2">
-              <span
-                class="num shrink-0 text-sm font-bold"
-                :class="{
-                  ok: 'text-ok', warn: 'text-warn', ng: 'text-crit',
-                }[a.status]"
-                :aria-label="a.status === 'ng' ? '実行不可' : a.status === 'warn' ? '条件付き' : '実行可'"
-              >{{ DECISION_ACTION_META[a.status].symbol }}</span>
+              <!-- 記号・トーンとも labels.ts の DECISION_ACTION_META が SoT -->
+              <UiStatusBadge
+                class="shrink-0"
+                :label="DECISION_ACTION_META[a.status].symbol"
+                :tone="DECISION_ACTION_META[a.status].tone"
+                aria-hidden="true"
+              />
+              <span class="sr-only">{{ a.status === 'ng' ? '実行不可' : a.status === 'warn' ? '条件付き' : '実行可' }}</span>
               <span class="min-w-0 flex-1 text-[13px] font-medium" :class="a.status === 'ng' ? 'line-through' : ''">
                 {{ a.name }}
               </span>

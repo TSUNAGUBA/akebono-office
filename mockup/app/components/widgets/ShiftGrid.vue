@@ -89,7 +89,7 @@ function markOf(wish: ShiftWishKind): { symbol: string; cls: string } {
                   :class="c.assigned >= c.required ? 'text-ok' : 'text-crit'"
                 >{{ c.assigned }}/{{ c.required }}</span>
                 <div
-                  class="mt-0.5 h-1.5 overflow-hidden rounded-full bg-[#eef0f2]"
+                  class="mt-0.5 h-1.5 overflow-hidden rounded-full bg-neutral-soft"
                   role="img"
                   :aria-label="`${fmtDate(c.date)}: 必要${c.required}名に対し割当${c.assigned}名（${c.assigned >= c.required ? '充足' : `${c.required - c.assigned}名不足`}）`"
                 >

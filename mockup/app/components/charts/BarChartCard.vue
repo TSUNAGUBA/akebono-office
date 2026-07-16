@@ -2,7 +2,7 @@
 /** 棒チャートカード（horizontal で横棒） */
 import type { ChartData, ChartOptions } from 'chart.js'
 import { Bar } from 'vue-chartjs'
-import { SERIES_COLORS } from '~/utils/chart-theme'
+import { CHART_GRID, SERIES_COLORS } from '~/utils/chart-theme'
 
 const props = withDefaults(defineProps<{
   title: string
@@ -35,7 +35,7 @@ const options = computed<ChartOptions<'bar'>>(() => ({
     [props.horizontal ? 'x' : 'y']: {
       beginAtZero: true,
       ticks: props.yFormatter ? { callback: (v: unknown) => props.yFormatter!(Number(v)) } : {},
-      grid: { color: '#eef0f2' },
+      grid: { color: CHART_GRID },
     },
     [props.horizontal ? 'y' : 'x']: { grid: { display: false } },
   } as ChartOptions<'bar'>['scales'],

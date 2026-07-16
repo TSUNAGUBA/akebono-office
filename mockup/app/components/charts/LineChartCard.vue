@@ -2,7 +2,7 @@
 /** 折れ線チャートカード（系列色はデザイントークンの固定順） */
 import type { ChartData, ChartOptions } from 'chart.js'
 import { Line } from 'vue-chartjs'
-import { SERIES_COLORS } from '~/utils/chart-theme'
+import { CHART_GRID, SERIES_COLORS } from '~/utils/chart-theme'
 
 const props = withDefaults(defineProps<{
   title: string
@@ -36,7 +36,7 @@ const options = computed<ChartOptions<'line'>>(() => ({
     y: {
       beginAtZero: true,
       ticks: props.yFormatter ? { callback: v => props.yFormatter!(Number(v)) } : {},
-      grid: { color: '#eef0f2' },
+      grid: { color: CHART_GRID },
     },
     x: { grid: { display: false } },
   },

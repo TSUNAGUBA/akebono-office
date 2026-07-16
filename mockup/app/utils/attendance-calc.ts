@@ -15,6 +15,28 @@ export const OVER60_THRESHOLD_MIN = 60 * 60 // 割増50%の閾値（月60h超）
 export const NIGHT_START_HOUR = 22
 export const NIGHT_END_HOUR = 5
 
+/**
+ * 有効打刻の射影（修正打刻による置換の解決）。
+ * fix レコードの fixedFrom は「置換した旧打刻の at」を保持する。
+ * fix を追記順（= 承認順）に適用し、その時点で未置換の同種・同時刻レコードを
+ * 1 件だけ無効化する（レコード id 単位の解決）。候補は常に同一 at を持つため
+ * 入力が安定ソートで並べ替えられていても結果の id 集合は不変。これにより
+ * 通常の連鎖（fix の fix）だけでなく、元の時刻へ戻す差戻し連鎖
+ * （at の再利用でキーが衝突するケース）でも最新の fix だけが有効になる。
+ */
+export function effectivePunches(rows: PunchRecord[]): PunchRecord[] {
+  const superseded = new Set<string>() // 置換された（無効化された）レコードの id
+  for (const p of rows) {
+    if (p.source !== 'fix' || !p.fixedFrom) continue
+    const target = rows.find(q =>
+      q.id !== p.id && !superseded.has(q.id) && q.kind === p.kind && q.at === p.fixedFrom)
+    if (target) superseded.add(target.id)
+  }
+  return rows
+    .filter(p => !superseded.has(p.id))
+    .sort((a, b) => a.at.localeCompare(b.at))
+}
+
 export interface DayWorkInput {
   /** 実労働分（休憩除く） */
   workMinutes: number
@@ -142,7 +164,8 @@ export function judgeArticle36(months: MonthOtRecord[], over45CountThisYear: num
   const curOt = cur.nonStatutoryOtMin
   const curTotal = cur.nonStatutoryOtMin + cur.legalHolidayMin
 
-  if (curOt >= OT_MONTHLY_LIMIT_MIN) {
+  // 月 45h ちょうどは「以内」で適法のため、超過判定は厳密に「>」
+  if (curOt > OT_MONTHLY_LIMIT_MIN) {
     alerts.push({ level: 'crit', code: 'AKO-ATT-A45', message: `時間外労働が月45時間を超過しています（${Math.floor(curOt / 60)}h）` })
   } else if (curOt >= OT_MONTHLY_LIMIT_MIN * 0.8) {
     alerts.push({ level: 'warn', code: 'AKO-ATT-A45W', message: `時間外労働が月45時間の80%に達しています（${Math.floor(curOt / 60)}h）` })

@@ -15,8 +15,8 @@
 | `Company` | id, kind(`self`/`customer`), name, aliases[], industryIds[], primaryIndustryId, size, location, description, ownerMemberId, fiscalStartMonth(自社), active, custom | C2 |
 | `Contact` | id, companyId, name, dept, title, keyPerson(1-3), email, phone, notes, active, custom | C2 |
 | `RelationType` | id(code), label, direction(`directed`/`mutual`), appliesTo(`company`/`contact`), active | C1 |
-| `CompanyRelation` | fromCompanyId, toCompanyId, relationTypeId, notes（有向エッジ。from≠to） | C2 |
-| `ContactRelation` | fromContactId, toContactId, relationTypeId, notes | C2 |
+| `CompanyRelation` | fromCompanyId, toCompanyId, relationTypeId, notes（有向エッジ。from≠to）※物理削除可（下記設計判断） | C2 |
+| `ContactRelation` | fromContactId, toContactId, relationTypeId, notes ※物理削除可（下記設計判断） | C2 |
 | `Project` | id, name, companyId, type(`biz_consulting`/`sys_consulting`/`development`/`operation`/`internal`), status, priority, ownerMemberId, memberIds[], startDate, endDate, budget, objective, active, custom | C2 |
 | `KnowledgeArticle` | id, domain(`industry`/`company`/`contact`/`relation`/`project`), targetId, title, body, tags[], source(`manual`/`escalation`), sourceRefId, updatedAt, active | C2 |
 | `AiRole` | id, name, mission, systemPrompt, permissions[], modelTier(`lite`/`standard`/`pro`), active | C1 |
@@ -27,6 +27,8 @@
 | `WorkflowRoute` | id, category(稟議区分), minAmount, maxAmount, steps[{order, approverRole/approverMemberId, mode(`serial`/`all`/`majority`)}], active | C1 |
 | `AttendanceRule` | id, name, appliesTo(employmentType[]), workStart, workEnd, breakMinutes, flex{coreStart,coreEnd,settlementMonths}, closingDay, legalHolidayWeekday, active | C1 |
 | `SystemService` | id, name, description, url, components[{id,name}] | C1 |
+
+> **設計判断（関係エッジの物理削除）:** マスタ系は論理削除（`active: false`）を原則とするが、`CompanyRelation` / `ContactRelation` の**関係エッジは例外的に物理削除可**とする（誤登録訂正のため。エッジは属性を持たない紐付けであり、論理削除で残す価値より誤った関係が可視化に残る害が大きい）。削除は**確認ダイアログ + 監査ログ（`AuditLog`）記録を必須**とする。
 
 ### 1.2 記録系（追記のみ・巻き戻し禁止: 開発原則 2）
 
@@ -52,7 +54,7 @@
 | `ServiceIncident` | id, serviceId, title, impact(`minor`/`major`/`critical`), status(`investigating`/`identified`/`monitoring`/`resolved`), updates[{status, body, at}], startedAt, resolvedAt | C1 |
 | `UptimeDaily` | serviceId, date, downMinutes, worstState | C1 |
 | `DecisionLog` | id, themeId, chosenSlot, reason, decidedBy, at | C2 |
-| `AuditLog` | id, actorId, action, entity, entityId, before?, after?, at | C3 |
+| `AuditLog` | id, actorId, action, entity, entityId, detail, at | C3 |
 | `SalesMonthly`（モック） | month, projectType, companyId, amount, cost | C2 |
 
 ## 2. スタースキーマ接続（akebono-scm-platform `mart` 規約準拠）
@@ -119,7 +121,7 @@ flowchart LR
 ### 2.5 モックアップでの表現
 
 - モックの型定義（`app/types/`）は上記ファクトへ写像可能な形（バケット分解済み勤怠・イベント型有給・ステップ型承認ログ）で持つ
-- 意思決定支援・売上サマリの画面に「mart メトリクス相当」のコード（例 `AKO-MET-ATT-001 総労働時間`）を出典バッジで表示し、分析基盤接続の意図を体感できるようにする
+- 意思決定支援・売上サマリの画面に「mart メトリクス相当」のコード（例 `AKO-MET-ATT-001 総労働時間`）を出典バッジで表示し、分析基盤接続の意図を体感できるようにする（**モックアップ未実装。本実装フェーズで追加予定**）
 
 ## 3. 変更時の必須確認（CLAUDE.md 開発原則 6 への回答）
 

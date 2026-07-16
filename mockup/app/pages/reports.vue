@@ -8,9 +8,7 @@ import {
 } from 'lucide-vue-next'
 import type { DailyReport, ReportEntry, WeeklyReport } from '~/types/domain'
 import { REPORT_STATUS_LABELS } from '~/composables/useReports'
-import {
-  addDays, fmtDate, fmtDateLong, fmtMinutes, fmtTime, toDateKey, weekdayOf,
-} from '~/utils/format'
+import { addDays, fmtDate, fmtDateLong, fmtMinutes, fmtTime, weekdayOf } from '~/utils/format'
 import type { TabItem } from '~/types/ui'
 
 const route = useRoute()

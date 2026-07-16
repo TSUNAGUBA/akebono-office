@@ -5,15 +5,24 @@
  * エスカレーションタブ（管理者のみ）: open 一覧 → 3 択対応モーダル / 解決済み一覧 / 還流率 KPI
  */
 import { CheckCheck } from 'lucide-vue-next'
-import type { AppNotification, Escalation, EscalationResolutionType, NotificationKind } from '~/types/domain'
+import type { AppNotification, Escalation, EscalationResolutionType, KnowledgeDomain, NotificationKind } from '~/types/domain'
 import type { TabItem, Tone } from '~/types/ui'
 import { fmtDateTime, fmtPct } from '~/utils/format'
-import { ESCALATION_RESOLUTION_LABELS, NOTIFICATION_KIND_LABELS } from '~/utils/labels'
+import { ESCALATION_RESOLUTION_LABELS, KNOWLEDGE_DOMAIN_LABELS, NOTIFICATION_KIND_LABELS } from '~/utils/labels'
 
 const { isAdmin } = useCurrentUser()
 const { mine, unreadCount, markRead, markAllRead } = useNotifications()
 const { open, resolved, openCount, refluxRate, resolve, byId } = useEscalations()
 const { show } = useToast()
+
+// 還流先候補の生成に使うマスタ（読み取りのみ）
+const { tbl } = useMockDb()
+const industries = tbl('industries')
+const companies = tbl('companies')
+const contacts = tbl('contacts')
+const relationTypes = tbl('relationTypes')
+const companyRelations = tbl('companyRelations')
+const projects = tbl('projects')
 
 // ---------- タブ ----------
 const tab = ref('notifications')
@@ -68,11 +77,49 @@ const RESOLUTION_HINTS: Record<EscalationResolutionType, string> = {
   no_action: '対応不要としてクローズします（本文は任意）',
 }
 
+// ---------- ナレッジ還流先の選択 ----------
+
+const knowledgeDomain = ref<KnowledgeDomain>('project')
+const knowledgeTargetId = ref('')
+
+const domainOptions = (Object.keys(KNOWLEDGE_DOMAIN_LABELS) as KnowledgeDomain[])
+  .map(d => ({ value: d, label: KNOWLEDGE_DOMAIN_LABELS[d] }))
+
+function companyNameOf(companyId: string): string {
+  return companies.value.find(c => c.id === companyId)?.name ?? companyId
+}
+
+/** ドメインに応じた還流先候補（マスタ実データから生成） */
+const targetOptions = computed<{ value: string; label: string }[]>(() => {
+  switch (knowledgeDomain.value) {
+    case 'industry':
+      return industries.value.filter(i => i.active).map(i => ({ value: i.id, label: i.name }))
+    case 'company':
+      return companies.value.filter(c => c.active && c.kind === 'customer').map(c => ({ value: c.id, label: c.name }))
+    case 'contact':
+      return contacts.value.filter(c => c.active).map(c => ({ value: c.id, label: `${c.name}（${companyNameOf(c.companyId)}）` }))
+    case 'relation':
+      return companyRelations.value.map((r) => {
+        const rt = relationTypes.value.find(t => t.id === r.relationTypeId)
+        return { value: r.id, label: `${companyNameOf(r.fromCompanyId)} → ${companyNameOf(r.toCompanyId)}（${rt?.label ?? '関係'}）` }
+      })
+    case 'project':
+      return projects.value.filter(p => p.active).map(p => ({ value: p.id, label: p.name }))
+  }
+})
+
+// ドメイン切替・還流 ON 時は先頭候補を既定選択にする
+watch([knowledgeDomain, reflectKnowledge], () => {
+  knowledgeTargetId.value = targetOptions.value[0]?.value ?? ''
+})
+
 function openRespond(e: Escalation): void {
   respondTarget.value = e
   resType.value = 'answer'
   resBody.value = ''
   reflectKnowledge.value = false
+  knowledgeDomain.value = 'project'
+  knowledgeTargetId.value = targetOptions.value[0]?.value ?? ''
   resError.value = ''
 }
 
@@ -83,7 +130,18 @@ function submitRespond(): void {
     resError.value = '本文を入力してください'
     return
   }
-  const r = resolve(target.id, resType.value, resBody.value.trim(), resType.value === 'ruling' && reflectKnowledge.value)
+  const reflect = resType.value === 'ruling' && reflectKnowledge.value
+  if (reflect && !knowledgeTargetId.value) {
+    resError.value = '還流先の対象を選択してください'
+    return
+  }
+  const r = resolve(
+    target.id,
+    resType.value,
+    resBody.value.trim(),
+    reflect,
+    reflect ? { domain: knowledgeDomain.value, targetId: knowledgeTargetId.value } : undefined,
+  )
   if (!r.ok) {
     resError.value = r.error.message
     return
@@ -243,6 +301,24 @@ function submitRespond(): void {
             <span class="block text-[11px] text-muted">裁定を出典付きでナレッジベースに登録します</span>
           </span>
         </label>
+
+        <!-- 還流先の選択（ドメイン → 対象） -->
+        <div
+          v-if="resType === 'ruling' && reflectKnowledge"
+          class="grid gap-2.5 rounded-lg border border-line bg-surface-soft p-2.5 sm:grid-cols-2"
+        >
+          <UiFormField label="還流先ドメイン" required>
+            <select v-model="knowledgeDomain" class="select" aria-label="還流先ドメイン">
+              <option v-for="o in domainOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+            </select>
+          </UiFormField>
+          <UiFormField label="還流先対象" required>
+            <select v-model="knowledgeTargetId" class="select" aria-label="還流先対象">
+              <option v-if="targetOptions.length === 0" value="" disabled>候補がありません</option>
+              <option v-for="o in targetOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+            </select>
+          </UiFormField>
+        </div>
 
         <p v-if="resError" class="text-xs font-semibold text-crit" role="alert">{{ resError }}</p>
       </div>

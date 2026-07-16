@@ -1,0 +1,76 @@
+name: deploy
+
+# main への push（mockup 配下の変更時）または手動実行で
+# モックアップを Firebase Hosting へデプロイする。
+# 必要な Repository secrets（scripts/setup-deploy-secrets.ps1 で設定）:
+#   FIREBASE_SERVICE_ACCOUNT ... サービスアカウント鍵 JSON（roles/firebasehosting.admin）
+#   FIREBASE_PROJECT_ID      ... Firebase プロジェクト ID
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'mockup/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-live
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mockup
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Secrets の存在チェック
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+        run: |
+          missing=0
+          if [ -z "$FIREBASE_SERVICE_ACCOUNT" ]; then
+            echo "::error::Repository secret FIREBASE_SERVICE_ACCOUNT が未設定です"
+            missing=1
+          fi
+          if [ -z "$FIREBASE_PROJECT_ID" ]; then
+            echo "::error::Repository secret FIREBASE_PROJECT_ID が未設定です"
+            missing=1
+          fi
+          if [ "$missing" = "1" ]; then
+            echo "::notice::scripts/setup-deploy-secrets.ps1 を実行して設定してください（手順は mockup/README.md の「デプロイ」参照）"
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mockup/package-lock.json
+
+      - name: 依存インストール
+        run: npm ci
+
+      - name: 単体テスト
+        run: npm run test
+
+      - name: 型チェック
+        run: npm run typecheck
+
+      - name: 静的ビルド
+        run: npm run generate
+
+      - name: Firebase Hosting へデプロイ（live チャネル）
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          projectId: ${{ secrets.FIREBASE_PROJECT_ID }}
+          channelId: live
+          entryPoint: mockup

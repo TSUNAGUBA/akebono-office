@@ -5,22 +5,22 @@
  * モバイル（<768px）は 打刻 → KPI(2列) → メニュー → 通知 の縦積み順（order 制御）。
  */
 import { ArrowRight, ChevronRight } from 'lucide-vue-next'
-import type { AppNotification, Member, WorkflowRouteStep } from '~/types/domain'
+import type { AppNotification } from '~/types/domain'
 import type { MenuCard } from '~/types/ui'
 import { fmtDateLong, fmtDateTime, fmtPct, fmtYenCompact } from '~/utils/format'
 import {
   NOTIFICATION_KIND_LABELS, SERVICE_STATE_LABELS, SERVICE_STATE_TONES,
 } from '~/utils/labels'
 
-const { currentUser, isAdmin } = useCurrentUser()
+const { currentUser, currentUserId, isAdmin } = useCurrentUser()
 const { mine, unreadCount, markRead } = useNotifications()
 const { isEnabled } = useAppSettings()
-const { tbl } = useMockDb()
-const workflowRequests = tbl('workflowRequests')
+const { pendingFor } = useWorkflow()
 
 const {
-  currentFiscalYear, fiscalMonthLabels, currentFySeries, previousFySeries,
-  currentMonthSales, currentMonthYoY, currentMonthMarginRate, marginYoYDiff, typeBreakdown,
+  fiscalMonthLabels, currentFySeries, previousFySeries,
+  currentMonthSales, currentMonthYoY, currentMonthMarginRate, marginYoYDiff,
+  typeBreakdown, customerBreakdown, selectedFy, fiscalYearOptions,
 } = useSales()
 
 const { services, stateOf, uptimePctOf, openIncidentsOf } = useSystemStatus()
@@ -35,20 +35,8 @@ const greeting = computed(() => {
 })
 const todayLong = computed(() => fmtDateLong(nowJstIso()))
 
-// ---------- 承認待ち件数（自分が承認者の申請） ----------
-function isApproverOf(step: WorkflowRouteStep, m: Member): boolean {
-  if (step.approverMemberId) return step.approverMemberId === m.id
-  if (step.approverRole === 'president') return m.title === '代表取締役'
-  if (step.approverRole === 'director') return m.title === '取締役'
-  return m.title === 'マネージャー'
-}
-
-const pendingApprovals = computed(() =>
-  workflowRequests.value.filter((r) => {
-    if (r.status !== 'submitted' && r.status !== 'in_review') return false
-    const step = r.routeSnapshot.find(s => s.order === r.currentStep)
-    return step ? isApproverOf(step, currentUser.value) : false
-  }).length)
+// ---------- 承認待ち件数（useWorkflow.pendingFor が SoT。代理承認・個人指定も考慮済み） ----------
+const pendingApprovals = computed(() => pendingFor(currentUserId.value).length)
 
 // ---------- KPI ----------
 const kpiSales = computed(() => fmtYenCompact(currentMonthSales.value))
@@ -57,8 +45,22 @@ const kpiMargin = computed(() =>
 
 // ---------- 売上チャート ----------
 const salesSeries = computed(() => [
-  { label: `${currentFiscalYear.value}年度`, data: currentFySeries.value },
-  { label: `${currentFiscalYear.value - 1}年度`, data: previousFySeries.value },
+  { label: `${selectedFy.value}年度`, data: currentFySeries.value },
+  { label: `${selectedFy.value - 1}年度`, data: previousFySeries.value },
+])
+
+// 年度セレクタ（UiSelect は string モデルのため変換）
+const fyModel = computed({
+  get: () => String(selectedFy.value),
+  set: (v: string) => { selectedFy.value = Number(v) },
+})
+const fyOptions = computed(() =>
+  fiscalYearOptions.value.map(fy => ({ value: String(fy), label: `${fy}年度` })))
+
+// 顧客別内訳（Top5 + その他。横棒チャート用の射影）
+const customerLabels = computed(() => customerBreakdown.value.map(c => c.label))
+const customerSeries = computed(() => [
+  { label: '売上', data: customerBreakdown.value.map(c => c.value) },
 ])
 
 // ---------- 提供システム稼働状況 ----------
@@ -110,14 +112,22 @@ const menuSections = computed<MenuSection[]>(() => {
       cards: [{ id: 'ai-company', title: 'AIネイティブカンパニー', description: 'AI 社員の執務室。タスク依頼と活動モニタリング', icon: 'Building2', to: '/ai-company' }],
     })
   }
-  sections.push({
-    id: 'support', label: '業務支援ツール',
-    cards: [{ id: 'support', title: '業務支援ツール', description: 'AI チャットボット・ドキュメント管理・外部ツール', icon: 'Wrench', to: '/support' }],
-  })
+  // サイドメニュー廃止に伴い、全遷移先をカードメニューで網羅する
+  const supportCards: MenuCard[] = [
+    { id: 'support', title: '業務支援ツール', description: 'AI チャットボット・ドキュメント管理・外部ツール', icon: 'Wrench', to: '/support' },
+    { id: 'inbox', title: '通知・エスカレーション', description: '通知の確認と、現場からの暗黙の情報共有への対応', icon: 'Inbox', to: '/inbox', badge: unreadCount.value },
+  ]
+  if (isEnabled('status')) {
+    supportCards.splice(1, 0, { id: 'status', title: '稼働状況', description: '提供システムの現在状態・稼働率・インシデント履歴', icon: 'Activity', to: '/status' })
+  }
+  sections.push({ id: 'support', label: '業務支援・状況', cards: supportCards })
   if (isAdmin.value) {
     sections.push({
-      id: 'masters', label: 'マスタメンテナンス',
-      cards: [{ id: 'masters', title: 'マスタメンテナンス', description: 'メンバー・顧客・案件・ナレッジ等の基礎データ管理', icon: 'Database', to: '/masters' }],
+      id: 'admin', label: '管理',
+      cards: [
+        { id: 'masters', title: 'マスタメンテナンス', description: 'メンバー・顧客・案件・ナレッジ等の基礎データ管理', icon: 'Database', to: '/masters' },
+        { id: 'settings', title: '設定', description: 'カスタム項目・汎用区分・外部リンク・機能トグル・監査ログ', icon: 'Settings', to: '/settings' },
+      ],
     })
   }
   return sections
@@ -165,21 +175,36 @@ function openNotification(n: AppNotification): void {
         />
       </div>
 
-      <!-- 売上サマリ（モバイルでは通知の後ろ） -->
+      <!-- 売上サマリ（モバイルでは通知の後ろ。モバイルはチャート縦積み） -->
       <section class="order-5 grid gap-2 lg:order-3 lg:col-span-8 xl:col-span-9" aria-label="売上サマリ">
+        <div class="flex flex-wrap items-center justify-end gap-2">
+          <span class="text-[11px] font-bold text-muted">表示年度</span>
+          <div class="w-32">
+            <UiSelect v-model="fyModel" :options="fyOptions" aria-label="売上サマリの表示年度" />
+          </div>
+        </div>
         <div class="grid gap-3 lg:grid-cols-5">
           <ChartsLineChartCard
             class="lg:col-span-3"
-            :title="`月次売上（${currentFiscalYear}年度 vs ${currentFiscalYear - 1}年度）`"
+            :title="`月次売上（${selectedFy}年度 vs ${selectedFy - 1}年度）`"
             :labels="fiscalMonthLabels"
             :series="salesSeries"
             :y-formatter="fmtYenCompact"
           />
           <ChartsDonutChartCard
             class="lg:col-span-2"
-            title="事業種別内訳（今年度）"
+            :title="`事業種別内訳（${selectedFy}年度）`"
             :items="typeBreakdown"
             :value-formatter="fmtYenCompact"
+          />
+          <ChartsBarChartCard
+            class="lg:col-span-5"
+            :title="`顧客別内訳（${selectedFy}年度）`"
+            :labels="customerLabels"
+            :series="customerSeries"
+            horizontal
+            :height="200"
+            :y-formatter="fmtYenCompact"
           />
         </div>
         <div class="flex justify-end">

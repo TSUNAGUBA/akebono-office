@@ -9,11 +9,11 @@ import { buildSeed, type MockDbShape } from '~/data/seed'
 
 const STORAGE_KEY = 'ako.mockdb.v1'
 /** シード世代。シード構造を変えたらインクリメントすると保存済みデータを破棄して再生成する */
-const SEED_VERSION = 1
+const SEED_VERSION = 2 // v2: 外部リンクを Google プレースホルダに変更（2026-07-16）
 
 interface PersistedDb {
   version: number
-  /** 生成日（日付が変わったら履歴系の鮮度のため再シードする） */
+  /** 生成日（日付が変わったら履歴系の鮮度のため再シードする。デモ仕様として README に明記） */
   seededOn: string
   data: MockDbShape
 }
@@ -22,13 +22,22 @@ function todayKey(): string {
   return todayJst()
 }
 
+/**
+ * ロード時に確定したシード基準日。persist はこの値を保持し続ける（押し直さない）。
+ * 日付が変わった後の commit で seededOn が更新されると「日付跨ぎで再シード」の
+ * 挙動が commit タイミング依存になるため、基準日はロード時点で固定する。
+ */
+let loadedSeededOn = ''
+
 function load(): MockDbShape {
+  loadedSeededOn = todayKey()
   if (import.meta.client) {
     try {
       const raw = localStorage.getItem(STORAGE_KEY)
       if (raw) {
         const parsed = JSON.parse(raw) as PersistedDb
         if (parsed.version === SEED_VERSION && parsed.seededOn === todayKey() && parsed.data) {
+          loadedSeededOn = parsed.seededOn
           return parsed.data
         }
       }
@@ -45,7 +54,7 @@ export function useMockDb() {
   function persist(): void {
     if (!import.meta.client) return
     try {
-      const payload: PersistedDb = { version: SEED_VERSION, seededOn: todayKey(), data: db.value }
+      const payload: PersistedDb = { version: SEED_VERSION, seededOn: loadedSeededOn || todayKey(), data: db.value }
       localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
     } catch {
       // 容量超過等は無視（モックのため非致命）
@@ -81,6 +90,7 @@ export function useMockDb() {
 
   /** デモデータをシード状態へ戻す（設定画面からのみ呼ぶ） */
   function resetDemo(): void {
+    loadedSeededOn = todayKey()
     db.value = buildSeed()
     if (import.meta.client) {
       try { localStorage.removeItem(STORAGE_KEY) } catch { /* noop */ }

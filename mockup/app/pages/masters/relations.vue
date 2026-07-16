@@ -152,8 +152,8 @@ async function deleteCompanyRelation(row: Record<string, unknown>): Promise<void
   if (!ok) return
   const rows = tbl('companyRelations')
   rows.value = rows.value.filter(r => r.id !== id)
-  commit()
   auditDelete('companyRelations', id, '会社間関係を削除')
+  commit()
   toast.show('会社間の関係を削除しました', 'warn')
 }
 
@@ -240,8 +240,8 @@ async function deleteContactRelation(row: Record<string, unknown>): Promise<void
   if (!ok) return
   const rows = tbl('contactRelations')
   rows.value = rows.value.filter(r => r.id !== id)
-  commit()
   auditDelete('contactRelations', id, '人どうしの関係を削除')
+  commit()
   toast.show('人どうしの関係を削除しました', 'warn')
 }
 

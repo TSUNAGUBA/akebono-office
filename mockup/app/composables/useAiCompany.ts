@@ -110,6 +110,7 @@ export function useAiCompany() {
   const aiTasks = tbl('aiTasks')
   const aiActivityLogs = tbl('aiActivityLogs')
   const dailyReports = tbl('dailyReports')
+  const escalationRules = tbl('escalationRules')
 
   // ---------- 参照系 ----------
 
@@ -350,8 +351,62 @@ export function useAiCompany() {
     return { created, skipped }
   }
 
+  /**
+   * ワークロードシグナル検知（stalled_task / overload）。画面表示時などに呼ぶ。
+   * - タスク停滞: in_progress タスクの最新活動（ログなしは createdAt）が threshold 日以上前
+   * - 過負荷: AI 社員ごとの open タスク（proposed/approved/in_progress/blocked）件数が threshold 超
+   * ルールの enabled / クールダウンは raise 側が判定するため二重チェックしない。
+   * 補助処理のため例外は握りつぶし、呼び出し元（画面表示）をブロックしない。
+   */
+  function evaluateWorkloadSignals(): { raised: number } {
+    let raised = 0
+    try {
+      const stalledThreshold = escalationRules.value.find(r => r.key === 'stalled_task')?.threshold ?? 3
+      const overloadThreshold = escalationRules.value.find(r => r.key === 'overload')?.threshold ?? 7
+      const today = todayJst()
+
+      // a) タスク停滞（日付キー文字列の比較で TZ 非依存に判定する）
+      const stalledCutoff = addDays(today, -stalledThreshold)
+      for (const task of aiTasks.value) {
+        if (task.status !== 'in_progress') continue
+        let lastAt: string | null = null
+        for (const l of aiActivityLogs.value) {
+          if (l.taskId === task.id && (lastAt === null || l.at > lastAt)) lastAt = l.at
+        }
+        const lastKey = (lastAt ?? task.createdAt).slice(0, 10)
+        if (lastKey > stalledCutoff) continue
+        const days = Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${lastKey}T00:00:00Z`)) / 86_400_000)
+        const r = raise({
+          reason: 'stalled_task',
+          targetAiEmployeeId: task.aiEmployeeId,
+          context: `AIタスク「${task.title}」が${days}日間更新されていません`,
+          dedupeKey: `stalled:${task.id}`,
+        })
+        if (r.ok) raised++
+      }
+
+      // b) 過負荷
+      const openStatuses: AiTask['status'][] = ['proposed', 'approved', 'in_progress', 'blocked']
+      for (const emp of aiEmployees.value.filter(e => e.active)) {
+        const count = aiTasks.value.filter(t => t.aiEmployeeId === emp.id && openStatuses.includes(t.status)).length
+        if (count <= overloadThreshold) continue
+        const r = raise({
+          reason: 'overload',
+          targetAiEmployeeId: emp.id,
+          context: `${emp.name} の保有タスクが${count}件に達しています`,
+          dedupeKey: `overload:${emp.id}`,
+        })
+        if (r.ok) raised++
+      }
+    } catch {
+      // 補助処理: 検知失敗は主フロー（画面表示）を止めない
+    }
+    return { raised }
+  }
+
   return {
     employees, roles, roleOf, employeeById, tasks, tasksOf, logs, aiReportsOn,
     requestTask, approveTask, progressTask, blockTask, cancelTask, generateDailyReports,
+    evaluateWorkloadSignals,
   }
 }

@@ -3,6 +3,7 @@ import {
   ArcElement, BarController, BarElement, CategoryScale, Chart, DoughnutController,
   Filler, Legend, LinearScale, LineController, LineElement, PointElement, Title, Tooltip,
 } from 'chart.js'
+import { CHART_TEXT } from '~/utils/chart-theme'
 
 export default defineNuxtPlugin(() => {
   Chart.register(
@@ -12,5 +13,5 @@ export default defineNuxtPlugin(() => {
   )
   Chart.defaults.font.family = "system-ui, -apple-system, 'Segoe UI', Roboto, 'Hiragino Kaku Gothic ProN', 'Noto Sans JP', Meiryo, sans-serif"
   Chart.defaults.font.size = 11
-  Chart.defaults.color = '#4b5563'
+  Chart.defaults.color = CHART_TEXT
 })
