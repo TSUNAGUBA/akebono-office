@@ -78,7 +78,7 @@ function toggleLinkActive(link: ExternalLink): void {
 // ---------- b) 機能トグル / e) エスカレーションルール ----------
 const { featureToggles, escalationRules, setToggle, updateEscalationRule, getConfig, setConfig, resetDemo } = useAppSettings()
 
-// ---------- 日報の入力方式（F-06-7） ----------
+// ---------- 日報の入力方式（F-13-7。F-06-7 のオプション設定） ----------
 
 const REPORT_INPUT_MODE_OPTIONS = [
   { value: 'form', label: '通常フォーム入力のみ' },
@@ -411,7 +411,7 @@ async function onResetDemo(): Promise<void> {
           </ul>
         </UiSectionCard>
 
-        <!-- b2) 日報の入力方式（F-06-7） -->
+        <!-- b2) 日報の入力方式（F-13-7） -->
         <UiSectionCard
           title="日報の入力方式"
           description="AI アシスト入力はオプション機能です。カレンダー予定・ぽいぽいメモ・AI ヒアリングから日報ドラフトを生成し、本人が確認・修正してから提出します"

@@ -65,7 +65,7 @@ formSchemaFor(entity): FieldDef[]       // UiSchemaForm に直結
 ```ts
 // useCalendar（F-06-8）
 isConnected: ComputedRef<boolean>                    // 擬似 OAuth 連携状態（本実装: トークン有無）
-connect() / disconnect(): Result                     // 画面上の同意フローで完結。connect は当日分を初回同期
+connect(): Result & { synced? } / disconnect(): Result  // 画面上の同意フローで完結。connect は当日分を初回同期
 syncFromGoogle(memberId, date): Result & { synced }  // google 発のみべき等 upsert（アプリ発に触れない）
 addTask({date, from, to, title, projectId, pushToGoogle}): Result & { warning? }  // 反映は補助処理（未連携でも作成は成立）
 pushToGoogle(eventId): Result & { warning? }         // アプリ発のみ。反映済みへの再実行は no-op + warning（冪等）
