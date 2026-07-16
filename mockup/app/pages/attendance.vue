@@ -465,7 +465,8 @@ const employmentOptions = Object.entries(EMPLOYMENT_TYPE_LABELS).map(([value, la
 
 const ruleColumns: TableColumn[] = [
   { key: 'name', label: '名称', primary: true },
-  { key: 'applies', label: '適用雇用区分', primary: true },
+  { key: 'applies', label: '選択可能な雇用区分' },
+  { key: 'defaults', label: '既定にする雇用区分', primary: true },
   { key: 'hours', label: '始業〜終業', width: '120px' },
   { key: 'breakMin', label: '休憩', width: '70px', align: 'right' },
   { key: 'flex', label: 'フレックス', width: '150px' },
@@ -477,7 +478,8 @@ const ruleColumns: TableColumn[] = [
 const ruleRows = computed(() => rulesCrud.list.value.map(r => ({
   id: r.id,
   name: r.name,
-  applies: r.appliesTo.map(t => EMPLOYMENT_TYPE_LABELS[t]).join('・'),
+  applies: r.appliesTo.map(t => EMPLOYMENT_TYPE_LABELS[t]).join('・') || '—',
+  defaults: r.defaultFor.map(t => EMPLOYMENT_TYPE_LABELS[t]).join('・') || '—（個別割当専用）',
   hours: `${r.workStart}〜${r.workEnd}`,
   breakMin: `${r.breakMinutes}分`,
   flex: r.flex?.enabled ? `コア ${r.flex.coreStart}〜${r.flex.coreEnd}` : '—',
@@ -492,6 +494,7 @@ const ruleForm = ref({
   id: '',
   name: '',
   appliesTo: [] as string[],
+  defaultFor: [] as string[],
   workStart: '09:00',
   workEnd: '18:00',
   breakMinutes: 60,
@@ -510,6 +513,7 @@ function openRuleModal(rule?: AttendanceRule): void {
       id: rule.id,
       name: rule.name,
       appliesTo: [...rule.appliesTo],
+      defaultFor: [...rule.defaultFor],
       workStart: rule.workStart,
       workEnd: rule.workEnd,
       breakMinutes: rule.breakMinutes,
@@ -522,7 +526,7 @@ function openRuleModal(rule?: AttendanceRule): void {
     }
   } else {
     ruleForm.value = {
-      id: '', name: '', appliesTo: [], workStart: '09:00', workEnd: '18:00',
+      id: '', name: '', appliesTo: [], defaultFor: [], workStart: '09:00', workEnd: '18:00',
       breakMinutes: 60, flexEnabled: false, coreStart: '10:00', coreEnd: '15:00',
       settlementMonths: 1, closingDay: 31, legalHolidayWeekday: '0',
     }
@@ -539,7 +543,8 @@ function submitRule(): void {
   const f = ruleForm.value
   const errs: Record<string, string> = {}
   if (!f.name.trim()) errs.name = '名称を入力してください'
-  if (f.appliesTo.length === 0) errs.appliesTo = '適用する雇用区分を1つ以上選択してください'
+  if (f.appliesTo.length === 0) errs.appliesTo = '選択可能な雇用区分を1つ以上選択してください'
+  if (f.defaultFor.some(t => !f.appliesTo.includes(t))) errs.defaultFor = '既定にする雇用区分は「選択可能な雇用区分」に含めてください'
   if (f.workStart && f.workEnd && f.workStart >= f.workEnd) errs.workEnd = '終業は始業より後の時刻にしてください'
   if (f.flexEnabled && f.coreStart >= f.coreEnd) errs.coreEnd = 'コア終了はコア開始より後の時刻にしてください'
   ruleErrors.value = errs
@@ -548,6 +553,7 @@ function submitRule(): void {
   const payload: Partial<AttendanceRule> & { id?: string } = {
     name: f.name.trim(),
     appliesTo: f.appliesTo as EmploymentType[],
+    defaultFor: f.defaultFor as EmploymentType[],
     workStart: f.workStart,
     workEnd: f.workEnd,
     breakMinutes: Math.max(0, Number(f.breakMinutes) || 0),
@@ -559,12 +565,28 @@ function submitRule(): void {
   }
   if (f.id) payload.id = f.id
   const r = rulesCrud.save(payload)
-  if (r.ok) {
-    ruleOpen.value = false
-    show('勤怠ルールを保存しました（日次集計に反映されます）', 'ok')
-  } else {
+  if (!r.ok) {
     show(r.error.message, 'warn')
+    return
   }
+  // 排他制御: 各雇用区分の既定は 1 ルールのみ。今回既定にした区分を他ルールの defaultFor から外す
+  const savedId = r.id ?? f.id
+  const stripped: string[] = []
+  for (const other of rulesCrud.list.value) {
+    if (other.id === savedId) continue
+    const kept = other.defaultFor.filter(t => !payload.defaultFor!.includes(t))
+    if (kept.length !== other.defaultFor.length) {
+      rulesCrud.save({ id: other.id, defaultFor: kept })
+      stripped.push(other.name)
+    }
+  }
+  ruleOpen.value = false
+  show(
+    stripped.length > 0
+      ? `勤怠ルールを保存しました（既定の付け替え: ${stripped.join('・')} から本ルールへ）`
+      : '勤怠ルールを保存しました（日次集計に反映されます）',
+    'ok',
+  )
 }
 </script>
 
@@ -1058,8 +1080,17 @@ function submitRule(): void {
         <UiFormField label="名称" required :error="ruleErrors.name">
           <input v-model="ruleForm.name" type="text" class="input" placeholder="例: 正社員（フレックス）" >
         </UiFormField>
-        <UiFormField label="適用雇用区分" required :error="ruleErrors.appliesTo">
-          <UiChipSelect v-model="ruleForm.appliesTo" :options="employmentOptions" aria-label="適用雇用区分" />
+        <UiFormField
+          label="選択可能な雇用区分" required :error="ruleErrors.appliesTo"
+          hint="この勤務体系を個別割当できる雇用区分（メンバーマスタの選択候補）"
+        >
+          <UiChipSelect v-model="ruleForm.appliesTo" :options="employmentOptions" aria-label="選択可能な雇用区分" />
+        </UiFormField>
+        <UiFormField
+          label="既定にする雇用区分" :error="ruleErrors.defaultFor"
+          hint="メンバーが勤務体系を個別指定していない場合に適用される既定。各雇用区分につき 1 ルールのみ（保存時に自動で付け替え）。個別割当専用のルールは未選択のままにする"
+        >
+          <UiChipSelect v-model="ruleForm.defaultFor" :options="employmentOptions" aria-label="既定にする雇用区分" />
         </UiFormField>
         <div class="grid grid-cols-2 gap-3">
           <UiFormField label="始業">

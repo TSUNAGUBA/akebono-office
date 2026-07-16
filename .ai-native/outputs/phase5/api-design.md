@@ -20,6 +20,7 @@
 ```ts
 // useAttendance
 punch(kind: PunchKind): Result            // 状態機械ガード付き打刻
+ruleFor(memberId): AttendanceRule         // 勤務体系の解決（①Member.attendanceRuleId ②defaultFor ③appliesTo 先頭）
 daySummary(memberId, date): AttendanceDaySummary   // 6 バケット集計
 monthSummary(memberId, month): MonthSummary        // 月次 + アラート
 alerts(memberId, endMonth?): Article36Alert[]      // 36協定判定。endMonth（YYYY-MM）を最終月とする直近6ヶ月。省略時は JST の当月

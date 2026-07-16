@@ -7,7 +7,9 @@ import type { LeaveGrant, PunchRecord, SalesMonthly, UptimeDaily } from '~/types
 import { addDays, toDateKey, weekdayOf } from '~/utils/format'
 import { leaveGrantDays } from '~/utils/attendance-calc'
 import { irange, pick, unit } from '~/utils/rng'
-import { seedCompanies, seedMembers, seedProjects, seedSystemServices } from './core'
+import { seedAttendanceRules, seedCompanies, seedMembers, seedProjects, seedSystemServices } from './core'
+
+const toMinutes = (hhmm: string): number => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5))
 
 /** シード生成の基準日（実行日の 0:00） */
 export function seedToday(): string {
@@ -29,13 +31,31 @@ export function buildPunchHistory(days = 45): PunchRecord[] {
       if (isParttime && unit(`${m.id}:${date}:attend`) > m.weeklyDays / 5) continue
       if (!isParttime && unit(`${m.id}:${date}:absent`) < 0.03) continue // まれな休暇
 
-      const startHour = isParttime ? 10 : 9 + (unit(`${m.id}:${date}:st`) > 0.6 ? 1 : 0)
-      const startMin = irange(`${m.id}:${date}:sm`, 0, 25)
-      // 忙しいメンバー（開発部）はやや残業が多い分布にする
+      // 個別割当ルール（時短等）があるメンバーは、そのルールの所定時間で生成する
+      const assignedRule = m.attendanceRuleId
+        ? seedAttendanceRules.find(r => r.id === m.attendanceRuleId)
+        : undefined
+      const startHour = isParttime
+        ? 10
+        : assignedRule
+          ? Math.floor(toMinutes(assignedRule.workStart) / 60)
+          : 9 + (unit(`${m.id}:${date}:st`) > 0.6 ? 1 : 0)
+      const startMin = assignedRule
+        ? toMinutes(assignedRule.workStart) % 60
+        : irange(`${m.id}:${date}:sm`, 0, 25)
+      // 忙しいメンバー（開発部）はやや残業が多い分布にする。時短者の残業は控えめに
       const busy = m.dept === 'システム開発部' ? 1.5 : 1
-      const otMin = isParttime ? 0 : Math.floor(irange(`${m.id}:${date}:ot`, 0, 90) * busy)
-      const workHours = isParttime ? irange(`${m.id}:${date}:wh`, 4, 6) : 8
-      const breakMin = workHours > 6 ? 60 : 0
+      const otMin = isParttime
+        ? 0
+        : assignedRule
+          ? irange(`${m.id}:${date}:ot`, 0, 30)
+          : Math.floor(irange(`${m.id}:${date}:ot`, 0, 90) * busy)
+      const workHours = isParttime
+        ? irange(`${m.id}:${date}:wh`, 4, 6)
+        : assignedRule
+          ? (toMinutes(assignedRule.workEnd) - toMinutes(assignedRule.workStart) - assignedRule.breakMinutes) / 60
+          : 8
+      const breakMin = isParttime ? (workHours > 6 ? 60 : 0) : (assignedRule ? assignedRule.breakMinutes : 60)
 
       const mk = (h: number, mi: number): string => {
         const hh = String(Math.floor(h + mi / 60)).padStart(2, '0')

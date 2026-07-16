@@ -31,6 +31,12 @@ export interface Member {
   weeklyDays: number
   weeklyHours: number
   punchRequired: boolean
+  /**
+   * 勤務体系（勤怠ルール）の個別指定。
+   * null = 雇用区分に合致する既定ルールを自動適用（正社員でも固定時間/フレックス/時短が
+   * 混在するため、雇用区分だけでは決定できないケースをここで上書きする）
+   */
+  attendanceRuleId: string | null
   birthDate: string
   active: boolean
   custom: CustomValues
@@ -215,7 +221,14 @@ export interface WorkflowRoute {
 export interface AttendanceRule {
   id: string
   name: string
+  /** この勤務体系を選択できる雇用区分（メンバーマスタの個別割当の候補を絞る） */
   appliesTo: EmploymentType[]
+  /**
+   * この勤務体系を「既定」とする雇用区分（appliesTo の部分集合）。
+   * 各雇用区分の既定は 1 ルールのみ（保存時に排他制御）。
+   * 同一雇用区分に複数の勤務体系（固定/フレックス/時短等）が存在するケースに対応する
+   */
+  defaultFor: EmploymentType[]
   workStart: string // HH:mm
   workEnd: string
   breakMinutes: number

@@ -10,7 +10,7 @@
 
 | エンティティ | 主要属性 | 機密度 |
 |---|---|---|
-| `Member` | id, name, email, employmentType(`director`/`employee`/`contract`/`parttime`/`outsource`), dept, title, role(`admin`/`member`), hireDate, weeklyDays, weeklyHours, punchRequired, birthDate（18 歳未満深夜判定用）, active, custom | C2 |
+| `Member` | id, name, email, employmentType(`director`/`employee`/`contract`/`parttime`/`outsource`), attendanceRuleId（勤務体系の個別指定。null=雇用区分の既定を適用）, dept, title, role(`admin`/`member`), hireDate, weeklyDays, weeklyHours, punchRequired, birthDate（18 歳未満深夜判定用）, active, custom | C2 |
 | `Industry` | id, name, displayOrder, active（直交軸・複合値禁止） | C1 |
 | `Company` | id, kind(`self`/`customer`), name, aliases[], industryIds[], primaryIndustryId, size, location, description, ownerMemberId, fiscalStartMonth(自社), active, custom | C2 |
 | `Contact` | id, companyId, name, dept, title, keyPerson(1-3), email, phone, notes, active, custom | C2 |
@@ -25,7 +25,9 @@
 | `CodeMaster` | id, category(dept/title/projectStatus/…), code, label, displayOrder, active | C1 |
 | `ExternalLink` | id, title, url, description, icon, displayOrder, active | C1 |
 | `WorkflowRoute` | id, category(稟議区分), minAmount, maxAmount, steps[{order, approverRole/approverMemberId, mode(`serial`/`all`/`majority`)}], active | C1 |
-| `AttendanceRule` | id, name, appliesTo(employmentType[]), workStart, workEnd, breakMinutes, flex{coreStart,coreEnd,settlementMonths}, closingDay, legalHolidayWeekday, active | C1 |
+| `AttendanceRule` | id, name, appliesTo(employmentType[]・選択可能な雇用区分), defaultFor(employmentType[]・既定とする雇用区分。区分ごとに 1 ルールのみ=保存時排他), workStart, workEnd, breakMinutes, flex{coreStart,coreEnd,settlementMonths}, closingDay, legalHolidayWeekday, active | C1 |
+
+> **設計判断（勤務体系の解決）:** 同一雇用区分に固定時間・フレックス・時短等が混在するため、雇用区分だけではルールを決定しない。適用優先順は ①`Member.attendanceRuleId`（個別指定） → ②`defaultFor` に区分を含む既定ルール → ③`appliesTo` に区分を含むルールの先頭（既定未設定時の防御）。個別割当専用ルール（時短等）は `defaultFor` を空にする。
 | `SystemService` | id, name, description, url, components[{id,name}] | C1 |
 
 > **設計判断（関係エッジの物理削除）:** マスタ系は論理削除（`active: false`）を原則とするが、`CompanyRelation` / `ContactRelation` の**関係エッジは例外的に物理削除可**とする（誤登録訂正のため。エッジは属性を持たない紐付けであり、論理削除で残す価値より誤った関係が可視化に残る害が大きい）。削除は**確認ダイアログ + 監査ログ（`AuditLog`）記録を必須**とする。

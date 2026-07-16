@@ -30,10 +30,27 @@ export function useAttendance() {
   const fixRequests = tbl('attendanceFixRequests')
   const rules = tbl('attendanceRules')
 
+  /**
+   * メンバーに適用する勤怠ルールの解決。
+   * 優先順: ①メンバーの個別指定（attendanceRuleId・有効なもののみ）
+   *        ②雇用区分の既定ルール（defaultFor。区分ごとに 1 ルールのみ）
+   *        ③雇用区分で選択可能なルールの先頭（既定未設定時の防御）
+   *        ④先頭ルール（最終フォールバック）
+   */
   function ruleFor(memberId: string) {
     const members = tbl('members')
     const m = members.value.find(x => x.id === memberId)
-    return rules.value.find(r => r.active && m && r.appliesTo.includes(m.employmentType)) ?? rules.value[0]
+    if (m?.attendanceRuleId) {
+      const explicit = rules.value.find(r => r.id === m.attendanceRuleId && r.active)
+      if (explicit) return explicit
+    }
+    if (m) {
+      const def = rules.value.find(r => r.active && r.defaultFor.includes(m.employmentType))
+      if (def) return def
+      const applicable = rules.value.find(r => r.active && r.appliesTo.includes(m.employmentType))
+      if (applicable) return applicable
+    }
+    return rules.value[0]
   }
 
   /**
