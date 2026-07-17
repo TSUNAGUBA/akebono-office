@@ -1,10 +1,12 @@
 /**
  * AIチャットボット（F-09-2）
- * - 会話は chatMessages コレクションで永続（ユーザー発言は即 commit、AI 応答はストリーミング完了後に commit）
- * - 応答はキーワードルーティング + マスタ/業務実データ参照で決定的に生成（乱数・API なし）
+ * - セッション管理（オペレーター指示 2026-07-17）: 会話はセッション単位で永続し、同一セッション内は
+ *   マルチターン（API モードはサーバーが直近履歴を LLM へ渡す）。過去セッションの再開・新規開始に対応
+ * - SoT: API モード = chat_sessions / chat_messages（DB）。モックモード = chatSessions / chatMessages（localStorage）
+ * - 応答: API モードは LLM 一次応答 → fallback 時は決定的ルーティング（応答はセッションへ追記して履歴を忠実に保つ）
  * - 擬似ストリーミング: 30-50 文字ずつ setInterval で流す。unmount 時は finalize() で確定保存
  */
-import type { ChatMessage, Result } from '~/types/domain'
+import type { ChatMessage, ChatSession, Result } from '~/types/domain'
 import { fmtDateLong, fmtHours } from '~/utils/format'
 import { PROJECT_STATUS_LABELS } from '~/utils/labels'
 import { irange } from '~/utils/rng'
@@ -21,15 +23,55 @@ interface BotAnswer {
   suggestions: string[]
 }
 
+// ---------- セッション状態（SPA・モジュールスコープ単一 = ページ遷移しても会話を維持） ----------
+
+const currentSessionId = ref<string | null>(null)
+/** API モード: 自分のセッション一覧・現在セッションのメッセージ（サーバーのローカルミラー） */
+const apiSessions = ref<ChatSession[]>([])
+const apiMessages = ref<ChatMessage[]>([])
+/** API モードのローカル表示用 id 採番（サーバーが id を返さない表示ミラーの :key 用） */
+let localSeq = 0
+
+onApiReset(() => {
+  currentSessionId.value = null
+  apiSessions.value = []
+  apiMessages.value = []
+})
+
 export function useChatbot() {
   const { tbl, commit, nextId } = useMockDb()
   const { nameOf: deptNameOf } = useDepartments()
   const { currentUser } = useCurrentUser()
   const { monthSummary } = useAttendance()
   const { activeFiles, folderPath } = useDocuments()
+  const isApi = useApiMode()
 
-  const messages = tbl('chatMessages')
-  const sorted = computed(() => [...messages.value].sort((a, b) => a.at.localeCompare(b.at)))
+  const mockMessages = tbl('chatMessages')
+  const mockSessions = tbl('chatSessions')
+
+  // セッション導入前のモック会話（sessionId なし）を「以前の会話」セッションへ一度だけ移行（下位互換 = 原則7）
+  if (!isApi && mockMessages.value.some(m => !m.sessionId)) {
+    const legacyId = nextId('chatSessions', 'cs')
+    mockSessions.value = [...mockSessions.value, {
+      id: legacyId, memberId: currentUser.value.id, title: '以前の会話',
+      createdAt: nowJstIso(), updatedAt: nowJstIso(),
+    }]
+    mockMessages.value = mockMessages.value.map(m => m.sessionId ? m : { ...m, sessionId: legacyId })
+    commit()
+  }
+
+  /** 現在のセッションのメッセージ（時系列 = 挿入順を保持。API はサーバーの seq 順 + ローカル追記順） */
+  const sorted = computed(() => isApi
+    ? apiMessages.value
+    : mockMessages.value.filter(m => m.sessionId === currentSessionId.value))
+
+  /** 自分のセッション一覧（新しい順） */
+  const sessions = computed<ChatSession[]>(() => {
+    const rows = isApi
+      ? apiSessions.value
+      : mockSessions.value.filter(s => s.memberId === currentUser.value.id)
+    return [...rows].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+  })
 
   // ---------- 擬似ストリーミング状態 ----------
   const isStreaming = ref(false)
@@ -37,12 +79,24 @@ export function useChatbot() {
   let timer: ReturnType<typeof setInterval> | null = null
   let pendingAnswer: BotAnswer | null = null
 
-  function append(msg: Omit<ChatMessage, 'id' | 'at'>): void {
-    messages.value = [...messages.value, {
+  function append(msg: Omit<ChatMessage, 'id' | 'at' | 'sessionId'>): void {
+    const full: ChatMessage = {
       ...msg,
-      id: nextId('chatMessages', 'ch'),
+      id: isApi ? `ch-l${++localSeq}` : nextId('chatMessages', 'ch'),
+      sessionId: currentSessionId.value ?? undefined,
       at: nowJstIso(),
-    }]
+    }
+    if (isApi) {
+      apiMessages.value = [...apiMessages.value, full]
+      return
+    }
+    mockMessages.value = [...mockMessages.value, full]
+    commit()
+  }
+
+  /** モックモード: セッションの最終更新を進める（一覧の並び用） */
+  function touchMockSession(id: string): void {
+    mockSessions.value = mockSessions.value.map(s => s.id === id ? { ...s, updatedAt: nowJstIso() } : s)
     commit()
   }
 
@@ -54,8 +108,20 @@ export function useChatbot() {
     }
     if (pendingAnswer) {
       append({ role: 'assistant', content: pendingAnswer.content, sources: pendingAnswer.sources, suggestions: pendingAnswer.suggestions })
+      if (!isApi && currentSessionId.value) touchMockSession(currentSessionId.value)
       pendingAnswer = null
     }
+    isStreaming.value = false
+    streamingText.value = ''
+  }
+
+  /** ストリーミング状態の破棄（セッション切替・新規開始時。pending は保存しない） */
+  function resetStream(): void {
+    if (timer) {
+      clearInterval(timer)
+      timer = null
+    }
+    pendingAnswer = null
     isStreaming.value = false
     streamingText.value = ''
   }
@@ -74,24 +140,79 @@ export function useChatbot() {
     }, 90)
   }
 
+  // ---------- セッション操作 ----------
+
+  /** セッション一覧の取り直し（API モードのみ。履歴 UI を開くとき・ページ表示時） */
+  async function refreshSessions(): Promise<void> {
+    if (!isApi) return
+    try {
+      apiSessions.value = await apiFetch<ChatSession[]>('/v1/chatbot/sessions')
+    } catch {
+      // 一覧取得失敗は現在の会話を妨げない（非ブロッキング）
+    }
+  }
+
+  /** 過去セッションを開いて続きから再開する */
+  async function openSession(id: string): Promise<Result> {
+    resetStream()
+    if (isApi) {
+      try {
+        const rows = await apiFetch<ChatMessage[]>(`/v1/chatbot/sessions/${id}/messages`)
+        apiMessages.value = rows
+        currentSessionId.value = id
+        return { ok: true, id }
+      } catch (e) {
+        return { ok: false, error: apiErrorOf(e) }
+      }
+    }
+    currentSessionId.value = id
+    return { ok: true, id }
+  }
+
+  /** 新しいセッションを開始する（実体は最初の送信時に作成。過去の会話は履歴に残る） */
+  function newSession(): void {
+    resetStream()
+    currentSessionId.value = null
+    if (isApi) apiMessages.value = []
+  }
+
+  /** ページ表示時の取り直し（セッション一覧 + 表示中セッションの復元） */
+  async function refresh(): Promise<void> {
+    if (!isApi) return
+    await refreshSessions()
+    if (currentSessionId.value && apiMessages.value.length === 0) {
+      await openSession(currentSessionId.value)
+    }
+  }
+
   /**
    * 質問を送信する（user メッセージ即保存 → 応答をストリーミング）。
-   * API モードは LLM 一次応答（POST /v1/chatbot/ask。サーバーが本人の勤怠・有給・顧客・ナレッジを文脈化）を
-   * 試み、fallback 指示・通信失敗時は既存の決定的ルーティング応答へ縮退する
-   * （移行済みドメインは API モードでもキャッシュ = 実データを参照するため応答は正しい）
+   * API モードは LLM 一次応答（POST /v1/chatbot/ask = セッション履歴つきマルチターン）を試み、
+   * fallback 指示・通信失敗時は決定的ルーティング応答へ縮退する。縮退応答もセッションへ
+   * 追記して履歴を忠実に保つ（POST /sessions/:id/messages・非ブロッキング）
    */
-  const isApi = useApiMode()
-
   async function send(rawText: string): Promise<void> {
-    const text = rawText.trim().slice(0, 2000)
+    const text = [...rawText.trim()].slice(0, 2000).join('')
     if (!text || isStreaming.value) return
+    if (!isApi && !currentSessionId.value) {
+      // モックモード: 最初の送信でセッションを作成（タイトルは最初の質問）
+      const id = nextId('chatSessions', 'cs')
+      mockSessions.value = [...mockSessions.value, {
+        id, memberId: currentUser.value.id, title: [...text].slice(0, 40).join(''),
+        createdAt: nowJstIso(), updatedAt: nowJstIso(),
+      }]
+      commit()
+      currentSessionId.value = id
+    }
     append({ role: 'user', content: text, sources: [], suggestions: [] })
+    if (!isApi && currentSessionId.value) touchMockSession(currentSessionId.value)
     if (isApi) {
       isStreaming.value = true // LLM 応答待ちの間も入力を抑止し「考え中」を表示
       try {
         const res = await apiFetch<{
-          fallback: boolean; content?: string; sources?: string[]; suggestions?: string[]
-        }>('/v1/chatbot/ask', { method: 'POST', body: { question: text } })
+          fallback: boolean; sessionId?: string; content?: string; sources?: string[]; suggestions?: string[]
+        }>('/v1/chatbot/ask', { method: 'POST', body: { question: text, sessionId: currentSessionId.value } })
+        if (res.sessionId) currentSessionId.value = res.sessionId
         if (!res.fallback && res.content) {
           startStream({
             content: res.content,
@@ -101,23 +222,20 @@ export function useChatbot() {
           return
         }
       } catch {
-        // 通信失敗も決定的応答へ縮退（下の共通経路）
+        // 通信失敗も決定的応答へ縮退（下の共通経路）。この場合セッション未確定なら履歴追記はしない
       }
+      // フォールバック: 決定的応答をセッションへ追記（履歴の忠実性。失敗しても表示は継続 = 非ブロッキング）
+      const ans = answer(text)
+      if (currentSessionId.value) {
+        void apiFetch(`/v1/chatbot/sessions/${currentSessionId.value}/messages`, {
+          method: 'POST',
+          body: { content: ans.content, sources: ans.sources, suggestions: ans.suggestions },
+        }).catch(() => { /* 追記失敗は表示を妨げない */ })
+      }
+      startStream(ans)
+      return
     }
     startStream(answer(text))
-  }
-
-  /** 会話クリア（確認ダイアログは呼び出し側で。ストリーミング中の応答は破棄） */
-  function clear(): void {
-    if (timer) {
-      clearInterval(timer)
-      timer = null
-    }
-    pendingAnswer = null
-    isStreaming.value = false
-    streamingText.value = ''
-    messages.value = []
-    commit()
   }
 
   /**
@@ -317,10 +435,15 @@ export function useChatbot() {
 
   return {
     messages: sorted,
+    sessions,
+    currentSessionId,
     isStreaming,
     streamingText,
     send,
-    clear,
+    newSession,
+    openSession,
+    refresh,
+    refreshSessions,
     finalize,
     escalate,
   }

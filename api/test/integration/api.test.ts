@@ -1019,11 +1019,50 @@ describe('意思決定支援', () => {
 })
 
 describe('チャットボット応答', () => {
-  it('LLM 無効環境は fallback: true（クライアントの決定的応答へ縮退）。空質問は 400', async () => {
+  it('LLM 無効環境は fallback: true + セッション自動作成。空質問は 400', async () => {
     expect((await api('POST', '/v1/chatbot/ask', { as: MEMBER, body: { question: ' ' } })).status).toBe(400)
     const r = await api('POST', '/v1/chatbot/ask', { as: MEMBER, body: { question: '有給の残りは何日？' } })
     expect(r.status).toBe(200)
-    expect((r.json.data as { fallback: boolean }).fallback).toBe(true)
+    const data = r.json.data as { fallback: boolean; sessionId: string }
+    expect(data.fallback).toBe(true)
+    expect(data.sessionId).toMatch(/^cs-/)
+  })
+
+  it('セッション管理: マルチターン追記・本人のみ参照・フォールバック応答の追記・再開', async () => {
+    // 1 問目 → セッション作成（タイトルは最初の質問）+ user メッセージ永続化
+    const first = await api('POST', '/v1/chatbot/ask', { as: HR, body: { question: '経費精算のルールを教えて' } })
+    const sessionId = (first.json.data as { sessionId: string }).sessionId
+
+    // フォールバック応答（クライアントの決定的ルーティング結果）を追記
+    const bot = await api('POST', `/v1/chatbot/sessions/${sessionId}/messages`, {
+      as: HR, body: { content: '経費精算規程をご確認ください', sources: ['ドキュメント管理'], suggestions: ['稟議を申請するには？'] },
+    })
+    expect(bot.status).toBe(201)
+
+    // 2 問目を同一セッションへ（マルチターン）
+    const second = await api('POST', '/v1/chatbot/ask', { as: HR, body: { question: 'その上限額は？', sessionId } })
+    expect((second.json.data as { sessionId: string }).sessionId).toBe(sessionId)
+
+    // セッション一覧: 本人には見え、タイトルは最初の質問。他人には見えない
+    const mine = (await api('GET', '/v1/chatbot/sessions', { as: HR })).json.data as
+      { id: string; title: string; messageCount: number }[]
+    const s = mine.find(x => x.id === sessionId)
+    expect(s?.title).toBe('経費精算のルールを教えて')
+    expect(s?.messageCount).toBe(3) // user + assistant + user
+    const others = (await api('GET', '/v1/chatbot/sessions', { as: MEMBER })).json.data as { id: string }[]
+    expect(others.some(x => x.id === sessionId)).toBe(false)
+
+    // メッセージの再開取得: 本人は時系列で取得、他人は AKO-CHT-001（404）
+    const msgs = (await api('GET', `/v1/chatbot/sessions/${sessionId}/messages`, { as: HR })).json.data as
+      { role: string; content: string }[]
+    expect(msgs.map(m => m.role)).toEqual(['user', 'assistant', 'user'])
+    expect(msgs[1]!.content).toBe('経費精算規程をご確認ください')
+    const denied = await api('GET', `/v1/chatbot/sessions/${sessionId}/messages`, { as: MEMBER })
+    expect(denied.status).toBe(404)
+    expect(denied.json.error?.code).toBe('AKO-CHT-001')
+    // 他人のセッションへの ask・追記も拒否
+    expect((await api('POST', '/v1/chatbot/ask', { as: MEMBER, body: { question: 'x', sessionId } })).status).toBe(404)
+    expect((await api('POST', `/v1/chatbot/sessions/${sessionId}/messages`, { as: MEMBER, body: { content: 'x' } })).status).toBe(404)
   })
 })
 

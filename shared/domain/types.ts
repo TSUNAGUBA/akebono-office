@@ -710,11 +710,25 @@ export interface DocumentNode {
 
 export interface ChatMessage {
   id: string
+  /** 所属セッション。過去データ（セッション導入前のモック会話）は未設定 = 初回ロード時に移行 */
+  sessionId?: string
   role: 'user' | 'assistant'
   content: string
   sources: string[]
   suggestions: string[]
   at: string
+}
+
+/** チャットセッション（オペレーター指示 2026-07-17: マルチターン・過去セッション再開・新規開始） */
+export interface ChatSession {
+  id: string
+  /** モックモードのユーザー切替用（API は認証ユーザーでスコープするためレスポンスに含まれない） */
+  memberId?: string
+  title: string
+  createdAt: string
+  updatedAt: string
+  /** API の一覧レスポンスのみ（表示用） */
+  messageCount?: number
 }
 
 export interface AkebonoWish {
