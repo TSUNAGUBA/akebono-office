@@ -234,7 +234,7 @@ export function useReports() {
   async function upsertDaily(
     input: DailyReportInput,
     status: 'draft' | 'submitted',
-  ): Promise<Result & { hoursGapMinutes?: number | null }> {
+  ): Promise<Result & { hoursGapMinutes?: number | null; escalated?: boolean }> {
     const existing = myReportOn(input.date)
     if (existing && existing.status === 'submitted') {
       return err('AKO-REP-001', '提出済みの日報は編集できません')
@@ -251,7 +251,7 @@ export function useReports() {
     if (isApi) {
       // SoT（API）へ書込 → 対象月キャッシュを取り直す（原則6）。提出済み保護はサーバーが FOR UPDATE で最終判定
       try {
-        const data = await apiFetch<{ id: string; hoursGapMinutes: number | null }>('/v1/reports/daily', {
+        const data = await apiFetch<{ id: string; hoursGapMinutes: number | null; escalated?: boolean }>('/v1/reports/daily', {
           method: 'PUT',
           body: {
             date: input.date,
@@ -263,7 +263,7 @@ export function useReports() {
           },
         })
         await loadMineMonth(input.date.slice(0, 7), true)
-        return { ok: true, id: data.id, hoursGapMinutes: data.hoursGapMinutes }
+        return { ok: true, id: data.id, hoursGapMinutes: data.hoursGapMinutes, escalated: data.escalated ?? false }
       } catch (e) {
         return { ok: false, error: apiErrorOf(e) }
       }
@@ -302,19 +302,18 @@ export function useReports() {
    * 日報提出。提出成立後の補助処理:
    * (a) 課題記入あり → エスカレーション起票（起票成否に関わらず提出は成立）
    * (b) 工数合計と勤怠実労働の乖離 60 分超 → hoursGapMinutes を返す（画面が警告表示）
-   * API モード: 乖離はサーバー計算値（提出レスポンス）。エスカレーション起票は
-   * エスカレーション API 化（バッチ3）まで未発火（implementation-status.md に明記）。
+   * API モード: 乖離・エスカレーション起票ともサーバーが担い、提出レスポンスの値を用いる。
    */
   async function submit(input: DailyReportInput): Promise<SubmitDailyResult> {
     const res = await upsertDaily(input, 'submitted')
     if (!res.ok) return res
     if (isApi) {
-      return { ok: true, id: res.id ?? '', escalated: false, hoursGapMinutes: res.hoursGapMinutes ?? null }
+      return { ok: true, id: res.id ?? '', escalated: res.escalated ?? false, hoursGapMinutes: res.hoursGapMinutes ?? null }
     }
 
     let escalated = false
     if (input.issues.trim()) {
-      const raised = useEscalations().raise({
+      const raised = await useEscalations().raise({
         reason: 'issue_reported',
         targetMemberId: currentUser.value.id,
         context: `日報（${input.date}）で課題の記入: 「${input.issues.trim()}」`,

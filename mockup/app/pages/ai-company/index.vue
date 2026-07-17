@@ -19,8 +19,8 @@ const { ask } = useConfirm()
 // ---------- シグナル検知（stalled_task / overload） ----------
 
 // 補助処理: 画面表示後に非ブロッキングで検知する（evaluateWorkloadSignals は内部で例外を握りつぶす）
-onMounted(() => {
-  const { raised } = evaluateWorkloadSignals()
+onMounted(async () => {
+  const { raised } = await evaluateWorkloadSignals()
   if (raised > 0) {
     show(`${raised}件のシグナルをエスカレーションしました`, 'warn', { label: '確認する', to: '/inbox' })
   }

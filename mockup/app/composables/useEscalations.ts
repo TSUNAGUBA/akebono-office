@@ -3,7 +3,12 @@
  * シグナル検知 → 起票（暗黙の情報共有）→ 管理者アクション → ナレッジ還流
  * - 起票は dedupeKey + クールダウンで冪等
  * - 起票・還流は補助処理: 失敗しても主フローを止めない
+ *
+ * デュアルモード（バッチ3a）:
+ * - API モード: SoT は /v1/escalations。一覧は管理者のみ参照可（サーバー側ガード）。
+ *   起票・解決はサーバーが冪等性・クレーム・通知・ナレッジ還流を担い、成功後にキャッシュを取り直す（原則6）
  */
+import type { Ref } from 'vue'
 import type { Escalation, EscalationReason, KnowledgeDomain, Result } from '~/types/domain'
 import { ESCALATION_REASON_LABELS } from '~/utils/labels'
 
@@ -15,17 +20,45 @@ export interface EscalationSignal {
   dedupeKey: string
 }
 
+// ---------- API モードのキャッシュ（SPA・モジュールスコープ単一） ----------
+
+const apiEscalations = ref<Escalation[]>([])
+
+function loadEscalations(force = false): Promise<void> {
+  return apiLoadOnce('esc:list', async () => {
+    apiEscalations.value = await apiFetch<Escalation[]>('/v1/escalations')
+  }, force)
+}
+
+// ログイン確立・切替時に取り直す（管理者のみ。一般ユーザーは 403 になるため空のまま）
+onApiReset(() => {
+  apiEscalations.value = []
+  if (useApiMe().value?.role === 'admin') void loadEscalations(true)
+})
+
 export function useEscalations() {
   const { tbl, commit, nextId } = useMockDb()
-  const { currentUser } = useCurrentUser()
+  const { currentUser, isAdmin } = useCurrentUser()
   const { notifyAdmins, notify } = useNotifications()
-  const escalations = tbl('escalations')
+  const isApi = useApiMode()
+  // API モードはキャッシュをバッキングにし、以降の射影ロジックを共通利用する
+  const escalations = isApi ? (apiEscalations as Ref<Escalation[]>) : tbl('escalations')
   const rules = tbl('escalationRules')
+  if (isApi && isAdmin.value) void loadEscalations()
 
-  const open = computed(() =>
-    escalations.value.filter(e => e.status === 'open').sort((a, b) => b.raisedAt.localeCompare(a.raisedAt)))
-  const resolved = computed(() =>
-    escalations.value.filter(e => e.status === 'resolved').sort((a, b) => b.raisedAt.localeCompare(a.raisedAt)))
+  /** API モード時、参照されたら管理者一覧を遅延ロードする（初期化順序に依存しない自己修復） */
+  function touchList(): void {
+    if (isApi && isAdmin.value) void loadEscalations()
+  }
+
+  const open = computed(() => {
+    touchList()
+    return escalations.value.filter(e => e.status === 'open').sort((a, b) => b.raisedAt.localeCompare(a.raisedAt))
+  })
+  const resolved = computed(() => {
+    touchList()
+    return escalations.value.filter(e => e.status === 'resolved').sort((a, b) => b.raisedAt.localeCompare(a.raisedAt))
+  })
   const openCount = computed(() => open.value.length)
   const refluxRate = computed(() => {
     const rulings = resolved.value.filter(e => e.resolution?.type === 'ruling')
@@ -37,7 +70,21 @@ export function useEscalations() {
    * シグナルから起票する。ルール無効・クールダウン中は起票しない（no-op）。
    * 例外を投げない（補助処理）。
    */
-  function raise(signal: EscalationSignal): Result {
+  async function raise(signal: EscalationSignal): Promise<Result> {
+    if (isApi) {
+      // サーバーがルール判定・クールダウン・管理者通知を担う（AKO-ESC-001/002 は非致命の想定エラー）
+      const res = await apiResult(() => apiFetch<{ id: string }>('/v1/escalations', {
+        method: 'POST',
+        body: {
+          reason: signal.reason,
+          targetMemberId: signal.targetMemberId,
+          context: signal.context,
+          dedupeKey: signal.dedupeKey,
+        },
+      }))
+      if (res.ok && isAdmin.value) void loadEscalations(true)
+      return res
+    }
     try {
       const rule = rules.value.find(r => r.key === signal.reason)
       if (rule && !rule.enabled) {
@@ -80,13 +127,25 @@ export function useEscalations() {
    * open → resolved のガードで二重解決を防止（クレームファースト）。
    * @param knowledgeTarget 裁定のナレッジ還流先（domain + targetId）。省略時はフォールバック先へ還流する
    */
-  function resolve(
+  async function resolve(
     id: string,
     type: 'answer' | 'ruling' | 'no_action',
     body: string,
     reflectToKnowledge = false,
     knowledgeTarget?: { domain: KnowledgeDomain; targetId: string },
-  ): Result {
+  ): Promise<Result> {
+    if (isApi) {
+      // クレーム（open → resolved）・ナレッジ還流・本人通知はサーバーが担う → 成功後にキャッシュを取り直す
+      const res = await apiResult(() => apiFetch<{ id: string; knowledgeReflected: boolean }>(
+        `/v1/escalations/${id}/resolution`,
+        { method: 'POST', body: { type, body, reflectKnowledge: reflectToKnowledge, knowledgeTarget } },
+      ))
+      if (res.ok) {
+        await loadEscalations(true)
+        if (reflectToKnowledge) void loadApiCollection('knowledge', true)
+      }
+      return res
+    }
     const target = escalations.value.find(e => e.id === id)
     if (!target || target.status !== 'open') {
       return { ok: false, error: { code: 'AKO-ESC-003', message: 'このエスカレーションは既に解決済みです' } }
@@ -142,5 +201,14 @@ export function useEscalations() {
     return escalations.value.find(e => e.id === id)
   }
 
-  return { open, resolved, openCount, refluxRate, raise, resolve, byId }
+  /**
+   * 一覧の取り直し（inbox 表示時に呼ぶ）。
+   * 起票はサーバー側（日報提出・36協定・チャットボット）でも発生するため、
+   * キャッシュ済みでも表示タイミングで最新化する。モックモードは no-op
+   */
+  async function refresh(): Promise<void> {
+    if (isApi && isAdmin.value) await loadEscalations(true)
+  }
+
+  return { open, resolved, openCount, refluxRate, raise, resolve, byId, refresh }
 }

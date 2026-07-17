@@ -57,10 +57,10 @@ function onKeydown(e: KeyboardEvent): void {
 }
 
 /** サジェストチップ: エスカレーション用チップだけは送信せず起票する */
-function onSuggestion(msg: ChatMessage, s: string): void {
+async function onSuggestion(msg: ChatMessage, s: string): Promise<void> {
   if (s === ESCALATE_SUGGESTION) {
     const question = questionBefore(msg.id)
-    const r = escalate(question)
+    const r = await escalate(question)
     if (r.ok) toast.show('管理者にエスカレーションしました。回答があれば通知されます', 'ok', { label: '確認', to: '/inbox' })
     else toast.show(r.error.message, 'info')
     return

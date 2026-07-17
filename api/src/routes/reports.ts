@@ -11,6 +11,7 @@ import { nowJstIso, todayJst } from '../../../shared/domain/jst'
 import type { PunchRecord, ReportEntry } from '../../../shared/domain/types'
 import { requireAdmin } from '../auth'
 import { daySummary } from '../domain/attendance'
+import { raiseEscalation } from '../lib/escalate'
 import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
 import { notify } from '../lib/notify'
@@ -148,7 +149,19 @@ export function reportsRoutes(pool: pg.Pool): Hono {
       client.release()
     }
     const gap = status === 'submitted' ? await hoursGapMinutes(pool, user.id, body.date, entries) : null
-    return c.json({ data: { id, status, hoursGapMinutes: gap } })
+    // 提出成立後の補助処理: 課題記入あり → エスカレーション起票（mockup submit と同一挙動）。
+    // クールダウン（AKO-ESC-001）は既に管理者へ共有済みとして escalated = true を返す
+    let escalated = false
+    if (status === 'submitted' && (body.issues ?? '').trim()) {
+      const raised = await raiseEscalation(pool, {
+        reason: 'issue_reported',
+        targetMemberId: user.id,
+        context: `日報（${body.date}）で課題の記入: 「${(body.issues ?? '').trim()}」`,
+        dedupeKey: `issue:${user.id}:${body.date}`,
+      })
+      escalated = raised.raised || raised.code === 'AKO-ESC-001'
+    }
+    return c.json({ data: { id, status, hoursGapMinutes: gap, escalated } })
   })
 
   // 週報一覧 / 保存（提出済みは編集不可）

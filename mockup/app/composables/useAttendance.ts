@@ -330,13 +330,16 @@ export function useAttendance() {
 
   /** 残業アラートをエスカレーションへ連携（補助処理・冪等） */
   function raiseOvertimeEscalations(memberId: string): void {
-    // API モードはエスカレーション API 化（バッチ3）まで未発火（モックストアへの起票は行わない）
-    if (isApi) return
+    if (isApi) {
+      // サーバー側で 36 協定判定 → 起票（dedupe + クールダウンで冪等。失敗は握りつぶす = 補助処理）
+      void apiFetch('/v1/escalations/overtime-check', { method: 'POST' }).catch(() => {})
+      return
+    }
     const found = alerts(memberId)
     if (found.length === 0) return
     const { raise } = useEscalations()
     const month = todayJst().slice(0, 7)
-    raise({
+    void raise({
       reason: 'overtime_alert',
       targetMemberId: memberId,
       context: `36協定アラート: ${found.map(a => a.message).join(' / ')}`,

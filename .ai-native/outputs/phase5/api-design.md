@@ -119,7 +119,7 @@ generateDraft(memberId, date): ReportDraft           // 保存しない（フォ
 | useReportAssist.generateDraft | LLM 構造化出力（responseSchema）+ 失敗時は本ヒューリスティックへフォールバック（ai-manager 方式）。タスク計画の結果（F-14）を含めて生成 |
 | useTaskPlans.aiReview | LLM（計画の批評: 目的の具体性・達成条件の検証可能性・段取り分解を観点にした構造化出力）+ 失敗時は本ヒューリスティックへフォールバック |
 | useLeave | `GET/POST /v1/leave/requests`（+ `/decision`）・`GET/POST /v1/leave/grants`（+ `/bulk`。冪等キー: memberId×leaveTypeId×grantDate。権限: admin/hr）（**実装・フロント接続済み**。grants/requests をハイドレーションし残数射影は共通ロジック） |
-| useEscalations.resolve | `POST /api/escalations/{id}/resolution`（ai-manager 方式: open→resolved のアトミッククレーム→失敗時補償） |
+| useEscalations | `GET/POST /v1/escalations`・`POST /v1/escalations/:id/resolution`・`POST /v1/escalations/overtime-check`（**実装・フロント接続済み**。起票 = dedupe + クールダウン冪等、解決 = open→resolved クレーム + ナレッジ還流 + 本人通知） |
 | useMasterCrud | `GET/POST/PATCH /v1/masters/{entity}`（**実装・フロント接続済み** = useMasterCrudAsync） |
 | useReports | `GET/PUT /v1/reports/daily`（month / from-to）・`GET/PUT /v1/reports/weekly`・`GET/POST /v1/reports/:id/comments`・`POST /v1/reports/comments/:id/reactions`（トグル）・`POST /v1/reports/remind`（**実装・フロント接続済み**。月単位の遅延ロードキャッシュ + SoT 書込→再取得） |
 | useNotifications | `GET /v1/notifications`・`POST /v1/notifications/:id/read`・`POST /v1/notifications/read-all`（**実装・フロント接続済み**。60 秒ポーリング。発火はサーバー側 = 未接続ドメインの notify はクライアント no-op） |
@@ -183,10 +183,10 @@ generateDraft(memberId, date): ReportDraft           // 保存しない（フォ
 | AKO-CAL-007 | 未連携での同期・反映操作 | |
 | AKO-RAS-001 | ヒアリング回答が空 | |
 | AKO-RAS-002 | ぽいぽいメモが空 | |
-| AKO-ESC-001 | クールダウン中の重複起票（no-op 情報） | |
-| AKO-ESC-002 | 無効化されたシグナルの起票 | |
-| AKO-ESC-003 | 解決済みエスカレーションへの再操作 | |
-| AKO-ESC-999 | 起票失敗（主フローは継続 = 非ブロッキング） | |
+| AKO-ESC-001 | クールダウン中の重複起票（no-op 情報） | ✅ |
+| AKO-ESC-002 | 無効化されたシグナルの起票 | ✅ |
+| AKO-ESC-003 | 解決済みエスカレーションへの再操作 | ✅ |
+| AKO-ESC-999 | 起票失敗（主フローは継続 = 非ブロッキング） | ✅ |
 | AKO-DEC-001 | 判断テーマが見つからない | |
 | AKO-DEC-002 | 選択肢が見つからない | |
 | AKO-DEC-003 | 判断理由未入力 | |
