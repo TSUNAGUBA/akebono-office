@@ -179,7 +179,9 @@ body {
 .link:hover { text-decoration: underline; }
 
 /* テーブル（UiDataTable の PC 表示） */
-.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+/* isolation: テーブル内 sticky セル（列固定 th/td の z-index）を表内だけの重なり順に閉じ込め、
+   ページ上部の固定ヘッダー（z-20）と競合させない（端末により日付ヘッダーが手前に描画される実バグ対応） */
+.tbl { width: 100%; border-collapse: collapse; font-size: 13px; isolation: isolate; }
 .tbl th {
   text-align: left;
   font-size: 11px;

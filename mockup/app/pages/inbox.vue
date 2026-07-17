@@ -12,7 +12,10 @@ import { ESCALATION_RESOLUTION_LABELS, KNOWLEDGE_DOMAIN_LABELS, NOTIFICATION_KIN
 
 const { isAdmin } = useCurrentUser()
 const { mine, unreadCount, markRead, markAllRead } = useNotifications()
-const { open, resolved, openCount, refluxRate, resolve, byId } = useEscalations()
+const { open, resolved, openCount, refluxRate, resolve, byId, refresh: refreshEscalations } = useEscalations()
+
+// サーバー側で起票されたエスカレーション（日報提出・36協定等）を表示時に最新化する
+onMounted(() => { void refreshEscalations() })
 const { show } = useToast()
 
 // 還流先候補の生成に使うマスタ（読み取りのみ）
@@ -123,7 +126,7 @@ function openRespond(e: Escalation): void {
   resError.value = ''
 }
 
-function submitRespond(): void {
+async function submitRespond(): Promise<void> {
   const target = respondTarget.value
   if (!target) return
   if ((resType.value === 'answer' || resType.value === 'ruling') && !resBody.value.trim()) {
@@ -135,7 +138,7 @@ function submitRespond(): void {
     resError.value = '還流先の対象を選択してください'
     return
   }
-  const r = resolve(
+  const r = await resolve(
     target.id,
     resType.value,
     resBody.value.trim(),
@@ -217,10 +220,6 @@ function submitRespond(): void {
 
     <!-- ================= エスカレーションタブ（管理者のみ） ================= -->
     <div v-else-if="tab === 'escalations' && isAdmin" class="grid gap-3">
-      <!-- API モードではエスカレーションは未接続（バッチ3）= デモデータのまま -->
-      <div class="flex justify-end">
-        <UiMockBadge label="モックアップ（エスカレーションはバッチ3 で本実装予定）" />
-      </div>
       <!-- KPI -->
       <div class="grid grid-cols-2 gap-2 md:grid-cols-3">
         <UiKpiCard label="対応待ち" :value="`${openCount}件`" sub="open のエスカレーション" icon="Flame" />

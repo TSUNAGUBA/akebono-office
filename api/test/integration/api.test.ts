@@ -489,3 +489,74 @@ describe('設定・監査', () => {
     expect(logs.some(l => l.entity === 'company_relations' && l.action === 'delete')).toBe(true)
   })
 })
+
+describe('エスカレーション', () => {
+  it('日報の課題提出で起票され管理者へ通知。クールダウンで重複起票しない', async () => {
+    const submit = await api('PUT', '/v1/reports/daily', {
+      as: HR,
+      body: {
+        date: '2026-07-18',
+        entries: [{ projectId: 'pj-x', task: '実装', hours: 8, progress: 50 }],
+        issues: '仕様が未確定でブロック中',
+        status: 'submitted',
+      },
+    })
+    expect(submit.status).toBe(200)
+    expect((submit.json.data as { escalated: boolean }).escalated).toBe(true)
+
+    // 一覧は管理者のみ
+    expect((await api('GET', '/v1/escalations', { as: MEMBER })).status).toBe(403)
+    const list = (await api('GET', '/v1/escalations', { as: ADMIN })).json.data as
+      { id: string; reason: string; status: string; targetMemberId: string }[]
+    const esc = list.find(e => e.reason === 'issue_reported' && e.targetMemberId === HR)
+    expect(esc?.status).toBe('open')
+
+    // 起票で管理者へ kind 'escalation' の通知
+    const adminNotes = (await api('GET', '/v1/notifications', { as: ADMIN })).json.data as { kind: string }[]
+    expect(adminNotes.some(n => n.kind === 'escalation')).toBe(true)
+
+    // 同一メンバーはクールダウン中の再起票をスキップ（AKO-ESC-001）
+    const dup = await api('POST', '/v1/escalations', {
+      as: HR, body: { reason: 'issue_reported', context: '別件', dedupeKey: `issue:${HR}:2026-07-19` },
+    })
+    expect(dup.status).toBe(409)
+    expect(dup.json.error?.code).toBe('AKO-ESC-001')
+  })
+
+  it('裁定 + ナレッジ還流 → 二重解決は AKO-ESC-003。回答は本人へ通知', async () => {
+    const list = (await api('GET', '/v1/escalations', { as: ADMIN })).json.data as
+      { id: string; reason: string; status: string; targetMemberId: string }[]
+    const esc = list.find(e => e.reason === 'issue_reported' && e.targetMemberId === HR)!
+
+    // member は解決不可
+    expect((await api('POST', `/v1/escalations/${esc.id}/resolution`, { as: MEMBER, body: { type: 'no_action' } })).status).toBe(403)
+
+    const res = await api('POST', `/v1/escalations/${esc.id}/resolution`, {
+      as: ADMIN,
+      body: { type: 'ruling', body: '仕様は A 案で確定とする', reflectKnowledge: true, knowledgeTarget: { domain: 'project', targetId: 'pj-x' } },
+    })
+    expect(res.status).toBe(200)
+    expect((res.json.data as { knowledgeReflected: boolean }).knowledgeReflected).toBe(true)
+
+    const again = await api('POST', `/v1/escalations/${esc.id}/resolution`, { as: ADMIN, body: { type: 'no_action' } })
+    expect(again.status).toBe(409)
+    expect(again.json.error?.code).toBe('AKO-ESC-003')
+
+    // ナレッジへ還流された記事が存在（source=escalation・sourceRefId 一致）
+    const ka = (await api('GET', '/v1/masters/knowledge', { as: ADMIN })).json.data as
+      { source: string; sourceRefId: string | null; tags: string[] }[]
+    expect(ka.some(k => k.source === 'escalation' && k.sourceRefId === esc.id)).toBe(true)
+
+    // 回答フロー: 別メンバーの起票 → answer 解決 → 本人へ通知
+    const raised = await api('POST', '/v1/escalations', {
+      as: MEMBER, body: { reason: 'issue_reported', context: '承認フローの相談', dedupeKey: `issue:${MEMBER}:2026-07-20` },
+    })
+    expect(raised.status).toBe(201)
+    const raisedId = (raised.json.data as { id: string }).id
+    expect((await api('POST', `/v1/escalations/${raisedId}/resolution`, {
+      as: ADMIN, body: { type: 'answer', body: '来週の定例で決めましょう' },
+    })).status).toBe(200)
+    const memberNotes = (await api('GET', '/v1/notifications', { as: MEMBER })).json.data as { kind: string; title: string }[]
+    expect(memberNotes.some(n => n.kind === 'escalation' && n.title === '管理者からの回答')).toBe(true)
+  })
+})

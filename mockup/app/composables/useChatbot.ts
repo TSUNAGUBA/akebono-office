@@ -95,8 +95,11 @@ export function useChatbot() {
     commit()
   }
 
-  /** フォールバック応答からのエスカレーション起票（補助処理・非ブロッキング） */
-  function escalate(question: string): Result {
+  /**
+   * フォールバック応答からのエスカレーション起票（補助処理・非ブロッキング）。
+   * 応答生成はモックだが、質問は実際のユーザー入力のため API モードでも実データへ起票する
+   */
+  function escalate(question: string): Promise<Result> {
     return useEscalations().raise({
       reason: 'low_confidence',
       targetMemberId: currentUser.value.id,

@@ -358,7 +358,9 @@ export function useAiCompany() {
    * ルールの enabled / クールダウンは raise 側が判定するため二重チェックしない。
    * 補助処理のため例外は握りつぶし、呼び出し元（画面表示）をブロックしない。
    */
-  function evaluateWorkloadSignals(): { raised: number } {
+  async function evaluateWorkloadSignals(): Promise<{ raised: number }> {
+    // AI カンパニーはモック実装（バッチ4）のため、API モードでは実データへ起票しない
+    if (useApiMode()) return { raised: 0 }
     let raised = 0
     try {
       const stalledThreshold = escalationRules.value.find(r => r.key === 'stalled_task')?.threshold ?? 3
@@ -376,7 +378,7 @@ export function useAiCompany() {
         const lastKey = (lastAt ?? task.createdAt).slice(0, 10)
         if (lastKey > stalledCutoff) continue
         const days = Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${lastKey}T00:00:00Z`)) / 86_400_000)
-        const r = raise({
+        const r = await raise({
           reason: 'stalled_task',
           targetAiEmployeeId: task.aiEmployeeId,
           context: `AIタスク「${task.title}」が${days}日間更新されていません`,
@@ -390,7 +392,7 @@ export function useAiCompany() {
       for (const emp of aiEmployees.value.filter(e => e.active)) {
         const count = aiTasks.value.filter(t => t.aiEmployeeId === emp.id && openStatuses.includes(t.status)).length
         if (count <= overloadThreshold) continue
-        const r = raise({
+        const r = await raise({
           reason: 'overload',
           targetAiEmployeeId: emp.id,
           context: `${emp.name} の保有タスクが${count}件に達しています`,
