@@ -8,7 +8,7 @@ import { ACTIVE_FILTER_OPTIONS, matchesActiveFilter } from '~/components/masters
 import type { Industry } from '~/types/domain'
 import type { FieldDef, TableColumn } from '~/types/ui'
 
-const crud = useMasterCrud('industries', 'ind')
+const crud = useMasterCrudAsync('industries', 'ind')
 const toast = useToast()
 const confirm = useConfirm()
 
@@ -87,19 +87,19 @@ function openCreate(): void {
   drawerOpen.value = true
 }
 
-function openEdit(): void {
+async function openEdit(): Promise<void> {
   if (!selected.value) return
   form.value = JSON.parse(JSON.stringify(selected.value)) as Record<string, unknown>
   errors.value = {}
   mode.value = 'edit'
 }
 
-function cancelEdit(): void {
+async function cancelEdit(): Promise<void> {
   if (mode.value === 'edit') mode.value = 'view'
   else drawerOpen.value = false
 }
 
-function save(): void {
+async function save(): Promise<void> {
   const e: Record<string, string> = {}
   if (!String(form.value.name ?? '').trim()) e.name = '業界名は必須です'
   errors.value = e
@@ -112,7 +112,7 @@ function save(): void {
     displayOrder: Number(form.value.displayOrder ?? 1),
   }
   if (mode.value === 'edit' && selectedId.value) payload.id = selectedId.value
-  const res = crud.save(payload)
+  const res = await crud.save(payload)
   if (!res.ok) {
     toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
     return
@@ -130,14 +130,14 @@ async function archiveSelected(): Promise<void> {
     { danger: true, confirmLabel: '無効化' },
   )
   if (!ok) return
-  const res = crud.archive(selected.value.id)
+  const res = await crud.archive(selected.value.id)
   if (res.ok) toast.show('無効化しました', 'warn')
   else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
 }
 
-function restoreSelected(): void {
+async function restoreSelected(): Promise<void> {
   if (!selected.value) return
-  const res = crud.restore(selected.value.id)
+  const res = await crud.restore(selected.value.id)
   if (res.ok) toast.show('復元しました')
   else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
 }

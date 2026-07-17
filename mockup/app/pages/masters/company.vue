@@ -8,9 +8,9 @@ import { splitAliases } from '~/components/masters/MasterShell.vue'
 import type { Company, CustomValues } from '~/types/domain'
 import type { FieldDef } from '~/types/ui'
 
-const crud = useMasterCrud('companies', 'c')
-const industryCrud = useMasterCrud('industries', 'ind')
-const memberCrud = useMasterCrud('members', 'm')
+const crud = useMasterCrudAsync('companies', 'c')
+const industryCrud = useMasterCrudAsync('industries', 'ind')
+const memberCrud = useMasterCrudAsync('members', 'm')
 const { itemsOf } = useCodeMaster()
 const { defsFor, formSchemaFor } = useCustomFields()
 const toast = useToast()
@@ -25,7 +25,7 @@ const form = ref<Record<string, unknown>>({
 })
 const errors = ref<Record<string, string>>({})
 
-function loadForm(s: Company): void {
+async function loadForm(s: Company): Promise<void> {
   const clone = JSON.parse(JSON.stringify(s)) as Record<string, unknown>
   form.value = {
     ...clone,
@@ -78,7 +78,7 @@ const formFields = computed<FieldDef[]>(() => [
   ...formSchemaFor('company'),
 ])
 
-function save(): void {
+async function save(): Promise<void> {
   const e: Record<string, string> = {}
   if (!String(form.value.name ?? '').trim()) e.name = '会社名は必須です'
   const industryIds = (form.value.industryIds as string[] | undefined) ?? []
@@ -114,7 +114,7 @@ function save(): void {
   }
   if (self.value) payload.id = self.value.id
 
-  const res = crud.save(payload)
+  const res = await crud.save(payload)
   if (!res.ok) {
     toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
     return

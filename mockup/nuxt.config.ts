@@ -6,6 +6,16 @@ export default defineNuxtConfig({
   compatibilityDate: '2025-05-01',
   devtools: { enabled: false },
   css: ['~/assets/css/main.css'],
+  runtimeConfig: {
+    public: {
+      /** API モード切替（NUXT_PUBLIC_API_BASE。空 = 従来どおりの完全モック動作） */
+      apiBase: '',
+      /** dev 認証（NUXT_PUBLIC_DEV_MEMBER_ID。ローカル・E2E 専用。x-dev-member-id で送出） */
+      devMemberId: '',
+      /** Firebase Web アプリ設定 JSON（NUXT_PUBLIC_FIREBASE_CONFIG。API モードのログインに使用） */
+      firebaseConfig: '',
+    },
+  },
   vite: {
     plugins: [tailwindcss()],
   },

@@ -61,8 +61,16 @@ export function useMockDb() {
     }
   }
 
-  /** 型付きコレクション参照。変更後は commit() を呼ぶ */
+  /**
+   * 型付きコレクション参照。変更後は commit() を呼ぶ。
+   * API モード（NUXT_PUBLIC_API_BASE 設定時）ではマイグレーション済みコレクションのみ
+   * API ハイドレーションキャッシュを返す（SoT は API/PostgreSQL。書込は useMasterCrudAsync 等の
+   * API 経路のみ。未移行コレクションは従来どおりモックシード + localStorage）。
+   */
   function tbl<K extends keyof MockDbShape>(name: K): Ref<MockDbShape[K]> {
+    if (useApiMode() && isMigratedCollection(name as string)) {
+      return apiCollection(name as string) as unknown as Ref<MockDbShape[K]>
+    }
     return computed({
       get: () => db.value[name],
       set: (v) => { db.value[name] = v },

@@ -56,11 +56,27 @@ flowchart LR
 
 クライアントは「表示と入力」に限定する。モックで composables に実装した計算ロジックは、フロント接続（バッチ2）の完了をもって API 呼び出しへ置き換え、クライアント側の計算実装は削除する（暫定期間の二重実装は implementation-status.md で追跡）。
 
+## 2.5 フロント接続方式（バッチ2a で確立）
+
+- **デュアルモード:** `NUXT_PUBLIC_API_BASE` 未設定 = 完全モック動作（localStorage。デモ配信の下位互換）。
+  設定時 = API モード。移行済みコレクション（マスタ 15 種 + 監査ログ + 設定）は `useMockDb.tbl()` が
+  **API ハイドレーションキャッシュ**を返すため、全画面の参照が一貫して API データになる（読み取りは中央で切替）
+- **書込:** `useMasterCrudAsync`（マスタ）/ `useAppSettings`（設定）が API を呼び、レスポンスでキャッシュを更新
+  （SoT 書込 → キャッシュ反映の順序 = 原則6）。バリデーション・ガードはサーバーが担い、エラーはモック互換の
+  Result 形式（`AKO-*` コード）で画面へ返る
+- **未移行ドメイン**（勤怠・日報・通知等のフロント）は API モードでもモックデータで動く（バッチ2b で順次接続。
+  移行状況の SoT は implementation-status.md）
+
 ## 3. 認証・認可
 
 - **認証:** Firebase Authentication。SPA がログインで取得した **ID トークン**を `Authorization: Bearer` で送付し、API が Google の JWKS（`securetoken@system.gserviceaccount.com`）で署名・`iss`/`aud` を検証する。検証後、トークンの email と `members.email`（在籍者・一意）を突合して業務ユーザーを解決する
 - **認可:** `members.role`（`admin` / `hr` / `member`）による API 側ガード。他人の勤怠・休暇参照は管理者/人事のみ（C3 データ保護）。マスタ変更は管理者のみ（休暇種別・勤怠ルールは人事も可）
 - **開発・テスト:** `AUTH_MODE=dev` では `x-dev-member-id` ヘッダで成りすまし（ローカル・CI 専用。本番は必ず `firebase`）
+- **フロントのログイン（バッチ2a）:** `/login` ページ（メール/パスワード・Google。Firebase Web SDK は動的 import で
+  モックモードのバンドルに含めない）。認証ゲートはグローバルミドルウェア（API モードのみ有効）。members 未登録の
+  アカウントは案内を表示（AKO-AUTH-002）。フロントの dev 認証は `NUXT_PUBLIC_DEV_MEMBER_ID`（E2E 用）
+- **バッチジョブ:** `/jobs/periodic-leave-grants`（周期有給付与）は Cloud Scheduler からの共有鍵認証
+  （`x-cron-key` = 環境変数 `CRON_SECRET`。未設定時はエンドポイント無効 = 管理者/人事の手動実行のみ）
 - **エラーコード:** AKO-AUTH-001（未認証/トークン不正）/ 002（メンバー未登録）/ 003（権限不足）
 - Cloud Run は `--allow-unauthenticated`（IAM ではなくアプリ層で認証）。CORS は Hosting のオリジンのみ許可（`CORS_ORIGINS`）
 
@@ -129,12 +145,14 @@ flowchart LR
 | `PORT` | — | 既定 8080（Cloud Run が注入） |
 | `MIGRATE_ON_START` | — | `0` で起動時マイグレーションを無効化（既定は有効） |
 | `DB_POOL_MAX` | — | プール上限（既定 5。Cloud Run 並行数と掛け算になるため控えめ） |
+| `CRON_SECRET` | — | `/jobs/*` の共有鍵（Cloud Scheduler 用。未設定ならジョブエンドポイント無効） |
 
 ## 9. 段階移行計画（モック → 本番）
 
-1. **バッチ1（本 PR）:** API+DB・認証基盤・CI/CD — 完了
-2. **バッチ2:** フロント接続。`useMockDb` 依存の composable を API クライアントへ差し替え（対象: 勤怠・休暇・日報・マスタ・設定）。Firebase Auth ログイン UI。通知/エスカレーション API。周期有給付与バッチ
-3. **バッチ3:** AI業務アシスタント・カレンダー連携・ワークフロー・シフト（LLM/OAuth はサーバーサイド）
-4. **バッチ4:** 意思決定支援・AI カンパニー・売上・稼働状況・チャットボット・mart ETL
+1. **バッチ1（PR #12・マージ済み）:** API+DB・認証基盤・CI/CD — 完了
+2. **バッチ2a（本 PR）:** フロント接続基盤（デュアルモード・ログイン UI・dev 認証）+ マスタ/設定のフロント接続 + 通知 API + 周期有給付与 — 完了
+3. **バッチ2b:** 勤怠・休暇・日報・通知のフロント接続（inbox・ダッシュボード含む）
+4. **バッチ3:** AI業務アシスタント・カレンダー連携・ワークフロー・シフト・エスカレーション API（LLM/OAuth はサーバーサイド）
+5. **バッチ4:** 意思決定支援・AI カンパニー・売上・稼働状況・チャットボット・mart ETL
 
 進捗の SoT: `implementation-status.md`（実装 PR ごとに更新）

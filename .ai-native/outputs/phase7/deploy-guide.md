@@ -103,6 +103,43 @@
 2. Cloud Run の環境変数 `DB_SSL=verify`・`DB_SSL_CA=<PEM の内容>` を設定
    （量が多い場合は Secret Manager に格納し `--set-secrets DB_SSL_CA=...` で注入）
 
+## 1-6. フロントエンドを API 接続版で配信する（バッチ2a 以降・任意）
+
+既定の配信は**モックモード**（デモ）。実データ（RDS）に接続した画面を配信するには 2 段階で行う:
+
+1. まず api をデプロイして Cloud Run URL を確認（1-3〜1-4）
+2. Firebase Console > プロジェクトの設定 > マイアプリ（Web アプリ）から firebaseConfig JSON を取得し、
+   Authentication でプロバイダ（メール/パスワード・Google 等）を有効化
+3. secrets を追加して再デプロイ:
+   ```powershell
+   ./scripts/setup-deploy-secrets.ps1 -ProjectId <project> -ServiceAccountJsonPath ./deploy-sa.json `
+     -ApiBaseUrl 'https://akebono-office-api-xxxx.a.run.app' `
+     -FirebaseWebConfigJsonPath ./firebase-web-config.json -TriggerDeploy
+   ```
+   → 以後の `deploy-mockup` は `NUXT_PUBLIC_API_BASE` / `NUXT_PUBLIC_FIREBASE_CONFIG` 付きでビルドされ、
+   ログイン必須の API 接続版が配信される（`API_BASE_URL` secret を削除すればモックモードへ戻る）
+4. 利用者の email を メンバーマスタに登録する（API はログイン email と `members.email` を突合する）。
+   最初の管理者だけは SQL で投入する:
+   ```sql
+   INSERT INTO app_office.members (id, name, email, role) VALUES ('m-admin', '管理者名', 'admin@your.co.jp', 'admin');
+   ```
+   以後のメンバーは画面（マスタメンテナンス > メンバー）から登録できる
+
+## 1-7. 有給の周期自動付与（Cloud Scheduler・任意）
+
+管理者/人事が画面外から `POST /v1/leave/periodic-grants/run` を叩けば手動実行できる（冪等）。
+毎日自動実行する場合:
+
+1. Cloud Run サービスに環境変数 `CRON_SECRET`（長いランダム文字列）を追加
+2. Cloud Scheduler ジョブを作成:
+   ```bash
+   gcloud scheduler jobs create http periodic-leave-grants \
+     --schedule "0 6 * * *" --time-zone "Asia/Tokyo" \
+     --uri "https://<cloud-run-url>/jobs/periodic-leave-grants" \
+     --http-method POST --headers "x-cron-key=<CRON_SECRET と同じ値>"
+   ```
+   付与は UNIQUE 制約（メンバー × 種別 × 付与日）で冪等のため、多重実行しても二重付与されない
+
 ## 2. 日常デプロイ（開発者）
 
 - **自動:** main へマージ → 変更パスに応じて mockup / api が自動デプロイ

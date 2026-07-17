@@ -326,6 +326,79 @@ describe('マスタ CRUD', () => {
   })
 })
 
+describe('通知', () => {
+  it('休暇申請で管理者へ、承認で申請者へ通知される。本人のみ参照・既読化できる', async () => {
+    const before = await api('GET', '/v1/notifications', { as: ADMIN })
+    const beforeCount = (before.json.data as unknown[]).length
+
+    const req = await api('POST', '/v1/leave/requests', {
+      as: MEMBER, body: { date: '2026-09-01', unit: 'full', leaveTypeId: 'lt-paid' },
+    })
+    expect(req.status).toBe(201)
+    const adminAfter = await api('GET', '/v1/notifications', { as: ADMIN })
+    const adminNotes = adminAfter.json.data as { id: string; kind: string; title: string; read: boolean }[]
+    expect(adminNotes.length).toBe(beforeCount + 1)
+    expect(adminNotes[0]?.kind).toBe('approval')
+
+    const reqId = ((req.json.data as { id: string }).id)
+    await api('POST', `/v1/leave/requests/${reqId}/decision`, { as: HR, body: { action: 'rejected' } })
+    const memberNotes = (await api('GET', '/v1/notifications?unread=1', { as: MEMBER })).json.data as { id: string; title: string }[]
+    expect(memberNotes.some(n => n.title.includes('却下'))).toBe(true)
+
+    // 他人の通知は既読化できない・本人は既読化できる
+    const target = memberNotes[0]!
+    expect((await api('POST', `/v1/notifications/${target.id}/read`, { as: ADMIN })).status).toBe(404)
+    expect((await api('POST', `/v1/notifications/${target.id}/read`, { as: MEMBER })).status).toBe(200)
+    expect((await api('POST', '/v1/notifications/read-all', { as: MEMBER })).status).toBe(200)
+    const unread = (await api('GET', '/v1/notifications?unread=1', { as: MEMBER })).json.data as unknown[]
+    expect(unread.length).toBe(0)
+  })
+
+  it('日報リマインドは管理者のみ実行でき、対象者へ通知される', async () => {
+    expect((await api('POST', '/v1/reports/remind', { as: MEMBER, body: { memberId: HR, date: '2026-07-15' } })).status).toBe(403)
+    expect((await api('POST', '/v1/reports/remind', { as: ADMIN, body: { memberId: HR, date: '2026-07-15' } })).status).toBe(200)
+    const notes = (await api('GET', '/v1/notifications?unread=1', { as: HR })).json.data as { kind: string }[]
+    expect(notes.some(n => n.kind === 'reminder')).toBe(true)
+  })
+})
+
+describe('周期有給付与', () => {
+  it('入社日基準で付与され、再実行は全件スキップ（冪等）。一般ユーザーは実行不可', async () => {
+    // 勤続 1.6 年（付与 2 回到来: 0.5 年で 10 日 / 1.5 年で 11 日）のメンバーを追加
+    const hire = new Date()
+    hire.setMonth(hire.getMonth() - 19)
+    const hireKey = `${hire.getFullYear()}-${String(hire.getMonth() + 1).padStart(2, '0')}-${String(hire.getDate()).padStart(2, '0')}`
+    const created = await api('POST', '/v1/masters/members', {
+      as: ADMIN,
+      body: { name: '周期 付与子', email: 'periodic@example.com', hireDate: hireKey, weeklyDays: 5, weeklyHours: 40 },
+    })
+    expect(created.status).toBe(201)
+    const newMemberId = (created.json.data as { id: string }).id
+
+    expect((await api('POST', '/v1/leave/periodic-grants/run', { as: MEMBER })).json.error?.code).toBe('AKO-LEV-004')
+
+    const first = await api('POST', '/v1/leave/periodic-grants/run', { as: HR })
+    expect(first.status).toBe(200)
+    const r1 = first.json.data as { granted: number; skipped: number }
+    expect(r1.granted).toBeGreaterThanOrEqual(2) // 新メンバーの 2 回分（既存メンバーは hireDate なし）
+
+    const grants = (await api('GET', `/v1/leave/grants?memberId=${newMemberId}`, { as: HR })).json.data as { days: number; kind: string; grantedBy: string | null }[]
+    expect(grants.length).toBe(2)
+    expect(grants.map(g => g.days).sort()).toEqual([10, 11])
+    expect(grants.every(g => g.kind === 'normal' && g.grantedBy === null)).toBe(true)
+
+    const second = await api('POST', '/v1/leave/periodic-grants/run', { as: HR })
+    const r2 = second.json.data as { granted: number; skipped: number }
+    expect(r2.granted).toBe(0)
+    expect(r2.skipped).toBeGreaterThanOrEqual(2)
+  })
+
+  it('/jobs エンドポイントは CRON_SECRET 必須', async () => {
+    const res = await app.request('/jobs/periodic-leave-grants', { method: 'POST' })
+    expect(res.status).toBe(401) // CRON_SECRET 未設定時は常に拒否
+  })
+})
+
 describe('設定・監査', () => {
   it('設定の upsert は管理者のみ・冪等。全員が参照可', async () => {
     expect((await api('PUT', '/v1/configs/reportInputMode', { as: MEMBER, body: { value: 'form' } })).status).toBe(403)

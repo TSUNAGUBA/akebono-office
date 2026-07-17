@@ -10,13 +10,11 @@ import { Plus } from 'lucide-vue-next'
 import type { Company, CompanyRelation, Contact, ContactRelation, RelationType } from '~/types/domain'
 import type { FieldDef, TableColumn } from '~/types/ui'
 
-const companyCrud = useMasterCrud('companies', 'c')
-const contactCrud = useMasterCrud('contacts', 'p')
-const rtCrud = useMasterCrud('relationTypes', 'rt')
-const crCrud = useMasterCrud('companyRelations', 'cr')
-const prCrud = useMasterCrud('contactRelations', 'pr')
-const { tbl, commit, nextId } = useMockDb()
-const { currentUser } = useCurrentUser()
+const companyCrud = useMasterCrudAsync('companies', 'c')
+const contactCrud = useMasterCrudAsync('contacts', 'p')
+const rtCrud = useMasterCrudAsync('relationTypes', 'rt')
+const crCrud = useMasterCrudAsync('companyRelations', 'cr')
+const prCrud = useMasterCrudAsync('contactRelations', 'pr')
 const toast = useToast()
 const confirm = useConfirm()
 
@@ -39,29 +37,11 @@ function rtOf(id: string): RelationType | undefined {
   return rtCrud.byId(id) as RelationType | undefined
 }
 
-/** エッジ削除の監査ログ（補助処理・非ブロッキング） */
-function auditDelete(entity: string, entityId: string, detail: string): void {
-  try {
-    const logs = tbl('auditLogs')
-    logs.value = [...logs.value, {
-      id: nextId('auditLogs', 'aud'),
-      actorId: currentUser.value.id,
-      action: 'delete',
-      entity,
-      entityId,
-      detail,
-      at: nowJstIso(),
-    }]
-  } catch {
-    // 監査ログ失敗は主フローを止めない
-  }
-}
-
 // ========== (a) 会社間関係 ==========
 
 const selCompany = ref<string | null>(null)
 
-function onSelectCompany(id: string): void {
+async function onSelectCompany(id: string): Promise<void> {
   selCompany.value = selCompany.value === id ? null : id
 }
 
@@ -114,7 +94,7 @@ const companyRtOptions = computed(() =>
 const crForm = ref({ from: '', typeId: '', to: '', notes: '' })
 const crError = ref('')
 
-function addCompanyRelation(): void {
+async function addCompanyRelation(): Promise<void> {
   const f = crForm.value
   if (!f.from || !f.typeId || !f.to) {
     crError.value = 'AKO-GEN-001: From・関係種別・To は必須です'
@@ -133,7 +113,7 @@ function addCompanyRelation(): void {
     relationTypeId: f.typeId,
     notes: f.notes.trim(),
   }
-  const res = crCrud.save(payload)
+  const res = await crCrud.save(payload)
   if (!res.ok) {
     toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
     return
@@ -150,10 +130,11 @@ async function deleteCompanyRelation(row: Record<string, unknown>): Promise<void
     { danger: true, confirmLabel: '削除' },
   )
   if (!ok) return
-  const rows = tbl('companyRelations')
-  rows.value = rows.value.filter(r => r.id !== id)
-  auditDelete('companyRelations', id, '会社間関係を削除')
-  commit()
+  const res = await crCrud.remove(id)
+  if (!res.ok) {
+    toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
+    return
+  }
   toast.show('会社間の関係を削除しました', 'warn')
 }
 
@@ -161,7 +142,7 @@ async function deleteCompanyRelation(row: Record<string, unknown>): Promise<void
 
 const selContact = ref<string | null>(null)
 
-function onSelectContact(id: string): void {
+async function onSelectContact(id: string): Promise<void> {
   selContact.value = selContact.value === id ? null : id
 }
 
@@ -202,7 +183,7 @@ const contactRtOptions = computed(() =>
 const prForm = ref({ from: '', typeId: '', to: '', notes: '' })
 const prError = ref('')
 
-function addContactRelation(): void {
+async function addContactRelation(): Promise<void> {
   const f = prForm.value
   if (!f.from || !f.typeId || !f.to) {
     prError.value = 'AKO-GEN-001: From・関係種別・To は必須です'
@@ -221,7 +202,7 @@ function addContactRelation(): void {
     relationTypeId: f.typeId,
     notes: f.notes.trim(),
   }
-  const res = prCrud.save(payload)
+  const res = await prCrud.save(payload)
   if (!res.ok) {
     toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
     return
@@ -238,10 +219,11 @@ async function deleteContactRelation(row: Record<string, unknown>): Promise<void
     { danger: true, confirmLabel: '削除' },
   )
   if (!ok) return
-  const rows = tbl('contactRelations')
-  rows.value = rows.value.filter(r => r.id !== id)
-  auditDelete('contactRelations', id, '人どうしの関係を削除')
-  commit()
+  const res = await prCrud.remove(id)
+  if (!res.ok) {
+    toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
+    return
+  }
   toast.show('人どうしの関係を削除しました', 'warn')
 }
 
@@ -281,21 +263,21 @@ const rtFormFields: FieldDef[] = [
   },
 ]
 
-function openRtCreate(): void {
+async function openRtCreate(): Promise<void> {
   rtEditingId.value = null
   rtForm.value = { label: '', direction: 'directed', appliesTo: 'company' }
   rtErrors.value = {}
   rtModalOpen.value = true
 }
 
-function openRtEdit(row: Record<string, unknown>): void {
+async function openRtEdit(row: Record<string, unknown>): Promise<void> {
   rtEditingId.value = String(row.id)
   rtForm.value = JSON.parse(JSON.stringify(row)) as Record<string, unknown>
   rtErrors.value = {}
   rtModalOpen.value = true
 }
 
-function saveRt(): void {
+async function saveRt(): Promise<void> {
   const e: Record<string, string> = {}
   if (!String(rtForm.value.label ?? '').trim()) e.label = '名称は必須です'
   rtErrors.value = e
@@ -309,7 +291,7 @@ function saveRt(): void {
     appliesTo: rtForm.value.appliesTo as RelationType['appliesTo'],
   }
   if (rtEditingId.value) payload.id = rtEditingId.value
-  const res = rtCrud.save(payload)
+  const res = await rtCrud.save(payload)
   if (!res.ok) {
     toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
     return
@@ -326,7 +308,7 @@ async function archiveRt(): Promise<void> {
     { danger: true, confirmLabel: '無効化' },
   )
   if (!ok) return
-  const res = rtCrud.archive(rtEditing.value.id)
+  const res = await rtCrud.archive(rtEditing.value.id)
   if (res.ok) {
     toast.show('無効化しました', 'warn')
     rtModalOpen.value = false
@@ -335,9 +317,9 @@ async function archiveRt(): Promise<void> {
   }
 }
 
-function restoreRt(): void {
+async function restoreRt(): Promise<void> {
   if (!rtEditing.value) return
-  const res = rtCrud.restore(rtEditing.value.id)
+  const res = await rtCrud.restore(rtEditing.value.id)
   if (res.ok) {
     toast.show('復元しました')
     rtModalOpen.value = false
