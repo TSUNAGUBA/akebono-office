@@ -30,7 +30,11 @@ onMounted(async () => {
   if (q === 'connected') {
     await cal.refreshStatus()
     const r = await cal.syncFromGoogle(currentUser.value.id, todayJst())
-    show(`Google カレンダーを連携しました（本日の予定 ${r.ok ? r.synced ?? 0 : 0} 件を同期）`, 'ok')
+    if (r.ok) {
+      show(`Google カレンダーを連携しました（本日の予定 ${r.synced ?? 0} 件を同期）`, 'ok')
+    } else {
+      show(`連携は完了しましたが初回同期に失敗しました: ${r.error.message}`, 'warn')
+    }
   } else {
     show('Google カレンダーの連携に失敗しました。時間をおいて再試行してください', 'warn')
   }
@@ -71,9 +75,12 @@ async function disconnect(): Promise<void> {
 </script>
 
 <template>
+  <!-- 状態取得中は何も出さない（未設定バナーの誤表示防止） -->
+  <div v-if="!cal.isStatusLoaded.value" aria-hidden="true" />
+
   <!-- 連携機能が未設定（API モードで OAuth 未投入）: 案内のみ -->
   <div
-    v-if="!cal.isEnabled.value"
+    v-else-if="!cal.isEnabled.value"
     class="flex items-center gap-2 rounded-lg border border-line bg-surface-soft px-3 py-1.5 text-xs text-muted"
   >
     <CalendarOff class="h-3.5 w-3.5" aria-hidden="true" />

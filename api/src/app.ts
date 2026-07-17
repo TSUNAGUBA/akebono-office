@@ -17,6 +17,7 @@ import { notificationsRoutes } from './routes/notifications'
 import { reportsRoutes } from './routes/reports'
 import { assistRoutes } from './routes/assist'
 import { calendarOauthCallback, calendarRoutes } from './routes/calendar'
+import { chatbotRoutes } from './routes/chatbot'
 import { shiftsRoutes } from './routes/shifts'
 import { taskPlansRoutes } from './routes/task-plans'
 import { workflowsRoutes } from './routes/workflows'
@@ -77,6 +78,7 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
   app.route('/v1/task-plans', taskPlansRoutes(pool, env))
   app.route('/v1/assist', assistRoutes(pool, env))
   app.route('/v1/calendar', calendarRoutes(pool, env))
+  app.route('/v1/chatbot', chatbotRoutes(pool, env))
 
   app.notFound(c => c.json({ error: { code: 'AKO-GEN-404', message: 'エンドポイントが見つかりません' } }, 404))
 

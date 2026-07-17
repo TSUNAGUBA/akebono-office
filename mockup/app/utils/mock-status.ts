@@ -10,7 +10,6 @@ const MOCK_PAGE_PATHS = new Set<string>([
   '/ai-company',
   '/sales',
   '/status',
-  '/support/chatbot',
 ])
 
 /** このパスのページが API モードでもモックデータ動作か（バッジ表示判定） */
