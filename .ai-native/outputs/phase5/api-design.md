@@ -110,12 +110,12 @@ generateDraft(memberId, date): ReportDraft           // 保存しない（フォ
 
 | composable | 将来のエンドポイント（例） |
 |---|---|
-| useAttendance.punch | `POST /api/attendance/punches`（冪等キー付き） |
+| useAttendance | `POST /v1/attendance/punches`・`GET /v1/attendance/state`・`GET /v1/attendance/day`（?raw=1 で修正履歴）・`GET /v1/attendance/month`・`GET /v1/attendance/alerts`・`GET /v1/attendance/timecard`・`POST /v1/attendance/fix-requests`（+ `/decision`）（**実装・フロント接続済み**。月サマリキャッシュから日次・週次を射影） |
 | useWorkflow.act | `POST /api/workflows/{id}/actions`（クレームファースト: 条件付き UPDATE） |
 | useCalendar.syncFromGoogle | Google Calendar API（OAuth 2.0 増分認可・calendar.readonly/events スコープ。Webhook push + 手動再同期の両立）。トークンはサーバー側で暗号化保管（C3 相当・クライアントへ出さない）。アプリの連携解除時はトークン破棄 + Google 側 revoke を呼び、Google 側での取消は次回 API 401 で検知して連携状態へ反映する |
 | useReportAssist.generateDraft | LLM 構造化出力（responseSchema）+ 失敗時は本ヒューリスティックへフォールバック（ai-manager 方式）。タスク計画の結果（F-14）を含めて生成 |
 | useTaskPlans.aiReview | LLM（計画の批評: 目的の具体性・達成条件の検証可能性・段取り分解を観点にした構造化出力）+ 失敗時は本ヒューリスティックへフォールバック |
-| useLeave.grant / bulkGrant | `POST /api/leave/grants`（冪等キー: memberId×leaveTypeId×grantDate。権限: admin/hr ロール） |
+| useLeave | `GET/POST /v1/leave/requests`（+ `/decision`）・`GET/POST /v1/leave/grants`（+ `/bulk`。冪等キー: memberId×leaveTypeId×grantDate。権限: admin/hr）（**実装・フロント接続済み**。grants/requests をハイドレーションし残数射影は共通ロジック） |
 | useEscalations.resolve | `POST /api/escalations/{id}/resolution`（ai-manager 方式: open→resolved のアトミッククレーム→失敗時補償） |
 | useMasterCrud | `GET/POST/PATCH /v1/masters/{entity}`（**実装・フロント接続済み** = useMasterCrudAsync） |
 | useReports | `GET/PUT /v1/reports/daily`（month / from-to）・`GET/PUT /v1/reports/weekly`・`GET/POST /v1/reports/:id/comments`・`POST /v1/reports/comments/:id/reactions`（トグル）・`POST /v1/reports/remind`（**実装・フロント接続済み**。月単位の遅延ロードキャッシュ + SoT 書込→再取得） |

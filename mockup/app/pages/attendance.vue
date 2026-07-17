@@ -25,8 +25,9 @@ const { tbl } = useMockDb()
 const { currentUser, isAdmin, isHrOrAdmin } = useCurrentUser()
 const {
   fixRequests, ruleFor, punchesRawOf, daySummary, monthSummary, alerts,
-  raiseOvertimeEscalations, requestFix, decideFix,
+  raiseOvertimeEscalations, requestFix, decideFix, timecardApi,
 } = useAttendance()
+const isApi = useApiMode()
 const leave = useLeave()
 const { show } = useToast()
 const { ask } = useConfirm()
@@ -183,13 +184,13 @@ function openFixModal(): void {
   fixOpen.value = true
 }
 
-function submitFix(): void {
+async function submitFix(): Promise<void> {
   fixError.value = ''
   if (!fixForm.value.time) {
     fixError.value = '修正時刻を入力してください'
     return
   }
-  const r = requestFix({
+  const r = await requestFix({
     date: selDate.value,
     kind: fixForm.value.kind as PunchKind,
     requestedAt: `${selDate.value}T${fixForm.value.time}:00+09:00`,
@@ -377,9 +378,9 @@ function openLeaveModal(): void {
   leaveOpen.value = true
 }
 
-function submitLeave(): void {
+async function submitLeave(): Promise<void> {
   leaveError.value = ''
-  const r = leave.request({
+  const r = await leave.request({
     leaveTypeId: leaveForm.value.leaveTypeId,
     date: leaveForm.value.date,
     unit: leaveForm.value.unit as LeaveRequest['unit'],
@@ -472,7 +473,7 @@ async function onDecide(row: Record<string, unknown>, action: 'approved' | 'reje
     })
     if (!ok) return
   }
-  const r = row.reqKind === 'fix' ? decideFix(id, action) : leave.decide(id, action)
+  const r = await (row.reqKind === 'fix' ? decideFix(id, action) : leave.decide(id, action))
   if (r.ok) {
     show(action === 'approved'
       ? `申請を承認しました${row.reqKind === 'fix' ? '（打刻へ反映済み）' : ''}`
@@ -540,8 +541,26 @@ const tcMembers = computed(() => {
 })
 
 /** 打刻のある日×メンバーの行のみ表示（出勤/退勤は有効打刻の先頭 in・末尾 out） */
-const timecardRows = computed(() =>
-  tcDates.value.flatMap(date =>
+const timecardRows = computed(() => {
+  if (isApi) {
+    // サーバー集計（GET /v1/attendance/timecard）。氏名はクライアント側で絞り込む（入力ごとの再取得を避ける）
+    const from = tcDates.value[tcDates.value.length - 1]
+    const to = tcDates.value[0]
+    if (!from || !to) return []
+    const q = tcName.value.trim().toLowerCase()
+    return timecardApi(from, to, tcDeptId.value)
+      .filter(r => !q || r.name.toLowerCase().includes(q))
+      .map(r => ({
+        id: `${r.memberId}-${r.date}`,
+        memberId: r.memberId,
+        date: r.date,
+        name: r.name,
+        inTime: r.inAt ? fmtTime(r.inAt) : '—',
+        outTime: r.outAt ? fmtTime(r.outAt) : '—',
+        workHours: fmtMinutes(r.workMinutes),
+      }))
+  }
+  return tcDates.value.flatMap(date =>
     tcMembers.value.flatMap((m) => {
       const punches = effectivePunches(punchesRawOf(m.id, date))
       if (punches.length === 0) return []
@@ -556,7 +575,8 @@ const timecardRows = computed(() =>
         outTime: lastOut ? fmtTime(lastOut.at) : '—',
         workHours: fmtMinutes(daySummary(m.id, date).workMinutes),
       }]
-    })))
+    }))
+})
 
 /** タイムカードの行クリック → 日次タブでその日・そのメンバーを開く */
 function openTimecardRow(row: Record<string, unknown>): void {
@@ -632,13 +652,13 @@ function openGrantModal(): void {
   grantOpen.value = true
 }
 
-function submitGrant(): void {
+async function submitGrant(): Promise<void> {
   grantError.value = ''
   if (!grantForm.value.memberId) {
     grantError.value = '付与するメンバーを選択してください'
     return
   }
-  const r = leave.grant({
+  const r = await leave.grant({
     memberId: grantForm.value.memberId,
     leaveTypeId: grantForm.value.leaveTypeId,
     days: Number(grantForm.value.days),
@@ -700,7 +720,7 @@ async function submitBulk(): Promise<void> {
     { confirmLabel: '一括付与' },
   )
   if (!ok) return
-  const r = leave.bulkGrant({
+  const r = await leave.bulkGrant({
     memberIds: targets.map(m => m.id),
     leaveTypeId: bulkForm.value.leaveTypeId,
     days: Number(bulkForm.value.days),

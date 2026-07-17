@@ -1,14 +1,51 @@
 /**
  * 休暇管理（F-04-5 / F-04-9）: 付与・FIFO 引当による残数・年5日取得義務・申請/承認・手動付与
- * - 休暇種別は leaveTypes マスタ（F-10-10）。有給（lt-paid）は周期自動付与、特別休暇は権限者の手動付与
- * - 付与の SoT は leaveGrants（有給は history.ts が労基法 39 条テーブルから生成。特別休暇は grant/bulkGrant）
+ * - 休暇種別は leaveTypes マスタ（F-10-10）。有給（lt-paid）は周期自動付与、特別休暇は権利者の手動付与
+ * - 付与の SoT は leaveGrants（有給は周期付与 API。特別休暇は grant/bulkGrant）
  * - 消化の SoT は leaveRequests（approved のみ残数に影響。half は 0.5 日）
  * - 残数 = 付与 − 消化（expireDate 超過分は除外。法定有給のみ保有上限 40 日）
  * - 付与（grant/bulkGrant）と申請の承認/却下は 管理者/人事（isHrOrAdmin）のみ実行可
+ *
+ * デュアルモード（バッチ2b-2）:
+ * - API モードは /v1/leave の grants/requests をハイドレーションし、残数・義務の射影
+ *   （balance/obligation = 純関数）は共通利用する。書込（申請・承認・付与）は API を呼んでから
+ *   キャッシュを取り直す（原則6）。残数チェック等の最終判定はサーバー側が FOR UPDATE で行う。
  */
+import type { Ref } from 'vue'
 import type { LeaveGrant, LeaveRequest, LeaveType, Result } from '~/types/domain'
 import type { Tone } from '~/types/ui'
 import { toDateKey } from '~/utils/format'
+
+// ---------- API モードのキャッシュ（SPA・モジュールスコープ単一） ----------
+
+const apiGrants = ref<LeaveGrant[]>([])
+const apiRequests = ref<LeaveRequest[]>([])
+
+function loadGrants(force = false): Promise<void> {
+  return apiLoadOnce('leave:grants', async () => {
+    const me = useApiMe().value
+    const scopeAll = me?.role === 'admin' || me?.role === 'hr'
+    apiGrants.value = await apiFetch<LeaveGrant[]>('/v1/leave/grants',
+      { query: scopeAll ? {} : { memberId: me?.id ?? '' } })
+  }, force)
+}
+
+function loadRequests(force = false): Promise<void> {
+  return apiLoadOnce('leave:requests', async () => {
+    const me = useApiMe().value
+    const scopeAll = me?.role === 'admin' || me?.role === 'hr'
+    apiRequests.value = await apiFetch<LeaveRequest[]>('/v1/leave/requests',
+      { query: scopeAll ? { scope: 'all' } : {} })
+  }, force)
+}
+
+// ログイン確立・切替時に取り直す（キーの解除は resetApiData が一括で行う）
+onApiReset(() => {
+  apiGrants.value = []
+  apiRequests.value = []
+  void loadGrants(true)
+  void loadRequests(true)
+})
 
 /** 法定有給の休暇種別 id（labels ではなくシード規約。seed/core.ts の seedLeaveTypes と一致） */
 export const PAID_LEAVE_TYPE_ID = 'lt-paid'
@@ -93,9 +130,15 @@ export function useLeave() {
   const { tbl, commit, nextId } = useMockDb()
   const { currentUser, isHrOrAdmin } = useCurrentUser()
   const { notify, notifyAdmins } = useNotifications()
-  const grants = tbl('leaveGrants')
-  const requests = tbl('leaveRequests')
+  const isApi = useApiMode()
+  // API モードは付与・申請をサーバーからハイドレーションし、残数等の射影ロジックを共通利用する
+  const grants = isApi ? (apiGrants as Ref<LeaveGrant[]>) : tbl('leaveGrants')
+  const requests = isApi ? (apiRequests as Ref<LeaveRequest[]>) : tbl('leaveRequests')
   const leaveTypes = tbl('leaveTypes')
+  if (isApi) {
+    void loadGrants()
+    void loadRequests()
+  }
 
   const activeLeaveTypes = computed(() =>
     leaveTypes.value.filter(t => t.active).sort((a, b) => a.displayOrder - b.displayOrder))
@@ -217,7 +260,7 @@ export function useLeave() {
   }
 
   /** 休暇申請（種別別の残数チェック → pending 追記 → 管理者へ通知） */
-  function request(input: { date: string; unit: LeaveRequest['unit']; reason: string; leaveTypeId?: string }): Result {
+  async function request(input: { date: string; unit: LeaveRequest['unit']; reason: string; leaveTypeId?: string }): Promise<Result> {
     if (!input.date) {
       return { ok: false, error: { code: 'AKO-GEN-001', message: '取得日を選択してください' } }
     }
@@ -230,6 +273,15 @@ export function useLeave() {
         ok: false,
         error: { code: 'AKO-LEV-001', message: `${typeName}の残数が不足しています（残 ${bal.remaining} 日 / 必要 ${needed} 日）。付与状況をご確認ください` },
       }
+    }
+    if (isApi) {
+      // 残数の最終判定・管理者通知はサーバー。成立後に申請一覧を取り直す（原則6）
+      const res = await apiResult(() => apiFetch<{ id: string }>('/v1/leave/requests', {
+        method: 'POST',
+        body: { date: input.date, unit: input.unit, reason: input.reason, leaveTypeId },
+      }))
+      if (res.ok) await loadRequests(true)
+      return res
     }
     const id = nextId('leaveRequests', 'lv')
     requests.value = [...requests.value, {
@@ -251,9 +303,16 @@ export function useLeave() {
   }
 
   /** 休暇申請の承認/却下（管理者/人事）。pending ガード + decidedBy 記録 + 申請者へ通知 */
-  function decide(requestId: string, action: 'approved' | 'rejected'): Result {
+  async function decide(requestId: string, action: 'approved' | 'rejected'): Promise<Result> {
     if (!isHrOrAdmin.value) {
       return { ok: false, error: { code: 'AKO-LEV-003', message: 'この操作には管理者または人事の権限が必要です' } }
+    }
+    if (isApi) {
+      // pending ガード・残数再チェック・申請者通知はサーバー（FOR UPDATE）。成立後に一覧を取り直す
+      const res = await apiResult(() =>
+        apiFetch(`/v1/leave/requests/${requestId}/decision`, { method: 'POST', body: { action } }))
+      if (res.ok) await loadRequests(true)
+      return res
     }
     const req = requests.value.find(r => r.id === requestId)
     if (!req || req.status !== 'pending') {
@@ -295,7 +354,7 @@ export function useLeave() {
    * 休暇の個別付与。冪等ガード: 同一メンバー × 種別 × 付与日の重複付与はスキップする
    * （誤操作・一括付与の再実行で残数が二重に増えるのを防ぐ）。
    */
-  function grant(input: { memberId: string; leaveTypeId: string; days: number; grantDate?: string }): Result & { skipped?: boolean } {
+  async function grant(input: { memberId: string; leaveTypeId: string; days: number; grantDate?: string }): Promise<Result & { skipped?: boolean }> {
     if (!isHrOrAdmin.value) {
       return { ok: false, error: { code: 'AKO-LEV-004', message: '休暇の付与には管理者または人事の権限が必要です' } }
     }
@@ -305,6 +364,16 @@ export function useLeave() {
     }
     if (!(input.days > 0) || input.days > 40) {
       return { ok: false, error: { code: 'AKO-LEV-006', message: '付与日数は 1〜40 日で入力してください' } }
+    }
+    if (isApi) {
+      // 冪等（同一メンバー×種別×付与日はスキップ）・本人通知はサーバー。成立後に付与一覧を取り直す
+      try {
+        const data = await apiFetch<{ id?: string; skipped: boolean }>('/v1/leave/grants', { method: 'POST', body: input })
+        await loadGrants(true)
+        return data.skipped ? { ok: true, skipped: true } : { ok: true, id: data.id }
+      } catch (e) {
+        return { ok: false, error: apiErrorOf(e) }
+      }
     }
     const grantDate = input.grantDate || todayJst()
     const dup = grants.value.some(g =>
@@ -339,18 +408,28 @@ export function useLeave() {
    * 一括付与（夏季休暇等を特定の対象へまとめて付与）。
    * 個別付与を対象者分繰り返す（重複はスキップ）。一部失敗でも続行し、結果件数を返す。
    */
-  function bulkGrant(input: { memberIds: string[]; leaveTypeId: string; days: number; grantDate?: string }):
-  Result & { granted?: number; skipped?: number } {
+  async function bulkGrant(input: { memberIds: string[]; leaveTypeId: string; days: number; grantDate?: string }):
+  Promise<Result & { granted?: number; skipped?: number }> {
     if (!isHrOrAdmin.value) {
       return { ok: false, error: { code: 'AKO-LEV-004', message: '休暇の付与には管理者または人事の権限が必要です' } }
     }
     if (input.memberIds.length === 0) {
       return { ok: false, error: { code: 'AKO-LEV-007', message: '付与対象のメンバーを選択してください' } }
     }
+    if (isApi) {
+      // 一括付与はサーバーが 1 リクエストで処理（重複スキップで冪等）。成立後に付与一覧を取り直す
+      try {
+        const data = await apiFetch<{ granted: number; skipped: number }>('/v1/leave/grants/bulk', { method: 'POST', body: input })
+        await loadGrants(true)
+        return { ok: true, ...data }
+      } catch (e) {
+        return { ok: false, error: apiErrorOf(e) }
+      }
+    }
     let granted = 0
     let skipped = 0
     for (const memberId of input.memberIds) {
-      const r = grant({ memberId, leaveTypeId: input.leaveTypeId, days: input.days, grantDate: input.grantDate })
+      const r = await grant({ memberId, leaveTypeId: input.leaveTypeId, days: input.days, grantDate: input.grantDate })
       if (!r.ok) return { ok: false, error: r.error } // 権限・種別・日数エラーは全員共通のため即返す
       if (r.skipped) skipped++
       else granted++

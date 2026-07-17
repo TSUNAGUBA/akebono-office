@@ -23,8 +23,6 @@ import { addDays, weekdayOf } from '~/utils/format'
 const apiDaily = ref<DailyReport[]>([])
 const apiWeekly = ref<WeeklyReport[]>([])
 const apiComments = ref<ReportComment[]>([])
-const loadedKeys = new Set<string>()
-const inflightKeys = new Map<string, Promise<void>>()
 
 function mergeById<T extends { id: string }>(store: Ref<T[]>, rows: T[]): void {
   const map = new Map(store.value.map(r => [r.id, r]))
@@ -32,46 +30,32 @@ function mergeById<T extends { id: string }>(store: Ref<T[]>, rows: T[]): void {
   store.value = [...map.values()]
 }
 
-/** キー単位の遅延ロード（同一キーは一度だけ。force で取り直し） */
-function loadOnce(key: string, fetcher: () => Promise<void>, force = false): Promise<void> {
-  if (!force && (loadedKeys.has(key) || inflightKeys.has(key))) {
-    return inflightKeys.get(key) ?? Promise.resolve()
-  }
-  const p = fetcher()
-    .then(() => { loadedKeys.add(key) })
-    .catch(() => { /* 未認証・一時エラーは空のまま（再訪・リセットで再試行） */ })
-    .finally(() => { inflightKeys.delete(key) })
-  inflightKeys.set(key, p)
-  return p
-}
-
 function loadMineMonth(month: string, force = false): Promise<void> {
-  return loadOnce(`mine:${month}`, async () => {
+  return apiLoadOnce(`rep:mine:${month}`, async () => {
     mergeById(apiDaily, await apiFetch<DailyReport[]>('/v1/reports/daily', { query: { month } }))
   }, force)
 }
 
 function loadTeamRange(from: string, to: string, force = false): Promise<void> {
-  return loadOnce(`team:${from}:${to}`, async () => {
+  return apiLoadOnce(`rep:team:${from}:${to}`, async () => {
     mergeById(apiDaily, await apiFetch<DailyReport[]>('/v1/reports/daily', { query: { scope: 'team', from, to } }))
   }, force)
 }
 
 function loadWeekly(force = false): Promise<void> {
-  return loadOnce('weekly', async () => {
+  return apiLoadOnce('rep:weekly', async () => {
     mergeById(apiWeekly, await apiFetch<WeeklyReport[]>('/v1/reports/weekly'))
   }, force)
 }
 
 function loadComments(reportId: string, force = false): Promise<void> {
-  return loadOnce(`comments:${reportId}`, async () => {
+  return apiLoadOnce(`rep:comments:${reportId}`, async () => {
     mergeById(apiComments, await apiFetch<ReportComment[]>(`/v1/reports/${reportId}/comments`))
   }, force)
 }
 
-// ログイン確立・切替時に取り直す
+// ログイン確立・切替時に取り直す（キーの解除は resetApiData が一括で行う）
 onApiReset(() => {
-  loadedKeys.clear()
   apiDaily.value = []
   apiWeekly.value = []
   apiComments.value = []
@@ -212,11 +196,12 @@ export function useReports() {
 
   // ---------- 工数乖離チェック ----------
 
-  /** 工数合計と勤怠実労働の乖離。60 分超のときのみ符号付き分数を返す（打刻がない日は対象外 = null） */
+  /**
+   * 工数合計と勤怠実労働の乖離。60 分超のときのみ符号付き分数を返す（打刻がない日は対象外 = null）。
+   * API モードの daySummary はサーバー集計キャッシュ（未ロード時は 0 = null 扱いで、到着後に追従する）。
+   * 提出時の確定値はサーバー計算（提出レスポンス）が SoT。
+   */
   function hoursGapMinutes(memberId: string, date: string, entries: ReportEntry[]): number | null {
-    // API モードの勤怠はモックデータのため参照しない（提出時はサーバー計算値を表示。
-    // 一覧上の乖離バッジは勤怠フロント接続=バッチ2b-2 で有効化）
-    if (isApi) return null
     try {
       const work = useAttendance().daySummary(memberId, date).workMinutes
       if (work <= 0) return null

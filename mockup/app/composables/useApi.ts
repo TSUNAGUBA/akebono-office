@@ -220,6 +220,27 @@ export async function loadApiCollection(name: string, force = false): Promise<vo
   return promise
 }
 
+// ---------- キー単位の一度きりロード（ドメイン別キャッシュ共通ヘルパー） ----------
+
+const onceLoaded = new Set<string>()
+const onceInflight = new Map<string, Promise<void>>()
+
+/**
+ * キー単位の遅延ロード（同一キーは一度だけ。force で取り直し）。
+ * 失敗は握りつぶしてキーを未ロードに戻す（再訪・resetApiData で再試行）。
+ */
+export function apiLoadOnce(key: string, fetcher: () => Promise<void>, force = false): Promise<void> {
+  if (!force && (onceLoaded.has(key) || onceInflight.has(key))) {
+    return onceInflight.get(key) ?? Promise.resolve()
+  }
+  const p = fetcher()
+    .then(() => { onceLoaded.add(key) })
+    .catch(() => { onceLoaded.delete(key) })
+    .finally(() => { onceInflight.delete(key) })
+  onceInflight.set(key, p)
+  return p
+}
+
 /**
  * 認証確立後・ログイン切替後の再取得フック。
  * useApi 管轄外のキャッシュ（通知・日報等のドメイン別キャッシュ）はここに登録する。
@@ -232,6 +253,7 @@ export function onApiReset(hook: () => void): void {
 /** 認証確立後・ログイン切替後にコレクションを取り直す */
 export function resetApiData(): void {
   loadedCollections.clear()
+  onceLoaded.clear()
   for (const name of stores.keys()) void loadApiCollection(name, true)
   for (const hook of resetHooks) hook()
 }
