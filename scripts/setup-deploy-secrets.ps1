@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   GitHub Actions デプロイ（.github/workflows/deploy.yml）が参照する
   Repository secrets を PowerShell だけで設定するスクリプト。
