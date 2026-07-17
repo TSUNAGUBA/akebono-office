@@ -277,7 +277,7 @@ export function reportsRoutes(pool: pg.Pool): Hono {
     // 補助処理: 日報作成者へ通知（自分の日報・AI 日報は除く。mockup と同一挙動）
     if (target.authorKind === 'human' && target.memberId && target.memberId !== user.id) {
       await notify(pool, target.memberId, 'comment',
-        `日報（${target.date}）にコメント`, `${user.name}: ${text.slice(0, 60)}`, '/reports')
+        `日報（${target.date}）にコメント`, `${user.name}: ${[...text].slice(0, 60).join('')}`, '/reports')
     }
     return c.json({ data: { id } }, 201)
   })

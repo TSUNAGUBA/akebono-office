@@ -168,7 +168,7 @@ async function llmDraft(env: Env, ctx: DraftContext, date: string): Promise<Repo
   return {
     entries: res.entries.slice(0, 20).map(e => ({
       projectId: validProjects.has(e.projectId) ? e.projectId : '',
-      task: String(e.task ?? '').slice(0, 120),
+      task: [...String(e.task ?? '')].slice(0, 120).join(''),
       hours: toQuarterHours(Math.min(24, Math.max(0, Number(e.hours) || 0)) * 60),
       progress: Math.min(100, Math.max(0, Math.round(Number(e.progress) || 0))),
     })),
