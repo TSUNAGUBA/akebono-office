@@ -74,11 +74,36 @@ export function useChatbot() {
     }, 90)
   }
 
-  /** 質問を送信する（user メッセージ即保存 → 応答をストリーミング） */
-  function send(rawText: string): void {
+  /**
+   * 質問を送信する（user メッセージ即保存 → 応答をストリーミング）。
+   * API モードは LLM 一次応答（POST /v1/chatbot/ask。サーバーが本人の勤怠・有給・顧客・ナレッジを文脈化）を
+   * 試み、fallback 指示・通信失敗時は既存の決定的ルーティング応答へ縮退する
+   * （移行済みドメインは API モードでもキャッシュ = 実データを参照するため応答は正しい）
+   */
+  const isApi = useApiMode()
+
+  async function send(rawText: string): Promise<void> {
     const text = rawText.trim().slice(0, 2000)
     if (!text || isStreaming.value) return
     append({ role: 'user', content: text, sources: [], suggestions: [] })
+    if (isApi) {
+      isStreaming.value = true // LLM 応答待ちの間も入力を抑止し「考え中」を表示
+      try {
+        const res = await apiFetch<{
+          fallback: boolean; content?: string; sources?: string[]; suggestions?: string[]
+        }>('/v1/chatbot/ask', { method: 'POST', body: { question: text } })
+        if (!res.fallback && res.content) {
+          startStream({
+            content: res.content,
+            sources: res.sources ?? [],
+            suggestions: (res.suggestions?.length ? res.suggestions : INITIAL_SUGGESTIONS.slice(0, 2)),
+          })
+          return
+        }
+      } catch {
+        // 通信失敗も決定的応答へ縮退（下の共通経路）
+      }
+    }
     startStream(answer(text))
   }
 

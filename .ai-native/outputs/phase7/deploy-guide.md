@@ -224,6 +224,13 @@ DATABASE_URL=postgresql://... AUTH_MODE=dev npm run dev
 | `permission denied to create extension` 等 | 本マイグレーションは拡張不要（gen_random_uuid 不使用）。カスタム SQL を足す際は RDS の権限制約に注意 |
 | Cloud Run から RDS への接続が遅い | 東京リージョン同士か確認（asia-northeast1 ⇄ ap-northeast-1）。恒常的に問題になる場合は production-architecture.md §5 の案 B / Cloud SQL 移行を検討 |
 
+### カレンダー連携: エラー 400 redirect_uri_mismatch
+
+OAuth クライアントの「承認済みのリダイレクト URI」とアプリが送る URI の不一致。Google のエラー画面の
+「エラーの詳細」に表示される `redirect_uri` の値を**一字一句そのまま**登録する（Cloud Run の URL には
+旧形式 `*-an.a.run.app` と新形式 `*-<番号>.<region>.run.app` があり、フロントの API_BASE_URL と同じ形式で
+登録すること。末尾スラッシュ・http/https の違いも不一致になる）。登録後の反映に数分かかる場合がある。
+
 ## 5. セキュリティ上の申し送り
 
 - API は公開 URL（`--allow-unauthenticated`）だが、`/v1/*` は Firebase ID トークン必須（アプリ層認証）。`/healthz` のみ匿名

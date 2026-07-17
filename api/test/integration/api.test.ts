@@ -949,6 +949,15 @@ describe('日報 AI アシスト', () => {
   })
 })
 
+describe('チャットボット応答', () => {
+  it('LLM 無効環境は fallback: true（クライアントの決定的応答へ縮退）。空質問は 400', async () => {
+    expect((await api('POST', '/v1/chatbot/ask', { as: MEMBER, body: { question: ' ' } })).status).toBe(400)
+    const r = await api('POST', '/v1/chatbot/ask', { as: MEMBER, body: { question: '有給の残りは何日？' } })
+    expect(r.status).toBe(200)
+    expect((r.json.data as { fallback: boolean }).fallback).toBe(true)
+  })
+})
+
 describe('カレンダー連携', () => {
   const today = todayJst()
   let taskId = ''
@@ -987,6 +996,26 @@ describe('カレンダー連携', () => {
     expect(mine.some(e => e.id === taskId)).toBe(true)
     const others = (await api('GET', `/v1/calendar/events?date=${today}`, { as: HR })).json.data as unknown[]
     expect(others.length).toBe(0)
+  })
+
+  it('同期 upsert は Google 反映済みの app 発予定を上書きしない（SoT 分離の回帰・3e レビュー指摘）', async () => {
+    await pool.query(
+      `INSERT INTO calendar_events (id, member_id, date, from_time, to_time, title, source, google_event_id, synced_to_google)
+       VALUES ('cal-app-sot', $1, $2, '10:00', '11:00', 'アプリのタスク', 'app', 'gev-app-sot', true)`,
+      [MEMBER, today])
+    // /sync と同一の upsert（Google 側で編集された想定の値が衝突するケース）
+    await pool.query(
+      `INSERT INTO calendar_events (id, member_id, date, from_time, to_time, title, source, google_event_id, synced_to_google)
+       VALUES ('cal-new-sot', $1, $2, '10:30', '12:00', 'Google側で編集された題名', 'google', 'gev-app-sot', true)
+       ON CONFLICT (member_id, google_event_id) WHERE google_event_id IS NOT NULL
+       DO UPDATE SET date = EXCLUDED.date, from_time = EXCLUDED.from_time,
+         to_time = EXCLUDED.to_time, title = EXCLUDED.title, updated_at = now()
+       WHERE calendar_events.source = 'google'`,
+      [MEMBER, today])
+    const { rows } = await pool.query(
+      `SELECT from_time, title FROM calendar_events WHERE id = 'cal-app-sot'`)
+    expect(rows[0]?.from_time).toBe('10:00')
+    expect(rows[0]?.title).toBe('アプリのタスク')
   })
 
   it('google 発の予定は削除不可（AKO-CAL-006 = SoT 分離）。app 発は削除可', async () => {

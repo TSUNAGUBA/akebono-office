@@ -127,6 +127,7 @@ generateDraft(memberId, date): ReportDraft           // 保存しない（フォ
 | useMasterCrud | `GET/POST/PATCH /v1/masters/{entity}`（**実装・フロント接続済み** = useMasterCrudAsync） |
 | useReports | `GET/PUT /v1/reports/daily`（month / from-to）・`GET/PUT /v1/reports/weekly`・`GET/POST /v1/reports/:id/comments`・`POST /v1/reports/comments/:id/reactions`（トグル）・`POST /v1/reports/remind`（**実装・フロント接続済み**。月単位の遅延ロードキャッシュ + SoT 書込→再取得） |
 | useNotifications | `GET /v1/notifications`・`POST /v1/notifications/:id/read`・`POST /v1/notifications/read-all`（**実装・フロント接続済み**。60 秒ポーリング。発火はサーバー側 = 未接続ドメインの notify はクライアント no-op） |
+| useChatbot | `POST /v1/chatbot/ask`（**実装・フロント接続済み**。Vertex AI 一次応答 = 本人の有給・勤怠・顧客・ナレッジをサーバーで文脈化。LLM 無効/失敗/低確信度は fallback 指示でクライアントの決定的ルーティングへ縮退。会話履歴はセッションローカル = 業務記録にしない設計判断） |
 | 参照系 computed | `GET` + クライアントキャッシュ（表示射影はフロント純粋関数のまま維持） |
 
 ## 4. エラーコード起番（台帳: モックアップ + API サービス共通）

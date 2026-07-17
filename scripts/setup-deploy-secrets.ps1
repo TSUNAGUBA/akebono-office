@@ -222,7 +222,11 @@ if ($DatabaseUrl) {
     Write-Step "Repository secrets を設定（カレンダー連携）: $Repo"
     Set-RepoSecret 'GOOGLE_OAUTH_CLIENT_ID' $GoogleOauthClientId
     Set-RepoSecret 'GOOGLE_OAUTH_CLIENT_SECRET' $oauthSecret
-    $hasKey = (gh secret list --repo $Repo) -match 'TOKEN_ENCRYPTION_KEY'
+    $secretList = gh secret list --repo $Repo
+    if ($LASTEXITCODE -ne 0) {
+      throw 'gh secret list に失敗しました。TOKEN_ENCRYPTION_KEY の存在確認ができないため中断します（誤って鍵を再生成すると保管済みトークンが全て復号不能になります）。'
+    }
+    $hasKey = $secretList -match 'TOKEN_ENCRYPTION_KEY'
     if (-not $hasKey) {
       $bytes = New-Object byte[] 32
       [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)

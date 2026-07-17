@@ -30,7 +30,8 @@
 - **バッチ3d 基盤（マージ済み PR #24）:** Vertex AI クライアント（ADC 認証・キー不要）+ IAM/デプロイ反映（オペレーター指示 2026-07-17: AI 機能は Vertex AI）
 - **バッチ3d（マージ済み PR #25）:** AI業務アシスタント（F-14）+ 日報 AI アシスト（F-06-7）の API 化 + フロント接続（LLM 失敗時はモックと同一ヒューリスティックへフォールバック）
 - **バッチ3e（本 PR）:** Google カレンダー連携（F-06-8）の API 化 + フロント接続（OAuth 2.0・トークン暗号化保管・予定同期・日報ドラフト材料）— バッチ3 完了
-- **バッチ4:** AI カンパニー・売上・稼働状況・意思決定・チャットボット応答・mart ETL
+- **バッチ4a（本 PR）:** チャットボット応答（F-09-3）の Vertex AI 一次応答化 + バッチ3e レビュー指摘対応（OAuth state の CSRF 対策・同期 upsert の SoT 保護・復帰導線修正ほか）
+- **バッチ4 続き:** 意思決定支援 → AI カンパニー → 売上 + mart ETL → 稼働状況
 
 > **フロント接続の方式（バッチ2a で確立）:** `NUXT_PUBLIC_API_BASE` 未設定なら完全モック動作（デモ環境の下位互換）。
 > 設定時は「API モード」となり、移行済みコレクションは `useMockDb.tbl()` が API ハイドレーションキャッシュを返す
@@ -129,7 +130,7 @@
 | 業務支援ツール `/support` | F-09 | ✅ | ⏳ | ドキュメント・外部リンクは接続済みマスタを参照。チャットボットはバッチ4 |
 | 売上管理 `/sales` | F-15 | ✅ | ⏳ | バッチ4（mart 接続の設計とセット） |
 | 提供システム稼働状況 `/status` | F-11 | ✅ | ⏳ | バッチ4 |
-| チャットボット（画面内ヘルプ） | F-09-3 | ✅ | ⏳ | バッチ4（LLM 応答はサーバーサイド） |
+| チャットボット（画面内ヘルプ） | F-09-3 | ✅ | 🚧 チャットボット接続（本 PR）: POST /v1/chatbot/ask = Vertex AI 一次応答（本人の有給・勤怠・顧客・ナレッジをサーバーで文脈化・C3 = 他人のデータは文脈に入れない）→ LLM 無効/失敗/低確信度は fallback 指示でクライアントの決定的ルーティング（移行済みドメインは実データ参照）へ縮退 | 会話履歴はセッションローカル（業務記録にしない設計判断）。エスカレーション起票は PR #21 で接続済み |
 | mart（分析基盤）ETL: fact_attendance / fact_leave / fact_effort ほか | data-design §2 | —（写像可能な型のみ） | ⏳ | バッチ4 以降。app_office → mart の一方向 ETL |
 
 ## 3. 今回バッチ（3d: AI業務アシスタント + 日報 AI アシスト）の完了条件（Definition of Done）
@@ -149,4 +150,11 @@
 - [x] デプロイ反映: deploy.yml（Secret Manager へ google-oauth-secret / token-encryption-key を冪等登録・CALENDAR_READY 時のみ有効化）/ setup-deploy-secrets.ps1（-GoogleOauthClientId / -GoogleOauthClientSecretPath・TOKEN_ENCRYPTION_KEY 初回自動生成）/ deploy-guide §1-9
 - [x] useCalendar デュアルモード化（connect = 同意画面リダイレクト・復帰クエリ処理・enabled=false 縮退）・assist ドラフト材料へ calendar_events を接続
 - [x] 検証: API 統合テスト 54 / 単体 19（crypto 追加）/ API モード実クリック E2E 9 スイート 92 チェック / モック回帰 / typecheck（api・mockup）
-- [ ] バッチ4: AI カンパニー・売上・稼働状況・意思決定・チャットボット応答・mart ETL
+## 5. 今回バッチ（4a: チャットボット応答 + 3e レビュー対応）の完了条件（Definition of Done)
+
+- [x] `POST /v1/chatbot/ask`: Vertex AI 一次応答（本人スコープの文脈収集 = C3 保護・構造化出力・出力正規化）。LLM 無効/失敗/confidence<0.4 は fallback 指示 → クライアントの決定的ルーティングへ縮退（原則4）
+- [x] useChatbot デュアルモード化（send async 化・通信失敗も決定的応答へ）・モックバッジ除去
+- [x] バッチ3e レビュー指摘対応（重大 3): ①同期 upsert に source='google' 条件 = app 発予定の保護（回帰テスト追加） ②OAuth state を一回性・10 分 TTL の DB ノンス化（0010）+ Google アカウント email と members.email の突合（openid email スコープ追加） ③復帰リダイレクトをゲート設置ページ（/ai-assistant）へ
+- [x] バッチ3e レビュー指摘対応（軽微): 割当 push の FOR UPDATE 直列化 / addTask の SoT 先行書込化 / status の復号可否判定 / 同期打ち切り時の削除抑止（maxResults 250）/ HH:MM 値域検証 / ps1 の gh 失敗時ガード / ゲートの成功トースト誤表示・ローディング中バナー修正 / AKO-CAL 台帳の重複行整理 / production-architecture §9 更新
+- [x] 検証: API 統合テスト 56 / 単体 19 / API モード実クリック E2E 10 スイート 96 チェック / モック回帰 / typecheck（api・mockup）
+- [ ] バッチ4 続き: 意思決定支援 → AI カンパニー → 売上 + mart ETL → 稼働状況

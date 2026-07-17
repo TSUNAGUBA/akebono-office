@@ -14,12 +14,14 @@ import { buildCalendarEvents } from '~/data/seed/history'
 
 // ---------- API モードのキャッシュ（SPA・モジュールスコープ単一） ----------
 
-const apiCalStatus = ref<{ enabled: boolean; connected: boolean }>({ enabled: false, connected: false })
+const apiCalStatus = ref<{ enabled: boolean; connected: boolean; loaded: boolean }>(
+  { enabled: false, connected: false, loaded: false })
 const apiCalEvents = ref<CalendarEvent[]>([])
 
 function loadCalStatus(force = false): Promise<void> {
   return apiLoadOnce('cal:status', async () => {
-    apiCalStatus.value = await apiFetch<{ enabled: boolean; connected: boolean }>('/v1/calendar/status')
+    const s = await apiFetch<{ enabled: boolean; connected: boolean }>('/v1/calendar/status')
+    apiCalStatus.value = { ...s, loaded: true }
   }, force)
 }
 
@@ -33,7 +35,7 @@ function loadCalEvents(date: string, force = false): Promise<void> {
 
 // ログイン確立・切替時に取り直す
 onApiReset(() => {
-  apiCalStatus.value = { enabled: false, connected: false }
+  apiCalStatus.value = { enabled: false, connected: false, loaded: false }
   apiCalEvents.value = []
 })
 
@@ -50,6 +52,9 @@ export function useCalendar() {
 
   /** カレンダー連携機能が利用可能か（API モードで OAuth 未設定なら false = UI 非表示） */
   const isEnabled = computed(() => isApi ? apiCalStatus.value.enabled : true)
+
+  /** 連携状態の取得が完了しているか（未取得の間は「未設定」バナー等を出さない） */
+  const isStatusLoaded = computed(() => isApi ? apiCalStatus.value.loaded : true)
 
   /** 現在ユーザーが Google カレンダー連携済みか */
   const isConnected = computed(() =>
@@ -237,6 +242,6 @@ export function useCalendar() {
 
   return {
     events, eventsOf, syncFromGoogle, addTask, pushToGoogle, removeTask,
-    isConnected, isEnabled, connect, disconnect, refreshStatus,
+    isConnected, isEnabled, isStatusLoaded, connect, disconnect, refreshStatus,
   }
 }

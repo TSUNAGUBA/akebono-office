@@ -8,7 +8,7 @@
  * エラー: AKO-CAL-001 同期失敗 / 002 タスク名 / 003 時刻 / 004 app 以外の反映 /
  *         006 google 由来の削除不可 / 007 未連携（005 は欠番 = 反映済み再実行は no-op + warning）
  */
-import { createHmac } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
 import type { Context } from 'hono'
 import { Hono } from 'hono'
 import type pg from 'pg'
@@ -28,10 +28,15 @@ const EVENT_COLS = `id, member_id AS "memberId", date::text AS date, from_time A
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
 const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth'
 const GOOGLE_EVENTS_URL = 'https://www.googleapis.com/calendar/v3/calendars/primary/events'
-const SCOPES = 'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events'
+const SCOPES = 'openid email https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events'
 
 function calendarEnabled(env: Env): boolean {
   return Boolean(env.googleOauthClientId && env.googleOauthClientSecret && env.tokenEncryptionKey)
+}
+
+/** HH:MM（値域含む検証。24:30 等を弾く） */
+function isHhmm(v: unknown): v is string {
+  return typeof v === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(v)
 }
 
 function requireEnabled(env: Env): void {
@@ -40,19 +45,38 @@ function requireEnabled(env: Env): void {
   }
 }
 
-/** state = base64url(memberId).HMAC（コールバックの成りすまし防止） */
-function signState(env: Env, memberId: string): string {
-  const payload = Buffer.from(memberId, 'utf8').toString('base64url')
-  const mac = createHmac('sha256', env.tokenEncryptionKey).update(payload).digest('base64url')
-  return `${payload}.${mac}`
+/**
+ * state ノンスの発行（DB 保存 = 一回性 + 有効期限。レビュー指摘: アカウントリンク CSRF 対策）。
+ * さらにコールバックで Google アカウントの email と members.email を突合し、
+ * 「他人に踏ませた同意 URL で被害者のトークンが攻撃者の口座へ入る」経路を遮断する
+ */
+async function issueState(pool: pg.Pool, memberId: string): Promise<string> {
+  const nonce = randomBytes(32).toString('base64url')
+  await pool.query(`DELETE FROM calendar_oauth_states WHERE created_at < now() - interval '10 minutes'`)
+  await pool.query(`INSERT INTO calendar_oauth_states (nonce, member_id) VALUES ($1, $2)`, [nonce, memberId])
+  return nonce
 }
 
-function verifyState(env: Env, state: string): string | null {
-  const [payload, mac] = state.split('.')
-  if (!payload || !mac) return null
-  const expect = createHmac('sha256', env.tokenEncryptionKey).update(payload).digest('base64url')
-  if (mac !== expect) return null
-  return Buffer.from(payload, 'base64url').toString('utf8')
+/** state の消費（一回限り・10 分以内のみ有効。無効は null） */
+async function consumeState(pool: pg.Pool, state: string): Promise<string | null> {
+  if (!state || state.length > 128) return null
+  const { rows } = await pool.query<{ memberId: string }>(
+    `DELETE FROM calendar_oauth_states
+     WHERE nonce = $1 AND created_at >= now() - interval '10 minutes'
+     RETURNING member_id AS "memberId"`, [state])
+  return rows[0]?.memberId ?? null
+}
+
+/** id_token（Google 発行・TLS 経由で直接受領）から email クレームを取り出す */
+function emailFromIdToken(idToken: string | undefined): string | null {
+  if (!idToken) return null
+  try {
+    const payload = idToken.split('.')[1] ?? ''
+    const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { email?: string }
+    return claims.email?.toLowerCase() ?? null
+  } catch {
+    return null
+  }
 }
 
 /** リクエスト URL からコールバック URI を組み立てる（Cloud Run / ローカルの両対応） */
@@ -114,17 +138,18 @@ function jstHhmm(dateTime: string): string {
 
 /**
  * OAuth コールバック（認証ヘッダなしのブラウザリダイレクトで届くため、/v1/* の認証より前に登録する。
- * 本人性は state の HMAC で担保）
+ * 本人性は ①一回性・10 分 TTL の state ノンス（DB 消費）②Google アカウント email と members.email の
+ * 突合の 2 段で担保する（レビュー指摘: アカウントリンク CSRF 対策）
  */
 export function calendarOauthCallback(pool: pg.Pool, env: Env) {
   return async (c: Context) => {
     const frontOrigin = env.corsOrigins[0] ?? ''
     const fail = (reason: string) =>
-      c.redirect(`${frontOrigin}/#/reports?calendar=error&reason=${encodeURIComponent(reason)}`, 302)
+      c.redirect(`${frontOrigin}/#/ai-assistant?calendar=error&reason=${encodeURIComponent(reason)}`, 302)
     if (!calendarEnabled(env)) return fail('not-configured')
     const state = c.req.query('state') ?? ''
     const code = c.req.query('code') ?? ''
-    const memberId = verifyState(env, state)
+    const memberId = await consumeState(pool, state)
     if (!memberId || !code) return fail('invalid-state')
     try {
       const res = await fetch(GOOGLE_TOKEN_URL, {
@@ -144,7 +169,16 @@ export function calendarOauthCallback(pool: pg.Pool, env: Env) {
         return fail('token-exchange')
       }
       const body = await res.json() as {
-        access_token: string; refresh_token?: string; expires_in: number; scope?: string
+        access_token: string; refresh_token?: string; expires_in: number; scope?: string; id_token?: string
+      }
+      // 同意した Google アカウントが本人（members.email）であることを検証（他人アカウントの誤リンク防止）
+      const googleEmail = emailFromIdToken(body.id_token)
+      const { rows: memberRows } = await pool.query<{ email: string }>(
+        `SELECT email FROM members WHERE id = $1 AND active = true`, [memberId])
+      const memberEmail = memberRows[0]?.email?.toLowerCase() ?? null
+      if (!googleEmail || !memberEmail || googleEmail !== memberEmail) {
+        console.warn('calendar oauth account mismatch:', memberId)
+        return fail('account-mismatch')
       }
       // 再連携時に refresh_token が返らないことがある（既存を保持する）
       await pool.query(
@@ -157,7 +191,7 @@ export function calendarOauthCallback(pool: pg.Pool, env: Env) {
         [memberId, encryptSecret(body.access_token, env.tokenEncryptionKey),
           body.refresh_token ? encryptSecret(body.refresh_token, env.tokenEncryptionKey) : null,
           new Date(Date.now() + body.expires_in * 1000).toISOString(), body.scope ?? ''])
-      return c.redirect(`${frontOrigin}/#/reports?calendar=connected`, 302)
+      return c.redirect(`${frontOrigin}/#/ai-assistant?calendar=connected`, 302)
     } catch (e) {
       console.warn('calendar oauth callback failed:', (e as Error).message)
       return fail('exchange-error')
@@ -168,12 +202,15 @@ export function calendarOauthCallback(pool: pg.Pool, env: Env) {
 export function calendarRoutes(pool: pg.Pool, env: Env): Hono {
   const app = new Hono()
 
-  // 連携状態（トークン有無。設定未投入なら enabled=false でフロントは連携 UI を隠す）
+  // 連携状態（設定未投入なら enabled=false でフロントは連携 UI を隠す。
+  // connected は「トークン行があり復号できる」こと = 鍵ローテーション後は false → 再連携導線へ）
   app.get('/status', async (c) => {
     const user = c.get('user')
     if (!calendarEnabled(env)) return c.json({ data: { enabled: false, connected: false } })
-    const { rows } = await pool.query(`SELECT member_id FROM calendar_tokens WHERE member_id = $1`, [user.id])
-    return c.json({ data: { enabled: true, connected: rows.length > 0 } })
+    const { rows } = await pool.query<{ accessTokenEnc: string }>(
+      `SELECT access_token_enc AS "accessTokenEnc" FROM calendar_tokens WHERE member_id = $1`, [user.id])
+    const connected = rows[0] ? decryptSecret(rows[0].accessTokenEnc, env.tokenEncryptionKey) !== null : false
+    return c.json({ data: { enabled: true, connected } })
   })
 
   // 同意画面 URL（フロントはこの URL へフルリダイレクトする）
@@ -187,7 +224,7 @@ export function calendarRoutes(pool: pg.Pool, env: Env): Hono {
       scope: SCOPES,
       access_type: 'offline',
       prompt: 'consent',
-      state: signState(env, user.id),
+      state: await issueState(pool, user.id),
     })
     return c.json({ data: { url: `${GOOGLE_AUTH_URL}?${params.toString()}` } })
   })
@@ -231,21 +268,27 @@ export function calendarRoutes(pool: pg.Pool, env: Env): Hono {
       throw err('AKO-CAL-007', 'Google カレンダーが未連携です。連携してから同期してください', 409)
     }
     let items: { id: string; summary?: string; start?: { dateTime?: string }; end?: { dateTime?: string } }[]
+    let truncated = false
     try {
       const q = new URLSearchParams({
         timeMin: `${date}T00:00:00+09:00`,
         timeMax: `${date}T23:59:59+09:00`,
         singleEvents: 'true',
         orderBy: 'startTime',
-        maxResults: '50',
+        maxResults: '250',
       })
       const res = await fetch(`${GOOGLE_EVENTS_URL}?${q.toString()}`, {
         headers: { authorization: `Bearer ${token}` },
         signal: AbortSignal.timeout(15_000),
       })
       if (!res.ok) throw new Error(`google events ${res.status}`)
-      const data = await res.json() as { items?: typeof items }
+      const data = await res.json() as { items?: typeof items; nextPageToken?: string }
       items = data.items ?? []
+      // 打ち切り（次ページあり）の場合、見えていない予定を誤削除しないよう削除フェーズを抑止する
+      if (data.nextPageToken) {
+        console.warn('calendar sync truncated (>250 events/day): skip delete phase')
+        truncated = true
+      }
     } catch (e) {
       console.warn('calendar sync failed:', (e as Error).message)
       throw err('AKO-CAL-001', 'カレンダー同期に失敗しました。時間をおいて再試行してください', 502)
@@ -256,11 +299,13 @@ export function calendarRoutes(pool: pg.Pool, env: Env): Hono {
     try {
       await client.query('BEGIN')
       const keepIds = timed.map(i => i.id)
-      await client.query(
-        `DELETE FROM calendar_events
-         WHERE member_id = $1 AND date = $2::date AND source = 'google'
-           AND NOT (google_event_id = ANY($3::text[]))`,
-        [user.id, date, keepIds])
+      if (!truncated) {
+        await client.query(
+          `DELETE FROM calendar_events
+           WHERE member_id = $1 AND date = $2::date AND source = 'google'
+             AND NOT (google_event_id = ANY($3::text[]))`,
+          [user.id, date, keepIds])
+      }
       for (const i of timed) {
         await client.query(
           `INSERT INTO calendar_events
@@ -268,7 +313,8 @@ export function calendarRoutes(pool: pg.Pool, env: Env): Hono {
            VALUES ($1, $2, $3, $4, $5, $6, 'google', $7, true)
            ON CONFLICT (member_id, google_event_id) WHERE google_event_id IS NOT NULL
            DO UPDATE SET date = EXCLUDED.date, from_time = EXCLUDED.from_time,
-             to_time = EXCLUDED.to_time, title = EXCLUDED.title, updated_at = now()`,
+             to_time = EXCLUDED.to_time, title = EXCLUDED.title, updated_at = now()
+           WHERE calendar_events.source = 'google'`,
           [newId('cal'), user.id, date, jstHhmm(i.start!.dateTime!), jstHhmm(i.end!.dateTime!),
             i.summary ?? '（無題の予定）', i.id])
       }
@@ -291,56 +337,77 @@ export function calendarRoutes(pool: pg.Pool, env: Env): Hono {
     const date = String(body.date ?? '')
     const from = String(body.from ?? '')
     const to = String(body.to ?? '')
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(from) || !/^\d{2}:\d{2}$/.test(to) || from >= to) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !isHhmm(from) || !isHhmm(to) || from >= to) {
       throw err('AKO-CAL-003', '開始・終了時刻を正しく入力してください', 400)
     }
     const projectId = typeof body.projectId === 'string' && body.projectId ? body.projectId : null
     const wantPush = body.pushToGoogle === true
 
-    let googleEventId: string | null = null
+    // SoT（本アプリの DB）へ先に書き、Google 反映は後段の補助処理（原則6。
+    // 逆順だと DB 失敗時に Google へ孤児イベントが残り、次回同期で削除不能な予定として再取込される）
+    const id = newId('cal')
+    await pool.query(
+      `INSERT INTO calendar_events
+         (id, member_id, date, from_time, to_time, title, source, project_id)
+       VALUES ($1, $2, $3, $4, $5, $6, 'app', $7)`,
+      [id, user.id, date, from, to, title, projectId])
+
     let warning: string | undefined
     if (wantPush) {
       const token = calendarEnabled(env) ? await accessTokenFor(pool, env, user.id) : null
       if (!token) {
         warning = 'Google カレンダーが未連携のため、タスクはアプリ内のみに登録しました'
       } else {
-        googleEventId = await insertGoogleEvent(token, { date, from, to, title })
-        if (!googleEventId) warning = 'Google への反映に失敗したため、タスクはアプリ内のみに登録しました'
+        const googleEventId = await insertGoogleEvent(token, { date, from, to, title })
+        if (googleEventId) {
+          await pool.query(
+            `UPDATE calendar_events SET google_event_id = $2, synced_to_google = true, updated_at = now() WHERE id = $1`,
+            [id, googleEventId])
+        } else {
+          warning = 'Google への反映に失敗したため、タスクはアプリ内のみに登録しました'
+        }
       }
     }
-    const id = newId('cal')
-    await pool.query(
-      `INSERT INTO calendar_events
-         (id, member_id, date, from_time, to_time, title, source, google_event_id, synced_to_google, project_id)
-       VALUES ($1, $2, $3, $4, $5, $6, 'app', $7, $8, $9)`,
-      [id, user.id, date, from, to, title, googleEventId, googleEventId !== null, projectId])
     return c.json({ data: { id, warning } }, 201)
   })
 
-  // アプリ発予定を後から Google へ反映（反映済みは no-op + warning = 冪等）
+  // アプリ発予定を後から Google へ反映（反映済みは no-op + warning = 冪等。
+  // FOR UPDATE クレームで並行 push による Google 二重作成を防ぐ）
   app.post('/events/:id/push', async (c) => {
     requireEnabled(env)
     const user = c.get('user')
     const eventId = c.req.param('id')
-    const { rows } = await pool.query<CalendarEventRow>(
-      `SELECT ${EVENT_COLS} FROM calendar_events WHERE id = $1 AND member_id = $2`, [eventId, user.id])
-    const ev = rows[0]
-    if (!ev || ev.source !== 'app') {
-      throw err('AKO-CAL-004', 'アプリで登録したタスクのみ Google へ反映できます', 400)
-    }
-    if (ev.syncedToGoogle) {
-      return c.json({ data: { id: eventId, warning: 'すでに Google へ反映済みです（変更はありません）' } })
-    }
     const token = await accessTokenFor(pool, env, user.id)
     if (!token) {
       throw err('AKO-CAL-007', 'Google カレンダーが未連携です。連携してから反映してください', 409)
     }
-    const googleEventId = await insertGoogleEvent(token, ev)
-    if (!googleEventId) throw err('AKO-CAL-001', 'Google への反映に失敗しました。時間をおいて再試行してください', 502)
-    await pool.query(
-      `UPDATE calendar_events SET google_event_id = $2, synced_to_google = true, updated_at = now() WHERE id = $1`,
-      [eventId, googleEventId])
-    return c.json({ data: { id: eventId } })
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+      const { rows } = await client.query<CalendarEventRow>(
+        `SELECT ${EVENT_COLS} FROM calendar_events WHERE id = $1 AND member_id = $2 FOR UPDATE`,
+        [eventId, user.id])
+      const ev = rows[0]
+      if (!ev || ev.source !== 'app') {
+        throw err('AKO-CAL-004', 'アプリで登録したタスクのみ Google へ反映できます', 400)
+      }
+      if (ev.syncedToGoogle) {
+        await client.query('COMMIT')
+        return c.json({ data: { id: eventId, warning: 'すでに Google へ反映済みです（変更はありません）' } })
+      }
+      const googleEventId = await insertGoogleEvent(token, ev)
+      if (!googleEventId) throw err('AKO-CAL-001', 'Google への反映に失敗しました。時間をおいて再試行してください', 502)
+      await client.query(
+        `UPDATE calendar_events SET google_event_id = $2, synced_to_google = true, updated_at = now() WHERE id = $1`,
+        [eventId, googleEventId])
+      await client.query('COMMIT')
+      return c.json({ data: { id: eventId } })
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {})
+      throw e
+    } finally {
+      client.release()
+    }
   })
 
   // アプリ発予定の削除（google 発は Google が SoT のため削除不可。Google 側の削除は補助処理）
