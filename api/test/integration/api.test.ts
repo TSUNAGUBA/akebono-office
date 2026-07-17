@@ -849,3 +849,99 @@ describe('シフト', () => {
     expect(adminNotes.some(n => n.title === 'シフト変更に本人が合意')).toBe(true)
   })
 })
+
+describe('タスク計画（AI業務アシスタント）', () => {
+  let planId = ''
+  const today = todayJst()
+
+  it('作成・更新は本人のみ。入力検証（AKO-TPL-001/002）', async () => {
+    expect((await api('PUT', '/v1/task-plans', { as: MEMBER, body: { title: '', date: today } })).json.error?.code)
+      .toBe('AKO-TPL-001')
+    expect((await api('PUT', '/v1/task-plans', { as: MEMBER, body: { title: 'x', date: '' } })).json.error?.code)
+      .toBe('AKO-TPL-002')
+    const created = await api('PUT', '/v1/task-plans', {
+      as: MEMBER,
+      body: { title: '請求書テンプレの整備', date: today, purpose: '経理の手作業を減らすため', doneCriteria: '', approach: '' },
+    })
+    expect(created.status).toBe(201)
+    planId = (created.json.data as { id: string }).id
+
+    // 他人の計画は編集不可（403 AKO-TPL-003）・一覧にも出ない（本人スコープ）
+    expect((await api('PUT', '/v1/task-plans', {
+      as: HR, body: { id: planId, title: '乗っ取り', date: today },
+    })).json.error?.code).toBe('AKO-TPL-003')
+    const hrList = (await api('GET', '/v1/task-plans', { as: HR })).json.data as { id: string }[]
+    expect(hrList.some(p => p.id === planId)).toBe(false)
+  })
+
+  it('AI レビューは LLM 無効環境でヒューリスティックへフォールバック（モックと同一文言）', async () => {
+    const r = await api('POST', `/v1/task-plans/${planId}/ai-review`, { as: MEMBER })
+    expect(r.status).toBe(200)
+    const comment = (r.json.data as { aiComment: string }).aiComment
+    expect(comment).toContain('目的が明確です。')
+    expect(comment).toContain('達成条件が未記入です。')
+    // 他人はレビュー不可
+    expect((await api('POST', `/v1/task-plans/${planId}/ai-review`, { as: HR })).status).toBe(403)
+  })
+
+  it('結果記録は 1 回で確定（記録系保護 AKO-TPL-004）。以後の編集・削除・再記録は不可', async () => {
+    expect((await api('POST', `/v1/task-plans/${planId}/result`, { as: MEMBER, body: { outcome: '' } })).json.error?.code)
+      .toBe('AKO-TPL-005')
+    expect((await api('POST', `/v1/task-plans/${planId}/result`, {
+      as: MEMBER, body: { outcome: 'テンプレ完成。経理へ共有済み', reflection: '想定より早く終わった' },
+    })).status).toBe(200)
+    for (const [method, path, body] of [
+      ['POST', `/v1/task-plans/${planId}/result`, { outcome: '二重記録' }],
+      ['PUT', '/v1/task-plans', { id: planId, title: '編集', date: today }],
+      ['POST', `/v1/task-plans/${planId}/remove`, {}],
+    ] as const) {
+      expect((await api(method, path, { as: MEMBER, body })).json.error?.code).toBe('AKO-TPL-004')
+    }
+    // インサイト: 管理者のみ。MEMBER の完了が集計される
+    expect((await api('GET', '/v1/task-plans/insights', { as: MEMBER })).status).toBe(403)
+    const ins = (await api('GET', '/v1/task-plans/insights', { as: ADMIN })).json.data as
+      { memberId: string; planned: number; done: number; doneRate: number | null }[]
+    const mine = ins.find(x => x.memberId === MEMBER)!
+    expect(mine.planned).toBeGreaterThanOrEqual(1)
+    expect(mine.done).toBeGreaterThanOrEqual(1)
+  })
+})
+
+describe('日報 AI アシスト', () => {
+  const today = todayJst()
+
+  it('回答・メモは追記のみ（本人スコープ）。空入力は AKO-RAS-001/002', async () => {
+    expect((await api('POST', '/v1/assist/answers', { as: MEMBER, body: { answer: '' } })).json.error?.code)
+      .toBe('AKO-RAS-001')
+    expect((await api('POST', '/v1/assist/memos', { as: MEMBER, body: { text: ' ' } })).json.error?.code)
+      .toBe('AKO-RAS-002')
+    expect((await api('POST', '/v1/assist/answers', {
+      as: MEMBER, body: { date: today, question: 'wrap:issue|困りごと・課題はありますか？', answer: 'レビュー待ちで遅れ気味' },
+    })).status).toBe(201)
+    expect((await api('POST', '/v1/assist/answers', {
+      as: MEMBER, body: { date: today, question: 'wrap:tomorrow|明日やる予定を一言で', answer: '締め処理の自動化' },
+    })).status).toBe(201)
+    expect((await api('POST', '/v1/assist/memos', {
+      as: MEMBER, body: { date: today, text: '午後は問い合わせ対応が多かった' },
+    })).status).toBe(201)
+    const mine = (await api('GET', `/v1/assist/logs?date=${today}`, { as: MEMBER })).json.data as unknown[]
+    expect(mine.length).toBe(3)
+    const others = (await api('GET', `/v1/assist/logs?date=${today}`, { as: HR })).json.data as unknown[]
+    expect(others.length).toBe(0)
+  })
+
+  it('ドラフト生成: LLM 無効環境はヒューリスティック（計画結果・回答・メモを反映。保存しない）', async () => {
+    const r = await api('POST', '/v1/assist/report-draft', { as: MEMBER, body: { date: today } })
+    expect(r.status).toBe(200)
+    const d = r.json.data as {
+      entries: { task: string }[]; reflection: string; issues: string; tomorrow: string; basis: string[]
+    }
+    // タスク計画（done）の結果がエントリへ
+    expect(d.entries.some(e => e.task.includes('請求書テンプレの整備'))).toBe(true)
+    // メモ → 所感 / 課題回答 → issues / 明日回答 → tomorrow
+    expect(d.reflection).toContain('午後は問い合わせ対応が多かった')
+    expect(d.issues).toContain('レビュー待ちで遅れ気味')
+    expect(d.tomorrow).toBe('締め処理の自動化')
+    expect(d.basis.length).toBeGreaterThan(0)
+  })
+})

@@ -10,7 +10,6 @@ const MOCK_PAGE_PATHS = new Set<string>([
   '/ai-company',
   '/sales',
   '/status',
-  '/ai-assistant',
   '/support/chatbot',
 ])
 
