@@ -1,0 +1,31 @@
+{
+  "name": "akebono-office-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "アケボノオフィス API サービス（Cloud Run + PostgreSQL）",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "esbuild src/index.ts --bundle --platform=node --target=node22 --format=esm --packages=external --outfile=dist/index.js && node -e \"require('fs').cpSync('db', 'dist/db', {recursive: true})\"",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --exclude 'test/integration/**'",
+    "test:integration": "bash test/run-integration.sh",
+    "db:migrate": "tsx src/db/migrate-cli.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.0.10",
+    "hono": "^4.12.30",
+    "jose": "^6.2.3",
+    "pg": "^8.22.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/pg": "^8.15.0",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}

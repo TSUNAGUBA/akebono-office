@@ -47,7 +47,10 @@ npm run build
 
 ## デプロイ（Firebase Hosting）
 
-`main` へのプッシュ（`mockup/` 配下の変更時）または手動実行で、GitHub Actions が自動デプロイします（`.github/workflows/deploy.yml`）。テスト → 型チェック → `nuxt generate` → Firebase Hosting の順で実行されます。
+`main` へのプッシュ（`mockup/` または `shared/` 配下の変更時）または手動実行で、GitHub Actions が自動デプロイします（`.github/workflows/deploy.yml`）。テスト → 型チェック → `nuxt generate` → Firebase Hosting の順で実行されます。
+
+> 本実装 API（`../api/` → Cloud Run + RDS PostgreSQL）のデプロイを含む全体手順は
+> `../.ai-native/outputs/phase7/deploy-guide.md` を参照してください。
 
 ### 初回セットアップ（PowerShell で完結）
 
@@ -57,9 +60,10 @@ npm run build
 ```powershell
 ./scripts/setup-deploy-secrets.ps1 -ProjectId <FirebaseプロジェクトID> -ServiceAccountJsonPath ./firebase-sa.json
 # 設定後すぐデプロイする場合は -TriggerDeploy を付ける
+# API（Cloud Run + RDS）も設定する場合は -DatabaseUrl 'postgresql://...' を追加
 ```
 
-設定される secrets: `FIREBASE_SERVICE_ACCOUNT`（鍵 JSON）/ `FIREBASE_PROJECT_ID`。ワークフローはこの 2 つを実行時に読み取ります。鍵ファイルはコミットしないでください。
+設定される secrets: `FIREBASE_SERVICE_ACCOUNT`（鍵 JSON）/ `FIREBASE_PROJECT_ID`（+ `-DatabaseUrl` 指定時は API 用 `GCP_*` / `DATABASE_URL` ほか）。鍵ファイルはコミットしないでください。
 
 ## ディレクトリ
 
@@ -74,6 +78,9 @@ app/
 ├── composables/          # 状態とロジック（将来の API 差し替え境界）
 ├── utils/                # 純粋関数（計算・書式・ラベル）
 ├── data/seed/            # 決定的シードデータ
-├── types/                # ドメイン型定義
+├── types/                # ドメイン型定義（shared/domain/types の再エクスポート）
 └── pages/                # 画面
 ```
+
+> ドメイン型・勤怠計算・JST ユーティリティの実装 SoT はリポジトリ直下の `../shared/domain/`
+> （API サービスと共有）。`app/types/domain.ts` と `app/utils/attendance-calc.ts` は再エクスポートのシムです。

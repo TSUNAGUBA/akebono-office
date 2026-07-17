@@ -1,15 +1,32 @@
 name: deploy
 
-# main への push（mockup 配下の変更時）または手動実行で
-# モックアップを Firebase Hosting へデプロイする。
+# main への push（対象パス変更時）または手動実行で以下をデプロイする:
+#   1) mockup  → Firebase Hosting（静的配信）
+#   2) api     → Cloud Run（コンテナ。DB は RDS PostgreSQL）
+#
 # 必要な Repository secrets（scripts/setup-deploy-secrets.ps1 で設定）:
+#   [mockup]
 #   FIREBASE_SERVICE_ACCOUNT ... サービスアカウント鍵 JSON（roles/firebasehosting.admin）
 #   FIREBASE_PROJECT_ID      ... Firebase プロジェクト ID
+#   [api]
+#   GCP_SERVICE_ACCOUNT      ... デプロイ用サービスアカウント鍵 JSON
+#                                （roles/run.admin, artifactregistry.admin, iam.serviceAccountUser, secretmanager.admin）
+#   GCP_PROJECT_ID           ... GCP プロジェクト ID（通常 FIREBASE_PROJECT_ID と同一）
+#   GCP_REGION               ... デプロイ先リージョン（例: asia-northeast1）
+#   CLOUD_RUN_SERVICE        ... Cloud Run サービス名（例: akebono-office-api）
+#   DATABASE_URL             ... RDS PostgreSQL 接続文字列（Secret Manager 経由で注入）
+#   DB_SSL                   ... disable / require / verify（RDS は require 以上を推奨）
+#   API_CORS_ORIGINS         ... CORS 許可オリジン（例: https://<project>.web.app）
+#
+# API の secrets が未設定の場合、deploy-api は警告を出してスキップする
+# （mockup のみの運用を止めない = 非ブロッキング）。
 on:
   push:
     branches: [main]
     paths:
       - 'mockup/**'
+      - 'api/**'
+      - 'shared/**'
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
 
@@ -21,7 +38,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
+  # ---------- モックアップ（Firebase Hosting） ----------
+  deploy-mockup:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -44,7 +62,7 @@ jobs:
             missing=1
           fi
           if [ "$missing" = "1" ]; then
-            echo "::notice::scripts/setup-deploy-secrets.ps1 を実行して設定してください（手順は mockup/README.md の「デプロイ」参照）"
+            echo "::notice::scripts/setup-deploy-secrets.ps1 を実行して設定してください（手順は .ai-native/outputs/phase7/deploy-guide.md 参照）"
             exit 1
           fi
 
@@ -74,3 +92,149 @@ jobs:
           projectId: ${{ secrets.FIREBASE_PROJECT_ID }}
           channelId: live
           entryPoint: mockup
+
+  # ---------- API（テスト → Cloud Run） ----------
+  api-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: akebono_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+
+      - name: 依存インストール
+        run: npm ci
+
+      - name: 型チェック
+        run: npm run typecheck
+
+      - name: 単体テスト
+        run: npm test
+
+      - name: 統合テスト（実 PostgreSQL）
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/akebono_test
+        run: npm run test:integration
+
+      - name: ビルド確認
+        run: npm run build
+
+  deploy-api:
+    runs-on: ubuntu-latest
+    needs: api-test
+    steps:
+      - name: Secrets の存在チェック（未設定なら以降をスキップ）
+        id: check
+        env:
+          GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          GCP_REGION: ${{ secrets.GCP_REGION }}
+          CLOUD_RUN_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+        run: |
+          if [ -z "$GCP_SERVICE_ACCOUNT" ] || [ -z "$GCP_PROJECT_ID" ] || [ -z "$GCP_REGION" ] \
+             || [ -z "$CLOUD_RUN_SERVICE" ] || [ -z "$DATABASE_URL" ] || [ -z "$FIREBASE_PROJECT_ID" ]; then
+            echo "::warning::API デプロイ用 secrets（GCP_* / CLOUD_RUN_SERVICE / DATABASE_URL / FIREBASE_PROJECT_ID）が未設定のため deploy-api をスキップします。scripts/setup-deploy-secrets.ps1 で設定してください"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.check.outputs.ready == 'true'
+
+      - uses: google-github-actions/auth@v2
+        if: steps.check.outputs.ready == 'true'
+        with:
+          credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+        if: steps.check.outputs.ready == 'true'
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Artifact Registry リポジトリを用意（冪等）
+        if: steps.check.outputs.ready == 'true'
+        env:
+          REGION: ${{ secrets.GCP_REGION }}
+        run: |
+          gcloud artifacts repositories describe akebono-office --location="$REGION" >/dev/null 2>&1 \
+            || gcloud artifacts repositories create akebono-office \
+                 --repository-format=docker --location="$REGION" \
+                 --description="akebono-office コンテナイメージ"
+          gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
+
+      - name: イメージをビルドしてプッシュ
+        if: steps.check.outputs.ready == 'true'
+        env:
+          REGION: ${{ secrets.GCP_REGION }}
+          PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+          SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
+        run: |
+          IMAGE="$REGION-docker.pkg.dev/$PROJECT/akebono-office/$SERVICE:$GITHUB_SHA"
+          docker build -f api/Dockerfile -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+      - name: DATABASE_URL を Secret Manager へ登録（冪等）
+        if: steps.check.outputs.ready == 'true'
+        env:
+          SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+        run: |
+          SECRET_NAME="$SERVICE-database-url"
+          if ! gcloud secrets describe "$SECRET_NAME" >/dev/null 2>&1; then
+            gcloud secrets create "$SECRET_NAME" --replication-policy=automatic
+          fi
+          # 値が変わったときだけ新バージョンを追加（毎回の無駄なバージョン増加を防ぐ）
+          CURRENT="$(gcloud secrets versions access latest --secret="$SECRET_NAME" 2>/dev/null || true)"
+          if [ "$CURRENT" != "$DATABASE_URL" ]; then
+            printf '%s' "$DATABASE_URL" | gcloud secrets versions add "$SECRET_NAME" --data-file=-
+          fi
+          # 実行サービスアカウント（既定: Compute Engine 既定 SA）へ読取権限を付与（冪等）
+          PROJECT_NUMBER="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')"
+          gcloud secrets add-iam-policy-binding "$SECRET_NAME" \
+            --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+            --role="roles/secretmanager.secretAccessor" --quiet >/dev/null
+
+      - name: Cloud Run へデプロイ
+        if: steps.check.outputs.ready == 'true'
+        env:
+          REGION: ${{ secrets.GCP_REGION }}
+          SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          DB_SSL: ${{ secrets.DB_SSL }}
+          API_CORS_ORIGINS: ${{ secrets.API_CORS_ORIGINS }}
+        run: |
+          gcloud run deploy "$SERVICE" \
+            --image "$IMAGE" \
+            --region "$REGION" \
+            --platform managed \
+            --allow-unauthenticated \
+            --port 8080 \
+            --min-instances 0 \
+            --max-instances 3 \
+            --set-env-vars "AUTH_MODE=firebase,FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID},DB_SSL=${DB_SSL:-require},CORS_ORIGINS=${API_CORS_ORIGINS}" \
+            --set-secrets "DATABASE_URL=$SERVICE-database-url:latest"
+          echo "デプロイ完了: $(gcloud run services describe "$SERVICE" --region "$REGION" --format='value(status.url)')"

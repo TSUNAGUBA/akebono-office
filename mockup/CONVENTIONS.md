@@ -2,6 +2,11 @@
 
 設計 SoT: `.ai-native/outputs/phase3/functional-requirements.md`（機能）/ `phase5/screen-design.md`（画面・デザイン）/ `phase5/data-design.md`（データ）/ `phase5/api-design.md`（I/F）。
 
+> **shared/domain（2026-07-17〜）:** ドメイン型（`types/domain.ts`）・勤怠計算（`utils/attendance-calc.ts`）・
+> JST/日付キー関数（`utils/format.ts` の該当分）の実装 SoT はリポジトリ直下 `../shared/domain/` へ移設した
+> （本実装 API と共有）。mockup 側の同名ファイルは再エクスポートのシムであり、**ロジック・型の変更は shared 側で行う**。
+> import パス（`~/types/domain` / `~/utils/attendance-calc`）と auto-import はこれまでどおり使える。
+
 ## スタック
 
 Nuxt 4 SPA（ssr:false, hashMode）/ TypeScript strict / Tailwind v4 + CSS 変数トークン / Chart.js 4 + vue-chartjs / lucide-vue-next。
