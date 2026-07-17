@@ -151,6 +151,18 @@ const schemas = {
     closingDay: z.number().int().min(1).max(31).default(31),
     legalHolidayWeekday: z.number().int().min(0).max(6).default(0),
   }),
+  'workflow-routes': z.object({
+    category: z.enum(['purchase', 'contract', 'expense', 'hiring', 'trip', 'other']),
+    minAmount: z.number().min(0).default(0),
+    maxAmount: z.number().min(0).nullable().default(null),
+    steps: z.array(z.object({
+      order: z.number().int().min(1),
+      approverRole: z.enum(['manager', 'director', 'president']),
+      approverMemberId: z.string().nullable().default(null),
+      mode: z.enum(['serial', 'all', 'majority']).default('serial'),
+    })).min(1, '承認ステップを 1 つ以上設定してください'),
+    active: z.boolean().default(true),
+  }),
 } as const
 
 export type MasterEntity = keyof typeof schemas
@@ -186,6 +198,7 @@ export const MASTERS: Record<MasterEntity, MasterDef> = {
   'code-masters': { table: 'code_masters', idPrefix: 'cm', schema: schemas['code-masters'], patchSchema: schemas['code-masters'].partial(), jsonbFields: [] },
   'external-links': { table: 'external_links', idPrefix: 'el', schema: schemas['external-links'], patchSchema: schemas['external-links'].partial(), jsonbFields: [] },
   'attendance-rules': { table: 'attendance_rules', idPrefix: 'ar', schema: schemas['attendance-rules'], patchSchema: schemas['attendance-rules'].partial(), jsonbFields: ['appliesTo', 'defaultFor', 'flex'] },
+  'workflow-routes': { table: 'workflow_routes', idPrefix: 'wr', schema: schemas['workflow-routes'], patchSchema: schemas['workflow-routes'].partial(), jsonbFields: ['steps'] },
 }
 
 export function camelToSnake(s: string): string {

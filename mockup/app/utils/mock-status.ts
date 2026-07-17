@@ -8,7 +8,6 @@ const MOCK_PAGE_PATHS = new Set<string>([
   '/decision',
   '/akebono',
   '/ai-company',
-  '/workflow',
   '/shift',
   '/sales',
   '/status',

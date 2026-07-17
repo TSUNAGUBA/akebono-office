@@ -560,3 +560,109 @@ describe('エスカレーション', () => {
     expect(memberNotes.some(n => n.kind === 'escalation' && n.title === '管理者からの回答')).toBe(true)
   })
 })
+
+describe('ワークフロー・稟議', () => {
+  let wfId = ''
+
+  it('下書き保存 → 提出（経路凍結・step1 承認者へ通知）。経路なしは AKO-WFL-003', async () => {
+    // 経路マスタ（マイグレーション seed）が参照できる
+    const routes = (await api('GET', '/v1/masters/workflow-routes', { as: MEMBER })).json.data as
+      { id: string; category: string }[]
+    expect(routes.filter(r => r.category === 'purchase').length).toBeGreaterThanOrEqual(3)
+
+    // 該当経路なし（purchase 以外は未定義）
+    const noRoute = await api('POST', '/v1/workflows/submit', {
+      as: MEMBER, body: { category: 'trip', title: '出張申請', amount: 30000 },
+    })
+    expect(noRoute.status).toBe(409)
+    expect(noRoute.json.error?.code).toBe('AKO-WFL-003')
+
+    // 下書き → 下書き更新 → 提出（10 万未満 = manager 1 段。承認者 = admin 社員）
+    const draft = await api('PUT', '/v1/workflows/draft', {
+      as: MEMBER, body: { category: 'purchase', title: 'モニター購入', amount: 50000 },
+    })
+    expect(draft.status).toBe(201)
+    wfId = (draft.json.data as { id: string }).id
+    expect((await api('PUT', '/v1/workflows/draft', {
+      as: MEMBER, body: { id: wfId, category: 'purchase', title: 'モニター購入（2台）', amount: 90000 },
+    })).status).toBe(200)
+
+    const submit = await api('POST', '/v1/workflows/submit', {
+      as: MEMBER, body: { id: wfId, category: 'purchase', title: 'モニター購入（2台）', amount: 90000 },
+    })
+    expect(submit.status).toBe(200)
+    const list = (await api('GET', '/v1/workflows', { as: HR })).json.data as
+      { id: string; status: string; currentStep: number; routeSnapshot: unknown[] }[]
+    const mine = list.find(r => r.id === wfId)!
+    expect(mine.status).toBe('in_review')
+    expect(mine.currentStep).toBe(1)
+    expect(mine.routeSnapshot.length).toBe(1)
+
+    // step1 承認者（ADMIN）へ通知が届く
+    const notes = (await api('GET', '/v1/notifications?unread=1', { as: ADMIN })).json.data as { title: string }[]
+    expect(notes.some(n => n.title === '承認依頼: モニター購入（2台）')).toBe(true)
+  })
+
+  it('承認権限ガード → 承認で決裁 + 申請者へ通知。二重承認は AKO-WFL-001', async () => {
+    // 申請者本人（承認者ではない）は承認できない
+    expect((await api('POST', `/v1/workflows/${wfId}/actions`, { as: MEMBER, body: { action: 'approve' } })).json.error?.code)
+      .toBe('AKO-WFL-001')
+    // HR も承認者ではない
+    expect((await api('POST', `/v1/workflows/${wfId}/actions`, { as: HR, body: { action: 'approve' } })).status).toBe(403)
+
+    expect((await api('POST', `/v1/workflows/${wfId}/actions`, { as: ADMIN, body: { action: 'approve' } })).status).toBe(200)
+    const list = (await api('GET', '/v1/workflows', { as: MEMBER })).json.data as { id: string; status: string }[]
+    expect(list.find(r => r.id === wfId)?.status).toBe('approved')
+
+    // 決裁済みへの再操作は不可
+    expect((await api('POST', `/v1/workflows/${wfId}/actions`, { as: ADMIN, body: { action: 'approve' } })).json.error?.code)
+      .toBe('AKO-WFL-001')
+
+    // 申請者へ決裁通知 + 証跡（submit → approve）
+    const memberNotes = (await api('GET', '/v1/notifications?unread=1', { as: MEMBER })).json.data as { title: string }[]
+    expect(memberNotes.some(n => n.title === '決裁: モニター購入（2台）')).toBe(true)
+    const logs = (await api('GET', `/v1/workflows/${wfId}/logs`, { as: MEMBER })).json.data as { action: string }[]
+    expect(logs.map(l => l.action)).toEqual(['submit', 'approve'])
+  })
+
+  it('差戻し（コメント必須）→ 再申請。代理承認は delegateForId を記録', async () => {
+    const submit = await api('POST', '/v1/workflows/submit', {
+      as: HR, body: { category: 'purchase', title: '書籍購入', amount: 20000 },
+    })
+    const id = (submit.json.data as { id: string }).id
+
+    // コメントなしの差戻しは AKO-WFL-002
+    expect((await api('POST', `/v1/workflows/${id}/actions`, { as: ADMIN, body: { action: 'remand' } })).json.error?.code)
+      .toBe('AKO-WFL-002')
+    expect((await api('POST', `/v1/workflows/${id}/actions`, {
+      as: ADMIN, body: { action: 'remand', comment: '見積書を添付してください' },
+    })).status).toBe(200)
+
+    // 再申請（remanded → in_review）
+    expect((await api('POST', '/v1/workflows/submit', {
+      as: HR, body: { id, category: 'purchase', title: '書籍購入', amount: 20000 },
+    })).status).toBe(200)
+
+    // 代理承認: ADMIN が MEMBER を代理人に設定 → MEMBER が承認できる
+    expect((await api('POST', '/v1/workflows/delegates', {
+      as: ADMIN, body: { delegateMemberId: MEMBER, from: '2026-01-01', to: '2099-12-31' },
+    })).status).toBe(201)
+    expect((await api('POST', `/v1/workflows/${id}/actions`, { as: MEMBER, body: { action: 'approve' } })).status).toBe(200)
+    const logs = (await api('GET', `/v1/workflows/${id}/logs`, { as: HR })).json.data as
+      { action: string; actorId: string; delegateForId: string | null }[]
+    const approveLog = logs.find(l => l.action === 'approve')!
+    expect(approveLog.actorId).toBe(MEMBER)
+    expect(approveLog.delegateForId).toBe(ADMIN)
+  })
+
+  it('取下げは申請者本人のみ', async () => {
+    const submit = await api('POST', '/v1/workflows/submit', {
+      as: HR, body: { category: 'purchase', title: '取下げテスト', amount: 10000 },
+    })
+    const id = (submit.json.data as { id: string }).id
+    expect((await api('POST', `/v1/workflows/${id}/actions`, { as: MEMBER, body: { action: 'withdraw' } })).status).toBe(403)
+    expect((await api('POST', `/v1/workflows/${id}/actions`, { as: HR, body: { action: 'withdraw' } })).status).toBe(200)
+    const list = (await api('GET', '/v1/workflows', { as: HR })).json.data as { id: string; status: string }[]
+    expect(list.find(r => r.id === id)?.status).toBe('withdrawn')
+  })
+})

@@ -174,6 +174,7 @@ const MIGRATED_MASTERS: Record<string, string> = {
   codeMaster: 'code-masters',
   externalLinks: 'external-links',
   attendanceRules: 'attendance-rules',
+  workflowRoutes: 'workflow-routes',
 }
 
 /** API モード時に API が SoT となるコレクション（tbl() が API キャッシュを返す） */
