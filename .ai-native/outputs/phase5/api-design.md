@@ -81,6 +81,9 @@ archive(id): Result                     // 論理削除のみ
 // useMasterCrudAsync<T>(collectionName, prefix)（バッチ2a〜。マスタ・設定画面はこちらへ移行済み）
 save/archive/restore/remove(…): Promise<Result>  // API モードは /v1/masters/* + キャッシュ反映。
                                                  // モックモードは同期版を Promise で包むだけ（挙動不変）
+// PATCH /v1/masters/:entity/:id は**部分更新**: リクエスト body に実在するキーのみ更新する。
+// zod v4 の .partial() は .default() フィールドへ既定値を注入するため、サーバー側で入力キーへ
+// フィルタしている（部署配属 {departmentId} で email/role が既定値に巻き戻った実障害の再発防止）
 
 // useCustomFields
 defsFor(entity): CustomFieldDef[]
