@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * F-10-5 顧客関係(会社)マスタ（管理者専用）
+ * F-10-6 顧客関係(会社)マスタ（管理者専用）
  * 会社間関係: RelationGraph + エッジ一覧 + 追加フォーム。
  * 関係エッジ（CompanyRelation）のみ物理削除可（UiConfirm 必須）。種別の定義は /masters/relation-types。
  */

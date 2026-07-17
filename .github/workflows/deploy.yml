@@ -257,9 +257,9 @@ jobs:
           put_secret "$SERVICE-token-encryption-key" "$TOKEN_ENCRYPTION_KEY"
           echo "CALENDAR_READY=true" >> "$GITHUB_ENV"
 
-      # AI 機能（Vertex AI・オペレーター決定 2026-07-17）: API 有効化と実行 SA への権限付与。
+      # AI 機能（Vertex AI）とカレンダー同期（Calendar API）の有効化 + 実行 SA への権限付与。
       # 補助処理として非ブロッキング（権限不足時は警告 + deploy-guide.md の手動手順へフォールバック）
-      - name: Vertex AI の有効化 + 実行 SA へ権限付与（冪等・非ブロッキング）
+      - name: Vertex AI / Calendar API の有効化 + 実行 SA へ権限付与（冪等・非ブロッキング）
         if: steps.check.outputs.ready == 'true'
         env:
           PROJECT: ${{ secrets.GCP_PROJECT_ID }}

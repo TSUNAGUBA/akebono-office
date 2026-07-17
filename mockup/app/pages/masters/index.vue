@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * F-10 マスタメンテナンス ハブ（管理者専用）
- * 8 マスタ + 設定への案内カード。各カードに件数バッジ。
+ * 12 マスタ + 設定への案内カード。各カードに件数バッジ。
  */
 import type { MenuCard } from '~/types/ui'
 
@@ -142,7 +142,7 @@ const cards = computed<MenuCard[]>(() => [
 <template>
   <MastersMasterShell
     title="マスタメンテナンス"
-    description="管理者専用。マスタは論理削除（無効化）で運用し、物理削除しません（関係エッジのみ削除可）"
+    description="管理者専用。マスタは論理削除（無効化）で運用します（関係エッジと未使用の関係種別のみ物理削除可）"
   >
     <UiCardMenu :items="cards" :cols="3" />
   </MastersMasterShell>

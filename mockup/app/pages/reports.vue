@@ -92,10 +92,12 @@ function loadEditor(): void {
     editTomorrow.value = ''
   }
 }
+// 日付・ユーザーが変わったら提出済み編集モードを終了する。
+// watcher は登録順に実行されるため、loadEditor より先に登録する（後だと editingSubmitted ガードで
+// 新日付の loadEditor がスキップされ、編集中の旧日付の内容が別日付のエディタに残留する）
+watch([selDate, currentUserId], () => { editingSubmitted.value = false })
 // myReport も監視: API モードでは月データが非同期に届くため、到着後に下書きを復元する
 watch([selDate, currentUserId, myReport], loadEditor, { immediate: true })
-// 日付・ユーザーが変わったら提出済み編集モードは終了する
-watch([selDate, currentUserId], () => { editingSubmitted.value = false })
 
 /** 提出済み日報の編集を開始（内容をエディタへ読み込む） */
 function startEditSubmitted(): void {
@@ -118,6 +120,9 @@ async function onUpdateSubmitted(): Promise<void> {
   }
   editingSubmitted.value = false
   show('提出済みの日報を更新しました')
+  if (res.escalated) {
+    show('課題が管理者へ共有されました', 'info', { label: '受信箱', to: '/inbox' })
+  }
   if (res.hoursGapMinutes !== null && res.hoursGapMinutes !== undefined) {
     show(`勤怠実労働と工数合計に 60 分超の乖離があります（${gapText(res.hoursGapMinutes)}）`, 'warn')
   }

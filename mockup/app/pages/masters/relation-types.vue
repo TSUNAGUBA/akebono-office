@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * F-10-5 関係種別マスタ（管理者専用）
+ * F-10-6 関係種別マスタ（管理者専用）
  * 納品先・競合・上司部下など、顧客関係(会社)/(人) で使う関係の種類を定義する。
  * 登録・編集・無効化/復元に加え、未使用（関係エッジから参照されていない）種別のみ物理削除可。
  * 使用中の種別の削除はサーバーが AKO-RTM-001 で拒否する（モックモードは画面前チェックで同一挙動）。
@@ -28,7 +28,7 @@ const rtColumns: TableColumn[] = [
   { key: 'label', label: '名称', primary: true },
   { key: 'direction', label: '方向', primary: true },
   { key: 'appliesTo', label: '適用対象' },
-  { key: 'usage', label: '使用中', align: 'right', width: '72px' },
+  { key: 'usage', label: '使用中', align: 'right', width: '72px', primary: true },
   { key: 'active', label: '状態', primary: true },
 ]
 
@@ -200,6 +200,9 @@ async function deleteRt(): Promise<void> {
         @close="rtModalOpen = false"
       >
         <UiSchemaForm v-model="rtForm" :fields="rtFormFields" :errors="rtErrors" />
+        <p v-if="rtEditing && usageCount(rtEditing.id) > 0" class="mt-2 text-[11px] text-muted">
+          この種別は {{ usageCount(rtEditing.id) }} 件の関係で使用中のため削除できません（無効化は可能です）
+        </p>
         <template #footer>
           <template v-if="rtEditing">
             <div class="mr-auto flex items-center gap-1.5">

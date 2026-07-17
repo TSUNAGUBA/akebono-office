@@ -1,7 +1,8 @@
 /**
  * 汎用マスタ CRUD の台帳（mockup useMasterCrud の対応物）。
  * - エンティティごとにテーブル・id プレフィックス・zod スキーマ・jsonb 列・ガードを宣言する
- * - 論理削除のみ（active=false）。例外: 関係エッジ（company/contact-relations）は物理削除可
+ * - 論理削除のみ（active=false）。例外: 関係エッジ（company/contact-relations）と
+ *   未使用の関係種別（relation-types。参照ガードは masters.ts）は物理削除可
  *   （data-design §1.1 の設計判断。削除は監査ログ必須）
  * - バリデーションは API の責務（モックでは画面側の責務だったが、公開 I/F になるためここで担保）
  */
@@ -218,7 +219,7 @@ export interface MasterDef {
   patchSchema?: z.ZodType
   /** jsonb 列（書込時に JSON.stringify が必要な camelCase フィールド名） */
   jsonbFields: string[]
-  /** 物理削除可の関係エッジか（archive/restore の代わりに DELETE を許可） */
+  /** DELETE を許可するか（関係エッジ = 常時可 / 関係種別 = 未使用のみ。ガードは masters.ts） */
   physicalDelete?: boolean
   /** 論理削除を持たないか（physicalDelete 系は active 列なし） */
   noActive?: boolean

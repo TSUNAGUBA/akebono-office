@@ -25,7 +25,7 @@ graph TD
     ST --> STD["/status/:id システム詳細"]
     HOME --> INB["/inbox 通知・エスカレーション"]
     HOME --> MST["/masters マスタメンテナンス"]
-    MST --> M1["/masters/members /masters/departments ほか 10 マスタ"]
+    MST --> M1["/masters/members /masters/departments ほか 12 マスタ"]
     HOME --> SET["/settings 設定"]
 ```
 
@@ -96,7 +96,7 @@ graph TD
 - `/status`: 全体バナー（最悪値ロールアップ）+ サービスカード（UptimeBar 90 日 + uptime%）
 - `/status/:id`: コンポーネント別状態 + インシデント履歴フィード + 管理者はインシデント登録/更新操作可
 - `/inbox`: タブ（通知 / エスカレーション）。エスカレーションカードに 3 アクション（回答送信/裁定記録/対応不要）。裁定記録はナレッジ還流トグル付きモーダル
-- `/masters`: ハブ（10 マスタ + ナレッジのカード）→ 各マスタは共通レイアウト（UiFilterBar + UiDataTable + UiDrawer + UiSchemaForm）。顧客関係は RelationGraph + エッジ一覧
+- `/masters`: ハブ（12 マスタ + ナレッジのカード）→ 各マスタは共通レイアウト（UiFilterBar + UiDataTable + UiDrawer + UiSchemaForm）。顧客関係は 会社/人/関係種別 の 3 ページ（会社・人は RelationGraph + エッジ一覧）
 - `/masters/departments`（F-10-9）: 組織図 ⇔ 一覧のビュー切替。組織図は階層ツリー（DeptOrgNode 再帰カード: 部署名・責任者バッジ・所属メンバーチップ・接続線）。詳細ドロワーに所属メンバー一覧 + 配属セレクト（他部署からの異動）。編集フォームは親部署（循環防止で自部署配下を除外）・責任者・表示順
 - `/masters/leave-types`（F-10-10）: 休暇名・付与方式（周期自動/手動）・使用期限（月数。空欄=期限なし）・表示順。法定有給は「法定」バッジ付きで編集・無効化不可。休暇管理（付与の実行）への導線
 - `/settings`: セクション（カスタム項目 / 汎用区分 / 外部リンク / 日報の入力方式 / 機能トグル / 勤怠ルール / 承認経路 / エスカレーションルール / 監査ログ / デモデータリセット）

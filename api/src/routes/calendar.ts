@@ -286,9 +286,11 @@ export function calendarRoutes(pool: pg.Pool, env: Env): Hono {
         signal: AbortSignal.timeout(15_000),
       })
       if (!res.ok) {
-        console.warn('calendar sync failed:', res.status, (await res.text()).slice(0, 300))
-        // 403 は一過性ではなく設定不備（GCP プロジェクトで Calendar API 未有効化 or スコープ不足）
-        if (res.status === 403) {
+        const bodyTxt = (await res.text()).slice(0, 300)
+        console.warn('calendar sync failed:', res.status, bodyTxt)
+        // 403 のうち設定不備（API 未有効化・権限なし）のみ管理者向け案内にする
+        // （レート超過も 403 を返すため、本文の理由コードで判別する）
+        if (res.status === 403 && /accessNotConfigured|SERVICE_DISABLED|PERMISSION_DENIED/.test(bodyTxt)) {
           throw err('AKO-CAL-001',
             'Google Calendar API が利用できません。管理者は GCP プロジェクトで Google Calendar API を有効化してください', 502)
         }
