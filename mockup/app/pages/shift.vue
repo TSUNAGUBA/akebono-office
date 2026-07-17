@@ -15,8 +15,12 @@ import {
 } from '~/composables/useShifts'
 
 const { currentUser, isAdmin, switchUser } = useCurrentUser()
+const isApi = useApiMode()
 const shifts = useShifts()
 const { staffMembers, sortedPeriods } = shifts
+
+// サーバー側で進んだ希望・割当・状態遷移（他者の操作）を表示時に取り込む
+onMounted(() => { void shifts.refresh() })
 const { show } = useToast()
 const { ask } = useConfirm()
 
@@ -58,8 +62,8 @@ function dayTextClass(date: string): string {
 const upcomingShifts = computed(() => myShifts.value.filter(a => a.date >= today))
 const pastShifts = computed(() => myShifts.value.filter(a => a.date < today).reverse())
 
-function onConsent(assignmentId: string): void {
-  const r = shifts.consent(assignmentId)
+async function onConsent(assignmentId: string): Promise<void> {
+  const r = await shifts.consent(assignmentId)
   if (r.ok) show('シフト変更に合意しました。管理者へ通知済みです', 'ok')
   else show(r.error.message, 'crit')
 }
@@ -103,15 +107,15 @@ function wishBtnClass(p: ShiftPeriod, date: string, kind: ShiftWishKind): string
     : 'border-line-strong bg-surface text-sub hover:border-muted'
 }
 
-function toggleWish(p: ShiftPeriod, date: string, kind: ShiftWishKind): void {
+async function toggleWish(p: ShiftPeriod, date: string, kind: ShiftWishKind): Promise<void> {
   const cur = shifts.wishOf(p.id, currentUser.value.id, date)
   if (cur?.wish === kind) {
-    const r = shifts.clearWish(p.id, currentUser.value.id, date)
+    const r = await shifts.clearWish(p.id, currentUser.value.id, date)
     if (r.ok) show(`${fmtDate(date)} の希望を取り消しました`, 'ok')
     else show(r.error.message, 'crit')
     return
   }
-  const r = shifts.submitWish({
+  const r = await shifts.submitWish({
     periodId: p.id, memberId: currentUser.value.id, date, wish: kind,
     from: cur?.from, to: cur?.to,
   })
@@ -119,10 +123,10 @@ function toggleWish(p: ShiftPeriod, date: string, kind: ShiftWishKind): void {
   else show(r.error.message, 'crit')
 }
 
-function updateWishTime(p: ShiftPeriod, date: string, field: 'from' | 'to', value: string): void {
+async function updateWishTime(p: ShiftPeriod, date: string, field: 'from' | 'to', value: string): Promise<void> {
   const cur = shifts.wishOf(p.id, currentUser.value.id, date)
   if (!cur || cur.wish !== 'want') return
-  const r = shifts.submitWish({
+  const r = await shifts.submitWish({
     periodId: p.id, memberId: currentUser.value.id, date, wish: 'want',
     from: field === 'from' ? value : cur.from,
     to: field === 'to' ? value : cur.to,
@@ -202,11 +206,11 @@ function openAssignCell(memberId: string, date: string): void {
   assignModal.open = true
 }
 
-function doAssign(): void {
+async function doAssign(): Promise<void> {
   const p = adjustPeriod.value
   if (!p) return
   const warnCount = modalWarnings.value.filter(w => w.level === 'warn').length
-  const r = shifts.assign({
+  const r = await shifts.assign({
     periodId: p.id, memberId: assignModal.memberId, date: assignModal.date,
     from: assignModal.from, to: assignModal.to,
   })
@@ -218,10 +222,10 @@ function doAssign(): void {
   }
 }
 
-function doUnassign(): void {
+async function doUnassign(): Promise<void> {
   const existing = modalExisting.value
   if (!existing) return
-  const r = shifts.unassign(existing.id)
+  const r = await shifts.unassign(existing.id)
   if (r.ok) {
     show('割当を解除しました', 'ok')
     assignModal.open = false
@@ -239,7 +243,7 @@ async function doRequestChange(): Promise<void> {
     { confirmLabel: '変更を申請' },
   )
   if (!ok) return
-  const r = shifts.requestChange(existing.id, assignModal.from, assignModal.to)
+  const r = await shifts.requestChange(existing.id, assignModal.from, assignModal.to)
   if (r.ok) {
     show('変更を申請し、本人へ合意依頼を通知しました', 'ok', { label: '通知を確認', to: '/inbox' })
     assignModal.open = false
@@ -254,7 +258,7 @@ async function publishPeriod(p: ShiftPeriod): Promise<void> {
     + (shortage > 0 ? ` ※必要人数に不足がある日が${shortage}日あります。` : '')
   const ok = await ask('シフトの確定・公開', message, { confirmLabel: '確定・公開する' })
   if (!ok) return
-  const r = shifts.publish(p.id)
+  const r = await shifts.publish(p.id)
   if (r.ok) show('シフトを確定・公開し、スタッフへ通知しました', 'ok', { label: '通知を確認', to: '/inbox' })
   else show(r.error.message, 'crit')
 }
@@ -293,7 +297,7 @@ async function advancePeriod(p: ShiftPeriod): Promise<void> {
     const ok = await ask('希望受付の締切', `「${p.label}」の希望受付を締め切ります。以後、スタッフは希望を提出・変更できません。`, { confirmLabel: '締め切る' })
     if (!ok) return
   }
-  const r = shifts.transition(p.id, next)
+  const r = await shifts.transition(p.id, next)
   if (r.ok) show(`「${p.label}」を「${SHIFT_PERIOD_STATUS_LABELS[next]}」にしました`, 'ok')
   else show(r.error.message, 'crit')
 }
@@ -315,8 +319,8 @@ function openPeriodModal(): void {
   periodModal.open = true
 }
 
-function savePeriod(): void {
-  const r = shifts.createPeriod({ ...periodForm })
+async function savePeriod(): Promise<void> {
+  const r = await shifts.createPeriod({ ...periodForm })
   if (r.ok) {
     show('募集期間を作成しました（状態: 準備中）', 'ok')
     periodModal.open = false
@@ -344,8 +348,8 @@ function openDemandRow(row: Record<string, unknown>): void {
   if (p) openDemandModal(p)
 }
 
-function saveDemandRow(row: { date: string; from: string; to: string; required: number }): void {
-  const r = shifts.setDemand(demandModal.periodId, row.date, row.from, row.to, Number(row.required))
+async function saveDemandRow(row: { date: string; from: string; to: string; required: number }): Promise<void> {
+  const r = await shifts.setDemand(demandModal.periodId, row.date, row.from, row.to, Number(row.required))
   if (r.ok) show(`${fmtDate(row.date)} の必要人数を保存しました`, 'ok')
   else show(r.error.message, 'crit')
 }
@@ -492,9 +496,11 @@ function saveDemandRow(row: { date: string; from: string; to: string; required: 
         <UiEmptyState
           icon="Users"
           title="アルバイト・パートスタッフ向けの機能です"
-          hint="希望提出はシフト制スタッフが利用します。ヘッダーのデモユーザー切替、または下のボタンで体験できます"
+          :hint="isApi
+            ? '希望提出はシフト制スタッフ（アルバイト・パート）のアカウントでログインすると利用できます'
+            : '希望提出はシフト制スタッフが利用します。ヘッダーのデモユーザー切替、または下のボタンで体験できます'"
         >
-          <template #action>
+          <template v-if="!isApi" #action>
             <div class="flex flex-wrap justify-center gap-2">
               <button
                 v-for="m in staffMembers"

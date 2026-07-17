@@ -3,23 +3,31 @@
  * - 期間状態は draft → open → closed → adjusting → published の一方向のみ（transition が唯一の遷移口）
  * - 希望は open かつ締切内のみ、割当は adjusting 中のみ書込可（設定系データとして上書き可）
  * - 確定後の変更は requestChange → 本人 consent の 2 段階（労基法上の本人合意を体感させる）
- * - バリデーション閾値は utils/attendance-calc.ts の定数（requiredBreakMinutes / LEGAL_WEEKLY_MIN / 深夜帯）を再利用
+ * - バリデーション（労基法34/61条・週40h・希望NG）は shared/domain/shift.ts を API サービスと共有
+ *
+ * デュアルモード（バッチ3c）:
+ * - API モード: SoT は /v1/shifts（期間・希望・割当・必要人数を一括ハイドレーション。
+ *   希望・割当は管理者 = 全件 / 本人 = 自分のみのサーバースコープ）。
+ *   書込は全てサーバーが状態機械・権限・バリデーション・通知を担い、成功後に一括再取得（原則6）
  */
+import type { Ref } from 'vue'
 import type {
   Member, Result, ShiftAssignment, ShiftAssignmentStatus, ShiftDemand,
   ShiftPeriod, ShiftPeriodStatus, ShiftWish, ShiftWishKind,
 } from '~/types/domain'
 import type { Tone } from '~/types/ui'
 import {
-  LEGAL_WEEKLY_MIN, NIGHT_END_HOUR, NIGHT_START_HOUR, requiredBreakMinutes,
-} from '~/utils/attendance-calc'
-import { addDays, fmtDate, fmtDateLong, fmtHours, weekdayOf } from '~/utils/format'
-import { SHIFT_PERIOD_STATUS_LABELS, SHIFT_WISH_LABELS } from '~/utils/labels'
+  ageAt, periodDates, SHIFT_STATUS_FLOW, shiftSpan, validateShiftAssign,
+} from '../../../shared/domain/shift'
+import type { ShiftWarning } from '../../../shared/domain/shift'
+import { addDays, fmtDate, fmtDateLong, weekdayOf } from '~/utils/format'
+import { SHIFT_PERIOD_STATUS_LABELS } from '~/utils/labels'
+
+// 純粋ロジックの SoT は shared/domain/shift.ts。既存 import 経路の互換用に再エクスポート
+export { ageAt, periodDates, SHIFT_STATUS_FLOW }
+export type { ShiftWarning }
 
 // ---------- 定数（区分ラベルは labels.ts が SoT。ここは F-05 固有の補完分のみ） ----------
-
-/** 期間状態の正順（この順にしか遷移できない） */
-export const SHIFT_STATUS_FLOW: ShiftPeriodStatus[] = ['draft', 'open', 'closed', 'adjusting', 'published']
 
 export const SHIFT_PERIOD_STATUS_TONES: Record<ShiftPeriodStatus, Tone> = {
   draft: 'neutral',
@@ -57,56 +65,38 @@ export const SHIFT_WISH_MARKS: Record<ShiftWishKind, { symbol: string; tone: Ton
   either: { symbol: '△', tone: 'warn' },
 }
 
-/** 割当バリデーションの結果 1 件。error は割当不可、warn は割当可だが注意喚起 */
-export interface ShiftWarning {
-  code: string
-  level: 'error' | 'warn'
-  message: string
+// ---------- API モードのキャッシュ（SPA・モジュールスコープ単一） ----------
+
+const apiShiftPeriods = ref<ShiftPeriod[]>([])
+const apiShiftWishes = ref<ShiftWish[]>([])
+const apiShiftAssignments = ref<ShiftAssignment[]>([])
+const apiShiftDemands = ref<ShiftDemand[]>([])
+
+interface ShiftBundle {
+  periods: ShiftPeriod[]
+  wishes: ShiftWish[]
+  assignments: ShiftAssignment[]
+  demands: ShiftDemand[]
 }
 
-// ---------- 純粋関数（Vue 非依存） ----------
-
-function toMin(hhmm: string): number {
-  const [h, m] = hhmm.split(':').map(Number)
-  return (h ?? 0) * 60 + (m ?? 0)
+/** /v1/shifts の一括ハイドレーション（書込成功後は force で取り直す） */
+function loadShiftData(force = false): Promise<void> {
+  return apiLoadOnce('shift:all', async () => {
+    const b = await apiFetch<ShiftBundle>('/v1/shifts')
+    apiShiftPeriods.value = b.periods
+    apiShiftWishes.value = b.wishes
+    apiShiftAssignments.value = b.assignments
+    apiShiftDemands.value = b.demands
+  }, force)
 }
 
-/** シフト時間帯を分区間へ。終了 <= 開始は日跨ぎとして +24h */
-function shiftSpan(from: string, to: string): { start: number; end: number; minutes: number } {
-  const start = toMin(from)
-  let end = toMin(to)
-  if (end <= start) end += 24 * 60
-  return { start, end, minutes: end - start }
-}
-
-function overlapMin(aStart: number, aEnd: number, bStart: number, bEnd: number): number {
-  return Math.max(0, Math.min(aEnd, bEnd) - Math.max(aStart, bStart))
-}
-
-/** 深夜帯（22:00-翌5:00）との重なり分。end は日跨ぎで 1440 超もあり得る */
-function nightOverlapMinutes(start: number, end: number): number {
-  const nightEnd = NIGHT_END_HOUR * 60 // 05:00
-  const nightStart = NIGHT_START_HOUR * 60 // 22:00
-  return overlapMin(start, end, 0, nightEnd) + overlapMin(start, end, nightStart, 24 * 60 + nightEnd)
-}
-
-/** 指定日時点の満年齢 */
-export function ageAt(birthDate: string, date: string): number {
-  let age = Number(date.slice(0, 4)) - Number(birthDate.slice(0, 4))
-  if (date.slice(5) < birthDate.slice(5)) age--
-  return age
-}
-
-/** 期間内の日付キー一覧（開始〜終了、暴走ガード 92 日） */
-export function periodDates(p: ShiftPeriod): string[] {
-  const dates: string[] = []
-  let d = p.startDate
-  for (let i = 0; i < 92 && d <= p.endDate; i++) {
-    dates.push(d)
-    d = addDays(d, 1)
-  }
-  return dates
-}
+// ログイン確立・切替時に取り直す
+onApiReset(() => {
+  apiShiftPeriods.value = []
+  apiShiftWishes.value = []
+  apiShiftAssignments.value = []
+  apiShiftDemands.value = []
+})
 
 // ---------- composable 本体 ----------
 
@@ -114,11 +104,20 @@ export function useShifts() {
   const { tbl, commit, nextId } = useMockDb()
   const { currentUser } = useCurrentUser()
   const { notify, notifyAdmins } = useNotifications()
-  const periods = tbl('shiftPeriods')
-  const wishes = tbl('shiftWishes')
-  const assignments = tbl('shiftAssignments')
-  const demands = tbl('shiftDemands')
+  const isApi = useApiMode()
+  // API モードはキャッシュをバッキングにし、以降の射影ロジックを共通利用する
+  const periods = isApi ? (apiShiftPeriods as Ref<ShiftPeriod[]>) : tbl('shiftPeriods')
+  const wishes = isApi ? (apiShiftWishes as Ref<ShiftWish[]>) : tbl('shiftWishes')
+  const assignments = isApi ? (apiShiftAssignments as Ref<ShiftAssignment[]>) : tbl('shiftAssignments')
+  const demands = isApi ? (apiShiftDemands as Ref<ShiftDemand[]>) : tbl('shiftDemands')
   const members = tbl('members')
+  if (isApi) void loadShiftData()
+
+  /** 一覧の取り直し（シフトページ表示時に呼ぶ。他者の希望・割当・状態遷移の取り込み） */
+  async function refresh(): Promise<void> {
+    if (!isApi) return
+    await loadShiftData(true)
+  }
 
   /** 対象スタッフ = アルバイト・パートの在籍者 */
   const staffMembers = computed<Member[]>(() =>
@@ -151,8 +150,18 @@ export function useShifts() {
 
   // ---------- 期間管理 ----------
 
-  /** 状態機械: draft→open→closed→adjusting→published の正順のみ許可 */
-  function transition(periodId: string, next: ShiftPeriodStatus): Result {
+  /**
+   * 状態機械: draft→open→closed→adjusting→published の正順のみ許可。
+   * published への遷移は割当の confirmed 化 + スタッフ通知まで含む（API はサーバーが一括で担う）
+   */
+  async function transition(periodId: string, next: ShiftPeriodStatus): Promise<Result> {
+    if (isApi) {
+      const res = await apiResult(() => apiFetch(`/v1/shifts/periods/${periodId}/transition`, {
+        method: 'POST', body: { next },
+      }))
+      if (res.ok) await loadShiftData(true)
+      return res
+    }
     const denied = requireAdmin()
     if (denied) return denied
     const p = periodById(periodId)
@@ -174,7 +183,14 @@ export function useShifts() {
     return { ok: true, id: periodId }
   }
 
-  function createPeriod(input: { label: string; startDate: string; endDate: string; wishDeadline: string }): Result {
+  async function createPeriod(input: { label: string; startDate: string; endDate: string; wishDeadline: string }): Promise<Result> {
+    if (isApi) {
+      const res = await apiResult(() => apiFetch<{ id: string }>('/v1/shifts/periods', {
+        method: 'POST', body: input,
+      }))
+      if (res.ok) await loadShiftData(true)
+      return res
+    }
     const denied = requireAdmin()
     if (denied) return denied
     if (!input.label.trim()) {
@@ -225,15 +241,23 @@ export function useShifts() {
     return null
   }
 
-  /** 希望の提出・更新（同一日への再提出は上書き = 設定系データ） */
-  function submitWish(input: {
+  /** 希望の提出・更新（同一日への再提出は上書き = 設定系データ。API は認証ユーザー本人として記録） */
+  async function submitWish(input: {
     periodId: string
     memberId: string
     date: string
     wish: ShiftWishKind
     from?: string | null
     to?: string | null
-  }): Result {
+  }): Promise<Result> {
+    if (isApi) {
+      const res = await apiResult(() => apiFetch<{ id: string }>('/v1/shifts/wishes', {
+        method: 'PUT',
+        body: { periodId: input.periodId, date: input.date, wish: input.wish, from: input.from, to: input.to },
+      }))
+      if (res.ok) await loadShiftData(true)
+      return res
+    }
     const guard = wishGuard(periodById(input.periodId), input.date)
     if (guard) return guard
     const from = input.wish === 'want' ? (input.from ?? '10:00') : null
@@ -254,8 +278,15 @@ export function useShifts() {
     return { ok: true, id }
   }
 
-  /** 希望の取消（締切内のみ） */
-  function clearWish(periodId: string, memberId: string, date: string): Result {
+  /** 希望の取消（締切内のみ。API は認証ユーザー本人の希望のみ） */
+  async function clearWish(periodId: string, memberId: string, date: string): Promise<Result> {
+    if (isApi) {
+      const res = await apiResult(() => apiFetch<{ id: string }>('/v1/shifts/wishes/clear', {
+        method: 'POST', body: { periodId, date },
+      }))
+      if (res.ok) await loadShiftData(true)
+      return res
+    }
     const guard = wishGuard(periodById(periodId), date)
     if (guard) return guard
     const existing = wishOf(periodId, memberId, date)
@@ -271,8 +302,8 @@ export function useShifts() {
 
   /**
    * 割当バリデーション（error = 割当不可 / warn = 割当可だが警告表示）
-   * a) 休憩不足（6h超45分・8h超60分） b) 18歳未満の深夜（労基法61条・エラー）
-   * c) 週40時間超（同一週の割当合計） d) 本人希望 NG との衝突
+   * 判定ロジックは shared/domain/shift.validateShiftAssign（API サービスと共有）。
+   * ここではストア（割当合計・希望・メンバー）から文脈を集めて渡す
    */
   function validateAssign(
     memberId: string,
@@ -281,59 +312,27 @@ export function useShifts() {
     to: string,
     opts?: { excludeAssignmentId?: string; periodId?: string },
   ): ShiftWarning[] {
-    if (!from || !to || from === to) {
-      return [{ code: 'AKO-SFT-007', level: 'error', message: '開始・終了時刻を正しく入力してください' }]
-    }
-    const list: ShiftWarning[] = []
-    const span = shiftSpan(from, to)
     const member = members.value.find(m => m.id === memberId)
-
-    // b) 18歳未満の深夜業（労基法61条）→ 割当不可
-    if (member && ageAt(member.birthDate, date) < 18 && nightOverlapMinutes(span.start, span.end) > 0) {
-      list.push({
-        code: 'AKO-SFT-001',
-        level: 'error',
-        message: `${member.name} さんは18歳未満のため深夜帯（22:00〜翌5:00）に割当できません（労基法61条）`,
-      })
-    }
-
-    // a) 休憩不足（労基法34条: 6h超45分 / 8h超60分）
-    const reqBreak = requiredBreakMinutes(span.minutes)
-    if (reqBreak > 0) {
-      list.push({
-        code: 'AKO-SFT-W01',
-        level: 'warn',
-        message: `勤務${fmtHours(span.minutes)}のため休憩${reqBreak}分の確保が必要です`,
-      })
-    }
-
-    // c) 週40時間超（週 = 日曜起算。今回分を含めた合計で判定）
     const weekStart = addDays(date, -weekdayOf(date))
     const weekEnd = addDays(weekStart, 6)
-    const weekTotal = assignments.value
+    const weekAssignedMinutes = assignments.value
       .filter(a => a.memberId === memberId
         && a.id !== opts?.excludeAssignmentId
         && a.date >= weekStart && a.date <= weekEnd)
-      .reduce((sum, a) => sum + shiftSpan(a.from, a.to).minutes, 0) + span.minutes
-    if (weekTotal > LEGAL_WEEKLY_MIN) {
-      list.push({
-        code: 'AKO-SFT-W02',
-        level: 'warn',
-        message: `同一週（${fmtDate(weekStart)}〜）の割当合計が${fmtHours(weekTotal)}となり週40時間を超えます`,
-      })
-    }
-
-    // d) 本人希望 NG との衝突（期間指定時は同一期間の希望のみ参照。期間重複作成時の誤警告防止）
+      .reduce((sum, a) => sum + shiftSpan(a.from, a.to).minutes, 0)
+    // 期間指定時は同一期間の希望のみ参照（期間重複作成時の誤警告防止）
     const w = wishes.value.find(x => x.memberId === memberId && x.date === date
       && (!opts?.periodId || x.periodId === opts.periodId))
-    if (w?.wish === 'ng') {
-      list.push({
-        code: 'AKO-SFT-W03',
-        level: 'warn',
-        message: `本人希望が「${SHIFT_WISH_LABELS.ng}」の日です`,
-      })
-    }
-    return list
+    return validateShiftAssign({
+      memberName: member?.name ?? memberId,
+      birthDate: member?.birthDate ?? null,
+      date,
+      from,
+      to,
+      weekAssignedMinutes,
+      weekStartDate: weekStart,
+      hasNgWish: w?.wish === 'ng',
+    })
   }
 
   // ---------- 割当 CRUD（adjusting 中のみ） ----------
@@ -343,7 +342,14 @@ export function useShifts() {
   }
 
   /** 割当の作成・更新。エラー級バリデーション（18歳未満深夜）に該当する場合は書き込まない */
-  function assign(input: { periodId: string; memberId: string; date: string; from: string; to: string }): Result {
+  async function assign(input: { periodId: string; memberId: string; date: string; from: string; to: string }): Promise<Result> {
+    if (isApi) {
+      const res = await apiResult(() => apiFetch<{ id: string }>('/v1/shifts/assignments', {
+        method: 'POST', body: input,
+      }))
+      if (res.ok) await loadShiftData(true)
+      return res
+    }
     const denied = requireAdmin()
     if (denied) return denied
     const p = periodById(input.periodId)
@@ -377,7 +383,12 @@ export function useShifts() {
     return { ok: true, id }
   }
 
-  function unassign(assignmentId: string): Result {
+  async function unassign(assignmentId: string): Promise<Result> {
+    if (isApi) {
+      const res = await apiResult(() => apiFetch(`/v1/shifts/assignments/${assignmentId}/unassign`, { method: 'POST' }))
+      if (res.ok) await loadShiftData(true)
+      return res
+    }
     const denied = requireAdmin()
     if (denied) return denied
     const a = assignments.value.find(x => x.id === assignmentId)
@@ -396,12 +407,16 @@ export function useShifts() {
   // ---------- 確定・公開 ----------
 
   /** 確定・公開: adjusting→published + 割当を confirmed + 各スタッフへ通知（通知は非ブロッキング） */
-  function publish(periodId: string): Result {
+  async function publish(periodId: string): Promise<Result> {
+    if (isApi) {
+      // confirmed 化・通知はサーバー（transition published）が一括で担う
+      return transition(periodId, 'published')
+    }
     const p = periodById(periodId)
     if (!p) {
       return { ok: false, error: { code: 'AKO-SFT-005', message: '対象の募集期間が見つかりません' } }
     }
-    const t = transition(periodId, 'published')
+    const t = await transition(periodId, 'published')
     if (!t.ok) return t
     const targets = new Set<string>()
     assignments.value = assignments.value.map((a) => {
@@ -421,7 +436,14 @@ export function useShifts() {
   // ---------- 確定後変更（本人合意ステップ付き） ----------
 
   /** 確定済み割当の時間変更を申請する（本人合意が得られるまで change_requested） */
-  function requestChange(assignmentId: string, from: string, to: string): Result {
+  async function requestChange(assignmentId: string, from: string, to: string): Promise<Result> {
+    if (isApi) {
+      const res = await apiResult(() => apiFetch(`/v1/shifts/assignments/${assignmentId}/request-change`, {
+        method: 'POST', body: { from, to },
+      }))
+      if (res.ok) await loadShiftData(true)
+      return res
+    }
     const denied = requireAdmin()
     if (denied) return denied
     const a = assignments.value.find(x => x.id === assignmentId)
@@ -449,7 +471,12 @@ export function useShifts() {
   }
 
   /** 本人が変更に合意する（consentAt を記録して confirmed へ） */
-  function consent(assignmentId: string): Result {
+  async function consent(assignmentId: string): Promise<Result> {
+    if (isApi) {
+      const res = await apiResult(() => apiFetch(`/v1/shifts/assignments/${assignmentId}/consent`, { method: 'POST' }))
+      if (res.ok) await loadShiftData(true)
+      return res
+    }
     const a = assignments.value.find(x => x.id === assignmentId)
     if (!a) {
       return { ok: false, error: { code: 'AKO-SFT-005', message: '対象の割当が見つかりません' } }
@@ -475,7 +502,15 @@ export function useShifts() {
   }
 
   /** 必要人数の設定（日別 1 スロットの簡易編集。0 人で削除 = 設定系データ） */
-  function setDemand(periodId: string, date: string, from: string, to: string, required: number): Result {
+  async function setDemand(periodId: string, date: string, from: string, to: string, required: number): Promise<Result> {
+    required = Math.floor(required) // 小数入力はモード共通で切り捨て（API の CHECK (required > 0) と整合）
+    if (isApi) {
+      const res = await apiResult(() => apiFetch<{ id: string | null }>('/v1/shifts/demands', {
+        method: 'PUT', body: { periodId, date, from, to, required },
+      }))
+      if (res.ok) await loadShiftData(true)
+      return res
+    }
     const denied = requireAdmin()
     if (denied) return denied
     const p = periodById(periodId)
@@ -535,5 +570,7 @@ export function useShifts() {
     submitWish, clearWish,
     // 割当
     validateAssign, assign, unassign, requestChange, consent, setDemand,
+    // API モード
+    refresh,
   }
 }

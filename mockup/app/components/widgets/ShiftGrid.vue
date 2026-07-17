@@ -111,8 +111,9 @@ function markOf(wish: ShiftWishKind): { symbol: string; cls: string } {
               class="sticky left-0 z-10 border-b border-r border-line bg-surface px-2 py-1 text-left align-middle"
             >
               <span class="block text-[12px] font-semibold leading-tight">{{ m.name }}</span>
+              <!-- birthDate は API モードでは未設定（null）があり得るためガード -->
               <span
-                v-if="ageAt(m.birthDate, period.startDate) < 18"
+                v-if="m.birthDate && ageAt(m.birthDate, period.startDate) < 18"
                 class="mt-0.5 inline-block rounded-full bg-warn-soft px-1.5 text-[10px] font-semibold text-warn"
               >{{ ageAt(m.birthDate, period.startDate) }}歳・深夜不可</span>
             </th>

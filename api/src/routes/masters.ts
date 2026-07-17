@@ -79,6 +79,34 @@ async function exclusiveDefaultFor(db: pg.PoolClient, ruleId: string, defaultFor
   )
 }
 
+/**
+ * workflow-routes の部分更新でも「上限 <= 下限」「steps.order 重複」を許さない
+ * （POST は schema の superRefine が担うが、.partial() 由来の patchSchema では
+ * クロスフィールド検証ができないため、既存行とマージした結果で検証する）
+ */
+async function workflowRouteCrossGuard(
+  pool: pg.Pool,
+  id: string,
+  body: Record<string, unknown>,
+): Promise<void> {
+  const { rows } = await pool.query<{ minAmount: number; maxAmount: number | null; steps: { order: number }[] }>(
+    `SELECT min_amount::float8 AS "minAmount", max_amount::float8 AS "maxAmount", steps
+     FROM workflow_routes WHERE id = $1`, [id])
+  const existing = rows[0]
+  if (!existing) return // 対象なしは後段の UPDATE が 404 を返す
+  const minAmount = 'minAmount' in body ? Number(body.minAmount) : existing.minAmount
+  const maxAmount = 'maxAmount' in body
+    ? (body.maxAmount === null ? null : Number(body.maxAmount))
+    : existing.maxAmount
+  if (maxAmount !== null && maxAmount <= minAmount) {
+    throw err('AKO-GEN-001', '上限金額は下限金額より大きくしてください', 400)
+  }
+  const steps = ('steps' in body ? body.steps : existing.steps) as { order: number }[]
+  if (Array.isArray(steps) && new Set(steps.map(s => s.order)).size !== steps.length) {
+    throw err('AKO-GEN-001', '承認ステップの順序（order）が重複しています', 400)
+  }
+}
+
 function toSqlValue(def: { jsonbFields: string[] }, field: string, value: unknown): unknown {
   return def.jsonbFields.includes(field) ? JSON.stringify(value) : value
 }
@@ -161,6 +189,9 @@ export function mastersRoutes(pool: pg.Pool): Hono {
     if (entity === 'leave-types') await leaveTypeStatutoryGuard(pool, id)
     if (entity === 'departments' && 'parentId' in body) {
       await departmentCycleGuard(pool, id, body.parentId as string | null)
+    }
+    if (entity === 'workflow-routes' && ('minAmount' in body || 'maxAmount' in body || 'steps' in body)) {
+      await workflowRouteCrossGuard(pool, id, body)
     }
 
     const fields = Object.keys(body)
