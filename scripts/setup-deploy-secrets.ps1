@@ -1,47 +1,95 @@
-﻿<#
+<#
 .SYNOPSIS
   GitHub Actions デプロイ（.github/workflows/deploy.yml）が参照する
   Repository secrets を PowerShell だけで設定するスクリプト。
 
 .DESCRIPTION
-  以下 2 つの Repository secrets を gh CLI 経由で設定します:
+  [mockup（Firebase Hosting）用 — 必須]
     - FIREBASE_SERVICE_ACCOUNT : Firebase Hosting デプロイ用サービスアカウント鍵 JSON
     - FIREBASE_PROJECT_ID      : Firebase プロジェクト ID
+
+  [api（Cloud Run + RDS PostgreSQL）用 — -DatabaseUrl 指定時に設定]
+    - GCP_SERVICE_ACCOUNT      : Cloud Run デプロイ用サービスアカウント鍵 JSON
+                                 （省略時は FIREBASE_SERVICE_ACCOUNT と同じ鍵を流用）
+    - GCP_PROJECT_ID           : GCP プロジェクト ID（省略時は -ProjectId と同一）
+    - GCP_REGION               : デプロイ先リージョン（既定: asia-northeast1）
+    - CLOUD_RUN_SERVICE        : Cloud Run サービス名（既定: akebono-office-api）
+    - DATABASE_URL             : RDS PostgreSQL 接続文字列
+                                 例) postgresql://app:PASS@xxxx.ap-northeast-1.rds.amazonaws.com:5432/akebono_office
+    - DB_SSL                   : disable / require / verify（既定: require。RDS は require 以上）
+    - API_CORS_ORIGINS         : CORS 許可オリジン（既定: https://<GcpProjectId>.web.app）
 
   前提:
     - GitHub CLI (gh) がインストール済みで `gh auth login` 済みであること
       （インストール: winget install GitHub.cli）
     - 対象リポジトリへの admin 権限があること
 
-  サービスアカウント鍵の作成（初回のみ・GCP 側の操作）:
-    gcloud CLI があれば以下で作成できます（PROJECT_ID は自分のものに置換）:
+  サービスアカウントの準備（初回のみ・GCP 側の操作。詳細は deploy-guide.md）:
+    mockup 用ロール: roles/firebasehosting.admin
+    api 用ロール:    roles/run.admin, roles/artifactregistry.admin,
+                     roles/iam.serviceAccountUser, roles/secretmanager.admin
+    1 つの SA に両方を付与して共用してもよい（小規模運用向け）:
       gcloud iam service-accounts create github-actions-deploy --project PROJECT_ID
-      gcloud projects add-iam-policy-binding PROJECT_ID `
-        --member "serviceAccount:github-actions-deploy@PROJECT_ID.iam.gserviceaccount.com" `
-        --role "roles/firebasehosting.admin"
-      gcloud iam service-accounts keys create firebase-sa.json `
+      foreach ($role in @('roles/firebasehosting.admin','roles/run.admin',
+                          'roles/artifactregistry.admin','roles/iam.serviceAccountUser',
+                          'roles/secretmanager.admin')) {
+        gcloud projects add-iam-policy-binding PROJECT_ID `
+          --member "serviceAccount:github-actions-deploy@PROJECT_ID.iam.gserviceaccount.com" `
+          --role $role
+      }
+      gcloud iam service-accounts keys create deploy-sa.json `
         --iam-account "github-actions-deploy@PROJECT_ID.iam.gserviceaccount.com"
-    gcloud を使わない場合は Firebase Console > プロジェクトの設定 > サービスアカウント からも生成できます。
 
 .EXAMPLE
+  # mockup のみ（従来と同じ使い方。下位互換）
   ./scripts/setup-deploy-secrets.ps1 -ProjectId my-firebase-project -ServiceAccountJsonPath ./firebase-sa.json
 
 .EXAMPLE
+  # mockup + api（Cloud Run。SA 鍵は共用）
+  ./scripts/setup-deploy-secrets.ps1 -ProjectId my-project -ServiceAccountJsonPath ./deploy-sa.json `
+    -DatabaseUrl 'postgresql://app:PASS@mydb.xxxx.ap-northeast-1.rds.amazonaws.com:5432/akebono_office'
+
+.EXAMPLE
   # 設定後にそのままデプロイを起動する
-  ./scripts/setup-deploy-secrets.ps1 -ProjectId my-firebase-project -ServiceAccountJsonPath ./firebase-sa.json -TriggerDeploy
+  ./scripts/setup-deploy-secrets.ps1 -ProjectId my-project -ServiceAccountJsonPath ./deploy-sa.json `
+    -DatabaseUrl 'postgresql://...' -TriggerDeploy
 #>
 [CmdletBinding()]
 param(
-  # Firebase プロジェクト ID（例: akebono-office-mock）
+  # Firebase / GCP プロジェクト ID（例: akebono-office-mock）
   [Parameter(Mandatory = $true)]
   [string]$ProjectId,
 
-  # サービスアカウント鍵 JSON ファイルのパス
+  # サービスアカウント鍵 JSON ファイルのパス（Firebase Hosting 用。-GcpServiceAccountJsonPath 省略時は api 用にも流用）
   [Parameter(Mandatory = $true)]
   [string]$ServiceAccountJsonPath,
 
   # 対象リポジトリ（owner/repo）
   [string]$Repo = 'TSUNAGUBA/akebono-office',
+
+  # ---------- api（Cloud Run）用。-DatabaseUrl を指定すると API 用 secrets も設定する ----------
+
+  # RDS PostgreSQL 接続文字列。未指定の場合 API 用 secrets は設定しない（deploy-api はスキップ動作）
+  [string]$DatabaseUrl = '',
+
+  # Cloud Run デプロイ用 SA 鍵 JSON（省略時は $ServiceAccountJsonPath を流用）
+  [string]$GcpServiceAccountJsonPath = '',
+
+  # GCP プロジェクト ID（省略時は $ProjectId と同一）
+  [string]$GcpProjectId = '',
+
+  # デプロイ先リージョン
+  [string]$GcpRegion = 'asia-northeast1',
+
+  # Cloud Run サービス名
+  [string]$CloudRunService = 'akebono-office-api',
+
+  # DB 接続の SSL モード（disable / require / verify。RDS は require 以上を推奨）
+  [ValidateSet('disable', 'require', 'verify')]
+  [string]$DbSsl = 'require',
+
+  # API の CORS 許可オリジン（カンマ区切り。省略時は https://<GcpProjectId>.web.app）
+  [string]$CorsOrigins = '',
 
   # 設定完了後に deploy ワークフローを手動起動する
   [switch]$TriggerDeploy
@@ -51,6 +99,38 @@ $ErrorActionPreference = 'Stop'
 
 function Write-Step([string]$Message) {
   Write-Host "==> $Message" -ForegroundColor Cyan
+}
+
+# gh secret set の共通ラッパー（stdin 経由・UTF-8。PS 5.1 の引数エスケープ問題と旧 gh の --body-file 非対応を回避）
+function Set-RepoSecret([string]$Name, [string]$Value) {
+  $prevOutputEncoding = $OutputEncoding
+  try {
+    $OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+    $Value | gh secret set $Name --repo $Repo
+  }
+  finally {
+    $OutputEncoding = $prevOutputEncoding
+  }
+  if ($LASTEXITCODE -ne 0) { throw "$Name の設定に失敗しました。" }
+  Write-Host "  ✓ $Name"
+}
+
+# サービスアカウント鍵 JSON の読込と検証
+function Read-ServiceAccountJson([string]$Path) {
+  if (-not (Test-Path $Path)) {
+    throw "ファイルが見つかりません: $Path"
+  }
+  $raw = Get-Content -Raw -Path $Path
+  try {
+    $sa = $raw | ConvertFrom-Json
+  }
+  catch {
+    throw 'サービスアカウント鍵が JSON として解析できません。ダウンロードした鍵ファイルを指定してください。'
+  }
+  if ($sa.type -ne 'service_account' -or -not $sa.client_email) {
+    throw "指定されたファイルはサービスアカウント鍵ではないようです（type=$($sa.type)）。"
+  }
+  return @{ Raw = $raw; Parsed = $sa }
 }
 
 # ---------- 前提チェック ----------
@@ -66,44 +146,45 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Step 'サービスアカウント鍵 JSON の検証'
-if (-not (Test-Path $ServiceAccountJsonPath)) {
-  throw "ファイルが見つかりません: $ServiceAccountJsonPath"
-}
-$saRaw = Get-Content -Raw -Path $ServiceAccountJsonPath
-try {
-  $sa = $saRaw | ConvertFrom-Json
-}
-catch {
-  throw 'サービスアカウント鍵が JSON として解析できません。ダウンロードした鍵ファイルを指定してください。'
-}
-if ($sa.type -ne 'service_account' -or -not $sa.client_email) {
-  throw "指定されたファイルはサービスアカウント鍵ではないようです（type=$($sa.type)）。"
-}
-if ($sa.project_id -and $sa.project_id -ne $ProjectId) {
-  Write-Warning "鍵の project_id ($($sa.project_id)) と -ProjectId ($ProjectId) が一致しません。意図したプロジェクトか確認してください。"
+$firebaseSa = Read-ServiceAccountJson $ServiceAccountJsonPath
+if ($firebaseSa.Parsed.project_id -and $firebaseSa.Parsed.project_id -ne $ProjectId) {
+  Write-Warning "鍵の project_id ($($firebaseSa.Parsed.project_id)) と -ProjectId ($ProjectId) が一致しません。意図したプロジェクトか確認してください。"
 }
 
-# ---------- Secrets 設定（冪等: 再実行すると同名 secret を上書き更新） ----------
+# ---------- mockup 用 Secrets（冪等: 再実行すると同名 secret を上書き更新） ----------
 
-Write-Step "Repository secrets を設定: $Repo"
-# 鍵 JSON は stdin パイプで渡す（gh は -b 未指定時に標準入力を読む）。
-# ・--body 引数渡しは PS 5.1 が引数内の二重引用符を正しくエスケープできず argv 分割される
-# ・--body-file は古い gh CLI に存在しない
-# ため、全バージョンで動く stdin 経路を採用し、$OutputEncoding を UTF-8 に明示して送る
-$prevOutputEncoding = $OutputEncoding
-try {
-  $OutputEncoding = New-Object System.Text.UTF8Encoding($false)
-  $saRaw | gh secret set FIREBASE_SERVICE_ACCOUNT --repo $Repo
-}
-finally {
-  $OutputEncoding = $prevOutputEncoding
-}
-if ($LASTEXITCODE -ne 0) { throw 'FIREBASE_SERVICE_ACCOUNT の設定に失敗しました。' }
-Write-Host '  ✓ FIREBASE_SERVICE_ACCOUNT'
+Write-Step "Repository secrets を設定（mockup / Firebase Hosting）: $Repo"
+Set-RepoSecret 'FIREBASE_SERVICE_ACCOUNT' $firebaseSa.Raw
+Set-RepoSecret 'FIREBASE_PROJECT_ID' $ProjectId
 
-gh secret set FIREBASE_PROJECT_ID --repo $Repo --body $ProjectId
-if ($LASTEXITCODE -ne 0) { throw 'FIREBASE_PROJECT_ID の設定に失敗しました。' }
-Write-Host '  ✓ FIREBASE_PROJECT_ID'
+# ---------- api 用 Secrets（-DatabaseUrl 指定時のみ） ----------
+
+if ($DatabaseUrl) {
+  if ($DatabaseUrl -notmatch '^postgres(ql)?://') {
+    throw "-DatabaseUrl は postgresql:// 形式で指定してください（例: postgresql://app:PASS@host:5432/akebono_office）"
+  }
+  $gcpSa = $firebaseSa
+  if ($GcpServiceAccountJsonPath) {
+    Write-Step 'Cloud Run 用サービスアカウント鍵 JSON の検証'
+    $gcpSa = Read-ServiceAccountJson $GcpServiceAccountJsonPath
+  }
+  $effectiveGcpProject = if ($GcpProjectId) { $GcpProjectId } else { $ProjectId }
+  $effectiveCors = if ($CorsOrigins) { $CorsOrigins } else { "https://$effectiveGcpProject.web.app" }
+
+  Write-Step "Repository secrets を設定（api / Cloud Run + RDS PostgreSQL）: $Repo"
+  Set-RepoSecret 'GCP_SERVICE_ACCOUNT' $gcpSa.Raw
+  Set-RepoSecret 'GCP_PROJECT_ID' $effectiveGcpProject
+  Set-RepoSecret 'GCP_REGION' $GcpRegion
+  Set-RepoSecret 'CLOUD_RUN_SERVICE' $CloudRunService
+  Set-RepoSecret 'DATABASE_URL' $DatabaseUrl
+  Set-RepoSecret 'DB_SSL' $DbSsl
+  Set-RepoSecret 'API_CORS_ORIGINS' $effectiveCors
+}
+else {
+  Write-Host ''
+  Write-Warning ('-DatabaseUrl が未指定のため API（Cloud Run）用 secrets は設定していません。' +
+    'deploy ワークフローの deploy-api ジョブは警告を出してスキップされます（mockup のみデプロイ）。')
+}
 
 Write-Step '設定結果の確認'
 gh secret list --repo $Repo
@@ -119,4 +200,5 @@ if ($TriggerDeploy) {
 }
 
 Write-Host ''
-Write-Host '完了しました。main への push（mockup/ 配下の変更）または gh workflow run deploy.yml でデプロイされます。' -ForegroundColor Green
+Write-Host '完了しました。main への push（mockup/ api/ shared/ 配下の変更）または gh workflow run deploy.yml でデプロイされます。' -ForegroundColor Green
+Write-Host 'RDS 側のネットワーク設定（Cloud Run からの到達性・SSL）は .ai-native/outputs/phase7/deploy-guide.md を参照してください。'

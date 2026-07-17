@@ -1,8 +1,11 @@
 # Phase 5: アーキテクチャ設計
 
-- **作成日:** 2026-07-15
+- **作成日:** 2026-07-15（更新: 2026-07-17）
 - **作成ロール:** コーディングエージェント（ナビゲーター協議済み）
 - **対象:** `mockup/`（Nuxt 4 SPA モックアップ）
+- **本番構成:** API（Cloud Run）+ RDS PostgreSQL の本実装アーキテクチャは `phase7/production-architecture.md` が SoT。
+  ドメイン型・勤怠計算・JST ユーティリティは repo 直下 `shared/domain/` へ移設し、フロント（本書の対象）と
+  API サービス（`api/`）で共有する（mockup 側の `types/domain.ts` / `utils/attendance-calc.ts` は再エクスポートのシム）
 
 ## 1. 全体構成
 

@@ -232,9 +232,18 @@ Phase 0 から開始します。
 ├── guides/                   # 利用ガイド
 ├── domain-context/           # プロジェクト横断の参考資料
 └── outputs/                  # プロジェクト成果物の出力先
+mockup/                       # Nuxt 4 SPA（モックアップ = 将来の本番 UI）
+api/                          # 本実装 API（Hono + PostgreSQL。Cloud Run で運用）
+shared/domain/                # フロント/API 共有のドメイン層（型・勤怠計算・JST）
+scripts/                      # 運用スクリプト（デプロイ用 secrets 設定等）
 ```
 
 `CLAUDE.md`（リポジトリルート）は Claude Code 環境固有の実装ルール（Push 前チェック、バグ修正手順など）を定義しています。
+
+本実装（Cloud Run + RDS PostgreSQL）の状況と手順:
+- 実装状況マトリクス: [`/.ai-native/outputs/phase7/implementation-status.md`](.ai-native/outputs/phase7/implementation-status.md)
+- 本番アーキテクチャ: [`/.ai-native/outputs/phase7/production-architecture.md`](.ai-native/outputs/phase7/production-architecture.md)
+- デプロイ手順: [`/.ai-native/outputs/phase7/deploy-guide.md`](.ai-native/outputs/phase7/deploy-guide.md)
 
 ---
 
