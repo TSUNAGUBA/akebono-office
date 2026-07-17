@@ -145,11 +145,17 @@ export function mastersRoutes(pool: pg.Pool): Hono {
     const user = requireMutator(c, entity)
     if (!def.patchSchema) throw err('AKO-GEN-002', '関係エッジは更新できません（削除して再登録）', 405)
     const id = c.req.param('id')
-    const parsed = def.patchSchema.safeParse(await c.req.json().catch(() => ({})))
+    const raw = await c.req.json().catch(() => ({})) as Record<string, unknown>
+    const parsed = def.patchSchema.safeParse(raw)
     if (!parsed.success) {
       throw err('AKO-GEN-001', parsed.error.issues[0]?.message ?? '入力内容を確認してください', 400)
     }
-    const body = parsed.data as Record<string, unknown>
+    // 重要: zod v4 の .partial() は .default() 付きフィールドへ既定値を注入する。
+    // そのまま UPDATE すると部分更新のつもりが未指定列を既定値で上書きしてしまう
+    // （実障害: 部署配属 {departmentId} で members.email が空・role が member に巻き戻った）。
+    // リクエスト body に実際に含まれるキーのみを更新対象にする。
+    const body = Object.fromEntries(
+      Object.entries(parsed.data as Record<string, unknown>).filter(([k]) => Object.hasOwn(raw, k)))
     if (Object.keys(body).length === 0) throw err('AKO-GEN-001', '更新内容がありません', 400)
 
     if (entity === 'leave-types') await leaveTypeStatutoryGuard(pool, id)

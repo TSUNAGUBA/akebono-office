@@ -337,6 +337,19 @@ describe('マスタ CRUD', () => {
     expect((await api('POST', `/v1/masters/departments/${depId}/restore`, { as: ADMIN })).status).toBe(200)
   })
 
+  it('部分 PATCH は未指定フィールドを上書きしない（zod v4 .partial() の既定値注入の回帰防止）', async () => {
+    // 実障害の再現経路: 部署配属（departmentId のみの PATCH）で email が空・role が member に巻き戻った
+    const r = await api('PATCH', `/v1/masters/members/${HR}`, { as: ADMIN, body: { title: '人事部長' } })
+    expect(r.status).toBe(200)
+    const rows = (await api('GET', '/v1/masters/members', { as: ADMIN })).json.data as
+      { id: string; name: string; email: string; role: string; title: string }[]
+    const hr = rows.find(m => m.id === HR)!
+    expect(hr.title).toBe('人事部長')
+    expect(hr.email).toBe('hr@example.com')
+    expect(hr.role).toBe('hr')
+    expect(hr.name).toBe('人事 花子')
+  })
+
   it('部署: 循環する親子は AKO-DEP-003', async () => {
     const a = (await api('POST', '/v1/masters/departments', { as: ADMIN, body: { name: 'A' } })).json.data as { id: string }
     const b = (await api('POST', '/v1/masters/departments', { as: ADMIN, body: { name: 'B', parentId: a.id } })).json.data as { id: string }
