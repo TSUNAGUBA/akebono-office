@@ -4,9 +4,16 @@
  * - 承認ログ（approvalLogs）は追記のみの監査証跡。巻き戻さない
  * - 通知は補助処理（useNotifications 側で非ブロッキング保証）
  * - 状態機械: draft → submitted → in_review(step 1..n) → approved / rejected / remanded / withdrawn
+ *
+ * デュアルモード（バッチ3b）:
+ * - API モード: SoT は /v1/workflows。申請・証跡・代理設定をハイドレーションし、
+ *   射影（承認待ち・フロー表示・経路プレビュー）は共通ロジック。書込（下書き・提出・承認操作・
+ *   代理設定）はサーバーが権限・状態機械・通知を担い、成功後にキャッシュを取り直す（原則6）。
+ *   承認経路マスタ（workflowRoutes）は移行済みマスタとして tbl() が API キャッシュを返す
  */
+import type { Ref } from 'vue'
 import type {
-  ApprovalAction, DelegateSetting, Member, Result, WorkflowCategory,
+  ApprovalAction, ApprovalLog, DelegateSetting, Member, Result, WorkflowCategory,
   WorkflowRequest, WorkflowRouteStep,
 } from '~/types/domain'
 import { resolveRoute } from '~/utils/approval-route'
@@ -28,6 +35,40 @@ export interface WorkflowInput {
   attachments: string[]
 }
 
+// ---------- API モードのキャッシュ（SPA・モジュールスコープ単一） ----------
+
+const apiWfRequests = ref<WorkflowRequest[]>([])
+const apiWfLogs = ref<ApprovalLog[]>([])
+const apiWfDelegates = ref<DelegateSetting[]>([])
+
+function loadWfRequests(force = false): Promise<void> {
+  return apiLoadOnce('wf:requests', async () => {
+    apiWfRequests.value = await apiFetch<WorkflowRequest[]>('/v1/workflows')
+  }, force)
+}
+
+function loadWfDelegates(force = false): Promise<void> {
+  return apiLoadOnce('wf:delegates', async () => {
+    apiWfDelegates.value = await apiFetch<DelegateSetting[]>('/v1/workflows/delegates')
+  }, force)
+}
+
+function loadWfLogs(requestId: string, force = false): Promise<void> {
+  return apiLoadOnce(`wf:logs:${requestId}`, async () => {
+    const rows = await apiFetch<ApprovalLog[]>(`/v1/workflows/${requestId}/logs`)
+    const map = new Map(apiWfLogs.value.map(l => [l.id, l]))
+    for (const l of rows) map.set(l.id, l)
+    apiWfLogs.value = [...map.values()]
+  }, force)
+}
+
+// ログイン確立・切替時に取り直す
+onApiReset(() => {
+  apiWfRequests.value = []
+  apiWfLogs.value = []
+  apiWfDelegates.value = []
+})
+
 /** WidgetsApprovalFlow へ渡す表示用ステップ */
 export interface FlowStepView {
   label: string
@@ -39,12 +80,24 @@ export function useWorkflow() {
   const { tbl, commit, nextId } = useMockDb()
   const { currentUser } = useCurrentUser()
   const { notify } = useNotifications()
-  const requests = tbl('workflowRequests')
-  const logs = tbl('approvalLogs')
-  const routes = tbl('workflowRoutes')
+  const isApi = useApiMode()
+  // API モードはキャッシュをバッキングにし、以降の射影ロジックを共通利用する
+  const requests = isApi ? (apiWfRequests as Ref<WorkflowRequest[]>) : tbl('workflowRequests')
+  const logs = isApi ? (apiWfLogs as Ref<ApprovalLog[]>) : tbl('approvalLogs')
+  const delegates = isApi ? (apiWfDelegates as Ref<DelegateSetting[]>) : tbl('delegateSettings')
+  const routes = tbl('workflowRoutes') // 移行済みマスタ（API モードは API キャッシュ）
   const members = tbl('members')
-  const delegates = tbl('delegateSettings')
   const delegateCrud = useMasterCrud('delegateSettings', 'dg')
+  if (isApi) {
+    void loadWfRequests()
+    void loadWfDelegates()
+  }
+
+  /** 一覧の取り直し（ワークフローページ表示時に呼ぶ。他者の申請・承認の取り込み） */
+  async function refresh(): Promise<void> {
+    if (!isApi) return
+    await Promise.all([loadWfRequests(true), loadWfDelegates(true)])
+  }
 
   function err(code: string, message: string): Result {
     return { ok: false, error: { code, message } }
@@ -99,7 +152,7 @@ export function useWorkflow() {
   const myDelegates = computed(() =>
     delegates.value.filter(d => d.memberId === currentUser.value.id && d.active))
 
-  function saveDelegate(input: { delegateMemberId: string; from: string; to: string }): Result {
+  async function saveDelegate(input: { delegateMemberId: string; from: string; to: string }): Promise<Result> {
     if (!input.delegateMemberId || !input.from || !input.to) {
       return err('AKO-GEN-001', '代理人と期間を入力してください')
     }
@@ -109,11 +162,23 @@ export function useWorkflow() {
     if (input.to < input.from) {
       return err('AKO-GEN-001', '期間の終了日は開始日以降にしてください')
     }
+    if (isApi) {
+      const res = await apiResult(() => apiFetch<{ id: string }>('/v1/workflows/delegates', {
+        method: 'POST', body: input,
+      }))
+      if (res.ok) await loadWfDelegates(true)
+      return res
+    }
     return delegateCrud.save({ memberId: currentUser.value.id, ...input, active: true })
   }
 
   /** 代理設定の解除（論理削除） */
-  function removeDelegate(id: string): Result {
+  async function removeDelegate(id: string): Promise<Result> {
+    if (isApi) {
+      const res = await apiResult(() => apiFetch(`/v1/workflows/delegates/${id}/archive`, { method: 'POST' }))
+      if (res.ok) await loadWfDelegates(true)
+      return res
+    }
     return delegateCrud.archive(id)
   }
 
@@ -124,6 +189,7 @@ export function useWorkflow() {
   }
 
   function logsOf(requestId: string) {
+    if (isApi) void loadWfLogs(requestId)
     return logs.value
       .filter(l => l.requestId === requestId)
       .sort((a, b) => a.at.localeCompare(b.at))
@@ -215,9 +281,17 @@ export function useWorkflow() {
   }
 
   /** 下書き保存（経路は未確定のまま。既存下書きの更新可） */
-  function saveDraft(input: WorkflowInput, requestId?: string): Result {
+  async function saveDraft(input: WorkflowInput, requestId?: string): Promise<Result> {
     const invalid = validateInput(input)
     if (invalid) return invalid
+    if (isApi) {
+      // 権限・状態ガードはサーバーが担う → 成功後にキャッシュを取り直す（原則6）
+      const res = await apiResult(() => apiFetch<{ id: string }>('/v1/workflows/draft', {
+        method: 'PUT', body: { id: requestId, ...input },
+      }))
+      if (res.ok) await loadWfRequests(true)
+      return res
+    }
     if (requestId) {
       const existing = byId(requestId)
       if (!existing) return err('AKO-GEN-002', '対象の申請が見つかりません')
@@ -246,12 +320,20 @@ export function useWorkflow() {
    * （経路をゼロから再解決して先頭ステップへ戻す）。
    * 経路を routeSnapshot に凍結し、submitted → in_review へ即遷移する。
    */
-  function submit(input: WorkflowInput, requestId?: string): Result {
+  async function submit(input: WorkflowInput, requestId?: string): Promise<Result> {
     const invalid = validateInput(input)
     if (invalid) return invalid
     const route = resolveRouteFor(input.category, input.amount)
     if (!route || route.length === 0) {
       return err('AKO-WFL-003', 'この区分・金額に該当する承認経路がありません。経路設定を確認してください')
+    }
+    if (isApi) {
+      // 経路解決・凍結・通知はサーバーが担う（上のチェックは即時フィードバック用）
+      const res = await apiResult(() => apiFetch<{ id: string }>('/v1/workflows/submit', {
+        method: 'POST', body: { id: requestId, ...input },
+      }))
+      if (res.ok) await loadWfRequests(true)
+      return res
     }
 
     let id: string
@@ -306,7 +388,18 @@ export function useWorkflow() {
    * - reject / remand はコメント必須（AKO-WFL-002）
    * - 全アクションを approvalLogs へ追記（代理時は delegateForId を記録）
    */
-  function act(requestId: string, action: Exclude<ApprovalAction, 'submit'>, comment = ''): Result {
+  async function act(requestId: string, action: Exclude<ApprovalAction, 'submit'>, comment = ''): Promise<Result> {
+    if (isApi) {
+      // 権限・状態機械・証跡・通知はサーバーが担う（クレームファースト）
+      const res = await apiResult(() => apiFetch(`/v1/workflows/${requestId}/actions`, {
+        method: 'POST', body: { action, comment },
+      }))
+      if (res.ok) {
+        await loadWfRequests(true)
+        void loadWfLogs(requestId, true)
+      }
+      return res
+    }
     const req = byId(requestId)
     if (!req) return err('AKO-GEN-002', '対象の申請が見つかりません')
     const me = currentUser.value
@@ -386,5 +479,6 @@ export function useWorkflow() {
     isActiveDelegateOf,
     saveDelegate,
     removeDelegate,
+    refresh,
   }
 }

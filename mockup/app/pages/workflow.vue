@@ -19,12 +19,16 @@ import type { TabItem, TableColumn, Tone } from '~/types/ui'
 const route = useRoute()
 const { currentUserId, isAdmin } = useCurrentUser()
 const wf = useWorkflow()
+
+// サーバー側で進んだ申請・承認（他者の操作）を表示時に取り込む
+onMounted(() => { void wf.refresh() })
 const { show } = useToast()
 const { ask } = useConfirm()
 const { tbl } = useMockDb()
-const requests = tbl('workflowRequests')
+// 申請一覧はデュアルモードのバッキング（API モード: /v1/workflows キャッシュ）を必ず経由する
+const requests = wf.requests
 const members = tbl('members')
-const routesCrud = useMasterCrud('workflowRoutes', 'wr')
+const routesCrud = useMasterCrudAsync('workflowRoutes', 'wr')
 
 // ---------- タブ ----------
 
@@ -147,7 +151,7 @@ async function onApprove(): Promise<void> {
   if (!r) return
   const ok = await ask('承認', `「${r.title}」（${fmtYen(r.amount)}）を承認しますか？`, { confirmLabel: '承認' })
   if (!ok) return
-  const res = wf.act(r.id, 'approve')
+  const res = await wf.act(r.id, 'approve')
   show(res.ok ? '承認しました' : res.error.message, res.ok ? 'ok' : 'warn')
 }
 
@@ -156,7 +160,7 @@ async function onWithdraw(): Promise<void> {
   if (!r) return
   const ok = await ask('取下げ', `「${r.title}」を取下げますか？`, { confirmLabel: '取下げ', danger: true })
   if (!ok) return
-  const res = wf.act(r.id, 'withdraw')
+  const res = await wf.act(r.id, 'withdraw')
   show(res.ok ? '申請を取下げました' : res.error.message, res.ok ? 'ok' : 'warn')
 }
 
@@ -169,11 +173,11 @@ function openCommentModal(action: 'reject' | 'remand'): void {
   commentBody.value = ''
 }
 
-function onCommentSubmit(): void {
+async function onCommentSubmit(): Promise<void> {
   const r = selectedReq.value
   const action = commentAction.value
   if (!r || !action) return
-  const res = wf.act(r.id, action, commentBody.value)
+  const res = await wf.act(r.id, action, commentBody.value)
   if (!res.ok) {
     show(res.error.message, 'warn')
     return
@@ -250,10 +254,10 @@ function wfPayload() {
   }
 }
 
-function onModalSubmit(): void {
+async function onModalSubmit(): Promise<void> {
   // submit() が status を書き換える前に元の状態を退避（再申請判定は元 status で行う）
   const wasRemanded = editingReq.value?.status === 'remanded'
-  const res = wf.submit(wfPayload(), editingId.value ?? undefined)
+  const res = await wf.submit(wfPayload(), editingId.value ?? undefined)
   if (!res.ok) {
     show(res.error.message, 'warn')
     return
@@ -263,8 +267,8 @@ function onModalSubmit(): void {
   selectedId.value = res.id ?? null
 }
 
-function onModalDraft(): void {
-  const res = wf.saveDraft(wfPayload(), editingId.value ?? undefined)
+async function onModalDraft(): Promise<void> {
+  const res = await wf.saveDraft(wfPayload(), editingId.value ?? undefined)
   if (!res.ok) {
     show(res.error.message, 'warn')
     return
@@ -344,7 +348,7 @@ function setStepRole(i: number, v: string): void {
   if (s) s.approverRole = v as WorkflowRouteStep['approverRole']
 }
 
-function onRouteSave(): void {
+async function onRouteSave(): Promise<void> {
   if (routeForm.steps.length === 0) {
     show('承認ステップを 1 つ以上設定してください', 'warn')
     return
@@ -360,7 +364,7 @@ function onRouteSave(): void {
     approverMemberId: null,
     mode: 'serial',
   }))
-  const res = routesCrud.save({
+  const res = await routesCrud.save({
     ...(routeEditingId.value ? { id: routeEditingId.value } : {}),
     category: routeForm.category,
     minAmount: Number(routeForm.minAmount) || 0,
@@ -389,8 +393,8 @@ const delegateOptions = computed(() =>
     .filter(m => m.active && m.id !== currentUserId.value && m.employmentType !== 'outsource')
     .map(m => ({ value: m.id, label: m.name })))
 
-function onSaveDelegate(): void {
-  const res = wf.saveDelegate({ ...delegateForm })
+async function onSaveDelegate(): Promise<void> {
+  const res = await wf.saveDelegate({ ...delegateForm })
   if (!res.ok) {
     show(res.error.message, 'warn')
     return
@@ -402,7 +406,7 @@ function onSaveDelegate(): void {
 async function onRemoveDelegate(d: DelegateSetting): Promise<void> {
   const ok = await ask('代理設定の解除', `${wf.memberName(d.delegateMemberId)} さんへの代理設定を解除しますか？`, { confirmLabel: '解除', danger: true })
   if (!ok) return
-  const res = wf.removeDelegate(d.id)
+  const res = await wf.removeDelegate(d.id)
   show(res.ok ? '代理設定を解除しました' : res.error.message, res.ok ? 'ok' : 'warn')
 }
 </script>

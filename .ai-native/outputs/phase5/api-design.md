@@ -53,13 +53,16 @@ aiReview(planId): Result                 // AI コメント生成（再取得で
 recordResult(planId, { outcome, reflection }): Result  // 1 回で確定（記録系）
 insights(days?): MemberInsight[]         // 管理者向け集計（計画数・完了率・振り返り記入率）
 
-// useWorkflow
+// useWorkflow（バッチ3b でデュアルモード化。API モードは /v1/workflows をハイドレーション）
 resolveRouteFor(category, amount): WorkflowRouteStep[] | null
    // 職務権限マトリクス解決。純粋関数 resolveRoute(routes, category, amount)
-   //（app/utils/approval-route.ts）を内包。該当経路なしは null（AKO-WFL-003）
-submit(input: WorkflowInput): Result               // 採番 + routeSnapshot 凍結
-act(requestId, action: Exclude<ApprovalAction, 'submit'>, comment?): Result  // 承認/却下/差戻し/取下げ
-pendingFor(memberId): WorkflowRequest[]                   // 代理設定を考慮（呼び出し側の computed 内で使用）
+   //（shared/domain/approval-route.ts。フロント/API で共有）を内包。該当経路なしは null（AKO-WFL-003）
+saveDraft(input, requestId?): Promise<Result>      // 本人 + draft のみ更新可（API: PUT /draft）
+submit(input, requestId?): Promise<Result>         // 採番 + routeSnapshot 凍結（API はサーバー側で経路再解決）
+act(requestId, action: Exclude<ApprovalAction, 'submit'>, comment?): Promise<Result>  // 承認/却下/差戻し/取下げ
+pendingFor(memberId): WorkflowRequest[]            // 代理設定を考慮（呼び出し側の computed 内で使用）
+saveDelegate / removeDelegate                      // 代理承認設定（本人のみ・期間必須）
+refresh(): Promise<void>                           // ページ表示時の取り直し（他者の申請・承認の取り込み）
 
 // useAiCompany
 requestTask(aiEmployeeId, title, description): { ok, id, confidence } // 分解案を決定的モックで生成し proposed で登録（低確信度はエスカレーション起票）
@@ -114,7 +117,7 @@ generateDraft(memberId, date): ReportDraft           // 保存しない（フォ
 | composable | 将来のエンドポイント（例） |
 |---|---|
 | useAttendance | `POST /v1/attendance/punches`・`GET /v1/attendance/state`・`GET /v1/attendance/day`（?raw=1 で修正履歴）・`GET /v1/attendance/month`・`GET /v1/attendance/alerts`・`GET /v1/attendance/timecard`・`POST /v1/attendance/fix-requests`（+ `/decision`）（**実装・フロント接続済み**。月サマリキャッシュから日次・週次を射影） |
-| useWorkflow.act | `POST /api/workflows/{id}/actions`（クレームファースト: 条件付き UPDATE） |
+| useWorkflow | `GET /v1/workflows`・`GET /v1/workflows/:id/logs`・`PUT /v1/workflows/draft`・`POST /v1/workflows/submit`・`POST /v1/workflows/:id/actions`（クレームファースト: FOR UPDATE クレーム）・`GET/POST /v1/workflows/delegates`（+ `/:id/archive`）・承認経路 = `/v1/masters/workflow-routes`（**実装・フロント接続済み**。経路解決・凍結・権限ガード・証跡・通知はサーバーが担い、射影ロジックはモックと共通） |
 | useCalendar.syncFromGoogle | Google Calendar API（OAuth 2.0 増分認可・calendar.readonly/events スコープ。Webhook push + 手動再同期の両立）。トークンはサーバー側で暗号化保管（C3 相当・クライアントへ出さない）。アプリの連携解除時はトークン破棄 + Google 側 revoke を呼び、Google 側での取消は次回 API 401 で検知して連携状態へ反映する |
 | useReportAssist.generateDraft | LLM 構造化出力（responseSchema）+ 失敗時は本ヒューリスティックへフォールバック（ai-manager 方式）。タスク計画の結果（F-14）を含めて生成 |
 | useTaskPlans.aiReview | LLM（計画の批評: 目的の具体性・達成条件の検証可能性・段取り分解を観点にした構造化出力）+ 失敗時は本ヒューリスティックへフォールバック |
@@ -158,9 +161,9 @@ generateDraft(memberId, date): ReportDraft           // 保存しない（フォ
 | AKO-DEP-003 | 部署の循環親子指定（自部署・配下を親に不可） | ✅ |
 | AKO-REP-001 | 提出済み日報の編集（不可 = 記録保護） | ✅ |
 | AKO-REP-002 | 提出済み週報の編集（不可 = 記録保護） | ✅ |
-| AKO-WFL-001 | 承認権限なし / 対象ステップ不一致 | |
-| AKO-WFL-002 | 却下・差戻しコメント未入力 | |
-| AKO-WFL-003 | 区分×金額に該当する承認経路なし | |
+| AKO-WFL-001 | 承認権限なし / 対象ステップ不一致 / 操作できない状態（クレーム失敗含む） | ✅ |
+| AKO-WFL-002 | 却下・差戻しコメント未入力 | ✅ |
+| AKO-WFL-003 | 区分×金額に該当する承認経路なし | ✅ |
 | AKO-SFT-001 | シフトバリデーション違反（休憩/深夜/週40h） | |
 | AKO-SFT-002 | 募集期間ステータスの不正遷移（正順のみ） | |
 | AKO-SFT-003 | 受付中以外への希望提出・変更 | |
