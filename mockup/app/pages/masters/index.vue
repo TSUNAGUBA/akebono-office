@@ -15,6 +15,7 @@ const companies = tbl('companies')
 const contacts = tbl('contacts')
 const companyRelations = tbl('companyRelations')
 const contactRelations = tbl('contactRelations')
+const relationTypes = tbl('relationTypes')
 const projects = tbl('projects')
 const knowledge = tbl('knowledge')
 const codeMaster = tbl('codeMaster')
@@ -89,12 +90,28 @@ const cards = computed<MenuCard[]>(() => [
     badge: activeCount(contacts.value),
   },
   {
-    id: 'relations',
-    title: '顧客関係',
-    description: '会社間・人どうしの関係エッジと関係種別。グラフ可視化',
+    id: 'relations-company',
+    title: '顧客関係(会社)',
+    description: '会社間の関係エッジ（納品先・競合など）。グラフ可視化',
     icon: 'Network',
-    to: '/masters/relations',
-    badge: companyRelations.value.length + contactRelations.value.length,
+    to: '/masters/relations-company',
+    badge: companyRelations.value.length,
+  },
+  {
+    id: 'relations-contact',
+    title: '顧客関係(人)',
+    description: '人どうしの関係エッジ（上司部下・紹介など）。グラフ可視化',
+    icon: 'Network',
+    to: '/masters/relations-contact',
+    badge: contactRelations.value.length,
+  },
+  {
+    id: 'relation-types',
+    title: '関係種別',
+    description: '顧客関係で使う関係の種類の定義（追加・編集・削除）',
+    icon: 'Tags',
+    to: '/masters/relation-types',
+    badge: activeCount(relationTypes.value),
   },
   {
     id: 'projects',

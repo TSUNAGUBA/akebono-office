@@ -1,6 +1,7 @@
 /**
  * 日報・週報 API。mockup useReports の API 版。
- * - 提出済みは編集不可（AKO-REP-001/002 = 記録系の状態保護）
+ * - 提出済み日報は本人が編集可（提出状態・初回提出時刻は維持・監査ログ記録。下書きへは戻せない = AKO-REP-001）
+ * - 提出済み週報は編集不可（AKO-REP-002 = 記録系の状態保護）
  * - 工数乖離チェック（勤怠実労働との差 60 分超で hoursGapMinutes を返す = 画面が警告表示）
  * - チーム参照（scope=team）は管理者のみ。コメントは提出済み日報に対して全員可
  * 注: 提出時のエスカレーション起票・通知はバッチ2（通知ドメイン）で API 化する（実装状況マトリクス参照）
@@ -11,6 +12,7 @@ import { nowJstIso, todayJst } from '../../../shared/domain/jst'
 import type { PunchRecord, ReportEntry } from '../../../shared/domain/types'
 import { requireAdmin } from '../auth'
 import { daySummary } from '../domain/attendance'
+import { audit } from '../lib/audit'
 import { raiseEscalation } from '../lib/escalate'
 import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
@@ -96,7 +98,7 @@ export function reportsRoutes(pool: pg.Pool): Hono {
     return c.json({ data: rows })
   })
 
-  // 日報の保存（下書き / 提出。提出済みは編集不可）
+  // 日報の保存（下書き / 提出 / 提出済みの本人編集）
   app.put('/daily', async (c) => {
     const user = c.get('user')
     const body = await c.req.json().catch(() => ({})) as {
@@ -117,6 +119,7 @@ export function reportsRoutes(pool: pg.Pool): Hono {
     const submittedAt = status === 'submitted' ? nowJstIso() : null
     const client = await pool.connect()
     let id: string
+    let editedAfterSubmit = false
     try {
       await client.query('BEGIN')
       const existing = await client.query<{ id: string; status: string }>(
@@ -124,14 +127,17 @@ export function reportsRoutes(pool: pg.Pool): Hono {
          WHERE author_kind = 'human' AND member_id = $1 AND date = $2 FOR UPDATE`,
         [user.id, body.date])
       const row = existing.rows[0]
-      if (row?.status === 'submitted') {
-        throw err('AKO-REP-001', '提出済みの日報は編集できません', 409)
+      // 提出済みは本人の編集を許可（オペレーター指示 2026-07-17。提出状態・初回提出時刻は維持し、
+      // 編集は監査ログへ記録する）。下書きへ戻す操作のみ不可（提出済み = 確定の意味を保つ）
+      if (row?.status === 'submitted' && status !== 'submitted') {
+        throw err('AKO-REP-001', '提出済みの日報は下書きへ戻せません（提出済みのまま編集してください）', 409)
       }
+      editedAfterSubmit = row?.status === 'submitted'
       if (row) {
         id = row.id
         await client.query(
           `UPDATE daily_reports SET entries = $2, reflection = $3, issues = $4, tomorrow = $5,
-             status = $6, submitted_at = $7, updated_at = now()
+             status = $6, submitted_at = COALESCE(submitted_at, $7), updated_at = now()
            WHERE id = $1`,
           [id, JSON.stringify(entries), body.reflection ?? '', body.issues ?? '', body.tomorrow ?? '', status, submittedAt])
       } else {
@@ -147,6 +153,12 @@ export function reportsRoutes(pool: pg.Pool): Hono {
       throw e
     } finally {
       client.release()
+    }
+    if (editedAfterSubmit) {
+      await audit(pool, {
+        actorId: user.id, action: 'update', entity: 'daily_reports', entityId: id,
+        detail: `提出済み日報（${body.date}）を本人が編集`,
+      })
     }
     const gap = status === 'submitted' ? await hoursGapMinutes(pool, user.id, body.date, entries) : null
     // 提出成立後の補助処理: 課題記入あり → エスカレーション起票（mockup submit と同一挙動）。

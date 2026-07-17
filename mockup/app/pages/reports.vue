@@ -4,7 +4,7 @@
  * タブ: 自分の日報 / チーム（管理者のみ・提出状況マトリクス+タイムライン） / 週報
  */
 import {
-  BellRing, Check, ChevronLeft, ChevronRight, Minus, Plus, Send, Sparkles, Trash2,
+  BellRing, Check, ChevronLeft, ChevronRight, Minus, Pencil, Plus, Send, Sparkles, Trash2,
 } from 'lucide-vue-next'
 import type { DailyReport, ReportEntry, WeeklyReport } from '~/types/domain'
 import { REPORT_STATUS_LABELS } from '~/composables/useReports'
@@ -74,7 +74,11 @@ function blankEntry(): ReportEntry {
   return { projectId: '', task: '', hours: 1, progress: 0 }
 }
 
+/** 提出済み日報の編集モード（オペレーター指示: 提出済みも本人が編集可。提出状態は維持） */
+const editingSubmitted = ref(false)
+
 function loadEditor(): void {
+  if (editingSubmitted.value) return // 編集中の内容をデータ再取得で消さない
   const r = myReport.value
   if (r && r.status === 'draft') {
     editEntries.value = r.entries.length > 0 ? r.entries.map(e => ({ ...e })) : [blankEntry()]
@@ -90,6 +94,34 @@ function loadEditor(): void {
 }
 // myReport も監視: API モードでは月データが非同期に届くため、到着後に下書きを復元する
 watch([selDate, currentUserId, myReport], loadEditor, { immediate: true })
+// 日付・ユーザーが変わったら提出済み編集モードは終了する
+watch([selDate, currentUserId], () => { editingSubmitted.value = false })
+
+/** 提出済み日報の編集を開始（内容をエディタへ読み込む） */
+function startEditSubmitted(): void {
+  const r = myReport.value
+  if (!r || r.status !== 'submitted') return
+  editEntries.value = r.entries.length > 0 ? r.entries.map(e => ({ ...e })) : [blankEntry()]
+  editReflection.value = r.reflection
+  editIssues.value = r.issues
+  editTomorrow.value = r.tomorrow
+  editingSubmitted.value = true
+  scrollToEditor()
+}
+
+/** 提出済み日報の更新保存（提出状態は維持。サーバーが監査ログへ記録） */
+async function onUpdateSubmitted(): Promise<void> {
+  const res = await reports.submit(payload())
+  if (!res.ok) {
+    show(res.error.message, 'warn')
+    return
+  }
+  editingSubmitted.value = false
+  show('提出済みの日報を更新しました')
+  if (res.hoursGapMinutes !== null && res.hoursGapMinutes !== undefined) {
+    show(`勤怠実労働と工数合計に 60 分超の乖離があります（${gapText(res.hoursGapMinutes)}）`, 'warn')
+  }
+}
 
 function addRow(): void {
   editEntries.value.push(blankEntry())
@@ -420,8 +452,14 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
         </button>
       </div>
 
-      <!-- 提出済み: 読み取り表示 + コメントスレッド -->
-      <UiSectionCard v-if="myReport && myReport.status === 'submitted'" :title="`${fmtDateLong(selDate)} の日報`">
+      <!-- 提出済み: 読み取り表示 + コメントスレッド（本人は編集可 = 提出状態のまま更新） -->
+      <UiSectionCard v-if="myReport && myReport.status === 'submitted' && !editingSubmitted" :title="`${fmtDateLong(selDate)} の日報`">
+        <template #actions>
+          <button type="button" class="btn btn-sm" @click="startEditSubmitted">
+            <Pencil class="h-3.5 w-3.5" aria-hidden="true" />
+            編集
+          </button>
+        </template>
         <div class="grid gap-4">
           <div class="flex flex-wrap items-center gap-2">
             <UiStatusBadge tone="ok" :label="REPORT_STATUS_LABELS.submitted" dot />
@@ -475,7 +513,6 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
           description="タスク計画の結果・ぽいぽいメモ・ヒアリング回答を材料に AI が下書きを作ります。材料の入力は AI業務アシスタントで"
         >
           <template #actions>
-            <UiMockBadge label="モック（AI アシストはバッチ3 で本実装予定）" />
             <NuxtLink to="/ai-assistant" class="btn btn-sm btn-primary">
               <Sparkles class="h-3.5 w-3.5" aria-hidden="true" />
               AI業務アシスタントを開く
@@ -503,9 +540,6 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
 
         <!-- ドラフト生成 -->
         <UiSectionCard title="日報ドラフト生成" description="スケジュール・回答・メモを材料に AI が下書きを作ります">
-          <template #actions>
-            <UiMockBadge label="モック（AI 生成はバッチ3 で本実装予定）" />
-          </template>
           <div class="grid gap-2">
             <button
               type="button"
@@ -534,9 +568,12 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
         </UiSectionCard>
       </template>
 
-      <!-- 未提出: エディタ（AI アシスト時はドラフトの確認・修正ステップとしてのみ表示） -->
-      <div v-if="!isSubmittedDay && showEditor" ref="editorWrap">
-      <UiSectionCard :title="`${fmtDateLong(selDate)} の日報を書く`" description="プロジェクト別に作業内容と工数（0.25h 刻み）を記録します">
+      <!-- エディタ（未提出時。AI アシスト時はドラフトの確認・修正ステップとしてのみ表示。提出済みは編集モードで表示） -->
+      <div v-if="(!isSubmittedDay && showEditor) || editingSubmitted" ref="editorWrap">
+      <UiSectionCard
+        :title="editingSubmitted ? `${fmtDateLong(selDate)} の日報を編集（提出済み）` : `${fmtDateLong(selDate)} の日報を書く`"
+        :description="editingSubmitted ? '提出済みの日報を修正します。保存しても提出状態と提出時刻は変わりません（編集は監査ログに記録されます）' : 'プロジェクト別に作業内容と工数（0.25h 刻み）を記録します'"
+      >
         <div class="grid gap-3">
           <!-- AI ドラフトバナー（生成根拠つき） -->
           <div v-if="assistActive && draftBasis" class="rounded-lg bg-brand-soft p-3">
@@ -616,11 +653,20 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
           </div>
 
           <div class="flex flex-wrap items-center justify-end gap-2">
-            <button type="button" class="btn" @click="onSaveDraft">下書き保存</button>
-            <button type="button" class="btn btn-primary" @click="onSubmit">
-              <Send class="h-3.5 w-3.5" aria-hidden="true" />
-              提出
-            </button>
+            <template v-if="editingSubmitted">
+              <button type="button" class="btn" @click="editingSubmitted = false; loadEditor()">キャンセル</button>
+              <button type="button" class="btn btn-primary" @click="onUpdateSubmitted">
+                <Send class="h-3.5 w-3.5" aria-hidden="true" />
+                更新を保存
+              </button>
+            </template>
+            <template v-else>
+              <button type="button" class="btn" @click="onSaveDraft">下書き保存</button>
+              <button type="button" class="btn btn-primary" @click="onSubmit">
+                <Send class="h-3.5 w-3.5" aria-hidden="true" />
+                提出
+              </button>
+            </template>
           </div>
         </div>
       </UiSectionCard>

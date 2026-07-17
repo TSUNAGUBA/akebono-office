@@ -18,7 +18,7 @@ import type { CalendarEvent } from '../../../shared/domain/types'
 type CalendarEventRow = CalendarEvent & { googleEventId: string | null }
 import type { Env } from '../env'
 import { decryptSecret, encryptSecret } from '../lib/crypto'
-import { err } from '../lib/errors'
+import { ApiError, err } from '../lib/errors'
 import { newId } from '../lib/ids'
 
 const EVENT_COLS = `id, member_id AS "memberId", date::text AS date, from_time AS "from", to_time AS "to",
@@ -150,8 +150,10 @@ export function calendarOauthCallback(pool: pg.Pool, env: Env) {
     const state = c.req.query('state') ?? ''
     const code = c.req.query('code') ?? ''
     const memberId = await consumeState(pool, state)
-    // 同意画面でキャンセルした場合は error=access_denied で戻る（code なし）
-    if (c.req.query('error')) return fail('denied')
+    // 同意画面でキャンセルした場合は error=access_denied で戻る（code なし）。
+    // それ以外の error（server_error・admin_policy_enforced 等）はキャンセル文言にしない
+    const oauthError = c.req.query('error')
+    if (oauthError) return fail(oauthError === 'access_denied' ? 'denied' : 'oauth-error')
     if (!memberId || !code) return fail('invalid-state')
     try {
       const res = await fetch(GOOGLE_TOKEN_URL, {
@@ -283,7 +285,15 @@ export function calendarRoutes(pool: pg.Pool, env: Env): Hono {
         headers: { authorization: `Bearer ${token}` },
         signal: AbortSignal.timeout(15_000),
       })
-      if (!res.ok) throw new Error(`google events ${res.status}`)
+      if (!res.ok) {
+        console.warn('calendar sync failed:', res.status, (await res.text()).slice(0, 300))
+        // 403 は一過性ではなく設定不備（GCP プロジェクトで Calendar API 未有効化 or スコープ不足）
+        if (res.status === 403) {
+          throw err('AKO-CAL-001',
+            'Google Calendar API が利用できません。管理者は GCP プロジェクトで Google Calendar API を有効化してください', 502)
+        }
+        throw new Error(`google events ${res.status}`)
+      }
       const data = await res.json() as { items?: typeof items; nextPageToken?: string }
       items = data.items ?? []
       // 打ち切り（次ページあり）の場合、見えていない予定を誤削除しないよう削除フェーズを抑止する
@@ -292,6 +302,7 @@ export function calendarRoutes(pool: pg.Pool, env: Env): Hono {
         truncated = true
       }
     } catch (e) {
+      if (e instanceof ApiError) throw e
       console.warn('calendar sync failed:', (e as Error).message)
       throw err('AKO-CAL-001', 'カレンダー同期に失敗しました。時間をおいて再試行してください', 502)
     }

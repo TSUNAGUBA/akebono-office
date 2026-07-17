@@ -182,17 +182,22 @@ const schemas = {
     links: z.array(z.object({ label: z.string(), to: z.string(), info: z.string() })).default([]),
     actions: z.array(z.object({
       name: z.string(),
-      status: z.string(),
-      slot: z.string().nullable().default(null),
+      status: z.enum(['ok', 'warn', 'ng']),
+      slot: z.enum(['A', 'B', 'C']).nullable().default(null),
       why: z.string().default(''),
     })).default([]),
+    // 配列内の検証は .partial()（部分 PATCH）でも維持されるため、スロット重複チェックはここで行う
     options: z.array(z.object({
-      slot: z.string(),
+      slot: z.enum(['A', 'B', 'C']),
       recommended: z.boolean().default(false),
       title: z.string(),
       prediction: z.array(z.string()).default([]),
       basis: z.string().default(''),
-    })).min(1, '選択肢を 1 つ以上設定してください'),
+    })).min(1, '選択肢を 1 つ以上設定してください').superRefine((opts, ctx) => {
+      if (new Set(opts.map(o => o.slot)).size !== opts.length) {
+        ctx.addIssue({ code: 'custom', message: '選択肢のスロット（A/B/C）が重複しています' })
+      }
+    }),
     whyRecommend: z.string().default(''),
     scenarioParams: z.array(z.object({
       key: z.string(), label: z.string(), min: z.number(), max: z.number(),
@@ -226,7 +231,8 @@ export const MASTERS: Record<MasterEntity, MasterDef> = {
   'industries': { table: 'industries', idPrefix: 'ind', schema: schemas.industries, patchSchema: schemas.industries.partial(), jsonbFields: [] },
   'companies': { table: 'companies', idPrefix: 'c', schema: schemas.companies, patchSchema: schemas.companies.partial(), jsonbFields: ['aliases', 'industryIds', 'custom'] },
   'contacts': { table: 'contacts', idPrefix: 'p', schema: schemas.contacts, patchSchema: schemas.contacts.partial(), jsonbFields: ['custom'] },
-  'relation-types': { table: 'relation_types', idPrefix: 'rt', schema: schemas['relation-types'], patchSchema: schemas['relation-types'].partial(), jsonbFields: [] },
+  // 関係種別は論理削除（無効化）に加え、未使用時のみ物理削除可（参照ガードは masters.ts の DELETE 側）
+  'relation-types': { table: 'relation_types', idPrefix: 'rt', schema: schemas['relation-types'], patchSchema: schemas['relation-types'].partial(), jsonbFields: [], physicalDelete: true },
   'company-relations': { table: 'company_relations', idPrefix: 'cr', schema: schemas['company-relations'], jsonbFields: [], physicalDelete: true, noActive: true },
   'contact-relations': { table: 'contact_relations', idPrefix: 'pr', schema: schemas['contact-relations'], jsonbFields: [], physicalDelete: true, noActive: true },
   'projects': { table: 'projects', idPrefix: 'pj', schema: schemas.projects, patchSchema: schemas.projects.partial(), jsonbFields: ['memberIds', 'custom'] },

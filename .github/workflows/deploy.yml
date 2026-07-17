@@ -266,6 +266,9 @@ jobs:
         run: |
           gcloud services enable aiplatform.googleapis.com --project "$PROJECT" \
             || echo "::warning::aiplatform.googleapis.com の有効化に失敗しました。オーナー権限で 'gcloud services enable aiplatform.googleapis.com' を実行してください（deploy-guide.md 参照）"
+          # カレンダー同期（events API）に必要。OAuth トークン交換は Calendar API 無効でも成功するため見落としやすい
+          gcloud services enable calendar-json.googleapis.com --project "$PROJECT" \
+            || echo "::warning::calendar-json.googleapis.com の有効化に失敗しました。オーナー権限で 'gcloud services enable calendar-json.googleapis.com' を実行してください（deploy-guide.md 参照）"
           PROJECT_NUMBER="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')"
           gcloud projects add-iam-policy-binding "$PROJECT" \
             --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \

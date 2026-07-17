@@ -30,7 +30,7 @@ export function decisionsRoutes(pool: pg.Pool): Hono {
     const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
     const themeId = String(body.themeId ?? '')
     const slot = String(body.slot ?? '')
-    const reason = String(body.reason ?? '').trim()
+    const reason = String(body.reason ?? '').trim().slice(0, 2000)
     if (!reason) throw err('AKO-DEC-003', '判断理由を入力してください', 400)
     const { rows } = await pool.query<{ options: { slot: string }[] }>(
       `SELECT options FROM decision_themes WHERE id = $1 AND active = true`, [themeId])

@@ -233,7 +233,7 @@ describe('休暇（付与・残数・申請・承認）', () => {
 })
 
 describe('日報', () => {
-  it('下書き → 提出 → 提出後の編集は AKO-REP-001', async () => {
+  it('下書き → 提出 → 提出済みは本人編集可（提出時刻維持）・下書き戻しは AKO-REP-001', async () => {
     const date = '2026-07-16'
     const draft = await api('PUT', '/v1/reports/daily', {
       as: MEMBER, body: { date, entries: [], reflection: 'メモ', status: 'draft' },
@@ -251,11 +251,26 @@ describe('日報', () => {
     })
     expect(submit.status).toBe(200)
 
-    const editAfter = await api('PUT', '/v1/reports/daily', {
+    // 下書きへ戻す操作は拒否（提出済み = 確定の意味を保つ）
+    const toDraft = await api('PUT', '/v1/reports/daily', {
       as: MEMBER, body: { date, entries: [{ projectId: 'pj-x', task: '改ざん', hours: 1, progress: 0 }], status: 'draft' },
     })
-    expect(editAfter.status).toBe(409)
-    expect(editAfter.json.error?.code).toBe('AKO-REP-001')
+    expect(toDraft.status).toBe(409)
+    expect(toDraft.json.error?.code).toBe('AKO-REP-001')
+
+    // 提出済みのまま本人が編集可（オペレーター指示 2026-07-17）。初回提出時刻は維持される
+    const before = await api('GET', `/v1/reports/daily?date=${date}`, { as: MEMBER })
+    const submittedAt = (before.json.data as { submittedAt: string }[])[0]!.submittedAt
+    const edit = await api('PUT', '/v1/reports/daily', {
+      as: MEMBER,
+      body: { date, entries: [{ projectId: 'pj-x', task: '実装（修正）', hours: 7.5, progress: 90 }], status: 'submitted' },
+    })
+    expect(edit.status).toBe(200)
+    const after = await api('GET', `/v1/reports/daily?date=${date}`, { as: MEMBER })
+    const row = (after.json.data as { status: string; submittedAt: string; entries: { task: string }[] }[])[0]!
+    expect(row.status).toBe('submitted')
+    expect(row.entries[0]!.task).toBe('実装（修正）')
+    expect(row.submittedAt).toBe(submittedAt)
   })
 
   it('チーム参照は管理者のみ。コメント追加ができる', async () => {
@@ -391,6 +406,28 @@ describe('マスタ CRUD', () => {
     const relId = (rel.json.data as { id: string }).id
     expect((await api('DELETE', `/v1/masters/company-relations/${relId}`, { as: ADMIN })).status).toBe(200)
     expect((await api('DELETE', `/v1/masters/departments/${relId}`, { as: ADMIN })).status).toBe(405)
+  })
+
+  it('関係種別: 未使用のみ物理削除可・使用中は AKO-RTM-001（無効化を案内）', async () => {
+    const rt = await api('POST', '/v1/masters/relation-types', {
+      as: ADMIN, body: { label: '削除テスト種別', direction: 'directed', appliesTo: 'company' },
+    })
+    expect(rt.status).toBe(201)
+    const rtId = (rt.json.data as { id: string }).id
+    const rel = await api('POST', '/v1/masters/company-relations', {
+      as: ADMIN, body: { fromCompanyId: 'c-1', toCompanyId: 'c-2', relationTypeId: rtId },
+    })
+    expect(rel.status).toBe(201)
+    const relId = (rel.json.data as { id: string }).id
+
+    // 関係エッジから参照中は削除不可
+    const denied = await api('DELETE', `/v1/masters/relation-types/${rtId}`, { as: ADMIN })
+    expect(denied.status).toBe(409)
+    expect(denied.json.error?.code).toBe('AKO-RTM-001')
+
+    // エッジを消せば削除できる
+    expect((await api('DELETE', `/v1/masters/company-relations/${relId}`, { as: ADMIN })).status).toBe(200)
+    expect((await api('DELETE', `/v1/masters/relation-types/${rtId}`, { as: ADMIN })).status).toBe(200)
   })
 
   it('勤怠ルール: defaultFor は区分ごとに 1 ルール（保存時排他）', async () => {
