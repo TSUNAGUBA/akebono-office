@@ -19,6 +19,12 @@ export interface Env {
   corsOrigins: string[]
   /** 起動時にマイグレーションを適用するか（既定 true。CI テストでは個別制御） */
   migrateOnStart: boolean
+  /** Vertex AI の対象プロジェクト（空 = LLM 無効。全 AI 機能はヒューリスティックへフォールバック） */
+  vertexProjectId: string
+  /** Vertex AI ロケーション（既定 global = リージョン非依存エンドポイント） */
+  vertexLocation: string
+  /** 生成モデル ID（既定 gemini-2.5-flash） */
+  vertexModel: string
 }
 
 export function loadEnv(): Env {
@@ -43,5 +49,8 @@ export function loadEnv(): Env {
     firebaseProjectId,
     corsOrigins: (process.env.CORS_ORIGINS ?? '').split(',').map(s => s.trim()).filter(Boolean),
     migrateOnStart: (process.env.MIGRATE_ON_START ?? '1') !== '0',
+    vertexProjectId: process.env.VERTEX_PROJECT_ID ?? '',
+    vertexLocation: process.env.VERTEX_LOCATION ?? 'global',
+    vertexModel: process.env.VERTEX_MODEL ?? 'gemini-2.5-flash',
   }
 }
