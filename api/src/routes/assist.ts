@@ -77,8 +77,8 @@ export function assistRoutes(pool: pg.Pool, env: Env): Hono {
     const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
     const date = dateOrToday(body.date)
 
-    // 材料の収集（カレンダー予定は連携バッチまで空）
-    const [logsQ, plansQ, nextPlansQ, projectsQ, companiesQ] = await Promise.all([
+    // 材料の収集（カレンダー予定は同期済みキャッシュ = calendar_events）
+    const [logsQ, plansQ, nextPlansQ, projectsQ, companiesQ, eventsQ] = await Promise.all([
       pool.query<HearingLog>(
         `SELECT ${LOG_COLS} FROM assist_logs WHERE member_id = $1 AND date = $2::date ORDER BY at`,
         [user.id, date]),
@@ -92,9 +92,14 @@ export function assistRoutes(pool: pg.Pool, env: Env): Hono {
         `SELECT id, name, company_id AS "companyId" FROM projects WHERE active = true ORDER BY id`),
       pool.query<{ id: string; name: string; aliases: string[] }>(
         `SELECT id, name, aliases FROM companies WHERE active = true ORDER BY id`),
+      pool.query(
+        `SELECT id, member_id AS "memberId", date::text AS date, from_time AS "from", to_time AS "to",
+                title, source, synced_to_google AS "syncedToGoogle", project_id AS "projectId"
+         FROM calendar_events WHERE member_id = $1 AND date = $2::date ORDER BY from_time LIMIT 200`,
+        [user.id, date]),
     ])
     const ctx: DraftContext = {
-      events: [],
+      events: eventsQ.rows,
       logs: logsQ.rows,
       dayPlans: plansQ.rows,
       nextDayPlans: nextPlansQ.rows,

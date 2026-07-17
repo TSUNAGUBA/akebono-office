@@ -10,8 +10,11 @@ import { CalendarCheck, CalendarOff, ShieldCheck } from 'lucide-vue-next'
 
 const { currentUser } = useCurrentUser()
 const cal = useCalendar()
+const isApi = useApiMode()
 const { show } = useToast()
 const confirm = useConfirm()
+const route = useRoute()
+const router = useRouter()
 
 const consentOpen = ref(false)
 
@@ -20,8 +23,32 @@ const SCOPES = [
   { name: '予定の作成・更新', detail: 'calendar.events — 本アプリで登録したタスクの反映に使用' },
 ]
 
-function approve(): void {
-  const r = cal.connect()
+// OAuth 同意画面からの復帰（?calendar=connected / error）を反映してクエリを消す
+onMounted(async () => {
+  const q = route.query.calendar
+  if (typeof q !== 'string') return
+  if (q === 'connected') {
+    await cal.refreshStatus()
+    const r = await cal.syncFromGoogle(currentUser.value.id, todayJst())
+    show(`Google カレンダーを連携しました（本日の予定 ${r.ok ? r.synced ?? 0 : 0} 件を同期）`, 'ok')
+  } else {
+    show('Google カレンダーの連携に失敗しました。時間をおいて再試行してください', 'warn')
+  }
+  void router.replace({ query: { ...route.query, calendar: undefined, reason: undefined } })
+})
+
+/** 連携開始。API モードは Google の同意画面へフルリダイレクト（モーダルは出さない） */
+async function startConnect(): Promise<void> {
+  if (!isApi) {
+    consentOpen.value = true
+    return
+  }
+  const r = await cal.connect() // 成功時はページ遷移するためここへは戻らない
+  if (!r.ok) show(r.error.message, 'warn')
+}
+
+async function approve(): Promise<void> {
+  const r = await cal.connect()
   consentOpen.value = false
   if (r.ok) {
     show(`Google カレンダーを連携しました（本日の予定 ${r.synced ?? 0} 件を同期）`, 'ok')
@@ -37,14 +64,24 @@ async function disconnect(): Promise<void> {
     { confirmLabel: '解除する', danger: true },
   )
   if (!ok) return
-  cal.disconnect()
-  show('Google カレンダー連携を解除しました', 'warn')
+  const r = await cal.disconnect()
+  if (r.ok) show('Google カレンダー連携を解除しました', 'warn')
+  else show(r.error.message, 'warn')
 }
 </script>
 
 <template>
+  <!-- 連携機能が未設定（API モードで OAuth 未投入）: 案内のみ -->
+  <div
+    v-if="!cal.isEnabled.value"
+    class="flex items-center gap-2 rounded-lg border border-line bg-surface-soft px-3 py-1.5 text-xs text-muted"
+  >
+    <CalendarOff class="h-3.5 w-3.5" aria-hidden="true" />
+    Google カレンダー連携は未設定です（管理者が OAuth クライアントを設定すると利用できます）
+  </div>
+
   <!-- 未連携: 連携プロンプト -->
-  <UiSectionCard v-if="!cal.isConnected.value">
+  <UiSectionCard v-else-if="!cal.isConnected.value">
     <div class="flex flex-col items-center gap-3 py-4 text-center">
       <CalendarOff class="h-8 w-8 text-muted" aria-hidden="true" />
       <div>
@@ -53,10 +90,14 @@ async function disconnect(): Promise<void> {
           連携すると予定が同期され、日ごとのタスク見える化と AI ヒアリング・日報ドラフト生成が使えます。
         </p>
       </div>
-      <button type="button" class="btn btn-primary btn-lg" @click="consentOpen = true">
+      <button type="button" class="btn btn-primary btn-lg" @click="startConnect">
         <CalendarCheck class="h-4 w-4" aria-hidden="true" /> Google アカウントを連携
       </button>
-      <p class="text-[10px] text-muted">連携は画面上の同意フローだけで完結します（モック: 実際の Google 認証は行いません）</p>
+      <p class="text-[10px] text-muted">
+        {{ isApi
+          ? 'Google の同意画面へ移動します（カレンダーの予定の表示・予定の作成のみを許可します）'
+          : '連携は画面上の同意フローだけで完結します（モック: 実際の Google 認証は行いません）' }}
+      </p>
     </div>
   </UiSectionCard>
 

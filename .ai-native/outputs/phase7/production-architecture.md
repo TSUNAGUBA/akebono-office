@@ -153,6 +153,9 @@ flowchart LR
 | `VERTEX_PROJECT_ID` | — | AI 機能（Vertex AI）の対象プロジェクト。未設定 = LLM 無効（ヒューリスティックへフォールバック）。デプロイでは GCP_PROJECT_ID を自動設定 |
 | `VERTEX_LOCATION` | — | Vertex AI ロケーション（既定 `global`） |
 | `VERTEX_MODEL` | — | 生成モデル ID（既定 `gemini-2.5-flash`） |
+| `GOOGLE_OAUTH_CLIENT_ID` | — | カレンダー連携の OAuth クライアント ID。未設定 = 連携無効 |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | — | 同シークレット（Secret Manager 経由） |
+| `TOKEN_ENCRYPTION_KEY` | — | OAuth トークンの AES-256-GCM 暗号化鍵（Secret Manager 経由。変更すると保管済みトークンは復号不能 = 全員再連携） |
 
 ## 9. 段階移行計画（モック → 本番）
 

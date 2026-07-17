@@ -166,6 +166,28 @@ AI 機能（日報 AI アシスト・タスク計画の AI コメント等）は
 - **フォールバック動作:** `VERTEX_PROJECT_ID` 未設定・権限不足・API エラー時、AI 機能は決定的
   ヒューリスティック（モックと同じ生成ロジック）へ自動フォールバックし、主要フローは止まらない（原則4）
 
+## 1-9. カレンダー連携（Google OAuth・F-06-8）
+
+日報 AI アシストのカレンダー材料取得と予定同期に使用する。トークンはサーバー側で AES-256-GCM
+暗号化のうえ DB 保管（クライアントへ出さない。喪失時は再連携で回復）。
+
+1. Cloud Console で OAuth クライアント（**ウェブアプリケーション**種別）を発行し、
+   「承認済みのリダイレクト URI」に Cloud Run の URL + コールバックパスを登録:
+   ```
+   https://<cloud-run-url>/v1/calendar/oauth/callback
+   ```
+2. secrets を設定（シークレットはファイル渡し = チャット・シェル履歴に残さない）:
+   ```powershell
+   ./scripts/setup-deploy-secrets.ps1 -ProjectId <project> -ServiceAccountJsonPath ./deploy-sa.json `
+     -DatabaseUrl 'postgresql://...' `
+     -GoogleOauthClientId '<client-id>.apps.googleusercontent.com' `
+     -GoogleOauthClientSecretPath ./oauth-secret.txt -TriggerDeploy
+   ```
+   `TOKEN_ENCRYPTION_KEY` は初回のみ自動生成される（既存キーは変更しない = 保管済みトークンの保護）
+3. デプロイが Secret Manager（`<service>-google-oauth-secret` / `<service>-token-encryption-key`）への
+   登録と Cloud Run への注入まで冪等に行う。secrets 未設定の間、カレンダー連携機能は自動的に無効
+   （画面に連携 UI が出ない）でその他の機能に影響しない
+
 ## 2. 日常デプロイ（開発者）
 
 - **自動:** main へマージ → 変更パスに応じて mockup / api が自動デプロイ

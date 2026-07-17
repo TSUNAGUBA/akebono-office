@@ -20,6 +20,9 @@
     - API_CORS_ORIGINS         : CORS 許可オリジン（既定: https://<GcpProjectId>.web.app）
     - VERTEX_LOCATION          : AI 機能（Vertex AI）のロケーション（任意。既定: global）
     - VERTEX_MODEL             : AI 機能の生成モデル ID（任意。既定: gemini-2.5-flash）
+    - GOOGLE_OAUTH_CLIENT_ID   : カレンダー連携の OAuth クライアント ID（-GoogleOauthClientId）
+    - GOOGLE_OAUTH_CLIENT_SECRET : 同シークレット（-GoogleOauthClientSecretPath でファイル渡し）
+    - TOKEN_ENCRYPTION_KEY     : トークン暗号化鍵（初回のみ自動生成。既存は変更しない）
                                  ※ 認証は Cloud Run 実行 SA の ADC。API キーの secret は不要。
                                     aiplatform API 有効化と roles/aiplatform.user 付与は deploy
                                     ワークフローが冪等に実行する（権限不足時は deploy-guide.md の手順で付与）
@@ -105,6 +108,12 @@ param(
 
   # AI 機能（Vertex AI）の生成モデル ID（省略時は gemini-2.5-flash。デプロイ側の既定を使用）
   [string]$VertexModel = '',
+
+  # カレンダー連携: Google OAuth クライアント ID（Cloud Console で発行したウェブアプリ種別）
+  [string]$GoogleOauthClientId = '',
+
+  # カレンダー連携: クライアントシークレットを 1 行で書いたファイルのパス（チャット・履歴に残さないためファイル渡し）
+  [string]$GoogleOauthClientSecretPath = '',
 
   # フロントエンドを API 接続版でビルドする場合の API URL（Cloud Run の URL。初回 api デプロイ後に設定）
   [string]$ApiBaseUrl = '',
@@ -203,6 +212,31 @@ if ($DatabaseUrl) {
   # AI 機能（Vertex AI）: 既定値以外を使う場合のみ secrets を設定（未設定時は global / gemini-2.5-flash）
   if ($VertexLocation) { Set-RepoSecret 'VERTEX_LOCATION' $VertexLocation }
   if ($VertexModel) { Set-RepoSecret 'VERTEX_MODEL' $VertexModel }
+
+  # カレンダー連携（F-06-8）: OAuth クライアント + トークン暗号化鍵。
+  # 鍵は初回のみ自動生成（既存の TOKEN_ENCRYPTION_KEY があれば触らない = 保管済みトークンを壊さない）
+  if ($GoogleOauthClientId -and $GoogleOauthClientSecretPath) {
+    if (-not (Test-Path $GoogleOauthClientSecretPath)) { throw "ファイルが見つかりません: $GoogleOauthClientSecretPath" }
+    $oauthSecret = (Get-Content -Raw -Path $GoogleOauthClientSecretPath).Trim()
+    if (-not $oauthSecret) { throw 'クライアントシークレットのファイルが空です。' }
+    Write-Step "Repository secrets を設定（カレンダー連携）: $Repo"
+    Set-RepoSecret 'GOOGLE_OAUTH_CLIENT_ID' $GoogleOauthClientId
+    Set-RepoSecret 'GOOGLE_OAUTH_CLIENT_SECRET' $oauthSecret
+    $hasKey = (gh secret list --repo $Repo) -match 'TOKEN_ENCRYPTION_KEY'
+    if (-not $hasKey) {
+      $bytes = New-Object byte[] 32
+      [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+      Set-RepoSecret 'TOKEN_ENCRYPTION_KEY' ([Convert]::ToBase64String($bytes))
+      Write-Host 'TOKEN_ENCRYPTION_KEY を自動生成しました（初回のみ）。' -ForegroundColor Yellow
+    }
+    else {
+      Write-Host 'TOKEN_ENCRYPTION_KEY は設定済みのため変更しません（保管済みトークンの保護）。' -ForegroundColor Yellow
+    }
+    Write-Host '※ OAuth クライアントの「承認済みのリダイレクト URI」に <Cloud Run URL>/v1/calendar/oauth/callback を登録してください。' -ForegroundColor Yellow
+  }
+  elseif ($GoogleOauthClientId -or $GoogleOauthClientSecretPath) {
+    Write-Warning '-GoogleOauthClientId と -GoogleOauthClientSecretPath は両方指定してください（カレンダー連携 secrets は未設定のまま）。'
+  }
 }
 else {
   Write-Host ''

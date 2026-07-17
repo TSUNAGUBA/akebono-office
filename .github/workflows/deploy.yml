@@ -223,6 +223,40 @@ jobs:
             --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
             --role="roles/secretmanager.secretAccessor" --quiet >/dev/null
 
+      # カレンダー連携（F-06-8）: OAuth クライアントシークレットとトークン暗号化鍵を Secret Manager へ。
+      # secrets 未設定ならスキップ（連携無効のままデプロイ継続 = 原則4）
+      - name: カレンダー連携の secrets を Secret Manager へ登録（冪等・任意）
+        if: steps.check.outputs.ready == 'true'
+        env:
+          SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
+          PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          TOKEN_ENCRYPTION_KEY: ${{ secrets.TOKEN_ENCRYPTION_KEY }}
+        run: |
+          if [ -z "$GOOGLE_OAUTH_CLIENT_SECRET" ] || [ -z "$TOKEN_ENCRYPTION_KEY" ]; then
+            echo "::notice::GOOGLE_OAUTH_CLIENT_SECRET / TOKEN_ENCRYPTION_KEY が未設定のためカレンダー連携は無効のままデプロイします（setup-deploy-secrets.ps1 -GoogleOauthClientId ... で設定）"
+            echo "CALENDAR_READY=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          PROJECT_NUMBER="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')"
+          put_secret() {
+            local NAME="$1" VALUE="$2"
+            if ! gcloud secrets describe "$NAME" >/dev/null 2>&1; then
+              gcloud secrets create "$NAME" --replication-policy=automatic
+            fi
+            local CURRENT
+            CURRENT="$(gcloud secrets versions access latest --secret="$NAME" 2>/dev/null || true)"
+            if [ "$CURRENT" != "$VALUE" ]; then
+              printf '%s' "$VALUE" | gcloud secrets versions add "$NAME" --data-file=-
+            fi
+            gcloud secrets add-iam-policy-binding "$NAME" \
+              --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+              --role="roles/secretmanager.secretAccessor" --quiet >/dev/null
+          }
+          put_secret "$SERVICE-google-oauth-secret" "$GOOGLE_OAUTH_CLIENT_SECRET"
+          put_secret "$SERVICE-token-encryption-key" "$TOKEN_ENCRYPTION_KEY"
+          echo "CALENDAR_READY=true" >> "$GITHUB_ENV"
+
       # AI 機能（Vertex AI・オペレーター決定 2026-07-17）: API 有効化と実行 SA への権限付与。
       # 補助処理として非ブロッキング（権限不足時は警告 + deploy-guide.md の手動手順へフォールバック）
       - name: Vertex AI の有効化 + 実行 SA へ権限付与（冪等・非ブロッキング）
@@ -249,7 +283,15 @@ jobs:
           API_CORS_ORIGINS: ${{ secrets.API_CORS_ORIGINS }}
           VERTEX_LOCATION: ${{ secrets.VERTEX_LOCATION }}
           VERTEX_MODEL: ${{ secrets.VERTEX_MODEL }}
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
         run: |
+          ENV_VARS="AUTH_MODE=firebase,FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID},DB_SSL=${DB_SSL:-require},CORS_ORIGINS=${API_CORS_ORIGINS},VERTEX_PROJECT_ID=${PROJECT},VERTEX_LOCATION=${VERTEX_LOCATION:-global},VERTEX_MODEL=${VERTEX_MODEL:-gemini-2.5-flash}"
+          SECRET_FLAGS="DATABASE_URL=$SERVICE-database-url:latest"
+          # カレンダー連携（secrets 登録済みのときのみ有効化）
+          if [ "${CALENDAR_READY:-false}" = "true" ] && [ -n "$GOOGLE_OAUTH_CLIENT_ID" ]; then
+            ENV_VARS="$ENV_VARS,GOOGLE_OAUTH_CLIENT_ID=${GOOGLE_OAUTH_CLIENT_ID}"
+            SECRET_FLAGS="$SECRET_FLAGS,GOOGLE_OAUTH_CLIENT_SECRET=$SERVICE-google-oauth-secret:latest,TOKEN_ENCRYPTION_KEY=$SERVICE-token-encryption-key:latest"
+          fi
           gcloud run deploy "$SERVICE" \
             --image "$IMAGE" \
             --region "$REGION" \
@@ -258,6 +300,6 @@ jobs:
             --port 8080 \
             --min-instances 0 \
             --max-instances 3 \
-            --set-env-vars "AUTH_MODE=firebase,FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID},DB_SSL=${DB_SSL:-require},CORS_ORIGINS=${API_CORS_ORIGINS},VERTEX_PROJECT_ID=${PROJECT},VERTEX_LOCATION=${VERTEX_LOCATION:-global},VERTEX_MODEL=${VERTEX_MODEL:-gemini-2.5-flash}" \
-            --set-secrets "DATABASE_URL=$SERVICE-database-url:latest"
+            --set-env-vars "$ENV_VARS" \
+            --set-secrets "$SECRET_FLAGS"
           echo "デプロイ完了: $(gcloud run services describe "$SERVICE" --region "$REGION" --format='value(status.url)')"

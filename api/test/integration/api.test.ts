@@ -23,6 +23,9 @@ const env: Env = {
   vertexProjectId: '', // LLM 無効 = 全 AI 機能はヒューリスティックへフォールバック
   vertexLocation: 'global',
   vertexModel: 'gemini-2.5-flash',
+  googleOauthClientId: '', // カレンダー連携無効（AKO-CAL-007 経路を検証）
+  googleOauthClientSecret: '',
+  tokenEncryptionKey: 'test-encryption-key',
 }
 
 let pool: pg.Pool
@@ -943,5 +946,61 @@ describe('日報 AI アシスト', () => {
     expect(d.issues).toContain('レビュー待ちで遅れ気味')
     expect(d.tomorrow).toBe('締め処理の自動化')
     expect(d.basis.length).toBeGreaterThan(0)
+  })
+})
+
+describe('カレンダー連携', () => {
+  const today = todayJst()
+  let taskId = ''
+
+  it('OAuth 設定なしでは enabled=false・同期は AKO-CAL-007。コールバックはエラーリダイレクト', async () => {
+    const st = (await api('GET', '/v1/calendar/status', { as: MEMBER })).json.data as
+      { enabled: boolean; connected: boolean }
+    expect(st.enabled).toBe(false)
+    expect(st.connected).toBe(false)
+    expect((await api('POST', '/v1/calendar/sync', { as: MEMBER, body: { date: today } })).json.error?.code)
+      .toBe('AKO-CAL-007')
+    // コールバックは認証なしで到達し、設定なしはフロントへエラーリダイレクト（500 にしない）
+    const cb = await app.request('/v1/calendar/oauth/callback?state=x&code=y')
+    expect(cb.status).toBe(302)
+    expect(cb.headers.get('location')).toContain('calendar=error')
+  })
+
+  it('アプリ発タスク: 入力検証（AKO-CAL-002/003）→ 作成（未連携 push は warning）→ 本人のみ参照 → 削除', async () => {
+    expect((await api('POST', '/v1/calendar/events', {
+      as: MEMBER, body: { date: today, from: '10:00', to: '11:00', title: '' },
+    })).json.error?.code).toBe('AKO-CAL-002')
+    expect((await api('POST', '/v1/calendar/events', {
+      as: MEMBER, body: { date: today, from: '11:00', to: '10:00', title: 'x' },
+    })).json.error?.code).toBe('AKO-CAL-003')
+
+    const created = await api('POST', '/v1/calendar/events', {
+      as: MEMBER, body: { date: today, from: '14:00', to: '15:00', title: '請求書レビュー', pushToGoogle: true },
+    })
+    expect(created.status).toBe(201)
+    const data = created.json.data as { id: string; warning?: string }
+    taskId = data.id
+    expect(data.warning).toContain('未連携')
+
+    const mine = (await api('GET', `/v1/calendar/events?date=${today}`, { as: MEMBER })).json.data as
+      { id: string; source: string }[]
+    expect(mine.some(e => e.id === taskId)).toBe(true)
+    const others = (await api('GET', `/v1/calendar/events?date=${today}`, { as: HR })).json.data as unknown[]
+    expect(others.length).toBe(0)
+  })
+
+  it('google 発の予定は削除不可（AKO-CAL-006 = SoT 分離）。app 発は削除可', async () => {
+    await pool.query(
+      `INSERT INTO calendar_events (id, member_id, date, from_time, to_time, title, source, google_event_id, synced_to_google)
+       VALUES ('cal-test-google', $1, $2, '09:00', '10:00', '定例', 'google', 'gev-1', true)`,
+      [MEMBER, today])
+    expect((await api('POST', '/v1/calendar/events/cal-test-google/remove', { as: MEMBER })).json.error?.code)
+      .toBe('AKO-CAL-006')
+    expect((await api('POST', `/v1/calendar/events/${taskId}/remove`, { as: MEMBER })).status).toBe(200)
+    // ドラフト生成の材料にカレンダー予定（google 発）が使われる
+    const d = (await api('POST', '/v1/assist/report-draft', { as: MEMBER, body: { date: today } })).json.data as
+      { entries: { task: string }[]; basis: string[] }
+    expect(d.entries.some(e => e.task.includes('定例'))).toBe(true)
+    expect(d.basis.some(b => b.includes('カレンダー予定'))).toBe(true)
   })
 })
