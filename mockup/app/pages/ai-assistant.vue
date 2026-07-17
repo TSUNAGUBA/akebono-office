@@ -79,13 +79,13 @@ const unplannedEvents = computed(() => {
   return planDayEvents.value.filter(e => !linked.has(e.id))
 })
 
-function onSyncPlanDay(): void {
-  const res = cal.syncFromGoogle(currentUserId.value, planDate.value)
+async function onSyncPlanDay(): Promise<void> {
+  const res = await cal.syncFromGoogle(currentUserId.value, planDate.value)
   if (!res.ok) {
     show(res.error.message, 'crit')
     return
   }
-  show(`${res.synced ?? 0} 件を同期しました（モック）`)
+  show(`${res.synced ?? 0} 件を同期しました`)
 }
 
 // 計画の作成・編集モーダル

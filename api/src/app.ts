@@ -16,6 +16,7 @@ import { mastersRoutes } from './routes/masters'
 import { notificationsRoutes } from './routes/notifications'
 import { reportsRoutes } from './routes/reports'
 import { assistRoutes } from './routes/assist'
+import { calendarOauthCallback, calendarRoutes } from './routes/calendar'
 import { shiftsRoutes } from './routes/shifts'
 import { taskPlansRoutes } from './routes/task-plans'
 import { workflowsRoutes } from './routes/workflows'
@@ -56,6 +57,9 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
     return c.json({ data: result })
   })
 
+  // OAuth コールバックはブラウザリダイレクト（認証ヘッダなし）で届くため認証より前に登録する。
+  // 本人性は state の HMAC（TOKEN_ENCRYPTION_KEY 署名）で担保する
+  app.get('/v1/calendar/oauth/callback', calendarOauthCallback(pool, env))
   app.use('/v1/*', authMiddleware(env, pool))
 
   // 認証済みユーザー自身の情報（フロントの起動時に呼ぶ）
@@ -72,6 +76,7 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
   app.route('/v1/shifts', shiftsRoutes(pool))
   app.route('/v1/task-plans', taskPlansRoutes(pool, env))
   app.route('/v1/assist', assistRoutes(pool, env))
+  app.route('/v1/calendar', calendarRoutes(pool, env))
 
   app.notFound(c => c.json({ error: { code: 'AKO-GEN-404', message: 'エンドポイントが見つかりません' } }, 404))
 

@@ -178,9 +178,12 @@ generateDraft(memberId, date): ReportDraft           // 保存しない（フォ
 | AKO-TPL-003 | 他人の計画への操作（本人のみ） | ✅ |
 | AKO-TPL-004 | 結果記録済み計画の編集・削除（不可 = 記録保護） | ✅ |
 | AKO-TPL-005 | 結果の未入力 | ✅ |
-| AKO-CAL-001 | カレンダー同期の失敗 | |
-| AKO-CAL-002 | タスク名未入力 | |
-| AKO-CAL-003 | タスク時刻の不正（開始 >= 終了） | |
+| AKO-CAL-001 | カレンダー同期・Google 反映の失敗 | ✅ |
+| AKO-CAL-002 | タスク名未入力 | ✅ |
+| AKO-CAL-003 | タスク時刻の不正（開始 >= 終了） | ✅ |
+| AKO-CAL-004 | アプリ発以外の予定の Google 反映（不可） | ✅ |
+| AKO-CAL-006 | Google 由来の予定の削除（不可。005 は欠番 = 反映済み再実行は no-op + warning） | ✅ |
+| AKO-CAL-007 | カレンダー未連携・連携未設定 | ✅ |
 | AKO-CAL-004 | google 発予定への反映操作（アプリ発のみ可） | |
 | AKO-CAL-005 | 欠番（反映済みへの再実行は no-op + warning に変更） | |
 | AKO-CAL-006 | google 発予定の削除操作（Google 側で変更→同期） | |
