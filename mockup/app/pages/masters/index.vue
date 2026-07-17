@@ -17,6 +17,7 @@ const companyRelations = tbl('companyRelations')
 const contactRelations = tbl('contactRelations')
 const projects = tbl('projects')
 const knowledge = tbl('knowledge')
+const codeMaster = tbl('codeMaster')
 
 function activeCount(rows: { active?: boolean }[]): number {
   return rows.filter(r => r.active !== false).length
@@ -38,6 +39,14 @@ const cards = computed<MenuCard[]>(() => [
     icon: 'Network',
     to: '/masters/departments',
     badge: activeCount(departments.value),
+  },
+  {
+    id: 'titles',
+    title: '役職',
+    description: 'メンバー登録の役職選択肢（追加・表示順・無効化）',
+    icon: 'IdCard',
+    to: '/masters/titles',
+    badge: activeCount(codeMaster.value.filter(i => i.category === 'title')),
   },
   {
     id: 'leave-types',

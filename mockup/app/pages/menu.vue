@@ -38,6 +38,7 @@ const visibleGroups = computed(() =>
         >
           <component :is="iconOf(item.icon)" class="h-4.5 w-4.5 text-sub" aria-hidden="true" />
           {{ item.label }}
+          <UiMockBadge v-if="isMockPage(item.path)" label="モック" />
         </NuxtLink>
       </div>
     </div>

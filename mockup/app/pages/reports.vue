@@ -475,6 +475,7 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
           description="タスク計画の結果・ぽいぽいメモ・ヒアリング回答を材料に AI が下書きを作ります。材料の入力は AI業務アシスタントで"
         >
           <template #actions>
+            <UiMockBadge label="モック（AI アシストはバッチ3 で本実装予定）" />
             <NuxtLink to="/ai-assistant" class="btn btn-sm btn-primary">
               <Sparkles class="h-3.5 w-3.5" aria-hidden="true" />
               AI業務アシスタントを開く
@@ -502,6 +503,9 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
 
         <!-- ドラフト生成 -->
         <UiSectionCard title="日報ドラフト生成" description="スケジュール・回答・メモを材料に AI が下書きを作ります">
+          <template #actions>
+            <UiMockBadge label="モック（AI 生成はバッチ3 で本実装予定）" />
+          </template>
           <div class="grid gap-2">
             <button
               type="button"

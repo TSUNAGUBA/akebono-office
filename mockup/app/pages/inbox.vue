@@ -217,6 +217,10 @@ function submitRespond(): void {
 
     <!-- ================= エスカレーションタブ（管理者のみ） ================= -->
     <div v-else-if="tab === 'escalations' && isAdmin" class="grid gap-3">
+      <!-- API モードではエスカレーションは未接続（バッチ3）= デモデータのまま -->
+      <div class="flex justify-end">
+        <UiMockBadge label="モックアップ（エスカレーションはバッチ3 で本実装予定）" />
+      </div>
       <!-- KPI -->
       <div class="grid grid-cols-2 gap-2 md:grid-cols-3">
         <UiKpiCard label="対応待ち" :value="`${openCount}件`" sub="open のエスカレーション" icon="Flame" />
