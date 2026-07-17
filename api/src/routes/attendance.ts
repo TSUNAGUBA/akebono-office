@@ -8,7 +8,7 @@ import type pg from 'pg'
 import { effectivePunches } from '../../../shared/domain/attendance-calc'
 import { addDays, nowJstIso, todayJst } from '../../../shared/domain/jst'
 import type { AttendanceRule, Member, PunchKind, PunchRecord } from '../../../shared/domain/types'
-import { requireAdmin, requireHrOrAdmin } from '../auth'
+import { requireHrOrAdmin } from '../auth'
 import {
   article36Alerts, daySummary, monthSummary, PUNCH_ALLOWED, punchState, resolveRule,
 } from '../domain/attendance'
@@ -259,12 +259,12 @@ export function attendanceRoutes(pool: pg.Pool): Hono {
     return c.json({ data: { id } }, 201)
   })
 
-  // 修正申請一覧（本人 = 自分の申請 / 管理者 = 全件（status 指定可））
+  // 修正申請一覧（本人 = 自分の申請 / 管理者・人事 = 全件（status 指定可）。承認は管理者のみ）
   app.get('/fix-requests', async (c) => {
     const user = c.get('user')
     const status = c.req.query('status') ?? ''
     const all = c.req.query('scope') === 'all'
-    if (all) requireAdmin(c)
+    if (all) requireHrOrAdmin(c)
     const { rows } = await pool.query(
       `SELECT id, member_id AS "memberId", date, kind, requested_at AS "requestedAt",
               reason, status, decided_by AS "decidedBy"

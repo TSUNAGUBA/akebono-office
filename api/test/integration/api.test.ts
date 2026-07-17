@@ -170,6 +170,13 @@ describe('打刻修正申請', () => {
     expect(outs[0]?.at).toBe(`${today}T19:00:00+09:00`)
     expect(d.rawPunches.length).toBe(5)
   })
+
+  it('申請一覧: 全件参照は管理者・人事のみ（承認は管理者のみのまま）', async () => {
+    expect((await api('GET', '/v1/attendance/fix-requests?scope=all', { as: MEMBER })).status).toBe(403)
+    const hrList = await api('GET', '/v1/attendance/fix-requests?scope=all', { as: HR })
+    expect(hrList.status).toBe(200)
+    expect((hrList.json.data as unknown[]).length).toBeGreaterThanOrEqual(1)
+  })
 })
 
 describe('休暇（付与・残数・申請・承認）', () => {

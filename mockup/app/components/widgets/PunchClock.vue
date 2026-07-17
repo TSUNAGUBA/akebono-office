@@ -47,8 +47,8 @@ const stateTone = computed(() => ({
   done: 'info' as const,
 }[state.value]))
 
-function doPunch(kind: PunchKind): void {
-  const r = punch(kind)
+async function doPunch(kind: PunchKind): Promise<void> {
+  const r = await punch(kind)
   if (r.ok) {
     show(`${PUNCH_KIND_LABELS[kind]}を打刻しました`, 'ok', { label: '勤怠管理で確認', to: '/attendance' })
   } else {

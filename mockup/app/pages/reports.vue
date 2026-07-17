@@ -110,11 +110,8 @@ function stepHours(i: number, delta: number): void {
 const totalHours = computed(() =>
   editEntries.value.reduce((s, e) => s + (Number.isFinite(e.hours) ? e.hours : 0), 0))
 
-/** API モードの勤怠はモックデータのため編集中の乖離表示に使わない（勤怠フロント接続=バッチ2b-2 で有効化） */
-const isApi = useApiMode()
-
 const dayWorkMinutes = computed(() => {
-  if (isApi) return 0
+  // API モードの daySummary はサーバー集計キャッシュ（未ロード時 0 → 到着後に追従）
   try {
     return attendance.daySummary(currentUser.value.id, selDate.value).workMinutes
   } catch {
@@ -598,7 +595,6 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
           <div class="flex flex-wrap items-center gap-2 rounded-lg bg-surface-soft px-3 py-2 text-xs text-sub">
             <span class="num font-semibold">工数合計 {{ totalHours }}h</span>
             <span v-if="dayWorkMinutes > 0" class="num">/ 勤怠実労働 {{ fmtMinutes(dayWorkMinutes) }}</span>
-            <span v-else-if="isApi">/ 勤怠実労働との乖離は提出時にチェックします</span>
             <span v-else>/ この日の打刻がないため乖離チェック対象外</span>
             <UiStatusBadge v-if="editorGap !== null" tone="warn" :label="`乖離 ${gapText(editorGap)}`" />
           </div>
