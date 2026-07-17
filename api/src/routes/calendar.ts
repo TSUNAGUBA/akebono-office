@@ -150,6 +150,8 @@ export function calendarOauthCallback(pool: pg.Pool, env: Env) {
     const state = c.req.query('state') ?? ''
     const code = c.req.query('code') ?? ''
     const memberId = await consumeState(pool, state)
+    // 同意画面でキャンセルした場合は error=access_denied で戻る（code なし）
+    if (c.req.query('error')) return fail('denied')
     if (!memberId || !code) return fail('invalid-state')
     try {
       const res = await fetch(GOOGLE_TOKEN_URL, {

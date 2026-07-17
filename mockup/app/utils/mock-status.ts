@@ -5,7 +5,6 @@
  * ページヘッダー・カードメニュー・メニュー一覧のモックバッジ表示に使う。
  */
 const MOCK_PAGE_PATHS = new Set<string>([
-  '/decision',
   '/akebono',
   '/ai-company',
   '/sales',

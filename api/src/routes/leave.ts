@@ -35,7 +35,8 @@ async function leaveTypeOf(db: pg.Pool | pg.PoolClient, id: string): Promise<Lea
   return rows[0] as LeaveType | undefined
 }
 
-async function balanceOf(
+/** 残数計算の SoT（FIFO 引当・失効・保有上限）。chatbot の文脈収集からも再利用する */
+export async function balanceOf(
   db: pg.Pool | pg.PoolClient,
   memberId: string,
   leaveTypeId: string,

@@ -115,7 +115,7 @@ onBeforeUnmount(() => {
     </UiEmptyState>
 
     <template v-else>
-      <UiPageHeader title="AIチャットボット" description="社内データを参照して回答します（モック応答）">
+      <UiPageHeader title="AIチャットボット" description="社内データを参照して AI が回答します（稼働状況・ドキュメントの回答は移行前のためデモデータ）">
         <template #actions>
           <button type="button" class="btn btn-ghost btn-sm" :disabled="messages.length === 0" @click="onClear">
             <Trash2 class="h-3.5 w-3.5" aria-hidden="true" />
@@ -134,7 +134,7 @@ onBeforeUnmount(() => {
             v-if="messages.length === 0 && !isStreaming"
             icon="Bot"
             title="AIチャットボットに質問してみましょう"
-            hint="勤怠・有給・顧客情報・規程・稼働状況を実データから回答します"
+            hint="勤怠・有給・顧客情報・規程を実データから回答します（稼働状況・ドキュメントはデモデータ）"
           >
             <template #action>
               <div class="flex flex-wrap justify-center gap-1.5">

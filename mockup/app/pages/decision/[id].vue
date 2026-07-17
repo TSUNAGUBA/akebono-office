@@ -10,7 +10,10 @@ import { fmtDateTime } from '~/utils/format'
 import { DECISION_ACTION_META } from '~/utils/labels'
 
 const route = useRoute()
-const { themeById, logsOf, predict, record } = useDecision()
+const decision = useDecision()
+const { themeById, logsOf, predict, record } = decision
+// サーバー側で進んだ判断ログ（他者の記録）を表示時に取り込む
+onMounted(() => { void decision.refresh() })
 const { show } = useToast()
 const { tbl } = useMockDb()
 const members = tbl('members')
@@ -50,13 +53,13 @@ function openRecord(slot: DecisionSlot): void {
   reasonError.value = ''
 }
 
-function submitRecord(): void {
+async function submitRecord(): Promise<void> {
   if (!theme.value || !recordSlot.value) return
   if (!reason.value.trim()) {
     reasonError.value = '判断理由を入力してください'
     return
   }
-  const res = record(theme.value.id, recordSlot.value, reason.value)
+  const res = await record(theme.value.id, recordSlot.value, reason.value)
   if (!res.ok) {
     show(res.error.message, 'warn')
     return

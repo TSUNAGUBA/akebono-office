@@ -23,7 +23,16 @@ const SCOPES = [
   { name: '予定の作成・更新', detail: 'calendar.events — 本アプリで登録したタスクの反映に使用' },
 ]
 
-// OAuth 同意画面からの復帰（?calendar=connected / error）を反映してクエリを消す
+/** 連携失敗理由（callback の ?reason=）→ 利用者向けメッセージ。原因により対処が違うため区別して表示する */
+const FAIL_REASONS: Record<string, string> = {
+  'account-mismatch': '会社アカウント以外の Google アカウントで同意されたため連携できませんでした。'
+    + 'AKEBONO Office に登録されたメールアドレスと同じ Google アカウントを選択してください',
+  'denied': 'Google の同意画面でアクセスがキャンセルされました。連携するには「許可」を選択してください',
+  'invalid-state': '連携リクエストの有効期限が切れました（10 分以内に同意してください）。もう一度お試しください',
+  'not-configured': 'Google カレンダー連携が未設定です。管理者に OAuth クライアントの設定を依頼してください',
+}
+
+// OAuth 同意画面からの復帰（?calendar=connected / error&reason=）を反映してクエリを消す
 onMounted(async () => {
   const q = route.query.calendar
   if (typeof q !== 'string') return
@@ -36,7 +45,8 @@ onMounted(async () => {
       show(`連携は完了しましたが初回同期に失敗しました: ${r.error.message}`, 'warn')
     }
   } else {
-    show('Google カレンダーの連携に失敗しました。時間をおいて再試行してください', 'warn')
+    const reason = typeof route.query.reason === 'string' ? route.query.reason : ''
+    show(FAIL_REASONS[reason] ?? 'Google カレンダーの連携に失敗しました。時間をおいて再試行してください', 'warn')
   }
   void router.replace({ query: { ...route.query, calendar: undefined, reason: undefined } })
 })

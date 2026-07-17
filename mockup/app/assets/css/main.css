@@ -83,8 +83,8 @@
 }
 
 html {
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Hiragino Kaku Gothic ProN", "Noto Sans JP", Meiryo, sans-serif;
-  font-feature-settings: 'palt';
+  /* palt（プロポーショナルメトリクス）は Windows の Meiryo 系で句読点が潰れ文字が重なるため使わない */
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", Meiryo, sans-serif;
   color: var(--c-ink);
   background: var(--c-page);
 }
