@@ -103,7 +103,8 @@ export function escalationsRoutes(pool: pg.Pool): Hono {
         if (domain && KNOWLEDGE_DOMAINS.includes(domain) && targetId) {
           await client.query('SAVEPOINT knowledge_reflux')
           try {
-            const title = `裁定: ${target.context.slice(0, 24)}${target.context.length > 24 ? '…' : ''}`
+            const ctx = [...target.context]
+            const title = `裁定: ${ctx.slice(0, 24).join('')}${ctx.length > 24 ? '…' : ''}`
             await client.query(
               `INSERT INTO knowledge_articles (id, domain, target_id, title, body, tags, source, source_ref_id, updated_at)
                VALUES ($1, $2, $3, $4, $5, $6, 'escalation', $7, now())`,

@@ -248,12 +248,27 @@ export function mastersRoutes(pool: pg.Pool): Hono {
     return c.json({ data: { id } })
   })
 
-  // 物理削除（関係エッジのみ。監査ログ必須 = 設計判断）
+  // 物理削除（関係エッジ + 未使用の関係種別のみ。監査ログ必須 = 設計判断）
   app.delete('/:entity/:id', async (c) => {
     const { def, entity } = defOf(c.req.param('entity'))
     const user = requireMutator(c, entity)
     if (!def.physicalDelete) throw err('AKO-GEN-002', 'このマスタは物理削除できません（論理削除を使用）', 405)
     const id = c.req.param('id')
+    // 関係種別は関係エッジから参照中なら削除不可（エッジの種別喪失を防ぐ。無効化を案内）。
+    // 参照確認と削除は単文で行う（確認と削除の間にエッジが追加される競合を防ぐ）
+    if (entity === 'relation-types') {
+      const del = await pool.query(
+        `DELETE FROM relation_types WHERE id = $1
+           AND NOT EXISTS (SELECT 1 FROM company_relations WHERE relation_type_id = $1)
+           AND NOT EXISTS (SELECT 1 FROM contact_relations WHERE relation_type_id = $1)`, [id])
+      if (del.rowCount === 0) {
+        const { rows } = await pool.query(`SELECT 1 FROM relation_types WHERE id = $1`, [id])
+        if (rows.length === 0) throw err('AKO-GEN-002', '対象が見つかりません', 404)
+        throw err('AKO-RTM-001', 'この関係種別は既存の関係で使用中のため削除できません（無効化を使用してください）', 409)
+      }
+      await audit(pool, { actorId: user.id, action: 'delete', entity: def.table, entityId: id, detail: `${entity} を物理削除` })
+      return c.json({ data: { id } })
+    }
     const result = await pool.query(`DELETE FROM ${def.table} WHERE id = $1`, [id])
     if (result.rowCount === 0) throw err('AKO-GEN-002', '対象が見つかりません', 404)
     await audit(pool, { actorId: user.id, action: 'delete', entity: def.table, entityId: id, detail: `${entity} を物理削除（関係エッジ）` })

@@ -257,15 +257,18 @@ jobs:
           put_secret "$SERVICE-token-encryption-key" "$TOKEN_ENCRYPTION_KEY"
           echo "CALENDAR_READY=true" >> "$GITHUB_ENV"
 
-      # AI 機能（Vertex AI・オペレーター決定 2026-07-17）: API 有効化と実行 SA への権限付与。
+      # AI 機能（Vertex AI）とカレンダー同期（Calendar API）の有効化 + 実行 SA への権限付与。
       # 補助処理として非ブロッキング（権限不足時は警告 + deploy-guide.md の手動手順へフォールバック）
-      - name: Vertex AI の有効化 + 実行 SA へ権限付与（冪等・非ブロッキング）
+      - name: Vertex AI / Calendar API の有効化 + 実行 SA へ権限付与（冪等・非ブロッキング）
         if: steps.check.outputs.ready == 'true'
         env:
           PROJECT: ${{ secrets.GCP_PROJECT_ID }}
         run: |
           gcloud services enable aiplatform.googleapis.com --project "$PROJECT" \
             || echo "::warning::aiplatform.googleapis.com の有効化に失敗しました。オーナー権限で 'gcloud services enable aiplatform.googleapis.com' を実行してください（deploy-guide.md 参照）"
+          # カレンダー同期（events API）に必要。OAuth トークン交換は Calendar API 無効でも成功するため見落としやすい
+          gcloud services enable calendar-json.googleapis.com --project "$PROJECT" \
+            || echo "::warning::calendar-json.googleapis.com の有効化に失敗しました。オーナー権限で 'gcloud services enable calendar-json.googleapis.com' を実行してください（deploy-guide.md 参照）"
           PROJECT_NUMBER="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')"
           gcloud projects add-iam-policy-binding "$PROJECT" \
             --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \

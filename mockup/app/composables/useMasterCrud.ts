@@ -92,14 +92,14 @@ export function useMasterCrud<K extends MasterCollections>(name: K, idPrefix: st
     return { ok: true, id }
   }
 
-  /** 物理削除（関係エッジ専用の例外。data-design §1.1 の設計判断。監査ログ必須） */
+  /** 物理削除（関係エッジ + 未使用の関係種別のみの例外。data-design §1.1 の設計判断。監査ログ必須） */
   function remove(id: string): Result {
     const all = rows.value as Row[]
     if (!all.some(r => r.id === id)) {
       return { ok: false, error: { code: 'AKO-GEN-002', message: '対象が見つかりません' } }
     }
     rows.value = all.filter(r => r.id !== id) as MockDbShape[K]
-    audit('delete', id, `${String(name)} を物理削除（関係エッジ）`)
+    audit('delete', id, `${String(name)} を物理削除`)
     commit()
     return { ok: true, id }
   }
@@ -116,7 +116,7 @@ export interface MasterCrudAsync<Row extends BaseEntity> {
   save: (entity: Partial<Row> & { id?: string }) => Promise<Result>
   archive: (id: string) => Promise<Result>
   restore: (id: string) => Promise<Result>
-  /** 物理削除（関係エッジ専用） */
+  /** 物理削除（関係エッジ + 未使用の関係種別のみ） */
   remove: (id: string) => Promise<Result>
 }
 

@@ -51,7 +51,7 @@ async function buildContext(pool: pg.Pool, memberId: string, question: string): 
     parts.push(`## 顧客「${company.name}」
 ${company.description}（${company.location}・規模 ${company.size}）
 プロジェクト: ${pjs.map(p => `${p.name}（${p.status}）`).join(' / ') || 'なし'}
-${ks.map(k => `ナレッジ「${k.title}」(${k.id}): ${k.body.slice(0, 200)}`).join('\n')}`)
+${ks.map(k => `ナレッジ「${k.title}」(${k.id}): ${[...k.body].slice(0, 200).join('')}`).join('\n')}`)
   }
 
   // ナレッジ全文検索（タイトル・本文の部分一致。上位 3 件。% _ はリテラル扱いにエスケープ）
@@ -63,7 +63,7 @@ ${ks.map(k => `ナレッジ「${k.title}」(${k.id}): ${k.body.slice(0, 200)}`).
        ORDER BY id LIMIT 3`,
       terms.map(t => `%${t.replace(/[\\%_]/g, m => `\\${m}`)}%`))
     if (hits.length > 0) {
-      parts.push(`## 関連ナレッジ\n${hits.map(k => `「${k.title}」(${k.id}): ${k.body.slice(0, 200)}`).join('\n')}`)
+      parts.push(`## 関連ナレッジ\n${hits.map(k => `「${k.title}」(${k.id}): ${[...k.body].slice(0, 200).join('')}`).join('\n')}`)
     }
   }
 
@@ -83,7 +83,8 @@ export function chatbotRoutes(pool: pg.Pool, env: Env): Hono {
   app.post('/ask', async (c) => {
     const user = c.get('user')
     const body = await c.req.json().catch(() => ({})) as { question?: string }
-    const question = String(body.question ?? '').trim().slice(0, 2000)
+    // 2000 字上限（コードポイント単位 = サロゲートペアを境界で壊さない）
+    const question = [...String(body.question ?? '').trim()].slice(0, 2000).join('')
     if (!question) throw err('AKO-GEN-001', 'question を指定してください', 400)
     if (!env.vertexProjectId) return c.json({ data: { fallback: true } })
 
@@ -115,7 +116,7 @@ export function chatbotRoutes(pool: pg.Pool, env: Env): Hono {
     return c.json({
       data: {
         fallback: false,
-        content: String(res.content).slice(0, 4000),
+        content: [...String(res.content)].slice(0, 4000).join(''),
         sources: (Array.isArray(res.sources) ? res.sources.map(String) : []).slice(0, 5),
         suggestions: (Array.isArray(res.suggestions) ? res.suggestions.map(String) : []).slice(0, 3),
       },

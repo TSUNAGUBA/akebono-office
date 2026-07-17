@@ -61,7 +61,9 @@ export function useDecision() {
     await loadDecisionLogs(true)
   }
 
-  const themes = computed<DecisionTheme[]>(() => decisionThemes.value)
+  // API モードはアーカイブ済みテーマも取得される（includeInactive）ため表示から除外する
+  const themes = computed<DecisionTheme[]>(() =>
+    decisionThemes.value.filter(t => (t as DecisionTheme & { active?: boolean }).active !== false))
 
   const logs = computed<DecisionLog[]>(() =>
     [...decisionLogs.value].sort((a, b) => b.at.localeCompare(a.at)))

@@ -236,8 +236,9 @@ export function useReports() {
     status: 'draft' | 'submitted',
   ): Promise<Result & { hoursGapMinutes?: number | null; escalated?: boolean }> {
     const existing = myReportOn(input.date)
-    if (existing && existing.status === 'submitted') {
-      return err('AKO-REP-001', '提出済みの日報は編集できません')
+    // 提出済みは本人が編集可（提出状態は維持。下書きへ戻す操作のみ不可 = サーバーと同一挙動）
+    if (existing && existing.status === 'submitted' && status !== 'submitted') {
+      return err('AKO-REP-001', '提出済みの日報は下書きへ戻せません（提出済みのまま編集してください）')
     }
     const entries = cleanEntries(input.entries)
     if (status === 'submitted') {
@@ -270,8 +271,9 @@ export function useReports() {
     }
     const submittedAt = status === 'submitted' ? nowJstIso() : null
     if (existing) {
+      // 初回提出時刻は保持（提出済みの編集で提出時刻を書き換えない）
       dailyReports.value = dailyReports.value.map(r => r.id === existing.id
-        ? { ...r, entries, reflection: input.reflection, issues: input.issues, tomorrow: input.tomorrow, status, submittedAt }
+        ? { ...r, entries, reflection: input.reflection, issues: input.issues, tomorrow: input.tomorrow, status, submittedAt: r.submittedAt ?? submittedAt }
         : r)
       commit()
       return { ok: true, id: existing.id }

@@ -1,7 +1,8 @@
 /**
  * 汎用マスタ CRUD の台帳（mockup useMasterCrud の対応物）。
  * - エンティティごとにテーブル・id プレフィックス・zod スキーマ・jsonb 列・ガードを宣言する
- * - 論理削除のみ（active=false）。例外: 関係エッジ（company/contact-relations）は物理削除可
+ * - 論理削除のみ（active=false）。例外: 関係エッジ（company/contact-relations）と
+ *   未使用の関係種別（relation-types。参照ガードは masters.ts）は物理削除可
  *   （data-design §1.1 の設計判断。削除は監査ログ必須）
  * - バリデーションは API の責務（モックでは画面側の責務だったが、公開 I/F になるためここで担保）
  */
@@ -182,17 +183,22 @@ const schemas = {
     links: z.array(z.object({ label: z.string(), to: z.string(), info: z.string() })).default([]),
     actions: z.array(z.object({
       name: z.string(),
-      status: z.string(),
-      slot: z.string().nullable().default(null),
+      status: z.enum(['ok', 'warn', 'ng']),
+      slot: z.enum(['A', 'B', 'C']).nullable().default(null),
       why: z.string().default(''),
     })).default([]),
+    // 配列内の検証は .partial()（部分 PATCH）でも維持されるため、スロット重複チェックはここで行う
     options: z.array(z.object({
-      slot: z.string(),
+      slot: z.enum(['A', 'B', 'C']),
       recommended: z.boolean().default(false),
       title: z.string(),
       prediction: z.array(z.string()).default([]),
       basis: z.string().default(''),
-    })).min(1, '選択肢を 1 つ以上設定してください'),
+    })).min(1, '選択肢を 1 つ以上設定してください').superRefine((opts, ctx) => {
+      if (new Set(opts.map(o => o.slot)).size !== opts.length) {
+        ctx.addIssue({ code: 'custom', message: '選択肢のスロット（A/B/C）が重複しています' })
+      }
+    }),
     whyRecommend: z.string().default(''),
     scenarioParams: z.array(z.object({
       key: z.string(), label: z.string(), min: z.number(), max: z.number(),
@@ -209,11 +215,11 @@ export interface MasterDef {
   idPrefix: string
   /** 追加時の入力スキーマ */
   schema: z.ZodType
-  /** 部分更新時の入力スキーマ（physicalDelete 系は更新不可のため未定義） */
+  /** 部分更新時の入力スキーマ（関係エッジは削除→再登録運用のため未定義。relation-types は物理削除可だが更新も可） */
   patchSchema?: z.ZodType
   /** jsonb 列（書込時に JSON.stringify が必要な camelCase フィールド名） */
   jsonbFields: string[]
-  /** 物理削除可の関係エッジか（archive/restore の代わりに DELETE を許可） */
+  /** DELETE を許可するか（関係エッジ = 常時可 / 関係種別 = 未使用のみ。ガードは masters.ts） */
   physicalDelete?: boolean
   /** 論理削除を持たないか（physicalDelete 系は active 列なし） */
   noActive?: boolean
@@ -226,7 +232,8 @@ export const MASTERS: Record<MasterEntity, MasterDef> = {
   'industries': { table: 'industries', idPrefix: 'ind', schema: schemas.industries, patchSchema: schemas.industries.partial(), jsonbFields: [] },
   'companies': { table: 'companies', idPrefix: 'c', schema: schemas.companies, patchSchema: schemas.companies.partial(), jsonbFields: ['aliases', 'industryIds', 'custom'] },
   'contacts': { table: 'contacts', idPrefix: 'p', schema: schemas.contacts, patchSchema: schemas.contacts.partial(), jsonbFields: ['custom'] },
-  'relation-types': { table: 'relation_types', idPrefix: 'rt', schema: schemas['relation-types'], patchSchema: schemas['relation-types'].partial(), jsonbFields: [] },
+  // 関係種別は論理削除（無効化）に加え、未使用時のみ物理削除可（参照ガードは masters.ts の DELETE 側）
+  'relation-types': { table: 'relation_types', idPrefix: 'rt', schema: schemas['relation-types'], patchSchema: schemas['relation-types'].partial(), jsonbFields: [], physicalDelete: true },
   'company-relations': { table: 'company_relations', idPrefix: 'cr', schema: schemas['company-relations'], jsonbFields: [], physicalDelete: true, noActive: true },
   'contact-relations': { table: 'contact_relations', idPrefix: 'pr', schema: schemas['contact-relations'], jsonbFields: [], physicalDelete: true, noActive: true },
   'projects': { table: 'projects', idPrefix: 'pj', schema: schemas.projects, patchSchema: schemas.projects.partial(), jsonbFields: ['memberIds', 'custom'] },
