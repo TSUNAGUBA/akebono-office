@@ -49,7 +49,8 @@ export function useChatbot() {
   const mockMessages = tbl('chatMessages')
   const mockSessions = tbl('chatSessions')
 
-  // セッション導入前のモック会話（sessionId なし）を「以前の会話」セッションへ一度だけ移行（下位互換 = 原則7）
+  // セッション導入前のモック会話（sessionId なし）を「以前の会話」セッションへ一度だけ移行（下位互換 = 原則7）。
+  // 旧会話は全モックユーザー共有だったため、移行後は最初にページを開いたユーザーの所有になる（設計判断）
   if (!isApi && mockMessages.value.some(m => !m.sessionId)) {
     const legacyId = nextId('chatSessions', 'cs')
     mockSessions.value = [...mockSessions.value, {
@@ -115,16 +116,18 @@ export function useChatbot() {
     streamingText.value = ''
   }
 
-  /** ストリーミング状態の破棄（セッション切替・新規開始時。pending は保存しない） */
-  function resetStream(): void {
-    if (timer) {
-      clearInterval(timer)
-      timer = null
+  // モックモード: ユーザー切替時に前ユーザーのセッションを引き継がない（他人の会話の表示・
+  // 他人のセッションへの追記を防ぐ = C3。API モードは onApiReset が担う）
+  function ensureOwnSession(): void {
+    if (isApi || !currentSessionId.value) return
+    const s = mockSessions.value.find(x => x.id === currentSessionId.value)
+    if (!s || s.memberId !== currentUser.value.id) {
+      finalize() // 前ユーザーのストリーミング中応答は前ユーザーのセッションへ確定保存
+      currentSessionId.value = null
     }
-    pendingAnswer = null
-    isStreaming.value = false
-    streamingText.value = ''
   }
+  ensureOwnSession()
+  watch(() => currentUser.value.id, ensureOwnSession)
 
   function startStream(ans: BotAnswer): void {
     pendingAnswer = ans
@@ -152,9 +155,9 @@ export function useChatbot() {
     }
   }
 
-  /** 過去セッションを開いて続きから再開する */
+  /** 過去セッションを開いて続きから再開する（ストリーミング中の応答は元セッションへ確定保存） */
   async function openSession(id: string): Promise<Result> {
-    resetStream()
+    finalize()
     if (isApi) {
       try {
         const rows = await apiFetch<ChatMessage[]>(`/v1/chatbot/sessions/${id}/messages`)
@@ -171,7 +174,7 @@ export function useChatbot() {
 
   /** 新しいセッションを開始する（実体は最初の送信時に作成。過去の会話は履歴に残る） */
   function newSession(): void {
-    resetStream()
+    finalize() // ストリーミング中の応答は元セッションへ確定保存してから切り替える
     currentSessionId.value = null
     if (isApi) apiMessages.value = []
   }

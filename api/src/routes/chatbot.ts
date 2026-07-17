@@ -102,11 +102,14 @@ ${ks.map(k => `ナレッジ「${k.title}」(${k.id}): ${[...k.body].slice(0, 200
 export function chatbotRoutes(pool: pg.Pool, env: Env): Hono {
   const app = new Hono()
 
-  // セッション一覧（本人のみ・新しい順）
+  // セッション一覧（本人のみ・新しい順・直近 100 件）。
+  // 表示時刻の規約どおり timestamptz は JST のウォールクロック文字列へ変換して返す（configs.ts の監査ログと同じパターン）
   app.get('/sessions', async (c) => {
     const user = c.get('user')
     const { rows } = await pool.query(
-      `SELECT s.id, s.title, s.created_at AS "createdAt", s.updated_at AS "updatedAt",
+      `SELECT s.id, s.title,
+              to_char(s.created_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"') AS "createdAt",
+              to_char(s.updated_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"') AS "updatedAt",
               (SELECT count(*)::int FROM chat_messages m WHERE m.session_id = s.id) AS "messageCount"
        FROM chat_sessions s WHERE s.member_id = $1
        ORDER BY s.updated_at DESC LIMIT 100`, [user.id])

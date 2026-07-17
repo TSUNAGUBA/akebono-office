@@ -38,7 +38,9 @@ function load(): MockDbShape {
         const parsed = JSON.parse(raw) as PersistedDb
         if (parsed.version === SEED_VERSION && parsed.seededOn === todayKey() && parsed.data) {
           loadedSeededOn = parsed.seededOn
-          return parsed.data
+          // 同一バージョン内でコレクションが増えた場合（例: chatSessions 追加）に旧保存データの
+          // 欠落キーをシードで補完する（欠落キーで tbl() が undefined になるクラッシュの防止 = 原則7）
+          return { ...buildSeed(), ...parsed.data }
         }
       }
     } catch {
