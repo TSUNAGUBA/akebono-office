@@ -49,9 +49,10 @@ export function useReportAssist() {
 
   // ---------- 入力方式設定（F-13） ----------
 
-  const configs = tbl('appConfigs')
+  // 設定の SoT は useAppSettings（API モードは /v1/configs、モックモードは appConfigs テーブル）
+  const settings = useAppSettings()
   const inputMode = computed<ReportInputMode>(() => {
-    const v = configs.value.find(c => c.key === 'reportInputMode')?.value
+    const v = settings.getConfig('reportInputMode', 'both')
     return v === 'form' || v === 'assist' || v === 'both' ? v : 'both'
   })
 

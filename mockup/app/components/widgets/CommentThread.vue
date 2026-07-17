@@ -17,8 +17,8 @@ const { show } = useToast()
 const body = ref('')
 const comments = computed(() => reports.commentsOf(props.reportId))
 
-function send(): void {
-  const res = reports.addComment(props.reportId, body.value)
+async function send(): Promise<void> {
+  const res = await reports.addComment(props.reportId, body.value)
   if (!res.ok) {
     show(res.error.message, 'warn')
     return
@@ -27,8 +27,8 @@ function send(): void {
   show('コメントしました')
 }
 
-function react(commentId: string, emoji: string): void {
-  const res = reports.toggleReaction(commentId, emoji)
+async function react(commentId: string, emoji: string): Promise<void> {
+  const res = await reports.toggleReaction(commentId, emoji)
   if (!res.ok) show(res.error.message, 'warn')
 }
 
