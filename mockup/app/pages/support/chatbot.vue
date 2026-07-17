@@ -1,18 +1,19 @@
 <script setup lang="ts">
 /**
  * F-09-2 AIチャットボット: 会話 UI（吹き出し・擬似ストリーミング・出典バッジ・サジェストチップ）
+ * セッション管理: 「新しい会話」で新規開始・「履歴」ドロワーから過去セッションを再開（続きから質問できる）。
  * リンクはテキスト分解で描画（v-html 禁止）。Enter 送信 / Shift+Enter 改行 / 2000 字制限。
  */
-import { SendHorizontal, Trash2 } from 'lucide-vue-next'
+import { History, MessageSquarePlus, SendHorizontal } from 'lucide-vue-next'
 import type { ChatMessage } from '~/types/domain'
-import { fmtTime } from '~/utils/format'
+import { fmtDateTime, fmtTime } from '~/utils/format'
 
 const { isEnabled } = useAppSettings()
 const {
-  messages, isStreaming, streamingText, send, clear, finalize, escalate,
+  messages, sessions, currentSessionId, isStreaming, streamingText,
+  send, newSession, openSession, refresh, refreshSessions, finalize, escalate,
 } = useChatbot()
 const toast = useToast()
-const confirm = useConfirm()
 
 const draft = ref('')
 const listEl = ref<HTMLElement | null>(null)
@@ -78,11 +79,28 @@ function questionBefore(assistantId: string): string {
   return '(質問不明)'
 }
 
-async function onClear(): Promise<void> {
-  const ok = await confirm.ask('会話をクリア', 'チャット履歴をすべて削除します。よろしいですか？', { danger: true, confirmLabel: 'クリア' })
-  if (!ok) return
-  clear()
-  toast.show('会話をクリアしました')
+// ---------- セッション操作（新しい会話・履歴からの再開） ----------
+
+const historyOpen = ref(false)
+
+function onNewSession(): void {
+  newSession()
+  toast.show('新しい会話を開始しました（過去の会話は履歴から再開できます）')
+}
+
+async function onOpenHistory(): Promise<void> {
+  await refreshSessions()
+  historyOpen.value = true
+}
+
+async function onOpenSession(id: string): Promise<void> {
+  const r = await openSession(id)
+  historyOpen.value = false
+  if (!r.ok) {
+    toast.show(`${r.error.code}: ${r.error.message}`, 'warn')
+    return
+  }
+  scrollToBottom()
 }
 
 function scrollToBottom(): void {
@@ -93,7 +111,10 @@ function scrollToBottom(): void {
 
 watch(() => messages.value.length, scrollToBottom)
 watch(streamingText, scrollToBottom)
-onMounted(scrollToBottom)
+onMounted(() => {
+  void refresh() // API モード: セッション一覧 + 表示中セッションの復元
+  scrollToBottom()
+})
 
 /** unmount 時: タイマ解除 + ストリーミング中の応答を確定保存 */
 onBeforeUnmount(() => {
@@ -115,11 +136,15 @@ onBeforeUnmount(() => {
     </UiEmptyState>
 
     <template v-else>
-      <UiPageHeader title="AIチャットボット" description="社内データを参照して AI が回答します（稼働状況・ドキュメントの回答は移行前のためデモデータ）">
+      <UiPageHeader title="AIチャットボット" description="社内データを参照して AI が回答します。会話はセッションとして保存され、履歴から続きを再開できます（稼働状況・ドキュメントの回答は移行前のためデモデータ）">
         <template #actions>
-          <button type="button" class="btn btn-ghost btn-sm" :disabled="messages.length === 0" @click="onClear">
-            <Trash2 class="h-3.5 w-3.5" aria-hidden="true" />
-            会話をクリア
+          <button type="button" class="btn btn-ghost btn-sm" @click="onOpenHistory">
+            <History class="h-3.5 w-3.5" aria-hidden="true" />
+            履歴
+          </button>
+          <button type="button" class="btn btn-sm" :disabled="messages.length === 0 && !currentSessionId" @click="onNewSession">
+            <MessageSquarePlus class="h-3.5 w-3.5" aria-hidden="true" />
+            新しい会話
           </button>
         </template>
       </UiPageHeader>
@@ -240,6 +265,32 @@ onBeforeUnmount(() => {
           <p v-if="draft.length >= 1800" class="num mt-1 text-right text-[11px] text-muted">{{ draft.length }} / 2000</p>
         </div>
       </div>
+
+      <!-- 会話履歴（セッション一覧。クリックで続きから再開） -->
+      <UiDrawer :open="historyOpen" title="会話の履歴" @close="historyOpen = false">
+        <UiEmptyState
+          v-if="sessions.length === 0"
+          icon="History"
+          title="保存された会話はまだありません"
+          hint="質問を送信すると会話がセッションとして保存されます"
+        />
+        <ul v-else class="grid gap-1.5">
+          <li v-for="s in sessions" :key="s.id">
+            <button
+              type="button"
+              class="w-full rounded-lg border p-2.5 text-left transition-colors hover:bg-surface-soft"
+              :class="s.id === currentSessionId ? 'border-brand bg-brand-soft' : 'border-line'"
+              @click="onOpenSession(s.id)"
+            >
+              <p class="truncate text-[13px] font-semibold">{{ s.title || '（無題の会話）' }}</p>
+              <p class="num mt-0.5 text-[11px] text-muted">
+                {{ fmtDateTime(s.updatedAt) }}{{ s.messageCount !== undefined ? ` ・ ${s.messageCount} 件` : '' }}
+                {{ s.id === currentSessionId ? ' ・ 表示中' : '' }}
+              </p>
+            </button>
+          </li>
+        </ul>
+      </UiDrawer>
     </template>
   </div>
 </template>
