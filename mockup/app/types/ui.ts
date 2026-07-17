@@ -17,6 +17,8 @@ export interface FieldDef {
   type: 'text' | 'number' | 'date' | 'time' | 'select' | 'multiselect' | 'boolean' | 'textarea'
   required?: boolean
   options?: { value: string; label: string }[]
+  /** select の空値（''）option の表示（既定「選択してください」。例: 未所属・未設定） */
+  emptyLabel?: string
   placeholder?: string
   hint?: string
   min?: number

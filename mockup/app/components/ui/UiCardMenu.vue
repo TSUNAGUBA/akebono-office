@@ -37,6 +37,7 @@ function iconOf(name: string) {
           <span class="flex items-center gap-1.5">
             <span class="text-[13px] font-bold">{{ item.title }}</span>
             <ExternalLinkIcon v-if="item.href" class="h-3 w-3 text-muted" aria-hidden="true" />
+            <UiMockBadge v-if="!item.href && item.to && isMockPage(item.to)" label="モック" />
             <UiStatusBadge v-if="item.disabled" label="準備中" tone="neutral" />
             <span
               v-else-if="item.badge !== undefined && Number(item.badge) > 0"

@@ -113,11 +113,15 @@ const formFields = computed<FieldDef[]>(() => [
     hint: '同一雇用区分でも固定時間・フレックス・時短等を個別に指定できます。「既定」は雇用区分の既定ルールを適用',
   },
   {
-    key: 'departmentId', label: '部署', type: 'select', required: true,
+    key: 'departmentId', label: '部署', type: 'select', emptyLabel: '未所属',
     options: departments.options.value,
-    hint: '部署の追加・階層の変更は 部署マスタ（組織図）で行います',
+    hint: '未所属のまま登録できます。部署の追加・階層の変更は 部署マスタ（組織図）で行います',
   },
-  { key: 'title', label: '役職', type: 'select', options: itemsOf('title') },
+  {
+    key: 'title', label: '役職', type: 'select', emptyLabel: '未設定',
+    options: itemsOf('title'),
+    hint: '選択肢は 役職マスタ（マスタメンテナンス > 役職）で管理します',
+  },
   {
     key: 'role', label: 'ロール', type: 'select', required: true,
     options: Object.entries(MEMBER_ROLE_LABELS).map(([value, label]) => ({ value, label })),
@@ -169,7 +173,7 @@ function openCreate(): void {
   selectedId.value = null
   form.value = {
     name: '', email: '', employmentType: 'employee', attendanceRuleId: DEFAULT_RULE_VALUE,
-    departmentId: departments.options.value[0]?.value ?? '', title: '', role: 'member',
+    departmentId: '', title: '', role: 'member',
     weeklyDays: 5, weeklyHours: 40, punchRequired: true, hireDate: '', birthDate: '', custom: {},
   }
   errors.value = {}
@@ -203,7 +207,7 @@ function validate(): boolean {
     }
   }
   if (!String(form.value.role ?? '')) e.role = 'ロールは必須です'
-  if (!String(form.value.departmentId ?? '')) e.departmentId = '部署は必須です'
+  // 部署は任意（未所属のまま登録できる。配属は部署マスタ or メンバー編集で）
   const custom = (form.value.custom ?? {}) as CustomValues
   for (const d of defsFor('member')) {
     const v = custom[d.key]

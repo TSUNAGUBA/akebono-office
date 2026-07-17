@@ -249,6 +249,23 @@ async function assignMember(): Promise<void> {
   toast.show(`${m.name} さんを ${from} から ${selected.value.name} へ配属しました`)
   assignMemberId.value = ''
 }
+
+/** 配属から外す（未所属にする。SoT は Member.departmentId） */
+async function unassignMember(m: Member): Promise<void> {
+  if (!selected.value) return
+  const ok = await confirm.ask(
+    '配属から外す',
+    `${m.name} さんを ${selected.value.name} の配属から外して未所属にしますか？`,
+    { confirmLabel: '外す' },
+  )
+  if (!ok) return
+  const res = await membersCrud.save({ id: m.id, departmentId: '' })
+  if (!res.ok) {
+    toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
+    return
+  }
+  toast.show(`${m.name} さんを配属から外しました（未所属）`)
+}
 </script>
 
 <template>
@@ -347,6 +364,15 @@ async function assignMember(): Promise<void> {
                 <span class="min-w-0 flex-1 truncate text-[13px] font-semibold">{{ m.name }}</span>
                 <span class="text-[11px] text-muted">{{ m.title }}</span>
                 <UiStatusBadge v-if="m.id === selected.managerId" label="責任者" tone="brand" />
+                <button
+                  v-if="selected.active"
+                  type="button"
+                  class="btn btn-sm shrink-0"
+                  :aria-label="`${m.name} を配属から外す`"
+                  @click="unassignMember(m)"
+                >
+                  外す
+                </button>
               </li>
             </ul>
             <p v-else class="mt-1.5 text-xs text-muted">直属メンバーはいません</p>

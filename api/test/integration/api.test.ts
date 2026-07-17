@@ -337,6 +337,14 @@ describe('マスタ CRUD', () => {
     expect((await api('POST', `/v1/masters/departments/${depId}/restore`, { as: ADMIN })).status).toBe(200)
   })
 
+  it('汎用区分の初期データ（役職等）がマイグレーションで投入される', async () => {
+    const rows = (await api('GET', '/v1/masters/code-masters', { as: MEMBER })).json.data as
+      { category: string; label: string }[]
+    const titles = rows.filter(r => r.category === 'title')
+    expect(titles.length).toBeGreaterThanOrEqual(7)
+    expect(titles.some(t => t.label === 'マネージャー')).toBe(true)
+  })
+
   it('部分 PATCH は未指定フィールドを上書きしない（zod v4 .partial() の既定値注入の回帰防止）', async () => {
     // 実障害の再現経路: 部署配属（departmentId のみの PATCH）で email が空・role が member に巻き戻った
     const r = await api('PATCH', `/v1/masters/members/${HR}`, { as: ADMIN, body: { title: '人事部長' } })

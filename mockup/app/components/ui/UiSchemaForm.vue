@@ -99,9 +99,10 @@ function arrValue(key: string): string[] {
         v-else-if="f.type === 'select'"
         :value="strValue(f.key)"
         class="select"
+        :aria-label="f.label"
         @change="setValue(f.key, ($event.target as HTMLSelectElement).value)"
       >
-        <option value="">選択してください</option>
+        <option value="">{{ f.emptyLabel ?? '選択してください' }}</option>
         <option v-for="o in f.options ?? []" :key="o.value" :value="o.value">{{ o.label }}</option>
       </select>
       <UiChipSelect
