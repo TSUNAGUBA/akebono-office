@@ -215,7 +215,7 @@ export interface MasterDef {
   idPrefix: string
   /** 追加時の入力スキーマ */
   schema: z.ZodType
-  /** 部分更新時の入力スキーマ（physicalDelete 系は更新不可のため未定義） */
+  /** 部分更新時の入力スキーマ（関係エッジは削除→再登録運用のため未定義。relation-types は物理削除可だが更新も可） */
   patchSchema?: z.ZodType
   /** jsonb 列（書込時に JSON.stringify が必要な camelCase フィールド名） */
   jsonbFields: string[]

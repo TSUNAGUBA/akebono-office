@@ -286,8 +286,9 @@ export function calendarRoutes(pool: pg.Pool, env: Env): Hono {
         signal: AbortSignal.timeout(15_000),
       })
       if (!res.ok) {
-        const bodyTxt = (await res.text()).slice(0, 300)
-        console.warn('calendar sync failed:', res.status, bodyTxt)
+        // 判定はエラーボディ全文に対して行う（理由コードが長い message の後に来る形式でも取りこぼさない）
+        const bodyTxt = await res.text()
+        console.warn('calendar sync failed:', res.status, bodyTxt.slice(0, 300))
         // 403 のうち設定不備（API 未有効化・権限なし）のみ管理者向け案内にする
         // （レート超過も 403 を返すため、本文の理由コードで判別する）
         if (res.status === 403 && /accessNotConfigured|SERVICE_DISABLED|PERMISSION_DENIED/.test(bodyTxt)) {

@@ -83,7 +83,8 @@ export function chatbotRoutes(pool: pg.Pool, env: Env): Hono {
   app.post('/ask', async (c) => {
     const user = c.get('user')
     const body = await c.req.json().catch(() => ({})) as { question?: string }
-    const question = String(body.question ?? '').trim().slice(0, 2000)
+    // 2000 字上限（コードポイント単位 = サロゲートペアを境界で壊さない）
+    const question = [...String(body.question ?? '').trim()].slice(0, 2000).join('')
     if (!question) throw err('AKO-GEN-001', 'question を指定してください', 400)
     if (!env.vertexProjectId) return c.json({ data: { fallback: true } })
 
@@ -115,7 +116,7 @@ export function chatbotRoutes(pool: pg.Pool, env: Env): Hono {
     return c.json({
       data: {
         fallback: false,
-        content: String(res.content).slice(0, 4000),
+        content: [...String(res.content)].slice(0, 4000).join(''),
         sources: (Array.isArray(res.sources) ? res.sources.map(String) : []).slice(0, 5),
         suggestions: (Array.isArray(res.suggestions) ? res.suggestions.map(String) : []).slice(0, 3),
       },

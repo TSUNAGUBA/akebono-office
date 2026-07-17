@@ -61,7 +61,8 @@ export function assistRoutes(pool: pg.Pool, env: Env): Hono {
   app.post('/memos', async (c) => {
     const user = c.get('user')
     const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
-    const text = String(body.text ?? '').trim().slice(0, 2000)
+    // 2000 字上限（コードポイント単位 = サロゲートペアを境界で壊さない）
+    const text = [...String(body.text ?? '').trim()].slice(0, 2000).join('')
     if (!text) throw err('AKO-RAS-002', 'メモを入力してください', 400)
     const id = newId('hl')
     await pool.query(
