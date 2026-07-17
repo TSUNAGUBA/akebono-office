@@ -16,5 +16,9 @@ export default defineNuxtRouteMiddleware(async (to) => {
   await firebaseAuthReady()
   if (!useFbUser().value) return navigateTo('/login')
   const me = await ensureMeLoaded()
-  if (!me) return navigateTo('/login?reason=unregistered')
+  if (!me) {
+    // 未登録（AKO-AUTH-002）とそれ以外（API 未達・トークン検証失敗等）を区別して渡す
+    const reason = useApiMeError().value?.code === 'AKO-AUTH-002' ? 'unregistered' : 'unreachable'
+    return navigateTo(`/login?reason=${reason}`)
+  }
 })
