@@ -15,7 +15,9 @@ import { leaveRoutes, runPeriodicGrants } from './routes/leave'
 import { mastersRoutes } from './routes/masters'
 import { notificationsRoutes } from './routes/notifications'
 import { reportsRoutes } from './routes/reports'
+import { assistRoutes } from './routes/assist'
 import { shiftsRoutes } from './routes/shifts'
+import { taskPlansRoutes } from './routes/task-plans'
 import { workflowsRoutes } from './routes/workflows'
 import { err } from './lib/errors'
 
@@ -68,6 +70,8 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
   app.route('/v1/escalations', escalationsRoutes(pool))
   app.route('/v1/workflows', workflowsRoutes(pool))
   app.route('/v1/shifts', shiftsRoutes(pool))
+  app.route('/v1/task-plans', taskPlansRoutes(pool, env))
+  app.route('/v1/assist', assistRoutes(pool, env))
 
   app.notFound(c => c.json({ error: { code: 'AKO-GEN-404', message: 'エンドポイントが見つかりません' } }, 404))
 
