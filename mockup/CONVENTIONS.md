@@ -68,6 +68,15 @@ const cal = useCalendar()   // isConnected / connect / syncFromGoogle / addTask 
 
 // 日報 AI アシスト（F-06-7。ログは追記のみ・ドラフトは保存せずフォームへ流し込む）
 const assist = useReportAssist()   // inputMode / questionsFor / recordAnswer / poipoiMemo / generateDraft
+
+// AI業務アシスタント（F-14。done 後の計画は編集不可 = 記録系）
+const tp = useTaskPlans()   // plansOf / upsertPlan / removePlan / aiReview / recordResult / insights
+
+// 部署（F-10-9。所属の SoT は Member.departmentId。CRUD は useMasterCrud('departments')）
+const depts = useDepartments()   // nameOf / options / membersOf / tree
+
+// 休暇（F-04-5/9。種別別残数。付与は管理者/人事のみ・同日同種別はスキップ=冪等）
+const leave = useLeave()   // balance(memberId, leaveTypeId?) / request / decide / grant / bulkGrant / activeLeaveTypes
 ```
 
 ## UI コンポーネント在庫（新規に作る前にここを見る）
@@ -79,7 +88,7 @@ const assist = useReportAssist()   // inputMode / questionsFor / recordAnswer / 
 | `UiKpiCard` | label, value, sub, delta, inverse, icon(lucide名), to |
 | `UiDataTable` | columns(TableColumn[]), rows, clickable, maxHeight + `#cell-<key>`。`@row-click` |
 | `UiDrawer` | open, title, width + #footer。`@close` |
-| `UiModal` | open, title, width + #footer。`@close` |
+| `UiModal` | open, title, width, topmost（確認ダイアログ用: 親モーダルより前面 z-70） + #footer。`@close` |
 | `UiTabBar` | tabs(TabItem[]), v-model |
 | `UiFilterBar` | slot + #trailing |
 | `UiSearchInput` / `UiSelect` / `UiChipSelect` | v-model |
@@ -90,8 +99,9 @@ const assist = useReportAssist()   // inputMode / questionsFor / recordAnswer / 
 | `UiAvatar` | name, kind('human'/'ai'), size |
 | `UiEmptyState` | icon, title, hint + #action |
 | `ChartsLineChartCard` / `ChartsBarChartCard` / `ChartsDonutChartCard` | title, labels/series or items, yFormatter |
-| `WidgetsPunchClock` | 打刻（props なし） |
+| `WidgetsPunchClock` | 打刻 = タイムカード（flat: モーダル内等でカード枠を外す） |
 | `WidgetsCalendarConnectGate` | Google カレンダー連携ゲート（擬似 OAuth 同意・props なし） |
+| `MastersDeptOrgNode` | 組織図の再帰ノード（node: DeptNode, depth）。`@select` で部署詳細へ |
 
 コンポーネントはディレクトリプレフィックス付きで自動インポートされる（例: `components/widgets/ApprovalFlow.vue` → `<WidgetsApprovalFlow>`）。
 

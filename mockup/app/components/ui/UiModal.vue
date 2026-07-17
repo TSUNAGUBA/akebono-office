@@ -5,7 +5,9 @@ const props = withDefaults(defineProps<{
   open: boolean
   title: string
   width?: string
-}>(), { width: '560px' })
+  /** 常に最前面に出す（確認ダイアログ用。モーダル内から開いても親モーダルに隠れない） */
+  topmost?: boolean
+}>(), { width: '560px', topmost: false })
 
 const emit = defineEmits<{ close: [] }>()
 
@@ -37,7 +39,12 @@ function onKeydown(e: KeyboardEvent): void {
 <template>
   <Teleport to="body">
     <Transition name="modal">
-      <div v-if="open" class="fixed inset-0 z-50 flex items-end justify-center md:items-center" @keydown="onKeydown">
+      <div
+        v-if="open"
+        class="fixed inset-0 flex items-end justify-center md:items-center"
+        :class="topmost ? 'z-[70]' : 'z-50'"
+        @keydown="onKeydown"
+      >
         <div class="absolute inset-0 bg-black/30" aria-hidden="true" @click="emit('close')" />
         <div
           ref="panel"

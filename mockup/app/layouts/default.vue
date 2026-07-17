@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import * as icons from 'lucide-vue-next'
-import { Bell, ChevronDown, House, Sunrise } from 'lucide-vue-next'
+import { Bell, ChevronDown, Clock3, House, Sunrise } from 'lucide-vue-next'
 import { EMPLOYMENT_TYPE_LABELS } from '~/utils/labels'
 import { isActivePath, MOBILE_NAV, NAV_GROUPS } from '~/utils/navigation'
 
@@ -9,6 +9,14 @@ const { currentUser, switchableUsers, switchUser } = useCurrentUser()
 const { unreadCount } = useNotifications()
 
 const userMenuOpen = ref(false)
+/** タイムカードモーダル（ヘッダーからどの画面でも打刻できる） */
+const punchModalOpen = ref(false)
+
+// モーダル内のリンク（勤怠管理へ等）で遷移したら閉じる（開いたまま画面を覆わない）
+watch(() => route.path, () => {
+  punchModalOpen.value = false
+  userMenuOpen.value = false
+})
 
 function iconOf(name: string) {
   return (icons as Record<string, unknown>)[name] ?? icons.Circle
@@ -52,6 +60,11 @@ function onSwitchUser(id: string): void {
         >
           <House class="h-4 w-4" aria-hidden="true" /> ホーム
         </NuxtLink>
+
+        <button type="button" class="btn btn-ghost btn-sm" @click="punchModalOpen = true">
+          <Clock3 class="h-4 w-4" aria-hidden="true" />
+          <span class="hidden sm:inline">タイムカード</span>
+        </button>
 
         <NuxtLink to="/inbox" class="btn btn-ghost btn-sm relative" aria-label="通知">
           <Bell class="h-4 w-4" />
@@ -97,8 +110,8 @@ function onSwitchUser(id: string): void {
                 <UiAvatar :name="u.name" size="sm" />
                 <span class="flex-1 text-[13px]">{{ u.name }}</span>
                 <UiStatusBadge
-                  :label="`${EMPLOYMENT_TYPE_LABELS[u.employmentType]}${u.role === 'admin' ? '・管理' : ''}`"
-                  :tone="u.role === 'admin' ? 'brand' : 'neutral'"
+                  :label="`${EMPLOYMENT_TYPE_LABELS[u.employmentType]}${u.role === 'admin' ? '・管理' : u.role === 'hr' ? '・人事' : ''}`"
+                  :tone="u.role === 'admin' ? 'brand' : u.role === 'hr' ? 'info' : 'neutral'"
                 />
               </button>
             </div>
@@ -132,6 +145,11 @@ function onSwitchUser(id: string): void {
         >{{ unreadCount }}</span>
       </NuxtLink>
     </nav>
+
+    <!-- タイムカードモーダル（打刻カードをそのまま表示・操作） -->
+    <UiModal :open="punchModalOpen" title="タイムカード" @close="punchModalOpen = false">
+      <WidgetsPunchClock flat />
+    </UiModal>
 
     <UiToastHost />
     <UiConfirmHost />

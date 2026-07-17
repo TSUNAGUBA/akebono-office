@@ -2,7 +2,7 @@
 import type {
   AiEmployeeStatus, AiTaskStatus, ApprovalAction, DecisionActionStatus,
   EmploymentType, EscalationReason, EscalationResolutionType, IncidentImpact,
-  IncidentStatus, KnowledgeDomain, NotificationKind, ProjectStatus, ProjectType,
+  IncidentStatus, KnowledgeDomain, MemberRole, NotificationKind, ProjectStatus, ProjectType,
   PunchKind, ShiftPeriodStatus, ShiftWishKind, WorkflowCategory, WorkflowStatus,
 } from '~/types/domain'
 import type { Tone } from '~/types/ui'
@@ -13,6 +13,12 @@ export const EMPLOYMENT_TYPE_LABELS: Record<EmploymentType, string> = {
   contract: '契約社員',
   parttime: 'アルバイト',
   outsource: '外注',
+}
+
+export const MEMBER_ROLE_LABELS: Record<MemberRole, string> = {
+  admin: '管理者',
+  hr: '人事',
+  member: '一般',
 }
 
 export const PUNCH_KIND_LABELS: Record<PunchKind, string> = {

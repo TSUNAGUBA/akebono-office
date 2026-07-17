@@ -17,14 +17,15 @@ export interface CustomValues {
 // ---------- マスタ系 ----------
 
 export type EmploymentType = 'director' | 'employee' | 'contract' | 'parttime' | 'outsource'
-export type MemberRole = 'admin' | 'member'
+export type MemberRole = 'admin' | 'hr' | 'member'
 
 export interface Member {
   id: string
   name: string
   email: string
   employmentType: EmploymentType
-  dept: string
+  /** 所属部署（Department マスタ参照。F-10-9） */
+  departmentId: string
   title: string
   role: MemberRole
   hireDate: string // YYYY-MM-DD
@@ -42,6 +43,22 @@ export interface Member {
   birthDate: string
   active: boolean
   custom: CustomValues
+}
+
+/**
+ * 部署（F-10-9）。parentId による階層構造を持ち、組織図はここから導出する。
+ * メンバーの所属は Member.departmentId が SoT。
+ */
+export interface Department {
+  id: string
+  name: string
+  /** 親部署（null = トップレベル） */
+  parentId: string | null
+  /** 部署責任者（Member 参照。組織図に表示） */
+  managerId: string | null
+  description: string
+  displayOrder: number
+  active: boolean
 }
 
 export interface Industry {
@@ -290,18 +307,44 @@ export interface AttendanceFixRequest {
   decidedBy: string | null
 }
 
+/**
+ * 休暇種別マスタ（F-10-10）。有給以外の特別休暇（夏季・結婚特休等）は会社ごとに
+ * 異なるためマスタ管理する。
+ * grantMethod='periodic': 周期的に自動付与（有給 = 労基法 39 条テーブル）
+ * grantMethod='manual'  : 権限者（管理者/人事）が任意タイミングで付与（個別・一括）
+ */
+export interface LeaveType {
+  id: string
+  name: string
+  grantMethod: 'periodic' | 'manual'
+  /** 付与日から失効までの月数（null = 期限なし） */
+  expiryMonths: number | null
+  /** 法定有給か（残数上限 40 日・年 5 日取得義務・比例付与の対象） */
+  isStatutory: boolean
+  description: string
+  displayOrder: number
+  active: boolean
+}
+
 export interface LeaveGrant {
   id: string
   memberId: string
+  /** 休暇種別（F-10-10） */
+  leaveTypeId: string
   grantDate: string
   days: number
-  kind: 'normal' | 'proportional'
+  /** normal/proportional = 有給の自動付与区分。special = 権限者による手動付与 */
+  kind: 'normal' | 'proportional' | 'special'
   expireDate: string
+  /** 付与実行者（null = 周期自動付与） */
+  grantedBy: string | null
 }
 
 export interface LeaveRequest {
   id: string
   memberId: string
+  /** 休暇種別（F-10-10） */
+  leaveTypeId: string
   date: string
   unit: 'full' | 'half'
   status: 'pending' | 'approved' | 'rejected'
@@ -354,7 +397,7 @@ export interface ShiftDemand {
   required: number
 }
 
-// ---------- 日報 AI アシスト（F-06-7/8） ----------
+// ---------- AI業務アシスタント / 日報 AI アシスト（F-14・F-06-7/8） ----------
 
 export type CalendarEventSource = 'google' | 'app'
 
@@ -390,6 +433,40 @@ export interface HearingLog {
   question: string // memo の場合は空文字
   answer: string
   at: string
+}
+
+/**
+ * タスク計画（AI業務アシスタント F-14）。
+ * 前日の終わりに翌日のタスクへ目的・達成条件・段取りを登録し、AI コメントを受けて修正する。
+ * 当日の終わりに結果・所感を記録すると日報ドラフトへ自動反映可能になる。
+ * 蓄積データは管理者向けインサイト（計画率・完了率等）の元ネタ（mart 写像は data-design 参照）。
+ * 記録系: 結果記録（status='done'）後は編集不可。計画中（planned）のみ修正可。
+ */
+export interface TaskPlan {
+  id: string
+  memberId: string
+  /** 実施予定日（前日に登録する「明日」の日付） */
+  date: string
+  /** 紐付くカレンダー予定（null = 手動追加タスク） */
+  calendarEventId: string | null
+  title: string
+  /** 目的 */
+  purpose: string
+  /** 達成条件 */
+  doneCriteria: string
+  /** 段取り・計画 */
+  approach: string
+  /** AI レビューコメント（モック: 決定的ヒューリスティック。本実装は LLM） */
+  aiComment: string
+  aiCommentAt: string | null
+  status: 'planned' | 'done'
+  /** 実施結果（当日の終わりに記録） */
+  outcome: string
+  /** 所感 */
+  reflection: string
+  resultAt: string | null
+  createdAt: string
+  updatedAt: string
 }
 
 /** アプリ全体設定（キー・バリュー。日報入力方式などの少数の設定を保持） */

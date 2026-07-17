@@ -26,10 +26,30 @@ monthSummary(memberId, month): MonthSummary        // 月次 + アラート
 alerts(memberId, endMonth?): Article36Alert[]      // 36協定判定。endMonth（YYYY-MM）を最終月とする直近6ヶ月。省略時は JST の当月
 requestFix(input: FixRequestInput): Result         // 修正申請（理由必須）
 
-// useLeave
-balance(memberId): LeaveBalance          // 残数・失効予定・義務進捗
-request(input: LeaveRequestInput): Result
-decide(requestId, action: 'approved'|'rejected'): Result
+// useLeave（F-04-5/9・F-10-10 対応）
+balance(memberId, leaveTypeId?): LeaveBalance  // 種別別の残数・失効予定（既定 = 法定有給。上限 40 日は法定のみ）
+request(input: { leaveTypeId?, date, unit, reason }): Result  // 種別別残数チェック → pending
+decide(requestId, action: 'approved'|'rejected'): Result      // 管理者/人事のみ
+grant({ memberId, leaveTypeId, days, grantDate? }): Result & { skipped? }
+   // 手動付与（管理者/人事のみ）。同一メンバー×種別×付与日は skipped=true（冪等）。
+   // expireDate は種別の expiryMonths から自動算出
+bulkGrant({ memberIds, leaveTypeId, days }): Result & { granted?, skipped? }  // 一括付与（重複スキップ・結果件数）
+activeLeaveTypes / leaveTypeName(id)     // 休暇種別マスタ参照
+
+// useDepartments（F-10-9）
+nameOf(departmentId): string             // 部署名（未所属フォールバック付き）
+options: ComputedRef<{value,label}[]>    // 階層インデント付きセレクト用
+membersOf(departmentId): Member[]        // 所属メンバー（責任者を先頭）
+tree: ComputedRef<DeptNode[]>            // 組織図ツリー（親無効時はトップへ繰り上げ = 表示から漏らさない）
+   // CRUD は useMasterCrud('departments')。所属変更は members への save（SoT = Member.departmentId）
+
+// useTaskPlans（F-14）
+plansOf(memberId, date): TaskPlan[]
+upsertPlan(input): Result                // 本人のみ。done は編集不可（AKO-TPL-004）
+removePlan(planId): Result               // 本人・planned のみ
+aiReview(planId): Result                 // AI コメント生成（再取得で上書きのみ。モックは決定的ヒューリスティック）
+recordResult(planId, { outcome, reflection }): Result  // 1 回で確定（記録系）
+insights(days?): MemberInsight[]         // 管理者向け集計（計画数・完了率・振り返り記入率）
 
 // useWorkflow
 resolveRouteFor(category, amount): WorkflowRouteStep[] | null
@@ -87,7 +107,9 @@ generateDraft(memberId, date): ReportDraft           // 保存しない（フォ
 | useAttendance.punch | `POST /api/attendance/punches`（冪等キー付き） |
 | useWorkflow.act | `POST /api/workflows/{id}/actions`（クレームファースト: 条件付き UPDATE） |
 | useCalendar.syncFromGoogle | Google Calendar API（OAuth 2.0 増分認可・calendar.readonly/events スコープ。Webhook push + 手動再同期の両立）。トークンはサーバー側で暗号化保管（C3 相当・クライアントへ出さない）。アプリの連携解除時はトークン破棄 + Google 側 revoke を呼び、Google 側での取消は次回 API 401 で検知して連携状態へ反映する |
-| useReportAssist.generateDraft | LLM 構造化出力（responseSchema）+ 失敗時は本ヒューリスティックへフォールバック（ai-manager 方式） |
+| useReportAssist.generateDraft | LLM 構造化出力（responseSchema）+ 失敗時は本ヒューリスティックへフォールバック（ai-manager 方式）。タスク計画の結果（F-14）を含めて生成 |
+| useTaskPlans.aiReview | LLM（計画の批評: 目的の具体性・達成条件の検証可能性・段取り分解を観点にした構造化出力）+ 失敗時は本ヒューリスティックへフォールバック |
+| useLeave.grant / bulkGrant | `POST /api/leave/grants`（冪等キー: memberId×leaveTypeId×grantDate。権限: admin/hr ロール） |
 | useEscalations.resolve | `POST /api/escalations/{id}/resolution`（ai-manager 方式: open→resolved のアトミッククレーム→失敗時補償） |
 | useMasterCrud | `GET/POST/PATCH /api/masters/{entity}` |
 | 参照系 computed | `GET` + クライアントキャッシュ（表示射影はフロント純粋関数のまま維持） |
@@ -99,11 +121,25 @@ generateDraft(memberId, date): ReportDraft           // 保存しない（フォ
 | AKO-ATT-001 | 不正な打刻順序（状態機械違反） |
 | AKO-ATT-002 | 修正理由未入力 |
 | AKO-LEV-001 | 有給残数不足 |
+| AKO-LEV-002 | 処理済み申請への再操作（承認/却下は pending のみ） |
+| AKO-LEV-003 | 休暇申請の承認/却下の権限なし（管理者/人事のみ） |
 | AKO-WFL-001 | 承認権限なし / 対象ステップ不一致 |
 | AKO-WFL-002 | 却下・差戻しコメント未入力 |
 | AKO-SFT-001 | シフトバリデーション違反（休憩/深夜/週40h） |
 | AKO-ESC-001 | クールダウン中の重複起票（no-op 情報） |
 | AKO-GEN-001 | 必須項目未入力 |
+| AKO-LEV-004 | 休暇付与の権限なし（管理者/人事のみ） |
+| AKO-LEV-005 | 無効な休暇種別への付与 |
+| AKO-LEV-006 | 付与日数の範囲外（1〜40 日） |
+| AKO-LEV-007 | 一括付与の対象 0 名 |
+| AKO-LEV-008 | 法定有給の編集・無効化（不可） |
+| AKO-DEP-001 | 所属メンバーが残る部署の無効化（不可） |
+| AKO-DEP-002 | 有効な子部署が残る部署の無効化（不可） |
+| AKO-TPL-001 | タスク計画のタスク名未入力 |
+| AKO-TPL-002 | タスク計画の実施予定日未選択 |
+| AKO-TPL-003 | 他人の計画への操作（本人のみ） |
+| AKO-TPL-004 | 結果記録済み計画の編集・削除（不可 = 記録保護） |
+| AKO-TPL-005 | 結果の未入力 |
 | AKO-CAL-001 | カレンダー同期の失敗 |
 | AKO-CAL-002 | タスク名未入力 |
 | AKO-CAL-003 | タスク時刻の不正（開始 >= 終了） |

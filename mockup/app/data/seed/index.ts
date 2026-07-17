@@ -6,12 +6,12 @@ import type {
   AiActivityLog, AiEmployee, AiRole, AiTask, AkebonoWish, ApprovalLog,
   AppConfigItem, AppNotification, AttendanceFixRequest, AttendanceRule, AuditLog, CalendarEvent, ChatMessage,
   CodeMasterItem, Company, CompanyRelation, Contact, ContactRelation,
-  CustomFieldDef, DailyReport, DecisionLog, DecisionTheme, DelegateSetting,
+  CustomFieldDef, DailyReport, DecisionLog, DecisionTheme, DelegateSetting, Department,
   DocumentNode, Escalation, EscalationRule, ExternalLink, FeatureToggle, HearingLog,
-  Industry, KnowledgeArticle, LeaveGrant, LeaveRequest, Member, Project,
+  Industry, KnowledgeArticle, LeaveGrant, LeaveRequest, LeaveType, Member, Project,
   PunchRecord, RelationType, ReportComment, SalesMonthly, ServiceIncident,
   ShiftAssignment, ShiftDemand, ShiftPeriod, ShiftWish, SystemService,
-  UptimeDaily, WeeklyReport, WorkflowRequest, WorkflowRoute,
+  TaskPlan, UptimeDaily, WeeklyReport, WorkflowRequest, WorkflowRoute,
 } from '~/types/domain'
 import * as core from './core'
 import * as attendance from './attendance'
@@ -24,10 +24,12 @@ import * as status from './status'
 import * as decision from './decision'
 import * as support from './support'
 import * as misc from './misc'
-import { buildCalendarEvents, buildLeaveGrants, buildPunchHistory, buildSalesMonthly, buildUptimeDaily } from './history'
+import { buildCalendarEvents, buildLeaveGrants, buildPunchHistory, buildSalesMonthly, buildSpecialLeaveGrants, buildTaskPlans, buildUptimeDaily } from './history'
 
 export interface MockDbShape {
   members: Member[]
+  departments: Department[]
+  leaveTypes: LeaveType[]
   industries: Industry[]
   companies: Company[]
   contacts: Contact[]
@@ -74,6 +76,7 @@ export interface MockDbShape {
   auditLogs: AuditLog[]
   calendarEvents: CalendarEvent[]
   hearingLogs: HearingLog[]
+  taskPlans: TaskPlan[]
   appConfigs: AppConfigItem[]
   salesMonthly: SalesMonthly[]
 }
@@ -81,6 +84,8 @@ export interface MockDbShape {
 export function buildSeed(): MockDbShape {
   return {
     members: core.seedMembers,
+    departments: core.seedDepartments,
+    leaveTypes: core.seedLeaveTypes,
     industries: core.seedIndustries,
     companies: core.seedCompanies,
     contacts: core.seedContacts,
@@ -101,7 +106,7 @@ export function buildSeed(): MockDbShape {
     escalationRules: core.seedEscalationRules,
     punches: buildPunchHistory(),
     attendanceFixRequests: attendance.seedAttendanceFixRequests,
-    leaveGrants: buildLeaveGrants(),
+    leaveGrants: [...buildLeaveGrants(), ...buildSpecialLeaveGrants()],
     leaveRequests: attendance.seedLeaveRequests,
     shiftPeriods: shifts.seedShiftPeriods,
     shiftWishes: shifts.seedShiftWishes,
@@ -132,6 +137,7 @@ export function buildSeed(): MockDbShape {
       return core.seedMembers.find(m => m.id === e.memberId)?.googleCalendarConnected === true
     }),
     hearingLogs: [],
+    taskPlans: buildTaskPlans(),
     appConfigs: [{ key: 'reportInputMode', value: 'both' }],
     salesMonthly: buildSalesMonthly(),
   }

@@ -4,24 +4,47 @@
  */
 import type {
   AiEmployee, AiRole, AttendanceRule, CodeMasterItem, Company, CompanyRelation,
-  Contact, ContactRelation, CustomFieldDef, EscalationRule, ExternalLink,
-  FeatureToggle, Industry, KnowledgeArticle, Member, Project, RelationType,
+  Contact, ContactRelation, CustomFieldDef, Department, EscalationRule, ExternalLink,
+  FeatureToggle, Industry, KnowledgeArticle, LeaveType, Member, Project, RelationType,
   SystemService, WorkflowRoute,
 } from '~/types/domain'
 
+/**
+ * 部署（F-10-9）。parentId で階層を表現（システム本部の下に開発部・運用部）。
+ * 組織図はこの階層 + Member.departmentId から導出する。
+ */
+export const seedDepartments: Department[] = [
+  { id: 'dp-01', name: '経営管理部', parentId: null, managerId: 'm-01', description: '経営企画・人事・労務・総務', displayOrder: 1, active: true },
+  { id: 'dp-02', name: 'コンサルティング部', parentId: null, managerId: 'm-03', description: '業務コンサル・システムコンサル', displayOrder: 2, active: true },
+  { id: 'dp-03', name: 'システム本部', parentId: null, managerId: 'm-02', description: '開発・運用を束ねる本部', displayOrder: 3, active: true },
+  { id: 'dp-04', name: 'システム開発部', parentId: 'dp-03', managerId: 'm-05', description: '受託開発・自社プロダクト開発', displayOrder: 4, active: true },
+  { id: 'dp-05', name: '運用部', parentId: 'dp-03', managerId: 'm-07', description: '提供システムの運用・保守', displayOrder: 5, active: true },
+]
+
+/**
+ * 休暇種別（F-10-10）。有給以外の特別休暇は会社ごとに異なるためマスタで管理。
+ * periodic = 周期自動付与（有給: 労基法 39 条テーブル） / manual = 権限者が任意付与（個別・一括）
+ */
+export const seedLeaveTypes: LeaveType[] = [
+  { id: 'lt-paid', name: '有給休暇', grantMethod: 'periodic', expiryMonths: 24, isStatutory: true, description: '労基法 39 条に基づき勤続年数・週所定に応じて自動付与（時効 2 年）', displayOrder: 1, active: true },
+  { id: 'lt-summer', name: '夏季休暇', grantMethod: 'manual', expiryMonths: 3, isStatutory: false, description: '夏季に対象者へ一括付与（付与から 3 ヶ月で失効）', displayOrder: 2, active: true },
+  { id: 'lt-wedding', name: '結婚特休', grantMethod: 'manual', expiryMonths: 6, isStatutory: false, description: '本人の結婚時に付与（連続 5 日を想定）', displayOrder: 3, active: true },
+  { id: 'lt-condolence', name: '慶弔休暇', grantMethod: 'manual', expiryMonths: 1, isStatutory: false, description: '慶弔時に付与（対象の続柄に応じて日数を決定）', displayOrder: 4, active: true },
+]
+
 export const seedMembers: Member[] = [
-  { id: 'm-01', name: '山下 誠', email: 'yamashita@tsunaguba.co.jp', employmentType: 'director', dept: '経営管理部', title: '代表取締役', role: 'admin', hireDate: '2018-04-01', weeklyDays: 5, weeklyHours: 40, punchRequired: false, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '1980-06-15', active: true, custom: {} },
-  { id: 'm-02', name: '佐伯 玲子', email: 'saeki@tsunaguba.co.jp', employmentType: 'director', dept: '経営管理部', title: '取締役', role: 'admin', hireDate: '2018-04-01', weeklyDays: 5, weeklyHours: 40, punchRequired: false, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '1983-11-02', active: true, custom: {} },
-  { id: 'm-03', name: '葛西 大輔', email: 'kasai@tsunaguba.co.jp', employmentType: 'employee', dept: 'コンサルティング部', title: 'マネージャー', role: 'admin', hireDate: '2019-07-01', weeklyDays: 5, weeklyHours: 40, punchRequired: true, googleCalendarConnected: false, attendanceRuleId: null, birthDate: '1987-03-21', active: true, custom: {} },
-  { id: 'm-04', name: '三浦 彩', email: 'miura@tsunaguba.co.jp', employmentType: 'employee', dept: 'コンサルティング部', title: 'リーダー', role: 'member', hireDate: '2020-04-01', weeklyDays: 5, weeklyHours: 30, punchRequired: true, googleCalendarConnected: true, attendanceRuleId: 'ar-04', birthDate: '1991-08-09', active: true, custom: {} },
-  { id: 'm-05', name: '小野寺 岳', email: 'onodera@tsunaguba.co.jp', employmentType: 'employee', dept: 'システム開発部', title: 'リーダー', role: 'member', hireDate: '2020-10-01', weeklyDays: 5, weeklyHours: 40, punchRequired: true, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '1990-01-30', active: true, custom: {} },
-  { id: 'm-06', name: '澤村 拓海', email: 'sawamura@tsunaguba.co.jp', employmentType: 'employee', dept: 'システム開発部', title: 'メンバー', role: 'member', hireDate: '2022-04-01', weeklyDays: 5, weeklyHours: 40, punchRequired: true, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '1996-12-05', active: true, custom: {} },
-  { id: 'm-07', name: '井関 美咲', email: 'iseki@tsunaguba.co.jp', employmentType: 'employee', dept: '運用部', title: 'メンバー', role: 'member', hireDate: '2023-04-01', weeklyDays: 5, weeklyHours: 40, punchRequired: true, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '1998-05-18', active: true, custom: {} },
-  { id: 'm-08', name: '玉井 蓮', email: 'tamai@tsunaguba.co.jp', employmentType: 'employee', dept: '運用部', title: 'メンバー', role: 'member', hireDate: '2024-04-01', weeklyDays: 5, weeklyHours: 40, punchRequired: true, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '2000-02-27', active: true, custom: {} },
-  { id: 'm-09', name: '深田 遥', email: 'fukada@tsunaguba.co.jp', employmentType: 'contract', dept: 'システム開発部', title: 'メンバー', role: 'member', hireDate: '2024-01-01', weeklyDays: 5, weeklyHours: 37.5, punchRequired: true, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '1993-09-14', active: true, custom: {} },
-  { id: 'm-10', name: '村瀬 光', email: 'murase@tsunaguba.co.jp', employmentType: 'parttime', dept: '経営管理部', title: 'アシスタント', role: 'member', hireDate: '2024-09-01', weeklyDays: 3, weeklyHours: 18, punchRequired: true, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '2003-04-22', active: true, custom: {} },
-  { id: 'm-11', name: '有田 望', email: 'arita@tsunaguba.co.jp', employmentType: 'parttime', dept: '運用部', title: 'アシスタント', role: 'member', hireDate: '2025-11-01', weeklyDays: 2, weeklyHours: 12, punchRequired: true, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '2008-10-03', active: true, custom: {} },
-  { id: 'm-12', name: '外川 亘', email: 'togawa@partner.example.com', employmentType: 'outsource', dept: 'システム開発部', title: 'パートナー', role: 'member', hireDate: '2025-05-01', weeklyDays: 5, weeklyHours: 40, punchRequired: false, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '1985-07-07', active: true, custom: {} },
+  { id: 'm-01', name: '山下 誠', email: 'yamashita@tsunaguba.co.jp', employmentType: 'director', departmentId: 'dp-01', title: '代表取締役', role: 'admin', hireDate: '2018-04-01', weeklyDays: 5, weeklyHours: 40, punchRequired: false, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '1980-06-15', active: true, custom: {} },
+  { id: 'm-02', name: '佐伯 玲子', email: 'saeki@tsunaguba.co.jp', employmentType: 'director', departmentId: 'dp-01', title: '取締役', role: 'admin', hireDate: '2018-04-01', weeklyDays: 5, weeklyHours: 40, punchRequired: false, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '1983-11-02', active: true, custom: {} },
+  { id: 'm-03', name: '葛西 大輔', email: 'kasai@tsunaguba.co.jp', employmentType: 'employee', departmentId: 'dp-02', title: 'マネージャー', role: 'admin', hireDate: '2019-07-01', weeklyDays: 5, weeklyHours: 40, punchRequired: true, googleCalendarConnected: false, attendanceRuleId: null, birthDate: '1987-03-21', active: true, custom: {} },
+  { id: 'm-04', name: '三浦 彩', email: 'miura@tsunaguba.co.jp', employmentType: 'employee', departmentId: 'dp-02', title: 'リーダー', role: 'member', hireDate: '2020-04-01', weeklyDays: 5, weeklyHours: 30, punchRequired: true, googleCalendarConnected: true, attendanceRuleId: 'ar-04', birthDate: '1991-08-09', active: true, custom: {} },
+  { id: 'm-05', name: '小野寺 岳', email: 'onodera@tsunaguba.co.jp', employmentType: 'employee', departmentId: 'dp-04', title: 'リーダー', role: 'member', hireDate: '2020-10-01', weeklyDays: 5, weeklyHours: 40, punchRequired: true, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '1990-01-30', active: true, custom: {} },
+  { id: 'm-06', name: '澤村 拓海', email: 'sawamura@tsunaguba.co.jp', employmentType: 'employee', departmentId: 'dp-04', title: 'メンバー', role: 'member', hireDate: '2022-04-01', weeklyDays: 5, weeklyHours: 40, punchRequired: true, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '1996-12-05', active: true, custom: {} },
+  { id: 'm-07', name: '井関 美咲', email: 'iseki@tsunaguba.co.jp', employmentType: 'employee', departmentId: 'dp-05', title: 'メンバー', role: 'member', hireDate: '2023-04-01', weeklyDays: 5, weeklyHours: 40, punchRequired: true, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '1998-05-18', active: true, custom: {} },
+  { id: 'm-08', name: '玉井 蓮', email: 'tamai@tsunaguba.co.jp', employmentType: 'employee', departmentId: 'dp-05', title: 'メンバー', role: 'member', hireDate: '2024-04-01', weeklyDays: 5, weeklyHours: 40, punchRequired: true, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '2000-02-27', active: true, custom: {} },
+  { id: 'm-09', name: '深田 遥', email: 'fukada@tsunaguba.co.jp', employmentType: 'contract', departmentId: 'dp-04', title: 'メンバー', role: 'member', hireDate: '2024-01-01', weeklyDays: 5, weeklyHours: 37.5, punchRequired: true, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '1993-09-14', active: true, custom: {} },
+  { id: 'm-10', name: '村瀬 光', email: 'murase@tsunaguba.co.jp', employmentType: 'parttime', departmentId: 'dp-01', title: '人事・労務', role: 'hr', hireDate: '2024-09-01', weeklyDays: 3, weeklyHours: 18, punchRequired: true, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '2003-04-22', active: true, custom: {} },
+  { id: 'm-11', name: '有田 望', email: 'arita@tsunaguba.co.jp', employmentType: 'parttime', departmentId: 'dp-05', title: 'アシスタント', role: 'member', hireDate: '2025-11-01', weeklyDays: 2, weeklyHours: 12, punchRequired: true, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '2008-10-03', active: true, custom: {} },
+  { id: 'm-12', name: '外川 亘', email: 'togawa@partner.example.com', employmentType: 'outsource', departmentId: 'dp-04', title: 'パートナー', role: 'member', hireDate: '2025-05-01', weeklyDays: 5, weeklyHours: 40, punchRequired: false, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '1985-07-07', active: true, custom: {} },
 ]
 
 export const seedIndustries: Industry[] = [
@@ -112,10 +135,6 @@ export const seedKnowledge: KnowledgeArticle[] = [
 ]
 
 export const seedCodeMaster: CodeMasterItem[] = [
-  { id: 'cm-01', category: 'dept', code: 'consulting', label: 'コンサルティング部', displayOrder: 1, active: true },
-  { id: 'cm-02', category: 'dept', code: 'development', label: 'システム開発部', displayOrder: 2, active: true },
-  { id: 'cm-03', category: 'dept', code: 'operation', label: '運用部', displayOrder: 3, active: true },
-  { id: 'cm-04', category: 'dept', code: 'corporate', label: '経営管理部', displayOrder: 4, active: true },
   { id: 'cm-05', category: 'title', code: 'ceo', label: '代表取締役', displayOrder: 1, active: true },
   { id: 'cm-06', category: 'title', code: 'director', label: '取締役', displayOrder: 2, active: true },
   { id: 'cm-07', category: 'title', code: 'manager', label: 'マネージャー', displayOrder: 3, active: true },

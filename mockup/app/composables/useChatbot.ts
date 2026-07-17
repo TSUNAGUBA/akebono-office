@@ -23,6 +23,7 @@ interface BotAnswer {
 
 export function useChatbot() {
   const { tbl, commit, nextId } = useMockDb()
+  const { nameOf: deptNameOf } = useDepartments()
   const { currentUser } = useCurrentUser()
   const { monthSummary } = useAttendance()
   const { activeFiles, folderPath } = useDocuments()
@@ -200,7 +201,7 @@ export function useChatbot() {
 
     const lines = [
       `${c.name}: ${c.description}。`,
-      `業界は${industries.join('・') || '未設定'}、規模 ${c.size}（${c.location}）。担当は ${owner ? `${owner.name}（${owner.dept}）` : '未設定'} です。`,
+      `業界は${industries.join('・') || '未設定'}、規模 ${c.size}（${c.location}）。担当は ${owner ? `${owner.name}（${deptNameOf(owner.departmentId)}）` : '未設定'} です。`,
     ]
     if (projects.length > 0) {
       lines.push(`関連プロジェクト: ${projects.map(p => `${p.name}（${PROJECT_STATUS_LABELS[p.status]}）`).join(' / ')}`)

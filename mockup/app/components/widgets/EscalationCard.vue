@@ -14,6 +14,7 @@ const props = defineProps<{ escalation: Escalation }>()
 const emit = defineEmits<{ respond: [] }>()
 
 const { tbl } = useMockDb()
+const { nameOf: deptName } = useDepartments()
 const members = tbl('members')
 const aiEmployees = tbl('aiEmployees')
 
@@ -29,7 +30,7 @@ const REASON_TONES: Record<EscalationReason, Tone> = {
 const target = computed(() => {
   if (props.escalation.targetMemberId) {
     const m = members.value.find(x => x.id === props.escalation.targetMemberId)
-    if (m) return { name: m.name, kind: 'human' as const, sub: `${m.dept} / ${m.title}` }
+    if (m) return { name: m.name, kind: 'human' as const, sub: `${deptName(m.departmentId)} / ${m.title}` }
   }
   if (props.escalation.targetAiEmployeeId) {
     const a = aiEmployees.value.find(x => x.id === props.escalation.targetAiEmployeeId)

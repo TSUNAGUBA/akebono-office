@@ -89,7 +89,7 @@ mockup/
 | `UiAvatar` | `name, kind(human/ai), size` | メンバー/AI社員の表示統一 |
 | `UiSectionCard` | `title, description` + slots | セクション枠 |
 
-widgets（業務部品・組み合わせ自由）: `PunchClock`（打刻）、`ApprovalFlow`（承認経路の可視化）、`ApprovalActionBar`（承認/却下/差戻し）、`CalendarMonth`（月次カレンダー）、`WeekGrid`（週別グリッド: 勤怠・シフト共用）、`CommentThread`（コメント+リアクション）、`NotificationList`、`EscalationCard`、`UptimeBar`（90 日稼働率）、`RelationGraph`（顧客関係グラフ）、`KnowledgeCard`、`CalendarConnectGate`（Google カレンダー連携ゲート: 擬似 OAuth 同意フロー + 連携状態バー）。
+widgets（業務部品・組み合わせ自由）: `PunchClock`（打刻 = タイムカード。flat プロパティでヘッダーモーダル内でも使用）、`ApprovalFlow`（承認経路の可視化）、`ApprovalActionBar`（承認/却下/差戻し）、`CalendarMonth`（月次カレンダー）、`WeekGrid`（週別グリッド: 勤怠・シフト共用）、`CommentThread`（コメント+リアクション）、`NotificationList`、`EscalationCard`、`UptimeBar`（90 日稼働率）、`RelationGraph`（顧客関係グラフ）、`KnowledgeCard`、`CalendarConnectGate`（Google カレンダー連携ゲート: 擬似 OAuth 同意フロー + 連携状態バー）。masters 配下に `DeptOrgNode`（組織図の再帰ノード）。
 
 charts: `LineChartCard` / `BarChartCard` / `DonutChartCard`（Chart.js。undeux パターン）。
 
@@ -105,7 +105,9 @@ office: `IsometricOffice`（アイソメトリック空間）、`AiEmployeeCard`
 | `useCustomFields` | エンティティ別カスタム項目定義の管理と値の読み書き（F-13-1） |
 | `useCodeMaster` | 汎用区分マスタの参照・管理（F-13-2） |
 | `useAttendance` | 打刻・日次/週次/月次集計・36 協定アラート・修正申請 |
-| `useLeave` | 有給付与・残数・申請・年 5 日義務判定 |
+| `useLeave` | 休暇種別別の付与・残数・申請・年 5 日義務判定・手動/一括付与（管理者/人事。F-04-5/9） |
+| `useDepartments` | 部署の参照・組織図ツリー導出・所属メンバー解決（F-10-9。CRUD は useMasterCrud） |
+| `useTaskPlans` | タスク計画・AI レビューコメント・振り返り記録・管理者インサイト（F-14） |
 | `useShifts` | 募集期間・希望・割当・確定・バリデーション |
 | `useReports` | 日報/週報 CRUD・提出状況・コメント・AI 報告の合流 |
 | `useCalendar` | Google カレンダー連携（擬似 OAuth・べき等同期・タスク追加/反映/削除。F-06-8） |

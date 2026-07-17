@@ -1,9 +1,17 @@
 <script setup lang="ts">
-/** 打刻ウィジェット（ダッシュボード・モバイルで共用。状態機械は useAttendance が SoT） */
-import { Coffee, LogIn, LogOut, Play } from 'lucide-vue-next'
+/**
+ * 打刻ウィジェット = タイムカード（ヘッダーのモーダル・モバイルで共用。状態機械は useAttendance が SoT）
+ * flat: モーダル等のコンテナ内に置くときにカード枠を外す
+ */
+import { ArrowRight, Coffee, LogIn, LogOut, Play } from 'lucide-vue-next'
+// 文字列名の動的コンポーネントは本番ビルドで解決されないため #components から import する（CONVENTIONS 12）
+import { UiSectionCard } from '#components'
 import type { PunchKind } from '~/types/domain'
 import { fmtTime, jstClock, todayJst } from '~/utils/format'
 import { PUNCH_KIND_LABELS } from '~/utils/labels'
+
+const props = withDefaults(defineProps<{ flat?: boolean }>(), { flat: false })
+const wrapper = computed(() => (props.flat ? 'div' : UiSectionCard))
 
 const { currentUser } = useCurrentUser()
 const { punch, punchState, punchesOf } = useAttendance()
@@ -50,7 +58,7 @@ function doPunch(kind: PunchKind): void {
 </script>
 
 <template>
-  <UiSectionCard>
+  <component :is="wrapper">
     <div v-if="!currentUser.punchRequired" class="py-2 text-center text-xs text-muted">
       {{ currentUser.name }} さんは打刻対象外です（{{ currentUser.employmentType === 'outsource' ? '外注は稼働報告で管理' : '管理監督者' }}）
     </div>
@@ -85,6 +93,9 @@ function doPunch(kind: PunchKind): void {
           </li>
         </ol>
       </div>
+      <NuxtLink to="/attendance?tab=daily" class="link inline-flex items-center gap-1 text-xs font-semibold">
+        勤怠管理（日次）で詳細を見る <ArrowRight class="h-3.5 w-3.5" aria-hidden="true" />
+      </NuxtLink>
     </div>
-  </UiSectionCard>
+  </component>
 </template>
