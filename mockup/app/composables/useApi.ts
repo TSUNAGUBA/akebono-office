@@ -25,6 +25,23 @@ interface PublicApiConfig {
 
 let cachedConfig: PublicApiConfig | null = null
 
+/**
+ * NUXT_PUBLIC_FIREBASE_CONFIG は JSON 文字列として渡すが、Nuxt の env 解釈（destr）により
+ * ランタイム設定へは**オブジェクト**として届く。どちらで来ても JSON 文字列へ正規化する
+ * （String(object) は "[object Object]" になり JSON.parse が壊れる = 実バグ事例）。
+ */
+function asJsonString(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (value && typeof value === 'object') {
+    try {
+      return JSON.stringify(value)
+    } catch {
+      return ''
+    }
+  }
+  return ''
+}
+
 /** ランタイム設定（初回はプラグインが setup 文脈でプライムする） */
 export function apiPublicConfig(): PublicApiConfig {
   if (!cachedConfig) {
@@ -32,7 +49,7 @@ export function apiPublicConfig(): PublicApiConfig {
     cachedConfig = {
       apiBase: String(pub.apiBase ?? ''),
       devMemberId: String(pub.devMemberId ?? ''),
-      firebaseConfig: String(pub.firebaseConfig ?? ''),
+      firebaseConfig: asJsonString(pub.firebaseConfig),
     }
   }
   return cachedConfig
