@@ -6,6 +6,8 @@
  *       → 日報ドラフト（useReportAssist.generateDraft）へ自動反映可能になる
  * 蓄積データは管理者インサイト（計画数・完了率・振り返り記入率）の元ネタ。
  */
+import type { Ref } from 'vue'
+import { heuristicPlanReview } from '../../../shared/domain/task-plan-review'
 import type { Result, TaskPlan } from '~/types/domain'
 
 export interface PlanInput {
@@ -29,16 +31,48 @@ export interface MemberInsight {
   reflectionRate: number | null
 }
 
-/** 達成条件が測定可能かの簡易判定（数値・完了語・成果物語のいずれかを含む） */
-const MEASURABLE_HINTS = /[0-9０-９]|完了|完成|合意|承認|提出|レビュー|できている|されている|終わっている/
-/** 段取りのステップ表現 */
-const STEP_HINTS = /[①②③④⑤]|→|\n|1\.|2\./
+
+// ---------- API モードのキャッシュ（SPA・モジュールスコープ単一） ----------
+
+const apiTaskPlans = ref<TaskPlan[]>([])
+const apiInsights = ref<MemberInsight[]>([])
+
+/** 自分の計画（±31 日）の一括ハイドレーション */
+function loadTaskPlans(force = false): Promise<void> {
+  return apiLoadOnce('tpl:list', async () => {
+    apiTaskPlans.value = await apiFetch<TaskPlan[]>('/v1/task-plans')
+  }, force)
+}
+
+function loadInsights(force = false): Promise<void> {
+  return apiLoadOnce('tpl:insights', async () => {
+    apiInsights.value = await apiFetch<MemberInsight[]>('/v1/task-plans/insights', { query: { days: '7' } })
+  }, force)
+}
+
+onApiReset(() => {
+  apiTaskPlans.value = []
+  apiInsights.value = []
+})
 
 export function useTaskPlans() {
   const { tbl, commit, nextId } = useMockDb()
   const { currentUser } = useCurrentUser()
-  const plans = tbl('taskPlans')
+  const { isAdmin } = useCurrentUser()
+  const isApi = useApiMode()
+  // API モードはキャッシュをバッキングにし、射影（plansOf 等）を共通利用する
+  const plans = isApi ? (apiTaskPlans as Ref<TaskPlan[]>) : tbl('taskPlans')
   const members = tbl('members')
+  if (isApi) {
+    void loadTaskPlans()
+    if (isAdmin.value) void loadInsights()
+  }
+
+  /** 表示時の取り直し（AI業務アシスタントページ表示時に呼ぶ） */
+  async function refresh(): Promise<void> {
+    if (!isApi) return
+    await Promise.all([loadTaskPlans(true), isAdmin.value ? loadInsights(true) : Promise.resolve()])
+  }
 
   function plansOf(memberId: string, date: string): TaskPlan[] {
     return plans.value
@@ -50,7 +84,15 @@ export function useTaskPlans() {
    * 計画の作成・更新（本人のみ）。結果記録済み（done）の計画は編集不可（記録保護）。
    * 更新時は AI コメントを保持する（内容を大きく変えたら「AI コメントをもらう」で再取得）。
    */
-  function upsertPlan(input: PlanInput): Result {
+  async function upsertPlan(input: PlanInput): Promise<Result> {
+    if (isApi) {
+      // 検証・本人ガード・記録保護はサーバーが担う → 成功後にキャッシュを取り直す（原則6）
+      const res = await apiResult(() => apiFetch<{ id: string }>('/v1/task-plans', {
+        method: 'PUT', body: input,
+      }))
+      if (res.ok) await loadTaskPlans(true)
+      return res
+    }
     if (!input.title.trim()) {
       return { ok: false, error: { code: 'AKO-TPL-001', message: 'タスク名を入力してください' } }
     }
@@ -105,7 +147,12 @@ export function useTaskPlans() {
   }
 
   /** 計画の削除（本人・planned のみ。done は記録のため削除不可） */
-  function removePlan(planId: string): Result {
+  async function removePlan(planId: string): Promise<Result> {
+    if (isApi) {
+      const res = await apiResult(() => apiFetch(`/v1/task-plans/${planId}/remove`, { method: 'POST' }))
+      if (res.ok) await loadTaskPlans(true)
+      return res
+    }
     const p = plans.value.find(x => x.id === planId)
     if (!p || p.memberId !== currentUser.value.id) {
       return { ok: false, error: { code: 'AKO-TPL-003', message: '自分の計画のみ削除できます' } }
@@ -122,7 +169,13 @@ export function useTaskPlans() {
    * AI レビューコメントの生成（モック: 決定的ヒューリスティック整形。本実装は LLM 構造化出力 +
    * 失敗時は本ヒューリスティックへフォールバック）。何度でも再取得できる（コメントの上書きのみ）。
    */
-  function aiReview(planId: string): Result {
+  async function aiReview(planId: string): Promise<Result> {
+    if (isApi) {
+      // 生成は Vertex AI（サーバー）。失敗時はサーバー側で同一ヒューリスティックへフォールバック
+      const res = await apiResult(() => apiFetch(`/v1/task-plans/${planId}/ai-review`, { method: 'POST' }))
+      if (res.ok) await loadTaskPlans(true)
+      return res
+    }
     const p = plans.value.find(x => x.id === planId)
     if (!p || p.memberId !== currentUser.value.id) {
       return { ok: false, error: { code: 'AKO-TPL-003', message: '自分の計画のみレビューを受けられます' } }
@@ -130,38 +183,8 @@ export function useTaskPlans() {
     if (p.status === 'done') {
       return { ok: false, error: { code: 'AKO-TPL-004', message: '結果記録済みの計画はレビュー対象外です' } }
     }
-    const good: string[] = []
-    const advice: string[] = []
-
-    if (!p.purpose) {
-      advice.push('目的が未記入です。「なぜやるか」を一言でも書くと、当日の判断がぶれにくくなります。')
-    } else if (p.purpose.length < 8) {
-      advice.push('目的をもう一歩具体化しましょう。誰の・何の状態を変えるのかまで書くのがおすすめです。')
-    } else {
-      good.push('目的が明確です。')
-    }
-
-    if (!p.doneCriteria) {
-      advice.push('達成条件が未記入です。「〜が完成している」「〜が合意されている」のように終了状態で書きましょう。')
-    } else if (!MEASURABLE_HINTS.test(p.doneCriteria)) {
-      advice.push('達成条件を検証可能な形にしましょう（数値・成果物・合意など、第三者が判定できる表現）。')
-    } else {
-      good.push('達成条件が検証可能で良いです。')
-    }
-
-    if (!p.approach) {
-      advice.push('段取りが未記入です。最初の 30 分に着手することだけでも決めておくと立ち上がりが速くなります。')
-    } else if (!STEP_HINTS.test(p.approach)) {
-      advice.push('段取りをステップに分解しましょう（① ② ③ や矢印区切り）。分解すると詰まりどころが事前に見えます。')
-    } else {
-      good.push('段取りがステップに分解されています。')
-    }
-
-    if (advice.length === 0) {
-      advice.push('計画に大きな穴はありません。想定外が起きたときに「どこまでで切り上げるか」の撤退ラインだけ意識しておきましょう。')
-    }
-
-    const comment = [...good, ...advice].join('\n')
+    // レビュー文言の SoT は shared/domain/task-plan-review（API のフォールバックと同一実装）
+    const comment = heuristicPlanReview({ purpose: p.purpose, doneCriteria: p.doneCriteria, approach: p.approach })
     plans.value = plans.value.map(x => x.id === planId
       ? { ...x, aiComment: comment, aiCommentAt: nowJstIso() }
       : x)
@@ -170,7 +193,14 @@ export function useTaskPlans() {
   }
 
   /** 結果・所感の記録（本人のみ・1 回で確定。以後は編集不可 = 記録系） */
-  function recordResult(planId: string, input: { outcome: string; reflection: string }): Result {
+  async function recordResult(planId: string, input: { outcome: string; reflection: string }): Promise<Result> {
+    if (isApi) {
+      const res = await apiResult(() => apiFetch(`/v1/task-plans/${planId}/result`, {
+        method: 'POST', body: input,
+      }))
+      if (res.ok) await loadTaskPlans(true)
+      return res
+    }
     const p = plans.value.find(x => x.id === planId)
     if (!p || p.memberId !== currentUser.value.id) {
       return { ok: false, error: { code: 'AKO-TPL-003', message: '自分の計画のみ記録できます' } }
@@ -201,6 +231,8 @@ export function useTaskPlans() {
    * 完了率の分母は「対象日が今日以前」の計画のみ（未来の計画は未完了扱いにしない）。
    */
   function insights(days = 7): MemberInsight[] {
+    // API モードはサーバー集計（直近 7 日固定。他人の計画はクライアントへ出さない = 本人スコープ維持）
+    if (isApi) return apiInsights.value
     const today = todayJst()
     const from = addDays(today, -(days - 1))
     return members.value
@@ -224,5 +256,5 @@ export function useTaskPlans() {
       .sort((a, b) => b.planned - a.planned)
   }
 
-  return { plans, plansOf, upsertPlan, removePlan, aiReview, recordResult, insights }
+  return { plans, plansOf, upsertPlan, removePlan, aiReview, recordResult, insights, refresh }
 }

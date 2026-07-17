@@ -222,7 +222,7 @@ async function onGenerateDraft(): Promise<void> {
     const okAsk = await ask('ドラフトの再生成', '生成し直すと、確認・修正中の内容を新しいドラフトで置き換えます。よろしいですか？', { confirmLabel: '再生成' })
     if (!okAsk) return
   }
-  const d = assist.generateDraft(currentUserId.value, selDate.value)
+  const d = await assist.generateDraft(currentUserId.value, selDate.value)
   editEntries.value = d.entries.map(e => ({ ...e }))
   editReflection.value = d.reflection
   editIssues.value = d.issues

@@ -119,8 +119,8 @@ generateDraft(memberId, date): ReportDraft           // 保存しない（フォ
 | useAttendance | `POST /v1/attendance/punches`・`GET /v1/attendance/state`・`GET /v1/attendance/day`（?raw=1 で修正履歴）・`GET /v1/attendance/month`・`GET /v1/attendance/alerts`・`GET /v1/attendance/timecard`・`POST /v1/attendance/fix-requests`（+ `/decision`）（**実装・フロント接続済み**。月サマリキャッシュから日次・週次を射影） |
 | useWorkflow | `GET /v1/workflows`・`GET /v1/workflows/:id/logs`・`PUT /v1/workflows/draft`・`POST /v1/workflows/submit`・`POST /v1/workflows/:id/actions`（クレームファースト: FOR UPDATE クレーム）・`GET/POST /v1/workflows/delegates`（+ `/:id/archive`）・承認経路 = `/v1/masters/workflow-routes`（**実装・フロント接続済み**。経路解決・凍結・権限ガード・証跡・通知はサーバーが担い、射影ロジックはモックと共通） |
 | useCalendar.syncFromGoogle | Google Calendar API（OAuth 2.0 増分認可・calendar.readonly/events スコープ。Webhook push + 手動再同期の両立）。トークンはサーバー側で暗号化保管（C3 相当・クライアントへ出さない）。アプリの連携解除時はトークン破棄 + Google 側 revoke を呼び、Google 側での取消は次回 API 401 で検知して連携状態へ反映する |
-| useReportAssist.generateDraft | LLM 構造化出力（responseSchema）+ 失敗時は本ヒューリスティックへフォールバック（ai-manager 方式）。タスク計画の結果（F-14）を含めて生成 |
-| useTaskPlans.aiReview | LLM（計画の批評: 目的の具体性・達成条件の検証可能性・段取り分解を観点にした構造化出力）+ 失敗時は本ヒューリスティックへフォールバック |
+| useReportAssist | `GET /v1/assist/logs`・`POST /v1/assist/answers` `/memos`（追記のみ）・`POST /v1/assist/report-draft`（**実装・フロント接続済み**。Vertex AI 構造化出力 + 出力正規化 → 失敗時は shared/domain/report-draft の同一ヒューリスティック。ドラフトは保存しない）|
+| useTaskPlans | `GET/PUT /v1/task-plans`・`POST /:id/remove` `/:id/ai-review` `/:id/result`・`GET /v1/task-plans/insights`（**実装・フロント接続済み**。AI レビュー = Vertex AI 構造化出力 → 失敗時は shared/domain/task-plan-review の同一ヒューリスティック。結果記録は FOR UPDATE で 1 回確定・インサイトはサーバー集計）|
 | useLeave | `GET/POST /v1/leave/requests`（+ `/decision`）・`GET/POST /v1/leave/grants`（+ `/bulk`。冪等キー: memberId×leaveTypeId×grantDate。権限: admin/hr）（**実装・フロント接続済み**。grants/requests をハイドレーションし残数射影は共通ロジック） |
 | useEscalations | `GET/POST /v1/escalations`・`POST /v1/escalations/:id/resolution`・`POST /v1/escalations/overtime-check`（**実装・フロント接続済み**。起票 = dedupe + クールダウン冪等、解決 = open→resolved クレーム + ナレッジ還流 + 本人通知） |
 | useShifts | `GET /v1/shifts`（期間・希望・割当・必要人数の一括ハイドレーション。希望・割当は管理者 = 全件 / 本人 = 自分のみ）・`POST /v1/shifts/periods`（+ `/:id/transition` = 正順の状態機械。published 遷移で割当 confirmed 化 + 通知）・`PUT /v1/shifts/wishes`（+ `/clear`。本人のみ・open 中・締切内）・`POST /v1/shifts/assignments`（+ `/:id/unassign` `/:id/request-change` `/:id/consent`）・`PUT /v1/shifts/demands`（**実装・フロント接続済み**。割当バリデーション（労基法34/61条・週40h・希望NG）は shared/domain/shift.ts をフロントのプレビューと共有） |
@@ -173,11 +173,11 @@ generateDraft(memberId, date): ReportDraft           // 保存しない（フォ
 | AKO-SFT-006 | 確定後変更・本人合意まわりの状態不正 | ✅ |
 | AKO-SFT-007 | 期間・日付入力の不正（締切/範囲/期間外） | ✅ |
 | AKO-SFT-008 | シフト管理操作の権限なし（管理者のみ） | ✅ |
-| AKO-TPL-001 | タスク計画のタスク名未入力 | |
-| AKO-TPL-002 | タスク計画の実施予定日未選択 | |
-| AKO-TPL-003 | 他人の計画への操作（本人のみ） | |
-| AKO-TPL-004 | 結果記録済み計画の編集・削除（不可 = 記録保護） | |
-| AKO-TPL-005 | 結果の未入力 | |
+| AKO-TPL-001 | タスク計画のタスク名未入力 | ✅ |
+| AKO-TPL-002 | タスク計画の実施予定日未選択 | ✅ |
+| AKO-TPL-003 | 他人の計画への操作（本人のみ） | ✅ |
+| AKO-TPL-004 | 結果記録済み計画の編集・削除（不可 = 記録保護） | ✅ |
+| AKO-TPL-005 | 結果の未入力 | ✅ |
 | AKO-CAL-001 | カレンダー同期の失敗 | |
 | AKO-CAL-002 | タスク名未入力 | |
 | AKO-CAL-003 | タスク時刻の不正（開始 >= 終了） | |
@@ -185,8 +185,8 @@ generateDraft(memberId, date): ReportDraft           // 保存しない（フォ
 | AKO-CAL-005 | 欠番（反映済みへの再実行は no-op + warning に変更） | |
 | AKO-CAL-006 | google 発予定の削除操作（Google 側で変更→同期） | |
 | AKO-CAL-007 | 未連携での同期・反映操作 | |
-| AKO-RAS-001 | ヒアリング回答が空 | |
-| AKO-RAS-002 | ぽいぽいメモが空 | |
+| AKO-RAS-001 | ヒアリング回答が空 | ✅ |
+| AKO-RAS-002 | ぽいぽいメモが空 | ✅ |
 | AKO-ESC-001 | クールダウン中の重複起票（no-op 情報） | ✅ |
 | AKO-ESC-002 | 無効化されたシグナルの起票 | ✅ |
 | AKO-ESC-003 | 解決済みエスカレーションへの再操作 | ✅ |

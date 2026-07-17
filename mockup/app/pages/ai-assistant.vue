@@ -17,6 +17,9 @@ const { currentUser, currentUserId, isAdmin } = useCurrentUser()
 const cal = useCalendar()
 const assist = useReportAssist()
 const tp = useTaskPlans()
+
+// サーバー側で進んだ計画・インサイト（他端末の操作）を表示時に取り込む
+onMounted(() => { void tp.refresh() })
 const { show } = useToast()
 const { ask } = useConfirm()
 const { tbl } = useMockDb()
@@ -45,9 +48,9 @@ function resultFormOf(planId: string): { outcome: string; reflection: string } {
   return resultForm.value[planId]
 }
 
-function onRecordResult(p: TaskPlan): void {
+async function onRecordResult(p: TaskPlan): Promise<void> {
   const f = resultFormOf(p.id)
-  const r = tp.recordResult(p.id, f)
+  const r = await tp.recordResult(p.id, f)
   if (!r.ok) {
     show(r.error.message, 'warn')
     return
@@ -116,10 +119,10 @@ function openPlanEdit(p: TaskPlan): void {
   planModal.value = true
 }
 
-function savePlan(): void {
+async function savePlan(): Promise<void> {
   planError.value = ''
   const f = planForm.value
-  const r = tp.upsertPlan({
+  const r = await tp.upsertPlan({
     id: f.id || undefined,
     date: planDate.value,
     calendarEventId: f.calendarEventId || null,
@@ -139,12 +142,12 @@ function savePlan(): void {
 async function onRemovePlan(p: TaskPlan): Promise<void> {
   const ok = await ask('計画の削除', `「${p.title}」の計画を削除しますか？`, { danger: true, confirmLabel: '削除' })
   if (!ok) return
-  const r = tp.removePlan(p.id)
+  const r = await tp.removePlan(p.id)
   show(r.ok ? '計画を削除しました' : r.error.message, r.ok ? 'ok' : 'warn')
 }
 
-function onAiReview(p: TaskPlan): void {
-  const r = tp.aiReview(p.id)
+async function onAiReview(p: TaskPlan): Promise<void> {
+  const r = await tp.aiReview(p.id)
   if (!r.ok) {
     show(r.error.message, 'warn')
     return
@@ -158,8 +161,8 @@ const memoText = ref('')
 const dayMemos = computed(() =>
   assist.logsOf(currentUserId.value, recDate.value).filter(l => l.kind === 'memo'))
 
-function onPoipoi(): void {
-  const res = assist.poipoiMemo(memoText.value, recDate.value)
+async function onPoipoi(): Promise<void> {
+  const res = await assist.poipoiMemo(memoText.value, recDate.value)
   if (!res.ok) {
     show(res.error.message, 'warn')
     return
@@ -170,7 +173,7 @@ function onPoipoi(): void {
 
 function onMemoKeydown(e: KeyboardEvent): void {
   if (e.isComposing) return // IME 変換確定の Enter では送信しない
-  onPoipoi()
+  void onPoipoi()
 }
 
 const questions = computed(() => assist.questionsFor(currentUserId.value, recDate.value))
@@ -184,8 +187,8 @@ function lastAnswerOf(q: AssistQuestion): string {
   return found?.answer ?? ''
 }
 
-function submitAnswer(q: AssistQuestion, text: string): void {
-  const res = assist.recordAnswer(q, text, recDate.value)
+async function submitAnswer(q: AssistQuestion, text: string): Promise<void> {
+  const res = await assist.recordAnswer(q, text, recDate.value)
   if (!res.ok) {
     show(res.error.message, 'warn')
     return
