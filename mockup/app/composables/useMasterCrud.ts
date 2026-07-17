@@ -126,7 +126,7 @@ export interface MasterCrudAsync<Row extends BaseEntity> {
  * - API モード（マイグレーション済みコレクション）: /v1/masters/* を呼び、レスポンスで
  *   キャッシュを更新する（SoT 書込 → キャッシュ反映の順序。原則6）。バリデーション・
  *   ガード（循環・法定有給保護等）はサーバーが担い、エラーは Result で返る（画面 I/F 不変）
- * 未移行コレクション（documents / workflowRoutes 等）は API モードでも従来のモック実装で動く。
+ * 未移行コレクション（documents 等）は API モードでも従来のモック実装で動く。
  */
 export function useMasterCrudAsync<K extends MasterCollections>(name: K, idPrefix: string):
 MasterCrudAsync<MockDbShape[K][number] & BaseEntity> {

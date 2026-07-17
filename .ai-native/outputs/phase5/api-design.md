@@ -123,6 +123,7 @@ generateDraft(memberId, date): ReportDraft           // 保存しない（フォ
 | useTaskPlans.aiReview | LLM（計画の批評: 目的の具体性・達成条件の検証可能性・段取り分解を観点にした構造化出力）+ 失敗時は本ヒューリスティックへフォールバック |
 | useLeave | `GET/POST /v1/leave/requests`（+ `/decision`）・`GET/POST /v1/leave/grants`（+ `/bulk`。冪等キー: memberId×leaveTypeId×grantDate。権限: admin/hr）（**実装・フロント接続済み**。grants/requests をハイドレーションし残数射影は共通ロジック） |
 | useEscalations | `GET/POST /v1/escalations`・`POST /v1/escalations/:id/resolution`・`POST /v1/escalations/overtime-check`（**実装・フロント接続済み**。起票 = dedupe + クールダウン冪等、解決 = open→resolved クレーム + ナレッジ還流 + 本人通知） |
+| useShifts | `GET /v1/shifts`（期間・希望・割当・必要人数の一括ハイドレーション。希望・割当は管理者 = 全件 / 本人 = 自分のみ）・`POST /v1/shifts/periods`（+ `/:id/transition` = 正順の状態機械。published 遷移で割当 confirmed 化 + 通知）・`PUT /v1/shifts/wishes`（+ `/clear`。本人のみ・open 中・締切内）・`POST /v1/shifts/assignments`（+ `/:id/unassign` `/:id/request-change` `/:id/consent`）・`PUT /v1/shifts/demands`（**実装・フロント接続済み**。割当バリデーション（労基法34/61条・週40h・希望NG）は shared/domain/shift.ts をフロントのプレビューと共有） |
 | useMasterCrud | `GET/POST/PATCH /v1/masters/{entity}`（**実装・フロント接続済み** = useMasterCrudAsync） |
 | useReports | `GET/PUT /v1/reports/daily`（month / from-to）・`GET/PUT /v1/reports/weekly`・`GET/POST /v1/reports/:id/comments`・`POST /v1/reports/comments/:id/reactions`（トグル）・`POST /v1/reports/remind`（**実装・フロント接続済み**。月単位の遅延ロードキャッシュ + SoT 書込→再取得） |
 | useNotifications | `GET /v1/notifications`・`POST /v1/notifications/:id/read`・`POST /v1/notifications/read-all`（**実装・フロント接続済み**。60 秒ポーリング。発火はサーバー側 = 未接続ドメインの notify はクライアント no-op） |
@@ -164,14 +165,14 @@ generateDraft(memberId, date): ReportDraft           // 保存しない（フォ
 | AKO-WFL-001 | 承認権限なし / 対象ステップ不一致 / 操作できない状態（クレーム失敗含む） | ✅ |
 | AKO-WFL-002 | 却下・差戻しコメント未入力 | ✅ |
 | AKO-WFL-003 | 区分×金額に該当する承認経路なし | ✅ |
-| AKO-SFT-001 | シフトバリデーション違反（休憩/深夜/週40h） | |
-| AKO-SFT-002 | 募集期間ステータスの不正遷移（正順のみ） | |
-| AKO-SFT-003 | 受付中以外への希望提出・変更 | |
-| AKO-SFT-004 | 調整中以外での割当変更・解除 | |
-| AKO-SFT-005 | 対象（期間・希望・割当）が見つからない | |
-| AKO-SFT-006 | 確定後変更・本人合意まわりの状態不正 | |
-| AKO-SFT-007 | 期間・日付入力の不正（締切/範囲/期間外） | |
-| AKO-SFT-008 | シフト管理操作の権限なし（管理者のみ） | |
+| AKO-SFT-001 | シフトバリデーション違反（休憩/深夜/週40h） | ✅ |
+| AKO-SFT-002 | 募集期間ステータスの不正遷移（正順のみ） | ✅ |
+| AKO-SFT-003 | 受付中以外への希望提出・変更 | ✅ |
+| AKO-SFT-004 | 調整中以外での割当変更・解除 | ✅ |
+| AKO-SFT-005 | 対象（期間・希望・割当）が見つからない | ✅ |
+| AKO-SFT-006 | 確定後変更・本人合意まわりの状態不正 | ✅ |
+| AKO-SFT-007 | 期間・日付入力の不正（締切/範囲/期間外） | ✅ |
+| AKO-SFT-008 | シフト管理操作の権限なし（管理者のみ） | ✅ |
 | AKO-TPL-001 | タスク計画のタスク名未入力 | |
 | AKO-TPL-002 | タスク計画の実施予定日未選択 | |
 | AKO-TPL-003 | 他人の計画への操作（本人のみ） | |

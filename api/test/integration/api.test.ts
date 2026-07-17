@@ -5,7 +5,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { Hono } from 'hono'
 import pg from 'pg'
-import { todayJst } from '../../../shared/domain/jst'
+import { addDays, todayJst } from '../../../shared/domain/jst'
 import { createApp } from '../../src/app'
 import { migrate } from '../../src/db/migrate'
 import { createPool } from '../../src/db/pool'
@@ -664,5 +664,185 @@ describe('ワークフロー・稟議', () => {
     expect((await api('POST', `/v1/workflows/${id}/actions`, { as: HR, body: { action: 'withdraw' } })).status).toBe(200)
     const list = (await api('GET', '/v1/workflows', { as: HR })).json.data as { id: string; status: string }[]
     expect(list.find(r => r.id === id)?.status).toBe('withdrawn')
+  })
+
+  it('他人の下書きは一覧に出ない（本人と管理者のみ。未提出の情報露出防止）', async () => {
+    const draft = await api('PUT', '/v1/workflows/draft', {
+      as: MEMBER, body: { category: 'purchase', title: '下書き秘匿テスト', amount: 12000 },
+    })
+    const draftId = (draft.json.data as { id: string }).id
+    const visibleTo = async (as: string): Promise<boolean> => {
+      const list = (await api('GET', '/v1/workflows', { as })).json.data as { id: string }[]
+      return list.some(r => r.id === draftId)
+    }
+    expect(await visibleTo(MEMBER)).toBe(true)
+    expect(await visibleTo(ADMIN)).toBe(true)
+    expect(await visibleTo(HR)).toBe(false)
+  })
+
+  it('経路マスタ: 上限 <= 下限・順序重複はサーバー側でも拒否（AKO-GEN-001）', async () => {
+    const bad = await api('POST', '/v1/masters/workflow-routes', {
+      as: ADMIN,
+      body: {
+        category: 'contract', minAmount: 100000, maxAmount: 100000,
+        steps: [{ order: 1, approverRole: 'manager' }, { order: 1, approverRole: 'director' }],
+      },
+    })
+    expect(bad.status).toBe(400)
+    expect(bad.json.error?.message).toContain('上限金額')
+
+    // PATCH（部分更新）でも既存行とマージした結果で検証される
+    const badPatch = await api('PATCH', '/v1/masters/workflow-routes/wr-01', {
+      as: ADMIN, body: { maxAmount: 0 },
+    })
+    expect(badPatch.status).toBe(400)
+    expect(badPatch.json.error?.message).toContain('上限金額')
+  })
+})
+
+describe('シフト', () => {
+  let periodId = ''
+  const YOUNG = 'm-young'
+  const start = addDays(todayJst(), 7)
+  const end = addDays(todayJst(), 13)
+
+  it('募集期間の作成は管理者のみ（AKO-SFT-008）。入力検証は AKO-SFT-007', async () => {
+    // 年少者（16 歳前後）スタッフを直接シード（深夜割当ガードの検証用）
+    const y = Number(todayJst().slice(0, 4)) - 16
+    await pool.query(
+      `INSERT INTO members (id, name, email, role, employment_type, birth_date)
+       VALUES ($1, '若手 三郎', 'young@example.com', 'member', 'parttime', $2) ON CONFLICT (id) DO NOTHING`,
+      [YOUNG, `${y}-01-15`])
+
+    expect((await api('POST', '/v1/shifts/periods', {
+      as: MEMBER, body: { label: 'x', startDate: start, endDate: end, wishDeadline: todayJst() },
+    })).json.error?.code).toBe('AKO-SFT-008')
+    expect((await api('POST', '/v1/shifts/periods', {
+      as: ADMIN, body: { label: '検証期間', startDate: start, endDate: end, wishDeadline: addDays(start, 1) },
+    })).json.error?.code).toBe('AKO-SFT-007') // 締切が開始日より後
+
+    const created = await api('POST', '/v1/shifts/periods', {
+      as: ADMIN, body: { label: '検証期間', startDate: start, endDate: end, wishDeadline: todayJst() },
+    })
+    expect(created.status).toBe(201)
+    periodId = (created.json.data as { id: string }).id
+  })
+
+  it('状態機械: 正順のみ遷移可（AKO-SFT-002）。希望は open 中のみ（AKO-SFT-003）', async () => {
+    // draft のまま希望提出は不可
+    expect((await api('PUT', '/v1/shifts/wishes', {
+      as: YOUNG, body: { periodId, date: start, wish: 'want' },
+    })).json.error?.code).toBe('AKO-SFT-003')
+    // 順序飛ばし（draft → adjusting）は不可
+    expect((await api('POST', `/v1/shifts/periods/${periodId}/transition`, {
+      as: ADMIN, body: { next: 'adjusting' },
+    })).json.error?.code).toBe('AKO-SFT-002')
+    expect((await api('POST', `/v1/shifts/periods/${periodId}/transition`, {
+      as: ADMIN, body: { next: 'open' },
+    })).status).toBe(200)
+
+    // 希望提出（本人スコープ）: 上書き = 設定系。期間外日付は AKO-SFT-007
+    expect((await api('PUT', '/v1/shifts/wishes', {
+      as: YOUNG, body: { periodId, date: addDays(end, 1), wish: 'want' },
+    })).json.error?.code).toBe('AKO-SFT-007')
+    expect((await api('PUT', '/v1/shifts/wishes', {
+      as: YOUNG, body: { periodId, date: start, wish: 'want', from: '10:00', to: '15:00' },
+    })).status).toBe(200)
+    expect((await api('PUT', '/v1/shifts/wishes', {
+      as: YOUNG, body: { periodId, date: addDays(start, 1), wish: 'ng' },
+    })).status).toBe(200)
+
+    // 本人には自分の希望のみ・他人には見えない（スコープ）
+    const mine = (await api('GET', '/v1/shifts', { as: YOUNG })).json.data as { wishes: { date: string }[] }
+    expect(mine.wishes.length).toBe(2)
+    const other = (await api('GET', '/v1/shifts', { as: MEMBER })).json.data as { wishes: unknown[] }
+    expect(other.wishes.length).toBe(0)
+
+    // 取消 → 再取消は AKO-SFT-005
+    expect((await api('POST', '/v1/shifts/wishes/clear', {
+      as: YOUNG, body: { periodId, date: addDays(start, 1) },
+    })).status).toBe(200)
+    expect((await api('POST', '/v1/shifts/wishes/clear', {
+      as: YOUNG, body: { periodId, date: addDays(start, 1) },
+    })).json.error?.code).toBe('AKO-SFT-005')
+  })
+
+  it('割当は調整中のみ（AKO-SFT-004）。年少者の深夜は AKO-SFT-001・休憩不足は警告', async () => {
+    // open 中の割当は不可
+    expect((await api('POST', '/v1/shifts/assignments', {
+      as: ADMIN, body: { periodId, memberId: YOUNG, date: start, from: '10:00', to: '15:00' },
+    })).json.error?.code).toBe('AKO-SFT-004')
+    expect((await api('POST', `/v1/shifts/periods/${periodId}/transition`, { as: ADMIN, body: { next: 'closed' } })).status).toBe(200)
+    expect((await api('POST', `/v1/shifts/periods/${periodId}/transition`, { as: ADMIN, body: { next: 'adjusting' } })).status).toBe(200)
+
+    // 年少者（16 歳）の深夜帯は割当不可（労基法61条）
+    expect((await api('POST', '/v1/shifts/assignments', {
+      as: ADMIN, body: { periodId, memberId: YOUNG, date: start, from: '21:00', to: '23:30' },
+    })).json.error?.code).toBe('AKO-SFT-001')
+
+    // 8h 超は休憩警告（W01）付きで割当可
+    const long = await api('POST', '/v1/shifts/assignments', {
+      as: ADMIN, body: { periodId, memberId: YOUNG, date: start, from: '09:00', to: '19:00' },
+    })
+    expect(long.status).toBe(200)
+    expect(((long.json.data as { warnings: { code: string }[] }).warnings).some(w => w.code === 'AKO-SFT-W01')).toBe(true)
+
+    // 必要人数の設定（upsert）→ 0 で削除
+    expect((await api('PUT', '/v1/shifts/demands', {
+      as: ADMIN, body: { periodId, date: start, from: '10:00', to: '17:00', required: 2 },
+    })).status).toBe(200)
+    expect((await api('PUT', '/v1/shifts/demands', {
+      as: ADMIN, body: { periodId, date: addDays(start, 1), from: '10:00', to: '17:00', required: 1 },
+    })).status).toBe(200)
+    expect((await api('PUT', '/v1/shifts/demands', {
+      as: ADMIN, body: { periodId, date: addDays(start, 1), required: 0 },
+    })).status).toBe(200)
+    // 小数の required は切り捨てて 0 扱い = 削除パス（CHECK (required > 0) 違反の 500 にしない）
+    expect((await api('PUT', '/v1/shifts/demands', {
+      as: ADMIN, body: { periodId, date: addDays(start, 1), from: '10:00', to: '17:00', required: 0.5 },
+    })).status).toBe(200)
+    const bundle = (await api('GET', '/v1/shifts', { as: ADMIN })).json.data as { demands: { date: string }[] }
+    expect(bundle.demands.filter(d => d.date === start).length).toBe(1)
+    expect(bundle.demands.filter(d => d.date === addDays(start, 1)).length).toBe(0)
+  })
+
+  it('確定・公開で割当が confirmed + 本人へ通知。確定後変更は本人合意で確定（AKO-SFT-006 ガード）', async () => {
+    expect((await api('POST', `/v1/shifts/periods/${periodId}/transition`, {
+      as: ADMIN, body: { next: 'published' },
+    })).status).toBe(200)
+    const mine = (await api('GET', '/v1/shifts', { as: YOUNG })).json.data as
+      { assignments: { id: string; status: string; consentAt: string | null }[] }
+    const a = mine.assignments[0]!
+    expect(a.status).toBe('confirmed')
+    const notes = (await api('GET', '/v1/notifications?unread=1', { as: YOUNG })).json.data as { title: string }[]
+    expect(notes.some(n => n.title === 'シフトが確定しました')).toBe(true)
+
+    // published 後の割当変更は不可（確定後変更のフローのみ）
+    expect((await api('POST', '/v1/shifts/assignments', {
+      as: ADMIN, body: { periodId, memberId: YOUNG, date: start, from: '10:00', to: '16:00' },
+    })).json.error?.code).toBe('AKO-SFT-004')
+
+    // 合意待ちがない状態の consent は AKO-SFT-006
+    expect((await api('POST', `/v1/shifts/assignments/${a.id}/consent`, { as: YOUNG })).json.error?.code)
+      .toBe('AKO-SFT-006')
+
+    // 変更申請（管理者）→ 本人以外の合意は不可 → 本人合意で confirmed + consentAt 記録
+    expect((await api('POST', `/v1/shifts/assignments/${a.id}/request-change`, {
+      as: ADMIN, body: { from: '10:00', to: '16:00' },
+    })).status).toBe(200)
+    expect((await api('POST', `/v1/shifts/assignments/${a.id}/consent`, { as: MEMBER })).json.error?.code)
+      .toBe('AKO-SFT-006')
+    expect((await api('POST', `/v1/shifts/assignments/${a.id}/consent`, { as: YOUNG })).status).toBe(200)
+
+    const after = (await api('GET', '/v1/shifts', { as: YOUNG })).json.data as
+      { assignments: { id: string; status: string; consentAt: string | null; from: string; to: string }[] }
+    const done = after.assignments.find(x => x.id === a.id)!
+    expect(done.status).toBe('confirmed')
+    expect(done.from).toBe('10:00')
+    expect(done.to).toBe('16:00')
+    expect(done.consentAt).toBeTruthy()
+    // 管理者へ合意通知
+    const adminNotes = (await api('GET', '/v1/notifications?unread=1', { as: ADMIN })).json.data as { title: string }[]
+    expect(adminNotes.some(n => n.title === 'シフト変更に本人が合意')).toBe(true)
   })
 })

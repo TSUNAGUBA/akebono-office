@@ -142,10 +142,14 @@ interface RequestRow {
 export function workflowsRoutes(pool: pg.Pool): Hono {
   const app = new Hono()
 
-  // 一覧（認証済み全員。mockup と同一の可視性 = 社内 C2）
+  // 一覧（認証済み全員 = 社内 C2。ただし他人の下書きは本人と管理者のみ = 未提出の情報露出を防ぐ）
   app.get('/', async (c) => {
+    const user = c.get('user')
     const { rows } = await pool.query(
-      `SELECT ${REQ_COLS} FROM workflow_requests ORDER BY created_at DESC LIMIT 500`)
+      `SELECT ${REQ_COLS} FROM workflow_requests
+       WHERE ($1 OR status <> 'draft' OR requester_id = $2)
+       ORDER BY created_at DESC LIMIT 500`,
+      [user.role === 'admin', user.id])
     return c.json({ data: rows })
   })
 
@@ -174,8 +178,12 @@ export function workflowsRoutes(pool: pg.Pool): Hono {
     }
     if (delegateMemberId === user.id) throw err('AKO-GEN-001', '自分自身を代理人にはできません', 400)
     if (to < from) throw err('AKO-GEN-001', '期間の終了日は開始日以降にしてください', 400)
-    const target = await pool.query('SELECT id FROM members WHERE id = $1 AND active = true', [delegateMemberId])
+    const target = await pool.query<{ employmentType: string }>(
+      `SELECT employment_type AS "employmentType" FROM members WHERE id = $1 AND active = true`, [delegateMemberId])
     if (!target.rows[0]) throw err('AKO-GEN-002', '代理人のメンバーが見つかりません', 404)
+    if (target.rows[0].employmentType === 'outsource') {
+      throw err('AKO-GEN-001', '外部委託メンバーは代理人に設定できません', 400)
+    }
     const id = newId('dg')
     await pool.query(
       `INSERT INTO delegate_settings (id, member_id, delegate_member_id, from_date, to_date)
@@ -202,6 +210,13 @@ export function workflowsRoutes(pool: pg.Pool): Hono {
     const requestId = typeof raw.id === 'string' && raw.id ? raw.id : null
 
     if (requestId) {
+      // エラー区分は mockup と同一（対象なし = AKO-GEN-002 / 本人・状態違反 = AKO-WFL-001）
+      const existing = await pool.query<{ requesterId: string; status: string }>(
+        `SELECT requester_id AS "requesterId", status FROM workflow_requests WHERE id = $1`, [requestId])
+      const row = existing.rows[0]
+      if (!row) throw err('AKO-GEN-002', '対象の申請が見つかりません', 404)
+      if (row.requesterId !== user.id) throw err('AKO-WFL-001', '申請者本人のみ編集できます', 403)
+      if (row.status !== 'draft') throw err('AKO-WFL-001', '下書き以外は下書き保存できません', 409)
       const result = await pool.query(
         `UPDATE workflow_requests
          SET category = $2, title = $3, amount = $4, body = $5, attachments = $6, updated_at = now()
@@ -274,12 +289,16 @@ export function workflowsRoutes(pool: pg.Pool): Hono {
       client.release()
     }
 
-    // 補助処理: step1 承認者へ通知（失敗しても提出は成立）
-    const first = route[0]
-    const approver = first ? await stepApprover(pool, first) : undefined
-    if (approver && approver.id !== user.id) {
-      await notify(pool, approver.id, 'approval', `承認依頼: ${input.title}`,
-        `${user.name} さんから${CATEGORY_LABELS[input.category]}稟議（${fmtYen(input.amount)}）が届いています`, '/workflow')
+    // 補助処理: step1 承認者へ通知（承認者解決を含め、失敗しても提出は成立 = コミット済みを 500 にしない）
+    try {
+      const first = route[0]
+      const approver = first ? await stepApprover(pool, first) : undefined
+      if (approver && approver.id !== user.id) {
+        await notify(pool, approver.id, 'approval', `承認依頼: ${input.title}`,
+          `${user.name} さんから${CATEGORY_LABELS[input.category]}稟議（${fmtYen(input.amount)}）が届いています`, '/workflow')
+      }
+    } catch (e) {
+      console.warn('submit notify failed (non-blocking):', (e as Error).message)
     }
     return c.json({ data: { id } }, requestId ? 200 : 201)
   })
