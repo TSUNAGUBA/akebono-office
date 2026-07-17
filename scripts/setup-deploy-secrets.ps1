@@ -91,6 +91,12 @@ param(
   # API の CORS 許可オリジン（カンマ区切り。省略時は https://<GcpProjectId>.web.app）
   [string]$CorsOrigins = '',
 
+  # フロントエンドを API 接続版でビルドする場合の API URL（Cloud Run の URL。初回 api デプロイ後に設定）
+  [string]$ApiBaseUrl = '',
+
+  # Firebase Web アプリ設定 JSON のパス（Console > プロジェクトの設定 > マイアプリ の firebaseConfig）
+  [string]$FirebaseWebConfigJsonPath = '',
+
   # 設定完了後に deploy ワークフローを手動起動する
   [switch]$TriggerDeploy
 )
