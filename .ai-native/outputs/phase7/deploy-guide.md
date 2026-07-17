@@ -48,7 +48,8 @@
    PROJECT_ID=<your-project>
    gcloud iam service-accounts create github-actions-deploy --project $PROJECT_ID
    for ROLE in roles/firebasehosting.admin roles/run.admin roles/artifactregistry.admin \
-               roles/iam.serviceAccountUser roles/secretmanager.admin; do
+               roles/iam.serviceAccountUser roles/secretmanager.admin \
+               roles/serviceusage.serviceUsageAdmin roles/resourcemanager.projectIamAdmin; do
      gcloud projects add-iam-policy-binding $PROJECT_ID \
        --member "serviceAccount:github-actions-deploy@$PROJECT_ID.iam.gserviceaccount.com" \
        --role $ROLE
@@ -139,6 +140,31 @@
      --http-method POST --headers "x-cron-key=<CRON_SECRET と同じ値>"
    ```
    付与は UNIQUE 制約（メンバー × 種別 × 付与日）で冪等のため、多重実行しても二重付与されない
+
+## 1-8. AI 機能（Vertex AI）
+
+AI 機能（日報 AI アシスト・タスク計画の AI コメント等）は **Vertex AI**（オペレーター決定 2026-07-17）を
+サーバーサイド（Cloud Run API）から呼び出す。**API キーの secret は不要** — Cloud Run 実行サービス
+アカウントの ADC（Application Default Credentials）で認証する。
+
+- **自動セットアップ:** deploy ワークフローが毎回冪等に実行する
+  1. `aiplatform.googleapis.com` の有効化
+  2. Cloud Run 実行 SA（Compute Engine 既定 SA）への `roles/aiplatform.user` 付与
+  3. Cloud Run へ環境変数 `VERTEX_PROJECT_ID`（= GCP_PROJECT_ID）・`VERTEX_LOCATION`（既定 global）・
+     `VERTEX_MODEL`（既定 gemini-2.5-flash）を設定
+- **手動フォールバック:** デプロイ SA に権限がなく警告が出た場合、オーナー権限で 1 回だけ実行:
+  ```bash
+  PROJECT_ID=<your-project>
+  gcloud services enable aiplatform.googleapis.com --project $PROJECT_ID
+  PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format='value(projectNumber)')
+  gcloud projects add-iam-policy-binding $PROJECT_ID \
+    --member "serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+    --role roles/aiplatform.user
+  ```
+- **モデル・ロケーションの変更:** `setup-deploy-secrets.ps1 -VertexLocation asia-northeast1 -VertexModel gemini-2.5-pro`
+  のように secrets（VERTEX_LOCATION / VERTEX_MODEL）を設定して再デプロイ
+- **フォールバック動作:** `VERTEX_PROJECT_ID` 未設定・権限不足・API エラー時、AI 機能は決定的
+  ヒューリスティック（モックと同じ生成ロジック）へ自動フォールバックし、主要フローは止まらない（原則4）
 
 ## 2. 日常デプロイ（開発者）
 

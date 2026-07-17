@@ -20,6 +20,9 @@ const env: Env = {
   firebaseProjectId: '',
   corsOrigins: [],
   migrateOnStart: false,
+  vertexProjectId: '', // LLM 無効 = 全 AI 機能はヒューリスティックへフォールバック
+  vertexLocation: 'global',
+  vertexModel: 'gemini-2.5-flash',
 }
 
 let pool: pg.Pool

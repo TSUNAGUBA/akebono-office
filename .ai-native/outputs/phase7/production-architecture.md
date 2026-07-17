@@ -50,7 +50,7 @@ flowchart LR
 | 休暇残数（FIFO 引当・失効・上限） | サーバー | `GET /v1/leave/balance` |
 | 打刻の状態機械・修正打刻の置換解決 | サーバー | `POST /v1/attendance/punches` ほか |
 | 日報の正規化・提出保護・工数乖離チェック | サーバー | `PUT /v1/reports/daily` |
-| LLM 呼び出し（AI コメント・日報ドラフト・チャットボット） | サーバー（バッチ3 以降） | 予定: `POST /v1/assist/*` |
+| LLM 呼び出し（AI コメント・日報ドラフト・チャットボット） | サーバー（**Vertex AI**・オペレーター決定 2026-07-17。Cloud Run 実行 SA の ADC 認証 = API キー不要。失敗時は決定的ヒューリスティックへフォールバック） | `api/src/lib/llm.ts`（generateContent + responseSchema）。エンドポイントはバッチ3 続きで実装: `POST /v1/assist/*` |
 | mart ETL・周期有給付与などのバッチ | サーバー（Cloud Scheduler + Cloud Run jobs。バッチ2 以降） | — |
 | 表示射影（フィルタ済みデータの整形・グラフ描画・組織図ツリー化） | フロント | —（API のデータを純粋関数で射影） |
 
@@ -150,6 +150,9 @@ flowchart LR
 | `MIGRATE_ON_START` | — | `0` で起動時マイグレーションを無効化（既定は有効） |
 | `DB_POOL_MAX` | — | プール上限（既定 5。Cloud Run 並行数と掛け算になるため控えめ） |
 | `CRON_SECRET` | — | `/jobs/*` の共有鍵（Cloud Scheduler 用。未設定ならジョブエンドポイント無効） |
+| `VERTEX_PROJECT_ID` | — | AI 機能（Vertex AI）の対象プロジェクト。未設定 = LLM 無効（ヒューリスティックへフォールバック）。デプロイでは GCP_PROJECT_ID を自動設定 |
+| `VERTEX_LOCATION` | — | Vertex AI ロケーション（既定 `global`） |
+| `VERTEX_MODEL` | — | 生成モデル ID（既定 `gemini-2.5-flash`） |
 
 ## 9. 段階移行計画（モック → 本番）
 
@@ -160,7 +163,7 @@ flowchart LR
 5. **バッチ3a（PR #21・マージ済み）:** エスカレーション API + フロント接続（起票・対応・ナレッジ還流）— 完了
 6. **バッチ3b（PR #22・マージ済み）:** ワークフロー・稟議 API + フロント接続（申請・経路凍結・承認・代理・証跡・承認経路マスタ）— 完了
 7. **バッチ3c（本 PR）:** シフト表 API + フロント接続（募集期間の状態機械・希望・割当・確定公開・本人合意）— 完了
-8. **バッチ3 続き:** AI業務アシスタント（LLM API キー要）→ カレンダー連携（OAuth クライアント要。LLM/OAuth はサーバーサイド）
+8. **バッチ3 続き:** AI業務アシスタント（LLM = Vertex AI・Cloud Run 実行 SA の ADC 認証でキー不要）→ カレンダー連携（OAuth クライアント要。LLM/OAuth はサーバーサイド）
 9. **バッチ4:** 意思決定支援・AI カンパニー・売上・稼働状況・チャットボット・mart ETL
 
 進捗の SoT: `implementation-status.md`（実装 PR ごとに更新）

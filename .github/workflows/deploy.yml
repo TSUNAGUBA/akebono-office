@@ -223,14 +223,32 @@ jobs:
             --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
             --role="roles/secretmanager.secretAccessor" --quiet >/dev/null
 
+      # AI 機能（Vertex AI・オペレーター決定 2026-07-17）: API 有効化と実行 SA への権限付与。
+      # 補助処理として非ブロッキング（権限不足時は警告 + deploy-guide.md の手動手順へフォールバック）
+      - name: Vertex AI の有効化 + 実行 SA へ権限付与（冪等・非ブロッキング）
+        if: steps.check.outputs.ready == 'true'
+        env:
+          PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+        run: |
+          gcloud services enable aiplatform.googleapis.com --project "$PROJECT" \
+            || echo "::warning::aiplatform.googleapis.com の有効化に失敗しました。オーナー権限で 'gcloud services enable aiplatform.googleapis.com' を実行してください（deploy-guide.md 参照）"
+          PROJECT_NUMBER="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')"
+          gcloud projects add-iam-policy-binding "$PROJECT" \
+            --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+            --role="roles/aiplatform.user" --condition=None --quiet >/dev/null \
+            || echo "::warning::実行 SA への roles/aiplatform.user 付与に失敗しました。オーナー権限で付与してください（deploy-guide.md 参照）"
+
       - name: Cloud Run へデプロイ
         if: steps.check.outputs.ready == 'true'
         env:
           REGION: ${{ secrets.GCP_REGION }}
           SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
+          PROJECT: ${{ secrets.GCP_PROJECT_ID }}
           FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
           DB_SSL: ${{ secrets.DB_SSL }}
           API_CORS_ORIGINS: ${{ secrets.API_CORS_ORIGINS }}
+          VERTEX_LOCATION: ${{ secrets.VERTEX_LOCATION }}
+          VERTEX_MODEL: ${{ secrets.VERTEX_MODEL }}
         run: |
           gcloud run deploy "$SERVICE" \
             --image "$IMAGE" \
@@ -240,6 +258,6 @@ jobs:
             --port 8080 \
             --min-instances 0 \
             --max-instances 3 \
-            --set-env-vars "AUTH_MODE=firebase,FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID},DB_SSL=${DB_SSL:-require},CORS_ORIGINS=${API_CORS_ORIGINS}" \
+            --set-env-vars "AUTH_MODE=firebase,FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID},DB_SSL=${DB_SSL:-require},CORS_ORIGINS=${API_CORS_ORIGINS},VERTEX_PROJECT_ID=${PROJECT},VERTEX_LOCATION=${VERTEX_LOCATION:-global},VERTEX_MODEL=${VERTEX_MODEL:-gemini-2.5-flash}" \
             --set-secrets "DATABASE_URL=$SERVICE-database-url:latest"
           echo "デプロイ完了: $(gcloud run services describe "$SERVICE" --region "$REGION" --format='value(status.url)')"

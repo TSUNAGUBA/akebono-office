@@ -18,6 +18,11 @@
                                  例) postgresql://app:PASS@xxxx.ap-northeast-1.rds.amazonaws.com:5432/akebono_office
     - DB_SSL                   : disable / require / verify（既定: require。RDS は require 以上）
     - API_CORS_ORIGINS         : CORS 許可オリジン（既定: https://<GcpProjectId>.web.app）
+    - VERTEX_LOCATION          : AI 機能（Vertex AI）のロケーション（任意。既定: global）
+    - VERTEX_MODEL             : AI 機能の生成モデル ID（任意。既定: gemini-2.5-flash）
+                                 ※ 認証は Cloud Run 実行 SA の ADC。API キーの secret は不要。
+                                    aiplatform API 有効化と roles/aiplatform.user 付与は deploy
+                                    ワークフローが冪等に実行する（権限不足時は deploy-guide.md の手順で付与）
 
   前提:
     - GitHub CLI (gh) がインストール済みで `gh auth login` 済みであること
@@ -27,12 +32,16 @@
   サービスアカウントの準備（初回のみ・GCP 側の操作。詳細は deploy-guide.md）:
     mockup 用ロール: roles/firebasehosting.admin
     api 用ロール:    roles/run.admin, roles/artifactregistry.admin,
-                     roles/iam.serviceAccountUser, roles/secretmanager.admin
+                     roles/iam.serviceAccountUser, roles/secretmanager.admin,
+                     roles/serviceusage.serviceUsageAdmin（Vertex AI の API 有効化用）,
+                     roles/resourcemanager.projectIamAdmin（実行 SA への aiplatform.user 自動付与用。
+                       付与しない場合は deploy が警告を出すので deploy-guide.md の手動手順で付与）
     1 つの SA に両方を付与して共用してもよい（小規模運用向け）:
       gcloud iam service-accounts create github-actions-deploy --project PROJECT_ID
       foreach ($role in @('roles/firebasehosting.admin','roles/run.admin',
                           'roles/artifactregistry.admin','roles/iam.serviceAccountUser',
-                          'roles/secretmanager.admin')) {
+                          'roles/secretmanager.admin','roles/serviceusage.serviceUsageAdmin',
+                          'roles/resourcemanager.projectIamAdmin')) {
         gcloud projects add-iam-policy-binding PROJECT_ID `
           --member "serviceAccount:github-actions-deploy@PROJECT_ID.iam.gserviceaccount.com" `
           --role $role
@@ -90,6 +99,12 @@ param(
 
   # API の CORS 許可オリジン（カンマ区切り。省略時は https://<GcpProjectId>.web.app）
   [string]$CorsOrigins = '',
+
+  # AI 機能（Vertex AI）のロケーション（省略時は global。デプロイ側の既定を使用）
+  [string]$VertexLocation = '',
+
+  # AI 機能（Vertex AI）の生成モデル ID（省略時は gemini-2.5-flash。デプロイ側の既定を使用）
+  [string]$VertexModel = '',
 
   # フロントエンドを API 接続版でビルドする場合の API URL（Cloud Run の URL。初回 api デプロイ後に設定）
   [string]$ApiBaseUrl = '',
@@ -185,6 +200,9 @@ if ($DatabaseUrl) {
   Set-RepoSecret 'DATABASE_URL' $DatabaseUrl
   Set-RepoSecret 'DB_SSL' $DbSsl
   Set-RepoSecret 'API_CORS_ORIGINS' $effectiveCors
+  # AI 機能（Vertex AI）: 既定値以外を使う場合のみ secrets を設定（未設定時は global / gemini-2.5-flash）
+  if ($VertexLocation) { Set-RepoSecret 'VERTEX_LOCATION' $VertexLocation }
+  if ($VertexModel) { Set-RepoSecret 'VERTEX_MODEL' $VertexModel }
 }
 else {
   Write-Host ''
