@@ -12,8 +12,8 @@ import type { AttendanceRule, CustomValues, EmploymentType, Member } from '~/typ
 import type { FieldDef, TableColumn } from '~/types/ui'
 import { EMPLOYMENT_TYPE_LABELS, MEMBER_ROLE_LABELS } from '~/utils/labels'
 
-const crud = useMasterCrud('members', 'm')
-const rulesCrud = useMasterCrud('attendanceRules', 'ar')
+const crud = useMasterCrudAsync('members', 'm')
+const rulesCrud = useMasterCrudAsync('attendanceRules', 'ar')
 const { itemsOf } = useCodeMaster()
 const { defsFor, formSchemaFor } = useCustomFields()
 const departments = useDepartments()
@@ -186,7 +186,7 @@ function openEdit(): void {
   mode.value = 'edit'
 }
 
-function cancelEdit(): void {
+async function cancelEdit(): Promise<void> {
   if (mode.value === 'edit') mode.value = 'view'
   else drawerOpen.value = false
 }
@@ -219,7 +219,7 @@ function validate(): boolean {
   return true
 }
 
-function save(): void {
+async function save(): Promise<void> {
   if (!validate()) return
   const f = form.value
   const payload: Partial<Member> & { id?: string } = {
@@ -242,7 +242,7 @@ function save(): void {
   if (mode.value === 'edit' && selectedId.value) payload.id = selectedId.value
   // 新規メンバーはカレンダー未連携から開始（連携は本人の擬似 OAuth 同意で行う）
   if (mode.value === 'create') payload.googleCalendarConnected = false
-  const res = crud.save(payload)
+  const res = await crud.save(payload)
   if (!res.ok) {
     toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
     return
@@ -260,14 +260,14 @@ async function archiveSelected(): Promise<void> {
     { danger: true, confirmLabel: '無効化' },
   )
   if (!ok) return
-  const res = crud.archive(selected.value.id)
+  const res = await crud.archive(selected.value.id)
   if (res.ok) toast.show('無効化しました', 'warn')
   else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
 }
 
-function restoreSelected(): void {
+async function restoreSelected(): Promise<void> {
   if (!selected.value) return
-  const res = crud.restore(selected.value.id)
+  const res = await crud.restore(selected.value.id)
   if (res.ok) toast.show('復元しました')
   else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
 }

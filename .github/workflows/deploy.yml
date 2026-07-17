@@ -82,6 +82,11 @@ jobs:
         run: npm run typecheck
 
       - name: 静的ビルド
+        env:
+          # 未設定なら完全モックモード（従来どおり）。API 接続版を配信する場合は
+          # secrets API_BASE_URL / FIREBASE_WEB_CONFIG を設定する（setup-deploy-secrets.ps1）
+          NUXT_PUBLIC_API_BASE: ${{ secrets.API_BASE_URL }}
+          NUXT_PUBLIC_FIREBASE_CONFIG: ${{ secrets.FIREBASE_WEB_CONFIG }}
         run: npm run generate
 
       - name: Firebase Hosting へデプロイ（live チャネル）

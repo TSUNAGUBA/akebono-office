@@ -13,6 +13,7 @@ import { requireAdmin } from '../auth'
 import { daySummary } from '../domain/attendance'
 import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
+import { notify } from '../lib/notify'
 
 const DAILY_COLS = `id, author_kind AS "authorKind", member_id AS "memberId",
   ai_employee_id AS "aiEmployeeId", date, entries, reflection, issues, tomorrow,
@@ -198,6 +199,21 @@ export function reportsRoutes(pool: pg.Pool): Hono {
       client.release()
     }
     return c.json({ data: { id, status } })
+  })
+
+  // 日報リマインド（管理者 → 未提出メンバーへ通知。mockup useReports.remind と同一挙動）
+  app.post('/remind', async (c) => {
+    requireAdmin(c)
+    const body = await c.req.json().catch(() => ({})) as { memberId?: string; date?: string }
+    if (!body.memberId) throw err('AKO-GEN-001', '対象メンバーを指定してください', 400)
+    if (!body.date || !/^\d{4}-\d{2}-\d{2}$/.test(body.date)) {
+      throw err('AKO-GEN-001', '対象日（date）を指定してください', 400)
+    }
+    const member = await pool.query('SELECT id FROM members WHERE id = $1 AND active = true', [body.memberId])
+    if (!member.rows[0]) throw err('AKO-GEN-002', '対象メンバーが見つかりません', 404)
+    await notify(pool, body.memberId, 'reminder', '日報リマインド',
+      `${body.date} の日報が未提出です。提出をお願いします`, '/reports')
+    return c.json({ data: { ok: true } })
   })
 
   // コメント（提出済み日報に対して）

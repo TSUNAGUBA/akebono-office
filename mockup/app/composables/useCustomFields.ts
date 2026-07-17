@@ -6,7 +6,7 @@ import type { CustomFieldDef, CustomFieldEntity } from '~/types/domain'
 import type { FieldDef } from '~/types/ui'
 
 export function useCustomFields() {
-  const crud = useMasterCrud('customFieldDefs', 'cf')
+  const crud = useMasterCrudAsync('customFieldDefs', 'cf')
 
   function defsFor(entity: CustomFieldEntity): CustomFieldDef[] {
     return crud.activeList.value

@@ -3,7 +3,7 @@
  * 各画面のセレクトはここを参照する（選択肢のハードコード禁止）。
  */
 export function useCodeMaster() {
-  const crud = useMasterCrud('codeMaster', 'cm')
+  const crud = useMasterCrudAsync('codeMaster', 'cm')
 
   function itemsOf(category: string): { value: string; label: string }[] {
     return crud.activeList.value

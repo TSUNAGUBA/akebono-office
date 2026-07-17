@@ -10,9 +10,11 @@ import type { Env } from './env'
 import { errorResponse } from './lib/errors'
 import { attendanceRoutes } from './routes/attendance'
 import { configsRoutes } from './routes/configs'
-import { leaveRoutes } from './routes/leave'
+import { leaveRoutes, runPeriodicGrants } from './routes/leave'
 import { mastersRoutes } from './routes/masters'
+import { notificationsRoutes } from './routes/notifications'
 import { reportsRoutes } from './routes/reports'
+import { err } from './lib/errors'
 
 export function createApp(env: Env, pool: pg.Pool): Hono {
   const app = new Hono()
@@ -39,6 +41,16 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
     return c.json({ status: 'ok', db })
   })
 
+  // バッチジョブ（Cloud Scheduler → OIDC ではなく共有鍵。CRON_SECRET 未設定時は無効 = 手動実行のみ）
+  app.post('/jobs/periodic-leave-grants', async (c) => {
+    const secret = process.env.CRON_SECRET ?? ''
+    if (!secret || c.req.header('x-cron-key') !== secret) {
+      throw err('AKO-AUTH-001', 'ジョブ実行キーが無効です', 401)
+    }
+    const result = await runPeriodicGrants(pool, null)
+    return c.json({ data: result })
+  })
+
   app.use('/v1/*', authMiddleware(env, pool))
 
   // 認証済みユーザー自身の情報（フロントの起動時に呼ぶ）
@@ -49,6 +61,7 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
   app.route('/v1/reports', reportsRoutes(pool))
   app.route('/v1/masters', mastersRoutes(pool))
   app.route('/v1/configs', configsRoutes(pool))
+  app.route('/v1/notifications', notificationsRoutes(pool))
 
   app.notFound(c => c.json({ error: { code: 'AKO-GEN-404', message: 'エンドポイントが見つかりません' } }, 404))
 

@@ -73,10 +73,14 @@ resolve(id, type: 'answer'|'ruling'|'no_action', body, reflectToKnowledge?, know
    // 裁定のナレッジ還流は resolve 内で非ブロッキング実施（専用の useKnowledge は設けない）。
    // knowledgeTarget = { domain, targetId } で還流先を指定。省略時は自社PJ
 
-// useMasterCrud<T>(collectionName)
+// useMasterCrud<T>(collectionName)（同期・モック専用。未移行ドメイン内部で使用）
 list(filter?): ComputedRef<T[]>
 save(entity: Partial<T>): Result        // 追加/更新の統一。監査ログ記録
 archive(id): Result                     // 論理削除のみ
+
+// useMasterCrudAsync<T>(collectionName, prefix)（バッチ2a〜。マスタ・設定画面はこちらへ移行済み）
+save/archive/restore/remove(…): Promise<Result>  // API モードは /v1/masters/* + キャッシュ反映。
+                                                 // モックモードは同期版を Promise で包むだけ（挙動不変）
 
 // useCustomFields
 defsFor(entity): CustomFieldDef[]
@@ -113,7 +117,7 @@ generateDraft(memberId, date): ReportDraft           // 保存しない（フォ
 | useTaskPlans.aiReview | LLM（計画の批評: 目的の具体性・達成条件の検証可能性・段取り分解を観点にした構造化出力）+ 失敗時は本ヒューリスティックへフォールバック |
 | useLeave.grant / bulkGrant | `POST /api/leave/grants`（冪等キー: memberId×leaveTypeId×grantDate。権限: admin/hr ロール） |
 | useEscalations.resolve | `POST /api/escalations/{id}/resolution`（ai-manager 方式: open→resolved のアトミッククレーム→失敗時補償） |
-| useMasterCrud | `GET/POST/PATCH /api/masters/{entity}` |
+| useMasterCrud | `GET/POST/PATCH /v1/masters/{entity}`（**実装・フロント接続済み** = useMasterCrudAsync） |
 | 参照系 computed | `GET` + クライアントキャッシュ（表示射影はフロント純粋関数のまま維持） |
 
 ## 4. エラーコード起番（台帳: モックアップ + API サービス共通）
@@ -128,6 +132,7 @@ generateDraft(memberId, date): ReportDraft           // 保存しない（フォ
 | AKO-GEN-003 | 重複データ（一意制約違反） | ✅ |
 | AKO-GEN-404 | エンドポイントなし（API のみ） | ✅ |
 | AKO-GEN-500 | サーバー内部エラー（API のみ・詳細はログ） | ✅ |
+| AKO-GEN-NET | API へ到達できない（フロント側のネットワーク/接続エラー） | ✅ |
 | AKO-AUTH-001 | 未認証・認証トークン不正（API のみ） | ✅ |
 | AKO-AUTH-002 | 認証済みだが members に未登録（API のみ） | ✅ |
 | AKO-AUTH-003 | 権限不足（管理者/人事ロール要求。ドメイン固有コードがある操作はそちらを優先） | ✅ |

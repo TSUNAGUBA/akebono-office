@@ -10,7 +10,7 @@ import { ACTIVE_FILTER_OPTIONS, matchesActiveFilter } from '~/components/masters
 import type { LeaveType } from '~/types/domain'
 import type { FieldDef, TableColumn } from '~/types/ui'
 
-const crud = useMasterCrud('leaveTypes', 'lt')
+const crud = useMasterCrudAsync('leaveTypes', 'lt')
 const toast = useToast()
 const confirm = useConfirm()
 
@@ -113,7 +113,7 @@ function openCreate(): void {
   drawerOpen.value = true
 }
 
-function openEdit(): void {
+async function openEdit(): Promise<void> {
   if (!selected.value) return
   if (selected.value.isStatutory) {
     toast.show('AKO-LEV-008: 法定有給の設定（付与テーブル・時効）は労基法準拠のため編集できません', 'warn')
@@ -127,12 +127,12 @@ function openEdit(): void {
   mode.value = 'edit'
 }
 
-function cancelEdit(): void {
+async function cancelEdit(): Promise<void> {
   if (mode.value === 'edit') mode.value = 'view'
   else drawerOpen.value = false
 }
 
-function save(): void {
+async function save(): Promise<void> {
   const e: Record<string, string> = {}
   if (!String(form.value.name ?? '').trim()) e.name = '休暇名は必須です'
   const expiryRaw = form.value.expiryMonths
@@ -154,7 +154,7 @@ function save(): void {
   }
   if (mode.value === 'edit' && selectedId.value) payload.id = selectedId.value
   else payload.isStatutory = false // 新設種別は常に特別休暇（法定有給はシード固定）
-  const res = crud.save(payload)
+  const res = await crud.save(payload)
   if (!res.ok) {
     toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
     return
@@ -176,14 +176,14 @@ async function archiveSelected(): Promise<void> {
     { danger: true, confirmLabel: '無効化' },
   )
   if (!ok) return
-  const res = crud.archive(selected.value.id)
+  const res = await crud.archive(selected.value.id)
   if (res.ok) toast.show('無効化しました', 'warn')
   else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
 }
 
-function restoreSelected(): void {
+async function restoreSelected(): Promise<void> {
   if (!selected.value) return
-  const res = crud.restore(selected.value.id)
+  const res = await crud.restore(selected.value.id)
   if (res.ok) toast.show('復元しました')
   else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
 }

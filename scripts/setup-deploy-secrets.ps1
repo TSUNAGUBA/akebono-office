@@ -186,6 +186,25 @@ else {
     'deploy ワークフローの deploy-api ジョブは警告を出してスキップされます（mockup のみデプロイ）。')
 }
 
+# ---------- フロントエンドの API 接続ビルド用（任意。未設定なら従来どおりモックモードで配信） ----------
+
+if ($ApiBaseUrl) {
+  if ($ApiBaseUrl -notmatch '^https?://') {
+    throw "-ApiBaseUrl は URL 形式で指定してください（例: https://akebono-office-api-xxxx.a.run.app）"
+  }
+  Write-Step "Repository secrets を設定（フロント API 接続ビルド）: $Repo"
+  Set-RepoSecret 'API_BASE_URL' $ApiBaseUrl
+  if ($FirebaseWebConfigJsonPath) {
+    if (-not (Test-Path $FirebaseWebConfigJsonPath)) { throw "ファイルが見つかりません: $FirebaseWebConfigJsonPath" }
+    $webConfigRaw = Get-Content -Raw -Path $FirebaseWebConfigJsonPath
+    try { $null = $webConfigRaw | ConvertFrom-Json } catch { throw 'Firebase Web 設定が JSON として解析できません。' }
+    Set-RepoSecret 'FIREBASE_WEB_CONFIG' $webConfigRaw
+  }
+  else {
+    Write-Warning '-FirebaseWebConfigJsonPath が未指定です。API 接続ビルドではログインに Firebase Web 設定が必要です（dev 認証を除く）。'
+  }
+}
+
 Write-Step '設定結果の確認'
 gh secret list --repo $Repo
 

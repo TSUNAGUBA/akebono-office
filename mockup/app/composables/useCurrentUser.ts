@@ -11,6 +11,41 @@ export function useCurrentUser() {
   const { tbl } = useMockDb()
   const members = tbl('members')
 
+  // ---------- API モード: /v1/me（Firebase or dev 認証）が正 ----------
+  if (useApiMode()) {
+    const me = useApiMe()
+    const currentUserId = computed(() => me.value?.id ?? '')
+    const currentUser = computed<Member>(() => {
+      const found = members.value.find(m => m.id === me.value?.id)
+      if (found) return found
+      // メンバーキャッシュ未ロード時のフォールバック（/v1/me の情報から合成）
+      return {
+        id: me.value?.id ?? '',
+        name: me.value?.name ?? '',
+        email: me.value?.email ?? '',
+        employmentType: 'employee',
+        departmentId: '',
+        title: '',
+        role: me.value?.role ?? 'member',
+        hireDate: '',
+        weeklyDays: 5,
+        weeklyHours: 40,
+        punchRequired: true,
+        googleCalendarConnected: false,
+        attendanceRuleId: null,
+        birthDate: null,
+        active: true,
+        custom: {},
+      } as unknown as Member
+    })
+    const isAdmin = computed(() => me.value?.role === 'admin')
+    const isHrOrAdmin = computed(() => me.value?.role === 'admin' || me.value?.role === 'hr')
+    // 実認証のためユーザー切替（デモ機能）は無効
+    const switchableUsers = computed<Member[]>(() => [])
+    const switchUser = (_id: string): void => { /* API モードでは切替不可 */ }
+    return { currentUser, currentUserId, isAdmin, isHrOrAdmin, switchableUsers, switchUser }
+  }
+
   const currentUserId = useState<string>('ako-current-user', () => {
     if (import.meta.client) {
       try {

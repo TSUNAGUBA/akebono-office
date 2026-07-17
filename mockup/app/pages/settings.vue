@@ -27,7 +27,7 @@ function iconOf(name: string) {
 }
 
 // ---------- a) 外部リンク ----------
-const linkCrud = useMasterCrud('externalLinks', 'el')
+const linkCrud = useMasterCrudAsync('externalLinks', 'el')
 const sortedLinks = computed(() =>
   [...linkCrud.list.value].sort((a, b) => Number(b.active) - Number(a.active) || a.displayOrder - b.displayOrder))
 
@@ -36,7 +36,7 @@ const linkForm = reactive({ id: '', title: '', url: '', description: '', icon: '
 const linkErrors = reactive<Record<string, string>>({})
 const linkIconFound = computed(() => (icons as Record<string, unknown>)[linkForm.icon] !== undefined)
 
-function openLinkModal(link?: ExternalLink): void {
+async function openLinkModal(link?: ExternalLink): Promise<void> {
   linkForm.id = link?.id ?? ''
   linkForm.title = link?.title ?? ''
   linkForm.url = link?.url ?? 'https://'
@@ -48,12 +48,12 @@ function openLinkModal(link?: ExternalLink): void {
   linkModalOpen.value = true
 }
 
-function saveLink(): void {
+async function saveLink(): Promise<void> {
   Object.keys(linkErrors).forEach(k => delete linkErrors[k])
   if (!linkForm.title.trim()) linkErrors.title = 'タイトルを入力してください'
   if (!/^https?:\/\/.+/.test(linkForm.url.trim())) linkErrors.url = 'http(s):// から始まる URL を入力してください'
   if (Object.keys(linkErrors).length > 0) return
-  const r = linkCrud.save({
+  const r = await linkCrud.save({
     ...(linkForm.id ? { id: linkForm.id } : {}),
     title: linkForm.title.trim(),
     url: linkForm.url.trim(),
@@ -69,14 +69,16 @@ function saveLink(): void {
   toast.show('外部リンクを保存しました', 'ok', { label: '確認', to: '/support' })
 }
 
-function toggleLinkActive(link: ExternalLink): void {
-  const r = link.active ? linkCrud.archive(link.id) : linkCrud.restore(link.id)
+async function toggleLinkActive(link: ExternalLink): Promise<void> {
+  const r = await (link.active ? linkCrud.archive(link.id) : linkCrud.restore(link.id))
   if (r.ok) toast.show(link.active ? `「${link.title}」を無効化しました` : `「${link.title}」を有効化しました`)
   else toast.show(r.error.message, 'crit')
 }
 
 // ---------- b) 機能トグル / e) エスカレーションルール ----------
 const { featureToggles, escalationRules, setToggle, updateEscalationRule, getConfig, setConfig, resetDemo } = useAppSettings()
+/** API モード（SoT = PostgreSQL）ではデモリセットを出さない */
+const apiMode = useApiMode()
 
 // ---------- 日報の入力方式（F-13-7。F-06-7 のオプション設定） ----------
 
@@ -150,7 +152,7 @@ const cfModalOpen = ref(false)
 const cfForm = reactive({ id: '', key: '', label: '', fieldType: 'text' as CustomFieldType, optionsText: '', required: false, displayOrder: 1 })
 const cfErrors = reactive<Record<string, string>>({})
 
-function openCfModal(def?: CustomFieldDef): void {
+async function openCfModal(def?: CustomFieldDef): Promise<void> {
   cfForm.id = def?.id ?? ''
   cfForm.key = def?.key ?? ''
   cfForm.label = def?.label ?? ''
@@ -162,7 +164,7 @@ function openCfModal(def?: CustomFieldDef): void {
   cfModalOpen.value = true
 }
 
-function saveCustomField(): void {
+async function saveCustomField(): Promise<void> {
   Object.keys(cfErrors).forEach(k => delete cfErrors[k])
   const key = cfForm.key.trim()
   if (!cfForm.label.trim()) cfErrors.label = '表示名を入力してください'
@@ -177,7 +179,7 @@ function saveCustomField(): void {
   if (needsOptions && options.length === 0) cfErrors.optionsText = '選択肢をカンマ区切りで入力してください'
   if (Object.keys(cfErrors).length > 0) return
 
-  const r = cf.save({
+  const r = await cf.save({
     ...(cfForm.id ? { id: cfForm.id } : {}),
     entity: cfEntity.value,
     key,
@@ -195,8 +197,8 @@ function saveCustomField(): void {
   toast.show(`カスタム項目を保存しました（${CF_ENTITY_LABELS[cfEntity.value]}のフォームに反映されます）`)
 }
 
-function toggleCfActive(def: CustomFieldDef): void {
-  const r = def.active ? cf.archive(def.id) : cf.restore(def.id)
+async function toggleCfActive(def: CustomFieldDef): Promise<void> {
+  const r = await (def.active ? cf.archive(def.id) : cf.restore(def.id))
   if (r.ok) toast.show(def.active ? `「${def.label}」を無効化しました` : `「${def.label}」を有効化しました`)
   else toast.show(r.error.message, 'crit')
 }
@@ -215,7 +217,7 @@ const cmModalOpen = ref(false)
 const cmForm = reactive({ id: '', code: '', label: '', displayOrder: 1 })
 const cmErrors = reactive<Record<string, string>>({})
 
-function openCmModal(item?: { id: string; code: string; label: string; displayOrder: number }): void {
+async function openCmModal(item?: { id: string; code: string; label: string; displayOrder: number }): Promise<void> {
   cmForm.id = item?.id ?? ''
   cmForm.code = item?.code ?? ''
   cmForm.label = item?.label ?? ''
@@ -224,7 +226,7 @@ function openCmModal(item?: { id: string; code: string; label: string; displayOr
   cmModalOpen.value = true
 }
 
-function saveCmItem(): void {
+async function saveCmItem(): Promise<void> {
   Object.keys(cmErrors).forEach(k => delete cmErrors[k])
   const code = cmForm.code.trim()
   if (!code) cmErrors.code = 'コードを入力してください'
@@ -233,7 +235,7 @@ function saveCmItem(): void {
   }
   if (!cmForm.label.trim()) cmErrors.label = 'ラベルを入力してください'
   if (Object.keys(cmErrors).length > 0) return
-  const r = cm.save({
+  const r = await cm.save({
     ...(cmForm.id ? { id: cmForm.id } : {}),
     category: cmCategory.value,
     code,
@@ -248,8 +250,8 @@ function saveCmItem(): void {
   toast.show('区分マスタを保存しました')
 }
 
-function toggleCmActive(item: { id: string; label: string; active: boolean }): void {
-  const r = item.active ? cm.archive(item.id) : cm.restore(item.id)
+async function toggleCmActive(item: { id: string; label: string; active: boolean }): Promise<void> {
+  const r = await (item.active ? cm.archive(item.id) : cm.restore(item.id))
   if (r.ok) toast.show(item.active ? `「${item.label}」を無効化しました` : `「${item.label}」を有効化しました`)
   else toast.show(r.error.message, 'crit')
 }
@@ -258,7 +260,7 @@ const catModalOpen = ref(false)
 const catForm = reactive({ category: '', code: '', label: '' })
 const catErrors = reactive<Record<string, string>>({})
 
-function openCatModal(): void {
+async function openCatModal(): Promise<void> {
   catForm.category = ''
   catForm.code = ''
   catForm.label = ''
@@ -266,7 +268,7 @@ function openCatModal(): void {
   catModalOpen.value = true
 }
 
-function saveCategory(): void {
+async function saveCategory(): Promise<void> {
   Object.keys(catErrors).forEach(k => delete catErrors[k])
   const category = catForm.category.trim()
   if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(category)) catErrors.category = '英字始まりの英数字（_可）で入力してください'
@@ -274,7 +276,7 @@ function saveCategory(): void {
   if (!catForm.code.trim()) catErrors.code = '初期項目のコードを入力してください'
   if (!catForm.label.trim()) catErrors.label = '初期項目のラベルを入力してください'
   if (Object.keys(catErrors).length > 0) return
-  const r = cm.save({
+  const r = await cm.save({
     category,
     code: catForm.code.trim(),
     label: catForm.label.trim(),
@@ -601,8 +603,9 @@ async function onResetDemo(): Promise<void> {
           </UiDataTable>
         </UiSectionCard>
 
-        <!-- h) デモデータ -->
+        <!-- h) デモデータ（モックモード専用。API モードでは SoT が PostgreSQL のため非表示） -->
         <UiSectionCard
+          v-if="!apiMode"
           class="lg:col-span-2"
           title="デモデータ"
           description="モックアップのデータをシード状態に戻します（打刻・申請・設定変更など全てが初期化されます）"

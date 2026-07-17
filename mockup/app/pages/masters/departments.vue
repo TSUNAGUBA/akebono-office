@@ -10,8 +10,8 @@ import { ACTIVE_FILTER_OPTIONS, matchesActiveFilter } from '~/components/masters
 import type { Department, Member } from '~/types/domain'
 import type { FieldDef, TableColumn } from '~/types/ui'
 
-const crud = useMasterCrud('departments', 'dp')
-const membersCrud = useMasterCrud('members', 'm')
+const crud = useMasterCrudAsync('departments', 'dp')
+const membersCrud = useMasterCrudAsync('members', 'm')
 const departments = useDepartments()
 const toast = useToast()
 const confirm = useConfirm()
@@ -146,7 +146,7 @@ function openDetailRow(row: Record<string, unknown>): void {
   openDetail(String(row.id))
 }
 
-function openCreate(): void {
+async function openCreate(): Promise<void> {
   selectedId.value = null
   const maxOrder = Math.max(0, ...(crud.list.value as Department[]).map(d => d.displayOrder))
   form.value = { name: '', parentId: '', managerId: '', description: '', displayOrder: maxOrder + 1 }
@@ -155,7 +155,7 @@ function openCreate(): void {
   drawerOpen.value = true
 }
 
-function openEdit(): void {
+async function openEdit(): Promise<void> {
   if (!selected.value) return
   form.value = {
     ...JSON.parse(JSON.stringify(selected.value)) as Record<string, unknown>,
@@ -166,12 +166,12 @@ function openEdit(): void {
   mode.value = 'edit'
 }
 
-function cancelEdit(): void {
+async function cancelEdit(): Promise<void> {
   if (mode.value === 'edit') mode.value = 'view'
   else drawerOpen.value = false
 }
 
-function save(): void {
+async function save(): Promise<void> {
   const e: Record<string, string> = {}
   if (!String(form.value.name ?? '').trim()) e.name = '部署名は必須です'
   const parentId = String(form.value.parentId ?? '')
@@ -191,7 +191,7 @@ function save(): void {
     displayOrder: Number(form.value.displayOrder ?? 1),
   }
   if (mode.value === 'edit' && selectedId.value) payload.id = selectedId.value
-  const res = crud.save(payload)
+  const res = await crud.save(payload)
   if (!res.ok) {
     toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
     return
@@ -217,14 +217,14 @@ async function archiveSelected(): Promise<void> {
     { danger: true, confirmLabel: '無効化' },
   )
   if (!ok) return
-  const res = crud.archive(selected.value.id)
+  const res = await crud.archive(selected.value.id)
   if (res.ok) toast.show('無効化しました', 'warn')
   else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
 }
 
-function restoreSelected(): void {
+async function restoreSelected(): Promise<void> {
   if (!selected.value) return
-  const res = crud.restore(selected.value.id)
+  const res = await crud.restore(selected.value.id)
   if (res.ok) toast.show('復元しました')
   else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
 }
@@ -236,12 +236,12 @@ const assignMemberId = ref('')
 const assignableMembers = computed(() =>
   activeMembers.value.filter(m => m.departmentId !== selected.value?.id))
 
-function assignMember(): void {
+async function assignMember(): Promise<void> {
   if (!selected.value || !assignMemberId.value) return
   const m = membersCrud.byId(assignMemberId.value) as Member | undefined
   if (!m) return
   const from = departments.nameOf(m.departmentId)
-  const res = membersCrud.save({ id: m.id, departmentId: selected.value.id })
+  const res = await membersCrud.save({ id: m.id, departmentId: selected.value.id })
   if (!res.ok) {
     toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
     return

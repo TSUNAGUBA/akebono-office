@@ -1,0 +1,213 @@
+/**
+ * API 接続の基盤（バッチ2a）。
+ * - API モード: NUXT_PUBLIC_API_BASE が設定されている場合のみ有効。未設定なら全機能が従来どおり
+ *   モック（useMockDb）で動作する（デモ環境の下位互換）
+ * - 認証: Firebase ID トークン（本番）または x-dev-member-id ヘッダ（NUXT_PUBLIC_DEV_MEMBER_ID。ローカル/E2E 専用）
+ * - エラー: API の { error: { code, message } } を Result 形式へ正規化（apiResult）
+ * SPA（ssr:false）専用の設計: 状態はモジュールスコープで単一。
+ */
+import type { Ref } from 'vue'
+import type { MemberRole, Result } from '~/types/domain'
+import { getFirebaseIdToken } from '~/utils/firebase-auth'
+
+export interface ApiUser {
+  id: string
+  name: string
+  email: string
+  role: MemberRole
+}
+
+interface PublicApiConfig {
+  apiBase: string
+  devMemberId: string
+  firebaseConfig: string
+}
+
+let cachedConfig: PublicApiConfig | null = null
+
+/** ランタイム設定（初回はプラグインが setup 文脈でプライムする） */
+export function apiPublicConfig(): PublicApiConfig {
+  if (!cachedConfig) {
+    const pub = useRuntimeConfig().public
+    cachedConfig = {
+      apiBase: String(pub.apiBase ?? ''),
+      devMemberId: String(pub.devMemberId ?? ''),
+      firebaseConfig: String(pub.firebaseConfig ?? ''),
+    }
+  }
+  return cachedConfig
+}
+
+/** API モードか（true のときマイグレーション済みコレクションは API が SoT） */
+export function useApiMode(): boolean {
+  return Boolean(apiPublicConfig().apiBase)
+}
+
+// ---------- 認証済みユーザー（/v1/me） ----------
+
+const me = ref<ApiUser | null>(null)
+let mePromise: Promise<ApiUser | null> | null = null
+
+export function useApiMe(): Ref<ApiUser | null> {
+  return me
+}
+
+/** /v1/me を一度だけ取得（ログイン直後・dev モード起動時）。失敗時は null（未登録等） */
+export function ensureMeLoaded(): Promise<ApiUser | null> {
+  if (me.value) return Promise.resolve(me.value)
+  mePromise ??= apiFetch<ApiUser>('/v1/me')
+    .then((u) => {
+      me.value = u
+      resetApiData() // 認証確立後にコレクションを取り直す（未認証時の空フェッチを解消）
+      return u
+    })
+    .catch(() => {
+      mePromise = null
+      return null
+    })
+  return mePromise
+}
+
+export function clearMe(): void {
+  me.value = null
+  mePromise = null
+}
+
+// ---------- HTTP ----------
+
+export interface ApiCallError extends Error {
+  code: string
+}
+
+/** API 呼び出し（{ data } を展開して返す。失敗は code 付き Error を throw） */
+export async function apiFetch<T = unknown>(
+  path: string,
+  opts: { method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'; body?: unknown; query?: Record<string, string> } = {},
+): Promise<T> {
+  const config = apiPublicConfig()
+  const headers: Record<string, string> = {}
+  if (config.devMemberId) {
+    headers['x-dev-member-id'] = config.devMemberId
+  } else {
+    const token = await getFirebaseIdToken()
+    if (token) headers.Authorization = `Bearer ${token}`
+  }
+  try {
+    const res = await $fetch<{ data: T }>(path, {
+      baseURL: config.apiBase,
+      method: opts.method ?? 'GET',
+      body: opts.body as Record<string, unknown> | undefined,
+      query: opts.query,
+      headers,
+    })
+    return res.data
+  } catch (e) {
+    const data = (e as { data?: { error?: { code?: string; message?: string } } }).data
+    const error = new Error(data?.error?.message ?? 'API との通信に失敗しました。ネットワークをご確認ください') as ApiCallError
+    error.code = data?.error?.code ?? 'AKO-GEN-NET'
+    throw error
+  }
+}
+
+/** API 呼び出しをモック互換の Result 形式へ正規化する（画面側の分岐を変えないため） */
+export async function apiResult(fn: () => Promise<{ id?: string } | void | unknown>): Promise<Result> {
+  try {
+    const data = (await fn()) as { id?: string } | undefined
+    return data?.id ? { ok: true, id: data.id } : { ok: true }
+  } catch (e) {
+    const error = e as Partial<ApiCallError>
+    return { ok: false, error: { code: error.code ?? 'AKO-GEN-NET', message: error.message ?? '通信に失敗しました' } }
+  }
+}
+
+// ---------- マイグレーション済みコレクション（API ハイドレーション） ----------
+
+/** mockup コレクション名 → API マスタスラッグ */
+const MIGRATED_MASTERS: Record<string, string> = {
+  members: 'members',
+  departments: 'departments',
+  leaveTypes: 'leave-types',
+  industries: 'industries',
+  companies: 'companies',
+  contacts: 'contacts',
+  relationTypes: 'relation-types',
+  companyRelations: 'company-relations',
+  contactRelations: 'contact-relations',
+  projects: 'projects',
+  knowledge: 'knowledge',
+  customFieldDefs: 'custom-field-defs',
+  codeMaster: 'code-masters',
+  externalLinks: 'external-links',
+  attendanceRules: 'attendance-rules',
+}
+
+/** API モード時に API が SoT となるコレクション（tbl() が API キャッシュを返す） */
+export function isMigratedCollection(name: string): boolean {
+  return name in MIGRATED_MASTERS || name === 'auditLogs'
+}
+
+export function apiEntityOf(name: string): string {
+  return MIGRATED_MASTERS[name] ?? name
+}
+
+const stores = new Map<string, Ref<unknown[]>>()
+const loadedCollections = new Set<string>()
+const inflight = new Map<string, Promise<void>>()
+
+/** コレクションのリアクティブキャッシュ（初回アクセスで遅延ロード） */
+export function apiCollection<T>(name: string): Ref<T[]> {
+  let store = stores.get(name)
+  if (!store) {
+    store = ref<unknown[]>([])
+    stores.set(name, store)
+  }
+  void loadApiCollection(name)
+  return store as Ref<T[]>
+}
+
+export async function loadApiCollection(name: string, force = false): Promise<void> {
+  if (!force && (loadedCollections.has(name) || inflight.has(name))) return inflight.get(name)
+  const promise = (async () => {
+    try {
+      const rows = name === 'auditLogs'
+        ? await apiFetch<unknown[]>('/v1/configs/audit-logs', { query: { limit: '200' } })
+        : await apiFetch<unknown[]>(`/v1/masters/${MIGRATED_MASTERS[name]}`, { query: { includeInactive: '1' } })
+      const store = stores.get(name)
+      if (store) store.value = rows
+      loadedCollections.add(name)
+    } catch {
+      // 未認証・権限なし・ネットワーク断は空のまま（ログイン後に resetApiData() で再取得）
+    } finally {
+      inflight.delete(name)
+    }
+  })()
+  inflight.set(name, promise)
+  return promise
+}
+
+/** 認証確立後・ログイン切替後にコレクションを取り直す */
+export function resetApiData(): void {
+  loadedCollections.clear()
+  for (const name of stores.keys()) void loadApiCollection(name, true)
+}
+
+/** 変更 API のレスポンス行をキャッシュへ反映する（SoT 書込 → キャッシュ更新の順序。原則6） */
+export function setApiRow(name: string, row: { id: string }): void {
+  const store = stores.get(name)
+  if (!store) return
+  const rows = store.value as { id: string }[]
+  const idx = rows.findIndex(r => r.id === row.id)
+  store.value = idx >= 0 ? [...rows.slice(0, idx), row, ...rows.slice(idx + 1)] : [...rows, row]
+}
+
+export function patchApiRow(name: string, id: string, patch: Record<string, unknown>): void {
+  const store = stores.get(name)
+  if (!store) return
+  store.value = (store.value as { id: string }[]).map(r => (r.id === id ? { ...r, ...patch } : r))
+}
+
+export function removeApiRow(name: string, id: string): void {
+  const store = stores.get(name)
+  if (!store) return
+  store.value = (store.value as { id: string }[]).filter(r => r.id !== id)
+}

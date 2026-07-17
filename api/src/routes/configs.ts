@@ -37,12 +37,13 @@ export function configsRoutes(pool: pg.Pool): Hono {
     return c.json({ data: { key } })
   })
 
-  // 監査ログ（管理者のみ・新しい順）
+  // 監査ログ（管理者のみ・新しい順）。at は JST ウォールクロック文字列で返す（表示規約と一致）
   app.get('/audit-logs', async (c) => {
     requireAdmin(c)
     const limit = Math.min(500, Math.max(1, Number(c.req.query('limit') ?? 100)))
     const { rows } = await pool.query(
-      `SELECT id, actor_id AS "actorId", action, entity, entity_id AS "entityId", detail, at
+      `SELECT id, actor_id AS "actorId", action, entity, entity_id AS "entityId", detail,
+              to_char(at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"') AS at
        FROM audit_logs ORDER BY id DESC LIMIT $1`,
       [limit])
     return c.json({ data: rows })

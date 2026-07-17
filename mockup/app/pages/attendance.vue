@@ -674,7 +674,7 @@ const bulkTargets = computed(() => {
   })
 })
 
-function openBulkModal(): void {
+async function openBulkModal(): Promise<void> {
   bulkForm.value = {
     leaveTypeId: manualLeaveTypes.value[0]?.id ?? '',
     days: 3,
@@ -715,7 +715,7 @@ async function submitBulk(): Promise<void> {
 
 // ---------- 設定タブ（管理者・attendanceRules） ----------
 
-const rulesCrud = useMasterCrud('attendanceRules', 'ar')
+const rulesCrud = useMasterCrudAsync('attendanceRules', 'ar')
 
 const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土']
 const weekdayOptions = WEEKDAYS.map((w, i) => ({ value: String(i), label: `${w}曜日` }))
@@ -764,7 +764,7 @@ const ruleForm = ref({
   legalHolidayWeekday: '0',
 })
 
-function openRuleModal(rule?: AttendanceRule): void {
+async function openRuleModal(rule?: AttendanceRule): Promise<void> {
   ruleErrors.value = {}
   if (rule) {
     ruleForm.value = {
@@ -792,12 +792,12 @@ function openRuleModal(rule?: AttendanceRule): void {
   ruleOpen.value = true
 }
 
-function onRuleRowClick(row: Record<string, unknown>): void {
+async function onRuleRowClick(row: Record<string, unknown>): Promise<void> {
   const rule = rulesCrud.byId(String(row.id))
   if (rule) openRuleModal(rule)
 }
 
-function submitRule(): void {
+async function submitRule(): Promise<void> {
   const f = ruleForm.value
   const errs: Record<string, string> = {}
   if (!f.name.trim()) errs.name = '名称を入力してください'
@@ -822,7 +822,7 @@ function submitRule(): void {
     legalHolidayWeekday: Number(f.legalHolidayWeekday),
   }
   if (f.id) payload.id = f.id
-  const r = rulesCrud.save(payload)
+  const r = await rulesCrud.save(payload)
   if (!r.ok) {
     show(r.error.message, 'warn')
     return
@@ -834,7 +834,7 @@ function submitRule(): void {
     if (other.id === savedId) continue
     const kept = other.defaultFor.filter(t => !payload.defaultFor!.includes(t))
     if (kept.length !== other.defaultFor.length) {
-      rulesCrud.save({ id: other.id, defaultFor: kept })
+      await rulesCrud.save({ id: other.id, defaultFor: kept })
       stripped.push(other.name)
     }
   }

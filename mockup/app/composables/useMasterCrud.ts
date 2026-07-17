@@ -30,6 +30,8 @@ export function useMasterCrud<K extends MasterCollections>(name: K, idPrefix: st
 
   function audit(action: string, entityId: string, detail: string): void {
     try {
+      // API モードでは監査ログの SoT はサーバー（audit_logs）。モック書込でキャッシュを汚さない
+      if (useApiMode()) return
       const logs = tbl('auditLogs')
       logs.value = [...logs.value, {
         id: nextId('auditLogs', 'aud'),
@@ -90,5 +92,93 @@ export function useMasterCrud<K extends MasterCollections>(name: K, idPrefix: st
     return { ok: true, id }
   }
 
-  return { list, activeList, byId, save, archive, restore }
+  /** 物理削除（関係エッジ専用の例外。data-design §1.1 の設計判断。監査ログ必須） */
+  function remove(id: string): Result {
+    const all = rows.value as Row[]
+    if (!all.some(r => r.id === id)) {
+      return { ok: false, error: { code: 'AKO-GEN-002', message: '対象が見つかりません' } }
+    }
+    rows.value = all.filter(r => r.id !== id) as MockDbShape[K]
+    audit('delete', id, `${String(name)} を物理削除（関係エッジ）`)
+    commit()
+    return { ok: true, id }
+  }
+
+  return { list, activeList, byId, save, archive, restore, remove }
+}
+
+// ---------- API 対応の非同期版（バッチ2a: マスタ・設定画面が使用） ----------
+
+export interface MasterCrudAsync<Row extends BaseEntity> {
+  list: ComputedRef<Row[]>
+  activeList: ComputedRef<Row[]>
+  byId: (id: string) => Row | undefined
+  save: (entity: Partial<Row> & { id?: string }) => Promise<Result>
+  archive: (id: string) => Promise<Result>
+  restore: (id: string) => Promise<Result>
+  /** 物理削除（関係エッジ専用） */
+  remove: (id: string) => Promise<Result>
+}
+
+/**
+ * useMasterCrud の非同期・デュアルモード版。
+ * - モックモード: 従来の同期実装を Promise で包むだけ（挙動不変）
+ * - API モード（マイグレーション済みコレクション）: /v1/masters/* を呼び、レスポンスで
+ *   キャッシュを更新する（SoT 書込 → キャッシュ反映の順序。原則6）。バリデーション・
+ *   ガード（循環・法定有給保護等）はサーバーが担い、エラーは Result で返る（画面 I/F 不変）
+ * 未移行コレクション（documents / workflowRoutes 等）は API モードでも従来のモック実装で動く。
+ */
+export function useMasterCrudAsync<K extends MasterCollections>(name: K, idPrefix: string):
+MasterCrudAsync<MockDbShape[K][number] & BaseEntity> {
+  type Row = MockDbShape[K][number] & BaseEntity
+  const sync = useMasterCrud(name, idPrefix)
+  if (!(useApiMode() && isMigratedCollection(name as string))) {
+    return {
+      list: sync.list as ComputedRef<Row[]>,
+      activeList: sync.activeList as ComputedRef<Row[]>,
+      byId: sync.byId,
+      save: async e => sync.save(e),
+      archive: async id => sync.archive(id),
+      restore: async id => sync.restore(id),
+      remove: async id => sync.remove(id),
+    }
+  }
+
+  const entity = apiEntityOf(name as string)
+  const rows = apiCollection<Row>(name as string)
+  const list = computed(() => rows.value)
+  const activeList = computed(() => rows.value.filter(r => r.active !== false))
+
+  function byId(id: string): Row | undefined {
+    return rows.value.find(r => r.id === id)
+  }
+
+  return {
+    list,
+    activeList,
+    byId,
+    save: e => apiResult(async () => {
+      const { id, ...body } = e
+      const saved = id
+        ? await apiFetch<Row & { id: string }>(`/v1/masters/${entity}/${id}`, { method: 'PATCH', body })
+        : await apiFetch<Row & { id: string }>(`/v1/masters/${entity}`, { method: 'POST', body })
+      setApiRow(name as string, saved)
+      return saved
+    }),
+    archive: id => apiResult(async () => {
+      await apiFetch(`/v1/masters/${entity}/${id}/archive`, { method: 'POST' })
+      patchApiRow(name as string, id, { active: false })
+      return { id }
+    }),
+    restore: id => apiResult(async () => {
+      await apiFetch(`/v1/masters/${entity}/${id}/restore`, { method: 'POST' })
+      patchApiRow(name as string, id, { active: true })
+      return { id }
+    }),
+    remove: id => apiResult(async () => {
+      await apiFetch(`/v1/masters/${entity}/${id}`, { method: 'DELETE' })
+      removeApiRow(name as string, id)
+      return { id }
+    }),
+  }
 }

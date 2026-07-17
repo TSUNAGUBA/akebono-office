@@ -15,6 +15,7 @@ import {
 import { audit } from '../lib/audit'
 import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
+import { notifyAdmins } from '../lib/notify'
 
 const PUNCH_KINDS: PunchKind[] = ['in', 'out', 'break_start', 'break_end']
 const PUNCH_KIND_LABELS: Record<PunchKind, string> = {
@@ -252,6 +253,9 @@ export function attendanceRoutes(pool: pg.Pool): Hono {
        VALUES ($1, $2, $3, $4, $5, $6)`,
       [id, user.id, body.date, body.kind, body.requestedAt, body.reason.trim()],
     )
+    // 管理者への通知は補助処理（mockup と同一挙動）
+    await notifyAdmins(pool, 'approval', '打刻修正申請',
+      `${user.name} さんから ${body.date} の修正申請`, '/attendance')
     return c.json({ data: { id } }, 201)
   })
 

@@ -17,7 +17,7 @@ import type { FieldDef, TableColumn, TabItem, Tone } from '~/types/ui'
 import { fmtDateLong } from '~/utils/format'
 import { KNOWLEDGE_DOMAIN_LABELS } from '~/utils/labels'
 
-const crud = useMasterCrud('knowledge', 'k')
+const crud = useMasterCrudAsync('knowledge', 'k')
 const { tbl } = useMockDb()
 const toast = useToast()
 const confirm = useConfirm()
@@ -163,7 +163,7 @@ function openCreate(): void {
   drawerOpen.value = true
 }
 
-function openEdit(): void {
+async function openEdit(): Promise<void> {
   if (!selected.value) return
   const clone = JSON.parse(JSON.stringify(selected.value)) as Record<string, unknown>
   form.value = { ...clone, tagsText: selected.value.tags.join(', ') }
@@ -171,7 +171,7 @@ function openEdit(): void {
   mode.value = 'edit'
 }
 
-function cancelEdit(): void {
+async function cancelEdit(): Promise<void> {
   if (mode.value === 'edit') mode.value = 'view'
   else drawerOpen.value = false
 }
@@ -186,7 +186,7 @@ watch(() => form.value.domain, (nv) => {
   }
 })
 
-function save(): void {
+async function save(): Promise<void> {
   const e: Record<string, string> = {}
   if (!String(form.value.title ?? '').trim()) e.title = 'タイトルは必須です'
   if (!String(form.value.targetId ?? '')) e.targetId = '対象は必須です'
@@ -211,7 +211,7 @@ function save(): void {
     payload.sourceRefId = null
   }
 
-  const res = crud.save(payload)
+  const res = await crud.save(payload)
   if (!res.ok) {
     toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
     return
@@ -231,14 +231,14 @@ async function archiveSelected(): Promise<void> {
     { danger: true, confirmLabel: '無効化' },
   )
   if (!ok) return
-  const res = crud.archive(selected.value.id)
+  const res = await crud.archive(selected.value.id)
   if (res.ok) toast.show('無効化しました', 'warn')
   else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
 }
 
-function restoreSelected(): void {
+async function restoreSelected(): Promise<void> {
   if (!selected.value) return
-  const res = crud.restore(selected.value.id)
+  const res = await crud.restore(selected.value.id)
   if (res.ok) toast.show('復元しました')
   else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
 }

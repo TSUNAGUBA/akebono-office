@@ -11,9 +11,13 @@ import { todayJst } from '../../../shared/domain/jst'
 import type { LeaveGrant, LeaveRequest, LeaveType } from '../../../shared/domain/types'
 import { requireHrOrAdmin } from '../auth'
 import { calcLeaveBalance, calcObligation, expireDateFor } from '../domain/leave'
+import { periodicGrantsFor } from '../domain/periodic-grant'
 import { audit } from '../lib/audit'
 import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
+import { notify, notifyAdmins } from '../lib/notify'
+
+const LEAVE_UNIT_LABELS = { full: '全日', half: '半日' } as const
 
 export const PAID_LEAVE_TYPE_ID = 'lt-paid'
 const GRANT_MAX_DAYS = 40
@@ -136,6 +140,10 @@ export function leaveRoutes(pool: pg.Pool): Hono {
        VALUES ($1, $2, $3, $4, $5, $6)`,
       [id, user.id, leaveTypeId, body.date, unit, body.reason ?? ''],
     )
+    // 管理者への通知は補助処理（失敗しても申請は成立。mockup と同一挙動）
+    await notifyAdmins(pool, 'approval', `${type.name}申請`,
+      `${user.name} さんから ${body.date}（${LEAVE_UNIT_LABELS[unit]}）の${type.name}申請`,
+      '/attendance?tab=requests')
     return c.json({ data: { id } }, 201)
   })
 
@@ -179,6 +187,19 @@ export function leaveRoutes(pool: pg.Pool): Hono {
       client.release()
     }
     await audit(pool, { actorId: user.id, action: body.action, entity: 'leave_requests', entityId: requestId })
+    // 申請者への通知は補助処理
+    {
+      const { rows } = await pool.query<LeaveRequest>(
+        `SELECT ${REQUEST_COLS} FROM leave_requests WHERE id = $1`, [requestId])
+      const req = rows[0]
+      if (req) {
+        const typeName = (await leaveTypeOf(pool, req.leaveTypeId))?.name ?? '休暇'
+        await notify(pool, req.memberId, 'approval',
+          `${typeName}申請が${body.action === 'approved' ? '承認' : '却下'}されました`,
+          `${req.date}（${LEAVE_UNIT_LABELS[req.unit]}）`,
+          '/attendance?tab=requests')
+      }
+    }
     return c.json({ data: { id: requestId } })
   })
 
@@ -240,8 +261,61 @@ export function leaveRoutes(pool: pg.Pool): Hono {
       actorId, action: 'grant', entity: 'leave_grants', entityId: id,
       detail: `${input.memberId} へ ${type.name} ${days} 日を付与`,
     })
+    // 本人への通知は補助処理
+    await notify(db, input.memberId, 'system', `${type.name}が付与されました`,
+      `${days} 日（有効期限 ${expireDateFor(type.expiryMonths, grantDate)}）`, '/attendance?tab=leave')
     return { id, skipped: false }
   }
 
+  // 周期自動付与の手動実行（管理者/人事。Cloud Scheduler からは /jobs/periodic-leave-grants を使用）
+  app.post('/periodic-grants/run', async (c) => {
+    const user = requireGrantPermission(c)
+    const result = await runPeriodicGrants(pool, user.id)
+    return c.json({ data: result })
+  })
+
   return app
+}
+
+/**
+ * 周期自動付与の実行（在籍・外注以外・入社日あり）。冪等: UNIQUE 制約で重複はスキップ。
+ * 戻り値: 付与件数・スキップ件数・対象メンバー数
+ */
+export async function runPeriodicGrants(
+  pool: pg.Pool,
+  actorId: string | null,
+): Promise<{ granted: number; skipped: number; members: number }> {
+  const today = todayJst()
+  const { rows: members } = await pool.query<{
+    id: string; hireDate: string | null; weeklyDays: number; weeklyHours: number
+  }>(
+    `SELECT id, hire_date AS "hireDate", weekly_days AS "weeklyDays", weekly_hours AS "weeklyHours"
+     FROM members WHERE active = true AND employment_type <> 'outsource' AND hire_date IS NOT NULL`)
+  let granted = 0
+  let skipped = 0
+  for (const m of members) {
+    for (const g of periodicGrantsFor(m, today)) {
+      const result = await pool.query(
+        `INSERT INTO leave_grants (id, member_id, leave_type_id, grant_date, days, kind, expire_date, granted_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, NULL)
+         ON CONFLICT ON CONSTRAINT leave_grants_idempotent DO NOTHING`,
+        [newId('lg'), g.memberId, PAID_LEAVE_TYPE_ID, g.grantDate, g.days, g.kind, g.expireDate],
+      )
+      if (result.rowCount === 0) {
+        skipped++
+        continue
+      }
+      granted++
+      await audit(pool, {
+        actorId: actorId ?? 'system', action: 'periodic-grant', entity: 'leave_grants', entityId: g.memberId,
+        detail: `有給休暇 ${g.days} 日を周期自動付与（付与日 ${g.grantDate}）`,
+      })
+      // 本日が付与日の分のみ通知（過去分の初期投入で通知が洪水にならないように）
+      if (g.grantDate === today) {
+        await notify(pool, g.memberId, 'system', '有給休暇が付与されました',
+          `${g.days} 日（有効期限 ${g.expireDate}）`, '/attendance?tab=leave')
+      }
+    }
+  }
+  return { granted, skipped, members: members.length }
 }
