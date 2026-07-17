@@ -127,7 +127,8 @@ generateDraft(memberId, date): ReportDraft           // 保存しない（フォ
 | useMasterCrud | `GET/POST/PATCH /v1/masters/{entity}`（**実装・フロント接続済み** = useMasterCrudAsync） |
 | useReports | `GET/PUT /v1/reports/daily`（month / from-to）・`GET/PUT /v1/reports/weekly`・`GET/POST /v1/reports/:id/comments`・`POST /v1/reports/comments/:id/reactions`（トグル）・`POST /v1/reports/remind`（**実装・フロント接続済み**。月単位の遅延ロードキャッシュ + SoT 書込→再取得） |
 | useNotifications | `GET /v1/notifications`・`POST /v1/notifications/:id/read`・`POST /v1/notifications/read-all`（**実装・フロント接続済み**。60 秒ポーリング。発火はサーバー側 = 未接続ドメインの notify はクライアント no-op） |
-| useChatbot | `POST /v1/chatbot/ask`（**実装・フロント接続済み**。Vertex AI 一次応答 = 本人の有給・勤怠・顧客・ナレッジをサーバーで文脈化。LLM 無効/失敗/低確信度は fallback 指示でクライアントの決定的ルーティングへ縮退。会話履歴はセッションローカル = 業務記録にしない設計判断） |
+| useChatbot | `POST /v1/chatbot/ask`（**実装・フロント接続済み**。Vertex AI 一次応答 = 本人の有給・勤怠・顧客・ナレッジをサーバーで文脈化。有給残数は leave ドメインの残数計算（FIFO 引当・失効考慮）を再利用。LLM 無効/失敗/低確信度は fallback 指示でクライアントの決定的ルーティングへ縮退。会話履歴はセッションローカル = 業務記録にしない設計判断） |
+| useDecision | `GET /v1/decisions/logs`・`POST /v1/decisions/logs`（**実装・フロント接続済み**。判断テーマ = `/v1/masters/decision-themes`（汎用マスタ）。判断ログは追記のみ = 記録系保護。テーマ・選択肢・理由の存在チェックはサーバーが強制。シナリオ予測（決定的線形モデル）は表示射影としてクライアント側に維持 = 設計判断） |
 | 参照系 computed | `GET` + クライアントキャッシュ（表示射影はフロント純粋関数のまま維持） |
 
 ## 4. エラーコード起番（台帳: モックアップ + API サービス共通）
@@ -185,19 +186,15 @@ generateDraft(memberId, date): ReportDraft           // 保存しない（フォ
 | AKO-CAL-004 | アプリ発以外の予定の Google 反映（不可） | ✅ |
 | AKO-CAL-006 | Google 由来の予定の削除（不可。005 は欠番 = 反映済み再実行は no-op + warning） | ✅ |
 | AKO-CAL-007 | カレンダー未連携・連携未設定 | ✅ |
-| AKO-CAL-004 | google 発予定への反映操作（アプリ発のみ可） | |
-| AKO-CAL-005 | 欠番（反映済みへの再実行は no-op + warning に変更） | |
-| AKO-CAL-006 | google 発予定の削除操作（Google 側で変更→同期） | |
-| AKO-CAL-007 | 未連携での同期・反映操作 | |
 | AKO-RAS-001 | ヒアリング回答が空 | ✅ |
 | AKO-RAS-002 | ぽいぽいメモが空 | ✅ |
 | AKO-ESC-001 | クールダウン中の重複起票（no-op 情報） | ✅ |
 | AKO-ESC-002 | 無効化されたシグナルの起票 | ✅ |
 | AKO-ESC-003 | 解決済みエスカレーションへの再操作 | ✅ |
 | AKO-ESC-999 | 起票失敗（主フローは継続 = 非ブロッキング） | ✅ |
-| AKO-DEC-001 | 判断テーマが見つからない | |
-| AKO-DEC-002 | 選択肢が見つからない | |
-| AKO-DEC-003 | 判断理由未入力 | |
+| AKO-DEC-001 | 判断テーマが見つからない | ✅ |
+| AKO-DEC-002 | 選択肢が見つからない | ✅ |
+| AKO-DEC-003 | 判断理由未入力 | ✅ |
 | AKO-DOC-001 | ファイル名未入力 | |
 | AKO-DOC-002 | フォルダ名未入力 | |
 | AKO-DOC-003 | 同名フォルダの重複 | |

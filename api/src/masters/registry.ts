@@ -174,6 +174,32 @@ const schemas = {
       ctx.addIssue({ code: 'custom', path: ['steps'], message: '承認ステップの順序（order）が重複しています' })
     }
   }),
+  'decision-themes': z.object({
+    title: z.string().trim().min(1, 'テーマ名は必須です'),
+    category: z.enum(['business', 'project']),
+    objective: z.string().default(''),
+    semantics: z.array(z.object({ key: z.string(), value: z.string() })).default([]),
+    links: z.array(z.object({ label: z.string(), to: z.string(), info: z.string() })).default([]),
+    actions: z.array(z.object({
+      name: z.string(),
+      status: z.string(),
+      slot: z.string().nullable().default(null),
+      why: z.string().default(''),
+    })).default([]),
+    options: z.array(z.object({
+      slot: z.string(),
+      recommended: z.boolean().default(false),
+      title: z.string(),
+      prediction: z.array(z.string()).default([]),
+      basis: z.string().default(''),
+    })).min(1, '選択肢を 1 つ以上設定してください'),
+    whyRecommend: z.string().default(''),
+    scenarioParams: z.array(z.object({
+      key: z.string(), label: z.string(), min: z.number(), max: z.number(),
+      step: z.number(), default: z.number(), unit: z.string(),
+    })).default([]),
+    active: z.boolean().default(true),
+  }),
 } as const
 
 export type MasterEntity = keyof typeof schemas
@@ -210,6 +236,7 @@ export const MASTERS: Record<MasterEntity, MasterDef> = {
   'external-links': { table: 'external_links', idPrefix: 'el', schema: schemas['external-links'], patchSchema: schemas['external-links'].partial(), jsonbFields: [] },
   'attendance-rules': { table: 'attendance_rules', idPrefix: 'ar', schema: schemas['attendance-rules'], patchSchema: schemas['attendance-rules'].partial(), jsonbFields: ['appliesTo', 'defaultFor', 'flex'] },
   'workflow-routes': { table: 'workflow_routes', idPrefix: 'wr', schema: schemas['workflow-routes'], patchSchema: workflowRouteBase.partial(), jsonbFields: ['steps'] },
+  'decision-themes': { table: 'decision_themes', idPrefix: 'dt', schema: schemas['decision-themes'], patchSchema: schemas['decision-themes'].partial(), jsonbFields: ['semantics', 'links', 'actions', 'options', 'scenarioParams'] },
 }
 
 export function camelToSnake(s: string): string {

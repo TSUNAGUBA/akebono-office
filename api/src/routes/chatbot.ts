@@ -12,6 +12,7 @@ import type pg from 'pg'
 import type { Env } from '../env'
 import { err } from '../lib/errors'
 import { generateJson } from '../lib/llm'
+import { balanceOf, PAID_LEAVE_TYPE_ID } from './leave'
 
 interface ChatAnswer {
   content: string
@@ -26,23 +27,20 @@ async function buildContext(pool: pg.Pool, memberId: string, question: string): 
   const q = question.toLowerCase()
 
   // 有給・勤怠（本人分のみ = C3 保護。他人の数値は文脈に入れない）
+  // 残数は leave ドメインの SoT 計算（FIFO 引当・失効・保有上限）を再利用する（原則3）
   if (/有給|休暇|残業|勤怠|労働/.test(question)) {
-    const { rows: grants } = await pool.query<{ days: number; expireDate: string | null }>(
-      `SELECT days, expire_date AS "expireDate" FROM leave_grants WHERE member_id = $1 ORDER BY grant_date`,
-      [memberId])
-    const { rows: used } = await pool.query<{ days: number }>(
-      `SELECT coalesce(sum(CASE WHEN unit = 'half' THEN 0.5 ELSE 1 END), 0)::float8 AS days
-       FROM leave_requests WHERE member_id = $1 AND status = 'approved'`, [memberId])
-    parts.push(`## 本人の有給（概算。正確な残数は /attendance の有給タブが正）
-付与合計 ${grants.reduce((s, g) => s + Number(g.days), 0)} 日 / 承認済み消化 ${used[0]?.days ?? 0} 日`)
+    const b = await balanceOf(pool, memberId, PAID_LEAVE_TYPE_ID)
+    parts.push(`## 本人の有給（法定有給。詳細は /attendance の有給タブ）
+残数 ${b.remaining} 日 / 今年度の消化 ${b.usedThisFiscalYear} 日${
+  b.nextExpire ? ` / 直近の失効 ${b.nextExpire.date}（${b.nextExpire.days} 日）` : ''}`)
   }
 
-  // 顧客（名前一致時のみ概要 + 関連ナレッジ）
+  // 顧客（名前一致時のみ概要 + 関連ナレッジ。ORDER BY で照合対象を決定的にする）
   const { rows: companies } = await pool.query<{
     id: string; name: string; aliases: string[]; description: string; location: string; size: string
   }>(
     `SELECT id, name, aliases, description, location, size FROM companies
-     WHERE kind = 'customer' AND active = true LIMIT 100`)
+     WHERE kind = 'customer' AND active = true ORDER BY id LIMIT 100`)
   const company = companies.find(c => [c.name, ...c.aliases].some(n => n && q.includes(n.toLowerCase())))
   if (company) {
     const { rows: ks } = await pool.query<{ id: string; title: string; body: string }>(
@@ -56,14 +54,14 @@ ${company.description}（${company.location}・規模 ${company.size}）
 ${ks.map(k => `ナレッジ「${k.title}」(${k.id}): ${k.body.slice(0, 200)}`).join('\n')}`)
   }
 
-  // ナレッジ全文検索（タイトル・本文の部分一致。上位 3 件）
+  // ナレッジ全文検索（タイトル・本文の部分一致。上位 3 件。% _ はリテラル扱いにエスケープ）
   const terms = question.replace(/[？?。、！!]/g, ' ').split(/\s+/).filter(t => t.length >= 2).slice(0, 5)
   if (terms.length > 0) {
     const { rows: hits } = await pool.query<{ id: string; title: string; body: string }>(
       `SELECT id, title, body FROM knowledge_articles
-       WHERE active = true AND (${terms.map((_, i) => `title ILIKE $${i + 1} OR body ILIKE $${i + 1}`).join(' OR ')})
-       LIMIT 3`,
-      terms.map(t => `%${t}%`))
+       WHERE active = true AND (${terms.map((_, i) => `title ILIKE $${i + 1} ESCAPE '\\' OR body ILIKE $${i + 1} ESCAPE '\\'`).join(' OR ')})
+       ORDER BY id LIMIT 3`,
+      terms.map(t => `%${t.replace(/[\\%_]/g, m => `\\${m}`)}%`))
     if (hits.length > 0) {
       parts.push(`## 関連ナレッジ\n${hits.map(k => `「${k.title}」(${k.id}): ${k.body.slice(0, 200)}`).join('\n')}`)
     }
@@ -109,8 +107,9 @@ export function chatbotRoutes(pool: pg.Pool, env: Env): Hono {
       },
       maxTokens: 1024,
     })
-    // 低確信度・空応答はクライアントの決定的ルーティングへ（誤答よりフォールバックを優先）
-    if (!res || !res.content || Number(res.confidence) < 0.4) {
+    // 低確信度・空応答はクライアントの決定的ルーティングへ（誤答よりフォールバックを優先）。
+    // confidence 欠落/非数値（NaN）も「確信あり」に倒さずフォールバック側へ
+    if (!res || !res.content || !(Number(res.confidence) >= 0.4)) {
       return c.json({ data: { fallback: true } })
     }
     return c.json({

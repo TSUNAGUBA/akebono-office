@@ -31,12 +31,35 @@ function manYen(n: number): string {
   return `¥${Math.round(n).toLocaleString('ja-JP')}万`
 }
 
+// ---------- API モードのキャッシュ（SPA・モジュールスコープ単一） ----------
+
+const apiDecisionLogs = ref<DecisionLog[]>([])
+
+function loadDecisionLogs(force = false): Promise<void> {
+  return apiLoadOnce('dec:logs', async () => {
+    apiDecisionLogs.value = await apiFetch<DecisionLog[]>('/v1/decisions/logs')
+  }, force)
+}
+
+onApiReset(() => {
+  apiDecisionLogs.value = []
+})
+
 export function useDecision() {
   const { tbl, commit, nextId } = useMockDb()
   const { currentUser } = useCurrentUser()
+  const isApi = useApiMode()
 
+  // テーマは移行済みマスタ（API モードは tbl() が API キャッシュを返す）。ログはバッキングスワップ
   const decisionThemes = tbl('decisionThemes')
-  const decisionLogs = tbl('decisionLogs')
+  const decisionLogs = isApi ? apiDecisionLogs : tbl('decisionLogs')
+  if (isApi) void loadDecisionLogs()
+
+  /** 判断ログの取り直し（ページ表示時に呼ぶ。他者の判断の取り込み） */
+  async function refresh(): Promise<void> {
+    if (!isApi) return
+    await loadDecisionLogs(true)
+  }
 
   const themes = computed<DecisionTheme[]>(() => decisionThemes.value)
 
@@ -120,8 +143,15 @@ export function useDecision() {
     ]
   }
 
-  /** 判断を記録する（decisionLogs へ追記のみ） */
-  function record(themeId: string, slot: DecisionSlot, reason: string): Result {
+  /** 判断を記録する（decisionLogs へ追記のみ。API はサーバーがテーマ・選択肢・理由を強制） */
+  async function record(themeId: string, slot: DecisionSlot, reason: string): Promise<Result> {
+    if (isApi) {
+      const res = await apiResult(() => apiFetch<{ id: string }>('/v1/decisions/logs', {
+        method: 'POST', body: { themeId, slot, reason },
+      }))
+      if (res.ok) await loadDecisionLogs(true)
+      return res
+    }
     const theme = themeById(themeId)
     if (!theme) return { ok: false, error: { code: 'AKO-DEC-001', message: '判断テーマが見つかりません' } }
     if (!theme.options.some(o => o.slot === slot)) {
@@ -143,5 +173,5 @@ export function useDecision() {
     return { ok: true, id }
   }
 
-  return { themes, logs, themeById, logsOf, predict, record }
+  return { themes, logs, themeById, logsOf, predict, record, refresh }
 }

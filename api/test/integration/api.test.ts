@@ -949,6 +949,38 @@ describe('日報 AI アシスト', () => {
   })
 })
 
+describe('意思決定支援', () => {
+  it('テーマは移行済みマスタ（マイグレーション seed）。判断記録の検証と追記・全員参照', async () => {
+    const themes = (await api('GET', '/v1/masters/decision-themes', { as: MEMBER })).json.data as
+      { id: string; options: { slot: string }[] }[]
+    expect(themes.length).toBeGreaterThanOrEqual(3)
+    const theme = themes.find(t => t.id === 'dt-01')!
+    expect(theme.options.length).toBeGreaterThan(0)
+
+    // 検証: 理由必須 → テーマなし → 選択肢なし
+    expect((await api('POST', '/v1/decisions/logs', {
+      as: MEMBER, body: { themeId: 'dt-01', slot: theme.options[0]!.slot, reason: ' ' },
+    })).json.error?.code).toBe('AKO-DEC-003')
+    expect((await api('POST', '/v1/decisions/logs', {
+      as: MEMBER, body: { themeId: 'dt-zzz', slot: 'A', reason: 'x' },
+    })).json.error?.code).toBe('AKO-DEC-001')
+    expect((await api('POST', '/v1/decisions/logs', {
+      as: MEMBER, body: { themeId: 'dt-01', slot: 'Z', reason: 'x' },
+    })).json.error?.code).toBe('AKO-DEC-002')
+
+    // 記録（追記のみ）→ 全員が参照可・decidedBy が記録される
+    const created = await api('POST', '/v1/decisions/logs', {
+      as: MEMBER, body: { themeId: 'dt-01', slot: theme.options[0]!.slot, reason: 'PoC 単価が採算ラインを超えるため' },
+    })
+    expect(created.status).toBe(201)
+    const logs = (await api('GET', '/v1/decisions/logs', { as: HR })).json.data as
+      { themeId: string; decidedBy: string; reason: string }[]
+    const mine = logs.find(l => l.themeId === 'dt-01')!
+    expect(mine.decidedBy).toBe(MEMBER)
+    expect(mine.reason).toContain('採算ライン')
+  })
+})
+
 describe('チャットボット応答', () => {
   it('LLM 無効環境は fallback: true（クライアントの決定的応答へ縮退）。空質問は 400', async () => {
     expect((await api('POST', '/v1/chatbot/ask', { as: MEMBER, body: { question: ' ' } })).status).toBe(400)

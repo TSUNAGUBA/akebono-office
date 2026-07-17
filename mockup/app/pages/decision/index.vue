@@ -6,7 +6,10 @@ import { ArrowRight, Target } from 'lucide-vue-next'
 import type { TableColumn } from '~/types/ui'
 import { fmtDateTime } from '~/utils/format'
 
-const { themes, logs } = useDecision()
+const decision = useDecision()
+const { themes, logs } = decision
+// サーバー側で進んだ判断ログ（他者の記録）を表示時に取り込む
+onMounted(() => { void decision.refresh() })
 const { tbl } = useMockDb()
 const members = tbl('members')
 
