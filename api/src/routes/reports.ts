@@ -63,29 +63,35 @@ async function hoursGapMinutes(
 export function reportsRoutes(pool: pg.Pool): Hono {
   const app = new Hono()
 
-  // 日報一覧（自分: month 指定 / チーム: scope=team は管理者のみ・date or 期間指定）
+  // 日報一覧（自分: month or from/to / チーム: scope=team は管理者のみ・date / month / from/to）
   app.get('/daily', async (c) => {
     const user = c.get('user')
     const scope = c.req.query('scope') ?? 'mine'
     const month = c.req.query('month') ?? ''
     const date = c.req.query('date') ?? ''
+    const from = c.req.query('from') ?? ''
+    const to = c.req.query('to') ?? ''
     if (month && !/^\d{4}-\d{2}$/.test(month)) throw err('AKO-GEN-001', 'month は YYYY-MM 形式で指定してください', 400)
-    if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw err('AKO-GEN-001', 'date は YYYY-MM-DD 形式で指定してください', 400)
+    for (const [key, v] of [['date', date], ['from', from], ['to', to]] as const) {
+      if (v && !/^\d{4}-\d{2}-\d{2}$/.test(v)) throw err('AKO-GEN-001', `${key} は YYYY-MM-DD 形式で指定してください`, 400)
+    }
+    const rangeWhere = `($1 = '' OR date = NULLIF($1, '')::date)
+         AND ($2 = '' OR to_char(date, 'YYYY-MM') = $2)
+         AND ($3 = '' OR date >= NULLIF($3, '')::date) AND ($4 = '' OR date <= NULLIF($4, '')::date)`
     if (scope === 'team') {
       requireAdmin(c)
       const { rows } = await pool.query(
         `SELECT ${DAILY_COLS} FROM daily_reports
-         WHERE ($1 = '' OR date = NULLIF($1, '')::date) AND ($2 = '' OR to_char(date, 'YYYY-MM') = $2)
+         WHERE ${rangeWhere}
          ORDER BY date DESC, submitted_at DESC NULLS LAST`,
-        [date, month])
+        [date, month, from, to])
       return c.json({ data: rows })
     }
     const { rows } = await pool.query(
       `SELECT ${DAILY_COLS} FROM daily_reports
-       WHERE author_kind = 'human' AND member_id = $1
-         AND ($2 = '' OR date = NULLIF($2, '')::date) AND ($3 = '' OR to_char(date, 'YYYY-MM') = $3)
+       WHERE author_kind = 'human' AND member_id = $5 AND ${rangeWhere}
        ORDER BY date DESC`,
-      [user.id, date, month])
+      [date, month, from, to, user.id])
     return c.json({ data: rows })
   })
 
@@ -166,6 +172,9 @@ export function reportsRoutes(pool: pg.Pool): Hono {
       throw err('AKO-GEN-001', '週の開始日（weekStart）を指定してください', 400)
     }
     const status = body.status === 'submitted' ? 'submitted' : 'draft'
+    if (status === 'submitted' && !String(body.mainWork ?? '').trim()) {
+      throw err('AKO-GEN-001', '主要業務を入力してください', 400)
+    }
     const submittedAt = status === 'submitted' ? nowJstIso() : null
     const client = await pool.connect()
     let id: string
@@ -231,13 +240,51 @@ export function reportsRoutes(pool: pg.Pool): Hono {
     const body = await c.req.json().catch(() => ({})) as { body?: string }
     const text = (body.body ?? '').trim()
     if (!text) throw err('AKO-GEN-001', 'コメントを入力してください', 400)
-    const report = await pool.query('SELECT id, status FROM daily_reports WHERE id = $1', [reportId])
-    if (!report.rows[0]) throw err('AKO-GEN-002', '対象の日報が見つかりません', 404)
+    const report = await pool.query<{ id: string; authorKind: string; memberId: string | null; date: string }>(
+      `SELECT id, author_kind AS "authorKind", member_id AS "memberId", date FROM daily_reports WHERE id = $1`,
+      [reportId])
+    const target = report.rows[0]
+    if (!target) throw err('AKO-GEN-002', '対象の日報が見つかりません', 404)
     const id = newId('rc')
     await pool.query(
       `INSERT INTO report_comments (id, report_id, member_id, body, at) VALUES ($1, $2, $3, $4, $5)`,
       [id, reportId, user.id, text, nowJstIso()])
+    // 補助処理: 日報作成者へ通知（自分の日報・AI 日報は除く。mockup と同一挙動）
+    if (target.authorKind === 'human' && target.memberId && target.memberId !== user.id) {
+      await notify(pool, target.memberId, 'comment',
+        `日報（${target.date}）にコメント`, `${user.name}: ${text.slice(0, 60)}`, '/reports')
+    }
     return c.json({ data: { id } }, 201)
+  })
+
+  // リアクションのトグル（コメントに対して 1 人 1 絵文字 1 個。mockup toggleReaction と同一挙動）
+  app.post('/comments/:commentId/reactions', async (c) => {
+    const user = c.get('user')
+    const commentId = c.req.param('commentId')
+    const body = await c.req.json().catch(() => ({})) as { emoji?: string }
+    const emoji = (body.emoji ?? '').trim()
+    if (!emoji || emoji.length > 8) throw err('AKO-GEN-001', 'リアクション（emoji）を指定してください', 400)
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+      const { rows } = await client.query<{ reactions: { memberId: string; emoji: string }[] }>(
+        'SELECT reactions FROM report_comments WHERE id = $1 FOR UPDATE', [commentId])
+      const row = rows[0]
+      if (!row) throw err('AKO-GEN-002', '対象のコメントが見つかりません', 404)
+      const has = row.reactions.some(r => r.memberId === user.id && r.emoji === emoji)
+      const reactions = has
+        ? row.reactions.filter(r => !(r.memberId === user.id && r.emoji === emoji))
+        : [...row.reactions, { memberId: user.id, emoji }]
+      await client.query('UPDATE report_comments SET reactions = $2 WHERE id = $1',
+        [commentId, JSON.stringify(reactions)])
+      await client.query('COMMIT')
+      return c.json({ data: { id: commentId, reactions } })
+    } catch (e) {
+      await client.query('ROLLBACK')
+      throw e
+    } finally {
+      client.release()
+    }
   })
 
   return app

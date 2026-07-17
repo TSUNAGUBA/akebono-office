@@ -256,8 +256,53 @@ describe('日報', () => {
     expect((list.json.data as unknown[]).length).toBe(1)
   })
 
-  it('週報の提出保護（AKO-REP-002）', async () => {
-    const body = { weekStart: '2026-07-13', goalReview: 'ok', status: 'submitted' }
+  it('from/to の期間指定で日報を絞り込める（自分・チーム両スコープ）', async () => {
+    for (const [date, task] of [['2026-06-29', '前月末'], ['2026-07-01', '月初']] as const) {
+      const r = await api('PUT', '/v1/reports/daily', {
+        as: HR, body: { date, entries: [{ projectId: 'pj-x', task, hours: 1, progress: 10 }], status: 'draft' },
+      })
+      expect(r.status, date).toBe(200)
+    }
+    const mine = await api('GET', '/v1/reports/daily?from=2026-06-28&to=2026-06-30', { as: HR })
+    expect((mine.json.data as { date: string }[]).map(r => r.date)).toEqual(['2026-06-29'])
+
+    const team = await api('GET', '/v1/reports/daily?scope=team&from=2026-06-01&to=2026-06-30', { as: ADMIN })
+    const teamRows = team.json.data as { date: string }[]
+    expect(teamRows.length).toBeGreaterThanOrEqual(1)
+    expect(teamRows.every(r => r.date >= '2026-06-01' && r.date <= '2026-06-30')).toBe(true)
+
+    expect((await api('GET', '/v1/reports/daily?from=20260629', { as: HR })).json.error?.code).toBe('AKO-GEN-001')
+  })
+
+  it('コメントは日報作成者へ通知され、リアクションはトグルできる', async () => {
+    const team = await api('GET', '/v1/reports/daily?scope=team&date=2026-07-16', { as: ADMIN })
+    const reportId = (team.json.data as { id: string }[])[0]!.id
+    const c = await api('POST', `/v1/reports/${reportId}/comments`, { as: ADMIN, body: { body: 'リアクション対象' } })
+    expect(c.status).toBe(201)
+    const commentId = (c.json.data as { id: string }).id
+
+    // 作成者（MEMBER）へ kind 'comment' の通知が届く
+    const notes = (await api('GET', '/v1/notifications?unread=1', { as: MEMBER })).json.data as { kind: string }[]
+    expect(notes.some(n => n.kind === 'comment')).toBe(true)
+
+    // リアクション: 付与 → 同じ絵文字の再送で解除（トグル）
+    const on = await api('POST', `/v1/reports/comments/${commentId}/reactions`, { as: MEMBER, body: { emoji: '👍' } })
+    expect(on.status).toBe(200)
+    expect((on.json.data as { reactions: unknown[] }).reactions).toEqual([{ memberId: MEMBER, emoji: '👍' }])
+    const off = await api('POST', `/v1/reports/comments/${commentId}/reactions`, { as: MEMBER, body: { emoji: '👍' } })
+    expect((off.json.data as { reactions: unknown[] }).reactions).toEqual([])
+
+    expect((await api('POST', '/v1/reports/comments/rc-nope/reactions', { as: MEMBER, body: { emoji: '👍' } })).status).toBe(404)
+    expect((await api('POST', `/v1/reports/comments/${commentId}/reactions`, { as: MEMBER, body: {} })).json.error?.code)
+      .toBe('AKO-GEN-001')
+  })
+
+  it('週報の提出保護（AKO-REP-002）。主要業務なしの提出は AKO-GEN-001', async () => {
+    const noMain = await api('PUT', '/v1/reports/weekly', { as: MEMBER, body: { weekStart: '2026-07-13', status: 'submitted' } })
+    expect(noMain.status).toBe(400)
+    expect(noMain.json.error?.code).toBe('AKO-GEN-001')
+
+    const body = { weekStart: '2026-07-13', goalReview: 'ok', mainWork: '実装', status: 'submitted' }
     expect((await api('PUT', '/v1/reports/weekly', { as: MEMBER, body })).status).toBe(200)
     const again = await api('PUT', '/v1/reports/weekly', { as: MEMBER, body: { ...body, goalReview: '書換' } })
     expect(again.json.error?.code).toBe('AKO-REP-002')

@@ -63,22 +63,34 @@ export function useApiMode(): boolean {
 // ---------- 認証済みユーザー（/v1/me） ----------
 
 const me = ref<ApiUser | null>(null)
+const meError = ref<{ code: string; message: string } | null>(null)
 let mePromise: Promise<ApiUser | null> | null = null
 
 export function useApiMe(): Ref<ApiUser | null> {
   return me
 }
 
-/** /v1/me を一度だけ取得（ログイン直後・dev モード起動時）。失敗時は null（未登録等） */
+/**
+ * /v1/me の直近の失敗理由（成功で null）。
+ * ログイン画面が「メンバー未登録（AKO-AUTH-002）」と「API 未達・サーバーエラー等」を
+ * 区別して表示するために公開する（未登録以外を未登録と誤表示しない）。
+ */
+export function useApiMeError(): Ref<{ code: string; message: string } | null> {
+  return meError
+}
+
+/** /v1/me を一度だけ取得（ログイン直後・dev モード起動時）。失敗時は null（理由は useApiMeError） */
 export function ensureMeLoaded(): Promise<ApiUser | null> {
   if (me.value) return Promise.resolve(me.value)
   mePromise ??= apiFetch<ApiUser>('/v1/me')
     .then((u) => {
       me.value = u
+      meError.value = null
       resetApiData() // 認証確立後にコレクションを取り直す（未認証時の空フェッチを解消）
       return u
     })
-    .catch(() => {
+    .catch((e) => {
+      meError.value = apiErrorOf(e)
       mePromise = null
       return null
     })
@@ -87,6 +99,7 @@ export function ensureMeLoaded(): Promise<ApiUser | null> {
 
 export function clearMe(): void {
   me.value = null
+  meError.value = null
   mePromise = null
 }
 
@@ -126,14 +139,19 @@ export async function apiFetch<T = unknown>(
   }
 }
 
+/** 例外を Result のエラー形式へ正規化する（apiResult を経由しない拡張レスポンス用） */
+export function apiErrorOf(e: unknown): { code: string; message: string } {
+  const error = e as Partial<ApiCallError>
+  return { code: error.code ?? 'AKO-GEN-NET', message: error.message ?? '通信に失敗しました' }
+}
+
 /** API 呼び出しをモック互換の Result 形式へ正規化する（画面側の分岐を変えないため） */
 export async function apiResult(fn: () => Promise<{ id?: string } | void | unknown>): Promise<Result> {
   try {
     const data = (await fn()) as { id?: string } | undefined
     return data?.id ? { ok: true, id: data.id } : { ok: true }
   } catch (e) {
-    const error = e as Partial<ApiCallError>
-    return { ok: false, error: { code: error.code ?? 'AKO-GEN-NET', message: error.message ?? '通信に失敗しました' } }
+    return { ok: false, error: apiErrorOf(e) }
   }
 }
 
@@ -202,10 +220,20 @@ export async function loadApiCollection(name: string, force = false): Promise<vo
   return promise
 }
 
+/**
+ * 認証確立後・ログイン切替後の再取得フック。
+ * useApi 管轄外のキャッシュ（通知・日報等のドメイン別キャッシュ）はここに登録する。
+ */
+const resetHooks: (() => void)[] = []
+export function onApiReset(hook: () => void): void {
+  resetHooks.push(hook)
+}
+
 /** 認証確立後・ログイン切替後にコレクションを取り直す */
 export function resetApiData(): void {
   loadedCollections.clear()
   for (const name of stores.keys()) void loadApiCollection(name, true)
+  for (const hook of resetHooks) hook()
 }
 
 /** 変更 API のレスポンス行をキャッシュへ反映する（SoT 書込 → キャッシュ更新の順序。原則6） */

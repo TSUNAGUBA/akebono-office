@@ -3,11 +3,79 @@
  * - 提出済みの日報・週報は編集不可（記録系の状態保護）
  * - 提出時の課題エスカレーション・通知は主フロー成立後の補助処理（非ブロッキング）
  * - 工数合計と勤怠実労働の乖離チェック（60 分超で warning を画面へ返す）
+ *
+ * デュアルモード（バッチ2b-1）:
+ * - モックモード: 従来どおり useMockDb
+ * - API モード: SoT は /v1/reports。参照はモジュールスコープの API キャッシュ（月/期間単位の遅延ロード）を
+ *   バッキングにした同一の射影ロジックで行い、書込（保存・提出・コメント・リアクション・リマインド）は
+ *   API を呼んでからキャッシュを取り直す（SoT 書込 → キャッシュ反映。原則6）。
+ *   工数乖離は提出レスポンス（サーバー計算）を用いる。提出時エスカレーションはエスカレーション API 化
+ *   （バッチ3）まで未発火（implementation-status.md に明記）。
  */
+import type { Ref } from 'vue'
 import type {
   DailyReport, ReportComment, ReportEntry, Result, WeeklyReport,
 } from '~/types/domain'
 import { addDays, weekdayOf } from '~/utils/format'
+
+// ---------- API モードのキャッシュ（SPA・モジュールスコープ単一） ----------
+
+const apiDaily = ref<DailyReport[]>([])
+const apiWeekly = ref<WeeklyReport[]>([])
+const apiComments = ref<ReportComment[]>([])
+const loadedKeys = new Set<string>()
+const inflightKeys = new Map<string, Promise<void>>()
+
+function mergeById<T extends { id: string }>(store: Ref<T[]>, rows: T[]): void {
+  const map = new Map(store.value.map(r => [r.id, r]))
+  for (const r of rows) map.set(r.id, r)
+  store.value = [...map.values()]
+}
+
+/** キー単位の遅延ロード（同一キーは一度だけ。force で取り直し） */
+function loadOnce(key: string, fetcher: () => Promise<void>, force = false): Promise<void> {
+  if (!force && (loadedKeys.has(key) || inflightKeys.has(key))) {
+    return inflightKeys.get(key) ?? Promise.resolve()
+  }
+  const p = fetcher()
+    .then(() => { loadedKeys.add(key) })
+    .catch(() => { /* 未認証・一時エラーは空のまま（再訪・リセットで再試行） */ })
+    .finally(() => { inflightKeys.delete(key) })
+  inflightKeys.set(key, p)
+  return p
+}
+
+function loadMineMonth(month: string, force = false): Promise<void> {
+  return loadOnce(`mine:${month}`, async () => {
+    mergeById(apiDaily, await apiFetch<DailyReport[]>('/v1/reports/daily', { query: { month } }))
+  }, force)
+}
+
+function loadTeamRange(from: string, to: string, force = false): Promise<void> {
+  return loadOnce(`team:${from}:${to}`, async () => {
+    mergeById(apiDaily, await apiFetch<DailyReport[]>('/v1/reports/daily', { query: { scope: 'team', from, to } }))
+  }, force)
+}
+
+function loadWeekly(force = false): Promise<void> {
+  return loadOnce('weekly', async () => {
+    mergeById(apiWeekly, await apiFetch<WeeklyReport[]>('/v1/reports/weekly'))
+  }, force)
+}
+
+function loadComments(reportId: string, force = false): Promise<void> {
+  return loadOnce(`comments:${reportId}`, async () => {
+    mergeById(apiComments, await apiFetch<ReportComment[]>(`/v1/reports/${reportId}/comments`))
+  }, force)
+}
+
+// ログイン確立・切替時に取り直す
+onApiReset(() => {
+  loadedKeys.clear()
+  apiDaily.value = []
+  apiWeekly.value = []
+  apiComments.value = []
+})
 
 export interface DailyReportInput {
   date: string
@@ -44,11 +112,31 @@ export function useReports() {
   const { tbl, commit, nextId } = useMockDb()
   const { currentUser } = useCurrentUser()
   const { notify } = useNotifications()
-  const dailyReports = tbl('dailyReports')
-  const weeklyReports = tbl('weeklyReports')
-  const comments = tbl('reportComments')
+  const isApi = useApiMode()
+  // API モードはキャッシュをバッキングにし、以降の射影ロジックを共通利用する
+  const dailyReports = isApi ? (apiDaily as Ref<DailyReport[]>) : tbl('dailyReports')
+  const weeklyReports = isApi ? (apiWeekly as Ref<WeeklyReport[]>) : tbl('weeklyReports')
+  const comments = isApi ? (apiComments as Ref<ReportComment[]>) : tbl('reportComments')
   const members = tbl('members')
   const aiEmployees = tbl('aiEmployees')
+  if (isApi) {
+    void loadMineMonth(todayJst().slice(0, 7))
+    void loadWeekly()
+  }
+
+  /** API モード時、参照された月の自分の日報を遅延ロードする（射影関数から fire-and-forget で呼ぶ） */
+  function touchMineMonth(date: string): void {
+    if (isApi && /^\d{4}-\d{2}/.test(date)) void loadMineMonth(date.slice(0, 7))
+  }
+
+  /** API モード時、チーム提出状況の対象期間を遅延ロードする（管理者ビューのみから呼ばれる） */
+  function touchTeamWindow(days: number): void {
+    if (!isApi) return
+    const range = recentBusinessDays(days)
+    const from = range[0]
+    const to = range[range.length - 1]
+    if (from && to) void loadTeamRange(from, to)
+  }
 
   function err(code: string, message: string): Result {
     return { ok: false, error: { code, message } }
@@ -61,6 +149,7 @@ export function useReports() {
   }
 
   function reportOn(memberId: string, date: string): DailyReport | undefined {
+    if (memberId === currentUser.value.id) touchMineMonth(date)
     return dailyReports.value.find(r =>
       r.authorKind === 'human' && r.memberId === memberId && r.date === date)
   }
@@ -104,13 +193,15 @@ export function useReports() {
       m.active && m.employmentType !== 'outsource' && m.employmentType !== 'director'))
 
   function cellStatus(memberId: string, date: string): SubmissionCell {
+    touchTeamWindow(7)
     const r = reportOn(memberId, date)
     if (!r) return 'none'
     return r.status === 'submitted' ? 'submitted' : 'draft'
   }
 
-  /** チームタイムライン（直近営業日分の提出済み日報。AI 社員の日報も同列に混在） */
+  /** チームタイムライン（直近営業日分の提出済み日報。AI 社員の日報も同列に混在 = モックのみ） */
   function timeline(days = 7): DailyReport[] {
+    touchTeamWindow(days)
     const range = new Set(recentBusinessDays(days))
     return dailyReports.value
       .filter(r => r.status === 'submitted' && range.has(r.date))
@@ -123,6 +214,9 @@ export function useReports() {
 
   /** 工数合計と勤怠実労働の乖離。60 分超のときのみ符号付き分数を返す（打刻がない日は対象外 = null） */
   function hoursGapMinutes(memberId: string, date: string, entries: ReportEntry[]): number | null {
+    // API モードの勤怠はモックデータのため参照しない（提出時はサーバー計算値を表示。
+    // 一覧上の乖離バッジは勤怠フロント接続=バッチ2b-2 で有効化）
+    if (isApi) return null
     try {
       const work = useAttendance().daySummary(memberId, date).workMinutes
       if (work <= 0) return null
@@ -152,7 +246,10 @@ export function useReports() {
       }))
   }
 
-  function upsertDaily(input: DailyReportInput, status: 'draft' | 'submitted'): Result {
+  async function upsertDaily(
+    input: DailyReportInput,
+    status: 'draft' | 'submitted',
+  ): Promise<Result & { hoursGapMinutes?: number | null }> {
     const existing = myReportOn(input.date)
     if (existing && existing.status === 'submitted') {
       return err('AKO-REP-001', '提出済みの日報は編集できません')
@@ -164,6 +261,26 @@ export function useReports() {
       }
       if (entries.some(e => !e.projectId || !e.task)) {
         return err('AKO-GEN-001', '各エントリのプロジェクトと作業内容を入力してください')
+      }
+    }
+    if (isApi) {
+      // SoT（API）へ書込 → 対象月キャッシュを取り直す（原則6）。提出済み保護はサーバーが FOR UPDATE で最終判定
+      try {
+        const data = await apiFetch<{ id: string; hoursGapMinutes: number | null }>('/v1/reports/daily', {
+          method: 'PUT',
+          body: {
+            date: input.date,
+            entries,
+            reflection: input.reflection,
+            issues: input.issues,
+            tomorrow: input.tomorrow,
+            status,
+          },
+        })
+        await loadMineMonth(input.date.slice(0, 7), true)
+        return { ok: true, id: data.id, hoursGapMinutes: data.hoursGapMinutes }
+      } catch (e) {
+        return { ok: false, error: apiErrorOf(e) }
       }
     }
     const submittedAt = status === 'submitted' ? nowJstIso() : null
@@ -192,7 +309,7 @@ export function useReports() {
     return { ok: true, id }
   }
 
-  function saveDraft(input: DailyReportInput): Result {
+  function saveDraft(input: DailyReportInput): Promise<Result> {
     return upsertDaily(input, 'draft')
   }
 
@@ -200,10 +317,15 @@ export function useReports() {
    * 日報提出。提出成立後の補助処理:
    * (a) 課題記入あり → エスカレーション起票（起票成否に関わらず提出は成立）
    * (b) 工数合計と勤怠実労働の乖離 60 分超 → hoursGapMinutes を返す（画面が警告表示）
+   * API モード: 乖離はサーバー計算値（提出レスポンス）。エスカレーション起票は
+   * エスカレーション API 化（バッチ3）まで未発火（implementation-status.md に明記）。
    */
-  function submit(input: DailyReportInput): SubmitDailyResult {
-    const res = upsertDaily(input, 'submitted')
+  async function submit(input: DailyReportInput): Promise<SubmitDailyResult> {
+    const res = await upsertDaily(input, 'submitted')
     if (!res.ok) return res
+    if (isApi) {
+      return { ok: true, id: res.id ?? '', escalated: false, hoursGapMinutes: res.hoursGapMinutes ?? null }
+    }
 
     let escalated = false
     if (input.issues.trim()) {
@@ -220,8 +342,11 @@ export function useReports() {
     return { ok: true, id: res.id ?? '', escalated, hoursGapMinutes: gap }
   }
 
-  /** リマインド送信（kind 'reminder' 通知） */
-  function remind(memberId: string, date: string): Result {
+  /** リマインド送信（kind 'reminder' 通知。API モードはサーバーが通知を発火する） */
+  async function remind(memberId: string, date: string): Promise<Result> {
+    if (isApi) {
+      return apiResult(() => apiFetch('/v1/reports/remind', { method: 'POST', body: { memberId, date } }))
+    }
     notify(memberId, 'reminder', '日報リマインド', `${date} の日報が未提出です。提出をお願いします`, '/reports')
     return { ok: true }
   }
@@ -229,14 +354,22 @@ export function useReports() {
   // ---------- コメント・リアクション ----------
 
   function commentsOf(reportId: string): ReportComment[] {
+    if (isApi) void loadComments(reportId)
     return comments.value
       .filter(c => c.reportId === reportId)
       .sort((a, b) => a.at.localeCompare(b.at))
   }
 
-  function addComment(reportId: string, body: string): Result {
+  async function addComment(reportId: string, body: string): Promise<Result> {
     const text = body.trim()
     if (!text) return err('AKO-GEN-001', 'コメントを入力してください')
+    if (isApi) {
+      // 作成者への通知はサーバーが発火する。書込成立後にスレッドを取り直す（原則6）
+      const res = await apiResult(() =>
+        apiFetch<{ id: string }>(`/v1/reports/${reportId}/comments`, { method: 'POST', body: { body: text } }))
+      if (res.ok) await loadComments(reportId, true)
+      return res
+    }
     const report = reportById(reportId)
     if (!report) return err('AKO-GEN-002', '対象の日報が見つかりません')
     const id = nextId('reportComments', 'rc')
@@ -256,7 +389,19 @@ export function useReports() {
     return { ok: true, id }
   }
 
-  function toggleReaction(commentId: string, emoji: string): Result {
+  async function toggleReaction(commentId: string, emoji: string): Promise<Result> {
+    if (isApi) {
+      // サーバーがトグルを確定し reactions 全量を返す → 該当行のみキャッシュへ反映（原則6）
+      try {
+        const data = await apiFetch<{ id: string; reactions: ReportComment['reactions'] }>(
+          `/v1/reports/comments/${commentId}/reactions`, { method: 'POST', body: { emoji } })
+        apiComments.value = apiComments.value.map(c =>
+          c.id === commentId ? { ...c, reactions: data.reactions } : c)
+        return { ok: true, id: commentId }
+      } catch (e) {
+        return { ok: false, error: apiErrorOf(e) }
+      }
+    }
     const target = comments.value.find(c => c.id === commentId)
     if (!target) return err('AKO-GEN-002', '対象のコメントが見つかりません')
     const me = currentUser.value.id
@@ -287,7 +432,7 @@ export function useReports() {
       .filter(r => r.memberId === currentUser.value.id)
       .sort((a, b) => b.weekStart.localeCompare(a.weekStart)))
 
-  function saveWeekly(input: WeeklyReportInput, submitNow: boolean): Result {
+  async function saveWeekly(input: WeeklyReportInput, submitNow: boolean): Promise<Result> {
     const existing = myWeeklyOn(input.weekStart)
     if (existing && existing.status === 'submitted') {
       return err('AKO-REP-002', '提出済みの週報は編集できません')
@@ -296,6 +441,21 @@ export function useReports() {
       return err('AKO-GEN-001', '主要業務を入力してください')
     }
     const status = submitNow ? 'submitted' as const : 'draft' as const
+    if (isApi) {
+      const res = await apiResult(() => apiFetch<{ id: string }>('/v1/reports/weekly', {
+        method: 'PUT',
+        body: {
+          weekStart: input.weekStart,
+          goalReview: input.goalReview,
+          mainWork: input.mainWork,
+          issues: input.issues,
+          nextWeek: input.nextWeek,
+          status,
+        },
+      }))
+      if (res.ok) await loadWeekly(true)
+      return res
+    }
     if (existing) {
       weeklyReports.value = weeklyReports.value.map(r => r.id === existing.id
         ? { ...r, goalReview: input.goalReview, mainWork: input.mainWork, issues: input.issues, nextWeek: input.nextWeek, status }
@@ -319,8 +479,12 @@ export function useReports() {
   }
 
   /** その週の自分の日報（entries.task / issues）から週報の下書きを生成 */
-  function draftFromDailies(weekStart: string): { mainWork: string; issues: string } {
+  async function draftFromDailies(weekStart: string): Promise<{ mainWork: string; issues: string }> {
     const end = addDays(weekStart, 6)
+    if (isApi) {
+      // 週が月をまたぐ場合に備えて両端の月をロードしてから射影する
+      await Promise.all([loadMineMonth(weekStart.slice(0, 7)), loadMineMonth(end.slice(0, 7))])
+    }
     const mine = dailyReports.value
       .filter(r =>
         r.authorKind === 'human'

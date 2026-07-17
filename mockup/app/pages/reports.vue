@@ -88,7 +88,8 @@ function loadEditor(): void {
     editTomorrow.value = ''
   }
 }
-watch([selDate, currentUserId], loadEditor, { immediate: true })
+// myReport も監視: API モードでは月データが非同期に届くため、到着後に下書きを復元する
+watch([selDate, currentUserId, myReport], loadEditor, { immediate: true })
 
 function addRow(): void {
   editEntries.value.push(blankEntry())
@@ -109,7 +110,11 @@ function stepHours(i: number, delta: number): void {
 const totalHours = computed(() =>
   editEntries.value.reduce((s, e) => s + (Number.isFinite(e.hours) ? e.hours : 0), 0))
 
+/** API モードの勤怠はモックデータのため編集中の乖離表示に使わない（勤怠フロント接続=バッチ2b-2 で有効化） */
+const isApi = useApiMode()
+
 const dayWorkMinutes = computed(() => {
+  if (isApi) return 0
   try {
     return attendance.daySummary(currentUser.value.id, selDate.value).workMinutes
   } catch {
@@ -146,13 +151,13 @@ function payload() {
   }
 }
 
-function onSaveDraft(): void {
-  const res = reports.saveDraft(payload())
+async function onSaveDraft(): Promise<void> {
+  const res = await reports.saveDraft(payload())
   show(res.ok ? '下書きを保存しました' : res.error.message, res.ok ? 'ok' : 'warn')
 }
 
-function onSubmit(): void {
-  const res = reports.submit(payload())
+async function onSubmit(): Promise<void> {
+  const res = await reports.submit(payload())
   if (!res.ok) {
     show(res.error.message, 'warn')
     return
@@ -278,8 +283,8 @@ async function askRemind(memberId: string, date: string): Promise<void> {
   const name = reports.memberName(memberId)
   const ok = await ask('リマインド送信', `${name} さんへ ${fmtDateLong(date)} の日報リマインドを送信しますか？`, { confirmLabel: '送信' })
   if (!ok) return
-  reports.remind(memberId, date)
-  show(`${name} さんへリマインドを送信しました`)
+  const res = await reports.remind(memberId, date)
+  show(res.ok ? `${name} さんへリマインドを送信しました` : res.error.message, res.ok ? 'ok' : 'warn')
 }
 
 async function remindAll(): Promise<void> {
@@ -293,8 +298,17 @@ async function remindAll(): Promise<void> {
   }
   const ok = await ask('一括リマインド', `${fmtDateLong(date)} が未提出の ${targets.length} 名へリマインドを送信しますか？`, { confirmLabel: '送信' })
   if (!ok) return
-  for (const m of targets) reports.remind(m.id, date)
-  show(`${targets.length} 名へリマインドを送信しました`)
+  // 一部失敗しても送れた分は成立させる（原則4: グレースフルデグラデーション）
+  let sent = 0
+  for (const m of targets) {
+    const res = await reports.remind(m.id, date)
+    if (res.ok) sent += 1
+  }
+  if (sent === targets.length) {
+    show(`${targets.length} 名へリマインドを送信しました`)
+  } else {
+    show(`${sent} / ${targets.length} 名へ送信しました（一部失敗）`, 'warn')
+  }
 }
 
 // ---------- 週報タブ ----------
@@ -321,14 +335,15 @@ function loadWeeklyEditor(): void {
     wkNext.value = ''
   }
 }
-watch(currentUserId, loadWeeklyEditor, { immediate: true })
+// myCurrentWeekly も監視: API モードでは週報データが非同期に届くため、到着後に下書きを復元する
+watch([currentUserId, myCurrentWeekly], loadWeeklyEditor, { immediate: true })
 
 function weekLabel(weekStart: string): string {
   return `${fmtDate(weekStart)}〜${fmtDate(addDays(weekStart, 6))}`
 }
 
-function generateFromDailies(): void {
-  const d = reports.draftFromDailies(thisWeekStart.value)
+async function generateFromDailies(): Promise<void> {
+  const d = await reports.draftFromDailies(thisWeekStart.value)
   if (!d.mainWork && !d.issues) {
     show('今週の日報がまだありません', 'warn')
     return
@@ -338,8 +353,8 @@ function generateFromDailies(): void {
   show('日報から下書きを生成しました')
 }
 
-function onSaveWeekly(submitNow: boolean): void {
-  const res = reports.saveWeekly({
+async function onSaveWeekly(submitNow: boolean): Promise<void> {
+  const res = await reports.saveWeekly({
     weekStart: thisWeekStart.value,
     goalReview: wkGoal.value,
     mainWork: wkMain.value,
@@ -583,6 +598,7 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
           <div class="flex flex-wrap items-center gap-2 rounded-lg bg-surface-soft px-3 py-2 text-xs text-sub">
             <span class="num font-semibold">工数合計 {{ totalHours }}h</span>
             <span v-if="dayWorkMinutes > 0" class="num">/ 勤怠実労働 {{ fmtMinutes(dayWorkMinutes) }}</span>
+            <span v-else-if="isApi">/ 勤怠実労働との乖離は提出時にチェックします</span>
             <span v-else>/ この日の打刻がないため乖離チェック対象外</span>
             <UiStatusBadge v-if="editorGap !== null" tone="warn" :label="`乖離 ${gapText(editorGap)}`" />
           </div>

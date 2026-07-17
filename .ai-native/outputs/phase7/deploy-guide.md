@@ -170,7 +170,8 @@ DATABASE_URL=postgresql://... AUTH_MODE=dev npm run dev
 |---|---|
 | deploy-api が「secrets 未設定のためスキップ」 | `setup-deploy-secrets.ps1 -DatabaseUrl ...` を実行して API 用 secrets を設定 |
 | `/healthz` が `db: "error"` | RDS の SG に Cloud Run のエグレス IP が許可されているか・`DATABASE_URL` のホスト/パスワード・`rds.force_ssl` と `DB_SSL` の整合を確認 |
-| `AKO-AUTH-002 メンバー未登録` | ログインした email が `members.email`（在籍者）に存在しない。メンバーマスタに登録する |
+| ログイン後「メンバー未登録です」（`AKO-AUTH-002`） | ログインした email が `members.email`（在籍・`active = true`）に存在しない。突合は大文字小文字を無視した完全一致（前後の空白・全角文字は不一致になる）。`SELECT id, email, active FROM app_office.members WHERE lower(email) = lower('<ログイン email>');` で行の存在・`active` を確認する。行があるのに出る場合は、`DATABASE_URL` が指す**データベース名**と同じ DB へ INSERT したかを確認（別 DB・別スキーマへの投入が典型原因）。登録後は画面の「登録後に再確認」で再突合できる |
+| ログイン後「API に接続できません」 | `/v1/me` が未登録以外の理由で失敗している。画面に表示されるコードで切り分ける: `AKO-GEN-NET` = API 未達（`API_BASE_URL` の URL が正しいか `curl <API_BASE_URL>/healthz` で確認。存在しない `*.run.app` ホストは Google の 404 ページになる）または CORS 拒否（`CORS_ORIGINS` secret に `https://<project>.web.app` が含まれるか。変更後は deploy を再実行）/ `AKO-AUTH-001` = トークン検証失敗（API の `FIREBASE_PROJECT_ID` と Web 側 firebaseConfig の `projectId` の一致を確認）/ `AKO-GEN-500` = Cloud Run ログを確認 |
 | マイグレーション失敗でコンテナが起動しない | Cloud Run のログで `migrate: applying ...` のエラーを確認。修正 SQL を追加して再デプロイ（適用済みファイルはスキップされる） |
 | `permission denied to create extension` 等 | 本マイグレーションは拡張不要（gen_random_uuid 不使用）。カスタム SQL を足す際は RDS の権限制約に注意 |
 | Cloud Run から RDS への接続が遅い | 東京リージョン同士か確認（asia-northeast1 ⇄ ap-northeast-1）。恒常的に問題になる場合は production-architecture.md §5 の案 B / Cloud SQL 移行を検討 |
