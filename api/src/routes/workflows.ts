@@ -156,7 +156,7 @@ export function workflowsRoutes(pool: pg.Pool): Hono {
   // 承認証跡（時系列昇順）
   app.get('/:id/logs', async (c) => {
     const { rows } = await pool.query(
-      `SELECT ${LOG_COLS} FROM approval_logs WHERE request_id = $1 ORDER BY at`,
+      `SELECT ${LOG_COLS} FROM approval_logs WHERE request_id = $1 ORDER BY at, created_at`,
       [c.req.param('id')])
     return c.json({ data: rows })
   })

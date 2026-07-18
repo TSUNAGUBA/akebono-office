@@ -149,7 +149,7 @@ export async function buildContext(
       const { rows } = await pool.query<PunchRecord>(
         `SELECT id, member_id AS "memberId", date::text AS date, kind, at, source,
                 fixed_from AS "fixedFrom", fix_reason AS "fixReason", approved_by AS "approvedBy"
-         FROM punch_records WHERE member_id = $1 AND to_char(date, 'YYYY-MM') = $2 ORDER BY at`,
+         FROM punch_records WHERE member_id = $1 AND to_char(date, 'YYYY-MM') = $2 ORDER BY at, created_at`,
         [user.id, today.slice(0, 7)])
       if (rows.length === 0) return
       const byDate = new Map<string, PunchRecord[]>()
@@ -297,7 +297,7 @@ export async function buildContext(
       const { rows } = await pool.query<{ context: string; raisedAt: string }>(
         `SELECT context, raised_at AS "raisedAt" FROM escalations
          WHERE target_member_id = $1 AND status = 'open' AND reason = 'issue_reported'
-         ORDER BY raised_at DESC LIMIT 3`, [user.id])
+         ORDER BY raised_at DESC, created_at DESC LIMIT 3`, [user.id])
       if (rows.length > 0) {
         parts.push(`## 本人に関する対応中エスカレーション\n${rows.map(e => `- ${capCp(e.context, 100)}（${e.raisedAt.slice(0, 10)}）`).join('\n')}`)
       }
@@ -361,7 +361,7 @@ export async function buildContext(
         serviceId: string; title: string; impact: string; status: string; startedAt: string
       }>(
         `SELECT service_id AS "serviceId", title, impact, status, started_at AS "startedAt"
-         FROM service_incidents WHERE status <> 'resolved' ORDER BY started_at DESC LIMIT 10`)
+         FROM service_incidents WHERE status <> 'resolved' ORDER BY started_at DESC, id LIMIT 10`)
       const stateLabel: Record<string, string> = {
         minor: '性能低下', major: '一部障害', critical: '重大障害',
       }

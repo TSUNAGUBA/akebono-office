@@ -231,7 +231,7 @@ export function aiCompanyRoutes(pool: pg.Pool, env: Env): Hono {
     }>(
       `SELECT ai_employee_id AS "aiEmployeeId", task_id AS "taskId", kind, summary, tokens,
               cost_usd::float AS "costUsd"
-       FROM ai_activity_logs WHERE at LIKE $1 || '%' ORDER BY at`, [date])
+       FROM ai_activity_logs WHERE at LIKE $1 || '%' ORDER BY at, id`, [date])
     const byEmp = new Map<string, typeof logs>()
     for (const l of logs) byEmp.set(l.aiEmployeeId, [...(byEmp.get(l.aiEmployeeId) ?? []), l])
 
