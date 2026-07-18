@@ -261,7 +261,13 @@ export function useChatbot() {
         // セッション不在（別アカウントの残骸等 = AKO-CHT-001）は保持をやめて新しい会話へ
         if (apiErrorOf(e).code === 'AKO-CHT-001') currentSessionId.value = null
       }
-      // フォールバック: 決定的応答をセッションへ追記（履歴の忠実性。失敗しても表示は継続 = 非ブロッキング）
+      // フォールバック: 決定的応答をセッションへ追記（履歴の忠実性。失敗しても表示は継続 = 非ブロッキング）。
+      // ルーティングが参照するマスタキャッシュ（会社・業界・関係・PJ・ナレッジ等）は遅延ロードのため、
+      // 初回質問ではロード未完了で照合が空振りし「回答できません」になる競合があった
+      // （オペレーター報告 2026-07-18 #2 の実原因の一つ）。ロード完了を待ってから判定する
+      await Promise.allSettled(
+        ['companies', 'industries', 'relationTypes', 'companyRelations', 'projects', 'knowledge', 'members', 'departments']
+          .map(n => loadApiCollection(n)))
       const ans = resolveAnswer(text)
       if (currentSessionId.value) {
         void apiFetch(`/v1/chatbot/sessions/${currentSessionId.value}/messages`, {
@@ -418,6 +424,20 @@ export function useChatbot() {
     ]
     if (projects.length > 0) {
       lines.push(`関連プロジェクト: ${projects.map(p => `${p.name}（${PROJECT_STATUS_LABELS[p.status]}）`).join(' / ')}`)
+    }
+    // 会社間の関係（companyRelations は移行済みマスタ = API モードでも実データ。
+    // オペレーター報告 2026-07-18 #2: フォールバック応答にも関係性を含める）
+    const relTypes = tbl('relationTypes').value
+    const compRels = tbl('companyRelations').value
+      .filter(r => r.fromCompanyId === c.id || r.toCompanyId === c.id)
+      .slice(0, 5)
+    if (compRels.length > 0) {
+      const compNameOf = (id: string): string => tbl('companies').value.find(x => x.id === id)?.name ?? id
+      lines.push(`関係: ${compRels.map((r) => {
+        const other = r.fromCompanyId === c.id ? r.toCompanyId : r.fromCompanyId
+        const label = relTypes.find(t => t.id === r.relationTypeId)?.label ?? '関係'
+        return `${compNameOf(other)}（${label}）`
+      }).join(' / ')}`)
     }
     for (const k of ks) {
       const body = k.body.length > 60 ? `${k.body.slice(0, 60)}…` : k.body

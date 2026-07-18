@@ -1209,6 +1209,190 @@ describe('チャットボット応答', () => {
   })
 })
 
+describe('チャットボット文脈の供給網羅（オペレーター報告 2026-07-18 #2: 業界・関係性ほか）', () => {
+  const adminUser = { id: ADMIN, name: '管理 太郎', email: 'admin@example.com', role: 'admin' as const, title: '', avatar: '' }
+  const memberUser = { id: MEMBER, name: '一般 次郎', email: 'member@example.com', role: 'member' as const, title: '', avatar: '' }
+  let buildContext: (typeof import('../../src/routes/chatbot'))['buildContext']
+  let custId = ''
+  let contactId = ''
+  let ctxSelfId = ''
+
+  afterAll(async () => {
+    // 後続の売上 ETL テストは「有効な自社は 1 社」を前提にするため、本 describe の自社を後片付けする
+    await api('POST', `/v1/masters/companies/${ctxSelfId}/archive`, { as: ADMIN })
+  })
+
+  beforeAll(async () => {
+    ;({ buildContext } = await import('../../src/routes/chatbot'))
+    // 業界 → 顧客（業界 + 担当付き）→ 自社 → 関係種別 → 会社間/人の関係 → 外部リンク → 部署 を API で整備
+    const ind = await api('POST', '/v1/masters/industries', { as: ADMIN, body: { name: 'アパレル' } })
+    const indId = (ind.json.data as { id: string }).id
+    const self = await api('POST', '/v1/masters/companies', {
+      as: ADMIN, body: { kind: 'self', name: 'ツナグバ本社', fiscalStartMonth: 4 },
+    })
+    const selfId = (self.json.data as { id: string }).id
+    ctxSelfId = selfId
+    const cust = await api('POST', '/v1/masters/companies', {
+      as: ADMIN,
+      body: {
+        kind: 'customer', name: 'CTX商事', aliases: ['シーティーエックス'],
+        industryIds: [indId], primaryIndustryId: indId, ownerMemberId: ADMIN,
+        description: 'アパレル向け商社', location: '東京', size: '100名',
+      },
+    })
+    custId = (cust.json.data as { id: string }).id
+    const rtCompany = await api('POST', '/v1/masters/relation-types', {
+      as: ADMIN, body: { label: '販売代理店', appliesTo: 'company' },
+    })
+    await api('POST', '/v1/masters/company-relations', {
+      as: ADMIN,
+      body: {
+        fromCompanyId: selfId, toCompanyId: custId,
+        relationTypeId: (rtCompany.json.data as { id: string }).id, notes: '主要取引',
+      },
+    })
+    const contact = await api('POST', '/v1/masters/contacts', {
+      as: ADMIN, body: { companyId: custId, name: '文脈 花子', title: '購買部長', keyPerson: 3 },
+    })
+    contactId = (contact.json.data as { id: string }).id
+    const rtContact = await api('POST', '/v1/masters/relation-types', {
+      as: ADMIN, body: { label: '窓口', appliesTo: 'contact' },
+    })
+    // 端点は顧客担当者 + 自社メンバー（PR #29 仕様）
+    await api('POST', '/v1/masters/contact-relations', {
+      as: ADMIN,
+      body: { fromContactId: contactId, toContactId: MEMBER, relationTypeId: (rtContact.json.data as { id: string }).id },
+    })
+    await api('POST', '/v1/masters/external-links', {
+      as: ADMIN, body: { title: '勤怠システム', url: 'https://example.com/kintai', description: '打刻ポータル' },
+    })
+    await api('POST', '/v1/masters/projects', {
+      as: ADMIN, body: { name: '文脈PJ', companyId: custId, type: 'development', status: 'active' },
+    })
+    const dep = await api('POST', '/v1/masters/departments', { as: ADMIN, body: { name: '文脈開発部' } })
+    await api('PATCH', `/v1/masters/members/${MEMBER}`, {
+      as: ADMIN, body: { departmentId: (dep.json.data as { id: string }).id },
+    })
+  })
+
+  it('顧客の業界・自社担当・先方担当者・会社間の関係が文脈に載る（報告の主訴 ①②）', async () => {
+    const ctx = await buildContext(pool, adminUser, 'CTX商事の業界と関係性を教えて', [])
+    expect(ctx).toContain('顧客「CTX商事」')
+    expect(ctx).toContain('業界: アパレル（主）')
+    expect(ctx).toContain('自社担当: 管理 太郎')
+    expect(ctx).toContain('先方担当者: 文脈 花子（購買部長）')
+    expect(ctx).toContain('会社間の関係:')
+    expect(ctx).toContain('ツナグバ本社: 販売代理店（主要取引）')
+    expect(ctx).toContain('プロジェクト: 文脈PJ（active）')
+    // 別名（aliases）でも照合できる
+    expect(await buildContext(pool, adminUser, 'シーティーエックスの業界は？', [])).toContain('業界: アパレル（主）')
+  })
+
+  it('「自社」キーワードで自社ブロック（会計年度・関係）が載る', async () => {
+    const ctx = await buildContext(pool, adminUser, '自社について教えて', [])
+    expect(ctx).toContain('自社「ツナグバ本社」')
+    expect(ctx).toContain('会計年度: 4 月始まり')
+    expect(ctx).toContain('CTX商事: 販売代理店')
+  })
+
+  it('業界の逆引き（業界マスタ × 顧客）が載る。companies.name の deny では顧客名が剥がれる', async () => {
+    const ctx = await buildContext(pool, adminUser, '業界別の顧客を教えて', [])
+    expect(ctx).toContain('業界別の顧客')
+    expect(ctx).toContain('- アパレル: CTX商事')
+    // 表示項目 deny: 顧客名が剥がれ「該当顧客なし」になる（参照範囲は拡がらない）
+    const nameDeny = [{
+      id: 'pm-ctx1', subjectKind: 'role' as const, subjectId: 'member', resource: 'companies', field: 'name',
+      effect: 'deny' as const, active: true,
+    }]
+    const denied = await buildContext(pool, memberUser, '業界別の顧客を教えて', nameDeny)
+    expect(denied).toContain('- アパレル: 該当顧客なし')
+    expect(denied).not.toContain('CTX商事')
+  })
+
+  it('人の関係（顧客担当者 ⇄ 自社メンバー）が双方のブロックに載る', async () => {
+    const fromContact = await buildContext(pool, adminUser, '文脈 花子さんはどんな人？', [])
+    expect(fromContact).toContain('顧客担当者「文脈 花子」')
+    expect(fromContact).toContain('人の関係:')
+    expect(fromContact).toContain('一般 次郎（自社）: 窓口')
+    const fromMember = await buildContext(pool, adminUser, '一般 次郎さんの顧客との関係は？', [])
+    expect(fromMember).toContain('メンバー「一般 次郎」')
+    expect(fromMember).toContain('文脈 花子: 窓口')
+  })
+
+  it('休暇種別・外部リンク・部署（所属メンバー展開）が文脈に載る', async () => {
+    const leave = await buildContext(pool, memberUser, 'どんな休暇の種類がありますか？', [])
+    expect(leave).toContain('休暇種別')
+    expect(leave).toContain('- 有給休暇（法定）')
+
+    const links = await buildContext(pool, memberUser, '勤怠システムのリンクを教えて', [])
+    expect(links).toContain('外部リンク')
+    expect(links).toContain('- 勤怠システム: https://example.com/kintai')
+
+    const dept = await buildContext(pool, adminUser, '文脈開発部には誰がいますか？', [])
+    expect(dept).toContain('部署・組織')
+    expect(dept).toContain('「文脈開発部」の所属: 一般 次郎')
+  })
+
+  it('補助マスタの表示項目 deny も文脈へ反映される（PR #41 レビュー指摘: strip 網羅）', async () => {
+    const deny = (id: string, subjectId: string, resource: string, field: string) => [{
+      id, subjectKind: 'role' as const, subjectId, resource, field, effect: 'deny' as const, active: true,
+    }]
+    // companies.fiscalStartMonth: 自社の会計年度が載らない（ブロック自体は残る）
+    const noFiscal = await buildContext(pool, adminUser, '自社について教えて',
+      deny('pm-aux1', 'admin', 'companies', 'fiscalStartMonth'))
+    expect(noFiscal).toContain('自社「ツナグバ本社」')
+    expect(noFiscal).not.toContain('会計年度')
+    // companies.primaryIndustryId: （主）マークが消える（業界名自体は載る）
+    const noPrimary = await buildContext(pool, adminUser, 'CTX商事の業界は？',
+      deny('pm-aux2', 'admin', 'companies', 'primaryIndustryId'))
+    expect(noPrimary).toContain('業界: アパレル')
+    expect(noPrimary).not.toContain('アパレル（主）')
+    // industries.name: 会社ブロックの業界行・業界逆引きブロックごと消える（description 等は残る）
+    const noInd = await buildContext(pool, adminUser, 'CTX商事の業界別の状況を教えて',
+      deny('pm-aux3', 'admin', 'industries', 'name'))
+    expect(noInd).toContain('顧客「CTX商事」')
+    expect(noInd).not.toContain('業界: アパレル')
+    expect(noInd).not.toContain('業界別の顧客')
+    // relation-types.label: 関係ラベルが消える（相手名は残る）
+    const noLabel = await buildContext(pool, adminUser, 'CTX商事との関係を教えて',
+      deny('pm-aux4', 'admin', 'relation-types', 'label'))
+    expect(noLabel).toContain('会社間の関係:')
+    expect(noLabel).toContain('ツナグバ本社')
+    expect(noLabel).not.toContain('販売代理店')
+    // company-relations.notes: 関係メモが消える（ラベルは残る）
+    const noNotes = await buildContext(pool, adminUser, 'CTX商事との関係を教えて',
+      deny('pm-aux5', 'admin', 'company-relations', 'notes'))
+    expect(noNotes).toContain('ツナグバ本社: 販売代理店')
+    expect(noNotes).not.toContain('主要取引')
+    // leave-types.name: 種別を特定できないため休暇種別ブロックごと消える（本人の有給は残る）
+    const noLeave = await buildContext(pool, memberUser, 'どんな休暇の種類がありますか？',
+      deny('pm-aux6', 'member', 'leave-types', 'name'))
+    expect(noLeave).not.toContain('## 休暇種別')
+    // external-links.url: タイトルのみ表示に縮退する
+    const noUrl = await buildContext(pool, memberUser, '勤怠システムのリンクを教えて',
+      deny('pm-aux7', 'member', 'external-links', 'url'))
+    expect(noUrl).toContain('- 勤怠システム')
+    expect(noUrl).not.toContain('https://example.com/kintai')
+    // departments.name: 部署ブロックごと消え、メンバーブロックの部署も未所属になる
+    const noDept = await buildContext(pool, adminUser, '文脈開発部の一般 次郎さんについて教えて',
+      deny('pm-aux8', 'admin', 'departments', 'name'))
+    expect(noDept).not.toContain('部署・組織')
+    expect(noDept).toContain('部署 未所属')
+    // projects.name: 会社ブロックの関連プロジェクト名が消え「なし」へ縮退（一覧ブロックと同一パターン）
+    const noPj = await buildContext(pool, adminUser, 'CTX商事について教えて',
+      deny('pm-aux9', 'admin', 'projects', 'name'))
+    expect(noPj).toContain('顧客「CTX商事」')
+    expect(noPj).not.toContain('文脈PJ')
+    expect(noPj).toContain('プロジェクト: なし')
+    // decision-themes.category deny: 種別括弧が既定値（PJ）で捏造表示されず省略される
+    const noCat = await buildContext(pool, memberUser, '意思決定のテーマを教えて',
+      deny('pm-aux10', 'member', 'decision-themes', 'category'))
+    expect(noCat).toContain('意思決定支援')
+    expect(noCat).not.toContain('(PJ)')
+    expect(noCat).not.toContain('(事業)')
+  })
+})
+
 describe('AI カンパニー（F-08）', () => {
   let roleId = ''
   let empId = ''

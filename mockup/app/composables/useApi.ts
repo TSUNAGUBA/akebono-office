@@ -196,13 +196,19 @@ const stores = new Map<string, Ref<unknown[]>>()
 const loadedCollections = new Set<string>()
 const inflight = new Map<string, Promise<void>>()
 
-/** コレクションのリアクティブキャッシュ（初回アクセスで遅延ロード） */
-export function apiCollection<T>(name: string): Ref<T[]> {
+/** コレクションストアの取得（なければ作成）。apiCollection / loadApiCollection の両入口で共有する */
+function ensureStore(name: string): Ref<unknown[]> {
   let store = stores.get(name)
   if (!store) {
     store = ref<unknown[]>([])
     stores.set(name, store)
   }
+  return store
+}
+
+/** コレクションのリアクティブキャッシュ（初回アクセスで遅延ロード） */
+export function apiCollection<T>(name: string): Ref<T[]> {
+  const store = ensureStore(name)
   void loadApiCollection(name)
   return store as Ref<T[]>
 }
@@ -214,8 +220,10 @@ export async function loadApiCollection(name: string, force = false): Promise<vo
       const rows = name === 'auditLogs'
         ? await apiFetch<unknown[]>('/v1/configs/audit-logs', { query: { limit: '200' } })
         : await apiFetch<unknown[]>(`/v1/masters/${MIGRATED_MASTERS[name]}`, { query: { includeInactive: '1' } })
-      const store = stores.get(name)
-      if (store) store.value = rows
+      // ストア未作成でも必ず作成して格納する。従来は tbl() 未アクセスのコレクションを先に
+      // ロードすると結果が捨てられ「ロード済み・中身は空」で固定される実バグがあった
+      // （オペレーター報告 2026-07-18 #2「会社について答えられない」の根本原因）
+      ensureStore(name).value = rows
       loadedCollections.add(name)
     } catch {
       // 未認証・権限なし・ネットワーク断は空のまま（ログイン後に resetApiData() で再取得）
