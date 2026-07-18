@@ -42,6 +42,12 @@ function loadTeamRange(from: string, to: string, force = false): Promise<void> {
   }, force)
 }
 
+function loadAllMonth(month: string, force = false): Promise<void> {
+  return apiLoadOnce(`rep:all:${month}`, async () => {
+    mergeById(apiDaily, await apiFetch<DailyReport[]>('/v1/reports/daily', { query: { scope: 'all', month } }))
+  }, force)
+}
+
 function loadWeekly(force = false): Promise<void> {
   return apiLoadOnce('rep:weekly', async () => {
     mergeById(apiWeekly, await apiFetch<WeeklyReport[]>('/v1/reports/weekly'))
@@ -194,6 +200,19 @@ export function useReports() {
         || (b.submittedAt ?? '').localeCompare(a.submittedAt ?? ''))
   }
 
+  /**
+   * 全員の日報（バッチ5e: 全メンバーが相互参照できる提出済み日報の月次一覧）。
+   * 下書きは本人以外に見せない（API も scope=all は提出済みのみを返す）
+   */
+  function allSubmitted(month: string): DailyReport[] {
+    if (isApi && /^\d{4}-\d{2}$/.test(month)) void loadAllMonth(month)
+    return dailyReports.value
+      .filter(r => r.status === 'submitted' && r.date.startsWith(month))
+      .sort((a, b) =>
+        b.date.localeCompare(a.date)
+        || (b.submittedAt ?? '').localeCompare(a.submittedAt ?? ''))
+  }
+
   // ---------- 工数乖離チェック ----------
 
   /**
@@ -222,9 +241,10 @@ export function useReports() {
 
   function cleanEntries(entries: ReportEntry[]): ReportEntry[] {
     return entries
-      .filter(e => e.projectId || e.task.trim())
+      .filter(e => (e.theme ?? '').trim() || e.projectId || e.task.trim())
       .map(e => ({
-        projectId: e.projectId,
+        theme: [...(e.theme ?? '').trim()].slice(0, 100).join(''),
+        projectId: e.projectId ?? '',
         task: e.task.trim(),
         hours: Math.max(0, Math.round((Number.isFinite(e.hours) ? e.hours : 0) * 4) / 4),
         progress: Math.min(100, Math.max(0, Math.round(Number.isFinite(e.progress) ? e.progress : 0))),
@@ -245,8 +265,9 @@ export function useReports() {
       if (entries.length === 0) {
         return err('AKO-GEN-001', '作業エントリを 1 行以上入力してください')
       }
-      if (entries.some(e => !e.projectId || !e.task)) {
-        return err('AKO-GEN-001', '各エントリのプロジェクトと作業内容を入力してください')
+      // theme（業務テーマ）が正。旧データ編集の projectId のみも許容する（原則7）
+      if (entries.some(e => !(e.theme || e.projectId) || !e.task)) {
+        return err('AKO-GEN-001', '各エントリの業務テーマと作業内容を入力してください')
       }
     }
     if (isApi) {
@@ -505,6 +526,7 @@ export function useReports() {
     teamMembers,
     cellStatus,
     timeline,
+    allSubmitted,
     hoursGapMinutes,
     gapOf,
     saveDraft,

@@ -41,6 +41,8 @@ export interface Member {
    */
   attendanceRuleId: string | null
   birthDate: string
+  /** プロフィール画像（小さな data:image/... URI。空/未設定 = イニシャル表示。本人が /profile で登録） */
+  avatar?: string
   active: boolean
   custom: CustomValues
 }
@@ -479,7 +481,13 @@ export interface AppConfigItem {
 export type ReportInputMode = 'form' | 'assist' | 'both'
 
 export interface ReportEntry {
-  projectId: string
+  /**
+   * 業務テーマ（自由入力。オペレーター指示 2026-07-17: 選択式プロジェクトを自由入力へ変更）。
+   * 旧データは theme 未設定 + projectId のみ。表示・編集時はプロジェクト名へフォールバックする（原則7）
+   */
+  theme?: string
+  /** 旧形式（選択式プロジェクト）。新規エントリでは未使用だが既存データの表示のため保持 */
+  projectId?: string
   task: string
   hours: number // 0.25 刻み
   progress: number // 0-100

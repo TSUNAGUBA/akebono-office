@@ -61,6 +61,15 @@ export function toQuarterHours(minutes: number): number {
   return Math.max(0.25, Math.round(minutes / 15) / 4)
 }
 
+/** 業務テーマ（自由入力）の生成: 推定プロジェクト名 → なければタイトル先頭の名詞句相当（先頭 20 字） */
+function themeOf(ctx: DraftContext, projectId: string | null, title: string): string {
+  if (projectId) {
+    const p = ctx.projects.find(x => x.id === projectId)
+    if (p) return p.name
+  }
+  return [...title].slice(0, 20).join('')
+}
+
 /** 日報ドラフトの決定的生成（mock useReportAssist.generateDraft と同一ロジック） */
 export function heuristicReportDraft(ctx: DraftContext, date: string): ReportDraft {
   const { events, logs, dayPlans } = ctx
@@ -77,8 +86,9 @@ export function heuristicReportDraft(ctx: DraftContext, date: string): ReportDra
       : [...logs].reverse().find(l => l.kind === 'qa' && l.calendarEventId === e.id)?.answer ?? ''
     const negative = NEGATIVE_HINTS.some(h => ans.includes(h))
     const done = plan?.status === 'done' || /完了|予定どおり/.test(ans)
-    if (pid && !e.projectId) basis.push(`「${e.title}」→ タイトルからプロジェクトを推定`)
+    if (pid && !e.projectId) basis.push(`「${e.title}」→ タイトルから業務テーマを推定`)
     return {
+      theme: themeOf(ctx, pid, e.title),
       projectId: pid ?? '',
       task: ans && !ans.startsWith('特になし') ? `${e.title}（${ans.slice(0, 40)}）` : e.title,
       hours: toQuarterHours(Math.max(0, hhmmToMin(e.to) - hhmmToMin(e.from))),
@@ -90,8 +100,10 @@ export function heuristicReportDraft(ctx: DraftContext, date: string): ReportDra
   // 予定に紐付かない完了タスク（手動計画）もエントリへ（工数は既定 1h → 確認・修正で調整）
   for (const p of donePlans.filter(x => !x.calendarEventId)) {
     const negative = NEGATIVE_HINTS.some(h => p.outcome.includes(h))
+    const pid = inferProjectIdFromText(ctx, p.title)
     entries.push({
-      projectId: inferProjectIdFromText(ctx, p.title) ?? '',
+      theme: themeOf(ctx, pid, p.title),
+      projectId: pid ?? '',
       task: `${p.title}（${p.outcome.slice(0, 40)}）`,
       hours: 1,
       progress: negative ? 50 : 100,
@@ -140,7 +152,7 @@ export function heuristicReportDraft(ctx: DraftContext, date: string): ReportDra
   }
 
   return {
-    entries: entries.length > 0 ? entries : [{ projectId: '', task: '', hours: 1, progress: 0 }],
+    entries: entries.length > 0 ? entries : [{ theme: '', projectId: '', task: '', hours: 1, progress: 0 }],
     reflection: reflectionParts.join('\n'),
     issues,
     tomorrow,

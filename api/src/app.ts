@@ -7,6 +7,7 @@ import { cors } from 'hono/cors'
 import type pg from 'pg'
 import { authMiddleware } from './auth'
 import type { Env } from './env'
+import { audit } from './lib/audit'
 import { errorResponse } from './lib/errors'
 import { featureGuard } from './lib/permissions'
 import { attendanceRoutes } from './routes/attendance'
@@ -69,6 +70,28 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
 
   // 認証済みユーザー自身の情報（フロントの起動時に呼ぶ）
   app.get('/v1/me', (c) => c.json({ data: c.get('user') }))
+
+  // プロフィール更新（本人のみ。バッチ5e: アイコン画像の登録・削除）
+  app.put('/v1/me/profile', async (c) => {
+    const user = c.get('user')
+    const body = await c.req.json().catch(() => ({})) as { avatar?: unknown }
+    if (typeof body.avatar !== 'string') {
+      throw err('AKO-GEN-001', 'avatar を指定してください（空文字 = 画像を削除）', 400)
+    }
+    const avatar = body.avatar
+    if (avatar !== '' && !avatar.startsWith('data:image/')) {
+      throw err('AKO-GEN-001', 'avatar は data:image/... 形式で指定してください', 400)
+    }
+    if (avatar.length > 300_000) {
+      throw err('AKO-GEN-001', '画像が大きすぎます（縮小して再度お試しください）', 400)
+    }
+    await pool.query('UPDATE members SET avatar = $2, updated_at = now() WHERE id = $1', [user.id, avatar])
+    await audit(pool, {
+      actorId: user.id, action: 'update', entity: 'members', entityId: user.id,
+      detail: avatar ? 'プロフィール画像を更新' : 'プロフィール画像を削除',
+    })
+    return c.json({ data: { ...user, avatar } })
+  })
 
   app.route('/v1/attendance', attendanceRoutes(pool))
   app.route('/v1/leave', leaveRoutes(pool))

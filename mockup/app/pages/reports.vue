@@ -1,7 +1,8 @@
 <script setup lang="ts">
 /**
  * 日報・週報（F-06）
- * タブ: 自分の日報 / チーム（管理者のみ・提出状況マトリクス+タイムライン） / 週報
+ * タブ: 自分の日報 / 全員の日報（提出済みの月次一覧・全メンバー参照可） /
+ *       チーム（管理者のみ・提出状況マトリクス+タイムライン） / 週報
  */
 import {
   BellRing, Check, ChevronLeft, ChevronRight, Minus, Pencil, Plus, Send, Sparkles, Trash2,
@@ -9,7 +10,7 @@ import {
 import type { DailyReport, ReportEntry, WeeklyReport } from '~/types/domain'
 import { REPORT_STATUS_LABELS } from '~/composables/useReports'
 import { addDays, fmtDate, fmtDateLong, fmtMinutes, fmtTime, weekdayOf } from '~/utils/format'
-import type { TabItem } from '~/types/ui'
+import type { TabItem, TableColumn } from '~/types/ui'
 
 const route = useRoute()
 const { currentUser, currentUserId, isAdmin } = useCurrentUser()
@@ -22,9 +23,12 @@ const projects = tbl('projects')
 
 // ---------- タブ ----------
 
-const TAB_KEYS = ['mine', 'team', 'weekly'] as const
+const TAB_KEYS = ['mine', 'all', 'team', 'weekly'] as const
 const tabs = computed<TabItem[]>(() => {
-  const t: TabItem[] = [{ key: 'mine', label: '自分の日報' }]
+  const t: TabItem[] = [
+    { key: 'mine', label: '自分の日報' },
+    { key: 'all', label: '全員の日報' },
+  ]
   if (isAdmin.value) t.push({ key: 'team', label: 'チーム' })
   t.push({ key: 'weekly', label: '週報' })
   return t
@@ -47,6 +51,11 @@ function projectName(id: string): string {
   return projects.value.find(p => p.id === id)?.name ?? id
 }
 
+/** エントリの業務テーマ表示（旧データは theme 未設定 → プロジェクト名へフォールバック。原則7） */
+function entryTheme(e: ReportEntry): string {
+  return e.theme || (e.projectId ? projectName(e.projectId) : '')
+}
+
 function totalHoursOf(r: DailyReport): number {
   return r.entries.reduce((s, e) => s + e.hours, 0)
 }
@@ -54,11 +63,6 @@ function totalHoursOf(r: DailyReport): number {
 function gapText(gap: number): string {
   return gap > 0 ? `+${fmtMinutes(gap)}` : fmtMinutes(gap)
 }
-
-const activeProjects = computed(() =>
-  projects.value
-    .filter(p => p.active && p.status === 'active')
-    .map(p => ({ value: p.id, label: p.name })))
 
 // ---------- 自分の日報タブ ----------
 
@@ -71,7 +75,12 @@ const editIssues = ref('')
 const editTomorrow = ref('')
 
 function blankEntry(): ReportEntry {
-  return { projectId: '', task: '', hours: 1, progress: 0 }
+  return { theme: '', projectId: '', task: '', hours: 1, progress: 0 }
+}
+
+/** エディタへ読み込む形へ整える（旧データの theme をプロジェクト名で補完してから編集させる） */
+function toEditable(e: ReportEntry): ReportEntry {
+  return { ...e, theme: entryTheme(e) }
 }
 
 /** 提出済み日報の編集モード（オペレーター指示: 提出済みも本人が編集可。提出状態は維持） */
@@ -81,7 +90,7 @@ function loadEditor(): void {
   if (editingSubmitted.value) return // 編集中の内容をデータ再取得で消さない
   const r = myReport.value
   if (r && r.status === 'draft') {
-    editEntries.value = r.entries.length > 0 ? r.entries.map(e => ({ ...e })) : [blankEntry()]
+    editEntries.value = r.entries.length > 0 ? r.entries.map(toEditable) : [blankEntry()]
     editReflection.value = r.reflection
     editIssues.value = r.issues
     editTomorrow.value = r.tomorrow
@@ -103,7 +112,7 @@ watch([selDate, currentUserId, myReport], loadEditor, { immediate: true })
 function startEditSubmitted(): void {
   const r = myReport.value
   if (!r || r.status !== 'submitted') return
-  editEntries.value = r.entries.length > 0 ? r.entries.map(e => ({ ...e })) : [blankEntry()]
+  editEntries.value = r.entries.length > 0 ? r.entries.map(toEditable) : [blankEntry()]
   editReflection.value = r.reflection
   editIssues.value = r.issues
   editTomorrow.value = r.tomorrow
@@ -260,7 +269,7 @@ async function onGenerateDraft(): Promise<void> {
     if (!okAsk) return
   }
   const d = await assist.generateDraft(currentUserId.value, selDate.value)
-  editEntries.value = d.entries.map(e => ({ ...e }))
+  editEntries.value = d.entries.map(toEditable)
   editReflection.value = d.reflection
   editIssues.value = d.issues
   editTomorrow.value = d.tomorrow
@@ -345,6 +354,40 @@ async function remindAll(): Promise<void> {
   }
 }
 
+// ---------- 全員の日報タブ（バッチ5e: 提出済みの月次一覧を全メンバーが参照可） ----------
+
+const allMonth = ref(todayJst().slice(0, 7))
+const allReports = computed(() => reports.allSubmitted(allMonth.value))
+
+const ALL_COLUMNS: TableColumn[] = [
+  { key: 'dateLabel', label: '日付', primary: true, width: '110px' },
+  { key: 'author', label: '名前', primary: true, width: '160px' },
+  { key: 'summary', label: 'サマリー', primary: true },
+  { key: 'hours', label: '工数', align: 'right', width: '70px' },
+]
+
+/** 一覧のサマリー: 先頭エントリの業務テーマ + 作業内容（複数行は件数を添える） */
+function summaryOf(r: DailyReport): string {
+  const first = r.entries[0]
+  if (!first) return '—'
+  const head = [entryTheme(first), first.task].filter(Boolean).join(': ')
+  return r.entries.length > 1 ? `${head}（他 ${r.entries.length - 1} 件）` : (head || '—')
+}
+
+const allRows = computed(() =>
+  allReports.value.map(r => ({
+    id: r.id,
+    dateLabel: dayLabel(r.date),
+    author: reports.authorOf(r).name,
+    summary: summaryOf(r),
+    hours: `${totalHoursOf(r)}h`,
+    issues: r.issues,
+  })) as unknown as Record<string, unknown>[])
+
+function openAllRow(row: Record<string, unknown>): void {
+  drawerReportId.value = String(row.id)
+}
+
 // ---------- 週報タブ ----------
 
 const thisWeekStart = computed(() => reports.weekStartOf(todayJst()))
@@ -415,15 +458,20 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
 
     <!-- ================= 自分の日報 ================= -->
     <div v-if="tab === 'mine'" class="grid gap-3">
+      <!-- 日付ナビ: 上段 = 前日 / 今日 / 翌日、下段 = 選択中の日付（直接選択可） -->
       <UiFilterBar>
-        <button type="button" class="btn btn-sm" aria-label="前日へ" @click="selDate = addDays(selDate, -1)">
-          <ChevronLeft class="h-4 w-4" aria-hidden="true" />
-        </button>
-        <input v-model="selDate" type="date" class="input w-auto" aria-label="対象日">
-        <button type="button" class="btn btn-sm" aria-label="翌日へ" @click="selDate = addDays(selDate, 1)">
-          <ChevronRight class="h-4 w-4" aria-hidden="true" />
-        </button>
-        <button type="button" class="btn btn-sm" @click="selDate = todayJst()">今日</button>
+        <div class="grid justify-items-start gap-1.5">
+          <div class="flex items-center gap-1.5">
+            <button type="button" class="btn btn-sm" aria-label="前日へ" @click="selDate = addDays(selDate, -1)">
+              <ChevronLeft class="h-4 w-4" aria-hidden="true" />
+            </button>
+            <button type="button" class="btn btn-sm" @click="selDate = todayJst()">今日</button>
+            <button type="button" class="btn btn-sm" aria-label="翌日へ" @click="selDate = addDays(selDate, 1)">
+              <ChevronRight class="h-4 w-4" aria-hidden="true" />
+            </button>
+          </div>
+          <input v-model="selDate" type="date" class="input w-auto" aria-label="対象日（直接選択可）">
+        </div>
         <template #trailing>
           <UiStatusBadge :tone="mineStatus.tone" :label="mineStatus.label" dot />
         </template>
@@ -475,11 +523,11 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
           <div class="overflow-x-auto scroll-slim">
             <table class="tbl">
               <thead>
-                <tr><th>プロジェクト</th><th>作業内容</th><th class="!text-right">工数</th><th class="!text-right">進捗</th></tr>
+                <tr><th>業務テーマ</th><th>作業内容</th><th class="!text-right">工数</th><th class="!text-right">進捗</th></tr>
               </thead>
               <tbody>
                 <tr v-for="(e, i) in myReport.entries" :key="i">
-                  <td class="whitespace-nowrap">{{ projectName(e.projectId) }}</td>
+                  <td class="whitespace-nowrap">{{ entryTheme(e) || '—' }}</td>
                   <td>{{ e.task }}</td>
                   <td class="num text-right">{{ e.hours }}h</td>
                   <td class="num text-right">{{ e.progress }}%</td>
@@ -577,7 +625,7 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
       <div v-if="(!isSubmittedDay && showEditor) || editingSubmitted" ref="editorWrap">
       <UiSectionCard
         :title="editingSubmitted ? `${fmtDateLong(selDate)} の日報を編集（提出済み）` : `${fmtDateLong(selDate)} の日報を書く`"
-        :description="editingSubmitted ? '提出済みの日報を修正します。保存しても提出状態と提出時刻は変わりません（編集は監査ログに記録されます）' : 'プロジェクト別に作業内容と工数（0.25h 刻み）を記録します'"
+        :description="editingSubmitted ? '提出済みの日報を修正します。保存しても提出状態と提出時刻は変わりません（編集は監査ログに記録されます）' : '業務テーマごとに作業内容と工数（0.25h 刻み）を記録します'"
       >
         <div class="grid gap-3">
           <!-- AI ドラフトバナー（生成根拠つき） -->
@@ -597,19 +645,15 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
             </template>
           </div>
 
+          <!-- PC は「業務テーマ / 作業内容 / 工数 / 進捗」を 1 行に収める（オペレーター指示） -->
           <div v-for="(e, i) in editEntries" :key="i" class="rounded-lg border border-line p-2.5">
-            <div class="grid gap-2 md:grid-cols-[minmax(0,1.1fr)_minmax(0,1.6fr)]">
-              <UiFormField label="プロジェクト" required>
-                <select v-model="e.projectId" class="select" :aria-label="`エントリ${i + 1} プロジェクト`">
-                  <option value="" disabled>選択してください</option>
-                  <option v-for="p in activeProjects" :key="p.value" :value="p.value">{{ p.label }}</option>
-                </select>
+            <div class="grid items-end gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_auto_auto_auto]">
+              <UiFormField label="業務テーマ" required>
+                <input v-model="e.theme" type="text" class="input" placeholder="例）○○案件・社内改善・採用" :aria-label="`エントリ${i + 1} 業務テーマ`">
               </UiFormField>
               <UiFormField label="作業内容" required>
                 <input v-model="e.task" type="text" class="input" placeholder="実施した作業" :aria-label="`エントリ${i + 1} 作業内容`">
               </UiFormField>
-            </div>
-            <div class="mt-2 flex flex-wrap items-end gap-x-4 gap-y-2">
               <UiFormField label="工数 (h)">
                 <div class="flex items-center gap-1">
                   <button type="button" class="btn btn-sm" aria-label="工数を 0.25h 減らす" @click="stepHours(i, -0.25)">
@@ -624,9 +668,9 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
               <UiFormField label="進捗 (%)">
                 <input v-model.number="e.progress" type="number" min="0" max="100" step="5" class="input num w-20 text-right" :aria-label="`エントリ${i + 1} 進捗`">
               </UiFormField>
-              <button type="button" class="btn btn-sm ml-auto text-crit" @click="removeRow(i)">
+              <button type="button" class="btn btn-sm mb-0.5 justify-self-start text-crit md:justify-self-auto" aria-label="行を削除" @click="removeRow(i)">
                 <Trash2 class="h-3.5 w-3.5" aria-hidden="true" />
-                行を削除
+                <span class="md:hidden">行を削除</span>
               </button>
             </div>
           </div>
@@ -676,6 +720,38 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
         </div>
       </UiSectionCard>
       </div>
+    </div>
+
+    <!-- ================= 全員の日報 ================= -->
+    <div v-else-if="tab === 'all'" class="grid gap-3">
+      <UiFilterBar>
+        <input v-model="allMonth" type="month" class="input w-auto" aria-label="対象月">
+        <template #trailing>
+          <span class="num text-xs text-muted">{{ allReports.length }} 件</span>
+        </template>
+      </UiFilterBar>
+
+      <UiSectionCard
+        title="全員の日報"
+        description="全メンバー・AI 社員の提出済み日報（新しい順）。行（モバイルはカード）を押すと詳細が開きます"
+        flush
+      >
+        <UiDataTable
+          :columns="ALL_COLUMNS"
+          :rows="allRows"
+          clickable
+          empty-title="この月の提出済み日報がありません"
+          empty-hint="「自分の日報」から提出すると、ここに表示されます"
+          @row-click="openAllRow"
+        >
+          <template #cell-summary="{ row }">
+            <span class="flex items-center gap-1.5">
+              <span class="line-clamp-1">{{ row.summary }}</span>
+              <UiStatusBadge v-if="row.issues" tone="warn" label="課題" />
+            </span>
+          </template>
+        </UiDataTable>
+      </UiSectionCard>
     </div>
 
     <!-- ================= チーム（管理者） ================= -->
@@ -847,11 +923,11 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
         <div class="overflow-x-auto scroll-slim">
           <table class="tbl">
             <thead>
-              <tr><th>プロジェクト</th><th>作業内容</th><th class="!text-right">工数</th><th class="!text-right">進捗</th></tr>
+              <tr><th>業務テーマ</th><th>作業内容</th><th class="!text-right">工数</th><th class="!text-right">進捗</th></tr>
             </thead>
             <tbody>
               <tr v-for="(e, i) in drawerReport.entries" :key="i">
-                <td class="whitespace-nowrap">{{ projectName(e.projectId) }}</td>
+                <td class="whitespace-nowrap">{{ entryTheme(e) || '—' }}</td>
                 <td>{{ e.task }}</td>
                 <td class="num text-right">{{ e.hours }}h</td>
                 <td class="num text-right">{{ e.progress }}%</td>
