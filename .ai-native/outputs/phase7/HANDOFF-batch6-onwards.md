@@ -28,6 +28,11 @@
   AI アシスタント・カレンダー・チャットボット応答・意思決定支援
 - バッチ5a〜5e: 顧客関係マスタ分割 / セッション管理 / 権限制御基盤 F-16 / チャットボット全 DB 参照 /
   アカウント機能 + 日報 UX 改善
+- オペレーター報告対応（2026-07-18）: マルチターン改善（PR #40）/ チャットボット DB 供給網羅 +
+  キャッシュ実バグ 2 件（PR #41。implementation-status §17）/ 一覧順序の決定化 = CI フレーク閉塞（PR #42）/
+  **営業日・祝日基盤**（public_holidays + attendance_rules.workingWeekdays/holidayAware +
+  shared/domain/business-day + 内閣府 CSV 取込 + /masters/holidays 画面。implementation-status §18。
+  **本番リリース後は管理者が /masters/holidays の「公式データから更新」を 1 回実行して祝日を初期投入する**）
 - **バッチ6a（PR #35・独立レビュー 2 巡でブロッキング指摘ゼロに収束・オペレーターのマージ待ち）:
   AI カンパニー F-08**
   - migration は 0015（表定義）+ 0016（部分一意索引 + AI ロール/社員シード）

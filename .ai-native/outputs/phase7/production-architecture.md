@@ -59,7 +59,7 @@ flowchart LR
 ## 2.5 フロント接続方式（バッチ2a で確立）
 
 - **デュアルモード:** `NUXT_PUBLIC_API_BASE` 未設定 = 完全モック動作（localStorage。デモ配信の下位互換）。
-  設定時 = API モード。移行済みコレクション（マスタ 15 種 + 監査ログ + 設定）は `useMockDb.tbl()` が
+  設定時 = API モード。移行済みコレクション（マスタ 21 種 = MIGRATED_MASTERS + 監査ログ + 設定）は `useMockDb.tbl()` が
   **API ハイドレーションキャッシュ**を返すため、全画面の参照が一貫して API データになる（読み取りは中央で切替）
 - **書込:** `useMasterCrudAsync`（マスタ）/ `useAppSettings`（設定）/ `useReports`（日報。バッチ2b-1）が API を呼び、
   レスポンスでキャッシュを更新（SoT 書込 → キャッシュ反映の順序 = 原則6）。バリデーション・ガードはサーバーが担い、

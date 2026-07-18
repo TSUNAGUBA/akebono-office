@@ -13,7 +13,7 @@ function punch(over: Partial<PunchRecord>): PunchRecord {
 const rule: AttendanceRule = {
   id: 'ar-standard', name: '標準', appliesTo: ['employee'], defaultFor: ['employee'],
   workStart: '09:00', workEnd: '18:00', breakMinutes: 60, flex: null,
-  closingDay: 31, legalHolidayWeekday: 0, active: true,
+  closingDay: 31, legalHolidayWeekday: 0, workingWeekdays: [1, 2, 3, 4, 5], holidayAware: true, active: true,
 }
 
 describe('punchState / PUNCH_ALLOWED', () => {

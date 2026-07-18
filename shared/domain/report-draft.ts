@@ -5,7 +5,7 @@
  * 材料 = カレンダー予定（未連携なら空）+ ヒアリングログ + タスク計画（F-14）。
  * 生成結果は保存しない（フォームへ流し込み → 利用者が確認・修正して既存の提出フローへ）
  */
-import { addDays, hhmmToMin, weekdayOf } from './jst'
+import { hhmmToMin } from './jst'
 import type { CalendarEvent, HearingLog, ReportEntry, TaskPlan } from './types'
 
 export interface ReportDraft {
@@ -160,9 +160,5 @@ export function heuristicReportDraft(ctx: DraftContext, date: string): ReportDra
   }
 }
 
-/** 翌営業日（土日スキップ）。呼び出し側が nextDayPlans を集めるためのヘルパー */
-export function nextBusinessDay(date: string): string {
-  let next = addDays(date, 1)
-  while (weekdayOf(next) === 0 || weekdayOf(next) === 6) next = addDays(next, 1)
-  return next
-}
+// 翌営業日の計算は shared/domain/business-day.ts の nextWorkingDay へ移設
+// （勤怠ルールの営業曜日 + 祝日マスタ対応。オペレーター報告 2026-07-18 #4）

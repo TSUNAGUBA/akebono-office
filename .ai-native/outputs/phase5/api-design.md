@@ -138,6 +138,7 @@ generateDraft(memberId, date): ReportDraft           // 保存しない（フォ
 | usePermissions | ルール = `/v1/masters/permission-rules`（汎用マスタ）。判定は shared/domain/permissions.ts をフロント/API で共有（個人 > 役職 > ロール・同一レイヤは deny 優先・未設定は allow）。機能ガード = API middleware（/v1/masters・/v1/configs・/v1/notifications・/v1/escalations はデータ面のため対象外）+ フロントのメニュー/ページ非表示。表示項目レベルはマスタ GET 応答からサーバーが剥がす |
 | useAiCompany | `GET/POST /v1/ai-company/tasks`（+ `/:id/approve|progress|block|cancel` = FOR UPDATE の状態機械・活動ログ・完了通知・AI 社員 status 同期）・`GET /v1/ai-company/logs`・`POST /v1/ai-company/daily-reports`（冪等生成 → daily_reports author_kind='ai'）・`POST /v1/ai-company/workload-check`（停滞/過負荷 → エスカレーション）・ロール/AI 社員 = `/v1/masters/ai-roles`・`ai-employees`（**実装・フロント接続済み = バッチ6a**。分解 = Vertex AI 構造化出力 → 失敗時 shared/domain/ai-tasks。機能ガード 'ai-company'） |
 | プロフィール（/profile） | `GET /v1/me`（avatar 含む）・`PUT /v1/me/profile`（本人のアイコン画像 = data:image/png・jpeg・webp の base64 のみ許可（SVG 等は拒否 = スクリプト混入防止）・300KB 上限・空文字で削除・監査ログ記録。バッチ5e）。パスワード変更は Firebase Auth（reauthenticate → updatePassword）でクライアント完結・Google SSO アカウントは対象外。ログアウト = Firebase signOut + /v1/me キャッシュ破棄 |
+| useBusinessDay | 祝日 = `/v1/masters/holidays`（汎用マスタ。date 一意・物理削除可・日付順）+ `POST /v1/holidays/import`（管理者のみ。内閣府「国民の祝日」CSV = Shift_JIS を取得して date 一意で upsert = 冪等・再取込可。csvText / csvBase64 のオフライン取込にも対応 = 公式サイト障害時の手動アップロード経路）。翌営業日計算は shared/domain/business-day（workingWeekdays / holidayAware = attendance_rules で勤務体系ごとに制御・祝日 Set を注入）をフロント/API（/v1/assist/report-draft の「明日の予定」）で共有（**オペレーター報告 2026-07-18 #4**） |
 | 参照系 computed | `GET` + クライアントキャッシュ（表示射影はフロント純粋関数のまま維持） |
 
 ## 4. エラーコード起番（台帳: モックアップ + API サービス共通）
@@ -220,6 +221,8 @@ generateDraft(memberId, date): ReportDraft           // 保存しない（フォ
 | AKO-SAL-002 | 顧客(会社)が未登録 | ✅ |
 | AKO-SAL-003 | 取込件数の範囲外（rows は 1〜500 件） | ✅ |
 | AKO-AKB-001 | AKEBONO 要望の本文未入力 | ✅ |
+| AKO-HOL-001 | 祝日の公式 CSV 取得失敗（ネットワーク・サイト側障害。CSV アップロードで代替可） | ✅ |
+| AKO-HOL-002 | 祝日 CSV の解析結果が 0 件（形式不正） | ✅ |
 | AKO-AIC-001 | AI 社員が見つからない | ✅ |
 | AKO-AIC-002 | AI タスクの件名未入力 | ✅ |
 | AKO-AIC-003 | AI タスクが見つからない | ✅ |

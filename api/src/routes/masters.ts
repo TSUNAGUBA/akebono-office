@@ -120,10 +120,11 @@ export function mastersRoutes(pool: pg.Pool): Hono {
     const { def, entity } = defOf(c.req.param('entity'))
     const where = def.noActive || c.req.query('includeInactive') === '1' ? '' : 'WHERE active = true'
     const order = def.noActive ? 'ORDER BY id' : 'ORDER BY display_order NULLS LAST, id'
-    // display_order を持たないテーブルは id 順
+    // display_order を持たないテーブルは id 順（祝日は日付順が自然なため date 順）
     const hasOrder = ['departments', 'leave_types', 'industries', 'custom_field_defs', 'code_masters', 'external_links'].includes(def.table)
+    const orderBy = def.table === 'public_holidays' ? 'ORDER BY date' : hasOrder ? order : 'ORDER BY id'
     const { rows } = await pool.query(
-      `SELECT * FROM ${def.table} ${where} ${hasOrder ? order : 'ORDER BY id'}`)
+      `SELECT * FROM ${def.table} ${where} ${orderBy}`)
     const data = await stripMasterFields(pool, c.get('user'), entity, rows.map(rowToCamel))
     return c.json({ data })
   })
@@ -277,7 +278,7 @@ export function mastersRoutes(pool: pg.Pool): Hono {
     }
     const result = await pool.query(`DELETE FROM ${def.table} WHERE id = $1`, [id])
     if (result.rowCount === 0) throw err('AKO-GEN-002', '対象が見つかりません', 404)
-    await audit(pool, { actorId: user.id, action: 'delete', entity: def.table, entityId: id, detail: `${entity} を物理削除（関係エッジ）` })
+    await audit(pool, { actorId: user.id, action: 'delete', entity: def.table, entityId: id, detail: `${entity} を物理削除` })
     return c.json({ data: { id } })
   })
 

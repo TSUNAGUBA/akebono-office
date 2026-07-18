@@ -11,7 +11,7 @@
  */
 import type { Ref } from 'vue'
 import type { DraftContext, ReportDraft } from '../../../shared/domain/report-draft'
-import { heuristicReportDraft, nextBusinessDay, WRAPUP_KEYS } from '../../../shared/domain/report-draft'
+import { heuristicReportDraft, WRAPUP_KEYS } from '../../../shared/domain/report-draft'
 import type { CalendarEvent, HearingLog, ReportInputMode, Result } from '~/types/domain'
 
 export type { ReportDraft }
@@ -47,6 +47,7 @@ export function useReportAssist() {
   const { tbl, commit, nextId } = useMockDb()
   const { currentUser } = useCurrentUser()
   const { eventsOf } = useCalendar()
+  const { nextWorkingDayFor } = useBusinessDay()
   const isApi = useApiMode()
   // API モードは assist_logs キャッシュをバッキング（questionsFor 等の射影は共通）
   const hearingLogs = isApi ? (apiAssistLogs as Ref<HearingLog[]>) : tbl('hearingLogs')
@@ -195,7 +196,8 @@ export function useReportAssist() {
       dayPlans: taskPlans.value
         .filter(tp => tp.memberId === memberId && tp.date === date)
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
-      nextDayPlans: taskPlans.value.filter(tp => tp.memberId === memberId && tp.date === nextBusinessDay(date)),
+      // 翌営業日はメンバーの勤怠ルール（営業曜日）+ 祝日マスタで解決（オペレーター報告 2026-07-18 #4）
+      nextDayPlans: taskPlans.value.filter(tp => tp.memberId === memberId && tp.date === nextWorkingDayFor(memberId, date)),
       projects: projects.value.filter(x => x.active),
       companies: companies.value.filter(x => x.active),
     }

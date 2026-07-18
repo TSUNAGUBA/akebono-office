@@ -191,6 +191,15 @@ const schemas = {
     }).nullable().default(null),
     closingDay: z.number().int().min(1).max(31).default(31),
     legalHolidayWeekday: z.number().int().min(0).max(6).default(0),
+    // 営業日定義（オペレーター報告 2026-07-18 #4: 外注等は平日以外も営業日になり得る）
+    workingWeekdays: z.array(z.number().int().min(0).max(6)).min(1, '営業曜日を 1 つ以上選択してください').default([1, 2, 3, 4, 5]),
+    holidayAware: z.boolean().default(true),
+  }),
+  // 祝日マスタ（SoT。内閣府公式 CSV の取込 = POST /v1/holidays/import と手動管理の両対応）
+  'holidays': z.object({
+    date: dateKey,
+    name: z.string().trim().min(1, '祝日名は必須です'),
+    source: z.enum(['official', 'manual']).default('manual'),
   }),
   'workflow-routes': workflowRouteBase.superRefine((v, ctx) => {
     // どの金額にもマッチしない経路・重複ステップの作成をサーバー側でも防ぐ（UI 検証のミラー）
@@ -285,7 +294,9 @@ export const MASTERS: Record<MasterEntity, MasterDef> = {
   'custom-field-defs': { table: 'custom_field_defs', idPrefix: 'cf', schema: schemas['custom-field-defs'], patchSchema: schemas['custom-field-defs'].partial(), jsonbFields: ['options'] },
   'code-masters': { table: 'code_masters', idPrefix: 'cm', schema: schemas['code-masters'], patchSchema: schemas['code-masters'].partial(), jsonbFields: [] },
   'external-links': { table: 'external_links', idPrefix: 'el', schema: schemas['external-links'], patchSchema: schemas['external-links'].partial(), jsonbFields: [] },
-  'attendance-rules': { table: 'attendance_rules', idPrefix: 'ar', schema: schemas['attendance-rules'], patchSchema: schemas['attendance-rules'].partial(), jsonbFields: ['appliesTo', 'defaultFor', 'flex'] },
+  'attendance-rules': { table: 'attendance_rules', idPrefix: 'ar', schema: schemas['attendance-rules'], patchSchema: schemas['attendance-rules'].partial(), jsonbFields: ['appliesTo', 'defaultFor', 'flex', 'workingWeekdays'] },
+  // 祝日は date 一意（重複 POST は 409）。誤登録の取り消しは物理削除（記録系ではない設定データ）
+  'holidays': { table: 'public_holidays', idPrefix: 'hd', schema: schemas.holidays, patchSchema: schemas.holidays.partial(), jsonbFields: [], physicalDelete: true, noActive: true },
   'workflow-routes': { table: 'workflow_routes', idPrefix: 'wr', schema: schemas['workflow-routes'], patchSchema: workflowRouteBase.partial(), jsonbFields: ['steps'] },
   'decision-themes': { table: 'decision_themes', idPrefix: 'dt', schema: schemas['decision-themes'], patchSchema: schemas['decision-themes'].partial(), jsonbFields: ['semantics', 'links', 'actions', 'options', 'scenarioParams'] },
   'ai-roles': { table: 'ai_roles', idPrefix: 'r', schema: schemas['ai-roles'], patchSchema: schemas['ai-roles'].partial(), jsonbFields: ['permissions'] },

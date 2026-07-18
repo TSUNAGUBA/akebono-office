@@ -35,7 +35,8 @@ async function punchesOf(pool: pg.Pool, memberId: string, date: string): Promise
   return rows
 }
 
-async function ruleOf(pool: pg.Pool, memberId: string): Promise<AttendanceRule | undefined> {
+/** メンバーへ適用する勤怠ルールの解決（assist の翌営業日計算でも再利用するため export） */
+export async function ruleOf(pool: pg.Pool, memberId: string): Promise<AttendanceRule | undefined> {
   const member = await pool.query<Pick<Member, 'attendanceRuleId' | 'employmentType'>>(
     'SELECT attendance_rule_id AS "attendanceRuleId", employment_type AS "employmentType" FROM members WHERE id = $1',
     [memberId],
@@ -43,7 +44,8 @@ async function ruleOf(pool: pg.Pool, memberId: string): Promise<AttendanceRule |
   const rules = await pool.query(
     `SELECT id, name, applies_to AS "appliesTo", default_for AS "defaultFor",
             work_start AS "workStart", work_end AS "workEnd", break_minutes AS "breakMinutes",
-            flex, closing_day AS "closingDay", legal_holiday_weekday AS "legalHolidayWeekday", active
+            flex, closing_day AS "closingDay", legal_holiday_weekday AS "legalHolidayWeekday",
+            working_weekdays AS "workingWeekdays", holiday_aware AS "holidayAware", active
      FROM attendance_rules ORDER BY id`)
   return resolveRule(member.rows[0], rules.rows as AttendanceRule[])
 }

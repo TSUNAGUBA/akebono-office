@@ -750,6 +750,7 @@ const ruleColumns: TableColumn[] = [
   { key: 'flex', label: 'フレックス', width: '150px' },
   { key: 'closing', label: '締め日', width: '70px' },
   { key: 'holiday', label: '法定休日', width: '80px' },
+  { key: 'working', label: '営業日', width: '130px' },
   { key: 'state', label: '状態', width: '70px', primary: true },
 ]
 
@@ -763,6 +764,7 @@ const ruleRows = computed(() => rulesCrud.list.value.map(r => ({
   flex: r.flex?.enabled ? `コア ${r.flex.coreStart}〜${r.flex.coreEnd}` : '—',
   closing: r.closingDay >= 31 ? '月末' : `${r.closingDay}日`,
   holiday: `${WEEKDAYS[r.legalHolidayWeekday] ?? '日'}曜日`,
+  working: `${(r.workingWeekdays ?? [1, 2, 3, 4, 5]).map(d => WEEKDAYS[d] ?? '').join('')}${(r.holidayAware ?? true) ? '' : '・祝日も営業'}`,
   state: r.active ? '有効' : '無効',
 })))
 
@@ -782,6 +784,8 @@ const ruleForm = ref({
   settlementMonths: 1,
   closingDay: 31,
   legalHolidayWeekday: '0',
+  workingWeekdays: ['1', '2', '3', '4', '5'] as string[],
+  holidayAware: true,
 })
 
 async function openRuleModal(rule?: AttendanceRule): Promise<void> {
@@ -801,12 +805,16 @@ async function openRuleModal(rule?: AttendanceRule): Promise<void> {
       settlementMonths: rule.flex?.settlementMonths ?? 1,
       closingDay: rule.closingDay,
       legalHolidayWeekday: String(rule.legalHolidayWeekday),
+      // 旧データ（列追加前）は既定の月〜金 + 祝日考慮で表示する
+      workingWeekdays: (rule.workingWeekdays ?? [1, 2, 3, 4, 5]).map(String),
+      holidayAware: rule.holidayAware ?? true,
     }
   } else {
     ruleForm.value = {
       id: '', name: '', appliesTo: [], defaultFor: [], workStart: '09:00', workEnd: '18:00',
       breakMinutes: 60, flexEnabled: false, coreStart: '10:00', coreEnd: '15:00',
       settlementMonths: 1, closingDay: 31, legalHolidayWeekday: '0',
+      workingWeekdays: ['1', '2', '3', '4', '5'], holidayAware: true,
     }
   }
   ruleOpen.value = true
@@ -825,6 +833,7 @@ async function submitRule(): Promise<void> {
   if (f.defaultFor.some(t => !f.appliesTo.includes(t))) errs.defaultFor = '既定にする雇用区分は「選択可能な雇用区分」に含めてください'
   if (f.workStart && f.workEnd && f.workStart >= f.workEnd) errs.workEnd = '終業は始業より後の時刻にしてください'
   if (f.flexEnabled && f.coreStart >= f.coreEnd) errs.coreEnd = 'コア終了はコア開始より後の時刻にしてください'
+  if (f.workingWeekdays.length === 0) errs.workingWeekdays = '営業曜日を1つ以上選択してください'
   ruleErrors.value = errs
   if (Object.keys(errs).length > 0) return
 
@@ -840,6 +849,9 @@ async function submitRule(): Promise<void> {
       : null,
     closingDay: Math.min(31, Math.max(1, Number(f.closingDay) || 31)),
     legalHolidayWeekday: Number(f.legalHolidayWeekday),
+    // 営業日定義（翌営業日計算・祝日考慮。オペレーター報告 2026-07-18 #4）
+    workingWeekdays: f.workingWeekdays.map(Number).sort((a, b) => a - b),
+    holidayAware: f.holidayAware,
   }
   if (f.id) payload.id = f.id
   const r = await rulesCrud.save(payload)
@@ -1607,6 +1619,19 @@ async function submitRule(): Promise<void> {
             <UiSelect v-model="ruleForm.legalHolidayWeekday" :options="weekdayOptions" aria-label="法定休日の曜日" />
           </UiFormField>
         </div>
+        <UiFormField
+          label="営業曜日"
+          :error="ruleErrors.workingWeekdays"
+          hint="翌営業日の計算（AI業務アシスタントの計画対象日・日報の明日の予定）に使われます。外注等の週末稼働はここで土日を追加します"
+        >
+          <UiChipSelect v-model="ruleForm.workingWeekdays" :options="weekdayOptions" aria-label="営業曜日" />
+        </UiFormField>
+        <UiFormField label="祝日の扱い">
+          <label class="flex cursor-pointer items-center gap-2 text-[13px]">
+            <input v-model="ruleForm.holidayAware" type="checkbox" class="h-4 w-4 accent-[var(--c-brand)]" >
+            <span class="text-sub">祝日（祝日マスタ）を非営業日として扱う</span>
+          </label>
+        </UiFormField>
         <p class="text-[11px] text-muted">
           保存すると、対象雇用区分のメンバーの日次集計（所定内の判定・法定休日の判定）に即時反映されます。
         </p>

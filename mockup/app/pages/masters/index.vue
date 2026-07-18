@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * F-10 マスタメンテナンス ハブ（管理者専用）
- * 13 マスタ + ナレッジ + 設定への案内カード。各カードに件数バッジ。
+ * 14 マスタ + ナレッジ + 設定への案内カード。各カードに件数バッジ。
  */
 import type { MenuCard } from '~/types/ui'
 
@@ -20,6 +20,7 @@ const permissionRules = tbl('permissionRules')
 const projects = tbl('projects')
 const knowledge = tbl('knowledge')
 const codeMaster = tbl('codeMaster')
+const holidays = tbl('holidays')
 
 function activeCount(rows: { active?: boolean }[]): number {
   return rows.filter(r => r.active !== false).length
@@ -137,6 +138,14 @@ const cards = computed<MenuCard[]>(() => [
     icon: 'BookOpen',
     to: '/masters/knowledge',
     badge: activeCount(knowledge.value),
+  },
+  {
+    id: 'holidays',
+    title: '祝日',
+    description: '内閣府の公式データ取込と手動管理。翌営業日計算・カレンダーへ反映',
+    icon: 'CalendarDays',
+    to: '/masters/holidays',
+    badge: holidays.value.length,
   },
   {
     id: 'settings',
