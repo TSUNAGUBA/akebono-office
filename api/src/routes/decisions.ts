@@ -17,10 +17,10 @@ const LOG_COLS = `id, theme_id AS "themeId", chosen_slot AS "chosenSlot", reason
 export function decisionsRoutes(pool: pg.Pool): Hono {
   const app = new Hono()
 
-  // 判断ログ一覧（新しい順）
+  // 判断ログ一覧（新しい順。at は秒精度のため id を第 2 キーに = 同一秒内でも順序を決定化）
   app.get('/logs', async (c) => {
     const { rows } = await pool.query(
-      `SELECT ${LOG_COLS} FROM decision_logs ORDER BY at DESC LIMIT 500`)
+      `SELECT ${LOG_COLS} FROM decision_logs ORDER BY at DESC, id LIMIT 500`)
     return c.json({ data: rows })
   })
 

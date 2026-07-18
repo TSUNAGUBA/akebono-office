@@ -261,7 +261,7 @@ export async function buildContext(
         `SELECT id, title, category FROM decision_themes WHERE active = true ORDER BY id LIMIT 10`)
       const { rows: logs } = await pool.query<{ themeTitle: string; chosenSlot: string; reason: string; at: string }>(
         `SELECT t.title AS "themeTitle", l.chosen_slot AS "chosenSlot", l.reason, l.at
-         FROM decision_logs l JOIN decision_themes t ON t.id = l.theme_id ORDER BY l.at DESC LIMIT 3`)
+         FROM decision_logs l JOIN decision_themes t ON t.id = l.theme_id ORDER BY l.at DESC, l.id LIMIT 3`)
       // テーマ名にも decision-themes の表示項目 deny を反映（title deny 時はテーマを特定できないため出さない）
       const shownThemes = strip('decision-themes', themes).filter(t => t.title)
       if (shownThemes.length === 0) return
@@ -386,7 +386,7 @@ export async function buildContext(
   if (can('akebono') && /AKEBONO(?!\s*(SCM|Office))|アケボノ(?!商事)|あけぼの|要望/i.test(topic)) {
     await block(async () => {
       const { rows } = await pool.query<{ body: string; at: string }>(
-        `SELECT body, at FROM akebono_wishes ORDER BY at DESC LIMIT 3`)
+        `SELECT body, at FROM akebono_wishes ORDER BY at DESC, id LIMIT 3`)
       parts.push(`## AKEBONO（/akebono）
 次世代の AI ネイティブ会社基盤として要件定義中（Phase 2）。要望ボックスで「こうなってほしい」を受付中。${
   rows.length > 0

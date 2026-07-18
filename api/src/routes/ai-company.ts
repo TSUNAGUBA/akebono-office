@@ -99,10 +99,10 @@ export function aiCompanyRoutes(pool: pg.Pool, env: Env): Hono {
     return c.json({ data: rows })
   })
 
-  // 活動ログ（新しい順）
+  // 活動ログ（新しい順。at は秒精度のため id を第 2 キーに = 同一秒内でも順序を決定化）
   app.get('/logs', async (c) => {
     const { rows } = await pool.query(
-      `SELECT ${LOG_COLS} FROM ai_activity_logs ORDER BY at DESC LIMIT 200`)
+      `SELECT ${LOG_COLS} FROM ai_activity_logs ORDER BY at DESC, id LIMIT 200`)
     return c.json({ data: rows })
   })
 
