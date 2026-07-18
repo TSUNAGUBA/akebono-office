@@ -181,10 +181,10 @@ export const seedWorkflowRoutes: WorkflowRoute[] = [
 ]
 
 export const seedAttendanceRules: AttendanceRule[] = [
-  { id: 'ar-01', name: '正社員（フレックス）', appliesTo: ['employee'], defaultFor: ['employee'], workStart: '09:00', workEnd: '18:00', breakMinutes: 60, flex: { enabled: true, coreStart: '10:00', coreEnd: '15:00', settlementMonths: 1 }, closingDay: 31, legalHolidayWeekday: 0, active: true },
-  { id: 'ar-02', name: '契約社員（固定時間）', appliesTo: ['contract'], defaultFor: ['contract'], workStart: '09:30', workEnd: '18:00', breakMinutes: 60, flex: null, closingDay: 31, legalHolidayWeekday: 0, active: true },
-  { id: 'ar-03', name: 'アルバイト（シフト制）', appliesTo: ['parttime'], defaultFor: ['parttime'], workStart: '10:00', workEnd: '17:00', breakMinutes: 45, flex: null, closingDay: 31, legalHolidayWeekday: 0, active: true },
-  { id: 'ar-04', name: '正社員（時短・9:30〜16:30）', appliesTo: ['employee'], defaultFor: [], workStart: '09:30', workEnd: '16:30', breakMinutes: 60, flex: null, closingDay: 31, legalHolidayWeekday: 0, active: true },
+  { id: 'ar-01', name: '正社員（フレックス）', appliesTo: ['employee'], defaultFor: ['employee'], workStart: '09:00', workEnd: '18:00', breakMinutes: 60, flex: { enabled: true, coreStart: '10:00', coreEnd: '15:00', settlementMonths: 1 }, closingDay: 31, legalHolidayWeekday: 0, workingWeekdays: [1, 2, 3, 4, 5], holidayAware: true, active: true },
+  { id: 'ar-02', name: '契約社員（固定時間）', appliesTo: ['contract'], defaultFor: ['contract'], workStart: '09:30', workEnd: '18:00', breakMinutes: 60, flex: null, closingDay: 31, legalHolidayWeekday: 0, workingWeekdays: [1, 2, 3, 4, 5], holidayAware: true, active: true },
+  { id: 'ar-03', name: 'アルバイト（シフト制）', appliesTo: ['parttime'], defaultFor: ['parttime'], workStart: '10:00', workEnd: '17:00', breakMinutes: 45, flex: null, closingDay: 31, legalHolidayWeekday: 0, workingWeekdays: [1, 2, 3, 4, 5], holidayAware: true, active: true },
+  { id: 'ar-04', name: '正社員（時短・9:30〜16:30）', appliesTo: ['employee'], defaultFor: [], workStart: '09:30', workEnd: '16:30', breakMinutes: 60, flex: null, closingDay: 31, legalHolidayWeekday: 0, workingWeekdays: [1, 2, 3, 4, 5], holidayAware: true, active: true },
 ]
 
 export const seedSystemServices: SystemService[] = [

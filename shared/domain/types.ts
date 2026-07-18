@@ -258,7 +258,19 @@ export interface AttendanceRule {
   flex: { enabled: boolean; coreStart: string; coreEnd: string; settlementMonths: number } | null
   closingDay: number // 締め日（月末=31）
   legalHolidayWeekday: number // 0=日曜
+  /** 営業曜日（0=日〜6=土）。外注等は土日を含められる（オペレーター報告 2026-07-18 #4） */
+  workingWeekdays: number[]
+  /** 祝日（public_holidays マスタ）を非営業日として扱うか */
+  holidayAware: boolean
   active: boolean
+}
+
+/** 祝日マスタ（SoT: public_holidays。内閣府公式 CSV の取込 + 手動管理） */
+export interface Holiday {
+  id: string
+  date: string // YYYY-MM-DD（一意）
+  name: string
+  source: 'official' | 'manual'
 }
 
 export interface SystemServiceComponent {

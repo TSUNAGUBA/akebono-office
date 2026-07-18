@@ -2128,3 +2128,88 @@ describe('AKEBONO 要望ボックス（F-03・バッチ6d）', () => {
     expect((await api('GET', '/v1/akebono/wishes', { as: MEMBER })).status).toBe(200)
   })
 })
+
+describe('営業日・祝日基盤（オペレーター報告 2026-07-18 #4）', () => {
+  it('祝日マスタ: 管理者のみ追加・削除でき、日付重複は 409。一覧は日付順で全員参照可', async () => {
+    expect((await api('POST', '/v1/masters/holidays', { as: MEMBER, body: { date: '2026-12-23', name: 'x' } })).status).toBe(403)
+    const created = await api('POST', '/v1/masters/holidays', { as: ADMIN, body: { date: '2026-12-23', name: '創立記念日' } })
+    expect(created.status).toBe(201)
+    const dupe = await api('POST', '/v1/masters/holidays', { as: ADMIN, body: { date: '2026-12-23', name: '重複' } })
+    expect(dupe.status).toBe(409)
+    const list = (await api('GET', '/v1/masters/holidays', { as: MEMBER })).json.data as
+      { id: string; date: string; name: string; source: string }[]
+    const mine = list.find(h => h.date === '2026-12-23')
+    expect(mine?.name).toBe('創立記念日')
+    expect(mine?.source).toBe('manual')
+    // 物理削除できる（誤登録の取り消し）
+    expect((await api('DELETE', `/v1/masters/holidays/${mine!.id}`, { as: ADMIN })).status).toBe(200)
+    const after = (await api('GET', '/v1/masters/holidays', { as: ADMIN })).json.data as { date: string }[]
+    expect(after.some(h => h.date === '2026-12-23')).toBe(false)
+  })
+
+  it('公式 CSV 取込: upsert（冪等）で管理者のみ。Shift_JIS も UTF-8 も受け付ける', async () => {
+    expect((await api('POST', '/v1/holidays/import', { as: MEMBER, body: { csvText: '2026/1/1,元日' } })).status).toBe(403)
+    const csv = '国民の祝日・休日月日,国民の祝日・休日名称\n2026/1/1,元日\n2026/7/20,海の日'
+    const first = await api('POST', '/v1/holidays/import', { as: ADMIN, body: { csvText: csv } })
+    expect(first.status).toBe(200)
+    expect((first.json.data as { total: number; upserted: number })).toEqual({ total: 2, upserted: 2 })
+    // 再取込は変更なし = upserted 0（冪等）。名称変更があればその行だけ更新
+    const again = await api('POST', '/v1/holidays/import', { as: ADMIN, body: { csvText: csv } })
+    expect((again.json.data as { upserted: number }).upserted).toBe(0)
+    const renamed = await api('POST', '/v1/holidays/import', {
+      as: ADMIN, body: { csvText: '2026/1/1,元日（改定）' },
+    })
+    expect((renamed.json.data as { upserted: number }).upserted).toBe(1)
+    // Shift_JIS バイト列（csvBase64）も自動判定で取り込める（内閣府 CSV の実エンコーディング）
+    const sjis = 'jZGWr4LMj2qT+oFFi3iT+oyOk/osjZGWr4LMj2qT+oFFi3iT+pa8j8wNCjIwMjYvMi8yMyyTVo1jkmGQtpP6DQo='
+    const viaSjis = await api('POST', '/v1/holidays/import', { as: ADMIN, body: { csvBase64: sjis } })
+    expect(viaSjis.status).toBe(200)
+    const list = (await api('GET', '/v1/masters/holidays', { as: ADMIN })).json.data as { date: string; name: string; source: string }[]
+    expect(list.find(h => h.date === '2026-02-23')?.name).toBe('天皇誕生日')
+    expect(list.find(h => h.date === '2026-01-01')?.source).toBe('official')
+    // 解析 0 件は AKO-HOL-002
+    const empty = await api('POST', '/v1/holidays/import', { as: ADMIN, body: { csvText: 'ヘッダのみ' } })
+    expect(empty.status).toBe(400)
+    expect(empty.json.error?.code).toBe('AKO-HOL-002')
+  })
+
+  it('勤怠ルールの営業日定義（workingWeekdays / holidayAware）を保存・検証できる', async () => {
+    const created = await api('POST', '/v1/masters/attendance-rules', {
+      as: ADMIN,
+      body: { name: '外注（週末稼働）', appliesTo: ['outsource'], workingWeekdays: [0, 3, 6], holidayAware: false },
+    })
+    expect(created.status).toBe(201)
+    const row = created.json.data as { id: string; workingWeekdays: number[]; holidayAware: boolean }
+    expect(row.workingWeekdays).toEqual([0, 3, 6])
+    expect(row.holidayAware).toBe(false)
+    // 既存ルール（列追加前からのデータ）は既定値で下位互換
+    const std = ((await api('GET', '/v1/masters/attendance-rules', { as: ADMIN })).json.data as
+      { id: string; workingWeekdays: number[]; holidayAware: boolean }[]).find(r => r.id === 'ar-standard')
+    expect(std?.workingWeekdays).toEqual([1, 2, 3, 4, 5])
+    expect(std?.holidayAware).toBe(true)
+    // 不正な曜日・空配列は 400
+    expect((await api('POST', '/v1/masters/attendance-rules', {
+      as: ADMIN, body: { name: 'x', appliesTo: ['outsource'], workingWeekdays: [7] },
+    })).status).toBe(400)
+    expect((await api('PATCH', `/v1/masters/attendance-rules/${row.id}`, {
+      as: ADMIN, body: { workingWeekdays: [] },
+    })).status).toBe(400)
+    await api('POST', `/v1/masters/attendance-rules/${row.id}/archive`, { as: ADMIN })
+  })
+
+  it('日報ドラフトの「明日の予定」は祝日を飛ばした翌営業日の計画を拾う（メンバー別ルール準拠）', async () => {
+    // 2026-07-17（金）を基準日に、月曜 7/20 を祝日化 → 翌営業日は火曜 7/21
+    // （公式 CSV 取込テストで 2026-07-20 = 海の日を登録済み）
+    await api('PUT', '/v1/task-plans', {
+      as: MEMBER, body: { title: '祝日の計画（拾われない）', date: '2026-07-20' },
+    })
+    await api('PUT', '/v1/task-plans', {
+      as: MEMBER, body: { title: '祝日明けの計画（拾われる）', date: '2026-07-21' },
+    })
+    const draft = (await api('POST', '/v1/assist/report-draft', {
+      as: MEMBER, body: { date: '2026-07-17' },
+    })).json.data as { tomorrow: string }
+    expect(draft.tomorrow).toContain('祝日明けの計画（拾われる）')
+    expect(draft.tomorrow).not.toContain('祝日の計画（拾われない）')
+  })
+})

@@ -8,14 +8,17 @@
  */
 import { Hono } from 'hono'
 import type pg from 'pg'
+import { nextWorkingDay, workingDayRuleOf } from '../../../shared/domain/business-day'
 import { nowJstIso, todayJst } from '../../../shared/domain/jst'
 import type { DraftContext, ReportDraft } from '../../../shared/domain/report-draft'
-import { heuristicReportDraft, nextBusinessDay, toQuarterHours } from '../../../shared/domain/report-draft'
+import { heuristicReportDraft, toQuarterHours } from '../../../shared/domain/report-draft'
 import type { HearingLog, TaskPlan } from '../../../shared/domain/types'
 import type { Env } from '../env'
 import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
 import { generateJson } from '../lib/llm'
+import { ruleOf } from './attendance'
+import { holidaySetAfter } from './holidays'
 
 const LOG_COLS = `id, member_id AS "memberId", date::text AS date, kind,
   calendar_event_id AS "calendarEventId", question, answer, at`
@@ -77,6 +80,10 @@ export function assistRoutes(pool: pg.Pool, env: Env): Hono {
     const user = c.get('user')
     const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
     const date = dateOrToday(body.date)
+    // 翌営業日はメンバーの勤怠ルール（営業曜日・祝日考慮）+ 祝日マスタで解決
+    // （オペレーター報告 2026-07-18 #4: 外注等の週末稼働・祝日をマスタで制御）
+    const [rule, holidays] = await Promise.all([ruleOf(pool, user.id), holidaySetAfter(pool, date)])
+    const nextDate = nextWorkingDay(date, workingDayRuleOf(rule), holidays)
 
     // 材料の収集（カレンダー予定は同期済みキャッシュ = calendar_events）
     const [logsQ, plansQ, nextPlansQ, projectsQ, companiesQ, eventsQ] = await Promise.all([
@@ -88,7 +95,7 @@ export function assistRoutes(pool: pg.Pool, env: Env): Hono {
         [user.id, date]),
       pool.query<TaskPlan>(
         `SELECT ${PLAN_COLS} FROM task_plans WHERE member_id = $1 AND date = $2::date ORDER BY created_at, id`,
-        [user.id, nextBusinessDay(date)]),
+        [user.id, nextDate]),
       pool.query<{ id: string; name: string; companyId: string }>(
         `SELECT id, name, company_id AS "companyId" FROM projects WHERE active = true ORDER BY id`),
       pool.query<{ id: string; name: string; aliases: string[] }>(

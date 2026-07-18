@@ -176,6 +176,7 @@ const MIGRATED_MASTERS: Record<string, string> = {
   codeMaster: 'code-masters',
   externalLinks: 'external-links',
   attendanceRules: 'attendance-rules',
+  holidays: 'holidays',
   workflowRoutes: 'workflow-routes',
   decisionThemes: 'decision-themes',
   permissionRules: 'permission-rules',

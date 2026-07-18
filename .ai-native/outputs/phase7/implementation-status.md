@@ -297,3 +297,13 @@
 - [x] 供給対象外の設計判断（変更なし・理由付き）: ドキュメント管理（未移行 = デモデータ）・通知/監査ログ/権限ルール（運用・管理データで会話文脈に不適）・コードマスタ/カスタム項目定義（メタ設定）
 - [x] 検証: API 統合テスト 94（業界・自社担当・先方担当者・会社間の関係・別名照合・自社ブロック・業界逆引き + name deny 剥がし・人の関係の双方向・休暇種別・外部リンク・部署の所属展開）/ 単体 37+35 / E2E フルスタック 12+16+11+8（会社質問で業界・関係が返ることを追加）+ モック回帰 10 / typecheck（api・mockup）/ api build
 - [x] 反復レビュー（原則9・PR #41）: 独立レビュー R1 で重大 1（**strip 網羅の漏れ** = ①自社ブロックの primaryIndustryId / fiscalStartMonth が剥がし前の生値参照 ②補助マスタ = 業界名・関係種別ラベル・関係メモ・休暇種別・外部リンク・部署名・意思決定テーマ・AI 社員名が未 strip で「マスタ由来はすべて strip」の宣言と矛盾）+ 軽微 3（業界逆引きの industryIds deny 時 TypeError で該当ブロック消滅・フォールバック待機リストに departments 欠落・personRelations の相手解決が active 未絞り込み）を検出 → **全件コード側で修正**（補助マスタも strip 適用。JOIN 由来の単一項目 = relation_types.label / ai_employees.name は canViewField で判定。顧客担当者ブロックの所属会社名の生値参照も同クラスとして修正）。補助マスタ deny の反映は統合テスト（fiscalStartMonth / primaryIndustryId / industries.name / relation-types.label / company-relations.notes / leave-types.name / external-links.url / departments.name の 8 観点）で回帰固定。R2 で残 1（会社ブロックの関連プロジェクト行の strip 漏れ = R1 でも双方見落とし）+ 軽微 1（decision-themes.category deny 時に既定「(PJ)」を捏造表示）を検出 → 修正し、projects.name / decision-themes.category deny の 2 観点をテストへ追加（計 10 観点・統合 95 件）
+
+## 18. 営業日・祝日基盤（オペレーター報告 2026-07-18 #4「明日の計画が 7/20 = 1日ズレ」対応）の完了条件（Definition of Done)
+
+- [x] 原因分析: バグではなく仕様どおりの挙動（screen-design §F-14「対象日ナビ 既定=翌営業日」）。報告日 7/18 が**土曜**のため翌営業日 = 7/20(月) が表示され、見出し「明日の計画」と乖離して 1 日ズレに見えた。オペレーター確認の結果、**翌営業日の既定は維持**し、①営業日定義のマスタ制御（外注等は平日以外も営業日になり得る）②祝日の公式データ反映 ③画面からの祝日データ更新、を追加する方針で合意
+- [x] 営業日のマスタ制御: attendance_rules へ workingWeekdays（営業曜日 0-6・既定 [1-5]）/ holidayAware（祝日を非営業日扱い・既定 true）を追加（0020。既存行は DEFAULT で下位互換 = 従来挙動）。勤怠ルール編集モーダル（/attendance 設定タブ）で設定可
+- [x] 祝日マスタ: public_holidays（0020。date 一意・SoT）。内閣府「国民の祝日」CSV（Shift_JIS）の公式取込 = `POST /v1/holidays/import`（管理者・date 一意 upsert = 冪等・再取込可・csvText / csvBase64 のオフライン経路あり = 公式サイト障害時の手動アップロード代替）。/masters/holidays 画面から「公式データから更新」ボタンでいつでも更新可 + 手動追加・物理削除
+- [x] 翌営業日計算の共有化: shared/domain/business-day.ts（isWorkingDay / nextWorkingDay / workingDayRuleOf）を新設し、旧 report-draft.nextBusinessDay（土日固定スキップ）を全廃。クライアント = useBusinessDay（ruleFor を再利用）・API = /v1/assist/report-draft（ruleOf + holidaySetAfter）で同一ロジック
+- [x] カレンダー表示への反映: AI業務アシスタントの対象日ナビへ「翌営業日」バッジ（対象日 ≠ 暦日の明日のとき）と「祝: 名称」バッジを表示（明日の計画・今日の振り返りの両方）
+- [x] 検証: 単体 45（business-day 6 観点 = 週末スキップ・祝日スキップ・連休・週末稼働ルール・フォールバック・無限ループ打ち切り + CSV 解析 2 観点）/ API 統合 100（祝日マスタ CRUD・公式取込の冪等/Shift_JIS 自動判定/権限/解析エラー・勤怠ルールの営業日定義・日報ドラフトの祝日跨ぎ翌営業日）/ mockup 単体 35 / 両 typecheck / api build / E2E フルスタック 12+16+11+8 + モック回帰 10
+- [x] 運用ノート: 本番リリース後、管理者が /masters/holidays で「公式データから更新」を 1 回実行して祝日を初期投入する（外部サイトへの起動時自動フェッチは行わない設計判断 = 政府サイト障害時にデプロイへ影響させない。以後の祝日改定も同ボタンで反映）

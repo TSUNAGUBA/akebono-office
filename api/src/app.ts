@@ -15,6 +15,7 @@ import { akebonoRoutes } from './routes/akebono'
 import { attendanceRoutes } from './routes/attendance'
 import { configsRoutes } from './routes/configs'
 import { escalationsRoutes } from './routes/escalations'
+import { holidaysRoutes } from './routes/holidays'
 import { leaveRoutes, runPeriodicGrants } from './routes/leave'
 import { mastersRoutes } from './routes/masters'
 import { notificationsRoutes } from './routes/notifications'
@@ -137,6 +138,7 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
   app.route('/v1/sales', salesRoutes(pool))
   app.route('/v1/status', statusRoutes(pool))
   app.route('/v1/akebono', akebonoRoutes(pool))
+  app.route('/v1/holidays', holidaysRoutes(pool))
 
   app.notFound(c => c.json({ error: { code: 'AKO-GEN-404', message: 'エンドポイントが見つかりません' } }, 404))
 

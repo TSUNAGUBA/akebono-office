@@ -61,14 +61,26 @@ async function onRecordResult(p: TaskPlan): Promise<void> {
 
 // ================= 明日の計画（対象日は未来へ変更可） =================
 
-/** 翌営業日（土日スキップ）を既定の計画対象日にする */
-function nextWeekday(dateKey: string): string {
-  let d = addDays(dateKey, 1)
-  while (weekdayOf(d) === 0 || weekdayOf(d) === 6) d = addDays(d, 1)
-  return d
-}
+// 既定の計画対象日 = 翌営業日（画面設計 §F-14: 既定=翌営業日）。
+// 営業日はメンバーの勤怠ルール（営業曜日・祝日考慮）+ 祝日マスタで解決する
+// （オペレーター報告 2026-07-18 #4: 外注等の週末稼働・祝日をマスタで制御）
+const biz = useBusinessDay()
 
-const planDate = ref(nextWeekday(todayKey))
+const planDate = ref(biz.nextWorkingDayFor(currentUserId.value, todayKey))
+
+/** 対象日が暦日の明日と異なる場合の説明ラベル（「明日」見出しとの乖離を明示する） */
+const planDateNote = computed(() => {
+  const note: string[] = []
+  if (planDate.value === biz.nextWorkingDayFor(currentUserId.value, todayKey) && planDate.value !== addDays(todayKey, 1)) {
+    note.push('翌営業日')
+  }
+  const holiday = biz.holidayNameOf(planDate.value)
+  if (holiday) note.push(`祝: ${holiday}`)
+  return note.join('・')
+})
+
+/** 振り返り対象日の祝日名（カレンダー表示への祝日反映） */
+const recDateHoliday = computed(() => biz.holidayNameOf(recDate.value))
 
 const planPlans = computed(() => tp.plansOf(currentUserId.value, planDate.value))
 
@@ -210,7 +222,7 @@ watch([recDate, currentUserId], () => {
   resultForm.value = {}
 })
 watch(currentUserId, () => {
-  planDate.value = nextWeekday(todayKey)
+  planDate.value = biz.nextWorkingDayFor(currentUserId.value, todayKey)
   recDate.value = todayKey
 })
 
@@ -247,6 +259,7 @@ const insightRows = computed(() => tp.insights(7))
               <ChevronLeft class="h-4 w-4" aria-hidden="true" />
             </button>
             <span class="num whitespace-nowrap text-xs font-semibold">{{ fmtDateLong(planDate) }}</span>
+            <UiStatusBadge v-if="planDateNote" :label="planDateNote" tone="neutral" />
             <button type="button" class="btn btn-sm" aria-label="翌日へ" @click="planDate = addDays(planDate, 1)">
               <ChevronRight class="h-4 w-4" aria-hidden="true" />
             </button>
@@ -351,6 +364,7 @@ const insightRows = computed(() => tp.insights(7))
               <ChevronLeft class="h-4 w-4" aria-hidden="true" />
             </button>
             <span class="num whitespace-nowrap text-xs font-semibold">{{ fmtDateLong(recDate) }}</span>
+            <UiStatusBadge v-if="recDateHoliday" :label="`祝: ${recDateHoliday}`" tone="neutral" />
             <button type="button" class="btn btn-sm" aria-label="翌日へ" @click="recDate = addDays(recDate, 1)">
               <ChevronRight class="h-4 w-4" aria-hidden="true" />
             </button>
