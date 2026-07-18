@@ -7,11 +7,17 @@
 
 ---
 
-## 0. 現在地（2026-07-18 時点）
+## 0. 現在地（2026-07-18 バッチ6b 時点で更新）
 
 `akebono-office` をモックアップから本番（Cloud Run API + RDS PostgreSQL・Vertex AI）へ段階移行中。
-**開発ブランチは `claude/nice-mayer-ipu30d` 固定**。1 バッチ = 1 PR で、マージ後に必ずブランチを
-最新 main から再作成する（後述の「運用慣行」参照）。
+**開発ブランチはセッションごとに指定される**（バッチ6a までは `claude/nice-mayer-ipu30d`、
+バッチ6b 以降は `claude/akebono-batch6b-onwards-3kma75`）。1 バッチ = 1 PR で、マージ後に必ず
+ブランチを最新 main から再作成する（後述の「運用慣行」参照）。
+
+- **バッチ6a（PR #35）はマージ済み**。バッチ6b（売上 F-15 + mart ETL）は本 PR で実装済み
+  （ETL 出力先 = app_office 内 mart 互換テーブル。オペレーター判断 2026-07-18。§1 参照）
+- 旧セッションの scratchpad（E2E スタック 16 スイート）は**コンテナ再作成で消失**。
+  バッチ6b で E2E ハーネスを scratchpad `e2e/` に再構築した（§4 検証スタック参照）
 
 ### 完了済み（マージ済み PR）
 - バッチ1〜4b: 勤怠・休暇・日報・マスタ・設定・通知・エスカレーション・ワークフロー・シフト・
@@ -38,7 +44,13 @@ AI アシスタント（F-14）・カレンダー・チャットボット（F-09
 
 ---
 
-## 1. バッチ6b: 売上管理（F-15）+ mart ETL 基盤
+## 1. バッチ6b: 売上管理（F-15）+ mart ETL 基盤 — **実装済み（本 PR）**
+
+> **結果メモ（2026-07-18）:** オペレーター確認の結果、mart ETL の出力先は
+> **app_office 内の mart 互換テーブル（fact_sales / mart_load_runs・migration 0017）** に決定。
+> 実装は下記方針どおり（sales_monthly 冪等 upsert・/v1/sales・shared/domain/fiscal・
+> useSales デュアルモード + 実績登録モーダル・chatbot 売上文脈・機能ガード 'sales'・
+> /jobs/sales-mart-etl）。詳細は implementation-status.md §13 が SoT。
 
 ### 要件（F-15-1）
 年度選択 → 月次推移・前年比・粗利率・顧客別/事業種別内訳の KPI + チャート。意思決定支援（F-02）への導線。
@@ -153,12 +165,18 @@ ETL の出力先を app_office 内の派生テーブルにするか、実際に 
   **マージ後に届いた指摘は次バッチの PR に取り込む**
 - 「直した」で終わらず「直した結果も問題ない（新たな問題が出ていない）」まで確認
 
-### 検証スタック（scratchpad）
-- `/tmp/claude-0/-home-user/daa9c2fe-5b99-5e8c-af32-2cbc5b92c31a/scratchpad/run-batch2a-stack.sh`:
-  使い捨て PostgreSQL + API（dev 認証・:8788）+ API モード静的配信（:4174）で全 E2E スイートを実行
-  （現在 16 スイート）。新バッチの E2E は `batchXX-e2e.cjs` を追加し、スタックスクリプトへ 1 行追記
-- モック回帰: mock-public を :4173 配信 → click-test / mock-masters-e2e / mock-reports-e2e /
-  mock-attendance-e2e
+### 検証スタック（scratchpad。バッチ6b で再構築）
+- 旧スタック（run-batch2a-stack.sh + 16 スイート）は旧コンテナの scratchpad ごと消失。
+  バッチ6b でセッション scratchpad の `e2e/` 配下に再構築した:
+  - `run-batch6b-stack.sh`: 使い捨て PostgreSQL + API（dev 認証・:8788・CORS_ORIGINS 必須）+
+    API モード静的配信（:4174）+ モック静的配信（:4173）を起動し、E2E スイートとモック回帰を実行
+  - `batch6b-e2e.cjs`（API モード実クリック 12 チェック）/ `mock-regression-e2e.cjs`（ナビ + 売上 + 主要ページ 9 チェック）
+  - `lib.cjs`（playwright ヘルパー。**chromium は executablePath '/opt/pw-browsers/chromium' 固定**。
+    `npm install playwright` を e2e/ 内で実行しておく）/ `serve.cjs`（SPA フォールバック付き静的配信）
+  - 新バッチの E2E は `batchXX-e2e.cjs` を追加し、スクリプトの SUITES へ 1 行追記
+  - ハマりどころ: ①フロントは**ハッシュルーティング**（URL は `/#/sales` 形式）②healthz は DB エラーでも
+    200 のため「最終マイグレーションの schema_migrations 登録」を待ってからシードする ③tsx プロセスの
+    pkill パターンは `tsx/dist/loader.mjs src/index.ts`（`tsx src/index.ts` では一致しない）
 - ビルド: api = `npm run build`（dist に db/migrations コピー必須）/ mockup = `npx nuxt generate`
   （モック版 = 環境変数なし / API 版 = `NUXT_PUBLIC_API_BASE=http://127.0.0.1:8788 NUXT_PUBLIC_DEV_MEMBER_ID=m-e2e`）
 - 各バッチ完了時: api typecheck / 単体 / 統合 / mockup typecheck / 単体 / E2E フルスタック / モック回帰

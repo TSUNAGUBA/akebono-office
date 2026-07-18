@@ -121,7 +121,7 @@ office: `IsometricOffice`（アイソメトリック空間）、`AiEmployeeCard`
 | `useNotifications` | 通知の発行・既読・バッジ数 |
 | `useEscalations` | シグナル検知・起票・管理者アクション・ナレッジ還流 |
 | `useSystemStatus` | 提供システム状態・インシデント・稼働率 |
-| `useSales` | 売上サマリ（モック集計） |
+| `useSales` | 売上サマリ・実績登録（デュアルモード: API モードは `/v1/sales` = sales_monthly が SoT。バッチ6b） |
 | `useChatbot` | シナリオベース応答・出典解決・擬似ストリーミング |
 | `useDocuments` | ドキュメントツリー・タグ・検索 |
 | `useToast` / `useConfirm` | UI フィードバック |

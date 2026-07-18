@@ -141,6 +141,20 @@
    ```
    付与は UNIQUE 制約（メンバー × 種別 × 付与日）で冪等のため、多重実行しても二重付与されない
 
+## 1-7b. 売上 mart ETL の日次実行（Cloud Scheduler・任意。バッチ6b）
+
+管理者が画面外から `POST /v1/sales/etl/run` を叩けば手動実行できる（冪等。実行履歴は
+`GET /v1/sales/etl/runs`）。毎日自動実行する場合は 1-7 と同じ `CRON_SECRET` を使い:
+
+```bash
+gcloud scheduler jobs create http sales-mart-etl \
+  --schedule "30 6 * * *" --time-zone "Asia/Tokyo" \
+  --uri "https://<cloud-run-url>/jobs/sales-mart-etl" \
+  --http-method POST --headers "x-cron-key=<CRON_SECRET と同じ値>"
+```
+
+ETL は `UNIQUE(tenant_key, source_txn_id)` の upsert で冪等のため、多重実行しても fact 行は増えない。
+
 ## 1-8. AI 機能（Vertex AI）
 
 AI 機能（日報 AI アシスト・タスク計画の AI コメント等）は **Vertex AI**（オペレーター決定 2026-07-17）を
