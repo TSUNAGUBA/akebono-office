@@ -23,6 +23,7 @@ import { Hono } from 'hono'
 import type pg from 'pg'
 import { fiscalMonthsOf, fiscalYearOf } from '../../../shared/domain/fiscal'
 import { nowJstIso, todayJst } from '../../../shared/domain/jst'
+import { findCompanyIn, SELF_COMPANY_PATTERN } from '../../../shared/domain/name-match'
 import { canUseFeature, canViewField, stripDeniedFields } from '../../../shared/domain/permissions'
 import type { PermissionRule, PunchRecord, ReportEntry } from '../../../shared/domain/types'
 import type { AuthUser } from '../auth'
@@ -33,6 +34,7 @@ import { capCp } from '../lib/text'
 import { newId } from '../lib/ids'
 import { generateJson } from '../lib/llm'
 import { activePermissionRules, subjectOf } from '../lib/permissions'
+import { searchDocsFor, TITLE_CHECKS } from '../lib/search-index'
 import { balanceOf, PAID_LEAVE_TYPE_ID } from './leave'
 import { selfFiscalStartMonth } from './sales'
 
@@ -79,11 +81,13 @@ export async function buildContext(
   question: string,
   rules: PermissionRule[],
   historyUserTexts: string[] = [],
+  env?: Env,
 ): Promise<string> {
   const parts: string[] = []
+  // 精密ブロックが描画済みのエンティティ（検索リトリーバルとの二重供給防止）
+  const renderedKeys = new Set<string>()
   // 話題判定用コーパス（質問 + 直近のユーザー発言）。LLM へ渡す質問文自体は変更しない
   const topic = [question, ...historyUserTexts].join('\n')
-  const q = topic.toLowerCase()
   const subject = subjectOf(user)
   const can = (feature: string): boolean => canUseFeature(rules, subject, feature)
   const strip = <T extends Record<string, unknown>>(entity: string, rows: T[]): T[] =>
@@ -407,16 +411,24 @@ export async function buildContext(
               primary_industry_id AS "primaryIndustryId", owner_member_id AS "ownerMemberId",
               description, location, size, fiscal_start_month AS "fiscalStartMonth"
        FROM companies WHERE active = true ORDER BY id LIMIT 100`)
-    const company = companies.find(c => [c.name, ...c.aliases].some(n => n && q.includes(String(n).toLowerCase())))
-      ?? (/自社|わが社|うちの会社/.test(topic) ? companies.find(c => c.kind === 'self') : undefined)
+    // 照合は正規化名寄せ（法人格・空白除去 = 「つなぐば」→「つなぐば株式会社」）+ 最長一致。
+    // 優先順: 今回の質問 → 直近のユーザー発言（新しい順）→ 自社キーワード
+    // （オペレーター報告 2026-07-18 #3: 履歴中の別会社が今回の質問の会社に勝つ誤りを解消）
+    const company = findCompanyIn(question, companies)
+      ?? [...historyUserTexts].reverse().map(t => findCompanyIn(t, companies)).find(Boolean)
+      ?? (SELF_COMPANY_PATTERN.test(topic) ? companies.find(c => c.kind === 'self') : undefined)
     if (!company) return
+    renderedKeys.add(`company:${company.id}`)
     // 見出しにも剥がし後の値を使う（name deny 時はブロックごと出さない）
     const [cs] = strip('companies', [company])
     if (!cs?.name) return
     const isSelf = company.kind === 'self'
-    const lines: string[] = [
-      `${String(cs.description ?? '')}（${String(cs.location ?? '') || '所在地未設定'}・規模 ${String(cs.size ?? '') || '未設定'}）`,
-    ]
+    // 空フィールドは出力しない（「規模 ()」等のテンプレート残骸を作らない）
+    const profile = [
+      cs.description ? String(cs.description) : '',
+      [cs.location ? String(cs.location) : '', cs.size ? `規模 ${String(cs.size)}` : ''].filter(Boolean).join('・'),
+    ].filter(Boolean).join(' / ')
+    const lines: string[] = profile ? [profile] : []
     // 業界（primary に（主）マーク。業界名にも industries の表示項目 deny を反映。
     // （主）判定も剥がし後の値を使う = primaryIndustryId deny 時はマークを出さない）
     if (cs.industryIds !== undefined && company.industryIds.length > 0) {
@@ -545,6 +557,7 @@ export async function buildContext(
        FROM contacts WHERE active = true ORDER BY id LIMIT 300`)
     const matched = contacts.find(p => nameHit(p.name))
     if (!matched) return
+    renderedKeys.add(`contact:${matched.id}`)
     // 見出しにも剥がし後の値を使う（name deny 時はブロックごと出さない）
     const [p] = strip('contacts', [matched])
     if (!p?.name) return
@@ -600,9 +613,28 @@ export async function buildContext(
        ORDER BY id LIMIT 3`,
       terms.map(t => `%${t.replace(/[\\%_]/g, m => `\\${m}`)}%`))
     if (hits.length > 0) {
+      for (const k of hits) renderedKeys.add(`knowledge:${k.id}`)
       parts.push(`## 関連ナレッジ\n${strip('knowledge', hits).map(k =>
         `「${String(k.title ?? '')}」(${k.id}): ${capCp(String(k.body ?? ''), 200)}`).join('\n')}`)
     }
+  })
+
+  // 検索リトリーバル（AI 検索最適化基盤 = search_docs。キーワード一致で拾えない曖昧・解釈型の質問を
+  // 字句バイグラム + 埋め込み（LLM 無効環境は字句のみ）で補足する。精密ブロック描画済みは除外。
+  // 照合は生データ・描画は segments の表示項目チェック（canViewField）通過行のみ = 既存パターン）
+  await block(async () => {
+    const hits = await searchDocsFor(pool, env, question)
+    const lines: string[] = []
+    for (const h of hits) {
+      if (renderedKeys.has(`${h.sourceKind}:${h.sourceId}`)) continue
+      const titleCheck = TITLE_CHECKS[h.sourceKind]
+      if (!canField(titleCheck.entity, titleCheck.field)) continue
+      const segLines = (h.segments ?? [])
+        .filter(s => (s.checks ?? []).every(ch => canField(ch.entity, ch.field)))
+        .map(s => s.text)
+      lines.push(`### ${h.title}\n${capCp(segLines.join('\n'), 600)}`)
+    }
+    if (lines.length > 0) parts.push(`## 関連情報（社内データ検索）\n${lines.join('\n')}`)
   })
 
   return parts.join('\n\n')
@@ -703,7 +735,7 @@ export function chatbotRoutes(pool: pg.Pool, env: Env): Hono {
       .filter(m => m.role === 'user')
       .slice(-3)
       .map(m => capCp(m.content, 200))
-    const context = await buildContext(pool, user, question, rules, historyUserTexts)
+    const context = await buildContext(pool, user, question, rules, historyUserTexts, env)
     const res = await generateJson<ChatAnswer>(env, {
       system: 'あなたは社内業務アシスタント（AKEBONO Office のチャットボット）です。与えられた社内文脈だけを'
         + '根拠に、日本語の丁寧語で簡潔に回答します。文脈にない事実は述べず、その場合は confidence を低くして'

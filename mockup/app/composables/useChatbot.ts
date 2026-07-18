@@ -6,7 +6,9 @@
  * - 応答: API モードは LLM 一次応答 → fallback 時は決定的ルーティング（応答はセッションへ追記して履歴を忠実に保つ）
  * - 擬似ストリーミング: 30-50 文字ずつ setInterval で流す。unmount 時は finalize() で確定保存
  */
-import type { ChatMessage, ChatSession, Result } from '~/types/domain'
+import { findCompanyIn, SELF_COMPANY_PATTERN } from '../../../shared/domain/name-match'
+import { bigramCoverage } from '../../../shared/domain/text-match'
+import type { ChatMessage, ChatSession, Company, Industry, Result } from '~/types/domain'
 import { fmtDateLong, fmtHours } from '~/utils/format'
 import { PROJECT_STATUS_LABELS } from '~/utils/labels'
 import { irange } from '~/utils/rng'
@@ -304,12 +306,21 @@ export function useChatbot() {
   function route(corpus: string, subText: string = corpus): BotAnswer | null {
     if (/有給|休暇/.test(corpus)) return answerLeave(subText)
     if (/残業|勤怠|労働時間/.test(corpus)) return answerOvertime()
+    // 会社照合は正規化名寄せ（法人格・空白除去 + 最長一致）。「弊社/当社」等は自社を回答
+    // （オペレーター報告 2026-07-18 #3: 「つなぐば」「弊社」が照合できない問題への対応）
     const company = matchCompany(corpus)
     if (company) return answerCompany(company)
+    if (SELF_COMPANY_PATTERN.test(corpus)) {
+      const self = tbl('companies').value.find(c => c.kind === 'self' && c.active)
+      if (self) return answerCompany(self)
+    }
+    const industry = matchIndustry(corpus)
+    if (industry) return answerIndustry(industry)
     if (/稼働|障害|システム/.test(corpus)) return answerStatus()
     if (/規程|ルール|就業/.test(corpus)) return answerRules(subText)
     if (/稟議|申請|承認/.test(corpus)) return answerWorkflow()
-    return null
+    // 最後の砦: ナレッジ全文の字句照合（解釈型の質問を蓄積ナレッジで補足。該当なしは null）
+    return answerKnowledgeSearch(subText)
   }
 
   function unknownAnswer(): BotAnswer {
@@ -328,14 +339,15 @@ export function useChatbot() {
   function resolveAnswer(text: string): BotAnswer {
     const primary = route(text)
     if (primary) return primary
-    // 直近のユーザー発言（今回分は表示リストに追加済みのため除く）から話題を引き継ぐ
-    const recent = sorted.value
+    // 直近のユーザー発言（今回分は表示リストに追加済みのため除く）から話題を引き継ぐ。
+    // 新しい発言から 1 件ずつ再判定する（サーバー側と同じ「新しい順優先」= 連結コーパスだと
+    // 古い発言の長い会社名が最長一致で勝ってしまうため）
+    const recents = sorted.value
       .filter(m => m.role === 'user')
       .slice(-4, -1)
       .map(m => m.content)
-      .join('\n')
-    if (recent) {
-      const followUp = route(`${recent}\n${text}`, text)
+    for (const t of [...recents].reverse()) {
+      const followUp = route(`${t}\n${text}`, text)
       if (followUp) return followUp
     }
     return unknownAnswer()
@@ -400,17 +412,13 @@ export function useChatbot() {
     }
   }
 
-  /** c) 顧客会社名マッチ（name / aliases） */
-  function matchCompany(text: string) {
-    const lower = text.toLowerCase()
-    return tbl('companies').value.find(c =>
-      c.kind === 'customer' && c.active
-      && [c.name, ...c.aliases].some(n => n && lower.includes(n.toLowerCase())),
-    )
+  /** c) 会社名マッチ（自社/顧客とも。正規化名寄せ + 最長一致 = shared/domain/name-match） */
+  function matchCompany(text: string): Company | undefined {
+    return findCompanyIn(text, tbl('companies').value.filter(c => c.active))
   }
 
-  /** c) 顧客: 概要 + 業界 + 担当 + 関連ナレッジ */
-  function answerCompany(c: { id: string; name: string; description: string; industryIds: string[]; size: string; location: string; ownerMemberId: string | null }): BotAnswer {
+  /** c) 会社（自社/顧客）: 概要 + 業界 + 担当 + 関係 + 関連ナレッジ（空フィールドは出力しない） */
+  function answerCompany(c: Company): BotAnswer {
     const industries = tbl('industries').value.filter(i => c.industryIds.includes(i.id)).map(i => i.name)
     const owner = tbl('members').value.find(m => m.id === c.ownerMemberId)
     const projects = tbl('projects').value.filter(p => p.active && p.companyId === c.id)
@@ -418,9 +426,15 @@ export function useChatbot() {
       .filter(k => k.active && k.domain === 'company' && k.targetId === c.id)
       .slice(0, 2)
 
+    const facts: string[] = []
+    if (industries.length > 0) facts.push(`業界は${industries.join('・')}`)
+    if (c.size) facts.push(`規模 ${c.size}`)
+    if (c.location) facts.push(`所在地 ${c.location}`)
+    if (owner) facts.push(`担当は ${owner.name}（${deptNameOf(owner.departmentId)}）`)
     const lines = [
-      `${c.name}: ${c.description}。`,
-      `業界は${industries.join('・') || '未設定'}、規模 ${c.size}（${c.location}）。担当は ${owner ? `${owner.name}（${deptNameOf(owner.departmentId)}）` : '未設定'} です。`,
+      `${c.kind === 'self' ? '自社' : '顧客'}「${c.name}」${c.description ? `: ${c.description}` : 'の情報です。'}`,
+      ...(facts.length > 0 ? [`${facts.join('、')}。`] : []),
+      ...(c.kind === 'self' && c.fiscalStartMonth ? [`会計年度は ${c.fiscalStartMonth} 月始まりです。`] : []),
     ]
     if (projects.length > 0) {
       lines.push(`関連プロジェクト: ${projects.map(p => `${p.name}（${PROJECT_STATUS_LABELS[p.status]}）`).join(' / ')}`)
@@ -445,8 +459,57 @@ export function useChatbot() {
     }
     return {
       content: lines.join('\n'),
-      sources: ['顧客マスタ', ...ks.map(k => `ナレッジ ${k.id}`)],
+      sources: [c.kind === 'self' ? '自社マスタ' : '顧客マスタ', ...ks.map(k => `ナレッジ ${k.id}`)],
       suggestions: ['システムの稼働状況は？', '経費精算の規程はある？'],
+    }
+  }
+
+  /** c2) 業界マッチ（「小売」→「小売業」のような末尾「業」の省略にも対応） */
+  function matchIndustry(text: string): Industry | undefined {
+    return tbl('industries').value.find(i => i.active && i.name.length >= 2 && (
+      text.includes(i.name)
+      || (i.name.endsWith('業') && i.name.length >= 3 && text.includes(i.name.slice(0, -1)))))
+  }
+
+  /** c2) 業界: 該当顧客 + 業界ナレッジ（「小売はどんなところで困る?」等の解釈型に蓄積ナレッジで回答） */
+  function answerIndustry(ind: Industry): BotAnswer {
+    const customers = tbl('companies').value
+      .filter(c => c.active && c.kind === 'customer' && c.industryIds.includes(ind.id))
+    const ks = tbl('knowledge').value
+      .filter(k => k.active && k.domain === 'industry' && k.targetId === ind.id)
+      .slice(0, 2)
+    const lines = [`業界「${ind.name}」の情報です。`]
+    if (customers.length > 0) lines.push(`該当する顧客: ${customers.map(c => c.name).join('・')}`)
+    for (const k of ks) {
+      lines.push(`ナレッジ「${k.title}」: ${k.body.length > 160 ? `${k.body.slice(0, 160)}…` : k.body}`)
+    }
+    if (customers.length === 0 && ks.length === 0) {
+      lines.push('この業界に紐付く顧客・ナレッジはまだ登録されていません。/masters/knowledge から蓄積できます。')
+    }
+    return {
+      content: lines.join('\n'),
+      sources: ['業界マスタ', ...ks.map(k => `ナレッジ ${k.id}`)],
+      suggestions: [customers.length > 0 ? `${customers[0]!.name}について教えて` : '業界別の顧客は？', '有給の残りは何日？'],
+    }
+  }
+
+  /** g) ナレッジ全文の字句照合（バイグラム被覆率。キーワードルートに乗らない質問の最後の砦） */
+  function answerKnowledgeSearch(text: string): BotAnswer | null {
+    const hits = tbl('knowledge').value
+      .filter(k => k.active)
+      .map(k => ({ k, score: bigramCoverage(text, `${k.title}\n${k.body}\n${k.tags.join(' ')}`) }))
+      .filter(x => x.score >= 0.25)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 2)
+    if (hits.length === 0) return null
+    const lines = ['関連しそうな社内ナレッジが見つかりました。']
+    for (const { k } of hits) {
+      lines.push(`「${k.title}」: ${k.body.length > 200 ? `${k.body.slice(0, 200)}…` : k.body}`)
+    }
+    return {
+      content: lines.join('\n'),
+      sources: hits.map(({ k }) => `ナレッジ ${k.id}`),
+      suggestions: INITIAL_SUGGESTIONS.slice(0, 2),
     }
   }
 

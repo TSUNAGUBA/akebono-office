@@ -13,8 +13,8 @@ const METADATA_TOKEN_URL
 
 let cachedToken: { token: string; expiresAt: number } | null = null
 
-/** ADC アクセストークン（メタデータサーバー）。取得不可 = LLM 無効環境として null */
-async function accessToken(): Promise<string | null> {
+/** ADC アクセストークン（メタデータサーバー）。取得不可 = LLM 無効環境として null（embeddings.ts でも再利用） */
+export async function accessToken(): Promise<string | null> {
   if (cachedToken && cachedToken.expiresAt > Date.now() + 60_000) return cachedToken.token
   try {
     const res = await fetch(METADATA_TOKEN_URL, {

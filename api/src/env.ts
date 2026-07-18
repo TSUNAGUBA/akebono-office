@@ -25,6 +25,8 @@ export interface Env {
   vertexLocation: string
   /** 生成モデル ID（既定 gemini-2.5-flash） */
   vertexModel: string
+  /** 埋め込みモデル ID（既定 text-multilingual-embedding-002。VERTEX_PROJECT_ID 空 = 埋め込み無効 = 字句検索のみ） */
+  vertexEmbeddingModel: string
   /** Google OAuth クライアント ID（カレンダー連携。空 = 連携無効） */
   googleOauthClientId: string
   /** Google OAuth クライアントシークレット（Secret Manager 経由） */
@@ -58,6 +60,7 @@ export function loadEnv(): Env {
     vertexProjectId: process.env.VERTEX_PROJECT_ID ?? '',
     vertexLocation: process.env.VERTEX_LOCATION ?? 'global',
     vertexModel: process.env.VERTEX_MODEL ?? 'gemini-2.5-flash',
+    vertexEmbeddingModel: process.env.VERTEX_EMBEDDING_MODEL ?? 'text-multilingual-embedding-002',
     googleOauthClientId: process.env.GOOGLE_OAUTH_CLIENT_ID ?? '',
     googleOauthClientSecret: process.env.GOOGLE_OAUTH_CLIENT_SECRET ?? '',
     tokenEncryptionKey: process.env.TOKEN_ENCRYPTION_KEY ?? '',

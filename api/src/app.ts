@@ -16,7 +16,9 @@ import { attendanceRoutes } from './routes/attendance'
 import { configsRoutes } from './routes/configs'
 import { escalationsRoutes } from './routes/escalations'
 import { holidaysRoutes } from './routes/holidays'
+import { knowledgeRoutes } from './routes/knowledge'
 import { leaveRoutes, runPeriodicGrants } from './routes/leave'
+import { searchRoutes } from './routes/search'
 import { mastersRoutes } from './routes/masters'
 import { notificationsRoutes } from './routes/notifications'
 import { reportsRoutes } from './routes/reports'
@@ -123,10 +125,10 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
   app.route('/v1/attendance', attendanceRoutes(pool))
   app.route('/v1/leave', leaveRoutes(pool))
   app.route('/v1/reports', reportsRoutes(pool))
-  app.route('/v1/masters', mastersRoutes(pool))
+  app.route('/v1/masters', mastersRoutes(pool, env))
   app.route('/v1/configs', configsRoutes(pool))
   app.route('/v1/notifications', notificationsRoutes(pool))
-  app.route('/v1/escalations', escalationsRoutes(pool))
+  app.route('/v1/escalations', escalationsRoutes(pool, env))
   app.route('/v1/workflows', workflowsRoutes(pool))
   app.route('/v1/shifts', shiftsRoutes(pool))
   app.route('/v1/task-plans', taskPlansRoutes(pool, env))
@@ -139,6 +141,8 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
   app.route('/v1/status', statusRoutes(pool))
   app.route('/v1/akebono', akebonoRoutes(pool))
   app.route('/v1/holidays', holidaysRoutes(pool))
+  app.route('/v1/search', searchRoutes(pool, env))
+  app.route('/v1/knowledge', knowledgeRoutes(pool, env))
 
   app.notFound(c => c.json({ error: { code: 'AKO-GEN-404', message: 'エンドポイントが見つかりません' } }, 404))
 

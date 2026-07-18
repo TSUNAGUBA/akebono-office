@@ -2,6 +2,7 @@
  * 統合テスト（実 PostgreSQL）。DATABASE_URL 必須（test/run-integration.sh が起動・設定する）。
  * マイグレーション適用 → dev 認証で主要フローをエンドツーエンドに検証する。
  */
+import { readFileSync } from 'node:fs'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { Hono } from 'hono'
 import pg from 'pg'
@@ -23,6 +24,7 @@ const env: Env = {
   vertexProjectId: '', // LLM 無効 = 全 AI 機能はヒューリスティックへフォールバック
   vertexLocation: 'global',
   vertexModel: 'gemini-2.5-flash',
+  vertexEmbeddingModel: 'text-multilingual-embedding-002', // 無効環境 = 埋め込みなし（字句検索のみ）
   googleOauthClientId: '', // カレンダー連携無効（AKO-CAL-007 経路を検証）
   googleOauthClientSecret: '',
   tokenEncryptionKey: 'test-encryption-key',
@@ -2212,5 +2214,233 @@ describe('営業日・祝日基盤（オペレーター報告 2026-07-18 #4）',
     })).json.data as { tomorrow: string }
     expect(draft.tomorrow).toContain('祝日明けの計画（拾われる）')
     expect(draft.tomorrow).not.toContain('祝日の計画（拾われない）')
+  })
+})
+
+describe('AI 検索最適化基盤 + ナレッジのドキュメント取込（オペレーター報告 2026-07-18 #3）', () => {
+  const adminUser = { id: ADMIN, name: '管理 太郎', email: 'admin@example.com', role: 'admin' as const, title: '', avatar: '' }
+  const memberUser = { id: MEMBER, name: '一般 次郎', email: 'member@example.com', role: 'member' as const, title: '', avatar: '' }
+  let buildContext: (typeof import('../../src/routes/chatbot'))['buildContext']
+  let srchSelfId = ''
+  let indId = ''
+
+  const b64 = (s: string): string => Buffer.from(s, 'utf8').toString('base64')
+
+  beforeAll(async () => {
+    ;({ buildContext } = await import('../../src/routes/chatbot'))
+    const ind = await api('POST', '/v1/masters/industries', { as: ADMIN, body: { name: '検索小売業' } })
+    indId = (ind.json.data as { id: string }).id
+    const self = await api('POST', '/v1/masters/companies', {
+      as: ADMIN, body: { kind: 'self', name: '検索つなぐば株式会社', fiscalStartMonth: 4 },
+    })
+    srchSelfId = (self.json.data as { id: string }).id
+    const cust = await api('POST', '/v1/masters/companies', {
+      as: ADMIN,
+      body: { kind: 'customer', name: '検索シマテスト株式会社', industryIds: [indId], primaryIndustryId: indId },
+    })
+    const rt = await api('POST', '/v1/masters/relation-types', {
+      as: ADMIN, body: { label: '検索取引先', appliesTo: 'company' },
+    })
+    await api('POST', '/v1/masters/company-relations', {
+      as: ADMIN,
+      body: {
+        fromCompanyId: srchSelfId, toCompanyId: (cust.json.data as { id: string }).id,
+        relationTypeId: (rt.json.data as { id: string }).id,
+      },
+    })
+    await api('POST', '/v1/masters/knowledge', {
+      as: ADMIN,
+      body: {
+        domain: 'industry', targetId: indId, title: '検索小売業の困りごと',
+        body: '検索小売業の顧客は在庫回転とシーズン切替の値引きで困る傾向がある。棚割りの最適化も課題。',
+        tags: ['商習慣'],
+      },
+    })
+  })
+
+  afterAll(async () => {
+    // 「有効な自社は 1 社」前提のテストが将来追加されても壊さないよう後片付け
+    await api('POST', `/v1/masters/companies/${srchSelfId}/archive`, { as: ADMIN })
+  })
+
+  it('検索インデックスの再生成は管理者のみ・冪等（2 回目は upserted 0）', async () => {
+    expect((await api('POST', '/v1/search/reindex', { as: MEMBER })).status).toBe(403)
+    const first = await api('POST', '/v1/search/reindex', { as: ADMIN })
+    expect(first.status).toBe(200)
+    const r1 = first.json.data as { docs: number; upserted: number; deleted: number; embedded: number }
+    expect(r1.docs).toBeGreaterThan(0)
+    expect(r1.embedded).toBe(0) // LLM 無効環境 = 埋め込みなし（字句検索のみ）
+    const again = await api('POST', '/v1/search/reindex', { as: ADMIN })
+    expect((again.json.data as { upserted: number; deleted: number })).toMatchObject({ upserted: 0, deleted: 0 })
+  })
+
+  it('名寄せ照合: 法人格省略（「検索つなぐば」）・「弊社」で自社ブロックが供給される', async () => {
+    const byShortName = await buildContext(pool, adminUser, '検索つなぐばの取引先は?', [])
+    expect(byShortName).toContain('自社「検索つなぐば株式会社」')
+    expect(byShortName).toContain('検索シマテスト株式会社: 検索取引先')
+    const bySelfWord = await buildContext(pool, adminUser, '弊社の取引先を教えて', [])
+    expect(bySelfWord).toContain('自社「検索つなぐば株式会社」')
+    expect((await buildContext(pool, adminUser, '当社の会計年度は?', []))).toContain('会計年度: 4 月始まり')
+  })
+
+  it('会社照合は今回の質問を履歴より優先する（履歴中の別会社に負けない）', async () => {
+    const ctx = await buildContext(pool, adminUser, '検索シマテスト株式会社について教えて', [],
+      ['検索つなぐばの取引先は?'])
+    expect(ctx).toContain('顧客「検索シマテスト株式会社」')
+    expect(ctx).not.toContain('## 自社「検索つなぐば株式会社」')
+    // 逆: 今回の質問に会社名がなければ履歴（新しい順）から引き継ぐ
+    const followUp = await buildContext(pool, adminUser, 'そこの担当は誰?', [], ['検索シマテスト株式会社について教えて'])
+    expect(followUp).toContain('顧客「検索シマテスト株式会社」')
+  })
+
+  it('検索リトリーバル: キーワードに乗らない解釈型の質問をナレッジで補足する（字句バイグラム）', async () => {
+    const ctx = await buildContext(pool, memberUser, '検索小売はどんなところで困る傾向がある?', [])
+    expect(ctx).toContain('関連情報（社内データ検索）')
+    expect(ctx).toContain('在庫回転とシーズン切替の値引きで困る傾向')
+    // 表示項目 deny: knowledge.body を deny すると本文セグメントが描画されない（タイトルは残る）
+    const bodyDeny = [{
+      id: 'pm-srch1', subjectKind: 'role' as const, subjectId: 'member', resource: 'knowledge', field: 'body',
+      effect: 'deny' as const, active: true,
+    }]
+    const noBody = await buildContext(pool, memberUser, '検索小売はどんなところで困る傾向がある?', bodyDeny)
+    expect(noBody).not.toContain('在庫回転とシーズン切替')
+    // knowledge.title を deny するとドキュメントごと描画されない
+    const titleDeny = [{
+      id: 'pm-srch2', subjectKind: 'role' as const, subjectId: 'member', resource: 'knowledge', field: 'title',
+      effect: 'deny' as const, active: true,
+    }]
+    const noTitle = await buildContext(pool, memberUser, '検索小売業の困りごとを教えて', titleDeny)
+    expect(noTitle).not.toContain('検索小売業の困りごと')
+  })
+
+  it('ドキュメント取込: .md（見出し→タイトル）・原本の保存とダウンロード', async () => {
+    const md = '# 検索輸入商材の商習慣\n\n検索輸入商材は船便リードタイムが長く、発注精度が利益を左右する。'
+    expect((await api('POST', '/v1/knowledge/import', {
+      as: MEMBER, body: { filename: 'a.md', contentBase64: b64(md), domain: 'industry', targetId: indId },
+    })).status).toBe(403)
+    const created = await api('POST', '/v1/knowledge/import', {
+      as: ADMIN, body: { filename: 'trade.md', contentBase64: b64(md), domain: 'industry', targetId: indId, tags: ['商習慣'] },
+    })
+    expect(created.status).toBe(201)
+    const article = created.json.data as { id: string; title: string; body: string; source: string }
+    expect(article.title).toBe('検索輸入商材の商習慣')
+    expect(article.body).toContain('船便リードタイム')
+    expect(article.source).toBe('manual')
+    // 原本メタと本体のラウンドトリップ
+    const files = (await api('GET', `/v1/knowledge/${article.id}/files`, { as: MEMBER })).json.data as
+      { id: string; filename: string; sizeBytes: number }[]
+    expect(files).toHaveLength(1)
+    expect(files[0]!.filename).toBe('trade.md')
+    const dl = (await api('GET', `/v1/knowledge/files/${files[0]!.id}`, { as: MEMBER })).json.data as
+      { filename: string; contentBase64: string }
+    expect(Buffer.from(dl.contentBase64, 'base64').toString('utf8')).toBe(md)
+    // 取込後の再インデックスで検索リトリーバルに載る（デバウンスを待たず手動再生成 = 手動回復パス）
+    await api('POST', '/v1/search/reindex', { as: ADMIN })
+    const ctx = await buildContext(pool, memberUser, '検索輸入商材の商習慣を教えて', [])
+    expect(ctx).toContain('船便リードタイム')
+  })
+
+  it('ドキュメント取込: .txt / .pdf / .docx から抽出できる。非対応形式・抽出不能はエラー', async () => {
+    const txt = await api('POST', '/v1/knowledge/import', {
+      as: ADMIN,
+      body: { filename: 'note.txt', contentBase64: b64('検索テキスト取込のメモ'), domain: 'industry', targetId: indId },
+    })
+    expect(txt.status).toBe(201)
+    expect((txt.json.data as { title: string }).title).toBe('note') // 拡張子除去のファイル名
+
+    const pdfBytes = readFileSync(new URL('../fixtures/sample.pdf', import.meta.url))
+    const pdf = await api('POST', '/v1/knowledge/import', {
+      as: ADMIN,
+      body: { filename: 'sample.pdf', contentBase64: pdfBytes.toString('base64'), domain: 'industry', targetId: indId },
+    })
+    expect(pdf.status).toBe(201)
+    expect((pdf.json.data as { body: string }).body).toContain('retail inventory issues')
+
+    const docxBytes = readFileSync(new URL('../fixtures/sample.docx', import.meta.url))
+    const docx = await api('POST', '/v1/knowledge/import', {
+      as: ADMIN,
+      body: { filename: 'sample.docx', contentBase64: docxBytes.toString('base64'), domain: 'company', targetId: srchSelfId },
+    })
+    expect(docx.status).toBe(201)
+    expect((docx.json.data as { body: string }).body).toContain('DOCX取込テスト')
+
+    // 旧 .doc は変換を案内・未知拡張子も 400
+    const doc = await api('POST', '/v1/knowledge/import', {
+      as: ADMIN, body: { filename: 'legacy.doc', contentBase64: b64('x'), domain: 'industry', targetId: indId },
+    })
+    expect(doc.status).toBe(400)
+    expect(doc.json.error?.code).toBe('AKO-KNW-001')
+    // 壊れた PDF はテキスト抽出不能（AKO-KNW-003）
+    const broken = await api('POST', '/v1/knowledge/import', {
+      as: ADMIN, body: { filename: 'broken.pdf', contentBase64: b64('not a pdf'), domain: 'industry', targetId: indId },
+    })
+    expect(broken.status).toBe(422)
+    expect(broken.json.error?.code).toBe('AKO-KNW-003')
+    // domain 不正
+    expect((await api('POST', '/v1/knowledge/import', {
+      as: ADMIN, body: { filename: 'a.md', contentBase64: b64('x'), domain: 'general' },
+    })).status).toBe(400)
+  })
+
+  it('検索リトリーバルの segments チェックは各セグメントの含有情報を網羅する（PR #45 レビュー R1）', async () => {
+    // 会社ドキュメントに役職付き担当者・説明を持たせ、会社名を出さない曖昧質問で検索経路を通す
+    const cust2 = await api('POST', '/v1/masters/companies', {
+      as: ADMIN,
+      body: { kind: 'customer', name: '検索卸山商店', description: '検索卸業務の専門商社', industryIds: [indId] },
+    })
+    const cust2Id = (cust2.json.data as { id: string }).id
+    await api('POST', '/v1/masters/contacts', {
+      as: ADMIN, body: { companyId: cust2Id, name: '検索 部長子', title: '検索仕入部長' },
+    })
+    await api('POST', '/v1/search/reindex', { as: ADMIN })
+    const deny = (id: string, resource: string, field: string) => [{
+      id, subjectKind: 'role' as const, subjectId: 'member', resource, field,
+      effect: 'deny' as const, active: true,
+    }]
+    const q = '検索卸業務を専門にしている先はある?'
+    const open = await buildContext(pool, memberUser, q, [])
+    expect(open).toContain('検索仕入部長') // 検索経路（関連情報）で役職まで供給される
+    // contacts.title deny → 役職を含む担当者セグメントは行ごと消える（漏えいしない）
+    const noTitle = await buildContext(pool, memberUser, q, deny('pm-r1a', 'contacts', 'title'))
+    expect(noTitle).not.toContain('検索仕入部長')
+    // companies.industryIds deny → 業界セグメント（所属の開示）が消える
+    const noInd = await buildContext(pool, memberUser, q, deny('pm-r1b', 'companies', 'industryIds'))
+    expect(noInd).not.toContain('業界: 検索小売業')
+    // projects.type deny → プロジェクトドキュメントの種別セグメントが消える
+    await api('POST', '/v1/masters/projects', {
+      as: ADMIN, body: { name: '検索棚割最適化', companyId: cust2Id, type: 'development', objective: '検索棚割の改善' },
+    })
+    await api('POST', '/v1/search/reindex', { as: ADMIN })
+    const pjQ = '検索棚割の改善はどう進んでいる?'
+    expect(await buildContext(pool, memberUser, pjQ, [])).toContain('種別: development')
+    expect(await buildContext(pool, memberUser, pjQ, deny('pm-r1c', 'projects', 'type')))
+      .not.toContain('種別: development')
+  })
+
+  it('ナレッジ原本の参照も表示項目 deny に従う（PR #45 レビュー R3: deny の迂回防止）', async () => {
+    const created = await api('POST', '/v1/knowledge/import', {
+      as: ADMIN,
+      body: { filename: 'secret.md', contentBase64: b64('# 検索機密メモ\n検索原本の中身'), domain: 'industry', targetId: indId },
+    })
+    const kid = (created.json.data as { id: string }).id
+    const files = (await api('GET', `/v1/knowledge/${kid}/files`, { as: MEMBER })).json.data as { id: string }[]
+    expect(files).toHaveLength(1)
+    // knowledge.body deny → 原本ダウンロードは 403（原本は抽出テキストの上位互換のため）
+    const bodyDeny = await api('POST', '/v1/masters/permission-rules', {
+      as: ADMIN, body: { subjectKind: 'role', subjectId: 'member', resource: 'knowledge', field: 'body', effect: 'deny' },
+    })
+    const ruleId = (bodyDeny.json.data as { id: string }).id
+    const denied = await api('GET', `/v1/knowledge/files/${files[0]!.id}`, { as: MEMBER })
+    expect(denied.status).toBe(403)
+    expect(denied.json.error?.code).toBe('AKO-PRM-001')
+    expect((await api('GET', `/v1/knowledge/files/${files[0]!.id}`, { as: ADMIN })).status).toBe(200)
+    await api('POST', `/v1/masters/permission-rules/${ruleId}/archive`, { as: ADMIN })
+    // knowledge.title deny → 添付メタ一覧（ファイル名）も空
+    const titleDeny = await api('POST', '/v1/masters/permission-rules', {
+      as: ADMIN, body: { subjectKind: 'role', subjectId: 'member', resource: 'knowledge', field: 'title', effect: 'deny' },
+    })
+    const titleRuleId = (titleDeny.json.data as { id: string }).id
+    expect((await api('GET', `/v1/knowledge/${kid}/files`, { as: MEMBER })).json.data).toEqual([])
+    await api('POST', `/v1/masters/permission-rules/${titleRuleId}/archive`, { as: ADMIN })
   })
 })

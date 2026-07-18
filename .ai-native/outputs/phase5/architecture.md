@@ -123,7 +123,7 @@ office: `IsometricOffice`（アイソメトリック空間）、`AiEmployeeCard`
 | `useSystemStatus` | 提供システム状態・インシデント・稼働率（デュアルモード: API モードは `/v1/status` = service_incidents が SoT・uptime はサーバー導出。バッチ6c） |
 | `useSales` | 売上サマリ・実績登録（デュアルモード: API モードは `/v1/sales` = sales_monthly が SoT。バッチ6b） |
 | `useAkebono` | AKEBONO 要望ボックス（デュアルモード: API モードは `/v1/akebono/wishes` = akebono_wishes が SoT・追記のみ。バッチ6d） |
-| `useChatbot` | セッション管理（デュアルモード: API モードは `/v1/chatbot` = chat_sessions / chat_messages が SoT・LLM 一次応答 + マルチターン。バッチ5b）・フォールバックのシナリオベース応答（2 段ルーティング = 今回の質問 → 直近のユーザー発言で再判定）・出典解決・擬似ストリーミング・表示中セッションの sessionStorage タブ内永続 + リロード自動再開（2026-07-18 改善） |
+| `useChatbot` | セッション管理（デュアルモード: API モードは `/v1/chatbot` = chat_sessions / chat_messages が SoT・LLM 一次応答 + マルチターン。バッチ5b）・フォールバックのシナリオベース応答（2 段ルーティング = 今回の質問 → 直近のユーザー発言で再判定。会社は正規化名寄せ + 最長一致・弊社/当社 = 自社・業界回答・ナレッジ全文字句照合 = バッチ7a）・出典解決・擬似ストリーミング・表示中セッションの sessionStorage タブ内永続 + リロード自動再開（2026-07-18 改善） |
 | `useBusinessDay` | 営業日・祝日の参照（翌営業日 = メンバーの勤怠ルールの営業曜日 + 祝日マスタで解決・祝日名のカレンダー表示。計算本体は shared/domain/business-day を API と共有。オペレーター報告 2026-07-18 #4） |
 | `useDocuments` | ドキュメントツリー・タグ・検索 |
 | `useToast` / `useConfirm` | UI フィードバック |
