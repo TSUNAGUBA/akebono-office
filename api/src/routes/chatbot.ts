@@ -149,7 +149,7 @@ export async function buildContext(
       const { rows } = await pool.query<PunchRecord>(
         `SELECT id, member_id AS "memberId", date::text AS date, kind, at, source,
                 fixed_from AS "fixedFrom", fix_reason AS "fixReason", approved_by AS "approvedBy"
-         FROM punch_records WHERE member_id = $1 AND to_char(date, 'YYYY-MM') = $2 ORDER BY at`,
+         FROM punch_records WHERE member_id = $1 AND to_char(date, 'YYYY-MM') = $2 ORDER BY at, created_at`,
         [user.id, today.slice(0, 7)])
       if (rows.length === 0) return
       const byDate = new Map<string, PunchRecord[]>()
@@ -261,7 +261,7 @@ export async function buildContext(
         `SELECT id, title, category FROM decision_themes WHERE active = true ORDER BY id LIMIT 10`)
       const { rows: logs } = await pool.query<{ themeTitle: string; chosenSlot: string; reason: string; at: string }>(
         `SELECT t.title AS "themeTitle", l.chosen_slot AS "chosenSlot", l.reason, l.at
-         FROM decision_logs l JOIN decision_themes t ON t.id = l.theme_id ORDER BY l.at DESC LIMIT 3`)
+         FROM decision_logs l JOIN decision_themes t ON t.id = l.theme_id ORDER BY l.at DESC, l.id LIMIT 3`)
       // テーマ名にも decision-themes の表示項目 deny を反映（title deny 時はテーマを特定できないため出さない）
       const shownThemes = strip('decision-themes', themes).filter(t => t.title)
       if (shownThemes.length === 0) return
@@ -277,7 +277,7 @@ export async function buildContext(
     await block(async () => {
       const { rows: plans } = await pool.query<{ title: string; status: string; outcome: string }>(
         `SELECT title, status, outcome FROM task_plans
-         WHERE member_id = $1 AND date = $2::date ORDER BY created_at LIMIT 10`, [user.id, today])
+         WHERE member_id = $1 AND date = $2::date ORDER BY created_at, id LIMIT 10`, [user.id, today])
       const { rows: events } = await pool.query<{ from: string; to: string; title: string }>(
         `SELECT from_time AS "from", to_time AS "to", title FROM calendar_events
          WHERE member_id = $1 AND date = $2::date ORDER BY from_time LIMIT 10`, [user.id, today])
@@ -297,7 +297,7 @@ export async function buildContext(
       const { rows } = await pool.query<{ context: string; raisedAt: string }>(
         `SELECT context, raised_at AS "raisedAt" FROM escalations
          WHERE target_member_id = $1 AND status = 'open' AND reason = 'issue_reported'
-         ORDER BY raised_at DESC LIMIT 3`, [user.id])
+         ORDER BY raised_at DESC, created_at DESC LIMIT 3`, [user.id])
       if (rows.length > 0) {
         parts.push(`## 本人に関する対応中エスカレーション\n${rows.map(e => `- ${capCp(e.context, 100)}（${e.raisedAt.slice(0, 10)}）`).join('\n')}`)
       }
@@ -310,7 +310,7 @@ export async function buildContext(
       const { rows } = await pool.query<{ title: string; status: string; empName: string }>(
         `SELECT t.title, t.status, e.name AS "empName"
          FROM ai_tasks t JOIN ai_employees e ON e.id = t.ai_employee_id
-         ORDER BY t.created_at DESC LIMIT 8`)
+         ORDER BY t.created_at DESC, t.id LIMIT 8`)
       if (rows.length === 0) return
       const label: Record<string, string> = {
         proposed: '承認待ち', approved: '承認済', in_progress: '実行中', blocked: 'ブロック中', done: '完了', cancelled: '中止',
@@ -361,7 +361,7 @@ export async function buildContext(
         serviceId: string; title: string; impact: string; status: string; startedAt: string
       }>(
         `SELECT service_id AS "serviceId", title, impact, status, started_at AS "startedAt"
-         FROM service_incidents WHERE status <> 'resolved' ORDER BY started_at DESC LIMIT 10`)
+         FROM service_incidents WHERE status <> 'resolved' ORDER BY started_at DESC, id LIMIT 10`)
       const stateLabel: Record<string, string> = {
         minor: '性能低下', major: '一部障害', critical: '重大障害',
       }
@@ -386,7 +386,7 @@ export async function buildContext(
   if (can('akebono') && /AKEBONO(?!\s*(SCM|Office))|アケボノ(?!商事)|あけぼの|要望/i.test(topic)) {
     await block(async () => {
       const { rows } = await pool.query<{ body: string; at: string }>(
-        `SELECT body, at FROM akebono_wishes ORDER BY at DESC LIMIT 3`)
+        `SELECT body, at FROM akebono_wishes ORDER BY at DESC, id LIMIT 3`)
       parts.push(`## AKEBONO（/akebono）
 次世代の AI ネイティブ会社基盤として要件定義中（Phase 2）。要望ボックスで「こうなってほしい」を受付中。${
   rows.length > 0

@@ -36,7 +36,7 @@ export function assistRoutes(pool: pg.Pool, env: Env): Hono {
     const user = c.get('user')
     const date = dateOrToday(c.req.query('date'))
     const { rows } = await pool.query(
-      `SELECT ${LOG_COLS} FROM assist_logs WHERE member_id = $1 AND date = $2::date ORDER BY at LIMIT 500`,
+      `SELECT ${LOG_COLS} FROM assist_logs WHERE member_id = $1 AND date = $2::date ORDER BY at, id LIMIT 500`,
       [user.id, date])
     return c.json({ data: rows })
   })
@@ -81,13 +81,13 @@ export function assistRoutes(pool: pg.Pool, env: Env): Hono {
     // 材料の収集（カレンダー予定は同期済みキャッシュ = calendar_events）
     const [logsQ, plansQ, nextPlansQ, projectsQ, companiesQ, eventsQ] = await Promise.all([
       pool.query<HearingLog>(
-        `SELECT ${LOG_COLS} FROM assist_logs WHERE member_id = $1 AND date = $2::date ORDER BY at`,
+        `SELECT ${LOG_COLS} FROM assist_logs WHERE member_id = $1 AND date = $2::date ORDER BY at, id`,
         [user.id, date]),
       pool.query<TaskPlan>(
-        `SELECT ${PLAN_COLS} FROM task_plans WHERE member_id = $1 AND date = $2::date ORDER BY created_at`,
+        `SELECT ${PLAN_COLS} FROM task_plans WHERE member_id = $1 AND date = $2::date ORDER BY created_at, id`,
         [user.id, date]),
       pool.query<TaskPlan>(
-        `SELECT ${PLAN_COLS} FROM task_plans WHERE member_id = $1 AND date = $2::date ORDER BY created_at`,
+        `SELECT ${PLAN_COLS} FROM task_plans WHERE member_id = $1 AND date = $2::date ORDER BY created_at, id`,
         [user.id, nextBusinessDay(date)]),
       pool.query<{ id: string; name: string; companyId: string }>(
         `SELECT id, name, company_id AS "companyId" FROM projects WHERE active = true ORDER BY id`),

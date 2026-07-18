@@ -29,7 +29,7 @@ const PUNCH_COLS = `id, member_id AS "memberId", date, kind, at, source,
 
 async function punchesOf(pool: pg.Pool, memberId: string, date: string): Promise<PunchRecord[]> {
   const { rows } = await pool.query<PunchRecord>(
-    `SELECT ${PUNCH_COLS} FROM punch_records WHERE member_id = $1 AND date = $2 ORDER BY at`,
+    `SELECT ${PUNCH_COLS} FROM punch_records WHERE member_id = $1 AND date = $2 ORDER BY at, created_at`,
     [memberId, date],
   )
   return rows
@@ -81,7 +81,7 @@ export function attendanceRoutes(pool: pg.Pool): Hono {
       await client.query('BEGIN')
       await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`punch:${user.id}`])
       const { rows } = await client.query<PunchRecord>(
-        `SELECT ${PUNCH_COLS} FROM punch_records WHERE member_id = $1 AND date = $2 ORDER BY at`,
+        `SELECT ${PUNCH_COLS} FROM punch_records WHERE member_id = $1 AND date = $2 ORDER BY at, created_at`,
         [user.id, date],
       )
       const state = punchState(rows)
@@ -131,7 +131,7 @@ export function attendanceRoutes(pool: pg.Pool): Hono {
     const { rows } = await pool.query<PunchRecord>(
       `SELECT ${PUNCH_COLS} FROM punch_records
        WHERE member_id = $1 AND date >= $2::date AND date < $2::date + interval '1 month'
-       ORDER BY at`,
+       ORDER BY at, created_at`,
       [memberId, `${month}-01`],
     )
     const rule = await ruleOf(pool, memberId)
@@ -148,7 +148,7 @@ export function attendanceRoutes(pool: pg.Pool): Hono {
     const { rows } = await pool.query<PunchRecord>(
       `SELECT ${PUNCH_COLS} FROM punch_records
        WHERE member_id = $1 AND date >= ($2::date - interval '5 months') AND date < ($2::date + interval '1 month')
-       ORDER BY at`,
+       ORDER BY at, created_at`,
       [memberId, from],
     )
     const rule = await ruleOf(pool, memberId)
@@ -185,7 +185,7 @@ export function attendanceRoutes(pool: pg.Pool): Hono {
     const punches = await pool.query<PunchRecord>(
       `SELECT ${PUNCH_COLS} FROM punch_records
        WHERE member_id = ANY($1) AND date BETWEEN $2 AND $3
-       ORDER BY at`,
+       ORDER BY at, created_at`,
       [memberIds, from, to],
     )
     const rules = await pool.query(
@@ -303,7 +303,7 @@ export function attendanceRoutes(pool: pg.Pool): Hono {
       }
       if (body.action === 'approved') {
         const { rows } = await client.query<PunchRecord>(
-          `SELECT ${PUNCH_COLS} FROM punch_records WHERE member_id = $1 AND date = $2 ORDER BY at`,
+          `SELECT ${PUNCH_COLS} FROM punch_records WHERE member_id = $1 AND date = $2 ORDER BY at, created_at`,
           [fix.memberId, fix.date],
         )
         // 置換対象 = 現在有効な同種打刻（fix の連鎖でも effectivePunches が最新のみ返す）

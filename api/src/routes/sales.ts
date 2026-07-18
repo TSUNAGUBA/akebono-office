@@ -213,7 +213,7 @@ export function salesRoutes(pool: pg.Pool): Hono {
       `SELECT id, target, status, rows_loaded AS "rowsLoaded", message,
               to_char(started_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"') AS "startedAt",
               to_char(finished_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"') AS "finishedAt"
-       FROM mart_load_runs ORDER BY started_at DESC LIMIT 20`)
+       FROM mart_load_runs ORDER BY started_at DESC, id LIMIT 20`)
     return c.json({ data: rows })
   })
 

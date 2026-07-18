@@ -10,14 +10,17 @@ const COLS = `id, member_id AS "memberId", kind, title, body, link, read, at`
 export function notificationsRoutes(pool: pg.Pool): Hono {
   const app = new Hono()
 
-  // 自分の通知（新しい順。?unread=1 で未読のみ）
+  // 自分の通知（新しい順。?unread=1 で未読のみ）。
+  // at は秒精度の JST テキストのため同一秒内で順序が不定になる（id はランダム UUID = 時系列タイブレーク不能）。
+  // created_at（timestamptz = マイクロ秒精度）を第 2 キーにして挿入順の決定的な新しい順を保証し、
+  // 同一トランザクション内の複数発行（created_at = now() が同値）にも id 第 3 キーで全順序を保証する
   app.get('/', async (c) => {
     const user = c.get('user')
     const unreadOnly = c.req.query('unread') === '1'
     const { rows } = await pool.query(
       `SELECT ${COLS} FROM notifications
        WHERE member_id = $1 AND ($2 = false OR read = false)
-       ORDER BY at DESC LIMIT 200`,
+       ORDER BY at DESC, created_at DESC, id LIMIT 200`,
       [user.id, unreadOnly])
     return c.json({ data: rows })
   })

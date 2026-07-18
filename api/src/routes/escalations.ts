@@ -33,7 +33,7 @@ export function escalationsRoutes(pool: pg.Pool): Hono {
   app.get('/', async (c) => {
     requireAdmin(c)
     const { rows } = await pool.query(
-      `SELECT ${COLS} FROM escalations ORDER BY raised_at DESC LIMIT 500`)
+      `SELECT ${COLS} FROM escalations ORDER BY raised_at DESC, created_at DESC LIMIT 500`)
     return c.json({ data: rows })
   })
 
@@ -147,7 +147,7 @@ export function escalationsRoutes(pool: pg.Pool): Hono {
               fixed_from AS "fixedFrom", fix_reason AS "fixReason", approved_by AS "approvedBy"
        FROM punch_records
        WHERE member_id = $1 AND date >= ($2::date - interval '5 months') AND date < ($2::date + interval '1 month')
-       ORDER BY at`,
+       ORDER BY at, created_at`,
       [user.id, `${endMonth}-01`])
     const member = await pool.query<Pick<Member, 'attendanceRuleId' | 'employmentType'>>(
       `SELECT attendance_rule_id AS "attendanceRuleId", employment_type AS "employmentType" FROM members WHERE id = $1`,

@@ -51,7 +51,7 @@ async function hoursGapMinutes(
     const { rows } = await pool.query<PunchRecord>(
       `SELECT id, member_id AS "memberId", date, kind, at, source,
               fixed_from AS "fixedFrom", fix_reason AS "fixReason", approved_by AS "approvedBy"
-       FROM punch_records WHERE member_id = $1 AND date = $2 ORDER BY at`,
+       FROM punch_records WHERE member_id = $1 AND date = $2 ORDER BY at, created_at`,
       [memberId, date],
     )
     const work = daySummary(rows, undefined, date).workMinutes
@@ -267,7 +267,7 @@ export function reportsRoutes(pool: pg.Pool): Hono {
   app.get('/:reportId/comments', async (c) => {
     const { rows } = await pool.query(
       `SELECT id, report_id AS "reportId", member_id AS "memberId", body, reactions, at
-       FROM report_comments WHERE report_id = $1 ORDER BY at`,
+       FROM report_comments WHERE report_id = $1 ORDER BY at, created_at`,
       [c.req.param('reportId')])
     return c.json({ data: rows })
   })

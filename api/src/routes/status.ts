@@ -98,7 +98,7 @@ export function statusRoutes(pool: pg.Pool): Hono {
     const { rows: services } = await pool.query(
       `SELECT ${SERVICE_COLS} FROM system_services WHERE active = true ORDER BY id`)
     const { rows: incidents } = await pool.query(
-      `SELECT ${INCIDENT_COLS} FROM service_incidents ORDER BY started_at DESC LIMIT 500`)
+      `SELECT ${INCIDENT_COLS} FROM service_incidents ORDER BY started_at DESC, id LIMIT 500`)
     const { rows: stored } = await pool.query<{
       serviceId: string; date: string; downMinutes: number; worstState: string
     }>(

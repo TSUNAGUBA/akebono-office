@@ -530,6 +530,24 @@ describe('通知', () => {
     expect(unread.length).toBe(0)
   })
 
+  it('同一秒の通知でも新しい順が決定的（created_at タイブレーク = CI フレーク再発防止）', async () => {
+    // at（JST テキスト）は秒精度のため、同一秒に 2 件入ると従来は順序不定だった
+    // （実障害: 一括付与の system 通知と休暇申請の approval 通知が同一秒で先頭が入れ替わる）
+    const at = '2026-07-18T09:00:00+09:00'
+    await pool.query(
+      `INSERT INTO notifications (id, member_id, kind, title, at) VALUES ('nt-tie-1', $1, 'system', '先に挿入', $2)`,
+      [ADMIN, at])
+    await pool.query(
+      `INSERT INTO notifications (id, member_id, kind, title, at) VALUES ('nt-tie-2', $1, 'approval', '後に挿入', $2)`,
+      [ADMIN, at])
+    const notes = (await api('GET', '/v1/notifications', { as: ADMIN })).json.data as { id: string }[]
+    const first = notes.findIndex(n => n.id === 'nt-tie-1')
+    const second = notes.findIndex(n => n.id === 'nt-tie-2')
+    expect(second).toBeGreaterThanOrEqual(0)
+    expect(second).toBeLessThan(first) // 同一秒なら後から挿入した方が先頭側（挿入順の新しい順）
+    await pool.query(`DELETE FROM notifications WHERE id IN ('nt-tie-1', 'nt-tie-2')`) // 後続テストの件数へ影響させない
+  })
+
   it('日報リマインドは管理者のみ実行でき、対象者へ通知される', async () => {
     expect((await api('POST', '/v1/reports/remind', { as: MEMBER, body: { memberId: HR, date: '2026-07-15' } })).status).toBe(403)
     expect((await api('POST', '/v1/reports/remind', { as: ADMIN, body: { memberId: HR, date: '2026-07-15' } })).status).toBe(200)

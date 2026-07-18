@@ -148,7 +148,7 @@ export function workflowsRoutes(pool: pg.Pool): Hono {
     const { rows } = await pool.query(
       `SELECT ${REQ_COLS} FROM workflow_requests
        WHERE ($1 OR status <> 'draft' OR requester_id = $2)
-       ORDER BY created_at DESC LIMIT 500`,
+       ORDER BY created_at DESC, id LIMIT 500`,
       [user.role === 'admin', user.id])
     return c.json({ data: rows })
   })
@@ -156,7 +156,7 @@ export function workflowsRoutes(pool: pg.Pool): Hono {
   // 承認証跡（時系列昇順）
   app.get('/:id/logs', async (c) => {
     const { rows } = await pool.query(
-      `SELECT ${LOG_COLS} FROM approval_logs WHERE request_id = $1 ORDER BY at`,
+      `SELECT ${LOG_COLS} FROM approval_logs WHERE request_id = $1 ORDER BY at, created_at`,
       [c.req.param('id')])
     return c.json({ data: rows })
   })

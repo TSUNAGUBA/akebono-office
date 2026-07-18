@@ -95,14 +95,14 @@ export function aiCompanyRoutes(pool: pg.Pool, env: Env): Hono {
   // タスク一覧（全員参照可 = モックのタスクボードと同じ可視性。作成日降順）
   app.get('/tasks', async (c) => {
     const { rows } = await pool.query(
-      `SELECT ${TASK_COLS} FROM ai_tasks ORDER BY created_at DESC LIMIT 200`)
+      `SELECT ${TASK_COLS} FROM ai_tasks ORDER BY created_at DESC, id LIMIT 200`)
     return c.json({ data: rows })
   })
 
-  // 活動ログ（新しい順）
+  // 活動ログ（新しい順。at は秒精度のため id を第 2 キーに = 同一秒内でも順序を決定化）
   app.get('/logs', async (c) => {
     const { rows } = await pool.query(
-      `SELECT ${LOG_COLS} FROM ai_activity_logs ORDER BY at DESC LIMIT 200`)
+      `SELECT ${LOG_COLS} FROM ai_activity_logs ORDER BY at DESC, id LIMIT 200`)
     return c.json({ data: rows })
   })
 
@@ -231,7 +231,7 @@ export function aiCompanyRoutes(pool: pg.Pool, env: Env): Hono {
     }>(
       `SELECT ai_employee_id AS "aiEmployeeId", task_id AS "taskId", kind, summary, tokens,
               cost_usd::float AS "costUsd"
-       FROM ai_activity_logs WHERE at LIKE $1 || '%' ORDER BY at`, [date])
+       FROM ai_activity_logs WHERE at LIKE $1 || '%' ORDER BY at, id`, [date])
     const byEmp = new Map<string, typeof logs>()
     for (const l of logs) byEmp.set(l.aiEmployeeId, [...(byEmp.get(l.aiEmployeeId) ?? []), l])
 
