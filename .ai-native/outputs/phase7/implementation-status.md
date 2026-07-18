@@ -132,7 +132,7 @@
 | シフト表 `/shift` | F-05 | ✅ | ✅ シフト接続済み（PR #23） | 希望・割当の参照は管理者 = 全件 / 本人 = 自分のみのサーバースコープ |
 | 意思決定支援 `/decision` | F-02 | ✅ | ✅ 意思決定接続済み（PR #28）: 判断テーマ = 汎用マスタ `/v1/masters/decision-themes`（0011 で mockup seed を移行）・判断ログ = `/v1/decisions/logs`（追記のみ = 記録系保護。テーマ・選択肢・理由をサーバーで強制） | シナリオ予測（決定的線形モデル）は表示射影としてクライアント側に維持（設計判断） |
 | AKEBONO（3D オフィス） `/akebono` | F-03 | ✅ | ⏳ | バッチ4 |
-| AIネイティブカンパニー `/ai-company` | F-08 | ✅ | ⏳ | バッチ4（AI 社員実行基盤の設計を伴う） |
+| AIネイティブカンパニー `/ai-company` | F-08 | ✅ | 🚧 AI カンパニー接続（本 PR = バッチ6a）: ロール/AI 社員 = 汎用マスタ（0015）・タスク依頼 → 分解（Vertex AI → 失敗時 shared/domain/ai-tasks の同一ヒューリスティック）→ 承認 → 実行 → 完了（FOR UPDATE 状態機械・活動ログ追記・依頼者へ通知・AI 社員 status 同期）・日次報告 = daily_reports（author_kind='ai'・冪等生成）・停滞/過負荷/低確信度エスカレーション・機能ガード 'ai-company'（F-16） | AI 社員の「実実行」（LLM がステップを自律実行）は将来拡張。現段階は進行操作を人が行うワークフロー |
 | 業務支援ツール `/support` | F-09 | ✅ | ⏳ | ドキュメント・外部リンクは接続済みマスタを参照。チャットボット（F-09-3）は PR #27 で接続済み |
 | 売上管理 `/sales` | F-15 | ✅ | ⏳ | バッチ4（mart 接続の設計とセット） |
 | 提供システム稼働状況 `/status` | F-11 | ✅ | ⏳ | バッチ4 |
@@ -220,11 +220,20 @@
 - [x] 5c レビュー第 2 巡の軽微 2 件: permission-rules PATCH の未送信フィールド保持アサート追加 / data-design §1.1 の SystemService 行を表内へ移動
 - [x] 検証: API 統合テスト 66（theme 提出 + テーマなし 400・scope=all 提出済みのみ・プロフィール画像の登録/検証/削除・permission-rules PATCH 保持）/ 単体 19 + 35 / API モード実クリック E2E 15 スイート 140 チェック / モック回帰（ナビ + マスタ 4 + 日報 11 + 勤怠 5）/ typecheck（api・mockup）
 
-## 11. 今回バッチ（5d: チャットボットの全 DB 参照化・権限準拠 + 5e レビュー指摘対応）の完了条件（Definition of Done）
+## 11. バッチ5d（PR #34・マージ済み）: チャットボットの全 DB 参照化・権限準拠 + 5e レビュー指摘対応の完了条件（Definition of Done）
 
 - [x] 文脈収集（buildContext）を DB の全移行済みドメインへ拡張: 勤怠（当月サマリ）・有給・日報（本人 = 下書き含む / 他人 = **提出済みのみ**）・ワークフロー（本人の申請）・シフト（本人の今後の割当）・意思決定（テーマ + 判断ログ）・タスク計画/カレンダー（本人の当日）・エスカレーション（本人対象の open）・メンバー/部署・顧客(会社/人)・プロジェクト・ナレッジ
 - [x] 参照範囲は権限（F-16）に準拠: ドメインごとに canUseFeature で文脈生成可否を判定（5c の共有ロジック・10 秒キャッシュを再利用 = 原則3）・マスタ由来の文脈は stripDeniedFields で表示項目 deny を反映・本人スコープ（C3）維持
 - [x] ブロック単位の収集失敗は全体を止めない（原則4 = 部分文脈でも回答を試みる）。未移行ドメイン（ドキュメント・稼働状況・売上）は従来どおり文脈対象外・モックの決定的応答が担う（設計判断）
 - [x] 5e レビュー第 1 巡の指摘対応（マージ後着荷分）: ① avatar のサブタイプ allowlist 化（png/jpeg/webp の base64 のみ・SVG 拒否）② scope=all の month 必須化（全履歴ダンプ防止）③ ログアウト時のドメインキャッシュ破棄 + 未認証ポーリング停止 ④ dev 認証ではログアウト非表示 ⑤ 業務テーマ input に maxlength=100 ⑥ screen-design のヘッダー記述更新 ⑦ 全員の日報ドロワーで権限のない他人の工数乖離を計算しない（無駄な 403 の抑止）
 - [x] 検証: API 統合テスト 67（buildContext 直接検証 = reports deny で文脈消失・フィールド deny 反映・他人日報は提出済みのみ・workflow deny / avatar allowlist / scope=all month 必須）/ 単体 19 + 35 / API モード実クリック E2E 15 スイート 140 チェック / モック回帰（ナビ + マスタ 4 + 日報 11 + 勤怠 5）/ typecheck（api・mockup）
-- [ ] バッチ4 続き: AI カンパニー → 売上 + mart ETL → 稼働状況
+
+## 12. 今回バッチ（6a: AI カンパニー F-08 の API 化 + 5d レビュー指摘対応）の完了条件（Definition of Done）
+
+- [x] DB（0015 = 表定義 / 0016 = 部分一意索引 + シード）: ai_roles / ai_employees（汎用マスタ = 管理者のみ変更・監査ログ・論理削除）+ ai_tasks（状態機械）+ ai_activity_logs（追記のみ）。AI 日次報告は既存 daily_reports（author_kind='ai'）を再利用。マイグレーションは append-only（適用済みファイルを改変せず 0016 で追補 = 6a 第 2 巡レビュー対応）
+- [x] API `/v1/ai-company`: タスク依頼（分解 = Vertex AI 構造化出力 → 失敗時 shared/domain/ai-tasks の同一ヒューリスティック）→ 承認/進行/ブロック/中止（FOR UPDATE 直列化・AKO-AIC-001〜008・活動ログ・完了時 依頼者へ通知・AI 社員 status 同期）+ 日次報告の冪等生成 + 停滞/過負荷検知（workload-check・クールダウン冪等）。機能ガード 'ai-company'（F-16）+ チャットボット文脈へ AI タスクブロック追加
+- [x] フロント: useAiCompany デュアルモード化（API = /v1/ai-company キャッシュ + 移行済みマスタ ai-roles/ai-employees。ロール設定ページは useMasterCrudAsync 化）。/ai-company のモックバッジを解除
+- [x] 5d 独立レビュー指摘対応（マージ後着荷分・7 件）: ① チャットボットのエスカレーション文脈を issue_reported（本人の日報由来）に限定（他者起票の内部メモ・注入経路を遮断）② 見出し・会社名参照にも stripDeniedFields を適用（name deny 時はブロックごと非表示）③ 通知キャッシュの値クリア ④ ログアウトは clearApiData（再取得しない = 未認証バーストなし）⑤ nameHit の敬称限定（一般語との偽ヒット防止）⑥ workflow/task/calendar title の capCp ⑦ chatbot.ts の機能 ID を F-09-2 へ修正
+- [x] 6a 独立レビュー指摘対応（重大 2 + 軽微 6）: ① 日次報告の並行重複 → 部分一意インデックス `daily_reports_ai_uq`（0015）+ ON CONFLICT DO NOTHING + UI 二重押下防止（0015 は AI テーブル新設と同時に索引を張るため既存本番に重複日報は生じ得ず、データパッチ不要 = 設計判断）② AI ロール/社員の初期データ未投入 → 0015 で mockup シードと同一の AI ロール 4・AI 社員 5 を `ON CONFLICT DO NOTHING` 投入（decision_themes 0011 と同方針 = 新規環境でも手動投入なしで F-08 が動く。AI 社員の新規作成 UI は将来拡張・現状は割当変更のみ = 明記）③ lowconf dedupe キーを 2 セグメント（`lowconf:emp`）へ簡約 ④ モック AI 日報 entries を theme 形式へ統一 ⑤ addLog seq を当該社員件数に統一 ⑥ decompose へ trim 後 title を渡す ⑦ ai-employees patchSchema から派生値 status を omit
+- [x] 検証: API 統合テスト 72（マスタ CRUD・シード投入・status omit・状態機械 遷移/409・低確信度・日次報告の並行/逐次冪等・scope=all 掲載・機能 deny 403）/ 単体 19 + 35 / API モード実クリック E2E 16 スイート 150 チェック（6a = 依頼 → 分解 → 承認 → 完了 → 日次報告 → タイムライン掲載）/ モック回帰（ナビ + マスタ 4 + 日報 11 + 勤怠 5）/ typecheck（api・mockup）
+- [ ] 残り: 売上 + mart ETL（F-15）→ 稼働状況（F-11）→ AKEBONO（F-03）

@@ -10,6 +10,7 @@ import type { Env } from './env'
 import { audit } from './lib/audit'
 import { errorResponse } from './lib/errors'
 import { featureGuard } from './lib/permissions'
+import { aiCompanyRoutes } from './routes/ai-company'
 import { attendanceRoutes } from './routes/attendance'
 import { configsRoutes } from './routes/configs'
 import { escalationsRoutes } from './routes/escalations'
@@ -108,6 +109,7 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
   app.route('/v1/assist', assistRoutes(pool, env))
   app.route('/v1/calendar', calendarRoutes(pool, env))
   app.route('/v1/chatbot', chatbotRoutes(pool, env))
+  app.route('/v1/ai-company', aiCompanyRoutes(pool, env))
   app.route('/v1/decisions', decisionsRoutes(pool))
 
   app.notFound(c => c.json({ error: { code: 'AKO-GEN-404', message: 'エンドポイントが見つかりません' } }, 404))

@@ -55,14 +55,14 @@ const proposedTaskId = ref<string | null>(null)
 const proposedTask = computed<AiTask | undefined>(() =>
   proposedTaskId.value ? tasks.value.find(t => t.id === proposedTaskId.value) : undefined)
 
-function submitRequest(): void {
+async function submitRequest(): Promise<void> {
   reqError.value = ''
   if (!selectedEmpId.value) return
   if (!reqTitle.value.trim()) {
     reqError.value = '件名を入力してください'
     return
   }
-  const res = requestTask(selectedEmpId.value, reqTitle.value, reqDesc.value)
+  const res = await requestTask(selectedEmpId.value, reqTitle.value, reqDesc.value)
   if (!res.ok) {
     show(res.error.message, 'warn')
     return
@@ -75,9 +75,9 @@ function submitRequest(): void {
   }
 }
 
-function approveProposal(): void {
+async function approveProposal(): Promise<void> {
   if (!proposedTaskId.value) return
-  const res = approveTask(proposedTaskId.value)
+  const res = await approveTask(proposedTaskId.value)
   if (!res.ok) {
     show(res.error.message, 'warn')
     return
@@ -97,13 +97,13 @@ const tabs = computed(() => [
   { key: 'daily', label: '日次報告' },
 ])
 
-function onApprove(taskId: string): void {
-  const res = approveTask(taskId)
+async function onApprove(taskId: string): Promise<void> {
+  const res = await approveTask(taskId)
   show(res.ok ? '承認しました。実行を開始します' : res.error.message, res.ok ? 'ok' : 'warn')
 }
 
-function onProgress(taskId: string): void {
-  const res = progressTask(taskId)
+async function onProgress(taskId: string): Promise<void> {
+  const res = await progressTask(taskId)
   if (!res.ok) {
     show(res.error.message, 'warn')
     return
@@ -116,9 +116,9 @@ function onProgress(taskId: string): void {
   }
 }
 
-function onBlock(taskId: string): void {
+async function onBlock(taskId: string): Promise<void> {
   const before = tasks.value.find(t => t.id === taskId)?.status
-  const res = blockTask(taskId)
+  const res = await blockTask(taskId)
   if (!res.ok) {
     show(res.error.message, 'warn')
     return
@@ -130,7 +130,7 @@ async function onCancel(taskId: string): Promise<void> {
   const task = tasks.value.find(t => t.id === taskId)
   const okAsk = await ask('タスクの中止', `「${task?.title ?? taskId}」を中止しますか？`, { confirmLabel: '中止する', danger: true })
   if (!okAsk) return
-  const res = cancelTask(taskId)
+  const res = await cancelTask(taskId)
   show(res.ok ? 'タスクを中止しました' : res.error.message, res.ok ? 'ok' : 'warn')
 }
 
@@ -138,18 +138,26 @@ async function onCancel(taskId: string): Promise<void> {
 
 const reportDate = ref(todayJst())
 const aiReports = computed(() => aiReportsOn(reportDate.value))
+/** 生成中フラグ（二重押下防止。サーバー側は部分一意 + ON CONFLICT で冪等だが UI でも抑止する） */
+const generating = ref(false)
 
-function onGenerateReports(): void {
-  const { created, skipped } = generateDailyReports(reportDate.value)
-  if (created === 0 && skipped === 0) {
-    show('この日の AI 活動ログがないため、生成対象がありません', 'warn')
-    return
+async function onGenerateReports(): Promise<void> {
+  if (generating.value) return
+  generating.value = true
+  try {
+    const { created, skipped } = await generateDailyReports(reportDate.value)
+    if (created === 0 && skipped === 0) {
+      show('この日の AI 活動ログがないため、生成対象がありません', 'warn')
+      return
+    }
+    show(
+      `日次報告を ${created} 件生成しました（既存 ${skipped} 件はスキップ）。日報・週報にも掲載されます`,
+      'ok',
+      { label: '日報を見る', to: '/reports' },
+    )
+  } finally {
+    generating.value = false
   }
-  show(
-    `日次報告を ${created} 件生成しました（既存 ${skipped} 件はスキップ）。日報・週報にも掲載されます`,
-    'ok',
-    { label: '日報を見る', to: '/reports' },
-  )
 }
 </script>
 
@@ -206,7 +214,9 @@ function onGenerateReports(): void {
                 class="input w-auto"
                 aria-label="報告対象日"
               >
-              <button type="button" class="btn btn-primary" @click="onGenerateReports">この日の報告を生成</button>
+              <button type="button" class="btn btn-primary" :disabled="generating" @click="onGenerateReports">
+                {{ generating ? '生成中…' : 'この日の報告を生成' }}
+              </button>
               <NuxtLink to="/reports" class="link ml-auto text-xs">日報・週報タイムラインを見る →</NuxtLink>
             </div>
           </UiSectionCard>

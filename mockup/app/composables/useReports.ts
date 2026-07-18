@@ -48,6 +48,11 @@ function loadAllMonth(month: string, force = false): Promise<void> {
   }, force)
 }
 
+/** 全員の日報キャッシュの取り直し（AI 日次報告の生成後などサーバー側で増えたときに呼ぶ） */
+export function reloadAllMonth(month: string): Promise<void> {
+  return loadAllMonth(month, true)
+}
+
 function loadWeekly(force = false): Promise<void> {
   return apiLoadOnce('rep:weekly', async () => {
     mergeById(apiWeekly, await apiFetch<WeeklyReport[]>('/v1/reports/weekly'))

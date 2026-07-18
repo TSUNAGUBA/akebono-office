@@ -1175,6 +1175,116 @@ describe('チャットボット応答', () => {
   })
 })
 
+describe('AI カンパニー（F-08）', () => {
+  let roleId = ''
+  let empId = ''
+  let taskId = ''
+
+  it('ロール・AI 社員は汎用マスタ（管理者のみ変更）。初期データはマイグレーションが投入する', async () => {
+    // 0015 マイグレーションがシード投入した AI 社員（アキ = ai-01）が存在する
+    const seeded = (await api('GET', '/v1/masters/ai-employees', { as: MEMBER })).json.data as { id: string; name: string }[]
+    expect(seeded.some(e => e.id === 'ai-01' && e.name === 'アキ')).toBe(true)
+
+    const role = await api('POST', '/v1/masters/ai-roles', {
+      as: ADMIN, body: { name: 'テスト班', mission: '調査と要約', modelTier: 'standard' },
+    })
+    expect(role.status).toBe(201)
+    roleId = (role.json.data as { id: string }).id
+    const emp = await api('POST', '/v1/masters/ai-employees', { as: ADMIN, body: { name: 'テスト社員', roleId } })
+    expect(emp.status).toBe(201)
+    empId = (emp.json.data as { id: string }).id
+    expect((await api('POST', '/v1/masters/ai-roles', { as: MEMBER, body: { name: 'x' } })).status).toBe(403)
+
+    // status は派生値: マスタ PATCH では変更できない（送っても無視され idle のまま。他フィールドは更新される）
+    const patched = await api('PATCH', `/v1/masters/ai-employees/${empId}`, { as: ADMIN, body: { name: 'テスト社員2', status: 'working' } })
+    expect(patched.status).toBe(200)
+    expect((patched.json.data as { name: string; status: string }).name).toBe('テスト社員2')
+    expect((patched.json.data as { status: string }).status).toBe('idle')
+  })
+
+  it('タスク依頼 → 分解 → 承認 → 進行 → 完了（状態機械・活動ログ・依頼者へ通知・status 同期）', async () => {
+    const req = await api('POST', '/v1/ai-company/tasks', {
+      as: MEMBER,
+      body: { aiEmployeeId: empId, title: '市場動向の調査', description: '競合 3 社の動向を比較し、来期の重点領域の示唆をまとめてください' },
+    })
+    expect(req.status).toBe(201)
+    taskId = (req.json.data as { id: string }).id
+    // 存在しない AI 社員は 404・件名なしは 400
+    expect((await api('POST', '/v1/ai-company/tasks', { as: MEMBER, body: { aiEmployeeId: 'ai-x', title: 'x' } })).status).toBe(404)
+    expect((await api('POST', '/v1/ai-company/tasks', { as: MEMBER, body: { aiEmployeeId: empId, title: ' ' } })).status).toBe(400)
+
+    // 提案中は進行不可（AKO-AIC-005）。AI 社員は承認待ち状態へ同期される
+    expect((await api('POST', `/v1/ai-company/tasks/${taskId}/progress`, { as: MEMBER })).status).toBe(409)
+    const emps = (await api('GET', '/v1/masters/ai-employees', { as: MEMBER })).json.data as { id: string; status: string }[]
+    expect(emps.find(e => e.id === empId)?.status).toBe('waiting_approval')
+
+    // 承認 → in_progress。全ステップ進行 → done + 依頼者へ通知
+    expect((await api('POST', `/v1/ai-company/tasks/${taskId}/approve`, { as: MEMBER })).status).toBe(200)
+    let status = 'in_progress'
+    for (let i = 0; i < 6 && status === 'in_progress'; i++) {
+      const r = await api('POST', `/v1/ai-company/tasks/${taskId}/progress`, { as: MEMBER })
+      expect(r.status).toBe(200)
+      status = (r.json.data as { status: string }).status
+    }
+    expect(status).toBe('done')
+    expect((await api('POST', `/v1/ai-company/tasks/${taskId}/progress`, { as: MEMBER })).status).toBe(409)
+
+    const logs = (await api('GET', '/v1/ai-company/logs', { as: MEMBER })).json.data as { kind: string; taskId: string | null }[]
+    const kinds = new Set(logs.filter(l => l.taskId === taskId).map(l => l.kind))
+    expect(kinds.has('plan') && kinds.has('execute') && kinds.has('report')).toBe(true)
+    const notes = (await api('GET', '/v1/notifications', { as: MEMBER })).json.data as { kind: string; title: string }[]
+    expect(notes.some(n => n.kind === 'ai_report' && n.title.includes('市場動向の調査'))).toBe(true)
+    expect(emps.length).toBeGreaterThan(0)
+  })
+
+  it('低確信度の依頼はエスカレーション対象（confidence=low）。ブロック/中止の状態機械', async () => {
+    const low = await api('POST', '/v1/ai-company/tasks', {
+      as: MEMBER, body: { aiEmployeeId: empId, title: '調査して', description: 'どう?' },
+    })
+    expect((low.json.data as { confidence: string }).confidence).toBe('low')
+    const lowId = (low.json.data as { id: string }).id
+    // proposed からのブロックは不可 → 承認後にブロック ↔ 再開 → 中止。中止済みの再中止は 409
+    expect((await api('POST', `/v1/ai-company/tasks/${lowId}/block`, { as: MEMBER })).status).toBe(409)
+    expect((await api('POST', `/v1/ai-company/tasks/${lowId}/approve`, { as: MEMBER })).status).toBe(200)
+    expect((await api('POST', `/v1/ai-company/tasks/${lowId}/block`, { as: MEMBER })).status).toBe(200)
+    expect((await api('POST', `/v1/ai-company/tasks/${lowId}/cancel`, { as: MEMBER })).status).toBe(200)
+    expect((await api('POST', `/v1/ai-company/tasks/${lowId}/cancel`, { as: MEMBER })).status).toBe(409)
+  })
+
+  it('日次報告の生成は並行実行でも冪等（部分一意 + ON CONFLICT）で、全員の日報（scope=all）に AI 日報が載る', async () => {
+    const today = todayJst()
+    // 並行 2 連発でも同一 AI 社員 × 同一日の報告は 1 件のみ（重複作成なし = DB 保証）
+    const [a, b] = await Promise.all([
+      api('POST', '/v1/ai-company/daily-reports', { as: ADMIN, body: { date: today } }),
+      api('POST', '/v1/ai-company/daily-reports', { as: ADMIN, body: { date: today } }),
+    ])
+    const createdTotal = (a.json.data as { created: number }).created + (b.json.data as { created: number }).created
+    expect(createdTotal).toBeGreaterThanOrEqual(1)
+    const all = (await api('GET', `/v1/reports/daily?scope=all&month=${today.slice(0, 7)}`, { as: MEMBER })).json.data as
+      { authorKind: string; aiEmployeeId: string | null; entries: { theme?: string }[] }[]
+    const aiReports = all.filter(r => r.authorKind === 'ai' && r.aiEmployeeId === empId)
+    expect(aiReports.length).toBe(1) // 並行でも重複しない
+    expect(aiReports[0]!.entries[0]!.theme).toBe('AI カンパニー')
+    // 逐次の再生成もスキップ（冪等）
+    const again = await api('POST', '/v1/ai-company/daily-reports', { as: ADMIN, body: { date: today } })
+    expect((again.json.data as { created: number }).created).toBe(0)
+    expect((again.json.data as { skipped: number }).skipped).toBeGreaterThanOrEqual(1)
+  })
+
+  it('ai-company の機能 deny で 403（F-16 準拠）', async () => {
+    const rule = await api('POST', '/v1/masters/permission-rules', {
+      as: ADMIN, body: { subjectKind: 'role', subjectId: 'member', resource: 'ai-company', effect: 'deny' },
+    })
+    expect(rule.status).toBe(201)
+    const denied = await api('GET', '/v1/ai-company/tasks', { as: MEMBER })
+    expect(denied.status).toBe(403)
+    expect(denied.json.error?.code).toBe('AKO-PRM-001')
+    expect((await api('GET', '/v1/ai-company/tasks', { as: ADMIN })).status).toBe(200)
+    const id = (rule.json.data as { id: string }).id
+    expect((await api('POST', `/v1/masters/permission-rules/${id}/archive`, { as: ADMIN })).status).toBe(200)
+  })
+})
+
 describe('カレンダー連携', () => {
   const today = todayJst()
   let taskId = ''

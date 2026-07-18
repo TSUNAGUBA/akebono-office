@@ -17,9 +17,9 @@ async function logout(): Promise<void> {
   userMenuOpen.value = false
   await signOutFirebase()
   clearMe()
-  // 前ユーザーのドメインキャッシュ（日報・通知等）をメモリから破棄する（深層防御。
-  // onApiReset のフックが各キャッシュをクリアし、次のログインで取り直す）
-  resetApiData()
+  // 前ユーザーのキャッシュ（マスタ・日報・通知等）を値ごと破棄する（深層防御）。
+  // 再取得はしない = サインアウト後に未認証リクエストを発生させない（次のログインで取り直す）
+  clearApiData()
   await navigateTo('/login')
 }
 

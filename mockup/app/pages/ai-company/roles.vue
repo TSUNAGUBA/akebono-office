@@ -8,8 +8,9 @@ import type { AiModelTier, AiRole } from '~/types/domain'
 import type { TableColumn } from '~/types/ui'
 import { AI_EMPLOYEE_STATUS_LABELS } from '~/utils/labels'
 
-const roleCrud = useMasterCrud('aiRoles', 'r')
-const empCrud = useMasterCrud('aiEmployees', 'ai')
+// 移行済みマスタ（バッチ6a: API モードは /v1/masters/ai-roles・ai-employees が SoT）
+const roleCrud = useMasterCrudAsync('aiRoles', 'r')
+const empCrud = useMasterCrudAsync('aiEmployees', 'ai')
 const { employees, roleOf } = useAiCompany()
 const { show } = useToast()
 
@@ -24,7 +25,7 @@ const columns: TableColumn[] = [
 ]
 
 const rows = computed(() =>
-  roleCrud.list.value.map(r => ({
+  (roleCrud.list.value as AiRole[]).map(r => ({
     ...r,
     permCount: r.permissions.length,
     state: r.active ? '有効' : '無効',
@@ -43,7 +44,7 @@ const form = reactive({
 })
 const formErrors = reactive({ name: '', mission: '' })
 
-const editingRole = computed(() => (editingId.value ? roleCrud.byId(editingId.value) : undefined))
+const editingRole = computed(() => (editingId.value ? roleCrud.byId(editingId.value) as AiRole | undefined : undefined))
 
 const tierOptions = (Object.keys(AI_MODEL_TIER_LABELS) as AiModelTier[])
   .map(t => ({ value: t, label: AI_MODEL_TIER_LABELS[t] }))
@@ -72,11 +73,11 @@ function openEdit(role: AiRole): void {
   modalOpen.value = true
 }
 
-function saveRole(): void {
+async function saveRole(): Promise<void> {
   formErrors.name = form.name.trim() ? '' : 'ロール名を入力してください'
   formErrors.mission = form.mission.trim() ? '' : 'ミッションを入力してください'
   if (formErrors.name || formErrors.mission) return
-  const res = roleCrud.save({
+  const res = await roleCrud.save({
     id: editingId.value ?? undefined,
     name: form.name.trim(),
     mission: form.mission.trim(),
@@ -92,28 +93,29 @@ function saveRole(): void {
   modalOpen.value = false
 }
 
-function toggleActive(): void {
+async function toggleActive(): Promise<void> {
   if (!editingId.value || !editingRole.value) return
-  const res = editingRole.value.active
-    ? roleCrud.archive(editingId.value)
-    : roleCrud.restore(editingId.value)
+  const wasActive = editingRole.value.active
+  const res = wasActive
+    ? await roleCrud.archive(editingId.value)
+    : await roleCrud.restore(editingId.value)
   if (!res.ok) {
     show(res.error.message, 'warn')
     return
   }
-  show(editingRole.value.active ? 'ロールを復元しました' : 'ロールを無効化しました')
+  show(wasActive ? 'ロールを無効化しました' : 'ロールを復元しました')
   modalOpen.value = false
 }
 
 // ---------- AI 社員への割当 ----------
 
 const activeRoleOptions = computed(() =>
-  roleCrud.activeList.value.map(r => ({ value: r.id, label: r.name })))
+  (roleCrud.activeList.value as AiRole[]).map(r => ({ value: r.id, label: r.name })))
 
-function changeAssignment(empId: string, roleId: string): void {
+async function changeAssignment(empId: string, roleId: string): Promise<void> {
   if (!roleId) return
   const emp = employees.value.find(e => e.id === empId)
-  const res = empCrud.save({ id: empId, roleId })
+  const res = await empCrud.save({ id: empId, roleId })
   if (res.ok) show(`${emp?.name ?? empId} のロールを変更しました`)
   else show(res.error.message, 'warn')
 }

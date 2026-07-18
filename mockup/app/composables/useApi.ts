@@ -179,6 +179,8 @@ const MIGRATED_MASTERS: Record<string, string> = {
   workflowRoutes: 'workflow-routes',
   decisionThemes: 'decision-themes',
   permissionRules: 'permission-rules',
+  aiRoles: 'ai-roles',
+  aiEmployees: 'ai-employees',
 }
 
 /** API モード時に API が SoT となるコレクション（tbl() が API キャッシュを返す） */
@@ -260,6 +262,17 @@ export function resetApiData(): void {
   loadedCollections.clear()
   onceLoaded.clear()
   for (const name of stores.keys()) void loadApiCollection(name, true)
+  for (const hook of resetHooks) hook()
+}
+
+/**
+ * ログアウト時の破棄（値のクリアのみで再取得しない = サインアウト後に未認証リクエストを発生させない。
+ * 次のログイン確立時に resetApiData() が取り直す）
+ */
+export function clearApiData(): void {
+  loadedCollections.clear()
+  onceLoaded.clear()
+  for (const store of stores.values()) store.value = []
   for (const hook of resetHooks) hook()
 }
 
