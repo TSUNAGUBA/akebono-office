@@ -91,8 +91,10 @@ export function reportsRoutes(pool: pg.Pool): Hono {
         [date, month, from, to])
       return c.json({ data: rows })
     }
-    // 全員の日報（バッチ5e: 相互参照による情報共有）。提出済みのみ = 下書きは本人以外に見せない
+    // 全員の日報（バッチ5e: 相互参照による情報共有）。提出済みのみ = 下書きは本人以外に見せない。
+    // month 必須: 期間なしの全履歴ダンプを許容しない（フロントは常に月単位でロードする）
     if (scope === 'all') {
+      if (!month) throw err('AKO-GEN-001', 'scope=all では month（YYYY-MM）を指定してください', 400)
       const { rows } = await pool.query(
         `SELECT ${DAILY_COLS} FROM daily_reports
          WHERE status = 'submitted' AND ${rangeWhere}

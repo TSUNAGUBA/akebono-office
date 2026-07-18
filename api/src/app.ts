@@ -79,8 +79,10 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
       throw err('AKO-GEN-001', 'avatar を指定してください（空文字 = 画像を削除）', 400)
     }
     const avatar = body.avatar
-    if (avatar !== '' && !avatar.startsWith('data:image/')) {
-      throw err('AKO-GEN-001', 'avatar は data:image/... 形式で指定してください', 400)
+    // サブタイプ allowlist + base64 必須（SVG 等のスクリプト混入可能な形式・任意テキストの持込を拒否。
+    // クライアントは canvas.toDataURL('image/jpeg') で生成するため常にこの形式に一致する）
+    if (avatar !== '' && !/^data:image\/(png|jpe?g|webp);base64,[A-Za-z0-9+/=]+$/.test(avatar)) {
+      throw err('AKO-GEN-001', 'avatar は data:image/png・jpeg・webp の base64 形式で指定してください', 400)
     }
     if (avatar.length > 300_000) {
       throw err('AKO-GEN-001', '画像が大きすぎます（縮小して再度お試しください）', 400)

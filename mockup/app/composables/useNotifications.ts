@@ -30,13 +30,17 @@ async function loadNotifications(force = false): Promise<void> {
 
 function startPolling(): void {
   if (pollTimer || !import.meta.client) return
-  pollTimer = setInterval(() => { void loadNotifications(true) }, POLL_INTERVAL_MS)
+  pollTimer = setInterval(() => {
+    // ログアウト後（/v1/me キャッシュなし）は未認証リクエストを打たない（次のログインで再開）
+    if (!useApiMe().value) return
+    void loadNotifications(true)
+  }, POLL_INTERVAL_MS)
 }
 
-// ログイン確立・切替時に取り直す
+// ログイン確立・切替時に取り直す（ログアウト起点の reset は未認証のため取得しない）
 onApiReset(() => {
   notesLoaded = false
-  void loadNotifications(true)
+  if (useApiMe().value) void loadNotifications(true)
 })
 
 export function useNotifications() {

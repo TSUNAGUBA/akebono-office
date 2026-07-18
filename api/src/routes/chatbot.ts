@@ -1,23 +1,34 @@
 /**
  * チャットボット応答 API（F-09-3）。mockup useChatbot の LLM 一次応答レイヤ。
- * - 一次応答: Vertex AI（構造化出力）。サーバーで本人の勤怠・有給・顧客・ナレッジを文脈化して回答
+ * - 一次応答: Vertex AI（構造化出力）。サーバーが DB の全移行済みドメイン
+ *   （勤怠・有給・日報・ワークフロー・シフト・意思決定・タスク計画・カレンダー・エスカレーション・
+ *   メンバー/部署・顧客・プロジェクト・ナレッジ）を文脈化して回答（バッチ5d・オペレーター指示 2026-07-17）
+ * - 参照範囲は権限（F-16）に従う: ドメインごとに canUseFeature で文脈生成の可否を判定し、
+ *   マスタ由来の文脈は stripDeniedFields で表示項目レベルの deny を反映する（5c の共有ロジックを再利用）
+ * - 本人スコープ（C3）は維持: 勤怠・有給・シフト・タスク計画・カレンダー・エスカレーションは本人分のみ。
+ *   他メンバーの日報は「提出済みのみ」（全員の日報タブ = scope=all と同じ基準）
  * - セッション管理（オペレーター指示 2026-07-17）: 会話は chat_sessions / chat_messages（DB）が SoT。
  *   同一セッション内は直近履歴を LLM へ渡すマルチターン。過去セッションの再開・新規開始に対応。
  *   セッションは本人のみ参照可（C3）。メッセージは追記のみ（記録系保護 = 原則2）
  * - フォールバック: LLM 無効・失敗・低確信度は { fallback: true, sessionId } を返し、クライアントが
  *   既存の決定的ルーティング応答（移行済みドメインは API モードでも実データ参照）へ縮退し、
  *   その応答を POST /sessions/:id/messages で追記する（履歴の忠実性）（原則4）
- * - 未移行ドメイン（ドキュメント・稼働状況）の質問は文脈に含めず、クライアント側の
+ * - 未移行ドメイン（ドキュメント・稼働状況・売上）の質問は文脈に含めず、クライアント側の
  *   モック応答が引き続き担う（implementation-status の SoT どおり）
  * エラー: AKO-CHT-001（セッションが見つからない・他人のセッション）
  */
 import { Hono } from 'hono'
 import type pg from 'pg'
-import { nowJstIso } from '../../../shared/domain/jst'
+import { nowJstIso, todayJst } from '../../../shared/domain/jst'
+import { canUseFeature, stripDeniedFields } from '../../../shared/domain/permissions'
+import type { PermissionRule, PunchRecord, ReportEntry } from '../../../shared/domain/types'
+import type { AuthUser } from '../auth'
+import { daySummary } from '../domain/attendance'
 import type { Env } from '../env'
 import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
 import { generateJson } from '../lib/llm'
+import { activePermissionRules, subjectOf } from '../lib/permissions'
 import { balanceOf, PAID_LEAVE_TYPE_ID } from './leave'
 
 interface ChatAnswer {
@@ -44,58 +55,252 @@ async function requireOwnSession(pool: pg.Pool, sessionId: string, memberId: str
   if (rows.length === 0) throw err('AKO-CHT-001', 'チャットセッションが見つかりません', 404)
 }
 
-/** 質問に関連しそうな社内文脈を収集する（本人スコープのデータ + 共有マスタの要約） */
-async function buildContext(pool: pg.Pool, memberId: string, question: string): Promise<string> {
+/** エントリ要約（業務テーマ → 旧 projectId データは task で代替。表示 3 件まで） */
+function entriesSummary(entries: unknown): string {
+  if (!Array.isArray(entries)) return ''
+  return (entries as ReportEntry[]).slice(0, 3).map(e => e.theme || e.task).filter(Boolean).join(' / ')
+}
+
+/**
+ * 質問に関連しそうな社内文脈を収集する（バッチ5d: DB の全移行済みドメイン）。
+ * - ドメインごとに権限（F-16 canUseFeature）で生成可否を判定 = チャットボットの参照範囲も権限に従う
+ * - マスタ由来の文脈は stripDeniedFields で表示項目 deny を反映
+ * - 本人スコープ（C3）維持。他メンバーの日報は提出済みのみ（scope=all と同じ基準）
+ * - ブロック単位の収集失敗は全体を止めない（原則4 = 部分的な文脈でも回答を試みる）
+ */
+export async function buildContext(
+  pool: pg.Pool,
+  user: AuthUser,
+  question: string,
+  rules: PermissionRule[],
+): Promise<string> {
   const parts: string[] = []
   const q = question.toLowerCase()
-
-  // 有給・勤怠（本人分のみ = C3 保護。他人の数値は文脈に入れない）
-  // 残数は leave ドメインの SoT 計算（FIFO 引当・失効・保有上限）を再利用する（原則3）
-  if (/有給|休暇|残業|勤怠|労働/.test(question)) {
-    const b = await balanceOf(pool, memberId, PAID_LEAVE_TYPE_ID)
-    parts.push(`## 本人の有給（法定有給。詳細は /attendance の有給タブ）
-残数 ${b.remaining} 日 / 今年度の消化 ${b.usedThisFiscalYear} 日${
-  b.nextExpire ? ` / 直近の失効 ${b.nextExpire.date}（${b.nextExpire.days} 日）` : ''}`)
+  const subject = subjectOf(user)
+  const can = (feature: string): boolean => canUseFeature(rules, subject, feature)
+  const strip = <T extends Record<string, unknown>>(entity: string, rows: T[]): T[] =>
+    stripDeniedFields(rules, subject, entity, rows)
+  const today = todayJst()
+  const block = async (fn: () => Promise<void>): Promise<void> => {
+    try {
+      await fn()
+    } catch (e) {
+      console.warn('chat context block failed (non-blocking):', (e as Error).message)
+    }
   }
 
-  // 顧客（名前一致時のみ概要 + 関連ナレッジ。ORDER BY で照合対象を決定的にする）
-  const { rows: companies } = await pool.query<{
-    id: string; name: string; aliases: string[]; description: string; location: string; size: string
-  }>(
-    `SELECT id, name, aliases, description, location, size FROM companies
-     WHERE kind = 'customer' AND active = true ORDER BY id LIMIT 100`)
-  const company = companies.find(c => [c.name, ...c.aliases].some(n => n && q.includes(n.toLowerCase())))
-  if (company) {
+  // 質問に含まれる人名の照合（フルネーム・空白除去・2 文字以上の名前パーツ。ORDER BY id で決定的）
+  const nameHit = (name: string): boolean =>
+    !!name && (question.includes(name) || question.includes(name.replace(/\s+/g, ''))
+      || name.split(/\s+/).some(p => p.length >= 2 && question.includes(p)))
+
+  // 有給・当月勤怠（本人分のみ = C3 保護。残数は leave ドメインの SoT 計算を再利用 = 原則3）
+  if (can('attendance') && /有給|休暇|残業|勤怠|労働|打刻/.test(question)) {
+    await block(async () => {
+      const b = await balanceOf(pool, user.id, PAID_LEAVE_TYPE_ID)
+      parts.push(`## 本人の有給（法定有給。詳細は /attendance の有給タブ）
+残数 ${b.remaining} 日 / 今年度の消化 ${b.usedThisFiscalYear} 日${
+  b.nextExpire ? ` / 直近の失効 ${b.nextExpire.date}（${b.nextExpire.days} 日）` : ''}`)
+    })
+    await block(async () => {
+      const { rows } = await pool.query<PunchRecord>(
+        `SELECT id, member_id AS "memberId", date::text AS date, kind, at, source,
+                fixed_from AS "fixedFrom", fix_reason AS "fixReason", approved_by AS "approvedBy"
+         FROM punch_records WHERE member_id = $1 AND to_char(date, 'YYYY-MM') = $2 ORDER BY at`,
+        [user.id, today.slice(0, 7)])
+      if (rows.length === 0) return
+      const byDate = new Map<string, PunchRecord[]>()
+      for (const r of rows) {
+        const list = byDate.get(r.date) ?? []
+        list.push(r)
+        byDate.set(r.date, list)
+      }
+      let work = 0
+      for (const [d, recs] of byDate) work += daySummary(recs, undefined, d).workMinutes
+      parts.push(`## 本人の当月勤怠（${today.slice(0, 7)}）
+出勤 ${byDate.size} 日 / 総労働 ${Math.round(work / 6) / 10} 時間`)
+    })
+  }
+
+  // 本人の日報（下書き含む = 本人スコープ）
+  if (can('reports') && /日報|週報|振り返り|所感|提出/.test(question)) {
+    await block(async () => {
+      const { rows } = await pool.query<{ date: string; entries: unknown; issues: string; status: string }>(
+        `SELECT date::text AS date, entries, issues, status FROM daily_reports
+         WHERE author_kind = 'human' AND member_id = $1 ORDER BY date DESC LIMIT 5`, [user.id])
+      if (rows.length === 0) return
+      parts.push(`## 本人の直近の日報\n${rows.map(r =>
+        `- ${r.date} [${r.status === 'submitted' ? '提出済' : '下書き'}] ${entriesSummary(r.entries) || '—'}${r.issues ? '・課題あり' : ''}`).join('\n')}`)
+    })
+  }
+
+  // メンバー照合（ディレクトリ情報 + そのメンバーの提出済み日報。表示項目 deny を反映）
+  await block(async () => {
+    const { rows: memberRows } = await pool.query<Record<string, unknown> & { id: string; name: string }>(
+      `SELECT id, name, title, role, email, employment_type AS "employmentType", department_id AS "departmentId"
+       FROM members WHERE active = true ORDER BY id LIMIT 300`)
+    const matched = memberRows.find(m => nameHit(m.name))
+    if (!matched) return
+    const [m] = strip('members', [matched])
+    if (!m) return
+    let deptName = ''
+    if (m.departmentId) {
+      const { rows: deps } = await pool.query<{ name: string }>(
+        `SELECT name FROM departments WHERE id = $1`, [String(m.departmentId)])
+      deptName = deps[0]?.name ?? ''
+    }
+    parts.push(`## メンバー「${matched.name}」
+部署 ${deptName || '未所属'} / 役職 ${String(m.title ?? '') || 'なし'}${m.email ? ` / メール ${String(m.email)}` : ''}`)
+    // 他メンバーの日報は提出済みのみ（全員の日報タブ = scope=all と同じ基準）
+    if (can('reports') && matched.id !== user.id) {
+      const { rows } = await pool.query<{ date: string; entries: unknown; issues: string }>(
+        `SELECT date::text AS date, entries, issues FROM daily_reports
+         WHERE author_kind = 'human' AND member_id = $1 AND status = 'submitted'
+         ORDER BY date DESC LIMIT 3`, [matched.id])
+      if (rows.length > 0) {
+        parts.push(`## ${matched.name} さんの日報（提出済みのみ）\n${rows.map(r =>
+          `- ${r.date} ${entriesSummary(r.entries) || '—'}${r.issues ? '・課題あり' : ''}`).join('\n')}`)
+      }
+    }
+  })
+
+  // ワークフロー（本人の申請 + 静的ガイド）
+  if (can('workflow') && /稟議|申請|承認|ワークフロー|決裁/.test(question)) {
+    await block(async () => {
+      const { rows } = await pool.query<{ id: string; title: string; status: string; amount: string }>(
+        `SELECT id, title, status, amount::text AS amount FROM workflow_requests
+         WHERE requester_id = $1 ORDER BY updated_at DESC LIMIT 5`, [user.id])
+      if (rows.length > 0) {
+        parts.push(`## 本人の稟議・申請\n${rows.map(w => `- ${w.id}「${w.title}」: ${w.status}（${w.amount} 円）`).join('\n')}`)
+      }
+    })
+    parts.push(`## 稟議・申請ガイド
+/workflow の「新規申請」から区分（購買・契約・経費・採用・出張・その他）と金額・内容を入力。
+区分×金額帯で承認経路（マネージャー→取締役→社長など）が自動設定され、承認者へ通知される。差戻し時は修正して再申請可能。`)
+  }
+
+  // シフト（本人の今後の割当）
+  if (can('shift') && /シフト|出勤/.test(question)) {
+    await block(async () => {
+      const { rows } = await pool.query<{ date: string; from: string; to: string; status: string }>(
+        `SELECT date::text AS date, from_time AS "from", to_time AS "to", status FROM shift_assignments
+         WHERE member_id = $1 AND date >= $2::date ORDER BY date LIMIT 7`, [user.id, today])
+      if (rows.length > 0) {
+        parts.push(`## 本人の今後のシフト\n${rows.map(s =>
+          `- ${s.date} ${s.from}〜${s.to}（${s.status === 'confirmed' ? '確定' : s.status === 'change_requested' ? '変更依頼中' : '仮'}）`).join('\n')}`)
+      }
+    })
+  }
+
+  // 意思決定支援（テーマ一覧 + 直近の判断ログ）
+  if (can('decision') && /意思決定|判断|テーマ|選択肢/.test(question)) {
+    await block(async () => {
+      const { rows: themes } = await pool.query<{ id: string; title: string; category: string }>(
+        `SELECT id, title, category FROM decision_themes WHERE active = true ORDER BY id LIMIT 10`)
+      const { rows: logs } = await pool.query<{ themeTitle: string; chosenSlot: string; reason: string; at: string }>(
+        `SELECT t.title AS "themeTitle", l.chosen_slot AS "chosenSlot", l.reason, l.at
+         FROM decision_logs l JOIN decision_themes t ON t.id = l.theme_id ORDER BY l.at DESC LIMIT 3`)
+      if (themes.length === 0) return
+      parts.push(`## 意思決定支援（/decision）
+テーマ: ${themes.map(t => `「${t.title}」(${t.category === 'business' ? '事業' : 'PJ'})`).join(' / ')}${
+  logs.length > 0 ? `\n直近の判断: ${logs.map(l => `「${l.themeTitle}」→ 案${l.chosenSlot}（${capCp(l.reason, 60)}）`).join(' / ')}` : ''}`)
+    })
+  }
+
+  // タスク計画・当日予定（本人分のみ）
+  if (can('ai-assistant') && /タスク|計画|予定|会議|ミーティング|カレンダー/.test(question)) {
+    await block(async () => {
+      const { rows: plans } = await pool.query<{ title: string; status: string; outcome: string }>(
+        `SELECT title, status, outcome FROM task_plans
+         WHERE member_id = $1 AND date = $2::date ORDER BY created_at LIMIT 10`, [user.id, today])
+      const { rows: events } = await pool.query<{ from: string; to: string; title: string }>(
+        `SELECT from_time AS "from", to_time AS "to", title FROM calendar_events
+         WHERE member_id = $1 AND date = $2::date ORDER BY from_time LIMIT 10`, [user.id, today])
+      const lines = [
+        ...events.map(e => `- 予定 ${e.from}〜${e.to}「${e.title}」`),
+        ...plans.map(p => `- タスク「${p.title}」: ${p.status === 'done' ? `完了（${capCp(p.outcome, 40)}）` : '計画中'}`),
+      ]
+      if (lines.length > 0) parts.push(`## 本人の本日の予定・タスク計画（${today}）\n${lines.join('\n')}`)
+    })
+  }
+
+  // エスカレーション（本人が対象のもの。データ面 = 機能ガード対象外）
+  if (/課題|エスカレ|困り/.test(question)) {
+    await block(async () => {
+      const { rows } = await pool.query<{ context: string; raisedAt: string }>(
+        `SELECT context, raised_at AS "raisedAt" FROM escalations
+         WHERE target_member_id = $1 AND status = 'open' ORDER BY raised_at DESC LIMIT 3`, [user.id])
+      if (rows.length > 0) {
+        parts.push(`## 本人に関する対応中エスカレーション\n${rows.map(e => `- ${capCp(e.context, 100)}（${e.raisedAt.slice(0, 10)}）`).join('\n')}`)
+      }
+    })
+  }
+
+  // 顧客(会社)（名前一致時のみ概要 + 関連ナレッジ。照合は生データ・整形は表示項目 deny 反映後）
+  await block(async () => {
+    const { rows: companies } = await pool.query<Record<string, unknown> & { id: string; name: string; aliases: string[] }>(
+      `SELECT id, name, aliases, description, location, size FROM companies
+       WHERE kind = 'customer' AND active = true ORDER BY id LIMIT 100`)
+    const company = companies.find(c => [c.name, ...c.aliases].some(n => n && q.includes(n.toLowerCase())))
+    if (!company) return
+    const [cs] = strip('companies', [company])
     const { rows: ks } = await pool.query<{ id: string; title: string; body: string }>(
       `SELECT id, title, body FROM knowledge_articles
        WHERE active = true AND domain = 'company' AND target_id = $1 LIMIT 3`, [company.id])
     const { rows: pjs } = await pool.query<{ name: string; status: string }>(
       `SELECT name, status FROM projects WHERE active = true AND company_id = $1 LIMIT 5`, [company.id])
     parts.push(`## 顧客「${company.name}」
-${company.description}（${company.location}・規模 ${company.size}）
+${String(cs?.description ?? '')}（${String(cs?.location ?? '')}・規模 ${String(cs?.size ?? '')}）
 プロジェクト: ${pjs.map(p => `${p.name}（${p.status}）`).join(' / ') || 'なし'}
-${ks.map(k => `ナレッジ「${k.title}」(${k.id}): ${[...k.body].slice(0, 200).join('')}`).join('\n')}`)
+${strip('knowledge', ks).map(k => `ナレッジ「${String(k.title ?? '')}」(${k.id}): ${capCp(String(k.body ?? ''), 200)}`).join('\n')}`)
+  })
+
+  // 顧客(人)（名前一致時のみ。表示項目 deny 反映）
+  await block(async () => {
+    const { rows: contacts } = await pool.query<Record<string, unknown> & { id: string; name: string; companyId: string }>(
+      `SELECT id, name, company_id AS "companyId", dept, title, key_person AS "keyPerson", email, phone
+       FROM contacts WHERE active = true ORDER BY id LIMIT 300`)
+    const matched = contacts.find(p => nameHit(p.name))
+    if (!matched) return
+    const [p] = strip('contacts', [matched])
+    if (!p) return
+    const { rows: comp } = await pool.query<{ name: string }>(
+      `SELECT name FROM companies WHERE id = $1`, [matched.companyId])
+    parts.push(`## 顧客担当者「${matched.name}」
+所属 ${comp[0]?.name ?? '不明'}${p.dept ? ` ${String(p.dept)}` : ''} / 役職 ${String(p.title ?? '') || 'なし'}${
+  p.keyPerson ? ` / キーパーソン度 ${String(p.keyPerson)}` : ''}${p.email ? ` / メール ${String(p.email)}` : ''}`)
+  })
+
+  // プロジェクト一覧（キーワード時。表示項目 deny 反映）
+  if (/プロジェクト|案件/.test(question)) {
+    await block(async () => {
+      const { rows } = await pool.query<Record<string, unknown> & { id: string; name: string; companyId: string | null }>(
+        `SELECT id, name, status, company_id AS "companyId" FROM projects WHERE active = true ORDER BY id LIMIT 10`)
+      if (rows.length === 0) return
+      const { rows: comps } = await pool.query<{ id: string; name: string }>(
+        `SELECT id, name FROM companies ORDER BY id LIMIT 200`)
+      const compName = new Map(comps.map(c => [c.id, c.name]))
+      const stripped = strip('projects', rows)
+      parts.push(`## プロジェクト一覧\n${stripped.map(p =>
+        `- ${String(p.name ?? '')}（${String(p.status ?? '')}${p.companyId ? `・${compName.get(String(p.companyId)) ?? ''}` : ''}）`).join('\n')}`)
+    })
   }
 
   // ナレッジ全文検索（タイトル・本文の部分一致。上位 3 件。% _ はリテラル扱いにエスケープ）
-  const terms = question.replace(/[？?。、！!]/g, ' ').split(/\s+/).filter(t => t.length >= 2).slice(0, 5)
-  if (terms.length > 0) {
+  await block(async () => {
+    const terms = question.replace(/[？?。、！!]/g, ' ').split(/\s+/).filter(t => t.length >= 2).slice(0, 5)
+    if (terms.length === 0) return
     const { rows: hits } = await pool.query<{ id: string; title: string; body: string }>(
       `SELECT id, title, body FROM knowledge_articles
        WHERE active = true AND (${terms.map((_, i) => `title ILIKE $${i + 1} ESCAPE '\\' OR body ILIKE $${i + 1} ESCAPE '\\'`).join(' OR ')})
        ORDER BY id LIMIT 3`,
       terms.map(t => `%${t.replace(/[\\%_]/g, m => `\\${m}`)}%`))
     if (hits.length > 0) {
-      parts.push(`## 関連ナレッジ\n${hits.map(k => `「${k.title}」(${k.id}): ${[...k.body].slice(0, 200).join('')}`).join('\n')}`)
+      parts.push(`## 関連ナレッジ\n${strip('knowledge', hits).map(k =>
+        `「${String(k.title ?? '')}」(${k.id}): ${capCp(String(k.body ?? ''), 200)}`).join('\n')}`)
     }
-  }
+  })
 
-  // 静的ガイド（稟議・申請）
-  if (/稟議|申請|承認|ワークフロー/.test(question)) {
-    parts.push(`## 稟議・申請ガイド
-/workflow の「新規申請」から区分（購買・契約・経費・採用・出張・その他）と金額・内容を入力。
-区分×金額帯で承認経路（マネージャー→取締役→社長など）が自動設定され、承認者へ通知される。差戻し時は修正して再申請可能。`)
-  }
   return parts.join('\n\n')
 }
 
@@ -187,13 +392,15 @@ export function chatbotRoutes(pool: pg.Pool, env: Env): Hono {
     const historyText = history
       .map(m => `${m.role === 'user' ? '質問者' : 'アシスタント'}: ${capCp(m.content, HISTORY_MSG_CAP)}`)
       .join('\n')
-    const context = await buildContext(pool, user.id, question)
+    // 参照範囲は権限ルール（F-16）に従う（バッチ5d）。ルール取得失敗は 500（フェイルクローズ = featureGuard と同方向）
+    const rules = await activePermissionRules(pool)
+    const context = await buildContext(pool, user, question, rules)
     const res = await generateJson<ChatAnswer>(env, {
       system: 'あなたは社内業務アシスタント（AKEBONO Office のチャットボット）です。与えられた社内文脈だけを'
         + '根拠に、日本語の丁寧語で簡潔に回答します。文脈にない事実は述べず、その場合は confidence を低くして'
         + '「わからない」と伝えてください。会話履歴がある場合は文脈を引き継いで回答します'
         + '（「それ」「さっきの」等の指示語は履歴から解決）。sources は使用した文脈の見出し'
-        + '（例: 本人の有給・顧客「◯◯」・ナレッジ タイトル）、suggestions は関連する次の質問を 2 件、'
+        + '（例: 本人の有給・本人の直近の日報・本人の稟議・顧客「◯◯」・ナレッジ タイトル）、suggestions は関連する次の質問を 2 件、'
         + 'confidence は回答の確信度 0-1。'
         + '画面パス（/attendance /workflow /reports 等）への案内は文脈にあるもののみ使用。',
       prompt: `質問者: ${user.name}\n`
