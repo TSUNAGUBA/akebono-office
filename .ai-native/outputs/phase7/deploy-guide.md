@@ -155,6 +155,21 @@ gcloud scheduler jobs create http sales-mart-etl \
 
 ETL は `UNIQUE(tenant_key, source_txn_id)` の upsert で冪等のため、多重実行しても fact 行は増えない。
 
+## 1-7c. 稼働状況 uptime の日次ロールアップ（Cloud Scheduler・任意。バッチ6c）
+
+uptime_daily はインシデント（SoT）からの導出データで、インシデント登録/更新時に自動再計算される。
+未解決インシデントの停止時間を日々進める場合は 1-7 と同じ `CRON_SECRET` を使い:
+
+```bash
+gcloud scheduler jobs create http uptime-rollup \
+  --schedule "5 0 * * *" --time-zone "Asia/Tokyo" \
+  --uri "https://<cloud-run-url>/jobs/uptime-rollup" \
+  --http-method POST --headers "x-cron-key=<CRON_SECRET と同じ値>"
+```
+
+再計算は窓内 DELETE→INSERT のトランザクションで冪等。手動回復は管理者 API
+`POST /v1/status/uptime/recompute`（直近 90 日・serviceId 指定可）でいつでも実行できる。
+
 ## 1-8. AI 機能（Vertex AI）
 
 AI 機能（日報 AI アシスト・タスク計画の AI コメント等）は **Vertex AI**（オペレーター決定 2026-07-17）を

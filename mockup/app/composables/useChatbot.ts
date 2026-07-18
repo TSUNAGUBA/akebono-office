@@ -44,6 +44,9 @@ export function useChatbot() {
   const { currentUser } = useCurrentUser()
   const { monthSummary } = useAttendance()
   const { activeFiles, folderPath } = useDocuments()
+  // 稼働状況はバッチ6c で移行済み: デュアルモードの useSystemStatus 経由で参照
+  // （API モードの決定的フォールバックも実データで答える）
+  const { services: statusServices, openIncidentsOf } = useSystemStatus()
   const isApi = useApiMode()
 
   const mockMessages = tbl('chatMessages')
@@ -366,16 +369,16 @@ export function useChatbot() {
     }
   }
 
-  /** d) 稼働状況: systemServices + serviceIncidents の open 状況を要約 */
+  /** d) 稼働状況: useSystemStatus（デュアルモード）の open 状況を要約 */
   function answerStatus(): BotAnswer {
-    const services = tbl('systemServices').value
-    const openIncidents = tbl('serviceIncidents').value.filter(i => i.status !== 'resolved')
+    const services = statusServices.value
+    const openCount = services.reduce((s, svc) => s + openIncidentsOf(svc.id).length, 0)
     const lines: string[] = []
-    lines.push(openIncidents.length === 0
+    lines.push(openCount === 0
       ? '現在、対応中の障害はありません。全サービスの稼働状況は次のとおりです。'
-      : `現在 ${openIncidents.length} 件の障害・事象に対応中です。サービス別の状況は次のとおりです。`)
+      : `現在 ${openCount} 件の障害・事象に対応中です。サービス別の状況は次のとおりです。`)
     for (const svc of services) {
-      const inc = openIncidents.filter(i => i.serviceId === svc.id)
+      const inc = openIncidentsOf(svc.id)
       lines.push(inc.length === 0
         ? `・${svc.name}: 正常稼働`
         : `・${svc.name}: 対応中 — ${inc.map(i => i.title).join(' / ')}`)

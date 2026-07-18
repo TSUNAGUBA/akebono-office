@@ -14,10 +14,12 @@
 バッチ6b 以降は `claude/akebono-batch6b-onwards-3kma75`）。1 バッチ = 1 PR で、マージ後に必ず
 ブランチを最新 main から再作成する（後述の「運用慣行」参照）。
 
-- **バッチ6a（PR #35）はマージ済み**。バッチ6b（売上 F-15 + mart ETL）は本 PR で実装済み
-  （ETL 出力先 = app_office 内 mart 互換テーブル。オペレーター判断 2026-07-18。§1 参照）
+- **バッチ6a（PR #35）・6b（PR #36）はマージ済み**（6b の ETL 出力先 = app_office 内 mart
+  互換テーブル。オペレーター判断 2026-07-18。§1 参照）。**バッチ6c（稼働状況 F-11）は本 PR で実装済み**（§2 参照）
 - 旧セッションの scratchpad（E2E スタック 16 スイート）は**コンテナ再作成で消失**。
-  バッチ6b で E2E ハーネスを scratchpad `e2e/` に再構築した（§4 検証スタック参照）
+  バッチ6b で E2E ハーネスを scratchpad `e2e/` に再構築した（§4 検証スタック参照）。
+  現在のスイート: batch6b（12）+ batch6c（16）+ モック回帰（9）
+- 残タスクは **バッチ6d（AKEBONO F-03・§3）のみ**。完了で mock-status が空 = モックバッジ全廃
 
 ### 完了済み（マージ済み PR）
 - バッチ1〜4b: 勤怠・休暇・日報・マスタ・設定・通知・エスカレーション・ワークフロー・シフト・
@@ -89,7 +91,12 @@ ETL の出力先を app_office 内の派生テーブルにするか、実際に 
 
 ---
 
-## 2. バッチ6c: 提供システム稼働状況（F-11）
+## 2. バッチ6c: 提供システム稼働状況（F-11）— **実装済み（本 PR）**
+
+> **結果メモ（2026-07-18）:** 下記方針どおり実装。uptime_daily の SoT はインシデントで、
+> shared/domain/uptime の純粋関数から日次導出（窓内 DELETE→INSERT = 冪等。トリガ =
+> 登録/更新時 + /jobs/uptime-rollup + 管理者の手動再計算）。モックの乱数 uptime シードは
+> 本番へ持ち込まない。詳細は implementation-status.md §14 が SoT。
 
 ### 要件
 - F-11-1 全体サマリ: コンポーネント状態（operational/degraded/partial_outage/major_outage/maintenance）の

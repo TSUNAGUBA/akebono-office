@@ -6,7 +6,6 @@
  */
 const MOCK_PAGE_PATHS = new Set<string>([
   '/akebono',
-  '/status',
 ])
 
 /** このパスのページが API モードでもモックデータ動作か（バッジ表示判定） */

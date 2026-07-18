@@ -178,7 +178,9 @@ flowchart LR
 16. **バッチ5e（PR #33・マージ済み）:** アカウント機能（ログアウト・プロフィール/アイコン画像・パスワード変更）+ 日報 UX 改善（全員の日報・業務テーマ化・1 行レイアウト・日付ナビ）— 完了
 17. **バッチ5d（PR #34・マージ済み）:** チャットボットの全 DB 参照化（文脈収集を全移行済みドメインへ拡張・参照範囲は F-16 権限に準拠）— 完了
 18. **バッチ6a（PR #35・マージ済み）:** AI カンパニー F-08（ロール/AI 社員 = 汎用マスタ・タスク状態機械・活動ログ・日次報告・停滞/過負荷検知。分解 = Vertex AI → 失敗時共有ヒューリスティック）— 完了
-19. **バッチ6b（本 PR）:** 売上管理 F-15（sales_monthly = 冪等 upsert・管理者の実績登録/取込・会計年度計算 = shared/domain/fiscal 共有）+ mart ETL 基盤（fact_sales / mart_load_runs = app_office 内 mart 互換テーブル・オペレーター判断 2026-07-18。手動実行 + Cloud Scheduler 日次の両経路）
-20. **残り:** 稼働状況（F-11）・AKEBONO（F-03）
+19. **バッチ6b（PR #36・マージ済み）:** 売上管理 F-15（sales_monthly = 冪等 upsert・管理者の実績登録/取込・会計年度計算 = shared/domain/fiscal 共有）+ mart ETL 基盤（fact_sales / mart_load_runs = app_office 内 mart 互換テーブル・オペレーター判断 2026-07-18。手動実行 + Cloud Scheduler 日次の両経路）— 完了
+20. **バッチ6c（本 PR）:** 提供システム稼働状況 F-11（system_services シード・service_incidents = 正順状態機械 + updates 追記・uptime_daily = インシデントから shared/domain/uptime で日次導出・/jobs/uptime-rollup + 手動再計算の両経路）
+21. **残り:** AKEBONO（F-03）
+
 
 進捗の SoT: `implementation-status.md`（実装 PR ごとに更新）

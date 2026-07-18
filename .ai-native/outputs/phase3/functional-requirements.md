@@ -163,8 +163,9 @@ undeux-sales-suite の意思決定オントロジー・ビュー（①意味 ②
 | ID | 機能 | 処理 | 出力 |
 |---|---|---|---|
 | F-11-1 | 全体サマリ | コンポーネント状態（operational/degraded/partial_outage/major_outage/maintenance）の最悪値ロールアップ | 全体バナー + システム一覧 |
-| F-11-2 | システム詳細 | 90 日稼働率バー（日別色分け）+ uptime% + インシデント履歴 | 詳細ページ |
-| F-11-3 | インシデント管理 | ライフサイクル: investigating → identified → monitoring → resolved。影響度 minor/major/critical。更新はタイムスタンプ付きフィード | インシデント登録・更新（管理者操作に反応） |
+| F-11-2 | システム詳細 | 90 日稼働率バー（日別色分け）+ uptime%（API モードはインシデントから shared/domain/uptime で日次導出 = バッチ6c）+ インシデント履歴 | 詳細ページ |
+| F-11-3 | インシデント管理 | ライフサイクル: investigating → identified → monitoring → resolved（正順のみ・API は FOR UPDATE で直列化）。影響度 minor/major/critical。更新はタイムスタンプ付きフィード（updates 追記のみ = 記録系） | インシデント登録・更新（管理者のみ。登録/更新で管理者へ通知） |
+| F-11-4 | uptime 日次集計（バッチ6c 追加） | SoT = インシデント → uptime_daily へ導出（窓内 DELETE→INSERT = 冪等）。トリガ = 登録/更新時 + Cloud Scheduler 日次（/jobs/uptime-rollup）+ 管理者の手動再計算 | 90 日稼働率・日別バーの元データ |
 
 ## F-12 通知・エスカレーションセンター（`/inbox`）【提案機能】
 

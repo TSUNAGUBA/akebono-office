@@ -8,7 +8,10 @@ import type { ServiceState } from '~/composables/useSystemStatus'
 import { fmtDateTime, fmtPct } from '~/utils/format'
 import { INCIDENT_STATUS_LABELS, SERVICE_STATE_LABELS, SERVICE_STATE_TONES } from '~/utils/labels'
 
-const { services, overallState, stateOf, uptimeDaysOf, uptimePctOf, openIncidentsOf } = useSystemStatus()
+const { services, overallState, stateOf, uptimeDaysOf, uptimePctOf, openIncidentsOf, refresh } = useSystemStatus()
+
+// 表示時に最新状態を取り込む（API モード。他管理者の登録・更新の反映）
+onMounted(() => { void refresh() })
 
 /** 全体バナーの見た目（ステータストーンの soft 背景） */
 const BANNER_META: Record<ServiceState, { class: string; icon: typeof CircleCheck; message: string }> = {
