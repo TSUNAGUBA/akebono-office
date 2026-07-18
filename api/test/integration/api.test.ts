@@ -1173,6 +1173,40 @@ describe('チャットボット応答', () => {
     const wfDenied = await buildContext(pool, memberUser, '自分の稟議の状況を教えて', wfDeny)
     expect(wfDenied).not.toContain('稟議・申請ガイド')
   })
+
+  it('フォローアップ質問でも直近のユーザー発言から文脈が供給される（オペレーター報告 2026-07-18）', async () => {
+    const { buildContext } = await import('../../src/routes/chatbot')
+    const memberUser = { id: MEMBER, name: '一般 次郎', email: 'member@example.com', role: 'member' as const, title: '', avatar: '' }
+
+    // キーワードを含まないフォローアップ単体では有給文脈は生成されない（従来挙動の確認）
+    const without = await buildContext(pool, memberUser, 'じゃあ去年は何日使った？', [])
+    expect(without).not.toContain('本人の有給')
+
+    // 直近のユーザー発言（履歴）に「有給」があれば話題を引き継いで文脈が供給される
+    const withHistory = await buildContext(pool, memberUser, 'じゃあ去年は何日使った？', [],
+      ['有給の残りは何日？'])
+    expect(withHistory).toContain('本人の有給')
+
+    // 権限 deny は履歴由来のコーパスに対しても従来どおり効く（参照範囲は拡がらない）
+    const denyAtt = [{
+      id: 'pm-mt', subjectKind: 'role' as const, subjectId: 'member', resource: 'attendance', field: null,
+      effect: 'deny' as const, active: true,
+    }]
+    expect(await buildContext(pool, memberUser, 'じゃあ去年は何日使った？', denyAtt,
+      ['有給の残りは何日？'])).not.toContain('本人の有給')
+
+    // /ask 経由でも履歴が渡ることを確認（LLM 無効環境 = fallback だがユーザー発言は永続され、
+    // 次のターンの buildContext へ届く経路をセッション実データで検証）
+    const ask1 = await api('POST', '/v1/chatbot/ask', { as: MEMBER, body: { question: '有給の残りは何日？' } })
+    expect(ask1.status).toBe(200)
+    const sessionId = (ask1.json.data as { sessionId: string }).sessionId
+    const { rows: history } = await pool.query<{ role: string; content: string }>(
+      `SELECT role, content FROM chat_messages WHERE session_id = $1 ORDER BY seq`, [sessionId])
+    const historyUserTexts = history.filter(m => m.role === 'user').map(m => m.content)
+    expect(historyUserTexts).toContain('有給の残りは何日？')
+    expect(await buildContext(pool, memberUser, 'じゃあ去年は？', [], historyUserTexts))
+      .toContain('本人の有給')
+  })
 })
 
 describe('AI カンパニー（F-08）', () => {

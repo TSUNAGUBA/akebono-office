@@ -25,7 +25,30 @@ interface BotAnswer {
 
 // ---------- セッション状態（SPA・モジュールスコープ単一 = ページ遷移しても会話を維持） ----------
 
-const currentSessionId = ref<string | null>(null)
+/**
+ * 表示中セッションはタブ内で永続（sessionStorage）し、リロード後も同じ会話を自動再開する
+ * （オペレーター報告 2026-07-18: リロードで新しい会話になり履歴が途切れて見える問題への対応。
+ * タブ単位のため別タブには波及しない。ログイン切替時は API モード = refresh/send のサーバー
+ * 所有チェック（404 = AKO-CHT-001）、モックモード = ensureOwnSession が null 化 → 削除する）
+ */
+const SESSION_STORAGE_KEY = 'ako.chatSession.v1'
+
+function restoreSessionId(): string | null {
+  try {
+    return sessionStorage.getItem(SESSION_STORAGE_KEY)
+  } catch {
+    return null
+  }
+}
+
+const currentSessionId = ref<string | null>(import.meta.client ? restoreSessionId() : null)
+
+watch(currentSessionId, (v) => {
+  try {
+    if (v) sessionStorage.setItem(SESSION_STORAGE_KEY, v)
+    else sessionStorage.removeItem(SESSION_STORAGE_KEY)
+  } catch { /* プライベートモード等の storage 不可は無視（会話自体は続けられる） */ }
+})
 /** API モード: 自分のセッション一覧・現在セッションのメッセージ（サーバーのローカルミラー） */
 const apiSessions = ref<ChatSession[]>([])
 const apiMessages = ref<ChatMessage[]>([])
@@ -33,7 +56,10 @@ const apiMessages = ref<ChatMessage[]>([])
 let localSeq = 0
 
 onApiReset(() => {
-  currentSessionId.value = null
+  // 認証の確立・切替時はサーバーミラーのみ破棄する。currentSessionId は保持し、復元可否は
+  // refresh()/openSession のサーバー所有チェック（他人・不在 = 404 → 新しい会話へ）に委ねる。
+  // 本フックは初回ロード（リロード含む）の認証確立でも走るため、ここで null 化すると
+  // sessionStorage によるリロード後の自動再開が壊れる（オペレーター報告 2026-07-18 の対応で判明）
   apiSessions.value = []
   apiMessages.value = []
 })
@@ -182,12 +208,15 @@ export function useChatbot() {
     if (isApi) apiMessages.value = []
   }
 
-  /** ページ表示時の取り直し（セッション一覧 + 表示中セッションの復元） */
+  /** ページ表示時の取り直し（セッション一覧 + 表示中セッションの復元。リロード後の自動再開もここ） */
   async function refresh(): Promise<void> {
     if (!isApi) return
     await refreshSessions()
     if (currentSessionId.value && apiMessages.value.length === 0) {
-      await openSession(currentSessionId.value)
+      const r = await openSession(currentSessionId.value)
+      // 復元できないセッション（別アカウントの残骸・削除済み = 404）のみ新しい会話へフォールバック。
+      // 一時的な通信失敗（AKO-GEN-NET 等）では保持し、次回の refresh で再試行する
+      if (!r.ok && r.error.code === 'AKO-CHT-001') currentSessionId.value = null
     }
   }
 
@@ -227,11 +256,13 @@ export function useChatbot() {
           })
           return
         }
-      } catch {
-        // 通信失敗も決定的応答へ縮退（下の共通経路）。この場合セッション未確定なら履歴追記はしない
+      } catch (e) {
+        // 通信失敗も決定的応答へ縮退（下の共通経路）。この場合セッション未確定なら履歴追記はしない。
+        // セッション不在（別アカウントの残骸等 = AKO-CHT-001）は保持をやめて新しい会話へ
+        if (apiErrorOf(e).code === 'AKO-CHT-001') currentSessionId.value = null
       }
       // フォールバック: 決定的応答をセッションへ追記（履歴の忠実性。失敗しても表示は継続 = 非ブロッキング）
-      const ans = answer(text)
+      const ans = resolveAnswer(text)
       if (currentSessionId.value) {
         void apiFetch(`/v1/chatbot/sessions/${currentSessionId.value}/messages`, {
           method: 'POST',
@@ -241,7 +272,7 @@ export function useChatbot() {
       startStream(ans)
       return
     }
-    startStream(answer(text))
+    startStream(resolveAnswer(text))
   }
 
   /**
@@ -259,19 +290,49 @@ export function useChatbot() {
 
   // ---------- シナリオルーティング（実データ参照） ----------
 
-  function answer(text: string): BotAnswer {
-    if (/有給|休暇/.test(text)) return answerLeave(text)
-    if (/残業|勤怠|労働時間/.test(text)) return answerOvertime()
-    const company = matchCompany(text)
+  /**
+   * キーワードルーティング（該当なしは null = 呼び出し側が履歴での再試行や定型応答を決める）。
+   * 話題の選択は corpus（履歴込みのことがある）で行い、サブ分類（申請/取り方・規程トピック等）は
+   * 今回の質問 subText だけで行う（履歴側のサブキーワードが今回の意図を上書きしないため）
+   */
+  function route(corpus: string, subText: string = corpus): BotAnswer | null {
+    if (/有給|休暇/.test(corpus)) return answerLeave(subText)
+    if (/残業|勤怠|労働時間/.test(corpus)) return answerOvertime()
+    const company = matchCompany(corpus)
     if (company) return answerCompany(company)
-    if (/稼働|障害|システム/.test(text)) return answerStatus()
-    if (/規程|ルール|就業/.test(text)) return answerRules(text)
-    if (/稟議|申請|承認/.test(text)) return answerWorkflow()
+    if (/稼働|障害|システム/.test(corpus)) return answerStatus()
+    if (/規程|ルール|就業/.test(corpus)) return answerRules(subText)
+    if (/稟議|申請|承認/.test(corpus)) return answerWorkflow()
+    return null
+  }
+
+  function unknownAnswer(): BotAnswer {
     return {
       content: 'すみません、この質問にはうまく回答できませんでした。管理者へエスカレーションしますか？（暗黙の情報共有として管理者に届き、回答があれば通知されます）',
       sources: [],
       suggestions: [ESCALATE_SUGGESTION, ...INITIAL_SUGGESTIONS.slice(0, 2)],
     }
+  }
+
+  /**
+   * 2 段ルーティング（オペレーター報告 2026-07-18: フォールバック応答が会話履歴を無視する問題への対応）。
+   * ①今回の質問だけで判定（従来どおり = 話題転換を優先）→ ②該当なしなら直近のユーザー発言を
+   * 連結して再判定（「じゃあ去年は？」等のフォローアップを直前の話題で回答）→ ③それでも不明なら定型応答
+   */
+  function resolveAnswer(text: string): BotAnswer {
+    const primary = route(text)
+    if (primary) return primary
+    // 直近のユーザー発言（今回分は表示リストに追加済みのため除く）から話題を引き継ぐ
+    const recent = sorted.value
+      .filter(m => m.role === 'user')
+      .slice(-4, -1)
+      .map(m => m.content)
+      .join('\n')
+    if (recent) {
+      const followUp = route(`${recent}\n${text}`, text)
+      if (followUp) return followUp
+    }
+    return unknownAnswer()
   }
 
   /** a) 有給: leaveGrants / leaveRequests から currentUser の残数を計算 */
