@@ -203,7 +203,8 @@ export async function buildSearchDocs(pool: pg.Pool): Promise<SearchDocInput[]> 
     const segments: SearchSegment[] = []
     segments.push(seg(`状態: ${pj.status} / 種別: ${pj.type}`, c('projects', 'status'), c('projects', 'type')))
     const compName = companyName.get(pj.companyId)
-    if (compName) segments.push(seg(`顧客: ${compName}`, c('companies', 'name')))
+    // PJ→顧客の紐付け（projects.companyId）の開示でもあるためチェックへ追加（R2 レビューの任意指摘）
+    if (compName) segments.push(seg(`顧客: ${compName}`, c('companies', 'name'), c('projects', 'companyId')))
     if (pj.objective) segments.push(seg(`目的: ${capCp(pj.objective, 300)}`, c('projects', 'objective')))
     const owner = memberName.get(pj.ownerMemberId)
     if (owner) segments.push(seg(`担当: ${owner}`, c('projects', 'ownerMemberId'), c('members', 'name')))
