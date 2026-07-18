@@ -13,6 +13,8 @@ import type {
 } from '../../../shared/domain/types'
 import { requireAdmin } from '../auth'
 import { article36Alerts, resolveRule } from '../domain/attendance'
+import type { Env } from '../env'
+import { scheduleSearchRebuild } from '../lib/search-index'
 import { ATTENDANCE_RULE_COLS } from './attendance'
 import { raiseEscalation } from '../lib/escalate'
 import { err } from '../lib/errors'
@@ -27,7 +29,7 @@ const COLS = `id, reason, target_member_id AS "targetMemberId", target_ai_employ
   context, status, resolution, knowledge_reflected AS "knowledgeReflected",
   dedupe_key AS "dedupeKey", raised_at AS "raisedAt"`
 
-export function escalationsRoutes(pool: pg.Pool): Hono {
+export function escalationsRoutes(pool: pg.Pool, env: Env): Hono {
   const app = new Hono()
 
   // 一覧（管理者のみ。open / resolved の分割はフロントの射影）
@@ -131,6 +133,8 @@ export function escalationsRoutes(pool: pg.Pool): Hono {
     } finally {
       client.release()
     }
+    // 裁定のナレッジ還流も検索インデックスへ反映（masters 書込後フックと同じ非ブロッキング経路）
+    if (knowledgeReflected) scheduleSearchRebuild(pool, env, 'escalation:reflux')
 
     // 回答送信は本人へ届ける（補助処理）
     if (body.type === 'answer' && target?.targetMemberId) {

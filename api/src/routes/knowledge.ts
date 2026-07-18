@@ -2,18 +2,20 @@
  * ナレッジのドキュメント取込（オペレーター指示 2026-07-18 #3: .md/.txt/.pdf/.docx のアップロード蓄積）。
  * - 既存の knowledge_articles スキーマは不変（SoT）。抽出テキストを body へ格納し、
  *   アップロード原本は knowledge_files へ保全（監査・再抽出用。原則7 = 既存マスタを崩さない）
- * - 抽出: .md/.txt = UTF-8 / .pdf = pdf-parse / .docx = mammoth（.doc 旧形式は非対応と明示）
+ * - 抽出: .md/.txt = UTF-8 / .pdf = pdfjs-dist / .docx = mammoth（lib/extract-text.ts。.doc 旧形式は非対応と明示）
  * - 取込後は検索インデックスを自動再生成（AI が探索・解釈しやすい最適化データへ反映）
  * エラー: AKO-KNW-001（非対応形式）/ AKO-KNW-002（サイズ超過）/ AKO-KNW-003（テキスト抽出不能）
  */
 import { Hono } from 'hono'
 import type pg from 'pg'
+import { canViewField } from '../../../shared/domain/permissions'
 import { requireAdmin } from '../auth'
 import type { Env } from '../env'
 import { audit } from '../lib/audit'
 import { err } from '../lib/errors'
 import { extractDocumentText } from '../lib/extract-text'
 import { newId } from '../lib/ids'
+import { activePermissionRules, subjectOf } from '../lib/permissions'
 import { scheduleSearchRebuild } from '../lib/search-index'
 import { capCp } from '../lib/text'
 
@@ -110,8 +112,13 @@ export function knowledgeRoutes(pool: pg.Pool, env: Env): Hono {
     return c.json({ data: rows[0] }, 201)
   })
 
-  // ナレッジの添付原本メタ一覧（認証済みなら参照可 = ナレッジ本文と同じ可視性）
+  // ナレッジの添付原本メタ一覧。表示項目 deny（F-16）に従う: knowledge.title が deny なら
+  // ファイル名（≒タイトル相当の情報）も出さない（masters GET の剥がしと同じ方向）
   app.get('/:knowledgeId/files', async (c) => {
+    const rules = await activePermissionRules(pool)
+    if (rules.length > 0 && !canViewField(rules, subjectOf(c.get('user')), 'knowledge', 'title')) {
+      return c.json({ data: [] })
+    }
     const { rows } = await pool.query(
       `SELECT id, knowledge_id AS "knowledgeId", filename, mime, size_bytes AS "sizeBytes",
               uploaded_by AS "uploadedBy", created_at AS "createdAt"
@@ -120,8 +127,13 @@ export function knowledgeRoutes(pool: pg.Pool, env: Env): Hono {
     return c.json({ data: rows })
   })
 
-  // 原本ダウンロード（base64 JSON。10MB 上限のため許容）
+  // 原本ダウンロード（base64 JSON。10MB 上限のため許容）。原本は抽出テキスト（body）の上位互換のため、
+  // knowledge.body の表示項目 deny があるユーザーにはダウンロードさせない（deny の迂回防止）
   app.get('/files/:id', async (c) => {
+    const rules = await activePermissionRules(pool)
+    if (rules.length > 0 && !canViewField(rules, subjectOf(c.get('user')), 'knowledge', 'body')) {
+      throw err('AKO-PRM-001', 'このファイルを参照する権限がありません（管理者にお問い合わせください）', 403)
+    }
     const { rows } = await pool.query<{ filename: string; mime: string; bytes: Buffer }>(
       `SELECT filename, mime, bytes FROM knowledge_files WHERE id = $1`, [c.req.param('id')])
     const f = rows[0]

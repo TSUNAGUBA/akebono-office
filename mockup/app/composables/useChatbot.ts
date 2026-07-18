@@ -339,14 +339,15 @@ export function useChatbot() {
   function resolveAnswer(text: string): BotAnswer {
     const primary = route(text)
     if (primary) return primary
-    // 直近のユーザー発言（今回分は表示リストに追加済みのため除く）から話題を引き継ぐ
-    const recent = sorted.value
+    // 直近のユーザー発言（今回分は表示リストに追加済みのため除く）から話題を引き継ぐ。
+    // 新しい発言から 1 件ずつ再判定する（サーバー側と同じ「新しい順優先」= 連結コーパスだと
+    // 古い発言の長い会社名が最長一致で勝ってしまうため）
+    const recents = sorted.value
       .filter(m => m.role === 'user')
       .slice(-4, -1)
       .map(m => m.content)
-      .join('\n')
-    if (recent) {
-      const followUp = route(`${recent}\n${text}`, text)
+    for (const t of [...recents].reverse()) {
+      const followUp = route(`${t}\n${text}`, text)
       if (followUp) return followUp
     }
     return unknownAnswer()

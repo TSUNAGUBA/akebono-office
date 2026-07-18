@@ -117,16 +117,21 @@ export async function buildSearchDocs(pool: pg.Pool): Promise<SearchDocInput[]> 
     }
     const inds = (co.industryIds ?? []).map(id => industryName.get(id)).filter((x): x is string => !!x)
     if (inds.length > 0) {
+      segments.push(seg(`業界: ${inds.join('・')}`, c('companies', 'industryIds'), c('industries', 'name')))
+      // （主）は primaryIndustryId 由来のため別セグメント（deny 時は主指定だけが消える = 精密ブロックと同じ縮退）
       const primary = industryName.get(co.primaryIndustryId)
-      segments.push(seg(`業界: ${inds.join('・')}${primary ? `（主: ${primary}）` : ''}`,
-        c('companies', 'industryIds'), c('industries', 'name')))
+      if (primary) {
+        segments.push(seg(`主業界: ${primary}`,
+          c('companies', 'industryIds'), c('companies', 'primaryIndustryId'), c('industries', 'name')))
+      }
     }
     const owner = memberName.get(co.ownerMemberId)
     if (owner) segments.push(seg(`自社担当: ${owner}`, c('companies', 'ownerMemberId'), c('members', 'name')))
     const cons = contactsQ.rows.filter(p => p.companyId === co.id).slice(0, 8)
     if (cons.length > 0) {
+      // 役職（contacts.title）も含むためチェックへ追加（deny 時は行ごと消える = フェイルセーフ方向）
       segments.push(seg(`先方担当者: ${cons.map(p => `${p.name}${p.title ? `（${p.title}）` : ''}`).join(' / ')}`,
-        c('contacts', 'name')))
+        c('contacts', 'name'), c('contacts', 'title')))
     }
     const rels = compRelsQ.rows.filter(r => r.fromCompanyId === co.id || r.toCompanyId === co.id).slice(0, 10)
     for (const r of rels) {
@@ -141,7 +146,8 @@ export async function buildSearchDocs(pool: pg.Pool): Promise<SearchDocInput[]> 
     }
     const pjs = projectsQ.rows.filter(p => p.companyId === co.id).slice(0, 10)
     if (pjs.length > 0) {
-      segments.push(seg(`プロジェクト: ${pjs.map(p => `${p.name}（${p.status}）`).join(' / ')}`, c('projects', 'name')))
+      segments.push(seg(`プロジェクト: ${pjs.map(p => `${p.name}（${p.status}）`).join(' / ')}`,
+        c('projects', 'name'), c('projects', 'status')))
     }
     const ks = knowledgeQ.rows.filter(k => k.domain === 'company' && k.targetId === co.id).slice(0, 5)
     for (const k of ks) {
@@ -181,7 +187,9 @@ export async function buildSearchDocs(pool: pg.Pool): Promise<SearchDocInput[]> 
     const segments: SearchSegment[] = []
     const customers = companiesQ.rows.filter(co => co.kind === 'customer' && (co.industryIds ?? []).includes(ind.id))
     if (customers.length > 0) {
-      segments.push(seg(`この業界の顧客: ${customers.map(co => co.name).join('・')}`, c('companies', 'name')))
+      // 業界所属（companies.industryIds）の開示でもあるためチェックへ追加（精密な業界逆引きと同じ縮退）
+      segments.push(seg(`この業界の顧客: ${customers.map(co => co.name).join('・')}`,
+        c('companies', 'name'), c('companies', 'industryIds')))
     }
     const ks = knowledgeQ.rows.filter(k => k.domain === 'industry' && k.targetId === ind.id).slice(0, 5)
     for (const k of ks) {
@@ -193,7 +201,7 @@ export async function buildSearchDocs(pool: pg.Pool): Promise<SearchDocInput[]> 
   // ---- プロジェクト ----
   for (const pj of projectsQ.rows) {
     const segments: SearchSegment[] = []
-    segments.push(seg(`状態: ${pj.status} / 種別: ${pj.type}`, c('projects', 'status')))
+    segments.push(seg(`状態: ${pj.status} / 種別: ${pj.type}`, c('projects', 'status'), c('projects', 'type')))
     const compName = companyName.get(pj.companyId)
     if (compName) segments.push(seg(`顧客: ${compName}`, c('companies', 'name')))
     if (pj.objective) segments.push(seg(`目的: ${capCp(pj.objective, 300)}`, c('projects', 'objective')))
@@ -220,7 +228,8 @@ export async function buildSearchDocs(pool: pg.Pool): Promise<SearchDocInput[]> 
             : undefined
     if (target) {
       const entity = k.domain === 'company' ? 'companies' : k.domain === 'contact' ? 'contacts' : k.domain === 'industry' ? 'industries' : 'projects'
-      segments.push(seg(`対象: ${target}（${k.domain}）`, c(entity, 'name')))
+      // ナレッジと対象の紐付け（knowledge.targetId）の開示でもあるためチェックへ追加
+      segments.push(seg(`対象: ${target}（${k.domain}）`, c(entity, 'name'), c('knowledge', 'targetId')))
     }
     if ((k.tags ?? []).length > 0) segments.push(seg(`タグ: ${(k.tags ?? []).join('・')}`, c('knowledge', 'tags')))
     if (k.body) segments.push(seg(capCp(k.body, 1500), c('knowledge', 'body')))
@@ -245,10 +254,12 @@ export async function rebuildSearchIndex(
   const existingByKey = new Map(existing.map(r => [`${r.sourceKind}:${r.sourceId}`, r]))
 
   let upserted = 0
-  const needEmbedding: { doc: SearchDocInput; body: string }[] = []
+  const needEmbedding: { doc: SearchDocInput; body: string; hash: string }[] = []
   for (const doc of docs) {
     const body = bodyOf(doc)
-    const hash = createHash('sha256').update(body).digest('hex')
+    // ハッシュには segments（表示可否チェック込み）も含める: checks 定義の変更（レビュー指摘の
+    // 権限チェック強化等）が本文不変でも既存行へ伝播するように（手動 reindex が回復パスとして機能する）
+    const hash = createHash('sha256').update(body).update(JSON.stringify(doc.segments)).digest('hex')
     const prev = existingByKey.get(`${doc.sourceKind}:${doc.sourceId}`)
     if (!prev || prev.bodyHash !== hash) {
       await pool.query(
@@ -261,9 +272,9 @@ export async function rebuildSearchIndex(
         [newId('sd'), doc.sourceKind, doc.sourceId, doc.title, JSON.stringify(doc.aliases),
           body, JSON.stringify(doc.segments), hash])
       upserted++
-      needEmbedding.push({ doc, body })
+      needEmbedding.push({ doc, body, hash })
     } else if (env.vertexProjectId && (!prev.hasEmbedding || prev.embeddingModel !== env.vertexEmbeddingModel)) {
-      needEmbedding.push({ doc, body })
+      needEmbedding.push({ doc, body, hash })
     }
   }
 
@@ -286,11 +297,14 @@ export async function rebuildSearchIndex(
       for (let i = 0; i < needEmbedding.length; i++) {
         const v = vectors[i]
         if (!v) continue
-        await pool.query(
+        // body_hash 一致を条件にする: 並行する再生成が新しい本文を upsert した後に、
+        // 古い本文のベクトルで上書きして恒久化する競合を防ぐ（レビュー指摘 M2）
+        const r = await pool.query(
           `UPDATE search_docs SET embedding = $3, embedding_model = $4
-           WHERE source_kind = $1 AND source_id = $2`,
-          [needEmbedding[i]!.doc.sourceKind, needEmbedding[i]!.doc.sourceId, JSON.stringify(v), env.vertexEmbeddingModel])
-        embedded++
+           WHERE source_kind = $1 AND source_id = $2 AND body_hash = $5`,
+          [needEmbedding[i]!.doc.sourceKind, needEmbedding[i]!.doc.sourceId, JSON.stringify(v),
+            env.vertexEmbeddingModel, needEmbedding[i]!.hash])
+        embedded += r.rowCount ?? 0
       }
     }
   }
@@ -363,7 +377,9 @@ export async function searchDocsFor(
     aliases: string[]; body: string; segments: SearchSegment[]; embedding: number[] | null
   }>(
     `SELECT source_kind AS "sourceKind", source_id AS "sourceId", title, aliases, body, segments, embedding
-     FROM search_docs LIMIT 3000`)
+     FROM search_docs ORDER BY id LIMIT 3000`)
+  // 全件を都度メモリへ載せる設計は SME 規模（〜数千件）前提。上限超過時も ORDER BY id で
+  // 決定的な部分集合になる。件数がこの規模を超える場合は pgvector 等への移行を検討する
   if (rows.length === 0) return []
   const qVec = env ? await embedQuery(env, question) : null
   const scored = rows.map((r) => {

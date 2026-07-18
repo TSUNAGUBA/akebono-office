@@ -128,7 +128,7 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
   app.route('/v1/masters', mastersRoutes(pool, env))
   app.route('/v1/configs', configsRoutes(pool))
   app.route('/v1/notifications', notificationsRoutes(pool))
-  app.route('/v1/escalations', escalationsRoutes(pool))
+  app.route('/v1/escalations', escalationsRoutes(pool, env))
   app.route('/v1/workflows', workflowsRoutes(pool))
   app.route('/v1/shifts', shiftsRoutes(pool))
   app.route('/v1/task-plans', taskPlansRoutes(pool, env))
