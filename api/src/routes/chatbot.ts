@@ -1,9 +1,10 @@
 /**
  * チャットボット応答 API（F-09-2）。mockup useChatbot の LLM 一次応答レイヤ。
  * - 一次応答: Vertex AI（構造化出力）。サーバーが DB の全移行済みドメイン
- *   （勤怠・有給・日報・ワークフロー・シフト・意思決定・タスク計画・カレンダー・エスカレーション・
- *   メンバー/部署・顧客・プロジェクト・ナレッジ・AI カンパニー・売上・稼働状況・AKEBONO）を文脈化して回答
- *   （バッチ5d/6a/6b/6c/6d・オペレーター指示 2026-07-17）
+ *   （勤怠・有給・休暇種別・日報・ワークフロー・シフト・意思決定・タスク計画・カレンダー・
+ *   エスカレーション・メンバー/部署・会社（自社/顧客 = 業界・担当・関係性込み）・顧客担当者・
+ *   人の関係・業界逆引き・プロジェクト・ナレッジ・外部リンク・AI カンパニー・売上・稼働状況・AKEBONO）
+ *   を文脈化して回答（バッチ5d/6a/6b/6c/6d + オペレーター報告 2026-07-18 #2 の供給漏れ是正）
  * - 参照範囲は権限（F-16）に従う: ドメインごとに canUseFeature で文脈生成の可否を判定し、
  *   マスタ由来の文脈は stripDeniedFields で表示項目レベルの deny を反映する（5c の共有ロジックを再利用）
  * - 本人スコープ（C3）は維持: 勤怠・有給・シフト・タスク計画・カレンダー・エスカレーションは本人分のみ。
@@ -102,6 +103,32 @@ export async function buildContext(
       || name.split(/\s+/).some(p =>
         p.length >= 2 && (topic.includes(`${p}さん`) || topic.includes(`${p}氏`))))
 
+  // 人の関係（contact_relations。端点は顧客担当者または自社メンバー = PR #29 仕様。
+  // 相手の表示名には contacts / members の表示項目 deny を反映する）
+  const personRelations = async (endpointId: string): Promise<string[]> => {
+    const { rows: rels } = await pool.query<{ fromId: string; toId: string; label: string; notes: string }>(
+      `SELECT r.from_contact_id AS "fromId", r.to_contact_id AS "toId", rt.label, r.notes
+       FROM contact_relations r JOIN relation_types rt ON rt.id = r.relation_type_id
+       WHERE r.from_contact_id = $1 OR r.to_contact_id = $1
+       ORDER BY r.created_at DESC LIMIT 5`, [endpointId])
+    if (rels.length === 0) return []
+    const otherIds = [...new Set(rels.map(r => (r.fromId === endpointId ? r.toId : r.fromId)))]
+    const { rows: cons } = await pool.query<Record<string, unknown> & { id: string }>(
+      `SELECT id, name FROM contacts WHERE id = ANY($1)`, [otherIds])
+    const { rows: mems } = await pool.query<Record<string, unknown> & { id: string }>(
+      `SELECT id, name FROM members WHERE id = ANY($1)`, [otherIds])
+    const conName = new Map(strip('contacts', cons).filter(x => x.name).map(x => [x.id, String(x.name)]))
+    const memName = new Map(strip('members', mems).filter(x => x.name).map(x => [x.id, `${String(x.name)}（自社）`]))
+    return rels
+      .map((r) => {
+        const otherId = r.fromId === endpointId ? r.toId : r.fromId
+        const other = conName.get(otherId) ?? memName.get(otherId)
+        if (!other) return null
+        return `${r.fromId === endpointId ? '→' : '←'} ${other}: ${r.label}${r.notes ? `（${capCp(r.notes, 60)}）` : ''}`
+      })
+      .filter((x): x is string => !!x)
+  }
+
   // 有給・当月勤怠（本人分のみ = C3 保護。残数は leave ドメインの SoT 計算を再利用 = 原則3）
   if (can('attendance') && /有給|休暇|残業|勤怠|労働|打刻/.test(topic)) {
     await block(async () => {
@@ -128,6 +155,17 @@ export async function buildContext(
       parts.push(`## 本人の当月勤怠（${today.slice(0, 7)}）
 出勤 ${byDate.size} 日 / 総労働 ${Math.round(work / 6) / 10} 時間`)
     })
+    // 休暇種別マスタ（「どんな休暇がある？」に回答。申請時に選択できる種別の一覧）
+    if (/休暇|有給/.test(topic)) {
+      await block(async () => {
+        const { rows } = await pool.query<{ name: string; description: string; isStatutory: boolean }>(
+          `SELECT name, description, is_statutory AS "isStatutory" FROM leave_types
+           WHERE active = true ORDER BY display_order, id LIMIT 10`)
+        if (rows.length === 0) return
+        parts.push(`## 休暇種別（/attendance の有給タブから申請）\n${rows.map(t =>
+          `- ${t.name}${t.isStatutory ? '（法定）' : ''}${t.description ? `: ${capCp(t.description, 60)}` : ''}`).join('\n')}`)
+      })
+    }
   }
 
   // 本人の日報（下書き含む = 本人スコープ）
@@ -159,8 +197,11 @@ export async function buildContext(
         `SELECT name FROM departments WHERE id = $1`, [String(m.departmentId)])
       deptName = deps[0]?.name ?? ''
     }
+    // 自社メンバーも顧客関係(人)の端点になれる（PR #29）ため関係を併記する
+    const relLines = await personRelations(matched.id)
     parts.push(`## メンバー「${displayName}」
-部署 ${deptName || '未所属'} / 役職 ${String(m.title ?? '') || 'なし'}${m.email ? ` / メール ${String(m.email)}` : ''}`)
+部署 ${deptName || '未所属'} / 役職 ${String(m.title ?? '') || 'なし'}${m.email ? ` / メール ${String(m.email)}` : ''}${
+  relLines.length > 0 ? `\n人の関係: ${relLines.join(' / ')}` : ''}`)
     // 他メンバーの日報は提出済みのみ（全員の日報タブ = scope=all と同じ基準）
     if (can('reports') && matched.id !== user.id) {
       const { rows } = await pool.query<{ date: string; entries: unknown; issues: string }>(
@@ -338,25 +379,133 @@ export async function buildContext(
     })
   }
 
-  // 顧客(会社)（名前一致時のみ概要 + 関連ナレッジ。照合は生データ・整形は表示項目 deny 反映後）
+  // 会社（自社・顧客）: 名前一致 or「自社」キーワードで概要 + 業界 + 担当 + 担当者 + 関係性 + PJ + ナレッジ
+  // （オペレーター報告 2026-07-18 #2: 業界・関係性が DB にあるのに文脈へ渡っていなかった供給漏れの是正。
+  //  照合は生データ・整形は表示項目 deny 反映後 = 従来パターン）
   await block(async () => {
-    const { rows: companies } = await pool.query<Record<string, unknown> & { id: string; name: string; aliases: string[] }>(
-      `SELECT id, name, aliases, description, location, size FROM companies
-       WHERE kind = 'customer' AND active = true ORDER BY id LIMIT 100`)
-    const company = companies.find(c => [c.name, ...c.aliases].some(n => n && q.includes(n.toLowerCase())))
+    const { rows: companies } = await pool.query<Record<string, unknown> & {
+      id: string; kind: string; name: string; aliases: string[]
+      industryIds: string[]; primaryIndustryId: string; ownerMemberId: string
+    }>(
+      `SELECT id, kind, name, aliases, industry_ids AS "industryIds",
+              primary_industry_id AS "primaryIndustryId", owner_member_id AS "ownerMemberId",
+              description, location, size, fiscal_start_month AS "fiscalStartMonth"
+       FROM companies WHERE active = true ORDER BY id LIMIT 100`)
+    const company = companies.find(c => [c.name, ...c.aliases].some(n => n && q.includes(String(n).toLowerCase())))
+      ?? (/自社|わが社|うちの会社/.test(topic) ? companies.find(c => c.kind === 'self') : undefined)
     if (!company) return
     // 見出しにも剥がし後の値を使う（name deny 時はブロックごと出さない）
     const [cs] = strip('companies', [company])
     if (!cs?.name) return
+    const isSelf = company.kind === 'self'
+    const lines: string[] = [
+      `${String(cs.description ?? '')}（${String(cs.location ?? '') || '所在地未設定'}・規模 ${String(cs.size ?? '') || '未設定'}）`,
+    ]
+    // 業界（primary を先頭・★付き）
+    if (cs.industryIds !== undefined && company.industryIds.length > 0) {
+      const { rows: inds } = await pool.query<{ id: string; name: string }>(
+        `SELECT id, name FROM industries WHERE id = ANY($1) AND active = true ORDER BY display_order, id`,
+        [company.industryIds])
+      const named = inds.map(i => i.id === company.primaryIndustryId ? `${i.name}（主）` : i.name)
+      if (named.length > 0) lines.push(`業界: ${named.join('・')}`)
+    }
+    // 自社担当（ownerMemberId → メンバー名。members の表示項目 deny を反映）
+    if (cs.ownerMemberId !== undefined && company.ownerMemberId) {
+      const { rows: owners } = await pool.query<Record<string, unknown> & { id: string }>(
+        `SELECT id, name FROM members WHERE id = $1`, [company.ownerMemberId])
+      const [o] = strip('members', owners)
+      if (o?.name) lines.push(`自社担当: ${String(o.name)}`)
+    }
+    if (isSelf && company.fiscalStartMonth) lines.push(`会計年度: ${company.fiscalStartMonth} 月始まり`)
+    // 先方担当者（contacts。表示項目 deny を反映）
+    const { rows: cons } = await pool.query<Record<string, unknown> & { id: string }>(
+      `SELECT id, name, title, key_person AS "keyPerson" FROM contacts
+       WHERE active = true AND company_id = $1 ORDER BY key_person DESC, id LIMIT 5`, [company.id])
+    const conNames = strip('contacts', cons)
+      .filter(p => p.name)
+      .map(p => `${String(p.name)}${p.title ? `（${String(p.title)}）` : ''}`)
+    if (conNames.length > 0) lines.push(`先方担当者: ${conNames.join(' / ')}`)
+    // 関係性（company_relations 双方向 + 関係種別ラベル。相手名にも companies の deny を反映）
+    const { rows: rels } = await pool.query<{
+      fromCompanyId: string; toCompanyId: string; label: string; notes: string
+    }>(
+      `SELECT r.from_company_id AS "fromCompanyId", r.to_company_id AS "toCompanyId",
+              rt.label, r.notes
+       FROM company_relations r JOIN relation_types rt ON rt.id = r.relation_type_id
+       WHERE r.from_company_id = $1 OR r.to_company_id = $1
+       ORDER BY r.created_at DESC LIMIT 5`, [company.id])
+    if (rels.length > 0) {
+      const compName = new Map(strip('companies', companies).filter(c => c.name).map(c => [c.id, String(c.name)]))
+      const relLines = rels
+        .map((r) => {
+          const otherId = r.fromCompanyId === company.id ? r.toCompanyId : r.fromCompanyId
+          const other = compName.get(otherId)
+          if (!other) return null
+          const direction = r.fromCompanyId === company.id ? '→' : '←'
+          return `${direction} ${other}: ${r.label}${r.notes ? `（${capCp(r.notes, 60)}）` : ''}`
+        })
+        .filter(Boolean)
+      if (relLines.length > 0) lines.push(`会社間の関係: ${relLines.join(' / ')}`)
+    }
+    const { rows: pjs } = await pool.query<{ name: string; status: string }>(
+      `SELECT name, status FROM projects WHERE active = true AND company_id = $1 LIMIT 5`, [company.id])
+    lines.push(`プロジェクト: ${pjs.map(p => `${p.name}（${p.status}）`).join(' / ') || 'なし'}`)
     const { rows: ks } = await pool.query<{ id: string; title: string; body: string }>(
       `SELECT id, title, body FROM knowledge_articles
        WHERE active = true AND domain = 'company' AND target_id = $1 LIMIT 3`, [company.id])
-    const { rows: pjs } = await pool.query<{ name: string; status: string }>(
-      `SELECT name, status FROM projects WHERE active = true AND company_id = $1 LIMIT 5`, [company.id])
-    parts.push(`## 顧客「${String(cs.name)}」
-${String(cs.description ?? '')}（${String(cs.location ?? '')}・規模 ${String(cs.size ?? '')}）
-プロジェクト: ${pjs.map(p => `${p.name}（${p.status}）`).join(' / ') || 'なし'}
-${strip('knowledge', ks).map(k => `ナレッジ「${String(k.title ?? '')}」(${k.id}): ${capCp(String(k.body ?? ''), 200)}`).join('\n')}`)
+    for (const k of strip('knowledge', ks)) {
+      lines.push(`ナレッジ「${String(k.title ?? '')}」(${k.id}): ${capCp(String(k.body ?? ''), 200)}`)
+    }
+    parts.push(`## ${isSelf ? '自社' : '顧客'}「${String(cs.name)}」\n${lines.join('\n')}`)
+  })
+
+  // 業界の逆引き（業界マスタ × 顧客。「アパレル業界の顧客は？」等に回答）
+  if (/業界/.test(topic)) {
+    await block(async () => {
+      const { rows: inds } = await pool.query<{ id: string; name: string }>(
+        `SELECT id, name FROM industries WHERE active = true ORDER BY display_order, id LIMIT 20`)
+      if (inds.length === 0) return
+      const { rows: comps } = await pool.query<Record<string, unknown> & { id: string; industryIds: string[] }>(
+        `SELECT id, name, industry_ids AS "industryIds" FROM companies
+         WHERE kind = 'customer' AND active = true ORDER BY id LIMIT 100`)
+      const stripped = strip('companies', comps).filter(c => c.name)
+      const lines = inds.map((i) => {
+        const names = stripped
+          .filter(c => (c.industryIds as string[]).includes(i.id))
+          .map(c => String(c.name))
+        return `- ${i.name}: ${names.join('・') || '該当顧客なし'}`
+      })
+      parts.push(`## 業界別の顧客（業界マスタ）\n${lines.join('\n')}`)
+    })
+  }
+
+  // 部署（一覧 + 部署名一致時は所属メンバー。「◯◯部には誰がいる？」等に回答。
+  // 「部署」等の一般語がなくても部署名そのものの言及で発火する）
+  await block(async () => {
+      const { rows: deps } = await pool.query<{ id: string; name: string; managerId: string | null; members: string }>(
+        `SELECT d.id, d.name, d.manager_id AS "managerId",
+                (SELECT count(*)::text FROM members m WHERE m.department_id = d.id AND m.active = true) AS members
+         FROM departments d WHERE d.active = true ORDER BY d.display_order, d.id LIMIT 50`)
+      if (deps.length === 0) return
+      if (!/部署|組織|チーム|所属/.test(topic) && !deps.some(d => topic.includes(d.name))) return
+      const { rows: allMembers } = await pool.query<Record<string, unknown> & { id: string; departmentId: string }>(
+        `SELECT id, name, title, department_id AS "departmentId" FROM members
+         WHERE active = true ORDER BY id LIMIT 300`)
+      const strippedMembers = strip('members', allMembers)
+      const nameOfMember = new Map(strippedMembers.filter(m => m.name).map(m => [m.id, String(m.name)]))
+      const lines = deps.map(d =>
+        `- ${d.name}（${d.members} 名${d.managerId && nameOfMember.get(d.managerId) ? `・責任者 ${nameOfMember.get(d.managerId)}` : ''}）`)
+      // 部署名が話題に含まれる場合は所属メンバーも展開（「開発部」より「文脈開発部」を優先 = 最長一致）
+      const hit = deps
+        .filter(d => topic.includes(d.name))
+        .sort((a, b) => b.name.length - a.name.length)[0]
+      if (hit) {
+        const names = strippedMembers
+          .filter(m => m.departmentId === hit.id && m.name)
+          .map(m => `${String(m.name)}${m.title ? `（${String(m.title)}）` : ''}`)
+        lines.push(`「${hit.name}」の所属: ${names.join(' / ') || 'なし'}`)
+      }
+      parts.push(`## 部署・組織（/masters の部署・組織図）\n${lines.join('\n')}`)
   })
 
   // 顧客(人)（名前一致時のみ。表示項目 deny 反映）
@@ -371,9 +520,11 @@ ${strip('knowledge', ks).map(k => `ナレッジ「${String(k.title ?? '')}」(${
     if (!p?.name) return
     const { rows: comp } = await pool.query<{ name: string }>(
       `SELECT name FROM companies WHERE id = $1`, [matched.companyId])
+    const relLines = await personRelations(matched.id)
     parts.push(`## 顧客担当者「${String(p.name)}」
 所属 ${comp[0]?.name ?? '不明'}${p.dept ? ` ${String(p.dept)}` : ''} / 役職 ${String(p.title ?? '') || 'なし'}${
-  p.keyPerson ? ` / キーパーソン度 ${String(p.keyPerson)}` : ''}${p.email ? ` / メール ${String(p.email)}` : ''}`)
+  p.keyPerson ? ` / キーパーソン度 ${String(p.keyPerson)}` : ''}${p.email ? ` / メール ${String(p.email)}` : ''}${
+  relLines.length > 0 ? `\n人の関係: ${relLines.join(' / ')}` : ''}`)
   })
 
   // プロジェクト一覧（キーワード時。表示項目 deny 反映）
@@ -390,6 +541,18 @@ ${strip('knowledge', ks).map(k => `ナレッジ「${String(k.title ?? '')}」(${
       const stripped = strip('projects', rows)
       parts.push(`## プロジェクト一覧\n${stripped.map(p =>
         `- ${String(p.name ?? '')}（${String(p.status ?? '')}${p.companyId ? `・${compName.get(String(p.companyId)) ?? ''}` : ''}）`).join('\n')}`)
+    })
+  }
+
+  // 外部リンク（「◯◯のリンクは？」「ログインページは？」に回答）
+  if (/リンク|URL|ログインページ/i.test(topic)) {
+    await block(async () => {
+      const { rows } = await pool.query<{ title: string; url: string; description: string }>(
+        `SELECT title, url, description FROM external_links
+         WHERE active = true ORDER BY display_order, id LIMIT 10`)
+      if (rows.length === 0) return
+      parts.push(`## 外部リンク（/support）\n${rows.map(l =>
+        `- ${l.title}: ${l.url}${l.description ? `（${capCp(l.description, 60)}）` : ''}`).join('\n')}`)
     })
   }
 
