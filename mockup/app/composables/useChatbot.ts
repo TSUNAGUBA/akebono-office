@@ -28,7 +28,8 @@ interface BotAnswer {
 /**
  * 表示中セッションはタブ内で永続（sessionStorage）し、リロード後も同じ会話を自動再開する
  * （オペレーター報告 2026-07-18: リロードで新しい会話になり履歴が途切れて見える問題への対応。
- * タブ単位のため別タブ・ログイン切替（onApiReset / ensureOwnSession が null 化 → 削除）には波及しない）
+ * タブ単位のため別タブには波及しない。ログイン切替時は API モード = refresh/send のサーバー
+ * 所有チェック（404 = AKO-CHT-001）、モックモード = ensureOwnSession が null 化 → 削除する）
  */
 const SESSION_STORAGE_KEY = 'ako.chatSession.v1'
 
@@ -213,8 +214,9 @@ export function useChatbot() {
     await refreshSessions()
     if (currentSessionId.value && apiMessages.value.length === 0) {
       const r = await openSession(currentSessionId.value)
-      // 復元できないセッション（別アカウントの残骸・削除済み等）は新しい会話へフォールバック
-      if (!r.ok) currentSessionId.value = null
+      // 復元できないセッション（別アカウントの残骸・削除済み = 404）のみ新しい会話へフォールバック。
+      // 一時的な通信失敗（AKO-GEN-NET 等）では保持し、次回の refresh で再試行する
+      if (!r.ok && r.error.code === 'AKO-CHT-001') currentSessionId.value = null
     }
   }
 
@@ -288,15 +290,19 @@ export function useChatbot() {
 
   // ---------- シナリオルーティング（実データ参照） ----------
 
-  /** キーワードルーティング（該当なしは null = 呼び出し側が履歴での再試行や定型応答を決める） */
-  function route(text: string): BotAnswer | null {
-    if (/有給|休暇/.test(text)) return answerLeave(text)
-    if (/残業|勤怠|労働時間/.test(text)) return answerOvertime()
-    const company = matchCompany(text)
+  /**
+   * キーワードルーティング（該当なしは null = 呼び出し側が履歴での再試行や定型応答を決める）。
+   * 話題の選択は corpus（履歴込みのことがある）で行い、サブ分類（申請/取り方・規程トピック等）は
+   * 今回の質問 subText だけで行う（履歴側のサブキーワードが今回の意図を上書きしないため）
+   */
+  function route(corpus: string, subText: string = corpus): BotAnswer | null {
+    if (/有給|休暇/.test(corpus)) return answerLeave(subText)
+    if (/残業|勤怠|労働時間/.test(corpus)) return answerOvertime()
+    const company = matchCompany(corpus)
     if (company) return answerCompany(company)
-    if (/稼働|障害|システム/.test(text)) return answerStatus()
-    if (/規程|ルール|就業/.test(text)) return answerRules(text)
-    if (/稟議|申請|承認/.test(text)) return answerWorkflow()
+    if (/稼働|障害|システム/.test(corpus)) return answerStatus()
+    if (/規程|ルール|就業/.test(corpus)) return answerRules(subText)
+    if (/稟議|申請|承認/.test(corpus)) return answerWorkflow()
     return null
   }
 
@@ -323,7 +329,7 @@ export function useChatbot() {
       .map(m => m.content)
       .join('\n')
     if (recent) {
-      const followUp = route(`${recent}\n${text}`)
+      const followUp = route(`${recent}\n${text}`, text)
       if (followUp) return followUp
     }
     return unknownAnswer()
