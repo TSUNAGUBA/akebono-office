@@ -138,18 +138,26 @@ async function onCancel(taskId: string): Promise<void> {
 
 const reportDate = ref(todayJst())
 const aiReports = computed(() => aiReportsOn(reportDate.value))
+/** 生成中フラグ（二重押下防止。サーバー側は部分一意 + ON CONFLICT で冪等だが UI でも抑止する） */
+const generating = ref(false)
 
 async function onGenerateReports(): Promise<void> {
-  const { created, skipped } = await generateDailyReports(reportDate.value)
-  if (created === 0 && skipped === 0) {
-    show('この日の AI 活動ログがないため、生成対象がありません', 'warn')
-    return
+  if (generating.value) return
+  generating.value = true
+  try {
+    const { created, skipped } = await generateDailyReports(reportDate.value)
+    if (created === 0 && skipped === 0) {
+      show('この日の AI 活動ログがないため、生成対象がありません', 'warn')
+      return
+    }
+    show(
+      `日次報告を ${created} 件生成しました（既存 ${skipped} 件はスキップ）。日報・週報にも掲載されます`,
+      'ok',
+      { label: '日報を見る', to: '/reports' },
+    )
+  } finally {
+    generating.value = false
   }
-  show(
-    `日次報告を ${created} 件生成しました（既存 ${skipped} 件はスキップ）。日報・週報にも掲載されます`,
-    'ok',
-    { label: '日報を見る', to: '/reports' },
-  )
 }
 </script>
 
@@ -206,7 +214,9 @@ async function onGenerateReports(): Promise<void> {
                 class="input w-auto"
                 aria-label="報告対象日"
               >
-              <button type="button" class="btn btn-primary" @click="onGenerateReports">この日の報告を生成</button>
+              <button type="button" class="btn btn-primary" :disabled="generating" @click="onGenerateReports">
+                {{ generating ? '生成中…' : 'この日の報告を生成' }}
+              </button>
               <NuxtLink to="/reports" class="link ml-auto text-xs">日報・週報タイムラインを見る →</NuxtLink>
             </div>
           </UiSectionCard>

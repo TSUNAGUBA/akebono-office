@@ -1180,16 +1180,26 @@ describe('AI カンパニー（F-08）', () => {
   let empId = ''
   let taskId = ''
 
-  it('ロール・AI 社員は汎用マスタ（管理者のみ変更）', async () => {
+  it('ロール・AI 社員は汎用マスタ（管理者のみ変更）。初期データはマイグレーションが投入する', async () => {
+    // 0015 マイグレーションがシード投入した AI 社員（アキ = ai-01）が存在する
+    const seeded = (await api('GET', '/v1/masters/ai-employees', { as: MEMBER })).json.data as { id: string; name: string }[]
+    expect(seeded.some(e => e.id === 'ai-01' && e.name === 'アキ')).toBe(true)
+
     const role = await api('POST', '/v1/masters/ai-roles', {
-      as: ADMIN, body: { name: 'リサーチャー', mission: '調査と要約', modelTier: 'standard' },
+      as: ADMIN, body: { name: 'テスト班', mission: '調査と要約', modelTier: 'standard' },
     })
     expect(role.status).toBe(201)
     roleId = (role.json.data as { id: string }).id
-    const emp = await api('POST', '/v1/masters/ai-employees', { as: ADMIN, body: { name: 'アキ', roleId } })
+    const emp = await api('POST', '/v1/masters/ai-employees', { as: ADMIN, body: { name: 'テスト社員', roleId } })
     expect(emp.status).toBe(201)
     empId = (emp.json.data as { id: string }).id
     expect((await api('POST', '/v1/masters/ai-roles', { as: MEMBER, body: { name: 'x' } })).status).toBe(403)
+
+    // status は派生値: マスタ PATCH では変更できない（送っても無視され idle のまま。他フィールドは更新される）
+    const patched = await api('PATCH', `/v1/masters/ai-employees/${empId}`, { as: ADMIN, body: { name: 'テスト社員2', status: 'working' } })
+    expect(patched.status).toBe(200)
+    expect((patched.json.data as { name: string; status: string }).name).toBe('テスト社員2')
+    expect((patched.json.data as { status: string }).status).toBe('idle')
   })
 
   it('タスク依頼 → 分解 → 承認 → 進行 → 完了（状態機械・活動ログ・依頼者へ通知・status 同期）', async () => {
@@ -1241,18 +1251,24 @@ describe('AI カンパニー（F-08）', () => {
     expect((await api('POST', `/v1/ai-company/tasks/${lowId}/cancel`, { as: MEMBER })).status).toBe(409)
   })
 
-  it('日次報告の生成は冪等で、全員の日報（scope=all）に AI 日報が載る', async () => {
+  it('日次報告の生成は並行実行でも冪等（部分一意 + ON CONFLICT）で、全員の日報（scope=all）に AI 日報が載る', async () => {
     const today = todayJst()
-    const gen = await api('POST', '/v1/ai-company/daily-reports', { as: ADMIN, body: { date: today } })
-    expect((gen.json.data as { created: number }).created).toBeGreaterThanOrEqual(1)
-    const again = await api('POST', '/v1/ai-company/daily-reports', { as: ADMIN, body: { date: today } })
-    expect((again.json.data as { created: number; skipped: number }).created).toBe(0)
-    expect((again.json.data as { skipped: number }).skipped).toBeGreaterThanOrEqual(1)
+    // 並行 2 連発でも同一 AI 社員 × 同一日の報告は 1 件のみ（重複作成なし = DB 保証）
+    const [a, b] = await Promise.all([
+      api('POST', '/v1/ai-company/daily-reports', { as: ADMIN, body: { date: today } }),
+      api('POST', '/v1/ai-company/daily-reports', { as: ADMIN, body: { date: today } }),
+    ])
+    const createdTotal = (a.json.data as { created: number }).created + (b.json.data as { created: number }).created
+    expect(createdTotal).toBeGreaterThanOrEqual(1)
     const all = (await api('GET', `/v1/reports/daily?scope=all&month=${today.slice(0, 7)}`, { as: MEMBER })).json.data as
       { authorKind: string; aiEmployeeId: string | null; entries: { theme?: string }[] }[]
-    const aiReport = all.find(r => r.authorKind === 'ai' && r.aiEmployeeId === empId)
-    expect(aiReport).toBeTruthy()
-    expect(aiReport!.entries[0]!.theme).toBe('AI カンパニー')
+    const aiReports = all.filter(r => r.authorKind === 'ai' && r.aiEmployeeId === empId)
+    expect(aiReports.length).toBe(1) // 並行でも重複しない
+    expect(aiReports[0]!.entries[0]!.theme).toBe('AI カンパニー')
+    // 逐次の再生成もスキップ（冪等）
+    const again = await api('POST', '/v1/ai-company/daily-reports', { as: ADMIN, body: { date: today } })
+    expect((again.json.data as { created: number }).created).toBe(0)
+    expect((again.json.data as { skipped: number }).skipped).toBeGreaterThanOrEqual(1)
   })
 
   it('ai-company の機能 deny で 403（F-16 準拠）', async () => {

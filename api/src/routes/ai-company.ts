@@ -139,14 +139,15 @@ export function aiCompanyRoutes(pool: pg.Pool, env: Env): Hono {
     await addLog(pool, emp.id, id, 'plan', `「${title}」の分解案を作成し承認待ち`)
     await syncEmployeeStatus(pool, emp.id)
 
-    // 補助処理: 低確信度エスカレーション（失敗しても主フローは成立 = 原則4）
+    // 補助処理: 低確信度エスカレーション（失敗しても主フローは成立 = 原則4）。
+    // dedupe は先頭 2 セグメント + クールダウンで判定されるため日付セグメントは付けない
     let escalated = false
     if (confidence === 'low') {
       const raised = await raiseEscalation(pool, {
         reason: 'low_confidence',
         targetAiEmployeeId: emp.id,
         context: `AI社員への依頼「${title}」の確信度が低いため確認が必要`,
-        dedupeKey: `lowconf:${emp.id}:${todayJst()}`,
+        dedupeKey: `lowconf:${emp.id}`,
       })
       escalated = raised.raised
     }
@@ -268,15 +269,18 @@ export function aiCompanyRoutes(pool: pg.Pool, env: Env): Hono {
         .filter(t => t.status === 'in_progress' || t.status === 'blocked')
         .map(t => (t as unknown as { decomposition: { title: string; done: boolean }[] }).decomposition.find(s => !s.done)?.title)
         .filter((s): s is string => !!s)
-      await pool.query(
+      // 並行実行の重複は部分一意インデックス（daily_reports_ai_uq）+ ON CONFLICT で DB が保証（冪等）
+      const ins = await pool.query(
         `INSERT INTO daily_reports (id, author_kind, ai_employee_id, date, entries, reflection, issues, tomorrow, status, submitted_at)
-         VALUES ($1, 'ai', $2, $3, $4, $5, $6, $7, 'submitted', $8)`,
+         VALUES ($1, 'ai', $2, $3, $4, $5, $6, $7, 'submitted', $8)
+         ON CONFLICT (ai_employee_id, date) WHERE author_kind = 'ai' DO NOTHING`,
         [newId('dr'), empId, date, JSON.stringify(entries),
           `活動 ${empLogs.length} 件 / 消費トークン ${totalTokens.toLocaleString('ja-JP')} / 概算コスト $${totalCost.toFixed(3)}`,
           issues,
           remaining.length > 0 ? `継続: ${remaining.join(' / ')}` : '新規依頼の待機',
           `${date}T18:00:00+09:00`])
-      created++
+      if ((ins.rowCount ?? 0) > 0) created++
+      else skipped++
     }
     return c.json({ data: { created, skipped } })
   })

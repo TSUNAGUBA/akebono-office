@@ -288,7 +288,8 @@ export const MASTERS: Record<MasterEntity, MasterDef> = {
   'workflow-routes': { table: 'workflow_routes', idPrefix: 'wr', schema: schemas['workflow-routes'], patchSchema: workflowRouteBase.partial(), jsonbFields: ['steps'] },
   'decision-themes': { table: 'decision_themes', idPrefix: 'dt', schema: schemas['decision-themes'], patchSchema: schemas['decision-themes'].partial(), jsonbFields: ['semantics', 'links', 'actions', 'options', 'scenarioParams'] },
   'ai-roles': { table: 'ai_roles', idPrefix: 'r', schema: schemas['ai-roles'], patchSchema: schemas['ai-roles'].partial(), jsonbFields: ['permissions'] },
-  'ai-employees': { table: 'ai_employees', idPrefix: 'ai', schema: schemas['ai-employees'], patchSchema: schemas['ai-employees'].partial(), jsonbFields: ['deskPosition'] },
+  // status はタスク状態からの派生値（SoT: ai_tasks）。マスタ PATCH では変更させない（omit）
+  'ai-employees': { table: 'ai_employees', idPrefix: 'ai', schema: schemas['ai-employees'], patchSchema: schemas['ai-employees'].partial().omit({ status: true }), jsonbFields: ['deskPosition'] },
 }
 
 export function camelToSnake(s: string): string {

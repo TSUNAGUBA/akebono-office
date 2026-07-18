@@ -177,7 +177,9 @@ export function useAiCompany() {
   function addLog(aiEmployeeId: string, taskId: string | null, kind: AiActivityKind, summary: string): void {
     const emp = employeeById(aiEmployeeId)
     const tier: AiModelTier = roleOf(emp)?.modelTier ?? 'standard'
-    const { tokens, costUsd } = mockActivityCost(aiEmployeeId, kind, aiActivityLogs.value.length, tier)
+    // seq は当該社員のログ件数（API 版 ai-company.ts と同一 = モック/API のモック値パリティ）
+    const seq = aiActivityLogs.value.filter(l => l.aiEmployeeId === aiEmployeeId).length
+    const { tokens, costUsd } = mockActivityCost(aiEmployeeId, kind, seq, tier)
     aiActivityLogs.value = [...aiActivityLogs.value, {
       id: nextId('aiActivityLogs', 'aal'),
       aiEmployeeId, taskId, kind, summary, tokens, costUsd,
@@ -206,34 +208,37 @@ export function useAiCompany() {
     }
     const emp = employeeById(aiEmployeeId)
     if (!emp) return { ok: false, error: { code: 'AKO-AIC-001', message: 'AI 社員が見つかりません' } }
-    if (!title.trim()) return { ok: false, error: { code: 'AKO-AIC-002', message: '件名を入力してください' } }
+    // title は先に正規化（trim）してから分解・確信度判定へ渡す（API 版と同一 = 生成結果のパリティ）
+    const t = title.trim()
+    const d = description.trim()
+    if (!t) return { ok: false, error: { code: 'AKO-AIC-002', message: '件名を入力してください' } }
 
-    const confidence = judgeTaskConfidence(aiEmployeeId, title.trim(), description)
+    const confidence = judgeTaskConfidence(aiEmployeeId, t, d)
     const id = nextId('aiTasks', 'at')
     aiTasks.value = [...aiTasks.value, {
       id,
       aiEmployeeId,
       requesterId: currentUser.value.id,
-      title: title.trim(),
-      description: description.trim(),
-      decomposition: decomposeTask(title, description),
+      title: t,
+      description: d,
+      decomposition: decomposeTask(t, d),
       status: 'proposed',
       dueDate: null,
       confidence,
       createdAt: nowJstIso(),
     }]
-    addLog(aiEmployeeId, id, 'plan', `「${title.trim()}」の分解案を作成し承認待ち`)
+    addLog(aiEmployeeId, id, 'plan', `「${t}」の分解案を作成し承認待ち`)
     syncEmployeeStatus(aiEmployeeId)
     commit()
 
-    // 補助処理: 低確信度エスカレーション（失敗しても主フローは成立）
+    // 補助処理: 低確信度エスカレーション（失敗しても主フローは成立）。
+    // dedupe は先頭 2 セグメントで判定されるため日付は付けない（API 版と同一）
     if (confidence === 'low') {
-      const date = nowJstIso().slice(0, 10)
       raise({
         reason: 'low_confidence',
         targetAiEmployeeId: aiEmployeeId,
-        context: `AI社員への依頼「${title.trim()}」の確信度が低いため確認が必要`,
-        dedupeKey: `lowconf:${aiEmployeeId}:${date}`,
+        context: `AI社員への依頼「${t}」の確信度が低いため確認が必要`,
+        dedupeKey: `lowconf:${aiEmployeeId}`,
       })
     }
     return { ok: true, id, confidence }
@@ -356,14 +361,14 @@ export function useAiCompany() {
       const exists = dailyReports.value.some(r => r.authorKind === 'ai' && r.aiEmployeeId === empId && r.date === date)
       if (exists) { skipped++; continue }
 
-      // タスク別エントリ（AI 活動は自社 PJ「AKEBONO Office 開発」に計上）
+      // タスク別エントリ（業務テーマ = 「AI カンパニー」。API 版 ai-company.ts と同一形式 = 原則5）
       const byTask = new Map<string | null, AiActivityLog[]>()
       for (const l of empLogs) byTask.set(l.taskId, [...(byTask.get(l.taskId) ?? []), l])
       const entries: ReportEntry[] = [...byTask.entries()].map(([taskId, ls]) => {
         const task = taskId ? aiTasks.value.find(t => t.id === taskId) : undefined
         const doneCount = task ? task.decomposition.filter(s => s.done).length : 0
         return {
-          projectId: 'pj-08',
+          theme: 'AI カンパニー',
           task: task?.title ?? '問い合わせ対応・その他の活動',
           hours: Math.max(0.25, ls.length * 0.5),
           progress: task
