@@ -39,9 +39,10 @@ export function useSales() {
     await loadSalesMonthly(true)
   }
 
-  /** 自社の会計年度開始月（未設定時は 4 月） */
+  /** 自社の会計年度開始月（未設定時は 4 月。active な自社のみ = サーバー側 selfFiscalStartMonth と同一解釈） */
   const fiscalStartMonth = computed(() =>
-    companies.value.find(c => c.kind === 'self')?.fiscalStartMonth ?? DEFAULT_FISCAL_START_MONTH)
+    companies.value.find(c => c.kind === 'self' && c.active !== false)?.fiscalStartMonth
+      ?? DEFAULT_FISCAL_START_MONTH)
 
   const todayKey = todayJst()
   /** 当月（YYYY-MM） */

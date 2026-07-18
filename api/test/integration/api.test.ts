@@ -1560,6 +1560,64 @@ describe('売上管理（F-15）+ mart ETL（バッチ6b）', () => {
     expect((await api('GET', '/v1/sales', { as: MEMBER })).status).toBe(200)
   })
 
+  it('取込件数の上限超過（501 件）は AKO-SAL-003', async () => {
+    const rows = Array.from({ length: 501 }, (_, i) => ({
+      month: '2026-01', companyId: customerId, projectType: 'development', amount: i, cost: 0,
+    }))
+    const r = await api('POST', '/v1/sales', { as: ADMIN, body: { rows } })
+    expect(r.status).toBe(400)
+    expect(r.json.error?.code).toBe('AKO-SAL-003')
+    // 金額の上限超過（bigint オーバーフロー防止の番兵）も AKO-SAL-001 で返る
+    const tooBig = await api('POST', '/v1/sales', {
+      as: ADMIN,
+      body: { rows: [{ month: '2026-01', companyId: customerId, projectType: 'development', amount: 1e16, cost: 0 }] },
+    })
+    expect(tooBig.status).toBe(400)
+    expect(tooBig.json.error?.code).toBe('AKO-SAL-001')
+  })
+
+  it('/jobs/sales-mart-etl は CRON_SECRET で保護され、実行すると ETL が走る（周期有給付与と同型）', async () => {
+    // CRON_SECRET 未設定 = 無効（401）
+    const disabled = await app.request('/jobs/sales-mart-etl', { method: 'POST' })
+    expect(disabled.status).toBe(401)
+    process.env.CRON_SECRET = 'test-cron-key'
+    try {
+      const wrongKey = await app.request('/jobs/sales-mart-etl', {
+        method: 'POST', headers: { 'x-cron-key': 'wrong' },
+      })
+      expect(wrongKey.status).toBe(401)
+      const ok = await app.request('/jobs/sales-mart-etl', {
+        method: 'POST', headers: { 'x-cron-key': 'test-cron-key' },
+      })
+      expect(ok.status).toBe(200)
+      const body = await ok.json() as { data: { runId: string; loaded: number } }
+      expect(body.data.loaded).toBeGreaterThanOrEqual(2)
+    } finally {
+      delete process.env.CRON_SECRET
+    }
+  })
+
+  it('チャットボット文脈に売上サマリが載る（can(sales) 準拠。バッチ6b: buildContext 直接検証）', async () => {
+    const { buildContext } = await import('../../src/routes/chatbot')
+    const adminUser = { id: ADMIN, name: '管理 太郎', email: 'admin@example.com', role: 'admin' as const, title: '', avatar: '' }
+    const memberUser = { id: MEMBER, name: '一般 次郎', email: 'member@example.com', role: 'member' as const, title: '', avatar: '' }
+
+    // ルール未設定 = allow: 年度累計（150 + 80 万円）と当月（2026-07 = 80 万円）が含まれる
+    const ctx = await buildContext(pool, adminUser, '今月の売上はどう？', [])
+    expect(ctx).toContain('売上サマリ')
+    expect(ctx).toContain('年度累計売上 230万円')
+    expect(ctx).toContain('売上 80万円')
+
+    // sales deny の member ロールには売上文脈が生成されない
+    const denySales = [{
+      id: 'pm-sal', subjectKind: 'role' as const, subjectId: 'member', resource: 'sales', field: null,
+      effect: 'deny' as const, active: true,
+    }]
+    expect(await buildContext(pool, memberUser, '今月の売上はどう？', denySales)).not.toContain('売上サマリ')
+    // 同じルールでも admin（別ロール）には影響しない
+    expect(await buildContext(pool, adminUser, '今月の売上はどう？', denySales)).toContain('売上サマリ')
+  })
+
   it('自社の会計年度設定を後片付けしても ETL は既定 4 月始まりで動く（フォールバック）', async () => {
     // 自社を無効化 → fiscalStartMonth 参照は既定 4 月へフォールバック
     expect((await api('POST', `/v1/masters/companies/${selfId}/archive`, { as: ADMIN })).status).toBe(200)

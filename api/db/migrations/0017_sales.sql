@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS fact_sales (
   source_txn_id       text NOT NULL, -- = sales_monthly.id（一方向 ETL の冪等キー）
   dim_date_key        int NOT NULL,  -- yyyymmdd（月次グレインのため月初日）
   customer_company_id text NOT NULL, -- dim_party 接続前の退化キー（companies.id）
-  project_type        text NOT NULL, -- dim_product 接続前の退化キー
+  project_type        text NOT NULL  -- dim_product 接続前の退化キー（区分値は text + CHECK = mart 規約）
+    CHECK (project_type IN ('biz_consulting','sys_consulting','development','operation','internal')),
   amount              bigint NOT NULL,
   cost                bigint NOT NULL,
   margin              bigint NOT NULL, -- amount - cost（ETL が導出）

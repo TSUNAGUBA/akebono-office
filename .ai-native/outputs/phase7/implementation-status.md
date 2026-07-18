@@ -248,4 +248,5 @@
 - [x] 会計年度計算を shared/domain/fiscal.ts へ切り出し（fiscalYearOf / fiscalMonthsOf / fiscalMonthNoOf / fiscalQuarterOf。useSales・ETL・チャットボット文脈で共有 = 原則3）
 - [x] フロント: useSales デュアルモード化（API キャッシュ + 表示時 refresh + upsert）・sales.vue に管理者の実績登録モーダル・mock-status から /sales 除去（モックバッジ解除）
 - [x] チャットボット文脈へ売上サマリブロック追加（can('sales')・年度累計/当月/前年同月比のみ = 明細は /sales へ誘導）
-- [x] 検証: API 統合テスト 77（一括 upsert 冪等・入力検証・管理者ガード・ETL 冪等/margin/会計期非正規化/実行履歴・sales deny 403・自社無効化時の既定 4 月フォールバック）/ 単体 19+9（fiscal）+ 35 / API モード実クリック E2E（E2E スタックは旧セッションの scratchpad 消失に伴い再構築）/ モック回帰 / typecheck（api・mockup）
+- [x] 検証: API 統合テスト 80（一括 upsert 冪等・入力検証（件数/金額上限含む）・管理者ガード・ETL 冪等/margin/会計期非正規化/実行履歴・/jobs/sales-mart-etl の CRON_SECRET 保護・buildContext 売上ブロック（deny で文脈消失）・sales deny 403・自社無効化時の既定 4 月フォールバック）/ 単体 19+9（fiscal）+ 35 / API モード実クリック E2E 12 チェック + モック回帰 9 チェック（E2E スタックは旧セッションの scratchpad 消失に伴い再構築）/ typecheck（api・mockup）
+- [x] 独立レビュー第 1 巡の指摘対応（重大 = ドキュメント整合 3 件: production-architecture の未移行ドメイン列挙・phase5/architecture の useSales 行・api-design useChatbot 行の文脈ドメイン列挙）+ 軽微 6 件（chatbot の自社会計月取得を selfFiscalStartMonth 再利用へ / useSales の自社解釈に active を追加 = サーバーと統一 / fact_sales.project_type に CHECK / 金額上限の番兵 AKO-SAL-001 / ETL 手動実行の監査ログ / テスト追補 3 本）。残る軽微（mart_load_runs の running 残留掃除・actor 列・PROJECT_TYPES 共有定数化・未来月登録の UX・ETL エラー経路テスト・初回表示の二重フェッチ）は次バッチで対応

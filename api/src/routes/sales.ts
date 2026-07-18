@@ -23,6 +23,8 @@ import { newId } from '../lib/ids'
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/
 const PROJECT_TYPES = new Set(['biz_consulting', 'sys_consulting', 'development', 'operation', 'internal'])
 const MAX_UPSERT_ROWS = 500
+/** 金額の上限（1,000 兆円。bigint オーバーフローによる生 500 を防ぎ AKO-SAL-001 で返すための番兵） */
+const MAX_AMOUNT_YEN = 1_000_000_000_000_000
 
 /**
  * mart 互換テーブルのテナントキー（akebono-scm-platform の mart へ接続する際に
@@ -67,6 +69,9 @@ function parseRows(raw: unknown): SalesRowInput[] {
     if (!PROJECT_TYPES.has(projectType)) throw err('AKO-SAL-001', `${at}: projectType が不正です`, 400)
     if (!Number.isFinite(amount) || amount < 0 || !Number.isFinite(cost) || cost < 0) {
       throw err('AKO-SAL-001', `${at}: amount / cost は 0 以上の数値で指定してください`, 400)
+    }
+    if (amount > MAX_AMOUNT_YEN || cost > MAX_AMOUNT_YEN) {
+      throw err('AKO-SAL-001', `${at}: amount / cost が上限（${MAX_AMOUNT_YEN.toLocaleString('ja-JP')} 円）を超えています`, 400)
     }
     return { month, companyId, projectType, amount: Math.round(amount), cost: Math.round(cost) }
   })
@@ -190,8 +195,13 @@ export function salesRoutes(pool: pg.Pool): Hono {
 
   // mart ETL の手動実行（管理者のみ。Cloud Scheduler 経路は /jobs/sales-mart-etl）
   app.post('/etl/run', async (c) => {
-    requireAdmin(c)
+    const user = requireAdmin(c)
     const result = await runSalesEtl(pool)
+    // 実行者の追跡（mart_load_runs に actor 列を持たないための補完。非ブロッキング）
+    await audit(pool, {
+      actorId: user.id, action: 'run', entity: 'mart_load_runs', entityId: result.runId,
+      detail: `売上 mart ETL を手動実行（${result.loaded} 件）`,
+    })
     return c.json({ data: result })
   })
 

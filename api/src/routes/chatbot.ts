@@ -20,7 +20,7 @@
  */
 import { Hono } from 'hono'
 import type pg from 'pg'
-import { DEFAULT_FISCAL_START_MONTH, fiscalMonthsOf, fiscalYearOf } from '../../../shared/domain/fiscal'
+import { fiscalMonthsOf, fiscalYearOf } from '../../../shared/domain/fiscal'
 import { nowJstIso, todayJst } from '../../../shared/domain/jst'
 import { canUseFeature, stripDeniedFields } from '../../../shared/domain/permissions'
 import type { PermissionRule, PunchRecord, ReportEntry } from '../../../shared/domain/types'
@@ -32,6 +32,7 @@ import { newId } from '../lib/ids'
 import { generateJson } from '../lib/llm'
 import { activePermissionRules, subjectOf } from '../lib/permissions'
 import { balanceOf, PAID_LEAVE_TYPE_ID } from './leave'
+import { selfFiscalStartMonth } from './sales'
 
 interface ChatAnswer {
   content: string
@@ -264,10 +265,7 @@ export async function buildContext(
   // 売上（バッチ6b で移行済みドメイン。年度累計・当月・前年同月比のサマリのみ = 明細は /sales へ誘導）
   if (can('sales') && /売上|売り上げ|粗利|業績|セールス/.test(question)) {
     await block(async () => {
-      const { rows: selfRows } = await pool.query<{ m: number | null }>(
-        `SELECT fiscal_start_month AS m FROM companies
-         WHERE kind = 'self' AND active = true ORDER BY id LIMIT 1`)
-      const fsm = selfRows[0]?.m ?? DEFAULT_FISCAL_START_MONTH
+      const fsm = await selfFiscalStartMonth(pool)
       const currentMonth = today.slice(0, 7)
       const fy = fiscalYearOf(currentMonth, fsm)
       const months = fiscalMonthsOf(fy, fsm).filter(m => m <= currentMonth)
