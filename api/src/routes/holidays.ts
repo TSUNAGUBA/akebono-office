@@ -56,6 +56,10 @@ export function holidaysRoutes(pool: pg.Pool): Hono {
   app.post('/import', async (c) => {
     const user = requireAdmin(c)
     const body = await c.req.json().catch(() => ({})) as { csvText?: string; csvBase64?: string }
+    // サイズ上限（公式 CSV 約 20KB に対し十分な余裕。巨大ボディの全量デコードを避ける = avatar ガードと同型）
+    if ((body.csvText?.length ?? 0) > 2_000_000 || (body.csvBase64?.length ?? 0) > 2_800_000) {
+      throw err('AKO-GEN-001', 'CSV が大きすぎます（1MB 以下にしてください）', 400)
+    }
     let text: string
     let source = 'アップロード'
     if (typeof body.csvText === 'string' && body.csvText) {

@@ -11,10 +11,12 @@
 import { Hono } from 'hono'
 import type pg from 'pg'
 import { requireAdmin, requireHrOrAdmin, type AuthUser } from '../auth'
+import type { Env } from '../env'
 import { audit } from '../lib/audit'
 import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
 import { clearPermissionCache, stripMasterFields } from '../lib/permissions'
+import { scheduleSearchRebuild, SEARCH_RELEVANT_ENTITIES } from '../lib/search-index'
 import { camelToSnake, MASTERS, rowToCamel, type MasterEntity } from '../masters/registry'
 
 function defOf(entity: string) {
@@ -112,8 +114,14 @@ function toSqlValue(def: { jsonbFields: string[] }, field: string, value: unknow
   return def.jsonbFields.includes(field) ? JSON.stringify(value) : value
 }
 
-export function mastersRoutes(pool: pg.Pool): Hono {
+export function mastersRoutes(pool: pg.Pool, env: Env): Hono {
   const app = new Hono()
+
+  // マスタ書込後の検索インデックス自動再生成（AI 検索最適化。デバウンス・非ブロッキング = 原則4。
+  // 権限キャッシュのクリアと同じ「書込後フック」パターン）
+  const refreshSearchIndex = (entity: MasterEntity): void => {
+    if (SEARCH_RELEVANT_ENTITIES.has(entity)) scheduleSearchRebuild(pool, env, `masters:${entity}`)
+  }
 
   // 一覧（includeInactive=1 で無効も含む）。表示項目レベルの権限ルールがある場合はフィールドを剥がす（F-16）
   app.get('/:entity', async (c) => {
@@ -167,6 +175,7 @@ export function mastersRoutes(pool: pg.Pool): Hono {
     }
     await audit(pool, { actorId: user.id, action: 'create', entity: def.table, entityId: id, detail: `${entity} を追加` })
     if (entity === 'permission-rules') clearPermissionCache() // 権限キャッシュをクリア（同一インスタンスは即時・他インスタンスは TTL 10 秒で追随）
+    refreshSearchIndex(entity)
     const { rows } = await pool.query(`SELECT * FROM ${def.table} WHERE id = $1`, [id])
     return c.json({ data: rowToCamel(rows[0]) }, 201)
   })
@@ -222,6 +231,7 @@ export function mastersRoutes(pool: pg.Pool): Hono {
     }
     await audit(pool, { actorId: user.id, action: 'update', entity: def.table, entityId: id, detail: `${entity} を更新` })
     if (entity === 'permission-rules') clearPermissionCache() // 権限キャッシュをクリア（同一インスタンスは即時・他インスタンスは TTL 10 秒で追随）
+    refreshSearchIndex(entity)
     const { rows } = await pool.query(`SELECT * FROM ${def.table} WHERE id = $1`, [id])
     return c.json({ data: rowToCamel(rows[0]) })
   })
@@ -239,6 +249,7 @@ export function mastersRoutes(pool: pg.Pool): Hono {
     if (result.rowCount === 0) throw err('AKO-GEN-002', '対象が見つかりません', 404)
     await audit(pool, { actorId: user.id, action: 'archive', entity: def.table, entityId: id, detail: `${entity} を無効化` })
     if (entity === 'permission-rules') clearPermissionCache() // 権限キャッシュをクリア（同一インスタンスは即時・他インスタンスは TTL 10 秒で追随）
+    refreshSearchIndex(entity)
     return c.json({ data: { id } })
   })
 
@@ -252,6 +263,7 @@ export function mastersRoutes(pool: pg.Pool): Hono {
     if (result.rowCount === 0) throw err('AKO-GEN-002', '対象が見つかりません', 404)
     await audit(pool, { actorId: user.id, action: 'restore', entity: def.table, entityId: id, detail: `${entity} を再有効化` })
     if (entity === 'permission-rules') clearPermissionCache() // 権限キャッシュをクリア（同一インスタンスは即時・他インスタンスは TTL 10 秒で追随）
+    refreshSearchIndex(entity)
     return c.json({ data: { id } })
   })
 
@@ -274,11 +286,13 @@ export function mastersRoutes(pool: pg.Pool): Hono {
         throw err('AKO-RTM-001', 'この関係種別は既存の関係で使用中のため削除できません（無効化を使用してください）', 409)
       }
       await audit(pool, { actorId: user.id, action: 'delete', entity: def.table, entityId: id, detail: `${entity} を物理削除` })
+      refreshSearchIndex(entity)
       return c.json({ data: { id } })
     }
     const result = await pool.query(`DELETE FROM ${def.table} WHERE id = $1`, [id])
     if (result.rowCount === 0) throw err('AKO-GEN-002', '対象が見つかりません', 404)
     await audit(pool, { actorId: user.id, action: 'delete', entity: def.table, entityId: id, detail: `${entity} を物理削除` })
+    refreshSearchIndex(entity)
     return c.json({ data: { id } })
   })
 

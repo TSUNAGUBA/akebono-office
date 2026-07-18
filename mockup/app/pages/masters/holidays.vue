@@ -88,6 +88,11 @@ async function onCsvFileSelected(ev: Event): Promise<void> {
   const file = (ev.target as HTMLInputElement).files?.[0]
   if (fileInput.value) fileInput.value.value = '' // 同じファイルの再選択を可能にする
   if (!file) return
+  // 公式 CSV は約 20KB。誤選択の巨大ファイルで base64 変換・送信が固まるのを防ぐ（avatar 上限ガードと同型）
+  if (file.size > 1_000_000) {
+    toast.show('AKO-GEN-001: CSV ファイルは 1MB 以下にしてください（公式 CSV は約 20KB です）', 'crit')
+    return
+  }
   const buf = new Uint8Array(await file.arrayBuffer())
   let base64 = ''
   for (let i = 0; i < buf.length; i += 0x8000) {

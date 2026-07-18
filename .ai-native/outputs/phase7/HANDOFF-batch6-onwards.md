@@ -32,7 +32,11 @@
   キャッシュ実バグ 2 件（PR #41。implementation-status §17）/ 一覧順序の決定化 = CI フレーク閉塞（PR #42）/
   **営業日・祝日基盤**（public_holidays + attendance_rules.workingWeekdays/holidayAware +
   shared/domain/business-day + 内閣府 CSV 取込 + /masters/holidays 画面。implementation-status §18。
-  **本番リリース後は管理者が /masters/holidays の「公式データから更新」を 1 回実行して祝日を初期投入する**）
+  **本番リリース後は管理者が /masters/holidays の「公式データから更新」を 1 回実行して祝日を初期投入する**）/
+  **バッチ7a: AI 検索最適化基盤 + ナレッジのドキュメント取込**（search_docs = 派生・自動再生成 +
+  Vertex 埋め込み・名寄せ照合・/v1/knowledge/import（.md/.txt/.pdf/.docx = pdfjs-dist + mammoth）。
+  implementation-status §19。新規依存: pdfjs-dist・mammoth（api/dependencies）・pdf-lib（devDependencies =
+  テストフィクスチャ生成）。検索インデックスは起動時に自動生成されるため運用の手動ステップなし）
 - **バッチ6a（PR #35・独立レビュー 2 巡でブロッキング指摘ゼロに収束・オペレーターのマージ待ち）:
   AI カンパニー F-08**
   - migration は 0015（表定義）+ 0016（部分一意索引 + AI ロール/社員シード）

@@ -194,6 +194,10 @@ AI 機能（日報 AI アシスト・タスク計画の AI コメント等）は
   のように secrets（VERTEX_LOCATION / VERTEX_MODEL）を設定して再デプロイ
 - **フォールバック動作:** `VERTEX_PROJECT_ID` 未設定・権限不足・API エラー時、AI 機能は決定的
   ヒューリスティック（モックと同じ生成ロジック）へ自動フォールバックし、主要フローは止まらない（原則4）
+- **検索インデックスの埋め込み（バッチ7a）:** チャットボットの AI 検索（search_docs）は同じ Vertex AI の
+  埋め込みモデル（既定 `text-multilingual-embedding-002`・環境変数 `VERTEX_EMBEDDING_MODEL` で変更可）を
+  使う。**追加セットアップは不要**（同じ API・同じ `roles/aiplatform.user`）。無効環境は字句検索のみへ縮退。
+  インデックスは起動時 + マスタ更新時に自動再生成され、手動再生成は `POST /v1/search/reindex`（管理者）
 
 ## 1-9. カレンダー連携（Google OAuth・F-06-8）
 

@@ -5,7 +5,7 @@
  * 出典: manual=手動 / escalation=裁定還流（F-12-3 からの還流）。
  * 検索はタイトル+本文+タグを横断。
  */
-import { Plus } from 'lucide-vue-next'
+import { Download, FileUp, Plus } from 'lucide-vue-next'
 import {
   ACTIVE_FILTER_OPTIONS, matchesActiveFilter, splitTags,
 } from '~/components/masters/MasterShell.vue'
@@ -153,6 +153,7 @@ function openDetail(row: Record<string, unknown>): void {
   selectedId.value = String(row.id)
   mode.value = 'view'
   drawerOpen.value = true
+  void loadFiles(String(row.id))
 }
 
 function openCreate(): void {
@@ -242,6 +243,106 @@ async function restoreSelected(): Promise<void> {
   if (res.ok) toast.show('復元しました')
   else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
 }
+
+// ---------- ドキュメント取込（.md/.txt/.pdf/.docx → ナレッジ化。オペレーター指示 2026-07-18 #3） ----------
+
+const isApi = useApiMode()
+const uploadOpen = ref(false)
+const uploading = ref(false)
+const uploadFile = ref<File | null>(null)
+// domain は UiSelect（string v-model）との親和性のため string で保持し、使用時に絞る
+const uploadForm = ref({ domain: 'industry' as string, targetId: '', title: '', tagsText: '' })
+const uploadErrors = ref<Record<string, string>>({})
+
+const uploadTargetOptions = computed(() => targetOptionsFor(uploadForm.value.domain as KnowledgeDomain))
+
+function openUpload(): void {
+  uploadFile.value = null
+  uploadForm.value = { domain: currentDomain.value, targetId: '', title: '', tagsText: '' }
+  uploadErrors.value = {}
+  uploadOpen.value = true
+}
+
+function onUploadFileSelected(ev: Event): void {
+  uploadFile.value = (ev.target as HTMLInputElement).files?.[0] ?? null
+}
+
+async function submitUpload(): Promise<void> {
+  const e: Record<string, string> = {}
+  if (!uploadFile.value) e.file = 'ファイルを選択してください（.md / .txt / .pdf / .docx）'
+  else if (uploadFile.value.size > 10 * 1024 * 1024) e.file = 'ファイルは 10MB 以下にしてください'
+  if (!uploadForm.value.targetId) e.targetId = '対象は必須です'
+  uploadErrors.value = e
+  if (Object.keys(e).length > 0) return
+  uploading.value = true
+  try {
+    const buf = new Uint8Array(await uploadFile.value!.arrayBuffer())
+    let bin = ''
+    for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000))
+    const created = await apiFetch<KnowledgeArticle>('/v1/knowledge/import', {
+      method: 'POST',
+      body: {
+        filename: uploadFile.value!.name,
+        contentBase64: btoa(bin),
+        domain: uploadForm.value.domain,
+        targetId: uploadForm.value.targetId,
+        title: uploadForm.value.title.trim(),
+        tags: splitTags(uploadForm.value.tagsText),
+      },
+    })
+    await loadApiCollection('knowledge', true)
+    toast.show(`ドキュメントを取り込みました（ナレッジ「${created.title}」として蓄積・AI の回答に反映されます）`)
+    uploadOpen.value = false
+    currentDomain.value = uploadForm.value.domain as KnowledgeDomain
+    selectedId.value = created.id
+    mode.value = 'view'
+    drawerOpen.value = true
+    void loadFiles(created.id)
+  } catch (err) {
+    const er = apiErrorOf(err)
+    toast.show(`${er.code}: ${er.message}`, 'crit')
+  } finally {
+    uploading.value = false
+  }
+}
+
+// 添付原本（アップロード取込されたナレッジのダウンロード。API モードのみ）
+interface KnowledgeFileMeta {
+  id: string
+  filename: string
+  mime: string
+  sizeBytes: number
+  createdAt: string
+}
+const attachedFiles = ref<KnowledgeFileMeta[]>([])
+
+async function loadFiles(knowledgeId: string): Promise<void> {
+  if (!isApi) {
+    attachedFiles.value = []
+    return
+  }
+  try {
+    attachedFiles.value = await apiFetch<KnowledgeFileMeta[]>(`/v1/knowledge/${knowledgeId}/files`)
+  } catch {
+    attachedFiles.value = [] // 取得失敗は添付なし表示（本文の閲覧は妨げない）
+  }
+}
+
+async function downloadFile(f: KnowledgeFileMeta): Promise<void> {
+  try {
+    const d = await apiFetch<{ filename: string; mime: string; contentBase64: string }>(`/v1/knowledge/files/${f.id}`)
+    const bytes = Uint8Array.from(atob(d.contentBase64), ch => ch.charCodeAt(0))
+    const url = URL.createObjectURL(new Blob([bytes], { type: d.mime }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = d.filename
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch (err) {
+    const er = apiErrorOf(err)
+    toast.show(`${er.code}: ${er.message}`, 'crit')
+  }
+}
 </script>
 
 <template>
@@ -250,6 +351,16 @@ async function restoreSelected(): Promise<void> {
     description="5 ドメインに紐付く知見を管理します。エスカレーション裁定（F-12）からの還流は出典「裁定還流」で記録されます"
   >
     <template #actions>
+      <button
+        v-if="isApi"
+        type="button"
+        class="btn"
+        title="ドキュメント（.md / .txt / .pdf / .docx）を取り込んでナレッジ化します"
+        @click="openUpload"
+      >
+        <FileUp class="h-4 w-4" aria-hidden="true" />
+        ドキュメント取込
+      </button>
       <button type="button" class="btn btn-primary" @click="openCreate">
         <Plus class="h-4 w-4" aria-hidden="true" />
         新規追加
@@ -321,6 +432,15 @@ async function restoreSelected(): Promise<void> {
             {{ targetLabel(selected.domain, selected.targetId) }}
           </div>
           <p class="whitespace-pre-wrap text-[13px] leading-relaxed">{{ selected.body || '（本文なし）' }}</p>
+          <div v-if="attachedFiles.length > 0" class="rounded-lg border border-line px-3 py-2">
+            <p class="mb-1.5 text-[11px] font-semibold text-muted">添付ドキュメント（取込原本）</p>
+            <div v-for="f in attachedFiles" :key="f.id" class="flex items-center justify-between gap-2 py-0.5 text-[12px]">
+              <span class="truncate">{{ f.filename }}<span class="num text-muted">（{{ Math.ceil(f.sizeBytes / 1024) }}KB）</span></span>
+              <button type="button" class="btn btn-sm" :aria-label="`${f.filename} をダウンロード`" @click="downloadFile(f)">
+                <Download class="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            </div>
+          </div>
           <div v-if="selected.tags.length > 0" class="flex flex-wrap gap-1">
             <span
               v-for="t in selected.tags"
@@ -343,6 +463,37 @@ async function restoreSelected(): Promise<void> {
           </div>
         </template>
       </UiDrawer>
+
+      <!-- ドキュメント取込モーダル -->
+      <UiModal :open="uploadOpen" title="ドキュメント取込（→ ナレッジ化）" @close="uploadOpen = false">
+        <div class="grid gap-3">
+          <UiFormField label="ファイル" :error="uploadErrors.file" hint=".md / .txt / .pdf / .docx（10MB まで）。テキストを抽出してナレッジ本文に保存し、原本も添付として保全します">
+            <input type="file" accept=".md,.txt,.pdf,.docx" class="text-[13px]" @change="onUploadFileSelected" >
+          </UiFormField>
+          <UiFormField label="ドメイン">
+            <UiSelect
+              v-model="uploadForm.domain"
+              :options="Object.entries(KNOWLEDGE_DOMAIN_LABELS).map(([value, label]) => ({ value, label }))"
+              aria-label="ドメイン"
+            />
+          </UiFormField>
+          <UiFormField label="対象" :error="uploadErrors.targetId">
+            <UiSelect v-model="uploadForm.targetId" :options="uploadTargetOptions" aria-label="対象" />
+          </UiFormField>
+          <UiFormField label="タイトル" hint="空欄ならファイルの見出し・ファイル名から自動設定">
+            <input v-model="uploadForm.title" type="text" class="input" >
+          </UiFormField>
+          <UiFormField label="タグ" hint="カンマ・読点区切り">
+            <input v-model="uploadForm.tagsText" type="text" class="input" placeholder="例）商習慣, 提案資料" >
+          </UiFormField>
+        </div>
+        <template #footer>
+          <button type="button" class="btn" @click="uploadOpen = false">キャンセル</button>
+          <button type="button" class="btn btn-primary" :disabled="uploading" @click="submitUpload">
+            {{ uploading ? '取込中…' : '取り込む' }}
+          </button>
+        </template>
+      </UiModal>
     </template>
   </MastersMasterShell>
 </template>
