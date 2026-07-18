@@ -122,6 +122,7 @@ office: `IsometricOffice`（アイソメトリック空間）、`AiEmployeeCard`
 | `useEscalations` | シグナル検知・起票・管理者アクション・ナレッジ還流 |
 | `useSystemStatus` | 提供システム状態・インシデント・稼働率（デュアルモード: API モードは `/v1/status` = service_incidents が SoT・uptime はサーバー導出。バッチ6c） |
 | `useSales` | 売上サマリ・実績登録（デュアルモード: API モードは `/v1/sales` = sales_monthly が SoT。バッチ6b） |
+| `useAkebono` | AKEBONO 要望ボックス（デュアルモード: API モードは `/v1/akebono/wishes` = akebono_wishes が SoT・追記のみ。バッチ6d） |
 | `useChatbot` | シナリオベース応答・出典解決・擬似ストリーミング |
 | `useDocuments` | ドキュメントツリー・タグ・検索 |
 | `useToast` / `useConfirm` | UI フィードバック |

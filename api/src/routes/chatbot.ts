@@ -316,8 +316,10 @@ export async function buildContext(
     })
   }
 
-  // AKEBONO（バッチ6d で移行済みドメイン。構想状況 + 直近の要望 = 詳細は /akebono へ誘導）
-  if (can('akebono') && /AKEBONO|アケボノ|あけぼの|要望/i.test(question)) {
+  // AKEBONO（バッチ6d で移行済みドメイン。構想状況 + 直近の要望 = 詳細は /akebono へ誘導）。
+  // 顧客「アケボノ商事」・サービス「AKEBONO SCM」・アプリ名「AKEBONO Office」への言及では
+  // 発火しない（顧客/稼働状況ブロックとの文脈ノイズ防止 = 6d レビュー指摘対応）
+  if (can('akebono') && /AKEBONO(?!\s*(SCM|Office))|アケボノ(?!商事)|あけぼの|要望/i.test(question)) {
     await block(async () => {
       const { rows } = await pool.query<{ body: string; at: string }>(
         `SELECT body, at FROM akebono_wishes ORDER BY at DESC LIMIT 3`)

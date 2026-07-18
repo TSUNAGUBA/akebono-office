@@ -1865,6 +1865,12 @@ describe('AKEBONO 要望ボックス（F-03・バッチ6d）', () => {
     const ctx = await buildContext(pool, adminUser, 'AKEBONO はいつ使える？', [])
     expect(ctx).toContain('AKEBONO（/akebono）')
     expect(ctx).toContain('採用面接の候補者比較')
+    // 顧客「アケボノ商事」・サービス「AKEBONO SCM」への言及ではプロダクトブロックを出さない
+    // （顧客/稼働状況ブロックとの文脈ノイズ防止 = 6d レビュー指摘対応）
+    expect(await buildContext(pool, adminUser, 'アケボノ商事について教えて', []))
+      .not.toContain('AKEBONO（/akebono）')
+    expect(await buildContext(pool, adminUser, 'AKEBONO SCM は動いてる？', []))
+      .not.toContain('AKEBONO（/akebono）')
 
     const denyAkebono = [{
       id: 'pm-akb', subjectKind: 'role' as const, subjectId: 'member', resource: 'akebono', field: null,
