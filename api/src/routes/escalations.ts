@@ -13,6 +13,7 @@ import type {
 } from '../../../shared/domain/types'
 import { requireAdmin } from '../auth'
 import { article36Alerts, resolveRule } from '../domain/attendance'
+import { ATTENDANCE_RULE_COLS } from './attendance'
 import { raiseEscalation } from '../lib/escalate'
 import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
@@ -153,10 +154,7 @@ export function escalationsRoutes(pool: pg.Pool): Hono {
       `SELECT attendance_rule_id AS "attendanceRuleId", employment_type AS "employmentType" FROM members WHERE id = $1`,
       [user.id])
     const rules = await pool.query(
-      `SELECT id, name, applies_to AS "appliesTo", default_for AS "defaultFor",
-              work_start AS "workStart", work_end AS "workEnd", break_minutes AS "breakMinutes",
-              flex, closing_day AS "closingDay", legal_holiday_weekday AS "legalHolidayWeekday", active
-       FROM attendance_rules ORDER BY id`)
+      `SELECT ${ATTENDANCE_RULE_COLS} FROM attendance_rules ORDER BY id`)
     const byDate = new Map<string, PunchRecord[]>()
     for (const p of rows) {
       const list = byDate.get(p.date) ?? []

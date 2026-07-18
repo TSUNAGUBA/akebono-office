@@ -6,7 +6,7 @@
  *   カレンダー表示（対象日の祝日名バッジ）に反映される
  * - 公式取込は再実行可能（date 一意の upsert = 冪等）。今後の祝日改定もボタン一つで反映できる
  */
-import { CloudDownload, Plus } from 'lucide-vue-next'
+import { CloudDownload, FileUp, Plus, Trash2 } from 'lucide-vue-next'
 import type { Holiday } from '~/types/domain'
 import type { FieldDef, TableColumn } from '~/types/ui'
 
@@ -41,15 +41,37 @@ const columns: TableColumn[] = [
   { key: 'date', label: '日付', primary: true, width: '130px' },
   { key: 'name', label: '名称', primary: true },
   { key: 'source', label: '登録元', width: '90px' },
+  { key: 'ops', label: '操作', width: '70px', primary: true },
 ]
+
+/** 年フィルタで 0 件でも他年にデータがある場合は案内を変える（空状態の誤解防止） */
+const emptyDescription = computed(() =>
+  crud.list.value.length > 0 && yearFilter.value
+    ? `${yearFilter.value}年の祝日はありません（年フィルタを「すべての年」にすると他の年を確認できます）`
+    : '「公式データから更新」で内閣府の祝日データを取り込めます')
 
 function asHoliday(row: Record<string, unknown>): Holiday {
   return row as unknown as Holiday
 }
 
-// ---------- 公式取込（内閣府 CSV） ----------
+// ---------- 公式取込（内閣府 CSV）+ ファイルアップロード取込 ----------
 
 const importing = ref(false)
+const fileInput = ref<HTMLInputElement | null>(null)
+
+async function runImport(body: Record<string, unknown>, sourceLabel: string): Promise<void> {
+  importing.value = true
+  try {
+    const res = await apiFetch<{ total: number; upserted: number }>('/v1/holidays/import', { method: 'POST', body })
+    await loadApiCollection('holidays', true)
+    toast.show(`${sourceLabel}を取り込みました（${res.total} 件中 ${res.upserted} 件を追加・更新）`)
+  } catch (e) {
+    const er = apiErrorOf(e)
+    toast.show(`${er.code}: ${er.message}`, 'crit')
+  } finally {
+    importing.value = false
+  }
+}
 
 async function importOfficial(): Promise<void> {
   const ok = await confirm.ask(
@@ -58,17 +80,20 @@ async function importOfficial(): Promise<void> {
     { confirmLabel: '取り込む' },
   )
   if (!ok) return
-  importing.value = true
-  try {
-    const res = await apiFetch<{ total: number; upserted: number }>('/v1/holidays/import', { method: 'POST', body: {} })
-    await loadApiCollection('holidays', true)
-    toast.show(`公式データを取り込みました（${res.total} 件中 ${res.upserted} 件を追加・更新）`)
-  } catch (e) {
-    const er = apiErrorOf(e)
-    toast.show(`${er.code}: ${er.message}`, 'crit')
-  } finally {
-    importing.value = false
+  await runImport({}, '公式データ')
+}
+
+/** 公式サイト障害時の代替経路: 手元の CSV（Shift_JIS / UTF-8 自動判定）をアップロードして取込 */
+async function onCsvFileSelected(ev: Event): Promise<void> {
+  const file = (ev.target as HTMLInputElement).files?.[0]
+  if (fileInput.value) fileInput.value.value = '' // 同じファイルの再選択を可能にする
+  if (!file) return
+  const buf = new Uint8Array(await file.arrayBuffer())
+  let base64 = ''
+  for (let i = 0; i < buf.length; i += 0x8000) {
+    base64 += String.fromCharCode(...buf.subarray(i, i + 0x8000))
   }
+  await runImport({ csvBase64: btoa(base64) }, `CSV ファイル（${file.name}）`)
 }
 
 // ---------- 手動追加・削除 ----------
@@ -92,6 +117,10 @@ async function save(): Promise<void> {
   const e: Record<string, string> = {}
   if (!String(form.value.date ?? '')) e.date = '日付を入力してください'
   if (!String(form.value.name ?? '').trim()) e.name = '名称を入力してください'
+  // 日付の一意はサーバー側 UNIQUE が SoT（409）。モックモードでも同じ制約を再現する
+  if ((crud.list.value as Holiday[]).some(h => h.date === String(form.value.date))) {
+    e.date = 'この日付は既に登録されています'
+  }
   errors.value = e
   if (Object.keys(e).length > 0) return
   const res = await crud.save({
@@ -107,8 +136,7 @@ async function save(): Promise<void> {
   drawerOpen.value = false
 }
 
-async function removeRow(row: Record<string, unknown>): Promise<void> {
-  const h = asHoliday(row)
+async function removeHoliday(h: Holiday): Promise<void> {
   const ok = await confirm.ask(
     '祝日の削除',
     `「${h.date} ${h.name}」を削除しますか？（翌営業日の計算から除外されます）`,
@@ -137,6 +165,18 @@ async function removeRow(row: Record<string, unknown>): Promise<void> {
         <CloudDownload class="h-4 w-4" aria-hidden="true" />
         {{ importing ? '取込中…' : '公式データから更新' }}
       </button>
+      <button
+        v-if="isApi"
+        type="button"
+        class="btn"
+        :disabled="importing"
+        title="公式サイトに接続できない場合の代替: 手元の祝日 CSV（日付,名称）を取り込みます"
+        @click="fileInput?.click()"
+      >
+        <FileUp class="h-4 w-4" aria-hidden="true" />
+        CSV から取込
+      </button>
+      <input ref="fileInput" type="file" accept=".csv,text/csv" class="hidden" @change="onCsvFileSelected" >
       <button type="button" class="btn btn-primary" @click="openCreate">
         <Plus class="h-4 w-4" aria-hidden="true" />
         手動追加
@@ -152,10 +192,8 @@ async function removeRow(row: Record<string, unknown>): Promise<void> {
       <UiDataTable
         :columns="columns"
         :rows="tableRows"
-        clickable
         empty-title="祝日が登録されていません"
-        empty-description="「公式データから更新」で内閣府の祝日データを取り込めます"
-        @row-click="removeRow"
+        :empty-description="emptyDescription"
       >
         <template #cell-date="{ row }">
           <span class="num font-medium">{{ asHoliday(row).date }}</span>
@@ -165,6 +203,16 @@ async function removeRow(row: Record<string, unknown>): Promise<void> {
             :label="asHoliday(row).source === 'official' ? '公式' : '手動'"
             :tone="asHoliday(row).source === 'official' ? 'ok' : 'neutral'"
           />
+        </template>
+        <template #cell-ops="{ row }">
+          <button
+            type="button"
+            class="btn btn-sm"
+            :aria-label="`${asHoliday(row).date} を削除`"
+            @click.stop="removeHoliday(asHoliday(row))"
+          >
+            <Trash2 class="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
         </template>
       </UiDataTable>
     </UiSectionCard>
