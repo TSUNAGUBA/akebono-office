@@ -1,17 +1,47 @@
 /**
  * AIネイティブカンパニー（F-08）
- * タスク依頼 → 分解（決定的モック）→ 承認 → 実行 → 完了報告 → 日次報告生成。
- * - 乱数は使わず hashStr / irange（~/utils/rng）で決定的に生成する
+ * タスク依頼 → 分解 → 承認 → 実行 → 完了報告 → 日次報告生成。
+ *
+ * デュアルモード（バッチ6a）:
+ * - モックモード: 従来どおり useMockDb + 決定的分解（SoT は shared/domain/ai-tasks = API フォールバックと同一）
+ * - API モード: SoT は /v1/ai-company（タスク・活動ログ）+ /v1/masters/ai-roles・ai-employees（マスタ）。
+ *   分解はサーバー（Vertex AI → 失敗時同一ヒューリスティック）。操作は API → キャッシュ取り直し（原則6）。
+ *   AI 日次報告は daily_reports（author_kind='ai'）が SoT = useReports の全員の日報キャッシュから射影
  * - 活動ログ・日次報告は追記のみ（記録系保護）。日次報告は既存分をスキップする UPSERT（冪等）
- * - エスカレーション・通知は主フロー成立後に非ブロッキングで呼ぶ
+ * - エスカレーション・通知は主フロー成立後に非ブロッキングで呼ぶ（API モードはサーバーが担う）
  */
+import type { Ref } from 'vue'
+import {
+  decomposeTask, judgeTaskConfidence, mockActivityCost,
+} from '../../../shared/domain/ai-tasks'
 import type {
   AiActivityKind, AiActivityLog, AiEmployee, AiModelTier, AiRole, AiTask,
   DailyReport, ReportEntry, Result,
 } from '~/types/domain'
 import type { Tone } from '~/types/ui'
 import { fmtInt } from '~/utils/format'
-import { hashStr, irange } from '~/utils/rng'
+
+// ---------- API モードのキャッシュ（SPA・モジュールスコープ単一） ----------
+
+const apiTasks = ref<AiTask[]>([])
+const apiLogs = ref<AiActivityLog[]>([])
+
+function loadAiTasks(force = false): Promise<void> {
+  return apiLoadOnce('aic:tasks', async () => {
+    apiTasks.value = await apiFetch<AiTask[]>('/v1/ai-company/tasks')
+  }, force)
+}
+
+function loadAiLogs(force = false): Promise<void> {
+  return apiLoadOnce('aic:logs', async () => {
+    apiLogs.value = await apiFetch<AiActivityLog[]>('/v1/ai-company/logs')
+  }, force)
+}
+
+onApiReset(() => {
+  apiTasks.value = []
+  apiLogs.value = []
+})
 
 // ---------- 画面固有ラベル（labels.ts にない区分は担当ファイルで定義） ----------
 
@@ -72,45 +102,32 @@ export type RequestTaskResult =
   | { ok: true; id: string; confidence: AiTask['confidence'] }
   | { ok: false; error: { code: string; message: string } }
 
-// ---------- 決定的なタスク分解テンプレート ----------
-
-const DECOMPOSITION_TEMPLATES: { keywords: string[]; steps: string[] }[] = [
-  { keywords: ['調査', 'リサーチ', '動向', '市場'], steps: ['対象範囲と情報源の洗い出し', '一次情報の収集と突合', '論点別の要約整理', '調査レポートのドラフト作成'] },
-  { keywords: ['資料', '提案', '議事録', 'ドラフト', '文書'], steps: ['構成案の作成', '既存ナレッジ・過去資料の参照', 'ドラフト作成', '体裁調整とセルフレビュー'] },
-  { keywords: ['分析', '集計', 'データ', 'KPI'], steps: ['データ抽出条件の定義', '集計・可視化の実行', '示唆の抽出', '分析サマリーの作成'] },
-  { keywords: ['レビュー', 'チェック', '確認', '点検'], steps: ['レビュー観点の整理', '対象の通読と指摘リスト化', '改善提案のまとめ'] },
-]
-
-const GENERIC_STEPS: string[][] = [
-  ['依頼内容の要件整理', '必要情報の収集', '成果物ドラフトの作成', 'セルフチェックと提出'],
-  ['要件の確認と論点整理', '作業の実施', '結果報告のまとめ'],
-]
-
-function decompose(title: string, description: string): { title: string; done: boolean }[] {
-  const text = `${title} ${description}`
-  const matched = DECOMPOSITION_TEMPLATES.find(t => t.keywords.some(k => text.includes(k)))
-  const steps = matched?.steps ?? GENERIC_STEPS[hashStr(`decomp:${title}`) % GENERIC_STEPS.length]!
-  return steps.map(s => ({ title: s, done: false }))
-}
-
-function judgeConfidence(aiEmployeeId: string, title: string, description: string): AiTask['confidence'] {
-  const d = description.trim()
-  if (d.length < 20 || d.includes('?') || d.includes('？')) return 'low'
-  return hashStr(`conf:${aiEmployeeId}:${title}`) % 2 === 0 ? 'high' : 'mid'
-}
-
 export function useAiCompany() {
   const { tbl, commit, nextId } = useMockDb()
   const { currentUser } = useCurrentUser()
   const { notify } = useNotifications()
   const { raise } = useEscalations()
+  const isApi = useApiMode()
 
+  // ai-roles / ai-employees は移行済みマスタ（API モードは tbl() が API キャッシュを返す）
   const aiEmployees = tbl('aiEmployees')
   const aiRoles = tbl('aiRoles')
-  const aiTasks = tbl('aiTasks')
-  const aiActivityLogs = tbl('aiActivityLogs')
+  // タスク・活動ログは API モードでは /v1/ai-company のキャッシュをバッキングにする
+  const aiTasks = isApi ? (apiTasks as Ref<AiTask[]>) : tbl('aiTasks')
+  const aiActivityLogs = isApi ? (apiLogs as Ref<AiActivityLog[]>) : tbl('aiActivityLogs')
   const dailyReports = tbl('dailyReports')
   const escalationRules = tbl('escalationRules')
+  // AI 日次報告（API モード）は全員の日報キャッシュ（scope=all）から射影する
+  const reportsApi = isApi ? useReports() : null
+  if (isApi) {
+    void loadAiTasks()
+    void loadAiLogs()
+  }
+
+  /** 操作後の取り直し（タスク・ログ・AI 社員の派生 status。原則6: SoT 書込 → キャッシュ反映） */
+  async function reloadAi(): Promise<void> {
+    await Promise.all([loadAiTasks(true), loadAiLogs(true), loadApiCollection('aiEmployees', true)])
+  }
 
   // ---------- 参照系 ----------
 
@@ -136,8 +153,11 @@ export function useAiCompany() {
   const logs = computed<AiActivityLog[]>(() =>
     [...aiActivityLogs.value].sort((a, b) => b.at.localeCompare(a.at)))
 
-  /** その日の AI 日次報告（プレビュー用） */
+  /** その日の AI 日次報告（プレビュー用。API モードは全員の日報キャッシュ = daily_reports が SoT） */
   function aiReportsOn(date: string): DailyReport[] {
+    if (reportsApi) {
+      return reportsApi.allSubmitted(date.slice(0, 7)).filter(r => r.authorKind === 'ai' && r.date === date)
+    }
     return dailyReports.value.filter(r => r.authorKind === 'ai' && r.date === date)
   }
 
@@ -153,18 +173,11 @@ export function useAiCompany() {
     aiEmployees.value = aiEmployees.value.map(e => e.id === aiEmployeeId ? { ...e, status: next } : e)
   }
 
-  /** 活動ログを追記する（tokens/costUsd は決定的モック値） */
+  /** 活動ログを追記する（モックモードのみ。tokens/costUsd は shared の決定的モック値） */
   function addLog(aiEmployeeId: string, taskId: string | null, kind: AiActivityKind, summary: string): void {
-    const seq = aiActivityLogs.value.length
-    const range: Record<AiActivityKind, [number, number]> = {
-      plan: [2000, 5000], execute: [8000, 28000], report: [1500, 4000], escalate: [800, 2500], chat: [500, 1500],
-    }
-    const [lo, hi] = range[kind]
-    const tokens = irange(`tok:${aiEmployeeId}:${kind}:${seq}`, lo, hi)
     const emp = employeeById(aiEmployeeId)
-    const tier = roleOf(emp)?.modelTier ?? 'standard'
-    const rate: Record<AiModelTier, number> = { lite: 0.6, standard: 1.1, pro: 2.8 }
-    const costUsd = Number((tokens * rate[tier] / 1_000_000).toFixed(4))
+    const tier: AiModelTier = roleOf(emp)?.modelTier ?? 'standard'
+    const { tokens, costUsd } = mockActivityCost(aiEmployeeId, kind, aiActivityLogs.value.length, tier)
     aiActivityLogs.value = [...aiActivityLogs.value, {
       id: nextId('aiActivityLogs', 'aal'),
       aiEmployeeId, taskId, kind, summary, tokens, costUsd,
@@ -178,12 +191,24 @@ export function useAiCompany() {
    * タスクを依頼する。AI が決定的にタスク分解を生成し status='proposed' で登録する。
    * confidence が low の場合はエスカレーション起票（非ブロッキング）し、フラグを返す。
    */
-  function requestTask(aiEmployeeId: string, title: string, description: string): RequestTaskResult {
+  async function requestTask(aiEmployeeId: string, title: string, description: string): Promise<RequestTaskResult> {
+    if (isApi) {
+      // 分解はサーバー（Vertex AI → 失敗時 shared ヒューリスティック）。エスカレーションもサーバーが担う
+      try {
+        const data = await apiFetch<{ id: string; confidence: AiTask['confidence'] }>('/v1/ai-company/tasks', {
+          method: 'POST', body: { aiEmployeeId, title: title.trim(), description: description.trim() },
+        })
+        await reloadAi()
+        return { ok: true, id: data.id, confidence: data.confidence }
+      } catch (e) {
+        return { ok: false, error: apiErrorOf(e) }
+      }
+    }
     const emp = employeeById(aiEmployeeId)
     if (!emp) return { ok: false, error: { code: 'AKO-AIC-001', message: 'AI 社員が見つかりません' } }
     if (!title.trim()) return { ok: false, error: { code: 'AKO-AIC-002', message: '件名を入力してください' } }
 
-    const confidence = judgeConfidence(aiEmployeeId, title.trim(), description)
+    const confidence = judgeTaskConfidence(aiEmployeeId, title.trim(), description)
     const id = nextId('aiTasks', 'at')
     aiTasks.value = [...aiTasks.value, {
       id,
@@ -191,7 +216,7 @@ export function useAiCompany() {
       requesterId: currentUser.value.id,
       title: title.trim(),
       description: description.trim(),
-      decomposition: decompose(title, description),
+      decomposition: decomposeTask(title, description),
       status: 'proposed',
       dueDate: null,
       confidence,
@@ -214,8 +239,16 @@ export function useAiCompany() {
     return { ok: true, id, confidence }
   }
 
+  /** タスクの状態遷移（API モード共通。サーバーが状態機械・ログ・通知・status 同期を担う） */
+  async function transitionApi(taskId: string, action: 'approve' | 'progress' | 'block' | 'cancel'): Promise<Result> {
+    const res = await apiResult(() => apiFetch(`/v1/ai-company/tasks/${taskId}/${action}`, { method: 'POST' }))
+    if (res.ok) await reloadAi()
+    return res
+  }
+
   /** 分解案を承認して実行開始（proposed → approved → 即 in_progress） */
-  function approveTask(taskId: string): Result {
+  async function approveTask(taskId: string): Promise<Result> {
+    if (isApi) return transitionApi(taskId, 'approve')
     const task = aiTasks.value.find(t => t.id === taskId)
     if (!task) return { ok: false, error: { code: 'AKO-AIC-003', message: 'タスクが見つかりません' } }
     if (task.status !== 'proposed') {
@@ -229,7 +262,8 @@ export function useAiCompany() {
   }
 
   /** 実行を 1 ステップ進める。全ステップ完了で done + 完了報告 + 依頼者へ通知 */
-  function progressTask(taskId: string): Result {
+  async function progressTask(taskId: string): Promise<Result> {
+    if (isApi) return transitionApi(taskId, 'progress')
     const task = aiTasks.value.find(t => t.id === taskId)
     if (!task) return { ok: false, error: { code: 'AKO-AIC-003', message: 'タスクが見つかりません' } }
     if (task.status !== 'in_progress') {
@@ -261,7 +295,8 @@ export function useAiCompany() {
   }
 
   /** ブロック ↔ 実行中 のトグル */
-  function blockTask(taskId: string): Result {
+  async function blockTask(taskId: string): Promise<Result> {
+    if (isApi) return transitionApi(taskId, 'block')
     const task = aiTasks.value.find(t => t.id === taskId)
     if (!task) return { ok: false, error: { code: 'AKO-AIC-003', message: 'タスクが見つかりません' } }
     if (task.status === 'in_progress') {
@@ -279,7 +314,8 @@ export function useAiCompany() {
   }
 
   /** タスクを中止する（done/cancelled 以外から遷移可） */
-  function cancelTask(taskId: string): Result {
+  async function cancelTask(taskId: string): Promise<Result> {
+    if (isApi) return transitionApi(taskId, 'cancel')
     const task = aiTasks.value.find(t => t.id === taskId)
     if (!task) return { ok: false, error: { code: 'AKO-AIC-003', message: 'タスクが見つかりません' } }
     if (task.status === 'done' || task.status === 'cancelled') {
@@ -295,7 +331,19 @@ export function useAiCompany() {
    * 指定日の活動ログを AI 社員ごとに集約し、日次報告を UPSERT する。
    * 既存（同一 AI × 同一日）はスキップ = 冪等（再実行で既存報告を巻き戻さない）。
    */
-  function generateDailyReports(date: string): { created: number; skipped: number } {
+  async function generateDailyReports(date: string): Promise<{ created: number; skipped: number }> {
+    if (isApi) {
+      try {
+        const data = await apiFetch<{ created: number; skipped: number }>('/v1/ai-company/daily-reports', {
+          method: 'POST', body: { date },
+        })
+        // 生成された AI 日報を全員の日報キャッシュへ反映（SoT → キャッシュ。原則6）
+        if (data.created > 0) await reloadAllMonth(date.slice(0, 7))
+        return data
+      } catch {
+        return { created: 0, skipped: 0 } // 画面は「生成対象なし」を表示（原則4）
+      }
+    }
     const dayLogs = aiActivityLogs.value.filter(l => l.at.slice(0, 10) === date)
     const byEmp = new Map<string, AiActivityLog[]>()
     for (const l of dayLogs) {
@@ -359,8 +407,14 @@ export function useAiCompany() {
    * 補助処理のため例外は握りつぶし、呼び出し元（画面表示）をブロックしない。
    */
   async function evaluateWorkloadSignals(): Promise<{ raised: number }> {
-    // AI カンパニーはモック実装（バッチ4）のため、API モードでは実データへ起票しない
-    if (useApiMode()) return { raised: 0 }
+    if (isApi) {
+      // サーバーが停滞・過負荷を判定して起票する（クールダウン冪等。失敗は握りつぶし = 補助処理）
+      try {
+        return await apiFetch<{ raised: number }>('/v1/ai-company/workload-check', { method: 'POST' })
+      } catch {
+        return { raised: 0 }
+      }
+    }
     let raised = 0
     try {
       const stalledThreshold = escalationRules.value.find(r => r.key === 'stalled_task')?.threshold ?? 3

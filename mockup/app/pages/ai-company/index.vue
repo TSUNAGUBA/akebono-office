@@ -55,14 +55,14 @@ const proposedTaskId = ref<string | null>(null)
 const proposedTask = computed<AiTask | undefined>(() =>
   proposedTaskId.value ? tasks.value.find(t => t.id === proposedTaskId.value) : undefined)
 
-function submitRequest(): void {
+async function submitRequest(): Promise<void> {
   reqError.value = ''
   if (!selectedEmpId.value) return
   if (!reqTitle.value.trim()) {
     reqError.value = '件名を入力してください'
     return
   }
-  const res = requestTask(selectedEmpId.value, reqTitle.value, reqDesc.value)
+  const res = await requestTask(selectedEmpId.value, reqTitle.value, reqDesc.value)
   if (!res.ok) {
     show(res.error.message, 'warn')
     return
@@ -75,9 +75,9 @@ function submitRequest(): void {
   }
 }
 
-function approveProposal(): void {
+async function approveProposal(): Promise<void> {
   if (!proposedTaskId.value) return
-  const res = approveTask(proposedTaskId.value)
+  const res = await approveTask(proposedTaskId.value)
   if (!res.ok) {
     show(res.error.message, 'warn')
     return
@@ -97,13 +97,13 @@ const tabs = computed(() => [
   { key: 'daily', label: '日次報告' },
 ])
 
-function onApprove(taskId: string): void {
-  const res = approveTask(taskId)
+async function onApprove(taskId: string): Promise<void> {
+  const res = await approveTask(taskId)
   show(res.ok ? '承認しました。実行を開始します' : res.error.message, res.ok ? 'ok' : 'warn')
 }
 
-function onProgress(taskId: string): void {
-  const res = progressTask(taskId)
+async function onProgress(taskId: string): Promise<void> {
+  const res = await progressTask(taskId)
   if (!res.ok) {
     show(res.error.message, 'warn')
     return
@@ -116,9 +116,9 @@ function onProgress(taskId: string): void {
   }
 }
 
-function onBlock(taskId: string): void {
+async function onBlock(taskId: string): Promise<void> {
   const before = tasks.value.find(t => t.id === taskId)?.status
-  const res = blockTask(taskId)
+  const res = await blockTask(taskId)
   if (!res.ok) {
     show(res.error.message, 'warn')
     return
@@ -130,7 +130,7 @@ async function onCancel(taskId: string): Promise<void> {
   const task = tasks.value.find(t => t.id === taskId)
   const okAsk = await ask('タスクの中止', `「${task?.title ?? taskId}」を中止しますか？`, { confirmLabel: '中止する', danger: true })
   if (!okAsk) return
-  const res = cancelTask(taskId)
+  const res = await cancelTask(taskId)
   show(res.ok ? 'タスクを中止しました' : res.error.message, res.ok ? 'ok' : 'warn')
 }
 
@@ -139,8 +139,8 @@ async function onCancel(taskId: string): Promise<void> {
 const reportDate = ref(todayJst())
 const aiReports = computed(() => aiReportsOn(reportDate.value))
 
-function onGenerateReports(): void {
-  const { created, skipped } = generateDailyReports(reportDate.value)
+async function onGenerateReports(): Promise<void> {
+  const { created, skipped } = await generateDailyReports(reportDate.value)
   if (created === 0 && skipped === 0) {
     show('この日の AI 活動ログがないため、生成対象がありません', 'warn')
     return

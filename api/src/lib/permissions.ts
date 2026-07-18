@@ -60,6 +60,7 @@ const PATH_FEATURES: [string, string][] = [
   ['/v1/calendar', 'ai-assistant'],
   ['/v1/decisions', 'decision'],
   ['/v1/chatbot', 'chatbot'],
+  ['/v1/ai-company', 'ai-company'],
 ]
 
 /** 機能単位の利用ガード（authMiddleware の後段。deny は AKO-PRM-001 403） */

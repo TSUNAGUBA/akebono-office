@@ -232,6 +232,22 @@ const schemas = {
     active: z.boolean().default(true),
   }),
   'permission-rules': permissionRuleBase.superRefine(permissionSubjectCheck),
+  'ai-roles': z.object({
+    name: z.string().trim().min(1, 'ロール名は必須です'),
+    mission: z.string().default(''),
+    systemPrompt: z.string().default(''),
+    permissions: z.array(z.string()).default([]),
+    modelTier: z.enum(['lite', 'standard', 'pro']).default('standard'),
+    active: z.boolean().default(true),
+  }),
+  'ai-employees': z.object({
+    name: z.string().trim().min(1, '名前は必須です'),
+    roleId: z.string().trim().min(1, 'ロールを指定してください'),
+    // status はタスク状態からの派生値（/v1/ai-company がタスク操作時に同期）。マスタからは初期値のみ
+    status: z.enum(['idle', 'working', 'waiting_approval']).default('idle'),
+    deskPosition: z.object({ x: z.number().int(), y: z.number().int() }).default({ x: 1, y: 1 }),
+    active: z.boolean().default(true),
+  }),
 } as const
 
 export type MasterEntity = keyof typeof schemas
@@ -271,6 +287,8 @@ export const MASTERS: Record<MasterEntity, MasterDef> = {
   'attendance-rules': { table: 'attendance_rules', idPrefix: 'ar', schema: schemas['attendance-rules'], patchSchema: schemas['attendance-rules'].partial(), jsonbFields: ['appliesTo', 'defaultFor', 'flex'] },
   'workflow-routes': { table: 'workflow_routes', idPrefix: 'wr', schema: schemas['workflow-routes'], patchSchema: workflowRouteBase.partial(), jsonbFields: ['steps'] },
   'decision-themes': { table: 'decision_themes', idPrefix: 'dt', schema: schemas['decision-themes'], patchSchema: schemas['decision-themes'].partial(), jsonbFields: ['semantics', 'links', 'actions', 'options', 'scenarioParams'] },
+  'ai-roles': { table: 'ai_roles', idPrefix: 'r', schema: schemas['ai-roles'], patchSchema: schemas['ai-roles'].partial(), jsonbFields: ['permissions'] },
+  'ai-employees': { table: 'ai_employees', idPrefix: 'ai', schema: schemas['ai-employees'], patchSchema: schemas['ai-employees'].partial(), jsonbFields: ['deskPosition'] },
 }
 
 export function camelToSnake(s: string): string {

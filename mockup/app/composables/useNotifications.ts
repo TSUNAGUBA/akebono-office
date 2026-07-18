@@ -37,8 +37,9 @@ function startPolling(): void {
   }, POLL_INTERVAL_MS)
 }
 
-// ログイン確立・切替時に取り直す（ログアウト起点の reset は未認証のため取得しない）
+// ログイン確立・切替時に取り直す（ログアウト起点の reset は未認証のため取得せず、値のクリアのみ）
 onApiReset(() => {
+  apiNotes.value = []
   notesLoaded = false
   if (useApiMe().value) void loadNotifications(true)
 })

@@ -1,8 +1,8 @@
 /**
- * チャットボット応答 API（F-09-3）。mockup useChatbot の LLM 一次応答レイヤ。
+ * チャットボット応答 API（F-09-2）。mockup useChatbot の LLM 一次応答レイヤ。
  * - 一次応答: Vertex AI（構造化出力）。サーバーが DB の全移行済みドメイン
  *   （勤怠・有給・日報・ワークフロー・シフト・意思決定・タスク計画・カレンダー・エスカレーション・
- *   メンバー/部署・顧客・プロジェクト・ナレッジ）を文脈化して回答（バッチ5d・オペレーター指示 2026-07-17）
+ *   メンバー/部署・顧客・プロジェクト・ナレッジ・AI カンパニー）を文脈化して回答（バッチ5d/6a・オペレーター指示 2026-07-17）
  * - 参照範囲は権限（F-16）に従う: ドメインごとに canUseFeature で文脈生成の可否を判定し、
  *   マスタ由来の文脈は stripDeniedFields で表示項目レベルの deny を反映する（5c の共有ロジックを再利用）
  * - 本人スコープ（C3）は維持: 勤怠・有給・シフト・タスク計画・カレンダー・エスカレーションは本人分のみ。
@@ -89,10 +89,12 @@ export async function buildContext(
     }
   }
 
-  // 質問に含まれる人名の照合（フルネーム・空白除去・2 文字以上の名前パーツ。ORDER BY id で決定的）
+  // 質問に含まれる人名の照合（フルネーム・空白除去・「◯◯さん/氏」形の名前パーツ。ORDER BY id で決定的）。
+  // パーツ単独の照合は敬称付きに限定する（「勤怠管理」→ メンバー「管理 太郎」のような一般語との偽ヒット防止）
   const nameHit = (name: string): boolean =>
     !!name && (question.includes(name) || question.includes(name.replace(/\s+/g, ''))
-      || name.split(/\s+/).some(p => p.length >= 2 && question.includes(p)))
+      || name.split(/\s+/).some(p =>
+        p.length >= 2 && (question.includes(`${p}さん`) || question.includes(`${p}氏`))))
 
   // 有給・当月勤怠（本人分のみ = C3 保護。残数は leave ドメインの SoT 計算を再利用 = 原則3）
   if (can('attendance') && /有給|休暇|残業|勤怠|労働|打刻/.test(question)) {
@@ -141,15 +143,17 @@ export async function buildContext(
        FROM members WHERE active = true ORDER BY id LIMIT 300`)
     const matched = memberRows.find(m => nameHit(m.name))
     if (!matched) return
+    // 見出しにも剥がし後の値を使う（name の field deny 時は本人を特定できないためブロックごと出さない）
     const [m] = strip('members', [matched])
-    if (!m) return
+    if (!m?.name) return
+    const displayName = String(m.name)
     let deptName = ''
     if (m.departmentId) {
       const { rows: deps } = await pool.query<{ name: string }>(
         `SELECT name FROM departments WHERE id = $1`, [String(m.departmentId)])
       deptName = deps[0]?.name ?? ''
     }
-    parts.push(`## メンバー「${matched.name}」
+    parts.push(`## メンバー「${displayName}」
 部署 ${deptName || '未所属'} / 役職 ${String(m.title ?? '') || 'なし'}${m.email ? ` / メール ${String(m.email)}` : ''}`)
     // 他メンバーの日報は提出済みのみ（全員の日報タブ = scope=all と同じ基準）
     if (can('reports') && matched.id !== user.id) {
@@ -158,7 +162,7 @@ export async function buildContext(
          WHERE author_kind = 'human' AND member_id = $1 AND status = 'submitted'
          ORDER BY date DESC LIMIT 3`, [matched.id])
       if (rows.length > 0) {
-        parts.push(`## ${matched.name} さんの日報（提出済みのみ）\n${rows.map(r =>
+        parts.push(`## ${displayName} さんの日報（提出済みのみ）\n${rows.map(r =>
           `- ${r.date} ${entriesSummary(r.entries) || '—'}${r.issues ? '・課題あり' : ''}`).join('\n')}`)
       }
     }
@@ -171,7 +175,7 @@ export async function buildContext(
         `SELECT id, title, status, amount::text AS amount FROM workflow_requests
          WHERE requester_id = $1 ORDER BY updated_at DESC LIMIT 5`, [user.id])
       if (rows.length > 0) {
-        parts.push(`## 本人の稟議・申請\n${rows.map(w => `- ${w.id}「${w.title}」: ${w.status}（${w.amount} 円）`).join('\n')}`)
+        parts.push(`## 本人の稟議・申請\n${rows.map(w => `- ${w.id}「${capCp(w.title, 60)}」: ${w.status}（${w.amount} 円）`).join('\n')}`)
       }
     })
     parts.push(`## 稟議・申請ガイド
@@ -217,22 +221,41 @@ export async function buildContext(
         `SELECT from_time AS "from", to_time AS "to", title FROM calendar_events
          WHERE member_id = $1 AND date = $2::date ORDER BY from_time LIMIT 10`, [user.id, today])
       const lines = [
-        ...events.map(e => `- 予定 ${e.from}〜${e.to}「${e.title}」`),
-        ...plans.map(p => `- タスク「${p.title}」: ${p.status === 'done' ? `完了（${capCp(p.outcome, 40)}）` : '計画中'}`),
+        ...events.map(e => `- 予定 ${e.from}〜${e.to}「${capCp(e.title, 60)}」`),
+        ...plans.map(p => `- タスク「${capCp(p.title, 60)}」: ${p.status === 'done' ? `完了（${capCp(p.outcome, 40)}）` : '計画中'}`),
       ]
       if (lines.length > 0) parts.push(`## 本人の本日の予定・タスク計画（${today}）\n${lines.join('\n')}`)
     })
   }
 
-  // エスカレーション（本人が対象のもの。データ面 = 機能ガード対象外）
+  // エスカレーション（本人が対象 かつ 本人の日報課題由来 = issue_reported のみ。
+  // 他者起票（overload/stalled 等）の context は管理者向け内部メモを含み得るため、
+  // GET /v1/escalations（管理者のみ）の可視性から逸脱しない範囲に限定する）
   if (/課題|エスカレ|困り/.test(question)) {
     await block(async () => {
       const { rows } = await pool.query<{ context: string; raisedAt: string }>(
         `SELECT context, raised_at AS "raisedAt" FROM escalations
-         WHERE target_member_id = $1 AND status = 'open' ORDER BY raised_at DESC LIMIT 3`, [user.id])
+         WHERE target_member_id = $1 AND status = 'open' AND reason = 'issue_reported'
+         ORDER BY raised_at DESC LIMIT 3`, [user.id])
       if (rows.length > 0) {
         parts.push(`## 本人に関する対応中エスカレーション\n${rows.map(e => `- ${capCp(e.context, 100)}（${e.raisedAt.slice(0, 10)}）`).join('\n')}`)
       }
+    })
+  }
+
+  // AI カンパニー（タスクボードの状況。バッチ6a で移行済みドメイン）
+  if (can('ai-company') && /AI ?社員|AI ?カンパニー|AI ?タスク/.test(question)) {
+    await block(async () => {
+      const { rows } = await pool.query<{ title: string; status: string; empName: string }>(
+        `SELECT t.title, t.status, e.name AS "empName"
+         FROM ai_tasks t JOIN ai_employees e ON e.id = t.ai_employee_id
+         ORDER BY t.created_at DESC LIMIT 8`)
+      if (rows.length === 0) return
+      const label: Record<string, string> = {
+        proposed: '承認待ち', approved: '承認済', in_progress: '実行中', blocked: 'ブロック中', done: '完了', cancelled: '中止',
+      }
+      parts.push(`## AI カンパニーのタスク（/ai-company）\n${rows.map(t =>
+        `- ${t.empName}「${capCp(t.title, 60)}」: ${label[t.status] ?? t.status}`).join('\n')}`)
     })
   }
 
@@ -243,14 +266,16 @@ export async function buildContext(
        WHERE kind = 'customer' AND active = true ORDER BY id LIMIT 100`)
     const company = companies.find(c => [c.name, ...c.aliases].some(n => n && q.includes(n.toLowerCase())))
     if (!company) return
+    // 見出しにも剥がし後の値を使う（name deny 時はブロックごと出さない）
     const [cs] = strip('companies', [company])
+    if (!cs?.name) return
     const { rows: ks } = await pool.query<{ id: string; title: string; body: string }>(
       `SELECT id, title, body FROM knowledge_articles
        WHERE active = true AND domain = 'company' AND target_id = $1 LIMIT 3`, [company.id])
     const { rows: pjs } = await pool.query<{ name: string; status: string }>(
       `SELECT name, status FROM projects WHERE active = true AND company_id = $1 LIMIT 5`, [company.id])
-    parts.push(`## 顧客「${company.name}」
-${String(cs?.description ?? '')}（${String(cs?.location ?? '')}・規模 ${String(cs?.size ?? '')}）
+    parts.push(`## 顧客「${String(cs.name)}」
+${String(cs.description ?? '')}（${String(cs.location ?? '')}・規模 ${String(cs.size ?? '')}）
 プロジェクト: ${pjs.map(p => `${p.name}（${p.status}）`).join(' / ') || 'なし'}
 ${strip('knowledge', ks).map(k => `ナレッジ「${String(k.title ?? '')}」(${k.id}): ${capCp(String(k.body ?? ''), 200)}`).join('\n')}`)
   })
@@ -262,11 +287,12 @@ ${strip('knowledge', ks).map(k => `ナレッジ「${String(k.title ?? '')}」(${
        FROM contacts WHERE active = true ORDER BY id LIMIT 300`)
     const matched = contacts.find(p => nameHit(p.name))
     if (!matched) return
+    // 見出しにも剥がし後の値を使う（name deny 時はブロックごと出さない）
     const [p] = strip('contacts', [matched])
-    if (!p) return
+    if (!p?.name) return
     const { rows: comp } = await pool.query<{ name: string }>(
       `SELECT name FROM companies WHERE id = $1`, [matched.companyId])
-    parts.push(`## 顧客担当者「${matched.name}」
+    parts.push(`## 顧客担当者「${String(p.name)}」
 所属 ${comp[0]?.name ?? '不明'}${p.dept ? ` ${String(p.dept)}` : ''} / 役職 ${String(p.title ?? '') || 'なし'}${
   p.keyPerson ? ` / キーパーソン度 ${String(p.keyPerson)}` : ''}${p.email ? ` / メール ${String(p.email)}` : ''}`)
   })
@@ -277,9 +303,11 @@ ${strip('knowledge', ks).map(k => `ナレッジ「${String(k.title ?? '')}」(${
       const { rows } = await pool.query<Record<string, unknown> & { id: string; name: string; companyId: string | null }>(
         `SELECT id, name, status, company_id AS "companyId" FROM projects WHERE active = true ORDER BY id LIMIT 10`)
       if (rows.length === 0) return
-      const { rows: comps } = await pool.query<{ id: string; name: string }>(
+      const { rows: comps } = await pool.query<Record<string, unknown> & { id: string }>(
         `SELECT id, name FROM companies ORDER BY id LIMIT 200`)
-      const compName = new Map(comps.map(c => [c.id, c.name]))
+      // 会社名の参照にも companies の表示項目 deny を反映する
+      const compName = new Map(strip('companies', comps)
+        .filter(c => c.name).map(c => [c.id, String(c.name)]))
       const stripped = strip('projects', rows)
       parts.push(`## プロジェクト一覧\n${stripped.map(p =>
         `- ${String(p.name ?? '')}（${String(p.status ?? '')}${p.companyId ? `・${compName.get(String(p.companyId)) ?? ''}` : ''}）`).join('\n')}`)
