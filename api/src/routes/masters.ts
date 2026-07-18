@@ -165,7 +165,7 @@ export function mastersRoutes(pool: pg.Pool): Hono {
       client.release()
     }
     await audit(pool, { actorId: user.id, action: 'create', entity: def.table, entityId: id, detail: `${entity} を追加` })
-    if (entity === 'permission-rules') clearPermissionCache() // 権限キャッシュを即時反映
+    if (entity === 'permission-rules') clearPermissionCache() // 権限キャッシュをクリア（同一インスタンスは即時・他インスタンスは TTL 10 秒で追随）
     const { rows } = await pool.query(`SELECT * FROM ${def.table} WHERE id = $1`, [id])
     return c.json({ data: rowToCamel(rows[0]) }, 201)
   })
@@ -220,7 +220,7 @@ export function mastersRoutes(pool: pg.Pool): Hono {
       client.release()
     }
     await audit(pool, { actorId: user.id, action: 'update', entity: def.table, entityId: id, detail: `${entity} を更新` })
-    if (entity === 'permission-rules') clearPermissionCache() // 権限キャッシュを即時反映
+    if (entity === 'permission-rules') clearPermissionCache() // 権限キャッシュをクリア（同一インスタンスは即時・他インスタンスは TTL 10 秒で追随）
     const { rows } = await pool.query(`SELECT * FROM ${def.table} WHERE id = $1`, [id])
     return c.json({ data: rowToCamel(rows[0]) })
   })
@@ -237,7 +237,7 @@ export function mastersRoutes(pool: pg.Pool): Hono {
       `UPDATE ${def.table} SET active = false, updated_at = now() WHERE id = $1`, [id])
     if (result.rowCount === 0) throw err('AKO-GEN-002', '対象が見つかりません', 404)
     await audit(pool, { actorId: user.id, action: 'archive', entity: def.table, entityId: id, detail: `${entity} を無効化` })
-    if (entity === 'permission-rules') clearPermissionCache() // 権限キャッシュを即時反映
+    if (entity === 'permission-rules') clearPermissionCache() // 権限キャッシュをクリア（同一インスタンスは即時・他インスタンスは TTL 10 秒で追随）
     return c.json({ data: { id } })
   })
 
@@ -250,7 +250,7 @@ export function mastersRoutes(pool: pg.Pool): Hono {
       `UPDATE ${def.table} SET active = true, updated_at = now() WHERE id = $1`, [id])
     if (result.rowCount === 0) throw err('AKO-GEN-002', '対象が見つかりません', 404)
     await audit(pool, { actorId: user.id, action: 'restore', entity: def.table, entityId: id, detail: `${entity} を再有効化` })
-    if (entity === 'permission-rules') clearPermissionCache() // 権限キャッシュを即時反映
+    if (entity === 'permission-rules') clearPermissionCache() // 権限キャッシュをクリア（同一インスタンスは即時・他インスタンスは TTL 10 秒で追随）
     return c.json({ data: { id } })
   })
 

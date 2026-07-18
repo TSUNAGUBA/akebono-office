@@ -22,7 +22,11 @@ import { err } from './errors'
 const RULE_COLS = `id, subject_kind AS "subjectKind", subject_id AS "subjectId",
   resource, field, effect, active`
 
-/** ルールの短期キャッシュ（ハイドレーションのバースト対策。変更時は clearPermissionCache） */
+/**
+ * ルールの短期キャッシュ（ハイドレーションのバースト対策。変更時は clearPermissionCache）。
+ * クリアはプロセスローカル: Cloud Run の複数インスタンス構成では他インスタンスは
+ * TTL 経過（最大 10 秒）で追随する。権限変更の伝播遅延として許容する設計判断。
+ */
 let cache: { at: number; rules: PermissionRule[] } | null = null
 const CACHE_TTL_MS = 10_000
 
@@ -32,8 +36,10 @@ export function clearPermissionCache(): void {
 
 export async function activePermissionRules(pool: pg.Pool): Promise<PermissionRule[]> {
   if (cache && Date.now() - cache.at < CACHE_TTL_MS) return cache.rules
+  // LIMIT を付けない: 部分ロードは deny ルールの無音欠落（fail-open）になる。
+  // 管理者が手動管理する小規模テーブルであり全件ロードが安全側
   const { rows } = await pool.query<PermissionRule>(
-    `SELECT ${RULE_COLS} FROM permission_rules WHERE active = true LIMIT 500`)
+    `SELECT ${RULE_COLS} FROM permission_rules WHERE active = true`)
   cache = { at: Date.now(), rules: rows }
   return rows
 }

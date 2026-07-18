@@ -1191,4 +1191,27 @@ describe('権限制御（F-16）', () => {
     const restored = (await api('GET', '/v1/masters/members', { as: MEMBER })).json.data as { email?: string }[]
     expect(restored.some(m => typeof m.email === 'string')).toBe(true)
   })
+
+  it('subjectKind と subjectId のペア整合を検証する（不整合ルールの登録を防ぐ）', async () => {
+    // ロール層の対象は admin / hr / member のみ
+    const badRole = await api('POST', '/v1/masters/permission-rules', {
+      as: ADMIN, body: { subjectKind: 'role', subjectId: 'ceo', resource: 'decision', effect: 'deny' },
+    })
+    expect(badRole.status).toBe(400)
+    // PATCH で subjectKind だけを変えるとペアが崩れるため拒否（subjectId と同時指定が必要）
+    const created = await api('POST', '/v1/masters/permission-rules', {
+      as: ADMIN, body: { subjectKind: 'role', subjectId: 'member', resource: 'decision', effect: 'allow' },
+    })
+    expect(created.status).toBe(201)
+    const id = (created.json.data as { id: string }).id
+    const badPatch = await api('PATCH', `/v1/masters/permission-rules/${id}`, {
+      as: ADMIN, body: { subjectKind: 'title' },
+    })
+    expect(badPatch.status).toBe(400)
+    const goodPatch = await api('PATCH', `/v1/masters/permission-rules/${id}`, {
+      as: ADMIN, body: { subjectKind: 'member', subjectId: MEMBER },
+    })
+    expect(goodPatch.status).toBe(200)
+    expect((await api('POST', `/v1/masters/permission-rules/${id}/archive`, { as: ADMIN })).status).toBe(200)
+  })
 })
