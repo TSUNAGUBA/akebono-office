@@ -1679,7 +1679,7 @@ describe('提供システム稼働状況（F-11・バッチ6c）', () => {
     })).json.error?.code).toBe('AKO-STS-002')
     expect((await api('POST', '/v1/status/incidents', {
       as: ADMIN, body: { serviceId: 'svc-01', title: 'x', impact: 'huge' },
-    })).json.error?.code).toBe('AKO-STS-001')
+    })).json.error?.code).toBe('AKO-STS-006')
 
     const created = await api('POST', '/v1/status/incidents', {
       as: ADMIN,

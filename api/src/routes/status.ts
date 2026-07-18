@@ -10,7 +10,7 @@
  *   フロントの表示射影はモックと共通のまま）
  * - 登録・状況更新は管理者のみ。成功後の管理者通知は非ブロッキング（原則4）
  * エラー: AKO-STS-001（サービスなし）/ 002（タイトル未入力）/ 003（インシデントなし）/
- *         004（正順以外の遷移）/ 005（状況説明未入力）
+ *         004（正順以外の遷移）/ 005（状況説明未入力）/ 006（影響度不正）
  */
 import { Hono } from 'hono'
 import type pg from 'pg'
@@ -67,8 +67,12 @@ export async function recomputeUptime(
         `DELETE FROM uptime_daily WHERE service_id = $1 AND date BETWEEN $2::date AND $3::date`,
         [svc.id, fromDate, toDate])
       for (const d of days) {
+        // 並行再計算（イベント × 日次ジョブ × 手動）で DELETE が他 Tx の新規行を見ない場合に備え
+        // upsert にする（先勝ち・後勝ちいずれも SoT からの導出値のため同値 = 冪等）
         await client.query(
-          `INSERT INTO uptime_daily (service_id, date, down_minutes, worst_state) VALUES ($1, $2, $3, $4)`,
+          `INSERT INTO uptime_daily (service_id, date, down_minutes, worst_state) VALUES ($1, $2, $3, $4)
+           ON CONFLICT (service_id, date) DO UPDATE
+           SET down_minutes = EXCLUDED.down_minutes, worst_state = EXCLUDED.worst_state`,
           [d.serviceId, d.date, d.downMinutes, d.worstState])
       }
       total += days.length
@@ -130,7 +134,7 @@ export function statusRoutes(pool: pg.Pool): Hono {
     const svc = svcRows[0]
     if (!svc) throw err('AKO-STS-001', '対象サービスが見つかりません', 404)
     if (!title) throw err('AKO-STS-002', 'タイトルを入力してください', 400)
-    if (!IMPACTS.has(impact)) throw err('AKO-STS-001', '影響度が不正です', 400)
+    if (!IMPACTS.has(impact)) throw err('AKO-STS-006', '影響度が不正です（minor / major / critical）', 400)
     const now = nowJstIso()
     const id = newId('inc')
     const updates = [{
@@ -163,10 +167,15 @@ export function statusRoutes(pool: pg.Pool): Hono {
 
     const client = await pool.connect()
     let serviceId = ''
+    let serviceName = ''
     try {
       await client.query('BEGIN')
-      const { rows } = await client.query<{ serviceId: string; status: IncidentStatus }>(
-        `SELECT service_id AS "serviceId", status FROM service_incidents WHERE id = $1 FOR UPDATE`,
+      // サービス名も同一トランザクションで取得する（コミット後の補助クエリ失敗で
+      // 「更新は成立したのに 500」となる経路を作らない = 原則4）
+      const { rows } = await client.query<{ serviceId: string; status: IncidentStatus; serviceName: string }>(
+        `SELECT i.service_id AS "serviceId", i.status, s.name AS "serviceName"
+         FROM service_incidents i JOIN system_services s ON s.id = i.service_id
+         WHERE i.id = $1 FOR UPDATE OF i`,
         [incidentId])
       const target = rows[0]
       if (!target) throw err('AKO-STS-003', 'インシデントが見つかりません', 404)
@@ -187,6 +196,7 @@ export function statusRoutes(pool: pg.Pool): Hono {
         [incidentId, nextStatus, now, JSON.stringify([{ status: nextStatus, body: note, at: now }])])
       await client.query('COMMIT')
       serviceId = target.serviceId
+      serviceName = target.serviceName
     } catch (e) {
       await client.query('ROLLBACK').catch(() => {})
       throw e
@@ -200,10 +210,8 @@ export function statusRoutes(pool: pg.Pool): Hono {
     } catch (e) {
       console.warn('uptime recompute failed (non-blocking):', (e as Error).message)
     }
-    const { rows: svcRows } = await pool.query<{ name: string }>(
-      `SELECT name FROM system_services WHERE id = $1`, [serviceId])
     await notifyAdmins(pool, 'system',
-      `インシデント更新: ${svcRows[0]?.name ?? serviceId}（${STATUS_LABELS[nextStatus]}）`,
+      `インシデント更新: ${serviceName}（${STATUS_LABELS[nextStatus]}）`,
       note, `/status/${serviceId}`)
     return c.json({ data: { id: incidentId } })
   })
