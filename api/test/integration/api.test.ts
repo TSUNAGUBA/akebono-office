@@ -1266,6 +1266,9 @@ describe('チャットボット文脈の供給網羅（オペレーター報告 
     await api('POST', '/v1/masters/external-links', {
       as: ADMIN, body: { title: '勤怠システム', url: 'https://example.com/kintai', description: '打刻ポータル' },
     })
+    await api('POST', '/v1/masters/projects', {
+      as: ADMIN, body: { name: '文脈PJ', companyId: custId, type: 'development', status: 'active' },
+    })
     const dep = await api('POST', '/v1/masters/departments', { as: ADMIN, body: { name: '文脈開発部' } })
     await api('PATCH', `/v1/masters/members/${MEMBER}`, {
       as: ADMIN, body: { departmentId: (dep.json.data as { id: string }).id },
@@ -1280,6 +1283,7 @@ describe('チャットボット文脈の供給網羅（オペレーター報告 
     expect(ctx).toContain('先方担当者: 文脈 花子（購買部長）')
     expect(ctx).toContain('会社間の関係:')
     expect(ctx).toContain('ツナグバ本社: 販売代理店（主要取引）')
+    expect(ctx).toContain('プロジェクト: 文脈PJ（active）')
     // 別名（aliases）でも照合できる
     expect(await buildContext(pool, adminUser, 'シーティーエックスの業界は？', [])).toContain('業界: アパレル（主）')
   })
@@ -1374,6 +1378,18 @@ describe('チャットボット文脈の供給網羅（オペレーター報告 
       deny('pm-aux8', 'admin', 'departments', 'name'))
     expect(noDept).not.toContain('部署・組織')
     expect(noDept).toContain('部署 未所属')
+    // projects.name: 会社ブロックの関連プロジェクト名が消え「なし」へ縮退（一覧ブロックと同一パターン）
+    const noPj = await buildContext(pool, adminUser, 'CTX商事について教えて',
+      deny('pm-aux9', 'admin', 'projects', 'name'))
+    expect(noPj).toContain('顧客「CTX商事」')
+    expect(noPj).not.toContain('文脈PJ')
+    expect(noPj).toContain('プロジェクト: なし')
+    // decision-themes.category deny: 種別括弧が既定値（PJ）で捏造表示されず省略される
+    const noCat = await buildContext(pool, memberUser, '意思決定のテーマを教えて',
+      deny('pm-aux10', 'member', 'decision-themes', 'category'))
+    expect(noCat).toContain('意思決定支援')
+    expect(noCat).not.toContain('(PJ)')
+    expect(noCat).not.toContain('(事業)')
   })
 })
 

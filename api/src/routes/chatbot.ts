@@ -267,7 +267,7 @@ export async function buildContext(
       if (shownThemes.length === 0) return
       const shownLogs = canField('decision-themes', 'title') ? logs : []
       parts.push(`## 意思決定支援（/decision）
-テーマ: ${shownThemes.map(t => `「${t.title}」(${t.category === 'business' ? '事業' : 'PJ'})`).join(' / ')}${
+テーマ: ${shownThemes.map(t => `「${t.title}」${t.category ? `(${t.category === 'business' ? '事業' : 'PJ'})` : ''}`).join(' / ')}${
   shownLogs.length > 0 ? `\n直近の判断: ${shownLogs.map(l => `「${l.themeTitle}」→ 案${l.chosenSlot}（${capCp(l.reason, 60)}）`).join(' / ')}` : ''}`)
     })
   }
@@ -468,9 +468,11 @@ export async function buildContext(
         .filter(Boolean)
       if (relLines.length > 0) lines.push(`会社間の関係: ${relLines.join(' / ')}`)
     }
-    const { rows: pjs } = await pool.query<{ name: string; status: string }>(
+    // プロジェクト名にも projects の表示項目 deny を反映（プロジェクト一覧ブロックと同じパターン）
+    const { rows: pjRows } = await pool.query<{ name: string; status: string }>(
       `SELECT name, status FROM projects WHERE active = true AND company_id = $1 LIMIT 5`, [company.id])
-    lines.push(`プロジェクト: ${pjs.map(p => `${p.name}（${p.status}）`).join(' / ') || 'なし'}`)
+    const pjs = strip('projects', pjRows).filter(p => p.name)
+    lines.push(`プロジェクト: ${pjs.map(p => `${p.name}${p.status ? `（${p.status}）` : ''}`).join(' / ') || 'なし'}`)
     const { rows: ks } = await pool.query<{ id: string; title: string; body: string }>(
       `SELECT id, title, body FROM knowledge_articles
        WHERE active = true AND domain = 'company' AND target_id = $1 LIMIT 3`, [company.id])
