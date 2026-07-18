@@ -34,6 +34,7 @@ export function useCurrentUser() {
         googleCalendarConnected: false,
         attendanceRuleId: null,
         birthDate: null,
+        avatar: me.value?.avatar ?? '',
         active: true,
         custom: {},
       } as unknown as Member

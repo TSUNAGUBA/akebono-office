@@ -10,6 +10,8 @@ export interface FbUser {
   uid: string
   email: string
   name: string
+  /** メール+パスワード認証のアカウントか（Google SSO のみのアカウントはパスワード変更対象外） */
+  hasPassword: boolean
 }
 
 let authInstance: Auth | null = null
@@ -54,7 +56,12 @@ export async function initFirebaseAuth(config: Record<string, unknown>, hooks: F
     onAuthStateChanged(authInstance, (user) => {
       // Firebase User は Proxy traverse 不可のため plain object へ変換して保持（規約）
       fbUser.value = user
-        ? { uid: user.uid, email: user.email ?? '', name: user.displayName ?? user.email ?? '' }
+        ? {
+            uid: user.uid,
+            email: user.email ?? '',
+            name: user.displayName ?? user.email ?? '',
+            hasPassword: user.providerData.some(p => p.providerId === 'password'),
+          }
         : null
       if (user) hooks.onSignIn()
       else hooks.onSignOut()
@@ -103,6 +110,33 @@ export async function signOutFirebase(): Promise<void> {
   if (!authInstance) return
   const { signOut } = await import('firebase/auth')
   await signOut(authInstance)
+}
+
+/**
+ * パスワード変更（メール+パスワード認証のアカウントのみ）。
+ * Firebase は直近ログインを要求するため、現在のパスワードで再認証してから更新する
+ */
+export async function changeFirebasePassword(
+  currentPassword: string,
+  newPassword: string,
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const user = authInstance?.currentUser
+  if (!user || !user.email) return { ok: false, message: 'サインインし直してから再度お試しください' }
+  try {
+    const { EmailAuthProvider, reauthenticateWithCredential, updatePassword } = await import('firebase/auth')
+    await reauthenticateWithCredential(user, EmailAuthProvider.credential(user.email, currentPassword))
+    await updatePassword(user, newPassword)
+    return { ok: true }
+  } catch (e) {
+    const code = (e as { code?: string }).code ?? ''
+    if (code.includes('invalid-credential') || code.includes('wrong-password')) {
+      return { ok: false, message: '現在のパスワードが正しくありません' }
+    }
+    if (code.includes('weak-password')) {
+      return { ok: false, message: '新しいパスワードが弱すぎます（6 文字以上にしてください）' }
+    }
+    return { ok: false, message: authErrorMessage(e) }
+  }
 }
 
 function authErrorMessage(e: unknown): string {

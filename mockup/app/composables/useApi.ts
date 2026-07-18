@@ -15,6 +15,8 @@ export interface ApiUser {
   name: string
   email: string
   role: MemberRole
+  /** プロフィール画像（data URI。空文字 = 未設定） */
+  avatar?: string
 }
 
 interface PublicApiConfig {

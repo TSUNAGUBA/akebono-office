@@ -197,7 +197,7 @@
 - [x] 検証: API 統合テスト 59（セッション管理を追加）/ 単体 19 / API モード実クリック E2E 13 スイート 117 チェック / モック回帰（ナビ + マスタ 4 + 日報 9 + 勤怠 5）/ typecheck（api・mockup）
 - [x] バッチ5c へ続く（§9 参照）
 
-## 9. 今回バッチ（5c: 権限制御基盤 F-16）の完了条件（Definition of Done）
+## 9. バッチ5c（PR #32・マージ済み）: 権限制御基盤 F-16 の完了条件（Definition of Done）
 
 - [x] permission_rules テーブル（0013・汎用マスタ基盤 = 管理者のみ変更・監査ログ・論理削除）+ 共有判定ロジック shared/domain/permissions.ts（個人 > 役職 > ロール・同一レイヤ拒否優先・未設定は許可）
 - [x] API: 機能ガード middleware（URL → 機能キー・deny は AKO-PRM-001 403・10 秒キャッシュ + 変更時クリア。クリアはプロセスローカルのため複数インスタンス時は他インスタンスが TTL 10 秒で追随 = 許容する設計判断）+ マスタ GET の表示項目剥がし。/v1/masters・configs・notifications・escalations はデータ面のためガード対象外（設計判断: 機能 deny でアプリ全体が壊れない）
@@ -205,4 +205,18 @@
 - [x] フロント: usePermissions（can/canPath/canField）・メニュー/ダッシュボードカード/モバイルナビ/業務支援ハブの非表示・ルートガード（permissions.global.ts）・権限設定ページ `/masters/permissions`（3 レイヤのルール CRUD）
 - [x] 検証: API 統合テスト 63（ロール deny 403・個人 allow 上書き・フィールド剥がし・復帰・subjectKind/subjectId ペア検証）/ 単体 19 / API モード実クリック E2E 14 スイート 124 チェック / モック回帰（ナビ + マスタ 4 + 日報 9 + 勤怠 5）/ typecheck（api・mockup）
 - [x] 独立レビュー第 1 巡の指摘対応: ヘッダーの打刻/通知導線を権限フィルタ + 滞在中 deny の再判定（layouts/default.vue の watchEffect）/ ルール全件ロード（LIMIT 撤去 = 部分ロードによる fail-open 防止）/ キャッシュ伝播（他インスタンス TTL 10 秒追随）の文書化 / subjectKind・subjectId ペア検証（registry superRefine）/ data-design §1.1・§1.2 に PermissionRule・DecisionTheme・ChatSession・ChatMessage を追記
+- [x] 独立レビュー第 2 巡: ブロッキング指摘ゼロで収束（軽微 2 件 = PATCH 保持アサート・data-design の SystemService 表崩れはバッチ5e で対応）
+
+## 10. 今回バッチ（5e: アカウント機能 + 日報 UX 改善・オペレーター指示 2026-07-17 の 8 件）の完了条件（Definition of Done）
+
+- [x] ① ログアウト: ヘッダーのアカウントメニューへ追加（API モード = Firebase signOut → /v1/me キャッシュ破棄 → /login）
+- [x] ② API モードのデモユーザー切替を除去: アカウントメニューへ置換（モックモードのみデモ切替を残す = デモ機能）
+- [x] ③ プロフィール/個人設定ページ `/profile`: アイコン画像の登録・削除（クライアントで 256px 縮小 → data URI → PUT /v1/me/profile・migration 0014 members.avatar・監査ログ）+ パスワード変更（Firebase reauthenticate → updatePassword。Google SSO / dev 認証 / モックは対象外の説明表示）+ アカウント情報の確認
+- [x] ④ 休暇種別の使用期限が空欄にできないバグ修正: UiSchemaForm の number 入力が空欄を 0 に変換していた実バグ（Number('') = 0）→ 空欄は '' のまま保持し保存側で null 変換（全 number フィールド共通の修正）
+- [x] ⑤ 全員の日報タブ: 提出済みのみの月次一覧（日付・名前・サマリー・工数）を全メンバーが参照可（GET /v1/reports/daily?scope=all）。行（PC）/ カード（モバイル）押下で詳細ドロワー = UiDataTable の自動切替を再利用（原則3・8）
+- [x] ⑥ 選択式「プロジェクト」→ 自由入力「業務テーマ」: entries.theme が正・旧 projectId は互換保持（表示・編集時にプロジェクト名へフォールバック = 原則7。既存データのパッチ不要）。AI ドラフト生成（LLM スキーマ・ヒューリスティック）も theme 出力へ追随
+- [x] ⑦ PC 表示で「業務テーマ」「作業内容」「工数」「進捗」を 1 行に（md 以上 5 カラムグリッド・モバイルは縦積み）
+- [x] ⑧ 日付ナビ再構成: 上段「← / 今日 / →」・下段「選択中の日付（直接選択可）」
+- [x] 5c レビュー第 2 巡の軽微 2 件: permission-rules PATCH の未送信フィールド保持アサート追加 / data-design §1.1 の SystemService 行を表内へ移動
+- [x] 検証: API 統合テスト 66（theme 提出 + テーマなし 400・scope=all 提出済みのみ・プロフィール画像の登録/検証/削除・permission-rules PATCH 保持）/ 単体 19 + 35 / API モード実クリック E2E 15 スイート 140 チェック / モック回帰（ナビ + マスタ 4 + 日報 11 + 勤怠 5）/ typecheck（api・mockup）
 - [ ] バッチ5 続き: チャットボット全 DB 参照化（権限準拠）/ その後バッチ4 続き: AI カンパニー → 売上 + mart ETL → 稼働状況

@@ -25,13 +25,14 @@ const WEEKLY_COLS = `id, member_id AS "memberId", week_start AS "weekStart",
   goal_review AS "goalReview", main_work AS "mainWork", issues, next_week AS "nextWeek",
   status, submitted_at AS "submittedAt"`
 
-/** エントリの正規化（mockup cleanEntries と同一: 0.25h 刻み・progress 0-100） */
+/** エントリの正規化（mockup cleanEntries と同一: 0.25h 刻み・progress 0-100。theme = 業務テーマ自由入力・projectId は旧形式互換） */
 function cleanEntries(entries: unknown): ReportEntry[] {
   if (!Array.isArray(entries)) return []
   return entries
     .map(e => e as Partial<ReportEntry>)
-    .filter(e => (e.projectId ?? '') || String(e.task ?? '').trim())
+    .filter(e => String(e.theme ?? '').trim() || (e.projectId ?? '') || String(e.task ?? '').trim())
     .map(e => ({
+      theme: [...String(e.theme ?? '').trim()].slice(0, 100).join(''),
       projectId: String(e.projectId ?? ''),
       task: String(e.task ?? '').trim(),
       hours: Math.max(0, Math.round((Number.isFinite(Number(e.hours)) ? Number(e.hours) : 0) * 4) / 4),
@@ -66,7 +67,7 @@ async function hoursGapMinutes(
 export function reportsRoutes(pool: pg.Pool): Hono {
   const app = new Hono()
 
-  // 日報一覧（自分: month or from/to / チーム: scope=team は管理者のみ・date / month / from/to）
+  // 日報一覧（自分: month or from/to / チーム: scope=team は管理者のみ / 全員: scope=all は提出済みのみ全メンバー可）
   app.get('/daily', async (c) => {
     const user = c.get('user')
     const scope = c.req.query('scope') ?? 'mine'
@@ -86,6 +87,15 @@ export function reportsRoutes(pool: pg.Pool): Hono {
       const { rows } = await pool.query(
         `SELECT ${DAILY_COLS} FROM daily_reports
          WHERE ${rangeWhere}
+         ORDER BY date DESC, submitted_at DESC NULLS LAST`,
+        [date, month, from, to])
+      return c.json({ data: rows })
+    }
+    // 全員の日報（バッチ5e: 相互参照による情報共有）。提出済みのみ = 下書きは本人以外に見せない
+    if (scope === 'all') {
+      const { rows } = await pool.query(
+        `SELECT ${DAILY_COLS} FROM daily_reports
+         WHERE status = 'submitted' AND ${rangeWhere}
          ORDER BY date DESC, submitted_at DESC NULLS LAST`,
         [date, month, from, to])
       return c.json({ data: rows })
@@ -112,8 +122,9 @@ export function reportsRoutes(pool: pg.Pool): Hono {
     const entries = cleanEntries(body.entries)
     if (status === 'submitted') {
       if (entries.length === 0) throw err('AKO-GEN-001', '作業エントリを 1 行以上入力してください', 400)
-      if (entries.some(e => !e.projectId || !e.task)) {
-        throw err('AKO-GEN-001', '各エントリのプロジェクトと作業内容を入力してください', 400)
+      // theme（業務テーマ）が正。旧クライアント・旧データ編集の projectId のみも許容する（原則7）
+      if (entries.some(e => !(e.theme || e.projectId) || !e.task)) {
+        throw err('AKO-GEN-001', '各エントリの業務テーマと作業内容を入力してください', 400)
       }
     }
     const submittedAt = status === 'submitted' ? nowJstIso() : null

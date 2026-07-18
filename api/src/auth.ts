@@ -21,6 +21,8 @@ export interface AuthUser {
   role: MemberRole
   /** 役職名（権限ルールの title レイヤ判定に使用。空文字 = 役職なし） */
   title: string
+  /** プロフィール画像（data:image/... URI。空文字 = 未設定） */
+  avatar: string
 }
 
 declare module 'hono' {
@@ -33,7 +35,7 @@ const FIREBASE_JWKS_URL = 'https://www.googleapis.com/service_accounts/v1/jwk/se
 
 async function findMember(pool: pg.Pool, where: string, value: string): Promise<AuthUser | null> {
   const { rows } = await pool.query(
-    `SELECT id, name, email, role, title FROM members WHERE ${where} AND active = true LIMIT 1`,
+    `SELECT id, name, email, role, title, avatar FROM members WHERE ${where} AND active = true LIMIT 1`,
     [value],
   )
   return (rows[0] as AuthUser | undefined) ?? null

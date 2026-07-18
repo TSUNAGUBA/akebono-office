@@ -84,6 +84,23 @@ describe('認証', () => {
     const res = await app.request('/healthz')
     expect(res.status).toBe(200)
   })
+
+  it('プロフィール画像を登録・削除できる（PUT /v1/me/profile。バッチ5e）', async () => {
+    const avatar = `data:image/jpeg;base64,${'A'.repeat(200)}`
+    const put = await api('PUT', '/v1/me/profile', { as: MEMBER, body: { avatar } })
+    expect(put.status).toBe(200)
+    const me = await api('GET', '/v1/me', { as: MEMBER })
+    expect((me.json.data as { avatar: string }).avatar).toBe(avatar)
+
+    // 不正形式・サイズ超過は 400。空文字で削除できる
+    expect((await api('PUT', '/v1/me/profile', { as: MEMBER, body: { avatar: 'https://evil/x.png' } })).status).toBe(400)
+    expect((await api('PUT', '/v1/me/profile', {
+      as: MEMBER, body: { avatar: `data:image/jpeg;base64,${'A'.repeat(300_001)}` },
+    })).status).toBe(400)
+    const del = await api('PUT', '/v1/me/profile', { as: MEMBER, body: { avatar: '' } })
+    expect(del.status).toBe(200)
+    expect(((await api('GET', '/v1/me', { as: MEMBER })).json.data as { avatar: string }).avatar).toBe('')
+  })
 })
 
 describe('打刻（状態機械）', () => {
@@ -271,6 +288,40 @@ describe('日報', () => {
     expect(row.status).toBe('submitted')
     expect(row.entries[0]!.task).toBe('実装（修正）')
     expect(row.submittedAt).toBe(submittedAt)
+  })
+
+  it('業務テーマ（theme）で提出できる。テーマも旧 projectId もないエントリは提出不可（バッチ5e）', async () => {
+    const date = '2026-07-17'
+    const ok = await api('PUT', '/v1/reports/daily', {
+      as: MEMBER,
+      body: { date, entries: [{ theme: '社内改善', task: '業務フロー整理', hours: 2, progress: 50 }], status: 'submitted' },
+    })
+    expect(ok.status).toBe(200)
+    const saved = await api('GET', `/v1/reports/daily?date=${date}`, { as: MEMBER })
+    const entry = (saved.json.data as { entries: { theme?: string; projectId?: string }[] }[])[0]!.entries[0]!
+    expect(entry.theme).toBe('社内改善')
+
+    const bad = await api('PUT', '/v1/reports/daily', {
+      as: MEMBER,
+      body: { date, entries: [{ task: 'テーマなし', hours: 1, progress: 0 }], status: 'submitted' },
+    })
+    expect(bad.status).toBe(400)
+    expect(bad.json.error?.code).toBe('AKO-GEN-001')
+  })
+
+  it('scope=all は全メンバーが参照でき、提出済みの日報のみを返す（バッチ5e: 全員の日報タブ）', async () => {
+    // HR の下書きは scope=all に現れない（下書きは本人以外に見せない）
+    const draft = await api('PUT', '/v1/reports/daily', {
+      as: HR, body: { date: '2026-07-02', entries: [{ theme: '下書き', task: '未提出', hours: 1, progress: 0 }], status: 'draft' },
+    })
+    expect(draft.status).toBe(200)
+    const all = await api('GET', '/v1/reports/daily?scope=all&month=2026-07', { as: HR })
+    expect(all.status).toBe(200)
+    const rows = all.json.data as { status: string; memberId: string | null; date: string }[]
+    expect(rows.length).toBeGreaterThanOrEqual(2) // MEMBER の 07-16 と 07-17
+    expect(rows.every(r => r.status === 'submitted')).toBe(true)
+    expect(rows.some(r => r.memberId === MEMBER)).toBe(true)
+    expect(rows.some(r => r.date === '2026-07-02')).toBe(false)
   })
 
   it('チーム参照は管理者のみ。コメント追加ができる', async () => {
@@ -1212,6 +1263,12 @@ describe('権限制御（F-16）', () => {
       as: ADMIN, body: { subjectKind: 'member', subjectId: MEMBER },
     })
     expect(goodPatch.status).toBe(200)
+    // 部分更新の回帰: 更新した subject ペアが反映され、送っていない resource / effect が保持されること
+    const patched = goodPatch.json.data as { subjectKind: string; subjectId: string; resource: string; effect: string }
+    expect(patched.subjectKind).toBe('member')
+    expect(patched.subjectId).toBe(MEMBER)
+    expect(patched.resource).toBe('decision')
+    expect(patched.effect).toBe('allow')
     expect((await api('POST', `/v1/masters/permission-rules/${id}/archive`, { as: ADMIN })).status).toBe(200)
   })
 })

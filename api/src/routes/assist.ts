@@ -128,14 +128,14 @@ async function llmDraft(env: Env, ctx: DraftContext, date: string): Promise<Repo
     ...ctx.logs.map(l => l.kind === 'memo' ? `- メモ: ${l.answer}` : `- Q: ${l.question} / A: ${l.answer}`),
     '## 翌営業日の計画',
     ...ctx.nextDayPlans.map(p => `- ${p.title}`),
-    '## 有効なプロジェクト（projectId: 名称）',
-    ...ctx.projects.map(p => `- ${p.id}: ${p.name}`),
+    '## 参考: 有効なプロジェクト名（業務テーマの候補）',
+    ...ctx.projects.map(p => `- ${p.name}`),
   ].join('\n')
   const res = await generateJson<ReportDraft>(env, {
     system: 'あなたは業務日報の下書きを作るアシスタントです。与えられた材料（タスク計画の結果・ヒアリング回答・メモ）'
       + 'だけを根拠に、日本語の日報ドラフトを JSON で返します。推測で事実を作らないこと。'
-      + 'entries は作業単位（task は 60 字以内、hours は 0.25 刻みの見積り、progress は 0-100、'
-      + 'projectId は材料に列挙された id のみ・不明なら空文字）。reflection は所感（丁寧語 2〜4 文）、'
+      + 'entries は作業単位（theme は業務テーマ = 短い名詞句 20 字以内・材料のプロジェクト名や業務分類を使う、'
+      + 'task は 60 字以内、hours は 0.25 刻みの見積り、progress は 0-100）。reflection は所感（丁寧語 2〜4 文）、'
       + 'issues は課題（なければ空文字）、tomorrow は明日の予定の一言、basis は生成根拠の短い箇条書き。',
     prompt: material,
     schema: {
@@ -146,12 +146,12 @@ async function llmDraft(env: Env, ctx: DraftContext, date: string): Promise<Repo
           items: {
             type: 'object',
             properties: {
-              projectId: { type: 'string' },
+              theme: { type: 'string' },
               task: { type: 'string' },
               hours: { type: 'number' },
               progress: { type: 'number' },
             },
-            required: ['projectId', 'task', 'hours', 'progress'],
+            required: ['theme', 'task', 'hours', 'progress'],
           },
         },
         reflection: { type: 'string' },
@@ -163,11 +163,10 @@ async function llmDraft(env: Env, ctx: DraftContext, date: string): Promise<Repo
     },
   })
   if (!res || !Array.isArray(res.entries) || res.entries.length === 0) return null
-  // LLM 出力の正規化: projectId は実在 id のみ・hours 0.25 刻み・progress 0-100
-  const validProjects = new Set(ctx.projects.map(p => p.id))
+  // LLM 出力の正規化: theme/task は文字数キャップ・hours 0.25 刻み・progress 0-100
   return {
     entries: res.entries.slice(0, 20).map(e => ({
-      projectId: validProjects.has(e.projectId) ? e.projectId : '',
+      theme: [...String(e.theme ?? '').trim()].slice(0, 20).join(''),
       task: [...String(e.task ?? '')].slice(0, 120).join(''),
       hours: toQuarterHours(Math.min(24, Math.max(0, Number(e.hours) || 0)) * 60),
       progress: Math.min(100, Math.max(0, Math.round(Number(e.progress) || 0))),

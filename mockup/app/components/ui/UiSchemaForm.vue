@@ -71,6 +71,8 @@ function arrValue(key: string): string[] {
         :placeholder="f.placeholder"
         @input="setValue(f.key, ($event.target as HTMLTextAreaElement).value)"
       />
+      <!-- 空欄は '' のまま保持する（Number('') = 0 で空欄にできなくなる実バグの修正。
+           「空欄 = 未設定（null）」を持つ項目（休暇種別の使用期限等）は保存側で '' → null 変換する -->
       <input
         v-else-if="f.type === 'number'"
         :value="strValue(f.key)"
@@ -79,7 +81,7 @@ function arrValue(key: string): string[] {
         :min="f.min"
         :max="f.max"
         :step="f.step"
-        @input="setValue(f.key, Number(($event.target as HTMLInputElement).value))"
+        @input="setValue(f.key, ($event.target as HTMLInputElement).value === '' ? '' : Number(($event.target as HTMLInputElement).value))"
       >
       <input
         v-else-if="f.type === 'date'"

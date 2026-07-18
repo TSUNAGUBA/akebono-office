@@ -1,12 +1,22 @@
 <script setup lang="ts">
 import * as icons from 'lucide-vue-next'
-import { Bell, ChevronDown, Clock3, House, Sunrise } from 'lucide-vue-next'
+import { Bell, ChevronDown, Clock3, House, LogOut, Sunrise, UserCog } from 'lucide-vue-next'
+import { signOutFirebase } from '~/utils/firebase-auth'
 import { EMPLOYMENT_TYPE_LABELS } from '~/utils/labels'
 import { isActivePath, MOBILE_NAV, NAV_GROUPS } from '~/utils/navigation'
 
 const route = useRoute()
 const { currentUser, switchableUsers, switchUser } = useCurrentUser()
 const { unreadCount } = useNotifications()
+/** API モードは実認証のためデモユーザー切替を出さない（バッチ5e: モックの名残の除去）*/
+const isApi = useApiMode()
+
+async function logout(): Promise<void> {
+  userMenuOpen.value = false
+  await signOutFirebase()
+  clearMe()
+  await navigateTo('/login')
+}
 
 const userMenuOpen = ref(false)
 /** タイムカードモーダル（ヘッダーからどの画面でも打刻できる） */
@@ -86,16 +96,17 @@ function onSwitchUser(id: string): void {
           >{{ unreadCount }}</span>
         </NuxtLink>
 
-        <!-- デモユーザー切替 -->
+        <!-- アカウントメニュー（API モード: プロフィール・ログアウト / モックモード: 加えてデモユーザー切替） -->
         <div class="relative">
           <button
             type="button"
             class="flex items-center gap-1.5 rounded-lg border border-line px-1.5 py-1 hover:border-muted"
             :aria-expanded="userMenuOpen"
-            aria-haspopup="listbox"
+            aria-haspopup="menu"
+            aria-label="アカウントメニュー"
             @click="userMenuOpen = !userMenuOpen"
           >
-            <UiAvatar :name="currentUser.name" size="sm" />
+            <UiAvatar :name="currentUser.name" :src="currentUser.avatar" size="sm" />
             <span class="hidden text-xs font-semibold sm:block">{{ currentUser.name }}</span>
             <ChevronDown class="h-3.5 w-3.5 text-muted" aria-hidden="true" />
           </button>
@@ -103,29 +114,50 @@ function onSwitchUser(id: string): void {
             <div
               v-if="userMenuOpen"
               class="card absolute right-0 top-full z-40 mt-1 w-64 overflow-hidden shadow-lg"
-              role="listbox"
-              aria-label="デモユーザー切替"
+              role="menu"
+              aria-label="アカウントメニュー"
             >
-              <p class="border-b border-line bg-surface-soft px-3 py-1.5 text-[10px] font-bold text-muted">
-                デモユーザー切替（権限別の見え方を体感）
-              </p>
-              <button
-                v-for="u in switchableUsers"
-                :key="u.id"
-                type="button"
-                role="option"
-                :aria-selected="u.id === currentUser.id"
-                class="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-brand-soft"
-                :class="u.id === currentUser.id ? 'bg-brand-soft' : ''"
-                @click="onSwitchUser(u.id)"
+              <NuxtLink
+                to="/profile"
+                role="menuitem"
+                class="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] font-semibold hover:bg-brand-soft"
+                @click="userMenuOpen = false"
               >
-                <UiAvatar :name="u.name" size="sm" />
-                <span class="flex-1 text-[13px]">{{ u.name }}</span>
-                <UiStatusBadge
-                  :label="`${EMPLOYMENT_TYPE_LABELS[u.employmentType]}${u.role === 'admin' ? '・管理' : u.role === 'hr' ? '・人事' : ''}`"
-                  :tone="u.role === 'admin' ? 'brand' : u.role === 'hr' ? 'info' : 'neutral'"
-                />
+                <UserCog class="h-4 w-4 text-muted" aria-hidden="true" />
+                プロフィール・個人設定
+              </NuxtLink>
+              <button
+                v-if="isApi"
+                type="button"
+                role="menuitem"
+                class="flex w-full items-center gap-2 border-t border-line px-3 py-2 text-left text-[13px] font-semibold text-crit hover:bg-brand-soft"
+                @click="logout"
+              >
+                <LogOut class="h-4 w-4" aria-hidden="true" />
+                ログアウト
               </button>
+              <template v-else>
+                <p class="border-y border-line bg-surface-soft px-3 py-1.5 text-[10px] font-bold text-muted">
+                  デモユーザー切替（権限別の見え方を体感）
+                </p>
+                <button
+                  v-for="u in switchableUsers"
+                  :key="u.id"
+                  type="button"
+                  role="menuitemradio"
+                  :aria-checked="u.id === currentUser.id"
+                  class="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-brand-soft"
+                  :class="u.id === currentUser.id ? 'bg-brand-soft' : ''"
+                  @click="onSwitchUser(u.id)"
+                >
+                  <UiAvatar :name="u.name" :src="u.avatar" size="sm" />
+                  <span class="flex-1 text-[13px]">{{ u.name }}</span>
+                  <UiStatusBadge
+                    :label="`${EMPLOYMENT_TYPE_LABELS[u.employmentType]}${u.role === 'admin' ? '・管理' : u.role === 'hr' ? '・人事' : ''}`"
+                    :tone="u.role === 'admin' ? 'brand' : u.role === 'hr' ? 'info' : 'neutral'"
+                  />
+                </button>
+              </template>
             </div>
           </Transition>
         </div>
