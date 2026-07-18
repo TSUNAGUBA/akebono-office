@@ -10,11 +10,16 @@ const { currentUser, switchableUsers, switchUser } = useCurrentUser()
 const { unreadCount } = useNotifications()
 /** API モードは実認証のためデモユーザー切替を出さない（バッチ5e: モックの名残の除去）*/
 const isApi = useApiMode()
+/** dev 認証（E2E・ローカル検証）はセッションを持たないためログアウトを出さない */
+const devMode = computed(() => !!apiPublicConfig().devMemberId)
 
 async function logout(): Promise<void> {
   userMenuOpen.value = false
   await signOutFirebase()
   clearMe()
+  // 前ユーザーのドメインキャッシュ（日報・通知等）をメモリから破棄する（深層防御。
+  // onApiReset のフックが各キャッシュをクリアし、次のログインで取り直す）
+  resetApiData()
   await navigateTo('/login')
 }
 
@@ -127,7 +132,7 @@ function onSwitchUser(id: string): void {
                 プロフィール・個人設定
               </NuxtLink>
               <button
-                v-if="isApi"
+                v-if="isApi && !devMode"
                 type="button"
                 role="menuitem"
                 class="flex w-full items-center gap-2 border-t border-line px-3 py-2 text-left text-[13px] font-semibold text-crit hover:bg-brand-soft"
@@ -136,7 +141,8 @@ function onSwitchUser(id: string): void {
                 <LogOut class="h-4 w-4" aria-hidden="true" />
                 ログアウト
               </button>
-              <template v-else>
+              <!-- デモユーザー切替はモックモード専用（API モードは dev 認証でも出さない） -->
+              <template v-if="!isApi">
                 <p class="border-y border-line bg-surface-soft px-3 py-1.5 text-[10px] font-bold text-muted">
                   デモユーザー切替（権限別の見え方を体感）
                 </p>

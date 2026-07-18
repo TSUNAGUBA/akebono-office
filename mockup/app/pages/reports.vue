@@ -13,7 +13,7 @@ import { addDays, fmtDate, fmtDateLong, fmtMinutes, fmtTime, weekdayOf } from '~
 import type { TabItem, TableColumn } from '~/types/ui'
 
 const route = useRoute()
-const { currentUser, currentUserId, isAdmin } = useCurrentUser()
+const { currentUser, currentUserId, isAdmin, isHrOrAdmin } = useCurrentUser()
 const reports = useReports()
 const attendance = useAttendance()
 const { show } = useToast()
@@ -51,7 +51,10 @@ function projectName(id: string): string {
   return projects.value.find(p => p.id === id)?.name ?? id
 }
 
-/** エントリの業務テーマ表示（旧データは theme 未設定 → プロジェクト名へフォールバック。原則7） */
+/**
+ * エントリの業務テーマ表示（旧データは theme 未設定 → プロジェクト名へフォールバック。原則7）。
+ * プロジェクトは論理削除のみで名称が残るため、フォールバックは常に名称解決できる
+ */
 function entryTheme(e: ReportEntry): string {
   return e.theme || (e.projectId ? projectName(e.projectId) : '')
 }
@@ -296,8 +299,14 @@ const drawerReport = computed(() =>
   drawerReportId.value ? reports.reportById(drawerReportId.value) ?? null : null)
 const drawerAuthor = computed(() =>
   drawerReport.value ? reports.authorOf(drawerReport.value) : null)
-const drawerGap = computed(() =>
-  drawerReport.value ? reports.gapOf(drawerReport.value) : null)
+// 工数乖離は勤怠データが必要。他人の勤怠は HR/管理者のみ参照可のため、
+// 権限がない閲覧者（全員の日報タブの一般メンバー）は計算しない（403 リクエストを発生させない）
+const drawerGap = computed(() => {
+  const r = drawerReport.value
+  if (!r) return null
+  if (r.memberId !== currentUserId.value && !isHrOrAdmin.value) return null
+  return reports.gapOf(r)
+})
 
 function cellClass(memberId: string, date: string): string {
   const s = reports.cellStatus(memberId, date)
@@ -649,7 +658,7 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
           <div v-for="(e, i) in editEntries" :key="i" class="rounded-lg border border-line p-2.5">
             <div class="grid items-end gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_auto_auto_auto]">
               <UiFormField label="業務テーマ" required>
-                <input v-model="e.theme" type="text" class="input" placeholder="例）○○案件・社内改善・採用" :aria-label="`エントリ${i + 1} 業務テーマ`">
+                <input v-model="e.theme" type="text" maxlength="100" class="input" placeholder="例）○○案件・社内改善・採用" :aria-label="`エントリ${i + 1} 業務テーマ`">
               </UiFormField>
               <UiFormField label="作業内容" required>
                 <input v-model="e.task" type="text" class="input" placeholder="実施した作業" :aria-label="`エントリ${i + 1} 作業内容`">

@@ -94,6 +94,13 @@ describe('認証', () => {
 
     // 不正形式・サイズ超過は 400。空文字で削除できる
     expect((await api('PUT', '/v1/me/profile', { as: MEMBER, body: { avatar: 'https://evil/x.png' } })).status).toBe(400)
+    // サブタイプ allowlist: SVG（スクリプト混入可能）と base64 なしの生データは拒否
+    expect((await api('PUT', '/v1/me/profile', {
+      as: MEMBER, body: { avatar: 'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=' },
+    })).status).toBe(400)
+    expect((await api('PUT', '/v1/me/profile', {
+      as: MEMBER, body: { avatar: 'data:image/png,rawtext' },
+    })).status).toBe(400)
     expect((await api('PUT', '/v1/me/profile', {
       as: MEMBER, body: { avatar: `data:image/jpeg;base64,${'A'.repeat(300_001)}` },
     })).status).toBe(400)
@@ -315,6 +322,8 @@ describe('日報', () => {
       as: HR, body: { date: '2026-07-02', entries: [{ theme: '下書き', task: '未提出', hours: 1, progress: 0 }], status: 'draft' },
     })
     expect(draft.status).toBe(200)
+    // month なしの全履歴ダンプは 400（期間必須）
+    expect((await api('GET', '/v1/reports/daily?scope=all', { as: HR })).status).toBe(400)
     const all = await api('GET', '/v1/reports/daily?scope=all&month=2026-07', { as: HR })
     expect(all.status).toBe(200)
     const rows = all.json.data as { status: string; memberId: string | null; date: string }[]
@@ -1114,6 +1123,55 @@ describe('チャットボット応答', () => {
     // 他人のセッションへの ask・追記も拒否
     expect((await api('POST', '/v1/chatbot/ask', { as: MEMBER, body: { question: 'x', sessionId } })).status).toBe(404)
     expect((await api('POST', `/v1/chatbot/sessions/${sessionId}/messages`, { as: MEMBER, body: { content: 'x' } })).status).toBe(404)
+  })
+
+  it('文脈収集は全ドメインを参照し、権限（F-16）に従う（バッチ5d: buildContext 直接検証）', async () => {
+    const { buildContext } = await import('../../src/routes/chatbot')
+    const memberUser = { id: MEMBER, name: '一般 次郎', email: 'member@example.com', role: 'member' as const, title: '', avatar: '' }
+    const hrUser = { id: HR, name: '人事 花子', email: 'hr@example.com', role: 'hr' as const, title: '', avatar: '' }
+
+    // 本人の日報（既存テストで提出済み 07-16/17 あり）: ルール未設定 = allow で文脈に含まれる
+    const withReports = await buildContext(pool, memberUser, '最近の日報を振り返りたい', [])
+    expect(withReports).toContain('本人の直近の日報')
+
+    // reports deny の member ロールには日報文脈が生成されない（機能単位の権限準拠）
+    const denyReports = [{
+      id: 'pm-t1', subjectKind: 'role' as const, subjectId: 'member', resource: 'reports', field: null,
+      effect: 'deny' as const, active: true,
+    }]
+    const denied = await buildContext(pool, memberUser, '最近の日報を振り返りたい', denyReports)
+    expect(denied).not.toContain('本人の直近の日報')
+    // 同じルールでも HR（別ロール）には影響しない。他人（一般 次郎）の日報は提出済みのみが含まれる
+    // （HR 本人の下書きは本人スコープとして含まれてよい。他人の下書きは固有テーマの不在で検証する）
+    const draft = await api('PUT', '/v1/reports/daily', {
+      as: MEMBER,
+      body: { date: '2026-07-10', entries: [{ theme: '未提出の秘密テーマ', task: '下書き作業', hours: 1, progress: 0 }], status: 'draft' },
+    })
+    expect(draft.status).toBe(200)
+    const hrView = await buildContext(pool, hrUser, '一般 次郎 さんの日報の状況は？', denyReports)
+    expect(hrView).toContain('一般 次郎 さんの日報（提出済みのみ）')
+    expect(hrView).not.toContain('未提出の秘密テーマ') // 他人の下書きは含まれない
+
+    // 表示項目レベル: members.email の deny がメンバー文脈へ反映される（フィールド剥がし）
+    const withEmail = await buildContext(pool, hrUser, '一般 次郎 さんの連絡先は？', [])
+    expect(withEmail).toContain('member@example.com')
+    const emailDeny = [{
+      id: 'pm-t2', subjectKind: 'role' as const, subjectId: 'hr', resource: 'members', field: 'email',
+      effect: 'deny' as const, active: true,
+    }]
+    const noEmail = await buildContext(pool, hrUser, '一般 次郎 さんの連絡先は？', emailDeny)
+    expect(noEmail).toContain('メンバー「一般 次郎」')
+    expect(noEmail).not.toContain('member@example.com')
+
+    // ワークフロー: 本人の申請が文脈に含まれる（既存テストで MEMBER の申請あり）。deny で消える
+    const wf = await buildContext(pool, memberUser, '自分の稟議の状況を教えて', [])
+    expect(wf).toContain('稟議・申請ガイド')
+    const wfDeny = [{
+      id: 'pm-t3', subjectKind: 'member' as const, subjectId: MEMBER, resource: 'workflow', field: null,
+      effect: 'deny' as const, active: true,
+    }]
+    const wfDenied = await buildContext(pool, memberUser, '自分の稟議の状況を教えて', wfDeny)
+    expect(wfDenied).not.toContain('稟議・申請ガイド')
   })
 })
 
