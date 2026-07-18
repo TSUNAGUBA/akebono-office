@@ -6,7 +6,6 @@
  */
 const MOCK_PAGE_PATHS = new Set<string>([
   '/akebono',
-  '/sales',
   '/status',
 ])
 

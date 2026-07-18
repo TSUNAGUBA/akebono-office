@@ -18,6 +18,7 @@ import { leaveRoutes, runPeriodicGrants } from './routes/leave'
 import { mastersRoutes } from './routes/masters'
 import { notificationsRoutes } from './routes/notifications'
 import { reportsRoutes } from './routes/reports'
+import { runSalesEtl, salesRoutes } from './routes/sales'
 import { assistRoutes } from './routes/assist'
 import { calendarOauthCallback, calendarRoutes } from './routes/calendar'
 import { chatbotRoutes } from './routes/chatbot'
@@ -59,6 +60,16 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
       throw err('AKO-AUTH-001', 'ジョブ実行キーが無効です', 401)
     }
     const result = await runPeriodicGrants(pool, null)
+    return c.json({ data: result })
+  })
+
+  // mart ETL の日次バッチ（Cloud Scheduler → 共有鍵。周期有給付与と同型）
+  app.post('/jobs/sales-mart-etl', async (c) => {
+    const secret = process.env.CRON_SECRET ?? ''
+    if (!secret || c.req.header('x-cron-key') !== secret) {
+      throw err('AKO-AUTH-001', 'ジョブ実行キーが無効です', 401)
+    }
+    const result = await runSalesEtl(pool)
     return c.json({ data: result })
   })
 
@@ -111,6 +122,7 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
   app.route('/v1/chatbot', chatbotRoutes(pool, env))
   app.route('/v1/ai-company', aiCompanyRoutes(pool, env))
   app.route('/v1/decisions', decisionsRoutes(pool))
+  app.route('/v1/sales', salesRoutes(pool))
 
   app.notFound(c => c.json({ error: { code: 'AKO-GEN-404', message: 'エンドポイントが見つかりません' } }, 404))
 

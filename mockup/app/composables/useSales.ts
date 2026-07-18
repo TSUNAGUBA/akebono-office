@@ -1,20 +1,47 @@
 /**
- * 売上サマリ集計（F-01-1）
- * SoT: salesMonthly コレクション。表示射影はすべて純粋 computed / 純粋関数。
+ * 売上サマリ集計（F-15 / F-01-1）
+ * SoT: salesMonthly コレクション（API モードは /v1/sales = sales_monthly テーブル）。
+ * 表示射影はすべて純粋 computed / 純粋関数（会計年度計算は shared/domain/fiscal を API と共有）。
  * 表示用の選択状態は selectedFy（表示対象の会計年度。既定 = 現年度）のみで、データは書き換えない。
  * 会計年度は自社（companies kind='self'）の fiscalStartMonth 起点で解釈する。
+ * 登録/取込（upsert）は管理者のみ（冪等キー = month × company × projectType。API はサーバーが強制）。
  */
-import type { ProjectType } from '~/types/domain'
+import {
+  DEFAULT_FISCAL_START_MONTH, fiscalMonthsOf as fiscalMonthsOfFy, fiscalYearOf as fiscalYearOfMonth,
+} from '../../../shared/domain/fiscal'
+import type { ProjectType, Result, SalesMonthly } from '~/types/domain'
 import { PROJECT_TYPE_LABELS } from '~/utils/labels'
 
+// ---------- API モードのキャッシュ（SPA・モジュールスコープ単一） ----------
+
+const apiSalesMonthly = ref<SalesMonthly[]>([])
+
+function loadSalesMonthly(force = false): Promise<void> {
+  return apiLoadOnce('sales:monthly', async () => {
+    apiSalesMonthly.value = await apiFetch<SalesMonthly[]>('/v1/sales')
+  }, force)
+}
+
+onApiReset(() => {
+  apiSalesMonthly.value = []
+})
+
 export function useSales() {
-  const { tbl } = useMockDb()
-  const salesMonthly = tbl('salesMonthly')
+  const { tbl, commit } = useMockDb()
+  const isApi = useApiMode()
+  const salesMonthly = isApi ? apiSalesMonthly : tbl('salesMonthly')
   const companies = tbl('companies')
+  if (isApi) void loadSalesMonthly()
+
+  /** 月次実績の取り直し（ページ表示時に呼ぶ。他管理者の登録の取り込み） */
+  async function refresh(): Promise<void> {
+    if (!isApi) return
+    await loadSalesMonthly(true)
+  }
 
   /** 自社の会計年度開始月（未設定時は 4 月） */
   const fiscalStartMonth = computed(() =>
-    companies.value.find(c => c.kind === 'self')?.fiscalStartMonth ?? 4)
+    companies.value.find(c => c.kind === 'self')?.fiscalStartMonth ?? DEFAULT_FISCAL_START_MONTH)
 
   const todayKey = todayJst()
   /** 当月（YYYY-MM） */
@@ -22,9 +49,7 @@ export function useSales() {
 
   /** YYYY-MM が属する会計年度（開始年の西暦） */
   function fiscalYearOf(month: string): number {
-    const y = Number(month.slice(0, 4))
-    const m = Number(month.slice(5, 7))
-    return m >= fiscalStartMonth.value ? y : y - 1
+    return fiscalYearOfMonth(month, fiscalStartMonth.value)
   }
 
   /** 今日が属する会計年度（開始年の西暦） */
@@ -37,19 +62,12 @@ export function useSales() {
     return [...fys].sort((a, b) => b - a)
   })
 
-  /** 表示対象の会計年度（既定 = 現年度。ダッシュボードの年度セレクタが更新） */
+  /** 表示対象の会計年度（既定 = 現年度。年度セレクタが更新） */
   const selectedFy = ref<number>(currentFiscalYear.value)
 
   /** 会計年度 fy に属する 12 ヶ月の YYYY-MM 配列（開始月起点） */
   function fiscalMonthsOf(fy: number): string[] {
-    const months: string[] = []
-    for (let i = 0; i < 12; i++) {
-      const m0 = fiscalStartMonth.value - 1 + i
-      const y = fy + Math.floor(m0 / 12)
-      const m = (m0 % 12) + 1
-      months.push(`${y}-${String(m).padStart(2, '0')}`)
-    }
-    return months
+    return fiscalMonthsOfFy(fy, fiscalStartMonth.value)
   }
 
   /** チャート X 軸ラベル（「4月」〜「3月」。選択年度に追従） */
@@ -143,6 +161,35 @@ export function useSales() {
     return [...head, { label: 'その他', value: restSum }]
   })
 
+  /**
+   * 月次実績の登録/更新（管理者のみ。冪等キー = month × company × projectType の upsert）。
+   * API モードはサーバー書込 → キャッシュ取り直し（原則6）。モックは同一キー行の置換。
+   */
+  async function upsert(input: SalesMonthly): Promise<Result> {
+    if (isApi) {
+      const res = await apiResult(() => apiFetch('/v1/sales', { method: 'POST', body: { rows: [input] } }))
+      if (res.ok) await loadSalesMonthly(true)
+      return res
+    }
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(input.month)) {
+      return { ok: false, error: { code: 'AKO-SAL-001', message: 'month は YYYY-MM 形式で指定してください' } }
+    }
+    if (!companies.value.some(c => c.id === input.companyId)) {
+      return { ok: false, error: { code: 'AKO-SAL-002', message: '顧客(会社)が未登録です' } }
+    }
+    if (!Number.isFinite(input.amount) || input.amount < 0 || !Number.isFinite(input.cost) || input.cost < 0) {
+      return { ok: false, error: { code: 'AKO-SAL-001', message: 'amount / cost は 0 以上の数値で指定してください' } }
+    }
+    const row: SalesMonthly = { ...input, amount: Math.round(input.amount), cost: Math.round(input.cost) }
+    const idx = salesMonthly.value.findIndex(r =>
+      r.month === row.month && r.companyId === row.companyId && r.projectType === row.projectType)
+    salesMonthly.value = idx >= 0
+      ? [...salesMonthly.value.slice(0, idx), row, ...salesMonthly.value.slice(idx + 1)]
+      : [...salesMonthly.value, row]
+    commit()
+    return { ok: true }
+  }
+
   return {
     fiscalStartMonth,
     currentFiscalYear,
@@ -159,5 +206,7 @@ export function useSales() {
     marginYoYDiff,
     typeBreakdown,
     customerBreakdown,
+    refresh,
+    upsert,
   }
 }

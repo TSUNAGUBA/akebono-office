@@ -36,7 +36,9 @@
 - **バッチ5b（マージ済み PR #30/#31・オペレーター指示 2026-07-17）:** チャットボットのセッション管理（DB 永続・マルチターン・過去セッション再開・新規開始）
 - **バッチ5c（本 PR・オペレーター指示 2026-07-17）:** 権限制御基盤 F-16（ロール/役職/個人の 3 レイヤ・機能単位ガード・表示項目レベル制御・権限設定 UI）
 - **バッチ5 続き（オペレーター指示 2026-07-17）:** チャットボットの全 DB 参照化（権限準拠）
-- **バッチ4 続き（バッチ5 の後）:** AI カンパニー → 売上 + mart ETL → 稼働状況
+- **バッチ6a（マージ済み PR #35）:** AI カンパニー F-08 の API 化 + フロント接続
+- **バッチ6b（本 PR）:** 売上管理 F-15 + mart ETL 基盤（ETL 出力先 = app_office 内 mart 互換テーブル。オペレーター判断 2026-07-18）
+- **残り:** 稼働状況（F-11）→ AKEBONO（F-03）
 
 > **フロント接続の方式（バッチ2a で確立）:** `NUXT_PUBLIC_API_BASE` 未設定なら完全モック動作（デモ環境の下位互換）。
 > 設定時は「API モード」となり、移行済みコレクションは `useMockDb.tbl()` が API ハイドレーションキャッシュを返す
@@ -92,7 +94,7 @@
 | ナレッジ | F-10-8 | ✅ | ✅ `/v1/masters/knowledge` | ✅ | 裁定還流（エスカレーション→ナレッジ）は PR #21 で接続済み |
 | グラフ可視化（関係マップ） | F-10-6 | ✅ | —（API 不要） | ✅ | 表示射影はフロントの責務（マスタ API のデータから描画） |
 | 監査ログ記録（全マスタ変更） | F-10-12 | ✅ | ✅ 全変更 API で記録（非ブロッキング） | ✅ | |
-| 権限設定 | F-16 | —（本 PR で新設） | 🚧 `/v1/masters/permission-rules`（0013）+ 機能ガード middleware（AKO-PRM-001）+ マスタ GET の表示項目剥がし | 🚧 `/masters/permissions`（3 レイヤのルール CRUD）+ メニュー/ページ/カードの非表示 + ルートガード | 解決順 = 個人 > 役職 > ロール（同一レイヤは拒否優先・未設定は許可 = 下位互換）。既存ロールガードは緩められない制限レイヤ。/v1/masters・configs・notifications・escalations はデータ面のためガード対象外（設計判断）。フィールド剥がしは API モードで有効（モックは管理 UI と機能ガードのみ） |
+| 権限設定 | F-16 | —（バッチ5c で新設） | ✅ `/v1/masters/permission-rules`（0013）+ 機能ガード middleware（AKO-PRM-001）+ マスタ GET の表示項目剥がし（PR #32） | ✅ `/masters/permissions`（3 レイヤのルール CRUD）+ メニュー/ページ/カードの非表示 + ルートガード | 解決順 = 個人 > 役職 > ロール（同一レイヤは拒否優先・未設定は許可 = 下位互換）。既存ロールガードは緩められない制限レイヤ。/v1/masters・configs・notifications・escalations はデータ面のためガード対象外（設計判断）。フィールド剥がしは API モードで有効（モックは管理 UI と機能ガードのみ） |
 
 ### 設定 `/settings`
 
@@ -132,12 +134,12 @@
 | シフト表 `/shift` | F-05 | ✅ | ✅ シフト接続済み（PR #23） | 希望・割当の参照は管理者 = 全件 / 本人 = 自分のみのサーバースコープ |
 | 意思決定支援 `/decision` | F-02 | ✅ | ✅ 意思決定接続済み（PR #28）: 判断テーマ = 汎用マスタ `/v1/masters/decision-themes`（0011 で mockup seed を移行）・判断ログ = `/v1/decisions/logs`（追記のみ = 記録系保護。テーマ・選択肢・理由をサーバーで強制） | シナリオ予測（決定的線形モデル）は表示射影としてクライアント側に維持（設計判断） |
 | AKEBONO（3D オフィス） `/akebono` | F-03 | ✅ | ⏳ | バッチ4 |
-| AIネイティブカンパニー `/ai-company` | F-08 | ✅ | 🚧 AI カンパニー接続（本 PR = バッチ6a）: ロール/AI 社員 = 汎用マスタ（0015）・タスク依頼 → 分解（Vertex AI → 失敗時 shared/domain/ai-tasks の同一ヒューリスティック）→ 承認 → 実行 → 完了（FOR UPDATE 状態機械・活動ログ追記・依頼者へ通知・AI 社員 status 同期）・日次報告 = daily_reports（author_kind='ai'・冪等生成）・停滞/過負荷/低確信度エスカレーション・機能ガード 'ai-company'（F-16） | AI 社員の「実実行」（LLM がステップを自律実行）は将来拡張。現段階は進行操作を人が行うワークフロー |
+| AIネイティブカンパニー `/ai-company` | F-08 | ✅ | ✅ AI カンパニー接続済み（PR #35 = バッチ6a）: ロール/AI 社員 = 汎用マスタ（0015）・タスク依頼 → 分解（Vertex AI → 失敗時 shared/domain/ai-tasks の同一ヒューリスティック）→ 承認 → 実行 → 完了（FOR UPDATE 状態機械・活動ログ追記・依頼者へ通知・AI 社員 status 同期）・日次報告 = daily_reports（author_kind='ai'・冪等生成）・停滞/過負荷/低確信度エスカレーション・機能ガード 'ai-company'（F-16） | AI 社員の「実実行」（LLM がステップを自律実行）は将来拡張。現段階は進行操作を人が行うワークフロー |
 | 業務支援ツール `/support` | F-09 | ✅ | ⏳ | ドキュメント・外部リンクは接続済みマスタを参照。チャットボット（F-09-3）は PR #27 で接続済み |
-| 売上管理 `/sales` | F-15 | ✅ | ⏳ | バッチ4（mart 接続の設計とセット） |
+| 売上管理 `/sales` | F-15 | ✅ | 🚧 売上接続（本 PR = バッチ6b）: 月次実績 = `sales_monthly`（0017・冪等キー month × company × projectType の upsert）・`GET/POST /v1/sales`（登録は管理者のみ・一括取込 500 件）・実績登録モーダル（管理者）・会計年度計算 = shared/domain/fiscal をフロント/API 共有・機能ガード 'sales'（F-16）・チャットボット文脈に売上サマリ追加 + **mart ETL**: `fact_sales` / `mart_load_runs`（app_office 内 mart 互換 = オペレーター判断 2026-07-18）へ一方向 ETL（`POST /v1/sales/etl/run` + `/jobs/sales-mart-etl`） | 実績データのためマスタ初期値シードなし（新規環境は管理者登録 or 取込から） |
 | 提供システム稼働状況 `/status` | F-11 | ✅ | ⏳ | バッチ4 |
-| チャットボット（画面内ヘルプ） | F-09-3 | ✅ | ✅ チャットボット接続済み（PR #27）+ 🚧 セッション管理（本 PR・オペレーター指示 2026-07-17）: 会話は chat_sessions / chat_messages（0012）で DB 管理・同一セッション内は直近履歴 12 件を LLM へ渡すマルチターン・過去セッションの再開/新規開始（履歴ドロワー + 新しい会話）・本人のみ参照（AKO-CHT-001）・メッセージは追記のみ。fallback 応答もセッションへ追記（履歴の忠実性） | 旧「会話履歴はセッションローカル」設計判断は本 PR で置換。稼働状況・ドキュメントの回答は移行前のためデモデータ（ページ説明に明示）。エスカレーション起票は PR #21 で接続済み |
-| mart（分析基盤）ETL: fact_attendance / fact_leave / fact_effort ほか | data-design §2 | —（写像可能な型のみ） | ⏳ | バッチ4 以降。app_office → mart の一方向 ETL |
+| チャットボット（画面内ヘルプ） | F-09-3 | ✅ | ✅ チャットボット接続済み（PR #27）+ ✅ セッション管理（PR #30/#31・オペレーター指示 2026-07-17）: 会話は chat_sessions / chat_messages（0012）で DB 管理・同一セッション内は直近履歴 12 件を LLM へ渡すマルチターン・過去セッションの再開/新規開始（履歴ドロワー + 新しい会話）・本人のみ参照（AKO-CHT-001）・メッセージは追記のみ。fallback 応答もセッションへ追記（履歴の忠実性） | 旧「会話履歴はセッションローカル」設計判断は本 PR で置換。稼働状況・ドキュメントの回答は移行前のためデモデータ（ページ説明に明示）。エスカレーション起票は PR #21 で接続済み |
+| mart（分析基盤）ETL: fact_attendance / fact_leave / fact_effort ほか | data-design §2 | —（写像可能な型のみ） | 🚧 fact_sales のみ本 PR（バッチ6b）で実装（app_office 内 mart 互換テーブル + mart_load_runs。data-design §2.3 の実装状況注記参照）。他ファクトは ⏳ | app_office → mart の一方向 ETL。mart 本体（akebono-scm-platform）への接続はテーブル移送 + ETL 先切替で対応（オペレーター判断 2026-07-18） |
 
 ## 3. バッチ3d（PR #25・マージ済み）: AI業務アシスタント + 日報 AI アシストの完了条件（Definition of Done）
 
@@ -228,7 +230,7 @@
 - [x] 5e レビュー第 1 巡の指摘対応（マージ後着荷分）: ① avatar のサブタイプ allowlist 化（png/jpeg/webp の base64 のみ・SVG 拒否）② scope=all の month 必須化（全履歴ダンプ防止）③ ログアウト時のドメインキャッシュ破棄 + 未認証ポーリング停止 ④ dev 認証ではログアウト非表示 ⑤ 業務テーマ input に maxlength=100 ⑥ screen-design のヘッダー記述更新 ⑦ 全員の日報ドロワーで権限のない他人の工数乖離を計算しない（無駄な 403 の抑止）
 - [x] 検証: API 統合テスト 67（buildContext 直接検証 = reports deny で文脈消失・フィールド deny 反映・他人日報は提出済みのみ・workflow deny / avatar allowlist / scope=all month 必須）/ 単体 19 + 35 / API モード実クリック E2E 15 スイート 140 チェック / モック回帰（ナビ + マスタ 4 + 日報 11 + 勤怠 5）/ typecheck（api・mockup）
 
-## 12. 今回バッチ（6a: AI カンパニー F-08 の API 化 + 5d レビュー指摘対応）の完了条件（Definition of Done）
+## 12. バッチ6a（PR #35・マージ済み）: AI カンパニー F-08 の API 化 + 5d レビュー指摘対応の完了条件（Definition of Done）
 
 - [x] DB（0015 = 表定義 / 0016 = 部分一意索引 + シード）: ai_roles / ai_employees（汎用マスタ = 管理者のみ変更・監査ログ・論理削除）+ ai_tasks（状態機械）+ ai_activity_logs（追記のみ）。AI 日次報告は既存 daily_reports（author_kind='ai'）を再利用。マイグレーションは append-only（適用済みファイルを改変せず 0016 で追補 = 6a 第 2 巡レビュー対応）
 - [x] API `/v1/ai-company`: タスク依頼（分解 = Vertex AI 構造化出力 → 失敗時 shared/domain/ai-tasks の同一ヒューリスティック）→ 承認/進行/ブロック/中止（FOR UPDATE 直列化・AKO-AIC-001〜008・活動ログ・完了時 依頼者へ通知・AI 社員 status 同期）+ 日次報告の冪等生成 + 停滞/過負荷検知（workload-check・クールダウン冪等）。機能ガード 'ai-company'（F-16）+ チャットボット文脈へ AI タスクブロック追加
@@ -236,4 +238,14 @@
 - [x] 5d 独立レビュー指摘対応（マージ後着荷分・7 件）: ① チャットボットのエスカレーション文脈を issue_reported（本人の日報由来）に限定（他者起票の内部メモ・注入経路を遮断）② 見出し・会社名参照にも stripDeniedFields を適用（name deny 時はブロックごと非表示）③ 通知キャッシュの値クリア ④ ログアウトは clearApiData（再取得しない = 未認証バーストなし）⑤ nameHit の敬称限定（一般語との偽ヒット防止）⑥ workflow/task/calendar title の capCp ⑦ chatbot.ts の機能 ID を F-09-2 へ修正
 - [x] 6a 独立レビュー指摘対応（重大 2 + 軽微 6）: ① 日次報告の並行重複 → 部分一意インデックス `daily_reports_ai_uq`（0015）+ ON CONFLICT DO NOTHING + UI 二重押下防止（0015 は AI テーブル新設と同時に索引を張るため既存本番に重複日報は生じ得ず、データパッチ不要 = 設計判断）② AI ロール/社員の初期データ未投入 → 0015 で mockup シードと同一の AI ロール 4・AI 社員 5 を `ON CONFLICT DO NOTHING` 投入（decision_themes 0011 と同方針 = 新規環境でも手動投入なしで F-08 が動く。AI 社員の新規作成 UI は将来拡張・現状は割当変更のみ = 明記）③ lowconf dedupe キーを 2 セグメント（`lowconf:emp`）へ簡約 ④ モック AI 日報 entries を theme 形式へ統一 ⑤ addLog seq を当該社員件数に統一 ⑥ decompose へ trim 後 title を渡す ⑦ ai-employees patchSchema から派生値 status を omit
 - [x] 検証: API 統合テスト 72（マスタ CRUD・シード投入・status omit・状態機械 遷移/409・低確信度・日次報告の並行/逐次冪等・scope=all 掲載・機能 deny 403）/ 単体 19 + 35 / API モード実クリック E2E 16 スイート 150 チェック（6a = 依頼 → 分解 → 承認 → 完了 → 日次報告 → タイムライン掲載）/ モック回帰（ナビ + マスタ 4 + 日報 11 + 勤怠 5）/ typecheck（api・mockup）
-- [ ] 残り: 売上 + mart ETL（F-15）→ 稼働状況（F-11）→ AKEBONO（F-03）
+- [x] 売上 + mart ETL（F-15）はバッチ6b（§13）で実装 → 残り: 稼働状況（F-11）→ AKEBONO（F-03）
+
+## 13. 今回バッチ（6b: 売上管理 F-15 + mart ETL 基盤）の完了条件（Definition of Done）
+
+- [x] mart ETL 出力先のオペレーター確認（2026-07-18）: akebono-scm-platform の mart へ直接書かず **app_office 内に mart 規約準拠の互換テーブル** を作成（将来はテーブル移送 + ETL 先切替のみで mart 本体へ接続可能な形）
+- [x] DB（0017）: `sales_monthly`（実績データ。冪等キー = month × company × projectType の UNIQUE。実績のためマスタ初期値シードは投入しない = 設計判断）+ `fact_sales`（mart 互換: tenant_key 先頭列・dim_date_key yyyymmdd・UNIQUE(tenant_key, source_txn_id)・会計期非正規化・load_run_id/created_at 監査列・customer_company_id/project_type は退化キー）+ `mart_load_runs`（ETL 実行監査 = 追記のみ）
+- [x] API `/v1/sales`: GET 一覧（表示射影 = shared/domain/fiscal の純粋関数をフロントと共有）/ POST 一括 upsert（管理者のみ・rows 1〜500 件・AKO-SAL-001〜003・監査ログ）/ ETL 手動実行 + 実行履歴（管理者のみ）。日次バッチ `/jobs/sales-mart-etl`（CRON_SECRET = 周期有給付与と同型・イベント + 手動回復の両経路 = 原則6）。機能ガード 'sales'（F-16）
+- [x] 会計年度計算を shared/domain/fiscal.ts へ切り出し（fiscalYearOf / fiscalMonthsOf / fiscalMonthNoOf / fiscalQuarterOf。useSales・ETL・チャットボット文脈で共有 = 原則3）
+- [x] フロント: useSales デュアルモード化（API キャッシュ + 表示時 refresh + upsert）・sales.vue に管理者の実績登録モーダル・mock-status から /sales 除去（モックバッジ解除）
+- [x] チャットボット文脈へ売上サマリブロック追加（can('sales')・年度累計/当月/前年同月比のみ = 明細は /sales へ誘導）
+- [x] 検証: API 統合テスト 77（一括 upsert 冪等・入力検証・管理者ガード・ETL 冪等/margin/会計期非正規化/実行履歴・sales deny 403・自社無効化時の既定 4 月フォールバック）/ 単体 19+9（fiscal）+ 35 / API モード実クリック E2E（E2E スタックは旧セッションの scratchpad 消失に伴い再構築）/ モック回帰 / typecheck（api・mockup）

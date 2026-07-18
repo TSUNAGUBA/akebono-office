@@ -1440,3 +1440,134 @@ describe('権限制御（F-16）', () => {
     expect((await api('POST', `/v1/masters/permission-rules/${id}/archive`, { as: ADMIN })).status).toBe(200)
   })
 })
+
+describe('売上管理（F-15）+ mart ETL（バッチ6b）', () => {
+  let selfId = ''
+  let customerId = ''
+
+  beforeAll(async () => {
+    // 自社（10 月始まり = 会計年度の非正規化検証用）と顧客を用意
+    const self = await api('POST', '/v1/masters/companies', {
+      as: ADMIN, body: { kind: 'self', name: '自社（売上テスト）', fiscalStartMonth: 10 },
+    })
+    selfId = (self.json.data as { id: string }).id
+    const customer = await api('POST', '/v1/masters/companies', {
+      as: ADMIN, body: { kind: 'customer', name: '売上テスト顧客' },
+    })
+    customerId = (customer.json.data as { id: string }).id
+  })
+
+  it('管理者が月次実績を一括登録でき、同一キー（month × company × type）の再登録は上書き（冪等）', async () => {
+    const r = await api('POST', '/v1/sales', {
+      as: ADMIN,
+      body: {
+        rows: [
+          { month: '2026-06', companyId: customerId, projectType: 'development', amount: 1200000, cost: 700000 },
+          { month: '2026-07', companyId: customerId, projectType: 'operation', amount: 800000, cost: 300000 },
+        ],
+      },
+    })
+    expect(r.status).toBe(201)
+    expect((r.json.data as { upserted: number }).upserted).toBe(2)
+
+    // 同一キーの再登録 → 行は増えず金額が更新される
+    const again = await api('POST', '/v1/sales', {
+      as: ADMIN,
+      body: { rows: [{ month: '2026-06', companyId: customerId, projectType: 'development', amount: 1500000, cost: 900000 }] },
+    })
+    expect(again.status).toBe(201)
+    const list = (await api('GET', '/v1/sales', { as: MEMBER })).json.data as {
+      month: string; companyId: string; projectType: string; amount: number; cost: number
+    }[]
+    const mine = list.filter(x => x.companyId === customerId)
+    expect(mine).toHaveLength(2)
+    const jun = mine.find(x => x.month === '2026-06')
+    expect(jun?.amount).toBe(1500000)
+    expect(jun?.cost).toBe(900000)
+  })
+
+  it('登録は管理者のみ（AKO-AUTH-003）。入力不正・未登録顧客は 400', async () => {
+    const denied = await api('POST', '/v1/sales', {
+      as: MEMBER,
+      body: { rows: [{ month: '2026-06', companyId: customerId, projectType: 'development', amount: 1, cost: 0 }] },
+    })
+    expect(denied.status).toBe(403)
+    expect(denied.json.error?.code).toBe('AKO-AUTH-003')
+
+    expect((await api('POST', '/v1/sales', { as: ADMIN, body: { rows: [] } })).json.error?.code).toBe('AKO-SAL-003')
+    expect((await api('POST', '/v1/sales', {
+      as: ADMIN, body: { rows: [{ month: '2026-13', companyId: customerId, projectType: 'development', amount: 1, cost: 0 }] },
+    })).json.error?.code).toBe('AKO-SAL-001')
+    expect((await api('POST', '/v1/sales', {
+      as: ADMIN, body: { rows: [{ month: '2026-06', companyId: customerId, projectType: 'unknown', amount: 1, cost: 0 }] },
+    })).json.error?.code).toBe('AKO-SAL-001')
+    expect((await api('POST', '/v1/sales', {
+      as: ADMIN, body: { rows: [{ month: '2026-06', companyId: customerId, projectType: 'development', amount: -1, cost: 0 }] },
+    })).json.error?.code).toBe('AKO-SAL-001')
+    expect((await api('POST', '/v1/sales', {
+      as: ADMIN, body: { rows: [{ month: '2026-06', companyId: 'c-unknown', projectType: 'development', amount: 1, cost: 0 }] },
+    })).json.error?.code).toBe('AKO-SAL-002')
+  })
+
+  it('mart ETL は冪等（2 回実行しても fact 行は増えない）。margin・会計期が非正規化される', async () => {
+    const run1 = await api('POST', '/v1/sales/etl/run', { as: ADMIN })
+    expect(run1.status).toBe(200)
+    const first = run1.json.data as { runId: string; loaded: number }
+    expect(first.loaded).toBeGreaterThanOrEqual(2)
+
+    const run2 = await api('POST', '/v1/sales/etl/run', { as: ADMIN })
+    const second = run2.json.data as { runId: string; loaded: number }
+    expect(second.runId).not.toBe(first.runId)
+
+    const { rows: facts } = await pool.query<{
+      sourceTxnId: string; dimDateKey: number; margin: string; fiscalYear: number
+      fiscalQuarter: number; fiscalMonth: number; loadRunId: string
+    }>(`SELECT source_txn_id AS "sourceTxnId", dim_date_key AS "dimDateKey", margin::text AS margin,
+          fiscal_year AS "fiscalYear", fiscal_quarter AS "fiscalQuarter", fiscal_month AS "fiscalMonth",
+          load_run_id AS "loadRunId"
+        FROM fact_sales WHERE customer_company_id = $1 ORDER BY dim_date_key`, [customerId])
+    // 冪等: 同一 source_txn_id は 1 行のまま・load_run_id は最新実行へ更新
+    expect(facts).toHaveLength(2)
+    expect(facts.every(f => f.loadRunId === second.runId)).toBe(true)
+    // margin = amount - cost / dim_date_key = 月初日 / 会計期は自社 10 月始まりで非正規化
+    const jun = facts.find(f => f.dimDateKey === 20260601)
+    expect(jun?.margin).toBe('600000') // 1,500,000 - 900,000
+    expect(jun?.fiscalYear).toBe(2025) // 10 月始まり: 2026-06 は 2025 年度
+    expect(jun?.fiscalMonth).toBe(9)   // 10 月起点で 6 月は 9 ヶ月目
+    expect(jun?.fiscalQuarter).toBe(3)
+
+    // 実行履歴（監査列の発行元）が記録される
+    const runs = (await api('GET', '/v1/sales/etl/runs', { as: ADMIN })).json.data as {
+      id: string; status: string; rowsLoaded: number
+    }[]
+    expect(runs.some(r => r.id === second.runId && r.status === 'done' && r.rowsLoaded >= 2)).toBe(true)
+    // ETL の実行・履歴は管理者のみ
+    expect((await api('POST', '/v1/sales/etl/run', { as: MEMBER })).status).toBe(403)
+    expect((await api('GET', '/v1/sales/etl/runs', { as: MEMBER })).status).toBe(403)
+  })
+
+  it('機能ガード: sales の deny で /v1/sales が 403（AKO-PRM-001）。解除で復帰', async () => {
+    const rule = await api('POST', '/v1/masters/permission-rules', {
+      as: ADMIN, body: { subjectKind: 'role', subjectId: 'member', resource: 'sales', effect: 'deny' },
+    })
+    expect(rule.status).toBe(201)
+    const id = (rule.json.data as { id: string }).id
+    const denied = await api('GET', '/v1/sales', { as: MEMBER })
+    expect(denied.status).toBe(403)
+    expect(denied.json.error?.code).toBe('AKO-PRM-001')
+    expect((await api('GET', '/v1/sales', { as: ADMIN })).status).toBe(200)
+    expect((await api('POST', `/v1/masters/permission-rules/${id}/archive`, { as: ADMIN })).status).toBe(200)
+    expect((await api('GET', '/v1/sales', { as: MEMBER })).status).toBe(200)
+  })
+
+  it('自社の会計年度設定を後片付けしても ETL は既定 4 月始まりで動く（フォールバック）', async () => {
+    // 自社を無効化 → fiscalStartMonth 参照は既定 4 月へフォールバック
+    expect((await api('POST', `/v1/masters/companies/${selfId}/archive`, { as: ADMIN })).status).toBe(200)
+    const run = await api('POST', '/v1/sales/etl/run', { as: ADMIN })
+    expect(run.status).toBe(200)
+    const { rows } = await pool.query<{ fiscalYear: number }>(
+      `SELECT fiscal_year AS "fiscalYear" FROM fact_sales WHERE customer_company_id = $1 AND dim_date_key = 20260601`,
+      [customerId])
+    expect(rows[0]?.fiscalYear).toBe(2026) // 4 月始まり: 2026-06 は 2026 年度
+  })
+})

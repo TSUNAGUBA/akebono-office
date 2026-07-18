@@ -208,7 +208,9 @@ akebono-ai-manager の「暗黙の情報共有 → エスカレーション → 
 
 | ID | 機能 | 入力 | 処理 | 出力 |
 |---|---|---|---|---|
-| F-15-1 | 売上サマリ | 年度選択 | モック売上データ集計（月次推移・前年比・粗利率・顧客別/事業種別内訳） | KPI カード + チャート。意思決定支援（F-02）への導線 |
+| F-15-1 | 売上サマリ | 年度選択 | 月次売上データ集計（月次推移・前年比・粗利率・顧客別/事業種別内訳。API モードは sales_monthly が SoT・会計年度計算は shared/domain/fiscal をフロント/API 共有） | KPI カード + チャート。意思決定支援（F-02）への導線 |
+| F-15-2 | 月次実績の登録/取込（バッチ6b 追加） | 対象月・顧客(会社)・事業種別・売上・原価 | 管理者のみ。冪等キー = month × company × projectType の月次 upsert（同一キーは上書き。一括取込は API `rows` 最大 500 件） | 実績登録モーダル → サマリへ即時反映 |
+| F-15-3 | mart ETL（バッチ6b 追加） | —（管理者の手動実行 or Cloud Scheduler 日次） | sales_monthly → `fact_sales`（app_office 内の mart 互換テーブル = オペレーター判断 2026-07-18）への一方向 ETL。冪等キー UNIQUE(tenant_key, source_txn_id)・実行監査 = mart_load_runs | ETL 実行結果（runId・件数）・実行履歴 API |
 
 ---
 

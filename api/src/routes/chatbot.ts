@@ -2,7 +2,8 @@
  * チャットボット応答 API（F-09-2）。mockup useChatbot の LLM 一次応答レイヤ。
  * - 一次応答: Vertex AI（構造化出力）。サーバーが DB の全移行済みドメイン
  *   （勤怠・有給・日報・ワークフロー・シフト・意思決定・タスク計画・カレンダー・エスカレーション・
- *   メンバー/部署・顧客・プロジェクト・ナレッジ・AI カンパニー）を文脈化して回答（バッチ5d/6a・オペレーター指示 2026-07-17）
+ *   メンバー/部署・顧客・プロジェクト・ナレッジ・AI カンパニー・売上）を文脈化して回答
+ *   （バッチ5d/6a/6b・オペレーター指示 2026-07-17）
  * - 参照範囲は権限（F-16）に従う: ドメインごとに canUseFeature で文脈生成の可否を判定し、
  *   マスタ由来の文脈は stripDeniedFields で表示項目レベルの deny を反映する（5c の共有ロジックを再利用）
  * - 本人スコープ（C3）は維持: 勤怠・有給・シフト・タスク計画・カレンダー・エスカレーションは本人分のみ。
@@ -13,12 +14,13 @@
  * - フォールバック: LLM 無効・失敗・低確信度は { fallback: true, sessionId } を返し、クライアントが
  *   既存の決定的ルーティング応答（移行済みドメインは API モードでも実データ参照）へ縮退し、
  *   その応答を POST /sessions/:id/messages で追記する（履歴の忠実性）（原則4）
- * - 未移行ドメイン（ドキュメント・稼働状況・売上）の質問は文脈に含めず、クライアント側の
- *   モック応答が引き続き担う（implementation-status の SoT どおり）
+ * - 未移行ドメイン（ドキュメント・稼働状況）の質問は文脈に含めず、クライアント側の
+ *   モック応答が引き続き担う（implementation-status の SoT どおり。売上はバッチ6b で移行済み = 文脈対象）
  * エラー: AKO-CHT-001（セッションが見つからない・他人のセッション）
  */
 import { Hono } from 'hono'
 import type pg from 'pg'
+import { DEFAULT_FISCAL_START_MONTH, fiscalMonthsOf, fiscalYearOf } from '../../../shared/domain/fiscal'
 import { nowJstIso, todayJst } from '../../../shared/domain/jst'
 import { canUseFeature, stripDeniedFields } from '../../../shared/domain/permissions'
 import type { PermissionRule, PunchRecord, ReportEntry } from '../../../shared/domain/types'
@@ -256,6 +258,38 @@ export async function buildContext(
       }
       parts.push(`## AI カンパニーのタスク（/ai-company）\n${rows.map(t =>
         `- ${t.empName}「${capCp(t.title, 60)}」: ${label[t.status] ?? t.status}`).join('\n')}`)
+    })
+  }
+
+  // 売上（バッチ6b で移行済みドメイン。年度累計・当月・前年同月比のサマリのみ = 明細は /sales へ誘導）
+  if (can('sales') && /売上|売り上げ|粗利|業績|セールス/.test(question)) {
+    await block(async () => {
+      const { rows: selfRows } = await pool.query<{ m: number | null }>(
+        `SELECT fiscal_start_month AS m FROM companies
+         WHERE kind = 'self' AND active = true ORDER BY id LIMIT 1`)
+      const fsm = selfRows[0]?.m ?? DEFAULT_FISCAL_START_MONTH
+      const currentMonth = today.slice(0, 7)
+      const fy = fiscalYearOf(currentMonth, fsm)
+      const months = fiscalMonthsOf(fy, fsm).filter(m => m <= currentMonth)
+      const prevMonth = `${Number(currentMonth.slice(0, 4)) - 1}-${currentMonth.slice(5, 7)}`
+      const { rows } = await pool.query<{ month: string; amount: string; cost: string }>(
+        `SELECT month, sum(amount)::text AS amount, sum(cost)::text AS cost
+         FROM sales_monthly WHERE month = ANY($1) GROUP BY month`,
+        [[...months, prevMonth]])
+      if (rows.length === 0) return
+      const of = (m: string): { amount: number; cost: number } => {
+        const r = rows.find(x => x.month === m)
+        return { amount: Number(r?.amount ?? 0), cost: Number(r?.cost ?? 0) }
+      }
+      const fyAmount = months.reduce((s, m) => s + of(m).amount, 0)
+      const fyCost = months.reduce((s, m) => s + of(m).cost, 0)
+      const cur = of(currentMonth)
+      const prev = of(prevMonth)
+      const yoy = prev.amount > 0 ? ` / 前年同月比 ${((cur.amount - prev.amount) / prev.amount * 100).toFixed(1)}%` : ''
+      const marginRate = fyAmount > 0 ? `（粗利率 ${((fyAmount - fyCost) / fyAmount * 100).toFixed(1)}%）` : ''
+      parts.push(`## 売上サマリ（/sales・${fy}年度）
+年度累計売上 ${Math.round(fyAmount / 10000).toLocaleString('ja-JP')}万円${marginRate}
+当月（${currentMonth}）売上 ${Math.round(cur.amount / 10000).toLocaleString('ja-JP')}万円${yoy}`)
     })
   }
 
