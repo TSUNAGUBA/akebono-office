@@ -66,15 +66,22 @@ function entriesSummary(entries: unknown): string {
  * - マスタ由来の文脈は stripDeniedFields で表示項目 deny を反映
  * - 本人スコープ（C3）維持。他メンバーの日報は提出済みのみ（scope=all と同じ基準）
  * - ブロック単位の収集失敗は全体を止めない（原則4 = 部分的な文脈でも回答を試みる）
+ * - キーワード判定は「今回の質問 + 直近のユーザー発言（historyUserTexts）」を対象にする
+ *   （オペレーター報告 2026-07-18: フォローアップ質問（「じゃあ去年は？」等）にキーワードが
+ *   含まれず文脈が供給されない → 低確信度 → フォールバックの連鎖を解消。権限判定・本人スコープは
+ *   従来どおりで、対象データの範囲は変わらない = 話題の継続性だけを補う）
  */
 export async function buildContext(
   pool: pg.Pool,
   user: AuthUser,
   question: string,
   rules: PermissionRule[],
+  historyUserTexts: string[] = [],
 ): Promise<string> {
   const parts: string[] = []
-  const q = question.toLowerCase()
+  // 話題判定用コーパス（質問 + 直近のユーザー発言）。LLM へ渡す質問文自体は変更しない
+  const topic = [question, ...historyUserTexts].join('\n')
+  const q = topic.toLowerCase()
   const subject = subjectOf(user)
   const can = (feature: string): boolean => canUseFeature(rules, subject, feature)
   const strip = <T extends Record<string, unknown>>(entity: string, rows: T[]): T[] =>
@@ -91,12 +98,12 @@ export async function buildContext(
   // 質問に含まれる人名の照合（フルネーム・空白除去・「◯◯さん/氏」形の名前パーツ。ORDER BY id で決定的）。
   // パーツ単独の照合は敬称付きに限定する（「勤怠管理」→ メンバー「管理 太郎」のような一般語との偽ヒット防止）
   const nameHit = (name: string): boolean =>
-    !!name && (question.includes(name) || question.includes(name.replace(/\s+/g, ''))
+    !!name && (topic.includes(name) || topic.includes(name.replace(/\s+/g, ''))
       || name.split(/\s+/).some(p =>
-        p.length >= 2 && (question.includes(`${p}さん`) || question.includes(`${p}氏`))))
+        p.length >= 2 && (topic.includes(`${p}さん`) || topic.includes(`${p}氏`))))
 
   // 有給・当月勤怠（本人分のみ = C3 保護。残数は leave ドメインの SoT 計算を再利用 = 原則3）
-  if (can('attendance') && /有給|休暇|残業|勤怠|労働|打刻/.test(question)) {
+  if (can('attendance') && /有給|休暇|残業|勤怠|労働|打刻/.test(topic)) {
     await block(async () => {
       const b = await balanceOf(pool, user.id, PAID_LEAVE_TYPE_ID)
       parts.push(`## 本人の有給（法定有給。詳細は /attendance の有給タブ）
@@ -124,7 +131,7 @@ export async function buildContext(
   }
 
   // 本人の日報（下書き含む = 本人スコープ）
-  if (can('reports') && /日報|週報|振り返り|所感|提出/.test(question)) {
+  if (can('reports') && /日報|週報|振り返り|所感|提出/.test(topic)) {
     await block(async () => {
       const { rows } = await pool.query<{ date: string; entries: unknown; issues: string; status: string }>(
         `SELECT date::text AS date, entries, issues, status FROM daily_reports
@@ -168,7 +175,7 @@ export async function buildContext(
   })
 
   // ワークフロー（本人の申請 + 静的ガイド）
-  if (can('workflow') && /稟議|申請|承認|ワークフロー|決裁/.test(question)) {
+  if (can('workflow') && /稟議|申請|承認|ワークフロー|決裁/.test(topic)) {
     await block(async () => {
       const { rows } = await pool.query<{ id: string; title: string; status: string; amount: string }>(
         `SELECT id, title, status, amount::text AS amount FROM workflow_requests
@@ -183,7 +190,7 @@ export async function buildContext(
   }
 
   // シフト（本人の今後の割当）
-  if (can('shift') && /シフト|出勤/.test(question)) {
+  if (can('shift') && /シフト|出勤/.test(topic)) {
     await block(async () => {
       const { rows } = await pool.query<{ date: string; from: string; to: string; status: string }>(
         `SELECT date::text AS date, from_time AS "from", to_time AS "to", status FROM shift_assignments
@@ -196,7 +203,7 @@ export async function buildContext(
   }
 
   // 意思決定支援（テーマ一覧 + 直近の判断ログ）
-  if (can('decision') && /意思決定|判断|テーマ|選択肢/.test(question)) {
+  if (can('decision') && /意思決定|判断|テーマ|選択肢/.test(topic)) {
     await block(async () => {
       const { rows: themes } = await pool.query<{ id: string; title: string; category: string }>(
         `SELECT id, title, category FROM decision_themes WHERE active = true ORDER BY id LIMIT 10`)
@@ -211,7 +218,7 @@ export async function buildContext(
   }
 
   // タスク計画・当日予定（本人分のみ）
-  if (can('ai-assistant') && /タスク|計画|予定|会議|ミーティング|カレンダー/.test(question)) {
+  if (can('ai-assistant') && /タスク|計画|予定|会議|ミーティング|カレンダー/.test(topic)) {
     await block(async () => {
       const { rows: plans } = await pool.query<{ title: string; status: string; outcome: string }>(
         `SELECT title, status, outcome FROM task_plans
@@ -230,7 +237,7 @@ export async function buildContext(
   // エスカレーション（本人が対象 かつ 本人の日報課題由来 = issue_reported のみ。
   // 他者起票（overload/stalled 等）の context は管理者向け内部メモを含み得るため、
   // GET /v1/escalations（管理者のみ）の可視性から逸脱しない範囲に限定する）
-  if (/課題|エスカレ|困り/.test(question)) {
+  if (/課題|エスカレ|困り/.test(topic)) {
     await block(async () => {
       const { rows } = await pool.query<{ context: string; raisedAt: string }>(
         `SELECT context, raised_at AS "raisedAt" FROM escalations
@@ -243,7 +250,7 @@ export async function buildContext(
   }
 
   // AI カンパニー（タスクボードの状況。バッチ6a で移行済みドメイン）
-  if (can('ai-company') && /AI ?社員|AI ?カンパニー|AI ?タスク/.test(question)) {
+  if (can('ai-company') && /AI ?社員|AI ?カンパニー|AI ?タスク/.test(topic)) {
     await block(async () => {
       const { rows } = await pool.query<{ title: string; status: string; empName: string }>(
         `SELECT t.title, t.status, e.name AS "empName"
@@ -259,7 +266,7 @@ export async function buildContext(
   }
 
   // 売上（バッチ6b で移行済みドメイン。年度累計・当月・前年同月比のサマリのみ = 明細は /sales へ誘導）
-  if (can('sales') && /売上|売り上げ|粗利|業績|セールス/.test(question)) {
+  if (can('sales') && /売上|売り上げ|粗利|業績|セールス/.test(topic)) {
     await block(async () => {
       const fsm = await selfFiscalStartMonth(pool)
       const currentMonth = today.slice(0, 7)
@@ -288,7 +295,7 @@ export async function buildContext(
   }
 
   // 稼働状況（バッチ6c で移行済みドメイン。全体状態 + 対応中インシデント。詳細は /status へ誘導）
-  if (can('status') && /稼働|障害|システム|メンテ|止まっ|落ち/.test(question)) {
+  if (can('status') && /稼働|障害|システム|メンテ|止まっ|落ち/.test(topic)) {
     await block(async () => {
       const { rows: services } = await pool.query<{ id: string; name: string }>(
         `SELECT id, name FROM system_services WHERE active = true ORDER BY id`)
@@ -319,7 +326,7 @@ export async function buildContext(
   // AKEBONO（バッチ6d で移行済みドメイン。構想状況 + 直近の要望 = 詳細は /akebono へ誘導）。
   // 顧客「アケボノ商事」・サービス「AKEBONO SCM」・アプリ名「AKEBONO Office」への言及では
   // 発火しない（顧客/稼働状況ブロックとの文脈ノイズ防止 = 6d レビュー指摘対応）
-  if (can('akebono') && /AKEBONO(?!\s*(SCM|Office))|アケボノ(?!商事)|あけぼの|要望/i.test(question)) {
+  if (can('akebono') && /AKEBONO(?!\s*(SCM|Office))|アケボノ(?!商事)|あけぼの|要望/i.test(topic)) {
     await block(async () => {
       const { rows } = await pool.query<{ body: string; at: string }>(
         `SELECT body, at FROM akebono_wishes ORDER BY at DESC LIMIT 3`)
@@ -370,7 +377,7 @@ ${strip('knowledge', ks).map(k => `ナレッジ「${String(k.title ?? '')}」(${
   })
 
   // プロジェクト一覧（キーワード時。表示項目 deny 反映）
-  if (/プロジェクト|案件/.test(question)) {
+  if (/プロジェクト|案件/.test(topic)) {
     await block(async () => {
       const { rows } = await pool.query<Record<string, unknown> & { id: string; name: string; companyId: string | null }>(
         `SELECT id, name, status, company_id AS "companyId" FROM projects WHERE active = true ORDER BY id LIMIT 10`)
@@ -388,7 +395,7 @@ ${strip('knowledge', ks).map(k => `ナレッジ「${String(k.title ?? '')}」(${
 
   // ナレッジ全文検索（タイトル・本文の部分一致。上位 3 件。% _ はリテラル扱いにエスケープ）
   await block(async () => {
-    const terms = question.replace(/[？?。、！!]/g, ' ').split(/\s+/).filter(t => t.length >= 2).slice(0, 5)
+    const terms = topic.replace(/[？?。、！!]/g, ' ').split(/\s+/).filter(t => t.length >= 2).slice(0, 5)
     if (terms.length === 0) return
     const { rows: hits } = await pool.query<{ id: string; title: string; body: string }>(
       `SELECT id, title, body FROM knowledge_articles
@@ -494,7 +501,12 @@ export function chatbotRoutes(pool: pg.Pool, env: Env): Hono {
       .join('\n')
     // 参照範囲は権限ルール（F-16）に従う（バッチ5d）。ルール取得失敗は 500（フェイルクローズ = featureGuard と同方向）
     const rules = await activePermissionRules(pool)
-    const context = await buildContext(pool, user, question, rules)
+    // 文脈収集の話題判定にはフォローアップ対応のため直近のユーザー発言も渡す（各 200 cp・3 件まで）
+    const historyUserTexts = history
+      .filter(m => m.role === 'user')
+      .slice(-3)
+      .map(m => capCp(m.content, 200))
+    const context = await buildContext(pool, user, question, rules, historyUserTexts)
     const res = await generateJson<ChatAnswer>(env, {
       system: 'あなたは社内業務アシスタント（AKEBONO Office のチャットボット）です。与えられた社内文脈だけを'
         + '根拠に、日本語の丁寧語で簡潔に回答します。文脈にない事実は述べず、その場合は confidence を低くして'
