@@ -148,7 +148,7 @@ export function workflowsRoutes(pool: pg.Pool): Hono {
     const { rows } = await pool.query(
       `SELECT ${REQ_COLS} FROM workflow_requests
        WHERE ($1 OR status <> 'draft' OR requester_id = $2)
-       ORDER BY created_at DESC LIMIT 500`,
+       ORDER BY created_at DESC, id LIMIT 500`,
       [user.role === 'admin', user.id])
     return c.json({ data: rows })
   })

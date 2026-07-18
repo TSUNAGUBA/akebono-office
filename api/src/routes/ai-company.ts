@@ -95,7 +95,7 @@ export function aiCompanyRoutes(pool: pg.Pool, env: Env): Hono {
   // タスク一覧（全員参照可 = モックのタスクボードと同じ可視性。作成日降順）
   app.get('/tasks', async (c) => {
     const { rows } = await pool.query(
-      `SELECT ${TASK_COLS} FROM ai_tasks ORDER BY created_at DESC LIMIT 200`)
+      `SELECT ${TASK_COLS} FROM ai_tasks ORDER BY created_at DESC, id LIMIT 200`)
     return c.json({ data: rows })
   })
 

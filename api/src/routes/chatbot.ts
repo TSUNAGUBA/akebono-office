@@ -277,7 +277,7 @@ export async function buildContext(
     await block(async () => {
       const { rows: plans } = await pool.query<{ title: string; status: string; outcome: string }>(
         `SELECT title, status, outcome FROM task_plans
-         WHERE member_id = $1 AND date = $2::date ORDER BY created_at LIMIT 10`, [user.id, today])
+         WHERE member_id = $1 AND date = $2::date ORDER BY created_at, id LIMIT 10`, [user.id, today])
       const { rows: events } = await pool.query<{ from: string; to: string; title: string }>(
         `SELECT from_time AS "from", to_time AS "to", title FROM calendar_events
          WHERE member_id = $1 AND date = $2::date ORDER BY from_time LIMIT 10`, [user.id, today])
@@ -310,7 +310,7 @@ export async function buildContext(
       const { rows } = await pool.query<{ title: string; status: string; empName: string }>(
         `SELECT t.title, t.status, e.name AS "empName"
          FROM ai_tasks t JOIN ai_employees e ON e.id = t.ai_employee_id
-         ORDER BY t.created_at DESC LIMIT 8`)
+         ORDER BY t.created_at DESC, t.id LIMIT 8`)
       if (rows.length === 0) return
       const label: Record<string, string> = {
         proposed: '承認待ち', approved: '承認済', in_progress: '実行中', blocked: 'ブロック中', done: '完了', cancelled: '中止',

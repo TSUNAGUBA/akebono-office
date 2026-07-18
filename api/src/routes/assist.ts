@@ -84,10 +84,10 @@ export function assistRoutes(pool: pg.Pool, env: Env): Hono {
         `SELECT ${LOG_COLS} FROM assist_logs WHERE member_id = $1 AND date = $2::date ORDER BY at, id`,
         [user.id, date]),
       pool.query<TaskPlan>(
-        `SELECT ${PLAN_COLS} FROM task_plans WHERE member_id = $1 AND date = $2::date ORDER BY created_at`,
+        `SELECT ${PLAN_COLS} FROM task_plans WHERE member_id = $1 AND date = $2::date ORDER BY created_at, id`,
         [user.id, date]),
       pool.query<TaskPlan>(
-        `SELECT ${PLAN_COLS} FROM task_plans WHERE member_id = $1 AND date = $2::date ORDER BY created_at`,
+        `SELECT ${PLAN_COLS} FROM task_plans WHERE member_id = $1 AND date = $2::date ORDER BY created_at, id`,
         [user.id, nextBusinessDay(date)]),
       pool.query<{ id: string; name: string; companyId: string }>(
         `SELECT id, name, company_id AS "companyId" FROM projects WHERE active = true ORDER BY id`),

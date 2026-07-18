@@ -45,7 +45,7 @@ export function taskPlansRoutes(pool: pg.Pool, env: Env): Hono {
     const { rows } = await pool.query(
       `SELECT ${COLS} FROM task_plans
        WHERE member_id = $1 AND date >= $2::date AND date <= $3::date
-       ORDER BY date, created_at LIMIT 2000`,
+       ORDER BY date, created_at, id LIMIT 2000`,
       [user.id, from, to])
     return c.json({ data: rows })
   })
