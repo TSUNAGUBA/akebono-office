@@ -23,7 +23,7 @@ import { Hono } from 'hono'
 import type pg from 'pg'
 import { fiscalMonthsOf, fiscalYearOf } from '../../../shared/domain/fiscal'
 import { nowJstIso, todayJst } from '../../../shared/domain/jst'
-import { canUseFeature, stripDeniedFields } from '../../../shared/domain/permissions'
+import { canUseFeature, canViewField, stripDeniedFields } from '../../../shared/domain/permissions'
 import type { PermissionRule, PunchRecord, ReportEntry } from '../../../shared/domain/types'
 import type { AuthUser } from '../auth'
 import { daySummary } from '../domain/attendance'
@@ -64,7 +64,8 @@ function entriesSummary(entries: unknown): string {
 /**
  * 質問に関連しそうな社内文脈を収集する（バッチ5d: DB の全移行済みドメイン）。
  * - ドメインごとに権限（F-16 canUseFeature）で生成可否を判定 = チャットボットの参照範囲も権限に従う
- * - マスタ由来の文脈は stripDeniedFields で表示項目 deny を反映
+ * - マスタ由来の文脈は stripDeniedFields で表示項目 deny を反映（補助マスタ = 業界・関係種別・
+ *   休暇種別・部署・外部リンク・意思決定テーマ等も対象。JOIN で取り込む単一項目は canViewField で判定）
  * - 本人スコープ（C3）維持。他メンバーの日報は提出済みのみ（scope=all と同じ基準）
  * - ブロック単位の収集失敗は全体を止めない（原則4 = 部分的な文脈でも回答を試みる）
  * - キーワード判定は「今回の質問 + 直近のユーザー発言（historyUserTexts）」を対象にする
@@ -87,6 +88,10 @@ export async function buildContext(
   const can = (feature: string): boolean => canUseFeature(rules, subject, feature)
   const strip = <T extends Record<string, unknown>>(entity: string, rows: T[]): T[] =>
     stripDeniedFields(rules, subject, entity, rows)
+  // JOIN で取り込んだ他エンティティ由来の単一項目（relation_types.label 等）の表示可否。
+  // 行キーが元エンティティの項目名と異なる場合は strip では剥がれないため、こちらで判定する
+  const canField = (entity: string, field: string): boolean =>
+    canViewField(rules, subject, entity, field)
   const today = todayJst()
   const block = async (fn: () => Promise<void>): Promise<void> => {
     try {
@@ -106,17 +111,19 @@ export async function buildContext(
   // 人の関係（contact_relations。端点は顧客担当者または自社メンバー = PR #29 仕様。
   // 相手の表示名には contacts / members の表示項目 deny を反映する）
   const personRelations = async (endpointId: string): Promise<string[]> => {
-    const { rows: rels } = await pool.query<{ fromId: string; toId: string; label: string; notes: string }>(
+    const { rows: relRows } = await pool.query<{ fromId: string; toId: string; label: string; notes: string }>(
       `SELECT r.from_contact_id AS "fromId", r.to_contact_id AS "toId", rt.label, r.notes
        FROM contact_relations r JOIN relation_types rt ON rt.id = r.relation_type_id
        WHERE r.from_contact_id = $1 OR r.to_contact_id = $1
        ORDER BY r.created_at DESC LIMIT 5`, [endpointId])
-    if (rels.length === 0) return []
+    if (relRows.length === 0) return []
+    // 関係種別ラベル（relation-types.label）・関係メモ（contact-relations.notes）にも表示項目 deny を反映
+    const rels = strip('contact-relations', strip('relation-types', relRows))
     const otherIds = [...new Set(rels.map(r => (r.fromId === endpointId ? r.toId : r.fromId)))]
     const { rows: cons } = await pool.query<Record<string, unknown> & { id: string }>(
-      `SELECT id, name FROM contacts WHERE id = ANY($1)`, [otherIds])
+      `SELECT id, name FROM contacts WHERE active = true AND id = ANY($1)`, [otherIds])
     const { rows: mems } = await pool.query<Record<string, unknown> & { id: string }>(
-      `SELECT id, name FROM members WHERE id = ANY($1)`, [otherIds])
+      `SELECT id, name FROM members WHERE active = true AND id = ANY($1)`, [otherIds])
     const conName = new Map(strip('contacts', cons).filter(x => x.name).map(x => [x.id, String(x.name)]))
     const memName = new Map(strip('members', mems).filter(x => x.name).map(x => [x.id, `${String(x.name)}（自社）`]))
     return rels
@@ -124,7 +131,8 @@ export async function buildContext(
         const otherId = r.fromId === endpointId ? r.toId : r.fromId
         const other = conName.get(otherId) ?? memName.get(otherId)
         if (!other) return null
-        return `${r.fromId === endpointId ? '→' : '←'} ${other}: ${r.label}${r.notes ? `（${capCp(r.notes, 60)}）` : ''}`
+        return `${r.fromId === endpointId ? '→' : '←'} ${other}${r.label ? `: ${r.label}` : ''}${
+          r.notes ? `（${capCp(r.notes, 60)}）` : ''}`
       })
       .filter((x): x is string => !!x)
   }
@@ -161,8 +169,10 @@ export async function buildContext(
         const { rows } = await pool.query<{ name: string; description: string; isStatutory: boolean }>(
           `SELECT name, description, is_statutory AS "isStatutory" FROM leave_types
            WHERE active = true ORDER BY display_order, id LIMIT 10`)
-        if (rows.length === 0) return
-        parts.push(`## 休暇種別（/attendance の有給タブから申請）\n${rows.map(t =>
+        // 表示項目 deny を反映（name deny 時は種別を特定できないため行ごと出さない）
+        const types = strip('leave-types', rows).filter(t => t.name)
+        if (types.length === 0) return
+        parts.push(`## 休暇種別（/attendance の有給タブから申請）\n${types.map(t =>
           `- ${t.name}${t.isStatutory ? '（法定）' : ''}${t.description ? `: ${capCp(t.description, 60)}` : ''}`).join('\n')}`)
       })
     }
@@ -195,7 +205,8 @@ export async function buildContext(
     if (m.departmentId) {
       const { rows: deps } = await pool.query<{ name: string }>(
         `SELECT name FROM departments WHERE id = $1`, [String(m.departmentId)])
-      deptName = deps[0]?.name ?? ''
+      // 部署名にも departments の表示項目 deny を反映する
+      deptName = strip('departments', deps)[0]?.name ?? ''
     }
     // 自社メンバーも顧客関係(人)の端点になれる（PR #29）ため関係を併記する
     const relLines = await personRelations(matched.id)
@@ -251,10 +262,13 @@ export async function buildContext(
       const { rows: logs } = await pool.query<{ themeTitle: string; chosenSlot: string; reason: string; at: string }>(
         `SELECT t.title AS "themeTitle", l.chosen_slot AS "chosenSlot", l.reason, l.at
          FROM decision_logs l JOIN decision_themes t ON t.id = l.theme_id ORDER BY l.at DESC LIMIT 3`)
-      if (themes.length === 0) return
+      // テーマ名にも decision-themes の表示項目 deny を反映（title deny 時はテーマを特定できないため出さない）
+      const shownThemes = strip('decision-themes', themes).filter(t => t.title)
+      if (shownThemes.length === 0) return
+      const shownLogs = canField('decision-themes', 'title') ? logs : []
       parts.push(`## 意思決定支援（/decision）
-テーマ: ${themes.map(t => `「${t.title}」(${t.category === 'business' ? '事業' : 'PJ'})`).join(' / ')}${
-  logs.length > 0 ? `\n直近の判断: ${logs.map(l => `「${l.themeTitle}」→ 案${l.chosenSlot}（${capCp(l.reason, 60)}）`).join(' / ')}` : ''}`)
+テーマ: ${shownThemes.map(t => `「${t.title}」(${t.category === 'business' ? '事業' : 'PJ'})`).join(' / ')}${
+  shownLogs.length > 0 ? `\n直近の判断: ${shownLogs.map(l => `「${l.themeTitle}」→ 案${l.chosenSlot}（${capCp(l.reason, 60)}）`).join(' / ')}` : ''}`)
     })
   }
 
@@ -301,8 +315,10 @@ export async function buildContext(
       const label: Record<string, string> = {
         proposed: '承認待ち', approved: '承認済', in_progress: '実行中', blocked: 'ブロック中', done: '完了', cancelled: '中止',
       }
+      // 担当 AI 社員名（ai-employees.name の JOIN 参照）にも表示項目 deny を反映
+      const empNameOk = canField('ai-employees', 'name')
       parts.push(`## AI カンパニーのタスク（/ai-company）\n${rows.map(t =>
-        `- ${t.empName}「${capCp(t.title, 60)}」: ${label[t.status] ?? t.status}`).join('\n')}`)
+        `- ${empNameOk ? t.empName : 'AI社員'}「${capCp(t.title, 60)}」: ${label[t.status] ?? t.status}`).join('\n')}`)
     })
   }
 
@@ -401,12 +417,14 @@ export async function buildContext(
     const lines: string[] = [
       `${String(cs.description ?? '')}（${String(cs.location ?? '') || '所在地未設定'}・規模 ${String(cs.size ?? '') || '未設定'}）`,
     ]
-    // 業界（primary を先頭・★付き）
+    // 業界（primary に（主）マーク。業界名にも industries の表示項目 deny を反映。
+    // （主）判定も剥がし後の値を使う = primaryIndustryId deny 時はマークを出さない）
     if (cs.industryIds !== undefined && company.industryIds.length > 0) {
       const { rows: inds } = await pool.query<{ id: string; name: string }>(
         `SELECT id, name FROM industries WHERE id = ANY($1) AND active = true ORDER BY display_order, id`,
         [company.industryIds])
-      const named = inds.map(i => i.id === company.primaryIndustryId ? `${i.name}（主）` : i.name)
+      const named = strip('industries', inds).filter(i => i.name)
+        .map(i => i.id === cs.primaryIndustryId ? `${i.name}（主）` : i.name)
       if (named.length > 0) lines.push(`業界: ${named.join('・')}`)
     }
     // 自社担当（ownerMemberId → メンバー名。members の表示項目 deny を反映）
@@ -416,7 +434,8 @@ export async function buildContext(
       const [o] = strip('members', owners)
       if (o?.name) lines.push(`自社担当: ${String(o.name)}`)
     }
-    if (isSelf && company.fiscalStartMonth) lines.push(`会計年度: ${company.fiscalStartMonth} 月始まり`)
+    // 剥がし後の値を使う（companies.fiscalStartMonth deny 時は出さない）
+    if (isSelf && cs.fiscalStartMonth) lines.push(`会計年度: ${String(cs.fiscalStartMonth)} 月始まり`)
     // 先方担当者（contacts。表示項目 deny を反映）
     const { rows: cons } = await pool.query<Record<string, unknown> & { id: string }>(
       `SELECT id, name, title, key_person AS "keyPerson" FROM contacts
@@ -425,8 +444,9 @@ export async function buildContext(
       .filter(p => p.name)
       .map(p => `${String(p.name)}${p.title ? `（${String(p.title)}）` : ''}`)
     if (conNames.length > 0) lines.push(`先方担当者: ${conNames.join(' / ')}`)
-    // 関係性（company_relations 双方向 + 関係種別ラベル。相手名にも companies の deny を反映）
-    const { rows: rels } = await pool.query<{
+    // 関係性（company_relations 双方向 + 関係種別ラベル。相手名にも companies の deny を反映し、
+    // ラベル（relation-types.label）・メモ（company-relations.notes）にも表示項目 deny を反映）
+    const { rows: relRows } = await pool.query<{
       fromCompanyId: string; toCompanyId: string; label: string; notes: string
     }>(
       `SELECT r.from_company_id AS "fromCompanyId", r.to_company_id AS "toCompanyId",
@@ -434,7 +454,8 @@ export async function buildContext(
        FROM company_relations r JOIN relation_types rt ON rt.id = r.relation_type_id
        WHERE r.from_company_id = $1 OR r.to_company_id = $1
        ORDER BY r.created_at DESC LIMIT 5`, [company.id])
-    if (rels.length > 0) {
+    if (relRows.length > 0) {
+      const rels = strip('company-relations', strip('relation-types', relRows))
       const compName = new Map(strip('companies', companies).filter(c => c.name).map(c => [c.id, String(c.name)]))
       const relLines = rels
         .map((r) => {
@@ -442,7 +463,7 @@ export async function buildContext(
           const other = compName.get(otherId)
           if (!other) return null
           const direction = r.fromCompanyId === company.id ? '→' : '←'
-          return `${direction} ${other}: ${r.label}${r.notes ? `（${capCp(r.notes, 60)}）` : ''}`
+          return `${direction} ${other}${r.label ? `: ${r.label}` : ''}${r.notes ? `（${capCp(r.notes, 60)}）` : ''}`
         })
         .filter(Boolean)
       if (relLines.length > 0) lines.push(`会社間の関係: ${relLines.join(' / ')}`)
@@ -462,16 +483,19 @@ export async function buildContext(
   // 業界の逆引き（業界マスタ × 顧客。「アパレル業界の顧客は？」等に回答）
   if (/業界/.test(topic)) {
     await block(async () => {
-      const { rows: inds } = await pool.query<{ id: string; name: string }>(
+      const { rows: indRows } = await pool.query<{ id: string; name: string }>(
         `SELECT id, name FROM industries WHERE active = true ORDER BY display_order, id LIMIT 20`)
+      // 業界名にも industries の表示項目 deny を反映（name deny 時は行ごと出さない）
+      const inds = strip('industries', indRows).filter(i => i.name)
       if (inds.length === 0) return
       const { rows: comps } = await pool.query<Record<string, unknown> & { id: string; industryIds: string[] }>(
         `SELECT id, name, industry_ids AS "industryIds" FROM companies
          WHERE kind = 'customer' AND active = true ORDER BY id LIMIT 100`)
       const stripped = strip('companies', comps).filter(c => c.name)
       const lines = inds.map((i) => {
+        // industryIds が deny で剥がれた顧客は該当なし扱い（?? [] = 偶発 throw でブロックごと消えるのを防ぐ）
         const names = stripped
-          .filter(c => (c.industryIds as string[]).includes(i.id))
+          .filter(c => ((c.industryIds as string[] | undefined) ?? []).includes(i.id))
           .map(c => String(c.name))
         return `- ${i.name}: ${names.join('・') || '該当顧客なし'}`
       })
@@ -488,22 +512,26 @@ export async function buildContext(
          FROM departments d WHERE d.active = true ORDER BY d.display_order, d.id LIMIT 50`)
       if (deps.length === 0) return
       if (!/部署|組織|チーム|所属/.test(topic) && !deps.some(d => topic.includes(d.name))) return
+      // 照合は生データ・表示は剥がし後（departments.name deny 時はブロックごと出さない = 従来パターン）
+      const strippedDeps = strip('departments', deps).filter(d => d.name)
+      if (strippedDeps.length === 0) return
       const { rows: allMembers } = await pool.query<Record<string, unknown> & { id: string; departmentId: string }>(
         `SELECT id, name, title, department_id AS "departmentId" FROM members
          WHERE active = true ORDER BY id LIMIT 300`)
       const strippedMembers = strip('members', allMembers)
       const nameOfMember = new Map(strippedMembers.filter(m => m.name).map(m => [m.id, String(m.name)]))
-      const lines = deps.map(d =>
+      const lines = strippedDeps.map(d =>
         `- ${d.name}（${d.members} 名${d.managerId && nameOfMember.get(d.managerId) ? `・責任者 ${nameOfMember.get(d.managerId)}` : ''}）`)
       // 部署名が話題に含まれる場合は所属メンバーも展開（「開発部」より「文脈開発部」を優先 = 最長一致）
       const hit = deps
         .filter(d => topic.includes(d.name))
         .sort((a, b) => b.name.length - a.name.length)[0]
-      if (hit) {
+      const hitShown = hit && strippedDeps.find(d => d.id === hit.id)
+      if (hitShown) {
         const names = strippedMembers
-          .filter(m => m.departmentId === hit.id && m.name)
+          .filter(m => m.departmentId === hitShown.id && m.name)
           .map(m => `${String(m.name)}${m.title ? `（${String(m.title)}）` : ''}`)
-        lines.push(`「${hit.name}」の所属: ${names.join(' / ') || 'なし'}`)
+        lines.push(`「${hitShown.name}」の所属: ${names.join(' / ') || 'なし'}`)
       }
       parts.push(`## 部署・組織（/masters の部署・組織図）\n${lines.join('\n')}`)
   })
@@ -521,8 +549,10 @@ export async function buildContext(
     const { rows: comp } = await pool.query<{ name: string }>(
       `SELECT name FROM companies WHERE id = $1`, [matched.companyId])
     const relLines = await personRelations(matched.id)
+    // 所属会社名にも companies の表示項目 deny を反映する
+    const compDisplayName = strip('companies', comp)[0]?.name
     parts.push(`## 顧客担当者「${String(p.name)}」
-所属 ${comp[0]?.name ?? '不明'}${p.dept ? ` ${String(p.dept)}` : ''} / 役職 ${String(p.title ?? '') || 'なし'}${
+所属 ${compDisplayName ?? '不明'}${p.dept ? ` ${String(p.dept)}` : ''} / 役職 ${String(p.title ?? '') || 'なし'}${
   p.keyPerson ? ` / キーパーソン度 ${String(p.keyPerson)}` : ''}${p.email ? ` / メール ${String(p.email)}` : ''}${
   relLines.length > 0 ? `\n人の関係: ${relLines.join(' / ')}` : ''}`)
   })
@@ -550,9 +580,11 @@ export async function buildContext(
       const { rows } = await pool.query<{ title: string; url: string; description: string }>(
         `SELECT title, url, description FROM external_links
          WHERE active = true ORDER BY display_order, id LIMIT 10`)
-      if (rows.length === 0) return
-      parts.push(`## 外部リンク（/support）\n${rows.map(l =>
-        `- ${l.title}: ${l.url}${l.description ? `（${capCp(l.description, 60)}）` : ''}`).join('\n')}`)
+      // 表示項目 deny を反映（title deny 時はリンクを特定できないため行ごと出さない）
+      const links = strip('external-links', rows).filter(l => l.title)
+      if (links.length === 0) return
+      parts.push(`## 外部リンク（/support）\n${links.map(l =>
+        `- ${l.title}${l.url ? `: ${l.url}` : ''}${l.description ? `（${capCp(l.description, 60)}）` : ''}`).join('\n')}`)
     })
   }
 

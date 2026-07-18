@@ -266,7 +266,7 @@ export function useChatbot() {
       // 初回質問ではロード未完了で照合が空振りし「回答できません」になる競合があった
       // （オペレーター報告 2026-07-18 #2 の実原因の一つ）。ロード完了を待ってから判定する
       await Promise.allSettled(
-        ['companies', 'industries', 'relationTypes', 'companyRelations', 'projects', 'knowledge', 'members']
+        ['companies', 'industries', 'relationTypes', 'companyRelations', 'projects', 'knowledge', 'members', 'departments']
           .map(n => loadApiCollection(n)))
       const ans = resolveAnswer(text)
       if (currentSessionId.value) {

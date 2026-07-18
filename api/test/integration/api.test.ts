@@ -1328,6 +1328,53 @@ describe('チャットボット文脈の供給網羅（オペレーター報告 
     expect(dept).toContain('部署・組織')
     expect(dept).toContain('「文脈開発部」の所属: 一般 次郎')
   })
+
+  it('補助マスタの表示項目 deny も文脈へ反映される（PR #41 レビュー指摘: strip 網羅）', async () => {
+    const deny = (id: string, subjectId: string, resource: string, field: string) => [{
+      id, subjectKind: 'role' as const, subjectId, resource, field, effect: 'deny' as const, active: true,
+    }]
+    // companies.fiscalStartMonth: 自社の会計年度が載らない（ブロック自体は残る）
+    const noFiscal = await buildContext(pool, adminUser, '自社について教えて',
+      deny('pm-aux1', 'admin', 'companies', 'fiscalStartMonth'))
+    expect(noFiscal).toContain('自社「ツナグバ本社」')
+    expect(noFiscal).not.toContain('会計年度')
+    // companies.primaryIndustryId: （主）マークが消える（業界名自体は載る）
+    const noPrimary = await buildContext(pool, adminUser, 'CTX商事の業界は？',
+      deny('pm-aux2', 'admin', 'companies', 'primaryIndustryId'))
+    expect(noPrimary).toContain('業界: アパレル')
+    expect(noPrimary).not.toContain('アパレル（主）')
+    // industries.name: 会社ブロックの業界行・業界逆引きブロックごと消える（description 等は残る）
+    const noInd = await buildContext(pool, adminUser, 'CTX商事の業界別の状況を教えて',
+      deny('pm-aux3', 'admin', 'industries', 'name'))
+    expect(noInd).toContain('顧客「CTX商事」')
+    expect(noInd).not.toContain('業界: アパレル')
+    expect(noInd).not.toContain('業界別の顧客')
+    // relation-types.label: 関係ラベルが消える（相手名は残る）
+    const noLabel = await buildContext(pool, adminUser, 'CTX商事との関係を教えて',
+      deny('pm-aux4', 'admin', 'relation-types', 'label'))
+    expect(noLabel).toContain('会社間の関係:')
+    expect(noLabel).toContain('ツナグバ本社')
+    expect(noLabel).not.toContain('販売代理店')
+    // company-relations.notes: 関係メモが消える（ラベルは残る）
+    const noNotes = await buildContext(pool, adminUser, 'CTX商事との関係を教えて',
+      deny('pm-aux5', 'admin', 'company-relations', 'notes'))
+    expect(noNotes).toContain('ツナグバ本社: 販売代理店')
+    expect(noNotes).not.toContain('主要取引')
+    // leave-types.name: 種別を特定できないため休暇種別ブロックごと消える（本人の有給は残る）
+    const noLeave = await buildContext(pool, memberUser, 'どんな休暇の種類がありますか？',
+      deny('pm-aux6', 'member', 'leave-types', 'name'))
+    expect(noLeave).not.toContain('## 休暇種別')
+    // external-links.url: タイトルのみ表示に縮退する
+    const noUrl = await buildContext(pool, memberUser, '勤怠システムのリンクを教えて',
+      deny('pm-aux7', 'member', 'external-links', 'url'))
+    expect(noUrl).toContain('- 勤怠システム')
+    expect(noUrl).not.toContain('https://example.com/kintai')
+    // departments.name: 部署ブロックごと消え、メンバーブロックの部署も未所属になる
+    const noDept = await buildContext(pool, adminUser, '文脈開発部の一般 次郎さんについて教えて',
+      deny('pm-aux8', 'admin', 'departments', 'name'))
+    expect(noDept).not.toContain('部署・組織')
+    expect(noDept).toContain('部署 未所属')
+  })
 })
 
 describe('AI カンパニー（F-08）', () => {
