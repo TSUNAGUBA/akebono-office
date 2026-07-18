@@ -31,6 +31,18 @@ const pageTitle = computed(() => {
   return '' // ナビ定義にないルート（404 等）はタイトル非表示
 })
 
+// 権限ルールで deny された機能はモバイル下部ナビ・ヘッダー導線（打刻/通知）からも隠す（F-16）
+const { canPath } = usePermissions()
+const visibleMobileNav = computed(() => MOBILE_NAV.filter(i => canPath(i.path)))
+
+// 遷移時のガードは permissions.global.ts。ここは「滞在中に deny になった」場合の補完:
+// API モードのルール非同期ハイドレーション完了時・モックモードのユーザー切替時に現在ページを再判定する
+watchEffect(() => {
+  if (route.path !== '/' && route.path !== '/login' && !canPath(route.path)) {
+    navigateTo('/')
+  }
+})
+
 function onSwitchUser(id: string): void {
   switchUser(id)
   userMenuOpen.value = false
@@ -61,12 +73,12 @@ function onSwitchUser(id: string): void {
           <House class="h-4 w-4" aria-hidden="true" /> ホーム
         </NuxtLink>
 
-        <button type="button" class="btn btn-ghost btn-sm" @click="punchModalOpen = true">
+        <button v-if="canPath('/attendance')" type="button" class="btn btn-ghost btn-sm" @click="punchModalOpen = true">
           <Clock3 class="h-4 w-4" aria-hidden="true" />
           <span class="hidden sm:inline">タイムカード</span>
         </button>
 
-        <NuxtLink to="/inbox" class="btn btn-ghost btn-sm relative" aria-label="通知">
+        <NuxtLink v-if="canPath('/inbox')" to="/inbox" class="btn btn-ghost btn-sm relative" aria-label="通知">
           <Bell class="h-4 w-4" />
           <span
             v-if="unreadCount > 0"
@@ -131,7 +143,7 @@ function onSwitchUser(id: string): void {
       aria-label="モバイルナビゲーション"
     >
       <NuxtLink
-        v-for="item in MOBILE_NAV"
+        v-for="item in visibleMobileNav"
         :key="item.path"
         :to="item.path"
         class="relative flex flex-1 flex-col items-center justify-center gap-0.5 text-[10px] font-semibold"

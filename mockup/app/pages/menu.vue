@@ -6,6 +6,7 @@ import { isActivePath, NAV_GROUPS } from '~/utils/navigation'
 const route = useRoute()
 const { isAdmin } = useCurrentUser()
 const { isEnabled } = useAppSettings()
+const { canPath } = usePermissions()
 
 function iconOf(name: string) {
   return (icons as Record<string, unknown>)[name] ?? icons.Circle
@@ -16,7 +17,7 @@ const visibleGroups = computed(() =>
     .map(g => ({
       ...g,
       items: g.items.filter(i =>
-        (!i.adminOnly || isAdmin.value) && (!i.featureKey || isEnabled(i.featureKey)),
+        (!i.adminOnly || isAdmin.value) && (!i.featureKey || isEnabled(i.featureKey)) && canPath(i.path),
       ),
     }))
     .filter(g => g.items.length > 0),

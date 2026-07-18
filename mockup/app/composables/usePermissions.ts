@@ -1,0 +1,39 @@
+/**
+ * 権限制御（F-16・オペレーター指示 2026-07-17）のフロント側判定。
+ * 判定ロジックは shared/domain/permissions.ts（API と共有）。ルールは移行済みマスタ
+ * `permissionRules`（API モードはサーバーの permission_rules をハイドレーション）。
+ * - can(resource): 機能の利用可否（メニュー表示・ページガード）
+ * - canPath(path): ページパスからの判定（ガード対象外パスは常に true）
+ * - canField(resource, field): 表示項目の可否（API モードはサーバーもレスポンスから剥がす）
+ * 既定は allow（ルール未設定なら挙動不変）。既存のロールガードを緩めることはできない（制限レイヤ）。
+ */
+import {
+  canUseFeature, canViewField, featureKeyOfPath, type PermissionSubject,
+} from '../../../shared/domain/permissions'
+
+export function usePermissions() {
+  const { tbl } = useMockDb()
+  const { currentUser } = useCurrentUser()
+  const rules = tbl('permissionRules')
+
+  const subject = computed<PermissionSubject>(() => ({
+    memberId: currentUser.value.id,
+    title: currentUser.value.title ?? '',
+    role: currentUser.value.role,
+  }))
+
+  function can(resource: string): boolean {
+    return canUseFeature(rules.value, subject.value, resource)
+  }
+
+  function canPath(path: string): boolean {
+    const key = featureKeyOfPath(path)
+    return key === null || can(key)
+  }
+
+  function canField(resource: string, field: string): boolean {
+    return canViewField(rules.value, subject.value, resource, field)
+  }
+
+  return { can, canPath, canField }
+}

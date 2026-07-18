@@ -4,7 +4,7 @@
  */
 import type {
   AiActivityLog, AiEmployee, AiRole, AiTask, AkebonoWish, ApprovalLog,
-  AppConfigItem, AppNotification, AttendanceFixRequest, AttendanceRule, AuditLog, CalendarEvent, ChatMessage, ChatSession,
+  AppConfigItem, AppNotification, AttendanceFixRequest, AttendanceRule, AuditLog, CalendarEvent, ChatMessage, ChatSession, PermissionRule,
   CodeMasterItem, Company, CompanyRelation, Contact, ContactRelation,
   CustomFieldDef, DailyReport, DecisionLog, DecisionTheme, DelegateSetting, Department,
   DocumentNode, Escalation, EscalationRule, ExternalLink, FeatureToggle, HearingLog,
@@ -73,6 +73,7 @@ export interface MockDbShape {
   documents: DocumentNode[]
   chatMessages: ChatMessage[]
   chatSessions: ChatSession[]
+  permissionRules: PermissionRule[]
   akebonoWishes: AkebonoWish[]
   auditLogs: AuditLog[]
   calendarEvents: CalendarEvent[]
@@ -130,6 +131,7 @@ export function buildSeed(): MockDbShape {
     documents: support.seedDocumentNodes,
     chatMessages: [],
     chatSessions: [],
+    permissionRules: [],
     akebonoWishes: misc.seedAkebonoWishes,
     auditLogs: misc.seedAuditLogs,
     // google 発予定のキャッシュは「連携済みメンバー」の分だけ初期投入する。

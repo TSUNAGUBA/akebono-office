@@ -129,6 +129,7 @@ generateDraft(memberId, date): ReportDraft           // 保存しない（フォ
 | useNotifications | `GET /v1/notifications`・`POST /v1/notifications/:id/read`・`POST /v1/notifications/read-all`（**実装・フロント接続済み**。60 秒ポーリング。発火はサーバー側 = 未接続ドメインの notify はクライアント no-op） |
 | useChatbot | `POST /v1/chatbot/ask`（sessionId 任意 = 未指定は新規セッション開始）・`GET /v1/chatbot/sessions`・`GET/POST /v1/chatbot/sessions/:id/messages`（**実装・フロント接続済み**。Vertex AI 一次応答 = 本人の有給・勤怠・顧客・ナレッジをサーバーで文脈化 + セッションの直近履歴 12 件（各 500 字）を渡すマルチターン。一覧は直近 100 セッション・メッセージは 1 セッション 500 件まで返却。会話は chat_sessions / chat_messages（DB）が SoT で本人のみ参照可・メッセージは追記のみ。過去セッションの再開・新規開始に対応（オペレーター指示 2026-07-17 = 旧「セッションローカル」設計判断を置換）。LLM 無効/失敗/低確信度は fallback 指示でクライアントの決定的ルーティングへ縮退し、縮退応答も POST messages で履歴へ追記） |
 | useDecision | `GET /v1/decisions/logs`・`POST /v1/decisions/logs`（**実装・フロント接続済み**。判断テーマ = `/v1/masters/decision-themes`（汎用マスタ）。判断ログは追記のみ = 記録系保護。テーマ・選択肢・理由の存在チェックはサーバーが強制。シナリオ予測（決定的線形モデル）は表示射影としてクライアント側に維持 = 設計判断） |
+| usePermissions | ルール = `/v1/masters/permission-rules`（汎用マスタ）。判定は shared/domain/permissions.ts をフロント/API で共有（個人 > 役職 > ロール・同一レイヤは deny 優先・未設定は allow）。機能ガード = API middleware（/v1/masters・/v1/configs・/v1/notifications・/v1/escalations はデータ面のため対象外）+ フロントのメニュー/ページ非表示。表示項目レベルはマスタ GET 応答からサーバーが剥がす |
 | 参照系 computed | `GET` + クライアントキャッシュ（表示射影はフロント純粋関数のまま維持） |
 
 ## 4. エラーコード起番（台帳: モックアップ + API サービス共通）
@@ -194,6 +195,7 @@ generateDraft(memberId, date): ReportDraft           // 保存しない（フォ
 | AKO-ESC-999 | 起票失敗（主フローは継続 = 非ブロッキング） | ✅ |
 | AKO-RTM-001 | 使用中の関係種別の物理削除（不可。未使用のみ削除可・使用中は無効化を案内） | ✅ |
 | AKO-CHT-001 | チャットセッションが見つからない・他人のセッションへの操作（404 に統一 = 存在を漏らさない） | ✅ |
+| AKO-PRM-001 | 機能の利用権限がない（権限ルールの deny・403） | ✅ |
 | AKO-DEC-001 | 判断テーマが見つからない | ✅ |
 | AKO-DEC-002 | 選択肢が見つからない | ✅ |
 | AKO-DEC-003 | 判断理由未入力 | ✅ |

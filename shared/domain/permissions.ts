@@ -1,0 +1,124 @@
+/**
+ * 権限解決（F-16 権限制御・オペレーター指示 2026-07-17）。フロント/API で共有する純粋関数。
+ *
+ * 解決順序（レイヤ優先）: member（個人）> title（役職）> role（ロール）。
+ * - 上位レイヤに該当ルールがあれば、そのレイヤの結果で確定する（個人の allow は役職/ロールの deny を上書き）
+ * - 同一レイヤ内に allow と deny が両方あれば deny 優先
+ * - どのレイヤにもルールがなければ **allow（既定）** = ルール未設定の環境では挙動が変わらない（下位互換）
+ *
+ * 安全方向の原則: 本ルールは既存のロールガード（admin/hr/member の API ガード）を緩められない
+ * 「制限レイヤ」である。allow ルールは同レイヤ/下位レイヤの deny を打ち消すためのもので、
+ * 既存ガードを超える権限は付与しない（設定ミスで権限昇格が起きない）。
+ */
+import type { PermissionRule } from './types'
+
+/** 権限解決の対象者（member の該当判定に使う属性） */
+export interface PermissionSubject {
+  memberId: string
+  /** 役職名（members.title。空文字 = 役職なし） */
+  title: string
+  role: 'admin' | 'hr' | 'member'
+}
+
+/** 機能キーのカタログ（管理 UI の選択肢・ページ/API ガードの共通語彙） */
+export const FEATURE_PERMISSION_KEYS: { key: string; label: string }[] = [
+  { key: 'attendance', label: '勤怠管理（休暇含む）' },
+  { key: 'shift', label: 'シフト表' },
+  { key: 'reports', label: '日報・週報' },
+  { key: 'ai-assistant', label: 'AI業務アシスタント（カレンダー連携含む）' },
+  { key: 'workflow', label: 'ワークフロー・稟議' },
+  { key: 'decision', label: '意思決定支援' },
+  { key: 'ai-company', label: 'AIネイティブカンパニー' },
+  { key: 'akebono', label: 'AKEBONO（3D オフィス）' },
+  { key: 'support', label: '業務支援ツール（ハブ）' },
+  { key: 'chatbot', label: 'AIチャットボット' },
+  { key: 'documents', label: 'ドキュメント管理' },
+  { key: 'sales', label: '売上管理' },
+  { key: 'status', label: '提供システム稼働状況' },
+  { key: 'inbox', label: '通知・エスカレーション' },
+  { key: 'masters', label: 'マスタメンテナンス' },
+  { key: 'settings', label: '設定' },
+]
+
+/** ページパス → 機能キー（フロントのメニュー・ルートガード用。null = ガード対象外 = 常に表示可） */
+export function featureKeyOfPath(path: string): string | null {
+  if (path === '/support/chatbot' || path.startsWith('/support/chatbot/')) return 'chatbot'
+  if (path === '/support/documents' || path.startsWith('/support/documents/')) return 'documents'
+  const seg = path.split('/')[1] ?? ''
+  const known = [
+    'attendance', 'shift', 'reports', 'ai-assistant', 'workflow', 'decision', 'ai-company',
+    'akebono', 'support', 'sales', 'status', 'inbox', 'masters', 'settings',
+  ]
+  return known.includes(seg) ? seg : null
+}
+
+/** ルールが対象者に該当するか（レイヤ判定は呼び出し側） */
+function matches(rule: PermissionRule, subject: PermissionSubject): boolean {
+  if (rule.subjectKind === 'member') return rule.subjectId === subject.memberId
+  if (rule.subjectKind === 'title') return rule.subjectId !== '' && rule.subjectId === subject.title
+  return rule.subjectId === subject.role
+}
+
+/** 1 レイヤ分の判定（deny 優先。該当ルールなしは null = 次レイヤへ） */
+function decideLayer(rules: PermissionRule[]): boolean | null {
+  if (rules.length === 0) return null
+  return rules.every(r => r.effect === 'allow')
+}
+
+function resolve(
+  rules: PermissionRule[],
+  subject: PermissionSubject,
+  resource: string,
+  field: string | null,
+): boolean {
+  const applicable = rules.filter(r =>
+    r.active && r.resource === resource && (r.field ?? null) === field && matches(r, subject))
+  for (const kind of ['member', 'title', 'role'] as const) {
+    const decided = decideLayer(applicable.filter(r => r.subjectKind === kind))
+    if (decided !== null) return decided
+  }
+  return true // 既定 = allow（下位互換）
+}
+
+/** 機能の利用可否（メニュー表示・ページガード・API ガード共通） */
+export function canUseFeature(
+  rules: PermissionRule[],
+  subject: PermissionSubject,
+  resource: string,
+): boolean {
+  // admin のマスタ・設定はロックアウト防止のため deny を無視する（権限ルール自体の編集手段を失わない = 設計判断）
+  if (subject.role === 'admin' && (resource === 'masters' || resource === 'settings')) return true
+  return resolve(rules, subject, resource, null)
+}
+
+/** 表示項目の可否（resource = マスタエンティティキー等・field = 項目名） */
+export function canViewField(
+  rules: PermissionRule[],
+  subject: PermissionSubject,
+  resource: string,
+  field: string,
+): boolean {
+  return resolve(rules, subject, resource, field)
+}
+
+/** オブジェクト配列から閲覧不可フィールドを取り除く（API レスポンス・モック共通の剥がし処理） */
+export function stripDeniedFields<T extends Record<string, unknown>>(
+  rules: PermissionRule[],
+  subject: PermissionSubject,
+  resource: string,
+  rows: T[],
+): T[] {
+  const denied = [...new Set(
+    rules
+      .filter(r => r.active && r.resource === resource && r.field)
+      .map(r => r.field as string),
+  )].filter(f => !canViewField(rules, subject, resource, f))
+  if (denied.length === 0) return rows
+  return rows.map((row) => {
+    const copy = { ...row }
+    for (const f of denied) {
+      if (f in copy) delete (copy as Record<string, unknown>)[f]
+    }
+    return copy
+  })
+}

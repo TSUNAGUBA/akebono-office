@@ -1141,3 +1141,77 @@ describe('カレンダー連携', () => {
     expect(d.basis.some(b => b.includes('カレンダー予定'))).toBe(true)
   })
 })
+
+describe('権限制御（F-16）', () => {
+  let denyId = ''
+  let allowId = ''
+  let fieldId = ''
+
+  it('ロール deny で機能 API が 403（AKO-PRM-001）。他ロールには影響しない', async () => {
+    const r = await api('POST', '/v1/masters/permission-rules', {
+      as: ADMIN, body: { subjectKind: 'role', subjectId: 'member', resource: 'decision', effect: 'deny' },
+    })
+    expect(r.status).toBe(201)
+    denyId = (r.json.data as { id: string }).id
+    const denied = await api('GET', '/v1/decisions/logs', { as: MEMBER })
+    expect(denied.status).toBe(403)
+    expect(denied.json.error?.code).toBe('AKO-PRM-001')
+    expect((await api('GET', '/v1/decisions/logs', { as: ADMIN })).status).toBe(200)
+    // ガード対象外のデータ面（マスタ・設定・通知）は deny 中も利用できる
+    expect((await api('GET', '/v1/masters/members', { as: MEMBER })).status).toBe(200)
+    expect((await api('GET', '/v1/notifications', { as: MEMBER })).status).toBe(200)
+  })
+
+  it('個人の allow がロールの deny を上書きする（レイヤ優先: 個人 > 役職 > ロール）', async () => {
+    const r = await api('POST', '/v1/masters/permission-rules', {
+      as: ADMIN, body: { subjectKind: 'member', subjectId: MEMBER, resource: 'decision', effect: 'allow' },
+    })
+    expect(r.status).toBe(201)
+    allowId = (r.json.data as { id: string }).id
+    expect((await api('GET', '/v1/decisions/logs', { as: MEMBER })).status).toBe(200)
+  })
+
+  it('表示項目 deny でマスタ応答からフィールドが剥がれる（対象レイヤのみ）。無効化で復帰する', async () => {
+    const r = await api('POST', '/v1/masters/permission-rules', {
+      as: ADMIN, body: { subjectKind: 'role', subjectId: 'member', resource: 'members', field: 'email', effect: 'deny' },
+    })
+    expect(r.status).toBe(201)
+    fieldId = (r.json.data as { id: string }).id
+    const mine = (await api('GET', '/v1/masters/members', { as: MEMBER })).json.data as { email?: string }[]
+    expect(mine.length).toBeGreaterThan(0)
+    expect(mine.every(m => m.email === undefined)).toBe(true)
+    const admin = (await api('GET', '/v1/masters/members', { as: ADMIN })).json.data as { email?: string }[]
+    expect(admin.some(m => typeof m.email === 'string')).toBe(true)
+
+    // 後続テストへ影響しないよう全ルールを無効化（キャッシュは変更 API が即時クリア）
+    for (const id of [denyId, allowId, fieldId]) {
+      expect((await api('POST', `/v1/masters/permission-rules/${id}/archive`, { as: ADMIN })).status).toBe(200)
+    }
+    expect((await api('GET', '/v1/decisions/logs', { as: MEMBER })).status).toBe(200)
+    const restored = (await api('GET', '/v1/masters/members', { as: MEMBER })).json.data as { email?: string }[]
+    expect(restored.some(m => typeof m.email === 'string')).toBe(true)
+  })
+
+  it('subjectKind と subjectId のペア整合を検証する（不整合ルールの登録を防ぐ）', async () => {
+    // ロール層の対象は admin / hr / member のみ
+    const badRole = await api('POST', '/v1/masters/permission-rules', {
+      as: ADMIN, body: { subjectKind: 'role', subjectId: 'ceo', resource: 'decision', effect: 'deny' },
+    })
+    expect(badRole.status).toBe(400)
+    // PATCH で subjectKind だけを変えるとペアが崩れるため拒否（subjectId と同時指定が必要）
+    const created = await api('POST', '/v1/masters/permission-rules', {
+      as: ADMIN, body: { subjectKind: 'role', subjectId: 'member', resource: 'decision', effect: 'allow' },
+    })
+    expect(created.status).toBe(201)
+    const id = (created.json.data as { id: string }).id
+    const badPatch = await api('PATCH', `/v1/masters/permission-rules/${id}`, {
+      as: ADMIN, body: { subjectKind: 'title' },
+    })
+    expect(badPatch.status).toBe(400)
+    const goodPatch = await api('PATCH', `/v1/masters/permission-rules/${id}`, {
+      as: ADMIN, body: { subjectKind: 'member', subjectId: MEMBER },
+    })
+    expect(goodPatch.status).toBe(200)
+    expect((await api('POST', `/v1/masters/permission-rules/${id}/archive`, { as: ADMIN })).status).toBe(200)
+  })
+})

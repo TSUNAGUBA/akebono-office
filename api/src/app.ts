@@ -8,6 +8,7 @@ import type pg from 'pg'
 import { authMiddleware } from './auth'
 import type { Env } from './env'
 import { errorResponse } from './lib/errors'
+import { featureGuard } from './lib/permissions'
 import { attendanceRoutes } from './routes/attendance'
 import { configsRoutes } from './routes/configs'
 import { escalationsRoutes } from './routes/escalations'
@@ -63,6 +64,8 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
   // 本人性は DB 保存の state ノンス（一回性・10 分 TTL）+ id_token の email と members.email の突合で担保する
   app.get('/v1/calendar/oauth/callback', calendarOauthCallback(pool, env))
   app.use('/v1/*', authMiddleware(env, pool))
+  // 機能単位の権限ガード（F-16。認証の後段。/v1/masters・/v1/configs はデータ面のため対象外 = lib/permissions 参照）
+  app.use('/v1/*', featureGuard(pool))
 
   // 認証済みユーザー自身の情報（フロントの起動時に呼ぶ）
   app.get('/v1/me', (c) => c.json({ data: c.get('user') }))

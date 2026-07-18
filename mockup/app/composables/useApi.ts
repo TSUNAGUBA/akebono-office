@@ -176,6 +176,7 @@ const MIGRATED_MASTERS: Record<string, string> = {
   attendanceRules: 'attendance-rules',
   workflowRoutes: 'workflow-routes',
   decisionThemes: 'decision-themes',
+  permissionRules: 'permission-rules',
 }
 
 /** API モード時に API が SoT となるコレクション（tbl() が API キャッシュを返す） */

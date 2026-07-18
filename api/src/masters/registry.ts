@@ -29,6 +29,31 @@ const workflowRouteBase = z.object({
   active: z.boolean().default(true),
 })
 
+/** permission-rules の基底（PATCH は .partial() を使うためクロスフィールド検証前の形を保持） */
+const permissionRuleBase = z.object({
+  subjectKind: z.enum(['role', 'title', 'member']),
+  subjectId: z.string().trim().min(1, '対象を指定してください'),
+  resource: z.string().trim().min(1, 'リソースを指定してください'),
+  field: z.string().trim().nullable().default(null),
+  effect: z.enum(['allow', 'deny']),
+})
+
+/**
+ * subjectKind / subjectId のペア整合。不整合ルールはマッチ不能（inert）で昇格リスクはないが、
+ * 「登録したのに効かない」事故を防ぐ。object 単位の superRefine は .partial() に引き継がれないため
+ * create / patch の両スキーマへ個別に適用する
+ */
+function permissionSubjectCheck(v: { subjectKind?: string; subjectId?: string }, ctx: z.RefinementCtx): void {
+  if (v.subjectKind === undefined && v.subjectId === undefined) return
+  if (v.subjectKind === undefined || v.subjectId === undefined) {
+    ctx.addIssue({ code: 'custom', path: ['subjectKind'], message: '対象レイヤ（subjectKind）と対象（subjectId）は同時に指定してください' })
+    return
+  }
+  if (v.subjectKind === 'role' && !['admin', 'hr', 'member'].includes(v.subjectId)) {
+    ctx.addIssue({ code: 'custom', path: ['subjectId'], message: 'ロール層の対象は admin / hr / member のいずれかです' })
+  }
+}
+
 const schemas = {
   members: z.object({
     name: z.string().trim().min(1, '氏名は必須です'),
@@ -206,6 +231,7 @@ const schemas = {
     })).default([]),
     active: z.boolean().default(true),
   }),
+  'permission-rules': permissionRuleBase.superRefine(permissionSubjectCheck),
 } as const
 
 export type MasterEntity = keyof typeof schemas
@@ -234,6 +260,7 @@ export const MASTERS: Record<MasterEntity, MasterDef> = {
   'contacts': { table: 'contacts', idPrefix: 'p', schema: schemas.contacts, patchSchema: schemas.contacts.partial(), jsonbFields: ['custom'] },
   // 関係種別は論理削除（無効化）に加え、未使用時のみ物理削除可（参照ガードは masters.ts の DELETE 側）
   'relation-types': { table: 'relation_types', idPrefix: 'rt', schema: schemas['relation-types'], patchSchema: schemas['relation-types'].partial(), jsonbFields: [], physicalDelete: true },
+  'permission-rules': { table: 'permission_rules', idPrefix: 'pm', schema: schemas['permission-rules'], patchSchema: permissionRuleBase.partial().superRefine(permissionSubjectCheck), jsonbFields: [] },
   'company-relations': { table: 'company_relations', idPrefix: 'cr', schema: schemas['company-relations'], jsonbFields: [], physicalDelete: true, noActive: true },
   'contact-relations': { table: 'contact_relations', idPrefix: 'pr', schema: schemas['contact-relations'], jsonbFields: [], physicalDelete: true, noActive: true },
   'projects': { table: 'projects', idPrefix: 'pj', schema: schemas.projects, patchSchema: schemas.projects.partial(), jsonbFields: ['memberIds', 'custom'] },

@@ -719,6 +719,24 @@ export interface ChatMessage {
   at: string
 }
 
+/**
+ * 権限ルール（F-16 権限制御・オペレーター指示 2026-07-17）
+ * - subjectKind: 適用レイヤ。member（個人）> title（役職）> role（ロール）の優先順で解決する
+ * - resource: 機能キー（FEATURE_PERMISSION_KEYS）またはマスタエンティティキー（フィールド制御時）
+ * - field: null = 機能全体の利用可否 / 値あり = 表示項目レベルの制御
+ * - 既存のロールガード（admin/hr/member）は緩められない（ルールは制限レイヤ = 権限昇格しない設計）
+ */
+export interface PermissionRule {
+  id: string
+  subjectKind: 'role' | 'title' | 'member'
+  /** role: admin|hr|member / title: 役職名（メンバーの title と一致）/ member: メンバー id */
+  subjectId: string
+  resource: string
+  field: string | null
+  effect: 'allow' | 'deny'
+  active: boolean
+}
+
 /** チャットセッション（オペレーター指示 2026-07-17: マルチターン・過去セッション再開・新規開始） */
 export interface ChatSession {
   id: string
