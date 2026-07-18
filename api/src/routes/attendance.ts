@@ -35,6 +35,15 @@ async function punchesOf(pool: pg.Pool, memberId: string, date: string): Promise
   return rows
 }
 
+/**
+ * 勤怠ルールの SELECT 列（AttendanceRule 型と 1:1。参照箇所で共通利用 = 列追加時の更新漏れ防止）。
+ * PR #43 レビュー指摘: 列リストの重複で workingWeekdays 等の追加が一部にしか反映されない事故を防ぐ
+ */
+export const ATTENDANCE_RULE_COLS = `id, name, applies_to AS "appliesTo", default_for AS "defaultFor",
+  work_start AS "workStart", work_end AS "workEnd", break_minutes AS "breakMinutes",
+  flex, closing_day AS "closingDay", legal_holiday_weekday AS "legalHolidayWeekday",
+  working_weekdays AS "workingWeekdays", holiday_aware AS "holidayAware", active`
+
 /** メンバーへ適用する勤怠ルールの解決（assist の翌営業日計算でも再利用するため export） */
 export async function ruleOf(pool: pg.Pool, memberId: string): Promise<AttendanceRule | undefined> {
   const member = await pool.query<Pick<Member, 'attendanceRuleId' | 'employmentType'>>(
@@ -42,11 +51,7 @@ export async function ruleOf(pool: pg.Pool, memberId: string): Promise<Attendanc
     [memberId],
   )
   const rules = await pool.query(
-    `SELECT id, name, applies_to AS "appliesTo", default_for AS "defaultFor",
-            work_start AS "workStart", work_end AS "workEnd", break_minutes AS "breakMinutes",
-            flex, closing_day AS "closingDay", legal_holiday_weekday AS "legalHolidayWeekday",
-            working_weekdays AS "workingWeekdays", holiday_aware AS "holidayAware", active
-     FROM attendance_rules ORDER BY id`)
+    `SELECT ${ATTENDANCE_RULE_COLS} FROM attendance_rules ORDER BY id`)
   return resolveRule(member.rows[0], rules.rows as AttendanceRule[])
 }
 
@@ -191,10 +196,7 @@ export function attendanceRoutes(pool: pg.Pool): Hono {
       [memberIds, from, to],
     )
     const rules = await pool.query(
-      `SELECT id, name, applies_to AS "appliesTo", default_for AS "defaultFor",
-              work_start AS "workStart", work_end AS "workEnd", break_minutes AS "breakMinutes",
-              flex, closing_day AS "closingDay", legal_holiday_weekday AS "legalHolidayWeekday", active
-       FROM attendance_rules ORDER BY id`)
+      `SELECT ${ATTENDANCE_RULE_COLS} FROM attendance_rules ORDER BY id`)
 
     const byMember = new Map<string, PunchRecord[]>()
     for (const p of punches.rows) {

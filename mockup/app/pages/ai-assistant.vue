@@ -66,12 +66,25 @@ async function onRecordResult(p: TaskPlan): Promise<void> {
 // （オペレーター報告 2026-07-18 #4: 外注等の週末稼働・祝日をマスタで制御）
 const biz = useBusinessDay()
 
-const planDate = ref(biz.nextWorkingDayFor(currentUserId.value, todayKey))
+const defaultPlanDate = computed(() => biz.nextWorkingDayFor(currentUserId.value, todayKey))
+const planDate = ref(defaultPlanDate.value)
+// API モードは祝日・勤怠ルールが非同期ハイドレーションのため、setup 時点の既定値は
+// 旧挙動（土日スキップのみ）になり得る。ユーザーが対象日を手動変更するまでは
+// キャッシュ到着後の再計算へ追随させる（PR #43 レビュー指摘 R-1）
+const planDateTouched = ref(false)
+watch(defaultPlanDate, (v) => {
+  if (!planDateTouched.value) planDate.value = v
+})
+
+function movePlanDate(days: number): void {
+  planDateTouched.value = true
+  planDate.value = addDays(planDate.value, days)
+}
 
 /** 対象日が暦日の明日と異なる場合の説明ラベル（「明日」見出しとの乖離を明示する） */
 const planDateNote = computed(() => {
   const note: string[] = []
-  if (planDate.value === biz.nextWorkingDayFor(currentUserId.value, todayKey) && planDate.value !== addDays(todayKey, 1)) {
+  if (planDate.value === defaultPlanDate.value && planDate.value !== addDays(todayKey, 1)) {
     note.push('翌営業日')
   }
   const holiday = biz.holidayNameOf(planDate.value)
@@ -222,7 +235,8 @@ watch([recDate, currentUserId], () => {
   resultForm.value = {}
 })
 watch(currentUserId, () => {
-  planDate.value = biz.nextWorkingDayFor(currentUserId.value, todayKey)
+  planDateTouched.value = false
+  planDate.value = defaultPlanDate.value
   recDate.value = todayKey
 })
 
@@ -255,12 +269,12 @@ const insightRows = computed(() => tp.insights(7))
           description="予定タスクに目的・達成条件・段取りを登録し、AI コメントで磨きます"
         >
           <template #actions>
-            <button type="button" class="btn btn-sm" aria-label="前日へ" @click="planDate = addDays(planDate, -1)">
+            <button type="button" class="btn btn-sm" aria-label="前日へ" @click="movePlanDate(-1)">
               <ChevronLeft class="h-4 w-4" aria-hidden="true" />
             </button>
             <span class="num whitespace-nowrap text-xs font-semibold">{{ fmtDateLong(planDate) }}</span>
             <UiStatusBadge v-if="planDateNote" :label="planDateNote" tone="neutral" />
-            <button type="button" class="btn btn-sm" aria-label="翌日へ" @click="planDate = addDays(planDate, 1)">
+            <button type="button" class="btn btn-sm" aria-label="翌日へ" @click="movePlanDate(1)">
               <ChevronRight class="h-4 w-4" aria-hidden="true" />
             </button>
           </template>
