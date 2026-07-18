@@ -31,6 +31,10 @@ const pageTitle = computed(() => {
   return '' // ナビ定義にないルート（404 等）はタイトル非表示
 })
 
+// 権限ルールで deny された機能はモバイル下部ナビからも隠す（F-16）
+const { canPath } = usePermissions()
+const visibleMobileNav = computed(() => MOBILE_NAV.filter(i => canPath(i.path)))
+
 function onSwitchUser(id: string): void {
   switchUser(id)
   userMenuOpen.value = false
@@ -131,7 +135,7 @@ function onSwitchUser(id: string): void {
       aria-label="モバイルナビゲーション"
     >
       <NuxtLink
-        v-for="item in MOBILE_NAV"
+        v-for="item in visibleMobileNav"
         :key="item.path"
         :to="item.path"
         class="relative flex flex-1 flex-col items-center justify-center gap-0.5 text-[10px] font-semibold"

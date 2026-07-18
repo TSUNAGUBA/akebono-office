@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * F-10 マスタメンテナンス ハブ（管理者専用）
- * 12 マスタ + ナレッジ + 設定への案内カード。各カードに件数バッジ。
+ * 13 マスタ + ナレッジ + 設定への案内カード。各カードに件数バッジ。
  */
 import type { MenuCard } from '~/types/ui'
 
@@ -16,6 +16,7 @@ const contacts = tbl('contacts')
 const companyRelations = tbl('companyRelations')
 const contactRelations = tbl('contactRelations')
 const relationTypes = tbl('relationTypes')
+const permissionRules = tbl('permissionRules')
 const projects = tbl('projects')
 const knowledge = tbl('knowledge')
 const codeMaster = tbl('codeMaster')
@@ -120,6 +121,14 @@ const cards = computed<MenuCard[]>(() => [
     icon: 'FolderKanban',
     to: '/masters/projects',
     badge: activeCount(projects.value),
+  },
+  {
+    id: 'permissions',
+    title: '権限設定',
+    description: 'ロール・役職・個人の 3 レイヤで機能と表示項目の権限を制御',
+    icon: 'ShieldCheck',
+    to: '/masters/permissions',
+    badge: activeCount(permissionRules.value),
   },
   {
     id: 'knowledge',

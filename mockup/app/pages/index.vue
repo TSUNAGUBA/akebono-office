@@ -25,6 +25,8 @@ const greeting = computed(() => {
 })
 const todayLong = computed(() => fmtDateLong(nowJstIso()))
 
+const { canPath } = usePermissions()
+
 // ---------- 承認待ち件数（useWorkflow.pendingFor が SoT。代理承認・個人指定も考慮済み） ----------
 const pendingApprovals = computed(() => pendingFor(currentUserId.value).length)
 
@@ -88,7 +90,10 @@ const menuSections = computed<MenuSection[]>(() => {
       ],
     })
   }
+  // 権限ルールで deny された機能のカードを隠す（F-16。空になったセクションごと落とす）
   return sections
+    .map(sec => ({ ...sec, cards: sec.cards.filter(card => !card.to || canPath(card.to)) }))
+    .filter(sec => sec.cards.length > 0)
 })
 
 // ---------- 通知フィード ----------

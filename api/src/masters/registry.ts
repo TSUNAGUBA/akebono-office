@@ -206,6 +206,13 @@ const schemas = {
     })).default([]),
     active: z.boolean().default(true),
   }),
+  'permission-rules': z.object({
+    subjectKind: z.enum(['role', 'title', 'member']),
+    subjectId: z.string().trim().min(1, '対象を指定してください'),
+    resource: z.string().trim().min(1, 'リソースを指定してください'),
+    field: z.string().trim().nullable().default(null),
+    effect: z.enum(['allow', 'deny']),
+  }),
 } as const
 
 export type MasterEntity = keyof typeof schemas
@@ -234,6 +241,7 @@ export const MASTERS: Record<MasterEntity, MasterDef> = {
   'contacts': { table: 'contacts', idPrefix: 'p', schema: schemas.contacts, patchSchema: schemas.contacts.partial(), jsonbFields: ['custom'] },
   // 関係種別は論理削除（無効化）に加え、未使用時のみ物理削除可（参照ガードは masters.ts の DELETE 側）
   'relation-types': { table: 'relation_types', idPrefix: 'rt', schema: schemas['relation-types'], patchSchema: schemas['relation-types'].partial(), jsonbFields: [], physicalDelete: true },
+  'permission-rules': { table: 'permission_rules', idPrefix: 'pm', schema: schemas['permission-rules'], patchSchema: schemas['permission-rules'].partial(), jsonbFields: [] },
   'company-relations': { table: 'company_relations', idPrefix: 'cr', schema: schemas['company-relations'], jsonbFields: [], physicalDelete: true, noActive: true },
   'contact-relations': { table: 'contact_relations', idPrefix: 'pr', schema: schemas['contact-relations'], jsonbFields: [], physicalDelete: true, noActive: true },
   'projects': { table: 'projects', idPrefix: 'pj', schema: schemas.projects, patchSchema: schemas.projects.partial(), jsonbFields: ['memberIds', 'custom'] },

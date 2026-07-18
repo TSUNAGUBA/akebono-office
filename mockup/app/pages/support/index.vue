@@ -5,13 +5,14 @@ import type { MenuCard } from '~/types/ui'
 
 const { isAdmin } = useCurrentUser()
 const { isEnabled } = useAppSettings()
+const { canPath } = usePermissions()
 const { activeList: links } = useMasterCrud('externalLinks', 'el')
 const { activeFiles } = useDocuments()
 
 /** 内部アプリ（機能トグルに追従） */
 const internalItems = computed<MenuCard[]>(() => {
   const items: MenuCard[] = []
-  if (isEnabled('chatbot')) {
+  if (isEnabled('chatbot') && canPath('/support/chatbot')) {
     items.push({
       id: 'app-chatbot',
       title: 'AIチャットボット',
@@ -20,7 +21,7 @@ const internalItems = computed<MenuCard[]>(() => {
       to: '/support/chatbot',
     })
   }
-  if (isEnabled('documents')) {
+  if (isEnabled('documents') && canPath('/support/documents')) {
     items.push({
       id: 'app-documents',
       title: 'ドキュメント管理',

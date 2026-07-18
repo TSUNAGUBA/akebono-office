@@ -14,6 +14,7 @@ import { requireAdmin, requireHrOrAdmin, type AuthUser } from '../auth'
 import { audit } from '../lib/audit'
 import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
+import { clearPermissionCache, stripMasterFields } from '../lib/permissions'
 import { camelToSnake, MASTERS, rowToCamel, type MasterEntity } from '../masters/registry'
 
 function defOf(entity: string) {
@@ -114,16 +115,17 @@ function toSqlValue(def: { jsonbFields: string[] }, field: string, value: unknow
 export function mastersRoutes(pool: pg.Pool): Hono {
   const app = new Hono()
 
-  // 一覧（includeInactive=1 で無効も含む）
+  // 一覧（includeInactive=1 で無効も含む）。表示項目レベルの権限ルールがある場合はフィールドを剥がす（F-16）
   app.get('/:entity', async (c) => {
-    const { def } = defOf(c.req.param('entity'))
+    const { def, entity } = defOf(c.req.param('entity'))
     const where = def.noActive || c.req.query('includeInactive') === '1' ? '' : 'WHERE active = true'
     const order = def.noActive ? 'ORDER BY id' : 'ORDER BY display_order NULLS LAST, id'
     // display_order を持たないテーブルは id 順
     const hasOrder = ['departments', 'leave_types', 'industries', 'custom_field_defs', 'code_masters', 'external_links'].includes(def.table)
     const { rows } = await pool.query(
       `SELECT * FROM ${def.table} ${where} ${hasOrder ? order : 'ORDER BY id'}`)
-    return c.json({ data: rows.map(rowToCamel) })
+    const data = await stripMasterFields(pool, c.get('user'), entity, rows.map(rowToCamel))
+    return c.json({ data })
   })
 
   // 追加
@@ -163,6 +165,7 @@ export function mastersRoutes(pool: pg.Pool): Hono {
       client.release()
     }
     await audit(pool, { actorId: user.id, action: 'create', entity: def.table, entityId: id, detail: `${entity} を追加` })
+    if (entity === 'permission-rules') clearPermissionCache() // 権限キャッシュを即時反映
     const { rows } = await pool.query(`SELECT * FROM ${def.table} WHERE id = $1`, [id])
     return c.json({ data: rowToCamel(rows[0]) }, 201)
   })
@@ -217,6 +220,7 @@ export function mastersRoutes(pool: pg.Pool): Hono {
       client.release()
     }
     await audit(pool, { actorId: user.id, action: 'update', entity: def.table, entityId: id, detail: `${entity} を更新` })
+    if (entity === 'permission-rules') clearPermissionCache() // 権限キャッシュを即時反映
     const { rows } = await pool.query(`SELECT * FROM ${def.table} WHERE id = $1`, [id])
     return c.json({ data: rowToCamel(rows[0]) })
   })
@@ -233,6 +237,7 @@ export function mastersRoutes(pool: pg.Pool): Hono {
       `UPDATE ${def.table} SET active = false, updated_at = now() WHERE id = $1`, [id])
     if (result.rowCount === 0) throw err('AKO-GEN-002', '対象が見つかりません', 404)
     await audit(pool, { actorId: user.id, action: 'archive', entity: def.table, entityId: id, detail: `${entity} を無効化` })
+    if (entity === 'permission-rules') clearPermissionCache() // 権限キャッシュを即時反映
     return c.json({ data: { id } })
   })
 
@@ -245,6 +250,7 @@ export function mastersRoutes(pool: pg.Pool): Hono {
       `UPDATE ${def.table} SET active = true, updated_at = now() WHERE id = $1`, [id])
     if (result.rowCount === 0) throw err('AKO-GEN-002', '対象が見つかりません', 404)
     await audit(pool, { actorId: user.id, action: 'restore', entity: def.table, entityId: id, detail: `${entity} を再有効化` })
+    if (entity === 'permission-rules') clearPermissionCache() // 権限キャッシュを即時反映
     return c.json({ data: { id } })
   })
 
