@@ -63,6 +63,7 @@ const PATH_FEATURES: [string, string][] = [
   ['/v1/ai-company', 'ai-company'],
   ['/v1/sales', 'sales'],
   ['/v1/status', 'status'],
+  ['/v1/akebono', 'akebono'],
 ]
 
 /** 機能単位の利用ガード（authMiddleware の後段。deny は AKO-PRM-001 403） */

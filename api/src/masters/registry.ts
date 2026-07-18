@@ -7,6 +7,7 @@
  * - バリデーションは API の責務（モックでは画面側の責務だったが、公開 I/F になるためここで担保）
  */
 import { z } from 'zod'
+import { PROJECT_TYPES } from '../../../shared/domain/types'
 
 const dateKey = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日付は YYYY-MM-DD 形式で入力してください')
 /** 空文字を null として扱う日付（画面の未入力と互換） */
@@ -134,7 +135,7 @@ const schemas = {
   projects: z.object({
     name: z.string().trim().min(1, 'プロジェクト名は必須です'),
     companyId: z.string().default(''),
-    type: z.enum(['biz_consulting', 'sys_consulting', 'development', 'operation', 'internal']).default('internal'),
+    type: z.enum(PROJECT_TYPES).default('internal'),
     status: z.string().default('active'),
     priority: z.string().default('mid'),
     ownerMemberId: z.string().default(''),

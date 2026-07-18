@@ -1,16 +1,19 @@
 <script setup lang="ts">
 /**
  * AKEBONO（F-03）: 要件定義中のプレースホルダ + 構想ロードマップ + 要望ボックス
+ * 要望は useAkebono が SoT（API モードは /v1/akebono/wishes）。バナー・ロードマップは静的表示。
  */
 import { CircleCheck, CircleDashed, CircleDot, Send, Sunrise } from 'lucide-vue-next'
 import { fmtDateTime } from '~/utils/format'
 
-const { tbl, commit, nextId } = useMockDb()
-const { currentUser } = useCurrentUser()
+const { tbl } = useMockDb()
 const { show } = useToast()
+const { wishes, submitWish: submitWishApi, refresh } = useAkebono()
 
-const akebonoWishes = tbl('akebonoWishes')
 const members = tbl('members')
+
+// 表示時に最新の要望を取り込む（API モード。他メンバーの投稿の反映）
+onMounted(() => { void refresh() })
 
 // ---------- 構想ロードマップ（静的表示） ----------
 
@@ -42,29 +45,27 @@ const ROADMAP = [
 
 const wishBody = ref('')
 const wishError = ref('')
-
-const wishes = computed(() =>
-  [...akebonoWishes.value].sort((a, b) => b.at.localeCompare(a.at)))
+const wishSaving = ref(false)
 
 function memberName(id: string): string {
   return members.value.find(m => m.id === id)?.name ?? id
 }
 
-function submitWish(): void {
+async function submitWish(): Promise<void> {
+  if (wishSaving.value) return
   wishError.value = ''
-  if (!wishBody.value.trim()) {
-    wishError.value = '要望を入力してください'
-    return
+  wishSaving.value = true
+  try {
+    const res = await submitWishApi(wishBody.value)
+    if (!res.ok) {
+      wishError.value = res.error.message
+      return
+    }
+    wishBody.value = ''
+    show('受け付けました。要件定義の参考にします')
+  } finally {
+    wishSaving.value = false
   }
-  akebonoWishes.value = [...akebonoWishes.value, {
-    id: nextId('akebonoWishes', 'aw'),
-    memberId: currentUser.value.id,
-    body: wishBody.value.trim(),
-    at: nowJstIso(),
-  }]
-  commit()
-  wishBody.value = ''
-  show('受け付けました。要件定義の参考にします')
 }
 </script>
 
@@ -136,9 +137,9 @@ function submitWish(): void {
             placeholder="例: 過去の提案書から勝ちパターンを提示してほしい"
           />
         </UiFormField>
-        <button type="button" class="btn btn-primary justify-self-end" @click="submitWish">
+        <button type="button" class="btn btn-primary justify-self-end" :disabled="wishSaving" @click="submitWish">
           <Send class="h-3.5 w-3.5" aria-hidden="true" />
-          送信
+          {{ wishSaving ? '送信中…' : '送信' }}
         </button>
       </div>
 

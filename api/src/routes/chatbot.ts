@@ -2,8 +2,8 @@
  * チャットボット応答 API（F-09-2）。mockup useChatbot の LLM 一次応答レイヤ。
  * - 一次応答: Vertex AI（構造化出力）。サーバーが DB の全移行済みドメイン
  *   （勤怠・有給・日報・ワークフロー・シフト・意思決定・タスク計画・カレンダー・エスカレーション・
- *   メンバー/部署・顧客・プロジェクト・ナレッジ・AI カンパニー・売上・稼働状況）を文脈化して回答
- *   （バッチ5d/6a/6b/6c・オペレーター指示 2026-07-17）
+ *   メンバー/部署・顧客・プロジェクト・ナレッジ・AI カンパニー・売上・稼働状況・AKEBONO）を文脈化して回答
+ *   （バッチ5d/6a/6b/6c/6d・オペレーター指示 2026-07-17）
  * - 参照範囲は権限（F-16）に従う: ドメインごとに canUseFeature で文脈生成の可否を判定し、
  *   マスタ由来の文脈は stripDeniedFields で表示項目レベルの deny を反映する（5c の共有ロジックを再利用）
  * - 本人スコープ（C3）は維持: 勤怠・有給・シフト・タスク計画・カレンダー・エスカレーションは本人分のみ。
@@ -28,6 +28,7 @@ import type { AuthUser } from '../auth'
 import { daySummary } from '../domain/attendance'
 import type { Env } from '../env'
 import { err } from '../lib/errors'
+import { capCp } from '../lib/text'
 import { newId } from '../lib/ids'
 import { generateJson } from '../lib/llm'
 import { activePermissionRules, subjectOf } from '../lib/permissions'
@@ -39,11 +40,6 @@ interface ChatAnswer {
   sources: string[]
   suggestions: string[]
   confidence: number
-}
-
-/** コードポイント単位の切詰め（サロゲートペアを境界で壊さない） */
-function capCp(s: string, n: number): string {
-  return [...s].slice(0, n).join('')
 }
 
 const MESSAGE_COLS = `id, session_id AS "sessionId", role, content, sources, suggestions, at`
@@ -317,6 +313,19 @@ export async function buildContext(
       })
       parts.push(`## 提供システムの稼働状況（/status）\n${lines.join('\n')}${
         open.length === 0 ? '\n現在、対応中の障害はありません。' : ''}`)
+    })
+  }
+
+  // AKEBONO（バッチ6d で移行済みドメイン。構想状況 + 直近の要望 = 詳細は /akebono へ誘導）
+  if (can('akebono') && /AKEBONO|アケボノ|あけぼの|要望/i.test(question)) {
+    await block(async () => {
+      const { rows } = await pool.query<{ body: string; at: string }>(
+        `SELECT body, at FROM akebono_wishes ORDER BY at DESC LIMIT 3`)
+      parts.push(`## AKEBONO（/akebono）
+次世代の AI ネイティブ会社基盤として要件定義中（Phase 2）。要望ボックスで「こうなってほしい」を受付中。${
+  rows.length > 0
+    ? `\n直近の要望: ${rows.map(w => `「${capCp(w.body, 60)}」（${w.at.slice(0, 10)}）`).join(' / ')}`
+    : '\nまだ要望はありません。'}`)
     })
   }
 
