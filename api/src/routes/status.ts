@@ -20,6 +20,7 @@ import { computeUptimeDaily } from '../../../shared/domain/uptime'
 import { requireAdmin } from '../auth'
 import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
+import { capCp } from '../lib/text'
 import { notifyAdmins } from '../lib/notify'
 
 const UPTIME_WINDOW_DAYS = 90
@@ -32,11 +33,6 @@ const IMPACTS = new Set(['minor', 'major', 'critical'])
 const SERVICE_COLS = `id, name, description, url, components`
 const INCIDENT_COLS = `id, service_id AS "serviceId", title, impact, status, updates,
   started_at AS "startedAt", resolved_at AS "resolvedAt"`
-
-/** コードポイント単位の切詰め（サロゲートペアを境界で壊さない） */
-function capCp(s: string, n: number): string {
-  return [...s].slice(0, n).join('')
-}
 
 /**
  * uptime_daily の再計算（サービス単位・[fromDate, toDate] 窓・冪等）。

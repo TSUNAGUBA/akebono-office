@@ -1695,9 +1695,11 @@ describe('提供システム稼働状況（F-11・バッチ6c）', () => {
     expect(inc?.status).toBe('investigating')
     expect(inc?.updates).toHaveLength(1)
     expect(inc?.updates[0]?.body).toBe('応答時間の悪化を検知。')
-    // 発生と同時に当日の uptime へ反映（開始直後のため停止分は 0 でも状態は写像される）
-    const today = todayJst()
-    expect(status.uptime.find(u => u.serviceId === 'svc-01' && u.date === today)?.worstState).toBe('partial_outage')
+    // 発生と同時に当日の uptime へ反映（開始直後のため停止分は 0 でも状態は写像される）。
+    // 深夜 0 時跨ぎ実行でも壊れないよう「昨日または今日」のどちらかで判定する（6c レビュー指摘対応）
+    const recentDays = [addDays(todayJst(), -1), todayJst()]
+    expect(status.uptime.some(u =>
+      u.serviceId === 'svc-01' && recentDays.includes(u.date) && u.worstState === 'partial_outage')).toBe(true)
     // 管理者へ通知される（非ブロッキングの成功経路）
     const { rows: nt } = await pool.query(
       `SELECT 1 FROM notifications WHERE title LIKE 'インシデント発生%' LIMIT 1`)
@@ -1816,5 +1818,71 @@ describe('提供システム稼働状況（F-11・バッチ6c）', () => {
     expect((await api('GET', '/v1/status', { as: ADMIN })).status).toBe(200)
     expect((await api('POST', `/v1/masters/permission-rules/${id}/archive`, { as: ADMIN })).status).toBe(200)
     expect((await api('GET', '/v1/status', { as: MEMBER })).status).toBe(200)
+  })
+})
+
+describe('AKEBONO 要望ボックス（F-03・バッチ6d）', () => {
+  it('要望を投稿でき、全員が新しい順で参照できる（記録系 = 追記のみ）', async () => {
+    const first = await api('POST', '/v1/akebono/wishes', {
+      as: MEMBER, body: { body: '過去の提案書から勝ちパターンを提示してほしい' },
+    })
+    expect(first.status).toBe(201)
+    const second = await api('POST', '/v1/akebono/wishes', {
+      as: HR, body: { body: '  採用面接の候補者比較を支援してほしい  ' },
+    })
+    expect(second.status).toBe(201)
+
+    // 別ロール（admin）からも全件が見える（社内 C2 = モックと同一の可視性）。
+    // 同秒投稿の並びは id タイブレークで不定のため、順序は at の非増加のみを検証する
+    const list = (await api('GET', '/v1/akebono/wishes', { as: ADMIN })).json.data as {
+      id: string; memberId: string; body: string; at: string
+    }[]
+    expect(list.length).toBeGreaterThanOrEqual(2)
+    const hrWish = list.find(w => w.body === '採用面接の候補者比較を支援してほしい') // trim 済みで格納
+    expect(hrWish?.memberId).toBe(HR)
+    expect(list.some(w => w.body === '過去の提案書から勝ちパターンを提示してほしい')).toBe(true)
+    expect(list.every((w, i, a) => i === 0 || String(a[i - 1]?.at) >= w.at)).toBe(true)
+  })
+
+  it('本文未入力は AKO-AKB-001。過長は 2000 コードポイントへ切詰め', async () => {
+    expect((await api('POST', '/v1/akebono/wishes', { as: MEMBER, body: { body: '   ' } }))
+      .json.error?.code).toBe('AKO-AKB-001')
+    expect((await api('POST', '/v1/akebono/wishes', { as: MEMBER, body: {} }))
+      .json.error?.code).toBe('AKO-AKB-001')
+    const long = await api('POST', '/v1/akebono/wishes', { as: MEMBER, body: { body: 'あ'.repeat(3000) } })
+    expect(long.status).toBe(201)
+    const id = (long.json.data as { id: string }).id
+    const list = (await api('GET', '/v1/akebono/wishes', { as: MEMBER })).json.data as { id: string; body: string }[]
+    expect([...list.find(w => w.id === id)?.body ?? '']).toHaveLength(2000)
+  })
+
+  it('機能ガード: akebono の deny で /v1/akebono が 403（AKO-PRM-001）。チャットボット文脈も消える', async () => {
+    const { buildContext } = await import('../../src/routes/chatbot')
+    const adminUser = { id: ADMIN, name: '管理 太郎', email: 'admin@example.com', role: 'admin' as const, title: '', avatar: '' }
+    const memberUser = { id: MEMBER, name: '一般 次郎', email: 'member@example.com', role: 'member' as const, title: '', avatar: '' }
+
+    // ルール未設定 = allow: AKEBONO ブロックが生成され、直近の要望が載る
+    const ctx = await buildContext(pool, adminUser, 'AKEBONO はいつ使える？', [])
+    expect(ctx).toContain('AKEBONO（/akebono）')
+    expect(ctx).toContain('採用面接の候補者比較')
+
+    const denyAkebono = [{
+      id: 'pm-akb', subjectKind: 'role' as const, subjectId: 'member', resource: 'akebono', field: null,
+      effect: 'deny' as const, active: true,
+    }]
+    expect(await buildContext(pool, memberUser, 'AKEBONO はいつ使える？', denyAkebono)).not.toContain('AKEBONO（/akebono）')
+
+    // API ガード（DB ルール経由）
+    const rule = await api('POST', '/v1/masters/permission-rules', {
+      as: ADMIN, body: { subjectKind: 'role', subjectId: 'member', resource: 'akebono', effect: 'deny' },
+    })
+    expect(rule.status).toBe(201)
+    const id = (rule.json.data as { id: string }).id
+    const denied = await api('GET', '/v1/akebono/wishes', { as: MEMBER })
+    expect(denied.status).toBe(403)
+    expect(denied.json.error?.code).toBe('AKO-PRM-001')
+    expect((await api('GET', '/v1/akebono/wishes', { as: ADMIN })).status).toBe(200)
+    expect((await api('POST', `/v1/masters/permission-rules/${id}/archive`, { as: ADMIN })).status).toBe(200)
+    expect((await api('GET', '/v1/akebono/wishes', { as: MEMBER })).status).toBe(200)
   })
 })

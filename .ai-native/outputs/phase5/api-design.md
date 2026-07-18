@@ -134,6 +134,7 @@ generateDraft(memberId, date): ReportDraft           // 保存しない（フォ
 | useDecision | `GET /v1/decisions/logs`・`POST /v1/decisions/logs`（**実装・フロント接続済み**。判断テーマ = `/v1/masters/decision-themes`（汎用マスタ）。判断ログは追記のみ = 記録系保護。テーマ・選択肢・理由の存在チェックはサーバーが強制。シナリオ予測（決定的線形モデル）は表示射影としてクライアント側に維持 = 設計判断） |
 | useSales | `GET /v1/sales`（月次実績の一覧。会計年度集計・KPI は shared/domain/fiscal の純粋関数をフロントと共有 = 表示射影はクライアント）・`POST /v1/sales`（管理者のみ。`rows` 1〜500 件の一括 upsert = 冪等キー month × company × projectType）・`POST /v1/sales/etl/run`・`GET /v1/sales/etl/runs`（管理者のみ。mart ETL = sales_monthly → fact_sales（app_office 内の mart 互換テーブル・オペレーター判断 2026-07-18）の一方向・冪等。日次バッチは `POST /jobs/sales-mart-etl`（CRON_SECRET）＝周期有給付与と同型）（**実装・フロント接続済み = バッチ6b**。機能ガード 'sales'（F-16）・実績登録はページの管理者モーダル） |
 | useSystemStatus | `GET /v1/status`（services + インシデント（新しい順・直近 500 件）+ 90 日 uptime の一括ハイドレーション。記録のない日は operational 埋め = フロント射影はモックと共通。uptime バーはサーバー導出のため 500 件超でも影響なし）・`POST /v1/status/incidents`（管理者のみ。初報を updates[0] に記録・管理者通知）・`POST /v1/status/incidents/:id/updates`（管理者のみ・正順のみの状態機械 = FOR UPDATE 直列化・updates 追記・resolved で resolvedAt）・`POST /v1/status/uptime/recompute`（管理者のみ = 導出データの手動回復パス）。uptime 日次集計は shared/domain/uptime をフロントと共有し、日次バッチは `POST /jobs/uptime-rollup`（CRON_SECRET）（**実装・フロント接続済み = バッチ6c**。機能ガード 'status'（F-16）） |
+| useAkebono | `GET /v1/akebono/wishes`（新しい順・直近 500 件。表示名はフロントが members マスタキャッシュから解決）・`POST /v1/akebono/wishes`（本文必須 = AKO-AKB-001・2000 コードポイントへ切詰め・追記のみ = 記録系）（**実装・フロント接続済み = バッチ6d**。機能ガード 'akebono'（F-16）。プレースホルダ・ロードマップは静的表示 = フロントの責務。**本バッチで mock-status が空 = API モードのモックバッジ全廃**） |
 | usePermissions | ルール = `/v1/masters/permission-rules`（汎用マスタ）。判定は shared/domain/permissions.ts をフロント/API で共有（個人 > 役職 > ロール・同一レイヤは deny 優先・未設定は allow）。機能ガード = API middleware（/v1/masters・/v1/configs・/v1/notifications・/v1/escalations はデータ面のため対象外）+ フロントのメニュー/ページ非表示。表示項目レベルはマスタ GET 応答からサーバーが剥がす |
 | useAiCompany | `GET/POST /v1/ai-company/tasks`（+ `/:id/approve|progress|block|cancel` = FOR UPDATE の状態機械・活動ログ・完了通知・AI 社員 status 同期）・`GET /v1/ai-company/logs`・`POST /v1/ai-company/daily-reports`（冪等生成 → daily_reports author_kind='ai'）・`POST /v1/ai-company/workload-check`（停滞/過負荷 → エスカレーション）・ロール/AI 社員 = `/v1/masters/ai-roles`・`ai-employees`（**実装・フロント接続済み = バッチ6a**。分解 = Vertex AI 構造化出力 → 失敗時 shared/domain/ai-tasks。機能ガード 'ai-company'） |
 | プロフィール（/profile） | `GET /v1/me`（avatar 含む）・`PUT /v1/me/profile`（本人のアイコン画像 = data:image/png・jpeg・webp の base64 のみ許可（SVG 等は拒否 = スクリプト混入防止）・300KB 上限・空文字で削除・監査ログ記録。バッチ5e）。パスワード変更は Firebase Auth（reauthenticate → updatePassword）でクライアント完結・Google SSO アカウントは対象外。ログアウト = Firebase signOut + /v1/me キャッシュ破棄 |
@@ -218,6 +219,7 @@ generateDraft(memberId, date): ReportDraft           // 保存しない（フォ
 | AKO-SAL-001 | 月次実績の入力不正（month 形式・projectType・金額） | ✅ |
 | AKO-SAL-002 | 顧客(会社)が未登録 | ✅ |
 | AKO-SAL-003 | 取込件数の範囲外（rows は 1〜500 件） | ✅ |
+| AKO-AKB-001 | AKEBONO 要望の本文未入力 | ✅ |
 | AKO-AIC-001 | AI 社員が見つからない | ✅ |
 | AKO-AIC-002 | AI タスクの件名未入力 | ✅ |
 | AKO-AIC-003 | AI タスクが見つからない | ✅ |

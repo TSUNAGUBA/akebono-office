@@ -15,13 +15,14 @@ import type pg from 'pg'
 import {
   DEFAULT_FISCAL_START_MONTH, fiscalMonthNoOf, fiscalQuarterOf, fiscalYearOf,
 } from '../../../shared/domain/fiscal'
+import { PROJECT_TYPES } from '../../../shared/domain/types'
 import { requireAdmin } from '../auth'
 import { audit } from '../lib/audit'
 import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
 
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/
-const PROJECT_TYPES = new Set(['biz_consulting', 'sys_consulting', 'development', 'operation', 'internal'])
+const PROJECT_TYPE_SET = new Set<string>(PROJECT_TYPES)
 const MAX_UPSERT_ROWS = 500
 /** 金額の上限（1,000 兆円。bigint オーバーフローによる生 500 を防ぎ AKO-SAL-001 で返すための番兵） */
 const MAX_AMOUNT_YEN = 1_000_000_000_000_000
@@ -66,7 +67,7 @@ function parseRows(raw: unknown): SalesRowInput[] {
     const at = `rows[${i}]`
     if (!MONTH_RE.test(month)) throw err('AKO-SAL-001', `${at}: month は YYYY-MM 形式で指定してください`, 400)
     if (!companyId) throw err('AKO-SAL-001', `${at}: companyId を指定してください`, 400)
-    if (!PROJECT_TYPES.has(projectType)) throw err('AKO-SAL-001', `${at}: projectType が不正です`, 400)
+    if (!PROJECT_TYPE_SET.has(projectType)) throw err('AKO-SAL-001', `${at}: projectType が不正です`, 400)
     if (!Number.isFinite(amount) || amount < 0 || !Number.isFinite(cost) || cost < 0) {
       throw err('AKO-SAL-001', `${at}: amount / cost は 0 以上の数値で指定してください`, 400)
     }

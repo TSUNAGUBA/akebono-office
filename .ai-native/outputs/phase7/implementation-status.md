@@ -38,8 +38,8 @@
 - **バッチ5 続き（オペレーター指示 2026-07-17）:** チャットボットの全 DB 参照化（権限準拠）
 - **バッチ6a（マージ済み PR #35）:** AI カンパニー F-08 の API 化 + フロント接続
 - **バッチ6b（マージ済み PR #36）:** 売上管理 F-15 + mart ETL 基盤（ETL 出力先 = app_office 内 mart 互換テーブル。オペレーター判断 2026-07-18）
-- **バッチ6c（本 PR）:** 提供システム稼働状況 F-11（インシデント状態機械 + uptime 日次集計）
-- **残り:** AKEBONO（F-03）
+- **バッチ6c（マージ済み PR #37）:** 提供システム稼働状況 F-11（インシデント状態機械 + uptime 日次集計）
+- **バッチ6d（本 PR）:** AKEBONO F-03（要望ボックス API 化）— **全ドメインの接続が完了し、API モードのモックバッジ全廃（マイルストーン）**
 
 > **フロント接続の方式（バッチ2a で確立）:** `NUXT_PUBLIC_API_BASE` 未設定なら完全モック動作（デモ環境の下位互換）。
 > 設定時は「API モード」となり、移行済みコレクションは `useMockDb.tbl()` が API ハイドレーションキャッシュを返す
@@ -122,6 +122,7 @@
 ## 2. 対象外メニュー（バッチ3 以降。現状はモックアップのみ）
 
 > **モック表示の明示:** API モード（実データ運用）では、本表のモック実装ページ・機能に「モックアップ」バッジを表示する
+> （**バッチ6d で全ドメインの接続が完了し、現在バッジ対象ページはゼロ**。判定の仕組み = mock-status.ts は将来のモック先行ページに備えて残す）
 > （表示判定は `mockup/app/utils/mock-status.ts`。本表が SoT で、ドメインを接続したら両方から削除する）。
 > モックモード（デモ配信）は全機能がモックのためバッジは表示しない。
 
@@ -134,11 +135,11 @@
 | ワークフロー・稟議 `/workflow` | F-07 | ✅ | ✅ ワークフロー接続済み（PR #22）: 申請・経路凍結・承認/却下/差戻し（クレームファースト）・代理承認・承認ログ・通知 + 承認経路マスタ | PR #23 で下書きの可視性を本人と管理者のみに制限（レビュー指摘対応） |
 | シフト表 `/shift` | F-05 | ✅ | ✅ シフト接続済み（PR #23） | 希望・割当の参照は管理者 = 全件 / 本人 = 自分のみのサーバースコープ |
 | 意思決定支援 `/decision` | F-02 | ✅ | ✅ 意思決定接続済み（PR #28）: 判断テーマ = 汎用マスタ `/v1/masters/decision-themes`（0011 で mockup seed を移行）・判断ログ = `/v1/decisions/logs`（追記のみ = 記録系保護。テーマ・選択肢・理由をサーバーで強制） | シナリオ予測（決定的線形モデル）は表示射影としてクライアント側に維持（設計判断） |
-| AKEBONO（3D オフィス） `/akebono` | F-03 | ✅ | ⏳ | バッチ4 |
+| AKEBONO（3D オフィス） `/akebono` | F-03 | ✅ | 🚧 AKEBONO 接続（本 PR = バッチ6d）: 要望ボックス = `akebono_wishes`（0019・記録系 = 追記のみ・編集/削除なし）・`GET/POST /v1/akebono/wishes`（本文必須 = AKO-AKB-001・2000 cp 切詰め・全員参照可 = 社内 C2）・useAkebono デュアルモード化・機能ガード 'akebono'（F-16）・チャットボット文脈に AKEBONO ブロック追加。プレースホルダ（バナー・ロードマップ）は静的表示 = フロントの責務 | **本 PR で mock-status が空 = API モードのモックバッジ全廃（マイルストーン）** |
 | AIネイティブカンパニー `/ai-company` | F-08 | ✅ | ✅ AI カンパニー接続済み（PR #35 = バッチ6a）: ロール/AI 社員 = 汎用マスタ（0015）・タスク依頼 → 分解（Vertex AI → 失敗時 shared/domain/ai-tasks の同一ヒューリスティック）→ 承認 → 実行 → 完了（FOR UPDATE 状態機械・活動ログ追記・依頼者へ通知・AI 社員 status 同期）・日次報告 = daily_reports（author_kind='ai'・冪等生成）・停滞/過負荷/低確信度エスカレーション・機能ガード 'ai-company'（F-16） | AI 社員の「実実行」（LLM がステップを自律実行）は将来拡張。現段階は進行操作を人が行うワークフロー |
 | 業務支援ツール `/support` | F-09 | ✅ | ⏳ | ドキュメント・外部リンクは接続済みマスタを参照。チャットボット（F-09-3）は PR #27 で接続済み |
 | 売上管理 `/sales` | F-15 | ✅ | ✅ 売上接続済み（PR #36 = バッチ6b）: 月次実績 = `sales_monthly`（0017・冪等キー month × company × projectType の upsert）・`GET/POST /v1/sales`（登録は管理者のみ・一括取込 500 件）・実績登録モーダル（管理者）・会計年度計算 = shared/domain/fiscal をフロント/API 共有・機能ガード 'sales'（F-16）・チャットボット文脈に売上サマリ追加 + **mart ETL**: `fact_sales` / `mart_load_runs`（app_office 内 mart 互換 = オペレーター判断 2026-07-18）へ一方向 ETL（`POST /v1/sales/etl/run` + `/jobs/sales-mart-etl`） | 実績データのためマスタ初期値シードなし（新規環境は管理者登録 or 取込から） |
-| 提供システム稼働状況 `/status` | F-11 | ✅ | 🚧 稼働状況接続（本 PR = バッチ6c）: サービス = `system_services`（0018・mockup と同一の 3 サービスをシード）・インシデント = `service_incidents`（記録系 = updates 追記のみ・正順の状態機械を FOR UPDATE で直列化・登録/更新で管理者通知）・uptime = `uptime_daily`（SoT はインシデント → shared/domain/uptime で日次導出・窓内 DELETE→INSERT で冪等。トリガ = 登録/更新時 + `/jobs/uptime-rollup` + 管理者の手動再計算）・`GET /v1/status` 一括ハイドレーション（90 日 operational 埋め）・機能ガード 'status'（F-16）・チャットボット文脈 + 決定的フォールバックも実データ化 | モックの乱数 uptime シードは本番へ持ち込まない（インシデント実績から導出） |
+| 提供システム稼働状況 `/status` | F-11 | ✅ | ✅ 稼働状況接続済み（PR #37 = バッチ6c）: サービス = `system_services`（0018・mockup と同一の 3 サービスをシード）・インシデント = `service_incidents`（記録系 = updates 追記のみ・正順の状態機械を FOR UPDATE で直列化・登録/更新で管理者通知）・uptime = `uptime_daily`（SoT はインシデント → shared/domain/uptime で日次導出・窓内 DELETE→INSERT で冪等。トリガ = 登録/更新時 + `/jobs/uptime-rollup` + 管理者の手動再計算）・`GET /v1/status` 一括ハイドレーション（90 日 operational 埋め）・機能ガード 'status'（F-16）・チャットボット文脈 + 決定的フォールバックも実データ化 | モックの乱数 uptime シードは本番へ持ち込まない（インシデント実績から導出） |
 | チャットボット（画面内ヘルプ） | F-09-3 | ✅ | ✅ チャットボット接続済み（PR #27）+ ✅ セッション管理（PR #30/#31・オペレーター指示 2026-07-17）: 会話は chat_sessions / chat_messages（0012）で DB 管理・同一セッション内は直近履歴 12 件を LLM へ渡すマルチターン・過去セッションの再開/新規開始（履歴ドロワー + 新しい会話）・本人のみ参照（AKO-CHT-001）・メッセージは追記のみ。fallback 応答もセッションへ追記（履歴の忠実性） | 旧「会話履歴はセッションローカル」設計判断は PR #30/#31 で置換。ドキュメントの回答は移行前のためデモデータ（ページ説明に明示。稼働状況はバッチ6c で実データ化）。エスカレーション起票は PR #21 で接続済み |
 | mart（分析基盤）ETL: fact_attendance / fact_leave / fact_effort ほか | data-design §2 | —（写像可能な型のみ） | 🚧 fact_sales のみ本 PR（バッチ6b）で実装（app_office 内 mart 互換テーブル + mart_load_runs。data-design §2.3 の実装状況注記参照）。他ファクトは ⏳ | app_office → mart の一方向 ETL。mart 本体（akebono-scm-platform）への接続はテーブル移送 + ETL 先切替で対応（オペレーター判断 2026-07-18） |
 
@@ -253,7 +254,7 @@
 - [x] 独立レビュー第 2 巡: **重大ゼロで収束**（第 1 巡対応の正しさ・回帰なしを確認）。推奨 1 件 = buildContext 売上テストの実時計依存（2026-08 以降に固定期待値が fail する時限性）を本 PR 内で修正（期待値を実データ + 共有 fiscal 関数から相対導出へ）。0017 の CHECK 追加が「適用済み migration の in-place 修正」にあたらないことを確認（deploy は main push のみ = 修正前版 0017 が恒久環境へ適用された事実なし）。軽微メモ（production-architecture の「ドキュメント」バッジ文言と MOCK_PAGE_PATHS の不一致 = 本 PR 以前からの状態・CRON_SECRET テストの env 前提 = 既存同型）は次バッチで対応
 - [x] 独立レビュー第 1 巡の指摘対応（重大 = ドキュメント整合 3 件: production-architecture の未移行ドメイン列挙・phase5/architecture の useSales 行・api-design useChatbot 行の文脈ドメイン列挙）+ 軽微 6 件（chatbot の自社会計月取得を selfFiscalStartMonth 再利用へ / useSales の自社解釈に active を追加 = サーバーと統一 / fact_sales.project_type に CHECK / 金額上限の番兵 AKO-SAL-001 / ETL 手動実行の監査ログ / テスト追補 3 本）。残る軽微（mart_load_runs の running 残留掃除・actor 列・PROJECT_TYPES 共有定数化・未来月登録の UX・ETL エラー経路テスト・初回表示の二重フェッチ）は次バッチで対応
 
-## 14. 今回バッチ（6c: 提供システム稼働状況 F-11）の完了条件（Definition of Done）
+## 14. バッチ6c（PR #37・マージ済み）: 提供システム稼働状況 F-11 の完了条件（Definition of Done）
 
 - [x] DB（0018）: `system_services`（マスタ的 + components jsonb。mockup シードと同一の 3 サービスを `ON CONFLICT DO NOTHING` 投入 = 新規環境でも手動投入なしで F-11 が動く・原則1）+ `service_incidents`（記録系: updates jsonb 追記のみ・status/resolved_at はその射影・started_at は JST ISO text）+ `uptime_daily`（日次集計。UNIQUE(service_id, date)・非 operational の日のみ格納）。インシデント・uptime はシードしない（モックの乱数 uptime は本番へ持ち込まない = 実績データの偽装防止・sales_monthly と同方針）
 - [x] uptime 集計を shared/domain/uptime.ts の純粋関数へ切り出し（JST 日境界の区間分割・重なりは和集合で二重計上しない・最悪値ロールアップ・発生直後のゼロ長でも当日状態へ写像。影響度→状態の写像 IMPACT_TO_STATE はフロント/API 共有 = 原則3）。**SoT = インシデント → uptime_daily は導出**（窓内 DELETE→INSERT のトランザクションで冪等）。トリガ = インシデント登録/更新時（イベント）+ `/jobs/uptime-rollup`（Cloud Scheduler・CRON_SECRET = 周期有給付与と同型）+ `POST /v1/status/uptime/recompute`（管理者の手動回復パス）= 原則6 の両経路
@@ -263,3 +264,13 @@
 - [x] 検証: API 統合テスト 85（GET 密配列・登録/更新の権限と状態機械・updates 追記・通知発火・uptime 導出 150 分/冪等/管理者ガード・/jobs/uptime-rollup・buildContext 稼働状況の allow/deny・機能 deny 403 復帰）/ 単体 19+9+9（uptime）+ 35 / API モード実クリック E2E 12+16 チェック + モック回帰 9 チェック / typecheck（api・mockup）
 - [x] 独立レビュー第 2 巡: **重大ゼロ・軽微ゼロで収束**（第 1 巡対応の正しさと新規問題なしを確認: FOR UPDATE OF i のロック範囲 = インシデント行のみでマスタと相互ブロックしない・ON CONFLICT 化後も単独実行の冪等性は同値・「窓内 DELETE→INSERT」の各記述は upsert 化後も正・ドキュメント矛盾の grep 全件確認）。観察 2 点（並行競合時の理論的な行残存 = 回復パス 3 経路で自己修復・許容）を記録
 - [x] 独立レビュー第 1 巡の指摘対応（重大 = ドキュメント整合 4 件: production-architecture の未移行ドメイン列挙・api-design useChatbot 行・本ファイル F-09-3 行の「稼働状況はデモデータ」+「本 PR」残存・phase5/architecture の useSystemStatus 行。**6b 第 1 巡と同一箇所の再発クラスのため、この 3 ファイル + 本ファイルの旧記述確認を毎バッチのセルフチェックに含めること**）+ 軽微 6 件中 4 件採用（AKO-STS-006 起番 = 影響度不正の専用コード / 状況更新のサービス名取得を FOR UPDATE トランザクション内へ = コミット後 500 経路の排除 / uptime 再計算の INSERT を ON CONFLICT DO UPDATE 化 = 並行再計算の一意制約違反防止 / GET インシデント上限 500 の台帳明記）。残る軽微（capCp の共通化 = 3 箇所重複・登録→当日反映テストの深夜 0 時跨ぎフレーク耐性）は次バッチで対応
+
+## 15. 今回バッチ（6d: AKEBONO F-03 = 最終バッチ・モックバッジ全廃）の完了条件（Definition of Done）
+
+- [x] DB（0019）: `akebono_wishes`（記録系 = 追記のみ・巻き戻し禁止。編集・削除 API は設けない。要望は実データのためシードしない = sales_monthly / service_incidents と同方針）
+- [x] API `/v1/akebono/wishes`: GET 一覧（新しい順・直近 500 件。表示名はフロントが members マスタキャッシュから解決）/ POST 投稿（本文必須 = AKO-AKB-001・2000 コードポイント切詰め）。参照・投稿は認証済み全員（モックと同一の可視性 = 社内 C2）。機能ガード 'akebono'（F-16）
+- [x] フロント: useAkebono 新設（デュアルモード = useDecision 型。API 書込 → キャッシュ取り直し = 原則6）・akebono.vue の async 化 + 二重送信防止 + 表示時 refresh・**mock-status.ts を空化 = API モードのモックバッジ全廃（マイルストーン。判定の仕組みは将来のモック先行ページに備えて残す）**
+- [x] チャットボット文脈へ AKEBONO ブロック追加（can('akebono')・構想状況 + 直近の要望 3 件 = 詳細は /akebono へ誘導）
+- [x] 6b/6c 繰り越しの軽微指摘対応: ① capCp を lib/text.ts へ共通化（chatbot / ai-company / status / akebono の 4 箇所で共有 = 原則3）② PROJECT_TYPES を shared/domain/types の単一定義へ（registry の z.enum・sales の検証 Set が参照）③ 6c 統合テスト「登録 → 当日 uptime 反映」の深夜 0 時跨ぎフレーク耐性（昨日/今日のいずれかで判定）④ production-architecture の「未移行ドメイン」記述をバッジ全廃後の状態へ更新
+- [x] 6b/6c 繰り越しのうち対応しない項目（理由付きで残置）: mart_load_runs の running 残留掃除（クラッシュ時のみ・実害なし = 導出データで常に再実行可能）・actor 列（監査ログで代替済み）・ETL エラー経路テスト・未来月登録の UX 注記・初回表示の二重フェッチ（実害なし）
+- [x] 検証: API 統合テスト 88（投稿/一覧の可視性・trim・順序・未入力 AKO-AKB-001・2000 cp 切詰め・buildContext AKEBONO の allow/deny・機能 deny 403 復帰）/ 単体 19+9+9 + 35 / API モード実クリック E2E 12+16+11 チェック + モック回帰 10 チェック / typecheck（api・mockup）/ api build

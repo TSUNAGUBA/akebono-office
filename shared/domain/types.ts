@@ -128,7 +128,9 @@ export interface ContactRelation {
   notes: string
 }
 
-export type ProjectType = 'biz_consulting' | 'sys_consulting' | 'development' | 'operation' | 'internal'
+/** 事業種別の区分値（登録 API・マスタスキーマ・mart 退化キーで共有する単一定義 = 原則3） */
+export const PROJECT_TYPES = ['biz_consulting', 'sys_consulting', 'development', 'operation', 'internal'] as const
+export type ProjectType = (typeof PROJECT_TYPES)[number]
 export type ProjectStatus = 'planned' | 'active' | 'onhold' | 'closed'
 
 export interface Project {

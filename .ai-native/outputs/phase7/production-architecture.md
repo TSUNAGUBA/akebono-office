@@ -68,8 +68,9 @@ flowchart LR
   モジュールスコープの API キャッシュを `useMockDb.tbl()` の代わりに射影ロジックへ差し込む（画面・射影は共通のまま）。
   勤怠はサーバー集計（月サマリ・36 協定・タイムカード）をキー単位でキャッシュし、日次・週次はそこから射影する。
   ログイン確立・切替時は `onApiReset` フックで取り直す。通知は 60 秒ポーリングで新着を反映
-- **未移行ドメイン**（AKEBONO・ドキュメントのフロント）は API モードでもモックデータで動く
-  （順次接続。対象ページには「モックアップ」バッジを表示。移行状況の SoT は implementation-status.md）
+- **バッチ6d で全ドメインの接続が完了し、API モードの「モックアップ」バッジは全廃**（マイルストーン）。
+  唯一の未移行はドキュメント管理（/support/documents = 表示のみのデモデータ。バッジ対象外の設計判断）。
+  バッジの判定機構（mock-status.ts）は将来のモック先行ページに備えて残す。移行状況の SoT は implementation-status.md
 
 ## 3. 認証・認可
 
@@ -179,8 +180,8 @@ flowchart LR
 17. **バッチ5d（PR #34・マージ済み）:** チャットボットの全 DB 参照化（文脈収集を全移行済みドメインへ拡張・参照範囲は F-16 権限に準拠）— 完了
 18. **バッチ6a（PR #35・マージ済み）:** AI カンパニー F-08（ロール/AI 社員 = 汎用マスタ・タスク状態機械・活動ログ・日次報告・停滞/過負荷検知。分解 = Vertex AI → 失敗時共有ヒューリスティック）— 完了
 19. **バッチ6b（PR #36・マージ済み）:** 売上管理 F-15（sales_monthly = 冪等 upsert・管理者の実績登録/取込・会計年度計算 = shared/domain/fiscal 共有）+ mart ETL 基盤（fact_sales / mart_load_runs = app_office 内 mart 互換テーブル・オペレーター判断 2026-07-18。手動実行 + Cloud Scheduler 日次の両経路）— 完了
-20. **バッチ6c（本 PR）:** 提供システム稼働状況 F-11（system_services シード・service_incidents = 正順状態機械 + updates 追記・uptime_daily = インシデントから shared/domain/uptime で日次導出・/jobs/uptime-rollup + 手動再計算の両経路）
-21. **残り:** AKEBONO（F-03）
+20. **バッチ6c（PR #37・マージ済み）:** 提供システム稼働状況 F-11（system_services シード・service_incidents = 正順状態機械 + updates 追記・uptime_daily = インシデントから shared/domain/uptime で日次導出・/jobs/uptime-rollup + 手動再計算の両経路）— 完了
+21. **バッチ6d（本 PR）:** AKEBONO F-03（akebono_wishes = 記録系の要望ボックス・useAkebono デュアルモード）— **全ドメインの接続が完了し、API モードのモックバッジ全廃（段階移行のマイルストーン達成）**
 
 
 進捗の SoT: `implementation-status.md`（実装 PR ごとに更新）

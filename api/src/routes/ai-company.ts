@@ -18,6 +18,7 @@ import { addDays, nowJstIso, todayJst } from '../../../shared/domain/jst'
 import type { AiActivityKind, AiModelTier, AiTask, ReportEntry } from '../../../shared/domain/types'
 import type { Env } from '../env'
 import { raiseEscalation } from '../lib/escalate'
+import { capCp } from '../lib/text'
 import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
 import { generateJson } from '../lib/llm'
@@ -27,10 +28,6 @@ const TASK_COLS = `id, ai_employee_id AS "aiEmployeeId", requester_id AS "reques
   title, description, decomposition, status, due_date::text AS "dueDate", confidence, created_at AS "createdAt"`
 const LOG_COLS = `id, ai_employee_id AS "aiEmployeeId", task_id AS "taskId", kind, summary, tokens,
   cost_usd::float AS "costUsd", at`
-
-function capCp(s: string, n: number): string {
-  return [...s].slice(0, n).join('')
-}
 
 /** タスク状態から AI 社員の状態を導出して同期（SoT: ai_tasks → 派生: ai_employees.status） */
 async function syncEmployeeStatus(db: pg.Pool | pg.PoolClient, aiEmployeeId: string): Promise<void> {
