@@ -1599,14 +1599,31 @@ describe('売上管理（F-15）+ mart ETL（バッチ6b）', () => {
 
   it('チャットボット文脈に売上サマリが載る（can(sales) 準拠。バッチ6b: buildContext 直接検証）', async () => {
     const { buildContext } = await import('../../src/routes/chatbot')
+    const { selfFiscalStartMonth } = await import('../../src/routes/sales')
+    const { fiscalMonthsOf, fiscalYearOf } = await import('../../../shared/domain/fiscal')
     const adminUser = { id: ADMIN, name: '管理 太郎', email: 'admin@example.com', role: 'admin' as const, title: '', avatar: '' }
     const memberUser = { id: MEMBER, name: '一般 次郎', email: 'member@example.com', role: 'member' as const, title: '', avatar: '' }
 
-    // ルール未設定 = allow: 年度累計（150 + 80 万円）と当月（2026-07 = 80 万円）が含まれる
+    // buildContext は実時計（todayJst）で当月を決めるため、期待値は実データから相対導出する
+    // （固定月の期待値は実行日でずれる時限性がある）。当月の実績を登録して文脈生成を保証する
+    const currentMonth = todayJst().slice(0, 7)
+    const reg = await api('POST', '/v1/sales', {
+      as: ADMIN,
+      body: { rows: [{ month: currentMonth, companyId: customerId, projectType: 'internal', amount: 400000, cost: 100000 }] },
+    })
+    expect(reg.status).toBe(201)
+    const fsm = await selfFiscalStartMonth(pool)
+    const fyMonths = new Set(fiscalMonthsOf(fiscalYearOf(currentMonth, fsm), fsm).filter(m => m <= currentMonth))
+    const all = (await api('GET', '/v1/sales', { as: ADMIN })).json.data as { month: string; amount: number }[]
+    const manYen = (n: number): string => `${Math.round(n / 10000).toLocaleString('ja-JP')}万円`
+    const fyAmount = all.filter(r => fyMonths.has(r.month)).reduce((s, r) => s + r.amount, 0)
+    const curAmount = all.filter(r => r.month === currentMonth).reduce((s, r) => s + r.amount, 0)
+
+    // ルール未設定 = allow: 年度累計と当月の集計値が文脈に含まれる
     const ctx = await buildContext(pool, adminUser, '今月の売上はどう？', [])
     expect(ctx).toContain('売上サマリ')
-    expect(ctx).toContain('年度累計売上 230万円')
-    expect(ctx).toContain('売上 80万円')
+    expect(ctx).toContain(`年度累計売上 ${manYen(fyAmount)}`)
+    expect(ctx).toContain(`当月（${currentMonth}）売上 ${manYen(curAmount)}`)
 
     // sales deny の member ロールには売上文脈が生成されない
     const denySales = [{
