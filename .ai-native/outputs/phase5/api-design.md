@@ -130,9 +130,10 @@ generateDraft(memberId, date): ReportDraft           // 保存しない（フォ
 | useMasterCrud | `GET/POST/PATCH /v1/masters/{entity}`（**実装・フロント接続済み** = useMasterCrudAsync） |
 | useReports | `GET/PUT /v1/reports/daily`（month / from-to。scope=team=管理者のみ / **scope=all=提出済みのみ全メンバー参照可・month 必須（バッチ5e: 全員の日報タブ）**）・`GET/PUT /v1/reports/weekly`・`GET/POST /v1/reports/:id/comments`・`POST /v1/reports/comments/:id/reactions`（トグル）・`POST /v1/reports/remind`（**実装・フロント接続済み**。月単位の遅延ロードキャッシュ + SoT 書込→再取得。entries は theme（業務テーマ・自由入力）が正・旧 projectId は互換保持で表示時にプロジェクト名へフォールバック） |
 | useNotifications | `GET /v1/notifications`・`POST /v1/notifications/:id/read`・`POST /v1/notifications/read-all`（**実装・フロント接続済み**。60 秒ポーリング。発火はサーバー側 = 未接続ドメインの notify はクライアント no-op） |
-| useChatbot | `POST /v1/chatbot/ask`（sessionId 任意 = 未指定は新規セッション開始）・`GET /v1/chatbot/sessions`・`GET/POST /v1/chatbot/sessions/:id/messages`（**実装・フロント接続済み**。Vertex AI 一次応答 = **DB の全移行済みドメイン（勤怠・有給・日報・ワークフロー・シフト・意思決定・タスク計画・カレンダー・エスカレーション・メンバー/部署・顧客・プロジェクト・ナレッジ・AI カンパニー・売上）をサーバーで文脈化（バッチ5d/6a/6b）。参照範囲は権限 F-16 に準拠 = ドメインごとに canUseFeature で文脈生成可否を判定・マスタ由来は stripDeniedFields で表示項目 deny を反映・本人スコープ C3 維持・他人の日報は提出済みのみ**+ セッションの直近履歴 12 件（各 500 字）を渡すマルチターン。一覧は直近 100 セッション・メッセージは 1 セッション 500 件まで返却。会話は chat_sessions / chat_messages（DB）が SoT で本人のみ参照可・メッセージは追記のみ。過去セッションの再開・新規開始に対応（オペレーター指示 2026-07-17 = 旧「セッションローカル」設計判断を置換）。LLM 無効/失敗/低確信度は fallback 指示でクライアントの決定的ルーティングへ縮退し、縮退応答も POST messages で履歴へ追記） |
+| useChatbot | `POST /v1/chatbot/ask`（sessionId 任意 = 未指定は新規セッション開始）・`GET /v1/chatbot/sessions`・`GET/POST /v1/chatbot/sessions/:id/messages`（**実装・フロント接続済み**。Vertex AI 一次応答 = **DB の全移行済みドメイン（勤怠・有給・日報・ワークフロー・シフト・意思決定・タスク計画・カレンダー・エスカレーション・メンバー/部署・顧客・プロジェクト・ナレッジ・AI カンパニー・売上・稼働状況）をサーバーで文脈化（バッチ5d/6a/6b/6c）。参照範囲は権限 F-16 に準拠 = ドメインごとに canUseFeature で文脈生成可否を判定・マスタ由来は stripDeniedFields で表示項目 deny を反映・本人スコープ C3 維持・他人の日報は提出済みのみ**+ セッションの直近履歴 12 件（各 500 字）を渡すマルチターン。一覧は直近 100 セッション・メッセージは 1 セッション 500 件まで返却。会話は chat_sessions / chat_messages（DB）が SoT で本人のみ参照可・メッセージは追記のみ。過去セッションの再開・新規開始に対応（オペレーター指示 2026-07-17 = 旧「セッションローカル」設計判断を置換）。LLM 無効/失敗/低確信度は fallback 指示でクライアントの決定的ルーティングへ縮退し、縮退応答も POST messages で履歴へ追記） |
 | useDecision | `GET /v1/decisions/logs`・`POST /v1/decisions/logs`（**実装・フロント接続済み**。判断テーマ = `/v1/masters/decision-themes`（汎用マスタ）。判断ログは追記のみ = 記録系保護。テーマ・選択肢・理由の存在チェックはサーバーが強制。シナリオ予測（決定的線形モデル）は表示射影としてクライアント側に維持 = 設計判断） |
 | useSales | `GET /v1/sales`（月次実績の一覧。会計年度集計・KPI は shared/domain/fiscal の純粋関数をフロントと共有 = 表示射影はクライアント）・`POST /v1/sales`（管理者のみ。`rows` 1〜500 件の一括 upsert = 冪等キー month × company × projectType）・`POST /v1/sales/etl/run`・`GET /v1/sales/etl/runs`（管理者のみ。mart ETL = sales_monthly → fact_sales（app_office 内の mart 互換テーブル・オペレーター判断 2026-07-18）の一方向・冪等。日次バッチは `POST /jobs/sales-mart-etl`（CRON_SECRET）＝周期有給付与と同型）（**実装・フロント接続済み = バッチ6b**。機能ガード 'sales'（F-16）・実績登録はページの管理者モーダル） |
+| useSystemStatus | `GET /v1/status`（services + インシデント（新しい順・直近 500 件）+ 90 日 uptime の一括ハイドレーション。記録のない日は operational 埋め = フロント射影はモックと共通。uptime バーはサーバー導出のため 500 件超でも影響なし）・`POST /v1/status/incidents`（管理者のみ。初報を updates[0] に記録・管理者通知）・`POST /v1/status/incidents/:id/updates`（管理者のみ・正順のみの状態機械 = FOR UPDATE 直列化・updates 追記・resolved で resolvedAt）・`POST /v1/status/uptime/recompute`（管理者のみ = 導出データの手動回復パス）。uptime 日次集計は shared/domain/uptime をフロントと共有し、日次バッチは `POST /jobs/uptime-rollup`（CRON_SECRET）（**実装・フロント接続済み = バッチ6c**。機能ガード 'status'（F-16）） |
 | usePermissions | ルール = `/v1/masters/permission-rules`（汎用マスタ）。判定は shared/domain/permissions.ts をフロント/API で共有（個人 > 役職 > ロール・同一レイヤは deny 優先・未設定は allow）。機能ガード = API middleware（/v1/masters・/v1/configs・/v1/notifications・/v1/escalations はデータ面のため対象外）+ フロントのメニュー/ページ非表示。表示項目レベルはマスタ GET 応答からサーバーが剥がす |
 | useAiCompany | `GET/POST /v1/ai-company/tasks`（+ `/:id/approve|progress|block|cancel` = FOR UPDATE の状態機械・活動ログ・完了通知・AI 社員 status 同期）・`GET /v1/ai-company/logs`・`POST /v1/ai-company/daily-reports`（冪等生成 → daily_reports author_kind='ai'）・`POST /v1/ai-company/workload-check`（停滞/過負荷 → エスカレーション）・ロール/AI 社員 = `/v1/masters/ai-roles`・`ai-employees`（**実装・フロント接続済み = バッチ6a**。分解 = Vertex AI 構造化出力 → 失敗時 shared/domain/ai-tasks。機能ガード 'ai-company'） |
 | プロフィール（/profile） | `GET /v1/me`（avatar 含む）・`PUT /v1/me/profile`（本人のアイコン画像 = data:image/png・jpeg・webp の base64 のみ許可（SVG 等は拒否 = スクリプト混入防止）・300KB 上限・空文字で削除・監査ログ記録。バッチ5e）。パスワード変更は Firebase Auth（reauthenticate → updatePassword）でクライアント完結・Google SSO アカウントは対象外。ログアウト = Firebase signOut + /v1/me キャッシュ破棄 |
@@ -208,11 +209,12 @@ generateDraft(memberId, date): ReportDraft           // 保存しない（フォ
 | AKO-DOC-001 | ファイル名未入力 | |
 | AKO-DOC-002 | フォルダ名未入力 | |
 | AKO-DOC-003 | 同名フォルダの重複 | |
-| AKO-STS-001 | 対象サービスが見つからない | |
-| AKO-STS-002 | インシデントのタイトル未入力 | |
-| AKO-STS-003 | インシデントが見つからない | |
-| AKO-STS-004 | インシデントステータスの不正遷移（正順のみ） | |
-| AKO-STS-005 | 状況説明の未入力 | |
+| AKO-STS-001 | 対象サービスが見つからない | ✅ |
+| AKO-STS-002 | インシデントのタイトル未入力 | ✅ |
+| AKO-STS-003 | インシデントが見つからない | ✅ |
+| AKO-STS-004 | インシデントステータスの不正遷移（正順のみ） | ✅ |
+| AKO-STS-005 | 状況説明の未入力 | ✅ |
+| AKO-STS-006 | 影響度の不正（minor / major / critical 以外。API のみ = モックは UI セレクトで制約） | ✅ |
 | AKO-SAL-001 | 月次実績の入力不正（month 形式・projectType・金額） | ✅ |
 | AKO-SAL-002 | 顧客(会社)が未登録 | ✅ |
 | AKO-SAL-003 | 取込件数の範囲外（rows は 1〜500 件） | ✅ |

@@ -19,6 +19,7 @@ import { mastersRoutes } from './routes/masters'
 import { notificationsRoutes } from './routes/notifications'
 import { reportsRoutes } from './routes/reports'
 import { runSalesEtl, salesRoutes } from './routes/sales'
+import { runUptimeRollup, statusRoutes } from './routes/status'
 import { assistRoutes } from './routes/assist'
 import { calendarOauthCallback, calendarRoutes } from './routes/calendar'
 import { chatbotRoutes } from './routes/chatbot'
@@ -73,6 +74,16 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
     return c.json({ data: result })
   })
 
+  // 稼働状況 uptime の日次ロールアップ（Cloud Scheduler → 共有鍵。未解決インシデントの停止時間を進める）
+  app.post('/jobs/uptime-rollup', async (c) => {
+    const secret = process.env.CRON_SECRET ?? ''
+    if (!secret || c.req.header('x-cron-key') !== secret) {
+      throw err('AKO-AUTH-001', 'ジョブ実行キーが無効です', 401)
+    }
+    const result = await runUptimeRollup(pool)
+    return c.json({ data: result })
+  })
+
   // OAuth コールバックはブラウザリダイレクト（認証ヘッダなし）で届くため認証より前に登録する。
   // 本人性は DB 保存の state ノンス（一回性・10 分 TTL）+ id_token の email と members.email の突合で担保する
   app.get('/v1/calendar/oauth/callback', calendarOauthCallback(pool, env))
@@ -123,6 +134,7 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
   app.route('/v1/ai-company', aiCompanyRoutes(pool, env))
   app.route('/v1/decisions', decisionsRoutes(pool))
   app.route('/v1/sales', salesRoutes(pool))
+  app.route('/v1/status', statusRoutes(pool))
 
   app.notFound(c => c.json({ error: { code: 'AKO-GEN-404', message: 'エンドポイントが見つかりません' } }, 404))
 

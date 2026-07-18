@@ -2,8 +2,8 @@
  * チャットボット応答 API（F-09-2）。mockup useChatbot の LLM 一次応答レイヤ。
  * - 一次応答: Vertex AI（構造化出力）。サーバーが DB の全移行済みドメイン
  *   （勤怠・有給・日報・ワークフロー・シフト・意思決定・タスク計画・カレンダー・エスカレーション・
- *   メンバー/部署・顧客・プロジェクト・ナレッジ・AI カンパニー・売上）を文脈化して回答
- *   （バッチ5d/6a/6b・オペレーター指示 2026-07-17）
+ *   メンバー/部署・顧客・プロジェクト・ナレッジ・AI カンパニー・売上・稼働状況）を文脈化して回答
+ *   （バッチ5d/6a/6b/6c・オペレーター指示 2026-07-17）
  * - 参照範囲は権限（F-16）に従う: ドメインごとに canUseFeature で文脈生成の可否を判定し、
  *   マスタ由来の文脈は stripDeniedFields で表示項目レベルの deny を反映する（5c の共有ロジックを再利用）
  * - 本人スコープ（C3）は維持: 勤怠・有給・シフト・タスク計画・カレンダー・エスカレーションは本人分のみ。
@@ -14,8 +14,8 @@
  * - フォールバック: LLM 無効・失敗・低確信度は { fallback: true, sessionId } を返し、クライアントが
  *   既存の決定的ルーティング応答（移行済みドメインは API モードでも実データ参照）へ縮退し、
  *   その応答を POST /sessions/:id/messages で追記する（履歴の忠実性）（原則4）
- * - 未移行ドメイン（ドキュメント・稼働状況）の質問は文脈に含めず、クライアント側の
- *   モック応答が引き続き担う（implementation-status の SoT どおり。売上はバッチ6b で移行済み = 文脈対象）
+ * - 未移行ドメイン（ドキュメント）の質問は文脈に含めず、クライアント側のモック応答が
+ *   引き続き担う（implementation-status の SoT どおり。売上 = 6b・稼働状況 = 6c で移行済み = 文脈対象）
  * エラー: AKO-CHT-001（セッションが見つからない・他人のセッション）
  */
 import { Hono } from 'hono'
@@ -288,6 +288,35 @@ export async function buildContext(
       parts.push(`## 売上サマリ（/sales・${fy}年度）
 年度累計売上 ${Math.round(fyAmount / 10000).toLocaleString('ja-JP')}万円${marginRate}
 当月（${currentMonth}）売上 ${Math.round(cur.amount / 10000).toLocaleString('ja-JP')}万円${yoy}`)
+    })
+  }
+
+  // 稼働状況（バッチ6c で移行済みドメイン。全体状態 + 対応中インシデント。詳細は /status へ誘導）
+  if (can('status') && /稼働|障害|システム|メンテ|止まっ|落ち/.test(question)) {
+    await block(async () => {
+      const { rows: services } = await pool.query<{ id: string; name: string }>(
+        `SELECT id, name FROM system_services WHERE active = true ORDER BY id`)
+      if (services.length === 0) return
+      const { rows: open } = await pool.query<{
+        serviceId: string; title: string; impact: string; status: string; startedAt: string
+      }>(
+        `SELECT service_id AS "serviceId", title, impact, status, started_at AS "startedAt"
+         FROM service_incidents WHERE status <> 'resolved' ORDER BY started_at DESC LIMIT 10`)
+      const stateLabel: Record<string, string> = {
+        minor: '性能低下', major: '一部障害', critical: '重大障害',
+      }
+      const statusLabel: Record<string, string> = {
+        investigating: '調査中', identified: '原因特定', monitoring: '経過観察',
+      }
+      const nameOf = new Map(services.map(s => [s.id, s.name]))
+      const lines = services.map((s) => {
+        const incs = open.filter(i => i.serviceId === s.id)
+        if (incs.length === 0) return `- ${s.name}: 正常稼働`
+        return incs.map(i =>
+          `- ${nameOf.get(i.serviceId)}: ${stateLabel[i.impact] ?? i.impact}「${capCp(i.title, 60)}」（${statusLabel[i.status] ?? i.status}・${i.startedAt.slice(0, 16)}〜）`).join('\n')
+      })
+      parts.push(`## 提供システムの稼働状況（/status）\n${lines.join('\n')}${
+        open.length === 0 ? '\n現在、対応中の障害はありません。' : ''}`)
     })
   }
 

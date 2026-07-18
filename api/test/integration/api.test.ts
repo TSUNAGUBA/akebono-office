@@ -1646,3 +1646,175 @@ describe('売上管理（F-15）+ mart ETL（バッチ6b）', () => {
     expect(rows[0]?.fiscalYear).toBe(2026) // 4 月始まり: 2026-06 は 2026 年度
   })
 })
+
+describe('提供システム稼働状況（F-11・バッチ6c）', () => {
+  let incidentId = ''
+
+  it('GET /v1/status: シード 3 サービス + 90 日分の uptime（記録なしは operational 埋め）を返す', async () => {
+    const r = await api('GET', '/v1/status', { as: MEMBER })
+    expect(r.status).toBe(200)
+    const data = r.json.data as {
+      services: { id: string; components: { id: string }[] }[]
+      incidents: unknown[]
+      uptime: { serviceId: string; date: string; downMinutes: number; worstState: string }[]
+    }
+    expect(data.services.map(s => s.id)).toEqual(['svc-01', 'svc-02', 'svc-03'])
+    expect(data.services[0]!.components.length).toBeGreaterThan(0)
+    // 全サービス × 90 日の密な配列（インシデントなし = 全日 operational）
+    expect(data.uptime).toHaveLength(3 * 90)
+    expect(data.uptime.every(u => u.worstState === 'operational' && u.downMinutes === 0)).toBe(true)
+  })
+
+  it('インシデント登録は管理者のみ。サービス不在 404 / タイトル未入力 400', async () => {
+    const denied = await api('POST', '/v1/status/incidents', {
+      as: MEMBER, body: { serviceId: 'svc-01', title: 'x', impact: 'minor' },
+    })
+    expect(denied.status).toBe(403)
+    expect(denied.json.error?.code).toBe('AKO-AUTH-003')
+    expect((await api('POST', '/v1/status/incidents', {
+      as: ADMIN, body: { serviceId: 'svc-99', title: 'x', impact: 'minor' },
+    })).json.error?.code).toBe('AKO-STS-001')
+    expect((await api('POST', '/v1/status/incidents', {
+      as: ADMIN, body: { serviceId: 'svc-01', title: '  ', impact: 'minor' },
+    })).json.error?.code).toBe('AKO-STS-002')
+    expect((await api('POST', '/v1/status/incidents', {
+      as: ADMIN, body: { serviceId: 'svc-01', title: 'x', impact: 'huge' },
+    })).json.error?.code).toBe('AKO-STS-006')
+
+    const created = await api('POST', '/v1/status/incidents', {
+      as: ADMIN,
+      body: { serviceId: 'svc-01', title: 'API 応答遅延', impact: 'major', body: '応答時間の悪化を検知。' },
+    })
+    expect(created.status).toBe(201)
+    incidentId = (created.json.data as { id: string }).id
+    const status = (await api('GET', '/v1/status', { as: MEMBER })).json.data as {
+      incidents: { id: string; status: string; updates: { status: string; body: string }[]; resolvedAt: string | null }[]
+      uptime: { serviceId: string; date: string; worstState: string }[]
+    }
+    const inc = status.incidents.find(i => i.id === incidentId)
+    expect(inc?.status).toBe('investigating')
+    expect(inc?.updates).toHaveLength(1)
+    expect(inc?.updates[0]?.body).toBe('応答時間の悪化を検知。')
+    // 発生と同時に当日の uptime へ反映（開始直後のため停止分は 0 でも状態は写像される）
+    const today = todayJst()
+    expect(status.uptime.find(u => u.serviceId === 'svc-01' && u.date === today)?.worstState).toBe('partial_outage')
+    // 管理者へ通知される（非ブロッキングの成功経路）
+    const { rows: nt } = await pool.query(
+      `SELECT 1 FROM notifications WHERE title LIKE 'インシデント発生%' LIMIT 1`)
+    expect(nt.length).toBe(1)
+  })
+
+  it('状況更新は正順のみ（スキップ可・逆行 409）・説明必須・resolved で resolvedAt 記録', async () => {
+    // 説明未入力
+    expect((await api('POST', `/v1/status/incidents/${incidentId}/updates`, {
+      as: ADMIN, body: { status: 'identified', body: ' ' },
+    })).json.error?.code).toBe('AKO-STS-005')
+    // 不在 404
+    expect((await api('POST', `/v1/status/incidents/inc-none/updates`, {
+      as: ADMIN, body: { status: 'identified', body: 'x' },
+    })).json.error?.code).toBe('AKO-STS-003')
+    // 正順スキップ（investigating → monitoring）は可
+    const skip = await api('POST', `/v1/status/incidents/${incidentId}/updates`, {
+      as: ADMIN, body: { status: 'monitoring', body: '暫定対処を適用し経過観察に移行。' },
+    })
+    expect(skip.status).toBe(200)
+    // 逆行は 409（AKO-STS-004）
+    const back = await api('POST', `/v1/status/incidents/${incidentId}/updates`, {
+      as: ADMIN, body: { status: 'identified', body: '巻き戻し' },
+    })
+    expect(back.status).toBe(409)
+    expect(back.json.error?.code).toBe('AKO-STS-004')
+    // 一般メンバーは更新不可
+    expect((await api('POST', `/v1/status/incidents/${incidentId}/updates`, {
+      as: MEMBER, body: { status: 'resolved', body: 'x' },
+    })).status).toBe(403)
+    // 解決
+    const resolve = await api('POST', `/v1/status/incidents/${incidentId}/updates`, {
+      as: ADMIN, body: { status: 'resolved', body: '応答時間の回復を確認しました。' },
+    })
+    expect(resolve.status).toBe(200)
+    const status = (await api('GET', '/v1/status', { as: MEMBER })).json.data as {
+      incidents: { id: string; status: string; updates: unknown[]; resolvedAt: string | null }[]
+    }
+    const inc = status.incidents.find(i => i.id === incidentId)
+    expect(inc?.status).toBe('resolved')
+    expect(inc?.resolvedAt).toBeTruthy()
+    expect(inc?.updates).toHaveLength(3) // 初報 + monitoring + resolved（追記のみ）
+    // 解決済みへの再操作は 409
+    expect((await api('POST', `/v1/status/incidents/${incidentId}/updates`, {
+      as: ADMIN, body: { status: 'resolved', body: 'x' },
+    })).status).toBe(409)
+  })
+
+  it('uptime 集計: 過去のインシデントから日次 downMinutes を導出。再計算は冪等（管理者 + 日次ジョブ）', async () => {
+    // 一昨日 10:00〜12:30 の解決済みインシデント（150 分・major）を SoT へ直接投入して再計算
+    const day = addDays(todayJst(), -2)
+    await pool.query(
+      `INSERT INTO service_incidents (id, service_id, title, impact, status, updates, started_at, resolved_at)
+       VALUES ('inc-hist-1', 'svc-02', '分析画面の停止', 'major', 'resolved', '[]',
+               '${day}T10:00:00+09:00', '${day}T12:30:00+09:00')`)
+    const run1 = await api('POST', '/v1/status/uptime/recompute', { as: ADMIN, body: {} })
+    expect(run1.status).toBe(200)
+    const readRow = async (): Promise<{ downMinutes: number; worstState: string } | undefined> => {
+      const status = (await api('GET', '/v1/status', { as: MEMBER })).json.data as {
+        uptime: { serviceId: string; date: string; downMinutes: number; worstState: string }[]
+      }
+      return status.uptime.find(u => u.serviceId === 'svc-02' && u.date === day)
+    }
+    expect(await readRow()).toMatchObject({ downMinutes: 150, worstState: 'partial_outage' })
+    // 再実行しても値・行数が変わらない（冪等 = DELETE→INSERT の窓再計算）
+    expect((await api('POST', '/v1/status/uptime/recompute', { as: ADMIN, body: {} })).status).toBe(200)
+    expect(await readRow()).toMatchObject({ downMinutes: 150, worstState: 'partial_outage' })
+    const { rows: cnt } = await pool.query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM uptime_daily WHERE service_id = 'svc-02' AND date = $1::date`, [day])
+    expect(cnt[0]?.n).toBe('1')
+    // 再計算は管理者のみ
+    expect((await api('POST', '/v1/status/uptime/recompute', { as: MEMBER, body: {} })).status).toBe(403)
+
+    // 日次ジョブ（CRON_SECRET 保護。周期有給付与・sales ETL と同型）
+    expect((await app.request('/jobs/uptime-rollup', { method: 'POST' })).status).toBe(401)
+    process.env.CRON_SECRET = 'test-cron-key'
+    try {
+      const job = await app.request('/jobs/uptime-rollup', {
+        method: 'POST', headers: { 'x-cron-key': 'test-cron-key' },
+      })
+      expect(job.status).toBe(200)
+    } finally {
+      delete process.env.CRON_SECRET
+    }
+  })
+
+  it('機能ガード: status の deny で /v1/status が 403（AKO-PRM-001）。チャットボット文脈も消える', async () => {
+    const { buildContext } = await import('../../src/routes/chatbot')
+    const adminUser = { id: ADMIN, name: '管理 太郎', email: 'admin@example.com', role: 'admin' as const, title: '', avatar: '' }
+    const memberUser = { id: MEMBER, name: '一般 次郎', email: 'member@example.com', role: 'member' as const, title: '', avatar: '' }
+
+    // ルール未設定 = allow: 稼働状況ブロックが生成され、解決済みでないインシデントが載る
+    await api('POST', '/v1/status/incidents', {
+      as: ADMIN, body: { serviceId: 'svc-03', title: 'AI 生成の失敗率上昇', impact: 'minor' },
+    })
+    const ctx = await buildContext(pool, adminUser, 'システムの稼働状況は？', [])
+    expect(ctx).toContain('提供システムの稼働状況')
+    expect(ctx).toContain('AI 生成の失敗率上昇')
+    expect(ctx).toContain('AKEBONO SCM: 正常稼働') // svc-01 は解決済みのため正常
+
+    const denyStatus = [{
+      id: 'pm-sts', subjectKind: 'role' as const, subjectId: 'member', resource: 'status', field: null,
+      effect: 'deny' as const, active: true,
+    }]
+    expect(await buildContext(pool, memberUser, 'システムの稼働状況は？', denyStatus)).not.toContain('提供システムの稼働状況')
+
+    // API ガード（DB ルール経由）
+    const rule = await api('POST', '/v1/masters/permission-rules', {
+      as: ADMIN, body: { subjectKind: 'role', subjectId: 'member', resource: 'status', effect: 'deny' },
+    })
+    expect(rule.status).toBe(201)
+    const id = (rule.json.data as { id: string }).id
+    const denied = await api('GET', '/v1/status', { as: MEMBER })
+    expect(denied.status).toBe(403)
+    expect(denied.json.error?.code).toBe('AKO-PRM-001')
+    expect((await api('GET', '/v1/status', { as: ADMIN })).status).toBe(200)
+    expect((await api('POST', `/v1/masters/permission-rules/${id}/archive`, { as: ADMIN })).status).toBe(200)
+    expect((await api('GET', '/v1/status', { as: MEMBER })).status).toBe(200)
+  })
+})

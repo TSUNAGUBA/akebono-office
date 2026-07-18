@@ -18,8 +18,11 @@ const { isAdmin } = useCurrentUser()
 const { show } = useToast()
 const {
   services, serviceById, stateOf, uptimeDaysOf, uptimePctOf,
-  incidentsOf, incidentById, nextStatusesOf, createIncident, addIncidentUpdate,
+  incidentsOf, incidentById, nextStatusesOf, createIncident, addIncidentUpdate, refresh,
 } = useSystemStatus()
+
+// 表示時に最新状態を取り込む（API モード。他管理者の登録・更新の反映）
+onMounted(() => { void refresh() })
 
 const serviceId = computed(() => String(route.params.id ?? ''))
 const service = computed(() => serviceById(serviceId.value))
@@ -50,13 +53,21 @@ function openRegister(): void {
   registerOpen.value = true
 }
 
-function submitRegister(): void {
-  const r = createIncident({
-    serviceId: regForm.serviceId,
-    title: regForm.title,
-    impact: regForm.impact as IncidentImpact,
-    body: regForm.body,
-  })
+const regSaving = ref(false)
+async function submitRegister(): Promise<void> {
+  if (regSaving.value) return
+  regSaving.value = true
+  let r: Awaited<ReturnType<typeof createIncident>>
+  try {
+    r = await createIncident({
+      serviceId: regForm.serviceId,
+      title: regForm.title,
+      impact: regForm.impact as IncidentImpact,
+      body: regForm.body,
+    })
+  } finally {
+    regSaving.value = false
+  }
   if (!r.ok) {
     regError.value = r.error.message
     return
@@ -89,9 +100,16 @@ function openUpdate(incident: ServiceIncident): void {
   updError.value = ''
 }
 
-function submitUpdate(): void {
-  if (!updateTarget.value) return
-  const r = addIncidentUpdate(updateTarget.value.id, updForm.status as IncidentStatus, updForm.body)
+const updSaving = ref(false)
+async function submitUpdate(): Promise<void> {
+  if (!updateTarget.value || updSaving.value) return
+  updSaving.value = true
+  let r: Awaited<ReturnType<typeof addIncidentUpdate>>
+  try {
+    r = await addIncidentUpdate(updateTarget.value.id, updForm.status as IncidentStatus, updForm.body)
+  } finally {
+    updSaving.value = false
+  }
   if (!r.ok) {
     updError.value = r.error.message
     return
@@ -230,7 +248,9 @@ function timelineOf(incident: ServiceIncident) {
         </div>
         <template #footer>
           <button type="button" class="btn" @click="registerOpen = false">キャンセル</button>
-          <button type="button" class="btn btn-primary" @click="submitRegister">登録して通知</button>
+          <button type="button" class="btn btn-primary" :disabled="regSaving" @click="submitRegister">
+            {{ regSaving ? '登録中…' : '登録して通知' }}
+          </button>
         </template>
       </UiModal>
 
@@ -254,7 +274,9 @@ function timelineOf(incident: ServiceIncident) {
         </div>
         <template #footer>
           <button type="button" class="btn" @click="updateTarget = null">キャンセル</button>
-          <button type="button" class="btn btn-primary" @click="submitUpdate">更新して通知</button>
+          <button type="button" class="btn btn-primary" :disabled="updSaving" @click="submitUpdate">
+            {{ updSaving ? '更新中…' : '更新して通知' }}
+          </button>
         </template>
       </UiModal>
     </template>
