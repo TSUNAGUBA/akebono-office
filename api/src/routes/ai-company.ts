@@ -258,7 +258,7 @@ async function prepareStepExecution(
   })
   if (res) {
     // 再質問はタスクあたり 3 回まで（LLM が needsInput を返し続ける無限問答の防止。
-    // 上限到達後は手元の材料で遂行し、不足は成果物内で明示させる）
+    // 上限到達後は needsInput を無視して output を採用し、output が空なら決定的出力へ縮退する）
     if (res.needsInput && String(res.question ?? '').trim() && materials.answeredCount < 3) {
       return { kind: 'question', question: capCp(String(res.question).trim(), 500) }
     }
@@ -649,11 +649,13 @@ export function aiCompanyRoutes(pool: pg.Pool, env: Env): Hono {
           throw err('AKO-AIC-008', '完了・中止済みのタスクは中止できません', 409)
         }
         await client.query(`UPDATE ai_tasks SET status = 'cancelled', updated_at = now() WHERE id = $1`, [taskId])
-        // open な質問は中止で打ち切り（宙吊りの回答待ちを残さない。打ち切りの経緯は answer 欄に記録）
+        // open な質問は中止で打ち切り（宙吊りの回答待ちを残さない。打ち切りの経緯は answer 欄に記録）。
+        // 連鎖中止される分担子タスクの質問も同時に打ち切る（再連携なし = 孫は存在しない）
         await client.query(
           `UPDATE ai_task_questions SET status = 'answered', answer = '（タスク中止により打ち切り）',
              answered_by = $2, answered_at = now()
-           WHERE task_id = $1 AND status = 'open'`, [taskId, user.id])
+           WHERE status = 'open'
+             AND task_id IN (SELECT id FROM ai_tasks WHERE id = $1 OR parent_task_id = $1)`, [taskId, user.id])
         // 親の中止は未完了の分担子タスクへ連鎖（分担だけが走り続ける宙吊りを作らない）
         const { rows: kids } = await client.query<{ id: string; aiEmployeeId: string; title: string }>(
           `SELECT id, ai_employee_id AS "aiEmployeeId", title FROM ai_tasks

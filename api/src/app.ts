@@ -40,13 +40,6 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
 
   app.onError((e, c) => errorResponse(c, e))
 
-  // リクエストボディの総量制限（添付 = 10MB × 5 件の base64 ≒ 70MB を許容し、それ以上は 413。
-  // バッチ7f レビュー指摘 = 無制限ボディの受理を閉塞）
-  app.use('/v1/*', bodyLimit({
-    maxSize: 80 * 1024 * 1024,
-    onError: c => c.json({ error: { code: 'AKO-GEN-004', message: 'リクエストが大きすぎます（添付は 10MB × 5 件までにしてください）' } }, 413),
-  }))
-
   if (env.corsOrigins.length > 0) {
     app.use('/v1/*', cors({
       origin: env.corsOrigins,
@@ -55,6 +48,13 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
       maxAge: 3600,
     }))
   }
+
+  // リクエストボディの総量制限（添付 = 10MB × 5 件の base64 ≒ 70MB を許容し、それ以上は 413。
+  // cors の後段に置く = 413 応答にも CORS ヘッダが付き、フロントがエラーメッセージを読める）
+  app.use('/v1/*', bodyLimit({
+    maxSize: 80 * 1024 * 1024,
+    onError: c => c.json({ error: { code: 'AKO-GEN-004', message: 'リクエストが大きすぎます（添付は 10MB × 5 件までにしてください）' } }, 413),
+  }))
 
   // ヘルスチェック（Cloud Run の起動プローブ・監視用。DB 死活も返すが 200 は維持 = 非ブロッキング）
   app.get('/healthz', async (c) => {

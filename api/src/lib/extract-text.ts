@@ -41,8 +41,11 @@ async function extractPdf(bytes: Buffer): Promise<string> {
 function decodeXmlEntities(s: string): string {
   return s.replace(/&(#x[0-9a-f]+|#\d+|lt|gt|quot|apos|amp);/gi, (_, ent: string) => {
     const e = ent.toLowerCase()
-    if (e.startsWith('#x')) return String.fromCodePoint(Number.parseInt(e.slice(2), 16))
-    if (e.startsWith('#')) return String.fromCodePoint(Number.parseInt(e.slice(1), 10))
+    if (e.startsWith('#x') || e.startsWith('#')) {
+      const cp = e.startsWith('#x') ? Number.parseInt(e.slice(2), 16) : Number.parseInt(e.slice(1), 10)
+      // 範囲外（> U+10FFFF）は fromCodePoint が throw し外側 catch で全損するため、当該エンティティのみ落とす
+      return Number.isFinite(cp) && cp >= 0 && cp <= 0x10FFFF ? String.fromCodePoint(cp) : ''
+    }
     return { lt: '<', gt: '>', quot: '"', apos: '\'', amp: '&' }[e] ?? ''
   })
 }
@@ -51,6 +54,7 @@ function decodeXmlEntities(s: string): string {
 // 抽出テキストの累積上限で打ち切り、スライド数にも上限を置く（呼び出し側の cap より十分大きい値）
 const PPTX_TEXT_CAP = 100_000
 const PPTX_MAX_SLIDES = 300
+const MAX_SLIDE_XML_BYTES = 20 * 1024 * 1024 // 1 スライド XML の伸長上限（超過エントリはスキップ）
 
 async function extractPptx(bytes: Buffer): Promise<string> {
   const zip = await JSZip.loadAsync(bytes)
@@ -62,6 +66,11 @@ async function extractPptx(bytes: Buffer): Promise<string> {
   const slides: string[] = []
   let total = 0
   for (const name of slideNames) {
+    // エントリ単位の伸長サイズ事前チェック（1 スライドが数 GB へ伸長する zip 爆弾は伸長前にスキップ。
+    // uncompressedSize は zip セントラルディレクトリ由来 = jszip 内部フィールドを参照する設計判断）
+    const entry = zip.files[name]! as unknown as { _data?: { uncompressedSize?: number } }
+    const inflated = entry._data?.uncompressedSize
+    if (typeof inflated === 'number' && inflated > MAX_SLIDE_XML_BYTES) continue
     const xml = await zip.files[name]!.async('string')
     const texts = [...xml.matchAll(/<a:t(?:\s[^>]*)?>([^<]*)<\/a:t>/g)].map(m => decodeXmlEntities(m[1] ?? ''))
     const body = texts.join(' ').trim()
