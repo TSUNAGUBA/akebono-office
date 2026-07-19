@@ -94,14 +94,21 @@ function canArchive(n: Note): boolean {
 
 // 取消済みの表示と復元（取消の取消 = 原則 9.5 の対称性。復元権限のある行のみ archived に入る）
 const showArchived = ref(false)
+const restoring = ref(false)
 
 async function onRestore(n: Note): Promise<void> {
-  const res = await notes.restore(n.id)
-  if (!res.ok) {
-    show(`${res.error.code}: ${res.error.message}`, 'crit')
-    return
+  if (restoring.value) return // 連打ガード（二重実行はサーバー側 no-op だが成功トーストの二重表示を防ぐ）
+  restoring.value = true
+  try {
+    const res = await notes.restore(n.id)
+    if (!res.ok) {
+      show(`${res.error.code}: ${res.error.message}`, 'crit')
+      return
+    }
+    show('復元しました（一覧と AI の参照対象に戻ります）')
+  } finally {
+    restoring.value = false
   }
-  show('復元しました（一覧と AI の参照対象に戻ります）')
 }
 
 async function onArchive(n: Note): Promise<void> {
@@ -238,7 +245,7 @@ function authorOf(n: Note): string {
           <li v-for="n in notes.archived.value" :key="n.id" class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 py-2">
             <p class="text-[13px] text-muted line-through">{{ n.title }}</p>
             <span class="num ml-auto text-[11px] text-muted">{{ fmtDateLong(n.createdAt) }}</span>
-            <button type="button" class="btn btn-ghost btn-sm" :aria-label="`「${n.title}」を復元する`" @click="onRestore(n)">
+            <button type="button" class="btn btn-ghost btn-sm" :disabled="restoring" :aria-label="`「${n.title}」を復元する`" @click="onRestore(n)">
               <RotateCcw class="h-3.5 w-3.5" aria-hidden="true" />
               元に戻す
             </button>

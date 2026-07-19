@@ -74,7 +74,9 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
 
   // 一覧（poipoi = 本人のみ / minutes = 全員。新しい順）。
   // includeArchived=1 で取消済みも含める（復元 UI 用。取消済みの可視範囲は復元権限と同じ =
-  // poipoi は本人のみ・minutes は登録者または管理者。誤アップロードの内容を全員へ晒し続けない）
+  // poipoi は本人のみ・minutes は登録者または管理者。誤アップロードの内容を全員へ晒し続けない）。
+  // LIMIT 300 は active + 取消済みの合算（取消済みが極端に多いと active の表示件数が減るが、
+  // SME 規模では実害なしと判断。件数が問題になったらページング導入時に吸収する）
   app.get('/', async (c) => {
     const user = c.get('user')
     const kind = kindOf(c.req.query('kind'))
