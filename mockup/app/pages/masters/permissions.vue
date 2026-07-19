@@ -222,9 +222,10 @@ async function restoreRule(): Promise<void> {
   >
     <UiTabBar v-model="viewTab" :tabs="VIEW_TABS" class="mb-3" />
 
-    <MastersPermissionMatrix v-if="viewTab === 'matrix'" />
+    <!-- v-show でタブ往復しても権限表の状態（レイヤ・個人列の選択）を保持する（レビュー M-6） -->
+    <MastersPermissionMatrix v-show="viewTab === 'matrix'" />
 
-    <UiSectionCard v-else title="権限ルール" description="拒否ルールで機能を隠し、個人の許可ルールで例外を作れます。表示項目（項目列あり）は API モードでマスタ応答から除外されます" flush>
+    <UiSectionCard v-show="viewTab === 'list'" title="権限ルール" description="拒否ルールで機能を隠し、個人の許可ルールで例外を作れます。表示項目（項目列あり）は API モードでマスタ応答から除外されます" flush>
       <template #actions>
         <button type="button" class="btn btn-primary btn-sm" @click="openCreate">
           <Plus class="h-3.5 w-3.5" aria-hidden="true" />

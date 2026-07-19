@@ -89,14 +89,17 @@ async function cycleCell(subjectId: string, row: MatrixRow): Promise<void> {
   if (busyCells.value.has(key)) return
   busyCells.value = new Set([...busyCells.value, key])
   try {
-    const rule = cellRule(subjectId, row)
-    let res
+    const matches = activeRules.value.filter(r => matchKey(r, subjectId, row))
+    const rule = matches.find(r => r.effect === 'deny') ?? matches[0]
+    let res: { ok: true } | { ok: false; error: { code: string; message: string } } = { ok: true }
     if (!rule) {
-      // 未設定 → 拒否。同一キーの無効ルールがあれば復元して再利用（履歴の乱立防止）
+      // 未設定 → 拒否。同一キーの無効ルールがあれば復元して再利用（履歴の乱立防止）。
+      // 順序は「無効のまま effect を deny へ書き換え → 復元」: 途中失敗しても有効な allow が
+      // 復活しない = 拒否操作の失敗が権限を広げる方向に倒れない（フェイルセーフ。レビュー R-1）
       const inactive = (ruleCrud.list.value as PermissionRule[]).find(r => !r.active && matchKey(r, subjectId, row))
       if (inactive) {
-        res = await ruleCrud.restore(inactive.id)
-        if (res.ok && inactive.effect !== 'deny') res = await ruleCrud.save({ id: inactive.id, effect: 'deny' })
+        if (inactive.effect !== 'deny') res = await ruleCrud.save({ id: inactive.id, effect: 'deny' })
+        if (res.ok) res = await ruleCrud.restore(inactive.id)
       } else {
         res = await ruleCrud.save({
           subjectKind: matrixLayer.value as PermissionRule['subjectKind'], subjectId,
@@ -104,11 +107,17 @@ async function cycleCell(subjectId: string, row: MatrixRow): Promise<void> {
         })
       }
     } else if (rule.effect === 'deny') {
-      // 拒否 → 許可（同一ルールの効果を書き換え = ルールは増えない）
-      res = await ruleCrud.save({ id: rule.id, effect: 'allow' })
+      // 拒否 → 許可。同一キーに有効な allow が既にある（旧データの deny+allow 併存）場合は
+      // patch すると完全重複 allow が生まれるため、deny の論理削除で許可状態にする（レビュー M-2）
+      const otherAllow = matches.some(r => r.id !== rule.id && r.effect === 'allow')
+      res = otherAllow ? await ruleCrud.archive(rule.id) : await ruleCrud.save({ id: rule.id, effect: 'allow' })
     } else {
-      // 許可 → 未設定（論理削除 = 監査保持。既定の許可へ戻る）
-      res = await ruleCrud.archive(rule.id)
+      // 許可 → 未設定（論理削除 = 監査保持。既定の許可へ戻る）。同一キーの有効ルールを全件
+      // 論理削除する（旧データで複数併存していても 1 クリックで未設定へ収束 = 空振りしない）
+      for (const m of matches) {
+        res = await ruleCrud.archive(m.id)
+        if (!res.ok) break
+      }
     }
     if (!res.ok) toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
     // 成功時のトーストは出さない（セルの状態変化が即時フィードバック。連続編集の邪魔をしない設計判断）
@@ -126,10 +135,18 @@ function cellState(subjectId: string, row: MatrixRow): 'deny' | 'allow' | 'unset
 
 const STATE_LABELS: Record<string, string> = { deny: '拒否', allow: '許可', unset: '未設定（既定 = 許可）' }
 
-/** admin のマスタ・設定 deny はロックアウト防止で無視される（shared/domain/permissions.ts と同期） */
+/**
+ * admin のマスタ・設定 deny はロックアウト防止で無視される（shared/domain/permissions.ts の
+ * canUseFeature と同期。保護は利用者属性ベース = ロール列の admin と、role が admin の個人列が対象。
+ * 役職レイヤは対象者が静的に決まらないため脚注での言及に留める）
+ */
 function isLockoutProtected(subjectId: string, row: MatrixRow): boolean {
-  return matrixLayer.value === 'role' && subjectId === 'admin'
-    && (row.resource === 'masters' || row.resource === 'settings') && row.field === null
+  if (!(row.resource === 'masters' || row.resource === 'settings') || row.field !== null) return false
+  if (matrixLayer.value === 'role') return subjectId === 'admin'
+  if (matrixLayer.value === 'member') {
+    return (memberCrud.byId(subjectId) as Member | undefined)?.role === 'admin'
+  }
+  return false
 }
 </script>
 
@@ -173,8 +190,9 @@ function isLockoutProtected(subjectId: string, row: MatrixRow): boolean {
         <tbody>
           <template v-for="section in sections" :key="section.key">
             <tr class="border-b border-line bg-surface-soft">
-              <td :colspan="columns.length + 1" class="sticky left-0 px-4 py-1.5 text-[11px] font-bold text-sub">
-                {{ section.label }}
+              <td :colspan="columns.length + 1" class="px-4 py-1.5 text-[11px] font-bold text-sub">
+                <!-- colspan セルは全幅のため sticky の可動域がない。内側要素を sticky にして横スクロールでも見出しを画面内に留める -->
+                <span class="sticky left-4 inline-block">{{ section.label }}</span>
               </td>
             </tr>
             <tr v-for="row in section.rows" :key="`${row.resource}:${row.field ?? ''}`" class="border-b border-line last:border-b-0">
@@ -191,6 +209,7 @@ function isLockoutProtected(subjectId: string, row: MatrixRow): boolean {
                     'border-transparent hover:border-line-strong': cellState(col.id, row) === 'unset',
                     'opacity-50': busyCells.has(`${col.id}:${row.resource}:${row.field ?? ''}`),
                   }"
+                  :aria-busy="busyCells.has(`${col.id}:${row.resource}:${row.field ?? ''}`)"
                   :aria-label="`${col.label} × ${section.label}/${row.label}: ${STATE_LABELS[cellState(col.id, row)]}。クリックで切替`"
                   :title="isLockoutProtected(col.id, row) ? 'ロックアウト防止のため管理者への拒否は無効です' : undefined"
                   @click="cycleCell(col.id, row)"
@@ -207,7 +226,7 @@ function isLockoutProtected(subjectId: string, row: MatrixRow): boolean {
       </table>
     </div>
     <p class="border-t border-line px-4 py-2 text-[11px] text-muted">
-      ※ 管理者の「マスタメンテナンス」「設定」への拒否はロックアウト防止のため判定時に無視されます。個々のルールの無効化・復元の履歴はルール一覧モードで確認できます
+      ※ 管理者（ロール列の管理者・権限ロールが管理者の個人。役職経由で該当する場合も同様）の「マスタメンテナンス」「設定」への拒否はロックアウト防止のため判定時に無視されます。個々のルールの無効化・復元の履歴はルール一覧モードで確認できます
     </p>
   </UiSectionCard>
 </template>
