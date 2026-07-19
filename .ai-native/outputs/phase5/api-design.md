@@ -118,13 +118,19 @@ questionsFor(memberId, date): AssistQuestion[]       // 予定 1 件 1 問 + ま
 recordAnswer(q, answer, date?) / poipoiMemo(text, date?): Result  // 蓄積ログ（追記のみ）。date 省略時は本日（過去日の日報にも対応）
 generateDraft(memberId, date): ReportDraft           // 保存しない（フォームへ流し込み→確認・修正→既存 submit）
 
-// useWeeklyInsight（バッチ7g）
-generate(weekStart): Promise<{ metrics: WeeklyMetrics; insight: WeeklyInsight; llm: boolean }>
-   // API = GET /v1/reports/weekly-insight（集計 = サーバー・洞察 = Vertex AI → 失敗時 heuristicWeeklyInsight）
-   // weekStart は実在する週初め（月曜）のみ。暦不正・月曜以外は AKO-GEN-001 400（R1 M-1）
-   // モック = 同一の WeeklyMetrics をモックコレクションから集計し heuristic のみ（shared/domain/weekly-insight）
-   // 参照は閲覧権限準拠（売上は can('sales') のみ供給・reports 機能 deny は 403）
-   // 既知の差異（R1 M-4）: aiTasksDone の週内判定は API = updated_at（JST）・モック = 最終成果物
+// useWeeklyInsight（バッチ7g → バッチ7j: 永続化・前日まで前提・全体/個別分離）
+load(weekStart): Promise<WeeklyInsightBundle>       // 保存済みのみ取得（生成しない。未生成 = company/personal とも null）
+generate(weekStart): Promise<WeeklyInsightBundle>   // 生成・再生成（全体共通 + ログインユーザーの個別を保管 = upsert）
+   // WeeklyInsightBundle = { company: { metrics, insight, llm, generatedAt, generatedByName } | null,
+   //                         personal: { metrics: PersonalWeeklyMetrics, insight: PersonalWeeklyInsight, llm, generatedAt } | null }
+   // API = GET/POST /v1/reports/weekly-insight（保管 = weekly_insights・週 × audience（'company'/'member:<id>'）で一意 upsert）
+   // weekStart は実在する週初め（月曜）のみ。暦不正・月曜以外は AKO-GEN-001 400
+   // 集計は asOf = min(weekEnd, 前日) まで・経過営業日（public_holidays + 月〜金既定）基準
+   //（日報は前日分までが正常な運用 = 当日を未提出として悲観評価しない。バッチ7j）
+   // 全体は保管時に全量集計し、配信時に閲覧者マスク（売上 = sales 権限・memberHours/issues = F-16-6 の memberId 判定）。
+   // 全体の洞察本文は個人名・売上に言及しない形で生成（共有保管物のため）。個別は本人権限スコープで生成・本人のみ配信
+   // モック = 同一集計・同一ヒューリスティック（shared/domain/weekly-insight）+ weeklyInsights コレクションへ保管
+   // 既知の差異（PR #56 R1 M-4）: aiTasksDone の週内判定は API = updated_at（JST）・モック = 最終成果物
    //（無ければ作成）日時での近似（モック AiTask に updatedAt が無いため）
 // 提出済み保護: useReports.reportOn の結果（status='submitted'）で呼び出し側が生成 UI を無効化する
 

@@ -10,10 +10,14 @@
  */
 import { Hono } from 'hono'
 import type pg from 'pg'
+import { DEFAULT_WORKING_DAY_RULE, isWorkingDay } from '../../../shared/domain/business-day'
 import { addDays, nowJstIso, todayJst } from '../../../shared/domain/jst'
-import { canUseFeature, canViewMemberReports } from '../../../shared/domain/permissions'
-import type { PunchRecord, ReportEntry } from '../../../shared/domain/types'
-import { heuristicWeeklyInsight, type WeeklyInsight, type WeeklyMetrics } from '../../../shared/domain/weekly-insight'
+import { canUseFeature, canViewMemberReports, type PermissionSubject } from '../../../shared/domain/permissions'
+import type { PermissionRule, PunchRecord, ReportEntry } from '../../../shared/domain/types'
+import {
+  heuristicPersonalInsight, heuristicWeeklyInsight,
+  type PersonalWeeklyInsight, type PersonalWeeklyMetrics, type WeeklyInsight, type WeeklyMetrics,
+} from '../../../shared/domain/weekly-insight'
 import { requireAdmin, type AuthUser } from '../auth'
 import { daySummary } from '../domain/attendance'
 import { audit } from '../lib/audit'
@@ -79,6 +83,10 @@ async function llmWeeklyInsight(env: Env | undefined, metrics: WeeklyMetrics): P
     system: 'あなたは中小コンサルティング会社の経営参謀 AI です。週次の業務データ集計から、'
       + '経営・営業活動・チームやメンバーの状況の視点で会社運営に有効なインサイトを日本語で出力します。'
       + '集計値にある事実のみを根拠にし、推測で数値・事実を作らないこと。'
+      + '日報は前日分までしか存在しないのが正常な運用のため、集計基準日（asOf）より後の未提出を'
+      + '悲観的に評価しないこと（提出率は経過営業日 businessDaysElapsed 基準で判断する）。'
+      + 'これは全メンバーが閲覧する全体レポートのため、本文に個人名を出さず集計・傾向で語ること'
+      + '（個人への言及は個別インサイトが担う）。'
       + 'executiveSummary は 3〜5 文。swot の各項目・risks・actions は具体的かつ簡潔に（各 40 字以内・最大 5 件）。'
       + 'risks の severity は high / mid / low。',
     prompt: `# 週次集計（${metrics.weekStart}〜${metrics.weekEnd}）
@@ -133,6 +141,36 @@ ${JSON.stringify(metrics, null, 1)}`,
     })),
     actions: arr(res.actions),
   }
+}
+
+/** 個別インサイトの洞察生成（Vertex AI 構造化出力。失敗・無効環境は null → heuristicPersonalInsight へ） */
+async function llmPersonalInsight(
+  env: Env | undefined,
+  personal: PersonalWeeklyMetrics,
+  company: WeeklyMetrics,
+): Promise<PersonalWeeklyInsight | null> {
+  if (!env?.vertexProjectId) return null
+  const res = await generateJson<PersonalWeeklyInsight>(env, {
+    system: 'あなたは社員一人ひとりに寄り添う業務アドバイザー AI です。本人の週次実績と全体集計から、'
+      + '本人のロール（admin = 経営/管理・hr = 人事・member = 一般）・役職・所属部署に最適化した'
+      + '個人向けインサイトを日本語で出力します。集計値にある事実のみを根拠にし、推測で数値・事実を作らないこと。'
+      + '日報は前日分までが正常な運用のため、集計基準日（asOf）より後の未提出を指摘しないこと。'
+      + 'summary は 2〜3 文（本人に語りかける文体）。focus・actions は具体的かつ簡潔に（各 50 字以内・最大 5 件）。',
+    prompt: `# 本人の週次実績・属性\n${JSON.stringify(personal, null, 1)}\n\n# 全体集計（参考）\n${JSON.stringify(company, null, 1)}`,
+    schema: {
+      type: 'object',
+      properties: {
+        summary: { type: 'string' },
+        focus: { type: 'array', items: { type: 'string' } },
+        actions: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['summary', 'focus', 'actions'],
+    },
+    maxTokens: 1536,
+  })
+  if (!res || !res.summary) return null
+  const arr = (v: unknown): string[] => (Array.isArray(v) ? v.slice(0, 5).map(x => capCp(String(x), 100)) : [])
+  return { summary: capCp(String(res.summary), 600), focus: arr(res.focus), actions: arr(res.actions) }
 }
 
 export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
@@ -439,27 +477,41 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
     }
   })
 
-  // 週次 AI インサイト（バッチ7g・オペレーター指示 2026-07-19 #9）。
-  // 該当週の全登録データ（閲覧権限準拠 = 提出済み日報は全員可視・売上は can('sales') のみ供給）を
-  // 決定的に集計し、Vertex AI（無効時はヒューリスティック）で経営・営業・チーム視点の洞察を生成する
-  app.get('/weekly-insight', async (c) => {
-    const user = c.get('user')
-    const weekStart = String(c.req.query('weekStart') ?? '')
+  // ---------- 週次 AI インサイト（バッチ7g → バッチ7j: 永続化・前日まで前提・全体/個別分離） ----------
+
+  /** weekStart の検証（YYYY-MM-DD・実在日・月曜）。不正は AKO-GEN-001 400 */
+  function validWeekStart(weekStart: string): string {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) throw err('AKO-GEN-001', 'weekStart（YYYY-MM-DD）を指定してください', 400)
-    // 暦上不正な日付（2026-02-31 等）は addDays が NaN 文字列を返し pg 側で 500 になるため、ここで 400 に落とす。
-    // 週初め = 月曜（weekStartOf と同一規約）以外も集計が週とずれるため弾く
     const wsDate = new Date(`${weekStart}T00:00:00Z`)
     if (Number.isNaN(wsDate.getTime()) || wsDate.toISOString().slice(0, 10) !== weekStart || wsDate.getUTCDay() !== 1) {
       throw err('AKO-GEN-001', 'weekStart には実在する週初め（月曜）の日付を指定してください', 400)
     }
-    const weekEnd = addDays(weekStart, 6)
-    const rules = await activePermissionRules(pool)
-    const subject = subjectOf(user)
-    if (rules.length > 0 && !canUseFeature(rules, subject, 'reports')) {
-      throw err('AKO-PRM-001', 'この機能を利用する権限がありません', 403)
-    }
-    const canSales = rules.length === 0 || canUseFeature(rules, subject, 'sales')
+    return addDays(weekStart, 6)
+  }
 
+  /**
+   * 集計基準（バッチ7j）: 日報は前日分までが正常な運用のため、asOf = min(weekEnd, 前日)。
+   * businessDaysElapsed = weekStart〜asOf の営業日数（祝日 = public_holidays・月〜金の既定ルール）
+   */
+  async function weekWindow(weekStart: string, weekEnd: string): Promise<{ asOf: string; businessDaysElapsed: number }> {
+    const yesterday = addDays(todayJst(), -1)
+    const asOf = yesterday < weekEnd ? yesterday : weekEnd
+    const { rows } = await pool.query<{ date: string }>(
+      `SELECT date::text AS date FROM public_holidays WHERE date BETWEEN $1::date AND $2::date`, [weekStart, weekEnd])
+    const holidays = new Set(rows.map(r => r.date))
+    let businessDaysElapsed = 0
+    for (let d = weekStart; d <= asOf; d = addDays(d, 1)) {
+      if (isWorkingDay(d, DEFAULT_WORKING_DAY_RULE, holidays)) businessDaysElapsed++
+    }
+    return { asOf, businessDaysElapsed }
+  }
+
+  /**
+   * 全体共通の週次集計（バッチ7j: 保管して全員が共有するため、閲覧者に依存しない全量で集計する。
+   * 売上・メンバー名（F-16-6）の閲覧者ごとのマスクは配信時 = maskCompanyForViewer が行う）
+   */
+  async function computeCompanyMetrics(weekStart: string, weekEnd: string): Promise<WeeklyMetrics> {
+    const { asOf, businessDaysElapsed } = await weekWindow(weekStart, weekEnd)
     const [membersQ, dailyQ, weeklyQ, plansQ, wfQ, escQ, aiQ, notesQ, salesQ] = await Promise.all([
       pool.query<{ id: string; name: string }>(`SELECT id, name FROM members WHERE active = true`),
       pool.query<{ memberId: string | null; date: string; entries: ReportEntry[]; issues: string }>(
@@ -488,45 +540,51 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
         `SELECT kind, count(*)::text AS n FROM notes
          WHERE active = true AND (created_at AT TIME ZONE 'Asia/Tokyo')::date BETWEEN $1::date AND $2::date
          GROUP BY kind`, [weekStart, weekEnd]),
-      canSales
-        ? pool.query<{ total: string | null }>(
-            `SELECT sum(amount)::text AS total FROM sales_monthly WHERE month = $1`, [weekStart.slice(0, 7)])
-        : Promise.resolve<{ rows: { total: string | null }[] }>({ rows: [] }),
+      pool.query<{ total: string | null }>(
+        `SELECT sum(amount)::text AS total FROM sales_monthly WHERE month = $1`, [weekStart.slice(0, 7)]),
     ])
 
     const nameOf = new Map(membersQ.rows.map(m => [m.id, m.name]))
-    const memberHours = new Map<string, number>()
+    const memberHours = new Map<string, { name: string; hours: number }>()
     const themeHours = new Map<string, number>()
     const daily = new Map<string, number>()
     const reporters = new Set<string>()
-    const issues: { member: string; issue: string }[] = []
+    const issues: { memberId?: string; member: string; issue: string }[] = []
     let totalHours = 0
-    // 日報参照権限（F-16-6）: deny 対象者の日報は集計にも入れない（メンバー名・課題の漏えい防止）
-    const visibleDaily = rules.length === 0
-      ? dailyQ.rows
-      : dailyQ.rows.filter(r => !r.memberId || canViewMemberReports(rules, subject, r.memberId))
-    for (const r of visibleDaily) {
+    let submittedUpToAsOf = 0
+    for (const r of dailyQ.rows) {
       const name = (r.memberId && nameOf.get(r.memberId)) || '不明'
-      reporters.add(r.memberId ?? name)
+      // 提出数・提出者は前日（asOf）まで基準（当日・未来日を未提出として扱わない = バッチ7j）
+      if (r.date <= asOf) {
+        submittedUpToAsOf++
+        reporters.add(r.memberId ?? name)
+      }
       daily.set(r.date, (daily.get(r.date) ?? 0) + 1)
       for (const e of (Array.isArray(r.entries) ? r.entries : [])) {
         const h = Number.isFinite(Number(e.hours)) ? Number(e.hours) : 0
         totalHours += h
-        memberHours.set(name, (memberHours.get(name) ?? 0) + h)
+        const key = r.memberId ?? name
+        const cur = memberHours.get(key) ?? { name, hours: 0 }
+        memberHours.set(key, { name, hours: cur.hours + h })
         const theme = String(e.theme ?? '').trim() || 'その他'
         themeHours.set(theme, (themeHours.get(theme) ?? 0) + h)
       }
-      if (r.issues?.trim()) issues.push({ member: name, issue: capCp(r.issues.trim(), 120) })
+      if (r.issues?.trim()) {
+        issues.push({ memberId: r.memberId ?? undefined, member: name, issue: capCp(r.issues.trim(), 120) })
+      }
     }
     const notesByKind = new Map(notesQ.rows.map(r => [r.kind, Number(r.n)]))
-    const metrics: WeeklyMetrics = {
+    return {
       weekStart,
       weekEnd,
-      reportSubmitted: visibleDaily.length,
+      asOf,
+      businessDaysElapsed,
+      reportSubmitted: submittedUpToAsOf,
       reporters: reporters.size,
       membersActive: membersQ.rows.length,
       totalHours: Math.round(totalHours * 4) / 4,
-      memberHours: [...memberHours.entries()].map(([name, hours]) => ({ name, hours: Math.round(hours * 4) / 4 }))
+      memberHours: [...memberHours.entries()]
+        .map(([memberId, v]) => ({ memberId, name: v.name, hours: Math.round(v.hours * 4) / 4 }))
         .sort((a, b) => b.hours - a.hours).slice(0, 10),
       themeHours: [...themeHours.entries()].map(([theme, hours]) => ({ theme, hours: Math.round(hours * 4) / 4 }))
         .sort((a, b) => b.hours - a.hours).slice(0, 8),
@@ -546,10 +604,189 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
       aiTasksActive: Number(aiQ.rows[0]?.active ?? 0),
       minutesCount: notesByKind.get('minutes') ?? 0,
       poipoiCount: notesByKind.get('poipoi') ?? 0,
-      salesMonthAmount: canSales ? Number(salesQ.rows[0]?.total ?? 0) : null,
+      salesMonthAmount: Number(salesQ.rows[0]?.total ?? 0),
     }
-    const llm = await llmWeeklyInsight(env, metrics)
-    return c.json({ data: { metrics, insight: llm ?? heuristicWeeklyInsight(metrics), llm: !!llm } })
+  }
+
+  /** 個別インサイトの材料（ログインユーザーの週次実績 + 属性） */
+  async function computePersonalMetrics(
+    weekStart: string,
+    weekEnd: string,
+    user: AuthUser,
+    window: { asOf: string; businessDaysElapsed: number },
+  ): Promise<PersonalWeeklyMetrics> {
+    const [memberQ, dailyQ, plansQ, weeklyQ] = await Promise.all([
+      pool.query<{ name: string; role: string; title: string; departmentName: string | null }>(
+        `SELECT m.name, m.role, m.title, d.name AS "departmentName"
+         FROM members m LEFT JOIN departments d ON d.id = m.department_id WHERE m.id = $1`, [user.id]),
+      pool.query<{ date: string; entries: ReportEntry[]; issues: string }>(
+        `SELECT date::text AS date, entries, issues FROM daily_reports
+         WHERE author_kind = 'human' AND member_id = $1 AND status = 'submitted'
+           AND date BETWEEN $2::date AND $3::date`, [user.id, weekStart, weekEnd]),
+      pool.query<{ total: string; done: string }>(
+        `SELECT count(*)::text AS total, count(*) FILTER (WHERE status = 'done')::text AS done
+         FROM task_plans WHERE member_id = $1 AND date BETWEEN $2::date AND $3::date`,
+        [user.id, weekStart, weekEnd]),
+      pool.query<{ n: string }>(
+        `SELECT count(*)::text AS n FROM weekly_reports
+         WHERE member_id = $1 AND week_start = $2::date AND status = 'submitted'`, [user.id, weekStart]),
+    ])
+    const m = memberQ.rows[0]
+    const themeHours = new Map<string, number>()
+    const issues: string[] = []
+    let totalHours = 0
+    let submitted = 0
+    for (const r of dailyQ.rows) {
+      if (r.date <= window.asOf) submitted++
+      for (const e of (Array.isArray(r.entries) ? r.entries : [])) {
+        const h = Number.isFinite(Number(e.hours)) ? Number(e.hours) : 0
+        totalHours += h
+        const theme = String(e.theme ?? '').trim() || 'その他'
+        themeHours.set(theme, (themeHours.get(theme) ?? 0) + h)
+      }
+      if (r.issues?.trim()) issues.push(capCp(r.issues.trim(), 120))
+    }
+    return {
+      memberId: user.id,
+      memberName: m?.name ?? user.name,
+      role: (m?.role === 'admin' || m?.role === 'hr' ? m.role : 'member'),
+      title: m?.title ?? '',
+      department: m?.departmentName ?? '',
+      reportSubmitted: submitted,
+      businessDaysElapsed: window.businessDaysElapsed,
+      totalHours: Math.round(totalHours * 4) / 4,
+      themeHours: [...themeHours.entries()].map(([theme, hours]) => ({ theme, hours: Math.round(hours * 4) / 4 }))
+        .sort((a, b) => b.hours - a.hours).slice(0, 5),
+      issues: issues.slice(0, 5),
+      planDone: Number(plansQ.rows[0]?.done ?? 0),
+      planTotal: Number(plansQ.rows[0]?.total ?? 0),
+      weeklySubmitted: Number(weeklyQ.rows[0]?.n ?? 0) > 0,
+    }
+  }
+
+  /**
+   * 保管された全体集計を閲覧者ごとにマスクして返す（F-16 準拠の配信時フィルタ）。
+   * - 売上: sales 機能権限がなければ null
+   * - メンバー別工数・課題: 日報参照権限（F-16-6）で deny された対象者の行を除外
+   */
+  function maskCompanyForViewer(
+    metrics: WeeklyMetrics,
+    rules: PermissionRule[],
+    subject: PermissionSubject,
+  ): WeeklyMetrics {
+    const canSales = rules.length === 0 || canUseFeature(rules, subject, 'sales')
+    const visible = (memberId?: string): boolean =>
+      rules.length === 0 || !memberId || canViewMemberReports(rules, subject, memberId)
+    return {
+      ...metrics,
+      salesMonthAmount: canSales ? metrics.salesMonthAmount : null,
+      memberHours: metrics.memberHours.filter(x => visible(x.memberId)),
+      issues: metrics.issues.filter(x => visible(x.memberId)),
+    }
+  }
+
+  interface StoredInsight {
+    metrics: unknown
+    insight: unknown
+    llm: boolean
+    generatedAt: string
+    generatedByName: string | null
+  }
+
+  async function storedInsight(weekStart: string, audience: string): Promise<StoredInsight | null> {
+    const { rows } = await pool.query<StoredInsight>(
+      `SELECT wi.metrics, wi.insight, wi.llm, wi.generated_at::text AS "generatedAt",
+              m.name AS "generatedByName"
+       FROM weekly_insights wi LEFT JOIN members m ON m.id = wi.generated_by
+       WHERE wi.week_start = $1::date AND wi.audience = $2`, [weekStart, audience])
+    return rows[0] ?? null
+  }
+
+  async function upsertInsight(
+    weekStart: string,
+    audience: string,
+    metrics: unknown,
+    insight: unknown,
+    llm: boolean,
+    generatedBy: string,
+  ): Promise<void> {
+    await pool.query(
+      `INSERT INTO weekly_insights (id, week_start, audience, metrics, insight, llm, generated_by)
+       VALUES ($1, $2::date, $3, $4, $5, $6, $7)
+       ON CONFLICT (week_start, audience) DO UPDATE SET
+         metrics = EXCLUDED.metrics, insight = EXCLUDED.insight, llm = EXCLUDED.llm,
+         generated_by = EXCLUDED.generated_by, generated_at = now()`,
+      [newId('wi'), weekStart, audience, JSON.stringify(metrics), JSON.stringify(insight), llm, generatedBy])
+  }
+
+  function requireReportsFeature(rules: PermissionRule[], subject: PermissionSubject): void {
+    if (rules.length > 0 && !canUseFeature(rules, subject, 'reports')) {
+      throw err('AKO-PRM-001', 'この機能を利用する権限がありません', 403)
+    }
+  }
+
+  // 保管済みインサイトの取得（バッチ7j: 生成しない = 再生成されるまで保存済みの結果を表示する）。
+  // company = 全体共通（閲覧者ごとに売上・F-16-6 をマスク）/ personal = ログインユーザー向け
+  app.get('/weekly-insight', async (c) => {
+    const user = c.get('user')
+    const weekStart = String(c.req.query('weekStart') ?? '')
+    validWeekStart(weekStart)
+    const rules = await activePermissionRules(pool)
+    const subject = subjectOf(user)
+    requireReportsFeature(rules, subject)
+    const [company, personal] = await Promise.all([
+      storedInsight(weekStart, 'company'),
+      storedInsight(weekStart, `member:${user.id}`),
+    ])
+    return c.json({
+      data: {
+        company: company
+          ? { ...company, metrics: maskCompanyForViewer(company.metrics as WeeklyMetrics, rules, subject) }
+          : null,
+        personal,
+      },
+    })
+  })
+
+  // 生成・再生成（バッチ7j: 全体共通 + ログインユーザーの個別を集計 → 洞察生成 → 保管（upsert = 導出キャッシュ））。
+  // 全体の洞察本文は「個人名なし・売上言及なし」で生成する（全員が共有する保管物のため。
+  // 売上 KPI 値は保管し、配信時に権限マスク。個人向けの言及は個別インサイトが担う）
+  app.post('/weekly-insight', async (c) => {
+    const user = c.get('user')
+    const body = await c.req.json().catch(() => ({})) as { weekStart?: string }
+    const weekStart = String(body.weekStart ?? '')
+    const weekEnd = validWeekStart(weekStart)
+    const rules = await activePermissionRules(pool)
+    const subject = subjectOf(user)
+    requireReportsFeature(rules, subject)
+
+    const metrics = await computeCompanyMetrics(weekStart, weekEnd)
+    // 全体の洞察は売上を伏せた集計から生成（売上権限のない閲覧者にも配信されるため）
+    const narrativeSource: WeeklyMetrics = { ...metrics, salesMonthAmount: null }
+    const companyLlm = await llmWeeklyInsight(env, narrativeSource)
+    const companyInsight = companyLlm ?? heuristicWeeklyInsight(narrativeSource)
+    await upsertInsight(weekStart, 'company', metrics, companyInsight, !!companyLlm, user.id)
+
+    // 個別（ログインユーザー向け）: 本人の実績 + 閲覧者マスク済みの全体集計から生成
+    const window = { asOf: metrics.asOf, businessDaysElapsed: metrics.businessDaysElapsed }
+    const personalMetrics = await computePersonalMetrics(weekStart, weekEnd, user, window)
+    const maskedCompany = maskCompanyForViewer(metrics, rules, subject)
+    const personalLlm = await llmPersonalInsight(env, personalMetrics, maskedCompany)
+    const personalInsight = personalLlm ?? heuristicPersonalInsight(personalMetrics, maskedCompany)
+    await upsertInsight(weekStart, `member:${user.id}`, personalMetrics, personalInsight, !!personalLlm, user.id)
+
+    const [company, personal] = await Promise.all([
+      storedInsight(weekStart, 'company'),
+      storedInsight(weekStart, `member:${user.id}`),
+    ])
+    return c.json({
+      data: {
+        company: company
+          ? { ...company, metrics: maskCompanyForViewer(company.metrics as WeeklyMetrics, rules, subject) }
+          : null,
+        personal,
+      },
+    })
   })
 
   return app

@@ -1,37 +1,39 @@
 <script setup lang="ts">
 /**
- * 週次 AI インサイト（バッチ7g・オペレーター指示 2026-07-19 #9）。
- * 該当週の全登録データ（閲覧権限準拠）から、集計サマリーカード・グラフ・
- * エグゼクティブサマリー・SWOT・リスク・推奨アクションの実用レポートを表示する。
- * 週ナビゲーション付き・何度でも再生成可（保存しない = 常に最新データから生成）
+ * 週次 AI インサイト（バッチ7g → バッチ7j・オペレーター指示 2026-07-19 #9/#12）。
+ * - 一度生成したら保管し、再生成されるまでは保存済みの結果を表示する（週ナビは保存済みを読むだけ）
+ * - 集計は「前日（asOf）まで」基準（日報は前日分までが正常な運用）
+ * - 全体共通（サマリーカード・グラフ・エグゼクティブサマリー・SWOT・リスク・アクション）と
+ *   個別ユーザー向け（ロール・役職・所属部署に最適化した要点・アクション)を分けて表示する
  */
-import { ChevronLeft, ChevronRight, Sparkles, TriangleAlert } from 'lucide-vue-next'
-import type { WeeklyInsightResult } from '~/composables/useWeeklyInsight'
-import { addDays, fmtDate } from '~/utils/format'
+import { ChevronLeft, ChevronRight, Sparkles, TriangleAlert, UserRound } from 'lucide-vue-next'
+import type { WeeklyInsightBundle } from '~/composables/useWeeklyInsight'
+import { addDays, fmtDate, fmtDateTime } from '~/utils/format'
 
 const props = defineProps<{
   /** 初期表示の週（週初め = 月曜） */
   initialWeekStart: string
 }>()
 
-const { generate } = useWeeklyInsight()
+const { load, generate } = useWeeklyInsight()
 const { show } = useToast()
 
 const weekStart = ref(props.initialWeekStart)
-const result = ref<WeeklyInsightResult | null>(null)
+const bundle = ref<WeeklyInsightBundle | null>(null)
 const loading = ref(false)
+const generating = ref(false)
 
 const weekLabel = computed(() => `${fmtDate(weekStart.value)}〜${fmtDate(addDays(weekStart.value, 6))}`)
 
 // 世代トークン: ロード中の週移動で古いレスポンスが新しい週のラベルに表示されるのを防ぐ
 let runSeq = 0
-async function run(): Promise<void> {
+async function loadStored(): Promise<void> {
   const seq = ++runSeq
   loading.value = true
   try {
-    const r = await generate(weekStart.value)
+    const r = await load(weekStart.value)
     if (seq !== runSeq) return
-    result.value = r
+    bundle.value = r
   } catch (e) {
     if (seq === runSeq) show(apiErrorOf(e).message, 'crit')
   } finally {
@@ -39,16 +41,34 @@ async function run(): Promise<void> {
   }
 }
 
-function moveWeek(delta: number): void {
-  weekStart.value = addDays(weekStart.value, delta * 7)
-  result.value = null
-  void run()
+async function regenerate(): Promise<void> {
+  if (generating.value) return
+  const seq = ++runSeq
+  generating.value = true
+  try {
+    const r = await generate(weekStart.value)
+    if (seq !== runSeq) return
+    bundle.value = r
+    show('週次インサイトを生成し、保存しました（再生成するまでこの内容が表示されます）')
+  } catch (e) {
+    if (seq === runSeq) show(apiErrorOf(e).message, 'crit')
+  } finally {
+    if (seq === runSeq) generating.value = false
+  }
 }
 
-onMounted(run)
+function moveWeek(delta: number): void {
+  weekStart.value = addDays(weekStart.value, delta * 7)
+  bundle.value = null
+  void loadStored()
+}
 
-const m = computed(() => result.value?.metrics ?? null)
-const insight = computed(() => result.value?.insight ?? null)
+onMounted(loadStored)
+
+const company = computed(() => bundle.value?.company ?? null)
+const personal = computed(() => bundle.value?.personal ?? null)
+const m = computed(() => company.value?.metrics ?? null)
+const insight = computed(() => company.value?.insight ?? null)
 
 const SEVERITY_META: Record<string, { label: string; tone: 'crit' | 'warn' | 'info' }> = {
   high: { label: '高', tone: 'crit' },
@@ -66,7 +86,7 @@ const SWOT_QUADRANTS = [
 
 <template>
   <div class="grid gap-3">
-    <!-- 週ナビゲーション + 再生成 -->
+    <!-- 週ナビゲーション + 生成/再生成 -->
     <div class="flex flex-wrap items-center gap-2">
       <button type="button" class="btn btn-sm" aria-label="前の週" @click="moveWeek(-1)">
         <ChevronLeft class="h-4 w-4" aria-hidden="true" />
@@ -75,18 +95,64 @@ const SWOT_QUADRANTS = [
       <button type="button" class="btn btn-sm" aria-label="次の週" @click="moveWeek(1)">
         <ChevronRight class="h-4 w-4" aria-hidden="true" />
       </button>
-      <button type="button" class="btn btn-primary btn-sm ml-auto" :disabled="loading" @click="run">
+      <span v-if="company" class="text-[11px] text-muted">
+        生成 {{ fmtDateTime(company.generatedAt) }}{{ company.generatedByName ? `（${company.generatedByName}）` : '' }}
+      </span>
+      <button
+        type="button"
+        class="btn btn-primary btn-sm ml-auto"
+        :disabled="generating || loading"
+        @click="regenerate"
+      >
         <Sparkles class="h-3.5 w-3.5" aria-hidden="true" />
-        {{ loading ? '生成中…' : result ? 'インサイトを再生成' : 'インサイトを生成' }}
+        {{ generating ? '生成中…' : company ? 'インサイトを再生成' : 'インサイトを生成' }}
       </button>
     </div>
 
-    <UiEmptyState v-if="!result && loading" icon="Sparkles" title="週次データを集計し、インサイトを生成しています…" />
+    <UiEmptyState v-if="loading && !bundle" icon="Sparkles" title="保存済みのインサイトを読み込んでいます…" />
+    <UiEmptyState
+      v-else-if="!loading && !company"
+      icon="Sparkles"
+      title="この週のインサイトはまだ生成されていません"
+      hint="「インサイトを生成」を押すと、該当週の全登録データ（前日分まで基準）から全体とあなた向けのレポートを生成・保存します"
+    />
 
     <template v-if="m && insight">
-      <!-- 集計サマリーカード -->
+      <p class="text-[11px] text-muted">
+        集計は前日（{{ fmtDate(m.asOf) }}）分まで・経過営業日 {{ m.businessDaysElapsed }} 日基準。日報は前日分までが正常な運用のため、当日分は未提出として扱いません
+      </p>
+
+      <!-- あなた向けインサイト（個別 = ロール・役職・所属に最適化。バッチ7j） -->
+      <UiSectionCard
+        v-if="personal"
+        title="あなた向けインサイト"
+        :description="`${personal.metrics.memberName} さん向け（${[personal.metrics.department, personal.metrics.title].filter(Boolean).join(' / ') || 'ロール: ' + personal.metrics.role}）。${personal.llm ? 'Vertex AI による生成' : '集計値からの自動生成'}`"
+      >
+        <div class="grid gap-3">
+          <p class="flex items-start gap-2 text-[13px]">
+            <UserRound class="mt-0.5 h-4 w-4 shrink-0 text-brand" aria-hidden="true" />
+            <span>{{ personal.insight.summary }}</span>
+          </p>
+          <div class="grid gap-3 md:grid-cols-2">
+            <div>
+              <p class="label">今週の注目ポイント</p>
+              <ul class="grid list-disc gap-0.5 pl-4 text-[13px]">
+                <li v-for="(f, i) in personal.insight.focus" :key="i">{{ f }}</li>
+              </ul>
+            </div>
+            <div>
+              <p class="label">あなたへの推奨アクション</p>
+              <ol class="grid list-decimal gap-0.5 pl-5 text-[13px]">
+                <li v-for="(a, i) in personal.insight.actions" :key="i">{{ a }}</li>
+              </ol>
+            </div>
+          </div>
+        </div>
+      </UiSectionCard>
+
+      <!-- 全体共通: 集計サマリーカード -->
       <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <UiKpiCard label="日報提出" :value="`${m.reportSubmitted}件`" :sub="`提出者 ${m.reporters}/${m.membersActive} 名`" icon="FileText" />
+        <UiKpiCard label="日報提出（前日まで）" :value="`${m.reportSubmitted}件`" :sub="`提出者 ${m.reporters}/${m.membersActive} 名`" icon="FileText" />
         <UiKpiCard label="総工数" :value="`${m.totalHours}h`" :sub="`週報 ${m.weeklyCount} 件`" icon="Clock" />
         <UiKpiCard label="タスク計画" :value="m.planTotal > 0 ? `${m.planDone}/${m.planTotal}` : '—'" sub="完了/計画" icon="ClipboardList" />
         <UiKpiCard label="課題・エスカレ" :value="`${m.issues.length} / ${m.escalationRaised}`" :sub="`エスカレ解決 ${m.escalationResolved}`" icon="TriangleAlert" />
@@ -126,10 +192,10 @@ const SWOT_QUADRANTS = [
         />
       </div>
 
-      <!-- エグゼクティブサマリー -->
+      <!-- エグゼクティブサマリー（全体共通 = 個人名・売上の言及なしで生成） -->
       <UiSectionCard
-        title="エグゼクティブサマリー"
-        :description="result?.llm ? 'Vertex AI による生成（集計値に基づく）' : '集計値からの自動生成（AI 無効環境のため決定的レポート）'"
+        title="エグゼクティブサマリー（全体）"
+        :description="company?.llm ? 'Vertex AI による生成（集計値に基づく）' : '集計値からの自動生成（AI 無効環境のため決定的レポート）'"
       >
         <UiMarkdown :source="insight.executiveSummary" />
       </UiSectionCard>
@@ -171,7 +237,7 @@ const SWOT_QUADRANTS = [
 
       <!-- 推奨アクション + 課題明細 -->
       <div class="grid gap-3 lg:grid-cols-2">
-        <UiSectionCard title="推奨アクション">
+        <UiSectionCard title="推奨アクション（全体）">
           <ol class="grid list-decimal gap-1 pl-5 text-[13px]">
             <li v-for="(a, i) in insight.actions" :key="i">{{ a }}</li>
           </ol>
