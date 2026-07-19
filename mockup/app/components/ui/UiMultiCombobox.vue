@@ -29,8 +29,10 @@ const listboxId = useId()
 const selectedSet = computed(() => new Set(props.modelValue))
 const filtered = computed(() => {
   const q = query.value.trim().toLowerCase()
+  // tag（区分バッジ）でも絞り込める（例: 「外注」で外注メンバーだけに絞る。PR #61 R1 N-2）
   return props.options.filter(o =>
-    !q || o.label.toLowerCase().includes(q) || o.value.toLowerCase().includes(q))
+    !q || o.label.toLowerCase().includes(q) || o.value.toLowerCase().includes(q)
+    || (o.tag ?? '').toLowerCase().includes(q))
 })
 
 function labelOf(v: string): string {

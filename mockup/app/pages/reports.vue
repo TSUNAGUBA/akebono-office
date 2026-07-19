@@ -339,8 +339,11 @@ const teamCandidateOptions = computed(() =>
   })))
 
 function openTeamSettings(): void {
-  // 解釈は utils/team-visibility.ts と共通（未設定・不正 = null = 既定表示 → 空ドラフト）
+  // 解釈は utils/team-visibility.ts と共通（未設定・不正 = null = 既定表示 → 空ドラフト）。
+  // 候補外の id（退職者等 = 名前解決できず設定の影響外）はドラフトから除いて生 id チップを出さない
+  const candidateIds = new Set(reports.teamMemberCandidates.value.map(m => m.id))
   teamSettingsDraft.value = [...(parseTeamVisibleIds(getConfig('teamVisibleMemberIds', '')) ?? [])]
+    .filter(id => candidateIds.has(id))
   teamSettingsOpen.value = true
 }
 

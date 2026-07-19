@@ -215,11 +215,14 @@ export function useReports() {
   /** タイムライン上の人間日報の可視判定（PR #57 R1 M-5 / R2 Minor-2 → バッチ7k で統一）。
    * - 参照権限（F-16-6）は常に適用
    * - 表示メンバー設定: 未設定 = 全員（従来どおり）/ 設定あり = 選択メンバー + 自分。
-   *   バッチ7k で全メンバーが設定の選択肢に出るため、バッチ7h の「候補外（役員・業務委託）は
-   *   設定の影響を受けない」特例は廃止（選択状態がそのまま表示状態 = 判定は utils/team-visibility.ts） */
+   *   在籍中の全メンバーが設定の選択肢に出るため、バッチ7h の「候補外は設定の影響を受けない」
+   *   特例は在籍中の取締役・外注については廃止（選択状態がそのまま表示状態）。
+   *   候補に出ない在籍外（退職者等）は引き続き設定の影響外 = 常に表示（PR #61 R1 M-1。
+   *   判定は utils/team-visibility.ts が SoT） */
   function timelineVisible(memberId: string): boolean {
     if (!perms.canViewMemberReports(memberId)) return false
-    return timelineVisibleWith(teamVisibleIds.value, memberId, currentUser.value.id)
+    const selectable = teamMemberCandidates.value.some(m => m.id === memberId)
+    return timelineVisibleWith(teamVisibleIds.value, memberId, currentUser.value.id, selectable)
   }
 
   function timeline(days = 7): DailyReport[] {

@@ -66,13 +66,19 @@ describe('matrixVisible', () => {
 
 describe('timelineVisibleWith', () => {
   it('設定未設定は全員表示（従来どおり。参照権限 F-16-6 は呼び出し側で別途適用）', () => {
-    expect(timelineVisibleWith(null, 'anyone', 'me')).toBe(true)
+    expect(timelineVisibleWith(null, 'anyone', 'me', true)).toBe(true)
+    expect(timelineVisibleWith(null, 'retired', 'me', false)).toBe(true)
   })
 
-  it('設定ありは選択メンバー + 自分のみ表示（バッチ7h の候補外特例は廃止）', () => {
+  it('設定ありは選択メンバー + 自分のみ表示（在籍中の取締役・外注も選択どおり = バッチ7k）', () => {
     const ids = new Set(['m1'])
-    expect(timelineVisibleWith(ids, 'm1', 'me')).toBe(true)
-    expect(timelineVisibleWith(ids, 'd1', 'me')).toBe(false)
-    expect(timelineVisibleWith(ids, 'me', 'me')).toBe(true)
+    expect(timelineVisibleWith(ids, 'm1', 'me', true)).toBe(true)
+    expect(timelineVisibleWith(ids, 'd1', 'me', true)).toBe(false)
+    expect(timelineVisibleWith(ids, 'me', 'me', true)).toBe(true)
+  })
+
+  it('候補に出ない在籍外（退職者等）は設定の影響外 = 常に表示（PR #61 R1 M-1）', () => {
+    const ids = new Set(['m1'])
+    expect(timelineVisibleWith(ids, 'retired', 'me', false)).toBe(true)
   })
 })
