@@ -4,8 +4,36 @@
  * - wouldCycle: フォルダ移動の循環検出
  */
 import { describe, expect, it } from 'vitest'
-import { buildV4SignParts } from '../../src/lib/storage'
+import { buildV4SignParts, sanitizeFilename, strictEncode } from '../../src/lib/storage'
 import { wouldCycle } from '../../src/routes/documents'
+
+describe('sanitizeFilename / strictEncode（R1 M-1）', () => {
+  it('パス区切り・制御文字を除去し、危険な名前はフォールバックする', () => {
+    expect(sanitizeFilename('a/b\\c.txt')).toBe('a_b_c.txt')
+    expect(sanitizeFilename('rep\u0000ort\u001f.pdf')).toBe('report.pdf')
+    expect(sanitizeFilename('..')).toBe('file')
+    expect(sanitizeFilename('  ')).toBe('file')
+    expect(sanitizeFilename('会議資料.pdf')).toBe('会議資料.pdf')
+  })
+
+  it("strictEncode は encodeURIComponent が素通しする ! ' ( ) * も %XX 化する", () => {
+    expect(strictEncode("a(1)'*!.pdf")).toBe('a%281%29%27%2A%21.pdf')
+    expect(strictEncode('レポート.pdf')).toBe(encodeURIComponent('レポート.pdf'))
+  })
+
+  it('特殊文字ファイル名でも署名パーツが厳格エンコードで構築される', () => {
+    const p = buildV4SignParts({
+      bucket: 'b',
+      path: "documents/doc-1/会議資料(最終版)'23.pdf",
+      saEmail: 'sa@example.iam.gserviceaccount.com',
+      now: new Date('2026-07-19T00:00:00.000Z'),
+      expiresSeconds: 900,
+      responseDisposition: `attachment; filename*=UTF-8''${strictEncode("会議資料(最終版)'23.pdf")}`,
+    })
+    expect(p.canonicalUri).not.toMatch(/[!'()*]/)
+    expect(p.canonicalQuery).not.toMatch(/[!'()*]/)
+  })
+})
 
 describe('buildV4SignParts', () => {
   const base = {

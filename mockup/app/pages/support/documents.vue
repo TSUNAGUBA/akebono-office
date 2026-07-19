@@ -23,6 +23,14 @@ const confirm = useConfirm()
 const selectedFolderId = ref<string | null>(null)
 const expanded = ref<Set<string>>(new Set(docs.activeFolders.value.map(f => f.id)))
 
+// API モードはフォルダの遅延ロード完了後に初回だけ全展開する（モックモードの初期表示と揃える。
+// ユーザーが畳んだ後のリロード分岐には触らない = 空 → 非空 の最初の遷移のみ）
+watch(() => docs.activeFolders.value.length, (n, old) => {
+  if ((old ?? 0) === 0 && n > 0 && expanded.value.size === 0) {
+    expanded.value = new Set(docs.activeFolders.value.map(f => f.id))
+  }
+})
+
 function toggleExpand(id: string): void {
   const next = new Set(expanded.value)
   if (next.has(id)) next.delete(id)
@@ -559,6 +567,7 @@ async function doCreateFolder(): Promise<void> {
           </UiFormField>
           <UiFormField label="フォルダ" required>
             <select v-model="uploadForm.parentId" class="select" aria-label="フォルダ">
+              <option value="">（ルート直下）</option>
               <option v-for="o in folderOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
             </select>
           </UiFormField>

@@ -264,7 +264,12 @@ export function useDocuments() {
     try {
       const { url } = await apiFetch<{ url: string | null }>(`/v1/documents/files/${id}/url`, { method: 'POST' })
       if (url) {
-        window.open(url, '_blank', 'noopener')
+        // 署名 URL は content-disposition: attachment のためナビゲーションでそのまま保存される。
+        // window.open は await 後のジェスチャ切れでポップアップブロックされ得るため使わない（PR レビュー M-3）
+        const a = document.createElement('a')
+        a.href = url
+        a.rel = 'noopener'
+        a.click()
         return { ok: true, id }
       }
       const data = await apiFetch<{ filename: string; mime: string; contentBase64: string }>(
@@ -296,6 +301,7 @@ export function useDocuments() {
   }
 
   async function driveSearch(q: string): Promise<Result & { files?: DriveFile[] }> {
+    if (!isApi) return { ok: false, error: { code: 'AKO-DOC-006', message: 'モックモードではドライブ連携を利用できません' } }
     try {
       const files = await apiFetch<DriveFile[]>('/v1/documents/drive/files', { query: q ? { q } : {} })
       return { ok: true, files }
@@ -305,6 +311,14 @@ export function useDocuments() {
   }
 
   async function driveImport(fileIds: string[], parentId: string | null): Promise<Result & DriveImportResult> {
+    if (!isApi) {
+      return {
+        ok: false,
+        error: { code: 'AKO-DOC-006', message: 'モックモードではドライブ連携を利用できません' },
+        imported: [],
+        failed: [],
+      }
+    }
     try {
       const data = await apiFetch<DriveImportResult>('/v1/documents/drive/import', {
         method: 'POST', body: { fileIds, parentId },

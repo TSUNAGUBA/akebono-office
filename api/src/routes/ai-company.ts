@@ -27,9 +27,11 @@ import { extractDocumentText } from '../lib/extract-text'
 import { capCp } from '../lib/text'
 import { ApiError, err } from '../lib/errors'
 import { newId } from '../lib/ids'
+import { canUseFeature, canViewField } from '../../../shared/domain/permissions'
 import { generateGroundedText, generateJson } from '../lib/llm'
 import { notify } from '../lib/notify'
-import { searchDocsFor } from '../lib/search-index'
+import { activePermissionRules } from '../lib/permissions'
+import { searchDocsFor, TITLE_CHECKS } from '../lib/search-index'
 
 // questions / files（メタのみ）はタスク行へ埋め込んで返す（フロントの型 = AiTask.questions/files と一致。
 // 一覧 LIMIT 200 での相関サブクエリは SME 規模で十分軽量）。
@@ -254,18 +256,38 @@ async function prepareStepExecution(
         : '')
     : ''
   // 社内の保管ドキュメント（バッチ7l: search_docs のリトリーバルで関連資料を材料へ供給。
-  // ドキュメントは全社共有 = 依頼者スコープの制約なし。失敗・ヒットなしは材料なしで続行 = 原則4）
+  // 失敗・ヒットなしは材料なしで続行 = 原則4）。
+  // 権限（F-16）は依頼者基準で原本・URL・チャットボット文脈と同一の 3 点を適用する
+  // （R1 C-1: 機能 'documents' deny → ブロックなし / 表示項目 deny → 該当 segment を除外。
+  // 成果物は依頼者が閲覧するため、依頼者に見せられない内容を材料に混ぜない = deny 迂回防止）
   let docsBlock = ''
   try {
-    const docHits = (await searchDocsFor(pool, env, `${task.title} ${step.title}`, task.requesterId, 6))
-      .filter(h => h.sourceKind === 'document')
-      .slice(0, 3)
-    if (docHits.length > 0) {
-      docsBlock = `\n\n# 社内ドキュメント（保管ファイルの関連抜粋）\n${docHits.map(h =>
-        `【${h.title}】\n${capCp((h.segments ?? []).map(s => s.text).join('\n'), 1200)}`).join('\n\n')}`
+    const rules = await activePermissionRules(pool)
+    const { rows: reqRows } = await pool.query<{ id: string; title: string | null; role: 'admin' | 'hr' | 'member' }>(
+      `SELECT id, title, role FROM members WHERE id = $1`, [task.requesterId])
+    const requester = reqRows[0]
+    const subject = requester
+      ? { memberId: requester.id, title: requester.title ?? '', role: requester.role }
+      : null
+    const allow = (check: () => boolean): boolean => rules.length === 0 || (subject !== null && check())
+    if (allow(() => canUseFeature(rules, subject!, 'documents'))) {
+      const titleCheck = TITLE_CHECKS.document
+      const docHits = (await searchDocsFor(pool, env, `${task.title} ${step.title}`, task.requesterId, 6))
+        .filter(h => h.sourceKind === 'document')
+        .filter(() => allow(() => canViewField(rules, subject!, titleCheck.entity, titleCheck.field)))
+        .slice(0, 3)
+      const rendered = docHits.map((h) => {
+        const segs = (h.segments ?? [])
+          .filter(s => (s.checks ?? []).every(ch => allow(() => canViewField(rules, subject!, ch.entity, ch.field))))
+          .map(s => s.text)
+        return segs.length > 0 ? `【${h.title}】\n${capCp(segs.join('\n'), 1200)}` : ''
+      }).filter(Boolean)
+      if (rendered.length > 0) {
+        docsBlock = `\n\n# 社内ドキュメント（保管ファイルの関連抜粋）\n${rendered.join('\n\n')}`
+      }
     }
   } catch {
-    // 検索失敗は補助材料なしで続行（非ブロッキング）
+    // 検索・権限解決の失敗は補助材料なしで続行（非ブロッキング）
   }
   const res = await generateJson<{ needsInput?: boolean; question?: string; output?: string }>(env, {
     system: `あなたは AI 社員「${role?.name ?? '汎用'}」です。ミッション: ${role?.mission ?? ''}\n`

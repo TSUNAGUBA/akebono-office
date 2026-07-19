@@ -20,9 +20,31 @@ export function gcsEnabled(env: Env): boolean {
   return Boolean(env.storageBucket)
 }
 
-/** オブジェクトパスの URL エンコード（スラッシュはパス区切りとして保持） */
+/**
+ * RFC 3986 厳格版パーセントエンコード（V4 署名の正規化と等価にするため
+ * encodeURIComponent が素通しする ! ' ( ) * も %XX 化する。R1 M-1）
+ */
+export function strictEncode(s: string): string {
+  return encodeURIComponent(s).replace(/[!'()*]/g, ch => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`)
+}
+
+/**
+ * 保存ファイル名のサニタイズ（R1 M-1）。パス区切り・制御文字を除去し、
+ * `.`/`..`/空になった名前は無害なフォールバック名にする（storage_path とダウンロード名の両方に使う）
+ */
+export function sanitizeFilename(name: string): string {
+  // eslint-disable-next-line no-control-regex
+  const cleaned = name
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .replace(/[/\\]/g, '_')
+    .trim()
+  if (!cleaned || cleaned === '.' || cleaned === '..') return 'file'
+  return cleaned
+}
+
+/** オブジェクトパスの URL エンコード（スラッシュはパス区切りとして保持。厳格版 = 署名と等価） */
 function encodePath(path: string): string {
-  return path.split('/').map(encodeURIComponent).join('/')
+  return path.split('/').map(strictEncode).join('/')
 }
 
 export async function putObject(env: Env, path: string, bytes: Buffer, mime: string): Promise<boolean> {
@@ -121,9 +143,10 @@ export function buildV4SignParts(input: {
     ['X-Goog-SignedHeaders', 'host'],
   ]
   if (input.responseDisposition) params.push(['response-content-disposition', input.responseDisposition])
-  // V4 仕様の並び順はコードポイント順（localeCompare はロケール順で大文字/小文字の順序が変わるため不可）
+  // V4 仕様の並び順はコードポイント順（localeCompare はロケール順で大文字/小文字の順序が変わるため不可）。
+  // エンコードは厳格版（! ' ( ) * も %XX）= GCS 側の正規化と等価にする
   const canonicalQuery = params
-    .map(([k, v]) => [encodeURIComponent(k), encodeURIComponent(v)] as const)
+    .map(([k, v]) => [strictEncode(k), strictEncode(v)] as const)
     .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
     .map(([k, v]) => `${k}=${v}`)
     .join('&')
@@ -148,7 +171,8 @@ export async function signedDownloadUrl(
   if (!gcsEnabled(env)) return null
   const [token, saEmail] = await Promise.all([accessToken(), serviceAccountEmail()])
   if (!token || !saEmail) return null
-  const disposition = `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`
+  // RFC 5987 の ext-value は ' を区切りに使うため厳格エンコード（' を %27 化）が必須
+  const disposition = `attachment; filename*=UTF-8''${strictEncode(filename)}`
   const parts = buildV4SignParts({
     bucket: env.storageBucket, path, saEmail, now: new Date(), expiresSeconds,
     responseDisposition: disposition,

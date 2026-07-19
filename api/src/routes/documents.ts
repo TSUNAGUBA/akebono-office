@@ -21,7 +21,7 @@ import { extractDocumentText } from '../lib/extract-text'
 import { newId } from '../lib/ids'
 import { activePermissionRules, subjectOf } from '../lib/permissions'
 import { scheduleSearchRebuild } from '../lib/search-index'
-import { gcsEnabled, getObject, putObject, signedDownloadUrl } from '../lib/storage'
+import { deleteObject, gcsEnabled, getObject, putObject, sanitizeFilename, signedDownloadUrl } from '../lib/storage'
 import { capCp } from '../lib/text'
 import { accessTokenFor, DRIVE_SCOPE, googleOauthEnabled } from './calendar'
 
@@ -172,6 +172,39 @@ async function requireDriveToken(pool: pg.Pool, env: Env, memberId: string): Pro
   return token
 }
 
+/** Drive 再取込のスナップショット更新（フォルダ・タグ・概要は保持し内容系のみ更新。blob は保管先に追従） */
+async function updateDriveFileRecord(
+  pool: pg.Pool, input: {
+    id: string; name: string; mime: string; sizeBytes: number
+    storage: 'gcs' | 'db'; storagePath: string; driveWebLink: string
+    extractedText: string; updatedBy: string
+  }, bytes: Buffer,
+): Promise<void> {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    await client.query(
+      `UPDATE documents SET name = $2, mime = $3, size_bytes = $4, storage = $5, storage_path = $6,
+              drive_web_link = $7, extracted_text = $8, updated_by = $9, updated_at = now()
+       WHERE id = $1`,
+      [input.id, input.name, input.mime, input.sizeBytes, input.storage, input.storagePath,
+        input.driveWebLink, input.extractedText, input.updatedBy])
+    if (input.storage === 'db') {
+      await client.query(
+        `INSERT INTO document_blobs (document_id, bytes) VALUES ($1, $2)
+         ON CONFLICT (document_id) DO UPDATE SET bytes = EXCLUDED.bytes`, [input.id, bytes])
+    } else {
+      await client.query(`DELETE FROM document_blobs WHERE document_id = $1`, [input.id])
+    }
+    await client.query('COMMIT')
+  } catch (e) {
+    await client.query('ROLLBACK')
+    throw e
+  } finally {
+    client.release()
+  }
+}
+
 /** ファイルレコードの確定。DB 保管は documents 行 + blob を同一トランザクションで保存する */
 async function saveFileRecord(
   pool: pg.Pool, input: {
@@ -227,14 +260,16 @@ export function documentsRoutes(pool: pg.Pool, env: Env): Hono {
     if (!name) throw err('AKO-DOC-002', 'フォルダ名を入力してください', 400)
     const parentId = body.parentId ? String(body.parentId) : null
     await assertParentFolder(pool, parentId)
-    const { rows: dup } = await pool.query(
-      `SELECT 1 FROM documents WHERE kind = 'folder' AND active = true AND name = $1
-        AND parent_id IS NOT DISTINCT FROM $2`, [name, parentId])
-    if (dup.length > 0) throw err('AKO-DOC-003', '同名のフォルダが既にあります', 409)
     const id = newId('doc')
-    await pool.query(
-      `INSERT INTO documents (id, parent_id, kind, name, updated_by) VALUES ($1, $2, 'folder', $3, $4)`,
-      [id, parentId, name, user.id])
+    try {
+      // 同名重複は部分一意 index（uq_documents_folder_name）が最終判定（並行作成の TOCTOU 対策）
+      await pool.query(
+        `INSERT INTO documents (id, parent_id, kind, name, updated_by) VALUES ($1, $2, 'folder', $3, $4)`,
+        [id, parentId, name, user.id])
+    } catch (e) {
+      if ((e as { code?: string }).code === '23505') throw err('AKO-DOC-003', '同名のフォルダが既にあります', 409)
+      throw e
+    }
     await audit(pool, {
       actorId: user.id, action: 'create', entity: 'documents', entityId: id,
       detail: `フォルダ作成（${name}）`,
@@ -249,8 +284,9 @@ export function documentsRoutes(pool: pg.Pool, env: Env): Hono {
       filename?: string; contentBase64?: string; parentId?: string | null
       tags?: unknown; summary?: string; mime?: string
     }
-    const filename = capCp(String(body.filename ?? '').trim(), 200)
-    if (!filename) throw err('AKO-DOC-001', 'ファイル名を入力してください', 400)
+    // サニタイズ（R1 M-1）: パス区切り・制御文字は storage_path・署名 URL を壊すため除去する
+    const filename = sanitizeFilename(capCp(String(body.filename ?? '').trim(), 200))
+    if (!body.filename || !String(body.filename).trim()) throw err('AKO-DOC-001', 'ファイル名を入力してください', 400)
     const contentBase64 = String(body.contentBase64 ?? '')
     if (!contentBase64) throw err('AKO-GEN-001', 'contentBase64 を指定してください', 400)
     if (contentBase64.length > MAX_FILE_BYTES * 1.4) {
@@ -271,10 +307,16 @@ export function documentsRoutes(pool: pg.Pool, env: Env): Hono {
     // GCS は実体（SoT）を先に保存 → メタを確定（原則6）。抽出は補助処理（失敗しても取込成立 = 原則4）
     const storage = await resolveStorage(env, storagePath, bytes, mime)
     const extractedText = await extractBestEffort(filename, bytes)
-    await saveFileRecord(pool, {
-      id, parentId, name: filename, tags, summary, mime, sizeBytes: bytes.length,
-      storage, storagePath, source: 'upload', extractedText, updatedBy: user.id,
-    }, bytes)
+    try {
+      await saveFileRecord(pool, {
+        id, parentId, name: filename, tags, summary, mime, sizeBytes: bytes.length,
+        storage, storagePath, source: 'upload', extractedText, updatedBy: user.id,
+      }, bytes)
+    } catch (e) {
+      // メタ確定に失敗したら GCS の孤児オブジェクトをベストエフォートで掃除（R1 M-2。エラーはそのまま返す）
+      if (storage === 'gcs') void deleteObject(env, storagePath)
+      throw e
+    }
     await audit(pool, {
       actorId: user.id, action: 'create', entity: 'documents', entityId: id,
       detail: `ファイルアップロード（${filename}）`,
@@ -328,9 +370,15 @@ export function documentsRoutes(pool: pg.Pool, env: Env): Hono {
     }
     if (sets.length === 0) throw err('AKO-GEN-001', '更新内容を指定してください', 400)
     params.push(user.id)
-    await pool.query(
-      `UPDATE documents SET ${sets.join(', ')}, updated_by = $${params.length}, updated_at = now() WHERE id = $1`,
-      params)
+    try {
+      await pool.query(
+        `UPDATE documents SET ${sets.join(', ')}, updated_by = $${params.length}, updated_at = now() WHERE id = $1`,
+        params)
+    } catch (e) {
+      // フォルダの改名・移動先での同名重複（部分一意 index。R1 ニット2）
+      if ((e as { code?: string }).code === '23505') throw err('AKO-DOC-003', '同名のフォルダが既にあります', 409)
+      throw e
+    }
     await audit(pool, {
       actorId: user.id, action: 'update', entity: 'documents', entityId: id,
       detail: `ドキュメント更新（${target.name}）`,
@@ -359,9 +407,18 @@ export function documentsRoutes(pool: pg.Pool, env: Env): Hono {
   app.post('/:id/restore', async (c) => {
     const user = c.get('user')
     const id = c.req.param('id')
-    const { rows } = await pool.query<{ name: string }>(
-      `UPDATE documents SET active = true, updated_by = $2, updated_at = now()
-       WHERE id = $1 RETURNING name`, [id, user.id])
+    let rows: { name: string }[]
+    try {
+      rows = (await pool.query<{ name: string }>(
+        `UPDATE documents SET active = true, updated_by = $2, updated_at = now()
+         WHERE id = $1 RETURNING name`, [id, user.id])).rows
+    } catch (e) {
+      // 復元先に同名の有効フォルダが既にある場合（部分一意 index）
+      if ((e as { code?: string }).code === '23505') {
+        throw err('AKO-DOC-003', '同名のフォルダが既にあるため復元できません（先に改名してください）', 409)
+      }
+      throw e
+    }
     if (!rows[0]) throw err('AKO-GEN-002', '対象のドキュメントが見つかりません', 404)
     await audit(pool, {
       actorId: user.id, action: 'restore', entity: 'documents', entityId: id,
@@ -501,20 +558,45 @@ export function documentsRoutes(pool: pg.Pool, env: Env): Hono {
           failed.push({ fileId, name, reason: 'ファイルが空か 10MB を超えています' })
           continue
         }
-        const filename = exp && !name.toLowerCase().endsWith(`.${exp.ext}`) ? `${name}.${exp.ext}` : name
-        const id = newId('doc')
+        const filename = sanitizeFilename(
+          exp && !name.toLowerCase().endsWith(`.${exp.ext}`) ? `${name}.${exp.ext}` : name)
+        // 再取込の冪等化（原則2・R1 ニット4）: 同じ Drive ファイルの有効な取込があれば
+        // 別ドキュメントとして複製せず、内容をスナップショット更新する（フォルダ・タグ・概要は保持）
+        const { rows: existingRows } = await pool.query<{ id: string; storage: string; storagePath: string }>(
+          `SELECT id, storage, storage_path AS "storagePath" FROM documents
+           WHERE source = 'drive' AND drive_file_id = $1 AND active = true
+           ORDER BY created_at DESC LIMIT 1`, [fileId])
+        const existing = existingRows[0]
+        const id = existing?.id ?? newId('doc')
         const storagePath = `documents/${id}/${filename}`
         const mime = exp?.mime ?? meta.mimeType
         const storage = await resolveStorage(env, storagePath, bytes, mime)
         const extractedText = await extractBestEffort(filename, bytes)
-        await saveFileRecord(pool, {
-          id, parentId, name: filename, tags: [], summary: '', mime, sizeBytes: bytes.length,
-          storage, storagePath, source: 'drive', driveFileId: fileId,
-          driveWebLink: meta.webViewLink ?? '', extractedText, updatedBy: user.id,
-        }, bytes)
+        try {
+          if (existing) {
+            await updateDriveFileRecord(pool, {
+              id, name: filename, mime, sizeBytes: bytes.length, storage, storagePath,
+              driveWebLink: meta.webViewLink ?? '', extractedText, updatedBy: user.id,
+            }, bytes)
+          } else {
+            await saveFileRecord(pool, {
+              id, parentId, name: filename, tags: [], summary: '', mime, sizeBytes: bytes.length,
+              storage, storagePath, source: 'drive', driveFileId: fileId,
+              driveWebLink: meta.webViewLink ?? '', extractedText, updatedBy: user.id,
+            }, bytes)
+          }
+        } catch (e) {
+          // メタ確定に失敗したら GCS の孤児オブジェクトをベストエフォートで掃除（R1 M-2）
+          if (storage === 'gcs') void deleteObject(env, storagePath)
+          throw e
+        }
+        // 旧実体の掃除（ファイル名変更でパスが変わった場合。失敗しても主フローは続行）
+        if (existing?.storage === 'gcs' && existing.storagePath !== storagePath) {
+          void deleteObject(env, existing.storagePath)
+        }
         await audit(pool, {
-          actorId: user.id, action: 'create', entity: 'documents', entityId: id,
-          detail: `Google ドライブ取込（${filename}）`,
+          actorId: user.id, action: existing ? 'update' : 'create', entity: 'documents', entityId: id,
+          detail: `Google ドライブ取込（${filename}${existing ? ' = 再取込で更新' : ''}）`,
         })
         imported.push({ id, name: filename })
       } catch (e) {
