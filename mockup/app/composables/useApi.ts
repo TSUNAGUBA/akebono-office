@@ -165,6 +165,7 @@ const MIGRATED_MASTERS: Record<string, string> = {
   departments: 'departments',
   leaveTypes: 'leave-types',
   industries: 'industries',
+  workCategories: 'work-categories',
   companies: 'companies',
   contacts: 'contacts',
   relationTypes: 'relation-types',

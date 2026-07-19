@@ -357,3 +357,14 @@
 - [x] モックモードも同一ロジック（delegateOnApproveMock / rollUpToParentMock = shared planDelegation を共有）
 - [x] 検証: 単体 54（planDelegation の類似割当・ラウンドロビン・決定性）/ 統合 113 ×3（連携生成・requester/parent 列・ステップ取りこぼしなし・連携ログ・全分担完了で親自動 done + 通知・ブロックのエスカレーション + 通知・中止の連鎖・非マネージャーは連携しない・カレンダー選択の検証/未連携ガード）/ 両 typecheck / api build / E2E 全スイート回帰 green
 - [x] 反復レビュー（原則9・PR #48 → フォローアップ PR）: R1 で重大 0 + 軽微 9 を検出 → 全件対応（①連携計画の LLM 呼び出しをロック取得前へ移動 = Vertex ハング時のプール枯渇防止（llmDecompose と同配置・ロック後に分解不一致なら決定的計画で再作成） ②cancelled の分担を「完了待ち」に数えない = 中止が統合完了を恒久ブロックしない（親中止連鎖と同一集合・モックも同修正） ③親子ロック順序差のデッドロック（40P01）を AKO-AIC-009 = 409 再試行可能へ変換 ④sync の warning をフロントへ伝搬しトースト報告（保存後再同期・手動同期の両方） ⑤404（共有解除）カレンダーは「予定ゼロ」扱い = 削除フェーズを永久抑止しない + 選択見直しの案内 ⑥選択解除カレンダーの掃除タイミング（日付単位）を api-design へ明文化 ⑦モックの選択をイベント合成へ反映（既定選択は従来と同一 = 下位互換） ⑧同期統合を純関数 mergeCalendarFetches へ分離し単体 4 件追加 ⑨UI 細部 = 連携済みバーの flex-wrap・モーダル読込の aria-live/aria-busy・タスクボードの名前解決を無効化済み AI 社員含む全件へ）。回帰テスト: cancelled 分担のロールアップ統合 1 件 + カレンダー統合の単体 4 件（単体 58・統合 114）
+
+## 23. バッチ7c: ぽいぽいメモ/議事録の独立メニュー + 業務種別マスタ + AI 参照統合（オペレーター指示 2026-07-19 #4）の完了条件（Definition of Done)
+
+- [x] ぽいぽいメモを独立メニュー化（/poipoi。本人のみ参照 = C3）・議事録登録メニュー新設（/minutes。全員参照 = C2）。どちらも任意でプロジェクト・顧客・業務種別を紐付け（notes 0023 = 記録系・追記のみ）。ダッシュボード業務ツールへカード 2 枚
+- [x] 業務種別マスタ（work_categories 0023 = /masters/work-categories。汎用マスタ CRUD・モックシード 4 件）
+- [x] ドキュメント取込（.md/.txt/.pdf/.docx・10MB・旧 .doc は変換案内 = AKO-NOTE-001〜003）。原本は note_files へ保全。モックモードは .md/.txt のみ（抽出はサーバーの設計判断）
+- [x] AI 用インデックス/ベクター化: search_docs へ kind 'note' を追加（body 1500cp + 紐付け segments。CHECK 制約差し替え）。**poipoi は owner_member_id = 本人スコープ**（searchDocsFor が WHERE owner IS NULL OR = user で絞る = チャットボット・AI業務アシスタントとも本人のメモしか参照しない）。書込後の自動再生成 + 起動時 + 手動 reindex は既存経路
+- [x] AI業務アシスタントの参照統合: 日報ドラフト材料へ notes(poipoi, 当日, 本人) を合流（旧 assist_logs メモも下位互換で継続）。**LLM ドラフト生成へ buildContext（チャットボットと同じ参照範囲・権限準拠）を 4000cp cap で供給**（LLM 無効時は従来ヒューリスティックのみ = 原則4）
+- [x] 日報・週報はフォーム入力が既定（reports.vue の entryMethod 既定を 'form' へ。設定 'both' = フォーム主 + AI アシスト補助）
+- [x] 機能ガード poipoi / minutes を FEATURE_PERMISSION_KEYS / featureKeyOfPath へ追加（F-16 準拠）
+- [x] 検証: 単体 58 / 統合 119 ×3（業務種別 CRUD / poipoi の本人スコープ・紐付け / 議事録の全員参照・.md 取込・原本ラウンドトリップ・poipoi 原本の本人ガード / 検索統合 = minutes 全員・poipoi 本人のみ / ドラフト材料合流）/ 両 typecheck / api build

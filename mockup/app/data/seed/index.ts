@@ -11,7 +11,7 @@ import type {
   Industry, KnowledgeArticle, LeaveGrant, LeaveRequest, LeaveType, Member, Project,
   PunchRecord, RelationType, ReportComment, SalesMonthly, ServiceIncident,
   ShiftAssignment, ShiftDemand, ShiftPeriod, ShiftWish, SystemService,
-  TaskPlan, UptimeDaily, WeeklyReport, WorkflowRequest, WorkflowRoute,
+  TaskPlan, UptimeDaily, WeeklyReport, WorkflowRequest, WorkflowRoute, WorkCategory, Note,
 } from '~/types/domain'
 import * as core from './core'
 import * as attendance from './attendance'
@@ -31,6 +31,8 @@ export interface MockDbShape {
   departments: Department[]
   leaveTypes: LeaveType[]
   industries: Industry[]
+  workCategories: WorkCategory[]
+  notes: Note[]
   companies: Company[]
   contacts: Contact[]
   relationTypes: RelationType[]
@@ -90,6 +92,13 @@ export function buildSeed(): MockDbShape {
     departments: core.seedDepartments,
     leaveTypes: core.seedLeaveTypes,
     industries: core.seedIndustries,
+    workCategories: [
+      { id: 'wc-01', name: '定例会議', displayOrder: 1, active: true },
+      { id: 'wc-02', name: '顧客対応', displayOrder: 2, active: true },
+      { id: 'wc-03', name: '開発作業', displayOrder: 3, active: true },
+      { id: 'wc-04', name: '社内業務', displayOrder: 4, active: true },
+    ],
+    notes: [],
     companies: core.seedCompanies,
     contacts: core.seedContacts,
     relationTypes: core.seedRelationTypes,

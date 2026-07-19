@@ -63,6 +63,30 @@ export interface Department {
   active: boolean
 }
 
+/** 業務種別（ぽいぽいメモ・議事録の任意分類。バッチ7c） */
+export interface WorkCategory {
+  id: string
+  name: string
+  displayOrder: number
+  active: boolean
+}
+
+export type NoteKind = 'poipoi' | 'minutes'
+
+/** ノート（ぽいぽいメモ = 本人メモ / 議事録 = 全員参照。記録系 = 追記のみ。バッチ7c） */
+export interface Note {
+  id: string
+  memberId: string
+  kind: NoteKind
+  title: string
+  body: string
+  projectId: string | null
+  companyId: string | null
+  workCategoryId: string | null
+  source: 'text' | 'upload'
+  createdAt: string
+}
+
 export interface Industry {
   id: string
   name: string

@@ -2633,3 +2633,97 @@ describe('バッチ7b: カレンダー同期対象の選択 + AI 社員間の依
     })
   })
 })
+
+describe('バッチ7c: ぽいぽいメモ/議事録 + 業務種別マスタ + AI 参照統合（オペレーター指示 2026-07-19 #4）', () => {
+  const memberUser = { id: MEMBER, name: '一般 次郎', email: 'member@example.com', role: 'member' as const, title: '', avatar: '' }
+  const adminUser = { id: ADMIN, name: '管理 太郎', email: 'admin@example.com', role: 'admin' as const, title: '', avatar: '' }
+  let buildContext: (typeof import('../../src/routes/chatbot'))['buildContext']
+  let wcId = ''
+
+  beforeAll(async () => {
+    ;({ buildContext } = await import('../../src/routes/chatbot'))
+    const wc = await api('POST', '/v1/masters/work-categories', { as: ADMIN, body: { name: 'ノート検証会議' } })
+    wcId = (wc.json.data as { id: string }).id
+  })
+
+  it('業務種別マスタ: 追加・一覧・論理削除（汎用マスタ CRUD）', async () => {
+    const list = (await api('GET', '/v1/masters/work-categories', { as: MEMBER })).json.data as { id: string; name: string }[]
+    expect(list.some(w => w.id === wcId && w.name === 'ノート検証会議')).toBe(true)
+    expect((await api('POST', '/v1/masters/work-categories', { as: MEMBER, body: { name: 'x' } })).status).toBe(403)
+  })
+
+  it('ぽいぽいメモ: 登録・本人のみ参照（C3）・任意の紐付け', async () => {
+    const created = await api('POST', '/v1/notes', {
+      as: MEMBER,
+      body: { kind: 'poipoi', body: 'ノート検証: A社の見積は単価見直しが必要そう', workCategoryId: wcId },
+    })
+    expect(created.status).toBe(201)
+    const note = created.json.data as { id: string; title: string; workCategoryId: string }
+    expect(note.title).toContain('ノート検証')
+    expect(note.workCategoryId).toBe(wcId)
+    // 本人には見える・他人には見えない
+    const mine = (await api('GET', '/v1/notes?kind=poipoi', { as: MEMBER })).json.data as { id: string }[]
+    expect(mine.some(n => n.id === note.id)).toBe(true)
+    const others = (await api('GET', '/v1/notes?kind=poipoi', { as: ADMIN })).json.data as { id: string }[]
+    expect(others.some(n => n.id === note.id)).toBe(false)
+    // 不正 kind・存在しない紐付け
+    expect((await api('POST', '/v1/notes', { as: MEMBER, body: { kind: 'other', body: 'x' } })).status).toBe(400)
+    expect((await api('POST', '/v1/notes', {
+      as: MEMBER, body: { kind: 'poipoi', body: 'x', projectId: 'p-nope' },
+    })).status).toBe(400)
+  })
+
+  it('議事録: 全員参照・.md 取込（原本保全 + ラウンドトリップ）・poipoi 原本の本人ガード', async () => {
+    const md = '# ノート検証定例 7/19\n決定事項: 検索インデックスの運用開始。'
+    const b64 = Buffer.from(md, 'utf8').toString('base64')
+    const created = await api('POST', '/v1/notes/import', {
+      as: ADMIN, body: { kind: 'minutes', filename: 'minutes-0719.md', contentBase64: b64, workCategoryId: wcId },
+    })
+    expect(created.status).toBe(201)
+    const note = created.json.data as { id: string; title: string; source: string }
+    expect(note.source).toBe('upload')
+    expect(note.title).toContain('ノート検証定例')
+    // 議事録は他メンバーにも見える
+    const list = (await api('GET', '/v1/notes?kind=minutes', { as: MEMBER })).json.data as { id: string }[]
+    expect(list.some(n => n.id === note.id)).toBe(true)
+    // 原本ラウンドトリップ
+    const files = (await api('GET', `/v1/notes/${note.id}/files`, { as: MEMBER })).json.data as { id: string }[]
+    expect(files).toHaveLength(1)
+    const dl = (await api('GET', `/v1/notes/files/${files[0]!.id}`, { as: MEMBER })).json.data as { contentBase64: string }
+    expect(Buffer.from(dl.contentBase64, 'base64').toString('utf8')).toBe(md)
+    // poipoi の取込原本は本人のみ
+    const p = await api('POST', '/v1/notes/import', {
+      as: MEMBER, body: { kind: 'poipoi', filename: 'memo.txt', contentBase64: Buffer.from('ノート検証の秘密メモ').toString('base64') },
+    })
+    const pid = (p.json.data as { id: string }).id
+    const pFiles = (await api('GET', `/v1/notes/${pid}/files`, { as: MEMBER })).json.data as { id: string }[]
+    expect((await api('GET', `/v1/notes/${pid}/files`, { as: ADMIN })).status).toBe(403)
+    expect((await api('GET', `/v1/notes/files/${pFiles[0]!.id}`, { as: ADMIN })).status).toBe(403)
+    // 非対応形式
+    expect((await api('POST', '/v1/notes/import', {
+      as: MEMBER, body: { kind: 'poipoi', filename: 'x.doc', contentBase64: 'eA==' },
+    })).json.error?.code).toBe('AKO-NOTE-001')
+  })
+
+  it('AI 参照統合: 議事録は全員の検索文脈へ・ぽいぽいメモは本人のみ（owner スコープ = C3）', async () => {
+    expect((await api('POST', '/v1/search/reindex', { as: ADMIN })).status).toBe(200)
+    // 議事録（minutes）は他メンバーの文脈にも載る
+    const other = await buildContext(pool, memberUser, 'ノート検証定例の決定事項は?', [])
+    expect(other).toContain('検索インデックスの運用開始')
+    // poipoi は本人の文脈のみ（他人には載らない）
+    const own = await buildContext(pool, memberUser, 'ノート検証の秘密メモの内容は?', [])
+    expect(own).toContain('ノート検証の秘密メモ')
+    const notOwn = await buildContext(pool, adminUser, 'ノート検証の秘密メモの内容は?', [])
+    expect(notOwn).not.toContain('ノート検証の秘密メモ')
+  })
+
+  it('日報ドラフト: 独立メニューのぽいぽいメモが材料へ合流する（AI業務アシスタント統合）', async () => {
+    const today = todayJst()
+    await api('POST', '/v1/notes', {
+      as: MEMBER, body: { kind: 'poipoi', body: 'ノート検証ドラフト材料: B社ヒアリングの論点整理を実施' },
+    })
+    const draft = await api('POST', '/v1/assist/report-draft', { as: MEMBER, body: { date: today } })
+    expect(draft.status).toBe(200)
+    expect(JSON.stringify(draft.json.data)).toContain('ノート検証ドラフト材料')
+  })
+})

@@ -91,6 +91,10 @@ const schemas = {
     name: z.string().trim().min(1, '業界名は必須です'),
     displayOrder: z.number().int().default(1),
   }),
+  'work-categories': z.object({
+    name: z.string().trim().min(1, '業務種別名は必須です'),
+    displayOrder: z.number().int().default(1),
+  }),
   companies: z.object({
     kind: z.enum(['self', 'customer']).default('customer'),
     name: z.string().trim().min(1, '会社名は必須です'),
@@ -282,6 +286,8 @@ export const MASTERS: Record<MasterEntity, MasterDef> = {
   'departments': { table: 'departments', idPrefix: 'dep', schema: schemas.departments, patchSchema: schemas.departments.partial(), jsonbFields: [] },
   'leave-types': { table: 'leave_types', idPrefix: 'lt', schema: schemas['leave-types'], patchSchema: schemas['leave-types'].partial().omit({ isStatutory: true }), jsonbFields: [] },
   'industries': { table: 'industries', idPrefix: 'ind', schema: schemas.industries, patchSchema: schemas.industries.partial(), jsonbFields: [] },
+  // 業務種別（ぽいぽいメモ・議事録の任意分類。バッチ7c）
+  'work-categories': { table: 'work_categories', idPrefix: 'wc', schema: schemas['work-categories'], patchSchema: schemas['work-categories'].partial(), jsonbFields: [] },
   'companies': { table: 'companies', idPrefix: 'c', schema: schemas.companies, patchSchema: schemas.companies.partial(), jsonbFields: ['aliases', 'industryIds', 'custom'] },
   'contacts': { table: 'contacts', idPrefix: 'p', schema: schemas.contacts, patchSchema: schemas.contacts.partial(), jsonbFields: ['custom'] },
   // 関係種別は論理削除（無効化）に加え、未使用時のみ物理削除可（参照ガードは masters.ts の DELETE 側）

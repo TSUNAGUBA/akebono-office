@@ -223,8 +223,8 @@ const assist = useReportAssist()
 const tp = useTaskPlans()
 const inputMode = assist.inputMode
 
-/** 入力方式が 'both' のときの切替（既定は AI アシスト） */
-const entryMethod = ref<'form' | 'assist'>('assist')
+/** 入力方式が 'both' のときの切替（既定は通常フォーム。AI アシストは補助機能 = オペレーター指示 2026-07-19 #4） */
+const entryMethod = ref<'form' | 'assist'>('form')
 const assistActive = computed(() =>
   inputMode.value === 'assist' || (inputMode.value === 'both' && entryMethod.value === 'assist'))
 

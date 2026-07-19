@@ -623,7 +623,7 @@ export async function buildContext(
   // 字句バイグラム + 埋め込み（LLM 無効環境は字句のみ）で補足する。精密ブロック描画済みは除外。
   // 照合は生データ・描画は segments の表示項目チェック（canViewField）通過行のみ = 既存パターン）
   await block(async () => {
-    const hits = await searchDocsFor(pool, env, question)
+    const hits = await searchDocsFor(pool, env, question, user.id)
     const lines: string[] = []
     for (const h of hits) {
       if (renderedKeys.has(`${h.sourceKind}:${h.sourceId}`)) continue
