@@ -24,8 +24,11 @@ import { capCp } from '../lib/text'
 const MAX_FILE_BYTES = 10 * 1024 * 1024
 const BODY_CAP = 20_000
 
+// createdAt は JST ウォールクロック文字列で返す（表示時刻の規約 = configs/sales/chatbot と同一パターン。
+// フロントは文字列を直接パースするため UTC の "Z" ISO を返すと日付キー比較・表示が最大 9 時間ずれる）
 const NOTE_COLS = `id, member_id AS "memberId", kind, title, body, project_id AS "projectId",
-  company_id AS "companyId", work_category_id AS "workCategoryId", source, created_at AS "createdAt"`
+  company_id AS "companyId", work_category_id AS "workCategoryId", source,
+  to_char(created_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"') AS "createdAt"`
 
 const EXT_MIME: Record<string, string> = {
   md: 'text/markdown',
@@ -178,7 +181,8 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
       throw err('AKO-PRM-001', '本人のメモのみ参照できます', 403)
     }
     const { rows } = await pool.query(
-      `SELECT id, note_id AS "noteId", filename, mime, size_bytes AS "sizeBytes", created_at AS "createdAt"
+      `SELECT id, note_id AS "noteId", filename, mime, size_bytes AS "sizeBytes",
+              to_char(created_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"') AS "createdAt"
        FROM note_files WHERE note_id = $1 ORDER BY created_at, id`, [c.req.param('noteId')])
     return c.json({ data: rows })
   })
