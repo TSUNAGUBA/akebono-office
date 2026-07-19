@@ -2580,6 +2580,46 @@ describe('バッチ7b: カレンダー同期対象の選択 + AI 社員間の依
       expect(after.find(t => t.id === child.id)!.status).toBe('cancelled')
     })
 
+    it('中止された分担は「完了待ち」に数えない（残りの完了で親が統合完了する。PR #48 レビュー指摘）', async () => {
+      const created = await api('POST', '/v1/ai-company/tasks', {
+        as: MEMBER,
+        body: {
+          aiEmployeeId: mgrId, title: '競合の調査と比較資料の作成',
+          description: '競合各社の動向を調査し、収集した情報から比較資料のドラフトを作成する。',
+        },
+      })
+      const taskId = (created.json.data as { id: string }).id
+      await api('POST', `/v1/ai-company/tasks/${taskId}/approve`, { as: MEMBER })
+      const tasks = (await api('GET', '/v1/ai-company/tasks', { as: MEMBER })).json.data as {
+        id: string; parentTaskId: string | null; decomposition: { title: string }[]
+      }[]
+      const children = tasks.filter(t => t.parentTaskId === taskId)
+      expect(children.length).toBeGreaterThan(0)
+      // 先頭の子を中止し、残りを完了させる
+      await api('POST', `/v1/ai-company/tasks/${children[0]!.id}/cancel`, { as: MEMBER })
+      for (const child of children.slice(1)) {
+        for (let i = 0; i < child.decomposition.length; i++) {
+          await api('POST', `/v1/ai-company/tasks/${child.id}/progress`, { as: MEMBER })
+        }
+      }
+      const after = (await api('GET', '/v1/ai-company/tasks', { as: MEMBER })).json.data as
+        { id: string; status: string }[]
+      if (children.length > 1) {
+        // 中止された分担が残りの統合完了をブロックしない
+        expect(after.find(t => t.id === taskId)!.status).toBe('done')
+      } else {
+        // 分担が 1 件のみで中止された場合、親は自動完了しない（人間が親を進めて完了できる）
+        expect(after.find(t => t.id === taskId)!.status).toBe('in_progress')
+        const parent = tasks.find(t => t.id === taskId)!
+        for (let i = 0; i < parent.decomposition.length; i++) {
+          await api('POST', `/v1/ai-company/tasks/${taskId}/progress`, { as: MEMBER })
+        }
+        const final = (await api('GET', '/v1/ai-company/tasks', { as: MEMBER })).json.data as
+          { id: string; status: string }[]
+        expect(final.find(t => t.id === taskId)!.status).toBe('done')
+      }
+    })
+
     it('delegate 権限のないロールの AI 社員への依頼は連携しない（従来どおり単独実行）', async () => {
       const created = await api('POST', '/v1/ai-company/tasks', {
         as: MEMBER,

@@ -110,7 +110,9 @@ async function onSyncPlanDay(): Promise<void> {
     show(res.error.message, 'crit')
     return
   }
-  show(`${res.synced ?? 0} 件を同期しました`)
+  // 部分失敗（一部カレンダーの取得失敗等）は warn で報告（原則4 = できた分の同期 + 報告）
+  if (res.warning) show(`${res.synced ?? 0} 件を同期しました。${res.warning}`, 'warn')
+  else show(`${res.synced ?? 0} 件を同期しました`)
 }
 
 // 計画の作成・編集モーダル

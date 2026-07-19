@@ -49,6 +49,53 @@ async function selectedCalendarIds(pool: pg.Pool, memberId: string): Promise<str
   return ids.length > 0 ? ids.slice(0, MAX_SELECTED_CALENDARS) : ['primary']
 }
 
+export interface GoogleCalendarItem {
+  id: string
+  summary?: string
+  start?: { dateTime?: string }
+  end?: { dateTime?: string }
+}
+
+export interface CalendarFetchResult {
+  ok: boolean
+  items?: GoogleCalendarItem[]
+  truncated?: boolean
+  /** カレンダー自体が見つからない（共有解除等）= 予定ゼロとして扱う（失敗ではない） */
+  missing?: boolean
+}
+
+/**
+ * 複数カレンダーの取得結果を統合する純粋関数（レビュー PR #48 R1 指摘で単体テスト可能に分離）。
+ * - 終日予定（dateTime なし）は対象外・同一イベント id は重複排除（(member_id, google_event_id) 一意と整合）
+ * - truncated / failedCals は削除フェーズの抑止条件・missingCals は選択見直しの案内材料
+ */
+export function mergeCalendarFetches(fetched: CalendarFetchResult[]): {
+  timed: GoogleCalendarItem[]
+  truncated: boolean
+  failedCals: number
+  missingCals: number
+} {
+  const seen = new Set<string>()
+  const timed: GoogleCalendarItem[] = []
+  let truncated = false
+  let failedCals = 0
+  let missingCals = 0
+  for (const f of fetched) {
+    if (!f.ok) {
+      failedCals++
+      continue
+    }
+    if (f.missing) missingCals++
+    if (f.truncated) truncated = true
+    for (const i of f.items ?? []) {
+      if (!i.start?.dateTime || !i.end?.dateTime || seen.has(i.id)) continue
+      seen.add(i.id)
+      timed.push(i)
+    }
+  }
+  return { timed, truncated, failedCals, missingCals }
+}
+
 function calendarEnabled(env: Env): boolean {
   return Boolean(env.googleOauthClientId && env.googleOauthClientSecret && env.tokenEncryptionKey)
 }
@@ -347,10 +394,7 @@ export function calendarRoutes(pool: pg.Pool, env: Env): Hono {
     // 選択された全カレンダーから取得（オペレーター指示 2026-07-19 #3。従来は primary 固定）。
     // 一部カレンダーの失敗は「取れた分だけ同期 + 削除フェーズ抑止」のグレースフルデグラデーション（原則4）
     const calendarIds = await selectedCalendarIds(pool, user.id)
-    type GoogleItem = { id: string; summary?: string; start?: { dateTime?: string }; end?: { dateTime?: string } }
-    const items: GoogleItem[] = []
-    let truncated = false
-    let failedCals = 0
+    const fetched: CalendarFetchResult[] = []
     let configError: ApiError | null = null
     for (const calId of calendarIds) {
       try {
@@ -365,6 +409,13 @@ export function calendarRoutes(pool: pg.Pool, env: Env): Hono {
           headers: { authorization: `Bearer ${token}` },
           signal: AbortSignal.timeout(15_000),
         })
+        if (res.status === 404) {
+          // カレンダーが存在しない/共有解除（notFound）は一時障害ではなく「予定ゼロ」として扱う
+          // （failed 扱いにすると削除フェーズが永久に抑止され、消えた予定が残り続ける）
+          console.warn('calendar sync: calendar not found (treat as empty):', calId)
+          fetched.push({ ok: true, missing: true, items: [] })
+          continue
+        }
         if (!res.ok) {
           // 判定はエラーボディ全文に対して行う（理由コードが長い message の後に来る形式でも取りこぼさない）
           const bodyTxt = await res.text()
@@ -377,29 +428,22 @@ export function calendarRoutes(pool: pg.Pool, env: Env): Hono {
           }
           throw new Error(`google events ${res.status}`)
         }
-        const data = await res.json() as { items?: GoogleItem[]; nextPageToken?: string }
-        items.push(...(data.items ?? []))
+        const data = await res.json() as { items?: GoogleCalendarItem[]; nextPageToken?: string }
         // 打ち切り（次ページあり）の場合、見えていない予定を誤削除しないよう削除フェーズを抑止する
         if (data.nextPageToken) {
           console.warn(`calendar sync truncated (>250 events/day in ${calId}): skip delete phase`)
-          truncated = true
         }
+        fetched.push({ ok: true, items: data.items ?? [], truncated: Boolean(data.nextPageToken) })
       } catch {
-        failedCals++
+        fetched.push({ ok: false })
       }
     }
-    if (failedCals === calendarIds.length) {
+    const merged = mergeCalendarFetches(fetched)
+    if (merged.failedCals === calendarIds.length && calendarIds.length > 0) {
       // 全滅は従来どおりエラー（設定不備の案内があればそれを優先）
       throw configError ?? err('AKO-CAL-001', 'カレンダー同期に失敗しました。時間をおいて再試行してください', 502)
     }
-    // 終日予定（dateTime なし）は対象外。同一イベントが複数カレンダーに現れる場合は
-    // イベント id で重複排除（(member_id, google_event_id) 一意制約と整合）
-    const seen = new Set<string>()
-    const timed = items.filter((i) => {
-      if (!i.start?.dateTime || !i.end?.dateTime || seen.has(i.id)) return false
-      seen.add(i.id)
-      return true
-    })
+    const { timed, truncated, failedCals } = merged
     const client = await pool.connect()
     try {
       await client.query('BEGIN')
@@ -431,13 +475,16 @@ export function calendarRoutes(pool: pg.Pool, env: Env): Hono {
     } finally {
       client.release()
     }
+    const warnings: string[] = []
+    if (failedCals > 0) warnings.push(`${failedCals} 件のカレンダーの取得に失敗しました（取得できた分のみ同期）`)
+    if (merged.missingCals > 0) {
+      warnings.push(`${merged.missingCals} 件のカレンダーが見つかりません（共有解除の可能性。「同期カレンダー」設定を見直してください）`)
+    }
     return c.json({
       data: {
         synced: timed.length,
         calendars: calendarIds.length - failedCals,
-        warning: failedCals > 0
-          ? `${failedCals} 件のカレンダーの取得に失敗しました（取得できた分のみ同期）`
-          : undefined,
+        warning: warnings.length > 0 ? warnings.join(' / ') : undefined,
       },
     })
   })

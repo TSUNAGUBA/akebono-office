@@ -144,12 +144,13 @@ export function useCalendar() {
    * 決定的シードを「Google 側の最新状態」とみなし、google 発予定のみ upsert する。
    * アプリ発（source='app'）の予定には触れない（SoT の分離）。
    */
-  async function syncFromGoogle(memberId: string, date: string): Promise<Result & { synced?: number }> {
+  async function syncFromGoogle(memberId: string, date: string): Promise<Result & { synced?: number; warning?: string }> {
     if (isApi) {
       try {
-        const r = await apiFetch<{ synced: number }>('/v1/calendar/sync', { method: 'POST', body: { date } })
+        // warning = 部分失敗の報告（一部カレンダーの取得失敗・共有解除）。呼び出し側がトーストで通知する（原則4 の「報告」）
+        const r = await apiFetch<{ synced: number; warning?: string }>('/v1/calendar/sync', { method: 'POST', body: { date } })
         await loadCalEvents(date, true)
-        return { ok: true, synced: r.synced }
+        return { ok: true, synced: r.synced, warning: r.warning }
       } catch (e) {
         return { ok: false, error: apiErrorOf(e) }
       }
@@ -159,7 +160,15 @@ export function useCalendar() {
       if (!member?.googleCalendarConnected) {
         return { ok: false, error: { code: 'AKO-CAL-007', message: 'Google カレンダーが未連携です。連携してから同期してください' } }
       }
-      const latest = buildCalendarEvents().filter(e => e.memberId === memberId && e.date === date)
+      // 選択されたカレンダーを反映（primary = 既定シード / 追加カレンダーは決定的な擬似予定を合成。
+      // 既定選択（primary のみ）では従来と完全に同じ結果 = 下位互換）
+      const selected = mockSelectedCalendarIds()
+      const latest = [
+        ...(selected.includes('primary')
+          ? buildCalendarEvents().filter(e => e.memberId === memberId && e.date === date)
+          : []),
+        ...mockExtraCalendarEvents(memberId, date, selected),
+      ]
       const keepIds = new Set(latest.map(e => e.id))
       events.value = [
         // 対象日の google 発予定を最新状態へ置き換え（その他・アプリ発はそのまま）
@@ -304,4 +313,28 @@ function mockSelectedCalendarIds(): string[] {
     if (Array.isArray(v) && v.length > 0) return v.map(String)
   } catch { /* 壊れた保存値は既定へ */ }
   return ['primary']
+}
+
+/** 追加カレンダー選択時の擬似予定（カレンダーごとに 1 件・決定的 id = 再同期で重複しない） */
+function mockExtraCalendarEvents(memberId: string, date: string, selected: string[]): CalendarEvent[] {
+  const EXTRA: Record<string, { from: string; to: string; title: string }> = {
+    'mock-team-dev': { from: '10:00', to: '11:00', title: 'チーム開発 定例' },
+    'mock-sys-support': { from: '15:00', to: '15:30', title: 'システムサポート 引き継ぎ' },
+    'mock-core': { from: '17:00', to: '17:30', title: 'コアメンバー 共有会' },
+  }
+  return selected.flatMap((calId) => {
+    const tpl = EXTRA[calId]
+    if (!tpl) return []
+    return [{
+      id: `gcal-${calId}-${memberId}-${date}`,
+      memberId,
+      date,
+      from: tpl.from,
+      to: tpl.to,
+      title: tpl.title,
+      source: 'google' as const,
+      syncedToGoogle: true,
+      projectId: null,
+    }]
+  })
 }

@@ -10,7 +10,7 @@ import type { AiTask } from '~/types/domain'
 import { AI_EMPLOYEE_STATUS_LABELS, AI_TASK_STATUS_LABELS } from '~/utils/labels'
 
 const {
-  employees, roleOf, employeeById, tasks, tasksOf, logs, aiReportsOn,
+  employees, employeesAll, roleOf, employeeById, tasks, tasksOf, logs, aiReportsOn,
   requestTask, approveTask, progressTask, blockTask, cancelTask, generateDailyReports,
   evaluateWorkloadSignals,
 } = useAiCompany()
@@ -195,7 +195,7 @@ async function onGenerateReports(): Promise<void> {
         <OfficeAiTaskBoard
           v-if="tab === 'board'"
           :tasks="tasks"
-          :employees="employees"
+          :employees="employeesAll"
           @approve="onApprove"
           @progress="onProgress"
           @block="onBlock"

@@ -134,6 +134,8 @@ export function useAiCompany() {
   // ---------- 参照系 ----------
 
   const employees = computed<AiEmployee[]>(() => aiEmployees.value.filter(e => e.active))
+  /** 無効化済みも含む全 AI 社員（タスクボード等の名前解決用 = 過去タスクの担当名を生 id にしない） */
+  const employeesAll = computed<AiEmployee[]>(() => aiEmployees.value)
   const roles = computed<AiRole[]>(() => aiRoles.value)
 
   function roleOf(emp: AiEmployee | undefined): AiRole | undefined {
@@ -240,8 +242,9 @@ export function useAiCompany() {
     addLog(parent.aiEmployeeId, parent.id, 'report',
       `${employeeById(child.aiEmployeeId)?.name ?? 'AI社員'} から「${child.title}」の完了報告を受領`)
     const childTitles = new Set(child.decomposition.map(s => s.title))
+    // cancelled の分担は「完了待ち」に数えない（API 版と同一 = レビュー PR #48 R1 指摘）
     const allChildrenDone = !aiTasks.value.some(t =>
-      t.parentTaskId === parent.id && t.id !== child.id && t.status !== 'done')
+      t.parentTaskId === parent.id && t.id !== child.id && t.status !== 'done' && t.status !== 'cancelled')
     const decomposition = parent.decomposition.map(s =>
       allChildrenDone || childTitles.has(s.title) ? { ...s, done: true } : s)
     aiTasks.value = aiTasks.value.map(t => t.id === parent.id
@@ -557,7 +560,7 @@ export function useAiCompany() {
   }
 
   return {
-    employees, roles, roleOf, employeeById, tasks, tasksOf, logs, aiReportsOn,
+    employees, employeesAll, roles, roleOf, employeeById, tasks, tasksOf, logs, aiReportsOn,
     requestTask, approveTask, progressTask, blockTask, cancelTask, generateDailyReports,
     evaluateWorkloadSignals,
   }

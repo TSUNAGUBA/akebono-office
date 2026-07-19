@@ -127,9 +127,14 @@ async function saveCalendarSettings(): Promise<void> {
   calendarsOpen.value = false
   // 保存後は当日分を再同期して選択を即反映（失敗しても保存自体は成立 = 非ブロッキング）
   const sync = await cal.syncFromGoogle(currentUser.value.id, todayJst())
-  show(sync.ok
-    ? `同期カレンダーを保存しました（本日の予定 ${sync.synced ?? 0} 件を再同期）`
-    : '同期カレンダーを保存しました（再同期に失敗したため、あとで手動同期してください）', sync.ok ? 'ok' : 'warn')
+  if (!sync.ok) {
+    show('同期カレンダーを保存しました（再同期に失敗したため、あとで手動同期してください）', 'warn')
+  } else if (sync.warning) {
+    // 部分失敗の報告（原則4）: 一部カレンダーの取得失敗・共有解除は握りつぶさない
+    show(`同期カレンダーを保存しました（本日の予定 ${sync.synced ?? 0} 件を再同期）。${sync.warning}`, 'warn')
+  } else {
+    show(`同期カレンダーを保存しました（本日の予定 ${sync.synced ?? 0} 件を再同期）`)
+  }
 }
 </script>
 
@@ -167,11 +172,11 @@ async function saveCalendarSettings(): Promise<void> {
     </div>
   </UiSectionCard>
 
-  <!-- 連携済み: 状態表示 -->
-  <div v-else class="flex items-center justify-between gap-2 rounded-lg border border-line bg-surface-soft px-3 py-1.5">
-    <p class="flex items-center gap-1.5 text-xs text-sub">
-      <CalendarCheck class="h-3.5 w-3.5 text-ok" aria-hidden="true" />
-      Google カレンダー連携済み（{{ currentUser.email }}）
+  <!-- 連携済み: 状態表示（モバイル幅ではボタン行が折り返す = 原則8） -->
+  <div v-else class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line bg-surface-soft px-3 py-1.5">
+    <p class="flex min-w-0 items-center gap-1.5 text-xs text-sub">
+      <CalendarCheck class="h-3.5 w-3.5 shrink-0 text-ok" aria-hidden="true" />
+      <span class="truncate">Google カレンダー連携済み（{{ currentUser.email }}）</span>
     </p>
     <span class="flex items-center gap-1">
       <button type="button" class="btn btn-ghost btn-sm" @click="openCalendarSettings">
@@ -217,7 +222,9 @@ async function saveCalendarSettings(): Promise<void> {
 
   <!-- 同期対象カレンダーの選択 -->
   <UiModal :open="calendarsOpen" title="同期するカレンダー" width="440px" @close="calendarsOpen = false">
-    <p v-if="calendarsLoading" class="py-6 text-center text-[13px] text-muted">カレンダー一覧を取得中…</p>
+    <p v-if="calendarsLoading" class="py-6 text-center text-[13px] text-muted" aria-live="polite" aria-busy="true">
+      カレンダー一覧を取得中…
+    </p>
     <div v-else class="grid gap-1.5">
       <p class="text-[12px] text-sub">
         チェックしたカレンダーの予定が同期されます（共有・サブカレンダーも選べます）。
