@@ -73,9 +73,9 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
     const kind = kindOf(c.req.query('kind'))
     await guardFeature(pool, user, kind)
     const { rows } = kind === 'poipoi'
-      ? await pool.query(`SELECT ${NOTE_COLS} FROM notes WHERE kind = 'poipoi' AND member_id = $1
+      ? await pool.query(`SELECT ${NOTE_COLS} FROM notes WHERE kind = 'poipoi' AND member_id = $1 AND active = true
                           ORDER BY created_at DESC, id LIMIT 300`, [user.id])
-      : await pool.query(`SELECT ${NOTE_COLS} FROM notes WHERE kind = 'minutes'
+      : await pool.query(`SELECT ${NOTE_COLS} FROM notes WHERE kind = 'minutes' AND active = true
                           ORDER BY created_at DESC, id LIMIT 300`)
     return c.json({ data: rows })
   })
@@ -167,6 +167,27 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
     scheduleSearchRebuild(pool, env, `notes:import`)
     const { rows } = await pool.query(`SELECT ${NOTE_COLS} FROM notes WHERE id = $1`, [id])
     return c.json({ data: rows[0] }, 201)
+  })
+
+  // 取消（論理削除。本アプリ共通原則: 操作の取消可能性 = オペレーター指示 2026-07-19 #5）。
+  // poipoi = 本人のみ / minutes = 登録者または管理者。監査ログへ記録し検索インデックスからも除外
+  app.post('/:noteId/archive', async (c) => {
+    const user = c.get('user')
+    const { rows } = await pool.query<{ kind: NoteKind; memberId: string; title: string; active: boolean }>(
+      `SELECT kind, member_id AS "memberId", title, active FROM notes WHERE id = $1`, [c.req.param('noteId')])
+    const note = rows[0]
+    if (!note) throw err('AKO-GEN-002', 'ノートが見つかりません', 404)
+    await guardFeature(pool, user, note.kind)
+    const canUndo = note.memberId === user.id || (note.kind === 'minutes' && user.role === 'admin')
+    if (!canUndo) throw err('AKO-PRM-001', '登録者本人（議事録は管理者も可）のみ取り消せます', 403)
+    if (!note.active) return c.json({ data: { id: c.req.param('noteId'), warning: 'すでに取消済みです' } })
+    await pool.query(`UPDATE notes SET active = false WHERE id = $1`, [c.req.param('noteId')])
+    await audit(pool, {
+      actorId: user.id, action: 'archive', entity: 'notes', entityId: c.req.param('noteId'),
+      detail: `${note.kind === 'poipoi' ? 'ぽいぽいメモ' : '議事録'}「${capCp(note.title, 40)}」を取消`,
+    })
+    scheduleSearchRebuild(pool, env, 'notes:archive')
+    return c.json({ data: { id: c.req.param('noteId') } })
   })
 
   // 添付原本メタ一覧（poipoi は本人のみ）

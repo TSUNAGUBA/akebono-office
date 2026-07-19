@@ -624,12 +624,30 @@ export async function buildContext(
   // 照合は生データ・描画は segments の表示項目チェック（canViewField）通過行のみ = 既存パターン）
   await block(async () => {
     const hits = await searchDocsFor(pool, env, question, user.id)
+    // 混入防止（オペレーター指示 2026-07-19 #5）: 質問が特定の顧客/プロジェクトに解決された場合、
+    // 「別の顧客/プロジェクトに紐付くノート」は関係のない情報として文脈から除外する。
+    // 紐付けなしのノートは対象外（全般メモとして従来どおりスコア勝負）
+    const noteHits = hits.some(h => h.sourceKind === 'note')
+    let mentionedCompanyId: string | null = null
+    let mentionedProjectId: string | null = null
+    if (noteHits) {
+      const { rows: cos } = await pool.query<{ id: string; name: string; aliases: string[] }>(
+        `SELECT id, name, aliases FROM companies WHERE active = true ORDER BY id LIMIT 1000`)
+      mentionedCompanyId = findCompanyIn(topic, cos)?.id ?? null
+      const { rows: pjs } = await pool.query<{ id: string; name: string }>(
+        `SELECT id, name FROM projects WHERE active = true ORDER BY id LIMIT 1000`)
+      mentionedProjectId = pjs.find(p => p.name.length >= 2 && topic.includes(p.name))?.id ?? null
+    }
     const lines: string[] = []
     for (const h of hits) {
       if (renderedKeys.has(`${h.sourceKind}:${h.sourceId}`)) continue
       // ノートは機能ガード（F-16）にも従う: poipoi（owner あり）= 'poipoi' / 議事録 = 'minutes'
       // （reports 等のドメイン文脈と同じ「deny で文脈から消える」挙動に統一）
       if (h.sourceKind === 'note' && !can(h.ownerMemberId ? 'poipoi' : 'minutes')) continue
+      if (h.sourceKind === 'note') {
+        if (mentionedCompanyId && h.links.companyId && h.links.companyId !== mentionedCompanyId) continue
+        if (mentionedProjectId && h.links.projectId && h.links.projectId !== mentionedProjectId) continue
+      }
       const titleCheck = TITLE_CHECKS[h.sourceKind]
       if (!canField(titleCheck.entity, titleCheck.field)) continue
       const segLines = (h.segments ?? [])

@@ -40,7 +40,8 @@ export function useNotes(kind: NoteKind) {
   const list = computed<Note[]>(() => {
     if (isApi) return apiNotes.value[kind] ?? []
     return (mockNotes.value as Note[])
-      .filter(n => n.kind === kind && (kind === 'minutes' || n.memberId === currentUser.value.id))
+      .filter(n => n.kind === kind && n.active !== false
+        && (kind === 'minutes' || n.memberId === currentUser.value.id))
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   })
 
@@ -95,9 +96,28 @@ export function useNotes(kind: NoteKind) {
     return add({ ...meta, title: meta.title || file.name.replace(/\.[^.]+$/, ''), body: text })
   }
 
+  /** 取消（論理削除。本アプリ共通原則: 操作の取消可能性）。poipoi = 本人 / minutes = 登録者 or 管理者 */
+  async function archive(noteId: string): Promise<Result> {
+    if (isApi) {
+      const res = await apiResult(() => apiFetch(`/v1/notes/${noteId}/archive`, { method: 'POST' }))
+      if (res.ok) await loadNotes(kind, true)
+      return res
+    }
+    const target = (mockNotes.value as Note[]).find(n => n.id === noteId)
+    if (!target) return { ok: false, error: { code: 'AKO-GEN-002', message: 'ノートが見つかりません' } }
+    const { isAdmin } = useCurrentUser()
+    const canUndo = target.memberId === currentUser.value.id || (target.kind === 'minutes' && isAdmin.value)
+    if (!canUndo) {
+      return { ok: false, error: { code: 'AKO-PRM-001', message: '登録者本人（議事録は管理者も可）のみ取り消せます' } }
+    }
+    mockNotes.value = (mockNotes.value as Note[]).map(n => n.id === noteId ? { ...n, active: false } : n)
+    commit()
+    return { ok: true, id: noteId }
+  }
+
   async function refresh(): Promise<void> {
     if (isApi) await loadNotes(kind, true)
   }
 
-  return { list, add, importFile, refresh }
+  return { list, add, importFile, archive, refresh }
 }
