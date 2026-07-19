@@ -338,12 +338,16 @@ const teamCandidateOptions = computed(() =>
     tagTone: EMPLOYMENT_TYPE_TONES[m.employmentType] ?? 'neutral',
   })))
 
+// 保存済み設定から除外した候補外 id（退職者等）の数。0 超のときモーダルに案内を出す（PR #61 R2 N2-1）
+const teamSettingsDroppedCount = ref(0)
+
 function openTeamSettings(): void {
   // 解釈は utils/team-visibility.ts と共通（未設定・不正 = null = 既定表示 → 空ドラフト）。
   // 候補外の id（退職者等 = 名前解決できず設定の影響外）はドラフトから除いて生 id チップを出さない
   const candidateIds = new Set(reports.teamMemberCandidates.value.map(m => m.id))
-  teamSettingsDraft.value = [...(parseTeamVisibleIds(getConfig('teamVisibleMemberIds', '')) ?? [])]
-    .filter(id => candidateIds.has(id))
+  const stored = [...(parseTeamVisibleIds(getConfig('teamVisibleMemberIds', '')) ?? [])]
+  teamSettingsDraft.value = stored.filter(id => candidateIds.has(id))
+  teamSettingsDroppedCount.value = stored.length - teamSettingsDraft.value.length
   teamSettingsOpen.value = true
 }
 
@@ -1173,6 +1177,10 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
           選択できます（雇用区分はバッジで表示）。未選択のまま保存すると既定の表示
           （マトリクス = 社員・契約・アルバイト / タイムライン = 全員）に戻ります。
           誰の日報を参照できるかは権限設定（日報の参照対象）でロール・役職・個人ごとに制御できます
+        </p>
+        <p v-if="teamSettingsDroppedCount > 0" class="text-[12px] text-warn">
+          保存済みの設定に在籍していないメンバーが {{ teamSettingsDroppedCount }} 名含まれていたため、選択から除外しています。
+          このまま保存すると除外後の内容で確定します（未選択のまま保存 = 既定の表示）
         </p>
         <UiMultiCombobox
           v-model="teamSettingsDraft"
