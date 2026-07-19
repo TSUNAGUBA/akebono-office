@@ -1,15 +1,17 @@
 <script setup lang="ts">
 /**
  * 複数選択オートコンプリート（論理名で検索して選ぶ。オペレーター指示 2026-07-19）。
- * - 入力でオプションを部分一致フィルタ（ラベル・値の両方に一致）
+ * - 入力でオプションを部分一致フィルタ（ラベル・値・tag のいずれかに一致）
  * - 選択済みはチップ表示（× で解除）。single 指定時は 1 件のみ（選び直しで置換）
  * - Enter = 絞り込み先頭の未選択項目を追加 / Esc = 候補を閉じる
+ * - tag/tagTone（任意）= 候補行・選択チップに区分バッジを添える（雇用区分等。バッチ7k）
  */
 import { X } from 'lucide-vue-next'
+import type { Tone } from '~/types/ui'
 
 const props = withDefaults(defineProps<{
   modelValue: string[]
-  options: { value: string; label: string }[]
+  options: { value: string; label: string; tag?: string; tagTone?: Tone }[]
   placeholder?: string
   ariaLabel?: string
   /** true = 単一選択（編集画面など 1 件だけ選ばせたい場合） */
@@ -27,12 +29,18 @@ const listboxId = useId()
 const selectedSet = computed(() => new Set(props.modelValue))
 const filtered = computed(() => {
   const q = query.value.trim().toLowerCase()
+  // tag（区分バッジ）でも絞り込める（例: 「外注」で外注メンバーだけに絞る。PR #61 R1 N-2）
   return props.options.filter(o =>
-    !q || o.label.toLowerCase().includes(q) || o.value.toLowerCase().includes(q))
+    !q || o.label.toLowerCase().includes(q) || o.value.toLowerCase().includes(q)
+    || (o.tag ?? '').toLowerCase().includes(q))
 })
 
 function labelOf(v: string): string {
   return props.options.find(o => o.value === v)?.label ?? v
+}
+
+function tagOf(v: string): string | undefined {
+  return props.options.find(o => o.value === v)?.tag
 }
 
 function toggle(value: string): void {
@@ -96,6 +104,7 @@ function onFocusOut(e: FocusEvent): void {
         class="inline-flex items-center gap-1 rounded-full border border-brand bg-brand-soft px-2 py-0.5 text-xs font-medium text-brand"
       >
         {{ labelOf(v) }}
+        <span v-if="tagOf(v)" class="text-[10px] font-normal opacity-70">{{ tagOf(v) }}</span>
         <button type="button" class="transition-opacity hover:opacity-60" :aria-label="`${labelOf(v)} を解除`" @click.stop="remove(v)">
           <X class="h-3 w-3" aria-hidden="true" />
         </button>
@@ -134,7 +143,10 @@ function onFocusOut(e: FocusEvent): void {
         :class="selectedSet.has(o.value) ? 'font-medium text-brand' : ''"
         @click="toggle(o.value)"
       >
-        <span>{{ o.label }}</span>
+        <span class="flex items-center gap-1.5">
+          {{ o.label }}
+          <UiStatusBadge v-if="o.tag" :label="o.tag" :tone="o.tagTone ?? 'neutral'" />
+        </span>
         <span class="num text-[11px] text-muted">{{ o.value }}</span>
       </button>
       <p v-if="filtered.length === 0" class="px-3 py-2 text-[12px] text-muted">該当する項目がありません</p>

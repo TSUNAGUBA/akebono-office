@@ -17,6 +17,7 @@ import type {
   DailyReport, ReportComment, ReportEntry, Result, WeeklyReport,
 } from '~/types/domain'
 import { addDays, weekdayOf } from '~/utils/format'
+import { matrixVisible, parseTeamVisibleIds, timelineVisibleWith } from '~/utils/team-visibility'
 
 // ---------- API モードのキャッシュ（SPA・モジュールスコープ単一） ----------
 
@@ -182,36 +183,25 @@ export function useReports() {
     return days
   }
 
-  // 表示メンバー設定 + 日報参照権限（バッチ7h・オペレーター指示 2026-07-19 #10 ①）
+  // 表示メンバー設定 + 日報参照権限（バッチ7h・オペレーター指示 2026-07-19 #10 ① → バッチ7k #13 で候補拡大）
   const perms = usePermissions()
   const { getConfig } = useAppSettings()
 
-  /** チームタブの表示メンバー設定（configs 'teamVisibleMemberIds' = JSON 配列。未設定・空・不正 = 全員） */
-  const teamVisibleIds = computed<Set<string> | null>(() => {
-    const raw = getConfig('teamVisibleMemberIds', '')
-    if (!raw) return null
-    try {
-      const arr = JSON.parse(raw) as unknown
-      if (!Array.isArray(arr)) return null
-      const ids = arr.filter((x): x is string => typeof x === 'string')
-      return ids.length > 0 ? new Set(ids) : null
-    } catch {
-      return null
-    }
-  })
+  /** チームタブの表示メンバー設定（configs 'teamVisibleMemberIds' = JSON 配列。未設定・空・不正 = 既定表示） */
+  const teamVisibleIds = computed<Set<string> | null>(() =>
+    parseTeamVisibleIds(getConfig('teamVisibleMemberIds', '')))
 
-  /** マトリクス対象の候補（在籍中の社員・契約・アルバイト = 表示設定の選択肢） */
-  const teamMemberCandidates = computed(() =>
-    members.value.filter(m =>
-      m.active && m.employmentType !== 'outsource' && m.employmentType !== 'director'))
+  /** 表示メンバー設定の選択肢 = 在籍中の全メンバー（バッチ7k で取締役・外注も選択可能に） */
+  const teamMemberCandidates = computed(() => members.value.filter(m => m.active))
 
   /**
    * 提出状況マトリクスの対象メンバー = 候補 ∩ 表示メンバー設定 ∩ 日報参照権限（F-16-6）。
-   * 自分は表示設定に関わらず常に表示する（自分の提出状況を見失わない）
+   * 設定未設定の既定は従来どおり社員・契約・アルバイトのみ。設定ありは「選択メンバー + 自分」
+   * （自分の提出状況を見失わない。判定は utils/team-visibility.ts が SoT）
    */
   const teamMembers = computed(() =>
     teamMemberCandidates.value.filter(m =>
-      (teamVisibleIds.value === null || teamVisibleIds.value.has(m.id) || m.id === currentUser.value.id)
+      matrixVisible(teamVisibleIds.value, m, currentUser.value.id)
       && perms.canViewMemberReports(m.id)))
 
   function cellStatus(memberId: string, date: string): SubmissionCell {
@@ -222,15 +212,17 @@ export function useReports() {
   }
 
   /** チームタイムライン（直近営業日分の提出済み日報。AI 社員の日報も同列に混在 = モックのみ） */
-  /** タイムライン上の人間日報の可視判定（PR #57 R1 M-5 / R2 Minor-2）。
+  /** タイムライン上の人間日報の可視判定（PR #57 R1 M-5 / R2 Minor-2 → バッチ7k で統一）。
    * - 参照権限（F-16-6）は常に適用
-   * - 表示メンバー設定はマトリクス候補（社員・契約・アルバイト）にのみ適用する。
-   *   候補外（役員・業務委託 = 設定 UI の選択肢に出ない）は設定の影響を受けず従来どおり表示
-   *   （「選択肢に出ない対象が部分設定で消える」導線を作らない） */
+   * - 表示メンバー設定: 未設定 = 全員（従来どおり）/ 設定あり = 選択メンバー + 自分。
+   *   在籍中の全メンバーが設定の選択肢に出るため、バッチ7h の「候補外は設定の影響を受けない」
+   *   特例は在籍中の取締役・外注については廃止（選択状態がそのまま表示状態）。
+   *   候補に出ない在籍外（退職者等）は引き続き設定の影響外 = 常に表示（PR #61 R1 M-1。
+   *   判定は utils/team-visibility.ts が SoT） */
   function timelineVisible(memberId: string): boolean {
     if (!perms.canViewMemberReports(memberId)) return false
-    if (!teamMemberCandidates.value.some(m => m.id === memberId)) return true
-    return teamVisibleIds.value === null || teamVisibleIds.value.has(memberId) || memberId === currentUser.value.id
+    const selectable = teamMemberCandidates.value.some(m => m.id === memberId)
+    return timelineVisibleWith(teamVisibleIds.value, memberId, currentUser.value.id, selectable)
   }
 
   function timeline(days = 7): DailyReport[] {

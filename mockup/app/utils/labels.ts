@@ -15,6 +15,15 @@ export const EMPLOYMENT_TYPE_LABELS: Record<EmploymentType, string> = {
   outsource: '外注',
 }
 
+/** 雇用区分バッジのトーン（メンバー管理・チームタブ表示メンバー設定で共有 = バッチ7k で集約） */
+export const EMPLOYMENT_TYPE_TONES: Record<EmploymentType, Tone> = {
+  director: 'brand',
+  employee: 'info',
+  contract: 'ok',
+  parttime: 'warn',
+  outsource: 'neutral',
+}
+
 export const MEMBER_ROLE_LABELS: Record<MemberRole, string> = {
   admin: '管理者',
   hr: '人事',

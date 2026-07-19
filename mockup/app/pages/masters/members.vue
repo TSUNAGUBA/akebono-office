@@ -10,7 +10,7 @@ import {
 } from '~/components/masters/MasterShell.vue'
 import type { AttendanceRule, CustomValues, EmploymentType, Member } from '~/types/domain'
 import type { FieldDef, TableColumn } from '~/types/ui'
-import { EMPLOYMENT_TYPE_LABELS, MEMBER_ROLE_LABELS } from '~/utils/labels'
+import { EMPLOYMENT_TYPE_LABELS, EMPLOYMENT_TYPE_TONES, MEMBER_ROLE_LABELS } from '~/utils/labels'
 
 const crud = useMasterCrudAsync('members', 'm')
 const rulesCrud = useMasterCrudAsync('attendanceRules', 'ar')
@@ -19,14 +19,6 @@ const { defsFor, formSchemaFor } = useCustomFields()
 const departments = useDepartments()
 const toast = useToast()
 const confirm = useConfirm()
-
-const EMPLOYMENT_TYPE_TONES: Record<string, 'brand' | 'info' | 'ok' | 'warn' | 'neutral'> = {
-  director: 'brand',
-  employee: 'info',
-  contract: 'ok',
-  parttime: 'warn',
-  outsource: 'neutral',
-}
 
 // ---------- 一覧 ----------
 
