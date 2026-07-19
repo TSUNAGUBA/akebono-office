@@ -31,7 +31,10 @@ import { generateJson } from '../lib/llm'
 import { notify } from '../lib/notify'
 
 // questions / files（メタのみ）はタスク行へ埋め込んで返す（フロントの型 = AiTask.questions/files と一致。
-// 一覧 LIMIT 200 での相関サブクエリは SME 規模で十分軽量）
+// 一覧 LIMIT 200 での相関サブクエリは SME 規模で十分軽量）。
+// 可視性の設計判断（バッチ7f レビュー R-5）: タスクボードは従来どおり全員参照（C2）で、
+// 成果物・質問/回答（添付から抽出したテキストの引用を含む）も全員に見える = チームで共有する前提。
+// 原本ファイル（バイナリ）のダウンロードのみ依頼者 + 管理者に制限する（GET /files/:id）
 const TASK_COLS = `id, ai_employee_id AS "aiEmployeeId", requester_id AS "requesterId",
   title, description, decomposition, outputs, status, due_date::text AS "dueDate", confidence, created_at AS "createdAt",
   requester_ai_employee_id AS "requesterAiEmployeeId", parent_task_id AS "parentTaskId",
@@ -120,7 +123,7 @@ async function insertAttachments(
     await db.query(
       `INSERT INTO ai_task_files (id, task_id, question_id, filename, mime, size_bytes, bytes, extracted_text, uploaded_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      [newId('atf'), taskId, questionId, f.filename, f.mime, f.bytes.length, f.bytes, f.extractedText, uploadedBy])
+      [newId('atf'), taskId, questionId, capCp(f.filename, 200), f.mime, f.bytes.length, f.bytes, f.extractedText, uploadedBy])
   }
 }
 
@@ -133,19 +136,20 @@ async function taskMaterials(pool: pg.Pool, task: AiTask): Promise<{
   const { rows: qs } = await pool.query<{ question: string; answer: string | null }>(
     `SELECT question, answer FROM ai_task_questions WHERE task_id = $1 AND status = 'answered'
      ORDER BY asked_at, id`, [task.id])
-  const { rows: files } = await pool.query<{ filename: string; mime: string; extractedText: string | null; bytes: Buffer }>(
-    `SELECT filename, mime, extracted_text AS "extractedText",
-            CASE WHEN mime LIKE 'image/%' THEN bytes ELSE NULL END AS bytes
+  const { rows: files } = await pool.query<{ filename: string; extractedText: string | null }>(
+    `SELECT filename, extracted_text AS "extractedText"
      FROM ai_task_files WHERE task_id = $1 ORDER BY created_at, id`, [task.id])
+  // 画像は SQL 側で 3 枚に制限（bytes の全件ロードを避ける）。Vertex の inline data 上限（~20MB/リクエスト）は
+  // 入口の 10MB×3 制限内でも超え得るため、超過時は API エラー → ヒューリスティック縮退（原則4）で自己回復する
+  const { rows: imgRows } = await pool.query<{ mime: string; bytes: Buffer }>(
+    `SELECT mime, bytes FROM ai_task_files WHERE task_id = $1 AND mime LIKE 'image/%'
+     ORDER BY created_at, id LIMIT 3`, [task.id])
   const parts: string[] = [`依頼内容: ${task.description || '（記載なし）'}`]
   for (const q of qs) parts.push(`確認済み Q&A:\nQ: ${q.question}\nA: ${q.answer ?? ''}`)
   for (const f of files) {
     if (f.extractedText) parts.push(`添付「${f.filename}」の内容:\n${capCp(f.extractedText, 6000)}`)
   }
-  const images = files
-    .filter(f => f.bytes)
-    .slice(0, 3) // マルチモーダル入力はコスト・ペイロード上限を考慮し 3 枚まで
-    .map(f => ({ mime: f.mime, dataBase64: f.bytes!.toString('base64') }))
+  const images = imgRows.map(f => ({ mime: f.mime, dataBase64: f.bytes.toString('base64') }))
   return { text: capCp(parts.join('\n\n'), 16_000), images, answeredCount: qs.length }
 }
 
@@ -253,7 +257,9 @@ async function prepareStepExecution(
     images: materials.images,
   })
   if (res) {
-    if (res.needsInput && String(res.question ?? '').trim()) {
+    // 再質問はタスクあたり 3 回まで（LLM が needsInput を返し続ける無限問答の防止。
+    // 上限到達後は手元の材料で遂行し、不足は成果物内で明示させる）
+    if (res.needsInput && String(res.question ?? '').trim() && materials.answeredCount < 3) {
       return { kind: 'question', question: capCp(String(res.question).trim(), 500) }
     }
     const body = String(res.output ?? '').trim()
@@ -575,10 +581,12 @@ export function aiCompanyRoutes(pool: pg.Pool, env: Env): Hono {
         const idx = task.decomposition.findIndex(s => !s.done)
         if (idx < 0) throw err('AKO-AIC-006', '未完了のステップがありません', 409)
         const step = task.decomposition[idx]!
-        // 事前実行の対象とロック後の状態が食い違う場合（通常起きない防御）は決定的出力で作り直す
-        const exec = preparedExec && preparedExec.stepIndex === idx && preparedExec.stepTitle === step.title
-          ? preparedExec.result
-          : { kind: 'output' as const, body: heuristicStepOutput(task.title, step.title, task.description) }
+        // 事前実行の対象とロック後の状態が食い違う場合（同時操作の競合 = 通常起きない）は、
+        // 質問判定・材料を欠いた劣化出力を作らず、再試行可能エラーで返す（次の操作で正しく事前実行される）
+        if (!preparedExec || preparedExec.stepIndex !== idx || preparedExec.stepTitle !== step.title) {
+          throw err('AKO-AIC-009', '同時操作が競合しました。もう一度お試しください', 409)
+        }
+        const exec = preparedExec.result
         if (exec.kind === 'question') {
           // 人間のアクションが必要 = 依頼者へ質問し、回答があるまでブロック（バッチ7f）
           const qid = newId('atq')
@@ -641,6 +649,11 @@ export function aiCompanyRoutes(pool: pg.Pool, env: Env): Hono {
           throw err('AKO-AIC-008', '完了・中止済みのタスクは中止できません', 409)
         }
         await client.query(`UPDATE ai_tasks SET status = 'cancelled', updated_at = now() WHERE id = $1`, [taskId])
+        // open な質問は中止で打ち切り（宙吊りの回答待ちを残さない。打ち切りの経緯は answer 欄に記録）
+        await client.query(
+          `UPDATE ai_task_questions SET status = 'answered', answer = '（タスク中止により打ち切り）',
+             answered_by = $2, answered_at = now()
+           WHERE task_id = $1 AND status = 'open'`, [taskId, user.id])
         // 親の中止は未完了の分担子タスクへ連鎖（分担だけが走り続ける宙吊りを作らない）
         const { rows: kids } = await client.query<{ id: string; aiEmployeeId: string; title: string }>(
           `SELECT id, ai_employee_id AS "aiEmployeeId", title FROM ai_tasks
@@ -716,6 +729,9 @@ export function aiCompanyRoutes(pool: pg.Pool, env: Env): Hono {
       if (!task) throw err('AKO-AIC-003', 'タスクが見つかりません', 404)
       if (task.requesterId !== user.id && user.role !== 'admin') {
         throw err('AKO-AIC-013', '依頼者本人（または管理者）のみ回答できます', 403)
+      }
+      if (task.status === 'done' || task.status === 'cancelled') {
+        throw err('AKO-AIC-012', '完了・中止済みのタスクには回答できません', 409)
       }
       const { rows: qs } = await client.query<{ id: string; question: string }>(
         `SELECT id, question FROM ai_task_questions WHERE task_id = $1 AND status = 'open'

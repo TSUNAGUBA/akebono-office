@@ -451,7 +451,8 @@ export function useAiCompany() {
     }
     // 分担子タスクの完了は依頼元マネージャーへ報告・ロールアップ（API 版と同一）
     if (finished && task.parentTaskId) {
-      rollUpToParentMock({ ...task, decomposition, status: 'done' })
+      // outputs も渡す（親の統合報告が今回ステップの成果物・子の統合報告を参照できるように = R1 指摘）
+      rollUpToParentMock({ ...task, decomposition, outputs, status: 'done' })
     }
     syncEmployeeStatus(task.aiEmployeeId)
     commit()
@@ -484,6 +485,9 @@ export function useAiCompany() {
     if (!task) return { ok: false, error: { code: 'AKO-AIC-003', message: 'タスクが見つかりません' } }
     if (task.requesterId !== currentUser.value.id && currentUser.value.role !== 'admin') {
       return { ok: false, error: { code: 'AKO-AIC-013', message: '依頼者本人（または管理者）のみ回答できます' } }
+    }
+    if (task.status === 'done' || task.status === 'cancelled') {
+      return { ok: false, error: { code: 'AKO-AIC-012', message: '完了・中止済みのタスクには回答できません' } }
     }
     const open = (task.questions ?? []).find(q => q.status === 'open')
     if (!open) return { ok: false, error: { code: 'AKO-AIC-012', message: '回答待ちの質問がありません' } }
@@ -541,11 +545,20 @@ export function useAiCompany() {
     if (task.status === 'done' || task.status === 'cancelled') {
       return { ok: false, error: { code: 'AKO-AIC-008', message: '完了・中止済みのタスクは中止できません' } }
     }
-    // 親の中止は未完了の分担子タスクへ連鎖（API 版と同一 = 分担だけが走り続ける宙吊りを作らない）
+    // 親の中止は未完了の分担子タスクへ連鎖（API 版と同一 = 分担だけが走り続ける宙吊りを作らない）。
+    // open な質問は中止で打ち切り（宙吊りの回答待ちを残さない = API 版と同一）
     const kids = aiTasks.value.filter(t =>
       t.parentTaskId === taskId && t.status !== 'done' && t.status !== 'cancelled')
     aiTasks.value = aiTasks.value.map(t =>
-      (t.id === taskId || kids.some(k => k.id === t.id)) ? { ...t, status: 'cancelled' as const } : t)
+      (t.id === taskId || kids.some(k => k.id === t.id))
+        ? {
+            ...t,
+            status: 'cancelled' as const,
+            questions: (t.questions ?? []).map(q => q.status === 'open'
+              ? { ...q, status: 'answered' as const, answer: '（タスク中止により打ち切り）', answeredBy: currentUser.value.id, answeredAt: nowJstIso() }
+              : q),
+          }
+        : t)
     for (const k of kids) {
       addLog(k.aiEmployeeId, k.id, 'chat', `連携元タスクの中止に伴い「${k.title}」を中止`)
       syncEmployeeStatus(k.aiEmployeeId)

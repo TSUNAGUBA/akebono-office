@@ -45,3 +45,18 @@ describe('extractDocumentText (.pptx)', () => {
     expect(await extractDocumentText('pptx', Buffer.from('not a zip'))).toBeNull()
   })
 })
+
+describe('extractDocumentText (.pptx) 伸長サイズ上限（zip 爆弾対策）', () => {
+  it('高圧縮の巨大テキストは累積上限で打ち切られる', async () => {
+    // 5MB 相当の繰り返しテキスト（deflate で高圧縮 = 入口 10MB 制限を素通りする形）
+    const huge = 'あ'.repeat(5_000_000)
+    const zip = new JSZip()
+    zip.file('[Content_Types].xml', '<?xml version="1.0"?><Types/>')
+    zip.file('ppt/slides/slide1.xml', slideXml([huge]))
+    zip.file('ppt/slides/slide2.xml', slideXml(['打ち切り後は読まれない']))
+    const text = await extractDocumentText('pptx', await zip.generateAsync({ type: 'nodebuffer' }))
+    expect(text).not.toBeNull()
+    expect(text!.length).toBeLessThanOrEqual(100_000 + 10)
+    expect(text).not.toContain('打ち切り後は読まれない')
+  })
+})

@@ -160,6 +160,7 @@ generateDraft(memberId, date): ReportDraft           // 保存しない（フォ
 | AKO-GEN-003 | 重複データ（一意制約違反） | ✅ |
 | AKO-GEN-404 | エンドポイントなし（API のみ） | ✅ |
 | AKO-GEN-500 | サーバー内部エラー（API のみ・詳細はログ） | ✅ |
+| AKO-GEN-004 | リクエストボディの総量超過（80MB = 添付 10MB × 5 件の base64 を許容。413） | ✅ |
 | AKO-GEN-NET | API へ到達できない（フロント側のネットワーク/接続エラー） | ✅ |
 | AKO-AUTH-001 | 未認証・認証トークン不正（API のみ） | ✅ |
 | AKO-AUTH-002 | 認証済みだが members に未登録（API のみ） | ✅ |

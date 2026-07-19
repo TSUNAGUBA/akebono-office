@@ -13,6 +13,8 @@ const empCrud = useMasterCrudAsync('aiEmployees', 'ai')
 const roleCrud = useMasterCrudAsync('aiRoles', 'r')
 const { roleOf } = useAiCompany()
 const { show } = useToast()
+// 増減員は管理者のみ（API はサーバーの masters ガードが正。UI でも出し分けて誤操作を防ぐ = レビュー M-6）
+const { isAdmin } = useCurrentUser()
 
 // ---------- 一覧 ----------
 
@@ -62,10 +64,20 @@ function openEdit(emp: AiEmployee): void {
   modalOpen.value = true
 }
 
-/** 新規席の自動割当（既存人数から 4 列グリッドの次の席へ = 手動入力を求めない） */
+/**
+ * 新規席の自動割当（手動入力を求めない）。オフィスは 4×3 グリッド（IsometricOffice の GRID_X/GRID_Y）。
+ * 既存席（無効化済みも含む = 復元との衝突防止）を避けて最初の空きセルへ。満席時はグリッド内を循環
+ * （視覚上の重なりは許容 = 描画範囲外へ出さないことを優先）
+ */
 function nextDeskPosition(): { x: number; y: number } {
-  const n = (empCrud.list.value as AiEmployee[]).length
-  return { x: n % 4, y: Math.floor(n / 4) }
+  const all = empCrud.list.value as AiEmployee[]
+  const occupied = new Set(all.map(e => `${e.deskPosition.x},${e.deskPosition.y}`))
+  for (let y = 0; y < 3; y++) {
+    for (let x = 0; x < 4; x++) {
+      if (!occupied.has(`${x},${y}`)) return { x, y }
+    }
+  }
+  return { x: all.length % 4, y: all.length % 3 }
 }
 
 async function saveEmployee(): Promise<void> {
@@ -111,14 +123,21 @@ async function toggleActive(): Promise<void> {
           <ArrowLeft class="h-3.5 w-3.5" aria-hidden="true" />
           オフィスへ戻る
         </NuxtLink>
-        <button type="button" class="btn btn-primary btn-sm" @click="openCreate">
+        <button v-if="isAdmin" type="button" class="btn btn-primary btn-sm" @click="openCreate">
           <Plus class="h-3.5 w-3.5" aria-hidden="true" />
           AI 社員を追加
         </button>
       </template>
     </UiPageHeader>
 
+    <UiEmptyState
+      v-if="!isAdmin"
+      icon="Users"
+      title="AI 社員の管理は管理者のみ行えます"
+      hint="閲覧・依頼は AI オフィス（/ai-company）から"
+    />
     <UiSectionCard
+      v-else
       title="AI 社員一覧"
       description="行をクリックすると編集できます。減員は無効化（論理削除）で行い、過去のタスク・活動ログは保全されます"
       flush

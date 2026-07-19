@@ -147,6 +147,7 @@ export function buildFinalReport(
   return [
     `# 「${title}」完了報告`,
     `全 ${steps.length} ステップを遂行しました。要約は以下（全文は各ステップの成果物を参照）。`,
-    ...steps.map(o => `## ${o.title}\n${[...o.body.replace(/^#+\s.*$/m, '').trim()].slice(0, 300).join('')}`),
+    // 冒頭の見出し行のみ除去（本文中の見出しは保持 = LLM 成果物の構造を壊さない）
+    ...steps.map(o => `## ${o.title}\n${[...o.body.replace(/^#{1,6}\s[^\n]*\n?/, '').trim()].slice(0, 300).join('')}`),
   ].join('\n\n')
 }

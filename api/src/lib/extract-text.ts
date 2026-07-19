@@ -37,14 +37,20 @@ async function extractPdf(bytes: Buffer): Promise<string> {
   }
 }
 
-/** XML の数値/基本エンティティを戻す（pptx の <a:t> 内テキスト用） */
+/** XML の数値/基本エンティティを戻す（pptx の <a:t> 内テキスト用。1 パス置換 = &amp;lt; の二重復号を防ぐ） */
 function decodeXmlEntities(s: string): string {
-  return s
-    .replace(/&#x([0-9a-f]+);/gi, (_, h: string) => String.fromCodePoint(Number.parseInt(h, 16)))
-    .replace(/&#(\d+);/g, (_, d: string) => String.fromCodePoint(Number.parseInt(d, 10)))
-    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
-    .replace(/&apos;/g, '\'').replace(/&amp;/g, '&')
+  return s.replace(/&(#x[0-9a-f]+|#\d+|lt|gt|quot|apos|amp);/gi, (_, ent: string) => {
+    const e = ent.toLowerCase()
+    if (e.startsWith('#x')) return String.fromCodePoint(Number.parseInt(e.slice(2), 16))
+    if (e.startsWith('#')) return String.fromCodePoint(Number.parseInt(e.slice(1), 10))
+    return { lt: '<', gt: '>', quot: '"', apos: '\'', amp: '&' }[e] ?? ''
+  })
 }
+
+// zip 爆弾対策（入口の 10MB 制限は「圧縮後」サイズのみ = deflate は最大 ~1000 倍まで伸長し得る）。
+// 抽出テキストの累積上限で打ち切り、スライド数にも上限を置く（呼び出し側の cap より十分大きい値）
+const PPTX_TEXT_CAP = 100_000
+const PPTX_MAX_SLIDES = 300
 
 async function extractPptx(bytes: Buffer): Promise<string> {
   const zip = await JSZip.loadAsync(bytes)
@@ -52,12 +58,18 @@ async function extractPptx(bytes: Buffer): Promise<string> {
   const slideNames = Object.keys(zip.files)
     .filter(n => /^ppt\/slides\/slide\d+\.xml$/.test(n))
     .sort((a, b) => Number(a.match(/\d+/)?.[0] ?? 0) - Number(b.match(/\d+/)?.[0] ?? 0))
+    .slice(0, PPTX_MAX_SLIDES)
   const slides: string[] = []
+  let total = 0
   for (const name of slideNames) {
     const xml = await zip.files[name]!.async('string')
     const texts = [...xml.matchAll(/<a:t(?:\s[^>]*)?>([^<]*)<\/a:t>/g)].map(m => decodeXmlEntities(m[1] ?? ''))
     const body = texts.join(' ').trim()
-    if (body) slides.push(body)
+    if (body) {
+      slides.push(body.length > PPTX_TEXT_CAP - total ? body.slice(0, PPTX_TEXT_CAP - total) : body)
+      total += body.length
+      if (total >= PPTX_TEXT_CAP) break
+    }
   }
   return slides.join('\n')
 }

@@ -20,6 +20,31 @@ const { currentUser, isAdmin } = useCurrentUser()
 
 /** 添付の受付形式（フリーテキストと合わせた依頼者インプット = バッチ7f） */
 const ATTACH_ACCEPT = '.md,.txt,.pdf,.docx,.pptx,.jpg,.jpeg,.png'
+const ATTACH_EXTS = new Set(['md', 'txt', 'pdf', 'docx', 'pptx', 'jpg', 'jpeg', 'png'])
+const ATTACH_MAX_BYTES = 10 * 1024 * 1024
+const ATTACH_MAX_COUNT = 5
+
+/** 添付の事前検証（サーバーの AKO-AIC-010/011 と同じ基準。不合格は理由をトーストして除外） */
+function validateAttachments(current: File[], selected: File[]): File[] {
+  const ok: File[] = [...current]
+  for (const f of selected) {
+    const ext = f.name.split('.').pop()?.toLowerCase() ?? ''
+    if (!ATTACH_EXTS.has(ext)) {
+      show(`「${f.name}」は非対応形式です（${ATTACH_ACCEPT}）`, 'warn')
+      continue
+    }
+    if (f.size === 0 || f.size > ATTACH_MAX_BYTES) {
+      show(`「${f.name}」は空か 10MB を超えています`, 'warn')
+      continue
+    }
+    if (ok.length >= ATTACH_MAX_COUNT) {
+      show(`添付は ${ATTACH_MAX_COUNT} 件までです（「${f.name}」以降を外しました）`, 'warn')
+      break
+    }
+    ok.push(f)
+  }
+  return ok
+}
 
 // ---------- シグナル検知（stalled_task / overload） ----------
 
@@ -64,7 +89,7 @@ function onReqFilesSelected(ev: Event): void {
   const list = (ev.target as HTMLInputElement).files
   if (reqFileInput.value) reqFileInput.value.value = '' // 同一ファイルの再選択を可能にする
   if (!list) return
-  reqFiles.value = [...reqFiles.value, ...Array.from(list)].slice(0, 5) // サーバー上限と同じ 5 件
+  reqFiles.value = validateAttachments(reqFiles.value, Array.from(list))
 }
 
 function removeReqFile(i: number): void {
@@ -132,7 +157,37 @@ function onAnswerFilesSelected(ev: Event): void {
   const list = (ev.target as HTMLInputElement).files
   if (answerFileInput.value) answerFileInput.value.value = ''
   if (!list) return
-  answerFiles.value = [...answerFiles.value, ...Array.from(list)].slice(0, 5)
+  answerFiles.value = validateAttachments(answerFiles.value, Array.from(list))
+}
+
+function removeAnswerFile(i: number): void {
+  answerFiles.value = answerFiles.value.filter((_, x) => x !== i)
+}
+
+// M-5: 添付原本のダウンロード（依頼者 or 管理者。API モードのみ = モックは原本を保存しない設計判断）
+const canDownloadFiles = computed(() =>
+  !!detailTask.value && (detailTask.value.requesterId === currentUser.value.id || isAdmin.value))
+
+async function downloadFile(fileId: string, filename: string): Promise<void> {
+  if (!useApiMode()) {
+    show('モックモードは原本を保存していません（メタのみ）', 'warn')
+    return
+  }
+  try {
+    const data = await apiFetch<{ filename: string; mime: string; contentBase64: string }>(
+      `/v1/ai-company/files/${fileId}`)
+    const bin = atob(data.contentBase64)
+    const buf = new Uint8Array(bin.length)
+    for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i)
+    const url = URL.createObjectURL(new Blob([buf], { type: data.mime }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = data.filename || filename
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch (e) {
+    show(apiErrorOf(e).message, 'warn')
+  }
 }
 
 async function submitAnswer(): Promise<void> {
@@ -242,7 +297,7 @@ async function onGenerateReports(): Promise<void> {
   <div>
     <UiPageHeader title="AIネイティブカンパニー" description="AI 社員のオフィス。クリックしてタスクを依頼できます">
       <template #actions>
-        <NuxtLink to="/ai-company/employees" class="btn btn-sm">
+        <NuxtLink v-if="isAdmin" to="/ai-company/employees" class="btn btn-sm">
           <Users class="h-3.5 w-3.5" aria-hidden="true" />
           AI 社員の管理
         </NuxtLink>
@@ -348,7 +403,7 @@ async function onGenerateReports(): Promise<void> {
     <UiModal
       :open="!!detailTask"
       :title="detailTask?.title ?? ''"
-      width="lg"
+      width="720px"
       @close="detailTaskId = null"
     >
       <div v-if="detailTask" class="grid gap-4">
@@ -368,11 +423,18 @@ async function onGenerateReports(): Promise<void> {
         <div v-if="(detailTask.files ?? []).length > 0">
           <p class="mb-1 text-[11px] font-bold text-muted">添付（{{ (detailTask.files ?? []).length }}件）</p>
           <ul class="flex flex-wrap gap-1.5">
-            <li
-              v-for="f in detailTask.files"
-              :key="f.id"
-              class="rounded-full border border-line bg-surface-soft px-2.5 py-0.5 text-[11px]"
-            >{{ f.filename }}<span class="num text-muted">（{{ Math.ceil(f.sizeBytes / 1024) }}KB）</span></li>
+            <li v-for="f in detailTask.files" :key="f.id">
+              <button
+                v-if="canDownloadFiles"
+                type="button"
+                class="rounded-full border border-line bg-surface-soft px-2.5 py-0.5 text-[11px] transition-colors hover:bg-brand-soft"
+                :aria-label="`「${f.filename}」をダウンロード`"
+                @click="downloadFile(f.id, f.filename)"
+              >{{ f.filename }}<span class="num text-muted">（{{ Math.ceil(f.sizeBytes / 1024) }}KB）</span> ⬇</button>
+              <span v-else class="rounded-full border border-line bg-surface-soft px-2.5 py-0.5 text-[11px]">
+                {{ f.filename }}<span class="num text-muted">（{{ Math.ceil(f.sizeBytes / 1024) }}KB）</span>
+              </span>
+            </li>
           </ul>
         </div>
 
@@ -398,13 +460,25 @@ async function onGenerateReports(): Promise<void> {
               placeholder="回答・補足情報を入力（添付も可）"
               aria-label="AI への回答"
             />
+            <ul v-if="answerFiles.length > 0" class="grid gap-1">
+              <li
+                v-for="(f, i) in answerFiles"
+                :key="`${f.name}-${i}`"
+                class="flex items-center gap-2 rounded-lg border border-line bg-page px-2.5 py-1 text-[12px]"
+              >
+                <span class="min-w-0 flex-1 truncate">{{ f.name }}</span>
+                <span class="num text-muted">{{ Math.ceil(f.size / 1024) }}KB</span>
+                <button type="button" class="btn btn-ghost btn-sm" :aria-label="`「${f.name}」を外す`" @click="removeAnswerFile(i)">
+                  <X class="h-3 w-3" aria-hidden="true" />
+                </button>
+              </li>
+            </ul>
             <div class="flex flex-wrap items-center gap-2">
               <input ref="answerFileInput" type="file" :accept="ATTACH_ACCEPT" multiple class="hidden" @change="onAnswerFilesSelected">
               <button type="button" class="btn btn-sm" @click="answerFileInput?.click()">
                 <Paperclip class="h-3.5 w-3.5" aria-hidden="true" />
                 資料を添付
               </button>
-              <span v-if="answerFiles.length > 0" class="text-[11px] text-sub">{{ answerFiles.map(f => f.name).join(' / ') }}</span>
               <button type="button" class="btn btn-primary btn-sm ml-auto" :disabled="answering" @click="submitAnswer">
                 <Send class="h-3.5 w-3.5" aria-hidden="true" />
                 {{ answering ? '送信中…' : '回答を送信' }}
