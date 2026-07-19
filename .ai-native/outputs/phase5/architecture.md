@@ -94,7 +94,7 @@ mockup/
 | `UiAvatar` | `name, kind(human/ai), size` | メンバー/AI社員の表示統一 |
 | `UiSectionCard` | `title, description` + slots | セクション枠 |
 
-widgets（業務部品・組み合わせ自由）: `PunchClock`（打刻 = タイムカード。flat プロパティでヘッダーモーダル内でも使用）、`ApprovalFlow`（承認経路の可視化）、`ApprovalActionBar`（承認/却下/差戻し）、`CalendarMonth`（月次カレンダー）、`WeekGrid`（週別グリッド: 勤怠・シフト共用）、`CommentThread`（コメント+リアクション）、`NotificationList`、`EscalationCard`、`UptimeBar`（90 日稼働率）、`RelationGraph`（顧客関係グラフ）、`KnowledgeCard`、`CalendarConnectGate`（Google カレンダー連携ゲート: 擬似 OAuth 同意フロー + 連携状態バー）。masters 配下に `DeptOrgNode`（組織図の再帰ノード）。
+widgets（業務部品・組み合わせ自由）: `PunchClock`（打刻 = タイムカード。flat プロパティでヘッダーモーダル内でも使用）、`ApprovalFlow`（承認経路の可視化）、`ApprovalActionBar`（承認/却下/差戻し）、`CalendarMonth`（月次カレンダー）、`WeekGrid`（週別グリッド: 勤怠・シフト共用）、`CommentThread`（コメント+リアクション）、`NotificationList`、`EscalationCard`、`UptimeBar`（90 日稼働率）、`RelationGraph`（顧客関係グラフ）、`KnowledgeCard`、`CalendarConnectGate`（Google カレンダー連携ゲート: 擬似 OAuth 同意フロー + 連携状態バー + 同期カレンダー選択モーダル = バッチ7b）。masters 配下に `DeptOrgNode`（組織図の再帰ノード）。
 
 charts: `LineChartCard` / `BarChartCard` / `DonutChartCard`（Chart.js。undeux パターン）。
 
@@ -115,10 +115,10 @@ office: `IsometricOffice`（アイソメトリック空間）、`AiEmployeeCard`
 | `useTaskPlans` | タスク計画・AI レビューコメント・振り返り記録・管理者インサイト（F-14） |
 | `useShifts` | 募集期間・希望・割当・確定・バリデーション |
 | `useReports` | 日報/週報 CRUD・提出状況・コメント・AI 報告の合流 |
-| `useCalendar` | Google カレンダー連携（擬似 OAuth・べき等同期・タスク追加/反映/削除。F-06-8） |
+| `useCalendar` | Google カレンダー連携（擬似 OAuth・べき等同期・タスク追加/反映/削除。F-06-8）。同期対象カレンダーの選択（listCalendars / saveCalendars = バッチ7b。既定 primary のみ・モックは擬似一覧 + localStorage） |
 | `useReportAssist` | 日報 AI アシスト（入力方式設定・ヒアリング・ぽいぽいメモ・ドラフト生成。F-06-7） |
 | `useWorkflow` | 稟議 CRUD・承認経路解決・承認操作・代理設定 |
-| `useAiCompany` | AI 社員・ロール・タスク・活動ログ・日次報告生成 |
+| `useAiCompany` | AI 社員・ロール・タスク・活動ログ・日次報告生成。AI 社員間の依頼・連携（delegate 権限 = マネージャーロール。承認時に分担子タスク化・ロールアップ = バッチ7b） |
 | `useDecision` | 判断テーマ・オントロジー・シナリオ・判断ログ |
 | `useNotifications` | 通知の発行・既読・バッジ数 |
 | `useEscalations` | シグナル検知・起票・管理者アクション・ナレッジ還流 |

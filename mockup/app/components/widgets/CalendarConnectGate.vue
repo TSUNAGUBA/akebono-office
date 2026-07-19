@@ -6,7 +6,8 @@
  * 本実装では Google OAuth 2.0（calendar.readonly / calendar.events スコープ）の
  * 同意画面リダイレクトに置き換わる。画面遷移だけで完結し、鍵の手動設定は不要。
  */
-import { CalendarCheck, CalendarOff, ShieldCheck } from 'lucide-vue-next'
+import { CalendarCheck, CalendarOff, Settings2, ShieldCheck } from 'lucide-vue-next'
+import type { SyncCalendar } from '~/composables/useCalendar'
 
 const { currentUser } = useCurrentUser()
 const cal = useCalendar()
@@ -82,6 +83,54 @@ async function disconnect(): Promise<void> {
   if (r.ok) show('Google カレンダー連携を解除しました', 'warn')
   else show(r.error.message, 'warn')
 }
+
+// ---------- 同期対象カレンダーの選択（オペレーター指示 2026-07-19 #3。従来は primary 固定） ----------
+
+const calendarsOpen = ref(false)
+const calendarsLoading = ref(false)
+const calendarsSaving = ref(false)
+const calendarList = ref<SyncCalendar[]>([])
+const selectedCalIds = ref<string[]>([])
+
+async function openCalendarSettings(): Promise<void> {
+  calendarsOpen.value = true
+  calendarsLoading.value = true
+  const r = await cal.listCalendars()
+  calendarsLoading.value = false
+  if (!r.ok) {
+    show(`${r.error.code}: ${r.error.message}`, 'crit')
+    calendarsOpen.value = false
+    return
+  }
+  calendarList.value = r.calendars ?? []
+  selectedCalIds.value = calendarList.value.filter(x => x.selected).map(x => x.id)
+}
+
+function toggleCalendar(id: string): void {
+  selectedCalIds.value = selectedCalIds.value.includes(id)
+    ? selectedCalIds.value.filter(v => v !== id)
+    : [...selectedCalIds.value, id]
+}
+
+async function saveCalendarSettings(): Promise<void> {
+  if (selectedCalIds.value.length === 0) {
+    show('AKO-GEN-001: 同期するカレンダーを 1 件以上選択してください', 'crit')
+    return
+  }
+  calendarsSaving.value = true
+  const r = await cal.saveCalendars(selectedCalIds.value)
+  calendarsSaving.value = false
+  if (!r.ok) {
+    show(`${r.error.code}: ${r.error.message}`, 'crit')
+    return
+  }
+  calendarsOpen.value = false
+  // 保存後は当日分を再同期して選択を即反映（失敗しても保存自体は成立 = 非ブロッキング）
+  const sync = await cal.syncFromGoogle(currentUser.value.id, todayJst())
+  show(sync.ok
+    ? `同期カレンダーを保存しました（本日の予定 ${sync.synced ?? 0} 件を再同期）`
+    : '同期カレンダーを保存しました（再同期に失敗したため、あとで手動同期してください）', sync.ok ? 'ok' : 'warn')
+}
 </script>
 
 <template>
@@ -124,7 +173,13 @@ async function disconnect(): Promise<void> {
       <CalendarCheck class="h-3.5 w-3.5 text-ok" aria-hidden="true" />
       Google カレンダー連携済み（{{ currentUser.email }}）
     </p>
-    <button type="button" class="btn btn-ghost btn-sm" @click="disconnect">連携解除</button>
+    <span class="flex items-center gap-1">
+      <button type="button" class="btn btn-ghost btn-sm" @click="openCalendarSettings">
+        <Settings2 class="h-3.5 w-3.5" aria-hidden="true" />
+        同期カレンダー
+      </button>
+      <button type="button" class="btn btn-ghost btn-sm" @click="disconnect">連携解除</button>
+    </span>
   </div>
 
   <!-- 擬似 OAuth 同意画面 -->
@@ -157,6 +212,39 @@ async function disconnect(): Promise<void> {
     <template #footer>
       <button type="button" class="btn" @click="consentOpen = false">キャンセル</button>
       <button type="button" class="btn btn-primary" @click="approve">許可して連携</button>
+    </template>
+  </UiModal>
+
+  <!-- 同期対象カレンダーの選択 -->
+  <UiModal :open="calendarsOpen" title="同期するカレンダー" width="440px" @close="calendarsOpen = false">
+    <p v-if="calendarsLoading" class="py-6 text-center text-[13px] text-muted">カレンダー一覧を取得中…</p>
+    <div v-else class="grid gap-1.5">
+      <p class="text-[12px] text-sub">
+        チェックしたカレンダーの予定が同期されます（共有・サブカレンダーも選べます）。
+      </p>
+      <label
+        v-for="c in calendarList"
+        :key="c.id"
+        class="flex cursor-pointer items-center gap-2 rounded-lg border border-line px-3 py-2 text-[13px] hover:bg-surface-soft"
+      >
+        <input
+          type="checkbox"
+          :checked="selectedCalIds.includes(c.id)"
+          :aria-label="c.summary"
+          @change="toggleCalendar(c.id)"
+        >
+        <span class="min-w-0 flex-1 truncate">{{ c.summary }}</span>
+        <UiStatusBadge v-if="c.primary" label="マイカレンダー" tone="brand" />
+      </label>
+      <p v-if="calendarList.length === 0" class="py-4 text-center text-[12px] text-muted">
+        選択できるカレンダーがありません
+      </p>
+    </div>
+    <template #footer>
+      <button type="button" class="btn" @click="calendarsOpen = false">キャンセル</button>
+      <button type="button" class="btn btn-primary" :disabled="calendarsSaving || calendarsLoading" @click="saveCalendarSettings">
+        {{ calendarsSaving ? '保存中…' : '保存して再同期' }}
+      </button>
     </template>
   </UiModal>
 </template>

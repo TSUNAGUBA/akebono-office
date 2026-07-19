@@ -4,7 +4,7 @@
  * proposed / in_progress(approved 含む) / blocked / done の 4 カラム。
  * カードに分解チェックリストと操作ボタン。モバイルは縦積み。
  */
-import { CheckCircle2, Circle } from 'lucide-vue-next'
+import { CheckCircle2, Circle, Share2 } from 'lucide-vue-next'
 import type { AiEmployee, AiTask, AiTaskStatus } from '~/types/domain'
 import { AI_TASK_STATUS_LABELS } from '~/utils/labels'
 
@@ -32,6 +32,15 @@ const columns = computed(() =>
 
 function empName(id: string): string {
   return props.employees.find(e => e.id === id)?.name ?? id
+}
+
+/** 分担先（子タスク）の件数・完了数（連携の進捗をマネージャーカードで可視化） */
+function childCount(taskId: string): number {
+  return props.tasks.filter(t => t.parentTaskId === taskId && t.status !== 'cancelled').length
+}
+
+function childDoneCount(taskId: string): number {
+  return props.tasks.filter(t => t.parentTaskId === taskId && t.status === 'done').length
 }
 
 function doneCount(t: AiTask): number {
@@ -68,6 +77,16 @@ function doneCount(t: AiTask): number {
             <span>{{ empName(t.aiEmployeeId) }}</span>
             <span class="num ml-auto">{{ doneCount(t) }}/{{ t.decomposition.length }}</span>
           </div>
+
+          <!-- AI 社員間の連携（オペレーター指示 2026-07-19 #3）: 分担元 / 分担先の可視化 -->
+          <p v-if="t.requesterAiEmployeeId" class="mt-1 flex items-center gap-1 text-[11px] text-brand">
+            <Share2 class="h-3 w-3" aria-hidden="true" />
+            {{ empName(t.requesterAiEmployeeId) }} からの分担依頼
+          </p>
+          <p v-else-if="childCount(t.id) > 0" class="mt-1 flex items-center gap-1 text-[11px] text-brand">
+            <Share2 class="h-3 w-3" aria-hidden="true" />
+            {{ childCount(t.id) }} 名の AI 社員へ分担中（完了 {{ childDoneCount(t.id) }}）
+          </p>
 
           <!-- 分解チェックリスト -->
           <ul class="mt-2 grid gap-1 border-t border-line pt-2">

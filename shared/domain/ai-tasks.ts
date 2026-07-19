@@ -4,6 +4,7 @@
  * - API モード: Vertex AI（LLM 構造化出力）失敗時のフォールバック（原則4。report-draft と同型）
  * 乱数は使わず hashStr で決定的に生成する（再現性 = デモ・テストの安定性）
  */
+import { bigramCoverage } from './text-match'
 import type { AiActivityKind, AiModelTier, AiTask } from './types'
 
 /** 文字列 → 32bit ハッシュ（FNV-1a。mockup utils/rng.ts の hashStr と同一実装 = 生成値の完全一致） */
@@ -57,4 +58,42 @@ export function mockActivityCost(
   const tokens = lo + (hashStrShared(`tok:${aiEmployeeId}:${kind}:${seq}`) % (hi - lo + 1))
   const rate: Record<AiModelTier, number> = { lite: 0.6, standard: 1.1, pro: 2.8 }
   return { tokens, costUsd: Number((tokens * rate[tier] / 1_000_000).toFixed(4)) }
+}
+
+// ---------- AI 社員間の依頼・連携（マネージャーロール。オペレーター指示 2026-07-19 #3） ----------
+
+/** AiRole.permissions の認識キー: 他の AI 社員への依頼・連携を許可（= マネージャーロールの要件） */
+export const DELEGATE_PERMISSION = 'delegate'
+
+export interface DelegationCandidate {
+  id: string
+  name: string
+  roleName: string
+  mission: string
+}
+
+/**
+ * 連携計画（決定的ヒューリスティック。API モードの LLM 失敗時フォールバック / モックモードの唯一のロジック）。
+ * 各分解ステップを「ロール名 + ミッションとの字句類似（バイグラム被覆率）が最も高い候補」へ割り当てる。
+ * 同点は候補の並び順（呼び出し側で id 順に渡す）で決定的。候補ゼロは空配列 = 連携なし
+ */
+export function planDelegation(
+  steps: { title: string }[],
+  candidates: DelegationCandidate[],
+): { title: string; aiEmployeeId: string }[] {
+  if (candidates.length === 0) return []
+  return steps.map((s, i) => {
+    let best = candidates[0]!
+    let bestScore = -1
+    for (const cand of candidates) {
+      const score = bigramCoverage(s.title, `${cand.roleName} ${cand.mission}`)
+      if (score > bestScore) {
+        best = cand
+        bestScore = score
+      }
+    }
+    // 全候補スコア 0（語彙が全く重ならない）はラウンドロビンで負荷分散（決定的）
+    const target = bestScore > 0 ? best : candidates[i % candidates.length]!
+    return { title: s.title, aiEmployeeId: target.id }
+  })
 }

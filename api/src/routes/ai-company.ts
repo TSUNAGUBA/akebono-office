@@ -12,7 +12,8 @@
 import { Hono } from 'hono'
 import type pg from 'pg'
 import {
-  decomposeTask, judgeTaskConfidence, mockActivityCost,
+  decomposeTask, DELEGATE_PERMISSION, judgeTaskConfidence, mockActivityCost, planDelegation,
+  type DelegationCandidate,
 } from '../../../shared/domain/ai-tasks'
 import { addDays, nowJstIso, todayJst } from '../../../shared/domain/jst'
 import type { AiActivityKind, AiModelTier, AiTask, ReportEntry } from '../../../shared/domain/types'
@@ -25,7 +26,8 @@ import { generateJson } from '../lib/llm'
 import { notify } from '../lib/notify'
 
 const TASK_COLS = `id, ai_employee_id AS "aiEmployeeId", requester_id AS "requesterId",
-  title, description, decomposition, status, due_date::text AS "dueDate", confidence, created_at AS "createdAt"`
+  title, description, decomposition, status, due_date::text AS "dueDate", confidence, created_at AS "createdAt",
+  requester_ai_employee_id AS "requesterAiEmployeeId", parent_task_id AS "parentTaskId"`
 const LOG_COLS = `id, ai_employee_id AS "aiEmployeeId", task_id AS "taskId", kind, summary, tokens,
   cost_usd::float AS "costUsd", at`
 
@@ -87,6 +89,130 @@ async function llmDecompose(
   if (!res || !Array.isArray(res.steps) || res.steps.length === 0) return null
   const confidence = res.confidence === 'high' || res.confidence === 'low' ? res.confidence : 'mid'
   return { steps: res.steps.slice(0, 6).map(s => capCp(String(s), 40)), confidence }
+}
+
+/**
+ * 連携計画（LLM 構造化出力。失敗・不正 id は null = shared/domain/ai-tasks の planDelegation へフォールバック）。
+ * 各分解ステップを、候補 AI 社員の役割・ミッションに照らして最適な担当へ割り当てる
+ */
+async function llmPlanDelegation(
+  env: Env,
+  title: string,
+  steps: { title: string }[],
+  candidates: DelegationCandidate[],
+): Promise<{ title: string; aiEmployeeId: string }[] | null> {
+  const validIds = new Set(candidates.map(cand => cand.id))
+  const res = await generateJson<{ assignments?: { aiEmployeeId?: string }[] }>(env, {
+    system: 'あなたは AI 社員チームのマネージャーです。タスクの各ステップを、最も適した AI 社員へ割り当てます。',
+    prompt: `タスク「${title}」の各ステップを担当 AI 社員へ割り当ててください。\n`
+      + `ステップ（この順で assignments を返す）:\n${steps.map((s, i) => `${i + 1}. ${s.title}`).join('\n')}\n`
+      + `候補 AI 社員:\n${candidates.map(cand => `- id=${cand.id}: ${cand.name}（${cand.roleName} / ${cand.mission}）`).join('\n')}`,
+    schema: {
+      type: 'object',
+      properties: {
+        assignments: {
+          type: 'array',
+          items: { type: 'object', properties: { aiEmployeeId: { type: 'string' } }, required: ['aiEmployeeId'] },
+        },
+      },
+      required: ['assignments'],
+    },
+    maxTokens: 512,
+  })
+  const assignments = res?.assignments
+  if (!Array.isArray(assignments) || assignments.length !== steps.length) return null
+  if (!assignments.every(a => a.aiEmployeeId && validIds.has(a.aiEmployeeId))) return null
+  return steps.map((s, i) => ({ title: s.title, aiEmployeeId: assignments[i]!.aiEmployeeId! }))
+}
+
+/**
+ * 承認時の連携（AI 社員間の依頼・連携 = オペレーター指示 2026-07-19 #3）。
+ * - 対象: delegate 権限（AiRole.permissions）を持つロールの AI 社員（= マネージャーロール）
+ * - 子タスクからの再連携はしない（連鎖の暴走防止）。候補ゼロ（自分以外に有効な AI 社員なし）は連携なし
+ * - 割当は LLM 構造化出力 → 失敗時 shared/domain/ai-tasks の planDelegation（決定的）へフォールバック
+ * - 子タスクは即 in_progress（人間の承認は親の 1 回のみ = 依頼を一挙に引き受ける）
+ */
+async function delegateOnApprove(
+  client: pg.PoolClient,
+  env: Env,
+  task: AiTask & { decomposition: { title: string; done: boolean }[] },
+): Promise<number> {
+  if (task.parentTaskId) return 0
+  const { rows: roleRows } = await client.query<{ permissions: string[]; name: string }>(
+    `SELECT r.permissions, e.name FROM ai_employees e JOIN ai_roles r ON r.id = e.role_id WHERE e.id = $1`,
+    [task.aiEmployeeId])
+  if (!(roleRows[0]?.permissions ?? []).includes(DELEGATE_PERMISSION)) return 0
+  const managerName = roleRows[0]?.name ?? 'マネージャー'
+  const { rows: candidates } = await client.query<DelegationCandidate>(
+    `SELECT e.id, e.name, r.name AS "roleName", r.mission
+     FROM ai_employees e JOIN ai_roles r ON r.id = e.role_id
+     WHERE e.active = true AND e.id <> $1 ORDER BY e.id`, [task.aiEmployeeId])
+  if (candidates.length === 0 || task.decomposition.length === 0) return 0
+
+  const plan = (await llmPlanDelegation(env, task.title, task.decomposition, candidates))
+    ?? planDelegation(task.decomposition, candidates)
+  // 担当ごとにステップをまとめて 1 子タスク（AI 社員 1 名 = 分担 1 件でボードが読みやすい）
+  const byEmp = new Map<string, string[]>()
+  for (const p of plan) byEmp.set(p.aiEmployeeId, [...(byEmp.get(p.aiEmployeeId) ?? []), p.title])
+  let delegated = 0
+  for (const [empId, stepTitles] of byEmp) {
+    const cand = candidates.find(x => x.id === empId)
+    if (!cand) continue
+    const childId = newId('at')
+    const childTitle = capCp(`${task.title}（分担: ${cand.roleName}）`, 100)
+    const description = `マネージャー ${managerName} からの連携依頼（元タスク: ${task.title}）`
+    await client.query(
+      `INSERT INTO ai_tasks (id, ai_employee_id, requester_id, title, description, decomposition, status,
+         confidence, created_at, requester_ai_employee_id, parent_task_id)
+       VALUES ($1, $2, $3, $4, $5, $6, 'in_progress', $7, $8, $9, $10)`,
+      [childId, empId, task.requesterId, childTitle, description,
+        JSON.stringify(stepTitles.map(t => ({ title: t, done: false }))),
+        judgeTaskConfidence(empId, childTitle, description), nowJstIso(), task.aiEmployeeId, task.id])
+    await addLog(client, task.aiEmployeeId, task.id, 'chat',
+      `${cand.name} へ「${task.title}」の分担を依頼（${stepTitles.length} ステップ）`)
+    await addLog(client, empId, childId, 'plan', `${managerName} から「${task.title}」の分担を受領し実行を開始`)
+    await syncEmployeeStatus(client, empId)
+    delegated++
+  }
+  return delegated
+}
+
+/**
+ * 分担子タスク完了時の親（マネージャー）へのロールアップ。
+ * 子のステップと同名の親ステップを done 化し、全子タスク完了で親も done + 統合報告。
+ * 戻り値 = 親が完了した場合の通知材料（null = 継続中）
+ */
+async function rollUpToParent(
+  client: pg.PoolClient,
+  child: AiTask & { decomposition: { title: string; done: boolean }[] },
+): Promise<{ requesterId: string; title: string; managerId: string } | null> {
+  const { rows: pRows } = await client.query<AiTask & { decomposition: { title: string; done: boolean }[] }>(
+    `SELECT ${TASK_COLS} FROM ai_tasks WHERE id = $1 FOR UPDATE`, [child.parentTaskId])
+  const parent = pRows[0]
+  if (!parent || (parent.status !== 'in_progress' && parent.status !== 'blocked')) return null
+  const { rows: empRows } = await client.query<{ name: string }>(
+    `SELECT name FROM ai_employees WHERE id = $1`, [child.aiEmployeeId])
+  await addLog(client, parent.aiEmployeeId, parent.id, 'report',
+    `${empRows[0]?.name ?? 'AI社員'} から「${child.title}」の完了報告を受領`)
+  const childTitles = new Set(child.decomposition.map(s => s.title))
+  const { rows: sib } = await client.query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM ai_tasks
+     WHERE parent_task_id = $1 AND id <> $2 AND status <> 'done'`, [parent.id, child.id])
+  const allChildrenDone = Number(sib[0]?.n ?? '0') === 0
+  // 全分担完了なら親ステップも全完了とみなす（分担漏れステップの宙吊り防止）
+  const decomposition = parent.decomposition.map(s =>
+    allChildrenDone || childTitles.has(s.title) ? { ...s, done: true } : s)
+  await client.query(
+    `UPDATE ai_tasks SET decomposition = $2, status = $3, updated_at = now() WHERE id = $1`,
+    [parent.id, JSON.stringify(decomposition), allChildrenDone ? 'done' : parent.status])
+  if (allChildrenDone) {
+    await addLog(client, parent.aiEmployeeId, parent.id, 'report',
+      `「${parent.title}」の全分担が完了、成果を統合して報告`)
+  }
+  await syncEmployeeStatus(client, parent.aiEmployeeId)
+  return allChildrenDone
+    ? { requesterId: parent.requesterId, title: parent.title, managerId: parent.aiEmployeeId }
+    : null
 }
 
 export function aiCompanyRoutes(pool: pg.Pool, env: Env): Hono {
@@ -157,7 +283,12 @@ export function aiCompanyRoutes(pool: pg.Pool, env: Env): Hono {
     const taskId = c.req.param('id')
     const action = c.req.param('action')
     const client = await pool.connect()
-    let result: { finished?: boolean; requesterId?: string; title?: string; aiEmployeeId?: string } = {}
+    let result: {
+      finished?: boolean; requesterId?: string; title?: string; aiEmployeeId?: string
+      notifyHuman?: boolean
+      parentFinished?: { requesterId: string; title: string; managerId: string }
+      childBlocked?: { requesterId: string; title: string }
+    } = {}
     try {
       await client.query('BEGIN')
       const { rows } = await client.query<AiTask & { decomposition: { title: string; done: boolean }[] }>(
@@ -169,6 +300,9 @@ export function aiCompanyRoutes(pool: pg.Pool, env: Env): Hono {
         if (task.status !== 'proposed') throw err('AKO-AIC-004', '提案中のタスクのみ承認できます', 409)
         await client.query(`UPDATE ai_tasks SET status = 'in_progress', updated_at = now() WHERE id = $1`, [taskId])
         await addLog(client, task.aiEmployeeId, taskId, 'plan', `「${task.title}」の分解が承認され実行を開始`)
+        // マネージャーロール（delegate 権限）なら、承認と同時に他 AI 社員へ分担を連携
+        // （人間の承認は親タスク 1 回のみ = 依頼を一挙に引き受ける。オペレーター指示 2026-07-19 #3）
+        await delegateOnApprove(client, env, task)
       } else if (action === 'progress') {
         if (task.status !== 'in_progress') throw err('AKO-AIC-005', '実行中のタスクのみ進められます', 409)
         const idx = task.decomposition.findIndex(s => !s.done)
@@ -183,11 +317,27 @@ export function aiCompanyRoutes(pool: pg.Pool, env: Env): Hono {
         if (finished) {
           await addLog(client, task.aiEmployeeId, taskId, 'report', `「${task.title}」の全ステップが完了、成果を報告`)
         }
-        result = { finished, requesterId: task.requesterId, title: task.title }
+        // 子タスク（連携分担）の完了は依頼元マネージャーへ報告・ロールアップ（人間への通知は親の完了時のみ）
+        result = { finished, requesterId: task.requesterId, title: task.title, notifyHuman: finished && !task.parentTaskId }
+        if (finished && task.parentTaskId) {
+          const parentDone = await rollUpToParent(client, task)
+          if (parentDone) result.parentFinished = parentDone
+        }
       } else if (action === 'block') {
         if (task.status === 'in_progress') {
           await client.query(`UPDATE ai_tasks SET status = 'blocked', updated_at = now() WHERE id = $1`, [taskId])
           await addLog(client, task.aiEmployeeId, taskId, 'escalate', `「${task.title}」がブロックされ対応待ち`)
+          // 分担先のブロックは依頼元マネージャーの活動ログへエスカレーション（人間へは補助通知）
+          if (task.parentTaskId) {
+            const { rows: p } = await client.query<{ aiEmployeeId: string; requesterId: string }>(
+              `SELECT ai_employee_id AS "aiEmployeeId", requester_id AS "requesterId"
+               FROM ai_tasks WHERE id = $1`, [task.parentTaskId])
+            if (p[0]) {
+              await addLog(client, p[0].aiEmployeeId, task.parentTaskId, 'escalate',
+                `分担先で「${task.title}」がブロック、対応を検討`)
+              result.childBlocked = { requesterId: p[0].requesterId, title: task.title }
+            }
+          }
         } else if (task.status === 'blocked') {
           await client.query(`UPDATE ai_tasks SET status = 'in_progress', updated_at = now() WHERE id = $1`, [taskId])
           await addLog(client, task.aiEmployeeId, taskId, 'plan', `「${task.title}」のブロックが解除され実行を再開`)
@@ -199,6 +349,15 @@ export function aiCompanyRoutes(pool: pg.Pool, env: Env): Hono {
           throw err('AKO-AIC-008', '完了・中止済みのタスクは中止できません', 409)
         }
         await client.query(`UPDATE ai_tasks SET status = 'cancelled', updated_at = now() WHERE id = $1`, [taskId])
+        // 親の中止は未完了の分担子タスクへ連鎖（分担だけが走り続ける宙吊りを作らない）
+        const { rows: kids } = await client.query<{ id: string; aiEmployeeId: string; title: string }>(
+          `SELECT id, ai_employee_id AS "aiEmployeeId", title FROM ai_tasks
+           WHERE parent_task_id = $1 AND status NOT IN ('done', 'cancelled') ORDER BY id FOR UPDATE`, [taskId])
+        for (const k of kids) {
+          await client.query(`UPDATE ai_tasks SET status = 'cancelled', updated_at = now() WHERE id = $1`, [k.id])
+          await addLog(client, k.aiEmployeeId, k.id, 'chat', `連携元タスクの中止に伴い「${k.title}」を中止`)
+          await syncEmployeeStatus(client, k.aiEmployeeId)
+        }
       }
       await syncEmployeeStatus(client, task.aiEmployeeId)
       result.aiEmployeeId = task.aiEmployeeId
@@ -209,12 +368,24 @@ export function aiCompanyRoutes(pool: pg.Pool, env: Env): Hono {
     } finally {
       client.release()
     }
-    // 補助処理: 完了通知（トランザクション確定後・失敗しても遷移は成立 = 原則4）
-    if (result.finished && result.requesterId) {
+    // 補助処理: 完了・連携通知（トランザクション確定後・失敗しても遷移は成立 = 原則4）
+    if (result.notifyHuman && result.requesterId) {
       const { rows } = await pool.query<{ name: string }>(
         `SELECT name FROM ai_employees WHERE id = $1`, [result.aiEmployeeId])
       await notify(pool, result.requesterId, 'ai_report', `AI 完了報告: ${result.title}`,
         `${rows[0]?.name ?? 'AI社員'} がタスクを完了しました`, '/ai-company')
+    }
+    if (result.parentFinished) {
+      const { rows } = await pool.query<{ name: string }>(
+        `SELECT name FROM ai_employees WHERE id = $1`, [result.parentFinished.managerId])
+      await notify(pool, result.parentFinished.requesterId, 'ai_report',
+        `AI 連携完了報告: ${result.parentFinished.title}`,
+        `${rows[0]?.name ?? 'マネージャー'} が分担タスクの成果を統合して完了しました`, '/ai-company')
+    }
+    if (result.childBlocked) {
+      await notify(pool, result.childBlocked.requesterId, 'ai_report',
+        `AI 連携ブロック: ${result.childBlocked.title}`,
+        '分担先のタスクがブロックされました。/ai-company で状況を確認してください', '/ai-company')
     }
     const { rows: after } = await pool.query(`SELECT ${TASK_COLS} FROM ai_tasks WHERE id = $1`, [taskId])
     return c.json({ data: after[0] })

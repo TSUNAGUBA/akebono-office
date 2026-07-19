@@ -593,6 +593,10 @@ export interface AiTask {
   dueDate: string | null
   confidence: 'high' | 'mid' | 'low'
   createdAt: string
+  /** 依頼元 AI 社員（AI 社員間の連携で作られた子タスクのみ。人間からの直接依頼は null/未設定） */
+  requesterAiEmployeeId?: string | null
+  /** 連携元（親）タスク（マネージャーのタスクから分担された子タスクのみ） */
+  parentTaskId?: string | null
 }
 
 export type AiActivityKind = 'plan' | 'execute' | 'report' | 'escalate' | 'chat'
