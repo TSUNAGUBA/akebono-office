@@ -161,7 +161,8 @@ export async function buildContext(
 
   // 有給・当月勤怠（既定 = 本人分のみ（C3）。AI 参照範囲 'all' の対象者にはチーム全体のサマリーも供給）
   if (can('attendance') && /有給|休暇|残業|勤怠|労働|打刻/.test(topic)) {
-    if (aiScope('attendance') === 'all') {
+    // メンバー名の表示 deny（F-16-3）時はチームブロック自体を供給しない（氏名がサマリーの主キーのため）
+    if (aiScope('attendance') === 'all' && canField('members', 'name')) {
       await block(async () => {
         const { rows } = await pool.query<PunchRecord & { memberName: string }>(
           `SELECT p.id, p.member_id AS "memberId", p.date::text AS date, p.kind, p.at, p.source,
@@ -322,7 +323,8 @@ export async function buildContext(
 
   // タスク計画・当日予定（既定 = 本人分のみ。AI 参照範囲 'all' の対象者にはチーム全体の本日計画も供給）
   if (can('ai-assistant') && /タスク|計画|予定|会議|ミーティング|カレンダー/.test(topic)) {
-    if (aiScope('ai-assistant') === 'all') {
+    // メンバー名の表示 deny（F-16-3）時はチームブロック自体を供給しない（C-1 対応と同一規約）
+    if (aiScope('ai-assistant') === 'all' && canField('members', 'name')) {
       await block(async () => {
         const { rows } = await pool.query<{ name: string; title: string; status: string }>(
           `SELECT m.name, t.title, t.status FROM task_plans t

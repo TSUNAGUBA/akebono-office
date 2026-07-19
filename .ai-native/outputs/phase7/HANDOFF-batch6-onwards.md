@@ -20,7 +20,7 @@
 - **マイルストーン達成: 全ドメインの API 接続が完了し、mock-status は空 = API モードのモックバッジ全廃**。
   唯一の未移行はドキュメント管理（表示のみのデモデータ・バッジ対象外の設計判断）
 - 旧セッションの scratchpad（E2E スタック 16 スイート）は**コンテナ再作成で消失**。
-  バッチ6b で E2E ハーネスを scratchpad `e2e/` に再構築した（§4 検証スタック参照）。
+  バッチ6b で E2E ハーネスを再構築し、現在は**リポジトリ直下 `e2e/` にコミット済み**（検証スタック節参照）。
   現在のスイート: batch6b（12）+ batch6c（16）+ batch6d（11）+ モック回帰（10）
 
 ### 完了済み（マージ済み PR）
@@ -194,14 +194,16 @@ ETL の出力先を app_office 内の派生テーブルにするか、実際に 
   **マージ後に届いた指摘は次バッチの PR に取り込む**
 - 「直した」で終わらず「直した結果も問題ない（新たな問題が出ていない）」まで確認
 
-### 検証スタック（scratchpad。バッチ6b で再構築）
+### 検証スタック（リポジトリ `e2e/`。PR #56 R1 M-7 対応でコミット済み）
 - 旧スタック（run-batch2a-stack.sh + 16 スイート）は旧コンテナの scratchpad ごと消失。
-  バッチ6b でセッション scratchpad の `e2e/` 配下に再構築した:
+  バッチ6b で再構築し、**7g R1 レビュー（M-7: 「E2E green」の主張がリポジトリ内で検証不能）を受けて
+  リポジトリ直下 `e2e/` へコミットした**（README.md に前提・実行手順。chromium は
+  CHROMIUM_PATH → /opt/pw-browsers/chromium → playwright 既定の順で解決するよう可搬化）:
   - `run-batch6b-stack.sh`: 使い捨て PostgreSQL + API（dev 認証・:8788・CORS_ORIGINS 必須）+
     API モード静的配信（:4174）+ モック静的配信（:4173）を起動し、E2E スイートとモック回帰を実行
   - `batch6b-e2e.cjs`（API モード実クリック 12 チェック）/ `mock-regression-e2e.cjs`（ナビ + 売上 + 主要ページ 9 チェック）
-  - `lib.cjs`（playwright ヘルパー。**chromium は executablePath '/opt/pw-browsers/chromium' 固定**。
-    `npm install playwright` を e2e/ 内で実行しておく）/ `serve.cjs`（SPA フォールバック付き静的配信）
+  - `lib.cjs`（playwright ヘルパー。`npm ci` を e2e/ 内で実行しておく）/
+    `serve.cjs`（SPA フォールバック付き静的配信）
   - 新バッチの E2E は `batchXX-e2e.cjs` を追加し、スクリプトの SUITES へ 1 行追記
   - ハマりどころ: ①フロントは**ハッシュルーティング**（URL は `/#/sales` 形式）②healthz は DB エラーでも
     200 のため「最終マイグレーションの schema_migrations 登録」を待ってからシードする ③tsx プロセスの

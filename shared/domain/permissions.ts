@@ -142,7 +142,8 @@ export const AI_SCOPE_FIELD = 'ai-scope'
 export const AI_SCOPE_FEATURES: { key: string; label: string; defaultScope: 'all' | 'own' }[] = [
   { key: 'poipoi', label: 'ぽいぽいポスト', defaultScope: 'all' },
   { key: 'attendance', label: '勤怠（労働時間・有給）', defaultScope: 'own' },
-  { key: 'ai-assistant', label: 'タスク計画・カレンダー', defaultScope: 'own' },
+  // 'all' で供給されるのはチームのタスク計画のみ（カレンダー予定は本人分に限る）。ラベルは実挙動に合わせる
+  { key: 'ai-assistant', label: 'タスク計画', defaultScope: 'own' },
 ]
 
 /**

@@ -65,6 +65,10 @@ export function useWeeklyInsight() {
     const wfs = (tbl('workflowRequests').value as WorkflowRequest[]).filter(w => inWeek(w.createdAt.slice(0, 10)))
     const escs = (tbl('escalations').value as Escalation[]).filter(e => inWeek(e.raisedAt.slice(0, 10)))
     const aiTasks = tbl('aiTasks').value as AiTask[]
+    // 完了の週内判定: API は updated_at（JST 日付）で判定するが、モックの AiTask に updatedAt は
+    // 無いため「最終成果物の記録日時（無ければ作成日時）」で近似する（差異は api-design.md に記載）
+    const doneDateOf = (t: AiTask): string =>
+      (t.outputs && t.outputs.length > 0 ? t.outputs[t.outputs.length - 1]!.at : t.createdAt).slice(0, 10)
     const notes = (tbl('notes').value as Note[]).filter(n => n.active !== false && inWeek(n.createdAt.slice(0, 10)))
     const sales = can('sales')
       ? (tbl('salesMonthly').value as SalesMonthly[])
@@ -96,7 +100,7 @@ export function useWeeklyInsight() {
       workflowApproved: wfs.filter(w => w.status === 'approved').length,
       escalationRaised: escs.length,
       escalationResolved: escs.filter(e => e.status === 'resolved').length,
-      aiTasksDone: aiTasks.filter(t => t.status === 'done').length,
+      aiTasksDone: aiTasks.filter(t => t.status === 'done' && inWeek(doneDateOf(t))).length,
       aiTasksActive: aiTasks.filter(t => t.status === 'proposed' || t.status === 'in_progress' || t.status === 'blocked').length,
       minutesCount: notes.filter(n => n.kind === 'minutes').length,
       poipoiCount: notes.filter(n => n.kind === 'poipoi').length,

@@ -123,7 +123,8 @@ ${JSON.stringify(metrics, null, 1)}`,
       opportunities: arr(res.swot.opportunities),
       threats: arr(res.swot.threats),
     },
-    risks: (Array.isArray(res.risks) ? res.risks.slice(0, 5) : []).map(r => ({
+    risks: (Array.isArray(res.risks) ? res.risks : [])
+      .filter((r): r is NonNullable<typeof r> => !!r && typeof r === 'object').slice(0, 5).map(r => ({
       title: capCp(String(r.title ?? ''), 60),
       severity: r.severity === 'high' || r.severity === 'low' ? r.severity : 'mid',
       mitigation: capCp(String(r.mitigation ?? ''), 100),
@@ -400,6 +401,12 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
     const user = c.get('user')
     const weekStart = String(c.req.query('weekStart') ?? '')
     if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) throw err('AKO-GEN-001', 'weekStart（YYYY-MM-DD）を指定してください', 400)
+    // 暦上不正な日付（2026-02-31 等）は addDays が NaN 文字列を返し pg 側で 500 になるため、ここで 400 に落とす。
+    // 週初め = 月曜（weekStartOf と同一規約）以外も集計が週とずれるため弾く
+    const wsDate = new Date(`${weekStart}T00:00:00Z`)
+    if (Number.isNaN(wsDate.getTime()) || wsDate.toISOString().slice(0, 10) !== weekStart || wsDate.getUTCDay() !== 1) {
+      throw err('AKO-GEN-001', 'weekStart には実在する週初め（月曜）の日付を指定してください', 400)
+    }
     const weekEnd = addDays(weekStart, 6)
     const rules = await activePermissionRules(pool)
     const subject = subjectOf(user)
@@ -436,8 +443,10 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
         `SELECT kind, count(*)::text AS n FROM notes
          WHERE active = true AND (created_at AT TIME ZONE 'Asia/Tokyo')::date BETWEEN $1::date AND $2::date
          GROUP BY kind`, [weekStart, weekEnd]),
-      pool.query<{ total: string | null }>(
-        `SELECT sum(amount)::text AS total FROM sales_monthly WHERE month = $1`, [weekStart.slice(0, 7)]),
+      canSales
+        ? pool.query<{ total: string | null }>(
+            `SELECT sum(amount)::text AS total FROM sales_monthly WHERE month = $1`, [weekStart.slice(0, 7)])
+        : Promise.resolve<{ rows: { total: string | null }[] }>({ rows: [] }),
     ])
 
     const nameOf = new Map(membersQ.rows.map(m => [m.id, m.name]))

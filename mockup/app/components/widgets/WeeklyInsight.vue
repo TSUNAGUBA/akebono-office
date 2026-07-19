@@ -23,15 +23,19 @@ const loading = ref(false)
 
 const weekLabel = computed(() => `${fmtDate(weekStart.value)}〜${fmtDate(addDays(weekStart.value, 6))}`)
 
+// 世代トークン: ロード中の週移動で古いレスポンスが新しい週のラベルに表示されるのを防ぐ
+let runSeq = 0
 async function run(): Promise<void> {
-  if (loading.value) return
+  const seq = ++runSeq
   loading.value = true
   try {
-    result.value = await generate(weekStart.value)
+    const r = await generate(weekStart.value)
+    if (seq !== runSeq) return
+    result.value = r
   } catch (e) {
-    show(apiErrorOf(e).message, 'crit')
+    if (seq === runSeq) show(apiErrorOf(e).message, 'crit')
   } finally {
-    loading.value = false
+    if (seq === runSeq) loading.value = false
   }
 }
 

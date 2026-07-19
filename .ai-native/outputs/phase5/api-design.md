@@ -119,8 +119,11 @@ generateDraft(memberId, date): ReportDraft           // 保存しない（フォ
 // useWeeklyInsight（バッチ7g）
 generate(weekStart): Promise<{ metrics: WeeklyMetrics; insight: WeeklyInsight; llm: boolean }>
    // API = GET /v1/reports/weekly-insight（集計 = サーバー・洞察 = Vertex AI → 失敗時 heuristicWeeklyInsight）
+   // weekStart は実在する週初め（月曜）のみ。暦不正・月曜以外は AKO-GEN-001 400（R1 M-1）
    // モック = 同一の WeeklyMetrics をモックコレクションから集計し heuristic のみ（shared/domain/weekly-insight）
    // 参照は閲覧権限準拠（売上は can('sales') のみ供給・reports 機能 deny は 403）
+   // 既知の差異（R1 M-4）: aiTasksDone の週内判定は API = updated_at（JST）・モック = 最終成果物
+   //（無ければ作成）日時での近似（モック AiTask に updatedAt が無いため）
 // 提出済み保護: useReports.reportOn の結果（status='submitted'）で呼び出し側が生成 UI を無効化する
 
 ```
