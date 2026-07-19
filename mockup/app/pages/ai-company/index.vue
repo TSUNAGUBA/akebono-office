@@ -203,7 +203,8 @@ async function onGenerateReports(): Promise<void> {
         />
 
         <UiSectionCard v-else-if="tab === 'logs'" title="活動ログ" description="AI 社員の活動を時系列で記録（tokens / コストはモック値）">
-          <OfficeActivityTimeline :logs="logs" :employees="employees" :tasks="tasks" />
+          <!-- 名前解決は無効化済み AI 社員も含む（過去ログの担当名を生 id にしない = タスクボードと同様） -->
+          <OfficeActivityTimeline :logs="logs" :employees="employeesAll" :tasks="tasks" />
         </UiSectionCard>
 
         <div v-else-if="tab === 'daily'" class="grid gap-3">
