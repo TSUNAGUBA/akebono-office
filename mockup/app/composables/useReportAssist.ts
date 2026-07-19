@@ -12,7 +12,7 @@
 import type { Ref } from 'vue'
 import type { DraftContext, ReportDraft } from '../../../shared/domain/report-draft'
 import { heuristicReportDraft, WRAPUP_KEYS } from '../../../shared/domain/report-draft'
-import type { CalendarEvent, HearingLog, ReportInputMode, Result } from '~/types/domain'
+import type { CalendarEvent, HearingLog, Note, ReportInputMode, Result } from '~/types/domain'
 
 export type { ReportDraft }
 
@@ -190,9 +190,16 @@ export function useReportAssist() {
         // API 断でもフォームを空で返さない（材料 = ローカルキャッシュのヒューリスティック）
       }
     }
+    // ぽいぽいメモ（独立メニュー = notes コレクション。バッチ7c）も材料へ合流（memo 形式）
+    const poipoiNotes = (tbl('notes').value as Note[])
+      .filter(n => n.kind === 'poipoi' && n.memberId === memberId && n.createdAt.slice(0, 10) === date)
+      .map(n => ({
+        id: n.id, memberId, date, kind: 'memo' as const,
+        calendarEventId: null, question: '', answer: n.body, at: n.createdAt,
+      }))
     const ctx: DraftContext = {
       events: eventsOf(memberId, date),
-      logs: logsOf(memberId, date),
+      logs: [...logsOf(memberId, date), ...poipoiNotes],
       dayPlans: taskPlans.value
         .filter(tp => tp.memberId === memberId && tp.date === date)
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt)),

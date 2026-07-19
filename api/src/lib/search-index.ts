@@ -32,11 +32,13 @@ export interface SearchSegment {
 }
 
 export interface SearchDocInput {
-  sourceKind: 'company' | 'contact' | 'industry' | 'knowledge' | 'project'
+  sourceKind: 'company' | 'contact' | 'industry' | 'knowledge' | 'project' | 'note'
   sourceId: string
   title: string
   aliases: string[]
   segments: SearchSegment[]
+  /** 参照可能な所有者（null/未設定 = 全員。poipoi メモは本人のみ = C3） */
+  ownerMemberId?: string | null
 }
 
 export interface SearchDocRow extends SearchDocInput {
@@ -47,6 +49,7 @@ export interface SearchDocRow extends SearchDocInput {
 
 /** 検索ドキュメントの見出しに対する表示可否（kind → タイトルのフィールド） */
 export const TITLE_CHECKS: Record<SearchDocInput['sourceKind'], SegmentCheck> = {
+  note: { entity: 'notes', field: 'title' },
   company: { entity: 'companies', field: 'name' },
   contact: { entity: 'contacts', field: 'name' },
   industry: { entity: 'industries', field: 'name' },
@@ -237,6 +240,39 @@ export async function buildSearchDocs(pool: pg.Pool): Promise<SearchDocInput[]> 
     docs.push({ sourceKind: 'knowledge', sourceId: k.id, title: k.title, aliases: [], segments })
   }
 
+  // ---- ノート（ぽいぽいメモ = 本人スコープ / 議事録 = 全員。バッチ7c） ----
+  const { rows: noteRows } = await pool.query<{
+    id: string; memberId: string; kind: string; title: string; body: string
+    projectId: string | null; companyId: string | null; workCategoryId: string | null
+  }>(
+    `SELECT n.id, n.member_id AS "memberId", n.kind, n.title, n.body,
+            n.project_id AS "projectId", n.company_id AS "companyId", n.work_category_id AS "workCategoryId"
+     FROM notes n ORDER BY n.id LIMIT 5000`)
+  const { rows: wcRows } = await pool.query<{ id: string; name: string }>(
+    `SELECT id, name FROM work_categories WHERE active = true LIMIT 200`)
+  const wcName = new Map(wcRows.map(x => [x.id, x.name]))
+  const projName = new Map(projectsQ.rows.map(x => [x.id, x.name]))
+  for (const n of noteRows) {
+    const segments: SearchSegment[] = []
+    segments.push(seg(n.kind === 'poipoi' ? '種別: ぽいぽいメモ' : '種別: 議事録', c('notes', 'kind')))
+    const links: string[] = []
+    const linkChecks: SegmentCheck[] = []
+    const pj = n.projectId ? projName.get(n.projectId) : undefined
+    if (pj) { links.push(`プロジェクト: ${pj}`); linkChecks.push(c('projects', 'name')) }
+    const co = n.companyId ? companyName.get(n.companyId) : undefined
+    if (co) { links.push(`顧客: ${co}`); linkChecks.push(c('companies', 'name')) }
+    const wc = n.workCategoryId ? wcName.get(n.workCategoryId) : undefined
+    if (wc) { links.push(`業務種別: ${wc}`); linkChecks.push(c('work-categories', 'name')) }
+    if (links.length > 0) segments.push(seg(links.join(' / '), ...linkChecks))
+    const author = memberName.get(n.memberId)
+    if (author && n.kind === 'minutes') segments.push(seg(`登録者: ${author}`, c('members', 'name')))
+    if (n.body) segments.push(seg(capCp(n.body, 1500), c('notes', 'body')))
+    docs.push({
+      sourceKind: 'note', sourceId: n.id, title: n.title, aliases: [], segments,
+      ownerMemberId: n.kind === 'poipoi' ? n.memberId : null,
+    })
+  }
+
   return docs
 }
 
@@ -260,18 +296,19 @@ export async function rebuildSearchIndex(
     const body = bodyOf(doc)
     // ハッシュには segments（表示可否チェック込み）も含める: checks 定義の変更（レビュー指摘の
     // 権限チェック強化等）が本文不変でも既存行へ伝播するように（手動 reindex が回復パスとして機能する）
-    const hash = createHash('sha256').update(body).update(JSON.stringify(doc.segments)).digest('hex')
+    const hash = createHash('sha256').update(body).update(JSON.stringify(doc.segments))
+      .update(doc.ownerMemberId ?? '').digest('hex')
     const prev = existingByKey.get(`${doc.sourceKind}:${doc.sourceId}`)
     if (!prev || prev.bodyHash !== hash) {
       await pool.query(
-        `INSERT INTO search_docs (id, source_kind, source_id, title, aliases, body, segments, body_hash, embedding, embedding_model, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, '', now())
+        `INSERT INTO search_docs (id, source_kind, source_id, title, aliases, body, segments, body_hash, embedding, embedding_model, owner_member_id, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, '', $9, now())
          ON CONFLICT (source_kind, source_id) DO UPDATE SET
            title = EXCLUDED.title, aliases = EXCLUDED.aliases, body = EXCLUDED.body,
            segments = EXCLUDED.segments, body_hash = EXCLUDED.body_hash,
-           embedding = NULL, embedding_model = '', updated_at = now()`,
+           embedding = NULL, embedding_model = '', owner_member_id = EXCLUDED.owner_member_id, updated_at = now()`,
         [newId('sd'), doc.sourceKind, doc.sourceId, doc.title, JSON.stringify(doc.aliases),
-          body, JSON.stringify(doc.segments), hash])
+          body, JSON.stringify(doc.segments), hash, doc.ownerMemberId ?? null])
       upserted++
       needEmbedding.push({ doc, body, hash })
     } else if (env.vertexProjectId && (!prev.hasEmbedding || prev.embeddingModel !== env.vertexEmbeddingModel)) {
@@ -317,7 +354,7 @@ export async function rebuildSearchIndex(
 /** search_docs の再生成が必要なマスタエンティティ（masters ルートの書込後フックが参照） */
 export const SEARCH_RELEVANT_ENTITIES = new Set([
   'companies', 'contacts', 'industries', 'projects', 'knowledge',
-  'relation-types', 'company-relations', 'contact-relations', 'members',
+  'relation-types', 'company-relations', 'contact-relations', 'members', 'work-categories',
 ])
 
 let rebuildTimer: NodeJS.Timeout | null = null
@@ -364,6 +401,8 @@ export interface SearchHit {
   title: string
   segments: SearchSegment[]
   score: number
+  /** note の所有者（null = 全員参照 = 議事録。値あり = poipoi = 本人） */
+  ownerMemberId: string | null
 }
 
 /** 質問に関連する検索ドキュメントの上位 K 件（字句 + 埋め込みのハイブリッド。埋め込み無効時は字句のみ） */
@@ -371,14 +410,17 @@ export async function searchDocsFor(
   pool: pg.Pool,
   env: Env | undefined,
   question: string,
+  forMemberId: string,
   limit = 4,
 ): Promise<SearchHit[]> {
   const { rows } = await pool.query<{
     sourceKind: SearchDocInput['sourceKind']; sourceId: string; title: string
     aliases: string[]; body: string; segments: SearchSegment[]; embedding: number[] | null
+    ownerMemberId: string | null
   }>(
-    `SELECT source_kind AS "sourceKind", source_id AS "sourceId", title, aliases, body, segments, embedding
-     FROM search_docs ORDER BY id LIMIT 3000`)
+    `SELECT source_kind AS "sourceKind", source_id AS "sourceId", title, aliases, body, segments, embedding,
+            owner_member_id AS "ownerMemberId"
+     FROM search_docs WHERE owner_member_id IS NULL OR owner_member_id = $1 ORDER BY id LIMIT 3000`, [forMemberId])
   // 全件を都度メモリへ載せる設計は SME 規模（〜数千件）前提。上限超過時も ORDER BY id で
   // 決定的な部分集合になる。件数がこの規模を超える場合は pgvector 等への移行を検討する
   if (rows.length === 0) return []
@@ -388,7 +430,7 @@ export async function searchDocsFor(
     const cos = qVec && r.embedding ? cosineSimilarity(qVec, r.embedding) : 0
     // 字句 0.2 / 埋め込み 0.62 を関連の下限とし、スコアは両者の最大値（片系統でも成立）
     const score = Math.max(lex >= 0.2 ? lex : 0, cos >= 0.62 ? cos : 0)
-    return { sourceKind: r.sourceKind, sourceId: r.sourceId, title: r.title, segments: r.segments ?? [], score }
+    return { sourceKind: r.sourceKind, sourceId: r.sourceId, title: r.title, segments: r.segments ?? [], score, ownerMemberId: r.ownerMemberId ?? null }
   })
   return scored
     .filter(s => s.score > 0)

@@ -141,6 +141,7 @@ generateDraft(memberId, date): ReportDraft           // 保存しない（フォ
 | useAiCompany | `GET/POST /v1/ai-company/tasks`（+ `/:id/approve|progress|block|cancel` = FOR UPDATE の状態機械・活動ログ・完了通知・AI 社員 status 同期）・`GET /v1/ai-company/logs`・`POST /v1/ai-company/daily-reports`（冪等生成 → daily_reports author_kind='ai'）・`POST /v1/ai-company/workload-check`（停滞/過負荷 → エスカレーション）・ロール/AI 社員 = `/v1/masters/ai-roles`・`ai-employees`（**実装・フロント接続済み = バッチ6a**。分解 = Vertex AI 構造化出力 → 失敗時 shared/domain/ai-tasks。機能ガード 'ai-company'）。**AI 社員間の依頼・連携（バッチ7b・オペレーター指示 2026-07-19 #3): AiRole.permissions の `delegate` 権限（= マネージャーロール）を持つ AI 社員への依頼は、承認と同時に他の有効 AI 社員へ分担を子タスク化（requester_ai_employee_id + parent_task_id。割当 = LLM 構造化出力 → 失敗時 shared planDelegation の字句類似・決定的）。子は即 in_progress（人間の承認は親 1 回のみ = 依頼を一挙に引き受ける）・完了は親へロールアップ（全分担完了で親 done + 統合報告通知）・ブロックは親へエスカレーション + 依頼者通知・親の中止は子へ連鎖。子からの再連携なし = 連鎖の暴走防止** |
 | プロフィール（/profile） | `GET /v1/me`（avatar 含む）・`PUT /v1/me/profile`（本人のアイコン画像 = data:image/png・jpeg・webp の base64 のみ許可（SVG 等は拒否 = スクリプト混入防止）・300KB 上限・空文字で削除・監査ログ記録。バッチ5e）。パスワード変更は Firebase Auth（reauthenticate → updatePassword）でクライアント完結・Google SSO アカウントは対象外。ログアウト = Firebase signOut + /v1/me キャッシュ破棄 |
 | useBusinessDay | 祝日 = `/v1/masters/holidays`（汎用マスタ。date 一意・物理削除可・日付順）+ `POST /v1/holidays/import`（管理者のみ。内閣府「国民の祝日」CSV = Shift_JIS を取得して date 一意で upsert = 冪等・再取込可。csvText / csvBase64 のオフライン取込にも対応 = 公式サイト障害時の手動アップロード経路）。翌営業日計算は shared/domain/business-day（workingWeekdays / holidayAware = attendance_rules で勤務体系ごとに制御・祝日 Set を注入）をフロント/API（/v1/assist/report-draft の「明日の予定」）で共有（**オペレーター報告 2026-07-18 #4**） |
+| useNotes（ぽいぽいメモ・議事録） | `GET/POST /v1/notes`（?kind=poipoi/minutes。poipoi = 本人のみ・minutes = 全員。任意で projectId/companyId/workCategoryId）・`POST /v1/notes/import`（.md/.txt/.pdf/.docx = extract-text 再利用・原本 = note_files）・`GET /v1/notes/:id/files`・`/files/:id`（poipoi は本人ガード）。機能ガード poipoi / minutes（F-16）。書込後は検索インデックスへ自動反映（poipoi は owner_member_id = 本人スコープ = C3。バッチ7c）。業務種別 = `/v1/masters/work-categories` |
 | 検索インデックス（AI 検索最適化） | `POST /v1/search/reindex`（管理者のみ。search_docs の全再生成 = 手動回復パス。通常はマスタ書込後の自動再生成（デバウンス・非ブロッキング）+ API 起動時の再生成で追随 = 手動ステップなし）。SoT は各マスタ/ナレッジ本体で search_docs は派生キャッシュ（body_hash 不変はスキップ = 埋め込み API の無駄呼び出しなし。埋め込みは VERTEX_PROJECT_ID 設定時のみ = text-multilingual-embedding-002。無効環境は字句検索のみへ縮退）（**バッチ7a**） |
 | ナレッジのドキュメント取込 | `POST /v1/knowledge/import`（管理者のみ。.md/.txt/.pdf/.docx を base64 で受け、テキスト抽出（PDF = pdfjs-dist・DOCX = mammoth）→ knowledge_articles へ記事化（既存スキーマ不変・本文 20,000cp 上限）+ 原本を knowledge_files へ保全（10MB 上限）。タイトルは指定 > md 見出し > ファイル名）・`GET /v1/knowledge/:id/files`（添付メタ）・`GET /v1/knowledge/files/:id`（原本 base64 ダウンロード）。取込後は検索インデックスへ自動反映（**バッチ7a**。UI = /masters/knowledge の「ドキュメント取込」） |
 | 参照系 computed | `GET` + クライアントキャッシュ（表示射影はフロント純粋関数のまま維持） |
@@ -231,6 +232,9 @@ generateDraft(memberId, date): ReportDraft           // 保存しない（フォ
 | AKO-KNW-002 | ドキュメント取込のサイズ超過（10MB） | ✅ |
 | AKO-KNW-003 | ドキュメントからテキスト抽出不能（画像のみの PDF・破損ファイル等） | ✅ |
 | AKO-AIC-009 | AI タスクの同時操作競合（親子ロックのデッドロック検出 = 再試行可能） | ✅ |
+| AKO-NOTE-001 | ノート取込の非対応形式（.md/.txt/.pdf/.docx 以外。旧 .doc は変換案内） | ✅ |
+| AKO-NOTE-002 | ノート取込のサイズ超過（10MB） | ✅ |
+| AKO-NOTE-003 | ノートからテキスト抽出不能 | ✅ |
 | AKO-AIC-001 | AI 社員が見つからない | ✅ |
 | AKO-AIC-002 | AI タスクの件名未入力 | ✅ |
 | AKO-AIC-003 | AI タスクが見つからない | ✅ |

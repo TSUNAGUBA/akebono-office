@@ -17,6 +17,9 @@ import type { Env } from '../env'
 import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
 import { generateJson } from '../lib/llm'
+import { activePermissionRules } from '../lib/permissions'
+import { capCp } from '../lib/text'
+import { buildContext } from './chatbot'
 import { ruleOf } from './attendance'
 import { holidaySetAfter } from './holidays'
 
@@ -86,7 +89,7 @@ export function assistRoutes(pool: pg.Pool, env: Env): Hono {
     const nextDate = nextWorkingDay(date, workingDayRuleOf(rule), holidays)
 
     // 材料の収集（カレンダー予定は同期済みキャッシュ = calendar_events）
-    const [logsQ, plansQ, nextPlansQ, projectsQ, companiesQ, eventsQ] = await Promise.all([
+    const [logsQ, plansQ, nextPlansQ, projectsQ, companiesQ, eventsQ, poipoiQ] = await Promise.all([
       pool.query<HearingLog>(
         `SELECT ${LOG_COLS} FROM assist_logs WHERE member_id = $1 AND date = $2::date ORDER BY at, id`,
         [user.id, date]),
@@ -105,25 +108,53 @@ export function assistRoutes(pool: pg.Pool, env: Env): Hono {
                 title, source, synced_to_google AS "syncedToGoogle", project_id AS "projectId"
          FROM calendar_events WHERE member_id = $1 AND date = $2::date ORDER BY from_time LIMIT 200`,
         [user.id, date]),
+      // ぽいぽいメモ（バッチ7c で独立メニュー化 = notes が SoT。旧 assist_logs の memo も logsQ で読む = 下位互換）
+      pool.query<{ id: string; body: string; at: string }>(
+        `SELECT id, body, created_at AS at FROM notes
+         WHERE member_id = $1 AND kind = 'poipoi' AND ((created_at AT TIME ZONE 'Asia/Tokyo')::date = $2::date)
+         ORDER BY created_at, id LIMIT 100`,
+        [user.id, date]),
     ])
     const ctx: DraftContext = {
       events: eventsQ.rows,
-      logs: logsQ.rows,
+      // notes 由来のぽいぽいメモを材料へ合流（memo 形式 = ヒューリスティック/LLM 両対応）
+      logs: [
+        ...logsQ.rows,
+        ...poipoiQ.rows.map(n => ({
+          id: n.id, memberId: user.id, date, kind: 'memo' as const,
+          calendarEventId: null, question: '', answer: n.body, at: String(n.at),
+        })),
+      ],
       dayPlans: plansQ.rows,
       nextDayPlans: nextPlansQ.rows,
       projects: projectsQ.rows,
       companies: companiesQ.rows,
     }
 
-    const draft = (await llmDraft(env, ctx, date)) ?? heuristicReportDraft(ctx, date)
+    // AI業務アシスタントはチャットボットと同じ参照範囲の社内データ文脈を使う（オペレーター指示 2026-07-19 #4。
+    // LLM 無効環境は従来どおりヒューリスティックのみ = 文脈は不要）
+    let orgContext = ''
+    if (env.vertexProjectId) {
+      try {
+        const rules = await activePermissionRules(pool)
+        const query = [
+          ...ctx.dayPlans.map(p => p.title),
+          ...poipoiQ.rows.map(n => capCp(n.body, 100)),
+        ].join('\n') || date
+        orgContext = capCp(await buildContext(pool, user, query, rules, [], env), 4000)
+      } catch (e) {
+        console.warn('assist org context failed (non-blocking):', (e as Error).message)
+      }
+    }
+    const draft = (await llmDraft(env, ctx, date, orgContext)) ?? heuristicReportDraft(ctx, date)
     return c.json({ data: draft })
   })
 
   return app
 }
 
-/** LLM によるドラフト生成（失敗・無効環境は null → ヒューリスティックへ） */
-async function llmDraft(env: Env, ctx: DraftContext, date: string): Promise<ReportDraft | null> {
+/** LLM によるドラフト生成（失敗・無効環境は null → ヒューリスティックへ）。orgContext = 社内データ文脈（任意） */
+async function llmDraft(env: Env, ctx: DraftContext, date: string, orgContext = ''): Promise<ReportDraft | null> {
   if (!env.vertexProjectId) return null
   if (ctx.logs.length === 0 && ctx.dayPlans.length === 0) return null // 材料ゼロは定型出力で十分
   const material = [
@@ -137,6 +168,7 @@ async function llmDraft(env: Env, ctx: DraftContext, date: string): Promise<Repo
     ...ctx.nextDayPlans.map(p => `- ${p.title}`),
     '## 参考: 有効なプロジェクト名（業務テーマの候補）',
     ...ctx.projects.map(p => `- ${p.name}`),
+    ...(orgContext ? ['## 参考: 社内データ文脈（チャットボットと同じ参照範囲。表現の補助にのみ使用）', orgContext] : []),
   ].join('\n')
   const res = await generateJson<ReportDraft>(env, {
     system: 'あなたは業務日報の下書きを作るアシスタントです。与えられた材料（タスク計画の結果・ヒアリング回答・メモ）'

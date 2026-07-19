@@ -11,6 +11,7 @@ const members = tbl('members')
 const departments = tbl('departments')
 const leaveTypes = tbl('leaveTypes')
 const industries = tbl('industries')
+const workCategories = tbl('workCategories')
 const companies = tbl('companies')
 const contacts = tbl('contacts')
 const companyRelations = tbl('companyRelations')
@@ -66,6 +67,14 @@ const cards = computed<MenuCard[]>(() => [
     icon: 'Factory',
     to: '/masters/industries',
     badge: activeCount(industries.value),
+  },
+{
+    id: 'work-categories',
+    title: '業務種別',
+    description: 'ぽいぽいメモ・議事録の分類。名称と表示順',
+    icon: 'Tags',
+    to: '/masters/work-categories',
+    badge: activeCount(workCategories.value),
   },
   {
     id: 'company',

@@ -129,7 +129,7 @@ export function mastersRoutes(pool: pg.Pool, env: Env): Hono {
     const where = def.noActive || c.req.query('includeInactive') === '1' ? '' : 'WHERE active = true'
     const order = def.noActive ? 'ORDER BY id' : 'ORDER BY display_order NULLS LAST, id'
     // display_order を持たないテーブルは id 順（祝日は日付順が自然なため date 順）
-    const hasOrder = ['departments', 'leave_types', 'industries', 'custom_field_defs', 'code_masters', 'external_links'].includes(def.table)
+    const hasOrder = ['departments', 'leave_types', 'industries', 'work_categories', 'custom_field_defs', 'code_masters', 'external_links'].includes(def.table)
     const orderBy = def.table === 'public_holidays' ? 'ORDER BY date' : hasOrder ? order : 'ORDER BY id'
     const { rows } = await pool.query(
       `SELECT * FROM ${def.table} ${where} ${orderBy}`)
