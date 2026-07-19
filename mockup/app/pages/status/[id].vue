@@ -140,10 +140,7 @@ function timelineOf(incident: ServiceIncident) {
     </UiEmptyState>
 
     <template v-else>
-      <NuxtLink to="/status" class="link mb-2 inline-flex items-center gap-1 text-xs font-semibold">
-        <ArrowLeft class="h-3.5 w-3.5" aria-hidden="true" /> 稼働状況一覧
-      </NuxtLink>
-
+      <!-- 一覧への戻る導線はヘッダー共通の親リンク（nav-map.ts）に統一（バッチ7h） -->
       <UiPageHeader :title="service.name" :description="service.description">
         <template #actions>
           <a :href="service.url" target="_blank" rel="noopener noreferrer" class="btn btn-sm">

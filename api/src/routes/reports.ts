@@ -3,13 +3,15 @@
  * - 提出済み日報は本人が編集可（提出状態・初回提出時刻は維持・監査ログ記録。下書きへは戻せない = AKO-REP-001）
  * - 提出済み週報は編集不可（AKO-REP-002 = 記録系の状態保護）
  * - 工数乖離チェック（勤怠実労働との差 60 分超で hoursGapMinutes を返す = 画面が警告表示）
- * - チーム参照（scope=team）は管理者のみ。コメントは提出済み日報に対して全員可
+ * - チーム参照（scope=team）: 管理者 = 下書き含む全件 / 一般 = 提出済みのみ（バッチ7h で全員へ公開）。
+ *   scope=team / scope=all は日報参照権限（F-16-6 = reports + field 'member:<id>' の deny）で対象者を絞り込む。
+ *   コメントは提出済み日報に対して全員可
  * 注: 提出時のエスカレーション起票・通知はバッチ2（通知ドメイン）で API 化する（実装状況マトリクス参照）
  */
 import { Hono } from 'hono'
 import type pg from 'pg'
 import { addDays, nowJstIso, todayJst } from '../../../shared/domain/jst'
-import { canUseFeature } from '../../../shared/domain/permissions'
+import { canUseFeature, canViewMemberReports } from '../../../shared/domain/permissions'
 import type { PunchRecord, ReportEntry } from '../../../shared/domain/types'
 import { heuristicWeeklyInsight, type WeeklyInsight, type WeeklyMetrics } from '../../../shared/domain/weekly-insight'
 import { requireAdmin } from '../auth'
@@ -151,25 +153,36 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
     const rangeWhere = `($1 = '' OR date = NULLIF($1, '')::date)
          AND ($2 = '' OR to_char(date, 'YYYY-MM') = $2)
          AND ($3 = '' OR date >= NULLIF($3, '')::date) AND ($4 = '' OR date <= NULLIF($4, '')::date)`
+    // 日報参照権限（F-16-6・バッチ7h）: deny された対象者の日報を応答から除外する共通フィルタ。
+    // 自分の日報・AI 社員の日次報告は常に参照可（shared canViewMemberReports の規約どおり）
+    const filterViewable = async (rows: { authorKind: string; memberId: string | null }[]) => {
+      const rules = await activePermissionRules(pool)
+      if (rules.length === 0) return rows
+      const subject = subjectOf(user)
+      return rows.filter(r => r.authorKind !== 'human' || !r.memberId
+        || canViewMemberReports(rules, subject, r.memberId))
+    }
     if (scope === 'team') {
-      requireAdmin(c)
-      const { rows } = await pool.query(
+      // バッチ7h: チームタブは全員へ公開。管理者は下書き含む全件・一般メンバーは提出済みのみ
+      //（他人の下書きの内容・存在を一般メンバーへ見せない）
+      const isAdminUser = user.role === 'admin'
+      const { rows } = await pool.query<{ authorKind: string; memberId: string | null }>(
         `SELECT ${DAILY_COLS} FROM daily_reports
-         WHERE ${rangeWhere}
+         WHERE ${rangeWhere}${isAdminUser ? '' : ` AND status = 'submitted'`}
          ORDER BY date DESC, submitted_at DESC NULLS LAST`,
         [date, month, from, to])
-      return c.json({ data: rows })
+      return c.json({ data: await filterViewable(rows) })
     }
     // 全員の日報（バッチ5e: 相互参照による情報共有）。提出済みのみ = 下書きは本人以外に見せない。
     // month 必須: 期間なしの全履歴ダンプを許容しない（フロントは常に月単位でロードする）
     if (scope === 'all') {
       if (!month) throw err('AKO-GEN-001', 'scope=all では month（YYYY-MM）を指定してください', 400)
-      const { rows } = await pool.query(
+      const { rows } = await pool.query<{ authorKind: string; memberId: string | null }>(
         `SELECT ${DAILY_COLS} FROM daily_reports
          WHERE status = 'submitted' AND ${rangeWhere}
          ORDER BY date DESC, submitted_at DESC NULLS LAST`,
         [date, month, from, to])
-      return c.json({ data: rows })
+      return c.json({ data: await filterViewable(rows) })
     }
     const { rows } = await pool.query(
       `SELECT ${DAILY_COLS} FROM daily_reports
@@ -456,7 +469,11 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
     const reporters = new Set<string>()
     const issues: { member: string; issue: string }[] = []
     let totalHours = 0
-    for (const r of dailyQ.rows) {
+    // 日報参照権限（F-16-6）: deny 対象者の日報は集計にも入れない（メンバー名・課題の漏えい防止）
+    const visibleDaily = rules.length === 0
+      ? dailyQ.rows
+      : dailyQ.rows.filter(r => !r.memberId || canViewMemberReports(rules, subject, r.memberId))
+    for (const r of visibleDaily) {
       const name = (r.memberId && nameOf.get(r.memberId)) || '不明'
       reporters.add(r.memberId ?? name)
       daily.set(r.date, (daily.get(r.date) ?? 0) + 1)
@@ -473,7 +490,7 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
     const metrics: WeeklyMetrics = {
       weekStart,
       weekEnd,
-      reportSubmitted: dailyQ.rows.length,
+      reportSubmitted: visibleDaily.length,
       reporters: reporters.size,
       membersActive: membersQ.rows.length,
       totalHours: Math.round(totalHours * 4) / 4,

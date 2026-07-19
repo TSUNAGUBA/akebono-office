@@ -2,10 +2,12 @@
 /**
  * 日報・週報（F-06）
  * タブ: 自分の日報 / 全員の日報（提出済みの月次一覧・全メンバー参照可） /
- *       チーム（管理者のみ・提出状況マトリクス+タイムライン） / 週報
+ *       チーム（提出状況マトリクス+タイムライン。バッチ7h で全員へ公開 = 表示メンバー設定 ∩ 日報参照権限。
+ *       リマインド・下書き状態の表示は管理者のみ） / 週報
+ * 参照 = 基本ビュー・入力 = ボタン押下で表示（バッチ7h・オペレーター指示 2026-07-19 #10 ④）
  */
 import {
-  BellRing, Check, ChevronLeft, ChevronRight, Eye, Minus, Pencil, Plus, Send, Sparkles, Trash2,
+  BellRing, Check, ChevronLeft, ChevronRight, Eye, Minus, Pencil, Plus, Send, Settings2, Sparkles, Trash2,
 } from 'lucide-vue-next'
 import type { DailyReport, ReportEntry, WeeklyReport } from '~/types/domain'
 import { REPORT_STATUS_LABELS } from '~/composables/useReports'
@@ -25,12 +27,13 @@ const projects = tbl('projects')
 
 const TAB_KEYS = ['mine', 'all', 'team', 'weekly'] as const
 const tabs = computed<TabItem[]>(() => {
+  // チームタブは全員へ公開（バッチ7h。表示範囲は 表示メンバー設定 ∩ 日報参照権限 で制御）
   const t: TabItem[] = [
     { key: 'mine', label: '自分の日報' },
     { key: 'all', label: '全員の日報' },
+    { key: 'team', label: 'チーム' },
+    { key: 'weekly', label: '週報' },
   ]
-  if (isAdmin.value) t.push({ key: 'team', label: 'チーム' })
-  t.push({ key: 'weekly', label: '週報' })
   return t
 })
 const queryTab = typeof route.query.tab === 'string' ? route.query.tab : ''
@@ -91,6 +94,10 @@ function toEditable(e: ReportEntry): ReportEntry {
 
 /** 提出済み日報の編集モード（オペレーター指示: 提出済みも本人が編集可。提出状態は維持） */
 const editingSubmitted = ref(false)
+
+/** 参照 = 基本ビュー・入力はボタン押下（バッチ7h ④）。日付・ユーザー切替で参照へ戻す */
+const mineEditing = ref(false)
+watch([selDate, currentUserId], () => { mineEditing.value = false })
 
 function loadEditor(): void {
   if (editingSubmitted.value) return // 編集中の内容をデータ再取得で消さない
@@ -211,6 +218,8 @@ async function onSubmit(): Promise<void> {
     show(res.error.message, 'warn')
     return
   }
+  mineEditing.value = false
+  confirmStep.value = false
   show('日報を提出しました')
   if (res.escalated) {
     show('課題が管理者へ共有されました', 'info', { label: '受信箱', to: '/inbox' })
@@ -284,6 +293,7 @@ async function onGenerateDraft(): Promise<void> {
   editTomorrow.value = d.tomorrow
   draftBasis.value = d.basis
   confirmStep.value = true
+  mineEditing.value = true
   show('AI ドラフトを生成しました。内容を確認・修正して提出してください')
   scrollToEditor()
 }
@@ -292,13 +302,56 @@ async function onGenerateDraft(): Promise<void> {
 function openSavedDraft(): void {
   draftBasis.value = null
   confirmStep.value = true
+  mineEditing.value = true
   scrollToEditor()
 }
 
-// ---------- チームタブ（管理者） ----------
+// ---------- チームタブ（バッチ7h で全員へ公開。リマインド・下書き表示は管理者のみ） ----------
 
 const matrixDays = computed(() => reports.recentBusinessDays(7))
 const teamTimeline = computed(() => reports.timeline(7))
+
+/**
+ * セルの表示状態。他人の下書きの存在は管理者以外に見せない（内容も API が返さない）
+ */
+function displayCellStatus(memberId: string, date: string): 'submitted' | 'draft' | 'none' {
+  const s = reports.cellStatus(memberId, date)
+  if (s === 'draft' && !isAdmin.value && memberId !== currentUserId.value) return 'none'
+  return s
+}
+
+// ---------- チームタブの表示メンバー設定（管理者。configs 'teamVisibleMemberIds'） ----------
+
+const { getConfig, setConfig } = useAppSettings()
+const teamSettingsOpen = ref(false)
+const teamSettingsDraft = ref<string[]>([])
+const teamSettingsSaving = ref(false)
+
+const teamCandidateOptions = computed(() =>
+  reports.teamMemberCandidates.value.map(m => ({ value: m.id, label: m.name })))
+
+function openTeamSettings(): void {
+  try {
+    const arr = JSON.parse(getConfig('teamVisibleMemberIds', '[]')) as unknown
+    teamSettingsDraft.value = Array.isArray(arr) ? arr.filter((x): x is string => typeof x === 'string') : []
+  } catch {
+    teamSettingsDraft.value = []
+  }
+  teamSettingsOpen.value = true
+}
+
+/** 保存（空選択 = 全員表示に戻す。取消フロー = いつでも再設定・全員に戻すが可能） */
+async function saveTeamSettings(reset = false): Promise<void> {
+  teamSettingsSaving.value = true
+  try {
+    const value = reset || teamSettingsDraft.value.length === 0 ? '' : JSON.stringify(teamSettingsDraft.value)
+    await setConfig('teamVisibleMemberIds', value)
+    teamSettingsOpen.value = false
+    show(value ? '表示メンバーを保存しました' : '全員表示に戻しました')
+  } finally {
+    teamSettingsSaving.value = false
+  }
+}
 
 const drawerReportId = ref<string | null>(null)
 const drawerReport = computed(() =>
@@ -315,26 +368,34 @@ const drawerGap = computed(() => {
 })
 
 function cellClass(memberId: string, date: string): string {
-  const s = reports.cellStatus(memberId, date)
+  const s = displayCellStatus(memberId, date)
   if (s === 'submitted') return 'bg-ok-soft text-ok hover:brightness-95'
   if (s === 'draft') return 'bg-warn-soft text-warn hover:brightness-95'
   return 'bg-surface-soft text-muted hover:bg-brand-soft hover:text-brand'
 }
 
 function cellAria(memberId: string, date: string): string {
-  const s = reports.cellStatus(memberId, date)
+  const s = displayCellStatus(memberId, date)
   const name = reports.memberName(memberId)
-  const label = s === 'none' ? '未提出（クリックでリマインド）' : REPORT_STATUS_LABELS[s]
+  const label = s === 'none'
+    ? (isAdmin.value ? '未提出（クリックでリマインド）' : '未提出')
+    : REPORT_STATUS_LABELS[s]
   return `${name} ${dayLabel(date)}: ${label}`
 }
 
 function openCell(memberId: string, date: string): void {
   const r = reports.reportOn(memberId, date)
-  if (r) {
+  // 他人の下書きは管理者のみ開ける（一般メンバーには存在も見せない = displayCellStatus と対）
+  const canOpen = !!r && (r.status === 'submitted' || isAdmin.value || memberId === currentUserId.value)
+  if (r && canOpen) {
     drawerReportId.value = r.id
     return
   }
-  void askRemind(memberId, date)
+  if (isAdmin.value) {
+    void askRemind(memberId, date)
+    return
+  }
+  show(`${reports.memberName(memberId)} さんの ${fmtDateLong(date)} の日報はまだ提出されていません`, 'info')
 }
 
 async function askRemind(memberId: string, date: string): Promise<void> {
@@ -470,6 +531,17 @@ async function onSaveWeekly(submitNow: boolean): Promise<void> {
 const weeklyDrawerId = ref<string | null>(null)
 const weeklyDrawer = computed<WeeklyReport | null>(() =>
   reports.myWeeklies.value.find(r => r.id === weeklyDrawerId.value) ?? null)
+
+/** 週報も参照 = 基本ビュー・入力はボタン押下（バッチ7h ④）。提出で参照へ戻す */
+const weeklyEditing = ref(false)
+watch(currentUserId, () => { weeklyEditing.value = false })
+
+async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
+  await onSaveWeekly(submitNow)
+  if (submitNow && reports.myWeeklyOn(thisWeekStart.value)?.status === 'submitted') {
+    weeklyEditing.value = false
+  }
+}
 </script>
 
 <template>
@@ -499,9 +571,30 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
         </template>
       </UiFilterBar>
 
-      <!-- 入力方式の切替（設定が 'both' のとき） -->
+      <!-- 未提出日の参照ビュー（バッチ7h ④: 参照が基本。入力は「日報を書く」から） -->
+      <UiSectionCard
+        v-if="!isSubmittedDay && !mineEditing && !editingSubmitted"
+        :title="`${fmtDateLong(selDate)} の日報`"
+        :description="myReport ? '下書きが保存されています。「日報を書く」から続きを編集できます' : 'まだ作成されていません'"
+      >
+        <template #actions>
+          <button type="button" class="btn btn-primary btn-sm" @click="mineEditing = true">
+            <Pencil class="h-3.5 w-3.5" aria-hidden="true" />
+            日報を書く
+          </button>
+        </template>
+        <div class="flex flex-wrap items-center gap-2">
+          <UiStatusBadge :tone="mineStatus.tone" :label="mineStatus.label" dot />
+          <span v-if="myReport" class="num text-xs text-sub">
+            {{ myReport.entries.length }} エントリ / 合計 {{ totalHoursOf(myReport) }}h
+          </span>
+          <span v-else class="text-xs text-muted">「日報を書く」から入力を始められます（AI アシストは入力画面から）</span>
+        </div>
+      </UiSectionCard>
+
+      <!-- 入力方式の切替（設定が 'both' かつ入力中のとき） -->
       <div
-        v-if="inputMode === 'both'"
+        v-if="inputMode === 'both' && mineEditing && !isSubmittedDay"
         class="inline-flex items-center gap-1 justify-self-start rounded-lg border border-line bg-surface p-1"
         role="group"
         aria-label="日報の入力方式"
@@ -583,8 +676,8 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
         </div>
       </UiSectionCard>
 
-      <!-- ================= AI アシスト入力（F-06-7/8） ================= -->
-      <template v-if="assistActive">
+      <!-- ================= AI アシスト入力（F-06-7/8。入力中のみ表示 = バッチ7h ④） ================= -->
+      <template v-if="assistActive && mineEditing && !isSubmittedDay">
         <!-- 材料サマリ（計画・メモ・回答の入力は AI業務アシスタント F-14 で行う） -->
         <UiSectionCard
           title="AI アシストの材料"
@@ -646,8 +739,8 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
         </UiSectionCard>
       </template>
 
-      <!-- エディタ（未提出時。AI アシスト時はドラフトの確認・修正ステップとしてのみ表示。提出済みは編集モードで表示） -->
-      <div v-if="(!isSubmittedDay && showEditor) || editingSubmitted" ref="editorWrap">
+      <!-- エディタ（未提出時 = 「日報を書く」押下後。AI アシスト時はドラフトの確認・修正ステップとしてのみ表示。提出済みは編集モードで表示） -->
+      <div v-if="(!isSubmittedDay && mineEditing && showEditor) || editingSubmitted" ref="editorWrap">
       <UiSectionCard
         :title="editingSubmitted ? `${fmtDateLong(selDate)} の日報を編集（提出済み）` : `${fmtDateLong(selDate)} の日報を書く`"
         :description="editingSubmitted ? '提出済みの日報を修正します。保存しても提出状態と提出時刻は変わりません（編集は監査ログに記録されます）' : '業務テーマごとに作業内容と工数（0.25h 刻み）を記録します'"
@@ -744,6 +837,7 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
               </button>
             </template>
             <template v-else>
+              <button type="button" class="btn" @click="mineEditing = false; confirmStep = false">閉じる</button>
               <button type="button" class="btn" @click="onSaveDraft">下書き保存</button>
               <button type="button" class="btn btn-primary" @click="onSubmit">
                 <Send class="h-3.5 w-3.5" aria-hidden="true" />
@@ -788,11 +882,21 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
       </UiSectionCard>
     </div>
 
-    <!-- ================= チーム（管理者） ================= -->
+    <!-- ================= チーム（全員。表示メンバー設定 ∩ 日報参照権限 = バッチ7h） ================= -->
     <div v-else-if="tab === 'team'" class="grid gap-3">
-      <UiSectionCard title="提出状況マトリクス" description="メンバー × 直近 7 営業日。未提出セルをクリックするとリマインドできます" flush>
+      <UiSectionCard
+        title="提出状況マトリクス"
+        :description="isAdmin
+          ? 'メンバー × 直近 7 営業日。未提出セルをクリックするとリマインドできます'
+          : 'メンバー × 直近 7 営業日。提出済みセルをクリックすると日報を参照できます'"
+        flush
+      >
         <template #actions>
-          <button type="button" class="btn btn-sm" @click="remindAll">
+          <button v-if="isAdmin" type="button" class="btn btn-ghost btn-sm" @click="openTeamSettings">
+            <Settings2 class="h-3.5 w-3.5" aria-hidden="true" />
+            表示メンバー
+          </button>
+          <button v-if="isAdmin" type="button" class="btn btn-sm" @click="remindAll">
             <BellRing class="h-3.5 w-3.5" aria-hidden="true" />
             一括リマインド
           </button>
@@ -823,8 +927,8 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
                     :aria-label="cellAria(m.id, d)"
                     @click="openCell(m.id, d)"
                   >
-                    <Check v-if="reports.cellStatus(m.id, d) === 'submitted'" class="h-4 w-4" aria-hidden="true" />
-                    <template v-else-if="reports.cellStatus(m.id, d) === 'draft'">{{ REPORT_STATUS_LABELS.draft }}</template>
+                    <Check v-if="displayCellStatus(m.id, d) === 'submitted'" class="h-4 w-4" aria-hidden="true" />
+                    <template v-else-if="displayCellStatus(m.id, d) === 'draft'">{{ REPORT_STATUS_LABELS.draft }}</template>
                     <template v-else>未</template>
                   </button>
                 </td>
@@ -868,13 +972,19 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
       <WidgetsWeeklyInsight v-if="weeklyView === 'insight'" :initial-week-start="thisWeekStart" />
 
       <template v-else>
-      <!-- 今週の週報 -->
+      <!-- 今週の週報（参照 = 基本ビュー・入力は「週報を書く」から = バッチ7h ④） -->
       <UiSectionCard
         :title="`今週の週報（${weekLabel(thisWeekStart)}）`"
-        :description="myCurrentWeekly?.status === 'submitted' ? '提出済みです' : '日報から下書きを生成できます'"
+        :description="myCurrentWeekly?.status === 'submitted'
+          ? '提出済みです'
+          : weeklyEditing ? '日報から下書きを生成できます' : '「週報を書く」から入力できます'"
       >
         <template v-if="myCurrentWeekly?.status !== 'submitted'" #actions>
-          <button type="button" class="btn btn-sm" @click="generateFromDailies">
+          <button v-if="!weeklyEditing" type="button" class="btn btn-primary btn-sm" @click="weeklyEditing = true">
+            <Pencil class="h-3.5 w-3.5" aria-hidden="true" />
+            週報を書く
+          </button>
+          <button v-else type="button" class="btn btn-sm" @click="generateFromDailies">
             <Sparkles class="h-3.5 w-3.5" aria-hidden="true" />
             日報から下書き生成
           </button>
@@ -889,6 +999,18 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
             <div><p class="label">課題</p><UiMarkdown v-if="myCurrentWeekly.issues" :source="myCurrentWeekly.issues" /><p v-else class="text-[13px]">—</p></div>
             <div><p class="label">来週の予定</p><UiMarkdown v-if="myCurrentWeekly.nextWeek" :source="myCurrentWeekly.nextWeek" /><p v-else class="text-[13px]">—</p></div>
           </div>
+        </div>
+
+        <!-- 参照ビュー（未提出・未編集: 状態表示のみ） -->
+        <div v-else-if="!weeklyEditing" class="flex flex-wrap items-center gap-2">
+          <UiStatusBadge
+            :tone="myCurrentWeekly ? 'warn' : 'neutral'"
+            :label="myCurrentWeekly ? REPORT_STATUS_LABELS.draft : '未作成'"
+            dot
+          />
+          <span class="text-xs text-muted">
+            {{ myCurrentWeekly ? '下書きが保存されています。「週報を書く」から続きを編集できます' : '今週の週報はまだ作成されていません' }}
+          </span>
         </div>
 
         <!-- エディタ -->
@@ -918,8 +1040,9 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
             </UiFormField>
           </div>
           <div class="flex flex-wrap items-center justify-end gap-2">
+            <button type="button" class="btn" @click="weeklyEditing = false">閉じる</button>
             <button type="button" class="btn" @click="onSaveWeekly(false)">下書き保存</button>
-            <button type="button" class="btn btn-primary" @click="onSaveWeekly(true)">
+            <button type="button" class="btn btn-primary" @click="onSaveWeeklyAndClose(true)">
               <Send class="h-3.5 w-3.5" aria-hidden="true" />
               提出
             </button>
@@ -1034,5 +1157,27 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
         <div><p class="label">来週の予定</p><UiMarkdown v-if="weeklyDrawer.nextWeek" :source="weeklyDrawer.nextWeek" /><p v-else class="text-[13px]">—</p></div>
       </div>
     </UiDrawer>
+
+    <!-- チームタブの表示メンバー設定（管理者。バッチ7h。空選択 = 全員表示 = 取消フロー） -->
+    <UiModal :open="teamSettingsOpen" title="チームタブの表示メンバー" width="560px" @close="teamSettingsOpen = false">
+      <div class="grid gap-2">
+        <p class="text-[12px] text-muted">
+          提出状況マトリクス・タイムラインに表示するメンバーを選びます。未選択のまま保存すると全員表示に戻ります。
+          誰の日報を参照できるかは権限設定（日報の参照対象）でロール・役職・個人ごとに制御できます
+        </p>
+        <UiMultiCombobox
+          v-model="teamSettingsDraft"
+          :options="teamCandidateOptions"
+          aria-label="表示メンバーを選択"
+          placeholder="メンバー名で検索"
+        />
+      </div>
+      <template #footer>
+        <button type="button" class="btn" :disabled="teamSettingsSaving" @click="saveTeamSettings(true)">全員表示に戻す</button>
+        <button type="button" class="btn btn-primary" :disabled="teamSettingsSaving" @click="saveTeamSettings()">
+          {{ teamSettingsSaving ? '保存中…' : '保存' }}
+        </button>
+      </template>
+    </UiModal>
   </div>
 </template>

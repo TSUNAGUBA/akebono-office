@@ -3,6 +3,7 @@
  * F-13 設定・汎用化基盤（管理者専用）
  * a) 外部リンク b) 機能トグル c) カスタム項目 d) 汎用区分マスタ
  * e) エスカレーションルール f) 勤怠ルール/承認経路への導線 g) 監査ログ h) デモデータリセット
+ * i) メニューカテゴリ（F-13-8・バッチ7h = SettingsMenuCategoryEditor）
  */
 import * as icons from 'lucide-vue-next'
 import { ArrowRight, Plus } from 'lucide-vue-next'
@@ -581,6 +582,9 @@ async function onResetDemo(): Promise<void> {
             </NuxtLink>
           </div>
         </UiSectionCard>
+
+        <!-- i) メニューカテゴリ（バッチ7h。カードメニューのカテゴリカスタマイズ） -->
+        <SettingsMenuCategoryEditor class="lg:col-span-2" />
 
         <!-- g) 監査ログ -->
         <UiSectionCard

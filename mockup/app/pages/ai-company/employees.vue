@@ -4,7 +4,7 @@
  * AI 社員の追加（増員）・名前/ロール変更・無効化（減員）/復元。roles.vue と同じ汎用マスタパターン。
  * 減員は論理削除（過去タスク・活動ログの担当名を保全 = 原則 9.5 の取消可能性は復元で担保）
  */
-import { ArrowLeft, Plus } from 'lucide-vue-next'
+import { Plus } from 'lucide-vue-next'
 import type { AiEmployee, AiRole } from '~/types/domain'
 import type { TableColumn } from '~/types/ui'
 import { AI_EMPLOYEE_STATUS_LABELS } from '~/utils/labels'
@@ -119,10 +119,7 @@ async function toggleActive(): Promise<void> {
   <div>
     <UiPageHeader title="AI 社員の管理" description="AI 社員の増員・減員（無効化/復元）とロール割当を管理します">
       <template #actions>
-        <NuxtLink to="/ai-company" class="btn btn-ghost btn-sm">
-          <ArrowLeft class="h-3.5 w-3.5" aria-hidden="true" />
-          オフィスへ戻る
-        </NuxtLink>
+        <!-- オフィスへの戻る導線はヘッダー共通の親リンク（nav-map.ts）に統一（バッチ7h） -->
         <button v-if="isAdmin" type="button" class="btn btn-primary btn-sm" @click="openCreate">
           <Plus class="h-3.5 w-3.5" aria-hidden="true" />
           AI 社員を追加

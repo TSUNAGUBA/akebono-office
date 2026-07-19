@@ -25,7 +25,7 @@ export interface WeeklyInsightResult {
 
 export function useWeeklyInsight() {
   const { tbl } = useMockDb()
-  const { can } = usePermissions()
+  const { can, canViewMemberReports } = usePermissions()
   const isApi = useApiMode()
 
   async function generate(weekStart: string): Promise<WeeklyInsightResult> {
@@ -43,6 +43,8 @@ export function useWeeklyInsight() {
 
     const dailies = (tbl('dailyReports').value as DailyReport[])
       .filter(r => r.authorKind === 'human' && r.status === 'submitted' && inWeek(r.date))
+      // 日報参照権限（F-16-6・バッチ7h）: deny 対象者の日報は集計にも入れない（API と同一基準）
+      .filter(r => !r.memberId || canViewMemberReports(r.memberId))
     const memberHours = new Map<string, number>()
     const themeHours = new Map<string, number>()
     const daily = new Map<string, number>()

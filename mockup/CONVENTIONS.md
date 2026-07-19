@@ -100,6 +100,7 @@ const leave = useLeave()   // balance(memberId, leaveTypeId?) / request / decide
 | `UiTabBar` | tabs(TabItem[]), v-model |
 | `UiFilterBar` | slot + #trailing |
 | `UiSearchInput` / `UiSelect` / `UiChipSelect` | v-model |
+| `UiChipTabs` | v-model(string), options({value,label}[])。単一選択のチップ行（カードメニューのカテゴリ切替等。バッチ7h） |
 | `UiMultiCombobox` | v-model(string[]), options({value,label}[]), single（単一選択モード）。論理名で検索する複数選択オートコンプリート（権限設定の項目指定等） |
 | `UiFormField` | label, required, error, hint |
 | `UiSchemaForm` | fields(FieldDef[]), v-model(Record), errors |
@@ -111,10 +112,16 @@ const leave = useLeave()   // balance(memberId, leaveTypeId?) / request / decide
 | `WidgetsPunchClock` | 打刻 = タイムカード（flat: モーダル内等でカード枠を外す） |
 | `WidgetsCalendarConnectGate` | Google カレンダー連携ゲート（擬似 OAuth 同意・props なし）。連携済みバーに「同期カレンダー」選択モーダル（バッチ7b） |
 | `MastersDeptOrgNode` | 組織図の再帰ノード（node: DeptNode, depth）。`@select` で部署詳細へ |
-| `WidgetsNotesPanel` | kind('poipoi'/'minutes'), showAuthor。ノート共通パネル（登録（マークダウンプレビュー付き）+ ファイル取込（選択 → ステージ → 取込ボタンで実行）+ サマリー一覧（押下で詳細モーダル = 全文をマークダウン描画）+ 行単位の取消/復元 + 管理者の全ポスト閲覧（poipoi）。バッチ7c/7d/7e） |
+| `WidgetsNotesPanel` | kind('poipoi'/'minutes'), showAuthor。ノート共通パネル（**一覧が基本ビュー・登録/ファイル取込はヘッダーボタン → 入力モーダル（バッチ7h）**。マークダウンプレビュー・ステージ → 取込ボタン・サマリー一覧（押下で詳細モーダル）+ 行単位の取消/復元 + 管理者の全ポスト閲覧（poipoi）。バッチ7c/7d/7e/7h） |
 | `WidgetsWeeklyInsight` | initialWeekStart。週次 AI インサイト（集計 KPI + チャート + エグゼクティブサマリー/SWOT/リスク/アクション。週ナビ + 再生成。バッチ7g） |
 | `UiMarkdown` | source。安全なサブセットのマークダウン描画（utils/markdown.ts の AST を VNode 直接生成 = v-html 不使用。見出し・リスト・引用・コード・強調・http(s) リンクのみ。バッチ7e） |
 | `MastersPermissionMatrix` | 権限表モード（props なし = ruleCrud を内部利用）。機能 + マスタ項目 × ロール/役職/個人のマトリクス。セルクリックで 未設定→拒否→許可→未設定 |
+| `SettingsMenuCategoryEditor` | props なし。メニューカテゴリのカスタマイズ（F-13-8。エリア切替 + カテゴリ CRUD/並び替え/カード割当 + 既定に戻す。バッチ7h） |
+
+**ページ間導線・メニュー定義の SoT（バッチ7h）:** 親ページへ戻る・関連ページは `app/utils/nav-map.ts`、
+ダッシュボード / マスタハブのカード定義と既定カテゴリは `app/utils/menu-registry.ts` が SoT。
+ページ個別のアドホックな戻るリンク・カードのハードコードを追加しない（レイアウトヘッダー・レジストリへ追記する）。
+新ページ追加時は nav-map（parent/related）と、カードメニューに載せる場合は menu-registry へ登録すること。
 
 コンポーネントはディレクトリプレフィックス付きで自動インポートされる（例: `components/widgets/ApprovalFlow.vue` → `<WidgetsApprovalFlow>`）。
 

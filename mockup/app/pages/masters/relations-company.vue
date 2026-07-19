@@ -78,6 +78,8 @@ const companyRtOptions = computed(() =>
 
 const crForm = ref({ from: '', typeId: '', to: '', notes: '' })
 const crError = ref('')
+// 追加フォームはドロワーへ分離（バッチ7h: 参照 = 基本ビュー・入力 = ボタン押下。マスタ標準と同型）
+const addOpen = ref(false)
 
 async function addCompanyRelation(): Promise<void> {
   const f = crForm.value
@@ -105,6 +107,7 @@ async function addCompanyRelation(): Promise<void> {
   }
   toast.show('会社間の関係を追加しました')
   crForm.value = { from: '', typeId: '', to: '', notes: '' }
+  addOpen.value = false
 }
 
 async function deleteCompanyRelation(row: Record<string, unknown>): Promise<void> {
@@ -135,6 +138,10 @@ async function deleteCompanyRelation(row: Record<string, unknown>): Promise<void
           <Tags class="h-3.5 w-3.5" aria-hidden="true" />
           関係種別マスタ
         </NuxtLink>
+        <button type="button" class="btn btn-primary btn-sm" @click="addOpen = true">
+          <Plus class="h-3.5 w-3.5" aria-hidden="true" />
+          追加
+        </button>
       </template>
       <WidgetsRelationGraph
         :nodes="companyNodes"
@@ -152,7 +159,7 @@ async function deleteCompanyRelation(row: Record<string, unknown>): Promise<void
         :columns="edgeColumns"
         :rows="companyEdgeRows"
         empty-title="会社間の関係がありません"
-        empty-hint="下のフォームから追加できます"
+        empty-hint="右上の「追加」から登録できます"
       >
         <template #cell-fromName="{ row }">
           <span class="font-medium">{{ row.fromName }}</span>
@@ -162,9 +169,12 @@ async function deleteCompanyRelation(row: Record<string, unknown>): Promise<void
         </template>
       </UiDataTable>
 
-      <div class="mt-3 border-t border-line pt-3">
-        <p class="mb-2 text-[12px] font-bold text-sub">関係を追加</p>
-        <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-[1fr_1fr_1fr_1fr_auto]">
+    </UiSectionCard>
+
+    <!-- 追加ドロワー（バッチ7h: 他マスタと同じ「一覧 = 基本ビュー・入力 = ドロワー」に統一） -->
+    <template #drawer>
+      <UiDrawer :open="addOpen" title="会社間の関係を追加" @close="addOpen = false">
+        <div class="grid gap-2">
           <UiFormField label="From" required>
             <UiSelect v-model="crForm.from" :options="companyOptions" empty-label="会社を選択" aria-label="From 会社" />
           </UiFormField>
@@ -177,15 +187,16 @@ async function deleteCompanyRelation(row: Record<string, unknown>): Promise<void
           <UiFormField label="メモ">
             <input v-model="crForm.notes" type="text" class="input" placeholder="関係の補足">
           </UiFormField>
-          <div class="flex items-end">
-            <button type="button" class="btn btn-primary w-full lg:w-auto" @click="addCompanyRelation">
-              <Plus class="h-4 w-4" aria-hidden="true" />
-              追加
-            </button>
-          </div>
+          <p v-if="crError" class="text-[11px] font-medium text-crit" role="alert">{{ crError }}</p>
         </div>
-        <p v-if="crError" class="mt-1 text-[11px] font-medium text-crit" role="alert">{{ crError }}</p>
-      </div>
-    </UiSectionCard>
+        <template #footer>
+          <button type="button" class="btn" @click="addOpen = false">キャンセル</button>
+          <button type="button" class="btn btn-primary" @click="addCompanyRelation">
+            <Plus class="h-4 w-4" aria-hidden="true" />
+            追加
+          </button>
+        </template>
+      </UiDrawer>
+    </template>
   </MastersMasterShell>
 </template>

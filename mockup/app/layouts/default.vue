@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import * as icons from 'lucide-vue-next'
-import { Bell, ChevronDown, Clock3, House, LogOut, Sunrise, UserCog } from 'lucide-vue-next'
+import { ArrowLeft, Bell, ChevronDown, Clock3, Link2, LogOut, Sunrise, UserCog } from 'lucide-vue-next'
 import { signOutFirebase } from '~/utils/firebase-auth'
 import { EMPLOYMENT_TYPE_LABELS } from '~/utils/labels'
+import { navEntryOf } from '~/utils/nav-map'
 import { isActivePath, MOBILE_NAV, NAV_GROUPS } from '~/utils/navigation'
 
 const route = useRoute()
-const { currentUser, switchableUsers, switchUser } = useCurrentUser()
+const { currentUser, isAdmin, switchableUsers, switchUser } = useCurrentUser()
 const { unreadCount } = useNotifications()
 /** API モードは実認証のためデモユーザー切替を出さない（バッチ5e: モックの名残の除去）*/
 const isApi = useApiMode()
@@ -31,7 +32,17 @@ const punchModalOpen = ref(false)
 watch(() => route.path, () => {
   punchModalOpen.value = false
   userMenuOpen.value = false
+  relatedOpen.value = false
 })
+
+// ページ間導線（バッチ7h）: 親ページへ戻る + 関連ページ・設定（nav-map.ts が SoT）
+const relatedOpen = ref(false)
+const navEntry = computed(() => navEntryOf(route.path))
+const parentLink = computed(() => (route.path === '/' ? null : navEntry.value?.parent ?? null))
+const relatedLinks = computed(() => (navEntry.value?.related ?? []).filter((l) => {
+  const bare = l.to.split('?')[0] ?? l.to
+  return (!l.adminOnly || isAdmin.value) && canPath(bare) && bare !== route.path
+}))
 
 function iconOf(name: string) {
   return (icons as Record<string, unknown>)[name] ?? icons.Circle
@@ -80,13 +91,54 @@ function onSwitchUser(id: string): void {
         </template>
         <div v-else class="flex-1" />
 
+        <!-- 親ページへ戻る（nav-map.ts。モバイルでもアイコンで常時表示 = 迷子にならない） -->
         <NuxtLink
-          v-if="route.path !== '/'"
-          to="/"
-          class="btn btn-ghost btn-sm hidden md:inline-flex"
+          v-if="parentLink"
+          :to="parentLink.to"
+          class="btn btn-ghost btn-sm"
+          :aria-label="`${parentLink.label}へ戻る`"
         >
-          <House class="h-4 w-4" aria-hidden="true" /> ホーム
+          <ArrowLeft class="h-4 w-4" aria-hidden="true" />
+          <span class="hidden md:inline">{{ parentLink.label }}</span>
         </NuxtLink>
+
+        <!-- 関連ページ・関連設定（nav-map.ts。権限・管理者フィルタ後に空なら非表示） -->
+        <div v-if="relatedLinks.length > 0" class="relative">
+          <button
+            type="button"
+            class="btn btn-ghost btn-sm"
+            :aria-expanded="relatedOpen"
+            aria-haspopup="menu"
+            aria-label="関連ページ・設定"
+            @click="relatedOpen = !relatedOpen"
+          >
+            <Link2 class="h-4 w-4" aria-hidden="true" />
+            <span class="hidden md:inline">関連</span>
+            <ChevronDown class="h-3.5 w-3.5 text-muted" aria-hidden="true" />
+          </button>
+          <Transition name="fade">
+            <div
+              v-if="relatedOpen"
+              class="card absolute right-0 top-full z-40 mt-1 w-64 overflow-hidden shadow-lg"
+              role="menu"
+              aria-label="関連ページ・設定"
+            >
+              <p class="border-b border-line bg-surface-soft px-3 py-1.5 text-[10px] font-bold text-muted">
+                関連ページ・設定
+              </p>
+              <NuxtLink
+                v-for="l in relatedLinks"
+                :key="l.to"
+                :to="l.to"
+                role="menuitem"
+                class="block px-3 py-2 text-[13px] font-semibold hover:bg-brand-soft"
+                @click="relatedOpen = false"
+              >
+                {{ l.label }}
+              </NuxtLink>
+            </div>
+          </Transition>
+        </div>
 
         <button v-if="canPath('/attendance')" type="button" class="btn btn-ghost btn-sm" @click="punchModalOpen = true">
           <Clock3 class="h-4 w-4" aria-hidden="true" />
@@ -170,7 +222,7 @@ function onSwitchUser(id: string): void {
       </header>
 
       <!-- ページ本体 -->
-      <main class="flex-1 p-3 pb-[calc(var(--bottomnav-h)+16px)] md:p-5 md:pb-8" @click="userMenuOpen = false">
+      <main class="flex-1 p-3 pb-[calc(var(--bottomnav-h)+16px)] md:p-5 md:pb-8" @click="userMenuOpen = false; relatedOpen = false">
         <slot />
       </main>
     </div>

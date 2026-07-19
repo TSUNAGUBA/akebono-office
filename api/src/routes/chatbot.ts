@@ -24,7 +24,9 @@ import type pg from 'pg'
 import { fiscalMonthsOf, fiscalYearOf } from '../../../shared/domain/fiscal'
 import { nowJstIso, todayJst } from '../../../shared/domain/jst'
 import { findCompanyIn, SELF_COMPANY_PATTERN } from '../../../shared/domain/name-match'
-import { aiReferenceScope, canUseFeature, canViewField, stripDeniedFields } from '../../../shared/domain/permissions'
+import {
+  aiReferenceScope, canUseFeature, canViewField, canViewMemberReports, stripDeniedFields,
+} from '../../../shared/domain/permissions'
 import type { PermissionRule, PunchRecord, ReportEntry } from '../../../shared/domain/types'
 import type { AuthUser } from '../auth'
 import { daySummary } from '../domain/attendance'
@@ -262,8 +264,9 @@ export async function buildContext(
     parts.push(`## メンバー「${displayName}」
 部署 ${deptName || '未所属'} / 役職 ${String(m.title ?? '') || 'なし'}${m.email ? ` / メール ${String(m.email)}` : ''}${
   relLines.length > 0 ? `\n人の関係: ${relLines.join(' / ')}` : ''}`)
-    // 他メンバーの日報は提出済みのみ（全員の日報タブ = scope=all と同じ基準）
-    if (can('reports') && matched.id !== user.id) {
+    // 他メンバーの日報は提出済みのみ（全員の日報タブ = scope=all と同じ基準）。
+    // 日報参照権限（F-16-6・バッチ7h）の deny 対象者は AI 文脈にも供給しない
+    if (can('reports') && matched.id !== user.id && canViewMemberReports(rules, subject, matched.id)) {
       const { rows } = await pool.query<{ date: string; entries: unknown; issues: string }>(
         `SELECT date::text AS date, entries, issues FROM daily_reports
          WHERE author_kind = 'human' AND member_id = $1 AND status = 'submitted'
