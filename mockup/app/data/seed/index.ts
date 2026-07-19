@@ -142,7 +142,16 @@ export function buildSeed(): MockDbShape {
     documents: support.seedDocumentNodes,
     chatMessages: [],
     chatSessions: [],
-    permissionRules: [],
+    // 権限の運用デフォルト（バッチ7f。API 側 migration 0025 と同一内容 = モック/API パリティ。
+    // 経営情報（売上・意思決定）と管理 UI（マスタ・設定）を一般/人事から制限。個別例外は権限設定で上書き可）
+    permissionRules: [
+      { id: 'pr-def-01', subjectKind: 'role', subjectId: 'member', resource: 'sales', field: null, effect: 'deny', active: true },
+      { id: 'pr-def-02', subjectKind: 'role', subjectId: 'member', resource: 'decision', field: null, effect: 'deny', active: true },
+      { id: 'pr-def-03', subjectKind: 'role', subjectId: 'member', resource: 'masters', field: null, effect: 'deny', active: true },
+      { id: 'pr-def-04', subjectKind: 'role', subjectId: 'member', resource: 'settings', field: null, effect: 'deny', active: true },
+      { id: 'pr-def-05', subjectKind: 'role', subjectId: 'hr', resource: 'sales', field: null, effect: 'deny', active: true },
+      { id: 'pr-def-06', subjectKind: 'role', subjectId: 'hr', resource: 'decision', field: null, effect: 'deny', active: true },
+    ],
     akebonoWishes: misc.seedAkebonoWishes,
     auditLogs: misc.seedAuditLogs,
     // google 発予定のキャッシュは「連携済みメンバー」の分だけ初期投入する。

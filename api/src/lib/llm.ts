@@ -47,6 +47,8 @@ export interface LlmJsonRequest {
   schema: Record<string, unknown>
   /** 生成上限トークン（既定 2048） */
   maxTokens?: number
+  /** 添付画像（マルチモーダル入力。AI タスクの依頼・回答添付 = バッチ7f。プロンプトの前に並べる） */
+  images?: { mime: string; dataBase64: string }[]
 }
 
 /**
@@ -64,7 +66,13 @@ export async function generateJson<T>(env: Env, req: LlmJsonRequest): Promise<T 
       signal: AbortSignal.timeout(30_000),
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: req.system }] },
-        contents: [{ role: 'user', parts: [{ text: req.prompt }] }],
+        contents: [{
+          role: 'user',
+          parts: [
+            ...(req.images ?? []).map(img => ({ inlineData: { mimeType: img.mime, data: img.dataBase64 } })),
+            { text: req.prompt },
+          ],
+        }],
         generationConfig: {
           responseMimeType: 'application/json',
           responseSchema: req.schema,

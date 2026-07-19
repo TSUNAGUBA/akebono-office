@@ -53,8 +53,10 @@
 | `WorkflowRequest` | id(決裁番号 WF-xxxx), category, title, amount, body, attachments[], requesterId, status(`draft`/`submitted`/`in_review`/`approved`/`rejected`/`remanded`/`withdrawn`), currentStep, routeSnapshot（申請時の経路を凍結保存） | C2 |
 | `ApprovalLog` | id, requestId, step, actorId, delegateForId?, action(`approve`/`reject`/`remand`/`withdraw`/`submit`), comment, at | C2 |
 | `DelegateSetting` | id, memberId, delegateMemberId, from, to, active | C1 |
-| `AiTask` | id, aiEmployeeId, requesterId, title, description, decomposition[{title,done}], status(`proposed`/`approved`/`in_progress`/`blocked`/`done`/`cancelled`), dueDate, confidence(`high`/`mid`/`low`) | C2 |
+| `AiTask` | id, aiEmployeeId, requesterId, title, description, decomposition[{title,done}], status(`proposed`/`approved`/`in_progress`/`blocked`/`done`/`cancelled`), dueDate, confidence(`high`/`mid`/`low`), outputs[{step(-1=統合報告), title, body, at}]（バッチ7f 0025 = ステップ実遂行の成果物。追記のみ） | C2 |
 | `AiActivityLog` | id, aiEmployeeId, taskId?, at, kind(`plan`/`execute`/`report`/`escalate`/`chat`), summary, tokens, costUsd | C2 |
+| `AiTaskQuestion` | id, taskId, stepIndex, question, status(`open`/`answered`), answer, answeredBy, askedAt, answeredAt（バッチ7f = `ai_task_questions` 0025。AI が依頼者へ確認を求める質問。open が残る間はタスクをブロック = 回答で再開。追記 + 回答で確定） | C2 |
+| `AiTaskFile` | id, taskId, questionId?, filename, mime, sizeBytes, bytes, extractedText, uploadedBy（バッチ7f = `ai_task_files` 0025。依頼・回答の添付原本。.md/.txt/.pdf/.docx/.pptx はテキスト抽出・.jpg/.png は LLM マルチモーダル入力。DL は依頼者 + 管理者） | C2 |
 | `Notification` | id, memberId, kind(`approval`/`comment`/`reminder`/`ai_report`/`system`/`escalation`), title, body, link, read, at | C2 |
 | `Escalation` | id, reason(`issue_reported`/`stalled_task`/`overload`/`low_confidence`/`overtime_alert`), targetMemberId/aiEmployeeId, context, status(`open`/`resolved`), resolution{type(`answer`/`ruling`/`no_action`), body, resolvedBy, at}, knowledgeReflected, dedupeKey | C3 |
 | `ServiceIncident` | id, serviceId, title, impact(`minor`/`major`/`critical`), status(`investigating`/`identified`/`monitoring`/`resolved`), updates[{status, body, at}], startedAt, resolvedAt（バッチ6c で API 化 = `service_incidents` 0018。updates は追記のみ・status/resolvedAt はその射影・正順遷移を FOR UPDATE で直列化） | C1 |

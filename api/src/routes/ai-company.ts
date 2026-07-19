@@ -7,29 +7,147 @@
  * - 活動ログは追記のみ（記録系）。トークン/コストは決定的モック値（実 LLM 課金の代替 = 設計判断）
  * - 日次報告は既存 daily_reports（author_kind='ai'）へ生成。既存分はスキップ = 冪等（原則2）
  * - 低確信度・停滞・過負荷は raiseEscalation（クールダウン冪等・非ブロッキング = 原則4）
- * エラー: AKO-AIC-001〜008（api-design の台帳に準拠）
+ * - 実遂行（バッチ7f）: 「進める」でステップを LLM が実際に遂行し成果物（outputs）を生成。
+ *   人間の判断が必要な場合は依頼者へ質問（ai_task_questions）してブロック → 回答（/answer）で再開。
+ *   依頼・回答の添付（画像/ドキュメント = ai_task_files）は抽出テキスト + マルチモーダルで材料化
+ * エラー: AKO-AIC-001〜014（api-design の台帳に準拠）
  */
 import { Hono } from 'hono'
 import type pg from 'pg'
 import {
-  decomposeTask, DELEGATE_PERMISSION, judgeTaskConfidence, mockActivityCost, planDelegation,
+  buildFinalReport, decomposeTask, DELEGATE_PERMISSION, heuristicNeedsInput, heuristicStepOutput, judgeTaskConfidence,
+  mockActivityCost, planDelegation,
   type DelegationCandidate,
 } from '../../../shared/domain/ai-tasks'
 import { addDays, nowJstIso, todayJst } from '../../../shared/domain/jst'
-import type { AiActivityKind, AiModelTier, AiTask, ReportEntry } from '../../../shared/domain/types'
+import type { AiActivityKind, AiModelTier, AiTask, AiTaskOutput, ReportEntry } from '../../../shared/domain/types'
 import type { Env } from '../env'
 import { raiseEscalation } from '../lib/escalate'
+import { extractDocumentText } from '../lib/extract-text'
 import { capCp } from '../lib/text'
 import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
 import { generateJson } from '../lib/llm'
 import { notify } from '../lib/notify'
 
+// questions / files（メタのみ）はタスク行へ埋め込んで返す（フロントの型 = AiTask.questions/files と一致。
+// 一覧 LIMIT 200 での相関サブクエリは SME 規模で十分軽量）
 const TASK_COLS = `id, ai_employee_id AS "aiEmployeeId", requester_id AS "requesterId",
-  title, description, decomposition, status, due_date::text AS "dueDate", confidence, created_at AS "createdAt",
-  requester_ai_employee_id AS "requesterAiEmployeeId", parent_task_id AS "parentTaskId"`
+  title, description, decomposition, outputs, status, due_date::text AS "dueDate", confidence, created_at AS "createdAt",
+  requester_ai_employee_id AS "requesterAiEmployeeId", parent_task_id AS "parentTaskId",
+  (SELECT COALESCE(json_agg(json_build_object(
+      'id', q.id, 'stepIndex', q.step_index, 'question', q.question, 'status', q.status,
+      'answer', q.answer, 'answeredBy', q.answered_by,
+      'askedAt', to_char(q.asked_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"'),
+      'answeredAt', CASE WHEN q.answered_at IS NULL THEN NULL
+        ELSE to_char(q.answered_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"') END
+    ) ORDER BY q.asked_at, q.id), '[]'::json)
+   FROM ai_task_questions q WHERE q.task_id = ai_tasks.id) AS questions,
+  (SELECT COALESCE(json_agg(json_build_object(
+      'id', f.id, 'filename', f.filename, 'mime', f.mime, 'sizeBytes', f.size_bytes, 'questionId', f.question_id
+    ) ORDER BY f.created_at, f.id), '[]'::json)
+   FROM ai_task_files f WHERE f.task_id = ai_tasks.id) AS files`
 const LOG_COLS = `id, ai_employee_id AS "aiEmployeeId", task_id AS "taskId", kind, summary, tokens,
   cost_usd::float AS "costUsd", at`
+
+// ---------- 添付（依頼者インプット: 画像 + ドキュメント。バッチ7f） ----------
+
+const TASK_FILE_EXT_MIME: Record<string, string> = {
+  md: 'text/markdown',
+  txt: 'text/plain',
+  pdf: 'application/pdf',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+}
+const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png'])
+const MAX_TASK_FILE_BYTES = 10 * 1024 * 1024
+const MAX_TASK_FILES = 5
+const EXTRACT_CAP = 20_000
+
+interface PreparedAttachment {
+  filename: string
+  ext: string
+  mime: string
+  bytes: Buffer
+  extractedText: string | null
+}
+
+/**
+ * 添付の検証と抽出（.md/.txt/.pdf/.docx/.pptx = テキスト抽出・.jpg/.png = 画像として保持し LLM へ渡す）。
+ * DB 書込前に全件検証する = 失敗時に中途半端な保存を残さない
+ */
+async function prepareAttachments(raw: unknown): Promise<PreparedAttachment[]> {
+  if (raw === undefined || raw === null) return []
+  if (!Array.isArray(raw)) throw err('AKO-AIC-010', 'attachments は配列で指定してください', 400)
+  if (raw.length > MAX_TASK_FILES) throw err('AKO-AIC-011', `添付は ${MAX_TASK_FILES} 件までです`, 400)
+  const out: PreparedAttachment[] = []
+  for (const a of raw as { filename?: unknown; contentBase64?: unknown }[]) {
+    const filename = String(a?.filename ?? '').trim()
+    const ext = filename.includes('.') ? filename.split('.').pop()!.toLowerCase() : ''
+    const mime = TASK_FILE_EXT_MIME[ext]
+    if (!mime) {
+      throw err('AKO-AIC-010',
+        `対応形式は .md / .txt / .pdf / .docx / .pptx / .jpg / .png です${ext === 'doc' || ext === 'ppt' ? '（旧形式は新形式へ変換してください）' : ''}`, 400)
+    }
+    const contentBase64 = String(a?.contentBase64 ?? '')
+    if (!contentBase64 || contentBase64.length > MAX_TASK_FILE_BYTES * 1.4) {
+      throw err('AKO-AIC-011', 'ファイルが空か大きすぎます（10MB 以下にしてください）', 400)
+    }
+    const bytes = Buffer.from(contentBase64, 'base64')
+    if (bytes.length === 0 || bytes.length > MAX_TASK_FILE_BYTES) {
+      throw err('AKO-AIC-011', 'ファイルが空か大きすぎます（10MB 以下にしてください）', 400)
+    }
+    // 抽出失敗（画像のみの PDF 等）は原本のみ保全して継続（フェイルオープン = 依頼自体は成立させる）
+    const extractedText = IMAGE_EXTS.has(ext)
+      ? null
+      : capCp(((await extractDocumentText(ext, bytes)) ?? '').trim(), EXTRACT_CAP) || null
+    out.push({ filename, ext, mime, bytes, extractedText })
+  }
+  return out
+}
+
+async function insertAttachments(
+  db: pg.Pool | pg.PoolClient,
+  taskId: string,
+  questionId: string | null,
+  uploadedBy: string,
+  files: PreparedAttachment[],
+): Promise<void> {
+  for (const f of files) {
+    await db.query(
+      `INSERT INTO ai_task_files (id, task_id, question_id, filename, mime, size_bytes, bytes, extracted_text, uploaded_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [newId('atf'), taskId, questionId, f.filename, f.mime, f.bytes.length, f.bytes, f.extractedText, uploadedBy])
+  }
+}
+
+/** タスクの実行材料（依頼文 + 回答済み Q&A + 添付抽出テキスト。LLM/ヒューリスティック共通） */
+async function taskMaterials(pool: pg.Pool, task: AiTask): Promise<{
+  text: string
+  images: { mime: string; dataBase64: string }[]
+  answeredCount: number
+}> {
+  const { rows: qs } = await pool.query<{ question: string; answer: string | null }>(
+    `SELECT question, answer FROM ai_task_questions WHERE task_id = $1 AND status = 'answered'
+     ORDER BY asked_at, id`, [task.id])
+  const { rows: files } = await pool.query<{ filename: string; mime: string; extractedText: string | null; bytes: Buffer }>(
+    `SELECT filename, mime, extracted_text AS "extractedText",
+            CASE WHEN mime LIKE 'image/%' THEN bytes ELSE NULL END AS bytes
+     FROM ai_task_files WHERE task_id = $1 ORDER BY created_at, id`, [task.id])
+  const parts: string[] = [`依頼内容: ${task.description || '（記載なし）'}`]
+  for (const q of qs) parts.push(`確認済み Q&A:\nQ: ${q.question}\nA: ${q.answer ?? ''}`)
+  for (const f of files) {
+    if (f.extractedText) parts.push(`添付「${f.filename}」の内容:\n${capCp(f.extractedText, 6000)}`)
+  }
+  const images = files
+    .filter(f => f.bytes)
+    .slice(0, 3) // マルチモーダル入力はコスト・ペイロード上限を考慮し 3 枚まで
+    .map(f => ({ mime: f.mime, dataBase64: f.bytes!.toString('base64') }))
+  return { text: capCp(parts.join('\n\n'), 16_000), images, answeredCount: qs.length }
+}
 
 /** タスク状態から AI 社員の状態を導出して同期（SoT: ai_tasks → 派生: ai_employees.status） */
 async function syncEmployeeStatus(db: pg.Pool | pg.PoolClient, aiEmployeeId: string): Promise<void> {
@@ -89,6 +207,62 @@ async function llmDecompose(
   if (!res || !Array.isArray(res.steps) || res.steps.length === 0) return null
   const confidence = res.confidence === 'high' || res.confidence === 'low' ? res.confidence : 'mid'
   return { steps: res.steps.slice(0, 6).map(s => capCp(String(s), 40)), confidence }
+}
+
+/**
+ * ステップの実遂行（バッチ7f）。LLM が材料（依頼文・Q&A・添付）に基づき実際に成果物を生成する。
+ * 人間の判断・情報が必要と判定した場合は needsInput=true + 具体的な質問を返す（依頼者へ確認）。
+ * LLM 無効・失敗時は決定的ヒューリスティック（heuristicNeedsInput / heuristicStepOutput）へ（原則4）
+ */
+async function prepareStepExecution(
+  pool: pg.Pool,
+  env: Env,
+  task: AiTask & { decomposition: { title: string; done: boolean }[]; outputs: AiTaskOutput[] },
+  stepIndex: number,
+): Promise<{ kind: 'output'; body: string } | { kind: 'question'; question: string }> {
+  const step = task.decomposition[stepIndex]!
+  const materials = await taskMaterials(pool, task)
+  const { rows: roleRows } = await pool.query<{ name: string; mission: string; systemPrompt: string }>(
+    `SELECT r.name, r.mission, r.system_prompt AS "systemPrompt"
+     FROM ai_employees e JOIN ai_roles r ON r.id = e.role_id WHERE e.id = $1`, [task.aiEmployeeId])
+  const role = roleRows[0]
+  const priorOutputs = task.outputs
+    .filter(o => o.step >= 0)
+    .map(o => `【${o.title}】\n${capCp(o.body, 1500)}`)
+    .join('\n\n')
+  const res = await generateJson<{ needsInput?: boolean; question?: string; output?: string }>(env, {
+    system: `あなたは AI 社員「${role?.name ?? '汎用'}」です。ミッション: ${role?.mission ?? ''}\n`
+      + `${role?.systemPrompt ? `${role.systemPrompt}\n` : ''}`
+      + 'タスクの現在のステップを実際に遂行し、成果物をマークダウンで出力します。'
+      + '材料（依頼文・確認済み Q&A・添付）にある情報のみを使い、推測で事実を作らないこと。'
+      + '人間の判断・追加情報がないと遂行できない場合のみ needsInput=true とし、依頼者への具体的な質問を question に書くこと'
+      + '（その場合 output は空でよい）。',
+    prompt: `# タスク\n件名: ${task.title}\n\n# 材料\n${materials.text}`
+      + (priorOutputs ? `\n\n# これまでのステップ成果\n${capCp(priorOutputs, 6000)}` : '')
+      + `\n\n# 今回遂行するステップ\n${step.title}\n\nこのステップを遂行し、成果物を出力してください。`,
+    schema: {
+      type: 'object',
+      properties: {
+        needsInput: { type: 'boolean' },
+        question: { type: 'string' },
+        output: { type: 'string' },
+      },
+      required: ['needsInput', 'output'],
+    },
+    maxTokens: 4096,
+    images: materials.images,
+  })
+  if (res) {
+    if (res.needsInput && String(res.question ?? '').trim()) {
+      return { kind: 'question', question: capCp(String(res.question).trim(), 500) }
+    }
+    const body = String(res.output ?? '').trim()
+    if (body) return { kind: 'output', body: capCp(body, 6000) }
+  }
+  // フォールバック（LLM 無効・失敗・空応答）: 決定的ヒューリスティック
+  const q = heuristicNeedsInput(task.description, materials.answeredCount)
+  if (q) return { kind: 'question', question: q }
+  return { kind: 'output', body: heuristicStepOutput(task.title, step.title, materials.text) }
 }
 
 /**
@@ -221,9 +395,23 @@ async function rollUpToParent(
   // 全分担完了なら親ステップも全完了とみなす（分担漏れステップの宙吊り防止）
   const decomposition = parent.decomposition.map(s =>
     allChildrenDone || childTitles.has(s.title) ? { ...s, done: true } : s)
+  // 全分担完了時は、分担先の統合報告を集約した親（マネージャー）の統合成果物も作る（バッチ7f = 実遂行）
+  let outputs = (parent as unknown as { outputs: AiTaskOutput[] }).outputs
+  if (allChildrenDone) {
+    const { rows: childDone } = await client.query<{ title: string; outputs: AiTaskOutput[] }>(
+      `SELECT title, outputs FROM ai_tasks WHERE parent_task_id = $1 AND status = 'done' ORDER BY id`, [parent.id])
+    const body = [
+      `# 「${parent.title}」統合完了報告（連携分担）`,
+      ...childDone.map((ct) => {
+        const fin = ct.outputs.find(o => o.step === -1) ?? ct.outputs[ct.outputs.length - 1]
+        return `## ${ct.title}\n${capCp(fin?.body ?? '（成果物なし）', 800)}`
+      }),
+    ].join('\n\n')
+    outputs = [...outputs, { step: -1, title: '統合報告', body, at: nowJstIso() }]
+  }
   await client.query(
-    `UPDATE ai_tasks SET decomposition = $2, status = $3, updated_at = now() WHERE id = $1`,
-    [parent.id, JSON.stringify(decomposition), allChildrenDone ? 'done' : parent.status])
+    `UPDATE ai_tasks SET decomposition = $2, outputs = $3, status = $4, updated_at = now() WHERE id = $1`,
+    [parent.id, JSON.stringify(decomposition), JSON.stringify(outputs), allChildrenDone ? 'done' : parent.status])
   if (allChildrenDone) {
     await addLog(client, parent.aiEmployeeId, parent.id, 'report',
       `「${parent.title}」の全分担が完了、成果を統合して報告`)
@@ -251,11 +439,13 @@ export function aiCompanyRoutes(pool: pg.Pool, env: Env): Hono {
     return c.json({ data: rows })
   })
 
-  // タスク依頼（分解 = LLM → 失敗時ヒューリスティック。proposed で登録・低確信度はエスカレーション）
+  // タスク依頼（分解 = LLM → 失敗時ヒューリスティック。proposed で登録・低確信度はエスカレーション）。
+  // 添付（画像/ドキュメント = バッチ7f）はテキスト抽出して分解・実行の材料に使い、原本を保全する
   app.post('/tasks', async (c) => {
     const user = c.get('user')
     const body = await c.req.json().catch(() => ({})) as {
       aiEmployeeId?: string; title?: string; description?: string
+      attachments?: { filename?: string; contentBase64?: string }[]
     }
     const title = capCp(String(body.title ?? '').trim(), 100)
     const description = capCp(String(body.description ?? '').trim(), 2000)
@@ -266,19 +456,39 @@ export function aiCompanyRoutes(pool: pg.Pool, env: Env): Hono {
        WHERE e.id = $1 AND e.active = true`, [String(body.aiEmployeeId ?? '')])
     const emp = emps[0]
     if (!emp) throw err('AKO-AIC-001', 'AI 社員が見つかりません', 404)
+    // 添付は DB 書込前に全件検証・抽出（失敗時に中途半端なタスクを作らない）
+    const attachments = await prepareAttachments(body.attachments)
+    const attachedTexts = attachments
+      .filter(a => a.extractedText)
+      .map(a => `添付「${a.filename}」:\n${capCp(a.extractedText!, 3000)}`)
+      .join('\n\n')
+    const materialForDecompose = attachedTexts ? `${description}\n\n参考資料:\n${attachedTexts}` : description
 
-    const llm = await llmDecompose(env, { name: emp.roleName, mission: emp.mission }, title, description)
+    const llm = await llmDecompose(env, { name: emp.roleName, mission: emp.mission }, title,
+      capCp(materialForDecompose, 12_000))
     const decomposition = llm
       ? llm.steps.map(s => ({ title: s, done: false }))
       : decomposeTask(title, description)
     const confidence = llm ? llm.confidence : judgeTaskConfidence(emp.id, title, description)
 
     const id = newId('at')
-    await pool.query(
-      `INSERT INTO ai_tasks (id, ai_employee_id, requester_id, title, description, decomposition, status, confidence, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, 'proposed', $7, $8)`,
-      [id, emp.id, user.id, title, description, JSON.stringify(decomposition), confidence, nowJstIso()])
-    await addLog(pool, emp.id, id, 'plan', `「${title}」の分解案を作成し承認待ち`)
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+      await client.query(
+        `INSERT INTO ai_tasks (id, ai_employee_id, requester_id, title, description, decomposition, status, confidence, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, 'proposed', $7, $8)`,
+        [id, emp.id, user.id, title, description, JSON.stringify(decomposition), confidence, nowJstIso()])
+      await insertAttachments(client, id, null, user.id, attachments)
+      await client.query('COMMIT')
+    } catch (e) {
+      await client.query('ROLLBACK')
+      throw e
+    } finally {
+      client.release()
+    }
+    await addLog(pool, emp.id, id, 'plan',
+      `「${title}」の分解案を作成し承認待ち${attachments.length > 0 ? `（添付 ${attachments.length} 件を受領）` : ''}`)
     await syncEmployeeStatus(pool, emp.id)
 
     // 補助処理: 低確信度エスカレーション（失敗しても主フローは成立 = 原則4）。
@@ -302,14 +512,34 @@ export function aiCompanyRoutes(pool: pg.Pool, env: Env): Hono {
     const taskId = c.req.param('id')
     const action = c.req.param('action')
 
-    // 連携計画（LLM 呼び出しあり = 最長 30 秒）はロック取得前に済ませる。
-    // 事前読みが proposed 以外なら計画不要（トランザクション内の状態ガードが正）
+    // 連携計画・ステップ実行（LLM 呼び出しあり = 最長 30 秒）はロック取得前に済ませる。
+    // 事前読みの状態が対象外ならスキップ（トランザクション内の状態ガードが正）
     let prepared: Awaited<ReturnType<typeof prepareDelegationPlan>> = null
-    if (action === 'approve') {
-      const { rows: pre } = await pool.query<AiTask & { decomposition: { title: string; done: boolean }[] }>(
+    let preparedExec: {
+      stepIndex: number
+      stepTitle: string
+      result: Awaited<ReturnType<typeof prepareStepExecution>>
+    } | null = null
+    if (action === 'approve' || action === 'progress') {
+      const { rows: pre } = await pool.query<AiTask & {
+        decomposition: { title: string; done: boolean }[]
+        outputs: AiTaskOutput[]
+        questions: { status: string }[]
+      }>(
         `SELECT ${TASK_COLS} FROM ai_tasks WHERE id = $1`, [taskId])
-      if (pre[0]?.status === 'proposed') {
+      if (action === 'approve' && pre[0]?.status === 'proposed') {
         prepared = await prepareDelegationPlan(pool, env, pre[0])
+      }
+      if (action === 'progress' && pre[0]?.status === 'in_progress'
+        && !pre[0].questions.some(q => q.status === 'open')) {
+        const idx = pre[0].decomposition.findIndex(s => !s.done)
+        if (idx >= 0) {
+          preparedExec = {
+            stepIndex: idx,
+            stepTitle: pre[0].decomposition[idx]!.title,
+            result: await prepareStepExecution(pool, env, pre[0], idx),
+          }
+        }
       }
     }
 
@@ -317,6 +547,7 @@ export function aiCompanyRoutes(pool: pg.Pool, env: Env): Hono {
     let result: {
       finished?: boolean; requesterId?: string; title?: string; aiEmployeeId?: string
       notifyHuman?: boolean
+      questionAsked?: string
       parentFinished?: { requesterId: string; title: string; managerId: string }
       childBlocked?: { requesterId: string; title: string }
     } = {}
@@ -335,24 +566,54 @@ export function aiCompanyRoutes(pool: pg.Pool, env: Env): Hono {
         // （人間の承認は親タスク 1 回のみ = 依頼を一挙に引き受ける。オペレーター指示 2026-07-19 #3）
         if (prepared) await delegateOnApprove(client, task, prepared)
       } else if (action === 'progress') {
+        // 依頼者の回答待ち（open な質問）の間は進められない = 回答（/answer）で再開する。
+        // 質問によるブロックは status='blocked' のため、状態ガードより先に判定して 014 を返す
+        const { rows: openQ } = await client.query(
+          `SELECT 1 FROM ai_task_questions WHERE task_id = $1 AND status = 'open' LIMIT 1`, [taskId])
+        if (openQ.length > 0) throw err('AKO-AIC-014', '依頼者の回答待ちです（回答すると実行を再開できます）', 409)
         if (task.status !== 'in_progress') throw err('AKO-AIC-005', '実行中のタスクのみ進められます', 409)
         const idx = task.decomposition.findIndex(s => !s.done)
         if (idx < 0) throw err('AKO-AIC-006', '未完了のステップがありません', 409)
         const step = task.decomposition[idx]!
-        const decomposition = task.decomposition.map((s, i) => i === idx ? { ...s, done: true } : s)
-        const finished = decomposition.every(s => s.done)
-        await client.query(
-          `UPDATE ai_tasks SET decomposition = $2, status = $3, updated_at = now() WHERE id = $1`,
-          [taskId, JSON.stringify(decomposition), finished ? 'done' : task.status])
-        await addLog(client, task.aiEmployeeId, taskId, 'execute', `「${step.title}」を完了`)
-        if (finished) {
-          await addLog(client, task.aiEmployeeId, taskId, 'report', `「${task.title}」の全ステップが完了、成果を報告`)
-        }
-        // 子タスク（連携分担）の完了は依頼元マネージャーへ報告・ロールアップ（人間への通知は親の完了時のみ）
-        result = { finished, requesterId: task.requesterId, title: task.title, notifyHuman: finished && !task.parentTaskId }
-        if (finished && task.parentTaskId) {
-          const parentDone = await rollUpToParent(client, task)
-          if (parentDone) result.parentFinished = parentDone
+        // 事前実行の対象とロック後の状態が食い違う場合（通常起きない防御）は決定的出力で作り直す
+        const exec = preparedExec && preparedExec.stepIndex === idx && preparedExec.stepTitle === step.title
+          ? preparedExec.result
+          : { kind: 'output' as const, body: heuristicStepOutput(task.title, step.title, task.description) }
+        if (exec.kind === 'question') {
+          // 人間のアクションが必要 = 依頼者へ質問し、回答があるまでブロック（バッチ7f）
+          const qid = newId('atq')
+          await client.query(
+            `INSERT INTO ai_task_questions (id, task_id, step_index, question, status, asked_at)
+             VALUES ($1, $2, $3, $4, 'open', now())`, [qid, taskId, idx, exec.question])
+          await client.query(`UPDATE ai_tasks SET status = 'blocked', updated_at = now() WHERE id = $1`, [taskId])
+          await addLog(client, task.aiEmployeeId, taskId, 'escalate',
+            `「${step.title}」の遂行に確認が必要: ${capCp(exec.question, 60)}`)
+          result = { requesterId: task.requesterId, title: task.title }
+          result.questionAsked = exec.question
+        } else {
+          // 実遂行: 成果物を生成して保存し、ステップを完了へ（outputs は追記のみ = 記録系）
+          const outputs: AiTaskOutput[] = [
+            ...(task as unknown as { outputs: AiTaskOutput[] }).outputs,
+            { step: idx, title: step.title, body: exec.body, at: nowJstIso() },
+          ]
+          const decomposition = task.decomposition.map((s, i) => i === idx ? { ...s, done: true } : s)
+          const finished = decomposition.every(s => s.done)
+          if (finished) {
+            outputs.push({ step: -1, title: '統合報告', body: buildFinalReport(task.title, outputs), at: nowJstIso() })
+          }
+          await client.query(
+            `UPDATE ai_tasks SET decomposition = $2, outputs = $3, status = $4, updated_at = now() WHERE id = $1`,
+            [taskId, JSON.stringify(decomposition), JSON.stringify(outputs), finished ? 'done' : task.status])
+          await addLog(client, task.aiEmployeeId, taskId, 'execute', `「${step.title}」を遂行し成果物を作成`)
+          if (finished) {
+            await addLog(client, task.aiEmployeeId, taskId, 'report', `「${task.title}」の全ステップが完了、成果を統合して報告`)
+          }
+          // 子タスク（連携分担）の完了は依頼元マネージャーへ報告・ロールアップ（人間への通知は親の完了時のみ）
+          result = { finished, requesterId: task.requesterId, title: task.title, notifyHuman: finished && !task.parentTaskId }
+          if (finished && task.parentTaskId) {
+            const parentDone = await rollUpToParent(client, task)
+            if (parentDone) result.parentFinished = parentDone
+          }
         }
       } else if (action === 'block') {
         if (task.status === 'in_progress') {
@@ -404,7 +665,14 @@ export function aiCompanyRoutes(pool: pg.Pool, env: Env): Hono {
     } finally {
       client.release()
     }
-    // 補助処理: 完了・連携通知（トランザクション確定後・失敗しても遷移は成立 = 原則4）
+    // 補助処理: 完了・確認依頼・連携通知（トランザクション確定後・失敗しても遷移は成立 = 原則4）
+    if (result.questionAsked && result.requesterId) {
+      const { rows } = await pool.query<{ name: string }>(
+        `SELECT name FROM ai_employees WHERE id = $1`, [result.aiEmployeeId])
+      await notify(pool, result.requesterId, 'ai_report', `AI 確認依頼: ${result.title}`,
+        `${rows[0]?.name ?? 'AI社員'} から確認: ${capCp(result.questionAsked, 80)}（/ai-company で回答してください）`,
+        '/ai-company')
+    }
     if (result.notifyHuman && result.requesterId) {
       const { rows } = await pool.query<{ name: string }>(
         `SELECT name FROM ai_employees WHERE id = $1`, [result.aiEmployeeId])
@@ -425,6 +693,72 @@ export function aiCompanyRoutes(pool: pg.Pool, env: Env): Hono {
     }
     const { rows: after } = await pool.query(`SELECT ${TASK_COLS} FROM ai_tasks WHERE id = $1`, [taskId])
     return c.json({ data: after[0] })
+  })
+
+  // 依頼者の回答（人間のアクションが必要な箇所への応答。バッチ7f）。
+  // 最も古い open な質問へ回答し、ブロック中なら実行を再開する。添付（画像/ドキュメント）も受け付ける
+  app.post('/tasks/:id/answer', async (c) => {
+    const user = c.get('user')
+    const taskId = c.req.param('id')
+    const body = await c.req.json().catch(() => ({})) as {
+      answer?: string; attachments?: { filename?: string; contentBase64?: string }[]
+    }
+    const answer = capCp(String(body.answer ?? '').trim(), 4000)
+    if (!answer) throw err('AKO-GEN-001', '回答を入力してください', 400)
+    const attachments = await prepareAttachments(body.attachments)
+
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+      const { rows } = await client.query<AiTask>(
+        `SELECT ${TASK_COLS} FROM ai_tasks WHERE id = $1 FOR UPDATE`, [taskId])
+      const task = rows[0]
+      if (!task) throw err('AKO-AIC-003', 'タスクが見つかりません', 404)
+      if (task.requesterId !== user.id && user.role !== 'admin') {
+        throw err('AKO-AIC-013', '依頼者本人（または管理者）のみ回答できます', 403)
+      }
+      const { rows: qs } = await client.query<{ id: string; question: string }>(
+        `SELECT id, question FROM ai_task_questions WHERE task_id = $1 AND status = 'open'
+         ORDER BY asked_at, id LIMIT 1 FOR UPDATE`, [taskId])
+      const q = qs[0]
+      if (!q) throw err('AKO-AIC-012', '回答待ちの質問がありません', 409)
+      await client.query(
+        `UPDATE ai_task_questions SET status = 'answered', answer = $2, answered_by = $3, answered_at = now()
+         WHERE id = $1`, [q.id, answer, user.id])
+      await insertAttachments(client, taskId, q.id, user.id, attachments)
+      // 回答でブロックを解除し実行を再開できる状態へ（cancelled/done は状態を変えない）
+      if (task.status === 'blocked') {
+        await client.query(`UPDATE ai_tasks SET status = 'in_progress', updated_at = now() WHERE id = $1`, [taskId])
+      }
+      await addLog(client, task.aiEmployeeId, taskId, 'chat',
+        `依頼者から回答を受領: ${capCp(answer, 60)}${attachments.length > 0 ? `（添付 ${attachments.length} 件）` : ''}`)
+      await syncEmployeeStatus(client, task.aiEmployeeId)
+      await client.query('COMMIT')
+    } catch (e) {
+      await client.query('ROLLBACK')
+      throw e
+    } finally {
+      client.release()
+    }
+    // 回答者本人の操作のため人間への追加通知は不要（AI は次の「進める」で回答を材料に遂行する）
+    const { rows: after } = await pool.query(`SELECT ${TASK_COLS} FROM ai_tasks WHERE id = $1`, [taskId])
+    return c.json({ data: after[0] })
+  })
+
+  // 添付原本のダウンロード（依頼者本人または管理者のみ = 依頼インプットの既定可視性）
+  app.get('/files/:id', async (c) => {
+    const user = c.get('user')
+    const { rows } = await pool.query<{
+      filename: string; mime: string; bytes: Buffer; requesterId: string
+    }>(
+      `SELECT f.filename, f.mime, f.bytes, t.requester_id AS "requesterId"
+       FROM ai_task_files f JOIN ai_tasks t ON t.id = f.task_id WHERE f.id = $1`, [c.req.param('id')])
+    const f = rows[0]
+    if (!f) throw err('AKO-GEN-002', 'ファイルが見つかりません', 404)
+    if (f.requesterId !== user.id && user.role !== 'admin') {
+      throw err('AKO-PRM-001', '依頼者本人（または管理者）のみ参照できます', 403)
+    }
+    return c.json({ data: { filename: f.filename, mime: f.mime, contentBase64: f.bytes.toString('base64') } })
   })
 
   // 日次報告の生成（活動ログ集約 → daily_reports。既存分はスキップ = 冪等）

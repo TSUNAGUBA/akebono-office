@@ -9,6 +9,7 @@ import pg from 'pg'
 import { addDays, todayJst } from '../../../shared/domain/jst'
 import { createApp } from '../../src/app'
 import { migrate } from '../../src/db/migrate'
+import { clearPermissionCache } from '../../src/lib/permissions'
 import { createPool } from '../../src/db/pool'
 import type { Env } from '../../src/env'
 
@@ -58,6 +59,10 @@ beforeAll(async () => {
   pool = createPool(env)
   await pool.query('DROP SCHEMA IF EXISTS app_office CASCADE')
   await migrate(pool, () => {})
+  // 権限の運用デフォルト（0025 = バッチ7f）は「未設定環境の初期値」であり、既存の権限テスト群は
+  // クリーンな状態（未設定 = 全 allow）を前提に自分でルールを出し入れする。テストでは一旦無効化し、
+  // デフォルト自体の検証はバッチ7f の describe が再有効化して行う
+  await pool.query(`UPDATE permission_rules SET active = false WHERE id LIKE 'pr-def-%'`)
   app = createApp(env, pool)
   // テストメンバー（admin / hr / 一般）
   await pool.query(`
@@ -2906,5 +2911,156 @@ describe('バッチ7e: ぽいぽいポスト（管理者の全ポスト閲覧。
     expect(files.length).toBe(1)
     expect((await api('GET', `/v1/notes/files/${files[0]!.id}`, { as: ADMIN })).status).toBe(200)
     expect((await api('GET', `/v1/notes/files/${files[0]!.id}`, { as: HR })).status).toBe(403)
+  })
+})
+
+describe('バッチ7f: 権限デフォルト + AI 社員の増減 + AI カンパニーの実遂行（オペレーター指示 2026-07-19 #7）', () => {
+  // 1x1 の最小 PNG（バイナリ添付の検証用）
+  const PNG_1PX = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
+
+  it('権限の運用デフォルト（0025）: member/hr は売上・意思決定が deny、管理者は allow、マスタ参照 API は影響なし', async () => {
+    // migration が投入したデフォルト（beforeAll で無効化済み）を再有効化して振る舞いを検証する
+    const { rowCount } = await pool.query(
+      `UPDATE permission_rules SET active = true WHERE id LIKE 'pr-def-%'`)
+    expect(rowCount).toBe(6)
+    clearPermissionCache() // 直接 SQL での切替はキャッシュを経由しないため明示的にクリア
+    try {
+      expect((await api('GET', '/v1/sales', { as: MEMBER })).status).toBe(403)
+      expect((await api('GET', '/v1/sales', { as: HR })).status).toBe(403)
+      expect((await api('GET', '/v1/sales', { as: ADMIN })).status).toBe(200)
+      expect((await api('GET', '/v1/decisions/logs', { as: MEMBER })).status).toBe(403)
+      expect((await api('GET', '/v1/decisions/logs', { as: ADMIN })).status).toBe(200)
+      // masters deny は管理 UI の非表示のみ（/v1/masters はデータ面 = 機能ガード対象外。参照データ供給は維持）
+      expect((await api('GET', '/v1/masters/companies', { as: MEMBER })).status).toBe(200)
+    } finally {
+      await pool.query(`UPDATE permission_rules SET active = false WHERE id LIKE 'pr-def-%'`)
+      clearPermissionCache()
+    }
+  })
+
+  it('AI 社員の増減: 追加（増員）→ 無効化（減員）で依頼不可 → 復元で再開', async () => {
+    const role = await api('POST', '/v1/masters/ai-roles', {
+      as: ADMIN, body: { name: '7f検証ロール', mission: '実遂行の検証', systemPrompt: '', permissions: [], modelTier: 'lite' },
+    })
+    const roleId = (role.json.data as { id: string }).id
+    const emp = await api('POST', '/v1/masters/ai-employees', {
+      as: ADMIN, body: { name: '7f検証社員', roleId, deskPosition: { x: 3, y: 2 } },
+    })
+    const empId = (emp.json.data as { id: string }).id
+    // 減員 = 論理削除 → 新規依頼は 404
+    expect((await api('POST', `/v1/masters/ai-employees/${empId}/archive`, { as: ADMIN })).status).toBe(200)
+    expect((await api('POST', '/v1/ai-company/tasks', {
+      as: MEMBER, body: { aiEmployeeId: empId, title: '減員後の依頼' },
+    })).json.error?.code).toBe('AKO-AIC-001')
+    // 復元（取消可能性 = 原則 9.5）で依頼可能へ戻る
+    expect((await api('POST', `/v1/masters/ai-employees/${empId}/restore`, { as: ADMIN })).status).toBe(200)
+    expect((await api('POST', '/v1/ai-company/tasks', {
+      as: MEMBER, body: { aiEmployeeId: empId, title: '復元後の依頼', description: '復元検証のための依頼です。分解して進めてください。' },
+    })).status).toBe(201)
+  })
+
+  it('実遂行: 情報不足の依頼は依頼者へ質問 → 回答（権限ガードあり）→ 遂行で成果物 → 完了で統合報告', async () => {
+    const role = await api('POST', '/v1/masters/ai-roles', {
+      as: ADMIN, body: { name: '7f遂行ロール', mission: '調査と資料作成', systemPrompt: '', permissions: [], modelTier: 'standard' },
+    })
+    const emp = await api('POST', '/v1/masters/ai-employees', {
+      as: ADMIN, body: { name: '7f遂行社員', roleId: (role.json.data as { id: string }).id, deskPosition: { x: 0, y: 3 } },
+    })
+    const empId = (emp.json.data as { id: string }).id
+    // 添付付きの依頼（.md = 抽出・.png = 画像原本）。説明が薄い（20 字未満）= ヒューリスティックが確認を要求する
+    const created = await api('POST', '/v1/ai-company/tasks', {
+      as: MEMBER,
+      body: {
+        aiEmployeeId: empId,
+        title: '7f実遂行検証タスク',
+        description: '急ぎで頼む',
+        attachments: [
+          { filename: 'ref.md', contentBase64: Buffer.from('# 参考資料\n単価テーブル: A=100, B=200', 'utf8').toString('base64') },
+          { filename: 'shot.png', contentBase64: PNG_1PX.toString('base64') },
+        ],
+      },
+    })
+    expect(created.status).toBe(201)
+    const taskId = (created.json.data as { id: string }).id
+    // 添付メタがタスク行へ埋め込まれる
+    const listed = (await api('GET', '/v1/ai-company/tasks', { as: MEMBER })).json.data as {
+      id: string; files: { filename: string }[]; questions: unknown[]
+    }[]
+    expect(listed.find(t => t.id === taskId)?.files.map(f => f.filename).sort()).toEqual(['ref.md', 'shot.png'])
+
+    await api('POST', `/v1/ai-company/tasks/${taskId}/approve`, { as: MEMBER })
+    // 1 回目の「進める」: 情報不足 → 依頼者へ質問してブロック（人間のアクション要求）
+    const p1 = await api('POST', `/v1/ai-company/tasks/${taskId}/progress`, { as: MEMBER })
+    expect((p1.json.data as { status: string }).status).toBe('blocked')
+    const q1 = (p1.json.data as { questions: { status: string; question: string }[] }).questions
+    expect(q1.length).toBe(1)
+    expect(q1[0]!.status).toBe('open')
+    // 回答待ちの間は進められない
+    expect((await api('POST', `/v1/ai-company/tasks/${taskId}/progress`, { as: MEMBER })).json.error?.code).toBe('AKO-AIC-014')
+    // 回答は依頼者本人（または管理者）のみ
+    expect((await api('POST', `/v1/ai-company/tasks/${taskId}/answer`, {
+      as: HR, body: { answer: '勝手に回答' },
+    })).json.error?.code).toBe('AKO-AIC-013')
+    // 依頼者の回答（添付付き）で実行再開
+    const ans = await api('POST', `/v1/ai-company/tasks/${taskId}/answer`, {
+      as: MEMBER,
+      body: {
+        answer: '目的はコスト削減比較です。A/B 単価の比較表を期待しています',
+        attachments: [{ filename: 'note.txt', contentBase64: Buffer.from('締切は今週金曜').toString('base64') }],
+      },
+    })
+    expect(ans.status).toBe(200)
+    expect((ans.json.data as { status: string }).status).toBe('in_progress')
+    expect((ans.json.data as { questions: { status: string; answer: string }[] }).questions[0]!.status).toBe('answered')
+
+    // 全ステップ遂行 → 各ステップの成果物 + 統合報告
+    interface ExecState { status: string; outputs: { step: number; title: string; body: string }[] }
+    let last: ExecState | undefined
+    for (let i = 0; i < 8; i++) {
+      const r = await api('POST', `/v1/ai-company/tasks/${taskId}/progress`, { as: MEMBER })
+      if (r.status !== 200) break
+      last = r.json.data as ExecState
+      if (last.status === 'done') break
+    }
+    expect(last?.status).toBe('done')
+    const outputs = last!.outputs
+    expect(outputs.length).toBeGreaterThan(1)
+    // ステップ成果物は材料（回答・添付抽出テキスト）に基づく（LLM 無効 = 決定的ヒューリスティック）
+    expect(outputs[0]!.body).toContain('コスト削減')
+    // 統合報告（step = -1）が末尾に生成される
+    expect(outputs.some(o => o.step === -1 && o.title === '統合報告')).toBe(true)
+  })
+
+  it('添付バリデーション: 非対応形式は AKO-AIC-010・6 件以上は AKO-AIC-011。原本は依頼者 + 管理者のみDL可', async () => {
+    const emps = (await api('GET', '/v1/masters/ai-employees', { as: ADMIN })).json.data as { id: string; active: boolean }[]
+    const empId = emps.find(e => e.active)!.id
+    expect((await api('POST', '/v1/ai-company/tasks', {
+      as: MEMBER,
+      body: { aiEmployeeId: empId, title: 'x', attachments: [{ filename: 'v.exe', contentBase64: 'eA==' }] },
+    })).json.error?.code).toBe('AKO-AIC-010')
+    expect((await api('POST', '/v1/ai-company/tasks', {
+      as: MEMBER,
+      body: {
+        aiEmployeeId: empId, title: 'x',
+        attachments: Array.from({ length: 6 }, (_, i) => ({ filename: `${i}.txt`, contentBase64: 'eA==' })),
+      },
+    })).json.error?.code).toBe('AKO-AIC-011')
+    // 原本ダウンロードの権限（依頼者 or 管理者）
+    const created = await api('POST', '/v1/ai-company/tasks', {
+      as: MEMBER,
+      body: {
+        aiEmployeeId: empId, title: '7f原本DL検証', description: '添付原本の権限検証のための依頼です。よろしくお願いします。',
+        attachments: [{ filename: 'dl.txt', contentBase64: Buffer.from('原本テキスト').toString('base64') }],
+      },
+    })
+    const createdId = (created.json.data as { id: string }).id
+    const allTasks = (await api('GET', '/v1/ai-company/tasks', { as: MEMBER })).json.data as {
+      id: string; files: { id: string }[]
+    }[]
+    const files = allTasks.find(t => t.id === createdId)!.files
+    expect((await api('GET', `/v1/ai-company/files/${files[0]!.id}`, { as: HR })).status).toBe(403)
+    expect((await api('GET', `/v1/ai-company/files/${files[0]!.id}`, { as: MEMBER })).status).toBe(200)
+    expect((await api('GET', `/v1/ai-company/files/${files[0]!.id}`, { as: ADMIN })).status).toBe(200)
   })
 })

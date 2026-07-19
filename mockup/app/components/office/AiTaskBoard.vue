@@ -4,7 +4,7 @@
  * proposed / in_progress(approved 含む) / blocked / done の 4 カラム。
  * カードに分解チェックリストと操作ボタン。モバイルは縦積み。
  */
-import { CheckCircle2, Circle, Share2 } from 'lucide-vue-next'
+import { CheckCircle2, Circle, FileText, MessageCircleQuestion, Share2 } from 'lucide-vue-next'
 import type { AiEmployee, AiTask, AiTaskStatus } from '~/types/domain'
 import { AI_TASK_STATUS_LABELS } from '~/utils/labels'
 
@@ -18,7 +18,17 @@ const emit = defineEmits<{
   progress: [taskId: string]
   block: [taskId: string]
   cancel: [taskId: string]
+  detail: [taskId: string]
 }>()
+
+/** 依頼者の回答待ち（open な質問）か（バッチ7f: 実遂行で AI が確認を求めた状態） */
+function hasOpenQuestion(t: AiTask): boolean {
+  return (t.questions ?? []).some(q => q.status === 'open')
+}
+
+function outputCount(t: AiTask): number {
+  return (t.outputs ?? []).length
+}
 
 const COLUMNS: { key: string; label: string; statuses: AiTaskStatus[] }[] = [
   { key: 'proposed', label: AI_TASK_STATUS_LABELS.proposed, statuses: ['proposed'] },
@@ -78,6 +88,16 @@ function doneCount(t: AiTask): number {
             <span class="num ml-auto">{{ doneCount(t) }}/{{ t.decomposition.length }}</span>
           </div>
 
+          <!-- 実遂行（バッチ7f）: 回答待ち・成果物の可視化 -->
+          <p v-if="hasOpenQuestion(t)" class="mt-1 flex items-center gap-1 text-[11px] font-semibold text-warn">
+            <MessageCircleQuestion class="h-3 w-3" aria-hidden="true" />
+            依頼者の回答待ち（詳細から回答できます）
+          </p>
+          <p v-else-if="outputCount(t) > 0" class="mt-1 flex items-center gap-1 text-[11px] text-sub">
+            <FileText class="h-3 w-3" aria-hidden="true" />
+            成果物 {{ outputCount(t) }} 件
+          </p>
+
           <!-- AI 社員間の連携（オペレーター指示 2026-07-19 #3）: 分担元 / 分担先の可視化 -->
           <p v-if="t.requesterAiEmployeeId" class="mt-1 flex items-center gap-1 text-[11px] text-brand">
             <Share2 class="h-3 w-3" aria-hidden="true" />
@@ -103,7 +123,7 @@ function doneCount(t: AiTask): number {
           </ul>
 
           <!-- 操作 -->
-          <div v-if="t.status !== 'done'" class="mt-2 flex flex-wrap gap-1.5 border-t border-line pt-2">
+          <div class="mt-2 flex flex-wrap gap-1.5 border-t border-line pt-2">
             <template v-if="t.status === 'proposed'">
               <button type="button" class="btn btn-primary btn-sm" @click="emit('approve', t.id)">承認して開始</button>
               <button type="button" class="btn btn-ghost btn-sm" @click="emit('cancel', t.id)">中止</button>
@@ -114,12 +134,21 @@ function doneCount(t: AiTask): number {
               <button type="button" class="btn btn-ghost btn-sm" @click="emit('cancel', t.id)">中止</button>
             </template>
             <template v-else-if="t.status === 'blocked'">
-              <button type="button" class="btn btn-primary btn-sm" @click="emit('block', t.id)">再開</button>
+              <button
+                v-if="hasOpenQuestion(t)"
+                type="button"
+                class="btn btn-primary btn-sm"
+                @click="emit('detail', t.id)"
+              >回答する</button>
+              <button v-else type="button" class="btn btn-primary btn-sm" @click="emit('block', t.id)">再開</button>
               <button type="button" class="btn btn-ghost btn-sm" @click="emit('cancel', t.id)">中止</button>
             </template>
+            <button type="button" class="btn btn-ghost btn-sm ml-auto" @click="emit('detail', t.id)">
+              詳細・成果物
+            </button>
           </div>
-          <p v-else class="mt-2 border-t border-line pt-2 text-[11px] text-ok">
-            全ステップ完了・依頼者へ報告済み
+          <p v-if="t.status === 'done'" class="mt-1 text-[11px] text-ok">
+            全ステップ完了・依頼者へ報告済み（成果物は「詳細・成果物」から）
           </p>
         </li>
       </ul>

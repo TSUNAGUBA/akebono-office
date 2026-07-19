@@ -97,3 +97,56 @@ export function planDelegation(
     return { title: s.title, aiEmployeeId: target.id }
   })
 }
+
+// ---------- 実遂行（バッチ7f・オペレーター指示 2026-07-19 #7） ----------
+
+/**
+ * 依頼者への確認が必要か（決定的ヒューリスティック = LLM 無効環境・モックの唯一のロジック）。
+ * 情報不足の依頼（confidence=low と同じ判定基準）は、最初のステップ実行前に一度だけ依頼者へ確認する。
+ * 一度回答を得た依頼（answeredCount > 0）には再質問しない = 質問ループを作らない
+ */
+export function heuristicNeedsInput(description: string, answeredCount: number): string | null {
+  if (answeredCount > 0) return null
+  const d = description.trim()
+  if (d.length < 20 || d.includes('?') || d.includes('？')) {
+    return '依頼内容を具体化するため、目的・期待する成果物・前提条件（あれば参考資料も）を教えてください'
+  }
+  return null
+}
+
+/**
+ * ステップ実行の成果物（決定的ヒューリスティック = LLM 無効環境・モックのフォールバック）。
+ * 依頼文・回答・添付抽出テキストの冒頭を引用した実施記録をマークダウンで生成する。
+ * 推測で事実は作らない（materials にある情報の整理のみ）
+ */
+export function heuristicStepOutput(
+  title: string,
+  stepTitle: string,
+  materials: string,
+): string {
+  const src = materials.trim()
+  const excerpt = src ? [...src.replace(/\s+/g, ' ')].slice(0, 300).join('') : ''
+  return [
+    `### ${stepTitle}`,
+    `依頼「${title}」について本ステップを実施しました。`,
+    excerpt ? `**参照した材料（冒頭）:** ${excerpt}` : '**参照した材料:** 依頼本文のみ（追加資料なし）',
+    '- 材料の要点を整理し、本ステップの観点で確認しました',
+    '- 判断が必要な事項・不足情報は見つかりませんでした（あれば依頼者へ確認します）',
+  ].join('\n')
+}
+
+/**
+ * 統合報告（全ステップ完了時に outputs の成果を集約。決定的 = LLM 追加呼び出しなし・モック/API 共通）。
+ * 各ステップの全文は個別の成果物として保存済みのため、ここでは要約（冒頭）のみ再掲する = 二重保存を防ぐ
+ */
+export function buildFinalReport(
+  title: string,
+  outputs: { step: number; title: string; body: string }[],
+): string {
+  const steps = outputs.filter(o => o.step >= 0)
+  return [
+    `# 「${title}」完了報告`,
+    `全 ${steps.length} ステップを遂行しました。要約は以下（全文は各ステップの成果物を参照）。`,
+    ...steps.map(o => `## ${o.title}\n${[...o.body.replace(/^#+\s.*$/m, '').trim()].slice(0, 300).join('')}`),
+  ].join('\n\n')
+}
