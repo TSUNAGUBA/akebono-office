@@ -373,18 +373,24 @@ export function useAiCompany() {
    * モックは決定的ヒューリスティックのため即座に収束する（Web 調査は API モードのみの機能）
    */
   const AUTO_RUN_MAX_STEPS = 12
+  let autoRunning = false // progressTask 末尾の自動継続との相互再帰防止（R1 M-3）
   async function autoRunMock(taskId: string): Promise<void> {
     const kids = aiTasks.value.filter(t => t.parentTaskId === taskId && t.status === 'in_progress')
     const targets = kids.length > 0 ? kids.map(k => k.id) : [taskId]
-    for (const id of targets) {
-      for (let i = 0; i < AUTO_RUN_MAX_STEPS; i++) {
-        const t = aiTasks.value.find(x => x.id === id)
-        if (!t || t.status !== 'in_progress') break
-        if ((t.questions ?? []).some(q => q.status === 'open')) break
-        if (!t.decomposition.some(s => !s.done)) break
-        const res = await progressTask(id)
-        if (!res.ok) break
+    autoRunning = true
+    try {
+      for (const id of targets) {
+        for (let i = 0; i < AUTO_RUN_MAX_STEPS; i++) {
+          const t = aiTasks.value.find(x => x.id === id)
+          if (!t || t.status !== 'in_progress') break
+          if ((t.questions ?? []).some(q => q.status === 'open')) break
+          if (!t.decomposition.some(s => !s.done)) break
+          const res = await progressTask(id)
+          if (!res.ok) break
+        }
       }
+    } finally {
+      autoRunning = false
     }
   }
 
@@ -487,6 +493,9 @@ export function useAiCompany() {
       notify(task.requesterId, 'ai_report', `AI 完了報告: ${task.title}`,
         `${emp?.name ?? 'AI社員'} がタスクを完了しました`, '/ai-company')
     }
+    // 手動「再開」でも残りのステップは自動で走り切る（バッチ7i・R1 M-3 = API と同一挙動。
+    // autoRunMock からの呼び出し時はループ側が継続を担うため再帰しない）
+    if (!finished && !autoRunning) await autoRunMock(taskId)
     return { ok: true, id: taskId }
   }
 

@@ -9,6 +9,12 @@ import { createPool } from './db/pool'
 import { loadEnv } from './env'
 import { scheduleSearchRebuild } from './lib/search-index'
 
+// バックグラウンド処理（AI タスクの自動実行等の fire-and-forget）由来の未処理拒否で
+// プロセスを落とさない（Node 既定は終了 = PR #58 R1 C-1 の深層防御。起点側でも catch 済み）
+process.on('unhandledRejection', (reason) => {
+  console.error('unhandled rejection (non-fatal):', reason)
+})
+
 const env = loadEnv()
 const pool = createPool(env)
 

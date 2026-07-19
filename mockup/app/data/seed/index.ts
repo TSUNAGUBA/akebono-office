@@ -13,6 +13,7 @@ import type {
   ShiftAssignment, ShiftDemand, ShiftPeriod, ShiftWish, SystemService,
   TaskPlan, UptimeDaily, WeeklyReport, WorkflowRequest, WorkflowRoute, WorkCategory, Note,
 } from '~/types/domain'
+import type { WeeklyInsightRecord } from '../../../../shared/domain/weekly-insight'
 import * as core from './core'
 import * as attendance from './attendance'
 import * as shifts from './shifts'
@@ -84,6 +85,8 @@ export interface MockDbShape {
   taskPlans: TaskPlan[]
   appConfigs: AppConfigItem[]
   salesMonthly: SalesMonthly[]
+  /** 週次 AI インサイトの保管（バッチ7j。導出キャッシュ = 再生成で上書き） */
+  weeklyInsights: WeeklyInsightRecord[]
 }
 
 export function buildSeed(): MockDbShape {
@@ -164,5 +167,6 @@ export function buildSeed(): MockDbShape {
     taskPlans: buildTaskPlans(),
     appConfigs: [{ key: 'reportInputMode', value: 'both' }],
     salesMonthly: buildSalesMonthly(),
+    weeklyInsights: [], // 週次インサイトは生成時に保管（シードなし = 「生成」ボタンから作る）
   }
 }

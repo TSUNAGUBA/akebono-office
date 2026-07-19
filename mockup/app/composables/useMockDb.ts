@@ -9,7 +9,7 @@ import { buildSeed, type MockDbShape } from '~/data/seed'
 
 const STORAGE_KEY = 'ako.mockdb.v1'
 /** シード世代。シード構造を変えたらインクリメントすると保存済みデータを破棄して再生成する */
-const SEED_VERSION = 6 // v6: 権限の運用デフォルト（permissionRules。バッチ7f = migration 0025 とパリティ。2026-07-19）
+const SEED_VERSION = 7 // v7: weeklyInsights コレクション追加（バッチ7j = migration 0026 とパリティ。2026-07-19）
 
 interface PersistedDb {
   version: number

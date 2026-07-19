@@ -295,6 +295,9 @@ jobs:
             ENV_VARS="$ENV_VARS,GOOGLE_OAUTH_CLIENT_ID=${GOOGLE_OAUTH_CLIENT_ID}"
             SECRET_FLAGS="$SECRET_FLAGS,GOOGLE_OAUTH_CLIENT_SECRET=$SERVICE-google-oauth-secret:latest,TOKEN_ENCRYPTION_KEY=$SERVICE-token-encryption-key:latest"
           fi
+          # --no-cpu-throttling: AI タスクの承認後自動実行（バッチ7i = HTTP 応答後のバックグラウンド
+          # LLM 実行）を応答返却後も CPU 割当されたまま走らせるため（PR #58 R1 C-2）。
+          # 課金はインスタンス稼働時間ベースへ変わる（min-instances 0 のためアイドル時はゼロスケール）
           gcloud run deploy "$SERVICE" \
             --image "$IMAGE" \
             --region "$REGION" \
@@ -303,6 +306,7 @@ jobs:
             --port 8080 \
             --min-instances 0 \
             --max-instances 3 \
+            --no-cpu-throttling \
             --set-env-vars "$ENV_VARS" \
             --set-secrets "$SECRET_FLAGS"
           echo "デプロイ完了: $(gcloud run services describe "$SERVICE" --region "$REGION" --format='value(status.url)')"

@@ -21,15 +21,17 @@ const { currentUser, isAdmin } = useCurrentUser()
 // 承認・回答後の自動実行（バッチ7i）は API モードではサーバー側で走るため、
 // 進捗（ステップ完了・質問・完了報告）を数回ポーリングして画面へ反映する（モックは同期完了 = 不要）
 const apiModeActive = useApiMode()
+// 実 LLM は 1 ステップ数十秒 × 複数ステップ = 数分規模のため、5 秒間隔 × 最大 36 回（約 3 分）追跡する
+//（R1 M-4。実行中タスクがなくなれば自然停止・それ以降は通知 + 手動の再読み込みで確認）
 let pollTimer: ReturnType<typeof setTimeout> | null = null
-function pollAutoRun(times = 8): void {
+function pollAutoRun(times = 36): void {
   if (!apiModeActive || times <= 0) return
   if (pollTimer) clearTimeout(pollTimer)
   pollTimer = setTimeout(async () => {
     await reloadAi()
     // 実行中タスクが残っている間だけ追跡を続ける（質問・完了で自然停止）
     if (tasks.value.some(t => t.status === 'in_progress')) pollAutoRun(times - 1)
-  }, 3000)
+  }, 5000)
 }
 onUnmounted(() => {
   if (pollTimer) clearTimeout(pollTimer)
@@ -256,6 +258,12 @@ async function onApprove(taskId: string): Promise<void> {
 async function onProgress(taskId: string): Promise<void> {
   const res = await progressTask(taskId)
   if (!res.ok) {
+    // 自動実行が生きている最中の「再開」は競合（009）になる = エラーではなく進行中の案内（R1 M-4）
+    if (res.error.code === 'AKO-AIC-009') {
+      show('自動実行が進行中です。進捗は順次反映されます', 'info')
+      pollAutoRun()
+      return
+    }
     show(res.error.message, 'warn')
     return
   }

@@ -242,7 +242,8 @@ async function prepareStepExecution(
     system: 'あなたはリサーチアシスタントです。Google 検索で信頼できる最新情報を収集し、'
       + '事実のみを日本語の箇条書きで簡潔にまとめます。推測や創作をしないこと。',
     prompt: `次のタスクのステップを遂行するために役立つ情報を Web から調査し、要点をまとめてください。\n`
-      + `件名: ${task.title}\n依頼内容: ${capCp(task.description, 1000)}\n遂行するステップ: ${step.title}`,
+      + `件名: ${task.title}\n材料（依頼文・確認済み Q&A・添付の抜粋）:\n${capCp(materials.text, 1500)}\n`
+      + `遂行するステップ: ${step.title}`,
     maxTokens: 1536,
   })
   const researchBlock = research
@@ -561,8 +562,20 @@ async function progressTaskOnce(pool: pg.Pool, env: Env, taskId: string): Promis
   return result
 }
 
-/** 遂行結果の補助通知（トランザクション確定後・失敗しても遷移は成立 = 原則4） */
+/**
+ * 遂行結果の補助通知（トランザクション確定後・失敗しても遷移は成立 = 原則4）。
+ * 本体を try で包み**決して throw しない**（PR #58 R1 C-1: fire-and-forget 連鎖から呼ばれるため、
+ * 名前解決クエリ等の失敗が未処理拒否 = プロセス終了へ波及しない）
+ */
 async function notifyTaskEvents(pool: pg.Pool, result: ProgressResult): Promise<void> {
+  try {
+    await notifyTaskEventsInner(pool, result)
+  } catch (e) {
+    console.warn('ai task notify failed (non-blocking):', (e as Error).message)
+  }
+}
+
+async function notifyTaskEventsInner(pool: pg.Pool, result: ProgressResult): Promise<void> {
   if (result.questionAsked && result.requesterId) {
     const { rows } = await pool.query<{ name: string }>(
       `SELECT name FROM ai_employees WHERE id = $1`, [result.aiEmployeeId])
@@ -600,38 +613,49 @@ const AUTO_RUN_MAX_STEPS = 12
  * 競合（009）は 1 回だけ再試行する。予期しないエラーはログのみ（手動の「進める」で再開可能）
  */
 async function autoRunTask(pool: pg.Pool, env: Env, taskId: string): Promise<void> {
-  let retried = false
-  for (let i = 0; i < AUTO_RUN_MAX_STEPS; i++) {
-    let result: ProgressResult
-    try {
-      result = await progressTaskOnce(pool, env, taskId)
-    } catch (e) {
-      const code = e instanceof ApiError ? e.code : ''
-      if (code === 'AKO-AIC-009' && !retried) {
-        retried = true
-        continue
+  // 全体を try で包む = fire-and-forget 起点として**決して reject しない**（PR #58 R1 C-1:
+  // 未処理拒否は Node 既定でプロセス終了。補助実行の失敗で API を落とさない = 原則4）
+  try {
+    let retried = false
+    for (let i = 0; i < AUTO_RUN_MAX_STEPS; i++) {
+      let result: ProgressResult
+      try {
+        result = await progressTaskOnce(pool, env, taskId)
+      } catch (e) {
+        const code = e instanceof ApiError ? e.code : ''
+        if (code === 'AKO-AIC-009' && !retried) {
+          retried = true
+          continue
+        }
+        if (!['AKO-AIC-005', 'AKO-AIC-006', 'AKO-AIC-009', 'AKO-AIC-014'].includes(code)) {
+          console.warn(`ai task auto-run stopped (non-blocking): ${taskId}`, (e as Error).message)
+        }
+        return
       }
-      if (!['AKO-AIC-005', 'AKO-AIC-006', 'AKO-AIC-009', 'AKO-AIC-014'].includes(code)) {
-        console.warn(`ai task auto-run stopped (non-blocking): ${taskId}`, (e as Error).message)
-      }
-      return
+      retried = false
+      await notifyTaskEvents(pool, result) // 内部で非スロー化済み
+      if (result.finished || result.questionAsked) return
     }
-    retried = false
-    await notifyTaskEvents(pool, result)
-    if (result.finished || result.questionAsked) return
+    console.warn(`ai task auto-run reached step cap (non-blocking): ${taskId}`)
+  } catch (e) {
+    console.warn(`ai task auto-run failed (non-blocking): ${taskId}`, (e as Error).message)
   }
-  console.warn(`ai task auto-run reached step cap (non-blocking): ${taskId}`)
 }
 
-/** 承認直後の自動実行の起点: 連携分担があれば子タスク群を、なければ本体を自動実行する */
+/** 承認直後の自動実行の起点: 連携分担があれば子タスク群を、なければ本体を自動実行する。
+ * fire-and-forget 起点として決して reject しない（C-1） */
 async function autoRunAfterApprove(pool: pg.Pool, env: Env, taskId: string): Promise<void> {
-  const { rows: kids } = await pool.query<{ id: string }>(
-    `SELECT id FROM ai_tasks WHERE parent_task_id = $1 AND status = 'in_progress' ORDER BY id`, [taskId])
-  if (kids.length > 0) {
-    // 分担は並行実行（親の完了は rollUpToParent が判定）
-    await Promise.all(kids.map(k => autoRunTask(pool, env, k.id)))
-  } else {
-    await autoRunTask(pool, env, taskId)
+  try {
+    const { rows: kids } = await pool.query<{ id: string }>(
+      `SELECT id FROM ai_tasks WHERE parent_task_id = $1 AND status = 'in_progress' ORDER BY id`, [taskId])
+    if (kids.length > 0) {
+      // 分担は並行実行（親の完了は rollUpToParent が判定）
+      await Promise.all(kids.map(k => autoRunTask(pool, env, k.id)))
+    } else {
+      await autoRunTask(pool, env, taskId)
+    }
+  } catch (e) {
+    console.warn(`ai task auto-run (approve) failed (non-blocking): ${taskId}`, (e as Error).message)
   }
 }
 
