@@ -191,7 +191,7 @@ graph TD
 
 - **メニューレジストリ**: `mockup/app/utils/menu-registry.ts` にダッシュボード / マスタハブの全カードを
   安定 id 付きで一元定義（既存 3 ページのハードコード computed を置換。権限フィルタ・バッジ注入は不変）。
-- **カテゴリ設定（SoT = configs）**: `menuCategories:dashboard` / `menuCategories:masters` に
+- **カテゴリ設定（SoT = configs）**: `menu-categories-dashboard` / `menu-categories-masters` に
   `{ id, label, cardIds[] }[]` を保存（API モード = /v1/configs・モック = appConfigs。既定値は現行の
   セクション構成から導出）。**未割当カードは自動的に「その他」カテゴリへ**（新機能のカードが消えない）。
 - **表示**: カードグリッド上部にカテゴリチップ（すべて / カテゴリ…）。選択カテゴリのカードのみ表示。

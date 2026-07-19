@@ -18,6 +18,11 @@ cd e2e && npm ci
 ./run-batch6b-stack.sh          # 全スイート（使い捨て DB を毎回構築・終了時に自動破棄）
 ```
 
+- 対象リポジトリはスクリプト位置の親ディレクトリを既定とする。別の場所の clone を対象にする場合は
+  `REPO=/path/to/akebono-office ./run-batch6b-stack.sh`
+- クリーンアップは自プロセス群の kill に加えて保険の `pkill -f "tsx/dist/loader.mjs src/index.ts"` を
+  実行する。**同一ホストで無関係な tsx プロセスを動かしている場合は注意**（専用環境での実行を推奨）
+
 - API スイート（batch6b/6c/6d/chatbot-multiturn）は `:4174`（API モード静的配信）に対して実行
 - モック回帰（mock-regression-e2e.cjs）は `:4173`（モックモード静的配信）に対して実行
 - `perm-combobox-e2e.cjs` は権限設定 UI の単発スイート。スタック起動中に

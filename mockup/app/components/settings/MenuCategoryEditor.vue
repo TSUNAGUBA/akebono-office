@@ -33,6 +33,12 @@ function syncDraft(): void {
   dirty.value = false
 }
 watch(area, syncDraft, { immediate: true })
+// API モードは configs が非同期ハイドレーションされるため、保存値の到着時にも再同期する。
+// 編集中（dirty）は上書きしない（PR #57 R1 M-1: 到着前に編集を始めると既定構成ベースの保存で
+// 保存済みカスタマイズを静かに上書きするレースの解消）
+watch(() => current.value.categories.value, () => {
+  if (!dirty.value) syncDraft()
+})
 
 const cardOptions = computed(() =>
   MENU_CARDS[area.value].map(c => ({ value: c.id, label: c.title })))

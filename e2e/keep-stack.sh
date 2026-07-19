@@ -2,7 +2,8 @@
 # デバッグ用: スタックを起動したまま維持（run-batch6b-stack.sh のスイート実行なし版）
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-REPO="${REPO:-/home/user/akebono-office}"
+# リポジトリ直下の e2e/ に置かれる前提で親ディレクトリを既定にする（REPO 環境変数で上書き可）
+REPO="${REPO:-$(dirname "$HERE")}"
 WORK=/tmp/e2e-debug-work
 rm -rf "$WORK"; mkdir -p "$WORK"
 API_PORT=8788

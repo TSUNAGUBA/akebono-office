@@ -81,6 +81,11 @@ const crError = ref('')
 // 追加フォームはドロワーへ分離（バッチ7h: 参照 = 基本ビュー・入力 = ボタン押下。マスタ標準と同型）
 const addOpen = ref(false)
 
+function openAdd(): void {
+  crError.value = '' // 前回のバリデーションエラーを持ち越さない
+  addOpen.value = true
+}
+
 async function addCompanyRelation(): Promise<void> {
   const f = crForm.value
   if (!f.from || !f.typeId || !f.to) {
@@ -138,7 +143,7 @@ async function deleteCompanyRelation(row: Record<string, unknown>): Promise<void
           <Tags class="h-3.5 w-3.5" aria-hidden="true" />
           関係種別マスタ
         </NuxtLink>
-        <button type="button" class="btn btn-primary btn-sm" @click="addOpen = true">
+        <button type="button" class="btn btn-primary btn-sm" @click="openAdd">
           <Plus class="h-3.5 w-3.5" aria-hidden="true" />
           追加
         </button>

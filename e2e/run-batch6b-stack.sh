@@ -5,7 +5,8 @@
 # 新バッチの E2E は batchXX-e2e.cjs を追加し、末尾の SUITES に 1 行追記する。
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-REPO="${REPO:-/home/user/akebono-office}"
+# リポジトリ直下の e2e/ に置かれる前提で親ディレクトリを既定にする（REPO 環境変数で上書き可）
+REPO="${REPO:-$(dirname "$HERE")}"
 WORK="$(mktemp -d)"
 API_PORT=8788
 API_STATIC_PORT=4174
@@ -26,7 +27,7 @@ fi
 PIDS=()
 cleanup() {
   pkill -f "tsx/dist/loader.mjs src/index.ts" >/dev/null 2>&1 || true
-  pkill -f "serve.cjs" >/dev/null 2>&1 || true
+  pkill -f "$HERE/serve.cjs" >/dev/null 2>&1 || true
   for pid in "${PIDS[@]:-}"; do kill "$pid" >/dev/null 2>&1 || true; done
   $RUN "$PGBIN/pg_ctl" -D "$PGDATA" -m immediate stop >/dev/null 2>&1 || true
   rm -rf "$WORK"

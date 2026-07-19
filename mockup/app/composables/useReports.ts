@@ -124,7 +124,7 @@ export function useReports() {
     if (isApi && /^\d{4}-\d{2}/.test(date)) void loadMineMonth(date.slice(0, 7))
   }
 
-  /** API モード時、チーム提出状況の対象期間を遅延ロードする（管理者ビューのみから呼ばれる） */
+  /** API モード時、チーム提出状況の対象期間を遅延ロードする（チームタブ = バッチ7h で全員公開） */
   function touchTeamWindow(days: number): void {
     if (!isApi) return
     const range = recentBusinessDays(days)
@@ -222,14 +222,20 @@ export function useReports() {
   }
 
   /** チームタイムライン（直近営業日分の提出済み日報。AI 社員の日報も同列に混在 = モックのみ） */
+  /** タイムライン上の人間日報の可視判定（表示メンバー設定 ∩ 参照権限。マトリクス候補の
+   * 雇用区分条件は課さない = 役員・業務委託の提出済み日報は従来どおり表示。PR #57 R1 M-5） */
+  function timelineVisible(memberId: string): boolean {
+    return (teamVisibleIds.value === null || teamVisibleIds.value.has(memberId) || memberId === currentUser.value.id)
+      && perms.canViewMemberReports(memberId)
+  }
+
   function timeline(days = 7): DailyReport[] {
     touchTeamWindow(days)
     const range = new Set(recentBusinessDays(days))
-    const visibleHuman = new Set(teamMembers.value.map(m => m.id))
     return dailyReports.value
       .filter(r => r.status === 'submitted' && range.has(r.date))
       // 人間の日報は表示メンバー設定 ∩ 参照権限に従う（AI 社員の日次報告は従来どおり全員分）
-      .filter(r => r.authorKind !== 'human' || !r.memberId || visibleHuman.has(r.memberId))
+      .filter(r => r.authorKind !== 'human' || !r.memberId || timelineVisible(r.memberId))
       .sort((a, b) =>
         b.date.localeCompare(a.date)
         || (b.submittedAt ?? '').localeCompare(a.submittedAt ?? ''))

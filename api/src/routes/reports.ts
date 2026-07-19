@@ -14,7 +14,7 @@ import { addDays, nowJstIso, todayJst } from '../../../shared/domain/jst'
 import { canUseFeature, canViewMemberReports } from '../../../shared/domain/permissions'
 import type { PunchRecord, ReportEntry } from '../../../shared/domain/types'
 import { heuristicWeeklyInsight, type WeeklyInsight, type WeeklyMetrics } from '../../../shared/domain/weekly-insight'
-import { requireAdmin } from '../auth'
+import { requireAdmin, type AuthUser } from '../auth'
 import { daySummary } from '../domain/attendance'
 import { audit } from '../lib/audit'
 import { raiseEscalation } from '../lib/escalate'
@@ -164,7 +164,11 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
     }
     if (scope === 'team') {
       // バッチ7h: チームタブは全員へ公開。管理者は下書き含む全件・一般メンバーは提出済みのみ
-      //（他人の下書きの内容・存在を一般メンバーへ見せない）
+      //（他人の下書きの内容・存在を一般メンバーへ見せない）。
+      // scope=all と同じく期間なしの全履歴ダンプは許容しない（R1 M-2。フロントは常に期間指定）
+      if (!date && !month && !(from && to)) {
+        throw err('AKO-GEN-001', 'scope=team では date / month / from+to のいずれかを指定してください', 400)
+      }
       const isAdminUser = user.role === 'admin'
       const { rows } = await pool.query<{ authorKind: string; memberId: string | null }>(
         `SELECT ${DAILY_COLS} FROM daily_reports
@@ -345,12 +349,43 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
     return c.json({ data: { ok: true } })
   })
 
-  // コメント（提出済み日報に対して）
+  /**
+   * コメントスレッドの対象日報ガード（PR #57 R1 M-3）。
+   * 他人の人間日報は「提出済み かつ 日報参照権限（F-16-6）で参照可」のときのみ許可。
+   * 自分の日報・AI 社員の日報は従来どおり。違反は 404（存在を秘匿 = 下書き秘匿と同じ基準）
+   */
+  async function guardCommentTarget(
+    c: { get: (k: 'user') => AuthUser },
+    reportId: string,
+  ): Promise<{ id: string; authorKind: string; memberId: string | null; status: string; date: string }> {
+    const user = c.get('user')
+    const { rows } = await pool.query<{ id: string; authorKind: string; memberId: string | null; status: string; date: string }>(
+      `SELECT id, author_kind AS "authorKind", member_id AS "memberId", status, date::text AS date
+       FROM daily_reports WHERE id = $1`, [reportId])
+    const target = rows[0]
+    if (!target) throw err('AKO-GEN-002', '対象の日報が見つかりません', 404)
+    if (target.authorKind === 'human' && target.memberId && target.memberId !== user.id) {
+      // 他人の下書きは管理者のみ（scope=team の下書き参照と同じ基準）
+      if (target.status !== 'submitted' && user.role !== 'admin') {
+        throw err('AKO-GEN-002', '対象の日報が見つかりません', 404)
+      }
+      // F-16-6 の参照 deny は一覧フィルタ（filterViewable）と同じく管理者にも適用される
+      const rules = await activePermissionRules(pool)
+      if (rules.length > 0 && !canViewMemberReports(rules, subjectOf(user), target.memberId)) {
+        throw err('AKO-GEN-002', '対象の日報が見つかりません', 404)
+      }
+    }
+    return target
+  }
+
+  // コメント（提出済み日報に対して。参照ガード = guardCommentTarget）
   app.get('/:reportId/comments', async (c) => {
+    const reportId = c.req.param('reportId')
+    await guardCommentTarget(c, reportId)
     const { rows } = await pool.query(
       `SELECT id, report_id AS "reportId", member_id AS "memberId", body, reactions, at
        FROM report_comments WHERE report_id = $1 ORDER BY at, created_at`,
-      [c.req.param('reportId')])
+      [reportId])
     return c.json({ data: rows })
   })
 
@@ -360,11 +395,7 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
     const body = await c.req.json().catch(() => ({})) as { body?: string }
     const text = (body.body ?? '').trim()
     if (!text) throw err('AKO-GEN-001', 'コメントを入力してください', 400)
-    const report = await pool.query<{ id: string; authorKind: string; memberId: string | null; date: string }>(
-      `SELECT id, author_kind AS "authorKind", member_id AS "memberId", date FROM daily_reports WHERE id = $1`,
-      [reportId])
-    const target = report.rows[0]
-    if (!target) throw err('AKO-GEN-002', '対象の日報が見つかりません', 404)
+    const target = await guardCommentTarget(c, reportId)
     const id = newId('rc')
     await pool.query(
       `INSERT INTO report_comments (id, report_id, member_id, body, at) VALUES ($1, $2, $3, $4, $5)`,
