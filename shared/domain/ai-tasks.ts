@@ -102,14 +102,21 @@ export function planDelegation(
 
 /**
  * 依頼者への確認が必要か（決定的ヒューリスティック = LLM 無効環境・モックの唯一のロジック）。
- * 情報不足の依頼（confidence=low と同じ判定基準）は、最初のステップ実行前に一度だけ依頼者へ確認する。
+ * バッチ7i（オペレーター指示 2026-07-19 #11）: 質問は「自社・顧客のドメイン情報が不可欠」
+ * 「重要な意思表示が必要」な場合のみに限定し、自力（Web 調査・材料）での遂行を優先する。
+ * ヒューリスティックでは (a) 依頼内容が実質空（10 字未満）= 遂行対象が特定できない、
+ * (b) 依頼文が社内・顧客固有情報を明示的に参照しているのに材料が薄い（30 字未満）、のみ確認する。
  * 一度回答を得た依頼（answeredCount > 0）には再質問しない = 質問ループを作らない
  */
 export function heuristicNeedsInput(description: string, answeredCount: number): string | null {
   if (answeredCount > 0) return null
   const d = description.trim()
-  if (d.length < 20 || d.includes('?') || d.includes('？')) {
+  if (d.length < 10) {
     return '依頼内容を具体化するため、目的・期待する成果物・前提条件（あれば参考資料も）を教えてください'
+  }
+  const internalMarkers = ['自社', '弊社', '当社', '社内', '顧客', 'お客様']
+  if (d.length < 30 && internalMarkers.some(m => d.includes(m))) {
+    return '自社・顧客固有の情報が必要と思われます。対象（会社・案件等）と参照してよい資料を教えてください'
   }
   return null
 }

@@ -129,7 +129,17 @@ function doneCount(t: AiTask): number {
               <button type="button" class="btn btn-ghost btn-sm" @click="emit('cancel', t.id)">中止</button>
             </template>
             <template v-else-if="t.status === 'in_progress' || t.status === 'approved'">
-              <button type="button" class="btn btn-primary btn-sm" @click="emit('progress', t.id)">進める</button>
+              <!-- バッチ7i: 承認後は全自動実行。ボタンは自動実行が止まった場合（サーバー再起動等）の再開用 -->
+              <span class="inline-flex items-center gap-1 text-[11px] font-semibold text-brand">
+                <span class="h-2 w-2 animate-pulse rounded-full bg-brand" aria-hidden="true" />
+                自動実行中
+              </span>
+              <button
+                type="button"
+                class="btn btn-ghost btn-sm"
+                title="自動実行が止まった場合に手動で再開します"
+                @click="emit('progress', t.id)"
+              >再開</button>
               <button type="button" class="btn btn-sm" @click="emit('block', t.id)">ブロック</button>
               <button type="button" class="btn btn-ghost btn-sm" @click="emit('cancel', t.id)">中止</button>
             </template>

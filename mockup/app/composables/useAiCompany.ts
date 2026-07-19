@@ -366,7 +366,29 @@ export function useAiCompany() {
     return res
   }
 
-  /** 分解案を承認して実行開始（proposed → approved → 即 in_progress） */
+  /**
+   * 全自動実行（バッチ7i・オペレーター指示 2026-07-19 #11 = モック版）。
+   * 承認・回答・ブロック解除後、「進める」の連打なしで 完了 / 依頼者への質問 / 中止 まで走り切る。
+   * 分担があれば子タスク群を対象にする（API の autoRunAfterApprove と同型）。
+   * モックは決定的ヒューリスティックのため即座に収束する（Web 調査は API モードのみの機能）
+   */
+  const AUTO_RUN_MAX_STEPS = 12
+  async function autoRunMock(taskId: string): Promise<void> {
+    const kids = aiTasks.value.filter(t => t.parentTaskId === taskId && t.status === 'in_progress')
+    const targets = kids.length > 0 ? kids.map(k => k.id) : [taskId]
+    for (const id of targets) {
+      for (let i = 0; i < AUTO_RUN_MAX_STEPS; i++) {
+        const t = aiTasks.value.find(x => x.id === id)
+        if (!t || t.status !== 'in_progress') break
+        if ((t.questions ?? []).some(q => q.status === 'open')) break
+        if (!t.decomposition.some(s => !s.done)) break
+        const res = await progressTask(id)
+        if (!res.ok) break
+      }
+    }
+  }
+
+  /** 分解案を承認して実行開始（proposed → 即 in_progress → 全自動実行 = バッチ7i） */
   async function approveTask(taskId: string): Promise<Result> {
     if (isApi) return transitionApi(taskId, 'approve')
     const task = aiTasks.value.find(t => t.id === taskId)
@@ -380,6 +402,8 @@ export function useAiCompany() {
     delegateOnApproveMock(task)
     syncEmployeeStatus(task.aiEmployeeId)
     commit()
+    // 承認 = ユーザーの意思表示。以降は「進める」なしで走り切る（バッチ7i）
+    await autoRunMock(taskId)
     return { ok: true, id: taskId }
   }
 
@@ -506,6 +530,8 @@ export function useAiCompany() {
       `依頼者から回答を受領: ${[...text].slice(0, 60).join('')}${files.length > 0 ? `（添付 ${files.length} 件）` : ''}`)
     syncEmployeeStatus(task.aiEmployeeId)
     commit()
+    // 回答で実行を自動再開する（バッチ7i = 「進める」の連打不要）
+    await autoRunMock(taskId)
     return { ok: true, id: taskId }
   }
 
@@ -529,6 +555,11 @@ export function useAiCompany() {
     } else if (task.status === 'blocked') {
       aiTasks.value = aiTasks.value.map(t => t.id === taskId ? { ...t, status: 'in_progress' as const } : t)
       addLog(task.aiEmployeeId, taskId, 'plan', `「${task.title}」のブロックが解除され実行を再開`)
+      syncEmployeeStatus(task.aiEmployeeId)
+      commit()
+      // 解除後は自動で走り切る（バッチ7i。open な質問があれば autoRunMock 側で停止）
+      await autoRunMock(taskId)
+      return { ok: true, id: taskId }
     } else {
       return { ok: false, error: { code: 'AKO-AIC-007', message: '実行中またはブロック中のタスクのみ切替できます' } }
     }
@@ -705,5 +736,7 @@ export function useAiCompany() {
     employees, employeesAll, roles, roleOf, employeeById, tasks, tasksOf, logs, aiReportsOn,
     requestTask, approveTask, progressTask, answerTask, blockTask, cancelTask, generateDailyReports,
     evaluateWorkloadSignals,
+    /** API モードのタスク・ログ再取得（バッチ7i: 承認後の自動実行の進捗を追うポーリングに使う） */
+    reloadAi,
   }
 }
