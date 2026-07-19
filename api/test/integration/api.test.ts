@@ -9,7 +9,7 @@ import pg from 'pg'
 import { addDays, todayJst } from '../../../shared/domain/jst'
 import { createApp } from '../../src/app'
 import { migrate } from '../../src/db/migrate'
-import { clearPermissionCache } from '../../src/lib/permissions'
+import { activePermissionRules, clearPermissionCache } from '../../src/lib/permissions'
 import { createPool } from '../../src/db/pool'
 import type { Env } from '../../src/env'
 
@@ -2719,8 +2719,10 @@ describe('バッチ7c: ぽいぽいポスト/議事録 + 業務種別マスタ +
     // poipoi は本人の文脈のみ（他人には載らない）
     const own = await buildContext(pool, memberUser, 'ノート検証の秘密メモの内容は?', [])
     expect(own).toContain('ノート検証の秘密メモ')
+    // バッチ7g で既定の AI 参照範囲が「すべて」へ変更（オペレーター指示 2026-07-19 #8 = 他メンバーの
+    // 投稿も参照）。ai-scope ルールで自分のみへ制限できることは 7g のテストが検証する
     const notOwn = await buildContext(pool, adminUser, 'ノート検証の秘密メモの内容は?', [])
-    expect(notOwn).not.toContain('ノート検証の秘密メモ')
+    expect(notOwn).toContain('ノート検証の秘密メモ')
   })
 
   it('機能ガード（F-16）: minutes の deny で API も検索文脈も閉じる。GET の kind 不正は 400', async () => {
@@ -3062,5 +3064,101 @@ describe('バッチ7f: 権限デフォルト + AI 社員の増減 + AI カンパ
     expect((await api('GET', `/v1/ai-company/files/${files[0]!.id}`, { as: HR })).status).toBe(403)
     expect((await api('GET', `/v1/ai-company/files/${files[0]!.id}`, { as: MEMBER })).status).toBe(200)
     expect((await api('GET', `/v1/ai-company/files/${files[0]!.id}`, { as: ADMIN })).status).toBe(200)
+  })
+})
+
+describe('バッチ7g: AI 参照範囲の権限化 + 週次 AI インサイト（オペレーター指示 2026-07-19 #8/#9）', () => {
+  const memberUser = { id: MEMBER, name: '一般 次郎', email: 'member@example.com', role: 'member' as const, title: '', avatar: '' }
+  const adminUser = { id: ADMIN, name: '管理 太郎', email: 'admin@example.com', role: 'admin' as const, title: '', avatar: '' }
+  let buildContext: (typeof import('../../src/routes/chatbot'))['buildContext']
+
+  beforeAll(async () => {
+    ;({ buildContext } = await import('../../src/routes/chatbot'))
+  })
+
+  it('ぽいぽいポストの AI 参照は既定で他メンバーの投稿も対象（投稿者名付き）・ai-scope ルールで自分のみへ制限可', async () => {
+    // HR が投稿 → MEMBER のチャットボット文脈に載る（バッチ7g 以前は本人のみ = 見えなかった）
+    await api('POST', '/v1/notes', {
+      as: HR, body: { kind: 'poipoi', body: '7gスコープ検証: 受注プロセスの改善アイデアあり' },
+    })
+    await api('POST', '/v1/search/reindex', { as: ADMIN })
+    const ctx = await buildContext(pool, memberUser, '7gスコープ検証の改善アイデアは?', [])
+    expect(ctx).toContain('受注プロセスの改善アイデア')
+    expect(ctx).toContain('人事 花子') // 投稿者セグメント
+    // role=member へ ai-scope 'own'（deny）を設定すると他メンバーの投稿は文脈から消える
+    const ruleRes = await api('POST', '/v1/masters/permission-rules', {
+      as: ADMIN,
+      body: { subjectKind: 'role', subjectId: 'member', resource: 'poipoi', field: 'ai-scope', effect: 'deny' },
+    })
+    const ruleId = (ruleRes.json.data as { id: string }).id
+    clearPermissionCache()
+    try {
+      const rules = await activePermissionRules(pool)
+      const own = await buildContext(pool, memberUser, '7gスコープ検証の改善アイデアは?', rules)
+      expect(own).not.toContain('受注プロセスの改善アイデア')
+      // 管理者（ロール外）は既定 all のまま
+      const adm = await buildContext(pool, adminUser, '7gスコープ検証の改善アイデアは?', rules)
+      expect(adm).toContain('受注プロセスの改善アイデア')
+    } finally {
+      await api('POST', `/v1/masters/permission-rules/${ruleId}/archive`, { as: ADMIN })
+      clearPermissionCache()
+    }
+  })
+
+  it('勤怠の AI 参照は既定 own（チームサマリーなし）・ai-scope all の付与でチーム全体を供給', async () => {
+    // 当月の打刻を作る（チームサマリーの材料）
+    await api('POST', '/v1/attendance/punches', { as: MEMBER, body: { kind: 'in' } })
+    const before = await buildContext(pool, adminUser, '今月の労働時間は?', [])
+    expect(before).not.toContain('チーム全体の当月勤怠')
+    const ruleRes = await api('POST', '/v1/masters/permission-rules', {
+      as: ADMIN,
+      body: { subjectKind: 'role', subjectId: 'admin', resource: 'attendance', field: 'ai-scope', effect: 'allow' },
+    })
+    const ruleId = (ruleRes.json.data as { id: string }).id
+    clearPermissionCache()
+    try {
+      const rules = await activePermissionRules(pool)
+      const after = await buildContext(pool, adminUser, '今月の労働時間は?', rules)
+      expect(after).toContain('チーム全体の当月勤怠')
+      expect(after).toContain('一般 次郎') // 打刻したメンバーが載る
+      // ルール対象外（member ロール）は own のまま
+      const member = await buildContext(pool, memberUser, '今月の労働時間は?', rules)
+      expect(member).not.toContain('チーム全体の当月勤怠')
+    } finally {
+      await api('POST', `/v1/masters/permission-rules/${ruleId}/archive`, { as: ADMIN })
+      clearPermissionCache()
+    }
+  })
+
+  it('週次 AI インサイト: 集計 + 決定的洞察（LLM 無効）・売上は権限がないと供給されない', async () => {
+    const today = todayJst()
+    // 今週の月曜（weekStartOf と同一ロジック）
+    const dow = (new Date(`${today}T00:00:00Z`).getUTCDay() + 6) % 7
+    const weekStart = addDays(today, -dow)
+    expect((await api('GET', '/v1/reports/weekly-insight?weekStart=bad', { as: MEMBER })).status).toBe(400)
+    const r = await api('GET', `/v1/reports/weekly-insight?weekStart=${weekStart}`, { as: MEMBER })
+    expect(r.status).toBe(200)
+    const data = r.json.data as {
+      metrics: { weekStart: string; membersActive: number; dailySubmissions: { date: string }[]; salesMonthAmount: number | null }
+      insight: { executiveSummary: string; swot: { strengths: string[] }; risks: unknown[]; actions: string[] }
+      llm: boolean
+    }
+    expect(data.metrics.weekStart).toBe(weekStart)
+    expect(data.metrics.membersActive).toBeGreaterThan(0)
+    expect(data.metrics.dailySubmissions.length).toBe(7)
+    expect(data.metrics.salesMonthAmount).not.toBeNull() // ルールなし = 供給
+    expect(data.insight.executiveSummary).toContain('週次サマリー')
+    expect(Array.isArray(data.insight.swot.strengths)).toBe(true)
+    expect(data.llm).toBe(false) // テスト環境は LLM 無効 = ヒューリスティック
+    // 売上 deny（運用デフォルトの member ルール）を有効化すると salesMonthAmount は null
+    await pool.query(`UPDATE permission_rules SET active = true WHERE id = 'pr-def-01'`)
+    clearPermissionCache()
+    try {
+      const masked = await api('GET', `/v1/reports/weekly-insight?weekStart=${weekStart}`, { as: MEMBER })
+      expect((masked.json.data as { metrics: { salesMonthAmount: number | null } }).metrics.salesMonthAmount).toBeNull()
+    } finally {
+      await pool.query(`UPDATE permission_rules SET active = false WHERE id = 'pr-def-01'`)
+      clearPermissionCache()
+    }
   })
 })

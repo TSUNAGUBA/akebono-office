@@ -267,8 +267,10 @@ export async function buildSearchDocs(pool: pg.Pool): Promise<SearchDocInput[]> 
     const wc = n.workCategoryId ? wcName.get(n.workCategoryId) : undefined
     if (wc) { links.push(`業務種別: ${wc}`); linkChecks.push(c('work-categories', 'name')) }
     if (links.length > 0) segments.push(seg(links.join(' / '), ...linkChecks))
+    // 投稿者はぽいぽいポストにも載せる（AI 参照範囲 'all' で他メンバーの投稿を参照するとき
+    // 誰のフィードバックかが文脈に必要。バッチ7g）
     const author = memberName.get(n.memberId)
-    if (author && n.kind === 'minutes') segments.push(seg(`登録者: ${author}`, c('members', 'name')))
+    if (author) segments.push(seg(n.kind === 'minutes' ? `登録者: ${author}` : `投稿者: ${author}`, c('members', 'name')))
     if (n.body) segments.push(seg(capCp(n.body, 1500), c('notes', 'body')))
     // 顧客未指定でもプロジェクト経由で顧客を補完する
     // （PJ のみ紐付けたノートが、別顧客の質問の混入防止フィルタを素通りしないように）
@@ -419,13 +421,18 @@ export interface SearchHit {
   links: { companyId?: string; projectId?: string }
 }
 
-/** 質問に関連する検索ドキュメントの上位 K 件（字句 + 埋め込みのハイブリッド。埋め込み無効時は字句のみ） */
+/**
+ * 質問に関連する検索ドキュメントの上位 K 件（字句 + 埋め込みのハイブリッド。埋め込み無効時は字句のみ）。
+ * allOwners = true で本人スコープ（owner_member_id）の絞り込みを外す
+ * （ぽいぽいポストの AI 参照範囲 'all' = 他メンバーの投稿も参照。バッチ7g・オペレーター指示 2026-07-19 #8）
+ */
 export async function searchDocsFor(
   pool: pg.Pool,
   env: Env | undefined,
   question: string,
   forMemberId: string,
   limit = 4,
+  allOwners = false,
 ): Promise<SearchHit[]> {
   const { rows } = await pool.query<{
     sourceKind: SearchDocInput['sourceKind']; sourceId: string; title: string
@@ -434,7 +441,8 @@ export async function searchDocsFor(
   }>(
     `SELECT source_kind AS "sourceKind", source_id AS "sourceId", title, aliases, body, segments, embedding,
             owner_member_id AS "ownerMemberId", links
-     FROM search_docs WHERE owner_member_id IS NULL OR owner_member_id = $1 ORDER BY id LIMIT 3000`, [forMemberId])
+     FROM search_docs WHERE $2::boolean OR owner_member_id IS NULL OR owner_member_id = $1
+     ORDER BY id LIMIT 3000`, [forMemberId, allOwners])
   // 全件を都度メモリへ載せる設計は SME 規模（〜数千件）前提。上限超過時も ORDER BY id で
   // 決定的な部分集合になる。件数がこの規模を超える場合は pgvector 等への移行を検討する
   if (rows.length === 0) return []

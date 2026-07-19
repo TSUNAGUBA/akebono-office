@@ -112,6 +112,7 @@ const leave = useLeave()   // balance(memberId, leaveTypeId?) / request / decide
 | `WidgetsCalendarConnectGate` | Google カレンダー連携ゲート（擬似 OAuth 同意・props なし）。連携済みバーに「同期カレンダー」選択モーダル（バッチ7b） |
 | `MastersDeptOrgNode` | 組織図の再帰ノード（node: DeptNode, depth）。`@select` で部署詳細へ |
 | `WidgetsNotesPanel` | kind('poipoi'/'minutes'), showAuthor。ノート共通パネル（登録（マークダウンプレビュー付き）+ ファイル取込（選択 → ステージ → 取込ボタンで実行）+ サマリー一覧（押下で詳細モーダル = 全文をマークダウン描画）+ 行単位の取消/復元 + 管理者の全ポスト閲覧（poipoi）。バッチ7c/7d/7e） |
+| `WidgetsWeeklyInsight` | initialWeekStart。週次 AI インサイト（集計 KPI + チャート + エグゼクティブサマリー/SWOT/リスク/アクション。週ナビ + 再生成。バッチ7g） |
 | `UiMarkdown` | source。安全なサブセットのマークダウン描画（utils/markdown.ts の AST を VNode 直接生成 = v-html 不使用。見出し・リスト・引用・コード・強調・http(s) リンクのみ。バッチ7e） |
 | `MastersPermissionMatrix` | 権限表モード（props なし = ruleCrud を内部利用）。機能 + マスタ項目 × ロール/役職/個人のマトリクス。セルクリックで 未設定→拒否→許可→未設定 |
 

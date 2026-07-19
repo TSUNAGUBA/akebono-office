@@ -24,7 +24,7 @@ import type pg from 'pg'
 import { fiscalMonthsOf, fiscalYearOf } from '../../../shared/domain/fiscal'
 import { nowJstIso, todayJst } from '../../../shared/domain/jst'
 import { findCompanyIn, SELF_COMPANY_PATTERN } from '../../../shared/domain/name-match'
-import { canUseFeature, canViewField, stripDeniedFields } from '../../../shared/domain/permissions'
+import { aiReferenceScope, canUseFeature, canViewField, stripDeniedFields } from '../../../shared/domain/permissions'
 import type { PermissionRule, PunchRecord, ReportEntry } from '../../../shared/domain/types'
 import type { AuthUser } from '../auth'
 import { daySummary } from '../domain/attendance'
@@ -105,6 +105,9 @@ export async function buildContext(
   const topic = [question, ...historyUserTexts].join('\n')
   const subject = subjectOf(user)
   const can = (feature: string): boolean => canUseFeature(rules, subject, feature)
+  // AI 参照範囲（バッチ7g・オペレーター指示 2026-07-19 #8/#9: 'all' = 権限範囲内のすべてのデータ /
+  // 'own' = 自分の登録データのみ。権限設定の field='ai-scope' ルールで区分ごとに設定・機能 deny が最優先）
+  const aiScope = (feature: string): 'all' | 'own' => aiReferenceScope(rules, subject, feature)
   const strip = <T extends Record<string, unknown>>(entity: string, rows: T[]): T[] =>
     stripDeniedFields(rules, subject, entity, rows)
   // JOIN で取り込んだ他エンティティ由来の単一項目（relation_types.label 等）の表示可否。
@@ -156,8 +159,34 @@ export async function buildContext(
       .filter((x): x is string => !!x)
   }
 
-  // 有給・当月勤怠（本人分のみ = C3 保護。残数は leave ドメインの SoT 計算を再利用 = 原則3）
+  // 有給・当月勤怠（既定 = 本人分のみ（C3）。AI 参照範囲 'all' の対象者にはチーム全体のサマリーも供給）
   if (can('attendance') && /有給|休暇|残業|勤怠|労働|打刻/.test(topic)) {
+    if (aiScope('attendance') === 'all') {
+      await block(async () => {
+        const { rows } = await pool.query<PunchRecord & { memberName: string }>(
+          `SELECT p.id, p.member_id AS "memberId", p.date::text AS date, p.kind, p.at, p.source,
+                  p.fixed_from AS "fixedFrom", p.fix_reason AS "fixReason", p.approved_by AS "approvedBy",
+                  m.name AS "memberName"
+           FROM punch_records p JOIN members m ON m.id = p.member_id AND m.active = true
+           WHERE to_char(p.date, 'YYYY-MM') = $1 ORDER BY p.at, p.created_at LIMIT 8000`, [today.slice(0, 7)])
+        if (rows.length === 0) return
+        const byMember = new Map<string, { name: string; byDate: Map<string, PunchRecord[]> }>()
+        for (const r of rows) {
+          const m = byMember.get(r.memberId) ?? { name: r.memberName, byDate: new Map() }
+          const list = m.byDate.get(r.date) ?? []
+          list.push(r)
+          m.byDate.set(r.date, list)
+          byMember.set(r.memberId, m)
+        }
+        const lines: string[] = []
+        for (const [, m] of [...byMember.entries()].slice(0, 30)) {
+          let work = 0
+          for (const [d, recs] of m.byDate) work += daySummary(recs, undefined, d).workMinutes
+          lines.push(`- ${m.name}: 出勤 ${m.byDate.size} 日 / 総労働 ${Math.round(work / 6) / 10} 時間`)
+        }
+        parts.push(`## チーム全体の当月勤怠（${today.slice(0, 7)}。AI 参照範囲 = すべて）\n${lines.join('\n')}`)
+      })
+    }
     await block(async () => {
       const b = await balanceOf(pool, user.id, PAID_LEAVE_TYPE_ID)
       parts.push(`## 本人の有給（法定有給。詳細は /attendance の有給タブ）
@@ -291,8 +320,19 @@ export async function buildContext(
     })
   }
 
-  // タスク計画・当日予定（本人分のみ）
+  // タスク計画・当日予定（既定 = 本人分のみ。AI 参照範囲 'all' の対象者にはチーム全体の本日計画も供給）
   if (can('ai-assistant') && /タスク|計画|予定|会議|ミーティング|カレンダー/.test(topic)) {
+    if (aiScope('ai-assistant') === 'all') {
+      await block(async () => {
+        const { rows } = await pool.query<{ name: string; title: string; status: string }>(
+          `SELECT m.name, t.title, t.status FROM task_plans t
+           JOIN members m ON m.id = t.member_id AND m.active = true
+           WHERE t.date = $1::date ORDER BY m.id, t.created_at LIMIT 50`, [today])
+        if (rows.length === 0) return
+        parts.push(`## チーム全体の本日のタスク計画（${today}。AI 参照範囲 = すべて）\n${rows.map(r =>
+          `- ${r.name}:「${capCp(r.title, 50)}」${r.status === 'done' ? '（完了）' : ''}`).join('\n')}`)
+      })
+    }
     await block(async () => {
       const { rows: plans } = await pool.query<{ title: string; status: string; outcome: string }>(
         `SELECT title, status, outcome FROM task_plans
@@ -637,7 +677,8 @@ export async function buildContext(
   // 字句バイグラム + 埋め込み（LLM 無効環境は字句のみ）で補足する。精密ブロック描画済みは除外。
   // 照合は生データ・描画は segments の表示項目チェック（canViewField）通過行のみ = 既存パターン）
   await block(async () => {
-    const hits = await searchDocsFor(pool, env, question, user.id)
+    // ぽいぽいポストの AI 参照範囲（'all' = 他メンバーの投稿も参照 = 既定。'own' 設定時は本人のみ）
+    const hits = await searchDocsFor(pool, env, question, user.id, 4, aiScope('poipoi') === 'all')
     // 混入防止（オペレーター指示 2026-07-19 #5）: 質問が特定の顧客/プロジェクトに解決された場合、
     // 「別の顧客/プロジェクトに紐付くノート」は関係のない情報として文脈から除外する。
     // 紐付けなしのノートは対象外（全般メモとして従来どおりスコア勝負）

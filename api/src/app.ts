@@ -133,7 +133,7 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
 
   app.route('/v1/attendance', attendanceRoutes(pool))
   app.route('/v1/leave', leaveRoutes(pool))
-  app.route('/v1/reports', reportsRoutes(pool))
+  app.route('/v1/reports', reportsRoutes(pool, env))
   app.route('/v1/masters', mastersRoutes(pool, env))
   app.route('/v1/configs', configsRoutes(pool))
   app.route('/v1/notifications', notificationsRoutes(pool))

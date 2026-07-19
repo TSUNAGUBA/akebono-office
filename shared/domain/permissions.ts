@@ -124,3 +124,43 @@ export function stripDeniedFields<T extends Record<string, unknown>>(
     return copy
   })
 }
+
+// ---------- AI 参照範囲（バッチ7g・オペレーター指示 2026-07-19 #8/#9） ----------
+
+/**
+ * AI 参照範囲の擬似フィールド（permission_rules.field）。
+ * resource = 機能キー・field = 'ai-scope'・effect: allow = すべて / deny = 自分の登録データのみ。
+ * 既存のレイヤ解決（個人 > 役職 > ロール・同一レイヤ deny 優先）をそのまま使う
+ */
+export const AI_SCOPE_FIELD = 'ai-scope'
+
+/**
+ * AI 参照範囲を設定できるデータ（本人スコープを持つドメインのみ = それ以外は従来から権限準拠の全体参照）。
+ * defaultScope = 未設定時の既定: ぽいぽいポストは「すべて」（オペレーター指示 #8 = 他メンバーの投稿も参照）、
+ * 勤怠・タスク計画/カレンダーは「自分のみ」（C3 = 安全側。管理職等へは権限設定で「すべて」を付与する運用）
+ */
+export const AI_SCOPE_FEATURES: { key: string; label: string; defaultScope: 'all' | 'own' }[] = [
+  { key: 'poipoi', label: 'ぽいぽいポスト', defaultScope: 'all' },
+  { key: 'attendance', label: '勤怠（労働時間・有給）', defaultScope: 'own' },
+  { key: 'ai-assistant', label: 'タスク計画・カレンダー', defaultScope: 'own' },
+]
+
+/**
+ * AI の参照範囲（'all' = 権限範囲内のすべてのデータ / 'own' = 自分の登録データのみ）。
+ * チャットボット・AI業務アシスタントの文脈供給が参照する。機能自体の deny（canUseFeature）が最優先
+ * （機能が使えないユーザーの AI には当該ドメインを一切供給しない = 従来どおり）
+ */
+export function aiReferenceScope(
+  rules: PermissionRule[],
+  subject: PermissionSubject,
+  resource: string,
+): 'all' | 'own' {
+  const def = AI_SCOPE_FEATURES.find(f => f.key === resource)?.defaultScope ?? 'own'
+  const applicable = rules.filter(r =>
+    r.active && r.resource === resource && (r.field ?? null) === AI_SCOPE_FIELD && matches(r, subject))
+  for (const kind of ['member', 'title', 'role'] as const) {
+    const layer = applicable.filter(r => r.subjectKind === kind)
+    if (layer.length > 0) return layer.every(r => r.effect === 'allow') ? 'all' : 'own'
+  }
+  return def
+}

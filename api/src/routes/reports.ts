@@ -8,15 +8,21 @@
  */
 import { Hono } from 'hono'
 import type pg from 'pg'
-import { nowJstIso, todayJst } from '../../../shared/domain/jst'
+import { addDays, nowJstIso, todayJst } from '../../../shared/domain/jst'
+import { canUseFeature } from '../../../shared/domain/permissions'
 import type { PunchRecord, ReportEntry } from '../../../shared/domain/types'
+import { heuristicWeeklyInsight, type WeeklyInsight, type WeeklyMetrics } from '../../../shared/domain/weekly-insight'
 import { requireAdmin } from '../auth'
 import { daySummary } from '../domain/attendance'
 import { audit } from '../lib/audit'
 import { raiseEscalation } from '../lib/escalate'
 import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
+import { generateJson } from '../lib/llm'
 import { notify } from '../lib/notify'
+import { activePermissionRules, subjectOf } from '../lib/permissions'
+import type { Env } from '../env'
+import { capCp } from '../lib/text'
 
 const DAILY_COLS = `id, author_kind AS "authorKind", member_id AS "memberId",
   ai_employee_id AS "aiEmployeeId", date, entries, reflection, issues, tomorrow,
@@ -64,7 +70,69 @@ async function hoursGapMinutes(
   }
 }
 
-export function reportsRoutes(pool: pg.Pool): Hono {
+/** 週次インサイトの洞察生成（Vertex AI 構造化出力。失敗・無効環境は null → heuristicWeeklyInsight へ） */
+async function llmWeeklyInsight(env: Env | undefined, metrics: WeeklyMetrics): Promise<WeeklyInsight | null> {
+  if (!env?.vertexProjectId) return null
+  const res = await generateJson<WeeklyInsight>(env, {
+    system: 'あなたは中小コンサルティング会社の経営参謀 AI です。週次の業務データ集計から、'
+      + '経営・営業活動・チームやメンバーの状況の視点で会社運営に有効なインサイトを日本語で出力します。'
+      + '集計値にある事実のみを根拠にし、推測で数値・事実を作らないこと。'
+      + 'executiveSummary は 3〜5 文。swot の各項目・risks・actions は具体的かつ簡潔に（各 40 字以内・最大 5 件）。'
+      + 'risks の severity は high / mid / low。',
+    prompt: `# 週次集計（${metrics.weekStart}〜${metrics.weekEnd}）
+${JSON.stringify(metrics, null, 1)}`,
+    schema: {
+      type: 'object',
+      properties: {
+        executiveSummary: { type: 'string' },
+        swot: {
+          type: 'object',
+          properties: {
+            strengths: { type: 'array', items: { type: 'string' } },
+            weaknesses: { type: 'array', items: { type: 'string' } },
+            opportunities: { type: 'array', items: { type: 'string' } },
+            threats: { type: 'array', items: { type: 'string' } },
+          },
+          required: ['strengths', 'weaknesses', 'opportunities', 'threats'],
+        },
+        risks: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              title: { type: 'string' },
+              severity: { type: 'string' },
+              mitigation: { type: 'string' },
+            },
+            required: ['title', 'severity', 'mitigation'],
+          },
+        },
+        actions: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['executiveSummary', 'swot', 'risks', 'actions'],
+    },
+    maxTokens: 3000,
+  })
+  if (!res || !res.executiveSummary || !res.swot) return null
+  const arr = (v: unknown): string[] => (Array.isArray(v) ? v.slice(0, 5).map(x => capCp(String(x), 80)) : [])
+  return {
+    executiveSummary: capCp(String(res.executiveSummary), 1000),
+    swot: {
+      strengths: arr(res.swot.strengths),
+      weaknesses: arr(res.swot.weaknesses),
+      opportunities: arr(res.swot.opportunities),
+      threats: arr(res.swot.threats),
+    },
+    risks: (Array.isArray(res.risks) ? res.risks.slice(0, 5) : []).map(r => ({
+      title: capCp(String(r.title ?? ''), 60),
+      severity: r.severity === 'high' || r.severity === 'low' ? r.severity : 'mid',
+      mitigation: capCp(String(r.mitigation ?? ''), 100),
+    })),
+    actions: arr(res.actions),
+  }
+}
+
+export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
   const app = new Hono()
 
   // 日報一覧（自分: month or from/to / チーム: scope=team は管理者のみ / 全員: scope=all は提出済みのみ全メンバー可）
@@ -323,6 +391,107 @@ export function reportsRoutes(pool: pg.Pool): Hono {
     } finally {
       client.release()
     }
+  })
+
+  // 週次 AI インサイト（バッチ7g・オペレーター指示 2026-07-19 #9）。
+  // 該当週の全登録データ（閲覧権限準拠 = 提出済み日報は全員可視・売上は can('sales') のみ供給）を
+  // 決定的に集計し、Vertex AI（無効時はヒューリスティック）で経営・営業・チーム視点の洞察を生成する
+  app.get('/weekly-insight', async (c) => {
+    const user = c.get('user')
+    const weekStart = String(c.req.query('weekStart') ?? '')
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) throw err('AKO-GEN-001', 'weekStart（YYYY-MM-DD）を指定してください', 400)
+    const weekEnd = addDays(weekStart, 6)
+    const rules = await activePermissionRules(pool)
+    const subject = subjectOf(user)
+    if (rules.length > 0 && !canUseFeature(rules, subject, 'reports')) {
+      throw err('AKO-PRM-001', 'この機能を利用する権限がありません', 403)
+    }
+    const canSales = rules.length === 0 || canUseFeature(rules, subject, 'sales')
+
+    const [membersQ, dailyQ, weeklyQ, plansQ, wfQ, escQ, aiQ, notesQ, salesQ] = await Promise.all([
+      pool.query<{ id: string; name: string }>(`SELECT id, name FROM members WHERE active = true`),
+      pool.query<{ memberId: string | null; date: string; entries: ReportEntry[]; issues: string }>(
+        `SELECT member_id AS "memberId", date::text AS date, entries, issues
+         FROM daily_reports WHERE author_kind = 'human' AND status = 'submitted'
+           AND date BETWEEN $1::date AND $2::date`, [weekStart, weekEnd]),
+      pool.query<{ n: string }>(
+        `SELECT count(*)::text AS n FROM weekly_reports WHERE week_start = $1::date AND status = 'submitted'`,
+        [weekStart]),
+      pool.query<{ total: string; done: string }>(
+        `SELECT count(*)::text AS total, count(*) FILTER (WHERE status = 'done')::text AS done
+         FROM task_plans WHERE date BETWEEN $1::date AND $2::date`, [weekStart, weekEnd]),
+      pool.query<{ submitted: string; approved: string }>(
+        `SELECT count(*) FILTER (WHERE status <> 'draft')::text AS submitted,
+                count(*) FILTER (WHERE status = 'approved')::text AS approved
+         FROM workflow_requests WHERE substr(created_at, 1, 10) BETWEEN $1 AND $2`, [weekStart, weekEnd]),
+      pool.query<{ raised: string; resolved: string }>(
+        `SELECT count(*)::text AS raised, count(*) FILTER (WHERE status = 'resolved')::text AS resolved
+         FROM escalations WHERE substr(raised_at, 1, 10) BETWEEN $1 AND $2`, [weekStart, weekEnd]),
+      pool.query<{ done: string; active: string }>(
+        `SELECT count(*) FILTER (WHERE status = 'done'
+                  AND (updated_at AT TIME ZONE 'Asia/Tokyo')::date BETWEEN $1::date AND $2::date)::text AS done,
+                count(*) FILTER (WHERE status IN ('proposed', 'in_progress', 'blocked'))::text AS active
+         FROM ai_tasks`, [weekStart, weekEnd]),
+      pool.query<{ kind: string; n: string }>(
+        `SELECT kind, count(*)::text AS n FROM notes
+         WHERE active = true AND (created_at AT TIME ZONE 'Asia/Tokyo')::date BETWEEN $1::date AND $2::date
+         GROUP BY kind`, [weekStart, weekEnd]),
+      pool.query<{ total: string | null }>(
+        `SELECT sum(amount)::text AS total FROM sales_monthly WHERE month = $1`, [weekStart.slice(0, 7)]),
+    ])
+
+    const nameOf = new Map(membersQ.rows.map(m => [m.id, m.name]))
+    const memberHours = new Map<string, number>()
+    const themeHours = new Map<string, number>()
+    const daily = new Map<string, number>()
+    const reporters = new Set<string>()
+    const issues: { member: string; issue: string }[] = []
+    let totalHours = 0
+    for (const r of dailyQ.rows) {
+      const name = (r.memberId && nameOf.get(r.memberId)) || '不明'
+      reporters.add(r.memberId ?? name)
+      daily.set(r.date, (daily.get(r.date) ?? 0) + 1)
+      for (const e of (Array.isArray(r.entries) ? r.entries : [])) {
+        const h = Number.isFinite(Number(e.hours)) ? Number(e.hours) : 0
+        totalHours += h
+        memberHours.set(name, (memberHours.get(name) ?? 0) + h)
+        const theme = String(e.theme ?? '').trim() || 'その他'
+        themeHours.set(theme, (themeHours.get(theme) ?? 0) + h)
+      }
+      if (r.issues?.trim()) issues.push({ member: name, issue: capCp(r.issues.trim(), 120) })
+    }
+    const notesByKind = new Map(notesQ.rows.map(r => [r.kind, Number(r.n)]))
+    const metrics: WeeklyMetrics = {
+      weekStart,
+      weekEnd,
+      reportSubmitted: dailyQ.rows.length,
+      reporters: reporters.size,
+      membersActive: membersQ.rows.length,
+      totalHours: Math.round(totalHours * 4) / 4,
+      memberHours: [...memberHours.entries()].map(([name, hours]) => ({ name, hours: Math.round(hours * 4) / 4 }))
+        .sort((a, b) => b.hours - a.hours).slice(0, 10),
+      themeHours: [...themeHours.entries()].map(([theme, hours]) => ({ theme, hours: Math.round(hours * 4) / 4 }))
+        .sort((a, b) => b.hours - a.hours).slice(0, 8),
+      dailySubmissions: Array.from({ length: 7 }, (_, i) => {
+        const date = addDays(weekStart, i)
+        return { date, count: daily.get(date) ?? 0 }
+      }),
+      issues: issues.slice(0, 10),
+      weeklyCount: Number(weeklyQ.rows[0]?.n ?? 0),
+      planDone: Number(plansQ.rows[0]?.done ?? 0),
+      planTotal: Number(plansQ.rows[0]?.total ?? 0),
+      workflowSubmitted: Number(wfQ.rows[0]?.submitted ?? 0),
+      workflowApproved: Number(wfQ.rows[0]?.approved ?? 0),
+      escalationRaised: Number(escQ.rows[0]?.raised ?? 0),
+      escalationResolved: Number(escQ.rows[0]?.resolved ?? 0),
+      aiTasksDone: Number(aiQ.rows[0]?.done ?? 0),
+      aiTasksActive: Number(aiQ.rows[0]?.active ?? 0),
+      minutesCount: notesByKind.get('minutes') ?? 0,
+      poipoiCount: notesByKind.get('poipoi') ?? 0,
+      salesMonthAmount: canSales ? Number(salesQ.rows[0]?.total ?? 0) : null,
+    }
+    const llm = await llmWeeklyInsight(env, metrics)
+    return c.json({ data: { metrics, insight: llm ?? heuristicWeeklyInsight(metrics), llm: !!llm } })
   })
 
   return app

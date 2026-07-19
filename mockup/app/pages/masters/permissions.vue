@@ -10,7 +10,7 @@
 import { Plus } from 'lucide-vue-next'
 import type { Member, PermissionRule } from '~/types/domain'
 import type { TableColumn } from '~/types/ui'
-import { FEATURE_PERMISSION_KEYS } from '../../../../shared/domain/permissions'
+import { AI_SCOPE_FEATURES, AI_SCOPE_FIELD, FEATURE_PERMISSION_KEYS } from '../../../../shared/domain/permissions'
 import { FIELD_CATALOG, FIELD_RESOURCES, fieldLabel } from '~/utils/permission-catalog'
 
 const ruleCrud = useMasterCrudAsync('permissionRules', 'pm')
@@ -34,13 +34,36 @@ const VIEW_TABS = [
   { key: 'matrix', label: '権限表' },
 ]
 
+// AI 参照範囲はフォーム上は擬似リソース 'ai-scope:<機能キー>' で選ばせ、保存時に
+// resource=<機能キー> + field='ai-scope' へ写像する（PermissionRule スキーマ不変 = 権限表と相互運用）
+const AI_SCOPE_PREFIX = 'ai-scope:'
+
 const resourceOptions = [
   ...FEATURE_PERMISSION_KEYS.map(f => ({ value: f.key, label: `機能: ${f.label}` })),
+  ...AI_SCOPE_FEATURES.map(f => ({
+    value: `${AI_SCOPE_PREFIX}${f.key}`,
+    label: `AI 参照範囲: ${f.label}（既定: ${f.defaultScope === 'all' ? 'すべて' : '自分のみ'}）`,
+  })),
   ...FIELD_RESOURCES.map(f => ({ value: f.key, label: `マスタ項目: ${f.label}` })),
 ]
 
 function resourceLabel(key: string): string {
   return resourceOptions.find(o => o.value === key)?.label ?? key
+}
+
+/** 一覧行のリソース表示（ai-scope ルールは AI 参照範囲として表示） */
+function ruleResourceLabel(r: PermissionRule): string {
+  if ((r.field ?? null) === AI_SCOPE_FIELD) {
+    const f = AI_SCOPE_FEATURES.find(x => x.key === r.resource)
+    return `AI 参照範囲: ${f?.label ?? r.resource}`
+  }
+  return resourceLabel(r.resource)
+}
+
+/** 効果ラベル（ai-scope ルールは すべて/自分のみ の語彙） */
+function ruleEffectLabel(r: PermissionRule): string {
+  if ((r.field ?? null) === AI_SCOPE_FIELD) return r.effect === 'allow' ? 'すべて' : '自分のみ'
+  return EFFECT_LABELS[r.effect]
 }
 
 function subjectLabel(r: PermissionRule): string {
@@ -65,7 +88,7 @@ const rows = computed(() =>
     ...r,
     kind: KIND_LABELS[r.subjectKind],
     subject: subjectLabel(r),
-    resourceName: resourceLabel(r.resource),
+    resourceName: ruleResourceLabel(r),
   })) as unknown as Record<string, unknown>[])
 
 function asRule(row: Record<string, unknown>): PermissionRule {
@@ -91,6 +114,19 @@ const form = ref({
 /** 選択中リソースが表示項目制御に対応しているか（機能リソースは項目指定なし） */
 const isFieldResource = computed(() => form.value.resource in FIELD_CATALOG)
 const fieldOptions = computed(() => FIELD_CATALOG[form.value.resource] ?? [])
+/** 選択中リソースが AI 参照範囲か（効果の語彙が すべて/自分のみ に変わる） */
+const isAiScope = computed(() => form.value.resource.startsWith(AI_SCOPE_PREFIX))
+/** フォームの擬似リソースを実際の resource / field へ写像 */
+function actualResource(): string {
+  return isAiScope.value ? form.value.resource.slice(AI_SCOPE_PREFIX.length) : form.value.resource
+}
+function actualField(field: string | null): string | null {
+  return isAiScope.value ? AI_SCOPE_FIELD : field
+}
+const effectOptions = computed(() => isAiScope.value
+  ? [{ value: 'allow', label: 'すべて（他メンバーの登録データも AI が参照）' },
+     { value: 'deny', label: '自分の登録データのみ' }]
+  : Object.entries(EFFECT_LABELS).map(([value, label]) => ({ value, label })))
 
 // リソース/レイヤ変更時のリセットは watch ではなくセレクトの change ハンドラで行う
 // （watch だと openEdit のフォーム丸ごと差し替えにも発火し、編集初期値の項目・対象を
@@ -121,9 +157,12 @@ function openEdit(row: Record<string, unknown>): void {
   const r = ruleCrud.byId(String(row.id)) as PermissionRule | undefined
   if (!r) return
   editingId.value = r.id
+  const isScope = (r.field ?? null) === AI_SCOPE_FIELD
   form.value = {
     subjectKind: r.subjectKind, subjectId: r.subjectId,
-    resource: r.resource, fields: r.field ? [r.field] : [], effect: r.effect,
+    resource: isScope ? `${AI_SCOPE_PREFIX}${r.resource}` : r.resource,
+    fields: !isScope && r.field ? [r.field] : [],
+    effect: r.effect,
   }
   modalOpen.value = true
 }
@@ -135,8 +174,8 @@ function ruleExists(field: string | null): boolean {
     && r.id !== editingId.value
     && r.subjectKind === form.value.subjectKind
     && r.subjectId === form.value.subjectId
-    && r.resource === form.value.resource
-    && (r.field ?? null) === field
+    && r.resource === actualResource()
+    && (r.field ?? null) === actualField(field)
     && r.effect === form.value.effect)
 }
 
@@ -148,7 +187,7 @@ async function save(): Promise<void> {
   const base = {
     subjectKind: form.value.subjectKind,
     subjectId: form.value.subjectId,
-    resource: form.value.resource,
+    resource: actualResource(),
     effect: form.value.effect,
   }
   // 編集 = 単一ルールの更新 / 追加 = 選択した項目ぶんのルールを一括作成（1 項目 1 ルール = スキーマ不変）
@@ -158,7 +197,7 @@ async function save(): Promise<void> {
       toast.show('同一の権限ルールが既に存在します', 'warn')
       return
     }
-    const res = await ruleCrud.save({ ...base, id: editingId.value, field: form.value.fields[0] ?? null })
+    const res = await ruleCrud.save({ ...base, id: editingId.value, field: actualField(form.value.fields[0] ?? null) })
     if (!res.ok) {
       toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
       return
@@ -177,7 +216,7 @@ async function save(): Promise<void> {
       skipped++
       continue
     }
-    const res = await ruleCrud.save({ ...base, field })
+    const res = await ruleCrud.save({ ...base, field: actualField(field) })
     if (!res.ok) {
       toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
       return
@@ -257,7 +296,7 @@ async function restoreRule(): Promise<void> {
         </template>
         <template #cell-effect="{ row }">
           <UiStatusBadge
-            :label="EFFECT_LABELS[asRule(row).effect]"
+            :label="ruleEffectLabel(asRule(row))"
             :tone="asRule(row).effect === 'deny' ? 'crit' : 'ok'"
             dot
           />
@@ -306,10 +345,10 @@ async function restoreRule(): Promise<void> {
               aria-label="制御する項目"
             />
           </UiFormField>
-          <UiFormField label="効果" required>
+          <UiFormField label="効果" required :hint="isAiScope ? 'AI（チャットボット・AI業務アシスタント）が当該データを参照する範囲' : undefined">
             <UiSelect
               v-model="form.effect"
-              :options="Object.entries(EFFECT_LABELS).map(([value, label]) => ({ value, label }))"
+              :options="effectOptions"
               aria-label="効果"
             />
           </UiFormField>
