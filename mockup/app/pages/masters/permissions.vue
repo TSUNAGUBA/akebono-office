@@ -11,6 +11,7 @@ import { Plus } from 'lucide-vue-next'
 import type { Member, PermissionRule } from '~/types/domain'
 import type { TableColumn } from '~/types/ui'
 import { FEATURE_PERMISSION_KEYS } from '../../../../shared/domain/permissions'
+import { FIELD_CATALOG, FIELD_RESOURCES, fieldLabel } from '~/utils/permission-catalog'
 
 const ruleCrud = useMasterCrudAsync('permissionRules', 'pm')
 const memberCrud = useMasterCrudAsync('members', 'm')
@@ -24,89 +25,14 @@ const KIND_LABELS: Record<PermissionRule['subjectKind'], string> = {
 const ROLE_LABELS: Record<string, string> = { admin: '管理者', hr: '人事', member: '一般' }
 const EFFECT_LABELS: Record<PermissionRule['effect'], string> = { allow: '許可', deny: '拒否' }
 
-/** フィールド制御に使えるマスタエンティティ（resource キー = API エンティティキー） */
-const FIELD_RESOURCES: { key: string; label: string }[] = [
-  { key: 'members', label: 'メンバー' },
-  { key: 'companies', label: '自社・顧客(会社)' },
-  { key: 'contacts', label: '顧客(人)' },
-  { key: 'projects', label: 'プロジェクト' },
-  { key: 'knowledge', label: 'ナレッジ' },
+// 項目カタログ（論理名）はルール一覧・権限表の両モードで共有（~/utils/permission-catalog）
+
+/** 表示モード: ルール一覧（従来）/ 権限表（オペレーター指示 2026-07-19 #2） */
+const viewTab = ref('list')
+const VIEW_TABS = [
+  { key: 'list', label: 'ルール一覧' },
+  { key: 'matrix', label: '権限表' },
 ]
-
-/**
- * 項目キーの論理名カタログ（オペレーター指示 2026-07-19: 物理名の手入力を廃止し、
- * 論理名のオートコンプリートで選択させる）。物理キー = shared/domain/types.ts の各インターフェース
- * （id・active・カスタム項目は制御対象外のため掲載しない）
- */
-const FIELD_CATALOG: Record<string, { value: string; label: string }[]> = {
-  members: [
-    { value: 'name', label: '氏名' },
-    { value: 'email', label: 'メールアドレス' },
-    { value: 'employmentType', label: '雇用区分' },
-    { value: 'departmentId', label: '所属部署' },
-    { value: 'title', label: '役職' },
-    { value: 'role', label: '権限ロール' },
-    { value: 'hireDate', label: '入社日' },
-    { value: 'weeklyDays', label: '週所定日数' },
-    { value: 'weeklyHours', label: '週所定時間' },
-    { value: 'punchRequired', label: '打刻要否' },
-    { value: 'googleCalendarConnected', label: 'カレンダー連携状態' },
-    { value: 'attendanceRuleId', label: '勤務体系' },
-    { value: 'birthDate', label: '生年月日' },
-    { value: 'avatar', label: 'プロフィール画像' },
-  ],
-  companies: [
-    { value: 'kind', label: '区分（自社/顧客）' },
-    { value: 'name', label: '会社名' },
-    { value: 'aliases', label: '別名' },
-    { value: 'industryIds', label: '業界' },
-    { value: 'primaryIndustryId', label: '主業界' },
-    { value: 'size', label: '規模' },
-    { value: 'location', label: '所在地' },
-    { value: 'description', label: '概要' },
-    { value: 'ownerMemberId', label: '自社担当' },
-    { value: 'fiscalStartMonth', label: '会計年度開始月' },
-  ],
-  contacts: [
-    { value: 'companyId', label: '所属会社' },
-    { value: 'name', label: '氏名' },
-    { value: 'dept', label: '部署' },
-    { value: 'title', label: '役職' },
-    { value: 'keyPerson', label: 'キーパーソン度' },
-    { value: 'email', label: 'メールアドレス' },
-    { value: 'phone', label: '電話番号' },
-    { value: 'notes', label: 'メモ' },
-  ],
-  projects: [
-    { value: 'name', label: 'プロジェクト名' },
-    { value: 'companyId', label: '顧客（会社）' },
-    { value: 'type', label: '種別' },
-    { value: 'status', label: '状態' },
-    { value: 'priority', label: '優先度' },
-    { value: 'ownerMemberId', label: '担当者' },
-    { value: 'memberIds', label: '参画メンバー' },
-    { value: 'startDate', label: '開始日' },
-    { value: 'endDate', label: '終了日' },
-    { value: 'budget', label: '予算' },
-    { value: 'objective', label: '目的' },
-  ],
-  knowledge: [
-    { value: 'domain', label: 'ドメイン' },
-    { value: 'targetId', label: '対象' },
-    { value: 'title', label: 'タイトル' },
-    { value: 'body', label: '本文' },
-    { value: 'tags', label: 'タグ' },
-    { value: 'source', label: '出典' },
-    { value: 'sourceRefId', label: '出典参照' },
-    { value: 'updatedAt', label: '更新日時' },
-  ],
-}
-
-/** 項目キーの論理名（カタログ外 = 過去に手入力された物理名などはそのまま表示） */
-function fieldLabel(resource: string, field: string | null | undefined): string {
-  if (!field) return ''
-  return FIELD_CATALOG[resource]?.find(f => f.value === field)?.label ?? field
-}
 
 const resourceOptions = [
   ...FEATURE_PERMISSION_KEYS.map(f => ({ value: f.key, label: `機能: ${f.label}` })),
@@ -294,7 +220,12 @@ async function restoreRule(): Promise<void> {
     title="権限設定"
     description="ロール・役職・個人の 3 レイヤで機能と表示項目の権限を制御します（解決順: 個人 > 役職 > ロール。未設定は許可）。管理者向けの基本権限（マスタ変更等）はここでは緩められません"
   >
-    <UiSectionCard title="権限ルール" description="拒否ルールで機能を隠し、個人の許可ルールで例外を作れます。表示項目（項目列あり）は API モードでマスタ応答から除外されます" flush>
+    <UiTabBar v-model="viewTab" :tabs="VIEW_TABS" class="mb-3" />
+
+    <!-- v-show でタブ往復しても権限表の状態（レイヤ・個人列の選択）を保持する（レビュー M-6） -->
+    <MastersPermissionMatrix v-show="viewTab === 'matrix'" />
+
+    <UiSectionCard v-show="viewTab === 'list'" title="権限ルール" description="拒否ルールで機能を隠し、個人の許可ルールで例外を作れます。表示項目（項目列あり）は API モードでマスタ応答から除外されます" flush>
       <template #actions>
         <button type="button" class="btn btn-primary btn-sm" @click="openCreate">
           <Plus class="h-3.5 w-3.5" aria-hidden="true" />

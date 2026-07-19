@@ -111,6 +111,7 @@ const leave = useLeave()   // balance(memberId, leaveTypeId?) / request / decide
 | `WidgetsPunchClock` | 打刻 = タイムカード（flat: モーダル内等でカード枠を外す） |
 | `WidgetsCalendarConnectGate` | Google カレンダー連携ゲート（擬似 OAuth 同意・props なし） |
 | `MastersDeptOrgNode` | 組織図の再帰ノード（node: DeptNode, depth）。`@select` で部署詳細へ |
+| `MastersPermissionMatrix` | 権限表モード（props なし = ruleCrud を内部利用）。機能 + マスタ項目 × ロール/役職/個人のマトリクス。セルクリックで 未設定→拒否→許可→未設定 |
 
 コンポーネントはディレクトリプレフィックス付きで自動インポートされる（例: `components/widgets/ApprovalFlow.vue` → `<WidgetsApprovalFlow>`）。
 
