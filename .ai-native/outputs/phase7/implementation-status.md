@@ -367,4 +367,5 @@
 - [x] AI業務アシスタントの参照統合: 日報ドラフト材料へ notes(poipoi, 当日, 本人) を合流（旧 assist_logs メモも下位互換で継続）。**LLM ドラフト生成へ buildContext（チャットボットと同じ参照範囲・権限準拠）を 4000cp cap で供給**（LLM 無効時は従来ヒューリスティックのみ = 原則4）
 - [x] 日報・週報はフォーム入力が既定（reports.vue の entryMethod 既定を 'form' へ。設定 'both' = フォーム主 + AI アシスト補助）
 - [x] 機能ガード poipoi / minutes を FEATURE_PERMISSION_KEYS / featureKeyOfPath へ追加（F-16 準拠）
-- [x] 検証: 単体 58 / 統合 119 ×3（業務種別 CRUD / poipoi の本人スコープ・紐付け / 議事録の全員参照・.md 取込・原本ラウンドトリップ・poipoi 原本の本人ガード / 検索統合 = minutes 全員・poipoi 本人のみ / ドラフト材料合流）/ 両 typecheck / api build
+- [x] 検証: 単体 58 / 統合 120 ×3（業務種別 CRUD / poipoi の本人スコープ・紐付け / 議事録の全員参照・.md 取込・原本ラウンドトリップ・poipoi 原本の本人ガード / 検索統合 = minutes 全員・poipoi 本人のみ / 機能 deny の API・検索文脈の一貫閉塞 / ドラフト材料合流）/ 両 typecheck / api build
+- [x] 反復レビュー（原則9・PR #51）: R1 で重大 0 + 軽微 8（マスタページの複製残骸文言 / 検索リトリーバルの note ヒットに機能ガード（can('poipoi'/'minutes')）未適用 = F-16 一貫性 / 原本 2 エンドポイントの guardFeature 欠落 / titleFrom のセンチネル比較と cap 漏れ / HANDOFF の実装宣言と実態の乖離（2 系統併存の設計判断へ修正）/ data-design の kind 列挙漏れ / 材料サマリの件数が notes を含まない / テスト抜け）→ **全件修正** + 回帰（機能 deny の一貫閉塞・kind 不正 400）を追加

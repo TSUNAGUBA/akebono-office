@@ -627,6 +627,9 @@ export async function buildContext(
     const lines: string[] = []
     for (const h of hits) {
       if (renderedKeys.has(`${h.sourceKind}:${h.sourceId}`)) continue
+      // ノートは機能ガード（F-16）にも従う: poipoi（owner あり）= 'poipoi' / 議事録 = 'minutes'
+      // （reports 等のドメイン文脈と同じ「deny で文脈から消える」挙動に統一）
+      if (h.sourceKind === 'note' && !can(h.ownerMemberId ? 'poipoi' : 'minutes')) continue
       const titleCheck = TITLE_CHECKS[h.sourceKind]
       if (!canField(titleCheck.entity, titleCheck.field)) continue
       const segLines = (h.segments ?? [])

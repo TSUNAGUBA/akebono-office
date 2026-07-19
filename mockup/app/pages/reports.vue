@@ -251,8 +251,11 @@ const dayPlanStats = computed(() => {
   const plans = tp.plansOf(currentUserId.value, selDate.value)
   return { total: plans.length, done: plans.filter(p => p.status === 'done').length }
 })
+// 独立メニュー（/poipoi = notes）のメモも材料へ合流するため件数へ含める（バッチ7c レビュー指摘）
+const poipoiNotes = useNotes('poipoi')
 const dayMemoCount = computed(() =>
-  assist.logsOf(currentUserId.value, selDate.value).filter(l => l.kind === 'memo').length)
+  assist.logsOf(currentUserId.value, selDate.value).filter(l => l.kind === 'memo').length
+  + poipoiNotes.list.value.filter(n => n.memberId === currentUserId.value && n.createdAt.slice(0, 10) === selDate.value).length)
 const dayAnswerStats = computed(() => {
   const qs = assist.questionsFor(currentUserId.value, selDate.value)
   return { total: qs.length, answered: qs.filter(q => q.answered).length }

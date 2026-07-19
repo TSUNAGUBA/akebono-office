@@ -131,7 +131,10 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
     if (!text) throw err('AKO-NOTE-003', 'ファイルからテキストを抽出できませんでした（画像のみの PDF 等は非対応です）', 422)
 
     const id = newId('nt')
-    const title = titleFrom(b.title, text) === 'メモ' ? filename.replace(/\.[^.]+$/, '') : titleFrom(b.title, text)
+    // タイトル導出: 指定 > 本文の先頭行 > ファイル名（センチネル比較はしない・常に 200cp cap）
+    const specifiedTitle = typeof b.title === 'string' ? b.title.trim() : ''
+    const firstLine = text.split('\n').map(l => l.replace(/^#+\s*/, '').trim()).find(Boolean) ?? ''
+    const title = capCp(specifiedTitle || capCp(firstLine, 40) || filename.replace(/\.[^.]+$/, ''), 200)
     const client = await pool.connect()
     try {
       await client.query('BEGIN')
@@ -170,6 +173,7 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
       `SELECT kind, member_id AS "memberId" FROM notes WHERE id = $1`, [c.req.param('noteId')])
     const note = notes[0]
     if (!note) throw err('AKO-GEN-002', 'ノートが見つかりません', 404)
+    await guardFeature(pool, user, note.kind)
     if (note.kind === 'poipoi' && note.memberId !== user.id) {
       throw err('AKO-PRM-001', '本人のメモのみ参照できます', 403)
     }
@@ -187,6 +191,7 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
        FROM note_files f JOIN notes n ON n.id = f.note_id WHERE f.id = $1`, [c.req.param('id')])
     const f = rows[0]
     if (!f) throw err('AKO-GEN-002', 'ファイルが見つかりません', 404)
+    await guardFeature(pool, user, f.kind)
     if (f.kind === 'poipoi' && f.memberId !== user.id) {
       throw err('AKO-PRM-001', '本人のメモのみ参照できます', 403)
     }

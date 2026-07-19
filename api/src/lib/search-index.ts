@@ -401,6 +401,8 @@ export interface SearchHit {
   title: string
   segments: SearchSegment[]
   score: number
+  /** note の所有者（null = 全員参照 = 議事録。値あり = poipoi = 本人） */
+  ownerMemberId: string | null
 }
 
 /** 質問に関連する検索ドキュメントの上位 K 件（字句 + 埋め込みのハイブリッド。埋め込み無効時は字句のみ） */
@@ -414,8 +416,10 @@ export async function searchDocsFor(
   const { rows } = await pool.query<{
     sourceKind: SearchDocInput['sourceKind']; sourceId: string; title: string
     aliases: string[]; body: string; segments: SearchSegment[]; embedding: number[] | null
+    ownerMemberId: string | null
   }>(
-    `SELECT source_kind AS "sourceKind", source_id AS "sourceId", title, aliases, body, segments, embedding
+    `SELECT source_kind AS "sourceKind", source_id AS "sourceId", title, aliases, body, segments, embedding,
+            owner_member_id AS "ownerMemberId"
      FROM search_docs WHERE owner_member_id IS NULL OR owner_member_id = $1 ORDER BY id LIMIT 3000`, [forMemberId])
   // 全件を都度メモリへ載せる設計は SME 規模（〜数千件）前提。上限超過時も ORDER BY id で
   // 決定的な部分集合になる。件数がこの規模を超える場合は pgvector 等への移行を検討する
@@ -426,7 +430,7 @@ export async function searchDocsFor(
     const cos = qVec && r.embedding ? cosineSimilarity(qVec, r.embedding) : 0
     // 字句 0.2 / 埋め込み 0.62 を関連の下限とし、スコアは両者の最大値（片系統でも成立）
     const score = Math.max(lex >= 0.2 ? lex : 0, cos >= 0.62 ? cos : 0)
-    return { sourceKind: r.sourceKind, sourceId: r.sourceId, title: r.title, segments: r.segments ?? [], score }
+    return { sourceKind: r.sourceKind, sourceId: r.sourceId, title: r.title, segments: r.segments ?? [], score, ownerMemberId: r.ownerMemberId ?? null }
   })
   return scored
     .filter(s => s.score > 0)

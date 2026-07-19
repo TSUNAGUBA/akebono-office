@@ -2717,6 +2717,24 @@ describe('バッチ7c: ぽいぽいメモ/議事録 + 業務種別マスタ + AI
     expect(notOwn).not.toContain('ノート検証の秘密メモ')
   })
 
+  it('機能ガード（F-16）: minutes の deny で API も検索文脈も閉じる。GET の kind 不正は 400', async () => {
+    expect((await api('GET', '/v1/notes?kind=other', { as: MEMBER })).status).toBe(400)
+    const deny = await api('POST', '/v1/masters/permission-rules', {
+      as: ADMIN, body: { subjectKind: 'role', subjectId: 'member', resource: 'minutes', effect: 'deny' },
+    })
+    const ruleId = (deny.json.data as { id: string }).id
+    expect((await api('GET', '/v1/notes?kind=minutes', { as: MEMBER })).status).toBe(403)
+    expect((await api('POST', '/v1/notes', { as: MEMBER, body: { kind: 'minutes', body: 'x' } })).status).toBe(403)
+    // 検索リトリーバル経由でも議事録が文脈に載らない（機能 deny の一貫性）
+    const rules = [{
+      id: ruleId, subjectKind: 'role' as const, subjectId: 'member', resource: 'minutes', field: null,
+      effect: 'deny' as const, active: true,
+    }]
+    const ctx = await buildContext(pool, memberUser, 'ノート検証定例の決定事項は?', rules)
+    expect(ctx).not.toContain('検索インデックスの運用開始')
+    await api('POST', `/v1/masters/permission-rules/${ruleId}/archive`, { as: ADMIN })
+  })
+
   it('日報ドラフト: 独立メニューのぽいぽいメモが材料へ合流する（AI業務アシスタント統合）', async () => {
     const today = todayJst()
     await api('POST', '/v1/notes', {

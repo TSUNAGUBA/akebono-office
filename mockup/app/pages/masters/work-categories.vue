@@ -56,8 +56,8 @@ const drawerTitle = computed(() =>
 
 const formFields: FieldDef[] = [
   {
-    key: 'name', label: '業務種別名', type: 'text', required: true, placeholder: '例）小売',
-    hint: '直交軸で管理します。「小売×アパレル」のような複合値を作らず、会社側で複数選択してください',
+    key: 'name', label: '業務種別名', type: 'text', required: true, placeholder: '例）定例会議',
+    hint: 'ぽいぽいメモ・議事録の分類に使います（例: 定例会議・顧客対応）',
   },
   { key: 'displayOrder', label: '表示順', type: 'number', min: 1, step: 1 },
 ]
@@ -146,7 +146,7 @@ async function restoreSelected(): Promise<void> {
 <template>
   <MastersMasterShell
     title="業務種別マスタ"
-    description="業務種別は直交軸で管理します（「小売×アパレル」のような複合値を作らず、会社側で複数業務種別を紐付ける）"
+    description="ぽいぽいメモ・議事録の任意分類を管理します。名称と表示順のみのシンプルなマスタです"
   >
     <template #actions>
       <button type="button" class="btn btn-primary" @click="openCreate">
