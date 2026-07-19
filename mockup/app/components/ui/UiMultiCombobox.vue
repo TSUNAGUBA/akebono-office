@@ -66,7 +66,12 @@ function onKeydown(e: KeyboardEvent): void {
   } else if (e.key === 'ArrowDown') {
     open.value = true
   } else if (e.key === 'Escape') {
-    open.value = false
+    // 候補が開いているときの Esc は候補を閉じるだけ（バブリングを止めて親モーダルまで
+    // 閉じない = 入力途中のフォーム破棄を防ぐ。閉じているときは伝播させてモーダルを閉じる）
+    if (open.value) {
+      open.value = false
+      e.stopPropagation()
+    }
   } else if (e.key === 'Backspace' && query.value === '' && props.modelValue.length > 0) {
     remove(props.modelValue[props.modelValue.length - 1]!)
   }
