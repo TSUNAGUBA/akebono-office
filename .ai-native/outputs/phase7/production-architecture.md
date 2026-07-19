@@ -69,7 +69,9 @@ flowchart LR
   勤怠はサーバー集計（月サマリ・36 協定・タイムカード）をキー単位でキャッシュし、日次・週次はそこから射影する。
   ログイン確立・切替時は `onApiReset` フックで取り直す。通知は 60 秒ポーリングで新着を反映
 - **バッチ6d で全ドメインの接続が完了し、API モードの「モックアップ」バッジは全廃**（マイルストーン）。
-  唯一の未移行はドキュメント管理（/support/documents = 表示のみのデモデータ。バッジ対象外の設計判断）。
+  最後の未移行だったドキュメント管理（/support/documents）も**バッチ7l で本実装済み**
+  （メタ = documents テーブル・実体 = Cloud Storage `STORAGE_BUCKET`（未設定環境は DB bytea フォールバック）・
+  Google ドライブ取込・search_docs 経由の AI 参照・署名 URL ダウンロード）= **全ドメイン移行完了**。
   バッジの判定機構（mock-status.ts）は将来のモック先行ページに備えて残す。移行状況の SoT は implementation-status.md
 
 ## 3. 認証・認可

@@ -29,6 +29,7 @@ import { ApiError, err } from '../lib/errors'
 import { newId } from '../lib/ids'
 import { generateGroundedText, generateJson } from '../lib/llm'
 import { notify } from '../lib/notify'
+import { searchDocsFor } from '../lib/search-index'
 
 // questions / files（メタのみ）はタスク行へ埋め込んで返す（フロントの型 = AiTask.questions/files と一致。
 // 一覧 LIMIT 200 での相関サブクエリは SME 規模で十分軽量）。
@@ -252,16 +253,30 @@ async function prepareStepExecution(
         ? `\n\n調査の出典:\n${research.sources.map(s => `- ${s.title}: ${s.uri}`).join('\n')}`
         : '')
     : ''
+  // 社内の保管ドキュメント（バッチ7l: search_docs のリトリーバルで関連資料を材料へ供給。
+  // ドキュメントは全社共有 = 依頼者スコープの制約なし。失敗・ヒットなしは材料なしで続行 = 原則4）
+  let docsBlock = ''
+  try {
+    const docHits = (await searchDocsFor(pool, env, `${task.title} ${step.title}`, task.requesterId, 6))
+      .filter(h => h.sourceKind === 'document')
+      .slice(0, 3)
+    if (docHits.length > 0) {
+      docsBlock = `\n\n# 社内ドキュメント（保管ファイルの関連抜粋）\n${docHits.map(h =>
+        `【${h.title}】\n${capCp((h.segments ?? []).map(s => s.text).join('\n'), 1200)}`).join('\n\n')}`
+    }
+  } catch {
+    // 検索失敗は補助材料なしで続行（非ブロッキング）
+  }
   const res = await generateJson<{ needsInput?: boolean; question?: string; output?: string }>(env, {
     system: `あなたは AI 社員「${role?.name ?? '汎用'}」です。ミッション: ${role?.mission ?? ''}\n`
       + `${role?.systemPrompt ? `${role.systemPrompt}\n` : ''}`
       + 'タスクの現在のステップを実際に遂行し、成果物をマークダウンで出力します。'
-      + '材料（依頼文・確認済み Q&A・添付・Web 調査メモ）にある情報のみを使い、推測で事実を作らないこと。'
+      + '材料（依頼文・確認済み Q&A・添付・Web 調査メモ・社内ドキュメント）にある情報のみを使い、推測で事実を作らないこと。'
       + 'Web 調査メモの情報を成果物に使った場合は、末尾に「参考」として出典 URL を明記すること。'
       + 'まず材料と Web 調査で自力遂行を尽くすこと。依頼者への質問（needsInput=true + question）は、'
       + '自社・顧客固有の内部情報がどうしても必要な場合、または重要な意思決定・承認を依頼者に求める場合に限る'
       + '（一般的な知識・調査で解決できることを質問しない。その場合 output は空でよい）。',
-    prompt: `# タスク\n件名: ${task.title}\n\n# 材料\n${materials.text}${researchBlock}`
+    prompt: `# タスク\n件名: ${task.title}\n\n# 材料\n${materials.text}${researchBlock}${docsBlock}`
       + (priorOutputs ? `\n\n# これまでのステップ成果\n${capCp(priorOutputs, 6000)}` : '')
       + `\n\n# 今回遂行するステップ\n${step.title}\n\nこのステップを遂行し、成果物を出力してください。`,
     schema: {

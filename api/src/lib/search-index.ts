@@ -32,7 +32,7 @@ export interface SearchSegment {
 }
 
 export interface SearchDocInput {
-  sourceKind: 'company' | 'contact' | 'industry' | 'knowledge' | 'project' | 'note'
+  sourceKind: 'company' | 'contact' | 'industry' | 'knowledge' | 'project' | 'note' | 'document'
   sourceId: string
   title: string
   aliases: string[]
@@ -52,6 +52,7 @@ export interface SearchDocRow extends SearchDocInput {
 /** 検索ドキュメントの見出しに対する表示可否（kind → タイトルのフィールド） */
 export const TITLE_CHECKS: Record<SearchDocInput['sourceKind'], SegmentCheck> = {
   note: { entity: 'notes', field: 'title' },
+  document: { entity: 'documents', field: 'name' },
   company: { entity: 'companies', field: 'name' },
   contact: { entity: 'contacts', field: 'name' },
   industry: { entity: 'industries', field: 'name' },
@@ -282,6 +283,27 @@ export async function buildSearchDocs(pool: pg.Pool): Promise<SearchDocInput[]> 
         ...(linkCompanyId ? { companyId: linkCompanyId } : {}),
         ...(n.projectId ? { projectId: n.projectId } : {}),
       },
+    })
+  }
+
+  // ---- 保管ドキュメント（F-09-3 本実装 = バッチ7l。抽出テキストがあるファイルのみ = AI が解釈できる対象） ----
+  const { rows: docRows } = await pool.query<{
+    id: string; name: string; tags: string[]; summary: string; extractedText: string
+  }>(
+    `SELECT id, name, tags, summary, extracted_text AS "extractedText"
+     FROM documents
+     WHERE active = true AND kind = 'file' AND (extracted_text <> '' OR summary <> '')
+     ORDER BY id LIMIT 5000`)
+  for (const d of docRows) {
+    const segments: SearchSegment[] = []
+    const tags = Array.isArray(d.tags) ? d.tags.map(String) : []
+    if (tags.length > 0) segments.push(seg(`タグ: ${tags.join('・')}`, c('documents', 'tags')))
+    if (d.summary) segments.push(seg(`概要: ${capCp(d.summary, 300)}`, c('documents', 'summary')))
+    // 抽出本文の表示可否は summary（本文プレビュー相当）の deny に従う = 原本ダウンロードのガードと同一基準
+    if (d.extractedText) segments.push(seg(capCp(d.extractedText, 1500), c('documents', 'summary')))
+    docs.push({
+      sourceKind: 'document', sourceId: d.id, title: d.name, aliases: [], segments,
+      ownerMemberId: null,
     })
   }
 
