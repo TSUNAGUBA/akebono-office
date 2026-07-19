@@ -254,6 +254,7 @@ export async function buildSearchDocs(pool: pg.Pool): Promise<SearchDocInput[]> 
     `SELECT id, name FROM work_categories WHERE active = true LIMIT 200`)
   const wcName = new Map(wcRows.map(x => [x.id, x.name]))
   const projName = new Map(projectsQ.rows.map(x => [x.id, x.name]))
+  const projCompany = new Map(projectsQ.rows.map(x => [x.id, x.companyId]))
   for (const n of noteRows) {
     const segments: SearchSegment[] = []
     segments.push(seg(n.kind === 'poipoi' ? '種別: ぽいぽいメモ' : '種別: 議事録', c('notes', 'kind')))
@@ -269,11 +270,14 @@ export async function buildSearchDocs(pool: pg.Pool): Promise<SearchDocInput[]> 
     const author = memberName.get(n.memberId)
     if (author && n.kind === 'minutes') segments.push(seg(`登録者: ${author}`, c('members', 'name')))
     if (n.body) segments.push(seg(capCp(n.body, 1500), c('notes', 'body')))
+    // 顧客未指定でもプロジェクト経由で顧客を補完する
+    // （PJ のみ紐付けたノートが、別顧客の質問の混入防止フィルタを素通りしないように）
+    const linkCompanyId = n.companyId ?? (n.projectId ? projCompany.get(n.projectId) ?? null : null)
     docs.push({
       sourceKind: 'note', sourceId: n.id, title: n.title, aliases: [], segments,
       ownerMemberId: n.kind === 'poipoi' ? n.memberId : null,
       links: {
-        ...(n.companyId ? { companyId: n.companyId } : {}),
+        ...(linkCompanyId ? { companyId: linkCompanyId } : {}),
         ...(n.projectId ? { projectId: n.projectId } : {}),
       },
     })

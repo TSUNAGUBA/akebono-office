@@ -27,7 +27,7 @@ const BODY_CAP = 20_000
 // createdAt は JST ウォールクロック文字列で返す（表示時刻の規約 = configs/sales/chatbot と同一パターン。
 // フロントは文字列を直接パースするため UTC の "Z" ISO を返すと日付キー比較・表示が最大 9 時間ずれる）
 const NOTE_COLS = `id, member_id AS "memberId", kind, title, body, project_id AS "projectId",
-  company_id AS "companyId", work_category_id AS "workCategoryId", source,
+  company_id AS "companyId", work_category_id AS "workCategoryId", source, active,
   to_char(created_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"') AS "createdAt"`
 
 const EXT_MIME: Record<string, string> = {
@@ -56,6 +56,11 @@ function refOrNull(v: unknown): string | null {
   return s || null
 }
 
+/** 取消・復元の権限（poipoi = 本人のみ（C3）/ minutes = 登録者または管理者）。取消済み原本の参照も同条件 */
+function canUndoNote(note: { kind: NoteKind; memberId: string }, user: AuthUser): boolean {
+  return note.memberId === user.id || (note.kind === 'minutes' && user.role === 'admin')
+}
+
 /** タイトル導出: 指定 > 本文の先頭行（40 字） */
 function titleFrom(specified: unknown, body: string): string {
   const t = typeof specified === 'string' ? specified.trim() : ''
@@ -67,16 +72,22 @@ function titleFrom(specified: unknown, body: string): string {
 export function notesRoutes(pool: pg.Pool, env: Env): Hono {
   const app = new Hono()
 
-  // 一覧（poipoi = 本人のみ / minutes = 全員。新しい順）
+  // 一覧（poipoi = 本人のみ / minutes = 全員。新しい順）。
+  // includeArchived=1 で取消済みも含める（復元 UI 用。取消済みの可視範囲は復元権限と同じ =
+  // poipoi は本人のみ・minutes は登録者または管理者。誤アップロードの内容を全員へ晒し続けない）
   app.get('/', async (c) => {
     const user = c.get('user')
     const kind = kindOf(c.req.query('kind'))
     await guardFeature(pool, user, kind)
+    const includeArchived = c.req.query('includeArchived') === '1'
     const { rows } = kind === 'poipoi'
-      ? await pool.query(`SELECT ${NOTE_COLS} FROM notes WHERE kind = 'poipoi' AND member_id = $1 AND active = true
+      ? await pool.query(`SELECT ${NOTE_COLS} FROM notes WHERE kind = 'poipoi' AND member_id = $1
+                          ${includeArchived ? '' : 'AND active = true'}
                           ORDER BY created_at DESC, id LIMIT 300`, [user.id])
-      : await pool.query(`SELECT ${NOTE_COLS} FROM notes WHERE kind = 'minutes' AND active = true
-                          ORDER BY created_at DESC, id LIMIT 300`)
+      : await pool.query(`SELECT ${NOTE_COLS} FROM notes WHERE kind = 'minutes'
+                          ${includeArchived ? 'AND (active = true OR member_id = $1 OR $2::boolean)' : 'AND active = true'}
+                          ORDER BY created_at DESC, id LIMIT 300`,
+        includeArchived ? [user.id, user.role === 'admin'] : [])
     return c.json({ data: rows })
   })
 
@@ -170,36 +181,60 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
   })
 
   // 取消（論理削除。本アプリ共通原則: 操作の取消可能性 = オペレーター指示 2026-07-19 #5）。
-  // poipoi = 本人のみ / minutes = 登録者または管理者。監査ログへ記録し検索インデックスからも除外
+  // poipoi = 本人のみ / minutes = 登録者または管理者。監査ログへ記録し検索インデックスからも除外。
+  // 冪等: UPDATE 自体を active = true 条件で行い、同時実行でも監査ログは 1 回だけ記録される
   app.post('/:noteId/archive', async (c) => {
     const user = c.get('user')
-    const { rows } = await pool.query<{ kind: NoteKind; memberId: string; title: string; active: boolean }>(
-      `SELECT kind, member_id AS "memberId", title, active FROM notes WHERE id = $1`, [c.req.param('noteId')])
+    const noteId = c.req.param('noteId')
+    const { rows } = await pool.query<{ kind: NoteKind; memberId: string; title: string }>(
+      `SELECT kind, member_id AS "memberId", title FROM notes WHERE id = $1`, [noteId])
     const note = rows[0]
     if (!note) throw err('AKO-GEN-002', 'ノートが見つかりません', 404)
     await guardFeature(pool, user, note.kind)
-    const canUndo = note.memberId === user.id || (note.kind === 'minutes' && user.role === 'admin')
-    if (!canUndo) throw err('AKO-PRM-001', '登録者本人（議事録は管理者も可）のみ取り消せます', 403)
-    if (!note.active) return c.json({ data: { id: c.req.param('noteId'), warning: 'すでに取消済みです' } })
-    await pool.query(`UPDATE notes SET active = false WHERE id = $1`, [c.req.param('noteId')])
+    if (!canUndoNote(note, user)) throw err('AKO-PRM-001', '登録者本人（議事録は管理者も可）のみ取り消せます', 403)
+    const upd = await pool.query(`UPDATE notes SET active = false WHERE id = $1 AND active = true`, [noteId])
+    if (upd.rowCount === 0) return c.json({ data: { id: noteId, warning: 'すでに取消済みです' } })
     await audit(pool, {
-      actorId: user.id, action: 'archive', entity: 'notes', entityId: c.req.param('noteId'),
+      actorId: user.id, action: 'archive', entity: 'notes', entityId: noteId,
       detail: `${note.kind === 'poipoi' ? 'ぽいぽいメモ' : '議事録'}「${capCp(note.title, 40)}」を取消`,
     })
     scheduleSearchRebuild(pool, env, 'notes:archive')
-    return c.json({ data: { id: c.req.param('noteId') } })
+    return c.json({ data: { id: noteId } })
   })
 
-  // 添付原本メタ一覧（poipoi は本人のみ）
+  // 復元（取消の取消。取消自体も操作である以上、立ち戻れるようにする = 原則 9.5 の対称性）。権限は取消と同一
+  app.post('/:noteId/restore', async (c) => {
+    const user = c.get('user')
+    const noteId = c.req.param('noteId')
+    const { rows } = await pool.query<{ kind: NoteKind; memberId: string; title: string }>(
+      `SELECT kind, member_id AS "memberId", title FROM notes WHERE id = $1`, [noteId])
+    const note = rows[0]
+    if (!note) throw err('AKO-GEN-002', 'ノートが見つかりません', 404)
+    await guardFeature(pool, user, note.kind)
+    if (!canUndoNote(note, user)) throw err('AKO-PRM-001', '登録者本人（議事録は管理者も可）のみ復元できます', 403)
+    const upd = await pool.query(`UPDATE notes SET active = true WHERE id = $1 AND active = false`, [noteId])
+    if (upd.rowCount === 0) return c.json({ data: { id: noteId, warning: '取消されていません' } })
+    await audit(pool, {
+      actorId: user.id, action: 'restore', entity: 'notes', entityId: noteId,
+      detail: `${note.kind === 'poipoi' ? 'ぽいぽいメモ' : '議事録'}「${capCp(note.title, 40)}」を復元`,
+    })
+    scheduleSearchRebuild(pool, env, 'notes:restore')
+    return c.json({ data: { id: noteId } })
+  })
+
+  // 添付原本メタ一覧（poipoi は本人のみ。取消済みは復元権限者のみ = 誤アップロード原本を晒し続けない）
   app.get('/:noteId/files', async (c) => {
     const user = c.get('user')
-    const { rows: notes } = await pool.query<{ kind: NoteKind; memberId: string }>(
-      `SELECT kind, member_id AS "memberId" FROM notes WHERE id = $1`, [c.req.param('noteId')])
+    const { rows: notes } = await pool.query<{ kind: NoteKind; memberId: string; active: boolean }>(
+      `SELECT kind, member_id AS "memberId", active FROM notes WHERE id = $1`, [c.req.param('noteId')])
     const note = notes[0]
     if (!note) throw err('AKO-GEN-002', 'ノートが見つかりません', 404)
     await guardFeature(pool, user, note.kind)
     if (note.kind === 'poipoi' && note.memberId !== user.id) {
       throw err('AKO-PRM-001', '本人のメモのみ参照できます', 403)
+    }
+    if (!note.active && !canUndoNote(note, user)) {
+      throw err('AKO-PRM-001', '取消済みノートの原本は登録者本人（議事録は管理者も可）のみ参照できます', 403)
     }
     const { rows } = await pool.query(
       `SELECT id, note_id AS "noteId", filename, mime, size_bytes AS "sizeBytes",
@@ -208,17 +243,22 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
     return c.json({ data: rows })
   })
 
-  // 原本ダウンロード（poipoi は本人のみ）
+  // 原本ダウンロード（poipoi は本人のみ。取消済みは復元権限者のみ）
   app.get('/files/:id', async (c) => {
     const user = c.get('user')
-    const { rows } = await pool.query<{ filename: string; mime: string; bytes: Buffer; kind: NoteKind; memberId: string }>(
-      `SELECT f.filename, f.mime, f.bytes, n.kind, n.member_id AS "memberId"
+    const { rows } = await pool.query<{
+      filename: string; mime: string; bytes: Buffer; kind: NoteKind; memberId: string; active: boolean
+    }>(
+      `SELECT f.filename, f.mime, f.bytes, n.kind, n.member_id AS "memberId", n.active
        FROM note_files f JOIN notes n ON n.id = f.note_id WHERE f.id = $1`, [c.req.param('id')])
     const f = rows[0]
     if (!f) throw err('AKO-GEN-002', 'ファイルが見つかりません', 404)
     await guardFeature(pool, user, f.kind)
     if (f.kind === 'poipoi' && f.memberId !== user.id) {
       throw err('AKO-PRM-001', '本人のメモのみ参照できます', 403)
+    }
+    if (!f.active && !canUndoNote(f, user)) {
+      throw err('AKO-PRM-001', '取消済みノートの原本は登録者本人（議事録は管理者も可）のみ参照できます', 403)
     }
     return c.json({ data: { filename: f.filename, mime: f.mime, contentBase64: f.bytes.toString('base64') } })
   })

@@ -4,7 +4,7 @@
  * テキスト登録 + ドキュメント取込（.md/.txt/.pdf/.docx）+ 一覧。
  * プロジェクト・顧客・業務種別は任意の紐付け（未選択のまま登録可）
  */
-import { FileUp, Send, Trash2, X } from 'lucide-vue-next'
+import { FileUp, RotateCcw, Send, Trash2, X } from 'lucide-vue-next'
 import type { Company, Note, NoteKind, Project, WorkCategory } from '~/types/domain'
 import { fmtDateLong } from '~/utils/format'
 
@@ -81,6 +81,7 @@ async function submitImport(): Promise<void> {
     }
     show(`「${stagedFile.value.name}」を取り込みました（AI の参照対象になります。誤操作は一覧から取消できます）`)
     stagedFile.value = null
+    form.value = { ...form.value, title: '' } // タイトル欄も取込へ適用済み。次の登録へ引き継がない
   } finally {
     saving.value = false
   }
@@ -89,6 +90,18 @@ async function submitImport(): Promise<void> {
 /** 取消可能か（poipoi = 本人 / minutes = 登録者 or 管理者） */
 function canArchive(n: Note): boolean {
   return n.memberId === currentUser.value.id || (props.kind === 'minutes' && isAdmin.value)
+}
+
+// 取消済みの表示と復元（取消の取消 = 原則 9.5 の対称性。復元権限のある行のみ archived に入る）
+const showArchived = ref(false)
+
+async function onRestore(n: Note): Promise<void> {
+  const res = await notes.restore(n.id)
+  if (!res.ok) {
+    show(`${res.error.code}: ${res.error.message}`, 'crit')
+    return
+  }
+  show('復元しました（一覧と AI の参照対象に戻ります）')
 }
 
 async function onArchive(n: Note): Promise<void> {
@@ -176,7 +189,7 @@ function authorOf(n: Note): string {
             <X class="h-3.5 w-3.5" aria-hidden="true" />
           </button>
         </div>
-        <p class="text-[11px] text-muted">ファイル取込は .md / .txt / .pdf / .docx（10MB まで。旧 .doc は .docx へ変換してください）。上の紐付けセレクトは取込にも適用されます</p>
+        <p class="text-[11px] text-muted">ファイル取込は .md / .txt / .pdf / .docx（10MB まで。旧 .doc は .docx へ変換してください）。上の紐付けセレクト{{ kind === 'minutes' ? 'とタイトル欄' : '' }}は取込にも適用されます</p>
       </div>
     </UiSectionCard>
 
@@ -216,6 +229,22 @@ function authorOf(n: Note): string {
           </div>
         </li>
       </ul>
+      <!-- 取消済み（復元権限のある行のみ）。誤って取り消した場合の立ち戻り導線 -->
+      <div v-if="notes.archived.value.length > 0" class="border-t border-line px-4 py-2">
+        <button type="button" class="btn btn-ghost btn-sm" @click="showArchived = !showArchived">
+          {{ showArchived ? '取消済みを隠す' : `取消済みを表示（${notes.archived.value.length}件）` }}
+        </button>
+        <ul v-if="showArchived" class="mt-1 divide-y divide-line">
+          <li v-for="n in notes.archived.value" :key="n.id" class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 py-2">
+            <p class="text-[13px] text-muted line-through">{{ n.title }}</p>
+            <span class="num ml-auto text-[11px] text-muted">{{ fmtDateLong(n.createdAt) }}</span>
+            <button type="button" class="btn btn-ghost btn-sm" :aria-label="`「${n.title}」を復元する`" @click="onRestore(n)">
+              <RotateCcw class="h-3.5 w-3.5" aria-hidden="true" />
+              元に戻す
+            </button>
+          </li>
+        </ul>
+      </div>
     </UiSectionCard>
   </div>
 </template>
