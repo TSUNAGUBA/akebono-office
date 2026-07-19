@@ -56,7 +56,7 @@ const menuSections = computed<MenuSection[]>(() => {
   work.push(
     { id: 'reports', title: '日報・週報', description: '日々の報告とチームの提出状況', icon: 'NotebookPen', to: '/reports' },
     { id: 'ai-assistant', title: 'AI業務アシスタント', description: '明日の計画と当日の振り返りを AI と。日報へ自動反映', icon: 'Sparkles', to: '/ai-assistant' },
-    { id: 'poipoi', title: 'ぽいぽいメモ', description: '思いついたことを投げ込むメモ。AI の参照対象（自分のみ）', icon: 'StickyNote', to: '/poipoi' },
+    { id: 'poipoi', title: 'ぽいぽいポスト', description: '気づき・改善アイデアを投げ込むポスト。AI の参照対象（自分のみ）・管理者はチーム改善のため閲覧可', icon: 'StickyNote', to: '/poipoi' },
     { id: 'minutes', title: '議事録', description: '会議の記録を蓄積。全員が参照でき AI の参照対象', icon: 'NotebookPen', to: '/minutes' },
     { id: 'workflow', title: 'ワークフロー', description: '稟議の申請・承認（職務権限マトリクス準拠）', icon: 'GitPullRequestArrow', to: '/workflow', badge: pendingApprovals.value },
   )

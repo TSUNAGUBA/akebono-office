@@ -116,7 +116,7 @@ office: `IsometricOffice`（アイソメトリック空間）、`AiEmployeeCard`
 | `useShifts` | 募集期間・希望・割当・確定・バリデーション |
 | `useReports` | 日報/週報 CRUD・提出状況・コメント・AI 報告の合流 |
 | `useCalendar` | Google カレンダー連携（擬似 OAuth・べき等同期・タスク追加/反映/削除。F-06-8）。同期対象カレンダーの選択（listCalendars / saveCalendars = バッチ7b。既定 primary のみ・モックは擬似一覧 + localStorage） |
-| `useReportAssist` | 日報 AI アシスト（入力方式設定・ヒアリング・ぽいぽいメモ・ドラフト生成。F-06-7） |
+| `useReportAssist` | 日報 AI アシスト（入力方式設定・ヒアリング・ぽいぽいポスト・ドラフト生成。F-06-7） |
 | `useWorkflow` | 稟議 CRUD・承認経路解決・承認操作・代理設定 |
 | `useAiCompany` | AI 社員・ロール・タスク・活動ログ・日次報告生成。AI 社員間の依頼・連携（delegate 権限 = マネージャーロール。承認時に分担子タスク化・ロールアップ = バッチ7b） |
 | `useDecision` | 判断テーマ・オントロジー・シナリオ・判断ログ |
@@ -126,7 +126,7 @@ office: `IsometricOffice`（アイソメトリック空間）、`AiEmployeeCard`
 | `useSales` | 売上サマリ・実績登録（デュアルモード: API モードは `/v1/sales` = sales_monthly が SoT。バッチ6b） |
 | `useAkebono` | AKEBONO 要望ボックス（デュアルモード: API モードは `/v1/akebono/wishes` = akebono_wishes が SoT・追記のみ。バッチ6d） |
 | `useChatbot` | セッション管理（デュアルモード: API モードは `/v1/chatbot` = chat_sessions / chat_messages が SoT・LLM 一次応答 + マルチターン。バッチ5b）・フォールバックのシナリオベース応答（2 段ルーティング = 今回の質問 → 直近のユーザー発言で再判定。会社は正規化名寄せ + 最長一致・弊社/当社 = 自社・業界回答・ナレッジ全文字句照合 = バッチ7a）・出典解決・擬似ストリーミング・表示中セッションの sessionStorage タブ内永続 + リロード自動再開（2026-07-18 改善） |
-| `useNotes` | ぽいぽいメモ・議事録（デュアルモード: API = `/v1/notes` が SoT・検索インデックス自動反映 / モック = notes コレクション。バッチ7c/7d）。テキスト登録 + ファイル取込（モックは .md/.txt のみ）+ 取消/復元（archive/restore = 論理削除とその取消。poipoi = 本人 / minutes = 登録者 or 管理者） |
+| `useNotes` | ぽいぽいポスト・議事録（デュアルモード: API = `/v1/notes` が SoT・検索インデックス自動反映 / モック = notes コレクション。バッチ7c/7d/7e）。テキスト登録 + ファイル取込（モックは .md/.txt のみ）+ 取消/復元（archive/restore = 論理削除とその取消。poipoi = 本人 / minutes = 登録者 or 管理者）+ adminList（管理者の全ポスト閲覧 = scope=all。7e） |
 | `useBusinessDay` | 営業日・祝日の参照（翌営業日 = メンバーの勤怠ルールの営業曜日 + 祝日マスタで解決・祝日名のカレンダー表示。計算本体は shared/domain/business-day を API と共有。オペレーター報告 2026-07-18 #4） |
 | `useDocuments` | ドキュメントツリー・タグ・検索 |
 | `useToast` / `useConfirm` | UI フィードバック |

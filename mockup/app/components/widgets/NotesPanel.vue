@@ -1,10 +1,11 @@
 <script setup lang="ts">
 /**
- * ノート共通パネル（ぽいぽいメモ / 議事録。バッチ7c）。
- * テキスト登録 + ドキュメント取込（.md/.txt/.pdf/.docx）+ 一覧。
- * プロジェクト・顧客・業務種別は任意の紐付け（未選択のまま登録可）
+ * ノート共通パネル（ぽいぽいポスト / 議事録。バッチ7c/7e）。
+ * テキスト登録（マークダウン対応・プレビュー付き）+ ドキュメント取込（.md/.txt/.pdf/.docx）+
+ * サマリー一覧（押下で詳細モーダル = 全文をマークダウン描画）。
+ * ぽいぽいポストは管理者が全メンバーのオリジナルを閲覧できる（フィードバック・チーム改善用途。バッチ7e）
  */
-import { FileUp, RotateCcw, Send, Trash2, X } from 'lucide-vue-next'
+import { Eye, FileUp, Pencil, RotateCcw, Send, Trash2, X } from 'lucide-vue-next'
 import type { Company, Note, NoteKind, Project, WorkCategory } from '~/types/domain'
 import { fmtDateLong } from '~/utils/format'
 
@@ -20,6 +21,9 @@ const { show } = useToast()
 const confirm = useConfirm()
 const { currentUser, isAdmin } = useCurrentUser()
 
+/** 表示名詞（poipoi = ポスト / minutes = 議事録。バッチ7e で「メモ」から改称） */
+const noun = computed(() => (props.kind === 'poipoi' ? 'ポスト' : '議事録'))
+
 const projects = computed(() => (tbl('projects').value as Project[]).filter(p => p.active))
 const companies = computed(() => (tbl('companies').value as Company[]).filter(c => c.active))
 const workCategories = computed(() =>
@@ -30,6 +34,8 @@ const members = tbl('members')
 const form = ref({ title: '', body: '', projectId: '', companyId: '', workCategoryId: '' })
 const saving = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
+// マークダウンプレビュー（入力はプレーンテキストのまま = 記法はそのまま保存され、表示時に描画される）
+const previewing = ref(false)
 
 function meta(): { title: string; projectId: string | null; companyId: string | null; workCategoryId: string | null } {
   return {
@@ -49,8 +55,9 @@ async function submit(): Promise<void> {
       show(`${res.error.code}: ${res.error.message}`, 'crit')
       return
     }
-    show(props.kind === 'poipoi' ? 'メモを登録しました（AI の参照対象になります）' : '議事録を登録しました（AI の参照対象になります）')
+    show(`${noun.value}を登録しました（AI の参照対象になります）`)
     form.value = { ...form.value, title: '', body: '' }
+    previewing.value = false
   } finally {
     saving.value = false
   }
@@ -113,7 +120,7 @@ async function onRestore(n: Note): Promise<void> {
 
 async function onArchive(n: Note): Promise<void> {
   const ok = await confirm.ask(
-    props.kind === 'poipoi' ? 'メモの取消' : '議事録の取消',
+    `${noun.value}の取消`,
     `「${n.title}」を取り消しますか？（一覧と AI の参照対象から外れます）`,
     { danger: true, confirmLabel: '取り消す' },
   )
@@ -124,6 +131,21 @@ async function onArchive(n: Note): Promise<void> {
     return
   }
   show('取り消しました', 'warn')
+}
+
+// 詳細モーダル（一覧はサマリー/冒頭のみ表示し、押下で全文をマークダウン描画。バッチ7e）
+const detailNote = ref<Note | null>(null)
+const detailWithAuthor = ref(false)
+
+function openDetail(n: Note, withAuthor: boolean): void {
+  detailNote.value = n
+  detailWithAuthor.value = withAuthor
+}
+
+/** 一覧のサマリー（冒頭 160 字。全文は詳細モーダルで） */
+function summaryOf(n: Note): string {
+  const flat = n.body.replace(/\s+/g, ' ').trim()
+  return flat.length > 160 ? `${flat.slice(0, 160)}…` : flat
 }
 
 function nameOf(list: { id: string; name: string }[], id: string | null): string {
@@ -146,9 +168,9 @@ function authorOf(n: Note): string {
 <template>
   <div class="grid gap-3">
     <UiSectionCard
-      :title="kind === 'poipoi' ? 'メモを投げ込む' : '議事録を登録する'"
+      :title="kind === 'poipoi' ? 'ポストを投げ込む' : '議事録を登録する'"
       :description="kind === 'poipoi'
-        ? '思いついたことをそのまま。日報ドラフトの材料になり、AI チャットボット・AI業務アシスタントの参照対象（自分のみ）になります'
+        ? '思いついたこと・気づき・改善アイデアをそのまま。日報ドラフトの材料になり、AI の参照対象（自分のみ）になります。管理者はフィードバック・チーム改善のためオリジナルを閲覧できます'
         : '会議の記録を蓄積します。全員が参照でき、AI チャットボット・AI業務アシスタントの参照対象になります'"
     >
       <div class="grid gap-2">
@@ -160,17 +182,27 @@ function authorOf(n: Note): string {
           placeholder="タイトル（空欄 = 本文の先頭行）"
           aria-label="タイトル"
         >
+        <!-- 本文（マークダウン対応。プレビューはトグルで切替 = 入力そのものはプレーンな textarea） -->
+        <div v-if="previewing" class="rounded-lg border border-line bg-surface p-3 min-h-24">
+          <UiMarkdown v-if="form.body.trim()" :source="form.body" />
+          <p v-else class="text-[12px] text-muted">（本文が空です。「編集に戻る」から入力してください）</p>
+        </div>
         <textarea
+          v-else
           v-model="form.body"
           class="textarea min-h-24"
           :placeholder="kind === 'poipoi' ? '例）A社の見積、明日までに単価見直しが必要そう' : '例）7/19 定例。決定事項: …'"
-          :aria-label="kind === 'poipoi' ? 'メモ本文' : '議事録本文'"
+          :aria-label="kind === 'poipoi' ? 'ポスト本文' : '議事録本文'"
         />
         <div class="flex flex-wrap items-center gap-2">
           <UiSelect v-model="form.projectId" :options="projects.map(p => ({ value: p.id, label: p.name }))" empty-label="プロジェクト（任意）" aria-label="プロジェクト" class="w-auto" />
           <UiSelect v-model="form.companyId" :options="companies.map(c => ({ value: c.id, label: c.name }))" empty-label="顧客（任意）" aria-label="顧客" class="w-auto" />
           <UiSelect v-model="form.workCategoryId" :options="workCategories.map(w => ({ value: w.id, label: w.name }))" empty-label="業務種別（任意）" aria-label="業務種別" class="w-auto" />
           <span class="ml-auto flex items-center gap-2">
+            <button type="button" class="btn btn-sm" :aria-pressed="previewing" @click="previewing = !previewing">
+              <component :is="previewing ? Pencil : Eye" class="h-3.5 w-3.5" aria-hidden="true" />
+              {{ previewing ? '編集に戻る' : 'プレビュー' }}
+            </button>
             <input ref="fileInput" type="file" accept=".md,.txt,.pdf,.docx" class="hidden" @change="onFileSelected">
             <button type="button" class="btn" :disabled="saving" @click="fileInput?.click()">
               <FileUp class="h-4 w-4" aria-hidden="true" />
@@ -196,44 +228,53 @@ function authorOf(n: Note): string {
             <X class="h-3.5 w-3.5" aria-hidden="true" />
           </button>
         </div>
-        <p class="text-[11px] text-muted">ファイル取込は .md / .txt / .pdf / .docx（10MB まで。旧 .doc は .docx へ変換してください）。上の紐付けセレクト{{ kind === 'minutes' ? 'とタイトル欄' : '' }}は取込にも適用されます</p>
+        <p class="text-[11px] text-muted">本文はマークダウン記法（見出し・箇条書き・強調・リンク等）に対応。ファイル取込は .md / .txt / .pdf / .docx（10MB まで。旧 .doc は .docx へ変換してください）。上の紐付けセレクト{{ kind === 'minutes' ? 'とタイトル欄' : '' }}は取込にも適用されます</p>
       </div>
     </UiSectionCard>
 
-    <UiSectionCard :title="`${kind === 'poipoi' ? 'メモ' : '議事録'}一覧（${notes.list.value.length}件）`" flush>
+    <UiSectionCard
+      :title="`${noun}一覧（${notes.list.value.length}件）`"
+      :description="`登録日時・${kind === 'minutes' ? '投稿者・' : ''}冒頭を一覧表示。押下で全文を表示します`"
+      flush
+    >
       <UiEmptyState
         v-if="notes.list.value.length === 0"
         icon="StickyNote"
-        :title="kind === 'poipoi' ? 'まだメモがありません' : 'まだ議事録がありません'"
+        :title="`まだ${noun}がありません`"
         hint="上のフォームから登録するか、ファイルを取り込んでください"
       />
       <ul v-else class="divide-y divide-line">
-        <li v-for="n in notes.list.value" :key="n.id" class="px-4 py-2.5">
-          <div class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-            <p class="text-[13px] font-bold">{{ n.title }}</p>
-            <span v-if="n.source === 'upload'" class="rounded-full bg-surface-soft border border-line px-2 text-[10px] text-sub">取込</span>
-            <span class="num ml-auto text-[11px] text-muted">{{ fmtDateLong(n.createdAt) }}</span>
-            <button
-              v-if="canArchive(n)"
-              type="button"
-              class="btn btn-ghost btn-sm"
-              :aria-label="`「${n.title}」を取り消す`"
-              @click="onArchive(n)"
-            >
-              <Trash2 class="h-3.5 w-3.5 text-crit" aria-hidden="true" />
-            </button>
-          </div>
-          <p class="mt-0.5 whitespace-pre-wrap text-[12px] leading-relaxed text-sub">
-            {{ n.body.length > 200 ? `${n.body.slice(0, 200)}…` : n.body }}
-          </p>
-          <div v-if="linkLabels(n).length > 0 || showAuthor" class="mt-1 flex flex-wrap gap-1 text-[11px] text-muted">
-            <span v-if="showAuthor">{{ authorOf(n) }}</span>
-            <span
-              v-for="l in linkLabels(n)"
-              :key="l"
-              class="rounded-full bg-surface-soft border border-line px-2 py-0.5"
-            >{{ l }}</span>
-          </div>
+        <li v-for="n in notes.list.value" :key="n.id" class="flex items-start gap-1 px-4 py-2.5">
+          <button
+            type="button"
+            class="min-w-0 flex-1 rounded-md text-left transition-colors hover:bg-brand-soft"
+            :aria-label="`「${n.title}」の詳細を表示`"
+            @click="openDetail(n, !!showAuthor)"
+          >
+            <span class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+              <span class="text-[13px] font-bold">{{ n.title }}</span>
+              <span v-if="n.source === 'upload'" class="rounded-full bg-surface-soft border border-line px-2 text-[10px] text-sub">取込</span>
+              <span class="num ml-auto text-[11px] text-muted">{{ fmtDateLong(n.createdAt) }}</span>
+            </span>
+            <span class="mt-0.5 block text-[12px] leading-relaxed text-sub">{{ summaryOf(n) }}</span>
+            <span v-if="linkLabels(n).length > 0 || showAuthor" class="mt-1 flex flex-wrap gap-1 text-[11px] text-muted">
+              <span v-if="showAuthor">{{ authorOf(n) }}</span>
+              <span
+                v-for="l in linkLabels(n)"
+                :key="l"
+                class="rounded-full bg-surface-soft border border-line px-2 py-0.5"
+              >{{ l }}</span>
+            </span>
+          </button>
+          <button
+            v-if="canArchive(n)"
+            type="button"
+            class="btn btn-ghost btn-sm shrink-0"
+            :aria-label="`「${n.title}」を取り消す`"
+            @click="onArchive(n)"
+          >
+            <Trash2 class="h-3.5 w-3.5 text-crit" aria-hidden="true" />
+          </button>
         </li>
       </ul>
       <!-- 取消済み（復元権限のある行のみ）。誤って取り消した場合の立ち戻り導線 -->
@@ -253,5 +294,48 @@ function authorOf(n: Note): string {
         </ul>
       </div>
     </UiSectionCard>
+
+    <!-- 管理者の全ポスト閲覧（ぽいぽいポストのみ。フィードバック・チーム改善用途 = バッチ7e） -->
+    <UiSectionCard
+      v-if="kind === 'poipoi' && isAdmin && notes.adminList.value.length > 0"
+      :title="`全メンバーのポスト（管理者・${notes.adminList.value.length}件）`"
+      description="チーム改善のフィードバックとしてオリジナルを閲覧できます（AI の参照対象は投稿者本人のみのまま。取消は本人のみ）"
+      flush
+    >
+      <ul class="divide-y divide-line">
+        <li v-for="n in notes.adminList.value" :key="n.id">
+          <button
+            type="button"
+            class="w-full px-4 py-2.5 text-left transition-colors hover:bg-brand-soft"
+            :aria-label="`${authorOf(n)} の「${n.title}」の詳細を表示`"
+            @click="openDetail(n, true)"
+          >
+            <span class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+              <span class="text-[12px] font-semibold text-sub">{{ authorOf(n) }}</span>
+              <span class="text-[13px] font-bold">{{ n.title }}</span>
+              <span class="num ml-auto text-[11px] text-muted">{{ fmtDateLong(n.createdAt) }}</span>
+            </span>
+            <span class="mt-0.5 block text-[12px] leading-relaxed text-sub">{{ summaryOf(n) }}</span>
+          </button>
+        </li>
+      </ul>
+    </UiSectionCard>
+
+    <!-- 詳細モーダル（全文をマークダウン描画） -->
+    <UiModal :open="!!detailNote" :title="detailNote?.title ?? ''" @close="detailNote = null">
+      <div v-if="detailNote" class="grid gap-3">
+        <div class="flex flex-wrap items-center gap-2 text-[11px] text-muted">
+          <span v-if="detailWithAuthor" class="font-semibold text-sub">{{ authorOf(detailNote) }}</span>
+          <span class="num">{{ fmtDateLong(detailNote.createdAt) }}</span>
+          <span v-if="detailNote.source === 'upload'" class="rounded-full bg-surface-soft border border-line px-2 text-[10px] text-sub">取込</span>
+          <span
+            v-for="l in linkLabels(detailNote)"
+            :key="l"
+            class="rounded-full bg-surface-soft border border-line px-2 py-0.5"
+          >{{ l }}</span>
+        </div>
+        <UiMarkdown :source="detailNote.body" />
+      </div>
+    </UiModal>
   </div>
 </template>

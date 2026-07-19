@@ -190,7 +190,7 @@ export function useReportAssist() {
         // API 断でもフォームを空で返さない（材料 = ローカルキャッシュのヒューリスティック）
       }
     }
-    // ぽいぽいメモ（独立メニュー = notes コレクション。バッチ7c）も材料へ合流（memo 形式）
+    // ぽいぽいポスト（独立メニュー = notes コレクション。バッチ7c）も材料へ合流（memo 形式）
     const poipoiNotes = (tbl('notes').value as Note[])
       .filter(n => n.kind === 'poipoi' && n.memberId === memberId && n.active !== false
         && n.createdAt.slice(0, 10) === date)

@@ -26,7 +26,7 @@ export const FEATURE_PERMISSION_KEYS: { key: string; label: string }[] = [
   { key: 'shift', label: 'シフト表' },
   { key: 'reports', label: '日報・週報' },
   { key: 'ai-assistant', label: 'AI業務アシスタント（カレンダー連携含む）' },
-  { key: 'poipoi', label: 'ぽいぽいメモ' },
+  { key: 'poipoi', label: 'ぽいぽいポスト' },
   { key: 'minutes', label: '議事録' },
   { key: 'workflow', label: 'ワークフロー・稟議' },
   { key: 'decision', label: '意思決定支援' },

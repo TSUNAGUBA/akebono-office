@@ -286,7 +286,7 @@ export const MASTERS: Record<MasterEntity, MasterDef> = {
   'departments': { table: 'departments', idPrefix: 'dep', schema: schemas.departments, patchSchema: schemas.departments.partial(), jsonbFields: [] },
   'leave-types': { table: 'leave_types', idPrefix: 'lt', schema: schemas['leave-types'], patchSchema: schemas['leave-types'].partial().omit({ isStatutory: true }), jsonbFields: [] },
   'industries': { table: 'industries', idPrefix: 'ind', schema: schemas.industries, patchSchema: schemas.industries.partial(), jsonbFields: [] },
-  // 業務種別（ぽいぽいメモ・議事録の任意分類。バッチ7c）
+  // 業務種別（ぽいぽいポスト・議事録の任意分類。バッチ7c）
   'work-categories': { table: 'work_categories', idPrefix: 'wc', schema: schemas['work-categories'], patchSchema: schemas['work-categories'].partial(), jsonbFields: [] },
   'companies': { table: 'companies', idPrefix: 'c', schema: schemas.companies, patchSchema: schemas.companies.partial(), jsonbFields: ['aliases', 'industryIds', 'custom'] },
   'contacts': { table: 'contacts', idPrefix: 'p', schema: schemas.contacts, patchSchema: schemas.contacts.partial(), jsonbFields: ['custom'] },

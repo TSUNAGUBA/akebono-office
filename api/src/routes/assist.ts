@@ -1,6 +1,6 @@
 /**
  * 日報 AI アシスト API（F-06-7）。mockup useReportAssist の API 版。
- * - ヒアリング回答・ぽいぽいメモは assist_logs へ追記のみ（記録系。答え直しは新しい回答が優先）
+ * - ヒアリング回答・ぽいぽいメモ（旧経路）は assist_logs へ追記のみ（記録系。答え直しは新しい回答が優先）
  * - ドラフト生成: Vertex AI（構造化出力）→ 失敗時は shared/domain/report-draft の
  *   決定的ヒューリスティックへフォールバック（原則4。モックと同一ロジック）。
  *   生成結果は保存しない（フォームへ流し込み → 既存 PUT /v1/reports/daily で提出）

@@ -5,7 +5,7 @@
  *       チーム（管理者のみ・提出状況マトリクス+タイムライン） / 週報
  */
 import {
-  BellRing, Check, ChevronLeft, ChevronRight, Minus, Pencil, Plus, Send, Sparkles, Trash2,
+  BellRing, Check, ChevronLeft, ChevronRight, Eye, Minus, Pencil, Plus, Send, Sparkles, Trash2,
 } from 'lucide-vue-next'
 import type { DailyReport, ReportEntry, WeeklyReport } from '~/types/domain'
 import { REPORT_STATUS_LABELS } from '~/composables/useReports'
@@ -73,6 +73,9 @@ const selDate = ref(todayJst())
 const myReport = computed(() => reports.myReportOn(selDate.value))
 
 const editEntries = ref<ReportEntry[]>([])
+// フリー入力欄のマークダウンプレビュー（バッチ7e。入力はプレーンな textarea のまま = 記法をそのまま保存）
+const dailyMdPreview = ref(false)
+const wkMdPreview = ref(false)
 const editReflection = ref('')
 const editIssues = ref('')
 const editTomorrow = ref('')
@@ -555,15 +558,18 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
           <div class="grid gap-3 md:grid-cols-3">
             <div>
               <p class="label">所感</p>
-              <p class="whitespace-pre-wrap text-[13px]">{{ myReport.reflection || '—' }}</p>
+              <UiMarkdown v-if="myReport.reflection" :source="myReport.reflection" />
+              <p v-else class="text-[13px]">—</p>
             </div>
             <div :class="myReport.issues ? 'rounded-lg bg-warn-soft p-2.5' : ''">
               <p class="label" :class="myReport.issues ? '!text-warn' : ''">課題{{ myReport.issues ? '（管理者へ共有済み）' : '' }}</p>
-              <p class="whitespace-pre-wrap text-[13px]">{{ myReport.issues || '—' }}</p>
+              <UiMarkdown v-if="myReport.issues" :source="myReport.issues" />
+              <p v-else class="text-[13px]">—</p>
             </div>
             <div>
               <p class="label">明日の予定</p>
-              <p class="whitespace-pre-wrap text-[13px]">{{ myReport.tomorrow || '—' }}</p>
+              <UiMarkdown v-if="myReport.tomorrow" :source="myReport.tomorrow" />
+              <p v-else class="text-[13px]">—</p>
             </div>
           </div>
           <WidgetsCommentThread :report-id="myReport.id" />
@@ -575,7 +581,7 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
         <!-- 材料サマリ（計画・メモ・回答の入力は AI業務アシスタント F-14 で行う） -->
         <UiSectionCard
           title="AI アシストの材料"
-          description="タスク計画の結果・ぽいぽいメモ・ヒアリング回答を材料に AI が下書きを作ります。材料の入力は AI業務アシスタントで"
+          description="タスク計画の結果・ぽいぽいポスト・ヒアリング回答を材料に AI が下書きを作ります。材料の入力は AI業務アシスタントで"
         >
           <template #actions>
             <NuxtLink to="/ai-assistant" class="btn btn-sm btn-primary">
@@ -591,7 +597,7 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
               </p>
             </li>
             <li class="rounded-lg border border-line p-2.5 text-center">
-              <p class="text-[11px] font-bold text-muted">ぽいぽいメモ</p>
+              <p class="text-[11px] font-bold text-muted">ぽいぽいポスト</p>
               <p class="num mt-0.5 text-[15px] font-bold">{{ dayMemoCount }}<span class="text-xs text-muted"> 件</span></p>
             </li>
             <li class="rounded-lg border border-line p-2.5 text-center">
@@ -701,15 +707,24 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
             <UiStatusBadge v-if="editorGap !== null" tone="warn" :label="`乖離 ${gapText(editorGap)}`" />
           </div>
 
+          <div class="flex items-center justify-end">
+            <button type="button" class="btn btn-sm" :aria-pressed="dailyMdPreview" @click="dailyMdPreview = !dailyMdPreview">
+              <component :is="dailyMdPreview ? Pencil : Eye" class="h-3.5 w-3.5" aria-hidden="true" />
+              {{ dailyMdPreview ? '編集に戻る' : 'プレビュー' }}
+            </button>
+          </div>
           <div class="grid gap-3 md:grid-cols-3">
-            <UiFormField label="所感">
-              <textarea v-model="editReflection" class="textarea" placeholder="今日のふりかえり" />
+            <UiFormField label="所感" :hint="dailyMdPreview ? '' : 'マークダウン記法に対応'">
+              <div v-if="dailyMdPreview" class="min-h-[72px] rounded-lg border border-line p-2.5"><UiMarkdown :source="editReflection" /></div>
+              <textarea v-else v-model="editReflection" class="textarea" placeholder="今日のふりかえり" />
             </UiFormField>
-            <UiFormField label="課題" hint="記入して提出すると管理者へ自動共有されます">
-              <textarea v-model="editIssues" class="textarea" placeholder="困っていること・ブロッカー" />
+            <UiFormField label="課題" :hint="dailyMdPreview ? '' : '記入して提出すると管理者へ自動共有されます'">
+              <div v-if="dailyMdPreview" class="min-h-[72px] rounded-lg border border-line p-2.5"><UiMarkdown :source="editIssues" /></div>
+              <textarea v-else v-model="editIssues" class="textarea" placeholder="困っていること・ブロッカー" />
             </UiFormField>
             <UiFormField label="明日の予定">
-              <textarea v-model="editTomorrow" class="textarea" placeholder="翌営業日の予定" />
+              <div v-if="dailyMdPreview" class="min-h-[72px] rounded-lg border border-line p-2.5"><UiMarkdown :source="editTomorrow" /></div>
+              <textarea v-else v-model="editTomorrow" class="textarea" placeholder="翌営業日の予定" />
             </UiFormField>
           </div>
 
@@ -779,7 +794,9 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
           <table class="tbl">
             <thead>
               <tr>
-                <th class="sticky left-0 z-[2] bg-surface-soft">メンバー</th>
+                <!-- .tbl th の z-index:1 は詳細度で z-[2] に勝つため !important で上書きする
+                     （日付ヘッダー（後続兄弟・同 z）が横スクロール時にメンバー列ヘッダーへ被る不具合の修正） -->
+                <th class="sticky left-0 !z-[2] bg-surface-soft">メンバー</th>
                 <th v-for="d in matrixDays" :key="d" class="!text-center">{{ dayLabel(d) }}</th>
               </tr>
             </thead>
@@ -854,27 +871,37 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
         <div v-if="myCurrentWeekly && myCurrentWeekly.status === 'submitted'" class="grid gap-3">
           <UiStatusBadge tone="ok" :label="REPORT_STATUS_LABELS.submitted" dot class="justify-self-start" />
           <div class="grid gap-3 md:grid-cols-2">
-            <div><p class="label">今週の目標達成</p><p class="whitespace-pre-wrap text-[13px]">{{ myCurrentWeekly.goalReview || '—' }}</p></div>
-            <div><p class="label">主要業務</p><p class="whitespace-pre-wrap text-[13px]">{{ myCurrentWeekly.mainWork || '—' }}</p></div>
-            <div><p class="label">課題</p><p class="whitespace-pre-wrap text-[13px]">{{ myCurrentWeekly.issues || '—' }}</p></div>
-            <div><p class="label">来週の予定</p><p class="whitespace-pre-wrap text-[13px]">{{ myCurrentWeekly.nextWeek || '—' }}</p></div>
+            <div><p class="label">今週の目標達成</p><UiMarkdown v-if="myCurrentWeekly.goalReview" :source="myCurrentWeekly.goalReview" /><p v-else class="text-[13px]">—</p></div>
+            <div><p class="label">主要業務</p><UiMarkdown v-if="myCurrentWeekly.mainWork" :source="myCurrentWeekly.mainWork" /><p v-else class="text-[13px]">—</p></div>
+            <div><p class="label">課題</p><UiMarkdown v-if="myCurrentWeekly.issues" :source="myCurrentWeekly.issues" /><p v-else class="text-[13px]">—</p></div>
+            <div><p class="label">来週の予定</p><UiMarkdown v-if="myCurrentWeekly.nextWeek" :source="myCurrentWeekly.nextWeek" /><p v-else class="text-[13px]">—</p></div>
           </div>
         </div>
 
         <!-- エディタ -->
         <div v-else class="grid gap-3">
+          <div class="flex items-center justify-end">
+            <button type="button" class="btn btn-sm" :aria-pressed="wkMdPreview" @click="wkMdPreview = !wkMdPreview">
+              <component :is="wkMdPreview ? Pencil : Eye" class="h-3.5 w-3.5" aria-hidden="true" />
+              {{ wkMdPreview ? '編集に戻る' : 'プレビュー' }}
+            </button>
+          </div>
           <div class="grid gap-3 md:grid-cols-2">
-            <UiFormField label="今週の目標達成">
-              <textarea v-model="wkGoal" class="textarea" placeholder="目標に対するふりかえり" />
+            <UiFormField label="今週の目標達成" :hint="wkMdPreview ? '' : 'マークダウン記法に対応'">
+              <div v-if="wkMdPreview" class="min-h-[72px] rounded-lg border border-line p-2.5"><UiMarkdown :source="wkGoal" /></div>
+              <textarea v-else v-model="wkGoal" class="textarea" placeholder="目標に対するふりかえり" />
             </UiFormField>
             <UiFormField label="主要業務" required>
-              <textarea v-model="wkMain" class="textarea" placeholder="今週の主な業務" />
+              <div v-if="wkMdPreview" class="min-h-[72px] rounded-lg border border-line p-2.5"><UiMarkdown :source="wkMain" /></div>
+              <textarea v-else v-model="wkMain" class="textarea" placeholder="今週の主な業務" />
             </UiFormField>
             <UiFormField label="課題">
-              <textarea v-model="wkIssues" class="textarea" placeholder="課題・相談したいこと" />
+              <div v-if="wkMdPreview" class="min-h-[72px] rounded-lg border border-line p-2.5"><UiMarkdown :source="wkIssues" /></div>
+              <textarea v-else v-model="wkIssues" class="textarea" placeholder="課題・相談したいこと" />
             </UiFormField>
             <UiFormField label="来週の予定">
-              <textarea v-model="wkNext" class="textarea" placeholder="来週やること" />
+              <div v-if="wkMdPreview" class="min-h-[72px] rounded-lg border border-line p-2.5"><UiMarkdown :source="wkNext" /></div>
+              <textarea v-else v-model="wkNext" class="textarea" placeholder="来週やること" />
             </UiFormField>
           </div>
           <div class="flex flex-wrap items-center justify-end gap-2">
@@ -956,15 +983,17 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
         <div class="grid gap-3">
           <div>
             <p class="label">所感</p>
-            <p class="whitespace-pre-wrap text-[13px]">{{ drawerReport.reflection || '—' }}</p>
+            <UiMarkdown v-if="drawerReport.reflection" :source="drawerReport.reflection" />
+            <p v-else class="text-[13px]">—</p>
           </div>
           <div v-if="drawerReport.issues" class="rounded-lg bg-warn-soft p-2.5">
             <p class="label !text-warn">課題（管理者へ共有済み）</p>
-            <p class="whitespace-pre-wrap text-[13px]">{{ drawerReport.issues }}</p>
+            <UiMarkdown :source="drawerReport.issues" />
           </div>
           <div>
             <p class="label">明日の予定</p>
-            <p class="whitespace-pre-wrap text-[13px]">{{ drawerReport.tomorrow || '—' }}</p>
+            <UiMarkdown v-if="drawerReport.tomorrow" :source="drawerReport.tomorrow" />
+            <p v-else class="text-[13px]">—</p>
           </div>
         </div>
 
@@ -985,10 +1014,10 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
           dot
           class="justify-self-start"
         />
-        <div><p class="label">今週の目標達成</p><p class="whitespace-pre-wrap text-[13px]">{{ weeklyDrawer.goalReview || '—' }}</p></div>
-        <div><p class="label">主要業務</p><p class="whitespace-pre-wrap text-[13px]">{{ weeklyDrawer.mainWork || '—' }}</p></div>
-        <div><p class="label">課題</p><p class="whitespace-pre-wrap text-[13px]">{{ weeklyDrawer.issues || '—' }}</p></div>
-        <div><p class="label">来週の予定</p><p class="whitespace-pre-wrap text-[13px]">{{ weeklyDrawer.nextWeek || '—' }}</p></div>
+        <div><p class="label">今週の目標達成</p><UiMarkdown v-if="weeklyDrawer.goalReview" :source="weeklyDrawer.goalReview" /><p v-else class="text-[13px]">—</p></div>
+        <div><p class="label">主要業務</p><UiMarkdown v-if="weeklyDrawer.mainWork" :source="weeklyDrawer.mainWork" /><p v-else class="text-[13px]">—</p></div>
+        <div><p class="label">課題</p><UiMarkdown v-if="weeklyDrawer.issues" :source="weeklyDrawer.issues" /><p v-else class="text-[13px]">—</p></div>
+        <div><p class="label">来週の予定</p><UiMarkdown v-if="weeklyDrawer.nextWeek" :source="weeklyDrawer.nextWeek" /><p v-else class="text-[13px]">—</p></div>
       </div>
     </UiDrawer>
   </div>
