@@ -118,7 +118,7 @@ office: `IsometricOffice`（アイソメトリック空間）、`AiEmployeeCard`
 | `useCalendar` | Google カレンダー連携（擬似 OAuth・べき等同期・タスク追加/反映/削除。F-06-8）。同期対象カレンダーの選択（listCalendars / saveCalendars = バッチ7b。既定 primary のみ・モックは擬似一覧 + localStorage） |
 | `useReportAssist` | 日報 AI アシスト（入力方式設定・ヒアリング・ぽいぽいポスト・ドラフト生成。F-06-7） |
 | `useWorkflow` | 稟議 CRUD・承認経路解決・承認操作・代理設定 |
-| `useAiCompany` | AI 社員・ロール・タスク・活動ログ・日次報告生成。AI 社員間の依頼・連携（delegate 権限 = マネージャーロール。承認時に分担子タスク化・ロールアップ = バッチ7b） |
+| `useAiCompany` | AI 社員・ロール・タスク・活動ログ・日次報告生成。AI 社員間の依頼・連携（delegate 権限 = マネージャーロール。承認時に分担子タスク化・ロールアップ = バッチ7b）。実遂行（バッチ7f）: progressTask = 成果物生成 / answerTask = 依頼者回答（質問ブロックの解除）/ requestTask 添付対応 |
 | `useDecision` | 判断テーマ・オントロジー・シナリオ・判断ログ |
 | `useNotifications` | 通知の発行・既読・バッジ数 |
 | `useEscalations` | シグナル検知・起票・管理者アクション・ナレッジ還流 |

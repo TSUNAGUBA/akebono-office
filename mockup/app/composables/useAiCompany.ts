@@ -12,10 +12,11 @@
  */
 import type { Ref } from 'vue'
 import {
-  decomposeTask, DELEGATE_PERMISSION, judgeTaskConfidence, mockActivityCost, planDelegation,
+  buildFinalReport, decomposeTask, DELEGATE_PERMISSION, heuristicNeedsInput, heuristicStepOutput,
+  judgeTaskConfidence, mockActivityCost, planDelegation,
 } from '../../../shared/domain/ai-tasks'
 import type {
-  AiActivityKind, AiActivityLog, AiEmployee, AiModelTier, AiRole, AiTask,
+  AiActivityKind, AiActivityLog, AiEmployee, AiModelTier, AiRole, AiTask, AiTaskFileMeta,
   DailyReport, ReportEntry, Result,
 } from '~/types/domain'
 import type { Tone } from '~/types/ui'
@@ -247,8 +248,22 @@ export function useAiCompany() {
       t.parentTaskId === parent.id && t.id !== child.id && t.status !== 'done' && t.status !== 'cancelled')
     const decomposition = parent.decomposition.map(s =>
       allChildrenDone || childTitles.has(s.title) ? { ...s, done: true } : s)
+    // 全分担完了時は分担先の統合報告を集約した親の統合成果物も作る（API 版と同一 = バッチ7f）
+    let parentOutputs = parent.outputs ?? []
+    if (allChildrenDone) {
+      const childDone = aiTasks.value.filter(t => t.parentTaskId === parent.id && (t.id === child.id || t.status === 'done'))
+      const body = [
+        `# 「${parent.title}」統合完了報告（連携分担）`,
+        ...childDone.map((ct) => {
+          const src = ct.id === child.id ? child : ct
+          const fin = (src.outputs ?? []).find(o => o.step === -1) ?? (src.outputs ?? [])[(src.outputs ?? []).length - 1]
+          return `## ${ct.title}\n${[...(fin?.body ?? '（成果物なし）')].slice(0, 800).join('')}`
+        }),
+      ].join('\n\n')
+      parentOutputs = [...parentOutputs, { step: -1, title: '統合報告', body, at: nowJstIso() }]
+    }
     aiTasks.value = aiTasks.value.map(t => t.id === parent.id
-      ? { ...t, decomposition, status: allChildrenDone ? 'done' as const : t.status }
+      ? { ...t, decomposition, outputs: parentOutputs, status: allChildrenDone ? 'done' as const : t.status }
       : t)
     if (allChildrenDone) {
       addLog(parent.aiEmployeeId, parent.id, 'report', `「${parent.title}」の全分担が完了、成果を統合して報告`)
@@ -260,16 +275,42 @@ export function useAiCompany() {
 
   // ---------- 操作系 ----------
 
+  /** File → base64（依頼・回答の添付。useNotes.importFile と同じ変換パターン） */
+  async function toAttachment(file: File): Promise<{ filename: string; contentBase64: string }> {
+    const buf = new Uint8Array(await file.arrayBuffer())
+    let bin = ''
+    for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000))
+    return { filename: file.name, contentBase64: btoa(bin) }
+  }
+
+  /** モックモードの添付メタ（原本は保存しない = メタのみの設計判断。API モードはサーバーが原本保全） */
+  function mockFileMetas(taskId: string, questionId: string | null, files: File[]): AiTaskFileMeta[] {
+    return files.map((f, i) => ({
+      id: `${taskId}-f${questionId ?? 'req'}-${i}`,
+      filename: f.name,
+      mime: f.type || 'application/octet-stream',
+      sizeBytes: f.size,
+      questionId,
+    }))
+  }
+
   /**
    * タスクを依頼する。AI が決定的にタスク分解を生成し status='proposed' で登録する。
    * confidence が low の場合はエスカレーション起票（非ブロッキング）し、フラグを返す。
+   * 添付（画像/ドキュメント = バッチ7f）は API モードでサーバーが抽出・原本保全して材料に使う
    */
-  async function requestTask(aiEmployeeId: string, title: string, description: string): Promise<RequestTaskResult> {
+  async function requestTask(
+    aiEmployeeId: string,
+    title: string,
+    description: string,
+    files: File[] = [],
+  ): Promise<RequestTaskResult> {
     if (isApi) {
       // 分解はサーバー（Vertex AI → 失敗時 shared ヒューリスティック）。エスカレーションもサーバーが担う
       try {
+        const attachments = await Promise.all(files.map(toAttachment))
         const data = await apiFetch<{ id: string; confidence: AiTask['confidence'] }>('/v1/ai-company/tasks', {
-          method: 'POST', body: { aiEmployeeId, title: title.trim(), description: description.trim() },
+          method: 'POST', body: { aiEmployeeId, title: title.trim(), description: description.trim(), attachments },
         })
         await reloadAi()
         return { ok: true, id: data.id, confidence: data.confidence }
@@ -297,6 +338,9 @@ export function useAiCompany() {
       dueDate: null,
       confidence,
       createdAt: nowJstIso(),
+      outputs: [],
+      questions: [],
+      files: mockFileMetas(id, null, files),
     }]
     addLog(aiEmployeeId, id, 'plan', `「${t}」の分解案を作成し承認待ち`)
     syncEmployeeStatus(aiEmployeeId)
@@ -339,11 +383,19 @@ export function useAiCompany() {
     return { ok: true, id: taskId }
   }
 
-  /** 実行を 1 ステップ進める。全ステップ完了で done + 完了報告 + 依頼者へ通知 */
+  /**
+   * 実行を 1 ステップ進める（実遂行 = バッチ7f）。ステップの成果物を生成して保存し、
+   * 人間の判断が必要な依頼（決定的判定 = API のヒューリスティックフォールバックと同一）は
+   * 依頼者へ質問してブロックする。全ステップ完了で done + 統合報告 + 依頼者へ通知
+   */
   async function progressTask(taskId: string): Promise<Result> {
     if (isApi) return transitionApi(taskId, 'progress')
     const task = aiTasks.value.find(t => t.id === taskId)
     if (!task) return { ok: false, error: { code: 'AKO-AIC-003', message: 'タスクが見つかりません' } }
+    // 質問によるブロックは status='blocked' のため、状態ガードより先に判定して 014 を返す（API 版と同一）
+    if ((task.questions ?? []).some(q => q.status === 'open')) {
+      return { ok: false, error: { code: 'AKO-AIC-014', message: '依頼者の回答待ちです（回答すると実行を再開できます）' } }
+    }
     if (task.status !== 'in_progress') {
       return { ok: false, error: { code: 'AKO-AIC-005', message: '実行中のタスクのみ進められます' } }
     }
@@ -351,18 +403,56 @@ export function useAiCompany() {
     if (idx < 0) return { ok: false, error: { code: 'AKO-AIC-006', message: '未完了のステップがありません' } }
 
     const step = task.decomposition[idx]!
+    const answered = (task.questions ?? []).filter(q => q.status === 'answered')
+    // 人間のアクションが必要か（API のフォールバックと同一の決定的判定）
+    const question = heuristicNeedsInput(task.description, answered.length)
+    if (question) {
+      const q = {
+        id: `${taskId}-q${(task.questions ?? []).length + 1}`,
+        stepIndex: idx,
+        question,
+        status: 'open' as const,
+        answer: null,
+        answeredBy: null,
+        askedAt: nowJstIso(),
+        answeredAt: null,
+      }
+      aiTasks.value = aiTasks.value.map(t => t.id === taskId
+        ? { ...t, status: 'blocked' as const, questions: [...(t.questions ?? []), q] }
+        : t)
+      addLog(task.aiEmployeeId, taskId, 'escalate', `「${step.title}」の遂行に確認が必要: ${question.slice(0, 60)}`)
+      syncEmployeeStatus(task.aiEmployeeId)
+      commit()
+      const emp = employeeById(task.aiEmployeeId)
+      notify(task.requesterId, 'ai_report', `AI 確認依頼: ${task.title}`,
+        `${emp?.name ?? 'AI社員'} から確認: ${question}（/ai-company で回答してください）`, '/ai-company')
+      return { ok: true, id: taskId }
+    }
+    // 実遂行: 材料（依頼文 + 回答済み Q&A）から成果物を生成（API フォールバックと同一関数）
+    const materials = [
+      `依頼内容: ${task.description || '（記載なし）'}`,
+      ...answered.map(q => `確認済み Q&A:\nQ: ${q.question}\nA: ${q.answer ?? ''}`),
+    ].join('\n\n')
+    const outputs = [
+      ...(task.outputs ?? []),
+      { step: idx, title: step.title, body: heuristicStepOutput(task.title, step.title, materials), at: nowJstIso() },
+    ]
     const decomposition = task.decomposition.map((s, i) => i === idx ? { ...s, done: true } : s)
     const finished = decomposition.every(s => s.done)
-    aiTasks.value = aiTasks.value.map(t => t.id === taskId
-      ? { ...t, decomposition, status: finished ? 'done' as const : t.status }
-      : t)
-    addLog(task.aiEmployeeId, taskId, 'execute', `「${step.title}」を完了`)
     if (finished) {
-      addLog(task.aiEmployeeId, taskId, 'report', `「${task.title}」の全ステップが完了、成果を報告`)
+      outputs.push({ step: -1, title: '統合報告', body: buildFinalReport(task.title, outputs), at: nowJstIso() })
+    }
+    aiTasks.value = aiTasks.value.map(t => t.id === taskId
+      ? { ...t, decomposition, outputs, status: finished ? 'done' as const : t.status }
+      : t)
+    addLog(task.aiEmployeeId, taskId, 'execute', `「${step.title}」を遂行し成果物を作成`)
+    if (finished) {
+      addLog(task.aiEmployeeId, taskId, 'report', `「${task.title}」の全ステップが完了、成果を統合して報告`)
     }
     // 分担子タスクの完了は依頼元マネージャーへ報告・ロールアップ（API 版と同一）
     if (finished && task.parentTaskId) {
-      rollUpToParentMock({ ...task, decomposition, status: 'done' })
+      // outputs も渡す（親の統合報告が今回ステップの成果物・子の統合報告を参照できるように = R1 指摘）
+      rollUpToParentMock({ ...task, decomposition, outputs, status: 'done' })
     }
     syncEmployeeStatus(task.aiEmployeeId)
     commit()
@@ -373,6 +463,49 @@ export function useAiCompany() {
       notify(task.requesterId, 'ai_report', `AI 完了報告: ${task.title}`,
         `${emp?.name ?? 'AI社員'} がタスクを完了しました`, '/ai-company')
     }
+    return { ok: true, id: taskId }
+  }
+
+  /**
+   * 依頼者の回答（人間のアクションが必要な箇所への応答 = バッチ7f）。
+   * 最も古い open な質問へ回答し、ブロック中なら実行を再開できる状態へ戻す
+   */
+  async function answerTask(taskId: string, answer: string, files: File[] = []): Promise<Result> {
+    const text = answer.trim()
+    if (!text) return { ok: false, error: { code: 'AKO-GEN-001', message: '回答を入力してください' } }
+    if (isApi) {
+      const attachments = await Promise.all(files.map(toAttachment))
+      const res = await apiResult(() => apiFetch(`/v1/ai-company/tasks/${taskId}/answer`, {
+        method: 'POST', body: { answer: text, attachments },
+      }))
+      if (res.ok) await reloadAi()
+      return res
+    }
+    const task = aiTasks.value.find(t => t.id === taskId)
+    if (!task) return { ok: false, error: { code: 'AKO-AIC-003', message: 'タスクが見つかりません' } }
+    if (task.requesterId !== currentUser.value.id && currentUser.value.role !== 'admin') {
+      return { ok: false, error: { code: 'AKO-AIC-013', message: '依頼者本人（または管理者）のみ回答できます' } }
+    }
+    if (task.status === 'done' || task.status === 'cancelled') {
+      return { ok: false, error: { code: 'AKO-AIC-012', message: '完了・中止済みのタスクには回答できません' } }
+    }
+    const open = (task.questions ?? []).find(q => q.status === 'open')
+    if (!open) return { ok: false, error: { code: 'AKO-AIC-012', message: '回答待ちの質問がありません' } }
+    const questions = (task.questions ?? []).map(q => q.id === open.id
+      ? { ...q, status: 'answered' as const, answer: text, answeredBy: currentUser.value.id, answeredAt: nowJstIso() }
+      : q)
+    aiTasks.value = aiTasks.value.map(t => t.id === taskId
+      ? {
+          ...t,
+          questions,
+          files: [...(t.files ?? []), ...mockFileMetas(taskId, open.id, files)],
+          status: t.status === 'blocked' ? 'in_progress' as const : t.status,
+        }
+      : t)
+    addLog(task.aiEmployeeId, taskId, 'chat',
+      `依頼者から回答を受領: ${[...text].slice(0, 60).join('')}${files.length > 0 ? `（添付 ${files.length} 件）` : ''}`)
+    syncEmployeeStatus(task.aiEmployeeId)
+    commit()
     return { ok: true, id: taskId }
   }
 
@@ -412,11 +545,20 @@ export function useAiCompany() {
     if (task.status === 'done' || task.status === 'cancelled') {
       return { ok: false, error: { code: 'AKO-AIC-008', message: '完了・中止済みのタスクは中止できません' } }
     }
-    // 親の中止は未完了の分担子タスクへ連鎖（API 版と同一 = 分担だけが走り続ける宙吊りを作らない）
+    // 親の中止は未完了の分担子タスクへ連鎖（API 版と同一 = 分担だけが走り続ける宙吊りを作らない）。
+    // open な質問は中止で打ち切り（宙吊りの回答待ちを残さない = API 版と同一）
     const kids = aiTasks.value.filter(t =>
       t.parentTaskId === taskId && t.status !== 'done' && t.status !== 'cancelled')
     aiTasks.value = aiTasks.value.map(t =>
-      (t.id === taskId || kids.some(k => k.id === t.id)) ? { ...t, status: 'cancelled' as const } : t)
+      (t.id === taskId || kids.some(k => k.id === t.id))
+        ? {
+            ...t,
+            status: 'cancelled' as const,
+            questions: (t.questions ?? []).map(q => q.status === 'open'
+              ? { ...q, status: 'answered' as const, answer: '（タスク中止により打ち切り）', answeredBy: currentUser.value.id, answeredAt: nowJstIso() }
+              : q),
+          }
+        : t)
     for (const k of kids) {
       addLog(k.aiEmployeeId, k.id, 'chat', `連携元タスクの中止に伴い「${k.title}」を中止`)
       syncEmployeeStatus(k.aiEmployeeId)
@@ -561,7 +703,7 @@ export function useAiCompany() {
 
   return {
     employees, employeesAll, roles, roleOf, employeeById, tasks, tasksOf, logs, aiReportsOn,
-    requestTask, approveTask, progressTask, blockTask, cancelTask, generateDailyReports,
+    requestTask, approveTask, progressTask, answerTask, blockTask, cancelTask, generateDailyReports,
     evaluateWorkloadSignals,
   }
 }

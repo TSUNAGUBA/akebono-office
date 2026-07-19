@@ -623,6 +623,41 @@ export interface AiTask {
   requesterAiEmployeeId?: string | null
   /** 連携元（親）タスク（マネージャーのタスクから分担された子タスクのみ） */
   parentTaskId?: string | null
+  /** ステップ実行の成果物（バッチ7f = 実遂行。step は decomposition の添字・-1 = 統合報告。追記のみ） */
+  outputs?: AiTaskOutput[]
+  /** 依頼者への質問（人間のアクションが必要な箇所。open が残る間はブロック = 回答で再開） */
+  questions?: AiTaskQuestion[]
+  /** 依頼・回答の添付メタ（原本は API の ai_task_files。モックはメタのみ） */
+  files?: AiTaskFileMeta[]
+}
+
+/** AI タスクのステップ成果物（バッチ7f） */
+export interface AiTaskOutput {
+  step: number
+  title: string
+  body: string
+  at: string
+}
+
+/** AI タスクの依頼者への質問（バッチ7f） */
+export interface AiTaskQuestion {
+  id: string
+  stepIndex: number
+  question: string
+  status: 'open' | 'answered'
+  answer: string | null
+  answeredBy: string | null
+  askedAt: string
+  answeredAt: string | null
+}
+
+/** AI タスク添付のメタ（バッチ7f。原本 bytes は含まない） */
+export interface AiTaskFileMeta {
+  id: string
+  filename: string
+  mime: string
+  sizeBytes: number
+  questionId: string | null
 }
 
 export type AiActivityKind = 'plan' | 'execute' | 'report' | 'escalate' | 'chat'

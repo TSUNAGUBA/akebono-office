@@ -3,6 +3,7 @@
  * ルーティング: /healthz（認証なし） / /v1/*（認証必須）
  */
 import { Hono } from 'hono'
+import { bodyLimit } from 'hono/body-limit'
 import { cors } from 'hono/cors'
 import type pg from 'pg'
 import { authMiddleware } from './auth'
@@ -47,6 +48,13 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
       maxAge: 3600,
     }))
   }
+
+  // リクエストボディの総量制限（添付 = 10MB × 5 件の base64 ≒ 70MB を許容し、それ以上は 413。
+  // cors の後段に置く = 413 応答にも CORS ヘッダが付き、フロントがエラーメッセージを読める）
+  app.use('/v1/*', bodyLimit({
+    maxSize: 80 * 1024 * 1024,
+    onError: c => c.json({ error: { code: 'AKO-GEN-004', message: 'リクエストが大きすぎます（添付は 10MB × 5 件までにしてください）' } }, 413),
+  }))
 
   // ヘルスチェック（Cloud Run の起動プローブ・監視用。DB 死活も返すが 200 は維持 = 非ブロッキング）
   app.get('/healthz', async (c) => {
