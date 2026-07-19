@@ -405,6 +405,13 @@ function openAllRow(row: Record<string, unknown>): void {
 
 // ---------- 週報タブ ----------
 
+/** 週報タブ内のサブビュー（自分の週報 / 週次 AI インサイト = バッチ7g・オペレーター指示 2026-07-19 #9） */
+const weeklyView = ref('mine')
+const WEEKLY_VIEW_TABS = [
+  { key: 'mine', label: '自分の週報' },
+  { key: 'insight', label: 'AI インサイト' },
+]
+
 const thisWeekStart = computed(() => reports.weekStartOf(todayJst()))
 const myCurrentWeekly = computed(() => reports.myWeeklyOn(thisWeekStart.value))
 
@@ -855,6 +862,12 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
 
     <!-- ================= 週報 ================= -->
     <div v-else class="grid gap-3">
+      <UiTabBar v-model="weeklyView" :tabs="WEEKLY_VIEW_TABS" />
+
+      <!-- 週次 AI インサイト（該当週の全登録データから経営・営業・チーム視点のレポート = バッチ7g） -->
+      <WidgetsWeeklyInsight v-if="weeklyView === 'insight'" :initial-week-start="thisWeekStart" />
+
+      <template v-else>
       <!-- 今週の週報 -->
       <UiSectionCard
         :title="`今週の週報（${weekLabel(thisWeekStart)}）`"
@@ -930,6 +943,7 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
           </li>
         </ul>
       </UiSectionCard>
+      </template>
     </div>
 
     <!-- 日報詳細ドロワー（チームタブ） -->

@@ -81,5 +81,6 @@ export const FIELD_CATALOG: Record<string, { value: string; label: string }[]> =
 /** 項目キーの論理名（カタログ外 = 過去に手入力された物理名などはそのまま表示） */
 export function fieldLabel(resource: string, field: string | null | undefined): string {
   if (!field) return ''
+  if (field === 'ai-scope') return 'AI 参照範囲' // バッチ7g の擬似フィールド（shared AI_SCOPE_FIELD）
   return FIELD_CATALOG[resource]?.find(f => f.value === field)?.label ?? field
 }

@@ -115,6 +115,12 @@ inputMode: ComputedRef<'form'|'assist'|'both'>       // 設定（reportInputMode
 questionsFor(memberId, date): AssistQuestion[]       // 予定 1 件 1 問 + まとめ 3 問（テンプレ+文脈）
 recordAnswer(q, answer, date?) / poipoiMemo(text, date?): Result  // 蓄積ログ（追記のみ）。date 省略時は本日（過去日の日報にも対応）
 generateDraft(memberId, date): ReportDraft           // 保存しない（フォームへ流し込み→確認・修正→既存 submit）
+
+// useWeeklyInsight（バッチ7g）
+generate(weekStart): Promise<{ metrics: WeeklyMetrics; insight: WeeklyInsight; llm: boolean }>
+   // API = GET /v1/reports/weekly-insight（集計 = サーバー・洞察 = Vertex AI → 失敗時 heuristicWeeklyInsight）
+   // モック = 同一の WeeklyMetrics をモックコレクションから集計し heuristic のみ（shared/domain/weekly-insight）
+   // 参照は閲覧権限準拠（売上は can('sales') のみ供給・reports 機能 deny は 403）
 // 提出済み保護: useReports.reportOn の結果（status='submitted'）で呼び出し側が生成 UI を無効化する
 
 ```

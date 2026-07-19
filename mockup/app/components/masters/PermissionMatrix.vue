@@ -9,7 +9,7 @@
  */
 import { Check, X } from 'lucide-vue-next'
 import type { CodeMasterItem, Member, PermissionRule } from '~/types/domain'
-import { FEATURE_PERMISSION_KEYS } from '../../../../shared/domain/permissions'
+import { AI_SCOPE_FEATURES, AI_SCOPE_FIELD, FEATURE_PERMISSION_KEYS } from '../../../../shared/domain/permissions'
 import { FIELD_CATALOG, FIELD_RESOURCES } from '~/utils/permission-catalog'
 
 const ruleCrud = useMasterCrudAsync('permissionRules', 'pm')
@@ -58,6 +58,16 @@ const sections = computed<{ key: string; label: string; rows: MatrixRow[] }[]>((
     key: 'features',
     label: '機能（利用可否）',
     rows: FEATURE_PERMISSION_KEYS.map(f => ({ resource: f.key, field: null, label: f.label })),
+  },
+  {
+    // AI 参照範囲（バッチ7g・オペレーター指示 2026-07-19 #8/#9）: ✓ = すべて / × = 自分の登録データのみ
+    key: 'ai-scope',
+    label: 'AI 参照範囲（✓ = すべて / × = 自分の登録データのみ）',
+    rows: AI_SCOPE_FEATURES.map(f => ({
+      resource: f.key,
+      field: AI_SCOPE_FIELD,
+      label: `${f.label}（既定: ${f.defaultScope === 'all' ? 'すべて' : '自分のみ'}）`,
+    })),
   },
   ...FIELD_RESOURCES.map(r => ({
     key: r.key,
@@ -135,6 +145,15 @@ function cellState(subjectId: string, row: MatrixRow): 'deny' | 'allow' | 'unset
 
 const STATE_LABELS: Record<string, string> = { deny: '拒否', allow: '許可', unset: '未設定（既定 = 許可）' }
 
+/** セル状態の読み上げ・ツールチップ（AI 参照範囲の行は「すべて / 自分のみ」の語彙で表現） */
+function stateLabel(row: MatrixRow, state: 'deny' | 'allow' | 'unset'): string {
+  if (row.field === AI_SCOPE_FIELD) {
+    const def = AI_SCOPE_FEATURES.find(f => f.key === row.resource)?.defaultScope === 'all' ? 'すべて' : '自分のみ'
+    return state === 'deny' ? 'AI 参照 = 自分の登録データのみ' : state === 'allow' ? 'AI 参照 = すべて' : `未設定（既定 = ${def}）`
+  }
+  return STATE_LABELS[state] ?? state
+}
+
 /**
  * admin のマスタ・設定 deny はロックアウト防止で無視される（shared/domain/permissions.ts の
  * canUseFeature と同期。保護は利用者属性ベース = ロール列の admin と、role が admin の個人列が対象。
@@ -210,7 +229,7 @@ function isLockoutProtected(subjectId: string, row: MatrixRow): boolean {
                     'opacity-50': busyCells.has(`${col.id}:${row.resource}:${row.field ?? ''}`),
                   }"
                   :aria-busy="busyCells.has(`${col.id}:${row.resource}:${row.field ?? ''}`)"
-                  :aria-label="`${col.label} × ${section.label}/${row.label}: ${STATE_LABELS[cellState(col.id, row)]}。クリックで切替`"
+                  :aria-label="`${col.label} × ${section.label}/${row.label}: ${stateLabel(row, cellState(col.id, row))}。クリックで切替`"
                   :title="isLockoutProtected(col.id, row) ? 'ロックアウト防止のため管理者への拒否は無効です' : undefined"
                   @click="cycleCell(col.id, row)"
                 >
