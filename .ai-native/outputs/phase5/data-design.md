@@ -29,7 +29,7 @@
 | `WorkflowRoute` | id, category(稟議区分), minAmount, maxAmount, steps[{order, approverRole/approverMemberId, mode(`serial`/`all`/`majority`)}], active | C1 |
 | `AttendanceRule` | id, name, appliesTo(employmentType[]・選択可能な雇用区分), defaultFor(employmentType[]・既定とする雇用区分。区分ごとに 1 ルールのみ=保存時排他), workStart, workEnd, breakMinutes, flex{coreStart,coreEnd,settlementMonths}, closingDay, legalHolidayWeekday, workingWeekdays(営業曜日 0-6。既定 [1-5]), holidayAware(祝日を非営業日扱い。既定 true), active（workingWeekdays / holidayAware は 0020 で追加 = 外注等の週末稼働を勤務体系ごとに表現。翌営業日計算が参照） | C1 |
 | `DecisionTheme` | id, title, category(`business`/`project`), objective, semantics[{key,value}], links[{label,to,info}], actions[{name,status,slot,why}], options[{slot(A/B/C),recommended,title,prediction[],basis}], whyRecommend, scenarioParams[], active（意思決定支援 F-02） | C2 |
-| `PermissionRule` | id, subjectKind(`role`/`title`/`member`), subjectId, resource(機能キー or マスタエンティティ), field?(null=機能全体/値あり=表示項目), effect(`allow`/`deny`), active（F-16。解決順 個人>役職>ロール・同一レイヤ deny 優先・未設定 allow・既存ロールガードを緩めない制限レイヤ。**field='ai-scope' は AI 参照範囲の擬似フィールド（バッチ7g）: allow = すべて / deny = 自分の登録データのみ。既定は shared AI_SCOPE_FEATURES の区分ごとに定義（poipoi = all / attendance・ai-assistant = own）**） | C2 |
+| `PermissionRule` | id, subjectKind(`role`/`title`/`member`), subjectId, resource(機能キー or マスタエンティティ), field?(null=機能全体/値あり=表示項目), effect(`allow`/`deny`), active（F-16。解決順 個人>役職>ロール・同一レイヤ deny 優先・未設定 allow・既存ロールガードを緩めない制限レイヤ。**field='ai-scope' は AI 参照範囲の擬似フィールド（バッチ7g）: allow = すべて / deny = 自分の登録データのみ。既定は shared AI_SCOPE_FEATURES の区分ごとに定義（poipoi = all / attendance・ai-assistant = own）**。**resource='reports' + field='member:<対象メンバー id>' は日報の参照対象の擬似フィールド（バッチ7h = F-16-6）: deny = その対象者の日報を参照不可。未設定 = 参照可・自分は常に参照可（shared canViewMemberReports）**） | C2 |
 | `SystemService` | id, name, description, url, components[{id,name}]（バッチ6c で API 化 = `system_services` 0018。マスタ初期値は mockup シードと同一の 3 サービスを migration 投入） | C1 |
 
 > **設計判断（勤務体系の解決）:** 同一雇用区分に固定時間・フレックス・時短等が混在するため、雇用区分だけではルールを決定しない。適用優先順は ①`Member.attendanceRuleId`（個別指定） → ②`defaultFor` に区分を含む既定ルール → ③`appliesTo` に区分を含むルールの先頭（既定未設定時の防御）。個別割当専用ルール（時短等）は `defaultFor` を空にする。
@@ -85,7 +85,7 @@
 | `CalendarEvent`（app 発） | id, memberId, date, from, to, title, source=`app`, syncedToGoogle, projectId | 本人管理のタスク（編集・削除可。SoT は本アプリ） | C2 |
 | `HearingLog` | id, memberId, date, kind(`qa`=ヒアリング回答/`memo`=ぽいぽいポスト), calendarEventId, question, answer, at | 記録系（追記のみ・巻き戻し禁止） | C3（課題回答を含み `DailyReport` と同水準） |
 | `TaskPlan`（F-14） | id, memberId, date（実施予定日）, calendarEventId（null=手動）, title, purpose（目的）, doneCriteria（達成条件）, approach（段取り）, aiComment/aiCommentAt（AI レビュー。再取得で上書き可）, status(`planned`/`done`), outcome（結果）, reflection（所感）, resultAt, createdAt/updatedAt | ハイブリッド: planned 中は本人が編集・削除可 / **結果記録（done）後は編集不可 = 記録系へ確定** | C3（業務内容の原文を含み `DailyReport` と同水準） |
-| `AppConfigItem` | key, value（例: reportInputMode = `form`/`assist`/`both`） | 設定系（upsert 更新可。SoT は本アプリ） | C1 |
+| `AppConfigItem` | key, value（例: reportInputMode = `form`/`assist`/`both`。**バッチ7h 追加キー: `teamVisibleMemberIds` = チームタブ表示メンバーの JSON 配列（''/空 = 全員）・`menu-categories-dashboard` / `menu-categories-masters` = メニューカテゴリ定義の JSON（'' = 既定構成）**） | 設定系（upsert 更新可。SoT は本アプリ） | C1 |
 
 > **SoT 宣言（カレンダー）:** `source='google'` の予定は **Google カレンダーが SoT**（本アプリはキャッシュ。編集・削除不可、決定的 id によるべき等 upsert で同期）。`source='app'` の予定は**本アプリが SoT**（`syncedToGoogle` で Google への反映状態を持つ）。連携解除後もキャッシュは表示用に保持し、**未連携メンバーには初期キャッシュを投入しない**（連携＝同意して初めて同期される、を再現）。HearingLog は記録系（追記のみ）。日報ドラフトは保存せずフォームへ流し込むのみで、**提出済み日報は再生成で上書きしない**（ai-manager の confirmed 保護と同型）。
 

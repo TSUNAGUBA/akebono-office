@@ -3,7 +3,7 @@
  * ロール設定（F-08-2）
  * ロールの一覧・追加・編集・無効化/復元 + AI 社員へのロール割当変更。
  */
-import { ArrowLeft, Plus } from 'lucide-vue-next'
+import { Plus } from 'lucide-vue-next'
 import type { AiModelTier, AiRole } from '~/types/domain'
 import type { TableColumn } from '~/types/ui'
 import { AI_EMPLOYEE_STATUS_LABELS } from '~/utils/labels'
@@ -125,10 +125,7 @@ async function changeAssignment(empId: string, roleId: string): Promise<void> {
   <div>
     <UiPageHeader title="ロール設定" description="AI 社員のロール（責務・システムプロンプト・権限・モデル層）を管理します">
       <template #actions>
-        <NuxtLink to="/ai-company" class="btn btn-ghost btn-sm">
-          <ArrowLeft class="h-3.5 w-3.5" aria-hidden="true" />
-          オフィスへ戻る
-        </NuxtLink>
+        <!-- オフィスへの戻る導線はヘッダー共通の親リンク（nav-map.ts）に統一（バッチ7h） -->
         <button type="button" class="btn btn-primary btn-sm" @click="openCreate">
           <Plus class="h-3.5 w-3.5" aria-hidden="true" />
           ロールを追加

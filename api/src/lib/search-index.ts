@@ -424,7 +424,9 @@ export interface SearchHit {
 /**
  * 質問に関連する検索ドキュメントの上位 K 件（字句 + 埋め込みのハイブリッド。埋め込み無効時は字句のみ）。
  * allOwners = true で本人スコープ（owner_member_id）の絞り込みを外す
- * （ぽいぽいポストの AI 参照範囲 'all' = 他メンバーの投稿も参照。バッチ7g・オペレーター指示 2026-07-19 #8）
+ * （ぽいぽいポストの AI 参照範囲 'all' = 他メンバーの投稿も参照。バッチ7g・オペレーター指示 2026-07-19 #8）。
+ * 不変条件: owner_member_id を持つのは source_kind = 'note'（ぽいぽいポスト）のみ。
+ * 将来 owner 付きの別種別を追加しても poipoi の設定で漏れないよう、SQL 側でも note に限定する
  */
 export async function searchDocsFor(
   pool: pg.Pool,
@@ -441,7 +443,8 @@ export async function searchDocsFor(
   }>(
     `SELECT source_kind AS "sourceKind", source_id AS "sourceId", title, aliases, body, segments, embedding,
             owner_member_id AS "ownerMemberId", links
-     FROM search_docs WHERE $2::boolean OR owner_member_id IS NULL OR owner_member_id = $1
+     FROM search_docs
+     WHERE owner_member_id IS NULL OR owner_member_id = $1 OR ($2::boolean AND source_kind = 'note')
      ORDER BY id LIMIT 3000`, [forMemberId, allOwners])
   // 全件を都度メモリへ載せる設計は SME 規模（〜数千件）前提。上限超過時も ORDER BY id で
   // 決定的な部分集合になる。件数がこの規模を超える場合は pgvector 等への移行を検討する

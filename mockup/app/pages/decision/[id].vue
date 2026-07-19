@@ -4,7 +4,7 @@
  * 3 カラム: ①意味（semantics）②関係（links）③制約と打ち手（actions。✗ は制約で潰れる）
  * 下段: 選択肢 A/B/C（AI 推奨 ★）+ 推奨理由 + シナリオスライダー（決定的予測の即時再計算）+ 判断の記録
  */
-import { ArrowLeft, ArrowUpRight, Info, Link2, ListChecks, Scale, Sparkles, Star } from 'lucide-vue-next'
+import { ArrowUpRight, Info, Link2, ListChecks, Scale, Sparkles, Star } from 'lucide-vue-next'
 import type { DecisionSlot } from '~/types/domain'
 import { fmtDateTime } from '~/utils/format'
 import { DECISION_ACTION_META } from '~/utils/labels'
@@ -87,10 +87,7 @@ function memberName(id: string): string {
     <UiPageHeader :title="theme.title" :description="`目的関数: ${theme.objective}`">
       <template #actions>
         <UiStatusBadge :label="DECISION_CATEGORY_LABELS[theme.category]" :tone="DECISION_CATEGORY_TONES[theme.category]" />
-        <NuxtLink to="/decision" class="btn btn-ghost btn-sm">
-          <ArrowLeft class="h-3.5 w-3.5" aria-hidden="true" />
-          一覧へ
-        </NuxtLink>
+        <!-- 一覧への戻る導線はヘッダー共通の親リンク（nav-map.ts）に統一（バッチ7h） -->
       </template>
     </UiPageHeader>
 

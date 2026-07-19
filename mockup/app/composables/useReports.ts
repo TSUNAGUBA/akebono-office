@@ -124,7 +124,7 @@ export function useReports() {
     if (isApi && /^\d{4}-\d{2}/.test(date)) void loadMineMonth(date.slice(0, 7))
   }
 
-  /** API モード時、チーム提出状況の対象期間を遅延ロードする（管理者ビューのみから呼ばれる） */
+  /** API モード時、チーム提出状況の対象期間を遅延ロードする（チームタブ = バッチ7h で全員公開） */
   function touchTeamWindow(days: number): void {
     if (!isApi) return
     const range = recentBusinessDays(days)
@@ -182,10 +182,37 @@ export function useReports() {
     return days
   }
 
-  /** 提出状況マトリクスの対象メンバー（在籍中の社員・契約・アルバイト） */
-  const teamMembers = computed(() =>
+  // 表示メンバー設定 + 日報参照権限（バッチ7h・オペレーター指示 2026-07-19 #10 ①）
+  const perms = usePermissions()
+  const { getConfig } = useAppSettings()
+
+  /** チームタブの表示メンバー設定（configs 'teamVisibleMemberIds' = JSON 配列。未設定・空・不正 = 全員） */
+  const teamVisibleIds = computed<Set<string> | null>(() => {
+    const raw = getConfig('teamVisibleMemberIds', '')
+    if (!raw) return null
+    try {
+      const arr = JSON.parse(raw) as unknown
+      if (!Array.isArray(arr)) return null
+      const ids = arr.filter((x): x is string => typeof x === 'string')
+      return ids.length > 0 ? new Set(ids) : null
+    } catch {
+      return null
+    }
+  })
+
+  /** マトリクス対象の候補（在籍中の社員・契約・アルバイト = 表示設定の選択肢） */
+  const teamMemberCandidates = computed(() =>
     members.value.filter(m =>
       m.active && m.employmentType !== 'outsource' && m.employmentType !== 'director'))
+
+  /**
+   * 提出状況マトリクスの対象メンバー = 候補 ∩ 表示メンバー設定 ∩ 日報参照権限（F-16-6）。
+   * 自分は表示設定に関わらず常に表示する（自分の提出状況を見失わない）
+   */
+  const teamMembers = computed(() =>
+    teamMemberCandidates.value.filter(m =>
+      (teamVisibleIds.value === null || teamVisibleIds.value.has(m.id) || m.id === currentUser.value.id)
+      && perms.canViewMemberReports(m.id)))
 
   function cellStatus(memberId: string, date: string): SubmissionCell {
     touchTeamWindow(7)
@@ -195,11 +222,24 @@ export function useReports() {
   }
 
   /** チームタイムライン（直近営業日分の提出済み日報。AI 社員の日報も同列に混在 = モックのみ） */
+  /** タイムライン上の人間日報の可視判定（PR #57 R1 M-5 / R2 Minor-2）。
+   * - 参照権限（F-16-6）は常に適用
+   * - 表示メンバー設定はマトリクス候補（社員・契約・アルバイト）にのみ適用する。
+   *   候補外（役員・業務委託 = 設定 UI の選択肢に出ない）は設定の影響を受けず従来どおり表示
+   *   （「選択肢に出ない対象が部分設定で消える」導線を作らない） */
+  function timelineVisible(memberId: string): boolean {
+    if (!perms.canViewMemberReports(memberId)) return false
+    if (!teamMemberCandidates.value.some(m => m.id === memberId)) return true
+    return teamVisibleIds.value === null || teamVisibleIds.value.has(memberId) || memberId === currentUser.value.id
+  }
+
   function timeline(days = 7): DailyReport[] {
     touchTeamWindow(days)
     const range = new Set(recentBusinessDays(days))
     return dailyReports.value
       .filter(r => r.status === 'submitted' && range.has(r.date))
+      // 人間の日報は表示メンバー設定 ∩ 参照権限に従う（AI 社員の日次報告は従来どおり全員分）
+      .filter(r => r.authorKind !== 'human' || !r.memberId || timelineVisible(r.memberId))
       .sort((a, b) =>
         b.date.localeCompare(a.date)
         || (b.submittedAt ?? '').localeCompare(a.submittedAt ?? ''))
@@ -213,6 +253,8 @@ export function useReports() {
     if (isApi && /^\d{4}-\d{2}$/.test(month)) void loadAllMonth(month)
     return dailyReports.value
       .filter(r => r.status === 'submitted' && r.date.startsWith(month))
+      // 日報参照権限（F-16-6）: deny された対象者の日報は一覧に出さない（API 側でも同じ絞り込み）
+      .filter(r => r.authorKind !== 'human' || !r.memberId || perms.canViewMemberReports(r.memberId))
       .sort((a, b) =>
         b.date.localeCompare(a.date)
         || (b.submittedAt ?? '').localeCompare(a.submittedAt ?? ''))
@@ -529,6 +571,7 @@ export function useReports() {
     memberName,
     recentBusinessDays,
     teamMembers,
+    teamMemberCandidates,
     cellStatus,
     timeline,
     allSubmitted,

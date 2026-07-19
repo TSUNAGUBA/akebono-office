@@ -3,16 +3,18 @@
  * - 提出済み日報は本人が編集可（提出状態・初回提出時刻は維持・監査ログ記録。下書きへは戻せない = AKO-REP-001）
  * - 提出済み週報は編集不可（AKO-REP-002 = 記録系の状態保護）
  * - 工数乖離チェック（勤怠実労働との差 60 分超で hoursGapMinutes を返す = 画面が警告表示）
- * - チーム参照（scope=team）は管理者のみ。コメントは提出済み日報に対して全員可
+ * - チーム参照（scope=team）: 管理者 = 下書き含む全件 / 一般 = 提出済みのみ（バッチ7h で全員へ公開）。
+ *   scope=team / scope=all は日報参照権限（F-16-6 = reports + field 'member:<id>' の deny）で対象者を絞り込む。
+ *   コメントは提出済み日報に対して全員可
  * 注: 提出時のエスカレーション起票・通知はバッチ2（通知ドメイン）で API 化する（実装状況マトリクス参照）
  */
 import { Hono } from 'hono'
 import type pg from 'pg'
 import { addDays, nowJstIso, todayJst } from '../../../shared/domain/jst'
-import { canUseFeature } from '../../../shared/domain/permissions'
+import { canUseFeature, canViewMemberReports } from '../../../shared/domain/permissions'
 import type { PunchRecord, ReportEntry } from '../../../shared/domain/types'
 import { heuristicWeeklyInsight, type WeeklyInsight, type WeeklyMetrics } from '../../../shared/domain/weekly-insight'
-import { requireAdmin } from '../auth'
+import { requireAdmin, type AuthUser } from '../auth'
 import { daySummary } from '../domain/attendance'
 import { audit } from '../lib/audit'
 import { raiseEscalation } from '../lib/escalate'
@@ -123,7 +125,8 @@ ${JSON.stringify(metrics, null, 1)}`,
       opportunities: arr(res.swot.opportunities),
       threats: arr(res.swot.threats),
     },
-    risks: (Array.isArray(res.risks) ? res.risks.slice(0, 5) : []).map(r => ({
+    risks: (Array.isArray(res.risks) ? res.risks : [])
+      .filter((r): r is NonNullable<typeof r> => !!r && typeof r === 'object').slice(0, 5).map(r => ({
       title: capCp(String(r.title ?? ''), 60),
       severity: r.severity === 'high' || r.severity === 'low' ? r.severity : 'mid',
       mitigation: capCp(String(r.mitigation ?? ''), 100),
@@ -135,7 +138,8 @@ ${JSON.stringify(metrics, null, 1)}`,
 export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
   const app = new Hono()
 
-  // 日報一覧（自分: month or from/to / チーム: scope=team は管理者のみ / 全員: scope=all は提出済みのみ全メンバー可）
+  // 日報一覧（自分: month or from/to / チーム: scope=team は全員可・期間必須（管理者 = 下書き含む / 一般 = 提出済みのみ）/
+  // 全員: scope=all は提出済みのみ全メンバー可。scope=all/team は F-16-6 の参照 deny で絞り込む）
   app.get('/daily', async (c) => {
     const user = c.get('user')
     const scope = c.req.query('scope') ?? 'mine'
@@ -150,25 +154,40 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
     const rangeWhere = `($1 = '' OR date = NULLIF($1, '')::date)
          AND ($2 = '' OR to_char(date, 'YYYY-MM') = $2)
          AND ($3 = '' OR date >= NULLIF($3, '')::date) AND ($4 = '' OR date <= NULLIF($4, '')::date)`
+    // 日報参照権限（F-16-6・バッチ7h）: deny された対象者の日報を応答から除外する共通フィルタ。
+    // 自分の日報・AI 社員の日次報告は常に参照可（shared canViewMemberReports の規約どおり）
+    const filterViewable = async (rows: { authorKind: string; memberId: string | null }[]) => {
+      const rules = await activePermissionRules(pool)
+      if (rules.length === 0) return rows
+      const subject = subjectOf(user)
+      return rows.filter(r => r.authorKind !== 'human' || !r.memberId
+        || canViewMemberReports(rules, subject, r.memberId))
+    }
     if (scope === 'team') {
-      requireAdmin(c)
-      const { rows } = await pool.query(
+      // バッチ7h: チームタブは全員へ公開。管理者は下書き含む全件・一般メンバーは提出済みのみ
+      //（他人の下書きの内容・存在を一般メンバーへ見せない）。
+      // scope=all と同じく期間なしの全履歴ダンプは許容しない（R1 M-2。フロントは常に期間指定）
+      if (!date && !month && !(from && to)) {
+        throw err('AKO-GEN-001', 'scope=team では date / month / from+to のいずれかを指定してください', 400)
+      }
+      const isAdminUser = user.role === 'admin'
+      const { rows } = await pool.query<{ authorKind: string; memberId: string | null }>(
         `SELECT ${DAILY_COLS} FROM daily_reports
-         WHERE ${rangeWhere}
+         WHERE ${rangeWhere}${isAdminUser ? '' : ` AND status = 'submitted'`}
          ORDER BY date DESC, submitted_at DESC NULLS LAST`,
         [date, month, from, to])
-      return c.json({ data: rows })
+      return c.json({ data: await filterViewable(rows) })
     }
     // 全員の日報（バッチ5e: 相互参照による情報共有）。提出済みのみ = 下書きは本人以外に見せない。
     // month 必須: 期間なしの全履歴ダンプを許容しない（フロントは常に月単位でロードする）
     if (scope === 'all') {
       if (!month) throw err('AKO-GEN-001', 'scope=all では month（YYYY-MM）を指定してください', 400)
-      const { rows } = await pool.query(
+      const { rows } = await pool.query<{ authorKind: string; memberId: string | null }>(
         `SELECT ${DAILY_COLS} FROM daily_reports
          WHERE status = 'submitted' AND ${rangeWhere}
          ORDER BY date DESC, submitted_at DESC NULLS LAST`,
         [date, month, from, to])
-      return c.json({ data: rows })
+      return c.json({ data: await filterViewable(rows) })
     }
     const { rows } = await pool.query(
       `SELECT ${DAILY_COLS} FROM daily_reports
@@ -331,12 +350,43 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
     return c.json({ data: { ok: true } })
   })
 
-  // コメント（提出済み日報に対して）
+  /**
+   * コメントスレッドの対象日報ガード（PR #57 R1 M-3）。
+   * 他人の人間日報は「提出済み かつ 日報参照権限（F-16-6）で参照可」のときのみ許可。
+   * 自分の日報・AI 社員の日報は従来どおり。違反は 404（存在を秘匿 = 下書き秘匿と同じ基準）
+   */
+  async function guardCommentTarget(
+    c: { get: (k: 'user') => AuthUser },
+    reportId: string,
+  ): Promise<{ id: string; authorKind: string; memberId: string | null; status: string; date: string }> {
+    const user = c.get('user')
+    const { rows } = await pool.query<{ id: string; authorKind: string; memberId: string | null; status: string; date: string }>(
+      `SELECT id, author_kind AS "authorKind", member_id AS "memberId", status, date::text AS date
+       FROM daily_reports WHERE id = $1`, [reportId])
+    const target = rows[0]
+    if (!target) throw err('AKO-GEN-002', '対象の日報が見つかりません', 404)
+    if (target.authorKind === 'human' && target.memberId && target.memberId !== user.id) {
+      // 他人の下書きは管理者のみ（scope=team の下書き参照と同じ基準）
+      if (target.status !== 'submitted' && user.role !== 'admin') {
+        throw err('AKO-GEN-002', '対象の日報が見つかりません', 404)
+      }
+      // F-16-6 の参照 deny は一覧フィルタ（filterViewable）と同じく管理者にも適用される
+      const rules = await activePermissionRules(pool)
+      if (rules.length > 0 && !canViewMemberReports(rules, subjectOf(user), target.memberId)) {
+        throw err('AKO-GEN-002', '対象の日報が見つかりません', 404)
+      }
+    }
+    return target
+  }
+
+  // コメント（提出済み日報に対して。参照ガード = guardCommentTarget）
   app.get('/:reportId/comments', async (c) => {
+    const reportId = c.req.param('reportId')
+    await guardCommentTarget(c, reportId)
     const { rows } = await pool.query(
       `SELECT id, report_id AS "reportId", member_id AS "memberId", body, reactions, at
        FROM report_comments WHERE report_id = $1 ORDER BY at, created_at`,
-      [c.req.param('reportId')])
+      [reportId])
     return c.json({ data: rows })
   })
 
@@ -346,11 +396,7 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
     const body = await c.req.json().catch(() => ({})) as { body?: string }
     const text = (body.body ?? '').trim()
     if (!text) throw err('AKO-GEN-001', 'コメントを入力してください', 400)
-    const report = await pool.query<{ id: string; authorKind: string; memberId: string | null; date: string }>(
-      `SELECT id, author_kind AS "authorKind", member_id AS "memberId", date FROM daily_reports WHERE id = $1`,
-      [reportId])
-    const target = report.rows[0]
-    if (!target) throw err('AKO-GEN-002', '対象の日報が見つかりません', 404)
+    const target = await guardCommentTarget(c, reportId)
     const id = newId('rc')
     await pool.query(
       `INSERT INTO report_comments (id, report_id, member_id, body, at) VALUES ($1, $2, $3, $4, $5)`,
@@ -400,6 +446,12 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
     const user = c.get('user')
     const weekStart = String(c.req.query('weekStart') ?? '')
     if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) throw err('AKO-GEN-001', 'weekStart（YYYY-MM-DD）を指定してください', 400)
+    // 暦上不正な日付（2026-02-31 等）は addDays が NaN 文字列を返し pg 側で 500 になるため、ここで 400 に落とす。
+    // 週初め = 月曜（weekStartOf と同一規約）以外も集計が週とずれるため弾く
+    const wsDate = new Date(`${weekStart}T00:00:00Z`)
+    if (Number.isNaN(wsDate.getTime()) || wsDate.toISOString().slice(0, 10) !== weekStart || wsDate.getUTCDay() !== 1) {
+      throw err('AKO-GEN-001', 'weekStart には実在する週初め（月曜）の日付を指定してください', 400)
+    }
     const weekEnd = addDays(weekStart, 6)
     const rules = await activePermissionRules(pool)
     const subject = subjectOf(user)
@@ -436,8 +488,10 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
         `SELECT kind, count(*)::text AS n FROM notes
          WHERE active = true AND (created_at AT TIME ZONE 'Asia/Tokyo')::date BETWEEN $1::date AND $2::date
          GROUP BY kind`, [weekStart, weekEnd]),
-      pool.query<{ total: string | null }>(
-        `SELECT sum(amount)::text AS total FROM sales_monthly WHERE month = $1`, [weekStart.slice(0, 7)]),
+      canSales
+        ? pool.query<{ total: string | null }>(
+            `SELECT sum(amount)::text AS total FROM sales_monthly WHERE month = $1`, [weekStart.slice(0, 7)])
+        : Promise.resolve<{ rows: { total: string | null }[] }>({ rows: [] }),
     ])
 
     const nameOf = new Map(membersQ.rows.map(m => [m.id, m.name]))
@@ -447,7 +501,11 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
     const reporters = new Set<string>()
     const issues: { member: string; issue: string }[] = []
     let totalHours = 0
-    for (const r of dailyQ.rows) {
+    // 日報参照権限（F-16-6）: deny 対象者の日報は集計にも入れない（メンバー名・課題の漏えい防止）
+    const visibleDaily = rules.length === 0
+      ? dailyQ.rows
+      : dailyQ.rows.filter(r => !r.memberId || canViewMemberReports(rules, subject, r.memberId))
+    for (const r of visibleDaily) {
       const name = (r.memberId && nameOf.get(r.memberId)) || '不明'
       reporters.add(r.memberId ?? name)
       daily.set(r.date, (daily.get(r.date) ?? 0) + 1)
@@ -464,7 +522,7 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
     const metrics: WeeklyMetrics = {
       weekStart,
       weekEnd,
-      reportSubmitted: dailyQ.rows.length,
+      reportSubmitted: visibleDaily.length,
       reporters: reporters.size,
       membersActive: membersQ.rows.length,
       totalHours: Math.round(totalHours * 4) / 4,

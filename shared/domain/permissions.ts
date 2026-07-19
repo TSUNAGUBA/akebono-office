@@ -142,7 +142,8 @@ export const AI_SCOPE_FIELD = 'ai-scope'
 export const AI_SCOPE_FEATURES: { key: string; label: string; defaultScope: 'all' | 'own' }[] = [
   { key: 'poipoi', label: 'ぽいぽいポスト', defaultScope: 'all' },
   { key: 'attendance', label: '勤怠（労働時間・有給）', defaultScope: 'own' },
-  { key: 'ai-assistant', label: 'タスク計画・カレンダー', defaultScope: 'own' },
+  // 'all' で供給されるのはチームのタスク計画のみ（カレンダー予定は本人分に限る）。ラベルは実挙動に合わせる
+  { key: 'ai-assistant', label: 'タスク計画', defaultScope: 'own' },
 ]
 
 /**
@@ -163,4 +164,27 @@ export function aiReferenceScope(
     if (layer.length > 0) return layer.every(r => r.effect === 'allow') ? 'all' : 'own'
   }
   return def
+}
+
+// ---------- 日報の参照対象（バッチ7h・オペレーター指示 2026-07-19 #10 = F-16-6） ----------
+
+/**
+ * 日報の参照対象の擬似フィールド（permission_rules.field）。
+ * resource = 'reports'・field = `member:<対象メンバー id>`・effect: deny = その対象者の日報を参照不可。
+ * 未設定 = 参照可（下位互換 = 従来の「提出済みは全員参照可」を維持）。解決は canViewField と同一
+ */
+export const REPORT_MEMBER_FIELD_PREFIX = 'member:'
+
+/**
+ * 対象メンバーの日報（提出済み）を参照できるか。
+ * 自分の日報は常に参照可（deny ルールの設定ミスで本人の記録が見えなくなる事故を防ぐ）。
+ * 適用範囲: チームマトリクス・全員の日報・詳細表示・API の日報一覧・チャットボットの他人日報文脈
+ */
+export function canViewMemberReports(
+  rules: PermissionRule[],
+  subject: PermissionSubject,
+  targetMemberId: string,
+): boolean {
+  if (targetMemberId === subject.memberId) return true
+  return resolve(rules, subject, 'reports', `${REPORT_MEMBER_FIELD_PREFIX}${targetMemberId}`)
 }

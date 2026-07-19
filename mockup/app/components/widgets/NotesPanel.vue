@@ -33,6 +33,8 @@ const members = tbl('members')
 
 const form = ref({ title: '', body: '', projectId: '', companyId: '', workCategoryId: '' })
 const saving = ref(false)
+// 入力モーダル（バッチ7h: 参照 = 基本ビュー・入力 = ボタン押下でモーダル表示。指示 #10 ④）
+const composeOpen = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 // マークダウンプレビュー（入力はプレーンテキストのまま = 記法はそのまま保存され、表示時に描画される）
 const previewing = ref(false)
@@ -58,6 +60,7 @@ async function submit(): Promise<void> {
     show(`${noun.value}を登録しました（AI の参照対象になります）`)
     form.value = { ...form.value, title: '', body: '' }
     previewing.value = false
+    composeOpen.value = false
   } finally {
     saving.value = false
   }
@@ -89,6 +92,7 @@ async function submitImport(): Promise<void> {
     show(`「${stagedFile.value.name}」を取り込みました（AI の参照対象になります。誤操作は一覧から取消できます）`)
     stagedFile.value = null
     form.value = { ...form.value, title: '' } // タイトル欄も取込へ適用済み。次の登録へ引き継がない
+    composeOpen.value = false
   } finally {
     saving.value = false
   }
@@ -167,13 +171,89 @@ function authorOf(n: Note): string {
 
 <template>
   <div class="grid gap-3">
+    <!-- 一覧 = 基本ビュー（バッチ7h: 入力はヘッダーのボタン → モーダル。指示 #10 ④） -->
     <UiSectionCard
+      :title="`${noun}一覧（${notes.list.value.length}件）`"
+      :description="`登録日時・${kind === 'minutes' ? '投稿者・' : ''}冒頭を一覧表示。押下で全文を表示します`"
+      flush
+    >
+      <template #actions>
+        <button type="button" class="btn btn-primary btn-sm" @click="composeOpen = true">
+          <Send class="h-3.5 w-3.5" aria-hidden="true" />
+          {{ kind === 'poipoi' ? 'ポストを投げ込む' : '議事録を登録する' }}
+        </button>
+      </template>
+      <UiEmptyState
+        v-if="notes.list.value.length === 0"
+        icon="StickyNote"
+        :title="`まだ${noun}がありません`"
+        :hint="`「${kind === 'poipoi' ? 'ポストを投げ込む' : '議事録を登録する'}」からテキスト登録またはファイル取込ができます`"
+      />
+      <ul v-else class="divide-y divide-line">
+        <li v-for="n in notes.list.value" :key="n.id" class="flex items-start gap-1 px-4 py-2.5">
+          <button
+            type="button"
+            class="min-w-0 flex-1 rounded-md text-left transition-colors hover:bg-brand-soft"
+            :aria-label="`「${n.title}」の詳細を表示`"
+            @click="openDetail(n, !!showAuthor)"
+          >
+            <span class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+              <span class="text-[13px] font-bold">{{ n.title }}</span>
+              <span v-if="n.source === 'upload'" class="rounded-full bg-surface-soft border border-line px-2 text-[10px] text-sub">取込</span>
+              <span class="num ml-auto text-[11px] text-muted">{{ fmtDateLong(n.createdAt) }}</span>
+            </span>
+            <span class="mt-0.5 block text-[12px] leading-relaxed text-sub">{{ summaryOf(n) }}</span>
+            <span v-if="linkLabels(n).length > 0 || showAuthor" class="mt-1 flex flex-wrap gap-1 text-[11px] text-muted">
+              <span v-if="showAuthor">{{ authorOf(n) }}</span>
+              <span
+                v-for="l in linkLabels(n)"
+                :key="l"
+                class="rounded-full bg-surface-soft border border-line px-2 py-0.5"
+              >{{ l }}</span>
+            </span>
+          </button>
+          <button
+            v-if="canArchive(n)"
+            type="button"
+            class="btn btn-ghost btn-sm shrink-0"
+            :aria-label="`「${n.title}」を取り消す`"
+            @click="onArchive(n)"
+          >
+            <Trash2 class="h-3.5 w-3.5 text-crit" aria-hidden="true" />
+          </button>
+        </li>
+      </ul>
+      <!-- 取消済み（復元権限のある行のみ）。誤って取り消した場合の立ち戻り導線 -->
+      <div v-if="notes.archived.value.length > 0" class="border-t border-line px-4 py-2">
+        <button type="button" class="btn btn-ghost btn-sm" @click="showArchived = !showArchived">
+          {{ showArchived ? '取消済みを隠す' : `取消済みを表示（${notes.archived.value.length}件）` }}
+        </button>
+        <ul v-if="showArchived" class="mt-1 divide-y divide-line">
+          <li v-for="n in notes.archived.value" :key="n.id" class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 py-2">
+            <p class="text-[13px] text-muted line-through">{{ n.title }}</p>
+            <span class="num ml-auto text-[11px] text-muted">{{ fmtDateLong(n.createdAt) }}</span>
+            <button type="button" class="btn btn-ghost btn-sm" :disabled="restoring" :aria-label="`「${n.title}」を復元する`" @click="onRestore(n)">
+              <RotateCcw class="h-3.5 w-3.5" aria-hidden="true" />
+              元に戻す
+            </button>
+          </li>
+        </ul>
+      </div>
+    </UiSectionCard>
+
+    <!-- 入力モーダル（テキスト登録 + ファイル取込。バッチ7h で一覧上部の同居フォームから移設） -->
+    <UiModal
+      :open="composeOpen"
       :title="kind === 'poipoi' ? 'ポストを投げ込む' : '議事録を登録する'"
-      :description="kind === 'poipoi'
-        ? '思いついたこと・気づき・改善アイデアをそのまま。日報ドラフトの材料になり、AI の参照対象（自分のみ）になります。管理者はフィードバック・チーム改善のためオリジナルを閲覧できます'
-        : '会議の記録を蓄積します。全員が参照でき、AI チャットボット・AI業務アシスタントの参照対象になります'"
+      width="680px"
+      @close="composeOpen = false"
     >
       <div class="grid gap-2">
+        <p class="text-[12px] text-muted">
+          {{ kind === 'poipoi'
+            ? '思いついたこと・気づき・改善アイデアをそのまま。日報ドラフトの材料になり、AI の参照対象になります。管理者はフィードバック・チーム改善のためオリジナルを閲覧できます'
+            : '会議の記録を蓄積します。全員が参照でき、AI チャットボット・AI業務アシスタントの参照対象になります' }}
+        </p>
         <input
           v-if="kind === 'minutes'"
           v-model="form.title"
@@ -230,70 +310,7 @@ function authorOf(n: Note): string {
         </div>
         <p class="text-[11px] text-muted">本文はマークダウン記法（見出し・箇条書き・強調・リンク等）に対応。ファイル取込は .md / .txt / .pdf / .docx（10MB まで。旧 .doc は .docx へ変換してください）。上の紐付けセレクト{{ kind === 'minutes' ? 'とタイトル欄' : '' }}は取込にも適用されます</p>
       </div>
-    </UiSectionCard>
-
-    <UiSectionCard
-      :title="`${noun}一覧（${notes.list.value.length}件）`"
-      :description="`登録日時・${kind === 'minutes' ? '投稿者・' : ''}冒頭を一覧表示。押下で全文を表示します`"
-      flush
-    >
-      <UiEmptyState
-        v-if="notes.list.value.length === 0"
-        icon="StickyNote"
-        :title="`まだ${noun}がありません`"
-        hint="上のフォームから登録するか、ファイルを取り込んでください"
-      />
-      <ul v-else class="divide-y divide-line">
-        <li v-for="n in notes.list.value" :key="n.id" class="flex items-start gap-1 px-4 py-2.5">
-          <button
-            type="button"
-            class="min-w-0 flex-1 rounded-md text-left transition-colors hover:bg-brand-soft"
-            :aria-label="`「${n.title}」の詳細を表示`"
-            @click="openDetail(n, !!showAuthor)"
-          >
-            <span class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-              <span class="text-[13px] font-bold">{{ n.title }}</span>
-              <span v-if="n.source === 'upload'" class="rounded-full bg-surface-soft border border-line px-2 text-[10px] text-sub">取込</span>
-              <span class="num ml-auto text-[11px] text-muted">{{ fmtDateLong(n.createdAt) }}</span>
-            </span>
-            <span class="mt-0.5 block text-[12px] leading-relaxed text-sub">{{ summaryOf(n) }}</span>
-            <span v-if="linkLabels(n).length > 0 || showAuthor" class="mt-1 flex flex-wrap gap-1 text-[11px] text-muted">
-              <span v-if="showAuthor">{{ authorOf(n) }}</span>
-              <span
-                v-for="l in linkLabels(n)"
-                :key="l"
-                class="rounded-full bg-surface-soft border border-line px-2 py-0.5"
-              >{{ l }}</span>
-            </span>
-          </button>
-          <button
-            v-if="canArchive(n)"
-            type="button"
-            class="btn btn-ghost btn-sm shrink-0"
-            :aria-label="`「${n.title}」を取り消す`"
-            @click="onArchive(n)"
-          >
-            <Trash2 class="h-3.5 w-3.5 text-crit" aria-hidden="true" />
-          </button>
-        </li>
-      </ul>
-      <!-- 取消済み（復元権限のある行のみ）。誤って取り消した場合の立ち戻り導線 -->
-      <div v-if="notes.archived.value.length > 0" class="border-t border-line px-4 py-2">
-        <button type="button" class="btn btn-ghost btn-sm" @click="showArchived = !showArchived">
-          {{ showArchived ? '取消済みを隠す' : `取消済みを表示（${notes.archived.value.length}件）` }}
-        </button>
-        <ul v-if="showArchived" class="mt-1 divide-y divide-line">
-          <li v-for="n in notes.archived.value" :key="n.id" class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 py-2">
-            <p class="text-[13px] text-muted line-through">{{ n.title }}</p>
-            <span class="num ml-auto text-[11px] text-muted">{{ fmtDateLong(n.createdAt) }}</span>
-            <button type="button" class="btn btn-ghost btn-sm" :disabled="restoring" :aria-label="`「${n.title}」を復元する`" @click="onRestore(n)">
-              <RotateCcw class="h-3.5 w-3.5" aria-hidden="true" />
-              元に戻す
-            </button>
-          </li>
-        </ul>
-      </div>
-    </UiSectionCard>
+    </UiModal>
 
     <!-- 管理者の全ポスト閲覧（ぽいぽいポストのみ。フィードバック・チーム改善用途 = バッチ7e）。
          0 件でもセクションを出す = 再読み込みボタンで新着を確認できる導線を常設 -->

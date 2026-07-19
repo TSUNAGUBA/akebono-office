@@ -8,7 +8,8 @@
  * 既定は allow（ルール未設定なら挙動不変）。既存のロールガードを緩めることはできない（制限レイヤ）。
  */
 import {
-  canUseFeature, canViewField, featureKeyOfPath, type PermissionSubject,
+  canUseFeature, canViewField, canViewMemberReports as canViewMemberReportsShared,
+  featureKeyOfPath, type PermissionSubject,
 } from '../../../shared/domain/permissions'
 
 export function usePermissions() {
@@ -35,5 +36,10 @@ export function usePermissions() {
     return canViewField(rules.value, subject.value, resource, field)
   }
 
-  return { can, canPath, canField }
+  /** 対象メンバーの日報を参照できるか（F-16-6・バッチ7h。自分は常に可・未設定 = 可） */
+  function canViewMemberReports(targetMemberId: string): boolean {
+    return canViewMemberReportsShared(rules.value, subject.value, targetMemberId)
+  }
+
+  return { can, canPath, canField, canViewMemberReports }
 }
