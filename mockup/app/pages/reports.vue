@@ -12,6 +12,8 @@ import {
 import type { DailyReport, ReportEntry, WeeklyReport } from '~/types/domain'
 import { REPORT_STATUS_LABELS } from '~/composables/useReports'
 import { addDays, fmtDate, fmtDateLong, fmtMinutes, fmtTime, weekdayOf } from '~/utils/format'
+import { EMPLOYMENT_TYPE_LABELS, EMPLOYMENT_TYPE_TONES } from '~/utils/labels'
+import { parseTeamVisibleIds } from '~/utils/team-visibility'
 import type { TabItem, TableColumn } from '~/types/ui'
 
 const route = useRoute()
@@ -327,27 +329,29 @@ const teamSettingsOpen = ref(false)
 const teamSettingsDraft = ref<string[]>([])
 const teamSettingsSaving = ref(false)
 
+// 候補 = 在籍中の全メンバー（バッチ7k）。雇用区分バッジで取締役・外注を判別できるようにする
 const teamCandidateOptions = computed(() =>
-  reports.teamMemberCandidates.value.map(m => ({ value: m.id, label: m.name })))
+  reports.teamMemberCandidates.value.map(m => ({
+    value: m.id,
+    label: m.name,
+    tag: EMPLOYMENT_TYPE_LABELS[m.employmentType] ?? m.employmentType,
+    tagTone: EMPLOYMENT_TYPE_TONES[m.employmentType] ?? 'neutral',
+  })))
 
 function openTeamSettings(): void {
-  try {
-    const arr = JSON.parse(getConfig('teamVisibleMemberIds', '[]')) as unknown
-    teamSettingsDraft.value = Array.isArray(arr) ? arr.filter((x): x is string => typeof x === 'string') : []
-  } catch {
-    teamSettingsDraft.value = []
-  }
+  // 解釈は utils/team-visibility.ts と共通（未設定・不正 = null = 既定表示 → 空ドラフト）
+  teamSettingsDraft.value = [...(parseTeamVisibleIds(getConfig('teamVisibleMemberIds', '')) ?? [])]
   teamSettingsOpen.value = true
 }
 
-/** 保存（空選択 = 全員表示に戻す。取消フロー = いつでも再設定・全員に戻すが可能） */
+/** 保存（空選択 = 既定の表示に戻す。取消フロー = いつでも再設定・既定に戻すが可能） */
 async function saveTeamSettings(reset = false): Promise<void> {
   teamSettingsSaving.value = true
   try {
     const value = reset || teamSettingsDraft.value.length === 0 ? '' : JSON.stringify(teamSettingsDraft.value)
     await setConfig('teamVisibleMemberIds', value)
     teamSettingsOpen.value = false
-    show(value ? '表示メンバーを保存しました' : '全員表示に戻しました')
+    show(value ? '表示メンバーを保存しました' : '既定の表示に戻しました')
   } finally {
     teamSettingsSaving.value = false
   }
@@ -1158,11 +1162,13 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
       </div>
     </UiDrawer>
 
-    <!-- チームタブの表示メンバー設定（管理者。バッチ7h。空選択 = 全員表示 = 取消フロー） -->
+    <!-- チームタブの表示メンバー設定（管理者。バッチ7h → 7k で候補を在籍全メンバーへ拡大。空選択 = 既定表示 = 取消フロー） -->
     <UiModal :open="teamSettingsOpen" title="チームタブの表示メンバー" width="560px" @close="teamSettingsOpen = false">
       <div class="grid gap-2">
         <p class="text-[12px] text-muted">
-          提出状況マトリクス・タイムラインに表示するメンバーを選びます。未選択のまま保存すると全員表示に戻ります。
+          提出状況マトリクス・タイムラインに表示するメンバーを選びます。取締役・外注を含む在籍中の全メンバーから
+          選択できます（雇用区分はバッジで表示）。未選択のまま保存すると既定の表示
+          （マトリクス = 社員・契約・アルバイト / タイムライン = 全員）に戻ります。
           誰の日報を参照できるかは権限設定（日報の参照対象）でロール・役職・個人ごとに制御できます
         </p>
         <UiMultiCombobox
@@ -1173,7 +1179,7 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
         />
       </div>
       <template #footer>
-        <button type="button" class="btn" :disabled="teamSettingsSaving" @click="saveTeamSettings(true)">全員表示に戻す</button>
+        <button type="button" class="btn" :disabled="teamSettingsSaving" @click="saveTeamSettings(true)">既定の表示に戻す</button>
         <button type="button" class="btn btn-primary" :disabled="teamSettingsSaving" @click="saveTeamSettings()">
           {{ teamSettingsSaving ? '保存中…' : '保存' }}
         </button>
