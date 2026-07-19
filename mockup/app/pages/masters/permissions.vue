@@ -33,6 +33,81 @@ const FIELD_RESOURCES: { key: string; label: string }[] = [
   { key: 'knowledge', label: 'ナレッジ' },
 ]
 
+/**
+ * 項目キーの論理名カタログ（オペレーター指示 2026-07-19: 物理名の手入力を廃止し、
+ * 論理名のオートコンプリートで選択させる）。物理キー = shared/domain/types.ts の各インターフェース
+ * （id・active・カスタム項目は制御対象外のため掲載しない）
+ */
+const FIELD_CATALOG: Record<string, { value: string; label: string }[]> = {
+  members: [
+    { value: 'name', label: '氏名' },
+    { value: 'email', label: 'メールアドレス' },
+    { value: 'employmentType', label: '雇用区分' },
+    { value: 'departmentId', label: '所属部署' },
+    { value: 'title', label: '役職' },
+    { value: 'role', label: '権限ロール' },
+    { value: 'hireDate', label: '入社日' },
+    { value: 'weeklyDays', label: '週所定日数' },
+    { value: 'weeklyHours', label: '週所定時間' },
+    { value: 'punchRequired', label: '打刻要否' },
+    { value: 'googleCalendarConnected', label: 'カレンダー連携状態' },
+    { value: 'attendanceRuleId', label: '勤務体系' },
+    { value: 'birthDate', label: '生年月日' },
+    { value: 'avatar', label: 'プロフィール画像' },
+  ],
+  companies: [
+    { value: 'kind', label: '区分（自社/顧客）' },
+    { value: 'name', label: '会社名' },
+    { value: 'aliases', label: '別名' },
+    { value: 'industryIds', label: '業界' },
+    { value: 'primaryIndustryId', label: '主業界' },
+    { value: 'size', label: '規模' },
+    { value: 'location', label: '所在地' },
+    { value: 'description', label: '概要' },
+    { value: 'ownerMemberId', label: '自社担当' },
+    { value: 'fiscalStartMonth', label: '会計年度開始月' },
+  ],
+  contacts: [
+    { value: 'companyId', label: '所属会社' },
+    { value: 'name', label: '氏名' },
+    { value: 'dept', label: '部署' },
+    { value: 'title', label: '役職' },
+    { value: 'keyPerson', label: 'キーパーソン度' },
+    { value: 'email', label: 'メールアドレス' },
+    { value: 'phone', label: '電話番号' },
+    { value: 'notes', label: 'メモ' },
+  ],
+  projects: [
+    { value: 'name', label: 'プロジェクト名' },
+    { value: 'companyId', label: '顧客（会社）' },
+    { value: 'type', label: '種別' },
+    { value: 'status', label: '状態' },
+    { value: 'priority', label: '優先度' },
+    { value: 'ownerMemberId', label: '担当者' },
+    { value: 'memberIds', label: '参画メンバー' },
+    { value: 'startDate', label: '開始日' },
+    { value: 'endDate', label: '終了日' },
+    { value: 'budget', label: '予算' },
+    { value: 'objective', label: '目的' },
+  ],
+  knowledge: [
+    { value: 'domain', label: 'ドメイン' },
+    { value: 'targetId', label: '対象' },
+    { value: 'title', label: 'タイトル' },
+    { value: 'body', label: '本文' },
+    { value: 'tags', label: 'タグ' },
+    { value: 'source', label: '出典' },
+    { value: 'sourceRefId', label: '出典参照' },
+    { value: 'updatedAt', label: '更新日時' },
+  ],
+}
+
+/** 項目キーの論理名（カタログ外 = 過去に手入力された物理名などはそのまま表示） */
+function fieldLabel(resource: string, field: string | null | undefined): string {
+  if (!field) return ''
+  return FIELD_CATALOG[resource]?.find(f => f.value === field)?.label ?? field
+}
+
 const resourceOptions = [
   ...FEATURE_PERMISSION_KEYS.map(f => ({ value: f.key, label: `機能: ${f.label}` })),
   ...FIELD_RESOURCES.map(f => ({ value: f.key, label: `マスタ項目: ${f.label}` })),
@@ -82,9 +157,18 @@ const form = ref({
   subjectKind: 'role' as PermissionRule['subjectKind'],
   subjectId: '',
   resource: '',
-  field: '',
+  /** 選択した項目キー（複数選択 = 1 項目 1 ルールで一括作成。編集時は単一選択） */
+  fields: [] as string[],
   effect: 'deny' as PermissionRule['effect'],
 })
+
+/** 選択中リソースが表示項目制御に対応しているか（機能リソースは項目指定なし） */
+const isFieldResource = computed(() => form.value.resource in FIELD_CATALOG)
+const fieldOptions = computed(() => FIELD_CATALOG[form.value.resource] ?? [])
+
+// リソース/レイヤ変更時のリセットは watch ではなくセレクトの change ハンドラで行う
+// （watch だと openEdit のフォーム丸ごと差し替えにも発火し、編集初期値の項目・対象を
+// 消してしまう = 無変更保存でルールが「マスタ全体」へ静かに拡大する実バグ。レビュー R-1）
 
 const subjectOptions = computed(() => {
   if (form.value.subjectKind === 'role') {
@@ -98,12 +182,12 @@ const subjectOptions = computed(() => {
   return (memberCrud.activeList.value as Member[]).map(m => ({ value: m.id, label: m.name }))
 })
 
-// レイヤ変更時は対象をリセット（前レイヤの値が残らないように）
-watch(() => form.value.subjectKind, () => { form.value.subjectId = '' })
+// レイヤ変更時の対象リセットもセレクトの change ハンドラで行う（上記 R-1 と同じ理由。
+// こちらは保存時バリデーションで止まるため静かな破壊にはならないが「編集で対象欄が空く」UX バグだった）
 
 function openCreate(): void {
   editingId.value = null
-  form.value = { subjectKind: 'role', subjectId: '', resource: '', field: '', effect: 'deny' }
+  form.value = { subjectKind: 'role', subjectId: '', resource: '', fields: [], effect: 'deny' }
   modalOpen.value = true
 }
 
@@ -113,9 +197,21 @@ function openEdit(row: Record<string, unknown>): void {
   editingId.value = r.id
   form.value = {
     subjectKind: r.subjectKind, subjectId: r.subjectId,
-    resource: r.resource, field: r.field ?? '', effect: r.effect,
+    resource: r.resource, fields: r.field ? [r.field] : [], effect: r.effect,
   }
   modalOpen.value = true
+}
+
+/** 同一のルール（レイヤ・対象・リソース・項目・効果）が既に有効で存在するか */
+function ruleExists(field: string | null): boolean {
+  return (ruleCrud.list.value as PermissionRule[]).some(r =>
+    r.active
+    && r.id !== editingId.value
+    && r.subjectKind === form.value.subjectKind
+    && r.subjectId === form.value.subjectId
+    && r.resource === form.value.resource
+    && (r.field ?? null) === field
+    && r.effect === form.value.effect)
 }
 
 async function save(): Promise<void> {
@@ -123,20 +219,48 @@ async function save(): Promise<void> {
     toast.show('AKO-GEN-001: 対象とリソースを選択してください', 'crit')
     return
   }
-  const payload: Partial<PermissionRule> & { id?: string } = {
+  const base = {
     subjectKind: form.value.subjectKind,
     subjectId: form.value.subjectId,
     resource: form.value.resource,
-    field: form.value.field.trim() || null,
     effect: form.value.effect,
   }
-  if (editingId.value) payload.id = editingId.value
-  const res = await ruleCrud.save(payload)
-  if (!res.ok) {
-    toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
+  // 編集 = 単一ルールの更新 / 追加 = 選択した項目ぶんのルールを一括作成（1 項目 1 ルール = スキーマ不変）
+  if (editingId.value) {
+    // 変更後の内容が別の有効ルールと同一になる場合は重複を作らせない（ruleExists は自ルールを除外）
+    if (ruleExists(form.value.fields[0] ?? null)) {
+      toast.show('同一の権限ルールが既に存在します', 'warn')
+      return
+    }
+    const res = await ruleCrud.save({ ...base, id: editingId.value, field: form.value.fields[0] ?? null })
+    if (!res.ok) {
+      toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
+      return
+    }
+    toast.show('権限ルールを更新しました')
+    modalOpen.value = false
     return
   }
-  toast.show(editingId.value ? '権限ルールを更新しました' : '権限ルールを追加しました')
+  const fields: (string | null)[] = isFieldResource.value && form.value.fields.length > 0
+    ? form.value.fields
+    : [null]
+  let created = 0
+  let skipped = 0
+  for (const field of fields) {
+    if (ruleExists(field)) {
+      skipped++
+      continue
+    }
+    const res = await ruleCrud.save({ ...base, field })
+    if (!res.ok) {
+      toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
+      return
+    }
+    created++
+  }
+  toast.show(created > 0
+    ? `権限ルールを ${created} 件追加しました${skipped > 0 ? `（同一ルール ${skipped} 件はスキップ）` : ''}`
+    : '同一のルールが既に存在するため追加しませんでした', created > 0 ? 'ok' : 'warn')
   modalOpen.value = false
 }
 
@@ -195,7 +319,10 @@ async function restoreRule(): Promise<void> {
           {{ row.resourceName }}
         </template>
         <template #cell-field="{ row }">
-          <span class="num text-xs">{{ row.field || '—' }}</span>
+          <span v-if="asRule(row).field" class="text-xs" :title="`物理キー: ${asRule(row).field}`">
+            {{ fieldLabel(asRule(row).resource, asRule(row).field) }}
+          </span>
+          <span v-else class="text-xs text-muted">—</span>
         </template>
         <template #cell-effect="{ row }">
           <UiStatusBadge
@@ -218,16 +345,35 @@ async function restoreRule(): Promise<void> {
               v-model="form.subjectKind"
               :options="Object.entries(KIND_LABELS).map(([value, label]) => ({ value, label }))"
               aria-label="レイヤ"
+              @update:model-value="form.subjectId = ''"
             />
           </UiFormField>
           <UiFormField label="対象" required>
             <UiSelect v-model="form.subjectId" :options="subjectOptions" empty-label="対象を選択" aria-label="対象" />
           </UiFormField>
-          <UiFormField label="リソース" required hint="機能 = 利用可否 / マスタ項目 = 項目キーとあわせて表示制御">
-            <UiSelect v-model="form.resource" :options="resourceOptions" empty-label="リソースを選択" aria-label="リソース" />
+          <UiFormField label="リソース" required hint="機能 = 利用可否 / マスタ項目 = 項目とあわせて表示制御">
+            <UiSelect
+              v-model="form.resource"
+              :options="resourceOptions"
+              empty-label="リソースを選択"
+              aria-label="リソース"
+              @update:model-value="form.fields = []"
+            />
           </UiFormField>
-          <UiFormField label="項目キー（任意）" hint="表示項目レベルの制御時のみ。例: email / phone / notes（空欄 = 機能全体）">
-            <input v-model="form.field" type="text" class="input" placeholder="例: email">
+          <UiFormField
+            v-if="isFieldResource"
+            label="項目（任意）"
+            :hint="editingId
+              ? '項目名で検索して 1 件選択（未選択 = マスタ全体）'
+              : '項目名で検索して選択。複数選択すると 1 項目 1 ルールで一括作成されます（未選択 = マスタ全体）'"
+          >
+            <UiMultiCombobox
+              v-model="form.fields"
+              :options="fieldOptions"
+              :single="!!editingId"
+              placeholder="例: 役職・メールアドレス"
+              aria-label="制御する項目"
+            />
           </UiFormField>
           <UiFormField label="効果" required>
             <UiSelect
