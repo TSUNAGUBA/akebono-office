@@ -111,7 +111,8 @@ export function assistRoutes(pool: pg.Pool, env: Env): Hono {
       // ぽいぽいメモ（バッチ7c で独立メニュー化 = notes が SoT。旧 assist_logs の memo も logsQ で読む = 下位互換）
       pool.query<{ id: string; body: string; at: string }>(
         `SELECT id, body, created_at AS at FROM notes
-         WHERE member_id = $1 AND kind = 'poipoi' AND ((created_at AT TIME ZONE 'Asia/Tokyo')::date = $2::date)
+         WHERE member_id = $1 AND kind = 'poipoi' AND active = true
+           AND ((created_at AT TIME ZONE 'Asia/Tokyo')::date = $2::date)
          ORDER BY created_at, id LIMIT 100`,
         [user.id, date]),
     ])

@@ -85,6 +85,8 @@ export interface Note {
   workCategoryId: string | null
   source: 'text' | 'upload'
   createdAt: string
+  /** 取消（論理削除）済みは false。既存データ・モック旧データは未設定 = 有効（原則7） */
+  active?: boolean
 }
 
 export interface Industry {

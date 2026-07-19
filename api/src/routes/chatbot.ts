@@ -64,6 +64,21 @@ function entriesSummary(entries: unknown): string {
 }
 
 /**
+ * 言及エンティティの解決（今回の質問 → 履歴の新しい順、の優先順）。
+ * オペレーター報告 2026-07-18 #3「履歴中の別会社が今回の質問の会社に勝つ」の修正と同じ優先順を、
+ * 会社ブロックと混入防止フィルタで共通化する。照合は findCompanyIn の正規化・最長一致を再利用
+ * （プロジェクト名にも法人格除去・空白/全半角正規化は無害）
+ */
+function findMentionedIn<T extends { name: string; aliases?: string[] | null }>(
+  question: string,
+  historyUserTexts: string[],
+  rows: T[],
+): T | undefined {
+  return findCompanyIn(question, rows)
+    ?? [...historyUserTexts].reverse().map(t => findCompanyIn(t, rows)).find(Boolean)
+}
+
+/**
  * 質問に関連しそうな社内文脈を収集する（バッチ5d: DB の全移行済みドメイン）。
  * - ドメインごとに権限（F-16 canUseFeature）で生成可否を判定 = チャットボットの参照範囲も権限に従う
  * - マスタ由来の文脈は stripDeniedFields で表示項目 deny を反映（補助マスタ = 業界・関係種別・
@@ -410,12 +425,11 @@ export async function buildContext(
       `SELECT id, kind, name, aliases, industry_ids AS "industryIds",
               primary_industry_id AS "primaryIndustryId", owner_member_id AS "ownerMemberId",
               description, location, size, fiscal_start_month AS "fiscalStartMonth"
-       FROM companies WHERE active = true ORDER BY id LIMIT 100`)
+       FROM companies WHERE active = true ORDER BY id LIMIT 1000`)
     // 照合は正規化名寄せ（法人格・空白除去 = 「つなぐば」→「つなぐば株式会社」）+ 最長一致。
     // 優先順: 今回の質問 → 直近のユーザー発言（新しい順）→ 自社キーワード
-    // （オペレーター報告 2026-07-18 #3: 履歴中の別会社が今回の質問の会社に勝つ誤りを解消）
-    const company = findCompanyIn(question, companies)
-      ?? [...historyUserTexts].reverse().map(t => findCompanyIn(t, companies)).find(Boolean)
+    // （オペレーター報告 2026-07-18 #3: 履歴中の別会社が今回の質問の会社に勝つ誤りを解消 = findMentionedIn）
+    const company = findMentionedIn(question, historyUserTexts, companies)
       ?? (SELF_COMPANY_PATTERN.test(topic) ? companies.find(c => c.kind === 'self') : undefined)
     if (!company) return
     renderedKeys.add(`company:${company.id}`)
@@ -624,12 +638,35 @@ export async function buildContext(
   // 照合は生データ・描画は segments の表示項目チェック（canViewField）通過行のみ = 既存パターン）
   await block(async () => {
     const hits = await searchDocsFor(pool, env, question, user.id)
+    // 混入防止（オペレーター指示 2026-07-19 #5）: 質問が特定の顧客/プロジェクトに解決された場合、
+    // 「別の顧客/プロジェクトに紐付くノート」は関係のない情報として文脈から除外する。
+    // 紐付けなしのノートは対象外（全般メモとして従来どおりスコア勝負）
+    const noteHits = hits.some(h => h.sourceKind === 'note')
+    let mentionedCompanyId: string | null = null
+    let mentionedProjectId: string | null = null
+    if (noteHits) {
+      // 会社ブロックと同じ「今回の質問 → 履歴（新しい順）→ 自社キーワード」の優先順で解決する。
+      // topic（連結）への最長一致だと履歴中の別会社が今回の質問の会社に勝ち、関係あるノートを誤除外する
+      // （オペレーター報告 2026-07-18 #3 で修正済みのパターンをここで再導入しない）
+      const { rows: cos } = await pool.query<{ id: string; name: string; aliases: string[]; kind: string }>(
+        `SELECT id, name, aliases, kind FROM companies WHERE active = true ORDER BY id LIMIT 1000`)
+      mentionedCompanyId = (findMentionedIn(question, historyUserTexts, cos)
+        ?? (SELF_COMPANY_PATTERN.test(topic) ? cos.find(x => x.kind === 'self') : undefined))?.id ?? null
+      // プロジェクトも同じ優先順 + 正規化・最長一致（生 includes の「最初の一致」では別 PJ の誤除外が起きる）
+      const { rows: pjs } = await pool.query<{ id: string; name: string }>(
+        `SELECT id, name FROM projects WHERE active = true ORDER BY id LIMIT 1000`)
+      mentionedProjectId = findMentionedIn(question, historyUserTexts, pjs)?.id ?? null
+    }
     const lines: string[] = []
     for (const h of hits) {
       if (renderedKeys.has(`${h.sourceKind}:${h.sourceId}`)) continue
       // ノートは機能ガード（F-16）にも従う: poipoi（owner あり）= 'poipoi' / 議事録 = 'minutes'
       // （reports 等のドメイン文脈と同じ「deny で文脈から消える」挙動に統一）
       if (h.sourceKind === 'note' && !can(h.ownerMemberId ? 'poipoi' : 'minutes')) continue
+      if (h.sourceKind === 'note') {
+        if (mentionedCompanyId && h.links.companyId && h.links.companyId !== mentionedCompanyId) continue
+        if (mentionedProjectId && h.links.projectId && h.links.projectId !== mentionedProjectId) continue
+      }
       const titleCheck = TITLE_CHECKS[h.sourceKind]
       if (!canField(titleCheck.entity, titleCheck.field)) continue
       const segLines = (h.segments ?? [])

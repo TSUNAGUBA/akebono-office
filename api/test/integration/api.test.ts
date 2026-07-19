@@ -2745,3 +2745,129 @@ describe('バッチ7c: ぽいぽいメモ/議事録 + 業務種別マスタ + AI
     expect(JSON.stringify(draft.json.data)).toContain('ノート検証ドラフト材料')
   })
 })
+
+describe('バッチ7d: ノートの取消 + 紐付けによる AI 文脈の混入防止（オペレーター指示 2026-07-19 #5）', () => {
+  const memberUser = { id: MEMBER, name: '一般 次郎', email: 'member@example.com', role: 'member' as const, title: '', avatar: '' }
+  let buildContext: (typeof import('../../src/routes/chatbot'))['buildContext']
+  let coAId = ''
+  let coBId = ''
+
+  beforeAll(async () => {
+    ;({ buildContext } = await import('../../src/routes/chatbot'))
+    const a = await api('POST', '/v1/masters/companies', { as: ADMIN, body: { kind: 'customer', name: '混入検証アルファ株式会社' } })
+    coAId = (a.json.data as { id: string }).id
+    const b = await api('POST', '/v1/masters/companies', { as: ADMIN, body: { kind: 'customer', name: '混入検証ベータ株式会社' } })
+    coBId = (b.json.data as { id: string }).id
+  })
+
+  it('取消（論理削除）: 本人/管理者の権限・一覧と検索文脈から除外・冪等', async () => {
+    const created = await api('POST', '/v1/notes', {
+      as: MEMBER, body: { kind: 'minutes', title: '取消検証議事録', body: '取消検証: 誤アップロードの内容' },
+    })
+    const noteId = (created.json.data as { id: string }).id
+    // 取消前は検索文脈に載る（除外ロジックの検証がトートロジーにならないための正の対照）
+    await api('POST', '/v1/search/reindex', { as: ADMIN })
+    expect(await buildContext(pool, memberUser, '取消検証議事録の内容は?', [])).toContain('誤アップロードの内容')
+    // 他人（登録者でも管理者でもない）は取消不可 → 管理者は可
+    expect((await api('POST', `/v1/notes/${noteId}/archive`, { as: HR })).status).toBe(403)
+    expect((await api('POST', `/v1/notes/${noteId}/archive`, { as: ADMIN })).status).toBe(200)
+    // 冪等（再実行は warning 付き no-op）
+    const again = await api('POST', `/v1/notes/${noteId}/archive`, { as: ADMIN })
+    expect(again.status).toBe(200)
+    expect((again.json.data as { warning?: string }).warning).toBeTruthy()
+    // 一覧から消える
+    const list = (await api('GET', '/v1/notes?kind=minutes', { as: MEMBER })).json.data as { id: string }[]
+    expect(list.some(n => n.id === noteId)).toBe(false)
+    // 検索文脈からも消える
+    await api('POST', '/v1/search/reindex', { as: ADMIN })
+    expect(await buildContext(pool, memberUser, '取消検証議事録の内容は?', [])).not.toContain('誤アップロードの内容')
+    // 登録者本人（非管理者）も取消できる
+    const own = await api('POST', '/v1/notes', { as: MEMBER, body: { kind: 'minutes', title: '本人取消', body: '本人が取り消す議事録' } })
+    expect((await api('POST', `/v1/notes/${(own.json.data as { id: string }).id}/archive`, { as: MEMBER })).status).toBe(200)
+    // poipoi は本人のみ取消可（管理者でも不可）
+    const p = await api('POST', '/v1/notes', { as: MEMBER, body: { kind: 'poipoi', body: '取消検証の個人メモ' } })
+    const pid = (p.json.data as { id: string }).id
+    expect((await api('POST', `/v1/notes/${pid}/archive`, { as: ADMIN })).status).toBe(403)
+    expect((await api('POST', `/v1/notes/${pid}/archive`, { as: MEMBER })).status).toBe(200)
+  })
+
+  it('復元（取消の取消）: 権限は取消と同一・includeArchived の可視範囲・冪等', async () => {
+    const created = await api('POST', '/v1/notes', {
+      as: MEMBER, body: { kind: 'minutes', title: '復元検証議事録', body: '復元検証: 一度取り消してから戻す' },
+    })
+    const noteId = (created.json.data as { id: string }).id
+    await api('POST', `/v1/notes/${noteId}/archive`, { as: MEMBER })
+    // 取消済みは includeArchived=1 で登録者本人には見えるが、無関係の他人には見えない
+    const mine = (await api('GET', '/v1/notes?kind=minutes&includeArchived=1', { as: MEMBER })).json.data as { id: string; active: boolean }[]
+    expect(mine.find(n => n.id === noteId)?.active).toBe(false)
+    const others = (await api('GET', '/v1/notes?kind=minutes&includeArchived=1', { as: HR })).json.data as { id: string }[]
+    expect(others.some(n => n.id === noteId)).toBe(false)
+    // 復元は他人不可 → 本人可 → 一覧へ戻る
+    expect((await api('POST', `/v1/notes/${noteId}/restore`, { as: HR })).status).toBe(403)
+    expect((await api('POST', `/v1/notes/${noteId}/restore`, { as: MEMBER })).status).toBe(200)
+    const back = (await api('GET', '/v1/notes?kind=minutes', { as: HR })).json.data as { id: string }[]
+    expect(back.some(n => n.id === noteId)).toBe(true)
+    // 冪等（取消されていないノートの復元は warning 付き no-op）
+    const again = await api('POST', `/v1/notes/${noteId}/restore`, { as: MEMBER })
+    expect(again.status).toBe(200)
+    expect((again.json.data as { warning?: string }).warning).toBeTruthy()
+  })
+
+  it('取消済みノートの原本ファイルは復元権限者のみ参照できる', async () => {
+    const md = Buffer.from('# 原本取消検証\n誤アップロードされた機密込みの本文', 'utf8').toString('base64')
+    const imported = await api('POST', '/v1/notes/import', {
+      as: MEMBER, body: { kind: 'minutes', filename: 'gohon.md', contentBase64: md },
+    })
+    const noteId = (imported.json.data as { id: string }).id
+    // 取消前は全員（minutes）参照可
+    expect((await api('GET', `/v1/notes/${noteId}/files`, { as: HR })).status).toBe(200)
+    await api('POST', `/v1/notes/${noteId}/archive`, { as: MEMBER })
+    // 取消後: 無関係の他人 403 / 登録者本人・管理者は監査・復元のため参照可
+    expect((await api('GET', `/v1/notes/${noteId}/files`, { as: HR })).status).toBe(403)
+    const files = (await api('GET', `/v1/notes/${noteId}/files`, { as: MEMBER })).json.data as { id: string }[]
+    expect(files.length).toBe(1)
+    expect((await api('GET', `/v1/notes/files/${files[0]!.id}`, { as: HR })).status).toBe(403)
+    expect((await api('GET', `/v1/notes/files/${files[0]!.id}`, { as: ADMIN })).status).toBe(200)
+  })
+
+  it('取消済みぽいぽいメモは日報ドラフト材料に混ざらない', async () => {
+    const today = todayJst()
+    const p = await api('POST', '/v1/notes', {
+      as: MEMBER, body: { kind: 'poipoi', body: 'ドラフト取消検証XYZ: 誤登録した内容' },
+    })
+    await api('POST', `/v1/notes/${(p.json.data as { id: string }).id}/archive`, { as: MEMBER })
+    const draft = await api('POST', '/v1/assist/report-draft', { as: MEMBER, body: { date: today } })
+    expect(draft.status).toBe(200)
+    expect(JSON.stringify(draft.json.data)).not.toContain('ドラフト取消検証XYZ')
+  })
+
+  it('混入防止: 別の顧客に紐付く議事録は、特定顧客の質問の文脈へ混ざらない', async () => {
+    // 同じ語彙（値引き交渉）を含む議事録を A 社・B 社に紐付けて登録
+    await api('POST', '/v1/notes', {
+      as: MEMBER,
+      body: { kind: 'minutes', title: '混入検証アルファ定例', body: '混入検証: アルファ社と値引き交渉、次回リミット提示。', companyId: coAId },
+    })
+    await api('POST', '/v1/notes', {
+      as: MEMBER,
+      body: { kind: 'minutes', title: '混入検証ベータ定例', body: '混入検証: ベータ社と値引き交渉、継続協議とする。', companyId: coBId },
+    })
+    await api('POST', '/v1/search/reindex', { as: ADMIN })
+    const ctx = await buildContext(pool, memberUser, '混入検証アルファの値引き交渉の状況は?', [])
+    expect(ctx).toContain('次回リミット提示') // A 社紐付けは載る
+    expect(ctx).not.toContain('継続協議とする') // B 社紐付けは混ざらない
+    // 特定顧客に解決されない一般質問では、両社の紐付きノートが通常どおり候補になる
+    // （A 側だけの一致では「フィルタなしでも B は載らない」可能性が残るため、両方を明示的に確認）
+    const generic = await buildContext(pool, memberUser, '混入検証の値引き交渉のメモはある?', [])
+    expect(generic).toContain('次回リミット提示')
+    expect(generic).toContain('継続協議とする')
+  })
+
+  it('混入防止: 会社解決は履歴より今回の質問を優先する（2026-07-18 #3 と同じ優先順）', async () => {
+    // 履歴に別会社（正規化名がより長いアルファ）が居ても、今回の質問のベータを優先して解決する。
+    // topic 連結への最長一致だとアルファに解決され、ベータ紐付けノートが誤除外される回帰を防ぐ
+    const ctx = await buildContext(pool, memberUser, '混入検証ベータの値引き交渉は?', [],
+      ['混入検証アルファの状況を教えて'])
+    expect(ctx).toContain('継続協議とする') // 今回の質問（ベータ）の紐付けは載る
+    expect(ctx).not.toContain('次回リミット提示') // 履歴の会社（アルファ）の紐付けは除外される
+  })
+})

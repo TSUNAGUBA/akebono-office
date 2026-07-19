@@ -192,7 +192,8 @@ export function useReportAssist() {
     }
     // ぽいぽいメモ（独立メニュー = notes コレクション。バッチ7c）も材料へ合流（memo 形式）
     const poipoiNotes = (tbl('notes').value as Note[])
-      .filter(n => n.kind === 'poipoi' && n.memberId === memberId && n.createdAt.slice(0, 10) === date)
+      .filter(n => n.kind === 'poipoi' && n.memberId === memberId && n.active !== false
+        && n.createdAt.slice(0, 10) === date)
       .map(n => ({
         id: n.id, memberId, date, kind: 'memo' as const,
         calendarEventId: null, question: '', answer: n.body, at: n.createdAt,

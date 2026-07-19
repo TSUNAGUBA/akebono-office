@@ -39,6 +39,8 @@ export interface SearchDocInput {
   segments: SearchSegment[]
   /** 参照可能な所有者（null/未設定 = 全員。poipoi メモは本人のみ = C3） */
   ownerMemberId?: string | null
+  /** 紐付け（AI 文脈の混入防止: 質問が特定の顧客/PJ に解決されたとき、別対象に紐付くノートを除外） */
+  links?: { companyId?: string; projectId?: string }
 }
 
 export interface SearchDocRow extends SearchDocInput {
@@ -247,11 +249,12 @@ export async function buildSearchDocs(pool: pg.Pool): Promise<SearchDocInput[]> 
   }>(
     `SELECT n.id, n.member_id AS "memberId", n.kind, n.title, n.body,
             n.project_id AS "projectId", n.company_id AS "companyId", n.work_category_id AS "workCategoryId"
-     FROM notes n ORDER BY n.id LIMIT 5000`)
+     FROM notes n WHERE n.active = true ORDER BY n.id LIMIT 5000`)
   const { rows: wcRows } = await pool.query<{ id: string; name: string }>(
     `SELECT id, name FROM work_categories WHERE active = true LIMIT 200`)
   const wcName = new Map(wcRows.map(x => [x.id, x.name]))
   const projName = new Map(projectsQ.rows.map(x => [x.id, x.name]))
+  const projCompany = new Map(projectsQ.rows.map(x => [x.id, x.companyId]))
   for (const n of noteRows) {
     const segments: SearchSegment[] = []
     segments.push(seg(n.kind === 'poipoi' ? '種別: ぽいぽいメモ' : '種別: 議事録', c('notes', 'kind')))
@@ -267,9 +270,16 @@ export async function buildSearchDocs(pool: pg.Pool): Promise<SearchDocInput[]> 
     const author = memberName.get(n.memberId)
     if (author && n.kind === 'minutes') segments.push(seg(`登録者: ${author}`, c('members', 'name')))
     if (n.body) segments.push(seg(capCp(n.body, 1500), c('notes', 'body')))
+    // 顧客未指定でもプロジェクト経由で顧客を補完する
+    // （PJ のみ紐付けたノートが、別顧客の質問の混入防止フィルタを素通りしないように）
+    const linkCompanyId = n.companyId ?? (n.projectId ? projCompany.get(n.projectId) ?? null : null)
     docs.push({
       sourceKind: 'note', sourceId: n.id, title: n.title, aliases: [], segments,
       ownerMemberId: n.kind === 'poipoi' ? n.memberId : null,
+      links: {
+        ...(linkCompanyId ? { companyId: linkCompanyId } : {}),
+        ...(n.projectId ? { projectId: n.projectId } : {}),
+      },
     })
   }
 
@@ -297,18 +307,20 @@ export async function rebuildSearchIndex(
     // ハッシュには segments（表示可否チェック込み）も含める: checks 定義の変更（レビュー指摘の
     // 権限チェック強化等）が本文不変でも既存行へ伝播するように（手動 reindex が回復パスとして機能する）
     const hash = createHash('sha256').update(body).update(JSON.stringify(doc.segments))
-      .update(doc.ownerMemberId ?? '').digest('hex')
+      .update(doc.ownerMemberId ?? '').update(JSON.stringify(doc.links ?? {})).digest('hex')
     const prev = existingByKey.get(`${doc.sourceKind}:${doc.sourceId}`)
     if (!prev || prev.bodyHash !== hash) {
       await pool.query(
-        `INSERT INTO search_docs (id, source_kind, source_id, title, aliases, body, segments, body_hash, embedding, embedding_model, owner_member_id, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, '', $9, now())
+        `INSERT INTO search_docs (id, source_kind, source_id, title, aliases, body, segments, body_hash, embedding, embedding_model, owner_member_id, links, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, '', $9, $10, now())
          ON CONFLICT (source_kind, source_id) DO UPDATE SET
            title = EXCLUDED.title, aliases = EXCLUDED.aliases, body = EXCLUDED.body,
            segments = EXCLUDED.segments, body_hash = EXCLUDED.body_hash,
-           embedding = NULL, embedding_model = '', owner_member_id = EXCLUDED.owner_member_id, updated_at = now()`,
+           embedding = NULL, embedding_model = '', owner_member_id = EXCLUDED.owner_member_id,
+           links = EXCLUDED.links, updated_at = now()`,
         [newId('sd'), doc.sourceKind, doc.sourceId, doc.title, JSON.stringify(doc.aliases),
-          body, JSON.stringify(doc.segments), hash, doc.ownerMemberId ?? null])
+          body, JSON.stringify(doc.segments), hash, doc.ownerMemberId ?? null,
+          JSON.stringify(doc.links ?? {})])
       upserted++
       needEmbedding.push({ doc, body, hash })
     } else if (env.vertexProjectId && (!prev.hasEmbedding || prev.embeddingModel !== env.vertexEmbeddingModel)) {
@@ -403,6 +415,8 @@ export interface SearchHit {
   score: number
   /** note の所有者（null = 全員参照 = 議事録。値あり = poipoi = 本人） */
   ownerMemberId: string | null
+  /** 紐付け（note のみ。混入防止フィルタ用） */
+  links: { companyId?: string; projectId?: string }
 }
 
 /** 質問に関連する検索ドキュメントの上位 K 件（字句 + 埋め込みのハイブリッド。埋め込み無効時は字句のみ） */
@@ -416,10 +430,10 @@ export async function searchDocsFor(
   const { rows } = await pool.query<{
     sourceKind: SearchDocInput['sourceKind']; sourceId: string; title: string
     aliases: string[]; body: string; segments: SearchSegment[]; embedding: number[] | null
-    ownerMemberId: string | null
+    ownerMemberId: string | null; links: { companyId?: string; projectId?: string } | null
   }>(
     `SELECT source_kind AS "sourceKind", source_id AS "sourceId", title, aliases, body, segments, embedding,
-            owner_member_id AS "ownerMemberId"
+            owner_member_id AS "ownerMemberId", links
      FROM search_docs WHERE owner_member_id IS NULL OR owner_member_id = $1 ORDER BY id LIMIT 3000`, [forMemberId])
   // 全件を都度メモリへ載せる設計は SME 規模（〜数千件）前提。上限超過時も ORDER BY id で
   // 決定的な部分集合になる。件数がこの規模を超える場合は pgvector 等への移行を検討する
@@ -430,7 +444,10 @@ export async function searchDocsFor(
     const cos = qVec && r.embedding ? cosineSimilarity(qVec, r.embedding) : 0
     // 字句 0.2 / 埋め込み 0.62 を関連の下限とし、スコアは両者の最大値（片系統でも成立）
     const score = Math.max(lex >= 0.2 ? lex : 0, cos >= 0.62 ? cos : 0)
-    return { sourceKind: r.sourceKind, sourceId: r.sourceId, title: r.title, segments: r.segments ?? [], score, ownerMemberId: r.ownerMemberId ?? null }
+    return {
+      sourceKind: r.sourceKind, sourceId: r.sourceId, title: r.title, segments: r.segments ?? [],
+      score, ownerMemberId: r.ownerMemberId ?? null, links: r.links ?? {},
+    }
   })
   return scored
     .filter(s => s.score > 0)
