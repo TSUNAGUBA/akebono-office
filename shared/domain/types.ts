@@ -793,6 +793,20 @@ export interface DocumentNode {
   updatedBy: string
   size: string | null
   summary: string
+  // ---- バッチ7l（本実装）で追加。旧モックデータ互換のため optional（原則7） ----
+  /** バイト数（API 実装。size は表示用文字列） */
+  sizeBytes?: number | null
+  mime?: string
+  /** 取得元（upload = アップロード / drive = Google ドライブ取込） */
+  source?: 'upload' | 'drive'
+  /** ドライブ取込元の閲覧リンク（source='drive' のとき） */
+  driveWebLink?: string
+  /** テキスト抽出済み = 検索・AI 参照の対象 */
+  hasText?: boolean
+  /** 実体保管あり = ダウンロード可能（モックのデモデータは false） */
+  downloadable?: boolean
+  /** 論理削除フラグ（false = アーカイブ済み。未設定 = 有効） */
+  active?: boolean
 }
 
 export interface ChatMessage {

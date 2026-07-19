@@ -269,11 +269,46 @@ jobs:
           # カレンダー同期（events API）に必要。OAuth トークン交換は Calendar API 無効でも成功するため見落としやすい
           gcloud services enable calendar-json.googleapis.com --project "$PROJECT" \
             || echo "::warning::calendar-json.googleapis.com の有効化に失敗しました。オーナー権限で 'gcloud services enable calendar-json.googleapis.com' を実行してください（deploy-guide.md 参照）"
+          # ドキュメント管理のドライブ取込（バッチ7l）。OAuth 連携と同じ資格情報で drive.readonly を使う
+          gcloud services enable drive.googleapis.com --project "$PROJECT" \
+            || echo "::warning::drive.googleapis.com の有効化に失敗しました。オーナー権限で有効化してください（deploy-guide.md 参照）"
           PROJECT_NUMBER="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')"
           gcloud projects add-iam-policy-binding "$PROJECT" \
             --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
             --role="roles/aiplatform.user" --condition=None --quiet >/dev/null \
             || echo "::warning::実行 SA への roles/aiplatform.user 付与に失敗しました。オーナー権限で付与してください（deploy-guide.md 参照）"
+
+      # ドキュメント保管（バッチ7l = Firebase の Cloud Storage バケット）。STORAGE_BUCKET secret 登録時のみ。
+      # 未登録の環境は DB bytea フォールバックで全機能が動作する（署名 URL のみ GCS 専用）
+      - name: ドキュメント保管（Cloud Storage）の準備（冪等・非ブロッキング）
+        if: steps.check.outputs.ready == 'true'
+        env:
+          PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+          REGION: ${{ secrets.GCP_REGION }}
+          STORAGE_BUCKET: ${{ secrets.STORAGE_BUCKET }}
+        run: |
+          if [ -z "$STORAGE_BUCKET" ]; then
+            echo "STORAGE_BUCKET 未設定のためスキップ（DB フォールバック保管で動作します）"
+            exit 0
+          fi
+          # 署名 URL（IAM signBlob）に必要
+          gcloud services enable iamcredentials.googleapis.com --project "$PROJECT" \
+            || echo "::warning::iamcredentials.googleapis.com の有効化に失敗しました（署名 URL が使えません。base64 ダウンロードへ縮退）"
+          # バケットが無ければ作成（Firebase の既定バケットが既にあれば no-op）。公開アクセスは禁止
+          if ! gcloud storage buckets describe "gs://$STORAGE_BUCKET" --project "$PROJECT" >/dev/null 2>&1; then
+            gcloud storage buckets create "gs://$STORAGE_BUCKET" --project "$PROJECT" \
+              --location "${REGION:-asia-northeast1}" --uniform-bucket-level-access \
+              || echo "::warning::バケット作成に失敗しました。Firebase コンソールで Cloud Storage を有効化するか手動作成してください"
+          fi
+          PROJECT_NUMBER="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')"
+          RUNTIME_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+          gcloud storage buckets add-iam-policy-binding "gs://$STORAGE_BUCKET" \
+            --member="serviceAccount:${RUNTIME_SA}" --role="roles/storage.objectAdmin" >/dev/null \
+            || echo "::warning::実行 SA への storage.objectAdmin 付与に失敗しました。オーナー権限で付与してください"
+          # 実行 SA が自分自身で signBlob する（署名 URL の生成）ための権限
+          gcloud iam service-accounts add-iam-policy-binding "$RUNTIME_SA" \
+            --member="serviceAccount:${RUNTIME_SA}" --role="roles/iam.serviceAccountTokenCreator" --project "$PROJECT" >/dev/null \
+            || echo "::warning::実行 SA への iam.serviceAccountTokenCreator（self）付与に失敗しました。署名 URL は base64 ダウンロードへ縮退します"
 
       - name: Cloud Run へデプロイ
         if: steps.check.outputs.ready == 'true'
@@ -287,8 +322,13 @@ jobs:
           VERTEX_LOCATION: ${{ secrets.VERTEX_LOCATION }}
           VERTEX_MODEL: ${{ secrets.VERTEX_MODEL }}
           GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          STORAGE_BUCKET: ${{ secrets.STORAGE_BUCKET }}
         run: |
           ENV_VARS="AUTH_MODE=firebase,FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID},DB_SSL=${DB_SSL:-require},CORS_ORIGINS=${API_CORS_ORIGINS},VERTEX_PROJECT_ID=${PROJECT},VERTEX_LOCATION=${VERTEX_LOCATION:-global},VERTEX_MODEL=${VERTEX_MODEL:-gemini-2.5-flash}"
+          # ドキュメント保管（バッチ7l）。未設定 = DB bytea フォールバック
+          if [ -n "$STORAGE_BUCKET" ]; then
+            ENV_VARS="$ENV_VARS,STORAGE_BUCKET=${STORAGE_BUCKET}"
+          fi
           SECRET_FLAGS="DATABASE_URL=$SERVICE-database-url:latest"
           # カレンダー連携（secrets 登録済みのときのみ有効化）
           if [ "${CALENDAR_READY:-false}" = "true" ] && [ -n "$GOOGLE_OAUTH_CLIENT_ID" ]; then

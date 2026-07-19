@@ -11,6 +11,7 @@ export const FIELD_RESOURCES: { key: string; label: string }[] = [
   { key: 'contacts', label: '顧客(人)' },
   { key: 'projects', label: 'プロジェクト' },
   { key: 'knowledge', label: 'ナレッジ' },
+  { key: 'documents', label: 'ドキュメント' },
 ]
 
 /** 項目キーの論理名カタログ */
@@ -75,6 +76,12 @@ export const FIELD_CATALOG: Record<string, { value: string; label: string }[]> =
     { value: 'source', label: '出典' },
     { value: 'sourceRefId', label: '出典参照' },
     { value: 'updatedAt', label: '更新日時' },
+  ],
+  // ドキュメント管理（バッチ7l）。summary の deny = 本文相当（抽出テキスト・原本ダウンロード・URL）も不可
+  documents: [
+    { value: 'name', label: 'ファイル名' },
+    { value: 'tags', label: 'タグ' },
+    { value: 'summary', label: '概要・本文（抽出テキスト/原本を含む）' },
   ],
 }
 

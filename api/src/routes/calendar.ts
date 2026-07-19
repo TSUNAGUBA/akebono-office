@@ -32,7 +32,10 @@ const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth'
 const GOOGLE_CAL_BASE = 'https://www.googleapis.com/calendar/v3'
 // アプリ発予定の Google への反映先は常に primary（自分のマイカレンダー）= 同期対象の選択とは独立
 const GOOGLE_EVENTS_URL = `${GOOGLE_CAL_BASE}/calendars/primary/events`
-const SCOPES = 'openid email https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events'
+// バッチ7l: drive.readonly を追加（ドキュメント管理の Google ドライブ取込）。
+// 既存連携者のトークンは旧スコープのまま = ドライブ機能は「再接続」で有効化（カレンダーは従来どおり動作）
+const SCOPES = 'openid email https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive.readonly'
+export const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.readonly'
 
 /** 同期対象カレンダーの上限（選択 UI・保存の双方で強制） */
 const MAX_SELECTED_CALENDARS = 20
@@ -96,9 +99,11 @@ export function mergeCalendarFetches(fetched: CalendarFetchResult[]): {
   return { timed, truncated, failedCals, missingCals }
 }
 
-function calendarEnabled(env: Env): boolean {
+/** Google 連携（OAuth）が構成されているか（カレンダー・ドライブ共用。documents.ts からも参照） */
+export function googleOauthEnabled(env: Env): boolean {
   return Boolean(env.googleOauthClientId && env.googleOauthClientSecret && env.tokenEncryptionKey)
 }
+const calendarEnabled = googleOauthEnabled
 
 /** HH:MM（値域含む検証。24:30 等を弾く） */
 function isHhmm(v: unknown): v is string {
@@ -159,8 +164,9 @@ interface TokenRow {
   expiresAt: string | null
 }
 
-/** 有効なアクセストークンを返す（期限切れは refresh。取得不可 = null → AKO-CAL-007） */
-async function accessTokenFor(pool: pg.Pool, env: Env, memberId: string): Promise<string | null> {
+/** 有効なアクセストークンを返す（期限切れは refresh。取得不可 = null → AKO-CAL-007）。
+ * ドキュメント管理のドライブ取込（routes/documents.ts）も同じ Google 連携トークンを共用する */
+export async function accessTokenFor(pool: pg.Pool, env: Env, memberId: string): Promise<string | null> {
   const { rows } = await pool.query<TokenRow>(
     `SELECT access_token_enc AS "accessTokenEnc", refresh_token_enc AS "refreshTokenEnc",
             expires_at AS "expiresAt"

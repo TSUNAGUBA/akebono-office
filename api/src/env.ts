@@ -27,12 +27,15 @@ export interface Env {
   vertexModel: string
   /** 埋め込みモデル ID（既定 text-multilingual-embedding-002。VERTEX_PROJECT_ID 空 = 埋め込み無効 = 字句検索のみ） */
   vertexEmbeddingModel: string
-  /** Google OAuth クライアント ID（カレンダー連携。空 = 連携無効） */
+  /** Google OAuth クライアント ID（カレンダー・ドライブ連携。空 = 連携無効） */
   googleOauthClientId: string
   /** Google OAuth クライアントシークレット（Secret Manager 経由） */
   googleOauthClientSecret: string
   /** トークン暗号化鍵（Secret Manager 経由。空 = 連携無効） */
   tokenEncryptionKey: string
+  /** ドキュメント実体の保管先 Cloud Storage バケット（Firebase の Cloud Storage。
+   * 空 = DB bytea フォールバック（ローカル/CI/未設定環境でも動作 = 原則1・4）。署名 URL は GCS 時のみ */
+  storageBucket: string
 }
 
 export function loadEnv(): Env {
@@ -64,5 +67,6 @@ export function loadEnv(): Env {
     googleOauthClientId: process.env.GOOGLE_OAUTH_CLIENT_ID ?? '',
     googleOauthClientSecret: process.env.GOOGLE_OAUTH_CLIENT_SECRET ?? '',
     tokenEncryptionKey: process.env.TOKEN_ENCRYPTION_KEY ?? '',
+    storageBucket: process.env.STORAGE_BUCKET ?? '',
   }
 }

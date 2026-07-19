@@ -82,6 +82,7 @@
 | `DATABASE_URL` | RDS 接続文字列（Secret Manager へ中継） | — |
 | `DB_SSL` | TLS モード | `require` |
 | `API_CORS_ORIGINS` | CORS 許可オリジン | `https://<project>.web.app` |
+| `STORAGE_BUCKET` | ドキュメント保管（`-StorageBucket` 指定時のみ。§1-10） | 未設定 = DB 保管フォールバック |
 
 > `-DatabaseUrl` を省略すると mockup 用 secrets のみ設定される（従来の使い方と完全互換）。
 > その場合 deploy-api ジョブは警告を出してスキップされ、mockup のデプロイは通常どおり動く。
@@ -224,6 +225,28 @@ AI 機能（日報 AI アシスト・タスク計画の AI コメント等）は
 3. デプロイが Secret Manager（`<service>-google-oauth-secret` / `<service>-token-encryption-key`）への
    登録と Cloud Run への注入まで冪等に行う。secrets 未設定の間、カレンダー連携機能は自動的に無効
    （画面に連携 UI が出ない）でその他の機能に影響しない
+4. **ドライブ取込（バッチ7l）:** ドキュメント管理の「ドライブから取込」は同じ OAuth クライアントを共用し、
+   スコープに `drive.readonly` が追加されている。デプロイが `drive.googleapis.com` を自動有効化する。
+   **バッチ7l 以前に連携済みのユーザーは、AI アシスタントのカレンダー連携から Google に再接続すると
+   ドライブ取込が使えるようになる**（旧トークンのままでもカレンダーは従来どおり動作）
+
+## 1-10. ドキュメント保管（Firebase の Cloud Storage・バッチ7l）
+
+ドキュメント管理（/support/documents）の実ファイル保管先。**未設定でも DB 保管（bytea）フォールバックで
+全機能が動作する**（署名 URL のみ GCS 専用 = 未設定時は base64 ダウンロードへ縮退）。
+
+1. バケット名を決める（Firebase の既定バケット `<project>.firebasestorage.app` を推奨。
+   未作成でもデプロイが `gcloud storage buckets create` で冪等に作成を試みる）
+2. secrets を設定して再デプロイ:
+   ```powershell
+   ./scripts/setup-deploy-secrets.ps1 -ProjectId <project> -ServiceAccountJsonPath ./deploy-sa.json `
+     -DatabaseUrl 'postgresql://...' -StorageBucket '<project>.firebasestorage.app' -TriggerDeploy
+   ```
+3. デプロイが冪等に行うこと: バケット作成（なければ）・実行 SA への `roles/storage.objectAdmin`（バケット単位）と
+   `roles/iam.serviceAccountTokenCreator`（自己 = 署名 URL の signBlob 用）付与・`iamcredentials.googleapis.com` 有効化。
+   権限不足時は警告を出して続行（オーナー権限で同じコマンドを手動実行すれば回復）
+4. **既存データの移行:** STORAGE_BUCKET 設定前にアップロードされたファイルは DB 保管（storage='db'）のまま
+   動作し続ける（新規アップロードから GCS へ保存）。強制移行は不要
 
 ## 2. 日常デプロイ（開発者）
 

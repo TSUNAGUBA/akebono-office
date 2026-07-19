@@ -27,8 +27,11 @@ import { extractDocumentText } from '../lib/extract-text'
 import { capCp } from '../lib/text'
 import { ApiError, err } from '../lib/errors'
 import { newId } from '../lib/ids'
+import { canUseFeature, canViewField } from '../../../shared/domain/permissions'
 import { generateGroundedText, generateJson } from '../lib/llm'
 import { notify } from '../lib/notify'
+import { activePermissionRules } from '../lib/permissions'
+import { searchDocsFor, TITLE_CHECKS } from '../lib/search-index'
 
 // questions / files（メタのみ）はタスク行へ埋め込んで返す（フロントの型 = AiTask.questions/files と一致。
 // 一覧 LIMIT 200 での相関サブクエリは SME 規模で十分軽量）。
@@ -252,16 +255,50 @@ async function prepareStepExecution(
         ? `\n\n調査の出典:\n${research.sources.map(s => `- ${s.title}: ${s.uri}`).join('\n')}`
         : '')
     : ''
+  // 社内の保管ドキュメント（バッチ7l: search_docs のリトリーバルで関連資料を材料へ供給。
+  // 失敗・ヒットなしは材料なしで続行 = 原則4）。
+  // 権限（F-16）は依頼者基準で原本・URL・チャットボット文脈と同一の 3 点を適用する
+  // （R1 C-1: 機能 'documents' deny → ブロックなし / 表示項目 deny → 該当 segment を除外。
+  // 成果物は依頼者が閲覧するため、依頼者に見せられない内容を材料に混ぜない = deny 迂回防止）
+  let docsBlock = ''
+  try {
+    const rules = await activePermissionRules(pool)
+    const { rows: reqRows } = await pool.query<{ id: string; title: string | null; role: 'admin' | 'hr' | 'member' }>(
+      `SELECT id, title, role FROM members WHERE id = $1`, [task.requesterId])
+    const requester = reqRows[0]
+    const subject = requester
+      ? { memberId: requester.id, title: requester.title ?? '', role: requester.role }
+      : null
+    const allow = (check: () => boolean): boolean => rules.length === 0 || (subject !== null && check())
+    if (allow(() => canUseFeature(rules, subject!, 'documents'))) {
+      const titleCheck = TITLE_CHECKS.document
+      const docHits = (await searchDocsFor(pool, env, `${task.title} ${step.title}`, task.requesterId, 6))
+        .filter(h => h.sourceKind === 'document')
+        .filter(() => allow(() => canViewField(rules, subject!, titleCheck.entity, titleCheck.field)))
+        .slice(0, 3)
+      const rendered = docHits.map((h) => {
+        const segs = (h.segments ?? [])
+          .filter(s => (s.checks ?? []).every(ch => allow(() => canViewField(rules, subject!, ch.entity, ch.field))))
+          .map(s => s.text)
+        return segs.length > 0 ? `【${h.title}】\n${capCp(segs.join('\n'), 1200)}` : ''
+      }).filter(Boolean)
+      if (rendered.length > 0) {
+        docsBlock = `\n\n# 社内ドキュメント（保管ファイルの関連抜粋）\n${rendered.join('\n\n')}`
+      }
+    }
+  } catch {
+    // 検索・権限解決の失敗は補助材料なしで続行（非ブロッキング）
+  }
   const res = await generateJson<{ needsInput?: boolean; question?: string; output?: string }>(env, {
     system: `あなたは AI 社員「${role?.name ?? '汎用'}」です。ミッション: ${role?.mission ?? ''}\n`
       + `${role?.systemPrompt ? `${role.systemPrompt}\n` : ''}`
       + 'タスクの現在のステップを実際に遂行し、成果物をマークダウンで出力します。'
-      + '材料（依頼文・確認済み Q&A・添付・Web 調査メモ）にある情報のみを使い、推測で事実を作らないこと。'
+      + '材料（依頼文・確認済み Q&A・添付・Web 調査メモ・社内ドキュメント）にある情報のみを使い、推測で事実を作らないこと。'
       + 'Web 調査メモの情報を成果物に使った場合は、末尾に「参考」として出典 URL を明記すること。'
       + 'まず材料と Web 調査で自力遂行を尽くすこと。依頼者への質問（needsInput=true + question）は、'
       + '自社・顧客固有の内部情報がどうしても必要な場合、または重要な意思決定・承認を依頼者に求める場合に限る'
       + '（一般的な知識・調査で解決できることを質問しない。その場合 output は空でよい）。',
-    prompt: `# タスク\n件名: ${task.title}\n\n# 材料\n${materials.text}${researchBlock}`
+    prompt: `# タスク\n件名: ${task.title}\n\n# 材料\n${materials.text}${researchBlock}${docsBlock}`
       + (priorOutputs ? `\n\n# これまでのステップ成果\n${capCp(priorOutputs, 6000)}` : '')
       + `\n\n# 今回遂行するステップ\n${step.title}\n\nこのステップを遂行し、成果物を出力してください。`,
     schema: {

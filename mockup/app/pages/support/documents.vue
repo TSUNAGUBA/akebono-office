@@ -1,12 +1,15 @@
 <script setup lang="ts">
 /**
- * F-09-3 ドキュメント管理: 左フォルダツリー + 右一覧（検索・タグ・アップロードモック・プレビュードロワー）
+ * F-09-3 ドキュメント管理: 左フォルダツリー + 右一覧（検索・タグ・アップロード・プレビュードロワー）
  * モバイルはツリーを横並びチップに切替。検索時はツリー選択を無視して全体検索。
+ * バッチ7l（本実装）: 実ファイルのアップロード・ダウンロード（署名 URL → base64 縮退）・
+ * Google ドライブ取込・アーカイブ済みの復元（原則 9.5）。取込済みは AI（チャットボット等）の参照対象
  */
-import { ChevronDown, ChevronRight, FileText, Folder, FolderPlus, FolderOpen, Upload } from 'lucide-vue-next'
+import { ChevronDown, ChevronRight, CloudDownload, Download, FileText, Folder, FolderPlus, FolderOpen, RotateCcw, Upload } from 'lucide-vue-next'
 import type { DocumentNode } from '~/types/domain'
 import type { TableColumn } from '~/types/ui'
 import { fmtDateLong, fmtDateTime } from '~/utils/format'
+import type { DriveFile } from '~/composables/useDocuments'
 
 const { isEnabled } = useAppSettings()
 const { itemsOf } = useCodeMaster()
@@ -19,6 +22,14 @@ const confirm = useConfirm()
 // ---------- ツリー状態 ----------
 const selectedFolderId = ref<string | null>(null)
 const expanded = ref<Set<string>>(new Set(docs.activeFolders.value.map(f => f.id)))
+
+// API モードはフォルダの遅延ロード完了後に初回だけ全展開する（モックモードの初期表示と揃える。
+// ユーザーが畳んだ後のリロード分岐には触らない = 空 → 非空 の最初の遷移のみ）
+watch(() => docs.activeFolders.value.length, (n, old) => {
+  if ((old ?? 0) === 0 && n > 0 && expanded.value.size === 0) {
+    expanded.value = new Set(docs.activeFolders.value.map(f => f.id))
+  }
+})
 
 function toggleExpand(id: string): void {
   const next = new Set(expanded.value)
@@ -100,9 +111,9 @@ function openPreview(row: Record<string, unknown>): void {
   editError.value = ''
 }
 
-function saveEdit(): void {
+async function saveEdit(): Promise<void> {
   if (!selectedDoc.value) return
-  const r = docs.updateFile(selectedDoc.value.id, {
+  const r = await docs.updateFile(selectedDoc.value.id, {
     name: editForm.name,
     tags: editForm.tags,
     summary: editForm.summary,
@@ -118,21 +129,46 @@ function saveEdit(): void {
 
 async function archiveDoc(): Promise<void> {
   if (!selectedDoc.value) return
-  const ok = await confirm.ask('アーカイブ', `「${selectedDoc.value.name}」をアーカイブ（無効化）します。一覧に表示されなくなります。`, { danger: true, confirmLabel: 'アーカイブ' })
+  const ok = await confirm.ask('アーカイブ', `「${selectedDoc.value.name}」をアーカイブ（無効化）します。一覧に表示されなくなります（「アーカイブ済み」からいつでも復元できます）。`, { danger: true, confirmLabel: 'アーカイブ' })
   if (!ok) return
-  const r = docs.archive(selectedDoc.value.id)
+  const r = await docs.archive(selectedDoc.value.id)
   if (r.ok) {
-    toast.show('アーカイブしました')
+    toast.show('アーカイブしました（復元可能）')
     selectedDoc.value = null
   } else {
     toast.show(r.error.message, 'crit')
   }
 }
 
-// ---------- アップロード（モック） ----------
+// ---------- ダウンロード（API モード。署名 URL → base64 縮退） ----------
+const downloading = ref(false)
+
+async function doDownload(): Promise<void> {
+  if (!selectedDoc.value || downloading.value) return
+  downloading.value = true
+  try {
+    const r = await docs.downloadFile(selectedDoc.value.id)
+    if (!r.ok) toast.show(r.error.message, 'crit')
+  } finally {
+    downloading.value = false
+  }
+}
+
+// ---------- アーカイブ済みの復元（原則 9.5） ----------
+const showArchived = ref(false)
+
+async function restoreDoc(id: string): Promise<void> {
+  const r = await docs.restore(id)
+  if (r.ok) toast.show('復元しました')
+  else toast.show(r.error.message, 'crit')
+}
+
+// ---------- アップロード（API = 実ファイル / モック = メタのみ） ----------
 const uploadOpen = ref(false)
 const uploadForm = reactive({ name: '', parentId: '', tags: [] as string[], summary: '' })
 const uploadError = ref('')
+const uploadFile = ref<File | null>(null)
+const uploading = ref(false)
 
 function openUpload(): void {
   uploadForm.name = ''
@@ -140,24 +176,128 @@ function openUpload(): void {
   uploadForm.tags = []
   uploadForm.summary = ''
   uploadError.value = ''
+  uploadFile.value = null
   uploadOpen.value = true
 }
 
-function doUpload(): void {
-  const r = docs.addFile({
-    name: uploadForm.name,
-    parentId: uploadForm.parentId || null,
-    tags: uploadForm.tags,
-    summary: uploadForm.summary,
-  })
-  if (!r.ok) {
-    uploadError.value = r.error.message
-    return
+function onFilePick(e: Event): void {
+  uploadFile.value = (e.target as HTMLInputElement).files?.[0] ?? null
+}
+
+async function doUpload(): Promise<void> {
+  if (uploading.value) return
+  uploading.value = true
+  try {
+    let r: { ok: boolean; error?: { message: string }; extracted?: boolean }
+    if (docs.isApi) {
+      if (!uploadFile.value) {
+        uploadError.value = 'ファイルを選択してください'
+        return
+      }
+      r = await docs.uploadFile({
+        file: uploadFile.value,
+        parentId: uploadForm.parentId || null,
+        tags: uploadForm.tags,
+        summary: uploadForm.summary,
+      })
+    } else {
+      r = docs.addFile({
+        name: uploadForm.name,
+        parentId: uploadForm.parentId || null,
+        tags: uploadForm.tags,
+        summary: uploadForm.summary,
+      })
+    }
+    if (!r.ok) {
+      uploadError.value = r.error?.message ?? 'アップロードに失敗しました'
+      return
+    }
+    uploadOpen.value = false
+    query.value = ''
+    selectedFolderId.value = uploadForm.parentId || null
+    toast.show(docs.isApi
+      ? (r.extracted ? 'アップロードしました（テキスト抽出済み = AI 検索対象）' : 'アップロードしました（テキスト抽出なし = 保管・ダウンロードのみ）')
+      : 'アップロードしました（モック）')
+  } finally {
+    uploading.value = false
   }
-  uploadOpen.value = false
-  query.value = ''
-  selectedFolderId.value = uploadForm.parentId || null
-  toast.show('アップロードしました（モック）')
+}
+
+// ---------- Google ドライブ取込（API モード） ----------
+const driveOpen = ref(false)
+const driveState = ref<{ available: boolean; connected: boolean; driveScope: boolean } | null>(null)
+const driveQuery = ref('')
+const driveResults = ref<DriveFile[]>([])
+const driveSelected = ref<Set<string>>(new Set())
+const driveBusy = ref(false)
+const driveTargetFolder = ref('')
+const driveError = ref('')
+
+async function openDrive(): Promise<void> {
+  driveOpen.value = true
+  driveQuery.value = ''
+  driveResults.value = []
+  driveSelected.value = new Set()
+  driveTargetFolder.value = selectedFolderId.value ?? ''
+  driveError.value = ''
+  driveState.value = null
+  driveState.value = await docs.driveStatus()
+  if (driveState.value.connected && driveState.value.driveScope) await doDriveSearch()
+}
+
+async function doDriveSearch(): Promise<void> {
+  driveBusy.value = true
+  driveError.value = ''
+  try {
+    const r = await docs.driveSearch(driveQuery.value)
+    if (!r.ok) {
+      driveError.value = r.error.message
+      return
+    }
+    driveResults.value = r.files ?? []
+  } finally {
+    driveBusy.value = false
+  }
+}
+
+function toggleDriveFile(id: string): void {
+  const next = new Set(driveSelected.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  driveSelected.value = next
+}
+
+async function doDriveImport(): Promise<void> {
+  if (driveSelected.value.size === 0 || driveBusy.value) return
+  driveBusy.value = true
+  driveError.value = ''
+  try {
+    const r = await docs.driveImport([...driveSelected.value], driveTargetFolder.value || null)
+    if (!r.ok) {
+      driveError.value = r.error.message
+      return
+    }
+    if (r.imported.length > 0) {
+      toast.show(`${r.imported.length} 件を取込みました${r.failed.length > 0 ? `（${r.failed.length} 件は失敗）` : ''}`)
+    }
+    if (r.failed.length > 0) {
+      driveError.value = r.failed.map(f => `${f.name}: ${f.reason}`).join(' / ')
+      // 失敗分を選択に残し、成功分だけ選択解除する（再試行しやすく）
+      const failedIds = new Set(r.failed.map(f => f.fileId))
+      driveSelected.value = new Set([...driveSelected.value].filter(id => failedIds.has(id)))
+      return
+    }
+    driveOpen.value = false
+  } finally {
+    driveBusy.value = false
+  }
+}
+
+/** ドライブのサイズ表示 */
+function driveSize(f: DriveFile): string {
+  if (f.sizeBytes === null) return '—'
+  const kb = f.sizeBytes / 1024
+  return kb >= 1000 ? `${(kb / 1024).toFixed(1)}MB` : `${Math.max(1, Math.round(kb))}KB`
 }
 
 // ---------- 新規フォルダ ----------
@@ -172,8 +312,8 @@ function openFolderModal(): void {
   folderModalOpen.value = true
 }
 
-function doCreateFolder(): void {
-  const r = docs.addFolder(folderForm.name, folderForm.parentId || null)
+async function doCreateFolder(): Promise<void> {
+  const r = await docs.addFolder(folderForm.name, folderForm.parentId || null)
   if (!r.ok) {
     folderError.value = r.error.message
     return
@@ -203,11 +343,15 @@ function doCreateFolder(): void {
     </UiEmptyState>
 
     <template v-else>
-      <UiPageHeader title="ドキュメント管理" description="社内文書のフォルダ・タグ・検索">
+      <UiPageHeader title="ドキュメント管理" description="社内文書のフォルダ・タグ・検索。取込済みファイルはチャットボット等の AI 参照対象になります">
         <template #actions>
           <button type="button" class="btn btn-sm" @click="openFolderModal">
             <FolderPlus class="h-3.5 w-3.5" aria-hidden="true" />
             新規フォルダ
+          </button>
+          <button v-if="docs.isApi" type="button" class="btn btn-sm" @click="openDrive">
+            <CloudDownload class="h-3.5 w-3.5" aria-hidden="true" />
+            ドライブから取込
           </button>
           <button type="button" class="btn btn-primary btn-sm" @click="openUpload">
             <Upload class="h-3.5 w-3.5" aria-hidden="true" />
@@ -300,7 +444,7 @@ function doCreateFolder(): void {
             :rows="tableRows"
             clickable
             empty-title="ファイルがありません"
-            empty-hint="アップロード（モック）から追加できます"
+            :empty-hint="docs.isApi ? 'アップロード・ドライブから取込 で追加できます' : 'アップロード（モック）から追加できます'"
             @row-click="openPreview"
           >
             <template #cell-name="{ row }">
@@ -320,20 +464,41 @@ function doCreateFolder(): void {
               </span>
             </template>
           </UiDataTable>
+
+          <!-- アーカイブ済み（取消フロー = 原則 9.5。復元できることを常に見える場所に置く） -->
+          <div v-if="docs.archivedFiles.value.length > 0" class="mt-3">
+            <button type="button" class="btn btn-ghost btn-sm" @click="showArchived = !showArchived">
+              <RotateCcw class="h-3.5 w-3.5" aria-hidden="true" />
+              アーカイブ済み（{{ docs.archivedFiles.value.length }}）{{ showArchived ? 'を隠す' : 'を表示' }}
+            </button>
+            <ul v-if="showArchived" class="mt-1.5 grid gap-1">
+              <li
+                v-for="f in docs.archivedFiles.value"
+                :key="f.id"
+                class="flex items-center justify-between gap-2 rounded-lg border border-line bg-surface-soft px-3 py-1.5 text-[13px]"
+              >
+                <span class="min-w-0 flex-1 truncate text-sub">{{ f.name }}</span>
+                <button type="button" class="btn btn-sm" @click="restoreDoc(f.id)">復元</button>
+              </li>
+            </ul>
+          </div>
         </section>
       </div>
 
       <!-- プレビュードロワー -->
       <UiDrawer :open="selectedDoc !== null" :title="selectedDoc?.name ?? ''" width="520px" @close="selectedDoc = null">
         <template v-if="selectedDoc">
-          <!-- 擬似プレビュー -->
+          <!-- プレビュー（概要 + 属性バッジ） -->
           <div class="rounded-lg border border-line bg-surface-soft p-4">
-            <div class="mb-2 flex items-center gap-2">
-              <FileText class="h-5 w-5 text-brand" aria-hidden="true" />
-              <span class="text-[13px] font-bold">{{ selectedDoc.name }}</span>
+            <div class="mb-2 flex flex-wrap items-center gap-2">
+              <FileText class="h-5 w-5 shrink-0 text-brand" aria-hidden="true" />
+              <span class="min-w-0 text-[13px] font-bold">{{ selectedDoc.name }}</span>
+              <UiStatusBadge v-if="selectedDoc.source === 'drive'" label="Drive 取込" tone="info" />
+              <UiStatusBadge v-if="selectedDoc.hasText" label="AI 検索対象" tone="ok" />
             </div>
             <p class="text-[13px] leading-relaxed text-sub">{{ selectedDoc.summary || '概要は登録されていません' }}</p>
-            <p class="mt-3 text-[10px] text-muted">※ モックのためファイル本体は保持していません（summary の擬似プレビュー）</p>
+            <p v-if="!docs.isApi" class="mt-3 text-[10px] text-muted">※ モックのためファイル本体は保持していません（summary の擬似プレビュー）</p>
+            <p v-else-if="selectedDoc.hasText" class="mt-3 text-[10px] text-muted">テキスト抽出済み: チャットボット等の AI が内容を参照し、必要に応じてこのファイルの URL を案内します</p>
           </div>
 
           <!-- メタ情報 -->
@@ -346,6 +511,10 @@ function doCreateFolder(): void {
             <dd class="num">{{ fmtDateTime(selectedDoc.updatedAt) }}</dd>
             <dt class="text-muted">サイズ</dt>
             <dd class="num">{{ selectedDoc.size ?? '—' }}</dd>
+            <template v-if="selectedDoc.driveWebLink">
+              <dt class="text-muted">取込元</dt>
+              <dd><a :href="selectedDoc.driveWebLink" target="_blank" rel="noopener" class="text-brand underline">Google ドライブで開く</a></dd>
+            </template>
           </dl>
 
           <!-- 編集 -->
@@ -364,19 +533,41 @@ function doCreateFolder(): void {
         <template #footer>
           <div class="flex items-center justify-between gap-2">
             <button type="button" class="btn btn-danger btn-sm" @click="archiveDoc">アーカイブ</button>
-            <button type="button" class="btn btn-primary" @click="saveEdit">保存</button>
+            <div class="flex items-center gap-2">
+              <button
+                v-if="docs.isApi && selectedDoc?.downloadable"
+                type="button"
+                class="btn"
+                :disabled="downloading"
+                @click="doDownload"
+              >
+                <Download class="h-3.5 w-3.5" aria-hidden="true" />
+                {{ downloading ? '準備中…' : 'ダウンロード' }}
+              </button>
+              <button type="button" class="btn btn-primary" @click="saveEdit">保存</button>
+            </div>
           </div>
         </template>
       </UiDrawer>
 
       <!-- アップロードモーダル -->
-      <UiModal :open="uploadOpen" title="アップロード（モック）" @close="uploadOpen = false">
+      <UiModal :open="uploadOpen" :title="docs.isApi ? 'ファイルのアップロード' : 'アップロード（モック）'" @close="uploadOpen = false">
         <div class="grid gap-3">
-          <UiFormField label="ファイル名" required :error="uploadError" hint="拡張子を含めて入力（例: 会議資料.pdf）">
+          <UiFormField
+            v-if="docs.isApi"
+            label="ファイル"
+            required
+            :error="uploadError"
+            hint="10MB まで。.md / .txt / .pdf / .docx / .pptx / .csv はテキスト抽出され AI の検索・参照対象になります（他形式は保管・ダウンロードのみ）"
+          >
+            <input type="file" class="input" aria-label="アップロードするファイル" @change="onFilePick">
+          </UiFormField>
+          <UiFormField v-else label="ファイル名" required :error="uploadError" hint="拡張子を含めて入力（例: 会議資料.pdf）">
             <input v-model="uploadForm.name" type="text" class="input" placeholder="例: 会議資料.pdf">
           </UiFormField>
           <UiFormField label="フォルダ" required>
             <select v-model="uploadForm.parentId" class="select" aria-label="フォルダ">
+              <option value="">（ルート直下）</option>
               <option v-for="o in folderOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
             </select>
           </UiFormField>
@@ -388,8 +579,74 @@ function doCreateFolder(): void {
           </UiFormField>
         </div>
         <template #footer>
-          <button type="button" class="btn" @click="uploadOpen = false">キャンセル</button>
-          <button type="button" class="btn btn-primary" @click="doUpload">アップロード</button>
+          <button type="button" class="btn" :disabled="uploading" @click="uploadOpen = false">キャンセル</button>
+          <button type="button" class="btn btn-primary" :disabled="uploading" @click="doUpload">
+            {{ uploading ? 'アップロード中…' : 'アップロード' }}
+          </button>
+        </template>
+      </UiModal>
+
+      <!-- Google ドライブ取込モーダル（API モード） -->
+      <UiModal :open="driveOpen" title="Google ドライブから取込" width="640px" @close="driveOpen = false">
+        <div v-if="driveState === null" class="py-6 text-center text-[13px] text-muted">連携状態を確認しています…</div>
+        <div v-else-if="!driveState.available" class="py-4 text-[13px] text-sub">
+          Google 連携が未設定の環境です（管理者にお問い合わせください）
+        </div>
+        <div v-else-if="!driveState.connected || !driveState.driveScope" class="grid gap-2 py-2 text-[13px] text-sub">
+          <p>
+            Google ドライブ連携が未接続です。
+            <NuxtLink to="/ai-assistant" class="text-brand underline">AI アシスタントのカレンダー連携</NuxtLink>
+            から Google に{{ driveState.connected ? '再接続' : '接続' }}してください（ドライブ読取の許可が追加されます）
+          </p>
+        </div>
+        <div v-else class="grid gap-2">
+          <div class="flex gap-2">
+            <UiSearchInput v-model="driveQuery" placeholder="ドライブ内をファイル名で検索" class="flex-1" @keydown.enter="doDriveSearch" />
+            <button type="button" class="btn btn-sm" :disabled="driveBusy" @click="doDriveSearch">検索</button>
+          </div>
+          <p v-if="driveError" class="text-[12px] text-crit">{{ driveError }}</p>
+          <div class="max-h-64 overflow-auto rounded-lg border border-line">
+            <p v-if="driveBusy && driveResults.length === 0" class="p-3 text-[12px] text-muted">読み込み中…</p>
+            <p v-else-if="driveResults.length === 0" class="p-3 text-[12px] text-muted">該当するファイルがありません</p>
+            <label
+              v-for="f in driveResults"
+              :key="f.id"
+              class="flex cursor-pointer items-center gap-2 border-b border-line px-3 py-2 text-[13px] last:border-b-0 hover:bg-surface-soft"
+            >
+              <input
+                type="checkbox"
+                class="checkbox"
+                :checked="driveSelected.has(f.id)"
+                :disabled="!f.exportable"
+                @change="toggleDriveFile(f.id)"
+              >
+              <span class="min-w-0 flex-1 truncate" :class="f.exportable ? '' : 'text-muted'">{{ f.name }}</span>
+              <span class="num shrink-0 text-[11px] text-muted">{{ driveSize(f) }}</span>
+              <span v-if="!f.exportable" class="shrink-0 text-[10px] text-muted">非対応形式</span>
+            </label>
+          </div>
+          <UiFormField label="取込先フォルダ">
+            <select v-model="driveTargetFolder" class="select" aria-label="取込先フォルダ">
+              <option value="">（ルート直下）</option>
+              <option v-for="o in folderOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+            </select>
+          </UiFormField>
+          <p class="text-[11px] text-muted">
+            選択したファイルをコピーして保管します（1 回 10 件・各 10MB まで。Google ドキュメント/スプレッドシート/スライドは
+            docx / csv / pptx に変換）。取込後はテキスト抽出され AI の検索・参照対象になります
+          </p>
+        </div>
+        <template #footer>
+          <button type="button" class="btn" :disabled="driveBusy" @click="driveOpen = false">閉じる</button>
+          <button
+            v-if="driveState?.connected && driveState?.driveScope"
+            type="button"
+            class="btn btn-primary"
+            :disabled="driveBusy || driveSelected.size === 0"
+            @click="doDriveImport"
+          >
+            {{ driveBusy ? '取込中…' : `取込む（${driveSelected.size}）` }}
+          </button>
         </template>
       </UiModal>
 

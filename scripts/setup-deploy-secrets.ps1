@@ -115,6 +115,10 @@ param(
   # カレンダー連携: クライアントシークレットを 1 行で書いたファイルのパス（チャット・履歴に残さないためファイル渡し）
   [string]$GoogleOauthClientSecretPath = '',
 
+  # ドキュメント保管（バッチ7l）: Firebase の Cloud Storage バケット名（例: <project>.firebasestorage.app）。
+  # 未指定の場合ドキュメント実体は DB 保管（bytea フォールバック）で動作し、署名 URL は無効
+  [string]$StorageBucket = '',
+
   # フロントエンドを API 接続版でビルドする場合の API URL（Cloud Run の URL。初回 api デプロイ後に設定）
   [string]$ApiBaseUrl = '',
 
@@ -212,6 +216,9 @@ if ($DatabaseUrl) {
   # AI 機能（Vertex AI）: 既定値以外を使う場合のみ secrets を設定（未設定時は global / gemini-2.5-flash）
   if ($VertexLocation) { Set-RepoSecret 'VERTEX_LOCATION' $VertexLocation }
   if ($VertexModel) { Set-RepoSecret 'VERTEX_MODEL' $VertexModel }
+
+  # ドキュメント保管（バッチ7l）: Cloud Storage バケット。デプロイ側がバケット作成・SA 権限付与まで冪等に行う
+  if ($StorageBucket) { Set-RepoSecret 'STORAGE_BUCKET' $StorageBucket }
 
   # カレンダー連携（F-06-8）: OAuth クライアント + トークン暗号化鍵。
   # 鍵は初回のみ自動生成（既存の TOKEN_ENCRYPTION_KEY があれば触らない = 保管済みトークンを壊さない）
