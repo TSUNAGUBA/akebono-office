@@ -8,7 +8,7 @@
     "generate": "nuxt generate",
     "preview": "nuxt preview",
     "typecheck": "nuxt typecheck",
-    "test": "vitest run"
+    "test": "nuxt prepare && vitest run"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.0",
