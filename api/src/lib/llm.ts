@@ -51,6 +51,70 @@ export interface LlmJsonRequest {
   images?: { mime: string; dataBase64: string }[]
 }
 
+export interface GroundedTextRequest {
+  system: string
+  prompt: string
+  maxTokens?: number
+}
+
+/**
+ * Google Search グラウンディング付きテキスト生成（バッチ7i・オペレーター指示 2026-07-19 #11）。
+ * AI カンパニーのステップ遂行前の Web 調査に使う。構造化出力（responseSchema）とグラウンディングの
+ * 併用は Vertex 側で保証されないため、調査（本関数 = テキスト）→ 遂行（generateJson）の 2 段に分ける。
+ * 失敗（未設定・認証不可・API エラー）は null（呼び出し側は調査なしで続行 = 原則4）。
+ * 出典は response の groundingMetadata.groundingChunks（web.uri / web.title）から抽出して返す
+ */
+export async function generateGroundedText(
+  env: Env,
+  req: GroundedTextRequest,
+): Promise<{ text: string; sources: { uri: string; title: string }[] } | null> {
+  if (!env.vertexProjectId) return null
+  const token = await accessToken()
+  if (!token) return null
+  try {
+    const res = await fetch(endpoint(env), {
+      method: 'POST',
+      headers: { 'authorization': `Bearer ${token}`, 'content-type': 'application/json' },
+      signal: AbortSignal.timeout(45_000),
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: req.system }] },
+        contents: [{ role: 'user', parts: [{ text: req.prompt }] }],
+        tools: [{ googleSearch: {} }],
+        generationConfig: {
+          maxOutputTokens: req.maxTokens ?? 2048,
+          temperature: 0.3,
+        },
+      }),
+    })
+    if (!res.ok) {
+      console.warn(`vertex grounded generateContent failed (non-blocking): ${res.status} ${(await res.text()).slice(0, 300)}`)
+      return null
+    }
+    const body = await res.json() as {
+      candidates?: {
+        content?: { parts?: { text?: string }[] }
+        groundingMetadata?: { groundingChunks?: { web?: { uri?: string; title?: string } }[] }
+      }[]
+    }
+    const cand = body.candidates?.[0]
+    const text = cand?.content?.parts?.map(p => p.text ?? '').join('').trim() ?? ''
+    if (!text) return null
+    const seen = new Set<string>()
+    const sources: { uri: string; title: string }[] = []
+    for (const chunk of cand?.groundingMetadata?.groundingChunks ?? []) {
+      const uri = chunk.web?.uri ?? ''
+      if (!uri || seen.has(uri)) continue
+      seen.add(uri)
+      sources.push({ uri, title: chunk.web?.title ?? uri })
+      if (sources.length >= 8) break
+    }
+    return { text, sources }
+  } catch (e) {
+    console.warn('vertex grounded generateContent failed (non-blocking):', (e as Error).message)
+    return null
+  }
+}
+
 /**
  * 構造化 JSON 生成。失敗（未設定・認証不可・API エラー・パース不能）は null を返す（例外は投げない）。
  * 呼び出し側は null をヒューリスティックへのフォールバック契機として扱うこと

@@ -54,6 +54,33 @@ async function api(
   return { status: res.status, json: await res.json() as never }
 }
 
+interface AiTaskRow {
+  id: string
+  status: string
+  decomposition: { title: string; done: boolean }[]
+  questions: { status: string; question: string }[]
+  outputs: { step: number; title: string; body: string }[]
+}
+
+/**
+ * AI タスクが条件を満たすまでポーリング（バッチ7i: 承認・回答後の自動実行は fire-and-forget のため、
+ * 状態遷移を待ってから検証する。LLM 無効環境はヒューリスティック = 通常 1〜2 周で収束）
+ */
+async function waitAiTask(
+  taskId: string,
+  pred: (t: AiTaskRow) => boolean,
+  tries = 100,
+): Promise<AiTaskRow> {
+  let last: AiTaskRow | undefined
+  for (let i = 0; i < tries; i++) {
+    const list = (await api('GET', '/v1/ai-company/tasks', { as: MEMBER })).json.data as AiTaskRow[]
+    last = list.find(x => x.id === taskId)
+    if (last && pred(last)) return last
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  throw new Error(`AI task ${taskId} が期待状態に達しません（最終: ${last?.status}）`)
+}
+
 beforeAll(async () => {
   if (!env.databaseUrl) throw new Error('DATABASE_URL が未設定です（test/run-integration.sh 経由で実行してください）')
   pool = createPool(env)
@@ -1465,15 +1492,13 @@ describe('AI カンパニー（F-08）', () => {
     const emps = (await api('GET', '/v1/masters/ai-employees', { as: MEMBER })).json.data as { id: string; status: string }[]
     expect(emps.find(e => e.id === empId)?.status).toBe('waiting_approval')
 
-    // 承認 → in_progress。全ステップ進行 → done + 依頼者へ通知
+    // 承認 → 全自動実行（バッチ7i: 「進める」の連打なしで done まで走り切る）+ 依頼者へ通知
     expect((await api('POST', `/v1/ai-company/tasks/${taskId}/approve`, { as: MEMBER })).status).toBe(200)
-    let status = 'in_progress'
-    for (let i = 0; i < 6 && status === 'in_progress'; i++) {
-      const r = await api('POST', `/v1/ai-company/tasks/${taskId}/progress`, { as: MEMBER })
-      expect(r.status).toBe(200)
-      status = (r.json.data as { status: string }).status
-    }
-    expect(status).toBe('done')
+    const doneTask = await waitAiTask(taskId, t => t.status === 'done')
+    expect(doneTask.decomposition.every(s => s.done)).toBe(true)
+    // 十分な依頼内容（内部情報の参照なし）には質問しない（バッチ7i: 質問は必要時のみ）
+    expect(doneTask.questions.length).toBe(0)
+    // 完了後の再進行は 409
     expect((await api('POST', `/v1/ai-company/tasks/${taskId}/progress`, { as: MEMBER })).status).toBe(409)
 
     const logs = (await api('GET', '/v1/ai-company/logs', { as: MEMBER })).json.data as { kind: string; taskId: string | null }[]
@@ -2533,7 +2558,8 @@ describe('バッチ7b: カレンダー同期対象の選択 + AI 社員間の依
       expect(children.length).toBeGreaterThan(0)
       for (const child of children) {
         expect(child.requesterAiEmployeeId).toBe(mgrId) // 依頼元 = マネージャー AI
-        expect(child.status).toBe('in_progress') // 人間の再承認は不要（親の承認で開始）
+        // 人間の再承認は不要（親の承認で開始）。バッチ7i の自動実行が既に完了させていることもある
+        expect(['in_progress', 'done']).toContain(child.status)
         expect(child.aiEmployeeId).not.toBe(mgrId) // 分担先は自分以外（シード済み AI 社員も候補に含まれる）
       }
       // 分担ステップの合計 = 親の分解ステップ数（取りこぼしなし）
@@ -2546,37 +2572,35 @@ describe('バッチ7b: カレンダー同期対象の選択 + AI 社員間の依
       expect(logs.some(l => l.aiEmployeeId !== mgrId && l.summary.includes('分担を受領'))).toBe(true)
     })
 
-    it('全分担の完了で親タスクが自動完了し、依頼者へ統合報告が通知される', async () => {
+    it('全分担の完了（バッチ7i: 承認時の自動実行）で親タスクが自動完了し、依頼者へ統合報告が通知される', async () => {
       const tasks = (await api('GET', '/v1/ai-company/tasks', { as: MEMBER })).json.data as {
-        id: string; status: string; parentTaskId: string | null; aiEmployeeId: string
-        decomposition: { title: string; done: boolean }[]
+        id: string; parentTaskId: string | null; aiEmployeeId: string
       }[]
       const parent = tasks.find(t => t.parentTaskId === null && t.aiEmployeeId === mgrId)!
-      const children = tasks.filter(t => t.parentTaskId === parent.id)
-      for (const child of children) {
-        for (let i = 0; i < child.decomposition.length; i++) {
-          expect((await api('POST', `/v1/ai-company/tasks/${child.id}/progress`, { as: MEMBER })).status).toBe(200)
-        }
-      }
-      const after = (await api('GET', '/v1/ai-company/tasks', { as: MEMBER })).json.data as
-        { id: string; status: string; decomposition: { done: boolean }[] }[]
-      expect(after.find(t => t.id === parent.id)!.status).toBe('done')
-      expect(after.find(t => t.id === parent.id)!.decomposition.every(s => s.done)).toBe(true)
+      // 分担は承認時の自動実行で走り切る（手動の「進める」は不要）→ 親のロールアップ完了を待つ
+      const after = await waitAiTask(parent.id, t => t.status === 'done')
+      expect(after.decomposition.every(s => s.done)).toBe(true)
       const notifs = (await api('GET', '/v1/notifications', { as: MEMBER })).json.data as { title: string }[]
       expect(notifs.some(n => n.title.startsWith('AI 連携完了報告'))).toBe(true)
     })
 
     it('分担先のブロックはマネージャーへエスカレーションされ、依頼者へ通知される', async () => {
+      // バッチ7i: 承認すると分担は自動実行で即完了し得るため、ブロック経路の検証は
+      // 未承認の親 + SQL で用意した実行中の子で決定的にセットアップする
+      //（分担の作成経路そのものは上のテストで検証済み。検証対象はブロック API の挙動）
       const created = await api('POST', '/v1/ai-company/tasks', {
         as: MEMBER,
         body: { aiEmployeeId: mgrId, title: '業界レポートの調査', description: '対象業界の動向を調査してまとめる。' },
       })
       const taskId = (created.json.data as { id: string }).id
-      await api('POST', `/v1/ai-company/tasks/${taskId}/approve`, { as: MEMBER })
-      const tasks = (await api('GET', '/v1/ai-company/tasks', { as: MEMBER })).json.data as
-        { id: string; parentTaskId: string | null }[]
-      const child = tasks.find(t => t.parentTaskId === taskId)!
-      expect((await api('POST', `/v1/ai-company/tasks/${child.id}/block`, { as: MEMBER })).status).toBe(200)
+      const childId = 'at-7i-block-child'
+      await pool.query(
+        `INSERT INTO ai_tasks (id, ai_employee_id, requester_id, title, description, decomposition, status,
+           confidence, created_at, requester_ai_employee_id, parent_task_id)
+         SELECT $1, ai_employee_id, requester_id, '業界レポートの調査（分担: 検証）', description,
+                '[{"title":"調査","done":false}]'::jsonb, 'in_progress', 'mid', created_at, ai_employee_id, id
+         FROM ai_tasks WHERE id = $2`, [childId, taskId])
+      expect((await api('POST', `/v1/ai-company/tasks/${childId}/block`, { as: MEMBER })).status).toBe(200)
       const logs = (await api('GET', '/v1/ai-company/logs', { as: MEMBER })).json.data as
         { aiEmployeeId: string; taskId: string | null; summary: string }[]
       expect(logs.some(l => l.aiEmployeeId === mgrId && l.taskId === taskId && l.summary.includes('分担先で'))).toBe(true)
@@ -2586,10 +2610,12 @@ describe('バッチ7b: カレンダー同期対象の選択 + AI 社員間の依
       expect((await api('POST', `/v1/ai-company/tasks/${taskId}/cancel`, { as: MEMBER })).status).toBe(200)
       const after = (await api('GET', '/v1/ai-company/tasks', { as: MEMBER })).json.data as
         { id: string; status: string }[]
-      expect(after.find(t => t.id === child.id)!.status).toBe('cancelled')
+      expect(after.find(t => t.id === childId)!.status).toBe('cancelled')
     })
 
     it('中止された分担は「完了待ち」に数えない（残りの完了で親が統合完了する。PR #48 レビュー指摘）', async () => {
+      // バッチ7i: 承認経由だと分担が自動実行で即完了し得るため、SQL で
+      // 「実行中の親 + 分担 2 件（片方を中止）」を決定的にセットアップしてロールアップを検証する
       const created = await api('POST', '/v1/ai-company/tasks', {
         as: MEMBER,
         body: {
@@ -2598,35 +2624,26 @@ describe('バッチ7b: カレンダー同期対象の選択 + AI 社員間の依
         },
       })
       const taskId = (created.json.data as { id: string }).id
-      await api('POST', `/v1/ai-company/tasks/${taskId}/approve`, { as: MEMBER })
-      const tasks = (await api('GET', '/v1/ai-company/tasks', { as: MEMBER })).json.data as {
-        id: string; parentTaskId: string | null; decomposition: { title: string }[]
-      }[]
-      const children = tasks.filter(t => t.parentTaskId === taskId)
-      expect(children.length).toBeGreaterThan(0)
-      // 先頭の子を中止し、残りを完了させる
-      await api('POST', `/v1/ai-company/tasks/${children[0]!.id}/cancel`, { as: MEMBER })
-      for (const child of children.slice(1)) {
-        for (let i = 0; i < child.decomposition.length; i++) {
-          await api('POST', `/v1/ai-company/tasks/${child.id}/progress`, { as: MEMBER })
-        }
-      }
-      const after = (await api('GET', '/v1/ai-company/tasks', { as: MEMBER })).json.data as
-        { id: string; status: string }[]
-      if (children.length > 1) {
-        // 中止された分担が残りの統合完了をブロックしない
-        expect(after.find(t => t.id === taskId)!.status).toBe('done')
-      } else {
-        // 分担が 1 件のみで中止された場合、親は自動完了しない（人間が親を進めて完了できる）
-        expect(after.find(t => t.id === taskId)!.status).toBe('in_progress')
-        const parent = tasks.find(t => t.id === taskId)!
-        for (let i = 0; i < parent.decomposition.length; i++) {
-          await api('POST', `/v1/ai-company/tasks/${taskId}/progress`, { as: MEMBER })
-        }
-        const final = (await api('GET', '/v1/ai-company/tasks', { as: MEMBER })).json.data as
-          { id: string; status: string }[]
-        expect(final.find(t => t.id === taskId)!.status).toBe('done')
-      }
+      const parentRow = ((await api('GET', '/v1/ai-company/tasks', { as: MEMBER })).json.data as
+        { id: string; decomposition: { title: string }[] }[]).find(t => t.id === taskId)!
+      await pool.query(`UPDATE ai_tasks SET status = 'in_progress' WHERE id = $1`, [taskId])
+      const mkChild = (id: string, steps: { title: string }[]) => pool.query(
+        `INSERT INTO ai_tasks (id, ai_employee_id, requester_id, title, description, decomposition, status,
+           confidence, created_at, requester_ai_employee_id, parent_task_id)
+         SELECT $1, ai_employee_id, requester_id, $3, description, $4::jsonb, 'in_progress', 'mid',
+                created_at, ai_employee_id, id
+         FROM ai_tasks WHERE id = $2`,
+        [id, taskId, `競合の調査と比較資料の作成（分担: 検証${id.slice(-1)}）`,
+          JSON.stringify(steps.map(s => ({ title: s.title, done: false })))])
+      // 子A = 先頭ステップのみ / 子B = 全ステップ（B の完了 + A の中止で親が統合完了する想定）
+      await mkChild('at-7i-rollup-a', parentRow.decomposition.slice(0, 1))
+      await mkChild('at-7i-rollup-b', parentRow.decomposition)
+      await api('POST', `/v1/ai-company/tasks/at-7i-rollup-a/cancel`, { as: MEMBER })
+      // 手動の「進める」1 回で残ステップは自動実行が引き継ぐ（バッチ7i）
+      expect((await api('POST', `/v1/ai-company/tasks/at-7i-rollup-b/progress`, { as: MEMBER })).status).toBe(200)
+      // 中止された分担（子A）が残り（子B）の統合完了をブロックしない = 親が done へ
+      const after = await waitAiTask(taskId, t => t.status === 'done')
+      expect(after.decomposition.every(s => s.done)).toBe(true)
     })
 
     it('delegate 権限のないロールの AI 社員への依頼は連携しない（従来どおり単独実行）', async () => {
@@ -2996,19 +3013,17 @@ describe('バッチ7f: 権限デフォルト + AI 社員の増減 + AI カンパ
     expect(listed.find(t => t.id === taskId)?.files.map(f => f.filename).sort()).toEqual(['ref.md', 'shot.png'])
 
     await api('POST', `/v1/ai-company/tasks/${taskId}/approve`, { as: MEMBER })
-    // 1 回目の「進める」: 情報不足 → 依頼者へ質問してブロック（人間のアクション要求）
-    const p1 = await api('POST', `/v1/ai-company/tasks/${taskId}/progress`, { as: MEMBER })
-    expect((p1.json.data as { status: string }).status).toBe('blocked')
-    const q1 = (p1.json.data as { questions: { status: string; question: string }[] }).questions
-    expect(q1.length).toBe(1)
-    expect(q1[0]!.status).toBe('open')
+    // 承認 → 自動実行（バッチ7i）: 情報不足（10 字未満）→ 依頼者へ自動で質問してブロック（人間のアクション要求）
+    const blocked = await waitAiTask(taskId, t => t.status === 'blocked')
+    expect(blocked.questions.length).toBe(1)
+    expect(blocked.questions[0]!.status).toBe('open')
     // 回答待ちの間は進められない
     expect((await api('POST', `/v1/ai-company/tasks/${taskId}/progress`, { as: MEMBER })).json.error?.code).toBe('AKO-AIC-014')
     // 回答は依頼者本人（または管理者）のみ
     expect((await api('POST', `/v1/ai-company/tasks/${taskId}/answer`, {
       as: HR, body: { answer: '勝手に回答' },
     })).json.error?.code).toBe('AKO-AIC-013')
-    // 依頼者の回答（添付付き）で実行再開
+    // 依頼者の回答（添付付き）で実行が自動再開する（「進める」の連打不要 = バッチ7i）
     const ans = await api('POST', `/v1/ai-company/tasks/${taskId}/answer`, {
       as: MEMBER,
       body: {
@@ -3017,20 +3032,13 @@ describe('バッチ7f: 権限デフォルト + AI 社員の増減 + AI カンパ
       },
     })
     expect(ans.status).toBe(200)
-    expect((ans.json.data as { status: string }).status).toBe('in_progress')
+    // 自動再開は fire-and-forget のため、応答時点の状態は in_progress（または既に done）
+    expect(['in_progress', 'done']).toContain((ans.json.data as { status: string }).status)
     expect((ans.json.data as { questions: { status: string; answer: string }[] }).questions[0]!.status).toBe('answered')
 
-    // 全ステップ遂行 → 各ステップの成果物 + 統合報告
-    interface ExecState { status: string; outputs: { step: number; title: string; body: string }[] }
-    let last: ExecState | undefined
-    for (let i = 0; i < 8; i++) {
-      const r = await api('POST', `/v1/ai-company/tasks/${taskId}/progress`, { as: MEMBER })
-      if (r.status !== 200) break
-      last = r.json.data as ExecState
-      if (last.status === 'done') break
-    }
-    expect(last?.status).toBe('done')
-    const outputs = last!.outputs
+    // 全ステップの自動遂行 → 各ステップの成果物 + 統合報告
+    const done = await waitAiTask(taskId, t => t.status === 'done')
+    const outputs = done.outputs
     expect(outputs.length).toBeGreaterThan(1)
     // ステップ成果物は材料（回答・添付抽出テキスト）に基づく（LLM 無効 = 決定的ヒューリスティック）
     expect(outputs[0]!.body).toContain('コスト削減')

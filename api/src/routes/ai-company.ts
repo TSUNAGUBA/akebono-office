@@ -25,9 +25,9 @@ import type { Env } from '../env'
 import { raiseEscalation } from '../lib/escalate'
 import { extractDocumentText } from '../lib/extract-text'
 import { capCp } from '../lib/text'
-import { err } from '../lib/errors'
+import { ApiError, err } from '../lib/errors'
 import { newId } from '../lib/ids'
-import { generateJson } from '../lib/llm'
+import { generateGroundedText, generateJson } from '../lib/llm'
 import { notify } from '../lib/notify'
 
 // questions / files（メタのみ）はタスク行へ埋め込んで返す（フロントの型 = AiTask.questions/files と一致。
@@ -215,7 +215,9 @@ async function llmDecompose(
 
 /**
  * ステップの実遂行（バッチ7f）。LLM が材料（依頼文・Q&A・添付）に基づき実際に成果物を生成する。
- * 人間の判断・情報が必要と判定した場合は needsInput=true + 具体的な質問を返す（依頼者へ確認）。
+ * バッチ7i（オペレーター指示 2026-07-19 #11）: 遂行前に Google 検索グラウンディングで Web 調査を行い、
+ * 調査メモ（出典付き）を材料へ加える。自 DB・依頼文だけで解決しようとせず、インターネットの情報で
+ * 遂行を目指す。依頼者への質問は「自社・顧客のドメイン情報が不可欠」「重要な意思表示が必要」のみに限定。
  * LLM 無効・失敗時は決定的ヒューリスティック（heuristicNeedsInput / heuristicStepOutput）へ（原則4）
  */
 async function prepareStepExecution(
@@ -234,14 +236,31 @@ async function prepareStepExecution(
     .filter(o => o.step >= 0)
     .map(o => `【${o.title}】\n${capCp(o.body, 1500)}`)
     .join('\n\n')
+  // Web 調査（バッチ7i）。グラウンディングと構造化出力は併用しない（Vertex 側の保証がない）ため、
+  // 調査（テキスト + 出典）→ 遂行（構造化出力）の 2 段。調査失敗は材料なしで続行（原則4）
+  const research = await generateGroundedText(env, {
+    system: 'あなたはリサーチアシスタントです。Google 検索で信頼できる最新情報を収集し、'
+      + '事実のみを日本語の箇条書きで簡潔にまとめます。推測や創作をしないこと。',
+    prompt: `次のタスクのステップを遂行するために役立つ情報を Web から調査し、要点をまとめてください。\n`
+      + `件名: ${task.title}\n依頼内容: ${capCp(task.description, 1000)}\n遂行するステップ: ${step.title}`,
+    maxTokens: 1536,
+  })
+  const researchBlock = research
+    ? `\n\n# Web 調査メモ（Google 検索による収集。出典付き）\n${capCp(research.text, 4000)}`
+      + (research.sources.length > 0
+        ? `\n\n調査の出典:\n${research.sources.map(s => `- ${s.title}: ${s.uri}`).join('\n')}`
+        : '')
+    : ''
   const res = await generateJson<{ needsInput?: boolean; question?: string; output?: string }>(env, {
     system: `あなたは AI 社員「${role?.name ?? '汎用'}」です。ミッション: ${role?.mission ?? ''}\n`
       + `${role?.systemPrompt ? `${role.systemPrompt}\n` : ''}`
       + 'タスクの現在のステップを実際に遂行し、成果物をマークダウンで出力します。'
-      + '材料（依頼文・確認済み Q&A・添付）にある情報のみを使い、推測で事実を作らないこと。'
-      + '人間の判断・追加情報がないと遂行できない場合のみ needsInput=true とし、依頼者への具体的な質問を question に書くこと'
-      + '（その場合 output は空でよい）。',
-    prompt: `# タスク\n件名: ${task.title}\n\n# 材料\n${materials.text}`
+      + '材料（依頼文・確認済み Q&A・添付・Web 調査メモ）にある情報のみを使い、推測で事実を作らないこと。'
+      + 'Web 調査メモの情報を成果物に使った場合は、末尾に「参考」として出典 URL を明記すること。'
+      + 'まず材料と Web 調査で自力遂行を尽くすこと。依頼者への質問（needsInput=true + question）は、'
+      + '自社・顧客固有の内部情報がどうしても必要な場合、または重要な意思決定・承認を依頼者に求める場合に限る'
+      + '（一般的な知識・調査で解決できることを質問しない。その場合 output は空でよい）。',
+    prompt: `# タスク\n件名: ${task.title}\n\n# 材料\n${materials.text}${researchBlock}`
       + (priorOutputs ? `\n\n# これまでのステップ成果\n${capCp(priorOutputs, 6000)}` : '')
       + `\n\n# 今回遂行するステップ\n${step.title}\n\nこのステップを遂行し、成果物を出力してください。`,
     schema: {
@@ -428,6 +447,194 @@ async function rollUpToParent(
     : null
 }
 
+// ---------- 承認後の全自動実行（バッチ7i・オペレーター指示 2026-07-19 #11） ----------
+
+interface ProgressResult {
+  finished?: boolean
+  requesterId?: string
+  title?: string
+  aiEmployeeId?: string
+  notifyHuman?: boolean
+  questionAsked?: string
+  parentFinished?: { requesterId: string; title: string; managerId: string }
+  childBlocked?: { requesterId: string; title: string }
+}
+
+/**
+ * 1 ステップの遂行（POST /tasks/:id/progress の本体。HTTP ハンドラと自動実行ループで共用）。
+ * 事前実行（Web 調査 + LLM）はロック取得前に済ませ、FOR UPDATE の状態機械で直列化する
+ */
+async function progressTaskOnce(pool: pg.Pool, env: Env, taskId: string): Promise<ProgressResult> {
+  let preparedExec: {
+    stepIndex: number
+    stepTitle: string
+    result: Awaited<ReturnType<typeof prepareStepExecution>>
+  } | null = null
+  const { rows: pre } = await pool.query<AiTask & {
+    decomposition: { title: string; done: boolean }[]
+    outputs: AiTaskOutput[]
+    questions: { status: string }[]
+  }>(`SELECT ${TASK_COLS} FROM ai_tasks WHERE id = $1`, [taskId])
+  if (pre[0]?.status === 'in_progress' && !pre[0].questions.some(q => q.status === 'open')) {
+    const idx = pre[0].decomposition.findIndex(s => !s.done)
+    if (idx >= 0) {
+      preparedExec = {
+        stepIndex: idx,
+        stepTitle: pre[0].decomposition[idx]!.title,
+        result: await prepareStepExecution(pool, env, pre[0], idx),
+      }
+    }
+  }
+
+  const client = await pool.connect()
+  let result: ProgressResult = {}
+  try {
+    await client.query('BEGIN')
+    const { rows } = await client.query<AiTask & { decomposition: { title: string; done: boolean }[] }>(
+      `SELECT ${TASK_COLS} FROM ai_tasks WHERE id = $1 FOR UPDATE`, [taskId])
+    const task = rows[0]
+    if (!task) throw err('AKO-AIC-003', 'タスクが見つかりません', 404)
+    // 依頼者の回答待ち（open な質問）の間は進められない = 回答（/answer）で再開する。
+    // 質問によるブロックは status='blocked' のため、状態ガードより先に判定して 014 を返す
+    const { rows: openQ } = await client.query(
+      `SELECT 1 FROM ai_task_questions WHERE task_id = $1 AND status = 'open' LIMIT 1`, [taskId])
+    if (openQ.length > 0) throw err('AKO-AIC-014', '依頼者の回答待ちです（回答すると実行を再開できます）', 409)
+    if (task.status !== 'in_progress') throw err('AKO-AIC-005', '実行中のタスクのみ進められます', 409)
+    const idx = task.decomposition.findIndex(s => !s.done)
+    if (idx < 0) throw err('AKO-AIC-006', '未完了のステップがありません', 409)
+    const step = task.decomposition[idx]!
+    // 事前実行の対象とロック後の状態が食い違う場合（同時操作の競合 = 通常起きない）は、
+    // 質問判定・材料を欠いた劣化出力を作らず、再試行可能エラーで返す（次の操作で正しく事前実行される）
+    if (!preparedExec || preparedExec.stepIndex !== idx || preparedExec.stepTitle !== step.title) {
+      throw err('AKO-AIC-009', '同時操作が競合しました。もう一度お試しください', 409)
+    }
+    const exec = preparedExec.result
+    if (exec.kind === 'question') {
+      // 人間のアクションが必要 = 依頼者へ質問し、回答があるまでブロック（バッチ7f）
+      const qid = newId('atq')
+      await client.query(
+        `INSERT INTO ai_task_questions (id, task_id, step_index, question, status, asked_at)
+         VALUES ($1, $2, $3, $4, 'open', now())`, [qid, taskId, idx, exec.question])
+      await client.query(`UPDATE ai_tasks SET status = 'blocked', updated_at = now() WHERE id = $1`, [taskId])
+      await addLog(client, task.aiEmployeeId, taskId, 'escalate',
+        `「${step.title}」の遂行に確認が必要: ${capCp(exec.question, 60)}`)
+      result = { requesterId: task.requesterId, title: task.title }
+      result.questionAsked = exec.question
+    } else {
+      // 実遂行: 成果物を生成して保存し、ステップを完了へ（outputs は追記のみ = 記録系）
+      const outputs: AiTaskOutput[] = [
+        ...(task as unknown as { outputs: AiTaskOutput[] }).outputs,
+        { step: idx, title: step.title, body: exec.body, at: nowJstIso() },
+      ]
+      const decomposition = task.decomposition.map((s, i) => i === idx ? { ...s, done: true } : s)
+      const finished = decomposition.every(s => s.done)
+      if (finished) {
+        outputs.push({ step: -1, title: '統合報告', body: buildFinalReport(task.title, outputs), at: nowJstIso() })
+      }
+      await client.query(
+        `UPDATE ai_tasks SET decomposition = $2, outputs = $3, status = $4, updated_at = now() WHERE id = $1`,
+        [taskId, JSON.stringify(decomposition), JSON.stringify(outputs), finished ? 'done' : task.status])
+      await addLog(client, task.aiEmployeeId, taskId, 'execute', `「${step.title}」を遂行し成果物を作成`)
+      if (finished) {
+        await addLog(client, task.aiEmployeeId, taskId, 'report', `「${task.title}」の全ステップが完了、成果を統合して報告`)
+      }
+      // 子タスク（連携分担）の完了は依頼元マネージャーへ報告・ロールアップ（人間への通知は親の完了時のみ）
+      result = { finished, requesterId: task.requesterId, title: task.title, notifyHuman: finished && !task.parentTaskId }
+      if (finished && task.parentTaskId) {
+        const parentDone = await rollUpToParent(client, task)
+        if (parentDone) result.parentFinished = parentDone
+      }
+    }
+    await syncEmployeeStatus(client, task.aiEmployeeId)
+    result.aiEmployeeId = task.aiEmployeeId
+    await client.query('COMMIT')
+  } catch (e) {
+    await client.query('ROLLBACK')
+    // 連携の親子ロック（progress = 子→親）の稀なデッドロック検出（40P01）は再試行可能エラーへ変換
+    if ((e as { code?: string }).code === '40P01') {
+      throw err('AKO-AIC-009', '同時操作が競合しました。もう一度お試しください', 409)
+    }
+    throw e
+  } finally {
+    client.release()
+  }
+  return result
+}
+
+/** 遂行結果の補助通知（トランザクション確定後・失敗しても遷移は成立 = 原則4） */
+async function notifyTaskEvents(pool: pg.Pool, result: ProgressResult): Promise<void> {
+  if (result.questionAsked && result.requesterId) {
+    const { rows } = await pool.query<{ name: string }>(
+      `SELECT name FROM ai_employees WHERE id = $1`, [result.aiEmployeeId])
+    await notify(pool, result.requesterId, 'ai_report', `AI 確認依頼: ${result.title}`,
+      `${rows[0]?.name ?? 'AI社員'} から確認: ${capCp(result.questionAsked, 80)}（/ai-company で回答してください）`,
+      '/ai-company')
+  }
+  if (result.notifyHuman && result.requesterId) {
+    const { rows } = await pool.query<{ name: string }>(
+      `SELECT name FROM ai_employees WHERE id = $1`, [result.aiEmployeeId])
+    await notify(pool, result.requesterId, 'ai_report', `AI 完了報告: ${result.title}`,
+      `${rows[0]?.name ?? 'AI社員'} がタスクを完了しました`, '/ai-company')
+  }
+  if (result.parentFinished) {
+    const { rows } = await pool.query<{ name: string }>(
+      `SELECT name FROM ai_employees WHERE id = $1`, [result.parentFinished.managerId])
+    await notify(pool, result.parentFinished.requesterId, 'ai_report',
+      `AI 連携完了報告: ${result.parentFinished.title}`,
+      `${rows[0]?.name ?? 'マネージャー'} が分担タスクの成果を統合して完了しました`, '/ai-company')
+  }
+  if (result.childBlocked) {
+    await notify(pool, result.childBlocked.requesterId, 'ai_report',
+      `AI 連携ブロック: ${result.childBlocked.title}`,
+      '分担先のタスクがブロックされました。/ai-company で状況を確認してください', '/ai-company')
+  }
+}
+
+/** 自動実行ループの安全上限（分解は最大 6 ステップ + 余裕。暴走・無限ループの背止め） */
+const AUTO_RUN_MAX_STEPS = 12
+
+/**
+ * 承認・回答後の全自動実行（バッチ7i）: 「進める」の連打なしで、完了・依頼者への質問・
+ * 中止のいずれかまで走り切る。fire-and-forget で呼ぶ（HTTP 応答をブロックしない）。
+ * 停止条件のエラー（回答待ち 014・状態外 005・ステップなし 006）は想定内として静かに終了し、
+ * 競合（009）は 1 回だけ再試行する。予期しないエラーはログのみ（手動の「進める」で再開可能）
+ */
+async function autoRunTask(pool: pg.Pool, env: Env, taskId: string): Promise<void> {
+  let retried = false
+  for (let i = 0; i < AUTO_RUN_MAX_STEPS; i++) {
+    let result: ProgressResult
+    try {
+      result = await progressTaskOnce(pool, env, taskId)
+    } catch (e) {
+      const code = e instanceof ApiError ? e.code : ''
+      if (code === 'AKO-AIC-009' && !retried) {
+        retried = true
+        continue
+      }
+      if (!['AKO-AIC-005', 'AKO-AIC-006', 'AKO-AIC-009', 'AKO-AIC-014'].includes(code)) {
+        console.warn(`ai task auto-run stopped (non-blocking): ${taskId}`, (e as Error).message)
+      }
+      return
+    }
+    retried = false
+    await notifyTaskEvents(pool, result)
+    if (result.finished || result.questionAsked) return
+  }
+  console.warn(`ai task auto-run reached step cap (non-blocking): ${taskId}`)
+}
+
+/** 承認直後の自動実行の起点: 連携分担があれば子タスク群を、なければ本体を自動実行する */
+async function autoRunAfterApprove(pool: pg.Pool, env: Env, taskId: string): Promise<void> {
+  const { rows: kids } = await pool.query<{ id: string }>(
+    `SELECT id FROM ai_tasks WHERE parent_task_id = $1 AND status = 'in_progress' ORDER BY id`, [taskId])
+  if (kids.length > 0) {
+    // 分担は並行実行（親の完了は rollUpToParent が判定）
+    await Promise.all(kids.map(k => autoRunTask(pool, env, k.id)))
+  } else {
+    await autoRunTask(pool, env, taskId)
+  }
+}
+
 export function aiCompanyRoutes(pool: pg.Pool, env: Env): Hono {
   const app = new Hono()
 
@@ -518,45 +725,34 @@ export function aiCompanyRoutes(pool: pg.Pool, env: Env): Hono {
     const taskId = c.req.param('id')
     const action = c.req.param('action')
 
-    // 連携計画・ステップ実行（LLM 呼び出しあり = 最長 30 秒）はロック取得前に済ませる。
+    // 進める = 1 ステップ遂行（progressTaskOnce を自動実行ループと共用）。
+    // バッチ7i: 手動の「進める」は再開の起点でもある = 残ステップは自動実行で走り切る
+    if (action === 'progress') {
+      const result = await progressTaskOnce(pool, env, taskId)
+      await notifyTaskEvents(pool, result)
+      if (!result.finished && !result.questionAsked) {
+        void autoRunTask(pool, env, taskId)
+      }
+      const { rows: after } = await pool.query(`SELECT ${TASK_COLS} FROM ai_tasks WHERE id = $1`, [taskId])
+      return c.json({ data: after[0] })
+    }
+
+    // 連携計画（LLM 呼び出しあり = 最長 30 秒）はロック取得前に済ませる。
     // 事前読みの状態が対象外ならスキップ（トランザクション内の状態ガードが正）
     let prepared: Awaited<ReturnType<typeof prepareDelegationPlan>> = null
-    let preparedExec: {
-      stepIndex: number
-      stepTitle: string
-      result: Awaited<ReturnType<typeof prepareStepExecution>>
-    } | null = null
-    if (action === 'approve' || action === 'progress') {
+    if (action === 'approve') {
       const { rows: pre } = await pool.query<AiTask & {
         decomposition: { title: string; done: boolean }[]
-        outputs: AiTaskOutput[]
-        questions: { status: string }[]
       }>(
         `SELECT ${TASK_COLS} FROM ai_tasks WHERE id = $1`, [taskId])
-      if (action === 'approve' && pre[0]?.status === 'proposed') {
+      if (pre[0]?.status === 'proposed') {
         prepared = await prepareDelegationPlan(pool, env, pre[0])
-      }
-      if (action === 'progress' && pre[0]?.status === 'in_progress'
-        && !pre[0].questions.some(q => q.status === 'open')) {
-        const idx = pre[0].decomposition.findIndex(s => !s.done)
-        if (idx >= 0) {
-          preparedExec = {
-            stepIndex: idx,
-            stepTitle: pre[0].decomposition[idx]!.title,
-            result: await prepareStepExecution(pool, env, pre[0], idx),
-          }
-        }
       }
     }
 
     const client = await pool.connect()
-    let result: {
-      finished?: boolean; requesterId?: string; title?: string; aiEmployeeId?: string
-      notifyHuman?: boolean
-      questionAsked?: string
-      parentFinished?: { requesterId: string; title: string; managerId: string }
-      childBlocked?: { requesterId: string; title: string }
-    } = {}
+    let result: ProgressResult = {}
+    let resumeAutoRun = false
     try {
       await client.query('BEGIN')
       const { rows } = await client.query<AiTask & { decomposition: { title: string; done: boolean }[] }>(
@@ -571,58 +767,6 @@ export function aiCompanyRoutes(pool: pg.Pool, env: Env): Hono {
         // マネージャーロール（delegate 権限）なら、承認と同時に他 AI 社員へ分担を連携
         // （人間の承認は親タスク 1 回のみ = 依頼を一挙に引き受ける。オペレーター指示 2026-07-19 #3）
         if (prepared) await delegateOnApprove(client, task, prepared)
-      } else if (action === 'progress') {
-        // 依頼者の回答待ち（open な質問）の間は進められない = 回答（/answer）で再開する。
-        // 質問によるブロックは status='blocked' のため、状態ガードより先に判定して 014 を返す
-        const { rows: openQ } = await client.query(
-          `SELECT 1 FROM ai_task_questions WHERE task_id = $1 AND status = 'open' LIMIT 1`, [taskId])
-        if (openQ.length > 0) throw err('AKO-AIC-014', '依頼者の回答待ちです（回答すると実行を再開できます）', 409)
-        if (task.status !== 'in_progress') throw err('AKO-AIC-005', '実行中のタスクのみ進められます', 409)
-        const idx = task.decomposition.findIndex(s => !s.done)
-        if (idx < 0) throw err('AKO-AIC-006', '未完了のステップがありません', 409)
-        const step = task.decomposition[idx]!
-        // 事前実行の対象とロック後の状態が食い違う場合（同時操作の競合 = 通常起きない）は、
-        // 質問判定・材料を欠いた劣化出力を作らず、再試行可能エラーで返す（次の操作で正しく事前実行される）
-        if (!preparedExec || preparedExec.stepIndex !== idx || preparedExec.stepTitle !== step.title) {
-          throw err('AKO-AIC-009', '同時操作が競合しました。もう一度お試しください', 409)
-        }
-        const exec = preparedExec.result
-        if (exec.kind === 'question') {
-          // 人間のアクションが必要 = 依頼者へ質問し、回答があるまでブロック（バッチ7f）
-          const qid = newId('atq')
-          await client.query(
-            `INSERT INTO ai_task_questions (id, task_id, step_index, question, status, asked_at)
-             VALUES ($1, $2, $3, $4, 'open', now())`, [qid, taskId, idx, exec.question])
-          await client.query(`UPDATE ai_tasks SET status = 'blocked', updated_at = now() WHERE id = $1`, [taskId])
-          await addLog(client, task.aiEmployeeId, taskId, 'escalate',
-            `「${step.title}」の遂行に確認が必要: ${capCp(exec.question, 60)}`)
-          result = { requesterId: task.requesterId, title: task.title }
-          result.questionAsked = exec.question
-        } else {
-          // 実遂行: 成果物を生成して保存し、ステップを完了へ（outputs は追記のみ = 記録系）
-          const outputs: AiTaskOutput[] = [
-            ...(task as unknown as { outputs: AiTaskOutput[] }).outputs,
-            { step: idx, title: step.title, body: exec.body, at: nowJstIso() },
-          ]
-          const decomposition = task.decomposition.map((s, i) => i === idx ? { ...s, done: true } : s)
-          const finished = decomposition.every(s => s.done)
-          if (finished) {
-            outputs.push({ step: -1, title: '統合報告', body: buildFinalReport(task.title, outputs), at: nowJstIso() })
-          }
-          await client.query(
-            `UPDATE ai_tasks SET decomposition = $2, outputs = $3, status = $4, updated_at = now() WHERE id = $1`,
-            [taskId, JSON.stringify(decomposition), JSON.stringify(outputs), finished ? 'done' : task.status])
-          await addLog(client, task.aiEmployeeId, taskId, 'execute', `「${step.title}」を遂行し成果物を作成`)
-          if (finished) {
-            await addLog(client, task.aiEmployeeId, taskId, 'report', `「${task.title}」の全ステップが完了、成果を統合して報告`)
-          }
-          // 子タスク（連携分担）の完了は依頼元マネージャーへ報告・ロールアップ（人間への通知は親の完了時のみ）
-          result = { finished, requesterId: task.requesterId, title: task.title, notifyHuman: finished && !task.parentTaskId }
-          if (finished && task.parentTaskId) {
-            const parentDone = await rollUpToParent(client, task)
-            if (parentDone) result.parentFinished = parentDone
-          }
-        }
       } else if (action === 'block') {
         if (task.status === 'in_progress') {
           await client.query(`UPDATE ai_tasks SET status = 'blocked', updated_at = now() WHERE id = $1`, [taskId])
@@ -641,6 +785,7 @@ export function aiCompanyRoutes(pool: pg.Pool, env: Env): Hono {
         } else if (task.status === 'blocked') {
           await client.query(`UPDATE ai_tasks SET status = 'in_progress', updated_at = now() WHERE id = $1`, [taskId])
           await addLog(client, task.aiEmployeeId, taskId, 'plan', `「${task.title}」のブロックが解除され実行を再開`)
+          resumeAutoRun = true // バッチ7i: 解除後は自動で走り切る（open な質問があれば自動実行側で停止）
         } else {
           throw err('AKO-AIC-007', '実行中またはブロック中のタスクのみ切替できます', 409)
         }
@@ -681,30 +826,13 @@ export function aiCompanyRoutes(pool: pg.Pool, env: Env): Hono {
       client.release()
     }
     // 補助処理: 完了・確認依頼・連携通知（トランザクション確定後・失敗しても遷移は成立 = 原則4）
-    if (result.questionAsked && result.requesterId) {
-      const { rows } = await pool.query<{ name: string }>(
-        `SELECT name FROM ai_employees WHERE id = $1`, [result.aiEmployeeId])
-      await notify(pool, result.requesterId, 'ai_report', `AI 確認依頼: ${result.title}`,
-        `${rows[0]?.name ?? 'AI社員'} から確認: ${capCp(result.questionAsked, 80)}（/ai-company で回答してください）`,
-        '/ai-company')
-    }
-    if (result.notifyHuman && result.requesterId) {
-      const { rows } = await pool.query<{ name: string }>(
-        `SELECT name FROM ai_employees WHERE id = $1`, [result.aiEmployeeId])
-      await notify(pool, result.requesterId, 'ai_report', `AI 完了報告: ${result.title}`,
-        `${rows[0]?.name ?? 'AI社員'} がタスクを完了しました`, '/ai-company')
-    }
-    if (result.parentFinished) {
-      const { rows } = await pool.query<{ name: string }>(
-        `SELECT name FROM ai_employees WHERE id = $1`, [result.parentFinished.managerId])
-      await notify(pool, result.parentFinished.requesterId, 'ai_report',
-        `AI 連携完了報告: ${result.parentFinished.title}`,
-        `${rows[0]?.name ?? 'マネージャー'} が分担タスクの成果を統合して完了しました`, '/ai-company')
-    }
-    if (result.childBlocked) {
-      await notify(pool, result.childBlocked.requesterId, 'ai_report',
-        `AI 連携ブロック: ${result.childBlocked.title}`,
-        '分担先のタスクがブロックされました。/ai-company で状況を確認してください', '/ai-company')
+    await notifyTaskEvents(pool, result)
+    // バッチ7i: 承認・ブロック解除後は fire-and-forget で全自動実行（HTTP 応答をブロックしない。
+    // 進捗は一覧の再読み込みで追える・完了/質問は通知が届く）
+    if (action === 'approve') {
+      void autoRunAfterApprove(pool, env, taskId)
+    } else if (resumeAutoRun) {
+      void autoRunTask(pool, env, taskId)
     }
     const { rows: after } = await pool.query(`SELECT ${TASK_COLS} FROM ai_tasks WHERE id = $1`, [taskId])
     return c.json({ data: after[0] })
@@ -758,7 +886,9 @@ export function aiCompanyRoutes(pool: pg.Pool, env: Env): Hono {
     } finally {
       client.release()
     }
-    // 回答者本人の操作のため人間への追加通知は不要（AI は次の「進める」で回答を材料に遂行する）
+    // 回答者本人の操作のため人間への追加通知は不要。
+    // バッチ7i: 回答で実行を自動再開する（fire-and-forget = 「進める」の連打不要）
+    void autoRunTask(pool, env, taskId)
     const { rows: after } = await pool.query(`SELECT ${TASK_COLS} FROM ai_tasks WHERE id = $1`, [taskId])
     return c.json({ data: after[0] })
   })

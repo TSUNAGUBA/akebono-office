@@ -12,11 +12,28 @@ import { AI_EMPLOYEE_STATUS_LABELS, AI_TASK_STATUS_LABELS } from '~/utils/labels
 const {
   employees, employeesAll, roleOf, employeeById, tasks, tasksOf, logs, aiReportsOn,
   requestTask, approveTask, progressTask, answerTask, blockTask, cancelTask, generateDailyReports,
-  evaluateWorkloadSignals,
+  evaluateWorkloadSignals, reloadAi,
 } = useAiCompany()
 const { show } = useToast()
 const { ask } = useConfirm()
 const { currentUser, isAdmin } = useCurrentUser()
+
+// 承認・回答後の自動実行（バッチ7i）は API モードではサーバー側で走るため、
+// 進捗（ステップ完了・質問・完了報告）を数回ポーリングして画面へ反映する（モックは同期完了 = 不要）
+const apiModeActive = useApiMode()
+let pollTimer: ReturnType<typeof setTimeout> | null = null
+function pollAutoRun(times = 8): void {
+  if (!apiModeActive || times <= 0) return
+  if (pollTimer) clearTimeout(pollTimer)
+  pollTimer = setTimeout(async () => {
+    await reloadAi()
+    // 実行中タスクが残っている間だけ追跡を続ける（質問・完了で自然停止）
+    if (tasks.value.some(t => t.status === 'in_progress')) pollAutoRun(times - 1)
+  }, 3000)
+}
+onUnmounted(() => {
+  if (pollTimer) clearTimeout(pollTimer)
+})
 
 /** 添付の受付形式（フリーテキストと合わせた依頼者インプット = バッチ7f） */
 const ATTACH_ACCEPT = '.md,.txt,.pdf,.docx,.pptx,.jpg,.jpeg,.png'
@@ -127,10 +144,11 @@ async function approveProposal(): Promise<void> {
     show(res.error.message, 'warn')
     return
   }
-  show(`${selectedEmp.value?.name ?? 'AI社員'} が実行を開始しました`)
+  show(`${selectedEmp.value?.name ?? 'AI社員'} が実行を開始しました。全ステップを自動で遂行します（確認が必要な場合・完了時は通知が届きます）`)
   reqTitle.value = ''
   reqDesc.value = ''
   proposedTaskId.value = null
+  pollAutoRun()
 }
 
 // ---------- タスク詳細（成果物・質問と回答 = バッチ7f 実遂行） ----------
@@ -201,13 +219,14 @@ async function submitAnswer(): Promise<void> {
     }
     answerText.value = ''
     answerFiles.value = []
-    show('回答を送信しました。「進める」で実行が再開されます')
+    show('回答を送信しました。実行を自動で再開します')
+    pollAutoRun()
   } finally {
     answering.value = false
   }
 }
 
-/** 詳細モーダルからの「進める」（回答後にそのまま実行を再開できる導線） */
+/** 詳細モーダルからの再開（自動実行が止まった場合のフォールバック導線。バッチ7i） */
 async function progressFromDetail(): Promise<void> {
   if (!detailTaskId.value) return
   await onProgress(detailTaskId.value)
@@ -228,7 +247,10 @@ const tabs = computed(() => [
 
 async function onApprove(taskId: string): Promise<void> {
   const res = await approveTask(taskId)
-  show(res.ok ? '承認しました。実行を開始します' : res.error.message, res.ok ? 'ok' : 'warn')
+  show(res.ok
+    ? '承認しました。全ステップを自動で遂行します（確認が必要な場合・完了時は通知が届きます）'
+    : res.error.message, res.ok ? 'ok' : 'warn')
+  if (res.ok) pollAutoRun()
 }
 
 async function onProgress(taskId: string): Promise<void> {
@@ -244,7 +266,8 @@ async function onProgress(taskId: string): Promise<void> {
     // 実遂行で人間のアクションが必要と判定 = 依頼者へ確認（バッチ7f）
     show('遂行に確認が必要なため、依頼者へ質問しました（詳細から回答できます）', 'warn')
   } else {
-    show('ステップを遂行し、成果物を作成しました')
+    show('ステップを遂行しました。残りのステップも自動で遂行します')
+    pollAutoRun()
   }
 }
 
@@ -255,7 +278,8 @@ async function onBlock(taskId: string): Promise<void> {
     show(res.error.message, 'warn')
     return
   }
-  show(before === 'blocked' ? 'ブロックを解除し実行を再開しました' : 'タスクをブロックしました', before === 'blocked' ? 'ok' : 'warn')
+  show(before === 'blocked' ? 'ブロックを解除し、残りのステップを自動で遂行します' : 'タスクをブロックしました', before === 'blocked' ? 'ok' : 'warn')
+  if (before === 'blocked') pollAutoRun()
 }
 
 async function onCancel(taskId: string): Promise<void> {
@@ -495,12 +519,13 @@ async function onGenerateReports(): Promise<void> {
             <button
               v-if="detailTask.status === 'in_progress'"
               type="button"
-              class="btn btn-primary btn-sm"
+              class="btn btn-ghost btn-sm"
+              title="自動実行が止まった場合に手動で再開します"
               @click="progressFromDetail"
-            >次のステップを遂行</button>
+            >実行を再開</button>
           </div>
           <p v-if="stepOutputs(detailTask).length === 0" class="text-[12px] text-muted">
-            まだ成果物がありません（「進める」でステップを遂行すると生成されます）
+            まだ成果物がありません（承認後、AI がステップを自動遂行すると生成されます）
           </p>
           <details
             v-for="o in stepOutputs(detailTask)"
