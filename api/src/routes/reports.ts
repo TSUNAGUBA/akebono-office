@@ -695,7 +695,8 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
 
   async function storedInsight(weekStart: string, audience: string): Promise<StoredInsight | null> {
     const { rows } = await pool.query<StoredInsight>(
-      `SELECT wi.metrics, wi.insight, wi.llm, wi.generated_at::text AS "generatedAt",
+      `SELECT wi.metrics, wi.insight, wi.llm,
+              to_char(wi.generated_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"') AS "generatedAt",
               m.name AS "generatedByName"
        FROM weekly_insights wi LEFT JOIN members m ON m.id = wi.generated_by
        WHERE wi.week_start = $1::date AND wi.audience = $2`, [weekStart, audience])
@@ -719,21 +720,15 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
       [newId('wi'), weekStart, audience, JSON.stringify(metrics), JSON.stringify(insight), llm, generatedBy])
   }
 
-  function requireReportsFeature(rules: PermissionRule[], subject: PermissionSubject): void {
-    if (rules.length > 0 && !canUseFeature(rules, subject, 'reports')) {
-      throw err('AKO-PRM-001', 'この機能を利用する権限がありません', 403)
-    }
-  }
-
   // 保管済みインサイトの取得（バッチ7j: 生成しない = 再生成されるまで保存済みの結果を表示する）。
-  // company = 全体共通（閲覧者ごとに売上・F-16-6 をマスク）/ personal = ログインユーザー向け
+  // company = 全体共通（閲覧者ごとに売上・F-16-6 をマスク）/ personal = ログインユーザー向け。
+  // reports 機能の deny は app.ts の featureGuard（/v1/reports）が 403 を返す（重複ガードは持たない = R1 M-5）
   app.get('/weekly-insight', async (c) => {
     const user = c.get('user')
     const weekStart = String(c.req.query('weekStart') ?? '')
     validWeekStart(weekStart)
     const rules = await activePermissionRules(pool)
     const subject = subjectOf(user)
-    requireReportsFeature(rules, subject)
     const [company, personal] = await Promise.all([
       storedInsight(weekStart, 'company'),
       storedInsight(weekStart, `member:${user.id}`),
@@ -758,11 +753,16 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
     const weekEnd = validWeekStart(weekStart)
     const rules = await activePermissionRules(pool)
     const subject = subjectOf(user)
-    requireReportsFeature(rules, subject)
 
     const metrics = await computeCompanyMetrics(weekStart, weekEnd)
-    // 全体の洞察は売上を伏せた集計から生成（売上権限のない閲覧者にも配信されるため）
-    const narrativeSource: WeeklyMetrics = { ...metrics, salesMonthAmount: null }
+    // 全体の洞察は売上・個人名を剥がした集計から生成（売上権限のない閲覧者にも配信され、
+    // 本文はマスク不能なテキストのため。個人名の抑止をプロンプト指示だけに頼らない = PR #59 R1 M-2）
+    const narrativeSource: WeeklyMetrics = {
+      ...metrics,
+      salesMonthAmount: null,
+      memberHours: metrics.memberHours.map((x, i) => ({ name: `メンバー${i + 1}`, hours: x.hours })),
+      issues: metrics.issues.map(x => ({ member: '匿名', issue: x.issue })),
+    }
     const companyLlm = await llmWeeklyInsight(env, narrativeSource)
     const companyInsight = companyLlm ?? heuristicWeeklyInsight(narrativeSource)
     await upsertInsight(weekStart, 'company', metrics, companyInsight, !!companyLlm, user.id)
