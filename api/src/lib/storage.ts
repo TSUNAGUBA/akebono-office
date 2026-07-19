@@ -33,7 +33,6 @@ export function strictEncode(s: string): string {
  * `.`/`..`/空になった名前は無害なフォールバック名にする（storage_path とダウンロード名の両方に使う）
  */
 export function sanitizeFilename(name: string): string {
-  // eslint-disable-next-line no-control-regex
   const cleaned = name
     .replace(/[\u0000-\u001f\u007f]/g, '')
     .replace(/[/\\]/g, '_')

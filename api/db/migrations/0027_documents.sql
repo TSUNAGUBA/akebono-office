@@ -24,10 +24,6 @@ CREATE TABLE IF NOT EXISTS documents (
   updated_at     timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_documents_parent ON documents (parent_id);
--- 有効なフォルダの同名重複を DB レベルで禁止（並行作成/改名の TOCTOU 対策。R1 ニット2。
--- parent_id NULL = ルート直下も 1 つの名前空間として扱う）
-CREATE UNIQUE INDEX IF NOT EXISTS uq_documents_folder_name
-  ON documents (COALESCE(parent_id, ''), name) WHERE kind = 'folder' AND active;
 
 -- bytea フォールバック保管（STORAGE_BUCKET 未設定環境。knowledge_files と同型のパターン）
 CREATE TABLE IF NOT EXISTS document_blobs (

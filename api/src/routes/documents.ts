@@ -586,12 +586,17 @@ export function documentsRoutes(pool: pg.Pool, env: Env): Hono {
             }, bytes)
           }
         } catch (e) {
-          // メタ確定に失敗したら GCS の孤児オブジェクトをベストエフォートで掃除（R1 M-2）
-          if (storage === 'gcs') void deleteObject(env, storagePath)
+          // メタ確定に失敗したら GCS の孤児オブジェクトをベストエフォートで掃除（R1 M-2）。
+          // ただし既存レコードが同一パスを参照している再取込（上書き put 済み = 同内容スナップショット）では
+          // 現役オブジェクトを消さない（R2 M-R2-1: 削除するとリトライまでダウンロード不能になる）
+          if (storage === 'gcs' && !(existing?.storage === 'gcs' && existing.storagePath === storagePath)) {
+            void deleteObject(env, storagePath)
+          }
           throw e
         }
-        // 旧実体の掃除（ファイル名変更でパスが変わった場合。失敗しても主フローは続行）
-        if (existing?.storage === 'gcs' && existing.storagePath !== storagePath) {
+        // 旧実体の掃除（パスが変わった場合、または db フォールバックで GCS 参照が外れた場合。
+        // 失敗しても主フローは続行 = ベストエフォート。R2 ニット2）
+        if (existing?.storage === 'gcs' && (existing.storagePath !== storagePath || storage !== 'gcs')) {
           void deleteObject(env, existing.storagePath)
         }
         await audit(pool, {
