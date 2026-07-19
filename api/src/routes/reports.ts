@@ -138,7 +138,8 @@ ${JSON.stringify(metrics, null, 1)}`,
 export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
   const app = new Hono()
 
-  // 日報一覧（自分: month or from/to / チーム: scope=team は管理者のみ / 全員: scope=all は提出済みのみ全メンバー可）
+  // 日報一覧（自分: month or from/to / チーム: scope=team は全員可・期間必須（管理者 = 下書き含む / 一般 = 提出済みのみ）/
+  // 全員: scope=all は提出済みのみ全メンバー可。scope=all/team は F-16-6 の参照 deny で絞り込む）
   app.get('/daily', async (c) => {
     const user = c.get('user')
     const scope = c.req.query('scope') ?? 'mine'

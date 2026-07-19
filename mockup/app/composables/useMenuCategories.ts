@@ -68,13 +68,15 @@ export function useMenuCategories(area: MenuArea) {
     return groups
   }
 
-  async function save(defs: MenuCategoryDef[]): Promise<void> {
-    await setConfig(key, JSON.stringify(defs))
+  async function save(defs: MenuCategoryDef[]): Promise<{ ok: boolean }> {
+    const res = await setConfig(key, JSON.stringify(defs))
+    return { ok: res?.ok !== false }
   }
 
   /** 既定に戻す（保存値を空へ = 取消フロー。原則 9.5） */
-  async function reset(): Promise<void> {
-    await setConfig(key, '')
+  async function reset(): Promise<{ ok: boolean }> {
+    const res = await setConfig(key, '')
+    return { ok: res?.ok !== false }
   }
 
   return { categories, isCustomized, categorize, save, reset }

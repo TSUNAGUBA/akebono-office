@@ -222,11 +222,15 @@ export function useReports() {
   }
 
   /** チームタイムライン（直近営業日分の提出済み日報。AI 社員の日報も同列に混在 = モックのみ） */
-  /** タイムライン上の人間日報の可視判定（表示メンバー設定 ∩ 参照権限。マトリクス候補の
-   * 雇用区分条件は課さない = 役員・業務委託の提出済み日報は従来どおり表示。PR #57 R1 M-5） */
+  /** タイムライン上の人間日報の可視判定（PR #57 R1 M-5 / R2 Minor-2）。
+   * - 参照権限（F-16-6）は常に適用
+   * - 表示メンバー設定はマトリクス候補（社員・契約・アルバイト）にのみ適用する。
+   *   候補外（役員・業務委託 = 設定 UI の選択肢に出ない）は設定の影響を受けず従来どおり表示
+   *   （「選択肢に出ない対象が部分設定で消える」導線を作らない） */
   function timelineVisible(memberId: string): boolean {
-    return (teamVisibleIds.value === null || teamVisibleIds.value.has(memberId) || memberId === currentUser.value.id)
-      && perms.canViewMemberReports(memberId)
+    if (!perms.canViewMemberReports(memberId)) return false
+    if (!teamMemberCandidates.value.some(m => m.id === memberId)) return true
+    return teamVisibleIds.value === null || teamVisibleIds.value.has(memberId) || memberId === currentUser.value.id
   }
 
   function timeline(days = 7): DailyReport[] {

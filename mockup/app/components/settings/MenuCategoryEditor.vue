@@ -34,10 +34,22 @@ function syncDraft(): void {
 }
 watch(area, syncDraft, { immediate: true })
 // API モードは configs が非同期ハイドレーションされるため、保存値の到着時にも再同期する。
-// 編集中（dirty）は上書きしない（PR #57 R1 M-1: 到着前に編集を始めると既定構成ベースの保存で
-// 保存済みカスタマイズを静かに上書きするレースの解消）
+// 編集中（dirty）は上書きしない（PR #57 R1 M-1）
 watch(() => current.value.categories.value, () => {
   if (!dirty.value) syncDraft()
+})
+// R2 Minor-1: ハイドレーション「前」に編集を始めた場合の上書きも塞ぐ —
+// 設定ページを開いたら configs を取り直し、完了するまで保存・リセットを無効化する
+// （モックモードの reloadConfigs は no-op のため即座に有効化される）
+const settings = useAppSettings()
+const hydrated = ref(false)
+onMounted(async () => {
+  try {
+    await settings.reloadConfigs()
+  } finally {
+    if (!dirty.value) syncDraft()
+    hydrated.value = true
+  }
 })
 
 const cardOptions = computed(() =>
@@ -79,7 +91,9 @@ async function saveDraft(): Promise<void> {
   }
   saving.value = true
   try {
-    await current.value.save(draft.value.map(c => ({ ...c, label: c.label.trim() })))
+    const res = await current.value.save(draft.value.map(c => ({ ...c, label: c.label.trim() })))
+    // 失敗時（API エラー = putConfig がエラートーストを表示済み）は編集内容を破棄しない（R2 参考観察）
+    if (!res.ok) return
     syncDraft()
     show(`${AREA_LABELS[area.value]}のメニューカテゴリを保存しました`, 'ok')
   } finally {
@@ -95,7 +109,8 @@ async function resetToDefault(): Promise<void> {
   if (!ok) return
   saving.value = true
   try {
-    await current.value.reset()
+    const res = await current.value.reset()
+    if (!res.ok) return
     syncDraft()
     show('既定のカテゴリ構成に戻しました', 'ok')
   } finally {
@@ -162,11 +177,11 @@ async function resetToDefault(): Promise<void> {
           <Plus class="h-3.5 w-3.5" aria-hidden="true" /> カテゴリを追加
         </button>
         <span class="flex-1" />
-        <button type="button" class="btn btn-sm" :disabled="saving" @click="resetToDefault">
+        <button type="button" class="btn btn-sm" :disabled="saving || !hydrated" @click="resetToDefault">
           <RotateCcw class="h-3.5 w-3.5" aria-hidden="true" /> 既定に戻す
         </button>
-        <button type="button" class="btn btn-primary btn-sm" :disabled="saving || !dirty" @click="saveDraft">
-          {{ saving ? '保存中…' : '保存' }}
+        <button type="button" class="btn btn-primary btn-sm" :disabled="saving || !dirty || !hydrated" @click="saveDraft">
+          {{ saving ? '保存中…' : !hydrated ? '読込中…' : '保存' }}
         </button>
       </div>
     </div>
