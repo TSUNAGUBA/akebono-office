@@ -610,7 +610,7 @@ const weeklyDrawer = computed<WeeklyReport | null>(() =>
         </UiSectionCard>
 
         <!-- ドラフト生成 -->
-        <UiSectionCard title="日報ドラフト生成" description="スケジュール・回答・メモを材料に AI が下書きを作ります">
+        <UiSectionCard title="日報ドラフト生成" description="スケジュール・回答・ぽいぽいポストを材料に AI が下書きを作ります">
           <div class="grid gap-2">
             <button
               type="button"

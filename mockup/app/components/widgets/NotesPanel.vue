@@ -5,7 +5,7 @@
  * サマリー一覧（押下で詳細モーダル = 全文をマークダウン描画）。
  * ぽいぽいポストは管理者が全メンバーのオリジナルを閲覧できる（フィードバック・チーム改善用途。バッチ7e）
  */
-import { Eye, FileUp, Pencil, RotateCcw, Send, Trash2, X } from 'lucide-vue-next'
+import { Eye, FileUp, Pencil, RefreshCw, RotateCcw, Send, Trash2, X } from 'lucide-vue-next'
 import type { Company, Note, NoteKind, Project, WorkCategory } from '~/types/domain'
 import { fmtDateLong } from '~/utils/format'
 
@@ -142,10 +142,10 @@ function openDetail(n: Note, withAuthor: boolean): void {
   detailWithAuthor.value = withAuthor
 }
 
-/** 一覧のサマリー（冒頭 160 字。全文は詳細モーダルで） */
+/** 一覧のサマリー（冒頭 160 字。全文は詳細モーダルで。コードポイント単位 = 絵文字等を境界で壊さない） */
 function summaryOf(n: Note): string {
-  const flat = n.body.replace(/\s+/g, ' ').trim()
-  return flat.length > 160 ? `${flat.slice(0, 160)}…` : flat
+  const chars = [...n.body.replace(/\s+/g, ' ').trim()]
+  return chars.length > 160 ? `${chars.slice(0, 160).join('')}…` : chars.join('')
 }
 
 function nameOf(list: { id: string; name: string }[], id: string | null): string {
@@ -298,10 +298,16 @@ function authorOf(n: Note): string {
     <!-- 管理者の全ポスト閲覧（ぽいぽいポストのみ。フィードバック・チーム改善用途 = バッチ7e） -->
     <UiSectionCard
       v-if="kind === 'poipoi' && isAdmin && notes.adminList.value.length > 0"
-      :title="`全メンバーのポスト（管理者・${notes.adminList.value.length}件）`"
-      description="チーム改善のフィードバックとしてオリジナルを閲覧できます（AI の参照対象は投稿者本人のみのまま。取消は本人のみ）"
+      :title="`メンバーのポスト（管理者・${notes.adminList.value.length}件）`"
+      description="チーム改善のフィードバックとしてオリジナルを閲覧できます（自分のポストは上の一覧に表示。AI の参照対象は投稿者本人のみ・取消も本人のみ）"
       flush
     >
+      <template #actions>
+        <button type="button" class="btn btn-ghost btn-sm" aria-label="メンバーのポストを再読み込み" @click="notes.refresh()">
+          <RefreshCw class="h-3.5 w-3.5" aria-hidden="true" />
+          再読み込み
+        </button>
+      </template>
       <ul class="divide-y divide-line">
         <li v-for="n in notes.adminList.value" :key="n.id">
           <button

@@ -66,12 +66,13 @@ export function useNotes(kind: NoteKind) {
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   })
 
-  /** 管理者の全ポスト一覧（kind='poipoi' + 管理者のみ。フィードバック・チーム改善のオリジナル閲覧用） */
+  /** 管理者の全ポスト一覧（kind='poipoi' + 管理者のみ。フィードバック・チーム改善のオリジナル閲覧用。
+   *  自分のポストは通常一覧（list）に出るため除外 = 二重表示を避ける） */
   const adminList = computed<Note[]>(() => {
     if (kind !== 'poipoi' || !isAdmin.value) return []
-    if (isApi) return apiAdminPosts.value
+    if (isApi) return apiAdminPosts.value.filter(n => n.memberId !== currentUser.value.id)
     return (mockNotes.value as Note[])
-      .filter(n => n.kind === 'poipoi' && n.active !== false)
+      .filter(n => n.kind === 'poipoi' && n.active !== false && n.memberId !== currentUser.value.id)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   })
 
@@ -97,7 +98,7 @@ export function useNotes(kind: NoteKind) {
       id,
       memberId: currentUser.value.id,
       kind,
-      title: input.title.trim() || ([...body.split('\n').map(l => l.replace(/^#+\s*/, '').trim()).filter(Boolean)][0] ?? 'メモ').slice(0, 40),
+      title: input.title.trim() || ([...body.split('\n').map(l => l.replace(/^#+\s*/, '').trim()).filter(Boolean)][0] ?? 'ノート').slice(0, 40),
       body,
       projectId: input.projectId,
       companyId: input.companyId,

@@ -66,7 +66,7 @@ function canUndoNote(note: { kind: NoteKind; memberId: string }, user: AuthUser)
 function titleFrom(specified: unknown, body: string): string {
   const t = typeof specified === 'string' ? specified.trim() : ''
   if (t) return capCp(t, 200)
-  const first = body.split('\n').map(l => l.replace(/^#+\s*/, '').trim()).find(Boolean) ?? 'メモ'
+  const first = body.split('\n').map(l => l.replace(/^#+\s*/, '').trim()).find(Boolean) ?? 'ノート'
   return capCp(first, 40)
 }
 
@@ -87,6 +87,7 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
     // active のみ・取消済みは対象外。AI の参照スコープ（owner_member_id = 本人）は変えない）
     if (kind === 'poipoi' && c.req.query('scope') === 'all') {
       if (user.role !== 'admin') throw err('AKO-PRM-001', '全メンバーのポスト閲覧は管理者のみです', 403)
+      // LIMIT 300 は通常一覧と同じ設計判断（SME 規模で十分。超えたらページング導入時に吸収）
       const { rows } = await pool.query(
         `SELECT ${NOTE_COLS} FROM notes WHERE kind = 'poipoi' AND active = true
          ORDER BY created_at DESC, id LIMIT 300`)

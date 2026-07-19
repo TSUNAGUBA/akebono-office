@@ -69,7 +69,7 @@ export function assistRoutes(pool: pg.Pool, env: Env): Hono {
     const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
     // 2000 字上限（コードポイント単位 = サロゲートペアを境界で壊さない）
     const text = [...String(body.text ?? '').trim()].slice(0, 2000).join('')
-    if (!text) throw err('AKO-RAS-002', 'メモを入力してください', 400)
+    if (!text) throw err('AKO-RAS-002', 'ポストを入力してください', 400)
     const id = newId('hl')
     await pool.query(
       `INSERT INTO assist_logs (id, member_id, date, kind, calendar_event_id, question, answer, at)

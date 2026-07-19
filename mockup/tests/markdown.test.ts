@@ -16,17 +16,30 @@ describe('markdown パーサ（バッチ7e: 安全なサブセット）', () => 
     expect(parseMarkdown('```\n閉じない')[0]).toEqual({ t: 'codeblock', code: '閉じない' })
   })
 
-  it('インライン: 太字・斜体・コード・リンクを分解する', () => {
-    expect(parseInline('**太字**と*斜体*と`code`')).toEqual([
+  it('インライン: 太字・コード・リンクを分解する', () => {
+    expect(parseInline('**太字**と`code`')).toEqual([
       { t: 'bold', text: '太字' },
-      { t: 'text', text: 'と' },
-      { t: 'italic', text: '斜体' },
       { t: 'text', text: 'と' },
       { t: 'code', text: 'code' },
     ])
     expect(parseInline('[社内リンク](https://example.com/a?b=1)')).toEqual([
       { t: 'link', text: '社内リンク', href: 'https://example.com/a?b=1' },
     ])
+    // URL 中の丸括弧は 1 段まで許容（末尾の ) で切れない）
+    expect(parseInline('[t](https://ex.com/a(b)c)')).toEqual([
+      { t: 'link', text: 't', href: 'https://ex.com/a(b)c' },
+    ])
+  })
+
+  it('孤立した * は整形しない（既存プレーン文の保護 = 単独アスタリスク斜体は非対応）', () => {
+    // 「3*4 と 5*6」のような文で * 同士がクロスマッチして斜体化しない
+    expect(parseInline('3*4 と 5*6')).toEqual([{ t: 'text', text: '3*4 と 5*6' }])
+    // 孤立 * があっても後続の太字は正しく分解される
+    expect(parseInline('3*4 と **強調**')).toEqual([
+      { t: 'text', text: '3*4 と ' },
+      { t: 'bold', text: '強調' },
+    ])
+    expect(parseInline('*斜体記法は非対応*')).toEqual([{ t: 'text', text: '*斜体記法は非対応*' }])
   })
 
   it('安全性: 生 HTML はテキストのまま・javascript: リンクは記法として成立しない', () => {
@@ -45,5 +58,15 @@ describe('markdown パーサ（バッチ7e: 安全なサブセット）', () => 
 
   it('##### 以上の見出しは h4 に丸める', () => {
     expect(parseMarkdown('##### 深い見出し')[0]).toMatchObject({ t: 'heading', level: 4 })
+  })
+
+  it('番号リストは開始番号を保持し、空のリスト項目はスキップする', () => {
+    expect(parseMarkdown('3. 三\n4. 四')[0]).toMatchObject({ t: 'ol', start: 3 })
+    expect(parseMarkdown('1. 一\n2. 二')[0]).toMatchObject({ t: 'ol', start: 1 })
+    // 本文のない項目（「- 」だけの行）は空 li にしない。全項目が空ならブロック自体を出さない
+    expect(parseMarkdown('- 有効\n- \n- 有効2')[0]).toMatchObject({
+      t: 'ul', items: [[{ t: 'text', text: '有効' }], [{ t: 'text', text: '有効2' }]],
+    })
+    expect(parseMarkdown('- \n本文').map(b => b.t)).toEqual(['paragraph'])
   })
 })

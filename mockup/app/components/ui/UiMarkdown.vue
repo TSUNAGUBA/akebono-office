@@ -14,7 +14,6 @@ const props = defineProps<{ source: string }>()
 function inline(nodes: MdInline[]): (VNode | string)[] {
   return nodes.map((n) => {
     if (n.t === 'bold') return h('strong', n.text)
-    if (n.t === 'italic') return h('em', n.text)
     if (n.t === 'code') return h('code', { class: 'rounded bg-surface-soft border border-line px-1 text-[12px]' }, n.text)
     if (n.t === 'link') {
       return h('a', {
@@ -43,7 +42,10 @@ function render(): VNode {
   return h('div', { class: 'grid gap-1.5 text-[13px] leading-relaxed' }, blocks.map((b) => {
     if (b.t === 'heading') return h(`h${b.level}`, { class: HEADING_CLASS[b.level] }, inline(b.inline))
     if (b.t === 'ul') return h('ul', { class: 'list-disc pl-5 grid gap-0.5' }, b.items.map(it => h('li', inline(it))))
-    if (b.t === 'ol') return h('ol', { class: 'list-decimal pl-5 grid gap-0.5' }, b.items.map(it => h('li', inline(it))))
+    if (b.t === 'ol') {
+      return h('ol', { class: 'list-decimal pl-5 grid gap-0.5', start: b.start !== 1 ? b.start : undefined },
+        b.items.map(it => h('li', inline(it))))
+    }
     if (b.t === 'quote') {
       return h('blockquote', { class: 'border-l-2 border-line pl-3 text-sub' }, joinLines(b.lines))
     }

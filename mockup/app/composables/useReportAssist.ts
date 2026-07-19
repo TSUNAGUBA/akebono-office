@@ -152,7 +152,7 @@ export function useReportAssist() {
    */
   async function poipoiMemo(text: string, date?: string): Promise<Result> {
     const t = text.trim().slice(0, 2000)
-    if (!t) return { ok: false, error: { code: 'AKO-RAS-002', message: 'メモを入力してください' } }
+    if (!t) return { ok: false, error: { code: 'AKO-RAS-002', message: 'ポストを入力してください' } }
     if (isApi) {
       const d = date ?? todayJst()
       const res = await apiResult(() => apiFetch<{ id: string }>('/v1/assist/memos', {
