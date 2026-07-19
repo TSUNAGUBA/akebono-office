@@ -5,6 +5,7 @@
  * 下段: タスクボード / 活動ログ / 日次報告
  */
 import { Settings2, Sparkles } from 'lucide-vue-next'
+import { DELEGATE_PERMISSION } from '../../../../shared/domain/ai-tasks'
 import type { AiTask } from '~/types/domain'
 import { AI_EMPLOYEE_STATUS_LABELS, AI_TASK_STATUS_LABELS } from '~/utils/labels'
 
@@ -272,7 +273,14 @@ async function onGenerateReports(): Promise<void> {
           <UiAvatar :name="selectedEmp.name" kind="ai" size="lg" />
           <div class="min-w-0">
             <p class="text-[15px] font-bold">{{ selectedEmp.name }}</p>
-            <p class="text-xs text-sub">{{ selectedRole?.name ?? 'ロール未設定' }}</p>
+            <p class="flex items-center gap-1.5 text-xs text-sub">
+              {{ selectedRole?.name ?? 'ロール未設定' }}
+              <UiStatusBadge
+                v-if="selectedRole?.permissions.includes(DELEGATE_PERMISSION)"
+                label="マネージャー"
+                tone="brand"
+              />
+            </p>
           </div>
           <UiStatusBadge
             class="ml-auto"

@@ -12,7 +12,7 @@
  */
 import type { Ref } from 'vue'
 import {
-  decomposeTask, judgeTaskConfidence, mockActivityCost,
+  decomposeTask, DELEGATE_PERMISSION, judgeTaskConfidence, mockActivityCost, planDelegation,
 } from '../../../shared/domain/ai-tasks'
 import type {
   AiActivityKind, AiActivityLog, AiEmployee, AiModelTier, AiRole, AiTask,
@@ -67,7 +67,7 @@ export const AI_MODEL_TIER_LABELS: Record<AiModelTier, string> = {
   pro: 'プロ',
 }
 
-/** ロールに付与できる権限の固定候補（6 種） */
+/** ロールに付与できる権限の固定候補（7 種） */
 export const AI_PERMISSION_OPTIONS: { value: string; label: string }[] = [
   { value: 'knowledge:read', label: 'ナレッジ参照' },
   { value: 'knowledge:write', label: 'ナレッジ更新' },
@@ -75,6 +75,8 @@ export const AI_PERMISSION_OPTIONS: { value: string; label: string }[] = [
   { value: 'mart:read', label: '分析データ参照' },
   { value: 'masters:read', label: 'マスタ参照' },
   { value: 'web:search', label: 'Web 検索' },
+  // マネージャーロールの要件（オペレーター指示 2026-07-19 #3）: 依頼の承認時に他 AI 社員へ分担を連携する
+  { value: DELEGATE_PERMISSION, label: '他のAI社員への依頼・連携（マネージャー）' },
 ]
 
 export const AI_CONFIDENCE_META: Record<AiTask['confidence'], { label: string; tone: Tone }> = {
@@ -187,6 +189,72 @@ export function useAiCompany() {
     }]
   }
 
+  // ---------- AI 社員間の連携（モック。API 版 ai-company.ts と同一の決定的ロジック） ----------
+
+  /**
+   * 承認時の連携（delegate 権限を持つロールの AI 社員 = マネージャーのみ。
+   * 子タスクからの再連携はしない = 連鎖の暴走防止。分担は planDelegation で決定的に割当）
+   */
+  function delegateOnApproveMock(task: AiTask): void {
+    if (task.parentTaskId) return
+    const mgr = employeeById(task.aiEmployeeId)
+    if (!roleOf(mgr)?.permissions.includes(DELEGATE_PERMISSION)) return
+    const candidates = aiEmployees.value
+      .filter(e => e.active && e.id !== task.aiEmployeeId)
+      .sort((a, b) => a.id.localeCompare(b.id))
+      .map(e => ({ id: e.id, name: e.name, roleName: roleOf(e)?.name ?? '', mission: roleOf(e)?.mission ?? '' }))
+    if (candidates.length === 0 || task.decomposition.length === 0) return
+    const plan = planDelegation(task.decomposition, candidates)
+    const byEmp = new Map<string, string[]>()
+    for (const p of plan) byEmp.set(p.aiEmployeeId, [...(byEmp.get(p.aiEmployeeId) ?? []), p.title])
+    for (const [empId, stepTitles] of byEmp) {
+      const cand = candidates.find(x => x.id === empId)
+      if (!cand) continue
+      const childId = nextId('aiTasks', 'at')
+      const childTitle = [...`${task.title}（分担: ${cand.roleName}）`].slice(0, 100).join('')
+      const description = `マネージャー ${mgr?.name ?? ''} からの連携依頼（元タスク: ${task.title}）`
+      aiTasks.value = [...aiTasks.value, {
+        id: childId,
+        aiEmployeeId: empId,
+        requesterId: task.requesterId,
+        title: childTitle,
+        description,
+        decomposition: stepTitles.map(t => ({ title: t, done: false })),
+        status: 'in_progress',
+        dueDate: null,
+        confidence: judgeTaskConfidence(empId, childTitle, description),
+        createdAt: nowJstIso(),
+        requesterAiEmployeeId: task.aiEmployeeId,
+        parentTaskId: task.id,
+      }]
+      addLog(task.aiEmployeeId, task.id, 'chat', `${cand.name} へ「${task.title}」の分担を依頼（${stepTitles.length} ステップ）`)
+      addLog(empId, childId, 'plan', `${mgr?.name ?? 'マネージャー'} から「${task.title}」の分担を受領し実行を開始`)
+      syncEmployeeStatus(empId)
+    }
+  }
+
+  /** 分担子タスク完了時の親（マネージャー）へのロールアップ（全子完了で親も done + 統合報告 + 通知） */
+  function rollUpToParentMock(child: AiTask): void {
+    const parent = aiTasks.value.find(t => t.id === child.parentTaskId)
+    if (!parent || (parent.status !== 'in_progress' && parent.status !== 'blocked')) return
+    addLog(parent.aiEmployeeId, parent.id, 'report',
+      `${employeeById(child.aiEmployeeId)?.name ?? 'AI社員'} から「${child.title}」の完了報告を受領`)
+    const childTitles = new Set(child.decomposition.map(s => s.title))
+    const allChildrenDone = !aiTasks.value.some(t =>
+      t.parentTaskId === parent.id && t.id !== child.id && t.status !== 'done')
+    const decomposition = parent.decomposition.map(s =>
+      allChildrenDone || childTitles.has(s.title) ? { ...s, done: true } : s)
+    aiTasks.value = aiTasks.value.map(t => t.id === parent.id
+      ? { ...t, decomposition, status: allChildrenDone ? 'done' as const : t.status }
+      : t)
+    if (allChildrenDone) {
+      addLog(parent.aiEmployeeId, parent.id, 'report', `「${parent.title}」の全分担が完了、成果を統合して報告`)
+      notify(parent.requesterId, 'ai_report', `AI 連携完了報告: ${parent.title}`,
+        `${employeeById(parent.aiEmployeeId)?.name ?? 'マネージャー'} が分担タスクの成果を統合して完了しました`, '/ai-company')
+    }
+    syncEmployeeStatus(parent.aiEmployeeId)
+  }
+
   // ---------- 操作系 ----------
 
   /**
@@ -261,6 +329,8 @@ export function useAiCompany() {
     }
     aiTasks.value = aiTasks.value.map(t => t.id === taskId ? { ...t, status: 'in_progress' as const } : t)
     addLog(task.aiEmployeeId, taskId, 'plan', `「${task.title}」の分解が承認され実行を開始`)
+    // マネージャーロール（delegate 権限）なら承認と同時に他 AI 社員へ分担を連携（API 版と同一）
+    delegateOnApproveMock(task)
     syncEmployeeStatus(task.aiEmployeeId)
     commit()
     return { ok: true, id: taskId }
@@ -287,11 +357,15 @@ export function useAiCompany() {
     if (finished) {
       addLog(task.aiEmployeeId, taskId, 'report', `「${task.title}」の全ステップが完了、成果を報告`)
     }
+    // 分担子タスクの完了は依頼元マネージャーへ報告・ロールアップ（API 版と同一）
+    if (finished && task.parentTaskId) {
+      rollUpToParentMock({ ...task, decomposition, status: 'done' })
+    }
     syncEmployeeStatus(task.aiEmployeeId)
     commit()
 
-    // 補助処理: 完了通知（失敗しても主フローは成立）
-    if (finished) {
+    // 補助処理: 完了通知（失敗しても主フローは成立。子タスクは親の統合報告時のみ = 通知の重複防止）
+    if (finished && !task.parentTaskId) {
       const emp = employeeById(task.aiEmployeeId)
       notify(task.requesterId, 'ai_report', `AI 完了報告: ${task.title}`,
         `${emp?.name ?? 'AI社員'} がタスクを完了しました`, '/ai-company')
@@ -307,6 +381,15 @@ export function useAiCompany() {
     if (task.status === 'in_progress') {
       aiTasks.value = aiTasks.value.map(t => t.id === taskId ? { ...t, status: 'blocked' as const } : t)
       addLog(task.aiEmployeeId, taskId, 'escalate', `「${task.title}」がブロックされ対応待ち`)
+      // 分担先のブロックは依頼元マネージャーの活動ログへエスカレーション + 依頼者へ補助通知（API 版と同一）
+      if (task.parentTaskId) {
+        const parent = aiTasks.value.find(t => t.id === task.parentTaskId)
+        if (parent) {
+          addLog(parent.aiEmployeeId, parent.id, 'escalate', `分担先で「${task.title}」がブロック、対応を検討`)
+          notify(parent.requesterId, 'ai_report', `AI 連携ブロック: ${task.title}`,
+            '分担先のタスクがブロックされました。/ai-company で状況を確認してください', '/ai-company')
+        }
+      }
     } else if (task.status === 'blocked') {
       aiTasks.value = aiTasks.value.map(t => t.id === taskId ? { ...t, status: 'in_progress' as const } : t)
       addLog(task.aiEmployeeId, taskId, 'plan', `「${task.title}」のブロックが解除され実行を再開`)
@@ -326,7 +409,15 @@ export function useAiCompany() {
     if (task.status === 'done' || task.status === 'cancelled') {
       return { ok: false, error: { code: 'AKO-AIC-008', message: '完了・中止済みのタスクは中止できません' } }
     }
-    aiTasks.value = aiTasks.value.map(t => t.id === taskId ? { ...t, status: 'cancelled' as const } : t)
+    // 親の中止は未完了の分担子タスクへ連鎖（API 版と同一 = 分担だけが走り続ける宙吊りを作らない）
+    const kids = aiTasks.value.filter(t =>
+      t.parentTaskId === taskId && t.status !== 'done' && t.status !== 'cancelled')
+    aiTasks.value = aiTasks.value.map(t =>
+      (t.id === taskId || kids.some(k => k.id === t.id)) ? { ...t, status: 'cancelled' as const } : t)
+    for (const k of kids) {
+      addLog(k.aiEmployeeId, k.id, 'chat', `連携元タスクの中止に伴い「${k.title}」を中止`)
+      syncEmployeeStatus(k.aiEmployeeId)
+    }
     syncEmployeeStatus(task.aiEmployeeId)
     commit()
     return { ok: true, id: taskId }

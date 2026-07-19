@@ -38,7 +38,12 @@
   implementation-status §19。新規依存: pdfjs-dist・mammoth（api/dependencies）。
   テストフィクスチャ（api/test/fixtures/sample.pdf・sample.docx）はコミット済みバイナリ（最小の
   標準準拠ファイル。再生成が必要なら pdf-lib 等で作り直す）。
-  検索インデックスは起動時に自動生成されるため運用の手動ステップなし）
+  検索インデックスは起動時に自動生成されるため運用の手動ステップなし）/
+  **権限設定 UX 2 件**（PR #46 = 項目キーの論理名オートコンプリート / PR #47 = 権限表モード）/
+  **バッチ7b: カレンダー同期対象の選択 + AI 社員間の依頼・連携**（selected_calendar_ids +
+  GET/PUT /v1/calendar/calendars + 複数カレンダー横断同期 / AiRole.permissions の delegate 権限 =
+  マネージャーロール + ai_tasks の親子連携列。implementation-status §22。
+  **マネージャーロールはシードしない = オペレーターが /ai-company/roles で delegate 権限を付けて作成**）
 - **バッチ6a（PR #35・独立レビュー 2 巡でブロッキング指摘ゼロに収束・オペレーターのマージ待ち）:
   AI カンパニー F-08**
   - migration は 0015（表定義）+ 0016（部分一意索引 + AI ロール/社員シード）

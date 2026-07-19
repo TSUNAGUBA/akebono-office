@@ -338,3 +338,21 @@
 - [x] レスポンシブ（原則8): マトリクスは overflow-x-auto + 先頭列 sticky
 - [x] 検証: mockup typecheck / 単体 35 / ブラウザ実クリックスモーク 17 チェック（従来 11 + 権限表 6 = 未設定表示・一覧作成ルールの反映・循環 3 状態・乱立なし）
 - [x] 反復レビュー（原則9・PR #47）: R1 で重大 1（未設定→拒否の復元パスが restore → patch の順で、途中失敗時に無効だった allow ルールが有効化される = 拒否操作の失敗が権限を広げるフェイルオープン）+ 軽微 5（旧データの deny+allow 併存時の重複 allow 生成と解除の空振り / ロックアウト保護表示が個人レイヤの admin を対象外 / セクション見出しの sticky 不発 / aria-busy なし / タブ往復で権限表の状態破棄）を検出 → 全件修正（patch → restore の順へ入替 = フェイルセーフ・併存時は deny の論理削除 + 解除は全件論理削除で 1 クリック収束・member レイヤの admin 判定 + 脚注拡充・見出し内側 sticky・aria-busy・v-show 化）
+
+## 22. バッチ7b: カレンダー同期対象の選択 + AI 社員間の依頼・連携（オペレーター指示 2026-07-19 #3）の完了条件（Definition of Done)
+
+### 7b-1 カレンダー同期対象の選択
+- [x] 回答: 従来の同期対象は **primary（マイカレンダー）固定**（`calendars/primary/events` ハードコード）。共有・サブカレンダー（チーム開発等）は同期対象外だった
+- [x] `calendar_tokens.selected_calendar_ids`（0022。既定 `["primary"]` = 従来挙動の下位互換 = 原則7）+ `GET /v1/calendar/calendars`（Google calendarList + 保存済み選択のマージ）+ `PUT /v1/calendar/calendars`（1〜20 件・検証付き）
+- [x] 同期は選択された全カレンダーを横断（同一イベント id は重複排除 = (member_id, google_event_id) 一意と整合）。**一部カレンダーの取得失敗は「取れた分だけ同期 + 削除フェーズ抑止 + warning」**（原則4。全滅のみエラー）。アプリ発予定の Google への反映先は常に primary（設計判断）
+- [x] UI: カレンダー連携ゲートの連携済みバーへ「同期カレンダー」ボタン → チェックボックスモーダル → 保存で当日分を自動再同期。モックモードは擬似カレンダー 4 件 + localStorage 永続
+- [x] スコープ変更なし（calendar.readonly で calendarList 参照可 = 再連携不要）
+
+### 7b-2 AI 社員間の依頼・連携（マネージャーロール）
+- [x] `AiRole.permissions` の認識キー **`delegate`**（shared/domain/ai-tasks の DELEGATE_PERMISSION。ロール設定の権限候補へ「他のAI社員への依頼・連携（マネージャー）」を追加）。マネージャーロール = この権限を付与したロール（オペレーターがロール設定画面から自由に作成できる）
+- [x] `ai_tasks` へ追加列のみ（0022 = requester_ai_employee_id / parent_task_id。既存データ・API 不変 = 原則7）
+- [x] フロー: マネージャーへの依頼 → 分解（従来どおり）→ **人間の承認 1 回で、他の有効 AI 社員へ分担を子タスク化**（割当 = LLM 構造化出力 → 失敗時 shared planDelegation = 役割名・ミッションとの字句類似 + ラウンドロビンの決定的ヒューリスティック。担当ごとに 1 子タスク・即 in_progress）
+- [x] 連動: 子の完了 → 親へ報告ログ + ステップのロールアップ（全分担完了で親 done + 「統合して報告」+ 依頼者へ AI 連携完了通知。子の個別完了は人間へ通知しない = 重複防止）/ 子のブロック → 親へエスカレーションログ + 依頼者通知 / 親の中止 → 未完了の子へ連鎖。**子からの再連携なし = 連鎖の暴走防止**
+- [x] UI: タスクボードへ「◯◯ からの分担依頼」「n 名の AI 社員へ分担中（完了 m）」の連携表示・AI 社員ドロワーへマネージャーバッジ
+- [x] モックモードも同一ロジック（delegateOnApproveMock / rollUpToParentMock = shared planDelegation を共有）
+- [x] 検証: 単体 54（planDelegation の類似割当・ラウンドロビン・決定性）/ 統合 113 ×3（連携生成・requester/parent 列・ステップ取りこぼしなし・連携ログ・全分担完了で親自動 done + 通知・ブロックのエスカレーション + 通知・中止の連鎖・非マネージャーは連携しない・カレンダー選択の検証/未連携ガード）/ 両 typecheck / api build / E2E 全スイート回帰 green

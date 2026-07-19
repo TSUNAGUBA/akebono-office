@@ -3,6 +3,8 @@
  * - OAuth 2.0 認可コードフロー（サーバーサイド）。トークンは AES-256-GCM で暗号化保管し
  *   クライアントへ出さない（C3 相当）。喪失時は再連携で再取得できる（設計判断）
  * - source='google' の予定は Google が SoT（同期で対象日の google 発のみ置換 upsert。app 発に触れない）
+ * - 同期対象は選択制（calendar_tokens.selected_calendar_ids。既定 ["primary"] = マイカレンダーのみ。
+ *   GET/PUT /calendars で一覧・保存。オペレーター指示 2026-07-19 #3）
  * - source='app' の予定は本アプリが SoT。Google への反映・削除は補助処理（失敗しても主フローは成立 = 原則4）
  * - GOOGLE_OAUTH_CLIENT_ID / SECRET / TOKEN_ENCRYPTION_KEY 未設定 = 連携無効（AKO-CAL-007）
  * エラー: AKO-CAL-001 同期失敗 / 002 タスク名 / 003 時刻 / 004 app 以外の反映 /
@@ -27,8 +29,25 @@ const EVENT_COLS = `id, member_id AS "memberId", date::text AS date, from_time A
 
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
 const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth'
-const GOOGLE_EVENTS_URL = 'https://www.googleapis.com/calendar/v3/calendars/primary/events'
+const GOOGLE_CAL_BASE = 'https://www.googleapis.com/calendar/v3'
+// アプリ発予定の Google への反映先は常に primary（自分のマイカレンダー）= 同期対象の選択とは独立
+const GOOGLE_EVENTS_URL = `${GOOGLE_CAL_BASE}/calendars/primary/events`
 const SCOPES = 'openid email https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events'
+
+/** 同期対象カレンダーの上限（選択 UI・保存の双方で強制） */
+const MAX_SELECTED_CALENDARS = 20
+
+function calendarEventsUrl(calendarId: string): string {
+  return `${GOOGLE_CAL_BASE}/calendars/${encodeURIComponent(calendarId)}/events`
+}
+
+/** 同期対象のカレンダー id（未設定・空は primary のみ = 従来挙動と同一の下位互換） */
+async function selectedCalendarIds(pool: pg.Pool, memberId: string): Promise<string[]> {
+  const { rows } = await pool.query<{ ids: unknown }>(
+    `SELECT selected_calendar_ids AS ids FROM calendar_tokens WHERE member_id = $1`, [memberId])
+  const ids = Array.isArray(rows[0]?.ids) ? (rows[0]!.ids as unknown[]).map(String).filter(Boolean) : []
+  return ids.length > 0 ? ids.slice(0, MAX_SELECTED_CALENDARS) : ['primary']
+}
 
 function calendarEnabled(env: Env): boolean {
   return Boolean(env.googleOauthClientId && env.googleOauthClientSecret && env.tokenEncryptionKey)
@@ -248,6 +267,60 @@ export function calendarRoutes(pool: pg.Pool, env: Env): Hono {
     return c.json({ data: { ok: true } })
   })
 
+  // 同期対象カレンダーの一覧（Google calendarList + 保存済み選択のマージ。
+  // オペレーター指示 2026-07-19 #3: 従来は primary 固定 → どのカレンダーと同期するか選択可能に）
+  app.get('/calendars', async (c) => {
+    requireEnabled(env)
+    const user = c.get('user')
+    const token = await accessTokenFor(pool, env, user.id)
+    if (!token) {
+      throw err('AKO-CAL-007', 'Google カレンダーが未連携です。連携してから設定してください', 409)
+    }
+    let items: { id?: string; summary?: string; primary?: boolean; accessRole?: string }[]
+    try {
+      const res = await fetch(`${GOOGLE_CAL_BASE}/users/me/calendarList?maxResults=100&minAccessRole=reader`, {
+        headers: { authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(15_000),
+      })
+      if (!res.ok) throw new Error(`calendarList ${res.status}`)
+      items = ((await res.json()) as { items?: typeof items }).items ?? []
+    } catch (e) {
+      console.warn('calendar list failed:', (e as Error).message)
+      throw err('AKO-CAL-001', 'カレンダー一覧の取得に失敗しました。時間をおいて再試行してください', 502)
+    }
+    const selected = new Set(await selectedCalendarIds(pool, user.id))
+    const data = items
+      .filter((i): i is { id: string; summary?: string; primary?: boolean } => Boolean(i.id))
+      .map(i => ({
+        id: i.id,
+        summary: i.summary ?? i.id,
+        primary: i.primary === true,
+        // primary は保存上 'primary' の別名で選択されている（従来データ互換）
+        selected: selected.has(i.id) || (i.primary === true && selected.has('primary')),
+      }))
+    return c.json({ data })
+  })
+
+  // 同期対象カレンダーの保存（設定系データの更新のみ = 同期済みイベントは次回同期で追随）
+  app.put('/calendars', async (c) => {
+    requireEnabled(env)
+    const user = c.get('user')
+    const body = await c.req.json().catch(() => ({})) as { calendarIds?: unknown }
+    const ids = Array.isArray(body.calendarIds)
+      ? [...new Set(body.calendarIds.map(v => String(v).trim()).filter(v => v.length > 0 && v.length <= 512))]
+      : []
+    if (ids.length === 0 || ids.length > MAX_SELECTED_CALENDARS) {
+      throw err('AKO-GEN-001', `同期するカレンダーを 1〜${MAX_SELECTED_CALENDARS} 件選択してください`, 400)
+    }
+    const { rowCount } = await pool.query(
+      `UPDATE calendar_tokens SET selected_calendar_ids = $2, updated_at = now() WHERE member_id = $1`,
+      [user.id, JSON.stringify(ids)])
+    if (rowCount === 0) {
+      throw err('AKO-CAL-007', 'Google カレンダーが未連携です。連携してから設定してください', 409)
+    }
+    return c.json({ data: { calendarIds: ids } })
+  })
+
   // 予定の参照（本人・日付指定）
   app.get('/events', async (c) => {
     const user = c.get('user')
@@ -271,51 +344,68 @@ export function calendarRoutes(pool: pg.Pool, env: Env): Hono {
     if (!token) {
       throw err('AKO-CAL-007', 'Google カレンダーが未連携です。連携してから同期してください', 409)
     }
-    let items: { id: string; summary?: string; start?: { dateTime?: string }; end?: { dateTime?: string } }[]
+    // 選択された全カレンダーから取得（オペレーター指示 2026-07-19 #3。従来は primary 固定）。
+    // 一部カレンダーの失敗は「取れた分だけ同期 + 削除フェーズ抑止」のグレースフルデグラデーション（原則4）
+    const calendarIds = await selectedCalendarIds(pool, user.id)
+    type GoogleItem = { id: string; summary?: string; start?: { dateTime?: string }; end?: { dateTime?: string } }
+    const items: GoogleItem[] = []
     let truncated = false
-    try {
-      const q = new URLSearchParams({
-        timeMin: `${date}T00:00:00+09:00`,
-        timeMax: `${date}T23:59:59+09:00`,
-        singleEvents: 'true',
-        orderBy: 'startTime',
-        maxResults: '250',
-      })
-      const res = await fetch(`${GOOGLE_EVENTS_URL}?${q.toString()}`, {
-        headers: { authorization: `Bearer ${token}` },
-        signal: AbortSignal.timeout(15_000),
-      })
-      if (!res.ok) {
-        // 判定はエラーボディ全文に対して行う（理由コードが長い message の後に来る形式でも取りこぼさない）
-        const bodyTxt = await res.text()
-        console.warn('calendar sync failed:', res.status, bodyTxt.slice(0, 300))
-        // 403 のうち設定不備（API 未有効化・権限なし）のみ管理者向け案内にする
-        // （レート超過も 403 を返すため、本文の理由コードで判別する）
-        if (res.status === 403 && /accessNotConfigured|SERVICE_DISABLED|PERMISSION_DENIED/.test(bodyTxt)) {
-          throw err('AKO-CAL-001',
-            'Google Calendar API が利用できません。管理者は GCP プロジェクトで Google Calendar API を有効化してください', 502)
+    let failedCals = 0
+    let configError: ApiError | null = null
+    for (const calId of calendarIds) {
+      try {
+        const q = new URLSearchParams({
+          timeMin: `${date}T00:00:00+09:00`,
+          timeMax: `${date}T23:59:59+09:00`,
+          singleEvents: 'true',
+          orderBy: 'startTime',
+          maxResults: '250',
+        })
+        const res = await fetch(`${calendarEventsUrl(calId)}?${q.toString()}`, {
+          headers: { authorization: `Bearer ${token}` },
+          signal: AbortSignal.timeout(15_000),
+        })
+        if (!res.ok) {
+          // 判定はエラーボディ全文に対して行う（理由コードが長い message の後に来る形式でも取りこぼさない）
+          const bodyTxt = await res.text()
+          console.warn('calendar sync failed:', calId, res.status, bodyTxt.slice(0, 300))
+          // 403 のうち設定不備（API 未有効化・権限なし）のみ管理者向け案内にする
+          // （レート超過も 403 を返すため、本文の理由コードで判別する）
+          if (res.status === 403 && /accessNotConfigured|SERVICE_DISABLED|PERMISSION_DENIED/.test(bodyTxt)) {
+            configError = err('AKO-CAL-001',
+              'Google Calendar API が利用できません。管理者は GCP プロジェクトで Google Calendar API を有効化してください', 502)
+          }
+          throw new Error(`google events ${res.status}`)
         }
-        throw new Error(`google events ${res.status}`)
+        const data = await res.json() as { items?: GoogleItem[]; nextPageToken?: string }
+        items.push(...(data.items ?? []))
+        // 打ち切り（次ページあり）の場合、見えていない予定を誤削除しないよう削除フェーズを抑止する
+        if (data.nextPageToken) {
+          console.warn(`calendar sync truncated (>250 events/day in ${calId}): skip delete phase`)
+          truncated = true
+        }
+      } catch {
+        failedCals++
       }
-      const data = await res.json() as { items?: typeof items; nextPageToken?: string }
-      items = data.items ?? []
-      // 打ち切り（次ページあり）の場合、見えていない予定を誤削除しないよう削除フェーズを抑止する
-      if (data.nextPageToken) {
-        console.warn('calendar sync truncated (>250 events/day): skip delete phase')
-        truncated = true
-      }
-    } catch (e) {
-      if (e instanceof ApiError) throw e
-      console.warn('calendar sync failed:', (e as Error).message)
-      throw err('AKO-CAL-001', 'カレンダー同期に失敗しました。時間をおいて再試行してください', 502)
     }
-    // 終日予定（dateTime なし）は工数材料にならないため対象外
-    const timed = items.filter(i => i.start?.dateTime && i.end?.dateTime)
+    if (failedCals === calendarIds.length) {
+      // 全滅は従来どおりエラー（設定不備の案内があればそれを優先）
+      throw configError ?? err('AKO-CAL-001', 'カレンダー同期に失敗しました。時間をおいて再試行してください', 502)
+    }
+    // 終日予定（dateTime なし）は対象外。同一イベントが複数カレンダーに現れる場合は
+    // イベント id で重複排除（(member_id, google_event_id) 一意制約と整合）
+    const seen = new Set<string>()
+    const timed = items.filter((i) => {
+      if (!i.start?.dateTime || !i.end?.dateTime || seen.has(i.id)) return false
+      seen.add(i.id)
+      return true
+    })
     const client = await pool.connect()
     try {
       await client.query('BEGIN')
       const keepIds = timed.map(i => i.id)
-      if (!truncated) {
+      // 取りこぼしの可能性がある（打ち切り・一部カレンダー失敗）ときは削除フェーズを抑止する
+      if (!truncated && failedCals === 0) {
         await client.query(
           `DELETE FROM calendar_events
            WHERE member_id = $1 AND date = $2::date AND source = 'google'
@@ -341,7 +431,15 @@ export function calendarRoutes(pool: pg.Pool, env: Env): Hono {
     } finally {
       client.release()
     }
-    return c.json({ data: { synced: timed.length } })
+    return c.json({
+      data: {
+        synced: timed.length,
+        calendars: calendarIds.length - failedCals,
+        warning: failedCals > 0
+          ? `${failedCals} 件のカレンダーの取得に失敗しました（取得できた分のみ同期）`
+          : undefined,
+      },
+    })
   })
 
   // タスク（アプリ発予定）の追加。pushToGoogle は補助処理（未連携・失敗でも作成は成立 + warning）

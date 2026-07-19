@@ -100,6 +100,38 @@ export function useCalendar() {
     await Promise.all([loadCalStatus(true), loadCalEvents(todayJst(), true)])
   }
 
+  // ---------- 同期対象カレンダーの選択（オペレーター指示 2026-07-19 #3。従来は primary 固定） ----------
+
+  /** 同期対象カレンダーの一覧（API: Google calendarList / モック: 擬似一覧 + localStorage 永続） */
+  async function listCalendars(): Promise<Result & { calendars?: SyncCalendar[] }> {
+    if (isApi) {
+      try {
+        return { ok: true, calendars: await apiFetch<SyncCalendar[]>('/v1/calendar/calendars') }
+      } catch (e) {
+        return { ok: false, error: apiErrorOf(e) }
+      }
+    }
+    if (!isConnected.value) {
+      return { ok: false, error: { code: 'AKO-CAL-007', message: 'Google カレンダーが未連携です。連携してから設定してください' } }
+    }
+    const selected = mockSelectedCalendarIds()
+    return { ok: true, calendars: MOCK_CALENDARS.map(c => ({ ...c, selected: selected.includes(c.id) })) }
+  }
+
+  /** 同期対象カレンダーの保存（設定系データの更新。同期済みイベントは次回同期で追随） */
+  async function saveCalendars(calendarIds: string[]): Promise<Result> {
+    if (calendarIds.length === 0) {
+      return { ok: false, error: { code: 'AKO-GEN-001', message: '同期するカレンダーを 1 件以上選択してください' } }
+    }
+    if (isApi) {
+      return apiResult(() => apiFetch('/v1/calendar/calendars', { method: 'PUT', body: { calendarIds } }))
+    }
+    try {
+      localStorage.setItem(MOCK_CAL_SELECTION_KEY, JSON.stringify(calendarIds))
+    } catch { /* プライベートモード等は保存不可でも選択自体は成立（次回既定に戻る） */ }
+    return { ok: true }
+  }
+
   function eventsOf(memberId: string, date: string): CalendarEvent[] {
     if (isApi) void loadCalEvents(date) // 参照キー単位の遅延ロード（本人分のみサーバーが返す）
     return events.value
@@ -243,5 +275,33 @@ export function useCalendar() {
   return {
     events, eventsOf, syncFromGoogle, addTask, pushToGoogle, removeTask,
     isConnected, isEnabled, isStatusLoaded, connect, disconnect, refreshStatus,
+    listCalendars, saveCalendars,
   }
+}
+
+// ---------- 同期対象カレンダー選択の型・モックデータ ----------
+
+export interface SyncCalendar {
+  id: string
+  summary: string
+  primary: boolean
+  selected: boolean
+}
+
+/** モックモードの擬似カレンダー一覧（共有・サブカレンダーがある環境の再現） */
+const MOCK_CALENDARS: { id: string; summary: string; primary: boolean }[] = [
+  { id: 'primary', summary: 'マイカレンダー', primary: true },
+  { id: 'mock-team-dev', summary: '02.チーム開発', primary: false },
+  { id: 'mock-sys-support', summary: '03.システムサポート', primary: false },
+  { id: 'mock-core', summary: 'コアメンバー', primary: false },
+]
+
+const MOCK_CAL_SELECTION_KEY = 'akebono-mock-calendar-selection'
+
+function mockSelectedCalendarIds(): string[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(MOCK_CAL_SELECTION_KEY) ?? '[]') as unknown
+    if (Array.isArray(v) && v.length > 0) return v.map(String)
+  } catch { /* 壊れた保存値は既定へ */ }
+  return ['primary']
 }
