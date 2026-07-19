@@ -20,6 +20,7 @@
     "vue-chartjs": "^5.3.3"
   },
   "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.8",
     "typescript": "^5.9.3",
     "vitest": "^2.1.8",
     "vue-tsc": "^3.2.9"

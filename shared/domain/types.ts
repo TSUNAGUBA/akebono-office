@@ -63,7 +63,7 @@ export interface Department {
   active: boolean
 }
 
-/** 業務種別（ぽいぽいメモ・議事録の任意分類。バッチ7c） */
+/** 業務種別（ぽいぽいポスト・議事録の任意分類。バッチ7c） */
 export interface WorkCategory {
   id: string
   name: string
@@ -73,7 +73,7 @@ export interface WorkCategory {
 
 export type NoteKind = 'poipoi' | 'minutes'
 
-/** ノート（ぽいぽいメモ = 本人メモ / 議事録 = 全員参照。記録系 = 追記のみ。バッチ7c） */
+/** ノート（ぽいぽいポスト = 本人 + 管理者閲覧 / 議事録 = 全員参照。記録系 = 追記 + 取消/復元。バッチ7c/7e） */
 export interface Note {
   id: string
   memberId: string

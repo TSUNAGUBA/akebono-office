@@ -1,6 +1,7 @@
 /**
- * ノート（ぽいぽいメモ / 議事録。バッチ7c・オペレーター指示 2026-07-19 #4）
- * - poipoi = 本人メモ（本人のみ参照 = C3）/ minutes = 議事録（全員参照 = C2）。記録系 = 追記 + 取消/復元（論理削除）
+ * ノート（ぽいぽいポスト / 議事録。バッチ7c/7e）
+ * - poipoi = ぽいぽいポスト（本人 + 管理者閲覧 = C3 + フィードバック用途。AI の参照は本人のみのまま）/
+ *   minutes = 議事録（全員参照 = C2）。記録系 = 追記 + 取消/復元（論理削除）
  * - プロジェクト・顧客・業務種別は任意の紐付け
  * - デュアルモード: API = /v1/notes（SoT。AI 検索インデックスへ自動反映）/ モック = notes コレクション
  * - アップロード（.md/.txt/.pdf/.docx）は API モードのみ（抽出はサーバー。モックは .md/.txt をクライアント読取）
@@ -17,8 +18,18 @@ function loadNotes(kind: NoteKind, force = false): Promise<void> {
   }, force)
 }
 
+// 管理者の全ポスト閲覧（バッチ7e。scope=all はサーバーが管理者権限を検証）
+const apiAdminPosts = ref<Note[]>([])
+
+function loadAdminPosts(force = false): Promise<void> {
+  return apiLoadOnce('notes:poipoi:all', async () => {
+    apiAdminPosts.value = await apiFetch<Note[]>('/v1/notes', { query: { kind: 'poipoi', scope: 'all' } })
+  }, force)
+}
+
 onApiReset(() => {
   apiNotes.value = {}
+  apiAdminPosts.value = []
 })
 
 export interface NoteInput {
@@ -35,7 +46,11 @@ export function useNotes(kind: NoteKind) {
   const { currentUser, isAdmin } = useCurrentUser()
   const isApi = useApiMode()
   const mockNotes = tbl('notes')
-  if (isApi) void loadNotes(kind)
+  if (isApi) {
+    void loadNotes(kind)
+    // 管理者のみ全ポスト一覧を取得（非管理者は 403 になるため呼ばない）
+    if (kind === 'poipoi' && isAdmin.value) void loadAdminPosts()
+  }
 
   /** 取消・復元の権限（poipoi = 本人のみ / minutes = 登録者 or 管理者） */
   function canUndo(n: Note): boolean {
@@ -48,6 +63,16 @@ export function useNotes(kind: NoteKind) {
     return (mockNotes.value as Note[])
       .filter(n => n.kind === kind && n.active !== false
         && (kind === 'minutes' || n.memberId === currentUser.value.id))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  })
+
+  /** 管理者の全ポスト一覧（kind='poipoi' + 管理者のみ。フィードバック・チーム改善のオリジナル閲覧用。
+   *  自分のポストは通常一覧（list）に出るため除外 = 二重表示を避ける） */
+  const adminList = computed<Note[]>(() => {
+    if (kind !== 'poipoi' || !isAdmin.value) return []
+    if (isApi) return apiAdminPosts.value.filter(n => n.memberId !== currentUser.value.id)
+    return (mockNotes.value as Note[])
+      .filter(n => n.kind === 'poipoi' && n.active !== false && n.memberId !== currentUser.value.id)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   })
 
@@ -65,7 +90,7 @@ export function useNotes(kind: NoteKind) {
     if (!body) return { ok: false, error: { code: 'AKO-GEN-001', message: '本文を入力してください' } }
     if (isApi) {
       const res = await apiResult(() => apiFetch('/v1/notes', { method: 'POST', body: { ...input, kind } }))
-      if (res.ok) await loadNotes(kind, true)
+      if (res.ok) await refresh() // 管理者の全ポスト一覧も同時に反映
       return res
     }
     const id = nextId('notes', 'nt')
@@ -73,7 +98,7 @@ export function useNotes(kind: NoteKind) {
       id,
       memberId: currentUser.value.id,
       kind,
-      title: input.title.trim() || ([...body.split('\n').map(l => l.replace(/^#+\s*/, '').trim()).filter(Boolean)][0] ?? 'メモ').slice(0, 40),
+      title: input.title.trim() || ([...body.split('\n').map(l => l.replace(/^#+\s*/, '').trim()).filter(Boolean)][0] ?? 'ノート').slice(0, 40),
       body,
       projectId: input.projectId,
       companyId: input.companyId,
@@ -98,7 +123,7 @@ export function useNotes(kind: NoteKind) {
         method: 'POST',
         body: { ...meta, kind, filename: file.name, contentBase64: btoa(bin) },
       }))
-      if (res.ok) await loadNotes(kind, true)
+      if (res.ok) await refresh() // 管理者の全ポスト一覧も同時に反映
       return res
     }
     const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
@@ -123,7 +148,7 @@ export function useNotes(kind: NoteKind) {
   async function setActive(noteId: string, active: boolean, apiPath: string, verb: string): Promise<Result> {
     if (isApi) {
       const res = await apiResult(() => apiFetch(apiPath, { method: 'POST' }))
-      if (res.ok) await loadNotes(kind, true)
+      if (res.ok) await refresh() // 管理者の全ポスト一覧も同時に反映
       return res
     }
     const target = (mockNotes.value as Note[]).find(n => n.id === noteId)
@@ -137,8 +162,11 @@ export function useNotes(kind: NoteKind) {
   }
 
   async function refresh(): Promise<void> {
-    if (isApi) await loadNotes(kind, true)
+    if (isApi) {
+      await loadNotes(kind, true)
+      if (kind === 'poipoi' && isAdmin.value) await loadAdminPosts(true)
+    }
   }
 
-  return { list, archived, add, importFile, archive, restore, refresh }
+  return { list, adminList, archived, add, importFile, archive, restore, refresh }
 }

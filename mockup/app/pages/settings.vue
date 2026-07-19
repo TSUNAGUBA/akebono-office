@@ -417,7 +417,7 @@ async function onResetDemo(): Promise<void> {
         <!-- b2) 日報の入力方式（F-13-7） -->
         <UiSectionCard
           title="日報の入力方式"
-          description="AI アシスト入力はオプション機能です。カレンダー予定・ぽいぽいメモ・AI ヒアリングから日報ドラフトを生成し、本人が確認・修正してから提出します"
+          description="AI アシスト入力はオプション機能です。カレンダー予定・ぽいぽいポスト・AI ヒアリングから日報ドラフトを生成し、本人が確認・修正してから提出します"
         >
           <div class="max-w-xs">
             <UiSelect v-model="reportInputMode" :options="REPORT_INPUT_MODE_OPTIONS" aria-label="日報の入力方式" />

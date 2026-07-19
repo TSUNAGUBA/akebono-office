@@ -1,6 +1,7 @@
 /**
  * ノート API（バッチ7c・オペレーター指示 2026-07-19 #4）。
- * - kind='poipoi'（ぽいぽいメモ = 本人のみ参照。C3）/ kind='minutes'（議事録 = 全員参照。C2）
+ * - kind='poipoi'（ぽいぽいポスト = 本人 + 管理者が参照。C3 + 管理者閲覧 = チーム改善のフィードバック用途。
+ *   バッチ7e で「ぽいぽいメモ」から改称・管理者の全ポスト閲覧を追加）/ kind='minutes'（議事録 = 全員参照。C2）
  * - プロジェクト・顧客・業務種別は任意の紐付け。記録系 = 追記のみ
  * - アップロード（.md/.txt/.pdf/.docx = lib/extract-text 再利用）は原本を note_files へ保全
  * - 書込後は検索インデックスを再生成（poipoi は owner スコープ付きで AI が参照 = search-index 側）
@@ -65,7 +66,7 @@ function canUndoNote(note: { kind: NoteKind; memberId: string }, user: AuthUser)
 function titleFrom(specified: unknown, body: string): string {
   const t = typeof specified === 'string' ? specified.trim() : ''
   if (t) return capCp(t, 200)
-  const first = body.split('\n').map(l => l.replace(/^#+\s*/, '').trim()).find(Boolean) ?? 'メモ'
+  const first = body.split('\n').map(l => l.replace(/^#+\s*/, '').trim()).find(Boolean) ?? 'ノート'
   return capCp(first, 40)
 }
 
@@ -82,6 +83,16 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
     const kind = kindOf(c.req.query('kind'))
     await guardFeature(pool, user, kind)
     const includeArchived = c.req.query('includeArchived') === '1'
+    // 管理者の全ポスト閲覧（バッチ7e: ぽいぽいポストはフィードバック用途 = 管理者はオリジナルを閲覧できる。
+    // active のみ・取消済みは対象外。AI の参照スコープ（owner_member_id = 本人）は変えない）
+    if (kind === 'poipoi' && c.req.query('scope') === 'all') {
+      if (user.role !== 'admin') throw err('AKO-PRM-001', '全メンバーのポスト閲覧は管理者のみです', 403)
+      // LIMIT 300 は通常一覧と同じ設計判断（SME 規模で十分。超えたらページング導入時に吸収）
+      const { rows } = await pool.query(
+        `SELECT ${NOTE_COLS} FROM notes WHERE kind = 'poipoi' AND active = true
+         ORDER BY created_at DESC, id LIMIT 300`)
+      return c.json({ data: rows })
+    }
     const { rows } = kind === 'poipoi'
       ? await pool.query(`SELECT ${NOTE_COLS} FROM notes WHERE kind = 'poipoi' AND member_id = $1
                           ${includeArchived ? '' : 'AND active = true'}
@@ -116,7 +127,7 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
     }
     await audit(pool, {
       actorId: user.id, action: 'create', entity: 'notes', entityId: id,
-      detail: kind === 'poipoi' ? 'ぽいぽいメモを登録' : '議事録を登録',
+      detail: kind === 'poipoi' ? 'ぽいぽいポストを登録' : '議事録を登録',
     })
     scheduleSearchRebuild(pool, env, `notes:${kind}`)
     const { rows } = await pool.query(`SELECT ${NOTE_COLS} FROM notes WHERE id = $1`, [id])
@@ -175,7 +186,7 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
     }
     await audit(pool, {
       actorId: user.id, action: 'import', entity: 'notes', entityId: id,
-      detail: `${kind === 'poipoi' ? 'ぽいぽいメモ' : '議事録'}へドキュメント取込（${filename}）`,
+      detail: `${kind === 'poipoi' ? 'ぽいぽいポスト' : '議事録'}へドキュメント取込（${filename}）`,
     })
     scheduleSearchRebuild(pool, env, `notes:import`)
     const { rows } = await pool.query(`SELECT ${NOTE_COLS} FROM notes WHERE id = $1`, [id])
@@ -198,7 +209,7 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
     if (upd.rowCount === 0) return c.json({ data: { id: noteId, warning: 'すでに取消済みです' } })
     await audit(pool, {
       actorId: user.id, action: 'archive', entity: 'notes', entityId: noteId,
-      detail: `${note.kind === 'poipoi' ? 'ぽいぽいメモ' : '議事録'}「${capCp(note.title, 40)}」を取消`,
+      detail: `${note.kind === 'poipoi' ? 'ぽいぽいポスト' : '議事録'}「${capCp(note.title, 40)}」を取消`,
     })
     scheduleSearchRebuild(pool, env, 'notes:archive')
     return c.json({ data: { id: noteId } })
@@ -218,13 +229,14 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
     if (upd.rowCount === 0) return c.json({ data: { id: noteId, warning: '取消されていません' } })
     await audit(pool, {
       actorId: user.id, action: 'restore', entity: 'notes', entityId: noteId,
-      detail: `${note.kind === 'poipoi' ? 'ぽいぽいメモ' : '議事録'}「${capCp(note.title, 40)}」を復元`,
+      detail: `${note.kind === 'poipoi' ? 'ぽいぽいポスト' : '議事録'}「${capCp(note.title, 40)}」を復元`,
     })
     scheduleSearchRebuild(pool, env, 'notes:restore')
     return c.json({ data: { id: noteId } })
   })
 
-  // 添付原本メタ一覧（poipoi は本人のみ。取消済みは復元権限者のみ = 誤アップロード原本を晒し続けない）
+  // 添付原本メタ一覧（poipoi は本人 + 管理者 = バッチ7e の管理者オリジナル閲覧。
+  // 取消済みは復元権限者のみ = 誤アップロード原本を晒し続けない）
   app.get('/:noteId/files', async (c) => {
     const user = c.get('user')
     const { rows: notes } = await pool.query<{ kind: NoteKind; memberId: string; active: boolean }>(
@@ -232,8 +244,8 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
     const note = notes[0]
     if (!note) throw err('AKO-GEN-002', 'ノートが見つかりません', 404)
     await guardFeature(pool, user, note.kind)
-    if (note.kind === 'poipoi' && note.memberId !== user.id) {
-      throw err('AKO-PRM-001', '本人のメモのみ参照できます', 403)
+    if (note.kind === 'poipoi' && note.memberId !== user.id && user.role !== 'admin') {
+      throw err('AKO-PRM-001', '本人のポスト（管理者はチーム改善のための閲覧のみ可）のみ参照できます', 403)
     }
     if (!note.active && !canUndoNote(note, user)) {
       throw err('AKO-PRM-001', '取消済みノートの原本は登録者本人（議事録は管理者も可）のみ参照できます', 403)
@@ -245,7 +257,7 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
     return c.json({ data: rows })
   })
 
-  // 原本ダウンロード（poipoi は本人のみ。取消済みは復元権限者のみ）
+  // 原本ダウンロード（poipoi は本人 + 管理者。取消済みは復元権限者のみ）
   app.get('/files/:id', async (c) => {
     const user = c.get('user')
     const { rows } = await pool.query<{
@@ -256,8 +268,8 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
     const f = rows[0]
     if (!f) throw err('AKO-GEN-002', 'ファイルが見つかりません', 404)
     await guardFeature(pool, user, f.kind)
-    if (f.kind === 'poipoi' && f.memberId !== user.id) {
-      throw err('AKO-PRM-001', '本人のメモのみ参照できます', 403)
+    if (f.kind === 'poipoi' && f.memberId !== user.id && user.role !== 'admin') {
+      throw err('AKO-PRM-001', '本人のポスト（管理者はチーム改善のための閲覧のみ可）のみ参照できます', 403)
     }
     if (!f.active && !canUndoNote(f, user)) {
       throw err('AKO-PRM-001', '取消済みノートの原本は登録者本人（議事録は管理者も可）のみ参照できます', 403)

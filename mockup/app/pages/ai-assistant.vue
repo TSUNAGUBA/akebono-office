@@ -3,7 +3,7 @@
  * AI業務アシスタント（F-14）。日報の AI アシスト（材料の入力側）を独立させたページ。
  * - 明日の計画: 翌日の予定タスクへ 目的/達成条件/段取り を登録 → AI コメント → 修正（F-14-2/3）
  * - 今日の振り返り: 当日の終わりに結果・所感を記録 → 日報ドラフトへ自動反映可能に（F-14-4）
- * - スケジュール & タスク / ぽいぽいメモ / AI ヒアリング（F-06-7 から移設）
+ * - スケジュール & タスク / ぽいぽいポスト / AI ヒアリング（F-06-7 から移設）
  * - 管理者: 蓄積データからのインサイト（計画数・完了率・振り返り記入率。F-14-6）
  */
 import {
@@ -182,7 +182,7 @@ async function onAiReview(p: TaskPlan): Promise<void> {
   show('AI コメントを受け取りました。内容を確認して計画を修正できます')
 }
 
-// ================= ぽいぽいメモ / AI ヒアリング（振り返りの対象日に記録） =================
+// ================= ぽいぽいポスト / AI ヒアリング（振り返りの対象日に記録） =================
 
 const memoText = ref('')
 const dayMemos = computed(() =>
@@ -442,16 +442,16 @@ const insightRows = computed(() => tp.insights(7))
               </div>
             </div>
 
-            <!-- ぽいぽいメモ -->
+            <!-- ぽいぽいポスト -->
             <div class="rounded-lg border border-line p-2.5">
-              <p class="text-[11px] font-bold text-muted">ぽいぽいメモ（計画外の出来事も一言でぽいっと）</p>
+              <p class="text-[11px] font-bold text-muted">ぽいぽいポスト（計画外の出来事も一言でぽいっと）</p>
               <div class="mt-1.5 flex gap-1.5">
                 <input
                   v-model="memoText"
                   type="text"
                   class="input min-w-0 flex-1"
                   placeholder="例: 見積の前提を確認済み"
-                  aria-label="ぽいぽいメモ"
+                  aria-label="ぽいぽいポスト"
                   @keydown.enter="onMemoKeydown"
                 >
                 <button type="button" class="btn btn-primary shrink-0" @click="onPoipoi">

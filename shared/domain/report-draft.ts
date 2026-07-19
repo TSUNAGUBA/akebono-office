@@ -123,7 +123,7 @@ export function heuristicReportDraft(ctx: DraftContext, date: string): ReportDra
     ...memos.map(m => `メモ: ${m}`),
   ].filter(Boolean)
   if (planReflections.length > 0) basis.push(`タスクの所感 ${planReflections.length} 件を所感へ反映`)
-  if (memos.length > 0) basis.push(`ぽいぽいメモ ${memos.length} 件を所感へ反映`)
+  if (memos.length > 0) basis.push(`ぽいぽいポスト ${memos.length} 件を所感へ反映`)
 
   // 課題: 課題回答（「特になし」以外） + イベント回答/計画結果のネガティブ表現
   const issueAns = [...logs].reverse().find(l => l.kind === 'qa' && l.question.startsWith(WRAPUP_KEYS.issue))?.answer ?? ''

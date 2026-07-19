@@ -152,7 +152,7 @@ export function useReportAssist() {
    */
   async function poipoiMemo(text: string, date?: string): Promise<Result> {
     const t = text.trim().slice(0, 2000)
-    if (!t) return { ok: false, error: { code: 'AKO-RAS-002', message: 'メモを入力してください' } }
+    if (!t) return { ok: false, error: { code: 'AKO-RAS-002', message: 'ポストを入力してください' } }
     if (isApi) {
       const d = date ?? todayJst()
       const res = await apiResult(() => apiFetch<{ id: string }>('/v1/assist/memos', {
@@ -190,7 +190,7 @@ export function useReportAssist() {
         // API 断でもフォームを空で返さない（材料 = ローカルキャッシュのヒューリスティック）
       }
     }
-    // ぽいぽいメモ（独立メニュー = notes コレクション。バッチ7c）も材料へ合流（memo 形式）
+    // ぽいぽいポスト（独立メニュー = notes コレクション。バッチ7c）も材料へ合流（memo 形式）
     const poipoiNotes = (tbl('notes').value as Note[])
       .filter(n => n.kind === 'poipoi' && n.memberId === memberId && n.active !== false
         && n.createdAt.slice(0, 10) === date)

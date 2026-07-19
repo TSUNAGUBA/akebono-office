@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 業務種別マスタ（管理者専用。バッチ7c・オペレーター指示 2026-07-19 #4）
- * ぽいぽいメモ・議事録の任意分類。シンプルな一覧 + 追加/編集（名称・表示順）。
+ * ぽいぽいポスト・議事録の任意分類。シンプルな一覧 + 追加/編集（名称・表示順）。
  */
 import { Plus } from 'lucide-vue-next'
 import { ACTIVE_FILTER_OPTIONS, matchesActiveFilter } from '~/components/masters/MasterShell.vue'
@@ -57,7 +57,7 @@ const drawerTitle = computed(() =>
 const formFields: FieldDef[] = [
   {
     key: 'name', label: '業務種別名', type: 'text', required: true, placeholder: '例）定例会議',
-    hint: 'ぽいぽいメモ・議事録の分類に使います（例: 定例会議・顧客対応）',
+    hint: 'ぽいぽいポスト・議事録の分類に使います（例: 定例会議・顧客対応）',
   },
   { key: 'displayOrder', label: '表示順', type: 'number', min: 1, step: 1 },
 ]
@@ -146,7 +146,7 @@ async function restoreSelected(): Promise<void> {
 <template>
   <MastersMasterShell
     title="業務種別マスタ"
-    description="ぽいぽいメモ・議事録の任意分類を管理します。名称と表示順のみのシンプルなマスタです"
+    description="ぽいぽいポスト・議事録の任意分類を管理します。名称と表示順のみのシンプルなマスタです"
   >
     <template #actions>
       <button type="button" class="btn btn-primary" @click="openCreate">

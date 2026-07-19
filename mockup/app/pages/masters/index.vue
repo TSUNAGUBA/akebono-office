@@ -71,7 +71,7 @@ const cards = computed<MenuCard[]>(() => [
 {
     id: 'work-categories',
     title: '業務種別',
-    description: 'ぽいぽいメモ・議事録の分類。名称と表示順',
+    description: 'ぽいぽいポスト・議事録の分類。名称と表示順',
     icon: 'Tags',
     to: '/masters/work-categories',
     badge: activeCount(workCategories.value),

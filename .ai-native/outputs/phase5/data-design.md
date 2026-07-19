@@ -67,8 +67,8 @@
 | `SalesMonthly` | month(YYYY-MM), projectType, companyId, amount, cost（バッチ6b で API 化 = `sales_monthly` 0017。**実績データ**: 追記のみではなく冪等キー month × company × projectType の upsert で管理者が更新可。マスタ初期値シードは投入しない = 実績を偽装しない設計判断） | C2 |
 | `CalendarToken` 追記 | selectedCalendarIds（バッチ7b = 0022。同期対象カレンダーの選択。既定 `["primary"]` = 従来挙動の下位互換。設定系データ = 再同期で巻き戻らない） | C3 |
 | `AiTask` 追記 | requesterAiEmployeeId（依頼元 AI 社員。人間からの直接依頼は null）・parentTaskId（連携元タスク）（バッチ7b = 0022。**追加列のみ = 既存タスクデータ不変**。マネージャーの承認で子タスクを生成し、完了/ブロック/中止は親子間で連動） | C2 |
-| `WorkCategory` | id, name, displayOrder, active（バッチ7c = `work_categories` 0023。ぽいぽいメモ・議事録の任意分類） | C1 |
-| `Note` | id, memberId, kind(`poipoi`=本人のみ/`minutes`=全員), title, body, projectId?, companyId?, workCategoryId?, source(`text`/`upload`), active(0024。**取消 = 論理削除 + 監査ログ・復元 = 取消の取消** = 原則 9.5 操作の取消可能性。取消済みの表示・原本参照は復元権限者のみ)（バッチ7c/7d = `notes` 0023/0024。**記録系 = 追記 + 論理削除のみ**。取込原本は `note_files`。検索インデックスへ自動反映 = poipoi は owner スコープ・active=false は除外） | poipoi=C3 / minutes=C2 |
+| `WorkCategory` | id, name, displayOrder, active（バッチ7c = `work_categories` 0023。ぽいぽいポスト・議事録の任意分類） | C1 |
+| `Note` | id, memberId, kind(`poipoi`=本人のみ/`minutes`=全員), title, body, projectId?, companyId?, workCategoryId?, source(`text`/`upload`), active(0024。**取消 = 論理削除 + 監査ログ・復元 = 取消の取消** = 原則 9.5 操作の取消可能性。取消済みの表示・原本参照は復元権限者のみ)（バッチ7c/7d = `notes` 0023/0024。**記録系 = 追記 + 論理削除のみ**。取込原本は `note_files`。検索インデックスへ自動反映 = poipoi は owner スコープ・active=false は除外） | poipoi=C3+管理者閲覧（バッチ7e。フィードバック用途 = 管理者はオリジナル閲覧可・取消/AI 参照は本人のみ） / minutes=C2 |
 | `SearchDoc` | sourceKind(`company`/`contact`/`industry`/`knowledge`/`project`/`note`) × sourceId(一意), title, aliases, body(AI 最適化平文), segments[(entity, field) チェック付き表示単位], bodyHash, embedding(Vertex 埋め込み。無効環境は null), ownerMemberId(null=全員。poipoi は本人のみ = 0023), links jsonb(`{companyId?, projectId?}` = ノートの紐付け。顧客未指定でも PJ 経由で顧客を補完。質問（今回の質問 → 履歴の新しい順の優先で解決）に別顧客/別 PJ の言及がある場合に AI 文脈から除外 = 混入防止 0024・バッチ7d)（バッチ7a = `search_docs` 0021。**派生キャッシュで SoT は各マスタ/ナレッジ本体** = 常に全再生成可能。更新経路 = マスタ書込後の自動再生成（デバウンス）+ 起動時 + `POST /v1/search/reindex` の手動回復（原則6）。照合は生データ・描画は segments の表示項目権限チェック通過行のみ = F-16 準拠） | C2 |
 | `KnowledgeFile` | id, knowledgeId, filename, mime, sizeBytes, bytes(原本), uploadedBy（バッチ7a = `knowledge_files` 0021。ドキュメント取込（.md/.txt/.pdf/.docx）の**アップロード原本の保全**（監査・再抽出用）。抽出テキストは knowledge_articles.body が SoT = 既存スキーマ不変） | C2 |
 | `Holiday` | id, date(一意), name, source(`official`/`manual`)（オペレーター報告 2026-07-18 #4 で追加 = `public_holidays` 0020。**SoT は本テーブル**で、内閣府「国民の祝日」CSV（Shift_JIS）は取込元 = `POST /v1/holidays/import` が date 一意の upsert（冪等・再取込可）。手動追加・物理削除は汎用マスタ経由。翌営業日計算（shared/domain/business-day）とカレンダー表示（AI業務アシスタントの対象日バッジ）が参照。**設計判断: 取込は追加・更新のみで削除しない** = 誤って登録済みデータを消さない安全側。祝日の「移動・取消」（実例: 五輪特措法 2020/2021 の海の日移動）が告示された場合は旧日付の official 行が残るため、/masters/holidays 画面から手動削除する） | C2 |
@@ -81,7 +81,7 @@
 |---|---|---|---|
 | `CalendarEvent`（google 発） | id(決定的 `gcal-…`), memberId, date, from, to, title, source=`google`, projectId（タイトルから推定 or 手動） | 外部キャッシュ（SoT は Google。編集・削除不可） | C2 |
 | `CalendarEvent`（app 発） | id, memberId, date, from, to, title, source=`app`, syncedToGoogle, projectId | 本人管理のタスク（編集・削除可。SoT は本アプリ） | C2 |
-| `HearingLog` | id, memberId, date, kind(`qa`=ヒアリング回答/`memo`=ぽいぽいメモ), calendarEventId, question, answer, at | 記録系（追記のみ・巻き戻し禁止） | C3（課題回答を含み `DailyReport` と同水準） |
+| `HearingLog` | id, memberId, date, kind(`qa`=ヒアリング回答/`memo`=ぽいぽいポスト), calendarEventId, question, answer, at | 記録系（追記のみ・巻き戻し禁止） | C3（課題回答を含み `DailyReport` と同水準） |
 | `TaskPlan`（F-14） | id, memberId, date（実施予定日）, calendarEventId（null=手動）, title, purpose（目的）, doneCriteria（達成条件）, approach（段取り）, aiComment/aiCommentAt（AI レビュー。再取得で上書き可）, status(`planned`/`done`), outcome（結果）, reflection（所感）, resultAt, createdAt/updatedAt | ハイブリッド: planned 中は本人が編集・削除可 / **結果記録（done）後は編集不可 = 記録系へ確定** | C3（業務内容の原文を含み `DailyReport` と同水準） |
 | `AppConfigItem` | key, value（例: reportInputMode = `form`/`assist`/`both`） | 設定系（upsert 更新可。SoT は本アプリ） | C1 |
 

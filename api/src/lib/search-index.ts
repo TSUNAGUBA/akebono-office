@@ -242,7 +242,7 @@ export async function buildSearchDocs(pool: pg.Pool): Promise<SearchDocInput[]> 
     docs.push({ sourceKind: 'knowledge', sourceId: k.id, title: k.title, aliases: [], segments })
   }
 
-  // ---- ノート（ぽいぽいメモ = 本人スコープ / 議事録 = 全員。バッチ7c） ----
+  // ---- ノート（ぽいぽいポスト = 本人スコープ / 議事録 = 全員。バッチ7c） ----
   const { rows: noteRows } = await pool.query<{
     id: string; memberId: string; kind: string; title: string; body: string
     projectId: string | null; companyId: string | null; workCategoryId: string | null
@@ -257,7 +257,7 @@ export async function buildSearchDocs(pool: pg.Pool): Promise<SearchDocInput[]> 
   const projCompany = new Map(projectsQ.rows.map(x => [x.id, x.companyId]))
   for (const n of noteRows) {
     const segments: SearchSegment[] = []
-    segments.push(seg(n.kind === 'poipoi' ? '種別: ぽいぽいメモ' : '種別: 議事録', c('notes', 'kind')))
+    segments.push(seg(n.kind === 'poipoi' ? '種別: ぽいぽいポスト' : '種別: 議事録', c('notes', 'kind')))
     const links: string[] = []
     const linkChecks: SegmentCheck[] = []
     const pj = n.projectId ? projName.get(n.projectId) : undefined
