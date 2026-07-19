@@ -295,9 +295,10 @@ function authorOf(n: Note): string {
       </div>
     </UiSectionCard>
 
-    <!-- 管理者の全ポスト閲覧（ぽいぽいポストのみ。フィードバック・チーム改善用途 = バッチ7e） -->
+    <!-- 管理者の全ポスト閲覧（ぽいぽいポストのみ。フィードバック・チーム改善用途 = バッチ7e）。
+         0 件でもセクションを出す = 再読み込みボタンで新着を確認できる導線を常設 -->
     <UiSectionCard
-      v-if="kind === 'poipoi' && isAdmin && notes.adminList.value.length > 0"
+      v-if="kind === 'poipoi' && isAdmin"
       :title="`メンバーのポスト（管理者・${notes.adminList.value.length}件）`"
       description="チーム改善のフィードバックとしてオリジナルを閲覧できます（自分のポストは上の一覧に表示。AI の参照対象は投稿者本人のみ・取消も本人のみ）"
       flush
@@ -308,7 +309,10 @@ function authorOf(n: Note): string {
           再読み込み
         </button>
       </template>
-      <ul class="divide-y divide-line">
+      <p v-if="notes.adminList.value.length === 0" class="px-4 py-3 text-[12px] text-muted">
+        メンバーのポストはまだありません（自分のポストは上の一覧に表示されます）
+      </p>
+      <ul v-else class="divide-y divide-line">
         <li v-for="n in notes.adminList.value" :key="n.id">
           <button
             type="button"
