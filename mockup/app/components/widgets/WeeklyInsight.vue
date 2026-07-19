@@ -53,7 +53,9 @@ async function regenerate(): Promise<void> {
   } catch (e) {
     if (seq === runSeq) show(apiErrorOf(e).message, 'crit')
   } finally {
-    if (seq === runSeq) generating.value = false
+    // 自操作のフラグは無条件で戻す（PR #59 R1 M-1: 週送りで先取りされたとき
+    // 「生成中…」のままボタンが永久に無効化されるデッドエンドの防止）
+    generating.value = false
   }
 }
 
@@ -88,11 +90,12 @@ const SWOT_QUADRANTS = [
   <div class="grid gap-3">
     <!-- 週ナビゲーション + 生成/再生成 -->
     <div class="flex flex-wrap items-center gap-2">
-      <button type="button" class="btn btn-sm" aria-label="前の週" @click="moveWeek(-1)">
+      <!-- 生成中は週送りも無効化（保存対象の週が生成中に変わる誤操作の防止 = R1 M-1） -->
+      <button type="button" class="btn btn-sm" :disabled="generating" aria-label="前の週" @click="moveWeek(-1)">
         <ChevronLeft class="h-4 w-4" aria-hidden="true" />
       </button>
       <span class="num text-[13px] font-bold">{{ weekLabel }}</span>
-      <button type="button" class="btn btn-sm" aria-label="次の週" @click="moveWeek(1)">
+      <button type="button" class="btn btn-sm" :disabled="generating" aria-label="次の週" @click="moveWeek(1)">
         <ChevronRight class="h-4 w-4" aria-hidden="true" />
       </button>
       <span v-if="company" class="text-[11px] text-muted">
