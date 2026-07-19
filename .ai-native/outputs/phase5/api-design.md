@@ -123,7 +123,7 @@ generateDraft(memberId, date): ReportDraft           // 保存しない（フォ
 |---|---|
 | useAttendance | `POST /v1/attendance/punches`・`GET /v1/attendance/state`・`GET /v1/attendance/day`（?raw=1 で修正履歴）・`GET /v1/attendance/month`・`GET /v1/attendance/alerts`・`GET /v1/attendance/timecard`・`POST /v1/attendance/fix-requests`（+ `/decision`）（**実装・フロント接続済み**。月サマリキャッシュから日次・週次を射影） |
 | useWorkflow | `GET /v1/workflows`・`GET /v1/workflows/:id/logs`・`PUT /v1/workflows/draft`・`POST /v1/workflows/submit`・`POST /v1/workflows/:id/actions`（クレームファースト: FOR UPDATE クレーム）・`GET/POST /v1/workflows/delegates`（+ `/:id/archive`）・承認経路 = `/v1/masters/workflow-routes`（**実装・フロント接続済み**。経路解決・凍結・権限ガード・証跡・通知はサーバーが担い、射影ロジックはモックと共通） |
-| useCalendar.syncFromGoogle | Google Calendar API（OAuth 2.0 増分認可・calendar.readonly/events スコープ。Webhook push + 手動再同期の両立）。トークンはサーバー側で暗号化保管（C3 相当・クライアントへ出さない）。アプリの連携解除時はトークン破棄 + Google 側 revoke を呼び、Google 側での取消は次回 API 401 で検知して連携状態へ反映する。**同期対象は選択制（バッチ7b・オペレーター指示 2026-07-19 #3）: 従来の primary 固定を廃し、calendar_tokens.selected_calendar_ids（既定 ["primary"] = 下位互換）に保存した複数カレンダーを横断同期。同一イベント id は重複排除・一部カレンダーの取得失敗は「取れた分だけ同期 + 削除フェーズ抑止 + warning」（原則4）・アプリ発予定の反映先は常に primary。UI = カレンダー連携ゲートの「同期カレンダー」モーダル（モックは擬似一覧 + localStorage）** |
+| useCalendar.syncFromGoogle | Google Calendar API（OAuth 2.0 増分認可・calendar.readonly/events スコープ。Webhook push + 手動再同期の両立）。トークンはサーバー側で暗号化保管（C3 相当・クライアントへ出さない）。アプリの連携解除時はトークン破棄 + Google 側 revoke を呼び、Google 側での取消は次回 API 401 で検知して連携状態へ反映する。**同期対象は選択制（バッチ7b・オペレーター指示 2026-07-19 #3）: 従来の primary 固定を廃し、calendar_tokens.selected_calendar_ids（既定 ["primary"] = 下位互換）に保存した複数カレンダーを横断同期。同一イベント id は重複排除・一部カレンダーの取得失敗は「取れた分だけ同期 + 削除フェーズ抑止 + warning」（原則4）・アプリ発予定の反映先は常に primary。**選択解除したカレンダーの同期済みイベントは日付単位の削除フェーズで掃除される = 過去・未来の日付は該当日を次に同期したときに追随**（per-date 同期設計の帰結）。見つからないカレンダー（共有解除 = 404）は「予定ゼロ」として扱い削除フェーズを抑止しない + warning で選択見直しを案内。部分失敗の warning はフロントがトーストで報告（原則4）。UI = カレンダー連携ゲートの「同期カレンダー」モーダル（モックは擬似一覧 + localStorage・選択に応じて擬似予定を合成）** |
 | useReportAssist | `GET /v1/assist/logs`・`POST /v1/assist/answers` `/memos`（追記のみ）・`POST /v1/assist/report-draft`（**実装・フロント接続済み**。Vertex AI 構造化出力 + 出力正規化 → 失敗時は shared/domain/report-draft の同一ヒューリスティック。ドラフトは保存しない）|
 | useTaskPlans | `GET/PUT /v1/task-plans`・`POST /:id/remove` `/:id/ai-review` `/:id/result`・`GET /v1/task-plans/insights`（**実装・フロント接続済み**。AI レビュー = Vertex AI 構造化出力 → 失敗時は shared/domain/task-plan-review の同一ヒューリスティック。結果記録は FOR UPDATE で 1 回確定・インサイトはサーバー集計）|
 | useLeave | `GET/POST /v1/leave/requests`（+ `/decision`）・`GET/POST /v1/leave/grants`（+ `/bulk`。冪等キー: memberId×leaveTypeId×grantDate。権限: admin/hr）（**実装・フロント接続済み**。grants/requests をハイドレーションし残数射影は共通ロジック） |
@@ -230,6 +230,7 @@ generateDraft(memberId, date): ReportDraft           // 保存しない（フォ
 | AKO-KNW-001 | ドキュメント取込の非対応形式（.md/.txt/.pdf/.docx 以外。旧 .doc は変換を案内） | ✅ |
 | AKO-KNW-002 | ドキュメント取込のサイズ超過（10MB） | ✅ |
 | AKO-KNW-003 | ドキュメントからテキスト抽出不能（画像のみの PDF・破損ファイル等） | ✅ |
+| AKO-AIC-009 | AI タスクの同時操作競合（親子ロックのデッドロック検出 = 再試行可能） | ✅ |
 | AKO-AIC-001 | AI 社員が見つからない | ✅ |
 | AKO-AIC-002 | AI タスクの件名未入力 | ✅ |
 | AKO-AIC-003 | AI タスクが見つからない | ✅ |

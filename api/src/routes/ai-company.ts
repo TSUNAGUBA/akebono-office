@@ -126,31 +126,48 @@ async function llmPlanDelegation(
 }
 
 /**
+ * 承認前の連携計画（トランザクション外で実行する = LLM 呼び出し（最長 30 秒）中に
+ * タスク行ロック・プール接続を保持しない。レビュー PR #48 R1 指摘。llmDecompose と同じ配置）。
+ * 対象外（子タスク・delegate 権限なし・候補ゼロ）は null = 連携なし
+ */
+async function prepareDelegationPlan(
+  pool: pg.Pool,
+  env: Env,
+  task: AiTask & { decomposition: { title: string; done: boolean }[] },
+): Promise<{ plan: { title: string; aiEmployeeId: string }[]; candidates: DelegationCandidate[]; managerName: string } | null> {
+  if (task.parentTaskId) return null
+  const { rows: roleRows } = await pool.query<{ permissions: string[]; name: string }>(
+    `SELECT r.permissions, e.name FROM ai_employees e JOIN ai_roles r ON r.id = e.role_id WHERE e.id = $1`,
+    [task.aiEmployeeId])
+  if (!(roleRows[0]?.permissions ?? []).includes(DELEGATE_PERMISSION)) return null
+  const { rows: candidates } = await pool.query<DelegationCandidate>(
+    `SELECT e.id, e.name, r.name AS "roleName", r.mission
+     FROM ai_employees e JOIN ai_roles r ON r.id = e.role_id
+     WHERE e.active = true AND e.id <> $1 ORDER BY e.id`, [task.aiEmployeeId])
+  if (candidates.length === 0 || task.decomposition.length === 0) return null
+  const plan = (await llmPlanDelegation(env, task.title, task.decomposition, candidates))
+    ?? planDelegation(task.decomposition, candidates)
+  return { plan, candidates, managerName: roleRows[0]?.name ?? 'マネージャー' }
+}
+
+/**
  * 承認時の連携（AI 社員間の依頼・連携 = オペレーター指示 2026-07-19 #3）。
  * - 対象: delegate 権限（AiRole.permissions）を持つロールの AI 社員（= マネージャーロール）
  * - 子タスクからの再連携はしない（連鎖の暴走防止）。候補ゼロ（自分以外に有効な AI 社員なし）は連携なし
- * - 割当は LLM 構造化出力 → 失敗時 shared/domain/ai-tasks の planDelegation（決定的）へフォールバック
+ * - 割当は事前計画（prepareDelegationPlan = LLM → 決定的フォールバック）を受け取り、INSERT のみ行う
  * - 子タスクは即 in_progress（人間の承認は親の 1 回のみ = 依頼を一挙に引き受ける）
  */
 async function delegateOnApprove(
   client: pg.PoolClient,
-  env: Env,
   task: AiTask & { decomposition: { title: string; done: boolean }[] },
+  prepared: { plan: { title: string; aiEmployeeId: string }[]; candidates: DelegationCandidate[]; managerName: string },
 ): Promise<number> {
-  if (task.parentTaskId) return 0
-  const { rows: roleRows } = await client.query<{ permissions: string[]; name: string }>(
-    `SELECT r.permissions, e.name FROM ai_employees e JOIN ai_roles r ON r.id = e.role_id WHERE e.id = $1`,
-    [task.aiEmployeeId])
-  if (!(roleRows[0]?.permissions ?? []).includes(DELEGATE_PERMISSION)) return 0
-  const managerName = roleRows[0]?.name ?? 'マネージャー'
-  const { rows: candidates } = await client.query<DelegationCandidate>(
-    `SELECT e.id, e.name, r.name AS "roleName", r.mission
-     FROM ai_employees e JOIN ai_roles r ON r.id = e.role_id
-     WHERE e.active = true AND e.id <> $1 ORDER BY e.id`, [task.aiEmployeeId])
-  if (candidates.length === 0 || task.decomposition.length === 0) return 0
-
-  const plan = (await llmPlanDelegation(env, task.title, task.decomposition, candidates))
-    ?? planDelegation(task.decomposition, candidates)
+  const { candidates, managerName } = prepared
+  // 事前計画とロック後の分解が食い違う場合（通常起きない防御）は決定的計画で作り直す
+  const plan = prepared.plan.length === task.decomposition.length
+    && prepared.plan.every((p, i) => p.title === task.decomposition[i]!.title)
+    ? prepared.plan
+    : planDelegation(task.decomposition, candidates)
   // 担当ごとにステップをまとめて 1 子タスク（AI 社員 1 名 = 分担 1 件でボードが読みやすい）
   const byEmp = new Map<string, string[]>()
   for (const p of plan) byEmp.set(p.aiEmployeeId, [...(byEmp.get(p.aiEmployeeId) ?? []), p.title])
@@ -195,9 +212,11 @@ async function rollUpToParent(
   await addLog(client, parent.aiEmployeeId, parent.id, 'report',
     `${empRows[0]?.name ?? 'AI社員'} から「${child.title}」の完了報告を受領`)
   const childTitles = new Set(child.decomposition.map(s => s.title))
+  // cancelled の分担は「完了待ち」に数えない（中止された分担が残りの完了・統合報告を
+  // 恒久ブロックしないため。親中止の連鎖条件と同じ集合 = レビュー PR #48 R1 指摘）
   const { rows: sib } = await client.query<{ n: string }>(
     `SELECT count(*)::text AS n FROM ai_tasks
-     WHERE parent_task_id = $1 AND id <> $2 AND status <> 'done'`, [parent.id, child.id])
+     WHERE parent_task_id = $1 AND id <> $2 AND status NOT IN ('done', 'cancelled')`, [parent.id, child.id])
   const allChildrenDone = Number(sib[0]?.n ?? '0') === 0
   // 全分担完了なら親ステップも全完了とみなす（分担漏れステップの宙吊り防止）
   const decomposition = parent.decomposition.map(s =>
@@ -282,6 +301,18 @@ export function aiCompanyRoutes(pool: pg.Pool, env: Env): Hono {
     const user = c.get('user')
     const taskId = c.req.param('id')
     const action = c.req.param('action')
+
+    // 連携計画（LLM 呼び出しあり = 最長 30 秒）はロック取得前に済ませる。
+    // 事前読みが proposed 以外なら計画不要（トランザクション内の状態ガードが正）
+    let prepared: Awaited<ReturnType<typeof prepareDelegationPlan>> = null
+    if (action === 'approve') {
+      const { rows: pre } = await pool.query<AiTask & { decomposition: { title: string; done: boolean }[] }>(
+        `SELECT ${TASK_COLS} FROM ai_tasks WHERE id = $1`, [taskId])
+      if (pre[0]?.status === 'proposed') {
+        prepared = await prepareDelegationPlan(pool, env, pre[0])
+      }
+    }
+
     const client = await pool.connect()
     let result: {
       finished?: boolean; requesterId?: string; title?: string; aiEmployeeId?: string
@@ -302,7 +333,7 @@ export function aiCompanyRoutes(pool: pg.Pool, env: Env): Hono {
         await addLog(client, task.aiEmployeeId, taskId, 'plan', `「${task.title}」の分解が承認され実行を開始`)
         // マネージャーロール（delegate 権限）なら、承認と同時に他 AI 社員へ分担を連携
         // （人間の承認は親タスク 1 回のみ = 依頼を一挙に引き受ける。オペレーター指示 2026-07-19 #3）
-        await delegateOnApprove(client, env, task)
+        if (prepared) await delegateOnApprove(client, task, prepared)
       } else if (action === 'progress') {
         if (task.status !== 'in_progress') throw err('AKO-AIC-005', '実行中のタスクのみ進められます', 409)
         const idx = task.decomposition.findIndex(s => !s.done)
@@ -364,6 +395,11 @@ export function aiCompanyRoutes(pool: pg.Pool, env: Env): Hono {
       await client.query('COMMIT')
     } catch (e) {
       await client.query('ROLLBACK')
+      // 連携の親子ロックは操作により順序が異なる（progress = 子→親 / cancel = 親→子）ため、
+      // 稀にデッドロック検出（40P01）で片方が中断される。再試行可能エラーへ変換する
+      if ((e as { code?: string }).code === '40P01') {
+        throw err('AKO-AIC-009', '同時操作が競合しました。もう一度お試しください', 409)
+      }
       throw e
     } finally {
       client.release()
