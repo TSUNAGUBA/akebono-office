@@ -100,6 +100,7 @@ const leave = useLeave()   // balance(memberId, leaveTypeId?) / request / decide
 | `UiTabBar` | tabs(TabItem[]), v-model |
 | `UiFilterBar` | slot + #trailing |
 | `UiSearchInput` / `UiSelect` / `UiChipSelect` | v-model |
+| `UiMultiCombobox` | v-model(string[]), options({value,label}[]), single（単一選択モード）。論理名で検索する複数選択オートコンプリート（権限設定の項目指定等） |
 | `UiFormField` | label, required, error, hint |
 | `UiSchemaForm` | fields(FieldDef[]), v-model(Record), errors |
 | `UiStatusBadge` | tone, label, dot |

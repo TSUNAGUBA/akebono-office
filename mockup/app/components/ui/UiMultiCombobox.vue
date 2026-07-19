@@ -22,6 +22,7 @@ const query = ref('')
 const open = ref(false)
 const root = ref<HTMLElement | null>(null)
 const inputEl = ref<HTMLInputElement | null>(null)
+const listboxId = useId()
 
 const selectedSet = computed(() => new Set(props.modelValue))
 const filtered = computed(() => {
@@ -55,8 +56,15 @@ function remove(value: string): void {
 function onKeydown(e: KeyboardEvent): void {
   if (e.key === 'Enter') {
     e.preventDefault()
+    // 候補が閉じているときは開くだけ（見えていない候補を追加しない）
+    if (!open.value) {
+      open.value = true
+      return
+    }
     const first = filtered.value.find(o => !selectedSet.value.has(o.value))
     if (first) toggle(first.value)
+  } else if (e.key === 'ArrowDown') {
+    open.value = true
   } else if (e.key === 'Escape') {
     open.value = false
   } else if (e.key === 'Backspace' && query.value === '' && props.modelValue.length > 0) {
@@ -95,6 +103,9 @@ function onFocusOut(e: FocusEvent): void {
         :placeholder="modelValue.length === 0 ? placeholder : ''"
         :aria-label="ariaLabel"
         role="combobox"
+        aria-haspopup="listbox"
+        aria-autocomplete="list"
+        :aria-controls="listboxId"
         :aria-expanded="open"
         @focus="open = true"
         @input="open = true"
@@ -103,6 +114,7 @@ function onFocusOut(e: FocusEvent): void {
     </div>
     <div
       v-if="open"
+      :id="listboxId"
       class="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-lg border border-line bg-surface py-1 shadow-lg"
       role="listbox"
       :aria-multiselectable="!single"

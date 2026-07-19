@@ -166,8 +166,9 @@ const form = ref({
 const isFieldResource = computed(() => form.value.resource in FIELD_CATALOG)
 const fieldOptions = computed(() => FIELD_CATALOG[form.value.resource] ?? [])
 
-// リソース変更時は項目選択をリセット（前リソースの物理キーが残らないように）
-watch(() => form.value.resource, () => { form.value.fields = [] })
+// リソース/レイヤ変更時のリセットは watch ではなくセレクトの change ハンドラで行う
+// （watch だと openEdit のフォーム丸ごと差し替えにも発火し、編集初期値の項目・対象を
+// 消してしまう = 無変更保存でルールが「マスタ全体」へ静かに拡大する実バグ。レビュー R-1）
 
 const subjectOptions = computed(() => {
   if (form.value.subjectKind === 'role') {
@@ -181,8 +182,8 @@ const subjectOptions = computed(() => {
   return (memberCrud.activeList.value as Member[]).map(m => ({ value: m.id, label: m.name }))
 })
 
-// レイヤ変更時は対象をリセット（前レイヤの値が残らないように）
-watch(() => form.value.subjectKind, () => { form.value.subjectId = '' })
+// レイヤ変更時の対象リセットもセレクトの change ハンドラで行う（上記 R-1 と同じ理由。
+// こちらは保存時バリデーションで止まるため静かな破壊にはならないが「編集で対象欄が空く」UX バグだった）
 
 function openCreate(): void {
   editingId.value = null
@@ -226,6 +227,11 @@ async function save(): Promise<void> {
   }
   // 編集 = 単一ルールの更新 / 追加 = 選択した項目ぶんのルールを一括作成（1 項目 1 ルール = スキーマ不変）
   if (editingId.value) {
+    // 変更後の内容が別の有効ルールと同一になる場合は重複を作らせない（ruleExists は自ルールを除外）
+    if (ruleExists(form.value.fields[0] ?? null)) {
+      toast.show('同一の権限ルールが既に存在します', 'warn')
+      return
+    }
     const res = await ruleCrud.save({ ...base, id: editingId.value, field: form.value.fields[0] ?? null })
     if (!res.ok) {
       toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
@@ -339,13 +345,20 @@ async function restoreRule(): Promise<void> {
               v-model="form.subjectKind"
               :options="Object.entries(KIND_LABELS).map(([value, label]) => ({ value, label }))"
               aria-label="レイヤ"
+              @update:model-value="form.subjectId = ''"
             />
           </UiFormField>
           <UiFormField label="対象" required>
             <UiSelect v-model="form.subjectId" :options="subjectOptions" empty-label="対象を選択" aria-label="対象" />
           </UiFormField>
-          <UiFormField label="リソース" required hint="機能 = 利用可否 / マスタ項目 = 項目キーとあわせて表示制御">
-            <UiSelect v-model="form.resource" :options="resourceOptions" empty-label="リソースを選択" aria-label="リソース" />
+          <UiFormField label="リソース" required hint="機能 = 利用可否 / マスタ項目 = 項目とあわせて表示制御">
+            <UiSelect
+              v-model="form.resource"
+              :options="resourceOptions"
+              empty-label="リソースを選択"
+              aria-label="リソース"
+              @update:model-value="form.fields = []"
+            />
           </UiFormField>
           <UiFormField
             v-if="isFieldResource"
