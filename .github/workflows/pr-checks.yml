@@ -66,16 +66,34 @@ jobs:
           *このコメントはPR作成・更新時に自動生成されます。*"
 
           # --- 既存コメントを検索して更新 or 新規作成 ---
-          EXISTING_COMMENT_ID=$(gh api "repos/${GH_REPO}/issues/${PR_NUMBER}/comments" \
-            --jq ".[] | select(.body | contains(\"${COMMENT_MARKER}\")) | .id" \
-            | head -1)
-
-          if [ -n "$EXISTING_COMMENT_ID" ]; then
-            gh api "repos/${GH_REPO}/issues/comments/${EXISTING_COMMENT_ID}" \
-              --method PATCH \
-              --field body="$COMMENT_BODY"
-            echo "既存コメントを更新しました (ID: ${EXISTING_COMMENT_ID})"
-          else
-            gh pr comment "$PR_NUMBER" --body "$COMMENT_BODY"
-            echo "新規コメントを投稿しました"
-          fi
+          # GitHub API の一時障害（503 等）への耐性（実障害 2026-07-20: gh の一覧取得が 503 になると
+          # エラー JSON が「既存コメント ID」として拾われ、不正 URL の PATCH で job が失敗した）:
+          # ① 取得失敗時は空扱い + ID は数値のみ採用 ② リトライ（20s/40s/60s バックオフ）
+          # ③ コメント投稿は補助処理 = 最終的に失敗しても本文検証のチェック自体は落とさない（開発原則4）
+          post_comment() {
+            local existing_id
+            existing_id=$(gh api "repos/${GH_REPO}/issues/${PR_NUMBER}/comments" \
+              --jq ".[] | select(.body | contains(\"${COMMENT_MARKER}\")) | .id" 2>/dev/null \
+              | head -1) || existing_id=""
+            if ! [[ "$existing_id" =~ ^[0-9]+$ ]]; then
+              existing_id=""
+            fi
+            if [ -n "$existing_id" ]; then
+              gh api "repos/${GH_REPO}/issues/comments/${existing_id}" \
+                --method PATCH \
+                --field body="$COMMENT_BODY" >/dev/null
+              echo "既存コメントを更新しました (ID: ${existing_id})"
+            else
+              gh pr comment "$PR_NUMBER" --body "$COMMENT_BODY"
+              echo "新規コメントを投稿しました"
+            fi
+          }
+          for attempt in 1 2 3; do
+            if post_comment; then
+              exit 0
+            fi
+            echo "コメント反映に失敗しました (試行 ${attempt}/3)。GitHub API の一時障害の可能性があるため待機して再試行します"
+            sleep $((attempt * 20))
+          done
+          echo "::warning::PR チェックコメントの投稿に 3 回失敗しました（GitHub API の一時障害の可能性）。本文検証の結果 — 要確認: $(echo -e "${WARNINGS:-なし}") / 確認済み: $(echo -e "${PASSED:-なし}")"
+          exit 0
