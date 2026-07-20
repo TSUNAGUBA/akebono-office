@@ -6,7 +6,7 @@
 - **要件:** `../phase3/akebono-menu-functional-requirements.md`（F-20〜F-33）
 - **SoT 宣言:** 本書は Akebonoメニュー（業務アプリ群）の設計 SoT。既存 `data-design.md` / `api-design.md` / `architecture.md` / `screen-design.md`（オフィス系機能の SoT）は変更せず、承認後に相互参照を追記する。akebono-scm-platform `docs/platform-design/`（プラットフォーム統合設計）と将来整合させるべき点は各節に「PF 整合」として明記する
 - **未決事項:** `../phase3/akebono-menu-discussion-points.md` に集約（本文では #n で参照）
-- **改訂:** 2026-07-20 壁打ち第 1 巡のオペレーター決定（同ファイル冒頭の決定記録 #1〜#14）を反映。主な設計変更 = 画像セクションの設定化（#10）・tenant_id の v1 先行導入（#11）・委託精算方向の確定（#5）
+- **改訂:** 2026-07-20 壁打ち第 1 巡のオペレーター決定（同ファイル冒頭の決定記録 #1〜#14）を反映。主な設計変更 = 画像セクションの設定化（#10）・tenant_id の v1 先行導入（#11）・委託精算方向の確定（#5）。同日第 2 巡で #5 付帯確認 3 点を**設定化**（委託条件マスタの支払算定方式・債務確定・税設定）で決定・反映（未決ゼロ）
 
 ---
 
@@ -64,7 +64,7 @@ flowchart LR
 ```
 
 - フロント/バック分担は既存方針を踏襲: **重い処理（在庫導出・締め・取込・ETL・集計）はサーバー**、フロントは表示射影と入力
-- 共有ドメイン層 `shared/domain/` に在庫残高計算・請求締め計算・会計年度（既存 fiscal）等の純粋関数を置き、フロントのプレビュー計算と API の確定計算を一致させる（既存パターン）
+- 共有ドメイン層 `shared/domain/` に在庫残高計算・請求締め計算・**委託精算計算・税計算（設定注入型の純関数 = 第 2 巡決定: 精算・税ポリシーは「設定データ + 純関数」で実装しコード分岐を作らない）**・会計年度（既存 fiscal）等の純粋関数を置き、フロントのプレビュー計算と API の確定計算を一致させる（既存パターン）
 - 商品画像・取込ファイル原本は Cloud Storage（既存 documents の STORAGE_BUCKET 方式 + DB bytea フォールバック・署名 URL 配信を流用 = 原則 3）
 
 ### 1.4 モックアップ先行
@@ -168,7 +168,7 @@ flowchart TD
 | `Warehouse` | id, name, kind(`own`/`store_deposit`/`external`), companyId?(store_deposit の店舗), displayOrder, active | 店舗預け在庫は「店舗 = 倉庫」として表現（F-26-2） |
 | `VariantAxisTemplate`（F-30-8） | id, name, axis1Label, axis2Label, industryTypes[], displayOrder, active | 業種タイプ別の軸ラベルの組（カラー×サイズ / 容量×味 等）。**初期値はコード上のカタログシード**（migration 投入・冪等）+ 汎用マスタとして編集可。商品登録時の軸ラベル入力の候補を供給する（テンプレートは候補であり強制ではない） |
 | `Unit` / `TaxRate` / `PaymentTerm` | 名称・率・締め/サイト等 | TaxRate は適用開始日で履歴保持（税率改定に耐える） |
-| `ConsignmentTerm` | id, companyId, segmentId, marginRate, direction(`bill_store_margin`), validFrom, active | 履歴保持（validFrom）。**精算方向は決定 #5（2026-07-20）で確定**: 店舗が売上金を保有 → 当社は店舗へ当社取り分（マージン）を請求 → 当社から作家へ支払（値域は現状 `bill_store_margin` のみ。将来別方式が必要になれば値を追加）。**作家支払額の算定式（売上連動率 or 仕入単価 × 販売数）は付帯確認 = 委託精算実装前に確定** |
+| `ConsignmentTerm` | id, companyId, segmentId, marginRate, direction(`bill_store_margin`), **payoutMethod(`sales_rate` 売上連動 / `purchase_cost` 仕入単価 × 販売数), payoutRate?(sales_rate 時の作家率), liabilityTiming(`on_sale` 販売時確定 / `on_receipt` 仕入計上時確定), taxMode(課税/非課税), taxIncluded(内税/外税), rounding(`floor`/`ceil`/`round`)**, validFrom, active | 履歴保持（validFrom）。精算方向は決定 #5（2026-07-20）で確定: 店舗が売上金を保有 → 当社は店舗へマージン請求 → 当社から作家へ支払。**支払算定・債務確定・税は第 2 巡決定（2026-07-20）で設定化**: 計算は shared/domain の設定注入型純関数で行いコード分岐を作らない。**purchase_cost の単価解決順** = ①対象 SKU の直近仕入実績（PurchaseRecord）→ ② ProductSku.costPrice → ③ Product.standardCost（フォールバックにより F-24 実装前の第 1 縦串でも成立）。税率は税率マスタ（F-30-5）参照 |
 | `Company`（既存拡張） | **追加列のみ**: partnerRoles text[](`customer`/`supplier`/`consignor_artist`/`store`/`subcontractor`), paymentTermId?, billingTermId? | 既存の顧客データ（kind='customer'）は `partnerRoles=['customer']` の更新パッチ（原則 7。§9.3） |
 | `AkebonoAppConfig` / `BusinessSegment` | §2.2 | |
 | `ItemSetting`（F-31） | id, appKey, entity, itemKey, formVisible?, formRequired?, listVisible?, displayOrder?, labelOverride? | **差分のみ保存**（未設定 = カタログ既定 = 下位互換）。カタログ（基本項目セット + 業種別既定）はコード上のシードが SoT（scm-platform ADR-039 の app_managed_item + tenant_app_item を単一テナント向けに簡約） |
@@ -191,7 +191,7 @@ flowchart TD
 | `InventoryBalance` | skuId, warehouseId, qty, asOf | **導出キャッシュ**（SoT は台帳）。伝票確定時に差分更新 + `POST /recompute` の全再計算（手動回復パス = 原則 6） |
 | `SalesRecord` | id, salesDate, companyId(得意先), segmentId, skuId, qty, unitPrice, amount, costPrice?, channel?, billingType?, sourceKind(`manual`/`shipment`/`import`/`monthly_bulk`), sourceRef?, invoiceId?(請求済みリンク), correctionOf?(赤黒元) | **売上の SoT（明細）**・記録系・訂正は赤黒。月次集約はサーバー導出。取込冪等キーは ImportRun 単位の commitToken + 行ハッシュ。**monthly_bulk の再登録（同一 月 × 得意先 × セグメント）はサーバーが旧有効行との差分を赤黒で自動計上**（集計結果は upsert と同値 = 互換 API の冪等性を維持しつつ台帳は追記のみ） |
 | `Invoice` + `InvoiceLine` | 番号, companyId, segmentId?(null = 複数セグメント合算。明細行はセグメント保持), periodFrom/To, invoiceType(`sales` 通常/`consignment_margin` 委託マージン), status(`draft`/`issued`/`paid`/`void`), issuedAt, totalAmount, creditFor?(赤伝元) | **確定系**: draft は洗い替え再生成可（冪等）・**issued 以降は不変**・訂正は赤伝（undeux DB-07 準拠）。締めの二重生成防止は**部分一意 UNIQUE(companyId, invoiceType, periodFrom, COALESCE(segmentId,'ALL')) WHERE status='draft'**（draft は同時に 1 世代のみ。**issued/void/赤伝/再発行は一意制約の対象外**なので赤伝 → 再発行のフローと両立する） |
-| `PaymentNotice` + 明細 | companyId(作家), segmentId, period, 対象 SalesRecord 明細, marginRate スナップショット, payableAmount, status(`draft`/`confirmed`/`paid`) | 確定系。委託条件は**発行時点の率をスナップショット**（後の率改定に影響されない） |
+| `PaymentNotice` + 明細 | companyId(作家), segmentId, period, 対象 SalesRecord 明細, **精算条件スナップショット（算定方式・率・単価解決結果・税設定）**, payableAmount, status(`draft`/`confirmed`/`paid`) | 確定系。委託条件は**発行時点の設定一式をスナップショット**（後の設定変更に影響されない = 第 2 巡決定）。マージン請求（Invoice invoiceType=consignment_margin）側も同様にスナップショット |
 | `PaymentReceipt` | invoiceId, receivedAt, amount, method | 記録系（入金消込・部分入金可） |
 | `ImportRun` / `ImportRowError` | §5 | 記録系 |
 
@@ -418,7 +418,7 @@ graph TD
 | # | リスク | 対応 |
 |---|---|---|
 | 1 | スコープ肥大（9 アプリ + 基盤 3 種を一括実装すると Phase 5 反復が回らない） | §8 段階分け（要件 §8）どおり v1 を絞り、モックアップで全体像 → 実装はバッチ分割（既存の段階移行実績パターン） |
-| 2 | 委託精算の金銭フロー誤解釈（マージン請求の向き・作家支払額の定義） | 精算方向は決定 #5（2026-07-20）で確定・反映済み。**残る付帯確認（作家支払額の算定式・委託仕入の債務確定・消費税）を委託精算の実装前に確定**。精算式は ConsignmentTerm に閉じ込め、伝票生成ロジックを差し替え可能にする |
+| 2 | 委託精算の金銭フロー誤解釈（マージン請求の向き・作家支払額の定義） | 精算方向 = 決定 #5・算定/債務確定/税 = 第 2 巡決定（いずれも 2026-07-20）で確定・反映済み。**精算式は ConsignmentTerm の設定に閉じ込め**、発行時スナップショットで後の設定変更から遮断する。残リスクは設定の初期値誤りのみ → モックアップ検証（自社の実精算と突合）で確認 |
 | 3 | 一覧の全件ハイドレーション踏襲による性能劣化 | XA-6 サーバーページングを基盤段階で導入（後付けは全画面改修になるため先行必須） |
 | 4 | 既存 sales_monthly 利用箇所（インサイト・チャットボット・ETL）の移行漏れ | 移行バッチ時に `sales_monthly` / `useSales` 参照を grep 全件確認（Push 前チェック #6）し、片側切替を作らない |
 | 5 | 取込の誤反映によるマスタ汚損 | dry-run 必須 UI・旧値スナップショット・エラー行隔離。トランザクション系は赤黒でしか取り消さない（巻き戻し禁止 = 原則 2） |
@@ -427,7 +427,7 @@ graph TD
 
 ## 11. 受け入れ基準（Phase 5 ゲートへ向けて）
 
-- [x] discussion-points の全論点がオペレーター判断済み（第 1 巡・2026-07-20 完了。**残 = #5 付帯確認 3 点を委託精算実装前に確定**）
+- [x] discussion-points の全論点がオペレーター判断済み（第 1 巡 14 論点 + 第 2 巡 #5 付帯確認 3 点・2026-07-20 完了。**未決ゼロ**）
 - [ ] サイトマップ・画面定義・I/F 6 視点チェック済み（§6.3 は宣言。モックアップ検証で確定）
 - [ ] データ設計が正規化原則・データ 3 分類・SoT 宣言（§3.6）を満たす
 - [ ] モックアップがダミーデータ（陶磁器 + SI/SaaS の自社シナリオ）で UC-09〜13 を一気通貫で操作できる
@@ -435,4 +435,4 @@ graph TD
 
 ## 12. 未決事項
 
-`../phase3/akebono-menu-discussion-points.md` に 14 論点を集約し、**壁打ち第 1 巡（2026-07-20）で全論点に決定が出た**（決定記録は同ファイル冒頭）。残る未決は **#5 の付帯確認 3 点**（作家支払額の算定式・委託仕入の債務確定タイミング・消費税の扱い）のみで、委託精算（F-29-4）の実装着手前に確定する。
+**未決ゼロ**（2026-07-20 時点）。`../phase3/akebono-menu-discussion-points.md` の 14 論点は第 1 巡で、#5 の付帯確認 3 点（支払算定・債務確定・税）は第 2 巡で**設定化**の方針により決定した（決定記録は同ファイル冒頭）。設定項目の値域・既定値の妥当性は Phase 5 のモックアップ検証（自社の実精算との突合）で確認する。
