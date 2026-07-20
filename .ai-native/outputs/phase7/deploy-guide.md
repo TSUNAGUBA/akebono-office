@@ -274,6 +274,14 @@ DATABASE_URL=postgresql://... AUTH_MODE=dev npm run dev
 
 ## 4. トラブルシュート
 
+- **ドライブ取込で「ドライブの検索に失敗しました（HTTP 403 / accessNotConfigured …）」:**
+  OAuth クライアントが属する GCP プロジェクトで Google Drive API が無効。
+  `gcloud services enable drive.googleapis.com --project <project>` を実行（デプロイの自動有効化は
+  権限不足時に警告のみで続行するため、手動での有効化が必要になることがある）。
+  403 で reason が `insufficientPermissions` の場合はスコープ不足 = AI アシスタントのカレンダー連携から
+  Google に再接続する（drive.readonly の許可が追加される）
+
+
 | 症状 | 原因と対処 |
 |---|---|
 | deploy-api が「secrets 未設定のためスキップ」 | `setup-deploy-secrets.ps1 -DatabaseUrl ...` を実行して API 用 secrets を設定 |

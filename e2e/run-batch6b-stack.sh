@@ -101,6 +101,7 @@ SUITES=(
   "batch6c-e2e.cjs"
   "batch6d-e2e.cjs"
   "chatbot-multiturn-e2e.cjs"
+  "team-visibility-e2e.cjs"
 )
 for s in "${SUITES[@]}"; do
   (cd "$HERE" && BASE="http://127.0.0.1:$API_STATIC_PORT" node "$s")

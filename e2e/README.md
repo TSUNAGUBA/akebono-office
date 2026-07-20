@@ -23,7 +23,7 @@ cd e2e && npm ci
 - クリーンアップは自プロセス群の kill に加えて保険の `pkill -f "tsx/dist/loader.mjs src/index.ts"` を
   実行する。**同一ホストで無関係な tsx プロセスを動かしている場合は注意**（専用環境での実行を推奨）
 
-- API スイート（batch6b/6c/6d/chatbot-multiturn）は `:4174`（API モード静的配信）に対して実行
+- API スイート（batch6b/6c/6d/chatbot-multiturn/team-visibility）は `:4174`（API モード静的配信）に対して実行
 - モック回帰（mock-regression-e2e.cjs）は `:4173`（モックモード静的配信）に対して実行
 - `perm-combobox-e2e.cjs` は権限設定 UI の単発スイート。スタック起動中に
   `BASE=http://127.0.0.1:4174 node perm-combobox-e2e.cjs` で個別実行できる
