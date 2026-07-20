@@ -163,7 +163,7 @@ flowchart TD
 | `Product` | id, code, name, segmentId, categoryId?, defaultSupplierCompanyId?, listPrice, standardCost, taxRateId, unitId, billingType(`one_time`/`monthly`/`usage`/null = 物販), variantAxis1Label?, variantAxis2Label?, description, active, custom | UNIQUE(segmentId, code)。billingType は情報サービス向け（F-21-1） |
 | `ProductSku` | id, productId, code, janCode?, axis1Value?, axis2Value?, sellPrice?, costPrice?, isDefault(既定 SKU), active | UNIQUE(productId, code)。**汎用 2 軸**（undeux ADR-008）。既定 SKU は productId ごとに 1 件（部分一意） |
 | `ProductImage` | id, productId, skuId?, sectionId(画像セクション), displayOrder, filename, mime, sizeBytes, storage(`gcs`/`db`), storagePath, active | 実体は GCS（documents 方式流用）。サムネイル = サムネイル優先セクション（既定 = 製品画像）の displayOrder 先頭 → 無ければ他セクション先頭（セクションバッジで明示）。アーカイブ = 論理削除（原則 9.5） |
-| `ProductImageSection`（F-21-6・決定 #10） | id, name, isThumbnailPriority(サムネイル優先), isSeed(既定シード = 削除不可・名称変更可), displayOrder, active | **商品マスタのオプション設定**（画像の区分を固定 2 区分にせず設定化 = 決定 #10・2026-07-20）。既定シード = `製品画像`（サムネイル優先）・`サンプル画像`。追加・名称変更・並び替え・無効化可（例: 着用画像・詳細画像）。**画像が紐付くセクションの無効化は参照チェックで拒否** |
+| `ProductImageSection`（F-21-6・決定 #10） | id, name, isThumbnailPriority(サムネイル優先), isSeed(既定シード = 削除不可・名称変更可), displayOrder, active | **商品マスタのオプション設定**（画像の区分を固定 2 区分にせず設定化 = 決定 #10・2026-07-20）。既定シード = `製品画像`（サムネイル優先）・`サンプル画像`。追加・名称変更・並び替え・無効化可（例: 着用画像・詳細画像）。**サムネイル優先は常に 1 件のみ**（部分一意 `WHERE isThumbnailPriority AND active`。ProductSku.isDefault と同パターン）。**画像が紐付くセクションの無効化は参照チェックで拒否** |
 | `ProductCategory` | id, name, parentId?, displayOrder, active | 自己参照階層（部署マスタと同パターン・循環禁止） |
 | `Warehouse` | id, name, kind(`own`/`store_deposit`/`external`), companyId?(store_deposit の店舗), displayOrder, active | 店舗預け在庫は「店舗 = 倉庫」として表現（F-26-2） |
 | `VariantAxisTemplate`（F-30-8） | id, name, axis1Label, axis2Label, industryTypes[], displayOrder, active | 業種タイプ別の軸ラベルの組（カラー×サイズ / 容量×味 等）。**初期値はコード上のカタログシード**（migration 投入・冪等）+ 汎用マスタとして編集可。商品登録時の軸ラベル入力の候補を供給する（テンプレートは候補であり強制ではない） |
@@ -239,7 +239,7 @@ flowchart LR
 - 解決順: カタログ既定（業種タイプ別）→ ItemSetting 差分 → CustomFieldDef 追加 → **F-16 deny で最終除去**（権限が常に勝つ = F-31-5）
 - 基本項目の「差し引き」= formVisible/listVisible=false（**削除ではない**。データは保持・再表示可能 = ADR-039 同旨）。必須解除は「カタログで必須固定」の項目（コード・数量等の整合必須項目）には適用不可
 - API バリデーション: zod スキーマは「カタログ必須固定」だけを強制し、テナント必須はサーバーで ItemSetting を参照して追加検証（画面と API の二重定義を防ぐため resolveItemSchema を共有）
-- **PF 整合:** scm-platform ADR-039/040（app_managed_item / tenant_app_item / app_master_def）の単一テナント簡約版。マルチテナント化時は tenant_id を付けてそのまま昇格できる形にする
+- **PF 整合:** scm-platform ADR-039/040（app_managed_item / tenant_app_item / app_master_def）の単一テナント簡約版。tenant_id は決定 #11 により v1 から全テーブルが保持済みのため、マルチテナント化時は RLS の有効化と実テナント値の運用開始のみで昇格できる
 
 ---
 
@@ -294,7 +294,7 @@ flowchart LR
 |---|---|---|
 | アプリ設定 | `GET/PUT /v1/akebono/apps`・`POST /apps/apply-preset` | 管理者。preset 適用は差分提示 → 確定の 2 段 |
 | セグメント・各マスタ | 既存汎用マスタ機構 `/v1/masters/{entity}` に追加登録 | business-segments / warehouses / units / tax-rates / payment-terms / consignment-terms / variant-axis-templates / product-categories / product-image-sections（原則 3: マスタ CRUD は registry 追加のみ）。**例外規約: akebono 系マスタは機能ガード（F-16）の対象に含める**（既存の「/v1/masters はデータ面のためガード対象外」の例外。consignment-terms 等の C2 取引条件を機能 deny 利用者が参照できる穴を塞ぐ。registry にエンティティ → 機能キーの対応を持たせ middleware で判定。対応例: consignment-terms / payment-terms → `akebono-billing`、warehouses → `akebono-inventory`、business-segments / units / tax-rates / variant-axis-templates / product-categories / product-image-sections → `akebono-products`） |
-| 商品 | `GET/POST/PATCH /v1/akebono/products`・`/products/:id/skus`（一括 upsert = マトリクス保存）・`/products/:id/images`（base64・並び替え・セクション変更・archive/restore） | 一覧は **必須ページング**（page/size + フィルタ）。PATCH は部分更新（Object.hasOwn フィルタ = 既存 Zod v4 対策踏襲）。画像セクション設定は汎用マスタ `product-image-sections`（下記） |
+| 商品 | `GET/POST/PATCH /v1/akebono/products`・`/products/:id/skus`（一括 upsert = マトリクス保存）・`/products/:id/images`（base64・並び替え・セクション変更・archive/restore） | 一覧は **必須ページング**（page/size + フィルタ）。PATCH は部分更新（Object.hasOwn フィルタ = 既存 Zod v4 対策踏襲）。画像セクション設定は汎用マスタ `product-image-sections`（本表のマスタ行参照） |
 | 発注 | `GET/POST /v1/akebono/purchase-orders`・`POST /:id/transition` | 正順状態機械・FOR UPDATE |
 | 生産 | `GET/POST /v1/akebono/production-orders`・`POST /:id/results` | 実績追記 |
 | 入荷/出荷 | `GET/POST /v1/akebono/inbound-plans`・`POST /inbound-plans/:id/results`・`POST /v1/akebono/inbound-results`（plan 無しの直接登録）・`GET/POST /v1/akebono/outbound-plans`・`POST /outbound-plans/:id/results`・`POST /v1/akebono/outbound-results`（同・直接登録）・`POST /:id/transition` | 予定/指示（設定系）と実績（追記のみ）を分離。実績登録で在庫台帳へ（同一トランザクション内・明細行単位の冪等キー） |
