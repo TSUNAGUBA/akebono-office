@@ -8,6 +8,7 @@
 import type { OutboundPlan, OutboundResult, PlanStatus, Warehouse } from '~/types/akebono'
 import type { Company } from '~/types/domain'
 import type { Result } from '~/types/domain'
+import type { PostEntry } from '~/composables/useInventory'
 import { hasPartnerRole, nextCode } from '~/utils/akebono'
 
 export function useOutbound() {
@@ -70,7 +71,7 @@ export function useOutbound() {
   }
 
   /** 出荷実績を登録（記録系・追記）。出庫（−）+ 店舗預け移動（+）を post */
-  function registerResult(input: { planId?: string | null; warehouseId?: string; companyId?: string; lines: { planLineId?: string | null; skuId: string; qty: number }[] }): Result {
+  function registerResult(input: { planId?: string | null; warehouseId?: string; companyId?: string | null; lines: { planLineId?: string | null; skuId: string; qty: number }[] }): Result {
     const plan = input.planId ? planById(input.planId) : undefined
     const warehouseId = plan?.warehouseId ?? input.warehouseId
     const companyId = plan?.companyId ?? input.companyId ?? null
@@ -98,12 +99,12 @@ export function useOutbound() {
     results.value = [...results.value, created]
 
     // 出庫（−）
-    const posts = resultLines.map(l => ({ skuId: l.skuId, warehouseId, qty: -l.qty, kind: 'outbound' as const, refType: 'outbound_result', refLineId: l.id }))
+    const posts: PostEntry[] = resultLines.map(l => ({ skuId: l.skuId, warehouseId, qty: -l.qty, kind: 'outbound', refType: 'outbound_result', refLineId: l.id }))
     // 店舗納品 = 預け在庫へ移動（+）
     const depositWh = storeDepositWarehouseOf(companyId)
     if (depositWh) {
       for (const l of resultLines) {
-        posts.push({ skuId: l.skuId, warehouseId: depositWh.id, qty: l.qty, kind: 'transfer_in' as const, refType: 'outbound_result', refLineId: l.id })
+        posts.push({ skuId: l.skuId, warehouseId: depositWh.id, qty: l.qty, kind: 'transfer_in', refType: 'outbound_result', refLineId: l.id })
       }
     }
     inv.post(posts)

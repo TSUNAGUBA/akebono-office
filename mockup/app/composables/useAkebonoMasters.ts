@@ -8,10 +8,11 @@
 import type {
   BusinessSegment, ConsignmentTerm, ProductCategory, TaxRate, Warehouse,
 } from '~/types/akebono'
+import { INDUSTRY_TYPES } from '~/types/akebono'
 import type { Company } from '~/types/domain'
 import type { FieldDef, TableColumn } from '~/types/ui'
 import {
-  INDUSTRY_TYPES, INDUSTRY_TYPE_LABELS, PARTNER_ROLE_LABELS, PAYOUT_METHOD_LABELS,
+  INDUSTRY_TYPE_LABELS, PARTNER_ROLE_LABELS, PAYOUT_METHOD_LABELS,
   hasPartnerRole,
 } from '~/utils/akebono'
 

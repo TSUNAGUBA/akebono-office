@@ -334,13 +334,13 @@ function submitResult(): void {
           <span class="text-right">入荷数</span>
         </div>
         <div
-          v-for="(l, idx) in resultLines"
+          v-for="l in resultLines"
           :key="l.planLineId"
           class="grid grid-cols-[1fr_100px] items-center gap-2"
         >
           <span class="text-[13px]">{{ l.label }}</span>
           <input
-            v-model.number="resultLines[idx].qty"
+            v-model.number="l.qty"
             type="number" min="0" step="1" class="input text-right"
             :aria-label="`${l.label} の入荷数`"
           >
