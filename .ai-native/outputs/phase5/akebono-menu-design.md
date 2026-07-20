@@ -2,10 +2,10 @@
 
 - **作成日:** 2026-07-20
 - **作成ロール:** コーディングエージェント（壁打ちナビゲーター・システム監査官視点で協議のうえ起草）
-- **ステータス:** **ドラフト（壁打ち用）**。オペレーター承認前・実装未着手
+- **ステータス:** **壁打ち完了（第 1 巡 + 第 2 巡・2026-07-20）・未決ゼロ**。オペレーター最終承認（PR レビュー）まで実装未着手
 - **要件:** `../phase3/akebono-menu-functional-requirements.md`（F-20〜F-33）
 - **SoT 宣言:** 本書は Akebonoメニュー（業務アプリ群）の設計 SoT。既存 `data-design.md` / `api-design.md` / `architecture.md` / `screen-design.md`（オフィス系機能の SoT）は変更せず、承認後に相互参照を追記する。akebono-scm-platform `docs/platform-design/`（プラットフォーム統合設計）と将来整合させるべき点は各節に「PF 整合」として明記する
-- **未決事項:** `../phase3/akebono-menu-discussion-points.md` に集約（本文では #n で参照）
+- **未決事項:** ゼロ（2026-07-20 時点。決定記録は `../phase3/akebono-menu-discussion-points.md` 冒頭。本文の #n は同ファイルの論点番号を指す）
 - **改訂:** 2026-07-20 壁打ち第 1 巡のオペレーター決定（同ファイル冒頭の決定記録 #1〜#14）を反映。主な設計変更 = 画像セクションの設定化（#10）・tenant_id の v1 先行導入（#11）・委託精算方向の確定（#5）。同日第 2 巡で #5 付帯確認 3 点を**設定化**（委託条件マスタの支払算定方式・債務確定・税設定）で決定・反映（未決ゼロ）
 
 ---
@@ -168,7 +168,7 @@ flowchart TD
 | `Warehouse` | id, name, kind(`own`/`store_deposit`/`external`), companyId?(store_deposit の店舗), displayOrder, active | 店舗預け在庫は「店舗 = 倉庫」として表現（F-26-2） |
 | `VariantAxisTemplate`（F-30-8） | id, name, axis1Label, axis2Label, industryTypes[], displayOrder, active | 業種タイプ別の軸ラベルの組（カラー×サイズ / 容量×味 等）。**初期値はコード上のカタログシード**（migration 投入・冪等）+ 汎用マスタとして編集可。商品登録時の軸ラベル入力の候補を供給する（テンプレートは候補であり強制ではない） |
 | `Unit` / `TaxRate` / `PaymentTerm` | 名称・率・締め/サイト等 | TaxRate は適用開始日で履歴保持（税率改定に耐える） |
-| `ConsignmentTerm` | id, companyId, segmentId, marginRate, direction(`bill_store_margin`), **payoutMethod(`sales_rate` 売上連動 / `purchase_cost` 仕入単価 × 販売数), payoutRate?(sales_rate 時の作家率), liabilityTiming(`on_sale` 販売時確定 / `on_receipt` 仕入計上時確定), taxMode(課税/非課税), taxIncluded(内税/外税), rounding(`floor`/`ceil`/`round`)**, validFrom, active | 履歴保持（validFrom）。精算方向は決定 #5（2026-07-20）で確定: 店舗が売上金を保有 → 当社は店舗へマージン請求 → 当社から作家へ支払。**支払算定・債務確定・税は第 2 巡決定（2026-07-20）で設定化**: 計算は shared/domain の設定注入型純関数で行いコード分岐を作らない。**purchase_cost の単価解決順** = ①対象 SKU の直近仕入実績（PurchaseRecord）→ ② ProductSku.costPrice → ③ Product.standardCost（フォールバックにより F-24 実装前の第 1 縦串でも成立）。税率は税率マスタ（F-30-5）参照 |
+| `ConsignmentTerm` | id, companyId, segmentId, marginRate, direction(`bill_store_margin`), **payoutMethod(`sales_rate` 売上連動 / `purchase_cost` 仕入単価 × 販売数), payoutRate?(sales_rate 時の作家率), liabilityTiming(`on_sale` 販売時確定 / `on_receipt` 仕入計上時確定), taxMode(課税/非課税), taxIncluded(内税/外税), rounding(`floor`/`ceil`/`round`)**, validFrom, active | 履歴保持（validFrom）。精算方向は決定 #5（2026-07-20）で確定: 店舗が売上金を保有 → 当社は店舗へマージン請求 → 当社から作家へ支払。**支払算定・債務確定・税は第 2 巡決定（2026-07-20）で設定化**: 計算は shared/domain の設定注入型純関数で行いコード分岐を作らない。**purchase_cost の単価解決順** = ①対象 SKU の直近仕入実績（PurchaseRecord）→ ② ProductSku.costPrice → ③ Product.standardCost（フォールバックにより F-24 実装前の第 1 縦串でも成立）。税率は税率マスタ（F-30-5）参照。**適用単位 = 取引先ロール別の行**: store（店舗）行は marginRate（マージン請求設定）を、consignor_artist（作家）行は payoutMethod/payoutRate/liabilityTiming（支払設定）を使用（各行で不要な項目は null・税設定は各行で有効） |
 | `Company`（既存拡張） | **追加列のみ**: partnerRoles text[](`customer`/`supplier`/`consignor_artist`/`store`/`subcontractor`), paymentTermId?, billingTermId? | 既存の顧客データ（kind='customer'）は `partnerRoles=['customer']` の更新パッチ（原則 7。§9.3） |
 | `AkebonoAppConfig` / `BusinessSegment` | §2.2 | |
 | `ItemSetting`（F-31） | id, appKey, entity, itemKey, formVisible?, formRequired?, listVisible?, displayOrder?, labelOverride? | **差分のみ保存**（未設定 = カタログ既定 = 下位互換）。カタログ（基本項目セット + 業種別既定）はコード上のシードが SoT（scm-platform ADR-039 の app_managed_item + tenant_app_item を単一テナント向けに簡約） |
@@ -191,7 +191,7 @@ flowchart TD
 | `InventoryBalance` | skuId, warehouseId, qty, asOf | **導出キャッシュ**（SoT は台帳）。伝票確定時に差分更新 + `POST /recompute` の全再計算（手動回復パス = 原則 6） |
 | `SalesRecord` | id, salesDate, companyId(得意先), segmentId, skuId, qty, unitPrice, amount, costPrice?, channel?, billingType?, sourceKind(`manual`/`shipment`/`import`/`monthly_bulk`), sourceRef?, invoiceId?(請求済みリンク), correctionOf?(赤黒元) | **売上の SoT（明細）**・記録系・訂正は赤黒。月次集約はサーバー導出。取込冪等キーは ImportRun 単位の commitToken + 行ハッシュ。**monthly_bulk の再登録（同一 月 × 得意先 × セグメント）はサーバーが旧有効行との差分を赤黒で自動計上**（集計結果は upsert と同値 = 互換 API の冪等性を維持しつつ台帳は追記のみ） |
 | `Invoice` + `InvoiceLine` | 番号, companyId, segmentId?(null = 複数セグメント合算。明細行はセグメント保持), periodFrom/To, invoiceType(`sales` 通常/`consignment_margin` 委託マージン), status(`draft`/`issued`/`paid`/`void`), issuedAt, totalAmount, creditFor?(赤伝元) | **確定系**: draft は洗い替え再生成可（冪等）・**issued 以降は不変**・訂正は赤伝（undeux DB-07 準拠）。締めの二重生成防止は**部分一意 UNIQUE(companyId, invoiceType, periodFrom, COALESCE(segmentId,'ALL')) WHERE status='draft'**（draft は同時に 1 世代のみ。**issued/void/赤伝/再発行は一意制約の対象外**なので赤伝 → 再発行のフローと両立する） |
-| `PaymentNotice` + 明細 | companyId(作家), segmentId, period, 対象 SalesRecord 明細, **精算条件スナップショット（算定方式・率・単価解決結果・税設定）**, payableAmount, status(`draft`/`confirmed`/`paid`) | 確定系。委託条件は**発行時点の設定一式をスナップショット**（後の設定変更に影響されない = 第 2 巡決定）。マージン請求（Invoice invoiceType=consignment_margin）側も同様にスナップショット |
+| `PaymentNotice` + 明細 | companyId(作家), segmentId, period, 対象 SalesRecord 明細, **精算条件スナップショット（算定方式・率・単価解決結果・税設定）**, payableAmount, status(`draft`/`confirmed`/`paid`) | 確定系。委託条件は**発行時点の設定一式をスナップショット**（後の設定変更に影響されない = 第 2 巡決定）。マージン請求（Invoice invoiceType=consignment_margin）側も同様に**ヘッダ属性へ**スナップショットを格納する |
 | `PaymentReceipt` | invoiceId, receivedAt, amount, method | 記録系（入金消込・部分入金可） |
 | `ImportRun` / `ImportRowError` | §5 | 記録系 |
 
