@@ -28,18 +28,46 @@ const inputEl = ref<HTMLInputElement | null>(null)
 const listboxId = useId()
 
 /**
- * 候補リストを上に開くか（オペレーター報告 2026-07-20: モバイルのボトムシート型モーダルでは
+ * 候補リストの開閉方向と高さ（オペレーター報告 2026-07-20: モバイルのボトムシート型モーダルでは
  * 入力欄が画面下端近くにあり、下方向のリストが画面外・フッターに隠れて選択できない）。
- * 開くたびに実測し、下に収まらず上の方が広ければ上方向に開く
+ * 開くたびに実測し、下に収まらず上の方が広ければ上方向に開く。
+ * 空間の基準はビューポートではなく**最近傍のクリップ祖先（overflow 要素）との交差**
+ * （PR #63 R1 M-1: モーダル本文・カードの overflow でリスト上端が切れて先頭候補が
+ * 不可視になる残欠陥への対応）。開く側に収まらない場合は max-height を残り空間へ縮める
  */
 const openUp = ref(false)
-const LIST_MAX_PX = 240 // max-h-56 (224px) + マージン
+const LIST_MAX_PX = 224 // 既定の最大高（旧 max-h-56 相当）
+const LIST_MARGIN_PX = 12 // リストと境界の余白（mt-1/mb-1 + 視認マージン）
+const listMaxHeight = ref(LIST_MAX_PX)
+
+/** クリップ祖先（overflow が visible でない要素）とビューポートの交差から可視境界を求める */
+function clipBounds(el: HTMLElement): { top: number; bottom: number } {
+  let top = 0
+  let bottom = window.innerHeight
+  let node = el.parentElement
+  while (node) {
+    const style = getComputedStyle(node)
+    if (style.overflowY !== 'visible' || style.overflowX !== 'visible') {
+      const r = node.getBoundingClientRect()
+      top = Math.max(top, r.top)
+      bottom = Math.min(bottom, r.bottom)
+    }
+    node = node.parentElement
+  }
+  return { top, bottom }
+}
 
 function updateDirection(): void {
-  const rect = root.value?.getBoundingClientRect()
-  if (!rect) return
-  const below = window.innerHeight - rect.bottom
-  openUp.value = below < LIST_MAX_PX && rect.top > below
+  const el = root.value
+  const rect = el?.getBoundingClientRect()
+  if (!el || !rect) return
+  const bounds = clipBounds(el)
+  const below = bounds.bottom - rect.bottom
+  const above = rect.top - bounds.top
+  openUp.value = below < LIST_MAX_PX + LIST_MARGIN_PX && above > below
+  const room = (openUp.value ? above : below) - LIST_MARGIN_PX
+  // 両側とも狭い場合でも操作不能にしない下限（1〜2 行分は常に見せ、リスト内スクロールで到達可能にする）
+  listMaxHeight.value = Math.max(80, Math.min(LIST_MAX_PX, Math.floor(room)))
 }
 
 watch(open, (v) => {
@@ -149,8 +177,9 @@ function onFocusOut(e: FocusEvent): void {
     <div
       v-if="open"
       :id="listboxId"
-      class="absolute z-20 max-h-56 w-full overflow-auto rounded-lg border border-line bg-surface py-1 shadow-lg"
+      class="absolute z-20 w-full overflow-auto rounded-lg border border-line bg-surface py-1 shadow-lg"
       :class="openUp ? 'bottom-full mb-1' : 'mt-1'"
+      :style="{ maxHeight: `${listMaxHeight}px` }"
       role="listbox"
       :aria-multiselectable="!single"
     >

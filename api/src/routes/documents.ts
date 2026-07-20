@@ -37,25 +37,31 @@ const DRIVE_FILES_URL = 'https://www.googleapis.com/drive/v3/files'
 /**
  * Google API エラー応答から原因（reason / message）を取り出す（オペレーター報告 2026-07-20:
  * 「HTTP 403」だけでは API 無効・スコープ不足・検証制限のどれか判別できないため、
- * エラーメッセージを自己診断可能にする）
+ * エラーメッセージを自己診断可能にする）。export は単体テスト用（PR #63 R1 M-2）
  */
-async function googleErrorDetail(res: Response): Promise<string> {
+export async function googleErrorDetail(res: Response): Promise<{ reason: string; detail: string }> {
   try {
     const body = await res.json() as { error?: { message?: string; errors?: { reason?: string }[] } }
-    const reason = body.error?.errors?.[0]?.reason ?? ''
+    const reason = String(body.error?.errors?.[0]?.reason ?? '')
     const msg = capCp(String(body.error?.message ?? ''), 200)
-    return [reason, msg].filter(Boolean).join(': ')
+    return { reason, detail: [reason, msg].filter(Boolean).join(': ') }
   } catch {
-    return ''
+    return { reason: '', detail: '' }
   }
 }
 
-/** 403 のときの運用ヒント（原因の大半は Drive API 未有効化 or スコープ不足） */
-function driveForbiddenHint(status: number): string {
-  return status === 403
-    ? '。GCP プロジェクト（OAuth クライアントのプロジェクト）で Google Drive API が有効か確認してください'
-      + '（gcloud services enable drive.googleapis.com）。スコープ不足の場合は Google に再接続してください'
-    : ''
+/** 設定不備を示す 403 の理由コード（calendar.ts の同期エラー判別と同じ分類 + スコープ不足） */
+const CONFIG_403_REASONS = /accessNotConfigured|SERVICE_DISABLED|PERMISSION_DENIED|insufficient/i
+
+/**
+ * 403 のときの運用ヒント。レート超過等も 403 を返すため、理由コードが判明していて
+ * 設定不備系でない場合はヒントを出さない（PR #63 R1 M-3。理由不明の 403 には出す = 実用優先）
+ */
+export function driveForbiddenHint(status: number, reason: string): string {
+  if (status !== 403) return ''
+  if (reason && !CONFIG_403_REASONS.test(reason)) return ''
+  return '。GCP プロジェクト（OAuth クライアントのプロジェクト）で Google Drive API が有効か確認してください'
+    + '（gcloud services enable drive.googleapis.com）。スコープ不足の場合は Google に再接続してください'
 }
 
 /** テキスト抽出対象の拡張子（extract-text.ts 対応分。それ以外も保管・ダウンロードは可能） */
@@ -515,9 +521,9 @@ export function documentsRoutes(pool: pg.Pool, env: Env): Hono {
       headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15_000),
     })
     if (!res.ok) {
-      const detail = await googleErrorDetail(res)
+      const g = await googleErrorDetail(res)
       throw err('AKO-DOC-007',
-        `ドライブの検索に失敗しました（HTTP ${res.status}${detail ? ` / ${detail}` : ''}）${driveForbiddenHint(res.status)}`, 502)
+        `ドライブの検索に失敗しました（HTTP ${res.status}${g.detail ? ` / ${g.detail}` : ''}）${driveForbiddenHint(res.status, g.reason)}`, 502)
     }
     const body = await res.json() as {
       files?: { id: string; name: string; mimeType: string; size?: string; modifiedTime?: string; webViewLink?: string }[]
@@ -555,8 +561,8 @@ export function documentsRoutes(pool: pg.Pool, env: Env): Hono {
           `${DRIVE_FILES_URL}/${encodeURIComponent(fileId)}?fields=id,name,mimeType,size,webViewLink`,
           { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15_000) })
         if (!metaRes.ok) {
-          const detail = await googleErrorDetail(metaRes)
-          failed.push({ fileId, name, reason: `メタ情報の取得に失敗（HTTP ${metaRes.status}${detail ? ` / ${detail}` : ''}）` })
+          const g = await googleErrorDetail(metaRes)
+          failed.push({ fileId, name, reason: `メタ情報の取得に失敗（HTTP ${metaRes.status}${g.detail ? ` / ${g.detail}` : ''}）` })
           continue
         }
         const meta = await metaRes.json() as {
@@ -579,8 +585,8 @@ export function documentsRoutes(pool: pg.Pool, env: Env): Hono {
           headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(60_000),
         })
         if (!dlRes.ok) {
-          const detail = await googleErrorDetail(dlRes)
-          failed.push({ fileId, name, reason: `ダウンロードに失敗（HTTP ${dlRes.status}${detail ? ` / ${detail}` : ''}）` })
+          const g = await googleErrorDetail(dlRes)
+          failed.push({ fileId, name, reason: `ダウンロードに失敗（HTTP ${dlRes.status}${g.detail ? ` / ${g.detail}` : ''}）` })
           continue
         }
         const bytes = Buffer.from(await dlRes.arrayBuffer())

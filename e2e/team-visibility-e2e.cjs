@@ -2,9 +2,8 @@
 // 前提: run-batch6b-stack.sh のスタック（API :8788・dev 認証 m-e2e=admin・静的配信 = BASE）
 // - 取締役・外注を候補から選択 → 保存 → マトリクス反映・リロード維持
 // - モバイルビューポートで候補リストが上方向に開き画面内で選択できる（ボトムシートのクリッピング回帰）
-const fs = require('fs')
 const { chromium } = require('playwright')
-const { check, withPage, summary } = require('./lib.cjs')
+const { check, withPage, summary, CHROMIUM_PATH } = require('./lib.cjs')
 
 const BASE = process.env.BASE ?? 'http://127.0.0.1:4174'
 const API = 'http://127.0.0.1:8788'
@@ -25,11 +24,15 @@ async function main() {
     name, email: `${name}-${RUN}@example.com`, employmentType,
     departmentId: '', title: '', role: 'member', weeklyDays: 5, weeklyHours: 40, punchRequired: true,
   })
-  await mk(`社員一郎${RUN}`, 'employee')
-  await mk(`社員二郎${RUN}`, 'contract')
-  await mk(`取締役太郎${RUN}`, 'director')
-  await mk(`外注花子${RUN}`, 'outsource')
-  await api('PUT', '/v1/configs/teamVisibleMemberIds', { value: '' })
+  for (const [name, type] of [
+    [`社員一郎${RUN}`, 'employee'], [`社員二郎${RUN}`, 'contract'],
+    [`取締役太郎${RUN}`, 'director'], [`外注花子${RUN}`, 'outsource'],
+  ]) {
+    const r = await mk(name, type)
+    if (r.status !== 201) throw new Error(`メンバー作成に失敗: ${name} HTTP ${r.status} ${JSON.stringify(r.json).slice(0, 200)}`)
+  }
+  const cfg = await api('PUT', '/v1/configs/teamVisibleMemberIds', { value: '' })
+  if (cfg.status !== 200) throw new Error(`設定リセットに失敗: HTTP ${cfg.status}`)
 
   // ---------- デスクトップ: 候補選択 → 保存 → 反映 ----------
   await withPage(async (page) => {
@@ -64,8 +67,6 @@ async function main() {
   })
 
   // ---------- モバイル: 候補リストが上方向に開き画面内で操作できる ----------
-  const CHROMIUM_PATH = process.env.CHROMIUM_PATH
-    ?? (fs.existsSync('/opt/pw-browsers/chromium') ? '/opt/pw-browsers/chromium' : undefined)
   const browser = await chromium.launch({ headless: true, executablePath: CHROMIUM_PATH })
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
   const page = await context.newPage()
@@ -85,6 +86,13 @@ async function main() {
       Boolean(optBox && comboBox && optBox.y + optBox.height <= comboBox.y + 4))
     check('モバイル: 候補がビューポート内に収まる',
       Boolean(optBox && optBox.y >= 0 && optBox.y + optBox.height <= 844))
+    // 先頭候補が実際に「見えて押せる」こと（boundingBox だけではクリップ・重なりを検出できない。
+    // PR #63 R1 ニット4: elementFromPoint で最前面が候補リスト内の要素であることを確認）
+    const firstVisible = Boolean(optBox) && await page.evaluate(([x, y]) => {
+      const el = document.elementFromPoint(x, y)
+      return Boolean(el && el.closest('[role="listbox"]'))
+    }, [optBox.x + optBox.width / 2, optBox.y + Math.min(16, optBox.height / 2)])
+    check('モバイル: 先頭候補が実可視（クリップ・重なりなし）', firstVisible)
     await combo.fill(`取締役太郎${RUN}`)
     await page.waitForTimeout(300)
     await page.getByRole('option').first().click()
