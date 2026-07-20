@@ -37,9 +37,20 @@ async function toggleApp(appKey: string, enabled: boolean): Promise<void> {
   show(enabled ? 'アプリを有効化しました' : 'アプリを不使用にしました', enabled ? 'ok' : 'warn')
 }
 
-function applyPreset(): void {
-  const res = apps.applyPreset()
-  if (res.enabled === 0) show('プリセットで新たに有効化するアプリはありませんでした', 'info')
+async function applyPreset(): Promise<void> {
+  const willEnable = apps.presetDiff.value.filter(d => d.willEnable)
+  if (willEnable.length === 0) {
+    show('プリセットで新たに有効化するアプリはありません（既に反映済み）', 'info')
+    return
+  }
+  const names = willEnable.map(d => apps.labelOf(d.app)).join('、')
+  const ok = await confirm.ask('業種プリセットの適用', `次のアプリを有効化します（既存の設定は OFF にしません）:\n${names}`, { confirmLabel: '適用する' })
+  if (!ok) return
+  apps.applyPreset() // 成功トーストは composable 側で表示
+}
+
+function saveLabel(appKey: string, value: string): void {
+  apps.setLabel(appKey, value)
 }
 
 // ---------- 要望ボックス ----------
@@ -134,21 +145,29 @@ async function submitWish(): Promise<void> {
           <p class="text-[12px] font-bold">使用するアプリ</p>
           <p class="mt-0.5 text-[11px] text-muted">使用するアプリのみメニューに表示されます。不使用にしてもデータは保全されます。</p>
           <ul class="mt-2 grid gap-1.5">
-            <li v-for="a in apps.catalog" :key="a.key" class="flex items-center justify-between rounded-[8px] border border-line px-3 py-2">
+            <li v-for="a in apps.catalog" :key="a.key" class="grid gap-2 rounded-[8px] border border-line px-3 py-2 sm:grid-cols-[1fr_auto]">
               <div class="flex items-center gap-2">
-                <CircleCheck v-if="apps.isAppEnabled(a.key)" class="h-4 w-4 text-ok" aria-hidden="true" />
-                <CircleDashed v-else class="h-4 w-4 text-muted" aria-hidden="true" />
-                <div>
-                  <p class="text-[13px] font-medium">{{ apps.labelOf(a) }}</p>
+                <CircleCheck v-if="apps.isAppEnabled(a.key)" class="h-4 w-4 shrink-0 text-ok" aria-hidden="true" />
+                <CircleDashed v-else class="h-4 w-4 shrink-0 text-muted" aria-hidden="true" />
+                <div class="min-w-0">
+                  <p class="text-[13px] font-medium">{{ a.title }}</p>
                   <p class="text-[10px] text-muted">{{ a.description }}</p>
                 </div>
               </div>
-              <label class="flex items-center gap-1.5 text-[11px]">
-                <input type="checkbox" :checked="apps.isAppEnabled(a.key)" @change="toggleApp(a.key, ($event.target as HTMLInputElement).checked)">
-                使用
-              </label>
+              <div class="flex items-center gap-2">
+                <input
+                  type="text" class="input h-8 w-40 text-[12px]" :value="apps.labelOf(a) === a.title ? '' : apps.labelOf(a)"
+                  :placeholder="a.title" :aria-label="`${a.title}の表示名`"
+                  @change="saveLabel(a.key, ($event.target as HTMLInputElement).value)"
+                >
+                <label class="flex items-center gap-1.5 whitespace-nowrap py-1 text-[11px]">
+                  <input type="checkbox" :checked="apps.isAppEnabled(a.key)" @change="toggleApp(a.key, ($event.target as HTMLInputElement).checked)">
+                  使用
+                </label>
+              </div>
             </li>
           </ul>
+          <p class="mt-1.5 text-[10px] text-muted">表示名を入力するとメニュー上のアプリ名を上書きできます（例: 発注管理 → 外注管理。情報サービス業向け）。空で既定名に戻ります。</p>
         </section>
       </div>
       <template #footer>

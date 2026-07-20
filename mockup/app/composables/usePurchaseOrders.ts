@@ -40,7 +40,8 @@ export function usePurchaseOrders() {
     const lines = input.lines.filter(l => l.skuId && l.qty > 0)
     if (lines.length === 0) return { ok: false, error: { code: 'AKO-POR-002', message: '発注明細を 1 行以上入力してください' } }
     const id = nextId('purchaseOrders', 'po')
-    const orderLines: OrderLine[] = lines.map(l => ({ id: nextId('purchaseOrders', 'pol') + '-' + l.skuId, skuId: l.skuId, qty: l.qty, unitPrice: l.unitPrice }))
+    // 明細行 id はヘッダ id + index で全域一意
+    const orderLines: OrderLine[] = lines.map((l, idx) => ({ id: `${id}-${idx}`, skuId: l.skuId, qty: l.qty, unitPrice: l.unitPrice }))
     const created: PurchaseOrder = {
       id, code: nextCode(orders.value.map(o => o.code), 'PO'),
       companyId: input.companyId, segmentId: input.segmentId, status: 'ordered',

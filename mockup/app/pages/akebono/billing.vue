@@ -252,8 +252,10 @@ const receiptCols: TableColumn[] = [
     <div v-else-if="tab === 'consignment'" class="grid gap-3">
       <UiSectionCard title="委託精算とは" flush>
         <p class="p-3 text-[13px] leading-relaxed text-sub">
-          店舗が売上金を保有 → 当社が店舗へマージンを請求 → 当社から作家へ支払を行う三者精算です。
-          締め時点の委託条件（マージン率・作家率・端数処理等）をスナップショットとして凍結し、後の設定変更の影響を受けません。
+          店舗が売上金を保有 → 店舗は自分の取り分を控除し残りを当社へ送金（＝当社が店舗へ請求）→ 当社から作家へ支払を行う三者精算です。
+          当社の店舗宛請求額 = 売上 × (1 − 店舗取り分率)。締め時点の委託条件（店舗取り分率・作家率・端数処理等）を
+          スナップショットとして凍結し、後の設定変更の影響を受けません。
+          <br><span class="text-[11px] text-muted">※ 店舗取り分か当社取り分かの定義は壁打ちでの最終確認事項（決定#5 は「設定で柔軟に」）。本モックは実運用に整合する「店舗取り分」で表示。</span>
         </p>
       </UiSectionCard>
 
@@ -417,7 +419,7 @@ const receiptCols: TableColumn[] = [
             <FileText class="h-3.5 w-3.5" aria-hidden="true" /> 発行
           </button>
           <template v-else-if="selectedInvoice.status === 'issued'">
-            <button type="button" class="btn btn-danger btn-sm" @click="doVoid">赤伝発行</button>
+            <button v-if="selectedInvoice.invoiceType === 'sales'" type="button" class="btn btn-danger btn-sm" @click="doVoid">赤伝発行</button>
             <button type="button" class="btn btn-primary btn-sm" @click="openReceipt(selectedInvoice.id)">
               <Wallet class="h-3.5 w-3.5" aria-hidden="true" /> 入金消込
             </button>

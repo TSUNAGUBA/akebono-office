@@ -8,7 +8,7 @@ import type {
   InventoryAdjustReason, InventoryTransaction, InventoryTxnKind,
 } from '~/types/akebono'
 import type { Result } from '~/types/domain'
-import { balanceKey, foldBalances } from '~/utils/akebono'
+import { balanceKey, foldBalances, nextCode } from '~/utils/akebono'
 
 export interface PostEntry {
   skuId: string
@@ -88,6 +88,16 @@ export function useInventory() {
     return toAdd.length
   }
 
+  /**
+   * 派生 id（調整/移動/棚卸の refLineId）の採番。
+   * nextId(collection, prefix) はコレクションのトップレベル id（itx-*）しか走査しないため、
+   * 別 prefix の refLineId には使えない（常に -0001 → 冪等キー衝突で 2 回目以降が破棄される）。
+   * ここでは既存の refLineId 実値を走査して一意連番を生成する。
+   */
+  function nextRefLineId(prefix: string): string {
+    return nextCode(txns.value.map(t => t.refLineId), prefix)
+  }
+
   /** 在庫調整（F-27-2。理由必須） */
   function adjust(input: { skuId: string; warehouseId: string; qty: number; reason: InventoryAdjustReason }): Result {
     if (!input.skuId || !input.warehouseId) {
@@ -96,7 +106,7 @@ export function useInventory() {
     if (!Number.isFinite(input.qty) || input.qty === 0) {
       return { ok: false, error: { code: 'AKO-INV-002', message: '調整数量は 0 以外で指定してください' } }
     }
-    const refLineId = nextId('inventoryTransactions', 'adj')
+    const refLineId = nextRefLineId('adj')
     post([{ ...input, kind: 'adjust', refType: 'adjust', refLineId }])
     return { ok: true, id: refLineId }
   }
@@ -112,7 +122,8 @@ export function useInventory() {
     if (balanceOf(input.skuId, input.fromWarehouseId) < input.qty) {
       return { ok: false, error: { code: 'AKO-INV-004', message: '移動元の在庫が不足しています' } }
     }
-    const refLineId = nextId('inventoryTransactions', 'trf')
+    // 出/入の 2 行は同一 refLineId を共有（kind が異なるため冪等キーは衝突しない）。イベント間は一意
+    const refLineId = nextRefLineId('trf')
     post([
       { skuId: input.skuId, warehouseId: input.fromWarehouseId, qty: -input.qty, kind: 'transfer_out', refType: 'transfer', refLineId },
       { skuId: input.skuId, warehouseId: input.toWarehouseId, qty: input.qty, kind: 'transfer_in', refType: 'transfer', refLineId },
@@ -122,15 +133,17 @@ export function useInventory() {
 
   /** 棚卸確定（F-27-4。実棚数 − 理論在庫の差分を stocktake 調整として計上） */
   function stocktake(warehouseId: string, counts: { skuId: string; actualQty: number }[]): Result & { adjusted?: number } {
+    // 各明細行は同一 kind 'stocktake' なので refLineId を行ごとに一意化する（1 回の post 内でも衝突させない）
+    const base = nextRefLineId('stk')
+    let seq = Number(base.slice(4))
     const entries: PostEntry[] = []
     for (const c of counts) {
       const diff = c.actualQty - balanceOf(c.skuId, warehouseId)
       if (diff === 0) continue
-      const refLineId = nextId('inventoryTransactions', 'stk')
-      entries.push({ skuId: c.skuId, warehouseId, qty: diff, kind: 'stocktake', reason: 'stocktake', refType: 'stocktake', refLineId })
+      entries.push({ skuId: c.skuId, warehouseId, qty: diff, kind: 'stocktake', reason: 'stocktake', refType: 'stocktake', refLineId: `stk-${String(seq).padStart(4, '0')}` })
+      seq++
     }
     if (entries.length === 0) return { ok: true, adjusted: 0 }
-    // 各 refLineId が一意なので post は全件追加
     post(entries)
     return { ok: true, adjusted: entries.length }
   }

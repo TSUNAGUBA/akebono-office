@@ -107,6 +107,11 @@ export function useConsignment() {
     const inv = invoices.value.find(v => v.id === invoiceId)
     if (!inv) return { ok: false, error: { code: 'AKO-GEN-002', message: '請求が見つかりません' } }
     if (inv.status !== 'issued') return { ok: false, error: { code: 'AKO-BIL-003', message: '発行済みのみ赤伝を発行できます' } }
+    // 委託マージン請求は作家支払通知と対で発行されるため、単独の赤伝は不可（再締めで作家二重払いになる）。
+    // 委託精算のやり直しは対象月の再締め（未実装の取消フローは v2）。ここでは通常請求のみ赤伝可とする
+    if (inv.invoiceType !== 'sales') {
+      return { ok: false, error: { code: 'AKO-BIL-008', message: '委託マージン請求は単独で赤伝できません（委託精算のやり直しで対応）' } }
+    }
     const creditId = nextId('invoices', 'inv')
     const credit: Invoice = {
       ...inv, id: creditId, code: nextCode(invoices.value.map(v => v.code), 'INV'),
@@ -163,6 +168,11 @@ export function useConsignment() {
     const periodTo = `${input.month}-31`
     const newInvoices: Invoice[] = []
     const newNotices: PaymentNotice[] = []
+    // id は蓄積配列を含めて採番する（ループ内で db へ書き戻さないため nextId 単独では重複する）
+    const nextInvoiceId = (): string => nextCode([...invoices.value, ...newInvoices].map(v => v.id), 'inv')
+    const nextNoticeId = (): string => nextCode([...notices.value, ...newNotices].map(n => n.id), 'pn')
+    // 売上明細 → その店舗のマージン請求 id（provenance を正確に保つ）
+    const settleByRecord = new Map<string, string>()
 
     // --- 店舗別マージン請求 ---
     const byStore = new Map<string, SalesRecord[]>()
@@ -172,19 +182,24 @@ export function useConsignment() {
       const rate = taxRateValue(storeTerm?.taxRateId)
       const snapshot = buildSettlementSnapshot(storeTerm, undefined, rate)
       const salesTotal = storeRows.reduce((s, r) => s + r.amount, 0)
-      const margin = calcStoreMargin(salesTotal, snapshot)
-      const tax = calcTax(margin, rate, snapshot.taxIncluded, snapshot.rounding)
-      const id = nextId('invoices', 'inv')
+      // 当社が店舗へ請求する額（店舗取り分控除後の送金額 = 売上 × (1 − 店舗取り分率)）
+      const billed = calcStoreMargin(salesTotal, snapshot)
+      const tax = calcTax(billed, rate, snapshot.taxIncluded, snapshot.rounding)
+      // 内税は billed に税込・外税は billed + tax（内税で二重計上しない）
+      const total = snapshot.taxIncluded ? billed : billed + tax
+      const id = nextInvoiceId()
+      const storeShare = Math.round(salesTotal * (snapshot.marginRate ?? 0))
       newInvoices.push({
         id, code: nextCode([...invoices.value, ...newInvoices].map(v => v.code), 'INV'),
         companyId: storeId, segmentId: input.segmentId, periodFrom, periodTo, invoiceType: 'consignment_margin',
-        status: 'issued', issuedAt: nowJstIso(), totalAmount: margin + tax, creditFor: null,
+        status: 'issued', issuedAt: nowJstIso(), totalAmount: total, creditFor: null,
         lines: [
-          { id: `${id}-l1`, description: `委託売上 ${salesTotal.toLocaleString()} 円 × マージン率 ${((snapshot.marginRate ?? 0) * 100).toFixed(0)}%`, amount: margin },
-          ...(tax > 0 ? [{ id: `${id}-l2`, description: `消費税（${(rate * 100).toFixed(0)}%）`, amount: tax }] : []),
+          { id: `${id}-l1`, description: `委託売上 ${salesTotal.toLocaleString()} 円 − 店舗取り分 ${((snapshot.marginRate ?? 0) * 100).toFixed(0)}%（${storeShare.toLocaleString()} 円）= 当社請求`, amount: billed },
+          ...(tax > 0 ? [{ id: `${id}-l2`, description: `消費税（${(rate * 100).toFixed(0)}%${snapshot.taxIncluded ? '・内税' : ''}）`, amount: tax }] : []),
         ],
         snapshot, sourceRecordIds: storeRows.map(r => r.id),
       })
+      for (const r of storeRows) settleByRecord.set(r.id, id)
     }
 
     // --- 作家別支払通知 ---
@@ -199,14 +214,14 @@ export function useConsignment() {
       const artistTerm = termOf(artistId, input.segmentId, 'consignor_artist')
       const rate = taxRateValue(artistTerm?.taxRateId)
       const snapshot = buildSettlementSnapshot(undefined, artistTerm, rate)
-      const lines = artistRows.map(r => ({
-        id: nextId('paymentNotices', 'pnl') + '-' + r.id,
+      const id = nextNoticeId()
+      const lines = artistRows.map((r, idx) => ({
+        id: `${id}-${idx}`,
         salesRecordId: r.id,
         description: `${r.salesDate} ${products.skuById(r.skuId) ? products.skuLabel(products.skuById(r.skuId)!) : r.skuId}（${r.qty}）`,
         amount: calcPayoutAmount(r, snapshot, resolveUnitCost),
       }))
       const payable = lines.reduce((s, l) => s + l.amount, 0)
-      const id = nextId('paymentNotices', 'pn')
       newNotices.push({
         id, code: nextCode([...notices.value, ...newNotices].map(n => n.code), 'PN'),
         companyId: artistId, segmentId: input.segmentId, periodFrom, periodTo, status: 'draft',
@@ -216,9 +231,8 @@ export function useConsignment() {
 
     invoices.value = [...invoices.value, ...newInvoices]
     notices.value = [...notices.value, ...newNotices]
-    // 対象売上に精算リンク（最初のマージン請求 id を代表に。再精算防止 = 冪等）
-    const settleId = newInvoices[0]?.id ?? `settle-${input.segmentId}-${input.month}`
-    sales.value = sales.value.map(r => rows.some(x => x.id === r.id) ? { ...r, invoiceId: settleId } : r)
+    // 対象売上に精算リンク（各売上をその店舗のマージン請求 id へ。再精算防止 = 冪等）
+    sales.value = sales.value.map(r => settleByRecord.has(r.id) ? { ...r, invoiceId: settleByRecord.get(r.id)! } : r)
     commit()
     return { ok: true, invoices: newInvoices.length, notices: newNotices.length }
   }

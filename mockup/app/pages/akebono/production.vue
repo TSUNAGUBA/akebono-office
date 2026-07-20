@@ -14,6 +14,7 @@ const prod = useProduction()
 const p = useProducts()
 const masters = useAkebonoMasters()
 const { show } = useToast()
+const confirm = useConfirm()
 
 // ---------- 選択肢 ----------
 const skuOptions = computed(() => p.activeSkus().map(s => ({ value: s.id, label: p.skuLabel(s) })))
@@ -54,8 +55,13 @@ function openDetail(row: Record<string, unknown>): void {
 const nextStatuses = computed<ProductionStatus[]>(() =>
   selected.value ? prod.NEXT[selected.value.status] : [])
 
-function transition(status: ProductionStatus): void {
+async function transition(status: ProductionStatus): Promise<void> {
   if (!selected.value) return
+  // 取消は終端状態（取り消せない）のため確認を挟む（他の入出荷・発注と同じ導線・原則9.5）
+  if (status === 'canceled') {
+    const ok = await confirm.ask('生産指示の取消', `「${selected.value.code}」を取消にしますか？（取消後は元に戻せません）`, { danger: true, confirmLabel: '取消にする' })
+    if (!ok) return
+  }
   const res = prod.setStatus(selected.value.id, status)
   if (!res.ok) {
     show(`${res.error.code}: ${res.error.message}`, 'crit')

@@ -309,6 +309,8 @@ export interface PurchaseRecord {
   purchaseType: PurchaseType
   /** 入荷実績からの生成時の参照 */
   inboundResultId: string | null
+  /** 入荷管理 OFF 時に在庫入庫した先の倉庫（訂正時の在庫戻しに使用。ON 時は null） */
+  warehouseId: string | null
   lines: { id: string; skuId: string; qty: number; costPrice: number }[]
   /** 赤黒訂正の元伝票 */
   correctionOf: string | null

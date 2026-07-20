@@ -161,7 +161,7 @@ export function useAkebonoMasters() {
           { key: 'companyId', label: '取引先', type: 'select', required: true, options: partnerCompanyOptions.value },
           { key: 'segmentId', label: '事業セグメント', type: 'select', required: true, options: segmentOptions.value },
           { key: 'role', label: '適用ロール', type: 'select', required: true, options: consignmentRoleOptions },
-          { key: 'marginRate', label: 'マージン率（店舗行。0.30=30%）', type: 'number', min: 0, max: 1, step: 0.01, hint: '店舗行のとき指定' },
+          { key: 'marginRate', label: '店舗取り分率（店舗行。0.30=30%）', type: 'number', min: 0, max: 1, step: 0.01, hint: '店舗行のとき指定。店舗が保有する率。当社請求 = 売上×(1−この率)' },
           { key: 'payoutMethod', label: '支払算定方式（作家行）', type: 'select', options: payoutMethodOptions, emptyLabel: '（作家行のとき指定）' },
           { key: 'payoutRate', label: '作家率（売上連動。0.60=60%）', type: 'number', min: 0, max: 1, step: 0.01 },
           { key: 'liabilityTiming', label: '債務確定タイミング（作家行）', type: 'select', options: liabilityOptions, emptyLabel: '（作家行のとき指定）' },
@@ -261,7 +261,10 @@ export const AKEBONO_MASTER_COLUMNS: Record<AkebonoMasterKey, TableColumn[]> = {
 
 /** 委託条件の設定サマリ（一覧セル表示） */
 export function consignmentSummary(t: ConsignmentTerm): string {
-  if (t.role === 'store') return `マージン率 ${((t.marginRate ?? 0) * 100).toFixed(0)}%`
+  if (t.role === 'store') {
+    const share = (t.marginRate ?? 0) * 100
+    return `店舗取り分 ${share.toFixed(0)}% → 当社請求 ${(100 - share).toFixed(0)}%`
+  }
   const method = t.payoutMethod === 'purchase_cost' ? '仕入単価×数量' : `売上×${((t.payoutRate ?? 0) * 100).toFixed(0)}%`
   const timing = t.liabilityTiming === 'on_receipt' ? '仕入時確定' : '販売時確定'
   return `${method} / ${timing}`

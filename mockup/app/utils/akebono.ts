@@ -215,10 +215,18 @@ export function calcPayoutAmount(
   return roundBy(record.amount * rate, snapshot.rounding)
 }
 
-/** 店舗へのマージン請求額（当社取り分 = 売上 × マージン率。決定 #5 案 1） */
+/**
+ * 当社が店舗へ請求する額（決定 #5 案 1 の三者精算）。
+ * marginRate = 店舗が保有する取り分率（店舗マージン）。店舗は自分の取り分を控除した残りを当社へ送金し、
+ * 当社はそこから作家へ支払い差額を粗利とする。したがって当社の店舗宛請求額 = 売上 × (1 − 店舗取り分率)。
+ * これにより「店舗取り分 + 作家支払 + 当社粗利 = 売上」が閉じ、当社粗利が非負になる
+ * （店舗取り分率と作家率の設定が 店舗率 + 作家率 ≤ 1 を満たすことが前提）。
+ * ※ marginRate の定義（店舗取り分か当社取り分か）は決定 #5 が「設定で柔軟に」としたため、
+ *   本モックは実運用に整合する「店舗取り分」で実装。壁打ちでの最終確認事項。
+ */
 export function calcStoreMargin(salesAmount: number, snapshot: SettlementSnapshot): number {
-  const rate = snapshot.marginRate ?? 0
-  return roundBy(salesAmount * rate, snapshot.rounding)
+  const storeShare = snapshot.marginRate ?? 0
+  return roundBy(salesAmount * (1 - storeShare), snapshot.rounding)
 }
 
 // ---------- 採番 ----------

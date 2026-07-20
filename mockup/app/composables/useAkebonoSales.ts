@@ -120,12 +120,18 @@ export function useAkebonoSales() {
     return [...head, { label: 'その他', value: rest }]
   })
 
-  /** セグメント並列比較（選択年度・期初〜当月の各セグメント合計） */
-  const segmentComparison = computed(() =>
-    activeSegments.value.map(s => ({
-      segment: s,
-      amount: [...selectedFyMonths()].reduce((sum, m) => sum + amountOfMonth(m, s.id), 0),
-    })))
+  /** セグメント別合計（非フィルタ = activeRecords ベース。並列比較用に汚染させない） */
+  function segmentTotalIn(months: Set<string>, segmentId: string): number {
+    return activeRecords.value
+      .filter(r => months.has(monthOf(r)) && r.segmentId === segmentId)
+      .reduce((s, r) => s + r.amount, 0)
+  }
+
+  /** セグメント並列比較（選択年度・期初〜当月の各セグメント合計。segmentFilter に依存しない） */
+  const segmentComparison = computed(() => {
+    const months = selectedFyMonths()
+    return activeSegments.value.map(s => ({ segment: s, amount: segmentTotalIn(months, s.id) }))
+  })
 
   // ---------- 書込 ----------
   function create(input: {

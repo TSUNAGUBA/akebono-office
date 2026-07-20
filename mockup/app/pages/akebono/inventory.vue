@@ -11,10 +11,36 @@ import { INVENTORY_KIND_LABELS, ADJUST_REASON_LABELS } from '~/utils/akebono'
 import { fmtDateTime, fmtInt } from '~/utils/format'
 
 const inv = useInventory()
+const inbound = useInbound()
+const outbound = useOutbound()
 const p = useProducts()
 const masters = useAkebonoMasters()
 const toast = useToast()
 const confirm = useConfirm()
+
+// ---------- 論理在庫（F-27-5: 実在庫 + 未完了入荷予定 − 未完了出荷指示） ----------
+const logicalDelta = computed(() => {
+  const map = new Map<string, number>()
+  const add = (skuId: string, whId: string, d: number): void => {
+    const k = `${skuId}::${whId}`
+    map.set(k, (map.get(k) ?? 0) + d)
+  }
+  for (const plan of inbound.plans.value) {
+    if (plan.status !== 'pending' && plan.status !== 'partial') continue
+    for (const l of plan.lines) {
+      const remaining = l.qty - inbound.receivedQtyOf(plan.id, l.id)
+      if (remaining > 0) add(l.skuId, plan.warehouseId, remaining)
+    }
+  }
+  for (const plan of outbound.plans.value) {
+    if (plan.status !== 'pending' && plan.status !== 'partial') continue
+    for (const l of plan.lines) {
+      const remaining = l.qty - outbound.shippedQtyOf(plan.id, l.id)
+      if (remaining > 0) add(l.skuId, plan.warehouseId, -remaining)
+    }
+  }
+  return map
+})
 
 // ---------- 共通選択肢 ----------
 const skuOptions = computed(() => p.activeSkus().map(s => ({ value: s.id, label: p.skuLabel(s) })))
@@ -47,12 +73,15 @@ const browseRows = computed(() => {
     for (const wh of masters.warehouses.value) {
       if (browseWh.value && wh.id !== browseWh.value) continue
       const qty = inv.balanceOf(sku.id, wh.id)
-      if (qty === 0) continue
+      const delta = logicalDelta.value.get(`${sku.id}::${wh.id}`) ?? 0
+      // 実在庫 0 かつ予定変動もない SKU×倉庫は表示しない
+      if (qty === 0 && delta === 0) continue
       rows.push({
         id: `${sku.id}::${wh.id}`,
         skuLabel: label,
         warehouseName: masters.warehouseName(wh.id),
         qty,
+        logical: qty + delta,
       })
     }
   }
@@ -62,7 +91,8 @@ const browseRows = computed(() => {
 const browseColumns: TableColumn[] = [
   { key: 'skuLabel', label: 'SKU', primary: true },
   { key: 'warehouseName', label: '倉庫', primary: true },
-  { key: 'qty', label: '数量', align: 'right', primary: true },
+  { key: 'qty', label: '実在庫', align: 'right', primary: true },
+  { key: 'logical', label: '論理在庫', align: 'right' },
 ]
 
 // ---------- 在庫調整モーダル ----------
@@ -289,7 +319,14 @@ async function submitStocktake(): Promise<void> {
           <template #cell-qty="{ row }">
             <span class="num tabular-nums font-medium">{{ fmtInt(Number(row.qty)) }}</span>
           </template>
+          <template #cell-logical="{ row }">
+            <span
+              class="num tabular-nums"
+              :class="Number(row.logical) !== Number(row.qty) ? 'font-medium text-info' : 'text-muted'"
+            >{{ fmtInt(Number(row.logical)) }}</span>
+          </template>
         </UiDataTable>
+        <p class="px-3 py-2 text-[11px] text-muted">論理在庫 = 実在庫 + 未完了の入荷予定 − 未完了の出荷指示（予定を加味した見込み在庫）。</p>
       </UiSectionCard>
     </div>
 

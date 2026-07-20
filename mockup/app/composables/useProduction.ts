@@ -60,7 +60,8 @@ export function useProduction() {
     if (!Number.isFinite(input.completedQty) || input.completedQty <= 0) {
       return { ok: false, error: { code: 'AKO-MFG-002', message: '完成数を正しく入力してください' } }
     }
-    const result: ProductionResult = { id: nextId('productionOrders', 'mfgr'), completedQty: input.completedQty, defectQty: input.defectQty, completedAt: nowJstIso() }
+    // 実績 id はオーダー id + 連番で全域一意（nextId は別 prefix を採番できず常に mfgr-0001 になる = 生産入庫が破棄される）
+    const result: ProductionResult = { id: `${o.id}-r${o.results.length + 1}`, completedQty: input.completedQty, defectQty: input.defectQty, completedAt: nowJstIso() }
     const nextResults = [...o.results, result]
     const done = nextResults.reduce((s, r) => s + r.completedQty, 0) >= o.qty
     orders.value = orders.value.map(x => x.id === id ? { ...x, results: nextResults, status: done ? 'completed' : 'in_progress' } : x)

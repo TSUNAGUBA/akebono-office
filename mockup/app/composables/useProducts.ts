@@ -135,13 +135,16 @@ export function useProducts() {
     const existing = skus.value.filter(s => s.productId === productId)
     const next = [...skus.value]
     let created = 0
+    // ループ内で書き戻さないため nextId は同一 id を反復する。基準連番を 1 度取り、ローカルで進める
+    let seq = Number(nextId('productSkus', 'sku').slice(4))
     for (const v1 of a1) {
       for (const v2 of a2) {
         const axis2 = v2 === '' ? null : v2
         const already = existing.find(s => s.axis1Value === v1 && s.axis2Value === axis2)
         if (already) continue
         const suffix = [v1, v2].filter(Boolean).join('-')
-        const id = nextId('productSkus', 'sku')
+        const id = `sku-${String(seq).padStart(4, '0')}`
+        seq++
         next.push({
           id, productId, code: `${product.code}-${suffix}`, janCode: null,
           axis1Value: v1, axis2Value: axis2, sellPrice: null, costPrice: null, isDefault: false, active: true,

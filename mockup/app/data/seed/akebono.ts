@@ -293,9 +293,9 @@ export const seedInventoryTransactions: InventoryTransaction[] = [
 
 /** 仕入計上（陶磁器 = 委託 / アパレル = 買取） */
 export const seedPurchaseRecords: PurchaseRecord[] = [
-  { id: 'pur-01', code: 'PUR-0001', companyId: 'c-ak-01', segmentId: 'seg-01', purchaseDate: midOf(M3), purchaseType: 'consignment', inboundResultId: 'ibr-01', lines: [{ id: 'purl-01', skuId: 'sku-01-0', qty: 20, costPrice: 2880 }], correctionOf: null },
-  { id: 'pur-02', code: 'PUR-0002', companyId: 'c-ak-02', segmentId: 'seg-01', purchaseDate: midOf(M3), purchaseType: 'consignment', inboundResultId: 'ibr-02', lines: [{ id: 'purl-02', skuId: 'sku-02-0', qty: 10, costPrice: 6600 }], correctionOf: null },
-  { id: 'pur-03', code: 'PUR-0003', companyId: 'c-ak-06', segmentId: 'seg-04', purchaseDate: midOf(M2), purchaseType: 'outright', inboundResultId: 'ibr-03', lines: [
+  { id: 'pur-01', code: 'PUR-0001', companyId: 'c-ak-01', segmentId: 'seg-01', purchaseDate: midOf(M3), purchaseType: 'consignment', inboundResultId: 'ibr-01', warehouseId: null, lines: [{ id: 'purl-01', skuId: 'sku-01-0', qty: 20, costPrice: 2880 }], correctionOf: null },
+  { id: 'pur-02', code: 'PUR-0002', companyId: 'c-ak-02', segmentId: 'seg-01', purchaseDate: midOf(M3), purchaseType: 'consignment', inboundResultId: 'ibr-02', warehouseId: null, lines: [{ id: 'purl-02', skuId: 'sku-02-0', qty: 10, costPrice: 6600 }], correctionOf: null },
+  { id: 'pur-03', code: 'PUR-0003', companyId: 'c-ak-06', segmentId: 'seg-04', purchaseDate: midOf(M2), purchaseType: 'outright', inboundResultId: 'ibr-03', warehouseId: null, lines: [
     { id: 'purl-03', skuId: 'sku-03-1', qty: 30, costPrice: 4200 }, { id: 'purl-04', skuId: 'sku-03-2', qty: 30, costPrice: 4200 },
     { id: 'purl-05', skuId: 'sku-03-3', qty: 20, costPrice: 4200 }, { id: 'purl-06', skuId: 'sku-03-4', qty: 20, costPrice: 4200 },
   ], correctionOf: null },
@@ -331,7 +331,7 @@ export const seedSalesRecords: SalesRecord[] = [
   { id: 'sr-06', code: 'SR-0006', salesDate: midOf(M1), companyId: 'c-02', segmentId: 'seg-03', skuId: 'sku-06-0', qty: 1, unitPrice: 30000, amount: 30000, costPrice: 6000, channel: null, billingType: 'monthly', sourceKind: 'manual', sourceRef: null, invoiceId: null, correctionOf: null, active: true },
   { id: 'sr-07', code: 'SR-0007', salesDate: midOf(M0), companyId: 'c-02', segmentId: 'seg-03', skuId: 'sku-06-0', qty: 1, unitPrice: 30000, amount: 30000, costPrice: 6000, channel: null, billingType: 'monthly', sourceKind: 'manual', sourceRef: null, invoiceId: null, correctionOf: null, active: true },
   // SaaS 従量
-  { id: 'sr-08', code: 'SR-0008', salesDate: midOf(M1), companyId: 'c-03', segmentId: 'seg-03', skuId: 'sku-07-0', qty: 12000, unitPrice: 5, amount: 60000, costPrice: 12000, channel: null, billingType: 'usage', sourceKind: 'manual', sourceRef: null, invoiceId: null, correctionOf: null, active: true },
+  { id: 'sr-08', code: 'SR-0008', salesDate: midOf(M1), companyId: 'c-03', segmentId: 'seg-03', skuId: 'sku-07-0', qty: 12000, unitPrice: 5, amount: 60000, costPrice: 1, channel: null, billingType: 'usage', sourceKind: 'manual', sourceRef: null, invoiceId: null, correctionOf: null, active: true },
 ]
 
 // ---------- 請求・支払通知・入金 ----------

@@ -38,7 +38,8 @@ export function useInbound() {
     const created: InboundPlan = {
       id, code: nextCode(plans.value.map(p => p.code), 'IBP'),
       poId: input.poId ?? null, warehouseId: input.warehouseId, dueDate: input.dueDate, status: 'pending',
-      lines: lines.map(l => ({ id: nextId('inboundPlans', 'ibpl') + '-' + l.skuId, skuId: l.skuId, qty: l.qty })),
+      // 明細行 id はヘッダ id + index で全域一意（nextId は別 prefix を採番できず衝突するため使わない）
+      lines: lines.map((l, idx) => ({ id: `${id}-${idx}`, skuId: l.skuId, qty: l.qty })),
     }
     plans.value = [...plans.value, created]
     commit()
@@ -67,8 +68,9 @@ export function useInbound() {
     if (lines.length === 0) return { ok: false, error: { code: 'AKO-INB-002', message: '入荷明細を 1 行以上入力してください' } }
 
     const resultId = nextId('inboundResults', 'ibr')
-    const resultLines = lines.map(l => ({
-      id: nextId('inboundResults', 'ibrl') + '-' + l.skuId,
+    // 明細行 id はヘッダ id + index で全域一意（同一 SKU 複数行・別実績の同一 SKU も分離 = 冪等キー衝突しない）
+    const resultLines = lines.map((l, idx) => ({
+      id: `${resultId}-${idx}`,
       planLineId: l.planLineId ?? null, skuId: l.skuId, qty: l.qty,
     }))
     const created: InboundResult = {
