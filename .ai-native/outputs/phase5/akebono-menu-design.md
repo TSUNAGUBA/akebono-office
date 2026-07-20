@@ -2,10 +2,11 @@
 
 - **作成日:** 2026-07-20
 - **作成ロール:** コーディングエージェント（壁打ちナビゲーター・システム監査官視点で協議のうえ起草）
-- **ステータス:** **ドラフト（壁打ち用）**。オペレーター承認前・実装未着手
+- **ステータス:** **壁打ち完了（第 1 巡 + 第 2 巡・2026-07-20）・未決ゼロ**。オペレーター最終承認（PR レビュー）まで実装未着手
 - **要件:** `../phase3/akebono-menu-functional-requirements.md`（F-20〜F-33）
 - **SoT 宣言:** 本書は Akebonoメニュー（業務アプリ群）の設計 SoT。既存 `data-design.md` / `api-design.md` / `architecture.md` / `screen-design.md`（オフィス系機能の SoT）は変更せず、承認後に相互参照を追記する。akebono-scm-platform `docs/platform-design/`（プラットフォーム統合設計）と将来整合させるべき点は各節に「PF 整合」として明記する
-- **未決事項:** `../phase3/akebono-menu-discussion-points.md` に集約（本文では #n で参照）
+- **未決事項:** ゼロ（2026-07-20 時点。決定記録は `../phase3/akebono-menu-discussion-points.md` 冒頭。本文の #n は同ファイルの論点番号を指す）
+- **改訂:** 2026-07-20 壁打ち第 1 巡のオペレーター決定（同ファイル冒頭の決定記録 #1〜#14）を反映。主な設計変更 = 画像セクションの設定化（#10）・tenant_id の v1 先行導入（#11）・委託精算方向の確定（#5）。同日第 2 巡で #5 付帯確認 3 点を**設定化**（委託条件マスタの支払算定方式・債務確定・税設定）で決定・反映（未決ゼロ）
 
 ---
 
@@ -23,11 +24,11 @@
 | 兄弟リポジトリとの整合 | **4 リポジトリ全部が業務 SoT = PostgreSQL**。scm-platform 既決「Firestore は Config-Store 限定・SoT にしない」（AKB-DOC-13） | 既決に反する | スキーマ設計は流用可 |
 | 運用 | 既存マイグレーション機構（起動時自動適用・advisory lock）を流用 | セキュリティルール・インデックス管理が別系統で増える | 運用対象が 2 系統に |
 
-**採択: ① PostgreSQL（既存 RDS 同居）**。Firestore は既存方針どおり利用しない（本アプリでは Config 用途も configs テーブルで足りている）。→ 承認事項 discussion-points #1
+**採択: ① PostgreSQL（既存 RDS 同居）**（**決定 #1・2026-07-20 オペレーター承認**）。Firestore は既存方針どおり利用しない（本アプリでは Config 用途も configs テーブルで足りている）。
 
 ### 1.2 スキーマ配置
 
-**推奨: 同一 DB 内に新スキーマ `app_akebono` を新設**（discussion-points #1 の下位論点）。
+**決定（#1・2026-07-20）: 同一 DB 内に新スキーマ `app_akebono` を新設**。
 
 - 理由: ① オフィス系（勤怠・日報 = C3 労務データ）と商流系（C2 取引データ)の論理境界が明確になる ② scm-platform の「サービス別スキーマ分割」（app_retail/app_maker/app_wms + 検討中の app_office）と相似形になり、**将来プラットフォームへ移送する単位がスキーマごと切り出せる** ③ バックアップ・権限・監査の粒度を分けられる
 - 規約: **スキーマ横断の物理 FK は張らない**（scm-platform 既決）。`members` / `companies` / `configs` 等 app_office 側への参照は ID 参照 + アプリ層整合（既存の論理参照パターンと同じ）
@@ -63,7 +64,7 @@ flowchart LR
 ```
 
 - フロント/バック分担は既存方針を踏襲: **重い処理（在庫導出・締め・取込・ETL・集計）はサーバー**、フロントは表示射影と入力
-- 共有ドメイン層 `shared/domain/` に在庫残高計算・請求締め計算・会計年度（既存 fiscal）等の純粋関数を置き、フロントのプレビュー計算と API の確定計算を一致させる（既存パターン）
+- 共有ドメイン層 `shared/domain/` に在庫残高計算・請求締め計算・**委託精算計算・税計算（設定注入型の純関数 = 第 2 巡決定: 精算・税ポリシーは「設定データ + 純関数」で実装しコード分岐を作らない）**・会計年度（既存 fiscal）等の純粋関数を置き、フロントのプレビュー計算と API の確定計算を一致させる（既存パターン）
 - 商品画像・取込ファイル原本は Cloud Storage（既存 documents の STORAGE_BUCKET 方式 + DB bytea フォールバック・署名 URL 配信を流用 = 原則 3）
 
 ### 1.4 モックアップ先行
@@ -113,7 +114,8 @@ flowchart TD
 2. **データ 3 分類**を各テーブルに宣言: 設定系（更新可 + 論理削除）/ **記録系（追記のみ・訂正は赤黒）** / **確定系（発行後不変・訂正は赤伝リンク）**（scm-platform 既決）
 3. **ON DELETE 既定 RESTRICT**。CASCADE は「ヘッダ→明細」の集約子のみ明示（warehouse P10）。SKU など全伝票から参照されるマスタは RESTRICT + 論理削除
 4. 区分値は text + CHECK（snake_case）。金額は numeric(12,2)・数量は numeric(12,2)（サービス業の人日 0.5 等に対応）
-5. 全トランザクションに `segment_id`（XA-2）。tenant_key は既存 fact_sales と同じく mart 境界で付与（v1 は単一テナント。**マルチテナント列の先行導入は discussion-points #11**）
+5. 全トランザクションに `segment_id`（XA-2）。**全 app_akebono テーブルは先頭列に `tenant_id text NOT NULL` を持つ（決定 #11・2026-07-20。v1 は定数 `akebono`）**。本書のエンティティ表・一意制約の表記では tenant_id を省略しているが、物理定義では全テーブルの先頭列 + 全 UNIQUE/主要索引の先頭に含める（scm-platform「tenant_id 全経路貫通」規約準拠。mart の tenant_key へは境界で変換 = 既存 fact_sales と同じ）。RLS の有効化はマルチテナント化時
+6. **伝票番号は接頭辞連番**（PO-0001 / INV-0001 等。既存 WF-xxxx と同型 = 決定 #14）。採番はサーバー一元（tenant_id スコープ）・取消による欠番は許容
 
 ### 3.2 エンティティ関係（全体図）
 
@@ -121,7 +123,8 @@ flowchart TD
 flowchart TD
     subgraph master["マスタ系"]
         PRD[Product 商品] --> SKU[ProductSku（既定SKU自動生成）]
-        PRD --> IMG[ProductImage<br/>kind: sample/production]
+        PRD --> IMG[ProductImage<br/>セクション別 = 既定: サンプル/製品]
+        SEC[ProductImageSection<br/>画像セクション設定 F-21-6] --> IMG
         SKU -.任意.- IMG
         CAT[ProductCategory 階層]--> PRD
         SEG[BusinessSegment 業態]
@@ -159,12 +162,13 @@ flowchart TD
 |---|---|---|
 | `Product` | id, code, name, segmentId, categoryId?, defaultSupplierCompanyId?, listPrice, standardCost, taxRateId, unitId, billingType(`one_time`/`monthly`/`usage`/null = 物販), variantAxis1Label?, variantAxis2Label?, description, active, custom | UNIQUE(segmentId, code)。billingType は情報サービス向け（F-21-1） |
 | `ProductSku` | id, productId, code, janCode?, axis1Value?, axis2Value?, sellPrice?, costPrice?, isDefault(既定 SKU), active | UNIQUE(productId, code)。**汎用 2 軸**（undeux ADR-008）。既定 SKU は productId ごとに 1 件（部分一意） |
-| `ProductImage` | id, productId, skuId?, kind(`sample`/`production`), displayOrder, filename, mime, sizeBytes, storage(`gcs`/`db`), storagePath, active | 実体は GCS（documents 方式流用）。主画像 = kind=production の displayOrder 先頭 → 無ければ sample。アーカイブ = 論理削除（原則 9.5） |
+| `ProductImage` | id, productId, skuId?, sectionId(画像セクション), displayOrder, filename, mime, sizeBytes, storage(`gcs`/`db`), storagePath, active | 実体は GCS（documents 方式流用）。サムネイル = サムネイル優先セクション（既定 = 製品画像）の displayOrder 先頭 → 無ければ他セクション先頭（セクションバッジで明示）。アーカイブ = 論理削除（原則 9.5） |
+| `ProductImageSection`（F-21-6・決定 #10） | id, name, isThumbnailPriority(サムネイル優先), isSeed(既定シード = 削除不可・名称変更可), displayOrder, active | **商品マスタのオプション設定**（画像の区分を固定 2 区分にせず設定化 = 決定 #10・2026-07-20）。既定シード = `製品画像`（サムネイル優先）・`サンプル画像`。追加・名称変更・並び替え・無効化可（例: 着用画像・詳細画像）。**サムネイル優先は常に 1 件のみ**（部分一意 `WHERE isThumbnailPriority AND active`。ProductSku.isDefault と同パターン）。**画像が紐付くセクションの無効化は参照チェックで拒否** |
 | `ProductCategory` | id, name, parentId?, displayOrder, active | 自己参照階層（部署マスタと同パターン・循環禁止） |
 | `Warehouse` | id, name, kind(`own`/`store_deposit`/`external`), companyId?(store_deposit の店舗), displayOrder, active | 店舗預け在庫は「店舗 = 倉庫」として表現（F-26-2） |
 | `VariantAxisTemplate`（F-30-8） | id, name, axis1Label, axis2Label, industryTypes[], displayOrder, active | 業種タイプ別の軸ラベルの組（カラー×サイズ / 容量×味 等）。**初期値はコード上のカタログシード**（migration 投入・冪等）+ 汎用マスタとして編集可。商品登録時の軸ラベル入力の候補を供給する（テンプレートは候補であり強制ではない） |
 | `Unit` / `TaxRate` / `PaymentTerm` | 名称・率・締め/サイト等 | TaxRate は適用開始日で履歴保持（税率改定に耐える） |
-| `ConsignmentTerm` | id, companyId, segmentId, marginRate, direction(`bill_store_margin` 等), validFrom, active | 履歴保持（validFrom）。精算方向の値域は discussion-points #5 の決着で確定 |
+| `ConsignmentTerm` | id, companyId, segmentId, marginRate, direction(`bill_store_margin`), **payoutMethod(`sales_rate` 売上連動 / `purchase_cost` 仕入単価 × 販売数), payoutRate?(sales_rate 時の作家率), liabilityTiming(`on_sale` 販売時確定 / `on_receipt` 仕入計上時確定), taxMode(課税/非課税), taxIncluded(内税/外税), rounding(`floor`/`ceil`/`round`)**, validFrom, active | 履歴保持（validFrom）。精算方向は決定 #5（2026-07-20）で確定: 店舗が売上金を保有 → 当社は店舗へマージン請求 → 当社から作家へ支払。**支払算定・債務確定・税は第 2 巡決定（2026-07-20）で設定化**: 計算は shared/domain の設定注入型純関数で行いコード分岐を作らない。**purchase_cost の単価解決順** = ①対象 SKU の直近仕入実績（PurchaseRecord）→ ② ProductSku.costPrice → ③ Product.standardCost（フォールバックにより F-24 実装前の第 1 縦串でも成立）。税率は税率マスタ（F-30-5）参照。**適用単位 = 取引先ロール別の行**: store（店舗）行は marginRate（マージン請求設定）を、consignor_artist（作家）行は payoutMethod/payoutRate/liabilityTiming（支払設定）を使用（各行で不要な項目は null・税設定は各行で有効） |
 | `Company`（既存拡張） | **追加列のみ**: partnerRoles text[](`customer`/`supplier`/`consignor_artist`/`store`/`subcontractor`), paymentTermId?, billingTermId? | 既存の顧客データ（kind='customer'）は `partnerRoles=['customer']` の更新パッチ（原則 7。§9.3） |
 | `AkebonoAppConfig` / `BusinessSegment` | §2.2 | |
 | `ItemSetting`（F-31） | id, appKey, entity, itemKey, formVisible?, formRequired?, listVisible?, displayOrder?, labelOverride? | **差分のみ保存**（未設定 = カタログ既定 = 下位互換）。カタログ（基本項目セット + 業種別既定）はコード上のシードが SoT（scm-platform ADR-039 の app_managed_item + tenant_app_item を単一テナント向けに簡約） |
@@ -187,7 +191,7 @@ flowchart TD
 | `InventoryBalance` | skuId, warehouseId, qty, asOf | **導出キャッシュ**（SoT は台帳）。伝票確定時に差分更新 + `POST /recompute` の全再計算（手動回復パス = 原則 6） |
 | `SalesRecord` | id, salesDate, companyId(得意先), segmentId, skuId, qty, unitPrice, amount, costPrice?, channel?, billingType?, sourceKind(`manual`/`shipment`/`import`/`monthly_bulk`), sourceRef?, invoiceId?(請求済みリンク), correctionOf?(赤黒元) | **売上の SoT（明細）**・記録系・訂正は赤黒。月次集約はサーバー導出。取込冪等キーは ImportRun 単位の commitToken + 行ハッシュ。**monthly_bulk の再登録（同一 月 × 得意先 × セグメント）はサーバーが旧有効行との差分を赤黒で自動計上**（集計結果は upsert と同値 = 互換 API の冪等性を維持しつつ台帳は追記のみ） |
 | `Invoice` + `InvoiceLine` | 番号, companyId, segmentId?(null = 複数セグメント合算。明細行はセグメント保持), periodFrom/To, invoiceType(`sales` 通常/`consignment_margin` 委託マージン), status(`draft`/`issued`/`paid`/`void`), issuedAt, totalAmount, creditFor?(赤伝元) | **確定系**: draft は洗い替え再生成可（冪等）・**issued 以降は不変**・訂正は赤伝（undeux DB-07 準拠）。締めの二重生成防止は**部分一意 UNIQUE(companyId, invoiceType, periodFrom, COALESCE(segmentId,'ALL')) WHERE status='draft'**（draft は同時に 1 世代のみ。**issued/void/赤伝/再発行は一意制約の対象外**なので赤伝 → 再発行のフローと両立する） |
-| `PaymentNotice` + 明細 | companyId(作家), segmentId, period, 対象 SalesRecord 明細, marginRate スナップショット, payableAmount, status(`draft`/`confirmed`/`paid`) | 確定系。委託条件は**発行時点の率をスナップショット**（後の率改定に影響されない） |
+| `PaymentNotice` + 明細 | companyId(作家), segmentId, period, 対象 SalesRecord 明細, **精算条件スナップショット（算定方式・率・単価解決結果・税設定）**, payableAmount, status(`draft`/`confirmed`/`paid`) | 確定系。委託条件は**発行時点の設定一式をスナップショット**（後の設定変更に影響されない = 第 2 巡決定）。マージン請求（Invoice invoiceType=consignment_margin）側も同様に**ヘッダ属性へ**スナップショットを格納する |
 | `PaymentReceipt` | invoiceId, receivedAt, amount, method | 記録系（入金消込・部分入金可） |
 | `ImportRun` / `ImportRowError` | §5 | 記録系 |
 
@@ -235,7 +239,7 @@ flowchart LR
 - 解決順: カタログ既定（業種タイプ別）→ ItemSetting 差分 → CustomFieldDef 追加 → **F-16 deny で最終除去**（権限が常に勝つ = F-31-5）
 - 基本項目の「差し引き」= formVisible/listVisible=false（**削除ではない**。データは保持・再表示可能 = ADR-039 同旨）。必須解除は「カタログで必須固定」の項目（コード・数量等の整合必須項目）には適用不可
 - API バリデーション: zod スキーマは「カタログ必須固定」だけを強制し、テナント必須はサーバーで ItemSetting を参照して追加検証（画面と API の二重定義を防ぐため resolveItemSchema を共有）
-- **PF 整合:** scm-platform ADR-039/040（app_managed_item / tenant_app_item / app_master_def）の単一テナント簡約版。マルチテナント化時は tenant_id を付けてそのまま昇格できる形にする
+- **PF 整合:** scm-platform ADR-039/040（app_managed_item / tenant_app_item / app_master_def）の単一テナント簡約版。tenant_id は決定 #11 により v1 から全テーブルが保持済みのため、マルチテナント化時は RLS の有効化と実テナント値の運用開始のみで昇格できる
 
 ---
 
@@ -256,7 +260,7 @@ flowchart LR
 - **原本保全**: アップロードファイルは GCS（documents 方式）に保存し ImportRun から参照（再取込・監査用）
 - **冪等**: ImportRun ごとの commitToken + 対象エンティティの自然キー upsert。同一ファイルの再実行は「更新 0 件」に収束する（warehouse の commit + file_hash 方式を簡約）
 - **部分成功**: エラー行は隔離し健全行を反映（原則 4）。結果は `applied / skipped / failed` の 3 計数で報告
-- 取消（F-32-5): マスタ系 = 反映時に旧値 JSON を ImportRun に保全 → 復元。トランザクション系 = 赤黒一括生成。**方式の確定は discussion-points #9**
+- 取消（F-32-5): マスタ系 = 反映時に旧値 JSON を ImportRun に保全 → 復元（**取込後に更新された行は復元スキップ + 警告** = updated_at ガードで lost update を防ぐ）。トランザクション系 = 赤黒一括生成。**決定 #9（2026-07-20）で確定**
 
 ### 5.2 マッピングメタモデル
 
@@ -278,7 +282,7 @@ flowchart LR
 - **権限:** 取込元定義・マッピング定義・実行・取消はすべて**管理者限定**（機能キー akebono-imports + admin ガード）
 - **SSRF 対策:** API pull（F-32-1）と画像 URL 取込（F-21-5）はサーバー側の外部アクセスであるため、① https のみ許可 ② プライベート IP・リンクローカル・メタデータエンドポイントへの解決を拒否 ③ リダイレクトは 3 回まで + 各ホップで再検証 ④ 応答サイズ上限 を実装要件とする
 - **シークレット登録の手動ステップ排除（原則 1）:** API 接続のシークレットは既存 `scripts/setup-deploy-secrets.ps1` の拡張（または管理画面からの登録 API → Secret Manager 書込）で完結させ、コンソール手作業を標準手順にしない
-- **原本・エラー行の扱い:** 取込原本とエラー行原文は業務データと同じ機密度（C2 相当）で扱い、参照は管理者限定。保持期間は discussion-points #14
+- **原本・エラー行の扱い:** 取込原本とエラー行原文は業務データと同じ機密度（C2 相当）で扱い、参照は管理者限定。保持期間は 1 年（決定 #14・2026-07-20。超過分は自動削除 or アーカイブ）
 
 ---
 
@@ -289,8 +293,8 @@ flowchart LR
 | リソース | エンドポイント（代表） | 備考 |
 |---|---|---|
 | アプリ設定 | `GET/PUT /v1/akebono/apps`・`POST /apps/apply-preset` | 管理者。preset 適用は差分提示 → 確定の 2 段 |
-| セグメント・各マスタ | 既存汎用マスタ機構 `/v1/masters/{entity}` に追加登録 | business-segments / warehouses / units / tax-rates / payment-terms / consignment-terms / variant-axis-templates / product-categories（原則 3: マスタ CRUD は registry 追加のみ）。**例外規約: akebono 系マスタは機能ガード（F-16）の対象に含める**（既存の「/v1/masters はデータ面のためガード対象外」の例外。consignment-terms 等の C2 取引条件を機能 deny 利用者が参照できる穴を塞ぐ。registry にエンティティ → 機能キーの対応を持たせ middleware で判定。対応例: consignment-terms / payment-terms → `akebono-billing`、warehouses → `akebono-inventory`、business-segments / units / tax-rates / variant-axis-templates / product-categories → `akebono-products`） |
-| 商品 | `GET/POST/PATCH /v1/akebono/products`・`/products/:id/skus`（一括 upsert = マトリクス保存）・`/products/:id/images`（multipart 相当 base64・並び替え・kind 変更・archive/restore） | 一覧は **必須ページング**（page/size + フィルタ）。PATCH は部分更新（Object.hasOwn フィルタ = 既存 Zod v4 対策踏襲） |
+| セグメント・各マスタ | 既存汎用マスタ機構 `/v1/masters/{entity}` に追加登録 | business-segments / warehouses / units / tax-rates / payment-terms / consignment-terms / variant-axis-templates / product-categories / product-image-sections（原則 3: マスタ CRUD は registry 追加のみ）。**例外規約: akebono 系マスタは機能ガード（F-16）の対象に含める**（既存の「/v1/masters はデータ面のためガード対象外」の例外。consignment-terms 等の C2 取引条件を機能 deny 利用者が参照できる穴を塞ぐ。registry にエンティティ → 機能キーの対応を持たせ middleware で判定。対応例: consignment-terms / payment-terms → `akebono-billing`、warehouses → `akebono-inventory`、business-segments / units / tax-rates / variant-axis-templates / product-categories / product-image-sections → `akebono-products`） |
+| 商品 | `GET/POST/PATCH /v1/akebono/products`・`/products/:id/skus`（一括 upsert = マトリクス保存）・`/products/:id/images`（base64・並び替え・セクション変更・archive/restore） | 一覧は **必須ページング**（page/size + フィルタ）。PATCH は部分更新（Object.hasOwn フィルタ = 既存 Zod v4 対策踏襲）。画像セクション設定は汎用マスタ `product-image-sections`（本表のマスタ行参照） |
 | 発注 | `GET/POST /v1/akebono/purchase-orders`・`POST /:id/transition` | 正順状態機械・FOR UPDATE |
 | 生産 | `GET/POST /v1/akebono/production-orders`・`POST /:id/results` | 実績追記 |
 | 入荷/出荷 | `GET/POST /v1/akebono/inbound-plans`・`POST /inbound-plans/:id/results`・`POST /v1/akebono/inbound-results`（plan 無しの直接登録）・`GET/POST /v1/akebono/outbound-plans`・`POST /outbound-plans/:id/results`・`POST /v1/akebono/outbound-results`（同・直接登録）・`POST /:id/transition` | 予定/指示（設定系）と実績（追記のみ）を分離。実績登録で在庫台帳へ（同一トランザクション内・明細行単位の冪等キー） |
@@ -351,7 +355,7 @@ graph TD
 | 一覧 → 詳細 | UiDataTable（**サーバーページング対応を拡張**: page/total を props 化）+ UiDrawer。モバイルはカード型（mobileMode） |
 | 伝票入力 | ヘッダ + 明細行エディタ（新規 widget `LineItemEditor`: SKU オートコンプリート・数量/単価・小計）。UiSchemaForm は F-31 の解決済みスキーマを受ける |
 | SKU マトリクス | 新規 widget `SkuMatrix`（縦 = 軸1・横 = 軸2。在庫照会/発注/棚卸で共用）。undeux の SKU マトリクス UI を Vue で再実装 |
-| 画像ギャラリー | 新規 widget `ProductImageGallery`（用途バッジ sample/production・並び替え・主画像指定）。アップロードは documents の実装を流用 |
+| 画像ギャラリー | 新規 widget `ProductImageGallery`（**セクション別グループ表示** = F-21-6 の設定に追随・セクションバッジ・並び替え・主画像指定）。アップロードは documents の実装を流用 |
 | 集計 | 既存 charts（Line/Bar/Donut）+ UiKpiCard。セグメント並列比較は KPI 行の横並び + 凡例統一 |
 | 取込ウィザード | ステップ UI（アップロード → マッピング → 検証 → プレビュー → 実行）。UiModal + 既存ステージ表示パターン（F-06b-3 の「ステージ → 実行」と同型） |
 
@@ -414,21 +418,26 @@ graph TD
 | # | リスク | 対応 |
 |---|---|---|
 | 1 | スコープ肥大（9 アプリ + 基盤 3 種を一括実装すると Phase 5 反復が回らない） | §8 段階分け（要件 §8）どおり v1 を絞り、モックアップで全体像 → 実装はバッチ分割（既存の段階移行実績パターン） |
-| 2 | 委託精算の金銭フロー誤解釈（マージン請求の向き・作家支払額の定義） | **実装前に discussion-points #5 を壁打ちで確定**。精算式は ConsignmentTerm に閉じ込め、伝票生成ロジックを差し替え可能にする |
+| 2 | 委託精算の金銭フロー誤解釈（マージン請求の向き・作家支払額の定義） | 精算方向 = 決定 #5・算定/債務確定/税 = 第 2 巡決定（いずれも 2026-07-20）で確定・反映済み。**精算式は ConsignmentTerm の設定に閉じ込め**、発行時スナップショットで後の設定変更から遮断する。残リスクは設定の初期値誤りのみ → モックアップ検証（自社の実精算と突合）で確認 |
 | 3 | 一覧の全件ハイドレーション踏襲による性能劣化 | XA-6 サーバーページングを基盤段階で導入（後付けは全画面改修になるため先行必須） |
 | 4 | 既存 sales_monthly 利用箇所（インサイト・チャットボット・ETL）の移行漏れ | 移行バッチ時に `sales_monthly` / `useSales` 参照を grep 全件確認（Push 前チェック #6）し、片側切替を作らない |
 | 5 | 取込の誤反映によるマスタ汚損 | dry-run 必須 UI・旧値スナップショット・エラー行隔離。トランザクション系は赤黒でしか取り消さない（巻き戻し禁止 = 原則 2） |
 | 6 | scm-platform 統合設計との将来乖離 | 「PF 整合」注記の項目（アプリカタログ・項目カスタマイズ・mart 名/グレイン・取込メタモデル）は命名・構造を合わせ、乖離が必要な場合は本書に設計判断として記録 |
-| 7 | 画像・取込ファイルのストレージコスト | 画像 5MB × 20 枚/商品の上限・取込原本の保持期間ポリシー（既定 1 年 → discussion-points #14）で制御 |
+| 7 | 画像・取込ファイルのストレージコスト | 画像 5MB × 20 枚/商品の上限・取込原本の保持期間 1 年（決定 #14・2026-07-20）で制御 |
+| 8 | 委託精算のマージン率の定義（店舗取り分 or 当社取り分）が未確定（決定 #5 の付帯 = 「設定で柔軟に」） | **モックアップは実運用に整合する「店舗取り分」で実装**（当社の店舗宛請求 = 売上 × (1 − 店舗取り分率)。店舗取り分 + 作家支払 + 当社粗利 = 売上）。受け入れ基準に「店舗請求 − 作家支払 ≥ 0」を追加。**最終定義は壁打ちでオペレーター確認**（自社の実精算と突合） |
 
 ## 11. 受け入れ基準（Phase 5 ゲートへ向けて）
 
-- [ ] discussion-points の全論点がオペレーター判断済み（壁打ち完了）
-- [ ] サイトマップ・画面定義・I/F 6 視点チェック済み（§6.3 は宣言。モックアップ検証で確定）
-- [ ] データ設計が正規化原則・データ 3 分類・SoT 宣言（§3.6）を満たす
-- [ ] モックアップがダミーデータ（陶磁器 + SI/SaaS の自社シナリオ）で UC-09〜13 を一気通貫で操作できる
-- [ ] 全データフロー（伝票 → 在庫 → 売上 → 請求 → mart）が I/F レベルで矛盾なく通る
+> **モックアップ実装状況（2026-07-20）:** v1 全域（12 ページ + 13 composable）を `mockup/` に実装。typecheck / build / 単体テスト（委託精算の三者整合・税・在庫畳込・採番のリグレッションテスト含む）green。独立ロールレビュー 4 観点 + 修正の再レビューを実施し、BLOCKER/MAJOR の未解決指摘ゼロ。
+
+- [x] discussion-points の全論点がオペレーター判断済み（第 1 巡 14 論点 + 第 2 巡 #5 付帯確認 3 点・2026-07-20 完了。**未決ゼロ**）
+- [x] サイトマップ・画面定義（12 ページ）実装済み。I/F 6 視点はモックアップで検証（在庫台帳導出・請求確定系・委託精算の設定注入純関数）
+- [x] データ設計が正規化原則・データ 3 分類・SoT 宣言（§3.6）を満たす（在庫 = 台帳 SoT・売上 = 明細 SoT・請求 = 発行後不変）
+- [x] モックアップがダミーデータ（陶磁器 + SI/SaaS + アパレル SKU）で UC-09〜13 を一気通貫で操作できる（商品→入荷→在庫→出荷→店舗預け→売上→請求/委託精算）
+- [x] 全データフロー（伝票 → 在庫 → 売上 → 請求）が I/F レベルで矛盾なく通る（冪等キー・赤黒訂正・発行後不変を含む）
+- [x] **委託精算の整合: 店舗請求 − 作家支払 = 当社粗利 ≥ 0**（銀座例: 10,080 − 8,640 = 1,440 = 売上の 10%）
+- [ ] **壁打ち残（実装後の確認）: 委託精算のマージン率の定義（店舗取り分 or 当社取り分）** をオペレーターと確定する（リスク #8）
 
 ## 12. 未決事項
 
-`../phase3/akebono-menu-discussion-points.md` に選択肢・トレードオフ・推奨付きで 14 論点を集約した。壁打ちはそちらを起点に行う。
+**未決ゼロ**（2026-07-20 時点）。`../phase3/akebono-menu-discussion-points.md` の 14 論点は第 1 巡で、#5 の付帯確認 3 点（支払算定・債務確定・税）は第 2 巡で**設定化**の方針により決定した（決定記録は同ファイル冒頭）。設定項目の値域・既定値の妥当性は Phase 5 のモックアップ検証（自社の実精算との突合）で確認する。

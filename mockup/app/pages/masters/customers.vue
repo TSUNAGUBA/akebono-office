@@ -10,14 +10,26 @@ import {
 } from '~/components/masters/MasterShell.vue'
 import type { Company, CustomValues } from '~/types/domain'
 import type { FieldDef, TableColumn } from '~/types/ui'
+import type { PartnerRole } from '~/types/akebono'
+import { PARTNER_ROLE_LABELS, partnerRolesOf } from '~/utils/akebono'
 
 const crud = useMasterCrudAsync('companies', 'c')
 const industryCrud = useMasterCrudAsync('industries', 'ind')
 const memberCrud = useMasterCrudAsync('members', 'm')
 const { itemsOf } = useCodeMaster()
 const { defsFor, formSchemaFor } = useCustomFields()
+const { tbl } = useMockDb()
 const toast = useToast()
 const confirm = useConfirm()
+
+// 取引ロール・取引条件（F-30-1。Akebono 業務アプリ群の発注/出荷/委託精算の選択肢連携に使う）
+const partnerRoleOptions = Object.entries(PARTNER_ROLE_LABELS).map(([value, label]) => ({ value, label }))
+const paymentTermOptions = computed(() =>
+  tbl('paymentTerms').value.filter(p => p.active !== false).map(p => ({ value: p.id, label: p.name })))
+function rolesLabel(c: Company): string {
+  const roles = partnerRolesOf(c)
+  return roles.length > 0 ? roles.map(r => PARTNER_ROLE_LABELS[r as PartnerRole] ?? r).join('、') : '—'
+}
 
 // ---------- 参照ヘルパー ----------
 
@@ -115,6 +127,12 @@ const formFields = computed<FieldDef[]>(() => [
   { key: 'location', label: '所在地', type: 'text' },
   { key: 'description', label: '事業内容', type: 'textarea' },
   { key: 'ownerMemberId', label: '担当メンバー', type: 'select', options: memberOptions.value },
+  {
+    key: 'partnerRoles', label: '取引ロール（複数可）', type: 'multiselect', options: partnerRoleOptions,
+    hint: '得意先/仕入先/委託仕入先(作家)/店舗/外注先。AKEBONO 業務の発注・出荷・委託精算の選択肢に反映されます',
+  },
+  { key: 'billingTermId', label: '回収条件（得意先）', type: 'select', options: paymentTermOptions.value, emptyLabel: '（未設定）' },
+  { key: 'paymentTermId', label: '支払条件（仕入先）', type: 'select', options: paymentTermOptions.value, emptyLabel: '（未設定）' },
   ...formSchemaFor('company'),
 ])
 
@@ -130,6 +148,7 @@ const detailRows = computed(() => {
     { label: '所在地', value: c.location || '—' },
     { label: '事業内容', value: c.description || '—' },
     { label: '担当', value: memberName(c.ownerMemberId) },
+    { label: '取引ロール', value: rolesLabel(c) },
     { label: '状態', value: c.active ? '有効' : '無効' },
   ]
   for (const d of defsFor('company')) {
@@ -148,7 +167,7 @@ function openCreate(): void {
   selectedId.value = null
   form.value = {
     name: '', aliasesText: '', industryIds: [], primaryIndustryId: '', size: '',
-    location: '', description: '', ownerMemberId: '', custom: {},
+    location: '', description: '', ownerMemberId: '', partnerRoles: ['customer'], billingTermId: '', paymentTermId: '', custom: {},
   }
   errors.value = {}
   mode.value = 'create'
@@ -164,6 +183,9 @@ async function openEdit(): Promise<void> {
     aliasesText: s.aliases.join(', '),
     primaryIndustryId: s.primaryIndustryId ?? '',
     ownerMemberId: s.ownerMemberId ?? '',
+    partnerRoles: partnerRolesOf(s),
+    billingTermId: s.billingTermId ?? '',
+    paymentTermId: s.paymentTermId ?? '',
   }
   errors.value = {}
   mode.value = 'edit'
@@ -206,6 +228,9 @@ async function save(): Promise<void> {
     description: String(form.value.description ?? ''),
     ownerMemberId: String(form.value.ownerMemberId ?? '') || null,
     fiscalStartMonth: null,
+    partnerRoles: ((form.value.partnerRoles as string[] | undefined) ?? []),
+    billingTermId: String(form.value.billingTermId ?? '') || null,
+    paymentTermId: String(form.value.paymentTermId ?? '') || null,
     custom,
   }
   if (mode.value === 'edit' && selectedId.value) payload.id = selectedId.value

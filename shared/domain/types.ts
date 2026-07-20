@@ -112,6 +112,16 @@ export interface Company {
   fiscalStartMonth: number | null // 自社のみ使用
   active: boolean
   custom: CustomValues
+  // ---- Akebonoメニュー（業務アプリ群）拡張。追加列のみ = 既存データ後方互換（原則7・F-30-1） ----
+  /**
+   * 取引ロール（得意先/仕入先/委託仕入先(作家)/店舗/外注先。複数保持）。
+   * 未設定 = 顧客(kind='customer')は ['customer'] 相当・自社は [] として扱う（partnerRolesOf ヘルパー）。
+   */
+  partnerRoles?: string[]
+  /** 支払条件（PaymentTerm 参照。仕入先向け） */
+  paymentTermId?: string | null
+  /** 回収条件（PaymentTerm 参照。得意先向け） */
+  billingTermId?: string | null
 }
 
 export interface Contact {
