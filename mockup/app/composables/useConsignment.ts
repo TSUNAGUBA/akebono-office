@@ -38,6 +38,14 @@ export function useConsignment() {
   function taxRateValue(id: string | null | undefined): number {
     return taxRates.value.find(t => t.id === id)?.rate ?? 0
   }
+  /** 月末日（YYYY-MM-DD。閏年考慮・Date 非依存） */
+  function monthEnd(month: string): string {
+    const y = Number(month.slice(0, 4))
+    const m = Number(month.slice(5, 7))
+    const isLeap = y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0)
+    const days = [31, isLeap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1] ?? 31
+    return `${month}-${String(days).padStart(2, '0')}`
+  }
 
   /** purchase_cost 方式の単価解決（①直近仕入実績 → ② SKU 原価 → ③ 商品標準原価） */
   function resolveUnitCost(skuId: string): number {
@@ -74,12 +82,13 @@ export function useConsignment() {
     const rate = taxRateValue(products.productById(products.skuById(rows[0]!.skuId)?.productId ?? '')?.taxRateId)
     const tax = calcTax(subtotal, rate, false, 'floor')
     const id = nextId('invoices', 'inv')
-    const lines = rows.map(r => ({
-      id: nextId('invoices', 'invl') + '-' + r.id,
+    // 明細行 id はヘッダ id + index で一意（nextId は別 prefix を採番できず定数化するため使わない）
+    const lines = rows.map((r, idx) => ({
+      id: `${id}-l${idx}`,
       description: `${r.salesDate} ${products.skuById(r.skuId) ? products.skuLabel(products.skuById(r.skuId)!) : r.skuId}（${r.qty}）`,
       amount: r.amount,
     }))
-    if (tax > 0) lines.push({ id: nextId('invoices', 'invl') + '-tax', description: `消費税（${(rate * 100).toFixed(0)}%）`, amount: tax })
+    if (tax > 0) lines.push({ id: `${id}-tax`, description: `消費税（${(rate * 100).toFixed(0)}%）`, amount: tax })
     const draft: Invoice = {
       id, code: nextCode(invoices.value.map(v => v.code), 'INV'),
       companyId: input.companyId, segmentId: null, periodFrom: input.periodFrom, periodTo: input.periodTo,
@@ -165,7 +174,7 @@ export function useConsignment() {
     const rows = consignableSales(input.segmentId, input.month)
     if (rows.length === 0) return { ok: false, error: { code: 'AKO-BIL-006', message: '対象の未精算 店舗売上がありません' } }
     const periodFrom = `${input.month}-01`
-    const periodTo = `${input.month}-31`
+    const periodTo = monthEnd(input.month)
     const newInvoices: Invoice[] = []
     const newNotices: PaymentNotice[] = []
     // id は蓄積配列を含めて採番する（ループ内で db へ書き戻さないため nextId 単独では重複する）
@@ -189,14 +198,19 @@ export function useConsignment() {
       const total = snapshot.taxIncluded ? billed : billed + tax
       const id = nextInvoiceId()
       const storeShare = Math.round(salesTotal * (snapshot.marginRate ?? 0))
+      // 外税は税明細を加算（明細合計 = totalAmount）。内税は billed に税込のため税明細を加算せず l1 に内訳注記
+      const l1desc = `委託売上 ${salesTotal.toLocaleString()} 円 − 店舗取り分 ${((snapshot.marginRate ?? 0) * 100).toFixed(0)}%（${storeShare.toLocaleString()} 円）= 当社請求`
+      const lines = snapshot.taxIncluded
+        ? [{ id: `${id}-l1`, description: `${l1desc}${tax > 0 ? `（うち消費税 ${tax.toLocaleString()} 円）` : ''}`, amount: billed }]
+        : [
+            { id: `${id}-l1`, description: l1desc, amount: billed },
+            ...(tax > 0 ? [{ id: `${id}-l2`, description: `消費税（${(rate * 100).toFixed(0)}%）`, amount: tax }] : []),
+          ]
       newInvoices.push({
         id, code: nextCode([...invoices.value, ...newInvoices].map(v => v.code), 'INV'),
         companyId: storeId, segmentId: input.segmentId, periodFrom, periodTo, invoiceType: 'consignment_margin',
         status: 'issued', issuedAt: nowJstIso(), totalAmount: total, creditFor: null,
-        lines: [
-          { id: `${id}-l1`, description: `委託売上 ${salesTotal.toLocaleString()} 円 − 店舗取り分 ${((snapshot.marginRate ?? 0) * 100).toFixed(0)}%（${storeShare.toLocaleString()} 円）= 当社請求`, amount: billed },
-          ...(tax > 0 ? [{ id: `${id}-l2`, description: `消費税（${(rate * 100).toFixed(0)}%${snapshot.taxIncluded ? '・内税' : ''}）`, amount: tax }] : []),
-        ],
+        lines,
         snapshot, sourceRecordIds: storeRows.map(r => r.id),
       })
       for (const r of storeRows) settleByRecord.set(r.id, id)
