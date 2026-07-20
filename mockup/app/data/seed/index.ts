@@ -14,7 +14,15 @@ import type {
   TaskPlan, UptimeDaily, WeeklyReport, WorkflowRequest, WorkflowRoute, WorkCategory, Note,
 } from '~/types/domain'
 import type { WeeklyInsightRecord } from '../../../../shared/domain/weekly-insight'
+import type {
+  AkebonoAppConfig, BusinessSegment, ConsignmentTerm, ImportMapping, ImportRun, ImportSource,
+  InboundPlan, InboundResult, InventoryTransaction, Invoice, ItemSetting, OutboundPlan,
+  OutboundResult, PaymentNotice, PaymentReceipt, PaymentTerm, Product, ProductCategory,
+  ProductImage, ProductImageSection, ProductSku, ProductionOrder, PurchaseOrder, PurchaseRecord,
+  SalesRecord, TaxRate, Unit, VariantAxisTemplate, Warehouse,
+} from '~/types/akebono'
 import * as core from './core'
+import * as akebono from './akebono'
 import * as attendance from './attendance'
 import * as shifts from './shifts'
 import * as reports from './reports'
@@ -87,6 +95,36 @@ export interface MockDbShape {
   salesMonthly: SalesMonthly[]
   /** 週次 AI インサイトの保管（バッチ7j。導出キャッシュ = 再生成で上書き） */
   weeklyInsights: WeeklyInsightRecord[]
+  // ---- Akebonoメニュー（業務アプリ群）。SoT: phase5/akebono-menu-design.md ----
+  businessSegments: BusinessSegment[]
+  warehouses: Warehouse[]
+  units: Unit[]
+  taxRates: TaxRate[]
+  paymentTerms: PaymentTerm[]
+  consignmentTerms: ConsignmentTerm[]
+  variantAxisTemplates: VariantAxisTemplate[]
+  productCategories: ProductCategory[]
+  productImageSections: ProductImageSection[]
+  products: Product[]
+  productSkus: ProductSku[]
+  productImages: ProductImage[]
+  purchaseOrders: PurchaseOrder[]
+  productionOrders: ProductionOrder[]
+  inboundPlans: InboundPlan[]
+  inboundResults: InboundResult[]
+  purchaseRecords: PurchaseRecord[]
+  outboundPlans: OutboundPlan[]
+  outboundResults: OutboundResult[]
+  inventoryTransactions: InventoryTransaction[]
+  salesRecords: SalesRecord[]
+  invoices: Invoice[]
+  paymentNotices: PaymentNotice[]
+  paymentReceipts: PaymentReceipt[]
+  importSources: ImportSource[]
+  importMappings: ImportMapping[]
+  importRuns: ImportRun[]
+  itemSettings: ItemSetting[]
+  akebonoAppConfigs: AkebonoAppConfig[]
 }
 
 export function buildSeed(): MockDbShape {
@@ -102,7 +140,7 @@ export function buildSeed(): MockDbShape {
       { id: 'wc-04', name: '社内業務', displayOrder: 4, active: true },
     ],
     notes: [],
-    companies: core.seedCompanies,
+    companies: [...core.seedCompanies, ...akebono.seedAkebonoCompanies],
     contacts: core.seedContacts,
     relationTypes: core.seedRelationTypes,
     companyRelations: core.seedCompanyRelations,
@@ -168,5 +206,35 @@ export function buildSeed(): MockDbShape {
     appConfigs: [{ key: 'reportInputMode', value: 'both' }],
     salesMonthly: buildSalesMonthly(),
     weeklyInsights: [], // 週次インサイトは生成時に保管（シードなし = 「生成」ボタンから作る）
+    // ---- Akebonoメニュー（業務アプリ群） ----
+    businessSegments: akebono.seedBusinessSegments,
+    warehouses: akebono.seedWarehouses,
+    units: akebono.seedUnits,
+    taxRates: akebono.seedTaxRates,
+    paymentTerms: akebono.seedPaymentTerms,
+    consignmentTerms: akebono.seedConsignmentTerms,
+    variantAxisTemplates: akebono.seedVariantAxisTemplates,
+    productCategories: akebono.seedProductCategories,
+    productImageSections: akebono.seedProductImageSections,
+    products: akebono.seedProducts,
+    productSkus: akebono.seedProductSkus,
+    productImages: akebono.seedProductImages,
+    purchaseOrders: akebono.seedPurchaseOrders,
+    productionOrders: akebono.seedProductionOrders,
+    inboundPlans: akebono.seedInboundPlans,
+    inboundResults: akebono.seedInboundResults,
+    purchaseRecords: akebono.seedPurchaseRecords,
+    outboundPlans: akebono.seedOutboundPlans,
+    outboundResults: akebono.seedOutboundResults,
+    inventoryTransactions: akebono.seedInventoryTransactions,
+    salesRecords: akebono.seedSalesRecords,
+    invoices: akebono.seedInvoices,
+    paymentNotices: akebono.seedPaymentNotices,
+    paymentReceipts: akebono.seedPaymentReceipts,
+    importSources: akebono.seedImportSources,
+    importMappings: akebono.seedImportMappings,
+    importRuns: akebono.seedImportRuns,
+    itemSettings: akebono.seedItemSettings,
+    akebonoAppConfigs: akebono.seedAkebonoAppConfigs,
   }
 }
