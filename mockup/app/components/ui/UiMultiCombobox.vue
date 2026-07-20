@@ -5,6 +5,7 @@
  * - 選択済みはチップ表示（× で解除）。single 指定時は 1 件のみ（選び直しで置換）
  * - Enter = 絞り込み先頭の未選択項目を追加 / Esc = 候補を閉じる
  * - tag/tagTone（任意）= 候補行・選択チップに区分バッジを添える（雇用区分等。バッチ7k）
+ * - 候補リストは下に収まらないとき上方向に開く（モバイルのボトムシートモーダル対応）
  */
 import { X } from 'lucide-vue-next'
 import type { Tone } from '~/types/ui'
@@ -25,6 +26,25 @@ const open = ref(false)
 const root = ref<HTMLElement | null>(null)
 const inputEl = ref<HTMLInputElement | null>(null)
 const listboxId = useId()
+
+/**
+ * 候補リストを上に開くか（オペレーター報告 2026-07-20: モバイルのボトムシート型モーダルでは
+ * 入力欄が画面下端近くにあり、下方向のリストが画面外・フッターに隠れて選択できない）。
+ * 開くたびに実測し、下に収まらず上の方が広ければ上方向に開く
+ */
+const openUp = ref(false)
+const LIST_MAX_PX = 240 // max-h-56 (224px) + マージン
+
+function updateDirection(): void {
+  const rect = root.value?.getBoundingClientRect()
+  if (!rect) return
+  const below = window.innerHeight - rect.bottom
+  openUp.value = below < LIST_MAX_PX && rect.top > below
+}
+
+watch(open, (v) => {
+  if (v) updateDirection()
+})
 
 const selectedSet = computed(() => new Set(props.modelValue))
 const filtered = computed(() => {
@@ -129,7 +149,8 @@ function onFocusOut(e: FocusEvent): void {
     <div
       v-if="open"
       :id="listboxId"
-      class="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-lg border border-line bg-surface py-1 shadow-lg"
+      class="absolute z-20 max-h-56 w-full overflow-auto rounded-lg border border-line bg-surface py-1 shadow-lg"
+      :class="openUp ? 'bottom-full mb-1' : 'mt-1'"
       role="listbox"
       :aria-multiselectable="!single"
     >
