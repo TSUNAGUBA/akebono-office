@@ -281,7 +281,6 @@ DATABASE_URL=postgresql://... AUTH_MODE=dev npm run dev
   403 で reason が `insufficientPermissions` の場合はスコープ不足 = AI アシスタントのカレンダー連携から
   Google に再接続する（drive.readonly の許可が追加される）
 
-
 | 症状 | 原因と対処 |
 |---|---|
 | deploy-api が「secrets 未設定のためスキップ」 | `setup-deploy-secrets.ps1 -DatabaseUrl ...` を実行して API 用 secrets を設定 |

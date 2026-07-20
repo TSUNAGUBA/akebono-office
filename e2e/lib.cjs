@@ -40,4 +40,4 @@ function summary(suite) {
   }
 }
 
-module.exports = { check, withPage, summary }
+module.exports = { check, withPage, summary, CHROMIUM_PATH }

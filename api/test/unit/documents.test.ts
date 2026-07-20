@@ -5,7 +5,50 @@
  */
 import { describe, expect, it } from 'vitest'
 import { buildV4SignParts, sanitizeFilename, strictEncode } from '../../src/lib/storage'
-import { wouldCycle } from '../../src/routes/documents'
+import { driveForbiddenHint, googleErrorDetail, wouldCycle } from '../../src/routes/documents'
+
+describe('googleErrorDetail / driveForbiddenHint（ドライブ 403 の自己診断。PR #63 R1 M-2/M-3）', () => {
+  const gRes = (body: unknown, status = 403): Response =>
+    new Response(typeof body === 'string' ? body : JSON.stringify(body), { status })
+
+  it('reason と message を結合して返す', async () => {
+    const g = await googleErrorDetail(gRes({
+      error: { message: 'Google Drive API has not been used in project 123', errors: [{ reason: 'accessNotConfigured' }] },
+    }))
+    expect(g.reason).toBe('accessNotConfigured')
+    expect(g.detail).toBe('accessNotConfigured: Google Drive API has not been used in project 123')
+  })
+
+  it('新形式（errors[].reason が汎用値・error.status に実理由）でも reason を取れる', async () => {
+    const g = await googleErrorDetail(gRes({
+      error: { message: 'Drive API disabled', status: 'PERMISSION_DENIED', errors: [{ reason: 'forbidden' }] },
+    }))
+    expect(g.reason).toBe('forbidden')
+    expect(g.raw).toContain('PERMISSION_DENIED')
+  })
+
+  it('非 JSON ボディ・空ボディは空文字（例外にしない）', async () => {
+    expect((await googleErrorDetail(gRes('<html>error</html>'))).detail).toBe('')
+    expect((await googleErrorDetail(gRes({}))).detail).toBe('')
+  })
+
+  it('message は 200 コードポイントで切り詰める', async () => {
+    const g = await googleErrorDetail(gRes({ error: { message: 'x'.repeat(500) } }))
+    expect([...g.detail].length).toBe(200)
+  })
+
+  it('ヒントはボディ全文で判定: 設定不備系・理由不明の 403 に付け、レート系には付けない', () => {
+    const cfg = JSON.stringify({ error: { message: 'API disabled', errors: [{ reason: 'accessNotConfigured' }] } })
+    const statusOnly = JSON.stringify({ error: { message: 'x', status: 'PERMISSION_DENIED', errors: [{ reason: 'forbidden' }] } })
+    const rate = JSON.stringify({ error: { message: 'Rate limit', errors: [{ reason: 'rateLimitExceeded' }] } })
+    expect(driveForbiddenHint(403, cfg)).toContain('drive.googleapis.com')
+    expect(driveForbiddenHint(403, statusOnly)).toContain('drive.googleapis.com')
+    expect(driveForbiddenHint(403, 'insufficientPermissions ...')).toContain('再接続')
+    expect(driveForbiddenHint(403, '')).toContain('drive.googleapis.com')
+    expect(driveForbiddenHint(403, rate)).toBe('')
+    expect(driveForbiddenHint(500, cfg)).toBe('')
+  })
+})
 
 describe('sanitizeFilename / strictEncode（R1 M-1）', () => {
   it('パス区切り・制御文字を除去し、危険な名前はフォールバックする', () => {
