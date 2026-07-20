@@ -39,27 +39,40 @@ const DRIVE_FILES_URL = 'https://www.googleapis.com/drive/v3/files'
  * 「HTTP 403」だけでは API 無効・スコープ不足・検証制限のどれか判別できないため、
  * エラーメッセージを自己診断可能にする）。export は単体テスト用（PR #63 R1 M-2）
  */
-export async function googleErrorDetail(res: Response): Promise<{ reason: string; detail: string }> {
+export async function googleErrorDetail(res: Response): Promise<{ reason: string; detail: string; raw: string }> {
+  let raw = ''
   try {
-    const body = await res.json() as { error?: { message?: string; errors?: { reason?: string }[] } }
-    const reason = String(body.error?.errors?.[0]?.reason ?? '')
-    const msg = capCp(String(body.error?.message ?? ''), 200)
-    return { reason, detail: [reason, msg].filter(Boolean).join(': ') }
+    raw = await res.text()
   } catch {
-    return { reason: '', detail: '' }
+    return { reason: '', detail: '', raw: '' }
+  }
+  try {
+    const body = JSON.parse(raw) as {
+      error?: { message?: string; status?: string; errors?: { reason?: string }[] }
+    }
+    // 新形式では errors[].reason に汎用値（forbidden 等）が入り error.status 側に実理由が来るため両方見る
+    const reason = String(body.error?.errors?.[0]?.reason || body.error?.status || '')
+    const msg = capCp(String(body.error?.message ?? ''), 200)
+    return { reason, detail: [reason, msg].filter(Boolean).join(': '), raw }
+  } catch {
+    return { reason: '', detail: '', raw }
   }
 }
 
-/** 設定不備を示す 403 の理由コード（calendar.ts の同期エラー判別と同じ分類 + スコープ不足） */
+/** 設定不備を示す 403 の理由（calendar.ts の同期エラー判別と同じ分類 + スコープ不足） */
 const CONFIG_403_REASONS = /accessNotConfigured|SERVICE_DISABLED|PERMISSION_DENIED|insufficient/i
+/** レート・クォータ系の 403（設定不備ではない = ヒントを出さない） */
+const RATE_403_REASONS = /rateLimit|userRateLimit|dailyLimit|quota/i
 
 /**
- * 403 のときの運用ヒント。レート超過等も 403 を返すため、理由コードが判明していて
- * 設定不備系でない場合はヒントを出さない（PR #63 R1 M-3。理由不明の 403 には出す = 実用優先）
+ * 403 のときの運用ヒント。判定は calendar.ts の先行実装と同様に**エラーボディ全文**へ regex を
+ * 当てる（理由コードが errors[].reason ではなく error.status / details 側や message に来る形式でも
+ * 取りこぼさない = PR #63 R2 指摘）。レート超過等が明示された 403 には出さず、
+ * 設定不備が明示された 403 と理由不明の 403 には出す（実用優先 = R1 M-3 の方針を維持）
  */
-export function driveForbiddenHint(status: number, reason: string): string {
+export function driveForbiddenHint(status: number, bodyText: string): string {
   if (status !== 403) return ''
-  if (reason && !CONFIG_403_REASONS.test(reason)) return ''
+  if (bodyText && !CONFIG_403_REASONS.test(bodyText) && RATE_403_REASONS.test(bodyText)) return ''
   return '。GCP プロジェクト（OAuth クライアントのプロジェクト）で Google Drive API が有効か確認してください'
     + '（gcloud services enable drive.googleapis.com）。スコープ不足の場合は Google に再接続してください'
 }
@@ -523,7 +536,7 @@ export function documentsRoutes(pool: pg.Pool, env: Env): Hono {
     if (!res.ok) {
       const g = await googleErrorDetail(res)
       throw err('AKO-DOC-007',
-        `ドライブの検索に失敗しました（HTTP ${res.status}${g.detail ? ` / ${g.detail}` : ''}）${driveForbiddenHint(res.status, g.reason)}`, 502)
+        `ドライブの検索に失敗しました（HTTP ${res.status}${g.detail ? ` / ${g.detail}` : ''}）${driveForbiddenHint(res.status, g.raw)}`, 502)
     }
     const body = await res.json() as {
       files?: { id: string; name: string; mimeType: string; size?: string; modifiedTime?: string; webViewLink?: string }[]

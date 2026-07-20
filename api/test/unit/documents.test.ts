@@ -19,6 +19,14 @@ describe('googleErrorDetail / driveForbiddenHint（ドライブ 403 の自己診
     expect(g.detail).toBe('accessNotConfigured: Google Drive API has not been used in project 123')
   })
 
+  it('新形式（errors[].reason が汎用値・error.status に実理由）でも reason を取れる', async () => {
+    const g = await googleErrorDetail(gRes({
+      error: { message: 'Drive API disabled', status: 'PERMISSION_DENIED', errors: [{ reason: 'forbidden' }] },
+    }))
+    expect(g.reason).toBe('forbidden')
+    expect(g.raw).toContain('PERMISSION_DENIED')
+  })
+
   it('非 JSON ボディ・空ボディは空文字（例外にしない）', async () => {
     expect((await googleErrorDetail(gRes('<html>error</html>'))).detail).toBe('')
     expect((await googleErrorDetail(gRes({}))).detail).toBe('')
@@ -29,12 +37,16 @@ describe('googleErrorDetail / driveForbiddenHint（ドライブ 403 の自己診
     expect([...g.detail].length).toBe(200)
   })
 
-  it('403 + 設定不備系 reason・理由不明の 403 のみヒントを付ける（レート超過には付けない）', () => {
-    expect(driveForbiddenHint(403, 'accessNotConfigured')).toContain('drive.googleapis.com')
-    expect(driveForbiddenHint(403, 'insufficientPermissions')).toContain('再接続')
+  it('ヒントはボディ全文で判定: 設定不備系・理由不明の 403 に付け、レート系には付けない', () => {
+    const cfg = JSON.stringify({ error: { message: 'API disabled', errors: [{ reason: 'accessNotConfigured' }] } })
+    const statusOnly = JSON.stringify({ error: { message: 'x', status: 'PERMISSION_DENIED', errors: [{ reason: 'forbidden' }] } })
+    const rate = JSON.stringify({ error: { message: 'Rate limit', errors: [{ reason: 'rateLimitExceeded' }] } })
+    expect(driveForbiddenHint(403, cfg)).toContain('drive.googleapis.com')
+    expect(driveForbiddenHint(403, statusOnly)).toContain('drive.googleapis.com')
+    expect(driveForbiddenHint(403, 'insufficientPermissions ...')).toContain('再接続')
     expect(driveForbiddenHint(403, '')).toContain('drive.googleapis.com')
-    expect(driveForbiddenHint(403, 'rateLimitExceeded')).toBe('')
-    expect(driveForbiddenHint(500, 'accessNotConfigured')).toBe('')
+    expect(driveForbiddenHint(403, rate)).toBe('')
+    expect(driveForbiddenHint(500, cfg)).toBe('')
   })
 })
 
