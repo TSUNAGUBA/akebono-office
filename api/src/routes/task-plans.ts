@@ -66,7 +66,7 @@ export function taskPlansRoutes(pool: pg.Pool, env: Env): Hono {
     return c.json({ data: rows })
   })
 
-  // 計画の作成・更新（本人のみ。done は編集不可。更新時は AI コメントを保持）
+  // 計画の作成・更新（本人のみ。done も訂正可 = done の編集は監査ログ記録。更新時は AI コメント・結果・status を保持）
   app.put('/', async (c) => {
     const user = c.get('user')
     const body = await c.req.json().catch(() => ({})) as Record<string, unknown>

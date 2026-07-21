@@ -413,8 +413,10 @@ function cellClass(memberId: string, date: string): string {
 function cellAria(memberId: string, date: string): string {
   const s = displayCellStatus(memberId, date)
   const name = reports.memberName(memberId)
+  // 未来日はリマインド不可（openCell のガードと整合。未来日に「クリックでリマインド」と読み上げない）
+  const remindable = isAdmin.value && date <= todayJst()
   const label = s === 'none'
-    ? (isAdmin.value ? '未提出（クリックでリマインド）' : '未提出')
+    ? (remindable ? '未提出（クリックでリマインド）' : '未提出')
     : REPORT_STATUS_LABELS[s]
   return `${name} ${dayLabel(date)}: ${label}`
 }

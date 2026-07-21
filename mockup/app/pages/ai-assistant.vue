@@ -10,7 +10,7 @@ import {
   ChevronLeft, ChevronRight, Eye, NotebookPen, Pencil, Plus, RefreshCw, Sparkles, Trash2, Zap,
 } from 'lucide-vue-next'
 import type { AssistQuestion } from '~/composables/useReportAssist'
-import type { CalendarEvent, Member, TaskPlan } from '~/types/domain'
+import type { CalendarEvent, HearingLog, Member, TaskPlan } from '~/types/domain'
 import { addDays, fmtDateLong, fmtPct, fmtTime } from '~/utils/format'
 
 const { currentUser, currentUserId, isAdmin } = useCurrentUser()
@@ -271,9 +271,18 @@ function onMemoKeydown(e: KeyboardEvent): void {
 const questions = computed(() => assist.questionsFor(targetId.value, recDate.value))
 const answeredCount = computed(() => questions.value.filter(q => q.answered).length)
 // readonly 参照時は設問生成（カレンダー予定に依存 = API モードでは他メンバー分を取得しない）を使わず、
-// 記録済みの回答ログのみを読み取り表示する（mock/API パリティを保つ）
-const readonlyAnswers = computed(() =>
-  assist.logsOf(targetId.value, recDate.value).filter(l => l.kind === 'qa'))
+// 記録済みの回答ログのみを読み取り表示する（mock/API パリティを保つ）。
+// 「答え直し」は追記されるため、設問キー（予定 id ?? 設問接頭辞）ごとに最新 1 件へ集約する
+// （自分の表示の lastAnswerOf と同じ「最新回答のみ」に揃える。古い回答の重複表示・件数の水増しを防ぐ）
+const readonlyAnswers = computed<HearingLog[]>(() => {
+  const latest = new Map<string, HearingLog>()
+  for (const l of assist.logsOf(targetId.value, recDate.value)) {
+    if (l.kind !== 'qa') continue
+    const key = l.calendarEventId ? `ev:${l.calendarEventId}` : `q:${l.question.split('|')[0]}`
+    latest.set(key, l) // ログは at 昇順のため後勝ち = 最新回答が残る
+  }
+  return [...latest.values()]
+})
 /** 回答ログの設問文（wrap 系のキー接頭辞を隠す） */
 function qaLabel(question: string): string {
   return question.includes('|') ? question.split('|').slice(1).join('|') : question
@@ -640,16 +649,15 @@ const showInsights = computed(() => isAdmin.value && !isReadonly.value)
                   class="rounded-lg border border-line p-2.5"
                   :class="q.answered ? 'bg-surface-soft' : ''"
                 >
+                  <!-- この分岐は自分の表示（v-else = 非 readonly）配下のみ描画される -->
                   <p class="text-[13px] font-semibold">{{ assist.displayQuestion(q) }}</p>
-                  <!-- 回答済み: 読み取り表示（answer + 答え直す は自分の表示のみ） -->
+                  <!-- 回答済み: 読み取り表示 + 答え直す -->
                   <div v-if="q.answered && !reanswering[q.key]" class="mt-1.5 flex flex-wrap items-center gap-2">
                     <UiStatusBadge tone="ok" label="回答済み" dot />
                     <span class="min-w-0 flex-1 text-xs text-muted">{{ lastAnswerOf(q) }}</span>
-                    <button v-if="!isReadonly" type="button" class="btn btn-sm" @click="reanswering[q.key] = true">答え直す</button>
+                    <button type="button" class="btn btn-sm" @click="reanswering[q.key] = true">答え直す</button>
                   </div>
-                  <!-- 未回答（readonly）: 状態のみ表示 -->
-                  <p v-else-if="isReadonly" class="mt-1.5 text-xs text-muted">未回答</p>
-                  <!-- 回答入力（自分の表示のみ） -->
+                  <!-- 回答入力 -->
                   <div v-else class="mt-1.5 grid gap-1.5">
                     <div v-if="q.chips.length > 0" class="flex flex-wrap gap-1.5">
                       <!-- チップは二重送信防止の無効化のみ（全チップにスピナーを出さない = どれを押したか分かる） -->
