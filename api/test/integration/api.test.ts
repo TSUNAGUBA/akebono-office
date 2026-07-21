@@ -1047,12 +1047,13 @@ describe('タスク計画（AI業務アシスタント）', () => {
     expect((await api('POST', `/v1/task-plans/${planId}/result`, {
       as: MEMBER, body: { outcome: 'テンプレ完成。経理へ共有済み', reflection: '想定より早く終わった' },
     })).status).toBe(200)
-    // done でも誤記の訂正ができる: 再記録・本文編集・後追い AI コメント（いずれも 200）
+    // done でも誤記の訂正ができる: 再記録・本文編集・後追い AI コメント（いずれも 200）。
+    // タイトルは下流テスト（日報ドラフト）が参照するため保持し、本文編集は purpose の訂正で検証する
     expect((await api('POST', `/v1/task-plans/${planId}/result`, {
       as: MEMBER, body: { outcome: 'テンプレ完成。経理へ共有済み（訂正）' },
     })).status).toBe(200)
     expect((await api('PUT', '/v1/task-plans', {
-      as: MEMBER, body: { id: planId, title: '請求書テンプレの整備（訂正）', date: today },
+      as: MEMBER, body: { id: planId, title: '請求書テンプレの整備', date: today, purpose: '経理の手作業を減らす（訂正）' },
     })).status).toBe(200)
     expect((await api('POST', `/v1/task-plans/${planId}/ai-review`, { as: MEMBER })).status).toBe(200)
     // 他人は依然として操作不可（本人ガード AKO-TPL-003）
@@ -1065,8 +1066,14 @@ describe('タスク計画（AI業務アシスタント）', () => {
     const mine = ins.find(x => x.memberId === MEMBER)!
     expect(mine.planned).toBeGreaterThanOrEqual(1)
     expect(mine.done).toBeGreaterThanOrEqual(1)
-    // done でも取消（削除）できる（原則9.5 = 取消フロー）
-    expect((await api('POST', `/v1/task-plans/${planId}/remove`, { as: MEMBER })).status).toBe(200)
+    // done でも取消（削除）できる（原則9.5 = 取消フロー）。planId は下流テストが参照するため消さず、
+    // 使い捨ての done 計画を新規作成して削除できることを検証する
+    const throwaway = await api('PUT', '/v1/task-plans', {
+      as: MEMBER, body: { title: '取消検証用', date: today, purpose: '', doneCriteria: '', approach: '' },
+    })
+    const throwawayId = (throwaway.json.data as { id: string }).id
+    expect((await api('POST', `/v1/task-plans/${throwawayId}/result`, { as: MEMBER, body: { outcome: '完了' } })).status).toBe(200)
+    expect((await api('POST', `/v1/task-plans/${throwawayId}/remove`, { as: MEMBER })).status).toBe(200)
   })
 
   it('他メンバーの計画は権限（ai-assistant + member:<id>）で許可された対象者のみ readonly 参照可', async () => {
