@@ -983,7 +983,7 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
       <UiSectionCard
         title="提出状況マトリクス"
         :description="isAdmin
-          ? 'メンバー × 選択した週の営業日（月〜金）。未提出セルをクリックするとリマインドできます'
+          ? 'メンバー × 選択した週の営業日（月〜金）。本日以前の未提出セルをクリックするとリマインドできます（未来の営業日はまだ提出対象外）'
           : 'メンバー × 選択した週の営業日（月〜金）。提出済みセルをクリックすると日報を参照できます'"
         flush
       >
