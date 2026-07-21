@@ -2,7 +2,8 @@
  * AI業務アシスタント（F-14）: タスク計画・AI コメント・振り返り・インサイト
  * フロー: 前日の終わりに翌日のタスクへ 目的/達成条件/段取り を登録
  *       → AI コメント（モック: 決定的ヒューリスティック。本実装は LLM）を受けて修正
- *       → 当日の終わりに 結果/所感 を記録（status='done'。以後編集不可 = 記録系保護）
+ *       → 当日の終わりに 結果/所感 を記録（status='done'）。誤記の訂正のため done でも本人が
+ *         再記録・編集・削除・後追い AI コメント可（resultAt は保持・API 側は監査ログ記録）
  *       → 日報ドラフト（useReportAssist.generateDraft）へ自動反映可能になる
  * 蓄積データは管理者インサイト（計画数・完了率・振り返り記入率）の元ネタ。
  */
@@ -36,11 +37,21 @@ export interface MemberInsight {
 
 const apiTaskPlans = ref<TaskPlan[]>([])
 const apiInsights = ref<MemberInsight[]>([])
+/** 他メンバーの計画（readonly 参照。F-14 対象メンバー切替）。memberId → 計画配列 */
+const apiMemberPlans = ref<Record<string, TaskPlan[]>>({})
 
 /** 自分の計画（±31 日）の一括ハイドレーション */
 function loadTaskPlans(force = false): Promise<void> {
   return apiLoadOnce('tpl:list', async () => {
     apiTaskPlans.value = await apiFetch<TaskPlan[]>('/v1/task-plans')
+  }, force)
+}
+
+/** 他メンバーの計画（readonly 参照）。サーバーが canViewMemberTaskPlans を enforcement する */
+function loadMemberTaskPlans(memberId: string, force = false): Promise<void> {
+  return apiLoadOnce(`tpl:member:${memberId}`, async () => {
+    const rows = await apiFetch<TaskPlan[]>('/v1/task-plans', { query: { memberId } })
+    apiMemberPlans.value = { ...apiMemberPlans.value, [memberId]: rows }
   }, force)
 }
 
@@ -53,6 +64,7 @@ function loadInsights(force = false): Promise<void> {
 onApiReset(() => {
   apiTaskPlans.value = []
   apiInsights.value = []
+  apiMemberPlans.value = {}
 })
 
 export function useTaskPlans() {
@@ -68,25 +80,38 @@ export function useTaskPlans() {
     if (isAdmin.value) void loadInsights()
   }
 
-  /** 表示時の取り直し（AI業務アシスタントページ表示時に呼ぶ） */
-  async function refresh(): Promise<void> {
+  /** 表示時の取り直し（AI業務アシスタントページ表示時に呼ぶ。memberId 指定で他メンバーの参照も取り直す） */
+  async function refresh(memberId?: string): Promise<void> {
     if (!isApi) return
+    if (memberId && memberId !== currentUser.value.id) {
+      await loadMemberTaskPlans(memberId, true)
+      return
+    }
     await Promise.all([loadTaskPlans(true), isAdmin.value ? loadInsights(true) : Promise.resolve()])
   }
 
   function plansOf(memberId: string, date: string): TaskPlan[] {
-    return plans.value
+    // API モードで他メンバーを参照するときは専用キャッシュから読む（自分の計画キャッシュを汚さない）。
+    // モックモードは taskPlans テーブルに全メンバーの計画があるためそのまま射影できる
+    let source = plans.value
+    if (isApi && memberId !== currentUser.value.id) {
+      void loadMemberTaskPlans(memberId)
+      source = apiMemberPlans.value[memberId] ?? []
+    }
+    return source
       .filter(p => p.memberId === memberId && p.date === date)
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
   }
 
   /**
-   * 計画の作成・更新（本人のみ）。結果記録済み（done）の計画は編集不可（記録保護）。
-   * 更新時は AI コメントを保持する（内容を大きく変えたら「AI コメントをもらう」で再取得）。
+   * 計画の作成・更新（本人のみ）。
+   * 誤登録の訂正のため、結果記録済み（done）の計画も再編集できる（オペレーター指示 2026-07-21）。
+   * 記録系保護は「巻き戻し防止」から「本人による訂正 + 監査ログ（API 側）」へ緩和（提出済み日報と同型）。
+   * 更新時は AI コメント・結果（outcome/reflection）・status を保持する（本文の訂正のみ反映）。
    */
   async function upsertPlan(input: PlanInput): Promise<Result> {
     if (isApi) {
-      // 検証・本人ガード・記録保護はサーバーが担う → 成功後にキャッシュを取り直す（原則6）
+      // 検証・本人ガード・監査ログはサーバーが担う → 成功後にキャッシュを取り直す（原則6）
       const res = await apiResult(() => apiFetch<{ id: string }>('/v1/task-plans', {
         method: 'PUT', body: input,
       }))
@@ -104,9 +129,6 @@ export function useTaskPlans() {
       const existing = plans.value.find(p => p.id === input.id)
       if (!existing || existing.memberId !== currentUser.value.id) {
         return { ok: false, error: { code: 'AKO-TPL-003', message: '自分の計画のみ編集できます' } }
-      }
-      if (existing.status === 'done') {
-        return { ok: false, error: { code: 'AKO-TPL-004', message: '結果記録済みの計画は編集できません' } }
       }
       plans.value = plans.value.map(p => p.id === input.id
         ? {
@@ -146,7 +168,7 @@ export function useTaskPlans() {
     return { ok: true, id }
   }
 
-  /** 計画の削除（本人・planned のみ。done は記録のため削除不可） */
+  /** 計画の削除（本人のみ。誤登録の取消のため done も削除可 = 取消フロー。原則9.5） */
   async function removePlan(planId: string): Promise<Result> {
     if (isApi) {
       const res = await apiResult(() => apiFetch(`/v1/task-plans/${planId}/remove`, { method: 'POST' }))
@@ -156,9 +178,6 @@ export function useTaskPlans() {
     const p = plans.value.find(x => x.id === planId)
     if (!p || p.memberId !== currentUser.value.id) {
       return { ok: false, error: { code: 'AKO-TPL-003', message: '自分の計画のみ削除できます' } }
-    }
-    if (p.status === 'done') {
-      return { ok: false, error: { code: 'AKO-TPL-004', message: '結果記録済みの計画は削除できません' } }
     }
     plans.value = plans.value.filter(x => x.id !== planId)
     commit()
@@ -180,9 +199,7 @@ export function useTaskPlans() {
     if (!p || p.memberId !== currentUser.value.id) {
       return { ok: false, error: { code: 'AKO-TPL-003', message: '自分の計画のみレビューを受けられます' } }
     }
-    if (p.status === 'done') {
-      return { ok: false, error: { code: 'AKO-TPL-004', message: '結果記録済みの計画はレビュー対象外です' } }
-    }
+    // AI コメントは status を問わず後からでも取得できる（オペレーター指示 2026-07-21）。
     // レビュー文言の SoT は shared/domain/task-plan-review（API のフォールバックと同一実装）
     const comment = heuristicPlanReview({ purpose: p.purpose, doneCriteria: p.doneCriteria, approach: p.approach })
     plans.value = plans.value.map(x => x.id === planId
@@ -192,7 +209,10 @@ export function useTaskPlans() {
     return { ok: true, id: planId }
   }
 
-  /** 結果・所感の記録（本人のみ・1 回で確定。以後は編集不可 = 記録系） */
+  /**
+   * 結果・所感の記録（本人のみ）。誤記の訂正のため記録済み（done）でも上書き再記録できる
+   * （オペレーター指示 2026-07-21）。初回記録日時（resultAt）は保持し、更新のみ updatedAt を進める。
+   */
   async function recordResult(planId: string, input: { outcome: string; reflection: string }): Promise<Result> {
     if (isApi) {
       const res = await apiResult(() => apiFetch(`/v1/task-plans/${planId}/result`, {
@@ -205,9 +225,6 @@ export function useTaskPlans() {
     if (!p || p.memberId !== currentUser.value.id) {
       return { ok: false, error: { code: 'AKO-TPL-003', message: '自分の計画のみ記録できます' } }
     }
-    if (p.status === 'done') {
-      return { ok: false, error: { code: 'AKO-TPL-004', message: 'この計画は記録済みです' } }
-    }
     if (!input.outcome.trim()) {
       return { ok: false, error: { code: 'AKO-TPL-005', message: '結果を入力してください' } }
     }
@@ -218,7 +235,7 @@ export function useTaskPlans() {
           status: 'done',
           outcome: input.outcome.trim(),
           reflection: input.reflection.trim(),
-          resultAt: now,
+          resultAt: x.resultAt ?? now, // 初回記録日時は保持（再記録では更新しない）
           updatedAt: now,
         }
       : x)

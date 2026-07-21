@@ -22,8 +22,17 @@ const reports = useReports()
 const attendance = useAttendance()
 const { show } = useToast()
 const { ask } = useConfirm()
+const { isRunning, run } = useAsyncAction()
 const { tbl } = useMockDb()
 const projects = tbl('projects')
+
+/** 'YYYY-MM' に月を加算（全員の日報タブの月送り。日付キー計算は addDays と別で月境界を扱う） */
+function shiftMonth(ym: string, delta: number): string {
+  const [y, m] = ym.split('-').map(Number)
+  if (!y || !m) return ym
+  const base = new Date(Date.UTC(y, m - 1 + delta, 1))
+  return `${base.getUTCFullYear()}-${String(base.getUTCMonth() + 1).padStart(2, '0')}`
+}
 
 // ---------- タブ ----------
 
@@ -137,19 +146,21 @@ function startEditSubmitted(): void {
 
 /** 提出済み日報の更新保存（提出状態は維持。サーバーが監査ログへ記録） */
 async function onUpdateSubmitted(): Promise<void> {
-  const res = await reports.submit(payload())
-  if (!res.ok) {
-    show(res.error.message, 'warn')
-    return
-  }
-  editingSubmitted.value = false
-  show('提出済みの日報を更新しました')
-  if (res.escalated) {
-    show('課題が管理者へ共有されました', 'info', { label: '受信箱', to: '/inbox' })
-  }
-  if (res.hoursGapMinutes !== null && res.hoursGapMinutes !== undefined) {
-    show(`勤怠実労働と工数合計に 60 分超の乖離があります（${gapText(res.hoursGapMinutes)}）`, 'warn')
-  }
+  await run('mine-update', async () => {
+    const res = await reports.submit(payload())
+    if (!res.ok) {
+      show(res.error.message, 'warn')
+      return
+    }
+    editingSubmitted.value = false
+    show('提出済みの日報を更新しました')
+    if (res.escalated) {
+      show('課題が管理者へ共有されました', 'info', { label: '受信箱', to: '/inbox' })
+    }
+    if (res.hoursGapMinutes !== null && res.hoursGapMinutes !== undefined) {
+      show(`勤怠実労働と工数合計に 60 分超の乖離があります（${gapText(res.hoursGapMinutes)}）`, 'warn')
+    }
+  }, { message: '提出済みの日報を更新しています…' })
 }
 
 function addRow(): void {
@@ -210,25 +221,29 @@ function payload() {
 }
 
 async function onSaveDraft(): Promise<void> {
-  const res = await reports.saveDraft(payload())
-  show(res.ok ? '下書きを保存しました' : res.error.message, res.ok ? 'ok' : 'warn')
+  await run('mine-draft', async () => {
+    const res = await reports.saveDraft(payload())
+    show(res.ok ? '下書きを保存しました' : res.error.message, res.ok ? 'ok' : 'warn')
+  }, { message: '下書きを保存しています…' })
 }
 
 async function onSubmit(): Promise<void> {
-  const res = await reports.submit(payload())
-  if (!res.ok) {
-    show(res.error.message, 'warn')
-    return
-  }
-  mineEditing.value = false
-  confirmStep.value = false
-  show('日報を提出しました')
-  if (res.escalated) {
-    show('課題が管理者へ共有されました', 'info', { label: '受信箱', to: '/inbox' })
-  }
-  if (res.hoursGapMinutes !== null) {
-    show(`勤怠実労働と工数合計に 60 分超の乖離があります（${gapText(res.hoursGapMinutes)}）`, 'warn')
-  }
+  await run('mine-submit', async () => {
+    const res = await reports.submit(payload())
+    if (!res.ok) {
+      show(res.error.message, 'warn')
+      return
+    }
+    mineEditing.value = false
+    confirmStep.value = false
+    show('日報を提出しました')
+    if (res.escalated) {
+      show('課題が管理者へ共有されました', 'info', { label: '受信箱', to: '/inbox' })
+    }
+    if (res.hoursGapMinutes !== null) {
+      show(`勤怠実労働と工数合計に 60 分超の乖離があります（${gapText(res.hoursGapMinutes)}）`, 'warn')
+    }
+  }, { message: '日報を提出しています…' })
 }
 
 // ---------- AI アシスト入力（F-06-7。材料の入力は AI業務アシスタント F-14 へ移設） ----------
@@ -288,16 +303,18 @@ async function onGenerateDraft(): Promise<void> {
     const okAsk = await ask('ドラフトの再生成', '生成し直すと、確認・修正中の内容を新しいドラフトで置き換えます。よろしいですか？', { confirmLabel: '再生成' })
     if (!okAsk) return
   }
-  const d = await assist.generateDraft(currentUserId.value, selDate.value)
-  editEntries.value = d.entries.map(toEditable)
-  editReflection.value = d.reflection
-  editIssues.value = d.issues
-  editTomorrow.value = d.tomorrow
-  draftBasis.value = d.basis
-  confirmStep.value = true
-  mineEditing.value = true
-  show('AI ドラフトを生成しました。内容を確認・修正して提出してください')
-  scrollToEditor()
+  await run('gen-draft', async () => {
+    const d = await assist.generateDraft(currentUserId.value, selDate.value)
+    editEntries.value = d.entries.map(toEditable)
+    editReflection.value = d.reflection
+    editIssues.value = d.issues
+    editTomorrow.value = d.tomorrow
+    draftBasis.value = d.basis
+    confirmStep.value = true
+    mineEditing.value = true
+    show('AI ドラフトを生成しました。内容を確認・修正して提出してください')
+    scrollToEditor()
+  }, { message: 'AI が日報ドラフトを生成しています…' })
 }
 
 /** 保存済みの下書きを（AI 生成なしで）確認・修正ステップで開く */
@@ -310,8 +327,16 @@ function openSavedDraft(): void {
 
 // ---------- チームタブ（バッチ7h で全員へ公開。リマインド・下書き表示は管理者のみ） ----------
 
-const matrixDays = computed(() => reports.recentBusinessDays(7))
-const teamTimeline = computed(() => reports.timeline(7))
+// 参照する週を選択できる（オペレーター指示 2026-07-21 #2）。既定 = 今週（月曜始まり）。
+// マトリクスはその週の営業日（月〜金）、タイムラインは同じ日付群を対象にする
+const teamWeekStart = ref(reports.weekStartOf(todayJst()))
+const matrixDays = computed(() => reports.businessDaysOfWeek(teamWeekStart.value))
+const teamTimeline = computed(() => reports.timelineForDates(matrixDays.value))
+
+function moveTeamWeek(delta: number): void {
+  teamWeekStart.value = addDays(teamWeekStart.value, delta * 7)
+}
+const isTeamThisWeek = computed(() => teamWeekStart.value === reports.weekStartOf(todayJst()))
 
 /**
  * セルの表示状態。他人の下書きの存在は管理者以外に見せない（内容も API が返さない）
@@ -388,8 +413,10 @@ function cellClass(memberId: string, date: string): string {
 function cellAria(memberId: string, date: string): string {
   const s = displayCellStatus(memberId, date)
   const name = reports.memberName(memberId)
+  // 未来日はリマインド不可（openCell のガードと整合。未来日に「クリックでリマインド」と読み上げない）
+  const remindable = isAdmin.value && date <= todayJst()
   const label = s === 'none'
-    ? (isAdmin.value ? '未提出（クリックでリマインド）' : '未提出')
+    ? (remindable ? '未提出（クリックでリマインド）' : '未提出')
     : REPORT_STATUS_LABELS[s]
   return `${name} ${dayLabel(date)}: ${label}`
 }
@@ -403,6 +430,11 @@ function openCell(memberId: string, date: string): void {
     return
   }
   if (isAdmin.value) {
+    // 未来日（未来週の営業日）は提出不能のためリマインド対象にしない
+    if (date > todayJst()) {
+      show('未来の日付にはリマインドできません', 'info')
+      return
+    }
     void askRemind(memberId, date)
     return
   }
@@ -413,13 +445,21 @@ async function askRemind(memberId: string, date: string): Promise<void> {
   const name = reports.memberName(memberId)
   const ok = await ask('リマインド送信', `${name} さんへ ${fmtDateLong(date)} の日報リマインドを送信しますか？`, { confirmLabel: '送信' })
   if (!ok) return
-  const res = await reports.remind(memberId, date)
-  show(res.ok ? `${name} さんへリマインドを送信しました` : res.error.message, res.ok ? 'ok' : 'warn')
+  await run(`remind:${memberId}:${date}`, async () => {
+    const res = await reports.remind(memberId, date)
+    show(res.ok ? `${name} さんへリマインドを送信しました` : res.error.message, res.ok ? 'ok' : 'warn')
+  }, { message: 'リマインドを送信しています…' })
 }
 
 async function remindAll(): Promise<void> {
-  const date = matrixDays.value[matrixDays.value.length - 1]
-  if (!date) return
+  // 対象日 = 選択週の営業日のうち本日以前で最新の日（未来週・未来日を催促しない）
+  const today = todayJst()
+  const past = matrixDays.value.filter(d => d <= today)
+  const date = past[past.length - 1]
+  if (!date) {
+    show('この週はまだ到来していないため、リマインド対象がありません', 'info')
+    return
+  }
   const targets = reports.teamMembers.value.filter(m =>
     reports.cellStatus(m.id, date) !== 'submitted' && m.id !== currentUserId.value)
   if (targets.length === 0) {
@@ -428,17 +468,19 @@ async function remindAll(): Promise<void> {
   }
   const ok = await ask('一括リマインド', `${fmtDateLong(date)} が未提出の ${targets.length} 名へリマインドを送信しますか？`, { confirmLabel: '送信' })
   if (!ok) return
-  // 一部失敗しても送れた分は成立させる（原則4: グレースフルデグラデーション）
-  let sent = 0
-  for (const m of targets) {
-    const res = await reports.remind(m.id, date)
-    if (res.ok) sent += 1
-  }
-  if (sent === targets.length) {
-    show(`${targets.length} 名へリマインドを送信しました`)
-  } else {
-    show(`${sent} / ${targets.length} 名へ送信しました（一部失敗）`, 'warn')
-  }
+  await run('remind-all', async () => {
+    // 一部失敗しても送れた分は成立させる（原則4: グレースフルデグラデーション）
+    let sent = 0
+    for (const m of targets) {
+      const res = await reports.remind(m.id, date)
+      if (res.ok) sent += 1
+    }
+    if (sent === targets.length) {
+      show(`${targets.length} 名へリマインドを送信しました`)
+    } else {
+      show(`${sent} / ${targets.length} 名へ送信しました（一部失敗）`, 'warn')
+    }
+  }, { message: 'リマインドを送信しています…' })
 }
 
 // ---------- 全員の日報タブ（バッチ5e: 提出済みの月次一覧を全メンバーが参照可） ----------
@@ -484,8 +526,14 @@ const WEEKLY_VIEW_TABS = [
   { key: 'insight', label: 'AI インサイト' },
 ]
 
-const thisWeekStart = computed(() => reports.weekStartOf(todayJst()))
-const myCurrentWeekly = computed(() => reports.myWeeklyOn(thisWeekStart.value))
+// 参照する週を選択できる（オペレーター指示 2026-07-21 #2）。既定 = 今週（月曜始まり）
+const selWeekStart = ref(reports.weekStartOf(todayJst()))
+const selWeekly = computed(() => reports.myWeeklyOn(selWeekStart.value))
+const isThisWeek = computed(() => selWeekStart.value === reports.weekStartOf(todayJst()))
+
+function moveWeeklyWeek(delta: number): void {
+  selWeekStart.value = addDays(selWeekStart.value, delta * 7)
+}
 
 const wkGoal = ref('')
 const wkMain = ref('')
@@ -493,63 +541,71 @@ const wkIssues = ref('')
 const wkNext = ref('')
 
 function loadWeeklyEditor(): void {
-  const r = myCurrentWeekly.value
+  const r = selWeekly.value
   if (r && r.status === 'draft') {
     wkGoal.value = r.goalReview
     wkMain.value = r.mainWork
     wkIssues.value = r.issues
     wkNext.value = r.nextWeek
-  } else if (!r) {
+  } else {
+    // 下書き以外（未作成・提出済み）は全クリア。週送りで別週へ入力内容が残留し、
+    // 誤った週へ提出される事故を防ぐ（提出済みはエディタ非表示だが残留も断つ）
     wkGoal.value = ''
     wkMain.value = ''
     wkIssues.value = ''
     wkNext.value = ''
   }
 }
-// myCurrentWeekly も監視: API モードでは週報データが非同期に届くため、到着後に下書きを復元する
-watch([currentUserId, myCurrentWeekly], loadWeeklyEditor, { immediate: true })
+// selWeekStart も監視: 未作成週→未作成週の移動では selWeekly が undefined→undefined で
+// 参照変化せず watcher が発火しないため、週初め自体を復元トリガに含める（入力残留の防止）。
+// selWeekly も監視: API モードでは週報データが非同期に届くため到着後に下書きを復元する
+watch([currentUserId, selWeekStart, selWeekly], loadWeeklyEditor, { immediate: true })
 
 function weekLabel(weekStart: string): string {
   return `${fmtDate(weekStart)}〜${fmtDate(addDays(weekStart, 6))}`
 }
 
 async function generateFromDailies(): Promise<void> {
-  const d = await reports.draftFromDailies(thisWeekStart.value)
-  if (!d.mainWork && !d.issues) {
-    show('今週の日報がまだありません', 'warn')
-    return
-  }
-  if (d.mainWork) wkMain.value = d.mainWork
-  if (d.issues) wkIssues.value = d.issues
-  show('日報から下書きを生成しました')
+  await run('wk-generate', async () => {
+    const d = await reports.draftFromDailies(selWeekStart.value)
+    if (!d.mainWork && !d.issues) {
+      show('この週の日報がまだありません', 'warn')
+      return
+    }
+    if (d.mainWork) wkMain.value = d.mainWork
+    if (d.issues) wkIssues.value = d.issues
+    show('日報から下書きを生成しました')
+  }, { message: '日報から下書きを生成しています…' })
 }
 
 async function onSaveWeekly(submitNow: boolean): Promise<void> {
-  const res = await reports.saveWeekly({
-    weekStart: thisWeekStart.value,
-    goalReview: wkGoal.value,
-    mainWork: wkMain.value,
-    issues: wkIssues.value,
-    nextWeek: wkNext.value,
-  }, submitNow)
-  if (!res.ok) {
-    show(res.error.message, 'warn')
-    return
-  }
-  show(submitNow ? '週報を提出しました' : '下書きを保存しました')
+  await run(submitNow ? 'wk-submit' : 'wk-draft', async () => {
+    const res = await reports.saveWeekly({
+      weekStart: selWeekStart.value,
+      goalReview: wkGoal.value,
+      mainWork: wkMain.value,
+      issues: wkIssues.value,
+      nextWeek: wkNext.value,
+    }, submitNow)
+    if (!res.ok) {
+      show(res.error.message, 'warn')
+      return
+    }
+    show(submitNow ? '週報を提出しました' : '下書きを保存しました')
+  }, { message: submitNow ? '週報を提出しています…' : '下書きを保存しています…' })
 }
 
 const weeklyDrawerId = ref<string | null>(null)
 const weeklyDrawer = computed<WeeklyReport | null>(() =>
   reports.myWeeklies.value.find(r => r.id === weeklyDrawerId.value) ?? null)
 
-/** 週報も参照 = 基本ビュー・入力はボタン押下（バッチ7h ④）。提出で参照へ戻す */
+/** 週報も参照 = 基本ビュー・入力はボタン押下（バッチ7h ④）。提出・週切替・ユーザー切替で参照へ戻す */
 const weeklyEditing = ref(false)
-watch(currentUserId, () => { weeklyEditing.value = false })
+watch([currentUserId, selWeekStart], () => { weeklyEditing.value = false })
 
 async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
   await onSaveWeekly(submitNow)
-  if (submitNow && reports.myWeeklyOn(thisWeekStart.value)?.status === 'submitted') {
+  if (submitNow && reports.myWeeklyOn(selWeekStart.value)?.status === 'submitted') {
     weeklyEditing.value = false
   }
 }
@@ -723,15 +779,17 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
         <!-- ドラフト生成 -->
         <UiSectionCard title="日報ドラフト生成" description="スケジュール・回答・ぽいぽいポストを材料に AI が下書きを作ります">
           <div class="grid gap-2">
-            <button
-              type="button"
-              class="btn btn-primary btn-lg w-full justify-center"
+            <UiButton
+              variant="primary"
+              size="lg"
+              block
+              :loading="isRunning('gen-draft')"
               :disabled="!!submittedForDate"
               @click="onGenerateDraft"
             >
-              <Sparkles class="h-4 w-4" aria-hidden="true" />
+              <template #icon><Sparkles class="h-4 w-4" aria-hidden="true" /></template>
               AI で日報ドラフトを生成
-            </button>
+            </UiButton>
             <p v-if="submittedForDate" class="text-center text-xs text-muted">
               この日の日報は提出済みです（提出済みの日報は上書きしません）
             </p>
@@ -842,18 +900,18 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
           <div class="flex flex-wrap items-center justify-end gap-2">
             <template v-if="editingSubmitted">
               <button type="button" class="btn" @click="editingSubmitted = false; loadEditor()">キャンセル</button>
-              <button type="button" class="btn btn-primary" @click="onUpdateSubmitted">
-                <Send class="h-3.5 w-3.5" aria-hidden="true" />
+              <UiButton variant="primary" :loading="isRunning('mine-update')" @click="onUpdateSubmitted">
+                <template #icon><Send class="h-3.5 w-3.5" aria-hidden="true" /></template>
                 更新を保存
-              </button>
+              </UiButton>
             </template>
             <template v-else>
               <button type="button" class="btn" @click="mineEditing = false; confirmStep = false">閉じる</button>
-              <button type="button" class="btn" @click="onSaveDraft">下書き保存</button>
-              <button type="button" class="btn btn-primary" @click="onSubmit">
-                <Send class="h-3.5 w-3.5" aria-hidden="true" />
+              <UiButton :loading="isRunning('mine-draft')" @click="onSaveDraft">下書き保存</UiButton>
+              <UiButton variant="primary" :loading="isRunning('mine-submit')" @click="onSubmit">
+                <template #icon><Send class="h-3.5 w-3.5" aria-hidden="true" /></template>
                 提出
-              </button>
+              </UiButton>
             </template>
           </div>
         </div>
@@ -863,8 +921,20 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
 
     <!-- ================= 全員の日報 ================= -->
     <div v-else-if="tab === 'all'" class="grid gap-3">
+      <!-- 月ナビ: 「自分の日報」の日付コントロールに合わせ、左右ボタン + 今月 + 月選択（直接選択可） -->
       <UiFilterBar>
-        <input v-model="allMonth" type="month" class="input w-auto" aria-label="対象月">
+        <div class="grid justify-items-start gap-1.5">
+          <div class="flex items-center gap-1.5">
+            <button type="button" class="btn btn-sm" aria-label="前の月へ" @click="allMonth = shiftMonth(allMonth, -1)">
+              <ChevronLeft class="h-4 w-4" aria-hidden="true" />
+            </button>
+            <button type="button" class="btn btn-sm" @click="allMonth = todayJst().slice(0, 7)">今月</button>
+            <button type="button" class="btn btn-sm" aria-label="次の月へ" @click="allMonth = shiftMonth(allMonth, 1)">
+              <ChevronRight class="h-4 w-4" aria-hidden="true" />
+            </button>
+          </div>
+          <input v-model="allMonth" type="month" class="input w-auto" aria-label="対象月（直接選択可）">
+        </div>
         <template #trailing>
           <span class="num text-xs text-muted">{{ allReports.length }} 件</span>
         </template>
@@ -895,11 +965,26 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
 
     <!-- ================= チーム（全員。表示メンバー設定 ∩ 日報参照権限 = バッチ7h） ================= -->
     <div v-else-if="tab === 'team'" class="grid gap-3">
+      <!-- 週ナビ: 「自分の日報」の日付コントロールに合わせ、左右ボタン + 今週 + 週レンジ表示（オペレーター指示 2026-07-21 #2） -->
+      <UiFilterBar>
+        <div class="flex items-center gap-1.5">
+          <button type="button" class="btn btn-sm" aria-label="前の週へ" @click="moveTeamWeek(-1)">
+            <ChevronLeft class="h-4 w-4" aria-hidden="true" />
+          </button>
+          <button type="button" class="btn btn-sm" :disabled="isTeamThisWeek" @click="teamWeekStart = reports.weekStartOf(todayJst())">今週</button>
+          <button type="button" class="btn btn-sm" aria-label="次の週へ" @click="moveTeamWeek(1)">
+            <ChevronRight class="h-4 w-4" aria-hidden="true" />
+          </button>
+          <span class="num ml-1 whitespace-nowrap text-xs font-semibold">{{ weekLabel(teamWeekStart) }}</span>
+          <UiStatusBadge v-if="isTeamThisWeek" label="今週" tone="brand" />
+        </div>
+      </UiFilterBar>
+
       <UiSectionCard
         title="提出状況マトリクス"
         :description="isAdmin
-          ? 'メンバー × 直近 7 営業日。未提出セルをクリックするとリマインドできます'
-          : 'メンバー × 直近 7 営業日。提出済みセルをクリックすると日報を参照できます'"
+          ? 'メンバー × 選択した週の営業日（月〜金）。本日以前の未提出セルをクリックするとリマインドできます（未来の営業日はまだ提出対象外）'
+          : 'メンバー × 選択した週の営業日（月〜金）。提出済みセルをクリックすると日報を参照できます'"
         flush
       >
         <template #actions>
@@ -907,10 +992,10 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
             <Settings2 class="h-3.5 w-3.5" aria-hidden="true" />
             表示メンバー
           </button>
-          <button v-if="isAdmin" type="button" class="btn btn-sm" @click="remindAll">
-            <BellRing class="h-3.5 w-3.5" aria-hidden="true" />
+          <UiButton v-if="isAdmin" size="sm" :loading="isRunning('remind-all')" @click="remindAll">
+            <template #icon><BellRing class="h-3.5 w-3.5" aria-hidden="true" /></template>
             一括リマインド
-          </button>
+          </UiButton>
         </template>
         <div class="overflow-x-auto scroll-slim">
           <table class="tbl">
@@ -949,7 +1034,7 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
         </div>
       </UiSectionCard>
 
-      <UiSectionCard title="タイムライン" description="チームと AI 社員の日報（直近 7 営業日・新しい順）" flush>
+      <UiSectionCard title="タイムライン" :description="`チームと AI 社員の日報（${weekLabel(teamWeekStart)}・新しい順）`" flush>
         <UiEmptyState v-if="teamTimeline.length === 0" title="提出済みの日報がありません" />
         <ul v-else class="divide-y divide-line">
           <li v-for="r in teamTimeline" :key="r.id">
@@ -980,47 +1065,69 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
       <UiTabBar v-model="weeklyView" :tabs="WEEKLY_VIEW_TABS" />
 
       <!-- 週次 AI インサイト（該当週の全登録データから経営・営業・チーム視点のレポート = バッチ7g） -->
-      <WidgetsWeeklyInsight v-if="weeklyView === 'insight'" :initial-week-start="thisWeekStart" />
+      <WidgetsWeeklyInsight v-if="weeklyView === 'insight'" :initial-week-start="selWeekStart" />
 
       <template v-else>
-      <!-- 今週の週報（参照 = 基本ビュー・入力は「週報を書く」から = バッチ7h ④） -->
+      <!-- 週ナビ: 「自分の日報」の日付コントロールに合わせ、左右ボタン + 今週 + 週レンジ表示（オペレーター指示 2026-07-21 #2） -->
+      <UiFilterBar>
+        <div class="flex items-center gap-1.5">
+          <button type="button" class="btn btn-sm" aria-label="前の週へ" @click="moveWeeklyWeek(-1)">
+            <ChevronLeft class="h-4 w-4" aria-hidden="true" />
+          </button>
+          <button type="button" class="btn btn-sm" :disabled="isThisWeek" @click="selWeekStart = reports.weekStartOf(todayJst())">今週</button>
+          <button type="button" class="btn btn-sm" aria-label="次の週へ" @click="moveWeeklyWeek(1)">
+            <ChevronRight class="h-4 w-4" aria-hidden="true" />
+          </button>
+          <span class="num ml-1 whitespace-nowrap text-xs font-semibold">{{ weekLabel(selWeekStart) }}</span>
+          <UiStatusBadge v-if="isThisWeek" label="今週" tone="brand" />
+        </div>
+        <template #trailing>
+          <UiStatusBadge
+            :tone="selWeekly?.status === 'submitted' ? 'ok' : selWeekly ? 'warn' : 'neutral'"
+            :label="selWeekly ? REPORT_STATUS_LABELS[selWeekly.status] : '未作成'"
+            dot
+          />
+        </template>
+      </UiFilterBar>
+
+      <!-- 選択した週の週報（参照 = 基本ビュー・入力は「週報を書く」から = バッチ7h ④） -->
       <UiSectionCard
-        :title="`今週の週報（${weekLabel(thisWeekStart)}）`"
-        :description="myCurrentWeekly?.status === 'submitted'
+        :title="`${isThisWeek ? '今週' : '選択週'}の週報（${weekLabel(selWeekStart)}）`"
+        :description="selWeekly?.status === 'submitted'
           ? '提出済みです'
           : weeklyEditing ? '日報から下書きを生成できます' : '「週報を書く」から入力できます'"
       >
-        <template v-if="myCurrentWeekly?.status !== 'submitted'" #actions>
+        <template v-if="selWeekly?.status !== 'submitted'" #actions>
           <button v-if="!weeklyEditing" type="button" class="btn btn-primary btn-sm" @click="weeklyEditing = true">
             <Pencil class="h-3.5 w-3.5" aria-hidden="true" />
             週報を書く
           </button>
-          <button v-else type="button" class="btn btn-sm" @click="generateFromDailies">
-            <Sparkles class="h-3.5 w-3.5" aria-hidden="true" />
+          <UiButton v-else size="sm" :loading="isRunning('wk-generate')" @click="generateFromDailies">
+            <template #icon><Sparkles class="h-3.5 w-3.5" aria-hidden="true" /></template>
             日報から下書き生成
-          </button>
+          </UiButton>
         </template>
 
         <!-- 提出済み: 読み取り表示 -->
-        <div v-if="myCurrentWeekly && myCurrentWeekly.status === 'submitted'" class="grid gap-3">
+        <div v-if="selWeekly && selWeekly.status === 'submitted'" class="grid gap-3">
           <UiStatusBadge tone="ok" :label="REPORT_STATUS_LABELS.submitted" dot class="justify-self-start" />
           <div class="grid gap-3 md:grid-cols-2">
-            <div><p class="label">今週の目標達成</p><UiMarkdown v-if="myCurrentWeekly.goalReview" :source="myCurrentWeekly.goalReview" /><p v-else class="text-[13px]">—</p></div>
-            <div><p class="label">主要業務</p><UiMarkdown v-if="myCurrentWeekly.mainWork" :source="myCurrentWeekly.mainWork" /><p v-else class="text-[13px]">—</p></div>
-            <div><p class="label">課題</p><UiMarkdown v-if="myCurrentWeekly.issues" :source="myCurrentWeekly.issues" /><p v-else class="text-[13px]">—</p></div>
-            <div><p class="label">来週の予定</p><UiMarkdown v-if="myCurrentWeekly.nextWeek" :source="myCurrentWeekly.nextWeek" /><p v-else class="text-[13px]">—</p></div>
+            <div><p class="label">今週の目標達成</p><UiMarkdown v-if="selWeekly.goalReview" :source="selWeekly.goalReview" /><p v-else class="text-[13px]">—</p></div>
+            <div><p class="label">主要業務</p><UiMarkdown v-if="selWeekly.mainWork" :source="selWeekly.mainWork" /><p v-else class="text-[13px]">—</p></div>
+            <div><p class="label">課題</p><UiMarkdown v-if="selWeekly.issues" :source="selWeekly.issues" /><p v-else class="text-[13px]">—</p></div>
+            <div><p class="label">来週の予定</p><UiMarkdown v-if="selWeekly.nextWeek" :source="selWeekly.nextWeek" /><p v-else class="text-[13px]">—</p></div>
           </div>
         </div>
 
         <!-- 参照ビュー（未提出・未編集: 状態表示のみ） -->
         <div v-else-if="!weeklyEditing" class="flex flex-wrap items-center gap-2">
           <UiStatusBadge
-            :tone="myCurrentWeekly ? 'warn' : 'neutral'"
-            :label="myCurrentWeekly ? REPORT_STATUS_LABELS.draft : '未作成'"
+            :tone="selWeekly ? 'warn' : 'neutral'"
+            :label="selWeekly ? REPORT_STATUS_LABELS.draft : '未作成'"
             dot
           />
           <span class="text-xs text-muted">
-            {{ myCurrentWeekly ? '下書きが保存されています。「週報を書く」から続きを編集できます' : '今週の週報はまだ作成されていません' }}
+            {{ selWeekly ? '下書きが保存されています。「週報を書く」から続きを編集できます' : `${isThisWeek ? '今週' : 'この週'}の週報はまだ作成されていません` }}
           </span>
         </div>
 
@@ -1052,11 +1159,11 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
           </div>
           <div class="flex flex-wrap items-center justify-end gap-2">
             <button type="button" class="btn" @click="weeklyEditing = false">閉じる</button>
-            <button type="button" class="btn" @click="onSaveWeekly(false)">下書き保存</button>
-            <button type="button" class="btn btn-primary" @click="onSaveWeeklyAndClose(true)">
-              <Send class="h-3.5 w-3.5" aria-hidden="true" />
+            <UiButton :loading="isRunning('wk-draft')" @click="onSaveWeekly(false)">下書き保存</UiButton>
+            <UiButton variant="primary" :loading="isRunning('wk-submit')" @click="onSaveWeeklyAndClose(true)">
+              <template #icon><Send class="h-3.5 w-3.5" aria-hidden="true" /></template>
               提出
-            </button>
+            </UiButton>
           </div>
         </div>
       </UiSectionCard>
@@ -1191,9 +1298,7 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
       </div>
       <template #footer>
         <button type="button" class="btn" :disabled="teamSettingsSaving" @click="saveTeamSettings(true)">既定の表示に戻す</button>
-        <button type="button" class="btn btn-primary" :disabled="teamSettingsSaving" @click="saveTeamSettings()">
-          {{ teamSettingsSaving ? '保存中…' : '保存' }}
-        </button>
+        <UiButton variant="primary" :loading="teamSettingsSaving" @click="saveTeamSettings()">保存</UiButton>
       </template>
     </UiModal>
   </div>

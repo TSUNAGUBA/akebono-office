@@ -46,11 +46,12 @@ tree: ComputedRef<DeptNode[]>            // 組織図ツリー（親無効時は
    // CRUD は useMasterCrud('departments')。所属変更は members への save（SoT = Member.departmentId）
 
 // useTaskPlans（F-14）
-plansOf(memberId, date): TaskPlan[]
-upsertPlan(input): Result                // 本人のみ。done は編集不可（AKO-TPL-004）
-removePlan(planId): Result               // 本人・planned のみ
-aiReview(planId): Result                 // AI コメント生成（再取得で上書きのみ。モックは決定的ヒューリスティック）
-recordResult(planId, { outcome, reflection }): Result  // 1 回で確定（記録系）
+plansOf(memberId, date): TaskPlan[]       // 他メンバーは F-16-7 の許可があれば readonly 参照（API は ?memberId=）
+upsertPlan(input): Result                // 本人のみ。done も訂正可（監査ログ記録・オペレーター指示 2026-07-21）
+removePlan(planId): Result               // 本人のみ。done も削除可（取消フロー = 原則9.5・done は監査ログ）
+aiReview(planId): Result                 // AI コメント生成（status を問わず後追い取得可・上書きのみ）
+recordResult(planId, { outcome, reflection }): Result  // 本人のみ。done も再記録で訂正可（result_at は保持・監査ログ）
+refresh(memberId?): Promise<void>        // 表示時の再取得（memberId 指定で他メンバー分を専用キャッシュへ）
 insights(days?): MemberInsight[]         // 管理者向け集計（計画数・完了率・振り返り記入率）
 
 // useWorkflow（バッチ3b でデュアルモード化。API モードは /v1/workflows をハイドレーション）
@@ -153,7 +154,7 @@ save(defs) / reset(): Promise<void>              // SoT = configs `menu-categori
 | useWorkflow | `GET /v1/workflows`・`GET /v1/workflows/:id/logs`・`PUT /v1/workflows/draft`・`POST /v1/workflows/submit`・`POST /v1/workflows/:id/actions`（クレームファースト: FOR UPDATE クレーム）・`GET/POST /v1/workflows/delegates`（+ `/:id/archive`）・承認経路 = `/v1/masters/workflow-routes`（**実装・フロント接続済み**。経路解決・凍結・権限ガード・証跡・通知はサーバーが担い、射影ロジックはモックと共通） |
 | useCalendar.syncFromGoogle | Google Calendar API（OAuth 2.0 増分認可・calendar.readonly/events スコープ。Webhook push + 手動再同期の両立）。トークンはサーバー側で暗号化保管（C3 相当・クライアントへ出さない）。アプリの連携解除時はトークン破棄 + Google 側 revoke を呼び、Google 側での取消は次回 API 401 で検知して連携状態へ反映する。**同期対象は選択制（バッチ7b・オペレーター指示 2026-07-19 #3）: 従来の primary 固定を廃し、calendar_tokens.selected_calendar_ids（既定 ["primary"] = 下位互換）に保存した複数カレンダーを横断同期。同一イベント id は重複排除・一部カレンダーの取得失敗は「取れた分だけ同期 + 削除フェーズ抑止 + warning」（原則4）・アプリ発予定の反映先は常に primary。**選択解除したカレンダーの同期済みイベントは日付単位の削除フェーズで掃除される = 過去・未来の日付は該当日を次に同期したときに追随**（per-date 同期設計の帰結）。見つからないカレンダー（共有解除 = 404）は「予定ゼロ」として扱い削除フェーズを抑止しない + warning で選択見直しを案内。部分失敗の warning はフロントがトーストで報告（原則4）。UI = カレンダー連携ゲートの「同期カレンダー」モーダル（モックは擬似一覧 + localStorage・選択に応じて擬似予定を合成）** |
 | useReportAssist | `GET /v1/assist/logs`・`POST /v1/assist/answers` `/memos`（追記のみ）・`POST /v1/assist/report-draft`（**実装・フロント接続済み**。Vertex AI 構造化出力 + 出力正規化 → 失敗時は shared/domain/report-draft の同一ヒューリスティック。ドラフトは保存しない）|
-| useTaskPlans | `GET/PUT /v1/task-plans`・`POST /:id/remove` `/:id/ai-review` `/:id/result`・`GET /v1/task-plans/insights`（**実装・フロント接続済み**。AI レビュー = Vertex AI 構造化出力 → 失敗時は shared/domain/task-plan-review の同一ヒューリスティック。結果記録は FOR UPDATE で 1 回確定・インサイトはサーバー集計）|
+| useTaskPlans | `GET/PUT /v1/task-plans`（GET は `?memberId=` で他メンバーを readonly 参照 = F-16-7・canViewMemberTaskPlans で enforcement・未許可 403 AKO-PRM-002）・`POST /:id/remove` `/:id/ai-review` `/:id/result`・`GET /v1/task-plans/insights`（**実装・フロント接続済み**。AI レビュー = Vertex AI 構造化出力 → 失敗時は shared/domain/task-plan-review の同一ヒューリスティック。**誤登録の訂正のため done でも編集・再記録・削除・後追い AI コメント可（2026-07-21）。done の訂正は監査ログ・result_at は FOR UPDATE + COALESCE で初回記録日時を保持**・インサイトはサーバー集計）。`GET /v1/assist/logs` も `?memberId=` で同権限の readonly 参照可 |
 | useLeave | `GET/POST /v1/leave/requests`（+ `/decision`）・`GET/POST /v1/leave/grants`（+ `/bulk`。冪等キー: memberId×leaveTypeId×grantDate。権限: admin/hr）（**実装・フロント接続済み**。grants/requests をハイドレーションし残数射影は共通ロジック） |
 | useEscalations | `GET/POST /v1/escalations`・`POST /v1/escalations/:id/resolution`・`POST /v1/escalations/overtime-check`（**実装・フロント接続済み**。起票 = dedupe + クールダウン冪等、解決 = open→resolved クレーム + ナレッジ還流 + 本人通知） |
 | useShifts | `GET /v1/shifts`（期間・希望・割当・必要人数の一括ハイドレーション。希望・割当は管理者 = 全件 / 本人 = 自分のみ）・`POST /v1/shifts/periods`（+ `/:id/transition` = 正順の状態機械。published 遷移で割当 confirmed 化 + 通知）・`PUT /v1/shifts/wishes`（+ `/clear`。本人のみ・open 中・締切内）・`POST /v1/shifts/assignments`（+ `/:id/unassign` `/:id/request-change` `/:id/consent`）・`PUT /v1/shifts/demands`（**実装・フロント接続済み**。割当バリデーション（労基法34/61条・週40h・希望NG）は shared/domain/shift.ts をフロントのプレビューと共有） |
@@ -223,7 +224,8 @@ save(defs) / reset(): Promise<void>              // SoT = configs `menu-categori
 | AKO-TPL-001 | タスク計画のタスク名未入力 | ✅ |
 | AKO-TPL-002 | タスク計画の実施予定日未選択 | ✅ |
 | AKO-TPL-003 | 他人の計画への操作（本人のみ） | ✅ |
-| AKO-TPL-004 | 結果記録済み計画の編集・削除（不可 = 記録保護） | ✅ |
+| AKO-TPL-004 | （廃止）旧: 結果記録済み計画の編集・削除不可。2026-07-21 に done も訂正可へ緩和したためコード上未使用（履歴のため欠番） | ✅ |
+| AKO-PRM-002 | 他メンバーの AI業務アシスタント参照の権限なし（F-16-7・?memberId=） | ✅ |
 | AKO-TPL-005 | 結果の未入力 | ✅ |
 | AKO-CAL-001 | カレンダー同期・Google 反映の失敗 | ✅ |
 | AKO-CAL-002 | タスク名未入力 | ✅ |

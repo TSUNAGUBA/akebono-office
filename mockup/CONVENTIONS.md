@@ -77,8 +77,8 @@ const cal = useCalendar()   // isConnected / connect / syncFromGoogle / addTask 
 // 日報 AI アシスト（F-06-7。ログは追記のみ・ドラフトは保存せずフォームへ流し込む）
 const assist = useReportAssist()   // inputMode / questionsFor / recordAnswer / poipoiMemo / generateDraft
 
-// AI業務アシスタント（F-14。done 後の計画は編集不可 = 記録系）
-const tp = useTaskPlans()   // plansOf / upsertPlan / removePlan / aiReview / recordResult / insights
+// AI業務アシスタント（F-14。done も訂正可 = 監査ログ・他メンバーは F-16-7 許可制で readonly 参照）
+const tp = useTaskPlans()   // plansOf / upsertPlan / removePlan / aiReview / recordResult / refresh(memberId?) / insights
 
 // 部署（F-10-9。所属の SoT は Member.departmentId。CRUD は useMasterCrud('departments')）
 const depts = useDepartments()   // nameOf / options / membersOf / tree

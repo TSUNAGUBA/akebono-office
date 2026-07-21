@@ -72,6 +72,7 @@ function resolve(
   subject: PermissionSubject,
   resource: string,
   field: string | null,
+  defaultAllow = true,
 ): boolean {
   const applicable = rules.filter(r =>
     r.active && r.resource === resource && (r.field ?? null) === field && matches(r, subject))
@@ -79,7 +80,7 @@ function resolve(
     const decided = decideLayer(applicable.filter(r => r.subjectKind === kind))
     if (decided !== null) return decided
   }
-  return true // 既定 = allow（下位互換）
+  return defaultAllow // 既定（下位互換 = allow。閲覧許可制のリソースは deny を既定にする）
 }
 
 /** 機能の利用可否（メニュー表示・ページガード・API ガード共通） */
@@ -187,4 +188,30 @@ export function canViewMemberReports(
 ): boolean {
   if (targetMemberId === subject.memberId) return true
   return resolve(rules, subject, 'reports', `${REPORT_MEMBER_FIELD_PREFIX}${targetMemberId}`)
+}
+
+// ---------- AI業務アシスタントの参照対象（F-14・オペレーター指示 2026-07-21 = F-16-7） ----------
+
+/**
+ * AI業務アシスタント（タスク計画・振り返り）の参照対象の擬似フィールド（permission_rules.field）。
+ * resource = 'ai-assistant'・field = `member:<対象メンバー id>`・effect: allow = その対象者のページを readonly 参照可。
+ *
+ * 日報（canViewMemberReports）との違い: 日報は「提出済みは全員参照可」が既定（deny で絞る）だが、
+ * AI業務アシスタントは個人の作業計画・振り返りのため **既定は参照不可**（allow で明示的に許可する）。
+ * 自分のページは常に参照可。解決レイヤ（個人 > 役職 > ロール・同一レイヤ deny 優先）は canViewField と同一。
+ */
+export const ASSIST_MEMBER_FIELD_PREFIX = 'member:'
+
+/**
+ * 対象メンバーの AI業務アシスタントページ（タスク計画・振り返り）を readonly 参照できるか。
+ * 自分のページは常に参照可。既定 = 参照不可（allow ルールで明示的に許可した対象者のみ）。
+ * 適用範囲: AI業務アシスタントページの対象メンバー切替（readonly 表示）・API の他メンバー計画/ログ取得。
+ */
+export function canViewMemberTaskPlans(
+  rules: PermissionRule[],
+  subject: PermissionSubject,
+  targetMemberId: string,
+): boolean {
+  if (targetMemberId === subject.memberId) return true
+  return resolve(rules, subject, 'ai-assistant', `${ASSIST_MEMBER_FIELD_PREFIX}${targetMemberId}`, false)
 }

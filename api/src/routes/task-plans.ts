@@ -1,6 +1,10 @@
 /**
  * タスク計画 API（F-14 AI業務アシスタント）。mockup useTaskPlans の API 版。
- * - 計画は本人のみ操作可（AKO-TPL-003）。結果記録済み（done）は編集・削除不可（AKO-TPL-004 = 記録系保護）
+ * - 計画は本人のみ操作可（AKO-TPL-003）。誤登録の訂正のため done でも本文編集・結果の再記録・削除・
+ *   後追い AI コメントが可能（オペレーター指示 2026-07-21）。done の訂正は監査ログへ記録し、初回記録日時
+ *   result_at は保持する（記録系保護を「巻き戻し防止」から「本人による訂正 + 監査」へ緩和 = 提出済み日報と同型）
+ * - 他メンバー参照（F-16-7）: GET は ?memberId= で readonly 参照可（canViewMemberTaskPlans で enforcement。
+ *   既定 = 参照不可の許可制。未許可は AKO-PRM-002 403）
  * - AI コメント: Vertex AI（lib/llm.generateJson）→ 失敗時は shared/domain/task-plan-review の
  *   決定的ヒューリスティックへフォールバック（原則4。モックと同一文言）
  * - インサイト: 管理者のみ。メンバー別の計画数・完了率・振り返り記入率をサーバー集計
@@ -8,13 +12,16 @@
 import { Hono } from 'hono'
 import type pg from 'pg'
 import { addDays, nowJstIso, todayJst } from '../../../shared/domain/jst'
+import { canViewMemberTaskPlans } from '../../../shared/domain/permissions'
 import { heuristicPlanReview } from '../../../shared/domain/task-plan-review'
 import type { TaskPlan } from '../../../shared/domain/types'
 import { requireAdmin } from '../auth'
 import type { Env } from '../env'
+import { audit } from '../lib/audit'
 import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
 import { generateJson } from '../lib/llm'
+import { activePermissionRules, subjectOf } from '../lib/permissions'
 
 const COLS = `id, member_id AS "memberId", date::text AS date, calendar_event_id AS "calendarEventId",
   title, purpose, done_criteria AS "doneCriteria", approach, ai_comment AS "aiComment",
@@ -37,20 +44,29 @@ async function ownPlan(
 export function taskPlansRoutes(pool: pg.Pool, env: Env): Hono {
   const app = new Hono()
 
-  // 一覧（本人のみ。期間指定 from/to。インサイトは /insights = 管理者のサーバー集計）
+  // 一覧（既定 = 本人。memberId 指定 = 他メンバーの readonly 参照 = 権限で許可された対象者のみ）。
+  // 期間指定 from/to。インサイトは /insights = 管理者のサーバー集計
   app.get('/', async (c) => {
     const user = c.get('user')
+    const target = c.req.query('memberId')?.trim() || user.id
+    if (target !== user.id) {
+      // 他メンバーの参照は権限表（resource='ai-assistant', field='member:<id>'）で許可された対象者のみ
+      const rules = await activePermissionRules(pool)
+      if (!canViewMemberTaskPlans(rules, subjectOf(user), target)) {
+        throw err('AKO-PRM-002', '指定メンバーの AI業務アシスタントを参照する権限がありません', 403)
+      }
+    }
     const from = c.req.query('from') ?? addDays(todayJst(), -31)
     const to = c.req.query('to') ?? addDays(todayJst(), 31)
     const { rows } = await pool.query(
       `SELECT ${COLS} FROM task_plans
        WHERE member_id = $1 AND date >= $2::date AND date <= $3::date
        ORDER BY date, created_at, id LIMIT 2000`,
-      [user.id, from, to])
+      [target, from, to])
     return c.json({ data: rows })
   })
 
-  // 計画の作成・更新（本人のみ。done は編集不可。更新時は AI コメントを保持）
+  // 計画の作成・更新（本人のみ。done も訂正可 = done の編集は監査ログ記録。更新時は AI コメント・結果・status を保持）
   app.put('/', async (c) => {
     const user = c.get('user')
     const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
@@ -68,14 +84,18 @@ export function taskPlansRoutes(pool: pg.Pool, env: Env): Hono {
     const planId = typeof body.id === 'string' && body.id ? body.id : null
 
     if (planId) {
+      // 誤登録の訂正のため done でも再編集できる（オペレーター指示 2026-07-21）。結果・status は保持し、
+      // done の訂正は監査ログへ記録する（記録系保護を「巻き戻し防止 + 監査」へ緩和 = 提出済み日報と同型）
       const existing = await ownPlan(pool, planId, user.id, '自分の計画のみ編集できます')
-      if (existing.status === 'done') throw err('AKO-TPL-004', '結果記録済みの計画は編集できません', 409)
       await pool.query(
         `UPDATE task_plans
          SET date = $2, calendar_event_id = $3, title = $4, purpose = $5,
              done_criteria = $6, approach = $7, updated_at = $8
          WHERE id = $1`,
         [planId, date, calendarEventId, title, purpose, doneCriteria, approach, now])
+      if (existing.status === 'done') {
+        await audit(pool, { actorId: user.id, action: 'update', entity: 'task_plan', entityId: planId, detail: '結果記録済みの計画を訂正' })
+      }
       return c.json({ data: { id: planId } })
     }
     const id = newId('tp')
@@ -87,22 +107,23 @@ export function taskPlansRoutes(pool: pg.Pool, env: Env): Hono {
     return c.json({ data: { id } }, 201)
   })
 
-  // 計画の削除（本人・planned のみ。done は記録のため削除不可）
+  // 計画の削除（本人のみ。誤登録の取消のため done も削除可 = 取消フロー。done の削除は監査ログへ記録）
   app.post('/:id/remove', async (c) => {
     const user = c.get('user')
     const planId = c.req.param('id')
     const p = await ownPlan(pool, planId, user.id, '自分の計画のみ削除できます')
-    if (p.status === 'done') throw err('AKO-TPL-004', '結果記録済みの計画は削除できません', 409)
     await pool.query(`DELETE FROM task_plans WHERE id = $1`, [planId])
+    if (p.status === 'done') {
+      await audit(pool, { actorId: user.id, action: 'delete', entity: 'task_plan', entityId: planId, detail: '結果記録済みの計画を取消（削除）' })
+    }
     return c.json({ data: { id: planId } })
   })
 
-  // AI レビューコメント（本人・planned のみ。LLM → 失敗時ヒューリスティック。何度でも再取得可 = 上書きのみ）
+  // AI レビューコメント（本人。status を問わず後からでも取得可 = 上書きのみ。LLM → 失敗時ヒューリスティック）
   app.post('/:id/ai-review', async (c) => {
     const user = c.get('user')
     const planId = c.req.param('id')
     const p = await ownPlan(pool, planId, user.id, '自分の計画のみレビューを受けられます')
-    if (p.status === 'done') throw err('AKO-TPL-004', '結果記録済みの計画はレビュー対象外です', 409)
 
     let comment: string | null = null
     const llm = await generateJson<{ good: string[]; advice: string[] }>(env, {
@@ -133,26 +154,29 @@ export function taskPlansRoutes(pool: pg.Pool, env: Env): Hono {
     return c.json({ data: { id: planId, aiComment: comment } })
   })
 
-  // 結果・所感の記録（本人のみ・1 回で確定。以後は編集不可 = 記録系）
+  // 結果・所感の記録（本人のみ）。誤記の訂正のため記録済み（done）でも上書き再記録できる
+  // （オペレーター指示 2026-07-21）。初回記録日時（result_at）は保持し、再記録は監査ログへ記録する
   app.post('/:id/result', async (c) => {
     const user = c.get('user')
     const planId = c.req.param('id')
     const body = await c.req.json().catch(() => ({})) as { outcome?: string; reflection?: string }
     const outcome = String(body.outcome ?? '').trim()
     if (!outcome) throw err('AKO-TPL-005', '結果を入力してください', 400)
+    let wasDone = false
     const client = await pool.connect()
     try {
       await client.query('BEGIN')
-      // クレームファースト: 二重記録を FOR UPDATE で防ぐ（記録系は 1 回で確定）
+      // クレームファースト: 本人ガード + 初回/再記録の判定を FOR UPDATE で確定する
       const { rows } = await client.query<{ memberId: string; status: string }>(
         `SELECT member_id AS "memberId", status FROM task_plans WHERE id = $1 FOR UPDATE`, [planId])
       const p = rows[0]
       if (!p || p.memberId !== user.id) throw err('AKO-TPL-003', '自分の計画のみ記録できます', 403)
-      if (p.status === 'done') throw err('AKO-TPL-004', 'この計画は記録済みです', 409)
+      wasDone = p.status === 'done'
       const now = nowJstIso()
       await client.query(
         `UPDATE task_plans
-         SET status = 'done', outcome = $2, reflection = $3, result_at = $4, updated_at = $4
+         SET status = 'done', outcome = $2, reflection = $3,
+             result_at = COALESCE(result_at, $4), updated_at = $4
          WHERE id = $1`,
         [planId, outcome, String(body.reflection ?? '').trim(), now])
       await client.query('COMMIT')
@@ -161,6 +185,9 @@ export function taskPlansRoutes(pool: pg.Pool, env: Env): Hono {
       throw e
     } finally {
       client.release()
+    }
+    if (wasDone) {
+      await audit(pool, { actorId: user.id, action: 'update', entity: 'task_plan', entityId: planId, detail: '記録済みの結果を訂正' })
     }
     return c.json({ data: { id: planId } })
   })

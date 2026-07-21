@@ -147,6 +147,7 @@
 
 - [x] task_plans / assist_logs テーブル（0008。結果記録済み計画は不変・ログは追記のみ = 記録系保護）
 - [x] `/v1/task-plans`: 一覧（本人スコープ）/ upsert（AKO-TPL-001〜004）/ 削除（planned のみ）/ AI レビュー（Vertex AI generateJson → 失敗時は shared/domain/task-plan-review の同一ヒューリスティック = 原則4）/ 結果記録（FOR UPDATE クレームで 1 回確定・AKO-TPL-005）/ インサイト（管理者・SQL 集計）
+  - **※当時の仕様。2026-07-21 に §34 で緩和済み**（done も本人による訂正可 = 本文編集・削除・結果の再記録・後追い AI コメント。削除も done 可・**AKO-TPL-004 は廃止/欠番**・結果は再記録可で初回 result_at 保持・他メンバーは F-16-7 の許可制で readonly 参照。詳細は §34 と api-design §4）
 - [x] `/v1/assist`: 回答・メモの追記（AKO-RAS-001/002）/ ログ参照（本人のみ）/ 日報ドラフト生成（Vertex AI 構造化出力 + 正規化（実在 projectId・0.25h 刻み・progress 0-100）→ 失敗時 shared/domain/report-draft。保存しない = フォーム流し込み）
 - [x] ヒューリスティック（計画レビュー・ドラフト生成）を shared/domain へ移設しモック実装を import へ置換（単一実装 = 原則3）
 - [x] useTaskPlans / useReportAssist デュアルモード化・ai-assistant.vue / reports.vue の await 変換・表示時 refresh・モックバッジ除去
@@ -488,3 +489,24 @@
 - [ ] 残課題（オペレーター側の運用確認）: 本番 GCP プロジェクトで `drive.googleapis.com` が有効かの確認（無効なら有効化）。修正デプロイ後のエラーメッセージに Google の理由が表示されるため、それで確定診断できる
 - [x] 独立レビュー R1 フォローアップ（PR #63 はレビュー完了前にマージ → 後続 PR で対応。Critical 0 / Minor 3 / ニット 4 = 全件対応）: **M-1** 方向判定がビューポート基準でクリップ祖先（モーダル本文の overflow 等）を見ておらず、未フィルタ時にリスト上端が切れ先頭候補が不可視になる残欠陥 → 可視境界を「クリップ祖先（overflow ≠ visible の祖先）とビューポートの交差」で実測し、開く側に収まらないときは max-height を残り空間へ動的縮小（下限 80px = リスト内スクロールで全候補到達可能）/ **M-2** googleErrorDetail・driveForbiddenHint の単体テスト追加（it 4 件: reason+message 結合・非 JSON 縮退・200cp cap・ヒント条件。R2 フォローアップで新形式 1 件を加え 5 件）/ **M-3** 403 ヒントを理由コードで条件化（calendar.ts の先行分類 + insufficient〜。レート超過 403 には出さない・理由不明は実用優先で出す）/ ニット: ①§33 の「デスクトップ従来挙動不変」を正確な記述へ ②deploy-guide の連続空行除去 ③E2E のシード API 成否検証 + lib.cjs の CHROMIUM_PATH を export して再利用 ④E2E モバイル検証に elementFromPoint の実可視性アサーションを追加（boundingBox だけではクリップを検出できない）
 - [x] 独立レビュー R2 フォローアップ（R1 全 7 件の解消を実機プローブ（未フィルタ 15 候補・視高 380px の権限表）込みで検証・新規 Minor 1 / ニット 2 = 全件対応）: **M-R2-1** driveForbiddenHint の判定が errors[0].reason のみで、新形式（実理由が error.status / details 側・errors[].reason は forbidden 等の汎用値）だと Drive API 未有効でもヒントが抑止され得る → calendar.ts の先行実装と同様に**エラーボディ全文**へ regex を当てる方式へ変更（設定不備が明示 or 理由不明 = ヒントあり / レート・クォータ系が明示 = ヒントなし）+ error.status を reason のフォールバックに追加 + 新形式の単体テスト 1 件追加（api 単体 95）/ ニット: ①§33 の履歴行に「当時の実装値」注記（現行値との混同防止）②テスト件数の表記を it 単位へ修正
+
+## 34. オペレーター指示 2026-07-21（AI業務アシスタントの再編集・後追い AI コメント・他メンバー readonly 参照 / 日報・週報の月・週切替 / 共通のボタン実行中表示）の完了条件（Definition of Done）
+
+### 34-1 AI業務アシスタント（F-14）: 登録後の全項目再編集 + 後追い AI コメント + 他メンバー readonly 参照
+- [x] **(1a) 記録済み（done）でも全項目を再編集可能に**（誤登録の訂正）。`useTaskPlans.upsertPlan`（計画本文）・`recordResult`（結果/所感の上書き再記録）・`removePlan`（取消削除）から done 制限（AKO-TPL-004）を撤去。API（`task-plans.ts`）も同様に緩和し、**done の訂正・再記録・削除は監査ログ（audit_logs）へ記録**（記録系保護を「巻き戻し防止」から「本人による訂正 + 監査」へ緩和 = 提出済み日報と同型）。初回記録日時 `resultAt` は保持（mock = `resultAt ?? now` / API = `result_at = COALESCE(result_at, $)`）＝ 原則2（記録の巻き戻しをしない）
+- [x] UI: 「明日の計画」は status を問わず 編集/削除/AI コメント ボタンを表示。「今日の振り返り」の記録済み項目に「結果を編集」導線（キャンセルで取消 = 原則9.5）を追加
+- [x] **(1b) AI コメントを後からでも取得可能に**。`aiReview` から done 制限を撤去（mock/API 両方）。振り返りカードの done 項目にも AI コメント表示 + 「AI コメントをもらう/再取得」ボタンを配置（done 後に到達できる導線）
+- [x] **(1c) 権限がある人は他メンバーのページを readonly 参照**（既存の権限表で管理）。`shared/domain/permissions.ts` に `canViewMemberTaskPlans`（resource='ai-assistant' + field='member:<id>'。**既定 = 参照不可（許可制）**・自分は常に可・レイヤ解決は canViewField と同型。`resolve` に defaultAllow 引数を追加し既存 API は allow 既定を維持 = 下位互換）。権限設定 UI（`masters/permissions.vue`）に擬似リソース `assistant-view`（= 日報の参照対象 `report-view` と対称。effect allow=参照可）を追加
+- [x] ページ: 対象メンバー切替セレクト（自分 + 許可された対象者のみ）・readonly バナー・全 mutation を `isReadonly` で無効化。読み取りは `targetId` で射影（mock は全メンバー分が seed テーブルにあるためそのまま / API は `?memberId=` で他メンバー分を専用キャッシュへ遅延ロード = 自分のキャッシュ・インサイトを汚さない）
+- [x] API enforcement: `GET /v1/task-plans?memberId=` と `GET /v1/assist/logs?memberId=` は `canViewMemberTaskPlans` を経由し未許可は 403（AKO-PRM-002）。featureGuard（ai-assistant 機能 deny）が前段
+- [x] デモ用シード: 既定ユーザー（管理者 m-03）が m-05 の AI業務アシスタントを readonly 参照できる allow ルール 1 件を mock seed に追加（運用デフォルト pr-def-* とは別 id・API は migration 0025 の運用デフォルトを不変に保ち権限表から設定）
+
+### 34-2 日報・週報（F-06）: 月・週の切替
+- [x] **(2a) 「全員の日報」タブの月切替**を「自分の日報」の日付コントロールに合わせて 左右ボタン + 「今月」+ 月直接選択（`<input type="month">`）に。`shiftMonth` で月境界を扱う
+- [x] **(2b) 「チーム」「週報」タブの参照週を選択可能に**（左右ボタン + 「今週」+ 週レンジ表示）。`useReports` に `businessDaysOfWeek(weekStart)`・`timelineForDates(dates)` を追加し、チームマトリクス/タイムラインを選択週の営業日（月〜金）へ。週報タブは自分の週報を選択週で編集・提出可能に（週切替でエディタは参照へ戻す）。週次 AI インサイト（WidgetsWeeklyInsight）は既存の週ナビを踏襲
+
+### 34-3 共通: ボタンの実行中フィードバック
+- [x] `UiButton.vue`（`.btn` トークン踏襲 + `:loading` でプログレスサークル Loader2 回転 + 押下無効化 + aria-busy。`#icon` スロットで先頭アイコンをスピナーへ差し替え）と `useAsyncAction`（キー付き pending + 押下直後のスナックバー + 二重送信防止）を新設
+- [x] 対象 2 ページ（ai-assistant / reports）の主要非同期ボタン（提出・保存・AI 生成・AI コメント・結果記録・同期・リマインド・週報生成/提出 等）へ適用 = 押下でスナックバー通知 + スピナー表示
+- [x] 残課題（原則 9.5 / 原則3 の漸進適用。対象機能の改修時に順次）: 他ページのボタンへの UiButton/useAsyncAction 展開・API モードでの他メンバー readonly 参照時のカレンダー予定候補（本人操作のため readonly では非表示）
+- [x] 検証: mock typecheck / mock 73 tests / api typecheck / api 101 unit tests green。統合テスト（DB 必須）は done 訂正フロー・他メンバー参照 403 を追加。独立レビュー（5 観点）+ 反復修正で指摘ゼロ

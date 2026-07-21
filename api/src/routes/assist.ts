@@ -10,6 +10,7 @@ import { Hono } from 'hono'
 import type pg from 'pg'
 import { nextWorkingDay, workingDayRuleOf } from '../../../shared/domain/business-day'
 import { nowJstIso, todayJst } from '../../../shared/domain/jst'
+import { canViewMemberTaskPlans } from '../../../shared/domain/permissions'
 import type { DraftContext, ReportDraft } from '../../../shared/domain/report-draft'
 import { heuristicReportDraft, toQuarterHours } from '../../../shared/domain/report-draft'
 import type { HearingLog, TaskPlan } from '../../../shared/domain/types'
@@ -17,7 +18,7 @@ import type { Env } from '../env'
 import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
 import { generateJson } from '../lib/llm'
-import { activePermissionRules } from '../lib/permissions'
+import { activePermissionRules, subjectOf } from '../lib/permissions'
 import { capCp } from '../lib/text'
 import { buildContext } from './chatbot'
 import { ruleOf } from './attendance'
@@ -37,13 +38,21 @@ function dateOrToday(v: unknown): string {
 export function assistRoutes(pool: pg.Pool, env: Env): Hono {
   const app = new Hono()
 
-  // 当日のヒアリングログ（本人のみ。設問生成はフロントの射影）
+  // ヒアリングログ（既定 = 本人。memberId 指定 = 他メンバーの readonly 参照 = 権限で許可された対象者のみ）。
+  // 設問生成はフロントの射影
   app.get('/logs', async (c) => {
     const user = c.get('user')
     const date = dateOrToday(c.req.query('date'))
+    const target = c.req.query('memberId')?.trim() || user.id
+    if (target !== user.id) {
+      const rules = await activePermissionRules(pool)
+      if (!canViewMemberTaskPlans(rules, subjectOf(user), target)) {
+        throw err('AKO-PRM-002', '指定メンバーの AI業務アシスタントを参照する権限がありません', 403)
+      }
+    }
     const { rows } = await pool.query(
       `SELECT ${LOG_COLS} FROM assist_logs WHERE member_id = $1 AND date = $2::date ORDER BY at, id LIMIT 500`,
-      [user.id, date])
+      [target, date])
     return c.json({ data: rows })
   })
 
