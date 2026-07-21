@@ -4,12 +4,16 @@
  * 解決順序（レイヤ優先）: member（個人）> title（役職）> role（ロール）。
  * - 上位レイヤに該当ルールがあれば、そのレイヤの結果で確定する（個人の allow は役職/ロールの deny を上書き）
  * - 同一レイヤ内に allow と deny が両方あれば deny 優先
- * - どのレイヤにもルールがなければ **allow（既定）** = ルール未設定の環境では挙動が変わらない（下位互換）
+ * - 同一レイヤ内では明示キー（項目・対象メンバー）→ 一括キー（マスタ全体 = field null・全メンバー =
+ *   member:*）の順で参照する（バッチ7m: 権限表の階層一括設定。個別設定が一括設定より優先）
+ * - どのレイヤにもルールがなければ **既定値**（canUseFeature/canViewField/日報参照 = allow・
+ *   AI業務アシスタント参照 = deny の許可制）= ルール未設定の環境では挙動が変わらない（下位互換）
  *
  * 安全方向の原則: 本ルールは既存のロールガード（admin/hr/member の API ガード）を緩められない
  * 「制限レイヤ」である。allow ルールは同レイヤ/下位レイヤの deny を打ち消すためのもので、
  * 既存ガードを超える権限は付与しない（設定ミスで権限昇格が起きない）。
  */
+import { FIELD_CATALOG } from './permission-catalog'
 import type { PermissionRule } from './types'
 
 /** 権限解決の対象者（member の該当判定に使う属性） */
@@ -67,18 +71,25 @@ function decideLayer(rules: PermissionRule[]): boolean | null {
   return rules.every(r => r.effect === 'allow')
 }
 
+/**
+ * fieldKeys は「明示キー → 一括キー」の順（例: ['email', null] / ['member:m-01', 'member:*']）。
+ * 同一レイヤ内で明示キーのルールがあればそれで確定し、無ければ一括キーへフォールバックする。
+ * どちらかで確定したレイヤがあれば下位レイヤは見ない（レイヤ優先は従来どおり）
+ */
 function resolve(
   rules: PermissionRule[],
   subject: PermissionSubject,
   resource: string,
-  field: string | null,
+  fieldKeys: (string | null)[],
   defaultAllow = true,
 ): boolean {
-  const applicable = rules.filter(r =>
-    r.active && r.resource === resource && (r.field ?? null) === field && matches(r, subject))
+  const applicable = rules.filter(r => r.active && r.resource === resource && matches(r, subject))
   for (const kind of ['member', 'title', 'role'] as const) {
-    const decided = decideLayer(applicable.filter(r => r.subjectKind === kind))
-    if (decided !== null) return decided
+    const layer = applicable.filter(r => r.subjectKind === kind)
+    for (const key of fieldKeys) {
+      const decided = decideLayer(layer.filter(r => (r.field ?? null) === key))
+      if (decided !== null) return decided
+    }
   }
   return defaultAllow // 既定（下位互換 = allow。閲覧許可制のリソースは deny を既定にする）
 }
@@ -91,17 +102,23 @@ export function canUseFeature(
 ): boolean {
   // admin のマスタ・設定はロックアウト防止のため deny を無視する（権限ルール自体の編集手段を失わない = 設計判断）
   if (subject.role === 'admin' && (resource === 'masters' || resource === 'settings')) return true
-  return resolve(rules, subject, resource, null)
+  return resolve(rules, subject, resource, [null])
 }
 
-/** 表示項目の可否（resource = マスタエンティティキー等・field = 項目名） */
+/**
+ * 表示項目の可否（resource = マスタエンティティキー等・field = 項目名）。
+ * 項目に明示ルールが無いレイヤでは「マスタ全体」（同一 resource・field=null）のルールへ
+ * フォールバックする（バッチ7m: 権限表のマスタ全体行 = 全項目の一括既定。個別項目の設定が優先）。
+ * resource が機能キーでもある documents では field=null ルール = 機能利用可否と共用（設計判断:
+ * 機能を止めたドキュメントは項目も既定で隠れる。個別項目 allow で例外を作れる）
+ */
 export function canViewField(
   rules: PermissionRule[],
   subject: PermissionSubject,
   resource: string,
   field: string,
 ): boolean {
-  return resolve(rules, subject, resource, field)
+  return resolve(rules, subject, resource, [field, null])
 }
 
 /** オブジェクト配列から閲覧不可フィールドを取り除く（API レスポンス・モック共通の剥がし処理） */
@@ -111,11 +128,13 @@ export function stripDeniedFields<T extends Record<string, unknown>>(
   resource: string,
   rows: T[],
 ): T[] {
-  const denied = [...new Set(
-    rules
-      .filter(r => r.active && r.resource === resource && r.field)
-      .map(r => r.field as string),
-  )].filter(f => !canViewField(rules, subject, resource, f))
+  // 判定候補 = ルールに現れた項目 ∪ カタログの全項目。カタログ分を含めるのは「マスタ全体
+  // （field=null）deny」が個別ルールなしで全項目に及ぶため（id・active 等のカタログ外キーは
+  // 従来どおり制御対象外 = ルールで名指しされた場合のみ）
+  const denied = [...new Set([
+    ...rules.filter(r => r.active && r.resource === resource && r.field).map(r => r.field as string),
+    ...(FIELD_CATALOG[resource] ?? []).map(f => f.value),
+  ])].filter(f => !canViewField(rules, subject, resource, f))
   if (denied.length === 0) return rows
   return rows.map((row) => {
     const copy = { ...row }
@@ -158,13 +177,7 @@ export function aiReferenceScope(
   resource: string,
 ): 'all' | 'own' {
   const def = AI_SCOPE_FEATURES.find(f => f.key === resource)?.defaultScope ?? 'own'
-  const applicable = rules.filter(r =>
-    r.active && r.resource === resource && (r.field ?? null) === AI_SCOPE_FIELD && matches(r, subject))
-  for (const kind of ['member', 'title', 'role'] as const) {
-    const layer = applicable.filter(r => r.subjectKind === kind)
-    if (layer.length > 0) return layer.every(r => r.effect === 'allow') ? 'all' : 'own'
-  }
-  return def
+  return resolve(rules, subject, resource, [AI_SCOPE_FIELD], def === 'all') ? 'all' : 'own'
 }
 
 // ---------- 日報の参照対象（バッチ7h・オペレーター指示 2026-07-19 #10 = F-16-6） ----------
@@ -177,6 +190,14 @@ export function aiReferenceScope(
 export const REPORT_MEMBER_FIELD_PREFIX = 'member:'
 
 /**
+ * 参照対象（日報・AI業務アシスタント）の全メンバー一括キー（バッチ7m: 権限表の階層一括設定）。
+ * 対象メンバー個別の明示ルールが無いレイヤでは本キーのルールへフォールバックする
+ * （例: role=member に reports/member:* deny + 個人に member:<id> allow で「既定参照不可・例外許可」）。
+ * '*' はメンバー id として発番されない前提の予約値
+ */
+export const MEMBER_VIEW_ALL_FIELD = 'member:*'
+
+/**
  * 対象メンバーの日報（提出済み）を参照できるか。
  * 自分の日報は常に参照可（deny ルールの設定ミスで本人の記録が見えなくなる事故を防ぐ）。
  * 適用範囲: チームマトリクス・全員の日報・詳細表示・API の日報一覧・チャットボットの他人日報文脈
@@ -187,7 +208,8 @@ export function canViewMemberReports(
   targetMemberId: string,
 ): boolean {
   if (targetMemberId === subject.memberId) return true
-  return resolve(rules, subject, 'reports', `${REPORT_MEMBER_FIELD_PREFIX}${targetMemberId}`)
+  return resolve(rules, subject, 'reports',
+    [`${REPORT_MEMBER_FIELD_PREFIX}${targetMemberId}`, MEMBER_VIEW_ALL_FIELD])
 }
 
 // ---------- AI業務アシスタントの参照対象（F-14・オペレーター指示 2026-07-21 = F-16-7） ----------
@@ -213,5 +235,6 @@ export function canViewMemberTaskPlans(
   targetMemberId: string,
 ): boolean {
   if (targetMemberId === subject.memberId) return true
-  return resolve(rules, subject, 'ai-assistant', `${ASSIST_MEMBER_FIELD_PREFIX}${targetMemberId}`, false)
+  return resolve(rules, subject, 'ai-assistant',
+    [`${ASSIST_MEMBER_FIELD_PREFIX}${targetMemberId}`, MEMBER_VIEW_ALL_FIELD], false)
 }

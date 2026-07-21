@@ -90,7 +90,7 @@ mockup/
 | `UiToastHost` | （useToast 経由） | 操作フィードバック。`aria-live` |
 | `UiSearchInput` / `UiSelect` / `UiChipSelect` | 標準入力群 | 汎用区分マスタ（F-13-2）参照対応 |
 | `UiMultiCombobox` | `modelValue(string[]), options, single?` | **複数選択オートコンプリート**（論理名・物理キーの両方で部分一致検索 + チップ表示。single = 単一選択）。権限設定の項目キー指定（F-16-1・オペレーター指示 2026-07-19）で使用 |
-| `MastersPermissionMatrix` | props なし（ruleCrud を内部利用） | **権限表モード**（F-16-1・オペレーター指示 2026-07-19 #2）。機能 + マスタ項目（論理名 = utils/permission-catalog を一覧モードと共有）× ロール/役職/個人のマトリクス。セルクリックで 未設定 → 拒否 → 許可 → 未設定 を循環（拒否化は同一キーの無効ルール復元を優先・解除は論理削除） |
+| `MastersPermissionMatrix` | props なし（ruleCrud を内部利用） | **権限表モード**（F-16-1・オペレーター指示 2026-07-19 #2 / 2026-07-21 バッチ7m で階層化）。行 = ページ > 機能 > 項目 の 3 階層ツリー（開閉可能。論理名 = shared/domain/permission-catalog を一覧モード・API と共有）× ロール/役職/個人。セルは常に可否を表示（明示 = 濃色 / 上位一括・既定値 = 薄色破線）しクリックで反転・引き継ぎ値へ戻すと明示ルールを解除（論理削除。明示化は同一キーの無効ルール復元を優先）。表ヘッダは内部スクロール + sticky |
 | `UiAvatar` | `name, kind(human/ai), size` | メンバー/AI社員の表示統一 |
 | `UiSectionCard` | `title, description` + slots | セクション枠 |
 

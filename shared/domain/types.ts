@@ -836,7 +836,10 @@ export interface ChatMessage {
  * 権限ルール（F-16 権限制御・オペレーター指示 2026-07-17）
  * - subjectKind: 適用レイヤ。member（個人）> title（役職）> role（ロール）の優先順で解決する
  * - resource: 機能キー（FEATURE_PERMISSION_KEYS）またはマスタエンティティキー（フィールド制御時）
- * - field: null = 機能全体の利用可否 / 値あり = 表示項目レベルの制御
+ * - field: null = 機能全体の利用可否（フィールドリソースでは「マスタ全体」= 全項目の一括既定）
+ *   / 'ai-scope' = AI 参照範囲 / 'member:<id>' = 参照対象の個別メンバー / 'member:*' = 参照対象の
+ *   全メンバー一括既定 / その他の値 = 表示項目レベルの制御。
+ *   一括キー（field=null・member:*）は同一レイヤ内で明示キーが無い場合のフォールバック（バッチ7m）
  * - 既存のロールガード（admin/hr/member）は緩められない（ルールは制限レイヤ = 権限昇格しない設計）
  */
 export interface PermissionRule {
