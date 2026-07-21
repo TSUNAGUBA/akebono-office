@@ -109,7 +109,7 @@ Cloud Run（GCP）から RDS（AWS）への接続は次の 2 案。**v1 は案 A
 | **A. パブリック + TLS + IP 制限（v1 採用）** | RDS を publicly accessible にし、SG で Cloud Run の**固定エグレス IP のみ許可**（Direct VPC egress + Cloud NAT の静的 IP）。`rds.force_ssl=1` + `DB_SSL=verify`（RDS CA バンドル） | 構築が速い。TLS 必須・SG 最小許可・強パスワードが前提 |
 | B. Site-to-Site VPN / 専用線 | GCP HA VPN ⇄ AWS VPN Gateway でプライベート接続 | 露出ゼロだが構築・運用コスト増。利用者増加時に検討 |
 
-> **留意（クロスクラウドのレイテンシ）:** 東京リージョン同士（asia-northeast1 ⇄ ap-northeast-1）で RTT 数 ms 程度。API は 1 リクエスト内のクエリ数を絞る設計（横断集計は一括取得 → サーバー内計算）でこの前提に耐える。将来、レイテンシまたは転送コストが問題になる場合は Cloud SQL for PostgreSQL への移行も選択肢（スキーマ・API は接続文字列以外無変更で移行可能なよう、RDS 固有機能に依存しない）
+> **留意（クロスクラウドのレイテンシ）:** 東京リージョン同士（asia-northeast1 ⇄ ap-northeast-1）で RTT 数 ms 程度。API は 1 リクエスト内のクエリ数を絞る設計（横断集計は一括取得 → サーバー内計算）でこの前提に耐える。将来、レイテンシまたは転送コストが問題になる場合は Cloud SQL for PostgreSQL への移行も選択肢（スキーマ・API は接続文字列以外無変更で移行可能なよう、RDS 固有機能に依存しない。50 名規模で GCP へ全面移行した場合のコスト試算は [`cost-estimate-firebase-gcp.md`](./cost-estimate-firebase-gcp.md) 参照）
 
 - 接続文字列は **Secret Manager** 経由で注入（`DATABASE_URL`。CI が値の変更時のみ新バージョン追加）。Cloud Run の環境変数に平文で置かない
 - `DB_SSL`: `require`（暗号化のみ）で開始し、RDS CA バンドルを配布して `verify` へ引き上げる（deploy-guide.md 参照）
