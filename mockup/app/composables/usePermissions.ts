@@ -9,6 +9,7 @@
  */
 import {
   canUseFeature, canViewField, canViewMemberReports as canViewMemberReportsShared,
+  canViewMemberTaskPlans as canViewMemberTaskPlansShared,
   featureKeyOfPath, type PermissionSubject,
 } from '../../../shared/domain/permissions'
 
@@ -41,5 +42,10 @@ export function usePermissions() {
     return canViewMemberReportsShared(rules.value, subject.value, targetMemberId)
   }
 
-  return { can, canPath, canField, canViewMemberReports }
+  /** 対象メンバーの AI業務アシスタントを readonly 参照できるか（F-16-7。自分は常に可・未設定 = 不可 = 許可制） */
+  function canViewMemberTaskPlans(targetMemberId: string): boolean {
+    return canViewMemberTaskPlansShared(rules.value, subject.value, targetMemberId)
+  }
+
+  return { can, canPath, canField, canViewMemberReports, canViewMemberTaskPlans }
 }

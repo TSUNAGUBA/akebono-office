@@ -29,6 +29,8 @@ export interface AssistQuestion {
 // ---------- API モードのキャッシュ（SPA・モジュールスコープ単一。日付キー単位の遅延ロード） ----------
 
 const apiAssistLogs = ref<HearingLog[]>([])
+/** 他メンバーのヒアリングログ（readonly 参照。F-14 対象メンバー切替）。id マージの単一ストア */
+const apiMemberAssistLogs = ref<HearingLog[]>([])
 
 function loadAssistLogs(date: string, force = false): Promise<void> {
   return apiLoadOnce(`ras:${date}`, async () => {
@@ -39,8 +41,19 @@ function loadAssistLogs(date: string, force = false): Promise<void> {
   }, force)
 }
 
+/** 他メンバーのヒアリングログ（readonly）。サーバーが canViewMemberTaskPlans を enforcement する */
+function loadMemberAssistLogs(memberId: string, date: string, force = false): Promise<void> {
+  return apiLoadOnce(`ras:member:${memberId}:${date}`, async () => {
+    const rows = await apiFetch<HearingLog[]>('/v1/assist/logs', { query: { date, memberId } })
+    const map = new Map(apiMemberAssistLogs.value.map(l => [l.id, l]))
+    for (const l of rows) map.set(l.id, l)
+    apiMemberAssistLogs.value = [...map.values()]
+  }, force)
+}
+
 onApiReset(() => {
   apiAssistLogs.value = []
+  apiMemberAssistLogs.value = []
 })
 
 export function useReportAssist() {
@@ -67,8 +80,14 @@ export function useReportAssist() {
   // ---------- ログ参照 ----------
 
   function logsOf(memberId: string, date: string): HearingLog[] {
-    if (isApi) void loadAssistLogs(date)
-    return hearingLogs.value
+    // API モードで他メンバーを参照するときは専用キャッシュから読む（自分のログキャッシュを汚さない）。
+    // モックモードは hearingLogs テーブルに全メンバーのログがあるためそのまま射影できる
+    let source = hearingLogs.value
+    if (isApi) {
+      if (memberId === currentUser.value.id) void loadAssistLogs(date)
+      else { void loadMemberAssistLogs(memberId, date); source = apiMemberAssistLogs.value }
+    }
+    return source
       .filter(l => l.memberId === memberId && l.date === date)
       .sort((a, b) => a.at.localeCompare(b.at))
   }

@@ -1041,19 +1041,23 @@ describe('タスク計画（AI業務アシスタント）', () => {
     expect((await api('POST', `/v1/task-plans/${planId}/ai-review`, { as: HR })).status).toBe(403)
   })
 
-  it('結果記録は 1 回で確定（記録系保護 AKO-TPL-004）。以後の編集・削除・再記録は不可', async () => {
+  it('結果記録後も本人は訂正できる（編集・再記録・後追い AI コメント・削除。オペレーター指示 2026-07-21）', async () => {
     expect((await api('POST', `/v1/task-plans/${planId}/result`, { as: MEMBER, body: { outcome: '' } })).json.error?.code)
       .toBe('AKO-TPL-005')
     expect((await api('POST', `/v1/task-plans/${planId}/result`, {
       as: MEMBER, body: { outcome: 'テンプレ完成。経理へ共有済み', reflection: '想定より早く終わった' },
     })).status).toBe(200)
-    for (const [method, path, body] of [
-      ['POST', `/v1/task-plans/${planId}/result`, { outcome: '二重記録' }],
-      ['PUT', '/v1/task-plans', { id: planId, title: '編集', date: today }],
-      ['POST', `/v1/task-plans/${planId}/remove`, {}],
-    ] as const) {
-      expect((await api(method, path, { as: MEMBER, body })).json.error?.code).toBe('AKO-TPL-004')
-    }
+    // done でも誤記の訂正ができる: 再記録・本文編集・後追い AI コメント（いずれも 200）
+    expect((await api('POST', `/v1/task-plans/${planId}/result`, {
+      as: MEMBER, body: { outcome: 'テンプレ完成。経理へ共有済み（訂正）' },
+    })).status).toBe(200)
+    expect((await api('PUT', '/v1/task-plans', {
+      as: MEMBER, body: { id: planId, title: '請求書テンプレの整備（訂正）', date: today },
+    })).status).toBe(200)
+    expect((await api('POST', `/v1/task-plans/${planId}/ai-review`, { as: MEMBER })).status).toBe(200)
+    // 他人は依然として操作不可（本人ガード AKO-TPL-003）
+    expect((await api('POST', `/v1/task-plans/${planId}/result`, { as: HR, body: { outcome: 'x' } })).json.error?.code)
+      .toBe('AKO-TPL-003')
     // インサイト: 管理者のみ。MEMBER の完了が集計される
     expect((await api('GET', '/v1/task-plans/insights', { as: MEMBER })).status).toBe(403)
     const ins = (await api('GET', '/v1/task-plans/insights', { as: ADMIN })).json.data as
@@ -1061,6 +1065,17 @@ describe('タスク計画（AI業務アシスタント）', () => {
     const mine = ins.find(x => x.memberId === MEMBER)!
     expect(mine.planned).toBeGreaterThanOrEqual(1)
     expect(mine.done).toBeGreaterThanOrEqual(1)
+    // done でも取消（削除）できる（原則9.5 = 取消フロー）
+    expect((await api('POST', `/v1/task-plans/${planId}/remove`, { as: MEMBER })).status).toBe(200)
+  })
+
+  it('他メンバーの計画は権限（ai-assistant + member:<id>）で許可された対象者のみ readonly 参照可', async () => {
+    // 既定 = 参照不可。許可ルール未設定の HR は MEMBER の計画を memberId 指定で取得できない（AKO-PRM-002）
+    const denied = await api('GET', `/v1/task-plans?memberId=${MEMBER}`, { as: HR })
+    expect(denied.status).toBe(403)
+    expect(denied.json.error?.code).toBe('AKO-PRM-002')
+    // 自分自身の memberId 指定は常に可（本人スコープと同じ）
+    expect((await api('GET', `/v1/task-plans?memberId=${MEMBER}`, { as: MEMBER })).status).toBe(200)
   })
 })
 

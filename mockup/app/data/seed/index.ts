@@ -192,6 +192,9 @@ export function buildSeed(): MockDbShape {
       { id: 'pr-def-04', subjectKind: 'role', subjectId: 'member', resource: 'settings', field: null, effect: 'deny', active: true },
       { id: 'pr-def-05', subjectKind: 'role', subjectId: 'hr', resource: 'sales', field: null, effect: 'deny', active: true },
       { id: 'pr-def-06', subjectKind: 'role', subjectId: 'hr', resource: 'decision', field: null, effect: 'deny', active: true },
+      // デモ例（F-16-7）: AI業務アシスタントの参照対象は既定 = 参照不可（許可制）。既定ユーザー（管理者 m-03）が
+      // 他メンバー（m-05）のページを readonly 参照できることを示す例。API 側は権限表から同様に設定する
+      { id: 'pr-demo-assist-01', subjectKind: 'member', subjectId: 'm-03', resource: 'ai-assistant', field: 'member:m-05', effect: 'allow', active: true },
     ],
     akebonoWishes: misc.seedAkebonoWishes,
     auditLogs: misc.seedAuditLogs,

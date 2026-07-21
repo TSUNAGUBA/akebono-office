@@ -183,6 +183,19 @@ export function useReports() {
     return days
   }
 
+  /** 指定週（weekStart = 月曜）の営業日（月〜金・昇順）。チームタブの週切替で参照する */
+  function businessDaysOfWeek(weekStart: string): string[] {
+    return Array.from({ length: 5 }, (_, i) => addDays(weekStart, i))
+  }
+
+  /** API モード時、指定した日付群を含む期間のチーム提出状況を遅延ロードする */
+  function touchTeamDates(dates: string[]): void {
+    if (!isApi || dates.length === 0) return
+    const from = dates[0]
+    const to = dates[dates.length - 1]
+    if (from && to) void loadTeamRange(from, to)
+  }
+
   // 表示メンバー設定 + 日報参照権限（バッチ7h・オペレーター指示 2026-07-19 #10 ① → バッチ7k #13 で候補拡大）
   const perms = usePermissions()
   const { getConfig } = useAppSettings()
@@ -225,9 +238,10 @@ export function useReports() {
     return timelineVisibleWith(teamVisibleIds.value, memberId, currentUser.value.id, selectable)
   }
 
-  function timeline(days = 7): DailyReport[] {
-    touchTeamWindow(days)
-    const range = new Set(recentBusinessDays(days))
+  /** 指定した日付群の提出済み日報タイムライン（表示メンバー設定 ∩ 参照権限を適用） */
+  function timelineForDates(dates: string[]): DailyReport[] {
+    touchTeamDates(dates)
+    const range = new Set(dates)
     return dailyReports.value
       .filter(r => r.status === 'submitted' && range.has(r.date))
       // 人間の日報は表示メンバー設定 ∩ 参照権限に従う（AI 社員の日次報告は従来どおり全員分）
@@ -235,6 +249,11 @@ export function useReports() {
       .sort((a, b) =>
         b.date.localeCompare(a.date)
         || (b.submittedAt ?? '').localeCompare(a.submittedAt ?? ''))
+  }
+
+  function timeline(days = 7): DailyReport[] {
+    touchTeamWindow(days)
+    return timelineForDates(recentBusinessDays(days))
   }
 
   /**
@@ -562,10 +581,12 @@ export function useReports() {
     authorOf,
     memberName,
     recentBusinessDays,
+    businessDaysOfWeek,
     teamMembers,
     teamMemberCandidates,
     cellStatus,
     timeline,
+    timelineForDates,
     allSubmitted,
     hoursGapMinutes,
     gapOf,
