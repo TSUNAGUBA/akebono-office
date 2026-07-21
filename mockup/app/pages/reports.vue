@@ -428,6 +428,11 @@ function openCell(memberId: string, date: string): void {
     return
   }
   if (isAdmin.value) {
+    // 未来日（未来週の営業日）は提出不能のためリマインド対象にしない
+    if (date > todayJst()) {
+      show('未来の日付にはリマインドできません', 'info')
+      return
+    }
     void askRemind(memberId, date)
     return
   }
@@ -445,8 +450,14 @@ async function askRemind(memberId: string, date: string): Promise<void> {
 }
 
 async function remindAll(): Promise<void> {
-  const date = matrixDays.value[matrixDays.value.length - 1]
-  if (!date) return
+  // 対象日 = 選択週の営業日のうち本日以前で最新の日（未来週・未来日を催促しない）
+  const today = todayJst()
+  const past = matrixDays.value.filter(d => d <= today)
+  const date = past[past.length - 1]
+  if (!date) {
+    show('この週はまだ到来していないため、リマインド対象がありません', 'info')
+    return
+  }
   const targets = reports.teamMembers.value.filter(m =>
     reports.cellStatus(m.id, date) !== 'submitted' && m.id !== currentUserId.value)
   if (targets.length === 0) {
@@ -534,15 +545,19 @@ function loadWeeklyEditor(): void {
     wkMain.value = r.mainWork
     wkIssues.value = r.issues
     wkNext.value = r.nextWeek
-  } else if (!r) {
+  } else {
+    // 下書き以外（未作成・提出済み）は全クリア。週送りで別週へ入力内容が残留し、
+    // 誤った週へ提出される事故を防ぐ（提出済みはエディタ非表示だが残留も断つ）
     wkGoal.value = ''
     wkMain.value = ''
     wkIssues.value = ''
     wkNext.value = ''
   }
 }
-// selWeekly も監視: API モードでは週報データが非同期に届くため、到着後に下書きを復元する
-watch([currentUserId, selWeekly], loadWeeklyEditor, { immediate: true })
+// selWeekStart も監視: 未作成週→未作成週の移動では selWeekly が undefined→undefined で
+// 参照変化せず watcher が発火しないため、週初め自体を復元トリガに含める（入力残留の防止）。
+// selWeekly も監視: API モードでは週報データが非同期に届くため到着後に下書きを復元する
+watch([currentUserId, selWeekStart, selWeekly], loadWeeklyEditor, { immediate: true })
 
 function weekLabel(weekStart: string): string {
   return `${fmtDate(weekStart)}〜${fmtDate(addDays(weekStart, 6))}`

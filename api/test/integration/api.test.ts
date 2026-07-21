@@ -1077,6 +1077,34 @@ describe('タスク計画（AI業務アシスタント）', () => {
     // 自分自身の memberId 指定は常に可（本人スコープと同じ）
     expect((await api('GET', `/v1/task-plans?memberId=${MEMBER}`, { as: MEMBER })).status).toBe(200)
   })
+
+  it('許可パス: allow ルール保持者は対象メンバーの計画/ログを 200 で取得・無関係な第三者指定は 403', async () => {
+    // MEMBER が今日の計画を 1 件持つように用意（前テストで作った計画は削除済みのため作り直す）
+    await api('PUT', '/v1/task-plans', {
+      as: MEMBER, body: { title: '参照許可パス検証', date: today, purpose: 'p', doneCriteria: '', approach: '' },
+    })
+    // HR に「MEMBER の AI業務アシスタントを参照可」を付与（resource='ai-assistant' + field='member:<MEMBER>' allow）
+    await pool.query(
+      `INSERT INTO permission_rules (id, subject_kind, subject_id, resource, field, effect, active)
+       VALUES ('pr-test-assist-view', 'member', $1, 'ai-assistant', $2, 'allow', true)
+       ON CONFLICT (id) DO UPDATE SET active = true`,
+      [HR, `member:${MEMBER}`])
+    clearPermissionCache()
+    try {
+      const plans = await api('GET', `/v1/task-plans?memberId=${MEMBER}`, { as: HR })
+      expect(plans.status).toBe(200)
+      const rows = plans.json.data as { memberId: string }[]
+      expect(rows.length).toBeGreaterThanOrEqual(1)
+      expect(rows.every(p => p.memberId === MEMBER)).toBe(true) // 対象メンバーの行のみ
+      // ヒアリングログも同じ許可で 200
+      expect((await api('GET', `/v1/assist/logs?memberId=${MEMBER}`, { as: HR })).status).toBe(200)
+      // 許可対象は MEMBER のみ。無関係な第三者（ADMIN）指定は依然 403
+      expect((await api('GET', `/v1/task-plans?memberId=${ADMIN}`, { as: HR })).json.error?.code).toBe('AKO-PRM-002')
+    } finally {
+      await pool.query(`DELETE FROM permission_rules WHERE id = 'pr-test-assist-view'`)
+      clearPermissionCache()
+    }
+  })
 })
 
 describe('日報 AI アシスト', () => {

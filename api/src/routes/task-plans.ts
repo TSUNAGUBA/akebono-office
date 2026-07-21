@@ -1,6 +1,10 @@
 /**
  * タスク計画 API（F-14 AI業務アシスタント）。mockup useTaskPlans の API 版。
- * - 計画は本人のみ操作可（AKO-TPL-003）。結果記録済み（done）は編集・削除不可（AKO-TPL-004 = 記録系保護）
+ * - 計画は本人のみ操作可（AKO-TPL-003）。誤登録の訂正のため done でも本文編集・結果の再記録・削除・
+ *   後追い AI コメントが可能（オペレーター指示 2026-07-21）。done の訂正は監査ログへ記録し、初回記録日時
+ *   result_at は保持する（記録系保護を「巻き戻し防止」から「本人による訂正 + 監査」へ緩和 = 提出済み日報と同型）
+ * - 他メンバー参照（F-16-7）: GET は ?memberId= で readonly 参照可（canViewMemberTaskPlans で enforcement。
+ *   既定 = 参照不可の許可制。未許可は AKO-PRM-002 403）
  * - AI コメント: Vertex AI（lib/llm.generateJson）→ 失敗時は shared/domain/task-plan-review の
  *   決定的ヒューリスティックへフォールバック（原則4。モックと同一文言）
  * - インサイト: 管理者のみ。メンバー別の計画数・完了率・振り返り記入率をサーバー集計

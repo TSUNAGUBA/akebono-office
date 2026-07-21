@@ -270,6 +270,14 @@ function onMemoKeydown(e: KeyboardEvent): void {
 
 const questions = computed(() => assist.questionsFor(targetId.value, recDate.value))
 const answeredCount = computed(() => questions.value.filter(q => q.answered).length)
+// readonly 参照時は設問生成（カレンダー予定に依存 = API モードでは他メンバー分を取得しない）を使わず、
+// 記録済みの回答ログのみを読み取り表示する（mock/API パリティを保つ）
+const readonlyAnswers = computed(() =>
+  assist.logsOf(targetId.value, recDate.value).filter(l => l.kind === 'qa'))
+/** 回答ログの設問文（wrap 系のキー接頭辞を隠す） */
+function qaLabel(question: string): string {
+  return question.includes('|') ? question.split('|').slice(1).join('|') : question
+}
 const qaText = ref<Record<string, string>>({})
 const reanswering = ref<Record<string, boolean>>({})
 
@@ -407,8 +415,10 @@ const showInsights = computed(() => isAdmin.value && !isReadonly.value)
             <UiEmptyState
               v-if="planPlans.length === 0"
               icon="ClipboardList"
-              title="この日の計画はまだありません"
-              :hint="calConnected ? '予定から計画化するか、手動で追加してください' : '「タスクを追加」から計画を登録してください（カレンダー連携で予定からも追加できます）'"
+              :title="isReadonly ? `${targetMemberName} さんはこの日の計画を登録していません` : 'この日の計画はまだありません'"
+              :hint="isReadonly
+                ? undefined
+                : (calConnected ? '予定から計画化するか、手動で追加してください' : '「タスクを追加」から計画を登録してください（カレンダー連携で予定からも追加できます）')"
             />
             <div
               v-for="p in planPlans"
@@ -612,9 +622,18 @@ const showInsights = computed(() => isAdmin.value && !isReadonly.value)
             <div class="rounded-lg border border-line p-2.5">
               <div class="flex items-center gap-2">
                 <p class="text-[11px] font-bold text-muted">AI ヒアリング（予定の進み具合と今日のまとめ）</p>
-                <span class="num ml-auto whitespace-nowrap text-xs font-semibold text-sub">回答 {{ answeredCount }}/{{ questions.length }}</span>
+                <span v-if="!isReadonly" class="num ml-auto whitespace-nowrap text-xs font-semibold text-sub">回答 {{ answeredCount }}/{{ questions.length }}</span>
+                <span v-else class="num ml-auto whitespace-nowrap text-xs font-semibold text-sub">回答 {{ readonlyAnswers.length }} 件</span>
               </div>
-              <div class="mt-1.5 grid gap-2">
+              <!-- readonly: 記録済みの回答のみを読み取り表示（設問生成 = カレンダー予定に依存しない） -->
+              <div v-if="isReadonly" class="mt-1.5 grid gap-2">
+                <p v-if="readonlyAnswers.length === 0" class="text-xs text-muted">この日の回答はありません</p>
+                <div v-for="a in readonlyAnswers" :key="a.id" class="rounded-lg border border-line bg-surface-soft p-2.5">
+                  <p class="text-[13px] font-semibold">{{ qaLabel(a.question) }}</p>
+                  <p class="mt-1 text-xs text-muted">{{ a.answer }}</p>
+                </div>
+              </div>
+              <div v-else class="mt-1.5 grid gap-2">
                 <div
                   v-for="q in questions"
                   :key="q.key"
@@ -633,11 +652,12 @@ const showInsights = computed(() => isAdmin.value && !isReadonly.value)
                   <!-- 回答入力（自分の表示のみ） -->
                   <div v-else class="mt-1.5 grid gap-1.5">
                     <div v-if="q.chips.length > 0" class="flex flex-wrap gap-1.5">
+                      <!-- チップは二重送信防止の無効化のみ（全チップにスピナーを出さない = どれを押したか分かる） -->
                       <UiButton
                         v-for="c in q.chips"
                         :key="c"
                         size="sm"
-                        :loading="isRunning(`answer:${q.key}`)"
+                        :disabled="isRunning(`answer:${q.key}`)"
                         @click="submitAnswer(q, c)"
                       >
                         {{ c }}
