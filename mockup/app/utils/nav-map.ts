@@ -32,6 +32,13 @@ const PROJECTS: NavLink = { to: '/masters/projects', label: 'プロジェクト�
 const WORK_CATEGORIES: NavLink = { to: '/masters/work-categories', label: '業務種別マスタ', adminOnly: true }
 
 export const NAV_MAP: Record<string, NavMapEntry> = {
+  '/timecard': {
+    parent: HOME,
+    related: [
+      { to: '/attendance', label: '勤怠管理' },
+      { to: '/shift', label: 'シフト表' },
+    ],
+  },
   '/attendance': {
     parent: HOME,
     related: [

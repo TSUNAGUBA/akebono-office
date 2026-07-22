@@ -26,13 +26,14 @@ export interface PermissionSubject {
 
 /** 機能キーのカタログ（管理 UI の選択肢・ページ/API ガードの共通語彙） */
 export const FEATURE_PERMISSION_KEYS: { key: string; label: string }[] = [
+  { key: 'timecard', label: 'タイムカード（自分の打刻）' },
   { key: 'attendance', label: '勤怠管理（休暇含む）' },
   { key: 'shift', label: 'シフト表' },
   { key: 'reports', label: '日報・週報' },
   { key: 'ai-assistant', label: 'AI業務アシスタント（カレンダー連携含む）' },
   { key: 'poipoi', label: 'ぽいぽいポスト' },
   { key: 'minutes', label: '議事録' },
-  { key: 'workflow', label: 'ワークフロー・稟議' },
+  { key: 'workflow', label: '稟議' },
   { key: 'decision', label: '意思決定支援' },
   { key: 'ai-company', label: 'AIネイティブカンパニー' },
   { key: 'akebono', label: 'AKEBONO（3D オフィス）' },
@@ -52,7 +53,7 @@ export function featureKeyOfPath(path: string): string | null {
   if (path === '/support/documents' || path.startsWith('/support/documents/')) return 'documents'
   const seg = path.split('/')[1] ?? ''
   const known = [
-    'attendance', 'shift', 'reports', 'ai-assistant', 'workflow', 'decision', 'ai-company',
+    'timecard', 'attendance', 'shift', 'reports', 'ai-assistant', 'workflow', 'decision', 'ai-company',
     'akebono', 'support', 'sales', 'status', 'inbox', 'masters', 'settings', 'poipoi', 'minutes',
   ]
   return known.includes(seg) ? seg : null
@@ -237,4 +238,27 @@ export function canViewMemberTaskPlans(
   if (targetMemberId === subject.memberId) return true
   return resolve(rules, subject, 'ai-assistant',
     [`${ASSIST_MEMBER_FIELD_PREFIX}${targetMemberId}`, MEMBER_VIEW_ALL_FIELD], false)
+}
+
+// ---------- 全員のタイムカードの参照（オペレーター指示 2026-07-22） ----------
+
+/**
+ * 全員のタイムカード（勤怠管理の全メンバー出退勤一覧）の参照可否の擬似フィールド
+ * （permission_rules.field）。resource = 'attendance'・field = 'timecard-all'。
+ * 既定 = 管理者/人事のみ参照可（従来のロールガードと同値 = 下位互換）。
+ * 権限表の明示ルールで一般メンバーへの許可・人事からの剥奪ができる（レイヤ解決は canViewField と同一）
+ */
+export const TIMECARD_ALL_FIELD = 'timecard-all'
+
+/** 全員のタイムカードの参照可否の既定値（明示ルールが無い場合。= 従来の管理者/人事ガード） */
+export function timecardAllDefault(role: PermissionSubject['role']): boolean {
+  return role === 'admin' || role === 'hr'
+}
+
+/** 全員のタイムカード（一覧・サーバー集計 API）を参照できるか */
+export function canViewAllTimecards(
+  rules: PermissionRule[],
+  subject: PermissionSubject,
+): boolean {
+  return resolve(rules, subject, 'attendance', [TIMECARD_ALL_FIELD], timecardAllDefault(subject.role))
 }

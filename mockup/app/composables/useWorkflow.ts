@@ -31,7 +31,10 @@ export interface WorkflowInput {
   category: WorkflowCategory
   title: string
   amount: number
-  body: string
+  /** 目的（オペレーター指示 2026-07-22: 本文を目的と内容に分割） */
+  purpose: string
+  /** 内容（区分別テンプレート = utils/workflow-templates.ts を呼び出して記入できる） */
+  content: string
   attachments: string[]
 }
 
@@ -305,6 +308,7 @@ export function useWorkflow() {
     requests.value = [...requests.value, {
       id,
       ...input,
+      body: '', // 新規は purpose / content が正（body は旧データ表示用の互換フィールド）
       requesterId: currentUser.value.id,
       status: 'draft',
       currentStep: 0,
@@ -351,6 +355,7 @@ export function useWorkflow() {
       requests.value = [...requests.value, {
         id,
         ...input,
+        body: '', // 新規は purpose / content が正（body は旧データ表示用の互換フィールド）
         requesterId: currentUser.value.id,
         status: 'in_review',
         currentStep: 1,

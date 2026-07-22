@@ -25,7 +25,8 @@ const ACTION_LABELS: Record<Exclude<ApprovalAction, 'submit' | 'approve'>, strin
   reject: '却下', remand: '差戻し', withdraw: '取下げ',
 }
 
-const REQ_COLS = `id, category, title, amount::float8 AS amount, body, attachments, requester_id AS "requesterId",
+const REQ_COLS = `id, category, title, amount::float8 AS amount, body, purpose, content,
+  attachments, requester_id AS "requesterId",
   status, current_step AS "currentStep", route_snapshot AS "routeSnapshot", created_at AS "createdAt"`
 const LOG_COLS = `id, request_id AS "requestId", step, actor_id AS "actorId",
   delegate_for_id AS "delegateForId", action, comment, at`
@@ -40,7 +41,10 @@ interface WorkflowInput {
   category: WorkflowCategory
   title: string
   amount: number
+  /** 旧形式の本文（旧クライアント互換。新クライアントは purpose / content を送る） */
   body: string
+  purpose: string
+  content: string
   attachments: string[]
 }
 
@@ -58,6 +62,8 @@ function parseInput(raw: Record<string, unknown>): WorkflowInput {
     title,
     amount,
     body: String(raw.body ?? ''),
+    purpose: String(raw.purpose ?? ''),
+    content: String(raw.content ?? ''),
     attachments: Array.isArray(raw.attachments) ? (raw.attachments as string[]).map(String) : [],
   }
 }
@@ -219,9 +225,10 @@ export function workflowsRoutes(pool: pg.Pool): Hono {
       if (row.status !== 'draft') throw err('AKO-WFL-001', '下書き以外は下書き保存できません', 409)
       const result = await pool.query(
         `UPDATE workflow_requests
-         SET category = $2, title = $3, amount = $4, body = $5, attachments = $6, updated_at = now()
-         WHERE id = $1 AND requester_id = $7 AND status = 'draft'`,
-        [requestId, input.category, input.title, input.amount, input.body,
+         SET category = $2, title = $3, amount = $4, body = $5, purpose = $6, content = $7,
+             attachments = $8, updated_at = now()
+         WHERE id = $1 AND requester_id = $9 AND status = 'draft'`,
+        [requestId, input.category, input.title, input.amount, input.body, input.purpose, input.content,
           JSON.stringify(input.attachments), user.id])
       if (result.rowCount === 0) {
         throw err('AKO-WFL-001', '下書き以外は下書き保存できません（申請者本人の下書きのみ）', 409)
@@ -230,9 +237,9 @@ export function workflowsRoutes(pool: pg.Pool): Hono {
     }
     const id = newId('WF')
     await pool.query(
-      `INSERT INTO workflow_requests (id, category, title, amount, body, attachments, requester_id, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [id, input.category, input.title, input.amount, input.body,
+      `INSERT INTO workflow_requests (id, category, title, amount, body, purpose, content, attachments, requester_id, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [id, input.category, input.title, input.amount, input.body, input.purpose, input.content,
         JSON.stringify(input.attachments), user.id, nowJstIso()])
     return c.json({ data: { id } }, 201)
   })
@@ -266,18 +273,18 @@ export function workflowsRoutes(pool: pg.Pool): Hono {
         id = requestId
         await client.query(
           `UPDATE workflow_requests
-           SET category = $2, title = $3, amount = $4, body = $5, attachments = $6,
-               status = 'in_review', current_step = 1, route_snapshot = $7, updated_at = now()
+           SET category = $2, title = $3, amount = $4, body = $5, purpose = $6, content = $7,
+               attachments = $8, status = 'in_review', current_step = 1, route_snapshot = $9, updated_at = now()
            WHERE id = $1`,
-          [id, input.category, input.title, input.amount, input.body,
+          [id, input.category, input.title, input.amount, input.body, input.purpose, input.content,
             JSON.stringify(input.attachments), JSON.stringify(route)])
       } else {
         id = newId('WF')
         await client.query(
           `INSERT INTO workflow_requests
-             (id, category, title, amount, body, attachments, requester_id, status, current_step, route_snapshot, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, 'in_review', 1, $8, $9)`,
-          [id, input.category, input.title, input.amount, input.body,
+             (id, category, title, amount, body, purpose, content, attachments, requester_id, status, current_step, route_snapshot, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'in_review', 1, $10, $11)`,
+          [id, input.category, input.title, input.amount, input.body, input.purpose, input.content,
             JSON.stringify(input.attachments), user.id, JSON.stringify(route), nowJstIso()])
       }
       await appendLog(client, id, 0, user.id, 'submit', '')

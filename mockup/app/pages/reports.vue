@@ -1,20 +1,24 @@
 <script setup lang="ts">
 /**
  * 日報・週報（F-06）
- * タブ: 自分の日報 / 全員の日報（提出済みの月次一覧・全メンバー参照可） /
- *       チーム（提出状況マトリクス+タイムライン。バッチ7h で全員へ公開 = 表示メンバー設定 ∩ 日報参照権限。
- *       リマインド・下書き状態の表示は管理者のみ） / 週報
+ * タブ: 自分の日報 / 自分の週報 / 全員の日報 / 全員の週報 / チーム（オペレーター指示 2026-07-22 で再編）
+ * - 参照権限は権限表の「日報・週報の参照対象」（F-16-6 canViewMemberReports）で管理する
+ * - 自分の日報: 週/月の表示モード（月は横スクロール・カレンダーの 2 ビュー）+ テーブル形式の通常入力 +
+ *   明日の予定（最大 3 件。翌営業日の日報へ自動反映）
+ * - 全員の日報・全員の週報・チーム: 部署・メンバーで絞り込み
+ * - チーム: 週/月の表示モード（月は横スクロールマトリクス・カレンダーの 2 ビュー）
  * 参照 = 基本ビュー・入力 = ボタン押下で表示（バッチ7h・オペレーター指示 2026-07-19 #10 ④）
  */
 import {
   BellRing, Check, ChevronLeft, ChevronRight, Eye, Minus, Pencil, Plus, Send, Settings2, Sparkles, Trash2,
 } from 'lucide-vue-next'
-import type { DailyReport, ReportEntry, WeeklyReport } from '~/types/domain'
+import type { DailyReport, ReportEntry, TomorrowPlan, WeeklyReport } from '~/types/domain'
+import { TOMORROW_PLANS_MAX } from '../../../shared/domain/types'
 import { REPORT_STATUS_LABELS } from '~/composables/useReports'
-import { addDays, fmtDate, fmtDateLong, fmtMinutes, fmtTime, weekdayOf } from '~/utils/format'
+import { addDays, daysInMonth, fmtDate, fmtDateLong, fmtMinutes, fmtTime, weekdayOf } from '~/utils/format'
 import { EMPLOYMENT_TYPE_LABELS, EMPLOYMENT_TYPE_TONES } from '~/utils/labels'
 import { parseTeamVisibleIds } from '~/utils/team-visibility'
-import type { TabItem, TableColumn } from '~/types/ui'
+import type { TabItem, TableColumn, Tone } from '~/types/ui'
 
 const route = useRoute()
 const { currentUser, currentUserId, isAdmin, isHrOrAdmin } = useCurrentUser()
@@ -25,8 +29,10 @@ const { ask } = useConfirm()
 const { isRunning, run } = useAsyncAction()
 const { tbl } = useMockDb()
 const projects = tbl('projects')
+const members = tbl('members')
+const { options: deptOptions } = useDepartments()
 
-/** 'YYYY-MM' に月を加算（全員の日報タブの月送り。日付キー計算は addDays と別で月境界を扱う） */
+/** 'YYYY-MM' に月を加算（月送り。日付キー計算は addDays と別で月境界を扱う） */
 function shiftMonth(ym: string, delta: number): string {
   const [y, m] = ym.split('-').map(Number)
   if (!y || !m) return ym
@@ -34,20 +40,25 @@ function shiftMonth(ym: string, delta: number): string {
   return `${base.getUTCFullYear()}-${String(base.getUTCMonth() + 1).padStart(2, '0')}`
 }
 
+/** 'YYYY-MM' の全日付（1日〜末日・昇順） */
+function daysOfMonth(ym: string): string[] {
+  const [y, m] = [Number(ym.slice(0, 4)), Number(ym.slice(5, 7))]
+  return Array.from({ length: daysInMonth(y, m) }, (_, i) => `${ym}-${String(i + 1).padStart(2, '0')}`)
+}
+
 // ---------- タブ ----------
 
-const TAB_KEYS = ['mine', 'all', 'team', 'weekly'] as const
-const tabs = computed<TabItem[]>(() => {
-  // チームタブは全員へ公開（バッチ7h。表示範囲は 表示メンバー設定 ∩ 日報参照権限 で制御）
-  const t: TabItem[] = [
-    { key: 'mine', label: '自分の日報' },
-    { key: 'all', label: '全員の日報' },
-    { key: 'team', label: 'チーム' },
-    { key: 'weekly', label: '週報' },
-  ]
-  return t
-})
-const queryTab = typeof route.query.tab === 'string' ? route.query.tab : ''
+const TAB_KEYS = ['mine', 'weekly-mine', 'all', 'weekly-all', 'team'] as const
+const tabs = computed<TabItem[]>(() => [
+  { key: 'mine', label: '自分の日報' },
+  { key: 'weekly-mine', label: '自分の週報' },
+  { key: 'all', label: '全員の日報' },
+  { key: 'weekly-all', label: '全員の週報' },
+  { key: 'team', label: 'チーム' },
+])
+// 旧タブキーのリンク互換（?tab=weekly = 旧・週報タブ → 自分の週報）
+const queryTabRaw = typeof route.query.tab === 'string' ? route.query.tab : ''
+const queryTab = queryTabRaw === 'weekly' ? 'weekly-mine' : queryTabRaw
 const tab = ref<string>((TAB_KEYS as readonly string[]).includes(queryTab) ? queryTab : 'mine')
 watchEffect(() => {
   if (!tabs.value.some(t => t.key === tab.value)) tab.value = 'mine'
@@ -66,7 +77,7 @@ function projectName(id: string): string {
 }
 
 /**
- * エントリの業務テーマ表示（旧データは theme 未設定 → プロジェクト名へフォールバック。原則7）。
+ * エントリのテーマ表示（旧データは theme 未設定 → プロジェクト名へフォールバック。原則7）。
  * プロジェクトは論理削除のみで名称が残るため、フォールバックは常に名称解決できる
  */
 function entryTheme(e: ReportEntry): string {
@@ -81,21 +92,91 @@ function gapText(gap: number): string {
   return gap > 0 ? `+${fmtMinutes(gap)}` : fmtMinutes(gap)
 }
 
+// ---------- 部署・メンバー絞り込み（全員の日報 / 全員の週報 / チーム） ----------
+
+const memberFilterOptions = computed(() =>
+  members.value.filter(m => m.active).map(m => ({ value: m.id, label: m.name })))
+
+/**
+ * 部署・メンバーの絞り込み判定。memberId = null は AI 社員の日報
+ * （メンバー・部署の属性を持たないため、絞り込み未指定のときのみ表示する）
+ */
+function matchesMemberFilter(memberId: string | null | undefined, deptId: string, memId: string): boolean {
+  if (!memberId) return !deptId && !memId
+  if (memId && memberId !== memId) return false
+  if (deptId) {
+    const m = members.value.find(x => x.id === memberId)
+    if (!m || m.departmentId !== deptId) return false
+  }
+  return true
+}
+
 // ---------- 自分の日報タブ ----------
 
 const selDate = ref(todayJst())
 const myReport = computed(() => reports.myReportOn(selDate.value))
 
+/** 表示モード（週 / 月）と月ビューの形式（横スクロール / カレンダー） */
+const mineView = ref<'week' | 'month'>('week')
+const mineMonthView = ref<'scroll' | 'calendar'>('scroll')
+const mineMonth = computed(() => selDate.value.slice(0, 7))
+const mineMonthDays = computed(() => daysOfMonth(mineMonth.value))
+const mineWeekDays = computed(() => {
+  const start = reports.weekStartOf(selDate.value)
+  return Array.from({ length: 7 }, (_, i) => addDays(start, i))
+})
+
+/** 自分の日報の提出状態（本人のため下書きも表示する） */
+function myStatusOf(date: string): 'submitted' | 'draft' | 'none' {
+  const r = reports.reportOn(currentUserId.value, date)
+  if (!r) return 'none'
+  return r.status === 'submitted' ? 'submitted' : 'draft'
+}
+
+function myDayCellClass(date: string): string {
+  const s = myStatusOf(date)
+  const sel = date === selDate.value ? ' ring-2 ring-[var(--c-brand)]' : ''
+  if (s === 'submitted') return `bg-ok-soft text-ok${sel}`
+  if (s === 'draft') return `bg-warn-soft text-warn${sel}`
+  return `bg-surface-soft text-muted${sel}`
+}
+
+function myDayAria(date: string): string {
+  const s = myStatusOf(date)
+  return `${fmtDateLong(date)}: ${s === 'none' ? '未作成' : REPORT_STATUS_LABELS[s]}。クリックで表示`
+}
+
+/** カレンダー形式の週分割（日曜始まり。先頭週は前月分を null 詰め） */
+const mineCalendarWeeks = computed(() => {
+  const cells: (string | null)[] = []
+  const first = mineMonthDays.value[0]
+  if (first) for (let i = 0; i < weekdayOf(first); i++) cells.push(null)
+  cells.push(...mineMonthDays.value)
+  while (cells.length % 7 !== 0) cells.push(null)
+  const weeks: (string | null)[][] = []
+  for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7))
+  return weeks
+})
+
 const editEntries = ref<ReportEntry[]>([])
+const editPlans = ref<TomorrowPlan[]>([])
 // フリー入力欄のマークダウンプレビュー（バッチ7e。入力はプレーンな textarea のまま = 記法をそのまま保存）
 const dailyMdPreview = ref(false)
 const wkMdPreview = ref(false)
 const editReflection = ref('')
 const editIssues = ref('')
+/** 旧形式の明日の予定（自由記述）。編集 UI は持たず保存時にそのまま保持する（原則7） */
 const editTomorrow = ref('')
+
+/** 前営業日の「明日の予定」を自動反映した場合の反映元（バナー表示用） */
+const reflected = ref<{ fromDate: string; plans: TomorrowPlan[] } | null>(null)
 
 function blankEntry(): ReportEntry {
   return { theme: '', projectId: '', task: '', hours: 1, progress: 0 }
+}
+
+function blankPlan(): TomorrowPlan {
+  return { theme: '', purpose: '', task: '', hours: 1 }
 }
 
 /** エディタへ読み込む形へ整える（旧データの theme をプロジェクト名で補完してから編集させる） */
@@ -118,11 +199,22 @@ function loadEditor(): void {
     editReflection.value = r.reflection
     editIssues.value = r.issues
     editTomorrow.value = r.tomorrow
+    editPlans.value = (r.tomorrowPlans ?? []).map(p => ({ ...p }))
+    reflected.value = null
   } else {
-    editEntries.value = [blankEntry()]
+    // 未作成日は前営業日に登録した「明日の予定」をエントリへ自動反映する（オペレーター指示 2026-07-22）
+    const auto = r ? null : reports.tomorrowPlansFor(selDate.value)
+    if (auto && auto.plans.length > 0) {
+      editEntries.value = auto.plans.map(p => ({ theme: p.theme, projectId: '', task: p.task, hours: p.hours, progress: 0 }))
+      reflected.value = auto
+    } else {
+      editEntries.value = [blankEntry()]
+      reflected.value = null
+    }
     editReflection.value = ''
     editIssues.value = ''
     editTomorrow.value = ''
+    editPlans.value = []
   }
 }
 // 日付・ユーザーが変わったら提出済み編集モードを終了する。
@@ -140,6 +232,8 @@ function startEditSubmitted(): void {
   editReflection.value = r.reflection
   editIssues.value = r.issues
   editTomorrow.value = r.tomorrow
+  editPlans.value = (r.tomorrowPlans ?? []).map(p => ({ ...p }))
+  reflected.value = null
   editingSubmitted.value = true
   scrollToEditor()
 }
@@ -158,7 +252,7 @@ async function onUpdateSubmitted(): Promise<void> {
       show('課題が管理者へ共有されました', 'info', { label: '受信箱', to: '/inbox' })
     }
     if (res.hoursGapMinutes !== null && res.hoursGapMinutes !== undefined) {
-      show(`勤怠実労働と工数合計に 60 分超の乖離があります（${gapText(res.hoursGapMinutes)}）`, 'warn')
+      show(`勤怠実労働と時間合計に 60 分超の乖離があります（${gapText(res.hoursGapMinutes)}）`, 'warn')
     }
   }, { message: '提出済みの日報を更新しています…' })
 }
@@ -177,6 +271,24 @@ function stepHours(i: number, delta: number): void {
   if (!e) return
   const cur = Number.isFinite(e.hours) ? e.hours : 0
   e.hours = Math.max(0, Math.round((cur + delta) * 4) / 4)
+}
+
+// 明日の予定（最大 TOMORROW_PLANS_MAX 件）
+
+function addPlan(): void {
+  if (editPlans.value.length >= TOMORROW_PLANS_MAX) return
+  editPlans.value.push(blankPlan())
+}
+
+function removePlan(i: number): void {
+  editPlans.value.splice(i, 1)
+}
+
+function stepPlanHours(i: number, delta: number): void {
+  const p = editPlans.value[i]
+  if (!p) return
+  const cur = Number.isFinite(p.hours) ? p.hours : 0
+  p.hours = Math.max(0, Math.round((cur + delta) * 4) / 4)
 }
 
 const totalHours = computed(() =>
@@ -217,6 +329,7 @@ function payload() {
     reflection: editReflection.value,
     issues: editIssues.value,
     tomorrow: editTomorrow.value,
+    tomorrowPlans: editPlans.value.map(p => ({ ...p })),
   }
 }
 
@@ -241,7 +354,7 @@ async function onSubmit(): Promise<void> {
       show('課題が管理者へ共有されました', 'info', { label: '受信箱', to: '/inbox' })
     }
     if (res.hoursGapMinutes !== null) {
-      show(`勤怠実労働と工数合計に 60 分超の乖離があります（${gapText(res.hoursGapMinutes)}）`, 'warn')
+      show(`勤怠実労働と時間合計に 60 分超の乖離があります（${gapText(res.hoursGapMinutes)}）`, 'warn')
     }
   }, { message: '日報を提出しています…' })
 }
@@ -310,6 +423,7 @@ async function onGenerateDraft(): Promise<void> {
     editIssues.value = d.issues
     editTomorrow.value = d.tomorrow
     draftBasis.value = d.basis
+    reflected.value = null
     confirmStep.value = true
     mineEditing.value = true
     show('AI ドラフトを生成しました。内容を確認・修正して提出してください')
@@ -327,16 +441,48 @@ function openSavedDraft(): void {
 
 // ---------- チームタブ（バッチ7h で全員へ公開。リマインド・下書き表示は管理者のみ） ----------
 
+/** 表示モード（週 / 月）と月ビューの形式（横スクロール / カレンダー） */
+const teamView = ref<'week' | 'month'>('week')
+const teamMonthView = ref<'scroll' | 'calendar'>('scroll')
+const teamMonth = ref(todayJst().slice(0, 7))
+const teamMonthDays = computed(() => daysOfMonth(teamMonth.value))
+/** 月カレンダービューで選択中の日（日別の提出状況を下に表示） */
+const teamSelDate = ref(todayJst())
+
+function moveTeamMonth(delta: number): void {
+  teamMonth.value = shiftMonth(teamMonth.value, delta)
+}
+const isTeamThisMonth = computed(() => teamMonth.value === todayJst().slice(0, 7))
+// 月を移動したら選択日をその月へ合わせる（当月なら今日）
+watch(teamMonth, (ym) => {
+  if (teamSelDate.value.slice(0, 7) !== ym) {
+    teamSelDate.value = ym === todayJst().slice(0, 7) ? todayJst() : `${ym}-01`
+  }
+})
+
 // 参照する週を選択できる（オペレーター指示 2026-07-21 #2）。既定 = 今週（月曜始まり）。
 // マトリクスはその週の営業日（月〜金）、タイムラインは同じ日付群を対象にする
 const teamWeekStart = ref(reports.weekStartOf(todayJst()))
 const matrixDays = computed(() => reports.businessDaysOfWeek(teamWeekStart.value))
-const teamTimeline = computed(() => reports.timelineForDates(matrixDays.value))
 
 function moveTeamWeek(delta: number): void {
   teamWeekStart.value = addDays(teamWeekStart.value, delta * 7)
 }
 const isTeamThisWeek = computed(() => teamWeekStart.value === reports.weekStartOf(todayJst()))
+
+// 部署・メンバー絞り込み（チームタブ）
+const teamDeptId = ref('')
+const teamMemberId = ref('')
+
+/** マトリクス・タイムラインの表示メンバー（表示メンバー設定 ∩ 参照権限 ∩ 絞り込み） */
+const visibleTeamMembers = computed(() =>
+  reports.teamMembers.value.filter(m => matchesMemberFilter(m.id, teamDeptId.value, teamMemberId.value)))
+
+const teamTimeline = computed(() => {
+  const dates = teamView.value === 'month' ? teamMonthDays.value : matrixDays.value
+  return reports.timelineForDates(dates)
+    .filter(r => r.authorKind !== 'human' || matchesMemberFilter(r.memberId, teamDeptId.value, teamMemberId.value))
+})
 
 /**
  * セルの表示状態。他人の下書きの存在は管理者以外に見せない（内容も API が返さない）
@@ -346,6 +492,33 @@ function displayCellStatus(memberId: string, date: string): 'submitted' | 'draft
   if (s === 'draft' && !isAdmin.value && memberId !== currentUserId.value) return 'none'
   return s
 }
+
+/** 月カレンダービュー: その日の提出数（表示メンバー基準） */
+function submittedCountOf(date: string): number {
+  return visibleTeamMembers.value.filter(m => displayCellStatus(m.id, date) === 'submitted').length
+}
+
+/** 月カレンダービューの日別詳細のバッジ表示（'none' を含むためラベル・トーンをここで解決） */
+function cellStatusLabel(memberId: string, date: string): string {
+  const s = displayCellStatus(memberId, date)
+  return s === 'none' ? '未提出' : REPORT_STATUS_LABELS[s]
+}
+function cellStatusTone(memberId: string, date: string): Tone {
+  const s = displayCellStatus(memberId, date)
+  return s === 'submitted' ? 'ok' : s === 'draft' ? 'warn' : 'neutral'
+}
+
+/** チーム月カレンダーの週分割（日曜始まり） */
+const teamCalendarWeeks = computed(() => {
+  const cells: (string | null)[] = []
+  const first = teamMonthDays.value[0]
+  if (first) for (let i = 0; i < weekdayOf(first); i++) cells.push(null)
+  cells.push(...teamMonthDays.value)
+  while (cells.length % 7 !== 0) cells.push(null)
+  const weeks: (string | null)[][] = []
+  for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7))
+  return weeks
+})
 
 // ---------- チームタブの表示メンバー設定（管理者。configs 'teamVisibleMemberIds'） ----------
 
@@ -452,15 +625,16 @@ async function askRemind(memberId: string, date: string): Promise<void> {
 }
 
 async function remindAll(): Promise<void> {
-  // 対象日 = 選択週の営業日のうち本日以前で最新の日（未来週・未来日を催促しない）
+  // 対象日 = 選択中ビューの日付群のうち本日以前で最新の日（未来週・未来日を催促しない）
   const today = todayJst()
-  const past = matrixDays.value.filter(d => d <= today)
+  const baseDays = teamView.value === 'month' ? teamMonthDays.value : matrixDays.value
+  const past = baseDays.filter(d => d <= today)
   const date = past[past.length - 1]
   if (!date) {
-    show('この週はまだ到来していないため、リマインド対象がありません', 'info')
+    show('この期間はまだ到来していないため、リマインド対象がありません', 'info')
     return
   }
-  const targets = reports.teamMembers.value.filter(m =>
+  const targets = visibleTeamMembers.value.filter(m =>
     reports.cellStatus(m.id, date) !== 'submitted' && m.id !== currentUserId.value)
   if (targets.length === 0) {
     show('全員提出済みです')
@@ -486,16 +660,20 @@ async function remindAll(): Promise<void> {
 // ---------- 全員の日報タブ（バッチ5e: 提出済みの月次一覧を全メンバーが参照可） ----------
 
 const allMonth = ref(todayJst().slice(0, 7))
-const allReports = computed(() => reports.allSubmitted(allMonth.value))
+const allDeptId = ref('')
+const allMemberId = ref('')
+const allReports = computed(() =>
+  reports.allSubmitted(allMonth.value)
+    .filter(r => r.authorKind !== 'human' || matchesMemberFilter(r.memberId, allDeptId.value, allMemberId.value)))
 
 const ALL_COLUMNS: TableColumn[] = [
   { key: 'dateLabel', label: '日付', primary: true, width: '110px' },
   { key: 'author', label: '名前', primary: true, width: '160px' },
   { key: 'summary', label: 'サマリー', primary: true },
-  { key: 'hours', label: '工数', align: 'right', width: '70px' },
+  { key: 'hours', label: '時間', align: 'right', width: '70px' },
 ]
 
-/** 一覧のサマリー: 先頭エントリの業務テーマ + 作業内容（複数行は件数を添える） */
+/** 一覧のサマリー: 先頭エントリのテーマ + 内容（複数行は件数を添える） */
 function summaryOf(r: DailyReport): string {
   const first = r.entries[0]
   if (!first) return '—'
@@ -517,14 +695,7 @@ function openAllRow(row: Record<string, unknown>): void {
   drawerReportId.value = String(row.id)
 }
 
-// ---------- 週報タブ ----------
-
-/** 週報タブ内のサブビュー（自分の週報 / 週次 AI インサイト = バッチ7g・オペレーター指示 2026-07-19 #9） */
-const weeklyView = ref('mine')
-const WEEKLY_VIEW_TABS = [
-  { key: 'mine', label: '自分の週報' },
-  { key: 'insight', label: 'AI インサイト' },
-]
+// ---------- 自分の週報タブ ----------
 
 // 参照する週を選択できる（オペレーター指示 2026-07-21 #2）。既定 = 今週（月曜始まり）
 const selWeekStart = ref(reports.weekStartOf(todayJst()))
@@ -597,7 +768,7 @@ async function onSaveWeekly(submitNow: boolean): Promise<void> {
 
 const weeklyDrawerId = ref<string | null>(null)
 const weeklyDrawer = computed<WeeklyReport | null>(() =>
-  reports.myWeeklies.value.find(r => r.id === weeklyDrawerId.value) ?? null)
+  weeklyDrawerId.value ? reports.weeklyById(weeklyDrawerId.value) ?? null : null)
 
 /** 週報も参照 = 基本ビュー・入力はボタン押下（バッチ7h ④）。提出・週切替・ユーザー切替で参照へ戻す */
 const weeklyEditing = ref(false)
@@ -609,6 +780,29 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
     weeklyEditing.value = false
   }
 }
+
+// ---------- 全員の週報タブ（オペレーター指示 2026-07-22。参照権限 = 日報・週報の参照対象） ----------
+
+/** サブビュー（一覧 / 週次 AI インサイト = バッチ7g。インサイトは全登録データ横断のため本タブに置く） */
+const weeklyAllView = ref('list')
+const WEEKLY_ALL_VIEW_TABS = [
+  { key: 'list', label: '全員の週報' },
+  { key: 'insight', label: 'AI インサイト' },
+]
+
+const selAllWeekStart = ref(reports.weekStartOf(todayJst()))
+const isAllThisWeek = computed(() => selAllWeekStart.value === reports.weekStartOf(todayJst()))
+
+function moveAllWeeklyWeek(delta: number): void {
+  selAllWeekStart.value = addDays(selAllWeekStart.value, delta * 7)
+}
+
+const waDeptId = ref('')
+const waMemberId = ref('')
+
+const allWeeklies = computed(() =>
+  reports.allSubmittedWeeklies(selAllWeekStart.value)
+    .filter(r => matchesMemberFilter(r.memberId, waDeptId.value, waMemberId.value)))
 </script>
 
 <template>
@@ -619,24 +813,152 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
 
     <!-- ================= 自分の日報 ================= -->
     <div v-if="tab === 'mine'" class="grid gap-3">
-      <!-- 日付ナビ: 上段 = 前日 / 今日 / 翌日、下段 = 選択中の日付（直接選択可） -->
+      <!-- 日付ナビ + 表示モード（週 / 月） -->
       <UiFilterBar>
         <div class="grid justify-items-start gap-1.5">
           <div class="flex items-center gap-1.5">
-            <button type="button" class="btn btn-sm" aria-label="前日へ" @click="selDate = addDays(selDate, -1)">
-              <ChevronLeft class="h-4 w-4" aria-hidden="true" />
-            </button>
-            <button type="button" class="btn btn-sm" @click="selDate = todayJst()">今日</button>
-            <button type="button" class="btn btn-sm" aria-label="翌日へ" @click="selDate = addDays(selDate, 1)">
-              <ChevronRight class="h-4 w-4" aria-hidden="true" />
-            </button>
+            <template v-if="mineView === 'week'">
+              <button type="button" class="btn btn-sm" aria-label="前日へ" @click="selDate = addDays(selDate, -1)">
+                <ChevronLeft class="h-4 w-4" aria-hidden="true" />
+              </button>
+              <button type="button" class="btn btn-sm" @click="selDate = todayJst()">今日</button>
+              <button type="button" class="btn btn-sm" aria-label="翌日へ" @click="selDate = addDays(selDate, 1)">
+                <ChevronRight class="h-4 w-4" aria-hidden="true" />
+              </button>
+            </template>
+            <template v-else>
+              <button type="button" class="btn btn-sm" aria-label="前月へ" @click="selDate = `${shiftMonth(mineMonth, -1)}-01`">
+                <ChevronLeft class="h-4 w-4" aria-hidden="true" />
+              </button>
+              <button type="button" class="btn btn-sm" @click="selDate = todayJst()">今月</button>
+              <button type="button" class="btn btn-sm" aria-label="翌月へ" @click="selDate = `${shiftMonth(mineMonth, 1)}-01`">
+                <ChevronRight class="h-4 w-4" aria-hidden="true" />
+              </button>
+            </template>
           </div>
           <input v-model="selDate" type="date" class="input w-auto" aria-label="対象日（直接選択可）">
+        </div>
+        <div class="inline-flex items-center gap-1 rounded-lg border border-line bg-surface p-1" role="group" aria-label="表示モード">
+          <button
+            type="button"
+            class="btn btn-sm"
+            :class="mineView === 'week' ? 'btn-primary' : 'btn-ghost'"
+            :aria-pressed="mineView === 'week'"
+            @click="mineView = 'week'"
+          >
+            週
+          </button>
+          <button
+            type="button"
+            class="btn btn-sm"
+            :class="mineView === 'month' ? 'btn-primary' : 'btn-ghost'"
+            :aria-pressed="mineView === 'month'"
+            @click="mineView = 'month'"
+          >
+            月
+          </button>
+        </div>
+        <div
+          v-if="mineView === 'month'"
+          class="inline-flex items-center gap-1 rounded-lg border border-line bg-surface p-1"
+          role="group"
+          aria-label="月ビューの形式"
+        >
+          <button
+            type="button"
+            class="btn btn-sm"
+            :class="mineMonthView === 'scroll' ? 'btn-primary' : 'btn-ghost'"
+            :aria-pressed="mineMonthView === 'scroll'"
+            @click="mineMonthView = 'scroll'"
+          >
+            横スクロール
+          </button>
+          <button
+            type="button"
+            class="btn btn-sm"
+            :class="mineMonthView === 'calendar' ? 'btn-primary' : 'btn-ghost'"
+            :aria-pressed="mineMonthView === 'calendar'"
+            @click="mineMonthView = 'calendar'"
+          >
+            カレンダー
+          </button>
         </div>
         <template #trailing>
           <UiStatusBadge :tone="mineStatus.tone" :label="mineStatus.label" dot />
         </template>
       </UiFilterBar>
+
+      <!-- 週ビュー: 選択日を含む週（月〜日）の提出状況ストリップ -->
+      <UiSectionCard v-if="mineView === 'week'" :title="`週の提出状況（${weekLabel(reports.weekStartOf(selDate))}）`">
+        <div class="grid grid-cols-7 gap-1">
+          <button
+            v-for="d in mineWeekDays"
+            :key="d"
+            type="button"
+            class="grid min-h-[52px] place-items-center rounded-md py-1 text-[11px] font-semibold transition-colors"
+            :class="myDayCellClass(d)"
+            :aria-label="myDayAria(d)"
+            :aria-pressed="d === selDate"
+            @click="selDate = d"
+          >
+            <span :class="weekdayOf(d) === 0 ? 'text-serious' : ''">{{ WEEKDAYS[weekdayOf(d)] }}</span>
+            <span class="num text-[13px] font-bold">{{ Number(d.slice(8, 10)) }}</span>
+            <Check v-if="myStatusOf(d) === 'submitted'" class="h-3.5 w-3.5" aria-hidden="true" />
+            <span v-else-if="myStatusOf(d) === 'draft'">下書き</span>
+            <span v-else class="text-muted">—</span>
+          </button>
+        </div>
+      </UiSectionCard>
+
+      <!-- 月ビュー（横スクロール）: 1日〜末日を横一列で表示 -->
+      <UiSectionCard v-else-if="mineMonthView === 'scroll'" :title="`月の提出状況（${Number(mineMonth.slice(0, 4))}年${Number(mineMonth.slice(5, 7))}月）`">
+        <div class="overflow-x-auto scroll-slim">
+          <div class="flex w-max gap-1 pb-1">
+            <button
+              v-for="d in mineMonthDays"
+              :key="d"
+              type="button"
+              class="grid min-h-[52px] w-12 shrink-0 place-items-center rounded-md py-1 text-[11px] font-semibold transition-colors"
+              :class="myDayCellClass(d)"
+              :aria-label="myDayAria(d)"
+              :aria-pressed="d === selDate"
+              @click="selDate = d"
+            >
+              <span :class="weekdayOf(d) === 0 ? 'text-serious' : ''">{{ WEEKDAYS[weekdayOf(d)] }}</span>
+              <span class="num text-[13px] font-bold">{{ Number(d.slice(8, 10)) }}</span>
+              <Check v-if="myStatusOf(d) === 'submitted'" class="h-3.5 w-3.5" aria-hidden="true" />
+              <span v-else-if="myStatusOf(d) === 'draft'">下書き</span>
+              <span v-else class="text-muted">—</span>
+            </button>
+          </div>
+        </div>
+      </UiSectionCard>
+
+      <!-- 月ビュー（カレンダー形式） -->
+      <UiSectionCard v-else :title="`月の提出状況（${Number(mineMonth.slice(0, 4))}年${Number(mineMonth.slice(5, 7))}月）`">
+        <div class="grid grid-cols-7 gap-1">
+          <span v-for="w in WEEKDAYS" :key="w" class="text-center text-[10px] font-bold text-muted">{{ w }}</span>
+          <template v-for="(week, wi) in mineCalendarWeeks" :key="wi">
+            <template v-for="(d, di) in week" :key="`${wi}-${di}`">
+              <button
+                v-if="d"
+                type="button"
+                class="grid min-h-[48px] place-items-center rounded-md py-1 text-[11px] font-semibold transition-colors"
+                :class="myDayCellClass(d)"
+                :aria-label="myDayAria(d)"
+                :aria-pressed="d === selDate"
+                @click="selDate = d"
+              >
+                <span class="num text-[13px] font-bold">{{ Number(d.slice(8, 10)) }}</span>
+                <Check v-if="myStatusOf(d) === 'submitted'" class="h-3.5 w-3.5" aria-hidden="true" />
+                <span v-else-if="myStatusOf(d) === 'draft'">下書き</span>
+                <span v-else class="text-muted">—</span>
+              </button>
+              <span v-else aria-hidden="true" />
+            </template>
+          </template>
+        </div>
+      </UiSectionCard>
 
       <!-- 未提出日の参照ビュー（バッチ7h ④: 参照が基本。入力は「日報を書く」から） -->
       <UiSectionCard
@@ -699,13 +1021,13 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
           <div class="flex flex-wrap items-center gap-2">
             <UiStatusBadge tone="ok" :label="REPORT_STATUS_LABELS.submitted" dot />
             <span v-if="myReport.submittedAt" class="num text-[11px] text-muted">提出 {{ fmtTime(myReport.submittedAt) }}</span>
-            <UiStatusBadge v-if="submittedGap !== null" tone="warn" :label="`工数乖離 ${gapText(submittedGap)}`" />
+            <UiStatusBadge v-if="submittedGap !== null" tone="warn" :label="`時間乖離 ${gapText(submittedGap)}`" />
             <UiStatusBadge v-if="myReport.issues" tone="warn" label="課題あり" />
           </div>
           <div class="overflow-x-auto scroll-slim">
             <table class="tbl">
               <thead>
-                <tr><th>業務テーマ</th><th>作業内容</th><th class="!text-right">工数</th><th class="!text-right">進捗</th></tr>
+                <tr><th>テーマ</th><th>内容</th><th class="!text-right">時間</th><th class="!text-right">進捗</th></tr>
               </thead>
               <tbody>
                 <tr v-for="(e, i) in myReport.entries" :key="i">
@@ -722,7 +1044,7 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
               </tbody>
             </table>
           </div>
-          <div class="grid gap-3 md:grid-cols-3">
+          <div class="grid gap-3 md:grid-cols-2">
             <div>
               <p class="label">所感</p>
               <UiMarkdown v-if="myReport.reflection" :source="myReport.reflection" />
@@ -733,11 +1055,26 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
               <UiMarkdown v-if="myReport.issues" :source="myReport.issues" />
               <p v-else class="text-[13px]">—</p>
             </div>
-            <div>
-              <p class="label">明日の予定</p>
-              <UiMarkdown v-if="myReport.tomorrow" :source="myReport.tomorrow" />
-              <p v-else class="text-[13px]">—</p>
+          </div>
+          <div>
+            <p class="label">明日の予定</p>
+            <div v-if="(myReport.tomorrowPlans?.length ?? 0) > 0" class="overflow-x-auto scroll-slim">
+              <table class="tbl">
+                <thead>
+                  <tr><th>テーマ</th><th>目的</th><th>内容</th><th class="!text-right">時間</th></tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(p, i) in myReport.tomorrowPlans" :key="i">
+                    <td class="whitespace-nowrap">{{ p.theme || '—' }}</td>
+                    <td>{{ p.purpose || '—' }}</td>
+                    <td>{{ p.task || '—' }}</td>
+                    <td class="num text-right">{{ p.hours }}h</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
+            <UiMarkdown v-else-if="myReport.tomorrow" :source="myReport.tomorrow" />
+            <p v-else class="text-[13px]">—</p>
           </div>
           <WidgetsCommentThread :report-id="myReport.id" />
         </div>
@@ -812,7 +1149,7 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
       <div v-if="(!isSubmittedDay && mineEditing && showEditor) || editingSubmitted" ref="editorWrap">
       <UiSectionCard
         :title="editingSubmitted ? `${fmtDateLong(selDate)} の日報を編集（提出済み）` : `${fmtDateLong(selDate)} の日報を書く`"
-        :description="editingSubmitted ? '提出済みの日報を修正します。保存しても提出状態と提出時刻は変わりません（編集は監査ログに記録されます）' : '業務テーマごとに作業内容と工数（0.25h 刻み）を記録します'"
+        :description="editingSubmitted ? '提出済みの日報を修正します。保存しても提出状態と提出時刻は変わりません（編集は監査ログに記録されます）' : 'テーマごとに内容と時間（0.25h 刻み）をテーブルの各セルへ記録します'"
       >
         <div class="grid gap-3">
           <!-- AI ドラフトバナー（生成根拠つき） -->
@@ -832,34 +1169,60 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
             </template>
           </div>
 
-          <!-- PC は「業務テーマ / 作業内容 / 工数 / 進捗」を 1 行に収める（オペレーター指示） -->
-          <div v-for="(e, i) in editEntries" :key="i" class="rounded-lg border border-line p-2.5">
-            <div class="grid items-end gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_auto_auto_auto]">
-              <UiFormField label="業務テーマ" required>
-                <input v-model="e.theme" type="text" maxlength="100" class="input" placeholder="例）○○案件・社内改善・採用" :aria-label="`エントリ${i + 1} 業務テーマ`">
-              </UiFormField>
-              <UiFormField label="作業内容" required>
-                <input v-model="e.task" type="text" class="input" placeholder="実施した作業" :aria-label="`エントリ${i + 1} 作業内容`">
-              </UiFormField>
-              <UiFormField label="工数 (h)">
-                <div class="flex items-center gap-1">
-                  <button type="button" class="btn btn-sm" aria-label="工数を 0.25h 減らす" @click="stepHours(i, -0.25)">
-                    <Minus class="h-3.5 w-3.5" aria-hidden="true" />
-                  </button>
-                  <input v-model.number="e.hours" type="number" min="0" step="0.25" class="input num w-20 text-right" :aria-label="`エントリ${i + 1} 工数`">
-                  <button type="button" class="btn btn-sm" aria-label="工数を 0.25h 増やす" @click="stepHours(i, 0.25)">
-                    <Plus class="h-3.5 w-3.5" aria-hidden="true" />
-                  </button>
-                </div>
-              </UiFormField>
-              <UiFormField label="進捗 (%)">
-                <input v-model.number="e.progress" type="number" min="0" max="100" step="5" class="input num w-20 text-right" :aria-label="`エントリ${i + 1} 進捗`">
-              </UiFormField>
-              <button type="button" class="btn btn-sm mb-0.5 justify-self-start text-crit md:justify-self-auto" aria-label="行を削除" @click="removeRow(i)">
-                <Trash2 class="h-3.5 w-3.5" aria-hidden="true" />
-                <span class="md:hidden">行を削除</span>
-              </button>
-            </div>
+          <!-- 前営業日の明日の予定を自動反映したバナー -->
+          <div v-if="reflected" class="rounded-lg bg-brand-soft p-3">
+            <p class="text-[13px] font-bold text-brand">
+              {{ fmtDateLong(reflected.fromDate) }} に登録した「明日の予定」を反映しました
+            </p>
+            <ul class="mt-1 grid gap-0.5">
+              <li v-for="(p, i) in reflected.plans" :key="i" class="text-xs text-sub">
+                ・{{ p.theme || '—' }}{{ p.purpose ? `（目的: ${p.purpose}）` : '' }}
+              </li>
+            </ul>
+          </div>
+
+          <!-- 通常入力: テーブル形式（共通ヘッダ 1 行 + 各セルへの入力 = オペレーター指示 2026-07-22） -->
+          <div class="overflow-x-auto scroll-slim">
+            <table class="tbl min-w-[640px]">
+              <thead>
+                <tr>
+                  <th class="w-[26%]">テーマ <span class="text-crit" aria-hidden="true">*</span></th>
+                  <th>内容 <span class="text-crit" aria-hidden="true">*</span></th>
+                  <th class="w-40 !text-right">時間 (h)</th>
+                  <th class="w-24 !text-right">進捗 (%)</th>
+                  <th class="w-12"><span class="sr-only">操作</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(e, i) in editEntries" :key="i">
+                  <td class="!py-1.5">
+                    <input v-model="e.theme" type="text" maxlength="100" class="input" placeholder="例）○○案件・社内改善" :aria-label="`エントリ${i + 1} テーマ`">
+                  </td>
+                  <td class="!py-1.5">
+                    <input v-model="e.task" type="text" class="input min-w-40" placeholder="実施した作業" :aria-label="`エントリ${i + 1} 内容`">
+                  </td>
+                  <td class="!py-1.5">
+                    <div class="flex items-center justify-end gap-1">
+                      <button type="button" class="btn btn-sm" aria-label="時間を 0.25h 減らす" @click="stepHours(i, -0.25)">
+                        <Minus class="h-3.5 w-3.5" aria-hidden="true" />
+                      </button>
+                      <input v-model.number="e.hours" type="number" min="0" step="0.25" class="input num w-20 text-right" :aria-label="`エントリ${i + 1} 時間`">
+                      <button type="button" class="btn btn-sm" aria-label="時間を 0.25h 増やす" @click="stepHours(i, 0.25)">
+                        <Plus class="h-3.5 w-3.5" aria-hidden="true" />
+                      </button>
+                    </div>
+                  </td>
+                  <td class="!py-1.5">
+                    <input v-model.number="e.progress" type="number" min="0" max="100" step="5" class="input num w-20 text-right" :aria-label="`エントリ${i + 1} 進捗`">
+                  </td>
+                  <td class="!py-1.5 text-right">
+                    <button type="button" class="btn btn-sm text-crit" :aria-label="`エントリ${i + 1} を削除`" @click="removeRow(i)">
+                      <Trash2 class="h-3.5 w-3.5" aria-hidden="true" />
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
 
           <div>
@@ -870,7 +1233,7 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
           </div>
 
           <div class="flex flex-wrap items-center gap-2 rounded-lg bg-surface-soft px-3 py-2 text-xs text-sub">
-            <span class="num font-semibold">工数合計 {{ totalHours }}h</span>
+            <span class="num font-semibold">時間合計 {{ totalHours }}h</span>
             <span v-if="dayWorkMinutes > 0" class="num">/ 勤怠実労働 {{ fmtMinutes(dayWorkMinutes) }}</span>
             <span v-else>/ この日の打刻がないため乖離チェック対象外</span>
             <UiStatusBadge v-if="editorGap !== null" tone="warn" :label="`乖離 ${gapText(editorGap)}`" />
@@ -882,7 +1245,7 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
               {{ dailyMdPreview ? '編集に戻る' : 'プレビュー' }}
             </button>
           </div>
-          <div class="grid gap-3 md:grid-cols-3">
+          <div class="grid gap-3 md:grid-cols-2">
             <UiFormField label="所感" :hint="dailyMdPreview ? '' : 'マークダウン記法に対応'">
               <div v-if="dailyMdPreview" class="min-h-[72px] rounded-lg border border-line p-2.5"><UiMarkdown :source="editReflection" /></div>
               <textarea v-else v-model="editReflection" class="textarea" placeholder="今日のふりかえり" />
@@ -891,11 +1254,68 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
               <div v-if="dailyMdPreview" class="min-h-[72px] rounded-lg border border-line p-2.5"><UiMarkdown :source="editIssues" /></div>
               <textarea v-else v-model="editIssues" class="textarea" placeholder="困っていること・ブロッカー" />
             </UiFormField>
-            <UiFormField label="明日の予定">
-              <div v-if="dailyMdPreview" class="min-h-[72px] rounded-lg border border-line p-2.5"><UiMarkdown :source="editTomorrow" /></div>
-              <textarea v-else v-model="editTomorrow" class="textarea" placeholder="翌営業日の予定" />
-            </UiFormField>
           </div>
+
+          <!-- 明日の予定（最大 3 件。翌営業日の日報へ自動反映） -->
+          <UiFormField label="明日の予定" :hint="`最大 ${TOMORROW_PLANS_MAX} 件。登録すると翌営業日の日報エントリへ自動反映されます`">
+            <div v-if="editPlans.length > 0" class="overflow-x-auto scroll-slim">
+              <table class="tbl min-w-[640px]">
+                <thead>
+                  <tr>
+                    <th class="w-[22%]">テーマ</th>
+                    <th class="w-[26%]">目的</th>
+                    <th>内容</th>
+                    <th class="w-40 !text-right">時間 (h)</th>
+                    <th class="w-12"><span class="sr-only">操作</span></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(p, i) in editPlans" :key="i">
+                    <td class="!py-1.5">
+                      <input v-model="p.theme" type="text" maxlength="100" class="input" placeholder="例）○○案件" :aria-label="`明日の予定${i + 1} テーマ`">
+                    </td>
+                    <td class="!py-1.5">
+                      <input v-model="p.purpose" type="text" class="input" placeholder="何のために" :aria-label="`明日の予定${i + 1} 目的`">
+                    </td>
+                    <td class="!py-1.5">
+                      <input v-model="p.task" type="text" class="input min-w-36" placeholder="実施する作業" :aria-label="`明日の予定${i + 1} 内容`">
+                    </td>
+                    <td class="!py-1.5">
+                      <div class="flex items-center justify-end gap-1">
+                        <button type="button" class="btn btn-sm" aria-label="時間を 0.25h 減らす" @click="stepPlanHours(i, -0.25)">
+                          <Minus class="h-3.5 w-3.5" aria-hidden="true" />
+                        </button>
+                        <input v-model.number="p.hours" type="number" min="0" step="0.25" class="input num w-20 text-right" :aria-label="`明日の予定${i + 1} 時間`">
+                        <button type="button" class="btn btn-sm" aria-label="時間を 0.25h 増やす" @click="stepPlanHours(i, 0.25)">
+                          <Plus class="h-3.5 w-3.5" aria-hidden="true" />
+                        </button>
+                      </div>
+                    </td>
+                    <td class="!py-1.5 text-right">
+                      <button type="button" class="btn btn-sm text-crit" :aria-label="`明日の予定${i + 1} を削除`" @click="removePlan(i)">
+                        <Trash2 class="h-3.5 w-3.5" aria-hidden="true" />
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="mt-1.5 flex items-center gap-2">
+              <button
+                type="button"
+                class="btn btn-sm"
+                :disabled="editPlans.length >= TOMORROW_PLANS_MAX"
+                @click="addPlan"
+              >
+                <Plus class="h-3.5 w-3.5" aria-hidden="true" />
+                予定を追加
+              </button>
+              <span v-if="editPlans.length >= TOMORROW_PLANS_MAX" class="text-[11px] text-muted">上限 {{ TOMORROW_PLANS_MAX }} 件に達しています</span>
+            </div>
+            <p v-if="editTomorrow" class="mt-1.5 text-[11px] text-muted">
+              旧形式の明日の予定（自由記述）が保存されています: 「{{ editTomorrow }}」（保存時にそのまま保持されます）
+            </p>
+          </UiFormField>
 
           <div class="flex flex-wrap items-center justify-end gap-2">
             <template v-if="editingSubmitted">
@@ -921,7 +1341,7 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
 
     <!-- ================= 全員の日報 ================= -->
     <div v-else-if="tab === 'all'" class="grid gap-3">
-      <!-- 月ナビ: 「自分の日報」の日付コントロールに合わせ、左右ボタン + 今月 + 月選択（直接選択可） -->
+      <!-- 月ナビ + 部署・メンバー絞り込み -->
       <UiFilterBar>
         <div class="grid justify-items-start gap-1.5">
           <div class="flex items-center gap-1.5">
@@ -935,6 +1355,8 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
           </div>
           <input v-model="allMonth" type="month" class="input w-auto" aria-label="対象月（直接選択可）">
         </div>
+        <UiSelect v-model="allDeptId" :options="deptOptions" empty-label="すべての部署" aria-label="部署で絞り込み" />
+        <UiSelect v-model="allMemberId" :options="memberFilterOptions" empty-label="すべてのメンバー" aria-label="メンバーで絞り込み" />
         <template #trailing>
           <span class="num text-xs text-muted">{{ allReports.length }} 件</span>
         </template>
@@ -942,7 +1364,7 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
 
       <UiSectionCard
         title="全員の日報"
-        description="全メンバー・AI 社員の提出済み日報（新しい順）。行（モバイルはカード）を押すと詳細が開きます"
+        description="全メンバー・AI 社員の提出済み日報（新しい順）。行（モバイルはカード）を押すと詳細が開きます。参照できる範囲は権限設定（日報・週報の参照対象）に従います"
         flush
       >
         <UiDataTable
@@ -950,7 +1372,7 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
           :rows="allRows"
           clickable
           empty-title="この月の提出済み日報がありません"
-          empty-hint="「自分の日報」から提出すると、ここに表示されます"
+          empty-hint="「自分の日報」から提出すると、ここに表示されます（絞り込み条件も確認してください）"
           @row-click="openAllRow"
         >
           <template #cell-summary="{ row }">
@@ -965,9 +1387,9 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
 
     <!-- ================= チーム（全員。表示メンバー設定 ∩ 日報参照権限 = バッチ7h） ================= -->
     <div v-else-if="tab === 'team'" class="grid gap-3">
-      <!-- 週ナビ: 「自分の日報」の日付コントロールに合わせ、左右ボタン + 今週 + 週レンジ表示（オペレーター指示 2026-07-21 #2） -->
+      <!-- 週/月ナビ + 表示モード + 絞り込み -->
       <UiFilterBar>
-        <div class="flex items-center gap-1.5">
+        <div v-if="teamView === 'week'" class="flex items-center gap-1.5">
           <button type="button" class="btn btn-sm" aria-label="前の週へ" @click="moveTeamWeek(-1)">
             <ChevronLeft class="h-4 w-4" aria-hidden="true" />
           </button>
@@ -978,13 +1400,76 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
           <span class="num ml-1 whitespace-nowrap text-xs font-semibold">{{ weekLabel(teamWeekStart) }}</span>
           <UiStatusBadge v-if="isTeamThisWeek" label="今週" tone="brand" />
         </div>
+        <div v-else class="flex items-center gap-1.5">
+          <button type="button" class="btn btn-sm" aria-label="前の月へ" @click="moveTeamMonth(-1)">
+            <ChevronLeft class="h-4 w-4" aria-hidden="true" />
+          </button>
+          <button type="button" class="btn btn-sm" :disabled="isTeamThisMonth" @click="teamMonth = todayJst().slice(0, 7)">今月</button>
+          <button type="button" class="btn btn-sm" aria-label="次の月へ" @click="moveTeamMonth(1)">
+            <ChevronRight class="h-4 w-4" aria-hidden="true" />
+          </button>
+          <span class="num ml-1 whitespace-nowrap text-xs font-semibold">{{ Number(teamMonth.slice(0, 4)) }}年{{ Number(teamMonth.slice(5, 7)) }}月</span>
+          <UiStatusBadge v-if="isTeamThisMonth" label="今月" tone="brand" />
+        </div>
+        <div class="inline-flex items-center gap-1 rounded-lg border border-line bg-surface p-1" role="group" aria-label="表示モード">
+          <button
+            type="button"
+            class="btn btn-sm"
+            :class="teamView === 'week' ? 'btn-primary' : 'btn-ghost'"
+            :aria-pressed="teamView === 'week'"
+            @click="teamView = 'week'"
+          >
+            週
+          </button>
+          <button
+            type="button"
+            class="btn btn-sm"
+            :class="teamView === 'month' ? 'btn-primary' : 'btn-ghost'"
+            :aria-pressed="teamView === 'month'"
+            @click="teamView = 'month'"
+          >
+            月
+          </button>
+        </div>
+        <div
+          v-if="teamView === 'month'"
+          class="inline-flex items-center gap-1 rounded-lg border border-line bg-surface p-1"
+          role="group"
+          aria-label="月ビューの形式"
+        >
+          <button
+            type="button"
+            class="btn btn-sm"
+            :class="teamMonthView === 'scroll' ? 'btn-primary' : 'btn-ghost'"
+            :aria-pressed="teamMonthView === 'scroll'"
+            @click="teamMonthView = 'scroll'"
+          >
+            横スクロール
+          </button>
+          <button
+            type="button"
+            class="btn btn-sm"
+            :class="teamMonthView === 'calendar' ? 'btn-primary' : 'btn-ghost'"
+            :aria-pressed="teamMonthView === 'calendar'"
+            @click="teamMonthView = 'calendar'"
+          >
+            カレンダー
+          </button>
+        </div>
+        <UiSelect v-model="teamDeptId" :options="deptOptions" empty-label="すべての部署" aria-label="部署で絞り込み" />
+        <UiSelect v-model="teamMemberId" :options="memberFilterOptions" empty-label="すべてのメンバー" aria-label="メンバーで絞り込み" />
       </UiFilterBar>
 
+      <!-- 週ビュー / 月・横スクロールビュー: 提出状況マトリクス -->
       <UiSectionCard
+        v-if="teamView === 'week' || teamMonthView === 'scroll'"
         title="提出状況マトリクス"
-        :description="isAdmin
-          ? 'メンバー × 選択した週の営業日（月〜金）。本日以前の未提出セルをクリックするとリマインドできます（未来の営業日はまだ提出対象外）'
-          : 'メンバー × 選択した週の営業日（月〜金）。提出済みセルをクリックすると日報を参照できます'"
+        :description="(teamView === 'week'
+          ? 'メンバー × 選択した週の営業日（月〜金）。'
+          : 'メンバー × 選択した月の 1 日〜末日（横スクロールで表示）。')
+          + (isAdmin
+            ? '本日以前の未提出セルをクリックするとリマインドできます（未来の日付はまだ提出対象外）'
+            : '提出済みセルをクリックすると日報を参照できます')"
         flush
       >
         <template #actions>
@@ -1004,29 +1489,42 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
                 <!-- .tbl th の z-index:1 は詳細度で z-[2] に勝つため !important で上書きする
                      （日付ヘッダー（後続兄弟・同 z）が横スクロール時にメンバー列ヘッダーへ被る不具合の修正） -->
                 <th class="sticky left-0 !z-[2] bg-surface-soft">メンバー</th>
-                <th v-for="d in matrixDays" :key="d" class="!text-center">{{ dayLabel(d) }}</th>
+                <template v-if="teamView === 'week'">
+                  <th v-for="d in matrixDays" :key="d" class="!text-center">{{ dayLabel(d) }}</th>
+                </template>
+                <template v-else>
+                  <th v-for="d in teamMonthDays" :key="d" class="!px-1 !text-center">
+                    <span class="block text-[10px]" :class="weekdayOf(d) === 0 ? 'text-serious' : ''">{{ WEEKDAYS[weekdayOf(d)] }}</span>
+                    <span class="num">{{ Number(d.slice(8, 10)) }}</span>
+                  </th>
+                </template>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="m in reports.teamMembers.value" :key="m.id">
+              <tr v-for="m in visibleTeamMembers" :key="m.id">
                 <td class="sticky left-0 z-[1] whitespace-nowrap bg-surface">
                   <span class="flex items-center gap-2">
                     <UiAvatar :name="m.name" size="sm" />
                     <span class="text-[13px] font-semibold">{{ m.name }}</span>
                   </span>
                 </td>
-                <td v-for="d in matrixDays" :key="d" class="!p-1 text-center">
+                <td v-for="d in (teamView === 'week' ? matrixDays : teamMonthDays)" :key="d" class="!p-1 text-center">
                   <button
                     type="button"
-                    class="inline-flex h-8 w-full min-w-[52px] items-center justify-center rounded-md text-[11px] font-semibold transition-colors"
-                    :class="cellClass(m.id, d)"
+                    class="inline-flex h-8 w-full items-center justify-center rounded-md text-[11px] font-semibold transition-colors"
+                    :class="[cellClass(m.id, d), teamView === 'week' ? 'min-w-[52px]' : 'min-w-[36px]']"
                     :aria-label="cellAria(m.id, d)"
                     @click="openCell(m.id, d)"
                   >
                     <Check v-if="displayCellStatus(m.id, d) === 'submitted'" class="h-4 w-4" aria-hidden="true" />
-                    <template v-else-if="displayCellStatus(m.id, d) === 'draft'">{{ REPORT_STATUS_LABELS.draft }}</template>
+                    <template v-else-if="displayCellStatus(m.id, d) === 'draft'">{{ teamView === 'week' ? REPORT_STATUS_LABELS.draft : '書' }}</template>
                     <template v-else>未</template>
                   </button>
+                </td>
+              </tr>
+              <tr v-if="visibleTeamMembers.length === 0">
+                <td :colspan="1 + (teamView === 'week' ? matrixDays.length : teamMonthDays.length)" class="py-6 text-center text-[13px] text-muted">
+                  絞り込み条件に一致するメンバーがいません
                 </td>
               </tr>
             </tbody>
@@ -1034,7 +1532,72 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
         </div>
       </UiSectionCard>
 
-      <UiSectionCard title="タイムライン" :description="`チームと AI 社員の日報（${weekLabel(teamWeekStart)}・新しい順）`" flush>
+      <!-- 月・カレンダービュー: 日別の提出数 + 選択日の詳細 -->
+      <template v-else>
+        <UiSectionCard
+          title="提出状況カレンダー"
+          description="各日の提出数（提出済み / 表示メンバー数）。日をクリックすると下にその日の提出状況を表示します"
+        >
+          <div class="grid grid-cols-7 gap-1">
+            <span v-for="w in WEEKDAYS" :key="w" class="text-center text-[10px] font-bold text-muted">{{ w }}</span>
+            <template v-for="(week, wi) in teamCalendarWeeks" :key="wi">
+              <template v-for="(d, di) in week" :key="`${wi}-${di}`">
+                <button
+                  v-if="d"
+                  type="button"
+                  class="grid min-h-[52px] place-items-center rounded-md py-1 text-[11px] font-semibold transition-colors"
+                  :class="[
+                    submittedCountOf(d) > 0 ? 'bg-ok-soft text-ok' : 'bg-surface-soft text-muted',
+                    d === teamSelDate ? 'ring-2 ring-[var(--c-brand)]' : '',
+                  ]"
+                  :aria-label="`${fmtDateLong(d)}: 提出 ${submittedCountOf(d)} / ${visibleTeamMembers.length} 名。クリックで詳細を表示`"
+                  :aria-pressed="d === teamSelDate"
+                  @click="teamSelDate = d"
+                >
+                  <span class="num text-[13px] font-bold">{{ Number(d.slice(8, 10)) }}</span>
+                  <span class="num">{{ submittedCountOf(d) }}/{{ visibleTeamMembers.length }}</span>
+                </button>
+                <span v-else aria-hidden="true" />
+              </template>
+            </template>
+          </div>
+        </UiSectionCard>
+
+        <UiSectionCard :title="`${fmtDateLong(teamSelDate)} の提出状況`" flush>
+          <template #actions>
+            <button v-if="isAdmin" type="button" class="btn btn-ghost btn-sm" @click="openTeamSettings">
+              <Settings2 class="h-3.5 w-3.5" aria-hidden="true" />
+              表示メンバー
+            </button>
+          </template>
+          <UiEmptyState v-if="visibleTeamMembers.length === 0" title="絞り込み条件に一致するメンバーがいません" />
+          <ul v-else class="divide-y divide-line">
+            <li v-for="m in visibleTeamMembers" :key="m.id">
+              <button
+                type="button"
+                class="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-brand-soft"
+                :aria-label="cellAria(m.id, teamSelDate)"
+                @click="openCell(m.id, teamSelDate)"
+              >
+                <UiAvatar :name="m.name" size="sm" />
+                <span class="min-w-0 flex-1 text-[13px] font-semibold">{{ m.name }}</span>
+                <UiStatusBadge
+                  :tone="cellStatusTone(m.id, teamSelDate)"
+                  :label="cellStatusLabel(m.id, teamSelDate)"
+                  dot
+                />
+              </button>
+            </li>
+          </ul>
+        </UiSectionCard>
+      </template>
+
+      <UiSectionCard
+        v-if="teamView === 'week'"
+        title="タイムライン"
+        :description="`チームと AI 社員の日報（${weekLabel(teamWeekStart)}・新しい順）`"
+        flush
+      >
         <UiEmptyState v-if="teamTimeline.length === 0" title="提出済みの日報がありません" />
         <ul v-else class="divide-y divide-line">
           <li v-for="r in teamTimeline" :key="r.id">
@@ -1060,15 +1623,65 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
       </UiSectionCard>
     </div>
 
-    <!-- ================= 週報 ================= -->
-    <div v-else class="grid gap-3">
-      <UiTabBar v-model="weeklyView" :tabs="WEEKLY_VIEW_TABS" />
+    <!-- ================= 全員の週報（オペレーター指示 2026-07-22） ================= -->
+    <div v-else-if="tab === 'weekly-all'" class="grid gap-3">
+      <UiTabBar v-model="weeklyAllView" :tabs="WEEKLY_ALL_VIEW_TABS" />
 
       <!-- 週次 AI インサイト（該当週の全登録データから経営・営業・チーム視点のレポート = バッチ7g） -->
-      <WidgetsWeeklyInsight v-if="weeklyView === 'insight'" :initial-week-start="selWeekStart" />
+      <WidgetsWeeklyInsight v-if="weeklyAllView === 'insight'" :initial-week-start="selAllWeekStart" />
 
       <template v-else>
-      <!-- 週ナビ: 「自分の日報」の日付コントロールに合わせ、左右ボタン + 今週 + 週レンジ表示（オペレーター指示 2026-07-21 #2） -->
+        <UiFilterBar>
+          <div class="flex items-center gap-1.5">
+            <button type="button" class="btn btn-sm" aria-label="前の週へ" @click="moveAllWeeklyWeek(-1)">
+              <ChevronLeft class="h-4 w-4" aria-hidden="true" />
+            </button>
+            <button type="button" class="btn btn-sm" :disabled="isAllThisWeek" @click="selAllWeekStart = reports.weekStartOf(todayJst())">今週</button>
+            <button type="button" class="btn btn-sm" aria-label="次の週へ" @click="moveAllWeeklyWeek(1)">
+              <ChevronRight class="h-4 w-4" aria-hidden="true" />
+            </button>
+            <span class="num ml-1 whitespace-nowrap text-xs font-semibold">{{ weekLabel(selAllWeekStart) }}</span>
+            <UiStatusBadge v-if="isAllThisWeek" label="今週" tone="brand" />
+          </div>
+          <UiSelect v-model="waDeptId" :options="deptOptions" empty-label="すべての部署" aria-label="部署で絞り込み" />
+          <UiSelect v-model="waMemberId" :options="memberFilterOptions" empty-label="すべてのメンバー" aria-label="メンバーで絞り込み" />
+          <template #trailing>
+            <span class="num text-xs text-muted">{{ allWeeklies.length }} 件</span>
+          </template>
+        </UiFilterBar>
+
+        <UiSectionCard
+          title="全員の週報"
+          description="選択した週の提出済み週報。参照できる範囲は権限設定（日報・週報の参照対象）に従います"
+          flush
+        >
+          <UiEmptyState
+            v-if="allWeeklies.length === 0"
+            title="この週の提出済み週報がありません"
+            hint="「自分の週報」から提出すると、ここに表示されます（絞り込み条件も確認してください）"
+          />
+          <ul v-else class="divide-y divide-line">
+            <li v-for="w in allWeeklies" :key="w.id">
+              <button
+                type="button"
+                class="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-brand-soft"
+                @click="weeklyDrawerId = w.id"
+              >
+                <UiAvatar :name="reports.memberName(w.memberId)" size="sm" />
+                <span class="min-w-0 flex-1">
+                  <span class="block text-[13px] font-bold">{{ reports.memberName(w.memberId) }}</span>
+                  <span class="block truncate text-xs text-sub">{{ w.mainWork || '—' }}</span>
+                </span>
+                <UiStatusBadge tone="ok" :label="REPORT_STATUS_LABELS.submitted" dot />
+              </button>
+            </li>
+          </ul>
+        </UiSectionCard>
+      </template>
+    </div>
+
+    <!-- ================= 自分の週報 ================= -->
+    <div v-else-if="tab === 'weekly-mine'" class="grid gap-3">
       <UiFilterBar>
         <div class="flex items-center gap-1.5">
           <button type="button" class="btn btn-sm" aria-label="前の週へ" @click="moveWeeklyWeek(-1)">
@@ -1184,10 +1797,9 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
           </li>
         </ul>
       </UiSectionCard>
-      </template>
     </div>
 
-    <!-- 日報詳細ドロワー（チームタブ） -->
+    <!-- 日報詳細ドロワー（チーム / 全員の日報） -->
     <UiDrawer
       :open="!!drawerReport"
       :title="drawerReport && drawerAuthor ? `${drawerAuthor.name} の日報` : '日報'"
@@ -1210,14 +1822,14 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
               :label="REPORT_STATUS_LABELS[drawerReport.status]"
               dot
             />
-            <UiStatusBadge v-if="drawerGap !== null" tone="warn" :label="`工数乖離 ${gapText(drawerGap)}`" />
+            <UiStatusBadge v-if="drawerGap !== null" tone="warn" :label="`時間乖離 ${gapText(drawerGap)}`" />
           </div>
         </div>
 
         <div class="overflow-x-auto scroll-slim">
           <table class="tbl">
             <thead>
-              <tr><th>業務テーマ</th><th>作業内容</th><th class="!text-right">工数</th><th class="!text-right">進捗</th></tr>
+              <tr><th>テーマ</th><th>内容</th><th class="!text-right">時間</th><th class="!text-right">進捗</th></tr>
             </thead>
             <tbody>
               <tr v-for="(e, i) in drawerReport.entries" :key="i">
@@ -1247,7 +1859,22 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
           </div>
           <div>
             <p class="label">明日の予定</p>
-            <UiMarkdown v-if="drawerReport.tomorrow" :source="drawerReport.tomorrow" />
+            <div v-if="(drawerReport.tomorrowPlans?.length ?? 0) > 0" class="overflow-x-auto scroll-slim">
+              <table class="tbl">
+                <thead>
+                  <tr><th>テーマ</th><th>目的</th><th>内容</th><th class="!text-right">時間</th></tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(p, i) in drawerReport.tomorrowPlans" :key="i">
+                    <td class="whitespace-nowrap">{{ p.theme || '—' }}</td>
+                    <td>{{ p.purpose || '—' }}</td>
+                    <td>{{ p.task || '—' }}</td>
+                    <td class="num text-right">{{ p.hours }}h</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <UiMarkdown v-else-if="drawerReport.tomorrow" :source="drawerReport.tomorrow" />
             <p v-else class="text-[13px]">—</p>
           </div>
         </div>
@@ -1256,19 +1883,22 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
       </div>
     </UiDrawer>
 
-    <!-- 週報詳細ドロワー -->
+    <!-- 週報詳細ドロワー（自分の週報の過去一覧 / 全員の週報） -->
     <UiDrawer
       :open="!!weeklyDrawer"
-      :title="weeklyDrawer ? `週報 ${weekLabel(weeklyDrawer.weekStart)}` : '週報'"
+      :title="weeklyDrawer ? `${weeklyDrawer.memberId === currentUserId ? '' : `${reports.memberName(weeklyDrawer.memberId)} の`}週報 ${weekLabel(weeklyDrawer.weekStart)}` : '週報'"
       @close="weeklyDrawerId = null"
     >
       <div v-if="weeklyDrawer" class="grid gap-3">
-        <UiStatusBadge
-          :tone="weeklyDrawer.status === 'submitted' ? 'ok' : 'warn'"
-          :label="REPORT_STATUS_LABELS[weeklyDrawer.status]"
-          dot
-          class="justify-self-start"
-        />
+        <div class="flex flex-wrap items-center gap-2">
+          <UiAvatar :name="reports.memberName(weeklyDrawer.memberId)" size="sm" />
+          <span class="text-[13px] font-bold">{{ reports.memberName(weeklyDrawer.memberId) }}</span>
+          <UiStatusBadge
+            :tone="weeklyDrawer.status === 'submitted' ? 'ok' : 'warn'"
+            :label="REPORT_STATUS_LABELS[weeklyDrawer.status]"
+            dot
+          />
+        </div>
         <div><p class="label">今週の目標達成</p><UiMarkdown v-if="weeklyDrawer.goalReview" :source="weeklyDrawer.goalReview" /><p v-else class="text-[13px]">—</p></div>
         <div><p class="label">主要業務</p><UiMarkdown v-if="weeklyDrawer.mainWork" :source="weeklyDrawer.mainWork" /><p v-else class="text-[13px]">—</p></div>
         <div><p class="label">課題</p><UiMarkdown v-if="weeklyDrawer.issues" :source="weeklyDrawer.issues" /><p v-else class="text-[13px]">—</p></div>
@@ -1283,7 +1913,7 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
           提出状況マトリクス・タイムラインに表示するメンバーを選びます。取締役・外注を含む在籍中の全メンバーから
           選択できます（雇用区分はバッジで表示）。未選択のまま保存すると既定の表示
           （マトリクス = 社員・契約・アルバイト / タイムライン = 全員）に戻ります。
-          誰の日報を参照できるかは権限設定（日報の参照対象）でロール・役職・個人ごとに制御できます
+          誰の日報を参照できるかは権限設定（日報・週報の参照対象）でロール・役職・個人ごとに制御できます
         </p>
         <p v-if="teamSettingsDroppedCount > 0" class="text-[12px] text-warn">
           保存済みの設定に在籍していないメンバーが {{ teamSettingsDroppedCount }} 名含まれていたため、選択から除外しています。

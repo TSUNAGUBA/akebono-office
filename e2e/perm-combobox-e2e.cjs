@@ -151,7 +151,7 @@ function check(name, ok) {
   await page.waitForTimeout(300)
   await page.getByRole('button', { name: '日報・週報 の下位項目を開く' }).click()
   await page.waitForTimeout(200)
-  const reportAllCell = page.getByRole('button', { name: /一般 × 日報の参照対象: 全メンバー（一括）: / })
+  const reportAllCell = page.getByRole('button', { name: /一般 × 日報・週報の参照対象: 全メンバー（一括）: / })
   check('権限表: 日報の参照対象（全メンバー一括）行がある（既定 = 参照可）',
     (await reportAllCell.getAttribute('aria-label')).includes('参照可（既定値）'))
   await reportAllCell.click()

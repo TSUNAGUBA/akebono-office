@@ -89,5 +89,6 @@ export const FIELD_CATALOG: Record<string, { value: string; label: string }[]> =
 export function fieldLabel(resource: string, field: string | null | undefined): string {
   if (!field) return ''
   if (field === 'ai-scope') return 'AI 参照範囲' // バッチ7g の擬似フィールド（shared AI_SCOPE_FIELD）
+  if (field === 'timecard-all') return '全員のタイムカードの参照' // 2026-07-22 の擬似フィールド（shared TIMECARD_ALL_FIELD）
   return FIELD_CATALOG[resource]?.find(f => f.value === field)?.label ?? field
 }

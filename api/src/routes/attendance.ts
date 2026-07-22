@@ -7,8 +7,10 @@ import { Hono } from 'hono'
 import type pg from 'pg'
 import { effectivePunches } from '../../../shared/domain/attendance-calc'
 import { addDays, nowJstIso, todayJst } from '../../../shared/domain/jst'
+import { canViewAllTimecards } from '../../../shared/domain/permissions'
 import type { AttendanceRule, Member, PunchKind, PunchRecord } from '../../../shared/domain/types'
 import { requireHrOrAdmin } from '../auth'
+import { activePermissionRules, subjectOf } from '../lib/permissions'
 import {
   article36Alerts, daySummary, monthSummary, PUNCH_ALLOWED, punchState, resolveRule,
 } from '../domain/attendance'
@@ -162,9 +164,13 @@ export function attendanceRoutes(pool: pg.Pool): Hono {
     return c.json({ data: article36Alerts(groupByDate(rows), rule, endMonth) })
   })
 
-  // タイムカード（管理者/人事。期間 × 部署 × 氏名でフィルタし日別の出退勤を返す）
+  // 全員のタイムカード（期間 × 部署 × 氏名でフィルタし日別の出退勤を返す）。
+  // 参照可否は権限表（attendance / timecard-all。既定 = 管理者/人事のみ = 従来ガードと同値）で制御する
   app.get('/timecard', async (c) => {
-    requireHrOrAdmin(c)
+    const user = c.get('user')
+    if (!canViewAllTimecards(await activePermissionRules(pool), subjectOf(user))) {
+      throw err('AKO-ATT-004', '全員のタイムカードを参照する権限がありません', 403)
+    }
     const from = c.req.query('from') ?? todayJst().slice(0, 8) + '01'
     const to = c.req.query('to') ?? todayJst()
     if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) {

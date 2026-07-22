@@ -43,11 +43,15 @@ function memberName(id: string): string {
 
 const VALID_TABS = ['daily', 'weekly', 'monthly', 'leave', 'requests', 'timecard', 'leave-admin', 'settings']
 
+// 全員のタイムカードは権限表（attendance / timecard-all。既定 = 管理者/人事）で参照制御する
+const { canViewAllTimecards } = usePermissions()
+
 function normalizeTab(v: unknown): string {
   const s = String(v ?? '')
   if (!VALID_TABS.includes(s)) return 'daily'
   if (s === 'settings' && !isAdmin.value) return 'daily'
-  if ((s === 'timecard' || s === 'leave-admin') && !isHrOrAdmin.value) return 'daily'
+  if (s === 'timecard' && !canViewAllTimecards.value) return 'daily'
+  if (s === 'leave-admin' && !isHrOrAdmin.value) return 'daily'
   return s
 }
 
@@ -69,7 +73,11 @@ watch(isAdmin, (v) => {
   if (!v && tab.value === 'settings') tab.value = 'daily'
 })
 watch(isHrOrAdmin, (v) => {
-  if (!v && (tab.value === 'timecard' || tab.value === 'leave-admin')) tab.value = 'daily'
+  if (!v && tab.value === 'leave-admin') tab.value = 'daily'
+})
+// ユーザー切替・ルール取得完了で権限が変わったら滞在中のタブを戻す（ページガードと同じ補完）
+watch(canViewAllTimecards, (v) => {
+  if (!v && tab.value === 'timecard') tab.value = 'daily'
 })
 
 const pendingCount = computed(() =>
@@ -83,9 +91,8 @@ const tabs = computed<TabItem[]>(() => {
     { key: 'leave', label: '休暇' },
     { key: 'requests', label: '申請', badge: isHrOrAdmin.value ? pendingCount.value : undefined },
   ]
-  if (isHrOrAdmin.value) {
-    t.push({ key: 'timecard', label: 'タイムカード' }, { key: 'leave-admin', label: '休暇管理' })
-  }
+  if (canViewAllTimecards.value) t.push({ key: 'timecard', label: '全員のタイムカード' })
+  if (isHrOrAdmin.value) t.push({ key: 'leave-admin', label: '休暇管理' })
   if (isAdmin.value) t.push({ key: 'settings', label: '設定' })
   return t
 })
@@ -578,9 +585,18 @@ const timecardRows = computed(() => {
     }))
 })
 
-/** タイムカードの行クリック → 日次タブでその日・そのメンバーを開く */
+/**
+ * 全員のタイムカードの行クリック → 日次タブでその日・そのメンバーを開く。
+ * 日次詳細（打刻タイムライン）の他メンバー閲覧は従来どおり管理者のみ
+ * （権限表で参照を許可された一般メンバーは一覧まで。本人の行は日次へ遷移できる）
+ */
 function openTimecardRow(row: Record<string, unknown>): void {
-  selMemberId.value = String(row.memberId)
+  const memberId = String(row.memberId)
+  if (memberId !== currentUser.value.id && !isAdmin.value) {
+    show('打刻の日次詳細は本人と管理者のみ参照できます', 'info')
+    return
+  }
+  selMemberId.value = memberId
   selDate.value = String(row.date)
   tab.value = 'daily'
 }
@@ -1308,9 +1324,9 @@ async function submitRule(): Promise<void> {
       </UiSectionCard>
     </div>
 
-    <!-- ================= タイムカード（管理者/人事 F-04-8） ================= -->
-    <div v-else-if="tab === 'timecard' && isHrOrAdmin" role="tabpanel" aria-label="タイムカード" class="mt-3 grid gap-3">
-      <UiSectionCard title="タイムカード" description="全メンバーの出退勤・労働時間の一覧（管理者/人事向け）。行クリックで日次詳細へ">
+    <!-- ================= 全員のタイムカード（F-04-8。権限表 attendance / timecard-all で制御） ================= -->
+    <div v-else-if="tab === 'timecard' && canViewAllTimecards" role="tabpanel" aria-label="全員のタイムカード" class="mt-3 grid gap-3">
+      <UiSectionCard title="全員のタイムカード" description="全メンバーの出退勤・労働時間の一覧（参照権限は権限設定で管理）。行クリックで日次詳細へ">
         <template #actions>
           <button
             type="button"
@@ -1488,8 +1504,8 @@ async function submitRule(): Promise<void> {
         <UiFormField label="取得単位" required>
           <UiSelect v-model="leaveForm.unit" :options="leaveUnitOptions" aria-label="取得単位" />
         </UiFormField>
-        <UiFormField label="理由" hint="任意。承認者への補足があれば記入してください">
-          <textarea v-model="leaveForm.reason" class="textarea" placeholder="例: 私用のため" />
+        <UiFormField label="理由">
+          <textarea v-model="leaveForm.reason" class="textarea" placeholder="任意。承認者への補足があれば記入してください" />
         </UiFormField>
         <p v-if="leaveError" class="text-[12px] font-medium text-crit" role="alert">{{ leaveError }}</p>
       </div>

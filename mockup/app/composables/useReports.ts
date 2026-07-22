@@ -14,8 +14,9 @@
  */
 import type { Ref } from 'vue'
 import type {
-  DailyReport, ReportComment, ReportEntry, Result, WeeklyReport,
+  DailyReport, ReportComment, ReportEntry, Result, TomorrowPlan, WeeklyReport,
 } from '~/types/domain'
+import { TOMORROW_PLANS_MAX } from '../../../shared/domain/types'
 import { addDays, weekdayOf } from '~/utils/format'
 import { matrixVisible, parseTeamVisibleIds, timelineVisibleWith } from '~/utils/team-visibility'
 
@@ -60,6 +61,13 @@ function loadWeekly(force = false): Promise<void> {
   }, force)
 }
 
+/** 全員の提出済み週報（scope=all。参照権限の絞り込みはサーバー側でも適用される） */
+function loadWeeklyAll(force = false): Promise<void> {
+  return apiLoadOnce('rep:weekly:all', async () => {
+    mergeById(apiWeekly, await apiFetch<WeeklyReport[]>('/v1/reports/weekly', { query: { scope: 'all' } }))
+  }, force)
+}
+
 function loadComments(reportId: string, force = false): Promise<void> {
   return apiLoadOnce(`rep:comments:${reportId}`, async () => {
     mergeById(apiComments, await apiFetch<ReportComment[]>(`/v1/reports/${reportId}/comments`))
@@ -78,7 +86,10 @@ export interface DailyReportInput {
   entries: ReportEntry[]
   reflection: string
   issues: string
+  /** 旧形式の明日の予定（自由記述。既存データの保持用パススルー） */
   tomorrow: string
+  /** 明日の予定（構造化・最大 TOMORROW_PLANS_MAX 件。翌営業日の日報へ自動反映） */
+  tomorrowPlans: TomorrowPlan[]
 }
 
 export interface WeeklyReportInput {
@@ -271,6 +282,26 @@ export function useReports() {
         || (b.submittedAt ?? '').localeCompare(a.submittedAt ?? ''))
   }
 
+  /**
+   * 指定日の日報エディタへ自動反映する「明日の予定」（オペレーター指示 2026-07-22）。
+   * 直近の自分の日報のうち、その日報の日付の翌営業日（本人の勤怠ルール基準）が指定日に一致し、
+   * かつ明日の予定が登録されているものを返す（該当なし = null）。
+   */
+  function tomorrowPlansFor(date: string): { fromDate: string; plans: TomorrowPlan[] } | null {
+    // 週明け・連休明けに備えて前月分もロードしておく（API モードの遅延ロード）
+    touchMineMonth(date)
+    touchMineMonth(addDays(date, -14))
+    const me = currentUser.value.id
+    const latest = dailyReports.value
+      .filter(r => r.authorKind === 'human' && r.memberId === me && r.date < date
+        && (r.tomorrowPlans?.length ?? 0) > 0)
+      .sort((a, b) => b.date.localeCompare(a.date))[0]
+    if (!latest) return null
+    // 予定の反映先は「登録した日の翌営業日」のみ（それ以外の日に古い予定を出さない）
+    if (useBusinessDay().nextWorkingDayFor(me, latest.date) !== date) return null
+    return { fromDate: latest.date, plans: latest.tomorrowPlans ?? [] }
+  }
+
   // ---------- 工数乖離チェック ----------
 
   /**
@@ -309,6 +340,19 @@ export function useReports() {
       }))
   }
 
+  /** 明日の予定の正規化（空行除去・0.25h 刻み・最大 TOMORROW_PLANS_MAX 件） */
+  function cleanTomorrowPlans(plans: TomorrowPlan[] | undefined): TomorrowPlan[] {
+    return (plans ?? [])
+      .filter(p => p.theme.trim() || p.purpose.trim() || p.task.trim())
+      .slice(0, TOMORROW_PLANS_MAX)
+      .map(p => ({
+        theme: [...p.theme.trim()].slice(0, 100).join(''),
+        purpose: p.purpose.trim(),
+        task: p.task.trim(),
+        hours: Math.max(0, Math.round((Number.isFinite(p.hours) ? p.hours : 0) * 4) / 4),
+      }))
+  }
+
   async function upsertDaily(
     input: DailyReportInput,
     status: 'draft' | 'submitted',
@@ -328,6 +372,7 @@ export function useReports() {
         return err('AKO-GEN-001', '各エントリの業務テーマと作業内容を入力してください')
       }
     }
+    const tomorrowPlans = cleanTomorrowPlans(input.tomorrowPlans)
     if (isApi) {
       // SoT（API）へ書込 → 対象月キャッシュを取り直す（原則6）。提出済み保護はサーバーが FOR UPDATE で最終判定
       try {
@@ -339,6 +384,7 @@ export function useReports() {
             reflection: input.reflection,
             issues: input.issues,
             tomorrow: input.tomorrow,
+            tomorrowPlans,
             status,
           },
         })
@@ -352,7 +398,7 @@ export function useReports() {
     if (existing) {
       // 初回提出時刻は保持（提出済みの編集で提出時刻を書き換えない）
       dailyReports.value = dailyReports.value.map(r => r.id === existing.id
-        ? { ...r, entries, reflection: input.reflection, issues: input.issues, tomorrow: input.tomorrow, status, submittedAt: r.submittedAt ?? submittedAt }
+        ? { ...r, entries, reflection: input.reflection, issues: input.issues, tomorrow: input.tomorrow, tomorrowPlans, status, submittedAt: r.submittedAt ?? submittedAt }
         : r)
       commit()
       return { ok: true, id: existing.id }
@@ -368,6 +414,7 @@ export function useReports() {
       reflection: input.reflection,
       issues: input.issues,
       tomorrow: input.tomorrow,
+      tomorrowPlans,
       status,
       submittedAt,
     }]
@@ -497,6 +544,24 @@ export function useReports() {
       .filter(r => r.memberId === currentUser.value.id)
       .sort((a, b) => b.weekStart.localeCompare(a.weekStart)))
 
+  /** 週報を id で取得（全員の週報タブのドロワー用。一覧に出るもの = 参照可のもののみ開かれる前提） */
+  function weeklyById(id: string): WeeklyReport | undefined {
+    return weeklyReports.value.find(r => r.id === id)
+  }
+
+  /**
+   * 全員の提出済み週報（オペレーター指示 2026-07-22: 全員の週報タブ）。
+   * 参照可否は日報と同じ権限表の「日報・週報の参照対象」（F-16-6 canViewMemberReports）で制御する。
+   * 下書きは本人以外に見せない（提出済みのみ）
+   */
+  function allSubmittedWeeklies(weekStart: string): WeeklyReport[] {
+    if (isApi) void loadWeeklyAll()
+    return weeklyReports.value
+      .filter(r => r.status === 'submitted' && r.weekStart === weekStart)
+      .filter(r => perms.canViewMemberReports(r.memberId))
+      .sort((a, b) => memberName(a.memberId).localeCompare(memberName(b.memberId), 'ja'))
+  }
+
   async function saveWeekly(input: WeeklyReportInput, submitNow: boolean): Promise<Result> {
     const existing = myWeeklyOn(input.weekStart)
     if (existing && existing.status === 'submitted') {
@@ -599,6 +664,9 @@ export function useReports() {
     weekStartOf,
     myWeeklyOn,
     myWeeklies,
+    weeklyById,
+    allSubmittedWeeklies,
+    tomorrowPlansFor,
     saveWeekly,
     draftFromDailies,
   }

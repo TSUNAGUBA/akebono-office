@@ -13,7 +13,8 @@ import type pg from 'pg'
 import { DEFAULT_WORKING_DAY_RULE, isWorkingDay } from '../../../shared/domain/business-day'
 import { addDays, nowJstIso, todayJst } from '../../../shared/domain/jst'
 import { canUseFeature, canViewMemberReports, type PermissionSubject } from '../../../shared/domain/permissions'
-import type { PermissionRule, PunchRecord, ReportEntry } from '../../../shared/domain/types'
+import { TOMORROW_PLANS_MAX } from '../../../shared/domain/types'
+import type { PermissionRule, PunchRecord, ReportEntry, TomorrowPlan } from '../../../shared/domain/types'
 import {
   heuristicPersonalInsight, heuristicWeeklyInsight,
   type PersonalWeeklyInsight, type PersonalWeeklyMetrics, type WeeklyInsight, type WeeklyMetrics,
@@ -32,7 +33,7 @@ import { capCp } from '../lib/text'
 
 const DAILY_COLS = `id, author_kind AS "authorKind", member_id AS "memberId",
   ai_employee_id AS "aiEmployeeId", date, entries, reflection, issues, tomorrow,
-  status, submitted_at AS "submittedAt"`
+  tomorrow_plans AS "tomorrowPlans", status, submitted_at AS "submittedAt"`
 const WEEKLY_COLS = `id, member_id AS "memberId", week_start AS "weekStart",
   goal_review AS "goalReview", main_work AS "mainWork", issues, next_week AS "nextWeek",
   status, submitted_at AS "submittedAt"`
@@ -49,6 +50,21 @@ function cleanEntries(entries: unknown): ReportEntry[] {
       task: String(e.task ?? '').trim(),
       hours: Math.max(0, Math.round((Number.isFinite(Number(e.hours)) ? Number(e.hours) : 0) * 4) / 4),
       progress: Math.min(100, Math.max(0, Math.round(Number.isFinite(Number(e.progress)) ? Number(e.progress) : 0))),
+    }))
+}
+
+/** 明日の予定の正規化（mockup cleanTomorrowPlans と同一: 空行除去・0.25h 刻み・最大 TOMORROW_PLANS_MAX 件） */
+function cleanTomorrowPlans(plans: unknown): TomorrowPlan[] {
+  if (!Array.isArray(plans)) return []
+  return plans
+    .map(p => p as Partial<TomorrowPlan>)
+    .filter(p => String(p.theme ?? '').trim() || String(p.purpose ?? '').trim() || String(p.task ?? '').trim())
+    .slice(0, TOMORROW_PLANS_MAX)
+    .map(p => ({
+      theme: [...String(p.theme ?? '').trim()].slice(0, 100).join(''),
+      purpose: String(p.purpose ?? '').trim(),
+      task: String(p.task ?? '').trim(),
+      hours: Math.max(0, Math.round((Number.isFinite(Number(p.hours)) ? Number(p.hours) : 0) * 4) / 4),
     }))
 }
 
@@ -240,18 +256,19 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
     const user = c.get('user')
     const body = await c.req.json().catch(() => ({})) as {
       date?: string; entries?: unknown; reflection?: string; issues?: string
-      tomorrow?: string; status?: 'draft' | 'submitted'
+      tomorrow?: string; tomorrowPlans?: unknown; status?: 'draft' | 'submitted'
     }
     if (!body.date || !/^\d{4}-\d{2}-\d{2}$/.test(body.date)) {
       throw err('AKO-GEN-001', '対象日（date）を指定してください', 400)
     }
     const status = body.status === 'submitted' ? 'submitted' : 'draft'
     const entries = cleanEntries(body.entries)
+    const tomorrowPlans = cleanTomorrowPlans(body.tomorrowPlans)
     if (status === 'submitted') {
       if (entries.length === 0) throw err('AKO-GEN-001', '作業エントリを 1 行以上入力してください', 400)
-      // theme（業務テーマ）が正。旧クライアント・旧データ編集の projectId のみも許容する（原則7）
+      // theme（テーマ）が正。旧クライアント・旧データ編集の projectId のみも許容する（原則7）
       if (entries.some(e => !(e.theme || e.projectId) || !e.task)) {
-        throw err('AKO-GEN-001', '各エントリの業務テーマと作業内容を入力してください', 400)
+        throw err('AKO-GEN-001', '各エントリのテーマと内容を入力してください', 400)
       }
     }
     const submittedAt = status === 'submitted' ? nowJstIso() : null
@@ -275,15 +292,17 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
         id = row.id
         await client.query(
           `UPDATE daily_reports SET entries = $2, reflection = $3, issues = $4, tomorrow = $5,
-             status = $6, submitted_at = COALESCE(submitted_at, $7), updated_at = now()
+             tomorrow_plans = $6, status = $7, submitted_at = COALESCE(submitted_at, $8), updated_at = now()
            WHERE id = $1`,
-          [id, JSON.stringify(entries), body.reflection ?? '', body.issues ?? '', body.tomorrow ?? '', status, submittedAt])
+          [id, JSON.stringify(entries), body.reflection ?? '', body.issues ?? '', body.tomorrow ?? '',
+            JSON.stringify(tomorrowPlans), status, submittedAt])
       } else {
         id = newId('dr')
         await client.query(
-          `INSERT INTO daily_reports (id, author_kind, member_id, date, entries, reflection, issues, tomorrow, status, submitted_at)
-           VALUES ($1, 'human', $2, $3, $4, $5, $6, $7, $8, $9)`,
-          [id, user.id, body.date, JSON.stringify(entries), body.reflection ?? '', body.issues ?? '', body.tomorrow ?? '', status, submittedAt])
+          `INSERT INTO daily_reports (id, author_kind, member_id, date, entries, reflection, issues, tomorrow, tomorrow_plans, status, submitted_at)
+           VALUES ($1, 'human', $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+          [id, user.id, body.date, JSON.stringify(entries), body.reflection ?? '', body.issues ?? '', body.tomorrow ?? '',
+            JSON.stringify(tomorrowPlans), status, submittedAt])
       }
       await client.query('COMMIT')
     } catch (e) {
@@ -315,8 +334,17 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
   })
 
   // 週報一覧 / 保存（提出済みは編集不可）
+  // scope=all: 全メンバーの提出済み週報（オペレーター指示 2026-07-22: 全員の週報タブ）。
+  // 参照権限は日報と同じ「日報・週報の参照対象」（F-16-6 canViewMemberReports）で絞り込む
   app.get('/weekly', async (c) => {
     const user = c.get('user')
+    if (c.req.query('scope') === 'all') {
+      const rules = await activePermissionRules(pool)
+      const subject = subjectOf(user)
+      const { rows } = await pool.query<{ memberId: string }>(
+        `SELECT ${WEEKLY_COLS} FROM weekly_reports WHERE status = 'submitted' ORDER BY week_start DESC`)
+      return c.json({ data: rows.filter(r => canViewMemberReports(rules, subject, r.memberId)) })
+    }
     const memberId = c.req.query('memberId') ?? user.id
     if (memberId !== user.id) requireAdmin(c)
     const { rows } = await pool.query(

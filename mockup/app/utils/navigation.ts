@@ -35,11 +35,12 @@ export const NAV_GROUPS: NavGroup[] = [
     id: 'work',
     label: '業務ツール',
     items: [
+      { path: '/timecard', label: 'タイムカード', icon: 'Clock3' },
       { path: '/attendance', label: '勤怠管理', icon: 'Clock' },
       { path: '/shift', label: 'シフト表', icon: 'CalendarRange', featureKey: 'shift' },
       { path: '/reports', label: '日報・週報', icon: 'NotebookPen' },
       { path: '/ai-assistant', label: 'AI業務アシスタント', icon: 'Sparkles' },
-      { path: '/workflow', label: 'ワークフロー', icon: 'GitPullRequestArrow' },
+      { path: '/workflow', label: '稟議', icon: 'GitPullRequestArrow' },
     ],
   },
   {

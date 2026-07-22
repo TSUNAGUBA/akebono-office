@@ -120,6 +120,20 @@ export const seedDailyReports: DailyReport[] = [
     reflection: '桜井主任のフィードバックが的確で助かる', issues: '', tomorrow: 'プロトタイプの改善',
     status: 'submitted', submittedAt: `${b3}T18:30:00+09:00`,
   },
+  // ---- 直近営業日（b1）の管理者（デモ既定ユーザー m-03）: 新形式（theme + 明日の予定）----
+  {
+    id: 'dr-0015', authorKind: 'human', memberId: 'm-03', aiEmployeeId: null, date: b1,
+    entries: [
+      { theme: 'SCM 導入支援', projectId: 'pj-01', task: 'Phase2 体制案のドラフト作成', hours: 3.5, progress: 60 },
+      { theme: '物流改善', projectId: 'pj-04', task: 'KPI 体系の最終化と裁定反映', hours: 3, progress: 90 },
+    ],
+    reflection: 'KPI は 5 個までの裁定に沿って絞り込み完了', issues: '', tomorrow: '',
+    tomorrowPlans: [
+      { theme: 'SCM 導入支援', purpose: 'Phase2 の体制合意', task: '体制案を北都物流へ提示・調整', hours: 3 },
+      { theme: '物流改善', purpose: 'KPI 運用開始の準備', task: '現場ボード掲載 KPI の最終確認', hours: 2 },
+    ],
+    status: 'submitted', submittedAt: `${b1}T19:15:00+09:00`,
+  },
   // ---- AI 社員の日報（同一タイムラインへ混在表示: F-06-5）----
   {
     id: 'dr-0013', authorKind: 'ai', memberId: null, aiEmployeeId: 'ai-01', date: b1,
@@ -144,6 +158,23 @@ export const seedWeeklyReports: WeeklyReport[] = [
     mainWork: '・SCM 定例のファシリテーションと Phase2 論点整理\n・物流改善 KPI 体系のドラフト作成\n・シーサイドホテルズ DX 構想の提案準備',
     issues: '・KPI が乱立気味。現場ボード掲載は 5 個までの裁定に沿って絞り込む',
     nextWeek: '・KPI 体系の最終化と北都物流への提示\n・SCM Phase2 の体制案作成',
+    status: 'submitted',
+  },
+  // 全員の週報タブのデモ用（他メンバーの提出済み週報）
+  {
+    id: 'wk-0002', memberId: 'm-04', weekStart: lastWeekStart,
+    goalReview: '週次売上レポートの検収クローズ（達成見込み）',
+    mainWork: '・週次売上レポートの検収対応\n・みなみ食品 受発注フローの現状整理\n・庫内 KPI 定義のヒアリング準備',
+    issues: '・受発注フローの例外パターンが多く、標準化方針の合意が必要',
+    nextWeek: '・例外パターンの一覧化と標準化方針の提案\n・北都物流ヒアリング（現地）',
+    status: 'submitted',
+  },
+  {
+    id: 'wk-0003', memberId: 'm-06', weekStart: lastWeekStart,
+    goalReview: 'AI 分析画面の集計 API 実装 60% まで前進',
+    mainWork: '・AI 分析画面の集計 API 実装\n・集計 API のスキーマ設計レビュー反映\n・アンケート分析画面のプロトタイプ作成',
+    issues: '・PII 匿名化の仕様が未確定で手戻りの懸念',
+    nextWeek: '・匿名化仕様の確定を受けて実装再開\n・プロトタイプの改善',
     status: 'submitted',
   },
 ]
