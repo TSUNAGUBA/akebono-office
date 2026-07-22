@@ -67,7 +67,7 @@ function resourceLabel(key: string): string {
   return resourceOptions.find(o => o.value === key)?.label ?? key
 }
 
-/** ルールが日報の参照対象（reports + member:<id>）か */
+/** ルールが日報・週報の参照対象（reports + member:<id>）か */
 function isReportViewRule(r: PermissionRule): boolean {
   return r.resource === 'reports' && (r.field ?? '').startsWith(REPORT_MEMBER_FIELD_PREFIX)
 }
@@ -164,7 +164,7 @@ const isFieldResource = computed(() => form.value.resource in FIELD_CATALOG)
 const fieldOptions = computed(() => FIELD_CATALOG[form.value.resource] ?? [])
 /** 選択中リソースが AI 参照範囲か（効果の語彙が すべて/自分のみ に変わる） */
 const isAiScope = computed(() => form.value.resource.startsWith(AI_SCOPE_PREFIX))
-/** 選択中リソースが日報の参照対象か（項目 = 対象メンバー・効果の語彙が 参照可/参照不可 に変わる） */
+/** 選択中リソースが日報・週報の参照対象か（項目 = 対象メンバー・効果の語彙が 参照可/参照不可 に変わる） */
 const isReportView = computed(() => form.value.resource === REPORT_VIEW_PSEUDO)
 /** 選択中リソースが AI業務アシスタントの参照対象か（項目 = 対象メンバー・既定 = 参照不可 = 許可制） */
 const isAssistView = computed(() => form.value.resource === ASSIST_VIEW_PSEUDO)
