@@ -555,9 +555,9 @@
 - [x] 通知フィードをタブでカテゴリ分け: すべて / エスカレーション（kind=escalation）/ 承認依頼（kind=approval のうち稟議以外）/ 稟議（リンク先 `/workflow` の通知）。未読数バッジ付き。判定は `categoryOf`（index.vue）
 
 ### 36-2 勤怠管理・タイムカード
-- [x] 「タイムカード」タブを独立メニュー `/timecard`（F-04-10）へ切り出し: **ログインユーザー本人のみ**（打刻ウィジェット + 期間フィルター付き出退勤一覧。API モードは本人の月サマリキャッシュから射影 = 追加 API なし）。メニューカード・ナビ・nav-map・機能キー `timecard`（既定 allow）を追加
+- [x] 「タイムカード」タブを独立メニュー `/timecard`（F-04-10）へ切り出し: **ログインユーザー本人のみ**（打刻ウィジェット + 期間フィルター付き出退勤一覧。API モードは本人の月サマリキャッシュから射影 = 追加 API なし）。メニューカード・ナビ・nav-map・機能キー `timecard`（既定 allow）を追加。**timecard のデータ面は attendance API に従属するため、canPath は timecard AND attendance で判定**（attendance deny 時はページごと非表示 = UI と API の一致。API 側はフロント enforcement = lib/permissions.ts の設計判断に明記。R1 レビュー #6 対応）
 - [x] 既存タブは「全員のタイムカード」へ改称して維持。参照可否を権限表で管理: `shared/domain/permissions.ts` に `TIMECARD_ALL_FIELD='timecard-all'`・`canViewAllTimecards`（**既定 = 管理者/人事のみ = 従来ロールガードと同値の下位互換**。明示ルールで一般への付与・人事からの剥奪が可能）。権限表（PermissionMatrix）に「全員のタイムカードの参照」行（列対象ごとの既定値 = `defaultAllowOf`）を追加。API `GET /v1/attendance/timecard` のガードを requireHrOrAdmin → canViewAllTimecards へ変更（403 = AKO-ATT-004）
-- [x] 他メンバーの日次詳細への行クリック遷移は従来どおり管理者のみ（権限付与された一般メンバーは一覧まで・本人行は可）
+- [x] 他メンバーの日次詳細への行クリック遷移は従来どおり管理者/人事のみ（API の guardTargetMember と同一 = UI と API の権限判断を一致。権限付与された一般メンバーは一覧まで・本人行は可。R1 監査 A-1 で hr 除外の退行を検出し修正）
 - [x] 休暇申請フォーム: 「任意。承認者への補足があれば記入してください」を hint から「理由」の placeholder へ移動
 - [x] 単体テスト: `mockup/tests/permissions-timecard.test.ts`（既定・付与・剥奪・レイヤ優先・論理削除 = 7 件）
 
@@ -567,7 +567,7 @@
 - [x] 明日の予定: テーマ/目的/内容/時間 × 最大 3 件（`TomorrowPlan[]`・`TOMORROW_PLANS_MAX`）。**翌営業日（本人の勤怠ルール基準 = useBusinessDay）の日報エディタへエントリとして自動反映**（反映元バナー表示）。旧自由記述 `tomorrow` は互換保持・互換表示（原則7）。API: `daily_reports.tomorrow_plans jsonb`（migration 0029）・PUT/SELECT 対応
 - [x] 自分の日報の表示モード「週」「月」: 週 = 週ストリップ（提出状態・日選択）/ 月 = 1 日〜末日の**横スクロール**と**カレンダー形式**の 2 ビュー切替
 - [x] 全員の日報・全員の週報・チーム: **部署・メンバーで絞り込み**（AI 社員の日報は絞り込み未指定時のみ表示）
-- [x] 全員の週報タブ（F-06-11）新設: 選択週の提出済み週報一覧（参照権限適用）→ 詳細ドロワー。API `GET /v1/reports/weekly?scope=all`（提出済みのみ・canViewMemberReports でサーバー側も絞り込み）。週次 AI インサイトは本タブのサブビューへ移設
+- [x] 全員の週報タブ（F-06-11）新設: 選択週の提出済み週報一覧（参照権限適用）→ 詳細ドロワー。API `GET /v1/reports/weekly?scope=all&weekStart=YYYY-MM-DD`（提出済みのみ・canViewMemberReports でサーバー側も絞り込み。weekStart 未指定は互換のため直近 500 件上限 = 全履歴ダンプを許容しない方針は daily と同型。R1 指摘対応）。週次 AI インサイトは本タブのサブビューへ移設
 - [x] チームの表示モード「週」「月」: 月 = 1 日〜末日の**横スクロールマトリクス**と**カレンダー形式**（日別提出数 + 選択日の詳細リスト）の 2 ビュー切替。一括リマインドは選択中ビューの表示メンバー・対象日基準
 
 ### 36-4 稟議（F-07）
@@ -576,6 +576,7 @@
 - [x] 詳細ドロワーは 目的/内容（マークダウン描画）を表示し、旧データは「本文」として互換表示
 
 ### 36-5 検証・ドキュメント
-- [x] mockup typecheck / 単体 80 件（73 + 新設 7）green・api typecheck / 単体 112 件 green
+- [x] mockup typecheck / 単体 80 件（73 + 新設 7）green・api typecheck / 単体 112 件 green・**統合 156 件（既存 152 + 新設 4 = tomorrow_plans 往復・weekly scope=all（週指定・下書き秘匿・F-16-6 deny）・timecard-all（既定/付与/剥奪 = AKO-ATT-004）・稟議 purpose/content 往復）green**
+- [x] 反復レビュー（原則9）: 独立コードレビュー + システム監査の 2 ロールで R1 実施 → 重大 3 件（API モードの旧稟議本文消失（?? → || 修正 + mock も body 移行で両モード一致）・明日の予定自動反映の初回不発（autoPlans computed + watch で遅延ロード到着に追従）・チーム月ビューの未ロード（touchTeamDates の明示タッチ = 誤リマインド防止））・中 3 件（AI 日報のフィルタバイパス・hr の日次詳細導線退行・timecard/attendance 依存）・軽微/表記 9 件をすべて修正し、R2 で指摘ゼロを確認
 - [x] ドキュメント更新（原則5）: functional-requirements（F-01-2/F-04-8/F-04-10/F-06-1/F-06-3/F-06-9/F-06-11/F-06-10/F-07 見出し/F-07-1）・本表（タイムカード・稟議行）・mockup/README
 - 既知の制約: API モードの「明日の予定の自動反映」は自分の日報キャッシュ到着後に反映（遅延ロード）。AI 日報ドラフト（F-06-7）は明日の予定（構造化）を生成しない（従来の tomorrow 文字列のみ = 将来拡張）

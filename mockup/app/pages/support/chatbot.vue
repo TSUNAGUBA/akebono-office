@@ -24,7 +24,7 @@ const rows = computed(() => Math.min(4, Math.max(1, draft.value.split('\n').leng
 const LINK_LABELS: Record<string, string> = {
   '/support/documents': 'ドキュメント管理',
   '/attendance': '勤怠管理',
-  '/workflow': 'ワークフロー',
+  '/workflow': '稟議',
   '/status': '稼働状況',
 }
 const LINK_RE = /(\/support\/documents|\/attendance|\/workflow|\/status)/g

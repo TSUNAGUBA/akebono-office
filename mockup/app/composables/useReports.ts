@@ -61,10 +61,10 @@ function loadWeekly(force = false): Promise<void> {
   }, force)
 }
 
-/** 全員の提出済み週報（scope=all。参照権限の絞り込みはサーバー側でも適用される） */
-function loadWeeklyAll(force = false): Promise<void> {
-  return apiLoadOnce('rep:weekly:all', async () => {
-    mergeById(apiWeekly, await apiFetch<WeeklyReport[]>('/v1/reports/weekly', { query: { scope: 'all' } }))
+/** 全員の提出済み週報（scope=all・単週指定。参照権限の絞り込みはサーバー側でも適用される） */
+function loadWeeklyAll(weekStart: string, force = false): Promise<void> {
+  return apiLoadOnce(`rep:weekly:all:${weekStart}`, async () => {
+    mergeById(apiWeekly, await apiFetch<WeeklyReport[]>('/v1/reports/weekly', { query: { scope: 'all', weekStart } }))
   }, force)
 }
 
@@ -369,7 +369,7 @@ export function useReports() {
       }
       // theme（業務テーマ）が正。旧データ編集の projectId のみも許容する（原則7）
       if (entries.some(e => !(e.theme || e.projectId) || !e.task)) {
-        return err('AKO-GEN-001', '各エントリの業務テーマと作業内容を入力してください')
+        return err('AKO-GEN-001', '各エントリのテーマと内容を入力してください')
       }
     }
     const tomorrowPlans = cleanTomorrowPlans(input.tomorrowPlans)
@@ -555,7 +555,7 @@ export function useReports() {
    * 下書きは本人以外に見せない（提出済みのみ）
    */
   function allSubmittedWeeklies(weekStart: string): WeeklyReport[] {
-    if (isApi) void loadWeeklyAll()
+    if (isApi) void loadWeeklyAll(weekStart)
     return weeklyReports.value
       .filter(r => r.status === 'submitted' && r.weekStart === weekStart)
       .filter(r => perms.canViewMemberReports(r.memberId))
@@ -652,6 +652,7 @@ export function useReports() {
     cellStatus,
     timeline,
     timelineForDates,
+    touchTeamDates,
     allSubmitted,
     hoursGapMinutes,
     gapOf,

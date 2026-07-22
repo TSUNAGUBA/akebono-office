@@ -171,6 +171,30 @@ const editTomorrow = ref('')
 /** 前営業日の「明日の予定」を自動反映した場合の反映元（バナー表示用） */
 const reflected = ref<{ fromDate: string; plans: TomorrowPlan[] } | null>(null)
 
+/**
+ * 選択日へ自動反映すべき前営業日の「明日の予定」（未作成日のみ）。
+ * computed にすることで API モードの遅延ロード到着（dailyReports の変化）にも追従する
+ * （loadEditor の watch は myReport が undefined のままだと発火しないため、下の watch が補完する）
+ */
+const autoPlans = computed(() =>
+  myReport.value ? null : reports.tomorrowPlansFor(selDate.value))
+
+/** エディタが未入力（自動反映で上書きしてよい状態）か */
+function isPristineEditor(): boolean {
+  return editEntries.value.every(e => !(e.theme ?? '').trim() && !e.task.trim())
+    && !editReflection.value.trim() && !editIssues.value.trim() && editPlans.value.length === 0
+}
+
+// API モード: 前営業日の日報（明日の予定入り）が非同期到着した時点で未入力エディタへ反映する
+watch(autoPlans, (v) => {
+  if (!v || v.plans.length === 0) return
+  if (myReport.value || editingSubmitted.value) return
+  if (reflected.value?.fromDate === v.fromDate) return // 反映済み（二重適用しない）
+  if (!isPristineEditor()) return // 入力中の内容を黙って上書きしない
+  editEntries.value = v.plans.map(p => ({ theme: p.theme, projectId: '', task: p.task, hours: p.hours, progress: 0 }))
+  reflected.value = v
+})
+
 function blankEntry(): ReportEntry {
   return { theme: '', projectId: '', task: '', hours: 1, progress: 0 }
 }
@@ -203,7 +227,7 @@ function loadEditor(): void {
     reflected.value = null
   } else {
     // 未作成日は前営業日に登録した「明日の予定」をエントリへ自動反映する（オペレーター指示 2026-07-22）
-    const auto = r ? null : reports.tomorrowPlansFor(selDate.value)
+    const auto = autoPlans.value
     if (auto && auto.plans.length > 0) {
       editEntries.value = auto.plans.map(p => ({ theme: p.theme, projectId: '', task: p.task, hours: p.hours, progress: 0 }))
       reflected.value = auto
@@ -452,6 +476,14 @@ const teamSelDate = ref(todayJst())
 function moveTeamMonth(delta: number): void {
   teamMonth.value = shiftMonth(teamMonth.value, delta)
 }
+
+// API モード: 月ビューの対象月レンジを遅延ロードする。週ビューはタイムラインカードの
+// timelineForDates が対象週をロードするが、月ビューはタイムライン非表示のため明示的にタッチする
+watchEffect(() => {
+  if (tab.value === 'team' && teamView.value === 'month') {
+    reports.touchTeamDates(teamMonthDays.value)
+  }
+})
 const isTeamThisMonth = computed(() => teamMonth.value === todayJst().slice(0, 7))
 // 月を移動したら選択日をその月へ合わせる（当月なら今日）
 watch(teamMonth, (ym) => {
@@ -480,8 +512,9 @@ const visibleTeamMembers = computed(() =>
 
 const teamTimeline = computed(() => {
   const dates = teamView.value === 'month' ? teamMonthDays.value : matrixDays.value
+  // AI 社員（memberId=null）は matchesMemberFilter が「絞り込み未指定のときのみ表示」を判定する
   return reports.timelineForDates(dates)
-    .filter(r => r.authorKind !== 'human' || matchesMemberFilter(r.memberId, teamDeptId.value, teamMemberId.value))
+    .filter(r => matchesMemberFilter(r.memberId, teamDeptId.value, teamMemberId.value))
 })
 
 /**
@@ -662,9 +695,10 @@ async function remindAll(): Promise<void> {
 const allMonth = ref(todayJst().slice(0, 7))
 const allDeptId = ref('')
 const allMemberId = ref('')
+// AI 社員（memberId=null）は matchesMemberFilter が「絞り込み未指定のときのみ表示」を判定する
 const allReports = computed(() =>
   reports.allSubmitted(allMonth.value)
-    .filter(r => r.authorKind !== 'human' || matchesMemberFilter(r.memberId, allDeptId.value, allMemberId.value)))
+    .filter(r => matchesMemberFilter(r.memberId, allDeptId.value, allMemberId.value)))
 
 const ALL_COLUMNS: TableColumn[] = [
   { key: 'dateLabel', label: '日付', primary: true, width: '110px' },
@@ -1511,8 +1545,8 @@ const allWeeklies = computed(() =>
                 <td v-for="d in (teamView === 'week' ? matrixDays : teamMonthDays)" :key="d" class="!p-1 text-center">
                   <button
                     type="button"
-                    class="inline-flex h-8 w-full items-center justify-center rounded-md text-[11px] font-semibold transition-colors"
-                    :class="[cellClass(m.id, d), teamView === 'week' ? 'min-w-[52px]' : 'min-w-[36px]']"
+                    class="inline-flex min-h-11 w-full items-center justify-center rounded-md text-[11px] font-semibold transition-colors"
+                    :class="[cellClass(m.id, d), teamView === 'week' ? 'min-w-[52px]' : 'min-w-[44px]']"
                     :aria-label="cellAria(m.id, d)"
                     @click="openCell(m.id, d)"
                   >

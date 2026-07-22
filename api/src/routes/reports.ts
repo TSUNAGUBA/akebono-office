@@ -335,14 +335,25 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
 
   // 週報一覧 / 保存（提出済みは編集不可）
   // scope=all: 全メンバーの提出済み週報（オペレーター指示 2026-07-22: 全員の週報タブ）。
-  // 参照権限は日報と同じ「日報・週報の参照対象」（F-16-6 canViewMemberReports）で絞り込む
+  // 参照権限は日報と同じ「日報・週報の参照対象」（F-16-6 canViewMemberReports）で絞り込む。
+  // 期間なしの全履歴ダンプを許容しない方針（daily scope=all の month 指定と同型）: weekStart 指定で
+  // 単週を返し、未指定は互換のため直近分に上限を設けて返す
   app.get('/weekly', async (c) => {
     const user = c.get('user')
     if (c.req.query('scope') === 'all') {
+      const weekStart = c.req.query('weekStart') ?? ''
+      if (weekStart && !/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) {
+        throw err('AKO-GEN-001', 'weekStart は YYYY-MM-DD 形式で指定してください', 400)
+      }
       const rules = await activePermissionRules(pool)
       const subject = subjectOf(user)
-      const { rows } = await pool.query<{ memberId: string }>(
-        `SELECT ${WEEKLY_COLS} FROM weekly_reports WHERE status = 'submitted' ORDER BY week_start DESC`)
+      const { rows } = weekStart
+        ? await pool.query<{ memberId: string }>(
+          `SELECT ${WEEKLY_COLS} FROM weekly_reports
+           WHERE status = 'submitted' AND week_start = $1 ORDER BY week_start DESC`, [weekStart])
+        : await pool.query<{ memberId: string }>(
+          `SELECT ${WEEKLY_COLS} FROM weekly_reports
+           WHERE status = 'submitted' ORDER BY week_start DESC LIMIT 500`)
       return c.json({ data: rows.filter(r => canViewMemberReports(rules, subject, r.memberId)) })
     }
     const memberId = c.req.query('memberId') ?? user.id

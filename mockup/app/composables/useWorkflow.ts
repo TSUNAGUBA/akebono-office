@@ -300,7 +300,8 @@ export function useWorkflow() {
       if (!existing) return err('AKO-GEN-002', '対象の申請が見つかりません')
       if (existing.requesterId !== currentUser.value.id) return err('AKO-WFL-001', '申請者本人のみ編集できます')
       if (existing.status !== 'draft') return err('AKO-WFL-001', '下書き以外は下書き保存できません')
-      patch(requestId, { ...input })
+      // 旧本文はフォームが content へ読み込み済み = 保存で body を空にして移行完了（API と同一挙動）
+      patch(requestId, { ...input, body: '' })
       commit()
       return { ok: true, id: requestId }
     }
@@ -349,7 +350,8 @@ export function useWorkflow() {
         return err('AKO-WFL-001', 'この申請は提出できる状態ではありません')
       }
       id = requestId
-      patch(id, { ...input, status: 'in_review', currentStep: 1, routeSnapshot: route })
+      // 旧本文はフォームが content へ読み込み済み = 再申請で body を空にして移行完了（API と同一挙動）
+      patch(id, { ...input, body: '', status: 'in_review', currentStep: 1, routeSnapshot: route })
     } else {
       id = nextId('workflowRequests', 'WF')
       requests.value = [...requests.value, {

@@ -140,7 +140,7 @@ export const seedDecisionThemes: DecisionTheme[] = [
     links: [
       { label: 'PJ: アケボノ商事 SCM 導入', to: '/masters/projects', info: 'pj-01 / 予算 ¥4,800万 / 2026-12 まで。開発 3 名 + 外注 1 名で進行中' },
       { label: 'PJ: トクタケ AI 分析基盤開発', to: '/masters/projects', info: 'pj-03 / 予算 ¥3,600万 / 2026-09 納期。現在が実装の佳境' },
-      { label: '採用稟議（ワークフロー）', to: '/workflow', info: '採用は稟議区分「採用」。取締役 → 社長の 2 段階承認が必要' },
+      { label: '採用稟議（稟議申請）', to: '/workflow', info: '採用は稟議区分「採用」。取締役 → 社長の 2 段階承認が必要' },
     ],
     actions: [
       { name: '正社員を 1 名採用', status: 'ok', slot: 'A', why: '' },

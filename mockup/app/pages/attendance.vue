@@ -490,7 +490,7 @@ async function onDecide(row: Record<string, unknown>, action: 'approved' | 'reje
   }
 }
 
-// ---------- タイムカードタブ（F-04-8。管理者/人事） ----------
+// ---------- 全員のタイムカードタブ（F-04-8。権限表 attendance / timecard-all で制御） ----------
 
 const tcFilterOpen = ref(true)
 const tcFrom = ref(addDays(todayKey, -6))
@@ -587,13 +587,14 @@ const timecardRows = computed(() => {
 
 /**
  * 全員のタイムカードの行クリック → 日次タブでその日・そのメンバーを開く。
- * 日次詳細（打刻タイムライン）の他メンバー閲覧は従来どおり管理者のみ
- * （権限表で参照を許可された一般メンバーは一覧まで。本人の行は日次へ遷移できる）
+ * 日次詳細（打刻タイムライン）の他メンバー閲覧は従来どおり管理者/人事のみ
+ * （API の guardTargetMember と同一 = UI と API の権限判断を一致させる。
+ * 権限表で参照を許可された一般メンバーは一覧まで。本人の行は日次へ遷移できる）
  */
 function openTimecardRow(row: Record<string, unknown>): void {
   const memberId = String(row.memberId)
-  if (memberId !== currentUser.value.id && !isAdmin.value) {
-    show('打刻の日次詳細は本人と管理者のみ参照できます', 'info')
+  if (memberId !== currentUser.value.id && !isHrOrAdmin.value) {
+    show('打刻の日次詳細は本人と管理者・人事のみ参照できます', 'info')
     return
   }
   selMemberId.value = memberId

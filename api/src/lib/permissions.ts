@@ -8,6 +8,9 @@
  *   通知（ヘッダーバッジのポーリング）・エスカレーション起票（チャットボット/日報からの補助処理）は
  *   全ページ横断の「データ面」であり、機能 deny でアプリ全体が壊れるため。masters/settings/inbox の
  *   機能 deny はフロントのメニュー・ページ非表示で enforcement する（変更系は既存ロールガードが基底）
+ * - 機能キー 'timecard'（/timecard = 本人のタイムカードページ。2026-07-22）は専用 API を持たず、
+ *   データ面は /v1/attendance（機能キー 'attendance'）に従属する = フロント enforcement のみ。
+ *   フロントの canPath は timecard AND attendance で判定し、attendance deny 時はページごと隠す（UI と API の一致）
  * - フィールドレベルは masters GET レスポンスの剥がし（stripMasterFields）で enforcement する
  */
 import type { MiddlewareHandler } from 'hono'

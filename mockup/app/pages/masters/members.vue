@@ -117,7 +117,7 @@ const formFields = computed<FieldDef[]>(() => [
   {
     key: 'role', label: 'ロール', type: 'select', required: true,
     options: Object.entries(MEMBER_ROLE_LABELS).map(([value, label]) => ({ value, label })),
-    hint: '管理者はマスタ・設定・承認系の操作が可能。人事はタイムカード・休暇管理（付与含む）が可能',
+    hint: '管理者はマスタ・設定・承認系の操作が可能。人事は全員のタイムカード（既定。権限設定で変更可）・休暇管理（付与含む）が可能',
   },
   { key: 'weeklyDays', label: '週所定日数', type: 'number', min: 1, max: 7, step: 1, hint: '有給の比例付与判定に使用' },
   { key: 'weeklyHours', label: '週所定時間', type: 'number', min: 1, max: 60, step: 0.5, hint: '有給の比例付与判定に使用' },

@@ -251,9 +251,11 @@ function openEdit(req: WorkflowRequest): void {
   form.category = req.category
   form.title = req.title
   form.amount = req.amount
-  // 旧データ（本文のみ）は内容へ読み込んで編集を続けられるようにする（原則7）
-  form.purpose = req.purpose ?? ''
-  form.content = req.content ?? req.body ?? ''
+  // 旧データ（本文のみ）は内容へ読み込んで編集を続けられるようにする（原則7）。
+  // API モードは migration 0029 の DEFAULT '' により旧行の content が空文字列で返るため、
+  // nullish（??）ではなく falsy（||）で本文へフォールバックする（?? だと旧本文が消失する）
+  form.purpose = req.purpose || ''
+  form.content = req.content || req.body || ''
   form.attachments = [...req.attachments]
   attachName.value = ''
   templateKey.value = ''
