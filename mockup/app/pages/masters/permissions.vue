@@ -12,9 +12,9 @@ import type { Member, PermissionRule } from '~/types/domain'
 import type { TableColumn } from '~/types/ui'
 import {
   AI_SCOPE_FEATURES, AI_SCOPE_FIELD, ASSIST_MEMBER_FIELD_PREFIX,
-  FEATURE_PERMISSION_KEYS, REPORT_MEMBER_FIELD_PREFIX,
+  FEATURE_PERMISSION_KEYS, MEMBER_VIEW_ALL_FIELD, REPORT_MEMBER_FIELD_PREFIX,
 } from '../../../../shared/domain/permissions'
-import { FIELD_CATALOG, FIELD_RESOURCES, fieldLabel } from '~/utils/permission-catalog'
+import { FIELD_CATALOG, FIELD_RESOURCES, fieldLabel } from '../../../../shared/domain/permission-catalog'
 
 const ruleCrud = useMasterCrudAsync('permissionRules', 'pm')
 const memberCrud = useMasterCrudAsync('members', 'm')
@@ -28,13 +28,13 @@ const KIND_LABELS: Record<PermissionRule['subjectKind'], string> = {
 const ROLE_LABELS: Record<string, string> = { admin: '管理者', hr: '人事', member: '一般' }
 const EFFECT_LABELS: Record<PermissionRule['effect'], string> = { allow: '許可', deny: '拒否' }
 
-// 項目カタログ（論理名）はルール一覧・権限表の両モードで共有（~/utils/permission-catalog）
+// 項目カタログ（論理名）はルール一覧・権限表・API 剥がしで共有（shared/domain/permission-catalog）
 
-/** 表示モード: ルール一覧（従来）/ 権限表（オペレーター指示 2026-07-19 #2） */
-const viewTab = ref('list')
+/** 表示モード: 権限表（既定）/ ルール一覧（並び・既定はオペレーター指示 2026-07-21） */
+const viewTab = ref('matrix')
 const VIEW_TABS = [
-  { key: 'list', label: 'ルール一覧' },
   { key: 'matrix', label: '権限表' },
+  { key: 'list', label: 'ルール一覧' },
 ]
 
 // AI 参照範囲はフォーム上は擬似リソース 'ai-scope:<機能キー>' で選ばせ、保存時に
@@ -91,9 +91,10 @@ function ruleEffectLabel(r: PermissionRule): string {
   return EFFECT_LABELS[r.effect]
 }
 
-/** 項目ラベル（参照対象は対象メンバー名を表示） */
+/** 項目ラベル（参照対象は対象メンバー名・member:* は全メンバー一括を表示） */
 function ruleFieldLabel(r: PermissionRule): string {
   if (isReportViewRule(r) || isAssistViewRule(r)) {
+    if ((r.field ?? '') === MEMBER_VIEW_ALL_FIELD) return '全メンバー（一括既定）'
     const prefix = isReportViewRule(r) ? REPORT_MEMBER_FIELD_PREFIX : ASSIST_MEMBER_FIELD_PREFIX
     const id = (r.field ?? '').slice(prefix.length)
     return (memberCrud.byId(id) as Member | undefined)?.name ?? id
@@ -157,9 +158,11 @@ const isReportView = computed(() => form.value.resource === REPORT_VIEW_PSEUDO)
 const isAssistView = computed(() => form.value.resource === ASSIST_VIEW_PSEUDO)
 /** 参照対象（メンバー指定）系のリソースか（対象メンバー UI を出すかの判定） */
 const isMemberTargetView = computed(() => isReportView.value || isAssistView.value)
-/** 対象メンバーの選択肢（参照対象。論理名 = メンバー名で検索） */
-const reportTargetOptions = computed(() =>
-  (memberCrud.activeList.value as Member[]).map(m => ({ value: m.id, label: m.name })))
+/** 対象メンバーの選択肢（参照対象。論理名 = メンバー名で検索。'*' = 全メンバーの一括既定） */
+const reportTargetOptions = computed(() => [
+  { value: '*', label: '全メンバー（一括既定）' },
+  ...(memberCrud.activeList.value as Member[]).map(m => ({ value: m.id, label: m.name })),
+])
 /** フォームの擬似リソースを実際の resource / field へ写像 */
 function actualResource(): string {
   if (isAiScope.value) return form.value.resource.slice(AI_SCOPE_PREFIX.length)
@@ -336,7 +339,7 @@ async function restoreRule(): Promise<void> {
 <template>
   <MastersMasterShell
     title="権限設定"
-    description="ロール・役職・個人の 3 レイヤで機能と表示項目の権限を制御します（解決順: 個人 > 役職 > ロール。未設定は許可）。管理者向けの基本権限（マスタ変更等）はここでは緩められません"
+    description="ロール・役職・個人の 3 レイヤで機能と表示項目の権限を制御します（解決順: 個人 > 役職 > ロール。明示ルールが無い場合は上位の一括設定 → アプリ既定値の順で決まります）。管理者向けの基本権限（マスタ変更等）はここでは緩められません"
   >
     <UiTabBar v-model="viewTab" :tabs="VIEW_TABS" class="mb-3" />
 
@@ -371,6 +374,8 @@ async function restoreRule(): Promise<void> {
           <span v-if="asRule(row).field" class="text-xs" :title="`物理キー: ${asRule(row).field}`">
             {{ ruleFieldLabel(asRule(row)) }}
           </span>
+          <!-- フィールドリソースの field=null は「マスタ全体」= 全項目の一括既定（個別項目ルールが優先） -->
+          <span v-else-if="asRule(row).resource in FIELD_CATALOG" class="text-xs text-muted">マスタ全体（一括既定）</span>
           <span v-else class="text-xs text-muted">—</span>
         </template>
         <template #cell-effect="{ row }">
@@ -429,8 +434,8 @@ async function restoreRule(): Promise<void> {
             v-else-if="isFieldResource"
             label="項目（任意）"
             :hint="editingId
-              ? '項目名で検索して 1 件選択（未選択 = マスタ全体）'
-              : '項目名で検索して選択。複数選択すると 1 項目 1 ルールで一括作成されます（未選択 = マスタ全体）'"
+              ? '項目名で検索して 1 件選択（未選択 = マスタ全体 = 全項目の一括既定。個別項目のルールが優先）'
+              : '項目名で検索して選択。複数選択すると 1 項目 1 ルールで一括作成されます（未選択 = マスタ全体 = 全項目の一括既定。個別項目のルールが優先）'"
           >
             <UiMultiCombobox
               v-model="form.fields"
