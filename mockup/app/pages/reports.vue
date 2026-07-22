@@ -179,9 +179,10 @@ const reflected = ref<{ fromDate: string; plans: TomorrowPlan[] } | null>(null)
 const autoPlans = computed(() =>
   myReport.value ? null : reports.tomorrowPlansFor(selDate.value))
 
-/** エディタが未入力（自動反映で上書きしてよい状態）か */
+/** エディタが未入力（= 空行の既定値のみ。自動反映で上書きしてよい状態）か */
 function isPristineEditor(): boolean {
-  return editEntries.value.every(e => !(e.theme ?? '').trim() && !e.task.trim())
+  return editEntries.value.every(e =>
+    !(e.theme ?? '').trim() && !e.task.trim() && e.hours === 1 && e.progress === 0)
     && !editReflection.value.trim() && !editIssues.value.trim() && editPlans.value.length === 0
 }
 

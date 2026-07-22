@@ -577,6 +577,6 @@
 
 ### 36-5 検証・ドキュメント
 - [x] mockup typecheck / 単体 80 件（73 + 新設 7）green・api typecheck / 単体 112 件 green・**統合 156 件（既存 152 + 新設 4 = tomorrow_plans 往復・weekly scope=all（週指定・下書き秘匿・F-16-6 deny）・timecard-all（既定/付与/剥奪 = AKO-ATT-004）・稟議 purpose/content 往復）green**
-- [x] 反復レビュー（原則9）: 独立コードレビュー + システム監査の 2 ロールで R1 実施 → 重大 3 件（API モードの旧稟議本文消失（?? → || 修正 + mock も body 移行で両モード一致）・明日の予定自動反映の初回不発（autoPlans computed + watch で遅延ロード到着に追従）・チーム月ビューの未ロード（touchTeamDates の明示タッチ = 誤リマインド防止））・中 3 件（AI 日報のフィルタバイパス・hr の日次詳細導線退行・timecard/attendance 依存）・軽微/表記 9 件をすべて修正し、R2 で指摘ゼロを確認
+- [x] 反復レビュー（原則9）: 独立コードレビュー + システム監査の 2 ロールで実施。**R1** = 重大 3 件（API モードの旧稟議本文消失（?? → || 修正 + mock も body 移行で両モード一致）・明日の予定自動反映の初回不発（autoPlans computed + watch で遅延ロード到着に追従）・チーム月ビューの未ロード（touchTeamDates の明示タッチ = 誤リマインド防止））・中 3 件（AI 日報のフィルタバイパス・hr の日次詳細導線退行・timecard/attendance 依存）・軽微/表記ほかを修正。**R2** = R1 修正 10 項目すべて解消・機能デグレゼロを確認したうえで、残存の表記 3 件（AI ドラフト生成根拠の 業務テーマ/工数・権限設定の aria-label・e2e チェックラベル）+ 設計 SoT ドキュメント未追随 3 本（screen-design の /attendance・/timecard・/reports・/workflow 節 / data-design の DailyReport・WorkflowRequest・PermissionRule / api-design の weekly scope=all・timecard ガード）+ 本欄の完了宣言先行を指摘 → 全件修正（isPristineEditor の hours/progress 判定強化・weekStart 非月曜の設計判断コメントを含む）。修正後に typecheck・単体・統合の全スイートで再検証
 - [x] ドキュメント更新（原則5）: functional-requirements（F-01-2/F-04-8/F-04-10/F-06-1/F-06-3/F-06-9/F-06-11/F-06-10/F-07 見出し/F-07-1）・本表（タイムカード・稟議行）・mockup/README
 - 既知の制約: API モードの「明日の予定の自動反映」は自分の日報キャッシュ到着後に反映（遅延ロード）。AI 日報ドラフト（F-06-7）は明日の予定（構造化）を生成しない（従来の tomorrow 文字列のみ = 将来拡張）

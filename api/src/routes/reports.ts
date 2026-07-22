@@ -345,6 +345,7 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
       if (weekStart && !/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) {
         throw err('AKO-GEN-001', 'weekStart は YYYY-MM-DD 形式で指定してください', 400)
       }
+      // 形式のみ検証（週報の week_start は常に月曜で保存されるため、非月曜指定は空配列が返るだけ = 無害）
       const rules = await activePermissionRules(pool)
       const subject = subjectOf(user)
       const { rows } = weekStart

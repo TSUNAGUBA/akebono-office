@@ -41,7 +41,7 @@ const VIEW_TABS = [
 // resource=<機能キー> + field='ai-scope' へ写像する（PermissionRule スキーマ不変 = 権限表と相互運用）
 const AI_SCOPE_PREFIX = 'ai-scope:'
 
-// 日報の参照対象（バッチ7h・F-16-6）: フォーム上は擬似リソース 'report-view' で対象メンバーを選ばせ、
+// 日報・週報の参照対象（バッチ7h・F-16-6。2026-07-22 で週報にも適用）: フォーム上は擬似リソース 'report-view' で対象メンバーを選ばせ、
 // 保存時に resource='reports' + field='member:<対象メンバー id>' へ写像する（1 対象 1 ルール）
 const REPORT_VIEW_PSEUDO = 'report-view'
 // AI業務アシスタントの参照対象（F-16-7）: 擬似リソース 'assistant-view' で対象メンバーを選ばせ、
@@ -450,7 +450,7 @@ async function restoreRule(): Promise<void> {
               :options="reportTargetOptions"
               :single="!!editingId"
               placeholder="メンバー名で検索"
-              :aria-label="isAssistView ? 'AI業務アシスタントの参照対象メンバー' : '日報の参照対象メンバー'"
+              :aria-label="isAssistView ? 'AI業務アシスタントの参照対象メンバー' : '日報・週報の参照対象メンバー'"
             />
           </UiFormField>
           <UiFormField
