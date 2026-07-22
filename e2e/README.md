@@ -33,3 +33,13 @@ cd e2e && npm ci
 
 `batchXX-e2e.cjs` を追加し、`run-batch6b-stack.sh` 末尾の `SUITES` に 1 行追記する
 （`lib.cjs` の `check/withPage/summary` を利用。失敗があれば exit 1 でランナーが止まる）。
+追加したスイートは CI（下記）でも自動的に実行される。
+
+## CI での実行（シナリオテストゲート）
+
+本ハーネスは GitHub Actions の `e2e-scenario` ジョブ（`.github/workflows/test-suite.yml`）として、
+**PR 時（ci.yml）とデプロイ前（deploy.yml）の両方**で自動実行される。失敗するとマージ確認・デプロイが中断される。
+
+- 環境変数 `E2E_LOG_EXPORT` にディレクトリを指定すると、終了時にスタックのログ
+  （`api.log`・`gen-*.log`）をそこへコピーしてから作業ディレクトリを破棄する。
+  CI では失敗時にこれを artifact `e2e-logs` として保存する（ローカルでは未設定 = 従来どおり）

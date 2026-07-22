@@ -251,7 +251,21 @@ AI 機能（日報 AI アシスト・タスク計画の AI コメント等）は
 ## 2. 日常デプロイ（開発者）
 
 - **自動:** main へマージ → 変更パスに応じて mockup / api が自動デプロイ
-  - api は `api-test`（typecheck + 単体 + 統合テスト + build）が green の場合のみデプロイされる
+- **テストゲート:** デプロイ前に `tests` ジョブ（`.github/workflows/test-suite.yml`）が 3 種の自動テストを実行し、
+  **1 つでも失敗すると mockup / api ともデプロイは中断される**
+
+  | テスト種別 | ジョブ | 内容 |
+  |---|---|---|
+  | 単体テスト | `mockup-test` / `api-test` | vitest（mockup はフロントロジック、api はドメイン・ルート単体） |
+  | 総合テスト | `api-test` | 実 PostgreSQL 16 に対する統合テスト + 型チェック（両者）+ ビルド確認 |
+  | シナリオテスト | `e2e-scenario` | `e2e/run-batch6b-stack.sh`（使い捨て DB + 本実装 API + 静的配信フロントへの Playwright 実クリック全スイート） |
+
+- **失敗時のログの見方（何がどうだめだったか）:**
+  1. Actions の実行ページ **Summary** — 失敗ジョブが「どの検査（単体/統合/型/ビルド/E2E）がどう失敗したか」の表を出力する
+  2. 失敗ジョブの**ログ本文** — 失敗したテスト名・アサーション・エラー全文（`::error::` アノテーションが失敗ステップを指す）
+  3. シナリオテスト失敗時は artifact **`e2e-logs`**（API サーバーログ・nuxt generate ログ）で原因調査できる
+- **PR 時の事前検証:** 同じテストスイートが PR でも実行される（`.github/workflows/ci.yml`）。
+  main が赤くなる前に PR で検出するのが原則（マージ前に green を確認する）
 - **手動:** `gh workflow run deploy.yml` または Actions 画面から `Run workflow`
 - **ロールバック:** Cloud Run はリビジョン単位で保持される
   ```bash

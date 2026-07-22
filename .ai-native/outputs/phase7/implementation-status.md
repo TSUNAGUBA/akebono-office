@@ -510,3 +510,16 @@
 - [x] 対象 2 ページ（ai-assistant / reports）の主要非同期ボタン（提出・保存・AI 生成・AI コメント・結果記録・同期・リマインド・週報生成/提出 等）へ適用 = 押下でスナックバー通知 + スピナー表示
 - [x] 残課題（原則 9.5 / 原則3 の漸進適用。対象機能の改修時に順次）: 他ページのボタンへの UiButton/useAsyncAction 展開・API モードでの他メンバー readonly 参照時のカレンダー予定候補（本人操作のため readonly では非表示）
 - [x] 検証: mock typecheck / mock 73 tests / api typecheck / api 101 unit tests green。統合テスト（DB 必須）は done 訂正フロー・他メンバー参照 403 を追加。独立レビュー（5 観点）+ 反復修正で指摘ゼロ
+
+## 35. AI ネイティブ開発改善: CI/CD テストゲート強化（オペレーター指示 2026-07-22）の完了条件（Definition of Done）
+
+依頼内容: ① deploy は GitHub Actions + Repository secrets（PowerShell で設定完結・手順書必須）② deploy 過程に自動テスト（単体・総合・シナリオ）を導入し、失敗時は deploy を中断して「何がどうだめだったか」をログに残す ③ 開発の質・効率の現状監査と必要な修正。
+
+- [x] **現状監査（エデュケーター + 独立レビュー）**: ①は既存の deploy.yml + `scripts/setup-deploy-secrets.ps1` + deploy-guide.md で充足済みと確認。ギャップは (a) シナリオテスト（E2E ハーネス）が CI 未組込 (b) 失敗時の構造化ログなし (c) PR 時にテストが走らない（デプロイ時まで検出が遅延 = SP-8 の左シフト不全）(d) mockup がシナリオ検証なしでデプロイされる、の 4 点。監査の詳細は `.ai-native/outputs/evaluation/methodology-review-2026-07-22-cicd-quality-gates.md`
+- [x] **(a)(d) シナリオテストのゲート化**: 再利用ワークフロー `.github/workflows/test-suite.yml` を新設（mockup-test / api-test / e2e-scenario の 3 ジョブ = 単体・総合・シナリオ）。deploy.yml は `tests` ジョブ（test-suite 呼出）→ `deploy-mockup` / `deploy-api` が `needs: tests` でゲートされ、**1 つでも失敗すると両デプロイとも中断**。e2e-scenario は既存ハーネス `e2e/run-batch6b-stack.sh` をそのまま実行（「E2E 全スイート green」の定義と CI 実行を一致させる = 原則3）
+- [x] **(b) 失敗の構造化ログ**: 各テストジョブに失敗時サマリー（GITHUB_STEP_SUMMARY へ検査別の結果表 + `::error::` アノテーションで失敗ステップを明示）。e2e-scenario はスタックログ（api.log / gen-*.log）を artifact `e2e-logs` として 14 日保存（ハーネスに `E2E_LOG_EXPORT` を追加。ローカル挙動は不変）
+- [x] **(c) PR テストゲート**: `.github/workflows/ci.yml` を新設。PR（mockup/api/shared/e2e/ワークフロー変更時）で同一スイートを実行し、マージ前に検出（deploy.yml と定義を二重管理しない = workflow_call で共有）。同一 PR の連続 push は旧実行をキャンセル
+- [x] ドキュメント全件更新（原則5）: deploy-guide.md §2（テストゲート表・失敗ログの見方・PR 事前検証）/ production-architecture.md §7（CI/CD 図を新ジョブ構成へ）/ mockup/README.md（デプロイ節）/ e2e/README.md（CI での実行・E2E_LOG_EXPORT）
+- [x] **監査で実測されたドリフトの修正**: E2E 実走で `batch6d-e2e.cjs` が main 上で失敗していることを検出（F-20-1 の AKEBONO ハブ化に未追随 — h1「AKEBONO 業務」への変更で見出し `AKEBONO` の部分一致が strict mode 違反、要件定義中バナー・ロードマップは既に存在せず、空入力エラーはボタン無効化へ仕様変更）。スイートを現行 UI に追随（11 チェック: ハブ表示・要望ボックス・管理者ツール・無効化検証）。**シナリオテストが CI ゲート外だったため無検知で蓄積したドリフトの実例** = 本バッチの必要性の裏付け（詳細は evaluation/methodology-review-2026-07-22-cicd-quality-gates.md 課題1b）
+- [x] 検証: 全ワークフロー YAML の構文検証 / mockup 単体 73 + typecheck green / api typecheck + 単体 101 + 統合 152 + build green / E2E ハーネスを `E2E_LOG_EXPORT` 付きでローカル実走し**全スイート green**（batch6b 12・batch6c 16・batch6d 11・chatbot-multiturn 10・team-visibility 11・モック回帰 10 = 70 チェック）+ ログエクスポート（api.log / gen-*.log）動作確認
+- [ ] 独立ロール（コードレビュアー・システム監査官）の反復レビューで指摘ゼロ（原則9）— 実施中。完了時に本行を [x] へ更新

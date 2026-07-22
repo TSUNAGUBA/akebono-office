@@ -1,0 +1,29 @@
+# PR のマージ前テストゲート。
+#
+# deploy.yml と同一のテストスイート（test-suite.yml = 単体・総合・シナリオ）を PR 時点で実行し、
+# 問題の検出を main へのマージ前へ左シフトする（SP-8 インクリメンタルレビューの機械検証部分。
+# PR 本文の検証は pr-checks.yml が別途行う）。
+# 失敗時のログの見方は test-suite.yml のヘッダーコメントおよび deploy-guide.md §2 を参照。
+name: CI（PR テストゲート）
+
+on:
+  pull_request:
+    paths:
+      - 'mockup/**'
+      - 'api/**'
+      - 'shared/**'
+      - 'e2e/**'
+      - '.github/workflows/ci.yml'
+      - '.github/workflows/test-suite.yml'
+
+permissions:
+  contents: read
+
+# 同一 PR への連続 push では古い実行をキャンセルする（最新コミットの結果だけが意味を持つ）
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    uses: ./.github/workflows/test-suite.yml

@@ -47,7 +47,7 @@ npm run build
 
 ## デプロイ（Firebase Hosting）
 
-`main` へのプッシュ（`mockup/` または `shared/` 配下の変更時）または手動実行で、GitHub Actions が自動デプロイします（`.github/workflows/deploy.yml`）。テスト → 型チェック → `nuxt generate` → Firebase Hosting の順で実行されます。
+`main` へのプッシュ（`mockup/` `api/` `shared/` `e2e/` 配下の変更時）または手動実行で、GitHub Actions が自動デプロイします（`.github/workflows/deploy.yml`）。デプロイ前にテストゲート（`test-suite.yml` = 単体・総合・シナリオの 3 種）が実行され、1 つでも失敗するとデプロイは中断されます。ゲート通過後に `nuxt generate` → Firebase Hosting の順で配信されます。
 
 > 本実装 API（`../api/` → Cloud Run + RDS PostgreSQL）のデプロイを含む全体手順は
 > `../.ai-native/outputs/phase7/deploy-guide.md` を参照してください。

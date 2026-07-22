@@ -26,6 +26,11 @@ fi
 
 PIDS=()
 cleanup() {
+  # CI 等で失敗原因の調査ログを残す場合は E2E_LOG_EXPORT にコピーしてから破棄する（未設定なら従来どおり）
+  if [ -n "${E2E_LOG_EXPORT:-}" ] && [ -d "$WORK" ]; then
+    mkdir -p "$E2E_LOG_EXPORT"
+    cp "$WORK"/*.log "$E2E_LOG_EXPORT"/ 2>/dev/null || true
+  fi
   pkill -f "tsx/dist/loader.mjs src/index.ts" >/dev/null 2>&1 || true
   pkill -f "$HERE/serve.cjs" >/dev/null 2>&1 || true
   for pid in "${PIDS[@]:-}"; do kill "$pid" >/dev/null 2>&1 || true; done

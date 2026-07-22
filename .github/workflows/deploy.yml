@@ -20,6 +20,10 @@ name: deploy
 #
 # API の secrets が未設定の場合、deploy-api は警告を出してスキップする
 # （mockup のみの運用を止めない = 非ブロッキング）。
+#
+# デプロイ前テストゲート: tests ジョブ（test-suite.yml = 単体・総合・シナリオの 3 種）が
+# 1 つでも失敗すると deploy-mockup / deploy-api の両方が中断される。
+# 何がどう失敗したかは Actions の Summary・::error:: アノテーション・artifact `e2e-logs` に記録される。
 on:
   push:
     branches: [main]
@@ -27,7 +31,9 @@ on:
       - 'mockup/**'
       - 'api/**'
       - 'shared/**'
+      - 'e2e/**'
       - '.github/workflows/deploy.yml'
+      - '.github/workflows/test-suite.yml'
   workflow_dispatch:
 
 permissions:
@@ -38,9 +44,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # ---------- デプロイ前テストゲート（単体・総合・シナリオ） ----------
+  tests:
+    uses: ./.github/workflows/test-suite.yml
+
   # ---------- モックアップ（Firebase Hosting） ----------
   deploy-mockup:
     runs-on: ubuntu-latest
+    needs: tests
     defaults:
       run:
         working-directory: mockup
@@ -75,12 +86,6 @@ jobs:
       - name: 依存インストール
         run: npm ci
 
-      - name: 単体テスト
-        run: npm run test
-
-      - name: 型チェック
-        run: npm run typecheck
-
       - name: 静的ビルド
         env:
           # 未設定なら完全モックモード（従来どおり）。API 接続版を配信する場合は
@@ -98,54 +103,10 @@ jobs:
           channelId: live
           entryPoint: mockup
 
-  # ---------- API（テスト → Cloud Run） ----------
-  api-test:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: api
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: akebono_test
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: api/package-lock.json
-
-      - name: 依存インストール
-        run: npm ci
-
-      - name: 型チェック
-        run: npm run typecheck
-
-      - name: 単体テスト
-        run: npm test
-
-      - name: 統合テスト（実 PostgreSQL）
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/akebono_test
-        run: npm run test:integration
-
-      - name: ビルド確認
-        run: npm run build
-
+  # ---------- API（Cloud Run。テストは tests ジョブ = test-suite.yml で実施済み） ----------
   deploy-api:
     runs-on: ubuntu-latest
-    needs: api-test
+    needs: tests
     steps:
       - name: Secrets の存在チェック（未設定なら以降をスキップ）
         id: check

@@ -127,15 +127,25 @@ Cloud Run（GCP）から RDS（AWS）への接続は次の 2 案。**v1 は案 A
 
 ```mermaid
 flowchart LR
-    P[main へ push<br/>mockup/ api/ shared/] --> T1[deploy-mockup<br/>test + typecheck + generate]
-    P --> T2[api-test<br/>typecheck + 単体 + 統合（PostgreSQL 16）+ build]
-    T1 --> H[Firebase Hosting]
-    T2 --> D[deploy-api]
+    PR[pull request] --> CI[ci.yml]
+    CI --> TS
+    P[main へ push<br/>mockup/ api/ shared/ e2e/] --> TS
+    subgraph TS[test-suite.yml（テストゲート）]
+        T1[mockup-test<br/>単体 + typecheck]
+        T2[api-test<br/>typecheck + 単体 + 統合（PostgreSQL 16）+ build]
+        T3[e2e-scenario<br/>シナリオテスト（Playwright フルスタック）]
+    end
+    TS -->|全ジョブ green| M[deploy-mockup<br/>generate]
+    TS -->|全ジョブ green| D[deploy-api]
+    M --> H[Firebase Hosting]
     D -->|イメージ build/push| AR[Artifact Registry]
     D -->|Secret 登録（変更時のみ）| SM[Secret Manager]
     D -->|gcloud run deploy| CR[Cloud Run]
 ```
 
+- **テストゲート:** 単体・総合・シナリオのいずれかが失敗するとデプロイは中断され、失敗内容は
+  Actions の Summary（検査別の結果表）・`::error::` アノテーション・artifact `e2e-logs` に記録される。
+  同じスイートが PR でも実行される（`ci.yml` = マージ前の左シフト検証）
 - API 用 secrets 未設定時は `deploy-api` を**警告付きスキップ**（mockup のみの運用を止めない = 開発原則4）
 - secrets の設定は `scripts/setup-deploy-secrets.ps1`（手順: deploy-guide.md）
 - DB マイグレーションは**コンテナ起動時に自動適用**（CI から DB へ直接接続しない = RDS を GitHub Actions へ開放しない）

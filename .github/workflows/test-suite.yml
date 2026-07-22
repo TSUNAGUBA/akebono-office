@@ -1,0 +1,244 @@
+# テストスイート（単体・総合・シナリオ）— 再利用ワークフロー
+#
+# deploy.yml（main への push = デプロイ前ゲート）と ci.yml（PR = マージ前ゲート）の両方から
+# workflow_call で呼ばれる（同一定義の二重管理をしない = 開発原則3）。
+#
+# テスト種別と対応ジョブ:
+#   単体テスト     ... mockup-test（vitest）/ api-test（vitest）
+#   総合テスト     ... api-test（実 PostgreSQL 16 での統合テスト + 型チェック + ビルド確認）
+#   シナリオテスト ... e2e-scenario（e2e/run-batch6b-stack.sh = 使い捨て PostgreSQL + 本実装 API +
+#                      静的配信フロントに対する Playwright 実クリックの全スイート）
+#
+# 1 つでも失敗すると呼び出し元のデプロイ/マージゲートが中断される。失敗時は各ジョブが
+# 「どの検査がどう失敗したか」を Actions の Summary と ::error:: アノテーションに記録し、
+# e2e-scenario はスタックのログ（API・nuxt generate）を artifact `e2e-logs` として保存する。
+name: テストスイート
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------- 単体テスト（mockup: Nuxt フロントエンド） ----------
+  mockup-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: mockup
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mockup/package-lock.json
+
+      - name: 依存インストール
+        id: deps
+        run: npm ci
+
+      - name: 単体テスト（vitest）
+        id: unit
+        run: npm run test
+
+      - name: 型チェック（nuxt typecheck）
+        id: typecheck
+        run: npm run typecheck
+
+      - name: 失敗内容を Summary へ記録して中断
+        if: failure()
+        env:
+          OUTCOME_DEPS: ${{ steps.deps.outcome }}
+          OUTCOME_UNIT: ${{ steps.unit.outcome }}
+          OUTCOME_TYPECHECK: ${{ steps.typecheck.outcome }}
+        run: |
+          {
+            echo "## ❌ mockup-test 失敗（デプロイ/マージゲートを中断）"
+            echo ""
+            echo "| 検査 | 結果 |"
+            echo "|---|---|"
+            echo "| 依存インストール (npm ci) | $OUTCOME_DEPS |"
+            echo "| 単体テスト (vitest) | $OUTCOME_UNIT |"
+            echo "| 型チェック (nuxt typecheck) | $OUTCOME_TYPECHECK |"
+            echo ""
+            echo "\`failure\` の検査が失敗原因。失敗したテスト名・アサーション・エラー本文は、このジョブのログの該当ステップに全文出力されている。"
+          } >> "$GITHUB_STEP_SUMMARY"
+          FAILED=""
+          [ "$OUTCOME_DEPS" = "failure" ] && FAILED="依存インストール"
+          [ "$OUTCOME_UNIT" = "failure" ] && FAILED="単体テスト(vitest)"
+          [ "$OUTCOME_TYPECHECK" = "failure" ] && FAILED="型チェック(nuxt typecheck)"
+          echo "::error title=mockup-test 失敗::${FAILED:-不明なステップ} が失敗したためパイプラインを中断しました。詳細はジョブログと Summary を参照"
+
+  # ---------- 単体 + 総合テスト（api: Hono + 実 PostgreSQL） ----------
+  api-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: api
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: akebono_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+
+      - name: 依存インストール
+        id: deps
+        run: npm ci
+
+      - name: 型チェック
+        id: typecheck
+        run: npm run typecheck
+
+      - name: 単体テスト
+        id: unit
+        run: npm test
+
+      - name: 統合テスト（実 PostgreSQL）
+        id: integration
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/akebono_test
+        run: npm run test:integration
+
+      - name: ビルド確認
+        id: build
+        run: npm run build
+
+      - name: 失敗内容を Summary へ記録して中断
+        if: failure()
+        env:
+          OUTCOME_DEPS: ${{ steps.deps.outcome }}
+          OUTCOME_TYPECHECK: ${{ steps.typecheck.outcome }}
+          OUTCOME_UNIT: ${{ steps.unit.outcome }}
+          OUTCOME_INTEGRATION: ${{ steps.integration.outcome }}
+          OUTCOME_BUILD: ${{ steps.build.outcome }}
+        run: |
+          {
+            echo "## ❌ api-test 失敗（デプロイ/マージゲートを中断）"
+            echo ""
+            echo "| 検査 | 結果 |"
+            echo "|---|---|"
+            echo "| 依存インストール (npm ci) | $OUTCOME_DEPS |"
+            echo "| 型チェック (tsc) | $OUTCOME_TYPECHECK |"
+            echo "| 単体テスト (vitest) | $OUTCOME_UNIT |"
+            echo "| 統合テスト (vitest + PostgreSQL 16) | $OUTCOME_INTEGRATION |"
+            echo "| ビルド確認 (esbuild) | $OUTCOME_BUILD |"
+            echo ""
+            echo "\`failure\` の検査が失敗原因。失敗したテスト名・アサーション・エラー本文は、このジョブのログの該当ステップに全文出力されている。"
+          } >> "$GITHUB_STEP_SUMMARY"
+          FAILED=""
+          [ "$OUTCOME_DEPS" = "failure" ] && FAILED="依存インストール"
+          [ "$OUTCOME_TYPECHECK" = "failure" ] && FAILED="型チェック(tsc)"
+          [ "$OUTCOME_UNIT" = "failure" ] && FAILED="単体テスト(vitest)"
+          [ "$OUTCOME_INTEGRATION" = "failure" ] && FAILED="統合テスト(PostgreSQL)"
+          [ "$OUTCOME_BUILD" = "failure" ] && FAILED="ビルド確認(esbuild)"
+          echo "::error title=api-test 失敗::${FAILED:-不明なステップ} が失敗したためパイプラインを中断しました。詳細はジョブログと Summary を参照"
+
+  # ---------- シナリオテスト（フルスタック E2E: e2e/README.md の「全スイート green」） ----------
+  e2e-scenario:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            api/package-lock.json
+            mockup/package-lock.json
+            e2e/package-lock.json
+
+      - name: PostgreSQL サーバーバイナリの確認（ランナー同梱。無ければインストール）
+        run: |
+          if ! ls -d /usr/lib/postgresql/*/bin >/dev/null 2>&1; then
+            sudo apt-get update && sudo apt-get install -y postgresql
+          fi
+          ls -d /usr/lib/postgresql/*/bin
+
+      - name: 依存インストール（api / mockup / e2e）
+        id: deps
+        run: |
+          (cd api && npm ci)
+          (cd mockup && npm ci)
+          (cd e2e && npm ci)
+
+      - name: Playwright ブラウザキャッシュ
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('e2e/package-lock.json') }}
+
+      - name: chromium インストール
+        id: chromium
+        run: cd e2e && npx playwright install --with-deps chromium
+
+      - name: シナリオテスト（フルスタック E2E 全スイート）
+        id: scenario
+        env:
+          E2E_LOG_EXPORT: ${{ runner.temp }}/e2e-logs
+        run: ./e2e/run-batch6b-stack.sh
+
+      - name: 失敗内容を Summary へ記録して中断
+        if: failure()
+        env:
+          OUTCOME_DEPS: ${{ steps.deps.outcome }}
+          OUTCOME_CHROMIUM: ${{ steps.chromium.outcome }}
+          OUTCOME_SCENARIO: ${{ steps.scenario.outcome }}
+          LOG_DIR: ${{ runner.temp }}/e2e-logs
+        run: |
+          {
+            echo "## ❌ e2e-scenario（シナリオテスト）失敗（デプロイ/マージゲートを中断）"
+            echo ""
+            echo "| 検査 | 結果 |"
+            echo "|---|---|"
+            echo "| 依存インストール (npm ci ×3) | $OUTCOME_DEPS |"
+            echo "| chromium インストール | $OUTCOME_CHROMIUM |"
+            echo "| E2E 全スイート (run-batch6b-stack.sh) | $OUTCOME_SCENARIO |"
+            echo ""
+            echo "失敗したスイート・チェック名（\`✗\` / \`FAILED:\` 行）はジョブログの「シナリオテスト」ステップに出力されている。"
+            echo "スタック側の原因調査用ログ（API サーバー・nuxt generate）は artifact \`e2e-logs\` を参照。"
+            if [ -d "$LOG_DIR" ]; then
+              for f in "$LOG_DIR"/*.log; do
+                [ -e "$f" ] || continue
+                echo ""
+                echo "<details><summary>$(basename "$f")（末尾 40 行）</summary>"
+                echo ""
+                echo '```'
+                tail -40 "$f"
+                echo '```'
+                echo "</details>"
+              done
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error title=e2e-scenario 失敗::シナリオテストが失敗したためパイプラインを中断しました。失敗チェックはジョブログ、スタックログは artifact e2e-logs を参照"
+
+      - name: スタックログを artifact として保存（失敗時）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs
+          path: ${{ runner.temp }}/e2e-logs
+          if-no-files-found: ignore
+          retention-days: 14
