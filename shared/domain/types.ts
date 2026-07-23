@@ -545,6 +545,20 @@ export interface ReportEntry {
   progress: number // 0-100
 }
 
+/**
+ * 明日の予定（オペレーター指示 2026-07-22）。日報に最大 3 件まで登録でき、
+ * 翌営業日の日報エディタへ自動反映される（テーマ/内容/時間 → エントリの初期値）
+ */
+export interface TomorrowPlan {
+  theme: string
+  purpose: string
+  task: string
+  hours: number // 0.25 刻み
+}
+
+/** 明日の予定の最大登録数 */
+export const TOMORROW_PLANS_MAX = 3
+
 export interface DailyReport {
   id: string
   authorKind: 'human' | 'ai'
@@ -554,7 +568,10 @@ export interface DailyReport {
   entries: ReportEntry[]
   reflection: string
   issues: string
+  /** 旧形式の明日の予定（自由記述）。新規入力は tomorrowPlans が正（原則7 = 既存データの表示のため保持） */
   tomorrow: string
+  /** 明日の予定（構造化・最大 TOMORROW_PLANS_MAX 件）。旧データは未設定 */
+  tomorrowPlans?: TomorrowPlan[]
   status: 'draft' | 'submitted'
   submittedAt: string | null
 }
@@ -587,7 +604,12 @@ export interface WorkflowRequest {
   category: WorkflowCategory
   title: string
   amount: number
+  /** 旧形式の本文（自由記述）。新規申請は purpose / content が正（原則7 = 既存データの表示のため保持） */
   body: string
+  /** 目的（オペレーター指示 2026-07-22: 本文を目的と内容に分割） */
+  purpose?: string
+  /** 内容（稟議の種類別テンプレートを呼び出して記入できる） */
+  content?: string
   attachments: string[]
   requesterId: string
   status: WorkflowStatus

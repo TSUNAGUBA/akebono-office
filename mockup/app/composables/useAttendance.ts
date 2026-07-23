@@ -416,7 +416,7 @@ export function useAttendance() {
   }
 
   /**
-   * タイムカード一覧（管理者/人事。API モード専用のサーバー集計）。
+   * 全員のタイムカード一覧（権限表 attendance / timecard-all で制御。API モード専用のサーバー集計）。
    * 氏名フィルタは取得済み行へのクライアント絞り込みで行う（入力ごとの再取得を避ける）。
    */
   function timecardApi(from: string, to: string, departmentId: string): TimecardApiRow[] {

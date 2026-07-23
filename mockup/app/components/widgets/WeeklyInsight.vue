@@ -156,7 +156,7 @@ const SWOT_QUADRANTS = [
       <!-- 全体共通: 集計サマリーカード -->
       <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
         <UiKpiCard label="日報提出（前日まで）" :value="`${m.reportSubmitted}件`" :sub="`提出者 ${m.reporters}/${m.membersActive} 名`" icon="FileText" />
-        <UiKpiCard label="総工数" :value="`${m.totalHours}h`" :sub="`週報 ${m.weeklyCount} 件`" icon="Clock" />
+        <UiKpiCard label="総時間" :value="`${m.totalHours}h`" :sub="`週報 ${m.weeklyCount} 件`" icon="Clock" />
         <UiKpiCard label="タスク計画" :value="m.planTotal > 0 ? `${m.planDone}/${m.planTotal}` : '—'" sub="完了/計画" icon="ClipboardList" />
         <UiKpiCard label="課題・エスカレ" :value="`${m.issues.length} / ${m.escalationRaised}`" :sub="`エスカレ解決 ${m.escalationResolved}`" icon="TriangleAlert" />
         <UiKpiCard label="稟議" :value="`${m.workflowSubmitted}件`" :sub="`承認 ${m.workflowApproved} 件`" icon="Stamp" />
@@ -174,16 +174,16 @@ const SWOT_QUADRANTS = [
       <!-- グラフ -->
       <div class="grid gap-3 lg:grid-cols-2">
         <ChartsBarChartCard
-          title="メンバー別工数（提出済み日報）"
+          title="メンバー別時間（提出済み日報）"
           :labels="m.memberHours.map(x => x.name)"
-          :series="[{ label: '工数(h)', data: m.memberHours.map(x => x.hours) }]"
+          :series="[{ label: '時間(h)', data: m.memberHours.map(x => x.hours) }]"
           horizontal
           :y-formatter="v => `${v}h`"
         />
         <ChartsBarChartCard
-          title="業務テーマ別工数"
+          title="テーマ別時間"
           :labels="m.themeHours.map(x => x.theme)"
-          :series="[{ label: '工数(h)', data: m.themeHours.map(x => x.hours) }]"
+          :series="[{ label: '時間(h)', data: m.themeHours.map(x => x.hours) }]"
           horizontal
           :y-formatter="v => `${v}h`"
         />

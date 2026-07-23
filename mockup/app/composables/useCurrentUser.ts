@@ -64,7 +64,7 @@ export function useCurrentUser() {
   })
 
   const isAdmin = computed(() => currentUser.value.role === 'admin')
-  /** 人事ロール（タイムカード・休暇管理・休暇付与の権限。管理者は常に含む） */
+  /** 人事ロール（全員のタイムカードの既定参照・休暇管理・休暇付与の権限。管理者は常に含む） */
   const isHrOrAdmin = computed(() =>
     currentUser.value.role === 'admin' || currentUser.value.role === 'hr')
 

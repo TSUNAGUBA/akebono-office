@@ -176,14 +176,14 @@ async function llmDraft(env: Env, ctx: DraftContext, date: string, orgContext = 
     ...ctx.logs.map(l => l.kind === 'memo' ? `- メモ: ${l.answer}` : `- Q: ${l.question} / A: ${l.answer}`),
     '## 翌営業日の計画',
     ...ctx.nextDayPlans.map(p => `- ${p.title}`),
-    '## 参考: 有効なプロジェクト名（業務テーマの候補）',
+    '## 参考: 有効なプロジェクト名（テーマの候補）',
     ...ctx.projects.map(p => `- ${p.name}`),
     ...(orgContext ? ['## 参考: 社内データ文脈（チャットボットと同じ参照範囲。表現の補助にのみ使用）', orgContext] : []),
   ].join('\n')
   const res = await generateJson<ReportDraft>(env, {
     system: 'あなたは業務日報の下書きを作るアシスタントです。与えられた材料（タスク計画の結果・ヒアリング回答・メモ）'
       + 'だけを根拠に、日本語の日報ドラフトを JSON で返します。推測で事実を作らないこと。'
-      + 'entries は作業単位（theme は業務テーマ = 短い名詞句 20 字以内・材料のプロジェクト名や業務分類を使う、'
+      + 'entries は作業単位（theme はテーマ = 短い名詞句 20 字以内・材料のプロジェクト名や業務分類を使う、'
       + 'task は 60 字以内、hours は 0.25 刻みの見積り、progress は 0-100）。reflection は所感（丁寧語 2〜4 文）、'
       + 'issues は課題（なければ空文字）、tomorrow は明日の予定の一言、basis は生成根拠の短い箇条書き。',
     prompt: material,

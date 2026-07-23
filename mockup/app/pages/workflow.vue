@@ -1,10 +1,11 @@
 <script setup lang="ts">
 /**
- * ワークフロー・稟議（F-07）
+ * 稟議（F-07。旧称ワークフロー = オペレーター指示 2026-07-22 で改名）
  * タブ: 自分の申請 / 承認待ち / 全件（管理者） / 経路設定（管理者）。?tab= で初期タブ指定可。
  * 職務権限マトリクス（区分×金額帯）により承認経路が金額でリアルタイムに変わる。
+ * 申請の本文は「目的」「内容」に分割（旧データの body は互換表示）。内容は区分別テンプレートを呼び出せる。
  */
-import { Paperclip, Pencil, Plus, Send, X } from 'lucide-vue-next'
+import { FileText, Paperclip, Pencil, Plus, Send, X } from 'lucide-vue-next'
 import type {
   ApprovalAction, DelegateSetting, WorkflowCategory, WorkflowRequest,
   WorkflowRoute, WorkflowRouteStep,
@@ -14,6 +15,7 @@ import {
   APPROVAL_ACTION_LABELS, WORKFLOW_CATEGORY_LABELS, WORKFLOW_STATUS_LABELS,
   WORKFLOW_STATUS_TONES,
 } from '~/utils/labels'
+import { workflowTemplatesFor } from '~/utils/workflow-templates'
 import type { TabItem, TableColumn, Tone } from '~/types/ui'
 
 const route = useRoute()
@@ -197,10 +199,30 @@ const form = reactive({
   category: 'purchase' as WorkflowCategory,
   title: '',
   amount: 0,
-  body: '',
+  purpose: '',
+  content: '',
   attachments: [] as string[],
 })
 const attachName = ref('')
+
+// ---------- 内容テンプレート（区分別 + 標準。utils/workflow-templates.ts が SoT） ----------
+
+const templateKey = ref('')
+const templateOptions = computed(() =>
+  workflowTemplatesFor(form.category).map(t => ({ value: t.key, label: t.label })))
+// 区分を切り替えたら選択中テンプレートをリセット（区分外のキーを残さない）
+watch(() => form.category, () => { templateKey.value = '' })
+
+/** テンプレートを「内容」へ挿入する（既存の入力があれば上書き確認 = 黙って消さない） */
+async function applyTemplate(): Promise<void> {
+  const tpl = workflowTemplatesFor(form.category).find(t => t.key === templateKey.value)
+  if (!tpl) return
+  if (form.content.trim()) {
+    const ok = await ask('テンプレートの呼び出し', '入力済みの「内容」をテンプレートで置き換えます。よろしいですか？', { confirmLabel: '置き換える' })
+    if (!ok) return
+  }
+  form.content = tpl.body
+}
 
 const categoryOptions = Object.entries(WORKFLOW_CATEGORY_LABELS).map(([value, label]) => ({ value, label }))
 const categoryModel = computed({
@@ -216,9 +238,11 @@ function openCreate(): void {
   form.category = 'purchase'
   form.title = ''
   form.amount = 0
-  form.body = ''
+  form.purpose = ''
+  form.content = ''
   form.attachments = []
   attachName.value = ''
+  templateKey.value = ''
   modalOpen.value = true
 }
 
@@ -227,9 +251,14 @@ function openEdit(req: WorkflowRequest): void {
   form.category = req.category
   form.title = req.title
   form.amount = req.amount
-  form.body = req.body
+  // 旧データ（本文のみ）は内容へ読み込んで編集を続けられるようにする（原則7）。
+  // API モードは migration 0029 の DEFAULT '' により旧行の content が空文字列で返るため、
+  // nullish（??）ではなく falsy（||）で本文へフォールバックする（?? だと旧本文が消失する）
+  form.purpose = req.purpose || ''
+  form.content = req.content || req.body || ''
   form.attachments = [...req.attachments]
   attachName.value = ''
+  templateKey.value = ''
   modalOpen.value = true
 }
 
@@ -249,7 +278,8 @@ function wfPayload() {
     category: form.category,
     title: form.title,
     amount: Number(form.amount) || 0,
-    body: form.body,
+    purpose: form.purpose,
+    content: form.content,
     attachments: [...form.attachments],
   }
 }
@@ -413,7 +443,7 @@ async function onRemoveDelegate(d: DelegateSetting): Promise<void> {
 
 <template>
   <div>
-    <UiPageHeader title="ワークフロー・稟議" description="職務権限マトリクス（区分×金額）で承認経路が自動決定されます">
+    <UiPageHeader title="稟議" description="職務権限マトリクス（区分×金額）で承認経路が自動決定されます">
       <template #actions>
         <button type="button" class="btn btn-primary" @click="openCreate">
           <Plus class="h-4 w-4" aria-hidden="true" />
@@ -575,7 +605,21 @@ async function onRemoveDelegate(d: DelegateSetting): Promise<void> {
           </div>
         </dl>
 
-        <div>
+        <!-- 目的・内容（旧データは body を本文として互換表示 = 原則7） -->
+        <template v-if="selectedReq.purpose || selectedReq.content">
+          <div>
+            <p class="label">目的</p>
+            <p class="whitespace-pre-wrap rounded-lg border border-line bg-surface-soft p-3 text-[13px]">{{ selectedReq.purpose || '—' }}</p>
+          </div>
+          <div>
+            <p class="label">内容</p>
+            <div class="rounded-lg border border-line bg-surface-soft p-3">
+              <UiMarkdown v-if="selectedReq.content" :source="selectedReq.content" />
+              <p v-else class="text-[13px]">—</p>
+            </div>
+          </div>
+        </template>
+        <div v-else>
           <p class="label">本文</p>
           <p class="whitespace-pre-wrap rounded-lg border border-line bg-surface-soft p-3 text-[13px]">{{ selectedReq.body || '—' }}</p>
         </div>
@@ -660,8 +704,23 @@ async function onRemoveDelegate(d: DelegateSetting): Promise<void> {
         <UiFormField label="件名" required>
           <input v-model="form.title" type="text" class="input" placeholder="申請の件名">
         </UiFormField>
-        <UiFormField label="本文" required>
-          <textarea v-model="form.body" class="textarea" rows="4" placeholder="目的・内容・金額の根拠" />
+        <UiFormField label="目的" required>
+          <textarea v-model="form.purpose" class="textarea" rows="2" placeholder="この稟議で実現したいこと（なぜ必要か）" />
+        </UiFormField>
+        <UiFormField label="内容" required hint="区分に応じたテンプレートを呼び出して記入できます（マークダウン記法に対応）">
+          <div class="mb-1.5 flex flex-wrap items-center gap-2">
+            <UiSelect
+              v-model="templateKey"
+              :options="templateOptions"
+              empty-label="テンプレートを選択"
+              aria-label="内容テンプレート"
+            />
+            <button type="button" class="btn btn-sm" :disabled="!templateKey" @click="applyTemplate">
+              <FileText class="h-3.5 w-3.5" aria-hidden="true" />
+              テンプレートを呼び出す
+            </button>
+          </div>
+          <textarea v-model="form.content" class="textarea" rows="8" placeholder="具体的な内容・金額の根拠など" />
         </UiFormField>
         <UiFormField label="添付ファイル" hint="モックのためファイル名のみ登録されます">
           <div class="flex gap-2">

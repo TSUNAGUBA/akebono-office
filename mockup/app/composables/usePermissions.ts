@@ -8,7 +8,8 @@
  * 既定は allow（ルール未設定なら挙動不変）。既存のロールガードを緩めることはできない（制限レイヤ）。
  */
 import {
-  canUseFeature, canViewField, canViewMemberReports as canViewMemberReportsShared,
+  canUseFeature, canViewAllTimecards as canViewAllTimecardsShared, canViewField,
+  canViewMemberReports as canViewMemberReportsShared,
   canViewMemberTaskPlans as canViewMemberTaskPlansShared,
   featureKeyOfPath, type PermissionSubject,
 } from '../../../shared/domain/permissions'
@@ -30,7 +31,12 @@ export function usePermissions() {
 
   function canPath(path: string): boolean {
     const key = featureKeyOfPath(path)
-    return key === null || can(key)
+    if (key === null) return true
+    // /timecard のデータ面（打刻・月次集計）は attendance API（機能キー 'attendance'）に従属する。
+    // attendance deny のままページだけ出すと API モードで全操作が 403 になるため、
+    // メニュー・ページ表示も attendance との AND で判定し UI と API の挙動を一致させる
+    if (key === 'timecard') return can('timecard') && can('attendance')
+    return can(key)
   }
 
   function canField(resource: string, field: string): boolean {
@@ -47,5 +53,9 @@ export function usePermissions() {
     return canViewMemberTaskPlansShared(rules.value, subject.value, targetMemberId)
   }
 
-  return { can, canPath, canField, canViewMemberReports, canViewMemberTaskPlans }
+  /** 全員のタイムカードを参照できるか（既定 = 管理者/人事。権限表の明示ルールで変更可） */
+  const canViewAllTimecards = computed(() =>
+    canViewAllTimecardsShared(rules.value, subject.value))
+
+  return { can, canPath, canField, canViewMemberReports, canViewMemberTaskPlans, canViewAllTimecards }
 }

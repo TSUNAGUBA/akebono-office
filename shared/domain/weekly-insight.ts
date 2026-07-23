@@ -129,7 +129,7 @@ export function heuristicWeeklyInsight(m: WeeklyMetrics): WeeklyInsight {
     `${m.weekStart}〜${m.weekEnd} の週次サマリー（集計は前日 = ${m.asOf} 分まで。日報は前日分までが正常な運用）。`,
     elapsed === 0
       ? 'この週はまだ集計対象の営業日がありません。'
-      : `日報 ${m.reportSubmitted} 件（提出者 ${m.reporters}/${m.membersActive} 名・経過営業日 ${elapsed} 日）・総工数 ${fmtH(m.totalHours)}・週報 ${m.weeklyCount} 件。`,
+      : `日報 ${m.reportSubmitted} 件（提出者 ${m.reporters}/${m.membersActive} 名・経過営業日 ${elapsed} 日）・総時間 ${fmtH(m.totalHours)}・週報 ${m.weeklyCount} 件。`,
     m.planTotal > 0 ? `タスク計画は ${m.planDone}/${m.planTotal} 完了。` : '',
     m.workflowSubmitted > 0 ? `稟議は提出 ${m.workflowSubmitted} 件・承認 ${m.workflowApproved} 件。` : '',
     m.issues.length > 0 ? `課題報告 ${m.issues.length} 件に注意。` : '課題報告はありません。',
@@ -189,7 +189,7 @@ export function heuristicPersonalInsight(
     focus.push(`日報が前日までの営業日 ${elapsed} 日に対し ${p.reportSubmitted} 件（不足分の記入を推奨）`)
     actions.push('未提出日の日報を記入する（自分の日報 > 日付ナビ）')
   } else if (elapsed > 0) {
-    focus.push(`日報は前日分まで提出済み（${p.reportSubmitted} 件・工数 ${fmtH(p.totalHours)}）`)
+    focus.push(`日報は前日分まで提出済み（${p.reportSubmitted} 件・時間 ${fmtH(p.totalHours)}）`)
   }
   if (p.planTotal > 0 && p.planDone < p.planTotal) {
     focus.push(`タスク計画 ${p.planDone}/${p.planTotal} 完了（未完了分の結果記録を忘れずに）`)
@@ -200,7 +200,7 @@ export function heuristicPersonalInsight(
   if (!p.weeklySubmitted) actions.push('今週の週報を作成・提出する（週報 > 週報を書く）')
   if (p.themeHours.length > 0) {
     const top = p.themeHours[0]!
-    focus.push(`工数の中心は「${top.theme}」（${fmtH(top.hours)}）`)
+    focus.push(`時間の中心は「${top.theme}」（${fmtH(top.hours)}）`)
   }
 
   // ロール・役職に応じた視点（管理者 = 承認・課題対応 / 人事 = 提出率・負荷 / 一般 = 自身の実績）
@@ -228,7 +228,7 @@ export function heuristicPersonalInsight(
     + `（${company.weekStart}〜${company.weekEnd}・前日 ${company.asOf} 分まで）。`
     + (elapsed === 0
       ? 'この週はまだ集計対象の営業日がありません。'
-      : `日報 ${p.reportSubmitted}/${elapsed} 日・工数 ${fmtH(p.totalHours)}`
+      : `日報 ${p.reportSubmitted}/${elapsed} 日・時間 ${fmtH(p.totalHours)}`
         + `${p.planTotal > 0 ? `・タスク計画 ${p.planDone}/${p.planTotal}` : ''}`
         + `・週報は${p.weeklySubmitted ? '提出済み' : '未提出'}。`)
 

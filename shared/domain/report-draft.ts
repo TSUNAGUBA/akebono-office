@@ -86,7 +86,7 @@ export function heuristicReportDraft(ctx: DraftContext, date: string): ReportDra
       : [...logs].reverse().find(l => l.kind === 'qa' && l.calendarEventId === e.id)?.answer ?? ''
     const negative = NEGATIVE_HINTS.some(h => ans.includes(h))
     const done = plan?.status === 'done' || /完了|予定どおり/.test(ans)
-    if (pid && !e.projectId) basis.push(`「${e.title}」→ タイトルから業務テーマを推定`)
+    if (pid && !e.projectId) basis.push(`「${e.title}」→ タイトルからテーマを推定`)
     return {
       theme: themeOf(ctx, pid, e.title),
       projectId: pid ?? '',
@@ -95,7 +95,7 @@ export function heuristicReportDraft(ctx: DraftContext, date: string): ReportDra
       progress: done ? 100 : negative ? 50 : 80,
     }
   })
-  if (events.length > 0) basis.push(`工数はカレンダー予定の時間から算出（${events.length} 件）`)
+  if (events.length > 0) basis.push(`時間はカレンダー予定の時間から算出（${events.length} 件）`)
 
   // 予定に紐付かない完了タスク（手動計画）もエントリへ（工数は既定 1h → 確認・修正で調整）
   for (const p of donePlans.filter(x => !x.calendarEventId)) {

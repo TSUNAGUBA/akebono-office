@@ -15,7 +15,7 @@ import { Check, ChevronDown, ChevronRight, X } from 'lucide-vue-next'
 import type { CodeMasterItem, Member, PermissionRule } from '~/types/domain'
 import {
   AI_SCOPE_FEATURES, AI_SCOPE_FIELD, ASSIST_MEMBER_FIELD_PREFIX, FEATURE_PERMISSION_KEYS,
-  MEMBER_VIEW_ALL_FIELD, REPORT_MEMBER_FIELD_PREFIX,
+  MEMBER_VIEW_ALL_FIELD, REPORT_MEMBER_FIELD_PREFIX, TIMECARD_ALL_FIELD, timecardAllDefault,
 } from '../../../../shared/domain/permissions'
 import { FIELD_CATALOG, FIELD_RESOURCES } from '../../../../shared/domain/permission-catalog'
 
@@ -68,6 +68,11 @@ interface MatrixNode {
   vocab: CellVocab
   /** どのレイヤにもルールが無い場合のアプリ既定値（true = 許可/すべて/参照可） */
   defaultAllow: boolean
+  /**
+   * 既定値が対象（列）ごとに変わる行の既定値解決（全員のタイムカード = 管理者/人事のみ参照可）。
+   * 未指定なら defaultAllow を使う。役職レイヤは対象者が静的に決まらないため defaultAllow で表示する
+   */
+  defaultAllowOf?: (subjectId: string) => boolean
   /** 明示ルールが無い場合に値を引き継ぐ上位行のキー（resolver のレイヤ内フォールバックと同一） */
   parent?: { resource: string; field: string | null }
   children?: MatrixNode[]
@@ -117,8 +122,26 @@ const tree = computed<MatrixNode[]>(() => FEATURE_PERMISSION_KEYS.map((f) => {
       defaultAllow: scope.defaultScope === 'all',
     })
   }
+  if (f.key === 'attendance') {
+    children.push({
+      resource: 'attendance',
+      field: TIMECARD_ALL_FIELD,
+      label: '全員のタイムカードの参照',
+      depth: 1,
+      vocab: 'view',
+      defaultAllow: false,
+      // 既定 = 管理者/人事のみ参照可（従来のロールガードと同値）。列の対象ごとに既定を解決する
+      defaultAllowOf: (subjectId) => {
+        if (matrixLayer.value === 'role') return timecardAllDefault(subjectId as 'admin' | 'hr' | 'member')
+        if (matrixLayer.value === 'member') {
+          return timecardAllDefault(((memberCrud.byId(subjectId) as Member | undefined)?.role ?? 'member'))
+        }
+        return false // 役職レイヤ: 該当者のロールに依存するため保守的に「参照不可」で表示（脚注参照）
+      },
+    })
+  }
   if (f.key === 'reports') {
-    children.push(viewTargetNodes('reports', '日報の参照対象', REPORT_MEMBER_FIELD_PREFIX, true))
+    children.push(viewTargetNodes('reports', '日報・週報の参照対象', REPORT_MEMBER_FIELD_PREFIX, true))
   }
   if (f.key === 'ai-assistant') {
     children.push(viewTargetNodes('ai-assistant', 'AI業務アシスタントの参照対象', ASSIST_MEMBER_FIELD_PREFIX, false))
@@ -226,7 +249,7 @@ function inheritedInfo(subjectId: string, node: MatrixNode): CellInfo {
     const pms = activeRules.value.filter(r => matchKey(r, subjectId, node.parent!))
     if (pms.length > 0) return { value: pms.every(r => r.effect === 'allow'), source: 'inherited' }
   }
-  return { value: node.defaultAllow, source: 'default' }
+  return { value: node.defaultAllowOf?.(subjectId) ?? node.defaultAllow, source: 'default' }
 }
 
 function cellInfo(subjectId: string, node: MatrixNode): CellInfo {
@@ -461,7 +484,7 @@ function cellClass(subjectId: string, node: MatrixNode): string[] {
       </table>
     </div>
     <p class="border-t border-line px-4 py-2 text-[11px] text-muted">
-      ※ 管理者（ロール列の管理者・権限ロールが管理者の個人。役職経由で該当する場合も同様）の「マスタメンテナンス」「設定」への拒否、および参照対象の本人セルはロックアウト防止のため操作できません。AI 参照範囲行は ✓ = すべて / × = 自分のみ、参照対象行は ✓ = 参照可 / × = 参照不可 を表します。マスタ項目の表示制御はページの利用可否とは独立に、アプリ全体のマスタ応答へ適用されます（ドキュメントのみページ行が項目の一括既定を兼ねます）。個々のルールの無効化・復元の履歴はルール一覧モードで確認できます
+      ※ 管理者（ロール列の管理者・権限ロールが管理者の個人。役職経由で該当する場合も同様）の「マスタメンテナンス」「設定」への拒否、および参照対象の本人セルはロックアウト防止のため操作できません。「全員のタイムカードの参照」の既定は管理者・人事のみ参照可です（役職列の既定表示は「参照不可」ですが、明示ルールが無い場合の実判定は本人のロール既定に従います）。AI 参照範囲行は ✓ = すべて / × = 自分のみ、参照対象行は ✓ = 参照可 / × = 参照不可 を表します。マスタ項目の表示制御はページの利用可否とは独立に、アプリ全体のマスタ応答へ適用されます（ドキュメントのみページ行が項目の一括既定を兼ねます）。個々のルールの無効化・復元の履歴はルール一覧モードで確認できます
     </p>
   </UiSectionCard>
 </template>

@@ -6,7 +6,7 @@
  * - 売上サマリは 売上管理（/sales）、稼働状況サマリは 提供システム稼働状況（/status）へ独立
  */
 import type { AppNotification } from '~/types/domain'
-import type { MenuCard } from '~/types/ui'
+import type { MenuCard, TabItem } from '~/types/ui'
 import { fmtDateLong, fmtDateTime } from '~/utils/format'
 import { NOTIFICATION_KIND_LABELS } from '~/utils/labels'
 import { MENU_CARDS } from '~/utils/menu-registry'
@@ -74,8 +74,39 @@ const shownSections = computed(() =>
     ? menuSections.value
     : menuSections.value.filter(s => s.id === selectedCategory.value))
 
-// ---------- 通知フィード ----------
-const recentNotifications = computed(() => mine.value.slice(0, 5))
+// ---------- 通知フィード（エスカレーション / 承認依頼 / 稟議 のタブ分け = オペレーター指示 2026-07-22） ----------
+
+type NotificationCategory = 'escalation' | 'approval' | 'workflow' | 'other'
+
+/**
+ * 通知のカテゴリ判定。稟議 = リンク先が /workflow の通知（承認依頼・決裁・却下・差戻し）、
+ * 承認依頼 = それ以外の approval 通知（打刻修正・休暇など）、エスカレーション = kind そのまま
+ */
+function categoryOf(n: AppNotification): NotificationCategory {
+  if (n.kind === 'escalation') return 'escalation'
+  const bare = (n.link || '').split('?')[0] ?? ''
+  if (bare === '/workflow' || bare.startsWith('/workflow/')) return 'workflow'
+  if (n.kind === 'approval') return 'approval'
+  return 'other'
+}
+
+const notifTab = ref('all')
+const notifTabs = computed<TabItem[]>(() => {
+  const unreadOf = (c: NotificationCategory): number =>
+    mine.value.filter(n => !n.read && categoryOf(n) === c).length
+  return [
+    { key: 'all', label: 'すべて', badge: unreadCount.value },
+    { key: 'escalation', label: 'エスカレーション', badge: unreadOf('escalation') },
+    { key: 'approval', label: '承認依頼', badge: unreadOf('approval') },
+    { key: 'workflow', label: '稟議', badge: unreadOf('workflow') },
+  ]
+})
+
+const recentNotifications = computed(() =>
+  (notifTab.value === 'all'
+    ? mine.value
+    : mine.value.filter(n => categoryOf(n) === notifTab.value)
+  ).slice(0, 5))
 
 function openNotification(n: AppNotification): void {
   markRead(n.id)
@@ -100,7 +131,7 @@ function openNotification(n: AppNotification): void {
         </div>
       </section>
 
-      <!-- 通知フィード -->
+      <!-- 通知フィード（エスカレーション / 承認依頼 / 稟議 のタブ分け） -->
       <UiSectionCard
         title="通知"
         description="直近 5 件。クリックで既読にしてリンク先へ"
@@ -109,6 +140,9 @@ function openNotification(n: AppNotification): void {
         <template #actions>
           <NuxtLink to="/inbox" class="link text-xs font-semibold">すべて見る</NuxtLink>
         </template>
+        <div class="px-3 pt-1">
+          <UiTabBar v-model="notifTab" :tabs="notifTabs" aria-label="通知カテゴリ" />
+        </div>
         <UiEmptyState v-if="recentNotifications.length === 0" icon="BellOff" title="通知はありません" />
         <ul v-else class="divide-y divide-[var(--c-line)]">
           <li v-for="n in recentNotifications" :key="n.id">

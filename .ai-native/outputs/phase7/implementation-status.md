@@ -61,7 +61,8 @@
 | 休暇申請の承認/却下 | F-04-5 | ✅ | ✅ `POST /v1/leave/requests/:id/decision` | ✅ | 管理者/人事のみ（AKO-LEV-002/003 ガード） |
 | 打刻修正申請・承認 | F-04-6 | ✅ | ✅ `POST /v1/attendance/fix-requests`（+ `/decision`） | ✅ | 元打刻は削除せず保全。全件参照は管理者/人事（承認は管理者のみ）（記録系追記のみ）。承認は管理者のみ |
 | 勤怠ルール設定 | F-04-7 | ✅ | ✅ `/v1/masters/attendance-rules` | ✅（バッチ2a のマスタ接続） | defaultFor の区分ごと 1 ルール排他を DB トランザクションで保証 |
-| タイムカード（管理者/人事・フィルター付きテーブル） | F-04-8 | ✅ | ✅ `GET /v1/attendance/timecard` | ✅ | 期間（上限 62 日）× 部署 × 氏名。メンバー横断集計をサーバーサイドで実行 |
+| 全員のタイムカード（フィルター付きテーブル。旧称: タイムカード = §36 で改称） | F-04-8 | ✅ | ✅ `GET /v1/attendance/timecard` | ✅ | 期間（上限 62 日）× 部署 × 氏名。メンバー横断集計をサーバーサイドで実行。参照可否は権限表（attendance / timecard-all。既定 = 管理者/人事） |
+| タイムカード（本人・独立メニュー `/timecard`） | F-04-10 | ✅ | ✅ 既存 API を利用（`/v1/attendance/month` = 本人分） | ✅ | §36 で F-04-8 から切り出し。本人の打刻 + 期間内の出退勤一覧のみ |
 | 休暇管理（管理者/人事: 一覧/明細・個別/一括付与） | F-04-9 | ✅ | ✅ `POST /v1/leave/grants`（+ `/bulk`）`GET /v1/leave/grants` | ✅ | 冪等性は DB UNIQUE 制約（member × 種別 × 付与日）で保証 |
 | 有給の周期自動付与（労基法 39 条テーブル） | F-04-5 | ✅（シードで表現） | ✅ `POST /v1/leave/periodic-grants/run`（管理者/人事）+ `/jobs/periodic-leave-grants`（Cloud Scheduler・CRON_SECRET） | ✅ 手動実行はサーバー / 定期実行は Cloud Scheduler | 入社日 + 6 ヶ月 + n 年で走査し UNIQUE 制約で冪等付与。当日付与分のみ本人へ通知 |
 
@@ -132,7 +133,7 @@
 | 通知・エスカレーションセンター `/inbox` | F-12 | ✅ | ✅ エスカレーション接続済み（PR #21）: 起票（日報課題・36協定・チャットボット）→ 対応（回答/裁定/対応不要）→ ナレッジ還流まで API 化 | 通知タブは PR #17 で接続済み。AI カンパニー発シグナル（停滞・過負荷）はバッチ4 |
 | AI業務アシスタント `/ai-assistant`（計画・AI コメント・振り返り・日報反映・インサイト） | F-14 | ✅ | ✅ AI アシスタント接続済み（PR #25） | カレンダー予定の材料は PR #26（F-06-8）で接続済み |
 | Google カレンダー連携（予定同期・タスク反映） | F-06-8 | ✅（モック同期） | ✅ カレンダー接続済み（PR #26/#27）: OAuth 2.0 認可コードフロー（state = 一回性・10 分 TTL の DB ノンス + Google アカウント email と members.email の突合・トークンは AES-256-GCM 暗号化保管 = C3）・予定同期（google 発のみ置換 upsert = SoT 分離）・アプリ発タスク（Google 反映は補助処理）・連携解除（revoke + トークン破棄）・日報ドラフト材料へ接続 | OAuth 未設定時は enabled=false で連携 UI 非表示（他機能に影響なし）。Webhook push は将来拡張（手動同期で開始） |
-| ワークフロー・稟議 `/workflow` | F-07 | ✅ | ✅ ワークフロー接続済み（PR #22）: 申請・経路凍結・承認/却下/差戻し（クレームファースト）・代理承認・承認ログ・通知 + 承認経路マスタ | PR #23 で下書きの可視性を本人と管理者のみに制限（レビュー指摘対応） |
+| 稟議 `/workflow`（旧称: ワークフロー = §36 で改称） | F-07 | ✅ | ✅ ワークフロー接続済み（PR #22）: 申請・経路凍結・承認/却下/差戻し（クレームファースト）・代理承認・承認ログ・通知 + 承認経路マスタ | PR #23 で下書きの可視性を本人と管理者のみに制限（レビュー指摘対応）。§36 で本文を目的/内容へ分割（区分別テンプレート・旧 body は互換表示） |
 | シフト表 `/shift` | F-05 | ✅ | ✅ シフト接続済み（PR #23） | 希望・割当の参照は管理者 = 全件 / 本人 = 自分のみのサーバースコープ |
 | 意思決定支援 `/decision` | F-02 | ✅ | ✅ 意思決定接続済み（PR #28）: 判断テーマ = 汎用マスタ `/v1/masters/decision-themes`（0011 で mockup seed を移行）・判断ログ = `/v1/decisions/logs`（追記のみ = 記録系保護。テーマ・選択肢・理由をサーバーで強制） | シナリオ予測（決定的線形モデル）は表示射影としてクライアント側に維持（設計判断） |
 | AKEBONO（3D オフィス） `/akebono` | F-03 | ✅ | 🚧 AKEBONO 接続（本 PR = バッチ6d）: 要望ボックス = `akebono_wishes`（0019・記録系 = 追記のみ・編集/削除なし）・`GET/POST /v1/akebono/wishes`（本文必須 = AKO-AKB-001・2000 cp 切詰め・全員参照可 = 社内 C2）・useAkebono デュアルモード化・機能ガード 'akebono'（F-16）・チャットボット文脈に AKEBONO ブロック追加。プレースホルダ（バナー・ロードマップ）は静的表示 = フロントの責務 | **本 PR で mock-status が空 = API モードのモックバッジ全廃（マイルストーン）** |
@@ -546,3 +547,36 @@
 - [x] api 単体テスト: permission-fallback.test.ts 新設（マスタ全体フォールバック・個別優先・レイヤ優先・stripDeniedFields のカタログ剥がし・member:* の両既定 = 11 件）。単体 112 件（既存 101 + 新設 11）green・api typecheck green
 - [x] mockup typecheck / 単体 73 件 green。実クリック e2e（perm-combobox-e2e.cjs）を新仕様へ更新し**モック静的ビルドで 26 チェック green**: 既定タブ = 権限表・階層展開・常時可否表示・トグル・一括→下位の継承表示・個別優先・member:* の両モード一致・取消フロー（BASE 環境変数対応 = README と整合）。スクリーンショットでデスクトップ（内部スクロール後も thead 常時表示）・モバイル 390px（ページ横スクロールなし = 原則8）を目視確認
 - [x] ドキュメント全件更新（原則5）: functional-requirements（F-16-1/2/3/5/6/7）・data-design（PermissionRule）・api-design（usePermissions）・screen-design（§5.4/5.5）・architecture（MastersPermissionMatrix）・CONVENTIONS（在庫表）・types.ts/permissions.ts の docstring・本表 §21 に置換注記
+
+## 36. オペレーター指示 2026-07-22（稟議への改称・通知タブ分け / タイムカード切り出し・全員のタイムカード権限化 / 日報・週報のタブ再編・明日の予定・週月ビュー / 稟議の目的・内容分割 + テンプレート）の完了条件（Definition of Done）
+
+### 36-1 ダッシュボード
+- [x] 名称変更「ワークフロー」→「稟議」: メニューカード（menu-registry）・ナビ（navigation）・ページタイトル（workflow.vue）・権限機能ラベル（FEATURE_PERMISSION_KEYS）を改称（パス `/workflow`・機能キー `workflow`・決裁データは不変 = 下位互換）
+- [x] 通知フィードをタブでカテゴリ分け: すべて / エスカレーション（kind=escalation）/ 承認依頼（kind=approval のうち稟議以外）/ 稟議（リンク先 `/workflow` の通知）。未読数バッジ付き。判定は `categoryOf`（index.vue）
+
+### 36-2 勤怠管理・タイムカード
+- [x] 「タイムカード」タブを独立メニュー `/timecard`（F-04-10）へ切り出し: **ログインユーザー本人のみ**（打刻ウィジェット + 期間フィルター付き出退勤一覧。API モードは本人の月サマリキャッシュから射影 = 追加 API なし）。メニューカード・ナビ・nav-map・機能キー `timecard`（既定 allow）を追加。**timecard のデータ面は attendance API に従属するため、canPath は timecard AND attendance で判定**（attendance deny 時はページごと非表示 = UI と API の一致。API 側はフロント enforcement = lib/permissions.ts の設計判断に明記。R1 レビュー #6 対応）
+- [x] 既存タブは「全員のタイムカード」へ改称して維持。参照可否を権限表で管理: `shared/domain/permissions.ts` に `TIMECARD_ALL_FIELD='timecard-all'`・`canViewAllTimecards`（**既定 = 管理者/人事のみ = 従来ロールガードと同値の下位互換**。明示ルールで一般への付与・人事からの剥奪が可能）。権限表（PermissionMatrix）に「全員のタイムカードの参照」行（列対象ごとの既定値 = `defaultAllowOf`）を追加。API `GET /v1/attendance/timecard` のガードを requireHrOrAdmin → canViewAllTimecards へ変更（403 = AKO-ATT-004）
+- [x] 他メンバーの日次詳細への行クリック遷移は従来どおり管理者/人事のみ（API の guardTargetMember と同一 = UI と API の権限判断を一致。権限付与された一般メンバーは一覧まで・本人行は可。R1 監査 A-1 で hr 除外の退行を検出し修正）
+- [x] 休暇申請フォーム: 「任意。承認者への補足があれば記入してください」を hint から「理由」の placeholder へ移動
+- [x] 単体テスト: `mockup/tests/permissions-timecard.test.ts`（既定・付与・剥奪・レイヤ優先・論理削除 = 7 件）
+
+### 36-3 日報・週報
+- [x] タブ再編: 自分の日報 / 自分の週報 / 全員の日報 / 全員の週報 / チーム（旧 `?tab=weekly` は 自分の週報 へ互換マップ）。参照権限は権限表「日報・週報の参照対象」（F-16-6 canViewMemberReports。ラベルを「日報の参照対象」から改称）で管理
+- [x] 自分の日報: 名称変更（業務テーマ→テーマ・作業内容→内容・工数→時間）。通常入力を**共通ヘッダ 1 行のテーブル形式**へ（各セルへ入力・行追加/削除・0.25h ステッパー維持・モバイルはコンテナ内横スクロール = 原則8）
+- [x] 明日の予定: テーマ/目的/内容/時間 × 最大 3 件（`TomorrowPlan[]`・`TOMORROW_PLANS_MAX`）。**翌営業日（本人の勤怠ルール基準 = useBusinessDay）の日報エディタへエントリとして自動反映**（反映元バナー表示）。旧自由記述 `tomorrow` は互換保持・互換表示（原則7）。API: `daily_reports.tomorrow_plans jsonb`（migration 0029）・PUT/SELECT 対応
+- [x] 自分の日報の表示モード「週」「月」: 週 = 週ストリップ（提出状態・日選択）/ 月 = 1 日〜末日の**横スクロール**と**カレンダー形式**の 2 ビュー切替
+- [x] 全員の日報・全員の週報・チーム: **部署・メンバーで絞り込み**（AI 社員の日報は絞り込み未指定時のみ表示）
+- [x] 全員の週報タブ（F-06-11）新設: 選択週の提出済み週報一覧（参照権限適用）→ 詳細ドロワー。API `GET /v1/reports/weekly?scope=all&weekStart=YYYY-MM-DD`（提出済みのみ・canViewMemberReports でサーバー側も絞り込み。weekStart 未指定は互換のため直近 500 件上限 = 全履歴ダンプを許容しない方針は daily と同型。R1 指摘対応）。週次 AI インサイトは本タブのサブビューへ移設
+- [x] チームの表示モード「週」「月」: 月 = 1 日〜末日の**横スクロールマトリクス**と**カレンダー形式**（日別提出数 + 選択日の詳細リスト）の 2 ビュー切替。一括リマインドは選択中ビューの表示メンバー・対象日基準
+
+### 36-4 稟議（F-07）
+- [x] 新規申請フォームの「本文」を「目的」「内容」に分割（`WorkflowRequest.purpose/content`・旧 `body` は互換表示 = 原則7。migration 0029 で列追加・draft/submit の PUT/INSERT/SELECT 対応）
+- [x] 内容の**区分別テンプレート**（`utils/workflow-templates.ts` = SoT。標準（現状と課題/実施する理由/実施しない場合の影響/期待する効果/緊急度・優先度）+ 購買/契約/経費/採用/出張）。呼び出し時に入力済み内容の上書き確認（黙って消さない = 原則9.5）
+- [x] 詳細ドロワーは 目的/内容（マークダウン描画）を表示し、旧データは「本文」として互換表示
+
+### 36-5 検証・ドキュメント
+- [x] mockup typecheck / 単体 80 件（73 + 新設 7）green・api typecheck / 単体 112 件 green・**統合 156 件（既存 152 + 新設 4 = tomorrow_plans 往復・weekly scope=all（週指定・下書き秘匿・F-16-6 deny）・timecard-all（既定/付与/剥奪 = AKO-ATT-004）・稟議 purpose/content 往復）green**
+- [x] 反復レビュー（原則9）: 独立コードレビュー + システム監査の 2 ロールで実施。**R1** = 重大 3 件（API モードの旧稟議本文消失（?? → || 修正 + mock も body 移行で両モード一致）・明日の予定自動反映の初回不発（autoPlans computed + watch で遅延ロード到着に追従）・チーム月ビューの未ロード（touchTeamDates の明示タッチ = 誤リマインド防止））・中 3 件（AI 日報のフィルタバイパス・hr の日次詳細導線退行・timecard/attendance 依存）・軽微/表記ほかを修正。**R2** = R1 修正 10 項目すべて解消・機能デグレゼロを確認したうえで、残存の表記 3 件（AI ドラフト生成根拠の 業務テーマ/工数・権限設定の aria-label・e2e チェックラベル）+ 設計 SoT ドキュメント未追随 3 本（screen-design の /attendance・/timecard・/reports・/workflow 節 / data-design の DailyReport・WorkflowRequest・PermissionRule / api-design の weekly scope=all・timecard ガード）+ 本欄の完了宣言先行を指摘 → 全件修正（isPristineEditor の hours/progress 判定強化・weekStart 非月曜の設計判断コメントを含む）。修正後に typecheck・単体・統合の全スイートで再検証
+- [x] ドキュメント更新（原則5）: functional-requirements（F-01-2/F-04-8/F-04-10/F-06-1/F-06-3/F-06-9/F-06-11/F-06-10/F-07 見出し/F-07-1）・本表（タイムカード・稟議行）・mockup/README
+- 既知の制約: API モードの「明日の予定の自動反映」は自分の日報キャッシュ到着後に反映（遅延ロード）。AI 日報ドラフト（F-06-7）は明日の予定（構造化）を生成しない（従来の tomorrow 文字列のみ = 将来拡張）

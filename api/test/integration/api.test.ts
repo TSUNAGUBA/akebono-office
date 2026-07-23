@@ -3558,3 +3558,105 @@ describe('バッチ7l: ドキュメント管理の本実装（オペレーター
     expect(empty.status).toBe(400)
   })
 })
+
+describe('オペレーター指示 2026-07-22: 明日の予定・全員の週報・全員のタイムカード権限・稟議の目的/内容', () => {
+  it('日報の明日の予定（tomorrow_plans）は正規化（空行除去・0.25h 刻み・最大 3 件）して保存され GET で往復する', async () => {
+    const put = await api('PUT', '/v1/reports/daily', {
+      as: MEMBER,
+      body: {
+        date: '2026-03-02',
+        entries: [{ theme: 'テスト', task: '実装', hours: 2, progress: 50 }],
+        reflection: '', issues: '', tomorrow: '',
+        tomorrowPlans: [
+          { theme: 'A', purpose: 'P1', task: 'T1', hours: 1.1 }, // 1.1 → 1.0（0.25h 刻み）
+          { theme: 'B', purpose: '', task: 'T2', hours: 2 },
+          { theme: '', purpose: '', task: '', hours: 3 }, // 空行 → 除去
+          { theme: 'C', purpose: 'P3', task: 'T3', hours: 3 },
+          { theme: 'D', purpose: 'P4', task: 'T4', hours: 4 }, // 上限 3 件で切り捨て
+        ],
+        status: 'submitted',
+      },
+    })
+    expect(put.status).toBe(200)
+    const list = await api('GET', '/v1/reports/daily?month=2026-03', { as: MEMBER })
+    const row = (list.json.data as { date: string; tomorrowPlans: unknown }[]).find(r => r.date === '2026-03-02')
+    expect(row?.tomorrowPlans).toEqual([
+      { theme: 'A', purpose: 'P1', task: 'T1', hours: 1 },
+      { theme: 'B', purpose: '', task: 'T2', hours: 2 },
+      { theme: 'C', purpose: 'P3', task: 'T3', hours: 3 },
+    ])
+  })
+
+  it('全員の週報（scope=all）は提出済みのみ・weekStart で単週に絞り込み・F-16-6 deny を適用する', async () => {
+    const ws = '2026-03-02' // 月曜
+    await api('PUT', '/v1/reports/weekly', {
+      as: HR, body: { weekStart: ws, goalReview: '', mainWork: 'HR 週次', issues: '', nextWeek: '', status: 'submitted' },
+    })
+    await api('PUT', '/v1/reports/weekly', {
+      as: ADMIN, body: { weekStart: ws, goalReview: '', mainWork: '下書き', issues: '', nextWeek: '', status: 'draft' },
+    })
+    expect((await api('GET', '/v1/reports/weekly?scope=all&weekStart=bad', { as: MEMBER })).status).toBe(400)
+
+    const r = await api('GET', `/v1/reports/weekly?scope=all&weekStart=${ws}`, { as: MEMBER })
+    expect(r.status).toBe(200)
+    const rows = r.json.data as { memberId: string; status: string; weekStart: string }[]
+    expect(rows.some(x => x.memberId === HR && x.status === 'submitted')).toBe(true)
+    expect(rows.some(x => x.status === 'draft')).toBe(false) // 下書きは本人以外に見せない
+    expect(rows.every(x => x.weekStart === ws)).toBe(true) // 単週絞り込み
+
+    // F-16-6: member ロールへ HR の参照 deny → 一覧から消える（日報と同じ参照対象ルール）
+    await pool.query(
+      `INSERT INTO permission_rules (id, subject_kind, subject_id, resource, field, effect, active)
+       VALUES ('pr-test-wk-view', 'role', 'member', 'reports', 'member:${HR}', 'deny', true)`)
+    clearPermissionCache()
+    try {
+      const denied = await api('GET', `/v1/reports/weekly?scope=all&weekStart=${ws}`, { as: MEMBER })
+      expect((denied.json.data as { memberId: string }[]).some(x => x.memberId === HR)).toBe(false)
+      // 管理者側は影響なし（レイヤ = role member のみ）
+      const adminView = await api('GET', `/v1/reports/weekly?scope=all&weekStart=${ws}`, { as: ADMIN })
+      expect((adminView.json.data as { memberId: string }[]).some(x => x.memberId === HR)).toBe(true)
+    } finally {
+      await pool.query(`DELETE FROM permission_rules WHERE id = 'pr-test-wk-view'`)
+      clearPermissionCache()
+    }
+  })
+
+  it('全員のタイムカードは権限表で制御（既定 = 管理者/人事・allow で一般へ付与・deny で人事から剥奪 = AKO-ATT-004）', async () => {
+    const today = todayJst()
+    const path = `/v1/attendance/timecard?from=${today}&to=${today}`
+    // 既定（ルールなし）= 従来のロールガードと同値
+    expect((await api('GET', path, { as: MEMBER })).status).toBe(403)
+    expect((await api('GET', path, { as: HR })).status).toBe(200)
+    expect((await api('GET', path, { as: ADMIN })).status).toBe(200)
+
+    await pool.query(
+      `INSERT INTO permission_rules (id, subject_kind, subject_id, resource, field, effect, active) VALUES
+        ('pr-test-tc-member', 'role', 'member', 'attendance', 'timecard-all', 'allow', true),
+        ('pr-test-tc-hr', 'role', 'hr', 'attendance', 'timecard-all', 'deny', true)`)
+    clearPermissionCache()
+    try {
+      expect((await api('GET', path, { as: MEMBER })).status).toBe(200) // allow ルールで一般へ付与
+      const hrDenied = await api('GET', path, { as: HR })
+      expect(hrDenied.status).toBe(403) // deny ルールで人事の既定を剥奪
+      expect(hrDenied.json.error?.code).toBe('AKO-ATT-004')
+      expect((await api('GET', path, { as: ADMIN })).status).toBe(200) // 他ロールへは波及しない
+    } finally {
+      await pool.query(`DELETE FROM permission_rules WHERE id IN ('pr-test-tc-member', 'pr-test-tc-hr')`)
+      clearPermissionCache()
+    }
+  })
+
+  it('稟議の目的・内容が下書き保存で往復する（新規の body は空 = purpose/content が正）', async () => {
+    const draft = await api('PUT', '/v1/workflows/draft', {
+      as: MEMBER,
+      body: { category: 'other', title: '目的内容の検証', amount: 0, purpose: '目的テスト', content: '# 現状と課題\n・検証', attachments: [] },
+    })
+    expect(draft.status).toBe(201)
+    const id = (draft.json.data as { id: string }).id
+    const list = await api('GET', '/v1/workflows', { as: MEMBER })
+    const row = (list.json.data as { id: string; purpose: string; content: string; body: string }[]).find(x => x.id === id)
+    expect(row?.purpose).toBe('目的テスト')
+    expect(row?.content).toBe('# 現状と課題\n・検証')
+    expect(row?.body).toBe('')
+  })
+})
