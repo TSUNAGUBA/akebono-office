@@ -48,7 +48,8 @@ export const MENU_CARDS: Record<MenuArea, MenuCardDef[]> = {
     { id: 'minutes', title: '議事録', description: '会議の記録を蓄積。全員が参照でき AI の参照対象', icon: 'NotebookPen', to: '/minutes' },
     { id: 'workflow', title: '稟議', description: '稟議の申請・承認（職務権限マトリクス準拠）', icon: 'GitPullRequestArrow', to: '/workflow' },
     { id: 'ai-company', title: 'AIネイティブカンパニー', description: 'AI 社員の執務室。タスク依頼と活動モニタリング', icon: 'Building2', to: '/ai-company', featureToggle: 'aiCompany' },
-    { id: 'media', title: 'メディア分析', description: 'GA × AI でサイト・記事のインサイトと次アクション、業務との PDCA、AI 記事生成', icon: 'LineChart', to: '/media', featureToggle: 'media' },
+    // メディア分析（media）は AKEBONO 業務配下のアプリへ移設（2026-07-28）。ダッシュボードの独立カードからは撤去し、
+    // 業態別 AKEBONO 業務アプリ（AkebonoSegmentApps）経由で入場する。
     { id: 'sales', title: '売上管理', description: '月次売上の推移・前年比・事業種別/顧客別の内訳', icon: 'TrendingUp', to: '/sales' },
     { id: 'status', title: '提供システム稼働状況', description: '提供システムの現在状態・稼働率・インシデント履歴', icon: 'Activity', to: '/status', featureToggle: 'status' },
     { id: 'support', title: '業務支援ツール', description: 'AI チャットボット・ドキュメント管理・外部ツール', icon: 'Wrench', to: '/support' },
@@ -83,7 +84,7 @@ export const DEFAULT_MENU_CATEGORIES: Record<MenuArea, MenuCategoryDef[]> = {
     { id: 'decision', label: '意思決定支援', cardIds: ['decision'] },
     { id: 'work', label: '業務ツール', cardIds: ['timecard', 'attendance', 'shift', 'reports', 'ai-assistant', 'poipoi', 'minutes', 'workflow'] },
     { id: 'ai-company', label: 'AIネイティブカンパニー', cardIds: ['ai-company'] },
-    { id: 'insights', label: '経営・状況', cardIds: ['sales', 'media', 'status'] },
+    { id: 'insights', label: '経営・状況', cardIds: ['sales', 'status'] },
     { id: 'support', label: '業務支援', cardIds: ['support', 'inbox'] },
     { id: 'admin', label: '管理', cardIds: ['masters', 'settings'] },
   ],

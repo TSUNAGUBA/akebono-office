@@ -50,7 +50,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { path: '/decision', label: '意思決定支援', icon: 'Scale', featureKey: 'decision', matchPrefix: true },
       { path: '/ai-company', label: 'AIネイティブカンパニー', icon: 'Building2', featureKey: 'aiCompany', matchPrefix: true },
       { path: '/akebono', label: 'AKEBONO', icon: 'Sunrise', featureKey: 'akebono' },
-      { path: '/media', label: 'メディア分析', icon: 'LineChart', featureKey: 'media', matchPrefix: true },
+      // メディア分析（/media）は AKEBONO 業務配下のアプリへ移設（2026-07-28）。トップ独立メニューからは撤去。
     ],
   },
   {

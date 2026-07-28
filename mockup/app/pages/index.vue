@@ -26,7 +26,8 @@ const greeting = computed(() => {
 })
 const todayLong = computed(() => fmtDateLong(nowJstIso()))
 
-const { canPath } = usePermissions()
+const { canPath, can } = usePermissions()
+const canCompanyDashboard = computed(() => can('sales'))
 
 // ---------- AKEBONO 業務（業態別アプリをトップに配置。2026-07-28） ----------
 // 機能トグル + 権限を満たし、かつ業態が 1 件以上あるときのみ専用セクションを表示する
@@ -131,9 +132,12 @@ function openNotification(n: AppNotification): void {
     <div class="grid gap-3">
       <!-- AKEBONO 業務（業態別アプリ。押下でその業態の業務へ入る = ヘッダ切替に依存しない導線） -->
       <section v-if="showAkebono" class="grid gap-1.5" aria-label="AKEBONO 業務">
-        <div class="flex items-center justify-between">
+        <div class="flex items-center justify-between gap-2">
           <p class="text-[11px] font-bold text-muted">AKEBONO 業務（業態別）</p>
-          <NuxtLink to="/akebono" class="link text-[11px] font-semibold">ハブを開く</NuxtLink>
+          <span class="flex items-center gap-3">
+            <NuxtLink v-if="canCompanyDashboard" to="/akebono/company" class="link text-[11px] font-semibold">会社全体ダッシュボード</NuxtLink>
+            <NuxtLink to="/akebono" class="link text-[11px] font-semibold">ハブを開く</NuxtLink>
+          </span>
         </div>
         <AkebonoSegmentApps />
       </section>

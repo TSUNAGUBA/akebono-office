@@ -91,6 +91,9 @@ const ms = useMediaSettings()    // settingFor / ensureSetting / save / connectG
 const ma = useMediaAnalytics()   // metricsFor(segId,28) / integratedMetricsFor(segId,6) / businessMonthly（GA 由来メトリクスの決定的導出）
 const mi = useMediaInsight()     // loadMedia/generateMedia / loadIntegrated/generateIntegrated（生成→保管→再生成で上書き）
 const art = useMediaArticles()   // generate（目的/質/雰囲気）/ suggestionFromInsight / adopt / unadopt / remove / restore（取消可能）
+
+// 業態別/会社全体ダッシュボード（F-41。業務×メディアを統合したサマリー+AIレポート+AIインサイト。純ロジック SoT = shared/domain/portfolio-insight）
+const di = useDashboardInsight() // buildSegmentSummary/buildCompanySummary（常時ライブ集計）/ loadSegment・generateSegment / loadCompany・generateCompany（生成→保管→再生成で上書き）
 ```
 
 ## UI コンポーネント在庫（新規に作る前にここを見る）
