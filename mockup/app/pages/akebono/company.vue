@@ -78,11 +78,12 @@ const generating = ref(false)
 
 onMounted(() => { if (canView.value) view.value = loadCompany() })
 
-function regenerate(): void {
+async function regenerate(): Promise<void> {
   if (generating.value || !canView.value) return
   generating.value = true
   try {
-    view.value = generateCompany()
+    // API モードは全業態の GA 月次のロードを await でそろえてから集計・保管する
+    view.value = await generateCompany()
     show('会社全体の AI レポート・インサイトを生成し、保存しました', 'ok')
   } finally { generating.value = false }
 }

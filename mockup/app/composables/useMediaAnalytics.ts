@@ -1,8 +1,12 @@
 /**
  * メディア分析メトリクス（GA 由来の集計）。
- * - モック: サイトの記事インベントリ（mediaArticles）から決定的に GA 風メトリクスを導出（shared/domain/media-metrics）
- * - 本実装: GA4 Data API の runReport 結果を同じ型へ整形する（インサイト生成は共通）
- * - 統合分析（業務 × メディア）は当該セグメントの売上明細（salesRecords）を月次集計して突き合わせる
+ * - モック: サイトの記事インベントリ（mediaArticles）から決定的に GA 風メトリクスを導出
+ *   （shared/domain/media-metrics = モック/デモ環境の SoT として維持）
+ * - API: GA4 Data API（batchRunReports）の実データをサーバー（GET /v1/media/metrics・/monthly）が
+ *   同じ MediaMetrics 型へ整形して返す（インサイト生成は共通）。segmentId × days キーの遅延ロードキャッシュ
+ * - 統合分析（業務 × メディア）の SoT 宣言: 売上明細（salesRecords）は**未移行のモック側コレクション**のため、
+ *   API モードでも売上月次はモック側集計・メディア月次のみ /v1/media/monthly（GA 実データ）を突合する
+ *   （businessSegments/salesRecords の API 移行時にサーバー側組み立て（/v1/media/integrated 相当）へ引き上げる）
  *
  * 集計基準日は「前日（asOf）」（週次インサイトと同じ思想 = 当日を未確定として悲観評価しない）。
  */
@@ -10,7 +14,7 @@ import type { SalesRecord } from '~/types/akebono'
 import type { MediaArticle } from '~/types/media'
 import {
   deriveMediaMetrics, deriveMonthlyMediaTrend,
-  type MediaArticleInput, type MediaMetrics,
+  type MediaArticleInput, type MediaMetrics, type MediaMonthlyPoint,
 } from '../../../shared/domain/media-metrics'
 import type { IntegratedMetrics } from '../../../shared/domain/media-integrated'
 
@@ -33,28 +37,112 @@ function recentMonths(n: number, endBackMonths = 0): string[] {
   return out
 }
 
+// ---------- API モードのキャッシュ（SPA・モジュールスコープ単一） ----------
+
+/** 記事インベントリ（segmentId → 取消済み含む全件。表示側でフィルタ） */
+const apiMediaArticles = ref<Record<string, MediaArticle[]>>({})
+/** GA 集計（`${segmentId}:${days}` → メトリクス。null = 取得失敗（未連携・GA エラー）） */
+const apiMetrics = ref<Record<string, MediaMetrics | null>>({})
+/** GA 集計の部分失敗警告（原則4 の「報告」。キーは apiMetrics と同じ） */
+const apiMetricsWarning = ref<Record<string, string | null>>({})
+/** 月次トレンド（`${segmentId}:${months}`） */
+const apiMonthly = ref<Record<string, MediaMonthlyPoint[] | null>>({})
+
+/** 記事インベントリの遅延ロード（useMediaArticles の採用・取消後の再取得でも使う） */
+export function loadMediaArticles(segmentId: string, force = false): Promise<void> {
+  if (!segmentId) return Promise.resolve()
+  return apiLoadOnce(`media:articles:${segmentId}`, async () => {
+    const rows = await apiFetch<MediaArticle[]>('/v1/media/articles', {
+      query: { segmentId, includeInactive: '1' },
+    })
+    apiMediaArticles.value = { ...apiMediaArticles.value, [segmentId]: rows }
+  }, force)
+}
+
+export function loadMediaMetrics(segmentId: string, days: number, force = false): Promise<void> {
+  if (!segmentId) return Promise.resolve()
+  const key = `${segmentId}:${days}`
+  return apiLoadOnce(`media:metrics:${key}`, async () => {
+    try {
+      const r = await apiFetch<{ metrics: MediaMetrics; warning?: string }>('/v1/media/metrics', {
+        query: { segmentId, days: String(days), ...(force ? { force: '1' } : {}) },
+      })
+      apiMetrics.value = { ...apiMetrics.value, [key]: r.metrics }
+      apiMetricsWarning.value = { ...apiMetricsWarning.value, [key]: r.warning ?? null }
+    } catch (e) {
+      // 未連携（AKO-MEDIA-003）・GA 障害（004）は null を記録 = 画面が再試行導線を出す（握りつぶさない）。
+      // rethrow はしない: 失敗を「ロード済み（結果 null）」として確定させる。rethrow すると apiLoadOnce が
+      // キーを未ロードへ戻し、null 記録のリアクティブ更新 → computed 再評価 → 再ロードの無限リトライになる。
+      // 再試行は明示操作（refreshMetrics = force）とログイン切替時の resetApiData のみ
+      apiMetrics.value = { ...apiMetrics.value, [key]: null }
+      apiMetricsWarning.value = { ...apiMetricsWarning.value, [key]: apiErrorOf(e).message }
+    }
+  }, force)
+}
+
+export function loadMediaMonthly(segmentId: string, months: number, force = false): Promise<void> {
+  if (!segmentId) return Promise.resolve()
+  const key = `${segmentId}:${months}`
+  return apiLoadOnce(`media:monthly:${key}`, async () => {
+    try {
+      const points = await apiFetch<MediaMonthlyPoint[]>('/v1/media/monthly', {
+        query: { segmentId, months: String(months) },
+      })
+      apiMonthly.value = { ...apiMonthly.value, [key]: points }
+    } catch {
+      // rethrow しない（上の loadMediaMetrics と同じ無限リトライ防止。失敗 = ロード済み・結果 null）
+      apiMonthly.value = { ...apiMonthly.value, [key]: null }
+    }
+  }, force)
+}
+
+onApiReset(() => {
+  apiMediaArticles.value = {}
+  apiMetrics.value = {}
+  apiMetricsWarning.value = {}
+  apiMonthly.value = {}
+})
+
 export function useMediaAnalytics() {
   const { tbl } = useMockDb()
   const articlesTbl = tbl('mediaArticles')
   const salesTbl = tbl('salesRecords')
   const { segmentById } = useCurrentSegment()
   const { settingFor } = useMediaSettings()
+  const isApi = useApiMode()
 
   /** 集計基準日（前日） */
   const asOf = computed(() => addDays(todayJst(), -1))
 
-  /** セグメントの記事インベントリ（GA 導出の入力） */
+  /** セグメントの記事インベントリ（取消済み含む生データ。API はサーバーが SoT） */
+  function rawArticlesFor(segmentId: string): MediaArticle[] {
+    if (isApi) {
+      void loadMediaArticles(segmentId)
+      return apiMediaArticles.value[segmentId] ?? []
+    }
+    return (articlesTbl.value as MediaArticle[]).filter(a => a.segmentId === segmentId)
+  }
+
+  /** セグメントの記事インベントリ（公開・有効のみ。モックの GA 導出の入力 / 記事数の表示） */
   function articleInputsFor(segmentId: string): MediaArticleInput[] {
-    return (articlesTbl.value as MediaArticle[])
-      .filter(a => a.segmentId === segmentId && a.active !== false && a.status === 'published')
+    return rawArticlesFor(segmentId)
+      .filter(a => a.active !== false && a.status === 'published')
       .map(a => ({
         id: a.id, title: a.title, path: a.path, section: a.section,
         publishedAt: a.publishedAt, wordCount: a.wordCount, origin: a.origin,
       }))
   }
 
-  /** GA 風メトリクスを導出する（既定 28 日） */
-  function metricsFor(segmentId: string, days = 28): MediaMetrics {
+  /**
+   * GA メトリクス（既定 28 日）。
+   * - モック: 決定的導出（常に非 null）
+   * - API: 遅延ロードキャッシュ（ロード中は null。取得失敗も null = metricsErrorFor で理由を出す）
+   */
+  function metricsFor(segmentId: string, days = 28): MediaMetrics | null {
+    if (isApi) {
+      void loadMediaMetrics(segmentId, days)
+      return apiMetrics.value[`${segmentId}:${days}`] ?? null
+    }
     const setting = settingFor(segmentId)
     return deriveMediaMetrics(articleInputsFor(segmentId), {
       segmentId,
@@ -62,6 +150,24 @@ export function useMediaAnalytics() {
       asOf: asOf.value,
       days,
     })
+  }
+
+  /** API: メトリクスのロードが完了したか（null 格納 = 失敗も「完了」。ローディング表示の判定用） */
+  function metricsReady(segmentId: string, days = 28): boolean {
+    if (!isApi) return true
+    return `${segmentId}:${days}` in apiMetrics.value
+  }
+
+  /** API: 部分失敗の警告・取得失敗の理由（原則4 の「報告」。なければ null） */
+  function metricsWarningFor(segmentId: string, days = 28): string | null {
+    if (!isApi) return null
+    return apiMetricsWarning.value[`${segmentId}:${days}`] ?? null
+  }
+
+  /** API: GA 集計の再取得（サーバーキャッシュも force で飛ばす） */
+  async function refreshMetrics(segmentId: string, days = 28): Promise<void> {
+    if (!isApi) return
+    await loadMediaMetrics(segmentId, days, true).catch(() => { /* 失敗は metricsWarningFor が報告 */ })
   }
 
   /**
@@ -92,16 +198,36 @@ export function useMediaAnalytics() {
     return map
   }
 
-  /** 業務 × メディアの統合メトリクスを組み立てる（直近 monthsCount ヶ月） */
+  /** メディア月次（モック: 決定的導出 / API: GA 実データ。未連携・未ロードは 0 埋め） */
+  function mediaMonthlyFor(segmentId: string, months: string[], monthsCount: number): Map<string, MediaMonthlyPoint> {
+    if (isApi) {
+      const connected = settingFor(segmentId)?.gaConnected === true
+      const map = new Map<string, MediaMonthlyPoint>()
+      if (connected) {
+        void loadMediaMonthly(segmentId, monthsCount)
+        // 月キーで突合する（サーバーも「直前の完了月まで」の同じ窓を返すが、境界の日跨ぎに備えてキー一致で読む）
+        for (const p of apiMonthly.value[`${segmentId}:${monthsCount}`] ?? []) map.set(p.month, p)
+      }
+      return map
+    }
+    const trend = deriveMonthlyMediaTrend(articleInputsFor(segmentId), months, segmentId)
+    return new Map(trend.map(p => [p.month, p]))
+  }
+
+  /**
+   * 業務 × メディアの統合メトリクスを組み立てる（直近 monthsCount ヶ月）。
+   * API モードでもメディア未連携・月次ロード中はメディア側 0 で返す（売上側は常に集計 =
+   * ダッシュボードの業務軸を止めない。ロード完了の判定は integratedReady）
+   */
   function integratedMetricsFor(segmentId: string, monthsCount = 6): IntegratedMetrics {
     // 最終月は直前の完了月（進行中の当月は締め前のため対象外）
     const months = recentMonths(monthsCount, 1)
     const setting = settingFor(segmentId)
     const seg = segmentById(segmentId)
-    const mediaTrend = deriveMonthlyMediaTrend(articleInputsFor(segmentId), months, segmentId)
+    const mediaBy = mediaMonthlyFor(segmentId, months, monthsCount)
     const biz = businessMonthly(segmentId, months)
-    const trend = months.map((month, i) => {
-      const mt = mediaTrend[i]!
+    const trend = months.map((month) => {
+      const mt = mediaBy.get(month) ?? { month, sessions: 0, users: 0, conversions: 0 }
       const b = biz.get(month) ?? { amount: 0, orders: 0 }
       return { month, sessions: mt.sessions, conversions: mt.conversions, salesAmount: b.amount, orders: b.orders }
     })
@@ -134,5 +260,24 @@ export function useMediaAnalytics() {
     }
   }
 
-  return { asOf, articleInputsFor, metricsFor, integratedMetricsFor, businessMonthly }
+  /** API: 統合メトリクスのメディア側（GA 月次）が確定しているか（未連携は「確定」扱い = 0 が正） */
+  function integratedReady(segmentId: string, monthsCount = 6): boolean {
+    if (!isApi) return true
+    const status = settingFor(segmentId)
+    if (status?.gaConnected !== true) return true
+    return `${segmentId}:${monthsCount}` in apiMonthly.value
+  }
+
+  /** API: 統合メトリクスの材料（GA 接続状態 + 月次）を await でそろえる（インサイト生成前に呼ぶ） */
+  async function ensureIntegratedLoaded(segmentId: string, monthsCount = 6): Promise<void> {
+    if (!isApi) return
+    await loadMediaGaStatus(segmentId)
+    if (settingFor(segmentId)?.gaConnected !== true) return
+    await loadMediaMonthly(segmentId, monthsCount).catch(() => { /* GA 障害時はメディア 0 で続行（原則4） */ })
+  }
+
+  return {
+    asOf, articleInputsFor, rawArticlesFor, metricsFor, integratedMetricsFor, businessMonthly,
+    metricsReady, metricsWarningFor, refreshMetrics, integratedReady, ensureIntegratedLoaded,
+  }
 }

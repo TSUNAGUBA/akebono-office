@@ -1,8 +1,13 @@
 /**
  * AI 記事生成スタジオ（目的・記事の質・雰囲気を指定して生成 / 過去分析からの生成 / 採用・取消）。
- * - 生成は決定的（shared/domain/media-article）。本実装では Vertex AI 呼び出しに置き換わる
- * - 生成物（generatedArticles）と依頼（articleBriefs）を保管。生成物は論理削除で取消・復元できる（原則9.5）
- * - 採用（採用ボタン）でサイトのコンテンツ資産（mediaArticles）へ登録 → 分析の入力に加わる。採用の取消も可
+ *
+ * デュアルモード:
+ * - モック: 決定的生成（shared/domain/media-article）+ モックコレクション（articleBriefs / generatedArticles）
+ * - API: SoT はサーバー（media_article_briefs / media_generated_articles。POST /v1/media/articles/generate =
+ *   Vertex AI → 失敗時は同じ決定的生成へサーバー側フォールバック。llm フラグで区別）。
+ *   採用・取消・復元もサーバー（トランザクション + 論理削除）。SoT 書込 → キャッシュ再取得の順序（原則6）
+ * - 生成物は論理削除で取消・復元できる（原則9.5）。採用でサイトのコンテンツ資産（記事インベントリ）へ
+ *   登録 → 分析の入力に加わる。採用の取消も可
  */
 import type { MediaInsight } from '../../../shared/domain/media-insight'
 import {
@@ -17,7 +22,7 @@ export interface ArticleGenRequest {
   quality: ArticleQuality
   tone: ArticleTone
   audience?: string
-  /** 過去分析から生成する場合の参照（MediaInsightRecord.id） */
+  /** 過去分析から生成する場合の参照（保管済みメディアインサイトの id） */
   fromInsightId?: string | null
 }
 
@@ -29,6 +34,20 @@ export interface BriefSuggestion {
   hint: string
 }
 
+// ---------- API モードのキャッシュ（segmentId → 生成物全件。取消済み含む） ----------
+
+const apiGenerated = ref<Record<string, GeneratedArticle[]>>({})
+
+function loadApiGenerated(segmentId: string, force = false): Promise<void> {
+  if (!segmentId) return Promise.resolve()
+  return apiLoadOnce(`media:generated:${segmentId}`, async () => {
+    const rows = await apiFetch<GeneratedArticle[]>('/v1/media/generated', { query: { segmentId } })
+    apiGenerated.value = { ...apiGenerated.value, [segmentId]: rows }
+  }, force)
+}
+
+onApiReset(() => { apiGenerated.value = {} })
+
 export function useMediaArticles() {
   const { tbl, commit, nextId } = useMockDb()
   const briefsTbl = tbl('articleBriefs')
@@ -37,22 +56,25 @@ export function useMediaArticles() {
   const { currentUser } = useCurrentUser()
   const { segmentById } = useCurrentSegment()
   const { settingFor } = useMediaSettings()
-  const { getById } = useMediaInsight()
+  const { getById, storedMedia } = useMediaInsight()
+  const analytics = useMediaAnalytics()
+  const isApi = useApiMode()
 
   /** セグメントの生成記事（既定は有効分のみ。取消済みも含めるなら includeInactive） */
   function generatedFor(segmentId: string, includeInactive = false): GeneratedArticle[] {
-    return (genTbl.value as GeneratedArticle[])
-      .filter(g => g.segmentId === segmentId && (includeInactive || g.active !== false))
+    const rows = isApi
+      ? (void loadApiGenerated(segmentId), apiGenerated.value[segmentId] ?? [])
+      : (genTbl.value as GeneratedArticle[]).filter(g => g.segmentId === segmentId)
+    return rows
+      .filter(g => includeInactive || g.active !== false)
       .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
   }
 
-  /** 過去の分析（保管済みメディアインサイト）から記事のお題を提案する */
+  /** 過去の分析（保管済みメディアインサイト）から記事のお題を提案する（両モード = storedMedia が SoT を吸収） */
   function suggestionFromInsight(segmentId: string): BriefSuggestion | null {
-    // scope='media' の保管レコードを取得
-    const rec = (tbl('mediaInsights').value as { id: string; segmentId: string; scope: string; insight: unknown }[])
-      .find(r => r.segmentId === segmentId && r.scope === 'media')
+    const rec = storedMedia(segmentId)
     if (!rec) return null
-    const insight = rec.insight as MediaInsight
+    const insight = rec.insight
     const opp = [...insight.articles, ...insight.siteStructure].find(f => f.kind === 'opportunity')
       ?? insight.articles[0] ?? insight.siteStructure[0]
     if (!opp) return null
@@ -67,7 +89,7 @@ export function useMediaArticles() {
     }
   }
 
-  /** インサイトからヒント文（生成の前提に添える）を取り出す */
+  /** インサイトからヒント文を取り出す（モック生成用。API モードはサーバーが from_insight_id から抽出する） */
   function hintsFromInsight(insightId: string | null | undefined): string[] {
     if (!insightId) return []
     const rec = getById(insightId)
@@ -79,12 +101,38 @@ export function useMediaArticles() {
       .slice(0, 3)
   }
 
-  /** 記事を生成して保管する（依頼 + 生成物）。決定的 = 同じ入力なら同じ結果 */
-  function generate(segmentId: string, req: ArticleGenRequest): { ok: boolean; article?: GeneratedArticle; error?: { code: string; message: string } } {
+  /**
+   * 記事を生成して保管する（依頼 + 生成物）。
+   * モック = 決定的（同じ入力なら同じ結果）/ API = Vertex AI → 失敗時サーバー側で決定的生成
+   */
+  async function generate(segmentId: string, req: ArticleGenRequest): Promise<{ ok: boolean; article?: GeneratedArticle; error?: { code: string; message: string } }> {
     const seg = segmentById(segmentId)
     if (!seg) return { ok: false, error: { code: 'AKO-MEDIA-010', message: '対象セグメントが見つかりません' } }
     if (!req.topic.trim() && !req.keyword.trim()) {
       return { ok: false, error: { code: 'AKO-MEDIA-011', message: 'お題またはキーワードを入力してください' } }
+    }
+    if (isApi) {
+      try {
+        const article = await apiFetch<GeneratedArticle>('/v1/media/articles/generate', {
+          method: 'POST',
+          body: {
+            segmentId,
+            topic: req.topic, keyword: req.keyword,
+            purpose: req.purpose, quality: req.quality, tone: req.tone,
+            audience: req.audience ?? '',
+            fromInsightId: req.fromInsightId ?? null,
+            // セグメント名はモック側エンティティ（未移行）のためクライアントから渡す（表示・文面用途）
+            segmentName: seg.name,
+          },
+        })
+        apiGenerated.value = {
+          ...apiGenerated.value,
+          [segmentId]: [article, ...(apiGenerated.value[segmentId] ?? [])],
+        }
+        return { ok: true, article }
+      } catch (e) {
+        return { ok: false, error: apiErrorOf(e) }
+      }
     }
     const setting = settingFor(segmentId)
     const audience = (req.audience ?? '').trim() || setting?.targetAudience || '読者'
@@ -122,8 +170,29 @@ export function useMediaArticles() {
     return { ok: true, article }
   }
 
-  /** 生成記事をサイトのコンテンツ資産へ採用する（分析の入力に加わる）。採用済みは二重採用しない */
-  function adopt(generatedArticleId: string, section = 'ブログ'): { ok: boolean; error?: { code: string; message: string } } {
+  /** API: 変更系の後にサーバー SoT からキャッシュを取り直す（生成物 + インベントリ + GA 集計） */
+  async function refreshAfterMutation(segmentId: string): Promise<void> {
+    await Promise.all([
+      loadApiGenerated(segmentId, true),
+      loadMediaArticles(segmentId, true),
+    ])
+    // 採用・取消はセクション対応・記事数に影響する（サーバーの集計キャッシュは無効化済み）
+    void analytics.refreshMetrics(segmentId, 28)
+  }
+
+  /** 生成記事をサイトのコンテンツ資産へ採用する（分析の入力に加わる） */
+  async function adopt(generatedArticleId: string, section = 'ブログ'): Promise<{ ok: boolean; warning?: string; error?: { code: string; message: string } }> {
+    if (isApi) {
+      const g = Object.values(apiGenerated.value).flat().find(x => x.id === generatedArticleId)
+      try {
+        const r = await apiFetch<{ id: string; articleId: string; warning?: string }>(
+          `/v1/media/generated/${generatedArticleId}/adopt`, { method: 'POST', body: { section } })
+        if (g) await refreshAfterMutation(g.segmentId)
+        return { ok: true, warning: r.warning }
+      } catch (e) {
+        return { ok: false, error: apiErrorOf(e) }
+      }
+    }
     const g = (genTbl.value as GeneratedArticle[]).find(x => x.id === generatedArticleId)
     if (!g || g.active === false) return { ok: false, error: { code: 'AKO-MEDIA-012', message: '対象の生成記事が見つかりません' } }
     if (g.adoptedArticleId) return { ok: false, error: { code: 'AKO-MEDIA-013', message: 'この記事は既に採用済みです' } }
@@ -150,7 +219,13 @@ export function useMediaArticles() {
   }
 
   /** 採用を取り消す（原則9.5。採用で作った資産を論理削除し、生成記事の採用リンクを解除） */
-  function unadopt(generatedArticleId: string): { ok: boolean; error?: { code: string; message: string } } {
+  async function unadopt(generatedArticleId: string): Promise<{ ok: boolean; error?: { code: string; message: string } }> {
+    if (isApi) {
+      const g = Object.values(apiGenerated.value).flat().find(x => x.id === generatedArticleId)
+      const res = await apiResult(() => apiFetch(`/v1/media/generated/${generatedArticleId}/unadopt`, { method: 'POST' }))
+      if (res.ok && g) await refreshAfterMutation(g.segmentId)
+      return res
+    }
     const g = (genTbl.value as GeneratedArticle[]).find(x => x.id === generatedArticleId)
     if (!g || !g.adoptedArticleId) return { ok: false, error: { code: 'AKO-MEDIA-014', message: '採用されていません' } }
     articlesTbl.value = (articlesTbl.value as MediaArticle[]).map(a => a.id === g.adoptedArticleId ? { ...a, active: false } : a)
@@ -160,16 +235,28 @@ export function useMediaArticles() {
   }
 
   /** 生成記事を取り消す（論理削除。採用済みなら採用も取り消してから） */
-  function remove(generatedArticleId: string): { ok: boolean } {
+  async function remove(generatedArticleId: string): Promise<{ ok: boolean; error?: { code: string; message: string } }> {
+    if (isApi) {
+      const g = Object.values(apiGenerated.value).flat().find(x => x.id === generatedArticleId)
+      const res = await apiResult(() => apiFetch(`/v1/media/generated/${generatedArticleId}/remove`, { method: 'POST' }))
+      if (res.ok && g) await refreshAfterMutation(g.segmentId)
+      return res
+    }
     const g = (genTbl.value as GeneratedArticle[]).find(x => x.id === generatedArticleId)
-    if (g?.adoptedArticleId) unadopt(generatedArticleId)
+    if (g?.adoptedArticleId) await unadopt(generatedArticleId)
     genTbl.value = (genTbl.value as GeneratedArticle[]).map(x => x.id === generatedArticleId ? { ...x, active: false } : x)
     commit()
     return { ok: true }
   }
 
   /** 取消した生成記事を復元する */
-  function restore(generatedArticleId: string): { ok: boolean } {
+  async function restore(generatedArticleId: string): Promise<{ ok: boolean; error?: { code: string; message: string } }> {
+    if (isApi) {
+      const g = Object.values(apiGenerated.value).flat().find(x => x.id === generatedArticleId)
+      const res = await apiResult(() => apiFetch(`/v1/media/generated/${generatedArticleId}/restore`, { method: 'POST' }))
+      if (res.ok && g) await loadApiGenerated(g.segmentId, true)
+      return res
+    }
     genTbl.value = (genTbl.value as GeneratedArticle[]).map(x => x.id === generatedArticleId ? { ...x, active: true } : x)
     commit()
     return { ok: true }

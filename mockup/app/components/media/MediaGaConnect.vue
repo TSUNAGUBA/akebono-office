@@ -1,9 +1,16 @@
 <script setup lang="ts">
 /**
- * Google Analytics 連携ゲート（擬似 OAuth）— セグメント単位。
- * 未連携: 連携の案内 + 「Google Analytics を連携」→ 擬似同意モーダル（プロパティ選択）→ 許可で連携。
- * 連携済み: 状態表示 + 連携解除。設定画面（/media/settings）と分析画面のゲートで共用する。
- * 本実装では Google OAuth 2.0（analytics.readonly スコープ）+ GA4 プロパティ選択に置き換わる。
+ * Google Analytics 連携ゲート — セグメント単位。
+ * 未連携: 連携の案内 + 「Google Analytics を連携」/ 連携済み: 状態表示 + 連携解除。
+ * 設定画面（/media/settings）と分析画面のゲートで共用する。
+ *
+ * デュアルモード（CalendarConnectGate の流儀）:
+ * - モック: 擬似同意モーダル（プロパティ選択込み）。実際の Google 認証は行わない
+ * - API: Google OAuth 2.0（analytics.readonly）の同意画面へフルリダイレクト →
+ *   復帰クエリ（/media/settings?ga=connected|error&reason=&segment=）を処理 →
+ *   GA4 プロパティ選択モーダル（Admin API の一覧 → PUT /v1/media/property）で連携が完成する。
+ *   「トークンあり・プロパティ未選択」（needsProperty）の中間状態でも選択モーダルへ誘導できる
+ *   （リロードで詰まない = 冪等）。連携・解除は管理者のみ（API 側 requireAdmin と一致）
  * 画面操作だけで完結し、鍵の手動設定は不要（原則1）。
  */
 import { ChartNoAxesCombined, Link2Off, ShieldCheck } from 'lucide-vue-next'
@@ -16,29 +23,113 @@ const props = withDefaults(defineProps<{
 }>(), { segmentId: '', variant: 'gate' })
 
 const { effectiveSegmentId, segmentById } = useCurrentSegment()
-const { settingFor, connectGa, disconnectGa } = useMediaSettings()
+const {
+  settingFor, connectGa, disconnectGa, gaStatusFor, refreshGa, startGaConnect, listGaProperties, selectGaProperty,
+} = useMediaSettings()
+const { isAdmin } = useCurrentUser()
+const isApi = useApiMode()
 const { show } = useToast()
 const confirm = useConfirm()
+const route = useRoute()
+const router = useRouter()
 
 const sid = computed(() => props.segmentId || effectiveSegmentId.value)
 const setting = computed(() => settingFor(sid.value))
+const status = computed(() => gaStatusFor(sid.value))
 const segName = computed(() => segmentById(sid.value)?.name ?? 'この業態')
 
-// 擬似 GA4 プロパティ候補（本実装では OAuth 後に Admin API で取得する一覧）
-const consentOpen = ref(false)
+/** 連携失敗理由（callback の ?reason=）→ 利用者向けメッセージ（calendar の FAIL_REASONS と同じ語彙） */
+const FAIL_REASONS: Record<string, string> = {
+  'account-mismatch': '会社アカウント以外の Google アカウントで同意されたため連携できませんでした。'
+    + 'AKEBONO Office に登録されたメールアドレスと同じ Google アカウントを選択してください',
+  'denied': 'Google の同意画面でアクセスがキャンセルされました。連携するには「許可」を選択してください',
+  'invalid-state': '連携リクエストの有効期限が切れました（10 分以内に同意してください）。もう一度お試しください',
+  'not-configured': 'Google Analytics 連携が未設定です。管理者に OAuth クライアントの設定を依頼してください',
+  'token-exchange': 'Google との認証処理に失敗しました。時間をおいて再試行してください',
+  'exchange-error': 'Google との認証処理に失敗しました。時間をおいて再試行してください',
+}
+
+// ---------- API: GA4 プロパティ選択（OAuth 復帰後 / needsProperty の再開） ----------
+
+const propertyOpen = ref(false)
+const propertyLoading = ref(false)
+const propertySaving = ref(false)
+const propertyList = ref<{ id: string; name: string; account: string }[]>([])
 const selectedProp = ref('')
-const PROPERTIES = computed(() => [
+/** 選択モーダルの対象セグメント（OAuth 復帰クエリの segment は現在の表示対象と異なりうる） */
+const propertySegment = ref('')
+
+async function openPropertySelect(segmentId: string): Promise<void> {
+  propertySegment.value = segmentId
+  propertyOpen.value = true
+  propertyLoading.value = true
+  const r = await listGaProperties(segmentId)
+  propertyLoading.value = false
+  if (!r.ok) {
+    show(`${r.error?.code}: ${r.error?.message}`, 'crit')
+    propertyOpen.value = false
+    return
+  }
+  propertyList.value = r.properties ?? []
+  selectedProp.value = propertyList.value[0]?.id ?? ''
+}
+
+async function savePropertySelect(): Promise<void> {
+  const prop = propertyList.value.find(p => p.id === selectedProp.value)
+  if (!prop) return
+  propertySaving.value = true
+  const r = await selectGaProperty(propertySegment.value, prop.id, prop.name)
+  propertySaving.value = false
+  if (!r.ok) {
+    show(`${r.error?.code}: ${r.error?.message}`, 'crit')
+    return
+  }
+  propertyOpen.value = false
+  show(`Google Analytics を連携しました（${prop.name}）`, 'ok')
+}
+
+// OAuth 同意画面からの復帰（?ga=connected / error&reason=&segment=）を反映してクエリを消す
+onMounted(async () => {
+  if (!isApi) return
+  const q = route.query.ga
+  if (typeof q !== 'string') return
+  const segment = typeof route.query.segment === 'string' && route.query.segment ? route.query.segment : sid.value
+  const reason = typeof route.query.reason === 'string' ? route.query.reason : ''
+  // 先にクエリを消す（プロパティ選択中のリロードで復帰処理が二重実行されない = 冪等。
+  // 中間状態は needsProperty バナーが引き継ぐため、消しても導線は失われない）
+  void router.replace({ query: { ...route.query, ga: undefined, reason: undefined, segment: undefined } })
+  if (q === 'connected') {
+    await refreshGa(segment)
+    show('Google アカウントを連携しました。続けて GA4 プロパティを選択してください', 'ok')
+    await openPropertySelect(segment)
+  } else {
+    show(FAIL_REASONS[reason] ?? 'Google Analytics の連携に失敗しました。時間をおいて再試行してください', 'warn')
+  }
+})
+
+// ---------- 連携の開始・解除 ----------
+
+// 擬似 GA4 プロパティ候補（モック専用。API は OAuth 後に Admin API で実一覧を取得する）
+const consentOpen = ref(false)
+const mockSelectedProp = ref('')
+const MOCK_PROPERTIES = computed(() => [
   { id: `properties/${380000000 + (sid.value.length * 111)}`, name: `${segName.value} - GA4` },
   { id: `properties/${380000000 + (sid.value.length * 222)}`, name: `${segName.value}（サブドメイン） - GA4` },
 ])
 
-function openConsent(): void {
-  selectedProp.value = PROPERTIES.value[0]?.id ?? ''
+/** 連携開始。API モードは Google の同意画面へフルリダイレクト（モーダルは出さない） */
+async function openConsent(): Promise<void> {
+  if (isApi) {
+    const r = await startGaConnect(sid.value) // 成功時はページ遷移するためここへは戻らない
+    if (!r.ok) show(`${r.error?.code}: ${r.error?.message}`, 'crit')
+    return
+  }
+  mockSelectedProp.value = MOCK_PROPERTIES.value[0]?.id ?? ''
   consentOpen.value = true
 }
 
 function approve(): void {
-  const prop = PROPERTIES.value.find(p => p.id === selectedProp.value) ?? PROPERTIES.value[0]
+  const prop = MOCK_PROPERTIES.value.find(p => p.id === mockSelectedProp.value) ?? MOCK_PROPERTIES.value[0]
   if (!prop) return
   const r = connectGa(sid.value, prop.id, prop.name)
   consentOpen.value = false
@@ -53,7 +144,7 @@ async function disconnect(): Promise<void> {
     { confirmLabel: '解除する', danger: true },
   )
   if (!ok) return
-  const r = disconnectGa(sid.value)
+  const r = await disconnectGa(sid.value)
   if (r.ok) show('GA 連携を解除しました', 'warn')
   else show(`${r.error?.code}: ${r.error?.message}`, 'crit')
 }
@@ -61,16 +152,43 @@ async function disconnect(): Promise<void> {
 
 <template>
   <div>
+    <!-- API: 状態取得中は何も出さない（未設定バナーの誤表示防止） -->
+    <div v-if="isApi && !status.loaded" aria-hidden="true" />
+
+    <!-- API: 連携機能が未設定（OAuth クライアント未投入）: 案内のみ -->
+    <div
+      v-else-if="isApi && !status.enabled"
+      class="flex items-center gap-2 rounded-lg border border-line bg-surface-soft px-3 py-1.5 text-xs text-muted"
+    >
+      <Link2Off class="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+      Google Analytics 連携は未設定です（管理者が OAuth クライアントを設定すると利用できます）
+    </div>
+
     <!-- 連携済み: 状態バー -->
     <div
-      v-if="setting?.gaConnected"
+      v-else-if="setting?.gaConnected"
       class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line bg-surface-soft px-3 py-1.5"
     >
       <p class="flex min-w-0 items-center gap-1.5 text-xs text-sub">
         <ChartNoAxesCombined class="h-3.5 w-3.5 shrink-0 text-ok" aria-hidden="true" />
         <span class="truncate">GA 連携済み（{{ setting.gaPropertyName || setting.gaPropertyId }}）</span>
       </p>
-      <button type="button" class="btn btn-ghost btn-sm" @click="disconnect">連携解除</button>
+      <button v-if="!isApi || isAdmin" type="button" class="btn btn-ghost btn-sm" @click="disconnect">連携解除</button>
+    </div>
+
+    <!-- API: トークンあり・プロパティ未選択の中間状態（選択モーダルへ誘導 = リロードで詰まない） -->
+    <div
+      v-else-if="isApi && status.needsProperty"
+      class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-warn/40 bg-warn-soft px-3 py-1.5"
+    >
+      <p class="flex min-w-0 items-center gap-1.5 text-xs text-sub">
+        <ChartNoAxesCombined class="h-3.5 w-3.5 shrink-0 text-warn" aria-hidden="true" />
+        Google アカウントは連携済みです。GA4 プロパティを選択すると分析が始められます
+      </p>
+      <button v-if="isAdmin" type="button" class="btn btn-primary btn-sm" @click="openPropertySelect(sid)">
+        プロパティを選択
+      </button>
+      <span v-else class="text-[11px] text-muted">管理者がプロパティを選択すると利用できます</span>
     </div>
 
     <!-- 未連携: 案内（gate） -->
@@ -83,12 +201,17 @@ async function disconnect(): Promise<void> {
             連携すると、サイトのアクセス指標を取得して AI 分析・記事提案・PDCA が使えます。
           </p>
         </div>
-        <button type="button" class="btn btn-primary btn-lg" @click="openConsent">
-          <ChartNoAxesCombined class="h-4 w-4" aria-hidden="true" /> Google Analytics を連携
-        </button>
-        <p class="text-[10px] text-muted">
-          連携は画面上の同意フローだけで完結します（モック: 実際の Google 認証は行いません）
-        </p>
+        <template v-if="!isApi || isAdmin">
+          <button type="button" class="btn btn-primary btn-lg" @click="openConsent">
+            <ChartNoAxesCombined class="h-4 w-4" aria-hidden="true" /> Google Analytics を連携
+          </button>
+          <p class="text-[10px] text-muted">
+            {{ isApi
+              ? 'Google の同意画面へ移動します（アクセス解析データの表示のみを許可します）'
+              : '連携は画面上の同意フローだけで完結します（モック: 実際の Google 認証は行いません）' }}
+          </p>
+        </template>
+        <p v-else class="text-[11px] text-muted">連携は管理者が「メディア設定」から行います</p>
       </div>
     </UiSectionCard>
 
@@ -100,12 +223,13 @@ async function disconnect(): Promise<void> {
       <p class="flex min-w-0 items-center gap-1.5 text-xs text-muted">
         <Link2Off class="h-3.5 w-3.5 shrink-0" aria-hidden="true" /> GA 未連携
       </p>
-      <button type="button" class="btn btn-primary btn-sm" @click="openConsent">
+      <button v-if="!isApi || isAdmin" type="button" class="btn btn-primary btn-sm" @click="openConsent">
         <ChartNoAxesCombined class="h-3.5 w-3.5" aria-hidden="true" /> GA を連携
       </button>
+      <span v-else class="text-[11px] text-muted">連携は管理者が行います</span>
     </div>
 
-    <!-- 擬似 OAuth 同意 + プロパティ選択 -->
+    <!-- 擬似 OAuth 同意 + プロパティ選択（モック専用。API は Google の実同意画面 + 下の実プロパティ選択） -->
     <UiModal :open="consentOpen" title="Google Analytics へのアクセス許可（モック）" width="460px" @close="consentOpen = false">
       <div class="grid gap-3">
         <p class="text-[13px]">
@@ -122,19 +246,51 @@ async function disconnect(): Promise<void> {
         </ul>
         <UiFormField label="連携する GA4 プロパティ">
           <UiSelect
-            v-model="selectedProp"
-            :options="PROPERTIES.map(p => ({ value: p.id, label: `${p.name}（${p.id}）` }))"
+            v-model="mockSelectedProp"
+            :options="MOCK_PROPERTIES.map(p => ({ value: p.id, label: `${p.name}（${p.id}）` }))"
             aria-label="GA4 プロパティ"
           />
         </UiFormField>
         <p class="text-[11px] text-muted">
           許可すると、選択したプロパティの集計データを分析に使用します。連携はいつでも解除できます。
-          （本実装では Google OAuth 2.0 の同意画面と GA4 プロパティ選択がここに表示されます）
+          （API モードでは Google OAuth 2.0 の実同意画面と GA4 プロパティ選択になります）
         </p>
       </div>
       <template #footer>
         <button type="button" class="btn" @click="consentOpen = false">キャンセル</button>
-        <button type="button" class="btn btn-primary" :disabled="!selectedProp" @click="approve">許可して連携</button>
+        <button type="button" class="btn btn-primary" :disabled="!mockSelectedProp" @click="approve">許可して連携</button>
+      </template>
+    </UiModal>
+
+    <!-- API: GA4 プロパティ選択（Admin API accountSummaries の実一覧） -->
+    <UiModal :open="propertyOpen" title="連携する GA4 プロパティを選択" width="460px" @close="propertyOpen = false">
+      <p v-if="propertyLoading" class="py-6 text-center text-[13px] text-muted" aria-live="polite" aria-busy="true">
+        GA4 プロパティ一覧を取得中…
+      </p>
+      <div v-else class="grid gap-3">
+        <p class="text-[12px] text-sub">
+          連携した Google アカウントで参照できる GA4 プロパティです。このメディアの分析に使うプロパティを選択してください。
+        </p>
+        <UiFormField label="GA4 プロパティ">
+          <UiSelect
+            v-model="selectedProp"
+            :options="propertyList.map(p => ({ value: p.id, label: `${p.name}（${p.account || p.id}）` }))"
+            aria-label="GA4 プロパティ"
+          />
+        </UiFormField>
+        <p v-if="propertyList.length === 0" class="py-2 text-center text-[12px] text-muted">
+          参照できる GA4 プロパティがありません（Google Analytics 側でアクセス権を確認してください）
+        </p>
+      </div>
+      <template #footer>
+        <button type="button" class="btn" @click="propertyOpen = false">あとで選択</button>
+        <button
+          type="button" class="btn btn-primary"
+          :disabled="propertySaving || propertyLoading || !selectedProp"
+          @click="savePropertySelect"
+        >
+          {{ propertySaving ? '保存中…' : 'このプロパティで連携' }}
+        </button>
       </template>
     </UiModal>
   </div>

@@ -2,10 +2,14 @@
  * メディア AI インサイト（生成・保管・読込）。週次インサイト（useWeeklyInsight）と同じ思想:
  * 一度生成したら保管し、再生成されるまで保存済みを表示する（導出キャッシュ = 再生成で上書き）。
  *
- * - scope='media': GA メトリクス → サイト構成・記事インサイト + 次アクション（heuristicMediaInsight）
- * - scope='integrated': 業務 × メディア → 相関・PDCA + アクション（heuristicIntegratedInsight）
- * - モックは決定的ヒューリスティックのみ（llm=false）。本実装は Vertex AI → 失敗時ヒューリスティック（原則4）
- * - セグメント × scope で 1 レコード（upsert）。再生成で上書きし、進捗・記録は持たない（原則2 に抵触しない導出系）
+ * デュアルモード:
+ * - モック: mediaInsights コレクション + 決定的ヒューリスティックのみ（llm=false）
+ * - API: SoT はサーバー（media_insights。GET/POST /v1/media/insights）。生成は Vertex AI →
+ *   失敗時サーバー側で同一ヒューリスティックへフォールバック（原則4。llm フラグで区別）。
+ *   scope='media' はサーバーが GA からメトリクスを組み立てる。scope='integrated' は
+ *   売上明細（salesRecords）が未移行のモック側 SoT のため、クライアントが統合メトリクスを
+ *   組み立てて渡す（useMediaAnalytics の SoT 宣言参照）
+ * - セグメント × scope で 1 レコード（upsert）。進捗・記録は持たない（原則2 に抵触しない導出系）
  */
 import {
   heuristicMediaInsight, type MediaInsight, type MediaInsightRecord,
@@ -32,12 +36,37 @@ export interface IntegratedInsightView {
   periodKey: string
 }
 
+// ---------- API モードのキャッシュ（`${segmentId}:${scope}` → 保管済み or null） ----------
+
+interface ApiInsightRow {
+  id: string
+  periodKey: string
+  metrics: unknown
+  insight: unknown
+  llm: boolean
+  generatedAt: string
+  generatedByName: string | null
+}
+
+const apiInsights = ref<Record<string, ApiInsightRow | null>>({})
+
+function loadApiInsight(segmentId: string, scope: 'media' | 'integrated', force = false): Promise<void> {
+  if (!segmentId) return Promise.resolve()
+  return apiLoadOnce(`media:insight:${segmentId}:${scope}`, async () => {
+    const row = await apiFetch<ApiInsightRow | null>('/v1/media/insights', { query: { segmentId, scope } })
+    apiInsights.value = { ...apiInsights.value, [`${segmentId}:${scope}`]: row }
+  }, force)
+}
+
+onApiReset(() => { apiInsights.value = {} })
+
 export function useMediaInsight() {
   const { tbl, commit, nextId } = useMockDb()
   const records = tbl('mediaInsights')
   const { currentUser } = useCurrentUser()
   const analytics = useMediaAnalytics()
   const membersTbl = tbl('members')
+  const isApi = useApiMode()
 
   function nameOf(id: string): string | null {
     return (membersTbl.value as { id: string; name: string }[]).find(m => m.id === id)?.name ?? null
@@ -47,8 +76,23 @@ export function useMediaInsight() {
     return (records.value as MediaInsightRecord[]).find(r => r.segmentId === segmentId && r.scope === scope)
   }
 
+  /** 保管レコードの参照（モック専用。記事生成のヒント抽出は API モードではサーバーが担う） */
   function getById(id: string): MediaInsightRecord | null {
     return (records.value as MediaInsightRecord[]).find(r => r.id === id) ?? null
+  }
+
+  /**
+   * 保管済みメディアインサイトの id + 本文（記事生成の「分析からお題を提案」用。両モード同期参照）。
+   * API モードは遅延ロードキャッシュから返す（未ロード時は null → 到着後にリアクティブ反映）
+   */
+  function storedMedia(segmentId: string): { id: string; insight: MediaInsight } | null {
+    if (isApi) {
+      void loadApiInsight(segmentId, 'media')
+      const row = apiInsights.value[`${segmentId}:media`]
+      return row ? { id: row.id, insight: row.insight as MediaInsight } : null
+    }
+    const rec = findRecord(segmentId, 'media')
+    return rec ? { id: rec.id, insight: rec.insight as MediaInsight } : null
   }
 
   function upsert(segmentId: string, scope: 'media' | 'integrated', periodKey: string, metrics: unknown, insight: unknown): MediaInsightRecord {
@@ -68,9 +112,25 @@ export function useMediaInsight() {
     return rec
   }
 
+  function apiViewOf<T>(row: ApiInsightRow | null): T | null {
+    if (!row) return null
+    return {
+      metrics: row.metrics,
+      insight: row.insight,
+      llm: row.llm,
+      generatedAt: row.generatedAt,
+      generatedByName: row.generatedByName,
+      periodKey: row.periodKey,
+    } as T
+  }
+
   // ---------- メディア単体 ----------
 
-  function loadMedia(segmentId: string): MediaInsightView | null {
+  async function loadMedia(segmentId: string): Promise<MediaInsightView | null> {
+    if (isApi) {
+      await loadApiInsight(segmentId, 'media')
+      return apiViewOf<MediaInsightView>(apiInsights.value[`${segmentId}:media`] ?? null)
+    }
     const rec = findRecord(segmentId, 'media')
     if (!rec) return null
     return {
@@ -80,17 +140,30 @@ export function useMediaInsight() {
     }
   }
 
-  function generateMedia(segmentId: string): MediaInsightView {
+  async function generateMedia(segmentId: string): Promise<MediaInsightView | null> {
+    if (isApi) {
+      // サーバーが GA からメトリクスを組み立て、LLM → ヒューリスティックで洞察を生成・保管する
+      const row = await apiFetch<ApiInsightRow>('/v1/media/insights/generate', {
+        method: 'POST', body: { segmentId, scope: 'media' },
+      })
+      apiInsights.value = { ...apiInsights.value, [`${segmentId}:media`]: row }
+      return apiViewOf<MediaInsightView>(row)
+    }
     const metrics = analytics.metricsFor(segmentId, 28)
+    if (!metrics) return null
     const insight = heuristicMediaInsight(metrics)
     const periodKey = `${metrics.periodFrom}_${metrics.periodTo}`
     upsert(segmentId, 'media', periodKey, metrics, insight)
-    return loadMedia(segmentId)!
+    return loadMedia(segmentId)
   }
 
   // ---------- 業務 × メディア（統合 PDCA） ----------
 
-  function loadIntegrated(segmentId: string): IntegratedInsightView | null {
+  async function loadIntegrated(segmentId: string): Promise<IntegratedInsightView | null> {
+    if (isApi) {
+      await loadApiInsight(segmentId, 'integrated')
+      return apiViewOf<IntegratedInsightView>(apiInsights.value[`${segmentId}:integrated`] ?? null)
+    }
     const rec = findRecord(segmentId, 'integrated')
     if (!rec) return null
     return {
@@ -100,12 +173,23 @@ export function useMediaInsight() {
     }
   }
 
-  function generateIntegrated(segmentId: string): IntegratedInsightView {
+  async function generateIntegrated(segmentId: string): Promise<IntegratedInsightView | null> {
+    if (isApi) {
+      // 統合メトリクスはクライアント合成（メディア月次 = GA 実データ / 売上月次 = 未移行のモック側集計）。
+      // 生成前に GA 月次を await でそろえる（ロード中の 0 埋めで洞察を作らない）
+      await analytics.ensureIntegratedLoaded(segmentId, 6)
+      const metrics = analytics.integratedMetricsFor(segmentId, 6)
+      const row = await apiFetch<ApiInsightRow>('/v1/media/insights/generate', {
+        method: 'POST', body: { segmentId, scope: 'integrated', metrics },
+      })
+      apiInsights.value = { ...apiInsights.value, [`${segmentId}:integrated`]: row }
+      return apiViewOf<IntegratedInsightView>(row)
+    }
     const metrics = analytics.integratedMetricsFor(segmentId, 6)
     const insight = heuristicIntegratedInsight(metrics)
     upsert(segmentId, 'integrated', metrics.periodMonth, metrics, insight)
-    return loadIntegrated(segmentId)!
+    return loadIntegrated(segmentId)
   }
 
-  return { loadMedia, generateMedia, loadIntegrated, generateIntegrated, getById }
+  return { loadMedia, generateMedia, loadIntegrated, generateIntegrated, getById, storedMedia }
 }

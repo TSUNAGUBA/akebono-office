@@ -8,8 +8,10 @@
  * 一度生成したら保管し、再生成されるまで保存済みを表示する（導出キャッシュ = 再生成で上書き）。
  *
  * - 集計（SegmentSummary/CompanySummary）は shared/domain/portfolio-insight が SoT・決定的
- * - 集計の材料は既存の useMediaAnalytics.integratedMetricsFor（業務 × メディアの月次統合）を再利用する（原則3）
- * - モックは決定的ヒューリスティックのみ（llm=false）。本実装は Vertex AI → 失敗時ヒューリスティック（原則4）
+ * - 集計の材料は既存の useMediaAnalytics.integratedMetricsFor（業務 × メディアの月次統合）を再利用する（原則3）。
+ *   API モードではメディア月次に GA 実データ（/v1/media/monthly）が入る（generate* は await でロードをそろえる）
+ * - 洞察は決定的ヒューリスティックのみ（llm=false）。保管先 dashboardInsights は未移行のモックコレクション
+ *   （売上明細 salesRecords と同じくモック側 SoT。API 移行時に media_insights と同型のテーブルへ引き上げる）
  */
 import type { BusinessSegment } from '~/types/akebono'
 import { INDUSTRY_TYPE_LABELS } from '~/utils/akebono'
@@ -46,7 +48,7 @@ export function useDashboardInsight() {
   const { currentUser } = useCurrentUser()
   const { activeSegments, segmentById } = useCurrentSegment()
   const { settingFor } = useMediaSettings()
-  const { integratedMetricsFor, articleInputsFor } = useMediaAnalytics()
+  const { integratedMetricsFor, articleInputsFor, ensureIntegratedLoaded } = useMediaAnalytics()
   const { isEnabled } = useAppSettings()
   const membersTbl = tbl('members')
 
@@ -172,7 +174,9 @@ export function useDashboardInsight() {
     }
   }
 
-  function generateSegment(segmentId: string): SegmentDashboardView {
+  async function generateSegment(segmentId: string): Promise<SegmentDashboardView> {
+    // API モードは GA 月次（メディア軸）を await でそろえてから集計する（ロード中の 0 で洞察を作らない）
+    await ensureIntegratedLoaded(segmentId, MONTHS)
     const metrics = buildSegmentSummary(segmentId)
     const insight = heuristicSegmentInsight(metrics)
     upsert('segment', segmentId, metrics.periodMonth, metrics, insight)
@@ -191,7 +195,9 @@ export function useDashboardInsight() {
     }
   }
 
-  function generateCompany(): CompanyDashboardView {
+  async function generateCompany(): Promise<CompanyDashboardView> {
+    // API モードは全業態の GA 月次を await でそろえてから集計する
+    await Promise.all((activeSegments.value as BusinessSegment[]).map(s => ensureIntegratedLoaded(s.id, MONTHS)))
     const metrics = buildCompanySummary()
     const insight = heuristicCompanyInsight(metrics)
     upsert('company', null, metrics.periodMonth, metrics, insight)

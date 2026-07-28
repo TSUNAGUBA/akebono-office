@@ -1,10 +1,12 @@
 /**
- * メディア分析ドメイン型（永続化 = モックコレクション / 本実装 = DB テーブル）。
+ * メディア分析ドメイン型（モックモード = モックコレクション / API モード = DB テーブル 0030_media）。
  * Akebono 業務の「事業セグメント（業態）」と 1:1 で対になる（segmentId 参照）。
  *
  * - 集計・洞察・記事生成の純ロジックは shared/domain/media-*（フロント/API 共有）が SoT
  * - 本ファイルは「保存されるエンティティ」の形（設定・記事インベントリ・生成物・依頼）を定義する
  * - GA 連携・AI 分析設定は各セグメントの設定画面（/media/settings）で画面操作のみで完結する
+ * - API モードの SoT: GA 接続状態 = media_ga_tokens（/v1/media/status）・AI 分析設定 = media_settings・
+ *   記事インベントリ = media_articles・生成物/依頼 = media_generated_articles / media_article_briefs
  */
 import type {
   ArticlePurpose, ArticleQuality, ArticleTone, GeneratedArticleDraft,
@@ -17,8 +19,10 @@ export const MEDIA_GOALS: MediaGoal[] = ['awareness', 'leadgen', 'nurturing', 'c
 
 /**
  * セグメント（業態）ごとのメディア設定（設定系・1 セグメント 1 レコード = upsert）。
- * GA 連携（擬似 OAuth の接続状態 = アプリ側が SoT）と AI 分析設定を保持する。
- * すべて任意既定を持ち、未設定でも安全に動く（原則7）。
+ * GA 連携の接続状態と AI 分析設定を保持する。すべて任意既定を持ち、未設定でも安全に動く（原則7）。
+ * モックモードは擬似 OAuth（このレコードが接続状態の SoT）。
+ * API モードは Google OAuth 2.0（analytics.readonly）で、接続状態の SoT はサーバー
+ * （media_ga_tokens → /v1/media/status）。useMediaSettings が両者を同一形へ合成する。
  */
 export interface MediaSetting {
   id: string
@@ -26,7 +30,7 @@ export interface MediaSetting {
   segmentId: string
   siteName: string
   siteUrl: string
-  // ---- Google Analytics 連携（擬似 OAuth。接続状態の SoT はアプリ側） ----
+  // ---- Google Analytics 連携（モック = このレコードが SoT / API = サーバーの status を反映） ----
   gaConnected: boolean
   /** GA4 プロパティ ID（例: properties/123456789） */
   gaPropertyId: string | null
@@ -94,4 +98,6 @@ export interface GeneratedArticle extends GeneratedArticleDraft {
   adoptedArticleId: string | null
   /** 論理削除（取消）。復元可能 */
   active: boolean
+  /** Vertex AI 生成か（API モードのみ。モック・フォールバックは false/未設定 = 決定的生成） */
+  llm?: boolean
 }

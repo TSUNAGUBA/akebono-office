@@ -8,7 +8,7 @@ import type { MenuCard } from '~/types/ui'
 
 const { effectiveSegmentId, currentSegment, activeSegments, switchSegment } = useCurrentSegment()
 const { settingFor } = useMediaSettings()
-const { metricsFor } = useMediaAnalytics()
+const { metricsFor, metricsReady } = useMediaAnalytics()
 const { isAdmin } = useCurrentUser()
 const router = useRouter()
 
@@ -67,6 +67,15 @@ const overview = computed(() => activeSegments.value.map((s) => {
         </p>
       </template>
 
+      <!-- API: GA 集計のロード中 / 取得失敗（詳細と再試行は分析ページが担う） -->
+      <template v-else-if="!metrics">
+        <p class="py-6 text-center text-[12px] text-muted" aria-live="polite" :aria-busy="!metricsReady(effectiveSegmentId, 28)">
+          {{ metricsReady(effectiveSegmentId, 28)
+            ? 'アクセス指標を取得できませんでした（メディア分析ページで再試行できます）'
+            : 'アクセス指標を取得中…' }}
+        </p>
+      </template>
+
       <!-- 連携済み: サマリー KPI -->
       <template v-else-if="metrics">
         <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -106,7 +115,8 @@ const overview = computed(() => activeSegments.value.map((s) => {
             </div>
             <UiStatusBadge :label="o.connected ? 'GA 連携済み' : '未連携'" :tone="o.connected ? 'ok' : 'neutral'" dot />
             <span v-if="o.connected" class="num text-[12px] text-sub">
-              セッション {{ fmtInt(o.sessions ?? 0) }} / CV {{ fmtInt(o.conversions ?? 0) }}
+              <!-- API モードのロード中（null）は 0 と区別して — 表示 -->
+              セッション {{ o.sessions === null ? '—' : fmtInt(o.sessions) }} / CV {{ o.conversions === null ? '—' : fmtInt(o.conversions) }}
             </span>
             <button type="button" class="link text-[11px]" @click="goToSegment(o.id, o.connected)">
               {{ o.connected ? '分析を見る' : '連携する' }}

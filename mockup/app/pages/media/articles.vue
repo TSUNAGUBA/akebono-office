@@ -3,6 +3,8 @@
  * AI 記事生成スタジオ（F-40-3）。目的・記事の質・雰囲気を指定して記事を生成する。
  * 過去の分析結果（保管済みメディアインサイト）からお題を提案し、成果に近いテーマの記事も作れる。
  * 生成物はプレビューでき、サイトのコンテンツ資産へ「採用」して分析対象に加えられる。
+ * 生成: モック = 決定的テンプレート合成 / API = Vertex AI → 失敗時は同じ決定的合成へサーバー側フォールバック
+ * （llm フラグで「Vertex AI / 自動生成」を表示 = 週次インサイトと同じ流儀）。
  * 取消可能性（原則9.5）: 生成記事は取消（論理削除）・復元でき、採用も取り消せる。
  */
 import { Lightbulb, PenLine, RotateCcw, Sparkles } from 'lucide-vue-next'
@@ -71,11 +73,12 @@ function applySuggestion(): void {
   show('過去の分析からお題を反映しました（生成すると分析の示唆を踏まえた記事になります）', 'ok')
 }
 
-function doGenerate(): void {
+async function doGenerate(): Promise<void> {
   if (generating.value) return
   generating.value = true
   try {
-    const res = articles.generate(effectiveSegmentId.value, {
+    // API モードは Vertex AI 生成（失敗時はサーバー側で決定的生成へフォールバック）
+    const res = await articles.generate(effectiveSegmentId.value, {
       topic: form.value.topic, keyword: form.value.keyword,
       purpose: form.value.purpose, quality: form.value.quality, tone: form.value.tone,
       audience: form.value.audience, fromInsightId: form.value.fromInsightId,
@@ -86,17 +89,20 @@ function doGenerate(): void {
   } finally { generating.value = false }
 }
 
-function doAdopt(id: string): void {
-  const res = articles.adopt(id, adoptSection.value)
+async function doAdopt(id: string): Promise<void> {
+  const res = await articles.adopt(id, adoptSection.value)
   if (!res.ok) { show(`${res.error?.code}: ${res.error?.message}`, 'warn'); return }
-  show(`「${adoptSection.value}」に採用しました（分析の対象に加わります）`, 'ok')
+  // 二重採用の no-op 等の警告は握りつぶさず通知する（原則4 の「報告」）
+  if (res.warning) show(res.warning, 'warn')
+  else show(`「${adoptSection.value}」に採用しました（分析の対象に加わります）`, 'ok')
   syncPreview(id)
 }
 
 async function doDiscard(id: string): Promise<void> {
   const ok = await confirm.ask('生成記事の取消', 'この生成記事を取り消します（後で復元できます）。', { confirmLabel: '取り消す' })
   if (!ok) return
-  articles.remove(id)
+  const res = await articles.remove(id)
+  if (!res.ok) { show(`${res.error?.code}: ${res.error?.message}`, 'warn'); return }
   if (preview.value?.id === id) preview.value = null
   show('生成記事を取り消しました（復元できます）', 'warn')
 }
@@ -108,14 +114,15 @@ function syncPreview(id: string): void {
   }
 }
 
-function doRestore(id: string): void {
-  articles.restore(id)
+async function doRestore(id: string): Promise<void> {
+  const res = await articles.restore(id)
+  if (!res.ok) { show(`${res.error?.code}: ${res.error?.message}`, 'warn'); return }
   syncPreview(id)
   show('生成記事を復元しました', 'ok')
 }
 
-function doUnadopt(id: string): void {
-  const res = articles.unadopt(id)
+async function doUnadopt(id: string): Promise<void> {
+  const res = await articles.unadopt(id)
   if (!res.ok) { show(`${res.error?.code}: ${res.error?.message}`, 'warn'); return }
   syncPreview(id)
   show('採用を取り消しました', 'warn')
@@ -187,7 +194,7 @@ function scoreTone(score: number): 'ok' | 'info' | 'warn' {
       </UiSectionCard>
 
       <!-- プレビュー -->
-      <UiSectionCard v-if="preview" title="生成プレビュー" :description="`${articlePurposeLabel(preview.purpose)}・${articleQualityLabel(preview.quality)}・${articleToneLabel(preview.tone)}`">
+      <UiSectionCard v-if="preview" title="生成プレビュー" :description="`${articlePurposeLabel(preview.purpose)}・${articleQualityLabel(preview.quality)}・${articleToneLabel(preview.tone)}・${preview.llm ? 'Vertex AI' : '自動生成'}`">
         <template #actions>
           <UiStatusBadge :label="`品質スコア ${preview.qualityScore}`" :tone="scoreTone(preview.qualityScore)" />
         </template>

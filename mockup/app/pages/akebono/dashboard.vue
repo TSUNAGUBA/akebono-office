@@ -53,11 +53,12 @@ function reload(): void {
 }
 watch(effectiveSegmentId, reload, { immediate: true })
 
-function regenerate(): void {
+async function regenerate(): Promise<void> {
   if (generating.value) return
   generating.value = true
   try {
-    view.value = generateSegment(effectiveSegmentId.value)
+    // API モードは GA 月次のロードを await でそろえてから集計・保管する
+    view.value = await generateSegment(effectiveSegmentId.value)
     show('AI レポート・インサイトを生成し、保存しました', 'ok')
   } finally { generating.value = false }
 }
