@@ -15,6 +15,7 @@ import type {
 } from '~/types/domain'
 import type { WeeklyInsightRecord } from '../../../../shared/domain/weekly-insight'
 import type { MediaInsightRecord } from '../../../../shared/domain/media-insight'
+import type { DashboardInsightRecord } from '../../../../shared/domain/portfolio-insight'
 import type {
   AkebonoAppConfig, BusinessSegment, ConsignmentTerm, ImportMapping, ImportRun, ImportSource,
   InboundPlan, InboundResult, InventoryTransaction, Invoice, ItemSetting, OutboundPlan,
@@ -135,6 +136,11 @@ export interface MockDbShape {
   mediaInsights: MediaInsightRecord[]
   articleBriefs: ArticleBrief[]
   generatedArticles: GeneratedArticle[]
+  /**
+   * ダッシュボード AI インサイトの保管（scope='segment'/'company'。導出キャッシュ = 再生成で上書き）。
+   * セグメント別/会社全体の「サマリー + AI レポート + AI インサイト」を保持する（F-41）。
+   */
+  dashboardInsights: DashboardInsightRecord[]
 }
 
 export function buildSeed(): MockDbShape {
@@ -255,5 +261,6 @@ export function buildSeed(): MockDbShape {
     mediaInsights: media.seedMediaInsights, // 生成時に保管（シードなし）
     articleBriefs: media.seedArticleBriefs,
     generatedArticles: media.seedGeneratedArticles,
+    dashboardInsights: [], // ダッシュボードインサイトは生成時に保管（シードなし = 「生成」ボタンから作る）
   }
 }

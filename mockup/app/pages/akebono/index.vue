@@ -6,7 +6,7 @@
  * 管理者はアプリの使用/不使用・業種プリセット適用を「業態ごと」に設定でき、
  * 業態アプリ設定/共通マスタ/取込/項目カスタマイズへの導線を持つ。要望ボックス（F-03-2）は残置。
  */
-import { CircleCheck, CircleDashed, Layers, Send, Sparkles, Sunrise } from 'lucide-vue-next'
+import { Building2, ChevronRight, CircleCheck, CircleDashed, Layers, LayoutDashboard, Send, Sparkles, Sunrise } from 'lucide-vue-next'
 import { fmtDateTime } from '~/utils/format'
 import { INDUSTRY_TYPE_LABELS } from '~/utils/akebono'
 import type { MenuCard } from '~/types/ui'
@@ -14,6 +14,8 @@ import type { MenuCard } from '~/types/ui'
 const apps = useAkebonoApps()
 const { activeSegments, currentSegment, currentIndustryLabel, effectiveSegmentId, switchSegment } = useCurrentSegment()
 const { isAdmin } = useCurrentUser()
+const { can } = usePermissions()
+const canSales = computed(() => can('sales'))
 const { tbl } = useMockDb()
 const { show } = useToast()
 const confirm = useConfirm()
@@ -118,6 +120,30 @@ async function submitWish(): Promise<void> {
     </div>
 
     <div class="grid gap-4">
+      <!-- ダッシュボード導線（サマリー・AI レポート・AI インサイト。業態別 + 会社全体） -->
+      <div v-if="currentSegment" class="grid gap-2 sm:grid-cols-2">
+        <NuxtLink to="/akebono/dashboard" class="card group flex items-center gap-3 p-3 transition-colors hover:border-brand">
+          <span class="grid h-10 w-10 shrink-0 place-items-center rounded-[10px] bg-brand-soft text-brand">
+            <LayoutDashboard class="h-5 w-5" aria-hidden="true" />
+          </span>
+          <span class="min-w-0 flex-1">
+            <span class="block text-[13px] font-bold">この業態のダッシュボード</span>
+            <span class="block text-[11px] text-muted">{{ currentSegment.name }} のサマリー・AI レポート・AI インサイト</span>
+          </span>
+          <ChevronRight class="h-4 w-4 shrink-0 text-muted transition-colors group-hover:text-brand" aria-hidden="true" />
+        </NuxtLink>
+        <NuxtLink v-if="canSales" to="/akebono/company" class="card group flex items-center gap-3 p-3 transition-colors hover:border-brand">
+          <span class="grid h-10 w-10 shrink-0 place-items-center rounded-[10px] bg-brand-soft text-brand">
+            <Building2 class="h-5 w-5" aria-hidden="true" />
+          </span>
+          <span class="min-w-0 flex-1">
+            <span class="block text-[13px] font-bold">会社全体ダッシュボード</span>
+            <span class="block text-[11px] text-muted">セグメントを超えた全社サマリー・AI レポート・AI インサイト</span>
+          </span>
+          <ChevronRight class="h-4 w-4 shrink-0 text-muted transition-colors group-hover:text-brand" aria-hidden="true" />
+        </NuxtLink>
+      </div>
+
       <!-- アプリランチャー -->
       <UiCardMenu v-if="appCards.length > 0" :items="appCards" />
       <UiEmptyState v-else icon="PackageOpen" title="この業態で使用中のアプリがありません" :hint="isAdmin ? '「アプリ・業態の設定」から使用するアプリを有効化してください' : '管理者が「アプリ・業態の設定」から使用するアプリを有効化してください'" />

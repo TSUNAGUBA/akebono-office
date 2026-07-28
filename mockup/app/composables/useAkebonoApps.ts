@@ -22,6 +22,8 @@ export interface AkebonoAppDef {
   description: string
   icon: string
   to: string
+  /** 機能トグル（useAppSettings）のキー。無効化されているとカタログから除外する */
+  featureKey?: string
 }
 
 /** アプリカタログ（F-20-2。静的 SoT） */
@@ -35,6 +37,8 @@ export const AKEBONO_APP_CATALOG: AkebonoAppDef[] = [
   { key: 'inventory', title: '在庫管理', description: '在庫台帳から残高導出・調整・移動・棚卸', icon: 'Boxes', to: '/akebono/inventory' },
   { key: 'sales', title: '売上管理', description: '売上明細・セグメント別サマリ・委託売上の取込', icon: 'TrendingUp', to: '/akebono/sales' },
   { key: 'billing', title: '請求管理', description: '請求締め・発行・入金消込・委託精算（店舗マージン請求/作家支払）', icon: 'ReceiptText', to: '/akebono/billing' },
+  // メディア分析は各業態と 1:1 で対になる業務アプリ（2026-07-28。従来のトップ独立メニューから配下アプリへ移設）
+  { key: 'media', title: 'メディア分析', description: 'GA × AI でサイト・記事のインサイトと次アクション、業務との PDCA、AI 記事生成', icon: 'LineChart', to: '/media', featureKey: 'media' },
 ]
 
 /** 常時有効の管理者機能（プリセット対象外。§3.3 の注記。ハブ下部に表示） */
@@ -50,7 +54,16 @@ export function useAkebonoApps() {
   const { tbl, commit } = useMockDb()
   const configs = tbl('akebonoAppConfigs')
   const { activeSegments, effectiveSegmentId } = useCurrentSegment()
+  const { isEnabled } = useAppSettings()
   const toast = useToast()
+
+  /** 機能トグルで利用可能なアプリか（featureKey 未設定は常に利用可） */
+  function isFeatureAvailable(app: AkebonoAppDef): boolean {
+    return !app.featureKey || isEnabled(app.featureKey)
+  }
+
+  /** 機能トグルで利用可能なアプリのみのカタログ（設定 UI・プリセット差分で使う） */
+  const availableCatalog = computed(() => AKEBONO_APP_CATALOG.filter(isFeatureAvailable))
 
   /** 対象業態を解決する（未指定 = 現在の業態） */
   function resolveSegmentId(segmentId?: string): string {
@@ -93,10 +106,10 @@ export function useAkebonoApps() {
     return configOf(resolveSegmentId(segmentId), app.key)?.labelOverride || app.title
   }
 
-  /** 指定業態で使用中のアプリのカード */
+  /** 指定業態で使用中のアプリのカード（機能トグルで無効なアプリは除外） */
   function enabledAppsOf(segmentId?: string): AkebonoAppDef[] {
     const sid = resolveSegmentId(segmentId)
-    return AKEBONO_APP_CATALOG.filter(a => isAppEnabled(a.key, sid))
+    return AKEBONO_APP_CATALOG.filter(a => isFeatureAvailable(a) && isAppEnabled(a.key, sid))
   }
 
   /** 現在業態で使用中のアプリのカード（ハブ・ダッシュボードで表示） */
@@ -175,7 +188,7 @@ export function useAkebonoApps() {
   function presetDiffOf(segmentId?: string) {
     const sid = resolveSegmentId(segmentId)
     const target = new Set(presetAppsOf(sid))
-    return AKEBONO_APP_CATALOG.map(app => ({
+    return availableCatalog.value.map(app => ({
       app,
       inPreset: target.has(app.key),
       enabled: isAppEnabled(app.key, sid),

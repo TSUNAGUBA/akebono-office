@@ -245,20 +245,20 @@ export function nextCode(existing: string[], prefix: string): string {
 
 // ---------- 業種プリセット（§3.3） ----------
 
-/** アプリキー */
+/** アプリキー（media = メディア分析。各業態と 1:1 で対になるため全業種の既定 ON。2026-07-28） */
 export const AKEBONO_APP_KEYS = [
   'products', 'production', 'purchase-orders', 'purchases',
-  'inbounds', 'outbounds', 'inventory', 'sales', 'billing',
+  'inbounds', 'outbounds', 'inventory', 'sales', 'billing', 'media',
 ] as const
 export type AkebonoAppKey = (typeof AKEBONO_APP_KEYS)[number]
 
-/** 業種プリセット（●=既定 ON）。§3.3 の表を機械化 */
+/** 業種プリセット（●=既定 ON）。§3.3 の表を機械化。media は全業種で既定 ON（1:1 ペアリング） */
 export const INDUSTRY_PRESET: Record<IndustryType, AkebonoAppKey[]> = {
-  retail: ['products', 'purchase-orders', 'purchases', 'inventory', 'sales', 'billing'],
-  maker: ['products', 'production', 'purchase-orders', 'purchases', 'inventory', 'sales', 'billing'],
-  logistics: ['products', 'inbounds', 'outbounds', 'inventory', 'sales', 'billing'],
-  it_service: ['products', 'production', 'purchase-orders', 'purchases', 'sales', 'billing'],
-  other: ['products', 'sales', 'billing'],
+  retail: ['products', 'purchase-orders', 'purchases', 'inventory', 'sales', 'billing', 'media'],
+  maker: ['products', 'production', 'purchase-orders', 'purchases', 'inventory', 'sales', 'billing', 'media'],
+  logistics: ['products', 'inbounds', 'outbounds', 'inventory', 'sales', 'billing', 'media'],
+  it_service: ['products', 'production', 'purchase-orders', 'purchases', 'sales', 'billing', 'media'],
+  other: ['products', 'sales', 'billing', 'media'],
 }
 
 /** 複数セグメントの業種タイプから使用アプリ既定（和集合） */
