@@ -9,7 +9,7 @@ import { buildSeed, type MockDbShape } from '~/data/seed'
 
 const STORAGE_KEY = 'ako.mockdb.v1'
 /** シード世代。シード構造を変えたらインクリメントすると保存済みデータを破棄して再生成する */
-const SEED_VERSION = 8 // v8: Akebonoメニュー（業務アプリ群）コレクション追加（商品〜請求・委託精算。2026-07-20）
+const SEED_VERSION = 9 // v9: Akebonoアプリ設定を業態ごとに保持（AkebonoAppConfig に segmentId。マルチ業態対応。2026-07-28）
 
 interface PersistedDb {
   version: number
@@ -53,13 +53,16 @@ function load(): MockDbShape {
 export function useMockDb() {
   const db = useState<MockDbShape>('ako-db', () => load())
 
-  function persist(): void {
-    if (!import.meta.client) return
+  /** 永続化する。成功なら true、容量超過等で失敗したら false（呼び出し側が必要に応じて警告できる） */
+  function persist(): boolean {
+    if (!import.meta.client) return true
     try {
       const payload: PersistedDb = { version: SEED_VERSION, seededOn: loadedSeededOn || todayKey(), data: db.value }
       localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
+      return true
     } catch {
-      // 容量超過等は無視（モックのため非致命）
+      // 容量超過等は非致命（モック）。ただし false を返し、呼び出し側で誤った成功表示を避けられるようにする
+      return false
     }
   }
 
@@ -79,9 +82,9 @@ export function useMockDb() {
     }) as Ref<MockDbShape[K]>
   }
 
-  /** 変更を永続化する（書込系操作の最後に必ず呼ぶ） */
-  function commit(): void {
-    persist()
+  /** 変更を永続化する（書込系操作の最後に必ず呼ぶ）。成功可否を返す */
+  function commit(): boolean {
+    return persist()
   }
 
   /** prefix-#### 形式の次 ID を採番する */

@@ -35,8 +35,8 @@ export function usePurchases() {
     const id = nextId('purchaseRecords', 'pur')
     // 明細行 id はヘッダ id + index で全域一意（別 prefix の nextId は衝突するため使わない）
     const recLines = lines.map((l, idx) => ({ id: `${id}-${idx}`, skuId: l.skuId, qty: l.qty, costPrice: l.costPrice }))
-    // 入荷管理 OFF のとき仕入計上と同時に在庫へ入庫（purchase_in）。訂正時の戻しのため warehouseId を保持
-    const postedWarehouseId = !apps.isAppEnabled('inbounds') && input.warehouseId ? input.warehouseId : null
+    // 入荷管理 OFF（当該業態で）のとき仕入計上と同時に在庫へ入庫（purchase_in）。訂正時の戻しのため warehouseId を保持
+    const postedWarehouseId = !apps.isAppEnabled('inbounds', input.segmentId) && input.warehouseId ? input.warehouseId : null
     const created: PurchaseRecord = {
       id, code: nextCode(records.value.map(r => r.code), 'PUR'),
       companyId: input.companyId, segmentId: input.segmentId, purchaseDate: input.purchaseDate,

@@ -259,7 +259,10 @@ function submitResult(): void {
               :key="l.id"
               class="grid grid-cols-[1fr_60px_60px_60px] items-center gap-2 border-b border-line pb-1.5 text-[13px] last:border-0"
             >
-              <span>{{ l.label }}</span>
+              <span class="flex min-w-0 items-center gap-2">
+                <AkebonoProductThumb :sku-id="l.skuId" :size="20" />
+                <span class="truncate">{{ l.label }}</span>
+              </span>
               <span class="num text-right tabular-nums">{{ fmtInt(l.planned) }}</span>
               <span class="num text-right tabular-nums">{{ fmtInt(l.received) }}</span>
               <span class="num text-right tabular-nums" :class="l.remaining > 0 ? 'text-warn font-semibold' : 'text-muted'">{{ fmtInt(l.remaining) }}</span>
@@ -338,7 +341,10 @@ function submitResult(): void {
           :key="l.planLineId"
           class="grid grid-cols-[1fr_100px] items-center gap-2"
         >
-          <span class="text-[13px]">{{ l.label }}</span>
+          <span class="flex min-w-0 items-center gap-2 text-[13px]">
+            <AkebonoProductThumb :sku-id="l.skuId" :size="20" />
+            <span class="truncate">{{ l.label }}</span>
+          </span>
           <input
             v-model.number="l.qty"
             type="number" min="0" step="1" class="input text-right"

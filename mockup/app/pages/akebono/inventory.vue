@@ -78,6 +78,7 @@ const browseRows = computed(() => {
       if (qty === 0 && delta === 0) continue
       rows.push({
         id: `${sku.id}::${wh.id}`,
+        skuId: sku.id,
         skuLabel: label,
         warehouseName: masters.warehouseName(wh.id),
         qty,
@@ -196,6 +197,7 @@ const ledgerRows = computed(() =>
     warehouseId: ledgerWh.value || undefined,
   }).map(t => ({
     id: t.id,
+    skuId: t.skuId,
     occurredAt: fmtDateTime(t.occurredAt),
     skuLabel: skuLabelOf(t.skuId),
     warehouseName: masters.warehouseName(t.warehouseId),
@@ -316,6 +318,12 @@ async function submitStocktake(): Promise<void> {
           :rows="browseRows"
           empty-title="在庫のある SKU × 倉庫がありません"
         >
+          <template #cell-skuLabel="{ row }">
+            <div class="flex items-center gap-2">
+              <AkebonoProductThumb :sku-id="String(row.skuId)" :size="24" />
+              <span>{{ row.skuLabel }}</span>
+            </div>
+          </template>
           <template #cell-qty="{ row }">
             <span class="num tabular-nums font-medium">{{ fmtInt(Number(row.qty)) }}</span>
           </template>
@@ -347,6 +355,12 @@ async function submitStocktake(): Promise<void> {
           :rows="ledgerRows"
           empty-title="該当する受払明細がありません"
         >
+          <template #cell-skuLabel="{ row }">
+            <div class="flex items-center gap-2">
+              <AkebonoProductThumb :sku-id="String(row.skuId)" :size="24" />
+              <span>{{ row.skuLabel }}</span>
+            </div>
+          </template>
           <template #cell-qty="{ row }">
             <span
               class="num tabular-nums font-medium"
@@ -388,7 +402,10 @@ async function submitStocktake(): Promise<void> {
             :key="it.skuId"
             class="grid grid-cols-1 items-center gap-2 border-b border-line pb-2 last:border-0 sm:grid-cols-[1fr_auto_auto_auto]"
           >
-            <div class="text-[13px] font-medium">{{ it.skuLabel }}</div>
+            <div class="flex items-center gap-2 text-[13px] font-medium">
+              <AkebonoProductThumb :sku-id="it.skuId" :size="24" />
+              <span>{{ it.skuLabel }}</span>
+            </div>
             <div class="text-[12px] text-muted">
               理論 <span class="num tabular-nums">{{ fmtInt(it.theory) }}</span>
             </div>

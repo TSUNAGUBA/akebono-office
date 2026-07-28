@@ -166,7 +166,10 @@ function submitCreate(): void {
           <span class="font-medium">{{ asOrder(row).code }}</span>
         </template>
         <template #cell-sku="{ row }">
-          {{ skuLabelOf(asOrder(row).skuId) }}
+          <div class="flex items-center gap-2">
+            <AkebonoProductThumb :sku-id="asOrder(row).skuId" :size="24" />
+            <span>{{ skuLabelOf(asOrder(row).skuId) }}</span>
+          </div>
         </template>
         <template #cell-qty="{ row }">
           <span class="num tabular-nums">{{ fmtInt(asOrder(row).qty) }}</span>
@@ -207,7 +210,10 @@ function submitCreate(): void {
           </div>
           <div class="grid grid-cols-[110px_1fr] gap-2 border-b border-line pb-2">
             <dt class="pt-0.5 text-[11px] font-semibold text-muted">対象 SKU</dt>
-            <dd>{{ skuLabelOf(selected.skuId) }}</dd>
+            <dd class="flex items-center gap-2">
+              <AkebonoProductThumb :sku-id="selected.skuId" :size="24" />
+              <span>{{ skuLabelOf(selected.skuId) }}</span>
+            </dd>
           </div>
           <div class="grid grid-cols-[110px_1fr] gap-2 border-b border-line pb-2">
             <dt class="pt-0.5 text-[11px] font-semibold text-muted">指示数 / 完成</dt>
