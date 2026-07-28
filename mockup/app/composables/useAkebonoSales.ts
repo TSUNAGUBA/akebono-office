@@ -6,14 +6,13 @@
 import {
   DEFAULT_FISCAL_START_MONTH, fiscalMonthsOf as fiscalMonthsOfFy, fiscalYearOf as fiscalYearOfMonth,
 } from '../../../shared/domain/fiscal'
-import type { BillingType, BusinessSegment, SalesRecord } from '~/types/akebono'
+import type { BillingType, SalesRecord } from '~/types/akebono'
 import type { Company, Result } from '~/types/domain'
 import { nextCode } from '~/utils/akebono'
 
 export function useAkebonoSales() {
   const { tbl, commit, nextId } = useMockDb()
   const records = tbl('salesRecords')
-  const segments = tbl('businessSegments')
   const companies = tbl('companies')
   const products = useProducts()
 
@@ -39,16 +38,14 @@ export function useAkebonoSales() {
   })
   const selectedFy = ref<number>(currentFiscalYear.value)
 
-  // 現在の業態（毎回選ばせない導線）。既定の絞り込み・登録セグメントに使う。
-  const { effectiveSegmentId } = useCurrentSegment()
+  // 現在の業態（毎回選ばせない導線）。有効業態リストもここに集約する（原則3: 重複排除）。
+  const { effectiveSegmentId, activeSegments } = useCurrentSegment()
 
   /** セグメント絞り込み（'' = 全セグメント合算。既定 = 現在の業態） */
   const segmentFilter = ref<string>(effectiveSegmentId.value)
-  // ヘッダの業態スイッチャで業態を切り替えたら、売上ビューの絞り込みも追随する。
-  watch(effectiveSegmentId, (id) => { segmentFilter.value = id })
-
-  const activeSegments = computed(() =>
-    (segments.value as BusinessSegment[]).filter(s => s.active !== false).sort((a, b) => a.displayOrder - b.displayOrder))
+  // ヘッダの業態スイッチャで業態を切り替えたら追随する。ただしユーザーが明示的に
+  // 別の絞り込み（全セグメント等）へ変更していれば尊重する（非破壊 = 原則2）。
+  watch(effectiveSegmentId, (id, prev) => { if (segmentFilter.value === prev) segmentFilter.value = id })
 
   function segmentName(id: string): string {
     return activeSegments.value.find(s => s.id === id)?.name ?? id

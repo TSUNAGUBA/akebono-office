@@ -169,7 +169,7 @@ export function useProducts() {
   // ---------- 画像（F-21-3。セクション別・追加/並び替え/アーカイブ） ----------
   const activeSections = computed(() => sections.value.filter(s => s.active !== false).slice().sort((a, b) => a.displayOrder - b.displayOrder))
 
-  function addImage(productId: string, input: { sectionId: string; skuId?: string | null; filename: string; mime: string; dataUrl?: string | null }): Result {
+  function addImage(productId: string, input: { sectionId: string; skuId?: string | null; filename: string; mime: string; dataUrl?: string | null }): Result & { persisted?: boolean } {
     const id = nextId('productImages', 'pimg')
     const order = imagesOf(productId).filter(i => i.sectionId === input.sectionId).length + 1
     const created: ProductImage = {
@@ -177,8 +177,9 @@ export function useProducts() {
       filename: input.filename, mime: input.mime, dataUrl: input.dataUrl ?? null, active: true,
     }
     images.value = [...images.value, created]
-    commit()
-    return { ok: true, id }
+    // 画像は data URI で嵩むため、容量超過で永続化に失敗しうる。成功可否を呼び出し側へ返す
+    const persisted = commit()
+    return { ok: true, id, persisted }
   }
   function archiveImage(id: string): Result {
     images.value = images.value.map(i => i.id === id ? { ...i, active: false } : i)

@@ -21,7 +21,6 @@ export function useCurrentSegment() {
   const activeSegments = computed(() =>
     (segments.value as BusinessSegment[])
       .filter(s => s.active !== false)
-      .slice()
       .sort((a, b) => a.displayOrder - b.displayOrder))
 
   /** 選択中の業態 id（未選択 = '' のときは先頭業態に解決される） */

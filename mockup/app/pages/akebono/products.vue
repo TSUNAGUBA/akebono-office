@@ -32,9 +32,10 @@ const billingTypeOptions = Object.entries(BILLING_TYPE_LABELS).map(([value, labe
 
 // ---------- 一覧・フィルタ ----------
 const search = ref('')
-// 既定は現在の業態（毎回選ばせない導線）。ヘッダの業態スイッチャ切替に追随する。
+// 既定は現在の業態（毎回選ばせない導線）。ヘッダの業態スイッチャ切替に追随するが、
+// ユーザーが明示的に別の絞り込みへ変更していれば尊重する（非破壊 = 原則2）。
 const segmentFilter = ref(effectiveSegmentId.value)
-watch(effectiveSegmentId, (id) => { segmentFilter.value = id })
+watch(effectiveSegmentId, (id, prev) => { if (segmentFilter.value === prev) segmentFilter.value = id })
 const statusFilter = ref('active')
 
 const segmentFilterOptions = computed(() => masters.segmentOptions.value)
@@ -270,6 +271,10 @@ async function onImageFileChange(ev: Event): Promise<void> {
   const input = ev.target as HTMLInputElement
   const file = input.files?.[0]
   input.value = '' // 同じファイルの再選択でも change を発火させる
+  // 新しい選択で前回のプレビュー/選択を破棄（却下時に古い画像が残って誤登録されるのを防ぐ）
+  imageForm.value.dataUrl = null
+  imageForm.value.filename = ''
+  imageForm.value.mime = ''
   if (!file) return
   if (!file.type.startsWith('image/')) {
     toast.show('画像ファイルを選択してください', 'warn')
@@ -312,7 +317,12 @@ function saveImage(): void {
     toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
     return
   }
-  toast.show('画像を登録しました（「削除」で取り消せます）', 'ok')
+  if (res.persisted === false) {
+    // 追加自体は成功（当セッションでは表示）だが、保存容量超過で永続化できず再読込で失われる可能性
+    toast.show('画像を追加しましたが、保存容量が上限に達したため再読込時に失われる可能性があります。不要な画像を削除してください', 'warn')
+  } else {
+    toast.show('画像を登録しました（「削除」で取り消せます）', 'ok')
+  }
   imageModalOpen.value = false
 }
 

@@ -126,7 +126,7 @@ function onSwitchUser(id: string): void {
           <Transition name="fade">
             <div
               v-if="segmentMenuOpen"
-              class="card absolute left-0 top-full z-40 mt-1 w-64 overflow-hidden shadow-lg"
+              class="card absolute right-0 top-full z-40 mt-1 w-64 max-w-[calc(100vw-1.5rem)] overflow-hidden shadow-lg"
               role="menu"
               aria-label="業態の切り替え"
             >

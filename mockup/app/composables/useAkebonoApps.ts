@@ -12,7 +12,8 @@
  */
 import type { AkebonoAppConfig, BusinessSegment } from '~/types/akebono'
 import {
-  AKEBONO_APP_KEYS, INDUSTRY_TYPE_LABELS, presetAppsForSegment, type AkebonoAppKey,
+  AKEBONO_APP_KEYS, INDUSTRY_TYPE_LABELS, presetAppConfigsForSegments,
+  presetAppsForSegment, type AkebonoAppKey,
 } from '~/utils/akebono'
 
 export interface AkebonoAppDef {
@@ -59,9 +60,31 @@ export function useAkebonoApps() {
     return configs.value.find(c => c.segmentId === segmentId && c.appKey === appKey)
   }
 
-  /** アプリが使用（導入）状態か（未設定 = 無効 = 未導入）。対象業態は未指定で現在の業態 */
+  /** その業態に設定行が 1 件でもあるか（= 一度でも設定・シードされたか） */
+  function hasAnyConfig(segmentId: string): boolean {
+    return configs.value.some(c => c.segmentId === segmentId)
+  }
+
+  /**
+   * アプリが使用（導入）状態か。対象業態は未指定で現在の業態。
+   * 設定行が 1 件も無い業態（実行時に追加された新規業態）は業種プリセットを既定にする
+   * （原則1: 初期化をコードで完結。管理者が設定するまで空メニューにしない）。
+   */
   function isAppEnabled(appKey: string, segmentId?: string): boolean {
-    return configOf(resolveSegmentId(segmentId), appKey)?.enabled === true
+    const sid = resolveSegmentId(segmentId)
+    if (!sid) return false
+    const cfg = configOf(sid, appKey)
+    if (cfg) return cfg.enabled === true
+    if (!hasAnyConfig(sid)) return presetAppsOf(sid).includes(appKey as AkebonoAppKey)
+    return false
+  }
+
+  /** 未設定の業態に業種プリセットの初期設定を materialize する（初回書込時。原則1・原則2） */
+  function ensureSegmentConfigs(segmentId: string): void {
+    if (hasAnyConfig(segmentId)) return
+    const seg = activeSegments.value.find(s => s.id === segmentId)
+    if (!seg) return
+    configs.value = [...configs.value, ...presetAppConfigsForSegments([seg])]
   }
 
   /** 表示ラベル（オーバーライド優先。F-20-6）。対象業態は未指定で現在の業態 */
@@ -88,6 +111,9 @@ export function useAkebonoApps() {
   function setEnabled(appKey: string, enabled: boolean, segmentId?: string): void {
     const sid = resolveSegmentId(segmentId)
     if (!sid) return
+    // 未設定の新規業態は初回書込でプリセットを materialize してから当該アプリだけ上書き
+    // （プリセット既定の他アプリが「行が無い」で OFF に落ちるのを防ぐ）
+    ensureSegmentConfigs(sid)
     const existing = configOf(sid, appKey)
     if (existing) {
       configs.value = configs.value.map(c =>
@@ -102,6 +128,7 @@ export function useAkebonoApps() {
   function setLabel(appKey: string, label: string, segmentId?: string): void {
     const sid = resolveSegmentId(segmentId)
     if (!sid) return
+    ensureSegmentConfigs(sid)
     const labelOverride = label.trim() || null
     const existing = configOf(sid, appKey)
     if (existing) {
