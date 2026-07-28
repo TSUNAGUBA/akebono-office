@@ -7,3 +7,6 @@ firebase-sa*.json
 
 # ログ
 *.log
+
+# デプロイパイプラインのステージログ（run-test-stage.sh が出力。CI でアーティファクト化）
+.deploy-logs/

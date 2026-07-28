@@ -14,6 +14,33 @@
 
 日常運用で必要な操作は **main へのマージのみ**。以下は初回セットアップ手順。
 
+### 0-1. デプロイパイプラインの構造（AI ネイティブ方法論テンプレート適用）
+
+デプロイは `ai-native-dev-operation-template` の deploy パイプラインを適用した **テストゲート方式**で動く（`.github/workflows/deploy.yml`）。テストゲートを通過した場合のみデプロイし、いずれかが失敗したらデプロイを中断する。「何がどのように失敗したか」は Step Summary と CI アーティファクト `deploy-logs`（`.deploy-logs/*.log`）に残る。
+
+```mermaid
+flowchart LR
+  P[事前検証<br/>preflight] --> T[テストゲート<br/>単体→結合→シナリオ]
+  T --> M[デプロイ<br/>mockup / Firebase Hosting]
+  T --> A[デプロイ<br/>api / Cloud Run]
+  M --> R[結果レポート<br/>report]
+  A --> R
+```
+
+| ジョブ | 内容 |
+|---|---|
+| **preflight（事前検証）** | デプロイ先環境を確定し、必須 secrets（mockup 用 Firebase）の有無を確認。欠ければ即中断。api 用 secrets が欠ければ api デプロイをスキップ（非ブロッキング = 原則4） |
+| **test（テストゲート）** | 各ステージを `scripts/run-test-stage.sh` で実行しログをアーティファクト化。**単体** = mockup/api の `typecheck` + `vitest`、**結合** = api の実 PostgreSQL 統合テスト（`test:integration`）、**シナリオ** = デプロイ成果物のビルド検証（mockup `generate` + api `build`）。前段が失敗した時点で以降は実行されずデプロイは中断 |
+| **deploy-mockup** | Firebase Hosting へ配信。環境で配信チャネルを切替（production=`live` / staging=プレビューチャネル `staging`） |
+| **deploy-api** | Cloud Run へ配信。**production かつ api secrets が揃うときのみ**実行。staging は別途プロビジョニングが必要なため対象外（preflight で通知） |
+| **report** | 成否にかかわらずパイプライン全体の結果を Step Summary へ記録 |
+
+**トリガーと環境:**
+- **main への push**（`mockup/` `api/` `shared/` 変更時）= 従来どおり **production へ自動デプロイ**（開発原則1「手動ステップを残さない」）。
+- **手動実行（workflow_dispatch）** = `staging` / `production` を選択可能。`staging` を選ぶと mockup は Firebase プレビューチャネル（本番と別 URL）へデプロイされ、api はスキップされる。
+
+> **テストゲートが失敗したら:** Actions の該当 run の Step Summary で失敗ステージを確認し、アーティファクト `deploy-logs` 内の該当ログ（`unit-test.log` / `integration-test.log` / `scenario-test.log`）で詳細を見る。修正後に再度 push または手動再実行する。
+
 ## 1. 初回セットアップ（オペレーター作業）
 
 ### 1-1. RDS PostgreSQL の作成（AWS 側・初回のみ）
@@ -127,9 +154,12 @@
    ```
    以後のメンバーは画面（マスタメンテナンス > メンバー）から登録できる
 
-> **更新時の配信順序:** スキーマ・I/F を拡張する更新は必ず **API（migration 込み）→ フロント** の順で配信する。
+> **更新時の配信順序:** スキーマ・I/F を拡張する更新は必ず **API（migration 込み）→ フロント** の順で反映する。
 > 例: 2026-07-22 改修（migration 0029）の稟議は、新フロントが `purpose`/`content` を送り `body` を送らないため、
-> 旧 API が先に受けると本文が保存されない。標準の deploy ワークフロー（api → mockup の順）に従えば発生しない。
+> 旧 API が先に受けると本文が保存されない。
+> **注意:** deploy パイプラインは テストゲート通過後に mockup（Firebase）と api（Cloud Run）を**並行**デプロイするため、
+> どちらが先に反映されるかは保証されない。破壊的なスキーマ・I/F 変更は **後方互換を保つ**（旧フロントからのリクエストも旧フィールドで受理する等）か、
+> **API 変更を先行してリリースしてからフロント変更をマージする**運用で回避する。
 
 ## 1-7. 有給の周期自動付与（Cloud Scheduler・任意）
 
@@ -254,9 +284,13 @@ AI 機能（日報 AI アシスト・タスク計画の AI コメント等）は
 
 ## 2. 日常デプロイ（開発者）
 
-- **自動:** main へマージ → 変更パスに応じて mockup / api が自動デプロイ
-  - api は `api-test`（typecheck + 単体 + 統合テスト + build）が green の場合のみデプロイされる
-- **手動:** `gh workflow run deploy.yml` または Actions 画面から `Run workflow`
+- **自動:** main へマージ → 変更パスに応じて production へ自動デプロイ（環境 = production）
+  - **テストゲート**（単体 → 結合 → シナリオ。§0-1）が **全て green の場合のみ** mockup / api がデプロイされる。
+    いずれか失敗すればデプロイは中断され、`deploy-logs` アーティファクトに失敗内容が残る
+  - mockup と api はテストゲート通過後に並行デプロイされる（api は secrets が揃う場合のみ）
+- **手動:** `gh workflow run deploy.yml -f environment=staging`（または Actions 画面の `Run workflow` で環境を選択）
+  - `staging` = mockup を Firebase プレビューチャネル（本番と別 URL）へ配信。api はスキップ
+  - `production` = 本番へ配信（自動デプロイと同じ）
 - **ロールバック:** Cloud Run はリビジョン単位で保持される
   ```bash
   gcloud run services update-traffic akebono-office-api --region asia-northeast1 \
