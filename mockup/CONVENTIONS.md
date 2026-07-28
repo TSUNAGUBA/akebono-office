@@ -85,6 +85,12 @@ const depts = useDepartments()   // nameOf / options / membersOf / tree
 
 // 休暇（F-04-5/9。種別別残数。付与は管理者/人事のみ・同日同種別はスキップ=冪等）
 const leave = useLeave()   // balance(memberId, leaveTypeId?) / request / decide / grant / bulkGrant / activeLeaveTypes
+
+// メディア分析（F-40。Akebono セグメントと 1:1。純ロジックの SoT = shared/domain/media-*）
+const ms = useMediaSettings()    // settingFor / ensureSetting / save / connectGa / disconnectGa（GA 擬似 OAuth）
+const ma = useMediaAnalytics()   // metricsFor(segId,28) / integratedMetricsFor(segId,6) / businessMonthly（GA 由来メトリクスの決定的導出）
+const mi = useMediaInsight()     // loadMedia/generateMedia / loadIntegrated/generateIntegrated（生成→保管→再生成で上書き）
+const art = useMediaArticles()   // generate（目的/質/雰囲気）/ suggestionFromInsight / adopt / unadopt / remove / restore（取消可能）
 ```
 
 ## UI コンポーネント在庫（新規に作る前にここを見る）
@@ -117,6 +123,9 @@ const leave = useLeave()   // balance(memberId, leaveTypeId?) / request / decide
 | `UiMarkdown` | source。安全なサブセットのマークダウン描画（utils/markdown.ts の AST を VNode 直接生成 = v-html 不使用。見出し・リスト・引用・コード・強調・http(s) リンクのみ。バッチ7e） |
 | `MastersPermissionMatrix` | 権限表モード（props なし = ruleCrud を内部利用）。ページ > 機能 > 項目 の 3 階層ツリー × ロール/役職/個人（バッチ7m）。セルは常に可否を表示（明示 = 濃色 / 上位一括・既定値 = 薄色破線）・クリックで反転・引き継ぎ値へ戻すと明示ルール解除。表ヘッダは内部スクロール + sticky |
 | `SettingsMenuCategoryEditor` | props なし。メニューカテゴリのカスタマイズ（F-13-8。エリア切替 + カテゴリ CRUD/並び替え/カード割当 + 既定に戻す。バッチ7h） |
+| `MediaSegmentBar` | props なし。メディア分析の対象セグメント（業態）切替バー（現在業態 + GA 連携バッジ + 設定導線）。全メディア画面の先頭に置く（F-40） |
+| `MediaGaConnect` | segmentId?（未指定=現在業態）, variant（'gate'/'bar'）。Google Analytics 連携ゲート（擬似 OAuth + GA4 プロパティ選択）。連携済みは状態バー + 解除（F-40。CalendarConnectGate と同型） |
+| `MediaFunnel` | stages（{label,value}[]）。流入→受注の簡易ファネル（幅バー + 前段比。Chart.js 不使用。F-40） |
 
 **ページ間導線・メニュー定義の SoT（バッチ7h）:** 親ページへ戻る・関連ページは `app/utils/nav-map.ts`、
 ダッシュボード / マスタハブのカード定義と既定カテゴリは `app/utils/menu-registry.ts` が SoT。
