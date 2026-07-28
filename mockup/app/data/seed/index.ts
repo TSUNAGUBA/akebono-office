@@ -14,6 +14,7 @@ import type {
   TaskPlan, UptimeDaily, WeeklyReport, WorkflowRequest, WorkflowRoute, WorkCategory, Note,
 } from '~/types/domain'
 import type { WeeklyInsightRecord } from '../../../../shared/domain/weekly-insight'
+import type { MediaInsightRecord } from '../../../../shared/domain/media-insight'
 import type {
   AkebonoAppConfig, BusinessSegment, ConsignmentTerm, ImportMapping, ImportRun, ImportSource,
   InboundPlan, InboundResult, InventoryTransaction, Invoice, ItemSetting, OutboundPlan,
@@ -21,6 +22,7 @@ import type {
   ProductImage, ProductImageSection, ProductSku, ProductionOrder, PurchaseOrder, PurchaseRecord,
   SalesRecord, TaxRate, Unit, VariantAxisTemplate, Warehouse,
 } from '~/types/akebono'
+import type { ArticleBrief, GeneratedArticle, MediaArticle, MediaSetting } from '~/types/media'
 import * as core from './core'
 import * as akebono from './akebono'
 import * as attendance from './attendance'
@@ -33,6 +35,7 @@ import * as status from './status'
 import * as decision from './decision'
 import * as support from './support'
 import * as misc from './misc'
+import * as media from './media'
 import { buildCalendarEvents, buildLeaveGrants, buildPunchHistory, buildSalesMonthly, buildSpecialLeaveGrants, buildTaskPlans, buildUptimeDaily } from './history'
 
 export interface MockDbShape {
@@ -125,6 +128,13 @@ export interface MockDbShape {
   importRuns: ImportRun[]
   itemSettings: ItemSetting[]
   akebonoAppConfigs: AkebonoAppConfig[]
+  // ---- メディア分析（Akebono セグメントと 1:1）。SoT: shared/domain/media-* + types/media ----
+  mediaSettings: MediaSetting[]
+  mediaArticles: MediaArticle[]
+  /** メディア AI インサイトの保管（scope='media'/'integrated'。導出キャッシュ = 再生成で上書き） */
+  mediaInsights: MediaInsightRecord[]
+  articleBriefs: ArticleBrief[]
+  generatedArticles: GeneratedArticle[]
 }
 
 export function buildSeed(): MockDbShape {
@@ -239,5 +249,11 @@ export function buildSeed(): MockDbShape {
     importRuns: akebono.seedImportRuns,
     itemSettings: akebono.seedItemSettings,
     akebonoAppConfigs: akebono.seedAkebonoAppConfigs,
+    // ---- メディア分析 ----
+    mediaSettings: media.seedMediaSettings,
+    mediaArticles: media.seedMediaArticles,
+    mediaInsights: media.seedMediaInsights, // 生成時に保管（シードなし）
+    articleBriefs: media.seedArticleBriefs,
+    generatedArticles: media.seedGeneratedArticles,
   }
 }

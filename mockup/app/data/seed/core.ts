@@ -233,6 +233,7 @@ export const seedAiEmployees: AiEmployee[] = [
 export const seedFeatureToggles: FeatureToggle[] = [
   { key: 'decision', label: '意思決定支援ツール', enabled: true },
   { key: 'akebono', label: 'AKEBONO', enabled: true },
+  { key: 'media', label: 'メディア分析', enabled: true },
   { key: 'shift', label: 'シフト表', enabled: true },
   { key: 'aiCompany', label: 'AIネイティブカンパニー', enabled: true },
   { key: 'chatbot', label: 'AIチャットボット', enabled: true },

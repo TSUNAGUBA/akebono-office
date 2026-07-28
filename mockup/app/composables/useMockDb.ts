@@ -9,7 +9,7 @@ import { buildSeed, type MockDbShape } from '~/data/seed'
 
 const STORAGE_KEY = 'ako.mockdb.v1'
 /** シード世代。シード構造を変えたらインクリメントすると保存済みデータを破棄して再生成する */
-const SEED_VERSION = 10 // v10: 業態（BusinessSegment）にアプリ表示（appName/appIcon/appIconImage）と商品登録の既定値（単位・課金区分・バリアント軸）を追加。2026-07-28
+const SEED_VERSION = 11 // v11: メディア分析（mediaSettings/mediaArticles/mediaInsights/articleBriefs/generatedArticles）を追加。セグメントと 1:1。2026-07-28
 
 interface PersistedDb {
   version: number
