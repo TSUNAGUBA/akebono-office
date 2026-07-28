@@ -310,14 +310,19 @@ async function fetchMediaMetrics(
       dimensions: ['pagePath', 'pageTitle'].map(dimension),
       metrics: ['screenPageViews', 'totalUsers', 'userEngagementDuration', 'entrances', 'bounceRate', 'keyEvents'].map(metric),
       orderBys: [{ metric: { metricName: 'screenPageViews' }, desc: true }],
-      limit: '50',
+      // セクション集計は「サイト全体の内訳」として表示するため全ページ母集団が必要（Codex 指摘 3）。
+      // 表示上限（topPages 12 件）は整形側の slice が担い、レスポンス/キャッシュには整形後の
+      // MediaMetrics のみが載るため limit を上げてもキャッシュサイズへの影響は軽微。
+      // 10000 (path,title) 組超の超ロングテールは打ち切りを許容（PV 降順のため影響は極小）
+      limit: '10000',
     },
     {
       dateRanges: [dateRange(prevFrom, prevTo)],
       dimensions: [dimension('pagePath')],
       metrics: ['screenPageViews'].map(metric),
       orderBys: [{ metric: { metricName: 'screenPageViews' }, desc: true }],
-      limit: '200',
+      // 前期比の突合先も同じ母集団を確保する（打ち切りによる prevPageviews=0 の誤判定を防ぐ）
+      limit: '10000',
     },
   ])
 

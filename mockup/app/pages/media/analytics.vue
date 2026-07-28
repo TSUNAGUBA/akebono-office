@@ -211,15 +211,18 @@ const SEVERITY_META: Record<string, { label: string; tone: 'crit' | 'warn' | 'in
         </p>
       </template>
 
+      <!-- 28 日メトリクス系のゲート（ロード中・失敗・空）は**メディア分析タブ限定**（Codex 指摘 1）。
+           PDCA タブは 6 ヶ月の月次 + 売上を見る画面で、直近 28 日が空でも有効な過去データがありうるため、
+           月次側の状態（integratedLoading / integratedIsFailed）のみでゲートする -->
       <!-- API: GA 集計のロード中（空状態・エラーと区別して表示） -->
-      <template v-else-if="metricsLoading">
+      <template v-else-if="activeTab === 'media' && metricsLoading">
         <p class="py-10 text-center text-[13px] text-muted" aria-live="polite" aria-busy="true">
           Google Analytics から集計を取得中…
         </p>
       </template>
 
       <!-- API: 取得失敗（未連携以外の GA エラー）。再試行導線を出す（握りつぶさない = 原則4） -->
-      <template v-else-if="metricsFailed">
+      <template v-else-if="activeTab === 'media' && metricsFailed">
         <UiEmptyState
           icon="TriangleAlert"
           title="Google Analytics から集計を取得できませんでした"
@@ -232,7 +235,7 @@ const SEVERITY_META: Record<string, { label: string; tone: 'crit' | 'warn' | 'in
       </template>
 
       <!-- データが無い（モック = 記事インベントリ空 / API = GA にデータ未着） -->
-      <template v-else-if="metricsEmpty">
+      <template v-else-if="activeTab === 'media' && metricsEmpty">
         <UiEmptyState
           icon="FileText"
           :title="isApi ? 'Google Analytics にまだ計測データがありません' : 'このメディアにはまだ記事データがありません'"

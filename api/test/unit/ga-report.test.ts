@@ -176,7 +176,7 @@ describe('buildMediaMetrics', () => {
     expect(m.channels[0]!.channel).toBe('オーガニック検索')
   })
 
-  it('前期比は pagePath で突合する（末尾スラッシュの揺れも一致）', () => {
+  it('前期比は pagePath で突合する（末尾スラッシュの揺れは正規化 path へ集約されて一致）', () => {
     const m = buildMediaMetrics({
       totals: report([], TOTAL_METS, [[[], [100, 80, 10, 300, 6000, '0.6', '0.4', 5]]]),
       prevTotals: null,
@@ -190,8 +190,41 @@ describe('buildMediaMetrics', () => {
         ]),
       prevPages: report(['pagePath'], ['screenPageViews'], [[['/service'], [180]]]),
     }, opts)
-    expect(m.topPages.find(p => p.path === '/service/')?.prevPageviews).toBe(180)
+    expect(m.topPages.find(p => p.path === '/service')?.prevPageviews).toBe(180)
     expect(m.topPages.find(p => p.path === '/blog/new')?.prevPageviews).toBe(0)
+  })
+
+  it('同一 path・異なる pageTitle の複数行は 1 エントリへ集約する（GA は全ディメンションでグループ化して返す）', () => {
+    const m = buildMediaMetrics({
+      totals: report([], TOTAL_METS, [[[], [500, 400, 50, 900, 27000, '0.6', '0.4', 21]]]),
+      prevTotals: null,
+      daily: null,
+      channels: null,
+      devices: null,
+      topPages: report(['pagePath', 'pageTitle'],
+        ['screenPageViews', 'totalUsers', 'userEngagementDuration', 'entrances', 'bounceRate', 'keyEvents'], [
+          // タイトル改題で同一 URL が 2 行 + 末尾スラッシュ揺れで 1 行（= 3 行が 1 エントリに集約されるべき）
+          [['/blog/hello', '旧タイトル'], [300, 200, 9000, 90, '0.4', 6]],
+          [['/blog/hello', '新タイトル（改題後）'], [500, 250, 20000, 150, '0.3', 12]],
+          [['/blog/hello/', '旧タイトル'], [100, 50, 3000, 30, '0.5', 3]],
+          [['/news/x', 'お知らせ'], [100, 90, 2000, 40, '0.5', 0]],
+        ]),
+      prevPages: report(['pagePath'], ['screenPageViews'], [[['/blog/hello'], [700]]]),
+    }, opts)
+    // 集約後は path 一意（重複エントリなし）
+    expect(m.topPages.map(p => p.path)).toEqual(['/blog/hello', '/news/x'])
+    const hello = m.topPages.find(p => p.path === '/blog/hello')!
+    expect(hello.pageviews).toBe(900) // 300 + 500 + 100
+    expect(hello.conversions).toBe(21)
+    expect(hello.entrances).toBe(270)
+    expect(hello.title).toBe('新タイトル（改題後）') // 代表タイトル = PV 最大の行
+    expect(hello.avgEngagementSec).toBe(Math.round((9000 + 20000 + 3000) / 900))
+    expect(hello.bounceRate).toBe(Math.round((0.4 * 300 + 0.3 * 500 + 0.5 * 100) / 900 * 1000) / 1000)
+    // prevPageviews は集約後の path に 1 回だけ割当（各重複行への全額割当 = 二重計上をしない）
+    expect(hello.prevPageviews).toBe(700)
+    expect(m.topPages.reduce((s, p) => s + p.prevPageviews, 0)).toBe(700)
+    // セクションの記事数も水増しされない（ブログ = 1 ページ）
+    expect(m.sections.find(s => s.section === 'ブログ')?.pages).toBe(1)
   })
 
   it('ページの CVR はユーザー 0 のとき 0（ゼロ除算しない）。タイトル欠落は path で補う', () => {

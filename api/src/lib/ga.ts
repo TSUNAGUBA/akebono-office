@@ -213,28 +213,55 @@ export function buildMediaMetrics(reports: GaReportSet, opts: BuildMetricsOption
     prevPvByPath.set(p, (prevPvByPath.get(p) ?? 0) + Math.round(r.met.screenPageViews ?? 0))
   }
 
-  // ページ別（id = pagePath。GA の並びに依存せず PV 降順へ整列）
-  const sectionMap = inventorySectionMap(opts.articles)
-  const pages: MediaPageStat[] = gaRows(reports.topPages).map((r) => {
-    const path = r.dim.pagePath ?? ''
+  // ページ別。GA は要求した**全ディメンションでグループ化**するため、期間中に pageTitle が変わった URL は
+  // (pagePath, pageTitle) の組ごとに複数行で返る（Codex 指摘 2）。正規化 path で集約してから統計を構築し、
+  // 重複エントリ・セクション記事数の水増し・prevPageviews の重複割当を防ぐ。
+  // タイトルは PV 最大の行を代表値とする。users はタイトル変遷をまたぐ同一ユーザーを重複計上しうる
+  // （GA が組ごとに返す値の合算 = 近似。path 単体次元での再取得はリクエスト数増のため許容する設計判断）
+  interface PageAgg {
+    title: string
+    titlePv: number
+    pv: number
+    users: number
+    engSum: number
+    entrances: number
+    bounceWSum: number
+    conv: number
+  }
+  const pageAgg = new Map<string, PageAgg>()
+  for (const r of gaRows(reports.topPages)) {
+    const path = normPath(r.dim.pagePath ?? '') || '/'
     const pv = Math.round(r.met.screenPageViews ?? 0)
-    const pageUsers = Math.round(r.met.totalUsers ?? 0)
-    const conv = Math.round(r.met.keyEvents ?? 0)
-    return {
-      id: path,
-      title: (r.dim.pageTitle ?? '').trim() || path,
-      path,
-      section: sectionOfPath(path, sectionMap),
-      pageviews: pv,
-      users: pageUsers,
-      avgEngagementSec: pv > 0 ? Math.round((r.met.userEngagementDuration ?? 0) / pv) : 0,
-      entrances: Math.round(r.met.entrances ?? 0),
-      bounceRate: round3(r.met.bounceRate ?? 0),
-      convRate: pageUsers > 0 ? round4(conv / pageUsers) : 0,
-      conversions: conv,
-      prevPageviews: prevPvByPath.get(normPath(path)) ?? 0,
+    const cur = pageAgg.get(path)
+      ?? { title: '', titlePv: -1, pv: 0, users: 0, engSum: 0, entrances: 0, bounceWSum: 0, conv: 0 }
+    const title = (r.dim.pageTitle ?? '').trim()
+    if (pv > cur.titlePv) {
+      cur.title = title
+      cur.titlePv = pv
     }
-  }).sort((a, b) => b.pageviews - a.pageviews)
+    cur.pv += pv
+    cur.users += Math.round(r.met.totalUsers ?? 0)
+    cur.engSum += r.met.userEngagementDuration ?? 0
+    cur.entrances += Math.round(r.met.entrances ?? 0)
+    cur.bounceWSum += (r.met.bounceRate ?? 0) * pv // 直帰率は PV 加重平均で合成
+    cur.conv += Math.round(r.met.keyEvents ?? 0)
+    pageAgg.set(path, cur)
+  }
+  const sectionMap = inventorySectionMap(opts.articles)
+  const pages: MediaPageStat[] = [...pageAgg.entries()].map(([path, a]) => ({
+    id: path,
+    title: a.title || path,
+    path,
+    section: sectionOfPath(path, sectionMap),
+    pageviews: a.pv,
+    users: a.users,
+    avgEngagementSec: a.pv > 0 ? Math.round(a.engSum / a.pv) : 0,
+    entrances: a.entrances,
+    bounceRate: a.pv > 0 ? round3(a.bounceWSum / a.pv) : 0,
+    convRate: a.users > 0 ? round4(a.conv / a.users) : 0,
+    conversions: a.conv,
+    prevPageviews: prevPvByPath.get(path) ?? 0,
+  })).sort((a, b) => b.pageviews - a.pageviews)
 
   // セクション別（取得した全ページで集約。表示上限前の母集団で集計する）
   const secMap = new Map<string, { pages: number; pageviews: number; engSum: number; convSum: number; userSum: number }>()
