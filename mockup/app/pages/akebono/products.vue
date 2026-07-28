@@ -312,7 +312,7 @@ function saveImage(): void {
     toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
     return
   }
-  toast.show('画像を登録しました（削除→復元で取り消せます）', 'ok')
+  toast.show('画像を登録しました（「削除」で取り消せます）', 'ok')
   imageModalOpen.value = false
 }
 
