@@ -1,25 +1,29 @@
-name: deploy
+# =============================================================================
+# デプロイパイプライン / Deploy Pipeline
+#
+# AI ネイティブ開発方法論の deploy パイプライン（ai-native-dev-operation-template）を
+# 本アプリへ適用したもの。テストゲート（単体 → 結合 → シナリオ）を通過した場合のみ
+# デプロイし、いずれかが失敗したらデプロイを中断する。「何がどのように失敗したか」は
+# Step Summary とアーティファクト（テストゲート: deploy-logs）に残る。
+#
+# 本アプリ固有の適用（テンプレートの構造 + 本アプリの実処理）:
+#   - デプロイ対象は mockup（Firebase Hosting）と api（Cloud Run + RDS PostgreSQL）の 2 系統
+#   - テストゲートは repository variables ではなく本アプリの実コマンドを直接実行する
+#     （単体 = mockup/api の vitest + typecheck、結合 = api の実 PostgreSQL 統合テスト、
+#      シナリオ = デプロイ成果物のビルド検証 mockup:generate + api:build）
+#   - 環境（environment）: production = Firebase live チャネル + Cloud Run 本番サービス、
+#     staging = Firebase プレビューチャネル（api の staging は別途プロビジョニングが必要なため対象外）
+#   - main への push は従来どおり production へ自動デプロイ（開発原則1）。手動実行で環境を選択できる
+#
+# 必要な Repository secrets（scripts/setup-deploy-secrets.ps1 で設定。詳細は
+# .ai-native/outputs/phase7/deploy-guide.md）:
+#   [mockup] FIREBASE_SERVICE_ACCOUNT, FIREBASE_PROJECT_ID（必須）
+#   [api]    GCP_SERVICE_ACCOUNT, GCP_PROJECT_ID, GCP_REGION, CLOUD_RUN_SERVICE,
+#            DATABASE_URL, DB_SSL, API_CORS_ORIGINS ほか
+#            （未設定なら api デプロイは警告を出してスキップ = 非ブロッキング。原則4）
+# =============================================================================
+name: デプロイパイプライン / Deploy Pipeline
 
-# main への push（対象パス変更時）または手動実行で以下をデプロイする:
-#   1) mockup  → Firebase Hosting（静的配信）
-#   2) api     → Cloud Run（コンテナ。DB は RDS PostgreSQL）
-#
-# 必要な Repository secrets（scripts/setup-deploy-secrets.ps1 で設定）:
-#   [mockup]
-#   FIREBASE_SERVICE_ACCOUNT ... サービスアカウント鍵 JSON（roles/firebasehosting.admin）
-#   FIREBASE_PROJECT_ID      ... Firebase プロジェクト ID
-#   [api]
-#   GCP_SERVICE_ACCOUNT      ... デプロイ用サービスアカウント鍵 JSON
-#                                （roles/run.admin, artifactregistry.admin, iam.serviceAccountUser, secretmanager.admin）
-#   GCP_PROJECT_ID           ... GCP プロジェクト ID（通常 FIREBASE_PROJECT_ID と同一）
-#   GCP_REGION               ... デプロイ先リージョン（例: asia-northeast1）
-#   CLOUD_RUN_SERVICE        ... Cloud Run サービス名（例: akebono-office-api）
-#   DATABASE_URL             ... RDS PostgreSQL 接続文字列（Secret Manager 経由で注入）
-#   DB_SSL                   ... disable / require / verify（RDS は require 以上を推奨）
-#   API_CORS_ORIGINS         ... CORS 許可オリジン（例: https://<project>.web.app）
-#
-# API の secrets が未設定の場合、deploy-api は警告を出してスキップする
-# （mockup のみの運用を止めない = 非ブロッキング）。
 on:
   push:
     branches: [main]
@@ -28,82 +32,98 @@ on:
       - 'api/**'
       - 'shared/**'
       - '.github/workflows/deploy.yml'
+      - 'scripts/run-test-stage.sh'
   workflow_dispatch:
+    inputs:
+      environment:
+        description: 'デプロイ先環境（Deploy target environment）'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
 
 permissions:
   contents: read
 
+# 同一環境への同時デプロイを禁止（push=production / 手動=選択環境。実行中はキャンセルしない）
 concurrency:
-  group: deploy-live
+  group: deploy-${{ github.event.inputs.environment || 'production' }}
   cancel-in-progress: false
 
 jobs:
-  # ---------- モックアップ（Firebase Hosting） ----------
-  deploy-mockup:
+  # ---------------------------------------------------------------------------
+  # 事前検証: デプロイ先環境を確定し、必要な設定値（secrets）の有無を最初に確認する。
+  # mockup（Firebase）に必要な secrets が欠けていれば即座に失敗させる。
+  # api（Cloud Run）の secrets は任意で、欠けていれば api デプロイをスキップする（非ブロッキング）。
+  # ---------------------------------------------------------------------------
+  preflight:
+    name: 事前検証（設定値チェック）
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: mockup
+    outputs:
+      environment: ${{ steps.env.outputs.environment }}
+      api_ready: ${{ steps.env.outputs.api_ready }}
+    env:
+      HAS_FIREBASE_SA: ${{ secrets.FIREBASE_SERVICE_ACCOUNT != '' }}
+      HAS_FIREBASE_PROJECT: ${{ secrets.FIREBASE_PROJECT_ID != '' }}
+      HAS_GCP_SA: ${{ secrets.GCP_SERVICE_ACCOUNT != '' }}
+      HAS_GCP_PROJECT: ${{ secrets.GCP_PROJECT_ID != '' }}
+      HAS_GCP_REGION: ${{ secrets.GCP_REGION != '' }}
+      HAS_CLOUD_RUN_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE != '' }}
+      HAS_DATABASE_URL: ${{ secrets.DATABASE_URL != '' }}
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Secrets の存在チェック
-        env:
-          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+      - name: 環境と必須設定値の確認
+        id: env
         run: |
-          missing=0
-          if [ -z "$FIREBASE_SERVICE_ACCOUNT" ]; then
-            echo "::error::Repository secret FIREBASE_SERVICE_ACCOUNT が未設定です"
-            missing=1
-          fi
-          if [ -z "$FIREBASE_PROJECT_ID" ]; then
-            echo "::error::Repository secret FIREBASE_PROJECT_ID が未設定です"
-            missing=1
-          fi
-          if [ "$missing" = "1" ]; then
-            echo "::notice::scripts/setup-deploy-secrets.ps1 を実行して設定してください（手順は .ai-native/outputs/phase7/deploy-guide.md 参照）"
+          ENVIRONMENT="${{ github.event.inputs.environment || 'production' }}"
+          echo "environment=$ENVIRONMENT" >> "$GITHUB_OUTPUT"
+
+          # --- mockup（Firebase Hosting）は必須 ---
+          MISSING=""
+          [ "$HAS_FIREBASE_SA" = "true" ]      || MISSING="${MISSING}\n- **FIREBASE_SERVICE_ACCOUNT**（repository secret）が未設定です"
+          [ "$HAS_FIREBASE_PROJECT" = "true" ] || MISSING="${MISSING}\n- **FIREBASE_PROJECT_ID**（repository secret）が未設定です"
+
+          if [ -n "$MISSING" ]; then
+            {
+              echo "## ❌ 事前検証失敗 — デプロイを中断します（環境: ${ENVIRONMENT}）"
+              echo ""
+              echo "mockup（Firebase Hosting）に必要な設定値が未登録です。\`scripts/setup-deploy-secrets.ps1\` で登録してください"
+              echo "（手順書: \`.ai-native/outputs/phase7/deploy-guide.md\`）:"
+              echo -e "$MISSING"
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::mockup デプロイに必要な設定値が不足しています。Step Summary を確認してください。"
             exit 1
           fi
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: mockup/package-lock.json
+          # --- api（Cloud Run）は任意。production かつ secrets が揃うときのみデプロイ ---
+          API_READY=false
+          if [ "$HAS_GCP_SA" = "true" ] && [ "$HAS_GCP_PROJECT" = "true" ] && [ "$HAS_GCP_REGION" = "true" ] \
+             && [ "$HAS_CLOUD_RUN_SERVICE" = "true" ] && [ "$HAS_DATABASE_URL" = "true" ]; then
+            API_READY=true
+          fi
+          echo "api_ready=$API_READY" >> "$GITHUB_OUTPUT"
 
-      - name: 依存インストール
-        run: npm ci
+          {
+            echo "- ✅ **事前検証**: mockup 設定値は登録済み（環境: ${ENVIRONMENT}）"
+            if [ "$ENVIRONMENT" != "production" ]; then
+              echo "- ℹ️ **api**: staging は対象外です（mockup のみ staging プレビューへデプロイ）"
+            elif [ "$API_READY" = "true" ]; then
+              echo "- ✅ **api**: 設定値は揃っています（Cloud Run へデプロイします）"
+            else
+              echo "- ⚠️ **api**: 設定値が未登録のためスキップします（mockup のみデプロイ）"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "✅ 事前検証 OK（環境: ${ENVIRONMENT} / api_ready=${API_READY}）"
 
-      - name: 単体テスト
-        run: npm run test
-
-      - name: 型チェック
-        run: npm run typecheck
-
-      - name: 静的ビルド
-        env:
-          # 未設定なら完全モックモード（従来どおり）。API 接続版を配信する場合は
-          # secrets API_BASE_URL / FIREBASE_WEB_CONFIG を設定する（setup-deploy-secrets.ps1）
-          NUXT_PUBLIC_API_BASE: ${{ secrets.API_BASE_URL }}
-          NUXT_PUBLIC_FIREBASE_CONFIG: ${{ secrets.FIREBASE_WEB_CONFIG }}
-        run: npm run generate
-
-      - name: Firebase Hosting へデプロイ（live チャネル）
-        uses: FirebaseExtended/action-hosting-deploy@v0
-        with:
-          repoToken: ${{ secrets.GITHUB_TOKEN }}
-          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          projectId: ${{ secrets.FIREBASE_PROJECT_ID }}
-          channelId: live
-          entryPoint: mockup
-
-  # ---------- API（テスト → Cloud Run） ----------
-  api-test:
+  # ---------------------------------------------------------------------------
+  # テストゲート: 単体 → 結合 → シナリオ の順に実行。前段が失敗した時点で以降は
+  # 実行されず、デプロイは中断される。ログは run-test-stage.sh がアーティファクト化する。
+  # ---------------------------------------------------------------------------
+  test:
+    name: テストゲート（単体・結合・シナリオ）
+    needs: preflight
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: api
     services:
       postgres:
         image: postgres:16
@@ -118,68 +138,127 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
+      - name: チェックアウト
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            mockup/package-lock.json
+            api/package-lock.json
+
+      - name: 依存インストール（mockup / api）
+        run: |
+          ( cd mockup && npm ci )
+          ( cd api && npm ci )
+
+      - name: 単体テスト（mockup/api の vitest + typecheck）
+        env:
+          STAGE_CMD: >-
+            ( cd mockup && npm run typecheck && npm run test ) &&
+            ( cd api && npm run typecheck && npm run test )
+        run: bash scripts/run-test-stage.sh "単体テスト" unit-test
+
+      - name: 結合テスト（api の実 PostgreSQL 統合テスト）
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/akebono_test
+          STAGE_CMD: cd api && npm run test:integration
+        run: bash scripts/run-test-stage.sh "結合テスト" integration-test
+
+      - name: シナリオテスト（デプロイ成果物のビルド検証）
+        env:
+          STAGE_CMD: >-
+            ( cd mockup && npm run generate ) &&
+            ( cd api && npm run build )
+        run: bash scripts/run-test-stage.sh "シナリオテスト（ビルド検証）" scenario-test
+
+      - name: テストログをアーティファクトとして保存
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-logs
+          path: .deploy-logs/
+          if-no-files-found: ignore
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # デプロイ（mockup / Firebase Hosting）: 全テストゲート通過時のみ実行。
+  # 環境で配信チャネルを切り替える（production=live / staging=プレビュー）。
+  # ---------------------------------------------------------------------------
+  deploy-mockup:
+    name: デプロイ実行（mockup / Firebase Hosting）
+    needs: [preflight, test]
+    runs-on: ubuntu-latest
+    environment: ${{ needs.preflight.outputs.environment }}
+    steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: api/package-lock.json
+          cache-dependency-path: mockup/package-lock.json
 
       - name: 依存インストール
+        working-directory: mockup
         run: npm ci
 
-      - name: 型チェック
-        run: npm run typecheck
-
-      - name: 単体テスト
-        run: npm test
-
-      - name: 統合テスト（実 PostgreSQL）
+      - name: 静的ビルド
+        working-directory: mockup
         env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/akebono_test
-        run: npm run test:integration
+          # 未設定なら完全モックモード（従来どおり）。API 接続版を配信する場合は
+          # secrets API_BASE_URL / FIREBASE_WEB_CONFIG を設定する（setup-deploy-secrets.ps1）
+          NUXT_PUBLIC_API_BASE: ${{ secrets.API_BASE_URL }}
+          NUXT_PUBLIC_FIREBASE_CONFIG: ${{ secrets.FIREBASE_WEB_CONFIG }}
+        run: npm run generate
 
-      - name: ビルド確認
-        run: npm run build
-
-  deploy-api:
-    runs-on: ubuntu-latest
-    needs: api-test
-    steps:
-      - name: Secrets の存在チェック（未設定なら以降をスキップ）
-        id: check
-        env:
-          GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-          GCP_REGION: ${{ secrets.GCP_REGION }}
-          CLOUD_RUN_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+      - name: デプロイ先チャネルを決定
+        id: channel
         run: |
-          if [ -z "$GCP_SERVICE_ACCOUNT" ] || [ -z "$GCP_PROJECT_ID" ] || [ -z "$GCP_REGION" ] \
-             || [ -z "$CLOUD_RUN_SERVICE" ] || [ -z "$DATABASE_URL" ] || [ -z "$FIREBASE_PROJECT_ID" ]; then
-            echo "::warning::API デプロイ用 secrets（GCP_* / CLOUD_RUN_SERVICE / DATABASE_URL / FIREBASE_PROJECT_ID）が未設定のため deploy-api をスキップします。scripts/setup-deploy-secrets.ps1 で設定してください"
-            echo "ready=false" >> "$GITHUB_OUTPUT"
+          if [ "${{ needs.preflight.outputs.environment }}" = "production" ]; then
+            echo "channel=live" >> "$GITHUB_OUTPUT"
           else
-            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "channel=staging" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Firebase Hosting へデプロイ
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          projectId: ${{ secrets.FIREBASE_PROJECT_ID }}
+          channelId: ${{ steps.channel.outputs.channel }}
+          entryPoint: mockup
+
+      - name: デプロイ結果をサマリーへ記録
+        if: always()
+        run: |
+          echo "- ✅ **mockup デプロイ**: 環境 ${{ needs.preflight.outputs.environment }} / チャネル ${{ steps.channel.outputs.channel }}" >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # デプロイ（api / Cloud Run）: 全テストゲート通過 + production + api 設定値ありのときのみ実行。
+  # staging は別途プロビジョニングが必要なため対象外（preflight で通知済み）。
+  # ---------------------------------------------------------------------------
+  deploy-api:
+    name: デプロイ実行（api / Cloud Run）
+    needs: [preflight, test]
+    if: needs.preflight.outputs.api_ready == 'true' && needs.preflight.outputs.environment == 'production'
+    runs-on: ubuntu-latest
+    environment: ${{ needs.preflight.outputs.environment }}
+    steps:
       - uses: actions/checkout@v4
-        if: steps.check.outputs.ready == 'true'
 
       - uses: google-github-actions/auth@v2
-        if: steps.check.outputs.ready == 'true'
         with:
           credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
       - uses: google-github-actions/setup-gcloud@v2
-        if: steps.check.outputs.ready == 'true'
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
       - name: Artifact Registry リポジトリを用意（冪等）
-        if: steps.check.outputs.ready == 'true'
         env:
           REGION: ${{ secrets.GCP_REGION }}
         run: |
@@ -190,7 +269,6 @@ jobs:
           gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
 
       - name: イメージをビルドしてプッシュ
-        if: steps.check.outputs.ready == 'true'
         env:
           REGION: ${{ secrets.GCP_REGION }}
           PROJECT: ${{ secrets.GCP_PROJECT_ID }}
@@ -202,7 +280,6 @@ jobs:
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
 
       - name: DATABASE_URL を Secret Manager へ登録（冪等）
-        if: steps.check.outputs.ready == 'true'
         env:
           SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
@@ -226,7 +303,6 @@ jobs:
       # カレンダー連携（F-06-8）: OAuth クライアントシークレットとトークン暗号化鍵を Secret Manager へ。
       # secrets 未設定ならスキップ（連携無効のままデプロイ継続 = 原則4）
       - name: カレンダー連携の secrets を Secret Manager へ登録（冪等・任意）
-        if: steps.check.outputs.ready == 'true'
         env:
           SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
           PROJECT: ${{ secrets.GCP_PROJECT_ID }}
@@ -260,7 +336,6 @@ jobs:
       # AI 機能（Vertex AI）とカレンダー同期（Calendar API）の有効化 + 実行 SA への権限付与。
       # 補助処理として非ブロッキング（権限不足時は警告 + deploy-guide.md の手動手順へフォールバック）
       - name: Vertex AI / Calendar API の有効化 + 実行 SA へ権限付与（冪等・非ブロッキング）
-        if: steps.check.outputs.ready == 'true'
         env:
           PROJECT: ${{ secrets.GCP_PROJECT_ID }}
         run: |
@@ -281,7 +356,6 @@ jobs:
       # ドキュメント保管（バッチ7l = Firebase の Cloud Storage バケット）。STORAGE_BUCKET secret 登録時のみ。
       # 未登録の環境は DB bytea フォールバックで全機能が動作する（署名 URL のみ GCS 専用）
       - name: ドキュメント保管（Cloud Storage）の準備（冪等・非ブロッキング）
-        if: steps.check.outputs.ready == 'true'
         env:
           PROJECT: ${{ secrets.GCP_PROJECT_ID }}
           REGION: ${{ secrets.GCP_REGION }}
@@ -311,7 +385,6 @@ jobs:
             || echo "::warning::実行 SA への iam.serviceAccountTokenCreator（self）付与に失敗しました。署名 URL は base64 ダウンロードへ縮退します"
 
       - name: Cloud Run へデプロイ
-        if: steps.check.outputs.ready == 'true'
         env:
           REGION: ${{ secrets.GCP_REGION }}
           SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
@@ -350,3 +423,64 @@ jobs:
             --set-env-vars "$ENV_VARS" \
             --set-secrets "$SECRET_FLAGS"
           echo "デプロイ完了: $(gcloud run services describe "$SERVICE" --region "$REGION" --format='value(status.url)')"
+
+      - name: デプロイ結果をサマリーへ記録
+        if: always()
+        run: |
+          echo "- ✅ **api デプロイ**: 環境 production / サービス ${{ secrets.CLOUD_RUN_SERVICE }}" >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # 最終レポート: 成否にかかわらずパイプライン全体の結果を Step Summary に記録
+  # ---------------------------------------------------------------------------
+  report:
+    name: パイプライン結果レポート
+    needs: [preflight, test, deploy-mockup, deploy-api]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: 結果サマリーを出力
+        env:
+          PREFLIGHT_RESULT: ${{ needs.preflight.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+          DEPLOY_MOCKUP_RESULT: ${{ needs.deploy-mockup.result }}
+          DEPLOY_API_RESULT: ${{ needs.deploy-api.result }}
+          TARGET_ENV: ${{ needs.preflight.outputs.environment }}
+          API_READY: ${{ needs.preflight.outputs.api_ready }}
+        run: |
+          to_mark() {
+            case "$1" in
+              success)   echo "✅ 成功" ;;
+              failure)   echo "❌ 失敗" ;;
+              skipped)   echo "⏭️ スキップ" ;;
+              cancelled) echo "🚫 キャンセル" ;;
+              *)         echo "$1" ;;
+            esac
+          }
+
+          {
+            echo "# デプロイパイプライン結果（環境: ${TARGET_ENV:-production}）"
+            echo ""
+            echo "| ステージ | 結果 |"
+            echo "|---------|------|"
+            echo "| 事前検証 | $(to_mark "$PREFLIGHT_RESULT") |"
+            echo "| テストゲート（単体・結合・シナリオ） | $(to_mark "$TEST_RESULT") |"
+            echo "| デプロイ（mockup / Firebase Hosting） | $(to_mark "$DEPLOY_MOCKUP_RESULT") |"
+            echo "| デプロイ（api / Cloud Run） | $(to_mark "$DEPLOY_API_RESULT") |"
+            echo ""
+            if [ "$DEPLOY_API_RESULT" = "skipped" ]; then
+              if [ "${TARGET_ENV}" != "production" ]; then
+                echo "ℹ️ api は staging では対象外です（mockup のみ staging プレビューへデプロイ）。"
+              elif [ "$API_READY" != "true" ]; then
+                echo "ℹ️ api デプロイ用 secrets が未設定のため api はスキップしました（mockup のみデプロイ）。"
+              fi
+              echo ""
+            fi
+            if [ "$PREFLIGHT_RESULT" = "success" ] && [ "$TEST_RESULT" = "success" ] \
+               && [ "$DEPLOY_MOCKUP_RESULT" = "success" ]; then
+              echo "🎉 デプロイが完了しました（環境: ${TARGET_ENV:-production}）。"
+            else
+              echo "⚠️ デプロイは完了していません。失敗したステージの Step Summary と"
+              echo "アーティファクト \`deploy-logs\` で「何がどのように失敗したか」を確認し、"
+              echo "修正後に再実行してください。対処手順: \`.ai-native/outputs/phase7/deploy-guide.md\`"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
