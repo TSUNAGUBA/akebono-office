@@ -542,35 +542,38 @@ export function normalizeIntegratedMetrics(raw: unknown): IntegratedMetrics | nu
   const n = {
     sessions: boundedNum(r.sessions, COUNT_MAX),
     conversions: boundedNum(r.conversions, COUNT_MAX),
-    conversionRate: boundedNum(r.conversionRate, 1),
     prevSessions: boundedNum(r.prevSessions, COUNT_MAX),
     prevConversions: boundedNum(r.prevConversions, COUNT_MAX),
     salesAmount: boundedNum(r.salesAmount, YEN_MAX),
     orders: boundedNum(r.orders, COUNT_MAX),
     prevSalesAmount: boundedNum(r.prevSalesAmount, YEN_MAX),
-    aov: boundedNum(r.aov, YEN_MAX),
-    salesPerSession: boundedNum(r.salesPerSession, YEN_MAX),
     fSessions: boundedNum(f.sessions, COUNT_MAX),
     fEngaged: boundedNum(f.engaged, COUNT_MAX),
     fConversions: boundedNum(f.conversions, COUNT_MAX),
     fOrders: boundedNum(f.orders, COUNT_MAX),
   }
   if (Object.values(n).some(v => v === null)) return null
+  const sessions = Math.round(n.sessions!)
+  const conversions = Math.round(n.conversions!)
+  const salesAmount = Math.round(n.salesAmount!)
+  const orders = Math.round(n.orders!)
   return {
     segmentId: capCp(String(r.segmentId ?? ''), 64),
     segmentName: capCp(String(r.segmentName ?? 'セグメント'), 100),
     siteName: capCp(String(r.siteName ?? 'メディア'), 100),
     periodMonth,
-    sessions: Math.round(n.sessions!),
-    conversions: Math.round(n.conversions!),
-    conversionRate: Math.round(n.conversionRate! * 10000) / 10000,
+    sessions,
+    conversions,
+    // 派生値（CVR・平均受注額・セッションあたり売上）は申告値を使わず検証済みの元値から再計算する
+    // （申告値の捏造余地をなくす + GA の keyEvents はセッション数を超えうるため CVR に上限検証を課さない）
+    conversionRate: sessions > 0 ? Math.round(conversions / sessions * 10000) / 10000 : 0,
     prevSessions: Math.round(n.prevSessions!),
     prevConversions: Math.round(n.prevConversions!),
-    salesAmount: Math.round(n.salesAmount!),
-    orders: Math.round(n.orders!),
+    salesAmount,
+    orders,
     prevSalesAmount: Math.round(n.prevSalesAmount!),
-    aov: Math.round(n.aov!),
-    salesPerSession: Math.round(n.salesPerSession!),
+    aov: orders > 0 ? Math.round(salesAmount / orders) : 0,
+    salesPerSession: sessions > 0 ? Math.round(salesAmount / sessions) : 0,
     funnel: {
       sessions: Math.round(n.fSessions!),
       engaged: Math.round(n.fEngaged!),

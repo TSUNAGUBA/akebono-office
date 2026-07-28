@@ -189,10 +189,19 @@ describe('normalizeIntegratedMetrics（M2: 受領検証 = whitelist + 有限・�
     expect(normalizeIntegratedMetrics({ ...valid, funnel: { ...valid.funnel, engaged: Number.NaN } })).toBeNull()
   })
 
-  it('範囲外（件数 > 1e9・金額 > 1e12・CVR > 1）は null', () => {
+  it('範囲外（件数 > 1e9・金額 > 1e12）は null', () => {
     expect(normalizeIntegratedMetrics({ ...valid, sessions: 2e9 })).toBeNull()
     expect(normalizeIntegratedMetrics({ ...valid, salesAmount: 2e12 })).toBeNull()
-    expect(normalizeIntegratedMetrics({ ...valid, conversionRate: 1.5 })).toBeNull()
+  })
+
+  it('派生値（CVR・AOV・セッションあたり売上）は申告値を無視して検証済みの元値から再計算する', () => {
+    const m = normalizeIntegratedMetrics({ ...valid, conversionRate: 0.999, aov: 1, salesPerSession: 1 })!
+    expect(m.conversionRate).toBe(Math.round(24 / 1200 * 10000) / 10000)
+    expect(m.aov).toBe(Math.round(3200000 / 16))
+    expect(m.salesPerSession).toBe(Math.round(3200000 / 1200))
+    // GA の keyEvents はセッション数を超えうる（1 セッション複数キーイベント）→ CVR > 1 も正しく通る
+    const over = normalizeIntegratedMetrics({ ...valid, sessions: 10, conversions: 15 })!
+    expect(over.conversionRate).toBe(1.5)
   })
 
   it('trend の欠落・空・月形式不正・要素の型崩れは null', () => {
