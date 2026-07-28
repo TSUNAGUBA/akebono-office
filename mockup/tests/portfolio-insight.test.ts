@@ -143,4 +143,18 @@ describe('heuristicCompanyInsight', () => {
     expect(r.actions.length).toBeGreaterThan(0)
     expect(r.executiveSummary.length).toBeGreaterThan(0)
   })
+
+  it('単一業態では「集中」も「バランス良好」も出さない（100% は自明で誤誘導になる）', () => {
+    const c = company({ snapshots: [snap({ segmentId: 'seg-01', segmentName: '唯一', salesAmount: 1_000_000, prevSalesAmount: 900_000 })] })
+    const r = heuristicCompanyInsight(c)
+    expect(r.findings.some(f => f.title.includes('集中'))).toBe(false)
+    expect(r.findings.some(f => f.title.includes('バランスが良好'))).toBe(false)
+  })
+
+  it('レポート本文は段落区切り（空行）を保持する', () => {
+    const r = heuristicCompanyInsight(company())
+    // 見出し・全社サマリー・メディア・牽引業態・締めの各段落が空行で区切られている
+    expect(r.executiveSummary).toContain('\n\n')
+    expect(r.executiveSummary.split('\n\n').length).toBeGreaterThanOrEqual(4)
+  })
 })

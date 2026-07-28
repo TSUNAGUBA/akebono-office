@@ -47,6 +47,7 @@ export function useDashboardInsight() {
   const { activeSegments, segmentById } = useCurrentSegment()
   const { settingFor } = useMediaSettings()
   const { integratedMetricsFor, articleInputsFor } = useMediaAnalytics()
+  const { isEnabled } = useAppSettings()
   const membersTbl = tbl('members')
 
   function nameOf(id: string): string | null {
@@ -61,7 +62,8 @@ export function useDashboardInsight() {
    */
   function snapshotFor(segmentId: string): { snapshot: SegmentSnapshot; trend: DashboardMonthPoint[]; periodMonth: string } {
     const seg = segmentById(segmentId)
-    const connected = settingFor(segmentId)?.gaConnected === true
+    // メディア機能トグルが無効ならダッシュボードのメディア軸も無効化（指標・レポート・全社ロールアップを一貫させる）
+    const connected = isEnabled('media') && settingFor(segmentId)?.gaConnected === true
     const im = integratedMetricsFor(segmentId, MONTHS)
     const snapshot: SegmentSnapshot = {
       segmentId,

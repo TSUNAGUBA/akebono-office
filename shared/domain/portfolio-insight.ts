@@ -277,10 +277,10 @@ export function heuristicCompanyInsight(c: CompanySummary): DashboardInsight {
     })
   }
 
-  // ---- 売上集中リスク ----
-  if (top && c.totalSales > 0) {
+  // ---- 売上集中リスク（複数業態のときのみ評価。単一業態は「集中」も「分散」も意味を持たない） ----
+  if (top && c.totalSales > 0 && c.segmentCount > 1) {
     const share = top.salesAmount / c.totalSales
-    if (share >= CONCENTRATION && c.segmentCount > 1) {
+    if (share >= CONCENTRATION) {
       findings.push({
         kind: 'issue',
         title: `売上が「${top.segmentName}」に集中（全社の ${pct(share)}）`,
@@ -291,7 +291,7 @@ export function heuristicCompanyInsight(c: CompanySummary): DashboardInsight {
         detail: `${top.segmentName} が売上の ${pct(share)} を占めます。伸びしろのある業態へメディア投資・商品拡充を配分し、依存度を下げます。`,
         priority: 'high',
       })
-    } else if (top) {
+    } else {
       findings.push({
         kind: 'win',
         title: `売上構成のバランスが良好（最大でも ${pct(share)}）`,
@@ -344,7 +344,8 @@ export function heuristicCompanyInsight(c: CompanySummary): DashboardInsight {
     })
   }
 
-  const executiveSummary = [
+  // 段落区切り（空行）を保持するため filter(Boolean) は使わず、任意行は条件付きで push する
+  const summaryLines = [
     `## 会社全体ダッシュボードレポート（${c.periodMonth}）`,
     '',
     `**全社サマリー**: 売上 ${man(c.totalSales)}（前月比 ${signed(salesDelta)}）、受注 ${c.totalOrders} 件、${c.segmentCount} 業態。`,
@@ -352,15 +353,14 @@ export function heuristicCompanyInsight(c: CompanySummary): DashboardInsight {
     c.connectedCount > 0
       ? `**メディア**: 接続 ${c.connectedCount}/${c.segmentCount} 業態、${int(c.totalSessions)} セッション（前月比 ${signed(sessionDelta)}）/ CV ${int(c.totalConversions)} 件。`
       : `**メディア**: まだどの業態も GA 未連携です。連携すると全社の流入 × 売上分析が可能になります。`,
-    '',
-    top ? `**牽引業態**: ${top.segmentName}（${man(top.salesAmount)}）。` : '',
-    '',
-    salesDelta >= GROWTH_STRONG
-      ? '全社は成長局面です。牽引業態の勝ち筋を型化し、他業態へ横展開して成長を面へ広げます。'
-      : salesDelta <= DECLINE
-        ? '全社は減速局面です。減速業態のてこ入れと、集中リスクの分散を並行して進めます。'
-        : '全社は安定局面です。業態間のばらつきを均し、メディア接続の拡大で次の成長基盤を作ります。',
-  ].filter(Boolean).join('\n')
+  ]
+  if (top) summaryLines.push('', `**牽引業態**: ${top.segmentName}（${man(top.salesAmount)}）。`)
+  summaryLines.push('', salesDelta >= GROWTH_STRONG
+    ? '全社は成長局面です。牽引業態の勝ち筋を型化し、他業態へ横展開して成長を面へ広げます。'
+    : salesDelta <= DECLINE
+      ? '全社は減速局面です。減速業態のてこ入れと、集中リスクの分散を並行して進めます。'
+      : '全社は安定局面です。業態間のばらつきを均し、メディア接続の拡大で次の成長基盤を作ります。')
+  const executiveSummary = summaryLines.join('\n')
 
   return { executiveSummary, findings, actions }
 }

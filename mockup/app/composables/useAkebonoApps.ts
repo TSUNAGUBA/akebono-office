@@ -204,7 +204,8 @@ export function useAkebonoApps() {
   }
 
   return {
-    catalog: AKEBONO_APP_CATALOG,
+    // 機能トグルで利用可能なアプリのみ（設定 UI・ランチャー・プリセット差分で一貫して使う）
+    catalog: availableCatalog,
     configs, activeSegments,
     enabledApps, enabledAppsOf, presetDiff, presetDiffOf, presetAppsOf,
     isAppEnabled, labelOf, setEnabled, setLabel, applyPreset, industryTypeLabel,

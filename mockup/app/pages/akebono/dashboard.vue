@@ -17,10 +17,16 @@ import type { SegmentDashboardView } from '~/composables/useDashboardInsight'
 const { activeSegments, effectiveSegmentId, currentSegment, switchSegment } = useCurrentSegment()
 const { settingFor } = useMediaSettings()
 const { buildSegmentSummary, loadSegment, generateSegment } = useDashboardInsight()
+const { isEnabled } = useAppSettings()
+const { can } = usePermissions()
 const apps = useAkebonoApps()
 const { show } = useToast()
 
-const connected = computed(() => settingFor(effectiveSegmentId.value)?.gaConnected === true)
+// メディア軸はメディア機能トグルが有効なときのみ表示（無効時は業務サマリーのみ）
+const mediaEnabled = computed(() => isEnabled('media'))
+const connected = computed(() => mediaEnabled.value && settingFor(effectiveSegmentId.value)?.gaConnected === true)
+// 会社全体ダッシュボードは売上権限が必要（導線もゲート = 他の入口と一貫）
+const canCompanyDashboard = computed(() => can('sales'))
 
 // ---------- サマリー（常時ライブ） ----------
 const summary = computed(() => buildSegmentSummary(effectiveSegmentId.value))
@@ -81,8 +87,8 @@ const appCards = computed<MenuCard[]>(() =>
           <span class="text-[12px] text-sub">対象業態</span>
           <span class="text-[13px] font-bold">{{ currentSegment.name }}</span>
           <UiStatusBadge :label="INDUSTRY_TYPE_LABELS[currentSegment.industryType]" tone="info" />
-          <UiStatusBadge :label="connected ? 'メディア連携済み' : 'メディア未連携'" :tone="connected ? 'ok' : 'neutral'" dot />
-          <NuxtLink to="/akebono/company" class="btn btn-ghost btn-sm ml-auto">
+          <UiStatusBadge v-if="mediaEnabled" :label="connected ? 'メディア連携済み' : 'メディア未連携'" :tone="connected ? 'ok' : 'neutral'" dot />
+          <NuxtLink v-if="canCompanyDashboard" to="/akebono/company" class="btn btn-ghost btn-sm ml-auto">
             <Sparkles class="h-3.5 w-3.5" aria-hidden="true" /> 会社全体
           </NuxtLink>
         </div>
@@ -101,7 +107,7 @@ const appCards = computed<MenuCard[]>(() =>
         </div>
       </div>
 
-      <!-- ① サマリー（KPI） -->
+      <!-- ① サマリー（KPI）。メディア軸は機能トグル有効時のみ -->
       <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
         <UiKpiCard
           label="売上（対象月）" :value="fmtYenCompact(snap.salesAmount)"
@@ -109,28 +115,32 @@ const appCards = computed<MenuCard[]>(() =>
           sub="前月比" icon="TrendingUp" to="/akebono/sales"
         />
         <UiKpiCard label="受注件数" :value="fmtInt(snap.orders)" :sub="`平均 ${snap.aov > 0 ? fmtYenCompact(snap.aov) : '—'}`" icon="Receipt" />
-        <UiKpiCard
-          label="メディア流入" :value="connected ? fmtInt(snap.sessions) : '—'"
-          :delta="connected && snap.prevSessions > 0 ? (snap.sessions - snap.prevSessions) / snap.prevSessions : null"
-          sub="前月比・セッション" icon="MousePointerClick" to="/media"
-        />
-        <UiKpiCard
-          label="コンバージョン" :value="connected ? fmtInt(snap.conversions) : '—'"
-          :sub="connected ? `CVR ${fmtPct(snap.conversionRate)}` : 'GA 未連携'" icon="Target" to="/media"
-        />
+        <template v-if="mediaEnabled">
+          <UiKpiCard
+            label="メディア流入" :value="connected ? fmtInt(snap.sessions) : '—'"
+            :delta="connected && snap.prevSessions > 0 ? (snap.sessions - snap.prevSessions) / snap.prevSessions : null"
+            sub="前月比・セッション" icon="MousePointerClick" to="/media"
+          />
+          <UiKpiCard
+            label="コンバージョン" :value="connected ? fmtInt(snap.conversions) : '—'"
+            :sub="connected ? `CVR ${fmtPct(snap.conversionRate)}` : 'GA 未連携'" icon="Target" to="/media"
+          />
+        </template>
       </div>
 
       <!-- チャート -->
-      <div class="grid gap-3 lg:grid-cols-2">
+      <div class="grid gap-3" :class="mediaEnabled ? 'lg:grid-cols-2' : ''">
         <ChartsBarChartCard title="売上推移（月次）" :labels="salesTrendChart.labels" :series="salesTrendChart.series" :y-formatter="v => `${fmtInt(v)}万`" />
-        <ChartsLineChartCard v-if="connected" title="流入・コンバージョン（月次）" :labels="mediaTrendChart.labels" :series="mediaTrendChart.series" />
-        <UiSectionCard v-else title="メディア分析" description="この業態はまだ Google Analytics 未連携です">
-          <UiEmptyState icon="LineChart" title="GA を連携するとメディア指標が表示されます" hint="流入・CV と売上を突き合わせた PDCA、記事別インサイトが本ダッシュボードに加わります">
-            <template #action>
-              <NuxtLink to="/media/settings" class="btn btn-primary btn-sm">メディアを連携する</NuxtLink>
-            </template>
-          </UiEmptyState>
-        </UiSectionCard>
+        <template v-if="mediaEnabled">
+          <ChartsLineChartCard v-if="connected" title="流入・コンバージョン（月次）" :labels="mediaTrendChart.labels" :series="mediaTrendChart.series" />
+          <UiSectionCard v-else title="メディア分析" description="この業態はまだ Google Analytics 未連携です">
+            <UiEmptyState icon="LineChart" title="GA を連携するとメディア指標が表示されます" hint="流入・CV と売上を突き合わせた PDCA、記事別インサイトが本ダッシュボードに加わります">
+              <template #action>
+                <NuxtLink to="/media/settings" class="btn btn-primary btn-sm">メディアを連携する</NuxtLink>
+              </template>
+            </UiEmptyState>
+          </UiSectionCard>
+        </template>
       </div>
 
       <!-- ②③ AI レポート・AI インサイト（生成/再生成） -->

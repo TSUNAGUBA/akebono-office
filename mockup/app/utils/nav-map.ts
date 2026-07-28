@@ -142,8 +142,10 @@ export const NAV_MAP: Record<string, NavMapEntry> = {
     parent: { to: '/ai-company', label: 'AIネイティブカンパニー' },
     related: [{ to: '/ai-company/employees', label: 'AI 社員の管理', adminOnly: true }],
   },
-  '/akebono': { parent: HOME, related: [{ to: '/akebono/dashboard', label: 'この業態のダッシュボード' }, { to: '/akebono/company', label: '会社全体ダッシュボード', adminOnly: true }, { to: '/media', label: 'メディア分析' }] },
-  '/akebono/dashboard': { parent: { to: '/akebono', label: 'AKEBONO 業務' }, related: [{ to: '/akebono/company', label: '会社全体ダッシュボード', adminOnly: true }, { to: '/media', label: 'メディア分析' }, { to: '/akebono/sales', label: '売上管理' }] },
+  // 会社全体ダッシュボード（/akebono/company）は can('sales') ゲート。nav-map の related は adminOnly しか
+  // 持てず判定が乖離するため、関連リンクには載せず、権限ゲート済みのハブ/ダッシュボードのボタンから導線する。
+  '/akebono': { parent: HOME, related: [{ to: '/akebono/dashboard', label: 'この業態のダッシュボード' }, { to: '/media', label: 'メディア分析' }] },
+  '/akebono/dashboard': { parent: { to: '/akebono', label: 'AKEBONO 業務' }, related: [{ to: '/media', label: 'メディア分析' }, { to: '/akebono/sales', label: '売上管理' }] },
   '/akebono/company': { parent: { to: '/akebono', label: 'AKEBONO 業務' }, related: [{ to: '/akebono/dashboard', label: '業態別ダッシュボード' }, { to: '/sales', label: '売上管理' }] },
   '/media': { parent: { to: '/akebono', label: 'AKEBONO 業務' }, related: [{ to: '/media/analytics', label: 'メディア分析' }, { to: '/media/articles', label: 'AI 記事生成' }, { to: '/media/settings', label: 'メディア設定', adminOnly: true }, { to: '/akebono/dashboard', label: '業態ダッシュボード' }] },
   '/media/analytics': { parent: { to: '/media', label: 'メディア分析' }, related: [{ to: '/media/articles', label: 'AI 記事生成' }, { to: '/media/settings', label: 'メディア設定', adminOnly: true }] },

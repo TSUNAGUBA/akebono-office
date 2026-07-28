@@ -47,6 +47,9 @@ const appCards = computed<MenuCard[]>(() =>
     id: a.key, title: apps.labelOf(a), description: a.description, icon: a.icon, to: a.to,
   })))
 
+// アプリ・業態の設定モーダルで列挙するアプリ（機能トグルで利用可能なもののみ）
+const manageableApps = computed(() => apps.catalog.value)
+
 // ---------- アプリ使用/不使用管理（管理者・業態ごと） ----------
 const manageOpen = ref(false)
 /** 設定対象の業態（既定 = 現在の業態） */
@@ -223,7 +226,7 @@ async function submitWish(): Promise<void> {
           <p class="text-[12px] font-bold">「{{ settingsSegment.name }}」で使用するアプリ</p>
           <p class="mt-0.5 text-[11px] text-muted">使用するアプリのみこの業態のメニューに表示されます。不使用にしてもデータは保全されます。</p>
           <ul class="mt-2 grid gap-1.5">
-            <li v-for="a in apps.catalog" :key="a.key" class="grid gap-2 rounded-[8px] border border-line px-3 py-2 sm:grid-cols-[1fr_auto]">
+            <li v-for="a in manageableApps" :key="a.key" class="grid gap-2 rounded-[8px] border border-line px-3 py-2 sm:grid-cols-[1fr_auto]">
               <div class="flex items-center gap-2">
                 <CircleCheck v-if="apps.isAppEnabled(a.key, settingsSegmentId)" class="h-4 w-4 shrink-0 text-ok" aria-hidden="true" />
                 <CircleDashed v-else class="h-4 w-4 shrink-0 text-muted" aria-hidden="true" />
