@@ -86,11 +86,13 @@ const depts = useDepartments()   // nameOf / options / membersOf / tree
 // 休暇（F-04-5/9。種別別残数。付与は管理者/人事のみ・同日同種別はスキップ=冪等）
 const leave = useLeave()   // balance(memberId, leaveTypeId?) / request / decide / grant / bulkGrant / activeLeaveTypes
 
-// メディア分析（F-40。Akebono セグメントと 1:1。純ロジックの SoT = shared/domain/media-*）
-const ms = useMediaSettings()    // settingFor / ensureSetting / save / connectGa / disconnectGa（GA 擬似 OAuth）
-const ma = useMediaAnalytics()   // metricsFor(segId,28) / integratedMetricsFor(segId,6) / businessMonthly（GA 由来メトリクスの決定的導出）
-const mi = useMediaInsight()     // loadMedia/generateMedia / loadIntegrated/generateIntegrated（生成→保管→再生成で上書き）
-const art = useMediaArticles()   // generate（目的/質/雰囲気）/ suggestionFromInsight / adopt / unadopt / remove / restore（取消可能）
+// メディア分析（F-40。Akebono セグメントと 1:1。純ロジックの SoT = shared/domain/media-*。
+// デュアルモード: モック = 擬似 OAuth + 決定的導出 / API = Google OAuth 2.0（analytics.readonly・セグメント単位）+
+// GA4 実データ（/v1/media/*）。save・connect 系・generate 系は async）
+const ms = useMediaSettings()    // settingFor / save / disconnectGa（両モード）+ gaStatusFor / startGaConnect / listGaProperties / selectGaProperty（API の OAuth + プロパティ選択）/ connectGa（モック擬似 OAuth）
+const ma = useMediaAnalytics()   // metricsFor(segId,28)（API はロード中 null）/ integratedMetricsFor(segId,6) / metricsReady / metricsWarningFor / refreshMetrics / ensureIntegratedLoaded
+const mi = useMediaInsight()     // loadMedia/generateMedia / loadIntegrated/generateIntegrated（async。生成→保管→再生成で上書き。API = Vertex AI → ヒューリスティック）/ storedMedia
+const art = useMediaArticles()   // generate（async。API = Vertex AI → 決定的フォールバック）/ suggestionFromInsight / adopt / unadopt / remove / restore（取消可能）
 
 // 業態別/会社全体ダッシュボード（F-41。業務×メディアを統合したサマリー+AIレポート+AIインサイト。純ロジック SoT = shared/domain/portfolio-insight）
 const di = useDashboardInsight() // buildSegmentSummary/buildCompanySummary（常時ライブ集計）/ loadSegment・generateSegment / loadCompany・generateCompany（生成→保管→再生成で上書き）
@@ -127,7 +129,7 @@ const di = useDashboardInsight() // buildSegmentSummary/buildCompanySummary（�
 | `MastersPermissionMatrix` | 権限表モード（props なし = ruleCrud を内部利用）。ページ > 機能 > 項目 の 3 階層ツリー × ロール/役職/個人（バッチ7m）。セルは常に可否を表示（明示 = 濃色 / 上位一括・既定値 = 薄色破線）・クリックで反転・引き継ぎ値へ戻すと明示ルール解除。表ヘッダは内部スクロール + sticky |
 | `SettingsMenuCategoryEditor` | props なし。メニューカテゴリのカスタマイズ（F-13-8。エリア切替 + カテゴリ CRUD/並び替え/カード割当 + 既定に戻す。バッチ7h） |
 | `MediaSegmentBar` | props なし。メディア分析の対象セグメント（業態）切替バー（現在業態 + GA 連携バッジ + 設定導線）。全メディア画面の先頭に置く（F-40） |
-| `MediaGaConnect` | segmentId?（未指定=現在業態）, variant（'gate'/'bar'）。Google Analytics 連携ゲート（擬似 OAuth + GA4 プロパティ選択）。連携済みは状態バー + 解除（F-40。CalendarConnectGate と同型） |
+| `MediaGaConnect` | segmentId?（未指定=現在業態）, variant（'gate'/'bar'）。Google Analytics 連携ゲート（モック = 擬似 OAuth / API = Google OAuth 2.0 リダイレクト + 復帰クエリ `?ga=` 処理 + GA4 プロパティ選択モーダル。needsProperty の中間状態も再開可）。連携済みは状態バー + 解除（F-40。CalendarConnectGate と同型） |
 | `MediaFunnel` | stages（{label,value}[]）。流入→受注の簡易ファネル（幅バー + 前段比。Chart.js 不使用。F-40） |
 
 **ページ間導線・メニュー定義の SoT（バッチ7h）:** 親ページへ戻る・関連ページは `app/utils/nav-map.ts`、

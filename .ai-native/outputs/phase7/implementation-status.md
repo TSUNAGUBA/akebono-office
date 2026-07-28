@@ -143,6 +143,8 @@
 | 提供システム稼働状況 `/status` | F-11 | ✅ | ✅ 稼働状況接続済み（PR #37 = バッチ6c）: サービス = `system_services`（0018・mockup と同一の 3 サービスをシード）・インシデント = `service_incidents`（記録系 = updates 追記のみ・正順の状態機械を FOR UPDATE で直列化・登録/更新で管理者通知）・uptime = `uptime_daily`（SoT はインシデント → shared/domain/uptime で日次導出・窓内 DELETE→INSERT で冪等。トリガ = 登録/更新時 + `/jobs/uptime-rollup` + 管理者の手動再計算）・`GET /v1/status` 一括ハイドレーション（90 日 operational 埋め）・機能ガード 'status'（F-16）・チャットボット文脈 + 決定的フォールバックも実データ化 | モックの乱数 uptime シードは本番へ持ち込まない（インシデント実績から導出） |
 | チャットボット（画面内ヘルプ） | F-09-3 | ✅ | ✅ チャットボット接続済み（PR #27）+ ✅ セッション管理（PR #30/#31・オペレーター指示 2026-07-17）: 会話は chat_sessions / chat_messages（0012）で DB 管理・同一セッション内は直近履歴 12 件を LLM へ渡すマルチターン・過去セッションの再開/新規開始（履歴ドロワー + 新しい会話）・本人のみ参照（AKO-CHT-001）・メッセージは追記のみ。fallback 応答もセッションへ追記（履歴の忠実性） | 旧「会話履歴はセッションローカル」設計判断は PR #30/#31 で置換。ドキュメントはバッチ7l で実データ化（search_docs 経由の参照 + 署名 URL 案内 = §32）。エスカレーション起票は PR #21 で接続済み |
 | mart（分析基盤）ETL: fact_attendance / fact_leave / fact_effort ほか | data-design §2 | —（写像可能な型のみ） | 🚧 fact_sales のみ本 PR（バッチ6b）で実装（app_office 内 mart 互換テーブル + mart_load_runs。data-design §2.3 の実装状況注記参照）。他ファクトは ⏳ | app_office → mart の一方向 ETL。mart 本体（akebono-scm-platform）への接続はテーブル移送 + ETL 先切替で対応（オペレーター判断 2026-07-18） |
+| メディア分析 `/media`（AKEBONO 業務配下） | F-40 | ✅ | ✅ メディア接続（§37 = 2026-07-28）: GA 連携 = Google OAuth 2.0（**セグメント単位**・analytics.readonly・state ノンス + email 突合・トークン AES-256-GCM 暗号化 = 0030）→ GA4 プロパティ選択（Admin API accountSummaries → PUT /v1/media/property）・集計 = GA4 Data API batchRunReports → MediaMetrics 整形（lib/ga.ts・30 分導出キャッシュ・conversions 廃止のため keyEvents 使用）・メディア設定（部分更新 = hasOwn フィルタ）・記事インベントリ（論理削除/復元）・AI 記事生成（Vertex AI → 決定的フォールバック・採用/取消）・AI インサイト（media/integrated = weekly_insights と同型の upsert 保管） | 記事インベントリは実データのためシードしない（採用・手動登録で育成）。統合メトリクスの売上月次は未移行の salesRecords（モック側 SoT）をクライアント合成（§37 残課題参照） |
+| 業態/会社全体ダッシュボード `/akebono/dashboard`・`/akebono/company` | F-41 | ✅ | 🚧 部分接続: メディア軸（GA 月次）は API モードで実データ化（/v1/media/monthly）。売上軸（salesRecords）と保管（dashboardInsights）は未移行のモックコレクション | ダッシュボードの本接続は salesRecords / businessSegments の API 移行時に実施（設計判断を useDashboardInsight に文書化） |
 
 ## 3. バッチ3d（PR #25・マージ済み）: AI業務アシスタント + 日報 AI アシストの完了条件（Definition of Done）
 
@@ -580,3 +582,24 @@
 - [x] 反復レビュー（原則9）: 独立コードレビュー + システム監査の 2 ロールで実施。**R1** = 重大 3 件（API モードの旧稟議本文消失（?? → || 修正 + mock も body 移行で両モード一致）・明日の予定自動反映の初回不発（autoPlans computed + watch で遅延ロード到着に追従）・チーム月ビューの未ロード（touchTeamDates の明示タッチ = 誤リマインド防止））・中 3 件（AI 日報のフィルタバイパス・hr の日次詳細導線退行・timecard/attendance 依存）・軽微/表記ほかを修正。**R2** = R1 修正 10 項目すべて解消・機能デグレゼロを確認したうえで、残存の表記 3 件（AI ドラフト生成根拠の 業務テーマ/工数・権限設定の aria-label・e2e チェックラベル）+ 設計 SoT ドキュメント未追随 3 本（screen-design の /attendance・/timecard・/reports・/workflow 節 / data-design の DailyReport・WorkflowRequest・PermissionRule / api-design の weekly scope=all・timecard ガード）+ 本欄の完了宣言先行を指摘 → 全件修正（isPristineEditor の hours/progress 判定強化・weekStart 非月曜の設計判断コメントを含む）。修正後に typecheck・単体・統合の全スイートで再検証
 - [x] ドキュメント更新（原則5）: functional-requirements（F-01-2/F-04-8/F-04-10/F-06-1/F-06-3/F-06-9/F-06-11/F-06-10/F-07 見出し/F-07-1）・本表（タイムカード・稟議行）・mockup/README
 - 既知の制約: API モードの「明日の予定の自動反映」は自分の日報キャッシュ到着後に反映（遅延ロード）。AI 日報ドラフト（F-06-7）は明日の予定（構造化）を生成しない（従来の tomorrow 文字列のみ = 将来拡張）
+
+## 37. メディア分析 F-40 の本実装（GA 連携・/media 全機能の API 化。2026-07-28）の完了条件（Definition of Done）
+
+### 37-1 GA 連携（Google OAuth 2.0 + GA4 Data/Admin API）
+- [x] migration 0030: media_settings（設定系）/ media_ga_tokens（**セグメント単位**のトークン = メディアは業態の資産。connected_by で連携者記録）/ media_oauth_states（一回性 + 10 分 TTL）/ media_metrics_cache（30 分の導出キャッシュ = GA クォータ対策。SoT は GA）/ media_articles / media_article_briefs / media_generated_articles / media_insights。segment_id はモック側エンティティ（businessSegments 未移行）のため FK なし（理由を migration に文書化）
+- [x] `/v1/media`: status（enabled/connected/needsProperty）/ oauth/url・oauth/callback（calendar と同型: state ノンス・email 突合・認証前登録・復帰 = `/media/settings?ga=&segment=`）/ properties（Admin API accountSummaries の平坦化）/ property（選択で connected 完成）/ disconnect（revoke 非ブロッキング・設定と記事は残す = 原則9.5）
+- [x] metrics（batchRunReports 2 呼び: 総計当期/前期 → 必須・内訳 5 レポート → 失敗時は空 + warning = 原則4）/ monthly（yearMonth。最終月 = 直前の完了月）。GA レスポンス整形は lib/ga.ts の純粋関数（rows 欠落・NaN・ゼロ除算防御・channels 日本語マッピング・yearMonth/date 変換・前期比 pagePath 突合・セクション = インベントリ優先 → 第 1 階層）。**conversions は GA4 で廃止済みのため keyEvents を使用**
+- [x] 認可: 書込系（oauth/url・property・disconnect・settings・articles 手動登録）は admin のみ。/v1/media は F-16 機能キー対象外（アプリ設定 = 業態別アプリ media + 機能トグルで制御。lib/permissions.ts に設計判断を文書化）
+- [x] デプロイ反映: deploy.yml が analyticsdata / analyticsadmin API を冪等有効化。deploy-guide §1-9b（リダイレクト URI `/v1/media/oauth/callback` の追加・API 有効化・同一 OAuth クライアント共用）
+
+### 37-2 /media 全機能の API 化
+- [x] メディア設定: GET/PUT /v1/media/settings（部分更新 = **body に実在するキーのみ** Object.hasOwn フィルタ。CLAUDE.md の Zod v4 注意に従い「送っていないフィールドの保持」を統合テストでアサート）
+- [x] 記事インベントリ: GET/POST /v1/media/articles + deactivate/restore（論理削除 = 原則9.5）。**実データはシードしない**（akebono_wishes / sales_monthly と同方針。採用・手動登録で育成）。API モードの分析空状態は articleCount でなく「GA データ空」で判定（analytics.vue）
+- [x] AI 記事生成: POST /v1/media/articles/generate = Vertex AI（generateJson）→ null は shared/domain/media-article の決定的生成へフォールバック（llm フラグ保存 → UI に Vertex AI / 自動生成 表示）。brief + 生成物をトランザクション保存。adopt（冪等: 二重採用 no-op + warning）/ unadopt / remove / restore
+- [x] AI インサイト: media_insights（weekly_insights 0026 と同型。UNIQUE(segment_id, scope) の upsert）。scope=media はサーバーが GA から集計・scope=integrated は**クライアント合成の統合メトリクスを受領**（売上明細 salesRecords が未移行のモック側 SoT のため。設計判断を routes/media.ts・useMediaAnalytics.ts に文書化）。生成は LLM → heuristicMediaInsight / heuristicIntegratedInsight
+- [x] フロント デュアルモード化: useMediaSettings（GA 状態 = サーバー SoT の合成）/ useMediaAnalytics（metricsFor はロード中 null・ready/warning/retry を公開）/ useMediaInsight・useMediaArticles（async 化）/ MediaGaConnect（OAuth リダイレクト + 復帰クエリ + プロパティ選択モーダル + needsProperty 再開 = リロードで詰まない）/ analytics.vue（ロード中・取得失敗・データ空・部分失敗警告の区別表示）/ useDashboardInsight（generate 前に GA 月次を await）。モックモードの挙動は不変（下位互換）
+- [x] エラーコード: AKO-MEDIA-003〜007・011〜016 を採番（api-design §4。001/002/010/013 はモック専用・008/009/015 は欠番）
+
+### 37-3 検証・残課題
+- [x] 検証: api 単体 146（ga-report 17 + media-routes 17 を新設）/ api 統合 162（メディア 6 スイート新設 = 部分更新の保持・生成→採用→取消→復元・統合インサイト upsert・GA 未設定経路）/ mockup 単体 148 / typecheck（api・mockup）/ mockup build 全 green
+- [ ] 残課題: 統合メトリクスの売上月次・F-41 ダッシュボード保管（dashboardInsights）・businessSegments/salesRecords の API 移行（移行時に /v1/media/integrated のサーバー組み立てへ引き上げ）。GA プロパティのタイムゾーンが JST 以外の場合の日単位ずれは許容（lib/ga.ts に設計判断を文書化）
