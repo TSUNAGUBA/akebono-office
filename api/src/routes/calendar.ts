@@ -138,8 +138,8 @@ async function consumeState(pool: pg.Pool, state: string): Promise<string | null
   return rows[0]?.memberId ?? null
 }
 
-/** id_token（Google 発行・TLS 経由で直接受領）から email クレームを取り出す */
-function emailFromIdToken(idToken: string | undefined): string | null {
+/** id_token（Google 発行・TLS 経由で直接受領）から email クレームを取り出す（media ルートでも再利用 = 原則3） */
+export function emailFromIdToken(idToken: string | undefined): string | null {
   if (!idToken) return null
   try {
     const payload = idToken.split('.')[1] ?? ''

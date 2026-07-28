@@ -51,7 +51,11 @@ export function subjectOf(user: AuthUser): PermissionSubject {
   return { memberId: user.id, title: user.title ?? '', role: user.role }
 }
 
-/** URL プレフィックス → 機能キー（対応しないパスはガード対象外） */
+/** URL プレフィックス → 機能キー（対応しないパスはガード対象外）
+ * /v1/media は意図的に未登録: メディア分析は F-16 の機能キー（FEATURE_PERMISSION_KEYS）に存在せず、
+ * 利用可否は AKEBONO 業務のアプリ設定（業態別アプリ media + 機能トグル）で制御する設計
+ * （フロントの featureKeyOfPath も /media を null = ガード対象外にしており、UI と API の判定を一致させる。
+ *  書込系の認可は routes/media.ts の requireAdmin が基底） */
 const PATH_FEATURES: [string, string][] = [
   ['/v1/attendance', 'attendance'],
   ['/v1/leave', 'attendance'],

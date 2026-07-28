@@ -28,6 +28,7 @@ import { runSalesEtl, salesRoutes } from './routes/sales'
 import { runUptimeRollup, statusRoutes } from './routes/status'
 import { assistRoutes } from './routes/assist'
 import { calendarOauthCallback, calendarRoutes } from './routes/calendar'
+import { mediaOauthCallback, mediaRoutes } from './routes/media'
 import { chatbotRoutes } from './routes/chatbot'
 import { decisionsRoutes } from './routes/decisions'
 import { documentsRoutes } from './routes/documents'
@@ -101,6 +102,7 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
   // OAuth コールバックはブラウザリダイレクト（認証ヘッダなし）で届くため認証より前に登録する。
   // 本人性は DB 保存の state ノンス（一回性・10 分 TTL）+ id_token の email と members.email の突合で担保する
   app.get('/v1/calendar/oauth/callback', calendarOauthCallback(pool, env))
+  app.get('/v1/media/oauth/callback', mediaOauthCallback(pool, env))
   app.use('/v1/*', authMiddleware(env, pool))
   // 機能単位の権限ガード（F-16。認証の後段。/v1/masters・/v1/configs はデータ面のため対象外 = lib/permissions 参照）
   app.use('/v1/*', featureGuard(pool))
@@ -155,6 +157,7 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
   app.route('/v1/notes', notesRoutes(pool, env))
   app.route('/v1/knowledge', knowledgeRoutes(pool, env))
   app.route('/v1/documents', documentsRoutes(pool, env))
+  app.route('/v1/media', mediaRoutes(pool, env))
 
   app.notFound(c => c.json({ error: { code: 'AKO-GEN-404', message: 'エンドポイントが見つかりません' } }, 404))
 

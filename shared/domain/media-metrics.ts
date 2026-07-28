@@ -2,9 +2,10 @@
  * メディア分析メトリクス（Google Analytics 由来の集計の型 + 決定的導出）。
  * フロント（モック）/ API 共有の純粋関数。Math.random 非依存（同じ入力 → 常に同じ出力）。
  *
- * 本実装では Google Analytics Data API（GA4 runReport）の結果をこの `MediaMetrics` へ整形する。
- * モックでは「サイトの記事インベントリ（MediaArticleInput）」から GA 風の指標を決定的に生成し、
- * 実 API と同一の型・同一のインサイト生成（heuristicMediaInsight）を通す（原則: モック/API パリティ）。
+ * API（本実装）は Google Analytics Data API（GA4 batchRunReports）の結果をこの `MediaMetrics` へ
+ * 整形する（api/src/lib/ga.ts の buildMediaMetrics）。モックでは「サイトの記事インベントリ
+ * （MediaArticleInput）」から GA 風の指標を決定的に生成し、実 API と同一の型・同一のインサイト生成
+ * （heuristicMediaInsight）を通す（原則: モック/API パリティ。deriveMediaMetrics はモック/デモ環境の SoT として維持）。
  */
 import { addDays, weekdayOf } from './jst'
 
@@ -186,8 +187,8 @@ const DEVICES: { key: string; base: number }[] = [
 ]
 
 /**
- * サイトの記事インベントリから GA 風メトリクスを決定的に導出する（モックの唯一のロジック）。
- * 実 API では GA4 runReport の結果をこの型へ整形する（同じインサイト生成を通す）。
+ * サイトの記事インベントリから GA 風メトリクスを決定的に導出する（モック/デモ環境の SoT）。
+ * API は GA4 batchRunReports の実データを同じ型へ整形する（api/src/lib/ga.ts。同じインサイト生成を通す）。
  */
 export function deriveMediaMetrics(articles: MediaArticleInput[], opts: DeriveOptions): MediaMetrics {
   const days = Math.max(1, opts.days)

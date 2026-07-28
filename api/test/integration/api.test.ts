@@ -3660,3 +3660,179 @@ describe('オペレーター指示 2026-07-22: 明日の予定・全員の週報
     expect(row?.body).toBe('')
   })
 })
+
+describe('メディア分析 F-40 の本実装（GA 連携・設定・記事インベントリ・生成・インサイト）', () => {
+  const SEG = 'seg-media-test'
+
+  it('GA 未設定環境: status は enabled=false・集計/同意 URL は AKO-MEDIA-005', async () => {
+    const status = await api('GET', `/v1/media/status?segmentId=${SEG}`, { as: MEMBER })
+    expect(status.status).toBe(200)
+    expect(status.json.data).toMatchObject({ enabled: false, connected: false })
+    const metrics = await api('GET', `/v1/media/metrics?segmentId=${SEG}`, { as: MEMBER })
+    expect(metrics.status).toBe(409)
+    expect(metrics.json.error?.code).toBe('AKO-MEDIA-005')
+    const url = await api('GET', `/v1/media/oauth/url?segmentId=${SEG}`, { as: ADMIN })
+    expect(url.status).toBe(409)
+    expect(url.json.error?.code).toBe('AKO-MEDIA-005')
+  })
+
+  it('メディア設定: 部分更新は送ったキーのみ上書き = 送っていないフィールドが保持される（Zod v4 注意の回帰）', async () => {
+    // 初回保存（materialize）
+    const first = await api('PUT', '/v1/media/settings', {
+      as: ADMIN,
+      body: {
+        segmentId: SEG, siteName: '器マガジン', siteUrl: 'https://example.com',
+        analysisGoal: 'conversion', targetAudience: '30〜50 代', defaultTone: 'friendly',
+        keywords: ['器', '選び方'],
+      },
+    })
+    expect(first.status).toBe(200)
+    // siteName のみ送る部分更新
+    const patch = await api('PUT', '/v1/media/settings', {
+      as: ADMIN, body: { segmentId: SEG, siteName: '暮らしの器マガジン' },
+    })
+    expect(patch.status).toBe(200)
+    const got = await api('GET', `/v1/media/settings?segmentId=${SEG}`, { as: MEMBER })
+    const row = got.json.data as { siteName: string; siteUrl: string; analysisGoal: string; targetAudience: string; defaultTone: string; keywords: string[] }
+    expect(row.siteName).toBe('暮らしの器マガジン')
+    // 送っていないフィールドが既定値で上書きされていないこと（部分更新の要）
+    expect(row.siteUrl).toBe('https://example.com')
+    expect(row.analysisGoal).toBe('conversion')
+    expect(row.targetAudience).toBe('30〜50 代')
+    expect(row.defaultTone).toBe('friendly')
+    expect(row.keywords).toEqual(['器', '選び方'])
+  })
+
+  it('メディア設定: 書込は管理者のみ（AKO-AUTH-003）・不正な区分値は AKO-GEN-001', async () => {
+    const denied = await api('PUT', '/v1/media/settings', { as: MEMBER, body: { segmentId: SEG, siteName: 'x' } })
+    expect(denied.status).toBe(403)
+    expect(denied.json.error?.code).toBe('AKO-AUTH-003')
+    const bad = await api('PUT', '/v1/media/settings', { as: ADMIN, body: { segmentId: SEG, analysisGoal: 'hack' } })
+    expect(bad.status).toBe(400)
+    expect(bad.json.error?.code).toBe('AKO-GEN-001')
+  })
+
+  it('記事インベントリ: 手動登録（管理者）→ 一覧 → 取消（論理削除）→ 復元（原則9.5）', async () => {
+    const denied = await api('POST', '/v1/media/articles', {
+      as: MEMBER, body: { segmentId: SEG, path: '/x', title: 'x', section: 'ブログ', publishedAt: '2026-01-01' },
+    })
+    expect(denied.status).toBe(403)
+    const created = await api('POST', '/v1/media/articles', {
+      as: ADMIN,
+      body: { segmentId: SEG, path: '/blog/utsuwa', title: '器の選び方', section: 'ブログ', publishedAt: '2026-01-10', wordCount: 2000 },
+    })
+    expect(created.status).toBe(201)
+    const articleId = (created.json.data as { id: string }).id
+    const list = await api('GET', `/v1/media/articles?segmentId=${SEG}`, { as: MEMBER })
+    expect((list.json.data as { id: string }[]).some(a => a.id === articleId)).toBe(true)
+    // 取消 → 既定一覧から消える（includeInactive では見える）→ 復元
+    expect((await api('POST', `/v1/media/articles/${articleId}/deactivate`, { as: ADMIN })).status).toBe(200)
+    const afterDeact = await api('GET', `/v1/media/articles?segmentId=${SEG}`, { as: MEMBER })
+    expect((afterDeact.json.data as { id: string }[]).some(a => a.id === articleId)).toBe(false)
+    const withInactive = await api('GET', `/v1/media/articles?segmentId=${SEG}&includeInactive=1`, { as: MEMBER })
+    expect((withInactive.json.data as { id: string }[]).some(a => a.id === articleId)).toBe(true)
+    expect((await api('POST', `/v1/media/articles/${articleId}/restore`, { as: ADMIN })).status).toBe(200)
+  })
+
+  it('記事生成（LLM 無効 = 決定的フォールバック）→ 採用 → 二重採用は no-op + warning → 採用取消 → 取消 → 復元', async () => {
+    const gen = await api('POST', '/v1/media/articles/generate', {
+      as: MEMBER,
+      body: {
+        segmentId: SEG, topic: '器の手入れ', keyword: '陶磁器 手入れ',
+        purpose: 'seo', quality: 'standard', tone: 'friendly', segmentName: 'テスト業態',
+      },
+    })
+    expect(gen.status).toBe(201)
+    const article = gen.json.data as { id: string; title: string; body: string; llm: boolean; adoptedArticleId: string | null }
+    expect(article.llm).toBe(false) // LLM 無効環境 = 決定的フォールバック（原則4）
+    expect(article.title.length).toBeGreaterThan(0)
+    expect(article.body).toContain('器の手入れ')
+    expect(article.adoptedArticleId).toBeNull()
+
+    // お題・キーワード両方空は AKO-MEDIA-011
+    const empty = await api('POST', '/v1/media/articles/generate', {
+      as: MEMBER, body: { segmentId: SEG, topic: '', keyword: '', purpose: 'seo', quality: 'draft', tone: 'formal' },
+    })
+    expect(empty.status).toBe(400)
+    expect(empty.json.error?.code).toBe('AKO-MEDIA-011')
+
+    // 採用 → インベントリへ登録（origin=generated）
+    const adopt = await api('POST', `/v1/media/generated/${article.id}/adopt`, { as: MEMBER, body: { section: 'ブログ' } })
+    expect(adopt.status).toBe(200)
+    const adoptedId = (adopt.json.data as { articleId: string }).articleId
+    const inv = await api('GET', `/v1/media/articles?segmentId=${SEG}`, { as: MEMBER })
+    const invRow = (inv.json.data as { id: string; origin: string; generatedArticleId: string }[]).find(a => a.id === adoptedId)
+    expect(invRow?.origin).toBe('generated')
+    expect(invRow?.generatedArticleId).toBe(article.id)
+
+    // 二重採用は no-op + warning（冪等）
+    const again = await api('POST', `/v1/media/generated/${article.id}/adopt`, { as: MEMBER, body: { section: 'ブログ' } })
+    expect(again.status).toBe(200)
+    expect((again.json.data as { warning?: string }).warning).toBeTruthy()
+    expect((again.json.data as { articleId: string }).articleId).toBe(adoptedId)
+
+    // 採用取消 → インベントリ側は論理削除・リンク解除
+    expect((await api('POST', `/v1/media/generated/${article.id}/unadopt`, { as: MEMBER })).status).toBe(200)
+    const afterUnadopt = await api('GET', `/v1/media/articles?segmentId=${SEG}`, { as: MEMBER })
+    expect((afterUnadopt.json.data as { id: string }[]).some(a => a.id === adoptedId)).toBe(false)
+    const unadoptTwice = await api('POST', `/v1/media/generated/${article.id}/unadopt`, { as: MEMBER })
+    expect(unadoptTwice.status).toBe(400)
+    expect(unadoptTwice.json.error?.code).toBe('AKO-MEDIA-014')
+
+    // 取消（論理削除）→ 復元
+    expect((await api('POST', `/v1/media/generated/${article.id}/remove`, { as: MEMBER })).status).toBe(200)
+    const listAll = await api('GET', `/v1/media/generated?segmentId=${SEG}`, { as: MEMBER })
+    const g = (listAll.json.data as { id: string; active: boolean }[]).find(x => x.id === article.id)
+    expect(g?.active).toBe(false)
+    expect((await api('POST', `/v1/media/generated/${article.id}/restore`, { as: MEMBER })).status).toBe(200)
+  })
+
+  it('統合インサイト: metrics をクライアント合成で受けて生成・保管（upsert）・取得。scope=media は GA 未設定で 409', async () => {
+    const metrics = {
+      segmentId: SEG, segmentName: 'テスト業態', siteName: '暮らしの器マガジン',
+      periodMonth: '2026-06',
+      sessions: 1200, conversions: 24, conversionRate: 0.02, prevSessions: 1000, prevConversions: 18,
+      salesAmount: 3200000, orders: 16, prevSalesAmount: 2800000, aov: 200000, salesPerSession: 2666,
+      funnel: { sessions: 1200, engaged: 660, conversions: 24, orders: 16 },
+      trend: [
+        { month: '2026-04', sessions: 900, conversions: 15, salesAmount: 2500000, orders: 12 },
+        { month: '2026-05', sessions: 1000, conversions: 18, salesAmount: 2800000, orders: 14 },
+        { month: '2026-06', sessions: 1200, conversions: 24, salesAmount: 3200000, orders: 16 },
+      ],
+    }
+    const gen = await api('POST', '/v1/media/insights/generate', {
+      as: MEMBER, body: { segmentId: SEG, scope: 'integrated', metrics },
+    })
+    expect(gen.status).toBe(200)
+    const view = gen.json.data as { llm: boolean; periodKey: string; insight: { executiveSummary: string } }
+    expect(view.llm).toBe(false) // LLM 無効 = heuristicIntegratedInsight
+    expect(view.periodKey).toBe('2026-06')
+    expect(view.insight.executiveSummary).toContain('テスト業態')
+
+    // 再生成は upsert 上書き（レコードは 1 行のまま）
+    const regen = await api('POST', '/v1/media/insights/generate', {
+      as: MEMBER, body: { segmentId: SEG, scope: 'integrated', metrics: { ...metrics, periodMonth: '2026-06' } },
+    })
+    expect(regen.status).toBe(200)
+    const { rows } = await pool.query(
+      `SELECT count(*)::int AS n FROM media_insights WHERE segment_id = $1 AND scope = 'integrated'`, [SEG])
+    expect(rows[0].n).toBe(1)
+
+    const got = await api('GET', `/v1/media/insights?segmentId=${SEG}&scope=integrated`, { as: MEMBER })
+    expect((got.json.data as { periodKey: string }).periodKey).toBe('2026-06')
+
+    // metrics 欠落・不正は AKO-MEDIA-016
+    const bad = await api('POST', '/v1/media/insights/generate', {
+      as: MEMBER, body: { segmentId: SEG, scope: 'integrated' },
+    })
+    expect(bad.status).toBe(400)
+    expect(bad.json.error?.code).toBe('AKO-MEDIA-016')
+
+    // scope=media はサーバーが GA から集計する = GA 未設定環境では 409（AKO-MEDIA-005）
+    const media = await api('POST', '/v1/media/insights/generate', {
+      as: MEMBER, body: { segmentId: SEG, scope: 'media' },
+    })
+    expect(media.status).toBe(409)
+    expect(media.json.error?.code).toBe('AKO-MEDIA-005')
+  })
+})
