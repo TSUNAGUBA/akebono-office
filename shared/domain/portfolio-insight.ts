@@ -49,6 +49,8 @@ export interface SegmentSnapshot {
 /** 1 セグメントのダッシュボード集計（サマリー + AI 生成の入力） */
 export interface SegmentSummary {
   periodMonth: string
+  /** メディア機能トグルが有効か（false = メディア軸は対象外。「未連携」ではなく「非対象」として扱う） */
+  mediaAvailable: boolean
   snapshot: SegmentSnapshot
   /** 直近数ヶ月のトレンド（古い順） */
   trend: DashboardMonthPoint[]
@@ -57,6 +59,8 @@ export interface SegmentSummary {
 /** 会社全体（全セグメント横断）のダッシュボード集計 */
 export interface CompanySummary {
   periodMonth: string
+  /** メディア機能トグルが有効か（false = メディア軸は対象外） */
+  mediaAvailable: boolean
   segmentCount: number
   /** GA 連携済みセグメント数 */
   connectedCount: number
@@ -155,8 +159,8 @@ export function heuristicSegmentInsight(s: SegmentSummary): DashboardInsight {
     })
   }
 
-  // ---- メディアの所見（GA 連携状況で分岐） ----
-  if (!m.mediaConnected) {
+  // ---- メディアの所見（メディア機能が有効なときのみ。無効時はメディア軸を一切扱わない = 誤誘導を出さない） ----
+  if (s.mediaAvailable && !m.mediaConnected) {
     findings.push({
       kind: 'opportunity',
       title: 'メディア分析が未接続（Google Analytics 未連携）',
@@ -167,7 +171,7 @@ export function heuristicSegmentInsight(s: SegmentSummary): DashboardInsight {
       detail: 'メディア設定から GA を連携すると、セッション・CV と売上の相関、記事別の改善提案が本ダッシュボードに加わります。',
       priority: 'mid',
     })
-  } else {
+  } else if (s.mediaAvailable && m.mediaConnected) {
     if (m.prevSessions > 0 && sessionDelta >= GROWTH_STRONG) {
       findings.push({
         kind: 'win',
@@ -219,22 +223,32 @@ export function heuristicSegmentInsight(s: SegmentSummary): DashboardInsight {
     })
   }
 
-  const mediaLine = m.mediaConnected
-    ? `メディアは ${int(m.sessions)} セッション / CV ${int(m.conversions)} 件（CVR ${pct(m.conversionRate)}）。`
-    : 'メディアは未接続で、GA 連携により流入 × 売上の分析が可能になります。'
-  const executiveSummary = [
+  // 段落区切り（空行）を保持するため、任意行は条件付きで push する
+  const summaryLines = [
     `## ${m.segmentName} のダッシュボードレポート（${s.periodMonth}）`,
     '',
     `**業務**: 売上 ${man(m.salesAmount)}（前月比 ${signed(salesDelta)}）、受注 ${m.orders} 件、平均受注額 ${m.aov > 0 ? man(m.aov) : '—'}。`,
-    '',
-    `**メディア**: ${mediaLine}`,
-    '',
-    salesDelta >= GROWTH_STRONG
-      ? '売上は伸長基調です。牽引要因を維持しつつ、メディア流入を売上へ橋渡しする導線を強化する局面です。'
-      : salesDelta <= DECLINE
-        ? '売上は減速しています。件数と単価の要因分解を起点に、メディア流入・CVR の改善で立て直します。'
-        : '売上は安定しています。メディア流入の底上げと CVR 改善で、次の成長の起点を作ります。',
-  ].join('\n')
+  ]
+  if (s.mediaAvailable) {
+    const mediaLine = m.mediaConnected
+      ? `メディアは ${int(m.sessions)} セッション / CV ${int(m.conversions)} 件（CVR ${pct(m.conversionRate)}）。`
+      : 'メディアは未接続で、GA 連携により流入 × 売上の分析が可能になります。'
+    summaryLines.push('', `**メディア**: ${mediaLine}`)
+  }
+  // メディアが対象のときは締めもメディアに言及、非対象のときは業務のみの締めにする（誤誘導しない）
+  const closing = s.mediaAvailable
+    ? (salesDelta >= GROWTH_STRONG
+        ? '売上は伸長基調です。牽引要因を維持しつつ、メディア流入を売上へ橋渡しする導線を強化する局面です。'
+        : salesDelta <= DECLINE
+          ? '売上は減速しています。件数と単価の要因分解を起点に、メディア流入・CVR の改善で立て直します。'
+          : '売上は安定しています。メディア流入の底上げと CVR 改善で、次の成長の起点を作ります。')
+    : (salesDelta >= GROWTH_STRONG
+        ? '売上は伸長基調です。牽引した商材・チャネルを特定し、翌月の重点配分に反映する局面です。'
+        : salesDelta <= DECLINE
+          ? '売上は減速しています。受注件数と平均受注額の要因分解を起点に立て直します。'
+          : '売上は安定しています。商品構成・受注単価の見直しで次の成長の起点を作ります。')
+  summaryLines.push('', closing)
+  const executiveSummary = summaryLines.join('\n')
 
   return { executiveSummary, findings, actions }
 }
@@ -316,8 +330,8 @@ export function heuristicCompanyInsight(c: CompanySummary): DashboardInsight {
     })
   }
 
-  // ---- メディア接続カバレッジ ----
-  if (c.connectedCount < c.segmentCount) {
+  // ---- メディア接続カバレッジ（メディア機能が有効なときのみ扱う） ----
+  if (c.mediaAvailable && c.connectedCount < c.segmentCount) {
     findings.push({
       kind: 'opportunity',
       title: `メディア分析の接続は ${c.connectedCount}/${c.segmentCount} 業態`,
@@ -328,7 +342,7 @@ export function heuristicCompanyInsight(c: CompanySummary): DashboardInsight {
       detail: `残り ${c.segmentCount - c.connectedCount} 業態を GA 連携し、全社のメディア PDCA を一気通貫にします。`,
       priority: 'mid',
     })
-  } else if (c.segmentCount > 0 && c.totalSessions > 0) {
+  } else if (c.mediaAvailable && c.segmentCount > 0 && c.totalSessions > 0) {
     findings.push({
       kind: 'win',
       title: `全業態がメディア接続済み（${int(c.totalSessions)} セッション / CV ${int(c.totalConversions)} 件）`,
@@ -349,17 +363,21 @@ export function heuristicCompanyInsight(c: CompanySummary): DashboardInsight {
     `## 会社全体ダッシュボードレポート（${c.periodMonth}）`,
     '',
     `**全社サマリー**: 売上 ${man(c.totalSales)}（前月比 ${signed(salesDelta)}）、受注 ${c.totalOrders} 件、${c.segmentCount} 業態。`,
-    '',
-    c.connectedCount > 0
-      ? `**メディア**: 接続 ${c.connectedCount}/${c.segmentCount} 業態、${int(c.totalSessions)} セッション（前月比 ${signed(sessionDelta)}）/ CV ${int(c.totalConversions)} 件。`
-      : `**メディア**: まだどの業態も GA 未連携です。連携すると全社の流入 × 売上分析が可能になります。`,
   ]
+  if (c.mediaAvailable) {
+    summaryLines.push('', c.connectedCount > 0
+      ? `**メディア**: 接続 ${c.connectedCount}/${c.segmentCount} 業態、${int(c.totalSessions)} セッション（前月比 ${signed(sessionDelta)}）/ CV ${int(c.totalConversions)} 件。`
+      : `**メディア**: まだどの業態も GA 未連携です。連携すると全社の流入 × 売上分析が可能になります。`)
+  }
   if (top) summaryLines.push('', `**牽引業態**: ${top.segmentName}（${man(top.salesAmount)}）。`)
+  // メディアが対象のときのみ締めでメディア接続に言及する
   summaryLines.push('', salesDelta >= GROWTH_STRONG
     ? '全社は成長局面です。牽引業態の勝ち筋を型化し、他業態へ横展開して成長を面へ広げます。'
     : salesDelta <= DECLINE
       ? '全社は減速局面です。減速業態のてこ入れと、集中リスクの分散を並行して進めます。'
-      : '全社は安定局面です。業態間のばらつきを均し、メディア接続の拡大で次の成長基盤を作ります。')
+      : c.mediaAvailable
+        ? '全社は安定局面です。業態間のばらつきを均し、メディア接続の拡大で次の成長基盤を作ります。'
+        : '全社は安定局面です。業態間のばらつきを均し、牽引業態の勝ち筋を横展開して次の成長基盤を作ります。')
   const executiveSummary = summaryLines.join('\n')
 
   return { executiveSummary, findings, actions }

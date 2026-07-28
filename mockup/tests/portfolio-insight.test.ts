@@ -18,10 +18,11 @@ function snap(over: Partial<SegmentSnapshot> = {}): SegmentSnapshot {
   }
 }
 
-function segSummary(over: Partial<SegmentSnapshot> = {}): SegmentSummary {
+function segSummary(over: Partial<SegmentSnapshot> = {}, mediaAvailable = true): SegmentSummary {
   const s = snap(over)
   return {
     periodMonth: '2026-06',
+    mediaAvailable,
     snapshot: s,
     trend: [
       { month: '2026-05', salesAmount: s.prevSalesAmount, orders: 12, sessions: s.prevSessions, conversions: 33 },
@@ -63,6 +64,16 @@ describe('heuristicSegmentInsight', () => {
     expect(r.actions.length).toBeGreaterThan(0)
     expect(r.executiveSummary.length).toBeGreaterThan(0)
   })
+
+  it('メディア機能が無効（mediaAvailable=false）なら「連携せよ」と誤誘導しない', () => {
+    const r = heuristicSegmentInsight(segSummary({ mediaConnected: false, sessions: 0, prevSessions: 0, conversions: 0, conversionRate: 0 }, false))
+    expect(r.findings.some(f => f.title.includes('未接続'))).toBe(false)
+    expect(r.actions.some(a => a.title.includes('メディア分析を接続'))).toBe(false)
+    expect(r.executiveSummary).not.toContain('**メディア**')
+    // 業務の所見・アクションは維持
+    expect(r.findings.length).toBeGreaterThan(0)
+    expect(r.actions.length).toBeGreaterThan(0)
+  })
 })
 
 function company(over: Partial<CompanySummary> = {}): CompanySummary {
@@ -74,6 +85,7 @@ function company(over: Partial<CompanySummary> = {}): CompanySummary {
   const sum = (fn: (s: SegmentSnapshot) => number): number => snapshots.reduce((a, s) => a + fn(s), 0)
   return {
     periodMonth: '2026-06',
+    mediaAvailable: true,
     segmentCount: snapshots.length,
     connectedCount: snapshots.filter(s => s.mediaConnected).length,
     totalSales: sum(s => s.salesAmount),
@@ -156,5 +168,13 @@ describe('heuristicCompanyInsight', () => {
     // 見出し・全社サマリー・メディア・牽引業態・締めの各段落が空行で区切られている
     expect(r.executiveSummary).toContain('\n\n')
     expect(r.executiveSummary.split('\n\n').length).toBeGreaterThanOrEqual(4)
+  })
+
+  it('メディア機能が無効なら全社レポートも接続を促さない', () => {
+    const r = heuristicCompanyInsight(company({ mediaAvailable: false, connectedCount: 0, totalSessions: 0, totalConversions: 0 }))
+    expect(r.findings.some(f => f.title.includes('メディア分析の接続'))).toBe(false)
+    expect(r.actions.some(a => a.title.includes('メディア連携'))).toBe(false)
+    expect(r.executiveSummary).not.toContain('**メディア**')
+    expect(r.actions.length).toBeGreaterThan(0)
   })
 })

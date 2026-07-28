@@ -108,7 +108,7 @@ const appCards = computed<MenuCard[]>(() =>
       </div>
 
       <!-- ① サマリー（KPI）。メディア軸は機能トグル有効時のみ -->
-      <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
+      <div class="grid grid-cols-2 gap-3" :class="mediaEnabled ? 'md:grid-cols-4' : 'md:grid-cols-2'">
         <UiKpiCard
           label="売上（対象月）" :value="fmtYenCompact(snap.salesAmount)"
           :delta="snap.prevSalesAmount > 0 ? (snap.salesAmount - snap.prevSalesAmount) / snap.prevSalesAmount : null"

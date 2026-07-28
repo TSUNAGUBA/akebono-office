@@ -16,10 +16,13 @@ import type { CompanyDashboardView } from '~/composables/useDashboardInsight'
 const { can } = usePermissions()
 const { activeSegments, switchSegment } = useCurrentSegment()
 const { buildCompanySummary, loadCompany, generateCompany } = useDashboardInsight()
+const { isEnabled } = useAppSettings()
 const { show } = useToast()
 const router = useRouter()
 
 const canView = computed(() => can('sales'))
+// メディア軸はメディア機能トグルが有効なときのみ表示（無効時は業務ロールアップのみ）
+const mediaEnabled = computed(() => isEnabled('media'))
 
 // ---------- サマリー（常時ライブ） ----------
 const summary = computed(() => buildCompanySummary())
@@ -39,14 +42,18 @@ const salesDelta = computed(() =>
 const sessionDelta = computed(() =>
   summary.value.prevTotalSessions > 0 ? (summary.value.totalSessions - summary.value.prevTotalSessions) / summary.value.prevTotalSessions : null)
 
-// ---------- セグメント別内訳テーブル ----------
-const segCols: TableColumn[] = [
+// ---------- セグメント別内訳テーブル（メディア列は機能トグル有効時のみ） ----------
+const segCols = computed<TableColumn[]>(() => [
   { key: 'name', label: '業態', primary: true },
   { key: 'salesAmount', label: '売上', align: 'right', primary: true },
   { key: 'orders', label: '受注', align: 'right' },
-  { key: 'sessions', label: 'セッション', align: 'right', primary: true },
-  { key: 'conversionRate', label: 'CVR', align: 'right', primary: true },
-]
+  ...(mediaEnabled.value
+    ? [
+        { key: 'sessions', label: 'セッション', align: 'right', primary: true },
+        { key: 'conversionRate', label: 'CVR', align: 'right', primary: true },
+      ] as TableColumn[]
+    : []),
+])
 const segRows = computed(() =>
   [...summary.value.snapshots]
     .sort((a, b) => b.salesAmount - a.salesAmount)
@@ -102,21 +109,23 @@ function regenerate(): void {
     </div>
 
     <div v-else class="grid gap-4">
-      <!-- ① サマリー（全社 KPI） -->
-      <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
+      <!-- ① サマリー（全社 KPI）。メディア軸は機能トグル有効時のみ -->
+      <div class="grid grid-cols-2 gap-3" :class="mediaEnabled ? 'md:grid-cols-4' : 'md:grid-cols-2'">
         <UiKpiCard
           label="全社売上（対象月）" :value="fmtYenCompact(summary.totalSales)"
           :delta="salesDelta" sub="前月比" icon="TrendingUp"
         />
         <UiKpiCard label="受注件数（全社）" :value="fmtInt(summary.totalOrders)" :sub="`${summary.segmentCount} 業態`" icon="Receipt" />
-        <UiKpiCard
-          label="メディア流入（全社）" :value="fmtInt(summary.totalSessions)"
-          :delta="sessionDelta" sub="前月比・連携業態合算" icon="MousePointerClick"
-        />
-        <UiKpiCard
-          label="コンバージョン（全社）" :value="fmtInt(summary.totalConversions)"
-          :sub="`メディア接続 ${summary.connectedCount}/${summary.segmentCount} 業態`" icon="Target"
-        />
+        <template v-if="mediaEnabled">
+          <UiKpiCard
+            label="メディア流入（全社）" :value="fmtInt(summary.totalSessions)"
+            :delta="sessionDelta" sub="前月比・連携業態合算" icon="MousePointerClick"
+          />
+          <UiKpiCard
+            label="コンバージョン（全社）" :value="fmtInt(summary.totalConversions)"
+            :sub="`メディア接続 ${summary.connectedCount}/${summary.segmentCount} 業態`" icon="Target"
+          />
+        </template>
       </div>
 
       <!-- チャート -->

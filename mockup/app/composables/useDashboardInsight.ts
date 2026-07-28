@@ -93,7 +93,7 @@ export function useDashboardInsight() {
   /** 業態単位のダッシュボード集計 */
   function buildSegmentSummary(segmentId: string): SegmentSummary {
     const { snapshot, trend, periodMonth } = snapshotFor(segmentId)
-    return { periodMonth, snapshot, trend }
+    return { periodMonth, mediaAvailable: isEnabled('media'), snapshot, trend }
   }
 
   /** 会社全体（全業態横断）のダッシュボード集計。全業態は同じ月ウィンドウなので月インデックスで合算する */
@@ -118,6 +118,7 @@ export function useDashboardInsight() {
     const sum = (fn: (s: SegmentSnapshot) => number): number => snapshots.reduce((a, s) => a + fn(s), 0)
     return {
       periodMonth,
+      mediaAvailable: isEnabled('media'),
       segmentCount: snapshots.length,
       connectedCount: snapshots.filter(s => s.mediaConnected).length,
       totalSales: sum(s => s.salesAmount),
