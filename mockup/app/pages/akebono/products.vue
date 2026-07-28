@@ -631,9 +631,9 @@ function saveMatrix(): void {
         <!-- 通常フォーム（入力コスト最小化） -->
         <UiSchemaForm v-model="form" :fields="baseFields" :errors="errors" />
 
-        <!-- カスタマイズ未使用時: 適用中の業態既定を明示（透明性） -->
+        <!-- カスタマイズ未使用時: 適用中の値を明示（透明性）。create は業態既定・edit は現在値 -->
         <p v-if="!customizeOpen" class="text-[11px] text-muted">
-          業態の既定を適用中 — {{ appliedDefaultsSummary }}。変更は「カスタマイズ」から。
+          {{ mode === 'create' ? '業態の既定を適用中' : '現在の設定' }} — {{ appliedDefaultsSummary }}。変更は「カスタマイズ」から。
         </p>
 
         <!-- カスタマイズフォーム（別フォーム。通常ルートでは編集不可の 5 項目） -->

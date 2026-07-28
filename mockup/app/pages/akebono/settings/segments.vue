@@ -21,6 +21,7 @@ import { IMAGE_MAX_CHARS, imageToDataUri } from '~/utils/thumb'
 const { activeSegments } = useCurrentSegment()
 const masters = useAkebonoMasters()
 const segCrud = useMasterCrud('businessSegments', 'seg')
+const { commit } = useMockDb()
 const toast = useToast()
 
 const billingOptions = Object.entries(BILLING_TYPE_LABELS).map(([value, label]) => ({ value, label }))
@@ -139,7 +140,13 @@ function save(): void {
     toast.show(`${res.error?.code}: ${res.error?.message}`, 'crit')
     return
   }
-  toast.show('業態アプリ設定を保存しました', 'ok')
+  // 画像アイコンは data URI で嵩むため容量超過で永続化に失敗しうる。商品画像と同様に警告する
+  // （commit() 再実行で現在の db が保存に収まるか確認。成功済みなら true・超過なら false = 原則4/7 の一貫性）。
+  if (form.value.appIconImage && commit() === false) {
+    toast.show('業態アプリ設定を保存しましたが、画像アイコンは保存容量の上限により再読込時に失われる可能性があります。小さい画像や選択式アイコンをお試しください', 'warn')
+  } else {
+    toast.show('業態アプリ設定を保存しました', 'ok')
+  }
   drawerOpen.value = false
 }
 </script>

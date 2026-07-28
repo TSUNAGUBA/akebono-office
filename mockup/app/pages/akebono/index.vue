@@ -20,8 +20,7 @@ const confirm = useConfirm()
 const { wishes, submitWish: submitWishApi, refresh } = useAkebono()
 const members = tbl('members')
 const route = useRoute()
-
-onMounted(() => { void refresh() })
+const router = useRouter()
 
 // トップの業態アプリカード（/akebono?seg=<id>）からの入場で現在業態を切り替える。
 // クエリの seg が有効な業態ならそれを現在業態にする（毎回ヘッダで選ばせない導線）。
@@ -32,6 +31,13 @@ function applySegmentQuery(seg: unknown): void {
   }
 }
 watch(() => route.query.seg, applySegmentQuery, { immediate: true })
+
+onMounted(() => {
+  void refresh()
+  // 適用後は URL から seg を除去する。以降ヘッダで切り替えた業態がリロードで
+  // 入場時の seg に引き戻されないようにする（seg は「入場のワンショット指定」= localStorage が正）。
+  if (route.query.seg) void router.replace({ path: '/akebono', query: {} })
+})
 
 // ---------- アプリランチャー（現在業態のみ） ----------
 const appCards = computed<MenuCard[]>(() =>
