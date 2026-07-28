@@ -264,6 +264,39 @@ AI 機能（日報 AI アシスト・タスク計画の AI コメント等）は
    **バッチ7l 以前に連携済みのユーザーは、AI アシスタントのカレンダー連携から Google に再接続すると
    ドライブ取込が使えるようになる**（旧トークンのままでもカレンダーは従来どおり動作）
 
+## 1-9b. メディア分析の Google Analytics 連携（F-40）
+
+メディア分析（/media）のアクセス指標取得に使用する。カレンダー連携（§1-9）と**同じ OAuth クライアント・
+同じ TOKEN_ENCRYPTION_KEY を共用**するため、§1-9 のセットアップ済み環境で追加の secrets は不要。
+連携は**業態（セグメント）単位**で、管理者がメディア設定画面（/media/settings）から画面操作のみで行う
+（同意 → GA4 プロパティ選択。スコープは `analytics.readonly` のみ = カレンダーとは別の同意・別トークン）。
+
+1. OAuth クライアントの「承認済みのリダイレクト URI」に**メディア用のコールバックパスを追加**する
+   （§1-9 のカレンダー用 URI とは別に 1 行必要）:
+   ```
+   https://<cloud-run-url>/v1/media/oauth/callback
+   ```
+2. GCP プロジェクトで **Google Analytics Data API / Google Analytics Admin API を有効化**する
+   （デプロイが `analyticsdata.googleapis.com` / `analyticsadmin.googleapis.com` を自動有効化する。
+   権限不足で警告が出た場合はオーナー権限で実行）:
+   ```bash
+   gcloud services enable analyticsdata.googleapis.com analyticsadmin.googleapis.com --project <project-id>
+   ```
+   OAuth のトークン交換は両 API 無効でも成功するため、「連携はできるがプロパティ一覧・集計が失敗する」
+   場合はまずこの有効化を確認する（カレンダーの §4 トラブルシュートと同じ構図）
+3. 連携する Google アカウントは AKEBONO Office に登録済みの会社アカウント（members.email と突合）で、
+   対象の GA4 プロパティに閲覧権限があること。GA 集計は 30 分の短期キャッシュ（クォータ対策）で配信され、
+   画面の再試行で強制再取得できる。secrets 未設定の間、GA 連携 UI は自動的に非表示（他機能に影響しない）
+4. **（任意）記事インベントリの手動登録:** 分析対象の記事一覧（セクション対応・記事数）は生成記事の
+   「採用」で自動登録される。既存サイトの記事を分析対象へ加えたい場合は管理者 API で登録できる
+   （専用 UI は未提供 = 運用回復パス。同一パスの再送は 409 で重複しない = 冪等）:
+   ```bash
+   curl -X POST "https://<cloud-run-url>/v1/media/articles" \
+     -H "Authorization: Bearer <管理者の Firebase ID トークン>" -H "Content-Type: application/json" \
+     -d '{"segmentId":"seg-01","path":"/blog/example","title":"記事タイトル","section":"ブログ","publishedAt":"2026-01-10","wordCount":2000}'
+   ```
+   誤登録は `POST /v1/media/articles/<id>/deactivate`（取消・論理削除）→ `/restore`（復元）で戻せる（原則9.5）
+
 ## 1-10. ドキュメント保管（Firebase の Cloud Storage・バッチ7l）
 
 ドキュメント管理（/support/documents）の実ファイル保管先。**未設定でも DB 保管（bytea）フォールバックで

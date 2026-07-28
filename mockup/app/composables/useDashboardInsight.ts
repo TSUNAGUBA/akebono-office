@@ -8,8 +8,10 @@
  * 一度生成したら保管し、再生成されるまで保存済みを表示する（導出キャッシュ = 再生成で上書き）。
  *
  * - 集計（SegmentSummary/CompanySummary）は shared/domain/portfolio-insight が SoT・決定的
- * - 集計の材料は既存の useMediaAnalytics.integratedMetricsFor（業務 × メディアの月次統合）を再利用する（原則3）
- * - モックは決定的ヒューリスティックのみ（llm=false）。本実装は Vertex AI → 失敗時ヒューリスティック（原則4）
+ * - 集計の材料は既存の useMediaAnalytics.integratedMetricsFor（業務 × メディアの月次統合）を再利用する（原則3）。
+ *   API モードではメディア月次に GA 実データ（/v1/media/monthly）が入る（generate* は await でロードをそろえる）
+ * - 洞察は決定的ヒューリスティックのみ（llm=false）。保管先 dashboardInsights は未移行のモックコレクション
+ *   （売上明細 salesRecords と同じくモック側 SoT。API 移行時に media_insights と同型のテーブルへ引き上げる）
  */
 import type { BusinessSegment } from '~/types/akebono'
 import { INDUSTRY_TYPE_LABELS } from '~/utils/akebono'
@@ -46,7 +48,7 @@ export function useDashboardInsight() {
   const { currentUser } = useCurrentUser()
   const { activeSegments, segmentById } = useCurrentSegment()
   const { settingFor } = useMediaSettings()
-  const { integratedMetricsFor, articleInputsFor } = useMediaAnalytics()
+  const { integratedMetricsFor, articleInputsFor, ensureIntegratedLoaded } = useMediaAnalytics()
   const { isEnabled } = useAppSettings()
   const membersTbl = tbl('members')
 
@@ -172,7 +174,15 @@ export function useDashboardInsight() {
     }
   }
 
-  function generateSegment(segmentId: string): SegmentDashboardView {
+  async function generateSegment(segmentId: string): Promise<SegmentDashboardView> {
+    // API モードは GA 月次（メディア軸）を await でそろえてから集計する。取得失敗時は生成しない
+    // （「流入ゼロ」という虚偽データ由来のレポートを保管させない。M1）
+    const ready = await ensureIntegratedLoaded(segmentId, MONTHS)
+    if (!ready) {
+      throw Object.assign(
+        new Error('GA の月次トレンドを取得できていないため、レポートを生成できません。時間をおいて再試行してください'),
+        { code: 'AKO-MEDIA-004' })
+    }
     const metrics = buildSegmentSummary(segmentId)
     const insight = heuristicSegmentInsight(metrics)
     upsert('segment', segmentId, metrics.periodMonth, metrics, insight)
@@ -191,7 +201,16 @@ export function useDashboardInsight() {
     }
   }
 
-  function generateCompany(): CompanyDashboardView {
+  async function generateCompany(): Promise<CompanyDashboardView> {
+    // API モードは全業態の GA 月次を await でそろえてから集計する。1 業態でも取得失敗があれば生成しない
+    // （欠けた業態が「流入ゼロ」として全社ロールアップへ混入するのを防ぐ。M1）
+    const results = await Promise.all(
+      (activeSegments.value as BusinessSegment[]).map(s => ensureIntegratedLoaded(s.id, MONTHS)))
+    if (results.some(ready => !ready)) {
+      throw Object.assign(
+        new Error('一部の業態で GA の月次トレンドを取得できていないため、レポートを生成できません。時間をおいて再試行してください'),
+        { code: 'AKO-MEDIA-004' })
+    }
     const metrics = buildCompanySummary()
     const insight = heuristicCompanyInsight(metrics)
     upsert('company', null, metrics.periodMonth, metrics, insight)

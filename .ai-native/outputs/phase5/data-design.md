@@ -91,6 +91,26 @@
 
 > **SoT 宣言（カレンダー）:** `source='google'` の予定は **Google カレンダーが SoT**（本アプリはキャッシュ。編集・削除不可、決定的 id によるべき等 upsert で同期）。`source='app'` の予定は**本アプリが SoT**（`syncedToGoogle` で Google への反映状態を持つ）。連携解除後もキャッシュは表示用に保持し、**未連携メンバーには初期キャッシュを投入しない**（連携＝同意して初めて同期される、を再現）。HearingLog は記録系（追記のみ）。日報ドラフトは保存せずフォームへ流し込むのみで、**提出済み日報は再生成で上書きしない**（ai-manager の confirmed 保護と同型）。
 
+### 1.4 メディア分析関連（F-40。2026-07-28 追加・本実装 = migration 0030）
+
+| エンティティ（テーブル） | 主要属性 | 分類 / SoT | 機密度 |
+|---|---|---|---|
+| `MediaSetting`（media_settings） | id, segmentId(一意), siteName, siteUrl, analysisGoal, targetAudience, defaultTone, keywords[], active | 設定系（segment 1:1 の upsert。部分更新 = 送ったキーのみ）。SoT = 本アプリ | C1 |
+| `media_ga_tokens` | segmentId(PK), propertyId/propertyName（GA4 プロパティ。NULL = 選択前の中間状態）, accessTokenEnc/refreshTokenEnc（AES-256-GCM）, expiresAt, scope, connectedBy, connectedAt | 設定系（**セグメント単位** = メディアは業態の資産）。トークンは Google 発行物 = 喪失時は再連携で回復（バックアップ対象外の設計判断。calendar_tokens と同型） | C3（暗号化保管・クライアントへ出さない） |
+| `media_oauth_states` | nonce(PK), memberId, segmentId, createdAt | 一時データ（一回性 + 10 分 TTL。calendar_oauth_states と同型） | C2 |
+| `media_metrics_cache` | segmentId × cacheKey(PK), payload, fetchedAt | **導出キャッシュ**（SoT は GA。TTL 30 分・force 再取得可・インベントリ/設定/連携変更で破棄） | C2 |
+| `MediaArticle`(media_articles) | id, segmentId, path, title, section, publishedAt, wordCount, status, origin(`seed`/`generated`), generatedArticleId, active | 設定系/資産（サイトのコンテンツ資産インベントリ。**集計値は持たない = GA が SoT**・セクション対応と記事数の SoT は本テーブル）。論理削除で取消・復元（原則9.5）。**UNIQUE(segmentId, path) WHERE active** = 重複登録防止 | C1 |
+| `ArticleBrief`(media_article_briefs) | id, segmentId, topic, keyword, purpose, quality, tone, audience, fromInsightId, createdBy, createdAt | 記録系（生成依頼の記録 = 追記のみ） | C2 |
+| `GeneratedArticle`(media_generated_articles) | id, segmentId, briefId, payload(GeneratedArticleDraft), llm, adoptedArticleId, active, createdBy, createdAt | 生成物（論理削除で取消・復元。採用でインベントリ化 = 冪等） | C2 |
+| `MediaInsightRecord`(media_insights) | id, segmentId × scope(`media`/`integrated`)(一意), periodKey, metrics, insight, llm, warning（劣化データ由来の告知）, generatedBy, generatedAt | **導出キャッシュ**（weekly_insights と同型 = 再生成で upsert 上書き） | C2 |
+
+> **SoT 宣言（メディア分析）:** GA 由来の集計値（セッション・PV・CV 等）は **Google Analytics が SoT**
+> （本アプリの metrics キャッシュ・保管済みインサイトの metrics は導出）。segment_id は
+> businessSegments（**未移行のモック側コレクション**）参照のため FK なし（0030 の設計判断コメント参照）。
+> 統合分析（scope=integrated）の**売上軸は salesRecords（未移行のモック側 SoT）**のためクライアント合成で
+> 受領し、メディア軸はサーバーが GA 導出値で上書き検証する（改ざん耐性の限界と受容は phase7 実装状況 §37）。
+> ダッシュボード保管（dashboardInsights）もモック側コレクション（API 移行時に media_insights と同型へ）。
+
 ## 2. スタースキーマ接続（akebono-scm-platform `mart` 規約準拠）
 
 ### 2.1 接続方針

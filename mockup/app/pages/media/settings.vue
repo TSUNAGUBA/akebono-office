@@ -2,8 +2,10 @@
 /**
  * メディア設定（F-40-4・管理者ゲート必須）— /media/settings。
  * セグメント（業態）ごとに Google Analytics 連携と AI 分析設定を「画面操作だけで」完結させる。
- * - GA 連携: 擬似 OAuth（MediaGaConnect）。本実装では OAuth + GA4 プロパティ選択に置き換わる
+ * - GA 連携: MediaGaConnect（モック = 擬似 OAuth / API = Google OAuth 2.0 + GA4 プロパティ選択。
+ *   OAuth 復帰はこのページへ ?ga=&segment= クエリで戻る）
  * - AI 分析設定: サイト名・URL・分析の目的・ターゲット読者・既定トーン・重点キーワード
+ *   （API モードの SoT は media_settings。部分更新 = 送ったキーのみ上書き）
  * 取消可能性（原則9.5）: 連携は解除でき、設定は再編集で上書きできる。
  */
 import { INDUSTRY_TYPE_LABELS } from '~/utils/akebono'
@@ -14,8 +16,11 @@ import type { MediaGoal } from '~/types/media'
 const { activeSegments, effectiveSegmentId } = useCurrentSegment()
 const { settingFor, save } = useMediaSettings()
 const { show } = useToast()
+const route = useRoute()
 
-const selectedId = ref(effectiveSegmentId.value || activeSegments.value[0]?.id || '')
+// OAuth 復帰（?segment=）は対象セグメントを選択して開く（MediaGaConnect の復帰処理と表示を一致させる）
+const returnSegment = typeof route.query.segment === 'string' ? route.query.segment : ''
+const selectedId = ref(returnSegment || effectiveSegmentId.value || activeSegments.value[0]?.id || '')
 const selectedSegment = computed(() => activeSegments.value.find(s => s.id === selectedId.value) ?? null)
 
 interface Form {
@@ -42,6 +47,15 @@ function loadForm(): void {
   }
 }
 watch(selectedId, loadForm, { immediate: true })
+// API モード: 設定行は遅延ロードで後から届く。行の実体（siteName 等）が変わったらフォームへ反映する
+// （到着前の既定値で編集を始めても、サーバー保存値が正 = SoT を優先する）
+watch(
+  () => {
+    const s = settingFor(selectedId.value)
+    return s ? [s.siteName, s.siteUrl, s.analysisGoal, s.targetAudience, s.defaultTone, s.keywords.join('、')].join('|') : ''
+  },
+  loadForm,
+)
 
 // GA 連携状態（connected）はコンポーネント（MediaGaConnect）が mediaSettings を直接更新し、
 // この computed が反応して案内文へ反映される。フォーム（サイト名等）は GA 連携で変化しないため同期不要。
@@ -51,17 +65,23 @@ function splitKeywords(text: string): string[] {
   return text.split(/[,、]/).map(s => s.trim()).filter(s => s.length > 0)
 }
 
-function saveForm(): void {
-  const res = save(selectedId.value, {
-    siteName: form.value.siteName.trim() || (selectedSegment.value?.name ?? 'メディア'),
-    siteUrl: form.value.siteUrl.trim(),
-    analysisGoal: form.value.analysisGoal,
-    targetAudience: form.value.targetAudience.trim(),
-    defaultTone: form.value.defaultTone,
-    keywords: splitKeywords(form.value.keywords),
-  })
-  if (!res.ok) { show(`${res.error?.code}: ${res.error?.message}`, 'crit'); return }
-  show('メディア設定を保存しました', 'ok')
+const saving = ref(false)
+
+async function saveForm(): Promise<void> {
+  if (saving.value) return
+  saving.value = true
+  try {
+    const res = await save(selectedId.value, {
+      siteName: form.value.siteName.trim() || (selectedSegment.value?.name ?? 'メディア'),
+      siteUrl: form.value.siteUrl.trim(),
+      analysisGoal: form.value.analysisGoal,
+      targetAudience: form.value.targetAudience.trim(),
+      defaultTone: form.value.defaultTone,
+      keywords: splitKeywords(form.value.keywords),
+    })
+    if (!res.ok) { show(`${res.error?.code}: ${res.error?.message}`, 'crit'); return }
+    show('メディア設定を保存しました', 'ok')
+  } finally { saving.value = false }
 }
 </script>
 
@@ -124,7 +144,7 @@ function saveForm(): void {
               <p class="text-[11px] text-muted">
                 {{ connected ? 'GA 連携済み。分析・記事生成が利用できます' : 'GA 連携すると分析・PDCA が利用できます（記事生成は連携なしでも可）' }}
               </p>
-              <button type="button" class="btn btn-primary" @click="saveForm">保存</button>
+              <button type="button" class="btn btn-primary" :disabled="saving" @click="saveForm">{{ saving ? '保存中…' : '保存' }}</button>
             </div>
           </div>
         </UiSectionCard>

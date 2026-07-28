@@ -174,6 +174,7 @@ save(defs) / reset(): Promise<void>              // SoT = configs `menu-categori
 | useNotes（ぽいぽいポスト・議事録） | `GET/POST /v1/notes`（?kind=poipoi/minutes。poipoi = 本人のみ・minutes = 全員。任意で projectId/companyId/workCategoryId。一覧は `active=true` のみ）・`POST /v1/notes/import`（.md/.txt/.pdf/.docx = extract-text 再利用・原本 = note_files。UI は選択で即アップロードせずステージ → 取込ボタン押下で実行 = バッチ7d）・`POST /v1/notes/:noteId/archive`・`/restore`（**取消 = 論理削除 + 監査ログ、復元 = 取消の取消（原則 9.5 の対称性）。どちらも poipoi = 本人 / minutes = 登録者 or 管理者。冪等 = 状態不一致は警告 no-op。取消済みは `GET /v1/notes?includeArchived=1` で復元権限者にのみ見える。バッチ7d**）・`GET /v1/notes/:id/files`・`/files/:id`（poipoi は本人ガード。**取消済みノートの原本は復元権限者のみ** = 誤アップロード原本を晒し続けない）。**管理者の全ポスト閲覧 = `GET /v1/notes?kind=poipoi&scope=all`（管理者のみ 200・active のみ。バッチ7e = フィードバック用途。poipoi 原本も本人 + 管理者が参照可）**。機能ガード poipoi / minutes（F-16）。書込・取消後は検索インデックスへ自動反映（poipoi は owner_member_id = 本人スコープ = C3。ノートの紐付け（companyId/projectId）は search_docs.links に保持し、チャットボット/アシストが**言及された顧客・PJ と異なる紐付けのノートを文脈から除外** = 混入防止。バッチ7c/7d）。業務種別 = `/v1/masters/work-categories` |
 | 検索インデックス（AI 検索最適化） | `POST /v1/search/reindex`（管理者のみ。search_docs の全再生成 = 手動回復パス。通常はマスタ書込後の自動再生成（デバウンス・非ブロッキング）+ API 起動時の再生成で追随 = 手動ステップなし）。SoT は各マスタ/ナレッジ本体で search_docs は派生キャッシュ（body_hash 不変はスキップ = 埋め込み API の無駄呼び出しなし。埋め込みは VERTEX_PROJECT_ID 設定時のみ = text-multilingual-embedding-002。無効環境は字句検索のみへ縮退）（**バッチ7a**） |
 | ナレッジのドキュメント取込 | `POST /v1/knowledge/import`（管理者のみ。.md/.txt/.pdf/.docx を base64 で受け、テキスト抽出（PDF = pdfjs-dist・DOCX = mammoth）→ knowledge_articles へ記事化（既存スキーマ不変・本文 20,000cp 上限）+ 原本を knowledge_files へ保全（10MB 上限）。タイトルは指定 > md 見出し > ファイル名）・`GET /v1/knowledge/:id/files`（添付メタ）・`GET /v1/knowledge/files/:id`（原本 base64 ダウンロード）。取込後は検索インデックスへ自動反映（**バッチ7a**。UI = /masters/knowledge の「ドキュメント取込」） |
+| useMediaSettings / useMediaAnalytics / useMediaInsight / useMediaArticles（メディア分析 F-40） | `GET /v1/media/status`（enabled / connected / needsProperty）・`GET /v1/media/oauth/url` + `/oauth/callback`（**Google OAuth 2.0・セグメント単位**・analytics.readonly。state = 一回性 10 分 TTL の DB ノンス + email 突合・トークン AES-256-GCM 暗号化 = calendar と同型。復帰 = `/media/settings?ga=&segment=`）・`GET /v1/media/properties`（Admin API accountSummaries）+ `PUT /v1/media/property`（選択で connected 完成）・`POST /v1/media/disconnect`（revoke 非ブロッキング・設定/記事は残す = 原則9.5）・`GET /v1/media/metrics?days=&force=`（GA4 Data API batchRunReports → MediaMetrics 整形 = lib/ga.ts の純粋関数。**conversions 廃止のため keyEvents**。30 分導出キャッシュ・内訳バッチ失敗は総計のみ + warning = 原則4）・`GET /v1/media/monthly?months=`・`GET/PUT /v1/media/settings`（部分更新 = body に実在するキーのみ hasOwn フィルタ）・`GET/POST /v1/media/articles` + `/:id/deactivate` `/restore`（インベントリ。実データのためシードなし）・`POST /v1/media/articles/generate`（Vertex AI → 決定的フォールバック・llm フラグ）・`GET /v1/media/generated` + `/:id/adopt|unadopt|remove|restore`（採用は冪等 = 二重採用 no-op + warning）・`GET/POST /v1/media/insights(/generate)`（scope=media はサーバー集計 / scope=integrated は**クライアント合成メトリクスを受領** = 売上明細 salesRecords が未移行のモック側 SoT のため。weekly_insights と同型の upsert 保管）（**実装・フロント接続済み = 2026-07-28**。書込系は admin のみ。/v1/media は F-16 機能キー対象外 = アプリ設定で制御） |
 | 参照系 computed | `GET` + クライアントキャッシュ（表示射影はフロント純粋関数のまま維持） |
 
 ## 4. エラーコード起番（台帳: モックアップ + API サービス共通）
@@ -285,3 +286,17 @@ save(defs) / reset(): Promise<void>              // SoT = configs `menu-categori
 | AKO-AIC-006 | 未完了ステップなし | ✅ |
 | AKO-AIC-007 | 実行中/ブロック中以外の状態切替 | ✅ |
 | AKO-AIC-008 | 完了・中止済みタスクの中止 | ✅ |
+| AKO-MEDIA-001 | メディア設定の対象セグメントなし | モックのみ |
+| AKO-MEDIA-002 | GA4 プロパティ ID 未入力（擬似 OAuth） | モックのみ |
+| AKO-MEDIA-003 | Google Analytics 未連携（トークンなし・プロパティ未選択を含む） | ✅ |
+| AKO-MEDIA-004 | GA 集計の取得失敗（Data API 全滅。設定不備は API 有効化を案内） | ✅ |
+| AKO-MEDIA-005 | GA 連携が未設定（GOOGLE_OAUTH_* 未投入 = 機能無効） | ✅ |
+| AKO-MEDIA-006 | GA4 プロパティ一覧の取得失敗（Admin API） | ✅ |
+| AKO-MEDIA-007 | 対象の記事（インベントリ）が見つからない | ✅ |
+| AKO-MEDIA-008 | 記事パスの重複（再送・二重クリックの再登録 = 409。有効な同一パスが残る状態での復元も 409） | ✅ |
+| AKO-MEDIA-010 | 記事生成の対象セグメントなし | モックのみ |
+| AKO-MEDIA-011 | 記事生成のお題・キーワード未入力 | ✅ |
+| AKO-MEDIA-012 | 対象の生成記事が見つからない | ✅ |
+| AKO-MEDIA-013 | 生成記事の二重採用（モックのみ。API は no-op + warning = 冪等） | モックのみ |
+| AKO-MEDIA-014 | 採用されていない生成記事の採用取消 | ✅ |
+| AKO-MEDIA-016 | 統合メトリクス（クライアント合成）の不正（whitelist 正規化 + 有限・非負・範囲検証で拒否。009・015 は欠番） | ✅ |

@@ -1,6 +1,7 @@
 /**
  * AI 記事生成（目的・記事の質・雰囲気を指定して記事ドラフトを生成する）。
- * - 本実装では Vertex AI（構造化出力）で本文を生成する。モックは決定的テンプレート合成で代替（原則4）。
+ * - API（本実装）は Vertex AI（構造化出力）で本文を生成し、LLM 無効・失敗時は本ファイルの
+ *   決定的テンプレート合成へフォールバックする（原則4。api/src/routes/media.ts）。モックは決定的合成のみ。
  * - 過去の分析結果（insightHints）を材料に、成果に近いテーマの記事も生成できる。
  * - 生成物は「ドラフト」であり、採用（サイトのコンテンツ資産へ登録）・取消は呼び出し側で管理する（原則9.5）。
  */
@@ -125,8 +126,19 @@ function hashStr(s: string): number {
 }
 
 /**
+ * 自己評価スコア（0..100）: 質ベース + 指定の充足（topic/keyword/audience/hints）。
+ * LLM 生成時もスコアはこの決定的式で付与する（LLM の自己申告に依存しない = API と共有。原則3）
+ */
+export function articleQualityScore(input: ArticleGenInput): number {
+  const qualityBase = { draft: 55, standard: 72, premium: 86 }[input.quality]
+  const bonus = (input.topic.trim() ? 4 : 0) + (input.keyword.trim() ? 4 : 0)
+    + (input.audience.trim() ? 3 : 0) + ((input.insightHints?.length ?? 0) > 0 ? 3 : 0)
+  return Math.min(100, qualityBase + bonus)
+}
+
+/**
  * 記事ドラフトを決定的に生成する。
- * 同じ入力 → 常に同じ出力（モックの一貫性）。本実装ではここが LLM 呼び出しに置き換わる。
+ * 同じ入力 → 常に同じ出力（モックの一貫性）。API は Vertex AI を一次とし、失敗時にここへフォールバックする。
  */
 export function generateArticleDraft(input: ArticleGenInput): GeneratedArticleDraft {
   const topic = (input.topic || '').trim() || (input.keyword || '').trim() || `${input.segmentName}の活用`
@@ -163,11 +175,7 @@ export function generateArticleDraft(input: ArticleGenInput): GeneratedArticleDr
   const start = hashStr(`${keyword}:${input.purpose}`) % suffixes.length
   const suggestedKeywords = [keyword, ...Array.from({ length: 4 }, (_, i) => `${keyword} ${suffixes[(start + i) % suffixes.length]}`)]
 
-  // 自己評価スコア: 質ベース + 指定の充足（topic/keyword/audience/hints）
-  const qualityBase = { draft: 55, standard: 72, premium: 86 }[input.quality]
-  const bonus = (input.topic.trim() ? 4 : 0) + (input.keyword.trim() ? 4 : 0)
-    + (input.audience.trim() ? 3 : 0) + ((input.insightHints?.length ?? 0) > 0 ? 3 : 0)
-  const qualityScore = Math.min(100, qualityBase + bonus)
+  const qualityScore = articleQualityScore(input)
 
   return {
     title, metaDescription, outline, body, suggestedKeywords,
