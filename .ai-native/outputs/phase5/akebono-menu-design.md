@@ -98,11 +98,13 @@ flowchart TD
 | エンティティ | 主要属性 | 分類 |
 |---|---|---|
 | `AkebonoAppConfig` | **segmentId（業態参照）**, appKey（レジストリ参照）, enabled, labelOverride?, source(`preset`/`manual`), updatedBy | 設定系（upsert。監査ログ記録）。**一意キー = (segmentId, appKey)** |
-| `BusinessSegment` | id, name, industryType(`retail`/`maker`/`logistics`/`it_service`/`other`), displayOrder, active | マスタ系（論理削除。**使用中セグメントの無効化は伝票参照チェックで拒否**） |
+| `BusinessSegment` | id, name, industryType(`retail`/`maker`/`logistics`/`it_service`/`other`), displayOrder, active, **appName?, appIcon?, appIconImage?（トップの業態アプリ表示）**, **defaultUnitId?, defaultBillingType?, defaultVariantAxis1Label?, defaultVariantAxis2Label?（商品登録の既定値）** | マスタ系（論理削除。**使用中セグメントの無効化は伝票参照チェックで拒否**）。追加属性はすべて任意 = 下位互換（原則 7） |
 
 プリセット適用（F-20-4）は「現状とプリセットの差分を提示 → 管理者確認 → 適用」のフローで、**確認なしの自動 OFF はしない**（既存設定の保護 = 原則 2）。
 
-**マルチ業態（2026-07-28 拡張）:** 1 テナントで複数業態を扱えるよう、アプリ設定は**業態ごとに保持**する（従来はテナント一律・全業態の業種タイプの和集合プリセット）。各業態の使用アプリ・ラベルは独立に設定でき、業種プリセットは**その業態の業種タイプ単独**で適用する（`presetAppsForSegment`）。加えて「現在の業態」をユーザー単位で保持する軽量コンテキスト（`useCurrentSegment`。ヘッダの業態スイッチャ）を設け、配下アプリ（売上・商品・発注・仕入・出荷・在庫）の一覧絞り込み・新規登録の既定業態に使う。**毎回業態を選ばせない導線**とし、各画面での「全セグメント」や他業態への切替は残す（非破壊 = 原則 2）。純関数 `resolveDefaultSegmentId`（無効/削除 id は先頭業態へフォールバック）・`presetAppConfigsForSegments`（業態別初期設定生成）に集約し単体テスト対象とする。**下位互換（原則 7）:** モックは `SEED_VERSION` 更新で業態別シードへ再生成。本実装移行時は既存 `akebono_app_configs` 行に `segment_id` を付与するデータ更新パッチ（各テナントの `business_segments` へ複製）をオペレーターへ提示する。
+**マルチ業態（2026-07-28 拡張）:** 1 テナントで複数業態を扱えるよう、アプリ設定は**業態ごとに保持**する（従来はテナント一律・全業態の業種タイプの和集合プリセット）。各業態の使用アプリ・ラベルは独立に設定でき、業種プリセットは**その業態の業種タイプ単独**で適用する（`presetAppsForSegment`）。加えて「現在の業態」をユーザー単位で保持する軽量コンテキスト（`useCurrentSegment`）を設け、配下アプリ（売上・商品・発注・仕入・出荷・在庫）の一覧絞り込み・新規登録の既定業態に使う。**毎回業態を選ばせない導線**とし、各画面での「全セグメント」や他業態への切替は残す（非破壊 = 原則 2）。純関数 `resolveDefaultSegmentId`（無効/削除 id は先頭業態へフォールバック）・`presetAppConfigsForSegments`（業態別初期設定生成）に集約し単体テスト対象とする。**下位互換（原則 7）:** モックは `SEED_VERSION` 更新で業態別シードへ再生成。本実装移行時は既存 `akebono_app_configs` 行に `segment_id` を付与するデータ更新パッチ（各テナントの `business_segments` へ複製）をオペレーターへ提示する。
+
+**業態アプリのトップ配置 + 入力既定の集約（2026-07-28 増分・オペレーター指示）:** 業態ごとの Akebono 業務を「アプリ」としてダッシュボードに直接並べ、押下でその業態の業務へ入場する（`/akebono?seg=<id>` → 現在業態を切替。従来の「単一 AKEBONO カード → ヘッダで業態切替」を置き換え。ヘッダスイッチャは入場後の切替手段として残す = 非破壊）。各業態アプリは**表示名（`appName`。未設定は業態名）とアイコン（`appIconImage` = アップロード画像を優先、無ければ `appIcon` = 選択式 lucide キー、無ければ業種タイプ既定 `INDUSTRY_DEFAULT_ICON`）**で直感識別する（`segmentAppName`/`segmentIconKey`。共有部品 `AkebonoSegmentIcon`/`AkebonoSegmentApps`）。設定は**業態アプリ設定**画面（`/akebono/settings/segments`。共通マスタ管理配下・管理者ゲート）に集約する。あわせて**商品登録の入力コスト最小化**として、`事業セグメント`（= 入場した業態で固定）・`単位`・`課金区分`・`バリアント軸1/2ラベル`の既定値を業態設定に持たせ、商品の通常登録・編集フォームからは外して自動適用する（`segmentFieldDefaults`）。個別に上書きしたい場合のみ商品側の**「カスタマイズ」フォーム**（別セクション）でこの 5 項目を編集する。「業態の既定に戻す」で取消可能（原則 9.5）。追加属性はすべて任意で未設定時はフォールバックするため下位互換（原則 7）。
 
 ---
 

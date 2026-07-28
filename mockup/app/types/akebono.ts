@@ -69,6 +69,24 @@ export interface BusinessSegment {
   industryType: IndustryType
   displayOrder: number
   active: boolean
+  /**
+   * 業態別 Akebono アプリの表示・入力既定（F-20 拡張。2026-07-28）。
+   * すべて任意（未設定 = フォールバック）で下位互換を保つ（原則7）。
+   */
+  /** トップに並べる業態アプリの表示名（未設定 = name を使用） */
+  appName?: string | null
+  /** アプリアイコン（lucide キー。未設定 = 業種タイプ既定アイコン） */
+  appIcon?: string | null
+  /** アプリアイコン画像（data URI。設定時は appIcon より優先。トップで直感識別） */
+  appIconImage?: string | null
+  /** 商品登録の既定単位（Unit 参照。通常フォームでは編集せずこれを適用） */
+  defaultUnitId?: string | null
+  /** 商品登録の既定課金区分（null = 物販。情報サービスは monthly 等） */
+  defaultBillingType?: BillingType | null
+  /** 商品登録の既定バリアント軸1ラベル（未設定 = 空 = SKU 展開なし） */
+  defaultVariantAxis1Label?: string | null
+  /** 商品登録の既定バリアント軸2ラベル */
+  defaultVariantAxis2Label?: string | null
 }
 
 /** 倉庫・保管場所（F-30-3。店舗預けは kind='store_deposit' + companyId=店舗） */

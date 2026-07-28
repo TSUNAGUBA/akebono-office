@@ -1,9 +1,10 @@
 <script setup lang="ts">
 /**
  * AKEBONO 業務アプリ ハブ（F-20-1。マルチ業態対応）
- * 現在の業態（ヘッダの業態スイッチャで選択）に応じて、使用（導入）中のアプリのみをカードで表示。
- * 管理者はアプリの使用/不使用・業種プリセット適用を「業態ごと」に設定でき、共通マスタ/取込/項目カスタマイズへの導線を持つ。
- * 要望ボックス（F-03-2）は残置。
+ * 現在の業態（トップの業態アプリで入場・ヘッダの業態スイッチャでも切替可。/akebono?seg=<id> で切替）に応じて、
+ * 使用（導入）中のアプリのみをカードで表示。
+ * 管理者はアプリの使用/不使用・業種プリセット適用を「業態ごと」に設定でき、
+ * 業態アプリ設定/共通マスタ/取込/項目カスタマイズへの導線を持つ。要望ボックス（F-03-2）は残置。
  */
 import { CircleCheck, CircleDashed, Layers, Send, Sparkles, Sunrise } from 'lucide-vue-next'
 import { fmtDateTime } from '~/utils/format'
@@ -11,15 +12,32 @@ import { INDUSTRY_TYPE_LABELS } from '~/utils/akebono'
 import type { MenuCard } from '~/types/ui'
 
 const apps = useAkebonoApps()
-const { activeSegments, currentSegment, currentIndustryLabel, effectiveSegmentId } = useCurrentSegment()
+const { activeSegments, currentSegment, currentIndustryLabel, effectiveSegmentId, switchSegment } = useCurrentSegment()
 const { isAdmin } = useCurrentUser()
 const { tbl } = useMockDb()
 const { show } = useToast()
 const confirm = useConfirm()
 const { wishes, submitWish: submitWishApi, refresh } = useAkebono()
 const members = tbl('members')
+const route = useRoute()
+const router = useRouter()
 
-onMounted(() => { void refresh() })
+// トップの業態アプリカード（/akebono?seg=<id>）からの入場で現在業態を切り替える。
+// クエリの seg が有効な業態ならそれを現在業態にする（毎回ヘッダで選ばせない導線）。
+function applySegmentQuery(seg: unknown): void {
+  const id = typeof seg === 'string' ? seg : ''
+  if (id && id !== effectiveSegmentId.value && activeSegments.value.some(s => s.id === id)) {
+    switchSegment(id)
+  }
+}
+watch(() => route.query.seg, applySegmentQuery, { immediate: true })
+
+onMounted(() => {
+  void refresh()
+  // 適用後は URL から seg を除去する。以降ヘッダで切り替えた業態がリロードで
+  // 入場時の seg に引き戻されないようにする（seg は「入場のワンショット指定」= localStorage が正）。
+  if (route.query.seg) void router.replace({ path: '/akebono', query: {} })
+})
 
 // ---------- アプリランチャー（現在業態のみ） ----------
 const appCards = computed<MenuCard[]>(() =>
@@ -96,7 +114,7 @@ async function submitWish(): Promise<void> {
       <span class="text-[12px] text-sub">現在の業態</span>
       <span class="text-[13px] font-bold">{{ currentSegment.name }}</span>
       <UiStatusBadge :label="currentIndustryLabel" tone="info" />
-      <span class="hidden text-[11px] text-muted sm:inline">・配下アプリはこの業態が既定になります（ヘッダの業態スイッチャで切替）</span>
+      <span class="hidden text-[11px] text-muted sm:inline">・配下アプリはこの業態が既定になります（トップの業態アプリで入場・ヘッダでも切替可）</span>
     </div>
 
     <div class="grid gap-4">
@@ -105,8 +123,12 @@ async function submitWish(): Promise<void> {
       <UiEmptyState v-else icon="PackageOpen" title="この業態で使用中のアプリがありません" :hint="isAdmin ? '「アプリ・業態の設定」から使用するアプリを有効化してください' : '管理者が「アプリ・業態の設定」から使用するアプリを有効化してください'" />
 
       <!-- 管理者ツール -->
-      <UiSectionCard v-if="isAdmin" title="管理者ツール" description="共通マスタ・データ取込・項目カスタマイズ（常時有効）">
-        <div class="grid gap-2 sm:grid-cols-3">
+      <UiSectionCard v-if="isAdmin" title="管理者ツール" description="業態アプリ設定・共通マスタ・データ取込・項目カスタマイズ（常時有効）">
+        <div class="grid gap-2 sm:grid-cols-2">
+          <NuxtLink to="/akebono/settings/segments" class="card block p-3 hover:border-brand">
+            <p class="text-[13px] font-bold">業態アプリ設定</p>
+            <p class="mt-1 text-[11px] text-sub">トップに並ぶ業態アプリの名称・アイコンと、商品登録の既定値（単位・課金区分・バリアント軸）</p>
+          </NuxtLink>
           <NuxtLink to="/akebono/masters" class="card block p-3 hover:border-brand">
             <p class="text-[13px] font-bold">共通マスタ管理</p>
             <p class="mt-1 text-[11px] text-sub">取引先ロール・事業セグメント・倉庫・単位・税区分・委託条件ほか</p>

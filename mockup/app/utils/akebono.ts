@@ -311,3 +311,60 @@ export function presetAppConfigsForSegments(
   }
   return configs
 }
+
+// ---------- 業態アプリの表示・入力既定（F-20 拡張。2026-07-28） ----------
+
+/**
+ * 業態アプリのアイコン選択肢（lucide キー。トップに並べる業態アプリの識別用）。
+ * 画像アップロードを使わない場合はここから選ぶ（原則5: アイコンは lucide のみ）。
+ */
+export const SEGMENT_ICON_CHOICES = [
+  'Sunrise', 'Store', 'ShoppingBag', 'ShoppingCart', 'Factory', 'Truck', 'Boxes',
+  'Server', 'Cpu', 'Cloud', 'Palette', 'Shirt', 'Gem', 'Utensils', 'Coffee',
+  'Wrench', 'Rocket', 'Building2', 'Package', 'Sparkles',
+] as const
+export type SegmentIconKey = (typeof SEGMENT_ICON_CHOICES)[number]
+
+/** 業種タイプ別の既定アイコン（appIcon 未設定時のフォールバック） */
+export const INDUSTRY_DEFAULT_ICON: Record<IndustryType, SegmentIconKey> = {
+  retail: 'Store',
+  maker: 'Factory',
+  logistics: 'Truck',
+  it_service: 'Server',
+  other: 'Package',
+}
+
+/** 業態アプリのアイコンキーを解決する（未設定 = 業種タイプ既定） */
+export function segmentIconKey(segment: Pick<BusinessSegment, 'industryType' | 'appIcon'>): string {
+  const key = segment.appIcon?.trim()
+  return key || INDUSTRY_DEFAULT_ICON[segment.industryType]
+}
+
+/** 業態アプリの表示名を解決する（appName 優先・未設定は業態名） */
+export function segmentAppName(segment: Pick<BusinessSegment, 'name' | 'appName'>): string {
+  return segment.appName?.trim() || segment.name
+}
+
+/** 商品登録フォームで自動適用する既定値（業態設定に集約。通常フォームでは編集不可） */
+export interface SegmentFieldDefaults {
+  unitId: string | null
+  billingType: BillingType | null
+  variantAxis1Label: string | null
+  variantAxis2Label: string | null
+}
+
+/**
+ * 業態の商品既定値を取り出す（未設定は null）。
+ * 商品登録・編集の通常フォームはこれを既定として使い、個別変更は「カスタマイズ」フォームでのみ許す。
+ * segment が無い場合も安全に空既定を返す（原則7）。
+ */
+export function segmentFieldDefaults(
+  segment: Pick<BusinessSegment, 'defaultUnitId' | 'defaultBillingType' | 'defaultVariantAxis1Label' | 'defaultVariantAxis2Label'> | null | undefined,
+): SegmentFieldDefaults {
+  return {
+    unitId: segment?.defaultUnitId ?? null,
+    billingType: segment?.defaultBillingType ?? null,
+    variantAxis1Label: segment?.defaultVariantAxis1Label ?? null,
+    variantAxis2Label: segment?.defaultVariantAxis2Label ?? null,
+  }
+}

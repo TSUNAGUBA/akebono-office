@@ -37,7 +37,8 @@ export const OTHER_CATEGORY_LABEL = 'その他'
 export const MENU_CARDS: Record<MenuArea, MenuCardDef[]> = {
   dashboard: [
     { id: 'decision', title: '意思決定支援', description: 'AI が意味・関係・制約を整理し、選択肢と根拠を提示', icon: 'Scale', to: '/decision', featureToggle: 'decision' },
-    { id: 'akebono', title: 'AKEBONO 業務', description: '商品マスタ〜在庫・売上・請求・委託精算の業務アプリ群（業種別構成）', icon: 'Sunrise', to: '/akebono', featureToggle: 'akebono' },
+    // AKEBONO 業務は業態別アプリとしてダッシュボード上部に専用セクション表示（pages/index.vue + AkebonoSegmentApps）。
+    // 単一カードは廃止し、業態ごとの業務アプリへ直接入場する導線へ置き換えた（2026-07-28）。
     { id: 'timecard', title: 'タイムカード', description: '自分の打刻と出退勤・労働時間の一覧', icon: 'Clock3', to: '/timecard' },
     { id: 'attendance', title: '勤怠管理', description: '打刻・月次集計・36 協定アラート・休暇', icon: 'Clock', to: '/attendance' },
     { id: 'shift', title: 'シフト表', description: '希望提出・調整・確定シフトの確認', icon: 'CalendarRange', to: '/shift', featureToggle: 'shift' },
@@ -79,7 +80,6 @@ export const MENU_CARDS: Record<MenuArea, MenuCardDef[]> = {
 export const DEFAULT_MENU_CATEGORIES: Record<MenuArea, MenuCategoryDef[]> = {
   dashboard: [
     { id: 'decision', label: '意思決定支援', cardIds: ['decision'] },
-    { id: 'akebono', label: 'AKEBONO', cardIds: ['akebono'] },
     { id: 'work', label: '業務ツール', cardIds: ['timecard', 'attendance', 'shift', 'reports', 'ai-assistant', 'poipoi', 'minutes', 'workflow'] },
     { id: 'ai-company', label: 'AIネイティブカンパニー', cardIds: ['ai-company'] },
     { id: 'insights', label: '経営・状況', cardIds: ['sales', 'status'] },

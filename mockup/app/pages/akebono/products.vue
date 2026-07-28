@@ -3,9 +3,12 @@
  * 商品マスタ管理（F-21）
  * 商品（親）+ SKU（バリアント 2 軸）+ 画像（セクション別）を一覧・詳細ドロワーで管理する。
  * 展開なし商品は既定 SKU 1 件（SKU 数 1 表示）。バリアント商品はマトリクス生成で SKU 展開。
- * 画像は data URI 実体を持たない色プレースホルダで描画（実アップロードはモック対象外）。
+ * 画像は実ファイルを縮小して data URI 登録（未登録は色プレースホルダ）。新規登録フォームでも
+ * 添付でき、商品保存時にまとめて登録する。
+ * 事業セグメント・単位・課金区分・バリアント軸ラベルは業態設定の既定を自動適用し、通常フォームからは
+ * 外す（入力コスト最小化。F-20-8）。個別変更は「カスタマイズ」フォームでのみ行う。
  */
-import { Plus } from 'lucide-vue-next'
+import { Layers, Plus, SlidersHorizontal } from 'lucide-vue-next'
 import { ACTIVE_FILTER_OPTIONS, matchesActiveFilter } from '~/components/masters/MasterShell.vue'
 import type { BillingType, Product, ProductSku } from '~/types/akebono'
 import type { Company } from '~/types/domain'
@@ -16,7 +19,7 @@ import { fmtYen } from '~/utils/format'
 
 const p = useProducts()
 const masters = useAkebonoMasters()
-const { effectiveSegmentId } = useCurrentSegment()
+const { effectiveSegmentId, defaultsFor } = useCurrentSegment()
 const { tbl } = useMockDb()
 const toast = useToast()
 const confirm = useConfirm()
@@ -87,22 +90,45 @@ const drawerTitle = computed(() =>
 
 const form = ref<Record<string, unknown>>({})
 const errors = ref<Record<string, string>>({})
+// カスタマイズ（業態・単位・課金区分・バリアント軸）を開いているか。既定は閉（業態の既定値を自動適用）
+const customizeOpen = ref(false)
 
-const formFields = computed<FieldDef[]>(() => [
+/**
+ * 通常フォーム項目（入力コスト最小化）。
+ * 事業セグメント・単位・課金区分・バリアント軸1/2ラベルは業態設定の既定を自動適用するため、
+ * ここには出さない（変更は「カスタマイズ」フォームでのみ）。
+ */
+const baseFields = computed<FieldDef[]>(() => [
   { key: 'code', label: '商品コード', type: 'text', required: true, placeholder: '例）AB-1001' },
   { key: 'name', label: '商品名', type: 'text', required: true },
-  { key: 'segmentId', label: '事業セグメント', type: 'select', required: true, options: masters.segmentOptions.value },
   { key: 'categoryId', label: '商品カテゴリ', type: 'select', options: masters.categoryOptions.value, emptyLabel: '（未分類）' },
   { key: 'defaultSupplierCompanyId', label: '仕入先', type: 'select', options: supplierOptions.value, emptyLabel: '（未指定）' },
   { key: 'listPrice', label: '標準売価（円）', type: 'number', min: 0, step: 1 },
   { key: 'standardCost', label: '標準原価（円）', type: 'number', min: 0, step: 1 },
   { key: 'taxRateId', label: '税区分', type: 'select', options: masters.taxRateOptions.value, emptyLabel: '（未指定）' },
+  { key: 'description', label: '説明', type: 'textarea' },
+])
+
+/** カスタマイズフォーム項目（業態設定の既定を個別に上書きしたいときだけ開く） */
+const customFields = computed<FieldDef[]>(() => [
+  { key: 'segmentId', label: '事業セグメント', type: 'select', required: true, options: masters.segmentOptions.value, hint: '通常は入場した業態が入ります' },
   { key: 'unitId', label: '単位', type: 'select', options: masters.unitOptions.value, emptyLabel: '（未指定）' },
   { key: 'billingType', label: '課金区分', type: 'select', options: billingTypeOptions, emptyLabel: '（物販）' },
   { key: 'variantAxis1Label', label: 'バリアント軸1ラベル', type: 'text', placeholder: '例）カラー', hint: '入力すると SKU 展開商品になります' },
   { key: 'variantAxis2Label', label: 'バリアント軸2ラベル', type: 'text', placeholder: '例）サイズ（任意）' },
-  { key: 'description', label: '説明', type: 'textarea' },
 ])
+
+/** フォームで採用中の既定値サマリ（カスタマイズ未使用時の透明性表示） */
+const appliedDefaultsSummary = computed(() => {
+  const unitId = str(form.value.unitId)
+  const billing = str(form.value.billingType)
+  const v1 = str(form.value.variantAxis1Label).trim()
+  const v2 = str(form.value.variantAxis2Label).trim()
+  const unit = unitId ? masters.unitName(unitId) || '未設定' : '未設定'
+  const billingLabel = billing ? BILLING_TYPE_LABELS[billing as BillingType] : '物販'
+  const variant = v1 ? (v2 ? `${v1}×${v2}` : v1) : 'バリアントなし'
+  return `単位: ${unit} ／ 課金: ${billingLabel} ／ ${variant}`
+})
 
 const detailRows = computed(() => {
   const s = selected.value
@@ -128,12 +154,19 @@ function openDetail(row: Record<string, unknown>): void {
 
 function openCreate(): void {
   selectedId.value = null
+  // 登録先の業態（入場した業態が既定）。その業態の既定値を単位・課金区分・バリアント軸へ自動適用する。
+  const sid = segmentFilter.value || effectiveSegmentId.value || ''
+  const d = defaultsFor(sid)
   form.value = {
-    code: '', name: '', segmentId: segmentFilter.value || effectiveSegmentId.value || '', categoryId: '',
+    code: '', name: '', segmentId: sid, categoryId: '',
     defaultSupplierCompanyId: '', listPrice: '', standardCost: '', taxRateId: '',
-    unitId: '', billingType: '', variantAxis1Label: '', variantAxis2Label: '', description: '',
+    unitId: d.unitId ?? '', billingType: d.billingType ?? '',
+    variantAxis1Label: d.variantAxis1Label ?? '', variantAxis2Label: d.variantAxis2Label ?? '',
+    description: '',
   }
   errors.value = {}
+  customizeOpen.value = false
+  pendingImages.value = []
   mode.value = 'create'
   drawerOpen.value = true
 }
@@ -150,7 +183,19 @@ function openEdit(): void {
     description: s.description,
   }
   errors.value = {}
+  customizeOpen.value = false
   mode.value = 'edit'
+}
+
+/** この業態の既定値をフォームへ再適用（カスタマイズを既定に戻す取消導線・原則9.5） */
+function reapplySegmentDefaults(): void {
+  const d = defaultsFor(str(form.value.segmentId))
+  form.value = {
+    ...form.value,
+    unitId: d.unitId ?? '', billingType: d.billingType ?? '',
+    variantAxis1Label: d.variantAxis1Label ?? '', variantAxis2Label: d.variantAxis2Label ?? '',
+  }
+  toast.show('この業態の既定値を再適用しました', 'ok')
 }
 
 function cancelEdit(): void {
@@ -195,13 +240,26 @@ function save(): void {
     variantAxis2Label: emptyToNull(form.value.variantAxis2Label),
     description: str(form.value.description),
   }
+  const wasCreate = mode.value === 'create'
   if (mode.value === 'edit' && selectedId.value) payload.id = selectedId.value
   const res = p.saveProduct(payload)
   if (!res.ok) {
     toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
     return
   }
-  toast.show(mode.value === 'create' ? '商品を追加しました' : '商品を更新しました', 'ok')
+  // 新規登録フォームで添付した画像を、作成された商品へまとめて登録する（feature: 登録フォームの画像）
+  let imageCapacityWarned = false
+  if (wasCreate && res.id && pendingImages.value.length > 0) {
+    for (const img of pendingImages.value) {
+      const r = p.addImage(res.id, img)
+      if (r.ok && r.persisted === false) imageCapacityWarned = true
+    }
+    pendingImages.value = []
+  }
+  toast.show(wasCreate ? '商品を追加しました' : '商品を更新しました', 'ok')
+  if (imageCapacityWarned) {
+    toast.show('一部の画像は保存容量の上限により再読込時に失われる可能性があります。不要な画像を削除してください', 'warn')
+  }
   if (res.id) selectedId.value = res.id
   mode.value = 'view'
 }
@@ -258,6 +316,17 @@ const imageBusy = ref(false)
 const imageForm = ref<{ sectionId: string; filename: string; mime: string; dataUrl: string | null }>({
   sectionId: '', filename: '', mime: '', dataUrl: null,
 })
+// 新規登録フォームで先に選んだ画像（商品未作成のため保存を保留し、保存時に一括登録する）
+interface StagedImage { sectionId: string; filename: string; mime: string; dataUrl: string }
+const pendingImages = ref<StagedImage[]>([])
+
+/** 保留画像のセクション名（表示用） */
+function sectionNameOf(id: string): string {
+  return masters.imageSections.value.find(s => s.id === id)?.name ?? id
+}
+function removePendingImage(idx: number): void {
+  pendingImages.value = pendingImages.value.filter((_, i) => i !== idx)
+}
 
 function openImageModal(): void {
   imageForm.value = {
@@ -298,7 +367,6 @@ async function onImageFileChange(ev: Event): Promise<void> {
 }
 
 function saveImage(): void {
-  if (!selectedId.value) return
   if (!imageForm.value.sectionId) {
     toast.show('セクションを選択してください', 'crit')
     return
@@ -307,6 +375,19 @@ function saveImage(): void {
     toast.show('画像ファイルを選択してください', 'crit')
     return
   }
+  // 新規登録フォーム（商品未作成）では保存を保留し、商品保存時に一括登録する
+  if (mode.value === 'create') {
+    pendingImages.value = [...pendingImages.value, {
+      sectionId: imageForm.value.sectionId,
+      filename: imageForm.value.filename || 'image',
+      mime: imageForm.value.mime || 'image/*',
+      dataUrl: imageForm.value.dataUrl,
+    }]
+    imageModalOpen.value = false
+    toast.show('画像を追加しました（商品の保存時に登録されます）', 'ok')
+    return
+  }
+  if (!selectedId.value) return
   const res = p.addImage(selectedId.value, {
     sectionId: imageForm.value.sectionId,
     filename: imageForm.value.filename || 'image',
@@ -529,7 +610,68 @@ function saveMatrix(): void {
       </div>
 
       <!-- 追加・編集フォーム -->
-      <UiSchemaForm v-else v-model="form" :fields="formFields" :errors="errors" />
+      <div v-else class="grid gap-4">
+        <!-- 登録先の業態（既定は入場した業態）+ カスタマイズ切替 -->
+        <div class="flex flex-wrap items-center justify-between gap-2 rounded-[10px] border border-line bg-surface-soft px-3 py-2">
+          <div class="flex min-w-0 items-center gap-2">
+            <Layers class="h-4 w-4 shrink-0 text-brand" aria-hidden="true" />
+            <span class="text-[11px] text-muted">登録先の業態</span>
+            <span class="truncate text-[12px] font-bold">{{ masters.segmentName(str(form.segmentId)) || '未設定' }}</span>
+          </div>
+          <button
+            type="button"
+            class="btn btn-sm shrink-0"
+            :aria-expanded="customizeOpen"
+            @click="customizeOpen = !customizeOpen"
+          >
+            <SlidersHorizontal class="h-3.5 w-3.5" aria-hidden="true" /> カスタマイズ
+          </button>
+        </div>
+
+        <!-- 通常フォーム（入力コスト最小化） -->
+        <UiSchemaForm v-model="form" :fields="baseFields" :errors="errors" />
+
+        <!-- カスタマイズ未使用時: 適用中の値を明示（透明性）。create は業態既定・edit は現在値 -->
+        <p v-if="!customizeOpen" class="text-[11px] text-muted">
+          {{ mode === 'create' ? '業態の既定を適用中' : '現在の設定' }} — {{ appliedDefaultsSummary }}。変更は「カスタマイズ」から。
+        </p>
+
+        <!-- カスタマイズフォーム（別フォーム。通常ルートでは編集不可の 5 項目） -->
+        <section v-if="customizeOpen" class="rounded-[10px] border border-line p-3">
+          <div class="mb-2 flex items-center justify-between gap-2">
+            <h3 class="text-[11px] font-bold uppercase tracking-wide text-muted">カスタマイズ</h3>
+            <button type="button" class="btn btn-sm" @click="reapplySegmentDefaults">業態の既定に戻す</button>
+          </div>
+          <UiSchemaForm v-model="form" :fields="customFields" :errors="errors" />
+        </section>
+
+        <!-- 画像（新規登録フォームで添付。保存時に商品へ登録） -->
+        <section v-if="mode === 'create'">
+          <div class="mb-2 flex items-center justify-between">
+            <h3 class="text-[11px] font-bold uppercase tracking-wide text-muted">画像（任意）</h3>
+            <button type="button" class="btn btn-sm" @click="openImageModal">
+              <Plus class="h-3.5 w-3.5" aria-hidden="true" /> 画像を追加
+            </button>
+          </div>
+          <div v-if="pendingImages.length === 0" class="rounded border border-line bg-page p-3 text-[12px] text-sub">
+            画像を添付できます。商品の保存時にまとめて登録します（未登録の画像は色プレースホルダで表示）。
+          </div>
+          <ul v-else class="grid gap-2">
+            <li
+              v-for="(img, idx) in pendingImages"
+              :key="idx"
+              class="flex items-center gap-2 rounded border border-line p-2"
+            >
+              <img :src="img.dataUrl" :alt="img.filename" class="h-10 w-10 shrink-0 rounded border border-line object-cover">
+              <div class="min-w-0 flex-1">
+                <div class="truncate text-[12px] font-medium">{{ img.filename }}</div>
+                <div class="text-[11px] text-muted">{{ sectionNameOf(img.sectionId) }}</div>
+              </div>
+              <button type="button" class="btn btn-danger btn-sm shrink-0" @click="removePendingImage(idx)">削除</button>
+            </li>
+          </ul>
+        </section>
+      </div>
 
       <template #footer>
         <div v-if="mode === 'view' && selected" class="flex items-center justify-between gap-2">

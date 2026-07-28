@@ -5,7 +5,7 @@
  * 単位・税区分・回収支払条件・委託条件）をタブで切替。CRUD は useAkebonoMasters に集約し、
  * 本ページは薄い表示層に徹する（原則3）。書込は cruds[key].save/archive/restore のみ。
  */
-import { Plus } from 'lucide-vue-next'
+import { Plus, Sunrise } from 'lucide-vue-next'
 import {
   AKEBONO_MASTER_COLUMNS, consignmentSummary,
   type AkebonoMasterKey,
@@ -202,6 +202,13 @@ function asTerm(row: Row): ConsignmentTerm {
     </template>
 
     <UiTabBar v-model="activeTab" :tabs="tabs" />
+
+    <div v-if="activeTab === 'businessSegments'" class="flex flex-wrap items-center gap-2 rounded-[10px] border border-brand/30 bg-brand-soft/40 px-3 py-2 text-[12px]">
+      <Sunrise class="h-4 w-4 shrink-0 text-brand" aria-hidden="true" />
+      <span class="text-sub">トップに並ぶ業態アプリの表示名・アイコンや、商品登録の既定値（単位・課金区分・バリアント軸）は</span>
+      <NuxtLink to="/akebono/settings/segments" class="link font-semibold">業態アプリ設定</NuxtLink>
+      <span class="text-sub">で設定できます。</span>
+    </div>
 
     <UiSectionCard :title="`${currentMeta.label}（${rows.length}件）`" :description="currentMeta.description" flush>
       <UiDataTable
