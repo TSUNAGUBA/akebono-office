@@ -82,9 +82,12 @@ async function regenerate(): Promise<void> {
   if (generating.value || !canView.value) return
   generating.value = true
   try {
-    // API モードは全業態の GA 月次のロードを await でそろえてから集計・保管する
+    // API モードは全業態の GA 月次のロードを await でそろえてから集計・保管する（取得失敗時は生成せずエラー = M1）
     view.value = await generateCompany()
     show('会社全体の AI レポート・インサイトを生成し、保存しました', 'ok')
+  } catch (e) {
+    const er = apiErrorOf(e)
+    show(`${er.code}: ${er.message}`, 'warn')
   } finally { generating.value = false }
 }
 </script>

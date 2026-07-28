@@ -86,14 +86,33 @@ export function loadMediaMonthly(segmentId: string, months: number, force = fals
   return apiLoadOnce(`media:monthly:${key}`, async () => {
     try {
       const points = await apiFetch<MediaMonthlyPoint[]>('/v1/media/monthly', {
-        query: { segmentId, months: String(months) },
+        // force はサーバーの 30 分キャッシュも飛ばす（m9。metrics と同じ再試行の意味論）
+        query: { segmentId, months: String(months), ...(force ? { force: '1' } : {}) },
       })
       apiMonthly.value = { ...apiMonthly.value, [key]: points }
     } catch {
-      // rethrow しない（上の loadMediaMetrics と同じ無限リトライ防止。失敗 = ロード済み・結果 null）
+      // rethrow しない（上の loadMediaMetrics と同じ無限リトライ防止。失敗 = ロード済み・結果 null =
+      // integratedFailed が検知して「0 表示」でなく失敗表示 + 再試行導線を出す。M1）
       apiMonthly.value = { ...apiMonthly.value, [key]: null }
     }
   }, force)
+}
+
+/**
+ * GA 連携の再構成（プロパティ確定・連携解除）時のクライアント側キャッシュ無効化（m7。原則6:
+ * SoT の変化 → 依存キャッシュの追随）。ロード済みキーのみ force 再取得する（未ロードは次アクセスで取得）
+ */
+export function invalidateMediaAnalytics(segmentId: string): void {
+  for (const key of Object.keys(apiMetrics.value)) {
+    if (!key.startsWith(`${segmentId}:`)) continue
+    const days = Number(key.slice(segmentId.length + 1))
+    if (Number.isFinite(days)) void loadMediaMetrics(segmentId, days, true)
+  }
+  for (const key of Object.keys(apiMonthly.value)) {
+    if (!key.startsWith(`${segmentId}:`)) continue
+    const months = Number(key.slice(segmentId.length + 1))
+    if (Number.isFinite(months)) void loadMediaMonthly(segmentId, months, true)
+  }
 }
 
 onApiReset(() => {
@@ -198,7 +217,8 @@ export function useMediaAnalytics() {
     return map
   }
 
-  /** メディア月次（モック: 決定的導出 / API: GA 実データ。未連携・未ロードは 0 埋め） */
+  /** メディア月次（モック: 決定的導出 / API: GA 実データ。未連携・未ロード・失敗は空 = 表示側は
+   * integratedReady / integratedFailed で状態を区別する。M1） */
   function mediaMonthlyFor(segmentId: string, months: string[], monthsCount: number): Map<string, MediaMonthlyPoint> {
     if (isApi) {
       const connected = settingFor(segmentId)?.gaConnected === true
@@ -252,7 +272,9 @@ export function useMediaAnalytics() {
       salesPerSession,
       funnel: {
         sessions: cur.sessions,
-        engaged: Math.round(cur.sessions * 0.55),
+        // 主体的関与は GA の engagedSessions 実測を優先（API モード。m4 = 実測に擬似係数を混ぜない）。
+        // 実測が無い場合（モック導出・旧キャッシュ）のみ従来の 0.55 係数で近似する
+        engaged: mediaBy.get(cur.month)?.engagedSessions ?? Math.round(cur.sessions * 0.55),
         conversions: cur.conversions,
         orders: cur.orders,
       },
@@ -260,24 +282,46 @@ export function useMediaAnalytics() {
     }
   }
 
-  /** API: 統合メトリクスのメディア側（GA 月次）が確定しているか（未連携は「確定」扱い = 0 が正） */
+  /** API: 統合メトリクスのメディア側（GA 月次）が**取得成功して**確定しているか（未連携は「確定」扱い = 0 が正。
+   * 取得失敗（null）は ready にしない = 0 表示・0 由来のインサイト生成を防ぐ。M1） */
   function integratedReady(segmentId: string, monthsCount = 6): boolean {
     if (!isApi) return true
     const status = settingFor(segmentId)
     if (status?.gaConnected !== true) return true
-    return `${segmentId}:${monthsCount}` in apiMonthly.value
+    const v = apiMonthly.value[`${segmentId}:${monthsCount}`]
+    return v !== undefined && v !== null
   }
 
-  /** API: 統合メトリクスの材料（GA 接続状態 + 月次）を await でそろえる（インサイト生成前に呼ぶ） */
-  async function ensureIntegratedLoaded(segmentId: string, monthsCount = 6): Promise<void> {
+  /** API: GA 月次の取得が失敗した状態か（PDCA タブの失敗表示 + 再試行導線の判定。M1） */
+  function integratedFailed(segmentId: string, monthsCount = 6): boolean {
+    if (!isApi) return false
+    if (settingFor(segmentId)?.gaConnected !== true) return false
+    const key = `${segmentId}:${monthsCount}`
+    return key in apiMonthly.value && apiMonthly.value[key] === null
+  }
+
+  /** API: GA 月次の再取得（サーバーキャッシュも force で飛ばす。失敗表示からの再試行導線） */
+  async function refreshMonthly(segmentId: string, monthsCount = 6): Promise<void> {
     if (!isApi) return
+    await loadMediaMonthly(segmentId, monthsCount, true)
+  }
+
+  /**
+   * API: 統合メトリクスの材料（GA 接続状態 + 月次）を await でそろえる（インサイト生成前に呼ぶ）。
+   * 戻り値 = メディア軸が確定したか（false = 取得失敗。**呼び出し側は生成を実行しないこと** =
+   * 「流入ゼロ」という虚偽データ由来のインサイトを保管させない。M1）
+   */
+  async function ensureIntegratedLoaded(segmentId: string, monthsCount = 6): Promise<boolean> {
+    if (!isApi) return true
     await loadMediaGaStatus(segmentId)
-    if (settingFor(segmentId)?.gaConnected !== true) return
-    await loadMediaMonthly(segmentId, monthsCount).catch(() => { /* GA 障害時はメディア 0 で続行（原則4） */ })
+    if (settingFor(segmentId)?.gaConnected !== true) return true
+    await loadMediaMonthly(segmentId, monthsCount)
+    return integratedReady(segmentId, monthsCount)
   }
 
   return {
     asOf, articleInputsFor, rawArticlesFor, metricsFor, integratedMetricsFor, businessMonthly,
-    metricsReady, metricsWarningFor, refreshMetrics, integratedReady, ensureIntegratedLoaded,
+    metricsReady, metricsWarningFor, refreshMetrics,
+    integratedReady, integratedFailed, refreshMonthly, ensureIntegratedLoaded,
   }
 }

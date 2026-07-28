@@ -3734,6 +3734,25 @@ describe('メディア分析 F-40 の本実装（GA 連携・設定・記事イ�
     expect((await api('POST', `/v1/media/articles/${articleId}/restore`, { as: ADMIN })).status).toBe(200)
   })
 
+  it('記事の手動登録は同一パスの重複を 409（AKO-MEDIA-008）で拒否・取消後は再登録可・復元は衝突で 409（m5 = 冪等）', async () => {
+    const body = { segmentId: SEG, path: '/blog/dup-check', title: '重複検証', section: 'ブログ', publishedAt: '2026-02-01' }
+    const first = await api('POST', '/v1/media/articles', { as: ADMIN, body })
+    expect(first.status).toBe(201)
+    const firstId = (first.json.data as { id: string }).id
+    // 再送・二重クリック相当の再登録は 409（重複行を作らない = 原則2）
+    const dup = await api('POST', '/v1/media/articles', { as: ADMIN, body })
+    expect(dup.status).toBe(409)
+    expect(dup.json.error?.code).toBe('AKO-MEDIA-008')
+    // 取消（論理削除）後は同一パスを再登録できる（部分一意 = active 行のみ）
+    expect((await api('POST', `/v1/media/articles/${firstId}/deactivate`, { as: ADMIN })).status).toBe(200)
+    const second = await api('POST', '/v1/media/articles', { as: ADMIN, body })
+    expect(second.status).toBe(201)
+    // 有効な同一パスが存在する状態での復元は 409（黙って重複させない）
+    const restore = await api('POST', `/v1/media/articles/${firstId}/restore`, { as: ADMIN })
+    expect(restore.status).toBe(409)
+    expect(restore.json.error?.code).toBe('AKO-MEDIA-008')
+  })
+
   it('記事生成（LLM 無効 = 決定的フォールバック）→ 採用 → 二重採用は no-op + warning → 採用取消 → 取消 → 復元', async () => {
     const gen = await api('POST', '/v1/media/articles/generate', {
       as: MEMBER,
@@ -3804,10 +3823,11 @@ describe('メディア分析 F-40 の本実装（GA 連携・設定・記事イ�
       as: MEMBER, body: { segmentId: SEG, scope: 'integrated', metrics },
     })
     expect(gen.status).toBe(200)
-    const view = gen.json.data as { llm: boolean; periodKey: string; insight: { executiveSummary: string } }
+    const view = gen.json.data as { llm: boolean; periodKey: string; warning: string | null; insight: { executiveSummary: string } }
     expect(view.llm).toBe(false) // LLM 無効 = heuristicIntegratedInsight
     expect(view.periodKey).toBe('2026-06')
     expect(view.insight.executiveSummary).toContain('テスト業態')
+    expect(view.warning).toBeNull() // 完全な集計からの生成 = 劣化告知なし（m11）
 
     // 再生成は upsert 上書き（レコードは 1 行のまま）
     const regen = await api('POST', '/v1/media/insights/generate', {
@@ -3821,12 +3841,23 @@ describe('メディア分析 F-40 の本実装（GA 連携・設定・記事イ�
     const got = await api('GET', `/v1/media/insights?segmentId=${SEG}&scope=integrated`, { as: MEMBER })
     expect((got.json.data as { periodKey: string }).periodKey).toBe('2026-06')
 
-    // metrics 欠落・不正は AKO-MEDIA-016
+    // metrics 欠落・不正は AKO-MEDIA-016（M2: 数値欠落・負数・型崩れは 400 = 500 を出さない）
     const bad = await api('POST', '/v1/media/insights/generate', {
       as: MEMBER, body: { segmentId: SEG, scope: 'integrated' },
     })
     expect(bad.status).toBe(400)
     expect(bad.json.error?.code).toBe('AKO-MEDIA-016')
+    const { sessions: _s, ...missingSessions } = metrics
+    const badMissing = await api('POST', '/v1/media/insights/generate', {
+      as: MEMBER, body: { segmentId: SEG, scope: 'integrated', metrics: missingSessions },
+    })
+    expect(badMissing.status).toBe(400)
+    expect(badMissing.json.error?.code).toBe('AKO-MEDIA-016')
+    const badNegative = await api('POST', '/v1/media/insights/generate', {
+      as: MEMBER, body: { segmentId: SEG, scope: 'integrated', metrics: { ...metrics, salesAmount: -100 } },
+    })
+    expect(badNegative.status).toBe(400)
+    expect(badNegative.json.error?.code).toBe('AKO-MEDIA-016')
 
     // scope=media はサーバーが GA から集計する = GA 未設定環境では 409（AKO-MEDIA-005）
     const media = await api('POST', '/v1/media/insights/generate', {

@@ -19,7 +19,8 @@ const router = useRouter()
 const { effectiveSegmentId, currentSegment } = useCurrentSegment()
 const { settingFor } = useMediaSettings()
 const {
-  metricsFor, integratedMetricsFor, metricsReady, metricsWarningFor, refreshMetrics, integratedReady,
+  metricsFor, integratedMetricsFor, metricsReady, metricsWarningFor, refreshMetrics,
+  integratedReady, integratedFailed, refreshMonthly,
 } = useMediaAnalytics()
 const { loadMedia, generateMedia, loadIntegrated, generateIntegrated } = useMediaInsight()
 const { show } = useToast()
@@ -42,7 +43,14 @@ const metricsLoading = computed(() => isApi && connected.value && !metricsReady(
 const metricsFailed = computed(() =>
   isApi && connected.value && metricsReady(effectiveSegmentId.value, 28) && metrics.value === null)
 const metricsWarning = computed(() => (metrics.value ? metricsWarningFor(effectiveSegmentId.value, 28) : null))
-const integratedLoading = computed(() => isApi && connected.value && !integratedReady(effectiveSegmentId.value, 6))
+// PDCA タブ（GA 月次）: ロード中と取得失敗を区別する（失敗を 0 表示にしない = M1）
+const integratedIsFailed = computed(() => integratedFailed(effectiveSegmentId.value, 6))
+const integratedLoading = computed(() =>
+  isApi && connected.value && !integratedReady(effectiveSegmentId.value, 6) && !integratedIsFailed.value)
+
+async function retryMonthly(): Promise<void> {
+  await refreshMonthly(effectiveSegmentId.value, 6)
+}
 /**
  * 空状態の判定: モック = 記事インベントリが空（記事を作ると指標が出る決定的導出）/
  * API = GA 実データが空（インベントリ非依存 — API モードは記事をシードしないため articleCount で判定しない）
@@ -77,7 +85,9 @@ async function regenerateMedia(): Promise<void> {
   genMedia.value = true
   try {
     mediaView.value = await generateMedia(effectiveSegmentId.value)
-    show('メディアインサイトを生成し、保存しました', 'ok')
+    // 劣化データ（GA 内訳の部分失敗等）から生成した場合は握りつぶさず告知する（m11・原則4）
+    if (mediaView.value?.warning) show(`メディアインサイトを生成しました（${mediaView.value.warning}）`, 'warn')
+    else show('メディアインサイトを生成し、保存しました', 'ok')
   } catch (e) {
     const er = apiErrorOf(e)
     show(`${er.code}: ${er.message}`, 'crit')
@@ -88,7 +98,8 @@ async function regenerateIntegrated(): Promise<void> {
   genIntegrated.value = true
   try {
     integratedView.value = await generateIntegrated(effectiveSegmentId.value)
-    show('業務 × メディアの統合インサイトを生成し、保存しました', 'ok')
+    if (integratedView.value?.warning) show(`統合インサイトを生成しました（${integratedView.value.warning}）`, 'warn')
+    else show('業務 × メディアの統合インサイトを生成し、保存しました', 'ok')
   } catch (e) {
     const er = apiErrorOf(e)
     show(`${er.code}: ${er.message}`, 'crit')
@@ -291,7 +302,7 @@ const SEVERITY_META: Record<string, { label: string; tone: 'crit' | 'warn' | 'in
         </UiSectionCard>
 
         <!-- AI インサイト（生成/再生成） -->
-        <UiSectionCard title="AI インサイト" :description="mediaView ? `生成 ${fmtDateTime(mediaView.generatedAt)}${mediaView.generatedByName ? `（${mediaView.generatedByName}）` : ''}・${mediaView.llm ? 'Vertex AI' : '集計値からの自動生成'}` : 'GA 集計からサイト構成・記事のインサイトと次アクションを生成します'">
+        <UiSectionCard title="AI インサイト" :description="mediaView ? `生成 ${fmtDateTime(mediaView.generatedAt)}${mediaView.generatedByName ? `（${mediaView.generatedByName}）` : ''}・${mediaView.llm ? 'Vertex AI' : '集計値からの自動生成'}${mediaView.warning ? `・${mediaView.warning}` : ''}` : 'GA 集計からサイト構成・記事のインサイトと次アクションを生成します'">
           <template #actions>
             <button type="button" class="btn btn-primary btn-sm" :disabled="genMedia" @click="regenerateMedia">
               <Sparkles class="h-3.5 w-3.5" aria-hidden="true" />
@@ -380,7 +391,28 @@ const SEVERITY_META: Record<string, { label: string; tone: 'crit' | 'warn' | 'in
           Google Analytics から月次トレンドを取得中…
         </p>
       </template>
+      <!-- API: GA 月次の取得失敗は「流入 0」として表示せず、失敗の事実 + 再試行導線を出す（M1・原則4） -->
+      <template v-else-if="activeTab === 'pdca' && integratedIsFailed">
+        <UiEmptyState
+          icon="TriangleAlert"
+          title="Google Analytics から月次トレンドを取得できませんでした"
+          hint="取得できるまで統合指標・インサイト生成は利用できません。時間をおいて再試行してください"
+        >
+          <template #action>
+            <button type="button" class="btn btn-primary btn-sm" @click="retryMonthly">再試行</button>
+          </template>
+        </UiEmptyState>
+      </template>
       <template v-else-if="activeTab === 'pdca' && integrated">
+        <!-- 売上・受注軸は未移行の salesRecords（デモデータ）。実 GA 流入との合成である旨を明示する
+             （M3。ダッシュボード（F-41）のモックバッジと基準を揃える。salesRecords の API 移行時に撤去） -->
+        <p
+          v-if="isApi"
+          class="flex flex-wrap items-center gap-2 rounded-lg border border-warn/40 bg-warn-soft px-3 py-1.5 text-[12px] text-sub"
+        >
+          <UiMockBadge label="売上・受注 = デモデータ" />
+          メディア指標（セッション・CV）は Google Analytics の実データ、売上・受注は未移行のデモデータです。
+        </p>
         <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
           <UiKpiCard
             label="セッション（対象月）" :value="fmtInt(integrated.sessions)"
@@ -409,7 +441,7 @@ const SEVERITY_META: Record<string, { label: string; tone: 'crit' | 'warn' | 'in
         </UiSectionCard>
 
         <!-- AI 統合インサイト -->
-        <UiSectionCard title="AI 統合インサイト（業務 × メディア）" :description="integratedView ? `生成 ${fmtDateTime(integratedView.generatedAt)}${integratedView.generatedByName ? `（${integratedView.generatedByName}）` : ''}・${integratedView.llm ? 'Vertex AI' : '集計値からの自動生成'}` : '売上と流入を突き合わせ、相関・PDCA・アクションを生成します'">
+        <UiSectionCard title="AI 統合インサイト（業務 × メディア）" :description="integratedView ? `生成 ${fmtDateTime(integratedView.generatedAt)}${integratedView.generatedByName ? `（${integratedView.generatedByName}）` : ''}・${integratedView.llm ? 'Vertex AI' : '集計値からの自動生成'}${integratedView.warning ? `・${integratedView.warning}` : ''}` : '売上と流入を突き合わせ、相関・PDCA・アクションを生成します'">
           <template #actions>
             <button type="button" class="btn btn-primary btn-sm" :disabled="genIntegrated" @click="regenerateIntegrated">
               <RefreshCw class="h-3.5 w-3.5" aria-hidden="true" />

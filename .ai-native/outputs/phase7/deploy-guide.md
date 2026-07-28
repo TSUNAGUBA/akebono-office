@@ -287,6 +287,15 @@ AI 機能（日報 AI アシスト・タスク計画の AI コメント等）は
 3. 連携する Google アカウントは AKEBONO Office に登録済みの会社アカウント（members.email と突合）で、
    対象の GA4 プロパティに閲覧権限があること。GA 集計は 30 分の短期キャッシュ（クォータ対策）で配信され、
    画面の再試行で強制再取得できる。secrets 未設定の間、GA 連携 UI は自動的に非表示（他機能に影響しない）
+4. **（任意）記事インベントリの手動登録:** 分析対象の記事一覧（セクション対応・記事数）は生成記事の
+   「採用」で自動登録される。既存サイトの記事を分析対象へ加えたい場合は管理者 API で登録できる
+   （専用 UI は未提供 = 運用回復パス。同一パスの再送は 409 で重複しない = 冪等）:
+   ```bash
+   curl -X POST "https://<cloud-run-url>/v1/media/articles" \
+     -H "Authorization: Bearer <管理者の Firebase ID トークン>" -H "Content-Type: application/json" \
+     -d '{"segmentId":"seg-01","path":"/blog/example","title":"記事タイトル","section":"ブログ","publishedAt":"2026-01-10","wordCount":2000}'
+   ```
+   誤登録は `POST /v1/media/articles/<id>/deactivate`（取消・論理削除）→ `/restore`（復元）で戻せる（原則9.5）
 
 ## 1-10. ドキュメント保管（Firebase の Cloud Storage・バッチ7l）
 

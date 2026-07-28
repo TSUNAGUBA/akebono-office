@@ -90,6 +90,10 @@ CREATE TABLE IF NOT EXISTS media_articles (
   updated_at           timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_media_articles_segment ON media_articles (segment_id);
+-- 手動登録の再送・二重クリックで同一パスの重複行を作らない（冪等 = 原則2）。
+-- active 行のみの部分一意: 論理削除済み（取消）とは共存でき、復元時の衝突はアプリ層が 409 で案内する
+CREATE UNIQUE INDEX IF NOT EXISTS media_articles_segment_path_active_idx
+  ON media_articles (segment_id, path) WHERE active = true;
 
 -- 記事生成の依頼（記録系 = 追記のみ。生成物と 1:1）
 CREATE TABLE IF NOT EXISTS media_article_briefs (
@@ -132,6 +136,9 @@ CREATE TABLE IF NOT EXISTS media_insights (
   metrics      jsonb NOT NULL,
   insight      jsonb NOT NULL,
   llm          boolean NOT NULL DEFAULT false,
+  -- 劣化データ由来の告知（GA 内訳の部分失敗・月次突合の失敗など。NULL = 完全な集計から生成）。
+  -- 生成時の warning を保管し、閲覧者にも「どの状態の集計から生成されたか」を明示する（原則4 の報告）
+  warning      text,
   generated_by text NOT NULL,
   generated_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (segment_id, scope)

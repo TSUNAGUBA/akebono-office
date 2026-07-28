@@ -175,8 +175,14 @@ export function useDashboardInsight() {
   }
 
   async function generateSegment(segmentId: string): Promise<SegmentDashboardView> {
-    // API モードは GA 月次（メディア軸）を await でそろえてから集計する（ロード中の 0 で洞察を作らない）
-    await ensureIntegratedLoaded(segmentId, MONTHS)
+    // API モードは GA 月次（メディア軸）を await でそろえてから集計する。取得失敗時は生成しない
+    // （「流入ゼロ」という虚偽データ由来のレポートを保管させない。M1）
+    const ready = await ensureIntegratedLoaded(segmentId, MONTHS)
+    if (!ready) {
+      throw Object.assign(
+        new Error('GA の月次トレンドを取得できていないため、レポートを生成できません。時間をおいて再試行してください'),
+        { code: 'AKO-MEDIA-004' })
+    }
     const metrics = buildSegmentSummary(segmentId)
     const insight = heuristicSegmentInsight(metrics)
     upsert('segment', segmentId, metrics.periodMonth, metrics, insight)
@@ -196,8 +202,15 @@ export function useDashboardInsight() {
   }
 
   async function generateCompany(): Promise<CompanyDashboardView> {
-    // API モードは全業態の GA 月次を await でそろえてから集計する
-    await Promise.all((activeSegments.value as BusinessSegment[]).map(s => ensureIntegratedLoaded(s.id, MONTHS)))
+    // API モードは全業態の GA 月次を await でそろえてから集計する。1 業態でも取得失敗があれば生成しない
+    // （欠けた業態が「流入ゼロ」として全社ロールアップへ混入するのを防ぐ。M1）
+    const results = await Promise.all(
+      (activeSegments.value as BusinessSegment[]).map(s => ensureIntegratedLoaded(s.id, MONTHS)))
+    if (results.some(ready => !ready)) {
+      throw Object.assign(
+        new Error('一部の業態で GA の月次トレンドを取得できていないため、レポートを生成できません。時間をおいて再試行してください'),
+        { code: 'AKO-MEDIA-004' })
+    }
     const metrics = buildCompanySummary()
     const insight = heuristicCompanyInsight(metrics)
     upsert('company', null, metrics.periodMonth, metrics, insight)

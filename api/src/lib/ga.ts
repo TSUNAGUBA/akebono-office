@@ -285,19 +285,27 @@ export function buildMediaMetrics(reports: GaReportSet, opts: BuildMetricsOption
 
 // ---------- 月次トレンド ----------
 
-/** yearMonth レポート → MediaMonthlyPoint[]（GA に無い月は 0 埋め = deriveMonthlyMediaTrend と同じ月数を保証） */
+/** yearMonth レポート → MediaMonthlyPoint[]（GA に無い月は 0 埋め = deriveMonthlyMediaTrend と同じ月数を保証。
+ * engagedSessions は実測（統合ファネルの「主体的関与」に擬似係数でなく実値を使うため = 原則: 事実を作らない） */
 export function buildMonthlyTrend(report: GaReport | null, months: string[]): MediaMonthlyPoint[] {
-  const byMonth = new Map<string, { sessions: number; users: number; conversions: number }>()
+  const byMonth = new Map<string, { sessions: number; users: number; conversions: number; engagedSessions: number }>()
   for (const r of gaRows(report)) {
     byMonth.set(gaMonthKey(r.dim.yearMonth ?? ''), {
       sessions: Math.round(r.met.sessions ?? 0),
       users: Math.round(r.met.totalUsers ?? 0),
       conversions: Math.round(r.met.keyEvents ?? 0),
+      engagedSessions: Math.round(r.met.engagedSessions ?? 0),
     })
   }
   return months.map((month) => {
     const m = byMonth.get(month)
-    return { month, sessions: m?.sessions ?? 0, users: m?.users ?? 0, conversions: m?.conversions ?? 0 }
+    return {
+      month,
+      sessions: m?.sessions ?? 0,
+      users: m?.users ?? 0,
+      conversions: m?.conversions ?? 0,
+      engagedSessions: m?.engagedSessions ?? 0,
+    }
   })
 }
 

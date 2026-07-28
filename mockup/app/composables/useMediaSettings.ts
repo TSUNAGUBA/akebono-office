@@ -211,12 +211,16 @@ export function useMediaSettings() {
     }
   }
 
-  /** API: GA4 プロパティを確定する（ここで connected が完成）。SoT 書込 → 状態の取り直し（原則6） */
+  /** API: GA4 プロパティを確定する（ここで connected が完成）。SoT 書込 → 状態の取り直し（原則6）。
+   * 分析キャッシュ（連携前の失敗記録・旧プロパティの集計）も無効化する（m7 = 連携直後の誤表示防止） */
   async function selectGaProperty(segmentId: string, propertyId: string, propertyName: string): Promise<{ ok: boolean; error?: { code: string; message: string } }> {
     const res = await apiResult(() => apiFetch('/v1/media/property', {
       method: 'PUT', body: { segmentId, propertyId, propertyName },
     }))
-    if (res.ok) await refreshGa(segmentId)
+    if (res.ok) {
+      await refreshGa(segmentId)
+      invalidateMediaAnalytics(segmentId)
+    }
     return res
   }
 
@@ -224,7 +228,12 @@ export function useMediaSettings() {
   async function disconnectGa(segmentId: string): Promise<{ ok: boolean; error?: { code: string; message: string } }> {
     if (isApi) {
       const res = await apiResult(() => apiFetch('/v1/media/disconnect', { method: 'POST', body: { segmentId } }))
-      if (res.ok) await refreshGa(segmentId)
+      if (res.ok) {
+        await refreshGa(segmentId)
+        // 旧プロパティ由来の分析キャッシュを破棄（画面は connected=false でゲートされるが、
+        // 再連携時に古い集計が一瞬見えないよう解除時点で無効化する。m7）
+        invalidateMediaAnalytics(segmentId)
+      }
       return res
     }
     return saveMock(segmentId, { gaConnected: false, gaPropertyId: null, gaPropertyName: null, gaConnectedAt: null })

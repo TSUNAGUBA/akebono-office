@@ -600,6 +600,12 @@
 - [x] フロント デュアルモード化: useMediaSettings（GA 状態 = サーバー SoT の合成）/ useMediaAnalytics（metricsFor はロード中 null・ready/warning/retry を公開）/ useMediaInsight・useMediaArticles（async 化）/ MediaGaConnect（OAuth リダイレクト + 復帰クエリ + プロパティ選択モーダル + needsProperty 再開 = リロードで詰まない）/ analytics.vue（ロード中・取得失敗・データ空・部分失敗警告の区別表示）/ useDashboardInsight（generate 前に GA 月次を await）。モックモードの挙動は不変（下位互換）
 - [x] エラーコード: AKO-MEDIA-003〜007・011〜016 を採番（api-design §4。001/002/010/013 はモック専用・008/009/015 は欠番）
 
-### 37-3 検証・残課題
-- [x] 検証: api 単体 146（ga-report 17 + media-routes 17 を新設）/ api 統合 162（メディア 6 スイート新設 = 部分更新の保持・生成→採用→取消→復元・統合インサイト upsert・GA 未設定経路）/ mockup 単体 148 / typecheck（api・mockup）/ mockup build 全 green
-- [ ] 残課題: 統合メトリクスの売上月次・F-41 ダッシュボード保管（dashboardInsights）・businessSegments/salesRecords の API 移行（移行時に /v1/media/integrated のサーバー組み立てへ引き上げ）。GA プロパティのタイムゾーンが JST 以外の場合の日単位ずれは許容（lib/ga.ts に設計判断を文書化）
+### 37-3 反復レビュー（原則9・1 巡目 = 独立コードレビュー + システム監査。major 3・minor 11）
+- [x] M1: GA 月次の取得失敗を「トラフィック 0」と区別（integratedReady = 取得成功のみ・integratedFailed 新設・PDCA タブに失敗表示 + 再試行導線）。失敗・未ロード状態では generateIntegrated / generateSegment / generateCompany を実行しない（AKO-MEDIA-004 でエラー = 虚偽の 0 由来インサイトを保管させない）
+- [x] M2: scope=integrated の受領検証を whitelist 正規化 + 全数値の有限・非負・範囲検証へ強化（normalizeIntegratedMetrics。不正は 400 = 500 を出さない・型崩れの保管と LLM プロンプトへの逐語挿入を遮断）。**メディア軸（sessions/conversions/engaged）は GA 連携済みならサーバー導出の月次で上書き**（applyServerMediaAxis = クライアント申告値を信頼しない。GA 一時障害時はクライアント値 + warning 告知で続行 = 原則4）。**改ざん耐性の受容判断**: 売上軸は salesRecords（未移行のモック側 SoT）でサーバー検証不能 = 範囲検証 + generated_by の監査可能性で緩和し、認証済み社内ユーザーの脅威モデルでは受容（routes/media.ts にコメント化。salesRecords の API 移行時にサーバー組み立てで解消）。生成の認可は全ロール可を維持（mockup の画面ゲートと一致・根拠を同コメントに記載）
+- [x] M3: PDCA タブに「売上・受注 = デモデータ」バッジ + 注記を表示（API モード。実 GA × デモ売上の合成を実績と誤認させない。ダッシュボード（F-41）のモックバッジと基準を統一。salesRecords 移行時に撤去）
+- [x] m4: 統合ファネルの「主体的関与」を GA の engagedSessions 実測へ（/monthly に追加・MediaMonthlyPoint.engagedSessions。実測が無い場合のみ従来の 0.55 係数で近似 = モック不変）/ m5: media_articles に部分一意 INDEX（segment_id, path WHERE active）+ 重複登録・復元衝突は AKO-MEDIA-008 の 409 / m6: GA 403 の理由分類（API 未有効化 vs プロパティ権限なし）を分離し案内を修正 / m7: プロパティ確定・連携解除時にクライアント分析キャッシュを invalidate / m8: PUT /settings でサーバー metrics キャッシュ破棄 / m9: 月次の再試行に force を伝搬 / m11: インサイト生成の劣化データ warning を media_insights.warning へ保管し生成トースト・説明文に表示 / m12: phase3 機能要件（F-40/F-41）・phase5 データ設計 §1.4・アーキテクチャ・画面設計へ追記 / m13: media トグルはクライアント側のみの制御である旨を lib/permissions.ts に明記 / m14: OAuth 基礎処理を calendar と共通化しない判断根拠をコード内コメント化 + 記事手動登録の curl 手順を deploy-guide §1-9b へ記載
+
+### 37-4 検証・残課題
+- [x] 検証（レビュー修正後の再実行）: api 単体 **154**（ga-report 19 + media-routes 23 を新設）/ api 統合 **163**（メディア 7 スイート = 部分更新の保持・重複登録/復元衝突・生成→採用→取消→復元・統合インサイト upsert + 受領検証・GA 未設定経路）/ mockup 単体 148 / typecheck（api・mockup）/ mockup build 全 green
+- [ ] 残課題: 統合メトリクスの売上月次・F-41 ダッシュボード保管（dashboardInsights）・businessSegments/salesRecords の API 移行(移行時に /v1/media/integrated のサーバー組み立てへ引き上げ = 売上軸の改ざん耐性限界も解消)。GA プロパティのタイムゾーンが JST 以外の場合の日単位ずれは許容（lib/ga.ts に設計判断を文書化）。記事インベントリ手動登録の専用 UI（現状は管理者 API + curl = deploy-guide §1-9b）

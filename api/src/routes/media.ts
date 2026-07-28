@@ -14,9 +14,9 @@
  * - segment はモック側エンティティ（未移行）のため存在検証は行わない（0030 の設計判断コメント参照）
  *
  * エラー: AKO-MEDIA-003 GA 未連携 / 004 GA 集計取得失敗 / 005 連携未設定（GOOGLE_OAUTH_*）/
- *         006 プロパティ一覧取得失敗 / 007 対象記事なし / 011 お題未入力 / 012 生成記事なし /
- *         014 未採用 / 016 統合メトリクス不正（001・002・010・013 はモック専用。013 の二重採用は
- *         API では no-op + warning = 冪等）
+ *         006 プロパティ一覧取得失敗 / 007 対象記事なし / 008 記事パスの重複 / 011 お題未入力 /
+ *         012 生成記事なし / 014 未採用 / 016 統合メトリクス不正（001・002・010・013 はモック専用。
+ *         013 の二重採用は API では no-op + warning = 冪等。009・015 は欠番）
  */
 import { randomBytes } from 'node:crypto'
 import type { Context } from 'hono'
@@ -119,7 +119,13 @@ async function gaTokenRow(pool: pg.Pool, segmentId: string): Promise<GaTokenRow 
   return rows[0] ?? null
 }
 
-/** 有効なアクセストークン + 選択済みプロパティ（期限切れは refresh。取得不可 = null → AKO-MEDIA-003） */
+/**
+ * 有効なアクセストークン + 選択済みプロパティ（期限切れは refresh。取得不可 = null → AKO-MEDIA-003）。
+ * calendar.ts の accessTokenFor / issueState と同型だが**共通化しない設計判断**（原則3 の例外）:
+ * キー（member_id vs segment_id）・テーブル・回復導線（再連携の単位が本人 vs 業態）が異なり、
+ * 抽象化すると障害切り分け時にどちらのフローか読みにくくなる。refresh 手順を変更する際は
+ * calendar.ts 側と併せて確認すること
+ */
 async function gaAccess(
   pool: pg.Pool, env: Env, segmentId: string,
 ): Promise<{ token: string; propertyId: string | null } | null> {
@@ -181,7 +187,30 @@ async function clearMetricsCache(pool: pg.Pool, segmentId: string): Promise<void
 
 // ---------- GA4 Data API 呼び出し ----------
 
-type BatchResult = { ok: true; reports: GaReport[] } | { ok: false; configError: boolean }
+/** GA 呼び出し失敗の分類（403 の理由コードで判別。原因により利用者への案内が異なる） */
+type GaFailReason = 'api-disabled' | 'permission' | 'other'
+type BatchResult = { ok: true; reports: GaReport[] } | { ok: false; reason: GaFailReason }
+
+/** 403 ボディの理由分類（API 未有効化と「プロパティへのアクセス権なし」を区別して誤案内を防ぐ） */
+function gaFailReasonOf(status: number, bodyTxt: string): GaFailReason {
+  if (status !== 403) return 'other'
+  if (/accessNotConfigured|SERVICE_DISABLED/.test(bodyTxt)) return 'api-disabled'
+  if (/PERMISSION_DENIED|does not have sufficient permissions|insufficientPermissions/i.test(bodyTxt)) return 'permission'
+  return 'other'
+}
+
+/** 集計取得失敗（AKO-MEDIA-004）の利用者向けメッセージ（理由別） */
+function gaFetchError(reason: GaFailReason): ApiError {
+  if (reason === 'api-disabled') {
+    return err('AKO-MEDIA-004',
+      'Google Analytics Data API が利用できません。管理者は GCP プロジェクトで Google Analytics Data API を有効化してください', 502)
+  }
+  if (reason === 'permission') {
+    return err('AKO-MEDIA-004',
+      '連携した Google アカウントに GA4 プロパティへのアクセス権がありません。GA 側の権限を確認するか、メディア設定からプロパティを選び直してください', 502)
+  }
+  return err('AKO-MEDIA-004', 'Google Analytics からの集計取得に失敗しました。時間をおいて再試行してください', 502)
+}
 
 /** batchRunReports（最大 5 リクエスト/バッチ）。失敗は例外にせず結果型で返す（呼び出し側がグレースフルに扱う） */
 async function runBatch(token: string, propertyId: string, requests: unknown[]): Promise<BatchResult> {
@@ -195,14 +224,13 @@ async function runBatch(token: string, propertyId: string, requests: unknown[]):
     if (!res.ok) {
       const bodyTxt = await res.text()
       console.warn('ga batchRunReports failed:', res.status, bodyTxt.slice(0, 300))
-      // 403 のうち設定不備（API 未有効化・権限なし）のみ管理者向け案内にする（calendar sync と同じ判別）
-      return { ok: false, configError: res.status === 403 && /accessNotConfigured|SERVICE_DISABLED|PERMISSION_DENIED/.test(bodyTxt) }
+      return { ok: false, reason: gaFailReasonOf(res.status, bodyTxt) }
     }
     const body = await res.json() as { reports?: GaReport[] }
     return { ok: true, reports: body.reports ?? [] }
   } catch (e) {
     console.warn('ga batchRunReports failed:', (e as Error).message)
-    return { ok: false, configError: false }
+    return { ok: false, reason: 'other' }
   }
 }
 
@@ -255,11 +283,7 @@ async function fetchMediaMetrics(
     { dateRanges: [dateRange(periodFrom, periodTo)], metrics: TOTAL_METRICS },
     { dateRanges: [dateRange(prevFrom, prevTo)], metrics: TOTAL_METRICS },
   ])
-  if (!totalsBatch.ok) {
-    throw err('AKO-MEDIA-004', totalsBatch.configError
-      ? 'Google Analytics Data API が利用できません。管理者は GCP プロジェクトで Google Analytics Data API を有効化してください'
-      : 'Google Analytics からの集計取得に失敗しました。時間をおいて再試行してください', 502)
-  }
+  if (!totalsBatch.ok) throw gaFetchError(totalsBatch.reason)
 
   // 内訳（日別・チャネル・デバイス・記事別 + 前期の記事別 PV）。失敗しても総計は返す（原則4）
   const detailBatch = await runBatch(access.token, access.propertyId, [
@@ -336,17 +360,14 @@ async function fetchMonthlyTrend(
   const monthKeys = recentMonthKeys(months, 1, todayJst())
   const first = monthKeys[0]!
   const last = monthKeys[monthKeys.length - 1]!
+  // engagedSessions = 統合ファネルの「主体的関与」の実測（擬似係数 0.55 の置換。m4）
   const batch = await runBatch(access.token, access.propertyId, [{
     dateRanges: [dateRange(`${first}-01`, monthEndOf(last))],
     dimensions: [dimension('yearMonth')],
-    metrics: ['sessions', 'totalUsers', 'keyEvents'].map(metric),
+    metrics: ['sessions', 'totalUsers', 'keyEvents', 'engagedSessions'].map(metric),
     limit: '100',
   }])
-  if (!batch.ok) {
-    throw err('AKO-MEDIA-004', batch.configError
-      ? 'Google Analytics Data API が利用できません。管理者は GCP プロジェクトで Google Analytics Data API を有効化してください'
-      : 'Google Analytics からの集計取得に失敗しました。時間をおいて再試行してください', 502)
-  }
+  if (!batch.ok) throw gaFetchError(batch.reason)
   const points = buildMonthlyTrend(batch.reports[0] ?? null, monthKeys)
   await putCache(pool, segmentId, cacheKey, points)
   return points
@@ -475,6 +496,125 @@ export function normalizeIntegratedInsight(res: unknown): IntegratedInsight | nu
         mitigation: capCp(String(x.mitigation ?? ''), 200),
       }))
       .filter(x => x.title.length > 0),
+  }
+}
+
+// ---------- 統合メトリクスの受領検証・サーバー突合（M2。純粋関数・単体テスト対象） ----------
+
+/** 有限・非負・上限内の数値のみ通す（それ以外は null = 全体を 400 で拒否） */
+function boundedNum(v: unknown, max: number): number | null {
+  const n = Number(v)
+  return Number.isFinite(n) && n >= 0 && n <= max ? n : null
+}
+const COUNT_MAX = 1e9 // 件数系（セッション・CV・受注）の上限
+const YEN_MAX = 1e12 // 金額系（円）の上限
+
+/**
+ * クライアント合成の統合メトリクスを**既知キーのみの whitelist へ正規化**する。
+ * 欠落・型崩れ・非有限・負数・範囲外は null（呼び出し側が AKO-MEDIA-016 の 400 = 想定エラーで拒否し、
+ * heuristic の TypeError → 500 や、型崩れ jsonb の保管・LLM プロンプトへの逐語挿入を経路ごと塞ぐ）。
+ * 文字列は cap（プロンプトインジェクション面の縮小）。unknown キーは捨てる
+ */
+export function normalizeIntegratedMetrics(raw: unknown): IntegratedMetrics | null {
+  const r = raw as Record<string, unknown> | null
+  if (!r || typeof r !== 'object') return null
+  const periodMonth = String(r.periodMonth ?? '')
+  if (!/^\d{4}-\d{2}$/.test(periodMonth)) return null
+  if (!Array.isArray(r.trend) || r.trend.length === 0 || r.trend.length > 24) return null
+  const trend: IntegratedMetrics['trend'] = []
+  for (const t of r.trend) {
+    const o = t as Record<string, unknown> | null
+    if (!o || typeof o !== 'object' || !/^\d{4}-\d{2}$/.test(String(o.month ?? ''))) return null
+    const sessions = boundedNum(o.sessions, COUNT_MAX)
+    const conversions = boundedNum(o.conversions, COUNT_MAX)
+    const salesAmount = boundedNum(o.salesAmount, YEN_MAX)
+    const orders = boundedNum(o.orders, COUNT_MAX)
+    if (sessions === null || conversions === null || salesAmount === null || orders === null) return null
+    trend.push({
+      month: String(o.month),
+      sessions: Math.round(sessions),
+      conversions: Math.round(conversions),
+      salesAmount: Math.round(salesAmount),
+      orders: Math.round(orders),
+    })
+  }
+  const f = (r.funnel ?? {}) as Record<string, unknown>
+  const n = {
+    sessions: boundedNum(r.sessions, COUNT_MAX),
+    conversions: boundedNum(r.conversions, COUNT_MAX),
+    conversionRate: boundedNum(r.conversionRate, 1),
+    prevSessions: boundedNum(r.prevSessions, COUNT_MAX),
+    prevConversions: boundedNum(r.prevConversions, COUNT_MAX),
+    salesAmount: boundedNum(r.salesAmount, YEN_MAX),
+    orders: boundedNum(r.orders, COUNT_MAX),
+    prevSalesAmount: boundedNum(r.prevSalesAmount, YEN_MAX),
+    aov: boundedNum(r.aov, YEN_MAX),
+    salesPerSession: boundedNum(r.salesPerSession, YEN_MAX),
+    fSessions: boundedNum(f.sessions, COUNT_MAX),
+    fEngaged: boundedNum(f.engaged, COUNT_MAX),
+    fConversions: boundedNum(f.conversions, COUNT_MAX),
+    fOrders: boundedNum(f.orders, COUNT_MAX),
+  }
+  if (Object.values(n).some(v => v === null)) return null
+  return {
+    segmentId: capCp(String(r.segmentId ?? ''), 64),
+    segmentName: capCp(String(r.segmentName ?? 'セグメント'), 100),
+    siteName: capCp(String(r.siteName ?? 'メディア'), 100),
+    periodMonth,
+    sessions: Math.round(n.sessions!),
+    conversions: Math.round(n.conversions!),
+    conversionRate: Math.round(n.conversionRate! * 10000) / 10000,
+    prevSessions: Math.round(n.prevSessions!),
+    prevConversions: Math.round(n.prevConversions!),
+    salesAmount: Math.round(n.salesAmount!),
+    orders: Math.round(n.orders!),
+    prevSalesAmount: Math.round(n.prevSalesAmount!),
+    aov: Math.round(n.aov!),
+    salesPerSession: Math.round(n.salesPerSession!),
+    funnel: {
+      sessions: Math.round(n.fSessions!),
+      engaged: Math.round(n.fEngaged!),
+      conversions: Math.round(n.fConversions!),
+      orders: Math.round(n.fOrders!),
+    },
+    trend,
+  }
+}
+
+/**
+ * メディア軸（sessions / conversions / engaged）を**サーバーが GA から導出した月次で上書き**する（M2）。
+ * クライアント申告値を信頼せず、GA 連携済みならメディア軸はサーバー導出が正。
+ * サーバー窓に無い月は 0（GA にデータなし = 捏造月の持ち込みを防ぐ）。売上軸（salesAmount / orders / aov）は
+ * モック側 SoT のため上書きしない。派生値（CVR・セッションあたり売上・ファネル）は上書き後に再計算する
+ */
+export function applyServerMediaAxis(m: IntegratedMetrics, points: MediaMonthlyPoint[]): IntegratedMetrics {
+  const by = new Map(points.map(p => [p.month, p]))
+  const trend = m.trend.map(t => ({
+    ...t,
+    sessions: by.get(t.month)?.sessions ?? 0,
+    conversions: by.get(t.month)?.conversions ?? 0,
+  }))
+  const cur = trend[trend.length - 1]
+  const prev = trend.length > 1 ? trend[trend.length - 2] : undefined
+  const sessions = cur?.sessions ?? 0
+  const conversions = cur?.conversions ?? 0
+  const curPoint = cur ? by.get(cur.month) : undefined
+  return {
+    ...m,
+    trend,
+    sessions,
+    conversions,
+    conversionRate: sessions > 0 ? Math.round(conversions / sessions * 10000) / 10000 : 0,
+    prevSessions: prev?.sessions ?? 0,
+    prevConversions: prev?.conversions ?? 0,
+    salesPerSession: sessions > 0 ? Math.round((cur?.salesAmount ?? 0) / sessions) : 0,
+    funnel: {
+      sessions,
+      // 主体的関与は GA の engagedSessions 実測。旧キャッシュ等で無い場合のみ従来係数で近似（m4）
+      engaged: curPoint?.engagedSessions ?? Math.round(sessions * 0.55),
+      conversions,
+      orders: m.funnel.orders,
+    },
   }
 }
 
@@ -816,9 +956,15 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
         if (!res.ok) {
           const bodyTxt = await res.text()
           console.warn('ga accountSummaries failed:', res.status, bodyTxt.slice(0, 300))
-          if (res.status === 403 && /accessNotConfigured|SERVICE_DISABLED|PERMISSION_DENIED/.test(bodyTxt)) {
+          // API 未有効化と権限不足を区別して案内する（m6。誤って API 有効化へ誘導しない）
+          const reason = gaFailReasonOf(res.status, bodyTxt)
+          if (reason === 'api-disabled') {
             throw err('AKO-MEDIA-006',
               'Google Analytics Admin API が利用できません。管理者は GCP プロジェクトで Google Analytics Admin API を有効化してください', 502)
+          }
+          if (reason === 'permission') {
+            throw err('AKO-MEDIA-006',
+              '連携した Google アカウントで GA4 プロパティ一覧を取得できません。Google Analytics 側でアカウントの閲覧権限を確認してください', 502)
           }
           throw new Error(`accountSummaries ${res.status}`)
         }
@@ -938,6 +1084,8 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
         patch.siteName ?? '', patch.siteUrl ?? '', patch.analysisGoal ?? 'awareness',
         patch.targetAudience ?? '', patch.defaultTone ?? 'formal',
         JSON.stringify(patch.keywords ?? []), patch.active ?? true])
+    // siteName は metrics ペイロードに含まれるため、設定変更 = SoT の変化として導出キャッシュを破棄（m8）
+    await clearMetricsCache(pool, segmentId)
     await audit(pool, {
       actorId: user.id, action: 'update', entity: 'media_settings', entityId: segmentId,
       detail: 'メディア設定を更新',
@@ -973,11 +1121,21 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
     const wordCount = Math.max(0, Math.round(Number(body.wordCount ?? 0)) || 0)
     const status = body.status === 'draft' ? 'draft' : 'published'
     const id = newId('ma')
-    const { rows } = await pool.query(
-      `INSERT INTO media_articles (id, segment_id, path, title, section, published_at, word_count, status, origin)
-       VALUES ($1, $2, $3, $4, $5, $6::date, $7, $8, 'seed')
-       RETURNING ${ARTICLE_COLS}`,
-      [id, segmentId, path, title, section, publishedAt, wordCount, status])
+    let rows: unknown[]
+    try {
+      const result = await pool.query(
+        `INSERT INTO media_articles (id, segment_id, path, title, section, published_at, word_count, status, origin)
+         VALUES ($1, $2, $3, $4, $5, $6::date, $7, $8, 'seed')
+         RETURNING ${ARTICLE_COLS}`,
+        [id, segmentId, path, title, section, publishedAt, wordCount, status])
+      rows = result.rows
+    } catch (e) {
+      // 部分一意 INDEX（segment_id, path WHERE active）違反 = 再送・二重クリックの重複登録（m5。冪等の案内）
+      if ((e as { code?: string }).code === '23505') {
+        throw err('AKO-MEDIA-008', '同じパスの記事が既に登録されています', 409)
+      }
+      throw e
+    }
     await clearMetricsCache(pool, segmentId)
     await audit(pool, {
       actorId: user.id, action: 'create', entity: 'media_articles', entityId: id,
@@ -1001,8 +1159,18 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
   app.post('/articles/:id/restore', async (c) => {
     const user = requireAdmin(c)
     const id = c.req.param('id')
-    const { rows } = await pool.query<{ segmentId: string }>(
-      `UPDATE media_articles SET active = true, updated_at = now() WHERE id = $1 RETURNING segment_id AS "segmentId"`, [id])
+    let rows: { segmentId: string }[]
+    try {
+      const result = await pool.query<{ segmentId: string }>(
+        `UPDATE media_articles SET active = true, updated_at = now() WHERE id = $1 RETURNING segment_id AS "segmentId"`, [id])
+      rows = result.rows
+    } catch (e) {
+      // 同一パスの有効な記事が既に存在する場合（取消後に再登録された等）は復元できない（部分一意 INDEX との整合）
+      if ((e as { code?: string }).code === '23505') {
+        throw err('AKO-MEDIA-008', '同じパスの有効な記事が存在するため復元できません（既存の記事を取り消してから復元してください）', 409)
+      }
+      throw e
+    }
     if (!rows[0]) throw err('AKO-MEDIA-007', '対象の記事が見つかりません', 404)
     await clearMetricsCache(pool, rows[0].segmentId)
     await audit(pool, { actorId: user.id, action: 'update', entity: 'media_articles', entityId: id, detail: '記事を復元' })
@@ -1192,21 +1360,28 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
     return c.json({ data: { id } })
   })
 
+  // 保管済みインサイトの参照列（warning = 劣化データ由来の告知。閲覧者にも生成時の集計状態を明示する）
+  const INSIGHT_COLS = `mi.id, mi.period_key AS "periodKey", mi.metrics, mi.insight, mi.llm, mi.warning,
+              to_char(mi.generated_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"') AS "generatedAt",
+              m.name AS "generatedByName"`
+
   // ---- AI インサイト（保管済みの取得。未生成は null）----
   app.get('/insights', async (c) => {
     const segmentId = segmentIdOf(c.req.query('segmentId'))
     const scope = c.req.query('scope')
     if (scope !== 'media' && scope !== 'integrated') throw err('AKO-GEN-001', 'scope は media / integrated を指定してください', 400)
     const { rows } = await pool.query(
-      `SELECT mi.id, mi.period_key AS "periodKey", mi.metrics, mi.insight, mi.llm,
-              to_char(mi.generated_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"') AS "generatedAt",
-              m.name AS "generatedByName"
+      `SELECT ${INSIGHT_COLS}
        FROM media_insights mi LEFT JOIN members m ON m.id = mi.generated_by
        WHERE mi.segment_id = $1 AND mi.scope = $2`, [segmentId, scope])
     return c.json({ data: rows[0] ?? null })
   })
 
   // ---- AI インサイトの生成・再生成（生成 → 保管 → 再生成で upsert 上書き = weekly_insights と同型）----
+  // 認可の設計判断: 生成は全ロール可（mockup の分析ページと同じ可視性。generated_by を保存 = 誰の操作か追跡可能）。
+  // scope=integrated のメディア軸はサーバーが GA 導出値で上書きするため、クライアント申告での改ざんは効かない。
+  // 売上軸はモック側 SoT（未移行）でサーバー検証不能 = 改ざん耐性の限界として受容する
+  // （範囲検証 + 監査可能性で緩和。salesRecords の API 移行時にサーバー組み立てへ引き上げて解消。原則7 の文書化）
   app.post('/insights/generate', async (c) => {
     const user = c.get('user')
     const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
@@ -1218,10 +1393,13 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
     let insight: unknown
     let llm = false
     let periodKey = ''
+    let warning: string | null = null
     if (scope === 'media') {
-      // メディア単体: サーバーが GA から集計を組み立てる（キャッシュ利用）
+      // メディア単体: サーバーが GA から集計を組み立てる（キャッシュ利用）。
+      // 内訳の部分失敗（warning）は捨てずに保管・返却する（劣化データ由来の告知 = 原則4。m11）
       const result = await fetchMediaMetrics(pool, env, segmentId, 28, false)
       metrics = result.metrics
+      warning = result.warning ? `部分的な集計から生成: ${result.warning}` : null
       const llmRes = await llmMediaInsight(env, result.metrics)
       insight = llmRes ?? heuristicMediaInsight(result.metrics)
       llm = !!llmRes
@@ -1230,12 +1408,25 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
       // 統合（業務 × メディア）: 売上明細（salesRecords）は未移行のモック側 SoT のため、
       // 統合メトリクスは**クライアントが**「メディア月次 = 本 API(/monthly) + 売上月次 = モック側集計」を
       // 突合して組み立てて渡す（設計判断の文書化 = 原則6。businessSegments/salesRecords の API 移行時に
-      // サーバー側組み立てへ引き上げる）。サーバーは検証 + 洞察生成 + 導出キャッシュ保管を担う
-      const im = body.metrics as IntegratedMetrics | undefined
-      if (!im || typeof im !== 'object' || !/^\d{4}-\d{2}$/.test(String(im.periodMonth ?? '')) || !Array.isArray(im.trend)) {
-        throw err('AKO-MEDIA-016', '統合メトリクス（metrics）が不正です', 400)
+      // サーバー側組み立てへ引き上げる）。サーバーの責務（M2）:
+      //   ① whitelist 正規化 + 全数値の有限・非負・範囲検証（不正は 400 = 500 を出さない・型崩れを保管しない）
+      //   ② メディア軸（sessions/conversions/engaged）は GA 連携済みならサーバー導出値で上書き（申告値を信頼しない）
+      //   ③ 売上軸はサーバー検証不能（モック SoT）= 範囲検証のみの限界を受容（上の認可コメント参照)
+      const normalized = normalizeIntegratedMetrics(body.metrics)
+      if (!normalized) throw err('AKO-MEDIA-016', '統合メトリクス（metrics）が不正です', 400)
+      let im: IntegratedMetrics = { ...normalized, segmentId }
+      const access = googleOauthEnabled(env) ? await gaAccess(pool, env, segmentId) : null
+      if (access?.token && access.propertyId) {
+        try {
+          const monthsCount = Math.min(12, Math.max(2, im.trend.length))
+          const points = await fetchMonthlyTrend(pool, env, segmentId, monthsCount, false)
+          im = applyServerMediaAxis(im, points)
+        } catch (e) {
+          // GA 一時障害時はクライアント値のまま続行し、突合できなかった事実を告知する（原則4）
+          console.warn('media integrated: server-side GA verify skipped:', (e as Error).message)
+          warning = 'メディア軸の GA 突合ができなかったため、送信された集計値のまま生成しています'
+        }
       }
-      if (JSON.stringify(im).length > 100_000) throw err('AKO-MEDIA-016', '統合メトリクスが大きすぎます', 400)
       metrics = im
       const llmRes = await llmIntegratedInsight(env, im)
       insight = llmRes ?? heuristicIntegratedInsight(im)
@@ -1244,16 +1435,14 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
     }
 
     await pool.query(
-      `INSERT INTO media_insights (id, segment_id, scope, period_key, metrics, insight, llm, generated_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO media_insights (id, segment_id, scope, period_key, metrics, insight, llm, warning, generated_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        ON CONFLICT (segment_id, scope) DO UPDATE SET
          period_key = EXCLUDED.period_key, metrics = EXCLUDED.metrics, insight = EXCLUDED.insight,
-         llm = EXCLUDED.llm, generated_by = EXCLUDED.generated_by, generated_at = now()`,
-      [newId('mi'), segmentId, scope, periodKey, JSON.stringify(metrics), JSON.stringify(insight), llm, user.id])
+         llm = EXCLUDED.llm, warning = EXCLUDED.warning, generated_by = EXCLUDED.generated_by, generated_at = now()`,
+      [newId('mi'), segmentId, scope, periodKey, JSON.stringify(metrics), JSON.stringify(insight), llm, warning, user.id])
     const { rows } = await pool.query(
-      `SELECT mi.id, mi.period_key AS "periodKey", mi.metrics, mi.insight, mi.llm,
-              to_char(mi.generated_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"') AS "generatedAt",
-              m.name AS "generatedByName"
+      `SELECT ${INSIGHT_COLS}
        FROM media_insights mi LEFT JOIN members m ON m.id = mi.generated_by
        WHERE mi.segment_id = $1 AND mi.scope = $2`, [segmentId, scope])
     return c.json({ data: rows[0] })

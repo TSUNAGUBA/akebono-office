@@ -247,17 +247,17 @@ describe('buildMediaMetrics', () => {
 })
 
 describe('buildMonthlyTrend / 月キー', () => {
-  it('yearMonth を月キーへ変換し、GA に無い月は 0 埋めする', () => {
+  it('yearMonth を月キーへ変換し、GA に無い月は 0 埋めする（engagedSessions 実測込み）', () => {
     const trend = buildMonthlyTrend(
-      report(['yearMonth'], ['sessions', 'totalUsers', 'keyEvents'], [
-        [['202605'], [100, 80, 4]],
-        [['202607'], [140, 100, 6]],
+      report(['yearMonth'], ['sessions', 'totalUsers', 'keyEvents', 'engagedSessions'], [
+        [['202605'], [100, 80, 4, 55]],
+        [['202607'], [140, 100, 6, 80]],
       ]),
       ['2026-05', '2026-06', '2026-07'])
     expect(trend).toEqual([
-      { month: '2026-05', sessions: 100, users: 80, conversions: 4 },
-      { month: '2026-06', sessions: 0, users: 0, conversions: 0 },
-      { month: '2026-07', sessions: 140, users: 100, conversions: 6 },
+      { month: '2026-05', sessions: 100, users: 80, conversions: 4, engagedSessions: 55 },
+      { month: '2026-06', sessions: 0, users: 0, conversions: 0, engagedSessions: 0 },
+      { month: '2026-07', sessions: 140, users: 100, conversions: 6, engagedSessions: 80 },
     ])
   })
 

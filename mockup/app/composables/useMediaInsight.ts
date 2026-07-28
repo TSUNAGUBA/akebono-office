@@ -26,6 +26,8 @@ export interface MediaInsightView {
   generatedAt: string
   generatedByName: string | null
   periodKey: string
+  /** 劣化データ由来の告知（API モードのみ。GA 内訳の部分失敗等。null/未設定 = 完全な集計から生成） */
+  warning?: string | null
 }
 export interface IntegratedInsightView {
   metrics: IntegratedMetrics
@@ -34,6 +36,8 @@ export interface IntegratedInsightView {
   generatedAt: string
   generatedByName: string | null
   periodKey: string
+  /** 劣化データ由来の告知（API モードのみ。GA 突合の失敗等。null/未設定 = 完全な集計から生成） */
+  warning?: string | null
 }
 
 // ---------- API モードのキャッシュ（`${segmentId}:${scope}` → 保管済み or null） ----------
@@ -44,6 +48,7 @@ interface ApiInsightRow {
   metrics: unknown
   insight: unknown
   llm: boolean
+  warning: string | null
   generatedAt: string
   generatedByName: string | null
 }
@@ -121,6 +126,7 @@ export function useMediaInsight() {
       generatedAt: row.generatedAt,
       generatedByName: row.generatedByName,
       periodKey: row.periodKey,
+      warning: row.warning ?? null,
     } as T
   }
 
@@ -176,8 +182,14 @@ export function useMediaInsight() {
   async function generateIntegrated(segmentId: string): Promise<IntegratedInsightView | null> {
     if (isApi) {
       // 統合メトリクスはクライアント合成（メディア月次 = GA 実データ / 売上月次 = 未移行のモック側集計）。
-      // 生成前に GA 月次を await でそろえる（ロード中の 0 埋めで洞察を作らない）
-      await analytics.ensureIntegratedLoaded(segmentId, 6)
+      // 生成前に GA 月次を await でそろえ、**取得失敗時は生成しない**
+      // （「流入ゼロ」という虚偽データ由来のインサイトを保管させない。M1）
+      const ready = await analytics.ensureIntegratedLoaded(segmentId, 6)
+      if (!ready) {
+        throw Object.assign(
+          new Error('GA の月次トレンドを取得できていないため、統合インサイトを生成できません。再試行してから生成してください'),
+          { code: 'AKO-MEDIA-004' })
+      }
       const metrics = analytics.integratedMetricsFor(segmentId, 6)
       const row = await apiFetch<ApiInsightRow>('/v1/media/insights/generate', {
         method: 'POST', body: { segmentId, scope: 'integrated', metrics },

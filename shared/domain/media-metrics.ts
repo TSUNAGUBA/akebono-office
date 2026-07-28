@@ -295,7 +295,15 @@ export function deriveMediaMetrics(articles: MediaArticleInput[], opts: DeriveOp
 
 // ---------- 月次トレンド（業務 × メディアの統合分析で使う） ----------
 
-export interface MediaMonthlyPoint { month: string; sessions: number; users: number; conversions: number }
+export interface MediaMonthlyPoint {
+  month: string
+  sessions: number
+  users: number
+  conversions: number
+  /** 主体的関与セッション（GA4 engagedSessions）。API モードのみ実測が入る（モック導出は未設定 =
+   * 消費側が 0.55 係数で近似。実測がある場合は擬似係数を使わない = 事実を作らない） */
+  engagedSessions?: number
+}
 
 /** 記事インベントリから月次の GA 風トレンドを決定的に導出する（月末基準の鮮度で公開前月は 0） */
 export function deriveMonthlyMediaTrend(

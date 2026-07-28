@@ -90,7 +90,7 @@ const leave = useLeave()   // balance(memberId, leaveTypeId?) / request / decide
 // デュアルモード: モック = 擬似 OAuth + 決定的導出 / API = Google OAuth 2.0（analytics.readonly・セグメント単位）+
 // GA4 実データ（/v1/media/*）。save・connect 系・generate 系は async）
 const ms = useMediaSettings()    // settingFor / save / disconnectGa（両モード）+ gaStatusFor / startGaConnect / listGaProperties / selectGaProperty（API の OAuth + プロパティ選択）/ connectGa（モック擬似 OAuth）
-const ma = useMediaAnalytics()   // metricsFor(segId,28)（API はロード中 null）/ integratedMetricsFor(segId,6) / metricsReady / metricsWarningFor / refreshMetrics / ensureIntegratedLoaded
+const ma = useMediaAnalytics()   // metricsFor(segId,28)（API はロード中 null）/ integratedMetricsFor(segId,6) / metricsReady / metricsWarningFor / refreshMetrics / integratedReady・integratedFailed・refreshMonthly（GA 月次の失敗表示 + 再試行）/ ensureIntegratedLoaded（false = 生成禁止）
 const mi = useMediaInsight()     // loadMedia/generateMedia / loadIntegrated/generateIntegrated（async。生成→保管→再生成で上書き。API = Vertex AI → ヒューリスティック）/ storedMedia
 const art = useMediaArticles()   // generate（async。API = Vertex AI → 決定的フォールバック）/ suggestionFromInsight / adopt / unadopt / remove / restore（取消可能）
 
