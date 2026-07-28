@@ -1382,9 +1382,11 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
 
   // ---- AI インサイトの生成・再生成（生成 → 保管 → 再生成で upsert 上書き = weekly_insights と同型）----
   // 認可の設計判断: 生成は全ロール可（mockup の分析ページと同じ可視性。generated_by を保存 = 誰の操作か追跡可能）。
-  // scope=integrated のメディア軸はサーバーが GA 導出値で上書きするため、クライアント申告での改ざんは効かない。
-  // 売上軸はモック側 SoT（未移行）でサーバー検証不能 = 改ざん耐性の限界として受容する
-  // （範囲検証 + 監査可能性で緩和。salesRecords の API 移行時にサーバー組み立てへ引き上げて解消。原則7 の文書化）
+  // scope=integrated のメディア軸は **GA 連携済みセグメントなら**サーバーが GA 導出値で上書きするため、
+  // クライアント申告での改ざんは効かない。**GA 未連携セグメントでは上書きできず**、範囲検証済みの申告値が
+  // そのまま保管される = 売上軸と同じ受容クラス（認証済み社内ユーザーの脅威モデル + generated_by の監査可能性で
+  // 緩和して受容）。売上軸はモック側 SoT（未移行）でサーバー検証不能 = 同様に受容する
+  // （salesRecords の API 移行時にサーバー組み立てへ引き上げて両方解消。原則7 の文書化）
   app.post('/insights/generate', async (c) => {
     const user = c.get('user')
     const body = await c.req.json().catch(() => ({})) as Record<string, unknown>

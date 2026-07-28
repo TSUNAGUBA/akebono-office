@@ -598,7 +598,7 @@
 - [x] AI 記事生成: POST /v1/media/articles/generate = Vertex AI（generateJson）→ null は shared/domain/media-article の決定的生成へフォールバック（llm フラグ保存 → UI に Vertex AI / 自動生成 表示）。brief + 生成物をトランザクション保存。adopt（冪等: 二重採用 no-op + warning）/ unadopt / remove / restore
 - [x] AI インサイト: media_insights（weekly_insights 0026 と同型。UNIQUE(segment_id, scope) の upsert）。scope=media はサーバーが GA から集計・scope=integrated は**クライアント合成の統合メトリクスを受領**（売上明細 salesRecords が未移行のモック側 SoT のため。設計判断を routes/media.ts・useMediaAnalytics.ts に文書化）。生成は LLM → heuristicMediaInsight / heuristicIntegratedInsight
 - [x] フロント デュアルモード化: useMediaSettings（GA 状態 = サーバー SoT の合成）/ useMediaAnalytics（metricsFor はロード中 null・ready/warning/retry を公開）/ useMediaInsight・useMediaArticles（async 化）/ MediaGaConnect（OAuth リダイレクト + 復帰クエリ + プロパティ選択モーダル + needsProperty 再開 = リロードで詰まない）/ analytics.vue（ロード中・取得失敗・データ空・部分失敗警告の区別表示）/ useDashboardInsight（generate 前に GA 月次を await）。モックモードの挙動は不変（下位互換）
-- [x] エラーコード: AKO-MEDIA-003〜007・011〜016 を採番（api-design §4。001/002/010/013 はモック専用・008/009/015 は欠番）
+- [x] エラーコード: AKO-MEDIA-003〜008・011〜016 を採番（api-design §4。001/002/010/013 はモック専用・009・015 は欠番。008 = 記事パスの重複はレビュー 1 巡目 m5 で起番）
 
 ### 37-3 反復レビュー（原則9・1 巡目 = 独立コードレビュー + システム監査。major 3・minor 11）
 - [x] M1: GA 月次の取得失敗を「トラフィック 0」と区別（integratedReady = 取得成功のみ・integratedFailed 新設・PDCA タブに失敗表示 + 再試行導線）。失敗・未ロード状態では generateIntegrated / generateSegment / generateCompany を実行しない（AKO-MEDIA-004 でエラー = 虚偽の 0 由来インサイトを保管させない）

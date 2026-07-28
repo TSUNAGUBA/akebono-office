@@ -316,6 +316,14 @@ export function useMediaAnalytics() {
     await loadMediaGaStatus(segmentId)
     if (settingFor(segmentId)?.gaConnected !== true) return true
     await loadMediaMonthly(segmentId, monthsCount)
+    // 過去の失敗は「ロード済み（結果 null）」で確定しており、force なしでは二度とサーバーへ行かない。
+    // 本関数はユーザーの明示操作（再生成ボタン等）起点の await 経路なので、**呼び出しごとに 1 回だけ**
+    // force 再試行して GA 復旧後の回復手段を確保する（N1。リアクティブ再評価による無限リトライ
+    // （M1 で封止）はここでは起きない = computed からは呼ばれない）。失敗が続けば false のまま =
+    // 生成遮断（M1）は維持
+    if (integratedFailed(segmentId, monthsCount)) {
+      await loadMediaMonthly(segmentId, monthsCount, true)
+    }
     return integratedReady(segmentId, monthsCount)
   }
 
