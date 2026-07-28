@@ -205,8 +205,8 @@ export function heuristicSegmentInsight(s: SegmentSummary): DashboardInsight {
     }
   }
 
-  // ---- コンテンツ量の所見（記事在庫） ----
-  if (m.mediaConnected && m.articleCount > 0 && m.articleCount < 5) {
+  // ---- コンテンツ量の所見（記事在庫。メディア対象かつ連携時のみ） ----
+  if (s.mediaAvailable && m.mediaConnected && m.articleCount > 0 && m.articleCount < 5) {
     actions.push({
       title: 'コンテンツ本数を増やして流入の土台を作る',
       detail: `公開記事は ${m.articleCount} 本。テーマを広げた記事追加で検索接点を増やし、流入の基盤を厚くします。`,
