@@ -90,7 +90,7 @@ function doAdopt(id: string): void {
   const res = articles.adopt(id, adoptSection.value)
   if (!res.ok) { show(`${res.error?.code}: ${res.error?.message}`, 'warn'); return }
   show(`「${adoptSection.value}」に採用しました（分析の対象に加わります）`, 'ok')
-  if (preview.value?.id === id) preview.value = articles.generatedFor(effectiveSegmentId.value, true).find(g => g.id === id) ?? null
+  syncPreview(id)
 }
 
 async function doDiscard(id: string): Promise<void> {
@@ -101,14 +101,23 @@ async function doDiscard(id: string): Promise<void> {
   show('生成記事を取り消しました（復元できます）', 'warn')
 }
 
+/** プレビュー表示中の記事なら最新状態へ差し替える（採用バッジ等の反映） */
+function syncPreview(id: string): void {
+  if (preview.value?.id === id) {
+    preview.value = articles.generatedFor(effectiveSegmentId.value, true).find(g => g.id === id) ?? null
+  }
+}
+
 function doRestore(id: string): void {
   articles.restore(id)
+  syncPreview(id)
   show('生成記事を復元しました', 'ok')
 }
 
 function doUnadopt(id: string): void {
   const res = articles.unadopt(id)
   if (!res.ok) { show(`${res.error?.code}: ${res.error?.message}`, 'warn'); return }
+  syncPreview(id)
   show('採用を取り消しました', 'warn')
 }
 

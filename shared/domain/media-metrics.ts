@@ -248,15 +248,17 @@ export function deriveMediaMetrics(articles: MediaArticleInput[], opts: DeriveOp
     dailyWeights.push(weekend * (0.8 + unit(`${seed}:day:${date}`) * 0.4))
   }
   const wSum = dailyWeights.reduce((s, x) => s + x, 0) || 1
-  let sAcc = 0; let uAcc = 0; let cAcc = 0
+  // 残量から配分する（各日を「残り」でクランプ・最終日は残り全量）。
+  // 丸め誤差があっても各値は非負かつ Σ = 総量 を厳密に満たす（微少トラフィックでの破綻防止）。
+  let sRem = sessions; let uRem = users; let cRem = conversions
   const daily: MediaDailyPoint[] = dailyWeights.map((w, i) => {
     const date = addDays(periodFrom, i)
     const last = i === days - 1
-    const s = last ? sessions - sAcc : Math.round(sessions * w / wSum)
-    const u = last ? users - uAcc : Math.round(users * w / wSum)
-    const c = last ? conversions - cAcc : Math.round(conversions * w / wSum)
-    sAcc += s; uAcc += u; cAcc += c
-    return { date, sessions: Math.max(0, s), users: Math.max(0, u), conversions: Math.max(0, c) }
+    const s = last ? sRem : Math.min(sRem, Math.round(sessions * w / wSum))
+    const u = last ? uRem : Math.min(uRem, Math.round(users * w / wSum))
+    const c = last ? cRem : Math.min(cRem, Math.round(conversions * w / wSum))
+    sRem -= s; uRem -= u; cRem -= c
+    return { date, sessions: s, users: u, conversions: c }
   })
 
   // セクション別

@@ -64,19 +64,31 @@ export function useMediaAnalytics() {
     })
   }
 
-  /** 当該セグメントの売上を月次集計（active な売上明細。赤黒訂正は amount 相殺で反映） */
+  /**
+   * 当該セグメントの売上を月次集計（active な売上明細）。
+   * 赤黒訂正（correctionOf 付きの相殺行）は「元明細の計上月」へ振り替えて金額・件数を相殺する。
+   * 訂正行自身の日付（発生日 = 訂正した日）ではなく元の売上月で相殺しないと、集計月が食い違って
+   * 元の売上が過大計上されたままになる（原則6: データフロー整合性）。
+   */
   function businessMonthly(segmentId: string, months: string[]): Map<string, { amount: number; orders: number }> {
     const map = new Map<string, { amount: number; orders: number }>()
     for (const m of months) map.set(m, { amount: 0, orders: 0 })
-    for (const r of salesTbl.value as SalesRecord[]) {
+    const all = salesTbl.value as SalesRecord[]
+    const byId = new Map(all.map(r => [r.id, r]))
+    for (const r of all) {
       if (r.segmentId !== segmentId || r.active === false) continue
-      const month = r.salesDate.slice(0, 7)
-      const cur = map.get(month)
+      // 訂正行は元明細の計上月へ帰属させる（元が見つからなければ自身の月）
+      const originMonth = (r.correctionOf ? byId.get(r.correctionOf)?.salesDate : r.salesDate)?.slice(0, 7)
+        ?? r.salesDate.slice(0, 7)
+      const cur = map.get(originMonth)
       if (!cur) continue
       cur.amount += r.amount
-      // 受注件数は正の明細のみ数える（赤黒の相殺行は件数に数えない）
-      if (r.amount > 0) cur.orders += 1
+      // 件数は純額: 訂正（相殺行）は元の受注を 1 件取り消す / 通常の正の明細は 1 件
+      if (r.correctionOf) cur.orders -= 1
+      else if (r.amount > 0) cur.orders += 1
     }
+    // 相殺で負になった件数は 0 でクランプ（表示の健全性）
+    for (const v of map.values()) v.orders = Math.max(0, v.orders)
     return map
   }
 

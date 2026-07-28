@@ -169,6 +169,19 @@ const SEVERITY_META: Record<string, { label: string; tone: 'crit' | 'warn' | 'in
         </p>
       </template>
 
+      <!-- 連携済みだが記事データが無い（実行時に追加した新規業態など） -->
+      <template v-else-if="metrics && metrics.articleCount === 0">
+        <UiEmptyState
+          icon="FileText"
+          title="このメディアにはまだ記事データがありません"
+          hint="記事生成スタジオで記事を生成・採用すると、アクセス指標と AI インサイトが表示されます"
+        >
+          <template #action>
+            <NuxtLink to="/media/articles" class="btn btn-primary btn-sm">記事生成スタジオへ</NuxtLink>
+          </template>
+        </UiEmptyState>
+      </template>
+
       <!-- ============ メディア分析タブ ============ -->
       <template v-else-if="activeTab === 'media' && metrics">
         <!-- KPI -->

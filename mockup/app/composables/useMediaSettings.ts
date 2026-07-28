@@ -5,14 +5,13 @@
  * - GA 連携状態のアプリ側 SoT（本実装では GA OAuth のトークン保管に置き換わる）
  * - 取消可能性（原則9.5）: 連携は解除でき、設定は再編集で上書きできる
  */
-import type { ArticleTone } from '../../../shared/domain/media-article'
-import type { MediaGoal, MediaSetting } from '~/types/media'
+import type { MediaSetting } from '~/types/media'
 import { defaultMediaSetting } from '~/utils/media'
 
 export function useMediaSettings() {
   const { tbl, commit, nextId } = useMockDb()
   const settings = tbl('mediaSettings')
-  const { activeSegments, effectiveSegmentId, segmentById } = useCurrentSegment()
+  const { effectiveSegmentId, segmentById } = useCurrentSegment()
 
   function rawFor(segmentId: string): MediaSetting | undefined {
     return (settings.value as MediaSetting[]).find(s => s.segmentId === segmentId)
@@ -44,10 +43,6 @@ export function useMediaSettings() {
   /** 現在の業態の設定（表示用。materialize しない） */
   const currentSetting = computed<MediaSetting | null>(() => settingFor(effectiveSegmentId.value))
 
-  /** GA 連携済みのセグメント設定のみ */
-  const connectedSettings = computed<MediaSetting[]>(() =>
-    activeSegments.value.map(s => rawFor(s.id)).filter((s): s is MediaSetting => !!s && s.gaConnected))
-
   /**
    * 部分更新（渡したキーのみ上書き = 未指定フィールドを保持）。
    * 呼び出し側は変更するキーだけを渡す（undefined を渡さない）ため、スプレッドで安全に合成できる。
@@ -78,15 +73,7 @@ export function useMediaSettings() {
   }
 
   return {
-    settings, currentSetting, connectedSettings,
+    settings, currentSetting,
     settingFor, ensureSetting, save, connectGa, disconnectGa,
   }
-}
-
-/** 設定の既定トーン（記事生成フォームの初期値解決） */
-export function resolveDefaultTone(setting: MediaSetting | null): ArticleTone {
-  return setting?.defaultTone ?? 'formal'
-}
-export function resolveGoal(setting: MediaSetting | null): MediaGoal {
-  return setting?.analysisGoal ?? 'awareness'
 }

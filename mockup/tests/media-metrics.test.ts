@@ -59,6 +59,26 @@ describe('deriveMediaMetrics', () => {
     const expected = m.sessions > 0 ? Math.round(m.conversions / m.sessions * 10000) / 10000 : 0
     expect(m.conversionRate).toBe(expected)
   })
+
+  it('低トラフィック（単一・低ウェイト記事）でも日別合計 = 総セッションで全て非負（丸め破綻なし）', () => {
+    const tiny: MediaArticleInput[] = [
+      { id: 't1', title: 'お知らせ', path: '/news/1', section: 'お知らせ', publishedAt: '2024-01-01', wordCount: 200, origin: 'seed' },
+    ]
+    const m = deriveMediaMetrics(tiny, { segmentId: 'seg-x', siteName: 't', asOf: '2026-07-27', days: 28 })
+    expect(m.daily.reduce((s, d) => s + d.sessions, 0)).toBe(m.sessions)
+    expect(m.daily.reduce((s, d) => s + d.users, 0)).toBe(m.users)
+    expect(m.daily.reduce((s, d) => s + d.conversions, 0)).toBe(m.conversions)
+    expect(m.daily.every(d => d.sessions >= 0 && d.users >= 0 && d.conversions >= 0)).toBe(true)
+  })
+
+  it('空の記事インベントリでも NaN/クラッシュせず 0 集計を返す', () => {
+    const m = deriveMediaMetrics([], opts)
+    expect(m.sessions).toBe(0)
+    expect(m.articleCount).toBe(0)
+    expect(m.channels.reduce((s, c) => s + c.sessions, 0)).toBe(0)
+    expect(m.daily).toHaveLength(28)
+    expect(Number.isNaN(m.conversionRate)).toBe(false)
+  })
 })
 
 describe('deriveMonthlyMediaTrend', () => {

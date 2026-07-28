@@ -42,9 +42,9 @@ function loadForm(): void {
   }
 }
 watch(selectedId, loadForm, { immediate: true })
-// GA 連携状態の外部変更（連携/解除）でサイト設定行が materialize されるため、選択中は同期し直す
-watch(() => settingFor(selectedId.value)?.gaConnected, () => { /* 連携状態はコンポーネントが直接反映。フォームは触らない */ })
 
+// GA 連携状態（connected）はコンポーネント（MediaGaConnect）が mediaSettings を直接更新し、
+// この computed が反応して案内文へ反映される。フォーム（サイト名等）は GA 連携で変化しないため同期不要。
 const connected = computed(() => settingFor(selectedId.value)?.gaConnected === true)
 
 function splitKeywords(text: string): string[] {

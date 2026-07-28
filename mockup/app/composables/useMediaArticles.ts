@@ -134,7 +134,9 @@ export function useMediaArticles() {
       path: `/blog/gen-${articleId}`,
       title: g.title,
       section,
-      publishedAt: todayJst(),
+      // 分析の集計基準は前日（asOf）。採用直後にその期間へ入るよう公開日を前日にする
+      // （当日にすると `publishedAt <= asOf` を満たさず、採用しても分析に反映されない）
+      publishedAt: addDays(todayJst(), -1),
       wordCount: g.estWordCount,
       status: 'published',
       origin: 'generated',
