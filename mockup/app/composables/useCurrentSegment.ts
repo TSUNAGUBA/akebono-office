@@ -9,7 +9,10 @@
  * 「現在の業態」の解決（無効 id のフォールバック）は utils/akebono の純関数 resolveDefaultSegmentId に集約。
  */
 import type { BusinessSegment } from '~/types/akebono'
-import { INDUSTRY_TYPE_LABELS, resolveDefaultSegmentId } from '~/utils/akebono'
+import {
+  INDUSTRY_TYPE_LABELS, resolveDefaultSegmentId, segmentFieldDefaults,
+  type SegmentFieldDefaults,
+} from '~/utils/akebono'
 
 const STORAGE_KEY = 'ako.currentSegment.v1'
 
@@ -58,6 +61,16 @@ export function useCurrentSegment() {
     }
   }
 
+  /** 業態レコードを id で解決（無効化済みも含めて全件から。編集時のフォールバック用） */
+  function segmentById(id: string | null | undefined): BusinessSegment | null {
+    return (segments.value as BusinessSegment[]).find(s => s.id === id) ?? null
+  }
+
+  /** 業態の商品既定値（単位・課金区分・バリアント軸）。商品登録の自動適用に使う */
+  function defaultsFor(id: string | null | undefined): SegmentFieldDefaults {
+    return segmentFieldDefaults(segmentById(id))
+  }
+
   return {
     activeSegments,
     currentSegmentId,
@@ -65,5 +78,7 @@ export function useCurrentSegment() {
     currentSegment,
     currentIndustryLabel,
     switchSegment,
+    segmentById,
+    defaultsFor,
   }
 }

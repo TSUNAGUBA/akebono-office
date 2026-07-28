@@ -85,10 +85,28 @@ export const seedAkebonoCompanies: Company[] = [
 // ---------- マスタ ----------
 
 export const seedBusinessSegments: BusinessSegment[] = [
-  { id: 'seg-01', name: '陶磁器委託販売', industryType: 'retail', displayOrder: 1, active: true },
-  { id: 'seg-02', name: 'SI 事業', industryType: 'it_service', displayOrder: 2, active: true },
-  { id: 'seg-03', name: 'SaaS 事業', industryType: 'it_service', displayOrder: 3, active: true },
-  { id: 'seg-04', name: 'アパレル', industryType: 'retail', displayOrder: 4, active: true },
+  // appName 未設定 = 業態名を表示。appIcon で業態アプリを直感識別。
+  // 既定値（単位・課金区分・バリアント軸）は業態設定に集約し、商品登録の入力コストを下げる。
+  {
+    id: 'seg-01', name: '陶磁器委託販売', industryType: 'retail', displayOrder: 1, active: true,
+    appName: null, appIcon: 'Palette', appIconImage: null,
+    defaultUnitId: 'unit-02', defaultBillingType: null, defaultVariantAxis1Label: null, defaultVariantAxis2Label: null,
+  },
+  {
+    id: 'seg-02', name: 'SI 事業', industryType: 'it_service', displayOrder: 2, active: true,
+    appName: null, appIcon: 'Server', appIconImage: null,
+    defaultUnitId: 'unit-03', defaultBillingType: 'one_time', defaultVariantAxis1Label: null, defaultVariantAxis2Label: null,
+  },
+  {
+    id: 'seg-03', name: 'SaaS 事業', industryType: 'it_service', displayOrder: 3, active: true,
+    appName: null, appIcon: 'Cloud', appIconImage: null,
+    defaultUnitId: 'unit-05', defaultBillingType: 'monthly', defaultVariantAxis1Label: null, defaultVariantAxis2Label: null,
+  },
+  {
+    id: 'seg-04', name: 'アパレル', industryType: 'retail', displayOrder: 4, active: true,
+    appName: null, appIcon: 'Shirt', appIconImage: null,
+    defaultUnitId: 'unit-01', defaultBillingType: null, defaultVariantAxis1Label: 'カラー', defaultVariantAxis2Label: 'サイズ',
+  },
 ]
 
 export const seedWarehouses: Warehouse[] = [

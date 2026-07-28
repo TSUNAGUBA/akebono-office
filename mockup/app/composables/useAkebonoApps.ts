@@ -40,6 +40,7 @@ export const AKEBONO_APP_CATALOG: AkebonoAppDef[] = [
 /** 常時有効の管理者機能（プリセット対象外。§3.3 の注記。ハブ下部に表示） */
 export interface AkebonoAdminTool { title: string; description: string; icon: string; to: string }
 export const AKEBONO_ADMIN_TOOLS: AkebonoAdminTool[] = [
+  { title: '業態アプリ設定', description: 'トップに並ぶ業態アプリの名称・アイコンと、商品登録の既定値（単位・課金区分・バリアント軸）', icon: 'LayoutGrid', to: '/akebono/settings/segments' },
   { title: '共通マスタ管理', description: '取引先ロール・事業セグメント・倉庫・単位・税区分・委託条件ほか', icon: 'Database', to: '/akebono/masters' },
   { title: 'データ取込・連携', description: 'CSV/固定長/JSON/API の項目マッピング・変換・取込', icon: 'Upload', to: '/akebono/imports' },
   { title: '項目カスタマイズ', description: 'フォーム/一覧の項目を業種の基本項目から差し引き・追加', icon: 'SlidersHorizontal', to: '/akebono/settings/items' },

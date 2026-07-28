@@ -28,6 +28,10 @@ const todayLong = computed(() => fmtDateLong(nowJstIso()))
 
 const { canPath } = usePermissions()
 
+// ---------- AKEBONO 業務（業態別アプリをトップに配置。2026-07-28） ----------
+// 機能トグル + 権限を満たすときのみ、業態ごとの業務アプリを専用セクションで表示する。
+const showAkebono = computed(() => isEnabled('akebono') && canPath('/akebono'))
+
 // ---------- 承認待ち件数（useWorkflow.pendingFor が SoT。代理承認・個人指定も考慮済み） ----------
 const pendingApprovals = computed(() => pendingFor(currentUserId.value).length)
 
@@ -122,6 +126,15 @@ function openNotification(n: AppNotification): void {
     />
 
     <div class="grid gap-3">
+      <!-- AKEBONO 業務（業態別アプリ。押下でその業態の業務へ入る = ヘッダ切替に依存しない導線） -->
+      <section v-if="showAkebono" class="grid gap-1.5" aria-label="AKEBONO 業務">
+        <div class="flex items-center justify-between">
+          <p class="text-[11px] font-bold text-muted">AKEBONO 業務（業態別）</p>
+          <NuxtLink to="/akebono" class="link text-[11px] font-semibold">ハブを開く</NuxtLink>
+        </div>
+        <AkebonoSegmentApps />
+      </section>
+
       <!-- カード型メニュー（カテゴリチップで絞り込み。バッチ7h） -->
       <section class="grid gap-3" aria-label="メニュー">
         <UiChipTabs v-model="selectedCategory" :options="categoryChips" aria-label="メニューカテゴリ" />

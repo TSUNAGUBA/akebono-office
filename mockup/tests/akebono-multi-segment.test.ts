@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { BusinessSegment } from '~/types/akebono'
 import {
-  AKEBONO_APP_KEYS, INDUSTRY_PRESET, presetAppConfigsForSegments,
-  presetAppsForSegment, resolveDefaultSegmentId,
+  AKEBONO_APP_KEYS, INDUSTRY_DEFAULT_ICON, INDUSTRY_PRESET, presetAppConfigsForSegments,
+  presetAppsForSegment, resolveDefaultSegmentId, segmentAppName, segmentFieldDefaults,
+  segmentIconKey,
 } from '~/utils/akebono'
 
 /** マルチ業態（現在業態コンテキスト + 業態ごとアプリ設定）の純関数リグレッション */
@@ -69,5 +70,50 @@ describe('presetAppConfigsForSegments（業態ごと初期アプリ設定）', (
     const itInv = configs.find(c => c.segmentId === 'seg-02' && c.appKey === 'inventory')!
     expect(retailInv.enabled).toBe(true)
     expect(itInv.enabled).toBe(false)
+  })
+})
+
+describe('segmentAppName（業態アプリの表示名）', () => {
+  it('appName があればそれを優先する', () => {
+    expect(segmentAppName({ name: '陶磁器委託販売', appName: '工芸品ショップ' })).toBe('工芸品ショップ')
+  })
+  it('appName 未設定（null/空白）は業態名にフォールバックする', () => {
+    expect(segmentAppName({ name: '陶磁器委託販売', appName: null })).toBe('陶磁器委託販売')
+    expect(segmentAppName({ name: '陶磁器委託販売', appName: '   ' })).toBe('陶磁器委託販売')
+    expect(segmentAppName({ name: '陶磁器委託販売' })).toBe('陶磁器委託販売')
+  })
+})
+
+describe('segmentIconKey（業態アプリのアイコン解決）', () => {
+  it('appIcon があればそれを使う', () => {
+    expect(segmentIconKey({ industryType: 'retail', appIcon: 'Shirt' })).toBe('Shirt')
+  })
+  it('appIcon 未設定は業種タイプ既定アイコンにフォールバックする', () => {
+    expect(segmentIconKey({ industryType: 'retail', appIcon: null })).toBe(INDUSTRY_DEFAULT_ICON.retail)
+    expect(segmentIconKey({ industryType: 'it_service', appIcon: '  ' })).toBe(INDUSTRY_DEFAULT_ICON.it_service)
+    expect(segmentIconKey({ industryType: 'logistics' })).toBe(INDUSTRY_DEFAULT_ICON.logistics)
+  })
+})
+
+describe('segmentFieldDefaults（商品登録の既定値）', () => {
+  it('業態に設定された既定値を取り出す', () => {
+    const s: BusinessSegment = {
+      ...seg('seg-x', 'retail'),
+      defaultUnitId: 'unit-01', defaultBillingType: 'monthly',
+      defaultVariantAxis1Label: 'カラー', defaultVariantAxis2Label: 'サイズ',
+    }
+    expect(segmentFieldDefaults(s)).toEqual({
+      unitId: 'unit-01', billingType: 'monthly', variantAxis1Label: 'カラー', variantAxis2Label: 'サイズ',
+    })
+  })
+  it('未設定は null（物販・SKU 展開なし相当）', () => {
+    expect(segmentFieldDefaults(seg('seg-y', 'other'))).toEqual({
+      unitId: null, billingType: null, variantAxis1Label: null, variantAxis2Label: null,
+    })
+  })
+  it('segment が null/undefined でも安全に空既定を返す（原則7）', () => {
+    const empty = { unitId: null, billingType: null, variantAxis1Label: null, variantAxis2Label: null }
+    expect(segmentFieldDefaults(null)).toEqual(empty)
+    expect(segmentFieldDefaults(undefined)).toEqual(empty)
   })
 })
