@@ -39,8 +39,13 @@ export function useAkebonoSales() {
   })
   const selectedFy = ref<number>(currentFiscalYear.value)
 
-  /** セグメント絞り込み（'' = 全セグメント合算） */
-  const segmentFilter = ref<string>('')
+  // 現在の業態（毎回選ばせない導線）。既定の絞り込み・登録セグメントに使う。
+  const { effectiveSegmentId } = useCurrentSegment()
+
+  /** セグメント絞り込み（'' = 全セグメント合算。既定 = 現在の業態） */
+  const segmentFilter = ref<string>(effectiveSegmentId.value)
+  // ヘッダの業態スイッチャで業態を切り替えたら、売上ビューの絞り込みも追随する。
+  watch(effectiveSegmentId, (id) => { segmentFilter.value = id })
 
   const activeSegments = computed(() =>
     (segments.value as BusinessSegment[]).filter(s => s.active !== false).sort((a, b) => a.displayOrder - b.displayOrder))

@@ -1,15 +1,17 @@
 <script setup lang="ts">
 /**
- * AKEBONO 業務アプリ ハブ（F-20-1）
- * 使用（導入）中のアプリのみをカードで表示。管理者はアプリの使用/不使用・業種プリセット適用・
- * 共通マスタ/取込/項目カスタマイズへの導線を持つ。要望ボックス（F-03-2）は残置。
+ * AKEBONO 業務アプリ ハブ（F-20-1。マルチ業態対応）
+ * 現在の業態（ヘッダの業態スイッチャで選択）に応じて、使用（導入）中のアプリのみをカードで表示。
+ * 管理者はアプリの使用/不使用・業種プリセット適用を「業態ごと」に設定でき、共通マスタ/取込/項目カスタマイズへの導線を持つ。
+ * 要望ボックス（F-03-2）は残置。
  */
-import { CircleCheck, CircleDashed, Send, Sparkles, Sunrise } from 'lucide-vue-next'
+import { CircleCheck, CircleDashed, Layers, Send, Sparkles, Sunrise } from 'lucide-vue-next'
 import { fmtDateTime } from '~/utils/format'
 import { INDUSTRY_TYPE_LABELS } from '~/utils/akebono'
 import type { MenuCard } from '~/types/ui'
 
 const apps = useAkebonoApps()
+const { activeSegments, currentSegment, currentIndustryLabel, effectiveSegmentId } = useCurrentSegment()
 const { isAdmin } = useCurrentUser()
 const { tbl } = useMockDb()
 const { show } = useToast()
@@ -19,38 +21,47 @@ const members = tbl('members')
 
 onMounted(() => { void refresh() })
 
-// ---------- アプリランチャー ----------
+// ---------- アプリランチャー（現在業態のみ） ----------
 const appCards = computed<MenuCard[]>(() =>
   apps.enabledApps.value.map(a => ({
     id: a.key, title: apps.labelOf(a), description: a.description, icon: a.icon, to: a.to,
   })))
 
-// ---------- アプリ使用/不使用管理（管理者） ----------
+// ---------- アプリ使用/不使用管理（管理者・業態ごと） ----------
 const manageOpen = ref(false)
+/** 設定対象の業態（既定 = 現在の業態） */
+const settingsSegmentId = ref('')
+const settingsSegment = computed(() => activeSegments.value.find(s => s.id === settingsSegmentId.value) ?? null)
+
+function openManage(): void {
+  settingsSegmentId.value = effectiveSegmentId.value
+  manageOpen.value = true
+}
 
 async function toggleApp(appKey: string, enabled: boolean): Promise<void> {
   if (!enabled) {
-    const ok = await confirm.ask('アプリの不使用化', 'このアプリをメニューから外します。登録済みデータは保全され、再度有効化すると元に戻ります。', { confirmLabel: '不使用にする' })
+    const ok = await confirm.ask('アプリの不使用化', 'この業態のメニューからアプリを外します。登録済みデータは保全され、再度有効化すると元に戻ります。', { confirmLabel: '不使用にする' })
     if (!ok) return
   }
-  apps.setEnabled(appKey, enabled)
+  apps.setEnabled(appKey, enabled, settingsSegmentId.value)
   show(enabled ? 'アプリを有効化しました' : 'アプリを不使用にしました', enabled ? 'ok' : 'warn')
 }
 
 async function applyPreset(): Promise<void> {
-  const willEnable = apps.presetDiff.value.filter(d => d.willEnable)
+  const willEnable = apps.presetDiffOf(settingsSegmentId.value).filter(d => d.willEnable)
   if (willEnable.length === 0) {
     show('プリセットで新たに有効化するアプリはありません（既に反映済み）', 'info')
     return
   }
-  const names = willEnable.map(d => apps.labelOf(d.app)).join('、')
-  const ok = await confirm.ask('業種プリセットの適用', `次のアプリを有効化します（既存の設定は OFF にしません）:\n${names}`, { confirmLabel: '適用する' })
+  const names = willEnable.map(d => apps.labelOf(d.app, settingsSegmentId.value)).join('、')
+  const segName = settingsSegment.value?.name ?? '業態'
+  const ok = await confirm.ask('業種プリセットの適用', `「${segName}」に次のアプリを有効化します（既存の設定は OFF にしません）:\n${names}`, { confirmLabel: '適用する' })
   if (!ok) return
-  apps.applyPreset() // 成功トーストは composable 側で表示
+  apps.applyPreset(settingsSegmentId.value) // 成功トーストは composable 側で表示
 }
 
 function saveLabel(appKey: string, value: string): void {
-  apps.setLabel(appKey, value)
+  apps.setLabel(appKey, value, settingsSegmentId.value)
 }
 
 // ---------- 要望ボックス ----------
@@ -73,16 +84,25 @@ async function submitWish(): Promise<void> {
 
 <template>
   <div class="mx-auto max-w-5xl">
-    <UiPageHeader title="AKEBONO 業務" description="商品マスタ〜在庫・売上・請求までの業務アプリ群。業種に応じた構成でご利用いただけます">
+    <UiPageHeader title="AKEBONO 業務" description="商品マスタ〜在庫・売上・請求までの業務アプリ群。業態ごとの構成でご利用いただけます">
       <template v-if="isAdmin" #actions>
-        <button type="button" class="btn btn-sm" @click="manageOpen = true">アプリ・業態の設定</button>
+        <button type="button" class="btn btn-sm" @click="openManage">アプリ・業態の設定</button>
       </template>
     </UiPageHeader>
+
+    <!-- 現在の業態（配下アプリはこの業態が既定になる） -->
+    <div v-if="currentSegment" class="mb-3 flex flex-wrap items-center gap-2 rounded-[10px] border border-line bg-surface-soft px-3 py-2">
+      <Layers class="h-4 w-4 shrink-0 text-brand" aria-hidden="true" />
+      <span class="text-[12px] text-sub">現在の業態</span>
+      <span class="text-[13px] font-bold">{{ currentSegment.name }}</span>
+      <UiStatusBadge :label="currentIndustryLabel" tone="info" />
+      <span class="hidden text-[11px] text-muted sm:inline">・配下アプリはこの業態が既定になります（ヘッダの業態スイッチャで切替）</span>
+    </div>
 
     <div class="grid gap-4">
       <!-- アプリランチャー -->
       <UiCardMenu v-if="appCards.length > 0" :items="appCards" />
-      <UiEmptyState v-else icon="PackageOpen" title="使用中のアプリがありません" hint="管理者が「アプリ・業態の設定」から使用するアプリを有効化してください" />
+      <UiEmptyState v-else icon="PackageOpen" title="この業態で使用中のアプリがありません" :hint="isAdmin ? '「アプリ・業態の設定」から使用するアプリを有効化してください' : '管理者が「アプリ・業態の設定」から使用するアプリを有効化してください'" />
 
       <!-- 管理者ツール -->
       <UiSectionCard v-if="isAdmin" title="管理者ツール" description="共通マスタ・データ取込・項目カスタマイズ（常時有効）">
@@ -124,30 +144,40 @@ async function submitWish(): Promise<void> {
       </UiSectionCard>
     </div>
 
-    <!-- アプリ・業態の設定（管理者） -->
+    <!-- アプリ・業態の設定（管理者・業態ごと） -->
     <UiModal :open="manageOpen" title="アプリ・業態の設定" width="lg" @close="manageOpen = false">
       <div class="grid gap-4">
         <section>
           <div class="flex items-center justify-between">
-            <p class="text-[12px] font-bold">事業セグメント（業態）</p>
-            <NuxtLink to="/akebono/masters" class="link text-[11px]" @click="manageOpen = false">セグメントを編集</NuxtLink>
+            <p class="text-[12px] font-bold">設定する業態</p>
+            <NuxtLink to="/akebono/masters" class="link text-[11px]" @click="manageOpen = false">業態を編集</NuxtLink>
           </div>
+          <p class="mt-0.5 text-[11px] text-muted">業態ごとに使用するアプリ・表示名を設定します。</p>
           <div class="mt-1.5 flex flex-wrap gap-1.5">
-            <UiStatusBadge v-for="s in apps.activeSegments.value" :key="s.id" :label="`${s.name}（${INDUSTRY_TYPE_LABELS[s.industryType]}）`" tone="info" />
+            <button
+              v-for="s in activeSegments"
+              :key="s.id"
+              type="button"
+              class="rounded-full border px-3 py-1 text-[12px] font-semibold"
+              :class="s.id === settingsSegmentId ? 'border-brand bg-brand-soft text-brand' : 'border-line hover:border-muted'"
+              @click="settingsSegmentId = s.id"
+            >
+              {{ s.name }}<span class="ml-1 text-[10px] text-muted">{{ INDUSTRY_TYPE_LABELS[s.industryType] }}</span>
+            </button>
           </div>
           <div class="mt-2">
-            <button type="button" class="btn btn-sm" @click="applyPreset">
+            <button type="button" class="btn btn-sm" :disabled="!settingsSegment" @click="applyPreset">
               <Sparkles class="h-3.5 w-3.5" aria-hidden="true" /> 業種プリセットを適用（不足アプリを有効化）
             </button>
           </div>
         </section>
-        <section>
-          <p class="text-[12px] font-bold">使用するアプリ</p>
-          <p class="mt-0.5 text-[11px] text-muted">使用するアプリのみメニューに表示されます。不使用にしてもデータは保全されます。</p>
+        <section v-if="settingsSegment">
+          <p class="text-[12px] font-bold">「{{ settingsSegment.name }}」で使用するアプリ</p>
+          <p class="mt-0.5 text-[11px] text-muted">使用するアプリのみこの業態のメニューに表示されます。不使用にしてもデータは保全されます。</p>
           <ul class="mt-2 grid gap-1.5">
             <li v-for="a in apps.catalog" :key="a.key" class="grid gap-2 rounded-[8px] border border-line px-3 py-2 sm:grid-cols-[1fr_auto]">
               <div class="flex items-center gap-2">
-                <CircleCheck v-if="apps.isAppEnabled(a.key)" class="h-4 w-4 shrink-0 text-ok" aria-hidden="true" />
+                <CircleCheck v-if="apps.isAppEnabled(a.key, settingsSegmentId)" class="h-4 w-4 shrink-0 text-ok" aria-hidden="true" />
                 <CircleDashed v-else class="h-4 w-4 shrink-0 text-muted" aria-hidden="true" />
                 <div class="min-w-0">
                   <p class="text-[13px] font-medium">{{ a.title }}</p>
@@ -156,19 +186,20 @@ async function submitWish(): Promise<void> {
               </div>
               <div class="flex items-center gap-2">
                 <input
-                  type="text" class="input h-8 w-40 text-[12px]" :value="apps.labelOf(a) === a.title ? '' : apps.labelOf(a)"
+                  type="text" class="input h-8 w-40 text-[12px]" :value="apps.labelOf(a, settingsSegmentId) === a.title ? '' : apps.labelOf(a, settingsSegmentId)"
                   :placeholder="a.title" :aria-label="`${a.title}の表示名`"
                   @change="saveLabel(a.key, ($event.target as HTMLInputElement).value)"
                 >
                 <label class="flex items-center gap-1.5 whitespace-nowrap py-1 text-[11px]">
-                  <input type="checkbox" :checked="apps.isAppEnabled(a.key)" @change="toggleApp(a.key, ($event.target as HTMLInputElement).checked)">
+                  <input type="checkbox" :checked="apps.isAppEnabled(a.key, settingsSegmentId)" @change="toggleApp(a.key, ($event.target as HTMLInputElement).checked)">
                   使用
                 </label>
               </div>
             </li>
           </ul>
-          <p class="mt-1.5 text-[10px] text-muted">表示名を入力するとメニュー上のアプリ名を上書きできます（例: 発注管理 → 外注管理。情報サービス業向け）。空で既定名に戻ります。</p>
+          <p class="mt-1.5 text-[10px] text-muted">表示名を入力するとこの業態のメニュー上のアプリ名を上書きできます（例: 発注管理 → 外注管理。情報サービス業向け）。空で既定名に戻ります。</p>
         </section>
+        <UiEmptyState v-else icon="Layers" title="業態がありません" hint="共通マスタ管理から事業セグメント（業態）を登録してください" />
       </div>
       <template #footer>
         <button type="button" class="btn btn-sm" @click="manageOpen = false">閉じる</button>

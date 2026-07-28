@@ -1,14 +1,31 @@
 <script setup lang="ts">
 import * as icons from 'lucide-vue-next'
-import { ArrowLeft, Bell, ChevronDown, Clock3, Link2, LogOut, Sunrise, UserCog } from 'lucide-vue-next'
+import { ArrowLeft, Bell, ChevronDown, Clock3, Layers, Link2, LogOut, Sunrise, UserCog } from 'lucide-vue-next'
 import { signOutFirebase } from '~/utils/firebase-auth'
 import { EMPLOYMENT_TYPE_LABELS } from '~/utils/labels'
+import { INDUSTRY_TYPE_LABELS } from '~/utils/akebono'
 import { navEntryOf } from '~/utils/nav-map'
 import { isActivePath, MOBILE_NAV, NAV_GROUPS } from '~/utils/navigation'
 
 const route = useRoute()
 const { currentUser, isAdmin, switchableUsers, switchUser } = useCurrentUser()
 const { unreadCount } = useNotifications()
+const { show: showToast } = useToast()
+
+// ---------- 業態（事業セグメント）スイッチャ（マルチ業態。F-20 拡張） ----------
+// AKEBONO 業務配下でのみ表示し、選んだ業態を配下アプリの既定として使う（毎回選ばせない導線）。
+const { activeSegments, currentSegment, effectiveSegmentId, switchSegment } = useCurrentSegment()
+const segmentMenuOpen = ref(false)
+const showSegmentSwitcher = computed(() =>
+  route.path.startsWith('/akebono') && activeSegments.value.length > 0)
+
+function onSwitchSegment(id: string): void {
+  segmentMenuOpen.value = false
+  if (id === effectiveSegmentId.value) return
+  switchSegment(id)
+  const name = activeSegments.value.find(s => s.id === id)?.name ?? ''
+  if (name) showToast(`業態を「${name}」に切り替えました`, 'ok')
+}
 /** API モードは実認証のためデモユーザー切替を出さない（バッチ5e: モックの名残の除去）*/
 const isApi = useApiMode()
 /** dev 認証（E2E・ローカル検証）はセッションを持たないためログアウトを出さない */
@@ -33,6 +50,7 @@ watch(() => route.path, () => {
   punchModalOpen.value = false
   userMenuOpen.value = false
   relatedOpen.value = false
+  segmentMenuOpen.value = false
 })
 
 // ページ間導線（バッチ7h）: 親ページへ戻る + 関連ページ・設定（nav-map.ts が SoT）
@@ -90,6 +108,47 @@ function onSwitchUser(id: string): void {
           <h1 class="min-w-0 flex-1 truncate text-[15px] font-bold">{{ pageTitle }}</h1>
         </template>
         <div v-else class="flex-1" />
+
+        <!-- 業態スイッチャ（マルチ業態。AKEBONO 業務配下でのみ表示。選択業態が配下アプリの既定になる） -->
+        <div v-if="showSegmentSwitcher" class="relative shrink-0">
+          <button
+            type="button"
+            class="flex items-center gap-1.5 rounded-lg border border-line px-2 py-1 hover:border-brand"
+            :aria-expanded="segmentMenuOpen"
+            aria-haspopup="menu"
+            :aria-label="`業態の切り替え（現在: ${currentSegment?.name ?? '未設定'}）`"
+            @click="segmentMenuOpen = !segmentMenuOpen"
+          >
+            <Layers class="h-4 w-4 shrink-0 text-brand" aria-hidden="true" />
+            <span class="hidden max-w-[9rem] truncate text-xs font-semibold sm:block">{{ currentSegment?.name ?? '業態を選択' }}</span>
+            <ChevronDown class="h-3.5 w-3.5 text-muted" aria-hidden="true" />
+          </button>
+          <Transition name="fade">
+            <div
+              v-if="segmentMenuOpen"
+              class="card absolute left-0 top-full z-40 mt-1 w-64 overflow-hidden shadow-lg"
+              role="menu"
+              aria-label="業態の切り替え"
+            >
+              <p class="border-b border-line bg-surface-soft px-3 py-1.5 text-[10px] font-bold text-muted">
+                業態（この業態の設定・データが既定になります）
+              </p>
+              <button
+                v-for="s in activeSegments"
+                :key="s.id"
+                type="button"
+                role="menuitemradio"
+                :aria-checked="s.id === effectiveSegmentId"
+                class="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-brand-soft"
+                :class="s.id === effectiveSegmentId ? 'bg-brand-soft' : ''"
+                @click="onSwitchSegment(s.id)"
+              >
+                <span class="flex-1 truncate text-[13px] font-semibold">{{ s.name }}</span>
+                <UiStatusBadge :label="INDUSTRY_TYPE_LABELS[s.industryType]" tone="info" />
+              </button>
+            </div>
+          </Transition>
+        </div>
 
         <!-- 親ページへ戻る（nav-map.ts。モバイルでもアイコンで常時表示 = 迷子にならない） -->
         <NuxtLink
@@ -222,7 +281,7 @@ function onSwitchUser(id: string): void {
       </header>
 
       <!-- ページ本体 -->
-      <main class="flex-1 p-3 pb-[calc(var(--bottomnav-h)+16px)] md:p-5 md:pb-8" @click="userMenuOpen = false; relatedOpen = false">
+      <main class="flex-1 p-3 pb-[calc(var(--bottomnav-h)+16px)] md:p-5 md:pb-8" @click="userMenuOpen = false; relatedOpen = false; segmentMenuOpen = false">
         <slot />
       </main>
     </div>

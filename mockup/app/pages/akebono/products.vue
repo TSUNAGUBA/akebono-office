@@ -5,16 +5,18 @@
  * 展開なし商品は既定 SKU 1 件（SKU 数 1 表示）。バリアント商品はマトリクス生成で SKU 展開。
  * 画像は data URI 実体を持たない色プレースホルダで描画（実アップロードはモック対象外）。
  */
-import { Image as ImageIcon, Plus } from 'lucide-vue-next'
+import { Plus } from 'lucide-vue-next'
 import { ACTIVE_FILTER_OPTIONS, matchesActiveFilter } from '~/components/masters/MasterShell.vue'
 import type { BillingType, Product, ProductSku } from '~/types/akebono'
 import type { Company } from '~/types/domain'
 import type { FieldDef, TableColumn } from '~/types/ui'
 import { BILLING_TYPE_LABELS, hasPartnerRole } from '~/utils/akebono'
+import { IMAGE_MAX_CHARS, imageToDataUri, thumbBoxClass, thumbFirstChar } from '~/utils/thumb'
 import { fmtYen } from '~/utils/format'
 
 const p = useProducts()
 const masters = useAkebonoMasters()
+const { effectiveSegmentId } = useCurrentSegment()
 const { tbl } = useMockDb()
 const toast = useToast()
 const confirm = useConfirm()
@@ -30,7 +32,9 @@ const billingTypeOptions = Object.entries(BILLING_TYPE_LABELS).map(([value, labe
 
 // ---------- 一覧・フィルタ ----------
 const search = ref('')
-const segmentFilter = ref('')
+// 既定は現在の業態（毎回選ばせない導線）。ヘッダの業態スイッチャ切替に追随する。
+const segmentFilter = ref(effectiveSegmentId.value)
+watch(effectiveSegmentId, (id) => { segmentFilter.value = id })
 const statusFilter = ref('active')
 
 const segmentFilterOptions = computed(() => masters.segmentOptions.value)
@@ -61,23 +65,6 @@ const columns: TableColumn[] = [
 
 function asProduct(row: Record<string, unknown>): Product {
   return row as unknown as Product
-}
-
-// ---------- 色プレースホルダ（画像・サムネイル。静的クラスで Tailwind 保持） ----------
-const BOX_CLASSES = [
-  'bg-brand-soft text-brand',
-  'bg-ok-soft text-ok',
-  'bg-info-soft text-info',
-  'bg-warn-soft text-warn',
-  'bg-serious-soft text-serious',
-]
-function boxClass(seed: string): string {
-  let h = 0
-  for (const ch of seed) h = (h * 31 + ch.charCodeAt(0)) >>> 0
-  return BOX_CLASSES[h % BOX_CLASSES.length]!
-}
-function firstChar(s: string): string {
-  return (s.trim()[0] ?? '?').toUpperCase()
 }
 
 // ---------- 詳細ドロワー ----------
@@ -141,7 +128,7 @@ function openDetail(row: Record<string, unknown>): void {
 function openCreate(): void {
   selectedId.value = null
   form.value = {
-    code: '', name: '', segmentId: segmentFilter.value || '', categoryId: '',
+    code: '', name: '', segmentId: segmentFilter.value || effectiveSegmentId.value || '', categoryId: '',
     defaultSupplierCompanyId: '', listPrice: '', standardCost: '', taxRateId: '',
     unitId: '', billingType: '', variantAxis1Label: '', variantAxis2Label: '', description: '',
   }
@@ -264,49 +251,68 @@ async function deleteImage(imageId: string, filename: string): Promise<void> {
   else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
 }
 
-// 画像追加モーダル
+// 画像追加モーダル（実ファイルを縮小して data URI 化して登録）
 const imageModalOpen = ref(false)
-const imageForm = ref<{ sectionId: string; filename: string }>({ sectionId: '', filename: '' })
+const imageBusy = ref(false)
+const imageForm = ref<{ sectionId: string; filename: string; mime: string; dataUrl: string | null }>({
+  sectionId: '', filename: '', mime: '', dataUrl: null,
+})
 
 function openImageModal(): void {
   imageForm.value = {
     sectionId: p.activeSections.value[0]?.id ?? '',
-    filename: '',
+    filename: '', mime: '', dataUrl: null,
   }
   imageModalOpen.value = true
 }
 
-function mimeOf(filename: string): string {
-  const ext = filename.split('.').pop()?.toLowerCase() ?? ''
-  if (ext === 'png') return 'image/png'
-  if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg'
-  if (ext === 'webp') return 'image/webp'
-  if (ext === 'gif') return 'image/gif'
-  return 'application/octet-stream'
+async function onImageFileChange(ev: Event): Promise<void> {
+  const input = ev.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = '' // 同じファイルの再選択でも change を発火させる
+  if (!file) return
+  if (!file.type.startsWith('image/')) {
+    toast.show('画像ファイルを選択してください', 'warn')
+    return
+  }
+  imageBusy.value = true
+  try {
+    const uri = await imageToDataUri(file)
+    if (uri.length > IMAGE_MAX_CHARS) {
+      toast.show('画像を縮小しても大きすぎます。別の画像をお試しください', 'warn')
+      return
+    }
+    imageForm.value.dataUrl = uri
+    imageForm.value.filename = file.name
+    imageForm.value.mime = file.type
+  } catch (e) {
+    toast.show((e as Error).message, 'crit')
+  } finally {
+    imageBusy.value = false
+  }
 }
 
 function saveImage(): void {
   if (!selectedId.value) return
-  const filename = imageForm.value.filename.trim()
   if (!imageForm.value.sectionId) {
     toast.show('セクションを選択してください', 'crit')
     return
   }
-  if (!filename) {
-    toast.show('ファイル名を入力してください', 'crit')
+  if (!imageForm.value.dataUrl) {
+    toast.show('画像ファイルを選択してください', 'crit')
     return
   }
   const res = p.addImage(selectedId.value, {
     sectionId: imageForm.value.sectionId,
-    filename,
-    mime: mimeOf(filename),
-    dataUrl: null,
+    filename: imageForm.value.filename || 'image',
+    mime: imageForm.value.mime || 'image/*',
+    dataUrl: imageForm.value.dataUrl,
   })
   if (!res.ok) {
     toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
     return
   }
-  toast.show('画像プレースホルダを追加しました', 'ok')
+  toast.show('画像を登録しました（削除→復元で取り消せます）', 'ok')
   imageModalOpen.value = false
 }
 
@@ -369,21 +375,7 @@ function saveMatrix(): void {
           @row-click="openDetail"
         >
           <template #cell-thumb="{ row }">
-            <div
-              v-if="p.thumbnailOf(asProduct(row).id)"
-              class="flex h-8 w-8 items-center justify-center rounded text-[13px] font-bold"
-              :class="boxClass(asProduct(row).id)"
-              aria-hidden="true"
-            >
-              {{ firstChar(asProduct(row).name) }}
-            </div>
-            <div
-              v-else
-              class="flex h-8 w-8 items-center justify-center rounded border border-line bg-page text-muted"
-              aria-hidden="true"
-            >
-              <ImageIcon class="h-3.5 w-3.5" />
-            </div>
+            <AkebonoProductThumb :product-id="asProduct(row).id" :size="32" />
           </template>
           <template #cell-code="{ row }">
             <span class="num font-medium">{{ asProduct(row).code }}</span>
@@ -451,12 +443,19 @@ function saveMatrix(): void {
                   :key="img.id"
                   class="flex items-center gap-2 rounded border border-line p-2"
                 >
+                  <img
+                    v-if="img.dataUrl"
+                    :src="img.dataUrl"
+                    :alt="img.filename"
+                    class="h-10 w-10 shrink-0 rounded border border-line object-cover"
+                  >
                   <div
+                    v-else
                     class="flex h-10 w-10 shrink-0 items-center justify-center rounded text-[14px] font-bold"
-                    :class="boxClass(img.id)"
+                    :class="thumbBoxClass(img.id)"
                     aria-hidden="true"
                   >
-                    {{ firstChar(img.filename) }}
+                    {{ thumbFirstChar(img.filename) }}
                   </div>
                   <div class="min-w-0 flex-1">
                     <div class="truncate text-[12px] font-medium">{{ img.filename }}</div>
@@ -476,7 +475,7 @@ function saveMatrix(): void {
             </div>
           </div>
           <p class="mt-2 text-[11px] text-muted">
-            画像は色プレースホルダで表示しています。実ファイルのアップロードはモック対象外です。
+            画像ファイルを登録できます（縮小して保存）。未登録の画像は色プレースホルダで表示します。
           </p>
         </section>
 
@@ -545,16 +544,30 @@ function saveMatrix(): void {
             aria-label="画像セクション"
           />
         </UiFormField>
-        <UiFormField label="ファイル名" required>
-          <input v-model="imageForm.filename" type="text" class="input" placeholder="例）front.png" aria-label="ファイル名">
+        <UiFormField label="画像ファイル" required>
+          <input
+            type="file"
+            accept="image/*"
+            class="block w-full text-[12px] file:mr-3 file:rounded file:border file:border-line file:bg-surface-soft file:px-2 file:py-1 file:text-[12px]"
+            aria-label="画像ファイル"
+            @change="onImageFileChange"
+          >
         </UiFormField>
+        <div v-if="imageBusy" class="text-[12px] text-muted">画像を処理しています…</div>
+        <div v-else-if="imageForm.dataUrl" class="flex items-center gap-2">
+          <img :src="imageForm.dataUrl" :alt="imageForm.filename" class="h-16 w-16 rounded border border-line object-cover">
+          <div class="min-w-0">
+            <div class="truncate text-[12px] font-medium">{{ imageForm.filename }}</div>
+            <div class="text-[11px] text-muted">{{ imageForm.mime }}</div>
+          </div>
+        </div>
         <p class="text-[11px] text-muted">
-          実ファイルは保存せず、色プレースホルダを追加します（モック）。
+          選択した画像を縮小して保存します（JPEG/PNG。最大 {{ Math.round(IMAGE_MAX_CHARS / 1000) }}KB 相当）。
         </p>
       </div>
       <template #footer>
         <button type="button" class="btn btn-sm" @click="imageModalOpen = false">キャンセル</button>
-        <button type="button" class="btn btn-primary btn-sm" @click="saveImage">追加する</button>
+        <button type="button" class="btn btn-primary btn-sm" :disabled="imageBusy || !imageForm.dataUrl" @click="saveImage">追加する</button>
       </template>
     </UiModal>
 

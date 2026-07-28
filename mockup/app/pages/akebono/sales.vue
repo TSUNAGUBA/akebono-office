@@ -10,6 +10,7 @@ import { fmtDate, fmtPct, fmtYen, fmtYenCompact, todayJst } from '~/utils/format
 
 const sales = useAkebonoSales()
 const products = useProducts()
+const { effectiveSegmentId } = useCurrentSegment()
 const { tbl } = useMockDb()
 const { show } = useToast()
 const { ask } = useConfirm()
@@ -123,7 +124,8 @@ function openEntry(): void {
   entryForm.value = {
     salesDate: todayJst(),
     companyId: customerOptions.value[0]?.value ?? '',
-    segmentId: segmentFilter.value || (segmentOptions.value[0]?.value ?? ''),
+    // 既定は現在の業態（絞り込みが「全セグメント」でも現在業態を初期選択）
+    segmentId: segmentFilter.value || effectiveSegmentId.value || (segmentOptions.value[0]?.value ?? ''),
     skuId: skuOptions.value[0]?.value ?? '',
     qty: '',
     unitPrice: '',
@@ -266,7 +268,10 @@ const entryAmount = computed(() => {
             {{ segmentName(String(row.segmentId)) }}
           </template>
           <template #cell-skuId="{ row }">
-            {{ skuLabelOf(String(row.skuId)) }}
+            <div class="flex items-center gap-2">
+              <AkebonoProductThumb :sku-id="String(row.skuId)" :size="24" />
+              <span>{{ skuLabelOf(String(row.skuId)) }}</span>
+            </div>
           </template>
           <template #cell-qty="{ row }">
             <span class="num tabular-nums" :class="Number(row.qty) < 0 ? 'text-crit' : ''">{{ row.qty }}</span>

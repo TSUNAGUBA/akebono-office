@@ -15,6 +15,7 @@ import type { LineRow } from '~/components/widgets/AkebonoLineItems.vue'
 const out = useOutbound()
 const p = useProducts()
 const masters = useAkebonoMasters()
+const { effectiveSegmentId } = useCurrentSegment()
 const { tbl } = useMockDb()
 const toast = useToast()
 const confirm = useConfirm()
@@ -97,7 +98,7 @@ function openPlanCreate(): void {
   planForm.value = {
     companyId: customerOptions.value[0]?.value ?? '',
     warehouseId: warehouseOptions.value[0]?.value ?? '',
-    segmentId: segmentOptions.value[0]?.value ?? '',
+    segmentId: effectiveSegmentId.value || (segmentOptions.value[0]?.value ?? ''),
     dueDate: '',
     lines: [{ skuId: '', qty: 1 }],
   }
@@ -278,7 +279,12 @@ function saveResult(): void {
               </thead>
               <tbody>
                 <tr v-for="l in planLineRows" :key="l.id">
-                  <td>{{ l.name }}</td>
+                  <td>
+                    <div class="flex items-center gap-2">
+                      <AkebonoProductThumb :sku-id="l.skuId" :size="22" />
+                      <span>{{ l.name }}</span>
+                    </div>
+                  </td>
                   <td class="num text-right">{{ fmtInt(l.planned) }}</td>
                   <td class="num text-right">{{ fmtInt(l.shipped) }}</td>
                   <td class="num text-right" :class="l.remaining > 0 ? 'text-warn font-semibold' : 'text-muted'">

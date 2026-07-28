@@ -19,7 +19,7 @@ import type {
   ProductImage, ProductImageSection, ProductSku, ProductionOrder, PurchaseOrder, PurchaseRecord,
   SalesRecord, TaxRate, Unit, VariantAxisTemplate, Warehouse,
 } from '~/types/akebono'
-import { AKEBONO_APP_KEYS } from '~/utils/akebono'
+import { presetAppConfigsForSegments } from '~/utils/akebono'
 
 // ---------- 日付ヘルパー（今日基準・決定的） ----------
 
@@ -368,11 +368,9 @@ export const seedImportRuns: ImportRun[] = [
 
 export const seedItemSettings: ItemSetting[] = []
 
-// ---------- アプリ使用/不使用（全域を有効 = デモ全体像確認。§3.3 の自社プリセット + 陶磁器の出荷） ----------
+// ---------- アプリ使用/不使用（業態ごと。§3.3 の業種プリセットを業態別に適用） ----------
+// 各業態の業種タイプのプリセットで初期化する（一意キー = segmentId × appKey）。
+// 例: 陶磁器委託販売/アパレル（retail）= 生産・入荷・出荷は既定 OFF、SI/SaaS（it_service）= 入荷・出荷・在庫が既定 OFF。
+// これにより「業態ごとに使うアプリだけが並ぶ」= 毎回業態を意識しないハブになる。
 
-export const seedAkebonoAppConfigs: AkebonoAppConfig[] = AKEBONO_APP_KEYS.map(appKey => ({
-  appKey,
-  enabled: true,
-  labelOverride: null,
-  source: 'preset' as const,
-}))
+export const seedAkebonoAppConfigs: AkebonoAppConfig[] = presetAppConfigsForSegments(seedBusinessSegments)

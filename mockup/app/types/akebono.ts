@@ -517,8 +517,14 @@ export interface ItemSetting {
 
 // ---------- アプリ基盤（F-20） ----------
 
-/** アプリの使用/不使用・ラベルオーバーライド（設定系。§2.2） */
+/**
+ * アプリの使用/不使用・ラベルオーバーライド（設定系。§2.2）
+ * 業態（BusinessSegment）ごとに設定を保持する。一意キー = (segmentId, appKey)。
+ * これにより 1 テナントで複数業態のアプリ構成・表示名を業態別に管理できる。
+ */
 export interface AkebonoAppConfig {
+  /** 対象の業態（BusinessSegment.id）。業態ごとに独立した設定を持つ */
+  segmentId: string
   appKey: string
   enabled: boolean
   labelOverride: string | null

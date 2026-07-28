@@ -14,6 +14,7 @@ import { fmtDate, fmtInt, fmtYen } from '~/utils/format'
 const po = usePurchaseOrders()
 const products = useProducts()
 const { segmentOptions, segmentName } = useAkebonoMasters()
+const { effectiveSegmentId } = useCurrentSegment()
 const { tbl } = useMockDb()
 const toast = useToast()
 const confirm = useConfirm()
@@ -71,6 +72,7 @@ const detailLines = computed(() => {
   if (!o) return []
   return o.lines.map(l => ({
     id: l.id,
+    skuId: l.skuId,
     label: skuLabelOf(l.skuId),
     qty: l.qty,
     unitPrice: l.unitPrice,
@@ -121,7 +123,7 @@ const createForm = ref<{
 function openCreate(): void {
   createForm.value = {
     companyId: supplierOptions.value[0]?.value ?? '',
-    segmentId: segmentOptions.value[0]?.value ?? '',
+    segmentId: effectiveSegmentId.value || (segmentOptions.value[0]?.value ?? ''),
     orderDate: '',
     dueDate: '',
     note: '',
@@ -246,7 +248,10 @@ function submitCreate(): void {
               :key="l.id"
               class="grid grid-cols-[1fr_56px_88px_96px] items-center gap-2 border-b border-line pb-1.5 text-[13px] last:border-0"
             >
-              <span>{{ l.label }}</span>
+              <span class="flex min-w-0 items-center gap-2">
+                <AkebonoProductThumb :sku-id="l.skuId" :size="20" />
+                <span class="truncate">{{ l.label }}</span>
+              </span>
               <span class="num text-right tabular-nums">{{ fmtInt(l.qty) }}</span>
               <span class="num text-right tabular-nums">{{ fmtYen(l.unitPrice) }}</span>
               <span class="num text-right tabular-nums">{{ fmtYen(l.subtotal) }}</span>

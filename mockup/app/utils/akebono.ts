@@ -6,9 +6,9 @@
  * （第 2 巡決定 = 設定化）。ここに集約し、composable/画面はここを呼ぶ。
  */
 import type {
-  BillingType, ConsignmentTerm, IndustryType, InventoryTransaction, InventoryTxnKind,
-  InvoiceStatus, PayoutMethod, PlanStatus, PoStatus, ProductionStatus,
-  Rounding, SalesRecord, SettlementSnapshot, PartnerRole,
+  AkebonoAppConfig, BillingType, BusinessSegment, ConsignmentTerm, IndustryType,
+  InventoryTransaction, InventoryTxnKind, InvoiceStatus, PayoutMethod, PlanStatus,
+  PoStatus, ProductionStatus, Rounding, SalesRecord, SettlementSnapshot, PartnerRole,
 } from '~/types/akebono'
 import type { Company } from '~/types/domain'
 import type { Tone } from '~/types/ui'
@@ -266,4 +266,48 @@ export function presetAppsFor(industryTypes: IndustryType[]): AkebonoAppKey[] {
   const set = new Set<AkebonoAppKey>()
   for (const it of industryTypes) for (const app of INDUSTRY_PRESET[it]) set.add(app)
   return AKEBONO_APP_KEYS.filter(k => set.has(k))
+}
+
+/** 1 業態の使用アプリ既定（その業態の業種タイプ単独のプリセット） */
+export function presetAppsForSegment(segment: Pick<BusinessSegment, 'industryType'>): AkebonoAppKey[] {
+  return presetAppsFor([segment.industryType])
+}
+
+// ---------- 業態コンテキスト（マルチ業態。F-20 拡張） ----------
+
+/**
+ * 「現在の業態」を解決する純関数。
+ * - 指定 id が有効な業態にあればそれを、無ければ先頭の業態を、業態が無ければ '' を返す。
+ * - ヘッダの業態スイッチャ・各アプリの既定業態（毎回選ばせない導線）で共有する。
+ */
+export function resolveDefaultSegmentId(
+  currentId: string | null | undefined,
+  activeSegments: Pick<BusinessSegment, 'id'>[],
+): string {
+  if (currentId && activeSegments.some(s => s.id === currentId)) return currentId
+  return activeSegments[0]?.id ?? ''
+}
+
+/**
+ * 業態ごとの初期アプリ設定を生成する（シード・新規業態の初期化で共有）。
+ * 各業態の業種タイプのプリセットに含まれるアプリを enabled=true にする。
+ * 一意キー = (segmentId, appKey)。
+ */
+export function presetAppConfigsForSegments(
+  segments: Pick<BusinessSegment, 'id' | 'industryType'>[],
+): AkebonoAppConfig[] {
+  const configs: AkebonoAppConfig[] = []
+  for (const seg of segments) {
+    const preset = new Set(presetAppsForSegment(seg))
+    for (const appKey of AKEBONO_APP_KEYS) {
+      configs.push({
+        segmentId: seg.id,
+        appKey,
+        enabled: preset.has(appKey),
+        labelOverride: null,
+        source: 'preset',
+      })
+    }
+  }
+  return configs
 }

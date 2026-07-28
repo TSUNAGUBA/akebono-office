@@ -6,7 +6,7 @@
 - **要件:** `../phase3/akebono-menu-functional-requirements.md`（F-20〜F-33）
 - **SoT 宣言:** 本書は Akebonoメニュー（業務アプリ群）の設計 SoT。既存 `data-design.md` / `api-design.md` / `architecture.md` / `screen-design.md`（オフィス系機能の SoT）は変更せず、承認後に相互参照を追記する。akebono-scm-platform `docs/platform-design/`（プラットフォーム統合設計）と将来整合させるべき点は各節に「PF 整合」として明記する
 - **未決事項:** ゼロ（2026-07-20 時点。決定記録は `../phase3/akebono-menu-discussion-points.md` 冒頭。本文の #n は同ファイルの論点番号を指す）
-- **改訂:** 2026-07-20 壁打ち第 1 巡のオペレーター決定（同ファイル冒頭の決定記録 #1〜#14）を反映。主な設計変更 = 画像セクションの設定化（#10）・tenant_id の v1 先行導入（#11）・委託精算方向の確定（#5）。同日第 2 巡で #5 付帯確認 3 点を**設定化**（委託条件マスタの支払算定方式・債務確定・税設定）で決定・反映（未決ゼロ）
+- **改訂:** 2026-07-20 壁打ち第 1 巡のオペレーター決定（同ファイル冒頭の決定記録 #1〜#14）を反映。主な設計変更 = 画像セクションの設定化（#10）・tenant_id の v1 先行導入（#11）・委託精算方向の確定（#5）。同日第 2 巡で #5 付帯確認 3 点を**設定化**（委託条件マスタの支払算定方式・債務確定・税設定）で決定・反映（未決ゼロ）。**2026-07-28 増分:** マルチ業態対応（§2.2「マルチ業態」= アプリ設定を業態ごとに保持 + 現在業態コンテキストで配下アプリの既定業態を統一）と商品画像の実登録（data URI）・各トランザクションでのサムネイル表示（F-21-3 の実装拡張）を反映
 
 ---
 
@@ -80,9 +80,9 @@ Phase 5 の反復（I/F 設計 ⇄ プロトタイプ）は既存と同じくモ
 ```mermaid
 flowchart TD
     CAT[アプリカタログ（コード上のレジストリ）<br/>akebono-app-registry.ts] --> RES
-    SEG[事業セグメントマスタ<br/>business_segments] -->|業種タイプ| PRE[業種プリセット<br/>（カタログ内定義）]
-    PRE -->|既定 ON の和集合| RES
-    CFG[アプリ使用設定<br/>akebono_app_configs] -->|管理者の ON/OFF が最優先| RES
+    SEG[事業セグメントマスタ<br/>business_segments<br/>= 現在の業態コンテキスト] -->|業種タイプ| PRE[業種プリセット<br/>（カタログ内定義・業態単独）]
+    PRE -->|業態別の既定 ON| RES
+    CFG[アプリ使用設定<br/>akebono_app_configs<br/>業態ごと = segmentId × appKey] -->|管理者の業態別 ON/OFF が最優先| RES
     RES{アプリ導入判定<br/>installed?} -->|yes| PERM{F-16 権限<br/>canUseFeature?}
     PERM -->|allow| MENU[メニュー表示 + API 許可]
     PERM -->|deny| HIDE1[非表示 + 403 AKO-PRM-001]
@@ -90,17 +90,19 @@ flowchart TD
 ```
 
 - **判定は 2 段**: ① テナント導入状態（`akebono_app_configs`。scm-platform の `tenant_application` に相当）② 利用者権限（既存 F-16。同 `entitlement`/RBAC に相当）。**新しい権限機構は作らない**
-- カタログ（アプリキー・名称・説明・業種プリセット・依存・既定ラベル）は**コード上のレジストリが SoT**（menu-registry.ts と同型）。DB はテナントの選択（ON/OFF・ラベルオーバーライド）だけを持つ → プリセット改訂がデプロイで配れる
+- カタログ（アプリキー・名称・説明・業種プリセット・依存・既定ラベル）は**コード上のレジストリが SoT**（menu-registry.ts と同型）。DB は**業態ごとの**選択（ON/OFF・ラベルオーバーライド）だけを持つ → プリセット改訂がデプロイで配れる
 - ダッシュボード（F-01-1）には「AKEBONO業務」カテゴリで使用中アプリを表示（F-13-8 のカテゴリカスタマイズに乗る）。nav-map に親（/akebono）・関連（各マスタ・設定）を追加
 
 ### 2.2 エンティティ
 
 | エンティティ | 主要属性 | 分類 |
 |---|---|---|
-| `AkebonoAppConfig` | appKey（レジストリ参照・一意）, enabled, labelOverride?, source(`preset`/`manual`), updatedBy | 設定系（upsert。監査ログ記録） |
+| `AkebonoAppConfig` | **segmentId（業態参照）**, appKey（レジストリ参照）, enabled, labelOverride?, source(`preset`/`manual`), updatedBy | 設定系（upsert。監査ログ記録）。**一意キー = (segmentId, appKey)** |
 | `BusinessSegment` | id, name, industryType(`retail`/`maker`/`logistics`/`it_service`/`other`), displayOrder, active | マスタ系（論理削除。**使用中セグメントの無効化は伝票参照チェックで拒否**） |
 
 プリセット適用（F-20-4）は「現状とプリセットの差分を提示 → 管理者確認 → 適用」のフローで、**確認なしの自動 OFF はしない**（既存設定の保護 = 原則 2）。
+
+**マルチ業態（2026-07-28 拡張）:** 1 テナントで複数業態を扱えるよう、アプリ設定は**業態ごとに保持**する（従来はテナント一律・全業態の業種タイプの和集合プリセット）。各業態の使用アプリ・ラベルは独立に設定でき、業種プリセットは**その業態の業種タイプ単独**で適用する（`presetAppsForSegment`）。加えて「現在の業態」をユーザー単位で保持する軽量コンテキスト（`useCurrentSegment`。ヘッダの業態スイッチャ）を設け、配下アプリ（売上・商品・発注・仕入・出荷・在庫）の一覧絞り込み・新規登録の既定業態に使う。**毎回業態を選ばせない導線**とし、各画面での「全セグメント」や他業態への切替は残す（非破壊 = 原則 2）。純関数 `resolveDefaultSegmentId`（無効/削除 id は先頭業態へフォールバック）・`presetAppConfigsForSegments`（業態別初期設定生成）に集約し単体テスト対象とする。**下位互換（原則 7）:** モックは `SEED_VERSION` 更新で業態別シードへ再生成。本実装移行時は既存 `akebono_app_configs` 行に `segment_id` を付与するデータ更新パッチ（各テナントの `business_segments` へ複製）をオペレーターへ提示する。
 
 ---
 

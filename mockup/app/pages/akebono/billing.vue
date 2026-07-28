@@ -14,6 +14,7 @@ import { fmtDateTime, fmtYen } from '~/utils/format'
 const con = useConsignment()
 const sales = useAkebonoSales()
 const masters = useAkebonoMasters()
+const { effectiveSegmentId } = useCurrentSegment()
 const { show } = useToast()
 const { ask } = useConfirm()
 
@@ -140,7 +141,9 @@ function runReceipt(): void {
 const closeConsignOpen = ref(false)
 const closeConsignForm = ref({ segmentId: '', month: currentMonth })
 function openCloseConsign(): void {
-  closeConsignForm.value = { segmentId: consignSegmentOptions.value[0]?.value ?? '', month: currentMonth }
+  // 既定は現在の業態（委託条件がある場合）。無ければ委託対象の先頭業態。
+  const preferred = consignSegmentOptions.value.find(o => o.value === effectiveSegmentId.value)?.value
+  closeConsignForm.value = { segmentId: preferred ?? consignSegmentOptions.value[0]?.value ?? '', month: currentMonth }
   closeConsignOpen.value = true
 }
 function runCloseConsign(): void {
