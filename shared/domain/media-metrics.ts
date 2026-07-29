@@ -44,13 +44,15 @@ export interface MediaPageStat {
   pageviews: number
   users: number
   avgEngagementSec: number
-  entrances: number
   bounceRate: number
   convRate: number
   conversions: number
   /** 前期間の表示数（増減の算出用） */
   prevPageviews: number
 }
+// 注: 旧フィールド entrances は削除（2026-07-29）。GA4 Data API に存在しない無効メトリクスで
+// （本番 GA 応答で確定）、UI・インサイト生成のどこにも消費実績がなかった。保管済みインサイトの
+// metrics jsonb に残る旧 entrances キーは読み飛ばされるだけで無害（下位互換 = 原則7）
 
 export interface MediaChannelStat { channel: string; sessions: number; conversions: number }
 export interface MediaDeviceStat { device: string; sessions: number }
@@ -148,13 +150,12 @@ function pageStatOf(
   const users = Math.max(1, Math.round(pv * (0.62 + unit(`${seed}:u:${a.id}`) * 0.18)))
   const avgEngagementSec = Math.round(35 + unit(`${seed}:eng:${a.id}`) * 195)
   const bounceRate = Math.round((0.30 + unit(`${seed}:b:${a.id}`) * 0.42) * 1000) / 1000
-  const entrances = Math.round(pv * (0.28 + unit(`${seed}:ent:${a.id}`) * 0.34))
   const convRate = Math.round(
     (sectionConvBase(a.section) * (0.6 + unit(`${seed}:cv:${a.id}`) * 1.1)) * 10000) / 10000
   const conversions = Math.round(users * convRate)
   return {
     id: a.id, title: a.title, path: a.path, section: a.section,
-    pageviews: pv, users, avgEngagementSec, entrances, bounceRate, convRate, conversions, prevPageviews: prevPv,
+    pageviews: pv, users, avgEngagementSec, bounceRate, convRate, conversions, prevPageviews: prevPv,
   }
 }
 

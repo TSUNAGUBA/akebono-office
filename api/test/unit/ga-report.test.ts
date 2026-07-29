@@ -115,10 +115,10 @@ describe('buildMediaMetrics', () => {
         [['mobile'], [600]], [['desktop'], [350]], [['tablet'], [50]],
       ]),
       topPages: report(['pagePath', 'pageTitle'],
-        ['screenPageViews', 'totalUsers', 'userEngagementDuration', 'entrances', 'bounceRate', 'keyEvents'], [
-          [['/blog/hello', 'こんにちは'], [800, 600, 48000, 300, '0.42', 12]],
-          [['/service/', 'サービス'], [400, 350, 20000, 150, '0.3', 20]],
-          [['/news/x', ''], [100, 90, 3000, 40, '0.5', 0]],
+        ['screenPageViews', 'totalUsers', 'userEngagementDuration', 'bounceRate', 'keyEvents'], [
+          [['/blog/hello', 'こんにちは'], [800, 600, 48000, '0.42', 12]],
+          [['/service/', 'サービス'], [400, 350, 20000, '0.3', 20]],
+          [['/news/x', ''], [100, 90, 3000, '0.5', 0]],
         ]),
       prevPages: report(['pagePath'], ['screenPageViews'], [
         [['/blog/hello'], [700]],
@@ -184,9 +184,9 @@ describe('buildMediaMetrics', () => {
       channels: null,
       devices: null,
       topPages: report(['pagePath', 'pageTitle'],
-        ['screenPageViews', 'totalUsers', 'userEngagementDuration', 'entrances', 'bounceRate', 'keyEvents'], [
-          [['/service/', 'サービス'], [200, 150, 8000, 60, '0.3', 6]],
-          [['/blog/new', '新記事'], [100, 90, 2000, 30, '0.5', 1]],
+        ['screenPageViews', 'totalUsers', 'userEngagementDuration', 'bounceRate', 'keyEvents'], [
+          [['/service/', 'サービス'], [200, 150, 8000, '0.3', 6]],
+          [['/blog/new', '新記事'], [100, 90, 2000, '0.5', 1]],
         ]),
       prevPages: report(['pagePath'], ['screenPageViews'], [[['/service'], [180]]]),
     }, opts)
@@ -202,12 +202,12 @@ describe('buildMediaMetrics', () => {
       channels: null,
       devices: null,
       topPages: report(['pagePath', 'pageTitle'],
-        ['screenPageViews', 'totalUsers', 'userEngagementDuration', 'entrances', 'bounceRate', 'keyEvents'], [
+        ['screenPageViews', 'totalUsers', 'userEngagementDuration', 'bounceRate', 'keyEvents'], [
           // タイトル改題で同一 URL が 2 行 + 末尾スラッシュ揺れで 1 行（= 3 行が 1 エントリに集約されるべき）
-          [['/blog/hello', '旧タイトル'], [300, 200, 9000, 90, '0.4', 6]],
-          [['/blog/hello', '新タイトル（改題後）'], [500, 250, 20000, 150, '0.3', 12]],
-          [['/blog/hello/', '旧タイトル'], [100, 50, 3000, 30, '0.5', 3]],
-          [['/news/x', 'お知らせ'], [100, 90, 2000, 40, '0.5', 0]],
+          [['/blog/hello', '旧タイトル'], [300, 200, 9000, '0.4', 6]],
+          [['/blog/hello', '新タイトル（改題後）'], [500, 250, 20000, '0.3', 12]],
+          [['/blog/hello/', '旧タイトル'], [100, 50, 3000, '0.5', 3]],
+          [['/news/x', 'お知らせ'], [100, 90, 2000, '0.5', 0]],
         ]),
       prevPages: report(['pagePath'], ['screenPageViews'], [[['/blog/hello'], [700]]]),
     }, opts)
@@ -216,7 +216,6 @@ describe('buildMediaMetrics', () => {
     const hello = m.topPages.find(p => p.path === '/blog/hello')!
     expect(hello.pageviews).toBe(900) // 300 + 500 + 100
     expect(hello.conversions).toBe(21)
-    expect(hello.entrances).toBe(270)
     expect(hello.title).toBe('新タイトル（改題後）') // 代表タイトル = PV 最大の行
     expect(hello.avgEngagementSec).toBe(Math.round((9000 + 20000 + 3000) / 900))
     expect(hello.bounceRate).toBe(Math.round((0.4 * 300 + 0.3 * 500 + 0.5 * 100) / 900 * 1000) / 1000)
@@ -235,8 +234,8 @@ describe('buildMediaMetrics', () => {
       channels: null,
       devices: null,
       topPages: report(['pagePath', 'pageTitle'],
-        ['screenPageViews', 'totalUsers', 'userEngagementDuration', 'entrances', 'bounceRate', 'keyEvents'], [
-          [['/x', ''], [10, 0, 0, 0, '0', 0]],
+        ['screenPageViews', 'totalUsers', 'userEngagementDuration', 'bounceRate', 'keyEvents'], [
+          [['/x', ''], [10, 0, 0, '0', 0]],
         ]),
       prevPages: null,
     }, opts)
@@ -266,9 +265,9 @@ describe('buildMediaMetrics', () => {
       channels: null,
       devices: null,
       topPages: report(['pagePath', 'pageTitle'],
-        ['screenPageViews', 'totalUsers', 'userEngagementDuration', 'entrances', 'bounceRate', 'keyEvents'], [
-          [['/blog/hello', 'A'], [400, 300, 16000, 100, '0.4', 6]],
-          [['/service/', 'B'], [200, 150, 8000, 60, '0.3', 20]],
+        ['screenPageViews', 'totalUsers', 'userEngagementDuration', 'bounceRate', 'keyEvents'], [
+          [['/blog/hello', 'A'], [400, 300, 16000, '0.4', 6]],
+          [['/service/', 'B'], [200, 150, 8000, '0.3', 20]],
           [['/news/x', 'C'], [100, 90, 2000, 30, '0.5', 0]],
         ]),
       prevPages: null,

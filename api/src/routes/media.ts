@@ -396,7 +396,10 @@ export async function fetchMediaMetrics(
       request: {
         dateRanges: [dateRange(periodFrom, periodTo)],
         dimensions: ['pagePath', 'pageTitle'].map(dimension),
-        metrics: ['screenPageViews', 'totalUsers', 'userEngagementDuration', 'entrances', 'bounceRate', 'keyEvents'].map(metric),
+        // 注意: `entrances` は GA4 Data API の**無効メトリクス**（本番 GA 応答「Field entrances is not a
+        // valid metric」で確定 = 記事別レポート単体失敗の根本原因。2026-07-29）。UA 時代の名前で GA4 UI には
+        // 表示があるが Data API には存在しない。UI・インサイトの消費実績もないため型ごと削除した
+        metrics: ['screenPageViews', 'totalUsers', 'userEngagementDuration', 'bounceRate', 'keyEvents'].map(metric),
         orderBys: [{ metric: { metricName: 'screenPageViews' }, desc: true }],
         // セクション集計は「サイト全体の内訳」として表示するため全ページ母集団が必要（Codex 指摘 3）。
         // 表示上限（topPages 12 件）は整形側の slice が担い、レスポンス/キャッシュには整形後の
