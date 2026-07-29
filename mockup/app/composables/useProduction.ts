@@ -2,6 +2,8 @@
  * 生産管理（F-22。v1 = 指示 + 実績 + 在庫連動の薄い実装）
  * 情報サービス業は「案件/開発タスク × 工数」に読み替え（ラベルは F-20-6。在庫連動なし）。
  * 状態機械 draft→instructed→in_progress→completed / canceled。完成 → 在庫へ入庫（production_in）。
+ * デュアルモード（Phase C = 0032）: API モードの SoT はサーバー（production_orders +
+ * inventory_transactions）。実績登録は 1 リクエストで実績追記 + 在庫入庫 + ステータス更新（トランザクション）。
  */
 import type { ProductionOrder, ProductionResult, ProductionStatus } from '~/types/akebono'
 import type { Result } from '~/types/domain'
@@ -11,6 +13,7 @@ export function useProduction() {
   const { tbl, commit, nextId } = useMockDb()
   const orders = tbl('productionOrders')
   const inv = useInventory()
+  const isApi = useApiMode()
 
   const activeOrders = computed(() => orders.value.slice().sort((a, b) => (a.dueDate < b.dueDate ? 1 : -1)))
   function orderById(id: string): ProductionOrder | undefined {
@@ -20,9 +23,13 @@ export function useProduction() {
     return o.results.reduce((s, r) => s + r.completedQty, 0)
   }
 
-  function createOrder(input: { skuId: string; qty: number; warehouseId: string; dueDate: string }): Result {
+  async function createOrder(input: { skuId: string; qty: number; warehouseId: string; dueDate: string }): Promise<Result> {
     if (!input.skuId) return { ok: false, error: { code: 'AKO-MFG-001', message: '対象 SKU を指定してください' } }
     if (!Number.isFinite(input.qty) || input.qty <= 0) return { ok: false, error: { code: 'AKO-MFG-002', message: '数量を正しく入力してください' } }
+    if (isApi) {
+      const res = await apiWrite<ProductionOrder>('/v1/akebono/production-orders', { body: input, reload: ['productionOrders'] })
+      return res.ok ? { ok: true, id: res.data.id } : res
+    }
     const id = nextId('productionOrders', 'mfg')
     const created: ProductionOrder = {
       id, code: nextCode(orders.value.map(o => o.code), 'MFG'),
@@ -41,7 +48,10 @@ export function useProduction() {
     completed: [],
     canceled: [],
   }
-  function setStatus(id: string, status: ProductionStatus): Result {
+  async function setStatus(id: string, status: ProductionStatus): Promise<Result> {
+    if (isApi) {
+      return apiWrite(`/v1/akebono/production-orders/${id}/status`, { body: { status }, reload: ['productionOrders'] })
+    }
     const o = orderById(id)
     if (!o) return { ok: false, error: { code: 'AKO-GEN-002', message: '対象が見つかりません' } }
     if (!NEXT[o.status].includes(status)) return { ok: false, error: { code: 'AKO-MFG-003', message: `「${o.status}」から遷移できません` } }
@@ -51,7 +61,13 @@ export function useProduction() {
   }
 
   /** 生産実績を登録（追記）。完成分を在庫へ入庫（production_in）。全数完成で completed */
-  function registerResult(id: string, input: { completedQty: number; defectQty: number }): Result {
+  async function registerResult(id: string, input: { completedQty: number; defectQty: number }): Promise<Result> {
+    if (isApi) {
+      const res = await apiWrite<ProductionOrder>(`/v1/akebono/production-orders/${id}/results`, {
+        body: input, reload: ['productionOrders', 'inventoryTransactions', 'inventoryBalances'],
+      })
+      return res.ok ? { ok: true, id: res.data.id } : res
+    }
     const o = orderById(id)
     if (!o) return { ok: false, error: { code: 'AKO-GEN-002', message: '対象が見つかりません' } }
     if (o.status !== 'in_progress' && o.status !== 'instructed') {

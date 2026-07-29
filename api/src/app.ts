@@ -13,6 +13,8 @@ import { errorResponse } from './lib/errors'
 import { featureGuard } from './lib/permissions'
 import { aiCompanyRoutes } from './routes/ai-company'
 import { akebonoRoutes } from './routes/akebono'
+import { akebonoBillingRoutes } from './routes/akebono-billing'
+import { akebonoTradeRoutes } from './routes/akebono-trade'
 import { attendanceRoutes } from './routes/attendance'
 import { configsRoutes } from './routes/configs'
 import { escalationsRoutes } from './routes/escalations'
@@ -152,6 +154,9 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
   app.route('/v1/sales', salesRoutes(pool))
   app.route('/v1/status', statusRoutes(pool))
   app.route('/v1/akebono', akebonoRoutes(pool))
+  // Phase C（0032）: 記録系。同一 /v1/akebono 配下に取引系・売上/請求系を追加マウント
+  app.route('/v1/akebono', akebonoTradeRoutes(pool))
+  app.route('/v1/akebono', akebonoBillingRoutes(pool))
   app.route('/v1/holidays', holidaysRoutes(pool))
   app.route('/v1/search', searchRoutes(pool, env))
   app.route('/v1/notes', notesRoutes(pool, env))

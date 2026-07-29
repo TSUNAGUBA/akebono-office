@@ -430,15 +430,8 @@ const SEVERITY_META: Record<string, { label: string; tone: 'crit' | 'warn' | 'in
         </UiEmptyState>
       </template>
       <template v-else-if="activeTab === 'pdca' && integrated">
-        <!-- 売上・受注軸は未移行の salesRecords（デモデータ）。実 GA 流入との合成である旨を明示する
-             （M3。ダッシュボード（F-41）のモックバッジと基準を揃える。salesRecords の API 移行時に撤去） -->
-        <p
-          v-if="isApi"
-          class="flex flex-wrap items-center gap-2 rounded-lg border border-warn/40 bg-warn-soft px-3 py-1.5 text-[12px] text-sub"
-        >
-          <UiMockBadge label="売上・受注 = デモデータ" />
-          メディア指標（セッション・CV）は Google Analytics の実データ、売上・受注は未移行のデモデータです。
-        </p>
+        <!-- Phase C で売上・受注軸も実データ化（sales_records = サーバー SoT のサーバー組み立て）
+             = 旧「売上・受注 = デモデータ」バッジ・注記は撤去（M3 の撤去条件成立） -->
         <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
           <UiKpiCard
             label="セッション（対象月）" :value="fmtInt(integrated.sessions)"

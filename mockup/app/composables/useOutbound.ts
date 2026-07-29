@@ -4,6 +4,8 @@
  * 実績（OutboundResult・記録系・追記のみ・部分実績可・指示参照 or 直接登録）を分離。
  * 実績登録で自社倉庫から出庫（−）。出荷先が店舗（store_deposit 倉庫を持つ）の場合は
  * 預け在庫へ移動（transfer_in +）を同時に post。
+ * デュアルモード（Phase C = 0032）: API モードの SoT はサーバー（outbound_plans / outbound_results +
+ * inventory_transactions）。在庫不足チェック・店舗預け移動・予定ステータス再計算はサーバーが担う。
  */
 import type { OutboundPlan, OutboundResult, PlanStatus, Warehouse } from '~/types/akebono'
 import type { Company } from '~/types/domain'
@@ -18,6 +20,7 @@ export function useOutbound() {
   const warehouses = tbl('warehouses')
   const companies = tbl('companies')
   const inv = useInventory()
+  const isApi = useApiMode()
 
   const activePlans = computed(() => plans.value.slice().sort((a, b) => (a.dueDate < b.dueDate ? 1 : -1)))
 
@@ -43,12 +46,16 @@ export function useOutbound() {
     return warehouses.value.find(w => w.kind === 'store_deposit' && w.companyId === companyId && w.active !== false) ?? null
   }
 
-  function createPlan(input: { companyId: string; warehouseId: string; segmentId: string; dueDate: string; lines: { skuId: string; qty: number }[] }): Result {
+  async function createPlan(input: { companyId: string; warehouseId: string; segmentId: string; dueDate: string; lines: { skuId: string; qty: number }[] }): Promise<Result> {
     if (!input.companyId) return { ok: false, error: { code: 'AKO-OUT-001', message: '出荷先を指定してください' } }
     if (!input.warehouseId) return { ok: false, error: { code: 'AKO-OUT-001', message: '出荷元倉庫を指定してください' } }
     if (!input.segmentId) return { ok: false, error: { code: 'AKO-OUT-001', message: '事業セグメントを指定してください' } }
     const lines = input.lines.filter(l => l.skuId && l.qty > 0)
     if (lines.length === 0) return { ok: false, error: { code: 'AKO-OUT-002', message: '出荷明細を 1 行以上入力してください' } }
+    if (isApi) {
+      const res = await apiWrite<OutboundPlan>('/v1/akebono/outbound-plans', { body: { ...input, lines }, reload: ['outboundPlans'] })
+      return res.ok ? { ok: true, id: res.data.id } : res
+    }
     const id = nextId('outboundPlans', 'obp')
     const created: OutboundPlan = {
       id, code: nextCode(plans.value.map(p => p.code), 'OBP'),
@@ -71,7 +78,13 @@ export function useOutbound() {
   }
 
   /** 出荷実績を登録（記録系・追記）。出庫（−）+ 店舗預け移動（+）を post */
-  function registerResult(input: { planId?: string | null; warehouseId?: string; companyId?: string | null; lines: { planLineId?: string | null; skuId: string; qty: number }[] }): Result {
+  async function registerResult(input: { planId?: string | null; warehouseId?: string; companyId?: string | null; lines: { planLineId?: string | null; skuId: string; qty: number }[] }): Promise<Result> {
+    if (isApi) {
+      const res = await apiWrite<OutboundResult>('/v1/akebono/outbound-results', {
+        body: input, reload: ['outboundResults', 'inventoryTransactions', 'inventoryBalances', 'outboundPlans'],
+      })
+      return res.ok ? { ok: true, id: res.data.id } : res
+    }
     const plan = input.planId ? planById(input.planId) : undefined
     const warehouseId = plan?.warehouseId ?? input.warehouseId
     const companyId = plan?.companyId ?? input.companyId ?? null
@@ -118,7 +131,8 @@ export function useOutbound() {
   }
 
   /** 取消（赤伝相当 = ステータス。単独 DELETE はしない） */
-  function cancelPlan(id: string): Result {
+  async function cancelPlan(id: string): Promise<Result> {
+    if (isApi) return apiWrite(`/v1/akebono/outbound-plans/${id}/cancel`, { reload: ['outboundPlans'] })
     const plan = planById(id)
     if (!plan) return { ok: false, error: { code: 'AKO-GEN-002', message: '対象が見つかりません' } }
     if (resultsOfPlan(id).length > 0) return { ok: false, error: { code: 'AKO-OUT-003', message: '出荷実績のある指示は取消できません' } }

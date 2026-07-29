@@ -461,13 +461,15 @@ export interface PaymentNotice {
   snapshot: SettlementSnapshot
 }
 
-/** 入金消込（F-29-3。記録系。部分入金可） */
+/** 入金消込（F-29-3。記録系。部分入金可。取消 = 監査列付き論理取消 = 原則9.5） */
 export interface PaymentReceipt {
   id: string
   invoiceId: string
   receivedAt: string
   amount: number
   method: string
+  /** 取消日時（null/未設定 = 有効。有効入金のみ消込集計の対象） */
+  voidedAt?: string | null
 }
 
 // ---------- データ取込（F-32） ----------

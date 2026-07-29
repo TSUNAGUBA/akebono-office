@@ -16,6 +16,8 @@ const outbound = useOutbound()
 const p = useProducts()
 const masters = useAkebonoMasters()
 const toast = useToast()
+// 二重送信ガード(Phase C: API 書込の重複作成防止。§34 の実行中フィードバック)
+const busy = ref(false)
 const confirm = useConfirm()
 
 // ---------- 論理在庫（F-27-5: 実在庫 + 未完了入荷予定 − 未完了出荷指示） ----------
@@ -111,6 +113,12 @@ function openAdjust(): void {
 }
 
 async function submitAdjust(): Promise<void> {
+  if (busy.value) return
+  busy.value = true
+  try { await submitAdjustInner() } finally { busy.value = false }
+}
+
+async function submitAdjustInner(): Promise<void> {
   const f = adjustForm.value
   const qty = Number(f.qty)
   if (!f.skuId || !f.warehouseId) {
@@ -127,7 +135,7 @@ async function submitAdjust(): Promise<void> {
     { confirmLabel: '調整する' },
   )
   if (!ok) return
-  const res = inv.adjust({ skuId: f.skuId, warehouseId: f.warehouseId, qty, reason: f.reason as InventoryAdjustReason })
+  const res = await inv.adjust({ skuId: f.skuId, warehouseId: f.warehouseId, qty, reason: f.reason as InventoryAdjustReason })
   if (!res.ok) {
     toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
     return
@@ -157,6 +165,12 @@ const transferAvail = computed(() => {
 })
 
 async function submitTransfer(): Promise<void> {
+  if (busy.value) return
+  busy.value = true
+  try { await submitTransferInner() } finally { busy.value = false }
+}
+
+async function submitTransferInner(): Promise<void> {
   const f = transferForm.value
   const qty = Number(f.qty)
   if (!f.skuId || !f.fromWarehouseId || !f.toWarehouseId) {
@@ -173,7 +187,7 @@ async function submitTransfer(): Promise<void> {
     { confirmLabel: '移動する' },
   )
   if (!ok) return
-  const res = inv.transfer({
+  const res = await inv.transfer({
     skuId: f.skuId,
     fromWarehouseId: f.fromWarehouseId,
     toWarehouseId: f.toWarehouseId,
@@ -255,6 +269,12 @@ const stChangedCount = computed(() =>
 )
 
 async function submitStocktake(): Promise<void> {
+  if (busy.value) return
+  busy.value = true
+  try { await submitStocktakeInner() } finally { busy.value = false }
+}
+
+async function submitStocktakeInner(): Promise<void> {
   if (!stWh.value) {
     toast.show('倉庫を選択してください', 'crit')
     return
@@ -275,7 +295,7 @@ async function submitStocktake(): Promise<void> {
     { confirmLabel: '棚卸を確定' },
   )
   if (!ok) return
-  const res = inv.stocktake(stWh.value, counts)
+  const res = await inv.stocktake(stWh.value, counts)
   if (!res.ok) {
     toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
     return
@@ -317,6 +337,7 @@ async function submitStocktake(): Promise<void> {
           :columns="browseColumns"
           :rows="browseRows"
           empty-title="在庫のある SKU × 倉庫がありません"
+          empty-hint="入荷実績・仕入計上・生産実績・在庫調整で入庫すると残高が表示されます"
         >
           <template #cell-skuLabel="{ row }">
             <div class="flex items-center gap-2">
@@ -379,7 +400,7 @@ async function submitStocktake(): Promise<void> {
         </div>
         <template #trailing>
           <span class="text-[12px] text-muted">差分あり <span class="num font-semibold text-ink">{{ stChangedCount }}</span> 件</span>
-          <button type="button" class="btn btn-primary btn-sm" @click="submitStocktake">
+          <button type="button" class="btn btn-primary btn-sm" :disabled="busy" @click="submitStocktake">
             <ClipboardCheck class="h-3.5 w-3.5" aria-hidden="true" /> 棚卸を確定
           </button>
         </template>
@@ -453,7 +474,7 @@ async function submitStocktake(): Promise<void> {
       </div>
       <template #footer>
         <button type="button" class="btn btn-sm" @click="adjustOpen = false">キャンセル</button>
-        <button type="button" class="btn btn-primary btn-sm" @click="submitAdjust">調整する</button>
+        <button type="button" class="btn btn-primary btn-sm" :disabled="busy" @click="submitAdjust">調整する</button>
       </template>
     </UiModal>
 
@@ -477,7 +498,7 @@ async function submitStocktake(): Promise<void> {
       </div>
       <template #footer>
         <button type="button" class="btn btn-sm" @click="transferOpen = false">キャンセル</button>
-        <button type="button" class="btn btn-primary btn-sm" @click="submitTransfer">移動する</button>
+        <button type="button" class="btn btn-primary btn-sm" :disabled="busy" @click="submitTransfer">移動する</button>
       </template>
     </UiModal>
   </div>

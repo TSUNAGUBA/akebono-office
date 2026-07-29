@@ -16,6 +16,8 @@ const sales = useAkebonoSales()
 const masters = useAkebonoMasters()
 const { effectiveSegmentId } = useCurrentSegment()
 const { show } = useToast()
+// 二重送信ガード(Phase C: API 書込の重複作成防止。§34 の実行中フィードバック)
+const busy = ref(false)
 const { ask } = useConfirm()
 
 // ---------- タブ ----------
@@ -80,11 +82,17 @@ function openCloseBill(): void {
   }
   closeBillOpen.value = true
 }
-function runCloseBill(): void {
+async function runCloseBill(): Promise<void> {
+  if (busy.value) return
+  busy.value = true
+  try { await runCloseBillInner() } finally { busy.value = false }
+}
+
+async function runCloseBillInner(): Promise<void> {
   const f = closeBillForm.value
   if (!f.companyId) { show('得意先を選択してください', 'crit'); return }
   if (!f.periodFrom || !f.periodTo) { show('期間を入力してください', 'crit'); return }
-  const res = con.closeBilling({ companyId: f.companyId, periodFrom: f.periodFrom, periodTo: f.periodTo })
+  const res = await con.closeBilling({ companyId: f.companyId, periodFrom: f.periodFrom, periodTo: f.periodTo })
   if (!res.ok) { show(`${res.error.code}: ${res.error.message}`, 'crit'); return }
   show(`請求ドラフトを作成しました（対象売上 ${res.count} 件）`, 'ok')
   closeBillOpen.value = false
@@ -102,9 +110,9 @@ function openInvoice(row: Record<string, unknown>): void {
   selectedInvoiceId.value = String(row.id)
   invoiceDrawerOpen.value = true
 }
-function doIssue(): void {
+async function doIssue(): Promise<void> {
   if (!selectedInvoice.value) return
-  const res = con.issue(selectedInvoice.value.id)
+  const res = await con.issue(selectedInvoice.value.id)
   if (!res.ok) { show(`${res.error.code}: ${res.error.message}`, 'crit'); return }
   show('請求を発行しました', 'ok')
 }
@@ -112,7 +120,7 @@ async function doVoid(): Promise<void> {
   if (!selectedInvoice.value) return
   const ok = await ask('赤伝の発行', `「${selectedInvoice.value.code}」を無効化し、赤伝（マイナス請求）を発行します。よろしいですか？`, { danger: true, confirmLabel: '赤伝発行' })
   if (!ok) return
-  const res = con.voidInvoice(selectedInvoice.value.id)
+  const res = await con.voidInvoice(selectedInvoice.value.id)
   if (!res.ok) { show(`${res.error.code}: ${res.error.message}`, 'crit'); return }
   show('赤伝を発行しました（元請求は無効）', 'warn')
 }
@@ -128,10 +136,16 @@ function openReceipt(invoiceId: string): void {
   receiptForm.value = { amount: remain > 0 ? String(remain) : '', method: '銀行振込' }
   receiptOpen.value = true
 }
-function runReceipt(): void {
+async function runReceipt(): Promise<void> {
+  if (busy.value) return
+  busy.value = true
+  try { await runReceiptInner() } finally { busy.value = false }
+}
+
+async function runReceiptInner(): Promise<void> {
   const amount = Number(receiptForm.value.amount)
   if (!Number.isFinite(amount) || amount <= 0) { show('入金額を正しく入力してください', 'crit'); return }
-  const res = con.recordReceipt({ invoiceId: receiptInvoiceId.value, amount, method: receiptForm.value.method })
+  const res = await con.recordReceipt({ invoiceId: receiptInvoiceId.value, amount, method: receiptForm.value.method })
   if (!res.ok) { show(`${res.error.code}: ${res.error.message}`, 'crit'); return }
   show('入金を記録しました', 'ok')
   receiptOpen.value = false
@@ -146,11 +160,17 @@ function openCloseConsign(): void {
   closeConsignForm.value = { segmentId: preferred ?? consignSegmentOptions.value[0]?.value ?? '', month: currentMonth }
   closeConsignOpen.value = true
 }
-function runCloseConsign(): void {
+async function runCloseConsign(): Promise<void> {
+  if (busy.value) return
+  busy.value = true
+  try { await runCloseConsignInner() } finally { busy.value = false }
+}
+
+async function runCloseConsignInner(): Promise<void> {
   const f = closeConsignForm.value
   if (!f.segmentId) { show('セグメントを選択してください', 'crit'); return }
   if (!f.month) { show('対象月を入力してください', 'crit'); return }
-  const res = con.closeConsignment({ segmentId: f.segmentId, month: f.month })
+  const res = await con.closeConsignment({ segmentId: f.segmentId, month: f.month })
   if (!res.ok) { show(`${res.error.code}: ${res.error.message}`, 'crit'); return }
   show(`委託精算を締めました（マージン請求 ${res.invoices} 件・支払通知 ${res.notices} 件）`, 'ok')
   closeConsignOpen.value = false
@@ -165,9 +185,9 @@ function openNotice(row: Record<string, unknown>): void {
   selectedNoticeId.value = String(row.id)
   noticeDrawerOpen.value = true
 }
-function doConfirmNotice(): void {
+async function doConfirmNotice(): Promise<void> {
   if (!selectedNotice.value) return
-  const res = con.confirmNotice(selectedNotice.value.id)
+  const res = await con.confirmNotice(selectedNotice.value.id)
   if (!res.ok) { show(`${res.error.code}: ${res.error.message}`, 'crit'); return }
   show('支払通知を確定しました', 'ok')
 }
@@ -205,7 +225,21 @@ const receiptCols: TableColumn[] = [
   { key: 'receivedAt', label: '入金日時', primary: true },
   { key: 'amount', label: '入金額', align: 'right', primary: true },
   { key: 'method', label: '方法' },
+  { key: 'cancel', label: '', align: 'right' },
 ]
+
+// 入金の取消（監査付き論理取消 = 原則9.5。誤入金の回復手段）
+async function cancelReceipt(id: string): Promise<void> {
+  const ok = await ask(
+    '入金の取消',
+    'この入金を取り消しますか？（取消は履歴に残ります。全額消込済みの請求は「発行済み」へ戻ります）',
+    { danger: true, confirmLabel: '取り消す' },
+  )
+  if (!ok) return
+  const res = await con.voidReceipt(id)
+  if (!res.ok) { show(`${res.error.code}: ${res.error.message}`, 'crit'); return }
+  show('入金を取り消しました', 'warn')
+}
 </script>
 
 <template>
@@ -268,6 +302,7 @@ const receiptCols: TableColumn[] = [
           :rows="asRows(marginInvoices)"
           clickable
           empty-title="マージン請求がありません"
+          empty-hint="「委託精算を締める」で店舗売上からマージン請求と支払通知を発行します"
           @row-click="openInvoice"
         >
           <template #cell-companyId="{ row }">{{ con.companyName(String(row.companyId)) }}</template>
@@ -343,7 +378,11 @@ const receiptCols: TableColumn[] = [
             <span class="text-[12px] text-sub">{{ fmtDateTime(String(row.receivedAt)) }}</span>
           </template>
           <template #cell-amount="{ row }">
-            <span class="num">{{ fmtYen(Number(row.amount)) }}</span>
+            <span class="num" :class="row.voidedAt ? 'text-muted line-through' : ''">{{ fmtYen(Number(row.amount)) }}</span>
+          </template>
+          <template #cell-cancel="{ row }">
+            <UiStatusBadge v-if="row.voidedAt" label="取消済み" tone="neutral" />
+            <button v-else type="button" class="btn btn-ghost btn-sm text-crit" @click="cancelReceipt(String(row.id))">取消</button>
           </template>
         </UiDataTable>
       </UiSectionCard>
@@ -367,7 +406,7 @@ const receiptCols: TableColumn[] = [
       </div>
       <template #footer>
         <button type="button" class="btn btn-sm" @click="closeBillOpen = false">キャンセル</button>
-        <button type="button" class="btn btn-primary btn-sm" @click="runCloseBill">締める</button>
+        <button type="button" class="btn btn-primary btn-sm" :disabled="busy" @click="runCloseBill">締める</button>
       </template>
     </UiModal>
 
@@ -386,7 +425,7 @@ const receiptCols: TableColumn[] = [
       </div>
       <template #footer>
         <button type="button" class="btn btn-sm" @click="closeConsignOpen = false">キャンセル</button>
-        <button type="button" class="btn btn-primary btn-sm" @click="runCloseConsign">締める</button>
+        <button type="button" class="btn btn-primary btn-sm" :disabled="busy" @click="runCloseConsign">締める</button>
       </template>
     </UiModal>
 
@@ -481,7 +520,7 @@ const receiptCols: TableColumn[] = [
       </div>
       <template #footer>
         <button type="button" class="btn btn-sm" @click="receiptOpen = false">キャンセル</button>
-        <button type="button" class="btn btn-primary btn-sm" @click="runReceipt">記録する</button>
+        <button type="button" class="btn btn-primary btn-sm" :disabled="busy" @click="runReceipt">記録する</button>
       </template>
     </UiModal>
   </div>

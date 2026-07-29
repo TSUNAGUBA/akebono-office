@@ -128,15 +128,16 @@ office: `IsometricOffice`（アイソメトリック空間）、`AiEmployeeCard`
 | `useAkebonoMasters` | Akebono マスタ 9 種（業態・倉庫・単位・税区分・支払条件・委託条件・バリアント軸テンプレ・商品カテゴリ・画像セクション）の CRUD 集約（Phase B: useMasterCrudAsync 化 = API モードは `/v1/masters/*` が SoT。0031 でモックシードと同一 id を投入） |
 | `useAkebonoApps` | 業態×アプリ設定（F-20。デュアルモード: API = `PUT /v1/akebono/app-configs` = akebono_app_configs（複合キー (segmentId, appKey)）が SoT・変更行だけのバッチ upsert。行が無い業態は業種プリセットへフォールバック = シード不要。Phase B） |
 | `useItemSettings` | 項目カスタマイズ（F-31。カタログ ITEM_CATALOG = コード静的 SoT + テナント差分 = item_settings。デュアルモード: API = `PUT /v1/akebono/item-settings` の部分 upsert + reset（エンティティ単位でカタログ既定へ戻す取消フロー = 原則9.5）。Phase B） |
+| `useProducts` ほか記録系 8 composable | Akebono 記録系（F-21〜F-29 = useProducts / usePurchaseOrders / useProduction / useInbound / usePurchases / useOutbound / useInventory / useAkebonoSales / useConsignment。Phase C: デュアルモード = API の SoT はサーバー（0032）・書込は /v1/akebono/* → apiWrite で影響コレクション再ロード。在庫の SoT = inventory_transactions（残高 = shared foldBalances で導出）・記録系は追記のみ/赤黒・確定系は赤伝・委託精算の金額算定 = shared/domain/akebono を API と共有） |
 | `useChatbot` | セッション管理（デュアルモード: API モードは `/v1/chatbot` = chat_sessions / chat_messages が SoT・LLM 一次応答 + マルチターン。バッチ5b）・フォールバックのシナリオベース応答（2 段ルーティング = 今回の質問 → 直近のユーザー発言で再判定。会社は正規化名寄せ + 最長一致・弊社/当社 = 自社・業界回答・ナレッジ全文字句照合 = バッチ7a）・出典解決・擬似ストリーミング・表示中セッションの sessionStorage タブ内永続 + リロード自動再開（2026-07-18 改善） |
 | `useNotes` | ぽいぽいポスト・議事録（デュアルモード: API = `/v1/notes` が SoT・検索インデックス自動反映 / モック = notes コレクション。バッチ7c/7d/7e）。テキスト登録 + ファイル取込（モックは .md/.txt のみ）+ 取消/復元（archive/restore = 論理削除とその取消。poipoi = 本人 / minutes = 登録者 or 管理者）+ adminList（管理者の全ポスト閲覧 = scope=all。7e） |
 | `useWeeklyInsight` | 週次 AI インサイト（バッチ7g。デュアルモード: API = GET /v1/reports/weekly-insight / モック = shared/domain/weekly-insight の同一集計 + heuristic。週次全データの決定的集計 → LLM 洞察） |
 | `useBusinessDay` | 営業日・祝日の参照（翌営業日 = メンバーの勤怠ルールの営業曜日 + 祝日マスタで解決・祝日名のカレンダー表示。計算本体は shared/domain/business-day を API と共有。オペレーター報告 2026-07-18 #4） |
 | `useMediaSettings` | メディア設定 + GA 連携状態（F-40。デュアルモード: モック = mediaSettings コレクション + 擬似 OAuth / API = `/v1/media/settings`（部分更新）+ `/v1/media/status`（media_ga_tokens = セグメント単位トークンが SoT）。startGaConnect（OAuth リダイレクト）・listGaProperties・selectGaProperty・disconnectGa） |
-| `useMediaAnalytics` | GA 由来メトリクス + 統合集計（F-40。デュアルモード: モック = 記事インベントリからの決定的導出（shared/domain/media-metrics）/ API = `/v1/media/metrics`・`/monthly` = GA4 実データの遅延ロード。ロード中/失敗/警告の状態公開・統合の売上軸は未移行の salesRecords をクライアント合成 = SoT 宣言をコード内文書化） |
+| `useMediaAnalytics` | GA 由来メトリクス + 統合集計（F-40。デュアルモード: モック = 記事インベントリからの決定的導出（shared/domain/media-metrics）+ shared composeIntegratedMetrics のクライアント合成 / API = `/v1/media/metrics` + **`/v1/media/integrated` = Phase C のサーバー組み立て**（売上軸 sales_records + メディア軸 GA）の遅延ロード。ロード中/失敗/警告の状態公開・売上書込後は invalidateIntegratedFor で追随） |
 | `useMediaInsight` | メディア/統合 AI インサイト（F-40。デュアルモード: API = `/v1/media/insights(/generate)` = media_insights が SoT・Vertex AI → heuristic・劣化告知 warning 保持。生成 → 保管 → 再生成で上書き = weekly_insights と同思想） |
 | `useMediaArticles` | AI 記事生成・採用・取消/復元（F-40。デュアルモード: API = `/v1/media/articles/generate` ほか = Vertex AI → 決定的フォールバック。採用は冪等・論理削除で取消可 = 原則9.5） |
-| `useDashboardInsight` | 業態別/会社全体ダッシュボードの集計 + AI レポート/インサイト（F-41。集計材料は integratedMetricsFor を再利用。保管 = dashboardInsights = 未移行モックコレクション。API モードは生成前に GA 月次を await・取得失敗時は生成しない） |
+| `useDashboardInsight` | 業態別/会社全体ダッシュボードの集計 + AI レポート/インサイト（F-41。集計材料は integratedMetricsFor を再利用 = Phase C から API モードはサーバー組み立ての実データ。保管 = dashboardInsights のみ未移行モックコレクション（Phase D）。生成前に ensureIntegratedLoaded を await・取得失敗時は生成しない） |
 | `useDocuments` | ドキュメントツリー・タグ・検索 |
 | `useToast` / `useConfirm` | UI フィードバック |
 | `useAppSettings` | 外部リンク・機能トグル・各種ルール設定・汎用設定（`appConfigs` の getConfig/setConfig）・デモリセット |

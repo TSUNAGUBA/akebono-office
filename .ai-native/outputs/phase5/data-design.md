@@ -109,9 +109,10 @@
 > 0030 作成時点で businessSegments が未移行のモック側コレクションだったため FK なし
 > （0030 の設計判断コメント参照）。**Phase B（0031）で business_segments テーブルへ移行済み**だが、
 > FK の後付けは Phase C（記録系移行）の参照整合引き上げと合わせて判断する（§1.5）。
-> 統合分析（scope=integrated）の**売上軸は salesRecords（未移行のモック側 SoT）**のためクライアント合成で
-> 受領し、メディア軸はサーバーが GA 導出値で上書き検証する（改ざん耐性の限界と受容は phase7 実装状況 §37）。
-> ダッシュボード保管（dashboardInsights）もモック側コレクション（API 移行時に media_insights と同型へ）。
+> 統合分析（scope=integrated）は **Phase C（0032）でサーバー組み立てへ引き上げ済み**: 売上軸 =
+> sales_records（§1.6）+ メディア軸 = GA を GET `/v1/media/integrated` がサーバーで突合し、
+> インサイト生成のクライアント合成メトリクス受領は廃止（M2 の改ざん耐性限界は解消・AKO-MEDIA-016 は欠番）。
+> ダッシュボード保管（dashboardInsights）のみモック側コレクションが残る（Phase D で media_insights と同型へ）。
 
 ### 1.5 Akebono 設定系の API 永続化（Phase B。2026-07-29 追加・本実装 = migration 0031）
 
@@ -142,6 +143,49 @@
 > akebono_app_configs / item_settings は投入しない（プリセット/カタログ既定がコード側でフォールバック）。
 > **FK なしの理由:** warehouses.company_id / consignment_terms.company_id 等の参照先シード
 > （c-ak-* デモ取引先）が実環境に存在しないため。Phase C（記録系移行）で参照整合の引き上げを判断する。
+
+### 1.6 Akebono 記録系の API 永続化（Phase C。2026-07-29 追加・本実装 = migration 0032・堅牢化 0033・外部レビュー対応 0034）
+
+従来モックコレクション（localStorage・日次リシード）だった Akebono 記録系 15 コレクションを
+`app_office` テーブルへ移行した。**初期データはシードしない**（実データは登録から育てる =
+akebono_wishes / sales_monthly / media_articles と同方針。各画面は空状態の登録案内を持つ）。
+伝票コード（PO-0001 等）は `akebono_doc_seqs`（prefix → last の単一 UPDATE）で原子的に採番する。
+
+| エンティティ（テーブル） | 主要属性 | 分類 / SoT | 機密度 |
+|---|---|---|---|
+| `Product`（products） | id, code（**UNIQUE(segment_id, code) WHERE active** = 論理削除後の再利用可）, name, segmentId, categoryId, defaultSupplierCompanyId, listPrice, standardCost, taxRateId, unitId, billingType, variantAxis1/2Label, description, active, custom | 設定系（更新可・論理削除）。作成時に既定 SKU を自動生成（XA-1） | C2 |
+| `ProductSku`（product_skus） | id, productId, code, janCode, axis1/2Value, sellPrice/costPrice（null = 商品既定）, isDefault, active | 設定系。マトリクス生成は既存軸値の組をスキップ = 冪等・生成で既定 SKU 無効化 | C2 |
+| `ProductImage`（product_images） | id, productId, skuId, sectionId, displayOrder, filename, mime, **dataUrl（data URI TEXT・400,000 字上限・png/jpeg/webp/gif base64 のみ = SVG 拒否）**, active | 設定系（論理削除で取消/復元 = 原則9.5）。documents の blob/GCS は原本保全用で表示サムネイルには過剰と判断（0032 コメント） | C2 |
+| `PurchaseOrder`（purchase_orders） | id, code, companyId, segmentId, status（状態機械 = shared PO_STATUS_NEXT）, orderDate, dueDate, **lines jsonb**, note | 指示系（遷移のみ・DELETE なし） | C2 |
+| `ProductionOrder`（production_orders） | id, code, skuId, qty, warehouseId, dueDate, status, **results jsonb（追記のみ）** | 指示系 + 実績（実績登録 = 追記 + 在庫 production_in + 全数完成で completed。1 トランザクション） | C2 |
+| `InboundPlan`（inbound_plans） | id, code, poId, warehouseId, dueDate, status, lines jsonb | 予定系（実績から pending/partial/completed を再計算。実績ありは取消不可 AKO-INB-003） | C2 |
+| `InboundResult`（inbound_results） | id, code, planId, warehouseId, receivedAt, lines jsonb（planLineId 消込） | **記録系（追記のみ）**。登録 = 実績 + 在庫 inbound(+) + 予定ステータスを 1 トランザクション | C2 |
+| `PurchaseRecord`（purchase_records） | id, code, companyId, segmentId, purchaseDate, purchaseType, warehouseId（入荷管理 OFF 経路の入庫先）, lines jsonb（**GIN `jsonb_path_ops` = 0034**）, correctionOf | **記録系（訂正は赤黒）**。warehouseId ありは purchase_in(+)・訂正で在庫も戻す。二重訂正は 409。委託精算の原価解決は `lines @> [{"skuId":…}]` で対象 SKU の最新仕入 1 件を取る（GIN が支える = Codex P1-1） | C2 |
+| `OutboundPlan`（outbound_plans） | id, code, companyId, warehouseId, segmentId, dueDate, status, lines jsonb | 指示系（取消はステータス） | C2 |
+| `OutboundResult`（outbound_results） | id, code, planId, warehouseId, companyId, shippedAt, lines jsonb | **記録系（追記のみ）**。在庫不足 409・出庫(−) + 店舗納品（partner_roles=store × store_deposit 倉庫）は預け在庫へ transfer_in(+) | C2 |
+| `InventoryTransaction`（inventory_transactions) | id, skuId, warehouseId, qty(±), kind, reason, refType, refLineId, occurredAt。**UNIQUE(ref_type, ref_line_id, kind)** = 冪等キー・INDEX(sku_id, warehouse_id) | **在庫の SoT（台帳・追記のみ）**。残高 = Σqty。**API モードは残高 = サーバー全量集約 `GET /inventory-balances`（GROUP BY・HAVING SUM<>0）**（明細 GET は表示用の LIMIT 20000 打ち切りあり = 2 万行超で残高が壊れる Codex P1-2 の是正）。モックモードは全件ローカル shared foldBalances。調整/移動/棚卸は専用 API | C2 |
+| `SalesRecord`（sales_records） | id, code, salesDate, companyId, segmentId, skuId, qty, unitPrice, amount, costPrice/billingType（サーバーが SKU/商品から解決）, channel, sourceKind, invoiceId（請求リンク）, correctionOf, active | **売上の SoT（記録系・訂正は赤黒）**。統合メトリクス（/v1/media/integrated）の売上軸の源泉。請求済みの訂正は 409（請求側で赤伝） | C3（売上） |
+| `Invoice`（invoices） | id, code, companyId, segmentId(null = 合算), periodFrom/To, invoiceType, status, issuedAt, totalAmount, creditFor, lines/snapshot/sourceRecordIds jsonb。**UNIQUE(company_id, period_from, period_to, invoice_type) WHERE draft**（0033 = 並行 close の二重ドラフト防止） | **確定系（issued 以降不変・訂正は赤伝 = マイナス請求の追記 + 売上リンク解除）**。draft は洗い替え可（設定系） | C3 |
+| `PaymentNotice`（payment_notices） | id, code, companyId(作家), segmentId, periodFrom/To, status, payableAmount, lines/snapshot jsonb | **確定系**（発行時点の委託条件をスナップショット凍結） | C3 |
+| `PaymentReceipt`（payment_receipts） | id, invoiceId, receivedAt, amount, method, **voidedAt/voidedBy（0033 = 監査列付き論理取消）** | **記録系（追記のみ・部分入金可）**。有効入金（voided_at IS NULL）の合計が全額で請求を paid・取消で paid → issued 再計算（取消フロー = 原則9.5） | C3 |
+
+> **SoT 宣言（Akebono 記録系）:** 上記テーブルが SoT。在庫残高・消込率・月次集計・KPI は導出
+> （表示射影はフロント純関数 = shared/domain/akebono・media-integrated を API と共有）。
+> 金額算定（税・店舗マージン・作家支払）は shared/domain/akebono の設定注入型純関数が SoT =
+> 両モードで同一の計算結果。**統合メトリクス（業務 × メディア）は Phase C でサーバー組み立て**
+> （GET `/v1/media/integrated` = 売上軸 sales_records + メディア軸 GA。§1.4 参照）。
+> companies の Akebono 拡張（partner_roles / payment_term_id / billing_term_id）は 0032 で物理列化
+> （追加列のみ = 原則7）。
+> **FK を張らない判断（Phase C で再評価・確定）:** 参照整合は API 書込パスの存在検証
+> （SKU・倉庫・会社・セグメント）で担保する。①明細（lines jsonb）内参照は FK で表現できず整合手段が
+> 二重になる ②記録系の原本は赤黒で不変・マスタは論理削除のみ = 物理削除起点の孤児参照が運用上生じない
+> ③モック期 localStorage データを API へ持ち込む経路が無い、ため（0030/0031 への FK 後付けも同判断で
+> 行わない。0032 冒頭コメントが正）。0031 シードの c-ak-* 参照（warehouses / consignment_terms）は
+> 実運用開始時に実取引先へ付け替える（オペレーター手順 = implementation-status §39）。
+> **取消フローの現状（原則9.5）:** 売上・仕入 = 赤黒 / 通常請求 = 赤伝 / 入金 = 論理取消（0033）/
+> 予定・指示 = ステータス取消。**委託精算（マージン請求 + 支払通知の組）の取消フローは未対応**
+> （AKO-BIL-008 で案内・Phase D 残課題 = §39-6）。入荷/出荷/生産の実績も伝票レベルの補償手段は
+> 未対応（在庫の数量は adjust で補償可・§39-6）。
 
 ## 2. スタースキーマ接続（akebono-scm-platform `mart` 規約準拠）
 

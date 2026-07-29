@@ -13,6 +13,8 @@ const products = useProducts()
 const { effectiveSegmentId } = useCurrentSegment()
 const { tbl } = useMockDb()
 const { show } = useToast()
+// 二重送信ガード(Phase C: API 書込の重複作成防止。§34 の実行中フィードバック)
+const busy = ref(false)
 const { ask } = useConfirm()
 
 const {
@@ -96,7 +98,7 @@ async function onRowClick(row: Record<string, unknown>): Promise<void> {
     { danger: true, confirmLabel: '訂正する' },
   )
   if (!ok) return
-  const res = correct(id)
+  const res = await correct(id)
   if (!res.ok) {
     show(`${res.error.code}: ${res.error.message}`, 'crit')
     return
@@ -140,7 +142,13 @@ function onSkuChange(): void {
   if (sku) entryForm.value.unitPrice = String(products.sellPriceOf(sku))
 }
 
-function saveEntry(): void {
+async function saveEntry(): Promise<void> {
+  if (busy.value) return
+  busy.value = true
+  try { await saveEntryInner() } finally { busy.value = false }
+}
+
+async function saveEntryInner(): Promise<void> {
   const f = entryForm.value
   const qty = Number(f.qty)
   const unitPrice = Number(f.unitPrice)
@@ -156,7 +164,7 @@ function saveEntry(): void {
     show('単価は 0 以上の数値で入力してください', 'crit')
     return
   }
-  const res = create({
+  const res = await create({
     salesDate: f.salesDate, companyId: f.companyId, segmentId: f.segmentId,
     skuId: f.skuId, qty, unitPrice,
   })
@@ -256,6 +264,7 @@ const entryAmount = computed(() => {
           :rows="tableRows"
           clickable
           empty-title="該当する売上明細がありません"
+          empty-hint="「売上を計上」から登録します（出荷実績・取込からの計上にも対応予定）"
           @row-click="onRowClick"
         >
           <template #cell-salesDate="{ row }">
@@ -334,7 +343,7 @@ const entryAmount = computed(() => {
       </div>
       <template #footer>
         <button type="button" class="btn btn-sm" @click="entryOpen = false">キャンセル</button>
-        <button type="button" class="btn btn-primary btn-sm" @click="saveEntry">登録する</button>
+        <button type="button" class="btn btn-primary btn-sm" :disabled="busy" @click="saveEntry">登録する</button>
       </template>
     </UiModal>
   </div>

@@ -143,9 +143,10 @@
 | 提供システム稼働状況 `/status` | F-11 | ✅ | ✅ 稼働状況接続済み（PR #37 = バッチ6c）: サービス = `system_services`（0018・mockup と同一の 3 サービスをシード）・インシデント = `service_incidents`（記録系 = updates 追記のみ・正順の状態機械を FOR UPDATE で直列化・登録/更新で管理者通知）・uptime = `uptime_daily`（SoT はインシデント → shared/domain/uptime で日次導出・窓内 DELETE→INSERT で冪等。トリガ = 登録/更新時 + `/jobs/uptime-rollup` + 管理者の手動再計算）・`GET /v1/status` 一括ハイドレーション（90 日 operational 埋め）・機能ガード 'status'（F-16）・チャットボット文脈 + 決定的フォールバックも実データ化 | モックの乱数 uptime シードは本番へ持ち込まない（インシデント実績から導出） |
 | チャットボット（画面内ヘルプ） | F-09-3 | ✅ | ✅ チャットボット接続済み（PR #27）+ ✅ セッション管理（PR #30/#31・オペレーター指示 2026-07-17）: 会話は chat_sessions / chat_messages（0012）で DB 管理・同一セッション内は直近履歴 12 件を LLM へ渡すマルチターン・過去セッションの再開/新規開始（履歴ドロワー + 新しい会話）・本人のみ参照（AKO-CHT-001）・メッセージは追記のみ。fallback 応答もセッションへ追記（履歴の忠実性） | 旧「会話履歴はセッションローカル」設計判断は PR #30/#31 で置換。ドキュメントはバッチ7l で実データ化（search_docs 経由の参照 + 署名 URL 案内 = §32）。エスカレーション起票は PR #21 で接続済み |
 | mart（分析基盤）ETL: fact_attendance / fact_leave / fact_effort ほか | data-design §2 | —（写像可能な型のみ） | 🚧 fact_sales のみ本 PR（バッチ6b）で実装（app_office 内 mart 互換テーブル + mart_load_runs。data-design §2.3 の実装状況注記参照）。他ファクトは ⏳ | app_office → mart の一方向 ETL。mart 本体（akebono-scm-platform）への接続はテーブル移送 + ETL 先切替で対応（オペレーター判断 2026-07-18） |
-| メディア分析 `/media`（AKEBONO 業務配下） | F-40 | ✅ | ✅ メディア接続（§37 = 2026-07-28）: GA 連携 = Google OAuth 2.0（**セグメント単位**・analytics.readonly・state ノンス + email 突合・トークン AES-256-GCM 暗号化 = 0030）→ GA4 プロパティ選択（Admin API accountSummaries → PUT /v1/media/property）・集計 = GA4 Data API batchRunReports → MediaMetrics 整形（lib/ga.ts・30 分導出キャッシュ・conversions 廃止のため keyEvents 使用）・メディア設定（部分更新 = hasOwn フィルタ）・記事インベントリ（論理削除/復元）・AI 記事生成（Vertex AI → 決定的フォールバック・採用/取消）・AI インサイト（media/integrated = weekly_insights と同型の upsert 保管） | 記事インベントリは実データのためシードしない（採用・手動登録で育成）。統合メトリクスの売上月次は未移行の salesRecords（モック側 SoT）をクライアント合成（§37 残課題参照） |
-| 業態/会社全体ダッシュボード `/akebono/dashboard`・`/akebono/company` | F-41 | ✅ | 🚧 部分接続: メディア軸（GA 月次）は API モードで実データ化（/v1/media/monthly）。売上軸（salesRecords）と保管（dashboardInsights）は未移行のモックコレクション | ダッシュボードの本接続は salesRecords の API 移行（Phase C）時に実施（設計判断を useDashboardInsight に文書化）。businessSegments は Phase B（§38）で移行済み |
-| Akebono 設定系（`/akebono` ハブのアプリ設定・`/akebono/masters`・`/akebono/settings/segments`・`/akebono/settings/items`） | F-20/F-30/F-31 | ✅ | ✅ Phase B 接続（§38 = 2026-07-29）: 業態 + 共通マスタ 8 種 = 汎用マスタ registry（0031・モックシードと同一 id を投入）・業態×アプリ設定 = `/v1/akebono/app-configs`（複合キーのバッチ upsert）・項目カスタマイズ = `/v1/akebono/item-settings`（部分 upsert + エンティティ単位 reset） | 記録系（products〜salesRecords〜請求）は Phase C（§38-5）。カタログ（アプリ・項目定義・業種プリセット）はフロント静的 SoT のまま |
+| メディア分析 `/media`（AKEBONO 業務配下） | F-40 | ✅ | ✅ メディア接続（§37 = 2026-07-28）: GA 連携 = Google OAuth 2.0（**セグメント単位**・analytics.readonly・state ノンス + email 突合・トークン AES-256-GCM 暗号化 = 0030）→ GA4 プロパティ選択（Admin API accountSummaries → PUT /v1/media/property）・集計 = GA4 Data API batchRunReports → MediaMetrics 整形（lib/ga.ts・30 分導出キャッシュ・conversions 廃止のため keyEvents 使用）・メディア設定（部分更新 = hasOwn フィルタ）・記事インベントリ（論理削除/復元）・AI 記事生成（Vertex AI → 決定的フォールバック・採用/取消）・AI インサイト（media/integrated = weekly_insights と同型の upsert 保管） | 記事インベントリは実データのためシードしない（採用・手動登録で育成）。統合メトリクス（PDCA）は Phase C（§39）でサーバー組み立てへ引き上げ = 売上軸も実データ（GET /v1/media/integrated） |
+| 業態/会社全体ダッシュボード `/akebono/dashboard`・`/akebono/company` | F-41 | ✅ | 🚧 ほぼ接続（Phase C = §39）: 集計（売上軸 = sales_records + メディア軸 = GA）はサーバー組み立ての実データ（/v1/media/integrated）。**AI レポートの保管（dashboardInsights）のみ未移行** = カードに「レポート保管 = ローカル」バッジ | 保管の media_insights 同型化は Phase D（§39-6）。ページ全体のモックバッジは撤去（M3 撤去条件成立） |
+| Akebono 設定系（`/akebono` ハブのアプリ設定・`/akebono/masters`・`/akebono/settings/segments`・`/akebono/settings/items`） | F-20/F-30/F-31 | ✅ | ✅ Phase B 接続（§38 = 2026-07-29）: 業態 + 共通マスタ 8 種 = 汎用マスタ registry（0031・モックシードと同一 id を投入）・業態×アプリ設定 = `/v1/akebono/app-configs`（複合キーのバッチ upsert）・項目カスタマイズ = `/v1/akebono/item-settings`（部分 upsert + エンティティ単位 reset） | カタログ（アプリ・項目定義・業種プリセット）はフロント静的 SoT のまま |
+| Akebono 記録系（`/akebono/products`・`purchase-orders`・`production`・`inbounds`・`outbounds`・`purchases`・`inventory`・`sales`・`billing`） | F-21〜F-29 | ✅ | ✅ Phase C 接続（§39 = 2026-07-29）: 記録系 15 コレクション = 0032（商品/SKU/画像・発注・生産・入荷・仕入・出荷・在庫台帳・売上明細・請求/支払通知/入金）。実績・台帳は追記のみ + 冪等キー・訂正は赤黒・確定系は赤伝。金額算定は shared/domain/akebono をモックと共有 | 実データのためシードなし（各画面に空状態の登録案内）。データ取込（F-32 `/akebono/imports`）のみモック残 = mock-status に登録（Phase D） |
 
 ## 3. バッチ3d（PR #25・マージ済み）: AI業務アシスタント + 日報 AI アシストの完了条件（Definition of Done）
 
@@ -624,7 +625,7 @@
 
 ### 37-4 検証・残課題
 - [x] 検証（レビュー修正後の再実行）: api 単体 **156**（ga-report 20 + media-routes 24 を新設）/ api 統合 **163**（メディア 7 スイート = 部分更新の保持・重複登録/復元衝突・生成→採用→取消→復元・統合インサイト upsert + 受領検証・GA 未設定経路）/ mockup 単体 148 / typecheck（api・mockup）/ mockup build 全 green
-- [ ] 残課題: 統合メトリクスの売上月次・F-41 ダッシュボード保管（dashboardInsights）・salesRecords の API 移行(移行時に /v1/media/integrated のサーバー組み立てへ引き上げ = 売上軸の改ざん耐性限界も解消。**businessSegments は Phase B = §38 で移行済み**)。GA プロパティのタイムゾーンが JST 以外の場合の日単位ずれは許容（lib/ga.ts に設計判断を文書化）。記事インベントリ手動登録の専用 UI（現状は管理者 API + curl = deploy-guide §1-9b）
+- [ ] 残課題: ~~統合メトリクスの売上月次・salesRecords の API 移行~~ → **Phase C（§39）で解消**（/v1/media/integrated のサーバー組み立て化 = 売上軸の改ざん耐性限界（M2）解消・AKO-MEDIA-016 欠番。businessSegments は Phase B = §38）。F-41 ダッシュボード**保管**（dashboardInsights）のみ Phase D（§39-6）。GA プロパティのタイムゾーンが JST 以外の場合の日単位ずれは許容（lib/ga.ts に設計判断を文書化）。記事インベントリ手動登録の専用 UI（現状は管理者 API + curl = deploy-guide §1-9b）
 
 ## 38. Akebono 設定・実データの本実装 Phase B: 設定系 12 コレクションの API 永続化（2026-07-29）の完了条件（Definition of Done）
 
@@ -660,6 +661,70 @@
 - [x] B-2（監査官）: businessSegments 移行完了後も「未移行のモック側エンティティだから存在検証しない」という**旧根拠**コメントが残存（原則5。実体判断 = Phase C まで参照整合を保留は data-design 文書化済みで正）→ media.ts（ヘッダ・segmentIdOf・segmentName 受領・統合組み立て）+ useMediaAnalytics + useMediaArticles（同型の残存 1 件を波及確認で追加検出）の理由記述を「Phase C の参照整合判断まで保留（business_segments はテーブル化済み）」へ修正。挙動変更なし
 
 ### 38-5 残課題（Phase C / Phase D 計画）
-- [ ] **Phase C（次の依頼): 売上系記録データ + PDCA 売上軸のサーバー実データ化**。記録系 15 コレクション（products / productVariantAxes / skus / スキャン・在庫（inventoryMoves 等）/ purchases / salesRecords / 委託精算・請求ほか）の API 移行と、/v1/media/integrated のサーバー組み立て化（= 統合メトリクス売上軸の改ざん耐性限界の解消・「売上・受注 = デモデータ」バッジの撤去 = §37 M3）。移行時に併せて判断: segment_id / company_id の FK 参照整合の引き上げ（0030/0031 とも）・c-ak-* デモシード（warehouses / consignment_terms の参照先）の整理案内・F-41 ダッシュボード保管（dashboardInsights）の media_insights 同型化
-- [ ] **Phase D: 残り記録系・導出系**（Phase C 対象外の記録・導出コレクション。akebonoNotifications 等の扱いを Phase C の結果を踏まえて判断）
-- [ ] 各 Phase で独立レビュー（コードレビュアー + システム監査官）を回す（原則9）
+- [x] **Phase C: 売上系記録データ + PDCA 売上軸のサーバー実データ化** → **§39 で実装完了（2026-07-29）**。FK 判断・c-ak-* 整理・バッジ撤去を含む（dashboardInsights の media_insights 同型化のみ Phase D へ = §39-6）
+- [ ] **Phase D: 残り記録系・導出系**（データ取込 F-32 = importSources/importMappings/importRuns・dashboardInsights のサーバー保管ほか。§39-6 参照）
+- [x] 各 Phase で独立レビュー（コードレビュアー + システム監査官）を回す（原則9。Phase B = §38-4b）
+
+## 39. Akebono 設定・実データの本実装 Phase C: 記録系 15 コレクションの API 永続化 + PDCA 売上軸の実データ化（2026-07-29）の完了条件（Definition of Done）
+
+> オペレーター指示「設定・実データの本実装」第 2 弾（Phase B = §38 の続き）。
+> 記録系 15 コレクション（商品〜売上〜請求）を API（PostgreSQL）へ移行し、統合メトリクス
+> （PDCA 売上軸）をサーバー組み立てへ引き上げて「売上・受注 = デモデータ」バッジを撤去する。
+
+### 39-1 DB（migration 0032）
+- [x] 15 テーブル + 採番台帳: products（部分一意 = UNIQUE(segment_id, code) WHERE active）/ product_skus / product_images（data URI TEXT）/ purchase_orders / production_orders（results jsonb）/ inbound_plans / inbound_results / purchase_records / outbound_plans / outbound_results / **inventory_transactions（在庫の SoT・追記のみ・冪等キー UNIQUE(ref_type, ref_line_id, kind)）** / sales_records / invoices / payment_notices / payment_receipts + **akebono_doc_seqs**（伝票コード PREFIX-0001 の単一 UPDATE 原子的採番 = 並行安全）
+- [x] companies へ Akebono 拡張列を追加（partner_roles jsonb / payment_term_id / billing_term_id = F-30-1。追加列のみ = 原則7。registry の companies スキーマにも追加 = 顧客マスタ画面の取引ロール・支払/回収条件が API モードで永続化）
+- [x] **実データ方針: 記録系はシードしない**（akebono_wishes / sales_monthly / media_articles と同方針）。各画面の主要テーブルに空状態の登録案内（empty-hint）を整備 = デモデータ前提の誤誘導なし
+- [x] **FK を張らない判断（確定）**: 参照整合は API 書込パスの存在検証（SKU・倉庫・会社・セグメント = requireRef/requireSkus）で担保。理由 = ①lines jsonb 内参照は FK 表現不可（整合手段の二重化）②記録系原本は赤黒で不変・マスタは論理削除のみ ③モック期 localStorage データの持ち込み経路なし。0030/0031 への後付けも同判断（0032 冒頭コメント + data-design §1.6 が正）
+- [x] c-ak-* デモシード参照の整理: 0031 の warehouses（wh-02/03）・consignment_terms（ct-01〜04）は c-ak-* を参照するが実環境の companies に不在 → **実運用開始時に画面から実取引先へ付け替える**（統合テストで wh-02 の付け替え → 店舗預け移動を検証。オペレーター手順は §39-5）
+
+### 39-2 API（routes/akebono-trade.ts / akebono-billing.ts。/v1/akebono 配下へ追加マウント）
+- [x] 商品: POST /products（既定 SKU 同時生成 = XA-1・コード重複 409）・PATCH（hasOwn 部分更新）・archive/restore・POST /:id/skus/matrix（既存組合せスキップ = 冪等・生成で既定 SKU 無効化）・PATCH /product-skus/:id・画像（POST /:id/images = **data:image png/jpeg/webp/gif base64・400,000 字上限 = SVG 拒否 AKO-PRD-004**・archive/restore・セクション変更）
+- [x] 伝票: 発注（状態機械 = shared PO_STATUS_NEXT を FOR UPDATE 検証）・生産（実績追記 + production_in + 全数完成判定を 1 トランザクション）・入荷/出荷（実績 = 追記のみ。在庫 post + 予定ステータス再計算を 1 トランザクション・実績ありの予定取消 409・出荷は在庫不足 409 + 店舗納品の預け倉庫 transfer_in をサーバー解決）・仕入（入荷管理 OFF 経路の warehouseId 指定で purchase_in・赤黒訂正で在庫戻し・二重訂正 409）
+- [x] 在庫: GET 台帳（残高はフロントが shared foldBalances で導出 = 両モード同一）・adjust / transfer（不足 409・出入 2 行を同一トランザクション）・stocktake（差分行のみ計上）。**postInventory = ON CONFLICT DO NOTHING の冪等追記（モック useInventory.post と同一意味論）**
+- [x] 売上・請求: sales-records（原価・課金区分をサーバーが SKU/商品から解決・赤黒 = 相殺行の追記・請求済みは 409）・billing/close（未発行ドラフトの洗い替え = 冪等）・issue / void（赤伝 = マイナス請求 + 売上リンク解除・paid は 409・委託マージンは AKO-BIL-008）・payment-receipts（部分入金・全額で paid）・**consignment/close（店舗マージン請求 + 作家支払通知の一括発行・委託条件スナップショット凍結・精算リンクで再締め冪等）**・payment-notices/:id/confirm。金額算定は **shared/domain/akebono**（calcTax / calcStoreMargin / calcPayoutAmount 等 = utils/akebono.ts から移設しモックと共有。mockup 側は再エクスポートで既存 import 不変）
+- [x] 認可: 参照・書込とも認証済み全員（モック画面に管理者ゲートなしの日常業務 = 社内 C2）。/v1/akebono は **featureGuard 'akebono'（F-16 = PATH_FEATURES）の対象**（機能 deny で全体遮断できる安全側。個別アプリの表示制御は業態×アプリ設定 = クライアント側。レビュー A2 で「対象外」の誤記述を訂正）。発行・精算・訂正・取消は監査ログ
+- [x] エラーコード: モック composable と同一の AKO-PRD/POR/MFG/INB/PCH/OUT/INV/SLS/BIL 系を台帳へ起番（新規 = AKO-PRD-004 のみ。api-design §4）
+
+### 39-3 統合メトリクスのサーバー組み立て + M3 バッジ撤去（オペレーター明示要望）
+- [x] `GET /v1/media/integrated?segmentId=&months=&force=`（buildIntegratedMetrics）: 売上軸 = sales_records を **foldBusinessMonthly（赤黒訂正の元月帰属 = businessMonthly と同一の共有純関数）** で集計 + メディア軸 = GA 月次（30 分キャッシュ・force 伝搬）をサーバーで突合。GA 未連携 = mediaConnected=false（メディア軸 0 が正）・GA 一時障害 = mediaFailed=true（フロントは 0 描画せず失敗表示 + 再試行 = M1 の意味論を維持）
+- [x] scope=integrated のインサイト生成は**クライアント合成メトリクスの受領を廃止**（サーバー組み立てのみ = M2 の改ざん耐性限界を解消。normalizeIntegratedMetrics / applyServerMediaAxis と AKO-MEDIA-016 を撤去 = 016 欠番。GA 月次が取れないときは 004 で生成拒否 = M1 のサーバー側強制）
+- [x] フロント: useMediaAnalytics = /monthly クライアントキャッシュを /integrated キャッシュへ置換（integratedReady/Failed/refreshMonthly/ensureIntegratedLoaded は同名で意味論維持・N1 の 1 回 force 再試行も維持）。モック合成も shared composeIntegratedMetrics へ統一（挙動不変 = 単体 148 green）。**売上の計上・赤黒訂正後は invalidateIntegratedFor でキャッシュ無効化**（SoT 変化の追随 = 原則6）
+- [x] **M3 バッジ撤去**: PDCA タブの「売上・受注 = デモデータ」バナー・analytics.vue 撤去 / ダッシュボード・会社全体のページ全体モックバッジ撤去（撤去条件 = salesRecords 移行の成立）。**AI レポート保管（dashboardInsights）のみ未移行のため「レポート保管 = ローカル」のスコープ付きバッジをカードに残す**（正直な表示。Phase D で撤去）
+- [x] mock-status: `/akebono/imports`（F-32 = 唯一のモック残）を登録（従来の未登録は表示漏れだった旨を記録）
+
+### 39-4 フロント（デュアルモード化。モックモードの挙動は不変）
+- [x] useApi: CUSTOM_COLLECTION_ENDPOINTS へ 15 コレクション追加 + **apiWrite ヘルパー新設**（書込 → 影響コレクションの force 再ロード = 実績登録の多コレクション波及（実績 + 在庫台帳 + 予定ステータス）をキャッシュ手術でなく再取得で整合 = 原則6）
+- [x] 9 composable の書込系を async 化（useProducts / usePurchaseOrders / useProduction / useInbound / usePurchases / useOutbound / useInventory / useAkebonoSales / useConsignment）。読み取り・導出（残高・消込率・月次 KPI）は両モード共通の純関数のまま
+- [x] 9 ページの呼び出しを await + エラートースト追随（Grep 全件）。**作成系ハンドラに busy ガード（二重送信 = 重複伝票の防止。§34 の実行中フィードバックの漸進適用）** + products/segments は保存中表示
+- [x] 空状態の導線: 全記録ページの主要テーブルへ empty-hint（登録方法の案内）を整備（§39-1 実データ方針）
+
+### 39-5 検証・オペレーター確認
+- [x] テスト: api 単体 **174**（akebono-integrated 6 件新設 = recentMonthKeys / foldBusinessMonthly の赤黒元月帰属 / composeIntegratedMetrics 派生値。旧 M2 テスト 9 件は機能撤去に伴い削除）/ api 統合 **179**（Phase C 8 スイート新設 = 商品/SKU/画像・発注→入荷→在庫・在庫操作・仕入赤黒・出荷店舗預け・売上/請求フロー・委託精算・統合メトリクス。旧「クライアント合成受領」統合テストは新契約へ書き換え）/ mockup 単体 148 / typecheck（api・mockup）・build 全 green
+- [x] オペレーター確認手順: ①`/akebono/products` で商品登録（空状態から）→ SKU マトリクス → 画像 ②`/akebono/purchases` 仕入計上（在庫入庫）→ `/akebono/inventory` 残高・調整・移動・棚卸 ③`/akebono/sales` 売上計上 → `/media/analytics` PDCA タブに実売上が反映（デモバッジなし）④`/akebono/billing` 締め → 発行 → 入金 / 委託精算（事前に顧客マスタで取引先へ「店舗」「委託仕入先（作家）」ロール + 共通マスタで委託条件を実取引先で登録・**wh-02/03 の預け先を実店舗へ付け替え**）⑤いずれもリロード・翌日も保持されること
+### 39-6 残課題（Phase D）
+- [ ] **委託精算の取消フロー**（マージン請求 + 支払通知の組の取消。現状 = AKO-BIL-008 で「今後対応予定・管理者へ相談」を案内 = 実在しないフローへ誘導しない文言に是正済み。レビュー C-2/A1）
+- [ ] **入荷/出荷/生産実績の伝票レベル補償**（実績は追記のみで取消手段なし。在庫数量は調整（adjust）で補償可能 = その旨を運用案内。レビュー A1）
+- [ ] 観察事項（レビュー 1 巡目・スコープ外の記録）: canceled 予定への実績受理を許している / qtyLines の不正行を無音スキップしている（明細検証の厳格化と合わせて Phase D で判断）
+- [ ] データ取込（F-32）: importSources / importMappings / importRuns の API 化と取込適用の実装（現状 = モック・mock-status 登録済み）
+- [ ] dashboardInsights のサーバー保管（media_insights 同型）: サーバー側 SegmentSummary 組み立てがクライアント専用の機能トグル（media = m13）・カタログに依存するため Phase C では見送り。**API モードの保管は localStorage = 日次リシードで消える既知の制約**（バッジ「レポート保管 = ローカル」で明示）
+- [ ] 出荷実績 → 売上明細の自動計上（sourceKind='shipment'）・取込からの売上計上（'import'）は未実装（sales.vue の空状態文言に「対応予定」と明示）
+
+### 39-7 反復レビュー（原則9・1 巡目 = 統合指摘 major 2・minor 4 → 全件対応）
+- [x] **C-1（major・並行性）**: check-then-act の突破を 3 経路で封止（migration **0033** + アプリ側）。①在庫（出荷・移動・棚卸）= `pg_advisory_xact_lock`（SKU × 倉庫キーを重複排除 + ソート取得 = デッドロック防止）で残高チェック → 台帳追記を直列化 ②請求締め = advisory lock（得意先 × 期間）+ **部分一意 INDEX（(company_id, period_from, period_to, invoice_type) WHERE status='draft'）** を最終防衛に 23505 → 409 変換 ③精算・発行のリンク張り = `WHERE invoice_id IS NULL` + 更新件数検証（すり抜けは 409 で全体中止）+ 精算は advisory lock（業態 × 月）。**並行性テストの実装可否**: advisory lock の直列化は統合テストで Promise.all の並行 2 発（出荷 = [201, 409] + 残高 0 / 締め = draft 1 枚）として決定的に検証できた。部分一意 INDEX は DB 直接 INSERT の 23505 で検証。精算の件数ガードは競合ウィンドウ限定のため決定的テスト不能 = advisory lock の直列化テスト + コードガードでカバー（判断を記録）
+- [x] **C-2 + A1（major・取消フロー = 原則9.5）**: ①入金の受理ガードを issued/paid のみに（void への入金による「void → paid」終端状態破壊を封止）②**入金取消を実装**（0033 の voided_at/voided_by = 監査列付き論理取消。有効入金の再集計で paid → issued を 1 Tx・二重取消 = **AKO-BIL-009**。モック側も同一挙動 + 入金履歴 UI に取消ボタン）③AKO-BIL-008 の文言を実態化（「精算のやり直しで対応」→「取消フローは今後対応予定・管理者へ相談」）④委託精算取消・実績の伝票補償を §39-6 + data-design §1.6 に残課題として明記
+- [x] **C-3（minor）**: `POST /products/:id/restore` の部分一意衝突（同コード再登録後の復元）を 23505 → **AKO-PRD-002 409 + 対処案内**へ（media_articles restore と同型。500 を出さない）
+- [x] **A2（minor・原則5）**: 「/v1/akebono は F-16 対象外」という実挙動（PATH_FEATURES で featureGuard 'akebono' の対象 = 安全側）と逆の記述 3 箇所（akebono-trade.ts ヘッダ・api-design §3・本書 §39-2）を訂正。実在しない「akebono.ts と同判断」引用も削除
+- [x] **A3（minor）**: §37-4 残課題行へ Phase C 完了を反映（サーバー組み立て化・M2 限界解消・016 欠番）
+- [x] 検証: api 単体 174 / 統合 **184**（レビュー対応 5 スイート新設 = C-1a 並行出荷・C-1b 一意 INDEX + 並行締め・C-2 入金ガード/取消/再入金・C-3 復元衝突）/ mockup 148・typecheck・build 全 green
+
+### 39-8 反復レビュー（外部ボット PR #84 Codex・P1×3・P2×1 = **スケール境界の取得ロジック** → 全件採用）
+> 全指摘とも本番規模（仕入 > 500 件・台帳/売上 > 2 万件）で顕在化する「取得窓に依存した誤集計」。
+> オペレーターには「小規模デモでは正しく見えるのにデータが育つと金額・残高がずれる」形で影響するため、
+> 取得ロジックを**窓非依存**へ是正した。migration **0034**（GIN）追加。
+- [x] **P1-1（作家支払の原価解決が全 SKU 横断の直近 500 件窓）**: `resolveUnitCost`（purchase_cost 方式）が仕入を「全 SKU 横断で `ORDER BY purchase_date DESC, id DESC LIMIT 500`」で取ってから JS 走査していたため、仕入総数が 500 を超えると対象 SKU の直近仕入が窓外へ落ち標準原価へ誤フォールバック = **作家支払額が誤った**。SQL を **`lines @> [{"skuId":…}]::jsonb` で対象 SKU を含む明細に絞り最新 1 件**へ是正（モックの全走査と窓非依存で一致）。**0034** = `purchase_records.lines` の GIN（`jsonb_path_ops`）で本番規模の全 SKU スキャンを回避
+- [x] **P1-2（在庫台帳 LIMIT 20000 の打ち切りが残高を壊す）**: `GET /inventory-transactions` は表示用の直近明細（LIMIT 20000）だが、フロントはこの明細を `foldBalances` で畳んで残高としていたため、台帳が 2 万行を超えると期首在庫・過去の移動が残高・棚卸入力から消えた。**`GET /inventory-balances`（GROUP BY sku_id, warehouse_id の Σqty・全量集約・0 残高は HAVING で除外）を新設**し、API モードの `useInventory` は「残高 = サーバー集約値・明細 = 表示用」に分離（`balanceOf`/`totalOf`/`balancesOfWarehouse`）。実績書込の reload に `inventoryBalances` を追加（SoT → キャッシュ = 原則6）。**モックモードは従来どおり全件ローカル `foldBalances`（不変）**
+- [x] **P1-3（統合メトリクスの売上取得が無順序 LIMIT 20000）**: `/v1/media/integrated` が売上を無順序 `LIMIT 20000` で取ってから `foldBusinessMonthly` に渡すため、2 万件超のセグメントで任意の部分集合になり売上総額・受注数・赤黒ペアリング・PDCA が誤った。**対象月窓（periodFrom〜periodTo）に絞って取得**へ是正。ただし赤黒訂正は「元伝票の計上月」へ帰属する意味論のため、`LEFT JOIN` で `COALESCE(元伝票.sales_date, 自身.sales_date)` が窓内の行を取る（**窓内の元伝票を offset する訂正は訂正日が当月=窓外でも拾う / 元伝票が窓外の訂正は帰属月も窓外で取得せず = 元不明フォールバックの暴発防止**）。`foldBusinessMonthly` の意味論は不変
+- [x] **P2-4（商品 PATCH が segmentId を無視 = モックと乖離）**: `productPatchOf` が作成時のみ segmentId をコピーし PATCH では無視 → 成功を返すのに旧セグメントのまま（モックは反映 = 乖離）。PATCH でも `Object.hasOwn` で受理 + 参照セグメントの存在検証（requireRef）を追加。別セグメントへの移動で同コード衝突 = 部分一意 INDEX (segment_id, code) WHERE active → 23505 → **AKO-PRD-002 409**（POST/restore と同型・文言をコード変更/移動の双方を案内する形に更新）
+- [x] **回帰テスト（スケール境界を小規模フィクスチャで決定的に検証）**: P1-1 = 対象 SKU の直近仕入を「別 SKU の新しい仕入の後」に置き作家支払 = 仕入単価 650×2=1300（標準原価 900 フォールバックなら 1800）で窓非依存を確認 / P1-2 = `inventory-balances` の Σ集約一致・0 残高非返却 / P1-3 = 元伝票が窓内・訂正日が当月（窓外）の赤黒が元月へ帰属して相殺（訂正日で単純フィルタする回帰なら 7000/2 件になる） / P2-4 = PATCH で segmentId 反映・不存在は 404・移動先の同コードは 409
+- [x] 検証: api 単体 174 / 統合 **188**（Codex 4 スイート新設 = P1-1 原価窓非依存・P1-2 残高集約・P1-3 統合メトリクス月窓 + 赤黒元月帰属・P2-4 segmentId PATCH）/ mockup 単体 148 / typecheck（api・mockup）・build 全 green

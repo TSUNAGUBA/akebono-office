@@ -215,7 +215,10 @@ function numOrZero(v: unknown): number {
   return Number.isFinite(n) ? n : 0
 }
 
-function save(): void {
+const saving = ref(false)
+
+async function save(): Promise<void> {
+  if (saving.value) return
   const e: Record<string, string> = {}
   if (!str(form.value.code).trim()) e.code = '商品コードは必須です'
   if (!str(form.value.name).trim()) e.name = '商品名は必須です'
@@ -242,26 +245,29 @@ function save(): void {
   }
   const wasCreate = mode.value === 'create'
   if (mode.value === 'edit' && selectedId.value) payload.id = selectedId.value
-  const res = p.saveProduct(payload)
-  if (!res.ok) {
-    toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
-    return
-  }
-  // 新規登録フォームで添付した画像を、作成された商品へまとめて登録する（feature: 登録フォームの画像）
-  let imageCapacityWarned = false
-  if (wasCreate && res.id && pendingImages.value.length > 0) {
-    for (const img of pendingImages.value) {
-      const r = p.addImage(res.id, img)
-      if (r.ok && r.persisted === false) imageCapacityWarned = true
+  saving.value = true
+  try {
+    const res = await p.saveProduct(payload)
+    if (!res.ok) {
+      toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
+      return
     }
-    pendingImages.value = []
-  }
-  toast.show(wasCreate ? '商品を追加しました' : '商品を更新しました', 'ok')
-  if (imageCapacityWarned) {
-    toast.show('一部の画像は保存容量の上限により再読込時に失われる可能性があります。不要な画像を削除してください', 'warn')
-  }
-  if (res.id) selectedId.value = res.id
-  mode.value = 'view'
+    // 新規登録フォームで添付した画像を、作成された商品へまとめて登録する（feature: 登録フォームの画像）
+    let imageCapacityWarned = false
+    if (wasCreate && res.id && pendingImages.value.length > 0) {
+      for (const img of pendingImages.value) {
+        const r = await p.addImage(res.id, img)
+        if (r.ok && r.persisted === false) imageCapacityWarned = true
+      }
+      pendingImages.value = []
+    }
+    toast.show(wasCreate ? '商品を追加しました' : '商品を更新しました', 'ok')
+    if (imageCapacityWarned) {
+      toast.show('一部の画像は保存容量の上限により再読込時に失われる可能性があります。不要な画像を削除してください', 'warn')
+    }
+    if (res.id) selectedId.value = res.id
+    mode.value = 'view'
+  } finally { saving.value = false }
 }
 
 async function archiveSelected(): Promise<void> {
@@ -273,15 +279,15 @@ async function archiveSelected(): Promise<void> {
     { danger: true, confirmLabel: '無効化' },
   )
   if (!ok) return
-  const res = p.archiveProduct(s.id)
+  const res = await p.archiveProduct(s.id)
   if (res.ok) toast.show('無効化しました', 'warn')
   else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
 }
 
-function restoreSelected(): void {
+async function restoreSelected(): Promise<void> {
   const s = selected.value
   if (!s) return
-  const res = p.restoreProduct(s.id)
+  const res = await p.restoreProduct(s.id)
   if (res.ok) toast.show('復元しました', 'ok')
   else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
 }
@@ -292,8 +298,8 @@ function imagesInSection(sectionId: string) {
   return p.imagesOf(selectedId.value).filter(i => i.sectionId === sectionId)
 }
 
-function onChangeImageSection(imageId: string, sectionId: string): void {
-  const res = p.setImageSection(imageId, sectionId)
+async function onChangeImageSection(imageId: string, sectionId: string): Promise<void> {
+  const res = await p.setImageSection(imageId, sectionId)
   if (res.ok) toast.show('画像のセクションを変更しました', 'ok')
   else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
 }
@@ -305,7 +311,7 @@ async function deleteImage(imageId: string, filename: string): Promise<void> {
     { danger: true, confirmLabel: '削除' },
   )
   if (!ok) return
-  const res = p.archiveImage(imageId)
+  const res = await p.archiveImage(imageId)
   if (res.ok) toast.show('画像を削除しました', 'warn')
   else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
 }
@@ -366,7 +372,7 @@ async function onImageFileChange(ev: Event): Promise<void> {
   }
 }
 
-function saveImage(): void {
+async function saveImage(): Promise<void> {
   if (!imageForm.value.sectionId) {
     toast.show('セクションを選択してください', 'crit')
     return
@@ -388,7 +394,7 @@ function saveImage(): void {
     return
   }
   if (!selectedId.value) return
-  const res = p.addImage(selectedId.value, {
+  const res = await p.addImage(selectedId.value, {
     sectionId: imageForm.value.sectionId,
     filename: imageForm.value.filename || 'image',
     mime: imageForm.value.mime || 'image/*',
@@ -416,7 +422,7 @@ function openMatrixModal(): void {
   matrixModalOpen.value = true
 }
 
-function saveMatrix(): void {
+async function saveMatrix(): Promise<void> {
   const s = selected.value
   if (!s) return
   const a1 = matrixForm.value.axis1.split(',').map(v => v.trim()).filter(Boolean)
@@ -425,7 +431,7 @@ function saveMatrix(): void {
     toast.show('軸1の値をカンマ区切りで 1 つ以上入力してください', 'crit')
     return
   }
-  const res = p.saveMatrix(s.id, a1, a2)
+  const res = await p.saveMatrix(s.id, a1, a2)
   if (!res.ok) {
     toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
     return
@@ -463,6 +469,7 @@ function saveMatrix(): void {
           :rows="tableRows"
           clickable
           empty-title="該当する商品がありません"
+          empty-hint="「商品を追加」から登録します（実データ運用は空から始まります）"
           @row-click="openDetail"
         >
           <template #cell-thumb="{ row }">
@@ -681,7 +688,7 @@ function saveMatrix(): void {
         </div>
         <div v-else class="flex items-center justify-end gap-2">
           <button type="button" class="btn" @click="cancelEdit">キャンセル</button>
-          <button type="button" class="btn btn-primary" @click="save">保存</button>
+          <button type="button" class="btn btn-primary" :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存' }}</button>
         </div>
       </template>
     </UiDrawer>

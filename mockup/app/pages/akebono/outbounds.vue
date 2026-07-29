@@ -18,6 +18,8 @@ const masters = useAkebonoMasters()
 const { effectiveSegmentId } = useCurrentSegment()
 const { tbl } = useMockDb()
 const toast = useToast()
+// 二重送信ガード(Phase C: API 書込の重複作成防止。§34 の実行中フィードバック)
+const busy = ref(false)
 const confirm = useConfirm()
 
 // ---------- 選択肢 ----------
@@ -83,7 +85,7 @@ async function cancelSelected(): Promise<void> {
     { danger: true, confirmLabel: '取消する' },
   )
   if (!ok) return
-  const res = out.cancelPlan(plan.id)
+  const res = await out.cancelPlan(plan.id)
   if (res.ok) toast.show('出荷指示を取消しました', 'warn')
   else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
 }
@@ -105,9 +107,15 @@ function openPlanCreate(): void {
   planOpen.value = true
 }
 
-function savePlan(): void {
+async function savePlan(): Promise<void> {
+  if (busy.value) return
+  busy.value = true
+  try { await savePlanInner() } finally { busy.value = false }
+}
+
+async function savePlanInner(): Promise<void> {
   const f = planForm.value
-  const res = out.createPlan({
+  const res = await out.createPlan({
     companyId: f.companyId,
     warehouseId: f.warehouseId,
     segmentId: f.segmentId,
@@ -161,10 +169,16 @@ function openResultDirect(): void {
 const resultDepositWarehouse = computed(() =>
   out.storeDepositWarehouseOf(resultForm.value.companyId || null))
 
-function saveResult(): void {
+async function saveResult(): Promise<void> {
+  if (busy.value) return
+  busy.value = true
+  try { await saveResultInner() } finally { busy.value = false }
+}
+
+async function saveResultInner(): Promise<void> {
   const f = resultForm.value
   const plan = resultPlan.value
-  const res = out.registerResult({
+  const res = await out.registerResult({
     planId: resultPlanId.value,
     warehouseId: f.warehouseId,
     companyId: f.companyId || null,
@@ -205,6 +219,7 @@ function saveResult(): void {
           :rows="rows"
           clickable
           empty-title="出荷指示がありません"
+          empty-hint="「出荷指示を作成」または「直接出荷登録」から始められます"
           @row-click="openDrawer"
         >
           <template #cell-code="{ row }">
@@ -344,7 +359,7 @@ function saveResult(): void {
       </div>
       <template #footer>
         <button type="button" class="btn btn-sm" @click="planOpen = false">キャンセル</button>
-        <button type="button" class="btn btn-primary btn-sm" @click="savePlan">作成する</button>
+        <button type="button" class="btn btn-primary btn-sm" :disabled="busy" @click="savePlan">作成する</button>
       </template>
     </UiModal>
 
@@ -390,7 +405,7 @@ function saveResult(): void {
       </div>
       <template #footer>
         <button type="button" class="btn btn-sm" @click="resultOpen = false">キャンセル</button>
-        <button type="button" class="btn btn-primary btn-sm" @click="saveResult">登録する</button>
+        <button type="button" class="btn btn-primary btn-sm" :disabled="busy" @click="saveResult">登録する</button>
       </template>
     </UiModal>
   </div>

@@ -2,6 +2,9 @@
  * 売上管理（F-28。F-15 を明細型へ強化）
  * SoT = salesRecords（売上明細）。月次・セグメント別サマリは導出。訂正は赤黒（記録系）。
  * 会計年度計算は shared/domain/fiscal を既存 useSales と共有。
+ * デュアルモード（Phase C = 0032）: API モードの SoT はサーバー（sales_records）。書込は
+ * /v1/akebono/sales-records（原価・課金区分はサーバーが SKU/商品から解決）→ 再ロード + 統合メトリクス
+ * （/v1/media/integrated）のキャッシュ無効化（売上軸の SoT 変化を PDCA・ダッシュボードへ追随 = 原則6）。
  */
 import {
   DEFAULT_FISCAL_START_MONTH, fiscalMonthsOf as fiscalMonthsOfFy, fiscalYearOf as fiscalYearOfMonth,
@@ -15,6 +18,7 @@ export function useAkebonoSales() {
   const records = tbl('salesRecords')
   const companies = tbl('companies')
   const products = useProducts()
+  const isApi = useApiMode()
 
   const activeRecords = computed(() => records.value.filter(r => r.active !== false))
 
@@ -136,15 +140,20 @@ export function useAkebonoSales() {
   })
 
   // ---------- 書込 ----------
-  function create(input: {
+  async function create(input: {
     salesDate: string; companyId: string; segmentId: string; skuId: string; qty: number; unitPrice: number;
     channel?: string | null; sourceKind?: SalesRecord['sourceKind']
-  }): Result {
+  }): Promise<Result> {
     if (!input.companyId || !input.segmentId || !input.skuId) {
       return { ok: false, error: { code: 'AKO-SLS-001', message: '得意先・セグメント・SKU は必須です' } }
     }
     if (!Number.isFinite(input.qty) || input.qty <= 0 || !Number.isFinite(input.unitPrice) || input.unitPrice < 0) {
       return { ok: false, error: { code: 'AKO-SLS-001', message: '数量・単価を正しく入力してください' } }
+    }
+    if (isApi) {
+      const res = await apiWrite<SalesRecord>('/v1/akebono/sales-records', { body: input, reload: ['salesRecords'] })
+      if (res.ok) invalidateIntegratedFor(input.segmentId)
+      return res.ok ? { ok: true, id: res.data.id } : res
     }
     const sku = products.skuById(input.skuId)
     const product = sku ? products.productById(sku.productId) : undefined
@@ -163,7 +172,13 @@ export function useAkebonoSales() {
   }
 
   /** 赤黒訂正（元明細のマイナス明細を追加。元は不変 = 記録系） */
-  function correct(id: string): Result {
+  async function correct(id: string): Promise<Result> {
+    if (isApi) {
+      const src = records.value.find(r => r.id === id)
+      const res = await apiWrite<SalesRecord>(`/v1/akebono/sales-records/${id}/correct`, { reload: ['salesRecords'] })
+      if (res.ok && src) invalidateIntegratedFor(src.segmentId)
+      return res.ok ? { ok: true, id: res.data.id } : res
+    }
     const src = records.value.find(r => r.id === id)
     if (!src) return { ok: false, error: { code: 'AKO-GEN-002', message: '対象が見つかりません' } }
     if (src.correctionOf) return { ok: false, error: { code: 'AKO-SLS-002', message: '訂正明細は再訂正できません' } }

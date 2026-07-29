@@ -2,6 +2,8 @@
  * 発注管理（F-23）
  * 仕入先への発注。状態機械 draft→ordered→partially_received→closed / canceled。
  * 入荷実績（poId 紐付け）から消込率を導出。情報サービスは外注費に読み替え（ラベルは F-20-6）。
+ * デュアルモード（Phase C = 0032）: API モードの SoT はサーバー（purchase_orders）。
+ * 書込は /v1/akebono/purchase-orders → 再ロード。導出（消込率等）は両モード共通。
  */
 import type { OrderLine, PoStatus, PurchaseOrder } from '~/types/akebono'
 import type { Result } from '~/types/domain'
@@ -12,6 +14,7 @@ export function usePurchaseOrders() {
   const orders = tbl('purchaseOrders')
   const inboundResults = tbl('inboundResults')
   const inboundPlans = tbl('inboundPlans')
+  const isApi = useApiMode()
 
   const activeOrders = computed(() => orders.value.slice().sort((a, b) => (a.orderDate < b.orderDate ? 1 : -1)))
 
@@ -34,11 +37,17 @@ export function usePurchaseOrders() {
     return o.lines.reduce((s, l) => s + l.qty, 0)
   }
 
-  function createOrder(input: { companyId: string; segmentId: string; orderDate: string; dueDate: string; note?: string; lines: { skuId: string; qty: number; unitPrice: number }[] }): Result {
+  async function createOrder(input: { companyId: string; segmentId: string; orderDate: string; dueDate: string; note?: string; lines: { skuId: string; qty: number; unitPrice: number }[] }): Promise<Result> {
     if (!input.companyId) return { ok: false, error: { code: 'AKO-POR-001', message: '仕入先を指定してください' } }
     if (!input.segmentId) return { ok: false, error: { code: 'AKO-POR-001', message: '事業セグメントを指定してください' } }
     const lines = input.lines.filter(l => l.skuId && l.qty > 0)
     if (lines.length === 0) return { ok: false, error: { code: 'AKO-POR-002', message: '発注明細を 1 行以上入力してください' } }
+    if (isApi) {
+      const res = await apiWrite<PurchaseOrder>('/v1/akebono/purchase-orders', {
+        body: { ...input, lines }, reload: ['purchaseOrders'],
+      })
+      return res.ok ? { ok: true, id: res.data.id } : res
+    }
     const id = nextId('purchaseOrders', 'po')
     // 明細行 id はヘッダ id + index で全域一意
     const orderLines: OrderLine[] = lines.map((l, idx) => ({ id: `${id}-${idx}`, skuId: l.skuId, qty: l.qty, unitPrice: l.unitPrice }))
@@ -59,7 +68,10 @@ export function usePurchaseOrders() {
     closed: [],
     canceled: [],
   }
-  function setStatus(id: string, status: PoStatus): Result {
+  async function setStatus(id: string, status: PoStatus): Promise<Result> {
+    if (isApi) {
+      return apiWrite(`/v1/akebono/purchase-orders/${id}/status`, { body: { status }, reload: ['purchaseOrders'] })
+    }
     const o = orderById(id)
     if (!o) return { ok: false, error: { code: 'AKO-GEN-002', message: '対象が見つかりません' } }
     if (!NEXT[o.status].includes(status)) {

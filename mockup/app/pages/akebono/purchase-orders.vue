@@ -17,6 +17,8 @@ const { segmentOptions, segmentName } = useAkebonoMasters()
 const { effectiveSegmentId } = useCurrentSegment()
 const { tbl } = useMockDb()
 const toast = useToast()
+// 二重送信ガード(Phase C: API 書込の重複作成防止。§34 の実行中フィードバック)
+const busy = ref(false)
 const confirm = useConfirm()
 
 // ---------- 仕入先・SKU 選択肢 ----------
@@ -101,7 +103,7 @@ async function transition(status: PoStatus): Promise<void> {
     )
     if (!ok) return
   }
-  const res = po.setStatus(o.id, status)
+  const res = await po.setStatus(o.id, status)
   if (!res.ok) {
     toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
     return
@@ -132,7 +134,13 @@ function openCreate(): void {
   createOpen.value = true
 }
 
-function submitCreate(): void {
+async function submitCreate(): Promise<void> {
+  if (busy.value) return
+  busy.value = true
+  try { await submitCreateInner() } finally { busy.value = false }
+}
+
+async function submitCreateInner(): Promise<void> {
   const f = createForm.value
   if (!f.companyId) {
     toast.show('仕入先を選択してください', 'crit')
@@ -150,7 +158,7 @@ function submitCreate(): void {
     toast.show('納期を入力してください', 'crit')
     return
   }
-  const res = po.createOrder({
+  const res = await po.createOrder({
     companyId: f.companyId,
     segmentId: f.segmentId,
     orderDate: f.orderDate,
@@ -184,6 +192,7 @@ function submitCreate(): void {
           :rows="tableRows"
           clickable
           empty-title="発注がありません"
+          empty-hint="「発注を作成」から登録できます"
           @row-click="openDetail"
         >
           <template #cell-code="{ row }">
@@ -310,7 +319,7 @@ function submitCreate(): void {
       </div>
       <template #footer>
         <button type="button" class="btn btn-sm" @click="createOpen = false">キャンセル</button>
-        <button type="button" class="btn btn-primary btn-sm" @click="submitCreate">作成する</button>
+        <button type="button" class="btn btn-primary btn-sm" :disabled="busy" @click="submitCreate">作成する</button>
       </template>
     </UiModal>
   </div>

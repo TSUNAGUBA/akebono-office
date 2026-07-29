@@ -6,9 +6,9 @@
  * - モック: mediaInsights コレクション + 決定的ヒューリスティックのみ（llm=false）
  * - API: SoT はサーバー（media_insights。GET/POST /v1/media/insights）。生成は Vertex AI →
  *   失敗時サーバー側で同一ヒューリスティックへフォールバック（原則4。llm フラグで区別）。
- *   scope='media' はサーバーが GA からメトリクスを組み立てる。scope='integrated' は
- *   売上明細（salesRecords）が未移行のモック側 SoT のため、クライアントが統合メトリクスを
- *   組み立てて渡す（useMediaAnalytics の SoT 宣言参照）
+ *   scope='media' / scope='integrated' ともサーバーがメトリクスを組み立てる（integrated は
+ *   Phase C で売上軸 = sales_records + メディア軸 = GA のサーバー組み立てへ引き上げ =
+ *   クライアント合成の送信を廃止。useMediaAnalytics の SoT 宣言参照）
  * - セグメント × scope で 1 レコード（upsert）。進捗・記録は持たない（原則2 に抵触しない導出系）
  */
 import {
@@ -181,18 +181,17 @@ export function useMediaInsight() {
 
   async function generateIntegrated(segmentId: string): Promise<IntegratedInsightView | null> {
     if (isApi) {
-      // 統合メトリクスはクライアント合成（メディア月次 = GA 実データ / 売上月次 = 未移行のモック側集計）。
-      // 生成前に GA 月次を await でそろえ、**取得失敗時は生成しない**
-      // （「流入ゼロ」という虚偽データ由来のインサイトを保管させない。M1）
+      // 統合メトリクスはサーバー組み立て（Phase C = メトリクス送信なし）。生成前に表示側の統合
+      // キャッシュを await でそろえ、**取得失敗時は生成しない**（M1。サーバー側でも mediaFailed は
+      // AKO-MEDIA-004 で拒否 = 二重の遮断。ensureIntegratedLoaded は失敗確定時に 1 回だけ force 再試行 = N1）
       const ready = await analytics.ensureIntegratedLoaded(segmentId, 6)
       if (!ready) {
         throw Object.assign(
           new Error('GA の月次トレンドを取得できていないため、統合インサイトを生成できません。再試行してから生成してください'),
           { code: 'AKO-MEDIA-004' })
       }
-      const metrics = analytics.integratedMetricsFor(segmentId, 6)
       const row = await apiFetch<ApiInsightRow>('/v1/media/insights/generate', {
-        method: 'POST', body: { segmentId, scope: 'integrated', metrics },
+        method: 'POST', body: { segmentId, scope: 'integrated', months: 6 },
       })
       apiInsights.value = { ...apiInsights.value, [`${segmentId}:integrated`]: row }
       return apiViewOf<IntegratedInsightView>(row)

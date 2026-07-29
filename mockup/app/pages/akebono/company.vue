@@ -94,11 +94,9 @@ async function regenerate(): Promise<void> {
 
 <template>
   <div class="mx-auto max-w-5xl">
-    <UiPageHeader title="会社全体ダッシュボード" :description="`セグメントを超えた全社の統合ビュー・対象月 ${summary.periodMonth}`">
-      <template #actions>
-        <UiMockBadge />
-      </template>
-    </UiPageHeader>
+    <!-- Phase C で売上軸（sales_records）・メディア軸（GA）とも実データ化 = ページ全体のモックバッジは撤去。
+         AI レポートの保管（dashboardInsights）のみ未移行 = カード側で明示 -->
+    <UiPageHeader title="会社全体ダッシュボード" :description="`セグメントを超えた全社の統合ビュー・対象月 ${summary.periodMonth}`" />
 
     <!-- 売上権限ゲート -->
     <UiEmptyState
@@ -159,6 +157,8 @@ async function regenerate(): Promise<void> {
         :description="view ? `生成 ${fmtDateTime(view.generatedAt)}${view.generatedByName ? `（${view.generatedByName}）` : ''}・${view.llm ? 'Vertex AI' : '集計値からの自動生成'}` : '全業態のロールアップから、経営レポートと横断インサイト・全社アクションを生成します'"
       >
         <template #actions>
+          <!-- レポートの保管先（dashboardInsights）のみ未移行のローカル保存（Phase D 予定）。集計データは実データ -->
+          <UiMockBadge label="レポート保管 = ローカル" />
           <button type="button" class="btn btn-primary btn-sm" :disabled="generating" @click="regenerate">
             <RefreshCw class="h-3.5 w-3.5" aria-hidden="true" />
             {{ generating ? '生成中…' : view ? '再生成' : 'レポートを生成' }}

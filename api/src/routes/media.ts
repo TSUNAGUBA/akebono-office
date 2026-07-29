@@ -29,7 +29,8 @@ import {
   heuristicMediaInsight, type MediaAction, type MediaFinding, type MediaInsight,
 } from '../../../shared/domain/media-insight'
 import {
-  heuristicIntegratedInsight, type IntegratedInsight, type IntegratedMetrics,
+  composeIntegratedMetrics, foldBusinessMonthly, heuristicIntegratedInsight,
+  type IntegratedInsight, type IntegratedMetrics,
 } from '../../../shared/domain/media-integrated'
 import {
   ARTICLE_PURPOSES, ARTICLE_QUALITIES, ARTICLE_TONES, articleQualityScore, generateArticleDraft,
@@ -652,115 +653,74 @@ const COUNT_MAX = 1e9 // 件数系（セッション・CV・受注）の上限
 const YEN_MAX = 1e12 // 金額系（円）の上限
 
 /**
- * クライアント合成の統合メトリクスを**既知キーのみの whitelist へ正規化**する。
- * 欠落・型崩れ・非有限・負数・範囲外は null（呼び出し側が AKO-MEDIA-016 の 400 = 想定エラーで拒否し、
- * heuristic の TypeError → 500 や、型崩れ jsonb の保管・LLM プロンプトへの逐語挿入を経路ごと塞ぐ）。
- * 文字列は cap（プロンプトインジェクション面の縮小）。unknown キーは捨てる
+ * 統合メトリクス（業務 × メディア）の**サーバー組み立て**（Phase C = salesRecords の API 移行で
+ * クライアント合成を廃止。M2 の受領検証・GA 突合上書き（normalizeIntegratedMetrics /
+ * applyServerMediaAxis）は不要になり撤去 = 売上軸・メディア軸とも改ざん余地なし）。
+ * - 売上月次 = sales_records（SoT）を foldBusinessMonthly で集計（赤黒訂正の帰属月ロジックは
+ *   フロントのモック集計と同一の共有純関数 = 原則3・6）
+ * - メディア月次 = GA（fetchMonthlyTrend = 30 分キャッシュ・force 対応）。未連携は 0（mediaConnected=false）。
+ *   取得失敗は mediaFailed=true で返し、**0 を実データの顔で描画・保管させない**（M1。生成側は 004 で拒否）
  */
-export function normalizeIntegratedMetrics(raw: unknown): IntegratedMetrics | null {
-  const r = raw as Record<string, unknown> | null
-  if (!r || typeof r !== 'object') return null
-  const periodMonth = String(r.periodMonth ?? '')
-  if (!/^\d{4}-\d{2}$/.test(periodMonth)) return null
-  if (!Array.isArray(r.trend) || r.trend.length === 0 || r.trend.length > 24) return null
-  const trend: IntegratedMetrics['trend'] = []
-  for (const t of r.trend) {
-    const o = t as Record<string, unknown> | null
-    if (!o || typeof o !== 'object' || !/^\d{4}-\d{2}$/.test(String(o.month ?? ''))) return null
-    const sessions = boundedNum(o.sessions, COUNT_MAX)
-    const conversions = boundedNum(o.conversions, COUNT_MAX)
-    const salesAmount = boundedNum(o.salesAmount, YEN_MAX)
-    const orders = boundedNum(o.orders, COUNT_MAX)
-    if (sessions === null || conversions === null || salesAmount === null || orders === null) return null
-    trend.push({
-      month: String(o.month),
-      sessions: Math.round(sessions),
-      conversions: Math.round(conversions),
-      salesAmount: Math.round(salesAmount),
-      orders: Math.round(orders),
-    })
-  }
-  const f = (r.funnel ?? {}) as Record<string, unknown>
-  const n = {
-    sessions: boundedNum(r.sessions, COUNT_MAX),
-    conversions: boundedNum(r.conversions, COUNT_MAX),
-    prevSessions: boundedNum(r.prevSessions, COUNT_MAX),
-    prevConversions: boundedNum(r.prevConversions, COUNT_MAX),
-    salesAmount: boundedNum(r.salesAmount, YEN_MAX),
-    orders: boundedNum(r.orders, COUNT_MAX),
-    prevSalesAmount: boundedNum(r.prevSalesAmount, YEN_MAX),
-    fSessions: boundedNum(f.sessions, COUNT_MAX),
-    fEngaged: boundedNum(f.engaged, COUNT_MAX),
-    fConversions: boundedNum(f.conversions, COUNT_MAX),
-    fOrders: boundedNum(f.orders, COUNT_MAX),
-  }
-  if (Object.values(n).some(v => v === null)) return null
-  const sessions = Math.round(n.sessions!)
-  const conversions = Math.round(n.conversions!)
-  const salesAmount = Math.round(n.salesAmount!)
-  const orders = Math.round(n.orders!)
-  return {
-    segmentId: capCp(String(r.segmentId ?? ''), 64),
-    segmentName: capCp(String(r.segmentName ?? 'セグメント'), 100),
-    siteName: capCp(String(r.siteName ?? 'メディア'), 100),
-    periodMonth,
-    sessions,
-    conversions,
-    // 派生値（CVR・平均受注額・セッションあたり売上）は申告値を使わず検証済みの元値から再計算する
-    // （申告値の捏造余地をなくす + GA の keyEvents はセッション数を超えうるため CVR に上限検証を課さない）
-    conversionRate: sessions > 0 ? Math.round(conversions / sessions * 10000) / 10000 : 0,
-    prevSessions: Math.round(n.prevSessions!),
-    prevConversions: Math.round(n.prevConversions!),
-    salesAmount,
-    orders,
-    prevSalesAmount: Math.round(n.prevSalesAmount!),
-    aov: orders > 0 ? Math.round(salesAmount / orders) : 0,
-    salesPerSession: sessions > 0 ? Math.round(salesAmount / sessions) : 0,
-    funnel: {
-      sessions: Math.round(n.fSessions!),
-      engaged: Math.round(n.fEngaged!),
-      conversions: Math.round(n.fConversions!),
-      orders: Math.round(n.fOrders!),
-    },
-    trend,
-  }
+export interface IntegratedBuildResult {
+  metrics: IntegratedMetrics
+  mediaConnected: boolean
+  mediaFailed: boolean
 }
 
-/**
- * メディア軸（sessions / conversions / engaged）を**サーバーが GA から導出した月次で上書き**する（M2）。
- * クライアント申告値を信頼せず、GA 連携済みならメディア軸はサーバー導出が正。
- * サーバー窓に無い月は 0（GA にデータなし = 捏造月の持ち込みを防ぐ）。売上軸（salesAmount / orders / aov）は
- * モック側 SoT のため上書きしない。派生値（CVR・セッションあたり売上・ファネル）は上書き後に再計算する
- */
-export function applyServerMediaAxis(m: IntegratedMetrics, points: MediaMonthlyPoint[]): IntegratedMetrics {
-  const by = new Map(points.map(p => [p.month, p]))
-  const trend = m.trend.map(t => ({
-    ...t,
-    sessions: by.get(t.month)?.sessions ?? 0,
-    conversions: by.get(t.month)?.conversions ?? 0,
-  }))
-  const cur = trend[trend.length - 1]
-  const prev = trend.length > 1 ? trend[trend.length - 2] : undefined
-  const sessions = cur?.sessions ?? 0
-  const conversions = cur?.conversions ?? 0
-  const curPoint = cur ? by.get(cur.month) : undefined
-  return {
-    ...m,
-    trend,
-    sessions,
-    conversions,
-    conversionRate: sessions > 0 ? Math.round(conversions / sessions * 10000) / 10000 : 0,
-    prevSessions: prev?.sessions ?? 0,
-    prevConversions: prev?.conversions ?? 0,
-    salesPerSession: sessions > 0 ? Math.round((cur?.salesAmount ?? 0) / sessions) : 0,
-    funnel: {
-      sessions,
-      // 主体的関与は GA の engagedSessions 実測。旧キャッシュ等で無い場合のみ従来係数で近似（m4）
-      engaged: curPoint?.engagedSessions ?? Math.round(sessions * 0.55),
-      conversions,
-      orders: m.funnel.orders,
-    },
+async function buildIntegratedMetrics(
+  pool: pg.Pool, env: Env, segmentId: string, monthsCount: number, force: boolean,
+): Promise<IntegratedBuildResult> {
+  const months = recentMonthKeys(monthsCount, 1, todayJst())
+  const { rows: segRows } = await pool.query<{ name: string }>(
+    `SELECT name FROM business_segments WHERE id = $1`, [segmentId])
+  const { rows: setRows } = await pool.query<{ siteName: string }>(
+    `SELECT site_name AS "siteName" FROM media_settings WHERE segment_id = $1`, [segmentId])
+  // 売上月次。**対象月窓に絞って取得**する（旧実装は無順序 LIMIT 20000 で、明細が 2 万件を超える
+  // セグメントでは任意の部分集合になり売上総額・受注数・赤黒ペアリングが誤った = Codex P1-3）。
+  // 窓の判定は foldBusinessMonthly の帰属月と一致させる: 通常明細は自身の売上月・**赤黒訂正は
+  // 元伝票（correctionOf 先）の計上月**へ帰属する。よって「元伝票があればその sales_date、無ければ
+  // 自身の sales_date」が窓内の行だけを取れば、窓へ寄与する行を過不足なく取得できる。
+  // - 窓内の元伝票（通常明細）を offset する訂正は、訂正日が窓外（当月に切った訂正等）でも元月で拾う
+  // - 元伝票が窓外の訂正は帰属月も窓外 = 取得されず誤って自身の月へ相殺しない（元不明フォールバック暴発の防止）
+  // 前提（不変条件）: sales_records は論理削除しない（active を false にする経路は存在せず、UPDATE は
+  //   invoice_id のみ）。ゆえに LEFT JOIN の元伝票 o に active フィルタは不要（取得された訂正の元は必ず
+  //   active で foldBusinessMonthly の byId 突合が解決する）。**将来 sales_records に論理削除を追加する場合、
+  //   ここへ `AND o.active` を足すだけでなく foldBusinessMonthly の元月帰属（元が消えた訂正の扱い）も見直すこと。**
+  const periodFrom = `${months[0]!}-01`
+  const periodTo = monthEndOf(months[months.length - 1]!)
+  const { rows: salesRows } = await pool.query<{ id: string; salesDate: string; amount: number; correctionOf: string | null }>(
+    `SELECT r.id, r.sales_date AS "salesDate", r.amount, r.correction_of AS "correctionOf"
+     FROM sales_records r
+     LEFT JOIN sales_records o ON o.id = r.correction_of
+     WHERE r.segment_id = $1 AND r.active
+       AND COALESCE(o.sales_date, r.sales_date) >= $2
+       AND COALESCE(o.sales_date, r.sales_date) <= $3`,
+    [segmentId, periodFrom, periodTo])
+  const biz = foldBusinessMonthly(salesRows, months)
+  let mediaBy = new Map<string, MediaMonthlyPoint>()
+  let mediaConnected = false
+  let mediaFailed = false
+  if (googleOauthEnabled(env)) {
+    const access = await gaAccess(pool, env, segmentId)
+    if (access?.token && access.propertyId) {
+      mediaConnected = true
+      try {
+        const points = await fetchMonthlyTrend(pool, env, segmentId, monthsCount, force)
+        mediaBy = new Map(points.map(p => [p.month, p]))
+      } catch (e) {
+        // GA 一時障害はメディア軸 0 の組み立て + mediaFailed で報告（原則4。呼び出し側が描画・生成を判断）
+        console.warn('media integrated: monthly fetch failed:', (e as Error).message)
+        mediaFailed = true
+      }
+    }
   }
+  const metrics = composeIntegratedMetrics({
+    segmentId,
+    segmentName: segRows[0]?.name ?? 'セグメント',
+    siteName: setRows[0]?.siteName ?? 'メディア',
+    months, mediaBy, biz,
+  })
+  return { metrics, mediaConnected, mediaFailed }
 }
 
 /**
@@ -1196,6 +1156,17 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
     return c.json({ data: points })
   })
 
+  // ---- 統合メトリクス（業務 × メディア。Phase C = サーバー組み立て）----
+  // GA 未連携でも売上軸は返す（mediaConnected=false = メディア軸 0 が正）。
+  // GA 一時障害は mediaFailed=true（フロントは 0 描画せず失敗表示 + 再試行導線 = M1）
+  app.get('/integrated', async (c) => {
+    const segmentId = segmentIdOf(c.req.query('segmentId'))
+    const months = Math.min(12, Math.max(2, Math.round(Number(c.req.query('months') ?? 6)) || 6))
+    const force = c.req.query('force') === '1'
+    const result = await buildIntegratedMetrics(pool, env, segmentId, months, force)
+    return c.json({ data: result })
+  })
+
   // ---- メディア設定（AI 分析設定。GA 接続状態は /status が SoT）----
   app.get('/settings', async (c) => {
     const segmentId = segmentIdOf(c.req.query('segmentId'))
@@ -1525,11 +1496,9 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
 
   // ---- AI インサイトの生成・再生成（生成 → 保管 → 再生成で upsert 上書き = weekly_insights と同型）----
   // 認可の設計判断: 生成は全ロール可（mockup の分析ページと同じ可視性。generated_by を保存 = 誰の操作か追跡可能）。
-  // scope=integrated のメディア軸は **GA 連携済みセグメントなら**サーバーが GA 導出値で上書きするため、
-  // クライアント申告での改ざんは効かない。**GA 未連携セグメントでは上書きできず**、範囲検証済みの申告値が
-  // そのまま保管される = 売上軸と同じ受容クラス（認証済み社内ユーザーの脅威モデル + generated_by の監査可能性で
-  // 緩和して受容）。売上軸はモック側 SoT（未移行）でサーバー検証不能 = 同様に受容する
-  // （salesRecords の API 移行時にサーバー組み立てへ引き上げて両方解消。原則7 の文書化）
+  // scope=integrated は Phase C で**サーバー組み立て**（buildIntegratedMetrics = 売上軸 sales_records +
+  // メディア軸 GA）へ引き上げ、クライアントからのメトリクス受領を廃止した = 申告値の改ざん余地なし
+  // （M2 の受容判断は解消。旧 normalizeIntegratedMetrics / AKO-MEDIA-016 は撤去 = 016 は欠番）
   app.post('/insights/generate', async (c) => {
     const user = c.get('user')
     const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
@@ -1553,33 +1522,19 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
       llm = !!llmRes
       periodKey = `${result.metrics.periodFrom}_${result.metrics.periodTo}`
     } else {
-      // 統合（業務 × メディア）: 売上明細（salesRecords）は未移行のモック側 SoT のため、
-      // 統合メトリクスは**クライアントが**「メディア月次 = 本 API(/monthly) + 売上月次 = モック側集計」を
-      // 突合して組み立てて渡す（設計判断の文書化 = 原則6。salesRecords の API 移行 = Phase C で
-      // サーバー側組み立てへ引き上げる。businessSegments は Phase B = 0031 で移行済み）。サーバーの責務（M2）:
-      //   ① whitelist 正規化 + 全数値の有限・非負・範囲検証（不正は 400 = 500 を出さない・型崩れを保管しない）
-      //   ② メディア軸（sessions/conversions/engaged）は GA 連携済みならサーバー導出値で上書き（申告値を信頼しない）
-      //   ③ 売上軸はサーバー検証不能（モック SoT）= 範囲検証のみの限界を受容（上の認可コメント参照)
-      const normalized = normalizeIntegratedMetrics(body.metrics)
-      if (!normalized) throw err('AKO-MEDIA-016', '統合メトリクス（metrics）が不正です', 400)
-      let im: IntegratedMetrics = { ...normalized, segmentId }
-      const access = googleOauthEnabled(env) ? await gaAccess(pool, env, segmentId) : null
-      if (access?.token && access.propertyId) {
-        try {
-          const monthsCount = Math.min(12, Math.max(2, im.trend.length))
-          const points = await fetchMonthlyTrend(pool, env, segmentId, monthsCount, false)
-          im = applyServerMediaAxis(im, points)
-        } catch (e) {
-          // GA 一時障害時はクライアント値のまま続行し、突合できなかった事実を告知する（原則4）
-          console.warn('media integrated: server-side GA verify skipped:', (e as Error).message)
-          warning = 'メディア軸の GA 突合ができなかったため、送信された集計値のまま生成しています'
-        }
+      // 統合（業務 × メディア）: サーバー組み立て（Phase C）。GA 連携済みで月次が取れない場合は
+      // 生成しない（メディア軸 0 の虚偽データ由来インサイトを保管させない = M1 をサーバー側でも強制）
+      const monthsRaw = Number(body.months ?? 6)
+      const monthsCount = Math.min(12, Math.max(2, Number.isFinite(monthsRaw) ? Math.round(monthsRaw) : 6))
+      const built = await buildIntegratedMetrics(pool, env, segmentId, monthsCount, false)
+      if (built.mediaFailed) {
+        throw err('AKO-MEDIA-004', 'Google Analytics の月次トレンドを取得できないため、統合インサイトを生成できません。時間をおいて再試行してください', 502)
       }
-      metrics = im
-      const llmRes = await llmIntegratedInsight(env, im)
-      insight = llmRes ?? heuristicIntegratedInsight(im)
+      metrics = built.metrics
+      const llmRes = await llmIntegratedInsight(env, built.metrics)
+      insight = llmRes ?? heuristicIntegratedInsight(built.metrics)
       llm = !!llmRes
-      periodKey = im.periodMonth
+      periodKey = built.metrics.periodMonth
     }
 
     await pool.query(
