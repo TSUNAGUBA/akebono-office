@@ -774,3 +774,8 @@
 - [x] **G7（P3。設計 SoT の型ズレ）**: cockpit-design §2.2 の Goal コード片へ `createdAt?: string`（API 行のみ・latestGoal の決定的な後勝ち判定に使用）を反映（shared/domain/types.ts の実装済み定義と一致）
 - [ ] **G8（nit。スコープ外の既存重複 = 残課題）**: `components/widgets/WeeklyInsight.vue` の当月売上 KPI（`(m.salesMonthAmount / 10_000).toLocaleString('ja-JP')`）が万円表記を直書きしており fmtValue（shared/domain/landing-forecast = F5 で一元化した共通実装）未使用。コックピット外の既存実装のため今回はコード変更せず、**次回 WeeklyInsight 改修時に fmtValue へ寄せる**
 - [x] 検証: mockup vitest 178 / typecheck / build・api tsc / 単体 174 / 統合 190（実 PostgreSQL = fresh DB に 0035 の新 CHECK 適用）を再実行し全 green（G2 は既存の C2 行フィルタテスト内へ hr ケースのアサーションを追加 = テスト数不変）
+
+### 40-6 独立レビュー3巡目（最終確認）の結果と残課題（2026-07-29）
+- 判定: コードレビュアー = **CLEAR** / システム監査官 = **無条件 PASS**（G1 の 4 シナリオ解消・reactive 化の副作用不在・hr 行フィルタ・0035 再編集の妥当性をコードトレース + 全テスト再実行で確認）
+- [ ] **残課題（P3。3巡目監査の記録推奨）**: API モードで goals コレクションのハイドレーション完了前は `goalsEmpty` が true になり、admin に限り予報行へ「目標が未設定です」が一瞬表示され得る（cb357cf 以前からの既存挙動。誤数値なし・ロード完了で自動解消）。G1 で導入した `isApiCollectionLoaded('goals')` を同思想（欠測と空の区別）で適用すれば閉じられるため、**次回コックピット改修時の適用候補**として記録
+- [x] コメント整備（3巡目 nit）: useCockpit のヘッダ「権限ゲート」総論に、G1 で生まれた例外（sales 許可ユーザーの業態売上予報はトグル非依存 = media 生成ゲートのコメント参照）の一言を追記
