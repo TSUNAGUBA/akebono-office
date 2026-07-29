@@ -667,7 +667,7 @@ export interface IntegratedBuildResult {
   mediaFailed: boolean
 }
 
-async function buildIntegratedMetrics(
+export async function buildIntegratedMetrics(
   pool: pg.Pool, env: Env, segmentId: string, monthsCount: number, force: boolean,
 ): Promise<IntegratedBuildResult> {
   const months = recentMonthKeys(monthsCount, 1, todayJst())

@@ -48,7 +48,7 @@ const INV_COLS = `id, code, company_id AS "companyId", segment_id AS "segmentId"
 
 const PN_COLS = `id, code, company_id AS "companyId", segment_id AS "segmentId",
   period_from AS "periodFrom", period_to AS "periodTo", status, payable_amount AS "payableAmount",
-  lines, snapshot`
+  lines, snapshot, ${JST_TS('voided_at')} AS "voidedAt"`
 
 const RCPT_COLS = `id, invoice_id AS "invoiceId", ${JST_TS('received_at')} AS "receivedAt", amount, method,
   ${JST_TS('voided_at')} AS "voidedAt"`
@@ -418,8 +418,10 @@ export function akebonoBillingRoutes(pool: pg.Pool): Hono {
     if (!segmentId || !MONTH_RE.test(month)) throw err('AKO-GEN-001', 'segmentId と month（YYYY-MM）を指定してください', 400)
     const periodFrom = `${month}-01`
     const periodTo = monthEndOf(month)
+    // 精算バッチ id（生成した請求/通知を束ね、取消フローが対象を特定するための id = 0037）
+    const settlementId = newId('cst')
     const result = await inTxn(pool, async (db) => {
-      // 並行 close の直列化（C-1。同一 業態 × 月 の精算を 1 本化）
+      // 並行 close の直列化（C-1。同一 業態 × 月 の精算を 1 本化。cancel も同一キーで排他）
       await db.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`consign:${segmentId}:${month}`])
       // 対象 = 未精算の店舗売上（店舗ロールの得意先・qty > 0）
       const { rows: stores } = await db.query<{ id: string }>(
@@ -461,10 +463,10 @@ export function akebonoBillingRoutes(pool: pg.Pool): Hono {
             ]
         await db.query(
           `INSERT INTO invoices (id, code, company_id, segment_id, period_from, period_to, invoice_type, status,
-             issued_at, total_amount, lines, snapshot, source_record_ids)
-           VALUES ($1, $2, $3, $4, $5, $6, 'consignment_margin', 'issued', now(), $7, $8, $9, $10)`,
+             issued_at, total_amount, lines, snapshot, source_record_ids, settlement_id)
+           VALUES ($1, $2, $3, $4, $5, $6, 'consignment_margin', 'issued', now(), $7, $8, $9, $10, $11)`,
           [id, code, storeId, segmentId, periodFrom, periodTo, total, JSON.stringify(lines),
-            JSON.stringify(snapshot), JSON.stringify(storeRows.map(r => r.id))])
+            JSON.stringify(snapshot), JSON.stringify(storeRows.map(r => r.id)), settlementId])
         invoiceCount++
         for (const r of storeRows) settleByRecord.set(r.id, id)
       }
@@ -498,9 +500,9 @@ export function akebonoBillingRoutes(pool: pg.Pool): Hono {
         }
         const payable = lines.reduce((s, l) => s + l.amount, 0)
         await db.query(
-          `INSERT INTO payment_notices (id, code, company_id, segment_id, period_from, period_to, status, payable_amount, lines, snapshot)
-           VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7, $8, $9)`,
-          [id, code, artistId, segmentId, periodFrom, periodTo, payable, JSON.stringify(lines), JSON.stringify(snapshot)])
+          `INSERT INTO payment_notices (id, code, company_id, segment_id, period_from, period_to, status, payable_amount, lines, snapshot, settlement_id)
+           VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7, $8, $9, $10)`,
+          [id, code, artistId, segmentId, periodFrom, periodTo, payable, JSON.stringify(lines), JSON.stringify(snapshot), settlementId])
         noticeCount++
       }
 
@@ -513,7 +515,7 @@ export function akebonoBillingRoutes(pool: pg.Pool): Hono {
           throw err('AKO-GEN-003', '対象売上の一部が既に他の請求・精算に紐づいたため精算を中止しました。最新の状態で再実行してください', 409)
         }
       }
-      return { invoices: invoiceCount, notices: noticeCount }
+      return { invoices: invoiceCount, notices: noticeCount, settlementId }
     })
     await audit(pool, {
       actorId: user.id, action: 'create', entity: 'invoices', entityId: `${segmentId}:${month}`,
@@ -522,13 +524,84 @@ export function akebonoBillingRoutes(pool: pg.Pool): Hono {
     return c.json({ data: result }, 201)
   })
 
+  /**
+   * 委託精算の取消（原則9.5 = 記録・確定系にも立ち戻る導線）。対象 = 業態 × 月 の精算バッチ。
+   * ①店舗マージン請求（consignment_margin・issued）を void + マイナス請求（赤伝 = credit_for）を追記
+   * ②対象売上の精算リンク（invoice_id）を解除（再締め可能に戻す）
+   * ③作家支払通知を論理取消（voided_at）= 支払通知に赤伝の器が無いため監査列で無効化（0037）
+   * 冪等・二重取消ガード: advisory lock（close と同一キー = close/cancel の排他）で直列化し、
+   * issued の consignment_margin 請求が無ければ取消対象なし（既に取消済み = 409 AKO-BIL-010）。
+   */
+  app.post('/consignment/cancel', async (c) => {
+    const user = c.get('user')
+    const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
+    const segmentId = String(body.segmentId ?? '').trim()
+    const month = String(body.month ?? '').trim()
+    if (!segmentId || !MONTH_RE.test(month)) throw err('AKO-GEN-001', 'segmentId と month（YYYY-MM）を指定してください', 400)
+    const periodFrom = `${month}-01`
+    const periodTo = monthEndOf(month)
+    const result = await inTxn(pool, async (db) => {
+      // close と同一キーで排他（並行 close/cancel の直列化 = 二重取消ガードの基盤）
+      await db.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`consign:${segmentId}:${month}`])
+      // 取消対象 = この業態 × 月 の発行済みマージン請求（バッチ）。無ければ「対象なし/取消済み」= 409
+      const { rows: margins } = await db.query<{
+        id: string; companyId: string; segmentId: string | null; periodFrom: string; periodTo: string
+        totalAmount: number; lines: { id: string; description: string; amount: number }[]
+        sourceRecordIds: string[]; settlementId: string | null
+      }>(
+        `SELECT id, company_id AS "companyId", segment_id AS "segmentId", period_from AS "periodFrom",
+                period_to AS "periodTo", total_amount AS "totalAmount", lines,
+                source_record_ids AS "sourceRecordIds", settlement_id AS "settlementId"
+         FROM invoices
+         WHERE invoice_type = 'consignment_margin' AND status = 'issued'
+           AND credit_for IS NULL
+           AND segment_id = $1 AND period_from = $2 AND period_to = $3
+         FOR UPDATE`, [segmentId, periodFrom, periodTo])
+      if (margins.length === 0) {
+        throw err('AKO-BIL-010', '取消対象の委託精算がありません（未実施、または既に取消済みです）', 409)
+      }
+      let credited = 0
+      let unlinked = 0
+      for (const inv of margins) {
+        // ① 赤伝（マイナス請求）を追記 + 元請求を void
+        const creditId = newId('inv')
+        const code = await nextDocCode(db, 'INV')
+        await db.query(
+          `INSERT INTO invoices (id, code, company_id, segment_id, period_from, period_to, invoice_type, status,
+             issued_at, total_amount, credit_for, lines, source_record_ids, settlement_id)
+           VALUES ($1, $2, $3, $4, $5, $6, 'consignment_margin', 'issued', now(), $7, $8, $9, '[]', $10)`,
+          [creditId, code, inv.companyId, inv.segmentId, inv.periodFrom, inv.periodTo, -inv.totalAmount, inv.id,
+            JSON.stringify(inv.lines.map(l => ({ ...l, id: l.id + '-c', amount: -l.amount }))), inv.settlementId])
+        await db.query(`UPDATE invoices SET status = 'void', updated_at = now() WHERE id = $1`, [inv.id])
+        credited++
+        // ② 対象売上の精算リンクを解除（再締め可能に。この請求に紐づく行のみ）
+        const { rowCount } = await db.query(
+          `UPDATE sales_records SET invoice_id = NULL WHERE invoice_id = $1`, [inv.id])
+        unlinked += rowCount ?? 0
+      }
+      // ③ 作家支払通知を論理取消（このバッチ = 業態 × 月 の未取消通知。settlement_id が NULL の旧精算も期間で拾う）
+      const { rowCount: voidedNotices } = await db.query(
+        `UPDATE payment_notices SET voided_at = now(), voided_by = $4, updated_at = now()
+         WHERE segment_id = $1 AND period_from = $2 AND period_to = $3 AND voided_at IS NULL`,
+        [segmentId, periodFrom, periodTo, user.id])
+      return { credited, unlinked, voidedNotices: voidedNotices ?? 0 }
+    })
+    await audit(pool, {
+      actorId: user.id, action: 'update', entity: 'invoices', entityId: `${segmentId}:${month}`,
+      detail: `委託精算を取消（赤伝 ${result.credited} 件・支払通知取消 ${result.voidedNotices} 件・売上リンク解除 ${result.unlinked} 件）`,
+    })
+    return c.json({ data: result })
+  })
+
   // 支払通知の確定（draft → confirmed。以後不変）
   app.post('/payment-notices/:id/confirm', async (c) => {
     const user = c.get('user')
     const id = c.req.param('id')
     const updated = await inTxn(pool, async (db) => {
-      const { rows } = await db.query<{ status: string }>(`SELECT status FROM payment_notices WHERE id = $1 FOR UPDATE`, [id])
+      const { rows } = await db.query<{ status: string; voidedAt: string | null }>(
+        `SELECT status, voided_at AS "voidedAt" FROM payment_notices WHERE id = $1 FOR UPDATE`, [id])
       if (rows.length === 0) throw err('AKO-GEN-002', '支払通知が見つかりません', 404)
+      if (rows[0]!.voidedAt) throw err('AKO-BIL-007', '取消済みの支払通知は確定できません', 409)
       if (rows[0]!.status !== 'draft') throw err('AKO-BIL-007', '下書き以外は確定できません', 409)
       const { rows: out } = await db.query(
         `UPDATE payment_notices SET status = 'confirmed', updated_at = now() WHERE id = $1 RETURNING ${PN_COLS}`, [id])
