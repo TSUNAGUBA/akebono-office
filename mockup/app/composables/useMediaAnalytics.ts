@@ -45,6 +45,10 @@ const apiMediaArticles = ref<Record<string, MediaArticle[]>>({})
 const apiMetrics = ref<Record<string, MediaMetrics | null>>({})
 /** GA 集計の部分失敗警告（原則4 の「報告」。キーは apiMetrics と同じ） */
 const apiMetricsWarning = ref<Record<string, string | null>>({})
+/** 取得できなかった内訳キー（'daily'|'channels'|'devices'|'topPages'|'prevPages'。
+ * サーバーの null 防御はゼロ埋めへ正規化するため、該当ビジュアライゼーションはゼロ描画せず
+ * 「取得できませんでした」表示に置き換える（P1 = 失敗を 0 表示にしない原則の内訳への適用） */
+const apiMetricsUnavailable = ref<Record<string, string[]>>({})
 /** 月次トレンド（`${segmentId}:${months}`） */
 const apiMonthly = ref<Record<string, MediaMonthlyPoint[] | null>>({})
 
@@ -64,11 +68,12 @@ export function loadMediaMetrics(segmentId: string, days: number, force = false)
   const key = `${segmentId}:${days}`
   return apiLoadOnce(`media:metrics:${key}`, async () => {
     try {
-      const r = await apiFetch<{ metrics: MediaMetrics; warning?: string }>('/v1/media/metrics', {
+      const r = await apiFetch<{ metrics: MediaMetrics; warning?: string; unavailable?: string[] }>('/v1/media/metrics', {
         query: { segmentId, days: String(days), ...(force ? { force: '1' } : {}) },
       })
       apiMetrics.value = { ...apiMetrics.value, [key]: r.metrics }
       apiMetricsWarning.value = { ...apiMetricsWarning.value, [key]: r.warning ?? null }
+      apiMetricsUnavailable.value = { ...apiMetricsUnavailable.value, [key]: r.unavailable ?? [] }
     } catch (e) {
       // 未連携（AKO-MEDIA-003）・GA 障害（004）は null を記録 = 画面が再試行導線を出す（握りつぶさない）。
       // rethrow はしない: 失敗を「ロード済み（結果 null）」として確定させる。rethrow すると apiLoadOnce が
@@ -119,6 +124,7 @@ onApiReset(() => {
   apiMediaArticles.value = {}
   apiMetrics.value = {}
   apiMetricsWarning.value = {}
+  apiMetricsUnavailable.value = {}
   apiMonthly.value = {}
 })
 
@@ -186,6 +192,12 @@ export function useMediaAnalytics() {
   function metricsWarningFor(segmentId: string, days = 28): string | null {
     if (!isApi) return null
     return apiMetricsWarning.value[`${segmentId}:${days}`] ?? null
+  }
+
+  /** API: 取得できなかった内訳キー（P1。モックは常に空 = 全表示。該当ビジュアライゼーションはゼロ描画しない） */
+  function metricsUnavailableFor(segmentId: string, days = 28): string[] {
+    if (!isApi) return []
+    return apiMetricsUnavailable.value[`${segmentId}:${days}`] ?? []
   }
 
   /** API: GA 集計の再取得（サーバーキャッシュも force で飛ばす） */
@@ -337,7 +349,7 @@ export function useMediaAnalytics() {
 
   return {
     asOf, articleInputsFor, rawArticlesFor, metricsFor, integratedMetricsFor, businessMonthly,
-    metricsReady, metricsWarningFor, refreshMetrics,
+    metricsReady, metricsWarningFor, metricsUnavailableFor, refreshMetrics,
     integratedReady, integratedFailed, refreshMonthly, ensureIntegratedLoaded,
   }
 }

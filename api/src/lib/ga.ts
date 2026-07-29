@@ -224,7 +224,6 @@ export function buildMediaMetrics(reports: GaReportSet, opts: BuildMetricsOption
     pv: number
     users: number
     engSum: number
-    entrances: number
     bounceWSum: number
     conv: number
   }
@@ -233,7 +232,7 @@ export function buildMediaMetrics(reports: GaReportSet, opts: BuildMetricsOption
     const path = normPath(r.dim.pagePath ?? '') || '/'
     const pv = Math.round(r.met.screenPageViews ?? 0)
     const cur = pageAgg.get(path)
-      ?? { title: '', titlePv: -1, pv: 0, users: 0, engSum: 0, entrances: 0, bounceWSum: 0, conv: 0 }
+      ?? { title: '', titlePv: -1, pv: 0, users: 0, engSum: 0, bounceWSum: 0, conv: 0 }
     const title = (r.dim.pageTitle ?? '').trim()
     if (pv > cur.titlePv) {
       cur.title = title
@@ -242,7 +241,6 @@ export function buildMediaMetrics(reports: GaReportSet, opts: BuildMetricsOption
     cur.pv += pv
     cur.users += Math.round(r.met.totalUsers ?? 0)
     cur.engSum += r.met.userEngagementDuration ?? 0
-    cur.entrances += Math.round(r.met.entrances ?? 0)
     cur.bounceWSum += (r.met.bounceRate ?? 0) * pv // 直帰率は PV 加重平均で合成
     cur.conv += Math.round(r.met.keyEvents ?? 0)
     pageAgg.set(path, cur)
@@ -256,7 +254,6 @@ export function buildMediaMetrics(reports: GaReportSet, opts: BuildMetricsOption
     pageviews: a.pv,
     users: a.users,
     avgEngagementSec: a.pv > 0 ? Math.round(a.engSum / a.pv) : 0,
-    entrances: a.entrances,
     bounceRate: a.pv > 0 ? round3(a.bounceWSum / a.pv) : 0,
     convRate: a.users > 0 ? round4(a.conv / a.users) : 0,
     conversions: a.conv,

@@ -22,8 +22,8 @@ function mk(over: Partial<MediaMetrics> = {}): MediaMetrics {
     devices: [{ device: 'モバイル', sessions: 600 }, { device: 'デスクトップ', sessions: 400 }],
     daily: [],
     topPages: [
-      { id: 'p1', title: '主力記事', path: '/blog/1', section: 'ブログ', pageviews: 500, users: 400, avgEngagementSec: 120, entrances: 200, bounceRate: 0.4, convRate: 0.02, conversions: 8, prevPageviews: 400 },
-      { id: 'p2', title: 'サービス', path: '/service', section: 'サービス', pageviews: 200, users: 160, avgEngagementSec: 90, entrances: 80, bounceRate: 0.35, convRate: 0.06, conversions: 10, prevPageviews: 210 },
+      { id: 'p1', title: '主力記事', path: '/blog/1', section: 'ブログ', pageviews: 500, users: 400, avgEngagementSec: 120, bounceRate: 0.4, convRate: 0.02, conversions: 8, prevPageviews: 400 },
+      { id: 'p2', title: 'サービス', path: '/service', section: 'サービス', pageviews: 200, users: 160, avgEngagementSec: 90, bounceRate: 0.35, convRate: 0.06, conversions: 10, prevPageviews: 210 },
     ],
     sections: [
       { section: 'ブログ', pages: 5, pageviews: 800, avgEngagementSec: 100, convRate: 0.02 },

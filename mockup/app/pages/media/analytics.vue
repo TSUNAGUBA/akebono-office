@@ -19,7 +19,7 @@ const router = useRouter()
 const { effectiveSegmentId, currentSegment } = useCurrentSegment()
 const { settingFor } = useMediaSettings()
 const {
-  metricsFor, integratedMetricsFor, metricsReady, metricsWarningFor, refreshMetrics,
+  metricsFor, integratedMetricsFor, metricsReady, metricsWarningFor, metricsUnavailableFor, refreshMetrics,
   integratedReady, integratedFailed, refreshMonthly,
 } = useMediaAnalytics()
 const { loadMedia, generateMedia, loadIntegrated, generateIntegrated } = useMediaInsight()
@@ -65,6 +65,16 @@ const metricsEmpty = computed(() => {
 
 async function retryMetrics(): Promise<void> {
   await refreshMetrics(effectiveSegmentId.value, 28)
+}
+
+/**
+ * 取得できなかった内訳（P1）。サーバーの null 防御は欠落をゼロ埋めへ正規化するため、
+ * 該当ビジュアライゼーションはゼロデータとして描画せず「取得できませんでした」表示へ置き換える
+ * （失敗を 0 表示にしない = M1 と同じ原則の内訳への適用。モックは常に空 = 全表示）
+ */
+const unavailableSet = computed(() => new Set(metricsUnavailableFor(effectiveSegmentId.value, 28)))
+function na(key: string): boolean {
+  return unavailableSet.value.has(key)
 }
 
 // ---------- 保管済みインサイト（生成 → 保管 → 再生成で上書き） ----------
@@ -289,19 +299,32 @@ const SEVERITY_META: Record<string, { label: string; tone: 'crit' | 'warn' | 'in
           集計期間 {{ fmtDate(metrics.periodFrom) }}〜{{ fmtDate(metrics.periodTo) }}（前日基準・{{ metrics.days }} 日間）。前期比は直前の同日数期間との比較です。
         </p>
 
-        <!-- チャート -->
-        <ChartsLineChartCard title="日別セッション・ユーザー" :labels="dailyChart.labels" :series="dailyChart.series" />
+        <!-- チャート。取得できなかった内訳（unavailable = P1）はゼロデータとして描画せず、
+             「取得できませんでした」表示へ置き換える（一過性の失敗を実トラフィック 0 と誤認させない） -->
+        <ChartsLineChartCard v-if="!na('daily')" title="日別セッション・ユーザー" :labels="dailyChart.labels" :series="dailyChart.series" />
+        <UiSectionCard v-else title="日別セッション・ユーザー">
+          <p class="py-6 text-center text-[12px] text-muted">この内訳は取得できませんでした（上部の警告参照。再試行で回復します）</p>
+        </UiSectionCard>
         <div class="grid gap-3 lg:grid-cols-2">
-          <ChartsDonutChartCard title="チャネル別セッション" :items="channelItems" :value-formatter="v => fmtInt(v)" />
-          <ChartsDonutChartCard title="デバイス別セッション" :items="deviceItems" :value-formatter="v => fmtInt(v)" />
+          <ChartsDonutChartCard v-if="!na('channels')" title="チャネル別セッション" :items="channelItems" :value-formatter="v => fmtInt(v)" />
+          <UiSectionCard v-else title="チャネル別セッション">
+            <p class="py-6 text-center text-[12px] text-muted">この内訳は取得できませんでした（再試行で回復します）</p>
+          </UiSectionCard>
+          <ChartsDonutChartCard v-if="!na('devices')" title="デバイス別セッション" :items="deviceItems" :value-formatter="v => fmtInt(v)" />
+          <UiSectionCard v-else title="デバイス別セッション">
+            <p class="py-6 text-center text-[12px] text-muted">この内訳は取得できませんでした（再試行で回復します）</p>
+          </UiSectionCard>
         </div>
-        <ChartsBarChartCard title="記事別 PV（上位）" :labels="topPagesBar.labels" :series="topPagesBar.series" horizontal :height="300" :y-formatter="v => fmtInt(v)" />
+        <ChartsBarChartCard v-if="!na('topPages')" title="記事別 PV（上位）" :labels="topPagesBar.labels" :series="topPagesBar.series" horizontal :height="300" :y-formatter="v => fmtInt(v)" />
 
-        <!-- セクション別 -->
-        <UiSectionCard title="サイト構成（セクション別）" description="第 1 階層のセクションごとの PV・滞在・CVR">
+        <!-- セクション別（母集団は記事別レポート = topPages と同じ unavailable キー） -->
+        <UiSectionCard v-if="!na('topPages')" title="サイト構成（セクション別）" description="第 1 階層のセクションごとの PV・滞在・CVR">
           <UiDataTable :columns="sectionCols" :rows="sectionRows" row-key="section">
             <template #cell-convRate="{ value }">{{ fmtPct(Number(value)) }}</template>
           </UiDataTable>
+        </UiSectionCard>
+        <UiSectionCard v-else title="記事別・セクション別の内訳">
+          <p class="py-6 text-center text-[12px] text-muted">この内訳は取得できませんでした（上部の警告参照。再試行で回復します）</p>
         </UiSectionCard>
 
         <!-- AI インサイト（生成/再生成） -->
@@ -372,8 +395,8 @@ const SEVERITY_META: Record<string, { label: string; tone: 'crit' | 'warn' | 'in
           </div>
         </UiSectionCard>
 
-        <!-- 記事別テーブル -->
-        <UiSectionCard title="記事別パフォーマンス" description="PV 上位の記事の滞在・直帰率・CVR・前期比">
+        <!-- 記事別テーブル（前期比列は prevPages 欠落時に全行 null → "—" 表示 = ゼロ表示にはならない） -->
+        <UiSectionCard v-if="!na('topPages')" title="記事別パフォーマンス" :description="na('prevPages') ? 'PV 上位の記事の滞在・直帰率・CVR（前期比は取得できませんでした）' : 'PV 上位の記事の滞在・直帰率・CVR・前期比'">
           <UiDataTable :columns="pageCols" :rows="pageRows" row-key="title">
             <template #cell-bounceRate="{ value }">{{ fmtPct(Number(value)) }}</template>
             <template #cell-convRate="{ value }">{{ fmtPct(Number(value)) }}</template>
