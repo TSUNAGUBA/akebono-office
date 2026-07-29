@@ -178,6 +178,7 @@ const MIGRATED_MASTERS: Record<string, string> = {
   externalLinks: 'external-links',
   attendanceRules: 'attendance-rules',
   holidays: 'holidays',
+  goals: 'goals',
   workflowRoutes: 'workflow-routes',
   decisionThemes: 'decision-themes',
   permissionRules: 'permission-rules',
@@ -258,8 +259,19 @@ export function apiEntityOf(name: string): string {
 }
 
 const stores = new Map<string, Ref<unknown[]>>()
-const loadedCollections = new Set<string>()
+/** ロード成功済みコレクション（リアクティブ Set = isApiCollectionLoaded を computed から購読可能にする） */
+const loadedCollections = reactive(new Set<string>())
 const inflight = new Map<string, Promise<void>>()
+
+/**
+ * コレクションのハイドレーションが成功済みか（リアクティブ）。「欠測と 0 の区別」の判定材料:
+ * 未ロード・ロード失敗（403 / ネットワーク断）の空キャッシュを「0 件で成功」と区別する
+ * （useCockpit の業態売上予報 = 実績未確定なら 0 表示でなく組み立てない。レビュー2巡目 G1）。
+ * モックモードはフェッチ自体が無いため、呼び出し側で常にロード済み扱いにすること（本関数は API キャッシュ専用）
+ */
+export function isApiCollectionLoaded(name: string): boolean {
+  return loadedCollections.has(name)
+}
 
 /** コレクションストアの取得（なければ作成）。apiCollection / loadApiCollection の両入口で共有する */
 function ensureStore(name: string): Ref<unknown[]> {

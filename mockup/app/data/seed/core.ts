@@ -5,7 +5,7 @@
 import type {
   AiEmployee, AiRole, AttendanceRule, CodeMasterItem, Company, CompanyRelation,
   Contact, ContactRelation, CustomFieldDef, Department, EscalationRule, ExternalLink,
-  FeatureToggle, Industry, KnowledgeArticle, LeaveType, Member, Project, RelationType,
+  FeatureToggle, Goal, Industry, KnowledgeArticle, LeaveType, Member, Project, RelationType,
   SystemService, WorkflowRoute,
 } from '~/types/domain'
 
@@ -33,18 +33,18 @@ export const seedLeaveTypes: LeaveType[] = [
 ]
 
 export const seedMembers: Member[] = [
-  { id: 'm-01', name: '山下 誠', email: 'yamashita@tsunaguba.co.jp', employmentType: 'director', departmentId: 'dp-01', title: '代表取締役', role: 'admin', hireDate: '2018-04-01', weeklyDays: 5, weeklyHours: 40, punchRequired: false, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '1980-06-15', active: true, custom: {} },
-  { id: 'm-02', name: '佐伯 玲子', email: 'saeki@tsunaguba.co.jp', employmentType: 'director', departmentId: 'dp-01', title: '取締役', role: 'admin', hireDate: '2018-04-01', weeklyDays: 5, weeklyHours: 40, punchRequired: false, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '1983-11-02', active: true, custom: {} },
-  { id: 'm-03', name: '葛西 大輔', email: 'kasai@tsunaguba.co.jp', employmentType: 'employee', departmentId: 'dp-02', title: 'マネージャー', role: 'admin', hireDate: '2019-07-01', weeklyDays: 5, weeklyHours: 40, punchRequired: true, googleCalendarConnected: false, attendanceRuleId: null, birthDate: '1987-03-21', active: true, custom: {} },
-  { id: 'm-04', name: '三浦 彩', email: 'miura@tsunaguba.co.jp', employmentType: 'employee', departmentId: 'dp-02', title: 'リーダー', role: 'member', hireDate: '2020-04-01', weeklyDays: 5, weeklyHours: 30, punchRequired: true, googleCalendarConnected: true, attendanceRuleId: 'ar-04', birthDate: '1991-08-09', active: true, custom: {} },
-  { id: 'm-05', name: '小野寺 岳', email: 'onodera@tsunaguba.co.jp', employmentType: 'employee', departmentId: 'dp-04', title: 'リーダー', role: 'member', hireDate: '2020-10-01', weeklyDays: 5, weeklyHours: 40, punchRequired: true, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '1990-01-30', active: true, custom: {} },
-  { id: 'm-06', name: '澤村 拓海', email: 'sawamura@tsunaguba.co.jp', employmentType: 'employee', departmentId: 'dp-04', title: 'メンバー', role: 'member', hireDate: '2022-04-01', weeklyDays: 5, weeklyHours: 40, punchRequired: true, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '1996-12-05', active: true, custom: {} },
-  { id: 'm-07', name: '井関 美咲', email: 'iseki@tsunaguba.co.jp', employmentType: 'employee', departmentId: 'dp-05', title: 'メンバー', role: 'member', hireDate: '2023-04-01', weeklyDays: 5, weeklyHours: 40, punchRequired: true, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '1998-05-18', active: true, custom: {} },
-  { id: 'm-08', name: '玉井 蓮', email: 'tamai@tsunaguba.co.jp', employmentType: 'employee', departmentId: 'dp-05', title: 'メンバー', role: 'member', hireDate: '2024-04-01', weeklyDays: 5, weeklyHours: 40, punchRequired: true, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '2000-02-27', active: true, custom: {} },
-  { id: 'm-09', name: '深田 遥', email: 'fukada@tsunaguba.co.jp', employmentType: 'contract', departmentId: 'dp-04', title: 'メンバー', role: 'member', hireDate: '2024-01-01', weeklyDays: 5, weeklyHours: 37.5, punchRequired: true, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '1993-09-14', active: true, custom: {} },
-  { id: 'm-10', name: '村瀬 光', email: 'murase@tsunaguba.co.jp', employmentType: 'parttime', departmentId: 'dp-01', title: '人事・労務', role: 'hr', hireDate: '2024-09-01', weeklyDays: 3, weeklyHours: 18, punchRequired: true, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '2003-04-22', active: true, custom: {} },
-  { id: 'm-11', name: '有田 望', email: 'arita@tsunaguba.co.jp', employmentType: 'parttime', departmentId: 'dp-05', title: 'アシスタント', role: 'member', hireDate: '2025-11-01', weeklyDays: 2, weeklyHours: 12, punchRequired: true, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '2008-10-03', active: true, custom: {} },
-  { id: 'm-12', name: '外川 亘', email: 'togawa@partner.example.com', employmentType: 'outsource', departmentId: 'dp-04', title: 'パートナー', role: 'member', hireDate: '2025-05-01', weeklyDays: 5, weeklyHours: 40, punchRequired: false, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '1985-07-07', active: true, custom: {} },
+  { id: 'm-01', name: '山下 誠', email: 'yamashita@tsunaguba.co.jp', employmentType: 'director', departmentId: 'dp-01', title: '代表取締役', role: 'admin', hireDate: '2018-04-01', weeklyDays: 5, weeklyHours: 40, punchRequired: false, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '1980-06-15', segmentIds: [], active: true, custom: {} },
+  { id: 'm-02', name: '佐伯 玲子', email: 'saeki@tsunaguba.co.jp', employmentType: 'director', departmentId: 'dp-01', title: '取締役', role: 'admin', hireDate: '2018-04-01', weeklyDays: 5, weeklyHours: 40, punchRequired: false, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '1983-11-02', segmentIds: [], active: true, custom: {} },
+  { id: 'm-03', name: '葛西 大輔', email: 'kasai@tsunaguba.co.jp', employmentType: 'employee', departmentId: 'dp-02', title: 'マネージャー', role: 'admin', hireDate: '2019-07-01', weeklyDays: 5, weeklyHours: 40, punchRequired: true, googleCalendarConnected: false, attendanceRuleId: null, birthDate: '1987-03-21', segmentIds: [], active: true, custom: {} },
+  { id: 'm-04', name: '三浦 彩', email: 'miura@tsunaguba.co.jp', employmentType: 'employee', departmentId: 'dp-02', title: 'リーダー', role: 'member', hireDate: '2020-04-01', weeklyDays: 5, weeklyHours: 30, punchRequired: true, googleCalendarConnected: true, attendanceRuleId: 'ar-04', birthDate: '1991-08-09', segmentIds: ['seg-01'], active: true, custom: {} },
+  { id: 'm-05', name: '小野寺 岳', email: 'onodera@tsunaguba.co.jp', employmentType: 'employee', departmentId: 'dp-04', title: 'リーダー', role: 'member', hireDate: '2020-10-01', weeklyDays: 5, weeklyHours: 40, punchRequired: true, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '1990-01-30', segmentIds: ['seg-02'], active: true, custom: {} },
+  { id: 'm-06', name: '澤村 拓海', email: 'sawamura@tsunaguba.co.jp', employmentType: 'employee', departmentId: 'dp-04', title: 'メンバー', role: 'member', hireDate: '2022-04-01', weeklyDays: 5, weeklyHours: 40, punchRequired: true, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '1996-12-05', segmentIds: ['seg-02'], active: true, custom: {} },
+  { id: 'm-07', name: '井関 美咲', email: 'iseki@tsunaguba.co.jp', employmentType: 'employee', departmentId: 'dp-05', title: 'メンバー', role: 'member', hireDate: '2023-04-01', weeklyDays: 5, weeklyHours: 40, punchRequired: true, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '1998-05-18', segmentIds: ['seg-03'], active: true, custom: {} },
+  { id: 'm-08', name: '玉井 蓮', email: 'tamai@tsunaguba.co.jp', employmentType: 'employee', departmentId: 'dp-05', title: 'メンバー', role: 'member', hireDate: '2024-04-01', weeklyDays: 5, weeklyHours: 40, punchRequired: true, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '2000-02-27', segmentIds: ['seg-04'], active: true, custom: {} },
+  { id: 'm-09', name: '深田 遥', email: 'fukada@tsunaguba.co.jp', employmentType: 'contract', departmentId: 'dp-04', title: 'メンバー', role: 'member', hireDate: '2024-01-01', weeklyDays: 5, weeklyHours: 37.5, punchRequired: true, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '1993-09-14', segmentIds: ['seg-02'], active: true, custom: {} },
+  { id: 'm-10', name: '村瀬 光', email: 'murase@tsunaguba.co.jp', employmentType: 'parttime', departmentId: 'dp-01', title: '人事・労務', role: 'hr', hireDate: '2024-09-01', weeklyDays: 3, weeklyHours: 18, punchRequired: true, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '2003-04-22', segmentIds: [], active: true, custom: {} },
+  { id: 'm-11', name: '有田 望', email: 'arita@tsunaguba.co.jp', employmentType: 'parttime', departmentId: 'dp-05', title: 'アシスタント', role: 'member', hireDate: '2025-11-01', weeklyDays: 2, weeklyHours: 12, punchRequired: true, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '2008-10-03', segmentIds: [], active: true, custom: {} },
+  { id: 'm-12', name: '外川 亘', email: 'togawa@partner.example.com', employmentType: 'outsource', departmentId: 'dp-04', title: 'パートナー', role: 'member', hireDate: '2025-05-01', weeklyDays: 5, weeklyHours: 40, punchRequired: false, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '1985-07-07', segmentIds: ['seg-02'], active: true, custom: {} },
 ]
 
 export const seedIndustries: Industry[] = [
@@ -165,6 +165,25 @@ export const seedExternalLinks: ExternalLink[] = [
   { id: 'el-01', title: 'サポート管理表', url: 'https://www.google.com/', description: '顧客サポートの起票・対応状況管理（スプレッドシート）', icon: 'Table2', displayOrder: 1, active: true },
   { id: 'el-02', title: '経費精算 SaaS', url: 'https://www.google.com/', description: '立替経費の精算はこちら（稟議の経費承認と連動）', icon: 'Receipt', displayOrder: 2, active: true },
   { id: 'el-03', title: '社内 Wiki（旧）', url: 'https://www.google.com/', description: '移行中の旧ナレッジベース', icon: 'BookOpen', displayOrder: 3, active: true },
+]
+
+/**
+ * 目標マスタ（F-01 コックピット着地予報。cockpit-design §2.2）。
+ * 値は akebono.ts seedSalesRecords の月次規模と整合させ、予報が ok / warn 混在になる現実的な値にする:
+ * - seg-01 陶磁器: 委託販売の月次実績は 1〜3 万円規模（前月 26,400 / 前々月 9,600）。目標 30,000 円 =
+ *   背伸び目標（当月実績が乗るまでは warn = 針路修正の対象）
+ * - seg-02 SI: 案件単位のスパイク型（前々月に 5,000,000 の一括計上・当月ゼロ）。月次平準の目標 2,500,000 円
+ *   （受注が乗らない月は warn = 経営計器の注意喚起として妥当）
+ * - seg-03 SaaS: 月額 30,000 円の継続課金が当月も計上済み。目標 30,000 円 = 継続で達成（ok）
+ * - seg-04 アパレル: 立ち上げ中（売上実績なしのシナリオ）。目標 100,000 円（warn）
+ * - 日報提出率: 全社 90%（cockpit-design §2.2 の指定値）
+ */
+export const seedGoals: Goal[] = [
+  { id: 'g-01', metric: 'segment_sales', segmentId: 'seg-01', monthlyValue: 30000, note: '委託販売の月次目標（銀座・横浜 2 店舗の実績ペースからの背伸び値）', active: true },
+  { id: 'g-02', metric: 'segment_sales', segmentId: 'seg-02', monthlyValue: 2500000, note: 'SI 案件の月次平準目標（案件単位のスパイクを月割りで評価）', active: true },
+  { id: 'g-03', metric: 'segment_sales', segmentId: 'seg-03', monthlyValue: 30000, note: 'SaaS 月額の継続維持ライン（MRR ベース）', active: true },
+  { id: 'g-04', metric: 'segment_sales', segmentId: 'seg-04', monthlyValue: 100000, note: 'アパレル立ち上げ期の月次目標', active: true },
+  { id: 'g-05', metric: 'report_rate', segmentId: null, monthlyValue: 90, note: '日報提出率の全社目標', active: true },
 ]
 
 export const seedWorkflowRoutes: WorkflowRoute[] = [

@@ -70,6 +70,41 @@ function permissionSubjectCheck(v: { subjectKind?: string; subjectId?: string },
   }
 }
 
+/**
+ * goals の基底（PATCH は .partial() を使うためクロスフィールド検証前の形を保持）。
+ * segment_sales = 円（対象業態必須）/ report_rate = %（全社 = segmentId null・0-100）
+ */
+const goalBase = z.object({
+  metric: z.enum(['segment_sales', 'report_rate']),
+  segmentId: z.string().trim().nullable().default(null).transform(v => (v ? v : null)),
+  monthlyValue: z.number().min(0, '目標値は 0 以上で入力してください').max(1e12, '目標値が大きすぎます'),
+  note: z.string().default(''),
+})
+
+/**
+ * goals の metric × segmentId × 値域のペア整合（POST = 全フィールド確定時の検証）。
+ * object 単位の superRefine は .partial() に引き継がれず、部分 PATCH は単独フィールドの変更で
+ * 既存行との組み合わせ不変条件を破れるため、PATCH は masters.ts の goalCrossGuard
+ * （既存行とマージした結果で検証 = workflow-routes と同型）+ goals テーブルの CHECK 制約
+ * （migration 0039）が同じ不変条件を担保する
+ */
+function goalMetricCheck(
+  v: { metric?: string; segmentId?: string | null; monthlyValue?: number },
+  ctx: z.RefinementCtx,
+): void {
+  if (v.metric === 'segment_sales' && !v.segmentId) {
+    ctx.addIssue({ code: 'custom', path: ['segmentId'], message: '業態売上の目標は対象業態を指定してください' })
+  }
+  if (v.metric === 'report_rate') {
+    if (v.segmentId) {
+      ctx.addIssue({ code: 'custom', path: ['segmentId'], message: '日報提出率の目標は全社です（業態は指定できません）' })
+    }
+    if (v.monthlyValue !== undefined && v.monthlyValue > 100) {
+      ctx.addIssue({ code: 'custom', path: ['monthlyValue'], message: '日報提出率は 0〜100 で入力してください' })
+    }
+  }
+}
+
 const schemas = {
   members: z.object({
     name: z.string().trim().min(1, '氏名は必須です'),
@@ -85,6 +120,8 @@ const schemas = {
     googleCalendarConnected: z.boolean().default(false),
     attendanceRuleId: z.string().nullable().default(null),
     birthDate: dateKeyOrNull.default(null),
+    // 担当業態（businessSegments 参照。F-01 コックピットの事業計器の出し分け。空 = 未設定 = 下位互換）
+    segmentIds: z.array(z.string()).default([]),
     custom: z.record(z.string(), z.unknown()).default({}),
   }),
   departments: z.object({
@@ -224,6 +261,8 @@ const schemas = {
     name: z.string().trim().min(1, '祝日名は必須です'),
     source: z.enum(['official', 'manual']).default('manual'),
   }),
+  // 目標マスタ（F-01 コックピット着地予報。cockpit-design §2.2。migration 0039）
+  'goals': goalBase.superRefine(goalMetricCheck),
   'workflow-routes': workflowRouteBase.superRefine((v, ctx) => {
     // どの金額にもマッチしない経路・重複ステップの作成をサーバー側でも防ぐ（UI 検証のミラー）
     if (v.maxAmount !== null && v.maxAmount <= v.minAmount) {
@@ -369,7 +408,7 @@ export interface MasterDef {
 }
 
 export const MASTERS: Record<MasterEntity, MasterDef> = {
-  'members': { table: 'members', idPrefix: 'm', schema: schemas.members, patchSchema: schemas.members.partial(), jsonbFields: ['custom'] },
+  'members': { table: 'members', idPrefix: 'm', schema: schemas.members, patchSchema: schemas.members.partial(), jsonbFields: ['segmentIds', 'custom'] },
   'departments': { table: 'departments', idPrefix: 'dep', schema: schemas.departments, patchSchema: schemas.departments.partial(), jsonbFields: [] },
   'leave-types': { table: 'leave_types', idPrefix: 'lt', schema: schemas['leave-types'], patchSchema: schemas['leave-types'].partial().omit({ isStatutory: true }), jsonbFields: [] },
   'industries': { table: 'industries', idPrefix: 'ind', schema: schemas.industries, patchSchema: schemas.industries.partial(), jsonbFields: [] },
@@ -390,6 +429,10 @@ export const MASTERS: Record<MasterEntity, MasterDef> = {
   'attendance-rules': { table: 'attendance_rules', idPrefix: 'ar', schema: schemas['attendance-rules'], patchSchema: schemas['attendance-rules'].partial(), jsonbFields: ['appliesTo', 'defaultFor', 'flex', 'workingWeekdays'] },
   // 祝日は date 一意（重複 POST は 409）。誤登録の取り消しは物理削除（記録系ではない設定データ）
   'holidays': { table: 'public_holidays', idPrefix: 'hd', schema: schemas.holidays, patchSchema: schemas.holidays.partial(), jsonbFields: [], physicalDelete: true, noActive: true },
+  // 目標マスタ（F-01 コックピット着地予報。同一 (metric, segmentId) の active 重複は後勝ち = 画面側が警告。
+  // PATCH のクロスフィールド不変条件は masters.ts の goalCrossGuard（既存行とマージ）+ DB CHECK が担保
+  // = workflow-routes と同型のクロスガード方式）
+  'goals': { table: 'goals', idPrefix: 'g', schema: schemas.goals, patchSchema: goalBase.partial(), jsonbFields: [] },
   'workflow-routes': { table: 'workflow_routes', idPrefix: 'wr', schema: schemas['workflow-routes'], patchSchema: workflowRouteBase.partial(), jsonbFields: ['steps'] },
   'decision-themes': { table: 'decision_themes', idPrefix: 'dt', schema: schemas['decision-themes'], patchSchema: schemas['decision-themes'].partial(), jsonbFields: ['semantics', 'links', 'actions', 'options', 'scenarioParams'] },
   'ai-roles': { table: 'ai_roles', idPrefix: 'r', schema: schemas['ai-roles'], patchSchema: schemas['ai-roles'].partial(), jsonbFields: ['permissions'] },

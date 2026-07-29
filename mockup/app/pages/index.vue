@@ -1,35 +1,55 @@
 <script setup lang="ts">
 /**
- * ダッシュボード（F-01）
- * カード型メニュー + 通知フィードのみを配置する（2026-07-16 オペレーター指示）。
- * - 打刻はヘッダーの「タイムカード」ボタン → モーダル（layouts/default.vue）
- * - 売上サマリは 売上管理（/sales）、稼働状況サマリは 提供システム稼働状況（/status）へ独立
+ * ダッシュボード = コックピット（F-01 改訂「夜明けの管制塔」。2026-07-29 オペレーター承認）
+ * 設計 SoT: .ai-native/outputs/phase5/cockpit-design.md
+ * 構成（§3）: ① CockpitStrip（挨拶・フェーズ・完了メーター・予報 1 行）→ ② CockpitMoves（次の一手）
+ * → ③ CockpitInstruments（役割と文脈の計器）→ ④ CockpitForecast（滑走路ボード。既定閉・①から開閉）
+ * → ⑤ AKEBONO 業務 → ⑥ すべての機能（カード型メニュー = 格下げ配置。ロジックは従来どおり）
+ * → ⑦ 通知フィード（従来どおり）
+ * - 打刻はヘッダーの「タイムカード」ボタン → モーダル（layouts/default.vue）+ ②の punch 埋込
+ * - 開いた時に AI 生成・重い再取得を発生させない（週次インサイト・予報は保存値・既存キャッシュのみ）
  */
 import type { AppNotification } from '~/types/domain'
 import type { MenuCard, TabItem } from '~/types/ui'
-import { fmtDateLong, fmtDateTime } from '~/utils/format'
+import { fmtDateTime } from '~/utils/format'
 import { NOTIFICATION_KIND_LABELS } from '~/utils/labels'
 import { MENU_CARDS } from '~/utils/menu-registry'
 
-const { currentUser, currentUserId, isAdmin } = useCurrentUser()
+const { currentUserId, isAdmin } = useCurrentUser()
 const { mine, unreadCount, markRead } = useNotifications()
 const { isEnabled } = useAppSettings()
 const { pendingFor } = useWorkflow()
 
-// ---------- 挨拶 ----------
-const greeting = computed(() => {
-  const h = Number(jstClock().h)
-  if (h < 5) return 'お疲れさまです'
-  if (h < 11) return 'おはようございます'
-  if (h < 18) return 'こんにちは'
-  return 'こんばんは'
-})
-const todayLong = computed(() => fmtDateLong(nowJstIso()))
-
 const { canPath, can } = usePermissions()
 const canCompanyDashboard = computed(() => can('sales'))
 
-// ---------- AKEBONO 業務（業態別アプリをトップに配置。2026-07-28） ----------
+// ---------- コックピット（①〜④ の材料。useCockpit が権限ゲート・フォールバックを解決） ----------
+const cockpit = useCockpit()
+
+/** 滑走路ボード（④）の開閉。既定は閉・①の予報 1 行でトグル */
+const forecastOpen = ref(false)
+function toggleForecast(): void {
+  forecastOpen.value = !forecastOpen.value
+  if (forecastOpen.value && import.meta.client) {
+    void nextTick(() => {
+      document.getElementById('cockpit-forecast')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    })
+  }
+}
+
+/** ①の予報 1 行（予報あり = サマリー / goals 未設定は admin にのみ設定導線として表示） */
+const stripForecast = computed(() => {
+  if (cockpit.forecasts.value.length > 0) {
+    const s = cockpit.forecastSummary.value
+    return { headline: s.headline, tone: s.tone, badge: s.tone === 'warn' ? '注意' : '順調', available: true }
+  }
+  if (cockpit.goalsEmpty.value && isAdmin.value) {
+    return { headline: '着地予報: 目標が未設定です', tone: 'warn' as const, badge: '未設定', available: true }
+  }
+  return { headline: '', tone: 'ok' as const, badge: '', available: false }
+})
+
+// ---------- AKEBONO 業務（業態別アプリ。2026-07-28 のセクションを維持） ----------
 // 機能トグル + 権限を満たし、かつ業態が 1 件以上あるときのみ専用セクションを表示する
 // （業態未登録時はセクションごと出さない = ダッシュボードに空状態を出さない）。
 const { activeSegments } = useCurrentSegment()
@@ -123,72 +143,90 @@ function openNotification(n: AppNotification): void {
 </script>
 
 <template>
-  <div>
-    <UiPageHeader
-      :title="`${greeting}、${currentUser.name} さん`"
-      :description="todayLong"
+  <div class="grid gap-3">
+    <!-- ① ストリップ（挨拶・フェーズ・完了メーター・予報 1 行） -->
+    <WidgetsCockpitStrip
+      :phase="cockpit.phase.value"
+      :meter="cockpit.meter.value"
+      :forecast="stripForecast"
+      :expanded="forecastOpen"
+      @toggle-forecast="toggleForecast"
     />
 
-    <div class="grid gap-3">
-      <!-- AKEBONO 業務（業態別アプリ。押下でその業態の業務へ入る = ヘッダ切替に依存しない導線） -->
-      <section v-if="showAkebono" class="grid gap-1.5" aria-label="AKEBONO 業務">
-        <div class="flex items-center justify-between gap-2">
-          <p class="text-[11px] font-bold text-muted">AKEBONO 業務（業態別）</p>
-          <span class="flex items-center gap-3">
-            <NuxtLink v-if="canCompanyDashboard" to="/akebono/company" class="link text-[11px] font-semibold">会社全体ダッシュボード</NuxtLink>
-            <NuxtLink to="/akebono" class="link text-[11px] font-semibold">ハブを開く</NuxtLink>
-          </span>
-        </div>
-        <AkebonoSegmentApps />
-      </section>
+    <!-- ② 次の一手 -->
+    <WidgetsCockpitMoves :moves="cockpit.moves.value" />
 
-      <!-- カード型メニュー（カテゴリチップで絞り込み。バッチ7h） -->
-      <section class="grid gap-3" aria-label="メニュー">
-        <UiChipTabs v-model="selectedCategory" :options="categoryChips" aria-label="メニューカテゴリ" />
-        <div v-for="sec in shownSections" :key="sec.id">
-          <p class="mb-1.5 text-[11px] font-bold text-muted">{{ sec.label }}</p>
-          <UiCardMenu :items="sec.cards" />
-        </div>
-      </section>
+    <!-- ③ 役割と文脈の計器 -->
+    <WidgetsCockpitInstruments :groups="cockpit.instruments.value" :weekly="cockpit.weeklyLine.value" />
 
-      <!-- 通知フィード（エスカレーション / 承認依頼 / 稟議 のタブ分け） -->
-      <UiSectionCard
-        title="通知"
-        description="直近 5 件。クリックで既読にしてリンク先へ"
-        flush
-      >
-        <template #actions>
-          <NuxtLink to="/inbox" class="link text-xs font-semibold">すべて見る</NuxtLink>
-        </template>
-        <div class="px-3 pt-1">
-          <UiTabBar v-model="notifTab" :tabs="notifTabs" aria-label="通知カテゴリ" />
-        </div>
-        <UiEmptyState v-if="recentNotifications.length === 0" icon="BellOff" title="通知はありません" />
-        <ul v-else class="divide-y divide-[var(--c-line)]">
-          <li v-for="n in recentNotifications" :key="n.id">
-            <button
-              type="button"
-              class="flex w-full min-h-11 items-start gap-2.5 px-3 py-2 text-left transition-colors hover:bg-brand-soft"
-              :class="n.read ? '' : 'bg-brand-soft/50'"
-              @click="openNotification(n)"
-            >
-              <span
-                class="mt-1.5 h-2 w-2 shrink-0 rounded-full"
-                :class="n.read ? 'bg-transparent' : 'bg-brand'"
-                :aria-label="n.read ? undefined : '未読'"
-              />
-              <span class="min-w-0 flex-1">
-                <span class="flex flex-wrap items-center gap-1.5">
-                  <UiStatusBadge :label="NOTIFICATION_KIND_LABELS[n.kind]" tone="neutral" />
-                  <span class="truncate text-[13px]" :class="n.read ? 'text-sub' : 'font-bold'">{{ n.title }}</span>
-                </span>
-                <span class="mt-0.5 block truncate text-xs text-muted">{{ n.body }}</span>
+    <!-- ④ 着地予報（滑走路ボード。既定閉・①から開閉） -->
+    <WidgetsCockpitForecast
+      v-if="forecastOpen && stripForecast.available"
+      :forecasts="cockpit.forecasts.value"
+      :correction="cockpit.courseCorrection.value"
+      :goals-empty="cockpit.goalsEmpty.value"
+      :is-admin="isAdmin"
+    />
+
+    <!-- ⑤ AKEBONO 業務（業態別アプリ。押下でその業態の業務へ入る = ヘッダ切替に依存しない導線） -->
+    <section v-if="showAkebono" class="grid gap-1.5" aria-label="AKEBONO 業務">
+      <div class="flex items-center justify-between gap-2">
+        <p class="text-[11px] font-bold text-muted">AKEBONO 業務（業態別）</p>
+        <span class="flex items-center gap-3">
+          <NuxtLink v-if="canCompanyDashboard" to="/akebono/company" class="link text-[11px] font-semibold">会社全体ダッシュボード</NuxtLink>
+          <NuxtLink to="/akebono" class="link text-[11px] font-semibold">ハブを開く</NuxtLink>
+        </span>
+      </div>
+      <AkebonoSegmentApps />
+    </section>
+
+    <!-- ⑥ すべての機能（カード型メニュー = 格下げ配置。カテゴリチップで絞り込み。バッチ7h） -->
+    <section class="grid gap-3" aria-label="すべての機能">
+      <p class="text-[11px] font-bold text-muted">すべての機能</p>
+      <UiChipTabs v-model="selectedCategory" :options="categoryChips" aria-label="メニューカテゴリ" />
+      <div v-for="sec in shownSections" :key="sec.id">
+        <p class="mb-1.5 text-[11px] font-bold text-muted">{{ sec.label }}</p>
+        <UiCardMenu :items="sec.cards" />
+      </div>
+    </section>
+
+    <!-- ⑦ 通知フィード（エスカレーション / 承認依頼 / 稟議 のタブ分け） -->
+    <UiSectionCard
+      title="通知"
+      description="直近 5 件。クリックで既読にしてリンク先へ"
+      flush
+    >
+      <template #actions>
+        <NuxtLink to="/inbox" class="link text-xs font-semibold">すべて見る</NuxtLink>
+      </template>
+      <div class="px-3 pt-1">
+        <UiTabBar v-model="notifTab" :tabs="notifTabs" aria-label="通知カテゴリ" />
+      </div>
+      <UiEmptyState v-if="recentNotifications.length === 0" icon="BellOff" title="通知はありません" />
+      <ul v-else class="divide-y divide-[var(--c-line)]">
+        <li v-for="n in recentNotifications" :key="n.id">
+          <button
+            type="button"
+            class="flex w-full min-h-11 items-start gap-2.5 px-3 py-2 text-left transition-colors hover:bg-brand-soft"
+            :class="n.read ? '' : 'bg-brand-soft/50'"
+            @click="openNotification(n)"
+          >
+            <span
+              class="mt-1.5 h-2 w-2 shrink-0 rounded-full"
+              :class="n.read ? 'bg-transparent' : 'bg-brand'"
+              :aria-label="n.read ? undefined : '未読'"
+            />
+            <span class="min-w-0 flex-1">
+              <span class="flex flex-wrap items-center gap-1.5">
+                <UiStatusBadge :label="NOTIFICATION_KIND_LABELS[n.kind]" tone="neutral" />
+                <span class="truncate text-[13px]" :class="n.read ? 'text-sub' : 'font-bold'">{{ n.title }}</span>
               </span>
-              <span class="num shrink-0 pt-0.5 text-[11px] text-muted">{{ fmtDateTime(n.at) }}</span>
-            </button>
-          </li>
-        </ul>
-      </UiSectionCard>
-    </div>
+              <span class="mt-0.5 block truncate text-xs text-muted">{{ n.body }}</span>
+            </span>
+            <span class="num shrink-0 pt-0.5 text-[11px] text-muted">{{ fmtDateTime(n.at) }}</span>
+          </button>
+        </li>
+      </ul>
+    </UiSectionCard>
   </div>
 </template>

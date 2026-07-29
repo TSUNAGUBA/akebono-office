@@ -72,6 +72,7 @@ export const MENU_CARDS: Record<MenuArea, MenuCardDef[]> = {
     { id: 'relation-types', title: '関係種別', description: '顧客関係で使う関係の種類の定義（追加・編集・削除）', icon: 'Tags', to: '/masters/relation-types' },
     { id: 'industries', title: '業界', description: '業界名と表示順。直交軸で管理（複合値を作らない）', icon: 'Factory', to: '/masters/industries' },
     { id: 'projects', title: 'プロジェクト', description: 'PJ 名・顧客・種別・状態・担当・期間・予算・目的', icon: 'FolderKanban', to: '/masters/projects' },
+    { id: 'goals', title: '目標', description: '業態売上・日報提出率の月次目標（ダッシュボードの着地予報が参照）', icon: 'Target', to: '/masters/goals' },
     { id: 'work-categories', title: '業務種別', description: 'ぽいぽいポスト・議事録の分類。名称と表示順', icon: 'Tags', to: '/masters/work-categories' },
     { id: 'knowledge', title: 'ナレッジ', description: '5 ドメイン（業界/会社/人/関係/PJ）に紐付く記事と裁定還流', icon: 'BookOpen', to: '/masters/knowledge' },
     { id: 'settings', title: 'カスタム項目・区分値', description: 'カスタム項目・区分値の定義は設定画面で管理します', icon: 'Settings2', to: '/settings' },
@@ -92,6 +93,6 @@ export const DEFAULT_MENU_CATEGORIES: Record<MenuArea, MenuCategoryDef[]> = {
     { id: 'org', label: '組織・権限', cardIds: ['members', 'departments', 'titles', 'permissions'] },
     { id: 'hr', label: '勤怠・休暇', cardIds: ['leave-types', 'holidays'] },
     { id: 'crm', label: '会社・顧客', cardIds: ['company', 'customers', 'contacts', 'relations-company', 'relations-contact', 'relation-types', 'industries'] },
-    { id: 'biz', label: '業務・ナレッジ', cardIds: ['projects', 'work-categories', 'knowledge', 'settings'] },
+    { id: 'biz', label: '業務・ナレッジ', cardIds: ['projects', 'goals', 'work-categories', 'knowledge', 'settings'] },
   ],
 }
