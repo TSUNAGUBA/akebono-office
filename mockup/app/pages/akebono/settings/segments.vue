@@ -6,7 +6,9 @@
  * - 商品登録の既定値（単位・課金区分・バリアント軸1/2ラベル）。通常フォームではこれを自動適用し、
  *   個別変更は商品側の「カスタマイズ」フォームでのみ許す（入力コストの最小化）
  *
- * 書込は useMasterCrud('businessSegments') の部分パッチ（name/業種等は保持 = 非破壊）。
+ * 書込は useMasterCrudAsync('businessSegments') の部分パッチ（name/業種等は保持 = 非破壊。
+ * Phase B で API 移行済み = API モードの SoT はサーバー（business_segments）・部分 PATCH は
+ * hasOwn フィルタで未送信フィールドを保持する）。
  * 取消可能性（原則9.5）: 再編集で上書き可能。画像は「アイコンに戻す」で取消できる。
  */
 import * as icons from 'lucide-vue-next'
@@ -20,8 +22,9 @@ import { IMAGE_MAX_CHARS, imageToDataUri } from '~/utils/thumb'
 
 const { activeSegments } = useCurrentSegment()
 const masters = useAkebonoMasters()
-const segCrud = useMasterCrud('businessSegments', 'seg')
+const segCrud = useMasterCrudAsync('businessSegments', 'seg')
 const { commit } = useMockDb()
+const isApi = useApiMode()
 const toast = useToast()
 
 const billingOptions = Object.entries(BILLING_TYPE_LABELS).map(([value, label]) => ({ value, label }))
@@ -123,8 +126,10 @@ function clearImage(): void {
   form.value.appIconImage = null
 }
 
-function save(): void {
-  if (!editingId.value) return
+const saving = ref(false)
+
+async function save(): Promise<void> {
+  if (!editingId.value || saving.value) return
   const patch: Partial<BusinessSegment> & { id: string } = {
     id: editingId.value,
     appName: form.value.appName.trim() || null,
@@ -135,19 +140,22 @@ function save(): void {
     defaultVariantAxis1Label: form.value.defaultVariantAxis1Label.trim() || null,
     defaultVariantAxis2Label: form.value.defaultVariantAxis2Label.trim() || null,
   }
-  const res = segCrud.save(patch)
-  if (!res.ok) {
-    toast.show(`${res.error?.code}: ${res.error?.message}`, 'crit')
-    return
-  }
-  // 画像アイコンは data URI で嵩むため容量超過で永続化に失敗しうる。商品画像と同様に警告する
-  // （commit() 再実行で現在の db が保存に収まるか確認。成功済みなら true・超過なら false = 原則4/7 の一貫性）。
-  if (form.value.appIconImage && commit() === false) {
-    toast.show('業態アプリ設定を保存しましたが、画像アイコンは保存容量の上限により再読込時に失われる可能性があります。小さい画像や選択式アイコンをお試しください', 'warn')
-  } else {
-    toast.show('業態アプリ設定を保存しました', 'ok')
-  }
-  drawerOpen.value = false
+  saving.value = true
+  try {
+    const res = await segCrud.save(patch)
+    if (!res.ok) {
+      toast.show(`${res.error?.code}: ${res.error?.message}`, 'crit')
+      return
+    }
+    // モックモード: 画像アイコンは data URI で嵩むため localStorage 容量超過で永続化に失敗しうる。
+    // 商品画像と同様に警告する（API モードはサーバー保管のため対象外 = Phase B）
+    if (!isApi && form.value.appIconImage && commit() === false) {
+      toast.show('業態アプリ設定を保存しましたが、画像アイコンは保存容量の上限により再読込時に失われる可能性があります。小さい画像や選択式アイコンをお試しください', 'warn')
+    } else {
+      toast.show('業態アプリ設定を保存しました', 'ok')
+    }
+    drawerOpen.value = false
+  } finally { saving.value = false }
 }
 </script>
 
@@ -273,7 +281,7 @@ function save(): void {
 
         <template #footer>
           <button type="button" class="btn" @click="drawerOpen = false">キャンセル</button>
-          <button type="button" class="btn btn-primary" :disabled="imageBusy" @click="save">保存</button>
+          <button type="button" class="btn btn-primary" :disabled="imageBusy || saving" @click="save">{{ saving ? '保存中…' : '保存' }}</button>
         </template>
       </UiDrawer>
     </template>

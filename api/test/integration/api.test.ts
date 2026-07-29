@@ -3867,3 +3867,129 @@ describe('メディア分析 F-40 の本実装（GA 連携・設定・記事イ�
     expect(media.json.error?.code).toBe('AKO-MEDIA-005')
   })
 })
+
+describe('Phase B: Akebono 設定系の API 永続化（業態マスタ・共通マスタ・アプリ設定・項目カスタマイズ）', () => {
+  it('業態マスタ: モック互換シード（seg-01〜04）が投入され、部分 PATCH は未送信フィールドを保持する', async () => {
+    const list = await api('GET', '/v1/masters/business-segments', { as: MEMBER })
+    const rows = list.json.data as { id: string; name: string; industryType: string }[]
+    expect(rows.map(r => r.id)).toEqual(expect.arrayContaining(['seg-01', 'seg-02', 'seg-03', 'seg-04']))
+    expect(rows.find(r => r.id === 'seg-01')?.name).toBe('陶磁器委託販売')
+
+    // 業態アプリ設定の部分パッチ（segments.vue 相当）= 送っていない name / industryType が保持されること
+    const patch = await api('PATCH', '/v1/masters/business-segments/seg-01', {
+      as: ADMIN, body: { appName: '器アプリ', defaultVariantAxis1Label: '窯元' },
+    })
+    expect(patch.status).toBe(200)
+    const updated = patch.json.data as { name: string; industryType: string; appName: string; defaultVariantAxis1Label: string; defaultUnitId: string }
+    expect(updated.appName).toBe('器アプリ')
+    expect(updated.defaultVariantAxis1Label).toBe('窯元')
+    expect(updated.name).toBe('陶磁器委託販売') // 未送信フィールドの保持（Zod v4 注意の回帰）
+    expect(updated.industryType).toBe('retail')
+    expect(updated.defaultUnitId).toBe('unit-02')
+  })
+
+  it('業態マスタ: アイコン画像は data:image base64 のみ許可（SVG 等は 400）・書込は管理者のみ', async () => {
+    const bad = await api('PATCH', '/v1/masters/business-segments/seg-01', {
+      as: ADMIN, body: { appIconImage: 'data:image/svg+xml;base64,PHN2Zz4=' },
+    })
+    expect(bad.status).toBe(400)
+    const good = await api('PATCH', '/v1/masters/business-segments/seg-01', {
+      as: ADMIN, body: { appIconImage: 'data:image/png;base64,iVBORw0KGgo=' },
+    })
+    expect(good.status).toBe(200)
+    const denied = await api('PATCH', '/v1/masters/business-segments/seg-01', {
+      as: MEMBER, body: { appName: 'x' },
+    })
+    expect(denied.status).toBe(403)
+  })
+
+  it('共通マスタ 8 種: シード投入 + CRUD が汎用マスタとして動く（単位を追加 → 更新 → 無効化 → 復元）', async () => {
+    const units = await api('GET', '/v1/masters/units', { as: MEMBER })
+    expect((units.json.data as unknown[]).length).toBeGreaterThanOrEqual(5)
+    const taxes = await api('GET', '/v1/masters/tax-rates', { as: MEMBER })
+    expect((taxes.json.data as { id: string }[]).map(t => t.id)).toEqual(expect.arrayContaining(['tax-10', 'tax-08', 'tax-00']))
+
+    const created = await api('POST', '/v1/masters/units', { as: ADMIN, body: { name: '箱', displayOrder: 9 } })
+    expect(created.status).toBe(201)
+    const id = (created.json.data as { id: string }).id
+    expect((await api('PATCH', `/v1/masters/units/${id}`, { as: ADMIN, body: { name: '箱（12入）' } })).status).toBe(200)
+    expect((await api('POST', `/v1/masters/units/${id}/archive`, { as: ADMIN })).status).toBe(200)
+    expect((await api('POST', `/v1/masters/units/${id}/restore`, { as: ADMIN })).status).toBe(200)
+  })
+
+  it('画像セクション: 既定シード（is_seed）は無効化不可（AKO-AKB-002）・名称変更は可', async () => {
+    const rename = await api('PATCH', '/v1/masters/product-image-sections/pis-01', {
+      as: ADMIN, body: { name: '完成品画像' },
+    })
+    expect(rename.status).toBe(200)
+    const archive = await api('POST', '/v1/masters/product-image-sections/pis-01/archive', { as: ADMIN })
+    expect(archive.status).toBe(409)
+    expect(archive.json.error?.code).toBe('AKO-AKB-002')
+    // 追加分（is_seed=false）は無効化できる
+    const created = await api('POST', '/v1/masters/product-image-sections', {
+      as: ADMIN, body: { name: '着用画像' },
+    })
+    expect(created.status).toBe(201)
+    const id = (created.json.data as { id: string }).id
+    expect((await api('POST', `/v1/masters/product-image-sections/${id}/archive`, { as: ADMIN })).status).toBe(200)
+  })
+
+  it('業態×アプリ設定: バッチ upsert（複合キー・冪等）→ GET 反映。書込は管理者のみ・不正 rows は 400', async () => {
+    const rows = [
+      { segmentId: 'seg-01', appKey: 'products', enabled: true, labelOverride: null, source: 'preset' },
+      { segmentId: 'seg-01', appKey: 'media', enabled: false, labelOverride: '器メディア', source: 'manual' },
+      // 同一キーの重複行は後勝ちで畳まれる（ON CONFLICT の二重更新エラーにならない）
+      { segmentId: 'seg-01', appKey: 'media', enabled: true, labelOverride: '器メディア', source: 'manual' },
+    ]
+    const put = await api('PUT', '/v1/akebono/app-configs', { as: ADMIN, body: { rows } })
+    expect(put.status).toBe(200)
+    const saved = put.json.data as { appKey: string; enabled: boolean; labelOverride: string | null }[]
+    expect(saved).toHaveLength(2)
+    expect(saved.find(r => r.appKey === 'media')).toMatchObject({ enabled: true, labelOverride: '器メディア' })
+
+    // 再送は同じ結果（冪等）・更新は上書き
+    const again = await api('PUT', '/v1/akebono/app-configs', {
+      as: ADMIN,
+      body: { rows: [{ segmentId: 'seg-01', appKey: 'media', enabled: false, labelOverride: null, source: 'manual' }] },
+    })
+    expect(again.status).toBe(200)
+    const got = await api('GET', '/v1/akebono/app-configs', { as: MEMBER })
+    const media = (got.json.data as { segmentId: string; appKey: string; enabled: boolean }[])
+      .find(r => r.segmentId === 'seg-01' && r.appKey === 'media')
+    expect(media?.enabled).toBe(false)
+
+    expect((await api('PUT', '/v1/akebono/app-configs', { as: MEMBER, body: { rows } })).status).toBe(403)
+    expect((await api('PUT', '/v1/akebono/app-configs', { as: ADMIN, body: { rows: [] } })).status).toBe(400)
+  })
+
+  it('項目カスタマイズ: 複合キーの部分 upsert（未送信フィールド保持）→ エンティティ単位リセット', async () => {
+    const first = await api('PUT', '/v1/akebono/item-settings', {
+      as: ADMIN, body: { entity: 'product', itemKey: 'listPrice', labelOverride: '販売価格' },
+    })
+    expect(first.status).toBe(200)
+    // formVisible のみ送る部分更新 → labelOverride が保持されること
+    const second = await api('PUT', '/v1/akebono/item-settings', {
+      as: ADMIN, body: { entity: 'product', itemKey: 'listPrice', formVisible: false },
+    })
+    expect(second.status).toBe(200)
+    const row = second.json.data as { formVisible: boolean; labelOverride: string; listVisible: boolean | null }
+    expect(row.formVisible).toBe(false)
+    expect(row.labelOverride).toBe('販売価格')
+    expect(row.listVisible).toBeNull()
+
+    // 別エンティティの差分はリセットの影響を受けない
+    await api('PUT', '/v1/akebono/item-settings', {
+      as: ADMIN, body: { entity: 'sales_record', itemKey: 'channel', listVisible: true },
+    })
+    const reset = await api('POST', '/v1/akebono/item-settings/reset', { as: ADMIN, body: { entity: 'product' } })
+    expect(reset.status).toBe(200)
+    expect((reset.json.data as { deleted: number }).deleted).toBe(1)
+    const rest = await api('GET', '/v1/akebono/item-settings', { as: MEMBER })
+    const rows = rest.json.data as { entity: string }[]
+    expect(rows.some(r => r.entity === 'product')).toBe(false)
+    expect(rows.some(r => r.entity === 'sales_record')).toBe(true)
+
+    expect((await api('PUT', '/v1/akebono/item-settings', { as: MEMBER, body: { entity: 'product', itemKey: 'x', formVisible: true } })).status).toBe(403)
+    expect((await api('PUT', '/v1/akebono/item-settings', { as: ADMIN, body: { entity: 'product', itemKey: 'x' } })).status).toBe(400)
+  })
+})

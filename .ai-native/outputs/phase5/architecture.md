@@ -125,6 +125,9 @@ office: `IsometricOffice`（アイソメトリック空間）、`AiEmployeeCard`
 | `useSystemStatus` | 提供システム状態・インシデント・稼働率（デュアルモード: API モードは `/v1/status` = service_incidents が SoT・uptime はサーバー導出。バッチ6c） |
 | `useSales` | 売上サマリ・実績登録（デュアルモード: API モードは `/v1/sales` = sales_monthly が SoT。バッチ6b） |
 | `useAkebono` | AKEBONO 要望ボックス（デュアルモード: API モードは `/v1/akebono/wishes` = akebono_wishes が SoT・追記のみ。バッチ6d） |
+| `useAkebonoMasters` | Akebono マスタ 9 種（業態・倉庫・単位・税区分・支払条件・委託条件・バリアント軸テンプレ・商品カテゴリ・画像セクション）の CRUD 集約（Phase B: useMasterCrudAsync 化 = API モードは `/v1/masters/*` が SoT。0031 でモックシードと同一 id を投入） |
+| `useAkebonoApps` | 業態×アプリ設定（F-20。デュアルモード: API = `PUT /v1/akebono/app-configs` = akebono_app_configs（複合キー (segmentId, appKey)）が SoT・変更行だけのバッチ upsert。行が無い業態は業種プリセットへフォールバック = シード不要。Phase B） |
+| `useItemSettings` | 項目カスタマイズ（F-31。カタログ ITEM_CATALOG = コード静的 SoT + テナント差分 = item_settings。デュアルモード: API = `PUT /v1/akebono/item-settings` の部分 upsert + reset（エンティティ単位でカタログ既定へ戻す取消フロー = 原則9.5）。Phase B） |
 | `useChatbot` | セッション管理（デュアルモード: API モードは `/v1/chatbot` = chat_sessions / chat_messages が SoT・LLM 一次応答 + マルチターン。バッチ5b）・フォールバックのシナリオベース応答（2 段ルーティング = 今回の質問 → 直近のユーザー発言で再判定。会社は正規化名寄せ + 最長一致・弊社/当社 = 自社・業界回答・ナレッジ全文字句照合 = バッチ7a）・出典解決・擬似ストリーミング・表示中セッションの sessionStorage タブ内永続 + リロード自動再開（2026-07-18 改善） |
 | `useNotes` | ぽいぽいポスト・議事録（デュアルモード: API = `/v1/notes` が SoT・検索インデックス自動反映 / モック = notes コレクション。バッチ7c/7d/7e）。テキスト登録 + ファイル取込（モックは .md/.txt のみ）+ 取消/復元（archive/restore = 論理削除とその取消。poipoi = 本人 / minutes = 登録者 or 管理者）+ adminList（管理者の全ポスト閲覧 = scope=all。7e） |
 | `useWeeklyInsight` | 週次 AI インサイト（バッチ7g。デュアルモード: API = GET /v1/reports/weekly-insight / モック = shared/domain/weekly-insight の同一集計 + heuristic。週次全データの決定的集計 → LLM 洞察） |

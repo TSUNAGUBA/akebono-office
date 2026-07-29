@@ -183,11 +183,31 @@ const MIGRATED_MASTERS: Record<string, string> = {
   permissionRules: 'permission-rules',
   aiRoles: 'ai-roles',
   aiEmployees: 'ai-employees',
+  // Akebono 設定系（Phase B = 0031）
+  businessSegments: 'business-segments',
+  warehouses: 'warehouses',
+  units: 'units',
+  taxRates: 'tax-rates',
+  paymentTerms: 'payment-terms',
+  consignmentTerms: 'consignment-terms',
+  variantAxisTemplates: 'variant-axis-templates',
+  productCategories: 'product-categories',
+  productImageSections: 'product-image-sections',
+}
+
+/**
+ * masters 以外の専用エンドポイントでハイドレーションするコレクション（Phase B）。
+ * 複合キー（akebonoAppConfigs）・差分 upsert（itemSettings）は汎用マスタ CRUD に合わないため、
+ * 読み取りだけここで API 化し、書込は各 composable（useAkebonoApps / useItemSettings）の専用経路が担う
+ */
+const CUSTOM_COLLECTION_ENDPOINTS: Record<string, string> = {
+  akebonoAppConfigs: '/v1/akebono/app-configs',
+  itemSettings: '/v1/akebono/item-settings',
 }
 
 /** API モード時に API が SoT となるコレクション（tbl() が API キャッシュを返す） */
 export function isMigratedCollection(name: string): boolean {
-  return name in MIGRATED_MASTERS || name === 'auditLogs'
+  return name in MIGRATED_MASTERS || name in CUSTOM_COLLECTION_ENDPOINTS || name === 'auditLogs'
 }
 
 export function apiEntityOf(name: string): string {
@@ -221,7 +241,9 @@ export async function loadApiCollection(name: string, force = false): Promise<vo
     try {
       const rows = name === 'auditLogs'
         ? await apiFetch<unknown[]>('/v1/configs/audit-logs', { query: { limit: '200' } })
-        : await apiFetch<unknown[]>(`/v1/masters/${MIGRATED_MASTERS[name]}`, { query: { includeInactive: '1' } })
+        : name in CUSTOM_COLLECTION_ENDPOINTS
+          ? await apiFetch<unknown[]>(CUSTOM_COLLECTION_ENDPOINTS[name]!)
+          : await apiFetch<unknown[]>(`/v1/masters/${MIGRATED_MASTERS[name]}`, { query: { includeInactive: '1' } })
       // ストア未作成でも必ず作成して格納する。従来は tbl() 未アクセスのコレクションを先に
       // ロードすると結果が捨てられ「ロード済み・中身は空」で固定される実バグがあった
       // （オペレーター報告 2026-07-18 #2「会社について答えられない」の根本原因）

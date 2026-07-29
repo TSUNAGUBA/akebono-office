@@ -19,15 +19,15 @@ const m = useAkebonoMasters()
 const toast = useToast()
 const confirm = useConfirm()
 
-// ---------- CRUD の緩い型（動的タブキーで union を跨ぐため） ----------
+// ---------- CRUD の緩い型（動的タブキーで union を跨ぐため。Phase B で async 化） ----------
 interface CrudResult { ok: boolean; id?: string; error?: { code: string; message: string } }
 type Row = Record<string, unknown>
 interface LooseCrud {
   list: { value: Row[] }
   byId: (id: string) => Row | undefined
-  save: (e: Row & { id?: string }) => CrudResult
-  archive: (id: string) => CrudResult
-  restore: (id: string) => CrudResult
+  save: (e: Row & { id?: string }) => Promise<CrudResult>
+  archive: (id: string) => Promise<CrudResult>
+  restore: (id: string) => Promise<CrudResult>
 }
 
 // ---------- タブ ----------
@@ -128,7 +128,10 @@ function cancelForm(): void {
   else drawerOpen.value = false
 }
 
-function save(): void {
+const saving = ref(false)
+
+async function save(): Promise<void> {
+  if (saving.value) return
   const e: Record<string, string> = {}
   for (const f of fields.value) {
     if (!f.required) continue
@@ -142,14 +145,17 @@ function save(): void {
   }
   const payload = m.coerce(activeTab.value, form.value) as Row & { id?: string }
   if (mode.value === 'edit' && selectedId.value) payload.id = selectedId.value
-  const res = currentCrud.value.save(payload)
-  if (!res.ok) {
-    toast.show(`${res.error?.code}: ${res.error?.message}`, 'crit')
-    return
-  }
-  toast.show(mode.value === 'create' ? `${currentMeta.value.label}を追加しました` : `${currentMeta.value.label}を更新しました`)
-  if (res.id) selectedId.value = res.id
-  mode.value = 'view'
+  saving.value = true
+  try {
+    const res = await currentCrud.value.save(payload)
+    if (!res.ok) {
+      toast.show(`${res.error?.code}: ${res.error?.message}`, 'crit')
+      return
+    }
+    toast.show(mode.value === 'create' ? `${currentMeta.value.label}を追加しました` : `${currentMeta.value.label}を更新しました`)
+    if (res.id) selectedId.value = res.id
+    mode.value = 'view'
+  } finally { saving.value = false }
 }
 
 async function archiveSelected(): Promise<void> {
@@ -161,15 +167,15 @@ async function archiveSelected(): Promise<void> {
     { danger: true, confirmLabel: '無効化' },
   )
   if (!ok) return
-  const res = currentCrud.value.archive(String(s.id))
+  const res = await currentCrud.value.archive(String(s.id))
   if (res.ok) toast.show('無効化しました', 'warn')
   else toast.show(`${res.error?.code}: ${res.error?.message}`, 'crit')
 }
 
-function restoreSelected(): void {
+async function restoreSelected(): Promise<void> {
   const s = selected.value
   if (!s) return
-  const res = currentCrud.value.restore(String(s.id))
+  const res = await currentCrud.value.restore(String(s.id))
   if (res.ok) toast.show('復元しました')
   else toast.show(`${res.error?.code}: ${res.error?.message}`, 'crit')
 }
@@ -296,7 +302,7 @@ function asTerm(row: Row): ConsignmentTerm {
           </div>
           <div v-else class="flex items-center justify-end gap-2">
             <button type="button" class="btn" @click="cancelForm">キャンセル</button>
-            <button type="button" class="btn btn-primary" @click="save">保存</button>
+            <button type="button" class="btn btn-primary" :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存' }}</button>
           </div>
         </template>
       </UiDrawer>

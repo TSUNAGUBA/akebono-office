@@ -15,7 +15,7 @@ Nuxt 4 SPA（ssr:false, hashMode）/ TypeScript strict / Tailwind v4 + CSS 変�
 
 1. **全操作が反応する**（X-1）: ボタン・行・カードは必ず 遷移 / ドロワー / モーダル / トースト / 状態変化 のいずれかを返す。飾りのボタンを作らない
 2. **データは useMockDb 経由のみ**: `const { tbl, commit, nextId } = useMockDb()`。書込後は必ず `commit()`。ID は `nextId(collection, prefix)`
-   - **API モード（バッチ2a〜）:** マイグレーション済みコレクション（マスタ 21 種 = useApi.ts の MIGRATED_MASTERS・監査ログ・設定）は `tbl()` が API キャッシュを返す（参照はそのまま）。**書込は `useMasterCrudAsync` / `useAppSettings` の API 経路のみ**。`tbl().value = ...` の直接書込やモック版 `useMasterCrud` での書込を追加しない（キャッシュ汚染 = SoT 逆流。原則6）
+   - **API モード（バッチ2a〜）:** マイグレーション済みコレクション（マスタ 31 種 = useApi.ts の MIGRATED_MASTERS・専用エンドポイント 2 種 = CUSTOM_COLLECTION_ENDPOINTS（akebonoAppConfigs / itemSettings。Phase B）・監査ログ・設定）は `tbl()` が API キャッシュを返す（参照はそのまま）。**書込は `useMasterCrudAsync` / `useAppSettings` / 専用 composable（useAkebonoApps / useItemSettings）の API 経路のみ**。`tbl().value = ...` の直接書込やモック版 `useMasterCrud` での書込を追加しない（キャッシュ汚染 = SoT 逆流。原則6）
 3. **記録系は追記のみ**: 打刻・承認ログ・活動ログ等を書き換え・削除しない。マスタは論理削除（`active:false`）のみ
 4. **Math.random / v-html 禁止**: 乱数は `~/utils/rng`（決定的）。リッチ表示はテキスト分解で
 5. **アイコンは lucide-vue-next のみ**。絵文字をアイコン代わりにしない
@@ -96,6 +96,15 @@ const art = useMediaArticles()   // generate（async。API = Vertex AI → 決�
 
 // 業態別/会社全体ダッシュボード（F-41。業務×メディアを統合したサマリー+AIレポート+AIインサイト。純ロジック SoT = shared/domain/portfolio-insight）
 const di = useDashboardInsight() // buildSegmentSummary/buildCompanySummary（常時ライブ集計）/ loadSegment・generateSegment / loadCompany・generateCompany（生成→保管→再生成で上書き）
+
+// Akebono マスタ（Phase B で API 永続化 = /v1/masters/*。cruds は useMasterCrudAsync = save/archive/restore は Promise<Result>）
+const am = useAkebonoMasters()  // segments / warehouses / units / taxRates / paymentTerms / consignmentTerms / variantAxisTemplates / productCategories / imageSections
+
+// 業態×アプリ設定（F-20。API = PUT /v1/akebono/app-configs の複合キーバッチ upsert。行が無い業態は業種プリセットへフォールバック）
+const apps = useAkebonoApps()   // isAppEnabled / appsForSegment / setEnabled・setLabel・applyPreset（async。変更行だけ送る）
+
+// 項目カスタマイズ（F-31。カタログ = コード静的 SoT + テナント差分。API = PUT /v1/akebono/item-settings の部分 upsert）
+const its = useItemSettings()   // resolve(entity) / upsert（渡したキーのみ更新）/ resetEntity（カタログ既定へ戻す取消フロー = 原則9.5）
 ```
 
 ## UI コンポーネント在庫（新規に作る前にここを見る）

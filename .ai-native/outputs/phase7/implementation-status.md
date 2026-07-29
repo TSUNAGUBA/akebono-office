@@ -144,7 +144,8 @@
 | チャットボット（画面内ヘルプ） | F-09-3 | ✅ | ✅ チャットボット接続済み（PR #27）+ ✅ セッション管理（PR #30/#31・オペレーター指示 2026-07-17）: 会話は chat_sessions / chat_messages（0012）で DB 管理・同一セッション内は直近履歴 12 件を LLM へ渡すマルチターン・過去セッションの再開/新規開始（履歴ドロワー + 新しい会話）・本人のみ参照（AKO-CHT-001）・メッセージは追記のみ。fallback 応答もセッションへ追記（履歴の忠実性） | 旧「会話履歴はセッションローカル」設計判断は PR #30/#31 で置換。ドキュメントはバッチ7l で実データ化（search_docs 経由の参照 + 署名 URL 案内 = §32）。エスカレーション起票は PR #21 で接続済み |
 | mart（分析基盤）ETL: fact_attendance / fact_leave / fact_effort ほか | data-design §2 | —（写像可能な型のみ） | 🚧 fact_sales のみ本 PR（バッチ6b）で実装（app_office 内 mart 互換テーブル + mart_load_runs。data-design §2.3 の実装状況注記参照）。他ファクトは ⏳ | app_office → mart の一方向 ETL。mart 本体（akebono-scm-platform）への接続はテーブル移送 + ETL 先切替で対応（オペレーター判断 2026-07-18） |
 | メディア分析 `/media`（AKEBONO 業務配下） | F-40 | ✅ | ✅ メディア接続（§37 = 2026-07-28）: GA 連携 = Google OAuth 2.0（**セグメント単位**・analytics.readonly・state ノンス + email 突合・トークン AES-256-GCM 暗号化 = 0030）→ GA4 プロパティ選択（Admin API accountSummaries → PUT /v1/media/property）・集計 = GA4 Data API batchRunReports → MediaMetrics 整形（lib/ga.ts・30 分導出キャッシュ・conversions 廃止のため keyEvents 使用）・メディア設定（部分更新 = hasOwn フィルタ）・記事インベントリ（論理削除/復元）・AI 記事生成（Vertex AI → 決定的フォールバック・採用/取消）・AI インサイト（media/integrated = weekly_insights と同型の upsert 保管） | 記事インベントリは実データのためシードしない（採用・手動登録で育成）。統合メトリクスの売上月次は未移行の salesRecords（モック側 SoT）をクライアント合成（§37 残課題参照） |
-| 業態/会社全体ダッシュボード `/akebono/dashboard`・`/akebono/company` | F-41 | ✅ | 🚧 部分接続: メディア軸（GA 月次）は API モードで実データ化（/v1/media/monthly）。売上軸（salesRecords）と保管（dashboardInsights）は未移行のモックコレクション | ダッシュボードの本接続は salesRecords / businessSegments の API 移行時に実施（設計判断を useDashboardInsight に文書化） |
+| 業態/会社全体ダッシュボード `/akebono/dashboard`・`/akebono/company` | F-41 | ✅ | 🚧 部分接続: メディア軸（GA 月次）は API モードで実データ化（/v1/media/monthly）。売上軸（salesRecords）と保管（dashboardInsights）は未移行のモックコレクション | ダッシュボードの本接続は salesRecords の API 移行（Phase C）時に実施（設計判断を useDashboardInsight に文書化）。businessSegments は Phase B（§38）で移行済み |
+| Akebono 設定系（`/akebono` ハブのアプリ設定・`/akebono/masters`・`/akebono/settings/segments`・`/akebono/settings/items`） | F-20/F-30/F-31 | ✅ | ✅ Phase B 接続（§38 = 2026-07-29）: 業態 + 共通マスタ 8 種 = 汎用マスタ registry（0031・モックシードと同一 id を投入）・業態×アプリ設定 = `/v1/akebono/app-configs`（複合キーのバッチ upsert）・項目カスタマイズ = `/v1/akebono/item-settings`（部分 upsert + エンティティ単位 reset） | 記録系（products〜salesRecords〜請求）は Phase C（§38-5）。カタログ（アプリ・項目定義・業種プリセット）はフロント静的 SoT のまま |
 
 ## 3. バッチ3d（PR #25・マージ済み）: AI業務アシスタント + 日報 AI アシストの完了条件（Definition of Done）
 
@@ -623,4 +624,38 @@
 
 ### 37-4 検証・残課題
 - [x] 検証（レビュー修正後の再実行）: api 単体 **156**（ga-report 20 + media-routes 24 を新設）/ api 統合 **163**（メディア 7 スイート = 部分更新の保持・重複登録/復元衝突・生成→採用→取消→復元・統合インサイト upsert + 受領検証・GA 未設定経路）/ mockup 単体 148 / typecheck（api・mockup）/ mockup build 全 green
-- [ ] 残課題: 統合メトリクスの売上月次・F-41 ダッシュボード保管（dashboardInsights）・businessSegments/salesRecords の API 移行(移行時に /v1/media/integrated のサーバー組み立てへ引き上げ = 売上軸の改ざん耐性限界も解消)。GA プロパティのタイムゾーンが JST 以外の場合の日単位ずれは許容（lib/ga.ts に設計判断を文書化）。記事インベントリ手動登録の専用 UI（現状は管理者 API + curl = deploy-guide §1-9b）
+- [ ] 残課題: 統合メトリクスの売上月次・F-41 ダッシュボード保管（dashboardInsights）・salesRecords の API 移行(移行時に /v1/media/integrated のサーバー組み立てへ引き上げ = 売上軸の改ざん耐性限界も解消。**businessSegments は Phase B = §38 で移行済み**)。GA プロパティのタイムゾーンが JST 以外の場合の日単位ずれは許容（lib/ga.ts に設計判断を文書化）。記事インベントリ手動登録の専用 UI（現状は管理者 API + curl = deploy-guide §1-9b）
+
+## 38. Akebono 設定・実データの本実装 Phase B: 設定系 12 コレクションの API 永続化（2026-07-29）の完了条件（Definition of Done）
+
+> オペレーター指示「設定・実データの本実装」第 1 弾。従来 localStorage + 日次リシードのモックコレクション
+> だった Akebono 設定系を API（PostgreSQL）へ移行し、API モードで「翌日消える設定」を解消する。
+> 段階計画: **Phase B（本節 = 設定系）→ Phase C（売上系記録データ + PDCA 売上軸のサーバー実データ化）
+> → Phase D（残り記録系・導出系）**。各 Phase で独立レビューを回す。
+
+### 38-1 DB（migration 0031）
+- [x] 11 テーブル新設: business_segments（業態 = 業態軸の根。app_name/app_icon/app_icon_image・default_unit_id・default_billing_type・default_variant_axis1/2_label を含む）/ warehouses / units / tax_rates / payment_terms / consignment_terms / variant_axis_templates / product_categories / product_image_sections（is_seed = 既定シード保護）/ akebono_app_configs（**PK (segment_id, app_key)**）/ item_settings（**UNIQUE (app_key, entity, item_key)**・差分列は全て nullable）
+- [x] 初期データの判断を migration 冒頭コメントに文書化: 9 マスタは**モックシードと同一 id・同一値**を投入（①業態が空だと全 Akebono 画面が業態軸を失う ②既存 API 実データ（media_ga_tokens / media_settings）と Phase C まで残るモック記録系が seg-01 等の同 id を参照 = 下位互換 原則7）。ON CONFLICT DO NOTHING = 冪等・既存行を巻き戻さない（原則2）。akebono_app_configs / item_settings は**投入しない**（プリセット / カタログ既定がコード側フォールバック = 空でも欠けない）
+- [x] FK なしの判断: warehouses.company_id / consignment_terms.company_id の参照先シード（c-ak-* = デモ取引先）が実環境の companies に存在しないため。Phase C（記録系移行）で参照整合の引き上げを判断（0030 の media 系 FK も同時に判断）
+
+### 38-2 API
+- [x] 汎用マスタ registry へ 9 種追加（`/v1/masters/business-segments`・`warehouses`・`units`・`tax-rates`・`payment-terms`・`consignment-terms`・`variant-axis-templates`・`product-categories`・`product-image-sections`。id プレフィックスはモックと同一 = seg/wh/unit/tax/pt/ct/vat/pcat/pis）。business-segments の appIconImage は data:image png/jpeg/webp base64 のみ・400,000 文字上限（プロフィール画像と同じ SVG 拒否 = スクリプト混入防止。80MB の body 上限に対し余裕）
+- [x] product_image_sections の既定シード（is_seed）は無効化不可 = **AKO-AKB-002**（409。名称変更は可 = 商品画像の整合保護。archive ルートの entity 別ガードとして実装）。isSeed は PATCH 対象外（patchSchema から omit）
+- [x] 複合キーの 2 コレクションは registry（id 主キーの行 CRUD）に合わないため**専用 API**（routes/akebono.ts に判断根拠をコメント化）: `GET/PUT /v1/akebono/app-configs`（PUT = 管理者のみ。rows 1〜200 のバッチ upsert・同一 (segmentId, appKey) は後勝ちで畳む = 単一 upsert 文の二重更新エラー防止・冪等）/ `GET/PUT /v1/akebono/item-settings`（PUT = 管理者のみ。**body に実在するキーのみ**の部分 upsert = Object.hasOwn・null は「カタログ既定へ戻す」明示値）/ `POST /v1/akebono/item-settings/reset`（管理者のみ。エンティティ単位の差分全削除 = カタログ既定へ戻す取消フロー 原則9.5・監査ログ）
+- [x] カタログ（アプリキー・依存・業種プリセット・ITEM_CATALOG）は**フロント静的 SoT** = サーバーはキー形式のみ検証し存在検証しない（設計判断: カタログ更新でサーバー再デプロイ不要）。参照は全員可（メニュー表示・項目解決に全画面が使う）・書込は管理者のみ（設定画面の管理者ゲートと一致）
+
+### 38-3 フロント（デュアルモード化。モックモードの挙動は不変）
+- [x] useApi: MIGRATED_MASTERS へ 9 マスタ追加 + **CUSTOM_COLLECTION_ENDPOINTS 新設**（akebonoAppConfigs / itemSettings = 専用 GET でロードする移行済みコレクション。isMigratedCollection / loadApiCollection が分岐）
+- [x] useAkebonoMasters: 9 cruds を useMasterCrudAsync 化。/akebono/masters・/akebono/settings/segments は save/archive/restore を await + 保存中表示（連打防止）。segments.vue の localStorage 容量警告はモックモード限定へ
+- [x] useAkebonoApps: setEnabled / setLabel / applyPreset を async 化（API モードは変更行だけを PUT → 応答でキャッシュ反映 = SoT 書込→キャッシュの順。行が無い業態はプリセットを materialize してから差分適用）。/akebono ハブのトグル・ラベル・一括適用がエラートースト対応
+- [x] useItemSettings: upsert（API = PUT → 複合キーで置換反映）/ resetEntity（API = POST reset → キャッシュから当該 entity を除去）を async 化。/akebono/settings/items の各ハンドラがエラートースト対応
+- [x] 取消可能性（原則9.5): マスタ = 論理削除 + 復元（既存パターン）。アプリ設定 = トグルの再操作で戻る（設定値の上書き）。項目カスタマイズ = null 指定で個別に既定へ戻す + reset でエンティティ単位の一括取消
+
+### 38-4 検証・ドキュメント
+- [x] テスト: api 単体 **177**（akebono-configs 11 件新設 = appConfigRowsOf の後勝ち畳み込み・境界 / itemSettingPatchOf の hasOwn フィルタ・null 意味論）/ api 統合 **169**（Phase B 6 スイート新設 = 業態シード + **部分 PATCH で未送信フィールド保持**・iconImage 検証（SVG 拒否・403）・units CRUD・pis-01 の AKO-AKB-002 と名称変更可・app-configs バッチ upsert（重複畳み込み・冪等・403/400）・item-settings 部分 upsert（labelOverride 保持）+ reset）/ mockup 単体 148 / typecheck（api・mockup）・build 全 green
+- [x] ドキュメント: data-design §1.5（テーブル一覧 + SoT 宣言 + 初期データ・FK 判断）・§1.4 の businessSegments 記述更新 / api-design §3（useAkebonoMasters / useAkebonoApps / useItemSettings）+ §4 台帳（AKO-AKB-002）/ CONVENTIONS（composable の async 化追随）/ 本節
+
+### 38-5 残課題（Phase C / Phase D 計画）
+- [ ] **Phase C（次の依頼): 売上系記録データ + PDCA 売上軸のサーバー実データ化**。記録系 15 コレクション（products / productVariantAxes / skus / スキャン・在庫（inventoryMoves 等）/ purchases / salesRecords / 委託精算・請求ほか）の API 移行と、/v1/media/integrated のサーバー組み立て化（= 統合メトリクス売上軸の改ざん耐性限界の解消・「売上・受注 = デモデータ」バッジの撤去 = §37 M3）。移行時に併せて判断: segment_id / company_id の FK 参照整合の引き上げ（0030/0031 とも）・c-ak-* デモシード（warehouses / consignment_terms の参照先）の整理案内・F-41 ダッシュボード保管（dashboardInsights）の media_insights 同型化
+- [ ] **Phase D: 残り記録系・導出系**（Phase C 対象外の記録・導出コレクション。akebonoNotifications 等の扱いを Phase C の結果を踏まえて判断）
+- [ ] 各 Phase で独立レビュー（コードレビュアー + システム監査官）を回す（原則9）
