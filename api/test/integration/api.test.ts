@@ -4564,7 +4564,10 @@ describe('Phase C レビュー 2 巡目（外部ボット PR #84 Codex・P1×3�
     expect((await api('POST', '/v1/akebono/purchase-records', {
       as: MEMBER, body: { companyId: artistId, segmentId: 'seg-03', purchaseDate: '2026-02-01', purchaseType: 'consignment', lines: [{ skuId: targetSkuId, qty: 10, costPrice: 650 }] },
     })).status).toBe(201)
-    // 別 SKU の仕入を「対象より新しい日付」で複数投入（旧実装 = 全 SKU 横断の直近 N 件窓なら対象を押し出す配置）
+    // 別 SKU の仕入を「対象より新しい日付」で複数投入。5 件では旧実装の LIMIT 500 窓は押し出せないため
+    // 本テストは「窓サイズ」そのものではなく、絞り込み後の per-line 単価抽出（他 SKU=111 や標準原価=900 を
+    // 誤って拾わず対象明細の 650 を返すこと）を決定的に検証する。窓非依存性は lines @> 絞り込み +
+    // migration 0034 の GIN によりクエリ構造上保証される（500+ 行生成は非現実的なため構造で担保）。
     for (let i = 0; i < 5; i++) {
       expect((await api('POST', '/v1/akebono/purchase-records', {
         as: MEMBER, body: { companyId: artistId, segmentId: 'seg-03', purchaseDate: todayJst(), purchaseType: 'outright', lines: [{ skuId: otherSkuId, qty: 1, costPrice: 111 }] },
@@ -4589,7 +4592,7 @@ describe('Phase C レビュー 2 巡目（外部ボット PR #84 Codex・P1×3�
     const notices = (await api('GET', '/v1/akebono/payment-notices', { as: MEMBER })).json.data as { segmentId: string; payableAmount: number }[]
     const notice = notices.find(n => n.segmentId === 'seg-03')!
     // 作家支払 = 仕入単価 650 × 数量 2 = 1300。標準原価 900 へ誤フォールバックすると 1800。
-    // 対象 SKU の直近仕入が「別 SKU の新しい仕入行の後」にあっても lines @> 絞り込みで 650 を拾う（窓非依存）
+    // 対象 SKU を含む明細を lines @> で絞り込み、その明細の costPrice 650 を拾う（他 SKU の単価も標準原価も拾わない）
     expect(notice.payableAmount).toBe(1300)
   })
 
@@ -4611,7 +4614,9 @@ describe('Phase C レビュー 2 巡目（外部ボット PR #84 Codex・P1×3�
     const w2 = balances.find(b => b.skuId === skuId && b.warehouseId === 'wh-02')
     expect(w1?.qty).toBe(101) // 100 + 6 − 5
     expect(w2?.qty).toBe(5)
-    // 全量集約は台帳明細（表示用）の Σ と一致する（打ち切りの無い小規模では両者一致 = 集約の正しさ確認）
+    // 全量集約は台帳明細（表示用）の Σ と一致する（小規模フィクスチャでは両者一致 = 集約の正しさ確認）。
+    // 表示打ち切り（LIMIT 20000）非依存性はエンドポイントが LIMIT 無しの GROUP BY 集約であること = クエリ
+    // 構造で担保される（2 万行超のフィクスチャ生成は非現実的なため境界そのものは本テストでは突かない）。
     const txns = (await api('GET', '/v1/akebono/inventory-transactions', { as: MEMBER })).json.data as { skuId: string; warehouseId: string; qty: number }[]
     const foldW1 = txns.filter(t => t.skuId === skuId && t.warehouseId === 'wh-01').reduce((s, t) => s + t.qty, 0)
     expect(w1?.qty).toBe(foldW1)

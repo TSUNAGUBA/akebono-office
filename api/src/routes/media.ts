@@ -682,6 +682,10 @@ async function buildIntegratedMetrics(
   // 自身の sales_date」が窓内の行だけを取れば、窓へ寄与する行を過不足なく取得できる。
   // - 窓内の元伝票（通常明細）を offset する訂正は、訂正日が窓外（当月に切った訂正等）でも元月で拾う
   // - 元伝票が窓外の訂正は帰属月も窓外 = 取得されず誤って自身の月へ相殺しない（元不明フォールバック暴発の防止）
+  // 前提（不変条件）: sales_records は論理削除しない（active を false にする経路は存在せず、UPDATE は
+  //   invoice_id のみ）。ゆえに LEFT JOIN の元伝票 o に active フィルタは不要（取得された訂正の元は必ず
+  //   active で foldBusinessMonthly の byId 突合が解決する）。**将来 sales_records に論理削除を追加する場合、
+  //   ここへ `AND o.active` を足すだけでなく foldBusinessMonthly の元月帰属（元が消えた訂正の扱い）も見直すこと。**
   const periodFrom = `${months[0]!}-01`
   const periodTo = monthEndOf(months[months.length - 1]!)
   const { rows: salesRows } = await pool.query<{ id: string; salesDate: string; amount: number; correctionOf: string | null }>(
