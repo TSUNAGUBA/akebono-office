@@ -66,7 +66,11 @@ async function toggleApp(appKey: string, enabled: boolean): Promise<void> {
     const ok = await confirm.ask('アプリの不使用化', 'この業態のメニューからアプリを外します。登録済みデータは保全され、再度有効化すると元に戻ります。', { confirmLabel: '不使用にする' })
     if (!ok) return
   }
-  apps.setEnabled(appKey, enabled, settingsSegmentId.value)
+  const res = await apps.setEnabled(appKey, enabled, settingsSegmentId.value)
+  if (!res.ok) {
+    show(`${res.error.code}: ${res.error.message}`, 'crit')
+    return
+  }
   show(enabled ? 'アプリを有効化しました' : 'アプリを不使用にしました', enabled ? 'ok' : 'warn')
 }
 
@@ -80,11 +84,12 @@ async function applyPreset(): Promise<void> {
   const segName = settingsSegment.value?.name ?? '業態'
   const ok = await confirm.ask('業種プリセットの適用', `「${segName}」に次のアプリを有効化します（既存の設定は OFF にしません）:\n${names}`, { confirmLabel: '適用する' })
   if (!ok) return
-  apps.applyPreset(settingsSegmentId.value) // 成功トーストは composable 側で表示
+  await apps.applyPreset(settingsSegmentId.value) // 成功・失敗トーストは composable 側で表示
 }
 
-function saveLabel(appKey: string, value: string): void {
-  apps.setLabel(appKey, value, settingsSegmentId.value)
+async function saveLabel(appKey: string, value: string): Promise<void> {
+  const res = await apps.setLabel(appKey, value, settingsSegmentId.value)
+  if (!res.ok) show(`${res.error.code}: ${res.error.message}`, 'crit')
 }
 
 // ---------- 要望ボックス ----------

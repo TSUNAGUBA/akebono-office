@@ -16,6 +16,21 @@ const hhmm = z.string().regex(/^\d{2}:\d{2}$/, '時刻は HH:mm 形式で入力�
 
 const employmentType = z.enum(['director', 'employee', 'contract', 'parttime', 'outsource'])
 
+// ---------- Akebono 設定系（Phase B = 0031。値域は mockup/app/types/akebono.ts の union が SoT） ----------
+
+const industryType = z.enum(['retail', 'maker', 'logistics', 'it_service', 'other'])
+/** 空文字を null として扱う任意文字列（画面の未選択・未入力と互換）。cap はコードポイントでなく length（ASCII 前提でない表示名は余裕を持たせる） */
+const optText = (max: number) => z.string().trim().max(max).nullable().default(null).transform(v => (v ? v : null))
+/**
+ * アイコン画像（data URI）。プロフィール画像（app.ts PUT /v1/me/profile）と同じ
+ * サブタイプ allowlist + base64 必須（SVG 等のスクリプト混入形式を拒否）。
+ * 上限 400,000 文字 = フロントの IMAGE_MAX_CHARS（utils/thumb）と一致させる
+ */
+const iconImage = z.string()
+  .regex(/^data:image\/(png|jpe?g|webp);base64,[A-Za-z0-9+/=]+$/, 'アイコン画像は data:image/png・jpeg・webp の base64 形式で指定してください')
+  .max(400_000, 'アイコン画像が大きすぎます（縮小して再度お試しください）')
+  .nullable().default(null)
+
 /** workflow-routes の基底（PATCH は .partial() を使うためクロスフィールド検証前の形を保持） */
 const workflowRouteBase = z.object({
   category: z.enum(['purchase', 'contract', 'expense', 'hiring', 'trip', 'other']),
@@ -262,6 +277,74 @@ const schemas = {
     deskPosition: z.object({ x: z.number().int(), y: z.number().int() }).default({ x: 1, y: 1 }),
     active: z.boolean().default(true),
   }),
+  // ---------- Akebono 設定系マスタ（Phase B = 0031。/akebono/masters・/akebono/settings/segments） ----------
+  'business-segments': z.object({
+    name: z.string().trim().min(1, 'セグメント名は必須です'),
+    industryType,
+    displayOrder: z.number().int().default(1),
+    // 業態別アプリの表示・入力既定（F-20 拡張。すべて任意 = 未設定はフォールバック）
+    appName: optText(60),
+    appIcon: optText(40),
+    appIconImage: iconImage,
+    defaultUnitId: optText(64),
+    defaultBillingType: z.enum(['one_time', 'monthly', 'usage']).nullable().default(null),
+    defaultVariantAxis1Label: optText(40),
+    defaultVariantAxis2Label: optText(40),
+  }),
+  'warehouses': z.object({
+    name: z.string().trim().min(1, '倉庫・保管場所名は必須です'),
+    kind: z.enum(['own', 'store_deposit', 'external']).default('own'),
+    companyId: optText(64),
+    displayOrder: z.number().int().default(1),
+  }),
+  'units': z.object({
+    name: z.string().trim().min(1, '単位名は必須です'),
+    displayOrder: z.number().int().default(1),
+  }),
+  'tax-rates': z.object({
+    name: z.string().trim().min(1, '名称は必須です'),
+    rate: z.number().min(0, '税率は 0〜1 で入力してください').max(1, '税率は 0〜1 で入力してください'),
+    displayOrder: z.number().int().default(1),
+  }),
+  'payment-terms': z.object({
+    name: z.string().trim().min(1, '名称は必須です'),
+    closingDay: z.number().int().min(1).max(31),
+    // 画面の未入力（null）は既定値へ倒す（PaymentTerm 型は number 必須）
+    payMonthOffset: z.number().int().min(0).max(3).nullable().default(1).transform(v => v ?? 1),
+    payDay: z.number().int().min(1).max(31).nullable().default(31).transform(v => v ?? 31),
+  }),
+  'consignment-terms': z.object({
+    companyId: z.string().trim().min(1, '取引先は必須です'),
+    segmentId: z.string().trim().min(1, '事業セグメントは必須です'),
+    role: z.enum(['store', 'consignor_artist']),
+    marginRate: z.number().min(0).max(1).nullable().default(null),
+    payoutMethod: z.enum(['sales_rate', 'purchase_cost']).nullable().default(null),
+    payoutRate: z.number().min(0).max(1).nullable().default(null),
+    liabilityTiming: z.enum(['on_sale', 'on_receipt']).nullable().default(null),
+    taxRateId: optText(64),
+    taxIncluded: z.boolean().default(false),
+    rounding: z.enum(['floor', 'ceil', 'round']).default('floor'),
+    validFrom: dateKey,
+  }),
+  'variant-axis-templates': z.object({
+    name: z.string().trim().min(1, 'テンプレート名は必須です'),
+    axis1Label: z.string().trim().min(1, '軸1ラベルは必須です'),
+    axis2Label: z.string().trim().min(1, '軸2ラベルは必須です'),
+    industryTypes: z.array(industryType).default([]),
+    displayOrder: z.number().int().default(1),
+  }),
+  'product-categories': z.object({
+    name: z.string().trim().min(1, 'カテゴリ名は必須です'),
+    parentId: optText(64),
+    displayOrder: z.number().int().default(1),
+  }),
+  'product-image-sections': z.object({
+    name: z.string().trim().min(1, 'セクション名は必須です'),
+    isThumbnailPriority: z.boolean().default(false),
+    // 既定シードは migration 投入のみ。POST の明示 true は 409（AKO-AKB-002）・無効化ガードも masters.ts
+    isSeed: z.boolean().default(false),
+    displayOrder: z.number().int().default(1),
+  }),
 } as const
 
 export type MasterEntity = keyof typeof schemas
@@ -308,6 +391,17 @@ export const MASTERS: Record<MasterEntity, MasterDef> = {
   'ai-roles': { table: 'ai_roles', idPrefix: 'r', schema: schemas['ai-roles'], patchSchema: schemas['ai-roles'].partial(), jsonbFields: ['permissions'] },
   // status はタスク状態からの派生値（SoT: ai_tasks）。マスタ PATCH では変更させない（omit）
   'ai-employees': { table: 'ai_employees', idPrefix: 'ai', schema: schemas['ai-employees'], patchSchema: schemas['ai-employees'].partial().omit({ status: true }), jsonbFields: ['deskPosition'] },
+  // ---------- Akebono 設定系マスタ（Phase B = 0031。id プレフィクスはモックシードと一致 = 互換） ----------
+  'business-segments': { table: 'business_segments', idPrefix: 'seg', schema: schemas['business-segments'], patchSchema: schemas['business-segments'].partial(), jsonbFields: [] },
+  'warehouses': { table: 'warehouses', idPrefix: 'wh', schema: schemas.warehouses, patchSchema: schemas.warehouses.partial(), jsonbFields: [] },
+  'units': { table: 'units', idPrefix: 'unit', schema: schemas.units, patchSchema: schemas.units.partial(), jsonbFields: [] },
+  'tax-rates': { table: 'tax_rates', idPrefix: 'tax', schema: schemas['tax-rates'], patchSchema: schemas['tax-rates'].partial(), jsonbFields: [] },
+  'payment-terms': { table: 'payment_terms', idPrefix: 'pt', schema: schemas['payment-terms'], patchSchema: schemas['payment-terms'].partial(), jsonbFields: [] },
+  'consignment-terms': { table: 'consignment_terms', idPrefix: 'ct', schema: schemas['consignment-terms'], patchSchema: schemas['consignment-terms'].partial(), jsonbFields: [] },
+  'variant-axis-templates': { table: 'variant_axis_templates', idPrefix: 'vat', schema: schemas['variant-axis-templates'], patchSchema: schemas['variant-axis-templates'].partial(), jsonbFields: ['industryTypes'] },
+  'product-categories': { table: 'product_categories', idPrefix: 'pcat', schema: schemas['product-categories'], patchSchema: schemas['product-categories'].partial(), jsonbFields: [] },
+  // 既定シード（is_seed）は無効化不可（AKO-AKB-002 ガード = masters.ts）・isSeed は PATCH 対象外
+  'product-image-sections': { table: 'product_image_sections', idPrefix: 'pis', schema: schemas['product-image-sections'], patchSchema: schemas['product-image-sections'].partial().omit({ isSeed: true }), jsonbFields: [] },
 }
 
 export function camelToSnake(s: string): string {

@@ -1,8 +1,13 @@
 /**
  * 項目カスタマイズ（F-31）
- * 基本項目カタログ（コード = シード SoT）に、テナント差分（itemSettings）を重ねて
+ * 基本項目カタログ（コード = 静的 SoT）に、テナント差分（itemSettings）を重ねて
  * フォーム/一覧の項目構成を解決する。基本項目は非表示化のみ（削除不可）。
  * F-16 の表示項目 deny は本モックでは扱わない（本実装で優先適用）。
+ *
+ * デュアルモード（Phase B = 0031）: API モードの差分 SoT はサーバー（item_settings =
+ * PUT /v1/akebono/item-settings の複合キー (entity, itemKey) 部分 upsert・
+ * POST /item-settings/reset のエンティティ単位リセット = カタログ既定へ戻す取消フロー。原則9.5）。
+ * 解決（resolve）は両モード共通で tbl() のキャッシュを読む。
  */
 import type { ItemSetting } from '~/types/akebono'
 import type { IndustryType } from '~/types/akebono'
@@ -63,6 +68,7 @@ export interface ResolvedItem extends CatalogItem {
 export function useItemSettings() {
   const { tbl, commit, nextId } = useMockDb()
   const settings = tbl('itemSettings')
+  const isApi = useApiMode()
   const appKey = 'akebono'
 
   function settingOf(entity: string, itemKey: string): ItemSetting | undefined {
@@ -84,7 +90,21 @@ export function useItemSettings() {
     })
   }
 
-  function upsert(entity: string, itemKey: string, patch: Partial<Pick<ItemSetting, 'formVisible' | 'listVisible' | 'formRequired' | 'labelOverride'>>): Result {
+  /** 差分の upsert（渡したキーのみ更新 = 未送信フィールドは保持。API モードはサーバーが hasOwn で保証） */
+  async function upsert(entity: string, itemKey: string, patch: Partial<Pick<ItemSetting, 'formVisible' | 'listVisible' | 'formRequired' | 'labelOverride'>>): Promise<Result> {
+    if (isApi) {
+      try {
+        const row = await apiFetch<ItemSetting>('/v1/akebono/item-settings', {
+          method: 'PUT', body: { entity, itemKey, ...patch },
+        })
+        // SoT 書込 → キャッシュ反映（複合キー一意のためサーバー採番 id で置換 or 追加）
+        const rest = settings.value.filter(s => !(s.entity === entity && s.itemKey === itemKey))
+        settings.value = [...rest, row]
+        return { ok: true }
+      } catch (e) {
+        return { ok: false, error: apiErrorOf(e) }
+      }
+    }
     const existing = settingOf(entity, itemKey)
     if (existing) {
       settings.value = settings.value.map(s => s.id === existing.id ? { ...s, ...patch } : s)
@@ -100,7 +120,14 @@ export function useItemSettings() {
   }
 
   /** 業種の基本項目へ戻す（取消フロー = 原則 9.5。当該エンティティの差分を全削除） */
-  function resetEntity(entity: string): Result {
+  async function resetEntity(entity: string): Promise<Result> {
+    if (isApi) {
+      const res = await apiResult(() => apiFetch('/v1/akebono/item-settings/reset', {
+        method: 'POST', body: { entity },
+      }))
+      if (res.ok) settings.value = settings.value.filter(s => s.entity !== entity)
+      return res
+    }
     settings.value = settings.value.filter(s => s.entity !== entity)
     commit()
     return { ok: true }

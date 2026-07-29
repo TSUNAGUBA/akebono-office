@@ -68,6 +68,15 @@ async function leaveTypeStatutoryGuard(pool: pg.Pool, id: string): Promise<void>
   }
 }
 
+/** 既定シードの画像セクション（is_seed）は無効化不可（名称変更は可 = モック UI の isSeedLocked と同じ保護） */
+async function imageSectionSeedGuard(pool: pg.Pool, id: string): Promise<void> {
+  const { rows } = await pool.query<{ is_seed: boolean }>(
+    'SELECT is_seed FROM product_image_sections WHERE id = $1', [id])
+  if (rows[0]?.is_seed) {
+    throw err('AKO-AKB-002', '既定シードの画像セクションは無効化できません（名称変更は可能です）', 409)
+  }
+}
+
 /** defaultFor の区分ごと 1 ルール排他（保存対象の区分を他ルールの defaultFor から外す） */
 async function exclusiveDefaultFor(db: pg.PoolClient, ruleId: string, defaultFor: string[]): Promise<void> {
   if (defaultFor.length === 0) return
@@ -129,7 +138,9 @@ export function mastersRoutes(pool: pg.Pool, env: Env): Hono {
     const where = def.noActive || c.req.query('includeInactive') === '1' ? '' : 'WHERE active = true'
     const order = def.noActive ? 'ORDER BY id' : 'ORDER BY display_order NULLS LAST, id'
     // display_order を持たないテーブルは id 順（祝日は日付順が自然なため date 順）
-    const hasOrder = ['departments', 'leave_types', 'industries', 'work_categories', 'custom_field_defs', 'code_masters', 'external_links'].includes(def.table)
+    const hasOrder = ['departments', 'leave_types', 'industries', 'work_categories', 'custom_field_defs', 'code_masters', 'external_links',
+      // Akebono 設定系（Phase B。payment_terms / consignment_terms は display_order 列なし = id 順）
+      'business_segments', 'warehouses', 'units', 'tax_rates', 'variant_axis_templates', 'product_categories', 'product_image_sections'].includes(def.table)
     const orderBy = def.table === 'public_holidays' ? 'ORDER BY date' : hasOrder ? order : 'ORDER BY id'
     const { rows } = await pool.query(
       `SELECT * FROM ${def.table} ${where} ${orderBy}`)
@@ -148,6 +159,11 @@ export function mastersRoutes(pool: pg.Pool, env: Env): Hono {
     const body = parsed.data as Record<string, unknown>
     if (entity === 'leave-types' && body.isStatutory) {
       throw err('AKO-LEV-008', '法定有給は追加できません（シード固定）', 409)
+    }
+    // 既定シードは migration 投入のみ。API で is_seed=true を作らせない（作れると archive が
+    // AKO-AKB-002 で恒久拒否・PATCH も isSeed を omit しており取消不能行になる = 原則9.5。レビュー B-1）
+    if (entity === 'product-image-sections' && body.isSeed) {
+      throw err('AKO-AKB-002', '既定シードの画像セクションは追加できません（migration 投入のみ）', 409)
     }
     const id = newId(def.idPrefix)
     const fields = Object.keys(body)
@@ -244,6 +260,7 @@ export function mastersRoutes(pool: pg.Pool, env: Env): Hono {
     const id = c.req.param('id')
     if (entity === 'departments') await departmentArchiveGuard(pool, id)
     if (entity === 'leave-types') await leaveTypeStatutoryGuard(pool, id)
+    if (entity === 'product-image-sections') await imageSectionSeedGuard(pool, id)
     const result = await pool.query(
       `UPDATE ${def.table} SET active = false, updated_at = now() WHERE id = $1`, [id])
     if (result.rowCount === 0) throw err('AKO-GEN-002', '対象が見つかりません', 404)

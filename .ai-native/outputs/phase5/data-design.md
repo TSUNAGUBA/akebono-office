@@ -106,10 +106,42 @@
 
 > **SoT 宣言（メディア分析）:** GA 由来の集計値（セッション・PV・CV 等）は **Google Analytics が SoT**
 > （本アプリの metrics キャッシュ・保管済みインサイトの metrics は導出）。segment_id は
-> businessSegments（**未移行のモック側コレクション**）参照のため FK なし（0030 の設計判断コメント参照）。
+> 0030 作成時点で businessSegments が未移行のモック側コレクションだったため FK なし
+> （0030 の設計判断コメント参照）。**Phase B（0031）で business_segments テーブルへ移行済み**だが、
+> FK の後付けは Phase C（記録系移行）の参照整合引き上げと合わせて判断する（§1.5）。
 > 統合分析（scope=integrated）の**売上軸は salesRecords（未移行のモック側 SoT）**のためクライアント合成で
 > 受領し、メディア軸はサーバーが GA 導出値で上書き検証する（改ざん耐性の限界と受容は phase7 実装状況 §37）。
 > ダッシュボード保管（dashboardInsights）もモック側コレクション（API 移行時に media_insights と同型へ）。
+
+### 1.5 Akebono 設定系の API 永続化（Phase B。2026-07-29 追加・本実装 = migration 0031）
+
+従来モックコレクション（localStorage・日次リシード）だった Akebono 設定系 12 コレクションを
+`app_office` テーブルへ移行した。**すべて設定系**（更新可・論理削除 or 明示的な差分削除。記録系ではない）。
+
+| エンティティ（テーブル） | 主要属性 | 分類 / SoT | 機密度 |
+|---|---|---|---|
+| `BusinessSegment`（business_segments） | id, name, industryType(`retail`/`maker`/`logistics`/`it_service`/`other`), displayOrder, appName/appIcon/appIconImage（業態アプリ表示。iconImage = data URI 上限 400,000 文字）, defaultUnitId, defaultBillingType, defaultVariantAxis1/2Label, active | 設定系（汎用マスタ registry = `/v1/masters/business-segments`）。SoT = 本テーブル。**業態軸の根** — media_ga_tokens / Phase C 記録系が segment_id で参照 | C1 |
+| `Warehouse`（warehouses） | id, name, kind(`own`/`store_deposit`/`external`), companyId（store_deposit の店舗）, displayOrder, active | 設定系（registry） | C1 |
+| `Unit`（units） | id, name, displayOrder, active | 設定系（registry） | C1 |
+| `TaxRate`（tax_rates） | id, name, rate(0–1), displayOrder, active | 設定系（registry） | C1 |
+| `PaymentTerm`（payment_terms） | id, name, closingDay(1–31), payMonthOffset(0–3), payDay(1–31), active | 設定系（registry） | C1 |
+| `ConsignmentTerm`（consignment_terms） | id, companyId, segmentId, role(`store`/`consignor_artist`), marginRate, payoutMethod/payoutRate, liabilityTiming, taxRateId, taxIncluded, rounding, validFrom, active | 設定系（registry）。取引先×業態×ロールの委託条件 | C2 |
+| `VariantAxisTemplate`（variant_axis_templates） | id, name, axis1Label, axis2Label, industryTypes(jsonb), displayOrder, active | 設定系（registry） | C1 |
+| `ProductCategory`（product_categories） | id, name, parentId（自己参照階層。アプリ層解決）, displayOrder, active | 設定系（registry） | C1 |
+| `ProductImageSection`（product_image_sections） | id, name, isThumbnailPriority, **isSeed（既定シード = 無効化不可 AKO-AKB-002・名称変更可）**, displayOrder, active | 設定系（registry + 専用アーカイブガード） | C1 |
+| `AkebonoAppConfig`（akebono_app_configs） | **PK (segmentId, appKey)**, enabled, labelOverride, source(`preset`/`manual`) | 設定系（複合キー = registry に合わないため**専用 API** `/v1/akebono/app-configs` のバッチ upsert）。行が無い業態は業種プリセットへフォールバック（コード側既定） | C1 |
+| `ItemSetting`（item_settings） | id, **UNIQUE (appKey, entity, itemKey)**, formVisible/formRequired/listVisible/displayOrder/labelOverride（すべて nullable = 差分列） | 設定系（**差分テーブル** = 空はカタログ既定。専用 API `/v1/akebono/item-settings` の部分 upsert + エンティティ単位 reset = 取消フロー 原則9.5） | C1 |
+
+> **SoT 宣言（Akebono 設定系）:** 上記テーブルが SoT（API モードのフロントは `apiCollection`
+> キャッシュへ SoT 書込 → 反映の順で更新）。**カタログ系の静的定義はフロントコードが SoT**
+> — アプリカタログ（APP_CATALOG）・業種プリセット・項目カタログ（ITEM_CATALOG）はコード定義で、
+> akebono_app_configs / item_settings は「業態ごとの選択・テナント差分」だけを持つ
+> （サーバーはキー形式のみ検証し存在検証しない = 設計判断。カタログ更新でサーバー再デプロイ不要）。
+> **初期データ:** 9 マスタはモックシードと同一 id・同一値を投入（業態軸の喪失防止 + 既存
+> media_ga_tokens 等が seg-01 を参照する下位互換 = 原則7。0031 冒頭コメントが判断の正）。
+> akebono_app_configs / item_settings は投入しない（プリセット/カタログ既定がコード側でフォールバック）。
+> **FK なしの理由:** warehouses.company_id / consignment_terms.company_id 等の参照先シード
+> （c-ak-* デモ取引先）が実環境に存在しないため。Phase C（記録系移行）で参照整合の引き上げを判断する。
 
 ## 2. スタースキーマ接続（akebono-scm-platform `mart` 規約準拠）
 

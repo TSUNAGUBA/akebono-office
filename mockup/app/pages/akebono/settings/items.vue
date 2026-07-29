@@ -38,23 +38,26 @@ const columns: TableColumn[] = [
 
 // ---------- 変更ハンドラ ----------
 
-function toggleForm(item: ResolvedItem, ev: Event): void {
+async function toggleForm(item: ResolvedItem, ev: Event): Promise<void> {
   if (item.requiredFixed) return
   const checked = (ev.target as HTMLInputElement).checked
-  its.upsert(current.value, item.itemKey, { formVisible: checked })
+  const res = await its.upsert(current.value, item.itemKey, { formVisible: checked })
+  if (!res.ok) { toast.show(`${res.error.code}: ${res.error.message}`, 'crit'); return }
   toast.show(`「${item.labelDisplay}」のフォーム表示を${checked ? 'ON' : 'OFF'}にしました`, 'ok')
 }
 
-function toggleList(item: ResolvedItem, ev: Event): void {
+async function toggleList(item: ResolvedItem, ev: Event): Promise<void> {
   const checked = (ev.target as HTMLInputElement).checked
-  its.upsert(current.value, item.itemKey, { listVisible: checked })
+  const res = await its.upsert(current.value, item.itemKey, { listVisible: checked })
+  if (!res.ok) { toast.show(`${res.error.code}: ${res.error.message}`, 'crit'); return }
   toast.show(`「${item.labelDisplay}」の一覧表示を${checked ? 'ON' : 'OFF'}にしました`, 'ok')
 }
 
-function changeLabel(item: ResolvedItem, ev: Event): void {
+async function changeLabel(item: ResolvedItem, ev: Event): Promise<void> {
   const raw = (ev.target as HTMLInputElement).value.trim()
   const next = raw === '' || raw === item.label ? null : raw
-  its.upsert(current.value, item.itemKey, { labelOverride: next })
+  const res = await its.upsert(current.value, item.itemKey, { labelOverride: next })
+  if (!res.ok) { toast.show(`${res.error.code}: ${res.error.message}`, 'crit'); return }
   toast.show(next ? `表示名を「${next}」に変更しました` : '表示名を既定に戻しました', 'ok')
 }
 
@@ -74,7 +77,8 @@ async function resetCurrent(): Promise<void> {
     { danger: true, confirmLabel: '基本項目へ戻す' },
   )
   if (!ok) return
-  its.resetEntity(current.value)
+  const res = await its.resetEntity(current.value)
+  if (!res.ok) { toast.show(`${res.error.code}: ${res.error.message}`, 'crit'); return }
   toast.show('業種の基本項目へ戻しました', 'ok')
 }
 </script>

@@ -121,7 +121,8 @@ export function useMediaArticles() {
             purpose: req.purpose, quality: req.quality, tone: req.tone,
             audience: req.audience ?? '',
             fromInsightId: req.fromInsightId ?? null,
-            // セグメント名はモック側エンティティ（未移行）のためクライアントから渡す（表示・文面用途）
+            // セグメント名はクライアントから渡す（表示・文面用途のみ。business_segments は Phase B で
+            // テーブル化済みだがサーバー解決への引き上げは Phase C の参照整合判断と併せて行う = 挙動維持）
             segmentName: seg.name,
           },
         })

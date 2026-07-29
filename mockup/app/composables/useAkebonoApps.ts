@@ -9,7 +9,14 @@
  * DB（akebonoAppConfigs）は業態ごとの選択（ON/OFF・ラベル）だけを持つ。
  *
  * 既定の対象業態は「現在の業態」（useCurrentSegment）。設定画面は業態を明示指定して他業態も編集できる。
+ *
+ * デュアルモード（Phase B = 0031）: API モードの SoT はサーバー（akebono_app_configs =
+ * PUT /v1/akebono/app-configs のバッチ upsert）。変更系（setEnabled / setLabel / applyPreset）は
+ * async 化し、変更行 + プリセット materialize 行だけを 1 リクエストで送る → レスポンス行を
+ * 複合キー (segmentId, appKey) でキャッシュへマージ（SoT 書込 → キャッシュ反映 = 原則6）。
+ * 「行が無い業態はプリセットへフォールバック」の解決ロジックは両モード共通（原則1 はコード側で充足）
  */
+import type { Result } from '~/types/domain'
 import type { AkebonoAppConfig, BusinessSegment } from '~/types/akebono'
 import {
   AKEBONO_APP_KEYS, INDUSTRY_TYPE_LABELS, presetAppConfigsForSegments,
@@ -55,7 +62,31 @@ export function useAkebonoApps() {
   const configs = tbl('akebonoAppConfigs')
   const { activeSegments, effectiveSegmentId } = useCurrentSegment()
   const { isEnabled } = useAppSettings()
+  const isApi = useApiMode()
   const toast = useToast()
+
+  /** API: 変更行をバッチ upsert し、レスポンス行を複合キーでキャッシュへマージする */
+  async function putConfigsApi(rows: AkebonoAppConfig[]): Promise<Result> {
+    try {
+      const saved = await apiFetch<AkebonoAppConfig[]>('/v1/akebono/app-configs', {
+        method: 'PUT', body: { rows },
+      })
+      const keyOf = (r: AkebonoAppConfig): string => `${r.segmentId}:${r.appKey}`
+      const map = new Map(configs.value.map(r => [keyOf(r), r]))
+      for (const r of saved) map.set(keyOf(r), r)
+      configs.value = [...map.values()]
+      return { ok: true }
+    } catch (e) {
+      return { ok: false, error: apiErrorOf(e) }
+    }
+  }
+
+  /** API: 未設定業態のプリセット materialize 行（バッチへ同梱する。setEnabled の同名ロジックと同義） */
+  function materializeRows(segmentId: string): AkebonoAppConfig[] {
+    if (hasAnyConfig(segmentId)) return []
+    const seg = activeSegments.value.find(s => s.id === segmentId)
+    return seg ? presetAppConfigsForSegments([seg]) : []
+  }
 
   /** 機能トグルで利用可能なアプリか（featureKey 未設定は常に利用可） */
   function isFeatureAvailable(app: AkebonoAppDef): boolean {
@@ -121,10 +152,17 @@ export function useAkebonoApps() {
     return seg ? presetAppsForSegment(seg) : []
   }
 
-  /** アプリの使用/不使用を切り替える（設定系。業態ごと。upsert） */
-  function setEnabled(appKey: string, enabled: boolean, segmentId?: string): void {
+  /** アプリの使用/不使用を切り替える（設定系。業態ごと。upsert。API モードはサーバー SoT） */
+  async function setEnabled(appKey: string, enabled: boolean, segmentId?: string): Promise<Result> {
     const sid = resolveSegmentId(segmentId)
-    if (!sid) return
+    if (!sid) return { ok: false, error: { code: 'AKO-GEN-001', message: '対象の業態がありません' } }
+    if (isApi) {
+      // 未設定の新規業態は materialize 行を同じバッチへ同梱してから当該アプリだけ上書き
+      const map = new Map(materializeRows(sid).map(r => [r.appKey, r]))
+      const cur = configOf(sid, appKey) ?? map.get(appKey)
+      map.set(appKey, { segmentId: sid, appKey, enabled, labelOverride: cur?.labelOverride ?? null, source: 'manual' })
+      return putConfigsApi([...map.values()])
+    }
     // 未設定の新規業態は初回書込でプリセットを materialize してから当該アプリだけ上書き
     // （プリセット既定の他アプリが「行が無い」で OFF に落ちるのを防ぐ）
     ensureSegmentConfigs(sid)
@@ -136,14 +174,24 @@ export function useAkebonoApps() {
       configs.value = [...configs.value, { segmentId: sid, appKey, enabled, labelOverride: null, source: 'manual' }]
     }
     commit()
+    return { ok: true }
   }
 
-  /** ラベルオーバーライドの設定（F-20-6。業態ごと。upsert） */
-  function setLabel(appKey: string, label: string, segmentId?: string): void {
+  /** ラベルオーバーライドの設定（F-20-6。業態ごと。upsert。API モードはサーバー SoT） */
+  async function setLabel(appKey: string, label: string, segmentId?: string): Promise<Result> {
     const sid = resolveSegmentId(segmentId)
-    if (!sid) return
-    ensureSegmentConfigs(sid)
+    if (!sid) return { ok: false, error: { code: 'AKO-GEN-001', message: '対象の業態がありません' } }
     const labelOverride = label.trim() || null
+    if (isApi) {
+      const map = new Map(materializeRows(sid).map(r => [r.appKey, r]))
+      const cur = configOf(sid, appKey) ?? map.get(appKey)
+      map.set(appKey, {
+        segmentId: sid, appKey,
+        enabled: cur?.enabled ?? false, labelOverride, source: cur?.source ?? 'manual',
+      })
+      return putConfigsApi([...map.values()])
+    }
+    ensureSegmentConfigs(sid)
     const existing = configOf(sid, appKey)
     if (existing) {
       configs.value = configs.value.map(c =>
@@ -152,6 +200,7 @@ export function useAkebonoApps() {
       configs.value = [...configs.value, { segmentId: sid, appKey, enabled: false, labelOverride, source: 'manual' }]
     }
     commit()
+    return { ok: true }
   }
 
   /**
@@ -159,10 +208,28 @@ export function useAkebonoApps() {
    * 「プリセットに含まれるアプリを ON」にするのみ。既存の ON は勝手に OFF にしない（既存設定の保護 = 原則2）。
    * 対象業態以外の設定行には一切触れない。
    */
-  function applyPreset(segmentId?: string): { enabled: number } {
+  async function applyPreset(segmentId?: string): Promise<{ enabled: number }> {
     const sid = resolveSegmentId(segmentId)
     if (!sid) return { enabled: 0 }
     const target = new Set(presetAppsOf(sid))
+    if (isApi) {
+      const map = new Map(materializeRows(sid).map(r => [r.appKey, r]))
+      let enabled = 0
+      for (const appKey of AKEBONO_APP_KEYS) {
+        if (!target.has(appKey)) continue
+        const stored = configOf(sid, appKey)
+        const cur = stored ?? map.get(appKey)
+        if (stored?.enabled !== true) enabled++
+        map.set(appKey, { segmentId: sid, appKey, enabled: true, labelOverride: cur?.labelOverride ?? null, source: 'preset' })
+      }
+      const res = await putConfigsApi([...map.values()])
+      if (!res.ok) {
+        toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
+        return { enabled: 0 }
+      }
+      toast.show(`プリセットを適用しました（${enabled} 件を有効化）`)
+      return { enabled }
+    }
     let enabled = 0
     const next = [...configs.value]
     for (const appKey of AKEBONO_APP_KEYS) {

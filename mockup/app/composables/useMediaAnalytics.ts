@@ -6,7 +6,8 @@
  *   同じ MediaMetrics 型へ整形して返す（インサイト生成は共通）。segmentId × days キーの遅延ロードキャッシュ
  * - 統合分析（業務 × メディア）の SoT 宣言: 売上明細（salesRecords）は**未移行のモック側コレクション**のため、
  *   API モードでも売上月次はモック側集計・メディア月次のみ /v1/media/monthly（GA 実データ）を突合する
- *   （businessSegments/salesRecords の API 移行時にサーバー側組み立て（/v1/media/integrated 相当）へ引き上げる）
+ *   （salesRecords の API 移行 = Phase C でサーバー側組み立て（/v1/media/integrated 相当）へ引き上げる。
+ *   businessSegments は Phase B で移行済み）
  *
  * 集計基準日は「前日（asOf）」（週次インサイトと同じ思想 = 当日を未確定として悲観評価しない）。
  */

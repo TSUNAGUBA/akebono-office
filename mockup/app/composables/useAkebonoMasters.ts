@@ -4,6 +4,10 @@
  * 商品カテゴリ・画像セクション）の CRUD・選択肢・名称解決・汎用フォーム定義を集約する。
  * 汎用マスタページ（/akebono/masters）はここを参照して薄く保つ（原則3）。
  * 取引先ロール（Company.partnerRoles）は既存の顧客(会社)マスタで編集する想定のため本 UI では扱わない。
+ *
+ * Phase B（0031）で 9 マスタとも API 移行済み: CRUD は useMasterCrudAsync（デュアルモード。
+ * API モードの SoT = /v1/masters/* = PostgreSQL・モックモードは従来どおり localStorage）。
+ * 選択肢・名称解決の tbl() 参照も移行済みコレクションとして自動で API キャッシュに切り替わる。
  */
 import type {
   BusinessSegment, ConsignmentTerm, ProductCategory, TaxRate, Warehouse,
@@ -43,16 +47,17 @@ export function useAkebonoMasters() {
   const { tbl } = useMockDb()
   const companies = tbl('companies')
 
+  // Phase B: API 対応の非同期版（モックモードは従来実装を Promise で包むだけ = 挙動不変）
   const cruds = {
-    businessSegments: useMasterCrud('businessSegments', 'seg'),
-    warehouses: useMasterCrud('warehouses', 'wh'),
-    units: useMasterCrud('units', 'unit'),
-    taxRates: useMasterCrud('taxRates', 'tax'),
-    paymentTerms: useMasterCrud('paymentTerms', 'pt'),
-    consignmentTerms: useMasterCrud('consignmentTerms', 'ct'),
-    variantAxisTemplates: useMasterCrud('variantAxisTemplates', 'vat'),
-    productCategories: useMasterCrud('productCategories', 'pcat'),
-    productImageSections: useMasterCrud('productImageSections', 'pis'),
+    businessSegments: useMasterCrudAsync('businessSegments', 'seg'),
+    warehouses: useMasterCrudAsync('warehouses', 'wh'),
+    units: useMasterCrudAsync('units', 'unit'),
+    taxRates: useMasterCrudAsync('taxRates', 'tax'),
+    paymentTerms: useMasterCrudAsync('paymentTerms', 'pt'),
+    consignmentTerms: useMasterCrudAsync('consignmentTerms', 'ct'),
+    variantAxisTemplates: useMasterCrudAsync('variantAxisTemplates', 'vat'),
+    productCategories: useMasterCrudAsync('productCategories', 'pcat'),
+    productImageSections: useMasterCrudAsync('productImageSections', 'pis'),
   } as const
 
   // ---------- 選択肢 ----------
