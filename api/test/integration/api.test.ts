@@ -467,7 +467,7 @@ describe('マスタ CRUD', () => {
 
   it('部分 PATCH は未指定フィールドを上書きしない（zod v4 .partial() の既定値注入の回帰防止）', async () => {
     // 実障害の再現経路: 部署配属（departmentId のみの PATCH）で email が空・role が member に巻き戻った
-    // segmentIds（0035 = F-01 コックピット。default([]) 付き jsonb）も同経路の回帰対象に含める
+    // segmentIds（0039 = F-01 コックピット。default([]) 付き jsonb）も同経路の回帰対象に含める
     const seg = await api('PATCH', `/v1/masters/members/${HR}`, { as: ADMIN, body: { segmentIds: ['seg-01'] } })
     expect(seg.status).toBe(200)
     const r = await api('PATCH', `/v1/masters/members/${HR}`, { as: ADMIN, body: { title: '人事部長' } })
@@ -544,7 +544,7 @@ describe('マスタ CRUD', () => {
     expect(standard?.defaultFor.includes('employee')).toBe(false) // 排他で外れる
   })
 
-  it('目標マスタ（0035 = F-01 コックピット）: metric×segmentId の整合検証 + 部分 PATCH の未送信フィールド保持', async () => {
+  it('目標マスタ（0039 = F-01 コックピット）: metric×segmentId の整合検証 + 部分 PATCH の未送信フィールド保持', async () => {
     // 業態売上は対象業態必須 / 日報提出率は全社（業態指定不可）・0-100
     expect((await api('POST', '/v1/masters/goals', {
       as: ADMIN, body: { metric: 'segment_sales', monthlyValue: 100000 },
@@ -4463,7 +4463,9 @@ describe('Phase C: Akebono 記録系の API 永続化（商品・伝票・在庫
       as: MEMBER, body: { segmentId: 'seg-01', month: prevMonth },
     })
     expect(close.status).toBe(201)
-    expect(close.json.data).toEqual({ invoices: 1, notices: 1 })
+    // 委託精算バッチ id（settlementId = 0037）が付随する。件数は 1/1（取消フローの対象特定に使う）
+    expect(close.json.data).toMatchObject({ invoices: 1, notices: 1 })
+    expect((close.json.data as { settlementId: string }).settlementId).toMatch(/^cst-/)
 
     const invs = (await api('GET', '/v1/akebono/invoices', { as: MEMBER })).json.data as
       { id: string; invoiceType: string; status: string; totalAmount: number; snapshot: { marginRate: number } | null }[]
@@ -4793,5 +4795,293 @@ describe('Phase C レビュー 2 巡目（外部ボット PR #84 Codex・P1×3�
     const conflict = await api('PATCH', `/v1/akebono/products/${dId}`, { as: MEMBER, body: { segmentId: 'seg-04' } })
     expect(conflict.status).toBe(409)
     expect(conflict.json.error?.code).toBe('AKO-PRD-002')
+  })
+})
+
+describe('Phase D: データ取込（F-32）・ダッシュボード保管（F-41）・委託精算取消・出荷→売上（localStorage 依存の解消）', () => {
+  // ---------- データ取込（F-32）: 設定系（取込元/マッピング）+ 記録系（実行履歴） ----------
+  describe('データ取込 F-32', () => {
+    let sourceId = ''
+
+    it('取込元: 書込は管理者のみ（member は 403）・作成 + 論理削除/復元で名称保持', async () => {
+      // member の書込は 403（管理者ゲート）。参照は全員可
+      expect((await api('POST', '/v1/akebono/import-sources', {
+        as: MEMBER, body: { name: 'x', method: 'file_csv', encoding: 'utf8', targetEntity: 'product' },
+      })).status).toBe(403)
+      const created = await api('POST', '/v1/akebono/import-sources', {
+        as: ADMIN, body: { name: '売上CSV', method: 'file_csv', encoding: 'sjis', targetEntity: 'sales_record' },
+      })
+      expect(created.status).toBe(201)
+      sourceId = (created.json.data as { id: string }).id
+      expect((created.json.data as { name: string; encoding: string; targetEntity: string }))
+        .toMatchObject({ name: '売上CSV', encoding: 'sjis', targetEntity: 'sales_record' })
+      // 名前必須（AKO-IMP-001）
+      expect((await api('POST', '/v1/akebono/import-sources', { as: ADMIN, body: { name: '  ' } })).json.error?.code)
+        .toBe('AKO-IMP-001')
+      // 論理削除 → 復元で active と名称が保持される（原則9.5）
+      expect((await api('POST', `/v1/akebono/import-sources/${sourceId}/archive`, { as: ADMIN })).status).toBe(200)
+      const restored = await api('POST', `/v1/akebono/import-sources/${sourceId}/restore`, { as: ADMIN })
+      expect((restored.json.data as { active: boolean; name: string })).toMatchObject({ active: true, name: '売上CSV' })
+    })
+
+    it('マッピング: 版管理（新版で旧 active は superseded・旧版の項目は履歴として保持）+ 空項目は 400', async () => {
+      // 空項目は AKO-IMP-003
+      expect((await api('POST', '/v1/akebono/import-mappings', {
+        as: ADMIN, body: { sourceId, fields: [{ sourceField: '', targetItemKey: '' }] },
+      })).json.error?.code).toBe('AKO-IMP-003')
+      const v1 = await api('POST', '/v1/akebono/import-mappings', {
+        as: ADMIN, body: { sourceId, fields: [{ sourceField: 'code', targetItemKey: 'code', transform: 'trim' }] },
+      })
+      expect(v1.status).toBe(201)
+      expect((v1.json.data as { version: number; status: string })).toMatchObject({ version: 1, status: 'active' })
+      const v2 = await api('POST', '/v1/akebono/import-mappings', {
+        as: ADMIN, body: { sourceId, fields: [
+          { sourceField: 'price', targetItemKey: 'unitPrice', transform: 'number' },
+          { sourceField: 'name', targetItemKey: 'name', transform: '' },
+        ] },
+      })
+      expect((v2.json.data as { version: number }).version).toBe(2)
+      const all = (await api('GET', '/v1/akebono/import-mappings', { as: MEMBER })).json.data as
+        { id: string; sourceId: string; version: number; status: string; fields: { sourceField: string }[] }[]
+      const mine = all.filter(m => m.sourceId === sourceId)
+      // 旧版は superseded・新版が active・旧版の項目（履歴）はそのまま保持される
+      expect(mine.find(m => m.version === 1)).toMatchObject({ status: 'superseded' })
+      expect(mine.find(m => m.version === 1)!.fields[0]!.sourceField).toBe('code')
+      expect(mine.find(m => m.version === 2)).toMatchObject({ status: 'active' })
+      expect(mine.filter(m => m.status === 'active')).toHaveLength(1)
+    })
+
+    it('取込実行: 有効マッピングなしは 409・実行は追記のみ（履歴が積み上がる）', async () => {
+      // マッピングの無い別の取込元では実行不可（AKO-IMP-002）
+      const bare = await api('POST', '/v1/akebono/import-sources', {
+        as: ADMIN, body: { name: 'マッピングなし', method: 'file_json', encoding: 'utf8', targetEntity: 'company' },
+      })
+      const bareId = (bare.json.data as { id: string }).id
+      expect((await api('POST', '/v1/akebono/import-runs', { as: ADMIN, body: { sourceId: bareId } })).json.error?.code)
+        .toBe('AKO-IMP-002')
+      // マッピングありは実行できる（記録系 = 追記のみ・2 回で 2 件積み上がる）
+      const r1 = await api('POST', '/v1/akebono/import-runs', { as: ADMIN, body: { sourceId } })
+      expect(r1.status).toBe(201)
+      expect((r1.json.data as { status: string; mappingVersion: number })).toMatchObject({ status: 'applied', mappingVersion: 2 })
+      await api('POST', '/v1/akebono/import-runs', { as: ADMIN, body: { sourceId } })
+      const runs = (await api('GET', '/v1/akebono/import-runs', { as: MEMBER })).json.data as { sourceId: string }[]
+      expect(runs.filter(r => r.sourceId === sourceId)).toHaveLength(2)
+    })
+  })
+
+  // ---------- ダッシュボード AI レポート保管（F-41）: 導出キャッシュ upsert ----------
+  describe('ダッシュボード保管 F-41', () => {
+    it('セグメント: 未生成は null → 生成で保管（GA 未連携はメディア軸 0・llm=false）→ 再生成は upsert（同一行）', async () => {
+      const seg = 'seg-04'
+      expect((await api('GET', `/v1/akebono/dashboard-insights?scope=segment&segmentId=${seg}`, { as: MEMBER })).json.data)
+        .toBeNull()
+      const gen = await api('POST', '/v1/akebono/dashboard-insights/generate', {
+        as: MEMBER, body: { scope: 'segment', segmentId: seg },
+      })
+      expect(gen.status).toBe(200)
+      const row = gen.json.data as {
+        id: string; llm: boolean; periodKey: string
+        metrics: { mediaAvailable: boolean; snapshot: { mediaConnected: boolean } }
+        insight: { executiveSummary: string }
+      }
+      expect(row.llm).toBe(false) // vertexProjectId 未設定 = ヒューリスティック
+      expect(row.metrics.snapshot.mediaConnected).toBe(false) // GA 未連携（テスト env）
+      expect(row.insight.executiveSummary.length).toBeGreaterThan(0)
+      const stored = await api('GET', `/v1/akebono/dashboard-insights?scope=segment&segmentId=${seg}`, { as: MEMBER })
+      expect((stored.json.data as { id: string }).id).toBe(row.id)
+      // 再生成は upsert = 同一行（id が変わらない = 重複行を作らない）
+      const regen = await api('POST', '/v1/akebono/dashboard-insights/generate', {
+        as: MEMBER, body: { scope: 'segment', segmentId: seg },
+      })
+      expect((regen.json.data as { id: string }).id).toBe(row.id)
+    })
+
+    it('会社全体: scope=company で全業態ロールアップを生成・保管（segmentId 不要）', async () => {
+      const gen = await api('POST', '/v1/akebono/dashboard-insights/generate', { as: MEMBER, body: { scope: 'company' } })
+      expect(gen.status).toBe(200)
+      const row = gen.json.data as { metrics: { segmentCount: number; connectedCount: number }; insight: { executiveSummary: string } }
+      expect(row.metrics.segmentCount).toBeGreaterThan(0)
+      expect(row.metrics.connectedCount).toBe(0) // GA 未連携
+      const stored = await api('GET', '/v1/akebono/dashboard-insights?scope=company', { as: MEMBER })
+      expect(stored.json.data).not.toBeNull()
+      // scope 不正は 400
+      expect((await api('POST', '/v1/akebono/dashboard-insights/generate', { as: MEMBER, body: { scope: 'x' } })).status).toBe(400)
+    })
+
+    it('会社全体はサーバー側でも売上権限を要求（監査-4。売上 deny の member は 403・admin は 200）', async () => {
+      // 運用デフォルト（member/hr は売上 deny）を再有効化してサーバーゲートを検証（batch7f と同型）
+      await pool.query(`UPDATE permission_rules SET active = true WHERE id LIKE 'pr-def-%'`)
+      clearPermissionCache()
+      try {
+        expect((await api('GET', '/v1/akebono/dashboard-insights?scope=company', { as: MEMBER })).json.error?.code).toBe('AKO-PRM-001')
+        expect((await api('POST', '/v1/akebono/dashboard-insights/generate', { as: MEMBER, body: { scope: 'company' } })).status).toBe(403)
+        // 業態単位（scope=segment）は業態の日常業務ビュー = 全ロール可（売上 deny でも 200）
+        expect((await api('GET', '/v1/akebono/dashboard-insights?scope=segment&segmentId=seg-04', { as: MEMBER })).status).toBe(200)
+        // 管理者は会社全体も可
+        expect((await api('POST', '/v1/akebono/dashboard-insights/generate', { as: ADMIN, body: { scope: 'company' } })).status).toBe(200)
+      } finally {
+        await pool.query(`UPDATE permission_rules SET active = false WHERE id LIKE 'pr-def-%'`)
+        clearPermissionCache()
+      }
+    })
+  })
+
+  // ---------- 委託精算の取消（原則9.5）: 冪等・二重取消ガード・再締め ----------
+  describe('委託精算の取消', () => {
+    const seg = 'seg-04'
+    const month = '2026-05'
+    let storeId = ''
+    let artistId = ''
+    let skuId = ''
+    let saleId = ''
+    let marginId = ''
+
+    it('締め → 取消（マージン赤伝・支払通知の論理取消・売上リンク解除）→ 二重取消 409 → 再締め可能', async () => {
+      const store = await api('POST', '/v1/masters/companies', { as: ADMIN, body: { name: 'PD店', partnerRoles: ['store', 'customer'] } })
+      storeId = (store.json.data as { id: string }).id
+      const artist = await api('POST', '/v1/masters/companies', { as: ADMIN, body: { name: 'PD作家', partnerRoles: ['consignor_artist'] } })
+      artistId = (artist.json.data as { id: string }).id
+      const product = await api('POST', '/v1/akebono/products', {
+        as: MEMBER, body: { code: 'PD-01', name: 'PD皿', segmentId: seg, listPrice: 1000, standardCost: 400, taxRateId: 'tax-10', defaultSupplierCompanyId: artistId },
+      })
+      const productId = (product.json.data as { id: string }).id
+      skuId = ((await api('GET', '/v1/akebono/product-skus', { as: MEMBER })).json.data as { id: string; productId: string }[])
+        .find(s => s.productId === productId)!.id
+      await api('POST', '/v1/masters/consignment-terms', { as: ADMIN, body: { companyId: storeId, segmentId: seg, role: 'store', marginRate: 0.30, taxRateId: 'tax-10', validFrom: '2026-01-01' } })
+      await api('POST', '/v1/masters/consignment-terms', { as: ADMIN, body: { companyId: artistId, segmentId: seg, role: 'consignor_artist', payoutMethod: 'sales_rate', payoutRate: 0.60, liabilityTiming: 'on_sale', taxRateId: 'tax-10', validFrom: '2026-01-01' } })
+      const sale = await api('POST', '/v1/akebono/sales-records', {
+        as: MEMBER, body: { salesDate: `${month}-10`, companyId: storeId, segmentId: seg, skuId, qty: 2, unitPrice: 1000 },
+      })
+      saleId = (sale.json.data as { id: string }).id
+
+      const close = await api('POST', '/v1/akebono/consignment/close', { as: MEMBER, body: { segmentId: seg, month } })
+      expect(close.status).toBe(201)
+      expect((close.json.data as { invoices: number; notices: number })).toMatchObject({ invoices: 1, notices: 1 })
+      // 売上に精算リンクが張られる
+      const linked = ((await api('GET', '/v1/akebono/sales-records', { as: MEMBER })).json.data as { id: string; invoiceId: string | null }[])
+        .find(r => r.id === saleId)!
+      expect(linked.invoiceId).not.toBeNull()
+      marginId = linked.invoiceId!
+
+      // --- 取消 ---
+      const cancel = await api('POST', '/v1/akebono/consignment/cancel', { as: MEMBER, body: { segmentId: seg, month } })
+      expect(cancel.status).toBe(200)
+      expect((cancel.json.data as { credited: number; voidedNotices: number; unlinked: number }))
+        .toMatchObject({ credited: 1, voidedNotices: 1, unlinked: 1 })
+      const invs = (await api('GET', '/v1/akebono/invoices', { as: MEMBER })).json.data as
+        { id: string; status: string; invoiceType: string; totalAmount: number; creditFor: string | null }[]
+      // 元マージンは void・赤伝（マイナス請求）が追記されている
+      expect(invs.find(v => v.id === marginId)!.status).toBe('void')
+      const credit = invs.find(v => v.creditFor === marginId)!
+      expect(credit.totalAmount).toBeLessThan(0)
+      // 支払通知は論理取消（voidedAt 設定）
+      const notices = (await api('GET', '/v1/akebono/payment-notices', { as: MEMBER })).json.data as
+        { id: string; companyId: string; voidedAt: string | null; status: string }[]
+      const voided = notices.find(n => n.companyId === artistId)!
+      expect(voided.voidedAt).not.toBeNull()
+      // 取消済み通知の確定は 409
+      expect((await api('POST', `/v1/akebono/payment-notices/${voided.id}/confirm`, { as: MEMBER })).json.error?.code).toBe('AKO-BIL-007')
+      // 売上リンクは解除（再締め可能）
+      expect(((await api('GET', '/v1/akebono/sales-records', { as: MEMBER })).json.data as { id: string; invoiceId: string | null }[])
+        .find(r => r.id === saleId)!.invoiceId).toBeNull()
+
+      // --- 二重取消ガード（既に取消済み = 409 AKO-BIL-010）---
+      expect((await api('POST', '/v1/akebono/consignment/cancel', { as: MEMBER, body: { segmentId: seg, month } })).json.error?.code)
+        .toBe('AKO-BIL-010')
+
+      // --- 再締め（取消後は同月を再度締められる = 冪等の再開）---
+      const reclose = await api('POST', '/v1/akebono/consignment/close', { as: MEMBER, body: { segmentId: seg, month } })
+      expect(reclose.status).toBe(201)
+      expect((reclose.json.data as { invoices: number })).toMatchObject({ invoices: 1 })
+    })
+
+    it('MAJOR-1: 入金済みマージン・確定済み通知を含むと取消拒否（AKO-BIL-011）→ 入金取消後は取消可能', async () => {
+      // 直前の it の再締めで seg-04/2026-05 の新バッチが有効。現行 issued マージンへ部分入金する
+      const marginNow = ((await api('GET', '/v1/akebono/invoices', { as: MEMBER })).json.data as
+        { id: string; invoiceType: string; status: string; creditFor: string | null; segmentId: string | null; periodFrom: string }[])
+        .find(v => v.invoiceType === 'consignment_margin' && v.status === 'issued' && !v.creditFor && v.segmentId === seg && v.periodFrom === `${month}-01`)!
+      const rcpt = await api('POST', '/v1/akebono/payment-receipts', { as: MEMBER, body: { invoiceId: marginNow.id, amount: 100, method: '振込' } })
+      expect(rcpt.status).toBe(201)
+      const rcptId = (rcpt.json.data as { id: string }).id
+      // 有効入金があると取消拒否（片側反転による孤児入金を防ぐ）
+      expect((await api('POST', '/v1/akebono/consignment/cancel', { as: MEMBER, body: { segmentId: seg, month } })).json.error?.code)
+        .toBe('AKO-BIL-011')
+      // 入金を取消すれば取消可能に戻る
+      expect((await api('POST', `/v1/akebono/payment-receipts/${rcptId}/cancel`, { as: MEMBER })).status).toBe(200)
+      expect((await api('POST', '/v1/akebono/consignment/cancel', { as: MEMBER, body: { segmentId: seg, month } })).status).toBe(200)
+
+      // 確定済み支払通知のブロック: 再締め → 通知確定 → 取消は AKO-BIL-011
+      expect((await api('POST', '/v1/akebono/consignment/close', { as: MEMBER, body: { segmentId: seg, month } })).status).toBe(201)
+      const notice = ((await api('GET', '/v1/akebono/payment-notices', { as: MEMBER })).json.data as
+        { id: string; segmentId: string; periodFrom: string; status: string; voidedAt: string | null }[])
+        .find(n => n.segmentId === seg && n.periodFrom === `${month}-01` && n.status === 'draft' && !n.voidedAt)!
+      expect((await api('POST', `/v1/akebono/payment-notices/${notice.id}/confirm`, { as: MEMBER })).status).toBe(200)
+      expect((await api('POST', '/v1/akebono/consignment/cancel', { as: MEMBER, body: { segmentId: seg, month } })).json.error?.code)
+        .toBe('AKO-BIL-011')
+    })
+  })
+
+  // ---------- 出荷実績 → 売上自動計上（sourceKind='shipment'）: 二重計上防止 ----------
+  describe('出荷 → 売上自動計上', () => {
+    const seg = 'seg-04'
+    let customerId = ''
+    let depositStoreId = ''
+    let depositWhId = ''
+    let skuId = ''
+
+    it('顧客出荷は売上を自動計上（源=shipment・在庫減）・店舗預けは計上不可 409', async () => {
+      const cust = await api('POST', '/v1/masters/companies', { as: ADMIN, body: { name: 'PD顧客', partnerRoles: ['customer'] } })
+      customerId = (cust.json.data as { id: string }).id
+      const product = await api('POST', '/v1/akebono/products', {
+        as: MEMBER, body: { code: 'PD-SHIP', name: 'PD出荷品', segmentId: seg, listPrice: 1500, standardCost: 600, taxRateId: 'tax-10' },
+      })
+      const productId = (product.json.data as { id: string }).id
+      skuId = ((await api('GET', '/v1/akebono/product-skus', { as: MEMBER })).json.data as { id: string; productId: string }[])
+        .find(s => s.productId === productId)!.id
+      // 在庫を積む（wh-01 = 自社倉庫。found で +10）
+      await api('POST', '/v1/akebono/inventory/adjust', { as: MEMBER, body: { skuId, warehouseId: 'wh-01', qty: 10, reason: 'found' } })
+
+      // 顧客への直接出荷 + 売上自動計上
+      const ship = await api('POST', '/v1/akebono/outbound-results', {
+        as: MEMBER, body: { warehouseId: 'wh-01', companyId: customerId, segmentId: seg, postSales: true, lines: [{ skuId, qty: 3 }] },
+      })
+      expect(ship.status).toBe(201)
+      const sales = (await api('GET', '/v1/akebono/sales-records', { as: MEMBER })).json.data as
+        { skuId: string; sourceKind: string; qty: number; unitPrice: number; amount: number; sourceRef: string | null; companyId: string }[]
+      const shipmentSales = sales.filter(s => s.sourceKind === 'shipment' && s.companyId === customerId)
+      expect(shipmentSales).toHaveLength(1)
+      expect(shipmentSales[0]!).toMatchObject({ qty: 3, unitPrice: 1500, amount: 4500, skuId })
+      expect(shipmentSales[0]!.sourceRef).toMatch(/^obr:/)
+      // 在庫が 10 → 7 に減っている
+      const bal = ((await api('GET', '/v1/akebono/inventory-balances', { as: MEMBER })).json.data as { skuId: string; warehouseId: string; qty: number }[])
+        .find(b => b.skuId === skuId && b.warehouseId === 'wh-01')!
+      expect(bal.qty).toBe(7)
+
+      // 店舗預けの出荷は売上計上できない（409 AKO-OUT-005）= 二重の売上導線を作らない
+      const store = await api('POST', '/v1/masters/companies', { as: ADMIN, body: { name: 'PD預け店', partnerRoles: ['store'] } })
+      depositStoreId = (store.json.data as { id: string }).id
+      const wh = await api('POST', '/v1/masters/warehouses', { as: ADMIN, body: { name: 'PD預け倉庫', kind: 'store_deposit', companyId: depositStoreId } })
+      depositWhId = (wh.json.data as { id: string }).id
+      const ng = await api('POST', '/v1/akebono/outbound-results', {
+        as: MEMBER, body: { warehouseId: 'wh-01', companyId: depositStoreId, segmentId: seg, postSales: true, lines: [{ skuId, qty: 1 }] },
+      })
+      expect(ng.status).toBe(409)
+      expect(ng.json.error?.code).toBe('AKO-OUT-005')
+      // ロールバックされ在庫は 7 のまま（部分適用を作らない）
+      const bal2 = ((await api('GET', '/v1/akebono/inventory-balances', { as: MEMBER })).json.data as { skuId: string; warehouseId: string; qty: number }[])
+        .find(b => b.skuId === skuId && b.warehouseId === 'wh-01')!
+      expect(bal2.qty).toBe(7)
+      expect(depositWhId).toBeTruthy()
+    })
+
+    it('二重計上防止: source_ref 部分一意 INDEX（0038）が同一出荷明細の売上重複を拒否（DB 制約 = 最終防衛。m2）', async () => {
+      // 同一 source_ref + source_kind='shipment' の 2 行は 23505（ルートは AKO-OUT-005 409 へ変換）
+      const dup = await pool.query(
+        `INSERT INTO sales_records (id, code, sales_date, company_id, segment_id, sku_id, qty, unit_price, amount, source_kind, source_ref)
+         VALUES ('sr-d1', 'SRD-1', '2026-07-01', $1, $2, $3, 1, 100, 100, 'shipment', 'obr:dup-x'),
+                ('sr-d2', 'SRD-2', '2026-07-01', $1, $2, $3, 1, 100, 100, 'shipment', 'obr:dup-x')`,
+        [customerId, seg, skuId]).then(() => null).catch(e => e as { code?: string })
+      expect(dup?.code).toBe('23505')
+    })
   })
 })

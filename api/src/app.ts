@@ -14,6 +14,8 @@ import { featureGuard } from './lib/permissions'
 import { aiCompanyRoutes } from './routes/ai-company'
 import { akebonoRoutes } from './routes/akebono'
 import { akebonoBillingRoutes } from './routes/akebono-billing'
+import { akebonoDashboardRoutes } from './routes/akebono-dashboard'
+import { akebonoImportsRoutes } from './routes/akebono-imports'
 import { akebonoTradeRoutes } from './routes/akebono-trade'
 import { attendanceRoutes } from './routes/attendance'
 import { configsRoutes } from './routes/configs'
@@ -157,6 +159,9 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
   // Phase C（0032）: 記録系。同一 /v1/akebono 配下に取引系・売上/請求系を追加マウント
   app.route('/v1/akebono', akebonoTradeRoutes(pool))
   app.route('/v1/akebono', akebonoBillingRoutes(pool))
+  // Phase D（0035-0038）: データ取込（F-32）・ダッシュボード AI レポート保管（F-41）を同配下へ追加マウント
+  app.route('/v1/akebono', akebonoImportsRoutes(pool))
+  app.route('/v1/akebono', akebonoDashboardRoutes(pool, env))
   app.route('/v1/holidays', holidaysRoutes(pool))
   app.route('/v1/search', searchRoutes(pool, env))
   app.route('/v1/notes', notesRoutes(pool, env))

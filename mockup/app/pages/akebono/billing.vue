@@ -30,7 +30,7 @@ const receivableInvoices = computed(() =>
 
 const tabs = computed(() => [
   { key: 'billing', label: '請求', badge: salesInvoices.value.filter(v => v.status === 'draft').length },
-  { key: 'consignment', label: '委託精算', badge: con.notices.value.filter(n => n.status === 'draft').length },
+  { key: 'consignment', label: '委託精算', badge: con.notices.value.filter(n => n.status === 'draft' && !n.voidedAt).length },
   { key: 'receipt', label: '入金', badge: con.invoices.value.filter(v => v.status === 'issued').length },
 ])
 
@@ -176,6 +176,28 @@ async function runCloseConsignInner(): Promise<void> {
   closeConsignOpen.value = false
 }
 
+// ---------- 委託精算の取消（原則9.5。マージン請求の赤伝 + 支払通知の論理取消 + 売上リンク解除で再締め可能に） ----------
+const cancelConsignOpen = ref(false)
+const cancelConsignForm = ref({ segmentId: '', month: currentMonth })
+function openCancelConsign(): void {
+  const preferred = consignSegmentOptions.value.find(o => o.value === effectiveSegmentId.value)?.value
+  cancelConsignForm.value = { segmentId: preferred ?? consignSegmentOptions.value[0]?.value ?? '', month: currentMonth }
+  cancelConsignOpen.value = true
+}
+async function runCancelConsign(): Promise<void> {
+  if (busy.value) return
+  busy.value = true
+  try {
+    const f = cancelConsignForm.value
+    if (!f.segmentId) { show('セグメントを選択してください', 'crit'); return }
+    if (!f.month) { show('対象月を入力してください', 'crit'); return }
+    const res = await con.cancelConsignment({ segmentId: f.segmentId, month: f.month })
+    if (!res.ok) { show(`${res.error.code}: ${res.error.message}`, 'crit'); return }
+    show(`委託精算を取消しました（赤伝 ${res.credited} 件・支払通知取消 ${res.voidedNotices} 件）。同月は再締めできます`, 'ok')
+    cancelConsignOpen.value = false
+  } finally { busy.value = false }
+}
+
 // ---------- 支払通知ドロワー ----------
 const noticeDrawerOpen = ref(false)
 const selectedNoticeId = ref<string | null>(null)
@@ -249,9 +271,14 @@ async function cancelReceipt(id: string): Promise<void> {
         <button v-if="tab === 'billing'" type="button" class="btn btn-primary btn-sm" @click="openCloseBill">
           <Plus class="h-3.5 w-3.5" aria-hidden="true" /> 締める
         </button>
-        <button v-else-if="tab === 'consignment'" type="button" class="btn btn-primary btn-sm" @click="openCloseConsign">
-          <HandCoins class="h-3.5 w-3.5" aria-hidden="true" /> 委託精算を締める
-        </button>
+        <template v-else-if="tab === 'consignment'">
+          <button type="button" class="btn btn-sm" @click="openCancelConsign">
+            委託精算を取消
+          </button>
+          <button type="button" class="btn btn-primary btn-sm" @click="openCloseConsign">
+            <HandCoins class="h-3.5 w-3.5" aria-hidden="true" /> 委託精算を締める
+          </button>
+        </template>
       </template>
     </UiPageHeader>
 
@@ -328,10 +355,12 @@ async function cancelReceipt(id: string): Promise<void> {
             <span class="text-[12px] text-sub">{{ row.periodFrom }} 〜 {{ row.periodTo }}</span>
           </template>
           <template #cell-payableAmount="{ row }">
-            <span class="num">{{ fmtYen(Number(row.payableAmount)) }}</span>
+            <span class="num" :class="row.voidedAt ? 'text-muted line-through' : ''">{{ fmtYen(Number(row.payableAmount)) }}</span>
           </template>
           <template #cell-status="{ row }">
+            <UiStatusBadge v-if="row.voidedAt" label="取消済み" tone="neutral" dot />
             <UiStatusBadge
+              v-else
               :label="NOTICE_STATUS_LABELS[(row.status as PaymentNoticeStatus)]"
               :tone="noticeTone(row.status as PaymentNoticeStatus)" dot
             />
@@ -429,6 +458,26 @@ async function cancelReceipt(id: string): Promise<void> {
       </template>
     </UiModal>
 
+    <!-- ============ 取消モーダル（委託精算。原則9.5） ============ -->
+    <UiModal :open="cancelConsignOpen" title="委託精算を取消" @close="cancelConsignOpen = false">
+      <div class="grid gap-3">
+        <UiFormField label="委託セグメント" required>
+          <UiSelect v-model="cancelConsignForm.segmentId" :options="consignSegmentOptions" aria-label="委託セグメント" />
+        </UiFormField>
+        <UiFormField label="対象月" required>
+          <input v-model="cancelConsignForm.month" type="month" class="input" aria-label="対象月">
+        </UiFormField>
+        <p class="rounded-[8px] border border-warn bg-warn-soft px-3 py-2 text-[12px] text-ink">
+          この業態 × 月の委託精算を取消します。マージン請求に赤伝（マイナス請求）を発行し、作家支払通知を取消、
+          対象売上の精算リンクを解除して同月を再締めできる状態に戻します。発行済みの請求・通知の記録は残ります（監査）。
+        </p>
+      </div>
+      <template #footer>
+        <button type="button" class="btn btn-sm" @click="cancelConsignOpen = false">やめる</button>
+        <button type="button" class="btn btn-danger btn-sm" :disabled="busy" @click="runCancelConsign">取消する</button>
+      </template>
+    </UiModal>
+
     <!-- ============ 請求 明細ドロワー ============ -->
     <UiDrawer :open="invoiceDrawerOpen" :title="selectedInvoice ? `請求 ${selectedInvoice.code}` : '請求'" @close="invoiceDrawerOpen = false">
       <div v-if="selectedInvoice" class="grid gap-3 text-[13px]">
@@ -478,7 +527,8 @@ async function cancelReceipt(id: string): Promise<void> {
       <div v-if="selectedNotice" class="grid gap-3 text-[13px]">
         <div class="flex items-center justify-between">
           <span class="text-muted">{{ con.companyName(selectedNotice.companyId) }}</span>
-          <UiStatusBadge :label="NOTICE_STATUS_LABELS[selectedNotice.status]" :tone="noticeTone(selectedNotice.status)" dot />
+          <UiStatusBadge v-if="selectedNotice.voidedAt" label="取消済み" tone="neutral" dot />
+          <UiStatusBadge v-else :label="NOTICE_STATUS_LABELS[selectedNotice.status]" :tone="noticeTone(selectedNotice.status)" dot />
         </div>
         <div class="text-[12px] text-sub">{{ selectedNotice.periodFrom }} 〜 {{ selectedNotice.periodTo }}</div>
 
@@ -500,7 +550,8 @@ async function cancelReceipt(id: string): Promise<void> {
 
       <template #footer>
         <div v-if="selectedNotice" class="flex items-center justify-end gap-2">
-          <button v-if="selectedNotice.status === 'draft'" type="button" class="btn btn-primary btn-sm" @click="doConfirmNotice">確定</button>
+          <span v-if="selectedNotice.voidedAt" class="text-[12px] text-muted">取消済み（委託精算の取消により無効）</span>
+          <button v-else-if="selectedNotice.status === 'draft'" type="button" class="btn btn-primary btn-sm" @click="doConfirmNotice">確定</button>
           <span v-else class="text-[12px] text-muted">確定済み（変更不可）</span>
         </div>
       </template>

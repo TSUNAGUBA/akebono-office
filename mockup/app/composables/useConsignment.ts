@@ -14,7 +14,8 @@ import type {
 } from '~/types/akebono'
 import type { Company, Result } from '~/types/domain'
 import {
-  buildSettlementSnapshot, calcPayoutAmount, calcStoreMargin, calcTax, nextCode,
+  buildSettlementSnapshot, calcPayoutAmount, calcStoreMargin, calcTax,
+  consignmentCancelBlockReason, nextCode,
 } from '~/utils/akebono'
 
 export function useConsignment() {
@@ -299,11 +300,69 @@ export function useConsignment() {
     return { ok: true, invoices: newInvoices.length, notices: newNotices.length }
   }
 
-  /** 支払通知の確定（draft → confirmed。以後不変） */
+  /**
+   * 委託精算の取消（原則9.5 = 記録・確定系にも立ち戻る導線。§39-6 の宿題）。
+   * 対象 = 業態 × 月 の精算バッチ。①店舗マージン請求を void + 赤伝（マイナス請求）を追記
+   * ②対象売上の精算リンクを解除（再締め可能に）③作家支払通知を論理取消（voidedAt）。
+   * 二重取消ガード: 発行済みマージン請求が無ければ AKO-BIL-010。
+   */
+  async function cancelConsignment(input: { segmentId: string; month: string }): Promise<Result & { credited?: number; voidedNotices?: number }> {
+    if (isApi) {
+      const res = await apiWrite<{ credited: number; unlinked: number; voidedNotices: number }>('/v1/akebono/consignment/cancel', {
+        body: input, reload: ['invoices', 'paymentNotices', 'salesRecords'],
+      })
+      return res.ok ? { ok: true, credited: res.data.credited, voidedNotices: res.data.voidedNotices } : res
+    }
+    const periodFrom = `${input.month}-01`
+    const periodTo = monthEnd(input.month)
+    // 下流確定状態の保護（レビュー MAJOR-1）: 有効入金のあるマージン請求（paid/部分入金）or 確定済み支払通知が
+    // 含まれると片側だけ反転して整合を壊す（孤児入金・再締めでの片側消失）。判断は共有純関数（両モード同一）。
+    const batchMargins = (invoices.value as Invoice[]).filter(v =>
+      v.invoiceType === 'consignment_margin' && !v.creditFor && (v.status === 'issued' || v.status === 'paid')
+      && v.segmentId === input.segmentId && v.periodFrom === periodFrom && v.periodTo === periodTo)
+    const batchNotices = (notices.value as PaymentNotice[]).filter(n =>
+      n.segmentId === input.segmentId && n.periodFrom === periodFrom && n.periodTo === periodTo && !n.voidedAt)
+    if (consignmentCancelBlockReason(batchMargins.map(v => ({ paid: paidAmountOf(v.id) })), batchNotices)) {
+      return { ok: false, error: { code: 'AKO-BIL-011', message: '入金済み（部分入金含む）のマージン請求、または確定済みの支払通知が含まれるため取消できません。先に入金取消を行ってください（確定済み支払通知がある場合は管理者にご相談ください）' } }
+    }
+    const targets = (invoices.value as Invoice[]).filter(v =>
+      v.invoiceType === 'consignment_margin' && v.status === 'issued' && !v.creditFor
+      && v.segmentId === input.segmentId && v.periodFrom === periodFrom && v.periodTo === periodTo)
+    if (targets.length === 0) {
+      return { ok: false, error: { code: 'AKO-BIL-010', message: '取消対象の委託精算がありません（未実施、または既に取消済みです）' } }
+    }
+    const credits: Invoice[] = []
+    const voidedInvoiceIds = new Set<string>()
+    const unlinkedRecordIds = new Set<string>()
+    for (const inv of targets) {
+      const creditId = nextCode([...invoices.value, ...credits].map(v => v.id), 'inv')
+      credits.push({
+        ...inv, id: creditId, code: nextCode([...invoices.value, ...credits].map(v => v.code), 'INV'),
+        status: 'issued', issuedAt: nowJstIso(), totalAmount: -inv.totalAmount, creditFor: inv.id,
+        lines: inv.lines.map(l => ({ ...l, id: l.id + '-c', amount: -l.amount })), sourceRecordIds: [],
+      })
+      voidedInvoiceIds.add(inv.id)
+      for (const rid of inv.sourceRecordIds) unlinkedRecordIds.add(rid)
+    }
+    invoices.value = [
+      ...invoices.value.map(v => voidedInvoiceIds.has(v.id) ? { ...v, status: 'void' as const } : v),
+      ...credits,
+    ]
+    sales.value = sales.value.map(r => unlinkedRecordIds.has(r.id) ? { ...r, invoiceId: null } : r)
+    const voidedNotices = notices.value.filter(n =>
+      n.segmentId === input.segmentId && n.periodFrom === periodFrom && n.periodTo === periodTo && !n.voidedAt)
+    notices.value = notices.value.map(n =>
+      voidedNotices.some(v => v.id === n.id) ? { ...n, voidedAt: nowJstIso() } : n)
+    commit()
+    return { ok: true, credited: credits.length, voidedNotices: voidedNotices.length }
+  }
+
+  /** 支払通知の確定（draft → confirmed。以後不変。取消済みは確定不可 = 原則9.5） */
   async function confirmNotice(id: string): Promise<Result> {
     if (isApi) return apiWrite(`/v1/akebono/payment-notices/${id}/confirm`, { reload: ['paymentNotices'] })
     const n = notices.value.find(x => x.id === id)
     if (!n) return { ok: false, error: { code: 'AKO-GEN-002', message: '支払通知が見つかりません' } }
+    if (n.voidedAt) return { ok: false, error: { code: 'AKO-BIL-007', message: '取消済みの支払通知は確定できません' } }
     if (n.status !== 'draft') return { ok: false, error: { code: 'AKO-BIL-007', message: '下書き以外は確定できません' } }
     notices.value = notices.value.map(x => x.id === id ? { ...x, status: 'confirmed' } : x)
     commit()
@@ -313,6 +372,6 @@ export function useConsignment() {
   return {
     invoices, notices, receipts,
     companyName, termOf, resolveUnitCost, billableSales, consignableSales, paidAmountOf,
-    closeBilling, issue, voidInvoice, recordReceipt, voidReceipt, closeConsignment, confirmNotice,
+    closeBilling, issue, voidInvoice, recordReceipt, voidReceipt, closeConsignment, cancelConsignment, confirmNotice,
   }
 }

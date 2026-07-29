@@ -86,7 +86,7 @@ const goalBase = z.object({
  * object 単位の superRefine は .partial() に引き継がれず、部分 PATCH は単独フィールドの変更で
  * 既存行との組み合わせ不変条件を破れるため、PATCH は masters.ts の goalCrossGuard
  * （既存行とマージした結果で検証 = workflow-routes と同型）+ goals テーブルの CHECK 制約
- * （migration 0035）が同じ不変条件を担保する
+ * （migration 0039）が同じ不変条件を担保する
  */
 function goalMetricCheck(
   v: { metric?: string; segmentId?: string | null; monthlyValue?: number },
@@ -261,7 +261,7 @@ const schemas = {
     name: z.string().trim().min(1, '祝日名は必須です'),
     source: z.enum(['official', 'manual']).default('manual'),
   }),
-  // 目標マスタ（F-01 コックピット着地予報。cockpit-design §2.2。migration 0035）
+  // 目標マスタ（F-01 コックピット着地予報。cockpit-design §2.2。migration 0039）
   'goals': goalBase.superRefine(goalMetricCheck),
   'workflow-routes': workflowRouteBase.superRefine((v, ctx) => {
     // どの金額にもマッチしない経路・重複ステップの作成をサーバー側でも防ぐ（UI 検証のミラー）

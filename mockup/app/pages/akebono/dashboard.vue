@@ -48,10 +48,10 @@ const mediaTrendChart = computed(() => ({
 const view = ref<SegmentDashboardView | null>(null)
 const generating = ref(false)
 
-function reload(): void {
-  view.value = loadSegment(effectiveSegmentId.value)
+async function reload(): Promise<void> {
+  view.value = await loadSegment(effectiveSegmentId.value)
 }
-watch(effectiveSegmentId, reload, { immediate: true })
+watch(effectiveSegmentId, () => { void reload() }, { immediate: true })
 
 async function regenerate(): Promise<void> {
   if (generating.value) return
@@ -73,8 +73,8 @@ const appCards = computed<MenuCard[]>(() =>
 
 <template>
   <div class="mx-auto max-w-5xl">
-    <!-- Phase C で売上軸（sales_records）・メディア軸（GA）とも実データ化 = ページ全体のモックバッジは撤去。
-         AI レポートの保管（dashboardInsights）のみ未移行 = カード側で明示 -->
+    <!-- Phase C で売上軸（sales_records）・メディア軸（GA）とも実データ化。
+         Phase D で AI レポートの保管（dashboardInsights）もサーバー化 = モックバッジは全撤去 -->
     <UiPageHeader title="業態ダッシュボード" :description="currentSegment ? `${currentSegment.name}・対象月 ${summary.periodMonth}` : ''" />
 
     <div v-if="!currentSegment">
@@ -151,8 +151,6 @@ const appCards = computed<MenuCard[]>(() =>
         :description="view ? `生成 ${fmtDateTime(view.generatedAt)}${view.generatedByName ? `（${view.generatedByName}）` : ''}・${view.llm ? 'Vertex AI' : '集計値からの自動生成'}` : '業務 × メディアの現状から、この業態のレポートとインサイト・次アクションを生成します'"
       >
         <template #actions>
-          <!-- レポートの保管先（dashboardInsights）のみ未移行のローカル保存（Phase D 予定）。集計データは実データ -->
-          <UiMockBadge label="レポート保管 = ローカル" />
           <button type="button" class="btn btn-primary btn-sm" :disabled="generating" @click="regenerate">
             <RefreshCw class="h-3.5 w-3.5" aria-hidden="true" />
             {{ generating ? '生成中…' : view ? '再生成' : 'レポートを生成' }}

@@ -124,7 +124,7 @@ async function workflowRouteCrossGuard(
  * goals の部分更新でも metric × segmentId × 値域（report_rate = 全社・0-100）の不変条件を
  * 破らせない（workflowRouteCrossGuard と同型: POST は schema の superRefine が担うが、
  * .partial() 由来の patchSchema ではクロスフィールド検証ができないため、既存行とマージした
- * 結果で検証する。DB 側も 0035 の CHECK 制約で二重防衛）
+ * 結果で検証する。DB 側も 0039 の CHECK 制約で二重防衛）
  */
 async function goalCrossGuard(
   pool: pg.Pool,
@@ -248,7 +248,7 @@ export function mastersRoutes(pool: pg.Pool, env: Env): Hono {
       if ((e as { code?: string }).code === '23505') {
         throw err('AKO-GEN-003', '同じ値のデータが既に存在します（重複）', 409)
       }
-      // CHECK 制約違反（例: goals の metric × segmentId × 値域 = 0035）。アプリ側ガードの最終防衛が
+      // CHECK 制約違反（例: goals の metric × segmentId × 値域 = 0039）。アプリ側ガードの最終防衛が
       // 発火した場合も 500 でなく想定エラーとして返す（レビュー2巡目 G4）
       if ((e as { code?: string }).code === '23514') {
         throw err('AKO-GEN-001', '入力値の組み合わせがデータ整合性の制約に違反しています。入力内容を確認してください', 400)
@@ -312,7 +312,7 @@ export function mastersRoutes(pool: pg.Pool, env: Env): Hono {
       if ((e as { code?: string }).code === '23505') {
         throw err('AKO-GEN-003', '同じ値のデータが既に存在します（重複）', 409)
       }
-      // CHECK 制約違反（例: goals の metric × segmentId × 値域 = 0035）。アプリ側ガードの最終防衛が
+      // CHECK 制約違反（例: goals の metric × segmentId × 値域 = 0039）。アプリ側ガードの最終防衛が
       // 発火した場合も 500 でなく想定エラーとして返す（レビュー2巡目 G4）
       if ((e as { code?: string }).code === '23514') {
         throw err('AKO-GEN-001', '入力値の組み合わせがデータ整合性の制約に違反しています。入力内容を確認してください', 400)

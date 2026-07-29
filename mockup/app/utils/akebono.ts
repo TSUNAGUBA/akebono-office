@@ -137,9 +137,10 @@ export function hasPartnerRole(company: Pick<Company, 'kind' | 'partnerRoles'>, 
 // 実装・詳細コメントの SoT は shared/domain/akebono.ts
 
 export {
-  balanceKey, buildSettlementSnapshot, calcPayoutAmount, calcStoreMargin, calcTax,
-  foldBalances, nextCode, roundBy, totalStockOf,
+  balanceKey, buildSettlementSnapshot, buildShipmentSaleLines, calcPayoutAmount, calcStoreMargin, calcTax,
+  consignmentCancelBlockReason, foldBalances, nextCode, roundBy, totalStockOf,
 } from '../../../shared/domain/akebono'
+export type { ShipmentSaleLine } from '../../../shared/domain/akebono'
 
 export interface StockBalanceKey {
   skuId: string

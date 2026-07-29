@@ -43,7 +43,7 @@ segmentIds?: string[]
 
 - 既定 `[]`。**任意フィールドで下位互換**（BusinessSegment.appName 等の前例に従う。原則7）。既存データへのパッチ不要（undefined = 未設定として扱う）
 - マスタ UI: `/masters/members` のフォームに `UiMultiCombobox`（選択肢 = active な businessSegments）を追加
-- API: `api/src/masters/registry.ts` の members スキーマへ `segmentIds: z.array(z.string()).default([])` を追加。マイグレーション `0035`: `ALTER TABLE members ADD COLUMN IF NOT EXISTS segment_ids jsonb NOT NULL DEFAULT '[]'`
+- API: `api/src/masters/registry.ts` の members スキーマへ `segmentIds: z.array(z.string()).default([])` を追加。マイグレーション `0039`: `ALTER TABLE members ADD COLUMN IF NOT EXISTS segment_ids jsonb NOT NULL DEFAULT '[]'`
 - **Zod v4 注意（CLAUDE.md）:** members の patchSchema は `.partial()`。`.default([])` 付きフィールドは部分更新で既定値が注入されるため、PATCH ハンドラが「body に実在するキーのみ」を更新対象にフィルタしていること（`Object.hasOwn`）を確認し、なければ同修正を適用する。回帰テストは「送っていないフィールドが保持されること」をアサート
 - シード（`data/seed/core.ts`）: m-04 → `['seg-01']`（うつわ=陶磁器委託販売の営業・管理）、m-05/m-06/m-09/m-12 → `['seg-02']`（SI）、m-07 → `['seg-03']`、m-08 → `['seg-04']`、他は `[]`。**SEED_VERSION を +1**
 
@@ -71,7 +71,7 @@ export interface Goal {
 }
 ```
 
-- モック: `useMockDb` コレクション `goals` + シード（下記）。API: 汎用マスタ CRUD に乗せる（`MIGRATED_MASTERS` に `goals: 'goals'` を追加、registry にスキーマ・テーブル宣言、マイグレーション 0035 で `goals` テーブル作成）。書込は `useMasterCrudAsync('goals', 'g')`
+- モック: `useMockDb` コレクション `goals` + シード（下記）。API: 汎用マスタ CRUD に乗せる（`MIGRATED_MASTERS` に `goals: 'goals'` を追加、registry にスキーマ・テーブル宣言、マイグレーション 0039 で `goals` テーブル作成）。書込は `useMasterCrudAsync('goals', 'g')`
 - 管理画面: `/masters/goals`（マスタハブのカード + nav-map 登録。カテゴリは `biz`）。論理削除（archive/restore）= 取消フロー（原則9.5）
 - バリデーション: `metric='segment_sales'` は segmentId 必須 / `report_rate` は segmentId null・値 0-100。同一 (metric, segmentId) の active 重複は登録時に警告（後勝ちで評価は最新 1 件を使用）
 - シード: seg-01〜04 の segment_sales（既存 salesRecords / akebono 売上シードの月次規模と整合させ、予報が ok / warn 混在になる値）+ report_rate 90%
@@ -198,7 +198,7 @@ export function summarizeForecasts(results: ForecastResult[]): { headline: strin
 | マスタUI | `mockup/app/pages/masters/members.vue` | segmentIds 入力を追加 |
 | 登録 | `mockup/app/utils/menu-registry.ts` / `nav-map.ts` | masters エリアに goals カード + 導線 |
 | シード | `mockup/app/data/seed/core.ts`（segmentIds）/ goals シード / `useMockDb.ts`（コレクション + SEED_VERSION+1） | |
-| API | `api/src/masters/registry.ts` / `api/db/migrations/0035_cockpit_goals.sql` | members.segment_ids 列 + goals テーブル |
+| API | `api/src/masters/registry.ts` / `api/db/migrations/0039_cockpit_goals.sql` | members.segment_ids 列 + goals テーブル |
 | テスト | `mockup/tests/landing-forecast.test.ts` / `mockup/tests/cockpit.test.ts` | 新設 |
 | ドキュメント | `screen-design.md` / `data-design.md` / `api-design.md` / `functional-requirements.md`(F-01) / `phase7/implementation-status.md` / `mockup/CONVENTIONS.md`（UI在庫・早見表） | 本書と整合させる（原則5） |
 

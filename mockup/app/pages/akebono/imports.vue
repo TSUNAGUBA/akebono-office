@@ -5,7 +5,7 @@
  * 取込実行（ステージング → 検証 → 反映。冪等・dry-run 思想。エラー行隔離）。
  * モックは実行をシミュレートし、実行履歴・エラー行を残す。
  */
-import { Plus, Play, Trash2, Wand2 } from 'lucide-vue-next'
+import { Plus, Play, RotateCcw, Trash2, Wand2 } from 'lucide-vue-next'
 import {
   IMPORT_METHOD_LABELS, IMPORT_ENTITY_LABELS,
 } from '~/composables/useAkebonoImports'
@@ -15,6 +15,7 @@ import { fmtDateTime, fmtInt } from '~/utils/format'
 
 const imp = useAkebonoImports()
 const toast = useToast()
+const confirm = useConfirm()
 
 // ---------- 取込元一覧 ----------
 
@@ -23,16 +24,19 @@ const selectedSource = computed<ImportSource | null>(() =>
   selectedSourceId.value ? (imp.sourceById(selectedSourceId.value) ?? null) : null,
 )
 
+// 無効化（archive）済みを表示するトグル。既定は有効のみ（原則9.5 = 取消済みも復元導線で見える）
+const showArchived = ref(false)
 const sourceRows = computed(() =>
-  imp.activeSources.value as unknown as Record<string, unknown>[],
+  (showArchived.value ? imp.sources.value : imp.activeSources.value) as unknown as Record<string, unknown>[],
 )
 
-const sourceColumns: TableColumn[] = [
+const sourceColumns = computed<TableColumn[]>(() => [
   { key: 'name', label: '名称', primary: true },
   { key: 'method', label: '方式', primary: true },
   { key: 'targetEntity', label: '対象', primary: true },
   { key: 'active', label: '状態' },
-]
+  ...(imp.isAdmin.value ? [{ key: 'actions', label: '操作' } as TableColumn] : []),
+])
 
 function asSource(row: Record<string, unknown>): ImportSource {
   return row as unknown as ImportSource
@@ -40,6 +44,22 @@ function asSource(row: Record<string, unknown>): ImportSource {
 
 function selectSource(row: Record<string, unknown>): void {
   selectedSourceId.value = String(row.id)
+}
+
+// 取込元の無効化 / 復元（原則9.5 = 誤登録を UI から取り消せる）
+async function archiveSource(row: Record<string, unknown>): Promise<void> {
+  const s = asSource(row)
+  if (!await confirm.ask('取込元を無効化', `「${s.name}」を無効化します。実行履歴は残ります。復元は「無効も表示」から行えます。`, { confirmLabel: '無効化', danger: true })) return
+  const res = await imp.archiveSource(s.id)
+  if (!res.ok) { toast.show(`${res.error.code}: ${res.error.message}`, 'crit'); return }
+  toast.show('取込元を無効化しました', 'ok')
+  if (selectedSourceId.value === s.id) selectedSourceId.value = null
+}
+async function restoreSource(row: Record<string, unknown>): Promise<void> {
+  const s = asSource(row)
+  const res = await imp.restoreSource(s.id)
+  if (!res.ok) { toast.show(`${res.error.code}: ${res.error.message}`, 'crit'); return }
+  toast.show('取込元を復元しました', 'ok')
 }
 
 // ---------- 取込元を追加（モーダル） ----------
@@ -73,7 +93,8 @@ function openAdd(): void {
   addOpen.value = true
 }
 
-function submitAdd(): void {
+const addBusy = ref(false)
+async function submitAdd(): Promise<void> {
   const e: Record<string, string> = {}
   if (!String(addForm.value.name ?? '').trim()) e.name = '取込元名は必須です'
   addErrors.value = e
@@ -81,19 +102,23 @@ function submitAdd(): void {
     toast.show('必須項目を入力してください', 'crit')
     return
   }
-  const res = imp.addSource({
-    name: String(addForm.value.name ?? ''),
-    method: addForm.value.method as ImportSource['method'],
-    encoding: addForm.value.encoding as ImportSource['encoding'],
-    targetEntity: addForm.value.targetEntity as ImportSource['targetEntity'],
-  })
-  if (!res.ok) {
-    toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
-    return
-  }
-  toast.show('取込元を追加しました', 'ok')
-  addOpen.value = false
-  if (res.id) selectedSourceId.value = res.id
+  if (addBusy.value) return
+  addBusy.value = true
+  try {
+    const res = await imp.addSource({
+      name: String(addForm.value.name ?? ''),
+      method: addForm.value.method as ImportSource['method'],
+      encoding: addForm.value.encoding as ImportSource['encoding'],
+      targetEntity: addForm.value.targetEntity as ImportSource['targetEntity'],
+    })
+    if (!res.ok) {
+      toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
+      return
+    }
+    toast.show('取込元を追加しました', 'ok')
+    addOpen.value = false
+    if (res.id) selectedSourceId.value = res.id
+  } finally { addBusy.value = false }
 }
 
 // ---------- マッピング ----------
@@ -146,41 +171,50 @@ function suggestMapping(): void {
   ]
   toast.show('AI が候補を提示しました。内容を確認して保存してください', 'info')
 }
-function saveMapping(): void {
+const mapBusy = ref(false)
+async function saveMapping(): Promise<void> {
   if (!selectedSourceId.value) return
   const valid = mapDraft.value.filter(f => f.sourceField.trim() && f.targetItemKey.trim())
   if (valid.length === 0) {
     toast.show('取込元項目と対象項目キーを1行以上入力してください', 'crit')
     return
   }
-  const res = imp.saveMapping(selectedSourceId.value, valid.map(f => ({
-    sourceField: f.sourceField.trim(),
-    targetItemKey: f.targetItemKey.trim(),
-    transform: f.transform.trim(),
-  })))
-  if (!res.ok) {
-    toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
-    return
-  }
-  toast.show('マッピングを新しい版として保存しました', 'ok')
-  mapOpen.value = false
+  if (mapBusy.value) return
+  mapBusy.value = true
+  try {
+    const res = await imp.saveMapping(selectedSourceId.value, valid.map(f => ({
+      sourceField: f.sourceField.trim(),
+      targetItemKey: f.targetItemKey.trim(),
+      transform: f.transform.trim(),
+    })))
+    if (!res.ok) {
+      toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
+      return
+    }
+    toast.show('マッピングを新しい版として保存しました', 'ok')
+    mapOpen.value = false
+  } finally { mapBusy.value = false }
 }
 
 // ---------- 取込実行 ----------
 
-function runImport(): void {
-  if (!selectedSourceId.value) return
-  const res = imp.runImport(selectedSourceId.value)
-  if (!res.ok) {
-    toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
-    return
-  }
-  const run = res.runId ? imp.runsOf(selectedSourceId.value).find(r => r.id === res.runId) : undefined
-  const failed = run?.counts.failed ?? 0
-  toast.show(
-    `取込を実行しました（${run?.code ?? ''}）${failed > 0 ? ` / ${failed}件を隔離` : ''}`,
-    failed > 0 ? 'warn' : 'ok',
-  )
+const runBusy = ref(false)
+async function runImport(): Promise<void> {
+  if (!selectedSourceId.value || runBusy.value) return
+  runBusy.value = true
+  try {
+    const res = await imp.runImport(selectedSourceId.value)
+    if (!res.ok) {
+      toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
+      return
+    }
+    const run = res.runId ? imp.runsOf(selectedSourceId.value).find(r => r.id === res.runId) : undefined
+    const failed = run?.counts.failed ?? 0
+    toast.show(
+      `取込を実行しました（${run?.code ?? ''}）${failed > 0 ? ` / ${failed}件を隔離` : ''}`,
+      failed > 0 ? 'warn' : 'ok',
+    )
+  } finally { runBusy.value = false }
 }
 
 // ---------- 実行履歴 ----------
@@ -222,7 +256,10 @@ function openRun(row: Record<string, unknown>): void {
     description="外部ファイル・API から商品・取引先・売上などを取り込みます（F-32）。AI が項目マッピング候補を提示し、人が確定します"
   >
     <template #actions>
-      <button type="button" class="btn btn-primary" @click="openAdd">
+      <label class="flex items-center gap-1.5 text-[12px] text-sub">
+        <input v-model="showArchived" type="checkbox">無効も表示
+      </label>
+      <button v-if="imp.isAdmin.value" type="button" class="btn btn-primary" @click="openAdd">
         <Plus class="h-4 w-4" aria-hidden="true" />
         取込元を追加
       </button>
@@ -232,11 +269,17 @@ function openRun(row: Record<string, unknown>): void {
     <div class="card border-line bg-info-soft p-3 text-[12px] leading-relaxed text-sub">
       取込は <span class="font-semibold text-ink">ステージング → 検証（dry-run）→ 反映</span> の順で行い、
       マスタ未登録などの不正行は隔離して健全行のみ反映します（原則4）。同一データの再取込は冪等に扱われます。
-      本画面はモックのため実行結果をシミュレートします。実運用では API 接続時の SSRF 対策・認証情報の保管はサーバー側で実装します。
+      取込元・マッピング・実行履歴はサーバーに永続化されます。取込実行は現在は結果を決定的にシミュレートします
+      （実ファイルのアップロード・パース・API 接続時の SSRF 対策付き本実装は F-32 の後続対応）。
+    </div>
+
+    <!-- 非管理者は閲覧のみ（取込設定・実行は管理者権限。両モードで一致 = AKO-AUTH-003） -->
+    <div v-if="!imp.isAdmin.value" class="card border-warn bg-warn-soft p-3 text-[12px] text-ink">
+      取込元の登録・マッピング保存・取込実行は<strong>管理者のみ</strong>が行えます。ここでは設定と実行履歴を閲覧できます。
     </div>
 
     <!-- 取込元一覧 -->
-    <UiSectionCard :title="`取込元（${imp.activeSources.value.length}件）`" flush>
+    <UiSectionCard :title="`取込元（${sourceRows.length}件）`" flush>
       <UiDataTable
         :columns="sourceColumns"
         :rows="sourceRows"
@@ -259,19 +302,35 @@ function openRun(row: Record<string, unknown>): void {
         <template #cell-active="{ row }">
           <UiStatusBadge :label="asSource(row).active ? '有効' : '無効'" :tone="asSource(row).active ? 'ok' : 'neutral'" dot />
         </template>
+        <template #cell-actions="{ row }">
+          <button
+            v-if="asSource(row).active"
+            type="button" class="btn btn-ghost btn-sm text-crit"
+            aria-label="取込元を無効化" @click.stop="archiveSource(row)"
+          >
+            <Trash2 class="h-4 w-4" aria-hidden="true" /> 無効化
+          </button>
+          <button
+            v-else
+            type="button" class="btn btn-ghost btn-sm"
+            aria-label="取込元を復元" @click.stop="restoreSource(row)"
+          >
+            <RotateCcw class="h-4 w-4" aria-hidden="true" /> 復元
+          </button>
+        </template>
       </UiDataTable>
     </UiSectionCard>
 
     <!-- 選択取込元の詳細 -->
     <UiSectionCard v-if="selectedSource" :title="`${selectedSource.name} の詳細`" :description="`${IMPORT_METHOD_LABELS[selectedSource.method]} / ${IMPORT_ENTITY_LABELS[selectedSource.targetEntity]} / ${selectedSource.encoding === 'utf8' ? 'UTF-8' : 'Shift_JIS'}`">
-      <template #actions>
+      <template v-if="imp.isAdmin.value" #actions>
         <button type="button" class="btn btn-sm" @click="openMapEditor">
           <Wand2 class="h-4 w-4" aria-hidden="true" />
           マッピングを保存
         </button>
-        <button type="button" class="btn btn-primary btn-sm" @click="runImport">
+        <button type="button" class="btn btn-primary btn-sm" :disabled="runBusy" @click="runImport">
           <Play class="h-4 w-4" aria-hidden="true" />
-          取込を実行
+          {{ runBusy ? '実行中…' : '取込を実行' }}
         </button>
       </template>
 
@@ -346,7 +405,7 @@ function openRun(row: Record<string, unknown>): void {
       <template #footer>
         <div class="flex items-center justify-end gap-2">
           <button type="button" class="btn" @click="addOpen = false">キャンセル</button>
-          <button type="button" class="btn btn-primary" @click="submitAdd">追加</button>
+          <button type="button" class="btn btn-primary" :disabled="addBusy" @click="submitAdd">{{ addBusy ? '追加中…' : '追加' }}</button>
         </div>
       </template>
     </UiModal>
@@ -391,7 +450,7 @@ function openRun(row: Record<string, unknown>): void {
       <template #footer>
         <div class="flex items-center justify-end gap-2">
           <button type="button" class="btn" @click="mapOpen = false">キャンセル</button>
-          <button type="button" class="btn btn-primary" @click="saveMapping">保存</button>
+          <button type="button" class="btn btn-primary" :disabled="mapBusy" @click="saveMapping">{{ mapBusy ? '保存中…' : '保存' }}</button>
         </div>
       </template>
     </UiModal>

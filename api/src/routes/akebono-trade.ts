@@ -894,22 +894,27 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
       line.planLineId = p
     })
     await requireSkus(pool, lines)
+    // 出荷実績からの売上自動計上（F-28 連携。sourceKind='shipment'）を要求されたか（既定 false = 後方互換）
+    const postSales = body.postSales === true
     const id = newId('obr')
     const created = await inTxn(pool, async (db) => {
       let warehouseId: string | null = null
       let companyId: string | null = null
+      let segmentId: string | null = null
       let plan: { id: string; status: string; lines: { id: string; qty: number }[] } | null = null
       if (planId) {
-        const { rows } = await db.query<{ id: string; status: string; warehouseId: string; companyId: string; lines: { id: string; qty: number }[] }>(
-          `SELECT id, status, warehouse_id AS "warehouseId", company_id AS "companyId", lines
+        const { rows } = await db.query<{ id: string; status: string; warehouseId: string; companyId: string; segmentId: string; lines: { id: string; qty: number }[] }>(
+          `SELECT id, status, warehouse_id AS "warehouseId", company_id AS "companyId", segment_id AS "segmentId", lines
            FROM outbound_plans WHERE id = $1 FOR UPDATE`, [planId])
         if (rows.length === 0) throw err('AKO-GEN-002', '出荷指示が見つかりません', 404)
         plan = rows[0]!
         warehouseId = rows[0]!.warehouseId
         companyId = rows[0]!.companyId
+        segmentId = rows[0]!.segmentId
       } else {
         warehouseId = typeof body.warehouseId === 'string' && body.warehouseId.trim() ? body.warehouseId.trim() : null
         companyId = typeof body.companyId === 'string' && body.companyId.trim() ? body.companyId.trim() : null
+        segmentId = typeof body.segmentId === 'string' && body.segmentId.trim() ? body.segmentId.trim() : null
         if (!warehouseId) throw err('AKO-OUT-001', '出荷元倉庫を指定してください（直接登録時は必須）', 400)
         await requireRef(db, 'warehouses', warehouseId, '倉庫')
         if (companyId) await requireRef(db, 'companies', companyId, '出荷先')
@@ -941,7 +946,38 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
           posts.push({ skuId: l.skuId, warehouseId: depositWh, qty: l.qty, kind: 'transfer_in', refType: 'outbound_result', refLineId: l.id })
         }
       }
+      // 出荷実績 → 売上自動計上（F-28 連携。sourceKind='shipment'）の**事前検証 + 単価解決を在庫 post の前に置く**
+      // （モック useOutbound と同順序 = 部分適用を作らない意図をトランザクション順序でも表現。監査-2）。
+      // 店舗預け（consignment）の出荷は「販売」ではないため対象外（店舗での販売時に別途計上する）。
+      const shipmentSales: { skuId: string; qty: number; unitPrice: number; costPrice: number | null; billingType: string | null; refLineId: string }[] = []
+      if (postSales) {
+        if (depositWh) throw err('AKO-OUT-005', '店舗預けの出荷は売上計上できません（店舗での販売時に売上を計上します）', 409)
+        if (!companyId) throw err('AKO-OUT-005', '売上計上には出荷先（得意先）が必要です', 400)
+        if (!segmentId) throw err('AKO-OUT-005', '売上計上には事業セグメントが必要です（直接登録時は segmentId を指定してください）', 400)
+        await requireRef(db, 'business_segments', segmentId, '事業セグメント')
+        for (const l of resultLines) {
+          // 単価 = SKU 販売単価 → 商品標準販売単価 / 原価 = SKU 原価 → 商品標準原価（sales-records と同じ解決）
+          const { rows: skuRows } = await db.query<{ sellPrice: number | null; listPrice: number | null; costPrice: number | null; stdCost: number | null; billingType: string | null }>(
+            `SELECT s.sell_price AS "sellPrice", p.list_price AS "listPrice", s.cost_price AS "costPrice",
+                    p.standard_cost AS "stdCost", p.billing_type AS "billingType"
+             FROM product_skus s LEFT JOIN products p ON p.id = s.product_id WHERE s.id = $1`, [l.skuId])
+          const sk = skuRows[0]
+          const unitPrice = Number(sk?.sellPrice ?? sk?.listPrice ?? 0)
+          if (!(unitPrice > 0)) throw err('AKO-OUT-005', '売上単価を解決できません（商品または SKU に販売単価を設定してください）', 409)
+          shipmentSales.push({ skuId: l.skuId, qty: l.qty, unitPrice, costPrice: sk?.costPrice ?? sk?.stdCost ?? null, billingType: sk?.billingType ?? null, refLineId: l.id })
+        }
+      }
       await postInventory(db, posts)
+      // 事前検証済みの明細を計上（同一トランザクションで原子的。二重計上は source_ref 一意 INDEX 0038 が最終防衛）
+      for (const s of shipmentSales) {
+        const salesCode = await nextDocCode(db, 'SR')
+        await db.query(
+          `INSERT INTO sales_records (id, code, sales_date, company_id, segment_id, sku_id, qty, unit_price, amount,
+             cost_price, channel, billing_type, source_kind, source_ref)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, $11, 'shipment', $12)`,
+          [newId('sr'), salesCode, todayJst(), companyId, segmentId, s.skuId, s.qty, s.unitPrice, Math.round(s.qty * s.unitPrice),
+            s.costPrice, s.billingType, `obr:${s.refLineId}`])
+      }
       if (plan) {
         const { rows: rrows } = await db.query<{ lines: { planLineId: string | null; qty: number }[] }>(
           `SELECT lines FROM outbound_results WHERE plan_id = $1`, [plan.id])
@@ -955,8 +991,15 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
         await db.query(`UPDATE outbound_plans SET status = $2, updated_at = now() WHERE id = $1`, [plan.id, status])
       }
       return out[0]
+    }).catch((e) => {
+      // 出荷→売上の source_ref 一意（0038）衝突 = 同一出荷明細からの売上二重生成（リトライ等）。
+      // 生 500 を出さず 409 でグレースフルに（原則4。m2）
+      if ((e as { code?: string }).code === '23505') {
+        throw err('AKO-OUT-005', 'この出荷からの売上は既に計上されています（二重計上の防止）', 409)
+      }
+      throw e
     })
-    await audit(pool, { actorId: user.id, action: 'create', entity: 'outbound_results', entityId: id, detail: '出荷実績を登録' })
+    await audit(pool, { actorId: user.id, action: 'create', entity: 'outbound_results', entityId: id, detail: postSales ? '出荷実績を登録（売上自動計上）' : '出荷実績を登録' })
     return c.json({ data: created }, 201)
   })
 
