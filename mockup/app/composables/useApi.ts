@@ -178,6 +178,7 @@ const MIGRATED_MASTERS: Record<string, string> = {
   externalLinks: 'external-links',
   attendanceRules: 'attendance-rules',
   holidays: 'holidays',
+  goals: 'goals',
   workflowRoutes: 'workflow-routes',
   decisionThemes: 'decision-themes',
   permissionRules: 'permission-rules',

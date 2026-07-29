@@ -43,6 +43,11 @@ export interface Member {
   birthDate: string
   /** プロフィール画像（小さな data:image/... URI。空/未設定 = イニシャル表示。本人が /profile で登録） */
   avatar?: string
+  /**
+   * 担当する事業セグメント（businessSegments 参照。F-01 コックピットの事業計器の出し分けに使用）。
+   * 空配列 = 未設定（下位互換: 従来どおり業態スイッチャの選択に従う）。SoT は members マスタ。
+   */
+  segmentIds?: string[]
   active: boolean
   custom: CustomValues
 }
@@ -255,6 +260,24 @@ export interface ExternalLink {
   description: string
   icon: string // lucide アイコン名
   displayOrder: number
+  active: boolean
+}
+
+/** 目標の指標区分（F-01 コックピット着地予報。cockpit-design §2.2） */
+export type GoalMetric = 'segment_sales' | 'report_rate'
+
+/**
+ * 目標マスタ（着地予報の基準値。/masters/goals で管理・論理削除のみ）。
+ * 同一 (metric, segmentId) の active 重複は登録時に警告し、評価は最新 1 件（後勝ち）を使用する。
+ */
+export interface Goal {
+  id: string
+  metric: GoalMetric
+  /** metric='segment_sales' のとき対象業態。'report_rate' は null（全社） */
+  segmentId: string | null
+  /** 月次目標値。segment_sales = 円 / report_rate = %（0-100） */
+  monthlyValue: number
+  note: string
   active: boolean
 }
 

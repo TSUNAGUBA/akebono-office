@@ -31,6 +31,7 @@ export const FIELD_CATALOG: Record<string, { value: string; label: string }[]> =
     { value: 'attendanceRuleId', label: '勤務体系' },
     { value: 'birthDate', label: '生年月日' },
     { value: 'avatar', label: 'プロフィール画像' },
+    { value: 'segmentIds', label: '担当業態' },
   ],
   companies: [
     { value: 'kind', label: '区分（自社/顧客）' },

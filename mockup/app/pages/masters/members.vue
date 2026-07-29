@@ -17,6 +17,8 @@ const rulesCrud = useMasterCrudAsync('attendanceRules', 'ar')
 const { itemsOf } = useCodeMaster()
 const { defsFor, formSchemaFor } = useCustomFields()
 const departments = useDepartments()
+// 担当業態（F-01 コックピットの事業計器の出し分け。選択肢 = active な businessSegments）
+const { segmentOptions, segmentName } = useAkebonoMasters()
 const toast = useToast()
 const confirm = useConfirm()
 
@@ -68,6 +70,12 @@ const errors = ref<Record<string, string>>({})
 const drawerTitle = computed(() =>
   mode.value === 'create' ? 'メンバーを追加' : mode.value === 'edit' ? 'メンバーを編集' : 'メンバー詳細',
 )
+
+/** 担当業態の v-model（UiSchemaForm 外の UiMultiCombobox 用。未設定は空配列 = 下位互換） */
+const segmentIdsModel = computed<string[]>({
+  get: () => (Array.isArray(form.value.segmentIds) ? (form.value.segmentIds as string[]) : []),
+  set: (v) => { form.value = { ...form.value, segmentIds: v } },
+})
 
 // ---------- 勤務体系（勤怠ルール）の選択肢 ----------
 
@@ -144,6 +152,7 @@ const detailRows = computed(() => {
     { label: '役職', value: m.title || '—' },
     { label: 'ロール', value: MEMBER_ROLE_LABELS[m.role] ?? m.role },
     { label: '週所定', value: `${m.weeklyDays}日 / ${m.weeklyHours}h` },
+    { label: '担当業態', value: (m.segmentIds ?? []).map(segmentName).join('、') || '—' },
     { label: '打刻対象', value: m.punchRequired ? '対象' : '対象外' },
     { label: '入社日', value: m.hireDate || '—' },
     { label: '生年月日', value: m.birthDate || '—' },
@@ -166,7 +175,8 @@ function openCreate(): void {
   form.value = {
     name: '', email: '', employmentType: 'employee', attendanceRuleId: DEFAULT_RULE_VALUE,
     departmentId: '', title: '', role: 'member',
-    weeklyDays: 5, weeklyHours: 40, punchRequired: true, hireDate: '', birthDate: '', custom: {},
+    weeklyDays: 5, weeklyHours: 40, punchRequired: true, hireDate: '', birthDate: '',
+    segmentIds: [], custom: {},
   }
   errors.value = {}
   mode.value = 'create'
@@ -233,6 +243,7 @@ async function save(): Promise<void> {
     punchRequired: Boolean(f.punchRequired),
     hireDate: String(f.hireDate ?? ''),
     birthDate: String(f.birthDate ?? ''),
+    segmentIds: Array.isArray(f.segmentIds) ? (f.segmentIds as string[]) : [],
     custom: (f.custom ?? {}) as CustomValues,
   }
   if (mode.value === 'edit' && selectedId.value) payload.id = selectedId.value
@@ -328,7 +339,20 @@ async function restoreSelected(): Promise<void> {
             <dd>{{ r.value }}</dd>
           </div>
         </dl>
-        <UiSchemaForm v-else v-model="form" :fields="formFields" :errors="errors" />
+        <div v-else class="grid gap-3">
+          <UiSchemaForm v-model="form" :fields="formFields" :errors="errors" />
+          <UiFormField
+            label="担当業態"
+            hint="コックピット（ダッシュボード）の事業計器に表示する業態。未選択 = 業態スイッチャの選択に従う"
+          >
+            <UiMultiCombobox
+              v-model="segmentIdsModel"
+              :options="segmentOptions"
+              placeholder="業態名で検索"
+              aria-label="担当業態"
+            />
+          </UiFormField>
+        </div>
 
         <template #footer>
           <div v-if="mode === 'view' && selected" class="flex items-center justify-between gap-2">
