@@ -153,11 +153,14 @@ async function goalCrossGuard(
 }
 
 /**
- * goals（経営目標 = C2）の一覧参照のサーバー側行フィルタ（システム監査指摘 2026-07-29）。
- * admin / hr（提出率予報の材料に report_rate が必要）/ sales 機能を許可されたユーザー
- * （canUseFeature = F-16 のレイヤ解決。ルール未設定は既定 allow = 下位互換）→ 全件。
- * それ以外 → 自分の担当業態（members.segment_ids）の segment_sales 行のみ（report_rate =
- * 全社目標は含めない）。汎用 CRUD の他エンティティへ影響させない goals 専用の特例
+ * goals（経営目標 = C2）の一覧参照のサーバー側行フィルタ（システム監査指摘 2026-07-29。
+ * hr の絞り込みはレビュー2巡目 G2 = 運用デフォルト pr-def-05（hr sales deny）と整合させる）。
+ * - admin / sales 機能を許可されたユーザー（canUseFeature = F-16 のレイヤ解決。ルール未設定は
+ *   既定 allow = 下位互換）→ 全件
+ * - hr（sales deny）→ report_rate 全件（提出率予報の材料 = 全社目標）+ 自分の担当業態
+ *   （members.segment_ids）の segment_sales 行（他業態の経営数字は返さない）
+ * - それ以外 → 自分の担当業態の segment_sales 行のみ（report_rate = 全社目標は含めない）。
+ * 汎用 CRUD の他エンティティへ影響させない goals 専用の特例
  * （事業予報: segmentIds を持つ一般メンバーは自業態の目標を従来どおり取得できる）
  */
 async function filterGoalRows(
@@ -165,13 +168,16 @@ async function filterGoalRows(
   user: AuthUser,
   rows: Record<string, unknown>[],
 ): Promise<Record<string, unknown>[]> {
-  if (user.role === 'admin' || user.role === 'hr') return rows
+  if (user.role === 'admin') return rows
   const rules = await activePermissionRules(pool)
   if (canUseFeature(rules, subjectOf(user), 'sales')) return rows
   const { rows: memberRows } = await pool.query<{ segmentIds: string[] | null }>(
     'SELECT segment_ids AS "segmentIds" FROM members WHERE id = $1', [user.id])
   const mine = new Set(memberRows[0]?.segmentIds ?? [])
-  return rows.filter(r => r.metric === 'segment_sales' && typeof r.segmentId === 'string' && mine.has(r.segmentId))
+  const isMySegmentSales = (r: Record<string, unknown>): boolean =>
+    r.metric === 'segment_sales' && typeof r.segmentId === 'string' && mine.has(r.segmentId)
+  if (user.role === 'hr') return rows.filter(r => r.metric === 'report_rate' || isMySegmentSales(r))
+  return rows.filter(isMySegmentSales)
 }
 
 function toSqlValue(def: { jsonbFields: string[] }, field: string, value: unknown): unknown {
@@ -242,6 +248,11 @@ export function mastersRoutes(pool: pg.Pool, env: Env): Hono {
       if ((e as { code?: string }).code === '23505') {
         throw err('AKO-GEN-003', '同じ値のデータが既に存在します（重複）', 409)
       }
+      // CHECK 制約違反（例: goals の metric × segmentId × 値域 = 0035）。アプリ側ガードの最終防衛が
+      // 発火した場合も 500 でなく想定エラーとして返す（レビュー2巡目 G4）
+      if ((e as { code?: string }).code === '23514') {
+        throw err('AKO-GEN-001', '入力値の組み合わせがデータ整合性の制約に違反しています。入力内容を確認してください', 400)
+      }
       throw e
     } finally {
       client.release()
@@ -300,6 +311,11 @@ export function mastersRoutes(pool: pg.Pool, env: Env): Hono {
       await client.query('ROLLBACK')
       if ((e as { code?: string }).code === '23505') {
         throw err('AKO-GEN-003', '同じ値のデータが既に存在します（重複）', 409)
+      }
+      // CHECK 制約違反（例: goals の metric × segmentId × 値域 = 0035）。アプリ側ガードの最終防衛が
+      // 発火した場合も 500 でなく想定エラーとして返す（レビュー2巡目 G4）
+      if ((e as { code?: string }).code === '23514') {
+        throw err('AKO-GEN-001', '入力値の組み合わせがデータ整合性の制約に違反しています。入力内容を確認してください', 400)
       }
       throw e
     } finally {

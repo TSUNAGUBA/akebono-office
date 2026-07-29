@@ -61,6 +61,13 @@ export interface Goal {
   monthlyValue: number
   note: string
   active: boolean
+  /**
+   * 登録日時（API 行のみ = goals.created_at の ISO 文字列。モックシードは持たない）。
+   * API の一覧は id（UUID）順で登録順と一致しないため、「重複目標は最新 1 件 = 後勝ち」の
+   * 判定は本フィールドがあれば createdAt 降順で決定的に行う（utils/cockpit.ts latestGoal。
+   * 無ければ従来どおり配列末尾 = モック互換）
+   */
+  createdAt?: string
 }
 ```
 

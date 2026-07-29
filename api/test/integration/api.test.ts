@@ -595,7 +595,7 @@ describe('マスタ CRUD', () => {
     expect((await api('GET', '/v1/masters/goals', { as: MEMBER })).status).toBe(200)
   })
 
-  it('目標マスタの一覧はサーバー側で行フィルタされる（経営目標 = C2。監査指摘 2026-07-29）', async () => {
+  it('目標マスタの一覧はサーバー側で行フィルタされる（経営目標 = C2。監査指摘 2026-07-29 + 2巡目 G2 = hr 絞り込み）', async () => {
     // 前提データ: seg-01 / seg-02 の業態売上 + 全社の提出率
     for (const body of [
       { metric: 'segment_sales', segmentId: 'seg-01', monthlyValue: 111000 },
@@ -605,31 +605,50 @@ describe('マスタ CRUD', () => {
       expect((await api('POST', '/v1/masters/goals', { as: ADMIN, body })).status).toBe(201)
     }
 
-    // ルール未設定（テスト既定）= sales は既定 allow → 従来どおり全件（下位互換）
+    // ルール未設定（テスト既定）= sales は既定 allow → 従来どおり全件（下位互換。member / hr とも）
     const before = (await api('GET', '/v1/masters/goals', { as: MEMBER })).json.data as { metric: string }[]
     expect(before.some(g => g.metric === 'report_rate')).toBe(true)
+    const hrBefore = (await api('GET', '/v1/masters/goals', { as: HR })).json.data as { metric: string }[]
+    expect(hrBefore.some(g => g.metric === 'report_rate')).toBe(true)
 
-    // 運用デフォルト相当の sales deny を投入 + MEMBER を seg-01 担当（segmentIds）にする
-    const deny = await api('POST', '/v1/masters/permission-rules', {
-      as: ADMIN, body: { subjectKind: 'role', subjectId: 'member', resource: 'sales', effect: 'deny' },
-    })
-    expect(deny.status).toBe(201)
-    const denyId = (deny.json.data as { id: string }).id
-    expect((await api('PATCH', `/v1/masters/members/${MEMBER}`, { as: ADMIN, body: { segmentIds: ['seg-01'] } })).status).toBe(200)
+    // deny ルール・segmentIds の投入以降は try/finally で必ず復元する
+    // （expect 失敗時の残留 = 以降のテストの「ルール未設定 = 既定 allow」前提を壊さない。2巡目 G5）
+    const denyIds: string[] = []
+    try {
+      // 運用デフォルト相当の sales deny（member = pr-def-01 / hr = pr-def-05 相当）を投入し、
+      // MEMBER を seg-01 担当 / HR を seg-02 担当（segmentIds）にする
+      for (const subjectId of ['member', 'hr']) {
+        const deny = await api('POST', '/v1/masters/permission-rules', {
+          as: ADMIN, body: { subjectKind: 'role', subjectId, resource: 'sales', effect: 'deny' },
+        })
+        expect(deny.status).toBe(201)
+        denyIds.push((deny.json.data as { id: string }).id)
+      }
+      expect((await api('PATCH', `/v1/masters/members/${MEMBER}`, { as: ADMIN, body: { segmentIds: ['seg-01'] } })).status).toBe(200)
+      expect((await api('PATCH', `/v1/masters/members/${HR}`, { as: ADMIN, body: { segmentIds: ['seg-02'] } })).status).toBe(200)
 
-    // sales deny の一般: 自分の担当業態の segment_sales のみ（report_rate = 全社目標は返さない）
-    const filtered = (await api('GET', '/v1/masters/goals', { as: MEMBER })).json.data as
-      { metric: string; segmentId: string | null }[]
-    expect(filtered.length).toBeGreaterThan(0) // 事業予報の材料（自業態の目標）は引き続き取得できる
-    expect(filtered.every(g => g.metric === 'segment_sales' && g.segmentId === 'seg-01')).toBe(true)
+      // sales deny の一般: 自分の担当業態の segment_sales のみ（report_rate = 全社目標は返さない）
+      const filtered = (await api('GET', '/v1/masters/goals', { as: MEMBER })).json.data as
+        { metric: string; segmentId: string | null }[]
+      expect(filtered.length).toBeGreaterThan(0) // 事業予報の材料（自業態の目標）は引き続き取得できる
+      expect(filtered.every(g => g.metric === 'segment_sales' && g.segmentId === 'seg-01')).toBe(true)
 
-    // hr は全件（提出率予報の材料 = report_rate を含む）
-    const hrRows = (await api('GET', '/v1/masters/goals', { as: HR })).json.data as { metric: string }[]
-    expect(hrRows.some(g => g.metric === 'report_rate')).toBe(true)
-
-    // 後片付け（以降のテストはルール未設定 = 既定 allow を前提とするため戻す）
-    expect((await api('POST', `/v1/masters/permission-rules/${denyId}/archive`, { as: ADMIN })).status).toBe(200)
-    expect((await api('PATCH', `/v1/masters/members/${MEMBER}`, { as: ADMIN, body: { segmentIds: [] } })).status).toBe(200)
+      // sales deny の hr（2巡目 G2）: report_rate 全件（提出率予報の材料）+ 自分の担当業態の
+      // segment_sales のみ。他業態（seg-01）の経営数字は返さない
+      const hrRows = (await api('GET', '/v1/masters/goals', { as: HR })).json.data as
+        { metric: string; segmentId: string | null }[]
+      expect(hrRows.some(g => g.metric === 'report_rate')).toBe(true)
+      expect(hrRows.some(g => g.metric === 'segment_sales' && g.segmentId === 'seg-02')).toBe(true)
+      expect(hrRows.some(g => g.segmentId === 'seg-01')).toBe(false)
+      expect(hrRows.every(g => g.metric === 'report_rate' || g.segmentId === 'seg-02')).toBe(true)
+    } finally {
+      // 後片付け（以降のテストはルール未設定 = 既定 allow・segmentIds 空を前提とするため必ず戻す）
+      for (const id of denyIds) {
+        await api('POST', `/v1/masters/permission-rules/${id}/archive`, { as: ADMIN })
+      }
+      await api('PATCH', `/v1/masters/members/${MEMBER}`, { as: ADMIN, body: { segmentIds: [] } })
+      await api('PATCH', `/v1/masters/members/${HR}`, { as: ADMIN, body: { segmentIds: [] } })
+    }
   })
 })
 

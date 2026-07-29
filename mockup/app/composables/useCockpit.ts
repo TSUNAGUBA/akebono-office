@@ -62,10 +62,16 @@ export function useCockpit() {
   // 権限のないユーザーの確定 403 呼出しを発火させない（useSales は生成時に GET /v1/sales、
   // useMediaAnalytics は tbl('salesRecords') = GET /v1/akebono/sales-records のハイドレーションを
   // 発火する）。API モードで権限（sales / akebono）が無い場合は生成自体をスキップする
-  // （null 時は計器・予報が従来の「403 → 空キャッシュ」と同じ空表示へフォールバック =
-  // 表示ゲートは不変。モックモードはフェッチが無いため常時生成 = 挙動不変）
+  // （モックモードはフェッチが無いため常時生成 = 挙動不変）。
+  // media のゲートは**権限のみ**で、機能トグル isEnabled('akebono') は入れない（レビュー2巡目 G1）:
+  // サーバーは機能トグルを enforcement しない（api/src/lib/permissions.ts の設計判断 = トグルは
+  // 画面整理の設定でデータ保護ではない）ため、トグル OFF でも実数を取得して予報を出すのが正規経路
+  // （業態売上予報の遷移先も /akebono 不可時は /sales へフォールバック済み）。トグルをゲートに
+  // 入れると sales 許可ユーザーの業態売上予報が「実績 0 円 → 着地 0 円 warn」の誤情報になり、
+  // かつ configs ハイドレーション前後で表示が変わる非決定的挙動になる。
+  // 生成スキップ時・ロード失敗時（403 → 空キャッシュ）の防衛は segmentSalesReady（欠測と 0 の区別）が担う
   const sales = !isApi || (can('sales') && canPath('/sales')) ? useSales() : null
-  const media = !isApi || (isEnabled('akebono') && canPath('/akebono')) ? useMediaAnalytics() : null
+  const media = !isApi || canPath('/akebono') ? useMediaAnalytics() : null
   const { activeSegments, currentSegmentId, currentSegment } = useCurrentSegment()
   const weeklyInsight = useWeeklyInsight()
   const holidays = tbl('holidays')
@@ -213,9 +219,21 @@ export function useCockpit() {
     return explicitlySelected && currentSegment.value ? [currentSegment.value] : []
   })
 
+  /**
+   * 業態売上（salesRecords）の実績が確定しているか = 「欠測と 0 の区別」（レビュー2巡目 G1）。
+   * API モードは useApi の salesRecords ロード成功シグナル（isApiCollectionLoaded）を条件にし、
+   * 未ロード・ロード失敗（akebono 権限 deny の 403 = 空キャッシュ等）時は業態売上の予報・事業計器を
+   * **組み立てない**（0 表示ではなく非表示 = 「実績 0 円 → 着地 0 円 warn」の誤予報を出さない。
+   * 「空枠は出さない」原則と整合）。media 未生成（権限なしで生成スキップ）時も未確定扱い。
+   * モックモードはフェッチが無いため常にロード済み扱い（挙動不変）
+   */
+  const segmentSalesReady = computed(() =>
+    !isApi || (media !== null && isApiCollectionLoaded('salesRecords')))
+
   /** 業態の当月・前月売上（移行済み salesRecords の月次畳み込み = 両モード共通） */
   function segmentMonthly(segmentId: string): { current: number; prev: number; orders: number } {
-    if (!media) return { current: 0, prev: 0, orders: 0 } // akebono 権限なし = 0 の器（表示側は従来どおり）
+    // media 未生成（akebono 権限なし）= 0 の器（防御。表示側は segmentSalesReady=false で組み立て自体を抑止）
+    if (!media) return { current: 0, prev: 0, orders: 0 }
     const prevMonth = prevMonthOf(currentMonth.value)
     const m = media.businessMonthly(segmentId, [prevMonth, currentMonth.value])
     const cur = m.get(currentMonth.value) ?? { amount: 0, orders: 0 }
@@ -339,8 +357,9 @@ export function useCockpit() {
       groups.push(salesGroup)
     }
 
-    // 事業計器（segmentIds 設定者 or 業態選択中）
-    if (targetSegments.value.length > 0) {
+    // 事業計器（segmentIds 設定者 or 業態選択中。実績未確定 = 未ロード・ロード失敗時は
+    // 0 表示でなく枠ごと組み立てない = 欠測と 0 の区別。G1）
+    if (targetSegments.value.length > 0 && segmentSalesReady.value) {
       groups.push({
         id: 'segments',
         label: '事業計器',
@@ -399,9 +418,13 @@ export function useCockpit() {
     const elapsed = countWorkingDays(monthStart.value, today.value, DEFAULT_WORKING_DAY_RULE)
     const total = countWorkingDays(monthStart.value, monthEnd.value, DEFAULT_WORKING_DAY_RULE)
 
-    // 1. 業態売上の着地（経営 = 全業態 / 事業担当 = 担当業態のみ）
+    // 1. 業態売上の着地（経営 = 全業態 / 事業担当 = 担当業態のみ）。
+    // 実績未確定（API モードで salesRecords 未ロード・ロード失敗）時は組み立てない
+    // （「実績 0 円 → 着地 0 円 warn」の誤予報を出さない = 欠測と 0 の区別。G1）
     const salesView = can('sales') && canPath('/sales')
-    const segmentPool = salesView ? activeSegments.value : targetSegments.value
+    const segmentPool = segmentSalesReady.value
+      ? (salesView ? activeSegments.value : targetSegments.value)
+      : []
     for (const s of segmentPool) {
       // 同一 (metric, segmentId) の active 重複は最新 1 件（後勝ち = §2.2。API の id 順に依存しない）
       const goal = latestGoal(activeGoals.value, 'segment_sales', s.id)

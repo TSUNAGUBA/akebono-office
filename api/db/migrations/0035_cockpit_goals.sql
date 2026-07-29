@@ -25,5 +25,9 @@ CREATE TABLE IF NOT EXISTS goals (
   -- 提出率目標の不変条件（全社 = segment_id NULL・0-100）は DB でも防衛する
   -- （API の goalCrossGuard = 部分 PATCH の既存行マージ検証と二重化。zod だけに依存しない）
   CONSTRAINT goals_report_rate_check
-    CHECK (metric <> 'report_rate' OR (segment_id IS NULL AND monthly_value <= 100))
+    CHECK (metric <> 'report_rate' OR (segment_id IS NULL AND monthly_value <= 100)),
+  -- 業態売上目標の不変条件（対象業態必須）も report_rate 側と対称に DB で防衛する
+  -- （レビュー2巡目 G3。未マージブランチのため 0035 を直接編集 = 1巡目 F1 と同じ判断）
+  CONSTRAINT goals_segment_sales_check
+    CHECK (metric <> 'segment_sales' OR segment_id IS NOT NULL)
 );
