@@ -76,7 +76,7 @@ export function useAkebonoImports() {
     commit()
     return { ok: true, id }
   }
-  /** 取込元の復元（論理削除の取消 = 原則9.5。API モードのみ導線を持つ。モックは archive で十分） */
+  /** 取込元の復元（論理削除の取消 = 原則9.5。imports.vue が「無効も表示」トグル経由で両モードとも復元導線を持つ） */
   async function restoreSource(id: string): Promise<Result> {
     const denied = adminGuard(); if (denied) return denied
     if (isApi) return apiWrite(`/v1/akebono/import-sources/${id}/restore`, { reload: ['importSources'] })

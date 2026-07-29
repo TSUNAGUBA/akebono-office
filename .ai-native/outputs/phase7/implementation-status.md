@@ -803,7 +803,7 @@
 - **結論**: サーバー保存しない。ゆえに本フェーズ完了時点で「localStorage 保管のまま端末ローカル/日次消失する**設定・実データ**」は 0（currentSegment は設定・実データではない UI 状態）。
 
 ### 40-6 検証・オペレーター確認（テスト数はレビュー 1 巡目対応後の確定値 = §40-8）
-- [x] テスト: api 単体 **180**（akebono-phase-d 8 件新設 = importFieldsOf/simulateRun/normalizeDashboardInsight）/ api 統合 **198**（Phase D スイート新設 = 取込の版管理/実行履歴・ダッシュボード upsert（GA 未連携・会社全体・**売上権限ゲート**）・委託精算取消の冪等と再締め・**入金済み/確定済みの取消拒否**・出荷→売上の二重計上防止と店舗預け 409・**source_ref 一意 INDEX**。Phase C の close 応答へ settlementId 追随）/ mockup 単体 **155**（akebono-phase-d 7 件新設 = consignmentCancelBlockReason・buildShipmentSaleLines）/ typecheck（api・mockup）・build 全 green
+- [x] テスト: api 単体 **182**（akebono-phase-d 8 件新設 = importFieldsOf/simulateRun/normalizeDashboardInsight）/ api 統合 **198**（Phase D スイート新設 = 取込の版管理/実行履歴・ダッシュボード upsert（GA 未連携・会社全体・**売上権限ゲート**）・委託精算取消の冪等と再締め・**入金済み/確定済みの取消拒否**・出荷→売上の二重計上防止と店舗預け 409・**source_ref 一意 INDEX**。Phase C の close 応答へ settlementId 追随）/ mockup 単体 **155**（akebono-phase-d 7 件新設 = consignmentCancelBlockReason・buildShipmentSaleLines）/ typecheck（api・mockup）・build 全 green
 - [x] オペレーター確認手順:
   1. `/akebono/imports`（管理者）で取込元を追加 → マッピングを保存（v1 → v2 で版が上がる）→ 取込を実行（履歴が積み上がる）→ **リロード・翌日も保持**
   2. `/akebono/dashboard`（業態ダッシュボード）→ 「レポートを生成」→ AI レポート・インサイトが表示 → **リロードで保持（バッジ「レポート保管 = ローカル」が無いこと）**。`/akebono/company`（会社全体・売上権限）でも同様
@@ -820,7 +820,7 @@
 > Phase D の 1 巡目レビュー。財務整合の major 1 件・原則9.5 実態化の中 1 件を是正し、minor を全消し込み。
 - [x] **MAJOR-1（財務整合・両モード）: `consignment/cancel` が下流確定状態を無視して片側反転**（入金済み/部分入金のマージン請求は `status='issued'` 条件から外れ void されず孤児入金化・支払通知は期間一括 void で再締め時に片側消失）→ **バッチに有効入金のあるマージン請求（部分入金含む）or 確定済み支払通知が 1 件でもあれば取消を AKO-BIL-011 で拒否**（整合を壊さない拒否を採用。全反転は入金・確定という確定系の自動巻き戻しになり危険なため不採用）。先に入金取消（AKO-BIL-009）を行えば取消可能。判断は共有純関数 `consignmentCancelBlockReason`（API = SQL EXISTS + JS 純関数、モック = 同純関数 = 両モード一致）。統合テスト（入金済みは 409 → 入金取消後は 200・確定通知は 409）+ mockup 単体
 - [x] **中（原則9.5）: 取込元 archive/restore が UI 未接続**（composable/API/統合テストは在るが imports.vue に導線なし = 宣言だけで実態が伴わない）→ imports.vue に **無効化（確認ダイアログ付き）+「無効も表示」トグル + 復元導線**を追加（既存マスタ画面の論理削除 UI パターン踏襲・原則8）
-- [x] **m1（テスト数の食い違い 182 vs 180）**: 実測を 3 回反復して確定 = **api 単体 180**（安定・flaky なし）。§40-6 を実測へ是正
+- [x] **m1（テスト数の食い違い 182 vs 180）**: 2 巡目レビューで独立コードレビュアーが再び 182 を実測して不一致が残ったため、コーディネータが `80effd1` で `npm test`（JSON reporter 含む）を複数回実行し **api 単体 182**（skipped 0・条件付きスキップなし・安定）を確定値とした。1 巡目対応時の 180 は当該環境の一時的な計測差で誤り。§40-6/§40-8 を実測 182 へ是正
 - [x] **m2（出荷→売上の 23505 が生 500）**: outbound-results の inTxn に `.catch` を追加し 0038 部分一意衝突（source_ref 重複）を **AKO-OUT-005 409** へ変換（原則4）。DB 制約の直接検証テスト（同一 source_ref の 2 行 INSERT = 23505）を追加
 - [x] **m4（imports のモード差 = 非管理者が直 URL で書込可）**: useAkebonoImports の全書込に **admin ガード（AKO-AUTH-003）を両モードで追加**（API の requireAdmin と一致）+ imports.vue の書込 UI を isAdmin でゲート + 非管理者向け閲覧のみ注記
 - [x] **監査-2（原則5）: §40-2「事前検証を post の前に置く」が API 実装と不一致**（postInventory 後に検証していた）→ **API の postSales 事前検証 + 単価解決を postInventory の前へ移動**（モック useOutbound と同順序 = 記述を実態に一致・部分適用防止をトランザクション順序でも表現）
@@ -828,4 +828,4 @@
 - [x] **監査-4（原則6/認可）: 会社全体 dashboard（C3 = 売上含む）にサーバー側売上権限検証がない**→ scope=company の GET/生成に **`canUseFeature(rules, subject, 'sales')` サーバーゲート（AKO-PRM-001 403）**を追加（featureGuard と同型・ルール未設定は既定 allow）。統合テスト（売上 deny の member は 403・admin/業態単位は 200）
 - [x] **監査-5（原則5・既存不整合）: §38 タイトル「12 コレクション」**→ 本文/表/実装と一致する「**11**」へ是正
 - [x] 観察-6（用語基準・任意）: 対応見送り（「導出キャッシュ」「設定系/記録系/確定系」の呼称は data-design §1.5-1.7 で統一済み = 実害なし）
-- [x] 検証: api 単体 **180** / 統合 **198**（レビュー対応 3 スイート新設 = MAJOR-1 取消拒否・監査-4 売上権限ゲート・m2 source_ref 一意 INDEX）/ mockup 単体 **155**（監査-3 = 2 純関数）/ typecheck（api・mockup）・build 全 green
+- [x] 検証: api 単体 **182** / 統合 **198**（レビュー対応 3 スイート新設 = MAJOR-1 取消拒否・監査-4 売上権限ゲート・m2 source_ref 一意 INDEX）/ mockup 単体 **155**（監査-3 = 2 純関数）/ typecheck（api・mockup）・build 全 green

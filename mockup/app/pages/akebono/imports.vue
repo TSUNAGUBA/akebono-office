@@ -279,7 +279,7 @@ function openRun(row: Record<string, unknown>): void {
     </div>
 
     <!-- 取込元一覧 -->
-    <UiSectionCard :title="`取込元（${imp.activeSources.value.length}件）`" flush>
+    <UiSectionCard :title="`取込元（${sourceRows.length}件）`" flush>
       <UiDataTable
         :columns="sourceColumns"
         :rows="sourceRows"
