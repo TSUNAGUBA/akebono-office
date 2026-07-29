@@ -573,14 +573,63 @@ describe('マスタ CRUD', () => {
     expect(row.segmentId).toBe('seg-01')
     expect(row.note).toBe('検証')
 
+    // クロスガード（goalCrossGuard = 既存行とマージして検証 + DB CHECK の二重防衛）:
+    // (b) segment_sales 行の metric だけを report_rate へ変えられない（segment_id 残存・円値のまま化ける穴）
+    expect((await api('PATCH', `/v1/masters/goals/${id}`, { as: ADMIN, body: { metric: 'report_rate' } })).status).toBe(400)
+    // (a) report_rate 行へ monthlyValue だけを送っても 0-100 の値域を破れない（150% 永続化の穴）
+    const rate = await api('POST', '/v1/masters/goals', { as: ADMIN, body: { metric: 'report_rate', monthlyValue: 90 } })
+    expect(rate.status).toBe(201)
+    const rateId = (rate.json.data as { id: string }).id
+    expect((await api('PATCH', `/v1/masters/goals/${rateId}`, { as: ADMIN, body: { monthlyValue: 150 } })).status).toBe(400)
+    // report_rate 行へ segmentId 単独付与も不可（全社不変条件）。値域内の部分更新は通る
+    expect((await api('PATCH', `/v1/masters/goals/${rateId}`, { as: ADMIN, body: { segmentId: 'seg-01' } })).status).toBe(400)
+    expect((await api('PATCH', `/v1/masters/goals/${rateId}`, { as: ADMIN, body: { monthlyValue: 95 } })).status).toBe(200)
+
     // 論理削除 / 復元（取消フロー。原則9.5）
     expect((await api('POST', `/v1/masters/goals/${id}/archive`, { as: ADMIN })).status).toBe(200)
     expect((await api('POST', `/v1/masters/goals/${id}/restore`, { as: ADMIN })).status).toBe(200)
-    // 変更は管理者のみ（一般は参照のみ）
+    // 変更は管理者のみ。一般の参照は 200（返る行はサーバー側行フィルタ = 次のテストで検証）
     expect((await api('POST', '/v1/masters/goals', {
       as: MEMBER, body: { metric: 'report_rate', monthlyValue: 90 },
     })).json.error?.code).toBe('AKO-AUTH-003')
     expect((await api('GET', '/v1/masters/goals', { as: MEMBER })).status).toBe(200)
+  })
+
+  it('目標マスタの一覧はサーバー側で行フィルタされる（経営目標 = C2。監査指摘 2026-07-29）', async () => {
+    // 前提データ: seg-01 / seg-02 の業態売上 + 全社の提出率
+    for (const body of [
+      { metric: 'segment_sales', segmentId: 'seg-01', monthlyValue: 111000 },
+      { metric: 'segment_sales', segmentId: 'seg-02', monthlyValue: 222000 },
+      { metric: 'report_rate', monthlyValue: 88 },
+    ]) {
+      expect((await api('POST', '/v1/masters/goals', { as: ADMIN, body })).status).toBe(201)
+    }
+
+    // ルール未設定（テスト既定）= sales は既定 allow → 従来どおり全件（下位互換）
+    const before = (await api('GET', '/v1/masters/goals', { as: MEMBER })).json.data as { metric: string }[]
+    expect(before.some(g => g.metric === 'report_rate')).toBe(true)
+
+    // 運用デフォルト相当の sales deny を投入 + MEMBER を seg-01 担当（segmentIds）にする
+    const deny = await api('POST', '/v1/masters/permission-rules', {
+      as: ADMIN, body: { subjectKind: 'role', subjectId: 'member', resource: 'sales', effect: 'deny' },
+    })
+    expect(deny.status).toBe(201)
+    const denyId = (deny.json.data as { id: string }).id
+    expect((await api('PATCH', `/v1/masters/members/${MEMBER}`, { as: ADMIN, body: { segmentIds: ['seg-01'] } })).status).toBe(200)
+
+    // sales deny の一般: 自分の担当業態の segment_sales のみ（report_rate = 全社目標は返さない）
+    const filtered = (await api('GET', '/v1/masters/goals', { as: MEMBER })).json.data as
+      { metric: string; segmentId: string | null }[]
+    expect(filtered.length).toBeGreaterThan(0) // 事業予報の材料（自業態の目標）は引き続き取得できる
+    expect(filtered.every(g => g.metric === 'segment_sales' && g.segmentId === 'seg-01')).toBe(true)
+
+    // hr は全件（提出率予報の材料 = report_rate を含む）
+    const hrRows = (await api('GET', '/v1/masters/goals', { as: HR })).json.data as { metric: string }[]
+    expect(hrRows.some(g => g.metric === 'report_rate')).toBe(true)
+
+    // 後片付け（以降のテストはルール未設定 = 既定 allow を前提とするため戻す）
+    expect((await api('POST', `/v1/masters/permission-rules/${denyId}/archive`, { as: ADMIN })).status).toBe(200)
+    expect((await api('PATCH', `/v1/masters/members/${MEMBER}`, { as: ADMIN, body: { segmentIds: [] } })).status).toBe(200)
   })
 })
 

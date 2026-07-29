@@ -11,7 +11,7 @@
  * - 祝日・シフト・goals 等が未ロードでも空落ちしない（空配列 = 出さないへフォールバック）
  * - トーンは ok / warn の 2 値のみ（バッジインフレ禁止。禁じ手 #4）
  */
-import type { Goal, GoalMetric } from '~/types/domain'
+import type { Goal } from '~/types/domain'
 import type { BusinessSegment } from '~/types/akebono'
 import {
   DEFAULT_WORKING_DAY_RULE, isWorkingDay, workingDayRuleOf, type WorkingDayRule,
@@ -21,7 +21,7 @@ import {
 } from '../../../shared/domain/landing-forecast'
 import { segmentAppName } from '~/utils/akebono'
 import {
-  buildMeter, buildMoves, phaseOf,
+  buildMeter, buildMoves, fmtCockpitValue, latestGoal, phaseOf,
   type CockpitInstrumentGroup, type CockpitInstrumentItem, type CockpitMovesInput,
 } from '~/utils/cockpit'
 import { addDays, daysInMonth, fmtDate } from '~/utils/format'
@@ -52,14 +52,20 @@ export function useCockpit() {
   const { currentUser, currentUserId, isAdmin, isHrOrAdmin } = useCurrentUser()
   const { canPath, can } = usePermissions()
   const { isEnabled } = useAppSettings()
+  const isApi = useApiMode()
   const att = useAttendance()
   const leave = useLeave()
   const shifts = useShifts()
   const { pendingFor } = useWorkflow()
   const escalations = useEscalations()
   const reports = useReports()
-  const sales = useSales()
-  const media = useMediaAnalytics()
+  // 権限のないユーザーの確定 403 呼出しを発火させない（useSales は生成時に GET /v1/sales、
+  // useMediaAnalytics は tbl('salesRecords') = GET /v1/akebono/sales-records のハイドレーションを
+  // 発火する）。API モードで権限（sales / akebono）が無い場合は生成自体をスキップする
+  // （null 時は計器・予報が従来の「403 → 空キャッシュ」と同じ空表示へフォールバック =
+  // 表示ゲートは不変。モックモードはフェッチが無いため常時生成 = 挙動不変）
+  const sales = !isApi || (can('sales') && canPath('/sales')) ? useSales() : null
+  const media = !isApi || (isEnabled('akebono') && canPath('/akebono')) ? useMediaAnalytics() : null
   const { activeSegments, currentSegmentId, currentSegment } = useCurrentSegment()
   const weeklyInsight = useWeeklyInsight()
   const holidays = tbl('holidays')
@@ -100,6 +106,12 @@ export function useCockpit() {
   // ---------- 材料（次の一手・メーター） ----------
 
   const isParttime = computed(() => currentUser.value.employmentType === 'parttime')
+  /**
+   * 打刻系の共通ゲート（punchRequired × canPath('/timecard')）。timecard（= timecard AND attendance）
+   * deny のユーザーには、フェーズ・打刻の一手・完了メーターの打刻デューティ・実働計器・勤怠予報を
+   * この 1 箇所で一括して出さない（打刻画面へ到達できないのに打刻導線だけ出さない）
+   */
+  const punchTarget = computed(() => currentUser.value.punchRequired && canPath('/timecard'))
   const shiftFeature = computed(() => isEnabled('shift') && canPath('/shift'))
   /** シフト管理の対象者（出勤打刻の出し分け・シフト計器の表示条件） */
   const shiftManaged = computed(() => isParttime.value && shiftFeature.value)
@@ -129,7 +141,7 @@ export function useCockpit() {
 
   /** 前営業日以前（直近 7 日）の「IN あり・OUT なし」= 退勤忘れ（新しい順） */
   const unclosedDates = computed(() => {
-    if (!currentUser.value.punchRequired) return []
+    if (!punchTarget.value) return []
     const out: string[] = []
     for (let i = 1; i <= 7; i++) {
       const d = addDays(today.value, -i)
@@ -157,7 +169,7 @@ export function useCockpit() {
   })
 
   const movesInput = computed<CockpitMovesInput>(() => ({
-    punchRequired: currentUser.value.punchRequired,
+    punchRequired: punchTarget.value,
     punchState: punchStateToday.value,
     hour: hour.value,
     unclosedDates: unclosedDates.value,
@@ -182,7 +194,7 @@ export function useCockpit() {
     obligation: myObligation.value,
   }))
 
-  const phase = computed(() => phaseOf(currentUser.value.punchRequired, punchStateToday.value))
+  const phase = computed(() => phaseOf(punchTarget.value, punchStateToday.value))
   const moves = computed(() => buildMoves(movesInput.value))
   const meter = computed(() => buildMeter(movesInput.value))
 
@@ -194,12 +206,16 @@ export function useCockpit() {
     const ids = currentUser.value.segmentIds ?? []
     const mine = activeSegments.value.filter(s => ids.includes(s.id))
     if (mine.length > 0) return mine
-    // 未設定者は「業態を明示的に選択中」のときのみ現在業態を表示（全員への経営数字の露出を防ぐ）
-    return currentSegmentId.value && currentSegment.value ? [currentSegment.value] : []
+    // 未設定者は「業態を明示的に選択中」のときのみ現在業態を表示（全員への経営数字の露出を防ぐ）。
+    // 保存済みの選択が無効化・削除済みの場合は表示しない（effectiveSegmentId の先頭業態フォールバックに
+    // 乗せると、選んでいない業態の売上へすり替わるため。選択 id が有効な業態のときのみ）
+    const explicitlySelected = activeSegments.value.some(s => s.id === currentSegmentId.value)
+    return explicitlySelected && currentSegment.value ? [currentSegment.value] : []
   })
 
   /** 業態の当月・前月売上（移行済み salesRecords の月次畳み込み = 両モード共通） */
   function segmentMonthly(segmentId: string): { current: number; prev: number; orders: number } {
+    if (!media) return { current: 0, prev: 0, orders: 0 } // akebono 権限なし = 0 の器（表示側は従来どおり）
     const prevMonth = prevMonthOf(currentMonth.value)
     const m = media.businessMonthly(segmentId, [prevMonth, currentMonth.value])
     const cur = m.get(currentMonth.value) ?? { amount: 0, orders: 0 }
@@ -212,7 +228,7 @@ export function useCockpit() {
 
     // 自分の計器（全員・punchRequired 考慮）
     const self: CockpitInstrumentItem[] = []
-    if (currentUser.value.punchRequired && canPath('/timecard')) {
+    if (punchTarget.value) {
       const ms = att.monthSummary(currentUserId.value, currentMonth.value)
       const workedMin = ms.days.reduce((s, d) => s + d.workMinutes, 0)
       self.push({
@@ -275,44 +291,46 @@ export function useCockpit() {
       const fix = att.fixRequests.value.filter(f => f.status === 'pending').length
       const lv = leave.pendingRequests.value.length
       const wf = canPath('/workflow') ? pendingFor(currentUserId.value).length : 0
-      const overtimeTargets = new Set(
-        escalations.open.value.filter(e => e.reason === 'overtime_alert').map(e => e.targetMemberId)).size
       const obligationWarn = members.value
         .filter(m => m.active && leave.obligation(m.id).warn).length
-      groups.push({
-        id: 'labor',
-        label: '労務計器',
-        items: [
-          {
-            id: 'labor-approvals', label: '承認キュー', icon: 'ClipboardCheck', to: '/attendance?tab=requests',
-            value: `${fix + lv + wf} 件`,
-            sub: `打刻修正 ${fix}・休暇 ${lv}・稟議 ${wf}`,
-          },
-          {
-            id: 'labor-article36', label: '36協定該当者', icon: 'TriangleAlert', to: '/inbox',
-            value: `${overtimeTargets} 人`,
-            sub: '未対応の残業エスカレーション',
-          },
-          {
-            id: 'labor-obligation', label: '年5日未達', icon: 'CalendarHeart', to: '/attendance?tab=leave-admin',
-            value: `${obligationWarn} 人`,
-            sub: '期限 3 ヶ月以内・未達',
-          },
-        ],
+      const items: CockpitInstrumentItem[] = [
+        {
+          id: 'labor-approvals', label: '承認キュー', icon: 'ClipboardCheck', to: '/attendance?tab=requests',
+          value: `${fix + lv + wf} 件`,
+          sub: `打刻修正 ${fix}・休暇 ${lv}・稟議 ${wf}`,
+        },
+      ]
+      // 36協定該当者はデータが取得できる場合のみ表示（API モードのエスカレーション一覧は admin のみ =
+      // hr は欠測になるため枠ごと非表示。欠測を 0 表示しない。モックモードは従来どおり全員分表示）
+      if (!isApi || isAdmin.value) {
+        const overtimeTargets = new Set(
+          escalations.open.value.filter(e => e.reason === 'overtime_alert').map(e => e.targetMemberId)).size
+        items.push({
+          id: 'labor-article36', label: '36協定該当者', icon: 'TriangleAlert', to: '/inbox',
+          value: `${overtimeTargets} 人`,
+          sub: '未対応の残業エスカレーション',
+        })
+      }
+      items.push({
+        id: 'labor-obligation', label: '年5日未達', icon: 'CalendarHeart', to: '/attendance?tab=leave-admin',
+        value: `${obligationWarn} 人`,
+        sub: '期限 3 ヶ月以内・未達',
       })
+      groups.push({ id: 'labor', label: '労務計器', items })
     }
 
-    // 経営計器（sales 権限）
-    if (can('sales') && canPath('/sales')) {
+    // 経営計器（sales 権限。sales null = F9 の未生成時は権限なしのため枠ごと出ない）
+    if (sales && can('sales') && canPath('/sales')) {
       const amount = sales.currentMonthSales.value
       const salesGroup: CockpitInstrumentGroup = {
         id: 'sales',
         label: '経営計器',
         items: [{
           id: 'sales-month', label: '今月売上', icon: 'TrendingUp', to: '/sales',
-          value: `${(Math.round(amount / 1000) / 10).toLocaleString('ja-JP')}万円`,
+          value: fmtCockpitValue(amount, 'currency'),
           delta: sales.currentMonthYoY.value,
-          sub: sales.currentMonthYoY.value !== null ? '前年同月比' : `${Number(currentMonth.value.slice(5, 7))}月実績`,
+          // 出典（月次実績 = /sales の登録データ）を明示する
+          sub: sales.currentMonthYoY.value !== null ? '前年同月比・月次実績より' : '月次実績より',
         }],
       }
       if (isEnabled('akebono') && canPath('/akebono') && activeSegments.value.length > 0) {
@@ -330,9 +348,10 @@ export function useCockpit() {
           const m = segmentMonthly(s.id)
           return {
             id: `segment-${s.id}`, label: segmentAppName(s), icon: 'Store', to: `/akebono?seg=${s.id}`,
-            value: `${(Math.round(m.current / 1000) / 10).toLocaleString('ja-JP')}万円`,
+            value: fmtCockpitValue(m.current, 'currency'),
             delta: m.prev > 0 ? (m.current - m.prev) / m.prev : null,
-            sub: m.prev > 0 ? '今月売上・前月比' : '今月売上',
+            // 出典（取引明細 = AKEBONO 売上記録の月次畳み込み）を明示する
+            sub: m.prev > 0 ? '今月売上・前月比・取引明細より' : '今月売上・取引明細より',
           }
         }),
       })
@@ -344,7 +363,10 @@ export function useCockpit() {
   // ---------- 週次インサイト 1 行（保存済み personal のみ。生成は /reports の明示操作） ----------
 
   const weeklyLine = ref<CockpitWeeklyLine | null>(null)
+  /** ロード世代（ユーザー切替の連続ロードで旧応答が後着して上書きしないように） */
+  let weeklyLineGen = 0
   async function loadWeeklyLine(): Promise<void> {
+    const gen = ++weeklyLineGen
     weeklyLine.value = null
     if (!canPath('/reports')) return
     try {
@@ -356,11 +378,12 @@ export function useCockpit() {
         weekStart = addDays(thisWeek, -7)
         bundle = await weeklyInsight.load(weekStart)
       }
+      if (gen !== weeklyLineGen) return // 旧世代の応答は破棄（最新のロード結果のみ反映）
       weeklyLine.value = bundle.personal
         ? { text: bundle.personal.insight.summary, weekStart, to: '/reports?tab=weekly-all' }
         : null
     } catch {
-      weeklyLine.value = null // 取得失敗は非表示（補助情報。主要フローを止めない）
+      if (gen === weeklyLineGen) weeklyLine.value = null // 取得失敗は非表示（補助情報。主要フローを止めない）
     }
   }
   watch(currentUserId, () => { void loadWeeklyLine() }, { immediate: true })
@@ -370,14 +393,9 @@ export function useCockpit() {
   const activeGoals = computed(() => (goalsTbl.value as Goal[]).filter(g => g.active))
   const goalsEmpty = computed(() => activeGoals.value.length === 0)
 
-  /** 同一 (metric, segmentId) の active 重複は後勝ち = 最新 1 件（cockpit-design §2.2） */
-  function latestGoal(metric: GoalMetric, segmentId: string | null): Goal | undefined {
-    const matches = activeGoals.value.filter(g => g.metric === metric && g.segmentId === segmentId)
-    return matches[matches.length - 1]
-  }
-
   const forecasts = computed<CockpitForecastView[]>(() => {
-    const defs: { input: ForecastInput; to: string }[] = []
+    // reasonNote = 算定根拠へ追記する分母等の定義（予報の透明性）
+    const defs: { input: ForecastInput; to: string; reasonNote?: string }[] = []
     const elapsed = countWorkingDays(monthStart.value, today.value, DEFAULT_WORKING_DAY_RULE)
     const total = countWorkingDays(monthStart.value, monthEnd.value, DEFAULT_WORKING_DAY_RULE)
 
@@ -385,7 +403,8 @@ export function useCockpit() {
     const salesView = can('sales') && canPath('/sales')
     const segmentPool = salesView ? activeSegments.value : targetSegments.value
     for (const s of segmentPool) {
-      const goal = latestGoal('segment_sales', s.id)
+      // 同一 (metric, segmentId) の active 重複は最新 1 件（後勝ち = §2.2。API の id 順に依存しない）
+      const goal = latestGoal(activeGoals.value, 'segment_sales', s.id)
       if (!goal) continue
       defs.push({
         input: {
@@ -399,7 +418,7 @@ export function useCockpit() {
 
     // 2. 日報提出率の着地（hr / admin。率は外挿しない）
     if (isHrOrAdmin.value && canPath('/reports')) {
-      const goal = latestGoal('report_rate', null)
+      const goal = latestGoal(activeGoals.value, 'report_rate', null)
       const asOf = addDays(today.value, -1)
       const elapsedToAsOf = asOf >= monthStart.value
         ? countWorkingDays(monthStart.value, asOf, DEFAULT_WORKING_DAY_RULE)
@@ -421,13 +440,14 @@ export function useCockpit() {
               elapsedWorkingDays: elapsedToAsOf, totalWorkingDays: total,
             },
             to: '/reports?tab=team',
+            reasonNote: '対象: 打刻対象の社員', // 分母の定義（active × punchRequired × 非アルバイト）
           })
         }
       }
     }
 
     // 3. 自分の勤怠着地（正社員系 = 残業の上限型 / アルバイト = 勤務時間）
-    if (currentUser.value.punchRequired && canPath('/timecard')) {
+    if (punchTarget.value) {
       const myElapsed = countWorkingDays(monthStart.value, today.value, memberRule.value)
       const myTotal = countWorkingDays(monthStart.value, monthEnd.value, memberRule.value)
       const ms = att.monthSummary(currentUserId.value, currentMonth.value)
@@ -456,13 +476,25 @@ export function useCockpit() {
       }
     }
 
-    return defs.slice(0, MAX_FORECASTS).map(d => ({
-      ...buildForecast(d.input),
-      unit: d.input.unit,
-      current: d.input.current,
-      inverse: d.input.inverse === true,
-      to: d.to,
-    }))
+    // 切り詰め: 自分の予報（my-overtime / my-hours）が存在する場合は最低 1 本確保し、
+    // 残り枠を組立順（業態売上 → 提出率）で充当する（業態数が多くても自分の勤怠着地が消えない）
+    const isMine = (d: { input: ForecastInput }): boolean =>
+      d.input.id === 'my-overtime' || d.input.id === 'my-hours'
+    const mine = defs.filter(isMine)
+    const others = defs.filter(d => !isMine(d))
+    const picked = [...others.slice(0, Math.max(0, MAX_FORECASTS - mine.length)), ...mine.slice(0, MAX_FORECASTS)]
+
+    return picked.map((d) => {
+      const built = buildForecast(d.input)
+      return {
+        ...built,
+        reason: d.reasonNote ? `${built.reason}（${d.reasonNote}）` : built.reason,
+        unit: d.input.unit,
+        current: d.input.current,
+        inverse: d.input.inverse === true,
+        to: d.to,
+      }
+    })
   })
 
   const forecastSummary = computed(() => summarizeForecasts(forecasts.value))

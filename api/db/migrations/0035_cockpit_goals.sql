@@ -15,10 +15,15 @@ CREATE TABLE IF NOT EXISTS goals (
   -- metric='segment_sales' のとき対象業態（business_segments 参照だがデモシード互換のため FK なし = 0031 の判断に従う）。
   -- 'report_rate' は NULL（全社）
   segment_id    text,
-  -- 月次目標値。segment_sales = 円 / report_rate = %（0-100。値域は registry の zod が担保）
+  -- 月次目標値。segment_sales = 円 / report_rate = %（0-100。値域は registry の zod +
+  -- masters.ts goalCrossGuard + 下の CHECK 制約が担保）
   monthly_value numeric NOT NULL DEFAULT 0 CHECK (monthly_value >= 0),
   note          text NOT NULL DEFAULT '',
   active        boolean NOT NULL DEFAULT true,
   created_at    timestamptz NOT NULL DEFAULT now(),
-  updated_at    timestamptz NOT NULL DEFAULT now()
+  updated_at    timestamptz NOT NULL DEFAULT now(),
+  -- 提出率目標の不変条件（全社 = segment_id NULL・0-100）は DB でも防衛する
+  -- （API の goalCrossGuard = 部分 PATCH の既存行マージ検証と二重化。zod だけに依存しない）
+  CONSTRAINT goals_report_rate_check
+    CHECK (metric <> 'report_rate' OR (segment_id IS NULL AND monthly_value <= 100))
 );

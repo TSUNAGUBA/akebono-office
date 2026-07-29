@@ -54,8 +54,12 @@ export interface ForecastResult {
 
 const round1 = (n: number): number => Math.round(n * 10) / 10
 
-/** 単位付きの値表示（currency = 万円 / percent = % / hours = h） */
-function fmtValue(n: number, unit: ForecastInput['unit']): string {
+/**
+ * 単位付きの値表示（currency = 万円 / percent = % / hours = h）。
+ * reason の組み立てに使うほか、コックピットの計器・予報表示（mockup utils/cockpit の
+ * fmtCockpitValue = 本関数への委譲）と共有する表示 SoT（万円表記の重複実装を作らない。原則3）
+ */
+export function fmtValue(n: number, unit: ForecastInput['unit']): string {
   if (unit === 'currency') return `${(Math.round(n / 1000) / 10).toLocaleString('ja-JP')}万円`
   if (unit === 'percent') return `${round1(n)}%`
   return `${round1(n)}h`

@@ -107,7 +107,7 @@ export function summarizeForecasts(results: ForecastResult[]): { headline: strin
 
 ## 3. 画面構成（`/` = pages/index.vue 再構成）
 
-モバイル(375px) = この縦順そのまま 1 カラム。PC(md〜) = ①②を全幅、③は 2 カラムグリッド。
+モバイル(375px) = この縦順そのまま 1 カラム。①②は全幅、③の KPI カードは 2 列グリッド（lg〜 = 4 列。実装 = `grid-cols-2 lg:grid-cols-4`）。
 
 ```
 ① CockpitStrip（フレーム + 地平線 1 行）
@@ -126,6 +126,8 @@ export function summarizeForecasts(results: ForecastResult[]): { headline: strin
 ④ CockpitForecast（滑走路ボード。①の予報行タップで開閉。既定: 閉）
    ロール別の滑走路バー 2〜4 本（CSS のみ: 実績塗り + 予測マーカー + 目標ティック）
    針路修正 1 件（最も乖離が大きい warn の対処導線。実行 = 該当ページへ遷移）
+   最大 4 本への切り詰めは「自分の予報（my-overtime / my-hours）を最低 1 本確保 →
+   残り枠を 業態売上 → 提出率 の順で充当」（業態数が多くても自分の勤怠着地は消えない）
 ⑤ AKEBONO 業務（業態別アプリ。現行 AkebonoSegmentApps を維持）
 ⑥ すべての機能（現行カードメニュー + カテゴリチップをそのまま格下げ配置）
 ⑦ 通知フィード（現行のタブ構成を維持）

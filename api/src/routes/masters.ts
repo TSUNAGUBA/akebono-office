@@ -10,12 +10,13 @@
  */
 import { Hono } from 'hono'
 import type pg from 'pg'
+import { canUseFeature } from '../../../shared/domain/permissions'
 import { requireAdmin, requireHrOrAdmin, type AuthUser } from '../auth'
 import type { Env } from '../env'
 import { audit } from '../lib/audit'
 import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
-import { clearPermissionCache, stripMasterFields } from '../lib/permissions'
+import { activePermissionRules, clearPermissionCache, stripMasterFields, subjectOf } from '../lib/permissions'
 import { scheduleSearchRebuild, SEARCH_RELEVANT_ENTITIES } from '../lib/search-index'
 import { camelToSnake, MASTERS, rowToCamel, type MasterEntity } from '../masters/registry'
 
@@ -119,6 +120,60 @@ async function workflowRouteCrossGuard(
   }
 }
 
+/**
+ * goals の部分更新でも metric × segmentId × 値域（report_rate = 全社・0-100）の不変条件を
+ * 破らせない（workflowRouteCrossGuard と同型: POST は schema の superRefine が担うが、
+ * .partial() 由来の patchSchema ではクロスフィールド検証ができないため、既存行とマージした
+ * 結果で検証する。DB 側も 0035 の CHECK 制約で二重防衛）
+ */
+async function goalCrossGuard(
+  pool: pg.Pool,
+  id: string,
+  body: Record<string, unknown>,
+): Promise<void> {
+  const { rows } = await pool.query<{ metric: string; segmentId: string | null; monthlyValue: number }>(
+    `SELECT metric, segment_id AS "segmentId", monthly_value::float8 AS "monthlyValue"
+     FROM goals WHERE id = $1`, [id])
+  const existing = rows[0]
+  if (!existing) return // 対象なしは後段の UPDATE が 404 を返す
+  const metric = 'metric' in body ? String(body.metric) : existing.metric
+  const segmentId = 'segmentId' in body ? (body.segmentId as string | null) : existing.segmentId
+  const monthlyValue = 'monthlyValue' in body ? Number(body.monthlyValue) : existing.monthlyValue
+  if (metric === 'segment_sales' && !segmentId) {
+    throw err('AKO-GEN-001', '業態売上の目標は対象業態を指定してください', 400)
+  }
+  if (metric === 'report_rate') {
+    if (segmentId) {
+      throw err('AKO-GEN-001', '日報提出率の目標は全社です（業態は指定できません）', 400)
+    }
+    if (monthlyValue > 100) {
+      throw err('AKO-GEN-001', '日報提出率は 0〜100 で入力してください', 400)
+    }
+  }
+}
+
+/**
+ * goals（経営目標 = C2）の一覧参照のサーバー側行フィルタ（システム監査指摘 2026-07-29）。
+ * admin / hr（提出率予報の材料に report_rate が必要）/ sales 機能を許可されたユーザー
+ * （canUseFeature = F-16 のレイヤ解決。ルール未設定は既定 allow = 下位互換）→ 全件。
+ * それ以外 → 自分の担当業態（members.segment_ids）の segment_sales 行のみ（report_rate =
+ * 全社目標は含めない）。汎用 CRUD の他エンティティへ影響させない goals 専用の特例
+ * （事業予報: segmentIds を持つ一般メンバーは自業態の目標を従来どおり取得できる）
+ */
+async function filterGoalRows(
+  pool: pg.Pool,
+  user: AuthUser,
+  rows: Record<string, unknown>[],
+): Promise<Record<string, unknown>[]> {
+  if (user.role === 'admin' || user.role === 'hr') return rows
+  const rules = await activePermissionRules(pool)
+  if (canUseFeature(rules, subjectOf(user), 'sales')) return rows
+  const { rows: memberRows } = await pool.query<{ segmentIds: string[] | null }>(
+    'SELECT segment_ids AS "segmentIds" FROM members WHERE id = $1', [user.id])
+  const mine = new Set(memberRows[0]?.segmentIds ?? [])
+  return rows.filter(r => r.metric === 'segment_sales' && typeof r.segmentId === 'string' && mine.has(r.segmentId))
+}
+
 function toSqlValue(def: { jsonbFields: string[] }, field: string, value: unknown): unknown {
   return def.jsonbFields.includes(field) ? JSON.stringify(value) : value
 }
@@ -144,7 +199,9 @@ export function mastersRoutes(pool: pg.Pool, env: Env): Hono {
     const orderBy = def.table === 'public_holidays' ? 'ORDER BY date' : hasOrder ? order : 'ORDER BY id'
     const { rows } = await pool.query(
       `SELECT * FROM ${def.table} ${where} ${orderBy}`)
-    const data = await stripMasterFields(pool, c.get('user'), entity, rows.map(rowToCamel))
+    let list = rows.map(rowToCamel)
+    if (entity === 'goals') list = await filterGoalRows(pool, c.get('user'), list) // C2 の行フィルタ（goals 専用）
+    const data = await stripMasterFields(pool, c.get('user'), entity, list)
     return c.json({ data })
   })
 
@@ -221,6 +278,9 @@ export function mastersRoutes(pool: pg.Pool, env: Env): Hono {
     }
     if (entity === 'workflow-routes' && ('minAmount' in body || 'maxAmount' in body || 'steps' in body)) {
       await workflowRouteCrossGuard(pool, id, body)
+    }
+    if (entity === 'goals' && ('metric' in body || 'segmentId' in body || 'monthlyValue' in body)) {
+      await goalCrossGuard(pool, id, body)
     }
 
     const fields = Object.keys(body)

@@ -746,12 +746,19 @@
 - [x] ウィジェット 4 点（`components/widgets/Cockpit*.vue`）: Strip（挨拶移設 + フェーズバッジ + メーター細バー + 予報 1 行 = ④の開閉トグル・aria-expanded/progressbar）/ Moves(最優先 1 件大カード = punch は WidgetsPunchClock flat 埋込・新規書込パスなし = 原則9.5。0 件は ok トーンの完了表示）/ Instruments（UiKpiCard 再利用・該当なしは枠ごと非表示・未提出者名は出さない = 労務計器も件数のみ）/ Forecast（CSS のみの滑走路バー: 実績塗り bg-brand + 予測マーカー + 目標ティック bg-line-strong・ステータス色は tone バッジのみ・reason 1 行 + 針路修正 1 件）
 - [x] `pages/index.vue` 再構成（§3 の縦順: ①②③④ → AKEBONO 業務 → すべての機能 → 通知）。**カードメニュー（カテゴリチップ・sessionStorage キー 'menu-cat-dashboard'）・通知タブ・AKEBONO セクションのロジックは挙動同一のまま移動**
 - [x] 権限ゲート: 一手・計器・予報すべて isEnabled × canPath × ロール条件（deny ユーザーは枠ごと消える）。事業計器・事業予報は segmentIds 優先・未設定は**明示的な業態選択のみ**フォールバック（既定業態の自動解決では出さない = 全員への経営数字露出を防ぐ）
-- [x] テスト `tests/cockpit.test.ts`（18 件）: §3.3 の 5 ペルソナ相当（m-01/m-04/m-06/m-10/m-11）+ 優先順位・時刻境界（12時/17時）・権限ゲート・ゼロ状態 + フェーズ導出 + メーター分母 0
-- [x] 検証: mockup vitest 176 / `npx nuxi typecheck` / `npm run build` 全 green。375px = 縦 1 カラム・主ボタン幅フル・横スクロールなし
+- [x] テスト `tests/cockpit.test.ts`（20 件）: §3.3 の 5 ペルソナ相当（m-01/m-04/m-06/m-10/m-11）+ 優先順位・時刻境界（12時/17時）・権限ゲート・ゼロ状態 + フェーズ導出 + メーター分母 0 + latestGoal（重複目標の最新 1 件が API の id = UUID 順に依存しない = createdAt 降順・混在時は配列末尾）
+- [x] 検証: mockup vitest 178 / `npx nuxi typecheck` / `npm run build` 全 green。375px = 縦 1 カラム・主ボタン幅フル・横スクロールなし
+- [x] API 統合テスト検証記録（実 PostgreSQL = test/run-integration.sh）: migration 0035 適用（members.segment_ids + goals テーブル + report_rate CHECK 制約）・goals CRUD（metric×segmentId 整合 / 部分 PATCH のクロスガード = 150% 永続化・metric すり替えの 400 / 論理削除・復元 / C2 行フィルタ）・segmentIds の部分 PATCH 回帰（未送信キー保持）を含む統合 190 / api 単体 174 全 green
 - [x] ドキュメント（原則5）: screen-design.md `/` 節改訂・functional-requirements.md F-01（F-01-4〜7 追加）・CONVENTIONS.md UI 在庫表（Cockpit* 4 行）・本節
 
 ### 40-3 設計からの逸脱・判断（記録）
 - §3.3 マトリクスは「例」であり、機械的なゲート（§3.2 / §3 本文）を正とした: m-06（segmentIds=seg-02 のシード）には事業計器・seg-02 売上予報が**表示される**（本文「segmentIds 設定者」どおり。マトリクスの行は seed の segmentIds 付与前の想定）/ m-10（hr × parttime）の一手に「日報」は出ない（§3.2 #6 = 非 parttime ゲートが正）/ hr の予報「年5日」は landing-forecast の月次目標セマンティクスに合わないため**労務計器（年5日未達数）+ 一手 #9** で表現し、予報は提出率 + 自分の勤務時間とした
 - 事業計器・事業予報の当月実績は buildSegmentSummary（対象月 = 直前の完了月）ではなく `useMediaAnalytics.businessMonthly`（salesRecords の月次畳み込み = 両モード共通・赤黒の元月帰属）を使用（「今月売上スナップ」には当月集計が必要なため）
-- 労務計器の「36協定該当者数」は未対応の残業エスカレーション（reason=overtime_alert）の対象者数で表現（全メンバー × 6 ヶ月の勤怠集計をダッシュボード表示時に走らせない = 重い再取得の禁止。API モードのエスカレーション一覧は admin のみのため hr は 0 表示になる既知の制約）
+- 労務計器の「36協定該当者数」は未対応の残業エスカレーション（reason=overtime_alert）の対象者数で表現（全メンバー × 6 ヶ月の勤怠集計をダッシュボード表示時に走らせない = 重い再取得の禁止）。**API モードのエスカレーション一覧は admin のみのため、hr にはタイル自体を非表示**（欠測を 0 表示しない = 空枠は出さない原則。レビュー1巡目 F10。モックモードは従来どおり表示。次の一手のエスカレーション件数は hr で 0 のまま = 件数キューは「出ない」だけで誤情報にならないため許容）
 - 取消可能性（原則9.5）: 本改修は新規の書込パスを作らない（打刻 = 既存 PunchClock の修正申請フロー・goals = 論理削除）= 新規の未対応取消フローなし
+
+### 40-4 独立レビュー1巡目（コードレビュアー + システム監査官）の対応記録（2026-07-29）
+- [x] **F4（監査指摘: 経営目標 C2 が API で全認証ユーザーから可読）→ サーバー側行フィルタ採用**: `/v1/masters/goals` の一覧 GET を admin / hr / sales 許可ユーザー（canUseFeature = 既定 allow を含むレイヤ解決）= 全件、それ以外 = 自分の担当業態（members.segment_ids）の segment_sales のみ（report_rate は返さない）へ変更。汎用 CRUD の他エンティティへは影響しない goals 専用の特例（masters.ts filterGoalRows）。segmentIds を持つ一般メンバーの事業予報は自業態の目標を取得できるため従来どおり成立
+- [x] **F1（goals 部分 PATCH の不変条件穴）**: patchSchema を goalBase.partial() とし、既存行とマージして検証する goalCrossGuard（workflowRouteCrossGuard と同型）+ goals テーブルの CHECK 制約（0035 直接編集 = 未マージブランチ内）で封止
+- [x] **F7（予報 4 本切り詰めの優先順）**: 自分の予報（my-overtime / my-hours）を最低 1 本確保し、残り枠を 業態売上 → 提出率 の順で充当（cockpit-design §3④ に追記）
+- [x] 残課題（F13。マスタ画面全般の既存挙動）: モックモードでは hr が `/masters/goals` に到達・編集できる（メニュー非表示のみで requireAdmin 相当のページガードなし）。API は requireAdmin で 403 = モックと非対称。マスタ画面全般のロールガード整備のタイミングで解消する

@@ -4,8 +4,9 @@
  * §3.3 の 5 ペルソナ相当（ロール × 時刻 × 状態の代表ケース）+ ゼロ状態 + メーター分母 0
  */
 import { describe, expect, it } from 'vitest'
+import type { Goal } from '~/types/domain'
 import {
-  buildMeter, buildMoves, obligationBehindPace, phaseOf,
+  buildMeter, buildMoves, latestGoal, obligationBehindPace, phaseOf,
   type CockpitMovesInput, type CockpitObligation,
 } from '~/utils/cockpit'
 
@@ -191,6 +192,30 @@ describe('obligationBehindPace（§3.2 #9 の年5日ペース判定）', () => {
     expect(obligationBehindPace(ob({ applicable: false }))).toBe(false)
     expect(obligationBehindPace(ob({ taken: 5 }))).toBe(false)
     expect(obligationBehindPace(null)).toBe(false)
+  })
+})
+
+describe('latestGoal（§2.2 重複目標は最新 1 件 = 後勝ち）', () => {
+  const goal = (id: string, over: Partial<Goal> = {}): Goal => ({
+    id, metric: 'segment_sales', segmentId: 'seg-01', monthlyValue: 100, note: '', active: true, ...over,
+  })
+
+  it('createdAt があれば降順で最新を選ぶ（API の id = UUID 順に依存しない）。無ければ配列末尾', () => {
+    const newer = goal('g-uuid-b', { monthlyValue: 200, createdAt: '2026-07-29T01:00:00.000Z' })
+    const older = goal('g-uuid-a', { monthlyValue: 100, createdAt: '2026-07-01T01:00:00.000Z' })
+    // 一覧の並び（id 順）が登録順と逆でも、createdAt が新しい行が選ばれる
+    expect(latestGoal([newer, older], 'segment_sales', 'seg-01')?.monthlyValue).toBe(200)
+    expect(latestGoal([older, newer], 'segment_sales', 'seg-01')?.monthlyValue).toBe(200)
+    // 同時刻は後の行（従来の後勝ちを維持）
+    const t = '2026-07-29T01:00:00.000Z'
+    expect(latestGoal([goal('g-1', { createdAt: t }), goal('g-2', { createdAt: t })], 'segment_sales', 'seg-01')?.id).toBe('g-2')
+    // createdAt なし（モックシード）は従来どおり配列末尾
+    expect(latestGoal([goal('g-01'), goal('g-02')], 'segment_sales', 'seg-01')?.id).toBe('g-02')
+    // 混在（比較できないペア）は後の行を採用（決定的）
+    expect(latestGoal([goal('g-3', { createdAt: t }), goal('g-4')], 'segment_sales', 'seg-01')?.id).toBe('g-4')
+    // metric × segmentId の一致行のみが対象。該当なしは undefined
+    expect(latestGoal([goal('g-5'), goal('g-6', { metric: 'report_rate', segmentId: null })], 'report_rate', null)?.id).toBe('g-6')
+    expect(latestGoal([goal('g-7')], 'report_rate', null)).toBeUndefined()
   })
 })
 

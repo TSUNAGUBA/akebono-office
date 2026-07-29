@@ -82,9 +82,11 @@ const goalBase = z.object({
 })
 
 /**
- * goals の metric × segmentId × 値域のペア整合。object 単位の superRefine は .partial() に
- * 引き継がれないため、create / patch の両スキーマへ個別に適用する（permission-rules と同型）。
- * PATCH で metric を変更する場合は segmentId も同時指定を要求する（既存行とのクロス検証を持たない設計）
+ * goals の metric × segmentId × 値域のペア整合（POST = 全フィールド確定時の検証）。
+ * object 単位の superRefine は .partial() に引き継がれず、部分 PATCH は単独フィールドの変更で
+ * 既存行との組み合わせ不変条件を破れるため、PATCH は masters.ts の goalCrossGuard
+ * （既存行とマージした結果で検証 = workflow-routes と同型）+ goals テーブルの CHECK 制約
+ * （migration 0035）が同じ不変条件を担保する
  */
 function goalMetricCheck(
   v: { metric?: string; segmentId?: string | null; monthlyValue?: number },
@@ -427,8 +429,10 @@ export const MASTERS: Record<MasterEntity, MasterDef> = {
   'attendance-rules': { table: 'attendance_rules', idPrefix: 'ar', schema: schemas['attendance-rules'], patchSchema: schemas['attendance-rules'].partial(), jsonbFields: ['appliesTo', 'defaultFor', 'flex', 'workingWeekdays'] },
   // 祝日は date 一意（重複 POST は 409）。誤登録の取り消しは物理削除（記録系ではない設定データ）
   'holidays': { table: 'public_holidays', idPrefix: 'hd', schema: schemas.holidays, patchSchema: schemas.holidays.partial(), jsonbFields: [], physicalDelete: true, noActive: true },
-  // 目標マスタ（F-01 コックピット着地予報。同一 (metric, segmentId) の active 重複は後勝ち = 画面側が警告）
-  'goals': { table: 'goals', idPrefix: 'g', schema: schemas.goals, patchSchema: goalBase.partial().superRefine(goalMetricCheck), jsonbFields: [] },
+  // 目標マスタ（F-01 コックピット着地予報。同一 (metric, segmentId) の active 重複は後勝ち = 画面側が警告。
+  // PATCH のクロスフィールド不変条件は masters.ts の goalCrossGuard（既存行とマージ）+ DB CHECK が担保
+  // = workflow-routes と同型のクロスガード方式）
+  'goals': { table: 'goals', idPrefix: 'g', schema: schemas.goals, patchSchema: goalBase.partial(), jsonbFields: [] },
   'workflow-routes': { table: 'workflow_routes', idPrefix: 'wr', schema: schemas['workflow-routes'], patchSchema: workflowRouteBase.partial(), jsonbFields: ['steps'] },
   'decision-themes': { table: 'decision_themes', idPrefix: 'dt', schema: schemas['decision-themes'], patchSchema: schemas['decision-themes'].partial(), jsonbFields: ['semantics', 'links', 'actions', 'options', 'scenarioParams'] },
   'ai-roles': { table: 'ai_roles', idPrefix: 'r', schema: schemas['ai-roles'], patchSchema: schemas['ai-roles'].partial(), jsonbFields: ['permissions'] },

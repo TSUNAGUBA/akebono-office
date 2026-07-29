@@ -4,8 +4,11 @@
  * - 次の一手ビルダー buildMoves（§3.2 の優先順位表 1〜9。入力はプリミティブな材料オブジェクト =
  *   composable 非依存でユニットテスト可能。材料収集は useCockpit が担う）
  * - 完了メーター buildMeter（今日の一手のうち完了した割合。分母 0 は非表示 = 分母 0 を祝わない）
+ * - 目標解決 latestGoal（重複目標から最新 1 件 = 後勝ち。§2.2）/ 値表示 fmtCockpitValue（landing-forecast へ委譲）
  * 決定的・副作用なし。時刻は JST 壁時計の hour（0-23）を呼び出し側から受け取る（Date#getHours 禁止）。
  */
+import type { Goal, GoalMetric } from '~/types/domain'
+import { fmtValue } from '../../../shared/domain/landing-forecast'
 import { fmtDate } from '~/utils/format'
 
 // ---------- フェーズ導出（§3.1） ----------
@@ -267,11 +270,35 @@ export function buildMeter(input: CockpitMovesInput): CockpitMeter {
 
 // ---------- 表示ヘルパ（計器・予報の値表示） ----------
 
-/** 予報・計器の単位付き値表示（landing-forecast の reason と同じ丸め系） */
-export function fmtCockpitValue(n: number, unit: 'currency' | 'percent' | 'hours'): string {
-  if (unit === 'currency') return `${(Math.round(n / 1000) / 10).toLocaleString('ja-JP')}万円`
-  if (unit === 'percent') return `${Math.round(n * 10) / 10}%`
-  return `${Math.round(n * 10) / 10}h`
+/**
+ * 予報・計器の単位付き値表示。実装 SoT は shared/domain/landing-forecast の fmtValue
+ * （reason の丸め系と同一。逐語コピーの重複実装を持たない = 原則3）。
+ */
+export const fmtCockpitValue = fmtValue
+
+// ---------- 目標の解決（着地予報の入力） ----------
+
+/**
+ * 同一 (metric, segmentId) の active 重複から評価対象の「最新 1 件」を選ぶ（cockpit-design §2.2 = 後勝ち）。
+ * API モードの一覧は id（UUID）順で登録順と一致しないため、createdAt を持つ行同士は createdAt 降順
+ * （同時刻は後の行）で比較する。createdAt が無い・比較できないペアは従来どおり配列の後の行を採用する
+ * （モックシード = createdAt なし = 配列末尾。決定的）。active フィルタは呼び出し側の責務。
+ */
+export function latestGoal(goals: Goal[], metric: GoalMetric, segmentId: string | null): Goal | undefined {
+  let latest: Goal | undefined
+  for (const g of goals) {
+    if (g.metric !== metric || g.segmentId !== segmentId) continue
+    if (!latest) {
+      latest = g
+      continue
+    }
+    if (latest.createdAt && g.createdAt) {
+      if (Date.parse(g.createdAt) >= Date.parse(latest.createdAt)) latest = g
+    } else {
+      latest = g
+    }
+  }
+  return latest
 }
 
 // ---------- 計器の型（useCockpit → CockpitInstruments の契約） ----------
