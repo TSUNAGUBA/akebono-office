@@ -202,14 +202,6 @@ export const NAV_MAP: Record<string, NavMapEntry> = {
     ],
   },
   '/masters/projects': { parent: MASTERS, related: [CUSTOMERS, MEMBERS] },
-  '/masters/goals': {
-    parent: MASTERS,
-    related: [
-      { to: '/akebono/settings/segments', label: '業態アプリ設定', adminOnly: true },
-      { to: '/sales', label: '売上管理' },
-      MEMBERS,
-    ],
-  },
   '/masters/titles': { parent: MASTERS, related: [MEMBERS, PERMISSIONS] },
   '/masters/leave-types': {
     parent: MASTERS,

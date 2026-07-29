@@ -10,13 +10,12 @@
  */
 import { Hono } from 'hono'
 import type pg from 'pg'
-import { canUseFeature } from '../../../shared/domain/permissions'
 import { requireAdmin, requireHrOrAdmin, type AuthUser } from '../auth'
 import type { Env } from '../env'
 import { audit } from '../lib/audit'
 import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
-import { activePermissionRules, clearPermissionCache, stripMasterFields, subjectOf } from '../lib/permissions'
+import { clearPermissionCache, stripMasterFields } from '../lib/permissions'
 import { scheduleSearchRebuild, SEARCH_RELEVANT_ENTITIES } from '../lib/search-index'
 import { camelToSnake, MASTERS, rowToCamel, type MasterEntity } from '../masters/registry'
 
@@ -120,66 +119,6 @@ async function workflowRouteCrossGuard(
   }
 }
 
-/**
- * goals の部分更新でも metric × segmentId × 値域（report_rate = 全社・0-100）の不変条件を
- * 破らせない（workflowRouteCrossGuard と同型: POST は schema の superRefine が担うが、
- * .partial() 由来の patchSchema ではクロスフィールド検証ができないため、既存行とマージした
- * 結果で検証する。DB 側も 0039 の CHECK 制約で二重防衛）
- */
-async function goalCrossGuard(
-  pool: pg.Pool,
-  id: string,
-  body: Record<string, unknown>,
-): Promise<void> {
-  const { rows } = await pool.query<{ metric: string; segmentId: string | null; monthlyValue: number }>(
-    `SELECT metric, segment_id AS "segmentId", monthly_value::float8 AS "monthlyValue"
-     FROM goals WHERE id = $1`, [id])
-  const existing = rows[0]
-  if (!existing) return // 対象なしは後段の UPDATE が 404 を返す
-  const metric = 'metric' in body ? String(body.metric) : existing.metric
-  const segmentId = 'segmentId' in body ? (body.segmentId as string | null) : existing.segmentId
-  const monthlyValue = 'monthlyValue' in body ? Number(body.monthlyValue) : existing.monthlyValue
-  if (metric === 'segment_sales' && !segmentId) {
-    throw err('AKO-GEN-001', '業態売上の目標は対象業態を指定してください', 400)
-  }
-  if (metric === 'report_rate') {
-    if (segmentId) {
-      throw err('AKO-GEN-001', '日報提出率の目標は全社です（業態は指定できません）', 400)
-    }
-    if (monthlyValue > 100) {
-      throw err('AKO-GEN-001', '日報提出率は 0〜100 で入力してください', 400)
-    }
-  }
-}
-
-/**
- * goals（経営目標 = C2）の一覧参照のサーバー側行フィルタ（システム監査指摘 2026-07-29。
- * hr の絞り込みはレビュー2巡目 G2 = 運用デフォルト pr-def-05（hr sales deny）と整合させる）。
- * - admin / sales 機能を許可されたユーザー（canUseFeature = F-16 のレイヤ解決。ルール未設定は
- *   既定 allow = 下位互換）→ 全件
- * - hr（sales deny）→ report_rate 全件（提出率予報の材料 = 全社目標）+ 自分の担当業態
- *   （members.segment_ids）の segment_sales 行（他業態の経営数字は返さない）
- * - それ以外 → 自分の担当業態の segment_sales 行のみ（report_rate = 全社目標は含めない）。
- * 汎用 CRUD の他エンティティへ影響させない goals 専用の特例
- * （事業予報: segmentIds を持つ一般メンバーは自業態の目標を従来どおり取得できる）
- */
-async function filterGoalRows(
-  pool: pg.Pool,
-  user: AuthUser,
-  rows: Record<string, unknown>[],
-): Promise<Record<string, unknown>[]> {
-  if (user.role === 'admin') return rows
-  const rules = await activePermissionRules(pool)
-  if (canUseFeature(rules, subjectOf(user), 'sales')) return rows
-  const { rows: memberRows } = await pool.query<{ segmentIds: string[] | null }>(
-    'SELECT segment_ids AS "segmentIds" FROM members WHERE id = $1', [user.id])
-  const mine = new Set(memberRows[0]?.segmentIds ?? [])
-  const isMySegmentSales = (r: Record<string, unknown>): boolean =>
-    r.metric === 'segment_sales' && typeof r.segmentId === 'string' && mine.has(r.segmentId)
-  if (user.role === 'hr') return rows.filter(r => r.metric === 'report_rate' || isMySegmentSales(r))
-  return rows.filter(isMySegmentSales)
-}
-
 function toSqlValue(def: { jsonbFields: string[] }, field: string, value: unknown): unknown {
   return def.jsonbFields.includes(field) ? JSON.stringify(value) : value
 }
@@ -205,9 +144,7 @@ export function mastersRoutes(pool: pg.Pool, env: Env): Hono {
     const orderBy = def.table === 'public_holidays' ? 'ORDER BY date' : hasOrder ? order : 'ORDER BY id'
     const { rows } = await pool.query(
       `SELECT * FROM ${def.table} ${where} ${orderBy}`)
-    let list = rows.map(rowToCamel)
-    if (entity === 'goals') list = await filterGoalRows(pool, c.get('user'), list) // C2 の行フィルタ（goals 専用）
-    const data = await stripMasterFields(pool, c.get('user'), entity, list)
+    const data = await stripMasterFields(pool, c.get('user'), entity, rows.map(rowToCamel))
     return c.json({ data })
   })
 
@@ -248,11 +185,6 @@ export function mastersRoutes(pool: pg.Pool, env: Env): Hono {
       if ((e as { code?: string }).code === '23505') {
         throw err('AKO-GEN-003', '同じ値のデータが既に存在します（重複）', 409)
       }
-      // CHECK 制約違反（例: goals の metric × segmentId × 値域 = 0039）。アプリ側ガードの最終防衛が
-      // 発火した場合も 500 でなく想定エラーとして返す（レビュー2巡目 G4）
-      if ((e as { code?: string }).code === '23514') {
-        throw err('AKO-GEN-001', '入力値の組み合わせがデータ整合性の制約に違反しています。入力内容を確認してください', 400)
-      }
       throw e
     } finally {
       client.release()
@@ -290,9 +222,6 @@ export function mastersRoutes(pool: pg.Pool, env: Env): Hono {
     if (entity === 'workflow-routes' && ('minAmount' in body || 'maxAmount' in body || 'steps' in body)) {
       await workflowRouteCrossGuard(pool, id, body)
     }
-    if (entity === 'goals' && ('metric' in body || 'segmentId' in body || 'monthlyValue' in body)) {
-      await goalCrossGuard(pool, id, body)
-    }
 
     const fields = Object.keys(body)
     const sets = fields.map((f, i) => `${camelToSnake(f)} = $${i + 2}`)
@@ -311,11 +240,6 @@ export function mastersRoutes(pool: pg.Pool, env: Env): Hono {
       await client.query('ROLLBACK')
       if ((e as { code?: string }).code === '23505') {
         throw err('AKO-GEN-003', '同じ値のデータが既に存在します（重複）', 409)
-      }
-      // CHECK 制約違反（例: goals の metric × segmentId × 値域 = 0039）。アプリ側ガードの最終防衛が
-      // 発火した場合も 500 でなく想定エラーとして返す（レビュー2巡目 G4）
-      if ((e as { code?: string }).code === '23514') {
-        throw err('AKO-GEN-001', '入力値の組み合わせがデータ整合性の制約に違反しています。入力内容を確認してください', 400)
       }
       throw e
     } finally {
