@@ -728,3 +728,30 @@
 - [x] **P2-4（商品 PATCH が segmentId を無視 = モックと乖離）**: `productPatchOf` が作成時のみ segmentId をコピーし PATCH では無視 → 成功を返すのに旧セグメントのまま（モックは反映 = 乖離）。PATCH でも `Object.hasOwn` で受理 + 参照セグメントの存在検証（requireRef）を追加。別セグメントへの移動で同コード衝突 = 部分一意 INDEX (segment_id, code) WHERE active → 23505 → **AKO-PRD-002 409**（POST/restore と同型・文言をコード変更/移動の双方を案内する形に更新）
 - [x] **回帰テスト（スケール境界を小規模フィクスチャで決定的に検証）**: P1-1 = 対象 SKU の直近仕入を「別 SKU の新しい仕入の後」に置き作家支払 = 仕入単価 650×2=1300（標準原価 900 フォールバックなら 1800）で窓非依存を確認 / P1-2 = `inventory-balances` の Σ集約一致・0 残高非返却 / P1-3 = 元伝票が窓内・訂正日が当月（窓外）の赤黒が元月へ帰属して相殺（訂正日で単純フィルタする回帰なら 7000/2 件になる） / P2-4 = PATCH で segmentId 反映・不存在は 404・移動先の同コードは 409
 - [x] 検証: api 単体 174 / 統合 **188**（Codex 4 スイート新設 = P1-1 原価窓非依存・P1-2 残高集約・P1-3 統合メトリクス月窓 + 赤黒元月帰属・P2-4 segmentId PATCH）/ mockup 単体 148 / typecheck（api・mockup）・build 全 green
+
+## 40. ダッシュボード・コックピット化 F-01 改訂「夜明けの管制塔」（2026-07-29 オペレーター承認）の完了条件（Definition of Done）
+
+> 設計 SoT = `phase5/cockpit-design.md`（壁打ち: オペレーター × ユーザー・運用サポート × UXコンセプトデザイナー）。
+> ダッシュボードを「①今日の状態 → ②次の一手 → ③計器 → ④着地予報」の 3 層コックピットへ再構成。
+> カードメニュー・通知フィード・AKEBONO セクションは**格下げ配置のみ（ロジック不変）**。
+
+### 40-1 基盤（§2。型・マスタ・予報エンジン）
+- [x] `Member.segmentIds`（任意フィールド = 下位互換・原則7）+ `/masters/members` フォーム + API registry / migration 0035（members.segment_ids + goals テーブル）+ シード（m-04=seg-01 / m-05,06,09,12=seg-02 / m-07=seg-03 / m-08=seg-04・SEED_VERSION=13）
+- [x] goals マスタ（metric = segment_sales / report_rate・論理削除 = 取消フロー・原則9.5）: `/masters/goals`（MasterShell + useMasterCrudAsync）+ マスタハブカード + nav-map + MIGRATED_MASTERS 登録。API モードで goals 空でも予報層は「目標未設定」へフォールバック
+- [x] `shared/domain/landing-forecast.ts`（決定的純関数・API 共有可能）: buildForecast（量 = 日割り外挿 / 率 = 外挿しない / inverse = 上限型・reason 必須・tone は ok/warn の 2 値）+ summarizeForecasts。単体 `tests/landing-forecast.test.ts`（elapsed=0 / 全営業日経過 / inverse / rate / 0 target）
+
+### 40-2 UI 層（§3。純関数 → composable → ウィジェット → ページ）
+- [x] `app/utils/cockpit.ts`（純関数・composable 非依存）: フェーズ導出 phaseOf（punchRequired=false → 'none' / before→morning 出勤前 Sunrise / working→active 勤務中 Sun / breaking→break 休憩中 Coffee / done→closed 退勤済み MoonStar）+ buildMoves（§3.2 優先順位表 1〜9。プリミティブ材料入力）+ buildMeter（完了メーター。**分母 0 は非表示 = 分母 0 を祝わない**）+ obligationBehindPace（年5日の残月数ペース判定）
+- [x] `app/composables/useCockpit.ts`: 各 composable から材料収集 → phase / moves / meter / instruments / forecasts / forecastSummary / courseCorrection を computed 提供。営業日 = business-day.ts + holidays マスタ。**開いた時に AI 生成・重い再取得なし**（週次インサイト = 保存済み load のみ・売上 = 移行済みコレクション / 既存キャッシュの参照のみ）。未ロード・goals 空でも空落ちしないフォールバック
+- [x] ウィジェット 4 点（`components/widgets/Cockpit*.vue`）: Strip（挨拶移設 + フェーズバッジ + メーター細バー + 予報 1 行 = ④の開閉トグル・aria-expanded/progressbar）/ Moves(最優先 1 件大カード = punch は WidgetsPunchClock flat 埋込・新規書込パスなし = 原則9.5。0 件は ok トーンの完了表示）/ Instruments（UiKpiCard 再利用・該当なしは枠ごと非表示・未提出者名は出さない = 労務計器も件数のみ）/ Forecast（CSS のみの滑走路バー: 実績塗り bg-brand + 予測マーカー + 目標ティック bg-line-strong・ステータス色は tone バッジのみ・reason 1 行 + 針路修正 1 件）
+- [x] `pages/index.vue` 再構成（§3 の縦順: ①②③④ → AKEBONO 業務 → すべての機能 → 通知）。**カードメニュー（カテゴリチップ・sessionStorage キー 'menu-cat-dashboard'）・通知タブ・AKEBONO セクションのロジックは挙動同一のまま移動**
+- [x] 権限ゲート: 一手・計器・予報すべて isEnabled × canPath × ロール条件（deny ユーザーは枠ごと消える）。事業計器・事業予報は segmentIds 優先・未設定は**明示的な業態選択のみ**フォールバック（既定業態の自動解決では出さない = 全員への経営数字露出を防ぐ）
+- [x] テスト `tests/cockpit.test.ts`（18 件）: §3.3 の 5 ペルソナ相当（m-01/m-04/m-06/m-10/m-11）+ 優先順位・時刻境界（12時/17時）・権限ゲート・ゼロ状態 + フェーズ導出 + メーター分母 0
+- [x] 検証: mockup vitest 176 / `npx nuxi typecheck` / `npm run build` 全 green。375px = 縦 1 カラム・主ボタン幅フル・横スクロールなし
+- [x] ドキュメント（原則5）: screen-design.md `/` 節改訂・functional-requirements.md F-01（F-01-4〜7 追加）・CONVENTIONS.md UI 在庫表（Cockpit* 4 行）・本節
+
+### 40-3 設計からの逸脱・判断（記録）
+- §3.3 マトリクスは「例」であり、機械的なゲート（§3.2 / §3 本文）を正とした: m-06（segmentIds=seg-02 のシード）には事業計器・seg-02 売上予報が**表示される**（本文「segmentIds 設定者」どおり。マトリクスの行は seed の segmentIds 付与前の想定）/ m-10（hr × parttime）の一手に「日報」は出ない（§3.2 #6 = 非 parttime ゲートが正）/ hr の予報「年5日」は landing-forecast の月次目標セマンティクスに合わないため**労務計器（年5日未達数）+ 一手 #9** で表現し、予報は提出率 + 自分の勤務時間とした
+- 事業計器・事業予報の当月実績は buildSegmentSummary（対象月 = 直前の完了月）ではなく `useMediaAnalytics.businessMonthly`（salesRecords の月次畳み込み = 両モード共通・赤黒の元月帰属）を使用（「今月売上スナップ」には当月集計が必要なため）
+- 労務計器の「36協定該当者数」は未対応の残業エスカレーション（reason=overtime_alert）の対象者数で表現（全メンバー × 6 ヶ月の勤怠集計をダッシュボード表示時に走らせない = 重い再取得の禁止。API モードのエスカレーション一覧は admin のみのため hr は 0 表示になる既知の制約）
+- 取消可能性（原則9.5）: 本改修は新規の書込パスを作らない（打刻 = 既存 PunchClock の修正申請フロー・goals = 論理削除）= 新規の未対応取消フローなし
