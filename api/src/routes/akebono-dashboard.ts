@@ -20,11 +20,14 @@ import {
   type CompanySummary, type DashboardInsight, type DashboardMonthPoint,
   type MediaAction, type MediaFinding, type SegmentSnapshot, type SegmentSummary,
 } from '../../../shared/domain/portfolio-insight'
+import { canUseFeature } from '../../../shared/domain/permissions'
+import type { AuthUser } from '../auth'
 import type { Env } from '../env'
 import { audit } from '../lib/audit'
 import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
 import { generateJson } from '../lib/llm'
+import { activePermissionRules, subjectOf } from '../lib/permissions'
 import { buildIntegratedMetrics } from './media'
 
 /** 集計・トレンドの対象月数（mockup useDashboardInsight の MONTHS と一致） */
@@ -185,6 +188,20 @@ async function llmDashboardInsight(
   return normalizeDashboardInsight(res)
 }
 
+/**
+ * 会社全体ダッシュボード（scope=company）は全社の売上を含む C3 = 売上権限（'sales'）をサーバーでも要求する
+ * （監査-4。フロントの can('sales') ゲートと一致 = クライアントゲートのみに依存しない。原則6/認可）。
+ * ルール未設定は既定 allow（下位互換 = featureGuard と同方針）。業態単位（scope=segment）は業態の日常業務
+ * ビュー = 全ロール可（mockup と一致）。
+ */
+async function requireCompanyDashboardAccess(pool: pg.Pool, user: AuthUser): Promise<void> {
+  const rules = await activePermissionRules(pool)
+  if (rules.length === 0) return
+  if (!canUseFeature(rules, subjectOf(user), 'sales')) {
+    throw err('AKO-PRM-001', '会社全体ダッシュボードの閲覧には売上権限が必要です（管理者にお問い合わせください）', 403)
+  }
+}
+
 export function akebonoDashboardRoutes(pool: pg.Pool, env: Env): Hono {
   const app = new Hono()
 
@@ -194,6 +211,7 @@ export function akebonoDashboardRoutes(pool: pg.Pool, env: Env): Hono {
     if (scope !== 'segment' && scope !== 'company') {
       throw err('AKO-GEN-001', 'scope は segment / company を指定してください', 400)
     }
+    if (scope === 'company') await requireCompanyDashboardAccess(pool, c.get('user'))
     const segmentId = scope === 'segment' ? String(c.req.query('segmentId') ?? '').trim() : ''
     if (scope === 'segment' && !segmentId) throw err('AKO-GEN-001', 'segmentId を指定してください', 400)
     const { rows } = await pool.query(
@@ -230,7 +248,8 @@ export function akebonoDashboardRoutes(pool: pg.Pool, env: Env): Hono {
       }
       segmentKey = segmentId
     } else {
-      // 会社全体（全業態横断）。全業態の GA 月次をそろえ、1 業態でも取得失敗があれば生成しない（M1）
+      // 会社全体（全業態横断）は売上権限を要求（監査-4）。全業態の GA 月次をそろえ、1 業態でも取得失敗なら生成しない（M1）
+      await requireCompanyDashboardAccess(pool, user)
       const { rows: segs } = await pool.query<{ id: string }>(
         `SELECT id FROM business_segments WHERE active ORDER BY display_order, id`)
       const builds = await Promise.all(segs.map(s => buildSnapshot(pool, env, s.id, mediaAvailable)))

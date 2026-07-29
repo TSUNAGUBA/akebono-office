@@ -531,6 +531,11 @@ export function akebonoBillingRoutes(pool: pg.Pool): Hono {
    * ③作家支払通知を論理取消（voided_at）= 支払通知に赤伝の器が無いため監査列で無効化（0037）
    * 冪等・二重取消ガード: advisory lock（close と同一キー = close/cancel の排他）で直列化し、
    * issued の consignment_margin 請求が無ければ取消対象なし（既に取消済み = 409 AKO-BIL-010）。
+   *
+   * **下流確定状態の保護（レビュー MAJOR-1）:** バッチに「有効入金のあるマージン請求（paid/部分入金）」
+   * または「確定済み支払通知」が 1 件でも含まれる場合は取消を拒否（AKO-BIL-011）。片側だけ反転すると
+   * ①paid マージンは status='issued' 条件から外れ void されず孤児入金が残る ②作家支払通知は期間一括で
+   * void され再締めで A 分が消える、という整合破壊を招くため。先に入金取消（AKO-BIL-009）を行えば取消可能。
    */
   app.post('/consignment/cancel', async (c) => {
     const user = c.get('user')
@@ -543,6 +548,24 @@ export function akebonoBillingRoutes(pool: pg.Pool): Hono {
     const result = await inTxn(pool, async (db) => {
       // close と同一キーで排他（並行 close/cancel の直列化 = 二重取消ガードの基盤）
       await db.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`consign:${segmentId}:${month}`])
+      // 下流確定状態の保護（MAJOR-1）: 有効入金のあるマージン請求 or 確定済み支払通知があれば拒否。
+      // status='paid' の paid マージンも含めて検査する（後続の取消対象は issued のみだが、検査は paid も見る）
+      const { rows: blockers } = await db.query<{ paidInvoices: number; confirmedNotices: number }>(
+        `SELECT
+           (SELECT count(*) FROM invoices i
+              WHERE i.invoice_type = 'consignment_margin' AND i.credit_for IS NULL
+                AND i.segment_id = $1 AND i.period_from = $2 AND i.period_to = $3
+                AND i.status IN ('issued','paid')
+                AND EXISTS (SELECT 1 FROM payment_receipts r WHERE r.invoice_id = i.id AND r.voided_at IS NULL))::int AS "paidInvoices",
+           (SELECT count(*) FROM payment_notices n
+              WHERE n.segment_id = $1 AND n.period_from = $2 AND n.period_to = $3
+                AND n.voided_at IS NULL AND n.status IN ('confirmed','paid'))::int AS "confirmedNotices"`,
+        [segmentId, periodFrom, periodTo])
+      if ((blockers[0]!.paidInvoices > 0) || (blockers[0]!.confirmedNotices > 0)) {
+        throw err('AKO-BIL-011',
+          '入金済み（部分入金含む）のマージン請求、または確定済みの支払通知が含まれるため取消できません。'
+          + '先に入金取消を行ってください（確定済み支払通知がある場合は管理者にご相談ください）', 409)
+      }
       // 取消対象 = この業態 × 月 の発行済みマージン請求（バッチ）。無ければ「対象なし/取消済み」= 409
       const { rows: margins } = await db.query<{
         id: string; companyId: string; segmentId: string | null; periodFrom: string; periodTo: string

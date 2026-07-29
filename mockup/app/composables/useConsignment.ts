@@ -14,7 +14,8 @@ import type {
 } from '~/types/akebono'
 import type { Company, Result } from '~/types/domain'
 import {
-  buildSettlementSnapshot, calcPayoutAmount, calcStoreMargin, calcTax, nextCode,
+  buildSettlementSnapshot, calcPayoutAmount, calcStoreMargin, calcTax,
+  consignmentCancelBlockReason, nextCode,
 } from '~/utils/akebono'
 
 export function useConsignment() {
@@ -314,6 +315,16 @@ export function useConsignment() {
     }
     const periodFrom = `${input.month}-01`
     const periodTo = monthEnd(input.month)
+    // 下流確定状態の保護（レビュー MAJOR-1）: 有効入金のあるマージン請求（paid/部分入金）or 確定済み支払通知が
+    // 含まれると片側だけ反転して整合を壊す（孤児入金・再締めでの片側消失）。判断は共有純関数（両モード同一）。
+    const batchMargins = (invoices.value as Invoice[]).filter(v =>
+      v.invoiceType === 'consignment_margin' && !v.creditFor && (v.status === 'issued' || v.status === 'paid')
+      && v.segmentId === input.segmentId && v.periodFrom === periodFrom && v.periodTo === periodTo)
+    const batchNotices = (notices.value as PaymentNotice[]).filter(n =>
+      n.segmentId === input.segmentId && n.periodFrom === periodFrom && n.periodTo === periodTo && !n.voidedAt)
+    if (consignmentCancelBlockReason(batchMargins.map(v => ({ paid: paidAmountOf(v.id) })), batchNotices)) {
+      return { ok: false, error: { code: 'AKO-BIL-011', message: '入金済み（部分入金含む）のマージン請求、または確定済みの支払通知が含まれるため取消できません。先に入金取消を行ってください（確定済み支払通知がある場合は管理者にご相談ください）' } }
+    }
     const targets = (invoices.value as Invoice[]).filter(v =>
       v.invoiceType === 'consignment_margin' && v.status === 'issued' && !v.creditFor
       && v.segmentId === input.segmentId && v.periodFrom === periodFrom && v.periodTo === periodTo)

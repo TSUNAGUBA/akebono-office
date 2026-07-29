@@ -206,6 +206,10 @@ Phase B（設定系）・Phase C（記録系 + 売上軸）に続く**最終フ�
 > IS NULL のみ）を void + 赤伝（マイナス請求）を追記 ②対象売上の invoice_id を解除（再締め可能に）
 > ③支払通知を論理取消（`voided_at`/`voided_by` = payment_receipts 0033 と同型。赤伝の器が無いため監査列で無効化）。
 > close と同一 advisory lock で排他 = 並行 close/cancel を直列化・二重取消は AKO-BIL-010（409）。
+> **下流確定状態の保護（レビュー MAJOR-1）:** バッチに有効入金のあるマージン請求（部分入金含む）or 確定済み支払通知が
+> 1 件でもあれば取消を **AKO-BIL-011 で拒否**（片側だけ反転すると paid マージンが取消対象から外れ孤児入金が残り、
+> 支払通知は期間一括 void で再締め時に片側が消えるため）。先に入金取消（AKO-BIL-009）を行えば取消可能。判断は共有純関数
+> `consignmentCancelBlockReason`（両モード同一）。
 > **出荷→売上連携（0038）:** 出荷実績登録に `postSales` オプションを追加し、対象明細から売上明細を自動生成
 > （source_kind='shipment'・source_ref='obr:<明細行id>'・同一トランザクションで原子的）。二重計上防止 = 部分一意
 > INDEX `sales_records(source_ref) WHERE source_kind='shipment'`。**店舗預けの出荷は「販売」ではないため対象外**

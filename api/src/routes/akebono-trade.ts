@@ -946,10 +946,10 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
           posts.push({ skuId: l.skuId, warehouseId: depositWh, qty: l.qty, kind: 'transfer_in', refType: 'outbound_result', refLineId: l.id })
         }
       }
-      await postInventory(db, posts)
-      // 出荷実績 → 売上自動計上（F-28 連携。sourceKind='shipment'・同一トランザクションで原子的）。
+      // 出荷実績 → 売上自動計上（F-28 連携。sourceKind='shipment'）の**事前検証 + 単価解決を在庫 post の前に置く**
+      // （モック useOutbound と同順序 = 部分適用を作らない意図をトランザクション順序でも表現。監査-2）。
       // 店舗預け（consignment）の出荷は「販売」ではないため対象外（店舗での販売時に別途計上する）。
-      // 二重計上防止（冪等）: source_ref = obr:<明細行 id>・部分一意 INDEX（0038）が最終防衛。
+      const shipmentSales: { skuId: string; qty: number; unitPrice: number; costPrice: number | null; billingType: string | null; refLineId: string }[] = []
       if (postSales) {
         if (depositWh) throw err('AKO-OUT-005', '店舗預けの出荷は売上計上できません（店舗での販売時に売上を計上します）', 409)
         if (!companyId) throw err('AKO-OUT-005', '売上計上には出荷先（得意先）が必要です', 400)
@@ -964,14 +964,19 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
           const sk = skuRows[0]
           const unitPrice = Number(sk?.sellPrice ?? sk?.listPrice ?? 0)
           if (!(unitPrice > 0)) throw err('AKO-OUT-005', '売上単価を解決できません（商品または SKU に販売単価を設定してください）', 409)
-          const salesCode = await nextDocCode(db, 'SR')
-          await db.query(
-            `INSERT INTO sales_records (id, code, sales_date, company_id, segment_id, sku_id, qty, unit_price, amount,
-               cost_price, channel, billing_type, source_kind, source_ref)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, $11, 'shipment', $12)`,
-            [newId('sr'), salesCode, todayJst(), companyId, segmentId, l.skuId, l.qty, unitPrice, Math.round(l.qty * unitPrice),
-              sk?.costPrice ?? sk?.stdCost ?? null, sk?.billingType ?? null, `obr:${l.id}`])
+          shipmentSales.push({ skuId: l.skuId, qty: l.qty, unitPrice, costPrice: sk?.costPrice ?? sk?.stdCost ?? null, billingType: sk?.billingType ?? null, refLineId: l.id })
         }
+      }
+      await postInventory(db, posts)
+      // 事前検証済みの明細を計上（同一トランザクションで原子的。二重計上は source_ref 一意 INDEX 0038 が最終防衛）
+      for (const s of shipmentSales) {
+        const salesCode = await nextDocCode(db, 'SR')
+        await db.query(
+          `INSERT INTO sales_records (id, code, sales_date, company_id, segment_id, sku_id, qty, unit_price, amount,
+             cost_price, channel, billing_type, source_kind, source_ref)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, $11, 'shipment', $12)`,
+          [newId('sr'), salesCode, todayJst(), companyId, segmentId, s.skuId, s.qty, s.unitPrice, Math.round(s.qty * s.unitPrice),
+            s.costPrice, s.billingType, `obr:${s.refLineId}`])
       }
       if (plan) {
         const { rows: rrows } = await db.query<{ lines: { planLineId: string | null; qty: number }[] }>(
@@ -986,6 +991,13 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
         await db.query(`UPDATE outbound_plans SET status = $2, updated_at = now() WHERE id = $1`, [plan.id, status])
       }
       return out[0]
+    }).catch((e) => {
+      // 出荷→売上の source_ref 一意（0038）衝突 = 同一出荷明細からの売上二重生成（リトライ等）。
+      // 生 500 を出さず 409 でグレースフルに（原則4。m2）
+      if ((e as { code?: string }).code === '23505') {
+        throw err('AKO-OUT-005', 'この出荷からの売上は既に計上されています（二重計上の防止）', 409)
+      }
+      throw e
     })
     await audit(pool, { actorId: user.id, action: 'create', entity: 'outbound_results', entityId: id, detail: postSales ? '出荷実績を登録（売上自動計上）' : '出荷実績を登録' })
     return c.json({ data: created }, 201)

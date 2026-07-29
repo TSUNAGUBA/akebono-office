@@ -4796,6 +4796,23 @@ describe('Phase D: データ取込（F-32）・ダッシュボード保管（F-4
       // scope 不正は 400
       expect((await api('POST', '/v1/akebono/dashboard-insights/generate', { as: MEMBER, body: { scope: 'x' } })).status).toBe(400)
     })
+
+    it('会社全体はサーバー側でも売上権限を要求（監査-4。売上 deny の member は 403・admin は 200）', async () => {
+      // 運用デフォルト（member/hr は売上 deny）を再有効化してサーバーゲートを検証（batch7f と同型）
+      await pool.query(`UPDATE permission_rules SET active = true WHERE id LIKE 'pr-def-%'`)
+      clearPermissionCache()
+      try {
+        expect((await api('GET', '/v1/akebono/dashboard-insights?scope=company', { as: MEMBER })).json.error?.code).toBe('AKO-PRM-001')
+        expect((await api('POST', '/v1/akebono/dashboard-insights/generate', { as: MEMBER, body: { scope: 'company' } })).status).toBe(403)
+        // 業態単位（scope=segment）は業態の日常業務ビュー = 全ロール可（売上 deny でも 200）
+        expect((await api('GET', '/v1/akebono/dashboard-insights?scope=segment&segmentId=seg-04', { as: MEMBER })).status).toBe(200)
+        // 管理者は会社全体も可
+        expect((await api('POST', '/v1/akebono/dashboard-insights/generate', { as: ADMIN, body: { scope: 'company' } })).status).toBe(200)
+      } finally {
+        await pool.query(`UPDATE permission_rules SET active = false WHERE id LIKE 'pr-def-%'`)
+        clearPermissionCache()
+      }
+    })
   })
 
   // ---------- 委託精算の取消（原則9.5）: 冪等・二重取消ガード・再締め ----------
@@ -4866,6 +4883,31 @@ describe('Phase D: データ取込（F-32）・ダッシュボード保管（F-4
       expect(reclose.status).toBe(201)
       expect((reclose.json.data as { invoices: number })).toMatchObject({ invoices: 1 })
     })
+
+    it('MAJOR-1: 入金済みマージン・確定済み通知を含むと取消拒否（AKO-BIL-011）→ 入金取消後は取消可能', async () => {
+      // 直前の it の再締めで seg-04/2026-05 の新バッチが有効。現行 issued マージンへ部分入金する
+      const marginNow = ((await api('GET', '/v1/akebono/invoices', { as: MEMBER })).json.data as
+        { id: string; invoiceType: string; status: string; creditFor: string | null; segmentId: string | null; periodFrom: string }[])
+        .find(v => v.invoiceType === 'consignment_margin' && v.status === 'issued' && !v.creditFor && v.segmentId === seg && v.periodFrom === `${month}-01`)!
+      const rcpt = await api('POST', '/v1/akebono/payment-receipts', { as: MEMBER, body: { invoiceId: marginNow.id, amount: 100, method: '振込' } })
+      expect(rcpt.status).toBe(201)
+      const rcptId = (rcpt.json.data as { id: string }).id
+      // 有効入金があると取消拒否（片側反転による孤児入金を防ぐ）
+      expect((await api('POST', '/v1/akebono/consignment/cancel', { as: MEMBER, body: { segmentId: seg, month } })).json.error?.code)
+        .toBe('AKO-BIL-011')
+      // 入金を取消すれば取消可能に戻る
+      expect((await api('POST', `/v1/akebono/payment-receipts/${rcptId}/cancel`, { as: MEMBER })).status).toBe(200)
+      expect((await api('POST', '/v1/akebono/consignment/cancel', { as: MEMBER, body: { segmentId: seg, month } })).status).toBe(200)
+
+      // 確定済み支払通知のブロック: 再締め → 通知確定 → 取消は AKO-BIL-011
+      expect((await api('POST', '/v1/akebono/consignment/close', { as: MEMBER, body: { segmentId: seg, month } })).status).toBe(201)
+      const notice = ((await api('GET', '/v1/akebono/payment-notices', { as: MEMBER })).json.data as
+        { id: string; segmentId: string; periodFrom: string; status: string; voidedAt: string | null }[])
+        .find(n => n.segmentId === seg && n.periodFrom === `${month}-01` && n.status === 'draft' && !n.voidedAt)!
+      expect((await api('POST', `/v1/akebono/payment-notices/${notice.id}/confirm`, { as: MEMBER })).status).toBe(200)
+      expect((await api('POST', '/v1/akebono/consignment/cancel', { as: MEMBER, body: { segmentId: seg, month } })).json.error?.code)
+        .toBe('AKO-BIL-011')
+    })
   })
 
   // ---------- 出荷実績 → 売上自動計上（sourceKind='shipment'）: 二重計上防止 ----------
@@ -4919,6 +4961,16 @@ describe('Phase D: データ取込（F-32）・ダッシュボード保管（F-4
         .find(b => b.skuId === skuId && b.warehouseId === 'wh-01')!
       expect(bal2.qty).toBe(7)
       expect(depositWhId).toBeTruthy()
+    })
+
+    it('二重計上防止: source_ref 部分一意 INDEX（0038）が同一出荷明細の売上重複を拒否（DB 制約 = 最終防衛。m2）', async () => {
+      // 同一 source_ref + source_kind='shipment' の 2 行は 23505（ルートは AKO-OUT-005 409 へ変換）
+      const dup = await pool.query(
+        `INSERT INTO sales_records (id, code, sales_date, company_id, segment_id, sku_id, qty, unit_price, amount, source_kind, source_ref)
+         VALUES ('sr-d1', 'SRD-1', '2026-07-01', $1, $2, $3, 1, 100, 100, 'shipment', 'obr:dup-x'),
+                ('sr-d2', 'SRD-2', '2026-07-01', $1, $2, $3, 1, 100, 100, 'shipment', 'obr:dup-x')`,
+        [customerId, seg, skuId]).then(() => null).catch(e => e as { code?: string })
+      expect(dup?.code).toBe('23505')
     })
   })
 })

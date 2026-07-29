@@ -33,7 +33,14 @@ export function useAkebonoImports() {
   const sources = tbl('importSources')
   const mappings = tbl('importMappings')
   const runs = tbl('importRuns')
+  const { currentUser } = useCurrentUser()
   const isApi = useApiMode()
+
+  /** 取込設定・実行の書込は管理者のみ（API の requireAdmin = AKO-AUTH-003 と両モード一致。m4） */
+  const isAdmin = computed(() => currentUser.value.role === 'admin')
+  function adminGuard(): Result | null {
+    return isAdmin.value ? null : { ok: false, error: { code: 'AKO-AUTH-003', message: 'この操作には管理者権限が必要です' } }
+  }
 
   const activeSources = computed(() => sources.value.filter(s => s.active !== false))
   function sourceById(id: string): ImportSource | undefined {
@@ -51,6 +58,7 @@ export function useAkebonoImports() {
   const recentRuns = computed(() => runs.value.slice().sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1)))
 
   async function addSource(input: { name: string; method: ImportMethod; encoding: 'utf8' | 'sjis'; targetEntity: ImportTargetEntity }): Promise<Result> {
+    const denied = adminGuard(); if (denied) return denied
     if (!input.name.trim()) return { ok: false, error: { code: 'AKO-IMP-001', message: '取込元名は必須です' } }
     if (isApi) {
       const res = await apiWrite<ImportSource>('/v1/akebono/import-sources', { body: input, reload: ['importSources'] })
@@ -62,6 +70,7 @@ export function useAkebonoImports() {
     return { ok: true, id }
   }
   async function archiveSource(id: string): Promise<Result> {
+    const denied = adminGuard(); if (denied) return denied
     if (isApi) return apiWrite(`/v1/akebono/import-sources/${id}/archive`, { reload: ['importSources'] })
     sources.value = sources.value.map(s => s.id === id ? { ...s, active: false } : s)
     commit()
@@ -69,6 +78,7 @@ export function useAkebonoImports() {
   }
   /** 取込元の復元（論理削除の取消 = 原則9.5。API モードのみ導線を持つ。モックは archive で十分） */
   async function restoreSource(id: string): Promise<Result> {
+    const denied = adminGuard(); if (denied) return denied
     if (isApi) return apiWrite(`/v1/akebono/import-sources/${id}/restore`, { reload: ['importSources'] })
     sources.value = sources.value.map(s => s.id === id ? { ...s, active: true } : s)
     commit()
@@ -77,6 +87,7 @@ export function useAkebonoImports() {
 
   /** 新しいマッピング版を作成（既存 active は superseded に）。AI 候補 + 人が確定の想定 */
   async function saveMapping(sourceId: string, fields: { sourceField: string; targetItemKey: string; transform: string }[]): Promise<Result> {
+    const denied = adminGuard(); if (denied) return denied
     if (isApi) {
       const res = await apiWrite<ImportMapping>('/v1/akebono/import-mappings', {
         body: { sourceId, fields }, reload: ['importMappings'],
@@ -103,6 +114,7 @@ export function useAkebonoImports() {
    * モックはステージング → 検証 → 反映を 1 回で行い、決定的にサンプルのエラー行を混ぜる（原則4）。
    */
   async function runImport(sourceId: string): Promise<Result & { runId?: string }> {
+    const denied = adminGuard(); if (denied) return denied
     if (isApi) {
       const res = await apiWrite<ImportRun>('/v1/akebono/import-runs', { body: { sourceId }, reload: ['importRuns'] })
       return res.ok ? { ok: true, runId: res.data.id } : res
@@ -129,7 +141,7 @@ export function useAkebonoImports() {
   }
 
   return {
-    sources, mappings, runs, activeSources, recentRuns,
+    sources, mappings, runs, activeSources, recentRuns, isAdmin,
     sourceById, mappingsOf, activeMappingOf, runsOf,
     addSource, archiveSource, restoreSource, saveMapping, runImport,
   }

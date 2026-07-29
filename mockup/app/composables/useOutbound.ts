@@ -11,7 +11,7 @@ import type { BillingType, OutboundPlan, OutboundResult, PlanStatus, SalesRecord
 import type { Company } from '~/types/domain'
 import type { Result } from '~/types/domain'
 import type { PostEntry } from '~/composables/useInventory'
-import { hasPartnerRole, nextCode } from '~/utils/akebono'
+import { buildShipmentSaleLines, hasPartnerRole, nextCode } from '~/utils/akebono'
 
 export function useOutbound() {
   const { tbl, commit, nextId } = useMockDb()
@@ -149,22 +149,20 @@ export function useOutbound() {
     }
     inv.post(posts)
 
-    // 売上自動計上（sourceKind='shipment'。事前検証済み = ここで失敗しない）
+    // 売上自動計上（sourceKind='shipment'。事前検証済み = ここで失敗しない）。
+    // 明細組み立て・SR コード累積採番は共有純関数（両モード同一・単体テスト対象 = 監査-3）
     if (input.postSales && companyId && segmentId) {
-      const newSales: SalesRecord[] = []
-      for (const [idx, l] of resultLines.entries()) {
-        const sku = products.skuById(l.skuId)!
-        const product = products.productOfSku(l.skuId)
-        const unitPrice = products.sellPriceOf(sku)
-        newSales.push({
-          // コードは既存 + 生成済みを含めて採番する（同一実績の複数行で SR コードが重複しないよう蓄積）
-          id: `${resultId}-sr${idx}`, code: nextCode([...sales.value, ...newSales].map(r => r.code), 'SR'),
-          salesDate: todayJst(), companyId, segmentId, skuId: l.skuId, qty: l.qty, unitPrice,
-          amount: Math.round(l.qty * unitPrice), costPrice: products.costOf(sku),
-          channel: null, billingType: (product?.billingType ?? null) as BillingType | null,
-          sourceKind: 'shipment', sourceRef: `obr:${l.id}`, invoiceId: null, correctionOf: null, active: true,
-        })
-      }
+      const built = buildShipmentSaleLines(resultLines, (skuId) => {
+        const sku = products.skuById(skuId)!
+        const product = products.productOfSku(skuId)
+        return { unitPrice: products.sellPriceOf(sku), costPrice: products.costOf(sku), billingType: product?.billingType ?? null }
+      }, sales.value.map(r => r.code))
+      const newSales: SalesRecord[] = built.map((s, idx) => ({
+        id: `${resultId}-sr${idx}`, code: s.code, salesDate: todayJst(), companyId, segmentId,
+        skuId: s.skuId, qty: s.qty, unitPrice: s.unitPrice, amount: s.amount, costPrice: s.costPrice,
+        channel: null, billingType: s.billingType as BillingType | null,
+        sourceKind: 'shipment', sourceRef: s.sourceRef, invoiceId: null, correctionOf: null, active: true,
+      }))
       sales.value = [...sales.value, ...newSales]
       invalidateIntegratedFor(segmentId)
     }

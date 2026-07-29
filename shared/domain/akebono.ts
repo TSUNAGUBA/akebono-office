@@ -148,6 +148,66 @@ export function nextCode(existing: string[], prefix: string): string {
   return `${prefix}-${String(max + 1).padStart(4, '0')}`
 }
 
+// ---------- 委託精算取消の下流確定状態ガード（Phase D。レビュー MAJOR-1） ----------
+
+/**
+ * 委託精算の取消を拒否すべき理由を返す（純関数・単体テスト対象）。
+ * バッチ（= 業態 × 月 の対象請求/通知に絞った配列を渡す）に有効入金のあるマージン請求（部分入金含む）が
+ * あれば 'paid'、確定済み/支払済みの支払通知があれば 'confirmed'、いずれも無ければ null。
+ * 片側だけ反転すると孤児入金・再締めでの片側消失を招くため、1 件でもあれば取消を止める（API/モック共通判断）。
+ * paid が confirmed より優先（入金取消の導線が明確なため先に案内する）。
+ */
+export function consignmentCancelBlockReason(
+  batchMargins: { paid: number }[],
+  batchNotices: { status: string }[],
+): 'paid' | 'confirmed' | null {
+  if (batchMargins.some(m => m.paid > 0)) return 'paid'
+  if (batchNotices.some(n => n.status === 'confirmed' || n.status === 'paid')) return 'confirmed'
+  return null
+}
+
+// ---------- 出荷実績 → 売上自動計上（Phase D。sourceKind='shipment'） ----------
+
+export interface ShipmentSaleLine {
+  code: string
+  skuId: string
+  qty: number
+  unitPrice: number
+  amount: number
+  costPrice: number | null
+  billingType: string | null
+  /** 発生元の出荷実績明細行 id 参照（二重計上防止キー = obr:<明細行id>） */
+  sourceRef: string
+}
+
+/**
+ * 出荷実績明細から売上明細を組み立てる（純関数・単体テスト対象。モックの計上ロジック）。
+ * 単価/原価/課金区分は resolve で注入（モックは products の sellPriceOf/costOf/billingType）。
+ * SR コードは既存 + 生成済みを累積して採番する（同一出荷の複数行で code が重複しないことを保証）。
+ * amount = round(qty × unitPrice)・sourceRef = 'obr:<明細行id>'（部分一意 INDEX 0038 と同一キー）。
+ */
+export function buildShipmentSaleLines(
+  resultLines: { id: string; skuId: string; qty: number }[],
+  resolve: (skuId: string) => { unitPrice: number; costPrice: number | null; billingType: string | null },
+  existingCodes: string[],
+): ShipmentSaleLine[] {
+  const out: ShipmentSaleLine[] = []
+  for (const l of resultLines) {
+    const r = resolve(l.skuId)
+    out.push({
+      code: nextCode([...existingCodes, ...out.map(s => s.code)], 'SR'),
+      skuId: l.skuId,
+      qty: l.qty,
+      unitPrice: r.unitPrice,
+      amount: Math.round(l.qty * r.unitPrice),
+      costPrice: r.costPrice,
+      billingType: r.billingType,
+      sourceRef: `obr:${l.id}`,
+    })
+  }
+  return out
+}
+
 // ---------- 状態機械（発注・生産。フロントのボタン活性と API の遷移検証を一致させる） ----------
 
 export const PO_STATUS_NEXT: Record<string, string[]> = {
