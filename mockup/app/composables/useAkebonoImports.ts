@@ -2,7 +2,14 @@
  * データ取込・連携基盤（F-32）
  * 取込元（CSV/固定長/JSON/API）・項目マッピング（AI 候補 + 人が確定・版管理）・
  * 取込実行（ステージング → 検証 → 反映。冪等・エラー行隔離）。
- * モックは実行をシミュレートし、実行履歴・エラー行を残す（管理者限定）。
+ *
+ * デュアルモード（Phase D = 0035。localStorage 依存の解消 = 本実装の最終フェーズ）:
+ * - モック: 従来どおり useMockDb（同期）+ 実行はシミュレート
+ * - API: SoT はサーバー（import_sources = 設定系・import_mappings = 設定系/版管理・
+ *   import_runs = 記録系）。読み取りは一覧 GET のキャッシュ（useApi）、書込は各専用エンドポイントへ
+ *   非同期に送り、成功後に影響コレクションを再ロードする（SoT 書込 → キャッシュ更新の順 = 原則6）。
+ *   取込実行はサーバーが決定的にシミュレートして履歴を記録する（実ファイル取込の本実装は F-32 後続）。
+ * - 取消可能性（原則9.5）: 取込元 = 論理削除 + 復元。マッピング = 新版で上書き（旧版は履歴に残る）。
  */
 import type {
   ImportMapping, ImportMethod, ImportRun, ImportSource, ImportTargetEntity,
@@ -26,6 +33,7 @@ export function useAkebonoImports() {
   const sources = tbl('importSources')
   const mappings = tbl('importMappings')
   const runs = tbl('importRuns')
+  const isApi = useApiMode()
 
   const activeSources = computed(() => sources.value.filter(s => s.active !== false))
   function sourceById(id: string): ImportSource | undefined {
@@ -42,21 +50,39 @@ export function useAkebonoImports() {
   }
   const recentRuns = computed(() => runs.value.slice().sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1)))
 
-  function addSource(input: { name: string; method: ImportMethod; encoding: 'utf8' | 'sjis'; targetEntity: ImportTargetEntity }): Result {
+  async function addSource(input: { name: string; method: ImportMethod; encoding: 'utf8' | 'sjis'; targetEntity: ImportTargetEntity }): Promise<Result> {
     if (!input.name.trim()) return { ok: false, error: { code: 'AKO-IMP-001', message: '取込元名は必須です' } }
+    if (isApi) {
+      const res = await apiWrite<ImportSource>('/v1/akebono/import-sources', { body: input, reload: ['importSources'] })
+      return res.ok ? { ok: true, id: res.data.id } : res
+    }
     const id = nextId('importSources', 'imp')
     sources.value = [...sources.value, { id, name: input.name.trim(), method: input.method, encoding: input.encoding, targetEntity: input.targetEntity, schedule: 'manual', active: true }]
     commit()
     return { ok: true, id }
   }
-  function archiveSource(id: string): Result {
+  async function archiveSource(id: string): Promise<Result> {
+    if (isApi) return apiWrite(`/v1/akebono/import-sources/${id}/archive`, { reload: ['importSources'] })
     sources.value = sources.value.map(s => s.id === id ? { ...s, active: false } : s)
+    commit()
+    return { ok: true, id }
+  }
+  /** 取込元の復元（論理削除の取消 = 原則9.5。API モードのみ導線を持つ。モックは archive で十分） */
+  async function restoreSource(id: string): Promise<Result> {
+    if (isApi) return apiWrite(`/v1/akebono/import-sources/${id}/restore`, { reload: ['importSources'] })
+    sources.value = sources.value.map(s => s.id === id ? { ...s, active: true } : s)
     commit()
     return { ok: true, id }
   }
 
   /** 新しいマッピング版を作成（既存 active は superseded に）。AI 候補 + 人が確定の想定 */
-  function saveMapping(sourceId: string, fields: { sourceField: string; targetItemKey: string; transform: string }[]): Result {
+  async function saveMapping(sourceId: string, fields: { sourceField: string; targetItemKey: string; transform: string }[]): Promise<Result> {
+    if (isApi) {
+      const res = await apiWrite<ImportMapping>('/v1/akebono/import-mappings', {
+        body: { sourceId, fields }, reload: ['importMappings'],
+      })
+      return res.ok ? { ok: true, id: res.data.id } : res
+    }
     const versions = mappingsOf(sourceId)
     const nextVersion = (versions[0]?.version ?? 0) + 1
     const id = nextId('importMappings', 'impm')
@@ -73,10 +99,14 @@ export function useAkebonoImports() {
   }
 
   /**
-   * 取込を実行（シミュレート）。ステージング → 検証 → 反映を 1 回で行い、実行履歴を残す。
-   * 決定的にサンプルのエラー行を 1 件混ぜる（マスタ未登録 = 隔離・健全行は反映 = 原則4）。
+   * 取込を実行。API モードはサーバーが決定的にシミュレートして履歴を記録（実ファイル取込は F-32 後続）。
+   * モックはステージング → 検証 → 反映を 1 回で行い、決定的にサンプルのエラー行を混ぜる（原則4）。
    */
-  function runImport(sourceId: string): Result & { runId?: string } {
+  async function runImport(sourceId: string): Promise<Result & { runId?: string }> {
+    if (isApi) {
+      const res = await apiWrite<ImportRun>('/v1/akebono/import-runs', { body: { sourceId }, reload: ['importRuns'] })
+      return res.ok ? { ok: true, runId: res.data.id } : res
+    }
     const source = sourceById(sourceId)
     if (!source) return { ok: false, error: { code: 'AKO-GEN-002', message: '取込元が見つかりません' } }
     const mapping = activeMappingOf(sourceId)
@@ -101,6 +131,6 @@ export function useAkebonoImports() {
   return {
     sources, mappings, runs, activeSources, recentRuns,
     sourceById, mappingsOf, activeMappingOf, runsOf,
-    addSource, archiveSource, saveMapping, runImport,
+    addSource, archiveSource, restoreSource, saveMapping, runImport,
   }
 }

@@ -133,8 +133,8 @@ async function savePlanInner(): Promise<void> {
 // ---------- 出荷実績登録モーダル（指示参照 / 直接） ----------
 const resultOpen = ref(false)
 const resultPlanId = ref<string | null>(null)
-const resultForm = ref<{ warehouseId: string; companyId: string; lines: LineRow[] }>({
-  warehouseId: '', companyId: '', lines: [],
+const resultForm = ref<{ warehouseId: string; companyId: string; segmentId: string; lines: LineRow[]; postSales: boolean }>({
+  warehouseId: '', companyId: '', segmentId: '', lines: [], postSales: false,
 })
 const resultPlan = computed<OutboundPlan | null>(() =>
   resultPlanId.value ? (out.planById(resultPlanId.value) ?? null) : null)
@@ -150,7 +150,9 @@ function openResultForPlan(): void {
   resultForm.value = {
     warehouseId: plan.warehouseId,
     companyId: plan.companyId,
+    segmentId: plan.segmentId,
     lines: lines.length > 0 ? lines : [{ skuId: '', qty: 1 }],
+    postSales: false,
   }
   resultOpen.value = true
 }
@@ -161,13 +163,18 @@ function openResultDirect(): void {
   resultForm.value = {
     warehouseId: warehouseOptions.value[0]?.value ?? '',
     companyId: customerOptions.value[0]?.value ?? '',
+    segmentId: effectiveSegmentId.value || (segmentOptions.value[0]?.value ?? ''),
     lines: [{ skuId: '', qty: 1 }],
+    postSales: false,
   }
   resultOpen.value = true
 }
 
 const resultDepositWarehouse = computed(() =>
   out.storeDepositWarehouseOf(resultForm.value.companyId || null))
+// 店舗預けの出荷は「販売」ではないため売上計上できない（店舗販売時に別途計上）。UI で無効化 + 自動解除
+const canPostSales = computed(() => !resultDepositWarehouse.value && !!resultForm.value.companyId)
+watch(resultDepositWarehouse, (dep) => { if (dep) resultForm.value.postSales = false })
 
 async function saveResult(): Promise<void> {
   if (busy.value) return
@@ -182,6 +189,8 @@ async function saveResultInner(): Promise<void> {
     planId: resultPlanId.value,
     warehouseId: f.warehouseId,
     companyId: f.companyId || null,
+    segmentId: f.segmentId || null,
+    postSales: f.postSales && canPostSales.value,
     lines: f.lines.map(l => ({
       planLineId: plan ? (plan.lines.find(pl => pl.skuId === l.skuId)?.id ?? null) : null,
       skuId: l.skuId,
@@ -192,7 +201,7 @@ async function saveResultInner(): Promise<void> {
     toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
     return
   }
-  toast.show('出荷実績を登録しました', 'ok')
+  toast.show(f.postSales && canPostSales.value ? '出荷実績を登録し、売上を計上しました' : '出荷実績を登録しました', 'ok')
   resultOpen.value = false
 }
 </script>
@@ -390,18 +399,34 @@ async function saveResultInner(): Promise<void> {
           <UiFormField label="出荷元倉庫" required>
             <UiSelect v-model="resultForm.warehouseId" :options="warehouseOptions" aria-label="出荷元倉庫" />
           </UiFormField>
+          <UiFormField v-if="resultForm.postSales" label="事業セグメント（売上計上先）" required>
+            <UiSelect v-model="resultForm.segmentId" :options="segmentOptions" aria-label="事業セグメント" />
+          </UiFormField>
         </template>
 
         <div
           v-if="resultDepositWarehouse"
           class="rounded-[8px] border border-brand bg-brand-soft px-3 py-2 text-[12px] text-ink"
         >
-          出荷先は店舗です。出庫分は店舗預け在庫「{{ resultDepositWarehouse.name }}」へ移動されます。
+          出荷先は店舗です。出庫分は店舗預け在庫「{{ resultDepositWarehouse.name }}」へ移動されます（店舗での販売時に売上を計上します）。
         </div>
 
         <UiFormField label="出荷明細" required>
           <WidgetsAkebonoLineItems v-model:model-value="resultForm.lines" :sku-options="skuOptions" />
         </UiFormField>
+
+        <!-- 出荷実績 → 売上自動計上（F-28 連携。店舗預けの出荷は対象外 = 無効化） -->
+        <label class="flex items-start gap-2 rounded-[8px] border border-line px-3 py-2 text-[12px]" :class="canPostSales ? 'text-ink' : 'text-muted'">
+          <input v-model="resultForm.postSales" type="checkbox" class="mt-0.5" :disabled="!canPostSales">
+          <span>
+            <span class="font-semibold">この出荷を売上として計上する</span>
+            <span class="mt-0.5 block text-[11px] text-sub">
+              出荷明細から売上（発生源 = 出荷実績）を自動生成します。単価は商品/SKU の販売単価から解決します。
+              <template v-if="resultDepositWarehouse">店舗預けの出荷は計上できません。</template>
+              <template v-else-if="!resultForm.companyId">出荷先（得意先）を指定すると計上できます。</template>
+            </span>
+          </span>
+        </label>
       </div>
       <template #footer>
         <button type="button" class="btn btn-sm" @click="resultOpen = false">キャンセル</button>

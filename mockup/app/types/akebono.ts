@@ -459,6 +459,8 @@ export interface PaymentNotice {
   payableAmount: number
   lines: PaymentNoticeLine[]
   snapshot: SettlementSnapshot
+  /** 委託精算取消による論理取消日時（null/未設定 = 有効。取消済みは確定・集計の対象外 = 原則9.5） */
+  voidedAt?: string | null
 }
 
 /** 入金消込（F-29-3。記録系。部分入金可。取消 = 監査列付き論理取消 = 原則9.5） */

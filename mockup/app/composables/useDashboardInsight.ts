@@ -7,13 +7,14 @@
  * を提供する。週次インサイト（useWeeklyInsight）・メディアインサイト（useMediaInsight）と同思想:
  * 一度生成したら保管し、再生成されるまで保存済みを表示する（導出キャッシュ = 再生成で上書き）。
  *
- * - 集計（SegmentSummary/CompanySummary）は shared/domain/portfolio-insight が SoT・決定的
- * - 集計の材料は既存の useMediaAnalytics.integratedMetricsFor（業務 × メディアの月次統合）を再利用する（原則3。
- *   generate* は ensureIntegratedLoaded を await でそろえる）
- * - 洞察は決定的ヒューリスティックのみ（llm=false）。集計材料は Phase C から API モードでは
- *   サーバー組み立ての実データ（/v1/media/integrated = 売上軸 sales_records + メディア軸 GA）。
- *   保管先 dashboardInsights のみ未移行のモックコレクション（Phase D で media_insights と同型へ =
- *   API モードの保管はローカル保存 = 「レポート保管 = ローカル」バッジで明示）
+ * - サマリー（SegmentSummary/CompanySummary）の常時ライブ集計は shared/domain/portfolio-insight が SoT・決定的。
+ *   材料は useMediaAnalytics.integratedMetricsFor（API モードはサーバー組み立ての /v1/media/integrated）を再利用。
+ * - 保管（生成 → 保管 → 再生成で上書き）はデュアルモード（Phase D = 0036。localStorage 依存の解消 = 最終フェーズ）:
+ *   - モック: dashboardInsights コレクション + 決定的ヒューリスティックのみ（llm=false）
+ *   - API: SoT はサーバー（dashboard_insights。GET/POST /v1/akebono/dashboard-insights）。集計材料は
+ *     サーバー組み立て（Phase C）・洞察は Vertex AI → 失敗時サーバー側で同一ヒューリスティックへ
+ *     フォールバック（原則4。llm フラグで区別）。scope='segment'/'company' で 1 レコード（upsert）。
+ *     GA 連携済みで月次が取れない場合は生成しない（AKO-MEDIA-004 = M1 のサーバー側強制）。
  */
 import type { BusinessSegment } from '~/types/akebono'
 import { INDUSTRY_TYPE_LABELS } from '~/utils/akebono'
@@ -44,6 +45,34 @@ export interface CompanyDashboardView {
 /** トレンド・集計の対象月数（統合分析と揃える） */
 const MONTHS = 6
 
+// ---------- API モードの保管キャッシュ（`${scope}:${segmentId||''}` → 保管済み or null） ----------
+
+interface ApiDashboardRow {
+  id: string
+  periodKey: string
+  metrics: unknown
+  insight: unknown
+  llm: boolean
+  generatedAt: string
+  generatedByName: string | null
+}
+
+const apiDashboards = ref<Record<string, ApiDashboardRow | null>>({})
+
+function apiKey(scope: 'segment' | 'company', segmentId: string | null): string {
+  return `${scope}:${segmentId ?? ''}`
+}
+
+function loadApiDashboard(scope: 'segment' | 'company', segmentId: string | null, force = false): Promise<void> {
+  return apiLoadOnce(`akebono:dashboard:${apiKey(scope, segmentId)}`, async () => {
+    const query: Record<string, string> = scope === 'segment' ? { scope, segmentId: segmentId ?? '' } : { scope }
+    const row = await apiFetch<ApiDashboardRow | null>('/v1/akebono/dashboard-insights', { query })
+    apiDashboards.value = { ...apiDashboards.value, [apiKey(scope, segmentId)]: row }
+  }, force)
+}
+
+onApiReset(() => { apiDashboards.value = {} })
+
 export function useDashboardInsight() {
   const { tbl, commit, nextId } = useMockDb()
   const records = tbl('dashboardInsights')
@@ -53,6 +82,7 @@ export function useDashboardInsight() {
   const { integratedMetricsFor, articleInputsFor, ensureIntegratedLoaded } = useMediaAnalytics()
   const { isEnabled } = useAppSettings()
   const membersTbl = tbl('members')
+  const isApi = useApiMode()
 
   function nameOf(id: string): string | null {
     return (membersTbl.value as { id: string; name: string }[]).find(m => m.id === id)?.name ?? null
@@ -164,9 +194,25 @@ export function useDashboardInsight() {
     return rec
   }
 
+  function apiViewOf<T>(row: ApiDashboardRow | null): T | null {
+    if (!row) return null
+    return {
+      metrics: row.metrics,
+      insight: row.insight,
+      llm: row.llm,
+      generatedAt: row.generatedAt,
+      generatedByName: row.generatedByName,
+      periodKey: row.periodKey,
+    } as T
+  }
+
   // ---------- 業態単位 ----------
 
-  function loadSegment(segmentId: string): SegmentDashboardView | null {
+  async function loadSegment(segmentId: string): Promise<SegmentDashboardView | null> {
+    if (isApi) {
+      await loadApiDashboard('segment', segmentId)
+      return apiViewOf<SegmentDashboardView>(apiDashboards.value[apiKey('segment', segmentId)] ?? null)
+    }
     const rec = findRecord('segment', segmentId)
     if (!rec) return null
     return {
@@ -177,7 +223,16 @@ export function useDashboardInsight() {
   }
 
   async function generateSegment(segmentId: string): Promise<SegmentDashboardView> {
-    // API モードは GA 月次（メディア軸）を await でそろえてから集計する。取得失敗時は生成しない
+    if (isApi) {
+      // サーバーが集計を組み立て（Phase C）、LLM → ヒューリスティックで洞察を生成・保管する。
+      // GA 連携済みで月次が取れない場合はサーバーが AKO-MEDIA-004 で拒否する（M1）
+      const row = await apiFetch<ApiDashboardRow>('/v1/akebono/dashboard-insights/generate', {
+        method: 'POST', body: { scope: 'segment', segmentId },
+      })
+      apiDashboards.value = { ...apiDashboards.value, [apiKey('segment', segmentId)]: row }
+      return apiViewOf<SegmentDashboardView>(row)!
+    }
+    // モック: GA 月次（メディア軸）を await でそろえてから集計する。取得失敗時は生成しない
     // （「流入ゼロ」という虚偽データ由来のレポートを保管させない。M1）
     const ready = await ensureIntegratedLoaded(segmentId, MONTHS)
     if (!ready) {
@@ -188,12 +243,16 @@ export function useDashboardInsight() {
     const metrics = buildSegmentSummary(segmentId)
     const insight = heuristicSegmentInsight(metrics)
     upsert('segment', segmentId, metrics.periodMonth, metrics, insight)
-    return loadSegment(segmentId)!
+    return (await loadSegment(segmentId))!
   }
 
   // ---------- 会社全体 ----------
 
-  function loadCompany(): CompanyDashboardView | null {
+  async function loadCompany(): Promise<CompanyDashboardView | null> {
+    if (isApi) {
+      await loadApiDashboard('company', null)
+      return apiViewOf<CompanyDashboardView>(apiDashboards.value[apiKey('company', null)] ?? null)
+    }
     const rec = findRecord('company', null)
     if (!rec) return null
     return {
@@ -204,8 +263,15 @@ export function useDashboardInsight() {
   }
 
   async function generateCompany(): Promise<CompanyDashboardView> {
-    // API モードは全業態の GA 月次を await でそろえてから集計する。1 業態でも取得失敗があれば生成しない
-    // （欠けた業態が「流入ゼロ」として全社ロールアップへ混入するのを防ぐ。M1）
+    if (isApi) {
+      // サーバーが全業態をロールアップして生成・保管する（1 業態でも GA 取得失敗なら 004 で拒否 = M1）
+      const row = await apiFetch<ApiDashboardRow>('/v1/akebono/dashboard-insights/generate', {
+        method: 'POST', body: { scope: 'company' },
+      })
+      apiDashboards.value = { ...apiDashboards.value, [apiKey('company', null)]: row }
+      return apiViewOf<CompanyDashboardView>(row)!
+    }
+    // モック: 全業態の GA 月次を await でそろえてから集計する。1 業態でも取得失敗があれば生成しない
     const results = await Promise.all(
       (activeSegments.value as BusinessSegment[]).map(s => ensureIntegratedLoaded(s.id, MONTHS)))
     if (results.some(ready => !ready)) {
@@ -216,7 +282,7 @@ export function useDashboardInsight() {
     const metrics = buildCompanySummary()
     const insight = heuristicCompanyInsight(metrics)
     upsert('company', null, metrics.periodMonth, metrics, insight)
-    return loadCompany()!
+    return (await loadCompany())!
   }
 
   return {

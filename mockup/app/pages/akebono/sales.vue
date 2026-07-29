@@ -264,7 +264,7 @@ const entryAmount = computed(() => {
           :rows="tableRows"
           clickable
           empty-title="該当する売上明細がありません"
-          empty-hint="「売上を計上」から登録します（出荷実績・取込からの計上にも対応予定）"
+          empty-hint="「売上を計上」から登録します（出荷実績からの自動計上は出荷管理で「売上として計上する」を有効に。取込からの計上は今後対応）"
           @row-click="onRowClick"
         >
           <template #cell-salesDate="{ row }">

@@ -5,13 +5,12 @@
  * ページヘッダー・カードメニュー・メニュー一覧のモックバッジ表示に使う。
  *
  * バッチ6d（AKEBONO F-03）で当時の全ドメインの接続が完了し一旦空になった。
- * Phase C（Akebono 記録系の API 化 = 2026-07-29）でモック残存が「データ取込（F-32）」のみとなり、
- * 正直な表示のため本マップへ登録した（それまで Akebono 記録系ページの未登録は表示漏れだった）。
+ * Phase C（Akebono 記録系の API 化 = 2026-07-29）でモック残存が「データ取込（F-32）」のみとなり
+ * 一時登録したが、Phase D（2026-07-29）で取込（F-32）・ダッシュボード AI レポート保管（F-41）を
+ * API 化し**再び空**になった = API モードで localStorage 保管のまま日次消失するモックコレクションは無い
+ * （currentSegment は端末ローカルの UI 状態 = 日次消失しない設計判断。implementation-status §40 参照）。
  */
-const MOCK_PAGE_PATHS = new Set<string>([
-  // F-32 データ取込: importSources / importMappings / importRuns が未移行のモックコレクション（Phase D 予定）
-  '/akebono/imports',
-])
+const MOCK_PAGE_PATHS = new Set<string>([])
 
 /** このパスのページが API モードでもモックデータ動作か（バッジ表示判定） */
 export function isMockPage(path: string): boolean {

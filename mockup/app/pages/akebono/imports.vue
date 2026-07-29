@@ -73,7 +73,8 @@ function openAdd(): void {
   addOpen.value = true
 }
 
-function submitAdd(): void {
+const addBusy = ref(false)
+async function submitAdd(): Promise<void> {
   const e: Record<string, string> = {}
   if (!String(addForm.value.name ?? '').trim()) e.name = '取込元名は必須です'
   addErrors.value = e
@@ -81,19 +82,23 @@ function submitAdd(): void {
     toast.show('必須項目を入力してください', 'crit')
     return
   }
-  const res = imp.addSource({
-    name: String(addForm.value.name ?? ''),
-    method: addForm.value.method as ImportSource['method'],
-    encoding: addForm.value.encoding as ImportSource['encoding'],
-    targetEntity: addForm.value.targetEntity as ImportSource['targetEntity'],
-  })
-  if (!res.ok) {
-    toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
-    return
-  }
-  toast.show('取込元を追加しました', 'ok')
-  addOpen.value = false
-  if (res.id) selectedSourceId.value = res.id
+  if (addBusy.value) return
+  addBusy.value = true
+  try {
+    const res = await imp.addSource({
+      name: String(addForm.value.name ?? ''),
+      method: addForm.value.method as ImportSource['method'],
+      encoding: addForm.value.encoding as ImportSource['encoding'],
+      targetEntity: addForm.value.targetEntity as ImportSource['targetEntity'],
+    })
+    if (!res.ok) {
+      toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
+      return
+    }
+    toast.show('取込元を追加しました', 'ok')
+    addOpen.value = false
+    if (res.id) selectedSourceId.value = res.id
+  } finally { addBusy.value = false }
 }
 
 // ---------- マッピング ----------
@@ -146,41 +151,50 @@ function suggestMapping(): void {
   ]
   toast.show('AI が候補を提示しました。内容を確認して保存してください', 'info')
 }
-function saveMapping(): void {
+const mapBusy = ref(false)
+async function saveMapping(): Promise<void> {
   if (!selectedSourceId.value) return
   const valid = mapDraft.value.filter(f => f.sourceField.trim() && f.targetItemKey.trim())
   if (valid.length === 0) {
     toast.show('取込元項目と対象項目キーを1行以上入力してください', 'crit')
     return
   }
-  const res = imp.saveMapping(selectedSourceId.value, valid.map(f => ({
-    sourceField: f.sourceField.trim(),
-    targetItemKey: f.targetItemKey.trim(),
-    transform: f.transform.trim(),
-  })))
-  if (!res.ok) {
-    toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
-    return
-  }
-  toast.show('マッピングを新しい版として保存しました', 'ok')
-  mapOpen.value = false
+  if (mapBusy.value) return
+  mapBusy.value = true
+  try {
+    const res = await imp.saveMapping(selectedSourceId.value, valid.map(f => ({
+      sourceField: f.sourceField.trim(),
+      targetItemKey: f.targetItemKey.trim(),
+      transform: f.transform.trim(),
+    })))
+    if (!res.ok) {
+      toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
+      return
+    }
+    toast.show('マッピングを新しい版として保存しました', 'ok')
+    mapOpen.value = false
+  } finally { mapBusy.value = false }
 }
 
 // ---------- 取込実行 ----------
 
-function runImport(): void {
-  if (!selectedSourceId.value) return
-  const res = imp.runImport(selectedSourceId.value)
-  if (!res.ok) {
-    toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
-    return
-  }
-  const run = res.runId ? imp.runsOf(selectedSourceId.value).find(r => r.id === res.runId) : undefined
-  const failed = run?.counts.failed ?? 0
-  toast.show(
-    `取込を実行しました（${run?.code ?? ''}）${failed > 0 ? ` / ${failed}件を隔離` : ''}`,
-    failed > 0 ? 'warn' : 'ok',
-  )
+const runBusy = ref(false)
+async function runImport(): Promise<void> {
+  if (!selectedSourceId.value || runBusy.value) return
+  runBusy.value = true
+  try {
+    const res = await imp.runImport(selectedSourceId.value)
+    if (!res.ok) {
+      toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
+      return
+    }
+    const run = res.runId ? imp.runsOf(selectedSourceId.value).find(r => r.id === res.runId) : undefined
+    const failed = run?.counts.failed ?? 0
+    toast.show(
+      `取込を実行しました（${run?.code ?? ''}）${failed > 0 ? ` / ${failed}件を隔離` : ''}`,
+      failed > 0 ? 'warn' : 'ok',
+    )
+  } finally { runBusy.value = false }
 }
 
 // ---------- 実行履歴 ----------
@@ -232,7 +246,8 @@ function openRun(row: Record<string, unknown>): void {
     <div class="card border-line bg-info-soft p-3 text-[12px] leading-relaxed text-sub">
       取込は <span class="font-semibold text-ink">ステージング → 検証（dry-run）→ 反映</span> の順で行い、
       マスタ未登録などの不正行は隔離して健全行のみ反映します（原則4）。同一データの再取込は冪等に扱われます。
-      本画面はモックのため実行結果をシミュレートします。実運用では API 接続時の SSRF 対策・認証情報の保管はサーバー側で実装します。
+      取込元・マッピング・実行履歴はサーバーに永続化されます。取込実行は現在は結果を決定的にシミュレートします
+      （実ファイルのアップロード・パース・API 接続時の SSRF 対策付き本実装は F-32 の後続対応）。
     </div>
 
     <!-- 取込元一覧 -->
@@ -269,9 +284,9 @@ function openRun(row: Record<string, unknown>): void {
           <Wand2 class="h-4 w-4" aria-hidden="true" />
           マッピングを保存
         </button>
-        <button type="button" class="btn btn-primary btn-sm" @click="runImport">
+        <button type="button" class="btn btn-primary btn-sm" :disabled="runBusy" @click="runImport">
           <Play class="h-4 w-4" aria-hidden="true" />
-          取込を実行
+          {{ runBusy ? '実行中…' : '取込を実行' }}
         </button>
       </template>
 
@@ -346,7 +361,7 @@ function openRun(row: Record<string, unknown>): void {
       <template #footer>
         <div class="flex items-center justify-end gap-2">
           <button type="button" class="btn" @click="addOpen = false">キャンセル</button>
-          <button type="button" class="btn btn-primary" @click="submitAdd">追加</button>
+          <button type="button" class="btn btn-primary" :disabled="addBusy" @click="submitAdd">{{ addBusy ? '追加中…' : '追加' }}</button>
         </div>
       </template>
     </UiModal>
@@ -391,7 +406,7 @@ function openRun(row: Record<string, unknown>): void {
       <template #footer>
         <div class="flex items-center justify-end gap-2">
           <button type="button" class="btn" @click="mapOpen = false">キャンセル</button>
-          <button type="button" class="btn btn-primary" @click="saveMapping">保存</button>
+          <button type="button" class="btn btn-primary" :disabled="mapBusy" @click="saveMapping">{{ mapBusy ? '保存中…' : '保存' }}</button>
         </div>
       </template>
     </UiModal>
