@@ -7,7 +7,7 @@ import type {
   AppConfigItem, AppNotification, AttendanceFixRequest, AttendanceRule, AuditLog, CalendarEvent, ChatMessage, ChatSession, PermissionRule,
   CodeMasterItem, Company, CompanyRelation, Contact, ContactRelation,
   CustomFieldDef, DailyReport, DecisionLog, DecisionTheme, DelegateSetting, Department,
-  DocumentNode, Escalation, EscalationRule, ExternalLink, FeatureToggle, Goal, HearingLog, Holiday,
+  DocumentNode, Escalation, EscalationRule, ExternalLink, FeatureToggle, HearingLog, Holiday,
   Industry, KnowledgeArticle, LeaveGrant, LeaveRequest, LeaveType, Member, Project,
   PunchRecord, RelationType, ReportComment, SalesMonthly, ServiceIncident,
   ShiftAssignment, ShiftDemand, ShiftPeriod, ShiftWish, SystemService,
@@ -59,8 +59,6 @@ export interface MockDbShape {
   workflowRoutes: WorkflowRoute[]
   attendanceRules: AttendanceRule[]
   holidays: Holiday[]
-  /** 目標マスタ（F-01 コックピット着地予報。cockpit-design §2.2） */
-  goals: Goal[]
   systemServices: SystemService[]
   aiRoles: AiRole[]
   aiEmployees: AiEmployee[]
@@ -171,7 +169,6 @@ export function buildSeed(): MockDbShape {
     workflowRoutes: core.seedWorkflowRoutes,
     attendanceRules: core.seedAttendanceRules,
     holidays: [], // 祝日はデモでは空（API モードで公式 CSV 取込 / 手動登録）。空なら従来どおり土日のみ非営業
-    goals: core.seedGoals,
     systemServices: core.seedSystemServices,
     aiRoles: core.seedAiRoles,
     aiEmployees: core.seedAiEmployees,

@@ -1,7 +1,7 @@
 /** 区分値 → 日本語ラベル（表示の SoT。列挙は types/domain.ts が正） */
 import type {
   AiEmployeeStatus, AiTaskStatus, ApprovalAction, DecisionActionStatus,
-  EmploymentType, EscalationReason, EscalationResolutionType, GoalMetric, IncidentImpact,
+  EmploymentType, EscalationReason, EscalationResolutionType, IncidentImpact,
   IncidentStatus, KnowledgeDomain, MemberRole, NotificationKind, ProjectStatus, ProjectType,
   PunchKind, ShiftPeriodStatus, ShiftWishKind, WorkflowCategory, WorkflowStatus,
 } from '~/types/domain'
@@ -168,12 +168,6 @@ export const SERVICE_STATE_TONES: Record<string, Tone> = {
   partial_outage: 'serious',
   major_outage: 'crit',
   maintenance: 'info',
-}
-
-/** 目標マスタの指標区分（/masters/goals とコックピット着地予報で共有。F-01） */
-export const GOAL_METRIC_LABELS: Record<GoalMetric, string> = {
-  segment_sales: '業態売上',
-  report_rate: '日報提出率',
 }
 
 export const KNOWLEDGE_DOMAIN_LABELS: Record<KnowledgeDomain, string> = {
