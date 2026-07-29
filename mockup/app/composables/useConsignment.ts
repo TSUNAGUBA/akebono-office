@@ -134,7 +134,7 @@ export function useConsignment() {
     // 委託マージン請求は作家支払通知と対で発行されるため、単独の赤伝は不可（再締めで作家二重払いになる）。
     // 委託精算のやり直しは対象月の再締め（未実装の取消フローは v2）。ここでは通常請求のみ赤伝可とする
     if (inv.invoiceType !== 'sales') {
-      return { ok: false, error: { code: 'AKO-BIL-008', message: '委託マージン請求は単独で赤伝できません（委託精算のやり直しで対応）' } }
+      return { ok: false, error: { code: 'AKO-BIL-008', message: '委託マージン請求は単独で赤伝できません（精算の取消フローは今後対応予定。誤った精算は管理者へご相談ください）' } }
     }
     const creditId = nextId('invoices', 'inv')
     const credit: Invoice = {
@@ -154,7 +154,8 @@ export function useConsignment() {
 
   // ---------- 入金消込（F-29-3） ----------
   function paidAmountOf(invoiceId: string): number {
-    return receipts.value.filter(r => r.invoiceId === invoiceId).reduce((s, r) => s + r.amount, 0)
+    // 有効入金のみ（取消済み = voidedAt は除外。レビュー C-2 = 入金取消）
+    return receipts.value.filter(r => r.invoiceId === invoiceId && !r.voidedAt).reduce((s, r) => s + r.amount, 0)
   }
   async function recordReceipt(input: { invoiceId: string; amount: number; method: string }): Promise<Result> {
     if (isApi) {
@@ -165,7 +166,10 @@ export function useConsignment() {
     }
     const inv = invoices.value.find(v => v.id === input.invoiceId)
     if (!inv) return { ok: false, error: { code: 'AKO-GEN-002', message: '請求が見つかりません' } }
-    if (inv.status === 'draft') return { ok: false, error: { code: 'AKO-BIL-004', message: '未発行の請求には入金できません' } }
+    // 発行済み（+ 全額消込後の追加入金 = paid）のみ受理。void/赤伝への入金は終端状態の破壊（レビュー C-2）
+    if (inv.status !== 'issued' && inv.status !== 'paid') {
+      return { ok: false, error: { code: 'AKO-BIL-004', message: '発行済みの請求にのみ入金を記録できます（下書き・無効の請求は対象外）' } }
+    }
     if (!Number.isFinite(input.amount) || input.amount <= 0) return { ok: false, error: { code: 'AKO-BIL-005', message: '入金額を正しく入力してください' } }
     const receipt: PaymentReceipt = { id: nextId('paymentReceipts', 'rcpt'), invoiceId: input.invoiceId, receivedAt: nowJstIso(), amount: Math.round(input.amount), method: input.method }
     receipts.value = [...receipts.value, receipt]
@@ -176,6 +180,23 @@ export function useConsignment() {
     }
     commit()
     return { ok: true, id: receipt.id }
+  }
+
+  /** 入金の取消（監査列付き論理取消 = 原則9.5。全額割れで請求を paid → issued へ再計算） */
+  async function voidReceipt(id: string): Promise<Result> {
+    if (isApi) {
+      return apiWrite(`/v1/akebono/payment-receipts/${id}/cancel`, { reload: ['paymentReceipts', 'invoices'] })
+    }
+    const r = receipts.value.find(x => x.id === id)
+    if (!r) return { ok: false, error: { code: 'AKO-GEN-002', message: '入金が見つかりません' } }
+    if (r.voidedAt) return { ok: false, error: { code: 'AKO-BIL-009', message: 'この入金は既に取消済みです' } }
+    receipts.value = receipts.value.map(x => x.id === id ? { ...x, voidedAt: nowJstIso() } : x)
+    const inv = invoices.value.find(v => v.id === r.invoiceId)
+    if (inv?.status === 'paid' && paidAmountOf(r.invoiceId) < inv.totalAmount) {
+      invoices.value = invoices.value.map(v => v.id === r.invoiceId ? { ...v, status: 'issued' } : v)
+    }
+    commit()
+    return { ok: true, id }
   }
 
   // ---------- 委託精算（F-29-4。決定 #5 + 第 2 巡設定化） ----------
@@ -292,6 +313,6 @@ export function useConsignment() {
   return {
     invoices, notices, receipts,
     companyName, termOf, resolveUnitCost, billableSales, consignableSales, paidAmountOf,
-    closeBilling, issue, voidInvoice, recordReceipt, closeConsignment, confirmNotice,
+    closeBilling, issue, voidInvoice, recordReceipt, voidReceipt, closeConsignment, confirmNotice,
   }
 }

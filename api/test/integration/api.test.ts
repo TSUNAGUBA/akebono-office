@@ -4410,3 +4410,123 @@ describe('Phase C: Akebono 記録系の API 永続化（商品・伝票・在庫
     expect(stored.insight.executiveSummary.length).toBeGreaterThan(0)
   })
 })
+
+describe('Phase C レビュー 1 巡目: 並行性ガード（C-1）・入金取消と受理ガード（C-2）・復元衝突（C-3）', () => {
+  const month = '2026-03' // 他スイートと重ならない過去月（会計・統合メトリクスの窓外でも請求フローは検証可能）
+  let companyId = ''
+  let skuId = ''
+
+  it('準備: 取引先・商品（既定 SKU）・在庫 10 を作る', async () => {
+    const company = await api('POST', '/v1/masters/companies', { as: ADMIN, body: { name: '並行テスト商店' } })
+    companyId = (company.json.data as { id: string }).id
+    const product = await api('POST', '/v1/akebono/products', {
+      as: MEMBER, body: { code: 'RACE-001', name: '並行テスト品', segmentId: 'seg-02', listPrice: 1000, taxRateId: 'tax-10' },
+    })
+    const productId = (product.json.data as { id: string }).id
+    const skus = (await api('GET', '/v1/akebono/product-skus', { as: MEMBER })).json.data as { id: string; productId: string }[]
+    skuId = skus.find(s => s.productId === productId)!.id
+    expect((await api('POST', '/v1/akebono/inbound-results', {
+      as: MEMBER, body: { warehouseId: 'wh-01', lines: [{ skuId, qty: 10 }] },
+    })).status).toBe(201)
+  })
+
+  it('C-1a: 残高 10 へ qty=10 の並行出荷 2 発 → 片方 201・片方 409（advisory lock で直列化 = 残高マイナスなし）', async () => {
+    const post = (): ReturnType<typeof api> => api('POST', '/v1/akebono/outbound-results', {
+      as: MEMBER, body: { warehouseId: 'wh-01', companyId, lines: [{ skuId, qty: 10 }] },
+    })
+    const [a, b] = await Promise.all([post(), post()])
+    expect([a.status, b.status].sort()).toEqual([201, 409])
+    const failed = a.status === 409 ? a : b
+    expect(failed.json.error?.code).toBe('AKO-OUT-004')
+    const txns = (await api('GET', '/v1/akebono/inventory-transactions', { as: MEMBER })).json.data as
+      { skuId: string; warehouseId: string; qty: number }[]
+    const balance = txns.filter(t => t.skuId === skuId && t.warehouseId === 'wh-01').reduce((s, t) => s + t.qty, 0)
+    expect(balance).toBe(0) // −10 が 1 回だけ = マイナス残高なし
+  })
+
+  it('C-1b: 同一キーの draft 請求は部分一意 INDEX（0033）が拒否・並行 close でも draft は 1 枚', async () => {
+    // 売上 2 件（請求フローの材料）
+    for (const day of ['05', '06']) {
+      expect((await api('POST', '/v1/akebono/sales-records', {
+        as: MEMBER, body: { salesDate: `${month}-${day}`, companyId, segmentId: 'seg-02', skuId, qty: 1, unitPrice: 1000 },
+      })).status).toBe(201)
+    }
+    // 部分一意 INDEX の直接検証（DB 制約 = 最終防衛）
+    const dup = await pool.query(
+      `INSERT INTO invoices (id, code, company_id, period_from, period_to, invoice_type, status)
+       VALUES ('inv-t1', 'T-1', $1, '2026-03-01', '2026-03-31', 'sales', 'draft'),
+              ('inv-t2', 'T-2', $1, '2026-03-01', '2026-03-31', 'sales', 'draft')`,
+      [companyId]).then(() => null).catch(e => e as { code?: string })
+    expect(dup?.code).toBe('23505')
+
+    // 並行 close: advisory lock で直列化 → いずれの結果でも同一キーの draft は 1 枚
+    const close = (): ReturnType<typeof api> => api('POST', '/v1/akebono/billing/close', {
+      as: MEMBER, body: { companyId, periodFrom: `${month}-01`, periodTo: `${month}-28` },
+    })
+    const results = await Promise.all([close(), close()])
+    for (const r of results) expect([201, 409]).toContain(r.status)
+    const invs = (await api('GET', '/v1/akebono/invoices', { as: MEMBER })).json.data as
+      { companyId: string; status: string; invoiceType: string }[]
+    expect(invs.filter(v => v.companyId === companyId && v.status === 'draft' && v.invoiceType === 'sales')).toHaveLength(1)
+  })
+
+  it('C-2: 入金は発行済みのみ受理（draft/void は 409）・取消 = 監査列付き論理取消で paid → issued 再計算・二重取消 409', async () => {
+    const invs = (await api('GET', '/v1/akebono/invoices', { as: MEMBER })).json.data as
+      { id: string; companyId: string; status: string; totalAmount: number }[]
+    const draft = invs.find(v => v.companyId === companyId && v.status === 'draft')!
+    // draft への入金は 409
+    const onDraft = await api('POST', '/v1/akebono/payment-receipts', {
+      as: MEMBER, body: { invoiceId: draft.id, amount: 100, method: '振込' },
+    })
+    expect(onDraft.status).toBe(409)
+    expect(onDraft.json.error?.code).toBe('AKO-BIL-004')
+
+    // 発行 → 部分入金 + 残額入金 = paid
+    expect((await api('POST', `/v1/akebono/invoices/${draft.id}/issue`, { as: MEMBER })).status).toBe(200)
+    const r1 = await api('POST', '/v1/akebono/payment-receipts', {
+      as: MEMBER, body: { invoiceId: draft.id, amount: 1000, method: '振込' },
+    })
+    expect(r1.status).toBe(201)
+    const receiptId = (r1.json.data as { id: string }).id
+    expect((await api('POST', '/v1/akebono/payment-receipts', {
+      as: MEMBER, body: { invoiceId: draft.id, amount: draft.totalAmount - 1000, method: '振込' },
+    })).status).toBe(201)
+    let inv = ((await api('GET', '/v1/akebono/invoices', { as: MEMBER })).json.data as { id: string; status: string }[])
+      .find(v => v.id === draft.id)!
+    expect(inv.status).toBe('paid')
+
+    // 取消（原則9.5）: voidedAt が付き、有効入金が全額を割るので paid → issued へ戻る
+    const cancel = await api('POST', `/v1/akebono/payment-receipts/${receiptId}/cancel`, { as: MEMBER })
+    expect(cancel.status).toBe(200)
+    expect((cancel.json.data as { voidedAt: string | null }).voidedAt).toBeTruthy()
+    inv = ((await api('GET', '/v1/akebono/invoices', { as: MEMBER })).json.data as { id: string; status: string }[])
+      .find(v => v.id === draft.id)!
+    expect(inv.status).toBe('issued')
+    // 二重取消は 409
+    const twice = await api('POST', `/v1/akebono/payment-receipts/${receiptId}/cancel`, { as: MEMBER })
+    expect(twice.status).toBe(409)
+    expect(twice.json.error?.code).toBe('AKO-BIL-009')
+
+    // 再入金で paid へ戻せる（取消済みは集計から除外されている）
+    expect((await api('POST', '/v1/akebono/payment-receipts', {
+      as: MEMBER, body: { invoiceId: draft.id, amount: 1000, method: '振込' },
+    })).status).toBe(201)
+    inv = ((await api('GET', '/v1/akebono/invoices', { as: MEMBER })).json.data as { id: string; status: string }[])
+      .find(v => v.id === draft.id)!
+    expect(inv.status).toBe('paid')
+  })
+
+  it('C-3: 論理削除 → 同コード再登録後の復元は 409（AKO-PRD-002）+ 対処案内（500 にしない）', async () => {
+    const p1 = await api('POST', '/v1/akebono/products', {
+      as: MEMBER, body: { code: 'RESTORE-1', name: '初代', segmentId: 'seg-02' },
+    })
+    const id1 = (p1.json.data as { id: string }).id
+    expect((await api('POST', `/v1/akebono/products/${id1}/archive`, { as: MEMBER })).status).toBe(200)
+    expect((await api('POST', '/v1/akebono/products', {
+      as: MEMBER, body: { code: 'RESTORE-1', name: '二代目', segmentId: 'seg-02' },
+    })).status).toBe(201)
+    const restore = await api('POST', `/v1/akebono/products/${id1}/restore`, { as: MEMBER })
+    expect(restore.status).toBe(409)
+    expect(restore.json.error?.code).toBe('AKO-PRD-002')
+  })
+})

@@ -165,9 +165,9 @@ akebono_wishes / sales_monthly / media_articles と同方針。各画面は空�
 | `OutboundResult`（outbound_results） | id, code, planId, warehouseId, companyId, shippedAt, lines jsonb | **記録系（追記のみ）**。在庫不足 409・出庫(−) + 店舗納品（partner_roles=store × store_deposit 倉庫）は預け在庫へ transfer_in(+) | C2 |
 | `InventoryTransaction`（inventory_transactions) | id, skuId, warehouseId, qty(±), kind, reason, refType, refLineId, occurredAt。**UNIQUE(ref_type, ref_line_id, kind)** = 冪等キー | **在庫の SoT（台帳・追記のみ）**。残高 = Σqty（導出。shared foldBalances をフロントと共有）。調整/移動/棚卸は専用 API | C2 |
 | `SalesRecord`（sales_records） | id, code, salesDate, companyId, segmentId, skuId, qty, unitPrice, amount, costPrice/billingType（サーバーが SKU/商品から解決）, channel, sourceKind, invoiceId（請求リンク）, correctionOf, active | **売上の SoT（記録系・訂正は赤黒）**。統合メトリクス（/v1/media/integrated）の売上軸の源泉。請求済みの訂正は 409（請求側で赤伝） | C3（売上） |
-| `Invoice`（invoices） | id, code, companyId, segmentId(null = 合算), periodFrom/To, invoiceType, status, issuedAt, totalAmount, creditFor, lines/snapshot/sourceRecordIds jsonb | **確定系（issued 以降不変・訂正は赤伝 = マイナス請求の追記 + 売上リンク解除）**。draft は洗い替え可（設定系） | C3 |
+| `Invoice`（invoices） | id, code, companyId, segmentId(null = 合算), periodFrom/To, invoiceType, status, issuedAt, totalAmount, creditFor, lines/snapshot/sourceRecordIds jsonb。**UNIQUE(company_id, period_from, period_to, invoice_type) WHERE draft**（0033 = 並行 close の二重ドラフト防止） | **確定系（issued 以降不変・訂正は赤伝 = マイナス請求の追記 + 売上リンク解除）**。draft は洗い替え可（設定系） | C3 |
 | `PaymentNotice`（payment_notices） | id, code, companyId(作家), segmentId, periodFrom/To, status, payableAmount, lines/snapshot jsonb | **確定系**（発行時点の委託条件をスナップショット凍結） | C3 |
-| `PaymentReceipt`（payment_receipts） | id, invoiceId, receivedAt, amount, method | **記録系（追記のみ・部分入金可）**。全額消込で請求を paid | C3 |
+| `PaymentReceipt`（payment_receipts） | id, invoiceId, receivedAt, amount, method, **voidedAt/voidedBy（0033 = 監査列付き論理取消）** | **記録系（追記のみ・部分入金可）**。有効入金（voided_at IS NULL）の合計が全額で請求を paid・取消で paid → issued 再計算（取消フロー = 原則9.5） | C3 |
 
 > **SoT 宣言（Akebono 記録系）:** 上記テーブルが SoT。在庫残高・消込率・月次集計・KPI は導出
 > （表示射影はフロント純関数 = shared/domain/akebono・media-integrated を API と共有）。
@@ -182,6 +182,10 @@ akebono_wishes / sales_monthly / media_articles と同方針。各画面は空�
 > ③モック期 localStorage データを API へ持ち込む経路が無い、ため（0030/0031 への FK 後付けも同判断で
 > 行わない。0032 冒頭コメントが正）。0031 シードの c-ak-* 参照（warehouses / consignment_terms）は
 > 実運用開始時に実取引先へ付け替える（オペレーター手順 = implementation-status §39）。
+> **取消フローの現状（原則9.5）:** 売上・仕入 = 赤黒 / 通常請求 = 赤伝 / 入金 = 論理取消（0033）/
+> 予定・指示 = ステータス取消。**委託精算（マージン請求 + 支払通知の組）の取消フローは未対応**
+> （AKO-BIL-008 で案内・Phase D 残課題 = §39-6）。入荷/出荷/生産の実績も伝票レベルの補償手段は
+> 未対応（在庫の数量は adjust で補償可・§39-6）。
 
 ## 2. スタースキーマ接続（akebono-scm-platform `mart` 規約準拠）
 

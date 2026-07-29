@@ -225,7 +225,21 @@ const receiptCols: TableColumn[] = [
   { key: 'receivedAt', label: '入金日時', primary: true },
   { key: 'amount', label: '入金額', align: 'right', primary: true },
   { key: 'method', label: '方法' },
+  { key: 'cancel', label: '', align: 'right' },
 ]
+
+// 入金の取消（監査付き論理取消 = 原則9.5。誤入金の回復手段）
+async function cancelReceipt(id: string): Promise<void> {
+  const ok = await ask(
+    '入金の取消',
+    'この入金を取り消しますか？（取消は履歴に残ります。全額消込済みの請求は「発行済み」へ戻ります）',
+    { danger: true, confirmLabel: '取り消す' },
+  )
+  if (!ok) return
+  const res = await con.voidReceipt(id)
+  if (!res.ok) { show(`${res.error.code}: ${res.error.message}`, 'crit'); return }
+  show('入金を取り消しました', 'warn')
+}
 </script>
 
 <template>
@@ -364,7 +378,11 @@ const receiptCols: TableColumn[] = [
             <span class="text-[12px] text-sub">{{ fmtDateTime(String(row.receivedAt)) }}</span>
           </template>
           <template #cell-amount="{ row }">
-            <span class="num">{{ fmtYen(Number(row.amount)) }}</span>
+            <span class="num" :class="row.voidedAt ? 'text-muted line-through' : ''">{{ fmtYen(Number(row.amount)) }}</span>
+          </template>
+          <template #cell-cancel="{ row }">
+            <UiStatusBadge v-if="row.voidedAt" label="取消済み" tone="neutral" />
+            <button v-else type="button" class="btn btn-ghost btn-sm text-crit" @click="cancelReceipt(String(row.id))">取消</button>
           </template>
         </UiDataTable>
       </UiSectionCard>

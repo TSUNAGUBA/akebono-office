@@ -50,7 +50,8 @@ const PN_COLS = `id, code, company_id AS "companyId", segment_id AS "segmentId",
   period_from AS "periodFrom", period_to AS "periodTo", status, payable_amount AS "payableAmount",
   lines, snapshot`
 
-const RCPT_COLS = `id, invoice_id AS "invoiceId", ${JST_TS('received_at')} AS "receivedAt", amount, method`
+const RCPT_COLS = `id, invoice_id AS "invoiceId", ${JST_TS('received_at')} AS "receivedAt", amount, method,
+  ${JST_TS('voided_at')} AS "voidedAt"`
 
 interface TermRow extends AkebonoConsignmentTermLike {
   taxRateId: string | null
@@ -204,6 +205,9 @@ export function akebonoBillingRoutes(pool: pg.Pool): Hono {
     const periodTo = dateOf(body.periodTo, '期間終了')
     const id = newId('inv')
     const result = await inTxn(pool, async (db) => {
+      // 並行 close の直列化（C-1）。同一キーの draft 一意は 0033 の部分一意 INDEX が最終防衛
+      await db.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
+        [`bill:${companyId}:${periodFrom}:${periodTo}`])
       const { rows } = await db.query<{ id: string; salesDate: string; skuId: string; qty: number; amount: number; taxRateId: string | null }>(
         `SELECT r.id, r.sales_date AS "salesDate", r.sku_id AS "skuId", r.qty, r.amount, p.tax_rate_id AS "taxRateId"
          FROM sales_records r
@@ -232,6 +236,12 @@ export function akebonoBillingRoutes(pool: pg.Pool): Hono {
          VALUES ($1, $2, $3, NULL, $4, $5, 'sales', 'draft', $6, $7, $8) RETURNING ${INV_COLS}`,
         [id, code, companyId, periodFrom, periodTo, subtotal + tax, JSON.stringify(lines), JSON.stringify(rows.map(r => r.id))])
       return { invoice: out[0], count: rows.length }
+    }).catch((e) => {
+      // 0033 の部分一意 INDEX 衝突 = 並行 close の同時 INSERT（advisory lock をすり抜ける経路はないが最終防衛。C-1）
+      if ((e as { code?: string }).code === '23505') {
+        throw err('AKO-GEN-003', '同じ得意先 × 期間の締め処理が同時に実行されました。再度お試しください', 409)
+      }
+      throw e
     })
     await audit(pool, { actorId: user.id, action: 'create', entity: 'invoices', entityId: id, detail: `請求締め（${result.count} 件）` })
     return c.json({ data: result }, 201)
@@ -248,7 +258,13 @@ export function akebonoBillingRoutes(pool: pg.Pool): Hono {
       if (rows[0]!.status !== 'draft') throw err('AKO-BIL-002', '下書き以外は発行できません', 409)
       const { rows: out } = await db.query(
         `UPDATE invoices SET status = 'issued', issued_at = now(), updated_at = now() WHERE id = $1 RETURNING ${INV_COLS}`, [id])
-      await db.query(`UPDATE sales_records SET invoice_id = $1 WHERE id = ANY($2)`, [id, rows[0]!.sourceRecordIds])
+      // 締め後に他の請求・精算が同じ売上を紐づけた場合は発行を中止（リンクは未請求行のみ + 件数検証 = C-1）
+      const { rowCount } = await db.query(
+        `UPDATE sales_records SET invoice_id = $1 WHERE id = ANY($2) AND invoice_id IS NULL`,
+        [id, rows[0]!.sourceRecordIds])
+      if ((rowCount ?? 0) !== rows[0]!.sourceRecordIds.length) {
+        throw err('AKO-GEN-003', '対象売上の一部が既に他の請求・精算に紐づいています。締め直してから発行してください', 409)
+      }
       return out[0]
     })
     await audit(pool, { actorId: user.id, action: 'update', entity: 'invoices', entityId: id, detail: '請求を発行' })
@@ -274,7 +290,7 @@ export function akebonoBillingRoutes(pool: pg.Pool): Hono {
       if (!inv) throw err('AKO-GEN-002', '請求が見つかりません', 404)
       if (inv.status !== 'issued') throw err('AKO-BIL-003', '発行済みのみ赤伝を発行できます', 409)
       if (inv.invoiceType !== 'sales') {
-        throw err('AKO-BIL-008', '委託マージン請求は単独で赤伝できません（委託精算のやり直しで対応）', 409)
+        throw err('AKO-BIL-008', '委託マージン請求は単独で赤伝できません（精算の取消フローは今後対応予定。誤った精算は管理者へご相談ください）', 409)
       }
       const code = await nextDocCode(db, 'INV')
       const { rows: out } = await db.query(
@@ -308,12 +324,16 @@ export function akebonoBillingRoutes(pool: pg.Pool): Hono {
       const { rows } = await db.query<{ status: string; totalAmount: number }>(
         `SELECT status, total_amount AS "totalAmount" FROM invoices WHERE id = $1 FOR UPDATE`, [invoiceId])
       if (rows.length === 0) throw err('AKO-GEN-002', '請求が見つかりません', 404)
-      if (rows[0]!.status === 'draft') throw err('AKO-BIL-004', '未発行の請求には入金できません', 409)
+      // 発行済み（+ 全額消込後の追加入金 = paid）のみ受理。draft は未発行・void/赤伝への入金は
+      // 「void → paid」の終端状態破壊になるため拒否（レビュー C-2）
+      if (rows[0]!.status !== 'issued' && rows[0]!.status !== 'paid') {
+        throw err('AKO-BIL-004', '発行済みの請求にのみ入金を記録できます（下書き・無効の請求は対象外）', 409)
+      }
       const { rows: out } = await db.query(
         `INSERT INTO payment_receipts (id, invoice_id, amount, method) VALUES ($1, $2, $3, $4) RETURNING ${RCPT_COLS}`,
         [id, invoiceId, Math.round(amount), method])
       const { rows: sums } = await db.query<{ paid: number | null }>(
-        `SELECT SUM(amount) AS paid FROM payment_receipts WHERE invoice_id = $1`, [invoiceId])
+        `SELECT SUM(amount) AS paid FROM payment_receipts WHERE invoice_id = $1 AND voided_at IS NULL`, [invoiceId])
       if ((sums[0]?.paid ?? 0) >= rows[0]!.totalAmount) {
         await db.query(`UPDATE invoices SET status = 'paid', updated_at = now() WHERE id = $1`, [invoiceId])
       }
@@ -321,6 +341,36 @@ export function akebonoBillingRoutes(pool: pg.Pool): Hono {
     })
     await audit(pool, { actorId: user.id, action: 'create', entity: 'payment_receipts', entityId: id, detail: '入金を記録' })
     return c.json({ data: created }, 201)
+  })
+
+  // 入金の取消（レビュー C-2 = 原則9.5）。記録系の追記保護と両立する監査列付き論理取消
+  // （voided_at / voided_by = 0033）。有効入金の再集計で請求の paid 判定を戻す（paid → issued）まで 1 Tx
+  app.post('/payment-receipts/:id/cancel', async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+    const result = await inTxn(pool, async (db) => {
+      const { rows } = await db.query<{ invoiceId: string; voidedAt: string | null }>(
+        `SELECT invoice_id AS "invoiceId", voided_at AS "voidedAt" FROM payment_receipts WHERE id = $1 FOR UPDATE`, [id])
+      if (rows.length === 0) throw err('AKO-GEN-002', '入金が見つかりません', 404)
+      if (rows[0]!.voidedAt) throw err('AKO-BIL-009', 'この入金は既に取消済みです', 409)
+      const invoiceId = rows[0]!.invoiceId
+      const { rows: invRows } = await db.query<{ status: string; totalAmount: number }>(
+        `SELECT status, total_amount AS "totalAmount" FROM invoices WHERE id = $1 FOR UPDATE`, [invoiceId])
+      const { rows: out } = await db.query(
+        `UPDATE payment_receipts SET voided_at = now(), voided_by = $2 WHERE id = $1 RETURNING ${RCPT_COLS}`,
+        [id, user.id])
+      // 有効入金の再集計。全額を割ったら paid → issued（導出ステータスの再計算 = 記録の巻き戻しではない）
+      if (invRows[0]?.status === 'paid') {
+        const { rows: sums } = await db.query<{ paid: number | null }>(
+          `SELECT SUM(amount) AS paid FROM payment_receipts WHERE invoice_id = $1 AND voided_at IS NULL`, [invoiceId])
+        if ((sums[0]?.paid ?? 0) < invRows[0]!.totalAmount) {
+          await db.query(`UPDATE invoices SET status = 'issued', updated_at = now() WHERE id = $1`, [invoiceId])
+        }
+      }
+      return out[0]
+    })
+    await audit(pool, { actorId: user.id, action: 'update', entity: 'payment_receipts', entityId: id, detail: '入金を取消（論理）' })
+    return c.json({ data: result })
   })
 
   // ========== 委託精算（F-29-4） ==========
@@ -362,6 +412,8 @@ export function akebonoBillingRoutes(pool: pg.Pool): Hono {
     const periodFrom = `${month}-01`
     const periodTo = monthEndOf(month)
     const result = await inTxn(pool, async (db) => {
+      // 並行 close の直列化（C-1。同一 業態 × 月 の精算を 1 本化）
+      await db.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`consign:${segmentId}:${month}`])
       // 対象 = 未精算の店舗売上（店舗ロールの得意先・qty > 0）
       const { rows: stores } = await db.query<{ id: string }>(
         `SELECT id FROM companies WHERE partner_roles @> '"store"'::jsonb OR partner_roles @> '["store"]'::jsonb`)
@@ -445,9 +497,14 @@ export function akebonoBillingRoutes(pool: pg.Pool): Hono {
         noticeCount++
       }
 
-      // 対象売上に精算リンク（各売上をその店舗のマージン請求 id へ。再精算防止 = 冪等）
+      // 対象売上に精算リンク（各売上をその店舗のマージン請求 id へ。再精算防止 = 冪等）。
+      // 抽出後に他の請求・精算が同じ売上を紐づけた場合は全体を中止（未請求行のみ更新 + 件数検証 = C-1）
       for (const [recordId, invoiceId] of settleByRecord) {
-        await db.query(`UPDATE sales_records SET invoice_id = $2 WHERE id = $1`, [recordId, invoiceId])
+        const { rowCount } = await db.query(
+          `UPDATE sales_records SET invoice_id = $2 WHERE id = $1 AND invoice_id IS NULL`, [recordId, invoiceId])
+        if ((rowCount ?? 0) !== 1) {
+          throw err('AKO-GEN-003', '対象売上の一部が既に他の請求・精算に紐づいたため精算を中止しました。最新の状態で再実行してください', 409)
+        }
       }
       return { invoices: invoiceCount, notices: noticeCount }
     })

@@ -9,8 +9,9 @@
  *   台帳へ post し、冪等キー UNIQUE(ref_type, ref_line_id, kind) + ON CONFLICT DO NOTHING で
  *   二重生成を防ぐ（モックの useInventory.post と同一の意味論）。
  * - 参照整合: FK は張らず（0032 冒頭コメント）、書込パスで SKU・倉庫・会社・セグメントの存在を検証する。
- * - 認可: 参照・書込とも認証済み全員（モックの各画面に管理者ゲートが無い日常業務操作 = 社内 C2。
- *   /v1/akebono は F-16 機能キー対象外 = 業態×アプリ設定で制御。routes/akebono.ts と同判断）。
+ * - 認可: 参照・書込とも認証済み全員（モックの各画面に管理者ゲートが無い日常業務操作 = 社内 C2）。
+ *   /v1/akebono は **featureGuard 'akebono'（F-16 = PATH_FEATURES）の対象**（機能 deny で全体を遮断できる
+ *   安全側。個別アプリの表示制御は業態×アプリ設定 = クライアント側）。
  * - 伝票コード（PO-0001 等）は akebono_doc_seqs の単一 UPDATE で原子的に採番（並行安全）。
  *   行 id はヘッダ id + index（モックと同形 = 全域一意。ヘッダ id は uuid のため衝突しない）。
  * - エラーコードはモック composable と同一の AKO-PRD/POR/MFG/INB/PCH/OUT/INV 系を使用（台帳 = api-design §4）
@@ -95,6 +96,19 @@ async function balanceOf(db: pg.Pool | pg.PoolClient, skuId: string, warehouseId
     `SELECT SUM(qty)::int AS sum FROM inventory_transactions WHERE sku_id = $1 AND warehouse_id = $2`,
     [skuId, warehouseId])
   return rows[0]?.sum ?? 0
+}
+
+/**
+ * 在庫の check-then-act 直列化（レビュー C-1）。残高チェック → 台帳追記の間に並行トランザクションが
+ * 同一 SKU × 倉庫へ出庫すると不変条件（残高 ≥ 0 前提のチェック）を突破できるため、
+ * pg_advisory_xact_lock（トランザクション終了で自動解放）でキー単位に直列化する。
+ * キーは重複排除 + ソートして取得順を全呼び出しで一致させる（デッドロック防止）
+ */
+async function lockInventoryKeys(db: pg.PoolClient, keys: { skuId: string; warehouseId: string }[]): Promise<void> {
+  const uniq = [...new Set(keys.map(k => `inv:${k.skuId}::${k.warehouseId}`))].sort()
+  for (const key of uniq) {
+    await db.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [key])
+  }
 }
 
 interface QtyLine { skuId: string; qty: number }
@@ -316,9 +330,18 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
     app.post(`/products/:id/${action}`, async (c) => {
       const user = c.get('user')
       const id = c.req.param('id')
-      const { rowCount } = await pool.query(
-        `UPDATE products SET active = $2, updated_at = now() WHERE id = $1`, [id, active])
-      if (rowCount === 0) throw err('AKO-GEN-002', '対象が見つかりません', 404)
+      try {
+        const { rowCount } = await pool.query(
+          `UPDATE products SET active = $2, updated_at = now() WHERE id = $1`, [id, active])
+        if (rowCount === 0) throw err('AKO-GEN-002', '対象が見つかりません', 404)
+      } catch (e) {
+        // 復元は部分一意（segment × code × active）と衝突しうる（無効化後に同コードで再登録 →
+        // 復元で 23505 = 500 になっていた。media_articles restore と同じ 409 + 対処案内。レビュー C-3）
+        if ((e as { code?: string }).code === '23505') {
+          throw err('AKO-PRD-002', '同じ商品コードの有効な商品が既に存在するため復元できません（どちらかのコードを変更してから復元してください）', 409)
+        }
+        throw e
+      }
       await audit(pool, { actorId: user.id, action: 'update', entity: 'products', entityId: id, detail: active ? '商品を復元' : '商品を無効化' })
       return c.json({ data: { id } })
     })
@@ -879,9 +902,11 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
         await requireRef(db, 'warehouses', warehouseId, '倉庫')
         if (companyId) await requireRef(db, 'companies', companyId, '出荷先')
       }
-      // 在庫不足チェック（同一 SKU 複数行の合計で判定 = モックと同一）
+      // 在庫不足チェック（同一 SKU 複数行の合計で判定 = モックと同一）。
+      // チェック → 出庫追記を advisory lock で直列化（並行出荷による残高マイナス防止 = C-1）
       const neededBySku = new Map<string, number>()
       for (const l of lines) neededBySku.set(l.skuId, (neededBySku.get(l.skuId) ?? 0) + l.qty)
+      await lockInventoryKeys(db, [...neededBySku.keys()].map(skuId => ({ skuId, warehouseId: warehouseId! })))
       for (const [skuId, need] of neededBySku) {
         if ((await balanceOf(db, skuId, warehouseId!)) < need) {
           throw err('AKO-OUT-004', '出荷元の在庫が不足しています', 409)
@@ -985,6 +1010,10 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
     await requireRef(pool, 'warehouses', toWarehouseId, '移動先倉庫')
     const refLineId = newId('trf')
     await inTxn(pool, async (db) => {
+      // チェック → 追記を advisory lock で直列化（C-1。出入両キーをソート取得 = デッドロック防止）
+      await lockInventoryKeys(db, [
+        { skuId, warehouseId: fromWarehouseId }, { skuId, warehouseId: toWarehouseId },
+      ])
       if ((await balanceOf(db, skuId, fromWarehouseId)) < qty) {
         throw err('AKO-INV-004', '移動元の在庫が不足しています', 409)
       }
@@ -1018,6 +1047,8 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
     await requireRef(pool, 'warehouses', warehouseId, '倉庫')
     await requireSkus(pool, counts)
     const adjusted = await inTxn(pool, async (db) => {
+      // 理論在庫の読取り → 差分計上を advisory lock で直列化（C-1）
+      await lockInventoryKeys(db, counts.map(cnt => ({ skuId: cnt.skuId, warehouseId })))
       const entries: InventoryPostEntry[] = []
       for (const cnt of counts) {
         const diff = cnt.actualQty - (await balanceOf(db, cnt.skuId, warehouseId))
