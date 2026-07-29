@@ -369,6 +369,20 @@ OAuth クライアントの「承認済みのリダイレクト URI」とアプ�
 旧形式 `*-an.a.run.app` と新形式 `*-<番号>.<region>.run.app` があり、フロントの API_BASE_URL と同じ形式で
 登録すること。末尾スラッシュ・http/https の違いも不一致になる）。登録後の反映に数分かかる場合がある。
 
+### メディア分析: 「内訳の取得に失敗」「一部の内訳（…）の取得に失敗」/ 月次トレンドの取得失敗
+
+内訳（日別・チャネル・デバイス・記事別）は 5 レポートの batchRunReports で取得し、バッチが失敗した場合は
+**レポート単位の個別リトライが自動で走る**（取れた内訳だけ表示され、失敗した内訳名のみが warning に出る）。
+warning・エラーメッセージの末尾に **「GA 応答: …」として Google Analytics の実エラー理由**が表示されるので、
+まずそれを読む（本番障害 2026-07-29 対策）。さらに詳しい生エラーは Cloud Run ログの
+`ga batchRunReports failed:` / `ga runReport failed:` 行（HTTP ステータス + エラーボディ先頭 300 字）で確認する。
+
+| GA 応答の典型 | 原因と対処 |
+|---|---|
+| `Quota exceeded` / HTTP 429 | Data API のクォータ超過。時間をおいて再試行（集計は 30 分キャッシュされるため通常運用でクォータには達しにくい） |
+| `... to make the request compatible` / HTTP 400 | 次元 × 指標の互換性違反。失敗した内訳名から該当レポートを特定し、`api/src/routes/media.ts` の detailDefs を見直す |
+| タイムアウト（timeout / aborted） | 内訳・月次は 25 秒でタイムアウトする。大規模プロパティで常態化する場合は期間（days）を狭めて確認 |
+
 ### カレンダー連携: 連携は成功するが「Google から同期」が失敗する
 
 典型原因は GCP プロジェクトで **Google Calendar API が未有効化**（OAuth のトークン交換は Calendar API

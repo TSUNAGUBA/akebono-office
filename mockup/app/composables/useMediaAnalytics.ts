@@ -171,9 +171,14 @@ export function useMediaAnalytics() {
     })
   }
 
-  /** API: メトリクスのロードが完了したか（null 格納 = 失敗も「完了」。ローディング表示の判定用） */
+  /** API: メトリクスのロードが完了したか（null 格納 = 失敗も「完了」。ローディング表示の判定用）。
+   * 状態判定もロードを**起動**する（読取り = 遅延ロードのイディオム）: analytics.vue の v-else-if 連鎖は
+   * ローディング分岐で短絡し、コンテンツ分岐（metricsFor 評価 = 従来唯一の起動点）に到達しないため、
+   * 判定だけ読んでロードが始まらない「スピナー永続」のデッドロックになる（本番障害 2026-07-29）。
+   * apiLoadOnce の一度きりセマンティクスは維持（失敗確定後の自動再試行はしない = M1 の封止不変） */
   function metricsReady(segmentId: string, days = 28): boolean {
     if (!isApi) return true
+    void loadMediaMetrics(segmentId, days)
     return `${segmentId}:${days}` in apiMetrics.value
   }
 
@@ -283,11 +288,14 @@ export function useMediaAnalytics() {
   }
 
   /** API: 統合メトリクスのメディア側（GA 月次）が**取得成功して**確定しているか（未連携は「確定」扱い = 0 が正。
-   * 取得失敗（null）は ready にしない = 0 表示・0 由来のインサイト生成を防ぐ。M1） */
+   * 取得失敗（null）は ready にしない = 0 表示・0 由来のインサイト生成を防ぐ。M1）。
+   * metricsReady と同じく状態判定がロードを起動する（PDCA タブのローディング分岐は本関数しか読まず、
+   * integrated computed（mediaMonthlyFor 経由の従来唯一の起動点）が評価されないため。本番障害 2026-07-29） */
   function integratedReady(segmentId: string, monthsCount = 6): boolean {
     if (!isApi) return true
     const status = settingFor(segmentId)
     if (status?.gaConnected !== true) return true
+    void loadMediaMonthly(segmentId, monthsCount)
     const v = apiMonthly.value[`${segmentId}:${monthsCount}`]
     return v !== undefined && v !== null
   }

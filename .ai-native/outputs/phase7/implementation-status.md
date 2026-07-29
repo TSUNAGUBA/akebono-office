@@ -612,6 +612,13 @@
 - [x] 指摘2: ページ別レポートは (pagePath, pageTitle) 組ごとに複数行で返るため、**正規化 path で集約してから** MediaPageStat 化（重複エントリ・セクション記事数の水増し・prevPageviews の重複割当を解消。タイトルは PV 最大行を代表値・直帰率は PV 加重平均。users は組合算の近似 = 設計判断をコメント化）。回帰テスト追加（ga-report 20 件）
 - [x] 指摘3: セクション集計は「サイト全体の内訳」のため、ページ別レポートの limit を 50 → 10000 へ（前期比突合の prevPages も 200 → 10000）。表示上限は整形側の topPages slice(12) が担い、レスポンス・キャッシュ（media_metrics_cache）には整形後 MediaMetrics のみが載るためサイズ影響は軽微。10000 組超の超ロングテールは打ち切り許容（PV 降順・コメント化）
 
+### 37-3c 本番障害対応（PR #80 マージ後の実環境・2026-07-29。オペレーター報告）
+- 症状: ①メディア分析タブに「内訳の取得に失敗したため総計のみ表示」が常態化 ②PDCA タブの「月次トレンドを取得中…」が永続
+- [x] 根本原因②（確定 = フロントのロード起動デッドロック）: analytics.vue の v-else-if 連鎖はローディング分岐で短絡し、ロードの唯一の起動点だったコンテンツ分岐（metricsFor / integrated computed）が評価されない → ロード未発火でスピナー永続。**状態判定関数（metricsReady / integratedReady）自身が遅延ロードを起動する**よう修正（読取り = 遅延ロードの既存イディオムへ統一。apiLoadOnce の一度きりセマンティクス維持 = M1 の無限リトライ封止は不変。訪問順・タブ順への依存を排除）。他画面（/media ハブ・ダッシュボード）は metricsFor / ensureIntegratedLoaded 経由で起動済みであることを点検
+- [x] 根本原因①（有力因子 = 内訳バッチの all-or-nothing + タイムアウト予算）: 内訳 5 レポートは 1 バッチ同梱のため 1 レポートの問題（互換性 400・クォータ 429・タイムアウト）で全滅する。limit 10000 × 2 を含む内訳は総計より重く 15 秒では不足しうる（メトリクス名は全て正規と検証済み: entrances / bounceRate × pagePath 等の互換性も公式ガイド実例で確認 = 憶測での削除はしない）。対策 = **自己診断・自己回復設計**: ①バッチ失敗時は各レポートを個別 runReport で並行リトライし、取れた内訳だけ表示 + 失敗した内訳名のみ warning に列挙（原則4 の粒度を per-report へ）②GA の実エラー理由（error.message 先頭 150 字）を warning / エラーメッセージへ付加（gaErrorDetailOf。従来はサーバーログのみで画面から原因が見えなかった）③内訳・月次のタイムアウトを 15s → 25s（総計は 15s のまま）
+- [x] 検証: api 単体 160（gaErrorDetailOf 4 件追加）/ 統合 163 / mockup 単体 148 / typecheck・build 全 green。deploy-guide §4 トラブルシュートへ「画面 warning の GA 応答 + Cloud Run ログの `ga batchRunReports failed:` / `ga runReport failed:` 行で生エラーを確認」を追記
+- 既知の制約: ②のロード起動はテンプレート短絡に依存しない設計へ変えたが、composable の API モード分岐は単体テスト基盤（純関数のみ）の対象外 = 実クリック e2e の領域（N1 と同じ判断）
+
 ### 37-4 検証・残課題
 - [x] 検証（レビュー修正後の再実行）: api 単体 **156**（ga-report 20 + media-routes 24 を新設）/ api 統合 **163**（メディア 7 スイート = 部分更新の保持・重複登録/復元衝突・生成→採用→取消→復元・統合インサイト upsert + 受領検証・GA 未設定経路）/ mockup 単体 148 / typecheck（api・mockup）/ mockup build 全 green
 - [ ] 残課題: 統合メトリクスの売上月次・F-41 ダッシュボード保管（dashboardInsights）・businessSegments/salesRecords の API 移行(移行時に /v1/media/integrated のサーバー組み立てへ引き上げ = 売上軸の改ざん耐性限界も解消)。GA プロパティのタイムゾーンが JST 以外の場合の日単位ずれは許容（lib/ga.ts に設計判断を文書化）。記事インベントリ手動登録の専用 UI（現状は管理者 API + curl = deploy-guide §1-9b）
