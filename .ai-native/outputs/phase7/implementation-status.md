@@ -717,3 +717,14 @@
 - [x] **A2（minor・原則5）**: 「/v1/akebono は F-16 対象外」という実挙動（PATH_FEATURES で featureGuard 'akebono' の対象 = 安全側）と逆の記述 3 箇所（akebono-trade.ts ヘッダ・api-design §3・本書 §39-2）を訂正。実在しない「akebono.ts と同判断」引用も削除
 - [x] **A3（minor）**: §37-4 残課題行へ Phase C 完了を反映（サーバー組み立て化・M2 限界解消・016 欠番）
 - [x] 検証: api 単体 174 / 統合 **184**（レビュー対応 5 スイート新設 = C-1a 並行出荷・C-1b 一意 INDEX + 並行締め・C-2 入金ガード/取消/再入金・C-3 復元衝突）/ mockup 148・typecheck・build 全 green
+
+### 39-8 反復レビュー（外部ボット PR #84 Codex・P1×3・P2×1 = **スケール境界の取得ロジック** → 全件採用）
+> 全指摘とも本番規模（仕入 > 500 件・台帳/売上 > 2 万件）で顕在化する「取得窓に依存した誤集計」。
+> オペレーターには「小規模デモでは正しく見えるのにデータが育つと金額・残高がずれる」形で影響するため、
+> 取得ロジックを**窓非依存**へ是正した。migration **0034**（GIN）追加。
+- [x] **P1-1（作家支払の原価解決が全 SKU 横断の直近 500 件窓）**: `resolveUnitCost`（purchase_cost 方式）が仕入を「全 SKU 横断で `ORDER BY purchase_date DESC, id DESC LIMIT 500`」で取ってから JS 走査していたため、仕入総数が 500 を超えると対象 SKU の直近仕入が窓外へ落ち標準原価へ誤フォールバック = **作家支払額が誤った**。SQL を **`lines @> [{"skuId":…}]::jsonb` で対象 SKU を含む明細に絞り最新 1 件**へ是正（モックの全走査と窓非依存で一致）。**0034** = `purchase_records.lines` の GIN（`jsonb_path_ops`）で本番規模の全 SKU スキャンを回避
+- [x] **P1-2（在庫台帳 LIMIT 20000 の打ち切りが残高を壊す）**: `GET /inventory-transactions` は表示用の直近明細（LIMIT 20000）だが、フロントはこの明細を `foldBalances` で畳んで残高としていたため、台帳が 2 万行を超えると期首在庫・過去の移動が残高・棚卸入力から消えた。**`GET /inventory-balances`（GROUP BY sku_id, warehouse_id の Σqty・全量集約・0 残高は HAVING で除外）を新設**し、API モードの `useInventory` は「残高 = サーバー集約値・明細 = 表示用」に分離（`balanceOf`/`totalOf`/`balancesOfWarehouse`）。実績書込の reload に `inventoryBalances` を追加（SoT → キャッシュ = 原則6）。**モックモードは従来どおり全件ローカル `foldBalances`（不変）**
+- [x] **P1-3（統合メトリクスの売上取得が無順序 LIMIT 20000）**: `/v1/media/integrated` が売上を無順序 `LIMIT 20000` で取ってから `foldBusinessMonthly` に渡すため、2 万件超のセグメントで任意の部分集合になり売上総額・受注数・赤黒ペアリング・PDCA が誤った。**対象月窓（periodFrom〜periodTo）に絞って取得**へ是正。ただし赤黒訂正は「元伝票の計上月」へ帰属する意味論のため、`LEFT JOIN` で `COALESCE(元伝票.sales_date, 自身.sales_date)` が窓内の行を取る（**窓内の元伝票を offset する訂正は訂正日が当月=窓外でも拾う / 元伝票が窓外の訂正は帰属月も窓外で取得せず = 元不明フォールバックの暴発防止**）。`foldBusinessMonthly` の意味論は不変
+- [x] **P2-4（商品 PATCH が segmentId を無視 = モックと乖離）**: `productPatchOf` が作成時のみ segmentId をコピーし PATCH では無視 → 成功を返すのに旧セグメントのまま（モックは反映 = 乖離）。PATCH でも `Object.hasOwn` で受理 + 参照セグメントの存在検証（requireRef）を追加。別セグメントへの移動で同コード衝突 = 部分一意 INDEX (segment_id, code) WHERE active → 23505 → **AKO-PRD-002 409**（POST/restore と同型・文言をコード変更/移動の双方を案内する形に更新）
+- [x] **回帰テスト（スケール境界を小規模フィクスチャで決定的に検証）**: P1-1 = 対象 SKU の直近仕入を「別 SKU の新しい仕入の後」に置き作家支払 = 仕入単価 650×2=1300（標準原価 900 フォールバックなら 1800）で窓非依存を確認 / P1-2 = `inventory-balances` の Σ集約一致・0 残高非返却 / P1-3 = 元伝票が窓内・訂正日が当月（窓外）の赤黒が元月へ帰属して相殺（訂正日で単純フィルタする回帰なら 7000/2 件になる） / P2-4 = PATCH で segmentId 反映・不存在は 404・移動先の同コードは 409
+- [x] 検証: api 単体 174 / 統合 **188**（Codex 4 スイート新設 = P1-1 原価窓非依存・P1-2 残高集約・P1-3 統合メトリクス月窓 + 赤黒元月帰属・P2-4 segmentId PATCH）/ mockup 単体 148 / typecheck（api・mockup）・build 全 green

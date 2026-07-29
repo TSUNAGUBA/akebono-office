@@ -28,9 +28,23 @@ export function useInventory() {
   const { tbl, commit, nextId } = useMockDb()
   const txns = tbl('inventoryTransactions')
   const isApi = useApiMode()
+  // 残高の母集団: API モードは**サーバー集約**（inventory-balances = 全量 Σqty）を使う。
+  // 台帳明細（txns = inventory-transactions）は表示用で LIMIT 打ち切りがあり、2 万行を超えると
+  // 期首在庫・過去の移動が残高から消える（Codex P1-2）。モックモードは従来どおり台帳を
+  // foldBalances でローカル集約（全件ローカル = 不変）。書込後は各実績経路が inventoryBalances も再取得する。
+  const serverBalances = isApi
+    ? apiCollection<{ skuId: string; warehouseId: string; qty: number }>('inventoryBalances')
+    : null
 
-  /** SKU × 倉庫 の残高マップ（台帳から導出） */
-  const balances = computed(() => foldBalances(txns.value))
+  /** SKU × 倉庫 の残高マップ（API = サーバー集約 / モック = 台帳から導出） */
+  const balances = computed(() => {
+    if (serverBalances) {
+      const map = new Map<string, number>()
+      for (const b of serverBalances.value) map.set(balanceKey(b.skuId, b.warehouseId), b.qty)
+      return map
+    }
+    return foldBalances(txns.value)
+  })
 
   function balanceOf(skuId: string, warehouseId: string): number {
     return balances.value.get(balanceKey(skuId, warehouseId)) ?? 0
@@ -38,11 +52,17 @@ export function useInventory() {
 
   /** SKU の全倉庫合計 */
   function totalOf(skuId: string): number {
+    if (serverBalances) return serverBalances.value.filter(b => b.skuId === skuId).reduce((s, b) => s + b.qty, 0)
     return txns.value.filter(t => t.skuId === skuId).reduce((s, t) => s + t.qty, 0)
   }
 
   /** 倉庫内の SKU 別残高（0 は除外） */
   function balancesOfWarehouse(warehouseId: string): { skuId: string; qty: number }[] {
+    if (serverBalances) {
+      return serverBalances.value
+        .filter(b => b.warehouseId === warehouseId && b.qty !== 0)
+        .map(b => ({ skuId: b.skuId, qty: b.qty }))
+    }
     const map = new Map<string, number>()
     for (const t of txns.value) {
       if (t.warehouseId !== warehouseId) continue
@@ -110,7 +130,7 @@ export function useInventory() {
     if (!Number.isFinite(input.qty) || input.qty === 0) {
       return { ok: false, error: { code: 'AKO-INV-002', message: '調整数量は 0 以外で指定してください' } }
     }
-    if (isApi) return apiWrite('/v1/akebono/inventory/adjust', { body: input, reload: ['inventoryTransactions'] })
+    if (isApi) return apiWrite('/v1/akebono/inventory/adjust', { body: input, reload: ['inventoryTransactions', 'inventoryBalances'] })
     const refLineId = nextRefLineId('adj')
     post([{ ...input, kind: 'adjust', refType: 'adjust', refLineId }])
     return { ok: true, id: refLineId }
@@ -124,7 +144,7 @@ export function useInventory() {
     if (!Number.isFinite(input.qty) || input.qty <= 0) {
       return { ok: false, error: { code: 'AKO-INV-002', message: '移動数量は 1 以上で指定してください' } }
     }
-    if (isApi) return apiWrite('/v1/akebono/inventory/transfer', { body: input, reload: ['inventoryTransactions'] })
+    if (isApi) return apiWrite('/v1/akebono/inventory/transfer', { body: input, reload: ['inventoryTransactions', 'inventoryBalances'] })
     if (balanceOf(input.skuId, input.fromWarehouseId) < input.qty) {
       return { ok: false, error: { code: 'AKO-INV-004', message: '移動元の在庫が不足しています' } }
     }
@@ -141,7 +161,7 @@ export function useInventory() {
   async function stocktake(warehouseId: string, counts: { skuId: string; actualQty: number }[]): Promise<Result & { adjusted?: number }> {
     if (isApi) {
       const res = await apiWrite<{ adjusted: number }>('/v1/akebono/inventory/stocktake', {
-        body: { warehouseId, counts }, reload: ['inventoryTransactions'],
+        body: { warehouseId, counts }, reload: ['inventoryTransactions', 'inventoryBalances'],
       })
       return res.ok ? { ok: true, adjusted: res.data.adjusted } : res
     }

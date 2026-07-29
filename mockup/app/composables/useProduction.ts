@@ -64,7 +64,7 @@ export function useProduction() {
   async function registerResult(id: string, input: { completedQty: number; defectQty: number }): Promise<Result> {
     if (isApi) {
       const res = await apiWrite<ProductionOrder>(`/v1/akebono/production-orders/${id}/results`, {
-        body: input, reload: ['productionOrders', 'inventoryTransactions'],
+        body: input, reload: ['productionOrders', 'inventoryTransactions', 'inventoryBalances'],
       })
       return res.ok ? { ok: true, id: res.data.id } : res
     }

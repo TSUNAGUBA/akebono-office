@@ -81,7 +81,7 @@ export function useOutbound() {
   async function registerResult(input: { planId?: string | null; warehouseId?: string; companyId?: string | null; lines: { planLineId?: string | null; skuId: string; qty: number }[] }): Promise<Result> {
     if (isApi) {
       const res = await apiWrite<OutboundResult>('/v1/akebono/outbound-results', {
-        body: input, reload: ['outboundResults', 'inventoryTransactions', 'outboundPlans'],
+        body: input, reload: ['outboundResults', 'inventoryTransactions', 'inventoryBalances', 'outboundPlans'],
       })
       return res.ok ? { ok: true, id: res.data.id } : res
     }

@@ -215,6 +215,9 @@ const CUSTOM_COLLECTION_ENDPOINTS: Record<string, string> = {
   outboundPlans: '/v1/akebono/outbound-plans',
   outboundResults: '/v1/akebono/outbound-results',
   inventoryTransactions: '/v1/akebono/inventory-transactions',
+  // 在庫残高（全量集約）: 台帳明細（inventoryTransactions）は表示打ち切りありのため、残高は
+  // サーバー集約値を別途ハイドレーションする（明細打ち切りに依らず正しい残高 = Codex P1-2）
+  inventoryBalances: '/v1/akebono/inventory-balances',
   salesRecords: '/v1/akebono/sales-records',
   invoices: '/v1/akebono/invoices',
   paymentNotices: '/v1/akebono/payment-notices',

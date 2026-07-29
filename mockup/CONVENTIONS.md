@@ -107,7 +107,8 @@ const apps = useAkebonoApps()   // isAppEnabled / appsForSegment / setEnabled・
 const its = useItemSettings()   // resolve(entity) / upsert（渡したキーのみ更新）/ resetEntity（カタログ既定へ戻す取消フロー = 原則9.5)
 
 // Akebono 記録系（F-21〜F-29。Phase C で API 永続化 = /v1/akebono/*。書込はすべて async = Promise<Result>。
-// 記録系は追記のみ・訂正は赤黒/赤伝・在庫の SoT = inventoryTransactions（残高は foldBalances で導出）。
+// 記録系は追記のみ・訂正は赤黒/赤伝・在庫の SoT = inventoryTransactions（残高はモック = foldBalances で導出・
+// API = サーバー全量集約 GET /inventory-balances = 台帳明細の表示打ち切りに依らず正しい残高 = Codex P1-2）。
 // 金額算定（税・委託精算）は shared/domain/akebono の純関数を API と共有）
 const prod = useProducts()      // saveProduct（既定 SKU 自動生成）/ saveMatrix / addImage / archive・restore 系
 const inv2 = useInventory()     // balanceOf / ledgerOf / adjust / transfer / stocktake（post はモック専用）

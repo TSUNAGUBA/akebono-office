@@ -4530,3 +4530,152 @@ describe('Phase C レビュー 1 巡目: 並行性ガード（C-1）・入金取
     expect(restore.json.error?.code).toBe('AKO-PRD-002')
   })
 })
+
+describe('Phase C レビュー 2 巡目（外部ボット PR #84 Codex・P1×3・P2×1 = スケール境界の取得ロジック）', () => {
+  // 直前の完了月（統合メトリクス = /media/integrated?months=6 の対象月・当月は endBackMonths=1 で窓外）
+  const prevMonth = (() => {
+    const t = todayJst()
+    const y = Number(t.slice(0, 4))
+    const m = Number(t.slice(5, 7))
+    const pm = m === 1 ? 12 : m - 1
+    return `${m === 1 ? y - 1 : y}-${String(pm).padStart(2, '0')}`
+  })()
+
+  it('P1-1: 委託精算の原価解決は仕入総数の窓に依らない（対象 SKU の直近仕入が「他 SKU の新しい仕入」の後でも拾う）', async () => {
+    const store = await api('POST', '/v1/masters/companies', { as: ADMIN, body: { name: 'Codex 店', partnerRoles: ['store', 'customer'] } })
+    const storeId = (store.json.data as { id: string }).id
+    const artist = await api('POST', '/v1/masters/companies', { as: ADMIN, body: { name: 'Codex 作家', partnerRoles: ['consignor_artist'] } })
+    const artistId = (artist.json.data as { id: string }).id
+
+    // 対象商品（標準原価 900 = フォールバック値。SKU 原価は null なので仕入実績が無いと 900 になる）
+    const prod = await api('POST', '/v1/akebono/products', {
+      as: MEMBER, body: { code: 'PC-TARGET', name: '原価対象', segmentId: 'seg-03', standardCost: 900, defaultSupplierCompanyId: artistId, taxRateId: 'tax-10' },
+    })
+    const targetProductId = (prod.json.data as { id: string }).id
+    const other = await api('POST', '/v1/akebono/products', {
+      as: MEMBER, body: { code: 'PC-OTHER', name: '別SKU', segmentId: 'seg-03', standardCost: 100 },
+    })
+    const otherProductId = (other.json.data as { id: string }).id
+    const skus = (await api('GET', '/v1/akebono/product-skus', { as: MEMBER })).json.data as { id: string; productId: string }[]
+    const targetSkuId = skus.find(s => s.productId === targetProductId)!.id
+    const otherSkuId = skus.find(s => s.productId === otherProductId)!.id
+
+    // 対象 SKU の仕入（古い日付・costPrice 650）
+    expect((await api('POST', '/v1/akebono/purchase-records', {
+      as: MEMBER, body: { companyId: artistId, segmentId: 'seg-03', purchaseDate: '2026-02-01', purchaseType: 'consignment', lines: [{ skuId: targetSkuId, qty: 10, costPrice: 650 }] },
+    })).status).toBe(201)
+    // 別 SKU の仕入を「対象より新しい日付」で複数投入（旧実装 = 全 SKU 横断の直近 N 件窓なら対象を押し出す配置）
+    for (let i = 0; i < 5; i++) {
+      expect((await api('POST', '/v1/akebono/purchase-records', {
+        as: MEMBER, body: { companyId: artistId, segmentId: 'seg-03', purchaseDate: todayJst(), purchaseType: 'outright', lines: [{ skuId: otherSkuId, qty: 1, costPrice: 111 }] },
+      })).status).toBe(201)
+    }
+
+    // 委託条件: 店舗 30% / 作家 = purchase_cost（仕入単価 × 数量）
+    expect((await api('POST', '/v1/masters/consignment-terms', {
+      as: ADMIN, body: { companyId: storeId, segmentId: 'seg-03', role: 'store', marginRate: 0.30, taxRateId: 'tax-10', validFrom: '2026-01-01' },
+    })).status).toBe(201)
+    expect((await api('POST', '/v1/masters/consignment-terms', {
+      as: ADMIN, body: { companyId: artistId, segmentId: 'seg-03', role: 'consignor_artist', payoutMethod: 'purchase_cost', taxRateId: 'tax-10', validFrom: '2026-01-01' },
+    })).status).toBe(201)
+
+    // 対象 SKU の店舗売上（精算対象・qty>0・未請求）
+    expect((await api('POST', '/v1/akebono/sales-records', {
+      as: MEMBER, body: { salesDate: `${prevMonth}-10`, companyId: storeId, segmentId: 'seg-03', skuId: targetSkuId, qty: 2, unitPrice: 3000 },
+    })).status).toBe(201)
+
+    const close = await api('POST', '/v1/akebono/consignment/close', { as: MEMBER, body: { segmentId: 'seg-03', month: prevMonth } })
+    expect(close.status).toBe(201)
+    const notices = (await api('GET', '/v1/akebono/payment-notices', { as: MEMBER })).json.data as { segmentId: string; payableAmount: number }[]
+    const notice = notices.find(n => n.segmentId === 'seg-03')!
+    // 作家支払 = 仕入単価 650 × 数量 2 = 1300。標準原価 900 へ誤フォールバックすると 1800。
+    // 対象 SKU の直近仕入が「別 SKU の新しい仕入行の後」にあっても lines @> 絞り込みで 650 を拾う（窓非依存）
+    expect(notice.payableAmount).toBe(1300)
+  })
+
+  it('P1-2: 在庫残高はサーバー全量集約（inventory-balances）= 台帳明細の表示打ち切りに依らず正しい・0 残高は返さない', async () => {
+    const prod = await api('POST', '/v1/akebono/products', { as: MEMBER, body: { code: 'BAL-1', name: '残高品', segmentId: 'seg-03' } })
+    const pid = (prod.json.data as { id: string }).id
+    const skuId = ((await api('GET', '/v1/akebono/product-skus', { as: MEMBER })).json.data as { id: string; productId: string }[])
+      .find(s => s.productId === pid)!.id
+
+    // 入庫 100 + 微小調整 6 件（明細行を増やす）+ 移動 5（wh-01 → wh-02）
+    expect((await api('POST', '/v1/akebono/inbound-results', { as: MEMBER, body: { warehouseId: 'wh-01', lines: [{ skuId, qty: 100 }] } })).status).toBe(201)
+    for (let i = 0; i < 6; i++) {
+      expect((await api('POST', '/v1/akebono/inventory/adjust', { as: MEMBER, body: { skuId, warehouseId: 'wh-01', qty: 1, reason: 'found' } })).status).toBe(201)
+    }
+    expect((await api('POST', '/v1/akebono/inventory/transfer', { as: MEMBER, body: { skuId, fromWarehouseId: 'wh-01', toWarehouseId: 'wh-02', qty: 5 } })).status).toBe(201)
+
+    const balances = (await api('GET', '/v1/akebono/inventory-balances', { as: MEMBER })).json.data as { skuId: string; warehouseId: string; qty: number }[]
+    const w1 = balances.find(b => b.skuId === skuId && b.warehouseId === 'wh-01')
+    const w2 = balances.find(b => b.skuId === skuId && b.warehouseId === 'wh-02')
+    expect(w1?.qty).toBe(101) // 100 + 6 − 5
+    expect(w2?.qty).toBe(5)
+    // 全量集約は台帳明細（表示用）の Σ と一致する（打ち切りの無い小規模では両者一致 = 集約の正しさ確認）
+    const txns = (await api('GET', '/v1/akebono/inventory-transactions', { as: MEMBER })).json.data as { skuId: string; warehouseId: string; qty: number }[]
+    const foldW1 = txns.filter(t => t.skuId === skuId && t.warehouseId === 'wh-01').reduce((s, t) => s + t.qty, 0)
+    expect(w1?.qty).toBe(foldW1)
+
+    // 残高 0 のキーは返さない（HAVING SUM(qty) <> 0）: +3 → −3
+    const prod0 = await api('POST', '/v1/akebono/products', { as: MEMBER, body: { code: 'BAL-0', name: 'ゼロ品', segmentId: 'seg-03' } })
+    const pid0 = (prod0.json.data as { id: string }).id
+    const skuId0 = ((await api('GET', '/v1/akebono/product-skus', { as: MEMBER })).json.data as { id: string; productId: string }[])
+      .find(s => s.productId === pid0)!.id
+    expect((await api('POST', '/v1/akebono/inventory/adjust', { as: MEMBER, body: { skuId: skuId0, warehouseId: 'wh-01', qty: 3, reason: 'found' } })).status).toBe(201)
+    expect((await api('POST', '/v1/akebono/inventory/adjust', { as: MEMBER, body: { skuId: skuId0, warehouseId: 'wh-01', qty: -3, reason: 'lost' } })).status).toBe(201)
+    const balances2 = (await api('GET', '/v1/akebono/inventory-balances', { as: MEMBER })).json.data as { skuId: string; warehouseId: string }[]
+    expect(balances2.find(b => b.skuId === skuId0 && b.warehouseId === 'wh-01')).toBeUndefined()
+  })
+
+  it('P1-3: 統合メトリクスは対象月窓で取得し、赤黒訂正（元伝票が窓内・訂正日は当月=窓外）を元月へ帰属して相殺する', async () => {
+    const store = await api('POST', '/v1/masters/companies', { as: ADMIN, body: { name: 'Codex 統合店', partnerRoles: ['store', 'customer'] } })
+    const storeId = (store.json.data as { id: string }).id
+    const prod = await api('POST', '/v1/akebono/products', { as: MEMBER, body: { code: 'INT-1', name: '統合品', segmentId: 'seg-04', standardCost: 0 } })
+    const pid = (prod.json.data as { id: string }).id
+    const skuId = ((await api('GET', '/v1/akebono/product-skus', { as: MEMBER })).json.data as { id: string; productId: string }[])
+      .find(s => s.productId === pid)!.id
+
+    // 対象月（窓内）に 2 件。うち 1 件を赤黒訂正（訂正行の salesDate = 当月 = 窓外）
+    const s1 = await api('POST', '/v1/akebono/sales-records', {
+      as: MEMBER, body: { salesDate: `${prevMonth}-10`, companyId: storeId, segmentId: 'seg-04', skuId, qty: 1, unitPrice: 5000 },
+    })
+    const s1Id = (s1.json.data as { id: string }).id
+    expect((await api('POST', '/v1/akebono/sales-records', {
+      as: MEMBER, body: { salesDate: `${prevMonth}-12`, companyId: storeId, segmentId: 'seg-04', skuId, qty: 1, unitPrice: 2000 },
+    })).status).toBe(201)
+    const corrected = await api('POST', `/v1/akebono/sales-records/${s1Id}/correct`, { as: MEMBER })
+    expect(corrected.status).toBe(201)
+    // 訂正行の salesDate は当月（= 窓外）。元伝票（prevMonth）の月へ帰属して相殺されなければならない
+    expect((corrected.json.data as { salesDate: string }).salesDate.slice(0, 7)).not.toBe(prevMonth)
+
+    const res = await api('GET', '/v1/media/integrated?segmentId=seg-04&months=6', { as: MEMBER })
+    expect(res.status).toBe(200)
+    const data = res.json.data as { metrics: { periodMonth: string; salesAmount: number; orders: number } }
+    expect(data.metrics.periodMonth).toBe(prevMonth)
+    // 5000 − 5000（訂正を元月 prevMonth へ帰属して相殺）+ 2000 = 2000・件数 = 2 − 1 = 1。
+    // 訂正行の salesDate（当月 = 窓外）で単純に月フィルタすると相殺行が落ち 7000 / 2 件になる回帰を検出する
+    expect(data.metrics.salesAmount).toBe(2000)
+    expect(data.metrics.orders).toBe(1)
+  })
+
+  it('P2-4: 商品 PATCH は segmentId を反映する（参照存在検証 + 移動先の同コード衝突は AKO-PRD-002 409）', async () => {
+    const a = await api('POST', '/v1/akebono/products', { as: MEMBER, body: { code: 'MOVE-1', name: '移動品A', segmentId: 'seg-03' } })
+    const aId = (a.json.data as { id: string }).id
+    // segmentId を PATCH で更新（旧実装は無視 = 成功を返すのに旧セグメントのまま = モックと乖離）
+    const moved = await api('PATCH', `/v1/akebono/products/${aId}`, { as: MEMBER, body: { segmentId: 'seg-04' } })
+    expect(moved.status).toBe(200)
+    expect((moved.json.data as { segmentId: string }).segmentId).toBe('seg-04')
+    const listed = ((await api('GET', '/v1/akebono/products', { as: MEMBER })).json.data as { id: string; segmentId: string }[]).find(p => p.id === aId)!
+    expect(listed.segmentId).toBe('seg-04')
+    // 不存在セグメントは 404（requireRef）
+    const bad = await api('PATCH', `/v1/akebono/products/${aId}`, { as: MEMBER, body: { segmentId: 'seg-none' } })
+    expect(bad.status).toBe(404)
+    // seg-03 で同コードを再登録（A は seg-04 へ移動済み = seg-03 の MOVE-1 は空き）→ seg-04 へ移動で A と衝突
+    const d = await api('POST', '/v1/akebono/products', { as: MEMBER, body: { code: 'MOVE-1', name: '移動品D', segmentId: 'seg-03' } })
+    expect(d.status).toBe(201)
+    const dId = (d.json.data as { id: string }).id
+    const conflict = await api('PATCH', `/v1/akebono/products/${dId}`, { as: MEMBER, body: { segmentId: 'seg-04' } })
+    expect(conflict.status).toBe(409)
+    expect(conflict.json.error?.code).toBe('AKO-PRD-002')
+  })
+})

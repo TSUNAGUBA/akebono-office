@@ -39,7 +39,7 @@ export function usePurchases() {
       // 入荷管理 OFF（当該業態で）のときだけ warehouseId を送る = サーバーが在庫入庫を同時に行う
       const warehouseId = !apps.isAppEnabled('inbounds', input.segmentId) && input.warehouseId ? input.warehouseId : null
       const res = await apiWrite<PurchaseRecord>('/v1/akebono/purchase-records', {
-        body: { ...input, warehouseId, lines }, reload: ['purchaseRecords', 'inventoryTransactions'],
+        body: { ...input, warehouseId, lines }, reload: ['purchaseRecords', 'inventoryTransactions', 'inventoryBalances'],
       })
       return res.ok ? { ok: true, id: res.data.id } : res
     }
@@ -66,7 +66,7 @@ export function usePurchases() {
   async function correct(id: string): Promise<Result> {
     if (isApi) {
       const res = await apiWrite<PurchaseRecord>(`/v1/akebono/purchase-records/${id}/correct`, {
-        reload: ['purchaseRecords', 'inventoryTransactions'],
+        reload: ['purchaseRecords', 'inventoryTransactions', 'inventoryBalances'],
       })
       return res.ok ? { ok: true, id: res.data.id } : res
     }

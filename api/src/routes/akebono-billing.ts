@@ -385,14 +385,21 @@ export function akebonoBillingRoutes(pool: pg.Pool): Hono {
     return rows[0]
   }
 
-  /** purchase_cost 方式の単価解決（①直近仕入実績 → ② SKU 原価 → ③ 商品標準原価 = モックと同一） */
+  /**
+   * purchase_cost 方式の単価解決（①直近仕入実績 → ② SKU 原価 → ③ 商品標準原価 = モックと同一）。
+   * ① は**対象 SKU を含む仕入明細に SQL で絞って最新 1 件**を取る（lines jsonb の @> 包含 = 0034 GIN）。
+   * 旧実装は「全 SKU 横断の直近 500 件」を取ってから JS で走査していたため、仕入総数が 500 を
+   * 超えると対象 SKU の直近仕入が窓外へ落ち標準原価へ誤フォールバックした（Codex P1-1）。
+   * モックの resolveUnitCost（全仕入を走査し対象 SKU の最新 costPrice）と窓に依らず一致する。
+   */
   async function resolveUnitCost(db: pg.PoolClient, skuId: string): Promise<number> {
-    const { rows: prs } = await db.query<{ lines: { skuId: string; costPrice: number }[]; purchaseDate: string }>(
-      `SELECT lines, purchase_date AS "purchaseDate" FROM purchase_records ORDER BY purchase_date DESC, id DESC LIMIT 500`)
-    for (const pr of prs) {
-      const hit = pr.lines.find(l => l.skuId === skuId)
-      if (hit) return hit.costPrice
-    }
+    const { rows: prs } = await db.query<{ lines: { skuId: string; costPrice: number }[] }>(
+      `SELECT lines FROM purchase_records
+       WHERE lines @> $1::jsonb
+       ORDER BY purchase_date DESC, id DESC LIMIT 1`,
+      [JSON.stringify([{ skuId }])])
+    const hit = prs[0]?.lines.find(l => l.skuId === skuId)
+    if (hit) return hit.costPrice
     const { rows } = await db.query<{ costPrice: number | null; stdCost: number | null }>(
       `SELECT s.cost_price AS "costPrice", p.standard_cost AS "stdCost"
        FROM product_skus s LEFT JOIN products p ON p.id = s.product_id WHERE s.id = $1`, [skuId])

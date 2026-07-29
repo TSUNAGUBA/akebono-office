@@ -70,7 +70,7 @@ export function useInbound() {
   async function registerResult(input: { planId?: string | null; warehouseId?: string; lines: { planLineId?: string | null; skuId: string; qty: number }[] }): Promise<Result> {
     if (isApi) {
       const res = await apiWrite<InboundResult>('/v1/akebono/inbound-results', {
-        body: input, reload: ['inboundResults', 'inventoryTransactions', 'inboundPlans'],
+        body: input, reload: ['inboundResults', 'inventoryTransactions', 'inventoryBalances', 'inboundPlans'],
       })
       return res.ok ? { ok: true, id: res.data.id } : res
     }

@@ -675,10 +675,23 @@ async function buildIntegratedMetrics(
     `SELECT name FROM business_segments WHERE id = $1`, [segmentId])
   const { rows: setRows } = await pool.query<{ siteName: string }>(
     `SELECT site_name AS "siteName" FROM media_settings WHERE segment_id = $1`, [segmentId])
-  // 売上月次（窓外の月へ帰属する訂正は集計対象外になるだけ = フロント集計と同一挙動）
+  // 売上月次。**対象月窓に絞って取得**する（旧実装は無順序 LIMIT 20000 で、明細が 2 万件を超える
+  // セグメントでは任意の部分集合になり売上総額・受注数・赤黒ペアリングが誤った = Codex P1-3）。
+  // 窓の判定は foldBusinessMonthly の帰属月と一致させる: 通常明細は自身の売上月・**赤黒訂正は
+  // 元伝票（correctionOf 先）の計上月**へ帰属する。よって「元伝票があればその sales_date、無ければ
+  // 自身の sales_date」が窓内の行だけを取れば、窓へ寄与する行を過不足なく取得できる。
+  // - 窓内の元伝票（通常明細）を offset する訂正は、訂正日が窓外（当月に切った訂正等）でも元月で拾う
+  // - 元伝票が窓外の訂正は帰属月も窓外 = 取得されず誤って自身の月へ相殺しない（元不明フォールバック暴発の防止）
+  const periodFrom = `${months[0]!}-01`
+  const periodTo = monthEndOf(months[months.length - 1]!)
   const { rows: salesRows } = await pool.query<{ id: string; salesDate: string; amount: number; correctionOf: string | null }>(
-    `SELECT id, sales_date AS "salesDate", amount, correction_of AS "correctionOf"
-     FROM sales_records WHERE segment_id = $1 AND active LIMIT 20000`, [segmentId])
+    `SELECT r.id, r.sales_date AS "salesDate", r.amount, r.correction_of AS "correctionOf"
+     FROM sales_records r
+     LEFT JOIN sales_records o ON o.id = r.correction_of
+     WHERE r.segment_id = $1 AND r.active
+       AND COALESCE(o.sales_date, r.sales_date) >= $2
+       AND COALESCE(o.sales_date, r.sales_date) <= $3`,
+    [segmentId, periodFrom, periodTo])
   const biz = foldBusinessMonthly(salesRows, months)
   let mediaBy = new Map<string, MediaMonthlyPoint>()
   let mediaConnected = false

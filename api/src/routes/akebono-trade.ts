@@ -239,7 +239,11 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
       if (!name) throw err('AKO-PRD-001', '商品名は必須です', 400)
       out.name = capCp(name, 200)
     }
-    if (forCreate) {
+    // segmentId は作成時必須。更新でも送られたら受理する（モックの編集フォームは segmentId を送るため、
+    // 無視すると「成功したのに旧セグメントのまま」= モードで挙動が乖離した = Codex P2-4）。
+    // 別セグメントへの移動で同コード衝突 = 部分一意 INDEX (segment_id, code) WHERE active → 23505 →
+    // PATCH ハンドラの catch が AKO-PRD-002 409 へ変換（POST/restore と同型）
+    if (forCreate || Object.hasOwn(body, 'segmentId')) {
       const segmentId = String(body.segmentId ?? '').trim()
       if (!segmentId) throw err('AKO-PRD-001', '事業セグメントは必須です', 400)
       out.segmentId = segmentId
@@ -311,6 +315,10 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
     const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
     const patch = productPatchOf(body, false)
     if (Object.keys(patch).length === 0) throw err('AKO-GEN-001', '更新内容がありません', 400)
+    // セグメント移動時は参照先セグメントの存在を検証（作成時 requireRef と同じ担保 = FK なしの代替）
+    if (Object.hasOwn(patch, 'segmentId')) {
+      await requireRef(pool, 'business_segments', patch.segmentId as string, '事業セグメント')
+    }
     const fields = Object.keys(patch)
     const sets = fields.map((f, i) => `${PRODUCT_COL_MAP[f]!} = $${i + 2}`)
     try {
@@ -321,7 +329,11 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
       await audit(pool, { actorId: user.id, action: 'update', entity: 'products', entityId: id, detail: '商品を更新' })
       return c.json({ data: rows[0] })
     } catch (e) {
-      if ((e as { code?: string }).code === '23505') throw err('AKO-PRD-002', '商品コードが重複しています', 409)
+      // 同一セグメント × 有効行のコード一意（部分一意 INDEX）衝突。コード変更・セグメント移動の
+      // いずれでも起きうるため両方を案内する（移動先に同コードの有効商品があるケースを含む）
+      if ((e as { code?: string }).code === '23505') {
+        throw err('AKO-PRD-002', '同じセグメントに同一商品コードの有効な商品が既に存在します（コードまたはセグメントを変更してください）', 409)
+      }
       throw e
     }
   })
@@ -966,8 +978,22 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
 
   // ========== 在庫（F-27。台帳 = SoT・追記のみ。残高はクライアントが Σqty で導出） ==========
 
+  // 台帳の**表示用**明細（直近順・打ち切りあり）。残高はこの明細から導出しない（下の balances を使う）。
+  // 打ち切り（LIMIT）は「新しい順に読める分だけ表示」用であり、残高計算の母集団ではない（Codex P1-2）
   app.get('/inventory-transactions', async (c) => {
     const { rows } = await pool.query(`SELECT ${ITX_COLS} FROM inventory_transactions ORDER BY occurred_at DESC, id LIMIT 20000`)
+    return c.json({ data: rows })
+  })
+
+  // SKU × 倉庫の**残高**（全量集約 = SUM(qty)）。台帳明細の表示打ち切り（LIMIT 20000）に依らず
+  // 常に正しい残高を返す。旧実装はフロントが打ち切り済み明細を foldBalances で畳んで残高としていたため、
+  // 台帳が 2 万行を超えると期首在庫・過去の移動が残高・棚卸入力から消えた（Codex P1-2）。
+  // 0 残高は返さない（balanceOf は既定 0・在庫照会/棚卸は 0 を非表示 = 送信量削減）
+  app.get('/inventory-balances', async (c) => {
+    const { rows } = await pool.query<{ skuId: string; warehouseId: string; qty: number }>(
+      `SELECT sku_id AS "skuId", warehouse_id AS "warehouseId", SUM(qty)::int AS qty
+       FROM inventory_transactions
+       GROUP BY sku_id, warehouse_id HAVING SUM(qty) <> 0`)
     return c.json({ data: rows })
   })
 

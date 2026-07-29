@@ -144,7 +144,7 @@
 > **FK なしの理由:** warehouses.company_id / consignment_terms.company_id 等の参照先シード
 > （c-ak-* デモ取引先）が実環境に存在しないため。Phase C（記録系移行）で参照整合の引き上げを判断する。
 
-### 1.6 Akebono 記録系の API 永続化（Phase C。2026-07-29 追加・本実装 = migration 0032）
+### 1.6 Akebono 記録系の API 永続化（Phase C。2026-07-29 追加・本実装 = migration 0032・堅牢化 0033・外部レビュー対応 0034）
 
 従来モックコレクション（localStorage・日次リシード）だった Akebono 記録系 15 コレクションを
 `app_office` テーブルへ移行した。**初期データはシードしない**（実データは登録から育てる =
@@ -160,10 +160,10 @@ akebono_wishes / sales_monthly / media_articles と同方針。各画面は空�
 | `ProductionOrder`（production_orders） | id, code, skuId, qty, warehouseId, dueDate, status, **results jsonb（追記のみ）** | 指示系 + 実績（実績登録 = 追記 + 在庫 production_in + 全数完成で completed。1 トランザクション） | C2 |
 | `InboundPlan`（inbound_plans） | id, code, poId, warehouseId, dueDate, status, lines jsonb | 予定系（実績から pending/partial/completed を再計算。実績ありは取消不可 AKO-INB-003） | C2 |
 | `InboundResult`（inbound_results） | id, code, planId, warehouseId, receivedAt, lines jsonb（planLineId 消込） | **記録系（追記のみ）**。登録 = 実績 + 在庫 inbound(+) + 予定ステータスを 1 トランザクション | C2 |
-| `PurchaseRecord`（purchase_records） | id, code, companyId, segmentId, purchaseDate, purchaseType, warehouseId（入荷管理 OFF 経路の入庫先）, lines jsonb, correctionOf | **記録系（訂正は赤黒）**。warehouseId ありは purchase_in(+)・訂正で在庫も戻す。二重訂正は 409 | C2 |
+| `PurchaseRecord`（purchase_records） | id, code, companyId, segmentId, purchaseDate, purchaseType, warehouseId（入荷管理 OFF 経路の入庫先）, lines jsonb（**GIN `jsonb_path_ops` = 0034**）, correctionOf | **記録系（訂正は赤黒）**。warehouseId ありは purchase_in(+)・訂正で在庫も戻す。二重訂正は 409。委託精算の原価解決は `lines @> [{"skuId":…}]` で対象 SKU の最新仕入 1 件を取る（GIN が支える = Codex P1-1） | C2 |
 | `OutboundPlan`（outbound_plans） | id, code, companyId, warehouseId, segmentId, dueDate, status, lines jsonb | 指示系（取消はステータス） | C2 |
 | `OutboundResult`（outbound_results） | id, code, planId, warehouseId, companyId, shippedAt, lines jsonb | **記録系（追記のみ）**。在庫不足 409・出庫(−) + 店舗納品（partner_roles=store × store_deposit 倉庫）は預け在庫へ transfer_in(+) | C2 |
-| `InventoryTransaction`（inventory_transactions) | id, skuId, warehouseId, qty(±), kind, reason, refType, refLineId, occurredAt。**UNIQUE(ref_type, ref_line_id, kind)** = 冪等キー | **在庫の SoT（台帳・追記のみ）**。残高 = Σqty（導出。shared foldBalances をフロントと共有）。調整/移動/棚卸は専用 API | C2 |
+| `InventoryTransaction`（inventory_transactions) | id, skuId, warehouseId, qty(±), kind, reason, refType, refLineId, occurredAt。**UNIQUE(ref_type, ref_line_id, kind)** = 冪等キー・INDEX(sku_id, warehouse_id) | **在庫の SoT（台帳・追記のみ）**。残高 = Σqty。**API モードは残高 = サーバー全量集約 `GET /inventory-balances`（GROUP BY・HAVING SUM<>0）**（明細 GET は表示用の LIMIT 20000 打ち切りあり = 2 万行超で残高が壊れる Codex P1-2 の是正）。モックモードは全件ローカル shared foldBalances。調整/移動/棚卸は専用 API | C2 |
 | `SalesRecord`（sales_records） | id, code, salesDate, companyId, segmentId, skuId, qty, unitPrice, amount, costPrice/billingType（サーバーが SKU/商品から解決）, channel, sourceKind, invoiceId（請求リンク）, correctionOf, active | **売上の SoT（記録系・訂正は赤黒）**。統合メトリクス（/v1/media/integrated）の売上軸の源泉。請求済みの訂正は 409（請求側で赤伝） | C3（売上） |
 | `Invoice`（invoices） | id, code, companyId, segmentId(null = 合算), periodFrom/To, invoiceType, status, issuedAt, totalAmount, creditFor, lines/snapshot/sourceRecordIds jsonb。**UNIQUE(company_id, period_from, period_to, invoice_type) WHERE draft**（0033 = 並行 close の二重ドラフト防止） | **確定系（issued 以降不変・訂正は赤伝 = マイナス請求の追記 + 売上リンク解除）**。draft は洗い替え可（設定系） | C3 |
 | `PaymentNotice`（payment_notices） | id, code, companyId(作家), segmentId, periodFrom/To, status, payableAmount, lines/snapshot jsonb | **確定系**（発行時点の委託条件をスナップショット凍結） | C3 |
