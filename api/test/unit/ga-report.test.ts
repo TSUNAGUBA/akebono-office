@@ -268,7 +268,7 @@ describe('buildMediaMetrics', () => {
         ['screenPageViews', 'totalUsers', 'userEngagementDuration', 'bounceRate', 'keyEvents'], [
           [['/blog/hello', 'A'], [400, 300, 16000, '0.4', 6]],
           [['/service/', 'B'], [200, 150, 8000, '0.3', 20]],
-          [['/news/x', 'C'], [100, 90, 2000, 30, '0.5', 0]],
+          [['/news/x', 'C'], [100, 90, 2000, '0.5', 0]],
         ]),
       prevPages: null,
     }, opts)
