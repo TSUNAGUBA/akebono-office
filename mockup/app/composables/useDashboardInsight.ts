@@ -8,10 +8,12 @@
  * 一度生成したら保管し、再生成されるまで保存済みを表示する（導出キャッシュ = 再生成で上書き）。
  *
  * - 集計（SegmentSummary/CompanySummary）は shared/domain/portfolio-insight が SoT・決定的
- * - 集計の材料は既存の useMediaAnalytics.integratedMetricsFor（業務 × メディアの月次統合）を再利用する（原則3）。
- *   API モードではメディア月次に GA 実データ（/v1/media/monthly）が入る（generate* は await でロードをそろえる）
- * - 洞察は決定的ヒューリスティックのみ（llm=false）。保管先 dashboardInsights は未移行のモックコレクション
- *   （売上明細 salesRecords と同じくモック側 SoT。API 移行時に media_insights と同型のテーブルへ引き上げる）
+ * - 集計の材料は既存の useMediaAnalytics.integratedMetricsFor（業務 × メディアの月次統合）を再利用する（原則3。
+ *   generate* は ensureIntegratedLoaded を await でそろえる）
+ * - 洞察は決定的ヒューリスティックのみ（llm=false）。集計材料は Phase C から API モードでは
+ *   サーバー組み立ての実データ（/v1/media/integrated = 売上軸 sales_records + メディア軸 GA）。
+ *   保管先 dashboardInsights のみ未移行のモックコレクション（Phase D で media_insights と同型へ =
+ *   API モードの保管はローカル保存 = 「レポート保管 = ローカル」バッジで明示）
  */
 import type { BusinessSegment } from '~/types/akebono'
 import { INDUSTRY_TYPE_LABELS } from '~/utils/akebono'

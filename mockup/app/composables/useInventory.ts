@@ -3,6 +3,9 @@
  * SoT = inventoryTransactions（台帳・追記のみ）。残高は導出（warehouse 実証方式: Σqty）。
  * 入荷/出荷/仕入/生産は本 composable の post() を通じて台帳へ書く（冪等キー = refType × refLineId × kind）。
  * 調整・移動・棚卸は本ページの操作として台帳へ追記する。
+ * デュアルモード（Phase C = 0032）: API モードの SoT はサーバー（inventory_transactions）。
+ * 残高・台帳表示はハイドレーション済みキャッシュからの導出（両モード共通の純関数 = foldBalances）。
+ * post() はモックモード専用（API では各実績エンドポイントがサーバー側で台帳へ書く）。
  */
 import type {
   InventoryAdjustReason, InventoryTransaction, InventoryTxnKind,
@@ -24,6 +27,7 @@ export interface PostEntry {
 export function useInventory() {
   const { tbl, commit, nextId } = useMockDb()
   const txns = tbl('inventoryTransactions')
+  const isApi = useApiMode()
 
   /** SKU × 倉庫 の残高マップ（台帳から導出） */
   const balances = computed(() => foldBalances(txns.value))
@@ -99,26 +103,28 @@ export function useInventory() {
   }
 
   /** 在庫調整（F-27-2。理由必須） */
-  function adjust(input: { skuId: string; warehouseId: string; qty: number; reason: InventoryAdjustReason }): Result {
+  async function adjust(input: { skuId: string; warehouseId: string; qty: number; reason: InventoryAdjustReason }): Promise<Result> {
     if (!input.skuId || !input.warehouseId) {
       return { ok: false, error: { code: 'AKO-INV-001', message: 'SKU と倉庫を指定してください' } }
     }
     if (!Number.isFinite(input.qty) || input.qty === 0) {
       return { ok: false, error: { code: 'AKO-INV-002', message: '調整数量は 0 以外で指定してください' } }
     }
+    if (isApi) return apiWrite('/v1/akebono/inventory/adjust', { body: input, reload: ['inventoryTransactions'] })
     const refLineId = nextRefLineId('adj')
     post([{ ...input, kind: 'adjust', refType: 'adjust', refLineId }])
     return { ok: true, id: refLineId }
   }
 
   /** 倉庫間移動（F-27-3。出 + 入をアトミックに） */
-  function transfer(input: { skuId: string; fromWarehouseId: string; toWarehouseId: string; qty: number }): Result {
+  async function transfer(input: { skuId: string; fromWarehouseId: string; toWarehouseId: string; qty: number }): Promise<Result> {
     if (input.fromWarehouseId === input.toWarehouseId) {
       return { ok: false, error: { code: 'AKO-INV-003', message: '移動元と移動先が同じです' } }
     }
     if (!Number.isFinite(input.qty) || input.qty <= 0) {
       return { ok: false, error: { code: 'AKO-INV-002', message: '移動数量は 1 以上で指定してください' } }
     }
+    if (isApi) return apiWrite('/v1/akebono/inventory/transfer', { body: input, reload: ['inventoryTransactions'] })
     if (balanceOf(input.skuId, input.fromWarehouseId) < input.qty) {
       return { ok: false, error: { code: 'AKO-INV-004', message: '移動元の在庫が不足しています' } }
     }
@@ -132,7 +138,13 @@ export function useInventory() {
   }
 
   /** 棚卸確定（F-27-4。実棚数 − 理論在庫の差分を stocktake 調整として計上） */
-  function stocktake(warehouseId: string, counts: { skuId: string; actualQty: number }[]): Result & { adjusted?: number } {
+  async function stocktake(warehouseId: string, counts: { skuId: string; actualQty: number }[]): Promise<Result & { adjusted?: number }> {
+    if (isApi) {
+      const res = await apiWrite<{ adjusted: number }>('/v1/akebono/inventory/stocktake', {
+        body: { warehouseId, counts }, reload: ['inventoryTransactions'],
+      })
+      return res.ok ? { ok: true, adjusted: res.data.adjusted } : res
+    }
     // 各明細行は同一 kind 'stocktake' なので refLineId を行ごとに一意化する（1 回の post 内でも衝突させない）
     const base = nextRefLineId('stk')
     let seq = Number(base.slice(4))

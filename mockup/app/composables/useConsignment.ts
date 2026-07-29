@@ -5,6 +5,9 @@
  *   + 作家へ支払通知（PaymentNotice）。金額は委託条件マスタの設定を注入した純関数で算定し、
  *   発行時点の設定一式をスナップショット（後の設定変更に影響されない）。
  * 確定系: issued/confirmed 以降は不変。訂正は赤伝（creditFor）。
+ * デュアルモード（Phase C = 0032）: API モードの SoT はサーバー（invoices / payment_notices /
+ * payment_receipts）。締め・発行・赤伝・入金・委託精算はサーバーのトランザクションが担い（金額算定は
+ * shared/domain/akebono の純関数を共有）、成功後に影響コレクションを再ロードする。
  */
 import type {
   ConsignmentTerm, Invoice, PaymentNotice, PaymentReceipt, SalesRecord, SettlementSnapshot,
@@ -25,6 +28,7 @@ export function useConsignment() {
   const companies = tbl('companies')
   const taxRates = tbl('taxRates')
   const products = useProducts()
+  const isApi = useApiMode()
 
   function companyName(id: string): string {
     return (companies.value as Company[]).find(c => c.id === id)?.name ?? id
@@ -71,7 +75,13 @@ export function useConsignment() {
   }
 
   /** 締め（ドラフト生成・洗い替え冪等）。同一得意先×期間の未発行ドラフトは置換 */
-  function closeBilling(input: { companyId: string; periodFrom: string; periodTo: string }): Result & { count?: number } {
+  async function closeBilling(input: { companyId: string; periodFrom: string; periodTo: string }): Promise<Result & { count?: number }> {
+    if (isApi) {
+      const res = await apiWrite<{ invoice: Invoice; count: number }>('/v1/akebono/billing/close', {
+        body: input, reload: ['invoices'],
+      })
+      return res.ok ? { ok: true, id: res.data.invoice.id, count: res.data.count } : res
+    }
     const rows = billableSales(input.companyId, input.periodFrom, input.periodTo)
     if (rows.length === 0) return { ok: false, error: { code: 'AKO-BIL-001', message: '対象の未請求売上がありません' } }
     // 既存の未発行ドラフト（同一得意先×期間）を洗い替え
@@ -101,7 +111,8 @@ export function useConsignment() {
   }
 
   /** 請求発行（draft → issued。以後不変。対象売上に invoiceId を張る） */
-  function issue(invoiceId: string): Result {
+  async function issue(invoiceId: string): Promise<Result> {
+    if (isApi) return apiWrite(`/v1/akebono/invoices/${invoiceId}/issue`, { reload: ['invoices', 'salesRecords'] })
     const inv = invoices.value.find(v => v.id === invoiceId)
     if (!inv) return { ok: false, error: { code: 'AKO-GEN-002', message: '請求が見つかりません' } }
     if (inv.status !== 'draft') return { ok: false, error: { code: 'AKO-BIL-002', message: '下書き以外は発行できません' } }
@@ -112,7 +123,11 @@ export function useConsignment() {
   }
 
   /** 赤伝発行（issued → void + マイナス請求を新規作成。訂正は赤伝） */
-  function voidInvoice(invoiceId: string): Result {
+  async function voidInvoice(invoiceId: string): Promise<Result> {
+    if (isApi) {
+      const res = await apiWrite<Invoice>(`/v1/akebono/invoices/${invoiceId}/void`, { reload: ['invoices', 'salesRecords'] })
+      return res.ok ? { ok: true, id: res.data.id } : res
+    }
     const inv = invoices.value.find(v => v.id === invoiceId)
     if (!inv) return { ok: false, error: { code: 'AKO-GEN-002', message: '請求が見つかりません' } }
     if (inv.status !== 'issued') return { ok: false, error: { code: 'AKO-BIL-003', message: '発行済みのみ赤伝を発行できます' } }
@@ -141,7 +156,13 @@ export function useConsignment() {
   function paidAmountOf(invoiceId: string): number {
     return receipts.value.filter(r => r.invoiceId === invoiceId).reduce((s, r) => s + r.amount, 0)
   }
-  function recordReceipt(input: { invoiceId: string; amount: number; method: string }): Result {
+  async function recordReceipt(input: { invoiceId: string; amount: number; method: string }): Promise<Result> {
+    if (isApi) {
+      const res = await apiWrite<PaymentReceipt>('/v1/akebono/payment-receipts', {
+        body: input, reload: ['paymentReceipts', 'invoices'],
+      })
+      return res.ok ? { ok: true, id: res.data.id } : res
+    }
     const inv = invoices.value.find(v => v.id === input.invoiceId)
     if (!inv) return { ok: false, error: { code: 'AKO-GEN-002', message: '請求が見つかりません' } }
     if (inv.status === 'draft') return { ok: false, error: { code: 'AKO-BIL-004', message: '未発行の請求には入金できません' } }
@@ -170,7 +191,13 @@ export function useConsignment() {
    * 委託精算の締め（冪等）。店舗ごとにマージン請求（Invoice）、作家ごとに支払通知（PaymentNotice）を発行。
    * 発行時点の設定をスナップショット。対象売上に invoiceId を張り再精算を防ぐ。
    */
-  function closeConsignment(input: { segmentId: string; month: string }): Result & { invoices?: number; notices?: number } {
+  async function closeConsignment(input: { segmentId: string; month: string }): Promise<Result & { invoices?: number; notices?: number }> {
+    if (isApi) {
+      const res = await apiWrite<{ invoices: number; notices: number }>('/v1/akebono/consignment/close', {
+        body: input, reload: ['invoices', 'paymentNotices', 'salesRecords'],
+      })
+      return res.ok ? { ok: true, invoices: res.data.invoices, notices: res.data.notices } : res
+    }
     const rows = consignableSales(input.segmentId, input.month)
     if (rows.length === 0) return { ok: false, error: { code: 'AKO-BIL-006', message: '対象の未精算 店舗売上がありません' } }
     const periodFrom = `${input.month}-01`
@@ -252,7 +279,8 @@ export function useConsignment() {
   }
 
   /** 支払通知の確定（draft → confirmed。以後不変） */
-  function confirmNotice(id: string): Result {
+  async function confirmNotice(id: string): Promise<Result> {
+    if (isApi) return apiWrite(`/v1/akebono/payment-notices/${id}/confirm`, { reload: ['paymentNotices'] })
     const n = notices.value.find(x => x.id === id)
     if (!n) return { ok: false, error: { code: 'AKO-GEN-002', message: '支払通知が見つかりません' } }
     if (n.status !== 'draft') return { ok: false, error: { code: 'AKO-BIL-007', message: '下書き以外は確定できません' } }

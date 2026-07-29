@@ -14,6 +14,8 @@ const prod = useProduction()
 const p = useProducts()
 const masters = useAkebonoMasters()
 const { show } = useToast()
+// 二重送信ガード(Phase C: API 書込の重複作成防止。§34 の実行中フィードバック)
+const busy = ref(false)
 const confirm = useConfirm()
 
 // ---------- 選択肢 ----------
@@ -62,7 +64,7 @@ async function transition(status: ProductionStatus): Promise<void> {
     const ok = await confirm.ask('生産指示の取消', `「${selected.value.code}」を取消にしますか？（取消後は元に戻せません）`, { danger: true, confirmLabel: '取消にする' })
     if (!ok) return
   }
-  const res = prod.setStatus(selected.value.id, status)
+  const res = await prod.setStatus(selected.value.id, status)
   if (!res.ok) {
     show(`${res.error.code}: ${res.error.message}`, 'crit')
     return
@@ -79,7 +81,13 @@ function resetResultForm(): void {
   resultForm.value = { completedQty: '', defectQty: '' }
 }
 
-function registerResult(): void {
+async function registerResult(): Promise<void> {
+  if (busy.value) return
+  busy.value = true
+  try { await registerResultInner() } finally { busy.value = false }
+}
+
+async function registerResultInner(): Promise<void> {
   if (!selected.value) return
   const completedQty = Number(resultForm.value.completedQty)
   const defectQty = resultForm.value.defectQty === '' ? 0 : Number(resultForm.value.defectQty)
@@ -91,7 +99,7 @@ function registerResult(): void {
     show('不良数は 0 以上の数値で入力してください', 'crit')
     return
   }
-  const res = prod.registerResult(selected.value.id, { completedQty, defectQty })
+  const res = await prod.registerResult(selected.value.id, { completedQty, defectQty })
   if (!res.ok) {
     show(`${res.error.code}: ${res.error.message}`, 'crit')
     return
@@ -114,7 +122,13 @@ function openCreate(): void {
   createOpen.value = true
 }
 
-function submitCreate(): void {
+async function submitCreate(): Promise<void> {
+  if (busy.value) return
+  busy.value = true
+  try { await submitCreateInner() } finally { busy.value = false }
+}
+
+async function submitCreateInner(): Promise<void> {
   const f = createForm.value
   const qty = Number(f.qty)
   if (!f.skuId) {
@@ -133,7 +147,7 @@ function submitCreate(): void {
     show('納期を入力してください', 'crit')
     return
   }
-  const res = prod.createOrder({ skuId: f.skuId, qty, warehouseId: f.warehouseId, dueDate: f.dueDate })
+  const res = await prod.createOrder({ skuId: f.skuId, qty, warehouseId: f.warehouseId, dueDate: f.dueDate })
   if (!res.ok) {
     show(`${res.error.code}: ${res.error.message}`, 'crit')
     return
@@ -268,7 +282,7 @@ function submitCreate(): void {
           </div>
           <p class="text-[11px] text-muted">完成分は入庫先倉庫へ自動入庫します。指示数に達すると自動で完了になります。</p>
           <div class="flex justify-end">
-            <button type="button" class="btn btn-primary btn-sm" @click="registerResult">登録する</button>
+            <button type="button" class="btn btn-primary btn-sm" :disabled="busy" @click="registerResult">登録する</button>
           </div>
         </div>
 
@@ -322,7 +336,7 @@ function submitCreate(): void {
       </div>
       <template #footer>
         <button type="button" class="btn btn-sm" @click="createOpen = false">キャンセル</button>
-        <button type="button" class="btn btn-primary btn-sm" @click="submitCreate">作成する</button>
+        <button type="button" class="btn btn-primary btn-sm" :disabled="busy" @click="submitCreate">作成する</button>
       </template>
     </UiModal>
   </div>

@@ -203,6 +203,41 @@ const MIGRATED_MASTERS: Record<string, string> = {
 const CUSTOM_COLLECTION_ENDPOINTS: Record<string, string> = {
   akebonoAppConfigs: '/v1/akebono/app-configs',
   itemSettings: '/v1/akebono/item-settings',
+  // Phase C（0032）: 記録系 15 コレクション。読み取りは一覧 GET・書込は各 composable の専用経路
+  products: '/v1/akebono/products',
+  productSkus: '/v1/akebono/product-skus',
+  productImages: '/v1/akebono/product-images',
+  purchaseOrders: '/v1/akebono/purchase-orders',
+  productionOrders: '/v1/akebono/production-orders',
+  inboundPlans: '/v1/akebono/inbound-plans',
+  inboundResults: '/v1/akebono/inbound-results',
+  purchaseRecords: '/v1/akebono/purchase-records',
+  outboundPlans: '/v1/akebono/outbound-plans',
+  outboundResults: '/v1/akebono/outbound-results',
+  inventoryTransactions: '/v1/akebono/inventory-transactions',
+  salesRecords: '/v1/akebono/sales-records',
+  invoices: '/v1/akebono/invoices',
+  paymentNotices: '/v1/akebono/payment-notices',
+  paymentReceipts: '/v1/akebono/payment-receipts',
+}
+
+/**
+ * 記録系書込の共通ヘルパー（Phase C）: 書込 → 成功時に影響コレクションを force 再ロードして返す。
+ * 実績登録は複数コレクション（実績 + 在庫台帳 + 予定ステータス等）へ波及するため、
+ * 部分的なキャッシュ手術ではなく影響コレクションの再取得で SoT → キャッシュの整合を保つ（原則6）
+ */
+export async function apiWrite<T = unknown>(
+  path: string,
+  opts: { method?: 'POST' | 'PATCH' | 'PUT'; body?: unknown; reload?: string[] } = {},
+): Promise<{ ok: true; id?: string; data: T } | { ok: false; error: { code: string; message: string } }> {
+  try {
+    const data = await apiFetch<T>(path, { method: opts.method ?? 'POST', body: opts.body })
+    await Promise.all((opts.reload ?? []).map(name => loadApiCollection(name, true)))
+    const id = (data as { id?: string } | null | undefined)?.id
+    return { ok: true, ...(id ? { id } : {}), data }
+  } catch (e) {
+    return { ok: false, error: apiErrorOf(e) }
+  }
 }
 
 /** API モード時に API が SoT となるコレクション（tbl() が API キャッシュを返す） */

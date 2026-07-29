@@ -15,7 +15,7 @@ Nuxt 4 SPA（ssr:false, hashMode）/ TypeScript strict / Tailwind v4 + CSS 変�
 
 1. **全操作が反応する**（X-1）: ボタン・行・カードは必ず 遷移 / ドロワー / モーダル / トースト / 状態変化 のいずれかを返す。飾りのボタンを作らない
 2. **データは useMockDb 経由のみ**: `const { tbl, commit, nextId } = useMockDb()`。書込後は必ず `commit()`。ID は `nextId(collection, prefix)`
-   - **API モード（バッチ2a〜）:** マイグレーション済みコレクション（マスタ 31 種 = useApi.ts の MIGRATED_MASTERS・専用エンドポイント 2 種 = CUSTOM_COLLECTION_ENDPOINTS（akebonoAppConfigs / itemSettings。Phase B）・監査ログ・設定）は `tbl()` が API キャッシュを返す（参照はそのまま）。**書込は `useMasterCrudAsync` / `useAppSettings` / 専用 composable（useAkebonoApps / useItemSettings）の API 経路のみ**。`tbl().value = ...` の直接書込やモック版 `useMasterCrud` での書込を追加しない（キャッシュ汚染 = SoT 逆流。原則6）
+   - **API モード（バッチ2a〜）:** マイグレーション済みコレクション（マスタ 31 種 = useApi.ts の MIGRATED_MASTERS・専用エンドポイント 17 種 = CUSTOM_COLLECTION_ENDPOINTS（akebonoAppConfigs / itemSettings = Phase B + 記録系 15 = Phase C）・監査ログ・設定）は `tbl()` が API キャッシュを返す（参照はそのまま）。**書込は `useMasterCrudAsync` / `useAppSettings` / 各ドメイン composable の API 経路（apiWrite = 書込 → 影響コレクション再ロード）のみ**。`tbl().value = ...` の直接書込やモック版 `useMasterCrud` での書込を追加しない（キャッシュ汚染 = SoT 逆流。原則6）
 3. **記録系は追記のみ**: 打刻・承認ログ・活動ログ等を書き換え・削除しない。マスタは論理削除（`active:false`）のみ
 4. **Math.random / v-html 禁止**: 乱数は `~/utils/rng`（決定的）。リッチ表示はテキスト分解で
 5. **アイコンは lucide-vue-next のみ**。絵文字をアイコン代わりにしない
@@ -104,7 +104,15 @@ const am = useAkebonoMasters()  // segments / warehouses / units / taxRates / pa
 const apps = useAkebonoApps()   // isAppEnabled / appsForSegment / setEnabled・setLabel・applyPreset（async。変更行だけ送る）
 
 // 項目カスタマイズ（F-31。カタログ = コード静的 SoT + テナント差分。API = PUT /v1/akebono/item-settings の部分 upsert）
-const its = useItemSettings()   // resolve(entity) / upsert（渡したキーのみ更新）/ resetEntity（カタログ既定へ戻す取消フロー = 原則9.5）
+const its = useItemSettings()   // resolve(entity) / upsert（渡したキーのみ更新）/ resetEntity（カタログ既定へ戻す取消フロー = 原則9.5)
+
+// Akebono 記録系（F-21〜F-29。Phase C で API 永続化 = /v1/akebono/*。書込はすべて async = Promise<Result>。
+// 記録系は追記のみ・訂正は赤黒/赤伝・在庫の SoT = inventoryTransactions（残高は foldBalances で導出）。
+// 金額算定（税・委託精算）は shared/domain/akebono の純関数を API と共有）
+const prod = useProducts()      // saveProduct（既定 SKU 自動生成）/ saveMatrix / addImage / archive・restore 系
+const inv2 = useInventory()     // balanceOf / ledgerOf / adjust / transfer / stocktake（post はモック専用）
+const asl = useAkebonoSales()   // create（原価はサーバー解決）/ correct（赤黒。成功時 invalidateIntegratedFor）
+const con = useConsignment()    // closeBilling / issue / voidInvoice / recordReceipt / closeConsignment / confirmNotice
 ```
 
 ## UI コンポーネント在庫（新規に作る前にここを見る）

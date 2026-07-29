@@ -16,6 +16,8 @@ const products = useProducts()
 const { warehouseOptions, warehouseName } = useAkebonoMasters()
 const { activePlans } = inbound
 const toast = useToast()
+// 二重送信ガード(Phase C: API 書込の重複作成防止。§34 の実行中フィードバック)
+const busy = ref(false)
 const confirm = useConfirm()
 
 // ---------- SKU 選択肢 ----------
@@ -81,7 +83,7 @@ async function cancelSelected(): Promise<void> {
     { danger: true, confirmLabel: '取消する' },
   )
   if (!ok) return
-  const res = inbound.cancelPlan(plan.id)
+  const res = await inbound.cancelPlan(plan.id)
   if (res.ok) toast.show('入荷予定を取消しました', 'warn')
   else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
 }
@@ -101,7 +103,13 @@ function openCreate(): void {
   createOpen.value = true
 }
 
-function submitCreate(): void {
+async function submitCreate(): Promise<void> {
+  if (busy.value) return
+  busy.value = true
+  try { await submitCreateInner() } finally { busy.value = false }
+}
+
+async function submitCreateInner(): Promise<void> {
   const f = createForm.value
   if (!f.warehouseId) {
     toast.show('入荷先倉庫を選択してください', 'crit')
@@ -111,7 +119,7 @@ function submitCreate(): void {
     toast.show('予定日を入力してください', 'crit')
     return
   }
-  const res = inbound.createPlan({
+  const res = await inbound.createPlan({
     warehouseId: f.warehouseId,
     dueDate: f.dueDate,
     lines: f.lines,
@@ -138,13 +146,19 @@ function openDirect(): void {
   directOpen.value = true
 }
 
-function submitDirect(): void {
+async function submitDirect(): Promise<void> {
+  if (busy.value) return
+  busy.value = true
+  try { await submitDirectInner() } finally { busy.value = false }
+}
+
+async function submitDirectInner(): Promise<void> {
   const f = directForm.value
   if (!f.warehouseId) {
     toast.show('入荷先倉庫を選択してください', 'crit')
     return
   }
-  const res = inbound.registerResult({ warehouseId: f.warehouseId, lines: f.lines })
+  const res = await inbound.registerResult({ warehouseId: f.warehouseId, lines: f.lines })
   if (!res.ok) {
     toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
     return
@@ -168,10 +182,16 @@ function openResult(): void {
   resultOpen.value = true
 }
 
-function submitResult(): void {
+async function submitResult(): Promise<void> {
+  if (busy.value) return
+  busy.value = true
+  try { await submitResultInner() } finally { busy.value = false }
+}
+
+async function submitResultInner(): Promise<void> {
   const plan = selectedPlan.value
   if (!plan) return
-  const res = inbound.registerResult({
+  const res = await inbound.registerResult({
     planId: plan.id,
     lines: resultLines.value.map(l => ({ planLineId: l.planLineId, skuId: l.skuId, qty: Number(l.qty) })),
   })
@@ -206,6 +226,7 @@ function submitResult(): void {
           :rows="tableRows"
           clickable
           empty-title="入荷予定がありません"
+          empty-hint="「入荷予定を作成」または「直接入荷登録」から始められます"
           @row-click="openDetail"
         >
           <template #cell-code="{ row }">
@@ -307,7 +328,7 @@ function submitResult(): void {
       </div>
       <template #footer>
         <button type="button" class="btn btn-sm" @click="createOpen = false">キャンセル</button>
-        <button type="button" class="btn btn-primary btn-sm" @click="submitCreate">作成する</button>
+        <button type="button" class="btn btn-primary btn-sm" :disabled="busy" @click="submitCreate">作成する</button>
       </template>
     </UiModal>
 
@@ -324,7 +345,7 @@ function submitResult(): void {
       </div>
       <template #footer>
         <button type="button" class="btn btn-sm" @click="directOpen = false">キャンセル</button>
-        <button type="button" class="btn btn-primary btn-sm" @click="submitDirect">登録する</button>
+        <button type="button" class="btn btn-primary btn-sm" :disabled="busy" @click="submitDirect">登録する</button>
       </template>
     </UiModal>
 
@@ -354,7 +375,7 @@ function submitResult(): void {
       </div>
       <template #footer>
         <button type="button" class="btn btn-sm" @click="resultOpen = false">キャンセル</button>
-        <button type="button" class="btn btn-primary btn-sm" @click="submitResult">登録する</button>
+        <button type="button" class="btn btn-primary btn-sm" :disabled="busy" @click="submitResult">登録する</button>
       </template>
     </UiModal>
   </div>

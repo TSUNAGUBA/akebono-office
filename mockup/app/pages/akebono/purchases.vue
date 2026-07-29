@@ -18,6 +18,8 @@ const { segmentOptions, segmentName, warehouseOptions } = useAkebonoMasters()
 const { effectiveSegmentId } = useCurrentSegment()
 const { tbl } = useMockDb()
 const toast = useToast()
+// 二重送信ガード(Phase C: API 書込の重複作成防止。§34 の実行中フィードバック)
+const busy = ref(false)
 const confirm = useConfirm()
 
 // ---------- 区分ラベル・トーン（ドメイン固有・固定 enum） ----------
@@ -106,7 +108,7 @@ async function correctSelected(): Promise<void> {
     { danger: true, confirmLabel: '訂正する' },
   )
   if (!ok) return
-  const res = purchases.correct(r.id)
+  const res = await purchases.correct(r.id)
   if (!res.ok) {
     toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
     return
@@ -138,7 +140,13 @@ function openCreate(): void {
   createOpen.value = true
 }
 
-function submitCreate(): void {
+async function submitCreate(): Promise<void> {
+  if (busy.value) return
+  busy.value = true
+  try { await submitCreateInner() } finally { busy.value = false }
+}
+
+async function submitCreateInner(): Promise<void> {
   const f = createForm.value
   if (!f.companyId) {
     toast.show('仕入先を選択してください', 'crit')
@@ -152,7 +160,7 @@ function submitCreate(): void {
     toast.show('仕入日を入力してください', 'crit')
     return
   }
-  const res = purchases.create({
+  const res = await purchases.create({
     companyId: f.companyId,
     segmentId: f.segmentId,
     purchaseDate: f.purchaseDate,
@@ -186,6 +194,7 @@ function submitCreate(): void {
           :rows="tableRows"
           clickable
           empty-title="仕入がありません"
+          empty-hint="「仕入を計上」から登録できます"
           @row-click="openDetail"
         >
           <template #cell-code="{ row }">
@@ -323,7 +332,7 @@ function submitCreate(): void {
       </div>
       <template #footer>
         <button type="button" class="btn btn-sm" @click="createOpen = false">キャンセル</button>
-        <button type="button" class="btn btn-primary btn-sm" @click="submitCreate">計上する</button>
+        <button type="button" class="btn btn-primary btn-sm" :disabled="busy" @click="submitCreate">計上する</button>
       </template>
     </UiModal>
   </div>

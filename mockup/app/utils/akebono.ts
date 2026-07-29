@@ -6,9 +6,9 @@
  * （第 2 巡決定 = 設定化）。ここに集約し、composable/画面はここを呼ぶ。
  */
 import type {
-  AkebonoAppConfig, BillingType, BusinessSegment, ConsignmentTerm, IndustryType,
-  InventoryTransaction, InventoryTxnKind, InvoiceStatus, PayoutMethod, PlanStatus,
-  PoStatus, ProductionStatus, Rounding, SalesRecord, SettlementSnapshot, PartnerRole,
+  AkebonoAppConfig, BillingType, BusinessSegment, IndustryType,
+  InventoryTxnKind, InvoiceStatus, PayoutMethod, PlanStatus,
+  PoStatus, ProductionStatus, PartnerRole,
 } from '~/types/akebono'
 import type { Company } from '~/types/domain'
 import type { Tone } from '~/types/ui'
@@ -132,115 +132,18 @@ export function hasPartnerRole(company: Pick<Company, 'kind' | 'partnerRoles'>, 
   return partnerRolesOf(company).includes(role)
 }
 
-// ---------- 在庫残高（台帳からの導出。SoT = InventoryTransaction） ----------
+// ---------- 在庫残高・税・委託精算・採番（Phase C で shared/domain/akebono へ移設し API と共有） ----------
+// 既存 import（composable・テスト）を不変に保つため再エクスポートする（原則3・7）。
+// 実装・詳細コメントの SoT は shared/domain/akebono.ts
+
+export {
+  balanceKey, buildSettlementSnapshot, calcPayoutAmount, calcStoreMargin, calcTax,
+  foldBalances, nextCode, roundBy, totalStockOf,
+} from '../../../shared/domain/akebono'
 
 export interface StockBalanceKey {
   skuId: string
   warehouseId: string
-}
-
-/** 台帳から SKU × 倉庫の残高を畳み込む（warehouse 実証方式: Σqty） */
-export function foldBalances(txns: InventoryTransaction[]): Map<string, number> {
-  const map = new Map<string, number>()
-  for (const t of txns) {
-    const key = `${t.skuId}::${t.warehouseId}`
-    map.set(key, (map.get(key) ?? 0) + t.qty)
-  }
-  return map
-}
-
-export function balanceKey(skuId: string, warehouseId: string): string {
-  return `${skuId}::${warehouseId}`
-}
-
-/** 特定 SKU の全倉庫合計残高 */
-export function totalStockOf(txns: InventoryTransaction[], skuId: string): number {
-  return txns.filter(t => t.skuId === skuId).reduce((s, t) => s + t.qty, 0)
-}
-
-// ---------- 税計算（設定注入型純関数） ----------
-
-export function roundBy(value: number, mode: Rounding): number {
-  if (mode === 'ceil') return Math.ceil(value)
-  if (mode === 'round') return Math.round(value)
-  return Math.floor(value)
-}
-
-/**
- * 税額を算出する。
- * - taxIncluded=false（外税）: tax = round(amount * rate)
- * - taxIncluded=true（内税）: tax = round(amount - amount / (1 + rate))
- */
-export function calcTax(amount: number, rate: number, included: boolean, rounding: Rounding): number {
-  if (rate <= 0) return 0
-  const raw = included ? amount - amount / (1 + rate) : amount * rate
-  return roundBy(raw, rounding)
-}
-
-// ---------- 委託精算（第 2 巡決定 = 設定化） ----------
-
-/** 委託条件（store 行 + consignor_artist 行）からスナップショットを作る */
-export function buildSettlementSnapshot(
-  storeTerm: ConsignmentTerm | undefined,
-  artistTerm: ConsignmentTerm | undefined,
-  taxRate: number,
-): SettlementSnapshot {
-  return {
-    payoutMethod: artistTerm?.payoutMethod ?? null,
-    payoutRate: artistTerm?.payoutRate ?? null,
-    marginRate: storeTerm?.marginRate ?? null,
-    taxRate,
-    taxIncluded: (artistTerm ?? storeTerm)?.taxIncluded ?? false,
-    rounding: (artistTerm ?? storeTerm)?.rounding ?? 'floor',
-  }
-}
-
-/**
- * 作家への支払額を算定する（決定 #5 + 第 2 巡）。
- * - sales_rate: 売価 × 販売数 × 作家率
- * - purchase_cost: 仕入単価（解決済み） × 販売数
- * unitCostResolver は purchase_cost 方式のとき SKU の単価を返す
- * （①直近仕入実績 → ② SKU 原価 → ③ 商品標準原価 のフォールバックは呼び出し側で解決して渡す）。
- */
-export function calcPayoutAmount(
-  record: Pick<SalesRecord, 'skuId' | 'qty' | 'amount'>,
-  snapshot: SettlementSnapshot,
-  unitCostResolver: (skuId: string) => number,
-): number {
-  if (snapshot.payoutMethod === 'purchase_cost') {
-    return roundBy(unitCostResolver(record.skuId) * record.qty, snapshot.rounding)
-  }
-  // sales_rate（既定）: 売上金額 × 作家率
-  const rate = snapshot.payoutRate ?? 0
-  return roundBy(record.amount * rate, snapshot.rounding)
-}
-
-/**
- * 当社が店舗へ請求する額（決定 #5 案 1 の三者精算）。
- * marginRate = 店舗が保有する取り分率（店舗マージン）。店舗は自分の取り分を控除した残りを当社へ送金し、
- * 当社はそこから作家へ支払い差額を粗利とする。したがって当社の店舗宛請求額 = 売上 × (1 − 店舗取り分率)。
- * これにより「店舗取り分 + 作家支払 + 当社粗利 = 売上」が閉じ、当社粗利が非負になる
- * （店舗取り分率と作家率の設定が 店舗率 + 作家率 ≤ 1 を満たすことが前提）。
- * ※ marginRate の定義（店舗取り分か当社取り分か）は決定 #5 が「設定で柔軟に」としたため、
- *   本モックは実運用に整合する「店舗取り分」で実装。壁打ちでの最終確認事項。
- */
-export function calcStoreMargin(salesAmount: number, snapshot: SettlementSnapshot): number {
-  const storeShare = snapshot.marginRate ?? 0
-  return roundBy(salesAmount * (1 - storeShare), snapshot.rounding)
-}
-
-// ---------- 採番 ----------
-
-/** 接頭辞連番の次番号（決定 #14。既存 nextId と同型だが伝票用に prefix を明示） */
-export function nextCode(existing: string[], prefix: string): string {
-  let max = 0
-  for (const c of existing) {
-    if (c.startsWith(`${prefix}-`)) {
-      const n = Number(c.slice(prefix.length + 1))
-      if (Number.isFinite(n) && n > max) max = n
-    }
-  }
-  return `${prefix}-${String(max + 1).padStart(4, '0')}`
 }
 
 // ---------- 業種プリセット（§3.3） ----------

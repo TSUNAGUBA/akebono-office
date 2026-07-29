@@ -42,6 +42,117 @@ export interface IntegratedMetrics {
   trend: IntegratedTrendPoint[]
 }
 
+// ---------- 統合メトリクスの組み立て（Phase C でサーバー組み立てへ引き上げ = フロント/API 共有の純関数） ----------
+
+/**
+ * 直近 N ヶ月の月キー（古い順）。currentYm = 'YYYY-MM'（呼び出し側が todayJst().slice(0,7) を注入）。
+ * endBackMonths=1 は「最終月 = 直前の完了月」（進行中の当月を締めていない売上で悲観評価しない）。
+ */
+export function recentMonthKeys(currentYm: string, n: number, endBackMonths = 0): string[] {
+  const y = Number(currentYm.slice(0, 4))
+  const m0 = Number(currentYm.slice(5, 7))
+  const out: string[] = []
+  for (let i = n - 1; i >= 0; i--) {
+    const m = m0 - 1 - endBackMonths - i
+    const ny = y + Math.floor(m / 12)
+    const nm = ((m % 12) + 12) % 12
+    out.push(`${ny}-${String(nm + 1).padStart(2, '0')}`)
+  }
+  return out
+}
+
+/** 売上明細の月次集計に必要な最小構造（mockup SalesRecord / DB 行の双方から渡せる） */
+export interface BusinessSalesRow {
+  id: string
+  salesDate: string
+  amount: number
+  correctionOf: string | null
+}
+
+/**
+ * 当該セグメントの売上を月次集計する（呼び出し側でセグメント・active フィルタ済みの行を渡す）。
+ * 赤黒訂正（correctionOf 付きの相殺行）は「元明細の計上月」へ振り替えて金額・件数を相殺する。
+ * 訂正行自身の日付（発生日 = 訂正した日）ではなく元の売上月で相殺しないと、集計月が食い違って
+ * 元の売上が過大計上されたままになる（原則6: データフロー整合性）。
+ */
+export function foldBusinessMonthly(
+  rows: BusinessSalesRow[],
+  months: string[],
+): Map<string, { amount: number; orders: number }> {
+  const map = new Map<string, { amount: number; orders: number }>()
+  for (const m of months) map.set(m, { amount: 0, orders: 0 })
+  const byId = new Map(rows.map(r => [r.id, r]))
+  for (const r of rows) {
+    // 訂正行は元明細の計上月へ帰属させる（元が見つからなければ自身の月）
+    const originMonth = (r.correctionOf ? byId.get(r.correctionOf)?.salesDate : r.salesDate)?.slice(0, 7)
+      ?? r.salesDate.slice(0, 7)
+    const cur = map.get(originMonth)
+    if (!cur) continue
+    cur.amount += r.amount
+    // 件数は純額: 訂正（相殺行）は元の受注を 1 件取り消す / 通常の正の明細は 1 件
+    if (r.correctionOf) cur.orders -= 1
+    else if (r.amount > 0) cur.orders += 1
+  }
+  // 相殺で負になった件数は 0 でクランプ（表示の健全性）
+  for (const v of map.values()) v.orders = Math.max(0, v.orders)
+  return map
+}
+
+/** メディア月次点の最小構造（GA 由来 / モック導出の双方から渡せる） */
+export interface MediaMonthlyLike {
+  sessions: number
+  conversions: number
+  engagedSessions?: number
+}
+
+/**
+ * 業務 × メディアの統合メトリクスを組み立てる（months は古い順。最終月 = 対象月）。
+ * mediaBy が空（GA 未連携等）はメディア軸 0 で返す（売上側は常に集計 = 業務軸を止めない）。
+ */
+export function composeIntegratedMetrics(input: {
+  segmentId: string
+  segmentName: string
+  siteName: string
+  months: string[]
+  mediaBy: Map<string, MediaMonthlyLike>
+  biz: Map<string, { amount: number; orders: number }>
+}): IntegratedMetrics {
+  const trend = input.months.map((month) => {
+    const mt = input.mediaBy.get(month) ?? { sessions: 0, conversions: 0 }
+    const b = input.biz.get(month) ?? { amount: 0, orders: 0 }
+    return { month, sessions: mt.sessions, conversions: mt.conversions, salesAmount: b.amount, orders: b.orders }
+  })
+  const cur = trend[trend.length - 1]!
+  const prev = trend[trend.length - 2] ?? { sessions: 0, conversions: 0, salesAmount: 0, orders: 0 }
+  const aov = cur.orders > 0 ? Math.round(cur.salesAmount / cur.orders) : 0
+  const salesPerSession = cur.sessions > 0 ? Math.round(cur.salesAmount / cur.sessions) : 0
+  return {
+    segmentId: input.segmentId,
+    segmentName: input.segmentName,
+    siteName: input.siteName,
+    periodMonth: cur.month,
+    sessions: cur.sessions,
+    conversions: cur.conversions,
+    conversionRate: cur.sessions > 0 ? Math.round(cur.conversions / cur.sessions * 10000) / 10000 : 0,
+    prevSessions: prev.sessions,
+    prevConversions: prev.conversions,
+    salesAmount: cur.salesAmount,
+    orders: cur.orders,
+    prevSalesAmount: prev.salesAmount,
+    aov,
+    salesPerSession,
+    funnel: {
+      sessions: cur.sessions,
+      // 主体的関与は GA の engagedSessions 実測を優先（m4 = 実測に擬似係数を混ぜない）。
+      // 実測が無い場合（モック導出・旧キャッシュ）のみ従来の 0.55 係数で近似する
+      engaged: input.mediaBy.get(cur.month)?.engagedSessions ?? Math.round(cur.sessions * 0.55),
+      conversions: cur.conversions,
+      orders: cur.orders,
+    },
+    trend,
+  }
+}
+
 export interface IntegratedInsight {
   executiveSummary: string
   /** メディア → 業務の関連（相関の読み） */

@@ -121,6 +121,10 @@ const schemas = {
     description: z.string().default(''),
     ownerMemberId: z.string().default(''),
     fiscalStartMonth: z.number().int().min(1).max(12).nullable().default(null),
+    // Akebono 拡張（F-30-1 = Phase C 0032 で物理列化。空 = customer は ['customer'] 相当のアプリ層互換）
+    partnerRoles: z.array(z.enum(['customer', 'supplier', 'consignor_artist', 'store', 'subcontractor'])).default([]),
+    paymentTermId: z.string().nullable().default(null).transform(v => (v ? v : null)),
+    billingTermId: z.string().nullable().default(null).transform(v => (v ? v : null)),
     custom: z.record(z.string(), z.unknown()).default({}),
   }),
   contacts: z.object({
@@ -371,7 +375,7 @@ export const MASTERS: Record<MasterEntity, MasterDef> = {
   'industries': { table: 'industries', idPrefix: 'ind', schema: schemas.industries, patchSchema: schemas.industries.partial(), jsonbFields: [] },
   // 業務種別（ぽいぽいポスト・議事録の任意分類。バッチ7c）
   'work-categories': { table: 'work_categories', idPrefix: 'wc', schema: schemas['work-categories'], patchSchema: schemas['work-categories'].partial(), jsonbFields: [] },
-  'companies': { table: 'companies', idPrefix: 'c', schema: schemas.companies, patchSchema: schemas.companies.partial(), jsonbFields: ['aliases', 'industryIds', 'custom'] },
+  'companies': { table: 'companies', idPrefix: 'c', schema: schemas.companies, patchSchema: schemas.companies.partial(), jsonbFields: ['aliases', 'industryIds', 'partnerRoles', 'custom'] },
   'contacts': { table: 'contacts', idPrefix: 'p', schema: schemas.contacts, patchSchema: schemas.contacts.partial(), jsonbFields: ['custom'] },
   // 関係種別は論理削除（無効化）に加え、未使用時のみ物理削除可（参照ガードは masters.ts の DELETE 側）
   'relation-types': { table: 'relation_types', idPrefix: 'rt', schema: schemas['relation-types'], patchSchema: schemas['relation-types'].partial(), jsonbFields: [], physicalDelete: true },

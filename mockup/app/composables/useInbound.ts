@@ -2,6 +2,8 @@
  * 入荷管理（F-25）
  * 予定（InboundPlan・設定系）と実績（InboundResult・記録系・追記のみ・部分実績可）を分離。
  * 実績登録で在庫台帳へ入庫（+）を post（明細行単位の冪等キー）。
+ * デュアルモード（Phase C = 0032）: API モードの SoT はサーバー（inbound_plans / inbound_results +
+ * inventory_transactions）。実績登録は 1 リクエストで実績追記 + 入庫 + 予定ステータス再計算（トランザクション）。
  */
 import type { InboundPlan, InboundResult, PlanStatus } from '~/types/akebono'
 import type { Result } from '~/types/domain'
@@ -12,6 +14,7 @@ export function useInbound() {
   const plans = tbl('inboundPlans')
   const results = tbl('inboundResults')
   const inv = useInventory()
+  const isApi = useApiMode()
 
   const activePlans = computed(() => plans.value.slice().sort((a, b) => (a.dueDate < b.dueDate ? 1 : -1)))
 
@@ -30,10 +33,14 @@ export function useInbound() {
     return sum
   }
 
-  function createPlan(input: { poId?: string | null; warehouseId: string; dueDate: string; lines: { skuId: string; qty: number }[] }): Result {
+  async function createPlan(input: { poId?: string | null; warehouseId: string; dueDate: string; lines: { skuId: string; qty: number }[] }): Promise<Result> {
     if (!input.warehouseId) return { ok: false, error: { code: 'AKO-INB-001', message: '入荷先倉庫を指定してください' } }
     const lines = input.lines.filter(l => l.skuId && l.qty > 0)
     if (lines.length === 0) return { ok: false, error: { code: 'AKO-INB-002', message: '入荷明細を 1 行以上入力してください' } }
+    if (isApi) {
+      const res = await apiWrite<InboundPlan>('/v1/akebono/inbound-plans', { body: { ...input, lines }, reload: ['inboundPlans'] })
+      return res.ok ? { ok: true, id: res.data.id } : res
+    }
     const id = nextId('inboundPlans', 'ibp')
     const created: InboundPlan = {
       id, code: nextCode(plans.value.map(p => p.code), 'IBP'),
@@ -60,7 +67,13 @@ export function useInbound() {
    * 入荷実績を登録（記録系・追記）。指示参照 or 直接登録。
    * 明細行ごとに在庫台帳へ入庫（+）を post。予定のステータスを再計算。
    */
-  function registerResult(input: { planId?: string | null; warehouseId?: string; lines: { planLineId?: string | null; skuId: string; qty: number }[] }): Result {
+  async function registerResult(input: { planId?: string | null; warehouseId?: string; lines: { planLineId?: string | null; skuId: string; qty: number }[] }): Promise<Result> {
+    if (isApi) {
+      const res = await apiWrite<InboundResult>('/v1/akebono/inbound-results', {
+        body: input, reload: ['inboundResults', 'inventoryTransactions', 'inboundPlans'],
+      })
+      return res.ok ? { ok: true, id: res.data.id } : res
+    }
     const plan = input.planId ? planById(input.planId) : undefined
     const warehouseId = plan?.warehouseId ?? input.warehouseId
     if (!warehouseId) return { ok: false, error: { code: 'AKO-INB-001', message: '入荷先倉庫を指定してください（直接登録時は必須）' } }
@@ -89,7 +102,8 @@ export function useInbound() {
     return { ok: true, id: resultId }
   }
 
-  function cancelPlan(id: string): Result {
+  async function cancelPlan(id: string): Promise<Result> {
+    if (isApi) return apiWrite(`/v1/akebono/inbound-plans/${id}/cancel`, { reload: ['inboundPlans'] })
     const plan = planById(id)
     if (!plan) return { ok: false, error: { code: 'AKO-GEN-002', message: '対象が見つかりません' } }
     if (resultsOfPlan(id).length > 0) return { ok: false, error: { code: 'AKO-INB-003', message: '入荷実績のある予定は取消できません' } }

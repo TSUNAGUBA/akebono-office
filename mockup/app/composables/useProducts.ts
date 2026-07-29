@@ -3,6 +3,11 @@
  * 商品（親）+ SKU（バリアント 2 軸）+ 画像（セクション別）。
  * SKU 展開なし商品は既定 SKU 1 件を透過生成（XA-1）。
  * 全トランザクションは SKU 単位で本商品から派生する。
+ *
+ * デュアルモード（Phase C = 0032）: API モードの SoT はサーバー（products / product_skus /
+ * product_images）。書込は /v1/akebono/products 系エンドポイント → 影響コレクションを再ロード
+ * （SoT 書込 → キャッシュ反映 = 原則6）。読み取り・導出（skuLabel・thumbnailOf 等）は両モード共通。
+ * モックモードの挙動は不変（同期実装を Promise で包むだけ）。
  */
 import type { Product, ProductImage, ProductSku } from '~/types/akebono'
 import type { Company } from '~/types/domain'
@@ -15,6 +20,7 @@ export function useProducts() {
   const images = tbl('productImages')
   const sections = tbl('productImageSections')
   const companies = tbl('companies')
+  const isApi = useApiMode()
 
   const activeProducts = computed(() => products.value.filter(p => p.active !== false))
 
@@ -68,11 +74,18 @@ export function useProducts() {
   }
 
   // ---------- 商品 CRUD ----------
-  function saveProduct(input: Partial<Product> & { id?: string }): Result {
+  async function saveProduct(input: Partial<Product> & { id?: string }): Promise<Result> {
     const code = String(input.code ?? '').trim()
     if (!code) return { ok: false, error: { code: 'AKO-PRD-001', message: '商品コードは必須です' } }
     if (!String(input.name ?? '').trim()) return { ok: false, error: { code: 'AKO-PRD-001', message: '商品名は必須です' } }
     if (!input.segmentId) return { ok: false, error: { code: 'AKO-PRD-001', message: '事業セグメントは必須です' } }
+    if (isApi) {
+      // 作成 = 既定 SKU も生成されるため両コレクションを再取得。更新 = 部分 PATCH（送ったキーのみ）
+      const res = input.id
+        ? await apiWrite<Product>(`/v1/akebono/products/${input.id}`, { method: 'PATCH', body: { ...input, id: undefined }, reload: ['products'] })
+        : await apiWrite<Product>('/v1/akebono/products', { body: input, reload: ['products', 'productSkus'] })
+      return res.ok ? { ok: true, id: res.data.id } : res
+    }
     // コード一意（同一セグメント内・有効行。論理削除は除外 = 再利用可）
     const dup = products.value.find(p =>
       p.id !== input.id && p.active !== false && p.segmentId === input.segmentId && p.code === code)
@@ -101,19 +114,21 @@ export function useProducts() {
     return { ok: true, id }
   }
 
-  function archiveProduct(id: string): Result {
+  async function archiveProduct(id: string): Promise<Result> {
+    if (isApi) return apiWrite(`/v1/akebono/products/${id}/archive`, { reload: ['products'] })
     products.value = products.value.map(p => p.id === id ? { ...p, active: false } : p)
     commit()
     return { ok: true, id }
   }
-  function restoreProduct(id: string): Result {
+  async function restoreProduct(id: string): Promise<Result> {
+    if (isApi) return apiWrite(`/v1/akebono/products/${id}/restore`, { reload: ['products'] })
     products.value = products.value.map(p => p.id === id ? { ...p, active: true } : p)
     commit()
     return { ok: true, id }
   }
 
   // ---------- SKU ----------
-  /** 既定 SKU が無ければ生成（展開なし商品向け） */
+  /** 既定 SKU が無ければ生成（展開なし商品向け。モックモード専用 = API は商品作成時にサーバーが生成） */
   function ensureDefaultSku(productId: string, productCode: string): void {
     if (skus.value.some(s => s.productId === productId && s.isDefault)) return
     const id = nextId('productSkus', 'sku')
@@ -125,12 +140,18 @@ export function useProducts() {
   }
 
   /** SKU マトリクス保存（軸1値 × 軸2値 の全組合せを upsert。既存はコードで突合） */
-  function saveMatrix(productId: string, axis1Values: string[], axis2Values: string[]): Result {
-    const product = productById(productId)
-    if (!product) return { ok: false, error: { code: 'AKO-GEN-002', message: '商品が見つかりません' } }
+  async function saveMatrix(productId: string, axis1Values: string[], axis2Values: string[]): Promise<Result> {
     const a1 = axis1Values.map(v => v.trim()).filter(Boolean)
     const a2 = axis2Values.length > 0 ? axis2Values.map(v => v.trim()).filter(Boolean) : ['']
     if (a1.length === 0) return { ok: false, error: { code: 'AKO-PRD-003', message: '軸1の値を 1 つ以上入力してください' } }
+    if (isApi) {
+      const res = await apiWrite<{ created: number }>(`/v1/akebono/products/${productId}/skus/matrix`, {
+        body: { axis1Values: a1, axis2Values: axis2Values }, reload: ['productSkus'],
+      })
+      return res.ok ? { ok: true, id: `${res.data.created}` } : res
+    }
+    const product = productById(productId)
+    if (!product) return { ok: false, error: { code: 'AKO-GEN-002', message: '商品が見つかりません' } }
 
     const existing = skus.value.filter(s => s.productId === productId)
     const next = [...skus.value]
@@ -158,7 +179,12 @@ export function useProducts() {
     return { ok: true, id: `${created}` }
   }
 
-  function saveSku(input: Partial<ProductSku> & { id: string }): Result {
+  async function saveSku(input: Partial<ProductSku> & { id: string }): Promise<Result> {
+    if (isApi) {
+      return apiWrite(`/v1/akebono/product-skus/${input.id}`, {
+        method: 'PATCH', body: { ...input, id: undefined }, reload: ['productSkus'],
+      })
+    }
     const idx = skus.value.findIndex(s => s.id === input.id)
     if (idx < 0) return { ok: false, error: { code: 'AKO-GEN-002', message: 'SKU が見つかりません' } }
     skus.value = skus.value.map(s => s.id === input.id ? { ...s, ...input } as ProductSku : s)
@@ -169,7 +195,14 @@ export function useProducts() {
   // ---------- 画像（F-21-3。セクション別・追加/並び替え/アーカイブ） ----------
   const activeSections = computed(() => sections.value.filter(s => s.active !== false).slice().sort((a, b) => a.displayOrder - b.displayOrder))
 
-  function addImage(productId: string, input: { sectionId: string; skuId?: string | null; filename: string; mime: string; dataUrl?: string | null }): Result & { persisted?: boolean } {
+  async function addImage(productId: string, input: { sectionId: string; skuId?: string | null; filename: string; mime: string; dataUrl?: string | null }): Promise<Result & { persisted?: boolean }> {
+    if (isApi) {
+      const res = await apiWrite<ProductImage>(`/v1/akebono/products/${productId}/images`, {
+        body: input, reload: ['productImages'],
+      })
+      // API はサーバー保管のため localStorage 容量問題なし（persisted は常に true）
+      return res.ok ? { ok: true, id: res.data.id, persisted: true } : res
+    }
     const id = nextId('productImages', 'pimg')
     const order = imagesOf(productId).filter(i => i.sectionId === input.sectionId).length + 1
     const created: ProductImage = {
@@ -181,17 +214,20 @@ export function useProducts() {
     const persisted = commit()
     return { ok: true, id, persisted }
   }
-  function archiveImage(id: string): Result {
+  async function archiveImage(id: string): Promise<Result> {
+    if (isApi) return apiWrite(`/v1/akebono/product-images/${id}/archive`, { reload: ['productImages'] })
     images.value = images.value.map(i => i.id === id ? { ...i, active: false } : i)
     commit()
     return { ok: true, id }
   }
-  function restoreImage(id: string): Result {
+  async function restoreImage(id: string): Promise<Result> {
+    if (isApi) return apiWrite(`/v1/akebono/product-images/${id}/restore`, { reload: ['productImages'] })
     images.value = images.value.map(i => i.id === id ? { ...i, active: true } : i)
     commit()
     return { ok: true, id }
   }
-  function setImageSection(id: string, sectionId: string): Result {
+  async function setImageSection(id: string, sectionId: string): Promise<Result> {
+    if (isApi) return apiWrite(`/v1/akebono/product-images/${id}`, { method: 'PATCH', body: { sectionId }, reload: ['productImages'] })
     images.value = images.value.map(i => i.id === id ? { ...i, sectionId } : i)
     commit()
     return { ok: true, id }

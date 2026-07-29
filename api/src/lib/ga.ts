@@ -13,6 +13,7 @@
  * メトリクス対応の注記: GA4 の `conversions` は廃止済みのため `keyEvents` を使う。
  * bounceRate / engagementRate は GA4 定義の比率（0..1）で返る。
  */
+import { recentMonthKeys as sharedRecentMonthKeys } from '../../../shared/domain/media-integrated'
 import type {
   MediaChannelStat, MediaDailyPoint, MediaDeviceStat, MediaMetrics, MediaMonthlyPoint,
   MediaPageStat, MediaSectionStat,
@@ -339,22 +340,10 @@ export function buildMonthlyTrend(report: GaReport | null, months: string[]): Me
  * todayKey を引数に取る純関数（テスト可能・JST は呼び出し側が渡す）
  */
 export function recentMonthKeys(n: number, endBackMonths: number, todayKey: string): string[] {
-  const y = Number(todayKey.slice(0, 4))
-  const m0 = Number(todayKey.slice(5, 7))
-  const out: string[] = []
-  for (let i = n - 1; i >= 0; i--) {
-    const m = m0 - 1 - endBackMonths - i
-    const ny = y + Math.floor(m / 12)
-    const nm = ((m % 12) + 12) % 12
-    out.push(`${ny}-${String(nm + 1).padStart(2, '0')}`)
-  }
-  return out
+  // 実装の SoT は shared/domain/media-integrated（Phase C でフロントの統合組み立てと共有化。
+  // 本シグネチャは既存呼び出し互換のため維持）
+  return sharedRecentMonthKeys(todayKey.slice(0, 7), n, endBackMonths)
 }
 
-/** 月キー（YYYY-MM）の月末日（YYYY-MM-DD）。dateRanges の endDate 用 */
-export function monthEndOf(month: string): string {
-  const y = Number(month.slice(0, 4))
-  const m = Number(month.slice(5, 7))
-  const last = new Date(y, m, 0).getDate()
-  return `${month}-${String(last).padStart(2, '0')}`
-}
+/** 月キー（YYYY-MM）の月末日（YYYY-MM-DD）。dateRanges の endDate 用。実装の SoT = shared/domain/akebono */
+export { monthEndOf } from '../../../shared/domain/akebono'
