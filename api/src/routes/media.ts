@@ -187,17 +187,28 @@ async function clearMetricsCache(pool: pg.Pool, segmentId: string): Promise<void
 
 // ---------- GA4 Data API 呼び出し ----------
 
-/** GA 呼び出し失敗の分類（403 の理由コードで判別。原因により利用者への案内が異なる） */
-type GaFailReason = 'api-disabled' | 'permission' | 'other'
+/** GA 呼び出し失敗の分類（ステータス + 理由コードで判別。原因により利用者への案内・リトライ可否が異なる） */
+export type GaFailReason = 'api-disabled' | 'permission' | 'quota' | 'other'
 /** detail = GA の実エラー理由（利用者向け報告に付加。本番障害 2026-07-29 で原因が画面から見えなかった対策） */
 type BatchResult = { ok: true; reports: GaReport[] } | { ok: false; reason: GaFailReason; detail: string }
 
-/** 403 ボディの理由分類（API 未有効化と「プロパティへのアクセス権なし」を区別して誤案内を防ぐ） */
-function gaFailReasonOf(status: number, bodyTxt: string): GaFailReason {
+/**
+ * 失敗理由の分類（純粋関数・単体テスト対象）。
+ * - quota（429 / RESOURCE_EXHAUSTED）: リトライしても悪化するだけ → per-report ファンアウトを抑止する（P2）
+ * - api-disabled / permission: 確定的失敗 → 同じくファンアウト無意味
+ * - other（タイムアウト・5xx・バッチ固有の 400 等）: レポート単位で切り分け可能 → ファンアウト対象
+ */
+export function gaFailReasonOf(status: number, bodyTxt: string): GaFailReason {
+  if (status === 429 || /RESOURCE_EXHAUSTED|Quota exceeded|quota/i.test(bodyTxt)) return 'quota'
   if (status !== 403) return 'other'
   if (/accessNotConfigured|SERVICE_DISABLED/.test(bodyTxt)) return 'api-disabled'
   if (/PERMISSION_DENIED|does not have sufficient permissions|insufficientPermissions/i.test(bodyTxt)) return 'permission'
   return 'other'
+}
+
+/** バッチ失敗後に per-report リトライ（ファンアウト）してよいか（P2: クォータ枯渇・確定的失敗では追い打ちしない） */
+export function shouldFanOut(reason: GaFailReason): boolean {
+  return reason === 'other'
 }
 
 /**
@@ -223,6 +234,10 @@ function gaFetchError(reason: GaFailReason, detail = ''): ApiError {
   if (reason === 'permission') {
     return err('AKO-MEDIA-004',
       '連携した Google アカウントに GA4 プロパティへのアクセス権がありません。GA 側の権限を確認するか、メディア設定からプロパティを選び直してください', 502)
+  }
+  if (reason === 'quota') {
+    return err('AKO-MEDIA-004',
+      `Google Analytics のクォータ上限に達しました${detail ? `（GA 応答: ${detail}）` : ''}。時間をおいて再試行してください`, 502)
   }
   return err('AKO-MEDIA-004',
     `Google Analytics からの集計取得に失敗しました${detail ? `（GA 応答: ${detail}）` : ''}。時間をおいて再試行してください`, 502)
@@ -279,7 +294,20 @@ const dateRange = (from: string, to: string): { startDate: string; endDate: stri
 const metric = (name: string): { name: string } => ({ name })
 const dimension = (name: string): { name: string } => ({ name })
 
-interface MetricsResult { metrics: MediaMetrics; warning?: string }
+/** 内訳レポートのキー（利用不能マーカー unavailable の語彙。フロントは該当ビジュアライゼーションを隠す = P1） */
+export type DetailKey = 'daily' | 'channels' | 'devices' | 'topPages' | 'prevPages'
+
+export interface MetricsResult {
+  metrics: MediaMetrics
+  warning?: string
+  /**
+   * 取得できなかった内訳（P1）。buildMediaMetrics の null 防御は欠落を「ゼロ埋め・空配列」へ正規化するため、
+   * そのまま描画すると一過性の失敗が「実トラフィック = ゼロ」の顔で表示される。フロントはこのマーカーで
+   * 該当ビジュアライゼーションを「取得できませんでした」表示に置き換える（ゼロデータとして描画しない）。
+   * 空 = 全内訳が有効（キャッシュされるのはこの状態のみ）
+   */
+  unavailable?: DetailKey[]
+}
 
 /**
  * GA4 から MediaMetrics を組み立てる（30 分キャッシュ利用）。
@@ -287,7 +315,8 @@ interface MetricsResult { metrics: MediaMetrics; warning?: string }
  *   GA プロパティのタイムゾーンが JST 以外の場合、日単位のずれは許容する（設計判断。lib/ga.ts 冒頭）
  * - 総計（当期/前期）が取れなければ全滅 = AKO-MEDIA-004。内訳バッチの失敗は空配列 + warning（原則4）
  */
-async function fetchMediaMetrics(
+// export はモック fetch による回帰テスト用（429 でファンアウトしない・unavailable の貫通 = P1/P2）
+export async function fetchMediaMetrics(
   pool: pg.Pool, env: Env, segmentId: string, days: number, force: boolean,
 ): Promise<MetricsResult> {
   requireEnabled(env)
@@ -330,8 +359,9 @@ async function fetchMediaMetrics(
   // 内訳は limit 10000 のページ別 × 2 を含み総計より重いため、タイムアウトを長めに取る
   // （本番障害 2026-07-29: 15 秒では内訳バッチのみタイムアウトし「総計のみ表示」が常態化した疑い）
   const DETAIL_TIMEOUT_MS = 25_000
-  const detailDefs: { label: string; request: unknown }[] = [
+  const detailDefs: { key: DetailKey; label: string; request: unknown }[] = [
     {
+      key: 'daily',
       label: '日別',
       request: {
         dateRanges: [dateRange(periodFrom, periodTo)],
@@ -341,6 +371,7 @@ async function fetchMediaMetrics(
       },
     },
     {
+      key: 'channels',
       label: 'チャネル別',
       request: {
         dateRanges: [dateRange(periodFrom, periodTo)],
@@ -350,6 +381,7 @@ async function fetchMediaMetrics(
       },
     },
     {
+      key: 'devices',
       label: 'デバイス別',
       request: {
         dateRanges: [dateRange(periodFrom, periodTo)],
@@ -359,6 +391,7 @@ async function fetchMediaMetrics(
       },
     },
     {
+      key: 'topPages',
       label: '記事別',
       request: {
         dateRanges: [dateRange(periodFrom, periodTo)],
@@ -373,6 +406,7 @@ async function fetchMediaMetrics(
       },
     },
     {
+      key: 'prevPages',
       label: '前期比（記事別）',
       request: {
         dateRanges: [dateRange(prevFrom, prevTo)],
@@ -387,11 +421,13 @@ async function fetchMediaMetrics(
   const detailBatch = await runBatch(access.token, access.propertyId, detailDefs.map(d => d.request), DETAIL_TIMEOUT_MS)
   let detailReports: (GaReport | null)[]
   const failedLabels: string[] = []
+  const unavailable: DetailKey[] = []
   let gaDetail = ''
+  let reasonNote = ''
   if (detailBatch.ok) {
     detailReports = detailDefs.map((_, i) => detailBatch.reports[i] ?? null)
-  } else {
-    // バッチは all-or-nothing のため、1 レポートの問題（互換性 400・クォータ・タイムアウト）が
+  } else if (shouldFanOut(detailBatch.reason)) {
+    // バッチは all-or-nothing のため、1 レポートの問題（互換性 400・タイムアウト・5xx）が
     // 5 つ全部を道連れにする。個別 runReport で**並行リトライ**し、取れた内訳だけ表示 +
     // 失敗した内訳名と GA の実エラー理由を warning で報告する（原則4 の粒度を per-report へ。
     // 原因が事前に確定できなくても本番で自己診断・自己回復できる設計。本番障害 2026-07-29）
@@ -404,9 +440,21 @@ async function fetchMediaMetrics(
     singles.forEach((s, i) => {
       if (!s.ok) {
         failedLabels.push(detailDefs[i]!.label)
+        unavailable.push(detailDefs[i]!.key)
         if (!gaDetail) gaDetail = s.detail
       }
     })
+  } else {
+    // クォータ枯渇（429）・確定的失敗（API 無効・権限なし）ではファンアウトしない（P2:
+    // 枯渇したプロパティへ 5 本の追い打ちはクォータ消費を倍増させ、他ユーザーの障害を長引かせる）
+    console.warn(`ga detail batch failed (${detailBatch.reason}) → per-report retry skipped:`, detailBatch.detail)
+    detailReports = detailDefs.map(() => null)
+    failedLabels.push(...detailDefs.map(d => d.label))
+    unavailable.push(...detailDefs.map(d => d.key))
+    gaDetail = detailBatch.detail
+    reasonNote = detailBatch.reason === 'quota'
+      ? 'Google Analytics のクォータ上限。'
+      : detailBatch.reason === 'api-disabled' ? 'Data API が無効。' : 'プロパティへのアクセス権なし。'
   }
 
   const metrics = buildMediaMetrics({
@@ -420,13 +468,13 @@ async function fetchMediaMetrics(
   }, { segmentId, siteName, periodFrom, periodTo, days, articles })
 
   // 失敗した内訳のみを名指しで報告（全滅は「総計のみ」・一部なら取れた内訳は表示している旨が伝わる文言）
-  const detailSuffix = `${gaDetail ? `（GA 応答: ${gaDetail}）` : ''}。時間をおいて再試行してください`
+  const detailSuffix = `${reasonNote || gaDetail ? `（${reasonNote}${gaDetail ? `GA 応答: ${gaDetail}` : ''}）` : ''}。時間をおいて再試行してください`
   const warning = failedLabels.length === 0
     ? undefined
     : failedLabels.length === detailDefs.length
       ? `内訳（日別・チャネル・デバイス・記事別）の取得に失敗したため、総計のみ表示しています${detailSuffix}`
       : `一部の内訳（${failedLabels.join('・')}）の取得に失敗しました${detailSuffix}`
-  const result: MetricsResult = { metrics, warning }
+  const result: MetricsResult = { metrics, warning, unavailable }
   // 部分失敗の結果は 30 分固定化しない（次回リクエストで再試行させる）
   if (!result.warning) await putCache(pool, segmentId, cacheKey, result)
   return result

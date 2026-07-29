@@ -7,8 +7,8 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  applyServerMediaAxis, gaErrorDetailOf, insightHintsOf, normalizeArticleDraft, normalizeIntegratedInsight,
-  normalizeIntegratedMetrics, normalizeMediaInsight, settingsPatchOf,
+  applyServerMediaAxis, gaErrorDetailOf, gaFailReasonOf, insightHintsOf, normalizeArticleDraft,
+  normalizeIntegratedInsight, normalizeIntegratedMetrics, normalizeMediaInsight, settingsPatchOf, shouldFanOut,
 } from '../../src/routes/media'
 import type { ArticleGenInput } from '../../../shared/domain/media-article'
 import { heuristicIntegratedInsight, type IntegratedMetrics } from '../../../shared/domain/media-integrated'
@@ -290,5 +290,31 @@ describe('gaErrorDetailOf（GA 実エラー理由の抽出 = 本番障害 2026-0
   it('壊れた入力でもクラッシュしない', () => {
     expect(gaErrorDetailOf('')).toBe('')
     expect(gaErrorDetailOf('{"error":{}}')).toBe('{"error":{}}')
+  })
+})
+
+describe('gaFailReasonOf / shouldFanOut（P2: クォータ・確定的失敗ではファンアウトしない）', () => {
+  it('429 / RESOURCE_EXHAUSTED / Quota exceeded は quota', () => {
+    expect(gaFailReasonOf(429, '')).toBe('quota')
+    expect(gaFailReasonOf(403, '{"error":{"status":"RESOURCE_EXHAUSTED"}}')).toBe('quota')
+    expect(gaFailReasonOf(500, 'Quota exceeded for property')).toBe('quota')
+  })
+
+  it('403 は理由コードで api-disabled / permission を分類', () => {
+    expect(gaFailReasonOf(403, 'accessNotConfigured')).toBe('api-disabled')
+    expect(gaFailReasonOf(403, 'PERMISSION_DENIED')).toBe('permission')
+  })
+
+  it('タイムアウト・5xx・その他 400 は other = per-report で切り分け可能', () => {
+    expect(gaFailReasonOf(0, 'The operation was aborted due to timeout')).toBe('other')
+    expect(gaFailReasonOf(500, 'Internal error')).toBe('other')
+    expect(gaFailReasonOf(400, 'Please remove entrances to make the request compatible.')).toBe('other')
+  })
+
+  it('shouldFanOut は other のみ true（quota / api-disabled / permission では追い打ちしない）', () => {
+    expect(shouldFanOut('other')).toBe(true)
+    expect(shouldFanOut('quota')).toBe(false)
+    expect(shouldFanOut('api-disabled')).toBe(false)
+    expect(shouldFanOut('permission')).toBe(false)
   })
 })
