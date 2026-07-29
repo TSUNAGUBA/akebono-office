@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  applyServerMediaAxis, insightHintsOf, normalizeArticleDraft, normalizeIntegratedInsight,
+  applyServerMediaAxis, gaErrorDetailOf, insightHintsOf, normalizeArticleDraft, normalizeIntegratedInsight,
   normalizeIntegratedMetrics, normalizeMediaInsight, settingsPatchOf,
 } from '../../src/routes/media'
 import type { ArticleGenInput } from '../../../shared/domain/media-article'
@@ -266,5 +266,29 @@ describe('applyServerMediaAxis（M2: メディア軸のサーバー上書き + �
     const noEngaged = [{ month: '2026-06', sessions: 1000, users: 800, conversions: 20 }]
     const m = applyServerMediaAxis(base, noEngaged)
     expect(m.funnel.engaged).toBe(Math.round(1000 * 0.55))
+  })
+})
+
+describe('gaErrorDetailOf（GA 実エラー理由の抽出 = 本番障害 2026-07-29 の画面診断対策）', () => {
+  it('GA の JSON エラーボディからは error.message を抽出する', () => {
+    const body = JSON.stringify({
+      error: { code: 400, message: 'Please remove entrances to make the request compatible.', status: 'INVALID_ARGUMENT' },
+    })
+    expect(gaErrorDetailOf(body)).toBe('Please remove entrances to make the request compatible.')
+  })
+
+  it('JSON でないボディ（HTML エラーページ等）は空白正規化した先頭を使う', () => {
+    expect(gaErrorDetailOf('<html>\n  <body>Quota\n exceeded</body></html>'))
+      .toBe('<html> <body>Quota exceeded</body></html>')
+  })
+
+  it('150 コードポイントで切り詰める（warning の肥大防止）', () => {
+    const long = JSON.stringify({ error: { message: 'x'.repeat(500) } })
+    expect([...gaErrorDetailOf(long)].length).toBe(150)
+  })
+
+  it('壊れた入力でもクラッシュしない', () => {
+    expect(gaErrorDetailOf('')).toBe('')
+    expect(gaErrorDetailOf('{"error":{}}')).toBe('{"error":{}}')
   })
 })

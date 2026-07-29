@@ -189,7 +189,8 @@ async function clearMetricsCache(pool: pg.Pool, segmentId: string): Promise<void
 
 /** GA 呼び出し失敗の分類（403 の理由コードで判別。原因により利用者への案内が異なる） */
 type GaFailReason = 'api-disabled' | 'permission' | 'other'
-type BatchResult = { ok: true; reports: GaReport[] } | { ok: false; reason: GaFailReason }
+/** detail = GA の実エラー理由（利用者向け報告に付加。本番障害 2026-07-29 で原因が画面から見えなかった対策） */
+type BatchResult = { ok: true; reports: GaReport[] } | { ok: false; reason: GaFailReason; detail: string }
 
 /** 403 ボディの理由分類（API 未有効化と「プロパティへのアクセス権なし」を区別して誤案内を防ぐ） */
 function gaFailReasonOf(status: number, bodyTxt: string): GaFailReason {
@@ -199,8 +200,22 @@ function gaFailReasonOf(status: number, bodyTxt: string): GaFailReason {
   return 'other'
 }
 
-/** 集計取得失敗（AKO-MEDIA-004）の利用者向けメッセージ（理由別） */
-function gaFetchError(reason: GaFailReason): ApiError {
+/**
+ * GA エラーボディから利用者に見せる実エラー理由を抽出する（純粋関数・単体テスト対象）。
+ * 本番障害 2026-07-29: 生エラーがサーバーログにしか出ず、オペレーターが画面から原因診断できなかったため、
+ * warning / エラーメッセージへ先頭 150 字を付加する（トークン等の機密は GA エラー本文に含まれない）
+ */
+export function gaErrorDetailOf(bodyTxt: string): string {
+  let msg = bodyTxt
+  try {
+    const parsed = JSON.parse(bodyTxt) as { error?: { message?: string } }
+    if (parsed.error?.message) msg = parsed.error.message
+  } catch { /* JSON でない（HTML エラーページ等）は生テキストの先頭を使う */ }
+  return capCp(msg.replace(/\s+/g, ' ').trim(), 150)
+}
+
+/** 集計取得失敗（AKO-MEDIA-004）の利用者向けメッセージ（理由別。detail = GA の実エラー理由） */
+function gaFetchError(reason: GaFailReason, detail = ''): ApiError {
   if (reason === 'api-disabled') {
     return err('AKO-MEDIA-004',
       'Google Analytics Data API が利用できません。管理者は GCP プロジェクトで Google Analytics Data API を有効化してください', 502)
@@ -209,28 +224,54 @@ function gaFetchError(reason: GaFailReason): ApiError {
     return err('AKO-MEDIA-004',
       '連携した Google アカウントに GA4 プロパティへのアクセス権がありません。GA 側の権限を確認するか、メディア設定からプロパティを選び直してください', 502)
   }
-  return err('AKO-MEDIA-004', 'Google Analytics からの集計取得に失敗しました。時間をおいて再試行してください', 502)
+  return err('AKO-MEDIA-004',
+    `Google Analytics からの集計取得に失敗しました${detail ? `（GA 応答: ${detail}）` : ''}。時間をおいて再試行してください`, 502)
 }
 
 /** batchRunReports（最大 5 リクエスト/バッチ）。失敗は例外にせず結果型で返す（呼び出し側がグレースフルに扱う） */
-async function runBatch(token: string, propertyId: string, requests: unknown[]): Promise<BatchResult> {
+async function runBatch(
+  token: string, propertyId: string, requests: unknown[], timeoutMs = 15_000,
+): Promise<BatchResult> {
   try {
     const res = await fetch(`${GA_DATA_BASE}/${propertyId}:batchRunReports`, {
       method: 'POST',
       headers: { 'authorization': `Bearer ${token}`, 'content-type': 'application/json' },
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(timeoutMs),
       body: JSON.stringify({ requests }),
     })
     if (!res.ok) {
       const bodyTxt = await res.text()
       console.warn('ga batchRunReports failed:', res.status, bodyTxt.slice(0, 300))
-      return { ok: false, reason: gaFailReasonOf(res.status, bodyTxt) }
+      return { ok: false, reason: gaFailReasonOf(res.status, bodyTxt), detail: gaErrorDetailOf(bodyTxt) }
     }
     const body = await res.json() as { reports?: GaReport[] }
     return { ok: true, reports: body.reports ?? [] }
   } catch (e) {
     console.warn('ga batchRunReports failed:', (e as Error).message)
-    return { ok: false, reason: 'other' }
+    return { ok: false, reason: 'other', detail: capCp((e as Error).message, 150) }
+  }
+}
+
+/** 単発 runReport（バッチ全滅時の per-report リトライ用。本番障害 2026-07-29 の自己回復経路） */
+async function runReport(
+  token: string, propertyId: string, request: unknown, timeoutMs: number,
+): Promise<{ ok: true; report: GaReport } | { ok: false; reason: GaFailReason; detail: string }> {
+  try {
+    const res = await fetch(`${GA_DATA_BASE}/${propertyId}:runReport`, {
+      method: 'POST',
+      headers: { 'authorization': `Bearer ${token}`, 'content-type': 'application/json' },
+      signal: AbortSignal.timeout(timeoutMs),
+      body: JSON.stringify(request),
+    })
+    if (!res.ok) {
+      const bodyTxt = await res.text()
+      console.warn('ga runReport failed:', res.status, bodyTxt.slice(0, 300))
+      return { ok: false, reason: gaFailReasonOf(res.status, bodyTxt), detail: gaErrorDetailOf(bodyTxt) }
+    }
+    return { ok: true, report: await res.json() as GaReport }
+  } catch (e) {
+    console.warn('ga runReport failed:', (e as Error).message)
+    return { ok: false, reason: 'other', detail: capCp((e as Error).message, 150) }
   }
 }
 
@@ -283,66 +324,109 @@ async function fetchMediaMetrics(
     { dateRanges: [dateRange(periodFrom, periodTo)], metrics: TOTAL_METRICS },
     { dateRanges: [dateRange(prevFrom, prevTo)], metrics: TOTAL_METRICS },
   ])
-  if (!totalsBatch.ok) throw gaFetchError(totalsBatch.reason)
+  if (!totalsBatch.ok) throw gaFetchError(totalsBatch.reason, totalsBatch.detail)
 
-  // 内訳（日別・チャネル・デバイス・記事別 + 前期の記事別 PV）。失敗しても総計は返す（原則4）
-  const detailBatch = await runBatch(access.token, access.propertyId, [
+  // 内訳（日別・チャネル・デバイス・記事別 + 前期の記事別 PV）。失敗しても総計は返す（原則4）。
+  // 内訳は limit 10000 のページ別 × 2 を含み総計より重いため、タイムアウトを長めに取る
+  // （本番障害 2026-07-29: 15 秒では内訳バッチのみタイムアウトし「総計のみ表示」が常態化した疑い）
+  const DETAIL_TIMEOUT_MS = 25_000
+  const detailDefs: { label: string; request: unknown }[] = [
     {
-      dateRanges: [dateRange(periodFrom, periodTo)],
-      dimensions: [dimension('date')],
-      metrics: ['sessions', 'totalUsers', 'keyEvents'].map(metric),
-      limit: '400',
+      label: '日別',
+      request: {
+        dateRanges: [dateRange(periodFrom, periodTo)],
+        dimensions: [dimension('date')],
+        metrics: ['sessions', 'totalUsers', 'keyEvents'].map(metric),
+        limit: '400',
+      },
     },
     {
-      dateRanges: [dateRange(periodFrom, periodTo)],
-      dimensions: [dimension('sessionDefaultChannelGroup')],
-      metrics: ['sessions', 'keyEvents'].map(metric),
-      limit: '50',
+      label: 'チャネル別',
+      request: {
+        dateRanges: [dateRange(periodFrom, periodTo)],
+        dimensions: [dimension('sessionDefaultChannelGroup')],
+        metrics: ['sessions', 'keyEvents'].map(metric),
+        limit: '50',
+      },
     },
     {
-      dateRanges: [dateRange(periodFrom, periodTo)],
-      dimensions: [dimension('deviceCategory')],
-      metrics: ['sessions'].map(metric),
-      limit: '10',
+      label: 'デバイス別',
+      request: {
+        dateRanges: [dateRange(periodFrom, periodTo)],
+        dimensions: [dimension('deviceCategory')],
+        metrics: ['sessions'].map(metric),
+        limit: '10',
+      },
     },
     {
-      dateRanges: [dateRange(periodFrom, periodTo)],
-      dimensions: ['pagePath', 'pageTitle'].map(dimension),
-      metrics: ['screenPageViews', 'totalUsers', 'userEngagementDuration', 'entrances', 'bounceRate', 'keyEvents'].map(metric),
-      orderBys: [{ metric: { metricName: 'screenPageViews' }, desc: true }],
-      // セクション集計は「サイト全体の内訳」として表示するため全ページ母集団が必要（Codex 指摘 3）。
-      // 表示上限（topPages 12 件）は整形側の slice が担い、レスポンス/キャッシュには整形後の
-      // MediaMetrics のみが載るため limit を上げてもキャッシュサイズへの影響は軽微。
-      // 10000 (path,title) 組超の超ロングテールは打ち切りを許容（PV 降順のため影響は極小）
-      limit: '10000',
+      label: '記事別',
+      request: {
+        dateRanges: [dateRange(periodFrom, periodTo)],
+        dimensions: ['pagePath', 'pageTitle'].map(dimension),
+        metrics: ['screenPageViews', 'totalUsers', 'userEngagementDuration', 'entrances', 'bounceRate', 'keyEvents'].map(metric),
+        orderBys: [{ metric: { metricName: 'screenPageViews' }, desc: true }],
+        // セクション集計は「サイト全体の内訳」として表示するため全ページ母集団が必要（Codex 指摘 3）。
+        // 表示上限（topPages 12 件）は整形側の slice が担い、レスポンス/キャッシュには整形後の
+        // MediaMetrics のみが載るため limit を上げてもキャッシュサイズへの影響は軽微。
+        // 10000 (path,title) 組超の超ロングテールは打ち切りを許容（PV 降順のため影響は極小）
+        limit: '10000',
+      },
     },
     {
-      dateRanges: [dateRange(prevFrom, prevTo)],
-      dimensions: [dimension('pagePath')],
-      metrics: ['screenPageViews'].map(metric),
-      orderBys: [{ metric: { metricName: 'screenPageViews' }, desc: true }],
-      // 前期比の突合先も同じ母集団を確保する（打ち切りによる prevPageviews=0 の誤判定を防ぐ）
-      limit: '10000',
+      label: '前期比（記事別）',
+      request: {
+        dateRanges: [dateRange(prevFrom, prevTo)],
+        dimensions: [dimension('pagePath')],
+        metrics: ['screenPageViews'].map(metric),
+        orderBys: [{ metric: { metricName: 'screenPageViews' }, desc: true }],
+        // 前期比の突合先も同じ母集団を確保する（打ち切りによる prevPageviews=0 の誤判定を防ぐ）
+        limit: '10000',
+      },
     },
-  ])
+  ]
+  const detailBatch = await runBatch(access.token, access.propertyId, detailDefs.map(d => d.request), DETAIL_TIMEOUT_MS)
+  let detailReports: (GaReport | null)[]
+  const failedLabels: string[] = []
+  let gaDetail = ''
+  if (detailBatch.ok) {
+    detailReports = detailDefs.map((_, i) => detailBatch.reports[i] ?? null)
+  } else {
+    // バッチは all-or-nothing のため、1 レポートの問題（互換性 400・クォータ・タイムアウト）が
+    // 5 つ全部を道連れにする。個別 runReport で**並行リトライ**し、取れた内訳だけ表示 +
+    // 失敗した内訳名と GA の実エラー理由を warning で報告する（原則4 の粒度を per-report へ。
+    // 原因が事前に確定できなくても本番で自己診断・自己回復できる設計。本番障害 2026-07-29）
+    console.warn('ga detail batch failed → per-report retry:', detailBatch.detail)
+    const token = access.token
+    const propertyId = access.propertyId
+    const singles = await Promise.all(
+      detailDefs.map(d => runReport(token, propertyId, d.request, DETAIL_TIMEOUT_MS)))
+    detailReports = singles.map(s => (s.ok ? s.report : null))
+    singles.forEach((s, i) => {
+      if (!s.ok) {
+        failedLabels.push(detailDefs[i]!.label)
+        if (!gaDetail) gaDetail = s.detail
+      }
+    })
+  }
 
-  const detail = detailBatch.ok ? detailBatch.reports : []
   const metrics = buildMediaMetrics({
     totals: totalsBatch.reports[0] ?? null,
     prevTotals: totalsBatch.reports[1] ?? null,
-    daily: detail[0] ?? null,
-    channels: detail[1] ?? null,
-    devices: detail[2] ?? null,
-    topPages: detail[3] ?? null,
-    prevPages: detail[4] ?? null,
+    daily: detailReports[0] ?? null,
+    channels: detailReports[1] ?? null,
+    devices: detailReports[2] ?? null,
+    topPages: detailReports[3] ?? null,
+    prevPages: detailReports[4] ?? null,
   }, { segmentId, siteName, periodFrom, periodTo, days, articles })
 
-  const result: MetricsResult = {
-    metrics,
-    warning: detailBatch.ok
-      ? undefined
-      : '内訳（日別・チャネル・デバイス・記事別）の取得に失敗したため、総計のみ表示しています。時間をおいて再試行してください',
-  }
+  // 失敗した内訳のみを名指しで報告（全滅は「総計のみ」・一部なら取れた内訳は表示している旨が伝わる文言）
+  const detailSuffix = `${gaDetail ? `（GA 応答: ${gaDetail}）` : ''}。時間をおいて再試行してください`
+  const warning = failedLabels.length === 0
+    ? undefined
+    : failedLabels.length === detailDefs.length
+      ? `内訳（日別・チャネル・デバイス・記事別）の取得に失敗したため、総計のみ表示しています${detailSuffix}`
+      : `一部の内訳（${failedLabels.join('・')}）の取得に失敗しました${detailSuffix}`
+  const result: MetricsResult = { metrics, warning }
   // 部分失敗の結果は 30 分固定化しない（次回リクエストで再試行させる）
   if (!result.warning) await putCache(pool, segmentId, cacheKey, result)
   return result
@@ -365,14 +449,15 @@ async function fetchMonthlyTrend(
   const monthKeys = recentMonthKeys(months, 1, todayJst())
   const first = monthKeys[0]!
   const last = monthKeys[monthKeys.length - 1]!
-  // engagedSessions = 統合ファネルの「主体的関与」の実測（擬似係数 0.55 の置換。m4）
+  // engagedSessions = 統合ファネルの「主体的関与」の実測（擬似係数 0.55 の置換。m4）。
+  // タイムアウトは内訳と同じ 25 秒 + 失敗時は GA の実エラー理由をメッセージへ付加（本番障害 2026-07-29）
   const batch = await runBatch(access.token, access.propertyId, [{
     dateRanges: [dateRange(`${first}-01`, monthEndOf(last))],
     dimensions: [dimension('yearMonth')],
     metrics: ['sessions', 'totalUsers', 'keyEvents', 'engagedSessions'].map(metric),
     limit: '100',
-  }])
-  if (!batch.ok) throw gaFetchError(batch.reason)
+  }], 25_000)
+  if (!batch.ok) throw gaFetchError(batch.reason, batch.detail)
   const points = buildMonthlyTrend(batch.reports[0] ?? null, monthKeys)
   await putCache(pool, segmentId, cacheKey, points)
   return points
