@@ -222,6 +222,11 @@ const CUSTOM_COLLECTION_ENDPOINTS: Record<string, string> = {
   invoices: '/v1/akebono/invoices',
   paymentNotices: '/v1/akebono/payment-notices',
   paymentReceipts: '/v1/akebono/payment-receipts',
+  // Phase D（0035）: データ取込（F-32）。取込元/マッピング/実行履歴の読み取りは一覧 GET・書込は
+  // useAkebonoImports の専用経路（dashboardInsights はセグメント×scope キーのため composable 側で個別ロード）
+  importSources: '/v1/akebono/import-sources',
+  importMappings: '/v1/akebono/import-mappings',
+  importRuns: '/v1/akebono/import-runs',
 }
 
 /**

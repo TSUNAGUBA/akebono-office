@@ -183,9 +183,41 @@ akebono_wishes / sales_monthly / media_articles と同方針。各画面は空�
 > 行わない。0032 冒頭コメントが正）。0031 シードの c-ak-* 参照（warehouses / consignment_terms）は
 > 実運用開始時に実取引先へ付け替える（オペレーター手順 = implementation-status §39）。
 > **取消フローの現状（原則9.5）:** 売上・仕入 = 赤黒 / 通常請求 = 赤伝 / 入金 = 論理取消（0033）/
-> 予定・指示 = ステータス取消。**委託精算（マージン請求 + 支払通知の組）の取消フローは未対応**
-> （AKO-BIL-008 で案内・Phase D 残課題 = §39-6）。入荷/出荷/生産の実績も伝票レベルの補償手段は
-> 未対応（在庫の数量は adjust で補償可・§39-6）。
+> 予定・指示 = ステータス取消 / **委託精算（マージン請求 + 支払通知の組）= Phase D（0037）で取消フロー実装済み**
+> （マージン請求の赤伝 + 支払通知の論理取消 voided_at + 売上リンク解除 = 再締め可能。§1.7 参照）。
+> 入荷/出荷/生産の実績は伝票レベルの補償手段は未対応（在庫の数量は adjust で補償可 = §40 残課題）。
+
+### 1.7 Akebono 残記録系・導出系の API 永続化（Phase D。2026-07-29 追加・本実装 = migration 0035-0038 = 最終フェーズ）
+
+Phase B（設定系）・Phase C（記録系 + 売上軸）に続く**最終フェーズ**。残っていたモックコレクション
+（importSources / importMappings / importRuns / dashboardInsights）を `app_office` へ移行し、
+**API モードで localStorage 保管のまま日次消失するモックコレクションを 0 にした**（走査した 30 コレクションの
+移行完了表は implementation-status §40）。委託精算の取消（0037）・出荷→売上連携（0038）も本フェーズで実装。
+
+| エンティティ（テーブル） | 主要属性 | 分類 / SoT | 機密度 |
+|---|---|---|---|
+| `ImportSource`（import_sources） | id, name, method（file_csv/file_fixed/file_json/api_pull）, encoding（utf8/sjis）, targetEntity, schedule, active | 設定系（CRUD・論理削除で取消/復元 = 原則9.5）。SoT = 本テーブル | C2 |
+| `ImportMapping`（import_mappings） | id, sourceId, version, status（draft/active/superseded）, **fields jsonb**（sourceField/targetItemKey/transform）, createdAt。**UNIQUE(source_id, version)** + 部分一意 `(source_id) WHERE status='active'` | 設定系/版管理（新版を追記し旧 active は superseded = 上書きせず履歴を残す）。version 採番は advisory lock で直列化 | C2 |
+| `ImportRun`（import_runs） | id, code, sourceId, mappingVersion, startedAt/finishedAt, status, **counts jsonb**（staged/applied/skipped/failed）, **errors jsonb**（隔離行） | **記録系（追記のみ・訂正しない = 監査性）**。実行はサーバーが決定的にシミュレートして記録（実ファイル取込は F-32 後続 = §40 残課題） | C2 |
+| `DashboardInsightRecord`（dashboard_insights） | id, scope（segment/company）, segmentId（company は '' 番兵）, periodKey, **metrics/insight jsonb**, llm, generatedBy, generatedAt。**UNIQUE(scope, segment_id)** | **導出キャッシュ**（記録系ではない）。生成 → 保管 → 再生成で upsert 上書き（media_insights 0030 / weekly_insights 0026 と同型）。集計材料 = サーバー組み立て（buildIntegratedMetrics = 売上軸 sales_records + メディア軸 GA。Phase C を消費）。洞察 = Vertex AI → 失敗時ヒューリスティック（原則4） | C3（売上を含む） |
+
+> **委託精算取消（0037・原則9.5）:** invoices / payment_notices に `settlement_id`（精算バッチ id）を付与し、
+> `POST /v1/akebono/consignment/cancel` が業態 × 月のバッチを特定して取消する。①マージン請求（issued・credit_for
+> IS NULL のみ）を void + 赤伝（マイナス請求）を追記 ②対象売上の invoice_id を解除（再締め可能に）
+> ③支払通知を論理取消（`voided_at`/`voided_by` = payment_receipts 0033 と同型。赤伝の器が無いため監査列で無効化）。
+> close と同一 advisory lock で排他 = 並行 close/cancel を直列化・二重取消は AKO-BIL-010（409）。
+> **下流確定状態の保護（レビュー MAJOR-1）:** バッチに有効入金のあるマージン請求（部分入金含む）or 確定済み支払通知が
+> 1 件でもあれば取消を **AKO-BIL-011 で拒否**（片側だけ反転すると paid マージンが取消対象から外れ孤児入金が残り、
+> 支払通知は期間一括 void で再締め時に片側が消えるため）。先に入金取消（AKO-BIL-009）を行えば取消可能。判断は共有純関数
+> `consignmentCancelBlockReason`（両モード同一）。
+> **出荷→売上連携（0038）:** 出荷実績登録に `postSales` オプションを追加し、対象明細から売上明細を自動生成
+> （source_kind='shipment'・source_ref='obr:<明細行id>'・同一トランザクションで原子的）。二重計上防止 = 部分一意
+> INDEX `sales_records(source_ref) WHERE source_kind='shipment'`。**店舗預けの出荷は「販売」ではないため対象外**
+> （店舗販売時に別途計上 = 二重の売上導線を作らない。AKO-OUT-005）。単価は SKU 販売単価 → 商品標準販売単価で解決。
+> **currentSegment（`ako.currentSegment.v1`）は端末ローカルのまま（移行しない）:** 「直近の作業コンテキスト」= 一時的な
+> UI 選択状態で、記録系でも設定系でもない。useMockDb（日次リシード）とは別の専用 localStorage キーのため**日次消失しない**
+> （useCurrentUser と同パターン）。無効 id は resolveDefaultSegmentId で先頭業態へフォールバック = 非破壊（原則2）。
+> 「今どの業態を見ているか」の端末間同期はむしろ不都合なため、端末ローカルが妥当と判断（implementation-status §40）。
 
 ## 2. スタースキーマ接続（akebono-scm-platform `mart` 規約準拠）
 

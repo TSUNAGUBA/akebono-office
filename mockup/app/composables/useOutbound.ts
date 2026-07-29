@@ -7,11 +7,11 @@
  * デュアルモード（Phase C = 0032）: API モードの SoT はサーバー（outbound_plans / outbound_results +
  * inventory_transactions）。在庫不足チェック・店舗預け移動・予定ステータス再計算はサーバーが担う。
  */
-import type { OutboundPlan, OutboundResult, PlanStatus, Warehouse } from '~/types/akebono'
+import type { BillingType, OutboundPlan, OutboundResult, PlanStatus, SalesRecord, Warehouse } from '~/types/akebono'
 import type { Company } from '~/types/domain'
 import type { Result } from '~/types/domain'
 import type { PostEntry } from '~/composables/useInventory'
-import { hasPartnerRole, nextCode } from '~/utils/akebono'
+import { buildShipmentSaleLines, hasPartnerRole, nextCode } from '~/utils/akebono'
 
 export function useOutbound() {
   const { tbl, commit, nextId } = useMockDb()
@@ -19,7 +19,9 @@ export function useOutbound() {
   const results = tbl('outboundResults')
   const warehouses = tbl('warehouses')
   const companies = tbl('companies')
+  const sales = tbl('salesRecords')
   const inv = useInventory()
+  const products = useProducts()
   const isApi = useApiMode()
 
   const activePlans = computed(() => plans.value.slice().sort((a, b) => (a.dueDate < b.dueDate ? 1 : -1)))
@@ -77,17 +79,28 @@ export function useOutbound() {
     return totalShipped >= totalPlanned ? 'completed' : 'partial'
   }
 
-  /** 出荷実績を登録（記録系・追記）。出庫（−）+ 店舗預け移動（+）を post */
-  async function registerResult(input: { planId?: string | null; warehouseId?: string; companyId?: string | null; lines: { planLineId?: string | null; skuId: string; qty: number }[] }): Promise<Result> {
+  /**
+   * 出荷実績を登録（記録系・追記）。出庫（−）+ 店舗預け移動（+）を post。
+   * postSales=true のときは出荷明細から売上を自動計上する（sourceKind='shipment'。F-28 連携）。
+   * 店舗預け（consignment）の出荷は「販売」ではないため売上計上の対象外。二重計上は source_ref で防ぐ。
+   */
+  async function registerResult(input: { planId?: string | null; warehouseId?: string; companyId?: string | null; segmentId?: string | null; lines: { planLineId?: string | null; skuId: string; qty: number }[]; postSales?: boolean }): Promise<Result> {
     if (isApi) {
+      const reload = ['outboundResults', 'inventoryTransactions', 'inventoryBalances', 'outboundPlans']
+      if (input.postSales) reload.push('salesRecords')
       const res = await apiWrite<OutboundResult>('/v1/akebono/outbound-results', {
-        body: input, reload: ['outboundResults', 'inventoryTransactions', 'inventoryBalances', 'outboundPlans'],
+        body: input, reload,
       })
+      if (res.ok && input.postSales) {
+        const segId = (input.planId ? planById(input.planId)?.segmentId : null) ?? input.segmentId
+        if (segId) invalidateIntegratedFor(segId)
+      }
       return res.ok ? { ok: true, id: res.data.id } : res
     }
     const plan = input.planId ? planById(input.planId) : undefined
     const warehouseId = plan?.warehouseId ?? input.warehouseId
     const companyId = plan?.companyId ?? input.companyId ?? null
+    const segmentId = plan?.segmentId ?? input.segmentId ?? null
     if (!warehouseId) return { ok: false, error: { code: 'AKO-OUT-001', message: '出荷元倉庫を指定してください（直接登録時は必須）' } }
     const lines = input.lines.filter(l => l.skuId && l.qty > 0)
     if (lines.length === 0) return { ok: false, error: { code: 'AKO-OUT-002', message: '出荷明細を 1 行以上入力してください' } }
@@ -105,6 +118,21 @@ export function useOutbound() {
     const resultLines = lines.map((l, idx) => ({
       id: `${resultId}-${idx}`, planLineId: l.planLineId ?? null, skuId: l.skuId, qty: l.qty,
     }))
+    const depositWh = storeDepositWarehouseOf(companyId)
+
+    // 売上自動計上（postSales）の事前検証（在庫 post の前に弾く = 部分適用を作らない）
+    if (input.postSales) {
+      if (depositWh) return { ok: false, error: { code: 'AKO-OUT-005', message: '店舗預けの出荷は売上計上できません（店舗での販売時に売上を計上します）' } }
+      if (!companyId) return { ok: false, error: { code: 'AKO-OUT-005', message: '売上計上には出荷先（得意先）が必要です' } }
+      if (!segmentId) return { ok: false, error: { code: 'AKO-OUT-005', message: '売上計上には事業セグメントが必要です' } }
+      for (const l of resultLines) {
+        const sku = products.skuById(l.skuId)
+        if (!sku || !(products.sellPriceOf(sku) > 0)) {
+          return { ok: false, error: { code: 'AKO-OUT-005', message: '売上単価を解決できません（商品または SKU に販売単価を設定してください）' } }
+        }
+      }
+    }
+
     const created: OutboundResult = {
       id: resultId, code: nextCode(results.value.map(r => r.code), 'OBR'),
       planId: input.planId ?? null, warehouseId, companyId, shippedAt: nowJstIso(), lines: resultLines,
@@ -114,13 +142,30 @@ export function useOutbound() {
     // 出庫（−）
     const posts: PostEntry[] = resultLines.map(l => ({ skuId: l.skuId, warehouseId, qty: -l.qty, kind: 'outbound', refType: 'outbound_result', refLineId: l.id }))
     // 店舗納品 = 預け在庫へ移動（+）
-    const depositWh = storeDepositWarehouseOf(companyId)
     if (depositWh) {
       for (const l of resultLines) {
         posts.push({ skuId: l.skuId, warehouseId: depositWh.id, qty: l.qty, kind: 'transfer_in', refType: 'outbound_result', refLineId: l.id })
       }
     }
     inv.post(posts)
+
+    // 売上自動計上（sourceKind='shipment'。事前検証済み = ここで失敗しない）。
+    // 明細組み立て・SR コード累積採番は共有純関数（両モード同一・単体テスト対象 = 監査-3）
+    if (input.postSales && companyId && segmentId) {
+      const built = buildShipmentSaleLines(resultLines, (skuId) => {
+        const sku = products.skuById(skuId)!
+        const product = products.productOfSku(skuId)
+        return { unitPrice: products.sellPriceOf(sku), costPrice: products.costOf(sku), billingType: product?.billingType ?? null }
+      }, sales.value.map(r => r.code))
+      const newSales: SalesRecord[] = built.map((s, idx) => ({
+        id: `${resultId}-sr${idx}`, code: s.code, salesDate: todayJst(), companyId, segmentId,
+        skuId: s.skuId, qty: s.qty, unitPrice: s.unitPrice, amount: s.amount, costPrice: s.costPrice,
+        channel: null, billingType: s.billingType as BillingType | null,
+        sourceKind: 'shipment', sourceRef: s.sourceRef, invoiceId: null, correctionOf: null, active: true,
+      }))
+      sales.value = [...sales.value, ...newSales]
+      invalidateIntegratedFor(segmentId)
+    }
 
     if (plan) {
       const status = recomputeStatus(plan)

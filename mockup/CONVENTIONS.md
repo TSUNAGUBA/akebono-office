@@ -15,7 +15,7 @@ Nuxt 4 SPA（ssr:false, hashMode）/ TypeScript strict / Tailwind v4 + CSS 変�
 
 1. **全操作が反応する**（X-1）: ボタン・行・カードは必ず 遷移 / ドロワー / モーダル / トースト / 状態変化 のいずれかを返す。飾りのボタンを作らない
 2. **データは useMockDb 経由のみ**: `const { tbl, commit, nextId } = useMockDb()`。書込後は必ず `commit()`。ID は `nextId(collection, prefix)`
-   - **API モード（バッチ2a〜）:** マイグレーション済みコレクション（マスタ 31 種 = useApi.ts の MIGRATED_MASTERS・専用エンドポイント 17 種 = CUSTOM_COLLECTION_ENDPOINTS（akebonoAppConfigs / itemSettings = Phase B + 記録系 15 = Phase C）・監査ログ・設定）は `tbl()` が API キャッシュを返す（参照はそのまま）。**書込は `useMasterCrudAsync` / `useAppSettings` / 各ドメイン composable の API 経路（apiWrite = 書込 → 影響コレクション再ロード）のみ**。`tbl().value = ...` の直接書込やモック版 `useMasterCrud` での書込を追加しない（キャッシュ汚染 = SoT 逆流。原則6）
+   - **API モード（バッチ2a〜）:** マイグレーション済みコレクション（マスタ 31 種 = useApi.ts の MIGRATED_MASTERS・専用エンドポイント 21 種 = CUSTOM_COLLECTION_ENDPOINTS（akebonoAppConfigs / itemSettings = Phase B + 記録系 16 = Phase C + 取込 importSources/importMappings/importRuns = Phase D）・監査ログ・設定）は `tbl()` が API キャッシュを返す（参照はそのまま）。**書込は `useMasterCrudAsync` / `useAppSettings` / 各ドメイン composable の API 経路（apiWrite = 書込 → 影響コレクション再ロード）のみ**。`tbl().value = ...` の直接書込やモック版 `useMasterCrud` での書込を追加しない（キャッシュ汚染 = SoT 逆流。原則6）。導出キャッシュ（mediaInsights / dashboardInsights）はコレクションでなくキー単位の遅延ロード（apiLoadOnce）= 各 composable が管理する（**Phase D で dashboardInsights もサーバー化 = API モードで localStorage 保管のモックコレクションは 0**）
 3. **記録系は追記のみ**: 打刻・承認ログ・活動ログ等を書き換え・削除しない。マスタは論理削除（`active:false`）のみ
 4. **Math.random / v-html 禁止**: 乱数は `~/utils/rng`（決定的）。リッチ表示はテキスト分解で
 5. **アイコンは lucide-vue-next のみ**。絵文字をアイコン代わりにしない
@@ -113,7 +113,13 @@ const its = useItemSettings()   // resolve(entity) / upsert（渡したキーの
 const prod = useProducts()      // saveProduct（既定 SKU 自動生成）/ saveMatrix / addImage / archive・restore 系
 const inv2 = useInventory()     // balanceOf / ledgerOf / adjust / transfer / stocktake（post はモック専用）
 const asl = useAkebonoSales()   // create（原価はサーバー解決）/ correct（赤黒。成功時 invalidateIntegratedFor）
-const con = useConsignment()    // closeBilling / issue / voidInvoice / recordReceipt / closeConsignment / confirmNotice
+const con = useConsignment()    // closeBilling / issue / voidInvoice / recordReceipt / voidReceipt / closeConsignment / cancelConsignment（Phase D = 取消 原則9.5）/ confirmNotice
+const outb = useOutbound()      // createPlan / registerResult（Phase D: postSales で出荷→売上自動計上 source_kind='shipment'・店舗預けは対象外）/ cancelPlan
+
+// Akebono データ取込（F-32。Phase D で API 永続化 = /v1/akebono/import-*。書込は async・管理者のみ）
+const imp = useAkebonoImports() // addSource / archiveSource・restoreSource（論理削除で取消）/ saveMapping（版管理）/ runImport（記録系・追記）
+// ダッシュボード AI レポート（F-41。Phase D で導出キャッシュをサーバー化 = media_insights 同型）
+const di = useDashboardInsight() // buildSegmentSummary/buildCompanySummary（常時ライブ集計）/ loadSegment・generateSegment / loadCompany・generateCompany（async。生成→保管→再生成で upsert・API = Vertex AI → ヒューリスティック）
 ```
 
 ## UI コンポーネント在庫（新規に作る前にここを見る）
