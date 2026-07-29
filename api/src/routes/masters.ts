@@ -160,6 +160,11 @@ export function mastersRoutes(pool: pg.Pool, env: Env): Hono {
     if (entity === 'leave-types' && body.isStatutory) {
       throw err('AKO-LEV-008', '法定有給は追加できません（シード固定）', 409)
     }
+    // 既定シードは migration 投入のみ。API で is_seed=true を作らせない（作れると archive が
+    // AKO-AKB-002 で恒久拒否・PATCH も isSeed を omit しており取消不能行になる = 原則9.5。レビュー B-1）
+    if (entity === 'product-image-sections' && body.isSeed) {
+      throw err('AKO-AKB-002', '既定シードの画像セクションは追加できません（migration 投入のみ）', 409)
+    }
     const id = newId(def.idPrefix)
     const fields = Object.keys(body)
     const cols = ['id', ...fields.map(camelToSnake)]

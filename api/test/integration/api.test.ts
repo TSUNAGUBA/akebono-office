@@ -3934,6 +3934,22 @@ describe('Phase B: Akebono 設定系の API 永続化（業態マスタ・共通
     expect((await api('POST', `/v1/masters/product-image-sections/${id}/archive`, { as: ADMIN })).status).toBe(200)
   })
 
+  it('画像セクション: POST の isSeed=true は 409（AKO-AKB-002）= 取消不能行を作らせない（レビュー B-1）', async () => {
+    // 作れてしまうと archive が AKO-AKB-002 で恒久拒否・PATCH も isSeed を omit しており
+    // SQL 直接操作でしか戻せない = 原則9.5 違反。leave-types の isStatutory ガードと同型
+    const seedCreate = await api('POST', '/v1/masters/product-image-sections', {
+      as: ADMIN, body: { name: '不正な既定シード', isSeed: true },
+    })
+    expect(seedCreate.status).toBe(409)
+    expect(seedCreate.json.error?.code).toBe('AKO-AKB-002')
+    // isSeed 省略（既定 false）の作成は従来どおり通る
+    const normal = await api('POST', '/v1/masters/product-image-sections', {
+      as: ADMIN, body: { name: '通常セクション' },
+    })
+    expect(normal.status).toBe(201)
+    expect((normal.json.data as { isSeed: boolean }).isSeed).toBe(false)
+  })
+
   it('業態×アプリ設定: バッチ upsert（複合キー・冪等）→ GET 反映。書込は管理者のみ・不正 rows は 400', async () => {
     const rows = [
       { segmentId: 'seg-01', appKey: 'products', enabled: true, labelOverride: null, source: 'preset' },

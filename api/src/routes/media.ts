@@ -11,7 +11,8 @@
  *   ヒューリスティックへフォールバック（原則4。weekly_insights と同じ「生成 → 保管 → 再生成で上書き」）
  * - 認可: GA 連携・設定・インベントリの書込は admin のみ（/media/settings 画面の管理者ゲートと一致）。
  *   参照・記事生成・採用・インサイト生成は全ロール可（mockup の画面ゲートと一致）
- * - segment はモック側エンティティ（未移行）のため存在検証は行わない（0030 の設計判断コメント参照）
+ * - segment の存在検証は行わない: business_segments は Phase B（0031）でテーブル化済みだが、
+ *   FK・参照整合の引き上げは Phase C（記録系移行）の判断まで保留（data-design §1.4/§1.5 参照）
  *
  * エラー: AKO-MEDIA-003 GA 未連携 / 004 GA 集計取得失敗 / 005 連携未設定（GOOGLE_OAUTH_*）/
  *         006 プロパティ一覧取得失敗 / 007 対象記事なし / 008 記事パスの重複 / 011 お題未入力 /
@@ -66,7 +67,7 @@ function requireEnabled(env: Env): void {
   }
 }
 
-/** segmentId クエリ/ボディの検証（セグメント自体はモック側エンティティのため存在検証はしない） */
+/** segmentId クエリ/ボディの検証（形式のみ。存在検証は Phase C の参照整合判断まで保留 = business_segments はテーブル化済み） */
 function segmentIdOf(v: unknown): string {
   const id = String(v ?? '').trim()
   if (!id || id.length > 64) throw err('AKO-GEN-001', 'segmentId を指定してください', 400)
@@ -1336,7 +1337,8 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
     if (!(ARTICLE_QUALITIES as string[]).includes(quality)) throw err('AKO-GEN-001', 'quality が不正です', 400)
     if (!(ARTICLE_TONES as string[]).includes(tone)) throw err('AKO-GEN-001', 'tone が不正です', 400)
     const fromInsightId = typeof body.fromInsightId === 'string' && body.fromInsightId ? body.fromInsightId : null
-    // セグメント名はモック側エンティティのためクライアントから受ける（表示・文面用途のみ）
+    // セグメント名はクライアントから受ける（表示・文面用途のみ。business_segments はテーブル化済みだが
+    // サーバー解決への引き上げは Phase C の参照整合判断と併せて行う = 挙動維持）
     const segmentName = capCp(String(body.segmentName ?? '').trim(), 100)
 
     const { rows: settingRows } = await pool.query<{ siteName: string; targetAudience: string }>(
@@ -1553,8 +1555,8 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
     } else {
       // 統合（業務 × メディア）: 売上明細（salesRecords）は未移行のモック側 SoT のため、
       // 統合メトリクスは**クライアントが**「メディア月次 = 本 API(/monthly) + 売上月次 = モック側集計」を
-      // 突合して組み立てて渡す（設計判断の文書化 = 原則6。businessSegments/salesRecords の API 移行時に
-      // サーバー側組み立てへ引き上げる）。サーバーの責務（M2）:
+      // 突合して組み立てて渡す（設計判断の文書化 = 原則6。salesRecords の API 移行 = Phase C で
+      // サーバー側組み立てへ引き上げる。businessSegments は Phase B = 0031 で移行済み）。サーバーの責務（M2）:
       //   ① whitelist 正規化 + 全数値の有限・非負・範囲検証（不正は 400 = 500 を出さない・型崩れを保管しない）
       //   ② メディア軸（sessions/conversions/engaged）は GA 連携済みならサーバー導出値で上書き（申告値を信頼しない）
       //   ③ 売上軸はサーバー検証不能（モック SoT）= 範囲検証のみの限界を受容（上の認可コメント参照)

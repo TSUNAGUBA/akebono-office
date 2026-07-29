@@ -267,7 +267,7 @@ save(defs) / reset(): Promise<void>              // SoT = configs `menu-categori
 | AKO-SAL-002 | 顧客(会社)が未登録 | ✅ |
 | AKO-SAL-003 | 取込件数の範囲外（rows は 1〜500 件） | ✅ |
 | AKO-AKB-001 | AKEBONO 要望の本文未入力 | ✅ |
-| AKO-AKB-002 | 既定シード画像セクション（is_seed）の無効化は不可（名称変更は可。409） | ✅ |
+| AKO-AKB-002 | 既定シード画像セクション（is_seed）の無効化・API からの新規作成は不可（名称変更は可。409） | ✅ |
 | AKO-HOL-001 | 祝日の公式 CSV 取得失敗（ネットワーク・サイト側障害。CSV アップロードで代替可） | ✅ |
 | AKO-HOL-002 | 祝日 CSV の解析結果が 0 件（形式不正） | ✅ |
 | AKO-KNW-001 | ドキュメント取込の非対応形式（.md/.txt/.pdf/.docx 以外。旧 .doc は変換を案内） | ✅ |

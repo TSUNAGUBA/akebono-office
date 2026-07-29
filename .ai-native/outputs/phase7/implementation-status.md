@@ -640,7 +640,7 @@
 
 ### 38-2 API
 - [x] 汎用マスタ registry へ 9 種追加（`/v1/masters/business-segments`・`warehouses`・`units`・`tax-rates`・`payment-terms`・`consignment-terms`・`variant-axis-templates`・`product-categories`・`product-image-sections`。id プレフィックスはモックと同一 = seg/wh/unit/tax/pt/ct/vat/pcat/pis）。business-segments の appIconImage は data:image png/jpeg/webp base64 のみ・400,000 文字上限（プロフィール画像と同じ SVG 拒否 = スクリプト混入防止。80MB の body 上限に対し余裕）
-- [x] product_image_sections の既定シード（is_seed）は無効化不可 = **AKO-AKB-002**（409。名称変更は可 = 商品画像の整合保護。archive ルートの entity 別ガードとして実装）。isSeed は PATCH 対象外（patchSchema から omit）
+- [x] product_image_sections の既定シード（is_seed）は無効化不可 = **AKO-AKB-002**（409。名称変更は可 = 商品画像の整合保護。archive ルートの entity 別ガードとして実装）。isSeed は PATCH 対象外（patchSchema から omit）。**POST の isSeed=true も 409**（レビュー B-1: 作れると archive 恒久拒否の取消不能行になる = 原則9.5。leave-types の isStatutory ガードと同型）
 - [x] 複合キーの 2 コレクションは registry（id 主キーの行 CRUD）に合わないため**専用 API**（routes/akebono.ts に判断根拠をコメント化）: `GET/PUT /v1/akebono/app-configs`（PUT = 管理者のみ。rows 1〜200 のバッチ upsert・同一 (segmentId, appKey) は後勝ちで畳む = 単一 upsert 文の二重更新エラー防止・冪等）/ `GET/PUT /v1/akebono/item-settings`（PUT = 管理者のみ。**body に実在するキーのみ**の部分 upsert = Object.hasOwn・null は「カタログ既定へ戻す」明示値）/ `POST /v1/akebono/item-settings/reset`（管理者のみ。エンティティ単位の差分全削除 = カタログ既定へ戻す取消フロー 原則9.5・監査ログ）
 - [x] カタログ（アプリキー・依存・業種プリセット・ITEM_CATALOG）は**フロント静的 SoT** = サーバーはキー形式のみ検証し存在検証しない（設計判断: カタログ更新でサーバー再デプロイ不要）。参照は全員可（メニュー表示・項目解決に全画面が使う）・書込は管理者のみ（設定画面の管理者ゲートと一致）
 
@@ -652,8 +652,12 @@
 - [x] 取消可能性（原則9.5): マスタ = 論理削除 + 復元（既存パターン）。アプリ設定 = トグルの再操作で戻る（設定値の上書き）。項目カスタマイズ = null 指定で個別に既定へ戻す + reset でエンティティ単位の一括取消
 
 ### 38-4 検証・ドキュメント
-- [x] テスト: api 単体 **177**（akebono-configs 11 件新設 = appConfigRowsOf の後勝ち畳み込み・境界 / itemSettingPatchOf の hasOwn フィルタ・null 意味論）/ api 統合 **169**（Phase B 6 スイート新設 = 業態シード + **部分 PATCH で未送信フィールド保持**・iconImage 検証（SVG 拒否・403）・units CRUD・pis-01 の AKO-AKB-002 と名称変更可・app-configs バッチ upsert（重複畳み込み・冪等・403/400）・item-settings 部分 upsert（labelOverride 保持）+ reset）/ mockup 単体 148 / typecheck（api・mockup）・build 全 green
+- [x] テスト: api 単体 **177**（akebono-configs 11 件新設 = appConfigRowsOf の後勝ち畳み込み・境界 / itemSettingPatchOf の hasOwn フィルタ・null 意味論）/ api 統合 **170**（Phase B 7 スイート新設 = 業態シード + **部分 PATCH で未送信フィールド保持**・iconImage 検証（SVG 拒否・403）・units CRUD・pis-01 の AKO-AKB-002 と名称変更可・POST isSeed=true の 409（B-1）・app-configs バッチ upsert（重複畳み込み・冪等・403/400）・item-settings 部分 upsert（labelOverride 保持）+ reset）/ mockup 単体 148 / typecheck（api・mockup）・build 全 green
 - [x] ドキュメント: data-design §1.5（テーブル一覧 + SoT 宣言 + 初期データ・FK 判断）・§1.4 の businessSegments 記述更新 / api-design §3（useAkebonoMasters / useAkebonoApps / useItemSettings）+ §4 台帳（AKO-AKB-002）/ CONVENTIONS（composable の async 化追随）/ 本節
+
+### 38-4b 反復レビュー（原則9・1 巡目 = 独立コードレビュー + システム監査。minor 2 件のみ = 他項目全クリア）
+- [x] B-1（コードレビュアー）: `POST /v1/masters/product-image-sections` が isSeed=true を受理し**取消不能行**（archive = AKO-AKB-002 恒久拒否・PATCH は isSeed omit = SQL 直接操作でしか戻せない）を作れた（原則9.5 違反）→ leave-types の isStatutory ガードと同型に POST で 409（AKO-AKB-002）を追加 + この経路の統合テスト 1 件（isSeed=true 拒否・省略時は既定 false で作成可）
+- [x] B-2（監査官）: businessSegments 移行完了後も「未移行のモック側エンティティだから存在検証しない」という**旧根拠**コメントが残存（原則5。実体判断 = Phase C まで参照整合を保留は data-design 文書化済みで正）→ media.ts（ヘッダ・segmentIdOf・segmentName 受領・統合組み立て）+ useMediaAnalytics + useMediaArticles（同型の残存 1 件を波及確認で追加検出）の理由記述を「Phase C の参照整合判断まで保留（business_segments はテーブル化済み）」へ修正。挙動変更なし
 
 ### 38-5 残課題（Phase C / Phase D 計画）
 - [ ] **Phase C（次の依頼): 売上系記録データ + PDCA 売上軸のサーバー実データ化**。記録系 15 コレクション（products / productVariantAxes / skus / スキャン・在庫（inventoryMoves 等）/ purchases / salesRecords / 委託精算・請求ほか）の API 移行と、/v1/media/integrated のサーバー組み立て化（= 統合メトリクス売上軸の改ざん耐性限界の解消・「売上・受注 = デモデータ」バッジの撤去 = §37 M3）。移行時に併せて判断: segment_id / company_id の FK 参照整合の引き上げ（0030/0031 とも）・c-ak-* デモシード（warehouses / consignment_terms の参照先）の整理案内・F-41 ダッシュボード保管（dashboardInsights）の media_insights 同型化

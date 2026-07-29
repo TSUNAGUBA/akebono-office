@@ -341,7 +341,7 @@ const schemas = {
   'product-image-sections': z.object({
     name: z.string().trim().min(1, 'セクション名は必須です'),
     isThumbnailPriority: z.boolean().default(false),
-    // 既定シードは migration 投入のみ（API からは作成不可 = 常に false。無効化ガードは masters.ts）
+    // 既定シードは migration 投入のみ。POST の明示 true は 409（AKO-AKB-002）・無効化ガードも masters.ts
     isSeed: z.boolean().default(false),
     displayOrder: z.number().int().default(1),
   }),
