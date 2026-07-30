@@ -276,6 +276,76 @@ describe('打刻修正申請', () => {
   })
 })
 
+describe('勤怠承認ワークフロー（直行/直帰 + 経路設定。0040）', () => {
+  const d1 = addDays(todayJst(), -10)
+  const d2 = addDays(todayJst(), -11)
+
+  it('経路なし: 直行/直帰は管理者単段承認。承認済みの日だけ打刻修正が解禁される（AKO-ATT-005 ゲート）', async () => {
+    const cr = await api('POST', '/v1/attendance/direct-requests', {
+      as: MEMBER, body: { date: d1, type: 'chokkou', reason: '客先へ直行' },
+    })
+    expect(cr.status).toBe(201)
+    const drId = (cr.json.data as { id: string }).id
+
+    // 申請者以外の一般ユーザーは承認不可（経路なし = 管理者のみ）
+    expect((await api('POST', `/v1/attendance/direct-requests/${drId}/actions`, { as: MEMBER, body: { action: 'approved' } })).status).toBe(403)
+
+    // 未承認の直行/直帰に紐づく打刻修正はゲートで拒否（AKO-ATT-005）
+    const blocked = await api('POST', '/v1/attendance/fix-requests', {
+      as: MEMBER, body: { date: d1, kind: 'in', requestedAt: `${d1}T09:00:00+09:00`, reason: '直行の出勤', directRequestId: drId },
+    })
+    expect(blocked.status).toBe(409)
+    expect(blocked.json.error?.code).toBe('AKO-ATT-005')
+
+    // 管理者が承認 → approved
+    expect((await api('POST', `/v1/attendance/direct-requests/${drId}/actions`, { as: ADMIN, body: { action: 'approved' } })).status).toBe(200)
+
+    // 承認済みなら紐づく打刻修正を申請できる（種別 in は chokkou で許可）
+    const fx = await api('POST', '/v1/attendance/fix-requests', {
+      as: MEMBER, body: { date: d1, kind: 'in', requestedAt: `${d1}T09:00:00+09:00`, reason: '直行の出勤打刻', directRequestId: drId },
+    })
+    expect(fx.status).toBe(201)
+    const fxId = (fx.json.data as { id: string }).id
+    // 経路未設定の打刻修正は従来どおり管理者単段で承認 → 修正打刻が追記される
+    expect((await api('POST', `/v1/attendance/fix-requests/${fxId}/decision`, { as: ADMIN, body: { action: 'approved' } })).status).toBe(200)
+    const day = await api('GET', `/v1/attendance/day?memberId=${MEMBER}&date=${d1}&raw=1`, { as: ADMIN })
+    const raw = (day.json.data as { rawPunches: { kind: string; source: string }[] }).rawPunches
+    expect(raw.some(p => p.kind === 'in' && p.source === 'fix')).toBe(true)
+  })
+
+  it('経路あり: 直行/直帰は経路の多段承認（manager→hr）で approved になる', async () => {
+    const route = await api('POST', '/v1/masters/attendance-routes', {
+      as: ADMIN,
+      body: { category: 'direct', steps: [{ order: 1, approverRole: 'manager' }, { order: 2, approverRole: 'hr' }], active: true },
+    })
+    expect(route.status).toBe(201)
+
+    const cr = await api('POST', '/v1/attendance/direct-requests', { as: MEMBER, body: { date: d2, type: 'both', reason: '終日客先' } })
+    const drId = (cr.json.data as { id: string }).id
+
+    // step1 の承認者は manager（= admin employee = m-admin）。HR は現ステップ承認者でも管理者でもないので不可
+    expect((await api('POST', `/v1/attendance/direct-requests/${drId}/actions`, { as: HR, body: { action: 'approved' } })).status).toBe(403)
+    // step1 承認 → step2 へ前進
+    expect((await api('POST', `/v1/attendance/direct-requests/${drId}/actions`, { as: ADMIN, body: { action: 'approved' } })).status).toBe(200)
+    // step2 の承認者は hr（= m-hr）→ 最終承認で approved
+    expect((await api('POST', `/v1/attendance/direct-requests/${drId}/actions`, { as: HR, body: { action: 'approved' } })).status).toBe(200)
+
+    const list = await api('GET', '/v1/attendance/direct-requests?scope=all', { as: ADMIN })
+    const dr = (list.json.data as { id: string; status: string; currentStep: number }[]).find(x => x.id === drId)
+    expect(dr?.status).toBe('approved')
+
+    // 二重処理は AKO-ATT-003
+    expect((await api('POST', `/v1/attendance/direct-requests/${drId}/actions`, { as: HR, body: { action: 'approved' } })).status).toBe(409)
+  })
+
+  it('取下げは申請者本人のみ（原則9.5）', async () => {
+    const cr = await api('POST', '/v1/attendance/direct-requests', { as: MEMBER, body: { date: addDays(todayJst(), -12), type: 'chokki', reason: 'x' } })
+    const drId = (cr.json.data as { id: string }).id
+    expect((await api('POST', `/v1/attendance/direct-requests/${drId}/actions`, { as: HR, body: { action: 'withdrawn' } })).status).toBe(403)
+    expect((await api('POST', `/v1/attendance/direct-requests/${drId}/actions`, { as: MEMBER, body: { action: 'withdrawn' } })).status).toBe(200)
+  })
+})
+
 describe('休暇（付与・残数・申請・承認）', () => {
   it('一般ユーザーの付与は AKO-LEV-004', async () => {
     const r = await api('POST', '/v1/leave/grants', {

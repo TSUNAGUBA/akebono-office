@@ -7,13 +7,17 @@
  *   未ロード時はゼロサマリを返し、到着後にリアクティブに追従する。
  */
 import type { Ref } from 'vue'
-import type { AttendanceFixRequest, PunchKind, PunchRecord, Result } from '~/types/domain'
+import type {
+  AttendanceFixRequest, AttendanceRoute, AttendanceRouteStep, DirectRequest, DirectType,
+  Member, PunchKind, PunchRecord, Result,
+} from '~/types/domain'
 import {
   calcWorkedMinutes, effectivePunches, judgeArticle36, requiredBreakMinutes, splitBuckets,
   type Article36Alert, type MonthOtRecord,
 } from '~/utils/attendance-calc'
+import { directKindsOf, resolveAttendanceRoute } from '~/utils/attendance-route'
 import { daysInMonth, weekdayOf } from '~/utils/format'
-import { PUNCH_KIND_LABELS } from '~/utils/labels'
+import { DIRECT_TYPE_LABELS, PUNCH_KIND_LABELS } from '~/utils/labels'
 
 export type PunchState = 'before' | 'working' | 'breaking' | 'done'
 
@@ -51,6 +55,7 @@ const apiAlertsMap = ref<Record<string, Article36Alert[]>>({})
 const apiRawDays = ref<Record<string, PunchRecord[]>>({})
 const apiPunchState = ref<{ state: PunchState; punches: PunchRecord[] }>({ state: 'before', punches: [] })
 const apiFixRequests = ref<AttendanceFixRequest[]>([])
+const apiDirectRequests = ref<DirectRequest[]>([])
 const apiTimecards = ref<Record<string, TimecardApiRow[]>>({})
 
 function loadMonth(memberId: string, month: string, force = false): Promise<void> {
@@ -90,6 +95,14 @@ function loadFixRequests(force = false): Promise<void> {
   }, force)
 }
 
+function loadDirectRequests(force = false): Promise<void> {
+  return apiLoadOnce('att:direct', async () => {
+    const role = useApiMe().value?.role
+    apiDirectRequests.value = await apiFetch<DirectRequest[]>(
+      '/v1/attendance/direct-requests', { query: role === 'admin' || role === 'hr' ? { scope: 'all' } : {} })
+  }, force)
+}
+
 function loadTimecard(from: string, to: string, departmentId: string, force = false): Promise<void> {
   const key = `${from}:${to}:${departmentId}`
   return apiLoadOnce(`att:tc:${key}`, async () => {
@@ -107,24 +120,68 @@ onApiReset(() => {
   apiRawDays.value = {}
   apiPunchState.value = { state: 'before', punches: [] }
   apiFixRequests.value = []
+  apiDirectRequests.value = []
   apiTimecards.value = {}
   // 打刻ウィジェット・申請バッジは即時性が要るため認証確立時に取り直す
   void loadPunchState(true)
   void loadFixRequests(true)
+  void loadDirectRequests(true)
 })
 
 export function useAttendance() {
   const { tbl, commit, nextId } = useMockDb()
   const { currentUser } = useCurrentUser()
-  const { notifyAdmins } = useNotifications()
+  const { notify, notifyAdmins } = useNotifications()
   const isApi = useApiMode()
   const punches = tbl('punches')
-  // API モードは修正申請一覧をサーバーから取得（表示ロジックは共通）
+  // API モードは申請一覧をサーバーから取得（表示ロジックは共通）
   const fixRequests = isApi ? (apiFixRequests as Ref<AttendanceFixRequest[]>) : tbl('attendanceFixRequests')
+  const directRequests = isApi ? (apiDirectRequests as Ref<DirectRequest[]>) : tbl('directRequests')
+  // 勤怠承認経路は移行済みマスタ（tbl が両モードで正しいソースを返す）
+  const attendanceRoutes = tbl('attendanceRoutes')
   const rules = tbl('attendanceRules')
   if (isApi) {
     void loadPunchState()
     void loadFixRequests()
+    void loadDirectRequests()
+  }
+
+  // ---------- 承認経路の解決・承認者判定（モック。API はサーバーが同一ロジックで判定） ----------
+
+  /** 区分の有効経路ステップ（該当なし = [] = 管理者単段フォールバック） */
+  function routeStepsFor(category: 'direct' | 'fix'): AttendanceRouteStep[] {
+    return resolveAttendanceRoute(attendanceRoutes.value as AttendanceRoute[], category) ?? []
+  }
+
+  /** 承認ステップ → 承認者メンバー（API routes/attendance.ts の pickApprover と同型 + hr） */
+  function pickApprover(step: AttendanceRouteStep): Member | undefined {
+    const ms = (tbl('members').value as Member[]).filter(m => m.active)
+    if (step.approverMemberId) {
+      const fixed = ms.find(m => m.id === step.approverMemberId)
+      if (fixed) return fixed
+    }
+    const president = ms.find(m => m.title === '代表取締役')
+    const anyAdmin = ms.find(m => m.role === 'admin')
+    switch (step.approverRole) {
+      case 'president': return president ?? anyAdmin
+      case 'director': return ms.find(m => m.employmentType === 'director' && m.id !== president?.id) ?? president ?? anyAdmin
+      case 'hr': return ms.find(m => m.role === 'hr') ?? anyAdmin
+      case 'manager': default: return ms.find(m => m.role === 'admin' && m.employmentType === 'employee') ?? anyAdmin
+    }
+  }
+
+  /** 現ステップの承認者 id（snapshot 空 = null = 管理者単段） */
+  function currentApproverId(snapshot: AttendanceRouteStep[], currentStep: number): string | null {
+    if (snapshot.length === 0) return null
+    const step = [...snapshot].sort((a, b) => a.order - b.order)[currentStep - 1]
+    return step ? pickApprover(step)?.id ?? null : null
+  }
+
+  /** 承認アクションの権限判定（経路なし = 管理者のみ / 経路あり = 現ステップ承認者 or 管理者） */
+  function canDecide(snapshot: AttendanceRouteStep[], currentStep: number): boolean {
+    if (currentUser.value.role === 'admin') return true
+    if (snapshot.length === 0) return false
+    return currentApproverId(snapshot, currentStep) === currentUser.value.id
   }
 
   /** API モード: 月キャッシュから日サマリを引く（未ロードならロードを発火して undefined） */
@@ -347,26 +404,51 @@ export function useAttendance() {
     })
   }
 
-  /** 打刻修正申請（理由必須・承認後に反映） */
-  async function requestFix(input: { date: string; kind: PunchKind; requestedAt: string; reason: string }): Promise<Result> {
+  /** 承認済みの直行/直帰申請を日付で引く（打刻修正の解禁判定・紐付け用） */
+  function approvedDirectFor(memberId: string, date: string): DirectRequest | undefined {
+    return directRequests.value.find(d =>
+      d.memberId === memberId && d.date === date && d.status === 'approved')
+  }
+
+  /**
+   * 打刻修正申請（理由必須・承認後に反映）。
+   * directRequestId 指定時は「本人の承認済み直行/直帰申請（同日・対象打刻種別）」が前提（AKO-ATT-005）。
+   * 経路（fix）設定時は多段承認・未設定時は管理者単段（下位互換）。
+   */
+  async function requestFix(input: {
+    date: string; kind: PunchKind; requestedAt: string; reason: string; directRequestId?: string
+  }): Promise<Result> {
     if (!input.reason.trim()) {
       return { ok: false, error: { code: 'AKO-ATT-002', message: '修正理由を入力してください（客観的記録の担保）' } }
     }
     if (isApi) {
-      // 管理者通知はサーバーが発火。成立後に申請一覧を取り直す（原則6）
+      // ゲート・通知はサーバー。成立後に申請一覧を取り直す（原則6）
       const res = await apiResult(() =>
         apiFetch('/v1/attendance/fix-requests', { method: 'POST', body: input }))
       if (res.ok) await loadFixRequests(true)
       return res
     }
+    if (input.directRequestId) {
+      const dr = directRequests.value.find(d => d.id === input.directRequestId && d.memberId === currentUser.value.id)
+      if (!dr || dr.status !== 'approved' || dr.date !== input.date || !directKindsOf(dr.type).includes(input.kind)) {
+        return { ok: false, error: { code: 'AKO-ATT-005', message: 'この日は直行/直帰が承認されていないため、打刻修正を申請できません' } }
+      }
+    }
+    const snapshot = routeStepsFor('fix')
     const id = nextId('attendanceFixRequests', 'fix')
     fixRequests.value = [...fixRequests.value, {
       id, memberId: currentUser.value.id,
       date: input.date, kind: input.kind, requestedAt: input.requestedAt,
-      reason: input.reason, status: 'pending', decidedBy: null,
+      reason: input.reason, status: snapshot.length > 0 ? 'in_review' : 'pending', decidedBy: null,
+      currentStep: 1, routeSnapshot: snapshot, directRequestId: input.directRequestId ?? null,
     }]
     commit()
-    notifyAdmins('approval', '打刻修正申請', `${currentUser.value.name} さんから ${input.date} の修正申請`, '/attendance')
+    const approverId = currentApproverId(snapshot, 1)
+    if (approverId && approverId !== currentUser.value.id) {
+      notify(approverId, 'approval', '打刻修正申請', `${currentUser.value.name} さんから ${input.date} の修正申請`, '/attendance')
+    } else if (!approverId) {
+      notifyAdmins('approval', '打刻修正申請', `${currentUser.value.name} さんから ${input.date} の修正申請`, '/attendance')
+    }
     return { ok: true, id }
   }
 
@@ -376,11 +458,8 @@ export function useAttendance() {
    * 集計・表示への反映は punchesOf の射影（fixedFrom 一致の旧打刻を除外）が担う。
    */
   async function decideFix(fixId: string, action: 'approved' | 'rejected'): Promise<Result> {
-    if (currentUser.value.role !== 'admin') {
-      return { ok: false, error: { code: 'AKO-ATT-004', message: 'この操作には管理者権限が必要です' } }
-    }
     if (isApi) {
-      // pending ガード・打刻反映はサーバー（FOR UPDATE）。成立後に一覧と対象日・対象月を取り直す
+      // 権限（現ステップ承認者 or 管理者）・pending/in_review ガード・打刻反映はサーバー（FOR UPDATE）
       const target = apiFixRequests.value.find(f => f.id === fixId)
       const res = await apiResult(() =>
         apiFetch(`/v1/attendance/fix-requests/${fixId}/decision`, { method: 'POST', body: { action } }))
@@ -394,10 +473,23 @@ export function useAttendance() {
       return res
     }
     const req = fixRequests.value.find(f => f.id === fixId)
-    if (!req || req.status !== 'pending') {
+    if (!req || (req.status !== 'pending' && req.status !== 'in_review')) {
       return { ok: false, error: { code: 'AKO-ATT-003', message: 'この申請は処理済みです' } }
     }
-    if (action === 'approved') {
+    if (!canDecide(req.routeSnapshot, req.currentStep)) {
+      return { ok: false, error: { code: 'AKO-ATT-004', message: 'この申請を承認する権限がありません' } }
+    }
+    if (action === 'rejected') {
+      fixRequests.value = fixRequests.value.map(f => f.id === fixId
+        ? { ...f, status: 'rejected', decidedBy: currentUser.value.id } : f)
+      commit()
+      return { ok: true, id: fixId }
+    }
+    const isLast = req.currentStep >= Math.max(1, req.routeSnapshot.length)
+    if (!isLast) {
+      fixRequests.value = fixRequests.value.map(f => f.id === fixId
+        ? { ...f, currentStep: f.currentStep + 1, status: 'in_review' } : f)
+    } else {
       // 置換対象 = 現在有効な同種打刻（fix の連鎖時も punchesOf が最新のみを返すため正しく繋がる）
       const existing = punchesOf(req.memberId, req.date).find(p => p.kind === req.kind)
       punches.value = [...punches.value, {
@@ -407,12 +499,79 @@ export function useAttendance() {
         fixedFrom: existing?.at ?? null, fixReason: req.reason,
         approvedBy: currentUser.value.id,
       }]
+      fixRequests.value = fixRequests.value.map(f => f.id === fixId
+        ? { ...f, status: 'approved', decidedBy: currentUser.value.id } : f)
     }
-    fixRequests.value = fixRequests.value.map(f => f.id === fixId
-      ? { ...f, status: action, decidedBy: currentUser.value.id }
-      : f)
     commit()
     return { ok: true, id: fixId }
+  }
+
+  // ---------- 直行/直帰 申請（F-04-11。承認後に当日の打刻修正が申請可能になる） ----------
+
+  /** 直行/直帰の申請（本人。経路 direct 設定時は多段・未設定時は管理者単段） */
+  async function submitDirect(input: { date: string; type: DirectType; reason: string }): Promise<Result> {
+    if (!input.reason.trim()) {
+      return { ok: false, error: { code: 'AKO-ATT-002', message: '理由を入力してください' } }
+    }
+    if (isApi) {
+      const res = await apiResult(() =>
+        apiFetch('/v1/attendance/direct-requests', { method: 'POST', body: input }))
+      if (res.ok) await loadDirectRequests(true)
+      return res
+    }
+    const snapshot = routeStepsFor('direct')
+    const id = nextId('directRequests', 'dr')
+    directRequests.value = [...directRequests.value, {
+      id, memberId: currentUser.value.id, date: input.date, type: input.type, reason: input.reason.trim(),
+      status: snapshot.length > 0 ? 'in_review' : 'pending', currentStep: 1, routeSnapshot: snapshot,
+      decidedBy: null, createdAt: nowJstIso(),
+    }]
+    commit()
+    const approverId = currentApproverId(snapshot, 1)
+    if (approverId && approverId !== currentUser.value.id) {
+      notify(approverId, 'approval', '直行/直帰申請', `${currentUser.value.name} さんから ${input.date} の${DIRECT_TYPE_LABELS[input.type]}申請`, '/attendance')
+    } else if (!approverId) {
+      notifyAdmins('approval', '直行/直帰申請', `${currentUser.value.name} さんから ${input.date} の${DIRECT_TYPE_LABELS[input.type]}申請`, '/attendance')
+    }
+    return { ok: true, id }
+  }
+
+  /** 直行/直帰の承認/却下/取下げ（多段。最終承認で approved = 当日の打刻修正が解禁される） */
+  async function decideDirect(id: string, action: 'approved' | 'rejected' | 'withdrawn'): Promise<Result> {
+    if (isApi) {
+      const res = await apiResult(() =>
+        apiFetch(`/v1/attendance/direct-requests/${id}/actions`, { method: 'POST', body: { action } }))
+      if (res.ok) await loadDirectRequests(true)
+      return res
+    }
+    const dr = directRequests.value.find(d => d.id === id)
+    if (!dr || (dr.status !== 'pending' && dr.status !== 'in_review')) {
+      return { ok: false, error: { code: 'AKO-ATT-003', message: 'この申請は処理済みです' } }
+    }
+    if (action === 'withdrawn') {
+      if (dr.memberId !== currentUser.value.id) {
+        return { ok: false, error: { code: 'AKO-ATT-004', message: '取下げは申請者本人のみ可能です' } }
+      }
+      directRequests.value = directRequests.value.map(d => d.id === id ? { ...d, status: 'withdrawn' } : d)
+      commit()
+      return { ok: true, id }
+    }
+    if (!canDecide(dr.routeSnapshot, dr.currentStep)) {
+      return { ok: false, error: { code: 'AKO-ATT-004', message: 'この申請を承認する権限がありません' } }
+    }
+    if (action === 'rejected') {
+      directRequests.value = directRequests.value.map(d => d.id === id
+        ? { ...d, status: 'rejected', decidedBy: currentUser.value.id } : d)
+    } else {
+      const isLast = dr.currentStep >= Math.max(1, dr.routeSnapshot.length)
+      directRequests.value = directRequests.value.map(d => d.id === id
+        ? (isLast
+            ? { ...d, status: 'approved', decidedBy: currentUser.value.id }
+            : { ...d, currentStep: d.currentStep + 1, status: 'in_review' })
+        : d)
+    }
+    commit()
+    return { ok: true, id }
   }
 
   /**
@@ -426,9 +585,9 @@ export function useAttendance() {
   }
 
   return {
-    punches, fixRequests, ruleFor, punchesOf, punchesRawOf, punchState, punch,
+    punches, fixRequests, directRequests, ruleFor, punchesOf, punchesRawOf, punchState, punch,
     daySummary, monthSummary, alerts, raiseOvertimeEscalations, requestFix, decideFix,
-    timecardApi,
+    submitDirect, decideDirect, approvedDirectFor, currentApproverId, timecardApi,
   }
 }
 

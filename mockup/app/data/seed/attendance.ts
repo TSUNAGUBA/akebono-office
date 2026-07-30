@@ -4,7 +4,7 @@
  * - ここには申請系の記録（打刻修正申請・有給申請）を置く
  * - 打刻履歴は平日のみ生成されるため、対象日は平日に丸めて整合を保つ（決定的）
  */
-import type { AttendanceFixRequest, LeaveRequest } from '~/types/domain'
+import type { AttendanceFixRequest, AttendanceRoute, DirectRequest, LeaveRequest } from '~/types/domain'
 import { addDays, weekdayOf } from '~/utils/format'
 import { seedToday } from './history'
 
@@ -24,10 +24,25 @@ function futureWeekday(fwd: number): string {
   return d
 }
 
-/** 打刻修正申請（pending 1 / approved 1） */
+/**
+ * 勤怠承認経路（F-04-12。既定は空 = 区分ごとに経路未設定 = 管理者 1 名の単段承認へフォールバック）。
+ * 管理者が「経路設定」タブで直行/直帰・打刻修正の承認ステップを追加すると多段承認になる（稟議と同様）。
+ */
+export const seedAttendanceRoutes: AttendanceRoute[] = []
+
+/** 直行/直帰 申請（pending 1 / approved 1）。経路未設定のため routeSnapshot は空・単段承認 */
+export const seedDirectRequests: DirectRequest[] = [
+  { id: 'dr-0001', memberId: 'm-07', date: pastWeekday(2), type: 'chokki', reason: '客先から直帰するため', status: 'pending', currentStep: 1, routeSnapshot: [], decidedBy: null, createdAt: `${pastWeekday(2)}T09:00:00+09:00` },
+  { id: 'dr-0002', memberId: 'm-05', date: pastWeekday(7), type: 'chokkou', reason: '客先へ直行するため', status: 'approved', currentStep: 1, routeSnapshot: [], decidedBy: 'm-03', createdAt: `${pastWeekday(7)}T08:00:00+09:00` },
+]
+
+/**
+ * 打刻修正申請（pending 1 / approved 1）。fix-0002 は承認済みの直行申請（dr-0002）に紐づく修正の例。
+ * currentStep=1・routeSnapshot=[] = 経路未設定の単段承認（下位互換）。
+ */
 export const seedAttendanceFixRequests: AttendanceFixRequest[] = [
-  { id: 'fix-0001', memberId: 'm-07', date: pastWeekday(3), kind: 'out', requestedAt: `${pastWeekday(3)}T19:30:00+09:00`, reason: '退勤打刻を忘れて帰宅したため', status: 'pending', decidedBy: null },
-  { id: 'fix-0002', memberId: 'm-05', date: pastWeekday(7), kind: 'in', requestedAt: `${pastWeekday(7)}T08:55:00+09:00`, reason: '客先直行のため出勤打刻ができなかった', status: 'approved', decidedBy: 'm-03' },
+  { id: 'fix-0001', memberId: 'm-07', date: pastWeekday(3), kind: 'out', requestedAt: `${pastWeekday(3)}T19:30:00+09:00`, reason: '退勤打刻を忘れて帰宅したため', status: 'pending', decidedBy: null, currentStep: 1, routeSnapshot: [], directRequestId: null },
+  { id: 'fix-0002', memberId: 'm-05', date: pastWeekday(7), kind: 'in', requestedAt: `${pastWeekday(7)}T08:55:00+09:00`, reason: '客先直行のため出勤打刻ができなかった', status: 'approved', decidedBy: 'm-03', currentStep: 1, routeSnapshot: [], directRequestId: 'dr-0002' },
 ]
 
 /** 休暇申請（有給 4 件 + 特別休暇 2 件。休暇管理の一覧・明細デモを兼ねる） */

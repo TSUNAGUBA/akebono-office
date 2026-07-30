@@ -12,20 +12,26 @@ import {
   PAID_LEAVE_TYPE_ID, useLeave,
 } from '~/composables/useLeave'
 import type {
-  AttendanceBuckets, AttendanceRule, EmploymentType, LeaveRequest, PunchKind,
+  AttendanceBuckets, AttendanceRoute, AttendanceRouteStep, AttendanceRequestCategory,
+  AttendanceRule, DirectType, EmploymentType, LeaveRequest, PunchKind,
 } from '~/types/domain'
 import type { TableColumn, TabItem, Tone } from '~/types/ui'
 import { effectivePunches, LEGAL_WEEKLY_MIN, OT_MONTHLY_LIMIT_MIN } from '~/utils/attendance-calc'
+import { directKindsOf } from '~/utils/attendance-route'
 import { addDays, fmtDate, fmtDateLong, fmtHours, fmtMinutes, fmtTime, weekdayOf } from '~/utils/format'
-import { EMPLOYMENT_TYPE_LABELS, PUNCH_KIND_LABELS } from '~/utils/labels'
+import {
+  ATTENDANCE_APPROVER_ROLE_LABELS, ATTENDANCE_ROUTE_CATEGORY_LABELS, DIRECT_TYPE_LABELS,
+  EMPLOYMENT_TYPE_LABELS, PUNCH_KIND_LABELS,
+} from '~/utils/labels'
 
 const route = useRoute()
 const router = useRouter()
 const { tbl } = useMockDb()
 const { currentUser, isAdmin, isHrOrAdmin } = useCurrentUser()
 const {
-  fixRequests, ruleFor, punchesRawOf, daySummary, monthSummary, alerts,
-  raiseOvertimeEscalations, requestFix, decideFix, timecardApi,
+  fixRequests, directRequests, ruleFor, punchesRawOf, daySummary, monthSummary, alerts,
+  raiseOvertimeEscalations, requestFix, decideFix, submitDirect, decideDirect, approvedDirectFor,
+  timecardApi,
 } = useAttendance()
 const isApi = useApiMode()
 const leave = useLeave()
@@ -41,7 +47,7 @@ function memberName(id: string): string {
 
 // ---------- タブ（route.query.tab で初期化・同期） ----------
 
-const VALID_TABS = ['daily', 'weekly', 'monthly', 'leave', 'requests', 'timecard', 'leave-admin', 'settings']
+const VALID_TABS = ['daily', 'weekly', 'monthly', 'leave', 'requests', 'timecard', 'leave-admin', 'settings', 'routes']
 
 // 全員のタイムカードは権限表（attendance / timecard-all。既定 = 管理者/人事）で参照制御する
 const { canViewAllTimecards } = usePermissions()
@@ -49,7 +55,7 @@ const { canViewAllTimecards } = usePermissions()
 function normalizeTab(v: unknown): string {
   const s = String(v ?? '')
   if (!VALID_TABS.includes(s)) return 'daily'
-  if (s === 'settings' && !isAdmin.value) return 'daily'
+  if ((s === 'settings' || s === 'routes') && !isAdmin.value) return 'daily'
   if (s === 'timecard' && !canViewAllTimecards.value) return 'daily'
   if (s === 'leave-admin' && !isHrOrAdmin.value) return 'daily'
   return s
@@ -70,7 +76,7 @@ watch(() => route.query.tab, (v) => {
   if (n !== tab.value) tab.value = n
 })
 watch(isAdmin, (v) => {
-  if (!v && tab.value === 'settings') tab.value = 'daily'
+  if (!v && (tab.value === 'settings' || tab.value === 'routes')) tab.value = 'daily'
 })
 watch(isHrOrAdmin, (v) => {
   if (!v && tab.value === 'leave-admin') tab.value = 'daily'
@@ -80,8 +86,12 @@ watch(canViewAllTimecards, (v) => {
   if (!v && tab.value === 'timecard') tab.value = 'daily'
 })
 
+/** 承認待ち（pending / in_review = 多段承認の途中も含む） */
+const awaiting = (s: string): boolean => s === 'pending' || s === 'in_review'
 const pendingCount = computed(() =>
-  fixRequests.value.filter(f => f.status === 'pending').length + leave.pendingRequests.value.length)
+  fixRequests.value.filter(f => awaiting(f.status)).length
+  + directRequests.value.filter(d => awaiting(d.status)).length
+  + leave.pendingRequests.value.length)
 
 const tabs = computed<TabItem[]>(() => {
   const t: TabItem[] = [
@@ -94,6 +104,7 @@ const tabs = computed<TabItem[]>(() => {
   if (canViewAllTimecards.value) t.push({ key: 'timecard', label: '全員のタイムカード' })
   if (isHrOrAdmin.value) t.push({ key: 'leave-admin', label: '休暇管理' })
   if (isAdmin.value) t.push({ key: 'settings', label: '設定' })
+  if (isAdmin.value) t.push({ key: 'routes', label: '経路設定' })
   return t
 })
 
@@ -183,10 +194,21 @@ function punchDotClass(kind: PunchKind): string {
 const fixOpen = ref(false)
 const fixForm = ref({ kind: 'in', time: '09:00', reason: '' })
 const fixError = ref('')
-const punchKindOptions = Object.entries(PUNCH_KIND_LABELS).map(([value, label]) => ({ value, label }))
+/** 直行/直帰に紐づく修正のときの申請 id（null = 通常の修正） */
+const fixDirectId = ref<string | null>(null)
+const allPunchKindOptions = Object.entries(PUNCH_KIND_LABELS).map(([value, label]) => ({ value, label }))
+/** 直行/直帰起因のときは対象打刻種別（出勤/退勤）のみに絞る */
+const punchKindOptions = computed(() => {
+  if (!fixDirectId.value) return allPunchKindOptions
+  const dr = directRequests.value.find(d => d.id === fixDirectId.value)
+  const kinds = dr ? directKindsOf(dr.type) : (['in', 'out'] as PunchKind[])
+  return allPunchKindOptions.filter(o => kinds.includes(o.value as PunchKind))
+})
 
-function openFixModal(): void {
-  fixForm.value = { kind: 'in', time: '09:00', reason: '' }
+/** 打刻修正モーダルを開く。directId 指定時は承認済み直行/直帰に紐づく打刻登録 */
+function openFixModal(opts: { directId?: string; kind?: PunchKind } = {}): void {
+  fixDirectId.value = opts.directId ?? null
+  fixForm.value = { kind: opts.kind ?? 'in', time: opts.kind === 'out' ? '18:00' : '09:00', reason: '' }
   fixError.value = ''
   fixOpen.value = true
 }
@@ -202,6 +224,7 @@ async function submitFix(): Promise<void> {
     kind: fixForm.value.kind as PunchKind,
     requestedAt: `${selDate.value}T${fixForm.value.time}:00+09:00`,
     reason: fixForm.value.reason,
+    ...(fixDirectId.value ? { directRequestId: fixDirectId.value } : {}),
   })
   if (!r.ok) {
     fixError.value = r.error.message
@@ -209,6 +232,54 @@ async function submitFix(): Promise<void> {
   }
   fixOpen.value = false
   show('打刻修正を申請しました（承認後に反映されます）', 'ok', { label: '申請状況', to: '/attendance?tab=requests' })
+}
+
+// 直行/直帰 申請モーダル（F-04-11）
+const directOpen = ref(false)
+const directForm = ref({ type: 'chokkou', reason: '' })
+const directError = ref('')
+const directTypeOptions = Object.entries(DIRECT_TYPE_LABELS).map(([value, label]) => ({ value, label }))
+
+function openDirectModal(): void {
+  directForm.value = { type: 'chokkou', reason: '' }
+  directError.value = ''
+  directOpen.value = true
+}
+
+async function submitDirectReq(): Promise<void> {
+  directError.value = ''
+  const r = await submitDirect({ date: selDate.value, type: directForm.value.type as DirectType, reason: directForm.value.reason })
+  if (!r.ok) {
+    directError.value = r.error.message
+    return
+  }
+  directOpen.value = false
+  show('直行/直帰を申請しました（承認後に打刻修正が可能になります）', 'ok', { label: '申請状況', to: '/attendance?tab=requests' })
+}
+
+/** 表示日に承認済みの直行/直帰があれば返す（打刻登録導線の出し分け） */
+const approvedDirectToday = computed(() =>
+  viewingSelf.value ? approvedDirectFor(currentUser.value.id, selDate.value) : undefined)
+
+/** 直行/直帰の打刻登録（承認済み申請に紐づけて出勤/退勤の修正申請を開く） */
+function openDirectPunch(kind: PunchKind): void {
+  const dr = approvedDirectToday.value
+  if (!dr) return
+  openFixModal({ directId: dr.id, kind })
+}
+
+// ---------- 申請ステータスの表示（fix/direct は in_review・withdrawn を含む） ----------
+const REQ_STATUS_LABELS: Record<string, string> = {
+  pending: '承認待ち', in_review: '承認中', approved: '承認済み', rejected: '却下', withdrawn: '取下げ',
+}
+const REQ_STATUS_TONES: Record<string, Tone> = {
+  pending: 'warn', in_review: 'info', approved: 'ok', rejected: 'serious', withdrawn: 'neutral',
+}
+function reqStatusLabel(s: unknown): string {
+  return REQ_STATUS_LABELS[String(s)] ?? leaveStatusLabel(s)
+}
+function reqStatusTone(s: unknown): Tone {
+  return REQ_STATUS_TONES[String(s)] ?? leaveStatusTone(s)
 }
 
 // ---------- 週次タブ（F-04-2 週 40h 判定含む週間グリッド） ----------
@@ -426,6 +497,18 @@ const myRequestRows = computed(() => {
       status: f.status,
       decidedBy: f.decidedBy ? memberName(f.decidedBy) : '—',
     }))
+  const directRows = directRequests.value
+    .filter(d => d.memberId === me)
+    .map(d => ({
+      id: d.id,
+      reqKind: 'direct',
+      type: '直行/直帰',
+      date: d.date,
+      detail: DIRECT_TYPE_LABELS[d.type],
+      reason: d.reason,
+      status: d.status,
+      decidedBy: d.decidedBy ? memberName(d.decidedBy) : '—',
+    }))
   const lvRows = leave.requestsOf(me).map(r => ({
     id: r.id,
     reqKind: 'leave',
@@ -436,7 +519,7 @@ const myRequestRows = computed(() => {
     status: r.status,
     decidedBy: r.decidedBy ? memberName(r.decidedBy) : '—',
   }))
-  return [...fixRows, ...lvRows].sort((a, b) => b.date.localeCompare(a.date))
+  return [...fixRows, ...directRows, ...lvRows].sort((a, b) => b.date.localeCompare(a.date))
 })
 
 const pendingColumns: TableColumn[] = [
@@ -450,7 +533,7 @@ const pendingColumns: TableColumn[] = [
 
 const pendingRows = computed(() => {
   const fixRows = fixRequests.value
-    .filter(f => f.status === 'pending')
+    .filter(f => awaiting(f.status))
     .map(f => ({
       id: f.id,
       reqKind: 'fix',
@@ -459,6 +542,17 @@ const pendingRows = computed(() => {
       date: f.date,
       detail: `${PUNCH_KIND_LABELS[f.kind]} を ${fmtTime(f.requestedAt)} に修正`,
       reason: f.reason,
+    }))
+  const directRows = directRequests.value
+    .filter(d => awaiting(d.status))
+    .map(d => ({
+      id: d.id,
+      reqKind: 'direct',
+      member: memberName(d.memberId),
+      type: '直行/直帰',
+      date: d.date,
+      detail: DIRECT_TYPE_LABELS[d.type],
+      reason: d.reason,
     }))
   const lvRows = leave.pendingRequests.value.map(r => ({
     id: r.id,
@@ -469,7 +563,7 @@ const pendingRows = computed(() => {
     detail: LEAVE_UNIT_LABELS[r.unit],
     reason: r.reason,
   }))
-  return [...fixRows, ...lvRows].sort((a, b) => a.date.localeCompare(b.date))
+  return [...fixRows, ...directRows, ...lvRows].sort((a, b) => a.date.localeCompare(b.date))
 })
 
 async function onDecide(row: Record<string, unknown>, action: 'approved' | 'rejected'): Promise<void> {
@@ -480,14 +574,98 @@ async function onDecide(row: Record<string, unknown>, action: 'approved' | 'reje
     })
     if (!ok) return
   }
-  const r = await (row.reqKind === 'fix' ? decideFix(id, action) : leave.decide(id, action))
+  const r = await (row.reqKind === 'fix'
+    ? decideFix(id, action)
+    : row.reqKind === 'direct'
+      ? decideDirect(id, action)
+      : leave.decide(id, action))
   if (r.ok) {
-    show(action === 'approved'
-      ? `申請を承認しました${row.reqKind === 'fix' ? '（打刻へ反映済み）' : ''}`
-      : '申請を却下しました', 'ok')
+    // 多段承認の途中（in_review）は「次の承認へ進めた」旨を出す
+    const stillReview = row.reqKind !== 'leave'
+      && (row.reqKind === 'fix' ? fixRequests.value : directRequests.value)
+        .find(x => x.id === id)?.status === 'in_review'
+    show(action === 'rejected'
+      ? '申請を却下しました'
+      : stillReview
+        ? '承認しました（次の承認へ進みました）'
+        : `申請を承認しました${row.reqKind === 'fix' ? '（打刻へ反映済み）' : ''}`, 'ok')
   } else {
     show(r.error.message, 'warn')
   }
+}
+
+// ---------- 経路設定タブ（勤怠承認経路。稟議 F-07-5 と同様。管理者のみ。F-04-12） ----------
+
+const routesCrud = useMasterCrudAsync('attendanceRoutes', 'atr')
+
+const routeGroups = computed(() => {
+  const cats: AttendanceRequestCategory[] = ['direct', 'fix']
+  return cats.map(category => ({
+    category,
+    label: ATTENDANCE_ROUTE_CATEGORY_LABELS[category],
+    routes: (routesCrud.list.value as AttendanceRoute[]).filter(r => r.category === category),
+  }))
+})
+
+const routeOpen = ref(false)
+const routeEditingId = ref<string | null>(null)
+const routeForm = reactive<{
+  category: string
+  steps: { approverRole: AttendanceRouteStep['approverRole'] }[]
+  active: boolean
+}>({ category: 'direct', steps: [{ approverRole: 'manager' }], active: true })
+const routeError = ref('')
+const approverRoleOptions = Object.entries(ATTENDANCE_APPROVER_ROLE_LABELS).map(([value, label]) => ({ value, label }))
+
+function routeStepSummary(r: AttendanceRoute): string {
+  return [...r.steps]
+    .sort((a, b) => a.order - b.order)
+    .map(s => ATTENDANCE_APPROVER_ROLE_LABELS[s.approverRole])
+    .join(' → ')
+}
+
+function openRouteModal(category: AttendanceRequestCategory, existing?: AttendanceRoute): void {
+  routeEditingId.value = existing?.id ?? null
+  routeForm.category = existing?.category ?? category
+  routeForm.steps = existing
+    ? [...existing.steps].sort((a, b) => a.order - b.order).map(s => ({ approverRole: s.approverRole }))
+    : [{ approverRole: 'manager' }]
+  routeForm.active = existing?.active ?? true
+  routeError.value = ''
+  routeOpen.value = true
+}
+function addRouteStep(): void { routeForm.steps.push({ approverRole: 'manager' }) }
+function removeRouteStep(i: number): void { if (routeForm.steps.length > 1) routeForm.steps.splice(i, 1) }
+function setRouteStepRole(i: number, v: string): void {
+  const s = routeForm.steps[i]
+  if (s) s.approverRole = v as AttendanceRouteStep['approverRole']
+}
+
+async function onRouteSave(): Promise<void> {
+  routeError.value = ''
+  if (routeForm.steps.length === 0) { routeError.value = '承認ステップを 1 つ以上設定してください'; return }
+  const steps: AttendanceRouteStep[] = routeForm.steps.map((s, i) => ({
+    order: i + 1, approverRole: s.approverRole, approverMemberId: null, mode: 'serial',
+  }))
+  const res = await routesCrud.save({
+    ...(routeEditingId.value ? { id: routeEditingId.value } : {}),
+    category: routeForm.category as AttendanceRequestCategory, steps, active: routeForm.active,
+  })
+  if (!res.ok) { routeError.value = res.error.message; return }
+  routeOpen.value = false
+  show('承認経路を保存しました', 'ok')
+}
+async function onRouteArchive(r: AttendanceRoute): Promise<void> {
+  const ok = await ask('経路の無効化', 'この承認経路を無効化しますか？（無効化中はその区分は管理者 1 名の単段承認に戻ります）', {
+    danger: true, confirmLabel: '無効化する',
+  })
+  if (!ok) return
+  const res = await routesCrud.archive(r.id)
+  show(res.ok ? '経路を無効化しました' : res.error.message, res.ok ? 'ok' : 'warn')
+}
+async function onRouteRestore(r: AttendanceRoute): Promise<void> {
+  const res = await routesCrud.restore(r.id)
+  show(res.ok ? '経路を有効化しました' : res.error.message, res.ok ? 'ok' : 'warn')
 }
 
 // ---------- 全員のタイムカードタブ（F-04-8。権限表 attendance / timecard-all で制御） ----------
@@ -921,9 +1099,25 @@ async function submitRule(): Promise<void> {
           aria-label="表示メンバー"
         />
         <template #trailing>
-          <button v-if="canRequestFix" type="button" class="btn btn-primary" @click="openFixModal">
-            <FilePen class="h-4 w-4" /> 打刻修正を申請
-          </button>
+          <span class="inline-flex flex-wrap items-center gap-2">
+            <button v-if="canRequestFix" type="button" class="btn btn-ghost" @click="openDirectModal">
+              <CalendarPlus class="h-4 w-4" /> 直行/直帰を申請
+            </button>
+            <template v-if="approvedDirectToday">
+              <button
+                v-for="k in directKindsOf(approvedDirectToday.type)"
+                :key="k"
+                type="button"
+                class="btn btn-ghost"
+                @click="openDirectPunch(k)"
+              >
+                <Check class="h-4 w-4" /> {{ PUNCH_KIND_LABELS[k] }}打刻を申請（{{ DIRECT_TYPE_LABELS[approvedDirectToday.type] }}承認済み）
+              </button>
+            </template>
+            <button v-if="canRequestFix" type="button" class="btn btn-primary" @click="openFixModal()">
+              <FilePen class="h-4 w-4" /> 打刻修正を申請
+            </button>
+          </span>
         </template>
       </UiFilterBar>
 
@@ -1290,7 +1484,7 @@ async function submitRule(): Promise<void> {
       <UiSectionCard
         v-if="isHrOrAdmin"
         title="承認待ち"
-        :description="`打刻修正・休暇の承認待ち ${pendingRows.length} 件`"
+        :description="`打刻修正・直行/直帰・休暇の承認待ち ${pendingRows.length} 件`"
         flush
       >
         <UiDataTable
@@ -1316,10 +1510,10 @@ async function submitRule(): Promise<void> {
           :columns="myRequestColumns"
           :rows="myRequestRows"
           empty-title="申請はまだありません"
-          empty-hint="日次タブの「打刻修正を申請」、休暇タブの「休暇を申請」から作成できます"
+          empty-hint="日次タブの「直行/直帰を申請」「打刻修正を申請」、休暇タブの「休暇を申請」から作成できます"
         >
           <template #cell-status="{ value }">
-            <UiStatusBadge :tone="leaveStatusTone(value)" :label="leaveStatusLabel(value)" />
+            <UiStatusBadge :tone="reqStatusTone(value)" :label="reqStatusLabel(value)" />
           </template>
         </UiDataTable>
       </UiSectionCard>
@@ -1465,12 +1659,100 @@ async function submitRule(): Promise<void> {
       </UiSectionCard>
     </div>
 
+    <!-- ================= 経路設定（勤怠承認経路。F-04-12。稟議 F-07-5 と同様） ================= -->
+    <div v-else-if="tab === 'routes' && isAdmin" role="tabpanel" aria-label="経路設定" class="mt-3 grid gap-3">
+      <p class="text-[13px] text-sub">
+        勤怠の承認経路を区分ごとに設定します（稟議と同様）。経路が未設定・全無効の区分は、管理者 1 名の単段承認になります。
+      </p>
+      <UiSectionCard
+        v-for="g in routeGroups"
+        :key="g.category"
+        :title="g.label"
+        description="上から順に承認（直列）。承認者ロールは申請時に実在メンバーへ解決されます"
+        flush
+      >
+        <template #actions>
+          <button type="button" class="btn" @click="openRouteModal(g.category)">
+            <Plus class="h-4 w-4" /> 経路を追加
+          </button>
+        </template>
+        <div v-if="g.routes.length === 0" class="px-3 py-6 text-center text-[13px] text-muted">
+          経路は未設定です（この区分は管理者 1 名の承認になります）
+        </div>
+        <ul v-else class="divide-y divide-line">
+          <li v-for="r in g.routes" :key="r.id" class="flex items-center justify-between gap-3 px-3 py-2.5">
+            <div class="min-w-0">
+              <div class="flex flex-wrap items-center gap-2">
+                <UiStatusBadge :tone="r.active ? 'ok' : 'neutral'" :label="r.active ? '有効' : '無効'" />
+                <span class="truncate text-[13px] font-semibold">{{ routeStepSummary(r) }}</span>
+              </div>
+              <p class="mt-0.5 text-[12px] text-sub">{{ r.steps.length }} 段承認（直列）</p>
+            </div>
+            <div class="flex shrink-0 items-center gap-1.5">
+              <button type="button" class="btn btn-sm" @click="openRouteModal(g.category, r)">編集</button>
+              <button v-if="r.active" type="button" class="btn btn-sm btn-danger" @click="onRouteArchive(r)">無効化</button>
+              <button v-else type="button" class="btn btn-sm" @click="onRouteRestore(r)">有効化</button>
+            </div>
+          </li>
+        </ul>
+      </UiSectionCard>
+    </div>
+
+    <!-- ================= モーダル: 承認経路の編集（F-04-12） ================= -->
+    <UiModal :open="routeOpen" :title="routeEditingId ? '承認経路を編集' : '承認経路を追加'" @close="routeOpen = false">
+      <div class="grid gap-3">
+        <UiFormField label="区分" required>
+          <UiSelect
+            v-model="routeForm.category"
+            :options="[{ value: 'direct', label: '直行/直帰申請' }, { value: 'fix', label: '打刻修正申請' }]"
+            aria-label="区分"
+          />
+        </UiFormField>
+        <UiFormField label="承認ステップ（上から順に承認）" required>
+          <div class="grid gap-2">
+            <div v-for="(s, i) in routeForm.steps" :key="i" class="flex items-center gap-2">
+              <span class="w-6 shrink-0 text-center text-[12px] font-semibold text-sub num">{{ i + 1 }}</span>
+              <UiSelect
+                :model-value="s.approverRole"
+                :options="approverRoleOptions"
+                aria-label="承認者ロール"
+                @update:model-value="setRouteStepRole(i, String($event))"
+              />
+              <button
+                type="button"
+                class="btn btn-sm btn-ghost"
+                :disabled="routeForm.steps.length <= 1"
+                aria-label="ステップを削除"
+                @click="removeRouteStep(i)"
+              >
+                <X class="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <button type="button" class="btn btn-sm w-fit" @click="addRouteStep">
+              <Plus class="h-3.5 w-3.5" /> ステップを追加
+            </button>
+          </div>
+        </UiFormField>
+        <label class="flex items-center gap-2 text-[13px] font-medium">
+          <input v-model="routeForm.active" type="checkbox" > 有効にする
+        </label>
+        <p v-if="routeError" class="text-[12px] font-medium text-crit" role="alert">{{ routeError }}</p>
+      </div>
+      <template #footer>
+        <button type="button" class="btn" @click="routeOpen = false">キャンセル</button>
+        <button type="button" class="btn btn-primary" @click="onRouteSave">保存する</button>
+      </template>
+    </UiModal>
+
     <!-- ================= モーダル: 打刻修正申請 ================= -->
     <UiModal :open="fixOpen" title="打刻修正を申請" @close="fixOpen = false">
       <div class="grid gap-3">
         <p class="text-[12px] text-sub">
           対象日: <b class="num">{{ fmtDateLong(selDate) }}</b>。
           修正は承認後に反映され、修正前の打刻・修正者・承認者は履歴として保全されます。
+        </p>
+        <p v-if="fixDirectId" class="rounded-md bg-brand-soft px-2.5 py-1.5 text-[12px] text-brand">
+          承認済みの直行/直帰にもとづく打刻登録です（対象の打刻種別のみ選択できます）。
         </p>
         <UiFormField label="打刻種別" required>
           <UiSelect v-model="fixForm.kind" :options="punchKindOptions" aria-label="打刻種別" />
@@ -1490,6 +1772,31 @@ async function submitRule(): Promise<void> {
       <template #footer>
         <button type="button" class="btn" @click="fixOpen = false">キャンセル</button>
         <button type="button" class="btn btn-primary" @click="submitFix">申請する</button>
+      </template>
+    </UiModal>
+
+    <!-- ================= モーダル: 直行/直帰申請（F-04-11） ================= -->
+    <UiModal :open="directOpen" title="直行/直帰を申請" @close="directOpen = false">
+      <div class="grid gap-3">
+        <p class="text-[12px] text-sub">
+          対象日: <b class="num">{{ fmtDateLong(selDate) }}</b>。
+          承認されると、この日の{{ '出勤/退勤' }}打刻を「打刻修正」から登録できるようになります。
+        </p>
+        <UiFormField label="種別" required>
+          <UiSelect v-model="directForm.type" :options="directTypeOptions" aria-label="直行/直帰の種別" />
+        </UiFormField>
+        <UiFormField label="理由" required>
+          <textarea
+            v-model="directForm.reason"
+            class="textarea"
+            placeholder="例: 朝一で客先へ直行するため"
+          />
+        </UiFormField>
+        <p v-if="directError" class="text-[12px] font-medium text-crit" role="alert">{{ directError }}</p>
+      </div>
+      <template #footer>
+        <button type="button" class="btn" @click="directOpen = false">キャンセル</button>
+        <button type="button" class="btn btn-primary" @click="submitDirectReq">申請する</button>
       </template>
     </UiModal>
 

@@ -4,6 +4,7 @@ import type {
   EmploymentType, EscalationReason, EscalationResolutionType, IncidentImpact,
   IncidentStatus, KnowledgeDomain, MemberRole, NotificationKind, ProjectStatus, ProjectType,
   PunchKind, ShiftPeriodStatus, ShiftWishKind, WorkflowCategory, WorkflowStatus,
+  AttendanceRouteStep, AttendanceRequestCategory, DirectType,
 } from '~/types/domain'
 import type { Tone } from '~/types/ui'
 
@@ -35,6 +36,27 @@ export const PUNCH_KIND_LABELS: Record<PunchKind, string> = {
   out: '退勤',
   break_start: '休憩開始',
   break_end: '休憩終了',
+}
+
+/** 直行/直帰の種別ラベル（F-04-11） */
+export const DIRECT_TYPE_LABELS: Record<DirectType, string> = {
+  chokkou: '直行',
+  chokki: '直帰',
+  both: '直行直帰',
+}
+
+/** 勤怠承認区分ラベル（経路設定タブ。F-04-12） */
+export const ATTENDANCE_ROUTE_CATEGORY_LABELS: Record<AttendanceRequestCategory, string> = {
+  direct: '直行/直帰申請',
+  fix: '打刻修正申請',
+}
+
+/** 勤怠承認ステップの承認者ロールラベル（稟議 + 人事） */
+export const ATTENDANCE_APPROVER_ROLE_LABELS: Record<AttendanceRouteStep['approverRole'], string> = {
+  manager: '管理者（マネージャー）',
+  hr: '人事',
+  director: '取締役',
+  president: '代表取締役',
 }
 
 export const PROJECT_TYPE_LABELS: Record<ProjectType, string> = {

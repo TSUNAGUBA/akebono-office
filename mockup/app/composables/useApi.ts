@@ -201,6 +201,7 @@ const MIGRATED_MASTERS: Record<string, string> = {
   workflowRoutes: 'workflow-routes',
   decisionThemes: 'decision-themes',
   permissionRules: 'permission-rules',
+  attendanceRoutes: 'attendance-routes',
   aiRoles: 'ai-roles',
   aiEmployees: 'ai-employees',
   // Akebono 設定系（Phase B = 0031）

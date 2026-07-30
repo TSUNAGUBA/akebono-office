@@ -348,6 +348,53 @@ export interface AttendanceBuckets {
   legalHoliday: number
 }
 
+// ---------- 勤怠承認ワークフロー（F-04-11/12。稟議と同様の経路設定。金額帯は持たない = 区分で選択） ----------
+
+/** 勤怠承認の区分（経路設定のキー）。direct=直行/直帰申請・fix=打刻修正申請 */
+export type AttendanceRequestCategory = 'direct' | 'fix'
+
+/** 直行/直帰の種別（chokkou=直行・chokki=直帰・both=直行直帰） */
+export type DirectType = 'chokkou' | 'chokki' | 'both'
+
+/**
+ * 勤怠承認ステップ（稟議 WorkflowRouteStep の勤怠版）。
+ * approverRole に hr（人事）を追加。mode は serial のみ実装（稟議と同じく all/majority は未実装のメタ）。
+ */
+export interface AttendanceRouteStep {
+  order: number
+  approverRole: 'manager' | 'hr' | 'director' | 'president'
+  approverMemberId: string | null
+  mode: ApprovalMode
+}
+
+/**
+ * 勤怠承認経路（区分ごとの承認ステップ）。稟議 WorkflowRoute との差分は「金額帯を持たない」点のみ。
+ * 区分に有効な経路が無い場合は管理者 1 名の単段承認へフォールバックする（下位互換 = 原則7）。
+ */
+export interface AttendanceRoute {
+  id: string
+  category: AttendanceRequestCategory
+  steps: AttendanceRouteStep[]
+  active: boolean
+}
+
+/**
+ * 直行/直帰 申請（承認系）。承認された日について打刻修正（出勤/退勤）が申請できるようになる。
+ * 経路（category='direct'）で多段承認。経路未設定時は管理者単段（routeSnapshot=[]）。
+ */
+export interface DirectRequest {
+  id: string
+  memberId: string
+  date: string // YYYY-MM-DD
+  type: DirectType
+  reason: string
+  status: 'pending' | 'in_review' | 'approved' | 'rejected' | 'withdrawn'
+  currentStep: number
+  routeSnapshot: AttendanceRouteStep[] // 申請時の経路を凍結（稟議と同設計）
+  decidedBy: string | null // 最終承認/却下者（一覧表示・互換のため保持）
+  createdAt: string
+}
+
 export interface AttendanceFixRequest {
   id: string
   memberId: string
@@ -355,8 +402,14 @@ export interface AttendanceFixRequest {
   kind: PunchKind
   requestedAt: string // 修正後の打刻時刻（ISO）
   reason: string
-  status: 'pending' | 'approved' | 'rejected'
+  status: 'pending' | 'in_review' | 'approved' | 'rejected'
   decidedBy: string | null
+  /** 経路承認の現在ステップ（1..n）。経路未設定時は 1（管理者単段フォールバック） */
+  currentStep: number
+  /** 申請時に凍結した経路（空配列 = 経路未設定 = 従来の管理者単段承認） */
+  routeSnapshot: AttendanceRouteStep[]
+  /** 直行/直帰申請との紐付け（直行/直帰起因の打刻修正のみ設定。null = 通常の修正） */
+  directRequestId: string | null
 }
 
 /**
