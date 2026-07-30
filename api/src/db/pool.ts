@@ -22,6 +22,12 @@ export function createPool(env: Env): pg.Pool {
     ssl,
     max: Number(process.env.DB_POOL_MAX ?? 5), // Cloud Run はインスタンス並行数と掛け算になるため控えめに
     options: '-c search_path=app_office',
+    // 暖機インスタンス上でも既定 idle 10s で接続が落ち、次リクエストが SSL 再確立の遅延を払う。
+    // TCP keepalive + idle を延ばして再接続チャーンを抑える（低頻度アクセスの体感遅延を軽減）。
+    keepAlive: true,
+    idleTimeoutMillis: Number(process.env.DB_IDLE_TIMEOUT_MS ?? 60_000),
+    // 接続獲得が滞留した場合に無限待ちにせず失敗させる（ハングではなくエラーで応答 = 原則4）。
+    connectionTimeoutMillis: Number(process.env.DB_CONNECT_TIMEOUT_MS ?? 15_000),
   })
   return pool
 }

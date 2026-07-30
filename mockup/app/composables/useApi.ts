@@ -257,10 +257,23 @@ const CUSTOM_COLLECTION_ENDPOINTS: Record<string, string> = {
  */
 export async function apiWrite<T = unknown>(
   path: string,
-  opts: { method?: 'POST' | 'PATCH' | 'PUT'; body?: unknown; reload?: string[] } = {},
+  opts: { method?: 'POST' | 'PATCH' | 'PUT'; body?: unknown; reload?: string[]; idempotent?: boolean } = {},
 ): Promise<{ ok: true; id?: string; data: T } | { ok: false; error: { code: string; message: string } }> {
+  const method = opts.method ?? 'POST'
   try {
-    const data = await apiFetch<T>(path, { method: opts.method ?? 'POST', body: opts.body })
+    let data: T
+    try {
+      data = await apiFetch<T>(path, { method, body: opts.body })
+    } catch (e) {
+      // 冪等な書込のみ、ネットワーク層の失敗（応答なし = AKO-GEN-NET。コールドスタートのタイムアウト・
+      // 接続断等）を 1 回だけ再試行する。非冪等な新規作成（POST）は二重作成の危険があるため再試行しない。
+      if (opts.idempotent && apiErrorOf(e).code === 'AKO-GEN-NET') {
+        await new Promise(resolve => setTimeout(resolve, 700))
+        data = await apiFetch<T>(path, { method, body: opts.body })
+      } else {
+        throw e
+      }
+    }
     await Promise.all((opts.reload ?? []).map(name => loadApiCollection(name, true)))
     const id = (data as { id?: string } | null | undefined)?.id
     return { ok: true, ...(id ? { id } : {}), data }

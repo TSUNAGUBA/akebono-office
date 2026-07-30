@@ -73,10 +73,10 @@ export function useAkebonoImports() {
     return { ok: true, id }
   }
 
-  /** 方式別設定の更新（エンドポイント/トークン・CSV ヘッダ有無等） */
+  /** 方式別設定の更新（エンドポイント/トークン・CSV ヘッダ有無等）。冪等（同値を再送しても結果不変）= 再試行安全 */
   async function updateSourceConfig(id: string, config: ImportSourceConfig): Promise<Result> {
     const denied = adminGuard(); if (denied) return denied
-    if (isApi) return apiWrite(`/v1/akebono/import-sources/${id}/config`, { method: 'PUT', body: { config }, reload: ['importSources'] })
+    if (isApi) return apiWrite(`/v1/akebono/import-sources/${id}/config`, { method: 'PUT', body: { config }, reload: ['importSources'], idempotent: true })
     // 取込元の method に合わせて正規化（API 経路と同じ subset に揃える）
     const method = sourceById(id)?.method
     const norm = method ? normalizeImportSourceConfig(config, method) as ImportSourceConfig : config
@@ -84,17 +84,18 @@ export function useAkebonoImports() {
     commit()
     return { ok: true, id }
   }
+  /** 取込元の無効化（論理削除）。冪等（active=false の再設定は結果不変）= コールドスタートのタイムアウトを 1 回再試行 */
   async function archiveSource(id: string): Promise<Result> {
     const denied = adminGuard(); if (denied) return denied
-    if (isApi) return apiWrite(`/v1/akebono/import-sources/${id}/archive`, { reload: ['importSources'] })
+    if (isApi) return apiWrite(`/v1/akebono/import-sources/${id}/archive`, { reload: ['importSources'], idempotent: true })
     sources.value = sources.value.map(s => s.id === id ? { ...s, active: false } : s)
     commit()
     return { ok: true, id }
   }
-  /** 取込元の復元（論理削除の取消 = 原則9.5。imports.vue が「無効も表示」トグル経由で両モードとも復元導線を持つ） */
+  /** 取込元の復元（論理削除の取消 = 原則9.5。imports.vue が「無効も表示」トグル経由で両モードとも復元導線を持つ）。冪等 = 再試行安全 */
   async function restoreSource(id: string): Promise<Result> {
     const denied = adminGuard(); if (denied) return denied
-    if (isApi) return apiWrite(`/v1/akebono/import-sources/${id}/restore`, { reload: ['importSources'] })
+    if (isApi) return apiWrite(`/v1/akebono/import-sources/${id}/restore`, { reload: ['importSources'], idempotent: true })
     sources.value = sources.value.map(s => s.id === id ? { ...s, active: true } : s)
     commit()
     return { ok: true, id }

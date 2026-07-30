@@ -402,6 +402,9 @@ jobs:
           VERTEX_MODEL: ${{ secrets.VERTEX_MODEL }}
           GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
           STORAGE_BUCKET: ${{ secrets.STORAGE_BUCKET }}
+          # 常時稼働インスタンス数（repository variable。未設定は 1 = 常に 1 台を暖機してコールドスタートを避ける）。
+          # コスト最優先なら 0 に設定（アイドル時ゼロスケール = 従来。ただし初回リクエストにコールドスタート遅延が戻る）
+          CLOUD_RUN_MIN_INSTANCES: ${{ vars.CLOUD_RUN_MIN_INSTANCES }}
         run: |
           ENV_VARS="AUTH_MODE=firebase,FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID},DB_SSL=${DB_SSL:-require},CORS_ORIGINS=${API_CORS_ORIGINS},VERTEX_PROJECT_ID=${PROJECT},VERTEX_LOCATION=${VERTEX_LOCATION:-global},VERTEX_MODEL=${VERTEX_MODEL:-gemini-2.5-flash}"
           # ドキュメント保管（バッチ7l）。未設定 = DB bytea フォールバック
@@ -416,16 +419,23 @@ jobs:
           fi
           # --no-cpu-throttling: AI タスクの承認後自動実行（バッチ7i = HTTP 応答後のバックグラウンド
           # LLM 実行）を応答返却後も CPU 割当されたまま走らせるため（PR #58 R1 C-2）。
-          # 課金はインスタンス稼働時間ベースへ変わる（min-instances 0 のためアイドル時はゼロスケール）
+          # --min-instances: 既定 1 = 常に 1 台を暖機し、アイドル後の初回リクエストのコールドスタート遅延
+          # （コンテナ起動 + DB プール確立で数秒〜十数秒）を解消する。オペレーター報告 2026-07-30
+          # （取込元の登録が異常に遅い / 無効化がタイムアウトで失敗）への対処。repository variable
+          # CLOUD_RUN_MIN_INSTANCES=0 でコスト優先のゼロスケール（従来挙動）へ戻せる。
+          MIN_INSTANCES="${CLOUD_RUN_MIN_INSTANCES:-1}"
+          # --cpu-boost: 残るコールドスタート（スパイク時の 2〜3 台目）の起動を高速化（低リスク。
+          # CLI フラグは --cpu-boost。--startup-cpu-boost は KRM アノテーション名で CLI では不正）
           gcloud run deploy "$SERVICE" \
             --image "$IMAGE" \
             --region "$REGION" \
             --platform managed \
             --allow-unauthenticated \
             --port 8080 \
-            --min-instances 0 \
+            --min-instances "$MIN_INSTANCES" \
             --max-instances 3 \
             --no-cpu-throttling \
+            --cpu-boost \
             --set-env-vars "$ENV_VARS" \
             --set-secrets "$SECRET_FLAGS"
           echo "デプロイ完了: $(gcloud run services describe "$SERVICE" --region "$REGION" --format='value(status.url)')"
