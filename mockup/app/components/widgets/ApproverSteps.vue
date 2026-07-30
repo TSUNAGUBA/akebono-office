@@ -23,7 +23,8 @@ const { itemsOf } = useCodeMaster()
 const members = tbl('members')
 
 const typeOptions = (Object.keys(APPROVER_TYPE_LABELS) as ApproverType[]).map(value => ({ value, label: APPROVER_TYPE_LABELS[value] }))
-const roleOptions = (['admin', 'hr', 'member'] as MemberRole[]).map(value => ({ value, label: MEMBER_ROLE_LABELS[value] }))
+// ロールは承認権限を持つ 管理者/人事 のみ提示（レビュー指摘: 一般は任意の一般社員へ解決＝承認者として無意味・自己承認の温床）
+const roleOptions = (['admin', 'hr'] as MemberRole[]).map(value => ({ value, label: MEMBER_ROLE_LABELS[value] }))
 const titleOptions = computed(() => itemsOf('title')) // [{ value: label, label }]
 const memberOptions = computed(() =>
   (members.value as Member[]).filter(m => m.active).map(m => ({ value: m.id, label: `${m.name}（${m.title || '—'}）` })))

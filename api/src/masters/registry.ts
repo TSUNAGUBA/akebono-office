@@ -38,7 +38,8 @@ const iconImage = z.string()
 const approverStepSchema = z.object({
   order: z.number().int().min(1),
   approverType: z.enum(['title', 'role', 'member']).default('role'),
-  approverRole: z.enum(['admin', 'hr', 'member']).nullable().default(null),
+  // ロールは承認権限を持つ 管理者/人事 のみ（一般は承認者として無意味なため非許容）
+  approverRole: z.enum(['admin', 'hr']).nullable().default(null),
   approverTitle: z.string().nullable().default(null),
   approverMemberId: z.string().nullable().default(null),
   mode: z.enum(['serial', 'all', 'majority']).default('serial'),
