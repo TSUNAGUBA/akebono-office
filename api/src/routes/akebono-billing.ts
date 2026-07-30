@@ -39,7 +39,7 @@ const JST_TS = (col: string): string =>
 const SR_COLS = `id, code, sales_date AS "salesDate", company_id AS "companyId",
   segment_id AS "segmentId", sku_id AS "skuId", qty, unit_price AS "unitPrice", amount,
   cost_price AS "costPrice", channel, billing_type AS "billingType", source_kind AS "sourceKind",
-  source_ref AS "sourceRef", invoice_id AS "invoiceId", correction_of AS "correctionOf", active`
+  source_ref AS "sourceRef", invoice_id AS "invoiceId", correction_of AS "correctionOf", active, custom`
 
 const INV_COLS = `id, code, company_id AS "companyId", segment_id AS "segmentId",
   period_from AS "periodFrom", period_to AS "periodTo", invoice_type AS "invoiceType", status,
@@ -100,6 +100,8 @@ export function akebonoBillingRoutes(pool: pg.Pool): Hono {
     }
     const channel = typeof body.channel === 'string' && body.channel.trim() ? capCp(body.channel.trim(), 100) : null
     const sourceKind = ['manual', 'shipment', 'import', 'monthly_bulk'].includes(String(body.sourceKind)) ? String(body.sourceKind) : 'manual'
+    // 追加カスタム項目（F-31）。オブジェクトのみ受理（配列/非オブジェクトは {} 扱い）
+    const custom = body.custom && typeof body.custom === 'object' && !Array.isArray(body.custom) ? body.custom : {}
     const { rows: crows } = await pool.query(`SELECT 1 FROM companies WHERE id = $1`, [companyId])
     if (crows.length === 0) throw err('AKO-GEN-002', `得意先が見つかりません（${companyId}）`, 404)
     const { rows: srows } = await pool.query(`SELECT 1 FROM business_segments WHERE id = $1`, [segmentId])
@@ -115,10 +117,10 @@ export function akebonoBillingRoutes(pool: pg.Pool): Hono {
       const code = await nextDocCode(db, 'SR')
       const { rows } = await db.query(
         `INSERT INTO sales_records (id, code, sales_date, company_id, segment_id, sku_id, qty, unit_price, amount,
-           cost_price, channel, billing_type, source_kind)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING ${SR_COLS}`,
+           cost_price, channel, billing_type, source_kind, custom)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING ${SR_COLS}`,
         [id, code, salesDate, companyId, segmentId, skuId, qty, unitPrice, Math.round(qty * unitPrice),
-          sku.costPrice ?? sku.stdCost ?? null, channel, sku.billingType, sourceKind])
+          sku.costPrice ?? sku.stdCost ?? null, channel, sku.billingType, sourceKind, JSON.stringify(custom)])
       return rows[0]
     })
     await audit(pool, { actorId: user.id, action: 'create', entity: 'sales_records', entityId: id, detail: '売上を計上' })

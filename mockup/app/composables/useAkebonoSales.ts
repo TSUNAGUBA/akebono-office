@@ -142,7 +142,7 @@ export function useAkebonoSales() {
   // ---------- 書込 ----------
   async function create(input: {
     salesDate: string; companyId: string; segmentId: string; skuId: string; qty: number; unitPrice: number;
-    channel?: string | null; sourceKind?: SalesRecord['sourceKind']
+    channel?: string | null; sourceKind?: SalesRecord['sourceKind']; custom?: SalesRecord['custom']
   }): Promise<Result> {
     if (!input.companyId || !input.segmentId || !input.skuId) {
       return { ok: false, error: { code: 'AKO-SLS-001', message: '得意先・セグメント・SKU は必須です' } }
@@ -165,6 +165,7 @@ export function useAkebonoSales() {
       costPrice: sku ? products.costOf(sku) : null,
       channel: input.channel ?? null, billingType: (product?.billingType ?? null) as BillingType | null,
       sourceKind: input.sourceKind ?? 'manual', sourceRef: null, invoiceId: null, correctionOf: null, active: true,
+      custom: input.custom ?? {},
     }
     records.value = [...records.value, created]
     commit()

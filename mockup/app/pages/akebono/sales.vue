@@ -5,7 +5,7 @@
  * 訂正は赤黒（記録系）= 誤登録の取消フロー（原則 9.5）。ルート /akebono/sales。管理者ゲート不要。
  */
 import { ArrowRight, Plus } from 'lucide-vue-next'
-import type { Company } from '~/types/domain'
+import type { Company, CustomValues } from '~/types/domain'
 import { fmtDate, fmtPct, fmtYen, fmtYenCompact, todayJst } from '~/utils/format'
 
 const sales = useAkebonoSales()
@@ -117,9 +117,14 @@ const segmentOptions = computed(() =>
 const skuOptions = computed(() =>
   products.activeSkus().map(s => ({ value: s.id, label: products.skuLabel(s) })))
 
+const { customDefs } = useAppFields()
+
 const entryOpen = ref(false)
-const entryForm = ref({
-  salesDate: todayJst(), companyId: '', segmentId: '', skuId: '', qty: '', unitPrice: '',
+const entryForm = ref<{
+  salesDate: string; companyId: string; segmentId: string; skuId: string; qty: string; unitPrice: string
+  custom: CustomValues
+}>({
+  salesDate: todayJst(), companyId: '', segmentId: '', skuId: '', qty: '', unitPrice: '', custom: {},
 })
 
 function openEntry(): void {
@@ -131,8 +136,24 @@ function openEntry(): void {
     skuId: skuOptions.value[0]?.value ?? '',
     qty: '',
     unitPrice: '',
+    custom: {},
   }
   entryOpen.value = true
+}
+
+/** WidgetsCustomFields からの更新を custom へ反映（UiSchemaForm は custom.<key> に書き込む） */
+function onCustomUpdate(v: Record<string, unknown>): void {
+  entryForm.value = { ...entryForm.value, custom: (v.custom ?? {}) as CustomValues }
+}
+
+/** 必須カスタム項目の未入力チェック（F-31）。未入力なら該当ラベルを返す（null = OK） */
+function missingRequiredCustom(custom: CustomValues): string | null {
+  for (const d of customDefs('sales_record')) {
+    if (!d.required) continue
+    const v = custom[d.key]
+    if (v == null || v === '' || (Array.isArray(v) && v.length === 0)) return d.label
+  }
+  return null
 }
 
 // SKU 選択時に既定売価を補完（未入力のときのみ。上書きしない）
@@ -164,9 +185,14 @@ async function saveEntryInner(): Promise<void> {
     show('単価は 0 以上の数値で入力してください', 'crit')
     return
   }
+  const missing = missingRequiredCustom(f.custom)
+  if (missing) {
+    show(`「${missing}」を入力してください`, 'crit')
+    return
+  }
   const res = await create({
     salesDate: f.salesDate, companyId: f.companyId, segmentId: f.segmentId,
-    skuId: f.skuId, qty, unitPrice,
+    skuId: f.skuId, qty, unitPrice, custom: f.custom,
   })
   if (!res.ok) {
     show(`${res.error.code}: ${res.error.message}`, 'crit')
@@ -337,6 +363,8 @@ const entryAmount = computed(() => {
         <p v-if="entryAmount !== null" class="text-[13px] text-sub">
           金額（税抜）: <span class="num font-semibold tabular-nums text-ink">{{ fmtYen(entryAmount) }}</span>
         </p>
+        <!-- 追加カスタム項目（F-31。項目カスタマイズ画面で定義した項目を描画） -->
+        <WidgetsCustomFields entity="sales_record" :model-value="entryForm" @update:model-value="onCustomUpdate" />
         <p class="text-[11px] text-muted">
           登録後の取消は、明細一覧の該当行をクリックして赤黒訂正で行えます（記録系のため物理削除しません）。
         </p>
