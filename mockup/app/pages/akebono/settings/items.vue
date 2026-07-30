@@ -4,13 +4,15 @@
  * 基本項目カタログ（コード SoT）にテナント差分を重ね、エンティティ単位で
  * フォーム/一覧の表示・必須・表示名を調整する。基本項目は非表示化のみ（削除不可）。
  */
-import { RotateCcw } from 'lucide-vue-next'
+import { Pencil, Plus, RotateCcw, X } from 'lucide-vue-next'
 import { useItemSettings, ITEM_ENTITY_LABELS, ITEM_CATALOG } from '~/composables/useItemSettings'
 import { INDUSTRY_TYPE_LABELS } from '~/utils/akebono'
 import type { ResolvedItem } from '~/composables/useItemSettings'
+import type { CustomFieldDef, CustomFieldEntity, CustomFieldType } from '~/types/domain'
 import type { TabItem, TableColumn } from '~/types/ui'
 
 const its = useItemSettings()
+const cf = useCustomFields()
 const toast = useToast()
 const confirm = useConfirm()
 
@@ -80,6 +82,76 @@ async function resetCurrent(): Promise<void> {
   const res = await its.resetEntity(current.value)
   if (!res.ok) { toast.show(`${res.error.code}: ${res.error.message}`, 'crit'); return }
   toast.show('業種の基本項目へ戻しました', 'ok')
+}
+
+// ---------- 追加カスタム項目（F-31 汎用化。同一エンジン = useCustomFields。全アプリ共通） ----------
+
+const CF_TYPE_LABELS: Record<CustomFieldType, string> = {
+  text: 'テキスト', number: '数値', date: '日付', select: '選択', multiselect: '複数選択', boolean: 'ON/OFF',
+}
+const cfTypeOptions = (Object.keys(CF_TYPE_LABELS) as CustomFieldType[]).map(k => ({ value: k, label: CF_TYPE_LABELS[k] }))
+const customDefs = computed<CustomFieldDef[]>(() => cf.defsFor(current.value as CustomFieldEntity))
+const cfRows = computed(() => customDefs.value as unknown as Record<string, unknown>[])
+function asDef(row: Record<string, unknown>): CustomFieldDef { return row as unknown as CustomFieldDef }
+
+const cfColumns: TableColumn[] = [
+  { key: 'label', label: '項目名', primary: true },
+  { key: 'type', label: '種別', width: '110px' },
+  { key: 'required', label: '必須', align: 'center', width: '70px' },
+  { key: 'actions', label: '操作', align: 'right', width: '120px', primary: true },
+]
+
+const cfOpen = ref(false)
+const cfForm = reactive<{ id: string | null; key: string; label: string; fieldType: CustomFieldType; optionsText: string; required: boolean }>({
+  id: null, key: '', label: '', fieldType: 'text', optionsText: '', required: false,
+})
+const cfError = ref('')
+const cfNeedsOptions = computed(() => cfForm.fieldType === 'select' || cfForm.fieldType === 'multiselect')
+
+function openCfCreate(): void {
+  Object.assign(cfForm, { id: null, key: '', label: '', fieldType: 'text', optionsText: '', required: false })
+  cfError.value = ''
+  cfOpen.value = true
+}
+function openCfEdit(d: CustomFieldDef): void {
+  Object.assign(cfForm, { id: d.id, key: d.key, label: d.label, fieldType: d.fieldType, optionsText: d.options.join('\n'), required: d.required })
+  cfError.value = ''
+  cfOpen.value = true
+}
+
+async function onCfSave(): Promise<void> {
+  cfError.value = ''
+  const key = cfForm.key.trim()
+  const label = cfForm.label.trim()
+  if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(key)) { cfError.value = 'キーは英字始まりの半角英数字（_ 可）で入力してください'; return }
+  if (!label) { cfError.value = '項目名を入力してください'; return }
+  // 既定項目キー・他カスタム項目キーとの重複を防ぐ（custom.<key> で保存されるが混同回避）
+  if (ITEM_CATALOG[current.value]?.some(c => c.itemKey === key)) { cfError.value = 'このキーは既定項目と重複しています'; return }
+  if (cf.list.value.some(d => d.entity === current.value && d.key === key && d.id !== cfForm.id)) {
+    cfError.value = 'このキーは既に使われています'; return
+  }
+  const options = cfNeedsOptions.value ? cfForm.optionsText.split('\n').map(s => s.trim()).filter(Boolean) : []
+  if (cfNeedsOptions.value && options.length === 0) { cfError.value = '選択肢を 1 つ以上入力してください'; return }
+  const order = cfForm.id
+    ? (customDefs.value.find(d => d.id === cfForm.id)?.displayOrder ?? customDefs.value.length + 1)
+    : customDefs.value.length + 1
+  const res = await cf.save({
+    ...(cfForm.id ? { id: cfForm.id } : {}),
+    entity: current.value as CustomFieldEntity, key, label, fieldType: cfForm.fieldType,
+    options, required: cfForm.required, displayOrder: order, active: true,
+  })
+  if (!res.ok) { cfError.value = res.error.message; return }
+  cfOpen.value = false
+  toast.show('カスタム項目を保存しました（対応済みのアプリのフォームに反映されます）', 'ok')
+}
+
+async function onCfRemove(d: CustomFieldDef): Promise<void> {
+  const ok = await confirm.ask('カスタム項目の削除',
+    `「${d.label}」を削除します。（既存レコードの入力値は保持されますが、入力欄は表示されなくなります）`,
+    { danger: true, confirmLabel: '削除する' })
+  if (!ok) return
+  const res = await cf.archive(d.id)
+  toast.show(res.ok ? 'カスタム項目を削除しました' : res.error.message, res.ok ? 'ok' : 'warn')
 }
 </script>
 
@@ -161,5 +233,71 @@ async function resetCurrent(): Promise<void> {
         </template>
       </UiDataTable>
     </UiSectionCard>
+
+    <!-- 追加カスタム項目（同一エンジンで全アプリ共通） -->
+    <UiSectionCard
+      :title="`${ITEM_ENTITY_LABELS[current] ?? current} の追加カスタム項目（${customDefs.length}件）`"
+      description="基本項目に無い項目を追加します。追加した項目は、フォーム反映に対応済みのアプリ（現在は商品・売上明細）で入力欄として表示されます。一覧表示・データ取込への反映は順次対応します。"
+      flush
+    >
+      <template #actions>
+        <button type="button" class="btn" @click="openCfCreate">
+          <Plus class="h-4 w-4" aria-hidden="true" /> 項目を追加
+        </button>
+      </template>
+      <UiDataTable
+        :columns="cfColumns"
+        :rows="cfRows"
+        empty-title="カスタム項目はありません"
+        empty-hint="「項目を追加」から、このアプリ独自の管理項目を追加できます"
+      >
+        <template #cell-label="{ row }">
+          <span class="font-medium">{{ asDef(row).label }}</span>
+          <p class="mt-0.5 text-[11px] text-muted">キー: custom.{{ asDef(row).key }}</p>
+        </template>
+        <template #cell-type="{ row }">
+          {{ CF_TYPE_LABELS[asDef(row).fieldType] }}
+        </template>
+        <template #cell-required="{ row }">
+          <UiStatusBadge v-if="asDef(row).required" tone="warn" label="必須" />
+          <span v-else class="text-muted">—</span>
+        </template>
+        <template #cell-actions="{ row }">
+          <span class="inline-flex gap-1.5">
+            <button type="button" class="btn btn-sm" @click="openCfEdit(asDef(row))">
+              <Pencil class="h-3.5 w-3.5" aria-hidden="true" /> 編集
+            </button>
+            <button type="button" class="btn btn-sm btn-danger" @click="onCfRemove(asDef(row))">
+              <X class="h-3.5 w-3.5" aria-hidden="true" /> 削除
+            </button>
+          </span>
+        </template>
+      </UiDataTable>
+    </UiSectionCard>
+
+    <UiModal :open="cfOpen" :title="`カスタム項目を${cfForm.id ? '編集' : '追加'}（${ITEM_ENTITY_LABELS[current] ?? current}）`" @close="cfOpen = false">
+      <div class="grid gap-3">
+        <UiFormField label="項目名" required>
+          <input v-model="cfForm.label" class="input" type="text" placeholder="例）ギフト対応" aria-label="項目名">
+        </UiFormField>
+        <UiFormField label="キー" required hint="半角英数字（英字始まり）。custom.<キー> として保存されます">
+          <input v-model="cfForm.key" class="input" type="text" placeholder="例）giftReady" :disabled="!!cfForm.id" aria-label="キー">
+        </UiFormField>
+        <UiFormField label="種別" required>
+          <UiSelect v-model="cfForm.fieldType" :options="cfTypeOptions" aria-label="種別" />
+        </UiFormField>
+        <UiFormField v-if="cfNeedsOptions" label="選択肢" required hint="1 行に 1 つ">
+          <textarea v-model="cfForm.optionsText" class="textarea" rows="4" placeholder="赤&#10;青&#10;緑" aria-label="選択肢" />
+        </UiFormField>
+        <label class="flex items-center gap-2 text-[13px] font-medium">
+          <input v-model="cfForm.required" type="checkbox" class="h-4 w-4 accent-brand"> 入力必須にする
+        </label>
+        <p v-if="cfError" class="text-[12px] font-medium text-crit" role="alert">{{ cfError }}</p>
+      </div>
+      <template #footer>
+        <button type="button" class="btn" @click="cfOpen = false">キャンセル</button>
+        <button type="button" class="btn btn-primary" @click="onCfSave">保存する</button>
+      </template>
+    </UiModal>
   </MastersMasterShell>
 </template>

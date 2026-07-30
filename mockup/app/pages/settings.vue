@@ -8,7 +8,7 @@
 import * as icons from 'lucide-vue-next'
 import { ArrowRight, Plus } from 'lucide-vue-next'
 import type {
-  CustomFieldDef, CustomFieldEntity, CustomFieldType, EscalationRule, ExternalLink, FeatureToggle,
+  CustomFieldDef, CustomFieldType, EscalationRule, ExternalLink, FeatureToggle,
 } from '~/types/domain'
 import type { TableColumn } from '~/types/ui'
 import { fmtDateTime } from '~/utils/format'
@@ -123,7 +123,9 @@ function onRuleCooldown(r: EscalationRule, e: Event): void {
 
 // ---------- c) カスタム項目 ----------
 // labels.ts は共有ファイル（編集禁止）のため、この画面固有の enum ラベルはローカル定義とする
-const CF_ENTITY_LABELS: Record<CustomFieldEntity, string> = {
+// この画面は CRM/HR 系の 4 エンティティ専用（Akebono 業務アプリのカスタム項目は F-31 の項目カスタマイズ画面で扱う）
+type CrmEntity = 'member' | 'company' | 'contact' | 'project'
+const CF_ENTITY_LABELS: Record<CrmEntity, string> = {
   member: 'メンバー',
   company: '顧客(会社)',
   contact: '顧客(人)',
@@ -137,13 +139,13 @@ const CF_TYPE_LABELS: Record<CustomFieldType, string> = {
   multiselect: '複数選択',
   boolean: 'ON/OFF',
 }
-const cfEntityOptions = (Object.keys(CF_ENTITY_LABELS) as CustomFieldEntity[])
+const cfEntityOptions = (Object.keys(CF_ENTITY_LABELS) as CrmEntity[])
   .map(k => ({ value: k, label: CF_ENTITY_LABELS[k] }))
 const cfTypeOptions = (Object.keys(CF_TYPE_LABELS) as CustomFieldType[])
   .map(k => ({ value: k, label: CF_TYPE_LABELS[k] }))
 
 const cf = useCustomFields()
-const cfEntity = ref<CustomFieldEntity>('member')
+const cfEntity = ref<CrmEntity>('member')
 const cfList = computed(() =>
   cf.list.value
     .filter(d => d.entity === cfEntity.value)

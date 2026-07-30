@@ -399,6 +399,8 @@ export interface SalesRecord {
   /** 赤黒訂正の元明細 */
   correctionOf: string | null
   active: boolean
+  /** 追加カスタム項目（F-31 汎用化。未設定 = {}） */
+  custom?: CustomValues
 }
 
 export interface InvoiceLine {

@@ -11,13 +11,14 @@
 import { Layers, Plus, SlidersHorizontal } from 'lucide-vue-next'
 import { ACTIVE_FILTER_OPTIONS, matchesActiveFilter } from '~/components/masters/MasterShell.vue'
 import type { BillingType, Product, ProductSku } from '~/types/akebono'
-import type { Company } from '~/types/domain'
+import type { Company, CustomValues } from '~/types/domain'
 import type { FieldDef, TableColumn } from '~/types/ui'
 import { BILLING_TYPE_LABELS, hasPartnerRole } from '~/utils/akebono'
 import { IMAGE_MAX_CHARS, imageToDataUri, thumbBoxClass, thumbFirstChar } from '~/utils/thumb'
 import { fmtYen } from '~/utils/format'
 
 const p = useProducts()
+const { customDefs } = useAppFields()
 const masters = useAkebonoMasters()
 const { effectiveSegmentId, defaultsFor } = useCurrentSegment()
 const { tbl } = useMockDb()
@@ -163,6 +164,7 @@ function openCreate(): void {
     unitId: d.unitId ?? '', billingType: d.billingType ?? '',
     variantAxis1Label: d.variantAxis1Label ?? '', variantAxis2Label: d.variantAxis2Label ?? '',
     description: '',
+    custom: {},
   }
   errors.value = {}
   customizeOpen.value = false
@@ -181,6 +183,7 @@ function openEdit(): void {
     taxRateId: s.taxRateId ?? '', unitId: s.unitId ?? '', billingType: s.billingType ?? '',
     variantAxis1Label: s.variantAxis1Label ?? '', variantAxis2Label: s.variantAxis2Label ?? '',
     description: s.description,
+    custom: { ...(s.custom ?? {}) },
   }
   errors.value = {}
   customizeOpen.value = false
@@ -223,12 +226,20 @@ async function save(): Promise<void> {
   if (!str(form.value.code).trim()) e.code = '商品コードは必須です'
   if (!str(form.value.name).trim()) e.name = '商品名は必須です'
   if (!str(form.value.segmentId)) e.segmentId = '事業セグメントは必須です'
+  // 必須カスタム項目（F-31）
+  const custom = (form.value.custom ?? {}) as CustomValues
+  for (const d of customDefs('product')) {
+    if (!d.required) continue
+    const v = custom[d.key]
+    if (v == null || v === '' || (Array.isArray(v) && v.length === 0)) e[`custom.${d.key}`] = `${d.label}は必須です`
+  }
   errors.value = e
   if (Object.keys(e).length > 0) {
     toast.show('必須項目を入力してください', 'crit')
     return
   }
   const payload: Partial<Product> & { id?: string } = {
+    custom,
     code: str(form.value.code).trim(),
     name: str(form.value.name).trim(),
     segmentId: str(form.value.segmentId),
@@ -637,6 +648,9 @@ async function saveMatrix(): Promise<void> {
 
         <!-- 通常フォーム（入力コスト最小化） -->
         <UiSchemaForm v-model="form" :fields="baseFields" :errors="errors" />
+
+        <!-- 追加カスタム項目（F-31。項目カスタマイズ画面で定義した商品の項目を描画） -->
+        <WidgetsCustomFields entity="product" v-model="form" :errors="errors" />
 
         <!-- カスタマイズ未使用時: 適用中の値を明示（透明性）。create は業態既定・edit は現在値 -->
         <p v-if="!customizeOpen" class="text-[11px] text-muted">

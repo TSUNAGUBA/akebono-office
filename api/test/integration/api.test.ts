@@ -4356,6 +4356,16 @@ describe('Phase C: Akebono 記録系の API 永続化（商品・伝票・在庫
     expect(row1.amount).toBe(5200)
     expect(row1.costPrice).toBe(800) // SKU 原価 null → 商品 standardCost
     expect(row1.code).toMatch(/^SR-\d{4}$/)
+
+    // F-31（項目カスタマイズ全アプリ化）: 追加カスタム項目が custom jsonb として保存・返却される（往復）。
+    // 金額集計（締め・統合メトリクス）へ影響させないため unitPrice=0（amount=0）で検証する
+    const custom = { giftReady: true, memo: '要ラッピング' }
+    const withCustom = await api('POST', '/v1/akebono/sales-records', {
+      as: MEMBER,
+      body: { salesDate: `${prevMonth}-12`, companyId: storeId, segmentId: 'seg-01', skuId: defaultSkuId, qty: 1, unitPrice: 0, custom },
+    })
+    expect(withCustom.status).toBe(201)
+    expect((withCustom.json.data as { custom: Record<string, unknown> }).custom).toEqual(custom)
     await api('POST', '/v1/akebono/sales-records', {
       as: MEMBER,
       body: { salesDate: `${prevMonth}-15`, companyId: storeId, segmentId: 'seg-01', skuId: defaultSkuId, qty: 1, unitPrice: 2600 },

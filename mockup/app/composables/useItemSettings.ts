@@ -51,11 +51,76 @@ export const ITEM_CATALOG: Record<string, CatalogItem[]> = {
     { itemKey: 'unitPrice', label: '単価', formDefault: true, listDefault: true, required: true, requiredFixed: true },
     { itemKey: 'channel', label: 'チャネル', formDefault: true, listDefault: false, required: false, industryHint: 'retail' },
   ],
+  sku: [
+    { itemKey: 'code', label: 'SKUコード', formDefault: true, listDefault: true, required: true, requiredFixed: true },
+    { itemKey: 'janCode', label: 'JANコード', formDefault: true, listDefault: true, required: false },
+    { itemKey: 'axis1Value', label: 'バリアント軸1', formDefault: true, listDefault: true, required: false, industryHint: 'retail' },
+    { itemKey: 'axis2Value', label: 'バリアント軸2', formDefault: true, listDefault: true, required: false, industryHint: 'retail' },
+    { itemKey: 'sellPrice', label: 'SKU売価', formDefault: true, listDefault: false, required: false },
+    { itemKey: 'costPrice', label: 'SKU原価', formDefault: true, listDefault: false, required: false },
+  ],
+  purchase_order: [
+    { itemKey: 'code', label: '発注番号', formDefault: true, listDefault: true, required: true, requiredFixed: true },
+    { itemKey: 'companyId', label: '仕入先', formDefault: true, listDefault: true, required: true, requiredFixed: true },
+    { itemKey: 'segmentId', label: '事業セグメント', formDefault: true, listDefault: true, required: true, requiredFixed: true },
+    { itemKey: 'orderDate', label: '発注日', formDefault: true, listDefault: true, required: true },
+    { itemKey: 'dueDate', label: '納期', formDefault: true, listDefault: true, required: false },
+    { itemKey: 'note', label: '備考', formDefault: true, listDefault: false, required: false },
+  ],
+  production_order: [
+    { itemKey: 'code', label: '生産指示番号', formDefault: true, listDefault: true, required: true, requiredFixed: true },
+    { itemKey: 'skuId', label: 'SKU', formDefault: true, listDefault: true, required: true, requiredFixed: true },
+    { itemKey: 'qty', label: '指示数量', formDefault: true, listDefault: true, required: true, requiredFixed: true },
+    { itemKey: 'warehouseId', label: '完成入庫先', formDefault: true, listDefault: false, required: true },
+    { itemKey: 'dueDate', label: '完成予定', formDefault: true, listDefault: true, required: false },
+  ],
+  purchase_record: [
+    { itemKey: 'code', label: '仕入番号', formDefault: true, listDefault: true, required: true, requiredFixed: true },
+    { itemKey: 'companyId', label: '仕入先', formDefault: true, listDefault: true, required: true, requiredFixed: true },
+    { itemKey: 'segmentId', label: '事業セグメント', formDefault: true, listDefault: true, required: true, requiredFixed: true },
+    { itemKey: 'purchaseDate', label: '仕入日', formDefault: true, listDefault: true, required: true, requiredFixed: true },
+    { itemKey: 'purchaseType', label: '仕入区分', formDefault: true, listDefault: true, required: false },
+  ],
+  inbound: [
+    { itemKey: 'code', label: '入荷番号', formDefault: true, listDefault: true, required: true, requiredFixed: true },
+    { itemKey: 'warehouseId', label: '入荷倉庫', formDefault: true, listDefault: true, required: true, requiredFixed: true },
+    { itemKey: 'receivedAt', label: '入荷日時', formDefault: true, listDefault: true, required: true, requiredFixed: true },
+  ],
+  outbound: [
+    { itemKey: 'code', label: '出荷番号', formDefault: true, listDefault: true, required: true, requiredFixed: true },
+    { itemKey: 'companyId', label: '出荷先', formDefault: true, listDefault: true, required: false },
+    { itemKey: 'warehouseId', label: '出荷倉庫', formDefault: true, listDefault: true, required: false },
+    { itemKey: 'shippedAt', label: '出荷日時', formDefault: true, listDefault: true, required: true, requiredFixed: true },
+  ],
+  inventory: [
+    { itemKey: 'skuId', label: 'SKU', formDefault: true, listDefault: true, required: true, requiredFixed: true },
+    { itemKey: 'warehouseId', label: '倉庫', formDefault: true, listDefault: true, required: true, requiredFixed: true },
+    { itemKey: 'qty', label: '増減数', formDefault: true, listDefault: true, required: true, requiredFixed: true },
+    { itemKey: 'kind', label: '区分', formDefault: true, listDefault: true, required: true, requiredFixed: true },
+    { itemKey: 'reason', label: '理由', formDefault: true, listDefault: false, required: false },
+    { itemKey: 'occurredAt', label: '発生日時', formDefault: true, listDefault: true, required: true, requiredFixed: true },
+  ],
+  invoice: [
+    { itemKey: 'code', label: '請求番号', formDefault: true, listDefault: true, required: true, requiredFixed: true },
+    { itemKey: 'companyId', label: '請求先', formDefault: true, listDefault: true, required: true, requiredFixed: true },
+    { itemKey: 'segmentId', label: '事業セグメント', formDefault: true, listDefault: false, required: false },
+    { itemKey: 'periodFrom', label: '対象期間（開始）', formDefault: true, listDefault: true, required: true },
+    { itemKey: 'periodTo', label: '対象期間（終了）', formDefault: true, listDefault: true, required: true },
+    { itemKey: 'invoiceType', label: '請求種別', formDefault: true, listDefault: true, required: false },
+  ],
 }
 
 export const ITEM_ENTITY_LABELS: Record<string, string> = {
   product: '商品マスタ',
+  sku: 'SKU',
   sales_record: '売上明細',
+  purchase_order: '発注',
+  production_order: '生産指示',
+  purchase_record: '仕入計上',
+  inbound: '入荷実績',
+  outbound: '出荷実績',
+  inventory: '在庫トランザクション',
+  invoice: '請求',
 }
 
 export interface ResolvedItem extends CatalogItem {
