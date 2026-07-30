@@ -5,8 +5,12 @@
  * 配下のアプリ（売上・商品・発注 等）は毎回業態を選ばせず、この現在業態を既定値として使う
  * （ユーザーは各画面で「全セグメント」や他業態へ切り替え可能 = 非破壊）。
  *
- * 永続化パターンは useCurrentUser を踏襲（useState + localStorage・SSR 安全・原則3）。
- * 「現在の業態」の解決（無効 id のフォールバック）は utils/akebono の純関数 resolveDefaultSegmentId に集約。
+ * 永続化（デュアルモード）:
+ *  - API モード: SoT はサーバー（/v1/me の prefs.currentSegmentId = user_preferences。0039）。
+ *    **どの端末からログインしても同じ業態で開ける**（オペレーター指示 2026-07-30。§40-5 の端末ローカル判断を上書き）。
+ *  - モックモード: 従来どおり端末ローカル（useState + localStorage・SSR 安全・原則3）。
+ * 「現在の業態」の解決（無効 id のフォールバック）は utils/akebono の純関数 resolveDefaultSegmentId に集約
+ * （保存済み id が無効化・削除されても先頭業態へ倒れるため情報損失なし = 原則2。両モード共通）。
  */
 import type { BusinessSegment } from '~/types/akebono'
 import {
@@ -14,10 +18,16 @@ import {
   type SegmentFieldDefaults,
 } from '~/utils/akebono'
 
+/** モックモードの端末ローカル保存キー（API モードでは使わない） */
 const STORAGE_KEY = 'ako.currentSegment.v1'
+/** API モードの user_preferences キー（/v1/me の prefs 配下） */
+const PREF_KEY = 'currentSegmentId'
 
 export function useCurrentSegment() {
   const { tbl } = useMockDb()
+  const isApi = useApiMode()
+  const me = useApiMe()
+  const toast = useToast()
   const segments = tbl('businessSegments')
 
   /** 有効な業態（表示順） */
@@ -26,9 +36,9 @@ export function useCurrentSegment() {
       .filter(s => s.active !== false)
       .sort((a, b) => a.displayOrder - b.displayOrder))
 
-  /** 選択中の業態 id（未選択 = '' のときは先頭業態に解決される） */
-  const currentSegmentId = useState<string>('ako-current-segment', () => {
-    if (import.meta.client) {
+  /** モックモードの選択状態（端末ローカル）。API モードでは参照しない */
+  const mockSegmentId = useState<string>('ako-current-segment', () => {
+    if (!isApi && import.meta.client) {
       try {
         const saved = localStorage.getItem(STORAGE_KEY)
         if (saved) return saved
@@ -36,6 +46,15 @@ export function useCurrentSegment() {
     }
     return ''
   })
+
+  /**
+   * 選択中の業態 id（未選択 = '' のときは先頭業態に解決される）。
+   * API モードはサーバー保管（me.prefs）を SoT とし、端末間で同期する。
+   */
+  const currentSegmentId = computed<string>(() =>
+    isApi
+      ? String((me.value?.prefs as Record<string, unknown> | undefined)?.[PREF_KEY] ?? '')
+      : mockSegmentId.value)
 
   /**
    * 実効業態 id（常に有効な業態 id を返す。業態が無ければ ''）。
@@ -52,10 +71,22 @@ export function useCurrentSegment() {
   const currentIndustryLabel = computed(() =>
     currentSegment.value ? INDUSTRY_TYPE_LABELS[currentSegment.value.industryType] : '')
 
-  /** 業態を切り替える（有効な業態のみ。localStorage へ永続化） */
+  /**
+   * 業態を切り替える（有効な業態のみ）。
+   *  - API モード: saveMePreference が楽観反映（クリック順で同期確定）+ サーバー保管を行う（非ブロッキング。原則4）。
+   *    保存失敗時は当該端末では切り替え済みのまま = 次回ロードで「最後に保存できた値」へ戻る（既定とは限らない）。
+   *    黙って握りつぶさず、失敗は控えめにトースト通知する（原則4 の「結果を報告する」）。
+   *  - モックモード: 従来どおり端末ローカル（localStorage）へ保存。
+   */
   function switchSegment(id: string): void {
     if (!activeSegments.value.some(s => s.id === id)) return
-    currentSegmentId.value = id
+    if (isApi) {
+      void saveMePreference(PREF_KEY, id).then((res) => {
+        if (!res.ok) toast.show('業態の保存に失敗しました。この端末では切り替え済みです', 'warn')
+      })
+      return
+    }
+    mockSegmentId.value = id
     if (import.meta.client) {
       try { localStorage.setItem(STORAGE_KEY, id) } catch { /* noop */ }
     }

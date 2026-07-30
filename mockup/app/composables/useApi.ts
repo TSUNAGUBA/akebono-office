@@ -17,6 +17,11 @@ export interface ApiUser {
   role: MemberRole
   /** プロフィール画像（data URI。空文字 = 未設定） */
   avatar?: string
+  /**
+   * 本人の UI 設定（端末間で同期する個人設定。/v1/me が user_preferences から返す）。
+   * 現状 currentSegmentId（現在の業態）。SoT はサーバー（0039）。
+   */
+  prefs?: Record<string, unknown>
 }
 
 interface PublicApiConfig {
@@ -103,6 +108,21 @@ export function clearMe(): void {
   me.value = null
   meError.value = null
   mePromise = null
+}
+
+/**
+ * 本人の UI 設定を保存する（端末間同期。PUT /v1/me/preferences/:key）。
+ * 楽観反映（me.prefs 更新）を呼び出し順で**同期的に**確定させてからサーバーへ保管する。
+ * これで反映順が呼び出し順（= クリック順）に一致し、round-trip 後の遅延書き戻しによる
+ * last-write-wins の取り違え（早い値が後着で上書き）を作らない。SoT は依然サーバーで、
+ * 次回 /v1/me 再取得でサーバー値が正となる（UI 反映が先行するだけ = 原則4 の非ブロッキング）。
+ * 保存失敗時はキャッシュを巻き戻さない（当該端末では反映済み・自己修復は次回ロード）。結果は Result で返す。
+ */
+export async function saveMePreference(key: string, value: unknown): Promise<Result> {
+  if (me.value) me.value = { ...me.value, prefs: { ...(me.value.prefs ?? {}), [key]: value } }
+  return apiResult(() => apiFetch(`/v1/me/preferences/${encodeURIComponent(key)}`, {
+    method: 'PUT', body: { value },
+  }))
 }
 
 // ---------- HTTP ----------

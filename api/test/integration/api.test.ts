@@ -143,6 +143,38 @@ describe('認証', () => {
     expect(del.status).toBe(200)
     expect(((await api('GET', '/v1/me', { as: MEMBER })).json.data as { avatar: string }).avatar).toBe('')
   })
+
+  it('UI 設定を端末間同期用に保存・取得できる（PUT /v1/me/preferences/:key + /v1/me の prefs。0039）', async () => {
+    // 初期は空（未設定）
+    const me0 = await api('GET', '/v1/me', { as: MEMBER })
+    expect((me0.json.data as { prefs: Record<string, unknown> }).prefs).toEqual({})
+
+    // 保存 → 別リクエストの /v1/me でも保持（= DB 永続化 = 端末間同期の土台）
+    const put = await api('PUT', '/v1/me/preferences/currentSegmentId', { as: MEMBER, body: { value: 'seg-02' } })
+    expect(put.status).toBe(200)
+    expect((put.json.data as { value: string }).value).toBe('seg-02')
+    const me1 = await api('GET', '/v1/me', { as: MEMBER })
+    expect((me1.json.data as { prefs: { currentSegmentId?: string } }).prefs.currentSegmentId).toBe('seg-02')
+
+    // upsert（冪等）: 同一キーの再保存は上書き（巻き戻さない = 原則2）
+    await api('PUT', '/v1/me/preferences/currentSegmentId', { as: MEMBER, body: { value: 'seg-03' } })
+    const me2 = await api('GET', '/v1/me', { as: MEMBER })
+    expect((me2.json.data as { prefs: { currentSegmentId?: string } }).prefs.currentSegmentId).toBe('seg-03')
+
+    // per-user 分離: HR が同一キーに別の値を保存しても MEMBER の値は独立して保持される
+    const hrMe0 = await api('GET', '/v1/me', { as: HR })
+    expect((hrMe0.json.data as { prefs: Record<string, unknown> }).prefs.currentSegmentId).toBeUndefined()
+    await api('PUT', '/v1/me/preferences/currentSegmentId', { as: HR, body: { value: 'seg-09' } })
+    expect(((await api('GET', '/v1/me', { as: HR })).json.data as { prefs: { currentSegmentId?: string } }).prefs.currentSegmentId).toBe('seg-09')
+    expect(((await api('GET', '/v1/me', { as: MEMBER })).json.data as { prefs: { currentSegmentId?: string } }).prefs.currentSegmentId).toBe('seg-03')
+
+    // 不正キー（先頭が英字でない）・value 欠落・サイズ超過は 400
+    expect((await api('PUT', '/v1/me/preferences/1bad', { as: MEMBER, body: { value: 'x' } })).status).toBe(400)
+    expect((await api('PUT', '/v1/me/preferences/currentSegmentId', { as: MEMBER, body: {} })).status).toBe(400)
+    expect((await api('PUT', '/v1/me/preferences/currentSegmentId', {
+      as: MEMBER, body: { value: 'A'.repeat(4097) },
+    })).status).toBe(400)
+  })
 })
 
 describe('打刻（状態機械）', () => {

@@ -793,9 +793,13 @@
 | 30 | dashboardInsights | 導出キャッシュ | `/v1/akebono/dashboard-insights` | **D**（0036） |
 
 > **参考（30 の外・Akebono 隣接）:** akebonoWishes = F-03 バッチ6d（0019）で移行済み / mediaSettings・mediaArticles・
-> mediaInsights・articleBriefs・generatedArticles = F-40（0030）で移行済み。**currentSegment は端末ローカルのまま（§40-5）**。
+> mediaInsights・articleBriefs・generatedArticles = F-40（0030）で移行済み。**currentSegment は §41（0039）で per-user DB 永続化へ変更（当初は端末ローカル = §40-5）**。
 
 ### 40-5 currentSegment（`ako.currentSegment.v1`）の判断: **端末ローカルのまま維持（移行しない）** — 根拠
+
+> ⚠️ **本判断は §41（2026-07-30）で上書き済み**: オペレーター指示「どの端末からログインしても同じ状態で閲覧できるように
+> DB へ永続化する」により、currentSegment は per-user で DB 永続化（`user_preferences`）へ変更した。以下の根拠は当時の
+> 記録として残す（「端末間同期はむしろ不都合」という想定より、端末間で状態を揃えたいという運用要求が優先された）。
 - **性質**: 「今どの業態で作業しているか」= 一時的な UI 選択状態（直近の作業コンテキスト）。記録系でも設定系でもない。
 - **日次消失しない**: 専用 localStorage キーで、日次リシードの対象（useMockDb = `ako.mockdb.v1`）とは別管理。端末に永続する（useCurrentUser と同パターン）。よって「API モードで日次消失する設定・実データ」には**該当しない**。
 - **非破壊**: 無効 id は既存の純関数 `resolveDefaultSegmentId` が先頭業態へフォールバック（原則2）。失っても情報損失なし（既定へ戻るだけ）。
@@ -829,3 +833,52 @@
 - [x] **監査-5（原則5・既存不整合）: §38 タイトル「12 コレクション」**→ 本文/表/実装と一致する「**11**」へ是正
 - [x] 観察-6（用語基準・任意）: 対応見送り（「導出キャッシュ」「設定系/記録系/確定系」の呼称は data-design §1.5-1.7 で統一済み = 実害なし）
 - [x] 検証: api 単体 **182** / 統合 **198**（レビュー対応 3 スイート新設 = MAJOR-1 取消拒否・監査-4 売上権限ゲート・m2 source_ref 一意 INDEX）/ mockup 単体 **155**（監査-3 = 2 純関数）/ typecheck（api・mockup）・build 全 green
+
+## 41. currentSegment（現在の業態）の per-user DB 永続化 = 端末間同期（オペレーター指示 2026-07-30）
+
+> オペレーター指示:「データが一部ローカルストレージ扱いになっている箇所がないか調査し、どの端末からログインしても
+> 同じ状態で閲覧できるように DB へ永続化する」。§40-5 の「currentSegment は端末ローカルのまま」判断を上書きする。
+
+### 41-1 調査結果（localStorage/sessionStorage の全走査）
+- 独立監査（Explore ロール）で `mockup/app` の全 `localStorage`/`sessionStorage` アクセスと、`commit()` を呼ぶ全 37 composable を精査。
+- **API モードで localStorage にのみ残る「業務・個人状態」は `currentSegment`（`ako.currentSegment.v1`）ただ 1 つ**と確定。
+  - 他の localStorage キーは全てモックモード限定のフォールバック（`ako.mockdb.v1` / `ako.currentUser.v1` /
+    `akebono-mock-calendar-selection` = いずれも `if (isApi)` の後段 or モック分岐からのみ到達）。
+  - sessionStorage（`ako.chatSession.v1` = 表示中セッション id・`menu-cat-*` = メニュー絞り込みチップ）は
+    **タブ単位の一時 UI 状態（アカウント設定ではない）**で、同期対象外と判断（実データはサーバー側）。
+- `switchSegment` だけが `isApi` ガードなしで無条件に localStorage 書込していた = 端末ごとに開く業態が変わる原因。
+
+### 41-2 DB（migration 0039）
+- [x] **`user_preferences`（設定系・per-user）**: `(member_id FK ON DELETE CASCADE, key, value jsonb, updated_at)`・PK `(member_id, key)`。
+  app_configs（0001 = テナント全体の key-value）の**ユーザースコープ版**（原則3 = 既存パターン再利用）。SoT = 本テーブル。シードしない。
+  members マスタには載せない（`/v1/masters/members` で全員へ露出させない・マスタ CRUD の巻き戻し対象にしない = avatar と同じ分離方針）。下位互換 = 新規テーブル追加のみ（原則7）。
+
+### 41-3 API
+- [x] **`GET /v1/me`**: レスポンスに `prefs`（本人の user_preferences をオブジェクト化）を追加。フロント起動時の 1 フェッチで同期状態を配信。
+- [x] **`PUT /v1/me/preferences/:key`**: 本人のみ・upsert = 冪等（原則2）。key は configs と同一 allowlist（`^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$`）・value(jsonb) は実バイト 4KB 上限・新規キーは 1 ユーザー 100 件上限（storage 暴走防止 = 監査-2）。
+  **監査ログは記録しない**（per-user・高頻度・非セキュリティな UI 状態。app_configs = 管理者テナント設定とは性質が異なる）。
+
+### 41-4 フロント（デュアルモード。モックモードの挙動は不変 = 原則7）
+- [x] **useApi**: `ApiUser` に `prefs?` を追加 + `saveMePreference(key, value)`（PUT → 成功時 me.prefs 反映 = SoT 書込→キャッシュの順。原則6）。
+- [x] **useCurrentSegment**: `currentSegmentId` を computed 化（API = `me.prefs.currentSegmentId` を SoT / モック = 従来の useState + localStorage）。
+  `switchSegment` は API モードで楽観反映 + 非ブロッキング永続化（原則4。失敗しても resolveDefaultSegmentId が先頭業態へ倒す = 原則2）。
+  消費側（layout/MediaSegmentBar 等）は読み取り + switchSegment 呼び出しのみで signature 互換（`currentSegmentId` への外部代入はゼロを grep 確認）。
+
+### 41-5 ドキュメント（原則5 = 全件更新）
+- [x] data-design §1.10（`user_preferences` テーブル定義）+ §1 末尾の currentSegment 注記を「per-user DB 永続化」へ是正。
+- [x] api-design（`GET /v1/me` の prefs・`PUT /v1/me/preferences/:key` 行を追加）。
+- [x] mock-status.ts / useCurrentSegment.ts のヘッダコメントを是正。§40-4 参考・§40-5 に上書き注記。
+
+### 41-6 検証
+- [x] api 単体 **182** / api 統合 **199**（`/v1/me` prefs + preferences upsert/取得/冪等/per-user 分離/キー・サイズ検証の 1 スイート新設）/ mockup 単体 **155** / typecheck（api・mockup）・build 全 green。
+- [x] オペレーター確認手順（API モード）: 端末 A で業態を切り替え → **別端末（or 別ブラウザ）で同じアカウントでログイン → 同じ業態で開く**。無効化された業態を選択済みでも先頭業態へフォールバック（壊れない）。モックモードは従来どおり端末ローカル。
+
+### 41-7 反復レビュー（原則9・1 巡目 = 独立コードレビュアー + システム監査官・いずれも Explore/Opus）
+> blocker/major はゼロ。minor を全件是正（重複する race/報告の指摘は 1 つの修正で同時解消）。
+- [x] **CR-M1 / 監査-1（クライアント race + 報告不足）: `saveMePreference` の round-trip 後の書き戻しが、`switchSegment` の楽観更新と重なり、PUT の後着完了で古い値へ戻り得た**（+ 失敗を握りつぶし「次回ロードで既定へ倒れる」というコメントが不正確 = 実際は最後に保存できた値へ戻る）→ **楽観反映を `saveMePreference` 内でクリック順に同期確定**（round-trip 後の書き戻しを撤去 = 取り違え解消）+ `switchSegment` の二重更新を撤去 + **保存失敗を warn トースト通知**（原則4 の「報告」）+ コメントを実態へ是正。
+- [x] **CR-M2（テスト薄さ）: per-user 分離テストが「書いていない HR が undefined」だけで、同一キーの独立保持を証明していない**→ **HR に別値（seg-09）を保存させ、MEMBER=seg-03 / HR=seg-09 の独立保持をアサート**。
+- [x] **CR-M3（デッドコード）: `serialized === undefined` は JSON 由来値では到達不能**→ 削除（configs.ts と同形へ）。
+- [x] **監査-2（storage 暴走）: value サイズ上限はあるがキー数無制限**→ **新規キーは 1 ユーザー 100 件上限**（既存キー更新は常に可の WHERE ガード付き upsert・超過は AKO-GEN-001）。
+- [x] **監査-3（サイズ単位）: 4KB 上限が文字数（UTF-16）で「4KB」表記と不一致**→ **`Buffer.byteLength` の実バイトで判定**（表記と一致）。
+- [x] 監査で確認済み（是正不要）: SoT=サーバー・冪等 upsert・他ユーザー参照/書込不可（member_id は認証コンテキスト）・下位互換（新規テーブル + 任意フィールド）・featureGuard 対象外が妥当・ドキュメント整合・§40-5→§41 の上書き注記・統合テスト数 199 実測一致。
+- [x] 再検証（是正後）: api 単体 182 / 統合 199 / mockup 単体 155 / typecheck（api・mockup）・build 全 green（テスト本数は不変 = 既存 it へアサート追加）。

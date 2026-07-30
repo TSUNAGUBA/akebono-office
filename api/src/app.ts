@@ -111,8 +111,48 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
   // 機能単位の権限ガード（F-16。認証の後段。/v1/masters・/v1/configs はデータ面のため対象外 = lib/permissions 参照）
   app.use('/v1/*', featureGuard(pool))
 
-  // 認証済みユーザー自身の情報（フロントの起動時に呼ぶ）
-  app.get('/v1/me', (c) => c.json({ data: c.get('user') }))
+  // 認証済みユーザー自身の情報（フロントの起動時に呼ぶ）。
+  // prefs = 本人の UI 設定（user_preferences。端末間で同期する個人設定。現状 currentSegmentId）。
+  // app_configs（テナント全体）と別に per-user で保管する（0039）。
+  app.get('/v1/me', async (c) => {
+    const user = c.get('user')
+    const { rows } = await pool.query<{ key: string; value: unknown }>(
+      'SELECT key, value FROM user_preferences WHERE member_id = $1', [user.id])
+    return c.json({ data: { ...user, prefs: Object.fromEntries(rows.map(r => [r.key, r.value])) } })
+  })
+
+  // 本人の UI 設定の保存（端末間同期。現在の業態など）。本人のみ・upsert = 冪等（原則2）。
+  // 監査ログは記録しない: per-user の UI 選択状態は高頻度・非セキュリティで、記録すると監査ログを汚す
+  // （app_configs = 管理者のテナント設定は監査対象だが、本エンドポイントは性質が異なる）。
+  app.put('/v1/me/preferences/:key', async (c) => {
+    const user = c.get('user')
+    const key = c.req.param('key')
+    // キー形式は app_configs（configs.ts）と同一の allowlist（任意キーの持込・インジェクション防止）
+    if (!/^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$/.test(key)) {
+      throw err('AKO-GEN-001', '設定キーの形式が不正です', 400)
+    }
+    const body = await c.req.json().catch(() => undefined) as { value?: unknown } | undefined
+    if (body === undefined || !('value' in body)) {
+      throw err('AKO-GEN-001', '設定値（value）を指定してください', 400)
+    }
+    // per-user 設定は軽量に保つ。value は実バイト 4KB 上限（巨大 payload 防止）。
+    // body.value は JSON 由来のため JSON.stringify は必ず文字列を返す（undefined 分岐は不要）
+    const serialized = JSON.stringify(body.value)
+    if (Buffer.byteLength(serialized, 'utf8') > 4096) {
+      throw err('AKO-GEN-001', '設定値が大きすぎます', 400)
+    }
+    // 新規キーは 1 ユーザーあたり上限（既存キーの更新は常に可）= 行数の暴走防止（原則2）。
+    // 既存キーは EXISTS が真で WHERE を通過 → upsert。上限超過の新規キーのみ 0 行 = 拒否。
+    const { rowCount } = await pool.query(
+      `INSERT INTO user_preferences (member_id, key, value)
+       SELECT $1, $2, $3
+       WHERE (SELECT count(*) FROM user_preferences WHERE member_id = $1) < 100
+          OR EXISTS (SELECT 1 FROM user_preferences WHERE member_id = $1 AND key = $2)
+       ON CONFLICT (member_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      [user.id, key, serialized])
+    if (rowCount === 0) throw err('AKO-GEN-001', '設定項目が多すぎます', 400)
+    return c.json({ data: { key, value: body.value } })
+  })
 
   // プロフィール更新（本人のみ。バッチ5e: アイコン画像の登録・削除）
   app.put('/v1/me/profile', async (c) => {
