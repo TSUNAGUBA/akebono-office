@@ -982,3 +982,38 @@
 - [x] 是正不要（設計判断として記録）: 役職/個人指定で自己が承認者になり得る点は稟議の運用上許容（承認者名をプレビュー表示）。approverMemberId/approverTitle の実在チェックは既存 approverMemberId と同様に非強制（不在は管理者フォールバック）。migration のステップ単位ガードは all-or-nothing 変換のため到達不能。
 - [x] 再検証（是正後）: api 単体 195 / 統合 202 / mockup 単体 155 / typecheck（api・mockup）・build 全 green。
 - [x] **2 巡目（是正の再確認・独立エージェント）: 指摘ゼロ**。5 修正すべて正しく原指摘を解消し、新規欠陥なし・回帰スイープ clean を確認（ロール制限は UI+Zod 双方・migration 本体は無変更で冪等維持・旧形式の凍結スナップショット解決は不変）。
+
+## 44. 項目カスタマイズの全アプリ汎用化（F-31。オペレーター指示 2026-07-30 ①）
+
+> オペレーター指示:「Akebono 業務のセグメントごとの各アプリで、フォーム(管理項目)のカスタマイズが商品と
+> 売上明細にしかないため、すべてのアプリに適用して同一の項目カスタマイズエンジンで動作するようにする」。
+> 本 PR は Part ①（②取込マッピングは後続 PR）。
+
+### 44-1 現状の課題（探索で判明）
+- 項目カスタマイズのエンジンが 2 系統に分裂:（A）`CustomFieldDef`（項目追加。member/company/contact/project 限定）、
+  （B）`ItemSetting`（既定項目の表示/ラベル差分。カタログは product/sales_record のみ・管理画面でしか使われず実フォーム未連動）。
+- custom 保存列を持つのは Product のみ。他アプリは保存先なし。
+
+### 44-2 実装（統一エンジン）
+- [x] 型: `AkebonoEntity`（10 アプリ）を追加し `CustomFieldEntity` を拡張（API/DB の entity は自由文字列 = 型のみ）。
+- [x] 既定項目カタログ（ITEM_CATALOG）・ラベルを全 10 アプリへ拡張。
+- [x] **`useAppFields`**: 「既定(カタログ+ItemSetting差分)＋カスタム(CustomFieldDef)」を 1 つに束ねる統一解決を新設。
+  フォーム/一覧、および後続の取込マッピング右辺の**単一 SoT**。
+- [x] 管理画面 `akebono/settings/items.vue`: 全アプリのタブ + 各アプリへ**追加カスタム項目の追加/編集/削除**を実装
+  （`useCustomFields` を再利用。原則3）。CRM/HR 側 `settings.vue` は CrmEntity サブセットへ限定。
+- [x] 保存基盤（migration 0042）: 全アプリのレコード表へ `custom jsonb DEFAULT '{}'` を追加（列追加のみ = 下位互換）。
+- [x] 共有 `WidgetsCustomFields`: entity のカスタム項目を UiSchemaForm で描画し `custom` へ読み書き（各フォームへ 1 行差込）。
+- [x] フォーム反映: **商品（products.vue）・売上明細（sales.vue）を接続**（必須チェック含む）。売上は API 側 `sales-records`
+  も custom 対応（SR_COLS/INSERT）。統合テストで custom jsonb 往復を検証。
+
+### 44-3 検証
+- [x] api 単体 195 / api 統合 202（migration 0042 適用・売上 custom 往復）/ mockup 単体 155 / typecheck（api・mockup）・build 全 green。
+
+### 44-4 本 PR のカバレッジと残作業
+- [x] 全 10 アプリ: **項目カスタマイズ設定（既定項目の表示/ラベル/必須 + 追加カスタム項目の定義）が可能**（エンジン+管理画面+保存列）。
+- [x] フォーム反映（描画+保存）: **商品・売上明細**を接続済み。
+- [ ] 残 7 アプリ（発注/生産/仕入/入荷/出荷/在庫/請求）のフォーム反映は同一パターン（`WidgetsCustomFields` 差込 +
+  各 API/composable の custom 往復）で順次接続（保存列は 0042 で用意済み）。
+
+### 44-5 反復レビュー（原則9）
+- [ ] 独立コードレビュアー + システム監査官のレビューを指摘ゼロまで反復（本節に結果を追記）。
