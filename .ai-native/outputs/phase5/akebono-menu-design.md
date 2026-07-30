@@ -278,8 +278,9 @@ flowchart LR
 
 変換 transforms の値域（決定論的純関数のみ・v1）: `trim` / `zenhan`(全半角) / `upper`/`lower` / `dateFormat(from,to)` / `numberFormat`(桁区切り除去) / `fixedValue` / `codeLookup(mapTable)` / `concat(fields, sep)` / `split(sep, index)`。コード変換表はマッピング定義内に保持（外部コード → マスタ ID）。
 
-- **AI 候補提示**: 列名・サンプル値から既存 Vertex AI 基盤（api/src/lib/llm.ts）で target 候補を構造化出力 → **人が確定**（自動確定しない。LLM 無効環境は字句類似のヒューリスティック = 既存パターン踏襲）
-- **API 接続（v1.5）**: REST pull（Bearer / API キー / Basic）。認証秘匿値は Secret Manager 参照名のみ DB に持つ。push 受信（Webhook）は v2
+- **左辺の生成（実装済み・F-32 Part②）**: 取込方式ごとに取込元を解析して左辺（マッピング元）を生成する。CSV = ファイル読込で列（列番号＋論理名）、JSON/API = 貼付/サンプル応答からキー抽出、固定長 = 開始〜終了バイト。右辺は対象アプリの有効項目（既定＋カスタマイズ項目 = `useAppFields`）から**人が確定**する。
+  - _AI 候補提示（Vertex AI で target 候補を構造化出力し人が確定）は当初構想。実装は上記の解析ベース検出で置換した（`/suggest` 未実装）。再導入する場合は解析ベース導線の上乗せとして扱う。_
+- **API 接続（v1.5）**: REST pull（Bearer / API キー / Basic）。認証秘匿値は本番では Secret Manager 参照名のみ DB に持つ想定（実装フェーズは config.authValue に保持し、`GET /import-sources` で**管理者にのみ実値・非管理者はマスク** = 最小権限）。実 API 接続（SSRF 対策付き）・push 受信（Webhook）は後続。
 
 ### 5.3 取込・外部アクセスのセキュリティ（AS 観点）
 
@@ -305,7 +306,7 @@ flowchart LR
 | 在庫 | `GET /v1/akebono/inventory/balances`・`/transactions`・`POST /adjustments`・`/transfers`・`/stocktakes`・`POST /inventory/recompute` | recompute = 手動回復パス（管理者） |
 | 売上 | `GET/POST /v1/akebono/sales-records`・`POST /sales-records/corrections`（赤黒）・`GET /v1/akebono/sales/summary`（セグメント別集計） | **既存 `GET/POST /v1/sales` は互換維持**（内部で明細/月次一括へ委譲）。フロント移管完了後に deprecation |
 | 請求 | `POST /v1/akebono/billing/close`（締め・冪等）・`GET/POST /invoices`・`POST /invoices/:id/issue`・`/void`・`POST /invoices/:id/receipts`・`POST /billing/consignment-close`（委託精算） | issue 以降は金額 API で不変 |
-| 取込 | `GET/POST /v1/akebono/imports/sources`・`/mappings`（+ `/suggest` AI 候補）・`POST /imports/runs`（stage→validate→apply の段階 API）・`GET /runs/:id/errors` | 実行は非同期（202 + ポーリング。既存 AI タスクの追跡パターン） |
+| 取込 | `GET/POST /v1/akebono/import-sources`・`PUT /import-sources/:id/config`（方式別設定）・`/import-sources/:id/archive`・`/restore`・`GET/POST /v1/akebono/import-mappings`（版管理）・`GET/POST /v1/akebono/import-runs`（実行履歴） | 実装済み（F-32 Phase D + Part②）。取込元は方式別マッピング編集で左辺=取込元・右辺=対象アプリ有効項目。実行は現状サーバーが決定的にシミュレート（実ファイル取込・段階 API・非同期化は後続） |
 | 項目設定 | `GET/PUT /v1/akebono/item-settings`・`GET /item-catalog` | カタログは読み取り専用 |
 | ETL | 既存 `POST /v1/sales/etl/run` を拡張 + `POST /jobs/akebono-mart-etl` | 既存 mart_load_runs へ記録 |
 

@@ -1,6 +1,6 @@
 /**
  * データ取込・連携基盤（F-32）
- * 取込元（CSV/固定長/JSON/API）・項目マッピング（AI 候補 + 人が確定・版管理）・
+ * 取込元（CSV/固定長/JSON/API）・項目マッピング（方式別に取込元を解析し右辺=対象アプリ項目へ対応づけ・版管理）・
  * 取込実行（ステージング → 検証 → 反映。冪等・エラー行隔離）。
  *
  * デュアルモード（Phase D = 0035。localStorage 依存の解消 = 本実装の最終フェーズ）:
@@ -12,11 +12,12 @@
  * - 取消可能性（原則9.5）: 取込元 = 論理削除 + 復元。マッピング = 新版で上書き（旧版は履歴に残る）。
  */
 import type {
-  ImportMapping, ImportMethod, ImportRun, ImportSource, ImportTargetEntity,
+  ImportFieldMap, ImportMapping, ImportMethod, ImportRun, ImportSource, ImportSourceConfig, ImportTargetEntity,
 } from '~/types/akebono'
 import type { Result } from '~/types/domain'
 import { irange } from '~/utils/rng'
 import { nextCode } from '~/utils/akebono'
+import { normalizeFieldLocators, normalizeImportSourceConfig } from '~/utils/import-parse'
 
 export const IMPORT_METHOD_LABELS: Record<ImportMethod, string> = {
   file_csv: 'CSV ファイル',
@@ -57,7 +58,7 @@ export function useAkebonoImports() {
   }
   const recentRuns = computed(() => runs.value.slice().sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1)))
 
-  async function addSource(input: { name: string; method: ImportMethod; encoding: 'utf8' | 'sjis'; targetEntity: ImportTargetEntity }): Promise<Result> {
+  async function addSource(input: { name: string; method: ImportMethod; encoding: 'utf8' | 'sjis'; targetEntity: ImportTargetEntity; config?: ImportSourceConfig }): Promise<Result> {
     const denied = adminGuard(); if (denied) return denied
     if (!input.name.trim()) return { ok: false, error: { code: 'AKO-IMP-001', message: '取込元名は必須です' } }
     if (isApi) {
@@ -65,7 +66,21 @@ export function useAkebonoImports() {
       return res.ok ? { ok: true, id: res.data.id } : res
     }
     const id = nextId('importSources', 'imp')
-    sources.value = [...sources.value, { id, name: input.name.trim(), method: input.method, encoding: input.encoding, targetEntity: input.targetEntity, schedule: 'manual', active: true }]
+    // config は method 別に正規化（API の normalizeImportSourceConfig と同一関数 = 両モード parity）
+    const config = normalizeImportSourceConfig(input.config ?? {}, input.method) as ImportSourceConfig
+    sources.value = [...sources.value, { id, name: input.name.trim(), method: input.method, encoding: input.encoding, targetEntity: input.targetEntity, schedule: 'manual', active: true, config }]
+    commit()
+    return { ok: true, id }
+  }
+
+  /** 方式別設定の更新（エンドポイント/トークン・CSV ヘッダ有無等） */
+  async function updateSourceConfig(id: string, config: ImportSourceConfig): Promise<Result> {
+    const denied = adminGuard(); if (denied) return denied
+    if (isApi) return apiWrite(`/v1/akebono/import-sources/${id}/config`, { method: 'PUT', body: { config }, reload: ['importSources'] })
+    // 取込元の method に合わせて正規化（API 経路と同じ subset に揃える）
+    const method = sourceById(id)?.method
+    const norm = method ? normalizeImportSourceConfig(config, method) as ImportSourceConfig : config
+    sources.value = sources.value.map(s => s.id === id ? { ...s, config: norm } : s)
     commit()
     return { ok: true, id }
   }
@@ -85,8 +100,8 @@ export function useAkebonoImports() {
     return { ok: true, id }
   }
 
-  /** 新しいマッピング版を作成（既存 active は superseded に）。AI 候補 + 人が確定の想定 */
-  async function saveMapping(sourceId: string, fields: { sourceField: string; targetItemKey: string; transform: string }[]): Promise<Result> {
+  /** 新しいマッピング版を作成（既存 active は superseded に）。方式別に取込元を解析して人が確定する想定 */
+  async function saveMapping(sourceId: string, fields: Omit<ImportFieldMap, 'id'>[]): Promise<Result> {
     const denied = adminGuard(); if (denied) return denied
     if (isApi) {
       const res = await apiWrite<ImportMapping>('/v1/akebono/import-mappings', {
@@ -99,7 +114,11 @@ export function useAkebonoImports() {
     const id = nextId('importMappings', 'impm')
     const mapping: ImportMapping = {
       id, sourceId, version: nextVersion, status: 'active', createdAt: nowJstIso(),
-      fields: fields.filter(f => f.sourceField && f.targetItemKey).map((f, i) => ({ id: `${id}-f${i}`, ...f })),
+      // ロケータは shared normalizeFieldLocators で正規化（API importFieldsOf と同一関数 = '' → null 等を両モード一致）
+      fields: fields.filter(f => f.sourceField && f.targetItemKey).map((f, i) => ({
+        id: `${id}-f${i}`, sourceField: f.sourceField, targetItemKey: f.targetItemKey, transform: f.transform,
+        ...normalizeFieldLocators(f as unknown as Record<string, unknown>),
+      })),
     }
     mappings.value = [
       ...mappings.value.map(m => m.sourceId === sourceId && m.status === 'active' ? { ...m, status: 'superseded' as const } : m),
@@ -143,6 +162,6 @@ export function useAkebonoImports() {
   return {
     sources, mappings, runs, activeSources, recentRuns, isAdmin,
     sourceById, mappingsOf, activeMappingOf, runsOf,
-    addSource, archiveSource, restoreSource, saveMapping, runImport,
+    addSource, updateSourceConfig, archiveSource, restoreSource, saveMapping, runImport,
   }
 }

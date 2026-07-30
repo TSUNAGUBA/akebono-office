@@ -4862,6 +4862,80 @@ describe('Phase D: データ取込（F-32）・ダッシュボード保管（F-4
       expect(mine.filter(m => m.status === 'active')).toHaveLength(1)
     })
 
+    it('方式別設定 config: method 別に正規化・PUT で更新・認証情報は管理者のみ・マッピングは方式別ロケータを保持', async () => {
+      // CSV: hasHeader/delimiter を保持し API 系の項目は落とす
+      const csv = await api('POST', '/v1/akebono/import-sources', {
+        as: ADMIN, body: {
+          name: 'CSV設定', method: 'file_csv', encoding: 'utf8', targetEntity: 'product',
+          config: { hasHeader: false, delimiter: '\t', endpoint: 'https://drop.me' },
+        },
+      })
+      const csvId = (csv.json.data as { id: string }).id
+      expect((csv.json.data as { config: Record<string, unknown> }).config).toEqual({ hasHeader: false, delimiter: '\t' })
+
+      // API: endpoint/authType/authValue/jsonRootPath を保持
+      const apiSrc = await api('POST', '/v1/akebono/import-sources', {
+        as: ADMIN, body: {
+          name: 'API設定', method: 'api_pull', encoding: 'utf8', targetEntity: 'sku',
+          config: { endpoint: 'https://api.example.com/skus', authType: 'bearer', authValue: 'tok', jsonRootPath: 'data.items' },
+        },
+      })
+      const apiId = (apiSrc.json.data as { id: string }).id
+      expect((apiSrc.json.data as { config: Record<string, unknown> }).config)
+        .toEqual({ endpoint: 'https://api.example.com/skus', authType: 'bearer', authValue: 'tok', jsonRootPath: 'data.items' })
+
+      // 認証情報（authValue）は管理者のみ実値・非管理者はマスク（M-1: 秘匿値の最小権限。参照自体は全員可）
+      type SrcRow = { id: string; config: { authValue?: string } }
+      const listMember = (await api('GET', '/v1/akebono/import-sources', { as: MEMBER })).json.data as SrcRow[]
+      const listAdmin = (await api('GET', '/v1/akebono/import-sources', { as: ADMIN })).json.data as SrcRow[]
+      expect(listMember.find(s => s.id === apiId)!.config.authValue).toBe('')
+      expect(listAdmin.find(s => s.id === apiId)!.config.authValue).toBe('tok')
+
+      // PUT /config: member は 403・不正 authType は none に落ち authValue は空へ
+      expect((await api('PUT', `/v1/akebono/import-sources/${apiId}/config`, {
+        as: MEMBER, body: { config: { endpoint: 'x' } },
+      })).status).toBe(403)
+      const upd = await api('PUT', `/v1/akebono/import-sources/${apiId}/config`, {
+        as: ADMIN, body: { config: { endpoint: 'https://api.example.com/v2', authType: 'bogus', authValue: 'ignored' } },
+      })
+      expect((upd.json.data as { config: Record<string, unknown> }).config)
+        .toEqual({ endpoint: 'https://api.example.com/v2', authType: 'none', authValue: '' })
+
+      // マッピング: CSV 列番号のロケータが版に保持される
+      const map = await api('POST', '/v1/akebono/import-mappings', {
+        as: ADMIN, body: { sourceId: csvId, fields: [
+          { sourceField: '商品コード', targetItemKey: 'code', columnIndex: 0 },
+          { sourceField: '単価', targetItemKey: 'unitPrice', transform: 'number', columnIndex: 2 },
+        ] },
+      })
+      const fields = (map.json.data as { fields: { sourceField: string; columnIndex: number | null; byteStart: number | null }[] }).fields
+      expect(fields.map(f => f.columnIndex)).toEqual([0, 2])
+      expect(fields.every(f => f.byteStart === null)).toBe(true)
+
+      // 固定長: バイト範囲ロケータの往復（columnIndex は null）
+      const fx = await api('POST', '/v1/akebono/import-sources', {
+        as: ADMIN, body: { name: '固定長取込', method: 'file_fixed', encoding: 'sjis', targetEntity: 'inventory' },
+      })
+      const fxMap = await api('POST', '/v1/akebono/import-mappings', {
+        as: ADMIN, body: { sourceId: (fx.json.data as { id: string }).id, fields: [
+          { sourceField: '数量', targetItemKey: 'qty', byteStart: 11, byteEnd: 20 },
+        ] },
+      })
+      const fxf = (fxMap.json.data as { fields: { byteStart: number | null; byteEnd: number | null; columnIndex: number | null }[] }).fields[0]!
+      expect([fxf.byteStart, fxf.byteEnd, fxf.columnIndex]).toEqual([11, 20, null])
+
+      // JSON: jsonKey ロケータの往復
+      const js = await api('POST', '/v1/akebono/import-sources', {
+        as: ADMIN, body: { name: 'JSON取込', method: 'file_json', encoding: 'utf8', targetEntity: 'product' },
+      })
+      const jsMap = await api('POST', '/v1/akebono/import-mappings', {
+        as: ADMIN, body: { sourceId: (js.json.data as { id: string }).id, fields: [
+          { sourceField: 'code', targetItemKey: 'code', jsonKey: 'code' },
+        ] },
+      })
+      expect((jsMap.json.data as { fields: { jsonKey: string | null }[] }).fields[0]!.jsonKey).toBe('code')
+    })
+
     it('取込実行: 有効マッピングなしは 409・実行は追記のみ（履歴が積み上がる）', async () => {
       // マッピングの無い別の取込元では実行不可（AKO-IMP-002）
       const bare = await api('POST', '/v1/akebono/import-sources', {

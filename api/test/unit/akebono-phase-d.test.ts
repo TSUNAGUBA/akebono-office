@@ -7,6 +7,9 @@ import { describe, expect, it } from 'vitest'
 import { importFieldsOf, simulateRun } from '../../src/routes/akebono-imports'
 import { normalizeDashboardInsight } from '../../src/routes/akebono-dashboard'
 
+// 方式別ロケータの既定（未指定は全て null）
+const NO_LOC = { columnIndex: null, byteStart: null, byteEnd: null, jsonKey: null }
+
 describe('importFieldsOf（マッピング項目の検証・正規化）', () => {
   it('配列でなければ null', () => {
     expect(importFieldsOf('m1', null)).toBeNull()
@@ -20,8 +23,8 @@ describe('importFieldsOf（マッピング項目の検証・正規化）', () =>
       { sourceField: 'price', targetItemKey: 'unitPrice', transform: 'number' },
     ])
     expect(out).toEqual([
-      { id: 'm1-f0', sourceField: 'code', targetItemKey: 'code', transform: 'trim' },
-      { id: 'm1-f1', sourceField: 'price', targetItemKey: 'unitPrice', transform: 'number' },
+      { id: 'm1-f0', sourceField: 'code', targetItemKey: 'code', transform: 'trim', ...NO_LOC },
+      { id: 'm1-f1', sourceField: 'price', targetItemKey: 'unitPrice', transform: 'number', ...NO_LOC },
     ])
   })
 
@@ -32,9 +35,28 @@ describe('importFieldsOf（マッピング項目の検証・正規化）', () =>
 
   it('transform 未指定は空文字・空白はトリム', () => {
     const out = importFieldsOf('m1', [{ sourceField: '  a ', targetItemKey: ' b ' }])
-    expect(out).toEqual([{ id: 'm1-f0', sourceField: 'a', targetItemKey: 'b', transform: '' }])
+    expect(out).toEqual([{ id: 'm1-f0', sourceField: 'a', targetItemKey: 'b', transform: '', ...NO_LOC }])
+  })
+
+  it('方式別ロケータ（CSV 列番号 / 固定長バイト範囲 / JSON キー）を保持', () => {
+    const out = importFieldsOf('m1', [
+      { sourceField: '売上日', targetItemKey: 'soldAt', columnIndex: 0 },
+      { sourceField: '金額', targetItemKey: 'amount', byteStart: 11, byteEnd: 20 },
+      { sourceField: 'code', targetItemKey: 'code', jsonKey: 'code' },
+    ])
+    expect(out).toEqual([
+      { id: 'm1-f0', sourceField: '売上日', targetItemKey: 'soldAt', transform: '', columnIndex: 0, byteStart: null, byteEnd: null, jsonKey: null },
+      { id: 'm1-f1', sourceField: '金額', targetItemKey: 'amount', transform: '', columnIndex: null, byteStart: 11, byteEnd: 20, jsonKey: null },
+      { id: 'm1-f2', sourceField: 'code', targetItemKey: 'code', transform: '', columnIndex: null, byteStart: null, byteEnd: null, jsonKey: 'code' },
+    ])
+  })
+
+  it('数値でないロケータ・空 jsonKey は null に落とす', () => {
+    const out = importFieldsOf('m1', [{ sourceField: 'a', targetItemKey: 'b', columnIndex: 'x', byteStart: '', jsonKey: '  ' }])
+    expect(out).toEqual([{ id: 'm1-f0', sourceField: 'a', targetItemKey: 'b', transform: '', ...NO_LOC }])
   })
 })
+// 注: normalizeImportSourceConfig の正規化テストは shared 直テストの import-parse.test.ts に集約（重複排除）
 
 describe('simulateRun（取込実行の決定的シミュレート）', () => {
   it('runIndex ごとに staged/failed が決定的（applied = staged − failed・failed>0 で隔離行 1 件）', () => {

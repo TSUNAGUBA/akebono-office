@@ -482,6 +482,24 @@ export type ImportMethod = 'file_csv' | 'file_fixed' | 'file_json' | 'api_pull'
 export type ImportTargetEntity = 'product' | 'sku' | 'company' | 'sales_record' | 'inventory'
 export type ImportRunStatus = 'staged' | 'validated' | 'applied' | 'failed' | 'reverted'
 
+export type ImportAuthType = 'none' | 'bearer' | 'api_key' | 'basic'
+
+/** 取込元の方式別設定（method に応じて使う項目が異なる。0043 で追加） */
+export interface ImportSourceConfig {
+  /** CSV: ヘッダ行の有無（true = 1 行目が項目名） */
+  hasHeader?: boolean
+  /** CSV: 区切り文字（既定 ','） */
+  delimiter?: string
+  /** API: 取得先エンドポイント URL */
+  endpoint?: string
+  /** API: 認証方式 */
+  authType?: ImportAuthType
+  /** API: トークン/キー/資格情報（本番は Secret Manager 参照。モックは平文可） */
+  authValue?: string
+  /** JSON/API: レコード配列のルートパス（空 = 応答自体が配列 or 単一オブジェクト） */
+  jsonRootPath?: string
+}
+
 export interface ImportSource {
   id: string
   name: string
@@ -490,16 +508,26 @@ export interface ImportSource {
   targetEntity: ImportTargetEntity
   schedule: 'manual' | 'daily'
   active: boolean
+  /** 方式別設定（0043 で追加。未設定 = 既定） */
+  config?: ImportSourceConfig
 }
 
 export interface ImportFieldMap {
   id: string
-  /** 取込元の列名 / 固定長項目名 / JSON パス */
+  /** 取込元の表示名（CSV ヘッダ名 / JSON キー / 固定長項目名）。UI 表示・照合の論理名 */
   sourceField: string
-  /** 対象エンティティの項目キー */
+  /** 対象エンティティの項目キー（既定項目 itemKey または custom.<key>） */
   targetItemKey: string
   /** 変換（trim / upper / dateFormat 等の識別子。空 = 恒等） */
   transform: string
+  /** CSV: 0 始まりの列番号（ヘッダ無し時の位置指定・ヘッダ有り時も併記。0043） */
+  columnIndex?: number | null
+  /** 固定長: 開始バイト（1 始まり・含む。0043） */
+  byteStart?: number | null
+  /** 固定長: 終了バイト（含む。0043） */
+  byteEnd?: number | null
+  /** JSON/API: JSON キー（ドットパス可。0043） */
+  jsonKey?: string | null
 }
 
 export interface ImportMapping {
