@@ -5,7 +5,7 @@
  * - 閲覧: 本人の記録は常に参照可。他メンバーの記録は権限（canViewMemberCustomerLog）で許可された対象者のみ readonly 参照可。
  * - デュアルモード: API = /v1/customer-logs（SoT。AI 検索インデックスへ自動反映）/ モック = customerLogs コレクション
  */
-import type { CustomerLog, Result } from '~/types/domain'
+import type { Contact, CustomerLog, Result } from '~/types/domain'
 
 /** 参照キャッシュ（memberId ごと。自分 = currentUser.id・他メンバー = 権限で許可された対象者） */
 const apiLogs = ref<Record<string, CustomerLog[]>>({})
@@ -33,10 +33,25 @@ export interface CustomerLogInput {
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/
+const BODY_CAP = 20_000
+const TITLE_CAP = 200
 
-/** 入力検証（モックモード用。API モードはサーバーが正。エラーコードはサーバーと同一 = AKO-CLG-001） */
+/** YYYY-MM-DD かつ実在日か（2026-13-40 / 2026-02-30 を弾く = API parseDate と同一判定） */
+function isRealDate(s: string): boolean {
+  if (!DATE_RE.test(s)) return false
+  const d = new Date(`${s}T00:00:00Z`)
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s
+}
+
+/** コードポイント単位で cap（絵文字等を境界で壊さない = API capCp と同義） */
+function capCp(s: string, n: number): string {
+  const cps = [...s]
+  return cps.length > n ? cps.slice(0, n).join('') : s
+}
+
+/** 入力検証（モックモード用。API モードはサーバーが正。エラーコード・メッセージはサーバーと同一 = パリティ） */
 function validate(input: CustomerLogInput): { code: string; message: string } | null {
-  if (!DATE_RE.test(input.logDate)) return { code: 'AKO-CLG-001', message: '日付（何月何日）を選択してください' }
+  if (!isRealDate(input.logDate)) return { code: 'AKO-CLG-001', message: '日付（何月何日）を選択してください' }
   if (input.logTime && !TIME_RE.test(input.logTime)) return { code: 'AKO-CLG-001', message: '時刻は HH:MM 形式で入力してください' }
   if (!input.companyId) return { code: 'AKO-CLG-001', message: '顧客(会社)を選択してください' }
   if (!input.body.trim()) return { code: 'AKO-CLG-001', message: '会話内容を入力してください' }
@@ -61,6 +76,16 @@ export function useCustomerLogs() {
   const { currentUser } = useCurrentUser()
   const isApi = useApiMode()
   const mockLogs = tbl('customerLogs')
+  const contactsTbl = tbl('contacts')
+
+  /** 担当者が選択会社に属するか（モック検証。API は assertContact = AKO-CLG-003 と同一） */
+  function contactError(contactId: string | null, companyId: string): { code: string; message: string } | null {
+    if (!contactId) return null
+    const c = (contactsTbl.value as Contact[]).find(x => x.id === contactId)
+    if (!c) return { code: 'AKO-CLG-003', message: '指定した顧客担当者が見つかりません' }
+    if (c.companyId !== companyId) return { code: 'AKO-CLG-003', message: '顧客担当者は選択した会社に所属している必要があります' }
+    return null
+  }
 
   /** 対象メンバーの読み込みを保証する（API モードのみ。ページの対象切替時に呼ぶ） */
   function ensureLoaded(memberId: string): void {
@@ -94,7 +119,7 @@ export function useCustomerLogs() {
       if (res.ok) await loadLogs(currentUser.value.id, true)
       return res
     }
-    const e = validate(input)
+    const e = validate(input) ?? contactError(input.contactId, input.companyId)
     if (e) return { ok: false, error: e }
     const id = nextId('customerLogs', 'clog')
     const now = nowJstIso()
@@ -105,8 +130,8 @@ export function useCustomerLogs() {
       logTime: input.logTime || null,
       companyId: input.companyId,
       contactId: input.contactId || null,
-      title: input.title.trim(),
-      body: input.body.trim(),
+      title: capCp(input.title.trim(), TITLE_CAP),
+      body: capCp(input.body.trim(), BODY_CAP),
       createdAt: now,
       updatedAt: now,
       active: true,
@@ -125,7 +150,7 @@ export function useCustomerLogs() {
     const target = (mockLogs.value as CustomerLog[]).find(l => l.id === id)
     if (!target) return { ok: false, error: { code: 'AKO-CLG-002', message: '顧客ログが見つかりません' } }
     if (target.memberId !== currentUser.value.id) return ownError('編集できます')
-    const e = validate(input)
+    const e = validate(input) ?? contactError(input.contactId, input.companyId)
     if (e) return { ok: false, error: e }
     mockLogs.value = (mockLogs.value as CustomerLog[]).map(l => l.id === id ? {
       ...l,
@@ -133,8 +158,8 @@ export function useCustomerLogs() {
       logTime: input.logTime || null,
       companyId: input.companyId,
       contactId: input.contactId || null,
-      title: input.title.trim(),
-      body: input.body.trim(),
+      title: capCp(input.title.trim(), TITLE_CAP),
+      body: capCp(input.body.trim(), BODY_CAP),
       updatedAt: nowJstIso(),
     } : l)
     commit()

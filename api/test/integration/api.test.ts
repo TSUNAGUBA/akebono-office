@@ -5208,6 +5208,10 @@ describe('顧客ログ', () => {
     // HR は本人スコープのため MEMBER の記録が既定一覧に出ない
     const hr = (await api('GET', '/v1/customer-logs', { as: HR })).json.data as { id: string }[]
     expect(hr.some(l => l.id === logId)).toBe(false)
+    // from/to に実在しない日（2026-02-30）を渡しても 500 にならない（::date キャストの 22007 回避 = フィルタ無視）
+    const badDate = await api('GET', '/v1/customer-logs?from=2026-02-30&to=2026-13-40', { as: MEMBER })
+    expect(badDate.status).toBe(200)
+    expect((badDate.json.data as { id: string }[]).some(l => l.id === logId)).toBe(true)
   })
 
   it('編集は本人のみ・部分更新は未指定項目を保持する（原則7・CLAUDE.md 部分更新原則）', async () => {

@@ -39,14 +39,18 @@ function refOrNull(v: unknown): string | null {
   return s || null
 }
 
+/** YYYY-MM-DD かつ実在日か（2026-13-40 / 2026-02-30 を弾く。DB の 22007→500 を防ぐ共通判定） */
+function isRealDate(s: string): boolean {
+  if (!DATE_RE.test(s)) return false
+  const d = new Date(`${s}T00:00:00Z`)
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s
+}
+
 /** 日付（YYYY-MM-DD・実在日）。不正・存在しない日（2026-13-40 等）は 400 で弾く（DB の 22007 を出さない） */
 function parseDate(v: unknown): string {
   const s = String(v ?? '').trim()
   if (!DATE_RE.test(s)) throw err('AKO-CLG-001', '日付（何月何日）を選択してください', 400)
-  const d = new Date(`${s}T00:00:00Z`)
-  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== s) {
-    throw err('AKO-CLG-001', '日付が正しくありません', 400)
-  }
+  if (!isRealDate(s)) throw err('AKO-CLG-001', '日付が正しくありません', 400)
   return s
 }
 
@@ -109,10 +113,11 @@ export function customerLogsRoutes(pool: pg.Pool, env: Env): Hono {
     const params: unknown[] = [target]
     const conds = ['member_id = $1']
     if (!includeArchived) conds.push('active = true')
+    // 実在日のみフィルタに使う（2026-02-30 等の不正日は無視 = ::date キャストの 22007→500 を出さない）
     const from = c.req.query('from')?.trim()
-    if (from && DATE_RE.test(from)) { params.push(from); conds.push(`log_date >= $${params.length}::date`) }
+    if (from && isRealDate(from)) { params.push(from); conds.push(`log_date >= $${params.length}::date`) }
     const to = c.req.query('to')?.trim()
-    if (to && DATE_RE.test(to)) { params.push(to); conds.push(`log_date <= $${params.length}::date`) }
+    if (to && isRealDate(to)) { params.push(to); conds.push(`log_date <= $${params.length}::date`) }
     const companyId = c.req.query('companyId')?.trim()
     if (companyId) { params.push(companyId); conds.push(`company_id = $${params.length}`) }
     const contactId = c.req.query('contactId')?.trim()

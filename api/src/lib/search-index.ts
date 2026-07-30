@@ -466,9 +466,9 @@ export interface SearchHit {
   title: string
   segments: SearchSegment[]
   score: number
-  /** note の所有者（null = 全員参照 = 議事録。値あり = poipoi = 本人） */
+  /** 所有者（null = 全員参照。値あり = 本人スコープ = poipoi または顧客ログ = customer-log） */
   ownerMemberId: string | null
-  /** 紐付け（note のみ。混入防止フィルタ用） */
+  /** 紐付け（note・customer-log。混入防止フィルタ用 = companyId/projectId） */
   links: { companyId?: string; projectId?: string }
 }
 
@@ -476,8 +476,10 @@ export interface SearchHit {
  * 質問に関連する検索ドキュメントの上位 K 件（字句 + 埋め込みのハイブリッド。埋め込み無効時は字句のみ）。
  * allOwners = true で本人スコープ（owner_member_id）の絞り込みを外す
  * （ぽいぽいポストの AI 参照範囲 'all' = 他メンバーの投稿も参照。バッチ7g・オペレーター指示 2026-07-19 #8）。
- * 不変条件: owner_member_id を持つのは source_kind = 'note'（ぽいぽいポスト）のみ。
- * 将来 owner 付きの別種別を追加しても poipoi の設定で漏れないよう、SQL 側でも note に限定する
+ * owner_member_id を持つのは source_kind = 'note'（ぽいぽいポスト）と 'customer-log'（顧客ログ）。
+ * **allOwners が広げるのは 'note' のみ**（下の SQL の `AND source_kind = 'note'`）。顧客ログは常に本人スコープで、
+ * どの ai-scope 設定でも他メンバーへは広がらない（安全側の意図的な制約）。
+ * owner 付きの新種別をこの `allOwners` 分岐へ**追加しないこと**（追加すると他メンバーのデータが漏れる）。
  */
 export async function searchDocsFor(
   pool: pg.Pool,
