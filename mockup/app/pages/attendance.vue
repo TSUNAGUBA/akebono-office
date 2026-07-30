@@ -16,12 +16,13 @@ import type {
   AttendanceBuckets, AttendanceRoute, AttendanceRouteStep, AttendanceRequestCategory,
   AttendanceRule, DirectType, EmploymentType, LeaveRequest, PunchKind,
 } from '~/types/domain'
+import type { ApproverStepForm } from '~/components/widgets/ApproverSteps.vue'
 import type { TableColumn, TabItem, Tone } from '~/types/ui'
 import { effectivePunches, LEGAL_WEEKLY_MIN, OT_MONTHLY_LIMIT_MIN } from '~/utils/attendance-calc'
 import { directKindsOf } from '~/utils/attendance-route'
 import { addDays, fmtDate, fmtDateLong, fmtHours, fmtMinutes, fmtTime, weekdayOf } from '~/utils/format'
 import {
-  ATTENDANCE_APPROVER_ROLE_LABELS, ATTENDANCE_ROUTE_CATEGORY_LABELS, DIRECT_TYPE_LABELS,
+  approverTargetLabel, ATTENDANCE_ROUTE_CATEGORY_LABELS, DIRECT_TYPE_LABELS,
   EMPLOYMENT_TYPE_LABELS, PUNCH_KIND_LABELS,
 } from '~/utils/labels'
 
@@ -624,16 +625,20 @@ const routeOpen = ref(false)
 const routeEditingId = ref<string | null>(null)
 const routeForm = reactive<{
   category: string
-  steps: { approverRole: AttendanceRouteStep['approverRole'] }[]
+  steps: ApproverStepForm[]
   active: boolean
-}>({ category: 'direct', steps: [{ approverRole: 'manager' }], active: true })
+}>({ category: 'direct', steps: [defaultRouteStep()], active: true })
 const routeError = ref('')
-const approverRoleOptions = Object.entries(ATTENDANCE_APPROVER_ROLE_LABELS).map(([value, label]) => ({ value, label }))
+
+/** 新規ステップの既定（ロール=管理者） */
+function defaultRouteStep(): ApproverStepForm {
+  return { approverType: 'role', approverRole: 'admin', approverTitle: null, approverMemberId: null }
+}
 
 function routeStepSummary(r: AttendanceRoute): string {
   return [...r.steps]
     .sort((a, b) => a.order - b.order)
-    .map(s => ATTENDANCE_APPROVER_ROLE_LABELS[s.approverRole])
+    .map(s => approverTargetLabel(s))
     .join(' → ')
 }
 
@@ -641,24 +646,30 @@ function openRouteModal(category: AttendanceRequestCategory, existing?: Attendan
   routeEditingId.value = existing?.id ?? null
   routeForm.category = existing?.category ?? category
   routeForm.steps = existing
-    ? [...existing.steps].sort((a, b) => a.order - b.order).map(s => ({ approverRole: s.approverRole }))
-    : [{ approverRole: 'manager' }]
+    ? [...existing.steps].sort((a, b) => a.order - b.order).map(s => ({
+        approverType: s.approverType, approverRole: s.approverRole,
+        approverTitle: s.approverTitle, approverMemberId: s.approverMemberId,
+      }))
+    : [defaultRouteStep()]
   routeForm.active = existing?.active ?? true
   routeError.value = ''
   routeOpen.value = true
 }
-function addRouteStep(): void { routeForm.steps.push({ approverRole: 'manager' }) }
-function removeRouteStep(i: number): void { if (routeForm.steps.length > 1) routeForm.steps.splice(i, 1) }
-function setRouteStepRole(i: number, v: string): void {
-  const s = routeForm.steps[i]
-  if (s) s.approverRole = v as AttendanceRouteStep['approverRole']
+
+/** ステップの指定内容が未入力なら弾く（役職/ロール/個人 の必須） */
+function stepIncomplete(s: ApproverStepForm): boolean {
+  return (s.approverType === 'title' && !s.approverTitle)
+    || (s.approverType === 'role' && !s.approverRole)
+    || (s.approverType === 'member' && !s.approverMemberId)
 }
 
 async function onRouteSave(): Promise<void> {
   routeError.value = ''
   if (routeForm.steps.length === 0) { routeError.value = '承認ステップを 1 つ以上設定してください'; return }
+  if (routeForm.steps.some(stepIncomplete)) { routeError.value = '各ステップの承認者（役職／ロール／個人）を選択してください'; return }
   const steps: AttendanceRouteStep[] = routeForm.steps.map((s, i) => ({
-    order: i + 1, approverRole: s.approverRole, approverMemberId: null, mode: 'serial',
+    order: i + 1, approverType: s.approverType, approverRole: s.approverRole,
+    approverTitle: s.approverTitle, approverMemberId: s.approverMemberId, mode: 'serial',
   }))
   const res = await routesCrud.save({
     ...(routeEditingId.value ? { id: routeEditingId.value } : {}),
@@ -1732,30 +1743,8 @@ async function submitRule(): Promise<void> {
             aria-label="区分"
           />
         </UiFormField>
-        <UiFormField label="承認ステップ（上から順に承認）" required>
-          <div class="grid gap-2">
-            <div v-for="(s, i) in routeForm.steps" :key="i" class="flex items-center gap-2">
-              <span class="w-6 shrink-0 text-center text-[12px] font-semibold text-sub num">{{ i + 1 }}</span>
-              <UiSelect
-                :model-value="s.approverRole"
-                :options="approverRoleOptions"
-                aria-label="承認者ロール"
-                @update:model-value="setRouteStepRole(i, String($event))"
-              />
-              <button
-                type="button"
-                class="btn btn-sm btn-ghost"
-                :disabled="routeForm.steps.length <= 1"
-                aria-label="ステップを削除"
-                @click="removeRouteStep(i)"
-              >
-                <X class="h-3.5 w-3.5" />
-              </button>
-            </div>
-            <button type="button" class="btn btn-sm w-fit" @click="addRouteStep">
-              <Plus class="h-3.5 w-3.5" /> ステップを追加
-            </button>
-          </div>
+        <UiFormField label="承認ステップ（上から順に承認）" required hint="承認者は役職／ロール／個人から指定できます">
+          <WidgetsApproverSteps v-model="routeForm.steps" />
         </UiFormField>
         <label class="flex items-center gap-2 text-[13px] font-medium">
           <input v-model="routeForm.active" type="checkbox" > 有効にする

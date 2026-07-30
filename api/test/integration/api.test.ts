@@ -316,14 +316,21 @@ describe('勤怠承認ワークフロー（直行/直帰 + 経路設定。0040�
   it('経路あり: 直行/直帰は経路の多段承認（manager→hr）で approved になる', async () => {
     const route = await api('POST', '/v1/masters/attendance-routes', {
       as: ADMIN,
-      body: { category: 'direct', steps: [{ order: 1, approverRole: 'manager' }, { order: 2, approverRole: 'hr' }], active: true },
+      body: {
+        category: 'direct',
+        steps: [
+          { order: 1, approverType: 'role', approverRole: 'admin' },
+          { order: 2, approverType: 'role', approverRole: 'hr' },
+        ],
+        active: true,
+      },
     })
     expect(route.status).toBe(201)
 
     const cr = await api('POST', '/v1/attendance/direct-requests', { as: MEMBER, body: { date: d2, type: 'both', reason: '終日客先' } })
     const drId = (cr.json.data as { id: string }).id
 
-    // step1 の承認者は manager（= admin employee = m-admin）。HR は現ステップ承認者でも管理者でもないので不可
+    // step1 の承認者はロール admin（= m-admin）。HR は現ステップ承認者でも管理者でもないので不可
     expect((await api('POST', `/v1/attendance/direct-requests/${drId}/actions`, { as: HR, body: { action: 'approved' } })).status).toBe(403)
     // step1 承認 → step2 へ前進
     expect((await api('POST', `/v1/attendance/direct-requests/${drId}/actions`, { as: ADMIN, body: { action: 'approved' } })).status).toBe(200)
@@ -947,7 +954,10 @@ describe('ワークフロー・稟議', () => {
       as: ADMIN,
       body: {
         category: 'contract', minAmount: 100000, maxAmount: 100000,
-        steps: [{ order: 1, approverRole: 'manager' }, { order: 1, approverRole: 'director' }],
+        steps: [
+          { order: 1, approverType: 'role', approverRole: 'admin' },
+          { order: 1, approverType: 'role', approverRole: 'hr' },
+        ],
       },
     })
     expect(bad.status).toBe(400)

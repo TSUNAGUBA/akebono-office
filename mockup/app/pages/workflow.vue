@@ -12,10 +12,11 @@ import type {
 } from '~/types/domain'
 import { addDays, fmtDateTime, fmtYen } from '~/utils/format'
 import {
-  APPROVAL_ACTION_LABELS, WORKFLOW_CATEGORY_LABELS, WORKFLOW_STATUS_LABELS,
+  approverTargetLabel, APPROVAL_ACTION_LABELS, WORKFLOW_CATEGORY_LABELS, WORKFLOW_STATUS_LABELS,
   WORKFLOW_STATUS_TONES,
 } from '~/utils/labels'
 import { workflowTemplatesFor } from '~/utils/workflow-templates'
+import type { ApproverStepForm } from '~/components/widgets/ApproverSteps.vue'
 import type { TabItem, TableColumn, Tone } from '~/types/ui'
 
 const route = useRoute()
@@ -328,15 +329,12 @@ function sortedSteps(r: WorkflowRoute): WorkflowRouteStep[] {
   return [...r.steps].sort((a, b) => a.order - b.order)
 }
 
-const roleOptions = (Object.keys(APPROVER_ROLE_LABELS) as WorkflowRouteStep['approverRole'][])
-  .map(value => ({ value, label: APPROVER_ROLE_LABELS[value] }))
-
 const routeModalOpen = ref(false)
 const routeEditingId = ref<string | null>(null)
 const routeForm = reactive({
   category: 'purchase' as WorkflowCategory,
   minAmount: 0,
-  steps: [] as { approverRole: WorkflowRouteStep['approverRole'] }[],
+  steps: [] as ApproverStepForm[],
   active: true,
 })
 const routeMaxStr = ref('') // '' = 上限なし
@@ -345,11 +343,16 @@ const routeCategoryModel = computed({
   set: (v: string) => { routeForm.category = v as WorkflowCategory },
 })
 
+/** 新規ステップの既定（ロール=管理者） */
+function defaultStep(): ApproverStepForm {
+  return { approverType: 'role', approverRole: 'admin', approverTitle: null, approverMemberId: null }
+}
+
 function openRouteCreate(category: WorkflowCategory): void {
   routeEditingId.value = null
   routeForm.category = category
   routeForm.minAmount = 0
-  routeForm.steps = [{ approverRole: 'manager' }]
+  routeForm.steps = [defaultStep()]
   routeForm.active = true
   routeMaxStr.value = ''
   routeModalOpen.value = true
@@ -359,28 +362,29 @@ function openRouteEdit(r: WorkflowRoute): void {
   routeEditingId.value = r.id
   routeForm.category = r.category
   routeForm.minAmount = r.minAmount
-  routeForm.steps = sortedSteps(r).map(s => ({ approverRole: s.approverRole }))
+  routeForm.steps = sortedSteps(r).map(s => ({
+    approverType: s.approverType, approverRole: s.approverRole,
+    approverTitle: s.approverTitle, approverMemberId: s.approverMemberId,
+  }))
   routeForm.active = r.active
   routeMaxStr.value = r.maxAmount === null ? '' : String(r.maxAmount)
   routeModalOpen.value = true
 }
 
-function addRouteStep(): void {
-  routeForm.steps.push({ approverRole: 'manager' })
-}
-
-function removeRouteStep(i: number): void {
-  routeForm.steps.splice(i, 1)
-}
-
-function setStepRole(i: number, v: string): void {
-  const s = routeForm.steps[i]
-  if (s) s.approverRole = v as WorkflowRouteStep['approverRole']
+/** ステップの指定内容が未入力なら弾く（役職/ロール/個人 の必須） */
+function stepIncomplete(s: ApproverStepForm): boolean {
+  return (s.approverType === 'title' && !s.approverTitle)
+    || (s.approverType === 'role' && !s.approverRole)
+    || (s.approverType === 'member' && !s.approverMemberId)
 }
 
 async function onRouteSave(): Promise<void> {
   if (routeForm.steps.length === 0) {
     show('承認ステップを 1 つ以上設定してください', 'warn')
+    return
+  }
+  if (routeForm.steps.some(stepIncomplete)) {
+    show('各ステップの承認者（役職／ロール／個人）を選択してください', 'warn')
     return
   }
   const maxAmount = routeMaxStr.value.trim() === '' ? null : Number(routeMaxStr.value)
@@ -390,8 +394,10 @@ async function onRouteSave(): Promise<void> {
   }
   const steps: WorkflowRouteStep[] = routeForm.steps.map((s, i) => ({
     order: i + 1,
+    approverType: s.approverType,
     approverRole: s.approverRole,
-    approverMemberId: null,
+    approverTitle: s.approverTitle,
+    approverMemberId: s.approverMemberId,
     mode: 'serial',
   }))
   const res = await routesCrud.save({
@@ -514,7 +520,7 @@ async function onRemoveDelegate(d: DelegateSetting): Promise<void> {
               <template v-for="(s, i) in sortedSteps(r)" :key="i">
                 <span v-if="i > 0" class="text-xs text-muted" aria-hidden="true">→</span>
                 <span class="whitespace-nowrap rounded-full bg-brand-soft px-2 py-0.5 text-[11px] font-semibold text-brand">
-                  {{ i + 1 }}. {{ APPROVER_ROLE_LABELS[s.approverRole] }}（{{ wf.approverFor(s.approverRole)?.name ?? '未設定' }}）
+                  {{ i + 1 }}. {{ approverTargetLabel(s) }}（{{ wf.stepApprover(s)?.name ?? '未設定' }}）
                 </span>
               </template>
             </span>
@@ -807,29 +813,8 @@ async function onRemoveDelegate(d: DelegateSetting): Promise<void> {
             <input v-model="routeMaxStr" type="number" min="0" step="10000" class="input num text-right" placeholder="上限なし" aria-label="上限金額">
           </UiFormField>
         </div>
-        <UiFormField label="承認ステップ" required hint="上から順に直列承認されます">
-          <div class="grid gap-2">
-            <div v-for="(s, i) in routeForm.steps" :key="i" class="flex items-center gap-2">
-              <span class="num w-6 text-center text-xs font-bold text-muted">{{ i + 1 }}</span>
-              <UiSelect
-                :model-value="s.approverRole"
-                :options="roleOptions"
-                :aria-label="`ステップ${i + 1} の承認ロール`"
-                class="flex-1"
-                @update:model-value="setStepRole(i, $event)"
-              />
-              <span class="text-xs text-sub">{{ wf.approverFor(s.approverRole)?.name ?? '未設定' }}</span>
-              <button type="button" class="btn btn-sm text-crit" :aria-label="`ステップ${i + 1} を削除`" @click="removeRouteStep(i)">
-                <X class="h-3.5 w-3.5" aria-hidden="true" />
-              </button>
-            </div>
-            <div>
-              <button type="button" class="btn btn-sm" @click="addRouteStep">
-                <Plus class="h-3.5 w-3.5" aria-hidden="true" />
-                ステップを追加
-              </button>
-            </div>
-          </div>
+        <UiFormField label="承認ステップ" required hint="上から順に直列承認されます。承認者は役職／ロール／個人から指定できます">
+          <WidgetsApproverSteps v-model="routeForm.steps" />
         </UiFormField>
         <label class="flex items-center gap-2 text-[13px]">
           <input v-model="routeForm.active" type="checkbox" class="h-4 w-4 accent-[var(--c-brand)]">

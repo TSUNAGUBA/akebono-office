@@ -31,29 +31,42 @@ const iconImage = z.string()
   .max(400_000, 'アイコン画像が大きすぎます（縮小して再度お試しください）')
   .nullable().default(null)
 
+/**
+ * 承認ステップの基底（稟議・勤怠 共通）。承認者は type で出し分け（役職/ロール/個人）。
+ * PermissionRule.subjectKind（role|title|member）と同じ 3 種。type ごとに必須フィールドを superRefine で検証。
+ */
+const approverStepSchema = z.object({
+  order: z.number().int().min(1),
+  approverType: z.enum(['title', 'role', 'member']).default('role'),
+  approverRole: z.enum(['admin', 'hr', 'member']).nullable().default(null),
+  approverTitle: z.string().nullable().default(null),
+  approverMemberId: z.string().nullable().default(null),
+  mode: z.enum(['serial', 'all', 'majority']).default('serial'),
+}).superRefine((s, ctx) => {
+  if (s.approverType === 'role' && !s.approverRole) {
+    ctx.addIssue({ code: 'custom', path: ['approverRole'], message: 'ロールを選択してください' })
+  }
+  if (s.approverType === 'title' && !s.approverTitle) {
+    ctx.addIssue({ code: 'custom', path: ['approverTitle'], message: '役職を選択してください' })
+  }
+  if (s.approverType === 'member' && !s.approverMemberId) {
+    ctx.addIssue({ code: 'custom', path: ['approverMemberId'], message: '承認者（個人）を選択してください' })
+  }
+})
+
 /** workflow-routes の基底（PATCH は .partial() を使うためクロスフィールド検証前の形を保持） */
 const workflowRouteBase = z.object({
   category: z.enum(['purchase', 'contract', 'expense', 'hiring', 'trip', 'other']),
   minAmount: z.number().min(0).default(0),
   maxAmount: z.number().min(0).nullable().default(null),
-  steps: z.array(z.object({
-    order: z.number().int().min(1),
-    approverRole: z.enum(['manager', 'director', 'president']),
-    approverMemberId: z.string().nullable().default(null),
-    mode: z.enum(['serial', 'all', 'majority']).default('serial'),
-  })).min(1, '承認ステップを 1 つ以上設定してください'),
+  steps: z.array(approverStepSchema).min(1, '承認ステップを 1 つ以上設定してください'),
   active: z.boolean().default(true),
 })
 
-/** attendance-routes の基底（勤怠承認経路 = 稟議 workflowRouteBase の勤怠版。金額帯なし・hr ロール追加） */
+/** attendance-routes の基底（勤怠承認経路 = 稟議 workflowRouteBase の勤怠版。金額帯なし） */
 const attendanceRouteBase = z.object({
   category: z.enum(['direct', 'fix']),
-  steps: z.array(z.object({
-    order: z.number().int().min(1),
-    approverRole: z.enum(['manager', 'hr', 'director', 'president']),
-    approverMemberId: z.string().nullable().default(null),
-    mode: z.enum(['serial', 'all', 'majority']).default('serial'),
-  })).min(1, '承認ステップを 1 つ以上設定してください'),
+  steps: z.array(approverStepSchema).min(1, '承認ステップを 1 つ以上設定してください'),
   active: z.boolean().default(true),
 })
 

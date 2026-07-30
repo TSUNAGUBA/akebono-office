@@ -261,12 +261,30 @@ export interface ExternalLink {
 export type WorkflowCategory = 'purchase' | 'contract' | 'expense' | 'hiring' | 'trip' | 'other'
 export type ApprovalMode = 'serial' | 'all' | 'majority'
 
-export interface WorkflowRouteStep {
+/**
+ * 承認者の指定方法（PermissionRule.subjectKind と同じ 3 種）。
+ * title=役職（CodeMaster category 'title' のラベル）/ role=ロール（MemberRole）/ member=個人。
+ */
+export type ApproverType = 'title' | 'role' | 'member'
+
+/**
+ * 承認経路のステップ（稟議・勤怠 共通）。approverType により承認対象を出し分ける:
+ *   - title:  approverTitle（役職ラベル）に一致する在籍者
+ *   - role:   approverRole（admin/hr/member）に一致する在籍者
+ *   - member: approverMemberId（個人指定）
+ * 解決は shared/domain/approver.ts の pickApprover に一本化（旧形式のフォールバックも同関数が吸収）。
+ */
+export interface ApprovalRouteStep {
   order: number
-  approverRole: 'manager' | 'director' | 'president'
+  approverType: ApproverType
+  approverRole: MemberRole | null
+  approverTitle: string | null
   approverMemberId: string | null
   mode: ApprovalMode
 }
+
+/** 稟議の承認ステップ（共通 ApprovalRouteStep のエイリアス） */
+export type WorkflowRouteStep = ApprovalRouteStep
 
 export interface WorkflowRoute {
   id: string
@@ -356,16 +374,8 @@ export type AttendanceRequestCategory = 'direct' | 'fix'
 /** 直行/直帰の種別（chokkou=直行・chokki=直帰・both=直行直帰） */
 export type DirectType = 'chokkou' | 'chokki' | 'both'
 
-/**
- * 勤怠承認ステップ（稟議 WorkflowRouteStep の勤怠版）。
- * approverRole に hr（人事）を追加。mode は serial のみ実装（稟議と同じく all/majority は未実装のメタ）。
- */
-export interface AttendanceRouteStep {
-  order: number
-  approverRole: 'manager' | 'hr' | 'director' | 'president'
-  approverMemberId: string | null
-  mode: ApprovalMode
-}
+/** 勤怠の承認ステップ（稟議と共通の ApprovalRouteStep のエイリアス。役職/ロール/個人で承認者を指定） */
+export type AttendanceRouteStep = ApprovalRouteStep
 
 /**
  * 勤怠承認経路（区分ごとの承認ステップ）。稟議 WorkflowRoute との差分は「金額帯を持たない」点のみ。

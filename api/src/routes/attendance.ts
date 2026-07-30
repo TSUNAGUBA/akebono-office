@@ -8,6 +8,7 @@ import { Hono } from 'hono'
 import type pg from 'pg'
 import { effectivePunches } from '../../../shared/domain/attendance-calc'
 import { directKindsOf, resolveAttendanceRoute } from '../../../shared/domain/attendance-route'
+import { pickApprover } from '../../../shared/domain/approver'
 import { addDays, nowJstIso, todayJst } from '../../../shared/domain/jst'
 import { canViewAllTimecards } from '../../../shared/domain/permissions'
 import type {
@@ -84,33 +85,14 @@ const DIRECT_TYPES: DirectType[] = ['chokkou', 'chokki', 'both']
 const DIRECT_TYPE_LABELS: Record<DirectType, string> = { chokkou: '直行', chokki: '直帰', both: '直行直帰' }
 
 interface ApproverCandidate {
-  id: string; name: string; role: string; title: string; employmentType: string
+  id: string; name: string; role: string; title: string
 }
 
-/** 承認者解決の候補（在籍者のみ）。ロール→人の解決で共通利用。id 順で first-match を決定的にする（モックと一致） */
+/** 承認者解決の候補（在籍者のみ・id 順）。解決は共有 pickApprover（役職/ロール/個人）に委譲する */
 async function approverCandidates(pool: pg.Pool): Promise<ApproverCandidate[]> {
   const { rows } = await pool.query<ApproverCandidate>(
-    `SELECT id, name, role, title, employment_type AS "employmentType" FROM members WHERE active = true ORDER BY id`)
+    `SELECT id, name, role, title FROM members WHERE active = true ORDER BY id`)
   return rows
-}
-
-/**
- * 承認ステップ → 承認者（在籍者）を解決する。稟議 workflows.ts の approverFor/stepApprover と同型 + hr。
- * approverMemberId 指定があればそれを優先。未解決時は代表取締役 → 任意の管理者へフォールバック。
- */
-function pickApprover(cands: ApproverCandidate[], step: AttendanceRouteStep): ApproverCandidate | undefined {
-  if (step.approverMemberId) {
-    const fixed = cands.find(m => m.id === step.approverMemberId)
-    if (fixed) return fixed
-  }
-  const president = cands.find(m => m.title === '代表取締役')
-  const anyAdmin = cands.find(m => m.role === 'admin')
-  switch (step.approverRole) {
-    case 'president': return president ?? anyAdmin
-    case 'director': return cands.find(m => m.employmentType === 'director' && m.id !== president?.id) ?? president ?? anyAdmin
-    case 'hr': return cands.find(m => m.role === 'hr') ?? anyAdmin
-    case 'manager': default: return cands.find(m => m.role === 'admin' && m.employmentType === 'employee') ?? anyAdmin
-  }
 }
 
 /**
@@ -137,6 +119,7 @@ async function currentApproverId(
   const cands = await approverCandidates(pool)
   return pickApprover(cands, step)?.id ?? null
 }
+// pickApprover は共有（shared/domain/approver.ts）。役職/ロール/個人 + 旧形式フォールバックを一元化。
 
 /**
  * 承認アクションの実行権限を判定する。

@@ -16,6 +16,7 @@ import {
   type Article36Alert, type MonthOtRecord,
 } from '~/utils/attendance-calc'
 import { directKindsOf, resolveAttendanceRoute } from '~/utils/attendance-route'
+import { pickApprover } from '~/utils/approver'
 import { daysInMonth, weekdayOf } from '~/utils/format'
 import { DIRECT_TYPE_LABELS, PUNCH_KIND_LABELS } from '~/utils/labels'
 
@@ -153,28 +154,11 @@ export function useAttendance() {
     return resolveAttendanceRoute(attendanceRoutes.value as AttendanceRoute[], category) ?? []
   }
 
-  /** 承認ステップ → 承認者メンバー（API routes/attendance.ts の pickApprover と同型 + hr。id 順で first-match を一致させる） */
-  function pickApprover(step: AttendanceRouteStep): Member | undefined {
-    const ms = (tbl('members').value as Member[]).filter(m => m.active).sort((a, b) => a.id.localeCompare(b.id))
-    if (step.approverMemberId) {
-      const fixed = ms.find(m => m.id === step.approverMemberId)
-      if (fixed) return fixed
-    }
-    const president = ms.find(m => m.title === '代表取締役')
-    const anyAdmin = ms.find(m => m.role === 'admin')
-    switch (step.approverRole) {
-      case 'president': return president ?? anyAdmin
-      case 'director': return ms.find(m => m.employmentType === 'director' && m.id !== president?.id) ?? president ?? anyAdmin
-      case 'hr': return ms.find(m => m.role === 'hr') ?? anyAdmin
-      case 'manager': default: return ms.find(m => m.role === 'admin' && m.employmentType === 'employee') ?? anyAdmin
-    }
-  }
-
-  /** 現ステップの承認者 id（snapshot 空 = null = 管理者単段） */
+  /** 現ステップの承認者 id（snapshot 空 = null = 管理者単段）。解決は共有 pickApprover（役職/ロール/個人） */
   function currentApproverId(snapshot: AttendanceRouteStep[], currentStep: number): string | null {
     if (snapshot.length === 0) return null
     const step = [...snapshot].sort((a, b) => a.order - b.order)[currentStep - 1]
-    return step ? pickApprover(step)?.id ?? null : null
+    return step ? pickApprover(tbl('members').value as Member[], step)?.id ?? null : null
   }
 
   /** 承認アクションの権限判定（経路なし = 管理者のみ / 経路あり = 現ステップ承認者 or 管理者） */

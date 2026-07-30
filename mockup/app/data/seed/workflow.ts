@@ -5,10 +5,16 @@ import { seedToday } from './history'
 
 const today = seedToday()
 
-/** 経路スナップショット生成（core.ts の workflowRoutes と整合するロール列） */
-function snap(...roles: WorkflowRouteStep['approverRole'][]): WorkflowRouteStep[] {
-  return roles.map((approverRole, i) => ({
-    order: i + 1, approverRole, approverMemberId: null, mode: 'serial' as const,
+/** 旧ロール名 → 役職ラベル（core.ts の workflowRoutes と同じ行動保存マッピング） */
+const SNAP_TITLE: Record<'manager' | 'director' | 'president', string> = {
+  manager: 'マネージャー', director: '取締役', president: '代表取締役',
+}
+
+/** 経路スナップショット生成（役職指定。core.ts の workflowRoutes と整合するステップ列） */
+function snap(...roles: ('manager' | 'director' | 'president')[]): WorkflowRouteStep[] {
+  return roles.map((r, i) => ({
+    order: i + 1, approverType: 'title' as const, approverRole: null,
+    approverTitle: SNAP_TITLE[r], approverMemberId: null, mode: 'serial' as const,
   }))
 }
 
