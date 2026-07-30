@@ -11,7 +11,7 @@ import { Plus } from 'lucide-vue-next'
 import type { Member, PermissionRule } from '~/types/domain'
 import type { TableColumn } from '~/types/ui'
 import {
-  AI_SCOPE_FEATURES, AI_SCOPE_FIELD, ASSIST_MEMBER_FIELD_PREFIX,
+  AI_SCOPE_FEATURES, AI_SCOPE_FIELD, ASSIST_MEMBER_FIELD_PREFIX, CUSTOMER_LOG_MEMBER_FIELD_PREFIX,
   FEATURE_PERMISSION_KEYS, MEMBER_VIEW_ALL_FIELD, REPORT_MEMBER_FIELD_PREFIX, TIMECARD_ALL_FIELD,
 } from '../../../../shared/domain/permissions'
 import { FIELD_CATALOG, FIELD_RESOURCES, fieldLabel } from '../../../../shared/domain/permission-catalog'
@@ -50,6 +50,9 @@ const ASSIST_VIEW_PSEUDO = 'assistant-view'
 // 全員のタイムカードの参照（オペレーター指示 2026-07-22）: 擬似リソース 'timecard-view'。
 // 保存時に resource='attendance' + field='timecard-all' へ写像する（既定 = 管理者/人事のみ参照可）
 const TIMECARD_VIEW_PSEUDO = 'timecard-view'
+// 顧客ログの参照対象（2026-07-30）: 擬似リソース 'customerlog-view' で対象メンバーを選ばせ、
+// 保存時に resource='customer-log' + field='member:<対象メンバー id>' へ写像する（既定 = 参照不可 = 許可制）
+const CUSTOMERLOG_VIEW_PSEUDO = 'customerlog-view'
 
 const resourceOptions = [
   ...FEATURE_PERMISSION_KEYS.map(f => ({ value: f.key, label: `機能: ${f.label}` })),
@@ -59,6 +62,7 @@ const resourceOptions = [
   })),
   { value: REPORT_VIEW_PSEUDO, label: '日報・週報の参照対象: メンバー指定（既定: 参照可）' },
   { value: ASSIST_VIEW_PSEUDO, label: 'AI業務アシスタントの参照対象: メンバー指定（既定: 参照不可）' },
+  { value: CUSTOMERLOG_VIEW_PSEUDO, label: '顧客ログの参照対象: メンバー指定（既定: 参照不可）' },
   { value: TIMECARD_VIEW_PSEUDO, label: '全員のタイムカードの参照（既定: 管理者/人事のみ参照可）' },
   ...FIELD_RESOURCES.map(f => ({ value: f.key, label: `マスタ項目: ${f.label}` })),
 ]
@@ -77,6 +81,11 @@ function isAssistViewRule(r: PermissionRule): boolean {
   return r.resource === 'ai-assistant' && (r.field ?? '').startsWith(ASSIST_MEMBER_FIELD_PREFIX)
 }
 
+/** ルールが顧客ログの参照対象（customer-log + member:<id>）か */
+function isCustomerLogViewRule(r: PermissionRule): boolean {
+  return r.resource === 'customer-log' && (r.field ?? '').startsWith(CUSTOMER_LOG_MEMBER_FIELD_PREFIX)
+}
+
 /** ルールが全員のタイムカードの参照（attendance + timecard-all）か */
 function isTimecardViewRule(r: PermissionRule): boolean {
   return r.resource === 'attendance' && (r.field ?? '') === TIMECARD_ALL_FIELD
@@ -90,6 +99,7 @@ function ruleResourceLabel(r: PermissionRule): string {
   }
   if (isReportViewRule(r)) return '日報・週報の参照対象'
   if (isAssistViewRule(r)) return 'AI業務アシスタントの参照対象'
+  if (isCustomerLogViewRule(r)) return '顧客ログの参照対象'
   if (isTimecardViewRule(r)) return '全員のタイムカードの参照'
   return resourceLabel(r.resource)
 }
@@ -97,7 +107,7 @@ function ruleResourceLabel(r: PermissionRule): string {
 /** 効果ラベル（ai-scope = すべて/自分のみ・参照対象 = 参照可/参照不可 の語彙） */
 function ruleEffectLabel(r: PermissionRule): string {
   if ((r.field ?? null) === AI_SCOPE_FIELD) return r.effect === 'allow' ? 'すべて' : '自分のみ'
-  if (isReportViewRule(r) || isAssistViewRule(r) || isTimecardViewRule(r)) {
+  if (isReportViewRule(r) || isAssistViewRule(r) || isCustomerLogViewRule(r) || isTimecardViewRule(r)) {
     return r.effect === 'allow' ? '参照可' : '参照不可'
   }
   return EFFECT_LABELS[r.effect]
@@ -105,9 +115,11 @@ function ruleEffectLabel(r: PermissionRule): string {
 
 /** 項目ラベル（参照対象は対象メンバー名・member:* は全メンバー一括を表示） */
 function ruleFieldLabel(r: PermissionRule): string {
-  if (isReportViewRule(r) || isAssistViewRule(r)) {
+  if (isReportViewRule(r) || isAssistViewRule(r) || isCustomerLogViewRule(r)) {
     if ((r.field ?? '') === MEMBER_VIEW_ALL_FIELD) return '全メンバー（一括既定）'
-    const prefix = isReportViewRule(r) ? REPORT_MEMBER_FIELD_PREFIX : ASSIST_MEMBER_FIELD_PREFIX
+    const prefix = isReportViewRule(r)
+      ? REPORT_MEMBER_FIELD_PREFIX
+      : isAssistViewRule(r) ? ASSIST_MEMBER_FIELD_PREFIX : CUSTOMER_LOG_MEMBER_FIELD_PREFIX
     const id = (r.field ?? '').slice(prefix.length)
     return (memberCrud.byId(id) as Member | undefined)?.name ?? id
   }
@@ -168,10 +180,12 @@ const isAiScope = computed(() => form.value.resource.startsWith(AI_SCOPE_PREFIX)
 const isReportView = computed(() => form.value.resource === REPORT_VIEW_PSEUDO)
 /** 選択中リソースが AI業務アシスタントの参照対象か（項目 = 対象メンバー・既定 = 参照不可 = 許可制） */
 const isAssistView = computed(() => form.value.resource === ASSIST_VIEW_PSEUDO)
+/** 選択中リソースが顧客ログの参照対象か（項目 = 対象メンバー・既定 = 参照不可 = 許可制） */
+const isCustomerLogView = computed(() => form.value.resource === CUSTOMERLOG_VIEW_PSEUDO)
 /** 選択中リソースが全員のタイムカードの参照か（対象メンバー指定なし・既定 = 管理者/人事のみ） */
 const isTimecardView = computed(() => form.value.resource === TIMECARD_VIEW_PSEUDO)
 /** 参照対象（メンバー指定）系のリソースか（対象メンバー UI を出すかの判定） */
-const isMemberTargetView = computed(() => isReportView.value || isAssistView.value)
+const isMemberTargetView = computed(() => isReportView.value || isAssistView.value || isCustomerLogView.value)
 /** 対象メンバーの選択肢（参照対象。論理名 = メンバー名で検索。'*' = 全メンバーの一括既定） */
 const reportTargetOptions = computed(() => [
   { value: '*', label: '全メンバー（一括既定）' },
@@ -182,6 +196,7 @@ function actualResource(): string {
   if (isAiScope.value) return form.value.resource.slice(AI_SCOPE_PREFIX.length)
   if (isReportView.value) return 'reports'
   if (isAssistView.value) return 'ai-assistant'
+  if (isCustomerLogView.value) return 'customer-log'
   if (isTimecardView.value) return 'attendance'
   return form.value.resource
 }
@@ -189,6 +204,7 @@ function actualField(field: string | null): string | null {
   if (isAiScope.value) return AI_SCOPE_FIELD
   if (isReportView.value) return field ? `${REPORT_MEMBER_FIELD_PREFIX}${field}` : null
   if (isAssistView.value) return field ? `${ASSIST_MEMBER_FIELD_PREFIX}${field}` : null
+  if (isCustomerLogView.value) return field ? `${CUSTOMER_LOG_MEMBER_FIELD_PREFIX}${field}` : null
   if (isTimecardView.value) return TIMECARD_ALL_FIELD
   return field
 }
@@ -203,6 +219,10 @@ const effectOptions = computed(() => {
   }
   if (isAssistView.value) {
     return [{ value: 'allow', label: '参照可（この対象者の AI業務アシスタントを readonly 閲覧可）' },
+            { value: 'deny', label: '参照不可（明示的に禁止。既定も参照不可）' }]
+  }
+  if (isCustomerLogView.value) {
+    return [{ value: 'allow', label: '参照可（この対象者の顧客ログを readonly 閲覧可）' },
             { value: 'deny', label: '参照不可（明示的に禁止。既定も参照不可）' }]
   }
   if (isTimecardView.value) {
@@ -244,26 +264,30 @@ function openEdit(row: Record<string, unknown>): void {
   const isScope = (r.field ?? null) === AI_SCOPE_FIELD
   const isRv = isReportViewRule(r)
   const isAv = isAssistViewRule(r)
+  const isCv = isCustomerLogViewRule(r)
   const isTv = isTimecardViewRule(r)
   form.value = {
     subjectKind: r.subjectKind, subjectId: r.subjectId,
     resource: isScope
       ? `${AI_SCOPE_PREFIX}${r.resource}`
-      : isRv ? REPORT_VIEW_PSEUDO : isAv ? ASSIST_VIEW_PSEUDO : isTv ? TIMECARD_VIEW_PSEUDO : r.resource,
+      : isRv ? REPORT_VIEW_PSEUDO : isAv ? ASSIST_VIEW_PSEUDO : isCv ? CUSTOMERLOG_VIEW_PSEUDO : isTv ? TIMECARD_VIEW_PSEUDO : r.resource,
     fields: isRv
       ? [(r.field ?? '').slice(REPORT_MEMBER_FIELD_PREFIX.length)]
       : isAv
         ? [(r.field ?? '').slice(ASSIST_MEMBER_FIELD_PREFIX.length)]
-        : !isScope && !isTv && r.field ? [r.field] : [],
+        : isCv
+          ? [(r.field ?? '').slice(CUSTOMER_LOG_MEMBER_FIELD_PREFIX.length)]
+          : !isScope && !isTv && r.field ? [r.field] : [],
     effect: r.effect,
   }
   modalOpen.value = true
 }
 
-/** リソース変更時: 項目をリセットし、参照許可制（AI業務アシスタント・全員のタイムカード）は allow を既定効果にする */
+/** リソース変更時: 項目をリセットし、参照許可制（AI業務アシスタント・顧客ログ・全員のタイムカード）は allow を既定効果にする */
 function onResourceChange(): void {
   form.value.fields = []
-  if (form.value.resource === ASSIST_VIEW_PSEUDO || form.value.resource === TIMECARD_VIEW_PSEUDO) {
+  if (form.value.resource === ASSIST_VIEW_PSEUDO || form.value.resource === CUSTOMERLOG_VIEW_PSEUDO
+    || form.value.resource === TIMECARD_VIEW_PSEUDO) {
     form.value.effect = 'allow'
   }
 }
@@ -450,7 +474,8 @@ async function restoreRule(): Promise<void> {
               :options="reportTargetOptions"
               :single="!!editingId"
               placeholder="メンバー名で検索"
-              :aria-label="isAssistView ? 'AI業務アシスタントの参照対象メンバー' : '日報・週報の参照対象メンバー'"
+              :aria-label="isAssistView ? 'AI業務アシスタントの参照対象メンバー'
+                : isCustomerLogView ? '顧客ログの参照対象メンバー' : '日報・週報の参照対象メンバー'"
             />
           </UiFormField>
           <UiFormField
@@ -475,7 +500,8 @@ async function restoreRule(): Promise<void> {
               ? 'AI（チャットボット・AI業務アシスタント）が当該データを参照する範囲'
               : isReportView ? '対象メンバーの日報・週報（チームタブ・全員の日報・全員の週報・AI 文脈）を参照できるか。本人の自分の日報・週報は常に参照可'
                 : isAssistView ? '対象メンバーの AI業務アシスタント（計画・振り返り）を readonly 参照できるか。既定は参照不可（許可制）。本人は常に参照可'
-                  : isTimecardView ? '勤怠管理の「全員のタイムカード」（全メンバーの出退勤一覧）を参照できるか。既定は管理者/人事のみ参照可' : undefined"
+                  : isCustomerLogView ? '対象メンバーの顧客ログを readonly 参照できるか。既定は参照不可（許可制）。本人は常に参照可'
+                    : isTimecardView ? '勤怠管理の「全員のタイムカード」（全メンバーの出退勤一覧）を参照できるか。既定は管理者/人事のみ参照可' : undefined"
           >
             <UiSelect
               v-model="form.effect"

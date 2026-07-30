@@ -93,6 +93,14 @@ export const NAV_MAP: Record<string, NavMapEntry> = {
       PROJECTS,
     ],
   },
+  '/customer-log': {
+    parent: HOME,
+    related: [
+      CUSTOMERS,
+      { to: '/masters/contacts', label: '顧客（人）マスタ', adminOnly: true },
+      PERMISSIONS,
+    ],
+  },
   '/workflow': {
     parent: HOME,
     related: [

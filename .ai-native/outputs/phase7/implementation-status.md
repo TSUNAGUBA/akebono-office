@@ -1127,3 +1127,35 @@
 ### 46-3 検証
 - [x] api 単体 213 / api 統合 203（pool 変更後も green）/ typecheck（api・mockup）・mockup build 全 green。
 - [ ] 反映はデプロイ後（main マージ → deploy パイプライン）。コスト最優先なら `CLOUD_RUN_MIN_INSTANCES=0` で従来のゼロスケールへ戻せる。
+
+## 47. 顧客ログ（新設メニュー。オペレーター指示 2026-07-30）の完了条件（Definition of Done）
+
+**要件:** 「顧客ログ」メニューを新設し、いつ（何月何日・時刻は任意）どの顧客（会社/人）とどんな会話をしたかを記録する。
+このデータは AI の参照対象。閲覧は自分の登録は常に見え、他人の記録の閲覧は権限で許可する。
+
+- [x] データモデル（記録系・C2）: `customer_logs` 0044（memberId=記録者・logDate 必須・logTime 任意・companyId 必須・
+  contactId 任意（会社所属を API 層で検証）・title 任意・body 必須・active・created/updated_at）。日報・タスク計画と同じ
+  **本人所有・本人のみ操作可**パターン。company_id/contact_id は app_office マスタへの ID 参照。
+- [x] API `/v1/customer-logs`（notes/task-plans パターン = 手動バリデーション・監査ログ・FK 23503→400・JST 文字列返却）:
+  `GET`（既定=本人。`?memberId=` は canViewMemberCustomerLog で許可された対象者のみ・未許可 403 AKO-PRM-002・自分は常に可。
+  `?from=&to=&companyId=&contactId=&includeArchived=1`（取消済みは本人のみ））・`POST`（入力検証 AKO-CLG-001・会社/担当者不整合
+  AKO-CLG-003）・`PATCH /:id`（**本人のみ・部分更新 = 送られたキーのみ更新し未指定は現状維持** = CLAUDE.md 部分更新原則）・
+  `POST /:id/archive` `/:id/restore`（取消/復元 = 論理削除の対称操作・冪等・本人のみ AKO-CLG-002）。app.ts へ登録・
+  PATH_FEATURES に `customer-log`（機能ガード・既定 allow）。
+- [x] 可視性（F-16）: 機能キー `customer-log`（FEATURE_PERMISSION_KEYS・featureKeyOfPath の known）+ 参照対象の擬似フィールド
+  `customer-log` × `member:<id>`（shared `canViewMemberCustomerLog` = **既定 deny の許可制**・自分は常に可 = AI業務アシスタント
+  と同型）。権限設定 UI（ルール一覧 = `customerlog-view` 擬似リソース / 権限表 = viewTargetNodes サブツリー・本人セルは
+  自動保護）で付与・剥奪できる。**参照権限は編集権限を与えない**（他人の記録は 403）。
+- [x] AI 参照（このデータは AI の参照対象）: search_docs へ `source_kind='customer-log'` を追加（0044 で CHECK 差し替え・
+  TITLE_CHECKS・buildSearchDocs のビルドループ = 日時/顧客/担当者/記録者/本文 segments）。**owner_member_id = 記録者 = 本人スコープ**
+  （searchDocsFor の allOwners は note 限定のため他メンバーの顧客ログは AI 文脈へ供給しない = 安全側の既定。UI の参照権限とは別軸
+  として文書化 = 原則6）。links.companyId でチャットボット文脈の顧客混入防止。書込/取消後に scheduleSearchRebuild。
+- [x] 取消可能性（原則9.5）: 取消（archive）/復元（restore）+ 本人編集（監査ログ）。取消済みは本人の折りたたみ一覧から復元。
+- [x] 画面: `/customer-log`（ダッシュボード「業務ツール」カード + ヘッダナビ + nav-map）。widget `CustomerLogPanel`
+  = 対象メンバー切替（readonly）/ 検索・会社フィルタ / 一覧 → 詳細モーダル / 登録・編集モーダル（担当者は選択会社の連絡先のみ）/
+  取消済み復元。モバイルはカード型。デュアルモード（API = /v1/customer-logs / モック = customerLogs コレクション + デモシード）。
+- [x] 検証: api 単体 222（顧客ログ参照権限 7 = 既定 deny・自分常時可・allow 付与・member:* 一括・レイヤ/deny 優先）/
+  api 統合 208（登録検証・本人スコープ・部分更新の項目保持・取消/復元冪等・参照権限マトリクス = HR 403→allow で 200・編集は依然 403）/
+  mockup 単体 155 / typecheck（api・mockup）全 green。
+- [x] docs（原則5）: data-design（CustomerLog エンティティ・SearchDoc sourceKind・PermissionRule 擬似フィールド）・
+  api-design（useCustomerLogs 契約・AKO-CLG-001/002/003）・screen-design（サイトマップ + 画面定義）を更新。

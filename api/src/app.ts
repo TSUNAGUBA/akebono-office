@@ -19,6 +19,7 @@ import { akebonoImportsRoutes } from './routes/akebono-imports'
 import { akebonoTradeRoutes } from './routes/akebono-trade'
 import { attendanceRoutes } from './routes/attendance'
 import { configsRoutes } from './routes/configs'
+import { customerLogsRoutes } from './routes/customer-logs'
 import { escalationsRoutes } from './routes/escalations'
 import { holidaysRoutes } from './routes/holidays'
 import { knowledgeRoutes } from './routes/knowledge'
@@ -205,6 +206,7 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
   app.route('/v1/holidays', holidaysRoutes(pool))
   app.route('/v1/search', searchRoutes(pool, env))
   app.route('/v1/notes', notesRoutes(pool, env))
+  app.route('/v1/customer-logs', customerLogsRoutes(pool, env))
   app.route('/v1/knowledge', knowledgeRoutes(pool, env))
   app.route('/v1/documents', documentsRoutes(pool, env))
   app.route('/v1/media', mediaRoutes(pool, env))

@@ -6,7 +6,7 @@ import type {
   AiActivityLog, AiEmployee, AiRole, AiTask, AkebonoWish, ApprovalLog,
   AppConfigItem, AppNotification, AttendanceFixRequest, AttendanceRoute, AttendanceRule, AuditLog, CalendarEvent, ChatMessage, ChatSession, DirectRequest, PermissionRule,
   CodeMasterItem, Company, CompanyRelation, Contact, ContactRelation,
-  CustomFieldDef, DailyReport, DecisionLog, DecisionTheme, DelegateSetting, Department,
+  CustomerLog, CustomFieldDef, DailyReport, DecisionLog, DecisionTheme, DelegateSetting, Department,
   DocumentNode, Escalation, EscalationRule, ExternalLink, FeatureToggle, HearingLog, Holiday,
   Industry, KnowledgeArticle, LeaveGrant, LeaveRequest, LeaveType, Member, Project,
   PunchRecord, RelationType, ReportComment, SalesMonthly, ServiceIncident,
@@ -36,6 +36,7 @@ import * as status from './status'
 import * as decision from './decision'
 import * as support from './support'
 import * as misc from './misc'
+import { buildCustomerLogs } from './customer-logs'
 import * as media from './media'
 import { buildCalendarEvents, buildLeaveGrants, buildPunchHistory, buildSalesMonthly, buildSpecialLeaveGrants, buildTaskPlans, buildUptimeDaily } from './history'
 
@@ -46,6 +47,7 @@ export interface MockDbShape {
   industries: Industry[]
   workCategories: WorkCategory[]
   notes: Note[]
+  customerLogs: CustomerLog[]
   companies: Company[]
   contacts: Contact[]
   relationTypes: RelationType[]
@@ -158,6 +160,7 @@ export function buildSeed(): MockDbShape {
       { id: 'wc-04', name: '社内業務', displayOrder: 4, active: true },
     ],
     notes: [],
+    customerLogs: buildCustomerLogs(),
     companies: [...core.seedCompanies, ...akebono.seedAkebonoCompanies],
     contacts: core.seedContacts,
     relationTypes: core.seedRelationTypes,

@@ -40,6 +40,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { path: '/shift', label: 'シフト表', icon: 'CalendarRange', featureKey: 'shift' },
       { path: '/reports', label: '日報・週報', icon: 'NotebookPen' },
       { path: '/ai-assistant', label: 'AI業務アシスタント', icon: 'Sparkles' },
+      { path: '/customer-log', label: '顧客ログ', icon: 'MessageSquare' },
       { path: '/workflow', label: '稟議', icon: 'GitPullRequestArrow' },
     ],
   },

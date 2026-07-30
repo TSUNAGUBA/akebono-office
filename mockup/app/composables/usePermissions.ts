@@ -8,7 +8,8 @@
  * 既定は allow（ルール未設定なら挙動不変）。既存のロールガードを緩めることはできない（制限レイヤ）。
  */
 import {
-  canUseFeature, canViewAllTimecards as canViewAllTimecardsShared, canViewField,
+  canUseFeature, canViewAllTimecards as canViewAllTimecardsShared,
+  canViewMemberCustomerLog as canViewMemberCustomerLogShared, canViewField,
   canViewMemberReports as canViewMemberReportsShared,
   canViewMemberTaskPlans as canViewMemberTaskPlansShared,
   featureKeyOfPath, type PermissionSubject,
@@ -53,9 +54,17 @@ export function usePermissions() {
     return canViewMemberTaskPlansShared(rules.value, subject.value, targetMemberId)
   }
 
+  /** 対象メンバーの顧客ログを readonly 参照できるか（自分は常に可・未設定 = 不可 = 許可制） */
+  function canViewMemberCustomerLog(targetMemberId: string): boolean {
+    return canViewMemberCustomerLogShared(rules.value, subject.value, targetMemberId)
+  }
+
   /** 全員のタイムカードを参照できるか（既定 = 管理者/人事。権限表の明示ルールで変更可） */
   const canViewAllTimecards = computed(() =>
     canViewAllTimecardsShared(rules.value, subject.value))
 
-  return { can, canPath, canField, canViewMemberReports, canViewMemberTaskPlans, canViewAllTimecards }
+  return {
+    can, canPath, canField, canViewMemberReports, canViewMemberTaskPlans,
+    canViewMemberCustomerLog, canViewAllTimecards,
+  }
 }
