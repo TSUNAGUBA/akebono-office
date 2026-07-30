@@ -722,6 +722,17 @@ export interface WorkflowRequest {
   createdAt: string
 }
 
+/** 稟議添付の実ファイル（API モード = workflow_files。attachments は表示名一覧 = 原則7 の互換） */
+export interface WorkflowFile {
+  id: string
+  requestId: string
+  filename: string
+  mime: string
+  sizeBytes: number
+  uploadedBy: string
+  createdAt: string
+}
+
 export type ApprovalAction = 'submit' | 'approve' | 'reject' | 'remand' | 'withdraw'
 
 export interface ApprovalLog {
@@ -892,6 +903,8 @@ export interface DecisionTheme {
   whyRecommend: string
   /** シナリオ比較のパラメータ定義 */
   scenarioParams: { key: string; label: string; min: number; max: number; step: number; default: number; unit: string }[]
+  /** 論理削除（マスタ管理 UI = /masters/decision-themes。旧モックシードは未設定 = 有効扱い） */
+  active?: boolean
 }
 
 export interface DecisionLog {

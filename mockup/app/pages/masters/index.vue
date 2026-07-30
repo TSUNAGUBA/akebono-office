@@ -21,6 +21,7 @@ const contactRelations = tbl('contactRelations')
 const relationTypes = tbl('relationTypes')
 const permissionRules = tbl('permissionRules')
 const projects = tbl('projects')
+const decisionThemes = tbl('decisionThemes')
 const knowledge = tbl('knowledge')
 const codeMaster = tbl('codeMaster')
 const holidays = tbl('holidays')
@@ -44,6 +45,7 @@ const badgeOf = computed<Record<string, number | undefined>>(() => ({
   'relations-contact': contactRelations.value.length,
   'relation-types': activeCount(relationTypes.value),
   'projects': activeCount(projects.value),
+  'decision-themes': activeCount(decisionThemes.value),
   'permissions': activeCount(permissionRules.value),
   'knowledge': activeCount(knowledge.value),
   'holidays': holidays.value.length,

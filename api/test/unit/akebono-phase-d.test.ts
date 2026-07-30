@@ -1,10 +1,13 @@
 /**
  * Phase D の純粋関数の単体テスト（DB 非依存）:
- * - importFieldsOf / simulateRun（データ取込 F-32）
+ * - importFieldsOf / 実取込の抽出・復号（データ取込 F-32。実取込 = 監査指摘 2026-07-30 ①）
  * - normalizeDashboardInsight（ダッシュボード AI レポートの LLM 出力正規化 F-41）
  */
 import { describe, expect, it } from 'vitest'
-import { importFieldsOf, simulateRun } from '../../src/routes/akebono-imports'
+import {
+  applyImportTransform, extractCsvRecords, extractFixedRecords, extractJsonRecords,
+} from '../../../shared/domain/import-run'
+import { decodeImportBytes, importFieldsOf, splitLineBytes } from '../../src/routes/akebono-imports'
 import { normalizeDashboardInsight } from '../../src/routes/akebono-dashboard'
 
 // 方式別ロケータの既定（未指定は全て null）
@@ -58,15 +61,87 @@ describe('importFieldsOf（マッピング項目の検証・正規化）', () =>
 })
 // 注: normalizeImportSourceConfig の正規化テストは shared 直テストの import-parse.test.ts に集約（重複排除）
 
-describe('simulateRun（取込実行の決定的シミュレート）', () => {
-  it('runIndex ごとに staged/failed が決定的（applied = staged − failed・failed>0 で隔離行 1 件）', () => {
-    expect(simulateRun(0)).toEqual({ counts: { staged: 10, applied: 10, skipped: 0, failed: 0 }, errors: [] })
-    const r1 = simulateRun(1)
-    expect(r1.counts).toEqual({ staged: 17, applied: 16, skipped: 0, failed: 1 })
-    expect(r1.errors).toHaveLength(1)
-    expect(simulateRun(2).counts).toEqual({ staged: 24, applied: 22, skipped: 0, failed: 2 })
-    // runIndex=3 は staged が周回して 10・failed=0（境界: (3*7)%21=0）
-    expect(simulateRun(3).counts).toEqual({ staged: 10, applied: 10, skipped: 0, failed: 0 })
+describe('applyImportTransform（値変換）', () => {
+  it('number は ¥・カンマ・空白を除去、date は区切り差を YYYY-MM-DD へ正規化', () => {
+    expect(applyImportTransform(' ¥12,300 ', 'number')).toBe('12300')
+    expect(applyImportTransform('2026/7/3', 'date')).toBe('2026-07-03')
+    expect(applyImportTransform('20260703', 'date')).toBe('2026-07-03')
+    expect(applyImportTransform('2026.07.03', 'date')).toBe('2026-07-03')
+    expect(applyImportTransform('not-a-date', 'date')).toBe('not-a-date')
+  })
+  it('未知の transform・空は前後空白のみ除去', () => {
+    expect(applyImportTransform('  abc ', '')).toBe('abc')
+    expect(applyImportTransform('AbC', 'lower')).toBe('abc')
+    expect(applyImportTransform('AbC', 'upper')).toBe('ABC')
+  })
+})
+
+const FIELD = { transform: '', columnIndex: null, byteStart: null, byteEnd: null, jsonKey: null }
+
+describe('extractCsvRecords（CSV → レコード）', () => {
+  it('列番号 or ヘッダ名で値を解決し、変換を適用する', () => {
+    const { records, mappingError } = extractCsvRecords(
+      'code,name,price\r\nP-1,りんご,"1,200"\nP-2,みかん,800\n',
+      [
+        { ...FIELD, sourceField: 'code', targetItemKey: 'code', columnIndex: 0 },
+        { ...FIELD, sourceField: 'name', targetItemKey: 'name' }, // ヘッダ名で解決
+        { ...FIELD, sourceField: 'price', targetItemKey: 'listPrice', transform: 'number' },
+      ])
+    expect(mappingError).toBeNull()
+    expect(records).toHaveLength(2)
+    expect(records[0]!.values).toEqual({ code: 'P-1', name: 'りんご', listPrice: '1200' })
+    expect(records[1]!.rowNo).toBe(2)
+  })
+  it('列を特定できない項目はマッピングエラー（実行前に止める）', () => {
+    const { mappingError } = extractCsvRecords('a,b\n1,2\n',
+      [{ ...FIELD, sourceField: 'ない列', targetItemKey: 'code' }])
+    expect(mappingError).toContain('ない列')
+  })
+})
+
+describe('extractFixedRecords（固定長 → レコード）', () => {
+  it('1 始まり両端含むバイト範囲でスライスする', () => {
+    const lines = ['P-001東京  ', 'P-002大阪  '].map(l => new TextEncoder().encode(l))
+    const decode = (b: Uint8Array): string => new TextDecoder().decode(b)
+    const { records, mappingError } = extractFixedRecords(lines, [
+      { ...FIELD, sourceField: 'コード', targetItemKey: 'code', byteStart: 1, byteEnd: 5 },
+    ], decode)
+    expect(mappingError).toBeNull()
+    expect(records.map(r => r.values.code)).toEqual(['P-001', 'P-002'])
+  })
+  it('バイト範囲未設定はマッピングエラー', () => {
+    const { mappingError } = extractFixedRecords([], [{ ...FIELD, sourceField: 'a', targetItemKey: 'b' }], () => '')
+    expect(mappingError).toContain('バイト範囲')
+  })
+})
+
+describe('extractJsonRecords（JSON → レコード）', () => {
+  it('ルートパス配下の配列をレコード化し、jsonKey（ドットパス）で値を引く', () => {
+    const { records, mappingError } = extractJsonRecords(
+      JSON.stringify({ data: { items: [{ sku: { code: 'S-1' }, qty: 3 }, { sku: { code: 'S-2' }, qty: 5 }] } }),
+      [
+        { ...FIELD, sourceField: 'sku', targetItemKey: 'skuId', jsonKey: 'sku.code' },
+        { ...FIELD, sourceField: 'qty', targetItemKey: 'qty' },
+      ], 'data.items')
+    expect(mappingError).toBeNull()
+    expect(records.map(r => r.values)).toEqual([{ skuId: 'S-1', qty: '3' }, { skuId: 'S-2', qty: '5' }])
+  })
+  it('構文エラー・パス不在はマッピングエラー', () => {
+    expect(extractJsonRecords('{oops', [], undefined).mappingError).toContain('構文')
+    expect(extractJsonRecords('{"a":1}', [], 'b.c').mappingError).toContain('b.c')
+  })
+})
+
+describe('decodeImportBytes / splitLineBytes（復号・行分割）', () => {
+  it('utf8 復号と CRLF/LF 混在・空行スキップの行分割', () => {
+    const buf = Buffer.from('あいう\r\nかきく\n\nさしす', 'utf8')
+    const lines = splitLineBytes(buf)
+    expect(lines.map(b => decodeImportBytes(Buffer.from(b), 'utf8'))).toEqual(['あいう', 'かきく', 'さしす'])
+  })
+  it('sjis 復号（ICU の shift_jis デコーダ）', () => {
+    // 「テスト」の Shift_JIS バイト列
+    const sjis = Buffer.from([0x83, 0x65, 0x83, 0x58, 0x83, 0x67])
+    expect(decodeImportBytes(sjis, 'sjis')).toBe('テスト')
   })
 })
 

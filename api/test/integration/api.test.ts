@@ -949,6 +949,86 @@ describe('ワークフロー・稟議', () => {
     expect(await visibleTo(HR)).toBe(false)
   })
 
+  it('添付の実ファイル（監査指摘 2026-07-30 ②): 保存 → 一覧/DL・差分同期・下書きは本人と管理者のみ参照', async () => {
+    const b64 = (s: string): string => Buffer.from(s, 'utf8').toString('base64')
+    // 対応外形式・名前のみ添付との共存を検証しつつ下書き保存
+    const badExt = await api('PUT', '/v1/workflows/draft', {
+      as: MEMBER, body: {
+        category: 'purchase', title: '添付テスト', amount: 30000,
+        files: [{ filename: 'evil.exe', contentBase64: b64('x') }],
+      },
+    })
+    expect(badExt.status).toBe(400)
+    expect(badExt.json.error?.code).toBe('AKO-WFL-004')
+
+    const draft = await api('PUT', '/v1/workflows/draft', {
+      as: MEMBER, body: {
+        category: 'purchase', title: '添付テスト', amount: 30000,
+        attachments: ['名前のみ旧添付.pdf'],
+        files: [
+          { filename: '見積書.pdf', contentBase64: b64('%PDF-1.4 見積内容') },
+          { filename: '仕様.txt', contentBase64: b64('仕様メモ') },
+        ],
+        keepFileIds: [],
+      },
+    })
+    expect(draft.status).toBe(201)
+    const id = (draft.json.data as { id: string }).id
+
+    // ファイル一覧: 実体 2 件・attachments は名前のみ + 実ファイル名の合成
+    type FileRow = { id: string; filename: string; sizeBytes: number }
+    const files = (await api('GET', `/v1/workflows/${id}/files`, { as: MEMBER })).json.data as FileRow[]
+    expect(files.map(f => f.filename).sort()).toEqual(['仕様.txt', '見積書.pdf'])
+    const row = ((await api('GET', '/v1/workflows', { as: MEMBER })).json.data as { id: string; attachments: string[] }[])
+      .find(r => r.id === id)!
+    expect(row.attachments).toEqual(['名前のみ旧添付.pdf', '見積書.pdf', '仕様.txt'])
+
+    // 下書きの添付は他人（HR）から見えない（一覧の可視性と同一 = 404）
+    expect((await api('GET', `/v1/workflows/${id}/files`, { as: HR })).status).toBe(404)
+    // 管理者は参照できる
+    expect((await api('GET', `/v1/workflows/${id}/files`, { as: ADMIN })).status).toBe(200)
+
+    // 原本ダウンロード（base64 ラウンドトリップ）
+    const pdf = files.find(f => f.filename === '見積書.pdf')!
+    const dl = await api('GET', `/v1/workflows/${id}/files/${pdf.id}`, { as: MEMBER })
+    expect((dl.json.data as { contentBase64: string; mime: string }).mime).toBe('application/pdf')
+    expect(Buffer.from((dl.json.data as { contentBase64: string }).contentBase64, 'base64').toString('utf8'))
+      .toBe('%PDF-1.4 見積内容')
+
+    // 差分同期: 1 件だけ keep + 新規 1 件 → 落とした方は削除される
+    const keep = files.find(f => f.filename === '仕様.txt')!
+    await api('PUT', '/v1/workflows/draft', {
+      as: MEMBER, body: {
+        id, category: 'purchase', title: '添付テスト', amount: 30000,
+        attachments: ['名前のみ旧添付.pdf'],
+        files: [{ filename: '比較表.md', contentBase64: b64('# 比較') }],
+        keepFileIds: [keep.id],
+      },
+    })
+    const after = (await api('GET', `/v1/workflows/${id}/files`, { as: MEMBER })).json.data as FileRow[]
+    expect(after.map(f => f.filename).sort()).toEqual(['仕様.txt', '比較表.md'])
+    expect((await api('GET', `/v1/workflows/${id}/files/${pdf.id}`, { as: MEMBER })).status).toBe(404)
+
+    // 提出後は全員参照可（C2）+ 添付はそのまま
+    await api('POST', '/v1/workflows/submit', {
+      as: MEMBER, body: {
+        id, category: 'purchase', title: '添付テスト', amount: 30000,
+        attachments: ['名前のみ旧添付.pdf'], keepFileIds: after.map(f => f.id),
+      },
+    })
+    expect(((await api('GET', `/v1/workflows/${id}/files`, { as: HR })).json.data as FileRow[]).length).toBe(2)
+
+    // files / keepFileIds を送らない旧クライアントの保存は実体に触れない（下位互換 = 原則7）
+    const legacy = await api('PUT', '/v1/workflows/draft', {
+      as: HR, body: { category: 'expense', title: '旧クライアント', amount: 5000, attachments: ['領収書.pdf'] },
+    })
+    const legacyId = (legacy.json.data as { id: string }).id
+    const legacyRow = ((await api('GET', '/v1/workflows', { as: HR })).json.data as { id: string; attachments: string[] }[])
+      .find(r => r.id === legacyId)!
+    expect(legacyRow.attachments).toEqual(['領収書.pdf'])
+    expect(((await api('GET', `/v1/workflows/${legacyId}/files`, { as: HR })).json.data as FileRow[]).length).toBe(0)
+  })
+
   it('経路マスタ: 上限 <= 下限・順序重複はサーバー側でも拒否（AKO-GEN-001）', async () => {
     const bad = await api('POST', '/v1/masters/workflow-routes', {
       as: ADMIN,
@@ -1342,6 +1422,32 @@ describe('チャットボット応答', () => {
     // 他人のセッションへの ask・追記も拒否
     expect((await api('POST', '/v1/chatbot/ask', { as: MEMBER, body: { question: 'x', sessionId } })).status).toBe(404)
     expect((await api('POST', `/v1/chatbot/sessions/${sessionId}/messages`, { as: MEMBER, body: { content: 'x' } })).status).toBe(404)
+  })
+
+  it('回復経路（監査指摘 2026-07-30 ④）: /ask 不達時のセッション明示作成 + role=user の追記で初回送信が永続する', async () => {
+    // /ask が届かなかった新規会話をクライアントが回復する経路: POST /sessions → 質問（role=user）→ 応答を追記
+    expect((await api('POST', '/v1/chatbot/sessions', { as: MEMBER, body: { title: '' } })).status).toBe(400)
+    const created = await api('POST', '/v1/chatbot/sessions', { as: MEMBER, body: { title: '通信断からの回復テスト' } })
+    expect(created.status).toBe(201)
+    const sid = (created.json.data as { id: string }).id
+    expect((await api('POST', `/v1/chatbot/sessions/${sid}/messages`, {
+      as: MEMBER, body: { role: 'user', content: '通信断からの回復テスト' },
+    })).status).toBe(201)
+    expect((await api('POST', `/v1/chatbot/sessions/${sid}/messages`, {
+      as: MEMBER, body: { content: 'フォールバック応答', sources: [], suggestions: [] },
+    })).status).toBe(201)
+    const msgs = (await api('GET', `/v1/chatbot/sessions/${sid}/messages`, { as: MEMBER })).json.data as
+      { role: string; content: string }[]
+    expect(msgs.map(m => m.role)).toEqual(['user', 'assistant'])
+    expect(msgs[0]!.content).toBe('通信断からの回復テスト')
+    // 不正 role は assistant へ倒す（role 汚染を防ぐ）
+    await api('POST', `/v1/chatbot/sessions/${sid}/messages`, { as: MEMBER, body: { role: 'system', content: 'x' } })
+    const after = (await api('GET', `/v1/chatbot/sessions/${sid}/messages`, { as: MEMBER })).json.data as { role: string }[]
+    expect(after[2]!.role).toBe('assistant')
+    // 他人はセッションを作れても他人のセッションへは追記できない（既存ガードの適用確認）
+    expect((await api('POST', `/v1/chatbot/sessions/${sid}/messages`, {
+      as: HR, body: { role: 'user', content: 'x' },
+    })).status).toBe(404)
   })
 
   it('文脈収集は全ドメインを参照し、権限（F-16）に従う（バッチ5d: buildContext 直接検証）', async () => {
@@ -4936,7 +5042,7 @@ describe('Phase D: データ取込（F-32）・ダッシュボード保管（F-4
       expect((jsMap.json.data as { fields: { jsonKey: string | null }[] }).fields[0]!.jsonKey).toBe('code')
     })
 
-    it('取込実行: 有効マッピングなしは 409・実行は追記のみ（履歴が積み上がる）', async () => {
+    it('取込実行: 有効マッピングなしは 409・ファイル未添付は 400（実取込 = 監査指摘 2026-07-30 ①）', async () => {
       // マッピングの無い別の取込元では実行不可（AKO-IMP-002）
       const bare = await api('POST', '/v1/akebono/import-sources', {
         as: ADMIN, body: { name: 'マッピングなし', method: 'file_json', encoding: 'utf8', targetEntity: 'company' },
@@ -4944,13 +5050,159 @@ describe('Phase D: データ取込（F-32）・ダッシュボード保管（F-4
       const bareId = (bare.json.data as { id: string }).id
       expect((await api('POST', '/v1/akebono/import-runs', { as: ADMIN, body: { sourceId: bareId } })).json.error?.code)
         .toBe('AKO-IMP-002')
-      // マッピングありは実行できる（記録系 = 追記のみ・2 回で 2 件積み上がる）
-      const r1 = await api('POST', '/v1/akebono/import-runs', { as: ADMIN, body: { sourceId } })
+      // ファイル方式でファイル未添付は AKO-IMP-004（sourceId = 売上CSV には v2 マッピングあり）
+      expect((await api('POST', '/v1/akebono/import-runs', { as: ADMIN, body: { sourceId } })).json.error?.code)
+        .toBe('AKO-IMP-004')
+    })
+
+    it('実取込（商品 CSV）: 作成 + 再実行で upsert・不正行は隔離して残りを反映（原則4）', async () => {
+      const b64 = (s: string): string => Buffer.from(s, 'utf8').toString('base64')
+      const src = await api('POST', '/v1/akebono/import-sources', {
+        as: ADMIN, body: {
+          name: '商品CSV実取込', method: 'file_csv', encoding: 'utf8', targetEntity: 'product',
+          config: { hasHeader: true, delimiter: ',' },
+        },
+      })
+      const srcId = (src.json.data as { id: string }).id
+      await api('POST', '/v1/akebono/import-mappings', {
+        as: ADMIN, body: { sourceId: srcId, fields: [
+          { sourceField: 'code', targetItemKey: 'code', columnIndex: 0 },
+          { sourceField: 'name', targetItemKey: 'name', columnIndex: 1 },
+          { sourceField: 'segment', targetItemKey: 'segmentId', columnIndex: 2 },
+          { sourceField: 'price', targetItemKey: 'listPrice', transform: 'number', columnIndex: 3 },
+        ] },
+      })
+      // 3 行: 2 行は正常（セグメントは id / 名称のどちらでも解決）・1 行はセグメント未登録 = 隔離
+      const csv = 'code,name,segment,price\nIMP-P1,取込商品1,seg-01,"1,200"\nIMP-P2,取込商品2,陶磁器委託販売,800\nIMP-NG,不正行,存在しない業態,100\n'
+      const r1 = await api('POST', '/v1/akebono/import-runs', {
+        as: ADMIN, body: { sourceId: srcId, filename: 'products.csv', contentBase64: b64(csv) },
+      })
       expect(r1.status).toBe(201)
-      expect((r1.json.data as { status: string; mappingVersion: number })).toMatchObject({ status: 'applied', mappingVersion: 2 })
-      await api('POST', '/v1/akebono/import-runs', { as: ADMIN, body: { sourceId } })
-      const runs = (await api('GET', '/v1/akebono/import-runs', { as: MEMBER })).json.data as { sourceId: string }[]
-      expect(runs.filter(r => r.sourceId === sourceId)).toHaveLength(2)
+      const run1 = r1.json.data as { status: string; counts: Record<string, number>; errors: { message: string }[] }
+      expect(run1.status).toBe('applied')
+      expect(run1.counts).toMatchObject({ staged: 3, applied: 2, failed: 1 })
+      expect(run1.errors[0]!.message).toContain('存在しない業態')
+      // 実反映: 商品 + 既定 SKU が作られている
+      type ProductRow = { id: string; code: string; name: string; segmentId: string; listPrice: number }
+      const products = (await api('GET', '/v1/akebono/products', { as: ADMIN })).json.data as ProductRow[]
+      const p1 = products.find(p => p.code === 'IMP-P1')
+      expect(p1).toMatchObject({ name: '取込商品1', segmentId: 'seg-01', listPrice: 1200 })
+      expect(products.find(p => p.code === 'IMP-P2')).toMatchObject({ segmentId: 'seg-01' })
+      const skus = (await api('GET', '/v1/akebono/product-skus', { as: ADMIN })).json.data as { code: string; productId: string }[]
+      expect(skus.some(s => s.productId === p1!.id && s.code === 'IMP-P1')).toBe(true)
+      // 再実行 = upsert（新規は増えない・値の更新のみ）
+      const csv2 = 'code,name,segment,price\nIMP-P1,取込商品1改,seg-01,1500\n'
+      const r2 = await api('POST', '/v1/akebono/import-runs', {
+        as: ADMIN, body: { sourceId: srcId, contentBase64: b64(csv2) },
+      })
+      expect((r2.json.data as { counts: Record<string, number> }).counts).toMatchObject({ staged: 1, applied: 1, failed: 0 })
+      const after = (await api('GET', '/v1/akebono/products', { as: ADMIN })).json.data as ProductRow[]
+      expect(after.filter(p => p.code === 'IMP-P1')).toHaveLength(1)
+      expect(after.find(p => p.code === 'IMP-P1')).toMatchObject({ name: '取込商品1改', listPrice: 1500 })
+    })
+
+    it('実取込（売上 JSON）: SKU コード解決 + 同一内容の再実行はスキップ（フィンガープリント冪等 = 原則2）', async () => {
+      const b64 = (s: string): string => Buffer.from(s, 'utf8').toString('base64')
+      // 取込先の得意先（会社）を用意
+      const comp = await api('POST', '/v1/masters/companies', {
+        as: ADMIN, body: { kind: 'customer', name: '取込テスト商店', primaryIndustryId: '', industryIds: [] },
+      })
+      const companyId = (comp.json.data as { id: string }).id
+      const src = await api('POST', '/v1/akebono/import-sources', {
+        as: ADMIN, body: {
+          name: '売上JSON実取込', method: 'file_json', encoding: 'utf8', targetEntity: 'sales_record',
+          config: { jsonRootPath: 'rows' },
+        },
+      })
+      const srcId = (src.json.data as { id: string }).id
+      await api('POST', '/v1/akebono/import-mappings', {
+        as: ADMIN, body: { sourceId: srcId, fields: [
+          { sourceField: 'date', targetItemKey: 'salesDate', transform: 'date', jsonKey: 'date' },
+          { sourceField: 'customer', targetItemKey: 'companyId', jsonKey: 'customer' },
+          { sourceField: 'segment', targetItemKey: 'segmentId', jsonKey: 'segment' },
+          { sourceField: 'sku', targetItemKey: 'skuId', jsonKey: 'sku' },
+          { sourceField: 'qty', targetItemKey: 'qty', jsonKey: 'qty' },
+          { sourceField: 'price', targetItemKey: 'unitPrice', jsonKey: 'price' },
+        ] },
+      })
+      // SKU は商品 CSV 実取込で作られた既定 SKU（IMP-P1）をコードで解決する。
+      // 末尾 2 行は**正当な同一内容行**（同日・同 SKU・同数量・同単価）= 出現序数で区別され両方反映される
+      const payload = { rows: [
+        { date: '2026/07/01', customer: '取込テスト商店', segment: 'seg-01', sku: 'IMP-P1', qty: 2, price: 1500 },
+        { date: '2026-07-02', customer: companyId, segment: 'seg-01', sku: 'IMP-P1', qty: 1, price: 1500 },
+        { date: '2026-07-03', customer: '未登録商店', segment: 'seg-01', sku: 'IMP-P1', qty: 1, price: 100 },
+        { date: '2026-07-04', customer: companyId, segment: 'seg-01', sku: 'IMP-P1', qty: 3, price: 900 },
+        { date: '2026-07-04', customer: companyId, segment: 'seg-01', sku: 'IMP-P1', qty: 3, price: 900 },
+      ] }
+      const r1 = await api('POST', '/v1/akebono/import-runs', {
+        as: ADMIN, body: { sourceId: srcId, contentBase64: b64(JSON.stringify(payload)) },
+      })
+      expect((r1.json.data as { counts: Record<string, number> }).counts)
+        .toMatchObject({ staged: 5, applied: 4, skipped: 0, failed: 1 })
+      type SalesRow = { sourceKind: string; sourceRef: string | null; amount: number; companyId: string }
+      const sales = (await api('GET', '/v1/akebono/sales-records', { as: ADMIN })).json.data as SalesRow[]
+      const imported = sales.filter(s => s.sourceKind === 'import' && s.companyId === companyId)
+      expect(imported).toHaveLength(4)
+      expect(imported.every(s => (s.sourceRef ?? '').startsWith('import:'))).toBe(true)
+      // 同一ファイルの再実行 = 全行スキップ（売上の二重計上なし。同一内容行の序数も再現される = 冪等）
+      const r2 = await api('POST', '/v1/akebono/import-runs', {
+        as: ADMIN, body: { sourceId: srcId, contentBase64: b64(JSON.stringify(payload)) },
+      })
+      expect((r2.json.data as { counts: Record<string, number> }).counts)
+        .toMatchObject({ staged: 5, applied: 0, skipped: 4, failed: 1 })
+      const salesAfter = (await api('GET', '/v1/akebono/sales-records', { as: ADMIN })).json.data as SalesRow[]
+      expect(salesAfter.filter(s => s.sourceKind === 'import' && s.companyId === companyId)).toHaveLength(4)
+    })
+
+    it('API 接続（pull）: https 以外・内部アドレスは SSRF ガードで拒否（AKO-IMP-007）', async () => {
+      const mk = async (endpoint: string): Promise<string> => {
+        const s = await api('POST', '/v1/akebono/import-sources', {
+          as: ADMIN, body: {
+            name: `pull:${endpoint.slice(0, 24)}`, method: 'api_pull', encoding: 'utf8', targetEntity: 'company',
+            config: { endpoint, authType: 'none' },
+          },
+        })
+        const sid = (s.json.data as { id: string }).id
+        await api('POST', '/v1/akebono/import-mappings', {
+          as: ADMIN, body: { sourceId: sid, fields: [{ sourceField: 'name', targetItemKey: 'name', jsonKey: 'name' }] },
+        })
+        return sid
+      }
+      const plain = await api('POST', '/v1/akebono/import-runs', {
+        as: ADMIN, body: { sourceId: await mk('http://example.com/feed') },
+      })
+      expect(plain.json.error?.code).toBe('AKO-IMP-007')
+      expect(plain.json.error?.message).toContain('https')
+      const internal = await api('POST', '/v1/akebono/import-runs', {
+        as: ADMIN, body: { sourceId: await mk('https://127.0.0.1/feed') },
+      })
+      expect(internal.json.error?.code).toBe('AKO-IMP-007')
+      expect(internal.json.error?.message).toContain('内部ネットワーク')
+      const meta = await api('POST', '/v1/akebono/import-runs', {
+        as: ADMIN, body: { sourceId: await mk('https://169.254.169.254/computeMetadata/v1/') },
+      })
+      expect(meta.json.error?.code).toBe('AKO-IMP-007')
+      // IPv6 リテラル（角括弧付き）も接続前に遮断（レビュー M-1 回帰）
+      const v6 = await api('POST', '/v1/akebono/import-runs', {
+        as: ADMIN, body: { sourceId: await mk('https://[::1]/feed') },
+      })
+      expect(v6.json.error?.code).toBe('AKO-IMP-007')
+      expect(v6.json.error?.message).toContain('内部ネットワーク')
+    })
+
+    it('無効化した取込元では実行できない（AKO-IMP-005）', async () => {
+      const src = await api('POST', '/v1/akebono/import-sources', {
+        as: ADMIN, body: { name: '無効化テスト', method: 'file_csv', encoding: 'utf8', targetEntity: 'product' },
+      })
+      const srcId = (src.json.data as { id: string }).id
+      await api('POST', '/v1/akebono/import-mappings', {
+        as: ADMIN, body: { sourceId: srcId, fields: [{ sourceField: 'code', targetItemKey: 'code', columnIndex: 0 }] },
+      })
+      await api('POST', `/v1/akebono/import-sources/${srcId}/archive`, { as: ADMIN })
+      const res = await api('POST', '/v1/akebono/import-runs', {
+        as: ADMIN, body: { sourceId: srcId, contentBase64: Buffer.from('code\nX-1\n').toString('base64') },
+      })
+      expect(res.json.error?.code).toBe('AKO-IMP-005')
     })
   })
 
