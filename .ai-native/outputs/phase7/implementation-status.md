@@ -935,3 +935,39 @@
 
 ### 42-7 残課題
 - [ ] **打刻修正申請（AttendanceFixRequest）の取下げ**: 直行/直帰には取下げを実装したが、打刻修正には `withdrawn` 状態が無い（本改修以前からの仕様）。原則9.5 の観点で後続改修時に追加を検討（記録として明示）。
+
+## 43. 承認経路の承認者指定を「役職／ロール／個人」へ統一（稟議・勤怠 共通。オペレーター指示 2026-07-30）
+
+> オペレーター指示:「稟議・勤怠管理のワークフローで、承認経路の設定に『役職』『ロール』『個人』のいずれかから
+> 選択して設定できるようにする」。承認ステップの承認者指定を PermissionRule.subjectKind（role|title|member）と
+> 同じ 3 種モデルへ統一した。migration **0041**。
+
+### 43-1 設計方針
+- 旧 `approverRole` 単一プリセット（manager/director/president〔勤怠は+hr〕）を廃し、**`approverType`（title=役職/role=ロール/
+  member=個人）+ approverTitle/approverRole(MemberRole)/approverMemberId** の判別式へ。`WorkflowRouteStep` と
+  `AttendanceRouteStep` を共通 **`ApprovalRouteStep`** に統合。
+- 承認者解決を共有純関数 **`pickApprover`（shared/domain/approver.ts）** に一元化 → 稟議・勤怠・API・モックで同一ロジック
+  （役職一致/ロール一致/個人指定 → id 昇順先頭・不在は管理者フォールバック）。既存の重複解決（workflows.ts の
+  approverFor/stepApprover・attendance.ts の pickApprover・useWorkflow/useAttendance）を撤去して集約（原則3）。
+- **下位互換（原則7・データ更新パッチ）**: `normalizeApproverStep` が旧形式（approverType 無し）を吸収し、
+  migration 0041 が既存 steps jsonb を行動保存的に変換（president→役職代表取締役 / director→役職取締役 /
+  manager→役職マネージャー / hr→ロール人事 / 個人指定→個人）。**冪等**（approverType を持つ行は非変換）。
+  進行中申請の凍結スナップショットは非変換だが `pickApprover` が旧形式も解決するため影響なし。
+
+### 43-2 実装
+- [x] shared: `ApproverType` + `ApprovalRouteStep` 統合 + `approver.ts`（pickApprover/normalizeApproverStep）+ 単体テスト 8 本。
+- [x] registry: 共通 `approverStepSchema`（type ごとの必須を superRefine）を workflow-routes / attendance-routes に適用。
+- [x] migration 0041: 両テーブルの steps を新形式へ変換（一時関数 + 冪等ガード）。
+- [x] API: workflows.ts / attendance.ts の承認者解決を共有 `pickApprover` へ集約。
+- [x] フロント: 共有コンポーネント **`WidgetsApproverSteps`**（役職/ロール/個人セレクタ + 解決名プレビュー・
+  useCodeMaster('title')/MemberRole/メンバーから選択）を 稟議・勤怠 の経路設定で使用。seed を新形式へ（SEED_VERSION 14）。
+  labels に `APPROVER_TYPE_LABELS` / `approverTargetLabel`（表示共通化）。
+
+### 43-3 検証
+- [x] api 単体 **195**（approver 8 本）/ api 統合 **202**（migration 0041 適用・稟議/勤怠の承認者解決を維持）/
+  mockup 単体 155 / typecheck（api・mockup）・build 全 green。
+- [x] 下位互換確認: 稟議の既存経路 seed（wr-01..10）は役職ラベルへ移行しても解決メンバーが不変
+  （マネージャー=葛西 / 取締役=佐伯 / 代表取締役=山下）。テスト DB（役職未設定）でも管理者フォールバックで従来同値。
+
+### 43-4 反復レビュー（原則9）
+- [ ] 独立コードレビュアー + システム監査官のレビューを指摘ゼロまで反復（本節に結果を追記）。
