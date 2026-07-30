@@ -124,6 +124,24 @@ flowchart LR
    curl -H "Authorization: Bearer <FirebaseのIDトークン>" https://<cloud-run-url>/v1/me
    ```
 
+### 1-4b. 応答性能（コールドスタート対策）
+
+Cloud Run は既定で **`--min-instances 1`**（常時 1 台を暖機）でデプロイする。アイドル後の初回リクエストで
+コンテナ起動 + DB プール確立に数秒〜十数秒かかる**コールドスタート遅延**を解消するため（オペレーター報告
+2026-07-30「取込元の登録が異常に遅い / 無効化がタイムアウトで失敗」への対処）。あわせて `--cpu-boost`
+（スパイク時の 2〜3 台目の起動を高速化。CLI フラグは `--cpu-boost`）と DB プールの `keepAlive`／idle 延長（暖機インスタンス上の接続再確立を抑制）を適用する。
+
+- **コスト最優先でゼロスケールへ戻す:** repository **variable**（secret ではない）`CLOUD_RUN_MIN_INSTANCES` を `0` に設定して再デプロイ
+  （GitHub → Settings → Secrets and variables → Actions → Variables）。未設定時の既定は `1`。
+- **コスト注記:** 既存の `--no-cpu-throttling` と併用のため、暖機インスタンスは**アイドル時も CPU 常時割当**となり、
+  素の暖機インスタンスより月額の下限が高い。応答性能とコストのトレードオフで、コスト最優先なら上記 `0` を選ぶ。
+- 冪等な取込操作（無効化・復元・方式別設定更新）は、残るコールドスタートのタイムアウトに対しフロント側で 1 回だけ自動再試行する
+  （非冪等な新規登録は二重作成防止のため再試行しない）。
+
+| Repository variable | 用途 | 既定 |
+|---|---|---|
+| `CLOUD_RUN_MIN_INSTANCES` | Cloud Run 常時稼働インスタンス数（`0` = ゼロスケール＝コールドスタート復活／`1` = 暖機） | `1` |
+
 ### 1-5. TLS の強化（推奨・任意）
 
 `DB_SSL=require` は暗号化のみで CA 検証を行わない。RDS の CA バンドルを配布して `verify` へ引き上げる:
