@@ -153,9 +153,9 @@ export function useAttendance() {
     return resolveAttendanceRoute(attendanceRoutes.value as AttendanceRoute[], category) ?? []
   }
 
-  /** 承認ステップ → 承認者メンバー（API routes/attendance.ts の pickApprover と同型 + hr） */
+  /** 承認ステップ → 承認者メンバー（API routes/attendance.ts の pickApprover と同型 + hr。id 順で first-match を一致させる） */
   function pickApprover(step: AttendanceRouteStep): Member | undefined {
-    const ms = (tbl('members').value as Member[]).filter(m => m.active)
+    const ms = (tbl('members').value as Member[]).filter(m => m.active).sort((a, b) => a.id.localeCompare(b.id))
     if (step.approverMemberId) {
       const fixed = ms.find(m => m.id === step.approverMemberId)
       if (fixed) return fixed

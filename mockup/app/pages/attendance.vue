@@ -240,6 +240,9 @@ const directOpen = ref(false)
 const directForm = ref({ type: 'chokkou', reason: '' })
 const directError = ref('')
 const directTypeOptions = Object.entries(DIRECT_TYPE_LABELS).map(([value, label]) => ({ value, label }))
+/** 選択中の種別で解禁される打刻（直行=出勤 / 直帰=退勤 / 直行直帰=出勤・退勤） */
+const directUnlockLabel = computed(() =>
+  directKindsOf(directForm.value.type as DirectType).map(k => PUNCH_KIND_LABELS[k]).join('・'))
 
 function openDirectModal(): void {
   directForm.value = { type: 'chokkou', reason: '' }
@@ -482,7 +485,16 @@ const myRequestColumns: TableColumn[] = [
   { key: 'reason', label: '理由' },
   { key: 'status', label: '状態', width: '90px', primary: true },
   { key: 'decidedBy', label: '承認者', width: '100px' },
+  { key: 'actions', label: '操作', width: '110px', align: 'right', primary: true },
 ]
+
+/** 自分の申請の取下げ（直行/直帰の承認前のみ。原則9.5 の取消フロー） */
+async function onWithdraw(row: Record<string, unknown>): Promise<void> {
+  const ok = await ask('申請の取下げ', `${String(row.type)}申請（${String(row.date)}）を取り下げますか？`, { confirmLabel: '取下げる' })
+  if (!ok) return
+  const r = await decideDirect(String(row.id), 'withdrawn')
+  show(r.ok ? '申請を取り下げました' : r.error.message, r.ok ? 'ok' : 'warn')
+}
 
 const myRequestRows = computed(() => {
   const me = currentUser.value.id
@@ -1506,7 +1518,7 @@ async function submitRule(): Promise<void> {
         </UiDataTable>
       </UiSectionCard>
 
-      <UiSectionCard title="自分の申請" description="打刻修正と休暇の申請状況" flush>
+      <UiSectionCard title="自分の申請" description="打刻修正・直行/直帰・休暇の申請状況（承認前の直行/直帰は取下げできます）" flush>
         <UiDataTable
           :columns="myRequestColumns"
           :rows="myRequestRows"
@@ -1515,6 +1527,17 @@ async function submitRule(): Promise<void> {
         >
           <template #cell-status="{ value }">
             <UiStatusBadge :tone="reqStatusTone(value)" :label="reqStatusLabel(value)" />
+          </template>
+          <template #cell-actions="{ row }">
+            <button
+              v-if="row.reqKind === 'direct' && (row.status === 'pending' || row.status === 'in_review')"
+              type="button"
+              class="btn btn-sm btn-ghost"
+              @click.stop="onWithdraw(row)"
+            >
+              <X class="h-3.5 w-3.5" /> 取下げ
+            </button>
+            <span v-else class="text-muted">—</span>
           </template>
         </UiDataTable>
       </UiSectionCard>
@@ -1781,7 +1804,7 @@ async function submitRule(): Promise<void> {
       <div class="grid gap-3">
         <p class="text-[12px] text-sub">
           対象日: <b class="num">{{ fmtDateLong(selDate) }}</b>。
-          承認されると、この日の{{ '出勤/退勤' }}打刻を「打刻修正」から登録できるようになります。
+          承認されると、この日の{{ directUnlockLabel }}打刻を「打刻修正」から登録できるようになります。
         </p>
         <UiFormField label="種別" required>
           <UiSelect v-model="directForm.type" :options="directTypeOptions" aria-label="直行/直帰の種別" />

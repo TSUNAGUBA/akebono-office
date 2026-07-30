@@ -1,7 +1,8 @@
 /**
  * 勤怠 API（打刻・日次/月次集計・タイムカード・36 協定・修正申請）。
  * 集計はすべてサーバーサイドで実行する（Phase 7 方針: 重い処理はサーバーサイド）。
- * エラーコード: AKO-ATT-001（状態機械違反）/ 002（理由未入力）/ 003（処理済み申請）/ 004（権限）
+ * エラーコード: AKO-ATT-001（状態機械違反）/ 002（理由未入力）/ 003（処理済み申請）/ 004（承認/取下げ権限）
+ *              / 005（直行/直帰が未承認で打刻修正できない）
  */
 import { Hono } from 'hono'
 import type pg from 'pg'
@@ -86,10 +87,10 @@ interface ApproverCandidate {
   id: string; name: string; role: string; title: string; employmentType: string
 }
 
-/** 承認者解決の候補（在籍者のみ）。ロール→人の解決で共通利用 */
+/** 承認者解決の候補（在籍者のみ）。ロール→人の解決で共通利用。id 順で first-match を決定的にする（モックと一致） */
 async function approverCandidates(pool: pg.Pool): Promise<ApproverCandidate[]> {
   const { rows } = await pool.query<ApproverCandidate>(
-    `SELECT id, name, role, title, employment_type AS "employmentType" FROM members WHERE active = true`)
+    `SELECT id, name, role, title, employment_type AS "employmentType" FROM members WHERE active = true ORDER BY id`)
   return rows
 }
 
@@ -112,11 +113,14 @@ function pickApprover(cands: ApproverCandidate[], step: AttendanceRouteStep): Ap
   }
 }
 
-/** 区分の有効な経路ステップを凍結用に解決する（該当なし = [] = 管理者単段フォールバック） */
+/**
+ * 区分の有効な経路ステップを凍結用に解決する（該当なし = [] = 管理者単段フォールバック）。
+ * ORDER BY id + 実 id を保持して resolveAttendanceRoute のタイブレーク（id.localeCompare）をモックと一致させる。
+ */
 async function freezeRouteSteps(pool: pg.Pool, category: 'direct' | 'fix'): Promise<AttendanceRouteStep[]> {
-  const { rows } = await pool.query<{ steps: AttendanceRouteStep[] }>(
-    `SELECT id, category, steps, active FROM attendance_routes WHERE active = true AND category = $1`, [category])
-  const routes = rows.map((r, i) => ({ id: `r${i}`, category, steps: r.steps, active: true })) as AttendanceRoute[]
+  const { rows } = await pool.query<{ id: string; steps: AttendanceRouteStep[] }>(
+    `SELECT id, steps FROM attendance_routes WHERE active = true AND category = $1 ORDER BY id`, [category])
+  const routes = rows.map(r => ({ id: r.id, category, steps: r.steps, active: true })) as AttendanceRoute[]
   return resolveAttendanceRoute(routes, category) ?? []
 }
 
@@ -364,7 +368,7 @@ export function attendanceRoutes(pool: pg.Pool): Hono {
     return c.json({ data: { id } }, 201)
   })
 
-  // 修正申請一覧（本人 = 自分の申請 / 管理者・人事 = 全件（status 指定可）。承認は管理者のみ）
+  // 修正申請一覧（本人 = 自分の申請 / 管理者・人事 = 全件（status 指定可）。承認は経路の現ステップ承認者 or 管理者）
   app.get('/fix-requests', async (c) => {
     const user = c.get('user')
     const status = c.req.query('status') ?? ''
