@@ -981,3 +981,4 @@
 - [x] **straggler 是正**: `mockup/tests/approval-route.test.ts` の旧形状ステップを新形状（役職指定）へ更新。
 - [x] 是正不要（設計判断として記録）: 役職/個人指定で自己が承認者になり得る点は稟議の運用上許容（承認者名をプレビュー表示）。approverMemberId/approverTitle の実在チェックは既存 approverMemberId と同様に非強制（不在は管理者フォールバック）。migration のステップ単位ガードは all-or-nothing 変換のため到達不能。
 - [x] 再検証（是正後）: api 単体 195 / 統合 202 / mockup 単体 155 / typecheck（api・mockup）・build 全 green。
+- [x] **2 巡目（是正の再確認・独立エージェント）: 指摘ゼロ**。5 修正すべて正しく原指摘を解消し、新規欠陥なし・回帰スイープ clean を確認（ロール制限は UI+Zod 双方・migration 本体は無変更で冪等維持・旧形式の凍結スナップショット解決は不変）。
