@@ -9,6 +9,7 @@
 import { Hono } from 'hono'
 import type pg from 'pg'
 import { resolveRoute } from '../../../shared/domain/approval-route'
+import { pickApprover, type ApproverStepLike } from '../../../shared/domain/approver'
 import { nowJstIso, todayJst } from '../../../shared/domain/jst'
 import type {
   ApprovalAction, Member, WorkflowCategory, WorkflowRoute, WorkflowRouteStep,
@@ -70,32 +71,17 @@ function parseInput(raw: Record<string, unknown>): WorkflowInput {
 
 type ApproverMember = Pick<Member, 'id' | 'name'>
 
-/** 承認ロール → 実メンバー解決（mockup approverFor と同一。見つからなければ president へフォールバック） */
-async function approverFor(
-  pool: pg.Pool | pg.PoolClient,
-  role: WorkflowRouteStep['approverRole'],
-): Promise<ApproverMember | undefined> {
-  const { rows } = await pool.query<Pick<Member, 'id' | 'name' | 'title' | 'employmentType' | 'role'>>(
-    `SELECT id, name, title, employment_type AS "employmentType", role FROM members WHERE active = true ORDER BY id`)
-  const president = rows.find(m => m.title === '代表取締役')
-  if (role === 'president') return president
-  if (role === 'director') {
-    return rows.find(m => m.employmentType === 'director' && m.id !== president?.id) ?? president
-  }
-  return rows.find(m => m.role === 'admin' && m.employmentType === 'employee') ?? president
-}
-
-/** ステップの承認者（個人指定があれば優先。無効ならロール解決へ） */
+/**
+ * ステップの承認者を実メンバーへ解決（役職/ロール/個人）。解決は共有 pickApprover に委譲し、
+ * 勤怠側・モック側と同一ロジックにする。旧形式（approverRole=manager/... の凍結スナップショット）も吸収。
+ */
 async function stepApprover(
   pool: pg.Pool | pg.PoolClient,
-  step: WorkflowRouteStep,
+  step: ApproverStepLike,
 ): Promise<ApproverMember | undefined> {
-  if (step.approverMemberId) {
-    const { rows } = await pool.query<ApproverMember>(
-      'SELECT id, name FROM members WHERE id = $1 AND active = true', [step.approverMemberId])
-    if (rows[0]) return rows[0]
-  }
-  return approverFor(pool, step.approverRole)
+  const { rows } = await pool.query<{ id: string; name: string; role: string; title: string }>(
+    `SELECT id, name, role, title FROM members WHERE active = true ORDER BY id`)
+  return pickApprover(rows, step)
 }
 
 /** approverId の有効な代理人として memberId が動けるか（期間は今日を含む） */

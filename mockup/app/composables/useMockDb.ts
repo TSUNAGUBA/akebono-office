@@ -9,7 +9,7 @@ import { buildSeed, type MockDbShape } from '~/data/seed'
 
 const STORAGE_KEY = 'ako.mockdb.v1'
 /** シード世代。シード構造を変えたらインクリメントすると保存済みデータを破棄して再生成する */
-const SEED_VERSION = 13 // v13: 勤怠承認ワークフロー（直行/直帰 = directRequests・勤怠承認経路 = attendanceRoutes）を追加。2026-07-30
+const SEED_VERSION = 14 // v14: 承認経路の承認者指定を役職/ロール/個人へ統一（稟議・勤怠の approverType）。2026-07-30
 
 interface PersistedDb {
   version: number

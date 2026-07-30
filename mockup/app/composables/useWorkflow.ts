@@ -17,15 +17,9 @@ import type {
   WorkflowRequest, WorkflowRouteStep,
 } from '~/types/domain'
 import { resolveRoute } from '~/utils/approval-route'
+import { pickApprover } from '~/utils/approver'
 import { fmtYen } from '~/utils/format'
-import { APPROVAL_ACTION_LABELS, WORKFLOW_CATEGORY_LABELS } from '~/utils/labels'
-
-/** 承認ロール → 日本語ラベル（本領域固有の区分値。共有 labels.ts は編集不可のためここが SoT） */
-export const APPROVER_ROLE_LABELS: Record<WorkflowRouteStep['approverRole'], string> = {
-  manager: 'マネージャー',
-  director: '取締役',
-  president: '代表取締役',
-}
+import { approverTargetLabel, APPROVAL_ACTION_LABELS, WORKFLOW_CATEGORY_LABELS } from '~/utils/labels'
 
 export interface WorkflowInput {
   category: WorkflowCategory
@@ -106,31 +100,11 @@ export function useWorkflow() {
     return { ok: false, error: { code, message } }
   }
 
-  // ---------- 承認者解決 ----------
+  // ---------- 承認者解決（共有 pickApprover。役職/ロール/個人 + 旧形式フォールバック） ----------
 
-  function presidentMember(): Member | undefined {
-    return members.value.find(m => m.active && m.title === '代表取締役')
-  }
-
-  /** 承認ロール → 実メンバー解決（見つからなければ president へフォールバック） */
-  function approverFor(role: WorkflowRouteStep['approverRole']): Member | undefined {
-    const president = presidentMember()
-    if (role === 'president') return president
-    if (role === 'director') {
-      return members.value.find(m =>
-        m.active && m.employmentType === 'director' && m.id !== president?.id) ?? president
-    }
-    return members.value.find(m =>
-      m.active && m.role === 'admin' && m.employmentType === 'employee') ?? president
-  }
-
-  /** ステップの承認者（個人指定があれば優先。無効なら ロール解決へ） */
+  /** ステップの承認者を実メンバーへ解決（API workflows.ts / 勤怠と同一ロジック） */
   function stepApprover(step: WorkflowRouteStep): Member | undefined {
-    if (step.approverMemberId) {
-      const fixed = members.value.find(m => m.id === step.approverMemberId && m.active)
-      if (fixed) return fixed
-    }
-    return approverFor(step.approverRole)
+    return pickApprover(members.value as Member[], step)
   }
 
   /** 区分×金額に合致する経路（null = 該当なし = AKO-WFL-003） */
@@ -238,7 +212,7 @@ export function useWorkflow() {
           else if (req.status === 'in_review' || req.status === 'submitted') state = 'current'
         }
         return {
-          label: APPROVER_ROLE_LABELS[s.approverRole],
+          label: approverTargetLabel(s),
           name: stepApprover(s)?.name ?? '未設定',
           state,
         }
@@ -250,7 +224,7 @@ export function useWorkflow() {
     const route = resolveRouteFor(category, amount)
     if (!route) return null
     return route.map(s => ({
-      label: APPROVER_ROLE_LABELS[s.approverRole],
+      label: approverTargetLabel(s),
       name: stepApprover(s)?.name ?? '未設定',
       state: 'future' as const,
     }))
@@ -469,7 +443,6 @@ export function useWorkflow() {
     requests,
     byId,
     logsOf,
-    approverFor,
     stepApprover,
     currentApproverOf,
     resolveRouteFor,

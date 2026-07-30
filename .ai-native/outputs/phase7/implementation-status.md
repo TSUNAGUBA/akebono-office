@@ -893,6 +893,7 @@
 - 稟議（F-07）の経路（workflow_routes）は **区分×金額帯** が選択キー。勤怠は金額でないため、**金額帯を持たない勤怠専用の
   経路マスタ `attendance_routes`（区分 = direct/fix）を新設**（Path B）。ステップ/承認エンジン（順序・ロール解決・直列前進・
   凍結）は稟議と同型で踏襲。承認者ロールは稟議の manager/director/president に **hr（人事）** を追加。
+  > **注（2026-07-30・§43 で刷新）:** 本節の manager/director/president/hr プリセットは §43 で「役職／ロール／個人」モデルへ統一済み。以降の SoT は §43。
 - **下位互換（原則7）**: 区分に有効経路が無ければ従来どおり**管理者 1 名の単段承認へフォールバック**。既存の打刻修正の挙動は
   経路未設定なら不変（既存統合テストがそのまま green）。新規テーブル + 列追加のみ。
 - **記録系保護（原則2）**: 打刻修正の最終承認で `source='fix'` 打刻を追記（元打刻は削除しない = 既存フロー踏襲）。
@@ -929,9 +930,55 @@
 - [x] **m（表示）: 直行/直帰モーダルのハードコード「出勤/退勤」** → 選択種別に応じた `directUnlockLabel`（directKindsOf → ラベル）へ。
 - [x] 是正不要（設計判断として記録）:
   - **管理者・承認者の自己承認を許容**: 経路未設定のフォールバック（管理者単段）で自己申請を承認できないと単独管理者環境でデッドロックする。従来の打刻修正も管理者は自己承認可だったため既存踏襲。一般社員は承認者ロールに解決されないため自己承認は構造的に不可（影響小）。
+    > **注（2026-07-30・§43 で失効）:** §43 でロール選択肢を **管理者/人事のみ** に制限したため「一般社員は承認者に解決されない」は設計上も担保（role=一般 は選べない）。役職/個人指定で自己が承認者になり得る点は §43 の設計判断を参照。
   - **PATCH の order 重複チェック省略**: 稟議 workflow-routes と同一挙動（UI は常に order=i+1 を送出＝到達不能）。
 - [x] 再検証（是正後）: api 単体 187 / 統合 202 / mockup 単体 155 / typecheck（api・mockup）・build 全 green。
 - [x] **2 巡目（是正の再確認・独立エージェント）: 指摘ゼロ**。4 修正すべて正しく、原指摘を解消し、新規欠陥なしを確認（決定性・取下げ UI の表示条件と本人ガード・ドキュメント整合・種別連動ラベル）。情報メモ 1 件（member id が将来 collation 依存文字を採ると `ORDER BY id` と JS `localeCompare` が理論上乖離し得る = 現行 `m-*` 形式では非顕在）。
 
 ### 42-7 残課題
 - [ ] **打刻修正申請（AttendanceFixRequest）の取下げ**: 直行/直帰には取下げを実装したが、打刻修正には `withdrawn` 状態が無い（本改修以前からの仕様）。原則9.5 の観点で後続改修時に追加を検討（記録として明示）。
+
+## 43. 承認経路の承認者指定を「役職／ロール／個人」へ統一（稟議・勤怠 共通。オペレーター指示 2026-07-30）
+
+> オペレーター指示:「稟議・勤怠管理のワークフローで、承認経路の設定に『役職』『ロール』『個人』のいずれかから
+> 選択して設定できるようにする」。承認ステップの承認者指定を PermissionRule.subjectKind（role|title|member）と
+> 同じ 3 種モデルへ統一した。migration **0041**。
+
+### 43-1 設計方針
+- 旧 `approverRole` 単一プリセット（manager/director/president〔勤怠は+hr〕）を廃し、**`approverType`（title=役職/role=ロール/
+  member=個人）+ approverTitle/approverRole(MemberRole)/approverMemberId** の判別式へ。`WorkflowRouteStep` と
+  `AttendanceRouteStep` を共通 **`ApprovalRouteStep`** に統合。
+- 承認者解決を共有純関数 **`pickApprover`（shared/domain/approver.ts）** に一元化 → 稟議・勤怠・API・モックで同一ロジック
+  （役職一致/ロール一致/個人指定 → id 昇順先頭・不在は管理者フォールバック）。既存の重複解決（workflows.ts の
+  approverFor/stepApprover・attendance.ts の pickApprover・useWorkflow/useAttendance）を撤去して集約（原則3）。
+- **下位互換（原則7・データ更新パッチ）**: `normalizeApproverStep` が旧形式（approverType 無し）を吸収し、
+  migration 0041 が既存 steps jsonb を行動保存的に変換（president→役職代表取締役 / director→役職取締役 /
+  manager→役職マネージャー / hr→ロール人事 / 個人指定→個人）。**冪等**（approverType を持つ行は非変換）。
+  進行中申請の凍結スナップショットは非変換だが `pickApprover` が旧形式も解決するため影響なし。
+
+### 43-2 実装
+- [x] shared: `ApproverType` + `ApprovalRouteStep` 統合 + `approver.ts`（pickApprover/normalizeApproverStep）+ 単体テスト 8 本。
+- [x] registry: 共通 `approverStepSchema`（type ごとの必須を superRefine）を workflow-routes / attendance-routes に適用。
+- [x] migration 0041: 両テーブルの steps を新形式へ変換（一時関数 + 冪等ガード）。
+- [x] API: workflows.ts / attendance.ts の承認者解決を共有 `pickApprover` へ集約。
+- [x] フロント: 共有コンポーネント **`WidgetsApproverSteps`**（役職/ロール/個人セレクタ + 解決名プレビュー・
+  useCodeMaster('title')/MemberRole/メンバーから選択）を 稟議・勤怠 の経路設定で使用。seed を新形式へ（SEED_VERSION 14）。
+  labels に `APPROVER_TYPE_LABELS` / `approverTargetLabel`（表示共通化）。
+
+### 43-3 検証
+- [x] api 単体 **195**（approver 8 本）/ api 統合 **202**（migration 0041 適用・稟議/勤怠の承認者解決を維持）/
+  mockup 単体 155 / typecheck（api・mockup）・build 全 green。
+- [x] 下位互換確認: 稟議の既存経路 seed（wr-01..10）は役職ラベルへ移行しても解決メンバーが不変
+  （マネージャー=葛西 / 取締役=佐伯 / 代表取締役=山下 / 人事=村瀬）。
+  ただし旧 manager/director は「role+employmentType」解決だったのに対し新モデルは「役職(title)一致」解決のため、
+  **標準の役職名を用いる環境でのみ解決結果が一致**する（非標準運用は移行後に経路確認が必要 = 0041 ヘッダ + オペレーター確認事項）。
+
+### 43-4 反復レビュー（原則9・1 巡目 = 独立コードレビュアー + システム監査官）
+> blocker ゼロ。両者が「移行の行動保存の主張が過大」を検出（監査は INFO・コードレビューは major）+ 監査が「ロール=一般の footgun」を検出。是正:
+- [x] **ロール選択肢を 管理者/人事 のみに制限**（一般=任意の一般社員へ解決＝承認者として無意味・自己承認の温床）。UI（ApproverSteps.vue）+ Zod（approverStepSchema の approverRole を `['admin','hr']`）の双方で担保。
+- [x] **移行の「行動保存」表現を是正**: 旧 role+employmentType 解決 → 新 役職一致 解決の差異と、非標準役職名環境での確認事項を 0041 ヘッダ・§43-1/§43-3 に明記（原則7 のオペレーター説明）。
+- [x] **原則5 全件チェック**: §42 の旧承認者モデル記述（manager/director/president+hr）と「一般社員は承認者に解決されない」不変条件へ §43 への失効注記を追加。
+- [x] **straggler 是正**: `mockup/tests/approval-route.test.ts` の旧形状ステップを新形状（役職指定）へ更新。
+- [x] 是正不要（設計判断として記録）: 役職/個人指定で自己が承認者になり得る点は稟議の運用上許容（承認者名をプレビュー表示）。approverMemberId/approverTitle の実在チェックは既存 approverMemberId と同様に非強制（不在は管理者フォールバック）。migration のステップ単位ガードは all-or-nothing 変換のため到達不能。
+- [x] 再検証（是正後）: api 単体 195 / 統合 202 / mockup 単体 155 / typecheck（api・mockup）・build 全 green。
+- [x] **2 巡目（是正の再確認・独立エージェント）: 指摘ゼロ**。5 修正すべて正しく原指摘を解消し、新規欠陥なし・回帰スイープ clean を確認（ロール制限は UI+Zod 双方・migration 本体は無変更で冪等維持・旧形式の凍結スナップショット解決は不変）。

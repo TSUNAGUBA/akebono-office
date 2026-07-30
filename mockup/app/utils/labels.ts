@@ -4,8 +4,9 @@ import type {
   EmploymentType, EscalationReason, EscalationResolutionType, IncidentImpact,
   IncidentStatus, KnowledgeDomain, MemberRole, NotificationKind, ProjectStatus, ProjectType,
   PunchKind, ShiftPeriodStatus, ShiftWishKind, WorkflowCategory, WorkflowStatus,
-  AttendanceRouteStep, AttendanceRequestCategory, DirectType,
+  ApproverType, AttendanceRequestCategory, DirectType,
 } from '~/types/domain'
+import { normalizeApproverStep, type ApproverStepLike } from '~/utils/approver'
 import type { Tone } from '~/types/ui'
 
 export const EMPLOYMENT_TYPE_LABELS: Record<EmploymentType, string> = {
@@ -51,12 +52,22 @@ export const ATTENDANCE_ROUTE_CATEGORY_LABELS: Record<AttendanceRequestCategory,
   fix: '打刻修正申請',
 }
 
-/** 勤怠承認ステップの承認者ロールラベル（稟議 + 人事） */
-export const ATTENDANCE_APPROVER_ROLE_LABELS: Record<AttendanceRouteStep['approverRole'], string> = {
-  manager: '管理者（マネージャー）',
-  hr: '人事',
-  director: '取締役',
-  president: '代表取締役',
+/** 承認者の指定方法ラベル（役職/ロール/個人。稟議・勤怠 共通の経路設定） */
+export const APPROVER_TYPE_LABELS: Record<ApproverType, string> = {
+  title: '役職',
+  role: 'ロール',
+  member: '個人',
+}
+
+/**
+ * 承認ステップの対象（承認者指定）を短いラベルで表す。稟議・勤怠 の経路一覧/承認フロー表示で共通利用。
+ * title=役職ラベル / role=ロール名（MEMBER_ROLE_LABELS）/ member=「個人指定」。旧形式も normalize が吸収。
+ */
+export function approverTargetLabel(step: ApproverStepLike): string {
+  const spec = normalizeApproverStep(step)
+  if (spec.type === 'title') return spec.title ?? '役職'
+  if (spec.type === 'role') return spec.role ? MEMBER_ROLE_LABELS[spec.role] : 'ロール'
+  return '個人指定'
 }
 
 export const PROJECT_TYPE_LABELS: Record<ProjectType, string> = {

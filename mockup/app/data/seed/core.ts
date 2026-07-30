@@ -6,7 +6,7 @@ import type {
   AiEmployee, AiRole, AttendanceRule, CodeMasterItem, Company, CompanyRelation,
   Contact, ContactRelation, CustomFieldDef, Department, EscalationRule, ExternalLink,
   FeatureToggle, Industry, KnowledgeArticle, LeaveType, Member, Project, RelationType,
-  SystemService, WorkflowRoute,
+  SystemService, WorkflowRoute, WorkflowRouteStep,
 } from '~/types/domain'
 
 /**
@@ -167,17 +167,22 @@ export const seedExternalLinks: ExternalLink[] = [
   { id: 'el-03', title: '社内 Wiki（旧）', url: 'https://www.google.com/', description: '移行中の旧ナレッジベース', icon: 'BookOpen', displayOrder: 3, active: true },
 ]
 
+/** 承認ステップ（役職指定）のヘルパー。旧 manager/director/president は役職ラベルへ対応（行動保存） */
+const wstep = (order: number, approverTitle: string): WorkflowRouteStep => ({
+  order, approverType: 'title', approverRole: null, approverTitle, approverMemberId: null, mode: 'serial',
+})
+
 export const seedWorkflowRoutes: WorkflowRoute[] = [
-  { id: 'wr-01', category: 'purchase', minAmount: 0, maxAmount: 100000, steps: [{ order: 1, approverRole: 'manager', approverMemberId: null, mode: 'serial' }], active: true },
-  { id: 'wr-02', category: 'purchase', minAmount: 100000, maxAmount: 1000000, steps: [{ order: 1, approverRole: 'manager', approverMemberId: null, mode: 'serial' }, { order: 2, approverRole: 'director', approverMemberId: null, mode: 'serial' }], active: true },
-  { id: 'wr-03', category: 'purchase', minAmount: 1000000, maxAmount: null, steps: [{ order: 1, approverRole: 'manager', approverMemberId: null, mode: 'serial' }, { order: 2, approverRole: 'director', approverMemberId: null, mode: 'serial' }, { order: 3, approverRole: 'president', approverMemberId: null, mode: 'serial' }], active: true },
-  { id: 'wr-04', category: 'contract', minAmount: 0, maxAmount: null, steps: [{ order: 1, approverRole: 'manager', approverMemberId: null, mode: 'serial' }, { order: 2, approverRole: 'director', approverMemberId: null, mode: 'serial' }, { order: 3, approverRole: 'president', approverMemberId: null, mode: 'serial' }], active: true },
-  { id: 'wr-05', category: 'expense', minAmount: 0, maxAmount: 50000, steps: [{ order: 1, approverRole: 'manager', approverMemberId: null, mode: 'serial' }], active: true },
-  { id: 'wr-06', category: 'expense', minAmount: 50000, maxAmount: null, steps: [{ order: 1, approverRole: 'manager', approverMemberId: null, mode: 'serial' }, { order: 2, approverRole: 'director', approverMemberId: null, mode: 'serial' }], active: true },
-  { id: 'wr-07', category: 'hiring', minAmount: 0, maxAmount: null, steps: [{ order: 1, approverRole: 'director', approverMemberId: null, mode: 'serial' }, { order: 2, approverRole: 'president', approverMemberId: null, mode: 'serial' }], active: true },
-  { id: 'wr-08', category: 'trip', minAmount: 0, maxAmount: 150000, steps: [{ order: 1, approverRole: 'manager', approverMemberId: null, mode: 'serial' }], active: true },
-  { id: 'wr-09', category: 'trip', minAmount: 150000, maxAmount: null, steps: [{ order: 1, approverRole: 'manager', approverMemberId: null, mode: 'serial' }, { order: 2, approverRole: 'director', approverMemberId: null, mode: 'serial' }], active: true },
-  { id: 'wr-10', category: 'other', minAmount: 0, maxAmount: null, steps: [{ order: 1, approverRole: 'manager', approverMemberId: null, mode: 'serial' }, { order: 2, approverRole: 'director', approverMemberId: null, mode: 'serial' }], active: true },
+  { id: 'wr-01', category: 'purchase', minAmount: 0, maxAmount: 100000, steps: [wstep(1, 'マネージャー')], active: true },
+  { id: 'wr-02', category: 'purchase', minAmount: 100000, maxAmount: 1000000, steps: [wstep(1, 'マネージャー'), wstep(2, '取締役')], active: true },
+  { id: 'wr-03', category: 'purchase', minAmount: 1000000, maxAmount: null, steps: [wstep(1, 'マネージャー'), wstep(2, '取締役'), wstep(3, '代表取締役')], active: true },
+  { id: 'wr-04', category: 'contract', minAmount: 0, maxAmount: null, steps: [wstep(1, 'マネージャー'), wstep(2, '取締役'), wstep(3, '代表取締役')], active: true },
+  { id: 'wr-05', category: 'expense', minAmount: 0, maxAmount: 50000, steps: [wstep(1, 'マネージャー')], active: true },
+  { id: 'wr-06', category: 'expense', minAmount: 50000, maxAmount: null, steps: [wstep(1, 'マネージャー'), wstep(2, '取締役')], active: true },
+  { id: 'wr-07', category: 'hiring', minAmount: 0, maxAmount: null, steps: [wstep(1, '取締役'), wstep(2, '代表取締役')], active: true },
+  { id: 'wr-08', category: 'trip', minAmount: 0, maxAmount: 150000, steps: [wstep(1, 'マネージャー')], active: true },
+  { id: 'wr-09', category: 'trip', minAmount: 150000, maxAmount: null, steps: [wstep(1, 'マネージャー'), wstep(2, '取締役')], active: true },
+  { id: 'wr-10', category: 'other', minAmount: 0, maxAmount: null, steps: [wstep(1, 'マネージャー'), wstep(2, '取締役')], active: true },
 ]
 
 export const seedAttendanceRules: AttendanceRule[] = [
