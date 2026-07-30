@@ -84,6 +84,7 @@ mockup/
 | `UiFilterBar` | slots | 一覧上部のフィルタ行 |
 | `UiFormField` | `label, required, error, hint` | フォーム項目ラッパー |
 | `UiSchemaForm` | `fields(FieldDef[]), modelValue` | **スキーマ駆動フォーム**。カスタム項目（F-13-1）を動的レンダリング |
+| `WidgetsCustomFields` | `entity, modelValue, errors?` | アプリの追加カスタム項目セクション（F-31）。`useAppFields` の項目を UiSchemaForm で描画し `custom` へ読み書き。各アプリのフォームへ 1 行で差込 |
 | `UiCardMenu` | `items(MenuCard[])` | カード型メニュー（ダッシュボード・支援ツールハブ共用。外部リンク/内部/バッジ対応） |
 | `UiPageHeader` | `title, description` + `#actions` | ページ見出しの統一 |
 | `UiEmptyState` | `icon, title, hint` + `#action` | 空状態の統一 |
@@ -108,6 +109,7 @@ office: `IsometricOffice`（アイソメトリック空間）、`AiEmployeeCard`
 | `useCurrentUser` | 擬似ログイン（デモ用ユーザー切替、権限判定 `isAdmin` 等） |
 | `useMasterCrud<T>` | 汎用マスタ CRUD（検索・追加・更新・無効化・監査ログ記録）。全マスタ画面が共用 |
 | `useCustomFields` | エンティティ別カスタム項目定義の管理と値の読み書き（F-13-1） |
+| `useAppFields` | Akebono 全アプリの項目を統一解決（F-31 汎用化）。「既定項目（ITEM_CATALOG＋item_settings 差分）＋追加カスタム項目（CustomFieldDef）」を 1 つに束ねる薄い統合層。フォーム/一覧・データ取込マッピング右辺の単一 SoT |
 | `useCodeMaster` | 汎用区分マスタの参照・管理（F-13-2） |
 | `useAttendance` | 打刻・日次/週次/月次集計・36 協定アラート・修正申請 |
 | `useLeave` | 休暇種別別の付与・残数・申請・年 5 日義務判定・手動/一括付与（管理者/人事。F-04-5/9） |

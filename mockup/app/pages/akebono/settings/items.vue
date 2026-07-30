@@ -142,7 +142,7 @@ async function onCfSave(): Promise<void> {
   })
   if (!res.ok) { cfError.value = res.error.message; return }
   cfOpen.value = false
-  toast.show('カスタム項目を保存しました（このアプリのフォーム・一覧に反映されます）', 'ok')
+  toast.show('カスタム項目を保存しました（対応済みのアプリのフォームに反映されます）', 'ok')
 }
 
 async function onCfRemove(d: CustomFieldDef): Promise<void> {
@@ -237,7 +237,7 @@ async function onCfRemove(d: CustomFieldDef): Promise<void> {
     <!-- 追加カスタム項目（同一エンジンで全アプリ共通） -->
     <UiSectionCard
       :title="`${ITEM_ENTITY_LABELS[current] ?? current} の追加カスタム項目（${customDefs.length}件）`"
-      description="基本項目に無い項目を追加します。追加した項目はこのアプリのフォーム・一覧・データ取込の対象項目に反映されます。"
+      description="基本項目に無い項目を追加します。追加した項目は、フォーム反映に対応済みのアプリ（現在は商品・売上明細）で入力欄として表示されます。一覧表示・データ取込への反映は順次対応します。"
       flush
     >
       <template #actions>

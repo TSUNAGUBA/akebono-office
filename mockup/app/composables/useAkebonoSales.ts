@@ -188,6 +188,8 @@ export function useAkebonoSales() {
     const reversal: SalesRecord = {
       ...src, id: newId, code: nextCode(records.value.map(r => r.code), 'SR'),
       qty: -src.qty, amount: -src.amount, salesDate: todayJst(), sourceKind: 'manual', correctionOf: id, invoiceId: null,
+      // 赤黒訂正の相殺行はシステム生成のため custom は持たない（API 側の既定 '{}' と一致 = 両モード同一結果）
+      custom: {},
     }
     records.value = [...records.value, reversal]
     commit()
