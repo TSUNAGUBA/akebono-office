@@ -4,7 +4,7 @@
  */
 import type {
   AiActivityLog, AiEmployee, AiRole, AiTask, AkebonoWish, ApprovalLog,
-  AppConfigItem, AppNotification, AttendanceFixRequest, AttendanceRule, AuditLog, CalendarEvent, ChatMessage, ChatSession, PermissionRule,
+  AppConfigItem, AppNotification, AttendanceFixRequest, AttendanceRoute, AttendanceRule, AuditLog, CalendarEvent, ChatMessage, ChatSession, DirectRequest, PermissionRule,
   CodeMasterItem, Company, CompanyRelation, Contact, ContactRelation,
   CustomFieldDef, DailyReport, DecisionLog, DecisionTheme, DelegateSetting, Department,
   DocumentNode, Escalation, EscalationRule, ExternalLink, FeatureToggle, HearingLog, Holiday,
@@ -66,6 +66,8 @@ export interface MockDbShape {
   escalationRules: EscalationRule[]
   punches: PunchRecord[]
   attendanceFixRequests: AttendanceFixRequest[]
+  directRequests: DirectRequest[]
+  attendanceRoutes: AttendanceRoute[]
   leaveGrants: LeaveGrant[]
   leaveRequests: LeaveRequest[]
   shiftPeriods: ShiftPeriod[]
@@ -176,6 +178,8 @@ export function buildSeed(): MockDbShape {
     escalationRules: core.seedEscalationRules,
     punches: buildPunchHistory(),
     attendanceFixRequests: attendance.seedAttendanceFixRequests,
+    directRequests: attendance.seedDirectRequests,
+    attendanceRoutes: attendance.seedAttendanceRoutes,
     leaveGrants: [...buildLeaveGrants(), ...buildSpecialLeaveGrants()],
     leaveRequests: attendance.seedLeaveRequests,
     shiftPeriods: shifts.seedShiftPeriods,

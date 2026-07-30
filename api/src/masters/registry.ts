@@ -45,6 +45,18 @@ const workflowRouteBase = z.object({
   active: z.boolean().default(true),
 })
 
+/** attendance-routes の基底（勤怠承認経路 = 稟議 workflowRouteBase の勤怠版。金額帯なし・hr ロール追加） */
+const attendanceRouteBase = z.object({
+  category: z.enum(['direct', 'fix']),
+  steps: z.array(z.object({
+    order: z.number().int().min(1),
+    approverRole: z.enum(['manager', 'hr', 'director', 'president']),
+    approverMemberId: z.string().nullable().default(null),
+    mode: z.enum(['serial', 'all', 'majority']).default('serial'),
+  })).min(1, '承認ステップを 1 つ以上設定してください'),
+  active: z.boolean().default(true),
+})
+
 /** permission-rules の基底（PATCH は .partial() を使うためクロスフィールド検証前の形を保持） */
 const permissionRuleBase = z.object({
   subjectKind: z.enum(['role', 'title', 'member']),
@@ -265,6 +277,12 @@ const schemas = {
     active: z.boolean().default(true),
   }),
   'permission-rules': permissionRuleBase.superRefine(permissionSubjectCheck),
+  'attendance-routes': attendanceRouteBase.superRefine((v, ctx) => {
+    // 承認ステップの順序（order）重複を防ぐ（稟議 workflow-routes と同じサーバー側検証）
+    if (new Set(v.steps.map(s => s.order)).size !== v.steps.length) {
+      ctx.addIssue({ code: 'custom', path: ['steps'], message: '承認ステップの順序（order）が重複しています' })
+    }
+  }),
   'ai-roles': z.object({
     name: z.string().trim().min(1, 'ロール名は必須です'),
     mission: z.string().default(''),
@@ -380,6 +398,8 @@ export const MASTERS: Record<MasterEntity, MasterDef> = {
   // 関係種別は論理削除（無効化）に加え、未使用時のみ物理削除可（参照ガードは masters.ts の DELETE 側）
   'relation-types': { table: 'relation_types', idPrefix: 'rt', schema: schemas['relation-types'], patchSchema: schemas['relation-types'].partial(), jsonbFields: [], physicalDelete: true },
   'permission-rules': { table: 'permission_rules', idPrefix: 'pm', schema: schemas['permission-rules'], patchSchema: permissionRuleBase.partial().superRefine(permissionSubjectCheck), jsonbFields: [] },
+  // 勤怠承認経路（0040。稟議 workflow-routes の勤怠版 = 区分ごとの承認ステップ・金額帯なし）
+  'attendance-routes': { table: 'attendance_routes', idPrefix: 'atr', schema: schemas['attendance-routes'], patchSchema: attendanceRouteBase.partial(), jsonbFields: ['steps'] },
   'company-relations': { table: 'company_relations', idPrefix: 'cr', schema: schemas['company-relations'], jsonbFields: [], physicalDelete: true, noActive: true },
   'contact-relations': { table: 'contact_relations', idPrefix: 'pr', schema: schemas['contact-relations'], jsonbFields: [], physicalDelete: true, noActive: true },
   'projects': { table: 'projects', idPrefix: 'pj', schema: schemas.projects, patchSchema: schemas.projects.partial(), jsonbFields: ['memberIds', 'custom'] },
