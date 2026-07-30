@@ -2,7 +2,7 @@
 /**
  * 意思決定支援（F-02）テーマ一覧 + 判断履歴
  */
-import { ArrowRight, Target } from 'lucide-vue-next'
+import { ArrowRight, Settings2, Target } from 'lucide-vue-next'
 import type { TableColumn } from '~/types/ui'
 import { fmtDateTime } from '~/utils/format'
 
@@ -11,6 +11,7 @@ const { themes, logs } = decision
 // サーバー側で進んだ判断ログ（他者の記録）を表示時に取り込む
 onMounted(() => { void decision.refresh() })
 const { tbl } = useMockDb()
+const { isAdmin } = useCurrentUser()
 const members = tbl('members')
 
 const historyColumns: TableColumn[] = [
@@ -36,7 +37,14 @@ const historyRows = computed(() =>
     <UiPageHeader
       title="意思決定支援"
       description="①意味 ②関係 ③制約 のオントロジーで判断テーマを整理し、制約を通った打ち手だけを選択肢に昇格させます"
-    />
+    >
+      <template v-if="isAdmin" #actions>
+        <NuxtLink to="/masters/decision-themes" class="btn">
+          <Settings2 class="h-4 w-4" aria-hidden="true" />
+          テーマを管理
+        </NuxtLink>
+      </template>
+    </UiPageHeader>
 
     <!-- テーマカード一覧 -->
     <div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">

@@ -14,7 +14,7 @@
 import type { Ref } from 'vue'
 import type {
   ApprovalAction, ApprovalLog, DelegateSetting, Member, Result, WorkflowCategory,
-  WorkflowRequest, WorkflowRouteStep,
+  WorkflowFile, WorkflowRequest, WorkflowRouteStep,
 } from '~/types/domain'
 import { resolveRoute } from '~/utils/approval-route'
 import { pickApprover } from '~/utils/approver'
@@ -29,7 +29,12 @@ export interface WorkflowInput {
   purpose: string
   /** 内容（区分別テンプレート = utils/workflow-templates.ts を呼び出して記入できる） */
   content: string
+  /** 名前のみの添付（モックモード・旧データ互換の表示名。API モードの実ファイル名はサーバーが合成） */
   attachments: string[]
+  /** 新規アップロードする実ファイル（API モードのみ。モックはメタのみ = ドキュメント管理と同方針） */
+  newFiles?: File[]
+  /** 既存添付（workflow_files）のうち維持するもの（API モードの編集時。含めない既存分は削除される） */
+  keepFileIds?: string[]
 }
 
 // ---------- API モードのキャッシュ（SPA・モジュールスコープ単一） ----------
@@ -37,6 +42,8 @@ export interface WorkflowInput {
 const apiWfRequests = ref<WorkflowRequest[]>([])
 const apiWfLogs = ref<ApprovalLog[]>([])
 const apiWfDelegates = ref<DelegateSetting[]>([])
+/** 申請 id → 添付実ファイルのメタ一覧（実体は都度ダウンロード） */
+const apiWfFiles = ref<Record<string, WorkflowFile[]>>({})
 
 function loadWfRequests(force = false): Promise<void> {
   return apiLoadOnce('wf:requests', async () => {
@@ -59,11 +66,42 @@ function loadWfLogs(requestId: string, force = false): Promise<void> {
   }, force)
 }
 
+function loadWfFiles(requestId: string, force = false): Promise<void> {
+  return apiLoadOnce(`wf:files:${requestId}`, async () => {
+    const rows = await apiFetch<WorkflowFile[]>(`/v1/workflows/${requestId}/files`)
+    apiWfFiles.value = { ...apiWfFiles.value, [requestId]: rows }
+  }, force)
+}
+
+/**
+ * 添付一覧の確定ロード（編集モーダル用。成功可否を返す）。
+ * keepFileIds は既存添付一覧から導出するため、ロード失敗のまま保存すると「既存添付を全部
+ * 取り外した」扱いになり意図せず削除される。呼び出し側は false のとき添付同期を送らない（原則7）
+ */
+async function loadWfFilesStrict(requestId: string): Promise<boolean> {
+  try {
+    const rows = await apiFetch<WorkflowFile[]>(`/v1/workflows/${requestId}/files`)
+    apiWfFiles.value = { ...apiWfFiles.value, [requestId]: rows }
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** File → base64（AI カンパニーの添付・ノート取込と同じ chunk 変換） */
+async function fileToBase64(file: File): Promise<string> {
+  const buf = new Uint8Array(await file.arrayBuffer())
+  let bin = ''
+  for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000))
+  return btoa(bin)
+}
+
 // ログイン確立・切替時に取り直す
 onApiReset(() => {
   apiWfRequests.value = []
   apiWfLogs.value = []
   apiWfDelegates.value = []
+  apiWfFiles.value = {}
 })
 
 /** WidgetsApprovalFlow へ渡す表示用ステップ */
@@ -172,6 +210,37 @@ export function useWorkflow() {
       .sort((a, b) => a.at.localeCompare(b.at))
   }
 
+  /** 添付実ファイルのメタ一覧（API モードのみ。モックはメタのみの名前一覧 = attachments が担う） */
+  function filesOf(requestId: string): WorkflowFile[] {
+    if (!isApi) return []
+    void loadWfFiles(requestId)
+    return apiWfFiles.value[requestId] ?? []
+  }
+
+  /** 添付一覧の確定ロード（編集開始時に await する。モックモードは常に true） */
+  async function loadFiles(requestId: string): Promise<boolean> {
+    if (!isApi) return true
+    return loadWfFilesStrict(requestId)
+  }
+
+  /** 添付原本のダウンロード（base64 → Blob。ナレッジ・AI タスク添付と同じ経路） */
+  async function downloadFile(file: WorkflowFile): Promise<Result> {
+    try {
+      const data = await apiFetch<{ filename: string; mime: string; contentBase64: string }>(
+        `/v1/workflows/${file.requestId}/files/${file.id}`)
+      const bin = Uint8Array.from(atob(data.contentBase64), ch => ch.charCodeAt(0))
+      const url = URL.createObjectURL(new Blob([bin], { type: data.mime }))
+      const a = document.createElement('a')
+      a.href = url
+      a.download = data.filename
+      a.click()
+      URL.revokeObjectURL(url)
+      return { ok: true }
+    } catch (e) {
+      return { ok: false, error: apiErrorOf(e) }
+    }
+  }
+
   /** 現在ステップの承認者（未確定なら undefined） */
   function currentApproverOf(req: WorkflowRequest): Member | undefined {
     const step = req.routeSnapshot[req.currentStep - 1]
@@ -257,32 +326,47 @@ export function useWorkflow() {
     return null
   }
 
+  /** API モードの申請 body（実ファイルは base64 化して files / keepFileIds として送る） */
+  async function apiBodyOf(input: WorkflowInput, requestId?: string): Promise<Record<string, unknown>> {
+    const { newFiles, keepFileIds, ...rest } = input
+    const files = await Promise.all((newFiles ?? []).map(async f => ({
+      filename: f.name, contentBase64: await fileToBase64(f),
+    })))
+    return { id: requestId, ...rest, files, keepFileIds: keepFileIds ?? [] }
+  }
+
   /** 下書き保存（経路は未確定のまま。既存下書きの更新可） */
   async function saveDraft(input: WorkflowInput, requestId?: string): Promise<Result> {
     const invalid = validateInput(input)
     if (invalid) return invalid
     if (isApi) {
       // 権限・状態ガードはサーバーが担う → 成功後にキャッシュを取り直す（原則6）
+      const body = await apiBodyOf(input, requestId)
       const res = await apiResult(() => apiFetch<{ id: string }>('/v1/workflows/draft', {
-        method: 'PUT', body: { id: requestId, ...input },
+        method: 'PUT', body,
       }))
-      if (res.ok) await loadWfRequests(true)
+      if (res.ok) {
+        await loadWfRequests(true)
+        if (res.id) void loadWfFiles(res.id, true)
+      }
       return res
     }
+    // File オブジェクト等の API 専用フィールドをモック保存へ持ち込まない（localStorage 直列化対象外）
+    const { newFiles: _nf, keepFileIds: _kf, ...data } = input
     if (requestId) {
       const existing = byId(requestId)
       if (!existing) return err('AKO-GEN-002', '対象の申請が見つかりません')
       if (existing.requesterId !== currentUser.value.id) return err('AKO-WFL-001', '申請者本人のみ編集できます')
       if (existing.status !== 'draft') return err('AKO-WFL-001', '下書き以外は下書き保存できません')
       // 旧本文はフォームが content へ読み込み済み = 保存で body を空にして移行完了（API と同一挙動）
-      patch(requestId, { ...input, body: '' })
+      patch(requestId, { ...data, body: '' })
       commit()
       return { ok: true, id: requestId }
     }
     const id = nextId('workflowRequests', 'WF')
     requests.value = [...requests.value, {
       id,
-      ...input,
+      ...data,
       body: '', // 新規は purpose / content が正（body は旧データ表示用の互換フィールド）
       requesterId: currentUser.value.id,
       status: 'draft',
@@ -308,13 +392,19 @@ export function useWorkflow() {
     }
     if (isApi) {
       // 経路解決・凍結・通知はサーバーが担う（上のチェックは即時フィードバック用）
+      const body = await apiBodyOf(input, requestId)
       const res = await apiResult(() => apiFetch<{ id: string }>('/v1/workflows/submit', {
-        method: 'POST', body: { id: requestId, ...input },
+        method: 'POST', body,
       }))
-      if (res.ok) await loadWfRequests(true)
+      if (res.ok) {
+        await loadWfRequests(true)
+        if (res.id) void loadWfFiles(res.id, true)
+      }
       return res
     }
 
+    // File オブジェクト等の API 専用フィールドをモック保存へ持ち込まない（localStorage 直列化対象外）
+    const { newFiles: _nf, keepFileIds: _kf, ...data } = input
     let id: string
     if (requestId) {
       const existing = byId(requestId)
@@ -325,12 +415,12 @@ export function useWorkflow() {
       }
       id = requestId
       // 旧本文はフォームが content へ読み込み済み = 再申請で body を空にして移行完了（API と同一挙動）
-      patch(id, { ...input, body: '', status: 'in_review', currentStep: 1, routeSnapshot: route })
+      patch(id, { ...data, body: '', status: 'in_review', currentStep: 1, routeSnapshot: route })
     } else {
       id = nextId('workflowRequests', 'WF')
       requests.value = [...requests.value, {
         id,
-        ...input,
+        ...data,
         body: '', // 新規は purpose / content が正（body は旧データ表示用の互換フィールド）
         requesterId: currentUser.value.id,
         status: 'in_review',
@@ -443,6 +533,9 @@ export function useWorkflow() {
     requests,
     byId,
     logsOf,
+    filesOf,
+    loadFiles,
+    downloadFile,
     stepApprover,
     currentApproverOf,
     resolveRouteFor,

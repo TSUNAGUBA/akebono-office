@@ -5,9 +5,9 @@
  * 職務権限マトリクス（区分×金額帯）により承認経路が金額でリアルタイムに変わる。
  * 申請の本文は「目的」「内容」に分割（旧データの body は互換表示）。内容は区分別テンプレートを呼び出せる。
  */
-import { FileText, Paperclip, Pencil, Plus, Send, X } from 'lucide-vue-next'
+import { Download, FileText, Paperclip, Pencil, Plus, Send, X } from 'lucide-vue-next'
 import type {
-  ApprovalAction, DelegateSetting, WorkflowCategory, WorkflowRequest,
+  ApprovalAction, DelegateSetting, WorkflowCategory, WorkflowFile, WorkflowRequest,
   WorkflowRoute, WorkflowRouteStep,
 } from '~/types/domain'
 import { addDays, fmtDateTime, fmtYen } from '~/utils/format'
@@ -22,6 +22,7 @@ import type { TabItem, TableColumn, Tone } from '~/types/ui'
 const route = useRoute()
 const { currentUserId, isAdmin } = useCurrentUser()
 const wf = useWorkflow()
+const isApi = useApiMode()
 
 // サーバー側で進んだ申請・承認（他者の操作）を表示時に取り込む
 onMounted(() => { void wf.refresh() })
@@ -119,6 +120,19 @@ const emptyTitles: Record<string, string> = {
 const selectedId = ref<string | null>(null)
 const selectedReq = computed(() => selectedId.value ? wf.byId(selectedId.value) ?? null : null)
 
+/** 実ファイルと重複しない名前のみ添付（旧データ・モックの表示分） */
+const selectedNameOnlyAttachments = computed(() => {
+  const r = selectedReq.value
+  if (!r) return []
+  const fileNames = new Set(wf.filesOf(r.id).map(f => f.filename))
+  return r.attachments.filter(a => !fileNames.has(a))
+})
+
+async function onDownloadFile(f: WorkflowFile): Promise<void> {
+  const res = await wf.downloadFile(f)
+  if (!res.ok) show(res.error.message, 'warn')
+}
+
 function openRow(row: Record<string, unknown>): void {
   selectedId.value = String(row.id ?? '')
 }
@@ -204,7 +218,30 @@ const form = reactive({
   content: '',
   attachments: [] as string[],
 })
-const attachName = ref('')
+/** 新規アップロード（API モード = 実ファイル。監査指摘 2026-07-30 ②） */
+const newFiles = ref<File[]>([])
+/** 編集中に取り外した既存添付（API モード。keepFileIds の除外分） */
+const removedFileIds = ref<string[]>([])
+/**
+ * 既存添付一覧のロード成否（API モードの編集時）。false のまま保存すると keepFileIds が
+ * 空扱いになり既存添付を意図せず削除するため、false のときは添付同期を送らない（原則7）
+ */
+const filesReady = ref(true)
+const fileInput = ref<HTMLInputElement | null>(null)
+const MAX_WF_FILES = 5
+
+/** 編集中申請の既存実ファイル（取り外し済みを除く。遅延ロードに追従する computed） */
+const existingFiles = computed<WorkflowFile[]>(() =>
+  editingId.value ? wf.filesOf(editingId.value).filter(f => !removedFileIds.value.includes(f.id)) : [])
+
+/** 名前のみの添付（実ファイルと重複しない表示分。旧データ・モックの互換） */
+const nameOnlyAttachments = computed(() => {
+  const fileNames = new Set([
+    ...existingFiles.value.map(f => f.filename),
+    ...newFiles.value.map(f => f.name),
+  ])
+  return form.attachments.filter(a => !fileNames.has(a))
+})
 
 // ---------- 内容テンプレート（区分別 + 標準。utils/workflow-templates.ts が SoT） ----------
 
@@ -242,7 +279,9 @@ function openCreate(): void {
   form.purpose = ''
   form.content = ''
   form.attachments = []
-  attachName.value = ''
+  newFiles.value = []
+  removedFileIds.value = []
+  filesReady.value = true
   templateKey.value = ''
   modalOpen.value = true
 }
@@ -258,20 +297,57 @@ function openEdit(req: WorkflowRequest): void {
   form.purpose = req.purpose || ''
   form.content = req.content || req.body || ''
   form.attachments = [...req.attachments]
-  attachName.value = ''
+  newFiles.value = []
+  removedFileIds.value = []
   templateKey.value = ''
   modalOpen.value = true
+  // 既存添付一覧を確定ロードしてから添付編集を有効化（keepFileIds の空送信 = 全削除事故を防ぐ）
+  if (isApi) {
+    filesReady.value = false
+    void wf.loadFiles(req.id).then((ok) => {
+      filesReady.value = ok
+      if (!ok) show('添付情報を取得できませんでした。今回の保存では添付は変更されません', 'warn')
+    })
+  } else {
+    filesReady.value = true
+  }
 }
 
-function addAttachment(): void {
-  const name = attachName.value.trim()
-  if (!name) return
-  form.attachments = [...form.attachments, name.includes('.') ? name : `${name}.pdf`]
-  attachName.value = ''
+/** ファイル選択（API = 実体を保持して送信 / モック = ファイル名のみ登録 = ドキュメント管理と同方針） */
+function onFilePick(e: Event): void {
+  const input = e.target as HTMLInputElement
+  const picked = [...(input.files ?? [])]
+  input.value = '' // 同じファイルの再選択を許す
+  for (const f of picked) {
+    if (isApi) {
+      if (existingFiles.value.length + newFiles.value.length >= MAX_WF_FILES) {
+        show(`添付は ${MAX_WF_FILES} 件までです`, 'warn')
+        return
+      }
+      if (f.size > 10 * 1024 * 1024) {
+        show(`${f.name} は 10MB を超えているため添付できません`, 'warn')
+        continue
+      }
+      newFiles.value = [...newFiles.value, f]
+    } else if (!form.attachments.includes(f.name)) {
+      form.attachments = [...form.attachments, f.name]
+    }
+  }
 }
 
-function removeAttachment(i: number): void {
-  form.attachments = form.attachments.filter((_, idx) => idx !== i)
+function removeNewFile(i: number): void {
+  newFiles.value = newFiles.value.filter((_, idx) => idx !== i)
+}
+
+/** 既存実ファイルの取り外し（保存時に keepFileIds から除外 → サーバーが削除） */
+function removeExistingFile(id: string): void {
+  removedFileIds.value = [...removedFileIds.value, id]
+}
+
+function removeAttachment(name: string): void {
+  // 同名の名前のみ添付が複数ある場合に両方消さない（最初の 1 件のみ取り外す）
+  const idx = form.attachments.indexOf(name)
+  if (idx >= 0) form.attachments = form.attachments.filter((_, i) => i !== idx)
 }
 
 function wfPayload() {
@@ -282,6 +358,10 @@ function wfPayload() {
     purpose: form.purpose,
     content: form.content,
     attachments: [...form.attachments],
+    // filesReady でない間は添付同期を送らない（サーバーは files/keepFileIds 未指定なら実体に触れない = 原則7）
+    ...(isApi && filesReady.value
+      ? { newFiles: [...newFiles.value], keepFileIds: existingFiles.value.map(f => f.id) }
+      : {}),
   }
 }
 
@@ -632,11 +712,23 @@ async function onRemoveDelegate(d: DelegateSetting): Promise<void> {
 
         <div>
           <p class="label">添付ファイル</p>
-          <ul v-if="selectedReq.attachments.length > 0" class="flex flex-wrap gap-1.5">
+          <ul v-if="wf.filesOf(selectedReq.id).length > 0 || selectedNameOnlyAttachments.length > 0" class="flex flex-wrap gap-1.5">
+            <li v-for="f in wf.filesOf(selectedReq.id)" :key="f.id">
+              <button
+                type="button"
+                class="inline-flex items-center gap-1 rounded-full border border-line px-2.5 py-1 text-xs hover:bg-surface-soft"
+                :title="`${f.filename} をダウンロード`"
+                @click="onDownloadFile(f)"
+              >
+                <Download class="h-3 w-3 text-brand" aria-hidden="true" />
+                {{ f.filename }}
+              </button>
+            </li>
             <li
-              v-for="(a, i) in selectedReq.attachments"
-              :key="i"
+              v-for="(a, i) in selectedNameOnlyAttachments"
+              :key="`n-${i}`"
               class="inline-flex items-center gap-1 rounded-full border border-line px-2.5 py-1 text-xs"
+              :title="isApi ? '名前のみの添付（旧データ = 原本なし）' : undefined"
             >
               <Paperclip class="h-3 w-3 text-muted" aria-hidden="true" />
               {{ a }}
@@ -728,27 +820,62 @@ async function onRemoveDelegate(d: DelegateSetting): Promise<void> {
           </div>
           <textarea v-model="form.content" class="textarea" rows="8" placeholder="具体的な内容・金額の根拠など" />
         </UiFormField>
-        <UiFormField label="添付ファイル" hint="モックのためファイル名のみ登録されます">
-          <div class="flex gap-2">
+        <UiFormField
+          label="添付ファイル"
+          :hint="isApi
+            ? '.md / .txt / .csv / .pdf / .docx / .xlsx / .pptx / .jpg / .png・10MB・5 件まで（原本を保管します）'
+            : 'モックモードはファイル名のみ登録されます（原本の保管は API モード）'"
+        >
+          <div>
             <input
-              v-model="attachName"
-              type="text"
-              class="input flex-1"
-              placeholder="例: 見積書_A社.pdf"
-              aria-label="添付ファイル名"
-              @keydown.enter.prevent="addAttachment"
+              ref="fileInput"
+              type="file"
+              multiple
+              class="hidden"
+              accept=".md,.txt,.csv,.pdf,.docx,.xlsx,.pptx,.jpg,.jpeg,.png"
+              aria-label="添付ファイルを選択"
+              @change="onFilePick"
             >
-            <button type="button" class="btn" @click="addAttachment">追加</button>
+            <button type="button" class="btn" :disabled="!filesReady" @click="fileInput?.click()">
+              <Paperclip class="h-3.5 w-3.5" aria-hidden="true" />
+              {{ filesReady ? 'ファイルを選択' : '添付情報を取得中…' }}
+            </button>
           </div>
-          <ul v-if="form.attachments.length > 0" class="mt-2 flex flex-wrap gap-1.5">
+          <ul
+            v-if="existingFiles.length > 0 || newFiles.length > 0 || nameOnlyAttachments.length > 0"
+            class="mt-2 flex flex-wrap gap-1.5"
+          >
             <li
-              v-for="(a, i) in form.attachments"
-              :key="i"
+              v-for="f in existingFiles"
+              :key="f.id"
               class="inline-flex items-center gap-1 rounded-full border border-line px-2.5 py-1 text-xs"
             >
               <Paperclip class="h-3 w-3 text-muted" aria-hidden="true" />
+              {{ f.filename }}
+              <button type="button" class="text-muted hover:text-crit" :aria-label="`${f.filename} を削除`" @click="removeExistingFile(f.id)">
+                <X class="h-3 w-3" aria-hidden="true" />
+              </button>
+            </li>
+            <li
+              v-for="(f, i) in newFiles"
+              :key="`new-${i}`"
+              class="inline-flex items-center gap-1 rounded-full border border-brand/40 bg-brand-soft px-2.5 py-1 text-xs"
+            >
+              <Paperclip class="h-3 w-3 text-brand" aria-hidden="true" />
+              {{ f.name }}
+              <button type="button" class="text-muted hover:text-crit" :aria-label="`${f.name} を削除`" @click="removeNewFile(i)">
+                <X class="h-3 w-3" aria-hidden="true" />
+              </button>
+            </li>
+            <li
+              v-for="(a, i) in nameOnlyAttachments"
+              :key="`name-${i}-${a}`"
+              class="inline-flex items-center gap-1 rounded-full border border-line px-2.5 py-1 text-xs"
+              :title="isApi ? '名前のみの添付（旧データ）' : undefined"
+            >
+              <Paperclip class="h-3 w-3 text-muted" aria-hidden="true" />
               {{ a }}
-              <button type="button" class="text-muted hover:text-crit" :aria-label="`${a} を削除`" @click="removeAttachment(i)">
+              <button type="button" class="text-muted hover:text-crit" :aria-label="`${a} を削除`" @click="removeAttachment(a)">
                 <X class="h-3 w-3" aria-hidden="true" />
               </button>
             </li>

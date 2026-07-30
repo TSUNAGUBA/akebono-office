@@ -8,7 +8,8 @@
  * - API: SoT はサーバー（import_sources = 設定系・import_mappings = 設定系/版管理・
  *   import_runs = 記録系）。読み取りは一覧 GET のキャッシュ（useApi）、書込は各専用エンドポイントへ
  *   非同期に送り、成功後に影響コレクションを再ロードする（SoT 書込 → キャッシュ更新の順 = 原則6）。
- *   取込実行はサーバーが決定的にシミュレートして履歴を記録する（実ファイル取込の本実装は F-32 後続）。
+ *   取込実行は**実取込**（監査指摘 2026-07-30 ① = implementation-status §48-1。ファイル添付 or
+ *   サーバーの SSRF ガード付き pull → マッピング適用 → 対象テーブルへ反映）。
  * - 取消可能性（原則9.5）: 取込元 = 論理削除 + 復元。マッピング = 新版で上書き（旧版は履歴に残る）。
  */
 import type {
@@ -27,6 +28,15 @@ export const IMPORT_METHOD_LABELS: Record<ImportMethod, string> = {
 }
 export const IMPORT_ENTITY_LABELS: Record<ImportTargetEntity, string> = {
   product: '商品', sku: 'SKU', company: '取引先', sales_record: '売上明細', inventory: '在庫',
+}
+
+/** 実取込の反映先コレクション（取込成功後にキャッシュを取り直す = 原則6） */
+const RELOAD_BY_ENTITY: Record<string, string[]> = {
+  product: ['products', 'productSkus'],
+  sku: ['productSkus'],
+  company: ['companies'],
+  sales_record: ['salesRecords'],
+  inventory: ['inventoryTransactions', 'inventoryBalances'],
 }
 
 export function useAkebonoImports() {
@@ -130,13 +140,31 @@ export function useAkebonoImports() {
   }
 
   /**
-   * 取込を実行。API モードはサーバーが決定的にシミュレートして履歴を記録（実ファイル取込は F-32 後続）。
-   * モックはステージング → 検証 → 反映を 1 回で行い、決定的にサンプルのエラー行を混ぜる（原則4）。
+   * 取込を実行。API モードは**実取込**（監査指摘 2026-07-30 ①）: ファイル方式は添付ファイルを
+   * base64 で送り、サーバーがパース → マッピング適用 → 検証 → 対象テーブルへ反映する
+   * （API 接続方式はサーバーが SSRF ガード付きで pull）。エラー行は隔離・再実行は冪等。
+   * モックはステージング → 検証 → 反映を 1 回で行い、決定的にサンプルのエラー行を混ぜる
+   * （デモ用シミュレート。実取込はサーバーが必要なため API モード限定 = 画面に明示）。
    */
-  async function runImport(sourceId: string): Promise<Result & { runId?: string }> {
+  async function runImport(sourceId: string, file?: File | null): Promise<Result & { runId?: string }> {
     const denied = adminGuard(); if (denied) return denied
     if (isApi) {
-      const res = await apiWrite<ImportRun>('/v1/akebono/import-runs', { body: { sourceId }, reload: ['importRuns'] })
+      const method = sourceById(sourceId)?.method
+      const body: Record<string, unknown> = { sourceId }
+      if (method?.startsWith('file')) {
+        if (!file) return { ok: false, error: { code: 'AKO-IMP-004', message: '取込ファイルを選択してください' } }
+        if (file.size > 10 * 1024 * 1024) {
+          return { ok: false, error: { code: 'AKO-IMP-004', message: 'ファイルは 10MB 以下にしてください' } }
+        }
+        const buf = new Uint8Array(await file.arrayBuffer())
+        let bin = ''
+        for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000))
+        body.filename = file.name
+        body.contentBase64 = btoa(bin)
+      }
+      // 実反映後に対象コレクションのキャッシュも取り直す（SoT → キャッシュの順 = 原則6）
+      const reload = ['importRuns', ...RELOAD_BY_ENTITY[sourceById(sourceId)?.targetEntity ?? ''] ?? []]
+      const res = await apiWrite<ImportRun>('/v1/akebono/import-runs', { body, reload })
       return res.ok ? { ok: true, runId: res.data.id } : res
     }
     const source = sourceById(sourceId)

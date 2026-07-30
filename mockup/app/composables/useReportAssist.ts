@@ -64,7 +64,11 @@ export function useReportAssist() {
   const isApi = useApiMode()
   // API モードは assist_logs キャッシュをバッキング（questionsFor 等の射影は共通）
   const hearingLogs = isApi ? (apiAssistLogs as Ref<HearingLog[]>) : tbl('hearingLogs')
-  const taskPlans = tbl('taskPlans')
+  // タスク計画・ぽいぽいポストはモード対応済みの composable を SoT 境界として再利用する（原則3）。
+  // tbl('taskPlans') / tbl('notes') は未移行コレクションのため、API モードで直接読むと
+  // モックシードが材料へ混入する（監査指摘 2026-07-30 の是正）
+  const { plansOf } = useTaskPlans()
+  const poipoi = useNotes('poipoi')
   const projects = tbl('projects')
   const companies = tbl('companies')
 
@@ -206,13 +210,19 @@ export function useReportAssist() {
       try {
         return await apiFetch<ReportDraft>('/v1/assist/report-draft', { method: 'POST', body: { date } })
       } catch {
-        // API 断でもフォームを空で返さない（材料 = ローカルキャッシュのヒューリスティック）
+        // API 断でもフォームを空で返さない（材料 = API キャッシュのヒューリスティック。
+        // キャッシュ未到着分は空のまま = モックシードを事実として混入させない）
       }
     }
-    // ぽいぽいポスト（独立メニュー = notes コレクション。バッチ7c）も材料へ合流（memo 形式）
-    const poipoiNotes = (tbl('notes').value as Note[])
-      .filter(n => n.kind === 'poipoi' && n.memberId === memberId && n.active !== false
-        && n.createdAt.slice(0, 10) === date)
+    // ぽいぽいポスト（独立メニュー = notes コレクション。バッチ7c）も材料へ合流（memo 形式）。
+    // useNotes('poipoi') はモード対応済み（API = /v1/notes キャッシュ = 本人分のみ / モック = notes テーブル）。
+    // モックモードは他メンバーの材料も許すため従来どおりテーブルから引く
+    const noteRows = isApi
+      ? poipoi.list.value.filter(n => n.memberId === memberId)
+      : (tbl('notes').value as Note[])
+          .filter(n => n.kind === 'poipoi' && n.memberId === memberId && n.active !== false)
+    const poipoiNotes = noteRows
+      .filter(n => n.createdAt.slice(0, 10) === date)
       .map(n => ({
         id: n.id, memberId, date, kind: 'memo' as const,
         calendarEventId: null, question: '', answer: n.body, at: n.createdAt,
@@ -220,11 +230,10 @@ export function useReportAssist() {
     const ctx: DraftContext = {
       events: eventsOf(memberId, date),
       logs: [...logsOf(memberId, date), ...poipoiNotes],
-      dayPlans: taskPlans.value
-        .filter(tp => tp.memberId === memberId && tp.date === date)
-        .sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+      // plansOf はモード対応済み（API = /v1/task-plans キャッシュ / モック = taskPlans テーブル）
+      dayPlans: plansOf(memberId, date),
       // 翌営業日はメンバーの勤怠ルール（営業曜日）+ 祝日マスタで解決（オペレーター報告 2026-07-18 #4）
-      nextDayPlans: taskPlans.value.filter(tp => tp.memberId === memberId && tp.date === nextWorkingDayFor(memberId, date)),
+      nextDayPlans: plansOf(memberId, nextWorkingDayFor(memberId, date)),
       projects: projects.value.filter(x => x.active),
       companies: companies.value.filter(x => x.active),
     }

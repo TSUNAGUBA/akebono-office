@@ -259,9 +259,31 @@ export function useChatbot() {
           return
         }
       } catch (e) {
-        // 通信失敗も決定的応答へ縮退（下の共通経路）。この場合セッション未確定なら履歴追記はしない。
+        // 通信失敗も決定的応答へ縮退（下の共通経路）。
         // セッション不在（別アカウントの残骸等 = AKO-CHT-001）は保持をやめて新しい会話へ
-        if (apiErrorOf(e).code === 'AKO-CHT-001') currentSessionId.value = null
+        const failCode = apiErrorOf(e).code
+        if (failCode === 'AKO-CHT-001') currentSessionId.value = null
+        // 回復経路: 新規会話の初回送信で /ask が不達だとセッション未確定のまま質問が未永続になる。
+        // セッションを明示作成して質問を追記する（履歴の忠実性）。これも失敗する場合（完全な通信断）
+        // はメモリ表示のみで継続し、以降の送信で再試行される（非ブロッキング = 原則4）
+        if (!currentSessionId.value) {
+          try {
+            const s = await apiFetch<{ id: string }>('/v1/chatbot/sessions', {
+              method: 'POST', body: { title: text },
+            })
+            await apiFetch(`/v1/chatbot/sessions/${s.id}/messages`, {
+              method: 'POST', body: { role: 'user', content: text },
+            })
+            currentSessionId.value = s.id
+          } catch { /* 完全な通信断は表示のみ継続 */ }
+        } else if (failCode === 'AKO-GEN-NET') {
+          // 既存セッションで /ask が応答なし（AKO-GEN-NET）= 質問がサーバーへ届いていない可能性が高い。
+          // 履歴の忠実性を優先して質問を追記する（サーバーが受理済みだった場合は重複し得るが、
+          // 質問の消失より軽微と判断。応答ありのエラー = 5xx は /ask が先に質問を永続化済みのため追記しない）
+          await apiFetch(`/v1/chatbot/sessions/${currentSessionId.value}/messages`, {
+            method: 'POST', body: { role: 'user', content: text },
+          }).catch(() => { /* 追記失敗は表示を妨げない */ })
+        }
       }
       // フォールバック: 決定的応答をセッションへ追記（履歴の忠実性。失敗しても表示は継続 = 非ブロッキング）。
       // ルーティングが参照するマスタキャッシュ（会社・業界・関係・PJ・ナレッジ等）は遅延ロードのため、

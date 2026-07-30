@@ -4,7 +4,11 @@
  * - 申請は routeSnapshot を凍結保存（経路変更の影響を受けない）。承認証跡は追記のみ
  * - 承認操作はクレームファースト（FOR UPDATE + 状態ガード）で二重処理を防ぐ
  * - 権限: 参照は認証済み全員（C2 社内情報・mockup と同一）。操作は本人/承認者/有効な代理人
- * エラー: AKO-WFL-001（権限・状態違反）/ 002（コメント必須）/ 003（該当経路なし）
+ * - 添付（監査指摘 2026-07-30 ②）: 実体は workflow_files（bytea = ai_task_files と同型）。
+ *   attachments(jsonb) は表示名一覧として維持（旧データ = 名前のみの互換表示。原則7）。
+ *   files（新規 base64）+ keepFileIds（既存維持）を draft/submit で受領し、差分同期する
+ * エラー: AKO-WFL-001（権限・状態違反）/ 002（コメント必須）/ 003（該当経路なし）/
+ *         004（添付の形式・サイズ・件数）
  */
 import { Hono } from 'hono'
 import type pg from 'pg'
@@ -17,6 +21,7 @@ import type {
 import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
 import { notify } from '../lib/notify'
+import { capCp } from '../lib/text'
 
 const CATEGORIES: WorkflowCategory[] = ['purchase', 'contract', 'expense', 'hiring', 'trip', 'other']
 const CATEGORY_LABELS: Record<WorkflowCategory, string> = {
@@ -46,7 +51,53 @@ interface WorkflowInput {
   body: string
   purpose: string
   content: string
+  /** 名前のみの添付（旧データ・モック互換の表示名一覧。実ファイル名はサーバーが合成する） */
   attachments: string[]
+  /** 新規アップロード（実体）。undefined = 添付同期なし（旧クライアント互換） */
+  files: { filename: string; mime: string; bytes: Buffer }[] | undefined
+  /** 既存 workflow_files のうち維持するもの（同期時、含まれない既存分は削除される） */
+  keepFileIds: string[] | undefined
+}
+
+/** 添付の対応形式（稟議の実務で使う書類 + 画像。ai-company の添付と同方針） */
+const WF_FILE_EXT_MIME: Record<string, string> = {
+  md: 'text/markdown',
+  txt: 'text/plain',
+  csv: 'text/csv',
+  pdf: 'application/pdf',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+}
+const MAX_WF_FILE_BYTES = 10 * 1024 * 1024
+const MAX_WF_FILES = 5
+
+/** 添付アップロードの検証（DB 書込前に全件検証 = 失敗時に中途半端な保存を残さない） */
+function parseFiles(raw: unknown): { filename: string; mime: string; bytes: Buffer }[] | undefined {
+  if (raw === undefined || raw === null) return undefined
+  if (!Array.isArray(raw)) throw err('AKO-WFL-004', 'files は配列で指定してください', 400)
+  const out: { filename: string; mime: string; bytes: Buffer }[] = []
+  for (const f of raw as { filename?: unknown; contentBase64?: unknown }[]) {
+    const filename = capCp(String(f?.filename ?? '').trim(), 200)
+    const ext = filename.includes('.') ? filename.split('.').pop()!.toLowerCase() : ''
+    const mime = WF_FILE_EXT_MIME[ext]
+    if (!mime) {
+      throw err('AKO-WFL-004', '添付の対応形式は .md / .txt / .csv / .pdf / .docx / .xlsx / .pptx / .jpg / .png です', 400)
+    }
+    const contentBase64 = String(f?.contentBase64 ?? '')
+    if (!contentBase64 || contentBase64.length > MAX_WF_FILE_BYTES * 1.4) {
+      throw err('AKO-WFL-004', 'ファイルが空か大きすぎます（10MB 以下にしてください）', 400)
+    }
+    const bytes = Buffer.from(contentBase64, 'base64')
+    if (bytes.length === 0 || bytes.length > MAX_WF_FILE_BYTES) {
+      throw err('AKO-WFL-004', 'ファイルが空か大きすぎます（10MB 以下にしてください）', 400)
+    }
+    out.push({ filename, mime, bytes })
+  }
+  return out
 }
 
 function parseInput(raw: Record<string, unknown>): WorkflowInput {
@@ -66,7 +117,42 @@ function parseInput(raw: Record<string, unknown>): WorkflowInput {
     purpose: String(raw.purpose ?? ''),
     content: String(raw.content ?? ''),
     attachments: Array.isArray(raw.attachments) ? (raw.attachments as string[]).map(String) : [],
+    files: parseFiles(raw.files),
+    keepFileIds: Array.isArray(raw.keepFileIds) ? (raw.keepFileIds as string[]).map(String) : undefined,
   }
+}
+
+/**
+ * 添付実体の差分同期 + 表示名一覧（attachments jsonb）の合成。
+ * files / keepFileIds のどちらも未指定（旧クライアント）は実体に触れず、表示名も送信値のまま
+ * = 下位互換（原則7）。指定時は「keep に無い既存を削除 → 新規を挿入」し、
+ * 表示名 = 名前のみ添付（input.attachments）+ 実ファイル名 とする（SoT = workflow_files 先行。原則6）
+ */
+async function syncRequestFiles(
+  db: pg.Pool | pg.PoolClient, requestId: string, userId: string, input: WorkflowInput,
+): Promise<string[]> {
+  if (input.files === undefined && input.keepFileIds === undefined) return input.attachments
+  const keep = input.keepFileIds ?? []
+  const news = input.files ?? []
+  const { rows: existing } = await db.query<{ id: string; filename: string }>(
+    `SELECT id, filename FROM workflow_files WHERE request_id = $1 ORDER BY created_at, id`, [requestId])
+  const kept = existing.filter(f => keep.includes(f.id))
+  if (kept.length + news.length > MAX_WF_FILES) {
+    throw err('AKO-WFL-004', `添付は ${MAX_WF_FILES} 件までです`, 400)
+  }
+  const dropIds = existing.filter(f => !keep.includes(f.id)).map(f => f.id)
+  if (dropIds.length > 0) {
+    await db.query(`DELETE FROM workflow_files WHERE request_id = $1 AND id = ANY($2)`, [requestId, dropIds])
+  }
+  for (const f of news) {
+    await db.query(
+      `INSERT INTO workflow_files (id, request_id, filename, mime, size_bytes, bytes, uploaded_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [newId('wff'), requestId, f.filename, f.mime, f.bytes.length, f.bytes, userId])
+  }
+  // 表示名一覧 = 名前のみ添付（実ファイル名と重複するものは除外）+ 実ファイル名
+  const fileNames = [...kept.map(f => f.filename), ...news.map(f => f.filename)]
+  return [...input.attachments.filter(a => !fileNames.includes(a)), ...fileNames]
 }
 
 type ApproverMember = Pick<Member, 'id' | 'name'>
@@ -153,6 +239,39 @@ export function workflowsRoutes(pool: pg.Pool): Hono {
     return c.json({ data: rows })
   })
 
+  /** 添付参照の可視性 = 申請一覧と同一（下書きは本人と管理者のみ。他は認証済み全員 = C2） */
+  async function assertRequestViewable(requestId: string, user: { id: string; role: string }): Promise<void> {
+    const { rows } = await pool.query<{ requesterId: string; status: string }>(
+      `SELECT requester_id AS "requesterId", status FROM workflow_requests WHERE id = $1`, [requestId])
+    const row = rows[0]
+    if (!row || (row.status === 'draft' && row.requesterId !== user.id && user.role !== 'admin')) {
+      throw err('AKO-GEN-002', '対象の申請が見つかりません', 404)
+    }
+  }
+
+  // 添付ファイル一覧（メタのみ。実体は /:id/files/:fileId）
+  app.get('/:id/files', async (c) => {
+    await assertRequestViewable(c.req.param('id'), c.get('user'))
+    const { rows } = await pool.query(
+      `SELECT id, request_id AS "requestId", filename, mime, size_bytes AS "sizeBytes",
+              uploaded_by AS "uploadedBy",
+              to_char(created_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"') AS "createdAt"
+       FROM workflow_files WHERE request_id = $1 ORDER BY created_at, id`,
+      [c.req.param('id')])
+    return c.json({ data: rows })
+  })
+
+  // 添付原本ダウンロード（base64 JSON = ナレッジ・AI タスク添付と同一パターン）
+  app.get('/:id/files/:fileId', async (c) => {
+    await assertRequestViewable(c.req.param('id'), c.get('user'))
+    const { rows } = await pool.query<{ filename: string; mime: string; bytes: Buffer }>(
+      `SELECT filename, mime, bytes FROM workflow_files WHERE id = $1 AND request_id = $2`,
+      [c.req.param('fileId'), c.req.param('id')])
+    const f = rows[0]
+    if (!f) throw err('AKO-GEN-002', '添付ファイルが見つかりません', 404)
+    return c.json({ data: { filename: f.filename, mime: f.mime, contentBase64: f.bytes.toString('base64') } })
+  })
+
   // 代理設定一覧（承認可否の射影に全員分が必要 = mockup と同一の可視性）
   app.get('/delegates', async (c) => {
     const { rows } = await pool.query(
@@ -194,40 +313,52 @@ export function workflowsRoutes(pool: pg.Pool): Hono {
     return c.json({ data: { id: c.req.param('id') } })
   })
 
-  // 下書き保存（経路未確定のまま。既存下書きの更新可）
+  // 下書き保存（経路未確定のまま。既存下書きの更新可）。添付実体の同期を含むためトランザクションで確定する
   app.put('/draft', async (c) => {
     const user = c.get('user')
     const raw = await c.req.json().catch(() => ({})) as Record<string, unknown>
     const input = parseInput(raw)
     const requestId = typeof raw.id === 'string' && raw.id ? raw.id : null
 
-    if (requestId) {
-      // エラー区分は mockup と同一（対象なし = AKO-GEN-002 / 本人・状態違反 = AKO-WFL-001）
-      const existing = await pool.query<{ requesterId: string; status: string }>(
-        `SELECT requester_id AS "requesterId", status FROM workflow_requests WHERE id = $1`, [requestId])
-      const row = existing.rows[0]
-      if (!row) throw err('AKO-GEN-002', '対象の申請が見つかりません', 404)
-      if (row.requesterId !== user.id) throw err('AKO-WFL-001', '申請者本人のみ編集できます', 403)
-      if (row.status !== 'draft') throw err('AKO-WFL-001', '下書き以外は下書き保存できません', 409)
-      const result = await pool.query(
-        `UPDATE workflow_requests
-         SET category = $2, title = $3, amount = $4, body = $5, purpose = $6, content = $7,
-             attachments = $8, updated_at = now()
-         WHERE id = $1 AND requester_id = $9 AND status = 'draft'`,
-        [requestId, input.category, input.title, input.amount, input.body, input.purpose, input.content,
-          JSON.stringify(input.attachments), user.id])
-      if (result.rowCount === 0) {
-        throw err('AKO-WFL-001', '下書き以外は下書き保存できません（申請者本人の下書きのみ）', 409)
+    const client = await pool.connect()
+    let id: string
+    try {
+      await client.query('BEGIN')
+      if (requestId) {
+        // エラー区分は mockup と同一（対象なし = AKO-GEN-002 / 本人・状態違反 = AKO-WFL-001）
+        const existing = await client.query<{ requesterId: string; status: string }>(
+          `SELECT requester_id AS "requesterId", status FROM workflow_requests WHERE id = $1 FOR UPDATE`,
+          [requestId])
+        const row = existing.rows[0]
+        if (!row) throw err('AKO-GEN-002', '対象の申請が見つかりません', 404)
+        if (row.requesterId !== user.id) throw err('AKO-WFL-001', '申請者本人のみ編集できます', 403)
+        if (row.status !== 'draft') throw err('AKO-WFL-001', '下書き以外は下書き保存できません', 409)
+        id = requestId
+        await client.query(
+          `UPDATE workflow_requests
+           SET category = $2, title = $3, amount = $4, body = $5, purpose = $6, content = $7, updated_at = now()
+           WHERE id = $1`,
+          [id, input.category, input.title, input.amount, input.body, input.purpose, input.content])
+      } else {
+        id = newId('WF')
+        await client.query(
+          `INSERT INTO workflow_requests (id, category, title, amount, body, purpose, content, requester_id, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [id, input.category, input.title, input.amount, input.body, input.purpose, input.content,
+            user.id, nowJstIso()])
       }
-      return c.json({ data: { id: requestId } })
+      // 添付実体の同期（SoT = workflow_files）→ 表示名一覧（attachments）を反映（原則6）
+      const names = await syncRequestFiles(client, id, user.id, input)
+      await client.query(
+        `UPDATE workflow_requests SET attachments = $2 WHERE id = $1`, [id, JSON.stringify(names)])
+      await client.query('COMMIT')
+    } catch (e) {
+      await client.query('ROLLBACK')
+      throw e
+    } finally {
+      client.release()
     }
-    const id = newId('WF')
-    await pool.query(
-      `INSERT INTO workflow_requests (id, category, title, amount, body, purpose, content, attachments, requester_id, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-      [id, input.category, input.title, input.amount, input.body, input.purpose, input.content,
-        JSON.stringify(input.attachments), user.id, nowJstIso()])
-    return c.json({ data: { id } }, 201)
+    return c.json({ data: { id } }, requestId ? 200 : 201)
   })
 
   // 提出（新規 / draft・remanded の再申請。経路を凍結し in_review step1 へ）
@@ -260,19 +391,23 @@ export function workflowsRoutes(pool: pg.Pool): Hono {
         await client.query(
           `UPDATE workflow_requests
            SET category = $2, title = $3, amount = $4, body = $5, purpose = $6, content = $7,
-               attachments = $8, status = 'in_review', current_step = 1, route_snapshot = $9, updated_at = now()
+               status = 'in_review', current_step = 1, route_snapshot = $8, updated_at = now()
            WHERE id = $1`,
           [id, input.category, input.title, input.amount, input.body, input.purpose, input.content,
-            JSON.stringify(input.attachments), JSON.stringify(route)])
+            JSON.stringify(route)])
       } else {
         id = newId('WF')
         await client.query(
           `INSERT INTO workflow_requests
-             (id, category, title, amount, body, purpose, content, attachments, requester_id, status, current_step, route_snapshot, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'in_review', 1, $10, $11)`,
+             (id, category, title, amount, body, purpose, content, requester_id, status, current_step, route_snapshot, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'in_review', 1, $9, $10)`,
           [id, input.category, input.title, input.amount, input.body, input.purpose, input.content,
-            JSON.stringify(input.attachments), user.id, JSON.stringify(route), nowJstIso()])
+            user.id, JSON.stringify(route), nowJstIso()])
       }
+      // 添付実体の同期（SoT = workflow_files）→ 表示名一覧（attachments）を反映（原則6）
+      const names = await syncRequestFiles(client, id, user.id, input)
+      await client.query(
+        `UPDATE workflow_requests SET attachments = $2 WHERE id = $1`, [id, JSON.stringify(names)])
       await appendLog(client, id, 0, user.id, 'submit', '')
       await client.query('COMMIT')
     } catch (e) {

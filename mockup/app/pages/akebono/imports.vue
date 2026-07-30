@@ -2,10 +2,11 @@
 /**
  * F-32 データ取込・連携（管理者専用）
  * 取込元（CSV/固定長/JSON/API）・項目マッピング（方式別に取込元を解析して左辺を生成し、右辺=対象アプリの
- * 有効項目〔既定+カスタム〕へ対応づけ・版管理）・取込実行（ステージング → 検証 → 反映。冪等・dry-run 思想。エラー行隔離）。
- * モックは実行をシミュレートし、実行履歴・エラー行を残す。
+ * 有効項目〔既定+カスタム〕へ対応づけ・版管理）・取込実行（ステージング → 検証 → 反映。冪等・エラー行隔離）。
+ * API モードは**実取込**（監査指摘 2026-07-30 ①）: ファイル方式は添付を、API 方式はサーバーの
+ * SSRF ガード付き pull を材料に、対象テーブルへ実反映する。モックは実行をシミュレートし履歴のみ残す。
  */
-import { Plus, Play, RotateCcw, Trash2, Upload } from 'lucide-vue-next'
+import { FileUp, Plus, Play, RotateCcw, Trash2, Upload } from 'lucide-vue-next'
 import {
   IMPORT_METHOD_LABELS, IMPORT_ENTITY_LABELS,
 } from '~/composables/useAkebonoImports'
@@ -17,6 +18,7 @@ import { fmtDateTime, fmtInt } from '~/utils/format'
 const imp = useAkebonoImports()
 const toast = useToast()
 const confirm = useConfirm()
+const isApi = useApiMode()
 
 // ---------- 取込元一覧 ----------
 
@@ -148,10 +150,11 @@ const MAPPING_STATUS: Record<ImportMapping['status'], { label: string; tone: 'ok
 // ---------- マッピング編集（方式別。左辺=取込元・右辺=アプリ項目〔既定+カスタム〕） ----------
 const { appFields } = useAppFields()
 
-// company（取引先）取込は Akebono カタログを持たないため CRM 会社項目へフォールバック（§44-6）
+// company（取引先）取込は Akebono カタログを持たないため CRM 会社項目へフォールバック（§44-6）。
+// キーは companies マスタの実項目に一致させる（実取込の反映先。旧 email/phone 等は実列が無く反映不能だった）
 const COMPANY_IMPORT_FIELDS: { key: string; label: string }[] = [
-  { key: 'name', label: '会社名' }, { key: 'kind', label: '区分' }, { key: 'industryId', label: '業界' },
-  { key: 'email', label: 'メール' }, { key: 'phone', label: '電話' }, { key: 'address', label: '住所' }, { key: 'note', label: '備考' },
+  { key: 'name', label: '会社名' }, { key: 'kind', label: '区分（self/customer）' }, { key: 'industryId', label: '業界' },
+  { key: 'size', label: '規模' }, { key: 'location', label: '所在地' }, { key: 'description', label: '備考' },
 ]
 /** 右辺の候補（対象アプリの既定＋カスタム項目）。company は CRM 会社項目＋会社カスタム項目 */
 const targetFieldOptions = computed<{ value: string; label: string }[]>(() => {
@@ -283,21 +286,39 @@ async function saveMapping(): Promise<void> {
 // ---------- 取込実行 ----------
 
 const runBusy = ref(false)
+/** 実取込のファイル（API モード × ファイル方式で必須。実行成功でクリア） */
+const runFile = ref<File | null>(null)
+const runFileInput = ref<HTMLInputElement | null>(null)
+/** API モードでファイル添付が必要な取込元か */
+const needsRunFile = computed(() => isApi && (selectedSource.value?.method.startsWith('file') ?? false))
+
+function onRunFilePick(ev: Event): void {
+  const input = ev.target as HTMLInputElement
+  runFile.value = input.files?.[0] ?? null
+  input.value = ''
+}
+
+// 取込元を切り替えたら選択済みファイルを引き継がない（別取込元への誤取込を防ぐ）
+watch(selectedSourceId, () => { runFile.value = null })
+
 async function runImport(): Promise<void> {
   if (!selectedSourceId.value || runBusy.value) return
   runBusy.value = true
   try {
-    const res = await imp.runImport(selectedSourceId.value)
+    const res = await imp.runImport(selectedSourceId.value, runFile.value)
     if (!res.ok) {
       toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
       return
     }
     const run = res.runId ? imp.runsOf(selectedSourceId.value).find(r => r.id === res.runId) : undefined
     const failed = run?.counts.failed ?? 0
+    const skipped = run?.counts.skipped ?? 0
     toast.show(
-      `取込を実行しました（${run?.code ?? ''}）${failed > 0 ? ` / ${failed}件を隔離` : ''}`,
+      `取込を実行しました（${run?.code ?? ''}）: ${run?.counts.applied ?? 0}件反映`
+      + `${skipped > 0 ? ` / ${skipped}件は取込済みのためスキップ` : ''}${failed > 0 ? ` / ${failed}件を隔離` : ''}`,
       failed > 0 ? 'warn' : 'ok',
     )
+    runFile.value = null
   } finally { runBusy.value = false }
 }
 
@@ -351,10 +372,16 @@ function openRun(row: Record<string, unknown>): void {
 
     <!-- 思想注記 -->
     <div class="card border-line bg-info-soft p-3 text-[12px] leading-relaxed text-sub">
-      取込は <span class="font-semibold text-ink">ステージング → 検証（dry-run）→ 反映</span> の順で行い、
-      マスタ未登録などの不正行は隔離して健全行のみ反映します（原則4）。同一データの再取込は冪等に扱われます。
-      取込元・マッピング・実行履歴はサーバーに永続化されます。取込実行は現在は結果を決定的にシミュレートします
-      （実ファイルのアップロード・パース・API 接続時の SSRF 対策付き本実装は F-32 の後続対応）。
+      取込は <span class="font-semibold text-ink">ステージング → 検証 → 反映</span> の順で行い、
+      マスタ未登録などの不正行は隔離して健全行のみ反映します（原則4）。同一データの再取込は冪等に扱われます
+      （商品・SKU・取引先 = 上書き更新 / 売上・在庫 = 取込済み行をスキップ）。
+      <template v-if="isApi">
+        ファイル方式は添付ファイル（CSV/固定長/JSON・10MB 以下）を、API 接続方式はサーバーが安全確認付きで取得した
+        応答を材料に、<span class="font-semibold text-ink">対象アプリのデータへ実反映</span>します。
+      </template>
+      <template v-else>
+        モックモードでは取込実行は結果をシミュレートし、実行履歴のみを残します（実反映は API モード）。
+      </template>
     </div>
 
     <!-- 非管理者は閲覧のみ（取込設定・実行は管理者権限。両モードで一致 = AKO-AUTH-003） -->
@@ -412,7 +439,25 @@ function openRun(row: Record<string, unknown>): void {
           <Upload class="h-4 w-4" aria-hidden="true" />
           マッピングを設定
         </button>
-        <button type="button" class="btn btn-primary btn-sm" :disabled="runBusy" @click="runImport">
+        <template v-if="needsRunFile">
+          <input
+            ref="runFileInput"
+            type="file"
+            class="hidden"
+            accept=".csv,.txt,.dat,.json"
+            aria-label="取込ファイルを選択"
+            @change="onRunFilePick"
+          >
+          <button type="button" class="btn btn-sm" @click="runFileInput?.click()">
+            <FileUp class="h-4 w-4" aria-hidden="true" />
+            {{ runFile ? runFile.name : 'ファイルを選択' }}
+          </button>
+        </template>
+        <button
+          type="button" class="btn btn-primary btn-sm"
+          :disabled="runBusy || (needsRunFile && !runFile)"
+          @click="runImport"
+        >
           <Play class="h-4 w-4" aria-hidden="true" />
           {{ runBusy ? '実行中…' : '取込を実行' }}
         </button>

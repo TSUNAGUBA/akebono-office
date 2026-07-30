@@ -133,9 +133,9 @@
 | 通知・エスカレーションセンター `/inbox` | F-12 | ✅ | ✅ エスカレーション接続済み（PR #21）: 起票（日報課題・36協定・チャットボット）→ 対応（回答/裁定/対応不要）→ ナレッジ還流まで API 化 | 通知タブは PR #17 で接続済み。AI カンパニー発シグナル（停滞・過負荷）はバッチ4 |
 | AI業務アシスタント `/ai-assistant`（計画・AI コメント・振り返り・日報反映・インサイト） | F-14 | ✅ | ✅ AI アシスタント接続済み（PR #25） | カレンダー予定の材料は PR #26（F-06-8）で接続済み |
 | Google カレンダー連携（予定同期・タスク反映） | F-06-8 | ✅（モック同期） | ✅ カレンダー接続済み（PR #26/#27）: OAuth 2.0 認可コードフロー（state = 一回性・10 分 TTL の DB ノンス + Google アカウント email と members.email の突合・トークンは AES-256-GCM 暗号化保管 = C3）・予定同期（google 発のみ置換 upsert = SoT 分離）・アプリ発タスク（Google 反映は補助処理）・連携解除（revoke + トークン破棄）・日報ドラフト材料へ接続 | OAuth 未設定時は enabled=false で連携 UI 非表示（他機能に影響なし）。Webhook push は将来拡張（手動同期で開始） |
-| 稟議 `/workflow`（旧称: ワークフロー = §36 で改称） | F-07 | ✅ | ✅ ワークフロー接続済み（PR #22）: 申請・経路凍結・承認/却下/差戻し（クレームファースト）・代理承認・承認ログ・通知 + 承認経路マスタ | PR #23 で下書きの可視性を本人と管理者のみに制限（レビュー指摘対応）。§36 で本文を目的/内容へ分割（区分別テンプレート・旧 body は互換表示） |
+| 稟議 `/workflow`（旧称: ワークフロー = §36 で改称） | F-07 | ✅ | ✅ ワークフロー接続済み（PR #22）: 申請・経路凍結・承認/却下/差戻し（クレームファースト）・代理承認・承認ログ・通知 + 承認経路マスタ | PR #23 で下書きの可視性を本人と管理者のみに制限（レビュー指摘対応）。§36 で本文を目的/内容へ分割（区分別テンプレート・旧 body は互換表示）。**添付は §48-2 で実ファイル化（workflow_files。従来はファイル名文字列のみ）** |
 | シフト表 `/shift` | F-05 | ✅ | ✅ シフト接続済み（PR #23） | 希望・割当の参照は管理者 = 全件 / 本人 = 自分のみのサーバースコープ |
-| 意思決定支援 `/decision` | F-02 | ✅ | ✅ 意思決定接続済み（PR #28）: 判断テーマ = 汎用マスタ `/v1/masters/decision-themes`（0011 で mockup seed を移行）・判断ログ = `/v1/decisions/logs`（追記のみ = 記録系保護。テーマ・選択肢・理由をサーバーで強制） | シナリオ予測（決定的線形モデル）は表示射影としてクライアント側に維持（設計判断） |
+| 意思決定支援 `/decision` | F-02 | ✅ | ✅ 意思決定接続済み（PR #28）: 判断テーマ = 汎用マスタ `/v1/masters/decision-themes`（0011 で mockup seed を移行）・判断ログ = `/v1/decisions/logs`（追記のみ = 記録系保護。テーマ・選択肢・理由をサーバーで強制） | シナリオ予測（決定的線形モデル）は表示射影としてクライアント側に維持（設計判断）。**テーマの作成・編集 UI は §48-3 で新設（/masters/decision-themes。従来はシード 3 テーマ固定）** |
 | AKEBONO（3D オフィス） `/akebono` | F-03 | ✅ | 🚧 AKEBONO 接続（本 PR = バッチ6d）: 要望ボックス = `akebono_wishes`（0019・記録系 = 追記のみ・編集/削除なし）・`GET/POST /v1/akebono/wishes`（本文必須 = AKO-AKB-001・2000 cp 切詰め・全員参照可 = 社内 C2）・useAkebono デュアルモード化・機能ガード 'akebono'（F-16）・チャットボット文脈に AKEBONO ブロック追加。プレースホルダ（バナー・ロードマップ）は静的表示 = フロントの責務 | **本 PR で mock-status が空 = API モードのモックバッジ全廃（マイルストーン）** |
 | AIネイティブカンパニー `/ai-company` | F-08 | ✅ | ✅ AI カンパニー接続済み（PR #35 = バッチ6a）: ロール/AI 社員 = 汎用マスタ（0015）・タスク依頼 → 分解（Vertex AI → 失敗時 shared/domain/ai-tasks の同一ヒューリスティック）→ 承認 → 実行 → 完了（FOR UPDATE 状態機械・活動ログ追記・依頼者へ通知・AI 社員 status 同期）・日次報告 = daily_reports（author_kind='ai'・冪等生成）・停滞/過負荷/低確信度エスカレーション・機能ガード 'ai-company'（F-16） | AI 社員の「実実行」（LLM がステップを自律実行）は将来拡張。現段階は進行操作を人が行うワークフロー |
 | 業務支援ツール `/support` | F-09 | ✅ | ✅ | 外部リンクは接続済みマスタを参照。チャットボット（F-09-3）は PR #27 で接続済み。**ドキュメント管理はバッチ7l で本実装（§32 参照）= 全ドメイン移行完了** |
@@ -146,7 +146,7 @@
 | メディア分析 `/media`（AKEBONO 業務配下） | F-40 | ✅ | ✅ メディア接続（§37 = 2026-07-28）: GA 連携 = Google OAuth 2.0（**セグメント単位**・analytics.readonly・state ノンス + email 突合・トークン AES-256-GCM 暗号化 = 0030）→ GA4 プロパティ選択（Admin API accountSummaries → PUT /v1/media/property）・集計 = GA4 Data API batchRunReports → MediaMetrics 整形（lib/ga.ts・30 分導出キャッシュ・conversions 廃止のため keyEvents 使用）・メディア設定（部分更新 = hasOwn フィルタ）・記事インベントリ（論理削除/復元）・AI 記事生成（Vertex AI → 決定的フォールバック・採用/取消）・AI インサイト（media/integrated = weekly_insights と同型の upsert 保管） | 記事インベントリは実データのためシードしない（採用・手動登録で育成）。統合メトリクス（PDCA）は Phase C（§39）でサーバー組み立てへ引き上げ = 売上軸も実データ（GET /v1/media/integrated） |
 | 業態/会社全体ダッシュボード `/akebono/dashboard`・`/akebono/company` | F-41 | ✅ | 🚧 ほぼ接続（Phase C = §39）: 集計（売上軸 = sales_records + メディア軸 = GA）はサーバー組み立ての実データ（/v1/media/integrated）。**AI レポートの保管（dashboardInsights）のみ未移行** = カードに「レポート保管 = ローカル」バッジ | 保管の media_insights 同型化は Phase D（§39-6）。ページ全体のモックバッジは撤去（M3 撤去条件成立） |
 | Akebono 設定系（`/akebono` ハブのアプリ設定・`/akebono/masters`・`/akebono/settings/segments`・`/akebono/settings/items`） | F-20/F-30/F-31 | ✅ | ✅ Phase B 接続（§38 = 2026-07-29）: 業態 + 共通マスタ 8 種 = 汎用マスタ registry（0031・モックシードと同一 id を投入）・業態×アプリ設定 = `/v1/akebono/app-configs`（複合キーのバッチ upsert）・項目カスタマイズ = `/v1/akebono/item-settings`（部分 upsert + エンティティ単位 reset） | カタログ（アプリ・項目定義・業種プリセット）はフロント静的 SoT のまま |
-| Akebono 記録系（`/akebono/products`・`purchase-orders`・`production`・`inbounds`・`outbounds`・`purchases`・`inventory`・`sales`・`billing`） | F-21〜F-29 | ✅ | ✅ Phase C 接続（§39 = 2026-07-29）: 記録系 15 コレクション = 0032（商品/SKU/画像・発注・生産・入荷・仕入・出荷・在庫台帳・売上明細・請求/支払通知/入金）。実績・台帳は追記のみ + 冪等キー・訂正は赤黒・確定系は赤伝。金額算定は shared/domain/akebono をモックと共有 | 実データのためシードなし（各画面に空状態の登録案内）。データ取込（F-32 `/akebono/imports`）のみモック残 = mock-status に登録（Phase D） |
+| Akebono 記録系（`/akebono/products`・`purchase-orders`・`production`・`inbounds`・`outbounds`・`purchases`・`inventory`・`sales`・`billing`） | F-21〜F-29 | ✅ | ✅ Phase C 接続（§39 = 2026-07-29）: 記録系 15 コレクション = 0032（商品/SKU/画像・発注・生産・入荷・仕入・出荷・在庫台帳・売上明細・請求/支払通知/入金）。実績・台帳は追記のみ + 冪等キー・訂正は赤黒・確定系は赤伝。金額算定は shared/domain/akebono をモックと共有 | 実データのためシードなし（各画面に空状態の登録案内）。データ取込（F-32 `/akebono/imports`）は Phase D で設定・履歴を永続化 → **§48-1 で取込実行も実取込化（シミュレーション廃止）** |
 
 ## 3. バッチ3d（PR #25・マージ済み）: AI業務アシスタント + 日報 AI アシストの完了条件（Definition of Done）
 
@@ -816,7 +816,7 @@
   5. いずれも API モードで**リロード・翌日も保持**されること（localStorage 依存の解消）
 
 ### 40-7 残課題（本フェーズ後）
-- [ ] **データ取込の実ファイル取込（F-32 後続）**: CSV/固定長/JSON のアップロード・パース・マッピング変換適用・API 接続の SSRF 対策・認証情報のサーバー保管。**本フェーズは取込設定・実行履歴の永続化（localStorage 依存の解消）が目的**で、実行はサーバーが決定的にシミュレートする（imports 画面に明示）。取込からの売上計上（source_kind='import'）はこの本実装とセット。
+- [x] **データ取込の実ファイル取込（F-32 後続）**: → **§48-1 で実装完了（2026-07-30）**。CSV/固定長/JSON のアップロード・パース・マッピング変換適用・API 接続の SSRF 対策・取込からの売上計上（source_kind='import'）まで実装。
 - [ ] **入荷/出荷/生産実績の伝票レベル補償**（実績は追記のみ・取消手段なし。**在庫の数量は adjust で補償可能** = 運用でカバー。伝票そのものの赤黒/取消は需要を見て判断）。
 - [ ] 観察事項（明細検証の厳格化・別軸）: canceled 予定への実績受理 / qtyLines の不正行の無音スキップ。データ整合ではなく入力厳格化の課題として据え置き。
 
@@ -1092,11 +1092,10 @@
 
 ### 45-7 本 PR のカバレッジと残作業
 - [x] 4 方式すべてで**方式別のマッピング設定 UI・接続/解析設定・右辺のアプリ有効項目連動**が成立。
-- [ ] **実ファイルの取込・パース・API 実接続（SSRF 対策付き）**は従来どおり F-32 後続スコープ（本 PR は設定の永続化と
-  マッピング編集体験まで。取込実行は決定的シミュレートのまま = §40 の位置づけを踏襲）。マッピングに保持した
-  ロケータ・config は後続の実パース実装がそのまま消費できる I/F として定義済み。
-- [ ] 後続で扱う軽微事項（実パース実装とセット）: 数値ロケータの範囲検証（byteStart ≤ byteEnd・1 始まり）は本 PR では UI の
-  `min=1` のみ（API 未強制）/ ヘッダ無し CSV で手動追加した行は列位置（columnIndex）を持てない（自動検出行のみ位置確定）。
+- [x] **実ファイルの取込・パース・API 実接続（SSRF 対策付き）** → **§48-1 で実装完了（2026-07-30）**。マッピングに保持した
+  ロケータ・config をそのまま消費する実パース（shared/domain/import-run）が接続された。
+- [x] 軽微事項も §48-1 で解消: バイト範囲検証（1 始まり・byteStart ≤ byteEnd）は抽出時に強制（AKO-IMP-008）/
+  ヘッダあり CSV は列位置未設定でもヘッダ名（sourceField 一致）で解決できる。
 
 ## 46. データ取込画面の応答遅延・無効化タイムアウトの是正（オペレーター報告 2026-07-30）
 
@@ -1159,3 +1158,66 @@
   mockup 単体 155 / typecheck（api・mockup）全 green。
 - [x] docs（原則5）: data-design（CustomerLog エンティティ・SearchDoc sourceKind・PermissionRule 擬似フィールド）・
   api-design（useCustomerLogs 契約・AKO-CLG-001/002/003）・screen-design（サイトマップ + 画面定義）を更新。
+
+## 48. モック残存・非永続 5 件の本実装（監査指摘 2026-07-30 = オペレーター指示）
+
+> 独立監査（2026-07-30。composable 全 54 本・全 64 ページ・API ルート走査）で挙がった
+> 「モックアップ実装・データが永続化されない機能」5 件の本実装。①データ取込の実行（完全シミュレーション）
+> ②稟議添付（ファイル名文字列のみ）③意思決定支援の分析コンテンツ（静的シード・テーマ編集 UI なし）
+> ④チャットボット初回送信失敗時の履歴消失 ⑤日報ドラフトのフォールバックがモックシード参照。
+
+### 48-1 ①データ取込の実行を実取込へ（F-32 後続の本実装）
+- [x] **取込内容の取得**: ファイル方式（file_csv/file_fixed/file_json）= `POST /v1/akebono/import-runs` が `contentBase64`（10MB 上限）を受領し encoding（utf8/sjis = ICU TextDecoder）で復号。API 方式（api_pull）= **SSRF ガード付き pull**（`api/src/lib/safe-fetch.ts` = https のみ・プライベート/ループバック/リンクローカル/メタデータ（169.254.169.254）等の内部レンジを**接続前に**拒否・検証済みアドレスで接続する自前 lookup = DNS リバインディング防止・リダイレクト不追跡・30 秒タイムアウト・10MB 上限。認証は config の authType/authValue = bearer/api_key/basic をヘッダへ）
+- [x] **レコード抽出**: `shared/domain/import-run.ts`（純粋関数・単体テスト対象）= CSV（列番号 or ヘッダ名解決・引用対応）/ 固定長（1 始まり両端含む**バイト範囲**スライス = Shift_JIS の全角対応）/ JSON（ルートパス・ドットパスキー）+ transform（trim/number/date/upper/lower）。上限 5000 行（AKO-IMP-006）
+- [x] **対象別の反映（検証 → 反映を同一トランザクション・取込元単位の advisory lock で直列化）**:
+  - product = (segment, code) upsert（参照 = セグメント/カテゴリ/仕入先/税区分/単位を id or 有効行名称で解決・未解決は隔離・**空セルは既存値を保持**・新規は既定 SKU 同時生成 = POST /products と同型・custom.* は custom jsonb へマージ）
+  - sku = SKU コード一致の更新のみ（親商品を表現できないため新規作成は対象外と明記）
+  - company = 会社名完全一致 upsert（業界解決・同名複数は隔離）
+  - sales_record = `source_ref` = **行フィンガープリント（sha256）で冪等追記**（0046 部分一意 INDEX + ON CONFLICT DO NOTHING → 再実行は skipped = 売上の二重計上なし）。原価・課金区分は SKU/商品から解決（POST /sales-records と同一）
+  - inventory = adjust/棚卸のみ受理し `ref_line_id` = フィンガープリントで台帳へ冪等追記（既存 UNIQUE(ref_type, ref_line_id, kind) を再利用）
+- [x] **エラー行隔離**: 行単位 SAVEPOINT（rowWrite）で一意制約衝突等も当該行のみ隔離し残りを反映（原則4）。errors は 50 件まで記録。counts = staged/applied/skipped/failed・全滅時のみ status='failed'
+- [x] フロント: imports.vue に実行用ファイル選択（API モード × ファイル方式で必須・10MB 検査・取込元切替でクリア）+ 実行結果トースト（反映/スキップ/隔離の内訳）+ 注記を実態へ更新（モックモード = シミュレートのままを明示）。useAkebonoImports.runImport(sourceId, file) 化 + 反映先コレクション（products/salesRecords 等）の再ロード（原則6）。company 取込の項目候補を companies マスタの実項目（size/location/description）へ是正（旧 email/phone は実列がなく反映不能だった）
+- [x] simulateRun（決定的シミュレート）は API から撤去（モックモードのシミュレートは維持 = デモ導線）
+- [ ] **残課題（原則9.5 の記録 = 取込の一括取消）**: akebono-menu-design 決定 #9（旧値 JSON の保全 → 一括復元・赤黒一括生成）と
+  決定 #14（アップロード原本の GCS 保全）は未実装。反映済みデータの是正は当面、各アプリの既存フロー
+  （商品/取引先/SKU = 編集・無効化 / 売上 = 赤黒訂正 / 在庫 = adjust）で個別に行う（akebono-imports.ts ヘッダに明記）。
+  なお売上・在庫は冪等キーにより再実行での二重反映はない
+
+### 48-2 ②稟議添付の実ファイル化
+- [x] `workflow_files`（0045。bytea = ai_task_files と同型・10MB・5 件/申請）。draft/submit が `files`（base64 新規）+ `keepFileIds`（既存維持）を受領し**差分同期**（トランザクション内で SoT 書込 → attachments 表示名一覧を合成 = 原則6。名前のみ旧データ・旧クライアントは互換 = 原則7）。形式 allowlist（.md/.txt/.csv/.pdf/.docx/.xlsx/.pptx/.jpg/.png = AKO-WFL-004）
+- [x] `GET /v1/workflows/:id/files`（メタ一覧）+ `GET /v1/workflows/:id/files/:fileId`（base64 原本 DL）。可視性 = 申請一覧と同一（下書きは本人と管理者のみ 404）
+- [x] workflow.vue: 手打ちファイル名入力 → **ファイル選択**へ置換（API = 実体保管・詳細ドロワーからダウンロード / モック = 名前のみ登録をヒントに明示 = ドキュメント管理と同方針）。編集時は既存添付の取り外し（keepFileIds）に対応
+
+### 48-3 ③意思決定支援テーマの管理 UI
+- [x] `/masters/decision-themes` 新設（管理者専用・MasterShell 準拠）: テーマの作成・編集・無効化/復元。①意味（key/value）②関係（リンク）③制約と打ち手（✓/△/✗ + 選択肢への昇格）・選択肢 A/B/C（★推奨・予測・根拠）・推奨理由・シナリオ比較パラメータの全項目を編集可能。書込は既存の汎用マスタ CRUD（`/v1/masters/decision-themes`）を再利用（原則3 = API 追加なし）
+- [x] マスタメンテナンスのカード + 意思決定支援ページの「テーマを管理」導線（管理者）。DecisionTheme 型へ active? を追加
+- [x] 既知の制約（変更なし・明記）: シナリオ予測の係数はテーマ固有ロジック（dt-01〜03）のため、新規テーマは汎用線形式で予測される（ページ説明に明示。実データ接続は将来課題）
+
+### 48-4 ④チャットボット初回送信失敗時の履歴消失
+- [x] `POST /v1/chatbot/sessions`（明示作成）+ `POST /sessions/:id/messages` に `role: 'user'` を追加（不正 role は assistant へ倒す）
+- [x] useChatbot.send の回復経路: /ask 不達（通信断・コールドスタート等）でセッション未確定のとき、セッションを明示作成 → 質問（role=user）→ フォールバック応答を追記（履歴の忠実性）。これも失敗する完全な通信断はメモリ表示のみで継続（非ブロッキング = 原則4）
+
+### 48-5 ⑤日報ドラフトフォールバックのモックシード混入
+- [x] useReportAssist.generateDraft のフォールバック材料を `tbl('notes')` / `tbl('taskPlans')`（未移行コレクション = API モードではモックシード）から **useNotes('poipoi') / useTaskPlans().plansOf**（モード対応済みの API キャッシュ）へ置換。API 断時に実在しないシードのタスク・ポストがドラフトへ混入し、気付かず提出すると虚偽内容が日報として永続化される問題の是正（事実を作らない）
+- [x] あわせて useReports ヘッダの陳腐化コメント（「提出時エスカレーションは未発火」= バッチ3a で解消済み）を是正
+
+### 48-6 検証
+- [x] api 単体 **238**（import-run 抽出/変換/復号 12 件 + safe-fetch SSRF 判定 7 件を新設・simulateRun テストを置換）/ api 統合 **214**（実取込 4 スイート = 商品 CSV upsert・売上 JSON 冪等〔同一内容行の序数含む〕・SSRF ガード〔IPv4/IPv6 リテラル〕・無効取込元 409 / 稟議添付 1 スイート = 保存・DL・差分同期・可視性・旧クライアント互換 / チャットボット回復経路 1 スイート）/ mockup 単体 **155** / typecheck（api・mockup）・build 全 green
+- [x] オペレーター確認手順（API モード）:
+  1. `/akebono/imports` で商品 CSV の取込元 + マッピング（列番号 or ヘッダ名）→ ファイルを選択 → 実行 → `/akebono/products` に実データが登録・同一ファイル再実行で二重登録なし
+  2. `/workflow` で申請にファイルを添付 → 提出 → 承認者が詳細ドロワーからダウンロードできる
+  3. `/masters/decision-themes` でテーマを新規作成 → `/decision` に表示され判断を記録できる
+  4. 機内モード等で `/support/chatbot` の新規会話へ送信 → 復帰後にセッション履歴へ質問と応答が残る（回復経路が動いた場合）
+
+### 48-8 反復レビュー（原則9・1 巡目 = 独立コードレビュアー + システム監査官。CRITICAL 0・MAJOR 計 5〔重複 1〕→ 全件対応）
+- [x] **CR-M1（SSRF・IPv6 リテラルバイパス）**: `https://[::1]/` 等は URL.hostname が角括弧付きで isIP=0 となり事前チェックを素通り + https.request は IP リテラルに lookup を呼ばない → **角括弧を剥がして両ファミリで接続前判定** + v4 射影の 16 進表記（`::ffff:7f00:1`）の再検査 + NAT64/Teredo レンジ追加。単体 7 件 + 統合（[::1]）の回帰テストを新設
+- [x] **CR-M2（売上 amount の numeric(14,2) あふれで取込全体が 500）**: 金額（数量 × 単価）上限を検証で隔離 + 商品/SKU 価格にも範囲検証を追加
+- [x] **CR-M3 / 監査-MINOR-5（稟議編集の添付全消去リスク）**: 既存添付一覧の遅延ロード未完了/失敗中に保存すると keepFileIds が空扱いで既存添付を全削除し得た → openEdit で**確定ロード**（loadFiles）し、未確定の間は files/keepFileIds を送らない（サーバーの「未指定 = 実体に触れない」下位互換経路へ倒す）+ 取得失敗は警告表示・添付編集を無効化
+- [x] **監査-MAJOR-1（§42 重複採番・挿入位置）**: 新設セクションを §48 へ再採番し文書末尾へ移動・相互参照 4 箇所を追随
+- [x] **監査-MAJOR-2（useReports コメント是正の未実施チェック）**: useReports.ts ヘッダの陳腐化 2 箇所（提出済み編集不可・エスカレーション未発火）を実際に是正
+- [x] **監査-MAJOR-3 / CR-m1（隔離が product のみ）**: sku/company/sales/inventory の書込も行単位 SAVEPOINT（rowWrite）で包み、在庫の発生日は YYYY-MM-DD を検証で隔離（不正日付 1 行で取込全滅する経路を排除）
+- [x] **監査-MINOR-6（既存セッションの /ask 不達で質問消失）**: AKO-GEN-NET（応答なし）のときのみ role=user で質問を追記（応答ありの 5xx は /ask が質問を永続化済みのため追記しない = 重複最小化。トレードオフをコメントに明記）
+- [x] **監査-MINOR-7（ファイル内の正当な同一内容行が skipped に収束）**: フィンガープリントへ出現序数を追加（再実行では序数も再現される = 冪等維持。統合テストで同一内容 2 行 → 2 件反映 → 再実行スキップを検証）
+- [x] 監査-MINOR-1〜4・8 / CR-n1（陳腐化コメント・akebono-menu-design/§45-7 の旧記述・F-32-5 取消の乖離記録・data-design 表列数・同名チップの二重削除）: 全件是正
+- [x] 受容（対応せず記録）: CR-m2/NIT-2 = skipped 行でも SR 採番が飛ぶ（記番ギャップのみ・機能影響なし）/ CR-n2 = /ask 受理済み + 応答喪失時の回復経路でセッションが二重化し得る（データ破壊なし・履歴の冗長のみ）
+- [x] 再検証（是正後）: api 単体 238 / api 統合 214 / mockup 単体 155 / typecheck（api・mockup）・build 全 green

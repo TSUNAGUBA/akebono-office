@@ -794,21 +794,38 @@ export function chatbotRoutes(pool: pg.Pool, env: Env): Hono {
     return c.json({ data: rows })
   })
 
-  // フォールバック応答（クライアントの決定的ルーティング結果）の追記（本人のみ・履歴の忠実性のため）
+  // セッションの明示作成（/ask 不達時の回復経路。通常の新規会話は /ask の sessionId 未指定が担う）。
+  // クライアントは作成後に /sessions/:id/messages で質問・フォールバック応答を追記し、
+  // 新規会話の初回送信が /ask の通信断で未永続のまま消えることを防ぐ（監査指摘 2026-07-30）
+  app.post('/sessions', async (c) => {
+    const user = c.get('user')
+    const body = await c.req.json().catch(() => ({})) as { title?: string }
+    const title = capCp(String(body.title ?? '').trim(), 40)
+    if (!title) throw err('AKO-GEN-001', 'title を指定してください', 400)
+    const id = newId('cs')
+    await pool.query(
+      `INSERT INTO chat_sessions (id, member_id, title) VALUES ($1, $2, $3)`,
+      [id, user.id, title])
+    return c.json({ data: { id, title } }, 201)
+  })
+
+  // フォールバック応答（クライアントの決定的ルーティング結果）の追記（本人のみ・履歴の忠実性のため）。
+  // role='user' は /ask 不達からの回復経路（POST /sessions で作った空セッションへの質問の追記）に使う
   app.post('/sessions/:id/messages', async (c) => {
     const user = c.get('user')
     const sessionId = c.req.param('id')
     await requireOwnSession(pool, sessionId, user.id)
     const body = await c.req.json().catch(() => ({})) as {
-      content?: string; sources?: unknown; suggestions?: unknown
+      role?: string; content?: string; sources?: unknown; suggestions?: unknown
     }
-    const content = capCp(String(body.content ?? '').trim(), 4000)
+    const role = body.role === 'user' ? 'user' : 'assistant'
+    const content = capCp(String(body.content ?? '').trim(), role === 'user' ? 2000 : 4000)
     if (!content) throw err('AKO-GEN-001', 'content を指定してください', 400)
     const id = newId('cm')
     await pool.query(
       `INSERT INTO chat_messages (id, session_id, role, content, sources, suggestions, at)
-       VALUES ($1, $2, 'assistant', $3, $4, $5, $6)`,
-      [id, sessionId, content,
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [id, sessionId, role, content,
         JSON.stringify((Array.isArray(body.sources) ? body.sources.map(String) : []).slice(0, 5)),
         JSON.stringify((Array.isArray(body.suggestions) ? body.suggestions.map(String) : []).slice(0, 3)),
         nowJstIso()])
