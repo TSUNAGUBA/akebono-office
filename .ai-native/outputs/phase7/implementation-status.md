@@ -1028,3 +1028,54 @@
 
 ### 44-6 Part ②（取込マッピング）への申し送り
 - **エンティティキー空間の整合（監査 M2）**: 取込の `ImportTargetEntity` は `company` を含むが `AkebonoEntity` には無く `ITEM_CATALOG['company']` も無い。取込右辺を `useAppFields(targetEntity)` で構成する際、`company` は Akebono 側カタログを持たず CRM 側 `company` カスタム項目（別画面 settings.vue 管理）と名前空間が衝突する。Part② 着手時に「company 用の Akebono カタログを追加」または「company 取込は CRM エンティティを明示的に参照」のいずれかを決定・文書化する。
+
+## 45. データ取込・連携の方式別マッピング設定（F-32。オペレーター指示 2026-07-30 ②）
+
+> オペレーター指示:「Akebono 業務のセグメントごとの『データ取込・連携』について、各取込方式ごとのマッピング設定が
+> 有効じゃないように見える」。CSV = 何列目↔アプリ項目 / 固定長 = 開始〜終了バイト↔アプリ項目 /
+> JSON = キー↔アプリ項目 / API = JSON + エンドポイント・トークン。**左辺 = 取込元・右辺 = そのセグメントアプリの
+> 有効項目（既定＋カスタマイズ項目）**。§44（Part ①）の `useAppFields` を右辺の SoT として使う。
+
+### 45-1 現状の課題（探索で判明）
+- マッピング編集が方式に依らず「取込元項目（自由文字列）↔対象キー（自由文字列）」の 2 テキスト入力のみで、
+  方式別のロケータ（CSV 列番号・固定長バイト範囲・JSON キー）と接続設定（CSV ヘッダ有無/区切り・API エンドポイント/認証）を
+  一切保持していなかった（「AI 候補」ボタンはスタブ）。右辺もアプリの有効項目と連動していなかった。
+
+### 45-2 実装（方式別マッピングエンジン）
+- [x] 型: `ImportSourceConfig`（hasHeader/delimiter・endpoint/authType/authValue・jsonRootPath）・`ImportAuthType`・
+  `ImportFieldMap` へ方式別ロケータ（columnIndex/byteStart/byteEnd/jsonKey）を追加。`ImportSource.config?` を追加。
+- [x] 純関数（`shared/domain/import-parse.ts`・単体テスト対象）: `parseCsvLine`（クォート/エスケープ対応）・
+  `parseCsvColumns`（ヘッダ有無で列番号＋論理名を抽出）・`extractJsonKeys`（配列/単一・rootPath・非オブジェクトは throw）。
+- [x] 保存基盤（migration 0043）: `import_sources.config jsonb DEFAULT '{}'` を追加（列追加のみ = 下位互換）。
+  ロケータはマッピングの既存 `fields jsonb` 各要素へ追加のためテーブル変更不要。
+- [x] API（`akebono-imports.ts`）: `normalizeSourceConfig(raw, method)`（method 別に使う項目のみ保持・不正 authType は none・
+  none は authValue 空）・POST /import-sources が config を永続化・**PUT /import-sources/:id/config**（管理者のみ）を新設。
+  `importFieldsOf` が方式別ロケータを保持（数値でない値・空 jsonKey は null）。
+- [x] composable（`useAkebonoImports`）: `addSource` が config 受理・`updateSourceConfig(id, config)` を新設
+  （両モード。API は PUT /config、モックは差し替え）。`saveMapping` の版管理は従来どおり。
+- [x] UI（`akebono/imports.vue`）: マッピングモーダルを**方式別**に刷新。
+  - CSV: ヘッダ有無・区切り文字・**ファイル読込→列（列番号＋論理名）を左辺へ自動展開**。
+  - 固定長: 各項目の**開始〜終了バイト**入力（1 始まり・両端含む）。
+  - JSON: ルートパス・**貼付 JSON からキーを検出**して左辺へ展開。
+  - API: 上記 JSON ＋ エンドポイント・認証方式（なし/Bearer/APIキー/Basic）・トークン値。
+  - **右辺 = `useAppFields(targetEntity)` の有効項目（既定＋カスタム。カスタムは「（カスタム）」表記）を UiSelect で選択**。
+    保存時に方式別ロケータのみ保持（JSON/API は `jsonKey = sourceField`）。設定は SoT（config）→ マッピング新版の順（原則6）。
+
+### 45-3 company 取込のキー空間（§44-6 の決定）
+- [x] 監査 M2 の申し送りを解決。`company` は Akebono カタログを持たないため、取込右辺は**CRM 会社の既定項目
+  （会社名/区分/業界/メール/電話/住所/備考）＋ CRM 会社カスタム項目**で構成する（管理画面 items.vue に company タブを増設せず、
+  既存の CRM 側 `company` 名前空間を明示参照）。他アプリは `appFields(entity)` をそのまま使用。
+
+### 45-4 取消可能性（原則9.5）
+- [x] マッピングは**新版で上書き**（旧版は履歴に残り版一覧から追える）。取込元は従来どおり論理削除＋復元。
+  config は設定系のため上書き更新（記録系ではない）。
+
+### 45-5 検証
+- [x] api 単体 209（import-parse 10 件 = CSV 行/列/JSON キー・akebono-phase-d に importFieldsOf ロケータ 2 件 + normalizeSourceConfig 4 件を追加）/
+  api 統合 203（config の method 別正規化・PUT /config の権限と正規化・マッピングのロケータ保持を追加）/ typecheck（api・mockup）・mockup build 全 green。
+
+### 45-6 本 PR のカバレッジと残作業
+- [x] 4 方式すべてで**方式別のマッピング設定 UI・接続/解析設定・右辺のアプリ有効項目連動**が成立。
+- [ ] **実ファイルの取込・パース・API 実接続（SSRF 対策付き）**は従来どおり F-32 後続スコープ（本 PR は設定の永続化と
+  マッピング編集体験まで。取込実行は決定的シミュレートのまま = §40 の位置づけを踏襲）。マッピングに保持した
+  ロケータ・config は後続の実パース実装がそのまま消費できる I/F として定義済み。

@@ -4,8 +4,11 @@
  * - normalizeDashboardInsight（ダッシュボード AI レポートの LLM 出力正規化 F-41）
  */
 import { describe, expect, it } from 'vitest'
-import { importFieldsOf, simulateRun } from '../../src/routes/akebono-imports'
+import { importFieldsOf, normalizeSourceConfig, simulateRun } from '../../src/routes/akebono-imports'
 import { normalizeDashboardInsight } from '../../src/routes/akebono-dashboard'
+
+// 方式別ロケータの既定（未指定は全て null）
+const NO_LOC = { columnIndex: null, byteStart: null, byteEnd: null, jsonKey: null }
 
 describe('importFieldsOf（マッピング項目の検証・正規化）', () => {
   it('配列でなければ null', () => {
@@ -20,8 +23,8 @@ describe('importFieldsOf（マッピング項目の検証・正規化）', () =>
       { sourceField: 'price', targetItemKey: 'unitPrice', transform: 'number' },
     ])
     expect(out).toEqual([
-      { id: 'm1-f0', sourceField: 'code', targetItemKey: 'code', transform: 'trim' },
-      { id: 'm1-f1', sourceField: 'price', targetItemKey: 'unitPrice', transform: 'number' },
+      { id: 'm1-f0', sourceField: 'code', targetItemKey: 'code', transform: 'trim', ...NO_LOC },
+      { id: 'm1-f1', sourceField: 'price', targetItemKey: 'unitPrice', transform: 'number', ...NO_LOC },
     ])
   })
 
@@ -32,7 +35,49 @@ describe('importFieldsOf（マッピング項目の検証・正規化）', () =>
 
   it('transform 未指定は空文字・空白はトリム', () => {
     const out = importFieldsOf('m1', [{ sourceField: '  a ', targetItemKey: ' b ' }])
-    expect(out).toEqual([{ id: 'm1-f0', sourceField: 'a', targetItemKey: 'b', transform: '' }])
+    expect(out).toEqual([{ id: 'm1-f0', sourceField: 'a', targetItemKey: 'b', transform: '', ...NO_LOC }])
+  })
+
+  it('方式別ロケータ（CSV 列番号 / 固定長バイト範囲 / JSON キー）を保持', () => {
+    const out = importFieldsOf('m1', [
+      { sourceField: '売上日', targetItemKey: 'soldAt', columnIndex: 0 },
+      { sourceField: '金額', targetItemKey: 'amount', byteStart: 11, byteEnd: 20 },
+      { sourceField: 'code', targetItemKey: 'code', jsonKey: 'code' },
+    ])
+    expect(out).toEqual([
+      { id: 'm1-f0', sourceField: '売上日', targetItemKey: 'soldAt', transform: '', columnIndex: 0, byteStart: null, byteEnd: null, jsonKey: null },
+      { id: 'm1-f1', sourceField: '金額', targetItemKey: 'amount', transform: '', columnIndex: null, byteStart: 11, byteEnd: 20, jsonKey: null },
+      { id: 'm1-f2', sourceField: 'code', targetItemKey: 'code', transform: '', columnIndex: null, byteStart: null, byteEnd: null, jsonKey: 'code' },
+    ])
+  })
+
+  it('数値でないロケータ・空 jsonKey は null に落とす', () => {
+    const out = importFieldsOf('m1', [{ sourceField: 'a', targetItemKey: 'b', columnIndex: 'x', byteStart: '', jsonKey: '  ' }])
+    expect(out).toEqual([{ id: 'm1-f0', sourceField: 'a', targetItemKey: 'b', transform: '', ...NO_LOC }])
+  })
+})
+
+describe('normalizeSourceConfig（取込元の方式別設定の正規化）', () => {
+  it('CSV: hasHeader 既定 true・delimiter 既定 ","・他方式の項目は落とす', () => {
+    expect(normalizeSourceConfig({ delimiter: '\t', endpoint: 'x', authValue: 'y' }, 'file_csv'))
+      .toEqual({ hasHeader: true, delimiter: '\t' })
+    expect(normalizeSourceConfig({ hasHeader: false }, 'file_csv')).toEqual({ hasHeader: false, delimiter: ',' })
+  })
+
+  it('固定長: 保持する設定はなし（空オブジェクト）', () => {
+    expect(normalizeSourceConfig({ hasHeader: false, endpoint: 'x' }, 'file_fixed')).toEqual({})
+  })
+
+  it('JSON: jsonRootPath のみ（空はキー自体を持たない）', () => {
+    expect(normalizeSourceConfig({ jsonRootPath: 'data.items', delimiter: ',' }, 'file_json')).toEqual({ jsonRootPath: 'data.items' })
+    expect(normalizeSourceConfig({ jsonRootPath: '   ' }, 'file_json')).toEqual({})
+  })
+
+  it('API: endpoint・authType（不正は none）・authValue（none は空）・jsonRootPath', () => {
+    expect(normalizeSourceConfig({ endpoint: 'https://x/y', authType: 'bearer', authValue: 'tok', jsonRootPath: 'd' }, 'api_pull'))
+      .toEqual({ endpoint: 'https://x/y', authType: 'bearer', authValue: 'tok', jsonRootPath: 'd' })
+    expect(normalizeSourceConfig({ authType: 'bogus', authValue: 'tok' }, 'api_pull'))
+      .toEqual({ endpoint: '', authType: 'none', authValue: '' })
   })
 })
 

@@ -4862,6 +4862,50 @@ describe('Phase D: データ取込（F-32）・ダッシュボード保管（F-4
       expect(mine.filter(m => m.status === 'active')).toHaveLength(1)
     })
 
+    it('方式別設定 config: method 別に正規化（他方式の項目は落とす）・PUT で更新・マッピングは方式別ロケータを保持', async () => {
+      // CSV: hasHeader/delimiter を保持し API 系の項目は落とす
+      const csv = await api('POST', '/v1/akebono/import-sources', {
+        as: ADMIN, body: {
+          name: 'CSV設定', method: 'file_csv', encoding: 'utf8', targetEntity: 'product',
+          config: { hasHeader: false, delimiter: '\t', endpoint: 'https://drop.me' },
+        },
+      })
+      const csvId = (csv.json.data as { id: string }).id
+      expect((csv.json.data as { config: Record<string, unknown> }).config).toEqual({ hasHeader: false, delimiter: '\t' })
+
+      // API: endpoint/authType/authValue/jsonRootPath を保持
+      const apiSrc = await api('POST', '/v1/akebono/import-sources', {
+        as: ADMIN, body: {
+          name: 'API設定', method: 'api_pull', encoding: 'utf8', targetEntity: 'sku',
+          config: { endpoint: 'https://api.example.com/skus', authType: 'bearer', authValue: 'tok', jsonRootPath: 'data.items' },
+        },
+      })
+      const apiId = (apiSrc.json.data as { id: string }).id
+      expect((apiSrc.json.data as { config: Record<string, unknown> }).config)
+        .toEqual({ endpoint: 'https://api.example.com/skus', authType: 'bearer', authValue: 'tok', jsonRootPath: 'data.items' })
+
+      // PUT /config: member は 403・不正 authType は none に落ち authValue は空へ
+      expect((await api('PUT', `/v1/akebono/import-sources/${apiId}/config`, {
+        as: MEMBER, body: { config: { endpoint: 'x' } },
+      })).status).toBe(403)
+      const upd = await api('PUT', `/v1/akebono/import-sources/${apiId}/config`, {
+        as: ADMIN, body: { config: { endpoint: 'https://api.example.com/v2', authType: 'bogus', authValue: 'ignored' } },
+      })
+      expect((upd.json.data as { config: Record<string, unknown> }).config)
+        .toEqual({ endpoint: 'https://api.example.com/v2', authType: 'none', authValue: '' })
+
+      // マッピング: CSV 列番号のロケータが版に保持される
+      const map = await api('POST', '/v1/akebono/import-mappings', {
+        as: ADMIN, body: { sourceId: csvId, fields: [
+          { sourceField: '商品コード', targetItemKey: 'code', columnIndex: 0 },
+          { sourceField: '単価', targetItemKey: 'unitPrice', transform: 'number', columnIndex: 2 },
+        ] },
+      })
+      const fields = (map.json.data as { fields: { sourceField: string; columnIndex: number | null; byteStart: number | null }[] }).fields
+      expect(fields.map(f => f.columnIndex)).toEqual([0, 2])
+      expect(fields.every(f => f.byteStart === null)).toBe(true)
+    })
+
     it('取込実行: 有効マッピングなしは 409・実行は追記のみ（履歴が積み上がる）', async () => {
       // マッピングの無い別の取込元では実行不可（AKO-IMP-002）
       const bare = await api('POST', '/v1/akebono/import-sources', {

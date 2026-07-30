@@ -5,12 +5,13 @@
  * 取込実行（ステージング → 検証 → 反映。冪等・dry-run 思想。エラー行隔離）。
  * モックは実行をシミュレートし、実行履歴・エラー行を残す。
  */
-import { Plus, Play, RotateCcw, Trash2, Wand2 } from 'lucide-vue-next'
+import { Plus, Play, RotateCcw, Trash2, Upload } from 'lucide-vue-next'
 import {
   IMPORT_METHOD_LABELS, IMPORT_ENTITY_LABELS,
 } from '~/composables/useAkebonoImports'
-import type { ImportMapping, ImportRun, ImportSource } from '~/types/akebono'
+import type { ImportMapping, ImportRun, ImportSource, ImportSourceConfig } from '~/types/akebono'
 import type { FieldDef, TableColumn } from '~/types/ui'
+import { parseCsvColumns, extractJsonKeys } from '~/utils/import-parse'
 import { fmtDateTime, fmtInt } from '~/utils/format'
 
 const imp = useAkebonoImports()
@@ -144,53 +145,134 @@ const MAPPING_STATUS: Record<ImportMapping['status'], { label: string; tone: 'ok
   superseded: { label: '旧版', tone: 'neutral' },
 }
 
-// マッピング編集モーダル（簡易エディタ）
+// ---------- マッピング編集（方式別。左辺=取込元・右辺=アプリ項目〔既定+カスタム〕） ----------
+const { appFields } = useAppFields()
+
+// company（取引先）取込は Akebono カタログを持たないため CRM 会社項目へフォールバック（§44-6）
+const COMPANY_IMPORT_FIELDS: { key: string; label: string }[] = [
+  { key: 'name', label: '会社名' }, { key: 'kind', label: '区分' }, { key: 'industryId', label: '業界' },
+  { key: 'email', label: 'メール' }, { key: 'phone', label: '電話' }, { key: 'address', label: '住所' }, { key: 'note', label: '備考' },
+]
+/** 右辺の候補（対象アプリの既定＋カスタム項目）。company は CRM 会社項目＋会社カスタム項目 */
+const targetFieldOptions = computed<{ value: string; label: string }[]>(() => {
+  const ent = selectedSource.value?.targetEntity
+  if (!ent) return []
+  if (ent === 'company') {
+    const builtins = COMPANY_IMPORT_FIELDS.map(f => ({ value: f.key, label: f.label }))
+    const customs = appFields('company').filter(f => f.source === 'custom').map(f => ({ value: f.key, label: `${f.label}（カスタム）` }))
+    return [...builtins, ...customs]
+  }
+  return appFields(ent).map(f => ({ value: f.key, label: f.source === 'custom' ? `${f.label}（カスタム）` : f.label }))
+})
+
+type MapDraftRow = {
+  sourceField: string; targetItemKey: string; transform: string
+  columnIndex: number | null; byteStart: number | null; byteEnd: number | null; jsonKey: string | null
+}
+function blankRow(): MapDraftRow {
+  return { sourceField: '', targetItemKey: '', transform: '', columnIndex: null, byteStart: null, byteEnd: null, jsonKey: null }
+}
+
 const mapOpen = ref(false)
-type MapDraftRow = { sourceField: string; targetItemKey: string; transform: string }
 const mapDraft = ref<MapDraftRow[]>([])
+const mapMethod = computed(() => selectedSource.value?.method ?? 'file_csv')
+// 方式別設定のドラフト（CSV: hasHeader/delimiter・API: endpoint/auth・JSON/API: jsonRootPath）。
+// v-model 摩擦回避のため具体型（全項目 required）。保存時に ImportSourceConfig へ渡す
+const cfgDraft = ref<{
+  hasHeader: boolean; delimiter: string; endpoint: string; authType: string; authValue: string; jsonRootPath: string
+}>({ hasHeader: true, delimiter: ',', endpoint: '', authType: 'none', authValue: '', jsonRootPath: '' })
+const parseText = ref('') // JSON/API 貼付
+const parseError = ref('')
+
+const AUTH_TYPE_OPTIONS = [
+  { value: 'none', label: '認証なし' }, { value: 'bearer', label: 'Bearer トークン' },
+  { value: 'api_key', label: 'API キー' }, { value: 'basic', label: 'Basic 認証' },
+]
+
+/** マッピング行のグリッド列（方式で左辺の項目数が異なる。全列を文字列リテラルで JIT に露出） */
+const rowGridClass = computed(() => {
+  switch (mapMethod.value) {
+    case 'file_csv': return 'grid-cols-[52px_1fr_16px_1.3fr_0.8fr_34px]'
+    case 'file_fixed': return 'grid-cols-[64px_64px_1fr_16px_1.3fr_0.8fr_34px]'
+    default: return 'grid-cols-[1fr_16px_1.3fr_0.8fr_34px]'
+  }
+})
 
 function openMapEditor(): void {
-  const active = selectedSourceId.value ? imp.activeMappingOf(selectedSourceId.value) : undefined
+  const src = selectedSource.value
+  if (!src) return
+  cfgDraft.value = {
+    hasHeader: src.config?.hasHeader ?? true, delimiter: src.config?.delimiter ?? ',',
+    endpoint: src.config?.endpoint ?? '', authType: src.config?.authType ?? 'none',
+    authValue: src.config?.authValue ?? '', jsonRootPath: src.config?.jsonRootPath ?? '',
+  }
+  parseText.value = ''
+  parseError.value = ''
+  const active = imp.activeMappingOf(src.id)
   mapDraft.value = active && active.fields.length > 0
-    ? active.fields.map(f => ({ sourceField: f.sourceField, targetItemKey: f.targetItemKey, transform: f.transform }))
-    : [{ sourceField: '', targetItemKey: '', transform: '' }]
+    ? active.fields.map(f => ({
+        sourceField: f.sourceField, targetItemKey: f.targetItemKey, transform: f.transform,
+        columnIndex: f.columnIndex ?? null, byteStart: f.byteStart ?? null, byteEnd: f.byteEnd ?? null, jsonKey: f.jsonKey ?? null,
+      }))
+    : [blankRow()]
   mapOpen.value = true
 }
-function addMapRow(): void {
-  mapDraft.value = [...mapDraft.value, { sourceField: '', targetItemKey: '', transform: '' }]
+
+/** CSV アップロード → 列（index＋論理名）抽出 → 左辺を自動生成 */
+async function onCsvUpload(ev: Event): Promise<void> {
+  const input = ev.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  const text = await file.text()
+  input.value = '' // 同一ファイル再選択を許可
+  const { columns } = parseCsvColumns(text, { hasHeader: cfgDraft.value.hasHeader ?? true, delimiter: cfgDraft.value.delimiter || ',' })
+  if (columns.length === 0) { parseError.value = '列を検出できませんでした（区切り文字・ヘッダ有無をご確認ください）'; return }
+  mapDraft.value = columns.map(c => ({ ...blankRow(), sourceField: c.name, columnIndex: c.index }))
+  parseError.value = ''
+  toast.show(`${columns.length} 列を検出しました。各列の右辺（アプリ項目）を選択してください`, 'ok')
 }
-function removeMapRow(i: number): void {
-  mapDraft.value = mapDraft.value.filter((_, idx) => idx !== i)
+
+/** JSON/API: 貼付テキスト → キー抽出 → 左辺を自動生成 */
+function onJsonParse(): void {
+  try {
+    const { keys, recordCount } = extractJsonKeys(parseText.value, cfgDraft.value.jsonRootPath || undefined)
+    if (keys.length === 0) { parseError.value = 'キーを検出できませんでした'; return }
+    mapDraft.value = keys.map(k => ({ ...blankRow(), sourceField: k, jsonKey: k }))
+    parseError.value = ''
+    toast.show(`${keys.length} キー（${recordCount} 件）を検出しました。右辺（アプリ項目）を選択してください`, 'ok')
+  } catch (e) {
+    parseError.value = `JSON を解析できませんでした: ${(e as Error).message}`
+  }
 }
-function suggestMapping(): void {
-  // AI 候補提示のシミュレート（人が確定する前提。実際は列名解析 + マスタ項目マッチ）
-  mapDraft.value = [
-    { sourceField: 'code', targetItemKey: 'code', transform: 'trim' },
-    { sourceField: 'name', targetItemKey: 'name', transform: 'trim' },
-    { sourceField: 'price', targetItemKey: 'unitPrice', transform: 'number' },
-  ]
-  toast.show('AI が候補を提示しました。内容を確認して保存してください', 'info')
-}
+
+function addMapRow(): void { mapDraft.value = [...mapDraft.value, blankRow()] }
+function removeMapRow(i: number): void { mapDraft.value = mapDraft.value.filter((_, idx) => idx !== i) }
+
 const mapBusy = ref(false)
 async function saveMapping(): Promise<void> {
-  if (!selectedSourceId.value) return
+  const src = selectedSource.value
+  if (!src) return
   const valid = mapDraft.value.filter(f => f.sourceField.trim() && f.targetItemKey.trim())
   if (valid.length === 0) {
-    toast.show('取込元項目と対象項目キーを1行以上入力してください', 'crit')
+    toast.show('取込元項目と対象アプリ項目を 1 行以上設定してください', 'crit')
     return
   }
   if (mapBusy.value) return
   mapBusy.value = true
   try {
-    const res = await imp.saveMapping(selectedSourceId.value, valid.map(f => ({
-      sourceField: f.sourceField.trim(),
-      targetItemKey: f.targetItemKey.trim(),
-      transform: f.transform.trim(),
+    // 方式別設定を先に保存（SoT → キャッシュの順 = 原則6）→ マッピング新版
+    const cfgRes = await imp.updateSourceConfig(src.id, cfgDraft.value as ImportSourceConfig)
+    if (!cfgRes.ok) { toast.show(`${cfgRes.error.code}: ${cfgRes.error.message}`, 'crit'); return }
+    const method = src.method
+    const res = await imp.saveMapping(src.id, valid.map(f => ({
+      sourceField: f.sourceField.trim(), targetItemKey: f.targetItemKey.trim(), transform: f.transform.trim(),
+      // 方式別ロケータのみ保持し他方式の残骸を混入させない（JSON/API は sourceField = JSON キー）
+      columnIndex: method === 'file_csv' ? f.columnIndex : null,
+      byteStart: method === 'file_fixed' ? f.byteStart : null,
+      byteEnd: method === 'file_fixed' ? f.byteEnd : null,
+      jsonKey: (method === 'file_json' || method === 'api_pull') ? f.sourceField.trim() : null,
     })))
-    if (!res.ok) {
-      toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
-      return
-    }
+    if (!res.ok) { toast.show(`${res.error.code}: ${res.error.message}`, 'crit'); return }
     toast.show('マッピングを新しい版として保存しました', 'ok')
     mapOpen.value = false
   } finally { mapBusy.value = false }
@@ -325,8 +407,8 @@ function openRun(row: Record<string, unknown>): void {
     <UiSectionCard v-if="selectedSource" :title="`${selectedSource.name} の詳細`" :description="`${IMPORT_METHOD_LABELS[selectedSource.method]} / ${IMPORT_ENTITY_LABELS[selectedSource.targetEntity]} / ${selectedSource.encoding === 'utf8' ? 'UTF-8' : 'Shift_JIS'}`">
       <template v-if="imp.isAdmin.value" #actions>
         <button type="button" class="btn btn-sm" @click="openMapEditor">
-          <Wand2 class="h-4 w-4" aria-hidden="true" />
-          マッピングを保存
+          <Upload class="h-4 w-4" aria-hidden="true" />
+          マッピングを設定
         </button>
         <button type="button" class="btn btn-primary btn-sm" :disabled="runBusy" @click="runImport">
           <Play class="h-4 w-4" aria-hidden="true" />
@@ -410,36 +492,127 @@ function openRun(row: Record<string, unknown>): void {
       </template>
     </UiModal>
 
-    <!-- マッピング編集モーダル -->
-    <UiModal :open="mapOpen" title="マッピングを保存（新しい版）" width="640px" @close="mapOpen = false">
-      <div class="grid gap-3">
+    <!-- マッピング編集モーダル（方式別。左辺=取込元・右辺=対象アプリ項目〔既定+カスタム〕） -->
+    <UiModal :open="mapOpen" title="マッピングを設定（新しい版）" width="720px" @close="mapOpen = false">
+      <div v-if="selectedSource" class="grid gap-3">
         <p class="text-[12px] leading-relaxed text-sub">
-          取込元の項目を対象エンティティの項目キーへ対応づけます。変換には trim / upper / number / dateFormat 等を指定できます（空 = 恒等）。
-          保存すると新しい版として記録され、既存の有効版は旧版になります。
+          取込元の項目（左）を対象アプリ「{{ IMPORT_ENTITY_LABELS[selectedSource.targetEntity] }}」の項目（右）へ対応づけます。
+          右辺の候補は対象アプリで有効な項目（既定＋カスタマイズ項目）です。変換に trim / upper / number / dateFormat 等を指定できます（空 = 恒等）。
+          保存すると新しい版になり、既存の有効版は旧版になります。
         </p>
-        <div class="flex flex-wrap gap-2">
-          <button type="button" class="btn btn-sm" @click="suggestMapping">
-            <Wand2 class="h-4 w-4" aria-hidden="true" />
-            AI 候補を提示
-          </button>
+
+        <!-- 方式別の接続 / 解析設定 -->
+        <div class="card border-line bg-page p-3 grid gap-2.5">
+          <p class="text-[11px] font-semibold text-muted">{{ IMPORT_METHOD_LABELS[selectedSource.method] }} の設定</p>
+
+          <!-- CSV -->
+          <template v-if="mapMethod === 'file_csv'">
+            <div class="flex flex-wrap items-end gap-3">
+              <label class="flex items-center gap-1.5 text-[12px] text-sub">
+                <input v-model="cfgDraft.hasHeader" type="checkbox">1 行目はヘッダ（項目名）
+              </label>
+              <label class="grid gap-1 text-[11px] font-semibold text-muted">
+                区切り文字
+                <input v-model="cfgDraft.delimiter" class="input w-20" type="text" placeholder="," aria-label="区切り文字">
+              </label>
+              <label class="btn btn-sm cursor-pointer">
+                <Upload class="h-4 w-4" aria-hidden="true" />
+                CSV を読み込んで列を検出
+                <input type="file" accept=".csv,.txt,text/csv,text/plain" class="sr-only" @change="onCsvUpload">
+              </label>
+            </div>
+            <p class="text-[11px] text-muted">
+              ファイルを読み込むと各列（{{ cfgDraft.hasHeader ? '列番号＋論理名' : '列番号' }}）が左辺に展開されます。手動で行を追加することもできます。
+            </p>
+          </template>
+
+          <!-- 固定長 -->
+          <template v-else-if="mapMethod === 'file_fixed'">
+            <p class="text-[12px] text-sub">
+              各項目の <span class="font-semibold text-ink">開始バイト〜終了バイト</span>（1 始まり・両端を含む）を指定し、右辺のアプリ項目へ対応づけます。
+              「行を追加」で項目を増やせます。
+            </p>
+          </template>
+
+          <!-- JSON / API -->
+          <template v-else>
+            <template v-if="mapMethod === 'api_pull'">
+              <label class="grid gap-1 text-[11px] font-semibold text-muted">
+                エンドポイント URL
+                <input v-model="cfgDraft.endpoint" class="input" type="url" placeholder="https://api.example.com/records" aria-label="エンドポイント URL">
+              </label>
+              <div class="grid grid-cols-1 gap-2 sm:grid-cols-[200px_1fr]">
+                <label class="grid gap-1 text-[11px] font-semibold text-muted">
+                  認証方式
+                  <select v-model="cfgDraft.authType" class="select" aria-label="認証方式">
+                    <option v-for="o in AUTH_TYPE_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
+                  </select>
+                </label>
+                <label v-if="cfgDraft.authType !== 'none'" class="grid gap-1 text-[11px] font-semibold text-muted">
+                  {{ cfgDraft.authType === 'basic' ? '資格情報（user:pass）' : 'トークン / キー' }}
+                  <input v-model="cfgDraft.authValue" class="input" type="text" placeholder="値を入力" aria-label="認証値" autocomplete="off">
+                </label>
+              </div>
+            </template>
+            <label class="grid gap-1 text-[11px] font-semibold text-muted">
+              レコード配列のルートパス（任意・空 = 応答が配列 or 単一オブジェクト）
+              <input v-model="cfgDraft.jsonRootPath" class="input" type="text" placeholder="例）data.items" aria-label="ルートパス">
+            </label>
+            <label class="grid gap-1 text-[11px] font-semibold text-muted">
+              {{ mapMethod === 'api_pull' ? 'サンプル応答（JSON）を貼り付け' : 'JSON を貼り付け' }}
+              <textarea v-model="parseText" class="textarea" rows="4" placeholder='[{"code":"A","name":"商品A"}]' aria-label="JSON 貼付" />
+            </label>
+            <div>
+              <button type="button" class="btn btn-sm" @click="onJsonParse">
+                <Upload class="h-4 w-4" aria-hidden="true" />
+                JSON からキーを検出
+              </button>
+            </div>
+          </template>
+
+          <p v-if="parseError" class="text-[12px] text-crit">{{ parseError }}</p>
+        </div>
+
+        <!-- マッピング行 -->
+        <div class="flex items-center justify-between">
+          <p class="text-[12px] font-semibold text-muted">項目マッピング（{{ mapDraft.length }} 行）</p>
           <button type="button" class="btn btn-sm" @click="addMapRow">
             <Plus class="h-4 w-4" aria-hidden="true" />
             行を追加
           </button>
         </div>
 
+        <div v-if="targetFieldOptions.length === 0" class="card border-warn bg-warn-soft p-2.5 text-[12px] text-ink">
+          対象アプリの項目候補がありません。項目カスタマイズ画面で項目を有効化してください。
+        </div>
+
         <div class="overflow-x-auto">
-          <div class="grid min-w-[520px] gap-2">
-            <div class="grid grid-cols-[1fr_1fr_1fr_36px] gap-2 text-[11px] font-semibold text-muted">
-              <span>取込元項目</span>
-              <span>対象項目キー</span>
-              <span>変換</span>
-              <span aria-hidden="true" />
-            </div>
-            <div v-for="(r, i) in mapDraft" :key="i" class="grid grid-cols-[1fr_1fr_1fr_36px] items-center gap-2">
-              <input v-model="r.sourceField" class="input" type="text" placeholder="例）price" aria-label="取込元項目">
-              <input v-model="r.targetItemKey" class="input" type="text" placeholder="例）unitPrice" aria-label="対象項目キー">
-              <input v-model="r.transform" class="input" type="text" placeholder="例）number" aria-label="変換">
+          <div class="grid gap-2" :class="mapMethod === 'file_fixed' ? 'min-w-[620px]' : 'min-w-[540px]'">
+            <div v-for="(r, i) in mapDraft" :key="i" class="grid items-center gap-2" :class="rowGridClass">
+              <!-- 左辺: 取込元項目（方式別） -->
+              <template v-if="mapMethod === 'file_csv'">
+                <span class="rounded border border-line bg-surface px-1 py-0.5 text-center text-[11px] tabular-nums text-muted">
+                  {{ r.columnIndex != null ? `列${r.columnIndex + 1}` : '—' }}
+                </span>
+                <input v-model="r.sourceField" class="input" type="text" placeholder="列の論理名" aria-label="取込元の列名">
+              </template>
+              <template v-else-if="mapMethod === 'file_fixed'">
+                <input v-model.number="r.byteStart" class="input" type="number" min="1" placeholder="開始" aria-label="開始バイト">
+                <input v-model.number="r.byteEnd" class="input" type="number" min="1" placeholder="終了" aria-label="終了バイト">
+                <input v-model="r.sourceField" class="input" type="text" placeholder="項目名" aria-label="取込元の項目名">
+              </template>
+              <template v-else>
+                <input v-model="r.sourceField" class="input" type="text" placeholder="JSON キー" aria-label="取込元の JSON キー">
+              </template>
+
+              <span class="text-center text-muted" aria-hidden="true">→</span>
+
+              <!-- 右辺: 対象アプリ項目（既定＋カスタム） -->
+              <select v-model="r.targetItemKey" class="select" aria-label="対象アプリ項目">
+                <option value="">（未選択）</option>
+                <option v-for="o in targetFieldOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+              </select>
+              <input v-model="r.transform" class="input" type="text" placeholder="変換" aria-label="変換">
               <button type="button" class="btn btn-ghost btn-sm" aria-label="行を削除" @click="removeMapRow(i)">
                 <Trash2 class="h-4 w-4 text-crit" aria-hidden="true" />
               </button>
