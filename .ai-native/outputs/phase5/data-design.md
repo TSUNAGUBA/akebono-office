@@ -214,10 +214,26 @@ Phase B（設定系）・Phase C（記録系 + 売上軸）に続く**最終フ�
 > （source_kind='shipment'・source_ref='obr:<明細行id>'・同一トランザクションで原子的）。二重計上防止 = 部分一意
 > INDEX `sales_records(source_ref) WHERE source_kind='shipment'`。**店舗預けの出荷は「販売」ではないため対象外**
 > （店舗販売時に別途計上 = 二重の売上導線を作らない。AKO-OUT-005）。単価は SKU 販売単価 → 商品標準販売単価で解決。
-> **currentSegment（`ako.currentSegment.v1`）は端末ローカルのまま（移行しない）:** 「直近の作業コンテキスト」= 一時的な
-> UI 選択状態で、記録系でも設定系でもない。useMockDb（日次リシード）とは別の専用 localStorage キーのため**日次消失しない**
-> （useCurrentUser と同パターン）。無効 id は resolveDefaultSegmentId で先頭業態へフォールバック = 非破壊（原則2）。
-> 「今どの業態を見ているか」の端末間同期はむしろ不都合なため、端末ローカルが妥当と判断（implementation-status §40）。
+> **currentSegment（現在の業態）は per-user で DB 永続化する（`user_preferences`。0039。オペレーター指示 2026-07-30）:**
+> 当初は「端末ローカルの UI 選択状態」として localStorage 保管のままとしていた（§40-5）が、**どの端末からログインしても
+> 同じ業態で開けるようにしたい**というオペレーター指示により方針を上書き。per-user の設定テーブル `user_preferences`
+> （`member_id, key, value(jsonb)` の複合 PK = app_configs のユーザースコープ版）へ保管し、`/v1/me` の `prefs` で配信する。
+> SoT はサーバー（API モード）。無効 id は resolveDefaultSegmentId で先頭業態へフォールバック = 非破壊（原則2）。
+> モックモードは従来どおり端末ローカル（localStorage `ako.currentSegment.v1`）。詳細は implementation-status §41。
+
+### 1.10 per-user UI 設定（`user_preferences`。0039）
+
+| 列 | 型 | 説明 |
+|---|---|---|
+| member_id | text (FK members ON DELETE CASCADE) | 対象ユーザー |
+| key | text | 設定キー（`^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$`。現状 `currentSegmentId`） |
+| value | jsonb | 設定値（現状は業態 id 文字列。将来の個人 UI 設定も同型で追加可） |
+| updated_at | timestamptz | 更新時刻 |
+
+- PK = `(member_id, key)`。**設定系（per-user）**で SoT は本テーブル。app_configs（テナント全体）と役割分担。
+- 端末間で同期する個人設定の受け皿。`/v1/me` が本人分を `prefs` オブジェクトとして返し、`PUT /v1/me/preferences/:key`
+  が upsert する（本人のみ・冪等）。**シードしない**（未設定はアプリ既定へフォールバック）。members マスタには載せない
+  （`/v1/masters/members` で全員へ露出させない・マスタ CRUD の巻き戻し対象にしない = 原則7 の分離）。
 
 ## 2. スタースキーマ接続（akebono-scm-platform `mart` 規約準拠）
 
