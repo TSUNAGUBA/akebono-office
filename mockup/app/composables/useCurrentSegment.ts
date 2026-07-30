@@ -27,6 +27,7 @@ export function useCurrentSegment() {
   const { tbl } = useMockDb()
   const isApi = useApiMode()
   const me = useApiMe()
+  const toast = useToast()
   const segments = tbl('businessSegments')
 
   /** 有効な業態（表示順） */
@@ -72,16 +73,17 @@ export function useCurrentSegment() {
 
   /**
    * 業態を切り替える（有効な業態のみ）。
-   *  - API モード: 即時に楽観反映（me.prefs を更新）し、サーバー保管は非ブロッキング（原則4）。
-   *    永続化に失敗しても当該セッションの選択は成立し、次回ロードで既定へ倒れるだけ（原則2）。
-   *    ※同一ユーザーの高速連打は最後の書込が勝つ（last-write-wins）= UI 選択状態のため許容。
+   *  - API モード: saveMePreference が楽観反映（クリック順で同期確定）+ サーバー保管を行う（非ブロッキング。原則4）。
+   *    保存失敗時は当該端末では切り替え済みのまま = 次回ロードで「最後に保存できた値」へ戻る（既定とは限らない）。
+   *    黙って握りつぶさず、失敗は控えめにトースト通知する（原則4 の「結果を報告する」）。
    *  - モックモード: 従来どおり端末ローカル（localStorage）へ保存。
    */
   function switchSegment(id: string): void {
     if (!activeSegments.value.some(s => s.id === id)) return
     if (isApi) {
-      if (me.value) me.value = { ...me.value, prefs: { ...(me.value.prefs ?? {}), [PREF_KEY]: id } }
-      void saveMePreference(PREF_KEY, id)
+      void saveMePreference(PREF_KEY, id).then((res) => {
+        if (!res.ok) toast.show('業態の保存に失敗しました。この端末では切り替え済みです', 'warn')
+      })
       return
     }
     mockSegmentId.value = id

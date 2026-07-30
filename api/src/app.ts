@@ -135,15 +135,22 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
     if (body === undefined || !('value' in body)) {
       throw err('AKO-GEN-001', '設定値（value）を指定してください', 400)
     }
+    // per-user 設定は軽量に保つ。value は実バイト 4KB 上限（巨大 payload 防止）。
+    // body.value は JSON 由来のため JSON.stringify は必ず文字列を返す（undefined 分岐は不要）
     const serialized = JSON.stringify(body.value)
-    // per-user 設定は軽量に保つ（巨大 payload・暴走防止）。currentSegmentId 等の小さな値のみ想定
-    if (serialized === undefined || serialized.length > 4096) {
-      throw err('AKO-GEN-001', '設定値が不正か、大きすぎます', 400)
+    if (Buffer.byteLength(serialized, 'utf8') > 4096) {
+      throw err('AKO-GEN-001', '設定値が大きすぎます', 400)
     }
-    await pool.query(
-      `INSERT INTO user_preferences (member_id, key, value) VALUES ($1, $2, $3)
+    // 新規キーは 1 ユーザーあたり上限（既存キーの更新は常に可）= 行数の暴走防止（原則2）。
+    // 既存キーは EXISTS が真で WHERE を通過 → upsert。上限超過の新規キーのみ 0 行 = 拒否。
+    const { rowCount } = await pool.query(
+      `INSERT INTO user_preferences (member_id, key, value)
+       SELECT $1, $2, $3
+       WHERE (SELECT count(*) FROM user_preferences WHERE member_id = $1) < 100
+          OR EXISTS (SELECT 1 FROM user_preferences WHERE member_id = $1 AND key = $2)
        ON CONFLICT (member_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
       [user.id, key, serialized])
+    if (rowCount === 0) throw err('AKO-GEN-001', '設定項目が多すぎます', 400)
     return c.json({ data: { key, value: body.value } })
   })
 

@@ -232,7 +232,8 @@ Phase B（設定系）・Phase C（記録系 + 売上軸）に続く**最終フ�
 
 - PK = `(member_id, key)`。**設定系（per-user）**で SoT は本テーブル。app_configs（テナント全体）と役割分担。
 - 端末間で同期する個人設定の受け皿。`/v1/me` が本人分を `prefs` オブジェクトとして返し、`PUT /v1/me/preferences/:key`
-  が upsert する（本人のみ・冪等）。**シードしない**（未設定はアプリ既定へフォールバック）。members マスタには載せない
+  が upsert する（本人のみ・冪等）。value は実バイト 4KB 上限・新規キーは 1 ユーザー 100 件上限（storage 暴走防止）。
+  **シードしない**（未設定はアプリ既定へフォールバック）。members マスタには載せない
   （`/v1/masters/members` で全員へ露出させない・マスタ CRUD の巻き戻し対象にしない = 原則7 の分離）。
 
 ## 2. スタースキーマ接続（akebono-scm-platform `mart` 規約準拠）

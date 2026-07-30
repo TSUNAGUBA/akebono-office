@@ -161,9 +161,12 @@ describe('認証', () => {
     const me2 = await api('GET', '/v1/me', { as: MEMBER })
     expect((me2.json.data as { prefs: { currentSegmentId?: string } }).prefs.currentSegmentId).toBe('seg-03')
 
-    // per-user 分離: 他メンバーの設定には漏れない
-    const hrMe = await api('GET', '/v1/me', { as: HR })
-    expect((hrMe.json.data as { prefs: Record<string, unknown> }).prefs.currentSegmentId).toBeUndefined()
+    // per-user 分離: HR が同一キーに別の値を保存しても MEMBER の値は独立して保持される
+    const hrMe0 = await api('GET', '/v1/me', { as: HR })
+    expect((hrMe0.json.data as { prefs: Record<string, unknown> }).prefs.currentSegmentId).toBeUndefined()
+    await api('PUT', '/v1/me/preferences/currentSegmentId', { as: HR, body: { value: 'seg-09' } })
+    expect(((await api('GET', '/v1/me', { as: HR })).json.data as { prefs: { currentSegmentId?: string } }).prefs.currentSegmentId).toBe('seg-09')
+    expect(((await api('GET', '/v1/me', { as: MEMBER })).json.data as { prefs: { currentSegmentId?: string } }).prefs.currentSegmentId).toBe('seg-03')
 
     // 不正キー（先頭が英字でない）・value 欠落・サイズ超過は 400
     expect((await api('PUT', '/v1/me/preferences/1bad', { as: MEMBER, body: { value: 'x' } })).status).toBe(400)
