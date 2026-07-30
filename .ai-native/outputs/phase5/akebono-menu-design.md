@@ -306,7 +306,7 @@ flowchart LR
 | 在庫 | `GET /v1/akebono/inventory/balances`・`/transactions`・`POST /adjustments`・`/transfers`・`/stocktakes`・`POST /inventory/recompute` | recompute = 手動回復パス（管理者） |
 | 売上 | `GET/POST /v1/akebono/sales-records`・`POST /sales-records/corrections`（赤黒）・`GET /v1/akebono/sales/summary`（セグメント別集計） | **既存 `GET/POST /v1/sales` は互換維持**（内部で明細/月次一括へ委譲）。フロント移管完了後に deprecation |
 | 請求 | `POST /v1/akebono/billing/close`（締め・冪等）・`GET/POST /invoices`・`POST /invoices/:id/issue`・`/void`・`POST /invoices/:id/receipts`・`POST /billing/consignment-close`（委託精算） | issue 以降は金額 API で不変 |
-| 取込 | `GET/POST /v1/akebono/imports/sources`・`/mappings`（+ `/suggest` AI 候補）・`POST /imports/runs`（stage→validate→apply の段階 API）・`GET /runs/:id/errors` | 実行は非同期（202 + ポーリング。既存 AI タスクの追跡パターン） |
+| 取込 | `GET/POST /v1/akebono/import-sources`・`PUT /import-sources/:id/config`（方式別設定）・`/import-sources/:id/archive`・`/restore`・`GET/POST /v1/akebono/import-mappings`（版管理）・`GET/POST /v1/akebono/import-runs`（実行履歴） | 実装済み（F-32 Phase D + Part②）。取込元は方式別マッピング編集で左辺=取込元・右辺=対象アプリ有効項目。実行は現状サーバーが決定的にシミュレート（実ファイル取込・段階 API・非同期化は後続） |
 | 項目設定 | `GET/PUT /v1/akebono/item-settings`・`GET /item-catalog` | カタログは読み取り専用 |
 | ETL | 既存 `POST /v1/sales/etl/run` を拡張 + `POST /jobs/akebono-mart-etl` | 既存 mart_load_runs へ記録 |
 

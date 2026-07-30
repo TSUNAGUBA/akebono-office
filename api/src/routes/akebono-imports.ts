@@ -24,9 +24,6 @@ import { capCp } from '../lib/text'
 import { normalizeFieldLocators, normalizeImportSourceConfig } from '../../../shared/domain/import-parse'
 import { nextDocCode } from './akebono-trade'
 
-// 単体テストの後方互換 import 名（実体は shared = フロント/API 共有 = 原則3）
-export { normalizeImportSourceConfig as normalizeSourceConfig } from '../../../shared/domain/import-parse'
-
 const IMPORT_METHODS = ['file_csv', 'file_fixed', 'file_json', 'api_pull']
 const IMPORT_ENTITIES = ['product', 'sku', 'company', 'sales_record', 'inventory']
 
