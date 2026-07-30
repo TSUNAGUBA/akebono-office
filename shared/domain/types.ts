@@ -225,7 +225,20 @@ export interface AiEmployee {
 }
 
 export type CustomFieldType = 'text' | 'number' | 'date' | 'select' | 'multiselect' | 'boolean'
-export type CustomFieldEntity = 'member' | 'company' | 'contact' | 'project'
+
+/**
+ * Akebono 業務アプリの項目カスタマイズ対象エンティティ（F-31 汎用化。オペレーター指示 2026-07-30）。
+ * 各アプリの既定項目カタログ + カスタム項目 + 取込マッピングの右辺が、このキー空間で統一される。
+ */
+export type AkebonoEntity =
+  | 'product' | 'sku' | 'sales_record' | 'purchase_order' | 'production_order'
+  | 'purchase_record' | 'inbound' | 'outbound' | 'inventory' | 'invoice'
+
+/**
+ * カスタム項目の対象エンティティ。CRM/HR 系（member/company/contact/project）に加え、
+ * Akebono 業務アプリ（AkebonoEntity）も同一エンジンで扱う。API/DB の entity 列は自由文字列のため型拡張のみ。
+ */
+export type CustomFieldEntity = 'member' | 'company' | 'contact' | 'project' | AkebonoEntity
 
 export interface CustomFieldDef {
   id: string
