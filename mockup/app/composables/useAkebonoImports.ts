@@ -12,7 +12,7 @@
  * - 取消可能性（原則9.5）: 取込元 = 論理削除 + 復元。マッピング = 新版で上書き（旧版は履歴に残る）。
  */
 import type {
-  ImportMapping, ImportMethod, ImportRun, ImportSource, ImportTargetEntity,
+  ImportFieldMap, ImportMapping, ImportMethod, ImportRun, ImportSource, ImportSourceConfig, ImportTargetEntity,
 } from '~/types/akebono'
 import type { Result } from '~/types/domain'
 import { irange } from '~/utils/rng'
@@ -57,7 +57,7 @@ export function useAkebonoImports() {
   }
   const recentRuns = computed(() => runs.value.slice().sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1)))
 
-  async function addSource(input: { name: string; method: ImportMethod; encoding: 'utf8' | 'sjis'; targetEntity: ImportTargetEntity }): Promise<Result> {
+  async function addSource(input: { name: string; method: ImportMethod; encoding: 'utf8' | 'sjis'; targetEntity: ImportTargetEntity; config?: ImportSourceConfig }): Promise<Result> {
     const denied = adminGuard(); if (denied) return denied
     if (!input.name.trim()) return { ok: false, error: { code: 'AKO-IMP-001', message: '取込元名は必須です' } }
     if (isApi) {
@@ -65,7 +65,16 @@ export function useAkebonoImports() {
       return res.ok ? { ok: true, id: res.data.id } : res
     }
     const id = nextId('importSources', 'imp')
-    sources.value = [...sources.value, { id, name: input.name.trim(), method: input.method, encoding: input.encoding, targetEntity: input.targetEntity, schedule: 'manual', active: true }]
+    sources.value = [...sources.value, { id, name: input.name.trim(), method: input.method, encoding: input.encoding, targetEntity: input.targetEntity, schedule: 'manual', active: true, config: input.config ?? {} }]
+    commit()
+    return { ok: true, id }
+  }
+
+  /** 方式別設定の更新（エンドポイント/トークン・CSV ヘッダ有無等） */
+  async function updateSourceConfig(id: string, config: ImportSourceConfig): Promise<Result> {
+    const denied = adminGuard(); if (denied) return denied
+    if (isApi) return apiWrite(`/v1/akebono/import-sources/${id}/config`, { method: 'PUT', body: { config }, reload: ['importSources'] })
+    sources.value = sources.value.map(s => s.id === id ? { ...s, config } : s)
     commit()
     return { ok: true, id }
   }
@@ -86,7 +95,7 @@ export function useAkebonoImports() {
   }
 
   /** 新しいマッピング版を作成（既存 active は superseded に）。AI 候補 + 人が確定の想定 */
-  async function saveMapping(sourceId: string, fields: { sourceField: string; targetItemKey: string; transform: string }[]): Promise<Result> {
+  async function saveMapping(sourceId: string, fields: Omit<ImportFieldMap, 'id'>[]): Promise<Result> {
     const denied = adminGuard(); if (denied) return denied
     if (isApi) {
       const res = await apiWrite<ImportMapping>('/v1/akebono/import-mappings', {
@@ -143,6 +152,6 @@ export function useAkebonoImports() {
   return {
     sources, mappings, runs, activeSources, recentRuns, isAdmin,
     sourceById, mappingsOf, activeMappingOf, runsOf,
-    addSource, archiveSource, restoreSource, saveMapping, runImport,
+    addSource, updateSourceConfig, archiveSource, restoreSource, saveMapping, runImport,
   }
 }

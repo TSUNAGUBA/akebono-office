@@ -25,8 +25,9 @@ import { nextDocCode } from './akebono-trade'
 
 const IMPORT_METHODS = ['file_csv', 'file_fixed', 'file_json', 'api_pull']
 const IMPORT_ENTITIES = ['product', 'sku', 'company', 'sales_record', 'inventory']
+const IMPORT_AUTH_TYPES = ['none', 'bearer', 'api_key', 'basic']
 
-const SRC_COLS = `id, name, method, encoding, target_entity AS "targetEntity", schedule, active`
+const SRC_COLS = `id, name, method, encoding, target_entity AS "targetEntity", schedule, active, config`
 const MAP_COLS = `id, source_id AS "sourceId", version, status, fields,
   to_char(created_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"') AS "createdAt"`
 const RUN_COLS = `id, code, source_id AS "sourceId", mapping_version AS "mappingVersion",
@@ -39,11 +40,22 @@ export interface ImportFieldInput {
   sourceField: string
   targetItemKey: string
   transform: string
+  columnIndex: number | null
+  byteStart: number | null
+  byteEnd: number | null
+  jsonKey: string | null
+}
+
+function numOrNull(v: unknown): number | null {
+  if (v == null || v === '') return null
+  const n = Number(v)
+  return Number.isFinite(n) ? n : null
 }
 
 /**
  * マッピング項目の検証・正規化（純粋関数・単体テスト対象）。
  * sourceField / targetItemKey が空の行は捨て、残りに行 id を付与する（モック saveMapping と同じフィルタ）。
+ * 方式別ロケータ（CSV 列番号 columnIndex / 固定長 byteStart-byteEnd / JSON jsonKey）を保持する。
  * 有効行が 0 のときは null（呼び出し側が AKO-IMP-003）。
  */
 export function importFieldsOf(mappingId: string, raw: unknown): ImportFieldInput[] | null {
@@ -60,9 +72,33 @@ export function importFieldsOf(mappingId: string, raw: unknown): ImportFieldInpu
       sourceField,
       targetItemKey,
       transform: capCp(String(o.transform ?? '').trim(), 60),
+      columnIndex: numOrNull(o.columnIndex),
+      byteStart: numOrNull(o.byteStart),
+      byteEnd: numOrNull(o.byteEnd),
+      jsonKey: o.jsonKey != null && String(o.jsonKey).trim() ? capCp(String(o.jsonKey).trim(), 200) : null,
     })
   }
   return out.length > 0 ? out : null
+}
+
+/** 取込元の方式別設定の正規化（method に応じて使う項目のみ保持） */
+export function normalizeSourceConfig(raw: unknown, method: string): Record<string, unknown> {
+  const o = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {}
+  const cfg: Record<string, unknown> = {}
+  if (method === 'file_csv') {
+    cfg.hasHeader = o.hasHeader !== false // 既定 true
+    cfg.delimiter = typeof o.delimiter === 'string' && o.delimiter.length > 0 ? o.delimiter.slice(0, 4) : ','
+  }
+  if (method === 'file_json' || method === 'api_pull') {
+    if (typeof o.jsonRootPath === 'string' && o.jsonRootPath.trim()) cfg.jsonRootPath = capCp(o.jsonRootPath.trim(), 200)
+  }
+  if (method === 'api_pull') {
+    cfg.endpoint = capCp(String(o.endpoint ?? '').trim(), 500)
+    const at = IMPORT_AUTH_TYPES.includes(String(o.authType)) ? String(o.authType) : 'none'
+    cfg.authType = at
+    cfg.authValue = at === 'none' ? '' : capCp(String(o.authValue ?? '').trim(), 500)
+  }
+  return cfg
 }
 
 /**
@@ -117,13 +153,29 @@ export function akebonoImportsRoutes(pool: pg.Pool): Hono {
     const method = IMPORT_METHODS.includes(String(body.method)) ? String(body.method) : 'file_csv'
     const encoding = String(body.encoding) === 'sjis' ? 'sjis' : 'utf8'
     const targetEntity = IMPORT_ENTITIES.includes(String(body.targetEntity)) ? String(body.targetEntity) : 'product'
+    const config = normalizeSourceConfig(body.config, method)
     const id = newId('imp')
     const { rows } = await pool.query(
-      `INSERT INTO import_sources (id, name, method, encoding, target_entity)
-       VALUES ($1, $2, $3, $4, $5) RETURNING ${SRC_COLS}`,
-      [id, name, method, encoding, targetEntity])
+      `INSERT INTO import_sources (id, name, method, encoding, target_entity, config)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING ${SRC_COLS}`,
+      [id, name, method, encoding, targetEntity, JSON.stringify(config)])
     await audit(pool, { actorId: user.id, action: 'create', entity: 'import_sources', entityId: id, detail: `取込元を登録（${name}）` })
     return c.json({ data: rows[0] }, 201)
+  })
+
+  // 方式別設定の更新（エンドポイント/トークン・CSV ヘッダ有無等の編集。method は method に応じて正規化）
+  app.put('/import-sources/:id/config', async (c) => {
+    const user = requireAdmin(c)
+    const id = c.req.param('id')
+    const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
+    const { rows: srows } = await pool.query<{ method: string }>(`SELECT method FROM import_sources WHERE id = $1`, [id])
+    if (srows.length === 0) throw err('AKO-GEN-002', '取込元が見つかりません', 404)
+    const config = normalizeSourceConfig(body.config, srows[0]!.method)
+    const { rows } = await pool.query(
+      `UPDATE import_sources SET config = $2, updated_at = now() WHERE id = $1 RETURNING ${SRC_COLS}`,
+      [id, JSON.stringify(config)])
+    await audit(pool, { actorId: user.id, action: 'update', entity: 'import_sources', entityId: id, detail: '取込元の方式別設定を更新' })
+    return c.json({ data: rows[0] })
   })
 
   // 論理削除（取消）と復元（原則9.5。media_articles の archive/restore と同型）
