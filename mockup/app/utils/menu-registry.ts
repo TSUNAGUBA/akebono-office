@@ -46,6 +46,7 @@ export const MENU_CARDS: Record<MenuArea, MenuCardDef[]> = {
     { id: 'ai-assistant', title: 'AI業務アシスタント', description: '明日の計画と当日の振り返りを AI と。日報へ自動反映', icon: 'Sparkles', to: '/ai-assistant' },
     { id: 'poipoi', title: 'ぽいぽいポスト', description: '気づき・改善アイデアを投げ込むポスト。AI の参照対象・管理者はチーム改善のため閲覧可', icon: 'StickyNote', to: '/poipoi' },
     { id: 'minutes', title: '議事録', description: '会議の記録を蓄積。全員が参照でき AI の参照対象', icon: 'NotebookPen', to: '/minutes' },
+    { id: 'customer-log', title: '顧客ログ', description: 'いつ・どの顧客と・どんな会話をしたかを記録。AI の参照対象（自分の記録）', icon: 'MessageSquare', to: '/customer-log' },
     { id: 'workflow', title: '稟議', description: '稟議の申請・承認（職務権限マトリクス準拠）', icon: 'GitPullRequestArrow', to: '/workflow' },
     { id: 'ai-company', title: 'AIネイティブカンパニー', description: 'AI 社員の執務室。タスク依頼と活動モニタリング', icon: 'Building2', to: '/ai-company', featureToggle: 'aiCompany' },
     // メディア分析（media）は AKEBONO 業務配下のアプリへ移設（2026-07-28）。ダッシュボードの独立カードからは撤去し、
@@ -82,7 +83,7 @@ export const MENU_CARDS: Record<MenuArea, MenuCardDef[]> = {
 export const DEFAULT_MENU_CATEGORIES: Record<MenuArea, MenuCategoryDef[]> = {
   dashboard: [
     { id: 'decision', label: '意思決定支援', cardIds: ['decision'] },
-    { id: 'work', label: '業務ツール', cardIds: ['timecard', 'attendance', 'shift', 'reports', 'ai-assistant', 'poipoi', 'minutes', 'workflow'] },
+    { id: 'work', label: '業務ツール', cardIds: ['timecard', 'attendance', 'shift', 'reports', 'ai-assistant', 'poipoi', 'minutes', 'customer-log', 'workflow'] },
     { id: 'ai-company', label: 'AIネイティブカンパニー', cardIds: ['ai-company'] },
     { id: 'insights', label: '経営・状況', cardIds: ['sales', 'status'] },
     { id: 'support', label: '業務支援', cardIds: ['support', 'inbox'] },

@@ -89,6 +89,34 @@ export interface Note {
   active?: boolean
 }
 
+/**
+ * 顧客ログ（顧客とのやり取りの記録。オペレーター指示 2026-07-30）。
+ * いつ（logDate 必須・logTime 任意）どの顧客（会社 companyId 必須 / 人 contactId 任意）と
+ * どんな会話をしたか（body 必須）を本人が記録する。AI の参照対象（本人スコープ）。
+ * 記録系 = 追記 + 本人編集（監査）+ 取消/復元（原則2/9.5）。本人所有・本人のみ操作可。
+ */
+export interface CustomerLog {
+  id: string
+  /** 記録者（所有者）*/
+  memberId: string
+  /** 何月何日（YYYY-MM-DD・必須）*/
+  logDate: string
+  /** 時刻（HH:MM・任意。未指定は null）*/
+  logTime: string | null
+  /** 顧客(会社)（必須）*/
+  companyId: string
+  /** 顧客(人)（任意。companyId に属する contact）*/
+  contactId: string | null
+  /** 件名（任意。空なら会社名から導出表示）*/
+  title: string
+  /** 会話内容（必須）*/
+  body: string
+  createdAt: string
+  updatedAt?: string
+  /** 取消（論理削除）済みは false。モック旧データは未設定 = 有効（原則7） */
+  active?: boolean
+}
+
 export interface Industry {
   id: string
   name: string

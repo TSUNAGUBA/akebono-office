@@ -32,7 +32,7 @@ export interface SearchSegment {
 }
 
 export interface SearchDocInput {
-  sourceKind: 'company' | 'contact' | 'industry' | 'knowledge' | 'project' | 'note' | 'document'
+  sourceKind: 'company' | 'contact' | 'industry' | 'knowledge' | 'project' | 'note' | 'document' | 'customer-log'
   sourceId: string
   title: string
   aliases: string[]
@@ -58,6 +58,7 @@ export const TITLE_CHECKS: Record<SearchDocInput['sourceKind'], SegmentCheck> = 
   industry: { entity: 'industries', field: 'name' },
   knowledge: { entity: 'knowledge', field: 'title' },
   project: { entity: 'projects', field: 'name' },
+  'customer-log': { entity: 'customer_logs', field: 'title' },
 }
 
 const seg = (text: string, ...checks: SegmentCheck[]): SearchSegment => ({ text, checks })
@@ -286,6 +287,34 @@ export async function buildSearchDocs(pool: pg.Pool): Promise<SearchDocInput[]> 
     })
   }
 
+  // ---- 顧客ログ（本人スコープ = 記録者のみ AI が参照。オペレーター指示 2026-07-30） ----
+  // owner_member_id = 記録者にすることで searchDocsFor は「本人のログのみ」を返す（allOwners は note 限定 =
+  // 他メンバーの顧客ログは AI 文脈へ供給しない安全側の既定。UI の参照権限 canViewMemberCustomerLog とは別軸）
+  const { rows: clogRows } = await pool.query<{
+    id: string; memberId: string; logDate: string; logTime: string | null
+    companyId: string; contactId: string | null; title: string; body: string
+  }>(
+    `SELECT id, member_id AS "memberId", log_date::text AS "logDate", log_time AS "logTime",
+            company_id AS "companyId", contact_id AS "contactId", title, body
+     FROM customer_logs WHERE active = true ORDER BY id LIMIT 5000`)
+  for (const cl of clogRows) {
+    const segments: SearchSegment[] = []
+    const co = companyName.get(cl.companyId)
+    segments.push(seg(`日時: ${cl.logTime ? `${cl.logDate} ${cl.logTime}` : cl.logDate}`))
+    if (co) segments.push(seg(`顧客: ${co}`, c('companies', 'name')))
+    const contact = cl.contactId ? contactName.get(cl.contactId) : undefined
+    if (contact) segments.push(seg(`担当者: ${contact}`, c('contacts', 'name')))
+    const author = memberName.get(cl.memberId)
+    if (author) segments.push(seg(`記録者: ${author}`, c('members', 'name')))
+    if (cl.body) segments.push(seg(capCp(cl.body, 1500), c('customer_logs', 'body')))
+    docs.push({
+      sourceKind: 'customer-log', sourceId: cl.id,
+      title: cl.title || `${co ?? '顧客'}との会話（${cl.logDate}）`, aliases: [], segments,
+      ownerMemberId: cl.memberId,
+      links: cl.companyId ? { companyId: cl.companyId } : {},
+    })
+  }
+
   // ---- 保管ドキュメント（F-09-3 本実装 = バッチ7l。抽出テキストがあるファイルのみ = AI が解釈できる対象） ----
   const { rows: docRows } = await pool.query<{
     id: string; name: string; tags: string[]; summary: string; extractedText: string
@@ -437,9 +466,9 @@ export interface SearchHit {
   title: string
   segments: SearchSegment[]
   score: number
-  /** note の所有者（null = 全員参照 = 議事録。値あり = poipoi = 本人） */
+  /** 所有者（null = 全員参照。値あり = 本人スコープ = poipoi または顧客ログ = customer-log） */
   ownerMemberId: string | null
-  /** 紐付け（note のみ。混入防止フィルタ用） */
+  /** 紐付け（note・customer-log。混入防止フィルタ用 = companyId/projectId） */
   links: { companyId?: string; projectId?: string }
 }
 
@@ -447,8 +476,10 @@ export interface SearchHit {
  * 質問に関連する検索ドキュメントの上位 K 件（字句 + 埋め込みのハイブリッド。埋め込み無効時は字句のみ）。
  * allOwners = true で本人スコープ（owner_member_id）の絞り込みを外す
  * （ぽいぽいポストの AI 参照範囲 'all' = 他メンバーの投稿も参照。バッチ7g・オペレーター指示 2026-07-19 #8）。
- * 不変条件: owner_member_id を持つのは source_kind = 'note'（ぽいぽいポスト）のみ。
- * 将来 owner 付きの別種別を追加しても poipoi の設定で漏れないよう、SQL 側でも note に限定する
+ * owner_member_id を持つのは source_kind = 'note'（ぽいぽいポスト）と 'customer-log'（顧客ログ）。
+ * **allOwners が広げるのは 'note' のみ**（下の SQL の `AND source_kind = 'note'`）。顧客ログは常に本人スコープで、
+ * どの ai-scope 設定でも他メンバーへは広がらない（安全側の意図的な制約）。
+ * owner 付きの新種別をこの `allOwners` 分岐へ**追加しないこと**（追加すると他メンバーのデータが漏れる）。
  */
 export async function searchDocsFor(
   pool: pg.Pool,

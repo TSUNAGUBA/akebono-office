@@ -14,7 +14,8 @@
 import { Check, ChevronDown, ChevronRight, X } from 'lucide-vue-next'
 import type { CodeMasterItem, Member, PermissionRule } from '~/types/domain'
 import {
-  AI_SCOPE_FEATURES, AI_SCOPE_FIELD, ASSIST_MEMBER_FIELD_PREFIX, FEATURE_PERMISSION_KEYS,
+  AI_SCOPE_FEATURES, AI_SCOPE_FIELD, ASSIST_MEMBER_FIELD_PREFIX, CUSTOMER_LOG_MEMBER_FIELD_PREFIX,
+  FEATURE_PERMISSION_KEYS,
   MEMBER_VIEW_ALL_FIELD, REPORT_MEMBER_FIELD_PREFIX, TIMECARD_ALL_FIELD, timecardAllDefault,
 } from '../../../../shared/domain/permissions'
 import { FIELD_CATALOG, FIELD_RESOURCES } from '../../../../shared/domain/permission-catalog'
@@ -145,6 +146,9 @@ const tree = computed<MatrixNode[]>(() => FEATURE_PERMISSION_KEYS.map((f) => {
   }
   if (f.key === 'ai-assistant') {
     children.push(viewTargetNodes('ai-assistant', 'AI業務アシスタントの参照対象', ASSIST_MEMBER_FIELD_PREFIX, false))
+  }
+  if (f.key === 'customer-log') {
+    children.push(viewTargetNodes('customer-log', '顧客ログの参照対象', CUSTOMER_LOG_MEMBER_FIELD_PREFIX, false))
   }
   if (f.key === 'documents') {
     children.push(...(FIELD_CATALOG.documents ?? []).map(fld => ({

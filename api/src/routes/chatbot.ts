@@ -689,9 +689,11 @@ export async function buildContext(
     // 「別の顧客/プロジェクトに紐付くノート」は関係のない情報として文脈から除外する。
     // 紐付けなしのノートは対象外（全般メモとして従来どおりスコア勝負）
     const noteHits = hits.some(h => h.sourceKind === 'note')
+    // 顧客ログも会社紐付けの混入防止フィルタ対象（別顧客のログを今回の顧客の文脈へ混ぜない）
+    const clogHits = hits.some(h => h.sourceKind === 'customer-log')
     let mentionedCompanyId: string | null = null
     let mentionedProjectId: string | null = null
-    if (noteHits) {
+    if (noteHits || clogHits) {
       // 会社ブロックと同じ「今回の質問 → 履歴（新しい順）→ 自社キーワード」の優先順で解決する。
       // topic（連結）への最長一致だと履歴中の別会社が今回の質問の会社に勝ち、関係あるノートを誤除外する
       // （オペレーター報告 2026-07-18 #3 で修正済みのパターンをここで再導入しない）
@@ -699,7 +701,10 @@ export async function buildContext(
         `SELECT id, name, aliases, kind FROM companies WHERE active = true ORDER BY id LIMIT 1000`)
       mentionedCompanyId = (findMentionedIn(question, historyUserTexts, cos)
         ?? (SELF_COMPANY_PATTERN.test(topic) ? cos.find(x => x.kind === 'self') : undefined))?.id ?? null
-      // プロジェクトも同じ優先順 + 正規化・最長一致（生 includes の「最初の一致」では別 PJ の誤除外が起きる）
+    }
+    if (noteHits) {
+      // プロジェクトも同じ優先順 + 正規化・最長一致（生 includes の「最初の一致」では別 PJ の誤除外が起きる）。
+      // プロジェクト紐付けはノートのみ = 顧客ログは会社紐付けのみのため noteHits 時だけ解決する
       const { rows: pjs } = await pool.query<{ id: string; name: string }>(
         `SELECT id, name FROM projects WHERE active = true ORDER BY id LIMIT 1000`)
       mentionedProjectId = findMentionedIn(question, historyUserTexts, pjs)?.id ?? null
@@ -713,10 +718,15 @@ export async function buildContext(
       if (h.sourceKind === 'note' && !can(h.ownerMemberId ? 'poipoi' : 'minutes')) continue
       // 保管ドキュメント（バッチ7l）も機能ガードに従う
       if (h.sourceKind === 'document' && !can('documents')) continue
+      // 顧客ログも機能ガードに従う。owner スコープにより hits は本人のログのみ（search-index 側 = 他人は非供給）
+      if (h.sourceKind === 'customer-log' && !can('customer-log')) continue
       if (h.sourceKind === 'note') {
         if (mentionedCompanyId && h.links.companyId && h.links.companyId !== mentionedCompanyId) continue
         if (mentionedProjectId && h.links.projectId && h.links.projectId !== mentionedProjectId) continue
       }
+      // 顧客ログの混入防止（会社紐付けのみ）: 今回の顧客に解決されたら別顧客のログを除外
+      if (h.sourceKind === 'customer-log'
+        && mentionedCompanyId && h.links.companyId && h.links.companyId !== mentionedCompanyId) continue
       const titleCheck = TITLE_CHECKS[h.sourceKind]
       if (!canField(titleCheck.entity, titleCheck.field)) continue
       const segLines = (h.segments ?? [])

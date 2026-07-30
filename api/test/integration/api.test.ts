@@ -5170,3 +5170,103 @@ describe('Phase D: データ取込（F-32）・ダッシュボード保管（F-4
     })
   })
 })
+
+describe('顧客ログ', () => {
+  let companyId = ''
+  let otherCompanyId = ''
+  let contactId = ''
+  let logId = ''
+  const today = todayJst()
+
+  beforeAll(async () => {
+    const co = await api('POST', '/v1/masters/companies', { as: ADMIN, body: { kind: 'customer', name: '顧客ログ商事' } })
+    companyId = (co.json.data as { id: string }).id
+    const co2 = await api('POST', '/v1/masters/companies', { as: ADMIN, body: { kind: 'customer', name: '別顧客社' } })
+    otherCompanyId = (co2.json.data as { id: string }).id
+    const ct = await api('POST', '/v1/masters/contacts', { as: ADMIN, body: { companyId, name: '窓口 太郎', keyPerson: 2 } })
+    contactId = (ct.json.data as { id: string }).id
+  })
+
+  it('登録の入力検証（AKO-CLG-001）と会社/担当者の不整合（AKO-CLG-003）', async () => {
+    // 会話内容なし・会社なし・日付不正・時刻不正はいずれも AKO-CLG-001
+    expect((await api('POST', '/v1/customer-logs', { as: MEMBER, body: { logDate: today, companyId, body: '' } })).json.error?.code).toBe('AKO-CLG-001')
+    expect((await api('POST', '/v1/customer-logs', { as: MEMBER, body: { logDate: today, companyId: '', body: 'x' } })).json.error?.code).toBe('AKO-CLG-001')
+    expect((await api('POST', '/v1/customer-logs', { as: MEMBER, body: { logDate: '2026-13-40', companyId, body: 'x' } })).json.error?.code).toBe('AKO-CLG-001')
+    expect((await api('POST', '/v1/customer-logs', { as: MEMBER, body: { logDate: today, logTime: '25:99', companyId, body: 'x' } })).json.error?.code).toBe('AKO-CLG-001')
+    // 担当者が選択会社に属さない → AKO-CLG-003
+    expect((await api('POST', '/v1/customer-logs', { as: MEMBER, body: { logDate: today, companyId: otherCompanyId, contactId, body: 'x' } })).json.error?.code).toBe('AKO-CLG-003')
+  })
+
+  it('本人が登録・一覧取得できる（他人の記録は本人スコープで見えない）', async () => {
+    const created = await api('POST', '/v1/customer-logs', {
+      as: MEMBER, body: { logDate: today, logTime: '14:30', companyId, contactId, title: '初回商談', body: '価格感の確認。次回見積提示。' },
+    })
+    expect(created.status).toBe(201)
+    logId = (created.json.data as { id: string }).id
+    const mine = (await api('GET', '/v1/customer-logs', { as: MEMBER })).json.data as { id: string }[]
+    expect(mine.some(l => l.id === logId)).toBe(true)
+    // HR は本人スコープのため MEMBER の記録が既定一覧に出ない
+    const hr = (await api('GET', '/v1/customer-logs', { as: HR })).json.data as { id: string }[]
+    expect(hr.some(l => l.id === logId)).toBe(false)
+    // from/to に実在しない日（2026-02-30）を渡しても 500 にならない（::date キャストの 22007 回避 = フィルタ無視）
+    const badDate = await api('GET', '/v1/customer-logs?from=2026-02-30&to=2026-13-40', { as: MEMBER })
+    expect(badDate.status).toBe(200)
+    expect((badDate.json.data as { id: string }[]).some(l => l.id === logId)).toBe(true)
+  })
+
+  it('編集は本人のみ・部分更新は未指定項目を保持する（原則7・CLAUDE.md 部分更新原則）', async () => {
+    // 他人は編集不可（403 AKO-CLG-002）
+    expect((await api('PATCH', `/v1/customer-logs/${logId}`, { as: HR, body: { body: '乗っ取り' } })).status).toBe(403)
+    // body だけ更新 → companyId/contactId/logDate/logTime/title は保持される
+    const upd = await api('PATCH', `/v1/customer-logs/${logId}`, { as: MEMBER, body: { body: '価格合意。契約手続きへ。' } })
+    expect(upd.status).toBe(200)
+    const row = upd.json.data as { body: string; companyId: string; contactId: string; logTime: string; title: string }
+    expect(row.body).toBe('価格合意。契約手続きへ。')
+    expect(row.companyId).toBe(companyId)
+    expect(row.contactId).toBe(contactId)
+    expect(row.logTime).toBe('14:30')
+    expect(row.title).toBe('初回商談')
+  })
+
+  it('取消・復元は本人のみ・冪等（原則9.5）', async () => {
+    expect((await api('POST', `/v1/customer-logs/${logId}/archive`, { as: HR })).status).toBe(403)
+    expect((await api('POST', `/v1/customer-logs/${logId}/archive`, { as: MEMBER })).status).toBe(200)
+    // 取消済みは既定一覧（active のみ）から外れ、includeArchived=1 でのみ見える
+    expect(((await api('GET', '/v1/customer-logs', { as: MEMBER })).json.data as { id: string }[]).some(l => l.id === logId)).toBe(false)
+    expect(((await api('GET', '/v1/customer-logs?includeArchived=1', { as: MEMBER })).json.data as { id: string }[]).some(l => l.id === logId)).toBe(true)
+    // 二重取消は冪等（200 + warning）
+    expect((await api('POST', `/v1/customer-logs/${logId}/archive`, { as: MEMBER })).status).toBe(200)
+    // 復元で一覧へ戻る
+    expect((await api('POST', `/v1/customer-logs/${logId}/restore`, { as: MEMBER })).status).toBe(200)
+    expect(((await api('GET', '/v1/customer-logs', { as: MEMBER })).json.data as { id: string }[]).some(l => l.id === logId)).toBe(true)
+  })
+
+  it('他メンバーの記録は権限（customer-log + member:<id>）で許可された対象者のみ readonly 参照可', async () => {
+    // 既定 = 参照不可（AKO-PRM-002）。自分の memberId 指定は常に可
+    const denied = await api('GET', `/v1/customer-logs?memberId=${MEMBER}`, { as: HR })
+    expect(denied.status).toBe(403)
+    expect(denied.json.error?.code).toBe('AKO-PRM-002')
+    expect((await api('GET', `/v1/customer-logs?memberId=${MEMBER}`, { as: MEMBER })).status).toBe(200)
+    // HR に「MEMBER の顧客ログを参照可」を付与
+    await pool.query(
+      `INSERT INTO permission_rules (id, subject_kind, subject_id, resource, field, effect, active)
+       VALUES ('pr-test-clog-view', 'member', $1, 'customer-log', $2, 'allow', true)
+       ON CONFLICT (id) DO UPDATE SET active = true`,
+      [HR, `member:${MEMBER}`])
+    clearPermissionCache()
+    try {
+      const view = await api('GET', `/v1/customer-logs?memberId=${MEMBER}`, { as: HR })
+      expect(view.status).toBe(200)
+      const rows = view.json.data as { memberId: string }[]
+      expect(rows.length).toBeGreaterThanOrEqual(1)
+      expect(rows.every(l => l.memberId === MEMBER)).toBe(true) // 対象メンバーの行のみ
+      // 参照権限は編集権限を与えない（他人の記録は依然 403）
+      expect((await api('PATCH', `/v1/customer-logs/${logId}`, { as: HR, body: { body: 'x' } })).status).toBe(403)
+      // 無関係な第三者（ADMIN）指定は依然 403
+      expect((await api('GET', `/v1/customer-logs?memberId=${ADMIN}`, { as: HR })).json.error?.code).toBe('AKO-PRM-002')
+    } finally {
+      await pool.query(`DELETE FROM permission_rules WHERE id = 'pr-test-clog-view'`)
+      clearPermissionCache()
+    }
+  })
+})
