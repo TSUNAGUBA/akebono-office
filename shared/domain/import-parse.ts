@@ -73,9 +73,68 @@ export function extractJsonKeys(text: string, rootPath?: string): JsonKeysResult
   const parsed = atPath(JSON.parse(text) as unknown, rootPath)
   const isArray = Array.isArray(parsed)
   const records = isArray ? (parsed as unknown[]) : [parsed]
+  if (records.length === 0) throw new Error('レコードがありません（空の配列です）')
   const first = records[0]
   if (first == null || typeof first !== 'object' || Array.isArray(first)) {
     throw new Error('先頭レコードがオブジェクトではありません')
   }
   return { keys: Object.keys(first as Record<string, unknown>), recordCount: records.length, isArray }
+}
+
+// ---------- 方式別設定・ロケータの正規化（フロント/API 共有 = 原則3。モック↔API の永続化形を揃える parity） ----------
+
+export const IMPORT_AUTH_TYPES = ['none', 'bearer', 'api_key', 'basic'] as const
+
+/** コードポイント単位の切詰め（api/lib/text.capCp と同一。サロゲート境界を壊さない） */
+function capCp(s: string, n: number): string {
+  return [...s].slice(0, n).join('')
+}
+
+/** 数値化（空文字・null・非数値は null）。CSV 列番号 / 固定長バイト範囲の正規化に使う（v-model.number の '' 対策） */
+export function numOrNull(v: unknown): number | null {
+  if (v == null || v === '') return null
+  const n = Number(v)
+  return Number.isFinite(n) ? n : null
+}
+
+export interface ImportFieldLocators {
+  columnIndex: number | null
+  byteStart: number | null
+  byteEnd: number | null
+  jsonKey: string | null
+}
+
+/** マッピング項目の方式別ロケータを正規化（数値でない値・空 jsonKey は null）。モック saveMapping / API importFieldsOf が共有 */
+export function normalizeFieldLocators(raw: Record<string, unknown>): ImportFieldLocators {
+  const jk = raw.jsonKey != null && String(raw.jsonKey).trim() ? capCp(String(raw.jsonKey).trim(), 200) : null
+  return {
+    columnIndex: numOrNull(raw.columnIndex),
+    byteStart: numOrNull(raw.byteStart),
+    byteEnd: numOrNull(raw.byteEnd),
+    jsonKey: jk,
+  }
+}
+
+/**
+ * 取込元の方式別設定を method 別に正規化（使う項目のみ保持・不正 authType は none・none は authValue 空）。
+ * モック（useAkebonoImports）と API（akebono-imports）が共有し、両モードで同一の config 形に揃える。
+ * delimiter は 1 文字に切詰める（parseCsvLine が単一文字区切りのため 2 文字以上は無効）。
+ */
+export function normalizeImportSourceConfig(raw: unknown, method: string): Record<string, unknown> {
+  const o = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {}
+  const cfg: Record<string, unknown> = {}
+  if (method === 'file_csv') {
+    cfg.hasHeader = o.hasHeader !== false // 既定 true
+    cfg.delimiter = typeof o.delimiter === 'string' && o.delimiter.length > 0 ? o.delimiter.slice(0, 1) : ','
+  }
+  if (method === 'file_json' || method === 'api_pull') {
+    if (typeof o.jsonRootPath === 'string' && o.jsonRootPath.trim()) cfg.jsonRootPath = capCp(o.jsonRootPath.trim(), 200)
+  }
+  if (method === 'api_pull') {
+    cfg.endpoint = capCp(String(o.endpoint ?? '').trim(), 500)
+    const at = (IMPORT_AUTH_TYPES as readonly string[]).includes(String(o.authType)) ? String(o.authType) : 'none'
+    cfg.authType = at
+    cfg.authValue = at === 'none' ? '' : capCp(String(o.authValue ?? '').trim(), 500)
+  }
+  return cfg
 }

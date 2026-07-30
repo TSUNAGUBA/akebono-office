@@ -1,6 +1,6 @@
 /**
  * データ取込・連携基盤（F-32）
- * 取込元（CSV/固定長/JSON/API）・項目マッピング（AI 候補 + 人が確定・版管理）・
+ * 取込元（CSV/固定長/JSON/API）・項目マッピング（方式別に取込元を解析し右辺=対象アプリ項目へ対応づけ・版管理）・
  * 取込実行（ステージング → 検証 → 反映。冪等・エラー行隔離）。
  *
  * デュアルモード（Phase D = 0035。localStorage 依存の解消 = 本実装の最終フェーズ）:
@@ -17,6 +17,7 @@ import type {
 import type { Result } from '~/types/domain'
 import { irange } from '~/utils/rng'
 import { nextCode } from '~/utils/akebono'
+import { normalizeFieldLocators, normalizeImportSourceConfig } from '~/utils/import-parse'
 
 export const IMPORT_METHOD_LABELS: Record<ImportMethod, string> = {
   file_csv: 'CSV ファイル',
@@ -65,7 +66,9 @@ export function useAkebonoImports() {
       return res.ok ? { ok: true, id: res.data.id } : res
     }
     const id = nextId('importSources', 'imp')
-    sources.value = [...sources.value, { id, name: input.name.trim(), method: input.method, encoding: input.encoding, targetEntity: input.targetEntity, schedule: 'manual', active: true, config: input.config ?? {} }]
+    // config は method 別に正規化（API の normalizeImportSourceConfig と同一関数 = 両モード parity）
+    const config = normalizeImportSourceConfig(input.config ?? {}, input.method) as ImportSourceConfig
+    sources.value = [...sources.value, { id, name: input.name.trim(), method: input.method, encoding: input.encoding, targetEntity: input.targetEntity, schedule: 'manual', active: true, config }]
     commit()
     return { ok: true, id }
   }
@@ -74,7 +77,10 @@ export function useAkebonoImports() {
   async function updateSourceConfig(id: string, config: ImportSourceConfig): Promise<Result> {
     const denied = adminGuard(); if (denied) return denied
     if (isApi) return apiWrite(`/v1/akebono/import-sources/${id}/config`, { method: 'PUT', body: { config }, reload: ['importSources'] })
-    sources.value = sources.value.map(s => s.id === id ? { ...s, config } : s)
+    // 取込元の method に合わせて正規化（API 経路と同じ subset に揃える）
+    const method = sourceById(id)?.method
+    const norm = method ? normalizeImportSourceConfig(config, method) as ImportSourceConfig : config
+    sources.value = sources.value.map(s => s.id === id ? { ...s, config: norm } : s)
     commit()
     return { ok: true, id }
   }
@@ -94,7 +100,7 @@ export function useAkebonoImports() {
     return { ok: true, id }
   }
 
-  /** 新しいマッピング版を作成（既存 active は superseded に）。AI 候補 + 人が確定の想定 */
+  /** 新しいマッピング版を作成（既存 active は superseded に）。方式別に取込元を解析して人が確定する想定 */
   async function saveMapping(sourceId: string, fields: Omit<ImportFieldMap, 'id'>[]): Promise<Result> {
     const denied = adminGuard(); if (denied) return denied
     if (isApi) {
@@ -108,7 +114,11 @@ export function useAkebonoImports() {
     const id = nextId('importMappings', 'impm')
     const mapping: ImportMapping = {
       id, sourceId, version: nextVersion, status: 'active', createdAt: nowJstIso(),
-      fields: fields.filter(f => f.sourceField && f.targetItemKey).map((f, i) => ({ id: `${id}-f${i}`, ...f })),
+      // ロケータは shared normalizeFieldLocators で正規化（API importFieldsOf と同一関数 = '' → null 等を両モード一致）
+      fields: fields.filter(f => f.sourceField && f.targetItemKey).map((f, i) => ({
+        id: `${id}-f${i}`, sourceField: f.sourceField, targetItemKey: f.targetItemKey, transform: f.transform,
+        ...normalizeFieldLocators(f as unknown as Record<string, unknown>),
+      })),
     }
     mappings.value = [
       ...mappings.value.map(m => m.sourceId === sourceId && m.status === 'active' ? { ...m, status: 'superseded' as const } : m),

@@ -4,7 +4,7 @@
  * - normalizeDashboardInsight（ダッシュボード AI レポートの LLM 出力正規化 F-41）
  */
 import { describe, expect, it } from 'vitest'
-import { importFieldsOf, normalizeSourceConfig, simulateRun } from '../../src/routes/akebono-imports'
+import { importFieldsOf, simulateRun } from '../../src/routes/akebono-imports'
 import { normalizeDashboardInsight } from '../../src/routes/akebono-dashboard'
 
 // 方式別ロケータの既定（未指定は全て null）
@@ -56,30 +56,7 @@ describe('importFieldsOf（マッピング項目の検証・正規化）', () =>
     expect(out).toEqual([{ id: 'm1-f0', sourceField: 'a', targetItemKey: 'b', transform: '', ...NO_LOC }])
   })
 })
-
-describe('normalizeSourceConfig（取込元の方式別設定の正規化）', () => {
-  it('CSV: hasHeader 既定 true・delimiter 既定 ","・他方式の項目は落とす', () => {
-    expect(normalizeSourceConfig({ delimiter: '\t', endpoint: 'x', authValue: 'y' }, 'file_csv'))
-      .toEqual({ hasHeader: true, delimiter: '\t' })
-    expect(normalizeSourceConfig({ hasHeader: false }, 'file_csv')).toEqual({ hasHeader: false, delimiter: ',' })
-  })
-
-  it('固定長: 保持する設定はなし（空オブジェクト）', () => {
-    expect(normalizeSourceConfig({ hasHeader: false, endpoint: 'x' }, 'file_fixed')).toEqual({})
-  })
-
-  it('JSON: jsonRootPath のみ（空はキー自体を持たない）', () => {
-    expect(normalizeSourceConfig({ jsonRootPath: 'data.items', delimiter: ',' }, 'file_json')).toEqual({ jsonRootPath: 'data.items' })
-    expect(normalizeSourceConfig({ jsonRootPath: '   ' }, 'file_json')).toEqual({})
-  })
-
-  it('API: endpoint・authType（不正は none）・authValue（none は空）・jsonRootPath', () => {
-    expect(normalizeSourceConfig({ endpoint: 'https://x/y', authType: 'bearer', authValue: 'tok', jsonRootPath: 'd' }, 'api_pull'))
-      .toEqual({ endpoint: 'https://x/y', authType: 'bearer', authValue: 'tok', jsonRootPath: 'd' })
-    expect(normalizeSourceConfig({ authType: 'bogus', authValue: 'tok' }, 'api_pull'))
-      .toEqual({ endpoint: '', authType: 'none', authValue: '' })
-  })
-})
+// 注: normalizeImportSourceConfig の正規化テストは shared 直テストの import-parse.test.ts に集約（重複排除）
 
 describe('simulateRun（取込実行の決定的シミュレート）', () => {
   it('runIndex ごとに staged/failed が決定的（applied = staged − failed・failed>0 で隔離行 1 件）', () => {

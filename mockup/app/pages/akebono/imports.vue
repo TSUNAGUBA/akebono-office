@@ -1,8 +1,8 @@
 <script setup lang="ts">
 /**
  * F-32 データ取込・連携（管理者専用）
- * 取込元（CSV/固定長/JSON/API）・項目マッピング（AI 候補 + 人が確定・版管理）・
- * 取込実行（ステージング → 検証 → 反映。冪等・dry-run 思想。エラー行隔離）。
+ * 取込元（CSV/固定長/JSON/API）・項目マッピング（方式別に取込元を解析して左辺を生成し、右辺=対象アプリの
+ * 有効項目〔既定+カスタム〕へ対応づけ・版管理）・取込実行（ステージング → 検証 → 反映。冪等・dry-run 思想。エラー行隔離）。
  * モックは実行をシミュレートし、実行履歴・エラー行を残す。
  */
 import { Plus, Play, RotateCcw, Trash2, Upload } from 'lucide-vue-next'
@@ -223,7 +223,9 @@ async function onCsvUpload(ev: Event): Promise<void> {
   const input = ev.target as HTMLInputElement
   const file = input.files?.[0]
   if (!file) return
-  const text = await file.text()
+  // 取込元の文字コードで復号（Shift_JIS を UTF-8 で読むと列名が文字化けする = m-3）
+  const enc = selectedSource.value?.encoding === 'sjis' ? 'shift_jis' : 'utf-8'
+  const text = new TextDecoder(enc).decode(await file.arrayBuffer())
   input.value = '' // 同一ファイル再選択を許可
   const { columns } = parseCsvColumns(text, { hasHeader: cfgDraft.value.hasHeader ?? true, delimiter: cfgDraft.value.delimiter || ',' })
   if (columns.length === 0) { parseError.value = '列を検出できませんでした（区切り文字・ヘッダ有無をご確認ください）'; return }
@@ -335,7 +337,7 @@ function openRun(row: Record<string, unknown>): void {
 <template>
   <MastersMasterShell
     title="データ取込・連携"
-    description="外部ファイル・API から商品・取引先・売上などを取り込みます（F-32）。AI が項目マッピング候補を提示し、人が確定します"
+    description="外部ファイル・API から商品・取引先・売上などを取り込みます（F-32）。取込方式ごとに取込元を解析し、対象アプリの有効項目（既定＋カスタマイズ項目）へ対応づけます"
   >
     <template #actions>
       <label class="flex items-center gap-1.5 text-[12px] text-sub">
@@ -424,7 +426,7 @@ function openRun(row: Record<string, unknown>): void {
             :columns="mappingColumns"
             :rows="mappingTableRows"
             empty-title="マッピング未定義"
-            empty-hint="「マッピングを保存」で AI 候補を確定してください"
+            empty-hint="「マッピングを設定」で取込元の列/キーを対象アプリ項目へ対応づけてください"
           >
             <template #cell-version="{ row }">
               <span class="num tabular-nums">v{{ asMapping(row).version }}</span>
@@ -513,7 +515,7 @@ function openRun(row: Record<string, unknown>): void {
               </label>
               <label class="grid gap-1 text-[11px] font-semibold text-muted">
                 区切り文字
-                <input v-model="cfgDraft.delimiter" class="input w-20" type="text" placeholder="," aria-label="区切り文字">
+                <input v-model="cfgDraft.delimiter" class="input w-20" type="text" maxlength="1" placeholder="," aria-label="区切り文字">
               </label>
               <label class="btn btn-sm cursor-pointer">
                 <Upload class="h-4 w-4" aria-hidden="true" />

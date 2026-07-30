@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { extractJsonKeys, parseCsvColumns, parseCsvLine } from '../../../shared/domain/import-parse'
+import {
+  extractJsonKeys, normalizeFieldLocators, normalizeImportSourceConfig, numOrNull, parseCsvColumns, parseCsvLine,
+} from '../../../shared/domain/import-parse'
 
 describe('parseCsvLine（CSV 行分割）', () => {
   it('区切りで分割する', () => {
@@ -47,5 +49,49 @@ describe('extractJsonKeys（JSON キー抽出）', () => {
   it('パース不可・非オブジェクトは throw', () => {
     expect(() => extractJsonKeys('not json')).toThrow()
     expect(() => extractJsonKeys('[1,2,3]')).toThrow()
+  })
+  it('空配列はレコードなしとして throw（先頭非オブジェクトと区別）', () => {
+    expect(() => extractJsonKeys('[]')).toThrow('レコードがありません（空の配列です）')
+  })
+})
+
+describe('numOrNull / normalizeFieldLocators（方式別ロケータの正規化 = モック↔API parity）', () => {
+  it('numOrNull: 空文字・null・非数値は null・0 は保持', () => {
+    expect(numOrNull('')).toBeNull()
+    expect(numOrNull(null)).toBeNull()
+    expect(numOrNull('x')).toBeNull()
+    expect(numOrNull(0)).toBe(0)
+    expect(numOrNull('12')).toBe(12)
+  })
+  it('v-model.number 由来の空文字ロケータを null へ落とす（M1 の回帰防止）', () => {
+    // 固定長で開始/終了を空にした行 = '' が来ても number|null に正規化される
+    expect(normalizeFieldLocators({ byteStart: '', byteEnd: '' }))
+      .toEqual({ columnIndex: null, byteStart: null, byteEnd: null, jsonKey: null })
+  })
+  it('各ロケータを保持（columnIndex=0 も維持・空 jsonKey は null・trim）', () => {
+    expect(normalizeFieldLocators({ columnIndex: 0, byteStart: 11, byteEnd: 20, jsonKey: ' code ' }))
+      .toEqual({ columnIndex: 0, byteStart: 11, byteEnd: 20, jsonKey: 'code' })
+    expect(normalizeFieldLocators({ jsonKey: '  ' }).jsonKey).toBeNull()
+  })
+})
+
+describe('normalizeImportSourceConfig（取込元の方式別設定 = モック↔API parity）', () => {
+  it('CSV: hasHeader 既定 true・delimiter 既定 ","・他方式の項目は落とす', () => {
+    expect(normalizeImportSourceConfig({ endpoint: 'x', authValue: 'y' }, 'file_csv'))
+      .toEqual({ hasHeader: true, delimiter: ',' })
+    expect(normalizeImportSourceConfig({ hasHeader: false, delimiter: '\t' }, 'file_csv'))
+      .toEqual({ hasHeader: false, delimiter: '\t' })
+  })
+  it('CSV: delimiter は 1 文字に切詰め（単一文字パーサに合わせる = m2）', () => {
+    expect(normalizeImportSourceConfig({ delimiter: '||' }, 'file_csv').delimiter).toBe('|')
+  })
+  it('固定長: 保持する設定なし（空オブジェクト）', () => {
+    expect(normalizeImportSourceConfig({ hasHeader: false, endpoint: 'x' }, 'file_fixed')).toEqual({})
+  })
+  it('API: endpoint・authType（不正は none）・authValue（none は空）・jsonRootPath', () => {
+    expect(normalizeImportSourceConfig({ endpoint: 'https://x/y', authType: 'bearer', authValue: 'tok', jsonRootPath: 'd' }, 'api_pull'))
+      .toEqual({ endpoint: 'https://x/y', authType: 'bearer', authValue: 'tok', jsonRootPath: 'd' })
+    expect(normalizeImportSourceConfig({ authType: 'bogus', authValue: 'tok' }, 'api_pull'))
+      .toEqual({ endpoint: '', authType: 'none', authValue: '' })
   })
 })

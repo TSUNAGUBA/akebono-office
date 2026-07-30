@@ -21,11 +21,14 @@ import { audit } from '../lib/audit'
 import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
 import { capCp } from '../lib/text'
+import { normalizeFieldLocators, normalizeImportSourceConfig } from '../../../shared/domain/import-parse'
 import { nextDocCode } from './akebono-trade'
+
+// 単体テストの後方互換 import 名（実体は shared = フロント/API 共有 = 原則3）
+export { normalizeImportSourceConfig as normalizeSourceConfig } from '../../../shared/domain/import-parse'
 
 const IMPORT_METHODS = ['file_csv', 'file_fixed', 'file_json', 'api_pull']
 const IMPORT_ENTITIES = ['product', 'sku', 'company', 'sales_record', 'inventory']
-const IMPORT_AUTH_TYPES = ['none', 'bearer', 'api_key', 'basic']
 
 const SRC_COLS = `id, name, method, encoding, target_entity AS "targetEntity", schedule, active, config`
 const MAP_COLS = `id, source_id AS "sourceId", version, status, fields,
@@ -46,17 +49,11 @@ export interface ImportFieldInput {
   jsonKey: string | null
 }
 
-function numOrNull(v: unknown): number | null {
-  if (v == null || v === '') return null
-  const n = Number(v)
-  return Number.isFinite(n) ? n : null
-}
-
 /**
  * マッピング項目の検証・正規化（純粋関数・単体テスト対象）。
  * sourceField / targetItemKey が空の行は捨て、残りに行 id を付与する（モック saveMapping と同じフィルタ）。
- * 方式別ロケータ（CSV 列番号 columnIndex / 固定長 byteStart-byteEnd / JSON jsonKey）を保持する。
- * 有効行が 0 のときは null（呼び出し側が AKO-IMP-003）。
+ * 方式別ロケータ（CSV 列番号 columnIndex / 固定長 byteStart-byteEnd / JSON jsonKey）は shared の
+ * normalizeFieldLocators で正規化（モックと同一関数 = 両モード parity）。有効行が 0 のときは null（AKO-IMP-003）。
  */
 export function importFieldsOf(mappingId: string, raw: unknown): ImportFieldInput[] | null {
   if (!Array.isArray(raw)) return null
@@ -72,33 +69,17 @@ export function importFieldsOf(mappingId: string, raw: unknown): ImportFieldInpu
       sourceField,
       targetItemKey,
       transform: capCp(String(o.transform ?? '').trim(), 60),
-      columnIndex: numOrNull(o.columnIndex),
-      byteStart: numOrNull(o.byteStart),
-      byteEnd: numOrNull(o.byteEnd),
-      jsonKey: o.jsonKey != null && String(o.jsonKey).trim() ? capCp(String(o.jsonKey).trim(), 200) : null,
+      ...normalizeFieldLocators(o),
     })
   }
   return out.length > 0 ? out : null
 }
 
-/** 取込元の方式別設定の正規化（method に応じて使う項目のみ保持） */
-export function normalizeSourceConfig(raw: unknown, method: string): Record<string, unknown> {
-  const o = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {}
-  const cfg: Record<string, unknown> = {}
-  if (method === 'file_csv') {
-    cfg.hasHeader = o.hasHeader !== false // 既定 true
-    cfg.delimiter = typeof o.delimiter === 'string' && o.delimiter.length > 0 ? o.delimiter.slice(0, 4) : ','
-  }
-  if (method === 'file_json' || method === 'api_pull') {
-    if (typeof o.jsonRootPath === 'string' && o.jsonRootPath.trim()) cfg.jsonRootPath = capCp(o.jsonRootPath.trim(), 200)
-  }
-  if (method === 'api_pull') {
-    cfg.endpoint = capCp(String(o.endpoint ?? '').trim(), 500)
-    const at = IMPORT_AUTH_TYPES.includes(String(o.authType)) ? String(o.authType) : 'none'
-    cfg.authType = at
-    cfg.authValue = at === 'none' ? '' : capCp(String(o.authValue ?? '').trim(), 500)
-  }
-  return cfg
+/** 非管理者向けに認証情報（config.authValue）を伏せる（実値は管理者のみ受け取り編集で pre-fill 可。参照は全員だが秘匿値は最小権限） */
+function maskImportSecret(row: Record<string, unknown>): Record<string, unknown> {
+  const cfg = row.config as Record<string, unknown> | null
+  if (cfg && typeof cfg === 'object' && cfg.authValue) return { ...row, config: { ...cfg, authValue: '' } }
+  return row
 }
 
 /**
@@ -129,8 +110,10 @@ export function akebonoImportsRoutes(pool: pg.Pool): Hono {
   // ---------- 参照（全員可。書込判定はメニューの管理者ゲートに任せ、ハイドレーションを妨げない） ----------
 
   app.get('/import-sources', async (c) => {
+    const user = c.get('user')
     const { rows } = await pool.query(`SELECT ${SRC_COLS} FROM import_sources ORDER BY created_at DESC, id LIMIT 2000`)
-    return c.json({ data: rows })
+    // 認証情報は管理者のみ実値を返す（非管理者はマスク = 最小権限。編集は管理者専用画面）
+    return c.json({ data: user.role === 'admin' ? rows : rows.map(maskImportSecret) })
   })
 
   app.get('/import-mappings', async (c) => {
@@ -153,7 +136,7 @@ export function akebonoImportsRoutes(pool: pg.Pool): Hono {
     const method = IMPORT_METHODS.includes(String(body.method)) ? String(body.method) : 'file_csv'
     const encoding = String(body.encoding) === 'sjis' ? 'sjis' : 'utf8'
     const targetEntity = IMPORT_ENTITIES.includes(String(body.targetEntity)) ? String(body.targetEntity) : 'product'
-    const config = normalizeSourceConfig(body.config, method)
+    const config = normalizeImportSourceConfig(body.config, method)
     const id = newId('imp')
     const { rows } = await pool.query(
       `INSERT INTO import_sources (id, name, method, encoding, target_entity, config)
@@ -170,11 +153,12 @@ export function akebonoImportsRoutes(pool: pg.Pool): Hono {
     const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
     const { rows: srows } = await pool.query<{ method: string }>(`SELECT method FROM import_sources WHERE id = $1`, [id])
     if (srows.length === 0) throw err('AKO-GEN-002', '取込元が見つかりません', 404)
-    const config = normalizeSourceConfig(body.config, srows[0]!.method)
+    const config = normalizeImportSourceConfig(body.config, srows[0]!.method)
     const { rows } = await pool.query(
       `UPDATE import_sources SET config = $2, updated_at = now() WHERE id = $1 RETURNING ${SRC_COLS}`,
       [id, JSON.stringify(config)])
-    await audit(pool, { actorId: user.id, action: 'update', entity: 'import_sources', entityId: id, detail: '取込元の方式別設定を更新' })
+    // 変更キー名のみ記録（秘匿値は残さない = 監査性と最小権限の両立。config は設定系のため上書き = §45-4）
+    await audit(pool, { actorId: user.id, action: 'update', entity: 'import_sources', entityId: id, detail: `取込元の方式別設定を更新（${Object.keys(config).join(', ') || '設定なし'}）` })
     return c.json({ data: rows[0] })
   })
 

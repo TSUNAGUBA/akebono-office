@@ -278,8 +278,9 @@ flowchart LR
 
 変換 transforms の値域（決定論的純関数のみ・v1）: `trim` / `zenhan`(全半角) / `upper`/`lower` / `dateFormat(from,to)` / `numberFormat`(桁区切り除去) / `fixedValue` / `codeLookup(mapTable)` / `concat(fields, sep)` / `split(sep, index)`。コード変換表はマッピング定義内に保持（外部コード → マスタ ID）。
 
-- **AI 候補提示**: 列名・サンプル値から既存 Vertex AI 基盤（api/src/lib/llm.ts）で target 候補を構造化出力 → **人が確定**（自動確定しない。LLM 無効環境は字句類似のヒューリスティック = 既存パターン踏襲）
-- **API 接続（v1.5）**: REST pull（Bearer / API キー / Basic）。認証秘匿値は Secret Manager 参照名のみ DB に持つ。push 受信（Webhook）は v2
+- **左辺の生成（実装済み・F-32 Part②）**: 取込方式ごとに取込元を解析して左辺（マッピング元）を生成する。CSV = ファイル読込で列（列番号＋論理名）、JSON/API = 貼付/サンプル応答からキー抽出、固定長 = 開始〜終了バイト。右辺は対象アプリの有効項目（既定＋カスタマイズ項目 = `useAppFields`）から**人が確定**する。
+  - _AI 候補提示（Vertex AI で target 候補を構造化出力し人が確定）は当初構想。実装は上記の解析ベース検出で置換した（`/suggest` 未実装）。再導入する場合は解析ベース導線の上乗せとして扱う。_
+- **API 接続（v1.5）**: REST pull（Bearer / API キー / Basic）。認証秘匿値は本番では Secret Manager 参照名のみ DB に持つ想定（実装フェーズは config.authValue に保持し、`GET /import-sources` で**管理者にのみ実値・非管理者はマスク** = 最小権限）。実 API 接続（SSRF 対策付き）・push 受信（Webhook）は後続。
 
 ### 5.3 取込・外部アクセスのセキュリティ（AS 観点）
 

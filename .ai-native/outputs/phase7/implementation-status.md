@@ -1044,21 +1044,24 @@
 ### 45-2 実装（方式別マッピングエンジン）
 - [x] 型: `ImportSourceConfig`（hasHeader/delimiter・endpoint/authType/authValue・jsonRootPath）・`ImportAuthType`・
   `ImportFieldMap` へ方式別ロケータ（columnIndex/byteStart/byteEnd/jsonKey）を追加。`ImportSource.config?` を追加。
-- [x] 純関数（`shared/domain/import-parse.ts`・単体テスト対象）: `parseCsvLine`（クォート/エスケープ対応）・
-  `parseCsvColumns`（ヘッダ有無で列番号＋論理名を抽出）・`extractJsonKeys`（配列/単一・rootPath・非オブジェクトは throw）。
+- [x] 純関数（`shared/domain/import-parse.ts`・単体テスト対象・**フロント/API 共有 = 原則3**）:
+  解析 = `parseCsvLine`（クォート/エスケープ対応）・`parseCsvColumns`（ヘッダ有無で列番号＋論理名を抽出）・
+  `extractJsonKeys`（配列/単一・rootPath・非オブジェクト/空配列は throw）。
+  正規化 = `numOrNull`・`normalizeFieldLocators`（方式別ロケータ）・`normalizeImportSourceConfig`（config を method 別に整形。
+  delimiter は単一文字パーサに合わせ 1 文字へ切詰め）。**モック（useAkebonoImports）と API（akebono-imports）が同一関数を使い両モード parity を保証**。
 - [x] 保存基盤（migration 0043）: `import_sources.config jsonb DEFAULT '{}'` を追加（列追加のみ = 下位互換）。
   ロケータはマッピングの既存 `fields jsonb` 各要素へ追加のためテーブル変更不要。
-- [x] API（`akebono-imports.ts`）: `normalizeSourceConfig(raw, method)`（method 別に使う項目のみ保持・不正 authType は none・
-  none は authValue 空）・POST /import-sources が config を永続化・**PUT /import-sources/:id/config**（管理者のみ）を新設。
-  `importFieldsOf` が方式別ロケータを保持（数値でない値・空 jsonKey は null）。
-- [x] composable（`useAkebonoImports`）: `addSource` が config 受理・`updateSourceConfig(id, config)` を新設
-  （両モード。API は PUT /config、モックは差し替え）。`saveMapping` の版管理は従来どおり。
+- [x] API（`akebono-imports.ts`）: POST /import-sources が config を永続化・**PUT /import-sources/:id/config**（管理者のみ・
+  変更キー名を監査 detail に記録〔秘匿値は残さない〕）を新設。`importFieldsOf` は shared `normalizeFieldLocators` でロケータを正規化。
+  **`GET /import-sources` は認証情報（config.authValue）を管理者にのみ実値で返し、非管理者にはマスク**（最小権限。参照自体は全員可）。
+- [x] composable（`useAkebonoImports`）: `addSource`/`updateSourceConfig` が shared `normalizeImportSourceConfig` で config を整形・
+  `saveMapping` が shared `normalizeFieldLocators` でロケータを整形（API と同一 = parity）。`updateSourceConfig(id, config)` を新設（両モード）。
 - [x] UI（`akebono/imports.vue`）: マッピングモーダルを**方式別**に刷新。
-  - CSV: ヘッダ有無・区切り文字・**ファイル読込→列（列番号＋論理名）を左辺へ自動展開**。
+  - CSV: ヘッダ有無・区切り文字（1 文字）・**ファイル読込→列（列番号＋論理名）を左辺へ自動展開**（取込元の文字コードで復号 = Shift_JIS 対応）。
   - 固定長: 各項目の**開始〜終了バイト**入力（1 始まり・両端含む）。
   - JSON: ルートパス・**貼付 JSON からキーを検出**して左辺へ展開。
   - API: 上記 JSON ＋ エンドポイント・認証方式（なし/Bearer/APIキー/Basic）・トークン値。
-  - **右辺 = `useAppFields(targetEntity)` の有効項目（既定＋カスタム。カスタムは「（カスタム）」表記）を UiSelect で選択**。
+  - **右辺 = `useAppFields(targetEntity)` の有効項目（既定＋カスタム。カスタムは「（カスタム）」表記）をセレクトで選択**。
     保存時に方式別ロケータのみ保持（JSON/API は `jsonKey = sourceField`）。設定は SoT（config）→ マッピング新版の順（原則6）。
 
 ### 45-3 company 取込のキー空間（§44-6 の決定）
@@ -1068,14 +1071,29 @@
 
 ### 45-4 取消可能性（原則9.5）
 - [x] マッピングは**新版で上書き**（旧版は履歴に残り版一覧から追える）。取込元は従来どおり論理削除＋復元。
-  config は設定系のため上書き更新（記録系ではない）。
+  config は設定系のため上書き更新（記録系ではない）。上書き時は変更キー名を監査ログに残す（値レベルの追跡性を補完）。
 
-### 45-5 検証
-- [x] api 単体 209（import-parse 10 件 = CSV 行/列/JSON キー・akebono-phase-d に importFieldsOf ロケータ 2 件 + normalizeSourceConfig 4 件を追加）/
-  api 統合 203（config の method 別正規化・PUT /config の権限と正規化・マッピングのロケータ保持を追加）/ typecheck（api・mockup）・mockup build 全 green。
+### 45-5 反復レビュー（原則9・独立コードレビュアー + システム監査官）
+> blocker ゼロ。指摘（コードレビュー major 1・監査 major 1・minor/nit 複数）を全件是正:
+- [x] **監査 M-1（セキュリティ・最小権限）**: 新設した config.authValue（API トークン/資格情報）が `GET /import-sources` で
+  全認証ユーザーに実値露出 → **非管理者にはマスク**（管理者のみ実値・編集は管理者専用画面）。統合テストで member マスク/admin 実値を検証。
+- [x] **コードレビュー M1（両モード parity）**: モック `saveMapping` がロケータを生値で保存し、`v-model.number` の空入力が `''` として
+  残っていた（API は `null`）→ 正規化を shared 純関数へ集約し**モック/API が同一関数**を使う形へ（原則3/6）。単体テストで `'' → null` を固定。
+- [x] **minor**: モック config も shared 正規化を適用（method 別 subset を両モード一致）/ delimiter を 1 文字へ（単一文字パーサ整合）/
+  CSV 読込を取込元の文字コードで復号（Shift_JIS 文字化け解消）/ config 更新の監査 detail に変更キー名を記録 /
+  「AI 候補」旧導線の残存コピー（説明・空状態・コメント・設計書）を解析ベース導線の記述へ更新（原則5）。
+- [x] **nit**: 空配列 JSON のエラーメッセージを区別（「レコードがありません」）/ §45-2 の「UiSelect」表記をネイティブ select へ訂正。
 
-### 45-6 本 PR のカバレッジと残作業
+### 45-6 検証
+- [x] api 単体 **213**（import-parse に 解析＋正規化テストを集約 = CSV 行/列・JSON キー/空配列・numOrNull/normalizeFieldLocators〔`''→null`〕・
+  normalizeImportSourceConfig〔method 別/delimiter 1 文字〕。akebono-phase-d に importFieldsOf ロケータ）/
+  api 統合 **203**（config の method 別正規化・PUT /config の権限と正規化・**authValue の管理者限定/非管理者マスク**・
+  CSV 列/固定長バイト範囲/JSON キーのロケータ往復）/ typecheck（api・mockup）・mockup build 全 green。
+
+### 45-7 本 PR のカバレッジと残作業
 - [x] 4 方式すべてで**方式別のマッピング設定 UI・接続/解析設定・右辺のアプリ有効項目連動**が成立。
 - [ ] **実ファイルの取込・パース・API 実接続（SSRF 対策付き）**は従来どおり F-32 後続スコープ（本 PR は設定の永続化と
   マッピング編集体験まで。取込実行は決定的シミュレートのまま = §40 の位置づけを踏襲）。マッピングに保持した
   ロケータ・config は後続の実パース実装がそのまま消費できる I/F として定義済み。
+- [ ] 後続で扱う軽微事項（実パース実装とセット）: 数値ロケータの範囲検証（byteStart ≤ byteEnd・1 始まり）は本 PR では UI の
+  `min=1` のみ（API 未強制）/ ヘッダ無し CSV で手動追加した行は列位置（columnIndex）を持てない（自動検出行のみ位置確定）。
