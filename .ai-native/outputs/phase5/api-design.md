@@ -150,7 +150,7 @@ save(defs) / reset(): Promise<void>              // SoT = configs `menu-categori
 
 | composable | 将来のエンドポイント（例） |
 |---|---|
-| useAttendance | `POST /v1/attendance/punches`・`GET /v1/attendance/state`・`GET /v1/attendance/day`（?raw=1 で修正履歴）・`GET /v1/attendance/month`・`GET /v1/attendance/alerts`・`GET /v1/attendance/timecard`（**2026-07-22: ガードを requireHrOrAdmin → 権限表 canViewAllTimecards（attendance / timecard-all・既定 = 管理者/人事）へ変更。未許可は 403 AKO-ATT-004**）・`POST /v1/attendance/fix-requests`（+ `/decision`）（**実装・フロント接続済み**。月サマリキャッシュから日次・週次を射影） |
+| useAttendance | `POST /v1/attendance/punches`・`GET /v1/attendance/state`・`GET /v1/attendance/day`（?raw=1 で修正履歴）・`GET /v1/attendance/month`・`GET /v1/attendance/alerts`・`GET /v1/attendance/timecard`（**2026-07-22: ガードを requireHrOrAdmin → 権限表 canViewAllTimecards（attendance / timecard-all・既定 = 管理者/人事）へ変更。未許可は 403 AKO-ATT-004**）・`POST /v1/attendance/fix-requests`（+ `/decision`）（**実装・フロント接続済み**。月サマリキャッシュから日次・週次を射影）。**直行/直帰（F-04-11。0040）: `POST /v1/attendance/direct-requests`（本人）・`GET /v1/attendance/direct-requests`（本人/`?scope=all` は HR・管理者）・`POST /v1/attendance/direct-requests/:id/actions`（approved/rejected/withdrawn = 多段承認・取下げは本人）。打刻修正は経路対応で多段化（`/decision` が現ステップ承認者 or 管理者・最終ステップで打刻追記）。直行/直帰起因の修正は承認済み申請が前提（`directRequestId` + AKO-ATT-005）。承認経路は `/v1/masters/attendance-routes`（区分×承認ステップ・金額帯なし = 稟議 F-07-5 の勤怠版・未設定は管理者単段フォールバック）** |
 | useWorkflow | `GET /v1/workflows`・`GET /v1/workflows/:id/logs`・`PUT /v1/workflows/draft`・`POST /v1/workflows/submit`・`POST /v1/workflows/:id/actions`（クレームファースト: FOR UPDATE クレーム）・`GET/POST /v1/workflows/delegates`（+ `/:id/archive`）・承認経路 = `/v1/masters/workflow-routes`（**実装・フロント接続済み**。経路解決・凍結・権限ガード・証跡・通知はサーバーが担い、射影ロジックはモックと共通） |
 | useCalendar.syncFromGoogle | Google Calendar API（OAuth 2.0 増分認可・calendar.readonly/events スコープ。Webhook push + 手動再同期の両立）。トークンはサーバー側で暗号化保管（C3 相当・クライアントへ出さない）。アプリの連携解除時はトークン破棄 + Google 側 revoke を呼び、Google 側での取消は次回 API 401 で検知して連携状態へ反映する。**同期対象は選択制（バッチ7b・オペレーター指示 2026-07-19 #3）: 従来の primary 固定を廃し、calendar_tokens.selected_calendar_ids（既定 ["primary"] = 下位互換）に保存した複数カレンダーを横断同期。同一イベント id は重複排除・一部カレンダーの取得失敗は「取れた分だけ同期 + 削除フェーズ抑止 + warning」（原則4）・アプリ発予定の反映先は常に primary。**選択解除したカレンダーの同期済みイベントは日付単位の削除フェーズで掃除される = 過去・未来の日付は該当日を次に同期したときに追随**（per-date 同期設計の帰結）。見つからないカレンダー（共有解除 = 404）は「予定ゼロ」として扱い削除フェーズを抑止しない + warning で選択見直しを案内。部分失敗の warning はフロントがトーストで報告（原則4）。UI = カレンダー連携ゲートの「同期カレンダー」モーダル（モックは擬似一覧 + localStorage・選択に応じて擬似予定を合成）** |
 | useReportAssist | `GET /v1/assist/logs`・`POST /v1/assist/answers` `/memos`（追記のみ）・`POST /v1/assist/report-draft`（**実装・フロント接続済み**。Vertex AI 構造化出力 + 出力正規化 → 失敗時は shared/domain/report-draft の同一ヒューリスティック。ドラフトは保存しない）|
@@ -209,7 +209,8 @@ save(defs) / reset(): Promise<void>              // SoT = configs `menu-categori
 | AKO-ATT-001 | 不正な打刻順序（状態機械違反） | ✅ |
 | AKO-ATT-002 | 修正理由未入力 | ✅ |
 | AKO-ATT-003 | 処理済み修正申請への再操作 | ✅ |
-| AKO-ATT-004 | 修正申請の承認/却下の権限なし（管理者のみ） | ✅ |
+| AKO-ATT-004 | 承認/却下/取下げの権限なし（経路の現ステップ承認者 or 管理者。取下げは本人） | ✅ |
+| AKO-ATT-005 | 直行/直帰が未承認のため打刻修正を申請できない（0040） | ✅ |
 | AKO-LEV-001 | 有給残数不足 | ✅ |
 | AKO-LEV-002 | 処理済み申請への再操作（承認/却下は pending のみ） | ✅ |
 | AKO-LEV-003 | 休暇申請の承認/却下の権限なし（管理者/人事のみ） | ✅ |

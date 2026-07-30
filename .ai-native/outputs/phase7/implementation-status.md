@@ -882,3 +882,44 @@
 - [x] **監査-3（サイズ単位）: 4KB 上限が文字数（UTF-16）で「4KB」表記と不一致**→ **`Buffer.byteLength` の実バイトで判定**（表記と一致）。
 - [x] 監査で確認済み（是正不要）: SoT=サーバー・冪等 upsert・他ユーザー参照/書込不可（member_id は認証コンテキスト）・下位互換（新規テーブル + 任意フィールド）・featureGuard 対象外が妥当・ドキュメント整合・§40-5→§41 の上書き注記・統合テスト数 199 実測一致。
 - [x] 再検証（是正後）: api 単体 182 / 統合 199 / mockup 単体 155 / typecheck（api・mockup）・build 全 green（テスト本数は不変 = 既存 it へアサート追加）。
+
+## 42. 勤怠承認ワークフロー: 直行/直帰の申請・承認 + 勤怠承認経路（稟議と同様の経路設定。オペレーター指示 2026-07-30）
+
+> オペレーター指示:「①直行/直帰の申請と承認 ②承認された日は直行/直帰の打刻記録修正を申請できる ③勤怠管理の
+> ワークフローも稟議と同様に経路設定できる」。F-04-11（直行/直帰）・F-04-12（勤怠承認経路）を新設し、既存の
+> 打刻修正（F-04-6）を経路対応の多段承認へ拡張した。migration **0040**。
+
+### 42-1 設計方針
+- 稟議（F-07）の経路（workflow_routes）は **区分×金額帯** が選択キー。勤怠は金額でないため、**金額帯を持たない勤怠専用の
+  経路マスタ `attendance_routes`（区分 = direct/fix）を新設**（Path B）。ステップ/承認エンジン（順序・ロール解決・直列前進・
+  凍結）は稟議と同型で踏襲。承認者ロールは稟議の manager/director/president に **hr（人事）** を追加。
+- **下位互換（原則7）**: 区分に有効経路が無ければ従来どおり**管理者 1 名の単段承認へフォールバック**。既存の打刻修正の挙動は
+  経路未設定なら不変（既存統合テストがそのまま green）。新規テーブル + 列追加のみ。
+- **記録系保護（原則2）**: 打刻修正の最終承認で `source='fix'` 打刻を追記（元打刻は削除しない = 既存フロー踏襲）。
+
+### 42-2 DB（migration 0040）
+- [x] `attendance_routes`（設定系マスタ・論理削除）/ `direct_requests`（承認系・多段）/ `attendance_fix_requests` へ
+  `current_step`・`route_snapshot`・`direct_request_id` を**列追加のみ**（既存行は既定値で単段のまま）+ status CHECK に `in_review` を許容。
+
+### 42-3 API
+- [x] 直行/直帰: `POST/GET /v1/attendance/direct-requests`・`POST /direct-requests/:id/actions`（approved/rejected/withdrawn）。
+- [x] 打刻修正を多段承認化（`/decision` = 現ステップ承認者 or 管理者・最終ステップで打刻追記）。承認者解決は稟議 stepApprover と同型 + hr。
+- [x] 直行/直帰起因の打刻修正ゲート（`directRequestId` = 承認済み・同日・対象打刻種別を満たすこと。AKO-ATT-005）。
+- [x] `attendance-routes` を汎用マスタ登録（registry。/v1/masters/attendance-routes）+ order 重複のサーバー検証。
+- [x] 通知は現ステップ承認者へ（経路なしは管理者一斉。補助処理 = 原則4）。統合テスト 3 本（経路なし/経路あり多段/取下げ）。
+
+### 42-4 フロント（デュアルモード。モックの挙動は API と一致）
+- [x] shared: 型 + 純関数 `attendance-route.ts`（resolveAttendanceRoute / directKindsOf）+ 単体テスト。SEED_VERSION 13。
+- [x] useAttendance: directRequests/attendanceRoutes を追加・submitDirect/decideDirect/approvedDirectFor・requestFix/decideFix を
+  経路対応（両モードで canDecide/前進を一致）。useApi に attendanceRoutes を移行済みマスタ登録。
+- [x] attendance.vue: 日次タブに「直行/直帰を申請」+ 承認済み日の「出勤/退勤 打刻を申請」導線・申請タブで直行/直帰の承認（多段の途中は
+  「次の承認へ進みました」）・**経路設定タブ**（区分ごとの承認ステップの追加/編集/無効化・復元 = 稟議 F-07-5 と同型）。labels 追加。
+
+### 42-5 検証
+- [x] api 単体 **187**（attendance-route 5 本）/ api 統合 **202**（直行/直帰の経路なし・多段・取下げの 3 本）/ mockup 単体 155 /
+  typecheck（api・mockup）・build 全 green。
+- [x] オペレーター確認手順: ①日次タブ「直行/直帰を申請」→ 申請タブで承認 → 承認済み日に「出勤打刻を申請」→ 承認で打刻反映
+  ②経路設定タブで direct/fix に承認ステップ（例 manager→hr）を追加 → 申請が多段承認になる（各段の承認者のみ操作可）。
+
+### 42-6 反復レビュー（原則9）
+- [ ] 独立コードレビュアー + システム監査官のレビューを指摘ゼロまで反復（本節に結果を追記）。

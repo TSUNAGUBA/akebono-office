@@ -1,7 +1,8 @@
 <script setup lang="ts">
 /**
- * F-04 勤怠管理（タブ: 日次 / 週次 / 月次 / 有給 / 申請 / 設定※管理者）
+ * F-04 勤怠管理（タブ: 日次 / 週次 / 月次 / 有給 / 申請 / 全員TC / 休暇管理 / 設定※管理者 / 経路設定※管理者）
  * 集計・状態機械は useAttendance / useLeave が SoT。この画面は表示と操作フローのみを持つ。
+ * 申請タブ = 打刻修正・直行/直帰（F-04-11）・休暇の承認。経路設定タブ = 勤怠承認経路（F-04-12。稟議と同様）。
  * ?tab=settings 等のクエリで初期タブを指定できる。
  */
 import { CalendarPlus, Check, ChevronLeft, ChevronRight, FilePen, Plus, X } from 'lucide-vue-next'

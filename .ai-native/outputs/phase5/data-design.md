@@ -44,6 +44,9 @@
 | `AttendanceDay`（日次確定） | memberId, date, buckets{scheduled, statutoryOt, nonStatutoryOt, over60Ot, night, legalHoliday}(分), status(`open`/`fixRequested`/`closed`) | C3 |
 | `LeaveGrant` | id, memberId, **leaveTypeId（休暇種別 F-10-10）**, grantDate, days, kind(`normal`/`proportional`=有給自動付与/`special`=手動付与), expireDate（種別の expiryMonths から算出。期限なしは 9999-12-31）, **grantedBy（付与実行者。null=周期自動付与）** | C3 |
 | `LeaveRequest` | id, memberId, **leaveTypeId**, date, unit(`full`/`half`), status(`pending`/`approved`/`rejected`), reason, decidedBy | C3 |
+| `AttendanceFixRequest`（打刻修正申請。F-04-6） | id, memberId, date, kind, requestedAt, reason, status(`pending`/`in_review`/`approved`/`rejected`), decidedBy, **currentStep, routeSnapshot[]（0040 で追加 = 多段承認。空 = 管理者単段）, directRequestId?（直行/直帰起因の紐付け）** | C3 |
+| `DirectRequest`（直行/直帰申請。F-04-11。0040） | id, memberId, date, type(`chokkou`/`chokki`/`both`), reason, status(`pending`/`in_review`/`approved`/`rejected`/`withdrawn`), currentStep, routeSnapshot[], decidedBy, createdAt | C3 |
+| `AttendanceRoute`（勤怠承認経路。F-04-12。0040） | id, category(`direct`/`fix`), steps[{order, approverRole(`manager`/`hr`/`director`/`president`)/approverMemberId, mode}], active。**稟議 WorkflowRoute の勤怠版 = 金額帯を持たない**。区分に有効経路が無ければ管理者単段へフォールバック | C1 |
 | `ShiftPeriod` | id, label, startDate, endDate, wishDeadline, status(`draft`/`open`/`closed`/`adjusting`/`published`) | C2 |
 | `ShiftWish` | id, periodId, memberId, date, wish(`want`/`ng`/`either`), from, to | C2 |
 | `ShiftAssignment` | id, periodId, memberId, date, from, to, status(`tentative`/`confirmed`/`change_requested`), consentAt? | C2 |
