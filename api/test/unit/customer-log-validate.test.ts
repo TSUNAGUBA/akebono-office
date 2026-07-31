@@ -90,4 +90,8 @@ describe('customerLogCompanyError（会社 = id or 新規名のどちらか必�
     expect(customerLogCompanyError('', '(株)')).toBe('顧客(会社)を選択してください')
     expect(customerLogCompanyError('', '株式会社 つなぐば')).toBeNull() // 法人格 + 実名は OK
   })
+  it('判定は NAME_CAP 切り詰め後の名前で行う（法人格の羅列 120cp + 実名のすり抜け防止 = 2 巡目 NIT-2）', () => {
+    // cap（120cp）後は法人格の羅列だけが残り正規化名が空になる → エラー（登録時と同じ名で判定）
+    expect(customerLogCompanyError('', '株式会社'.repeat(30) + 'テスト')).toBe('顧客(会社)を選択してください')
+  })
 })

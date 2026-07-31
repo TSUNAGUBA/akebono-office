@@ -1297,7 +1297,8 @@
 - [x] **監査 MAJOR-1（phase3 機能要求の未更新）**: F-06-1（進捗の入力非表示・ぽいぽいポスト欄）・F-06-9/F-06-11（既読管理）を更新し、
   欠落していた顧客ログの機能要求 **F-18（F-18-1〜3）を新設**。
 - [x] **監査 MINOR-1（CONVENTIONS の UI 在庫）**: UiCombobox 行を追加・UiMultiCombobox 行へ useDropdownDirection 共通化を注記。
-- [x] **監査 MINOR-2（検証漏れ）**: aliases 名寄せ・クロス kind 既読拒否・weekStart 実在日を統合テストへ追加。
+- [x] **監査 MINOR-2（検証漏れ）**: aliases 名寄せ・法人格のみ名の拒否・クロス kind 既読拒否を統合テストへ追加
+  （weekStart 実在日の統合テストは機能実装コミット側で追加済みであることを確認 = 2 巡目監査 MINOR-1 で記録を訂正）。
   shared 検証の単体 13 件で API/モックのパリティを構造的に固定。
 - [x] **監査 NIT-2（data-design の配置）**: §1.2 見出し直下に ReportRead の例外注記（閲覧状態 = 追記のみ原則の対象外）を追加。
 - [x] **残課題（原則9.5 = 監査 MAJOR-2 / CR-m4）**: コンボボックス経由で新規登録された companies/contacts マスタの
@@ -1313,3 +1314,21 @@
   （リポジトリにコンポーネントテスト基盤がなく、経路は既存の useNotes('poipoi').add = notes API の統合テスト済み経路。
   フォーム側は「成立時のみ・成功でクリア・失敗警告」の 3 分岐のみ = 手動確認 + レビューで担保する設計判断）。
 - [x] 再検証（是正後）: api 単体 251 / api 統合 221 / mockup 単体 155 / typecheck（api・mockup）全 green。
+
+### 49-6 反復レビュー（原則9・2 巡目。CRITICAL/MAJOR 0・MINOR 計 2・NIT 計 5 → 全件対応/受容記録）
+- [x] **監査（2 巡目）**: 1 巡目是正の実質確認（テスト件数の実測一致・F-18 と実装の突合・残課題/受容記録の妥当性）= 形骸化なし。
+  - MINOR（§49-5 の記録誤り = weekStart 実在日テストを是正コミットの追加と誤記）→ 記録を事実（機能実装コミットで追加済み）へ訂正
+  - NIT（実在日判定の重複 = 原則3）→ `isRealDateKey` を shared/domain/jst へ移設（customer-log は再エクスポートで互換維持）し、
+    reports.ts の 2 箇所（/reads weekStart・validWeekStart）を共通判定へ置換
+  - NIT（api-design に検証パリティ SoT の記載なし）→ useCustomerLogs 行へ `shared/domain/customer-log` を SoT として明記
+- [x] **コードレビュー（2 巡目）**: 1 巡目是正 5 件すべて解消を確認（Enter 優先順・advisory lock の順序一貫性 = デッドロック構成不能・
+  shared 集約の挙動不変・fillForm の flush タイミング・applyTags）。
+  - MINOR-1（PATCH の検証順が shared 宣言順と乖離 = tags parse が時刻範囲検証より先に throw）→ フィールドを宣言順に逐次解決する形へ
+    並べ替え（範囲 → タグ）+ 「範囲・タグ同時不正は範囲エラーが先」の回帰テストを統合テストへ追加
+  - NIT-1（advisory lock のハッシュ）→ 既存パターン（akebono-trade/billing）と同じ 64bit `hashtextextended($1, 0)` へ統一
+  - NIT-2（会社名検証が未 cap 名で行われ長大名がすり抜け）→ customerLogCompanyError を NAME_CAP 切り詰め後の名で判定 + 単体テスト追加
+  - NIT-3（自由入力ヒントと Enter 挙動の不一致）→ 部分一致候補がある間は「Enter は絞り込み候補の先頭を選択」の説明をヒントへ追加
+  - NIT-5（タグ 30cp 超の無警告切り詰め）→ addTag で 1 タグの文字数上限も保存前に警告
+- [x] 受容（対応せず記録）: CR NIT-4 = 候補リストの aria-activedescendant によるキーボードナビゲーション未実装
+  （既存 UiMultiCombobox と同一パターン = 回帰ではない。Tab でリスト内ボタンへ到達可能。将来の a11y 改善候補として記録）。
+- [x] 再検証（2 巡目是正後）: api 単体 252 / api 統合 221 / mockup 単体 155 / typecheck（api・mockup）全 green。

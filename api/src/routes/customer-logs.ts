@@ -104,11 +104,12 @@ interface ResolvedRefs {
  * READ COMMITTED では 2 リクエストが同時に照合へ失敗して重複マスタが生まれるため、
  * 正規化名単位のトランザクションスコープのアドバイザリロックで直列化する
  * （後着はロック待ち → 先着のコミット後に照合し直して既存へ名寄せされる。
- *  ロックはコミット/ロールバックで自動解放 = pg_advisory_xact_lock。hashtext 衝突は
- *  無関係な名前が直列化されるだけで無害）。
+ *  ロックはコミット/ロールバックで自動解放 = pg_advisory_xact_lock。ハッシュは他ロック箇所
+ *  （akebono-trade / akebono-billing 等）と同じ 64bit hashtextextended = 衝突確率を最小化。
+ *  万一衝突しても無関係な名前が直列化されるだけで無害）。
  */
 async function lockResolveKey(db: pg.PoolClient, key: string): Promise<void> {
-  await db.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [key])
+  await db.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [key])
 }
 
 /**
@@ -289,20 +290,22 @@ export function customerLogsRoutes(pool: pg.Pool, env: Env): Hono {
     const logId = c.req.param('id')
     const b = await c.req.json().catch(() => ({})) as Record<string, unknown>
     const cur = await ownLog(pool, logId, user.id, '自分の顧客ログのみ編集できます')
-    const next = {
-      logDate: Object.hasOwn(b, 'logDate') ? parseDate(b.logDate) : cur.logDate,
-      logTime: Object.hasOwn(b, 'logTime') ? parseTime(b.logTime, '開始') : cur.logTime,
-      endTime: Object.hasOwn(b, 'endTime') ? parseTime(b.endTime, '終了') : cur.endTime,
-      tags: Object.hasOwn(b, 'tags') ? parseTags(b.tags) : cur.tags,
-      staffMemberId: Object.hasOwn(b, 'staffMemberId')
-        ? (String(b.staffMemberId ?? '').trim() || user.id)
-        : cur.staffMemberId,
-      title: Object.hasOwn(b, 'title') ? capCp(String(b.title ?? '').trim(), TITLE_CAP) : cur.title,
-      body: Object.hasOwn(b, 'body') ? capCp(String(b.body ?? '').trim(), BODY_CAP) : cur.body,
-      minutesMemo: Object.hasOwn(b, 'minutesMemo') ? capCp(String(b.minutesMemo ?? '').trim(), BODY_CAP) : cur.minutesMemo,
-    }
-    assertClg(customerLogTimeRangeError(next.logTime, next.endTime))
-    assertClg(customerLogMemoError(next.body, next.minutesMemo))
+    // マージ後の全体検証は shared/domain/customer-log の宣言順（日付 → 開始 → 終了 → 範囲 → タグ → メモ）で
+    // 適用する（POST・モックと同一順 = パリティ。レビュー 2 巡目 MINOR-1: オブジェクトリテラル一括構築だと
+    // tags の parse が範囲検証より先に throw して順序が割れるため、フィールドごとに順に解決する）
+    const logDate = Object.hasOwn(b, 'logDate') ? parseDate(b.logDate) : cur.logDate
+    const logTime = Object.hasOwn(b, 'logTime') ? parseTime(b.logTime, '開始') : cur.logTime
+    const endTime = Object.hasOwn(b, 'endTime') ? parseTime(b.endTime, '終了') : cur.endTime
+    assertClg(customerLogTimeRangeError(logTime, endTime))
+    const tags = Object.hasOwn(b, 'tags') ? parseTags(b.tags) : cur.tags
+    const staffMemberId = Object.hasOwn(b, 'staffMemberId')
+      ? (String(b.staffMemberId ?? '').trim() || user.id)
+      : cur.staffMemberId
+    const title = Object.hasOwn(b, 'title') ? capCp(String(b.title ?? '').trim(), TITLE_CAP) : cur.title
+    const body = Object.hasOwn(b, 'body') ? capCp(String(b.body ?? '').trim(), BODY_CAP) : cur.body
+    const minutesMemo = Object.hasOwn(b, 'minutesMemo') ? capCp(String(b.minutesMemo ?? '').trim(), BODY_CAP) : cur.minutesMemo
+    assertClg(customerLogMemoError(body, minutesMemo))
+    const next = { logDate, logTime, endTime, tags, staffMemberId, title, body, minutesMemo }
     // 会社・担当者の解決（newCompanyName / newContactName 指定時は新規マスタ登録も行う）。
     // どのキーも送られていなければ現状維持
     const touchesCompany = Object.hasOwn(b, 'companyId') || Object.hasOwn(b, 'newCompanyName')

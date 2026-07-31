@@ -185,8 +185,10 @@ function onFocusOut(e: FocusEvent): void {
         <span class="num text-[11px] text-muted">{{ o.value }}</span>
       </button>
       <p v-if="filtered.length === 0 && !isFreeInput" class="px-3 py-2 text-[12px] text-muted">該当する項目がありません</p>
+      <!-- Enter の挙動とヒントを一致させる（2 巡目 NIT-3）: 部分一致候補がある間は Enter が先頭候補を選ぶ旨を明示 -->
       <p v-if="allowCreate && isFreeInput && !exactMatch" class="border-t border-line px-3 py-2 text-[12px] text-brand">
-        「{{ text.trim() }}」は未登録です{{ createHint ? `（${createHint}）` : '' }}
+        「{{ text.trim() }}」は未登録です{{ createHint ? `（${createHint}）` : '' }}{{
+          queryFiltered.length > 0 ? '。Enter は絞り込み候補の先頭を選択します（この名前のまま確定するには他の項目へ移動）' : '' }}
       </p>
       <p v-else-if="!allowCreate && isFreeInput" class="border-t border-line px-3 py-2 text-[12px] text-muted">
         既存の項目から選択してください

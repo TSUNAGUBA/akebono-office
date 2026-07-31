@@ -5551,6 +5551,13 @@ describe('顧客ログ', () => {
     expect(row.minutesMemo).toBe('議事録メモ')
     // マージ後の全体検証: 開始時刻だけを終了時刻より後へ動かす更新は 400（AKO-CLG-001）
     expect((await api('PATCH', `/v1/customer-logs/${id}`, { as: MEMBER, body: { logTime: '10:00' } })).json.error?.code).toBe('AKO-CLG-001')
+    // 検証順パリティ（2 巡目 MINOR-1 回帰）: 範囲不正 + タグ上限超過の同時指定は「範囲エラーが先」
+    // （shared/domain/customer-log の宣言順 = POST・モックと同一）
+    const both = await api('PATCH', `/v1/customer-logs/${id}`, {
+      as: MEMBER,
+      body: { logTime: '10:00', endTime: '09:00', tags: Array.from({ length: 11 }, (_, i) => `t${i}`) },
+    })
+    expect(both.json.error?.message).toBe('終了時間は開始時間より後にしてください')
   })
 
   it('コンボボックス新規登録: 未登録の会社・担当者はマスタ登録して反映・既存名は名寄せ（一般メンバーでも可）', async () => {

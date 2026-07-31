@@ -11,7 +11,7 @@
 import { Hono } from 'hono'
 import type pg from 'pg'
 import { DEFAULT_WORKING_DAY_RULE, isWorkingDay } from '../../../shared/domain/business-day'
-import { addDays, nowJstIso, todayJst } from '../../../shared/domain/jst'
+import { addDays, isRealDateKey, nowJstIso, todayJst } from '../../../shared/domain/jst'
 import { canUseFeature, canViewMemberReports, type PermissionSubject } from '../../../shared/domain/permissions'
 import { TOMORROW_PLANS_MAX } from '../../../shared/domain/types'
 import type { PermissionRule, PunchRecord, ReportEntry, TomorrowPlan } from '../../../shared/domain/types'
@@ -554,9 +554,7 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
     if (kind === 'weekly') {
       const weekStart = c.req.query('weekStart') ?? ''
       // 実在日チェックまで行う（2026-02-30 等は ::date キャストの 22007→500 を出さず 400 で弾く）
-      const ws = new Date(`${weekStart}T00:00:00Z`)
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)
-        || Number.isNaN(ws.getTime()) || ws.toISOString().slice(0, 10) !== weekStart) {
+      if (!isRealDateKey(weekStart)) {
         throw err('AKO-GEN-001', 'kind=weekly では weekStart（YYYY-MM-DD）を指定してください', 400)
       }
       const { rows } = await pool.query<{ reportId: string }>(
@@ -602,8 +600,8 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
   /** weekStart の検証（YYYY-MM-DD・実在日・月曜）。不正は AKO-GEN-001 400 */
   function validWeekStart(weekStart: string): string {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) throw err('AKO-GEN-001', 'weekStart（YYYY-MM-DD）を指定してください', 400)
-    const wsDate = new Date(`${weekStart}T00:00:00Z`)
-    if (Number.isNaN(wsDate.getTime()) || wsDate.toISOString().slice(0, 10) !== weekStart || wsDate.getUTCDay() !== 1) {
+    // 実在日は共通判定（shared/domain/jst）+ 月曜チェック
+    if (!isRealDateKey(weekStart) || new Date(`${weekStart}T00:00:00Z`).getUTCDay() !== 1) {
       throw err('AKO-GEN-001', 'weekStart には実在する週初め（月曜）の日付を指定してください', 400)
     }
     return addDays(weekStart, 6)

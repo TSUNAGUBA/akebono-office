@@ -6,8 +6,12 @@
  *   モック側は Result のエラーへ変換する（エラーコードの付与は各層の責務）。
  * - 検証順も本モジュールの並び（日付 → 開始 → 終了 → 範囲 → タグ → メモ → 会社）を両者で守る。
  */
+import { isRealDateKey } from './jst'
 import { normalizeCompanyName } from './name-match'
 import { CUSTOMER_LOG_TAG_CAP, CUSTOMER_LOG_TAGS_MAX } from './types'
+
+// 実在日判定は汎用ユーティリティ（shared/domain/jst）が SoT。既存の参照互換のため再エクスポートする
+export { isRealDateKey } from './jst'
 
 export const CUSTOMER_LOG_BODY_CAP = 20_000
 export const CUSTOMER_LOG_TITLE_CAP = 200
@@ -21,13 +25,6 @@ const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/
 export function capCodePoints(s: string, n: number): string {
   const cps = [...s]
   return cps.length > n ? cps.slice(0, n).join('') : s
-}
-
-/** YYYY-MM-DD かつ実在日か（2026-13-40 / 2026-02-30 を弾く。DB の 22007→500 を防ぐ共通判定） */
-export function isRealDateKey(s: string): boolean {
-  if (!DATE_RE.test(s)) return false
-  const d = new Date(`${s}T00:00:00Z`)
-  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s
 }
 
 /** 日付（必須・実在日） */
@@ -80,10 +77,13 @@ export function customerLogMemoError(body: string, minutesMemo: string): string 
 /**
  * 顧客(会社)の指定（companyId または newCompanyName のどちらか必須）。
  * 自由入力は正規化名（法人格・空白ゆらぎ除去）が空になる名前（例「株式会社」のみ）を弾く
- * = 意味のないマスタを新規登録しない（レビュー指摘 m-2）
+ * = 意味のないマスタを新規登録しない（レビュー指摘 m-2）。
+ * 判定は登録時と同じ **NAME_CAP で切り詰めた後の名前**で行う（未 cap 名で判定すると
+ * 「法人格の羅列 120cp + 実名」が検証を通過して cap 後に空正規化名のマスタが生まれる = レビュー 2 巡目 NIT-2）
  */
 export function customerLogCompanyError(companyId: string, newCompanyName: string): string | null {
   if (companyId) return null
-  if (!newCompanyName.trim() || !normalizeCompanyName(newCompanyName)) return '顧客(会社)を選択してください'
+  const capped = capCodePoints(newCompanyName.trim(), CUSTOMER_LOG_NAME_CAP)
+  if (!capped || !normalizeCompanyName(capped)) return '顧客(会社)を選択してください'
   return null
 }

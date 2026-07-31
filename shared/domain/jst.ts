@@ -54,3 +54,14 @@ export function daysInMonth(year: number, month1: number): number {
 export function weekdayOf(dateKey: string): number {
   return new Date(`${dateKey}T00:00:00`).getDay()
 }
+
+/**
+ * 日付キー（YYYY-MM-DD）が実在日か（2026-13-40 / 2026-02-30 を弾く）。
+ * DB の ::date キャストが 22007 → 500 になる前に 400 で弾くための共通判定
+ * （顧客ログ・日報既読の期間指定などで共用。監査指摘 2026-07-31 で customer-log 固有実装から集約）
+ */
+export function isRealDateKey(s: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false
+  const d = new Date(`${s}T00:00:00Z`)
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s
+}

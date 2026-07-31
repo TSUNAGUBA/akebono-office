@@ -9,7 +9,7 @@
  * - 操作の取消可能性（原則9.5）: 取消（論理削除）+ 復元 + 本人編集。
  */
 import { Pencil, Plus, RefreshCw, RotateCcw, Trash2, User, Users } from 'lucide-vue-next'
-import { CUSTOMER_LOG_TAG_PRESETS, CUSTOMER_LOG_TAGS_MAX } from '../../../../shared/domain/types'
+import { CUSTOMER_LOG_TAG_CAP, CUSTOMER_LOG_TAG_PRESETS, CUSTOMER_LOG_TAGS_MAX } from '../../../../shared/domain/types'
 import type { Company, Contact, CustomerLog, Member } from '~/types/domain'
 import { fmtDateLong } from '~/utils/format'
 
@@ -143,6 +143,11 @@ const newTag = ref('')
 function addTag(): void {
   const t = newTag.value.trim()
   if (!t) return
+  // 1 タグの文字数上限も保存前に警告（保存時の無警告切り詰めを防ぐ = 2 巡目 NIT-5）
+  if ([...t].length > CUSTOMER_LOG_TAG_CAP) {
+    show(`属性タグは 1 件 ${CUSTOMER_LOG_TAG_CAP} 文字までです`, 'warn')
+    return
+  }
   if (!form.value.tags.includes(t)) applyTags([...form.value.tags, t])
   if (form.value.tags.includes(t)) newTag.value = ''
 }
