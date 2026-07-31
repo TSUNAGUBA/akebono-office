@@ -5493,6 +5493,104 @@ describe('顧客ログ', () => {
     expect(((await api('GET', '/v1/customer-logs', { as: MEMBER })).json.data as { id: string }[]).some(l => l.id === logId)).toBe(true)
   })
 
+  it('項目拡張: 開始/終了時刻・属性タグ・自社担当者・議事録メモ（オペレーター指示 2026-07-31）', async () => {
+    // 終了のみ / 終了 <= 開始 / 終了の書式不正はいずれも AKO-CLG-001
+    expect((await api('POST', '/v1/customer-logs', { as: MEMBER, body: { logDate: today, endTime: '15:00', companyId, body: 'x' } })).json.error?.code).toBe('AKO-CLG-001')
+    expect((await api('POST', '/v1/customer-logs', { as: MEMBER, body: { logDate: today, logTime: '15:00', endTime: '15:00', companyId, body: 'x' } })).json.error?.code).toBe('AKO-CLG-001')
+    expect((await api('POST', '/v1/customer-logs', { as: MEMBER, body: { logDate: today, logTime: '15:00', endTime: '99:99', companyId, body: 'x' } })).json.error?.code).toBe('AKO-CLG-001')
+    // 担当者メモ・議事録メモの両方空は AKO-CLG-001（どちらか一方があれば OK）
+    expect((await api('POST', '/v1/customer-logs', { as: MEMBER, body: { logDate: today, companyId, body: '', minutesMemo: '' } })).json.error?.code).toBe('AKO-CLG-001')
+    // タグ上限（10 件）超過は AKO-CLG-001
+    expect((await api('POST', '/v1/customer-logs', {
+      as: MEMBER, body: { logDate: today, companyId, body: 'x', tags: Array.from({ length: 11 }, (_, i) => `t${i}`) },
+    })).json.error?.code).toBe('AKO-CLG-001')
+    // 議事録メモのみ + 開始/終了 + タグ（trim・重複除去）+ 自社担当者の明示指定
+    const created = await api('POST', '/v1/customer-logs', {
+      as: MEMBER,
+      body: {
+        logDate: today, logTime: '10:00', endTime: '10:45', companyId, contactId,
+        tags: ['商談', '商談', ' 取材 '], minutesMemo: '議事録のみで登録', staffMemberId: HR,
+      },
+    })
+    expect(created.status).toBe(201)
+    const row = created.json.data as {
+      logTime: string; endTime: string; tags: string[]; staffMemberId: string; body: string; minutesMemo: string
+    }
+    expect(row.logTime).toBe('10:00')
+    expect(row.endTime).toBe('10:45')
+    expect(row.tags).toEqual(['商談', '取材'])
+    expect(row.staffMemberId).toBe(HR)
+    expect(row.body).toBe('')
+    expect(row.minutesMemo).toBe('議事録のみで登録')
+    // 自社担当者の未指定はログインユーザー（既定 = 記録者）
+    const defaulted = await api('POST', '/v1/customer-logs', { as: MEMBER, body: { logDate: today, companyId, body: '既定担当者の確認' } })
+    expect((defaulted.json.data as { staffMemberId: string }).staffMemberId).toBe(MEMBER)
+    // 実在しない自社担当者は 400（FK → AKO-CLG-001）
+    expect((await api('POST', '/v1/customer-logs', { as: MEMBER, body: { logDate: today, companyId, body: 'x', staffMemberId: 'm-nope' } })).json.error?.code).toBe('AKO-CLG-001')
+  })
+
+  it('部分更新: 新項目（タグ・終了時刻・自社担当者・議事録メモ）も送っていないフィールドが保持される', async () => {
+    const created = await api('POST', '/v1/customer-logs', {
+      as: MEMBER,
+      body: {
+        logDate: today, logTime: '09:00', endTime: '09:30', companyId, contactId,
+        tags: ['イベント'], staffMemberId: HR, title: '保持確認', body: '担当者メモ', minutesMemo: '議事録メモ',
+      },
+    })
+    const id = (created.json.data as { id: string }).id
+    const upd = await api('PATCH', `/v1/customer-logs/${id}`, { as: MEMBER, body: { title: '保持確認（更新）' } })
+    expect(upd.status).toBe(200)
+    const row = upd.json.data as {
+      logTime: string; endTime: string; tags: string[]; staffMemberId: string; body: string; minutesMemo: string
+    }
+    expect(row.logTime).toBe('09:00')
+    expect(row.endTime).toBe('09:30')
+    expect(row.tags).toEqual(['イベント'])
+    expect(row.staffMemberId).toBe(HR)
+    expect(row.body).toBe('担当者メモ')
+    expect(row.minutesMemo).toBe('議事録メモ')
+    // マージ後の全体検証: 開始時刻だけを終了時刻より後へ動かす更新は 400（AKO-CLG-001）
+    expect((await api('PATCH', `/v1/customer-logs/${id}`, { as: MEMBER, body: { logTime: '10:00' } })).json.error?.code).toBe('AKO-CLG-001')
+  })
+
+  it('コンボボックス新規登録: 未登録の会社・担当者はマスタ登録して反映・既存名は名寄せ（一般メンバーでも可）', async () => {
+    const created = await api('POST', '/v1/customer-logs', {
+      as: MEMBER,
+      body: { logDate: today, newCompanyName: '新規コンボ商事', newContactName: '新規 花子', body: '新規マスタ経由の記録' },
+    })
+    expect(created.status).toBe(201)
+    const row = created.json.data as { companyId: string; contactId: string }
+    expect(row.companyId).toBeTruthy()
+    expect(row.contactId).toBeTruthy()
+    // マスタへ登録されている（会社 = kind 'customer' / 担当者 = その会社所属）
+    const co = await pool.query(`SELECT kind, name FROM companies WHERE id = $1`, [row.companyId])
+    expect(co.rows[0]).toEqual({ kind: 'customer', name: '新規コンボ商事' })
+    const ct = await pool.query(`SELECT company_id AS cid, name FROM contacts WHERE id = $1`, [row.contactId])
+    expect(ct.rows[0]).toEqual({ cid: row.companyId, name: '新規 花子' })
+    // 正規化名（法人格・空白除去）の一致は既存へ名寄せ = 重複マスタを作らない
+    const merged = await api('POST', '/v1/customer-logs', {
+      as: MEMBER,
+      body: { logDate: today, newCompanyName: '株式会社 新規コンボ商事', newContactName: '新規花子', body: '名寄せの確認' },
+    })
+    expect(merged.status).toBe(201)
+    expect((merged.json.data as { companyId: string }).companyId).toBe(row.companyId)
+    expect((merged.json.data as { contactId: string }).contactId).toBe(row.contactId)
+    // 会社もどちらも未指定は従来どおり AKO-CLG-001
+    expect((await api('POST', '/v1/customer-logs', { as: MEMBER, body: { logDate: today, newCompanyName: '   ', body: 'x' } })).json.error?.code).toBe('AKO-CLG-001')
+    // PATCH でも新規登録名を反映できる（会社を新規名へ変更 → 旧担当者は所属不整合で 400）
+    const logIdForPatch = (created.json.data as { id: string }).id
+    expect((await api('PATCH', `/v1/customer-logs/${logIdForPatch}`, {
+      as: MEMBER, body: { newCompanyName: '第二コンボ物産' },
+    })).json.error?.code).toBe('AKO-CLG-003')
+    const moved = await api('PATCH', `/v1/customer-logs/${logIdForPatch}`, {
+      as: MEMBER, body: { newCompanyName: '第二コンボ物産', contactId: '', newContactName: '' },
+    })
+    expect(moved.status).toBe(200)
+    const movedRow = moved.json.data as { companyId: string; contactId: string | null }
+    expect(movedRow.companyId).not.toBe(row.companyId)
+    expect(movedRow.contactId).toBeNull()
+  })
+
   it('他メンバーの記録は権限（customer-log + member:<id>）で許可された対象者のみ readonly 参照可', async () => {
     // 既定 = 参照不可（AKO-PRM-002）。自分の memberId 指定は常に可
     const denied = await api('GET', `/v1/customer-logs?memberId=${MEMBER}`, { as: HR })
@@ -5518,6 +5616,99 @@ describe('顧客ログ', () => {
       expect((await api('GET', `/v1/customer-logs?memberId=${ADMIN}`, { as: HR })).json.error?.code).toBe('AKO-PRM-002')
     } finally {
       await pool.query(`DELETE FROM permission_rules WHERE id = 'pr-test-clog-view'`)
+      clearPermissionCache()
+    }
+  })
+})
+
+describe('日報・週報の既読管理（オペレーター指示 2026-07-31。SoT = report_reads）', () => {
+  const today = todayJst()
+  const month = today.slice(0, 7)
+  // 過去の固定週（月曜）を使う（当該週の週報は他テストと衝突しない）
+  const weekStart = '2020-01-06'
+  let dailyId = ''
+  let weeklyId = ''
+
+  beforeAll(async () => {
+    // HR が日報・週報を提出 → MEMBER が既読管理する
+    const daily = await api('PUT', '/v1/reports/daily', {
+      as: HR,
+      body: {
+        date: today, status: 'submitted', reflection: '', issues: '', tomorrow: '', tomorrowPlans: [],
+        entries: [{ theme: '既読テスト', projectId: '', task: '既読対象の作業', hours: 1, progress: 0 }],
+      },
+    })
+    dailyId = (daily.json.data as { id: string }).id
+    const weekly = await api('PUT', '/v1/reports/weekly', {
+      as: HR,
+      body: { weekStart, status: 'submitted', goalReview: '', mainWork: '既読テストの主要業務', issues: '', nextWeek: '' },
+    })
+    weeklyId = (weekly.json.data as { id: string }).id
+  })
+
+  it('GET /reads は kind と期間の指定が必須（全履歴ダンプを許容しない）', async () => {
+    expect((await api('GET', '/v1/reports/reads', { as: MEMBER })).json.error?.code).toBe('AKO-GEN-001')
+    expect((await api('GET', '/v1/reports/reads?kind=daily', { as: MEMBER })).json.error?.code).toBe('AKO-GEN-001')
+    expect((await api('GET', '/v1/reports/reads?kind=weekly', { as: MEMBER })).json.error?.code).toBe('AKO-GEN-001')
+    // 実在しない日付（2026-02-30）は ::date キャストの 500 を出さず 400
+    expect((await api('GET', '/v1/reports/reads?kind=weekly&weekStart=2026-02-30', { as: MEMBER })).json.error?.code).toBe('AKO-GEN-001')
+    expect((await api('GET', `/v1/reports/reads?kind=daily&month=${month}`, { as: MEMBER })).status).toBe(200)
+  })
+
+  it('既読にする → 一覧へ載る。再実行しても readAt は巻き戻らない（冪等 = 原則2）', async () => {
+    // 初期状態: 未読
+    const before = (await api('GET', `/v1/reports/reads?kind=daily&month=${month}`, { as: MEMBER })).json.data as string[]
+    expect(before.includes(dailyId)).toBe(false)
+    // 既読
+    expect((await api('PUT', '/v1/reports/reads', { as: MEMBER, body: { kind: 'daily', reportId: dailyId } })).status).toBe(200)
+    const after = (await api('GET', `/v1/reports/reads?kind=daily&month=${month}`, { as: MEMBER })).json.data as string[]
+    expect(after.includes(dailyId)).toBe(true)
+    // 初回既読時刻を保持（再 PUT で read_at が更新されない）
+    const t1 = (await pool.query(`SELECT read_at FROM report_reads WHERE member_id = $1 AND report_kind = 'daily' AND report_id = $2`, [MEMBER, dailyId])).rows[0].read_at
+    expect((await api('PUT', '/v1/reports/reads', { as: MEMBER, body: { kind: 'daily', reportId: dailyId } })).status).toBe(200)
+    const t2 = (await pool.query(`SELECT read_at FROM report_reads WHERE member_id = $1 AND report_kind = 'daily' AND report_id = $2`, [MEMBER, dailyId])).rows[0].read_at
+    expect(String(t2)).toBe(String(t1))
+    // 既読は本人ごとに独立（ADMIN の一覧には出ない）
+    const admin = (await api('GET', `/v1/reports/reads?kind=daily&month=${month}`, { as: ADMIN })).json.data as string[]
+    expect(admin.includes(dailyId)).toBe(false)
+    // 週報も同様
+    expect((await api('PUT', '/v1/reports/reads', { as: MEMBER, body: { kind: 'weekly', reportId: weeklyId } })).status).toBe(200)
+    const weeklyReads = (await api('GET', `/v1/reports/reads?kind=weekly&weekStart=${weekStart}`, { as: MEMBER })).json.data as string[]
+    expect(weeklyReads.includes(weeklyId)).toBe(true)
+  })
+
+  it('未読に戻せる（既読付与の取消フロー = 原則9.5・冪等）', async () => {
+    expect((await api('DELETE', `/v1/reports/reads/daily/${dailyId}`, { as: MEMBER })).status).toBe(200)
+    const after = (await api('GET', `/v1/reports/reads?kind=daily&month=${month}`, { as: MEMBER })).json.data as string[]
+    expect(after.includes(dailyId)).toBe(false)
+    // 行がなくても成功（冪等）
+    expect((await api('DELETE', `/v1/reports/reads/daily/${dailyId}`, { as: MEMBER })).status).toBe(200)
+    // kind 不正は 400
+    expect((await api('DELETE', `/v1/reports/reads/nope/${dailyId}`, { as: MEMBER })).json.error?.code).toBe('AKO-GEN-001')
+  })
+
+  it('存在しない・参照できない対象は既読にできない（404 = 存在を秘匿）', async () => {
+    expect((await api('PUT', '/v1/reports/reads', { as: MEMBER, body: { kind: 'daily', reportId: 'dr-nope' } })).status).toBe(404)
+    expect((await api('PUT', '/v1/reports/reads', { as: MEMBER, body: { kind: 'weekly', reportId: 'wr-nope' } })).status).toBe(404)
+    expect((await api('PUT', '/v1/reports/reads', { as: MEMBER, body: { kind: 'nope', reportId: dailyId } })).json.error?.code).toBe('AKO-GEN-001')
+    // 下書き週報は本人以外は既読にできない（存在を秘匿 = 404）
+    const draft = await api('PUT', '/v1/reports/weekly', {
+      as: HR, body: { weekStart: '2020-01-13', status: 'draft', goalReview: '', mainWork: '下書き', issues: '', nextWeek: '' },
+    })
+    const draftId = (draft.json.data as { id: string }).id
+    expect((await api('PUT', '/v1/reports/reads', { as: MEMBER, body: { kind: 'weekly', reportId: draftId } })).status).toBe(404)
+    // F-16-6 の参照 deny 対象者の日報・週報は既読にできない（一覧フィルタと同じ基準）
+    await pool.query(
+      `INSERT INTO permission_rules (id, subject_kind, subject_id, resource, field, effect, active)
+       VALUES ('pr-test-read-deny', 'member', $1, 'reports', $2, 'deny', true)
+       ON CONFLICT (id) DO UPDATE SET active = true`,
+      [MEMBER, `member:${HR}`])
+    clearPermissionCache()
+    try {
+      expect((await api('PUT', '/v1/reports/reads', { as: MEMBER, body: { kind: 'daily', reportId: dailyId } })).status).toBe(404)
+      expect((await api('PUT', '/v1/reports/reads', { as: MEMBER, body: { kind: 'weekly', reportId: weeklyId } })).status).toBe(404)
+    } finally {
+      await pool.query(`DELETE FROM permission_rules WHERE id = 'pr-test-read-deny'`)
       clearPermissionCache()
     }
   })

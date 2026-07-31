@@ -273,6 +273,7 @@ async function onUpdateSubmitted(): Promise<void> {
     }
     editingSubmitted.value = false
     show('提出済みの日報を更新しました')
+    await submitPoipoiIfAny()
     if (res.escalated) {
       show('課題が管理者へ共有されました', 'info', { label: '受信箱', to: '/inbox' })
     }
@@ -362,6 +363,7 @@ async function onSaveDraft(): Promise<void> {
   await run('mine-draft', async () => {
     const res = await reports.saveDraft(payload())
     show(res.ok ? '下書きを保存しました' : res.error.message, res.ok ? 'ok' : 'warn')
+    if (res.ok) await submitPoipoiIfAny()
   }, { message: '下書きを保存しています…' })
 }
 
@@ -375,6 +377,7 @@ async function onSubmit(): Promise<void> {
     mineEditing.value = false
     confirmStep.value = false
     show('日報を提出しました')
+    await submitPoipoiIfAny()
     if (res.escalated) {
       show('課題が管理者へ共有されました', 'info', { label: '受信箱', to: '/inbox' })
     }
@@ -382,6 +385,27 @@ async function onSubmit(): Promise<void> {
       show(`勤怠実労働と時間合計に 60 分超の乖離があります（${gapText(res.hoursGapMinutes)}）`, 'warn')
     }
   }, { message: '日報を提出しています…' })
+}
+
+// ---------- ぽいぽいポストの同時登録（オペレーター指示 2026-07-31: 日報フォーム最下部） ----------
+
+/** 日報フォーム内のぽいぽいポスト入力。保存・提出の成立時に通常経路（useNotes 'poipoi' = トップメニューの
+ * ぽいぽいポストと同一経路）で登録する。日付・ユーザー切替でクリア（別日の日報への持ち越しを防ぐ） */
+const poipoiDraft = ref('')
+watch([selDate, currentUserId], () => { poipoiDraft.value = '' })
+
+/** 入力があれば日報の登録と合わせて登録・空欄ならスキップ。
+ * 登録成功でクリア = 続けて保存しても二重登録しない（冪等）。失敗しても日報フローは止めない（原則4） */
+async function submitPoipoiIfAny(): Promise<void> {
+  const text = poipoiDraft.value.trim()
+  if (!text) return
+  const res = await poipoiNotes.add({ title: '', body: text, projectId: null, companyId: null, workCategoryId: null })
+  if (res.ok) {
+    poipoiDraft.value = ''
+    show('ぽいぽいポストを登録しました')
+  } else {
+    show(`ぽいぽいポストの登録に失敗しました（${res.error.message}）。入力は保持されています`, 'warn')
+  }
 }
 
 // ---------- AI アシスト入力（F-06-7。材料の入力は AI業務アシスタント F-14 へ移設） ----------
@@ -701,6 +725,43 @@ const allReports = computed(() =>
   reports.allSubmitted(allMonth.value)
     .filter(r => matchesMemberFilter(r.memberId, allDeptId.value, allMemberId.value)))
 
+// ---- 既読/未読の可視化（オペレーター指示 2026-07-31。SoT = report_reads） ----
+
+/** 自分の日報か（自分の記録は既読管理の対象外 = 未読として数えない） */
+function isOwnDaily(r: DailyReport): boolean {
+  return r.authorKind === 'human' && r.memberId === currentUserId.value
+}
+
+function isDailyUnread(r: DailyReport): boolean {
+  return !isOwnDaily(r) && !reports.isReportRead('daily', r.id)
+}
+
+const allUnreadOnly = ref(false)
+const allUnreadCount = computed(() => allReports.value.filter(isDailyUnread).length)
+const allVisibleReports = computed(() =>
+  allUnreadOnly.value ? allReports.value.filter(isDailyUnread) : allReports.value)
+
+// 詳細を開いたら既読にする（全員の日報・チーム・タイムラインのどの導線でも一貫。
+// 下書き（管理者のみ開ける）は既読対象外 = 未読可視化は提出済みのみを扱う）
+watch(drawerReportId, (id) => {
+  if (!id) return
+  const r = reports.reportById(id)
+  if (r && r.status === 'submitted' && !isOwnDaily(r)) void reports.markReportRead('daily', id)
+})
+
+/** 未読に戻す（既読の取消フロー = 原則9.5）。あとで読み直すための導線 */
+async function onMarkUnreadDaily(): Promise<void> {
+  const r = drawerReport.value
+  if (!r) return
+  const res = await reports.markReportUnread('daily', r.id)
+  if (!res.ok) {
+    show(res.error.message, 'warn')
+    return
+  }
+  drawerReportId.value = null
+  show('未読に戻しました')
+}
+
 const ALL_COLUMNS: TableColumn[] = [
   { key: 'dateLabel', label: '日付', primary: true, width: '110px' },
   { key: 'author', label: '名前', primary: true, width: '160px' },
@@ -717,13 +778,14 @@ function summaryOf(r: DailyReport): string {
 }
 
 const allRows = computed(() =>
-  allReports.value.map(r => ({
+  allVisibleReports.value.map(r => ({
     id: r.id,
     dateLabel: dayLabel(r.date),
     author: reports.authorOf(r).name,
     summary: summaryOf(r),
     hours: `${totalHoursOf(r)}h`,
     issues: r.issues,
+    unread: isDailyUnread(r),
   })) as unknown as Record<string, unknown>[])
 
 function openAllRow(row: Record<string, unknown>): void {
@@ -838,6 +900,37 @@ const waMemberId = ref('')
 const allWeeklies = computed(() =>
   reports.allSubmittedWeeklies(selAllWeekStart.value)
     .filter(r => matchesMemberFilter(r.memberId, waDeptId.value, waMemberId.value)))
+
+// ---- 既読/未読の可視化（週報。日報と同じ扱い = 自分の週報は対象外） ----
+
+function isWeeklyUnread(w: WeeklyReport): boolean {
+  return w.memberId !== currentUserId.value && !reports.isReportRead('weekly', w.id)
+}
+
+const waUnreadOnly = ref(false)
+const waUnreadCount = computed(() => allWeeklies.value.filter(isWeeklyUnread).length)
+const visibleWeeklies = computed(() =>
+  waUnreadOnly.value ? allWeeklies.value.filter(isWeeklyUnread) : allWeeklies.value)
+
+// 詳細を開いたら既読にする（過去の週報一覧 = 自分の週報からの導線でも一貫。提出済みのみ）
+watch(weeklyDrawerId, (id) => {
+  if (!id) return
+  const w = reports.weeklyById(id)
+  if (w && w.status === 'submitted' && w.memberId !== currentUserId.value) void reports.markReportRead('weekly', id)
+})
+
+/** 未読に戻す（週報。既読の取消フロー = 原則9.5） */
+async function onMarkUnreadWeekly(): Promise<void> {
+  const w = weeklyDrawer.value
+  if (!w) return
+  const res = await reports.markReportUnread('weekly', w.id)
+  if (!res.ok) {
+    show(res.error.message, 'warn')
+    return
+  }
+  weeklyDrawerId.value = null
+  show('未読に戻しました')
+}
 </script>
 
 <template>
@@ -1216,15 +1309,16 @@ const allWeeklies = computed(() =>
             </ul>
           </div>
 
-          <!-- 通常入力: テーブル形式（共通ヘッダ 1 行 + 各セルへの入力 = オペレーター指示 2026-07-22） -->
+          <!-- 通常入力: テーブル形式（共通ヘッダ 1 行 + 各セルへの入力 = オペレーター指示 2026-07-22）。
+               「進捗」列は入力フォームでは非表示（オペレーター指示 2026-07-31。既存データの進捗値は
+               編集・保存でもそのまま保持され、参照表示には引き続き出る = 原則7） -->
           <div class="overflow-x-auto scroll-slim">
-            <table class="tbl min-w-[640px]">
+            <table class="tbl min-w-[560px]">
               <thead>
                 <tr>
                   <th class="w-[26%]">テーマ <span class="text-crit" aria-hidden="true">*</span></th>
                   <th>内容 <span class="text-crit" aria-hidden="true">*</span></th>
                   <th class="w-40 !text-right">時間 (h)</th>
-                  <th class="w-24 !text-right">進捗 (%)</th>
                   <th class="w-12"><span class="sr-only">操作</span></th>
                 </tr>
               </thead>
@@ -1246,9 +1340,6 @@ const allWeeklies = computed(() =>
                         <Plus class="h-3.5 w-3.5" aria-hidden="true" />
                       </button>
                     </div>
-                  </td>
-                  <td class="!py-1.5">
-                    <input v-model.number="e.progress" type="number" min="0" max="100" step="5" class="input num w-20 text-right" :aria-label="`エントリ${i + 1} 進捗`">
                   </td>
                   <td class="!py-1.5 text-right">
                     <button type="button" class="btn btn-sm text-crit" :aria-label="`エントリ${i + 1} を削除`" @click="removeRow(i)">
@@ -1352,6 +1443,20 @@ const allWeeklies = computed(() =>
             </p>
           </UiFormField>
 
+          <!-- ぽいぽいポスト（フォーム最下部 = オペレーター指示 2026-07-31。トップメニューのぽいぽいポストと
+               同一経路（useNotes 'poipoi'）で登録。入力があれば日報の保存と合わせて登録・空欄ならスキップ） -->
+          <UiFormField
+            label="ぽいぽいポスト（任意）"
+            hint="入力があると、日報の保存・提出と同時にぽいぽいポストとして登録されます（空欄ならスキップ）"
+          >
+            <textarea
+              v-model="poipoiDraft"
+              class="textarea"
+              placeholder="思いついたこと・気づき・改善アイデアを投げ込む"
+              aria-label="ぽいぽいポスト"
+            />
+          </UiFormField>
+
           <div class="flex flex-wrap items-center justify-end gap-2">
             <template v-if="editingSubmitted">
               <button type="button" class="btn" @click="editingSubmitted = false; loadEditor()">キャンセル</button>
@@ -1392,26 +1497,37 @@ const allWeeklies = computed(() =>
         </div>
         <UiSelect v-model="allDeptId" :options="deptOptions" empty-label="すべての部署" aria-label="部署で絞り込み" />
         <UiSelect v-model="allMemberId" :options="memberFilterOptions" empty-label="すべてのメンバー" aria-label="メンバーで絞り込み" />
+        <button
+          type="button"
+          class="btn btn-sm"
+          :class="allUnreadOnly ? 'btn-primary' : ''"
+          :aria-pressed="allUnreadOnly"
+          @click="allUnreadOnly = !allUnreadOnly"
+        >
+          未読のみ
+        </button>
         <template #trailing>
+          <UiStatusBadge v-if="allUnreadCount > 0" tone="brand" :label="`未読 ${allUnreadCount} 件`" dot />
           <span class="num text-xs text-muted">{{ allReports.length }} 件</span>
         </template>
       </UiFilterBar>
 
       <UiSectionCard
         title="全員の日報"
-        description="全メンバー・AI 社員の提出済み日報（新しい順）。行（モバイルはカード）を押すと詳細が開きます。参照できる範囲は権限設定（日報・週報の参照対象）に従います"
+        description="全メンバー・AI 社員の提出済み日報（新しい順）。行（モバイルはカード）を押すと詳細が開き、既読になります。参照できる範囲は権限設定（日報・週報の参照対象）に従います"
         flush
       >
         <UiDataTable
           :columns="ALL_COLUMNS"
           :rows="allRows"
           clickable
-          empty-title="この月の提出済み日報がありません"
-          empty-hint="「自分の日報」から提出すると、ここに表示されます（絞り込み条件も確認してください）"
+          :empty-title="allUnreadOnly ? '未読の日報はありません' : 'この月の提出済み日報がありません'"
+          :empty-hint="allUnreadOnly ? 'すべて既読です（「未読のみ」を解除すると全件表示されます）' : '「自分の日報」から提出すると、ここに表示されます（絞り込み条件も確認してください）'"
           @row-click="openAllRow"
         >
           <template #cell-summary="{ row }">
             <span class="flex items-center gap-1.5">
+              <UiStatusBadge v-if="row.unread" tone="brand" label="未読" dot />
               <span class="line-clamp-1">{{ row.summary }}</span>
               <UiStatusBadge v-if="row.issues" tone="warn" label="課題" />
             </span>
@@ -1680,23 +1796,33 @@ const allWeeklies = computed(() =>
           </div>
           <UiSelect v-model="waDeptId" :options="deptOptions" empty-label="すべての部署" aria-label="部署で絞り込み" />
           <UiSelect v-model="waMemberId" :options="memberFilterOptions" empty-label="すべてのメンバー" aria-label="メンバーで絞り込み" />
+          <button
+            type="button"
+            class="btn btn-sm"
+            :class="waUnreadOnly ? 'btn-primary' : ''"
+            :aria-pressed="waUnreadOnly"
+            @click="waUnreadOnly = !waUnreadOnly"
+          >
+            未読のみ
+          </button>
           <template #trailing>
+            <UiStatusBadge v-if="waUnreadCount > 0" tone="brand" :label="`未読 ${waUnreadCount} 件`" dot />
             <span class="num text-xs text-muted">{{ allWeeklies.length }} 件</span>
           </template>
         </UiFilterBar>
 
         <UiSectionCard
           title="全員の週報"
-          description="選択した週の提出済み週報。参照できる範囲は権限設定（日報・週報の参照対象）に従います"
+          description="選択した週の提出済み週報。開くと既読になります。参照できる範囲は権限設定（日報・週報の参照対象）に従います"
           flush
         >
           <UiEmptyState
-            v-if="allWeeklies.length === 0"
-            title="この週の提出済み週報がありません"
-            hint="「自分の週報」から提出すると、ここに表示されます（絞り込み条件も確認してください）"
+            v-if="visibleWeeklies.length === 0"
+            :title="waUnreadOnly ? '未読の週報はありません' : 'この週の提出済み週報がありません'"
+            :hint="waUnreadOnly ? 'すべて既読です（「未読のみ」を解除すると全件表示されます）' : '「自分の週報」から提出すると、ここに表示されます（絞り込み条件も確認してください）'"
           />
           <ul v-else class="divide-y divide-line">
-            <li v-for="w in allWeeklies" :key="w.id">
+            <li v-for="w in visibleWeeklies" :key="w.id">
               <button
                 type="button"
                 class="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-brand-soft"
@@ -1704,7 +1830,10 @@ const allWeeklies = computed(() =>
               >
                 <UiAvatar :name="reports.memberName(w.memberId)" size="sm" />
                 <span class="min-w-0 flex-1">
-                  <span class="block text-[13px] font-bold">{{ reports.memberName(w.memberId) }}</span>
+                  <span class="flex flex-wrap items-center gap-1.5">
+                    <span class="text-[13px] font-bold">{{ reports.memberName(w.memberId) }}</span>
+                    <UiStatusBadge v-if="isWeeklyUnread(w)" tone="brand" label="未読" dot />
+                  </span>
                   <span class="block truncate text-xs text-sub">{{ w.mainWork || '—' }}</span>
                 </span>
                 <UiStatusBadge tone="ok" :label="REPORT_STATUS_LABELS.submitted" dot />
@@ -1851,13 +1980,22 @@ const allWeeklies = computed(() =>
             </p>
             <p class="num text-[11px] text-muted">{{ fmtDateLong(drawerReport.date) }}</p>
           </div>
-          <div class="ml-auto flex flex-wrap gap-1.5">
+          <div class="ml-auto flex flex-wrap items-center gap-1.5">
             <UiStatusBadge
               :tone="drawerReport.status === 'submitted' ? 'ok' : 'warn'"
               :label="REPORT_STATUS_LABELS[drawerReport.status]"
               dot
             />
             <UiStatusBadge v-if="drawerGap !== null" tone="warn" :label="`時間乖離 ${gapText(drawerGap)}`" />
+            <!-- 未読に戻す（他人の提出済み日報のみ。開いた時点で既読になるため、その取消フロー = 原則9.5） -->
+            <button
+              v-if="!isOwnDaily(drawerReport) && drawerReport.status === 'submitted' && reports.isReportRead('daily', drawerReport.id)"
+              type="button"
+              class="btn btn-sm"
+              @click="onMarkUnreadDaily"
+            >
+              未読に戻す
+            </button>
           </div>
         </div>
 
@@ -1933,6 +2071,15 @@ const allWeeklies = computed(() =>
             :label="REPORT_STATUS_LABELS[weeklyDrawer.status]"
             dot
           />
+          <!-- 未読に戻す（他人の提出済み週報のみ。開いた時点で既読になるため、その取消フロー = 原則9.5） -->
+          <button
+            v-if="weeklyDrawer.memberId !== currentUserId && weeklyDrawer.status === 'submitted' && reports.isReportRead('weekly', weeklyDrawer.id)"
+            type="button"
+            class="btn btn-sm ml-auto"
+            @click="onMarkUnreadWeekly"
+          >
+            未読に戻す
+          </button>
         </div>
         <div><p class="label">今週の目標達成</p><UiMarkdown v-if="weeklyDrawer.goalReview" :source="weeklyDrawer.goalReview" /><p v-else class="text-[13px]">—</p></div>
         <div><p class="label">主要業務</p><UiMarkdown v-if="weeklyDrawer.mainWork" :source="weeklyDrawer.mainWork" /><p v-else class="text-[13px]">—</p></div>

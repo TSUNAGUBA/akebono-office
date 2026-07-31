@@ -9,7 +9,7 @@ import type {
   CustomerLog, CustomFieldDef, DailyReport, DecisionLog, DecisionTheme, DelegateSetting, Department,
   DocumentNode, Escalation, EscalationRule, ExternalLink, FeatureToggle, HearingLog, Holiday,
   Industry, KnowledgeArticle, LeaveGrant, LeaveRequest, LeaveType, Member, Project,
-  PunchRecord, RelationType, ReportComment, SalesMonthly, ServiceIncident,
+  PunchRecord, RelationType, ReportComment, ReportRead, SalesMonthly, ServiceIncident,
   ShiftAssignment, ShiftDemand, ShiftPeriod, ShiftWish, SystemService,
   TaskPlan, UptimeDaily, WeeklyReport, WorkflowRequest, WorkflowRoute, WorkCategory, Note,
 } from '~/types/domain'
@@ -79,6 +79,8 @@ export interface MockDbShape {
   dailyReports: DailyReport[]
   weeklyReports: WeeklyReport[]
   reportComments: ReportComment[]
+  /** 日報・週報の既読（全員の日報/週報タブの未読可視化。オペレーター指示 2026-07-31） */
+  reportReads: ReportRead[]
   workflowRequests: WorkflowRequest[]
   approvalLogs: ApprovalLog[]
   delegateSettings: DelegateSetting[]
@@ -192,6 +194,8 @@ export function buildSeed(): MockDbShape {
     dailyReports: reports.seedDailyReports,
     weeklyReports: reports.seedWeeklyReports,
     reportComments: reports.seedReportComments,
+    reportReads: [], // 既読は空スタート（ユーザーの閲覧操作でのみ増える）
+
     workflowRequests: workflow.seedWorkflowRequests,
     approvalLogs: workflow.seedApprovalLogs,
     delegateSettings: workflow.seedDelegateSettings,

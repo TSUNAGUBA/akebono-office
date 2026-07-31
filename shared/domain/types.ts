@@ -101,21 +101,35 @@ export interface CustomerLog {
   memberId: string
   /** 何月何日（YYYY-MM-DD・必須）*/
   logDate: string
-  /** 時刻（HH:MM・任意。未指定は null）*/
+  /** 開始時刻（HH:MM・任意。未指定は null。分は 15 分単位から選択 = UI 制約）*/
   logTime: string | null
+  /** 終了時刻（HH:MM・任意。開始時刻がある場合のみ指定可・開始より後）*/
+  endTime: string | null
   /** 顧客(会社)（必須）*/
   companyId: string
   /** 顧客(人)（任意。companyId に属する contact）*/
   contactId: string | null
+  /** 自社の担当者（Member 参照。既定 = ログインユーザー = 記録者）*/
+  staffMemberId: string
+  /** 属性タグ（商談/取材/イベント等。プリセット + 自由入力 = CUSTOMER_LOG_TAG_PRESETS）*/
+  tags: string[]
   /** 件名（任意。空なら会社名から導出表示）*/
   title: string
-  /** 会話内容（必須）*/
+  /** 担当者メモ（旧「会話内容」。既存データは本欄へ引き継ぐ = 原則7。議事録メモとどちらか必須）*/
   body: string
+  /** 議事録メモ（担当者メモとどちらか必須）*/
+  minutesMemo: string
   createdAt: string
   updatedAt?: string
   /** 取消（論理削除）済みは false。モック旧データは未設定 = 有効（原則7） */
   active?: boolean
 }
+
+/** 顧客ログの属性タグ推奨プリセット（「商談/取材/イベント等」= 自由入力も可。UI 候補と検証上限の SoT） */
+export const CUSTOMER_LOG_TAG_PRESETS = ['商談', '取材', 'イベント', '定例', '会食', '電話', 'その他'] as const
+/** 属性タグの最大数・1 タグの最大文字数（コードポイント） */
+export const CUSTOMER_LOG_TAGS_MAX = 10
+export const CUSTOMER_LOG_TAG_CAP = 30
 
 export interface Industry {
   id: string
@@ -698,6 +712,23 @@ export interface ReportComment {
   body: string
   at: string
   reactions: { memberId: string; emoji: string }[]
+}
+
+/** 日報・週報の対象種別（既読管理で共用） */
+export type ReportReadKind = 'daily' | 'weekly'
+
+/**
+ * 日報・週報の既読（全員の日報/全員の週報タブの未読可視化。オペレーター指示 2026-07-31）。
+ * 閲覧者 × 対象レポートごとに 1 行。readAt は初回既読時刻を保持する（再読で巻き戻さない = 原則2）。
+ * 「未読に戻す」は行の削除（既読は業務記録ではなく閲覧状態のため物理削除で取消フローを提供 = 原則9.5）。
+ */
+export interface ReportRead {
+  /** 閲覧者（既読を付けた本人）*/
+  memberId: string
+  reportKind: ReportReadKind
+  /** 対象の DailyReport.id / WeeklyReport.id */
+  reportId: string
+  readAt: string
 }
 
 export type WorkflowStatus =
