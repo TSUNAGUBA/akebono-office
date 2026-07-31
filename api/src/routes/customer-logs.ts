@@ -14,9 +14,13 @@
  */
 import { Hono } from 'hono'
 import type pg from 'pg'
+import {
+  CUSTOMER_LOG_BODY_CAP as BODY_CAP, CUSTOMER_LOG_NAME_CAP as NAME_CAP, CUSTOMER_LOG_TITLE_CAP as TITLE_CAP,
+  cleanCustomerLogTags, customerLogCompanyError, customerLogDateError, customerLogMemoError,
+  customerLogTagsError, customerLogTimeError, customerLogTimeRangeError, isRealDateKey,
+} from '../../../shared/domain/customer-log'
 import { normalizeCompanyName } from '../../../shared/domain/name-match'
 import { canViewMemberCustomerLog } from '../../../shared/domain/permissions'
-import { CUSTOMER_LOG_TAG_CAP, CUSTOMER_LOG_TAGS_MAX } from '../../../shared/domain/types'
 import type { CustomerLog } from '../../../shared/domain/types'
 import type { AuthUser } from '../auth'
 import type { Env } from '../env'
@@ -26,12 +30,6 @@ import { newId } from '../lib/ids'
 import { activePermissionRules, subjectOf } from '../lib/permissions'
 import { scheduleSearchRebuild } from '../lib/search-index'
 import { capCp } from '../lib/text'
-
-const BODY_CAP = 20_000
-const TITLE_CAP = 200
-const NAME_CAP = 120
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
-const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/
 
 // createdAt/updatedAt は JST ウォールクロック文字列で返す（notes/task-plans/chatbot と同一規約。
 // フロントは文字列を直接パースするため UTC の "Z" ISO を返すと日付キー比較・表示が最大 9 時間ずれる）。
@@ -48,55 +46,30 @@ function refOrNull(v: unknown): string | null {
   return s || null
 }
 
-/** YYYY-MM-DD かつ実在日か（2026-13-40 / 2026-02-30 を弾く。DB の 22007→500 を防ぐ共通判定） */
-function isRealDate(s: string): boolean {
-  if (!DATE_RE.test(s)) return false
-  const d = new Date(`${s}T00:00:00Z`)
-  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s
+/** shared 検証（メッセージ | null）を AKO-CLG-001（400）へ変換する（検証ロジックの SoT = shared/domain/customer-log） */
+function assertClg(message: string | null): void {
+  if (message) throw err('AKO-CLG-001', message, 400)
 }
 
 /** 日付（YYYY-MM-DD・実在日）。不正・存在しない日（2026-13-40 等）は 400 で弾く（DB の 22007 を出さない） */
 function parseDate(v: unknown): string {
   const s = String(v ?? '').trim()
-  if (!DATE_RE.test(s)) throw err('AKO-CLG-001', '日付（何月何日）を選択してください', 400)
-  if (!isRealDate(s)) throw err('AKO-CLG-001', '日付が正しくありません', 400)
+  assertClg(customerLogDateError(s))
   return s
 }
 
 /** 時刻（HH:MM・任意）。空は null。書式不正は 400。分の 15 分単位は UI の選択肢制約（既存データ互換のため API は HH:MM を許容） */
-function parseTime(v: unknown, label: string): string | null {
+function parseTime(v: unknown, label: '開始' | '終了'): string | null {
   const s = String(v ?? '').trim()
   if (!s) return null
-  if (!TIME_RE.test(s)) throw err('AKO-CLG-001', `${label}時間は HH:MM 形式で入力してください`, 400)
+  assertClg(customerLogTimeError(s, label))
   return s
-}
-
-/** 開始・終了時刻の組み合わせ検証（終了のみは不可・終了は開始より後） */
-function assertTimeRange(logTime: string | null, endTime: string | null): void {
-  if (endTime && !logTime) throw err('AKO-CLG-001', '終了時間を入力する場合は開始時間も入力してください', 400)
-  if (logTime && endTime && endTime <= logTime) {
-    throw err('AKO-CLG-001', '終了時間は開始時間より後にしてください', 400)
-  }
 }
 
 /** 属性タグ（任意・重複除去・件数/文字数上限）。文字列配列以外は 400 */
 function parseTags(v: unknown): string[] {
-  if (v === undefined || v === null) return []
-  if (!Array.isArray(v)) throw err('AKO-CLG-001', '属性タグの形式が正しくありません', 400)
-  const out: string[] = []
-  for (const t of v) {
-    const s = capCp(String(t ?? '').trim(), CUSTOMER_LOG_TAG_CAP)
-    if (s && !out.includes(s)) out.push(s)
-  }
-  if (out.length > CUSTOMER_LOG_TAGS_MAX) {
-    throw err('AKO-CLG-001', `属性タグは ${CUSTOMER_LOG_TAGS_MAX} 件までです`, 400)
-  }
-  return out
-}
-
-/** 担当者メモ・議事録メモ（どちらか必須） */
-function assertMemos(body: string, minutesMemo: string): void {
-  if (!body && !minutesMemo) throw err('AKO-CLG-001', '担当者メモまたは議事録メモを入力してください', 400)
+  assertClg(customerLogTagsError(v))
+  return Array.isArray(v) ? cleanCustomerLogTags(v) : []
 }
 
 /** 担当者(人)が選択した会社に属するか検証（FK では表現できない整合を API 層で担保） */
@@ -127,6 +100,18 @@ interface ResolvedRefs {
 }
 
 /**
+ * 「照合 → なければ INSERT」の同名同時登録ガード（レビュー指摘 m-1）。
+ * READ COMMITTED では 2 リクエストが同時に照合へ失敗して重複マスタが生まれるため、
+ * 正規化名単位のトランザクションスコープのアドバイザリロックで直列化する
+ * （後着はロック待ち → 先着のコミット後に照合し直して既存へ名寄せされる。
+ *  ロックはコミット/ロールバックで自動解放 = pg_advisory_xact_lock。hashtext 衝突は
+ *  無関係な名前が直列化されるだけで無害）。
+ */
+async function lockResolveKey(db: pg.PoolClient, key: string): Promise<void> {
+  await db.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [key])
+}
+
+/**
  * 顧客(会社)の解決。newCompanyName があれば正規化名（法人格・空白ゆらぎ除去 = shared name-match）の
  * 完全一致で既存の顧客(会社)を照合し、なければマスタへ新規登録する（重複マスタを作らない）。
  */
@@ -138,7 +123,7 @@ async function resolveCompany(
   if (companyId) return { id: companyId, created: null }
   const name = capCp(newCompanyName.trim(), NAME_CAP)
   const norm = normalizeCompanyName(name)
-  if (!norm) throw err('AKO-CLG-001', '顧客(会社)を選択してください', 400)
+  await lockResolveKey(db, `clog-company:${norm}`)
   const { rows } = await db.query<{ id: string; name: string; aliases: string[] | null }>(
     `SELECT id, name, aliases FROM companies WHERE kind = 'customer' AND active = true ORDER BY id`)
   for (const r of rows) {
@@ -168,6 +153,7 @@ async function resolveContact(
   const name = capCp(newContactName.trim(), NAME_CAP)
   if (!name) return { id: null, created: null }
   const norm = (s: string): string => s.replace(/\s+/g, '').toLowerCase()
+  await lockResolveKey(db, `clog-contact:${companyId}:${norm(name)}`)
   const { rows } = await db.query<{ id: string; name: string }>(
     `SELECT id, name FROM contacts WHERE company_id = $1 AND active = true ORDER BY id`, [companyId])
   const hit = rows.find(r => norm(r.name) === norm(name))
@@ -177,14 +163,12 @@ async function resolveContact(
   return { id, created: { id, name } }
 }
 
-/** 会社 + 担当者の一括解決（登録・編集で共用） */
+/** 会社 + 担当者の一括解決（登録・編集で共用）。会社指定の検証は shared customerLogCompanyError（パリティの SoT） */
 async function resolveRefs(
   db: pg.PoolClient,
   input: { companyId: string | null; newCompanyName: string; contactId: string | null; newContactName: string },
 ): Promise<ResolvedRefs> {
-  if (!input.companyId && !input.newCompanyName.trim()) {
-    throw err('AKO-CLG-001', '顧客(会社)を選択してください', 400)
-  }
+  assertClg(customerLogCompanyError(input.companyId ?? '', input.newCompanyName))
   const company = await resolveCompany(db, input.companyId, input.newCompanyName)
   const contact = await resolveContact(db, company.id, input.contactId, input.newContactName)
   return {
@@ -239,9 +223,9 @@ export function customerLogsRoutes(pool: pg.Pool, env: Env): Hono {
     if (!includeArchived) conds.push('active = true')
     // 実在日のみフィルタに使う（2026-02-30 等の不正日は無視 = ::date キャストの 22007→500 を出さない）
     const from = c.req.query('from')?.trim()
-    if (from && isRealDate(from)) { params.push(from); conds.push(`log_date >= $${params.length}::date`) }
+    if (from && isRealDateKey(from)) { params.push(from); conds.push(`log_date >= $${params.length}::date`) }
     const to = c.req.query('to')?.trim()
-    if (to && isRealDate(to)) { params.push(to); conds.push(`log_date <= $${params.length}::date`) }
+    if (to && isRealDateKey(to)) { params.push(to); conds.push(`log_date <= $${params.length}::date`) }
     const companyId = c.req.query('companyId')?.trim()
     if (companyId) { params.push(companyId); conds.push(`company_id = $${params.length}`) }
     const contactId = c.req.query('contactId')?.trim()
@@ -259,14 +243,14 @@ export function customerLogsRoutes(pool: pg.Pool, env: Env): Hono {
     const logDate = parseDate(b.logDate)
     const logTime = parseTime(b.logTime, '開始')
     const endTime = parseTime(b.endTime, '終了')
-    assertTimeRange(logTime, endTime)
+    assertClg(customerLogTimeRangeError(logTime, endTime))
     const tags = parseTags(b.tags)
     // 自社の担当者（未指定はログインユーザー = 記録者。仕様の既定値）
     const staffMemberId = String(b.staffMemberId ?? '').trim() || user.id
     const title = capCp(String(b.title ?? '').trim(), TITLE_CAP)
     const body = capCp(String(b.body ?? '').trim(), BODY_CAP)
     const minutesMemo = capCp(String(b.minutesMemo ?? '').trim(), BODY_CAP)
-    assertMemos(body, minutesMemo)
+    assertClg(customerLogMemoError(body, minutesMemo))
     const id = newId('clog')
     const client = await pool.connect()
     let refs: ResolvedRefs
@@ -317,8 +301,8 @@ export function customerLogsRoutes(pool: pg.Pool, env: Env): Hono {
       body: Object.hasOwn(b, 'body') ? capCp(String(b.body ?? '').trim(), BODY_CAP) : cur.body,
       minutesMemo: Object.hasOwn(b, 'minutesMemo') ? capCp(String(b.minutesMemo ?? '').trim(), BODY_CAP) : cur.minutesMemo,
     }
-    assertTimeRange(next.logTime, next.endTime)
-    assertMemos(next.body, next.minutesMemo)
+    assertClg(customerLogTimeRangeError(next.logTime, next.endTime))
+    assertClg(customerLogMemoError(next.body, next.minutesMemo))
     // 会社・担当者の解決（newCompanyName / newContactName 指定時は新規マスタ登録も行う）。
     // どのキーも送られていなければ現状維持
     const touchesCompany = Object.hasOwn(b, 'companyId') || Object.hasOwn(b, 'newCompanyName')

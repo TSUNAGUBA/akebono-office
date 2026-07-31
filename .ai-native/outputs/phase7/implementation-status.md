@@ -1272,8 +1272,44 @@
 - [x] モックシード: customerLogs へ新項目を反映・reportReads 追加（SEED_VERSION 15 → 16）。
 
 ### 49-4 検証
-- [x] api 単体 238 / **api 統合 221**（顧客ログ: 項目拡張 検証・部分更新の新項目保持・コンボボックス新規登録/名寄せ/PATCH 経路 = 3 スイート新設。
-  既読管理: 期間必須・冪等（read_at 不変）・未読戻し・404 秘匿（下書き・F-16-6 deny）= 4 スイート新設）/ mockup 単体 155 /
-  typecheck（api・mockup）全 green。
-- [x] docs（原則5）: data-design（CustomerLog 拡張・ReportRead 新設）・api-design（useCustomerLogs / useReports 契約・AKO-CLG-001）・
-  screen-design（/reports・/customer-log）・本ファイルを更新。
+- [x] api 単体 **251**（+13 = shared 顧客ログ検証の単体テスト新設 = 49-5 R1 対応）/ **api 統合 221**（顧客ログ: 項目拡張 検証・
+  部分更新の新項目保持・コンボボックス新規登録/名寄せ〔正規化名・aliases〕/PATCH 経路 = 3 スイート新設。
+  既読管理: 期間必須（実在日検証含む）・冪等（read_at 不変）・未読戻し・404 秘匿（下書き・F-16-6 deny・クロス kind）= 4 スイート新設）/
+  mockup 単体 155 / typecheck（api・mockup）全 green。
+- [x] docs（原則5）: functional-requirements（F-06-1/9/11 更新・**F-18 顧客ログを新設** = R1 監査 MAJOR-1）・
+  data-design（CustomerLog 拡張・ReportRead 新設 + §1.2 例外注記）・api-design（useCustomerLogs / useReports 契約・AKO-CLG-001）・
+  screen-design（/reports・/customer-log）・mockup/CONVENTIONS.md（UiCombobox / useDropdownDirection 在庫）・本ファイルを更新。
+
+### 49-5 反復レビュー（原則9・1 巡目 = 独立コードレビュアー + システム監査官。CRITICAL 0・MAJOR 計 3〔重複 1〕→ 全件対応）
+- [x] **CR-M1（UiCombobox の Enter が無関係な先頭候補を選択）**: 完全一致入力・選択済み・空入力での Enter が
+  「全候補表示の先頭」へ選択を差し替え得た → Enter の優先順を「①完全一致を選択 ②選択済み/空入力は閉じるだけ
+  ③絞り込み一致の先頭を選択 ④一致なしは自由入力として確定」へ再設計（選択対象は表示用でなく検索文字列そのままの絞り込み結果）。
+- [x] **CR-m1（同名同時登録で重複マスタ）**: 「照合 → INSERT」を正規化名単位の pg_advisory_xact_lock で直列化
+  （後着はロック待ち → 再照合で既存へ名寄せ。ロックはトランザクション終了で自動解放・hashtext 衝突は無害な直列化のみ）。
+- [x] **CR-m2 / 検証順パリティ CR-n1・n-2（モック/API の検証割れ）**: 検証ロジック・メッセージ・順序を
+  **shared/domain/customer-log へ集約（パリティの SoT・原則3）**し、API・モックとも同一関数を同一順で適用。
+  法人格のみの会社名（「株式会社」等 = 正規化で空）は両モードで拒否・担当者不整合は存在→所属の順で判定。
+  単体テスト 13 件を新設（api/test/unit/customer-log-validate.test.ts）。
+- [x] **CR-m3（編集オープン時に担当者リンクが黙って消える）**: openCreate/openEdit の一括代入で companyId watch が発火し、
+  無効化済み担当者・contacts 未ロード時に contactId をクリアしていた → フォーム復元中フラグ（fillForm）で
+  「ユーザーが会社を変更したとき」だけクリアが働くよう抑止。
+- [x] **CR-n4（タグ上限の UI 事前ガード漏れ）**: プリセットトグルも共通ガード（applyTags）経由にし、上限超過は保存前に警告。
+- [x] **監査 MAJOR-1（phase3 機能要求の未更新）**: F-06-1（進捗の入力非表示・ぽいぽいポスト欄）・F-06-9/F-06-11（既読管理）を更新し、
+  欠落していた顧客ログの機能要求 **F-18（F-18-1〜3）を新設**。
+- [x] **監査 MINOR-1（CONVENTIONS の UI 在庫）**: UiCombobox 行を追加・UiMultiCombobox 行へ useDropdownDirection 共通化を注記。
+- [x] **監査 MINOR-2（検証漏れ）**: aliases 名寄せ・クロス kind 既読拒否・weekStart 実在日を統合テストへ追加。
+  shared 検証の単体 13 件で API/モックのパリティを構造的に固定。
+- [x] **監査 NIT-2（data-design の配置）**: §1.2 見出し直下に ReportRead の例外注記（閲覧状態 = 追記のみ原則の対象外）を追加。
+- [x] **残課題（原則9.5 = 監査 MAJOR-2 / CR-m4）**: コンボボックス経由で新規登録された companies/contacts マスタの
+  **作成者本人による取消導線は未実装**。現状の回復経路 = 管理者が /masters から無効化（論理削除・復元あり）+
+  作成は監査ログで追跡可能。誤登録リスクは「正規化名の名寄せ + 法人格のみ名の拒否 + 保存前の未登録ヒント表示」で低減済み。
+  本人 undo（作成直後の取消・未参照マスタの自動無効化等）は顧客ログ改修時に対応する（宣言だけで実態が伴わない状態を作らない
+  ための明示記録 = 原則9.5 の残課題運用）。
+- [x] 受容（対応せず記録）: CR-n3 = 既読キャッシュの取得中に「未読に戻す」を行うと一時的に既読表示へ戻り得る
+  （SoT は正しく削除済み・次回ロードで自己修復。コードコメントに設計判断を明記）/ CR-NIT-1 = UiCombobox と UiMultiCombobox の
+  フィルタ・キー処理の類似実装（開閉方向は共通化済み。自由入力の有無という要件差で別部品を維持・将来の統合候補として記録）/
+  監査 MINOR-2 の一部 = 0047 バックフィルの「既存行あり状態」のマイグレーションテスト（統合テストは空 DB 起点のため未通過。
+  バックフィルは単純な UPDATE + SET NOT NULL でレビュー確認済み = 設計判断）・ぽいぽい同時登録のフロント自動テスト
+  （リポジトリにコンポーネントテスト基盤がなく、経路は既存の useNotes('poipoi').add = notes API の統合テスト済み経路。
+  フォーム側は「成立時のみ・成功でクリア・失敗警告」の 3 分岐のみ = 手動確認 + レビューで担保する設計判断）。
+- [x] 再検証（是正後）: api 単体 251 / api 統合 221 / mockup 単体 155 / typecheck（api・mockup）全 green。

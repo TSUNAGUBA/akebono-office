@@ -131,16 +131,20 @@ const tagOptions = computed(() => {
   for (const t of form.value.tags) if (!values.includes(t)) values.push(t)
   return values.map(t => ({ value: t, label: t }))
 })
+/** タグ変更の共通ガード（プリセットトグル・自由入力とも上限超過は保存前に警告 = 400 まで気付けない事故を防ぐ）*/
+function applyTags(next: string[]): void {
+  if (next.length > CUSTOMER_LOG_TAGS_MAX) {
+    show(`属性タグは ${CUSTOMER_LOG_TAGS_MAX} 件までです`, 'warn')
+    return
+  }
+  form.value.tags = next
+}
 const newTag = ref('')
 function addTag(): void {
   const t = newTag.value.trim()
   if (!t) return
-  if (!form.value.tags.includes(t) && form.value.tags.length >= CUSTOMER_LOG_TAGS_MAX) {
-    show(`属性タグは ${CUSTOMER_LOG_TAGS_MAX} 件までです`, 'warn')
-    return
-  }
-  if (!form.value.tags.includes(t)) form.value.tags = [...form.value.tags, t]
-  newTag.value = ''
+  if (!form.value.tags.includes(t)) applyTags([...form.value.tags, t])
+  if (form.value.tags.includes(t)) newTag.value = ''
 }
 
 /** 会社コンボボックスの候補（有効な顧客(会社)）*/
@@ -155,9 +159,22 @@ const contactOptions = computed(() =>
 /** 会社の入力があるか（既存選択 or 新規名の自由入力）。担当者欄の活性条件 */
 const hasCompanyInput = computed(() => !!form.value.companyId || !!form.value.companyText.trim())
 
+/**
+ * フォーム復元中フラグ（レビュー指摘 m-3）: openCreate/openEdit の一括代入で companyId watch が発火し、
+ * 無効化済み担当者・API モードの contacts 未ロード時に既存の担当者リンクを黙って消してしまうため、
+ * 「ユーザーが会社を変更したとき」だけクリアが働くよう復元中は抑止する
+ */
+let restoringForm = false
+function fillForm(next: typeof form.value): void {
+  restoringForm = true
+  form.value = next
+  void nextTick(() => { restoringForm = false })
+}
+
 // 会社を変えたら、その会社に属さない担当者選択は解除する（不整合の防止）。
 // 自由入力（新規会社）へ切り替えた場合も既存担当者は所属し得ないため解除する
 watch(() => form.value.companyId, (cid) => {
+  if (restoringForm) return
   if (form.value.contactId && !contacts.value.some(c => c.id === form.value.contactId && c.companyId === cid)) {
     form.value.contactId = ''
     form.value.contactText = ''
@@ -166,7 +183,7 @@ watch(() => form.value.companyId, (cid) => {
 
 function openCreate(): void {
   editingId.value = null
-  form.value = {
+  fillForm({
     logDate: todayJst(),
     logTime: '',
     endTime: '',
@@ -179,13 +196,13 @@ function openCreate(): void {
     title: '',
     body: '',
     minutesMemo: '',
-  }
+  })
   newTag.value = ''
   composeOpen.value = true
 }
 function openEdit(l: CustomerLog): void {
   editingId.value = l.id
-  form.value = {
+  fillForm({
     logDate: l.logDate,
     logTime: l.logTime ?? '',
     endTime: l.endTime ?? '',
@@ -198,7 +215,7 @@ function openEdit(l: CustomerLog): void {
     title: l.title,
     body: l.body,
     minutesMemo: l.minutesMemo ?? '',
-  }
+  })
   newTag.value = ''
   detailLog.value = null
   composeOpen.value = true
@@ -399,7 +416,7 @@ const showArchived = ref(false)
         </div>
         <UiFormField label="属性タグ（任意）" hint="商談・取材・イベントなど。自由入力でも追加できます">
           <div class="grid gap-1.5">
-            <UiChipSelect v-model="form.tags" :options="tagOptions" aria-label="属性タグ" />
+            <UiChipSelect :model-value="form.tags" :options="tagOptions" aria-label="属性タグ" @update:model-value="applyTags" />
             <div class="flex items-center gap-1.5">
               <input
                 v-model="newTag"

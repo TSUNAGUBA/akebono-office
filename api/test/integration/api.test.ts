@@ -5575,8 +5575,18 @@ describe('顧客ログ', () => {
     expect(merged.status).toBe(201)
     expect((merged.json.data as { companyId: string }).companyId).toBe(row.companyId)
     expect((merged.json.data as { contactId: string }).contactId).toBe(row.contactId)
-    // 会社もどちらも未指定は従来どおり AKO-CLG-001
+    // 会社もどちらも未指定・法人格のみ（正規化で空）は AKO-CLG-001（意味のないマスタを作らない）
     expect((await api('POST', '/v1/customer-logs', { as: MEMBER, body: { logDate: today, newCompanyName: '   ', body: 'x' } })).json.error?.code).toBe('AKO-CLG-001')
+    expect((await api('POST', '/v1/customer-logs', { as: MEMBER, body: { logDate: today, newCompanyName: '株式会社', body: 'x' } })).json.error?.code).toBe('AKO-CLG-001')
+    // 別名（aliases）でも既存へ名寄せされる（マスタの別名運用と整合）
+    const aliased = await api('POST', '/v1/masters/companies', {
+      as: ADMIN, body: { kind: 'customer', name: 'エイリアス電機', aliases: ['アリデン'] },
+    })
+    const aliasedId = (aliased.json.data as { id: string }).id
+    const byAlias = await api('POST', '/v1/customer-logs', {
+      as: MEMBER, body: { logDate: today, newCompanyName: 'アリデン', body: '別名で名寄せ' },
+    })
+    expect((byAlias.json.data as { companyId: string }).companyId).toBe(aliasedId)
     // PATCH でも新規登録名を反映できる（会社を新規名へ変更 → 旧担当者は所属不整合で 400）
     const logIdForPatch = (created.json.data as { id: string }).id
     expect((await api('PATCH', `/v1/customer-logs/${logIdForPatch}`, {
@@ -5691,6 +5701,9 @@ describe('日報・週報の既読管理（オペレーター指示 2026-07-31�
     expect((await api('PUT', '/v1/reports/reads', { as: MEMBER, body: { kind: 'daily', reportId: 'dr-nope' } })).status).toBe(404)
     expect((await api('PUT', '/v1/reports/reads', { as: MEMBER, body: { kind: 'weekly', reportId: 'wr-nope' } })).status).toBe(404)
     expect((await api('PUT', '/v1/reports/reads', { as: MEMBER, body: { kind: 'nope', reportId: dailyId } })).json.error?.code).toBe('AKO-GEN-001')
+    // kind の取り違え（daily に週報 id / weekly に日報 id）は対象不在として 404（別種の親を参照させない）
+    expect((await api('PUT', '/v1/reports/reads', { as: MEMBER, body: { kind: 'daily', reportId: weeklyId } })).status).toBe(404)
+    expect((await api('PUT', '/v1/reports/reads', { as: MEMBER, body: { kind: 'weekly', reportId: dailyId } })).status).toBe(404)
     // 下書き週報は本人以外は既読にできない（存在を秘匿 = 404）
     const draft = await api('PUT', '/v1/reports/weekly', {
       as: HR, body: { weekStart: '2020-01-13', status: 'draft', goalReview: '', mainWork: '下書き', issues: '', nextWeek: '' },

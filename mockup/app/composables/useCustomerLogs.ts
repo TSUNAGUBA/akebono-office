@@ -8,8 +8,13 @@
  *   マスタへ新規登録したうえでログに反映する（API = サーバーが同一トランザクションで実施 / モック = ここで実施）。
  * - デュアルモード: API = /v1/customer-logs（SoT。AI 検索インデックスへ自動反映）/ モック = customerLogs コレクション
  */
+import {
+  capCodePoints as capCp, cleanCustomerLogTags as cleanTags,
+  CUSTOMER_LOG_BODY_CAP as BODY_CAP, CUSTOMER_LOG_NAME_CAP as NAME_CAP, CUSTOMER_LOG_TITLE_CAP as TITLE_CAP,
+  customerLogCompanyError, customerLogDateError, customerLogMemoError,
+  customerLogTagsError, customerLogTimeError, customerLogTimeRangeError,
+} from '../../../shared/domain/customer-log'
 import { normalizeCompanyName } from '../../../shared/domain/name-match'
-import { CUSTOMER_LOG_TAG_CAP, CUSTOMER_LOG_TAGS_MAX } from '../../../shared/domain/types'
 import type { Company, Contact, CustomerLog, Result } from '~/types/domain'
 
 /** 参照キャッシュ（memberId ごと。自分 = currentUser.id・他メンバー = 権限で許可された対象者） */
@@ -52,52 +57,19 @@ export interface CustomerLogInput {
   minutesMemo: string
 }
 
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
-const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/
-const BODY_CAP = 20_000
-const TITLE_CAP = 200
-const NAME_CAP = 120
-
-/** YYYY-MM-DD かつ実在日か（2026-13-40 / 2026-02-30 を弾く = API parseDate と同一判定） */
-function isRealDate(s: string): boolean {
-  if (!DATE_RE.test(s)) return false
-  const d = new Date(`${s}T00:00:00Z`)
-  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s
-}
-
-/** コードポイント単位で cap（絵文字等を境界で壊さない = API capCp と同義） */
-function capCp(s: string, n: number): string {
-  const cps = [...s]
-  return cps.length > n ? cps.slice(0, n).join('') : s
-}
-
-/** 属性タグの正規化（trim・cap・重複除去 = API parseTags と同一） */
-function cleanTags(tags: string[]): string[] {
-  const out: string[] = []
-  for (const t of tags) {
-    const s = capCp(String(t ?? '').trim(), CUSTOMER_LOG_TAG_CAP)
-    if (s && !out.includes(s)) out.push(s)
-  }
-  return out
-}
-
-/** 入力検証（モックモード用。API モードはサーバーが正。エラーコード・メッセージはサーバーと同一 = パリティ） */
+/**
+ * 入力検証（モックモード用。API モードはサーバーが正）。検証ロジック・メッセージ・順序は
+ * shared/domain/customer-log が SoT（API と同一関数を同一順で適用 = パリティを構造的に担保）
+ */
 function validate(input: CustomerLogInput): { code: string; message: string } | null {
-  if (!isRealDate(input.logDate)) return { code: 'AKO-CLG-001', message: '日付（何月何日）を選択してください' }
-  if (input.logTime && !TIME_RE.test(input.logTime)) return { code: 'AKO-CLG-001', message: '開始時間は HH:MM 形式で入力してください' }
-  if (input.endTime && !TIME_RE.test(input.endTime)) return { code: 'AKO-CLG-001', message: '終了時間は HH:MM 形式で入力してください' }
-  if (input.endTime && !input.logTime) return { code: 'AKO-CLG-001', message: '終了時間を入力する場合は開始時間も入力してください' }
-  if (input.logTime && input.endTime && input.endTime <= input.logTime) {
-    return { code: 'AKO-CLG-001', message: '終了時間は開始時間より後にしてください' }
-  }
-  if (cleanTags(input.tags).length > CUSTOMER_LOG_TAGS_MAX) {
-    return { code: 'AKO-CLG-001', message: `属性タグは ${CUSTOMER_LOG_TAGS_MAX} 件までです` }
-  }
-  if (!input.companyId && !input.newCompanyName.trim()) return { code: 'AKO-CLG-001', message: '顧客(会社)を選択してください' }
-  if (!input.body.trim() && !input.minutesMemo.trim()) {
-    return { code: 'AKO-CLG-001', message: '担当者メモまたは議事録メモを入力してください' }
-  }
-  return null
+  const message = customerLogDateError(input.logDate)
+    ?? customerLogTimeError(input.logTime ?? '', '開始')
+    ?? customerLogTimeError(input.endTime ?? '', '終了')
+    ?? customerLogTimeRangeError(input.logTime, input.endTime)
+    ?? customerLogTagsError(input.tags)
+    ?? customerLogMemoError(input.body, input.minutesMemo)
+    ?? customerLogCompanyError(input.companyId, input.newCompanyName)
+  return message ? { code: 'AKO-CLG-001', message } : null
 }
 
 /** 表示順: 日付降順 → 時刻降順（未設定は後ろ）→ 作成降順 */
@@ -121,8 +93,11 @@ export function useCustomerLogs() {
   const companiesTbl = tbl('companies')
   const contactsTbl = tbl('contacts')
 
-  /** 担当者が選択会社に属するか（モック検証。API は assertContact = AKO-CLG-003 と同一） */
-  function contactError(contactId: string | null, companyId: string): { code: string; message: string } | null {
+  /**
+   * 担当者が選択会社に属するか（モック検証。API は assertContact = AKO-CLG-003 と同一の順序:
+   * 存在チェック → 所属チェック）。companyId = null（新規会社 = 照合なし）は既存担当者が所属し得ないため所属エラー
+   */
+  function contactError(contactId: string | null, companyId: string | null): { code: string; message: string } | null {
     if (!contactId) return null
     const c = (contactsTbl.value as Contact[]).find(x => x.id === contactId)
     if (!c) return { code: 'AKO-CLG-003', message: '指定した顧客担当者が見つかりません' }
@@ -251,11 +226,9 @@ export function useCustomerLogs() {
     const e = validate(input)
     if (e) return { ok: false, error: e }
     // 会社は照合のみ先行し、担当者の所属検証を通過してから作成する（失敗時に孤児マスタを残さない）。
-    // 新規会社（照合なし）に既存担当者 id は所属し得ないため不整合として弾く（API と同じ結果）
+    // 新規会社（照合なし = companyId null）は contactError 側が「既存担当者は所属し得ない」を判定する
     const foundCompanyId = lookupCompanyMock(input)
-    const ce = input.contactId && !foundCompanyId
-      ? { code: 'AKO-CLG-003', message: '顧客担当者は選択した会社に所属している必要があります' }
-      : contactError(input.contactId, foundCompanyId ?? '')
+    const ce = contactError(input.contactId, foundCompanyId)
     if (ce) return { ok: false, error: ce }
     const companyId = foundCompanyId ?? createCompanyMock(input)
     const contactId = resolveContactMock(companyId, input)
@@ -296,9 +269,7 @@ export function useCustomerLogs() {
     if (e) return { ok: false, error: e }
     // add と同じ順序: 照合 → 所属検証 → 作成（失敗時に孤児マスタを残さない）
     const foundCompanyId = lookupCompanyMock(input)
-    const ce = input.contactId && !foundCompanyId
-      ? { code: 'AKO-CLG-003', message: '顧客担当者は選択した会社に所属している必要があります' }
-      : contactError(input.contactId, foundCompanyId ?? '')
+    const ce = contactError(input.contactId, foundCompanyId)
     if (ce) return { ok: false, error: ce }
     const companyId = foundCompanyId ?? createCompanyMock(input)
     const contactId = resolveContactMock(companyId, input)

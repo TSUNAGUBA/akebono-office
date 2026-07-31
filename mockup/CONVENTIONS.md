@@ -136,7 +136,8 @@ const di = useDashboardInsight() // buildSegmentSummary/buildCompanySummary（�
 | `UiFilterBar` | slot + #trailing |
 | `UiSearchInput` / `UiSelect` / `UiChipSelect` | v-model |
 | `UiChipTabs` | v-model(string), options({value,label}[])。単一選択のチップ行（カードメニューのカテゴリ切替等。バッチ7h） |
-| `UiMultiCombobox` | v-model(string[]), options({value,label,tag?,tagTone?}[]), single（単一選択モード）。論理名で検索する複数選択オートコンプリート（権限設定の項目指定等）。tag/tagTone は候補行・選択チップの区分バッジ（雇用区分等。バッチ7k）。候補リストは下に収まらないとき上方向に開く（モバイルのボトムシートモーダル対応） |
+| `UiMultiCombobox` | v-model(string[]), options({value,label,tag?,tagTone?}[]), single（単一選択モード）。論理名で検索する複数選択オートコンプリート（権限設定の項目指定等）。tag/tagTone は候補行・選択チップの区分バッジ（雇用区分等。バッチ7k）。候補リストの開閉方向・最大高は `useDropdownDirection` 共通ロジック（UiCombobox と共有 = 2026-07-31）で下に収まらないとき上方向に開く（モバイルのボトムシートモーダル対応） |
+| `UiCombobox` | v-model(string = 選択 id・'' = 未選択/自由入力), v-model:text(string = 入力表示文字列), options({value,label}[]), allowCreate（自由入力の許可。既定 true）, createHint, disabled。**単一選択 + 自由入力**のオートコンプリート（顧客ログの会社・担当者 = 未登録名を「新規登録名」として呼び出し側へ渡す。2026-07-31）。ラベル完全一致は自動選択（重複マスタ防止）。開閉方向は `useDropdownDirection`（UiMultiCombobox と共有） |
 | `UiFormField` | label, required, error, hint |
 | `UiSchemaForm` | fields(FieldDef[]), v-model(Record), errors |
 | `UiStatusBadge` | tone, label, dot |

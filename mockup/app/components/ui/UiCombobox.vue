@@ -5,7 +5,8 @@
  * - 入力がどのラベルとも一致しない場合は自由入力として保持（modelValue = ''・text に入力名）。
  *   呼び出し側が text を「新規登録名」として扱う（例: 顧客ログの会社・担当者 = 保存時にマスタ登録）
  * - 入力がラベルと完全一致（trim）したらその項目を自動選択（重複マスタを作らない）
- * - Enter = 絞り込み先頭を選択 / Esc = 候補を閉じる（開いていなければ親モーダルへ伝播）
+ * - Enter = ①完全一致を選択 ②選択済み・空入力は閉じるだけ（選択を変えない）③絞り込み一致の先頭を選択
+ *   ④一致なしは自由入力（新規登録名）として確定 / Esc = 候補を閉じる（開いていなければ親モーダルへ伝播）
  * - 候補リストの開閉方向は UiMultiCombobox と共通の実測ロジック（useDropdownDirection）
  */
 import { X } from 'lucide-vue-next'
@@ -43,11 +44,18 @@ watch(open, (v) => {
   if (v) updateDirection()
 })
 
+/** 入力文字列そのままの絞り込み結果（Enter の選択対象 = 見えている検索結果と一致させる） */
+const queryFiltered = computed(() => {
+  const q = props.text.trim().toLowerCase()
+  if (!q) return props.options
+  return props.options.filter(o => o.label.toLowerCase().includes(q) || o.value.toLowerCase().includes(q))
+})
+
+/** 表示用の候補（選択済み = 入力が選択ラベルと一致しているときは全候補 = 選び直しやすさ優先） */
 const filtered = computed(() => {
   const q = props.text.trim().toLowerCase()
-  // 選択済み（入力 = 選択ラベル）のときは全候補を出す（選び直しやすさ優先）
-  if (!q || labelOf(props.modelValue).toLowerCase() === q) return props.options
-  return props.options.filter(o => o.label.toLowerCase().includes(q) || o.value.toLowerCase().includes(q))
+  if (!q || (props.modelValue && labelOf(props.modelValue).toLowerCase() === q)) return props.options
+  return queryFiltered.value
 })
 
 /** 入力が既存ラベルと完全一致するか（trim・大小無視 = 重複登録の防止） */
@@ -91,9 +99,20 @@ function onKeydown(e: KeyboardEvent): void {
       open.value = true
       return
     }
-    const first = filtered.value[0]
-    if (first && !isFreeInput.value) select(first.value)
-    else open.value = false // 自由入力を確定（新規登録名として保持）
+    // Enter の優先順（レビュー指摘 M-1: 選択済み・空入力時に無関係な先頭候補へ差し替えない）:
+    // ①完全一致 = その項目を選択 ②選択済み or 空入力 = 閉じるだけ（選択を変えない）
+    // ③絞り込み一致あり = 見えている検索結果の先頭を選択 ④一致なし = 自由入力（新規登録名）として確定
+    if (exactMatch.value) {
+      select(exactMatch.value.value)
+      return
+    }
+    if (props.modelValue || !props.text.trim()) {
+      open.value = false
+      return
+    }
+    const first = queryFiltered.value[0]
+    if (first) select(first.value)
+    else open.value = false
   } else if (e.key === 'ArrowDown') {
     open.value = true
   } else if (e.key === 'Escape') {

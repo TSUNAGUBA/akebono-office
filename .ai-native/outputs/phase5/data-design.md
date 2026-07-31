@@ -39,6 +39,8 @@
 
 ### 1.2 記録系（追記のみ・巻き戻し禁止: 開発原則 2）
 
+> **例外注記（2026-07-31）:** 本セクションの `ReportRead` は業務記録ではなく**閲覧状態**（既読/未読）であり、「追記のみ・巻き戻し禁止」の対象外（「未読に戻す」= 物理削除の取消フローを持つ）。日報・週報エンティティ群との関連が強いため参照性を優先して本表に併置する（行内の SoT 宣言が正）。
+
 | エンティティ | 主要属性 | 機密度 |
 |---|---|---|
 | `PunchRecord` | id, memberId, date, kind(`in`/`out`/`break_start`/`break_end`), at, source(`web`/`mobile`/`fix`), fixedFrom?, fixReason?, approvedBy? | C3 |

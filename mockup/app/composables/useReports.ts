@@ -76,7 +76,10 @@ function loadComments(reportId: string, force = false): Promise<void> {
 
 // ---------- 既読管理（全員の日報 / 全員の週報。オペレーター指示 2026-07-31。SoT = report_reads） ----------
 
-/** 既読済みレポート id（本人分。API モードのキャッシュ。モックは reportReads コレクションが SoT） */
+/** 既読済みレポート id（本人分。API モードのキャッシュ。モックは reportReads コレクションが SoT）。
+ * 期間ロードは既存 Set との和集合で統合する（複数月・複数週の結果を合流させるため）。
+ * 取得中に「未読に戻す」を行うと取得中スナップショットが id を再追加し既読表示へ戻る一時不整合があり得るが、
+ * サーバー側（SoT）は正しく削除済みで次回ロードで自己修復するため受容する（レビュー n-3 = 設計判断） */
 const apiReadIds = ref<{ daily: Set<string>; weekly: Set<string> }>({ daily: new Set(), weekly: new Set() })
 
 function loadDailyReads(month: string, force = false): Promise<void> {
