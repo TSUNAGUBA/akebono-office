@@ -11,7 +11,7 @@
 import { Hono } from 'hono'
 import type pg from 'pg'
 import { DEFAULT_WORKING_DAY_RULE, isWorkingDay } from '../../../shared/domain/business-day'
-import { addDays, nowJstIso, todayJst } from '../../../shared/domain/jst'
+import { addDays, isRealDateKey, nowJstIso, todayJst } from '../../../shared/domain/jst'
 import { canUseFeature, canViewMemberReports, type PermissionSubject } from '../../../shared/domain/permissions'
 import { TOMORROW_PLANS_MAX } from '../../../shared/domain/types'
 import type { PermissionRule, PunchRecord, ReportEntry, TomorrowPlan } from '../../../shared/domain/types'
@@ -517,13 +517,91 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
     }
   })
 
+  // ---------- 既読管理（全員の日報 / 全員の週報の未読可視化。オペレーター指示 2026-07-31） ----------
+  // SoT = report_reads（0047）。閲覧者 × 対象レポートごとに 1 行・read_at は初回既読時刻を保持。
+  // 参照可否は一覧と同じガード（日報 = guardCommentTarget / 週報 = 提出済み + F-16-6）を通してから記録する
+
+  /** 週報の既読対象ガード（本人 = 常に可 / 他人 = 提出済み + 参照権限。違反は 404 = 存在を秘匿） */
+  async function guardWeeklyReadTarget(user: AuthUser, reportId: string): Promise<void> {
+    const { rows } = await pool.query<{ memberId: string; status: string }>(
+      `SELECT member_id AS "memberId", status FROM weekly_reports WHERE id = $1`, [reportId])
+    const target = rows[0]
+    if (!target) throw err('AKO-GEN-002', '対象の週報が見つかりません', 404)
+    if (target.memberId !== user.id) {
+      if (target.status !== 'submitted') throw err('AKO-GEN-002', '対象の週報が見つかりません', 404)
+      const rules = await activePermissionRules(pool)
+      if (rules.length > 0 && !canViewMemberReports(rules, subjectOf(user), target.memberId)) {
+        throw err('AKO-GEN-002', '対象の週報が見つかりません', 404)
+      }
+    }
+  }
+
+  // 既読済みレポート id 一覧（本人のみ。一覧表示と同じ期間指定を必須にし全履歴ダンプを許容しない
+  // = daily scope=all の month 必須と同型）
+  app.get('/reads', async (c) => {
+    const user = c.get('user')
+    const kind = c.req.query('kind')
+    if (kind === 'daily') {
+      const month = c.req.query('month') ?? ''
+      if (!/^\d{4}-\d{2}$/.test(month)) throw err('AKO-GEN-001', 'kind=daily では month（YYYY-MM）を指定してください', 400)
+      const { rows } = await pool.query<{ reportId: string }>(
+        `SELECT rr.report_id AS "reportId" FROM report_reads rr
+         JOIN daily_reports d ON d.id = rr.report_id
+         WHERE rr.member_id = $1 AND rr.report_kind = 'daily' AND to_char(d.date, 'YYYY-MM') = $2`,
+        [user.id, month])
+      return c.json({ data: rows.map(r => r.reportId) })
+    }
+    if (kind === 'weekly') {
+      const weekStart = c.req.query('weekStart') ?? ''
+      // 実在日チェックまで行う（2026-02-30 等は ::date キャストの 22007→500 を出さず 400 で弾く）
+      if (!isRealDateKey(weekStart)) {
+        throw err('AKO-GEN-001', 'kind=weekly では weekStart（YYYY-MM-DD）を指定してください', 400)
+      }
+      const { rows } = await pool.query<{ reportId: string }>(
+        `SELECT rr.report_id AS "reportId" FROM report_reads rr
+         JOIN weekly_reports w ON w.id = rr.report_id
+         WHERE rr.member_id = $1 AND rr.report_kind = 'weekly' AND w.week_start = $2::date`,
+        [user.id, weekStart])
+      return c.json({ data: rows.map(r => r.reportId) })
+    }
+    throw err('AKO-GEN-001', 'kind（daily / weekly）を指定してください', 400)
+  })
+
+  // 既読にする（冪等: ON CONFLICT DO NOTHING = 再実行で read_at を巻き戻さない = 原則2）
+  app.put('/reads', async (c) => {
+    const user = c.get('user')
+    const body = await c.req.json().catch(() => ({})) as { kind?: string; reportId?: string }
+    const reportId = String(body.reportId ?? '').trim()
+    if (!reportId) throw err('AKO-GEN-001', '対象レポート（reportId）を指定してください', 400)
+    if (body.kind === 'daily') await guardCommentTarget(c, reportId)
+    else if (body.kind === 'weekly') await guardWeeklyReadTarget(user, reportId)
+    else throw err('AKO-GEN-001', 'kind（daily / weekly）を指定してください', 400)
+    await pool.query(
+      `INSERT INTO report_reads (member_id, report_kind, report_id) VALUES ($1, $2, $3)
+       ON CONFLICT (member_id, report_kind, report_id) DO NOTHING`,
+      [user.id, body.kind, reportId])
+    return c.json({ data: { reportId, kind: body.kind, read: true } })
+  })
+
+  // 未読に戻す（既読付与の取消フロー = 原則9.5。既読は閲覧状態のため物理削除・行がなくても成功 = 冪等）
+  app.delete('/reads/:kind/:reportId', async (c) => {
+    const user = c.get('user')
+    const kind = c.req.param('kind')
+    const reportId = c.req.param('reportId')
+    if (kind !== 'daily' && kind !== 'weekly') throw err('AKO-GEN-001', 'kind（daily / weekly）を指定してください', 400)
+    await pool.query(
+      `DELETE FROM report_reads WHERE member_id = $1 AND report_kind = $2 AND report_id = $3`,
+      [user.id, kind, reportId])
+    return c.json({ data: { reportId, kind, read: false } })
+  })
+
   // ---------- 週次 AI インサイト（バッチ7g → バッチ7j: 永続化・前日まで前提・全体/個別分離） ----------
 
   /** weekStart の検証（YYYY-MM-DD・実在日・月曜）。不正は AKO-GEN-001 400 */
   function validWeekStart(weekStart: string): string {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) throw err('AKO-GEN-001', 'weekStart（YYYY-MM-DD）を指定してください', 400)
-    const wsDate = new Date(`${weekStart}T00:00:00Z`)
-    if (Number.isNaN(wsDate.getTime()) || wsDate.toISOString().slice(0, 10) !== weekStart || wsDate.getUTCDay() !== 1) {
+    // 実在日は共通判定（shared/domain/jst）+ 月曜チェック
+    if (!isRealDateKey(weekStart) || new Date(`${weekStart}T00:00:00Z`).getUTCDay() !== 1) {
       throw err('AKO-GEN-001', 'weekStart には実在する週初め（月曜）の日付を指定してください', 400)
     }
     return addDays(weekStart, 6)

@@ -14,7 +14,7 @@
  */
 import type { Ref } from 'vue'
 import type {
-  DailyReport, ReportComment, ReportEntry, Result, TomorrowPlan, WeeklyReport,
+  DailyReport, ReportComment, ReportEntry, ReportRead, ReportReadKind, Result, TomorrowPlan, WeeklyReport,
 } from '~/types/domain'
 import { TOMORROW_PLANS_MAX } from '../../../shared/domain/types'
 import { addDays, weekdayOf } from '~/utils/format'
@@ -74,11 +74,34 @@ function loadComments(reportId: string, force = false): Promise<void> {
   }, force)
 }
 
+// ---------- 既読管理（全員の日報 / 全員の週報。オペレーター指示 2026-07-31。SoT = report_reads） ----------
+
+/** 既読済みレポート id（本人分。API モードのキャッシュ。モックは reportReads コレクションが SoT）。
+ * 期間ロードは既存 Set との和集合で統合する（複数月・複数週の結果を合流させるため）。
+ * 取得中に「未読に戻す」を行うと取得中スナップショットが id を再追加し既読表示へ戻る一時不整合があり得るが、
+ * サーバー側（SoT）は正しく削除済みで次回ロードで自己修復するため受容する（レビュー n-3 = 設計判断） */
+const apiReadIds = ref<{ daily: Set<string>; weekly: Set<string> }>({ daily: new Set(), weekly: new Set() })
+
+function loadDailyReads(month: string, force = false): Promise<void> {
+  return apiLoadOnce(`rep:reads:daily:${month}`, async () => {
+    const ids = await apiFetch<string[]>('/v1/reports/reads', { query: { kind: 'daily', month } })
+    apiReadIds.value = { ...apiReadIds.value, daily: new Set([...apiReadIds.value.daily, ...ids]) }
+  }, force)
+}
+
+function loadWeeklyReads(weekStart: string, force = false): Promise<void> {
+  return apiLoadOnce(`rep:reads:weekly:${weekStart}`, async () => {
+    const ids = await apiFetch<string[]>('/v1/reports/reads', { query: { kind: 'weekly', weekStart } })
+    apiReadIds.value = { ...apiReadIds.value, weekly: new Set([...apiReadIds.value.weekly, ...ids]) }
+  }, force)
+}
+
 // ログイン確立・切替時に取り直す（キーの解除は resetApiData が一括で行う）
 onApiReset(() => {
   apiDaily.value = []
   apiWeekly.value = []
   apiComments.value = []
+  apiReadIds.value = { daily: new Set(), weekly: new Set() }
 })
 
 export interface DailyReportInput {
@@ -272,7 +295,10 @@ export function useReports() {
    * 下書きは本人以外に見せない（API も scope=all は提出済みのみを返す）
    */
   function allSubmitted(month: string): DailyReport[] {
-    if (isApi && /^\d{4}-\d{2}$/.test(month)) void loadAllMonth(month)
+    if (isApi && /^\d{4}-\d{2}$/.test(month)) {
+      void loadAllMonth(month)
+      void loadDailyReads(month) // 未読可視化用の既読 id も同じ期間単位で遅延ロード
+    }
     return dailyReports.value
       .filter(r => r.status === 'submitted' && r.date.startsWith(month))
       // 日報参照権限（F-16-6）: deny された対象者の日報は一覧に出さない（API 側でも同じ絞り込み）
@@ -526,6 +552,60 @@ export function useReports() {
     return { ok: true, id: commentId }
   }
 
+  // ---------- 既読管理（全員の日報 / 全員の週報の未読可視化。オペレーター指示 2026-07-31） ----------
+
+  const reportReads = tbl('reportReads')
+
+  /** 既読か（本人の閲覧状態）。自分の日報・週報は既読概念の対象外 = 画面側で未読表示から除外する */
+  function isReportRead(kind: ReportReadKind, reportId: string): boolean {
+    if (isApi) return apiReadIds.value[kind].has(reportId)
+    return (reportReads.value as ReportRead[]).some(r =>
+      r.memberId === currentUser.value.id && r.reportKind === kind && r.reportId === reportId)
+  }
+
+  /**
+   * 既読にする（詳細を開いたときに呼ぶ）。冪等: 既読済みなら何もしない（readAt を巻き戻さない = 原則2）。
+   * 既読付けは閲覧の補助処理のため、API 失敗でも閲覧フローを止めない（原則4。次回ロードで再同期）
+   */
+  async function markReportRead(kind: ReportReadKind, reportId: string): Promise<void> {
+    if (isReportRead(kind, reportId)) return
+    if (isApi) {
+      try {
+        await apiFetch('/v1/reports/reads', { method: 'PUT', body: { kind, reportId } })
+        const set = new Set(apiReadIds.value[kind])
+        set.add(reportId)
+        apiReadIds.value = { ...apiReadIds.value, [kind]: set }
+      } catch {
+        // 非ブロッキング（未読表示が残るだけ。再閲覧・再ロードで自己修復）
+      }
+      return
+    }
+    reportReads.value = [...(reportReads.value as ReportRead[]), {
+      memberId: currentUser.value.id,
+      reportKind: kind,
+      reportId,
+      readAt: nowJstIso(),
+    }]
+    commit()
+  }
+
+  /** 未読に戻す（既読付与の取消フロー = 原則9.5）。行がなくても成功（冪等） */
+  async function markReportUnread(kind: ReportReadKind, reportId: string): Promise<Result> {
+    if (isApi) {
+      const res = await apiResult(() => apiFetch(`/v1/reports/reads/${kind}/${reportId}`, { method: 'DELETE' }))
+      if (res.ok) {
+        const set = new Set(apiReadIds.value[kind])
+        set.delete(reportId)
+        apiReadIds.value = { ...apiReadIds.value, [kind]: set }
+      }
+      return res
+    }
+    reportReads.value = (reportReads.value as ReportRead[]).filter(r =>
+      !(r.memberId === currentUser.value.id && r.reportKind === kind && r.reportId === reportId))
+    commit()
+    return { ok: true }
+  }
+
   // ---------- 週報 ----------
 
   /** 週の開始日（月曜） */
@@ -555,7 +635,10 @@ export function useReports() {
    * 下書きは本人以外に見せない（提出済みのみ）
    */
   function allSubmittedWeeklies(weekStart: string): WeeklyReport[] {
-    if (isApi) void loadWeeklyAll(weekStart)
+    if (isApi) {
+      void loadWeeklyAll(weekStart)
+      void loadWeeklyReads(weekStart) // 未読可視化用の既読 id も同じ週単位で遅延ロード
+    }
     return weeklyReports.value
       .filter(r => r.status === 'submitted' && r.weekStart === weekStart)
       .filter(r => perms.canViewMemberReports(r.memberId))
@@ -654,6 +737,9 @@ export function useReports() {
     timelineForDates,
     touchTeamDates,
     allSubmitted,
+    isReportRead,
+    markReportRead,
+    markReportUnread,
     hoursGapMinutes,
     gapOf,
     saveDraft,

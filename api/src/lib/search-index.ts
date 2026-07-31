@@ -291,22 +291,31 @@ export async function buildSearchDocs(pool: pg.Pool): Promise<SearchDocInput[]> 
   // owner_member_id = 記録者にすることで searchDocsFor は「本人のログのみ」を返す（allOwners は note 限定 =
   // 他メンバーの顧客ログは AI 文脈へ供給しない安全側の既定。UI の参照権限 canViewMemberCustomerLog とは別軸）
   const { rows: clogRows } = await pool.query<{
-    id: string; memberId: string; logDate: string; logTime: string | null
-    companyId: string; contactId: string | null; title: string; body: string
+    id: string; memberId: string; logDate: string; logTime: string | null; endTime: string | null
+    companyId: string; contactId: string | null; staffMemberId: string | null; tags: string[]
+    title: string; body: string; minutesMemo: string
   }>(
     `SELECT id, member_id AS "memberId", log_date::text AS "logDate", log_time AS "logTime",
-            company_id AS "companyId", contact_id AS "contactId", title, body
+            end_time AS "endTime", company_id AS "companyId", contact_id AS "contactId",
+            staff_member_id AS "staffMemberId", tags, title, body, minutes_memo AS "minutesMemo"
      FROM customer_logs WHERE active = true ORDER BY id LIMIT 5000`)
   for (const cl of clogRows) {
     const segments: SearchSegment[] = []
     const co = companyName.get(cl.companyId)
-    segments.push(seg(`日時: ${cl.logTime ? `${cl.logDate} ${cl.logTime}` : cl.logDate}`))
+    const when = cl.logTime
+      ? `${cl.logDate} ${cl.logTime}${cl.endTime ? `〜${cl.endTime}` : ''}`
+      : cl.logDate
+    segments.push(seg(`日時: ${when}`))
+    if ((cl.tags ?? []).length > 0) segments.push(seg(`属性タグ: ${cl.tags.join('、')}`, c('customer_logs', 'tags')))
     if (co) segments.push(seg(`顧客: ${co}`, c('companies', 'name')))
     const contact = cl.contactId ? contactName.get(cl.contactId) : undefined
     if (contact) segments.push(seg(`担当者: ${contact}`, c('contacts', 'name')))
+    const staff = cl.staffMemberId ? memberName.get(cl.staffMemberId) : undefined
+    if (staff) segments.push(seg(`自社担当者: ${staff}`, c('members', 'name')))
     const author = memberName.get(cl.memberId)
     if (author) segments.push(seg(`記録者: ${author}`, c('members', 'name')))
-    if (cl.body) segments.push(seg(capCp(cl.body, 1500), c('customer_logs', 'body')))
+    if (cl.body) segments.push(seg(`担当者メモ: ${capCp(cl.body, 1500)}`, c('customer_logs', 'body')))
+    if (cl.minutesMemo) segments.push(seg(`議事録メモ: ${capCp(cl.minutesMemo, 1500)}`, c('customer_logs', 'minutes_memo')))
     docs.push({
       sourceKind: 'customer-log', sourceId: cl.id,
       title: cl.title || `${co ?? '顧客'}との会話（${cl.logDate}）`, aliases: [], segments,
