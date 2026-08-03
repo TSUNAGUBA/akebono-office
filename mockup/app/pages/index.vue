@@ -1,22 +1,22 @@
 <script setup lang="ts">
 /**
  * ダッシュボード（F-01）
- * カード型メニュー + 通知フィードのみを配置する（2026-07-16 オペレーター指示）。
+ * カード型メニュー + 通知フィードを配置する（2026-07-16 オペレーター指示）。
+ * 表示・配置（セクション構成・メニュー要素の配置・通知欄の位置）はテンプレートから選択でき、
+ * ユーザー設定 > テナント設定 > デフォルト の順で解決する（useDashboardLayout。2026-08-03）。
  * - 打刻はヘッダーの「タイムカード」ボタン → モーダル（layouts/default.vue）
  * - 売上サマリは 売上管理（/sales）、稼働状況サマリは 提供システム稼働状況（/status）へ独立
  */
-import { CheckCheck } from 'lucide-vue-next'
-import type { AppNotification } from '~/types/domain'
-import type { MenuCard, TabItem } from '~/types/ui'
-import { fmtDateLong, fmtDateTime } from '~/utils/format'
-import { NOTIFICATION_KIND_LABELS } from '~/utils/labels'
+import { LayoutTemplate } from 'lucide-vue-next'
+import type { MenuCard } from '~/types/ui'
+import { categorizeCards, planDashboardCards } from '~/utils/dashboard-layout'
+import { fmtDateLong } from '~/utils/format'
 import { MENU_CARDS } from '~/utils/menu-registry'
 
 const { currentUser, currentUserId, isAdmin } = useCurrentUser()
-const { mine, unreadCount, markRead, markAllRead } = useNotifications()
+const { unreadCount } = useNotifications()
 const { isEnabled } = useAppSettings()
 const { pendingFor } = useWorkflow()
-const { show } = useToast()
 
 // ---------- 挨拶 ----------
 const greeting = computed(() => {
@@ -31,19 +31,29 @@ const todayLong = computed(() => fmtDateLong(nowJstIso()))
 const { canPath, can } = usePermissions()
 const canCompanyDashboard = computed(() => can('sales'))
 
-// ---------- AKEBONO 業務（業態別アプリをトップに配置。2026-07-28） ----------
-// 機能トグル + 権限を満たし、かつ業態が 1 件以上あるときのみ専用セクションを表示する
-// （業態未登録時はセクションごと出さない = ダッシュボードに空状態を出さない）。
+// ---------- レイアウト（表示・配置カスタマイズ。ユーザー > テナント > デフォルトで解決） ----------
+const { effectiveLayout } = useDashboardLayout()
+const layoutOpen = ref(false)
+/** 通知欄の位置（side=右カラム / bottom=メニュー下 / hidden=非表示） */
+const notifPlacement = computed(() => effectiveLayout.value.options.notifications)
+/** カード密度（compact = 余白を詰める） */
+const dense = computed(() => effectiveLayout.value.options.density === 'compact')
+
+// ---------- AKEBONO 業務（業態別アプリをトップに配置。2026-07-28 / カテゴリ配置対応 2026-08-03 #24） ----------
+// akebonoAccessible = そもそも AKEBONO が使えるか（機能トグル + 権限 + 業態 1 件以上）。
+// これが false のときは業態カードをどこにも出さない（プールにも入れない）。
 const { activeSegments } = useCurrentSegment()
-const showAkebono = computed(() =>
+const akebonoAccessible = computed(() =>
   isEnabled('akebono') && canPath('/akebono') && activeSegments.value.length > 0)
+// showAkebono = 専用「AKEBONO 業務（業態別）」セクションを出すか（利用可能 AND レイアウトで表示 ON）。
+// false（focus テンプレート等）のときは業態カードを通常メニューのプールへ混ぜる（未割当は「その他」へ）。
+const showAkebono = computed(() =>
+  akebonoAccessible.value && effectiveLayout.value.options.showAkebono)
 
 // ---------- 承認待ち件数（useWorkflow.pendingFor が SoT。代理承認・個人指定も考慮済み） ----------
 const pendingApprovals = computed(() => pendingFor(currentUserId.value).length)
 
-// ---------- カード型メニュー（定義 = utils/menu-registry.ts・カテゴリ = useMenuCategories。バッチ7h） ----------
-const { categorize } = useMenuCategories('dashboard')
-
+// ---------- カード型メニュー（定義 = utils/menu-registry.ts・配置 = effectiveLayout.sections） ----------
 /** カードのランタイムバッジ（レジストリは静的定義のみ） */
 function badgeOf(id: string): number | undefined {
   if (id === 'workflow') return pendingApprovals.value
@@ -60,12 +70,26 @@ const internalCards = computed<MenuCard[]>(() =>
       && canPath(d.to))
     .map(d => ({ id: d.id, title: d.title, description: d.description, icon: d.icon, to: d.to, badge: badgeOf(d.id) })))
 
-// 外部リンク（設定 > 外部リンク）も基本メニューと同じくカテゴリ配置対象にする（オペレーター指示 2026-08-03）。
-// 未割当の外部リンクは categorize が「その他」へ入れる = 基本メニューと同じ挙動（消えない）
+// 外部リンク（設定 > 外部リンク）・AKEBONO 業態アプリも基本メニューと同じくセクション配置対象にする
+// （オペレーター指示 2026-08-03 #24）。未割当は categorize が「その他」へ入れる = 基本メニューと同じ挙動（消えない）
 const { externalCards } = useExternalLinkCards()
-const visibleCards = computed<MenuCard[]>(() => [...internalCards.value, ...externalCards.value])
+const { akebonoCards } = useAkebonoAppCards()
 
-const menuSections = computed(() => categorize(visibleCards.value))
+// カードプールと専用 AKEBONO セクションの振り分け（二重表示防止 = planDashboardCards）。
+// AKEBONO 利用不可時は akebonoCards を空で渡す（= どこにも出さない）。
+const cardPlan = computed(() => planDashboardCards({
+  internalCards: internalCards.value,
+  externalCards: externalCards.value,
+  akebonoCards: akebonoAccessible.value ? akebonoCards.value : [],
+  sections: effectiveLayout.value.sections,
+  showAkebono: showAkebono.value,
+}))
+const visibleCards = computed<MenuCard[]>(() => cardPlan.value.pool)
+// 専用「AKEBONO 業務（業態別）」セクションが担当する未割当業態 id（割当済み業態はセクション配置側で表示）
+const unassignedAkebonoIds = computed(() => cardPlan.value.unassignedAkebonoSegmentIds)
+
+// レイアウトのセクション構成でグループ化（未割当カードは「その他」・空セクションは除去）
+const menuSections = computed(() => categorizeCards(visibleCards.value, effectiveLayout.value.sections))
 
 // カテゴリチップ（選択はページごとに sessionStorage 記憶 = 軽い状態。アカウント設定ではない）
 const selectedCategory = ref('all')
@@ -88,54 +112,6 @@ const shownSections = computed(() =>
   selectedCategory.value === 'all'
     ? menuSections.value
     : menuSections.value.filter(s => s.id === selectedCategory.value))
-
-// ---------- 通知フィード（エスカレーション / 承認依頼 / 稟議 のタブ分け = オペレーター指示 2026-07-22） ----------
-
-type NotificationCategory = 'escalation' | 'approval' | 'workflow' | 'other'
-
-/**
- * 通知のカテゴリ判定。稟議 = リンク先が /workflow の通知（承認依頼・決裁・却下・差戻し）、
- * 承認依頼 = それ以外の approval 通知（打刻修正・休暇など）、エスカレーション = kind そのまま
- */
-function categoryOf(n: AppNotification): NotificationCategory {
-  if (n.kind === 'escalation') return 'escalation'
-  const bare = (n.link || '').split('?')[0] ?? ''
-  if (bare === '/workflow' || bare.startsWith('/workflow/')) return 'workflow'
-  if (n.kind === 'approval') return 'approval'
-  return 'other'
-}
-
-const notifTab = ref('all')
-const notifTabs = computed<TabItem[]>(() => {
-  const unreadOf = (c: NotificationCategory): number =>
-    mine.value.filter(n => !n.read && categoryOf(n) === c).length
-  return [
-    { key: 'all', label: 'すべて', badge: unreadCount.value },
-    { key: 'escalation', label: 'エスカレーション', badge: unreadOf('escalation') },
-    { key: 'approval', label: '承認依頼', badge: unreadOf('approval') },
-    { key: 'workflow', label: '稟議', badge: unreadOf('workflow') },
-  ]
-})
-
-/** 未読のみ表示（オペレーター指示 2026-08-03）。ダッシュボードのサイド通知欄でも既読を隠して確認できる */
-const unreadOnly = ref(false)
-
-/** カテゴリタブ ∩ 未読フィルタを適用した通知（サイド欄は件数に余裕があるため 8 件まで） */
-const filteredNotifications = computed(() =>
-  mine.value
-    .filter(n => notifTab.value === 'all' || categoryOf(n) === notifTab.value)
-    .filter(n => !unreadOnly.value || !n.read))
-const recentNotifications = computed(() => filteredNotifications.value.slice(0, 8))
-
-function openNotification(n: AppNotification): void {
-  markRead(n.id)
-  if (n.link) navigateTo(n.link)
-}
-
-function onMarkAllRead(): void {
-  markAllRead()
-  show('すべての通知を既読にしました', 'ok')
-}
 </script>
 
 <template>
@@ -143,15 +119,25 @@ function onMarkAllRead(): void {
     <UiPageHeader
       :title="`${greeting}、${currentUser.name} さん`"
       :description="todayLong"
-    />
+    >
+      <template #actions>
+        <button type="button" class="btn btn-sm" @click="layoutOpen = true">
+          <LayoutTemplate class="h-3.5 w-3.5" aria-hidden="true" />
+          レイアウト
+        </button>
+      </template>
+    </UiPageHeader>
 
-    <!-- 2 カラム: 左 = メニュー / 右 = 通知欄（ダッシュボードを開いた時点で見える = オペレーター指示 2026-08-03）。
-         モバイルは縦積みで通知欄を先頭に置き、開いてすぐ通知が見えるようにする -->
-    <div class="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
+    <!-- 通知位置に応じてレイアウトを切替。
+         side = 2 カラム（左メニュー / 右通知欄・現行）。モバイルは縦積みで通知欄を先頭に置く。
+         bottom = 1 カラム（メニュー下に通知欄）。hidden = 通知欄なし。 -->
+    <div class="grid items-start gap-4" :class="notifPlacement === 'side' ? 'lg:grid-cols-[minmax(0,1fr)_340px]' : ''">
       <!-- メイン: メニュー -->
-      <div class="order-2 grid gap-3 lg:order-1">
-        <!-- AKEBONO 業務（業態別アプリ。押下でその業態の業務へ入る = ヘッダ切替に依存しない導線） -->
-        <section v-if="showAkebono" class="grid gap-1.5" aria-label="AKEBONO 業務">
+      <div class="grid gap-3" :class="notifPlacement === 'side' ? 'order-2 lg:order-1' : ''">
+        <!-- AKEBONO 業務（業態別アプリ。押下でその業態の業務へ入る = ヘッダ切替に依存しない導線）。
+             メニューカテゴリへ割り当てた業態はセクション配置側に出るため、ここは未割当業態のみを表示する
+             （= 二重表示を防ぐ。全業態が割当済みなら専用セクションごと出さない。2026-08-03 #24） -->
+        <section v-if="showAkebono && unassignedAkebonoIds.length > 0" class="grid gap-1.5" aria-label="AKEBONO 業務">
           <div class="flex items-center justify-between gap-2">
             <p class="text-[11px] font-bold text-muted">AKEBONO 業務（業態別）</p>
             <span class="flex items-center gap-3">
@@ -159,79 +145,31 @@ function onMarkAllRead(): void {
               <NuxtLink to="/akebono" class="link text-[11px] font-semibold">ハブを開く</NuxtLink>
             </span>
           </div>
-          <AkebonoSegmentApps />
+          <AkebonoSegmentApps :segment-ids="unassignedAkebonoIds" />
         </section>
 
-        <!-- カード型メニュー（カテゴリチップで絞り込み。バッチ7h） -->
+        <!-- カード型メニュー（カテゴリチップで絞り込み） -->
         <section class="grid gap-3" aria-label="メニュー">
           <UiChipTabs v-model="selectedCategory" :options="categoryChips" aria-label="メニューカテゴリ" />
           <div v-for="sec in shownSections" :key="sec.id">
             <p class="mb-1.5 text-[11px] font-bold text-muted">{{ sec.label }}</p>
-            <UiCardMenu :items="sec.cards" />
+            <UiCardMenu :items="sec.cards" :dense="dense" />
           </div>
         </section>
+
+        <!-- 通知欄（bottom = メニュー下に全幅で配置） -->
+        <OfficeDashboardNotifications v-if="notifPlacement === 'bottom'" />
       </div>
 
-      <!-- 通知欄（ページ側。lg では上部に張り付く。エスカレーション / 承認依頼 / 稟議 のタブ + 未読のみフィルタ） -->
-      <aside class="order-1 lg:sticky lg:top-3 lg:order-2" aria-label="通知">
-        <UiSectionCard
-          title="通知"
-          :description="`未読 ${unreadCount} 件${unreadOnly ? '（未読のみ表示中）' : ''}`"
-          flush
-        >
-          <template #actions>
-            <NuxtLink to="/inbox" class="link text-xs font-semibold">すべて見る</NuxtLink>
-          </template>
-          <div class="grid gap-2 px-3 pt-1">
-            <UiTabBar v-model="notifTab" :tabs="notifTabs" aria-label="通知カテゴリ" />
-            <div class="flex items-center justify-between gap-2">
-              <button
-                type="button"
-                class="btn btn-sm"
-                :class="unreadOnly ? 'btn-primary' : ''"
-                :aria-pressed="unreadOnly"
-                @click="unreadOnly = !unreadOnly"
-              >
-                未読のみ
-              </button>
-              <button type="button" class="btn btn-sm" :disabled="unreadCount === 0" @click="onMarkAllRead">
-                <CheckCheck class="h-3.5 w-3.5" aria-hidden="true" />
-                すべて既読
-              </button>
-            </div>
-          </div>
-          <UiEmptyState
-            v-if="recentNotifications.length === 0"
-            icon="BellOff"
-            :title="unreadOnly ? '未読の通知はありません' : '通知はありません'"
-            :hint="unreadOnly ? '「未読のみ」を解除すると既読も表示されます' : undefined"
-          />
-          <ul v-else class="divide-y divide-[var(--c-line)]">
-            <li v-for="n in recentNotifications" :key="n.id">
-              <button
-                type="button"
-                class="flex w-full min-h-11 items-start gap-2.5 px-3 py-2 text-left transition-colors hover:bg-brand-soft"
-                :class="n.read ? '' : 'bg-brand-soft/50'"
-                @click="openNotification(n)"
-              >
-                <span
-                  class="mt-1.5 h-2 w-2 shrink-0 rounded-full"
-                  :class="n.read ? 'bg-transparent' : 'bg-brand'"
-                  :aria-label="n.read ? undefined : '未読'"
-                />
-                <span class="min-w-0 flex-1">
-                  <span class="flex flex-wrap items-center gap-1.5">
-                    <UiStatusBadge :label="NOTIFICATION_KIND_LABELS[n.kind]" tone="neutral" />
-                    <span class="truncate text-[13px]" :class="n.read ? 'text-sub' : 'font-bold'">{{ n.title }}</span>
-                  </span>
-                  <span class="mt-0.5 block truncate text-xs text-muted">{{ n.body }}</span>
-                </span>
-                <span class="num shrink-0 pt-0.5 text-[11px] text-muted">{{ fmtDateTime(n.at) }}</span>
-              </button>
-            </li>
-          </ul>
-        </UiSectionCard>
+      <!-- 通知欄（side = 右カラム。lg では上部に張り付く） -->
+      <aside v-if="notifPlacement === 'side'" class="order-1 lg:sticky lg:top-3 lg:order-2" aria-label="通知">
+        <OfficeDashboardNotifications />
       </aside>
     </div>
+
+    <!-- レイアウト選択（テンプレート + プレビュー + 適用スコープ） -->
+    <UiModal :open="layoutOpen" title="ダッシュボードのレイアウト" width="780px" @close="layoutOpen = false">
+      <OfficeDashboardLayoutPicker />
+    </UiModal>
   </div>
 </template>

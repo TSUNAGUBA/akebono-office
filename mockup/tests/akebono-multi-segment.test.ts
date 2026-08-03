@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { BusinessSegment } from '~/types/akebono'
 import {
-  AKEBONO_APP_KEYS, INDUSTRY_DEFAULT_ICON, INDUSTRY_PRESET, presetAppConfigsForSegments,
+  akebonoSegmentCard, akebonoSegmentCardId, AKEBONO_APP_KEYS,
+  AKEBONO_SEGMENT_CARD_PREFIX, INDUSTRY_CARD_ICON, INDUSTRY_DEFAULT_ICON, INDUSTRY_PRESET,
+  parseAkebonoSegmentCardId, presetAppConfigsForSegments,
   presetAppsForSegment, resolveDefaultSegmentId, segmentAppName, segmentFieldDefaults,
   segmentIconKey,
 } from '~/utils/akebono'
@@ -115,5 +117,61 @@ describe('segmentFieldDefaults（商品登録の既定値）', () => {
     const empty = { unitId: null, billingType: null, variantAxis1Label: null, variantAxis2Label: null }
     expect(segmentFieldDefaults(null)).toEqual(empty)
     expect(segmentFieldDefaults(undefined)).toEqual(empty)
+  })
+})
+
+// ---------- AKEBONO 業態アプリのメニューカード化（#24。useAkebonoAppCards の写像 SoT） ----------
+
+describe('akebonoSegmentCardId / parseAkebonoSegmentCardId（安定 id）', () => {
+  it('業態 id から akebono-seg:<id> を作る', () => {
+    expect(akebonoSegmentCardId('seg-01')).toBe('akebono-seg:seg-01')
+    expect(akebonoSegmentCardId('seg-01').startsWith(AKEBONO_SEGMENT_CARD_PREFIX)).toBe(true)
+  })
+  it('akebono カード id からは業態 id を復元し、それ以外は null（基本メニュー・外部リンクと区別）', () => {
+    expect(parseAkebonoSegmentCardId('akebono-seg:seg-01')).toBe('seg-01')
+    expect(parseAkebonoSegmentCardId('timecard')).toBeNull()
+    expect(parseAkebonoSegmentCardId('el-1234')).toBeNull()
+  })
+  it('往復で一致する（id → parse → 元の業態 id）', () => {
+    expect(parseAkebonoSegmentCardId(akebonoSegmentCardId('seg-xyz'))).toBe('seg-xyz')
+  })
+})
+
+describe('INDUSTRY_CARD_ICON（業種タイプ別 lucide アイコン）', () => {
+  it('#24 指定のマッピングに一致する', () => {
+    expect(INDUSTRY_CARD_ICON).toEqual({
+      retail: 'Store',
+      maker: 'Factory',
+      logistics: 'Truck',
+      it_service: 'MonitorSmartphone',
+      other: 'LayoutGrid',
+    })
+  })
+})
+
+describe('akebonoSegmentCard（業態 → MenuCard の写像）', () => {
+  it('id 形式・title（appName 優先）・description・icon・to を組み立てる', () => {
+    const s = { ...seg('seg-01', 'retail'), appName: '雑貨ストア' }
+    const card = akebonoSegmentCard(s, 5)
+    expect(card).toEqual({
+      id: 'akebono-seg:seg-01',
+      title: '雑貨ストア',
+      description: '小売業・5 アプリ',
+      icon: 'Store',
+      to: '/akebono?seg=seg-01',
+    })
+  })
+
+  it('appName 未設定は業態名にフォールバックし、icon は業種タイプで決まる', () => {
+    const card = akebonoSegmentCard(seg('seg-02', 'it_service'), 0)
+    expect(card.title).toBe('seg-02')
+    expect(card.icon).toBe('MonitorSmartphone')
+    expect(card.description).toBe('情報サービス業・0 アプリ')
+  })
+
+  it('業種タイプごとに icon が切り替わる', () => {
+    expect(akebonoSegmentCard(seg('a', 'maker'), 1).icon).toBe('Factory')
+    expect(akebonoSegmentCard(seg('b', 'logistics'), 1).icon).toBe('Truck')
+    expect(akebonoSegmentCard(seg('c', 'other'), 1).icon).toBe('LayoutGrid')
   })
 })

@@ -11,6 +11,8 @@ defineProps<{
   items: MenuCard[]
   /** グリッド列数（md 以上） */
   cols?: number
+  /** 密度（compact でカード余白を詰める。ダッシュボードのレイアウト density 用） */
+  dense?: boolean
 }>()
 
 function iconOf(name: string) {
@@ -27,8 +29,8 @@ function iconOf(name: string) {
         :href="item.href || undefined"
         :target="item.href ? '_blank' : undefined"
         :rel="item.href ? 'noopener noreferrer' : undefined"
-        class="card group flex h-full items-start gap-3 p-3 transition-colors"
-        :class="item.disabled ? 'opacity-55' : 'hover:border-brand'"
+        class="card group flex h-full items-start transition-colors"
+        :class="[item.disabled ? 'opacity-55' : 'hover:border-brand', dense ? 'gap-2 p-2' : 'gap-3 p-3']"
       >
         <span class="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-soft text-brand">
           <component :is="iconOf(item.icon)" class="h-5 w-5" aria-hidden="true" />

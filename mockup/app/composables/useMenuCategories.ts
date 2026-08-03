@@ -7,37 +7,14 @@
  */
 import type { MenuCard } from '~/types/ui'
 import {
-  DEFAULT_MENU_CATEGORIES, type MenuArea, type MenuCategoryDef,
-  OTHER_CATEGORY_ID, OTHER_CATEGORY_LABEL,
-} from '~/utils/menu-registry'
+  categorizeCards, type CategorizedCards, parseMenuSections,
+} from '~/utils/dashboard-layout'
+import { DEFAULT_MENU_CATEGORIES, type MenuArea, type MenuCategoryDef } from '~/utils/menu-registry'
 
-export interface CategorizedCards {
-  id: string
-  label: string
-  cards: MenuCard[]
-}
+// カテゴリ解決・グルーピングの純ロジック・型（CategorizedCards）は dashboard-layout.ts に集約し共有する（原則3）
 
 function configKeyOf(area: MenuArea): string {
   return `menu-categories-${area}`
-}
-
-/** 保存値の妥当性検証（壊れた JSON・型不一致は既定へフォールバック = 表示を壊さない） */
-function parseCategories(raw: string): MenuCategoryDef[] | null {
-  if (!raw) return null
-  try {
-    const parsed = JSON.parse(raw) as unknown
-    if (!Array.isArray(parsed)) return null
-    const defs: MenuCategoryDef[] = []
-    for (const item of parsed) {
-      if (!item || typeof item !== 'object') return null
-      const { id, label, cardIds } = item as Record<string, unknown>
-      if (typeof id !== 'string' || id === '' || typeof label !== 'string' || !Array.isArray(cardIds)) return null
-      defs.push({ id, label, cardIds: cardIds.filter((c): c is string => typeof c === 'string') })
-    }
-    return defs
-  } catch {
-    return null
-  }
 }
 
 export function useMenuCategories(area: MenuArea) {
@@ -46,26 +23,16 @@ export function useMenuCategories(area: MenuArea) {
 
   /** 有効なカテゴリ定義（カスタマイズ済みならそれ・なければ既定） */
   const categories = computed<MenuCategoryDef[]>(() =>
-    parseCategories(getConfig(key, '')) ?? DEFAULT_MENU_CATEGORIES[area])
+    parseMenuSections(getConfig(key, '')) ?? DEFAULT_MENU_CATEGORIES[area])
 
-  const isCustomized = computed(() => parseCategories(getConfig(key, '')) !== null)
+  const isCustomized = computed(() => parseMenuSections(getConfig(key, '')) !== null)
 
   /**
    * カード一覧をカテゴリごとにグループ化する（カード側のフィルタ = 権限・トグルは呼び出し側で適用済み）。
-   * 未割当カードは「その他」へ。空カテゴリは落とす
+   * 未割当カードは「その他」へ。空カテゴリは落とす（実装は dashboard-layout.categorizeCards を共有）
    */
   function categorize(cards: MenuCard[]): CategorizedCards[] {
-    const byId = new Map(cards.map(c => [String(c.id), c]))
-    const assigned = new Set<string>()
-    const groups: CategorizedCards[] = []
-    for (const cat of categories.value) {
-      const catCards = cat.cardIds.map(id => byId.get(id)).filter((c): c is MenuCard => !!c)
-      for (const c of catCards) assigned.add(String(c.id))
-      if (catCards.length > 0) groups.push({ id: cat.id, label: cat.label, cards: catCards })
-    }
-    const rest = cards.filter(c => !assigned.has(String(c.id)))
-    if (rest.length > 0) groups.push({ id: OTHER_CATEGORY_ID, label: OTHER_CATEGORY_LABEL, cards: rest })
-    return groups
+    return categorizeCards(cards, categories.value)
   }
 
   async function save(defs: MenuCategoryDef[]): Promise<{ ok: boolean }> {

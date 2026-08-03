@@ -1395,3 +1395,174 @@
   ヘッドライン件数 158 は正。記録を訂正（テスト件数の SoT は 158）。
 - [x] 再検証（是正後）: api 単体 259 / api 統合 225 / mockup 単体 158 / typecheck（api・mockup）全 green +
   0048 の全適用 → 再適用の冪等性を実 PostgreSQL で確認。**未解決指摘ゼロで収束**。
+
+## 51. ダッシュボードの表示・配置カスタマイズ（レイアウト。2 階層 + テンプレート。オペレーター指示 2026-08-03）の完了条件（Definition of Done）
+
+ダッシュボード（`/`）の表示・配置（セクション構成・メニュー要素の配置・通知欄の位置・AKEBONO 業務
+セクションの表示・カード密度）を、**世の中の業務アプリを参考にした 5 種のテンプレート（プレビュー付き）**
+から選択できるようにした（両モード = mockup + API）。設定は **ユーザーごと / テナントごとの 2 階層**で、
+解決順は **ユーザー設定 > テナント設定 > デフォルト表示**。既存の 3 機能（外部リンク配置・通知サイド欄・
+未読フィルタ）と現行メディア/顧客ログ等の挙動は不変。
+
+- [x] **型・テンプレート・純ロジック（新 SoT = `mockup/app/utils/dashboard-layout.ts`。新規 shared 不要）**:
+  `DashboardLayout`（templateId + sections:MenuCategoryDef[] + options{notifications:'side'|'bottom'|'hidden' /
+  showAkebono:boolean / density:'comfortable'|'compact'}）・`DashboardTemplate`。テンプレート 5 種:
+  - `default`（標準）= 現行構成（DEFAULT_MENU_CATEGORIES.dashboard 流用）+ 通知 side + showAkebono
+  - `operations`（現場オペレーション）= 毎日の業務（timecard/attendance/shift/reports/ai-assistant）を最上部
+  - `sales`（営業・顧客）= 営業（customer-log/sales/media/workflow）上部・CRM 風
+  - `executive`（経営）= 経営・状況（sales/status/ai-company/decision）上部・通知 bottom
+  - `focus`（集中/ミニマル）= 単一「メニュー」に全カード・通知 bottom・density compact・AKEBONO 非表示
+
+  全テンプレートの cardIds は既存カード id のみ参照（未割当カード + 外部リンクは categorize が「その他」へ）。
+  純関数: `resolveDashboardLayout`（階層解決）・`parseDashboardLayout` / `parseMenuSections`（検証・1 段
+  フォールバック）・`layoutFromLegacyCategories`（下位互換）・`materializeLayout`（テンプレ→ディープコピー）・
+  `categorizeCards`（useMenuCategories と共有 = 原則3）。
+- [x] **categorize ロジックの共通化（原則3）**: 従来 useMenuCategories 内にあった categorize / parseCategories を
+  dashboard-layout.ts へ集約（`categorizeCards` / `parseMenuSections` / `CategorizedCards`）。useMenuCategories は
+  それを再利用する薄いラッパへ（挙動不変 = 未割当→その他・空セクション除去・順序保持）。
+- [x] **解決 composable（新 `mockup/app/composables/useDashboardLayout.ts`）**: `effectiveLayout` /
+  `resolvedScope`（'user'|'tenant'|'default'）/ `activeTemplateId` / `templates` / `userLayout` / `tenantLayout` /
+  `hasUserLayout` / `hasTenantLayout` / `applyTemplate(id, 'user'|'tenant')` / `resetLayout(scope)`（取消・原則9.5）。
+  ユーザー層 = API `me.prefs.dashboardLayout`（saveMePreference）/ mock localStorage `ako.dashboard-layout.v1`
+  （useCurrentSegment の SSR 安全 useState + localStorage 流儀）。テナント層 = `getConfig/setConfig('dashboard-layout')`。
+  下位互換 = テナント新キー未設定で従来 `menu-categories-dashboard` があればその sections を default options と
+  組み合わせテナント層として解釈（原則7）。テナント適用/解除は管理者のみ（非管理者は警告 no-op = 非ブロッキング）。
+- [x] **UI（プレビュー付き選択・レスポンシブ = 原則8）**:
+  - `OfficeDashboardLayoutPreview`（実データ不要の軽量ミニ描画。セクション見出し + カード数チップ + 通知位置図示 +
+    AKEBONO バンド + 密度反映）
+  - `OfficeDashboardLayoutPicker`（テンプレートを 1→2 列カードで一覧 + プレビュー + 適用スコープ〔自分/全社〕+
+    現在有効層・適用中テンプレート明示 + 層ごとの解除。管理者以外は「自分」のみ）
+  - `OfficeDashboardNotifications`（通知欄を index.vue から分離 = 通知位置 side/bottom で再配置可能に。挙動不変）
+  - ダッシュボードヘッダに「レイアウト」ボタン → UiModal で Picker を開く
+- [x] **反映（`mockup/app/pages/index.vue`）**: effectiveLayout に従いセクション（categorizeCards）・通知位置
+  （side=右カラム / bottom=メニュー下 / hidden=非表示）・AKEBONO 表示（options.showAkebono ∧ 既存条件
+  〔isEnabled('akebono')・canPath('/akebono')・活性業態数>0〕を AND で維持）・density（UiCardMenu の新 `dense` prop）。
+  既存のカテゴリチップ絞り込み・外部リンク合流・通知の未読/カテゴリタブは不変。
+- [x] **API 追加なしの確認**: ユーザー設定は既存 `PUT /v1/me/preferences/:key`（key='dashboardLayout'。
+  user_preferences 0039 の汎用 key/value）、テナント設定は既存 `PUT /v1/configs/:key`（key='dashboard-layout'。
+  app_configs 汎用）を利用。**新規 API ルート・マイグレーションは追加なし**。configs のキー正規表現
+  `^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$` に 'dashboard-layout' / 'dashboardLayout' とも適合。**user_preferences の
+  value は実バイト 4KB 上限**があるため、全テンプレートの materialize 済み JSON が 4KB 未満であることを
+  テストで担保（最大でも 1KB 未満）。
+- [x] **下位互換（原則7）**: `dashboard-layout` 未設定 + 従来 `menu-categories-dashboard` 設定済みのテナントは、
+  従来のセクション構成が default options と組み合わさりテナント層として解決 = 既存カスタマイズ不変。
+  すべて未設定なら default テンプレート = 現行の見た目と一致。壊れた JSON・不正構造は 1 段フォールバックで
+  表示を壊さない。ユーザー/テナント設定は「解除」で下位層へ戻せる（データ喪失なし）。
+- [x] **検証（実測値。この環境で実行）**:
+  - `cd mockup && npm run typecheck` green / `cd api && npm run typecheck`（tsc --noEmit）green
+  - `cd mockup && npm test`: **191 passed**（既存 158 + 新規 `tests/dashboard-layout.test.ts` 33 = 解決階層
+    〔user>tenant>default〕・壊れ JSON の 1 段フォールバック・categorize 流用・テンプレート健全性〔全 cardId が
+    MENU_CARDS.dashboard に存在・focus は全カード・default=DEFAULT_MENU_CATEGORIES・executive/focus の通知位置〕・
+    materialize ディープコピー・下位互換・4KB 上限）。既存 nav-map/media 等は無変更で green
+  - `cd api && npm test`（unit）: **259 passed**（本機能は既存 API のみ利用 = API 変更なし・回帰なし）
+  - `cd api && npm run test:integration`（実 PostgreSQL）: **225 passed**（既存 green 維持）
+- [x] **既知の制約・設計判断**:
+  - テナント層は `dashboard-layout`（新・リッチ）が `menu-categories-dashboard`（F-13-8・従来）より優先。
+    両方設定された場合は前者が有効になり、SettingsMenuCategoryEditor の編集は当該テナントのダッシュボードでは
+    シャドウされる（テナント層を「解除」すると従来カテゴリ設定が再び有効化される）。細粒度編集は F-13-8、
+    プリセット一括適用は F-13-9 と役割分担。
+  - 密度（density）は options として保持し UiCardMenu の余白に反映（compact = 余白を詰める）。任意項目。
+  - AI 生成・GA 等の外部依存はなく、両モードで決定的に動作。
+
+### 51-x 反復レビュー（原則9）
+- [x] **セルフレビュー（Push 前チェック）**: 手動ステップなし / 冪等（applyTemplate・resetLayout は upsert・delete
+  相当で再実行安全）/ 既存パターン再利用（useCurrentSegment・useMenuCategories・useAppSettings を踏襲・categorize
+  共通化）/ 非ブロッキング（テナント権限外は警告 no-op・壊れ JSON はフォールバック）/ ドキュメント全件更新
+  （functional-requirements F-01-4・F-13-9 / screen-design 5.6 / data-design 1.10 + AppConfigItem / api-design
+  useDashboardLayout 契約 / CONVENTIONS 早見表 + コンポーネント在庫 / 本 §51）/ 波及は Grep で確認（CategorizedCards
+  の参照元は useMenuCategories のみ = 再エクスポート削除で auto-import 重複警告も解消）/ SoT→キャッシュ順序遵守
+  （saveMePreference は楽観反映後にサーバー保管・setConfig は既存経路）/ 下位互換確認済み / レスポンシブ・取消可能性あり。
+
+## 52. AKEBONO 業態アプリのカテゴリ配置（#24）+ セクション配置の 3 階層化（#25）の完了条件（Definition of Done）
+
+> オペレーター指示 2026-08-03。§51（レイアウト = テンプレート + 3 階層解決）の土台の上に、(1) AKEBONO 各業態
+> アプリを基本メニュー・外部リンクと同じくメニューカテゴリへ配置可能にし、(2) セクション配置そのものを
+> ユーザー > テナント > アプリ既定の 3 階層で編集・保存できる導線を追加した。ブランチ
+> `claude/reports-customer-log-updates-k6on2x`（作業ツリーに残す・未コミット）。
+
+### 52-1 要件1（#24）: AKEBONO 業態アプリのメニューカテゴリ配置
+- [x] **写像の純関数（SoT = `mockup/app/utils/akebono.ts`）**: `akebonoSegmentCardId(segmentId)` =
+  `akebono-seg:<segmentId>`（安定 id）・`parseAkebonoSegmentCardId(cardId)`（逆写像・非該当は null）・
+  `INDUSTRY_CARD_ICON`（業種タイプ別 lucide: retail=Store / maker=Factory / logistics=Truck /
+  it_service=MonitorSmartphone / other=LayoutGrid）・`akebonoSegmentCard(segment, appCount)` = MenuCard
+  （title=segmentAppName・description=`<業種ラベル>・<appCount> アプリ`・icon=業種別・to=`/akebono?seg=<id>`）。
+- [x] **新 composable（`mockup/app/composables/useAkebonoAppCards.ts`。useExternalLinkCards と同型）**:
+  `akebonoCards` = active な各業態を `akebonoSegmentCard(s, enabledAppsOf(s.id).length)` で MenuCard 化。active のみ
+  （activeSegments 由来）。アプリ数は既存 useAkebonoApps.enabledAppsOf（機能トグル反映）を利用 = **新規 API なし**。
+- [x] **二重表示防止（純関数 `planDashboardCards` = `mockup/app/utils/dashboard-layout.ts`）**:
+  `assignedAkebonoSegmentIds(sections)` でセクションに割当済みの業態 id を集め、
+  - showAkebono=true: 割当済み業態カードのみプールへ（categorize がセクション配置）・未割当業態は
+    `unassignedAkebonoSegmentIds` として専用セクションが担当 → **未割当が「その他」へ落ちて二重表示になるのを防ぐ**。
+  - showAkebono=false（focus 等）: 全業態カードをプールへ（未割当は「その他」= 消えない）・専用セクションは出さない。
+  - akebono 利用不可（機能 OFF・権限なし・業態 0 件）: index.vue が akebonoCards を空で渡す = どこにも出さない。
+- [x] **index.vue 反映**: `akebonoAccessible`（isEnabled('akebono') ∧ canPath('/akebono') ∧ 業態数>0）と
+  `showAkebono`（= akebonoAccessible ∧ options.showAkebono）を分離。`cardPlan = planDashboardCards({...})` から
+  visibleCards（pool）と unassignedAkebonoIds を導出。専用「AKEBONO 業務（業態別）」セクションは
+  `v-if="showAkebono && unassignedAkebonoIds.length > 0"` で **未割当業態のみ**表示（全割当済みなら非表示）。
+- [x] **SegmentApps.vue 拡張**: optional prop `segmentIds?: string[]`（指定時はその業態のみ・順序も指定順・無効 id 除外。
+  未指定は従来どおり全 active）。専用セクションは `:segment-ids="unassignedAkebonoIds"` を渡す。
+- [x] **MenuCategoryEditor.vue（dashboard 領域）**: cardOptions に AKEBONO 業態アプリを追加
+  （label = `<segmentAppName>（AKEBONO）`。外部リンクと同様）= 管理者がテナント層カテゴリへ akebono を割当可能。
+- [x] **動的性の考慮**: 業態は増減する。cardIds に残った未存在業態 id は categorize が単に無視（既存挙動）。
+  UiCardMenu は lucide アイコン描画のため追加改修不要。
+
+### 52-2 要件2（#25）: セクション配置の 3 階層化（ユーザー > テナント > アプリ既定）
+- [x] **解決は既存の土台を利用**: effectiveLayout（resolveDashboardLayout）が既に user>tenant>default で sections も
+  解決済み。不足していた「編集・保存」導線を追加。
+- [x] **`useDashboardLayout.saveSections(sections, scope)`**: 現行 effectiveLayout.options を維持したまま sections を
+  差し替えた DashboardLayout（templateId='custom'）を該当層へ保存。保存経路は applyTemplate と共通化した
+  `persistLayout(layout, scope)`（原則3。user=saveMePreference/localStorage・tenant=setConfig〔管理者のみ・非管理者は
+  警告 no-op〕）。組み立ては純関数 `buildCustomLayout(sections, options)`（dashboard-layout.ts・ディープコピー）。
+- [x] **共通編集部品 `UiMenuSectionEditor`（`mockup/app/components/ui/`。原則3）**: カテゴリの追加・削除・改名・
+  並び替え・カード割当（UiMultiCombobox）。v-model（MenuCategoryDef[]）で、更新はユーザー操作起点でのみ emit
+  （親の dirty 判定を壊さない）。**MenuCategoryEditor もこれを使うよう refactor**（重複削減。既存の
+  ハイドレーション/dirty/保存オーケストレーションは維持）。
+- [x] **新 UI `OfficeDashboardSectionEditor`**: 現在の effectiveLayout.sections をドラフト初期値に、スコープ
+  （自分=user / 全社=tenant〔管理者のみ〕）を選んで編集・保存（saveSections）。割当候補 = 基本メニュー + 外部リンク +
+  AKEBONO 業態アプリ。「この階層の設定を解除」= resetLayout(scope)（取消フロー・原則9.5）。現在有効な層
+  （resolvedScope）と適用中テンプレートを明示。ハイドレーション（reloadConfigs）・dirty ガードは MenuCategoryEditor
+  と同流儀。`DashboardLayoutPicker` に「テンプレート」/「セクションを編集」のタブを追加して内包。
+- [x] **二重編集導線の判断（記録）**: 既存の /settings の MenuCategoryEditor（F-13-8）は masters 領域は従来どおり残す。
+  dashboard 領域は「3 階層のレイアウトセクションエディタが主導線」とし、MenuCategoryEditor のダッシュボードタブに
+  **案内文**（3 階層はレイアウトから・ここは従来テナント共通設定の下位互換導線）を表示。dashboard タブ自体は
+  残す（削除しない）= 既存挙動（テナント `dashboard-layout` が `menu-categories-dashboard` を優先）を壊さない選択。
+
+### 52-3 検証（実測値。この環境で実行）
+- [x] `cd mockup && npm run typecheck`（nuxt typecheck）**green**（exit 0）
+- [x] `cd mockup && npm test`: **207 passed**（16 files）。新規/追加テスト:
+  - `tests/akebono-multi-segment.test.ts`（22 = 従来 + 新規: akebonoSegmentCardId/parse 往復・INDUSTRY_CARD_ICON
+    マッピング一致・akebonoSegmentCard 写像〔id 形式・appName 優先・業種別 icon・description〕）
+  - `tests/dashboard-layout.test.ts`（42 = 従来 + 新規: assignedAkebonoSegmentIds・planDashboardCards〔showAkebono
+    on で割当/未割当振り分け・全割当済みで専用セクション空・off で全プール + 「その他」・akebonoCards 空で不出現〕・
+    buildCustomLayout〔custom/options 維持/ディープコピー・user>tenant>default 解決・全カード詰めて 4KB 未満〕）
+- [x] `cd api && npm run typecheck`（tsc --noEmit）**green**（exit 0。API 変更なし）
+- [x] `cd api && npm test`（unit）: **259 passed**（回帰なし）
+- [x] `cd api && npm run test:integration`（使い捨て PostgreSQL）: **225 passed**（既存 green 維持）
+
+### 52-4 API 追加なし・下位互換・既知の制約
+- [x] **API 追加なしの確認**: user=`/v1/me/preferences`（key='dashboardLayout'）・tenant=`/v1/configs`
+  （key='dashboard-layout'）の既存汎用 key/value のみ。**新規 API ルート・マイグレーションなし**。shared/domain 変更なし。
+  user_preferences の value 4KB 上限に対し、全基本メニュー + 外部リンク 20 + 業態 20 を単一セクションに詰めた
+  最大構成でも JSON < 4KB をテストで担保。
+- [x] **下位互換（原則7）**: 既存の `menu-categories-dashboard`・既存の `dashboard-layout` 保存値は不変で解釈可能。
+  akebono/外部リンクのカード id はセクション定義に「追加で」入るだけ（既存 cardIds を壊さない）。akebono カードが
+  未存在（業態削除・機能 OFF）でも categorize が無視 = レイアウトは壊れない。取消（解除）で下位層へ戻せる。
+- [x] **既知の制約**:
+  - akebono 業態カードのアイコンはカテゴリ配置では業種タイプ別 lucide（INDUSTRY_CARD_ICON）で統一。トップの
+    専用セクション（AkebonoSegmentApps）は従来どおり AkebonoSegmentIcon（画像 or lucide）で描画 = 意図的な二系統。
+  - セクション編集のドラフトは常に「現在の有効レイアウト」を初期値にする（保存先スコープに関わらず）。tenant へ
+    保存しても user 設定がある間は effective は user のまま（表示は user 優先）= 仕様どおり。
+  - focus テンプレート（showAkebono=false）では業態カードが通常メニュー（未割当は「その他」）に混ざる = ミニマル
+    表示の意図に沿う設計判断。
+
+### 52-x 反復レビュー（原則9）
+- [x] **セルフレビュー（Push 前チェック）**: 手動ステップなし / 冪等（saveSections・resetLayout は upsert/delete 相当で
+  再実行安全）/ 既存パターン再利用（useExternalLinkCards と同型の useAkebonoAppCards・共通部品 UiMenuSectionEditor で
+  MenuCategoryEditor と重複削減・persistLayout で保存経路共通化）/ 非ブロッキング（tenant 権限外は警告 no-op・
+  akebono 利用不可は空で処理）/ ドキュメント全件更新（functional-requirements F-01-4・F-01-5・F-13-8・F-13-9 /
+  data-design 1.10 / api-design useAkebonoAppCards・useExternalLinkCards・saveSections 契約 / screen-design 5.3・5.6 /
+  CONVENTIONS 早見表 + コンポーネント在庫 / 本 §52）/ 波及は Grep で確認（AkebonoSegmentApps 参照元 = index.vue のみ・
+  planDashboardCards/akebonoSegmentCard は新規）/ SoT→キャッシュ順序遵守 / 下位互換確認済み / レスポンシブ
+  （UiMenuSectionEditor は flex-wrap・チップ）・取消可能性（解除フロー）あり。
+- [x] **二重表示の網羅確認**: showAkebono on/off × 割当あり/なし/全割当済み × akebono 利用可/不可 を planDashboardCards
+  の単体テストで網羅。categorize と組み合わせた「その他」落ちも実測。
