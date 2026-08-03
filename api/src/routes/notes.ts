@@ -178,7 +178,8 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
     const body = capCp(String(b.body ?? '').trim(), BODY_CAP)
     if (!body) throw err('AKO-GEN-001', '本文を入力してください', 400)
     const id = newId('nt')
-    const meet = meetLinkOf(b)
+    // Meet 連携は議事録専用（poipoi に手製リクエストでリンクを持ち込ませない = レビュー NIT）
+    const meet = kind === 'minutes' ? meetLinkOf(b) : { id: null, name: null, webLink: null }
     try {
       await pool.query(
         `INSERT INTO notes (id, member_id, kind, title, body, project_id, company_id, work_category_id, source,
@@ -232,7 +233,7 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
     const specifiedTitle = typeof b.title === 'string' ? b.title.trim() : ''
     const firstLine = text.split('\n').map(l => l.replace(/^#+\s*/, '').trim()).find(Boolean) ?? ''
     const title = capCp(specifiedTitle || capCp(firstLine, 40) || filename.replace(/\.[^.]+$/, ''), 200)
-    const meet = meetLinkOf(b)
+    const meet = kind === 'minutes' ? meetLinkOf(b) : { id: null, name: null, webLink: null }
     const client = await pool.connect()
     try {
       await client.query('BEGIN')
@@ -276,6 +277,7 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
   // 連携状態（available = OAuth 構成 / connected + driveScope = カレンダートークンに drive.readonly / 既定フォルダ）
   app.get('/meet/status', async (c) => {
     const user = c.get('user')
+    await guardFeature(pool, user, 'minutes') // 議事録機能の F-16 ガードと一貫（deny 主体は連携も不可）
     if (!googleOauthEnabled(env)) {
       return c.json({ data: { available: false, connected: false, driveScope: false, defaultFolder: null } })
     }
@@ -289,6 +291,7 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
   // 保管フォルダの一覧（既定の設定・連携先の変更用。読取のみ・ごみ箱除外）
   app.get('/meet/folders', async (c) => {
     const user = c.get('user')
+    await guardFeature(pool, user, 'minutes')
     const token = await requireDriveToken(pool, env, user.id)
     const q = String(c.req.query('q') ?? '').trim().slice(0, 100)
     const conditions = [`mimeType = 'application/vnd.google-apps.folder'`, 'trashed = false']
@@ -311,6 +314,7 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
   // 選択フォルダ内のファイル一覧（Meet の AI メモ = Google ドキュメント / 録画 = 動画。folderId 未指定は既定フォルダ）
   app.get('/meet/files', async (c) => {
     const user = c.get('user')
+    await guardFeature(pool, user, 'minutes')
     const token = await requireDriveToken(pool, env, user.id)
     let folderId = String(c.req.query('folderId') ?? '').trim()
     if (!folderId) folderId = (await meetDefaultFolder(pool))?.id ?? ''
@@ -345,6 +349,7 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
   // AI メモ（Google ドキュメント）を text/plain でエクスポート（議事録本文へ取り込む材料。本文へは UI で反映）
   app.get('/meet/file-text', async (c) => {
     const user = c.get('user')
+    await guardFeature(pool, user, 'minutes')
     const token = await requireDriveToken(pool, env, user.id)
     const fileId = String(c.req.query('fileId') ?? '').trim()
     if (!fileId) throw err('AKO-GEN-001', 'fileId を指定してください', 400)
@@ -362,6 +367,7 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
   // 既定の保管フォルダを設定/クリア（管理者のみ = tenant 設定 app_configs。id 空でクリア）
   app.put('/meet/default-folder', async (c) => {
     const user = c.get('user')
+    await guardFeature(pool, user, 'minutes')
     if (user.role !== 'admin') throw err('AKO-PRM-001', '既定フォルダの設定は管理者のみです', 403)
     const b = await c.req.json().catch(() => ({})) as Record<string, unknown>
     const id = typeof b.id === 'string' ? b.id.trim().slice(0, 200) : ''

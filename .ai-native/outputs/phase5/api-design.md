@@ -368,6 +368,8 @@ akebonoCards: ComputedRef<MenuCard[]>
 | AKO-NOTE-001 | ノート取込の非対応形式（.md/.txt/.pdf/.docx 以外。旧 .doc は変換案内） | ✅ |
 | AKO-NOTE-002 | ノート取込のサイズ超過（10MB） | ✅ |
 | AKO-NOTE-003 | ノートからテキスト抽出不能 | ✅ |
+| AKO-NOTE-004 | 議事録 Meet 連携の Drive API 失敗（フォルダ/ファイル一覧・AI メモ export。③b・502） | ✅ |
+| AKO-NOTE-005 | 議事録 Meet 連携の保管フォルダ未指定（既定フォルダ未設定 + folderId 省略。③b） | ✅ |
 | AKO-CLG-001 | 顧客ログの入力不正（日付・開始/終了時刻・属性タグ・会社・担当者メモ〔必須〕・FK 未存在） | ✅ |
 | AKO-CLG-002 | 顧客ログが対象外・本人以外の操作（編集/取消/復元。403） | ✅ |
 | AKO-CLG-003 | 顧客担当者が選択会社に属さない | ✅ |

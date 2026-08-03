@@ -272,7 +272,7 @@ AKO-CHT（チャット）・AKO-REP（日報）など。売上は AKO-SAL、稼�
 設計（確定）:
 - migration 0023: `work_categories`(id,name,display_order,active) / `notes`(id, member_id, kind('poipoi'|'minutes'), title, body, project_id?, company_id?, work_category_id?, source('text'|'upload'), created_at。記録系=追記+論理削除なし・修正は将来) / `note_files`(knowledge_files と同型) / `search_docs` へ `owner_member_id text NULL` 追加（NULL=全員参照可。poipoi は本人のみ = C3）
 - MASTERS registry へ 'work-categories'（idPrefix 'wc'）。mockup: workCategories コレクション + MIGRATED_MASTERS + /masters カード + 汎用マスタページ（industries ページのパターン）
-- API `/v1/notes`: GET（?kind=。poipoi=本人のみ / minutes=全員） POST（本文 + 任意 projectId/companyId/workCategoryId） POST /import（extract-text 再利用・note_files 原本保全・AKO-NOTE-001〜003 = KNW と同型） GET /:id/files・/files/:id（poipoi は本人ガード）。書込後 scheduleSearchRebuild
+- API `/v1/notes`: GET（?kind=。poipoi=本人のみ / minutes=全員） POST（本文 + 任意 projectId/companyId/workCategoryId + 議事録は meetFileId/meetFileName/meetWebLink = ③b） POST /import（extract-text 再利用・note_files 原本保全・AKO-NOTE-001〜003 = KNW と同型） GET /:id/files・/files/:id（poipoi は本人ガード）。**議事録 Meet 連携（③b・2026-08-03・API 限定）: GET /meet/status・/meet/folders・/meet/files・/meet/file-text・PUT /meet/default-folder（カレンダー OAuth の drive.readonly を共用・AKO-NOTE-004/005・未接続 AKO-DOC-006・migration 0052 で notes に meet_* 列追加）**。書込後 scheduleSearchRebuild
 - FEATURE_PERMISSION_KEYS へ 'poipoi'（ぽいぽいメモ）・'minutes'（議事録）追加。featureKeyOfPath も
 - search-index: buildSearchDocs へ kind 'note' 追加（title=タイトル or 冒頭、segments= 本文/紐付け(PJ/顧客/業務種別名)。checks は notes.body 等 + 紐付け先 name）。poipoi → ownerMemberId=member / minutes → null。searchDocsFor へ user.id を渡し WHERE owner_member_id IS NULL OR = user
 - chatbot buildContext: searchDocsFor 呼び出しへ user.id（既存呼び出しの変更のみ）

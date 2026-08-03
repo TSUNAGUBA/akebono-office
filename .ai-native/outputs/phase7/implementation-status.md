@@ -1797,6 +1797,12 @@
   ため実 API 前提の方が一貫。demo では非表示になる旨を画面挙動で明示）。
 - **取消可能性（原則9.5）**: Meet リンクは議事録作成時に付与し、議事録自体の取消/復元（既存フロー）で立ち戻れる。
   作成前は選択チップの「リンクを解除」でクリア可能。既定フォルダの設定も id 空でクリア可能。
+- **アクセス整合の留意（監査 MINOR-2 = 記録）**: ブラウズは**接続実行者本人の Drive トークン**（calendar_tokens.member_id）で行うため、
+  選べるのは本人が閲覧権を持つファイル。一方リンク（meetWebLink・meetFileName）は C2 の議事録に保存され全メンバーに表示される。
+  ファイル本体の可視性は Google が開封時に強制する（**内容漏洩はしない**）が、①ファイル名が全メンバーへ開示される ②Drive 権限の
+  無いメンバーがリンクを開くと「アクセス権のリクエスト」になる、という残余がある。運用前提として **Meet の保管フォルダは
+  チーム共有ドライブ/共有フォルダを既定に設定する**ことを推奨（全メンバーがブラウズ・開封できる）。本文取込（text/plain）は
+  作成者の明示操作で C2 本文へ複製する設計判断。
 
 ### 57-x 反復レビュー（原則9）
 - [x] **セルフレビュー（Push 前チェック）**: 手動ステップなし（連携はカレンダー再利用）/ 冪等（0052・default-folder upsert・
@@ -1805,4 +1811,12 @@
   F-06b-8・data-design・api-design・screen-design・deploy-guide §1-9 step5・本 §57）/ 波及は Grep で確認（NOTE_COLS/POST/import
   の meet 列・/meet ルートと /:noteId の順序）/ SoT→キャッシュ（notes 書込 → 一覧再取得）/ 下位互換（列追加は NULL 許容 =
   原則7）/ レスポンシブ（フォルダ/ファイルリストは max-h スクロール・flex-wrap）/ 取消可能性（57-5）。
-- [ ] **独立レビュー / 監査**: 実施予定（コードレビュアー + システム監査官）。指摘があれば是正しゼロまで反復。
+- [x] **独立レビュー / 監査（コードレビュアー + システム監査官・並行）**: **MAJOR 0 件**。MINOR/NIT を是正。
+  - **MINOR（両者）: `/meet/*` が F-16 機能ガード未適用**（他の notes ハンドラは guardFeature 済み・/v1/notes は PATH_FEATURES 外で in-handler ガードが唯一の関門）。→ `/meet/status|folders|files|file-text|default-folder` に `guardFeature(pool, user, 'minutes')` を追加。
+  - **MINOR（両者）: 共有 C2 議事録をユーザー個人の Drive トークンで参照する留意**（内容漏洩なし = Google が開封時に強制。ファイル名開示・非共有メンバーのリンク切れ）。→ §57-5 に留意と「保管フォルダは共有ドライブ推奨」を記載。
+  - **MINOR（監査）: api-design のエラーコード表が AKO-NOTE-004/005 未掲載**。→ 表へ 2 行追加。
+  - **NIT: 「AI メモを本文へ取込」が非ドキュメントでも表示**（録画/その他は AKO-NOTE-004）。→ `meetFile.fileKind === 'notes'` のみ表示に限定。
+  - **NIT: poipoi にも手製リクエストで meet 列が入りうる**。→ POST/import で `kind === 'minutes'` のときのみ meet を保持。
+  - **NIT（監査）: HANDOFF スナップショットに /meet 未反映**。→ 追記（全件反映）。
+  - 許容（是正不要）: webViewLink 正規化の末尾スラッシュ要求（サフィックス攻撃防御として意図的・実リンクは必ずパスあり）/ documents→notes の Drive ヘルパ import（循環なし・calendar→documents の前例あり = 原則3）/ 既定フォルダ名空時の「（未選択）」表示（選択経由では常に name 設定・直 API のみ・体裁）/ Meet リンクの実在検証なし（google.com ホスト制約 + C2 同一チーム信頼）。
+- [x] **再検証（是正後）**: mockup typecheck + `npm test` **221 passed** / api typecheck + unit **273 passed** / integration **231 passed**（新規回帰なし = 原則9「直した結果も問題ない」）。

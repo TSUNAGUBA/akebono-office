@@ -51,7 +51,7 @@ const previewing = ref(false)
 // ---------- Google Meet 連携（議事録の AI メモ/録画リンク。API モード限定 = documents のドライブ取込と同型） ----------
 const isApi = useApiMode()
 const meet = useMeetLink()
-const meetFile = ref<{ id: string; name: string; webLink: string } | null>(null)
+const meetFile = ref<{ id: string; name: string; webLink: string; fileKind: MeetFile['fileKind'] } | null>(null)
 const meetFolderId = ref('')     // 現在参照中フォルダ（空 = 既定フォルダ）
 const meetFolderName = ref('')
 const meetFolders = ref<MeetFolder[]>([])
@@ -92,7 +92,7 @@ function selectMeetFolder(f: MeetFolder): void {
   void loadMeetFiles()
 }
 function pickMeetFile(f: MeetFile): void {
-  meetFile.value = { id: f.id, name: f.name, webLink: f.webViewLink }
+  meetFile.value = { id: f.id, name: f.name, webLink: f.webViewLink, fileKind: f.fileKind }
 }
 function clearMeetFile(): void { meetFile.value = null }
 async function importMeetNotes(): Promise<void> {
@@ -376,7 +376,7 @@ function authorOf(n: Note): string {
             <div v-if="meetFile" class="flex flex-wrap items-center gap-2 rounded border border-brand bg-brand-soft px-2.5 py-1.5 text-[12px]">
               <Link2 class="h-3.5 w-3.5 shrink-0 text-brand" aria-hidden="true" />
               <span class="min-w-0 flex-1 truncate font-medium">{{ meetFile.name }}</span>
-              <button type="button" class="btn btn-ghost btn-sm" :disabled="meetBusy" @click="importMeetNotes">AI メモを本文へ取込</button>
+              <button v-if="meetFile.fileKind === 'notes'" type="button" class="btn btn-ghost btn-sm" :disabled="meetBusy" @click="importMeetNotes">AI メモを本文へ取込</button>
               <button type="button" class="btn btn-ghost btn-sm" aria-label="リンクを解除" @click="clearMeetFile">
                 <X class="h-3.5 w-3.5" aria-hidden="true" />
               </button>
