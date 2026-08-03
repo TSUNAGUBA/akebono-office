@@ -1379,3 +1379,19 @@
 - [x] **NIT（akebono-dashboard の記事数 JOIN）**: media_channels JOIN に `c.active` フィルタを追加（取消済みチャンネルの記事を数えない）。
 - [x] 受容（対応せず記録）: CR NIT（akebono の appKey 'media' 残置 = app-configs 件数保護の意図・無害。既にコメント済み）。
 - [x] 再検証（是正後）: api 単体 259 / api 統合 225 / mockup 単体 **158**（外部材料テスト +2 → 156、既存 +... = 158）/ typecheck（api・mockup）全 green。
+
+### 50-y 反復レビュー（原則9・2 巡目 = 最終確認。CRITICAL/MAJOR 0・MINOR 1・NIT 2 → 対応/記録）
+- [x] 1 巡目是正 6 件はいずれも実体として解消を独立ロールが確認（テスト実測一致・shared 移設の挙動不変・
+  invalidateIntegratedFor のキー解析・channelForSegment の両モード動作・0048 孤児 backfill の実 PG 検証）。
+- [x] **MINOR（0048 step 2b の冪等性退行）**: step 2b が子テーブルの segment_id を無ガード参照しており、
+  ファイルが謳う「多重適用でも壊れない」不変条件に反していた（手動再適用時に column 不在で失敗）。
+  step 2b を information_schema 列存在ガード（media_metrics_cache.segment_id）で囲み、RENAME 済み環境では
+  丸ごとスキップ = 再適用安全に修正。使い捨て PostgreSQL で「全マイグレーション適用 → 0048 再適用 OK」を実測確認。
+  （本番ランナー migrate.ts は schema_migrations で適用済みをスキップ + ファイル単位トランザクションのため
+  通常運用では顕在化しないが、ファイルの不変条件の整合性として是正）。
+- [x] NIT（0048 は本ブランチで新規追加＝未デプロイのため 0048 編集で正。既デプロイ環境がある場合のみ 0049 分離が必要）:
+  0048 は本 PR で新設した未リリースのマイグレーションであり、編集で問題なし（デプロイ実績なし）。記録のみ。
+- [x] NIT（50-x のコミットメッセージ「2 件追加」は実際 3 件）: mockup 単体の追加 it は 3 件（155→158）。
+  ヘッドライン件数 158 は正。記録を訂正（テスト件数の SoT は 158）。
+- [x] 再検証（是正後）: api 単体 259 / api 統合 225 / mockup 単体 158 / typecheck（api・mockup）全 green +
+  0048 の全適用 → 再適用の冪等性を実 PostgreSQL で確認。**未解決指摘ゼロで収束**。

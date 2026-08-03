@@ -69,20 +69,30 @@ END $$;
 -- 対応する media_channels 行が無く UI から不可視になる。子テーブルに現れる segment_id のうち未 backfill のものから
 -- チャンネルを補完する（この時点では子テーブルはまだ segment_id 列。RENAME は次ステップ）。
 -- media_oauth_states は一時的（TTL）のため対象外。name は業態名 or '無題メディア'。
-INSERT INTO media_channels (id, name, segment_id, active)
-SELECT sid, COALESCE(b.name, '無題メディア'), sid, true
-FROM (
-  SELECT DISTINCT segment_id AS sid FROM media_ga_tokens
-  UNION SELECT DISTINCT segment_id FROM media_articles
-  UNION SELECT DISTINCT segment_id FROM media_article_briefs
-  UNION SELECT DISTINCT segment_id FROM media_generated_articles
-  UNION SELECT DISTINCT segment_id FROM media_insights
-  UNION SELECT DISTINCT segment_id FROM media_metrics_cache
-) src
-LEFT JOIN business_segments b ON b.id = src.sid
-WHERE src.sid IS NOT NULL AND src.sid <> ''
-  AND NOT EXISTS (SELECT 1 FROM media_channels mc WHERE mc.id = src.sid)
-ON CONFLICT (id) DO NOTHING;
+-- 冪等性: 子テーブルの segment_id 列が存在する場合のみ実行する（step 3 の RENAME 済み = 再適用時はスキップ）。
+-- 6 テーブルは step 3 で一括 RENAME されるため、代表 1 列（media_metrics_cache.segment_id）の存在で判定して足りる。
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'app_office' AND table_name = 'media_metrics_cache' AND column_name = 'segment_id'
+  ) THEN
+    INSERT INTO media_channels (id, name, segment_id, active)
+    SELECT sid, COALESCE(b.name, '無題メディア'), sid, true
+    FROM (
+      SELECT DISTINCT segment_id AS sid FROM media_ga_tokens
+      UNION SELECT DISTINCT segment_id FROM media_articles
+      UNION SELECT DISTINCT segment_id FROM media_article_briefs
+      UNION SELECT DISTINCT segment_id FROM media_generated_articles
+      UNION SELECT DISTINCT segment_id FROM media_insights
+      UNION SELECT DISTINCT segment_id FROM media_metrics_cache
+    ) src
+    LEFT JOIN business_segments b ON b.id = src.sid
+    WHERE src.sid IS NOT NULL AND src.sid <> ''
+      AND NOT EXISTS (SELECT 1 FROM media_channels mc WHERE mc.id = src.sid)
+    ON CONFLICT (id) DO NOTHING;
+  END IF;
+END $$;
 
 -- ---------- 3. child テーブルの segment_id → channel_id（RENAME COLUMN。値は不変 = 行の UPDATE 不要） ----------
 -- 各テーブルを information_schema ガードで冪等に RENAME する。制約名（PK/UNIQUE）は列名変更に自動追随する
