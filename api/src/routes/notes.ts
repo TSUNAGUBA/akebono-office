@@ -10,6 +10,7 @@
  */
 import { Hono } from 'hono'
 import type pg from 'pg'
+import { parseNotifyRecipients, resolveNotifyRecipientIds } from '../../../shared/domain/notify-recipients'
 import { canUseFeature } from '../../../shared/domain/permissions'
 import type { NoteKind } from '../../../shared/domain/types'
 import type { AuthUser } from '../auth'
@@ -18,9 +19,37 @@ import { audit } from '../lib/audit'
 import { err } from '../lib/errors'
 import { extractDocumentText } from '../lib/extract-text'
 import { newId } from '../lib/ids'
+import { notify } from '../lib/notify'
 import { activePermissionRules, subjectOf } from '../lib/permissions'
 import { scheduleSearchRebuild } from '../lib/search-index'
 import { capCp } from '../lib/text'
+
+/** ぽいぽいポスト登録時に、設定（app_configs 'poipoi-notify-recipients'）の宛先へ原文を通知する。
+ *  宛先は「ロール/役職/個人」指定を解決した在籍メンバー（投稿者本人は除外）。非ブロッキング（原則4）。
+ *  オペレーター指示 2026-08-03。API モードのみサーバー発火（mock は useNotes が発火）。 */
+async function notifyPoipoiRecipients(
+  db: pg.Pool, author: AuthUser, body: string,
+): Promise<void> {
+  try {
+    const { rows: cfg } = await db.query<{ value: unknown }>(
+      `SELECT value FROM app_configs WHERE key = 'poipoi-notify-recipients'`)
+    // configs は JSON.stringify した値を jsonb 保存するため、文字列で保存された設定は文字列で返る。
+    // parseNotifyRecipients は文字列・配列の両方を受ける（原則4: 壊れていても空扱いで主フローを止めない）
+    const targets = parseNotifyRecipients(cfg[0]?.value ?? '')
+    if (targets.length === 0) return
+    const { rows: members } = await db.query<{ id: string; role: string; title: string; active: boolean }>(
+      `SELECT id, role, title, active FROM members`)
+    const recipientIds = resolveNotifyRecipientIds(targets, members, author.id)
+    if (recipientIds.length === 0) return
+    const title = `新しいぽいぽいポスト（${author.name}）`
+    const preview = capCp(body, 140)
+    for (const mid of recipientIds) {
+      await notify(db, mid, 'poipoi', title, preview, '/poipoi')
+    }
+  } catch (e) {
+    console.warn('notifyPoipoiRecipients failed (non-blocking):', (e as Error).message)
+  }
+}
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024
 const BODY_CAP = 20_000
@@ -129,6 +158,8 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
       actorId: user.id, action: 'create', entity: 'notes', entityId: id,
       detail: kind === 'poipoi' ? 'ぽいぽいポストを登録' : '議事録を登録',
     })
+    // ぽいぽいポストは設定された宛先へ原文を通知（非ブロッキング。オペレーター指示 2026-08-03）
+    if (kind === 'poipoi') await notifyPoipoiRecipients(pool, user, body)
     scheduleSearchRebuild(pool, env, `notes:${kind}`)
     const { rows } = await pool.query(`SELECT ${NOTE_COLS} FROM notes WHERE id = $1`, [id])
     return c.json({ data: rows[0] }, 201)

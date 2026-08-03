@@ -50,6 +50,7 @@ const KIND_TONES: Record<NotificationKind, Tone> = {
   ai_report: 'info',
   system: 'neutral',
   escalation: 'serious',
+  poipoi: 'info',
 }
 
 /** 未読のみ表示（オペレーター指示 2026-08-03。ダッシュボードのサイド通知欄と同じ絞り込みを一覧にも） */

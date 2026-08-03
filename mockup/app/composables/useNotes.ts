@@ -6,7 +6,8 @@
  * - デュアルモード: API = /v1/notes（SoT。AI 検索インデックスへ自動反映）/ モック = notes コレクション
  * - アップロード（.md/.txt/.pdf/.docx）は API モードのみ（抽出はサーバー。モックは .md/.txt をクライアント読取）
  */
-import type { Note, NoteKind, Result } from '~/types/domain'
+import type { Member, Note, NoteKind, Result } from '~/types/domain'
+import { parseNotifyRecipients, resolveNotifyRecipientIds } from '~/utils/notify-recipients'
 
 const apiNotes = ref<Record<string, Note[]>>({})
 
@@ -45,7 +46,28 @@ export function useNotes(kind: NoteKind) {
   const { tbl, commit, nextId } = useMockDb()
   const { currentUser, isAdmin } = useCurrentUser()
   const isApi = useApiMode()
+  const appSettings = useAppSettings()
+  const notifications = useNotifications()
   const mockNotes = tbl('notes')
+
+  /**
+   * ぽいぽいポスト登録時に、設定（'poipoi-notify-recipients'）の宛先へ原文を通知する（mock のみ）。
+   * 宛先は「ロール/役職/個人」指定を解決した在籍メンバー（投稿者本人は除外）。非ブロッキング（原則4）。
+   * API モードはサーバー（POST /v1/notes）が発火するため呼ばない（useNotifications.notify も API では no-op）。
+   */
+  function firePoipoiNotify(body: string): void {
+    try {
+      const targets = parseNotifyRecipients(appSettings.getConfig('poipoi-notify-recipients', ''))
+      if (targets.length === 0) return
+      const recipientIds = resolveNotifyRecipientIds(targets, tbl('members').value as Member[], currentUser.value.id)
+      if (recipientIds.length === 0) return
+      const title = `新しいぽいぽいポスト（${currentUser.value.name}）`
+      const preview = [...body].slice(0, 140).join('')
+      for (const mid of recipientIds) notifications.notify(mid, 'poipoi', title, preview, '/poipoi')
+    } catch {
+      // 補助処理: 通知失敗は主フロー（ポスト登録）を止めない（原則4）
+    }
+  }
   if (isApi) {
     void loadNotes(kind)
     // 管理者のみ全ポスト一覧を取得（非管理者は 403 になるため呼ばない）
@@ -84,8 +106,11 @@ export function useNotes(kind: NoteKind) {
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   })
 
-  /** テキスト登録 */
-  async function add(input: Omit<NoteInput, 'kind'>): Promise<Result> {
+  /**
+   * テキスト登録。opts.notifyPoipoi=false のときは poipoi 通知を発火しない
+   * （ドキュメント取込は「入力原文」ではないため通知対象外 = API の /import と挙動を揃える。§54 レビュー MINOR-2）。
+   */
+  async function add(input: Omit<NoteInput, 'kind'>, opts?: { notifyPoipoi?: boolean }): Promise<Result> {
     const body = input.body.trim()
     if (!body) return { ok: false, error: { code: 'AKO-GEN-001', message: '本文を入力してください' } }
     if (isApi) {
@@ -107,6 +132,9 @@ export function useNotes(kind: NoteKind) {
       createdAt: nowJstIso(),
     }]
     commit()
+    // ぽいぽいポストは設定された宛先へ原文を通知（mock。API はサーバー発火。オペレーター指示 2026-08-03）。
+    // 取込（importFile）経由は notifyPoipoi=false で発火しない（API の /import と揃える）
+    if (kind === 'poipoi' && opts?.notifyPoipoi !== false) firePoipoiNotify(body)
     return { ok: true, id }
   }
 
@@ -132,7 +160,8 @@ export function useNotes(kind: NoteKind) {
     }
     const text = (await file.text()).trim()
     if (!text) return { ok: false, error: { code: 'AKO-NOTE-003', message: 'ファイルからテキストを抽出できませんでした' } }
-    return add({ ...meta, title: meta.title || file.name.replace(/\.[^.]+$/, ''), body: text })
+    // 取込は「入力原文」ではないため poipoi 通知は発火しない（API /import と挙動を揃える。§54 MINOR-2）
+    return add({ ...meta, title: meta.title || file.name.replace(/\.[^.]+$/, ''), body: text }, { notifyPoipoi: false })
   }
 
   /** 取消（論理削除。本アプリ共通原則: 操作の取消可能性）。poipoi = 本人 / minutes = 登録者 or 管理者 */

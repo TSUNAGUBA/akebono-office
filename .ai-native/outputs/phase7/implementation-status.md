@@ -1634,3 +1634,48 @@
   ドラフトは未永続（確定操作ではない）ため原則9.5 の必須対象外と判断し、確認ダイアログは追加しない（設計判断として記録）。
 - [x] **再検証**: 上記対応後 `cd mockup && npm run typecheck` green / `npm test` **212 passed**（挙動変更なし = テスト不変）。
   以上で未解決の指摘ゼロ。
+
+## 54. 日報・週報の項目拡張 + ぽいぽいポストの宛先通知（バッチ4。オペレーター指示 2026-08-03）の完了条件（Definition of Done）
+
+> 日報（自分の日報）・週報（自分の週報）のフォーム項目を改称・拡張し、ぽいぽいポストを提出必須化。さらに
+> ぽいぽいポスト原文を「ロール/役職/個人」で設定した宛先へ通知する仕組みを追加した（両モード = mockup + API）。
+> ブランチ `claude/reports-customer-log-updates-k6on2x`。
+
+### 54-1 要件1: 自分の日報
+- [x] **項目名変更**: 所感 → **本日の所感**、課題 → **本日の課題**（`reports.vue` のエディタ・参照表示・詳細ドロワーの全ラベル。型キー reflection/issues は不変 = 原則7）。
+- [x] **本日の課題の種別**: `DAILY_ISSUE_CATEGORY_PRESETS`（業務手順/目的の理解不足/事前の情報不足/スキル/経験の不足/コミュニケーション不足/工数/優先順位/顧客/外部要因/その他）を UiSelect で単一選択（空 = 未選択）。SoT = `shared/domain/types.ts`。`DailyReport.issueCategory?` を追加（migration 0049 = `daily_reports.issue_category`）。API/mock とも cleanIssueCategory でプリセット外を '' へ正規化。
+- [x] **説明文の除外**: 「マークダウン記法に対応」（所感）・「記入して提出すると管理者へ自動共有されます」（課題）・「入力があると…ぽいぽいポストとして登録されます（空欄ならスキップ）」（ぽいぽい）の 3 ヒントを撤去。
+- [x] **ぽいぽいポスト必須化**: ラベルから「（任意）」を除去し `required`。提出（onSubmit）時に未入力なら警告して中断（下書き保存・提出済み更新は必須にしない = 既登録の再投稿防止）。
+
+### 54-2 要件2: 自分の週報
+- [x] **項目名変更**: 今週の目標達成 → **今週の成果・達成感**（例文プレースホルダ付き）、主要業務 → **今週の主要業務**、課題 → **課題・原因仮説**、来週の予定 → **来週の最重要テーマ（最大3つ）**（「最大3つ」は入力ガイド）。
+- [x] **新規項目**: **うまくいったこと・続けたいこと**（goodPoints）、**チーム共有事項**（種別 `WEEKLY_TEAM_SHARE_KINDS`〔相談したい/判断してほしい/対応を依頼したい/特になし〕を UiChipTabs で選択・既定「特になし」 + 自由入力 teamShareNote〔任意〕）。`WeeklyReport.goodPoints?/teamShareKind?/teamShareNote?` を追加（migration 0049）。cleanTeamShareKind でプリセット外を '' へ正規化。
+
+### 54-3 要件3: ぽいぽいポスト原文の通知 + 宛先設定
+- [x] **宛先解決の純関数（新 SoT = `shared/domain/notify-recipients.ts`）**: `NotifyRecipientTarget`（type=title/role/member = ApproverType 流用 = 原則3）・`resolveNotifyRecipientIds`（在籍者・重複排除・投稿者除外・id 昇順）・`parseNotifyRecipients`（JSON/配列の正規化・不正要素除去）。mock 用 shim = `utils/notify-recipients.ts`。
+- [x] **通知種別**: `NotificationKind` に `poipoi` を追加（migration 0049 = notifications の CHECK 張り替え。冪等 = DROP IF EXISTS → ADD）。ラベル `NOTIFICATION_KIND_LABELS.poipoi='ぽいぽいポスト'`・inbox のトーンマップも追加。
+- [x] **発火**: API = `POST /v1/notes`（kind=poipoi）で configs `poipoi-notify-recipients` を解決し原文プレビュー（140cp）を宛先へ notify（link=/poipoi・投稿者除外・非ブロッキング = 原則4）。mock = `useNotes.add`（kind=poipoi）で同等に発火（API モードは useNotifications.notify が no-op のためサーバー発火と二重にならない）。
+- [x] **設定 UI**: `SettingsNotifyRecipientsEditor`（ロール/役職/個人を複数指定・解決人数プレビュー・空許容）を設定「ぽいぽいポストの通知先」に追加。SoT = configs `poipoi-notify-recipients`（JSON 文字列）。管理者のみ。
+
+### 54-4 検証（実測値。この環境で実行）
+- [x] `cd mockup && npm run typecheck`（nuxt typecheck）**green** / `cd api && npm run typecheck`（tsc --noEmit）**green**
+- [x] `cd mockup && npm test`: **221 passed**（17 files。新規 `tests/notify-recipients.test.ts` 9 = parse/resolve〔role/title/member・退職者除外・重複排除・投稿者除外・空〕）
+- [x] `cd api && npm test`（unit）: **259 passed**
+- [x] `cd api && npm run test:integration`（使い捨て PostgreSQL・migration 0049 適用）: **229 passed**（新規 4 = 日報 issueCategory 往復 + 正規化 / 週報 goodPoints・teamShareKind・teamShareNote 往復 + 正規化 / ぽいぽい設定なしで無通知 / ぽいぽい宛先ロールへ通知 + 投稿者除外）
+- [x] **migration 0049 冪等性**: 使い捨て PostgreSQL で二重適用を確認（ADD COLUMN IF NOT EXISTS の NOTICE スキップ・CHECK 張り替えは DROP IF EXISTS → ADD で再実行安全・poipoi 許可/bogus 拒否を実測）。
+
+### 54-5 API 追加なし・下位互換・既知の制約
+- [x] **API ルート追加なし**: 既存 `/v1/reports/daily`・`/v1/reports/weekly`・`/v1/notes`・`/v1/configs`・`/v1/notifications` のみ。スキーマ追加は migration 0049（列追加 + CHECK 拡張）のみ。
+- [x] **下位互換（原則7）**: 追加列は全て NOT NULL DEFAULT ''（既存行は空）。issueCategory/teamShareKind/goodPoints/teamShareNote は型で optional。旧データ・旧クライアントの送信欠落は '' 扱い。通知 kind 拡張は既存 kind に影響しない。
+- [x] **設計判断（記録）**: (1) ぽいぽい通知は「入力原文」= テキスト登録（POST /v1/notes・mock useNotes.add）で発火。**ドキュメント取込（/import・mock importFile）は対象外 = 両モードとも非発火**（§54-y MINOR-2 で mock を API に合わせて是正）。(2) ぽいぽい必須は初回提出（onSubmit）のみ（下書き・提出済み更新は非強制）。**入力欄が空でも当日すでにぽいぽいが 1 件以上あれば要件を満たす扱い**（下書き保存時に投稿済み → 再提出で二重投稿になるのを防ぐ = §54-y MINOR）。(3) 「来週の最重要テーマ（最大3つ）」は自由記述 textarea + ラベルの入力ガイド（構造化はしない）。
+
+### 54-x 反復レビュー（原則9）
+- [x] **セルフレビュー（Push 前チェック）**: 手動ステップなし / 冪等（migration 0049 二重適用安全・saveSections/upsert は再実行安全）/ 既存パターン再利用（ApproverType/pickApprover 流儀・UiSelect/UiChipTabs・CUSTOMER_LOG_TAG_PRESETS のプリセット方式）/ 非ブロッキング（poipoi 通知失敗は登録を止めない）/ ドキュメント全件更新（functional-requirements F-06/F-06b/F-12/F-13 / data-design / api-design / screen-design / CONVENTIONS / 本 §54）/ 波及は Grep で確認（NotificationKind の網羅 map = inbox のトーン + labels を更新）/ SoT→キャッシュ順序遵守 / 下位互換確認済み / レスポンシブ（UiSelect/UiChipTabs は flex-wrap）・取消可能性（提出済み日報は本人編集可・ぽいぽいは取消/復元・週報は下書き編集）。
+
+### 54-y 独立ロールによるレビュー反復（原則9。指摘ゼロまで是正）
+54-1〜54-4 の実装後、独立ロール（コードレビュアー・システム監査官）で再レビュー/監査を実施。指摘（MAJOR 1・MINOR 2・NIT 1。重複含む）を全件是正:
+- [x] **MAJOR（コードレビュー）/ MINOR-1（監査）: 提出ガードがアシストモードでエディタごと隠す**: `onSubmit` のぽいぽい未入力ガードが `confirmStep.value=false` を実行していたため、AI アシストモード（`showEditor = !assistActive || confirmStep`）では警告直後にエディタ（＝入力すべきぽいぽい欄）が消えて入力不能になっていた。→ ガード分岐から `confirmStep=false` を削除（成功パスの `confirmStep=false` のみ残す）。
+- [x] **MINOR（コードレビュー）: 下書き投稿済みでも再提出で二重投稿を強要**: 必須判定が一時 ref `poipoiDraft` のみを見ていたため、下書き保存でぽいぽい投稿済み → 再オープン（poipoiDraft は空）→ 提出でブロックされ二重投稿していた。→ `hasPoipoiForDay`（当日の自分のぽいぽい登録有無）を追加し、`!poipoiDraft.trim() && !hasPoipoiForDay` のときのみブロック。
+- [x] **MINOR-2（監査）: mock のみドキュメント取込で通知発火（API・文書と不一致）**: mock の `importFile` が `add` 再利用で poipoi 通知を発火していた（API `/import` は非発火・§54-5 の設計判断とも矛盾）。→ `add` に `opts.notifyPoipoi` を追加し `importFile` は `false` を渡して非発火に統一。
+- [x] **NIT-1（監査）: 必須マーカーが提出済み編集でも常時表示**: ぽいぽい欄の `required`（アスタリスク）を `:required="!editingSubmitted"` にし、必須が実際に効く初回提出コンテキストでのみ表示（提出済み編集での誤った再投稿を防ぐ）。
+- [x] **再検証**: `cd mockup && npm run typecheck` green・`npm test` **221 passed** / `cd api && npm run typecheck` green・unit **259**・integration **229**（挙動の是正のみでテスト件数不変。既存アサーションは全て緑）。以上で未解決の指摘ゼロ。

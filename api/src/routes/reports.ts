@@ -13,7 +13,9 @@ import type pg from 'pg'
 import { DEFAULT_WORKING_DAY_RULE, isWorkingDay } from '../../../shared/domain/business-day'
 import { addDays, isRealDateKey, nowJstIso, todayJst } from '../../../shared/domain/jst'
 import { canUseFeature, canViewMemberReports, type PermissionSubject } from '../../../shared/domain/permissions'
-import { TOMORROW_PLANS_MAX } from '../../../shared/domain/types'
+import {
+  DAILY_ISSUE_CATEGORY_PRESETS, TOMORROW_PLANS_MAX, WEEKLY_TEAM_SHARE_KINDS,
+} from '../../../shared/domain/types'
 import type { PermissionRule, PunchRecord, ReportEntry, TomorrowPlan } from '../../../shared/domain/types'
 import {
   heuristicPersonalInsight, heuristicWeeklyInsight,
@@ -32,11 +34,23 @@ import type { Env } from '../env'
 import { capCp } from '../lib/text'
 
 const DAILY_COLS = `id, author_kind AS "authorKind", member_id AS "memberId",
-  ai_employee_id AS "aiEmployeeId", date, entries, reflection, issues, tomorrow,
+  ai_employee_id AS "aiEmployeeId", date, entries, reflection, issues, issue_category AS "issueCategory", tomorrow,
   tomorrow_plans AS "tomorrowPlans", status, submitted_at AS "submittedAt"`
 const WEEKLY_COLS = `id, member_id AS "memberId", week_start AS "weekStart",
   goal_review AS "goalReview", main_work AS "mainWork", issues, next_week AS "nextWeek",
+  good_points AS "goodPoints", team_share_kind AS "teamShareKind", team_share_note AS "teamShareNote",
   status, submitted_at AS "submittedAt"`
+
+/** 課題種別の正規化（プリセット外・未指定は '' = 未選択。オペレーター指示 2026-08-03） */
+function cleanIssueCategory(v: unknown): string {
+  const s = typeof v === 'string' ? v.trim() : ''
+  return (DAILY_ISSUE_CATEGORY_PRESETS as readonly string[]).includes(s) ? s : ''
+}
+/** チーム共有事項の種別の正規化（プリセット外・未指定は '' = 既定「特になし」扱い） */
+function cleanTeamShareKind(v: unknown): string {
+  const s = typeof v === 'string' ? v.trim() : ''
+  return (WEEKLY_TEAM_SHARE_KINDS as readonly string[]).includes(s) ? s : ''
+}
 
 /** エントリの正規化（mockup cleanEntries と同一: 0.25h 刻み・progress 0-100。theme = 業務テーマ自由入力・projectId は旧形式互換） */
 function cleanEntries(entries: unknown): ReportEntry[] {
@@ -255,7 +269,7 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
   app.put('/daily', async (c) => {
     const user = c.get('user')
     const body = await c.req.json().catch(() => ({})) as {
-      date?: string; entries?: unknown; reflection?: string; issues?: string
+      date?: string; entries?: unknown; reflection?: string; issues?: string; issueCategory?: string
       tomorrow?: string; tomorrowPlans?: unknown; status?: 'draft' | 'submitted'
     }
     if (!body.date || !/^\d{4}-\d{2}-\d{2}$/.test(body.date)) {
@@ -264,6 +278,7 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
     const status = body.status === 'submitted' ? 'submitted' : 'draft'
     const entries = cleanEntries(body.entries)
     const tomorrowPlans = cleanTomorrowPlans(body.tomorrowPlans)
+    const issueCategory = cleanIssueCategory(body.issueCategory)
     if (status === 'submitted') {
       if (entries.length === 0) throw err('AKO-GEN-001', '作業エントリを 1 行以上入力してください', 400)
       // theme（テーマ）が正。旧クライアント・旧データ編集の projectId のみも許容する（原則7）
@@ -291,17 +306,17 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
       if (row) {
         id = row.id
         await client.query(
-          `UPDATE daily_reports SET entries = $2, reflection = $3, issues = $4, tomorrow = $5,
-             tomorrow_plans = $6, status = $7, submitted_at = COALESCE(submitted_at, $8), updated_at = now()
+          `UPDATE daily_reports SET entries = $2, reflection = $3, issues = $4, issue_category = $5, tomorrow = $6,
+             tomorrow_plans = $7, status = $8, submitted_at = COALESCE(submitted_at, $9), updated_at = now()
            WHERE id = $1`,
-          [id, JSON.stringify(entries), body.reflection ?? '', body.issues ?? '', body.tomorrow ?? '',
+          [id, JSON.stringify(entries), body.reflection ?? '', body.issues ?? '', issueCategory, body.tomorrow ?? '',
             JSON.stringify(tomorrowPlans), status, submittedAt])
       } else {
         id = newId('dr')
         await client.query(
-          `INSERT INTO daily_reports (id, author_kind, member_id, date, entries, reflection, issues, tomorrow, tomorrow_plans, status, submitted_at)
-           VALUES ($1, 'human', $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-          [id, user.id, body.date, JSON.stringify(entries), body.reflection ?? '', body.issues ?? '', body.tomorrow ?? '',
+          `INSERT INTO daily_reports (id, author_kind, member_id, date, entries, reflection, issues, issue_category, tomorrow, tomorrow_plans, status, submitted_at)
+           VALUES ($1, 'human', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+          [id, user.id, body.date, JSON.stringify(entries), body.reflection ?? '', body.issues ?? '', issueCategory, body.tomorrow ?? '',
             JSON.stringify(tomorrowPlans), status, submittedAt])
       }
       await client.query('COMMIT')
@@ -369,15 +384,17 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
     const user = c.get('user')
     const body = await c.req.json().catch(() => ({})) as {
       weekStart?: string; goalReview?: string; mainWork?: string; issues?: string
-      nextWeek?: string; status?: 'draft' | 'submitted'
+      nextWeek?: string; goodPoints?: string; teamShareKind?: string; teamShareNote?: string
+      status?: 'draft' | 'submitted'
     }
     if (!body.weekStart || !/^\d{4}-\d{2}-\d{2}$/.test(body.weekStart)) {
       throw err('AKO-GEN-001', '週の開始日（weekStart）を指定してください', 400)
     }
     const status = body.status === 'submitted' ? 'submitted' : 'draft'
     if (status === 'submitted' && !String(body.mainWork ?? '').trim()) {
-      throw err('AKO-GEN-001', '主要業務を入力してください', 400)
+      throw err('AKO-GEN-001', '今週の主要業務を入力してください', 400)
     }
+    const teamShareKind = cleanTeamShareKind(body.teamShareKind)
     const submittedAt = status === 'submitted' ? nowJstIso() : null
     const client = await pool.connect()
     let id: string
@@ -394,14 +411,18 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
         id = row.id
         await client.query(
           `UPDATE weekly_reports SET goal_review = $2, main_work = $3, issues = $4, next_week = $5,
-             status = $6, submitted_at = $7, updated_at = now() WHERE id = $1`,
-          [id, body.goalReview ?? '', body.mainWork ?? '', body.issues ?? '', body.nextWeek ?? '', status, submittedAt])
+             good_points = $6, team_share_kind = $7, team_share_note = $8,
+             status = $9, submitted_at = $10, updated_at = now() WHERE id = $1`,
+          [id, body.goalReview ?? '', body.mainWork ?? '', body.issues ?? '', body.nextWeek ?? '',
+            body.goodPoints ?? '', teamShareKind, body.teamShareNote ?? '', status, submittedAt])
       } else {
         id = newId('wr')
         await client.query(
-          `INSERT INTO weekly_reports (id, member_id, week_start, goal_review, main_work, issues, next_week, status, submitted_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-          [id, user.id, body.weekStart, body.goalReview ?? '', body.mainWork ?? '', body.issues ?? '', body.nextWeek ?? '', status, submittedAt])
+          `INSERT INTO weekly_reports
+             (id, member_id, week_start, goal_review, main_work, issues, next_week, good_points, team_share_kind, team_share_note, status, submitted_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+          [id, user.id, body.weekStart, body.goalReview ?? '', body.mainWork ?? '', body.issues ?? '', body.nextWeek ?? '',
+            body.goodPoints ?? '', teamShareKind, body.teamShareNote ?? '', status, submittedAt])
       }
       await client.query('COMMIT')
     } catch (e) {

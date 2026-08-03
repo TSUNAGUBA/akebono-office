@@ -677,6 +677,15 @@ export interface TomorrowPlan {
 /** 明日の予定の最大登録数 */
 export const TOMORROW_PLANS_MAX = 3
 
+/**
+ * 本日の課題の種別プリセット（単一選択。空 = 未選択。オペレーター指示 2026-08-03）。
+ * UI 候補と検証（保存値がこの集合か）の SoT。CUSTOMER_LOG_TAG_PRESETS と同じ「値=ラベル」方式。
+ */
+export const DAILY_ISSUE_CATEGORY_PRESETS = [
+  '業務手順', '目的の理解不足', '事前の情報不足', 'スキル', '経験の不足',
+  'コミュニケーション不足', '工数', '優先順位', '顧客', '外部要因', 'その他',
+] as const
+
 export interface DailyReport {
   id: string
   authorKind: 'human' | 'ai'
@@ -686,6 +695,11 @@ export interface DailyReport {
   entries: ReportEntry[]
   reflection: string
   issues: string
+  /**
+   * 本日の課題の種別（DAILY_ISSUE_CATEGORY_PRESETS のいずれか。空 = 未選択。オペレーター指示 2026-08-03）。
+   * 旧データは未設定（原則7 = 表示・保存とも空扱い）
+   */
+  issueCategory?: string
   /** 旧形式の明日の予定（自由記述）。新規入力は tomorrowPlans が正（原則7 = 既存データの表示のため保持） */
   tomorrow: string
   /** 明日の予定（構造化・最大 TOMORROW_PLANS_MAX 件）。旧データは未設定 */
@@ -694,14 +708,32 @@ export interface DailyReport {
   submittedAt: string | null
 }
 
+/**
+ * 週報「チーム共有事項」の種別（オペレーター指示 2026-08-03）。単一選択。既定 = '特になし'。
+ * UI 候補と検証の SoT（値=ラベル方式）。
+ */
+export const WEEKLY_TEAM_SHARE_KINDS = ['相談したい', '判断してほしい', '対応を依頼したい', '特になし'] as const
+/** チーム共有事項の既定種別（未選択・旧データのフォールバック） */
+export const WEEKLY_TEAM_SHARE_DEFAULT = '特になし'
+
 export interface WeeklyReport {
   id: string
   memberId: string
   weekStart: string
+  /** 今週の成果・達成感（旧ラベル「今週の目標達成」。項目名変更のみでキーは不変 = 原則7） */
   goalReview: string
+  /** 今週の主要業務（旧ラベル「主要業務」） */
   mainWork: string
+  /** 課題・原因仮説（旧ラベル「課題」） */
   issues: string
+  /** 来週の最重要テーマ（旧ラベル「来週の予定」。最大 3 つはフォーム側の入力ガイド） */
   nextWeek: string
+  /** うまくいったこと・続けたいこと（オペレーター指示 2026-08-03）。旧データは未設定 */
+  goodPoints?: string
+  /** チーム共有事項の種別（WEEKLY_TEAM_SHARE_KINDS のいずれか。既定 '特になし'）。旧データは未設定 */
+  teamShareKind?: string
+  /** チーム共有事項の自由入力（任意）。旧データは未設定 */
+  teamShareNote?: string
   status: 'draft' | 'submitted'
 }
 
@@ -853,7 +885,7 @@ export interface AiActivityLog {
   costUsd: number
 }
 
-export type NotificationKind = 'approval' | 'comment' | 'reminder' | 'ai_report' | 'system' | 'escalation'
+export type NotificationKind = 'approval' | 'comment' | 'reminder' | 'ai_report' | 'system' | 'escalation' | 'poipoi'
 
 export interface AppNotification {
   id: string
