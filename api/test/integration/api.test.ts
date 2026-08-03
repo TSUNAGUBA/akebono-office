@@ -5380,6 +5380,45 @@ describe('Phase D: データ取込（F-32）・ダッシュボード保管（F-4
       })
       expect(res.json.error?.code).toBe('AKO-IMP-005')
     })
+
+    it('Google スプレッドシート（sheets_pull）: 未設定は status=false・URL/一覧は AKO-SHEETS-001・コールバックはエラーリダイレクト・config 往復・未連携実行は AKO-SHEETS-001', async () => {
+      // OAuth 未設定（テスト env）: status は enabled/connected=false（カレンダー/GA と同型）
+      const st = (await api('GET', '/v1/akebono/sheets/status', { as: MEMBER })).json.data as
+        { enabled: boolean; connected: boolean }
+      expect(st).toMatchObject({ enabled: false, connected: false })
+      // 同意 URL・ブック一覧は未設定で AKO-SHEETS-001（連携設定が先）
+      expect((await api('GET', '/v1/akebono/sheets/oauth/url', { as: ADMIN })).json.error?.code).toBe('AKO-SHEETS-001')
+      expect((await api('GET', '/v1/akebono/sheets/spreadsheets', { as: ADMIN })).json.error?.code).toBe('AKO-SHEETS-001')
+      // コールバックは認証なしで到達し、未設定はフロントへエラーリダイレクト（500 にしない）
+      const cb = await app.request('/v1/akebono/sheets/oauth/callback?state=x&code=y')
+      expect(cb.status).toBe(302)
+      expect(cb.headers.get('location')).toContain('sheets=error')
+
+      // 取込元 sheets_pull: config が正規化されて往復（開始列は大文字化・既定補完・他方式項目は落とす）
+      const src = await api('POST', '/v1/akebono/import-sources', {
+        as: ADMIN, body: {
+          name: 'スプレッドシート取込', method: 'sheets_pull', encoding: 'utf8', targetEntity: 'product',
+          config: { spreadsheetId: 'ss-1', spreadsheetName: '商品台帳', sheetName: '商品', headerRow: 2, startColumn: 'b', endpoint: 'x' },
+        },
+      })
+      expect(src.status).toBe(201)
+      const srcId = (src.json.data as { id: string }).id
+      expect((src.json.data as { method: string; config: Record<string, unknown> })).toMatchObject({
+        method: 'sheets_pull',
+        config: { spreadsheetId: 'ss-1', spreadsheetName: '商品台帳', sheetName: '商品', headerRow: 2, startColumn: 'B' },
+      })
+      // マッピング（Sheets は CSV と同じ columnIndex ロケータを保持）
+      const map = await api('POST', '/v1/akebono/import-mappings', {
+        as: ADMIN, body: { sourceId: srcId, fields: [
+          { sourceField: '商品コード', targetItemKey: 'code', columnIndex: 0 },
+          { sourceField: '商品名', targetItemKey: 'name', columnIndex: 1 },
+        ] },
+      })
+      expect((map.json.data as { fields: { columnIndex: number | null }[] }).fields.map(f => f.columnIndex)).toEqual([0, 1])
+      // 実行: 未連携のため AKO-SHEETS-001（実取込エンジンが fetchSheetRows で検出。ファイル添付は不要）
+      const run = await api('POST', '/v1/akebono/import-runs', { as: ADMIN, body: { sourceId: srcId } })
+      expect(run.json.error?.code).toBe('AKO-SHEETS-001')
+    })
   })
 
   // ---------- ダッシュボード AI レポート保管（F-41）: 導出キャッシュ upsert ----------

@@ -25,6 +25,7 @@ export const IMPORT_METHOD_LABELS: Record<ImportMethod, string> = {
   file_fixed: '固定長テキスト',
   file_json: 'JSON ファイル',
   api_pull: 'API 接続（pull）',
+  sheets_pull: 'Google スプレッドシート',
 }
 export const IMPORT_ENTITY_LABELS: Record<ImportTargetEntity, string> = {
   product: '商品', sku: 'SKU', company: '取引先', sales_record: '売上明細', inventory: '在庫',

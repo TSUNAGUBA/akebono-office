@@ -253,7 +253,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    SRC[取込元<br/>CSV / 固定長 / JSON / API pull] --> STG[ステージング<br/>import_rows（原文 + 正規化列）]
+    SRC[取込元<br/>CSV / 固定長 / JSON / API pull / Google スプレッドシート] --> STG[ステージング<br/>import_rows（原文 + 正規化列）]
     STG --> VAL[検証 DQ<br/>必須/型/参照整合/コード正規化<br/>error=行隔離・warn=通過]
     VAL --> PRE[dry-run プレビュー<br/>変換結果 + 反映件数見積]
     PRE -->|管理者が実行| APPLY[反映<br/>自然キー upsert（冪等）<br/>1,000 行単位トランザクション]
@@ -271,7 +271,7 @@ flowchart LR
 
 | エンティティ | 主要属性 |
 |---|---|
-| `ImportSource` | id, name, method(`file_csv`/`file_fixed`/`file_json`/`api_pull`), encoding(`utf8`/`sjis`), targetEntity(`product`/`sku`/`company`/`sales_record`/`inventory`/…), apiConfig?(url, authKind, secretRef), schedule?(`manual`/`daily`), active |
+| `ImportSource` | id, name, method(`file_csv`/`file_fixed`/`file_json`/`api_pull`/`sheets_pull`〔Google スプレッドシート・2026-08-03〕), encoding(`utf8`/`sjis`), targetEntity(`product`/`sku`/`company`/`sales_record`/`inventory`/…), apiConfig?(url, authKind, secretRef), sheetsConfig?(spreadsheetId, spreadsheetName, sheetName, headerRow, startColumn), schedule?(`manual`/`daily`), active |
 | `ImportMapping` | id, sourceId, version, status(`draft`/`active`/`superseded`), fields[{sourceField(列名 or 固定長項目名 or JSON パス), targetItemKey, transforms[]}], createdBy | active 版は不変。改訂は新版作成 → 切替 |
 | `FixedLayout` | id, sourceId, fields[{name, start, length, type, trim}] | Shift_JIS はバイト位置で切り出し（warehouse RecordLayout 参考） |
 | `ImportRun` | id, sourceId, mappingVersion, fileRef?, startedAt, finishedAt, status(`staged`/`validated`/`applied`/`failed`/`reverted`), counts{staged, applied, skipped, failed}, commitToken, executedBy | 記録系（追記のみ） |
@@ -282,6 +282,7 @@ flowchart LR
 - **左辺の生成（実装済み・F-32 Part②）**: 取込方式ごとに取込元を解析して左辺（マッピング元）を生成する。CSV = ファイル読込で列（列番号＋論理名）、JSON/API = 貼付/サンプル応答からキー抽出、固定長 = 開始〜終了バイト。右辺は対象アプリの有効項目（既定＋カスタマイズ項目 = `useAppFields`）から**人が確定**する。
   - _AI 候補提示（Vertex AI で target 候補を構造化出力し人が確定）は当初構想。実装は上記の解析ベース検出で置換した（`/suggest` 未実装）。再導入する場合は解析ベース導線の上乗せとして扱う。_
 - **API 接続（v1.5）**: REST pull（Bearer / API キー / Basic）。認証秘匿値は本番では Secret Manager 参照名のみ DB に持つ想定（実装フェーズは config.authValue に保持し、`GET /import-sources` で**管理者にのみ実値・非管理者はマスク** = 最小権限）。**実 API 接続（SSRF 対策付き）は実装済み（2026-07-30 = implementation-status §48-1。lib/safe-fetch = https のみ・内部レンジ遮断・リダイレクト不追跡〔設計の「3 回まで + 再検証」より厳格側〕）**。push 受信（Webhook）は後続。
+- **Google スプレッドシート取込（`sheets_pull`・実装済み 2026-08-03 = §56）**: Google カレンダー連携と同型の OAuth 2.0（spreadsheets.readonly + drive.readonly・AES-256-GCM 暗号化・state 一回性 10 分 TTL + email 突合・テナント単位の単一接続 `sheets_tokens` id='default'）。操作は **連携認証 → 対象ブック検索/選択（Drive files.list）→ シート〔タブ〕選択 → 開始行（ヘッダ行）/開始列（A1）指定 → 列定義取得 → 各列を対象アプリ項目へマッピング → 取込**。run 時にサーバーが Sheets values API で指定範囲を読み取り、開始行以降・開始列以降でスライス → `rowsToCsv` で CSV 化 → 既存 CSV 抽出（`extractCsvRecords`・hasHeader:true・区切り ','・columnIndex ロケータ）へ流す。左辺の列番号は開始列でスライス済みのため 0 始まり。ファイル添付は不要（サーバーが直接取得）。エラー: AKO-SHEETS-001 未連携 / 002 API 失敗 / 003 対象未指定。連携ブラウズ・取込設定は管理者のみ。
 
 ### 5.3 取込・外部アクセスのセキュリティ（AS 観点）
 

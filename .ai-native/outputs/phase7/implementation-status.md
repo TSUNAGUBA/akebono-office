@@ -1709,3 +1709,36 @@
 
 ### 55-x 反復レビュー（原則9）
 - [x] **セルフレビュー（Push 前チェック）**: 手動ステップなし / 冪等（0050 DROP IF EXISTS）/ 既存パターン再利用（CustomerLogPanel の watch 補完流儀・Project.companyId 直参照）/ 非ブロッキング該当なし / ドキュメント全件更新（functional-requirements F-18・F-06b / data-design / api-design / screen-design / 本 §55）/ 波及は Grep で確認（minutesMemo/minutes_memo の残存 = 廃止を説明するコメントと「無視される」検証のみ）/ 下位互換の破壊的変更（列 DROP）はオペレーター説明を migration に明記（原則7）/ 取消可能性（顧客ログの取消/復元は不変）。
+
+## 56. Google スプレッドシート取込（データ取込・連携 F-32 の方式 `sheets_pull`。バッチ5 ①。オペレーター指示 2026-08-03）の完了条件（Definition of Done）
+
+> オペレーター指示 2026-08-03 ①「/akebono の各セグメントのアプリで『データ取込・連携』のスプレッドシートを対象にできるか」への**フル実装**回答。
+> 要望どおり **Google カレンダー同期と同様の連携認証 → 対象ブック検索・選択 → シート選択 → 開始行・列指定 → 列定義取得 → 各列をアプリ項目へマッピング → 取込** の操作感を、既存の取込基盤（F-32）へ新方式 `sheets_pull` として追加した。ブランチ `claude/reports-customer-log-updates-k6on2x`。
+
+### 56-1 可否回答（記録）
+- **可能**。既存 F-32 は取込元方式が拡張可能な設計（method 別に config を正規化し、実取込は shared/domain の抽出器へ流す）。Google スプレッドシートは「開始行=ヘッダ・開始列以降」でスライスした 2 次元配列を CSV 化すれば既存 CSV 抽出器をそのまま再利用でき（原則3）、OAuth はカレンダー/GA の実装（token 暗号化・state ノンス・email 突合）と同型で追加できる。
+
+### 56-2 実装（API）
+- [x] **OAuth 連携（`api/src/routes/sheets.ts`・新規）**: カレンダー/GA と同型の認可コードフロー。scope = `spreadsheets.readonly` + `drive.readonly`。**テナント単位の単一接続**（`sheets_tokens` id='default'）。`sheetsAccess`（期限切れは refresh）・`fetchSheetRows`（値取得 → 開始行/列スライス・MAX_SHEET_ROWS=50000）・`sheetsOauthCallback`（復帰 `/akebono/imports?sheets=connected|error`・email 突合）・`sheetsRoutes`（status / oauth/url〔admin〕/ disconnect〔admin〕/ spreadsheets 検索〔Drive files.list〕/ :id/tabs / :id/columns）。エラー AKO-SHEETS-001（未連携）/002（API 失敗）/003（対象未指定）。
+- [x] **実取込（`akebono-imports.ts`）**: IMPORT_METHODS に `sheets_pull` を追加。`akebonoImportsRoutes(pool, env)` へ env を注入。run の材料取得で sheets_pull は `fetchSheetRows` → `rowsToCsv` → 既存 CSV 抽出（`extractCsvRecords`・hasHeader:true・区切り ','・utf8）へ流す。ファイル添付不要。
+- [x] **shared 純関数（`shared/domain/import-parse.ts`）**: `a1ColToIndex`（A1 列 → 0 始まり index）・`rowsToCsv`（RFC4180 引用）・`normalizeImportSourceConfig` に sheets_pull 分岐（spreadsheetId/spreadsheetName/sheetName/headerRow〔1〜100000・既定1〕/startColumn〔/^[A-Z]{1,3}$/・既定A〕）。フロント/API 共有 = 両モード parity。
+- [x] **DB（migration 0051）**: `sheets_tokens`（単一接続）・`sheets_oauth_states`（一回性 10 分 TTL）を新設（CREATE IF NOT EXISTS = 冪等）。**`import_sources.method` の CHECK 制約を 0035 のインライン定義から拡張**して `sheets_pull` を許容（DROP CONSTRAINT IF EXISTS → ADD。既存方式は不変 = 原則7）。
+- [x] **配線（`app.ts`）**: OAuth コールバックを認証前に登録・`sheetsRoutes` を `/v1/akebono` へマウント・`akebonoImportsRoutes(pool, env)` へ env 追加。
+
+### 56-3 実装（フロント）
+- [x] **mock composable（`useSheetsImport.ts`・新規）**: status/refreshStatus/connect/disconnect/listSpreadsheets/listTabs/detectColumns。API モードは `/v1/akebono/sheets/*`・モックは疑似同意（即接続）+ 決定的なダミーのブック/シート/列（実 Google 通信なし・SSR 安全）。
+- [x] **取込画面（`imports.vue`）**: マッピング編集モーダルの方式別設定に **sheets_pull** ブロックを追加（未設定=案内 / 未連携=連携ボタン / 連携済=ブック検索・選択 → シート選択 → 開始行/列 → 「列を取得」で左辺自動生成）。左辺は CSV と同じ列番号表現（開始列スライス済 = 0 始まり）。`saveMapping` は sheets_pull で columnIndex ロケータを保持し、ブック・シート未選択は保存前ガード。`?sheets=connected|error` のコールバック復帰をトースト表示。
+- [x] **method ラベル（`useAkebonoImports.ts`）**: IMPORT_METHOD_LABELS に `sheets_pull: 'Google スプレッドシート'`。
+
+### 56-4 検証（実測値。この環境で実行）
+- [x] `cd mockup && npm run typecheck` green / `npm test` **221 passed**（件数不変 = 既存テストが緑のまま追随）
+- [x] `cd api && npm run typecheck` green / unit **267 passed**（import-parse に a1ColToIndex/rowsToCsv/sheets_pull config の 8 件を追加）/ `npm run test:integration`（使い捨て PostgreSQL・migration 0051 適用）**230 passed**（sheets_pull の status/URL/callback/config 往復/未連携実行 = AKO-SHEETS-001 を追加）
+- [x] **migration 0051 冪等性**: CREATE IF NOT EXISTS + DROP CONSTRAINT IF EXISTS → ADD は再適用安全。テスト env（GOOGLE_OAUTH_* 未設定）は enabled=false で連携 UI を隠す経路を検証。
+
+### 56-5 設計判断（記録）
+- **接続はテナント単位の単一接続**（sheets_tokens id='default'）。取込は管理者運用のため per-user ではない（GA のリソース単位とも異なる）。連携ブラウズ・取込設定・実行は管理者のみ（AKO-AUTH-003 と両モード一致）。
+- **CSV 抽出器の再利用**: 開始行/列スライス済みの値を `rowsToCsv` で CSV 化し `extractCsvRecords` へ流すことで、変換（trim/number/date/…）・参照解決・冪等 upsert・エラー行隔離を既存経路と完全共有（新規反映エンジンを書かない = 原則3・原則4）。
+- **取消可能性（原則9.5）**: 取込元 = 論理削除+復元・マッピング = 新版で上書き（旧版は履歴）・連携 = disconnect で解除、はいずれも既存フローを継承。反映済みデータの是正は各アプリの既存フロー。
+
+### 56-x 反復レビュー（原則9）
+- [x] **セルフレビュー（Push 前チェック）**: 手動ステップなし（連携はUIボタン→OAuth）/ 冪等（0051・token upsert・config 正規化は再送安全）/ 既存コード再利用（calendar/GA の OAuth 型・extractCsvRecords・normalizeImportSourceConfig・useAppFields）/ 非ブロッキング（連携失敗・タブ復元失敗はトースト/無視で主要フロー継続 = 原則4）/ ドキュメント全件更新（akebono-menu-design §5・data-design・api-design・本 §56）/ 波及は Grep で確認（IMPORT_METHODS/IMPORT_METHOD_LABELS/rowGridClass/method 分岐の網羅）/ SoT→キャッシュ順序（sheets_tokens 書込 → status 反映）/ 下位互換（新方式追加・CHECK 拡張は既存非破壊 = 原則7）/ レスポンシブ（検索・選択リストは flex/max-h スクロール）/ 取消可能性（56-5）。

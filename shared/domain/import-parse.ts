@@ -27,6 +27,25 @@ export function parseCsvLine(line: string, delimiter = ','): string[] {
   return out
 }
 
+/** A1 記法の列（'A'/'C'/'AA'…）→ 0 始まりの列インデックス。不正は 0（'A'）。Google スプレッドシート取込で使用 */
+export function a1ColToIndex(col: string): number {
+  const s = String(col ?? '').trim().toUpperCase()
+  if (!/^[A-Z]+$/.test(s)) return 0
+  let n = 0
+  for (const ch of s) n = n * 26 + (ch.charCodeAt(0) - 64)
+  return n - 1
+}
+
+/** 2 次元セル配列を CSV 文字列へ直列化（RFC4180: カンマ/引用符/改行を含むセルは "" で囲み・内部 " を "" へ）。
+ *  Google スプレッドシートの取込値を既存 CSV 抽出（extractCsvRecords）へ流すために使う（純粋・単体テスト対象） */
+export function rowsToCsv(rows: string[][]): string {
+  const esc = (v: unknown): string => {
+    const s = v == null ? '' : String(v)
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+  }
+  return rows.map(r => r.map(esc).join(',')).join('\n')
+}
+
 export interface CsvColumn { index: number; name: string }
 export interface CsvParseResult { columns: CsvColumn[]; sampleRows: string[][] }
 
@@ -135,6 +154,16 @@ export function normalizeImportSourceConfig(raw: unknown, method: string): Recor
     const at = (IMPORT_AUTH_TYPES as readonly string[]).includes(String(o.authType)) ? String(o.authType) : 'none'
     cfg.authType = at
     cfg.authValue = at === 'none' ? '' : capCp(String(o.authValue ?? '').trim(), 500)
+  }
+  if (method === 'sheets_pull') {
+    // Google スプレッドシート取込（2026-08-03）: 対象ブック/シート・開始行（ヘッダ行）・開始列を保持
+    cfg.spreadsheetId = capCp(String(o.spreadsheetId ?? '').trim(), 200)
+    cfg.spreadsheetName = capCp(String(o.spreadsheetName ?? '').trim(), 300)
+    cfg.sheetName = capCp(String(o.sheetName ?? '').trim(), 200)
+    const hr = Number(o.headerRow)
+    cfg.headerRow = Number.isInteger(hr) && hr >= 1 && hr <= 100000 ? hr : 1
+    const col = String(o.startColumn ?? '').trim().toUpperCase()
+    cfg.startColumn = /^[A-Z]{1,3}$/.test(col) ? col : 'A'
   }
   return cfg
 }

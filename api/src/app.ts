@@ -16,6 +16,7 @@ import { akebonoRoutes } from './routes/akebono'
 import { akebonoBillingRoutes } from './routes/akebono-billing'
 import { akebonoDashboardRoutes } from './routes/akebono-dashboard'
 import { akebonoImportsRoutes } from './routes/akebono-imports'
+import { sheetsOauthCallback, sheetsRoutes } from './routes/sheets'
 import { akebonoTradeRoutes } from './routes/akebono-trade'
 import { attendanceRoutes } from './routes/attendance'
 import { configsRoutes } from './routes/configs'
@@ -108,6 +109,7 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
   // 本人性は DB 保存の state ノンス（一回性・10 分 TTL）+ id_token の email と members.email の突合で担保する
   app.get('/v1/calendar/oauth/callback', calendarOauthCallback(pool, env))
   app.get('/v1/media/oauth/callback', mediaOauthCallback(pool, env))
+  app.get('/v1/akebono/sheets/oauth/callback', sheetsOauthCallback(pool, env))
   app.use('/v1/*', authMiddleware(env, pool))
   // 機能単位の権限ガード（F-16。認証の後段。/v1/masters・/v1/configs はデータ面のため対象外 = lib/permissions 参照）
   app.use('/v1/*', featureGuard(pool))
@@ -201,7 +203,8 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
   app.route('/v1/akebono', akebonoTradeRoutes(pool))
   app.route('/v1/akebono', akebonoBillingRoutes(pool))
   // Phase D（0035-0038）: データ取込（F-32）・ダッシュボード AI レポート保管（F-41）を同配下へ追加マウント
-  app.route('/v1/akebono', akebonoImportsRoutes(pool))
+  app.route('/v1/akebono', akebonoImportsRoutes(pool, env))
+  app.route('/v1/akebono', sheetsRoutes(pool, env))
   app.route('/v1/akebono', akebonoDashboardRoutes(pool, env))
   app.route('/v1/holidays', holidaysRoutes(pool))
   app.route('/v1/search', searchRoutes(pool, env))
