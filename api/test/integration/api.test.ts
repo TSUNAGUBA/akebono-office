@@ -545,6 +545,83 @@ describe('日報', () => {
   })
 })
 
+// バッチ4（オペレーター指示 2026-08-03）: 日報「本日の課題の種別」・週報の新規項目・ぽいぽいポストの宛先通知
+describe('バッチ4: 日報/週報の項目拡張 + ぽいぽいポスト通知', () => {
+  afterAll(async () => {
+    // 宛先設定を空へ戻す（後続の 7c 等が作るぽいぽいポストで通知が発火しないように）
+    await api('PUT', '/v1/configs/poipoi-notify-recipients', { as: ADMIN, body: { value: '' } })
+  })
+
+  it('日報: 本日の課題の種別（issueCategory）を保存・取得できる。プリセット外は空へ正規化', async () => {
+    // issues 本文は空にする（課題エスカレーションの cooldown で後続テストへ影響させない）。issueCategory は独立に保存される
+    const date = '2026-08-03'
+    const ok = await api('PUT', '/v1/reports/daily', {
+      as: MEMBER,
+      body: { date, entries: [{ theme: '改善', task: '手順整理', hours: 1, progress: 0 }], issueCategory: '業務手順', status: 'submitted' },
+    })
+    expect(ok.status).toBe(200)
+    const saved = await api('GET', `/v1/reports/daily?date=${date}`, { as: MEMBER })
+    expect((saved.json.data as { issueCategory: string }[])[0]!.issueCategory).toBe('業務手順')
+
+    // プリセット外の種別は '' に正規化（提出済みのまま本人編集）
+    const bad = await api('PUT', '/v1/reports/daily', {
+      as: MEMBER,
+      body: { date, entries: [{ theme: '改善', task: '手順整理', hours: 1, progress: 0 }], issueCategory: '謎の種別', status: 'submitted' },
+    })
+    expect(bad.status).toBe(200)
+    const after = await api('GET', `/v1/reports/daily?date=${date}`, { as: MEMBER })
+    expect((after.json.data as { issueCategory: string }[])[0]!.issueCategory).toBe('')
+  })
+
+  it('週報: goodPoints / teamShareKind / teamShareNote を保存・取得。種別プリセット外は空へ正規化', async () => {
+    const weekStart = '2026-08-10'
+    const base = {
+      weekStart, mainWork: '実装', goalReview: '達成度80%', goodPoints: '朝会が機能した',
+      teamShareKind: '相談したい', teamShareNote: '来週の優先度を相談したい', status: 'draft' as const,
+    }
+    expect((await api('PUT', '/v1/reports/weekly', { as: MEMBER, body: base })).status).toBe(200)
+    const saved = await api('GET', '/v1/reports/weekly', { as: MEMBER })
+    const row = (saved.json.data as { weekStart: string; goodPoints: string; teamShareKind: string; teamShareNote: string }[])
+      .find(r => r.weekStart === weekStart)!
+    expect(row.goodPoints).toBe('朝会が機能した')
+    expect(row.teamShareKind).toBe('相談したい')
+    expect(row.teamShareNote).toBe('来週の優先度を相談したい')
+
+    // プリセット外の種別は '' へ正規化（draft のまま更新）
+    expect((await api('PUT', '/v1/reports/weekly', { as: MEMBER, body: { ...base, teamShareKind: '謎' } })).status).toBe(200)
+    const after = await api('GET', '/v1/reports/weekly', { as: MEMBER })
+    expect((after.json.data as { weekStart: string; teamShareKind: string }[]).find(r => r.weekStart === weekStart)!.teamShareKind).toBe('')
+  })
+
+  it('ぽいぽいポスト: 設定なしでは通知は飛ばない', async () => {
+    await api('PUT', '/v1/configs/poipoi-notify-recipients', { as: ADMIN, body: { value: '' } })
+    const before = (await api('GET', '/v1/notifications', { as: ADMIN })).json.data as unknown[]
+    const post = await api('POST', '/v1/notes', { as: MEMBER, body: { kind: 'poipoi', body: '宛先未設定のポスト' } })
+    expect(post.status).toBe(201)
+    const after = (await api('GET', '/v1/notifications', { as: ADMIN })).json.data as { kind: string }[]
+    expect(after.length).toBe(before.length)
+    expect(after.some(n => n.kind === 'poipoi')).toBe(false)
+  })
+
+  it('ぽいぽいポスト: 宛先（ロール）へ原文を通知し、投稿者本人は除外する', async () => {
+    // 宛先 = admin ロール + member ロール。投稿者は MEMBER（member ロール）= 本人除外の検証を兼ねる
+    await api('PUT', '/v1/configs/poipoi-notify-recipients', {
+      as: ADMIN,
+      body: { value: JSON.stringify([{ type: 'role', role: 'admin' }, { type: 'role', role: 'member' }]) },
+    })
+    const post = await api('POST', '/v1/notes', { as: MEMBER, body: { kind: 'poipoi', body: '改善アイデア: 朝会を短縮する' } })
+    expect(post.status).toBe(201)
+    // ADMIN（role=admin）は通知を受け取り、本文に原文プレビュー・リンクは /poipoi
+    const adminNotes = (await api('GET', '/v1/notifications?unread=1', { as: ADMIN })).json.data as { kind: string; body: string; link: string }[]
+    const n = adminNotes.find(x => x.kind === 'poipoi' && x.body.includes('朝会を短縮する'))
+    expect(n).toBeTruthy()
+    expect(n!.link).toBe('/poipoi')
+    // 投稿者 MEMBER（role=member だが本人）は自分のポスト通知を受け取らない
+    const memberNotes = (await api('GET', '/v1/notifications', { as: MEMBER })).json.data as { kind: string; body: string }[]
+    expect(memberNotes.some(x => x.kind === 'poipoi' && x.body.includes('朝会を短縮する'))).toBe(false)
+  })
+})
+
 describe('マスタ CRUD', () => {
   it('一般ユーザーは参照可・変更不可（AKO-AUTH-003）', async () => {
     expect((await api('GET', '/v1/masters/departments', { as: MEMBER })).status).toBe(200)

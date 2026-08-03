@@ -16,7 +16,9 @@ import type { Ref } from 'vue'
 import type {
   DailyReport, ReportComment, ReportEntry, ReportRead, ReportReadKind, Result, TomorrowPlan, WeeklyReport,
 } from '~/types/domain'
-import { TOMORROW_PLANS_MAX } from '../../../shared/domain/types'
+import {
+  DAILY_ISSUE_CATEGORY_PRESETS, TOMORROW_PLANS_MAX, WEEKLY_TEAM_SHARE_KINDS,
+} from '../../../shared/domain/types'
 import { addDays, weekdayOf } from '~/utils/format'
 import { matrixVisible, parseTeamVisibleIds, timelineVisibleWith } from '~/utils/team-visibility'
 
@@ -109,6 +111,8 @@ export interface DailyReportInput {
   entries: ReportEntry[]
   reflection: string
   issues: string
+  /** 本日の課題の種別（DAILY_ISSUE_CATEGORY_PRESETS のいずれか。空 = 未選択。オペレーター指示 2026-08-03） */
+  issueCategory: string
   /** 旧形式の明日の予定（自由記述。既存データの保持用パススルー） */
   tomorrow: string
   /** 明日の予定（構造化・最大 TOMORROW_PLANS_MAX 件。翌営業日の日報へ自動反映） */
@@ -121,6 +125,23 @@ export interface WeeklyReportInput {
   mainWork: string
   issues: string
   nextWeek: string
+  /** うまくいったこと・続けたいこと（オペレーター指示 2026-08-03） */
+  goodPoints: string
+  /** チーム共有事項の種別（WEEKLY_TEAM_SHARE_KINDS のいずれか。既定 '特になし'） */
+  teamShareKind: string
+  /** チーム共有事項の自由入力（任意） */
+  teamShareNote: string
+}
+
+/** 課題種別の正規化（プリセット外・未指定は '' = 未選択。API cleanIssueCategory と同一挙動） */
+function cleanIssueCategory(v: string | undefined): string {
+  const s = (v ?? '').trim()
+  return (DAILY_ISSUE_CATEGORY_PRESETS as readonly string[]).includes(s) ? s : ''
+}
+/** チーム共有事項の種別の正規化（プリセット外・未指定は '' = 既定「特になし」扱い） */
+function cleanTeamShareKind(v: string | undefined): string {
+  const s = (v ?? '').trim()
+  return (WEEKLY_TEAM_SHARE_KINDS as readonly string[]).includes(s) ? s : ''
 }
 
 export type SubmissionCell = 'submitted' | 'draft' | 'none'
@@ -399,6 +420,7 @@ export function useReports() {
       }
     }
     const tomorrowPlans = cleanTomorrowPlans(input.tomorrowPlans)
+    const issueCategory = cleanIssueCategory(input.issueCategory)
     if (isApi) {
       // SoT（API）へ書込 → 対象月キャッシュを取り直す（原則6）。提出済み保護はサーバーが FOR UPDATE で最終判定
       try {
@@ -409,6 +431,7 @@ export function useReports() {
             entries,
             reflection: input.reflection,
             issues: input.issues,
+            issueCategory,
             tomorrow: input.tomorrow,
             tomorrowPlans,
             status,
@@ -424,7 +447,7 @@ export function useReports() {
     if (existing) {
       // 初回提出時刻は保持（提出済みの編集で提出時刻を書き換えない）
       dailyReports.value = dailyReports.value.map(r => r.id === existing.id
-        ? { ...r, entries, reflection: input.reflection, issues: input.issues, tomorrow: input.tomorrow, tomorrowPlans, status, submittedAt: r.submittedAt ?? submittedAt }
+        ? { ...r, entries, reflection: input.reflection, issues: input.issues, issueCategory, tomorrow: input.tomorrow, tomorrowPlans, status, submittedAt: r.submittedAt ?? submittedAt }
         : r)
       commit()
       return { ok: true, id: existing.id }
@@ -439,6 +462,7 @@ export function useReports() {
       entries,
       reflection: input.reflection,
       issues: input.issues,
+      issueCategory,
       tomorrow: input.tomorrow,
       tomorrowPlans,
       status,
@@ -651,9 +675,10 @@ export function useReports() {
       return err('AKO-REP-002', '提出済みの週報は編集できません')
     }
     if (submitNow && !input.mainWork.trim()) {
-      return err('AKO-GEN-001', '主要業務を入力してください')
+      return err('AKO-GEN-001', '今週の主要業務を入力してください')
     }
     const status = submitNow ? 'submitted' as const : 'draft' as const
+    const teamShareKind = cleanTeamShareKind(input.teamShareKind)
     if (isApi) {
       const res = await apiResult(() => apiFetch<{ id: string }>('/v1/reports/weekly', {
         method: 'PUT',
@@ -663,6 +688,9 @@ export function useReports() {
           mainWork: input.mainWork,
           issues: input.issues,
           nextWeek: input.nextWeek,
+          goodPoints: input.goodPoints,
+          teamShareKind,
+          teamShareNote: input.teamShareNote,
           status,
         },
       }))
@@ -671,7 +699,8 @@ export function useReports() {
     }
     if (existing) {
       weeklyReports.value = weeklyReports.value.map(r => r.id === existing.id
-        ? { ...r, goalReview: input.goalReview, mainWork: input.mainWork, issues: input.issues, nextWeek: input.nextWeek, status }
+        ? { ...r, goalReview: input.goalReview, mainWork: input.mainWork, issues: input.issues, nextWeek: input.nextWeek,
+            goodPoints: input.goodPoints, teamShareKind, teamShareNote: input.teamShareNote, status }
         : r)
       commit()
       return { ok: true, id: existing.id }
@@ -685,6 +714,9 @@ export function useReports() {
       mainWork: input.mainWork,
       issues: input.issues,
       nextWeek: input.nextWeek,
+      goodPoints: input.goodPoints,
+      teamShareKind,
+      teamShareNote: input.teamShareNote,
       status,
     }]
     commit()

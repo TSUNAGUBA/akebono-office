@@ -158,6 +158,7 @@ export const NOTIFICATION_KIND_LABELS: Record<NotificationKind, string> = {
   ai_report: 'AI報告',
   system: 'システム',
   escalation: 'エスカレーション',
+  poipoi: 'ぽいぽいポスト',
 }
 
 export const ESCALATION_REASON_LABELS: Record<EscalationReason, string> = {

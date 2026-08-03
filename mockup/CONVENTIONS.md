@@ -168,6 +168,7 @@ const di = useDashboardInsight() // buildSegmentSummary/buildCompanySummary（�
 | `MastersPermissionMatrix` | 権限表モード（props なし = ruleCrud を内部利用）。ページ > 機能 > 項目 の 3 階層ツリー × ロール/役職/個人（バッチ7m）。セルは常に可否を表示（明示 = 濃色 / 上位一括・既定値 = 薄色破線）・クリックで反転・引き継ぎ値へ戻すと明示ルール解除。表ヘッダは内部スクロール + sticky |
 | `SettingsMenuCategoryEditor` | props なし。メニューカテゴリのカスタマイズ（F-13-8。エリア切替 + カテゴリ CRUD/並び替え/カード割当 + 既定に戻す。バッチ7h。編集 UI は `UiMenuSectionEditor` 共用・ダッシュボードタブは外部リンク/AKEBONO も割当候補 + 3 階層はレイアウトへ案内） |
 | `UiMenuSectionEditor` | modelValue(MenuCategoryDef[]) / cardOptions / emptyHint。メニューセクション編集の共通 UI（追加・削除・改名・並び替え・カード割当 = UiMultiCombobox）。保存/リセット/スコープは呼び出し側（#25。原則3。MenuCategoryEditor と DashboardSectionEditor が共用） |
+| `SettingsNotifyRecipientsEditor` | modelValue(NotifyRecipientTarget[])。通知の宛先を「ロール/役職/個人」で複数指定（ApproverSteps と同 3 種・順序/モードなし）。各行に解決人数プレビュー・空許容。設定「ぽいぽいポストの通知先」で使用（F-12-5・F-13-10・2026-08-03。解決 = 共有 resolveNotifyRecipientIds） |
 | `OfficeDashboardNotifications` | props なし。ダッシュボードの通知欄（エスカレーション/承認依頼/稟議タブ + 未読のみフィルタ・直近 8 件）。index.vue から分離し通知位置（side/bottom）で配置切替可能に（2026-08-03） |
 | `OfficeDashboardLayoutPreview` | layout(DashboardLayout)。レイアウトの軽量プレビュー（実データ不要。セクション見出し + カード数チップ + 通知位置図示 + AKEBONO/密度反映。F-13-9） |
 | `OfficeDashboardLayoutPicker` | props なし。ダッシュボードのレイアウト選択。「テンプレート」/「セクションを編集」タブ切替 + 適用スコープ〔自分/全社〕+ 現在有効層表示 + 解除。ヘッダの「レイアウト」ボタン → UiModal 内で使用（F-13-9・2026-08-03） |

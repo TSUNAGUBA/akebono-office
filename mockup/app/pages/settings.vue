@@ -11,6 +11,8 @@ import type {
   CustomFieldDef, CustomFieldType, EscalationRule, ExternalLink, FeatureToggle,
 } from '~/types/domain'
 import type { TableColumn } from '~/types/ui'
+import type { NotifyRecipientTarget } from '~/utils/notify-recipients'
+import { parseNotifyRecipients } from '~/utils/notify-recipients'
 import { fmtDateTime } from '~/utils/format'
 
 const { isAdmin } = useCurrentUser()
@@ -94,6 +96,14 @@ const reportInputMode = computed({
   set: (v: string) => {
     setConfig('reportInputMode', v)
     toast.show('日報の入力方式を変更しました（日報画面に即時反映されます）')
+  },
+})
+
+// ぽいぽいポストの通知先（ロール/役職/個人。オペレーター指示 2026-08-03）。SoT = configs 'poipoi-notify-recipients'（JSON）
+const poipoiNotifyRecipients = computed<NotifyRecipientTarget[]>({
+  get: () => parseNotifyRecipients(getConfig('poipoi-notify-recipients', '')),
+  set: (v: NotifyRecipientTarget[]) => {
+    setConfig('poipoi-notify-recipients', JSON.stringify(v))
   },
 })
 
@@ -428,6 +438,14 @@ async function onResetDemo(): Promise<void> {
           <p class="mt-2 text-[11px] text-muted">
             「AI アシスト入力のみ」でも、生成されたドラフトの確認・修正は通常フォームで行います（AI の出力をそのまま提出することはありません）
           </p>
+        </UiSectionCard>
+
+        <!-- b3) ぽいぽいポストの通知先（ロール/役職/個人。オペレーター指示 2026-08-03） -->
+        <UiSectionCard
+          title="ぽいぽいポストの通知先"
+          description="ぽいぽいポストが登録されると、原文を下記の宛先へ通知します。宛先はロール・役職・個人で指定できます（投稿者本人は除外）。未設定の場合は通知しません"
+        >
+          <SettingsNotifyRecipientsEditor v-model="poipoiNotifyRecipients" />
         </UiSectionCard>
 
         <!-- c) カスタム項目 -->
