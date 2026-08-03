@@ -52,6 +52,11 @@ const KIND_TONES: Record<NotificationKind, Tone> = {
   escalation: 'serious',
 }
 
+/** 未読のみ表示（オペレーター指示 2026-08-03。ダッシュボードのサイド通知欄と同じ絞り込みを一覧にも） */
+const unreadOnly = ref(false)
+const visibleNotifications = computed(() =>
+  unreadOnly.value ? mine.value.filter(n => !n.read) : mine.value)
+
 function openNotification(n: AppNotification): void {
   markRead(n.id)
   if (n.link) navigateTo(n.link)
@@ -174,8 +179,17 @@ async function submitRespond(): Promise<void> {
 
     <!-- ================= 通知タブ ================= -->
     <div v-if="tab === 'notifications'" class="grid gap-3">
-      <UiSectionCard title="自分宛ての通知" :description="`未読 ${unreadCount} 件`" flush>
+      <UiSectionCard title="自分宛ての通知" :description="`未読 ${unreadCount} 件${unreadOnly ? '（未読のみ表示中）' : ''}`" flush>
         <template #actions>
+          <button
+            type="button"
+            class="btn btn-sm"
+            :class="unreadOnly ? 'btn-primary' : ''"
+            :aria-pressed="unreadOnly"
+            @click="unreadOnly = !unreadOnly"
+          >
+            未読のみ
+          </button>
           <button
             type="button"
             class="btn btn-sm"
@@ -186,13 +200,13 @@ async function submitRespond(): Promise<void> {
           </button>
         </template>
         <UiEmptyState
-          v-if="mine.length === 0"
+          v-if="visibleNotifications.length === 0"
           icon="BellOff"
-          title="通知はありません"
-          hint="承認依頼・コメント・AI 報告などがここに届きます"
+          :title="unreadOnly ? '未読の通知はありません' : '通知はありません'"
+          :hint="unreadOnly ? '「未読のみ」を解除すると既読も表示されます' : '承認依頼・コメント・AI 報告などがここに届きます'"
         />
         <ul v-else class="divide-y divide-[var(--c-line)]">
-          <li v-for="n in mine" :key="n.id">
+          <li v-for="n in visibleNotifications" :key="n.id">
             <button
               type="button"
               class="flex w-full min-h-11 items-start gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-brand-soft"
