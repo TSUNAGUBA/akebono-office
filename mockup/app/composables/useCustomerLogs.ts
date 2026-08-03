@@ -1,7 +1,7 @@
 /**
  * 顧客ログ（オペレーター指示 2026-07-30 → 項目拡張 2026-07-31）
  * 「いつ（何月何日・開始/終了時刻は任意）どの顧客（会社/人）と誰（自社担当者）が
- * どんな会話（担当者メモ/議事録メモ・属性タグ）をしたか」を本人が記録する。
+ * どんな会話（担当者メモ・属性タグ）をしたか」を本人が記録する（議事録メモは 2026-08-03 に廃止）。
  * - 記録系 = 追記 + 本人編集 + 取消/復元（論理削除）。本人所有・本人のみ操作可。AI の参照対象（本人スコープ）。
  * - 閲覧: 本人の記録は常に参照可。他メンバーの記録は権限（canViewMemberCustomerLog）で許可された対象者のみ readonly 参照可。
  * - コンボボックス新規登録: newCompanyName / newContactName が未登録名なら顧客(会社)・担当者(人)を
@@ -51,10 +51,8 @@ export interface CustomerLogInput {
   /** 属性タグ（商談/取材/イベント等） */
   tags: string[]
   title: string
-  /** 担当者メモ（議事録メモとどちらか必須） */
+  /** 担当者メモ（必須。議事録メモは 2026-08-03 に廃止 = オペレーター指示） */
   body: string
-  /** 議事録メモ */
-  minutesMemo: string
 }
 
 /**
@@ -67,7 +65,7 @@ function validate(input: CustomerLogInput): { code: string; message: string } | 
     ?? customerLogTimeError(input.endTime ?? '', '終了')
     ?? customerLogTimeRangeError(input.logTime, input.endTime)
     ?? customerLogTagsError(input.tags)
-    ?? customerLogMemoError(input.body, input.minutesMemo)
+    ?? customerLogMemoError(input.body)
     ?? customerLogCompanyError(input.companyId, input.newCompanyName)
   return message ? { code: 'AKO-CLG-001', message } : null
 }
@@ -212,7 +210,6 @@ export function useCustomerLogs() {
       tags: cleanTags(input.tags),
       title: input.title,
       body: input.body,
-      minutesMemo: input.minutesMemo,
     }
   }
 
@@ -246,7 +243,6 @@ export function useCustomerLogs() {
       tags: cleanTags(input.tags),
       title: capCp(input.title.trim(), TITLE_CAP),
       body: capCp(input.body.trim(), BODY_CAP),
-      minutesMemo: capCp(input.minutesMemo.trim(), BODY_CAP),
       createdAt: now,
       updatedAt: now,
       active: true,
@@ -284,7 +280,6 @@ export function useCustomerLogs() {
       tags: cleanTags(input.tags),
       title: capCp(input.title.trim(), TITLE_CAP),
       body: capCp(input.body.trim(), BODY_CAP),
-      minutesMemo: capCp(input.minutesMemo.trim(), BODY_CAP),
       updatedAt: nowJstIso(),
     } : l)
     commit()

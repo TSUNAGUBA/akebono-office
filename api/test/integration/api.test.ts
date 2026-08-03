@@ -5669,35 +5669,37 @@ describe('顧客ログ', () => {
     expect(((await api('GET', '/v1/customer-logs', { as: MEMBER })).json.data as { id: string }[]).some(l => l.id === logId)).toBe(true)
   })
 
-  it('項目拡張: 開始/終了時刻・属性タグ・自社担当者・議事録メモ（オペレーター指示 2026-07-31）', async () => {
+  it('項目拡張: 開始/終了時刻・属性タグ・自社担当者・担当者メモ必須（2026-07-31 拡張・議事録メモは 2026-08-03 廃止）', async () => {
     // 終了のみ / 終了 <= 開始 / 終了の書式不正はいずれも AKO-CLG-001
     expect((await api('POST', '/v1/customer-logs', { as: MEMBER, body: { logDate: today, endTime: '15:00', companyId, body: 'x' } })).json.error?.code).toBe('AKO-CLG-001')
     expect((await api('POST', '/v1/customer-logs', { as: MEMBER, body: { logDate: today, logTime: '15:00', endTime: '15:00', companyId, body: 'x' } })).json.error?.code).toBe('AKO-CLG-001')
     expect((await api('POST', '/v1/customer-logs', { as: MEMBER, body: { logDate: today, logTime: '15:00', endTime: '99:99', companyId, body: 'x' } })).json.error?.code).toBe('AKO-CLG-001')
-    // 担当者メモ・議事録メモの両方空は AKO-CLG-001（どちらか一方があれば OK）
-    expect((await api('POST', '/v1/customer-logs', { as: MEMBER, body: { logDate: today, companyId, body: '', minutesMemo: '' } })).json.error?.code).toBe('AKO-CLG-001')
+    // 担当者メモ（body）が空は AKO-CLG-001（議事録メモ廃止後は body 単独必須）
+    expect((await api('POST', '/v1/customer-logs', { as: MEMBER, body: { logDate: today, companyId, body: '' } })).json.error?.code).toBe('AKO-CLG-001')
+    // 廃止済みの minutesMemo を送っても body が空なら弾く（未知キーは無視・保管もされない）
+    expect((await api('POST', '/v1/customer-logs', { as: MEMBER, body: { logDate: today, companyId, body: '', minutesMemo: '無視される' } })).json.error?.code).toBe('AKO-CLG-001')
     // タグ上限（10 件）超過は AKO-CLG-001
     expect((await api('POST', '/v1/customer-logs', {
       as: MEMBER, body: { logDate: today, companyId, body: 'x', tags: Array.from({ length: 11 }, (_, i) => `t${i}`) },
     })).json.error?.code).toBe('AKO-CLG-001')
-    // 議事録メモのみ + 開始/終了 + タグ（trim・重複除去）+ 自社担当者の明示指定
+    // 担当者メモ + 開始/終了 + タグ（trim・重複除去）+ 自社担当者の明示指定
     const created = await api('POST', '/v1/customer-logs', {
       as: MEMBER,
       body: {
         logDate: today, logTime: '10:00', endTime: '10:45', companyId, contactId,
-        tags: ['商談', '商談', ' 取材 '], minutesMemo: '議事録のみで登録', staffMemberId: HR,
+        tags: ['商談', '商談', ' 取材 '], body: '担当者メモで登録', staffMemberId: HR,
       },
     })
     expect(created.status).toBe(201)
     const row = created.json.data as {
-      logTime: string; endTime: string; tags: string[]; staffMemberId: string; body: string; minutesMemo: string
+      logTime: string; endTime: string; tags: string[]; staffMemberId: string; body: string
     }
     expect(row.logTime).toBe('10:00')
     expect(row.endTime).toBe('10:45')
     expect(row.tags).toEqual(['商談', '取材'])
     expect(row.staffMemberId).toBe(HR)
-    expect(row.body).toBe('')
-    expect(row.minutesMemo).toBe('議事録のみで登録')
+    expect(row.body).toBe('担当者メモで登録')
+    expect('minutesMemo' in row).toBe(false) // 廃止 = 応答に含まれない
     // 自社担当者の未指定はログインユーザー（既定 = 記録者）
     const defaulted = await api('POST', '/v1/customer-logs', { as: MEMBER, body: { logDate: today, companyId, body: '既定担当者の確認' } })
     expect((defaulted.json.data as { staffMemberId: string }).staffMemberId).toBe(MEMBER)
@@ -5705,26 +5707,25 @@ describe('顧客ログ', () => {
     expect((await api('POST', '/v1/customer-logs', { as: MEMBER, body: { logDate: today, companyId, body: 'x', staffMemberId: 'm-nope' } })).json.error?.code).toBe('AKO-CLG-001')
   })
 
-  it('部分更新: 新項目（タグ・終了時刻・自社担当者・議事録メモ）も送っていないフィールドが保持される', async () => {
+  it('部分更新: 新項目（タグ・終了時刻・自社担当者・担当者メモ）も送っていないフィールドが保持される', async () => {
     const created = await api('POST', '/v1/customer-logs', {
       as: MEMBER,
       body: {
         logDate: today, logTime: '09:00', endTime: '09:30', companyId, contactId,
-        tags: ['イベント'], staffMemberId: HR, title: '保持確認', body: '担当者メモ', minutesMemo: '議事録メモ',
+        tags: ['イベント'], staffMemberId: HR, title: '保持確認', body: '担当者メモ',
       },
     })
     const id = (created.json.data as { id: string }).id
     const upd = await api('PATCH', `/v1/customer-logs/${id}`, { as: MEMBER, body: { title: '保持確認（更新）' } })
     expect(upd.status).toBe(200)
     const row = upd.json.data as {
-      logTime: string; endTime: string; tags: string[]; staffMemberId: string; body: string; minutesMemo: string
+      logTime: string; endTime: string; tags: string[]; staffMemberId: string; body: string
     }
     expect(row.logTime).toBe('09:00')
     expect(row.endTime).toBe('09:30')
     expect(row.tags).toEqual(['イベント'])
     expect(row.staffMemberId).toBe(HR)
     expect(row.body).toBe('担当者メモ')
-    expect(row.minutesMemo).toBe('議事録メモ')
     // マージ後の全体検証: 開始時刻だけを終了時刻より後へ動かす更新は 400（AKO-CLG-001）
     expect((await api('PATCH', `/v1/customer-logs/${id}`, { as: MEMBER, body: { logTime: '10:00' } })).json.error?.code).toBe('AKO-CLG-001')
     // 検証順パリティ（2 巡目 MINOR-1 回帰）: 範囲不正 + タグ上限超過の同時指定は「範囲エラーが先」

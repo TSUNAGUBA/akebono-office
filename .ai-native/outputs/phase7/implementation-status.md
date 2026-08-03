@@ -1252,7 +1252,7 @@
 
 ### 49-3 顧客ログの項目拡張
 - [x] DB（0047）: `end_time`（終了時刻）・`tags`（jsonb 属性タグ）・`staff_member_id`（自社担当者 = members FK。
-  **既存行は member_id でバックフィル + NOT NULL 化 = 原則7 のデータ更新パッチ**）・`minutes_memo`（議事録メモ）。
+  **既存行は member_id でバックフィル + NOT NULL 化 = 原則7 のデータ更新パッチ**）・`minutes_memo`（議事録メモ。**→ §55 で廃止（migration 0050・2026-08-03）**）。
   旧 `body` は「担当者メモ」として意味を引き継ぐ（列名・既存データ不変 = 下位互換）。
 - [x] API/モック検証（パリティ維持）: 開始/終了時刻（HH:MM・終了は開始必須 + 開始より後。**15 分単位は UI の選択肢制約**
   = 旧データの単位外時刻を API が拒否しない下位互換の設計判断）・タグ（trim・30cp cap・重複除去・最大 10 件 =
@@ -1679,3 +1679,33 @@
 - [x] **MINOR-2（監査）: mock のみドキュメント取込で通知発火（API・文書と不一致）**: mock の `importFile` が `add` 再利用で poipoi 通知を発火していた（API `/import` は非発火・§54-5 の設計判断とも矛盾）。→ `add` に `opts.notifyPoipoi` を追加し `importFile` は `false` を渡して非発火に統一。
 - [x] **NIT-1（監査）: 必須マーカーが提出済み編集でも常時表示**: ぽいぽい欄の `required`（アスタリスク）を `:required="!editingSubmitted"` にし、必須が実際に効く初回提出コンテキストでのみ表示（提出済み編集での誤った再投稿を防ぐ）。
 - [x] **再検証**: `cd mockup && npm run typecheck` green・`npm test` **221 passed** / `cd api && npm run typecheck` green・unit **259**・integration **229**（挙動の是正のみでテスト件数不変。既存アサーションは全て緑）。以上で未解決の指摘ゼロ。
+
+## 55. 顧客ログの議事録メモ廃止 + 議事録フォーム再構成（バッチ5 の一部。オペレーター指示 2026-08-03）の完了条件（Definition of Done）
+
+> オペレーター指示 2026-08-03（3 件）のうち、②顧客ログ「議事録メモ」の廃止 と ③a 議事録フォームの再構成 + プロジェクト→顧客補完 を実装した。
+> ①Akebono アプリのスプレッドシート取込・連携 と ③b Google Meet 連携（いずれも Google 外部連携を伴う大型機能）は
+> 可否回答 + 設計提示の上でスコープ確認中（本 §55 の対象外）。ブランチ `claude/reports-customer-log-updates-k6on2x`。
+
+### 55-1 ② 顧客ログ「議事録メモ」の入力・保管を廃止
+- [x] **検証 SoT**: `shared/domain/customer-log.ts` `customerLogMemoError(body)` を単一引数（担当者メモ必須）へ変更。呼び出し 3 箇所（API POST/PATCH・mock validate）を追随。
+- [x] **型**: `CustomerLog.minutesMemo` を削除（`shared/domain/types.ts`）。
+- [x] **API**: `customer-logs.ts` の CLOG_COLS・POST/PATCH の INSERT/UPDATE から `minutes_memo` を除去。`ownLog` は CLOG_COLS 経由で追随。
+- [x] **mock**: `useCustomerLogs.ts`（Input/validate/payload/add/update）から minutesMemo を除去。
+- [x] **UI**: `CustomerLogPanel.vue` の議事録メモ入力欄・詳細表示・一覧プレビュー・検索対象・form state を除去。担当者メモを `required` 表示に。
+- [x] **AI 検索インデックス**: `search-index.ts` の customer_logs SELECT と「議事録メモ」セグメント生成を除去。
+- [x] **seed**: `data/seed/customer-logs.ts` から minutesMemo を除去。
+- [x] **DB（migration 0050）**: `customer_logs DROP COLUMN IF EXISTS minutes_memo`（冪等）。**下位互換の注意（原則7）**: 議事録メモ本文を破棄する破壊的変更。0047 で追加された比較的新しい項目で、オペレーターの明示指示に基づく廃止。必要内容は担当者メモへ集約する運用（保全が必要なら適用前にバックアップ）。マイグレーション冒頭に明記。
+- [x] **テスト**: `customer-log-validate.test.ts`（memo 検証を body 単独へ）・`api.test.ts`（顧客ログ項目拡張 2 テストを body 必須へ・minutesMemo 応答非含有と未知キー無視を確認）を更新。
+
+### 55-2 ③a 議事録フォームの再構成 + プロジェクト→顧客補完（frontend のみ）
+- [x] **フォーム上部化**: `NotesPanel.vue`（ぽいぽいポスト/議事録の共通パネル）で プロジェクト/顧客/業務種別のセレクトを本文の上へ移設。操作ボタン（プレビュー/ファイル選択/登録）は末尾行に分離。
+- [x] **プロジェクト→顧客補完**: `form.projectId` を watch し、選択プロジェクトの `companyId`（Project.companyId = SoT）で `form.companyId` を補完（手動変更は妨げず、選び直し時のみ上書き）。API/DB 変更なし（既存の projectId/companyId をそのまま送る）。
+- [x] **共通化の帰結（記録）**: 共通パネルのため ぽいぽいポストの入力モーダルも同じ並び・補完になる（両ノート種別で一貫。害なし）。
+
+### 55-3 検証（実測値。この環境で実行）
+- [x] `cd mockup && npm run typecheck` green / `npm test` **221 passed**（17 files。件数不変 = 既存テストが緑のまま追随）
+- [x] `cd api && npm run typecheck` green / unit **259 passed** / `npm run test:integration`（使い捨て PostgreSQL・migration 0050 適用）**229 passed**
+- [x] **migration 0050 冪等性**: `DROP COLUMN IF EXISTS` は再適用・未適用いずれでも安全（本質的に冪等）。
+
+### 55-x 反復レビュー（原則9）
+- [x] **セルフレビュー（Push 前チェック）**: 手動ステップなし / 冪等（0050 DROP IF EXISTS）/ 既存パターン再利用（CustomerLogPanel の watch 補完流儀・Project.companyId 直参照）/ 非ブロッキング該当なし / ドキュメント全件更新（functional-requirements F-18・F-06b / data-design / api-design / screen-design / 本 §55）/ 波及は Grep で確認（minutesMemo/minutes_memo の残存 = 廃止を説明するコメントと「無視される」検証のみ）/ 下位互換の破壊的変更（列 DROP）はオペレーター説明を migration に明記（原則7）/ 取消可能性（顧客ログの取消/復元は不変）。

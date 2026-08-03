@@ -33,6 +33,14 @@ const members = tbl('members')
 
 const form = ref({ title: '', body: '', projectId: '', companyId: '', workCategoryId: '' })
 const saving = ref(false)
+
+// プロジェクト選択で顧客を補完（プロジェクトマスタの顧客 = Project.companyId が SoT。オペレーター指示 2026-08-03）。
+// 顧客の手動変更は妨げない（プロジェクトを選び直した時のみ上書き）。
+watch(() => form.value.projectId, (pid) => {
+  if (!pid) return
+  const proj = projects.value.find(p => p.id === pid)
+  if (proj?.companyId) form.value.companyId = proj.companyId
+})
 // 入力モーダル（バッチ7h: 参照 = 基本ビュー・入力 = ボタン押下でモーダル表示。指示 #10 ④）
 const composeOpen = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -254,6 +262,12 @@ function authorOf(n: Note): string {
             ? '思いついたこと・気づき・改善アイデアをそのまま。日報ドラフトの材料になり、AI の参照対象になります。管理者はフィードバック・チーム改善のためオリジナルを閲覧できます'
             : '会議の記録を蓄積します。全員が参照でき、AI チャットボット・AI業務アシスタントの参照対象になります' }}
         </p>
+        <!-- プロジェクト/顧客/業務種別（フォーム上部 = オペレーター指示 2026-08-03。プロジェクト選択で顧客を補完） -->
+        <div class="flex flex-wrap items-center gap-2">
+          <UiSelect v-model="form.projectId" :options="projects.map(p => ({ value: p.id, label: p.name }))" empty-label="プロジェクト（任意）" aria-label="プロジェクト" class="w-auto" />
+          <UiSelect v-model="form.companyId" :options="companies.map(c => ({ value: c.id, label: c.name }))" empty-label="顧客（任意）" aria-label="顧客" class="w-auto" />
+          <UiSelect v-model="form.workCategoryId" :options="workCategories.map(w => ({ value: w.id, label: w.name }))" empty-label="業務種別（任意）" aria-label="業務種別" class="w-auto" />
+        </div>
         <input
           v-if="kind === 'minutes'"
           v-model="form.title"
@@ -274,25 +288,20 @@ function authorOf(n: Note): string {
           :placeholder="kind === 'poipoi' ? '例）A社の見積、明日までに単価見直しが必要そう' : '例）7/19 定例。決定事項: …'"
           :aria-label="kind === 'poipoi' ? 'ポスト本文' : '議事録本文'"
         />
-        <div class="flex flex-wrap items-center gap-2">
-          <UiSelect v-model="form.projectId" :options="projects.map(p => ({ value: p.id, label: p.name }))" empty-label="プロジェクト（任意）" aria-label="プロジェクト" class="w-auto" />
-          <UiSelect v-model="form.companyId" :options="companies.map(c => ({ value: c.id, label: c.name }))" empty-label="顧客（任意）" aria-label="顧客" class="w-auto" />
-          <UiSelect v-model="form.workCategoryId" :options="workCategories.map(w => ({ value: w.id, label: w.name }))" empty-label="業務種別（任意）" aria-label="業務種別" class="w-auto" />
-          <span class="ml-auto flex items-center gap-2">
-            <button type="button" class="btn btn-sm" :aria-pressed="previewing" @click="previewing = !previewing">
-              <component :is="previewing ? Pencil : Eye" class="h-3.5 w-3.5" aria-hidden="true" />
-              {{ previewing ? '編集に戻る' : 'プレビュー' }}
-            </button>
-            <input ref="fileInput" type="file" accept=".md,.txt,.pdf,.docx" class="hidden" @change="onFileSelected">
-            <button type="button" class="btn" :disabled="saving" @click="fileInput?.click()">
-              <FileUp class="h-4 w-4" aria-hidden="true" />
-              ファイル選択
-            </button>
-            <button type="button" class="btn btn-primary" :disabled="saving" @click="submit">
-              <Send class="h-4 w-4" aria-hidden="true" />
-              {{ saving ? '登録中…' : '登録' }}
-            </button>
-          </span>
+        <div class="flex flex-wrap items-center justify-end gap-2">
+          <button type="button" class="btn btn-sm" :aria-pressed="previewing" @click="previewing = !previewing">
+            <component :is="previewing ? Pencil : Eye" class="h-3.5 w-3.5" aria-hidden="true" />
+            {{ previewing ? '編集に戻る' : 'プレビュー' }}
+          </button>
+          <input ref="fileInput" type="file" accept=".md,.txt,.pdf,.docx" class="hidden" @change="onFileSelected">
+          <button type="button" class="btn" :disabled="saving" @click="fileInput?.click()">
+            <FileUp class="h-4 w-4" aria-hidden="true" />
+            ファイル選択
+          </button>
+          <button type="button" class="btn btn-primary" :disabled="saving" @click="submit">
+            <Send class="h-4 w-4" aria-hidden="true" />
+            {{ saving ? '登録中…' : '登録' }}
+          </button>
         </div>
         <!-- 選択済みファイルのステージ表示（即アップロードしない。取込ボタン押下で実行） -->
         <div

@@ -1,7 +1,7 @@
 /**
  * 顧客ログ API（オペレーター指示 2026-07-30 → 項目拡張 2026-07-31）。
  * 「いつ（何月何日・開始/終了時刻は任意）どの顧客（会社/人）と誰（自社担当者）が
- * どんな会話（担当者メモ/議事録メモ・属性タグ）をしたか」を本人が記録する。
+ * どんな会話（担当者メモ・属性タグ）をしたか」を本人が記録する（議事録メモは 2026-08-03 に廃止）。
  * - 記録系 = 追記 + 本人編集（監査ログ）+ 取消(archive)/復元(restore)（原則2/9.5）。本人のみ操作可（AKO-CLG-002）。
  * - 他メンバー参照（F-16）: GET は ?memberId= で readonly 参照可（canViewMemberCustomerLog で enforcement。
  *   既定 = 参照不可の許可制。未許可は AKO-PRM-002 403）。自分のログは常に参照可。
@@ -36,7 +36,7 @@ import { capCp } from '../lib/text'
 // log_date は date 型（tz なし）のため ::text で 'YYYY-MM-DD' をそのまま返す
 const CLOG_COLS = `id, member_id AS "memberId", log_date::text AS "logDate", log_time AS "logTime",
   end_time AS "endTime", company_id AS "companyId", contact_id AS "contactId",
-  staff_member_id AS "staffMemberId", tags, title, body, minutes_memo AS "minutesMemo", active,
+  staff_member_id AS "staffMemberId", tags, title, body, active,
   to_char(created_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"') AS "createdAt",
   to_char(updated_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"') AS "updatedAt"`
 
@@ -250,8 +250,7 @@ export function customerLogsRoutes(pool: pg.Pool, env: Env): Hono {
     const staffMemberId = String(b.staffMemberId ?? '').trim() || user.id
     const title = capCp(String(b.title ?? '').trim(), TITLE_CAP)
     const body = capCp(String(b.body ?? '').trim(), BODY_CAP)
-    const minutesMemo = capCp(String(b.minutesMemo ?? '').trim(), BODY_CAP)
-    assertClg(customerLogMemoError(body, minutesMemo))
+    assertClg(customerLogMemoError(body))
     const id = newId('clog')
     const client = await pool.connect()
     let refs: ResolvedRefs
@@ -265,10 +264,10 @@ export function customerLogsRoutes(pool: pg.Pool, env: Env): Hono {
       })
       await client.query(
         `INSERT INTO customer_logs
-           (id, member_id, log_date, log_time, end_time, company_id, contact_id, staff_member_id, tags, title, body, minutes_memo)
-         VALUES ($1, $2, $3::date, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+           (id, member_id, log_date, log_time, end_time, company_id, contact_id, staff_member_id, tags, title, body)
+         VALUES ($1, $2, $3::date, $4, $5, $6, $7, $8, $9, $10, $11)`,
         [id, user.id, logDate, logTime, endTime, refs.companyId, refs.contactId, staffMemberId,
-          JSON.stringify(tags), title, body, minutesMemo])
+          JSON.stringify(tags), title, body])
       await client.query('COMMIT')
     } catch (e) {
       await client.query('ROLLBACK')
@@ -303,9 +302,8 @@ export function customerLogsRoutes(pool: pg.Pool, env: Env): Hono {
       : cur.staffMemberId
     const title = Object.hasOwn(b, 'title') ? capCp(String(b.title ?? '').trim(), TITLE_CAP) : cur.title
     const body = Object.hasOwn(b, 'body') ? capCp(String(b.body ?? '').trim(), BODY_CAP) : cur.body
-    const minutesMemo = Object.hasOwn(b, 'minutesMemo') ? capCp(String(b.minutesMemo ?? '').trim(), BODY_CAP) : cur.minutesMemo
-    assertClg(customerLogMemoError(body, minutesMemo))
-    const next = { logDate, logTime, endTime, tags, staffMemberId, title, body, minutesMemo }
+    assertClg(customerLogMemoError(body))
+    const next = { logDate, logTime, endTime, tags, staffMemberId, title, body }
     // 会社・担当者の解決（newCompanyName / newContactName 指定時は新規マスタ登録も行う）。
     // どのキーも送られていなければ現状維持
     const touchesCompany = Object.hasOwn(b, 'companyId') || Object.hasOwn(b, 'newCompanyName')
@@ -328,10 +326,10 @@ export function customerLogsRoutes(pool: pg.Pool, env: Env): Hono {
       await client.query(
         `UPDATE customer_logs
          SET log_date = $2::date, log_time = $3, end_time = $4, company_id = $5, contact_id = $6,
-             staff_member_id = $7, tags = $8, title = $9, body = $10, minutes_memo = $11, updated_at = now()
+             staff_member_id = $7, tags = $8, title = $9, body = $10, updated_at = now()
          WHERE id = $1`,
         [logId, next.logDate, next.logTime, next.endTime, refs.companyId, refs.contactId,
-          next.staffMemberId, JSON.stringify(next.tags), next.title, next.body, next.minutesMemo])
+          next.staffMemberId, JSON.stringify(next.tags), next.title, next.body])
       await client.query('COMMIT')
     } catch (e) {
       await client.query('ROLLBACK')

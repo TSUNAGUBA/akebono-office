@@ -5,6 +5,7 @@
  * - 返り値は「エラーメッセージ | null」。API 側は AKO-CLG-001（400）へ変換して throw し、
  *   モック側は Result のエラーへ変換する（エラーコードの付与は各層の責務）。
  * - 検証順も本モジュールの並び（日付 → 開始 → 終了 → 範囲 → タグ → メモ → 会社）を両者で守る。
+ * - 議事録メモ（minutesMemo）は 2026-08-03 のオペレーター指示で入力・保管とも廃止。メモ必須は担当者メモ（body）単独になった。
  */
 import { isRealDateKey } from './jst'
 import { normalizeCompanyName } from './name-match'
@@ -68,9 +69,9 @@ export function customerLogTagsError(tags: unknown): string | null {
   return null
 }
 
-/** 担当者メモ・議事録メモ（どちらか必須） */
-export function customerLogMemoError(body: string, minutesMemo: string): string | null {
-  if (!body.trim() && !minutesMemo.trim()) return '担当者メモまたは議事録メモを入力してください'
+/** 担当者メモ（必須。議事録メモは 2026-08-03 に廃止 = オペレーター指示） */
+export function customerLogMemoError(body: string): string | null {
+  if (!body.trim()) return '担当者メモを入力してください'
   return null
 }
 
