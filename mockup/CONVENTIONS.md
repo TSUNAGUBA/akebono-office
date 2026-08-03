@@ -86,11 +86,13 @@ const depts = useDepartments()   // nameOf / options / membersOf / tree
 // 休暇（F-04-5/9。種別別残数。付与は管理者/人事のみ・同日同種別はスキップ=冪等）
 const leave = useLeave()   // balance(memberId, leaveTypeId?) / request / decide / grant / bulkGrant / activeLeaveTypes
 
-// メディア分析（F-40。Akebono セグメントと 1:1。純ロジックの SoT = shared/domain/media-*。
-// デュアルモード: モック = 擬似 OAuth + 決定的導出 / API = Google OAuth 2.0（analytics.readonly・セグメント単位）+
-// GA4 実データ（/v1/media/*）。save・connect 系・generate 系は async）
-const ms = useMediaSettings()    // settingFor / save / disconnectGa（両モード）+ gaStatusFor / startGaConnect / listGaProperties / selectGaProperty（API の OAuth + プロパティ選択）/ connectGa（モック擬似 OAuth）
-const ma = useMediaAnalytics()   // metricsFor(segId,28)（API はロード中 null）/ integratedMetricsFor(segId,6) / metricsReady / metricsWarningFor / refreshMetrics / integratedReady・integratedFailed・refreshMonthly（GA 月次の失敗表示 + 再試行）/ ensureIntegratedLoaded（false = 生成禁止）
+// メディア分析（F-40。独立メディアチャンネル + 任意の業態連携（2026-08-03）。純ロジックの SoT = shared/domain/media-*。
+// デュアルモード: モック = 擬似 OAuth + 決定的導出 / API = Google OAuth 2.0（analytics.readonly・チャンネル単位）+
+// GA4 実データ（/v1/media/*）。save・connect 系・generate 系は async。全 API は channelId keying）
+const mc = useMediaChannels()    // channels / settingFor(channelId) / save / createChannel(name必須・segmentId任意) / archiveChannel・restoreChannel（取消/復元）/ channelForSegment(segmentId)（業態→連携チャンネル解決）/ disconnectGa / gaStatusFor / startGaConnect / listGaProperties / selectGaProperty / connectGa（モック擬似 OAuth）
+const cc = useCurrentChannel()   // 現在のメディアチャンネル（mock=localStorage / API=/v1/me pref 'currentChannelId'。無効 id は先頭へフォールバック）
+const mx = useMediaExternalArticles() // listFor(channelId) / add / update / archive / restore（外部投稿記事の原文保管 = media インサイトの材料。取消/復元 = 原則9.5）
+const ma = useMediaAnalytics()   // metricsFor(channelId,28)（API はロード中 null）/ integratedMetricsFor(channelId,6) / metricsReady / metricsWarningFor / refreshMetrics / integratedReady・integratedFailed・refreshMonthly（GA 月次の失敗表示 + 再試行）/ ensureIntegratedLoaded（false = 生成禁止）
 const mi = useMediaInsight()     // loadMedia/generateMedia / loadIntegrated/generateIntegrated（async。生成→保管→再生成で上書き。API = Vertex AI → ヒューリスティック）/ storedMedia
 const art = useMediaArticles()   // generate（async。API = Vertex AI → 決定的フォールバック）/ suggestionFromInsight / adopt / unadopt / remove / restore（取消可能）
 
@@ -153,8 +155,8 @@ const di = useDashboardInsight() // buildSegmentSummary/buildCompanySummary（�
 | `UiMarkdown` | source。安全なサブセットのマークダウン描画（utils/markdown.ts の AST を VNode 直接生成 = v-html 不使用。見出し・リスト・引用・コード・強調・http(s) リンクのみ。バッチ7e） |
 | `MastersPermissionMatrix` | 権限表モード（props なし = ruleCrud を内部利用）。ページ > 機能 > 項目 の 3 階層ツリー × ロール/役職/個人（バッチ7m）。セルは常に可否を表示（明示 = 濃色 / 上位一括・既定値 = 薄色破線）・クリックで反転・引き継ぎ値へ戻すと明示ルール解除。表ヘッダは内部スクロール + sticky |
 | `SettingsMenuCategoryEditor` | props なし。メニューカテゴリのカスタマイズ（F-13-8。エリア切替 + カテゴリ CRUD/並び替え/カード割当 + 既定に戻す。バッチ7h） |
-| `MediaSegmentBar` | props なし。メディア分析の対象セグメント（業態）切替バー（現在業態 + GA 連携バッジ + 設定導線）。全メディア画面の先頭に置く（F-40） |
-| `MediaGaConnect` | segmentId?（未指定=現在業態）, variant（'gate'/'bar'）。Google Analytics 連携ゲート（モック = 擬似 OAuth / API = Google OAuth 2.0 リダイレクト + 復帰クエリ `?ga=` 処理 + GA4 プロパティ選択モーダル。needsProperty の中間状態も再開可）。連携済みは状態バー + 解除（F-40。CalendarConnectGate と同型） |
+| `MediaChannelBar` | props なし。メディア分析の対象チャンネル切替バー（現在チャンネル + 連携業態バッジ + GA 連携バッジ + 設定導線）。全メディア画面の先頭に置く（F-40。2026-08-03 で MediaSegmentBar から改称・チャンネル化） |
+| `MediaGaConnect` | channelId?（未指定=現在チャンネル）, variant（'gate'/'bar'）。Google Analytics 連携ゲート（モック = 擬似 OAuth / API = Google OAuth 2.0 リダイレクト + 復帰クエリ `?ga=` 処理 + GA4 プロパティ選択モーダル。needsProperty の中間状態も再開可）。連携済みは状態バー + 解除（F-40。CalendarConnectGate と同型） |
 | `MediaFunnel` | stages（{label,value}[]）。流入→受注の簡易ファネル（幅バー + 前段比。Chart.js 不使用。F-40） |
 
 **ページ間導線・メニュー定義の SoT（バッチ7h）:** 親ページへ戻る・関連ページは `app/utils/nav-map.ts`、

@@ -63,6 +63,27 @@ BEGIN
   END IF;
 END $$;
 
+-- ---------- 2b. 孤児 backfill: 設定行を持たない業態の子行を救済（レビュー m-1） ----------
+-- 旧コードでは GA 連携（media_ga_tokens）・記事登録（media_articles 等）は media_settings 行の存在を要求しない。
+-- そのため「GA 連携済みだが設定未保存」等の業態があると、RENAME 後の子行（channel_id = 旧 segment_id）に
+-- 対応する media_channels 行が無く UI から不可視になる。子テーブルに現れる segment_id のうち未 backfill のものから
+-- チャンネルを補完する（この時点では子テーブルはまだ segment_id 列。RENAME は次ステップ）。
+-- media_oauth_states は一時的（TTL）のため対象外。name は業態名 or '無題メディア'。
+INSERT INTO media_channels (id, name, segment_id, active)
+SELECT sid, COALESCE(b.name, '無題メディア'), sid, true
+FROM (
+  SELECT DISTINCT segment_id AS sid FROM media_ga_tokens
+  UNION SELECT DISTINCT segment_id FROM media_articles
+  UNION SELECT DISTINCT segment_id FROM media_article_briefs
+  UNION SELECT DISTINCT segment_id FROM media_generated_articles
+  UNION SELECT DISTINCT segment_id FROM media_insights
+  UNION SELECT DISTINCT segment_id FROM media_metrics_cache
+) src
+LEFT JOIN business_segments b ON b.id = src.sid
+WHERE src.sid IS NOT NULL AND src.sid <> ''
+  AND NOT EXISTS (SELECT 1 FROM media_channels mc WHERE mc.id = src.sid)
+ON CONFLICT (id) DO NOTHING;
+
 -- ---------- 3. child テーブルの segment_id → channel_id（RENAME COLUMN。値は不変 = 行の UPDATE 不要） ----------
 -- 各テーブルを information_schema ガードで冪等に RENAME する。制約名（PK/UNIQUE）は列名変更に自動追随する
 -- （ON CONFLICT の列推論は列名で解決するため、制約名を変えなくても新コードは動く）。索引名は命名整合のため rename する。

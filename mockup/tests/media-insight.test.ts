@@ -3,7 +3,7 @@
  * しきい値（セクション集中 55%・CVR 1%）と構造（サイト構成/記事/アクションが非空）を検証する。
  */
 import { describe, expect, it } from 'vitest'
-import { heuristicMediaInsight } from '../../shared/domain/media-insight'
+import { applyExternalMaterial, externalMaterialOf, heuristicMediaInsight } from '../../shared/domain/media-insight'
 import type { MediaMetrics } from '../../shared/domain/media-metrics'
 
 function mk(over: Partial<MediaMetrics> = {}): MediaMetrics {
@@ -82,5 +82,35 @@ describe('heuristicMediaInsight', () => {
     const rank = { high: 0, mid: 1, low: 2 }
     const seq = r.actions.map(a => rank[a.priority])
     expect(seq).toEqual([...seq].sort((a, b) => a - b))
+  })
+})
+
+describe('外部投稿記事のインサイト材料反映（両モード共有 = useMediaInsight モック経路と同一。オペレーター指示 2026-08-03）', () => {
+  it('externalMaterialOf: 原文を 400 字で抜粋・入力を先頭 20 件で cap', () => {
+    const rows = Array.from({ length: 25 }, (_, i) => ({ title: `t${i}`, source: '', body: 'x'.repeat(500) }))
+    const mats = externalMaterialOf(rows)
+    expect(mats.length).toBe(20) // 先頭 20 件で cap
+    expect(mats[0]!.bodyExcerpt.length).toBe(400) // 原文は 400 字抜粋
+  })
+
+  it('externalMaterialOf: 空タイトルは除外する', () => {
+    const mats = externalMaterialOf([
+      { title: 'A', source: 'note', body: 'y' },
+      { title: '  ', source: 'X', body: 'y' }, // 空白のみ = 除外
+    ])
+    expect(mats.length).toBe(1)
+    expect(mats.every(m => m.title.length > 0)).toBe(true)
+  })
+
+  it('applyExternalMaterial: 材料ありは articles 先頭に opportunity を追加（最大 7 件）・0 件は素通し', () => {
+    const base = heuristicMediaInsight(mk())
+    expect(applyExternalMaterial(base, [])).toBe(base) // 0 件は同一参照で素通し
+    const out = applyExternalMaterial(base, externalMaterialOf([
+      { title: '外部寄稿1', source: 'note', body: '本文' },
+      { title: '外部寄稿2', source: 'PR TIMES', body: '本文' },
+    ]))
+    expect(out.articles[0]!.kind).toBe('opportunity')
+    expect(out.articles[0]!.title).toContain('外部投稿 2 件')
+    expect(out.articles.length).toBeLessThanOrEqual(7)
   })
 })

@@ -97,13 +97,19 @@ export function loadMediaIntegrated(channelId: string, months: number, force = f
 
 /**
  * 統合メトリクスのキャッシュ無効化（売上の計上・赤黒訂正後に useAkebonoSales / useOutbound が呼ぶ）。
- * 引数は連携先 segmentId（= 連携済みチャンネルの id と一致 = キー突合が成立）。原則6。
+ * 引数は連携先 segmentId。対象チャンネルは「その id 自身（下位互換 = channel.id === segmentId）」に加え、
+ * **その segmentId に連携する全チャンネル id**（UI 作成で id が mc-xxxx の連携チャンネル）も含める（レビュー M-1・原則6）。
+ * 統合キャッシュのキーは `${channelId}:${months}` なので、キーからチャンネル id を復元して突合する。
  */
 export function invalidateIntegratedFor(idOrSegmentId: string): void {
+  const targets = new Set<string>([idOrSegmentId, ...channelIdsForSegment(idOrSegmentId)])
   for (const key of Object.keys(apiIntegrated.value)) {
-    if (!key.startsWith(`${idOrSegmentId}:`)) continue
-    const months = Number(key.slice(idOrSegmentId.length + 1))
-    if (Number.isFinite(months)) void loadMediaIntegrated(idOrSegmentId, months, true)
+    const sep = key.lastIndexOf(':')
+    if (sep < 0) continue
+    const channelId = key.slice(0, sep)
+    if (!targets.has(channelId)) continue
+    const months = Number(key.slice(sep + 1))
+    if (Number.isFinite(months)) void loadMediaIntegrated(channelId, months, true)
   }
 }
 

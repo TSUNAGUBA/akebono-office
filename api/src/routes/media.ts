@@ -35,6 +35,7 @@ import type pg from 'pg'
 import { addDays, todayJst } from '../../../shared/domain/jst'
 import type { MediaMetrics, MediaMonthlyPoint } from '../../../shared/domain/media-metrics'
 import {
+  applyExternalMaterial, type ExternalArticleMaterial, externalMaterialOf,
   heuristicMediaInsight, type MediaAction, type MediaFinding, type MediaInsight,
 } from '../../../shared/domain/media-insight'
 import {
@@ -705,39 +706,11 @@ export function normalizeIntegratedInsight(res: unknown): IntegratedInsight | nu
   }
 }
 
-// ---------- 外部投稿記事のインサイト材料化（新機能。shared/domain は変更しない） ----------
-
-/** インサイト生成に渡す外部投稿記事の材料（原文は抜粋してプロンプト肥大を抑える） */
-export interface ExternalArticleMaterial { title: string; source: string; bodyExcerpt: string }
-
-/**
- * 外部投稿記事を LLM プロンプト用の材料テキストへ整形する（純粋関数・単体テスト対象）。
- * 原文（body）は 400 字で抜粋する（プロンプト肥大・トークン超過の防止）。
- */
-export function externalMaterialOf(rows: { title: string; source: string; body: string }[]): ExternalArticleMaterial[] {
-  return rows.slice(0, 20).map(r => ({
-    title: capCp(String(r.title ?? '').trim(), 120),
-    source: capCp(String(r.source ?? '').trim(), 60),
-    bodyExcerpt: capCp(String(r.body ?? '').trim(), 400),
-  })).filter(m => m.title.length > 0)
-}
-
-/**
- * 生成済み MediaInsight に外部投稿記事の材料反映を追記する（純粋関数・単体テスト対象）。
- * shared の heuristicMediaInsight / LLM 出力を変更せず、材料を取り込んだ事実を articles の機会として
- * 先頭に添える（LLM・ヒューリスティックの両経路に同一適用 = 挙動パリティ）。材料 0 件なら素通し。
- */
-export function applyExternalMaterial(insight: MediaInsight, materials: ExternalArticleMaterial[]): MediaInsight {
-  if (materials.length === 0) return insight
-  const sources = [...new Set(materials.map(m => m.source).filter(Boolean))].slice(0, 3)
-  const finding: MediaFinding = {
-    kind: 'opportunity',
-    title: `外部投稿 ${materials.length} 件を分析材料に取り込みました`,
-    detail: `外部媒体への投稿記事（${sources.length > 0 ? sources.join('・') + ' ほか' : '媒体名未設定を含む'}）の原文を洞察の材料に反映しています。`
-      + '自社サイトへの再掲・内部リンクで流入資産化できないか検討してください。',
-  }
-  return { ...insight, articles: [finding, ...insight.articles].slice(0, 7) }
-}
+// ---------- 外部投稿記事のインサイト材料化 ----------
+// externalMaterialOf / applyExternalMaterial は shared/domain/media-insight へ移設し、
+// API とモック（useMediaInsight）で同一ロジックを共有する（原則3・両モードパリティ）。
+// 既存の import 経路（api/test/unit/media-routes.test.ts が routes/media から参照）を保つため再エクスポートする。
+export { applyExternalMaterial, type ExternalArticleMaterial, externalMaterialOf }
 
 // ---------- 統合メトリクスの受領検証・サーバー突合（M2。純粋関数・単体テスト対象） ----------
 

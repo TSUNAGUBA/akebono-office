@@ -88,7 +88,7 @@ async function buildSnapshot(
   const { rows: artRows } = await pool.query<{ count: number }>(
     `SELECT COUNT(*)::int AS count FROM media_articles a
        JOIN media_channels c ON c.id = a.channel_id
-      WHERE c.segment_id = $1 AND a.active`, [segmentId])
+      WHERE c.segment_id = $1 AND c.active AND a.active`, [segmentId])
   // メディア機能トグルが無効なら GA 連携済みでもメディア軸を無効化（指標・レポート・全社ロールアップを一貫）
   const connected = mediaAvailable && built.mediaConnected
   const snapshot: SegmentSnapshot = {

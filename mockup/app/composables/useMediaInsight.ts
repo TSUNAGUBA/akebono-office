@@ -13,6 +13,7 @@
  * - チャンネル × scope で 1 レコード（upsert）。
  */
 import {
+  applyExternalMaterial, externalMaterialOf,
   heuristicMediaInsight, type MediaInsight, type MediaInsightRecord,
 } from '../../../shared/domain/media-insight'
 import type { MediaMetrics } from '../../../shared/domain/media-metrics'
@@ -71,6 +72,7 @@ export function useMediaInsight() {
   const records = tbl('mediaInsights')
   const { currentUser } = useCurrentUser()
   const analytics = useMediaAnalytics()
+  const externalArticles = useMediaExternalArticles()
   const membersTbl = tbl('members')
   const isApi = useApiMode()
 
@@ -160,7 +162,10 @@ export function useMediaInsight() {
     }
     const metrics = analytics.metricsFor(channelId, 28)
     if (!metrics) return null
-    const insight = heuristicMediaInsight(metrics)
+    // 外部投稿記事の原文を材料に反映する（API と同一の shared ロジック = 両モードパリティ。要件(d)の「AI活用」）
+    const materials = externalMaterialOf(
+      externalArticles.listFor(channelId).map(e => ({ title: e.title, source: e.source, body: e.body })))
+    const insight = applyExternalMaterial(heuristicMediaInsight(metrics), materials)
     const periodKey = `${metrics.periodFrom}_${metrics.periodTo}`
     upsert(channelId, 'media', periodKey, metrics, insight)
     return loadMedia(channelId)

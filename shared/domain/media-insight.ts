@@ -57,6 +57,46 @@ const pct = (r: number): string => `${Math.round(r * 1000) / 10}%`
 const fmtInt = (n: number): string => n.toLocaleString('ja-JP')
 const delta = (cur: number, prev: number): number => (prev > 0 ? (cur - prev) / prev : 0)
 
+// ---------- 外部投稿記事のインサイト材料化（フロント/API 共有 = 両モードで同一適用。オペレーター指示 2026-08-03） ----------
+
+/** コードポイント単位で cap（絵文字を境界で壊さない・純関数） */
+function capCp(s: string, n: number): string {
+  const cps = [...s]
+  return cps.length > n ? cps.slice(0, n).join('') : s
+}
+
+/** インサイト生成に渡す外部投稿記事の材料（原文は抜粋してプロンプト肥大を抑える） */
+export interface ExternalArticleMaterial { title: string; source: string; bodyExcerpt: string }
+
+/**
+ * 外部投稿記事を材料テキストへ整形する（純関数・単体テスト対象）。原文（body）は 400 字で抜粋する。
+ * shared に置くことで API（LLM プロンプト材料）とモック（heuristic 経路）の両方が同一ロジックを再利用する（原則3）。
+ */
+export function externalMaterialOf(rows: { title: string; source: string; body: string }[]): ExternalArticleMaterial[] {
+  return rows.slice(0, 20).map(r => ({
+    title: capCp(String(r.title ?? '').trim(), 120),
+    source: capCp(String(r.source ?? '').trim(), 60),
+    bodyExcerpt: capCp(String(r.body ?? '').trim(), 400),
+  })).filter(m => m.title.length > 0)
+}
+
+/**
+ * 生成済み MediaInsight に外部投稿記事の材料反映を追記する（純関数・単体テスト対象）。
+ * heuristic / LLM 出力を変更せず、材料を取り込んだ事実を articles の機会として先頭に添える
+ * （両経路・両モードに同一適用 = 挙動パリティ）。材料 0 件なら素通し。
+ */
+export function applyExternalMaterial(insight: MediaInsight, materials: ExternalArticleMaterial[]): MediaInsight {
+  if (materials.length === 0) return insight
+  const sources = [...new Set(materials.map(m => m.source).filter(Boolean))].slice(0, 3)
+  const finding: MediaFinding = {
+    kind: 'opportunity',
+    title: `外部投稿 ${materials.length} 件を分析材料に取り込みました`,
+    detail: `外部媒体への投稿記事（${sources.length > 0 ? `${sources.join('・')} ほか` : '媒体名未設定を含む'}）の原文を洞察の材料に反映しています。`
+      + '自社サイトへの再掲・内部リンクで流入資産化できないか検討してください。',
+  }
+  return { ...insight, articles: [finding, ...insight.articles].slice(0, 7) }
+}
+
 /**
  * 決定的なメディアインサイト生成（LLM 無効・失敗時のフォールバック / モックの唯一のロジック）。
  * しきい値はコード内に明示（前期比 ±10%、直帰率 60%、CVR 1%、記事集中度など）。

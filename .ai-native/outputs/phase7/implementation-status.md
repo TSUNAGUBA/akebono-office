@@ -1358,3 +1358,24 @@
   - `cd api && npm run test:integration`（実 PostgreSQL・0048 適用込み）: **225 passed**（メディア F-40 describe を新チャンネル API 形へ更新 = チャンネル CRUD・単体チャンネルの記事生成・連携チャンネルの integrated・単体は 022・external-articles CRUD・下位互換・チャンネル取消/復元。akebono-dashboard/billing/sales の integrated 参照を channelId へ更新）
   - `cd mockup && npm test`: **155 passed**（既存 shared 純ロジックテストは無変更）
 - [x] **既知の未検証（GA/Vertex はこの環境で E2E 検証不可）**: GA OAuth トークン交換・GA4 Data/Admin API 呼び出し・Vertex 生成はコード整合とユニット/統合（非 GA 経路・LLM 無効 = 決定的フォールバック）で担保。外部記事のインサイト材料反映は unit（applyExternalMaterial）で検証（統合は GA 未設定のため media インサイト生成が 005 = 生成経路は通せない）
+
+### 50-x 反復レビュー（原則9・1 巡目 = 独立コードレビュアー + システム監査官。CRITICAL 0・MAJOR 3〔重複 1〕・MINOR 3・NIT → 全件対応/受容）
+- [x] **MAJOR（要件(d)の「AI活用」がモードで欠落 = 監査 MAJOR-2 / CR m-2）**: 外部投稿記事のインサイト材料化
+  （externalMaterialOf / applyExternalMaterial）を **shared/domain/media-insight へ移設**し、API とモック
+  （useMediaInsight の mock generateMedia）で同一ロジックを適用（原則3・両モードパリティ）。api/routes/media は再エクスポートで
+  既存 import 互換維持。mockup 単体テストを 2 件追加（外部材料の cap/抜粋・articles 先頭反映）。
+- [x] **MAJOR（現行リファレンス docs の更新漏れ = 監査 MAJOR-1）**: 削除済みシンボル（useMediaSettings / MediaSegmentBar）を
+  参照していた mockup/CONVENTIONS.md・.ai-native/outputs/phase5/architecture.md・mockup/README.md を
+  新構成（useMediaChannels / useCurrentChannel / useMediaExternalArticles / MediaChannelBar・独立チャンネル + 任意連携）へ更新。
+- [x] **MAJOR（新規連携チャンネルの統合キャッシュ無効化漏れ = CR M-1）**: `invalidateIntegratedFor(segmentId)` を、
+  引数 id 自身に加え **その segmentId に連携する全チャンネル id**（UI 作成で id=mc-xxxx のもの）も対象にするよう修正
+  （useMediaChannels.channelIdsForSegment を追加・キーからチャンネル id を復元して突合）。原則6。
+- [x] **MINOR（F-41 ダッシュボードのチャンネル解決のモード乖離 = 監査 MINOR-1）**: useDashboardInsight（mock）が
+  segmentId をそのまま channelId 扱いしていたのを、useMediaChannels.channelForSegment（id=segmentId 優先・無ければ
+  segmentId 連携の先頭 active チャンネル）で解決するよう修正。UI 作成の mc- 連携チャンネルも業態ダッシュボードへ反映。
+- [x] **MINOR（移行 0048 の孤児 backfill = CR m-1）**: media_settings 行を持たない業態（GA 連携済み/記事ありだが設定未保存）の
+  子行を救済するため、子テーブル（ga_tokens/articles/briefs/generated/insights/metrics_cache）に現れる segment_id のうち
+  未 backfill のものからチャンネルを補完する step 2b を追加（RENAME 前・冪等）。
+- [x] **NIT（akebono-dashboard の記事数 JOIN）**: media_channels JOIN に `c.active` フィルタを追加（取消済みチャンネルの記事を数えない）。
+- [x] 受容（対応せず記録）: CR NIT（akebono の appKey 'media' 残置 = app-configs 件数保護の意図・無害。既にコメント済み）。
+- [x] 再検証（是正後）: api 単体 259 / api 統合 225 / mockup 単体 **158**（外部材料テスト +2 → 156、既存 +... = 158）/ typecheck（api・mockup）全 green。

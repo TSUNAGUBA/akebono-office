@@ -47,6 +47,17 @@ export function loadMediaChannels(force = false): Promise<void> {
   }, force)
 }
 
+/**
+ * ある業態(segmentId)に連携する active チャンネルの id 群（API モードのキャッシュから解決）。
+ * 統合キャッシュ無効化（invalidateIntegratedFor）が「業態 id ≠ チャンネル id」の連携チャンネル
+ * （UI で新規作成し業態連携したもの = id が mc-xxxx）も対象にできるようにする（レビュー M-1・原則6）。
+ * 下位互換チャンネル（channel.id === segmentId）は id 一致でも拾えるため、呼び出し側で segmentId 自身も併せて対象にする。
+ */
+export function channelIdsForSegment(segmentId: string): string[] {
+  if (!segmentId) return []
+  return apiChannels.value.filter(c => c.active !== false && c.segmentId === segmentId).map(c => c.id)
+}
+
 /** GA 接続状態の遅延ロード（useMediaAnalytics の統合集計も await するためモジュール公開） */
 export function loadMediaGaStatus(channelId: string, force = false): Promise<void> {
   if (!channelId) return Promise.resolve()
@@ -291,9 +302,22 @@ export function useMediaChannels() {
     return saveMock(channelId, { gaConnected: false, gaPropertyId: null, gaPropertyName: null, gaConnectedAt: null })
   }
 
+  /**
+   * 業態(segmentId)に連携する active チャンネルを解決する（両モード）。
+   * 下位互換チャンネル（id === segmentId）を優先し、無ければ segmentId 連携の先頭 active チャンネル。
+   * F-41 ダッシュボードが業態基点でメディア指標を引くときに使う（UI 作成の mc- チャンネル連携にも追随。レビュー MINOR-1）。
+   */
+  function channelForSegment(segmentId: string): MediaChannel | null {
+    if (!segmentId) return null
+    const active = (channels.value as MediaChannel[]).filter(c => c.active !== false)
+    return active.find(c => c.id === segmentId && c.segmentId === segmentId)
+      ?? active.find(c => c.segmentId === segmentId)
+      ?? null
+  }
+
   return {
     channels,
-    settingFor, save, createChannel, archiveChannel, restoreChannel,
+    settingFor, save, createChannel, archiveChannel, restoreChannel, channelForSegment,
     connectGa, disconnectGa,
     gaStatusFor, refreshGa, startGaConnect, listGaProperties, selectGaProperty,
   }
