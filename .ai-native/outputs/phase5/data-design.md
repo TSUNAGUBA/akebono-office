@@ -256,7 +256,8 @@ Phase B（設定系）・Phase C（記録系 + 売上軸）に続く**最終フ�
   （`/v1/masters/members` で全員へ露出させない・マスタ CRUD の巻き戻し対象にしない = 原則7 の分離）。
 - **ダッシュボードレイアウト（`dashboardLayout`。F-13-9・オペレーター指示 2026-08-03）**: 保存値 =
   `DashboardLayout`（テンプレート適用時は `materializeLayout`・手動セクション編集時は `buildCustomLayout`
-  〔templateId=`custom`・現行 options を維持〕した JSON。全テンプレート + 現実的な最大セクション構成〔全基本
+  〔templateId=`custom`・**保存先スコープ自身の層**の options を維持 = `pickBaseLayout`。§53 MAJOR 対応〕した JSON。
+  全テンプレート + 現実的な最大セクション構成〔全基本
   メニュー + 外部リンク + AKEBONO 業態アプリ〕で 4KB 上限に収まることをテストで担保 = `tests/dashboard-layout.test.ts`）。
   ユーザー層 = 本テーブル、テナント層 = `app_configs.dashboard-layout`。
   **解決順 = ユーザー設定 > テナント設定 > デフォルト**（`useDashboardLayout` / `resolveDashboardLayout`）。

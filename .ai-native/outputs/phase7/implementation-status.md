@@ -1396,12 +1396,12 @@
 - [x] 再検証（是正後）: api 単体 259 / api 統合 225 / mockup 単体 158 / typecheck（api・mockup）全 green +
   0048 の全適用 → 再適用の冪等性を実 PostgreSQL で確認。**未解決指摘ゼロで収束**。
 
-## 51. ダッシュボードの表示・配置カスタマイズ（レイアウト。2 階層 + テンプレート。オペレーター指示 2026-08-03）の完了条件（Definition of Done）
+## 51. ダッシュボードの表示・配置カスタマイズ（レイアウト。3 階層 + テンプレート。オペレーター指示 2026-08-03）の完了条件（Definition of Done）
 
 ダッシュボード（`/`）の表示・配置（セクション構成・メニュー要素の配置・通知欄の位置・AKEBONO 業務
 セクションの表示・カード密度）を、**世の中の業務アプリを参考にした 5 種のテンプレート（プレビュー付き）**
-から選択できるようにした（両モード = mockup + API）。設定は **ユーザーごと / テナントごとの 2 階層**で、
-解決順は **ユーザー設定 > テナント設定 > デフォルト表示**。既存の 3 機能（外部リンク配置・通知サイド欄・
+から選択できるようにした（両モード = mockup + API）。設定は **ユーザー / テナント / アプリ既定の 3 階層**で、
+解決順は **ユーザー設定 > テナント設定 > デフォルト表示（アプリ既定）**。既存の 3 機能（外部リンク配置・通知サイド欄・
 未読フィルタ）と現行メディア/顧客ログ等の挙動は不変。
 
 - [x] **型・テンプレート・純ロジック（新 SoT = `mockup/app/utils/dashboard-layout.ts`。新規 shared 不要）**:
@@ -1422,7 +1422,9 @@
   それを再利用する薄いラッパへ（挙動不変 = 未割当→その他・空セクション除去・順序保持）。
 - [x] **解決 composable（新 `mockup/app/composables/useDashboardLayout.ts`）**: `effectiveLayout` /
   `resolvedScope`（'user'|'tenant'|'default'）/ `activeTemplateId` / `templates` / `userLayout` / `tenantLayout` /
-  `hasUserLayout` / `hasTenantLayout` / `applyTemplate(id, 'user'|'tenant')` / `resetLayout(scope)`（取消・原則9.5）。
+  `tenantLayoutOwn`（新キー自身。解除可否・ハイライト用）/ `hasUserLayout` / `hasTenantLayout` /
+  `hasTenantLayoutOwn` / `baseLayoutForScope(scope)`（保存先層自身を土台に取る = pickBaseLayout）/
+  `applyTemplate(id, 'user'|'tenant')` / `saveSections(sections, scope)` / `resetLayout(scope)`（取消・原則9.5）。
   ユーザー層 = API `me.prefs.dashboardLayout`（saveMePreference）/ mock localStorage `ako.dashboard-layout.v1`
   （useCurrentSegment の SSR 安全 useState + localStorage 流儀）。テナント層 = `getConfig/setConfig('dashboard-layout')`。
   下位互換 = テナント新キー未設定で従来 `menu-categories-dashboard` があればその sections を default options と
@@ -1450,10 +1452,11 @@
   表示を壊さない。ユーザー/テナント設定は「解除」で下位層へ戻せる（データ喪失なし）。
 - [x] **検証（実測値。この環境で実行）**:
   - `cd mockup && npm run typecheck` green / `cd api && npm run typecheck`（tsc --noEmit）green
-  - `cd mockup && npm test`: **191 passed**（既存 158 + 新規 `tests/dashboard-layout.test.ts` 33 = 解決階層
-    〔user>tenant>default〕・壊れ JSON の 1 段フォールバック・categorize 流用・テンプレート健全性〔全 cardId が
-    MENU_CARDS.dashboard に存在・focus は全カード・default=DEFAULT_MENU_CATEGORIES・executive/focus の通知位置〕・
-    materialize ディープコピー・下位互換・4KB 上限）。既存 nav-map/media 等は無変更で green
+  - `cd mockup && npm test`: **191 passed**（本節実装時点。以後 §52・§53 で増加 = 最新値は §53-3 が正）。
+    新規 `tests/dashboard-layout.test.ts` = 解決階層〔user>tenant>default〕・壊れ JSON の 1 段フォールバック・
+    categorize 流用・テンプレート健全性〔全 cardId が MENU_CARDS.dashboard に存在・focus は全カード・
+    default=DEFAULT_MENU_CATEGORIES・executive/focus の通知位置〕・materialize ディープコピー・下位互換・4KB 上限。
+    既存 nav-map/media 等は無変更で green
   - `cd api && npm test`（unit）: **259 passed**（本機能は既存 API のみ利用 = API 変更なし・回帰なし）
   - `cd api && npm run test:integration`（実 PostgreSQL）: **225 passed**（既存 green 維持）
 - [x] **既知の制約・設計判断**:
@@ -1509,15 +1512,17 @@
 ### 52-2 要件2（#25）: セクション配置の 3 階層化（ユーザー > テナント > アプリ既定）
 - [x] **解決は既存の土台を利用**: effectiveLayout（resolveDashboardLayout）が既に user>tenant>default で sections も
   解決済み。不足していた「編集・保存」導線を追加。
-- [x] **`useDashboardLayout.saveSections(sections, scope)`**: 現行 effectiveLayout.options を維持したまま sections を
-  差し替えた DashboardLayout（templateId='custom'）を該当層へ保存。保存経路は applyTemplate と共通化した
+- [x] **`useDashboardLayout.saveSections(sections, scope)`**: **保存先スコープ自身の層**の options を維持したまま
+  （純関数 `pickBaseLayout`。effectiveLayout ではない = §53 MAJOR 対応）sections を差し替えた DashboardLayout
+  （templateId='custom'）を該当層へ保存。保存経路は applyTemplate と共通化した
   `persistLayout(layout, scope)`（原則3。user=saveMePreference/localStorage・tenant=setConfig〔管理者のみ・非管理者は
   警告 no-op〕）。組み立ては純関数 `buildCustomLayout(sections, options)`（dashboard-layout.ts・ディープコピー）。
 - [x] **共通編集部品 `UiMenuSectionEditor`（`mockup/app/components/ui/`。原則3）**: カテゴリの追加・削除・改名・
   並び替え・カード割当（UiMultiCombobox）。v-model（MenuCategoryDef[]）で、更新はユーザー操作起点でのみ emit
   （親の dirty 判定を壊さない）。**MenuCategoryEditor もこれを使うよう refactor**（重複削減。既存の
   ハイドレーション/dirty/保存オーケストレーションは維持）。
-- [x] **新 UI `OfficeDashboardSectionEditor`**: 現在の effectiveLayout.sections をドラフト初期値に、スコープ
+- [x] **新 UI `OfficeDashboardSectionEditor`**: **保存先スコープ自身の層**の sections をドラフト初期値に
+  （baseLayoutForScope。effectiveLayout ではない = §53 MAJOR 対応。スコープ切替時は seed し直す）、スコープ
   （自分=user / 全社=tenant〔管理者のみ〕）を選んで編集・保存（saveSections）。割当候補 = 基本メニュー + 外部リンク +
   AKEBONO 業態アプリ。「この階層の設定を解除」= resetLayout(scope)（取消フロー・原則9.5）。現在有効な層
   （resolvedScope）と適用中テンプレートを明示。ハイドレーション（reloadConfigs）・dirty ガードは MenuCategoryEditor
@@ -1550,8 +1555,11 @@
 - [x] **既知の制約**:
   - akebono 業態カードのアイコンはカテゴリ配置では業種タイプ別 lucide（INDUSTRY_CARD_ICON）で統一。トップの
     専用セクション（AkebonoSegmentApps）は従来どおり AkebonoSegmentIcon（画像 or lucide）で描画 = 意図的な二系統。
-  - セクション編集のドラフトは常に「現在の有効レイアウト」を初期値にする（保存先スコープに関わらず）。tenant へ
-    保存しても user 設定がある間は effective は user のまま（表示は user 優先）= 仕様どおり。
+  - セクション編集のドラフト初期値・保存時に引き継ぐ options は「**保存先スコープ自身の層**」を土台にする
+    （純関数 `pickBaseLayout`。user→user〔無ければ tenant→アプリ既定〕/ tenant→tenant〔無ければアプリ既定。**user 層には
+    フォールバックしない**〕）。これにより管理者が全社（tenant）を編集しても、自分の user 設定の options/sections が
+    テナントへ紛れ込まない（§53 レビュー MAJOR 対応。以前は effective〔解決結果〕を土台にしていた）。スコープ切替時は
+    対象層の土台でドラフトを seed し直す。tenant へ保存しても user 設定がある間は effective は user 優先 = 表示は変わらない（仕様どおり）。
   - focus テンプレート（showAkebono=false）では業態カードが通常メニュー（未割当は「その他」）に混ざる = ミニマル
     表示の意図に沿う設計判断。
 
@@ -1566,3 +1574,63 @@
   （UiMenuSectionEditor は flex-wrap・チップ）・取消可能性（解除フロー）あり。
 - [x] **二重表示の網羅確認**: showAkebono on/off × 割当あり/なし/全割当済み × akebono 利用可/不可 を planDashboardCards
   の単体テストで網羅。categorize と組み合わせた「その他」落ちも実測。
+
+## 53. ダッシュボードカスタマイズ（§51・§52）の独立レビュー反復（原則9）と修正の完了条件（Definition of Done）
+
+> オペレーター指示 2026-08-03。§51・§52 の実装に対し独立ロール（コードレビュアー・システム監査官）の
+> レビュー/監査を実施し、指摘（MAJOR 1・MINOR 2・NIT 2）を全件修正した。ブランチ
+> `claude/reports-customer-log-updates-k6on2x`。挙動・API・マイグレーション変更は伴わない（純ロジック + UI + ドキュメント）。
+
+### 53-1 指摘と修正
+- [x] **MAJOR（保存先スコープと無関係な層の設定が漏れる）**: `saveSections` と `DashboardSectionEditor` のドラフトが
+  `effectiveLayout`（解決結果）の options/sections を土台にしていたため、**個人（user）設定を持つ管理者が全社（tenant）を
+  編集すると、自分の user の options/sections がテナントへ保存されてしまう**不具合。→ 保存先スコープ自身の層を土台に取る
+  純関数 `pickBaseLayout(scope, {userLayout, tenantLayout})`（SoT = `utils/dashboard-layout.ts`・原則3）を新設し、
+  `useDashboardLayout.baseLayoutForScope` / `saveSections` / `DashboardSectionEditor` のドラフト seed をこれに統一。
+  tenant は tenant 層自身（無ければアプリ既定）を土台にし、**user 層へはフォールバックしない**（漏れ防止）。
+  スコープ切替時はドラフトを対象層の土台で seed し直す（`watch(scope)`）。
+- [x] **MINOR（テナント「解除」が何もしないのに成功表示）**: `resetLayout('tenant')` は新キー `dashboard-layout` のみを
+  クリアする（従来 `menu-categories-dashboard` は MenuCategoryEditor が管理）が、解除ボタンの活性・適用中ハイライトが
+  下位互換込みの `hasTenantLayout` を見ていたため、従来キーのみ設定のテナントで「解除」が押下でき（実際は無操作）成功トーストが出た。
+  → 新キー自身を表す `tenantLayoutOwn` / `hasTenantLayoutOwn` を追加し、`DashboardSectionEditor` / `DashboardLayoutPicker`
+  の解除可否・ハイライトをこれに切替（従来キーは MenuCategoryEditor 側で解除する導線を維持 = SoT 分離）。
+- [x] **MINOR（ドキュメント不整合）**: §51 見出し・本文の「2 階層」を「3 階層」に修正（§52 が §51 を「3 階層解決」と参照して
+  いた不整合を解消）。§52-3「既知の制約」の「ドラフトは常に現在の有効レイアウトを初期値にする」は MAJOR 修正で反転したため
+  「保存先スコープ自身の層を土台にする」へ書き換え。§51 のテスト実測値は本節実装時点である旨を明示（最新値は 53-3 が正）。
+- [x] **NIT（templateId='custom' の生表示）**: 手動編集レイアウトの `activeTemplateId`='custom' が UI に生の "custom" と
+  出ていたため、`templateName` に「カスタム」表示を追加（Picker / SectionEditor 双方）。
+- [x] **NIT（記録）**: セクションエディタの割当候補は機能 OFF 時も外部リンク/AKEBONO を提示しうるが、cardIds は categorize が
+  未存在を無視するため表示は壊れず、再有効化時に設定が生きる利点がある = 意図的挙動として記録（修正不要）。
+
+### 53-2 波及確認（原則5・原則6）
+- [x] `saveSections` の options 由来を Grep で確認（`effectiveLayout.value.options` の残存なし）。`hasTenantLayout` の
+  UI 参照を解除可否から `hasTenantLayoutOwn` へ切替済み（メッセージ表示等の情報用途は用途に応じて維持）。
+- [x] 純ロジック（pickBaseLayout）は utils に集約し composable は薄い委譲（原則3）。SoT→キャッシュ順序・下位互換は不変。
+
+### 53-3 検証（実測値。この環境で実行）
+- [x] `cd mockup && npm run typecheck`（nuxt typecheck）**green**（exit 0）
+- [x] `cd mockup && npm test`: **212 passed**（16 files）。`tests/dashboard-layout.test.ts` は **47**
+  （§52 の 42 + 新規 `pickBaseLayout` 回帰テスト 5 = tenant 編集の土台がテナント層自身であること・管理者個人の user
+  設定が tenant 編集へ紛れ込まないこと・tenant 層なしは user へフォールバックせず既定・user のフォールバック順・
+  saveSections 相当の options 維持）
+- [x] `cd api && npm run typecheck`（tsc --noEmit）**green**（API 変更なし）
+- [x] `cd api && npm test`（unit）: **259 passed** / `cd api && npm run test:integration`（使い捨て PostgreSQL）: **225 passed**（回帰なし）
+
+### 53-4 独立ロールによる反復レビュー（原則9。指摘ゼロまで）
+53-1 の修正後、独立ロール（コードレビュアー・システム監査官）で再レビュー/監査を実施。結果と対応:
+- [x] **コードレビュー = MAJOR/MINOR なし**（`pickBaseLayout` の層分離・`effectiveLayout.value.options` 残存ゼロ・
+  watch(scope)×watch(baseSections) の冪等性・回帰テストが弱いアサーションでないことを確認）。NIT のみ。
+- [x] **システム監査 = MINOR-1（ドキュメント是正漏れ・原則5）**: 旧挙動（ドラフト/options = effectiveLayout）の記述が
+  複数ドキュメントに残存（`phase5/screen-design.md` §5.6・`phase5/api-design.md` useDashboardLayout・`phase7/§52-2`・
+  `phase5/data-design.md`・`phase3/functional-requirements.md` F-13-9）。**全件を「保存先スコープ自身の層を土台にする
+  （pickBaseLayout）」へ統一**し、api-design.md に `tenantLayoutOwn` / `hasTenantLayoutOwn` / `baseLayoutForScope` を追記。
+  Grep で旧挙動の記述が残っていないことを再確認（ヒットゼロ）。
+- [x] **NIT-1（従来キーのみテナントでの表示食い違い。両ロールが指摘）**: 新キー未設定 + 従来 `menu-categories-dashboard`
+  のみのテナントで「設定なし」と出て解除も無効なのに、上部バナーは「全社設定 有効」でドラフトが legacy sections で埋まる
+  問題。→ `DashboardSectionEditor` / `DashboardLayoutPicker` に **`tenantLegacyActive`（新キーなし ∧ legacy あり）** の
+  分岐メッセージを追加（「従来のメニューカテゴリ設定が全社に適用されています（解除は『設定 > メニューカテゴリ』から）」）。
+  これにより `hasTenantLayout`（legacy 込み）を再度 UI が消費 = 旧 NIT（デッド export）も解消。
+- [x] **NIT-2（スコープ切替で未保存ドラフトが無警告破棄）**: 他層汚染（MAJOR）防止のための無条件 re-seed は意図的設計。
+  ドラフトは未永続（確定操作ではない）ため原則9.5 の必須対象外と判断し、確認ダイアログは追加しない（設計判断として記録）。
+- [x] **再検証**: 上記対応後 `cd mockup && npm run typecheck` green / `npm test` **212 passed**（挙動変更なし = テスト不変）。
+  以上で未解決の指摘ゼロ。

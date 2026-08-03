@@ -19,6 +19,7 @@ import {
   materializeLayout,
   parseDashboardLayout,
   parseMenuSections,
+  pickBaseLayout,
   planDashboardCards,
   resolveDashboardLayout,
   templateById,
@@ -400,5 +401,51 @@ describe('buildCustomLayout（saveSections が保存する DashboardLayout の�
     const layout = buildCustomLayout([{ id: 'all', label: 'すべてのメニュー', cardIds: ids }], DEFAULT_LAYOUT_OPTIONS)
     const bytes = new TextEncoder().encode(JSON.stringify(layout)).length
     expect(bytes, `${bytes} bytes`).toBeLessThan(4096)
+  })
+})
+
+// ---------- 保存先スコープ自身の層を土台にする（#25。レビュー MAJOR の回帰テスト） ----------
+
+describe('pickBaseLayout（保存先スコープ自身の層を土台にする。他層の設定を漏らさない）', () => {
+  // user 個人設定: focus 由来（options = bottom / showAkebono=false / compact）
+  const userLayout = parseDashboardLayout(VALID_USER_LAYOUT)!
+  // 全社設定: executive 由来（options = bottom / showAkebono=true / comfortable）
+  const tenantLayout = parseDashboardLayout(VALID_TENANT_LAYOUT)!
+
+  it('tenant 編集はテナント層自身（options・sections）を土台にする', () => {
+    const base = pickBaseLayout('tenant', { userLayout, tenantLayout })
+    expect(base.options).toEqual(tenantLayout.options)
+    expect(base.sections).toEqual(tenantLayout.sections)
+  })
+
+  it('【回帰】管理者個人の user 設定は tenant 編集の土台に紛れ込まない（レビュー MAJOR）', () => {
+    // user と tenant で異なる options を持たせ、tenant 側が user の options に汚染されないことを確認
+    expect(userLayout.options).not.toEqual(tenantLayout.options)
+    const base = pickBaseLayout('tenant', { userLayout, tenantLayout })
+    expect(base.options).not.toEqual(userLayout.options)
+  })
+
+  it('tenant 層が無ければ default（user 設定へはフォールバックしない = テナントへ漏らさない）', () => {
+    const base = pickBaseLayout('tenant', { userLayout, tenantLayout: null })
+    expect(base.templateId).toBe('default')
+    expect(base.options).toEqual(DEFAULT_LAYOUT_OPTIONS)
+    expect(base.options).not.toEqual(userLayout.options)
+  })
+
+  it('user 編集は user 層を最優先し、無ければ tenant → default にフォールバック', () => {
+    expect(pickBaseLayout('user', { userLayout, tenantLayout }).options).toEqual(userLayout.options)
+    expect(pickBaseLayout('user', { userLayout: null, tenantLayout }).options).toEqual(tenantLayout.options)
+    expect(pickBaseLayout('user', { userLayout: null, tenantLayout: null }).templateId).toBe('default')
+  })
+
+  it('saveSections 相当: 全社にセクション保存すると options はテナント層のものを維持する', () => {
+    // saveSections = persistLayout(buildCustomLayout(draft, pickBaseLayout(scope).options), scope) 相当
+    const saved = buildCustomLayout(
+      [{ id: 'x', label: 'X', cardIds: ['sales'] }],
+      pickBaseLayout('tenant', { userLayout, tenantLayout }).options,
+    )
+    expect(saved.templateId).toBe('custom')
+    expect(saved.options).toEqual(tenantLayout.options)
+    expect(saved.options).not.toEqual(userLayout.options)
   })
 })

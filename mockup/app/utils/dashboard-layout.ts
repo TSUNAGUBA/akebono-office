@@ -188,6 +188,22 @@ export function defaultDashboardLayout(): DashboardLayout {
 }
 
 /**
+ * 指定スコープでの編集・保存の「土台」となるレイアウトを層ごとに選ぶ（純関数。useDashboardLayout が使用）。
+ * - tenant: テナント層自身を最優先し、無ければアプリ既定（default）へ。**user 層にはフォールバックしない**
+ *   （管理者個人の user 設定の options/sections がテナントへ漏れるのを防ぐ = レビュー MAJOR）。
+ * - user: user 層を最優先し、無ければ tenant → default の順にフォールバック（今見えている構成を開始点にする）。
+ * ドラフト初期値（sections）と保存時に引き継ぐ options の両方をこの土台から取ることで、
+ * 保存先スコープと無関係な層の設定が紛れ込まないことを保証する。
+ */
+export function pickBaseLayout(
+  scope: 'user' | 'tenant',
+  layers: { userLayout: DashboardLayout | null; tenantLayout: DashboardLayout | null },
+): DashboardLayout {
+  if (scope === 'tenant') return layers.tenantLayout ?? defaultDashboardLayout()
+  return layers.userLayout ?? layers.tenantLayout ?? defaultDashboardLayout()
+}
+
+/**
  * カスタムのセクション構成から DashboardLayout を組み立てる（useDashboardLayout.saveSections が使用・純関数）。
  * sections はディープコピーし、options はそのまま（呼び出し側で現行 options を渡す）。templateId は 'custom'。
  */

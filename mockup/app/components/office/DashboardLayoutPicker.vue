@@ -13,7 +13,7 @@ import type { ApplyScope } from '~/composables/useDashboardLayout'
 
 const {
   templates, resolvedScope, activeTemplateId,
-  userLayout, tenantLayout, hasUserLayout, hasTenantLayout, isAdmin,
+  userLayout, tenantLayoutOwn, hasUserLayout, hasTenantLayout, hasTenantLayoutOwn, isAdmin,
   applyTemplate, resetLayout,
 } = useDashboardLayout()
 const { show } = useToast()
@@ -37,13 +37,18 @@ const scopeChips = computed(() => [
   ...(isAdmin.value ? [{ value: 'tenant', label: '全社（テナント既定）' }] : []),
 ])
 
-/** 選択中スコープに適用済みのテンプレート id（ハイライト用） */
+/** 選択中スコープに適用済みのテンプレート id（ハイライト用）。tenant は解除可能な新キー設定のみを対象にする */
 const activeForScope = computed(() =>
-  scope.value === 'user' ? userLayout.value?.templateId : tenantLayout.value?.templateId)
+  scope.value === 'user' ? userLayout.value?.templateId : tenantLayoutOwn.value?.templateId)
 
-const hasForScope = computed(() => scope.value === 'user' ? hasUserLayout.value : hasTenantLayout.value)
+// 解除可否・ハイライト = その層自身に（解除できる）設定があるか。tenant は新キーのみを対象にする（レビュー MINOR）
+const hasForScope = computed(() => scope.value === 'user' ? hasUserLayout.value : hasTenantLayoutOwn.value)
+// 全社かつ「新キーは無いが従来のメニューカテゴリ設定は有効」= 解除は別画面（設定>メニューカテゴリ）担当（§53 NIT）
+const tenantLegacyActive = computed(() =>
+  scope.value === 'tenant' && !hasTenantLayoutOwn.value && hasTenantLayout.value)
 
 function templateName(id: string): string {
+  if (id === 'custom') return 'カスタム'
   return templates.find(t => t.id === id)?.name ?? id
 }
 
@@ -115,6 +120,7 @@ async function onReset(): Promise<void> {
         <template v-if="hasForScope">
           現在この層は「{{ templateName(activeForScope || '') }}」が設定されています。
         </template>
+        <template v-else-if="tenantLegacyActive">従来のメニューカテゴリ設定が全社に適用されています（解除は「設定 &gt; メニューカテゴリ」から）。</template>
         <template v-else>現在この層には設定がありません。</template>
       </p>
     </div>

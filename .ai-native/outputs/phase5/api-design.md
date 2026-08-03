@@ -150,13 +150,17 @@ effectiveLayout: ComputedRef<DashboardLayout>    // 解決結果（ユーザー 
 resolvedScope:  ComputedRef<'user'|'tenant'|'default'>  // どの層が効いているか（表示用）
 activeTemplateId: ComputedRef<string>            // 有効レイアウトの由来テンプレート id
 templates: DashboardTemplate[]                   // テンプレート一覧（5 種。SoT = utils/dashboard-layout.ts）
-userLayout / tenantLayout: ComputedRef<DashboardLayout|null>  // 各層に保存済みのレイアウト（UI ハイライト用）
-hasUserLayout / hasTenantLayout: ComputedRef<boolean>
+userLayout / tenantLayout: ComputedRef<DashboardLayout|null>  // 各層に保存済みのレイアウト（tenantLayout は下位互換 legacy 込み。ドラフト土台に使用）
+tenantLayoutOwn: ComputedRef<DashboardLayout|null>  // テナント新キー自身のみ（legacy を含まない。ハイライト・解除可否の SoT）
+hasUserLayout / hasTenantLayout: ComputedRef<boolean>          // hasTenantLayout は legacy 込み（メッセージ表示用）
+hasTenantLayoutOwn: ComputedRef<boolean>                       // 新キー自身のみ（解除ボタン活性・ハイライト用。§53 MINOR 対応）
+baseLayoutForScope(scope: 'user'|'tenant'): DashboardLayout    // 保存先層自身を土台に取る（pickBaseLayout。tenant は user 層へ落ちない = §53 MAJOR 対応）
 applyTemplate(templateId, scope: 'user'|'tenant'): Promise<{ ok }>  // materialize → 該当層へ保存（tenant は管理者のみ）
 saveSections(sections: MenuCategoryDef[], scope: 'user'|'tenant'): Promise<{ ok }>
-  // 現行 options を維持したまま sections を差し替えた DashboardLayout（templateId='custom'）を該当層へ保存（#25）。
+  // 保存先スコープ自身の層の options（baseLayoutForScope。effectiveLayout ではない = §53 MAJOR 対応）を
+  // 維持したまま sections を差し替えた DashboardLayout（templateId='custom'）を該当層へ保存（#25）。
   // 保存経路は applyTemplate と共通（persistLayout）。tenant は管理者のみ（非管理者は警告 no-op = 非ブロッキング）。
-resetLayout(scope: 'user'|'tenant'): Promise<{ ok }>               // 該当層を解除（取消フロー・原則9.5）
+resetLayout(scope: 'user'|'tenant'): Promise<{ ok }>               // 該当層を解除（新キーのみ・取消フロー・原則9.5）
 // 解決・categorize・型・テンプレート・buildCustomLayout・planDashboardCards の純ロジック SoT = mockup/app/utils/dashboard-layout.ts
 // 保存: ユーザー層 = /v1/me/preferences 'dashboardLayout'（saveMePreference。mock=localStorage）
 //       テナント層 = /v1/configs 'dashboard-layout'（setConfig）。**新規 API・マイグレーション不要**（既存の汎用 key/value を利用）

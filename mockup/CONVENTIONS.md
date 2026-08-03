@@ -76,7 +76,7 @@ const mcat = useMenuCategories('dashboard')   // categories / categorize(cards) 
 
 // ダッシュボードのレイアウト（表示・配置 + セクション配置。F-13-9・2026-08-03。純ロジック/型/テンプレート SoT = utils/dashboard-layout.ts）
 // 解決順 = ユーザー設定 > テナント設定 > デフォルト（セクション配置も同 3 階層 = #25）。ユーザー層=/v1/me pref 'dashboardLayout'（mock=localStorage 'ako.dashboard-layout.v1'）/ テナント層=configs 'dashboard-layout'（未設定は menu-categories-dashboard 下位互換）
-const dl = useDashboardLayout()   // effectiveLayout / resolvedScope / activeTemplateId / templates / applyTemplate(id, scope) / saveSections(sections, scope)〔options 維持で sections 差替・templateId=custom〕 / resetLayout(scope)（取消・原則9.5。tenant は管理者のみ）
+const dl = useDashboardLayout()   // effectiveLayout / resolvedScope / activeTemplateId / templates / baseLayoutForScope(scope) / applyTemplate(id, scope) / saveSections(sections, scope)〔保存先層自身の options 維持で sections 差替・templateId=custom〕 / resetLayout(scope)（取消・原則9.5。tenant は管理者のみ）
 
 // カードメニュー写像（ダッシュボードのメニューカテゴリ配置用。基本メニュー MENU_CARDS.dashboard と同じ MenuCard 形へ）
 const { externalCards } = useExternalLinkCards()  // F-13-3 の外部リンク → MenuCard（id=`el-*`・href で別タブ）

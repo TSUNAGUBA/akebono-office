@@ -1,7 +1,7 @@
 /**
  * ダッシュボード（F-01）のレイアウト（表示・配置）解決と保存（オペレーター指示 2026-08-03）。
  *
- * 2 階層（ユーザー設定 > テナント設定 > デフォルト）を解決し、テンプレート適用・解除を提供する。
+ * 3 階層（ユーザー設定 > テナント設定 > アプリ既定（デフォルト表示））を解決し、テンプレート適用・解除を提供する。
  * 純ロジック（型・テンプレート・解決・categorize）は utils/dashboard-layout.ts が SoT。
  *
  * 永続化（デュアルモード。既存基盤を踏襲 = 原則3）:
@@ -15,8 +15,8 @@
  */
 import type { DashboardLayout, DashboardScope, DashboardTemplate } from '~/utils/dashboard-layout'
 import {
-  buildCustomLayout, DASHBOARD_TEMPLATES, layoutFromLegacyCategories, materializeLayout,
-  parseDashboardLayout, resolveDashboardLayout,
+  buildCustomLayout, DASHBOARD_TEMPLATES, layoutFromLegacyCategories,
+  materializeLayout, parseDashboardLayout, pickBaseLayout, resolveDashboardLayout,
 } from '~/utils/dashboard-layout'
 import type { MenuCategoryDef } from '~/utils/menu-registry'
 
@@ -75,8 +75,24 @@ export function useDashboardLayout() {
   const userLayout = computed<DashboardLayout | null>(() => parseDashboardLayout(userRaw.value))
   const tenantLayout = computed<DashboardLayout | null>(() =>
     parseDashboardLayout(tenantRaw.value) ?? layoutFromLegacyCategories(legacyRaw.value))
+  /**
+   * テナント層の「新キー（dashboard-layout）自身の」設定（下位互換の menu-categories-dashboard を含まない）。
+   * resetLayout('tenant') は新キーのみをクリアする（従来キーは MenuCategoryEditor が管理するため触らない）ので、
+   * 「解除」ボタンの活性判定・適用中テンプレートのハイライトはこちらを使う（レビュー MINOR）。
+   */
+  const tenantLayoutOwn = computed<DashboardLayout | null>(() => parseDashboardLayout(tenantRaw.value))
   const hasUserLayout = computed(() => userLayout.value !== null)
   const hasTenantLayout = computed(() => tenantLayout.value !== null)
+  const hasTenantLayoutOwn = computed(() => tenantLayoutOwn.value !== null)
+
+  /**
+   * 指定スコープでの編集の「土台」となるレイアウト（ドラフト初期値・保存時に引き継ぐ options の取得元）。
+   * 純ロジックは utils の pickBaseLayout が SoT（原則3）。effectiveLayout（解決結果）を土台にすると、
+   * 管理者が全社（tenant）を編集する際に自分の user 設定がテナントへ紛れ込む（レビュー MAJOR）ため層で分ける。
+   */
+  function baseLayoutForScope(scope: ApplyScope): DashboardLayout {
+    return pickBaseLayout(scope, { userLayout: userLayout.value, tenantLayout: tenantLayout.value })
+  }
 
   /**
    * DashboardLayout を該当層へ保存する（applyTemplate / saveSections の共通保存経路 = 原則3）。
@@ -113,12 +129,13 @@ export function useDashboardLayout() {
 
   /**
    * セクション構成（どのメニューをどのセクションに置くか）を該当層へ保存する（2026-08-03 #25）。
-   * 現行の有効レイアウトの options（通知位置・AKEBONO 表示・密度）を維持したまま sections だけ差し替える。
+   * options（通知位置・AKEBONO 表示・密度）は「保存先スコープ自身」の設定を維持したまま sections だけ
+   * 差し替える。effectiveLayout（解決結果）の options を使うと、管理者が全社を編集した際に自分の user 設定の
+   * options がテナントへ漏れる（レビュー MAJOR）ため baseLayoutForScope で層ごとに土台を取る。
    * templateId は 'custom'（テンプレート由来ではない手動編集）。保存経路は applyTemplate と同一（原則3）。
-   * user>tenant>default の解決は effectiveLayout（resolveDashboardLayout）が引き続き担う（土台は既存）。
    */
   async function saveSections(sections: MenuCategoryDef[], scope: ApplyScope): Promise<{ ok: boolean }> {
-    return persistLayout(buildCustomLayout(sections, effectiveLayout.value.options), scope)
+    return persistLayout(buildCustomLayout(sections, baseLayoutForScope(scope).options), scope)
   }
 
   /**
@@ -154,8 +171,11 @@ export function useDashboardLayout() {
     templates,
     userLayout,
     tenantLayout,
+    tenantLayoutOwn,
     hasUserLayout,
     hasTenantLayout,
+    hasTenantLayoutOwn,
+    baseLayoutForScope,
     isAdmin,
     applyTemplate,
     saveSections,

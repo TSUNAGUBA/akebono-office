@@ -308,11 +308,13 @@ graph TD
   - **テンプレート**: テンプレートをカードで一覧 + プレビュー + 適用ボタン。適用スコープ = 「自分（このアカウント）」
     = user（全ユーザー可）/「全社（テナント既定）」= tenant（**管理者のみ**・非管理者はチップ非表示）。現在有効な層
     （ユーザー/テナント/デフォルト）と適用中テンプレートを明示。
-  - **セクションを編集（`OfficeDashboardSectionEditor`。#25）**: 現在の有効レイアウトの sections をドラフト初期値に、
+  - **セクションを編集（`OfficeDashboardSectionEditor`。#25）**: **保存先スコープ自身の層**の sections をドラフト初期値に
+    （純関数 `baseLayoutForScope`/`pickBaseLayout`。user→user〔無ければ tenant→既定〕/ tenant→tenant〔無ければ既定。
+    管理者個人の user 設定はテナント編集へ混入しない = §53 MAJOR 対応〕。スコープ切替時は対象層で seed し直す）、
     カテゴリの追加・削除・改名・並び替え・カード割当ができる（共通部品 `UiMenuSectionEditor` を settings の
     `MenuCategoryEditor` と共用 = 原則3）。**割当候補 = 基本メニュー + 外部リンク（F-13-3）+ AKEBONO 業態アプリ（#24）**。
-    保存先スコープ（自分 / 全社〔管理者のみ〕）を選び **`saveSections(draft, scope)`** で保存（options は現行維持・
-    templateId=`custom`）。現在有効な層を明示。
+    保存先スコープ（自分 / 全社〔管理者のみ〕）を選び **`saveSections(draft, scope)`** で保存（options は**保存先層自身の
+    もの**を維持・templateId=`custom`）。現在有効な層を明示。
   - **取消フロー（原則 9.5）= 層ごとに「設定を解除」**（user 解除 → テナント/デフォルトへ・tenant 解除 → 従来
     カテゴリ/デフォルトへ）。レスポンシブ（原則8）= テンプレートは 1 → 2 列・セクション編集の行操作は flex-wrap。
 - **反映（`pages/index.vue`）**: `effectiveLayout` に従いセクション（categorize）・通知位置（side = 右カラム /
