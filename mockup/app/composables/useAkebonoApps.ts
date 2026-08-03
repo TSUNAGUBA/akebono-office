@@ -44,8 +44,9 @@ export const AKEBONO_APP_CATALOG: AkebonoAppDef[] = [
   { key: 'inventory', title: '在庫管理', description: '在庫台帳から残高導出・調整・移動・棚卸', icon: 'Boxes', to: '/akebono/inventory' },
   { key: 'sales', title: '売上管理', description: '売上明細・セグメント別サマリ・委託売上の取込', icon: 'TrendingUp', to: '/akebono/sales' },
   { key: 'billing', title: '請求管理', description: '請求締め・発行・入金消込・委託精算（店舗マージン請求/作家支払）', icon: 'ReceiptText', to: '/akebono/billing' },
-  // メディア分析は各業態と 1:1 で対になる業務アプリ（2026-07-28。従来のトップ独立メニューから配下アプリへ移設）
-  { key: 'media', title: 'メディア分析', description: 'GA × AI でサイト・記事のインサイトと次アクション、業務との PDCA、AI 記事生成', icon: 'LineChart', to: '/media', featureKey: 'media' },
+  // メディア分析（media）は 2026-08-03 に独立チャンネル化しトップメニューへ移設したため、業態配下アプリの
+  // カタログからは撤去した（トップの「メディア分析」から入場する）。アプリキー 'media' は下位互換のため
+  // AKEBONO_APP_KEYS には残す（既存の app-configs 行・プリセット件数の保護）が、カタログには載せない。
 ]
 
 /** 常時有効の管理者機能（プリセット対象外。§3.3 の注記。ハブ下部に表示） */

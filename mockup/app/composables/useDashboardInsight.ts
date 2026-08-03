@@ -78,7 +78,8 @@ export function useDashboardInsight() {
   const records = tbl('dashboardInsights')
   const { currentUser } = useCurrentUser()
   const { activeSegments, segmentById } = useCurrentSegment()
-  const { settingFor } = useMediaSettings()
+  // 連携済みチャンネルは id = 連携先 segmentId のため、業態 id をチャンネル id として解決できる（下位互換）
+  const { settingFor } = useMediaChannels()
   const { integratedMetricsFor, articleInputsFor, ensureIntegratedLoaded } = useMediaAnalytics()
   const { isEnabled } = useAppSettings()
   const membersTbl = tbl('members')

@@ -100,28 +100,38 @@
 
 > **SoT 宣言（カレンダー）:** `source='google'` の予定は **Google カレンダーが SoT**（本アプリはキャッシュ。編集・削除不可、決定的 id によるべき等 upsert で同期）。`source='app'` の予定は**本アプリが SoT**（`syncedToGoogle` で Google への反映状態を持つ）。連携解除後もキャッシュは表示用に保持し、**未連携メンバーには初期キャッシュを投入しない**（連携＝同意して初めて同期される、を再現）。HearingLog は記録系（追記のみ）。日報ドラフトは保存せずフォームへ流し込むのみで、**提出済み日報は再生成で上書きしない**（ai-manager の confirmed 保護と同型）。
 
-### 1.4 メディア分析関連（F-40。2026-07-28 追加・本実装 = migration 0030）
+### 1.4 メディア分析関連（F-40。初出 2026-07-28 = migration 0030。**独立チャンネル化 = 2026-08-03 = migration 0048**）
+
+2026-08-03 の移行（0048）で「事業セグメント（業態）と 1:1」から **独立したメディアチャンネル
+（media_channels）+ 任意の業態連携**へ変更した。旧 media_settings は media_channels へ移設・拡張し、
+全 child テーブルの `segment_id` を `channel_id` へ列名変更した（**channel.id = 旧 segment_id 値**にする
+backfill により child 行の値は不変 = UPDATE 不要・下位互換。原則7）。連携は必須でない。
 
 | エンティティ（テーブル） | 主要属性 | 分類 / SoT | 機密度 |
 |---|---|---|---|
-| `MediaSetting`（media_settings） | id, segmentId(一意), siteName, siteUrl, analysisGoal, targetAudience, defaultTone, keywords[], active | 設定系（segment 1:1 の upsert。部分更新 = 送ったキーのみ）。SoT = 本アプリ | C1 |
-| `media_ga_tokens` | segmentId(PK), propertyId/propertyName（GA4 プロパティ。NULL = 選択前の中間状態）, accessTokenEnc/refreshTokenEnc（AES-256-GCM）, expiresAt, scope, connectedBy, connectedAt | 設定系（**セグメント単位** = メディアは業態の資産）。トークンは Google 発行物 = 喪失時は再連携で回復（バックアップ対象外の設計判断。calendar_tokens と同型） | C3（暗号化保管・クライアントへ出さない） |
-| `media_oauth_states` | nonce(PK), memberId, segmentId, createdAt | 一時データ（一回性 + 10 分 TTL。calendar_oauth_states と同型） | C2 |
-| `media_metrics_cache` | segmentId × cacheKey(PK), payload, fetchedAt | **導出キャッシュ**（SoT は GA。TTL 30 分・force 再取得可・インベントリ/設定/連携変更で破棄） | C2 |
-| `MediaArticle`(media_articles) | id, segmentId, path, title, section, publishedAt, wordCount, status, origin(`seed`/`generated`), generatedArticleId, active | 設定系/資産（サイトのコンテンツ資産インベントリ。**集計値は持たない = GA が SoT**・セクション対応と記事数の SoT は本テーブル）。論理削除で取消・復元（原則9.5）。**UNIQUE(segmentId, path) WHERE active** = 重複登録防止 | C1 |
-| `ArticleBrief`(media_article_briefs) | id, segmentId, topic, keyword, purpose, quality, tone, audience, fromInsightId, createdBy, createdAt | 記録系（生成依頼の記録 = 追記のみ） | C2 |
-| `GeneratedArticle`(media_generated_articles) | id, segmentId, briefId, payload(GeneratedArticleDraft), llm, adoptedArticleId, active, createdBy, createdAt | 生成物（論理削除で取消・復元。採用でインベントリ化 = 冪等） | C2 |
-| `MediaInsightRecord`(media_insights) | id, segmentId × scope(`media`/`integrated`)(一意), periodKey, metrics, insight, llm, warning（劣化データ由来の告知）, generatedBy, generatedAt | **導出キャッシュ**（weekly_insights と同型 = 再生成で upsert 上書き） | C2 |
+| `MediaChannel`（media_channels） | id, **name**（表示名・必須）, **segmentId（連携先業態。NULL = 単体）**, siteName, siteUrl, analysisGoal, targetAudience, defaultTone, keywords[], active | 設定系（チャンネル 1 レコードの upsert。部分更新 = 送ったキーのみ = hasOwn フィルタ）。SoT = 本アプリ。旧 media_settings を置換・拡張（0048） | C1 |
+| `media_ga_tokens` | **channelId(PK)**, propertyId/propertyName（GA4 プロパティ。NULL = 選択前の中間状態）, accessTokenEnc/refreshTokenEnc（AES-256-GCM）, expiresAt, scope, connectedBy, connectedAt | 設定系（**チャンネル単位**。0048 で segment 単位から移行 = 列名 rename のみ・値不変）。トークンは Google 発行物 = 喪失時は再連携で回復（calendar_tokens と同型） | C3（暗号化保管・クライアントへ出さない） |
+| `media_oauth_states` | nonce(PK), memberId, **channelId**, createdAt | 一時データ（一回性 + 10 分 TTL。calendar_oauth_states と同型） | C2 |
+| `media_metrics_cache` | **channelId** × cacheKey(PK), payload, fetchedAt | **導出キャッシュ**（SoT は GA。TTL 30 分・force 再取得可・インベントリ/設定/連携変更で破棄） | C2 |
+| `MediaArticle`(media_articles) | id, **channelId**, path, title, section, publishedAt, wordCount, status, origin(`seed`/`generated`), generatedArticleId, active | 設定系/資産（サイトのコンテンツ資産インベントリ。**集計値は持たない = GA が SoT**）。論理削除で取消・復元（原則9.5）。**UNIQUE(channelId, path) WHERE active** = 重複登録防止 | C1 |
+| `ArticleBrief`(media_article_briefs) | id, **channelId**, topic, keyword, purpose, quality, tone, audience, fromInsightId, createdBy, createdAt | 記録系（生成依頼の記録 = 追記のみ） | C2 |
+| `GeneratedArticle`(media_generated_articles) | id, **channelId**, briefId, payload(GeneratedArticleDraft), llm, adoptedArticleId, active, createdBy, createdAt | 生成物（論理削除で取消・復元。採用でインベントリ化 = 冪等） | C2 |
+| `MediaInsightRecord`(media_insights) | id, **channelId** × scope(`media`/`integrated`)(一意), periodKey, metrics, insight, llm, warning（劣化データ由来の告知）, generatedBy, generatedAt | **導出キャッシュ**（weekly_insights と同型 = 再生成で upsert 上書き）。scope=integrated は連携済みチャンネルのみ | C2 |
+| `MediaExternalArticle`(media_external_articles) | id, **channelId**, title（必須）, url, source, publishedAt, body（原文・必須）, notes, createdBy, active | **外部投稿記事の原文**（media インサイト生成の材料。0048 新規）。論理削除で取消・復元（原則9.5） | C2 |
 
 > **SoT 宣言（メディア分析）:** GA 由来の集計値（セッション・PV・CV 等）は **Google Analytics が SoT**
-> （本アプリの metrics キャッシュ・保管済みインサイトの metrics は導出）。segment_id は
-> 0030 作成時点で businessSegments が未移行のモック側コレクションだったため FK なし
-> （0030 の設計判断コメント参照）。**Phase B（0031）で business_segments テーブルへ移行済み**だが、
-> FK の後付けは Phase C（記録系移行）の参照整合引き上げと合わせて判断する（§1.5）。
-> 統合分析（scope=integrated）は **Phase C（0032）でサーバー組み立てへ引き上げ済み**: 売上軸 =
-> sales_records（§1.6）+ メディア軸 = GA を GET `/v1/media/integrated` がサーバーで突合し、
-> インサイト生成のクライアント合成メトリクス受領は廃止（M2 の改ざん耐性限界は解消・AKO-MEDIA-016 は欠番）。
-> ダッシュボード保管（dashboardInsights）のみモック側コレクションが残る（Phase D で media_insights と同型へ）。
+> （本アプリの metrics キャッシュ・保管済みインサイトの metrics は導出）。**メディアチャンネルは独立
+> エンティティ**（media_channels が SoT）。channel.segmentId は連携先業態への任意参照（NULL = 単体）で
+> FK なし（0030/0048 の設計判断: business_segments への参照整合引き上げは記録系移行と合わせて判断）。
+> **統合分析（scope=integrated）は連携済みチャンネル（segmentId あり）でのみ**利用可能: 売上軸 =
+> sales_records（§1.6。連携先 segmentId で絞る）+ メディア軸 = GA（channelId keying）を
+> GET `/v1/media/integrated` がサーバーで突合する（未連携チャンネルは AKO-MEDIA-022）。
+> shared/domain/media-*（純ロジック）は不変 = opaque id を受け取る扱いで、media スコープは channelId を、
+> integrated スコープ（売上連携）は連携先 segmentId を渡す（0048 で shared は変更していない）。
+> F-41 ダッシュボード（buildSegmentIntegratedMetrics）は業態基点で、業態に連携したチャンネルを解決して
+> メディア軸を組み立てる（連携なしは売上軸のみ）。AKO-MEDIA-016 は欠番のまま。
+> 下位互換: media_settings 由来のチャンネルは channel.id = 旧 segment_id のため、child 行（channel_id =
+> 旧 segment_id 値）がそのまま解決する（0048 backfill の要）。
 
 ### 1.5 Akebono 設定系の API 永続化（Phase B。2026-07-29 追加・本実装 = migration 0031）
 

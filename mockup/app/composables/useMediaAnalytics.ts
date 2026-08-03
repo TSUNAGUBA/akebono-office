@@ -1,14 +1,14 @@
 /**
- * メディア分析メトリクス（GA 由来の集計）。
+ * メディア分析メトリクス（GA 由来の集計）。メディアチャンネル単位（任意で業態と連携）。
  * - モック: サイトの記事インベントリ（mediaArticles）から決定的に GA 風メトリクスを導出
- *   （shared/domain/media-metrics = モック/デモ環境の SoT として維持）
+ *   （shared/domain/media-metrics = モック/デモ環境の SoT として維持。channelId を opaque seed に渡す）
  * - API: GA4 Data API（batchRunReports）の実データをサーバー（GET /v1/media/metrics・/monthly）が
- *   同じ MediaMetrics 型へ整形して返す（インサイト生成は共通）。segmentId × days キーの遅延ロードキャッシュ
- * - 統合分析（業務 × メディア）: **Phase C でサーバー組み立てへ引き上げ済み**。API モードは
- *   GET /v1/media/integrated（メディア月次 = GA + 売上月次 = sales_records をサーバーで突合）を
- *   遅延ロードして表示する（クライアント合成は廃止 = M2 の改ざん耐性限界も解消）。モックモードは
- *   shared/domain/media-integrated の同一純関数（composeIntegratedMetrics）でクライアント合成する。
- *   売上の書込（useAkebonoSales.create/correct）は invalidateIntegratedFor で本キャッシュを無効化する。
+ *   同じ MediaMetrics 型へ整形して返す。channelId × days キーの遅延ロードキャッシュ
+ * - 統合分析（業務 × メディア）: **連携済みチャンネル（channel.segmentId あり）でのみ**利用可能。
+ *   API モードは GET /v1/media/integrated（メディア月次 = GA + 売上月次 = sales_records をサーバーで突合）を
+ *   遅延ロードして表示する。モックモードは shared/domain/media-integrated の同一純関数で合成する。
+ *   売上の書込（useAkebonoSales.create/correct）は invalidateIntegratedFor で本キャッシュを無効化する
+ *   （連携済みチャンネルの id = 連携先 segmentId のため segmentId でのキー突合が成立する）。
  *
  * 集計基準日は「前日（asOf）」（週次インサイトと同じ思想 = 当日を未確定として悲観評価しない）。
  */
@@ -27,20 +27,18 @@ function recentMonths(n: number, endBackMonths = 0): string[] {
   return recentMonthKeys(todayJst().slice(0, 7), n, endBackMonths)
 }
 
-// ---------- API モードのキャッシュ（SPA・モジュールスコープ単一） ----------
+// ---------- API モードのキャッシュ（SPA・モジュールスコープ単一。channelId キー） ----------
 
-/** 記事インベントリ（segmentId → 取消済み含む全件。表示側でフィルタ） */
+/** 記事インベントリ（channelId → 取消済み含む全件。表示側でフィルタ） */
 const apiMediaArticles = ref<Record<string, MediaArticle[]>>({})
-/** GA 集計（`${segmentId}:${days}` → メトリクス。null = 取得失敗（未連携・GA エラー）） */
+/** GA 集計（`${channelId}:${days}` → メトリクス。null = 取得失敗（未連携・GA エラー）） */
 const apiMetrics = ref<Record<string, MediaMetrics | null>>({})
 /** GA 集計の部分失敗警告（原則4 の「報告」。キーは apiMetrics と同じ） */
 const apiMetricsWarning = ref<Record<string, string | null>>({})
-/** 取得できなかった内訳キー（'daily'|'channels'|'devices'|'topPages'|'prevPages'。
- * サーバーの null 防御はゼロ埋めへ正規化するため、該当ビジュアライゼーションはゼロ描画せず
- * 「取得できませんでした」表示に置き換える（P1 = 失敗を 0 表示にしない原則の内訳への適用） */
+/** 取得できなかった内訳キー（ゼロ描画せず「取得できませんでした」表示に置き換える。P1） */
 const apiMetricsUnavailable = ref<Record<string, string[]>>({})
 /**
- * 統合メトリクス（`${segmentId}:${months}` → サーバー組み立ての結果。null = 取得失敗）。
+ * 統合メトリクス（`${channelId}:${months}` → サーバー組み立ての結果。null = 取得失敗）。
  * mediaFailed = 売上軸は組み立て済みだが GA 月次の取得に失敗（0 表示せず失敗表示 + 再試行 = M1）
  */
 interface ApiIntegratedRow {
@@ -51,80 +49,75 @@ interface ApiIntegratedRow {
 const apiIntegrated = ref<Record<string, ApiIntegratedRow | null>>({})
 
 /** 記事インベントリの遅延ロード（useMediaArticles の採用・取消後の再取得でも使う） */
-export function loadMediaArticles(segmentId: string, force = false): Promise<void> {
-  if (!segmentId) return Promise.resolve()
-  return apiLoadOnce(`media:articles:${segmentId}`, async () => {
+export function loadMediaArticles(channelId: string, force = false): Promise<void> {
+  if (!channelId) return Promise.resolve()
+  return apiLoadOnce(`media:articles:${channelId}`, async () => {
     const rows = await apiFetch<MediaArticle[]>('/v1/media/articles', {
-      query: { segmentId, includeInactive: '1' },
+      query: { channelId, includeInactive: '1' },
     })
-    apiMediaArticles.value = { ...apiMediaArticles.value, [segmentId]: rows }
+    apiMediaArticles.value = { ...apiMediaArticles.value, [channelId]: rows }
   }, force)
 }
 
-export function loadMediaMetrics(segmentId: string, days: number, force = false): Promise<void> {
-  if (!segmentId) return Promise.resolve()
-  const key = `${segmentId}:${days}`
+export function loadMediaMetrics(channelId: string, days: number, force = false): Promise<void> {
+  if (!channelId) return Promise.resolve()
+  const key = `${channelId}:${days}`
   return apiLoadOnce(`media:metrics:${key}`, async () => {
     try {
       const r = await apiFetch<{ metrics: MediaMetrics; warning?: string; unavailable?: string[] }>('/v1/media/metrics', {
-        query: { segmentId, days: String(days), ...(force ? { force: '1' } : {}) },
+        query: { channelId, days: String(days), ...(force ? { force: '1' } : {}) },
       })
       apiMetrics.value = { ...apiMetrics.value, [key]: r.metrics }
       apiMetricsWarning.value = { ...apiMetricsWarning.value, [key]: r.warning ?? null }
       apiMetricsUnavailable.value = { ...apiMetricsUnavailable.value, [key]: r.unavailable ?? [] }
     } catch (e) {
       // 未連携（AKO-MEDIA-003）・GA 障害（004）は null を記録 = 画面が再試行導線を出す（握りつぶさない）。
-      // rethrow はしない: 失敗を「ロード済み（結果 null）」として確定させる。rethrow すると apiLoadOnce が
-      // キーを未ロードへ戻し、null 記録のリアクティブ更新 → computed 再評価 → 再ロードの無限リトライになる。
-      // 再試行は明示操作（refreshMetrics = force）とログイン切替時の resetApiData のみ
+      // rethrow はしない（apiLoadOnce のキー巻き戻し → 無限リトライを避ける。再試行は明示操作のみ）
       apiMetrics.value = { ...apiMetrics.value, [key]: null }
       apiMetricsWarning.value = { ...apiMetricsWarning.value, [key]: apiErrorOf(e).message }
     }
   }, force)
 }
 
-export function loadMediaIntegrated(segmentId: string, months: number, force = false): Promise<void> {
-  if (!segmentId) return Promise.resolve()
-  const key = `${segmentId}:${months}`
+export function loadMediaIntegrated(channelId: string, months: number, force = false): Promise<void> {
+  if (!channelId) return Promise.resolve()
+  const key = `${channelId}:${months}`
   return apiLoadOnce(`media:integrated:${key}`, async () => {
     try {
       const row = await apiFetch<ApiIntegratedRow>('/v1/media/integrated', {
-        // force はサーバーの GA 月次 30 分キャッシュも飛ばす（m9。metrics と同じ再試行の意味論）
-        query: { segmentId, months: String(months), ...(force ? { force: '1' } : {}) },
+        query: { channelId, months: String(months), ...(force ? { force: '1' } : {}) },
       })
       apiIntegrated.value = { ...apiIntegrated.value, [key]: row }
     } catch {
-      // rethrow しない（上の loadMediaMetrics と同じ無限リトライ防止。失敗 = ロード済み・結果 null =
-      // integratedFailed が検知して「0 表示」でなく失敗表示 + 再試行導線を出す。M1）
+      // rethrow しない（無限リトライ防止。失敗 = ロード済み・結果 null = integratedFailed が失敗表示を出す。M1）
       apiIntegrated.value = { ...apiIntegrated.value, [key]: null }
     }
   }, force)
 }
 
 /**
- * 統合メトリクスのキャッシュ無効化（売上の計上・赤黒訂正後に useAkebonoSales が呼ぶ =
- * SoT（sales_records）の変化を PDCA タブ・ダッシュボードへ追随させる。原則6）。
- * ロード済みキーのみ force 再取得する（未ロードは次アクセスで最新を取得）
+ * 統合メトリクスのキャッシュ無効化（売上の計上・赤黒訂正後に useAkebonoSales / useOutbound が呼ぶ）。
+ * 引数は連携先 segmentId（= 連携済みチャンネルの id と一致 = キー突合が成立）。原則6。
  */
-export function invalidateIntegratedFor(segmentId: string): void {
+export function invalidateIntegratedFor(idOrSegmentId: string): void {
   for (const key of Object.keys(apiIntegrated.value)) {
-    if (!key.startsWith(`${segmentId}:`)) continue
-    const months = Number(key.slice(segmentId.length + 1))
-    if (Number.isFinite(months)) void loadMediaIntegrated(segmentId, months, true)
+    if (!key.startsWith(`${idOrSegmentId}:`)) continue
+    const months = Number(key.slice(idOrSegmentId.length + 1))
+    if (Number.isFinite(months)) void loadMediaIntegrated(idOrSegmentId, months, true)
   }
 }
 
 /**
- * GA 連携の再構成（プロパティ確定・連携解除）時のクライアント側キャッシュ無効化（m7。原則6:
- * SoT の変化 → 依存キャッシュの追随）。ロード済みキーのみ force 再取得する（未ロードは次アクセスで取得）
+ * GA 連携の再構成（プロパティ確定・連携解除）時のクライアント側キャッシュ無効化（m7。原則6）。
+ * ロード済みキーのみ force 再取得する（未ロードは次アクセスで取得）
  */
-export function invalidateMediaAnalytics(segmentId: string): void {
+export function invalidateMediaAnalytics(channelId: string): void {
   for (const key of Object.keys(apiMetrics.value)) {
-    if (!key.startsWith(`${segmentId}:`)) continue
-    const days = Number(key.slice(segmentId.length + 1))
-    if (Number.isFinite(days)) void loadMediaMetrics(segmentId, days, true)
+    if (!key.startsWith(`${channelId}:`)) continue
+    const days = Number(key.slice(channelId.length + 1))
+    if (Number.isFinite(days)) void loadMediaMetrics(channelId, days, true)
   }
-  invalidateIntegratedFor(segmentId)
+  invalidateIntegratedFor(channelId)
 }
 
 onApiReset(() => {
@@ -140,24 +133,24 @@ export function useMediaAnalytics() {
   const articlesTbl = tbl('mediaArticles')
   const salesTbl = tbl('salesRecords')
   const { segmentById } = useCurrentSegment()
-  const { settingFor } = useMediaSettings()
+  const { settingFor } = useMediaChannels()
   const isApi = useApiMode()
 
   /** 集計基準日（前日） */
   const asOf = computed(() => addDays(todayJst(), -1))
 
-  /** セグメントの記事インベントリ（取消済み含む生データ。API はサーバーが SoT） */
-  function rawArticlesFor(segmentId: string): MediaArticle[] {
+  /** チャンネルの記事インベントリ（取消済み含む生データ。API はサーバーが SoT） */
+  function rawArticlesFor(channelId: string): MediaArticle[] {
     if (isApi) {
-      void loadMediaArticles(segmentId)
-      return apiMediaArticles.value[segmentId] ?? []
+      void loadMediaArticles(channelId)
+      return apiMediaArticles.value[channelId] ?? []
     }
-    return (articlesTbl.value as MediaArticle[]).filter(a => a.segmentId === segmentId)
+    return (articlesTbl.value as MediaArticle[]).filter(a => a.channelId === channelId)
   }
 
-  /** セグメントの記事インベントリ（公開・有効のみ。モックの GA 導出の入力 / 記事数の表示） */
-  function articleInputsFor(segmentId: string): MediaArticleInput[] {
-    return rawArticlesFor(segmentId)
+  /** チャンネルの記事インベントリ（公開・有効のみ。モックの GA 導出の入力 / 記事数の表示） */
+  function articleInputsFor(channelId: string): MediaArticleInput[] {
+    return rawArticlesFor(channelId)
       .filter(a => a.active !== false && a.status === 'published')
       .map(a => ({
         id: a.id, title: a.title, path: a.path, section: a.section,
@@ -167,56 +160,48 @@ export function useMediaAnalytics() {
 
   /**
    * GA メトリクス（既定 28 日）。
-   * - モック: 決定的導出（常に非 null）
-   * - API: 遅延ロードキャッシュ（ロード中は null。取得失敗も null = metricsErrorFor で理由を出す）
+   * - モック: 決定的導出（常に非 null）/ API: 遅延ロードキャッシュ（ロード中・失敗は null）
    */
-  function metricsFor(segmentId: string, days = 28): MediaMetrics | null {
+  function metricsFor(channelId: string, days = 28): MediaMetrics | null {
     if (isApi) {
-      void loadMediaMetrics(segmentId, days)
-      return apiMetrics.value[`${segmentId}:${days}`] ?? null
+      void loadMediaMetrics(channelId, days)
+      return apiMetrics.value[`${channelId}:${days}`] ?? null
     }
-    const setting = settingFor(segmentId)
-    return deriveMediaMetrics(articleInputsFor(segmentId), {
-      segmentId,
-      siteName: setting?.siteName ?? 'メディア',
+    const setting = settingFor(channelId)
+    return deriveMediaMetrics(articleInputsFor(channelId), {
+      segmentId: channelId, // opaque seed（決定的導出のシード。チャンネル単位）
+      siteName: setting?.siteName || setting?.name || 'メディア',
       asOf: asOf.value,
       days,
     })
   }
 
-  /** API: メトリクスのロードが完了したか（null 格納 = 失敗も「完了」。ローディング表示の判定用）。
-   * 状態判定もロードを**起動**する（読取り = 遅延ロードのイディオム）: analytics.vue の v-else-if 連鎖は
-   * ローディング分岐で短絡し、コンテンツ分岐（metricsFor 評価 = 従来唯一の起動点）に到達しないため、
-   * 判定だけ読んでロードが始まらない「スピナー永続」のデッドロックになる（本番障害 2026-07-29）。
-   * apiLoadOnce の一度きりセマンティクスは維持（失敗確定後の自動再試行はしない = M1 の封止不変） */
-  function metricsReady(segmentId: string, days = 28): boolean {
+  /** API: メトリクスのロードが完了したか（null 格納 = 失敗も「完了」。判定もロードを起動する = 遅延ロードのイディオム） */
+  function metricsReady(channelId: string, days = 28): boolean {
     if (!isApi) return true
-    void loadMediaMetrics(segmentId, days)
-    return `${segmentId}:${days}` in apiMetrics.value
+    void loadMediaMetrics(channelId, days)
+    return `${channelId}:${days}` in apiMetrics.value
   }
 
   /** API: 部分失敗の警告・取得失敗の理由（原則4 の「報告」。なければ null） */
-  function metricsWarningFor(segmentId: string, days = 28): string | null {
+  function metricsWarningFor(channelId: string, days = 28): string | null {
     if (!isApi) return null
-    return apiMetricsWarning.value[`${segmentId}:${days}`] ?? null
+    return apiMetricsWarning.value[`${channelId}:${days}`] ?? null
   }
 
-  /** API: 取得できなかった内訳キー（P1。モックは常に空 = 全表示。該当ビジュアライゼーションはゼロ描画しない） */
-  function metricsUnavailableFor(segmentId: string, days = 28): string[] {
+  /** API: 取得できなかった内訳キー（P1。モックは常に空 = 全表示） */
+  function metricsUnavailableFor(channelId: string, days = 28): string[] {
     if (!isApi) return []
-    return apiMetricsUnavailable.value[`${segmentId}:${days}`] ?? []
+    return apiMetricsUnavailable.value[`${channelId}:${days}`] ?? []
   }
 
   /** API: GA 集計の再取得（サーバーキャッシュも force で飛ばす） */
-  async function refreshMetrics(segmentId: string, days = 28): Promise<void> {
+  async function refreshMetrics(channelId: string, days = 28): Promise<void> {
     if (!isApi) return
-    await loadMediaMetrics(segmentId, days, true).catch(() => { /* 失敗は metricsWarningFor が報告 */ })
+    await loadMediaMetrics(channelId, days, true).catch(() => { /* 失敗は metricsWarningFor が報告 */ })
   }
 
-  /**
-   * 当該セグメントの売上を月次集計（モックモードの表示射影。実装 = shared foldBusinessMonthly =
-   * API サーバーの組み立てと同一純関数。赤黒訂正は元明細の計上月へ帰属して相殺する）
-   */
+  /** 当該セグメントの売上を月次集計（モックモードの表示射影。実装 = shared foldBusinessMonthly） */
   function businessMonthly(segmentId: string, months: string[]): Map<string, { amount: number; orders: number }> {
     const rows = (salesTbl.value as SalesRecord[]).filter(r => r.segmentId === segmentId && r.active !== false)
     return foldBusinessMonthly(rows, months)
@@ -224,83 +209,73 @@ export function useMediaAnalytics() {
 
   /**
    * 業務 × メディアの統合メトリクスを組み立てる（直近 monthsCount ヶ月・最終月 = 直前の完了月）。
+   * 連携済みチャンネル（channel.segmentId あり）で売上軸が入る。未連携チャンネルは売上軸 0（連携案内は画面側）。
    * - モック: shared composeIntegratedMetrics でクライアント合成（メディア = 決定的導出 / 売上 = モック集計）
-   * - API: **サーバー組み立て**（GET /v1/media/integrated）の遅延ロードキャッシュ。ロード中・失敗は
-   *   メディア/売上とも 0 の器を返す（表示側は integratedReady / integratedFailed で状態を区別 = M1。
-   *   Phase C でクライアント合成を廃止 = 売上軸も GA 軸もサーバーが SoT から組み立てる）
+   * - API: サーバー組み立て（GET /v1/media/integrated）の遅延ロードキャッシュ。ロード中・失敗は 0 の器を返す
    */
-  function integratedMetricsFor(segmentId: string, monthsCount = 6): IntegratedMetrics {
+  function integratedMetricsFor(channelId: string, monthsCount = 6): IntegratedMetrics {
     const months = recentMonths(monthsCount, 1)
-    const setting = settingFor(segmentId)
-    const seg = segmentById(segmentId)
+    const setting = settingFor(channelId)
+    const linkedSegmentId = setting?.segmentId ?? null
+    const seg = linkedSegmentId ? segmentById(linkedSegmentId) : null
+    const segmentName = seg?.name ?? setting?.name ?? 'セグメント'
+    const siteName = setting?.siteName || setting?.name || 'メディア'
     if (isApi) {
-      void loadMediaIntegrated(segmentId, monthsCount)
-      const row = apiIntegrated.value[`${segmentId}:${monthsCount}`]
+      void loadMediaIntegrated(channelId, monthsCount)
+      const row = apiIntegrated.value[`${channelId}:${monthsCount}`]
       if (row) return row.metrics
       // 未ロード・取得失敗時のプレースホルダ（0 の器。描画ゲートは integratedReady が担う）
       return composeIntegratedMetrics({
-        segmentId,
-        segmentName: seg?.name ?? 'セグメント',
-        siteName: setting?.siteName ?? 'メディア',
-        months, mediaBy: new Map(), biz: new Map(),
+        segmentId: linkedSegmentId ?? channelId,
+        segmentName, siteName, months, mediaBy: new Map(), biz: new Map(),
       })
     }
-    const trend = deriveMonthlyMediaTrend(articleInputsFor(segmentId), months, segmentId)
+    const trend = deriveMonthlyMediaTrend(articleInputsFor(channelId), months, channelId)
     return composeIntegratedMetrics({
-      segmentId,
-      segmentName: seg?.name ?? 'セグメント',
-      siteName: setting?.siteName ?? 'メディア',
+      segmentId: linkedSegmentId ?? channelId,
+      segmentName,
+      siteName,
       months,
       mediaBy: new Map(trend.map(p => [p.month, p])),
-      biz: businessMonthly(segmentId, months),
+      biz: linkedSegmentId ? businessMonthly(linkedSegmentId, months) : new Map(),
     })
   }
 
-  /** API: 統合メトリクス（サーバー組み立て）が**取得成功して**確定しているか（GA 未連携は
-   * mediaFailed=false で返る = 「確定」扱い・0 が正。取得失敗・GA 月次失敗は ready にしない =
-   * 0 表示・0 由来のインサイト生成を防ぐ。M1）。
-   * metricsReady と同じく状態判定がロードを起動する（PDCA タブのローディング分岐は本関数しか読まず、
-   * integrated computed（従来唯一の起動点）が評価されないため。本番障害 2026-07-29） */
-  function integratedReady(segmentId: string, monthsCount = 6): boolean {
+  /** API: 統合メトリクスが取得成功して確定しているか（GA 未連携は mediaFailed=false = 確定・0 が正） */
+  function integratedReady(channelId: string, monthsCount = 6): boolean {
     if (!isApi) return true
-    void loadMediaIntegrated(segmentId, monthsCount)
-    const row = apiIntegrated.value[`${segmentId}:${monthsCount}`]
+    void loadMediaIntegrated(channelId, monthsCount)
+    const row = apiIntegrated.value[`${channelId}:${monthsCount}`]
     return row !== undefined && row !== null && !row.mediaFailed
   }
 
-  /** API: 統合メトリクスの取得が失敗した状態か（リクエスト失敗 or GA 月次の組み立て失敗 =
-   * PDCA タブの失敗表示 + 再試行導線の判定。M1） */
-  function integratedFailed(segmentId: string, monthsCount = 6): boolean {
+  /** API: 統合メトリクスの取得が失敗した状態か（リクエスト失敗 or GA 月次の組み立て失敗。M1） */
+  function integratedFailed(channelId: string, monthsCount = 6): boolean {
     if (!isApi) return false
-    const key = `${segmentId}:${monthsCount}`
+    const key = `${channelId}:${monthsCount}`
     if (!(key in apiIntegrated.value)) return false
     const row = apiIntegrated.value[key]
     return !row || row.mediaFailed === true
   }
 
   /** API: 統合メトリクスの再取得（サーバーの GA 月次キャッシュも force で飛ばす。失敗表示からの再試行導線） */
-  async function refreshMonthly(segmentId: string, monthsCount = 6): Promise<void> {
+  async function refreshMonthly(channelId: string, monthsCount = 6): Promise<void> {
     if (!isApi) return
-    await loadMediaIntegrated(segmentId, monthsCount, true)
+    await loadMediaIntegrated(channelId, monthsCount, true)
   }
 
   /**
-   * API: 統合メトリクス（サーバー組み立て）を await でそろえる（インサイト生成・ダッシュボード集計前に呼ぶ）。
-   * 戻り値 = 確定したか（false = 取得失敗。**呼び出し側は生成を実行しないこと** =
-   * 「流入ゼロ」という虚偽データ由来のインサイトを保管させない。M1）
+   * API: 統合メトリクス（サーバー組み立て）を await でそろえる（インサイト生成前に呼ぶ）。
+   * 戻り値 = 確定したか（false = 取得失敗。呼び出し側は生成を実行しない = M1）。
    */
-  async function ensureIntegratedLoaded(segmentId: string, monthsCount = 6): Promise<boolean> {
+  async function ensureIntegratedLoaded(channelId: string, monthsCount = 6): Promise<boolean> {
     if (!isApi) return true
-    await loadMediaIntegrated(segmentId, monthsCount)
-    // 過去の失敗は「ロード済み（結果 null / mediaFailed）」で確定しており、force なしでは二度とサーバーへ
-    // 行かない。本関数はユーザーの明示操作（再生成ボタン等）起点の await 経路なので、**呼び出しごとに
-    // 1 回だけ** force 再試行して GA 復旧後の回復手段を確保する（N1。リアクティブ再評価による無限リトライ
-    // （M1 で封止）はここでは起きない = computed からは呼ばれない）。失敗が続けば false のまま =
-    // 生成遮断（M1）は維持
-    if (integratedFailed(segmentId, monthsCount)) {
-      await loadMediaIntegrated(segmentId, monthsCount, true)
+    await loadMediaIntegrated(channelId, monthsCount)
+    // 失敗確定時は呼び出しごとに 1 回だけ force 再試行して GA 復旧後の回復手段を確保する（N1）
+    if (integratedFailed(channelId, monthsCount)) {
+      await loadMediaIntegrated(channelId, monthsCount, true)
     }
-    return integratedReady(segmentId, monthsCount)
+    return integratedReady(channelId, monthsCount)
   }
 
   return {

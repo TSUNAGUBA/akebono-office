@@ -15,7 +15,8 @@ import type { MenuCard } from '~/types/ui'
 import type { SegmentDashboardView } from '~/composables/useDashboardInsight'
 
 const { activeSegments, effectiveSegmentId, currentSegment, switchSegment } = useCurrentSegment()
-const { settingFor } = useMediaSettings()
+// 連携済みチャンネルは id = 連携先 segmentId のため、業態 id をチャンネル id として解決できる（下位互換）
+const { settingFor } = useMediaChannels()
 const { buildSegmentSummary, loadSegment, generateSegment } = useDashboardInsight()
 const { isEnabled } = useAppSettings()
 const { can } = usePermissions()

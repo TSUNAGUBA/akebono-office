@@ -1,13 +1,13 @@
 /**
  * AI 記事生成スタジオ（目的・記事の質・雰囲気を指定して生成 / 過去分析からの生成 / 採用・取消）。
+ * メディアチャンネル単位（channelId で keying）。
  *
  * デュアルモード:
  * - モック: 決定的生成（shared/domain/media-article）+ モックコレクション（articleBriefs / generatedArticles）
  * - API: SoT はサーバー（media_article_briefs / media_generated_articles。POST /v1/media/articles/generate =
  *   Vertex AI → 失敗時は同じ決定的生成へサーバー側フォールバック。llm フラグで区別）。
  *   採用・取消・復元もサーバー（トランザクション + 論理削除）。SoT 書込 → キャッシュ再取得の順序（原則6）
- * - 生成物は論理削除で取消・復元できる（原則9.5）。採用でサイトのコンテンツ資産（記事インベントリ）へ
- *   登録 → 分析の入力に加わる。採用の取消も可
+ * - 生成物は論理削除で取消・復元できる（原則9.5）。採用でサイトのコンテンツ資産（記事インベントリ）へ登録
  */
 import type { MediaInsight } from '../../../shared/domain/media-insight'
 import {
@@ -34,15 +34,15 @@ export interface BriefSuggestion {
   hint: string
 }
 
-// ---------- API モードのキャッシュ（segmentId → 生成物全件。取消済み含む） ----------
+// ---------- API モードのキャッシュ（channelId → 生成物全件。取消済み含む） ----------
 
 const apiGenerated = ref<Record<string, GeneratedArticle[]>>({})
 
-function loadApiGenerated(segmentId: string, force = false): Promise<void> {
-  if (!segmentId) return Promise.resolve()
-  return apiLoadOnce(`media:generated:${segmentId}`, async () => {
-    const rows = await apiFetch<GeneratedArticle[]>('/v1/media/generated', { query: { segmentId } })
-    apiGenerated.value = { ...apiGenerated.value, [segmentId]: rows }
+function loadApiGenerated(channelId: string, force = false): Promise<void> {
+  if (!channelId) return Promise.resolve()
+  return apiLoadOnce(`media:generated:${channelId}`, async () => {
+    const rows = await apiFetch<GeneratedArticle[]>('/v1/media/generated', { query: { channelId } })
+    apiGenerated.value = { ...apiGenerated.value, [channelId]: rows }
   }, force)
 }
 
@@ -54,31 +54,30 @@ export function useMediaArticles() {
   const genTbl = tbl('generatedArticles')
   const articlesTbl = tbl('mediaArticles')
   const { currentUser } = useCurrentUser()
-  const { segmentById } = useCurrentSegment()
-  const { settingFor } = useMediaSettings()
+  const { settingFor } = useMediaChannels()
   const { getById, storedMedia } = useMediaInsight()
   const analytics = useMediaAnalytics()
   const isApi = useApiMode()
 
-  /** セグメントの生成記事（既定は有効分のみ。取消済みも含めるなら includeInactive） */
-  function generatedFor(segmentId: string, includeInactive = false): GeneratedArticle[] {
+  /** チャンネルの生成記事（既定は有効分のみ。取消済みも含めるなら includeInactive） */
+  function generatedFor(channelId: string, includeInactive = false): GeneratedArticle[] {
     const rows = isApi
-      ? (void loadApiGenerated(segmentId), apiGenerated.value[segmentId] ?? [])
-      : (genTbl.value as GeneratedArticle[]).filter(g => g.segmentId === segmentId)
+      ? (void loadApiGenerated(channelId), apiGenerated.value[channelId] ?? [])
+      : (genTbl.value as GeneratedArticle[]).filter(g => g.channelId === channelId)
     return rows
       .filter(g => includeInactive || g.active !== false)
       .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
   }
 
   /** 過去の分析（保管済みメディアインサイト）から記事のお題を提案する（両モード = storedMedia が SoT を吸収） */
-  function suggestionFromInsight(segmentId: string): BriefSuggestion | null {
-    const rec = storedMedia(segmentId)
+  function suggestionFromInsight(channelId: string): BriefSuggestion | null {
+    const rec = storedMedia(channelId)
     if (!rec) return null
     const insight = rec.insight
     const opp = [...insight.articles, ...insight.siteStructure].find(f => f.kind === 'opportunity')
       ?? insight.articles[0] ?? insight.siteStructure[0]
     if (!opp) return null
-    const setting = settingFor(segmentId)
+    const setting = settingFor(channelId)
     const keyword = setting?.keywords[0] ?? ''
     return {
       topic: opp.title.replace(/^[^:：「]*[:：]\s*/, '').replace(/[「」]/g, '').slice(0, 40),
@@ -105,9 +104,9 @@ export function useMediaArticles() {
    * 記事を生成して保管する（依頼 + 生成物）。
    * モック = 決定的（同じ入力なら同じ結果）/ API = Vertex AI → 失敗時サーバー側で決定的生成
    */
-  async function generate(segmentId: string, req: ArticleGenRequest): Promise<{ ok: boolean; article?: GeneratedArticle; error?: { code: string; message: string } }> {
-    const seg = segmentById(segmentId)
-    if (!seg) return { ok: false, error: { code: 'AKO-MEDIA-010', message: '対象セグメントが見つかりません' } }
+  async function generate(channelId: string, req: ArticleGenRequest): Promise<{ ok: boolean; article?: GeneratedArticle; error?: { code: string; message: string } }> {
+    const channel = settingFor(channelId)
+    if (!channel) return { ok: false, error: { code: 'AKO-MEDIA-021', message: '対象のメディアチャンネルが見つかりません' } }
     if (!req.topic.trim() && !req.keyword.trim()) {
       return { ok: false, error: { code: 'AKO-MEDIA-011', message: 'お題またはキーワードを入力してください' } }
     }
@@ -116,30 +115,28 @@ export function useMediaArticles() {
         const article = await apiFetch<GeneratedArticle>('/v1/media/articles/generate', {
           method: 'POST',
           body: {
-            segmentId,
+            channelId,
             topic: req.topic, keyword: req.keyword,
             purpose: req.purpose, quality: req.quality, tone: req.tone,
             audience: req.audience ?? '',
             fromInsightId: req.fromInsightId ?? null,
-            // セグメント名はクライアントから渡す（表示・文面用途のみ。business_segments は Phase B で
-            // テーブル化済みだがサーバー解決への引き上げは Phase C の参照整合判断と併せて行う = 挙動維持）
-            segmentName: seg.name,
+            // チャンネル名は表示・文面用途で渡す
+            segmentName: channel.name,
           },
         })
         apiGenerated.value = {
           ...apiGenerated.value,
-          [segmentId]: [article, ...(apiGenerated.value[segmentId] ?? [])],
+          [channelId]: [article, ...(apiGenerated.value[channelId] ?? [])],
         }
         return { ok: true, article }
       } catch (e) {
         return { ok: false, error: apiErrorOf(e) }
       }
     }
-    const setting = settingFor(segmentId)
-    const audience = (req.audience ?? '').trim() || setting?.targetAudience || '読者'
+    const audience = (req.audience ?? '').trim() || channel.targetAudience || '読者'
     const brief: ArticleBrief = {
       id: nextId('articleBriefs', 'ab'),
-      segmentId,
+      channelId,
       topic: req.topic.trim(),
       keyword: req.keyword.trim(),
       purpose: req.purpose, quality: req.quality, tone: req.tone,
@@ -151,14 +148,14 @@ export function useMediaArticles() {
     const genInput: ArticleGenInput = {
       topic: brief.topic, keyword: brief.keyword,
       purpose: brief.purpose, quality: brief.quality, tone: brief.tone,
-      audience, siteName: setting?.siteName ?? seg.name, segmentName: seg.name,
+      audience, siteName: channel.siteName || channel.name, segmentName: channel.name,
       insightHints: hintsFromInsight(brief.fromInsightId),
     }
     const draft = generateArticleDraft(genInput)
     const article: GeneratedArticle = {
       ...draft,
       id: nextId('generatedArticles', 'ga'),
-      segmentId,
+      channelId,
       briefId: brief.id,
       createdAt: brief.createdAt,
       createdBy: currentUser.value.id,
@@ -172,13 +169,12 @@ export function useMediaArticles() {
   }
 
   /** API: 変更系の後にサーバー SoT からキャッシュを取り直す（生成物 + インベントリ + GA 集計） */
-  async function refreshAfterMutation(segmentId: string): Promise<void> {
+  async function refreshAfterMutation(channelId: string): Promise<void> {
     await Promise.all([
-      loadApiGenerated(segmentId, true),
-      loadMediaArticles(segmentId, true),
+      loadApiGenerated(channelId, true),
+      loadMediaArticles(channelId, true),
     ])
-    // 採用・取消はセクション対応・記事数に影響する（サーバーの集計キャッシュは無効化済み）
-    void analytics.refreshMetrics(segmentId, 28)
+    void analytics.refreshMetrics(channelId, 28)
   }
 
   /** 生成記事をサイトのコンテンツ資産へ採用する（分析の入力に加わる） */
@@ -188,7 +184,7 @@ export function useMediaArticles() {
       try {
         const r = await apiFetch<{ id: string; articleId: string; warning?: string }>(
           `/v1/media/generated/${generatedArticleId}/adopt`, { method: 'POST', body: { section } })
-        if (g) await refreshAfterMutation(g.segmentId)
+        if (g) await refreshAfterMutation(g.channelId)
         return { ok: true, warning: r.warning }
       } catch (e) {
         return { ok: false, error: apiErrorOf(e) }
@@ -200,12 +196,11 @@ export function useMediaArticles() {
     const articleId = nextId('mediaArticles', 'ma')
     const newArticle: MediaArticle = {
       id: articleId,
-      segmentId: g.segmentId,
+      channelId: g.channelId,
       path: `/blog/gen-${articleId}`,
       title: g.title,
       section,
       // 分析の集計基準は前日（asOf）。採用直後にその期間へ入るよう公開日を前日にする
-      // （当日にすると `publishedAt <= asOf` を満たさず、採用しても分析に反映されない）
       publishedAt: addDays(todayJst(), -1),
       wordCount: g.estWordCount,
       status: 'published',
@@ -224,7 +219,7 @@ export function useMediaArticles() {
     if (isApi) {
       const g = Object.values(apiGenerated.value).flat().find(x => x.id === generatedArticleId)
       const res = await apiResult(() => apiFetch(`/v1/media/generated/${generatedArticleId}/unadopt`, { method: 'POST' }))
-      if (res.ok && g) await refreshAfterMutation(g.segmentId)
+      if (res.ok && g) await refreshAfterMutation(g.channelId)
       return res
     }
     const g = (genTbl.value as GeneratedArticle[]).find(x => x.id === generatedArticleId)
@@ -240,7 +235,7 @@ export function useMediaArticles() {
     if (isApi) {
       const g = Object.values(apiGenerated.value).flat().find(x => x.id === generatedArticleId)
       const res = await apiResult(() => apiFetch(`/v1/media/generated/${generatedArticleId}/remove`, { method: 'POST' }))
-      if (res.ok && g) await refreshAfterMutation(g.segmentId)
+      if (res.ok && g) await refreshAfterMutation(g.channelId)
       return res
     }
     const g = (genTbl.value as GeneratedArticle[]).find(x => x.id === generatedArticleId)
@@ -255,7 +250,7 @@ export function useMediaArticles() {
     if (isApi) {
       const g = Object.values(apiGenerated.value).flat().find(x => x.id === generatedArticleId)
       const res = await apiResult(() => apiFetch(`/v1/media/generated/${generatedArticleId}/restore`, { method: 'POST' }))
-      if (res.ok && g) await loadApiGenerated(g.segmentId, true)
+      if (res.ok && g) await loadApiGenerated(g.channelId, true)
       return res
     }
     genTbl.value = (genTbl.value as GeneratedArticle[]).map(x => x.id === generatedArticleId ? { ...x, active: true } : x)

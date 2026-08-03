@@ -9,7 +9,7 @@ import { buildSeed, type MockDbShape } from '~/data/seed'
 
 const STORAGE_KEY = 'ako.mockdb.v1'
 /** シード世代。シード構造を変えたらインクリメントすると保存済みデータを破棄して再生成する */
-const SEED_VERSION = 16 // v16: 顧客ログの項目拡張（タグ・終了時刻・自社担当者・議事録メモ）+ 日報既読（reportReads）。2026-07-31
+const SEED_VERSION = 17 // v17: メディア分析を独立チャンネル化（mediaSettings → mediaChannels + 任意の業態連携）+ 外部投稿記事（mediaExternalArticles）。2026-08-03
 
 interface PersistedDb {
   version: number

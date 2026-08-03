@@ -1,12 +1,12 @@
 <script setup lang="ts">
 /**
- * メディア分析（F-40-2）。現在の業態のオウンドメディアについて、GA 由来の指標を可視化し、
+ * メディア分析（F-40-2）。現在のメディアチャンネルについて、GA 由来の指標を可視化し、
  * AI がサイト構成・記事のインサイトと次アクションを提示する。
- * 業務 × メディアの統合 PDCA タブでは、売上と流入を突き合わせて相関・PDCA・アクションを提示する。
+ * 業務 × メディアの統合 PDCA タブは **連携済みチャンネル（業態連携あり）でのみ**利用できる
+ * （未連携チャンネルは「連携すると使える」案内を表示）。
  *
- * 指標・チャート: モック = 常時ライブの決定的導出（前日基準）/ API = GA4 実データの遅延ロード
- * （ロード中・取得失敗・データ空をそれぞれ区別して表示する）。
- * AI インサイトは「生成 → 保管 → 再生成で上書き」（週次インサイトと同思想。API は Vertex AI → フォールバック）。
+ * 指標・チャート: モック = 常時ライブの決定的導出（前日基準）/ API = GA4 実データの遅延ロード。
+ * AI インサイトは「生成 → 保管 → 再生成で上書き」（週次インサイトと同思想。media インサイトは外部投稿記事も材料）。
  */
 import { RefreshCw, Sparkles, Target, TriangleAlert } from 'lucide-vue-next'
 import { fmtDate, fmtDateTime, fmtInt, fmtPct, fmtYenCompact } from '~/utils/format'
@@ -16,8 +16,8 @@ import type { MediaInsightView, IntegratedInsightView } from '~/composables/useM
 
 const route = useRoute()
 const router = useRouter()
-const { effectiveSegmentId, currentSegment } = useCurrentSegment()
-const { settingFor } = useMediaSettings()
+const { effectiveChannelId, currentChannel } = useCurrentChannel()
+const { settingFor } = useMediaChannels()
 const {
   metricsFor, integratedMetricsFor, metricsReady, metricsWarningFor, metricsUnavailableFor, refreshMetrics,
   integratedReady, integratedFailed, refreshMonthly,
@@ -33,27 +33,28 @@ const TABS: TabItem[] = [
 const activeTab = ref(route.query.tab === 'pdca' ? 'pdca' : 'media')
 watch(activeTab, (t) => { void router.replace({ query: { ...route.query, tab: t === 'media' ? undefined : t } }) })
 
-const setting = computed(() => settingFor(effectiveSegmentId.value))
+const setting = computed(() => settingFor(effectiveChannelId.value))
 const connected = computed(() => setting.value?.gaConnected === true)
-const metrics = computed(() => (connected.value ? metricsFor(effectiveSegmentId.value, 28) : null))
-const integrated = computed(() => (connected.value ? integratedMetricsFor(effectiveSegmentId.value, 6) : null))
+/** 連携済みチャンネルか（統合 PDCA の利用可否） */
+const linked = computed(() => currentChannel.value?.segmentId != null)
+const metrics = computed(() => (connected.value ? metricsFor(effectiveChannelId.value, 28) : null))
+const integrated = computed(() => (connected.value && linked.value ? integratedMetricsFor(effectiveChannelId.value, 6) : null))
 
 // API モードのロード状態（モックは常にロード済み）。null かつロード完了 = 取得失敗（再試行導線を出す）
-const metricsLoading = computed(() => isApi && connected.value && !metricsReady(effectiveSegmentId.value, 28))
+const metricsLoading = computed(() => isApi && connected.value && !metricsReady(effectiveChannelId.value, 28))
 const metricsFailed = computed(() =>
-  isApi && connected.value && metricsReady(effectiveSegmentId.value, 28) && metrics.value === null)
-const metricsWarning = computed(() => (metrics.value ? metricsWarningFor(effectiveSegmentId.value, 28) : null))
+  isApi && connected.value && metricsReady(effectiveChannelId.value, 28) && metrics.value === null)
+const metricsWarning = computed(() => (metrics.value ? metricsWarningFor(effectiveChannelId.value, 28) : null))
 // PDCA タブ（GA 月次）: ロード中と取得失敗を区別する（失敗を 0 表示にしない = M1）
-const integratedIsFailed = computed(() => integratedFailed(effectiveSegmentId.value, 6))
+const integratedIsFailed = computed(() => linked.value && integratedFailed(effectiveChannelId.value, 6))
 const integratedLoading = computed(() =>
-  isApi && connected.value && !integratedReady(effectiveSegmentId.value, 6) && !integratedIsFailed.value)
+  isApi && connected.value && linked.value && !integratedReady(effectiveChannelId.value, 6) && !integratedIsFailed.value)
 
 async function retryMonthly(): Promise<void> {
-  await refreshMonthly(effectiveSegmentId.value, 6)
+  await refreshMonthly(effectiveChannelId.value, 6)
 }
 /**
- * 空状態の判定: モック = 記事インベントリが空（記事を作ると指標が出る決定的導出）/
- * API = GA 実データが空（インベントリ非依存 — API モードは記事をシードしないため articleCount で判定しない）
+ * 空状態の判定: モック = 記事インベントリが空 / API = GA 実データが空（インベントリ非依存）
  */
 const metricsEmpty = computed(() => {
   const m = metrics.value
@@ -64,15 +65,10 @@ const metricsEmpty = computed(() => {
 })
 
 async function retryMetrics(): Promise<void> {
-  await refreshMetrics(effectiveSegmentId.value, 28)
+  await refreshMetrics(effectiveChannelId.value, 28)
 }
 
-/**
- * 取得できなかった内訳（P1）。サーバーの null 防御は欠落をゼロ埋めへ正規化するため、
- * 該当ビジュアライゼーションはゼロデータとして描画せず「取得できませんでした」表示へ置き換える
- * （失敗を 0 表示にしない = M1 と同じ原則の内訳への適用。モックは常に空 = 全表示）
- */
-const unavailableSet = computed(() => new Set(metricsUnavailableFor(effectiveSegmentId.value, 28)))
+const unavailableSet = computed(() => new Set(metricsUnavailableFor(effectiveChannelId.value, 28)))
 function na(key: string): boolean {
   return unavailableSet.value.has(key)
 }
@@ -84,18 +80,16 @@ const genMedia = ref(false)
 const genIntegrated = ref(false)
 
 async function reloadInsights(): Promise<void> {
-  // API モードはサーバー保管分の遅延ロード（保管なしは null = 未生成表示）
-  mediaView.value = await loadMedia(effectiveSegmentId.value)
-  integratedView.value = await loadIntegrated(effectiveSegmentId.value)
+  mediaView.value = await loadMedia(effectiveChannelId.value)
+  integratedView.value = linked.value ? await loadIntegrated(effectiveChannelId.value) : null
 }
-watch(effectiveSegmentId, () => { void reloadInsights() }, { immediate: true })
+watch(effectiveChannelId, () => { void reloadInsights() }, { immediate: true })
 
 async function regenerateMedia(): Promise<void> {
   if (genMedia.value || !connected.value) return
   genMedia.value = true
   try {
-    mediaView.value = await generateMedia(effectiveSegmentId.value)
-    // 劣化データ（GA 内訳の部分失敗等）から生成した場合は握りつぶさず告知する（m11・原則4）
+    mediaView.value = await generateMedia(effectiveChannelId.value)
     if (mediaView.value?.warning) show(`メディアインサイトを生成しました（${mediaView.value.warning}）`, 'warn')
     else show('メディアインサイトを生成し、保存しました', 'ok')
   } catch (e) {
@@ -104,10 +98,10 @@ async function regenerateMedia(): Promise<void> {
   } finally { genMedia.value = false }
 }
 async function regenerateIntegrated(): Promise<void> {
-  if (genIntegrated.value || !connected.value) return
+  if (genIntegrated.value || !connected.value || !linked.value) return
   genIntegrated.value = true
   try {
-    integratedView.value = await generateIntegrated(effectiveSegmentId.value)
+    integratedView.value = await generateIntegrated(effectiveChannelId.value)
     if (integratedView.value?.warning) show(`統合インサイトを生成しました（${integratedView.value.warning}）`, 'warn')
     else show('業務 × メディアの統合インサイトを生成し、保存しました', 'ok')
   } catch (e) {
@@ -207,36 +201,32 @@ const SEVERITY_META: Record<string, { label: string; tone: 'crit' | 'warn' | 'in
 <template>
   <div class="mx-auto max-w-5xl">
     <!-- メディア分析は API 接続済み（GA 実データ）のためモックバッジは付けない -->
-    <UiPageHeader title="メディア分析" :description="setting ? setting.siteName : ''" />
+    <UiPageHeader title="メディア分析" :description="setting ? setting.siteName || setting.name : ''" />
 
     <div class="grid gap-4">
-      <MediaSegmentBar />
+      <MediaChannelBar />
       <UiTabBar v-model="activeTab" :tabs="TABS" />
 
       <!-- 未連携ゲート -->
       <template v-if="!connected">
         <MediaGaConnect variant="gate" />
         <p class="text-center text-[11px] text-muted">
-          「{{ currentSegment?.name }}」のメディアを分析するには Google Analytics の連携が必要です。
+          「{{ currentChannel?.name }}」を分析するには Google Analytics の連携が必要です。
         </p>
       </template>
 
-      <!-- 28 日メトリクス系のゲート（ロード中・失敗・空）は**メディア分析タブ限定**（Codex 指摘 1）。
-           PDCA タブは 6 ヶ月の月次 + 売上を見る画面で、直近 28 日が空でも有効な過去データがありうるため、
-           月次側の状態（integratedLoading / integratedIsFailed）のみでゲートする -->
-      <!-- API: GA 集計のロード中（空状態・エラーと区別して表示） -->
+      <!-- 28 日メトリクス系のゲート（ロード中・失敗・空）は**メディア分析タブ限定** -->
       <template v-else-if="activeTab === 'media' && metricsLoading">
         <p class="py-10 text-center text-[13px] text-muted" aria-live="polite" aria-busy="true">
           Google Analytics から集計を取得中…
         </p>
       </template>
 
-      <!-- API: 取得失敗（未連携以外の GA エラー）。再試行導線を出す（握りつぶさない = 原則4） -->
       <template v-else-if="activeTab === 'media' && metricsFailed">
         <UiEmptyState
           icon="TriangleAlert"
           title="Google Analytics から集計を取得できませんでした"
-          :hint="metricsWarningFor(effectiveSegmentId, 28) ?? '時間をおいて再試行してください'"
+          :hint="metricsWarningFor(effectiveChannelId, 28) ?? '時間をおいて再試行してください'"
         >
           <template #action>
             <button type="button" class="btn btn-primary btn-sm" @click="retryMetrics">再試行</button>
@@ -244,7 +234,6 @@ const SEVERITY_META: Record<string, { label: string; tone: 'crit' | 'warn' | 'in
         </UiEmptyState>
       </template>
 
-      <!-- データが無い（モック = 記事インベントリ空 / API = GA にデータ未着） -->
       <template v-else-if="activeTab === 'media' && metricsEmpty">
         <UiEmptyState
           icon="FileText"
@@ -261,7 +250,6 @@ const SEVERITY_META: Record<string, { label: string; tone: 'crit' | 'warn' | 'in
 
       <!-- ============ メディア分析タブ ============ -->
       <template v-else-if="activeTab === 'media' && metrics">
-        <!-- 部分失敗の報告（原則4: 内訳バッチの失敗は総計のみで表示し、事実を告知する） -->
         <p
           v-if="metricsWarning"
           class="flex items-center gap-2 rounded-lg border border-warn/40 bg-warn-soft px-3 py-1.5 text-[12px] text-sub"
@@ -299,8 +287,6 @@ const SEVERITY_META: Record<string, { label: string; tone: 'crit' | 'warn' | 'in
           集計期間 {{ fmtDate(metrics.periodFrom) }}〜{{ fmtDate(metrics.periodTo) }}（前日基準・{{ metrics.days }} 日間）。前期比は直前の同日数期間との比較です。
         </p>
 
-        <!-- チャート。取得できなかった内訳（unavailable = P1）はゼロデータとして描画せず、
-             「取得できませんでした」表示へ置き換える（一過性の失敗を実トラフィック 0 と誤認させない） -->
         <ChartsLineChartCard v-if="!na('daily')" title="日別セッション・ユーザー" :labels="dailyChart.labels" :series="dailyChart.series" />
         <UiSectionCard v-else title="日別セッション・ユーザー">
           <p class="py-6 text-center text-[12px] text-muted">この内訳は取得できませんでした（上部の警告参照。再試行で回復します）</p>
@@ -317,7 +303,6 @@ const SEVERITY_META: Record<string, { label: string; tone: 'crit' | 'warn' | 'in
         </div>
         <ChartsBarChartCard v-if="!na('topPages')" title="記事別 PV（上位）" :labels="topPagesBar.labels" :series="topPagesBar.series" horizontal :height="300" :y-formatter="v => fmtInt(v)" />
 
-        <!-- セクション別（母集団は記事別レポート = topPages と同じ unavailable キー） -->
         <UiSectionCard v-if="!na('topPages')" title="サイト構成（セクション別）" description="第 1 階層のセクションごとの PV・滞在・CVR">
           <UiDataTable :columns="sectionCols" :rows="sectionRows" row-key="section">
             <template #cell-convRate="{ value }">{{ fmtPct(Number(value)) }}</template>
@@ -327,8 +312,8 @@ const SEVERITY_META: Record<string, { label: string; tone: 'crit' | 'warn' | 'in
           <p class="py-6 text-center text-[12px] text-muted">この内訳は取得できませんでした（上部の警告参照。再試行で回復します）</p>
         </UiSectionCard>
 
-        <!-- AI インサイト（生成/再生成） -->
-        <UiSectionCard title="AI インサイト" :description="mediaView ? `生成 ${fmtDateTime(mediaView.generatedAt)}${mediaView.generatedByName ? `（${mediaView.generatedByName}）` : ''}・${mediaView.llm ? 'Vertex AI' : '集計値からの自動生成'}${mediaView.warning ? `・${mediaView.warning}` : ''}` : 'GA 集計からサイト構成・記事のインサイトと次アクションを生成します'">
+        <!-- AI インサイト（生成/再生成。media インサイトは外部投稿記事も材料に取り込む） -->
+        <UiSectionCard title="AI インサイト" :description="mediaView ? `生成 ${fmtDateTime(mediaView.generatedAt)}${mediaView.generatedByName ? `（${mediaView.generatedByName}）` : ''}・${mediaView.llm ? 'Vertex AI' : '集計値からの自動生成'}${mediaView.warning ? `・${mediaView.warning}` : ''}` : 'GA 集計と外部投稿記事からサイト構成・記事のインサイトと次アクションを生成します'">
           <template #actions>
             <button type="button" class="btn btn-primary btn-sm" :disabled="genMedia" @click="regenerateMedia">
               <Sparkles class="h-3.5 w-3.5" aria-hidden="true" />
@@ -340,7 +325,7 @@ const SEVERITY_META: Record<string, { label: string; tone: 'crit' | 'warn' | 'in
             v-if="!mediaView"
             icon="Sparkles"
             title="この期間のインサイトはまだ生成されていません"
-            hint="「インサイトを生成」を押すと、現在の集計からサイト構成・記事のインサイトと次アクションを生成・保存します"
+            hint="「インサイトを生成」を押すと、現在の集計と外部投稿記事からサイト構成・記事のインサイトと次アクションを生成・保存します"
           />
           <div v-else class="grid gap-4">
             <UiMarkdown :source="mediaView.insight.executiveSummary" />
@@ -395,7 +380,6 @@ const SEVERITY_META: Record<string, { label: string; tone: 'crit' | 'warn' | 'in
           </div>
         </UiSectionCard>
 
-        <!-- 記事別テーブル（前期比列は prevPages 欠落時に全行 null → "—" 表示 = ゼロ表示にはならない） -->
         <UiSectionCard v-if="!na('topPages')" title="記事別パフォーマンス" :description="na('prevPages') ? 'PV 上位の記事の滞在・直帰率・CVR（前期比は取得できませんでした）' : 'PV 上位の記事の滞在・直帰率・CVR・前期比'">
           <UiDataTable :columns="pageCols" :rows="pageRows" row-key="title">
             <template #cell-bounceRate="{ value }">{{ fmtPct(Number(value)) }}</template>
@@ -411,6 +395,18 @@ const SEVERITY_META: Record<string, { label: string; tone: 'crit' | 'warn' | 'in
       </template>
 
       <!-- ============ 業務 × メディア PDCA タブ ============ -->
+      <!-- 未連携チャンネル: 「連携すると使える」案内（統合 PDCA は業態連携が前提） -->
+      <template v-else-if="activeTab === 'pdca' && !linked">
+        <UiEmptyState
+          icon="Link2"
+          title="業務 × メディア PDCA は業態と連携すると利用できます"
+          hint="このチャンネルはまだ Akebono 業務アプリ（業態）と連携していません。連携すると、売上と流入を突き合わせた統合分析・PDCA・AI インサイトが使えます"
+        >
+          <template #action>
+            <NuxtLink to="/media/settings" class="btn btn-primary btn-sm">連携する（チャンネル設定）</NuxtLink>
+          </template>
+        </UiEmptyState>
+      </template>
       <!-- API: GA 月次のロード中は 0 埋めの統合値を出さない（誤読防止） -->
       <template v-else-if="activeTab === 'pdca' && integratedLoading">
         <p class="py-10 text-center text-[13px] text-muted" aria-live="polite" aria-busy="true">
@@ -430,8 +426,6 @@ const SEVERITY_META: Record<string, { label: string; tone: 'crit' | 'warn' | 'in
         </UiEmptyState>
       </template>
       <template v-else-if="activeTab === 'pdca' && integrated">
-        <!-- Phase C で売上・受注軸も実データ化（sales_records = サーバー SoT のサーバー組み立て）
-             = 旧「売上・受注 = デモデータ」バッジ・注記は撤去（M3 の撤去条件成立） -->
         <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
           <UiKpiCard
             label="セッション（対象月）" :value="fmtInt(integrated.sessions)"
@@ -447,7 +441,7 @@ const SEVERITY_META: Record<string, { label: string; tone: 'crit' | 'warn' | 'in
           <UiKpiCard label="平均受注額" :value="integrated.aov > 0 ? fmtYenCompact(integrated.aov) : '—'" :sub="`受注 ${integrated.orders} 件`" icon="Receipt" />
         </div>
         <p class="text-[11px] text-muted">
-          対象月 {{ integrated.periodMonth }}。セッションあたり売上 {{ fmtYenCompact(integrated.salesPerSession) }}。メディア流入（GA）と業務の売上明細を突き合わせています。
+          対象月 {{ integrated.periodMonth }}。セッションあたり売上 {{ fmtYenCompact(integrated.salesPerSession) }}。メディア流入（GA）と連携業態の売上明細を突き合わせています。
         </p>
 
         <div class="grid gap-3 lg:grid-cols-2">
@@ -459,7 +453,6 @@ const SEVERITY_META: Record<string, { label: string; tone: 'crit' | 'warn' | 'in
           <MediaFunnel :stages="funnelStages" />
         </UiSectionCard>
 
-        <!-- AI 統合インサイト -->
         <UiSectionCard title="AI 統合インサイト（業務 × メディア）" :description="integratedView ? `生成 ${fmtDateTime(integratedView.generatedAt)}${integratedView.generatedByName ? `（${integratedView.generatedByName}）` : ''}・${integratedView.llm ? 'Vertex AI' : '集計値からの自動生成'}${integratedView.warning ? `・${integratedView.warning}` : ''}` : '売上と流入を突き合わせ、相関・PDCA・アクションを生成します'">
           <template #actions>
             <button type="button" class="btn btn-primary btn-sm" :disabled="genIntegrated" @click="regenerateIntegrated">
