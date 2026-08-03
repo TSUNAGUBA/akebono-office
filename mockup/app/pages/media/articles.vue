@@ -16,13 +16,13 @@ import {
 } from '~/utils/media'
 import type { GeneratedArticle } from '~/types/media'
 
-const { effectiveSegmentId, currentSegment } = useCurrentSegment()
-const { settingFor } = useMediaSettings()
+const { effectiveChannelId, currentChannel } = useCurrentChannel()
+const { settingFor } = useMediaChannels()
 const articles = useMediaArticles()
 const { show } = useToast()
 const confirm = useConfirm()
 
-const setting = computed(() => settingFor(effectiveSegmentId.value))
+const setting = computed(() => settingFor(effectiveChannelId.value))
 
 interface Form {
   topic: string
@@ -50,14 +50,14 @@ function applyDefaults(): void {
   }
   preview.value = null
 }
-watch(effectiveSegmentId, applyDefaults, { immediate: true })
+watch(effectiveChannelId, applyDefaults, { immediate: true })
 
 const preview = ref<GeneratedArticle | null>(null)
 const generating = ref(false)
 const adoptSection = ref<string>('ブログ')
 const sectionOptions = MEDIA_SECTION_CHOICES.map(s => ({ value: s, label: s }))
 
-const suggestion = computed(() => articles.suggestionFromInsight(effectiveSegmentId.value))
+const suggestion = computed(() => articles.suggestionFromInsight(effectiveChannelId.value))
 
 /** 過去の分析からお題を提案（保管済みインサイトが必要） */
 function applySuggestion(): void {
@@ -78,7 +78,7 @@ async function doGenerate(): Promise<void> {
   generating.value = true
   try {
     // API モードは Vertex AI 生成（失敗時はサーバー側で決定的生成へフォールバック）
-    const res = await articles.generate(effectiveSegmentId.value, {
+    const res = await articles.generate(effectiveChannelId.value, {
       topic: form.value.topic, keyword: form.value.keyword,
       purpose: form.value.purpose, quality: form.value.quality, tone: form.value.tone,
       audience: form.value.audience, fromInsightId: form.value.fromInsightId,
@@ -110,7 +110,7 @@ async function doDiscard(id: string): Promise<void> {
 /** プレビュー表示中の記事なら最新状態へ差し替える（採用バッジ等の反映） */
 function syncPreview(id: string): void {
   if (preview.value?.id === id) {
-    preview.value = articles.generatedFor(effectiveSegmentId.value, true).find(g => g.id === id) ?? null
+    preview.value = articles.generatedFor(effectiveChannelId.value, true).find(g => g.id === id) ?? null
   }
 }
 
@@ -130,7 +130,7 @@ async function doUnadopt(id: string): Promise<void> {
 
 // ---------- 一覧 ----------
 const showInactive = ref(false)
-const list = computed(() => articles.generatedFor(effectiveSegmentId.value, showInactive.value))
+const list = computed(() => articles.generatedFor(effectiveChannelId.value, showInactive.value))
 const detail = ref<GeneratedArticle | null>(null)
 
 function scoreTone(score: number): 'ok' | 'info' | 'warn' {
@@ -140,10 +140,10 @@ function scoreTone(score: number): 'ok' | 'info' | 'warn' {
 
 <template>
   <div class="mx-auto max-w-4xl">
-    <UiPageHeader title="AI 記事生成スタジオ" :description="`${currentSegment?.name ?? ''} のメディア向けに、目的・質・雰囲気を指定して記事を生成します`" />
+    <UiPageHeader title="AI 記事生成スタジオ" :description="`${currentChannel?.name ?? ''} のメディア向けに、目的・質・雰囲気を指定して記事を生成します`" />
 
     <div class="grid gap-4">
-      <MediaSegmentBar />
+      <MediaChannelBar />
 
       <!-- 生成フォーム -->
       <UiSectionCard title="記事を生成" description="目的・記事の質・雰囲気を指定します。過去の分析からお題を提案することもできます">
@@ -223,7 +223,7 @@ function scoreTone(score: number): 'ok' | 'info' | 'warn' {
       </UiSectionCard>
 
       <!-- 生成履歴 -->
-      <UiSectionCard title="生成した記事" :description="`${currentSegment?.name ?? ''} の生成履歴`" flush>
+      <UiSectionCard title="生成した記事" :description="`${currentChannel?.name ?? ''} の生成履歴`" flush>
         <template #actions>
           <label class="flex items-center gap-1.5 text-[11px] text-sub">
             <input v-model="showInactive" type="checkbox"> 取消済みも表示

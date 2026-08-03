@@ -1332,3 +1332,66 @@
 - [x] 受容（対応せず記録）: CR NIT-4 = 候補リストの aria-activedescendant によるキーボードナビゲーション未実装
   （既存 UiMultiCombobox と同一パターン = 回帰ではない。Tab でリスト内ボタンへ到達可能。将来の a11y 改善候補として記録）。
 - [x] 再検証（2 巡目是正後）: api 単体 252 / api 統合 221 / mockup 単体 155 / typecheck（api・mockup）全 green。
+
+## 50. メディア分析の独立チャンネル化 + 任意の業態連携 + 外部投稿記事（オペレーター指示 2026-08-03）の完了条件（Definition of Done）
+
+メディア分析を「事業セグメント（業態）と 1:1 結合」から「**独立したメディアチャンネル + 任意の Akebono
+業務アプリ（業態）連携**」へ両モード（mockup + API）で移行した。連携は必須でなく、未連携（単体）でも
+分析・記事生成・単体 AI インサイトが動く。業務 × メディアの統合 PDCA は連携済みチャンネルでのみ利用可能。
+外部で投稿した記事原文を保管し media インサイト生成の材料に活用する機能を追加した。
+
+- [x] **DB 移行（migration 0048_media_channels.sql・低リスク・データ移動最小化）**:
+  - `media_channels`（旧 media_settings を置換・拡張。name・segment_id NULL 可・site/AI 設定。GA は media_ga_tokens が SoT のまま）を新設
+  - **backfill: 旧 media_settings 1 行 → channel 1 件。channel.id = 旧 segment_id 値そのもの**（child の segment_id 値がそのまま channel_id として有効 = child 行の UPDATE 不要）。name = coalesce(nullif(site_name,''), business_segments.name, '無題メディア')・segment_id = 旧 segment_id（連携済み）
+  - child 7 テーブル（media_ga_tokens/oauth_states/metrics_cache/articles/article_briefs/generated_articles/insights）は `RENAME COLUMN segment_id TO channel_id`（索引名も命名整合で rename）
+  - `media_external_articles`（外部投稿記事の原文。channel_id・title・body 必須・論理削除）を新設
+  - DROP TABLE media_settings（データは移設済み）。全操作 IF NOT EXISTS / IF EXISTS / information_schema ガードで冪等
+- [x] **shared/domain/media-*.ts は不変**（純ロジックは opaque id 扱い。media スコープは channelId、integrated スコープは連携先 segmentId を渡す）。shared のテスト（mockup media-* / api unit media 系）は無変更で green
+- [x] **API（api/src/routes/media.ts）**: 全 segmentId → channelId re-key（segmentIdOf → channelIdOf）。新エンドポイント = チャンネル CRUD（GET/POST /channels・PUT/PATCH /:id・/:id/archive|restore）・外部記事 CRUD（GET/POST /external-articles・PATCH /:id・/:id/archive|restore）。設定/GA/記事/生成/インサイトは channelId keying。integrated は連携必須（channel.segmentId null は AKO-MEDIA-022）。media インサイト生成に外部記事原文を材料反映（LLM プロンプト + heuristic 両経路に applyExternalMaterial）。F-41 ダッシュボードは buildSegmentIntegratedMetrics（業態基点で連携チャンネルを解決）へ切替
+- [x] **新エラーコード**: AKO-MEDIA-020（チャンネル名必須）/ 021（対象チャンネルなし）/ 022（統合には連携業態が必要）/ 023（外部記事の入力不正）/ 024（対象外部記事なし）。既存 003/004/005/006/007/008/011/012/014 と重複なし・016 は欠番のまま
+- [x] **mockup**: types（MediaSetting → MediaChannel・child は channelId・MediaExternalArticle 新設）・seed（mediaChannels = 各業態連携 4 + 単体 mc-note・外部記事シード）・MockDbShape 更新・SEED_VERSION 16 → 17。composables = useMediaSettings → useMediaChannels（チャンネル CRUD + 設定 + GA）・useCurrentChannel（新設。mock localStorage 'ako.currentChannel.v1' / API pref 'currentChannelId'）・useMediaExternalArticles（新設）・analytics/articles/insight を channelId へ。components = MediaSegmentBar → MediaChannelBar・MediaGaConnect を channelId へ。pages = index（チャンネルハブ + 追加）・analytics（PDCA は連携時のみ・未連携は案内）・settings（チャンネル選択/追加/取消復元 + 連携業態選択（任意）+ AI 設定 + 外部記事管理）・akebono/dashboard は useMediaChannels へ
+- [x] **メニュー**: menu-registry の MENU_CARDS.dashboard に media カード追加（featureToggle:'media' = 既存トグル）・DEFAULT_MENU_CATEGORIES の 'insights'（経営・状況）へ 'media' 追加。AKEBONO_APP_CATALOG から media 撤去（トップメニュー化。AKEBONO_APP_KEYS には下位互換で残置 = 既存 app-configs 保護）。nav-map の /media を HOME 直下へ移動
+- [x] **下位互換（原則7）**: channel.id = 旧 segment_id の backfill により child 行の segment_id 値がそのまま channel_id として解決（0048 で child 行の値変更なし）。統合テストで「channel.id = 旧 segment_id 値のチャンネル + その値を channel_id に持つ子行が解決する」ことを検証。既存 app-configs の 'media' キー・プリセット件数は無変更
+- [x] **検証（実測値）**:
+  - `cd api && npx tsc --noEmit` green / `cd mockup && npm run typecheck` green
+  - `cd api && npm test`（unit）: **259 passed**（旧 252 + 外部記事の純関数テスト 7 = externalArticleInputOf・externalMaterialOf・applyExternalMaterial・settingsPatchOf の name/segmentId）
+  - `cd api && npm run test:integration`（実 PostgreSQL・0048 適用込み）: **225 passed**（メディア F-40 describe を新チャンネル API 形へ更新 = チャンネル CRUD・単体チャンネルの記事生成・連携チャンネルの integrated・単体は 022・external-articles CRUD・下位互換・チャンネル取消/復元。akebono-dashboard/billing/sales の integrated 参照を channelId へ更新）
+  - `cd mockup && npm test`: **155 passed**（既存 shared 純ロジックテストは無変更）
+- [x] **既知の未検証（GA/Vertex はこの環境で E2E 検証不可）**: GA OAuth トークン交換・GA4 Data/Admin API 呼び出し・Vertex 生成はコード整合とユニット/統合（非 GA 経路・LLM 無効 = 決定的フォールバック）で担保。外部記事のインサイト材料反映は unit（applyExternalMaterial）で検証（統合は GA 未設定のため media インサイト生成が 005 = 生成経路は通せない）
+
+### 50-x 反復レビュー（原則9・1 巡目 = 独立コードレビュアー + システム監査官。CRITICAL 0・MAJOR 3〔重複 1〕・MINOR 3・NIT → 全件対応/受容）
+- [x] **MAJOR（要件(d)の「AI活用」がモードで欠落 = 監査 MAJOR-2 / CR m-2）**: 外部投稿記事のインサイト材料化
+  （externalMaterialOf / applyExternalMaterial）を **shared/domain/media-insight へ移設**し、API とモック
+  （useMediaInsight の mock generateMedia）で同一ロジックを適用（原則3・両モードパリティ）。api/routes/media は再エクスポートで
+  既存 import 互換維持。mockup 単体テストを 2 件追加（外部材料の cap/抜粋・articles 先頭反映）。
+- [x] **MAJOR（現行リファレンス docs の更新漏れ = 監査 MAJOR-1）**: 削除済みシンボル（useMediaSettings / MediaSegmentBar）を
+  参照していた mockup/CONVENTIONS.md・.ai-native/outputs/phase5/architecture.md・mockup/README.md を
+  新構成（useMediaChannels / useCurrentChannel / useMediaExternalArticles / MediaChannelBar・独立チャンネル + 任意連携）へ更新。
+- [x] **MAJOR（新規連携チャンネルの統合キャッシュ無効化漏れ = CR M-1）**: `invalidateIntegratedFor(segmentId)` を、
+  引数 id 自身に加え **その segmentId に連携する全チャンネル id**（UI 作成で id=mc-xxxx のもの）も対象にするよう修正
+  （useMediaChannels.channelIdsForSegment を追加・キーからチャンネル id を復元して突合）。原則6。
+- [x] **MINOR（F-41 ダッシュボードのチャンネル解決のモード乖離 = 監査 MINOR-1）**: useDashboardInsight（mock）が
+  segmentId をそのまま channelId 扱いしていたのを、useMediaChannels.channelForSegment（id=segmentId 優先・無ければ
+  segmentId 連携の先頭 active チャンネル）で解決するよう修正。UI 作成の mc- 連携チャンネルも業態ダッシュボードへ反映。
+- [x] **MINOR（移行 0048 の孤児 backfill = CR m-1）**: media_settings 行を持たない業態（GA 連携済み/記事ありだが設定未保存）の
+  子行を救済するため、子テーブル（ga_tokens/articles/briefs/generated/insights/metrics_cache）に現れる segment_id のうち
+  未 backfill のものからチャンネルを補完する step 2b を追加（RENAME 前・冪等）。
+- [x] **NIT（akebono-dashboard の記事数 JOIN）**: media_channels JOIN に `c.active` フィルタを追加（取消済みチャンネルの記事を数えない）。
+- [x] 受容（対応せず記録）: CR NIT（akebono の appKey 'media' 残置 = app-configs 件数保護の意図・無害。既にコメント済み）。
+- [x] 再検証（是正後）: api 単体 259 / api 統合 225 / mockup 単体 **158**（外部材料テスト +2 → 156、既存 +... = 158）/ typecheck（api・mockup）全 green。
+
+### 50-y 反復レビュー（原則9・2 巡目 = 最終確認。CRITICAL/MAJOR 0・MINOR 1・NIT 2 → 対応/記録）
+- [x] 1 巡目是正 6 件はいずれも実体として解消を独立ロールが確認（テスト実測一致・shared 移設の挙動不変・
+  invalidateIntegratedFor のキー解析・channelForSegment の両モード動作・0048 孤児 backfill の実 PG 検証）。
+- [x] **MINOR（0048 step 2b の冪等性退行）**: step 2b が子テーブルの segment_id を無ガード参照しており、
+  ファイルが謳う「多重適用でも壊れない」不変条件に反していた（手動再適用時に column 不在で失敗）。
+  step 2b を information_schema 列存在ガード（media_metrics_cache.segment_id）で囲み、RENAME 済み環境では
+  丸ごとスキップ = 再適用安全に修正。使い捨て PostgreSQL で「全マイグレーション適用 → 0048 再適用 OK」を実測確認。
+  （本番ランナー migrate.ts は schema_migrations で適用済みをスキップ + ファイル単位トランザクションのため
+  通常運用では顕在化しないが、ファイルの不変条件の整合性として是正）。
+- [x] NIT（0048 は本ブランチで新規追加＝未デプロイのため 0048 編集で正。既デプロイ環境がある場合のみ 0049 分離が必要）:
+  0048 は本 PR で新設した未リリースのマイグレーションであり、編集で問題なし（デプロイ実績なし）。記録のみ。
+- [x] NIT（50-x のコミットメッセージ「2 件追加」は実際 3 件）: mockup 単体の追加 it は 3 件（155→158）。
+  ヘッドライン件数 158 は正。記録を訂正（テスト件数の SoT は 158）。
+- [x] 再検証（是正後）: api 単体 259 / api 統合 225 / mockup 単体 158 / typecheck（api・mockup）全 green +
+  0048 の全適用 → 再適用の冪等性を実 PostgreSQL で確認。**未解決指摘ゼロで収束**。

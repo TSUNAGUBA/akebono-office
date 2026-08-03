@@ -9,7 +9,7 @@ import {
 } from '../../../shared/domain/media-article'
 import type { MediaFindingKind } from '../../../shared/domain/media-insight'
 import type { IndustryType } from '~/types/akebono'
-import type { MediaGoal, MediaSetting } from '~/types/media'
+import type { MediaChannel, MediaGoal } from '~/types/media'
 import type { Tone } from '~/types/ui'
 
 // 記事生成の区分は shared/domain/media-article が SoT。画面からは utils/media 経由で参照する（深い相対パスの回避）
@@ -53,8 +53,9 @@ export function priorityTone(priority: 'high' | 'mid' | 'low'): Tone {
 }
 export const PRIORITY_LABELS: Record<'high' | 'mid' | 'low', string> = { high: '高', mid: '中', low: '低' }
 
-// ---------- セグメント既定のメディア設定（1:1 ペアリングの初期化。原則1） ----------
+// ---------- メディアチャンネルの既定（新規作成・ロード前プレースホルダで共有。原則1） ----------
 
+/** 連携先業態の業種タイプから分析目的の既定を導く（新規チャンネル作成時のヒント） */
 const INDUSTRY_GOAL: Record<IndustryType, MediaGoal> = {
   retail: 'conversion', maker: 'leadgen', logistics: 'awareness', it_service: 'leadgen', other: 'awareness',
 }
@@ -62,26 +63,32 @@ const INDUSTRY_TONE: Record<IndustryType, ArticleTone> = {
   retail: 'friendly', maker: 'formal', logistics: 'formal', it_service: 'expert', other: 'formal',
 }
 
+/** 連携先業態（任意）から既定の分析目的・トーンを導く（新規チャンネル作成のヒント。未連携は無難な既定） */
+export function channelDefaultsForIndustry(industryType?: IndustryType): { analysisGoal: MediaGoal; defaultTone: ArticleTone } {
+  return {
+    analysisGoal: industryType ? INDUSTRY_GOAL[industryType] : 'awareness',
+    defaultTone: industryType ? INDUSTRY_TONE[industryType] : 'formal',
+  }
+}
+
 /**
- * セグメントに対する既定のメディア設定を生成する（未設定セグメントの初回・シードで共有）。
- * GA は未連携（画面操作で連携）を既定にする。id は呼び出し側（採番）で確定する。
+ * メディアチャンネルの既定値を生成する（ロード前のプレースホルダ・新規作成の初期フォームで共有）。
+ * GA は未連携（画面操作で連携）・segmentId は null（単体）を既定にする。連携は任意（原則7）。
  */
-export function defaultMediaSetting(
-  segment: { id: string; name: string; industryType: IndustryType },
-  id: string,
-): MediaSetting {
+export function defaultMediaChannel(id: string, name = '無題メディア', segmentId: string | null = null): MediaChannel {
   return {
     id,
-    segmentId: segment.id,
-    siteName: `${segment.name} オウンドメディア`,
+    name,
+    segmentId,
+    siteName: '',
     siteUrl: '',
     gaConnected: false,
     gaPropertyId: null,
     gaPropertyName: null,
     gaConnectedAt: null,
-    analysisGoal: INDUSTRY_GOAL[segment.industryType],
+    analysisGoal: 'awareness',
     targetAudience: '',
-    defaultTone: INDUSTRY_TONE[segment.industryType],
+    defaultTone: 'formal',
     keywords: [],
     active: true,
   }

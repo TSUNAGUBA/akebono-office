@@ -23,7 +23,7 @@ import type {
   ProductImage, ProductImageSection, ProductSku, ProductionOrder, PurchaseOrder, PurchaseRecord,
   SalesRecord, TaxRate, Unit, VariantAxisTemplate, Warehouse,
 } from '~/types/akebono'
-import type { ArticleBrief, GeneratedArticle, MediaArticle, MediaSetting } from '~/types/media'
+import type { ArticleBrief, GeneratedArticle, MediaArticle, MediaChannel, MediaExternalArticle } from '~/types/media'
 import * as core from './core'
 import * as akebono from './akebono'
 import * as attendance from './attendance'
@@ -135,13 +135,16 @@ export interface MockDbShape {
   importRuns: ImportRun[]
   itemSettings: ItemSetting[]
   akebonoAppConfigs: AkebonoAppConfig[]
-  // ---- メディア分析（Akebono セグメントと 1:1）。SoT: shared/domain/media-* + types/media ----
-  mediaSettings: MediaSetting[]
+  // ---- メディア分析（独立チャンネル + 任意の業態連携）。SoT: shared/domain/media-* + types/media ----
+  /** メディアチャンネル（旧 mediaSettings を置換・拡張。任意で業態と連携） */
+  mediaChannels: MediaChannel[]
   mediaArticles: MediaArticle[]
   /** メディア AI インサイトの保管（scope='media'/'integrated'。導出キャッシュ = 再生成で上書き） */
   mediaInsights: MediaInsightRecord[]
   articleBriefs: ArticleBrief[]
   generatedArticles: GeneratedArticle[]
+  /** 外部投稿記事の原文（media インサイト生成の材料。取消/復元 = 原則9.5） */
+  mediaExternalArticles: MediaExternalArticle[]
   /**
    * ダッシュボード AI インサイトの保管（scope='segment'/'company'。導出キャッシュ = 再生成で上書き）。
    * セグメント別/会社全体の「サマリー + AI レポート + AI インサイト」を保持する（F-41）。
@@ -267,11 +270,12 @@ export function buildSeed(): MockDbShape {
     itemSettings: akebono.seedItemSettings,
     akebonoAppConfigs: akebono.seedAkebonoAppConfigs,
     // ---- メディア分析 ----
-    mediaSettings: media.seedMediaSettings,
+    mediaChannels: media.seedMediaChannels,
     mediaArticles: media.seedMediaArticles,
     mediaInsights: media.seedMediaInsights, // 生成時に保管（シードなし）
     articleBriefs: media.seedArticleBriefs,
     generatedArticles: media.seedGeneratedArticles,
+    mediaExternalArticles: media.seedMediaExternalArticles,
     dashboardInsights: [], // ダッシュボードインサイトは生成時に保管（シードなし = 「生成」ボタンから作る）
   }
 }

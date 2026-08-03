@@ -78,7 +78,8 @@ export function useDashboardInsight() {
   const records = tbl('dashboardInsights')
   const { currentUser } = useCurrentUser()
   const { activeSegments, segmentById } = useCurrentSegment()
-  const { settingFor } = useMediaSettings()
+  // 業態 → 連携チャンネルの解決（下位互換チャンネルは id=segmentId・UI 作成は mc-xxxx。channelForSegment が両対応）
+  const { settingFor, channelForSegment } = useMediaChannels()
   const { integratedMetricsFor, articleInputsFor, ensureIntegratedLoaded } = useMediaAnalytics()
   const { isEnabled } = useAppSettings()
   const membersTbl = tbl('members')
@@ -96,9 +97,12 @@ export function useDashboardInsight() {
    */
   function snapshotFor(segmentId: string): { snapshot: SegmentSnapshot; trend: DashboardMonthPoint[]; periodMonth: string } {
     const seg = segmentById(segmentId)
+    // 業態に連携する active チャンネルを解決（下位互換 id=segmentId・UI 作成 mc-xxxx の両対応）。
+    // 未連携（連携チャンネルなし）は segmentId をキーに使う = メディア指標なし（integratedMetricsFor が 0 系を返す）
+    const channelId = channelForSegment(segmentId)?.id ?? segmentId
     // メディア機能トグルが無効ならダッシュボードのメディア軸も無効化（指標・レポート・全社ロールアップを一貫させる）
-    const connected = isEnabled('media') && settingFor(segmentId)?.gaConnected === true
-    const im = integratedMetricsFor(segmentId, MONTHS)
+    const connected = isEnabled('media') && settingFor(channelId)?.gaConnected === true
+    const im = integratedMetricsFor(channelId, MONTHS)
     const snapshot: SegmentSnapshot = {
       segmentId,
       segmentName: seg?.name ?? 'セグメント',
@@ -112,7 +116,7 @@ export function useDashboardInsight() {
       prevSessions: connected ? im.prevSessions : 0,
       conversions: connected ? im.conversions : 0,
       conversionRate: connected ? im.conversionRate : 0,
-      articleCount: articleInputsFor(segmentId).length,
+      articleCount: articleInputsFor(channelId).length,
     }
     const trend: DashboardMonthPoint[] = im.trend.map(t => ({
       month: t.month,

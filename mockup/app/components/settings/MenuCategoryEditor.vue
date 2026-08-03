@@ -52,8 +52,14 @@ onMounted(async () => {
   }
 })
 
-const cardOptions = computed(() =>
-  MENU_CARDS[area.value].map(c => ({ value: c.id, label: c.title })))
+// ダッシュボード領域は外部リンク（設定 > 外部リンク）も割当可能カードに含める
+// （基本メニューと同じようにセクション配置できるようにする = オペレーター指示 2026-08-03）
+const { externalCards } = useExternalLinkCards()
+const cardOptions = computed(() => {
+  const base = MENU_CARDS[area.value].map(c => ({ value: c.id, label: c.title }))
+  if (area.value !== 'dashboard') return base
+  return [...base, ...externalCards.value.map(c => ({ value: String(c.id), label: `${c.title}（外部リンク）` }))]
+})
 
 function markDirty(): void {
   dirty.value = true

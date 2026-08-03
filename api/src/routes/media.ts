@@ -1,23 +1,32 @@
 /**
- * メディア分析 API（F-40）。mockup useMediaSettings / useMediaAnalytics / useMediaInsight /
- * useMediaArticles の API 版。calendar.ts の Google OAuth 設計（state ノンス・email 突合・
- * AES-256-GCM トークン暗号化・非ブロッキング revoke）を踏襲する。
+ * メディア分析 API（F-40）。mockup useMediaChannels / useMediaAnalytics / useMediaInsight /
+ * useMediaArticles / useMediaExternalArticles の API 版。calendar.ts の Google OAuth 設計
+ * （state ノンス・email 突合・AES-256-GCM トークン暗号化・非ブロッキング revoke）を踏襲する。
  *
- * - GA 連携は **segment（業態）単位**（メディアは業態の資産。calendar の per-member と異なる設計判断。
- *   connected_by で連携者を記録する）。スコープは analytics.readonly のみ = カレンダーとは別の同意・別トークン
+ * メディア分析は **独立したメディアチャンネル（media_channels）** を単位に動く（オペレーター指示 2026-08-03）。
+ * 任意で「どの Akebono 業務アプリ（= 業態 business_segment）と連携するか」を設定できる（連携は必須でない）:
+ * - 未連携（channel.segment_id = NULL）: メディア単体で分析・記事生成・単体 AI インサイトが動く
+ * - 連携済み（channel.segment_id あり）: 加えて業務 × メディアの統合 PDCA（売上 × 流入）が利用できる
+ *   （integrated は連携必須。未連携チャンネルで integrated を要求すると AKO-MEDIA-022）
+ *
+ * - GA 連携は **channel 単位**（0048 で segment 単位から移行。旧 segment_id 値は channel_id へ列名変更のみ =
+ *   値不変で下位互換。connected_by で連携者を記録する）。スコープは analytics.readonly のみ
  * - GA 集計（GA4 Data API batchRunReports）→ MediaMetrics 整形は lib/ga.ts の純粋関数。
  *   GA クォータ対策に 30 分の導出キャッシュ（media_metrics_cache）を持つ（SoT は GA = 記録系ではない）
  * - AI インサイト・記事生成は Vertex AI（generateJson）→ 失敗時は shared/domain の決定的
  *   ヒューリスティックへフォールバック（原則4。weekly_insights と同じ「生成 → 保管 → 再生成で上書き」）
- * - 認可: GA 連携・設定・インベントリの書込は admin のみ（/media/settings 画面の管理者ゲートと一致）。
+ * - media インサイト生成は **外部投稿記事（media_external_articles）の原文を材料**に取り込む（新機能）
+ * - 認可: GA 連携・チャンネル/設定・インベントリ・外部記事の書込は admin のみ。
  *   参照・記事生成・採用・インサイト生成は全ロール可（mockup の画面ゲートと一致）
- * - segment の存在検証は行わない: business_segments は Phase B（0031）でテーブル化済みだが、
- *   FK・参照整合の引き上げは Phase C（記録系移行）の判断まで保留（data-design §1.4/§1.5 参照）
+ * - segment（連携先業態）の存在検証は行わない: business_segments はテーブル化済みだが FK・参照整合の
+ *   引き上げは記録系移行の判断まで保留（data-design 参照。channel.segment_id は text 保持）
  *
  * エラー: AKO-MEDIA-003 GA 未連携 / 004 GA 集計取得失敗 / 005 連携未設定（GOOGLE_OAUTH_*）/
  *         006 プロパティ一覧取得失敗 / 007 対象記事なし / 008 記事パスの重複 / 011 お題未入力 /
- *         012 生成記事なし / 014 未採用 / 016 統合メトリクス不正（001・002・010・013 はモック専用。
- *         013 の二重採用は API では no-op + warning = 冪等。009・015 は欠番）
+ *         012 生成記事なし / 014 未採用 / 020 チャンネル名必須 / 021 対象チャンネルなし /
+ *         022 統合分析には連携業態が必要 / 023 外部記事の入力不正 / 024 対象の外部記事なし
+ *         （001・002・010・013・016 はモック専用/欠番。013 の二重採用は API では no-op + warning = 冪等。
+ *          009・015 は欠番）
  */
 import { randomBytes } from 'node:crypto'
 import type { Context } from 'hono'
@@ -26,6 +35,7 @@ import type pg from 'pg'
 import { addDays, todayJst } from '../../../shared/domain/jst'
 import type { MediaMetrics, MediaMonthlyPoint } from '../../../shared/domain/media-metrics'
 import {
+  applyExternalMaterial, type ExternalArticleMaterial, externalMaterialOf,
   heuristicMediaInsight, type MediaAction, type MediaFinding, type MediaInsight,
 } from '../../../shared/domain/media-insight'
 import {
@@ -59,7 +69,7 @@ const SCOPES = 'openid email https://www.googleapis.com/auth/analytics.readonly'
 
 /** GA 集計キャッシュの TTL（クォータ対策の短期キャッシュ。force=1 で再取得可） */
 const CACHE_TTL = '30 minutes'
-/** 分析目的の区分値（SoT はモックの MediaSetting（mockup/app/types/media.ts）。0030 の CHECK と一致させる） */
+/** 分析目的の区分値（SoT はモックの MediaChannel（mockup/app/types/media.ts）。0048 の CHECK と一致させる） */
 const MEDIA_GOALS = ['awareness', 'leadgen', 'nurturing', 'conversion', 'branding', 'retention']
 
 function requireEnabled(env: Env): void {
@@ -68,10 +78,10 @@ function requireEnabled(env: Env): void {
   }
 }
 
-/** segmentId クエリ/ボディの検証（形式のみ。存在検証は Phase C の参照整合判断まで保留 = business_segments はテーブル化済み） */
-function segmentIdOf(v: unknown): string {
+/** channelId クエリ/ボディの検証（形式のみ。存在検証は各ハンドラの行取得で行う） */
+function channelIdOf(v: unknown): string {
   const id = String(v ?? '').trim()
-  if (!id || id.length > 64) throw err('AKO-GEN-001', 'segmentId を指定してください', 400)
+  if (!id || id.length > 64) throw err('AKO-GEN-001', 'channelId を指定してください', 400)
   return id
 }
 
@@ -82,27 +92,27 @@ function redirectUri(c: Context): string {
   return `${proto}://${url.host}/v1/media/oauth/callback`
 }
 
-// ---------- OAuth state（一回性 + 10 分 TTL。calendar と同型 + segment_id） ----------
+// ---------- OAuth state（一回性 + 10 分 TTL。calendar と同型 + channel_id） ----------
 
-async function issueState(pool: pg.Pool, memberId: string, segmentId: string): Promise<string> {
+async function issueState(pool: pg.Pool, memberId: string, channelId: string): Promise<string> {
   const nonce = randomBytes(32).toString('base64url')
   await pool.query(`DELETE FROM media_oauth_states WHERE created_at < now() - interval '10 minutes'`)
   await pool.query(
-    `INSERT INTO media_oauth_states (nonce, member_id, segment_id) VALUES ($1, $2, $3)`,
-    [nonce, memberId, segmentId])
+    `INSERT INTO media_oauth_states (nonce, member_id, channel_id) VALUES ($1, $2, $3)`,
+    [nonce, memberId, channelId])
   return nonce
 }
 
-async function consumeState(pool: pg.Pool, state: string): Promise<{ memberId: string; segmentId: string } | null> {
+async function consumeState(pool: pg.Pool, state: string): Promise<{ memberId: string; channelId: string } | null> {
   if (!state || state.length > 128) return null
-  const { rows } = await pool.query<{ memberId: string; segmentId: string }>(
+  const { rows } = await pool.query<{ memberId: string; channelId: string }>(
     `DELETE FROM media_oauth_states
      WHERE nonce = $1 AND created_at >= now() - interval '10 minutes'
-     RETURNING member_id AS "memberId", segment_id AS "segmentId"`, [state])
+     RETURNING member_id AS "memberId", channel_id AS "channelId"`, [state])
   return rows[0] ?? null
 }
 
-// ---------- GA トークン（segment 単位。calendar accessTokenFor と同型） ----------
+// ---------- GA トークン（channel 単位。calendar accessTokenFor と同型） ----------
 
 interface GaTokenRow {
   propertyId: string | null
@@ -112,26 +122,26 @@ interface GaTokenRow {
   expiresAt: string | null
 }
 
-async function gaTokenRow(pool: pg.Pool, segmentId: string): Promise<GaTokenRow | null> {
+async function gaTokenRow(pool: pg.Pool, channelId: string): Promise<GaTokenRow | null> {
   const { rows } = await pool.query<GaTokenRow>(
     `SELECT property_id AS "propertyId", property_name AS "propertyName",
             access_token_enc AS "accessTokenEnc", refresh_token_enc AS "refreshTokenEnc",
             expires_at AS "expiresAt"
-     FROM media_ga_tokens WHERE segment_id = $1`, [segmentId])
+     FROM media_ga_tokens WHERE channel_id = $1`, [channelId])
   return rows[0] ?? null
 }
 
 /**
  * 有効なアクセストークン + 選択済みプロパティ（期限切れは refresh。取得不可 = null → AKO-MEDIA-003）。
  * calendar.ts の accessTokenFor / issueState と同型だが**共通化しない設計判断**（原則3 の例外）:
- * キー（member_id vs segment_id）・テーブル・回復導線（再連携の単位が本人 vs 業態）が異なり、
+ * キー（member_id vs channel_id）・テーブル・回復導線（再連携の単位が本人 vs チャンネル）が異なり、
  * 抽象化すると障害切り分け時にどちらのフローか読みにくくなる。refresh 手順を変更する際は
  * calendar.ts 側と併せて確認すること
  */
 async function gaAccess(
-  pool: pg.Pool, env: Env, segmentId: string,
+  pool: pg.Pool, env: Env, channelId: string,
 ): Promise<{ token: string; propertyId: string | null } | null> {
-  const row = await gaTokenRow(pool, segmentId)
+  const row = await gaTokenRow(pool, channelId)
   if (!row) return null
   const notExpired = !row.expiresAt || new Date(row.expiresAt).getTime() > Date.now() + 60_000
   if (notExpired) {
@@ -155,8 +165,8 @@ async function gaAccess(
     if (!res.ok) return null
     const body = await res.json() as { access_token: string; expires_in: number }
     await pool.query(
-      `UPDATE media_ga_tokens SET access_token_enc = $2, expires_at = $3, updated_at = now() WHERE segment_id = $1`,
-      [segmentId, encryptSecret(body.access_token, env.tokenEncryptionKey),
+      `UPDATE media_ga_tokens SET access_token_enc = $2, expires_at = $3, updated_at = now() WHERE channel_id = $1`,
+      [channelId, encryptSecret(body.access_token, env.tokenEncryptionKey),
         new Date(Date.now() + body.expires_in * 1000).toISOString()])
     return { token: body.access_token, propertyId: row.propertyId }
   } catch {
@@ -166,25 +176,50 @@ async function gaAccess(
 
 // ---------- GA 集計キャッシュ ----------
 
-async function cachedPayload<T>(pool: pg.Pool, segmentId: string, cacheKey: string): Promise<T | null> {
+async function cachedPayload<T>(pool: pg.Pool, channelId: string, cacheKey: string): Promise<T | null> {
   const { rows } = await pool.query<{ payload: T }>(
     `SELECT payload FROM media_metrics_cache
-     WHERE segment_id = $1 AND cache_key = $2 AND fetched_at > now() - interval '${CACHE_TTL}'`,
-    [segmentId, cacheKey])
+     WHERE channel_id = $1 AND cache_key = $2 AND fetched_at > now() - interval '${CACHE_TTL}'`,
+    [channelId, cacheKey])
   return rows[0]?.payload ?? null
 }
 
-async function putCache(pool: pg.Pool, segmentId: string, cacheKey: string, payload: unknown): Promise<void> {
+async function putCache(pool: pg.Pool, channelId: string, cacheKey: string, payload: unknown): Promise<void> {
   await pool.query(
-    `INSERT INTO media_metrics_cache (segment_id, cache_key, payload, fetched_at)
+    `INSERT INTO media_metrics_cache (channel_id, cache_key, payload, fetched_at)
      VALUES ($1, $2, $3, now())
-     ON CONFLICT (segment_id, cache_key) DO UPDATE SET payload = EXCLUDED.payload, fetched_at = now()`,
-    [segmentId, cacheKey, JSON.stringify(payload)])
+     ON CONFLICT (channel_id, cache_key) DO UPDATE SET payload = EXCLUDED.payload, fetched_at = now()`,
+    [channelId, cacheKey, JSON.stringify(payload)])
 }
 
 /** インベントリ変更・連携変更時のキャッシュ破棄（SoT の変化 → 依存する導出キャッシュを無効化 = 原則6） */
-async function clearMetricsCache(pool: pg.Pool, segmentId: string): Promise<void> {
-  await pool.query(`DELETE FROM media_metrics_cache WHERE segment_id = $1`, [segmentId])
+async function clearMetricsCache(pool: pg.Pool, channelId: string): Promise<void> {
+  await pool.query(`DELETE FROM media_metrics_cache WHERE channel_id = $1`, [channelId])
+}
+
+// ---------- チャンネル行（設定 + 連携先） ----------
+
+interface ChannelRow {
+  id: string
+  name: string
+  segmentId: string | null
+  siteName: string
+  siteUrl: string
+  analysisGoal: string
+  targetAudience: string
+  defaultTone: string
+  keywords: string[]
+  active: boolean
+}
+
+const CHANNEL_COLS = `id, name, segment_id AS "segmentId", site_name AS "siteName", site_url AS "siteUrl",
+  analysis_goal AS "analysisGoal", target_audience AS "targetAudience", default_tone AS "defaultTone",
+  keywords, active`
+
+async function channelRow(pool: pg.Pool, channelId: string): Promise<ChannelRow | null> {
+  const { rows } = await pool.query<ChannelRow>(
+    `SELECT ${CHANNEL_COLS} FROM media_channels WHERE id = $1`, [channelId])
+  return rows[0] ?? null
 }
 
 // ---------- GA4 Data API 呼び出し ----------
@@ -319,16 +354,16 @@ export interface MetricsResult {
  */
 // export はモック fetch による回帰テスト用（429 でファンアウトしない・unavailable の貫通 = P1/P2）
 export async function fetchMediaMetrics(
-  pool: pg.Pool, env: Env, segmentId: string, days: number, force: boolean,
+  pool: pg.Pool, env: Env, channelId: string, days: number, force: boolean,
 ): Promise<MetricsResult> {
   requireEnabled(env)
-  const access = await gaAccess(pool, env, segmentId)
+  const access = await gaAccess(pool, env, channelId)
   if (!access?.token || !access.propertyId) {
     throw err('AKO-MEDIA-003', 'Google Analytics が未連携です。メディア設定から連携してください', 409)
   }
   const cacheKey = `metrics:${days}`
   if (!force) {
-    const cached = await cachedPayload<MetricsResult>(pool, segmentId, cacheKey)
+    const cached = await cachedPayload<MetricsResult>(pool, channelId, cacheKey)
     if (cached) return cached
   }
 
@@ -341,11 +376,11 @@ export async function fetchMediaMetrics(
   // インベントリ（セクション対応 + articleCount の SoT はアプリ。集計値は GA が SoT）
   const { rows: articles } = await pool.query<{ path: string; section: string }>(
     `SELECT path, section FROM media_articles
-     WHERE segment_id = $1 AND active = true AND status = 'published' AND published_at <= $2::date`,
-    [segmentId, periodTo])
-  const { rows: settingRows } = await pool.query<{ siteName: string }>(
-    `SELECT site_name AS "siteName" FROM media_settings WHERE segment_id = $1`, [segmentId])
-  const siteName = settingRows[0]?.siteName || 'メディア'
+     WHERE channel_id = $1 AND active = true AND status = 'published' AND published_at <= $2::date`,
+    [channelId, periodTo])
+  const { rows: channelRows } = await pool.query<{ siteName: string }>(
+    `SELECT site_name AS "siteName" FROM media_channels WHERE id = $1`, [channelId])
+  const siteName = channelRows[0]?.siteName || 'メディア'
 
   // 総計メトリクス。GA4 の conversions は廃止済み → keyEvents を使う（lib/ga.ts 冒頭の注記参照）
   const TOTAL_METRICS = ['sessions', 'totalUsers', 'newUsers', 'screenPageViews',
@@ -470,7 +505,7 @@ export async function fetchMediaMetrics(
     devices: detailReports[2] ?? null,
     topPages: detailReports[3] ?? null,
     prevPages: detailReports[4] ?? null,
-  }, { segmentId, siteName, periodFrom, periodTo, days, articles })
+  }, { segmentId: channelId, siteName, periodFrom, periodTo, days, articles })
 
   // 失敗した内訳のみを名指しで報告（全滅は「総計のみ」・一部なら取れた内訳は表示している旨が伝わる文言）
   const detailSuffix = `${reasonNote || gaDetail ? `（${reasonNote}${gaDetail ? `GA 応答: ${gaDetail}` : ''}）` : ''}。時間をおいて再試行してください`
@@ -481,22 +516,22 @@ export async function fetchMediaMetrics(
       : `一部の内訳（${failedLabels.join('・')}）の取得に失敗しました${detailSuffix}`
   const result: MetricsResult = { metrics, warning, unavailable }
   // 部分失敗の結果は 30 分固定化しない（次回リクエストで再試行させる）
-  if (!result.warning) await putCache(pool, segmentId, cacheKey, result)
+  if (!result.warning) await putCache(pool, channelId, cacheKey, result)
   return result
 }
 
 /** 月次トレンド（統合 PDCA 用。最終月 = 直前の完了月。30 分キャッシュ） */
 async function fetchMonthlyTrend(
-  pool: pg.Pool, env: Env, segmentId: string, months: number, force: boolean,
+  pool: pg.Pool, env: Env, channelId: string, months: number, force: boolean,
 ): Promise<MediaMonthlyPoint[]> {
   requireEnabled(env)
-  const access = await gaAccess(pool, env, segmentId)
+  const access = await gaAccess(pool, env, channelId)
   if (!access?.token || !access.propertyId) {
     throw err('AKO-MEDIA-003', 'Google Analytics が未連携です。メディア設定から連携してください', 409)
   }
   const cacheKey = `monthly:${months}`
   if (!force) {
-    const cached = await cachedPayload<MediaMonthlyPoint[]>(pool, segmentId, cacheKey)
+    const cached = await cachedPayload<MediaMonthlyPoint[]>(pool, channelId, cacheKey)
     if (cached) return cached
   }
   const monthKeys = recentMonthKeys(months, 1, todayJst())
@@ -512,13 +547,16 @@ async function fetchMonthlyTrend(
   }], 25_000)
   if (!batch.ok) throw gaFetchError(batch.reason, batch.detail)
   const points = buildMonthlyTrend(batch.reports[0] ?? null, monthKeys)
-  await putCache(pool, segmentId, cacheKey, points)
+  await putCache(pool, channelId, cacheKey, points)
   return points
 }
 
-// ---------- メディア設定の部分更新（純粋関数・単体テスト対象） ----------
+// ---------- チャンネル設定の部分更新（純粋関数・単体テスト対象） ----------
 
 export interface MediaSettingsPatch {
+  name?: string
+  /** 連携先業態。'' / null = 連携解除（単体チャンネル） */
+  segmentId?: string | null
   siteName?: string
   siteUrl?: string
   analysisGoal?: string
@@ -532,9 +570,16 @@ export interface MediaSettingsPatch {
  * リクエスト body に**実在するキーのみ**を更新対象にする（Object.hasOwn）。
  * CLAUDE.md の Zod v4 注意（.partial() が default 値を注入して未指定列を上書きする実障害）を踏まえ、
  * zod を使わず手動フィルタで「送っていないフィールドの保持」を構造的に保証する。
+ * チャンネル PATCH（/channels/:id）と設定 PUT（/settings）で共用する。
  */
 export function settingsPatchOf(body: Record<string, unknown>): MediaSettingsPatch {
   const out: MediaSettingsPatch = {}
+  if (Object.hasOwn(body, 'name')) out.name = capCp(String(body.name ?? '').trim(), 100)
+  if (Object.hasOwn(body, 'segmentId')) {
+    const v = String(body.segmentId ?? '').trim()
+    // '' = 連携解除（単体化）。非空は連携先 id（存在検証はしない = FK 未設定の設計判断）
+    out.segmentId = v ? capCp(v, 64) : null
+  }
   if (Object.hasOwn(body, 'siteName')) out.siteName = capCp(String(body.siteName ?? '').trim(), 100)
   if (Object.hasOwn(body, 'siteUrl')) out.siteUrl = capCp(String(body.siteUrl ?? '').trim(), 500)
   if (Object.hasOwn(body, 'targetAudience')) out.targetAudience = capCp(String(body.targetAudience ?? '').trim(), 500)
@@ -556,9 +601,28 @@ export function settingsPatchOf(body: Record<string, unknown>): MediaSettingsPat
   return out
 }
 
-const SETTING_COLS = `id, segment_id AS "segmentId", site_name AS "siteName", site_url AS "siteUrl",
-  analysis_goal AS "analysisGoal", target_audience AS "targetAudience", default_tone AS "defaultTone",
-  keywords, active`
+/**
+ * patch から UPDATE の SET 句・値を組み立てる（送ったキーのみ = 未指定は保持 = Zod v4 注意への構造的対応）。
+ * id は WHERE の $1 に予約するため、値は $2 以降へ割り当てる。
+ */
+function channelUpdateParts(patch: MediaSettingsPatch): { assigns: string[]; values: unknown[] } {
+  const assigns: string[] = ['updated_at = now()']
+  const values: unknown[] = []
+  const add = (col: string, val: unknown, cast = '') => {
+    values.push(val)
+    assigns.push(`${col} = $${values.length + 1}${cast}`)
+  }
+  if (patch.name !== undefined) add('name', patch.name)
+  if (patch.segmentId !== undefined) add('segment_id', patch.segmentId)
+  if (patch.siteName !== undefined) add('site_name', patch.siteName)
+  if (patch.siteUrl !== undefined) add('site_url', patch.siteUrl)
+  if (patch.analysisGoal !== undefined) add('analysis_goal', patch.analysisGoal)
+  if (patch.targetAudience !== undefined) add('target_audience', patch.targetAudience)
+  if (patch.defaultTone !== undefined) add('default_tone', patch.defaultTone)
+  if (patch.keywords !== undefined) add('keywords', JSON.stringify(patch.keywords), '::jsonb')
+  if (patch.active !== undefined) add('active', patch.active)
+  return { assigns, values }
+}
 
 // ---------- インサイトのヒント抽出・LLM 出力の正規化（純粋関数・単体テスト対象） ----------
 
@@ -642,24 +706,21 @@ export function normalizeIntegratedInsight(res: unknown): IntegratedInsight | nu
   }
 }
 
-// ---------- 統合メトリクスの受領検証・サーバー突合（M2。純粋関数・単体テスト対象） ----------
+// ---------- 外部投稿記事のインサイト材料化 ----------
+// externalMaterialOf / applyExternalMaterial は shared/domain/media-insight へ移設し、
+// API とモック（useMediaInsight）で同一ロジックを共有する（原則3・両モードパリティ）。
+// 既存の import 経路（api/test/unit/media-routes.test.ts が routes/media から参照）を保つため再エクスポートする。
+export { applyExternalMaterial, type ExternalArticleMaterial, externalMaterialOf }
 
-/** 有限・非負・上限内の数値のみ通す（それ以外は null = 全体を 400 で拒否） */
-function boundedNum(v: unknown, max: number): number | null {
-  const n = Number(v)
-  return Number.isFinite(n) && n >= 0 && n <= max ? n : null
-}
-const COUNT_MAX = 1e9 // 件数系（セッション・CV・受注）の上限
-const YEN_MAX = 1e12 // 金額系（円）の上限
+// ---------- 統合メトリクスの受領検証・サーバー突合（M2。純粋関数・単体テスト対象） ----------
 
 /**
  * 統合メトリクス（業務 × メディア）の**サーバー組み立て**（Phase C = salesRecords の API 移行で
- * クライアント合成を廃止。M2 の受領検証・GA 突合上書き（normalizeIntegratedMetrics /
- * applyServerMediaAxis）は不要になり撤去 = 売上軸・メディア軸とも改ざん余地なし）。
- * - 売上月次 = sales_records（SoT）を foldBusinessMonthly で集計（赤黒訂正の帰属月ロジックは
- *   フロントのモック集計と同一の共有純関数 = 原則3・6）
- * - メディア月次 = GA（fetchMonthlyTrend = 30 分キャッシュ・force 対応）。未連携は 0（mediaConnected=false）。
- *   取得失敗は mediaFailed=true で返し、**0 を実データの顔で描画・保管させない**（M1。生成側は 004 で拒否）
+ * クライアント合成を廃止）。連携済みチャンネル（channel.segment_id あり）でのみ利用可能:
+ * - 売上月次 = sales_records（SoT。連携先 segmentId で絞る）を foldBusinessMonthly で集計
+ * - メディア月次 = GA（fetchMonthlyTrend = channelId keying・30 分キャッシュ・force 対応）。
+ *   未連携は 0（mediaConnected=false）。取得失敗は mediaFailed=true で返し、0 を実データの顔で
+ *   描画・保管させない（M1。生成側は 004 で拒否）
  */
 export interface IntegratedBuildResult {
   metrics: IntegratedMetrics
@@ -667,25 +728,17 @@ export interface IntegratedBuildResult {
   mediaFailed: boolean
 }
 
-export async function buildIntegratedMetrics(
-  pool: pg.Pool, env: Env, segmentId: string, monthsCount: number, force: boolean,
+/**
+ * 統合メトリクスの内部組み立て（売上軸 = segmentId で sales_records / メディア軸 = channelId で GA）。
+ * channelId が null（連携チャンネルなし）ならメディア軸 0（mediaConnected=false）。
+ */
+async function composeSalesAndGa(
+  pool: pg.Pool, env: Env,
+  args: { segmentId: string; channelId: string | null; segmentName: string; siteName: string; monthsCount: number; force: boolean },
 ): Promise<IntegratedBuildResult> {
-  const months = recentMonthKeys(monthsCount, 1, todayJst())
-  const { rows: segRows } = await pool.query<{ name: string }>(
-    `SELECT name FROM business_segments WHERE id = $1`, [segmentId])
-  const { rows: setRows } = await pool.query<{ siteName: string }>(
-    `SELECT site_name AS "siteName" FROM media_settings WHERE segment_id = $1`, [segmentId])
-  // 売上月次。**対象月窓に絞って取得**する（旧実装は無順序 LIMIT 20000 で、明細が 2 万件を超える
-  // セグメントでは任意の部分集合になり売上総額・受注数・赤黒ペアリングが誤った = Codex P1-3）。
-  // 窓の判定は foldBusinessMonthly の帰属月と一致させる: 通常明細は自身の売上月・**赤黒訂正は
-  // 元伝票（correctionOf 先）の計上月**へ帰属する。よって「元伝票があればその sales_date、無ければ
-  // 自身の sales_date」が窓内の行だけを取れば、窓へ寄与する行を過不足なく取得できる。
-  // - 窓内の元伝票（通常明細）を offset する訂正は、訂正日が窓外（当月に切った訂正等）でも元月で拾う
-  // - 元伝票が窓外の訂正は帰属月も窓外 = 取得されず誤って自身の月へ相殺しない（元不明フォールバック暴発の防止）
-  // 前提（不変条件）: sales_records は論理削除しない（active を false にする経路は存在せず、UPDATE は
-  //   invoice_id のみ）。ゆえに LEFT JOIN の元伝票 o に active フィルタは不要（取得された訂正の元は必ず
-  //   active で foldBusinessMonthly の byId 突合が解決する）。**将来 sales_records に論理削除を追加する場合、
-  //   ここへ `AND o.active` を足すだけでなく foldBusinessMonthly の元月帰属（元が消えた訂正の扱い）も見直すこと。**
+  const months = recentMonthKeys(args.monthsCount, 1, todayJst())
+  // 売上月次。**対象月窓に絞って取得**する（無順序 LIMIT では明細超過セグメントで誤集計 = Codex P1-3）。
+  // 窓の判定は foldBusinessMonthly の帰属月と一致させる（通常明細は自身の売上月・赤黒訂正は元伝票の計上月）。
   const periodFrom = `${months[0]!}-01`
   const periodTo = monthEndOf(months[months.length - 1]!)
   const { rows: salesRows } = await pool.query<{ id: string; salesDate: string; amount: number; correctionOf: string | null }>(
@@ -695,17 +748,17 @@ export async function buildIntegratedMetrics(
      WHERE r.segment_id = $1 AND r.active
        AND COALESCE(o.sales_date, r.sales_date) >= $2
        AND COALESCE(o.sales_date, r.sales_date) <= $3`,
-    [segmentId, periodFrom, periodTo])
+    [args.segmentId, periodFrom, periodTo])
   const biz = foldBusinessMonthly(salesRows, months)
   let mediaBy = new Map<string, MediaMonthlyPoint>()
   let mediaConnected = false
   let mediaFailed = false
-  if (googleOauthEnabled(env)) {
-    const access = await gaAccess(pool, env, segmentId)
+  if (args.channelId && googleOauthEnabled(env)) {
+    const access = await gaAccess(pool, env, args.channelId)
     if (access?.token && access.propertyId) {
       mediaConnected = true
       try {
-        const points = await fetchMonthlyTrend(pool, env, segmentId, monthsCount, force)
+        const points = await fetchMonthlyTrend(pool, env, args.channelId, args.monthsCount, args.force)
         mediaBy = new Map(points.map(p => [p.month, p]))
       } catch (e) {
         // GA 一時障害はメディア軸 0 の組み立て + mediaFailed で報告（原則4。呼び出し側が描画・生成を判断）
@@ -715,12 +768,55 @@ export async function buildIntegratedMetrics(
     }
   }
   const metrics = composeIntegratedMetrics({
-    segmentId,
-    segmentName: segRows[0]?.name ?? 'セグメント',
-    siteName: setRows[0]?.siteName ?? 'メディア',
-    months, mediaBy, biz,
+    segmentId: args.segmentId, segmentName: args.segmentName, siteName: args.siteName, months, mediaBy, biz,
   })
   return { metrics, mediaConnected, mediaFailed }
+}
+
+/**
+ * チャンネル基点の統合メトリクス（/v1/media/integrated・integrated インサイト生成）。
+ * 連携済みチャンネル（channel.segment_id あり）でのみ利用可能。未連携は AKO-MEDIA-022。
+ */
+export async function buildIntegratedMetrics(
+  pool: pg.Pool, env: Env, channelId: string, monthsCount: number, force: boolean,
+): Promise<IntegratedBuildResult> {
+  const channel = await channelRow(pool, channelId)
+  if (!channel) throw err('AKO-MEDIA-021', '対象のメディアチャンネルが見つかりません', 404)
+  const segmentId = channel.segmentId
+  if (!segmentId) {
+    throw err('AKO-MEDIA-022', '業務 × メディアの統合分析には、連携する Akebono 業務アプリ（業態）が必要です。メディア設定で連携してください', 400)
+  }
+  const { rows: segRows } = await pool.query<{ name: string }>(
+    `SELECT name FROM business_segments WHERE id = $1`, [segmentId])
+  return composeSalesAndGa(pool, env, {
+    segmentId, channelId,
+    segmentName: segRows[0]?.name ?? channel.name ?? 'セグメント',
+    siteName: channel.siteName || channel.name || 'メディア',
+    monthsCount, force,
+  })
+}
+
+/**
+ * 業態基点の統合メトリクス（F-41 ポートフォリオダッシュボード用）。業態に連携したメディアチャンネルを
+ * 解決し（複数あれば id = segmentId の下位互換チャンネルを優先・無ければ先頭・連携なしは売上軸のみ）、
+ * メディア軸をそのチャンネルの GA から組み立てる。**未連携でも売上軸を返す**（例外を投げない）。
+ */
+export async function buildSegmentIntegratedMetrics(
+  pool: pg.Pool, env: Env, segmentId: string, monthsCount: number, force: boolean,
+): Promise<IntegratedBuildResult> {
+  const { rows: segRows } = await pool.query<{ name: string }>(
+    `SELECT name FROM business_segments WHERE id = $1`, [segmentId])
+  const { rows: chRows } = await pool.query<{ id: string; siteName: string; name: string }>(
+    `SELECT id, site_name AS "siteName", name FROM media_channels
+     WHERE segment_id = $1 AND active = true
+     ORDER BY (id = $1) DESC, id LIMIT 1`, [segmentId])
+  const channel = chRows[0] ?? null
+  return composeSalesAndGa(pool, env, {
+    segmentId, channelId: channel?.id ?? null,
+    segmentName: segRows[0]?.name ?? 'セグメント',
+    siteName: channel?.siteName || channel?.name || 'メディア',
+    monthsCount, force,
+  })
 }
 
 /**
@@ -772,15 +868,21 @@ const ACTION_SCHEMA = {
   },
 }
 
-async function llmMediaInsight(env: Env, metrics: MediaMetrics): Promise<MediaInsight | null> {
+async function llmMediaInsight(env: Env, metrics: MediaMetrics, materials: ExternalArticleMaterial[]): Promise<MediaInsight | null> {
   if (!env.vertexProjectId) return null
+  // 外部投稿記事の原文抜粋をプロンプト材料に添える（自社サイト GA には現れない露出を洞察へ反映。新機能）
+  const externalBlock = materials.length === 0
+    ? ''
+    : `\n\n# 外部媒体への投稿記事（${materials.length} 件・自社サイト外の露出。原文抜粋）\n`
+      + materials.map((m, i) => `## ${i + 1}. ${m.title}${m.source ? `（${m.source}）` : ''}\n${m.bodyExcerpt}`).join('\n\n')
   const res = await generateJson<MediaInsight>(env, {
     system: 'あなたはオウンドメディアのアクセス解析コンサルタント AI です。Google Analytics の集計から、'
       + 'サイト構成・記事へのインサイトと「次に起こすべきアクション」を日本語で出力します。'
-      + '集計値にある事実のみを根拠にし、推測で数値・事実を作らないこと。'
+      + '外部媒体への投稿記事が提供された場合は、その内容を自社サイトへ再掲・内部リンクで流入資産化する観点も加味します。'
+      + '集計値・提供された原文にある事実のみを根拠にし、推測で数値・事実を作らないこと。'
       + 'executiveSummary は 3〜5 文（マークダウン可）。kind は win / issue / opportunity、'
       + 'priority は high / mid / low。各 title は 40 字以内・detail は具体的かつ簡潔に（最大 各 5 件）。',
-    prompt: `# メディア集計（${metrics.periodFrom}〜${metrics.periodTo}・${metrics.days} 日間）\n${JSON.stringify(metrics, null, 1)}`,
+    prompt: `# メディア集計（${metrics.periodFrom}〜${metrics.periodTo}・${metrics.days} 日間）\n${JSON.stringify(metrics, null, 1)}${externalBlock}`,
     schema: {
       type: 'object',
       properties: {
@@ -885,20 +987,20 @@ async function llmArticleDraft(env: Env, input: ArticleGenInput): Promise<Genera
 /**
  * OAuth コールバック（認証ヘッダなしのブラウザリダイレクトで届くため、/v1/* の認証より前に登録する。
  * 本人性は ①一回性・10 分 TTL の state ノンス ②Google アカウント email と members.email の突合の
- * 2 段で担保する（calendar と同型のアカウントリンク CSRF 対策）。復帰先は /media/settings
+ * 2 段で担保する（calendar と同型のアカウントリンク CSRF 対策）。復帰先は /media/settings?...&channel=
  */
 export function mediaOauthCallback(pool: pg.Pool, env: Env) {
   return async (c: Context) => {
     const frontOrigin = env.corsOrigins[0] ?? ''
     const back = (q: string) => c.redirect(`${frontOrigin}/#/media/settings?${q}`, 302)
-    const fail = (reason: string, segmentId = '') =>
-      back(`ga=error&reason=${encodeURIComponent(reason)}${segmentId ? `&segment=${encodeURIComponent(segmentId)}` : ''}`)
+    const fail = (reason: string, channelId = '') =>
+      back(`ga=error&reason=${encodeURIComponent(reason)}${channelId ? `&channel=${encodeURIComponent(channelId)}` : ''}`)
     if (!googleOauthEnabled(env)) return fail('not-configured')
     const state = c.req.query('state') ?? ''
     const code = c.req.query('code') ?? ''
     const st = await consumeState(pool, state)
     const oauthError = c.req.query('error')
-    if (oauthError) return fail(oauthError === 'access_denied' ? 'denied' : 'oauth-error', st?.segmentId ?? '')
+    if (oauthError) return fail(oauthError === 'access_denied' ? 'denied' : 'oauth-error', st?.channelId ?? '')
     if (!st || !code) return fail('invalid-state')
     try {
       const res = await fetch(GOOGLE_TOKEN_URL, {
@@ -915,7 +1017,7 @@ export function mediaOauthCallback(pool: pg.Pool, env: Env) {
       })
       if (!res.ok) {
         console.warn('media oauth exchange failed:', res.status, (await res.text()).slice(0, 200))
-        return fail('token-exchange', st.segmentId)
+        return fail('token-exchange', st.channelId)
       }
       const body = await res.json() as {
         access_token: string; refresh_token?: string; expires_in: number; scope?: string; id_token?: string
@@ -927,45 +1029,50 @@ export function mediaOauthCallback(pool: pg.Pool, env: Env) {
       const memberEmail = memberRows[0]?.email?.toLowerCase() ?? null
       if (!googleEmail || !memberEmail || googleEmail !== memberEmail) {
         console.warn('media oauth account mismatch:', st.memberId)
-        return fail('account-mismatch', st.segmentId)
+        return fail('account-mismatch', st.channelId)
       }
       // 再連携時に refresh_token が返らないことがある（既存を保持）。選択済みプロパティも保持する
       // （再連携 = トークン更新であり、プロパティ選択のやり直しを強制しない = 冪等）
       await pool.query(
         `INSERT INTO media_ga_tokens
-           (segment_id, access_token_enc, refresh_token_enc, expires_at, scope, connected_by)
+           (channel_id, access_token_enc, refresh_token_enc, expires_at, scope, connected_by)
          VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT (segment_id) DO UPDATE SET
+         ON CONFLICT (channel_id) DO UPDATE SET
            access_token_enc = EXCLUDED.access_token_enc,
            refresh_token_enc = COALESCE(EXCLUDED.refresh_token_enc, media_ga_tokens.refresh_token_enc),
            expires_at = EXCLUDED.expires_at, scope = EXCLUDED.scope,
            connected_by = EXCLUDED.connected_by, connected_at = now(), updated_at = now()`,
-        [st.segmentId, encryptSecret(body.access_token, env.tokenEncryptionKey),
+        [st.channelId, encryptSecret(body.access_token, env.tokenEncryptionKey),
           body.refresh_token ? encryptSecret(body.refresh_token, env.tokenEncryptionKey) : null,
           new Date(Date.now() + body.expires_in * 1000).toISOString(), body.scope ?? '', st.memberId])
-      await clearMetricsCache(pool, st.segmentId)
-      return back(`ga=connected&segment=${encodeURIComponent(st.segmentId)}`)
+      await clearMetricsCache(pool, st.channelId)
+      return back(`ga=connected&channel=${encodeURIComponent(st.channelId)}`)
     } catch (e) {
       console.warn('media oauth callback failed:', (e as Error).message)
-      return fail('exchange-error', st.segmentId)
+      return fail('exchange-error', st.channelId)
     }
   }
 }
 
 // ---------- ルート ----------
 
-const GENERATED_COLS = `g.id, g.segment_id AS "segmentId", g.brief_id AS "briefId", g.payload, g.llm,
+const GENERATED_COLS = `g.id, g.channel_id AS "channelId", g.brief_id AS "briefId", g.payload, g.llm,
   g.adopted_article_id AS "adoptedArticleId", g.active,
   g.created_by AS "createdBy",
   to_char(g.created_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"') AS "createdAt"`
 
-const ARTICLE_COLS = `id, segment_id AS "segmentId", path, title, section,
+const ARTICLE_COLS = `id, channel_id AS "channelId", path, title, section,
   published_at::text AS "publishedAt", word_count AS "wordCount", status, origin,
   generated_article_id AS "generatedArticleId", active`
 
+const EXTERNAL_COLS = `id, channel_id AS "channelId", title, url, source,
+  published_at::text AS "publishedAt", body, notes, active,
+  created_by AS "createdBy",
+  to_char(created_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"') AS "createdAt"`
+
 interface GeneratedRow {
   id: string
-  segmentId: string
+  channelId: string
   briefId: string
   payload: GeneratedArticleDraft
   llm: boolean
@@ -981,12 +1088,133 @@ function flattenGenerated(row: GeneratedRow): Record<string, unknown> {
   return { ...payload, ...rest }
 }
 
+/** 外部記事の入力検証（純粋関数・単体テスト対象。title/body 必須・publishedAt は空可） */
+export interface ExternalArticleInput {
+  title: string
+  url: string
+  source: string
+  publishedAt: string | null
+  body: string
+  notes: string
+}
+export function externalArticleInputOf(body: Record<string, unknown>): ExternalArticleInput {
+  const title = capCp(String(body.title ?? '').trim(), 200)
+  const content = capCp(String(body.body ?? '').trim(), 50000)
+  if (!title) throw err('AKO-MEDIA-023', 'タイトルを入力してください', 400)
+  if (!content) throw err('AKO-MEDIA-023', '記事の原文（本文）を入力してください', 400)
+  const publishedAtRaw = String(body.publishedAt ?? '').trim()
+  if (publishedAtRaw && !/^\d{4}-\d{2}-\d{2}$/.test(publishedAtRaw)) {
+    throw err('AKO-MEDIA-023', 'publishedAt は YYYY-MM-DD 形式で指定してください', 400)
+  }
+  return {
+    title,
+    url: capCp(String(body.url ?? '').trim(), 500),
+    source: capCp(String(body.source ?? '').trim(), 100),
+    publishedAt: publishedAtRaw || null,
+    body: content,
+    notes: capCp(String(body.notes ?? '').trim(), 2000),
+  }
+}
+
 export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
   const app = new Hono()
 
+  // ---- チャンネル一覧（全ロール参照可。GA 接続状態を各行へ合成する）----
+  app.get('/channels', async (c) => {
+    const includeInactive = c.req.query('includeInactive') === '1'
+    const { rows } = await pool.query<ChannelRow & { propertyId: string | null; propertyName: string | null; accessTokenEnc: string | null; connectedAt: string | null }>(
+      `SELECT ${CHANNEL_COLS},
+              t.property_id AS "propertyId", t.property_name AS "propertyName",
+              t.access_token_enc AS "accessTokenEnc",
+              to_char(t.connected_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"') AS "connectedAt"
+       FROM media_channels ch LEFT JOIN media_ga_tokens t ON t.channel_id = ch.id
+       ${includeInactive ? '' : 'WHERE ch.active = true'}
+       ORDER BY ch.active DESC, ch.name, ch.id`)
+    const data = rows.map((r) => {
+      const decryptable = r.accessTokenEnc ? decryptSecret(r.accessTokenEnc, env.tokenEncryptionKey) !== null : false
+      const gaEnabled = googleOauthEnabled(env)
+      const connected = gaEnabled && decryptable && Boolean(r.propertyId)
+      return {
+        id: r.id, name: r.name, segmentId: r.segmentId, siteName: r.siteName, siteUrl: r.siteUrl,
+        analysisGoal: r.analysisGoal, targetAudience: r.targetAudience, defaultTone: r.defaultTone,
+        keywords: r.keywords, active: r.active,
+        gaConnected: connected,
+        gaPropertyId: connected ? r.propertyId : null,
+        gaPropertyName: connected ? r.propertyName : null,
+        gaConnectedAt: connected ? r.connectedAt : null,
+      }
+    })
+    return c.json({ data })
+  })
+
+  // ---- チャンネル作成（管理者のみ。name 必須・segmentId 任意）----
+  app.post('/channels', async (c) => {
+    const user = requireAdmin(c)
+    const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
+    const patch = settingsPatchOf(body)
+    if (!patch.name) throw err('AKO-MEDIA-020', 'チャンネル名を入力してください', 400)
+    const id = newId('mc')
+    const { rows } = await pool.query(
+      `INSERT INTO media_channels (id, name, segment_id, site_name, site_url, analysis_goal, target_audience, default_tone, keywords, active)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING ${CHANNEL_COLS}`,
+      [id, patch.name, patch.segmentId ?? null,
+        patch.siteName ?? '', patch.siteUrl ?? '', patch.analysisGoal ?? 'awareness',
+        patch.targetAudience ?? '', patch.defaultTone ?? 'formal',
+        JSON.stringify(patch.keywords ?? []), patch.active ?? true])
+    await audit(pool, {
+      actorId: user.id, action: 'create', entity: 'media_channels', entityId: id,
+      detail: `メディアチャンネルを作成: ${patch.name}`,
+    })
+    return c.json({ data: rows[0] }, 201)
+  })
+
+  // ---- チャンネル編集（管理者のみ。送ったキーのみ上書き = 未指定は保持）----
+  const updateChannel = async (c: Context) => {
+    const user = requireAdmin(c)
+    const id = c.req.param('id') ?? ''
+    const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
+    const patch = settingsPatchOf(body)
+    if (Object.hasOwn(patch, 'name') && !patch.name) throw err('AKO-MEDIA-020', 'チャンネル名を入力してください', 400)
+    const { assigns, values } = channelUpdateParts(patch)
+    const { rows } = await pool.query(
+      `UPDATE media_channels SET ${assigns.join(', ')} WHERE id = $1 RETURNING ${CHANNEL_COLS}`,
+      [id, ...values])
+    if (!rows[0]) throw err('AKO-MEDIA-021', '対象のメディアチャンネルが見つかりません', 404)
+    // site_name / segment 連携は metrics・統合の SoT に影響 → 導出キャッシュを破棄（原則6）
+    await clearMetricsCache(pool, id)
+    await audit(pool, {
+      actorId: user.id, action: 'update', entity: 'media_channels', entityId: id, detail: 'メディアチャンネルを更新',
+    })
+    return c.json({ data: rows[0] })
+  }
+  app.put('/channels/:id', updateChannel)
+  app.patch('/channels/:id', updateChannel)
+
+  // ---- チャンネルの取消（論理削除）・復元（原則9.5。管理者のみ）----
+  app.post('/channels/:id/archive', async (c) => {
+    const user = requireAdmin(c)
+    const id = c.req.param('id')
+    const { rowCount } = await pool.query(
+      `UPDATE media_channels SET active = false, updated_at = now() WHERE id = $1`, [id])
+    if (rowCount === 0) throw err('AKO-MEDIA-021', '対象のメディアチャンネルが見つかりません', 404)
+    await audit(pool, { actorId: user.id, action: 'update', entity: 'media_channels', entityId: id, detail: 'メディアチャンネルを取消（論理削除）' })
+    return c.json({ data: { id } })
+  })
+
+  app.post('/channels/:id/restore', async (c) => {
+    const user = requireAdmin(c)
+    const id = c.req.param('id')
+    const { rowCount } = await pool.query(
+      `UPDATE media_channels SET active = true, updated_at = now() WHERE id = $1`, [id])
+    if (rowCount === 0) throw err('AKO-MEDIA-021', '対象のメディアチャンネルが見つかりません', 404)
+    await audit(pool, { actorId: user.id, action: 'update', entity: 'media_channels', entityId: id, detail: 'メディアチャンネルを復元' })
+    return c.json({ data: { id } })
+  })
+
   // ---- GA 連携状態（設定未投入なら enabled=false でフロントは連携 UI を隠す）----
   app.get('/status', async (c) => {
-    const segmentId = segmentIdOf(c.req.query('segmentId'))
+    const channelId = channelIdOf(c.req.query('channelId'))
     if (!googleOauthEnabled(env)) {
       return c.json({ data: { enabled: false, connected: false, needsProperty: false, propertyId: null, propertyName: null, connectedAt: null } })
     }
@@ -999,7 +1227,7 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
       `SELECT property_id AS "propertyId", property_name AS "propertyName",
               access_token_enc AS "accessTokenEnc",
               to_char(connected_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"') AS "connectedAt"
-       FROM media_ga_tokens WHERE segment_id = $1`, [segmentId])
+       FROM media_ga_tokens WHERE channel_id = $1`, [channelId])
     const row = rows[0]
     // connected は「トークン行があり復号でき、プロパティ選択済み」。復号不能（鍵ローテーション後）は再連携導線へ
     const decryptable = row ? decryptSecret(row.accessTokenEnc, env.tokenEncryptionKey) !== null : false
@@ -1021,7 +1249,7 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
   app.get('/oauth/url', async (c) => {
     requireEnabled(env)
     const user = requireAdmin(c)
-    const segmentId = segmentIdOf(c.req.query('segmentId'))
+    const channelId = channelIdOf(c.req.query('channelId'))
     const params = new URLSearchParams({
       client_id: env.googleOauthClientId,
       redirect_uri: redirectUri(c),
@@ -1029,7 +1257,7 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
       scope: SCOPES,
       access_type: 'offline',
       prompt: 'consent',
-      state: await issueState(pool, user.id, segmentId),
+      state: await issueState(pool, user.id, channelId),
     })
     return c.json({ data: { url: `${GOOGLE_AUTH_URL}?${params.toString()}` } })
   })
@@ -1038,8 +1266,8 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
   app.get('/properties', async (c) => {
     requireEnabled(env)
     requireAdmin(c)
-    const segmentId = segmentIdOf(c.req.query('segmentId'))
-    const access = await gaAccess(pool, env, segmentId)
+    const channelId = channelIdOf(c.req.query('channelId'))
+    const access = await gaAccess(pool, env, channelId)
     if (!access?.token) {
       throw err('AKO-MEDIA-003', 'Google Analytics が未連携です。先に Google アカウントを連携してください', 409)
     }
@@ -1096,34 +1324,34 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
     requireEnabled(env)
     const user = requireAdmin(c)
     const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
-    const segmentId = segmentIdOf(body.segmentId)
+    const channelId = channelIdOf(body.channelId)
     const propertyId = String(body.propertyId ?? '').trim()
     if (!/^properties\/\d+$/.test(propertyId)) {
       throw err('AKO-GEN-001', 'propertyId は properties/<数値> 形式で指定してください', 400)
     }
     const propertyName = capCp(String(body.propertyName ?? '').trim(), 200) || propertyId
     const { rowCount } = await pool.query(
-      `UPDATE media_ga_tokens SET property_id = $2, property_name = $3, updated_at = now() WHERE segment_id = $1`,
-      [segmentId, propertyId, propertyName])
+      `UPDATE media_ga_tokens SET property_id = $2, property_name = $3, updated_at = now() WHERE channel_id = $1`,
+      [channelId, propertyId, propertyName])
     if (rowCount === 0) {
       throw err('AKO-MEDIA-003', 'Google Analytics が未連携です。先に Google アカウントを連携してください', 409)
     }
-    await clearMetricsCache(pool, segmentId)
+    await clearMetricsCache(pool, channelId)
     await audit(pool, {
-      actorId: user.id, action: 'update', entity: 'media_ga_tokens', entityId: segmentId,
+      actorId: user.id, action: 'update', entity: 'media_ga_tokens', entityId: channelId,
       detail: `GA4 プロパティを設定: ${propertyName}`,
     })
-    return c.json({ data: { segmentId, propertyId, propertyName } })
+    return c.json({ data: { channelId, propertyId, propertyName } })
   })
 
   // ---- 連携解除（管理者のみ。revoke は補助処理・トークンは物理削除。設定・記事は残す = 非破壊。原則9.5）----
   app.post('/disconnect', async (c) => {
     const user = requireAdmin(c)
     const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
-    const segmentId = segmentIdOf(body.segmentId)
-    const access = googleOauthEnabled(env) ? await gaAccess(pool, env, segmentId) : null
-    await pool.query(`DELETE FROM media_ga_tokens WHERE segment_id = $1`, [segmentId])
-    await clearMetricsCache(pool, segmentId)
+    const channelId = channelIdOf(body.channelId)
+    const access = googleOauthEnabled(env) ? await gaAccess(pool, env, channelId) : null
+    await pool.query(`DELETE FROM media_ga_tokens WHERE channel_id = $1`, [channelId])
+    await clearMetricsCache(pool, channelId)
     if (access?.token) {
       try {
         await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(access.token)}`, {
@@ -1132,7 +1360,7 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
       } catch { /* 非ブロッキング（Google 側で失効済みでも解除は成立） */ }
     }
     await audit(pool, {
-      actorId: user.id, action: 'delete', entity: 'media_ga_tokens', entityId: segmentId,
+      actorId: user.id, action: 'delete', entity: 'media_ga_tokens', entityId: channelId,
       detail: 'GA 連携を解除',
     })
     return c.json({ data: { ok: true } })
@@ -1140,70 +1368,58 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
 
   // ---- GA 集計（全ロール参照可）----
   app.get('/metrics', async (c) => {
-    const segmentId = segmentIdOf(c.req.query('segmentId'))
+    const channelId = channelIdOf(c.req.query('channelId'))
     const days = Math.min(90, Math.max(7, Math.round(Number(c.req.query('days') ?? 28)) || 28))
     const force = c.req.query('force') === '1'
-    const result = await fetchMediaMetrics(pool, env, segmentId, days, force)
+    const result = await fetchMediaMetrics(pool, env, channelId, days, force)
     return c.json({ data: result })
   })
 
   // ---- 月次トレンド（統合 PDCA 用）----
   app.get('/monthly', async (c) => {
-    const segmentId = segmentIdOf(c.req.query('segmentId'))
+    const channelId = channelIdOf(c.req.query('channelId'))
     const months = Math.min(12, Math.max(2, Math.round(Number(c.req.query('months') ?? 6)) || 6))
     const force = c.req.query('force') === '1'
-    const points = await fetchMonthlyTrend(pool, env, segmentId, months, force)
+    const points = await fetchMonthlyTrend(pool, env, channelId, months, force)
     return c.json({ data: points })
   })
 
   // ---- 統合メトリクス（業務 × メディア。Phase C = サーバー組み立て）----
+  // 連携済みチャンネル（channel.segment_id あり）でのみ利用可能（未連携は AKO-MEDIA-022）。
   // GA 未連携でも売上軸は返す（mediaConnected=false = メディア軸 0 が正）。
   // GA 一時障害は mediaFailed=true（フロントは 0 描画せず失敗表示 + 再試行導線 = M1）
   app.get('/integrated', async (c) => {
-    const segmentId = segmentIdOf(c.req.query('segmentId'))
+    const channelId = channelIdOf(c.req.query('channelId'))
     const months = Math.min(12, Math.max(2, Math.round(Number(c.req.query('months') ?? 6)) || 6))
     const force = c.req.query('force') === '1'
-    const result = await buildIntegratedMetrics(pool, env, segmentId, months, force)
+    const result = await buildIntegratedMetrics(pool, env, channelId, months, force)
     return c.json({ data: result })
   })
 
-  // ---- メディア設定（AI 分析設定。GA 接続状態は /status が SoT）----
+  // ---- メディア設定（AI 分析設定・連携先。GA 接続状態は /status が SoT）----
   app.get('/settings', async (c) => {
-    const segmentId = segmentIdOf(c.req.query('segmentId'))
-    const { rows } = await pool.query(
-      `SELECT ${SETTING_COLS} FROM media_settings WHERE segment_id = $1`, [segmentId])
-    // 未設定は null（フロントが表示既定 defaultMediaSetting で補い、初回保存で materialize する）
-    return c.json({ data: rows[0] ?? null })
+    const channelId = channelIdOf(c.req.query('channelId'))
+    const row = await channelRow(pool, channelId)
+    // 未作成は null（フロントが表示既定 defaultMediaChannel で補う）
+    return c.json({ data: row })
   })
 
+  // 設定 PUT = 既存チャンネル行の部分更新（送ったキーのみ上書き）。チャンネル未作成は 404（作成は POST /channels）
   app.put('/settings', async (c) => {
     const user = requireAdmin(c)
     const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
-    const segmentId = segmentIdOf(body.segmentId)
+    const channelId = channelIdOf(body.channelId)
     const patch = settingsPatchOf(body)
-    // 部分更新: body に実在するキーのみ EXCLUDED から反映し、送っていない列は既存値を保持する。
-    // 行が無ければ既定値 + patch で materialize（upsert = 冪等）
-    const setCols: string[] = ['updated_at = now()']
-    if (patch.siteName !== undefined) setCols.push('site_name = EXCLUDED.site_name')
-    if (patch.siteUrl !== undefined) setCols.push('site_url = EXCLUDED.site_url')
-    if (patch.analysisGoal !== undefined) setCols.push('analysis_goal = EXCLUDED.analysis_goal')
-    if (patch.targetAudience !== undefined) setCols.push('target_audience = EXCLUDED.target_audience')
-    if (patch.defaultTone !== undefined) setCols.push('default_tone = EXCLUDED.default_tone')
-    if (patch.keywords !== undefined) setCols.push('keywords = EXCLUDED.keywords')
-    if (patch.active !== undefined) setCols.push('active = EXCLUDED.active')
+    if (Object.hasOwn(patch, 'name') && !patch.name) throw err('AKO-MEDIA-020', 'チャンネル名を入力してください', 400)
+    const { assigns, values } = channelUpdateParts(patch)
     const { rows } = await pool.query(
-      `INSERT INTO media_settings (id, segment_id, site_name, site_url, analysis_goal, target_audience, default_tone, keywords, active)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       ON CONFLICT (segment_id) DO UPDATE SET ${setCols.join(', ')}
-       RETURNING ${SETTING_COLS}`,
-      [newId('ms'), segmentId,
-        patch.siteName ?? '', patch.siteUrl ?? '', patch.analysisGoal ?? 'awareness',
-        patch.targetAudience ?? '', patch.defaultTone ?? 'formal',
-        JSON.stringify(patch.keywords ?? []), patch.active ?? true])
-    // siteName は metrics ペイロードに含まれるため、設定変更 = SoT の変化として導出キャッシュを破棄（m8）
-    await clearMetricsCache(pool, segmentId)
+      `UPDATE media_channels SET ${assigns.join(', ')} WHERE id = $1 RETURNING ${CHANNEL_COLS}`,
+      [channelId, ...values])
+    if (!rows[0]) throw err('AKO-MEDIA-021', '対象のメディアチャンネルが見つかりません', 404)
+    // siteName / 連携は metrics・統合の SoT に影響するため導出キャッシュを破棄（m8・原則6）
+    await clearMetricsCache(pool, channelId)
     await audit(pool, {
-      actorId: user.id, action: 'update', entity: 'media_settings', entityId: segmentId,
+      actorId: user.id, action: 'update', entity: 'media_channels', entityId: channelId,
       detail: 'メディア設定を更新',
     })
     return c.json({ data: rows[0] })
@@ -1211,12 +1427,12 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
 
   // ---- 記事インベントリ ----
   app.get('/articles', async (c) => {
-    const segmentId = segmentIdOf(c.req.query('segmentId'))
+    const channelId = channelIdOf(c.req.query('channelId'))
     const includeInactive = c.req.query('includeInactive') === '1'
     const { rows } = await pool.query(
       `SELECT ${ARTICLE_COLS} FROM media_articles
-       WHERE segment_id = $1 ${includeInactive ? '' : 'AND active = true'}
-       ORDER BY published_at DESC, id LIMIT 1000`, [segmentId])
+       WHERE channel_id = $1 ${includeInactive ? '' : 'AND active = true'}
+       ORDER BY published_at DESC, id LIMIT 1000`, [channelId])
     return c.json({ data: rows })
   })
 
@@ -1225,7 +1441,7 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
   app.post('/articles', async (c) => {
     const user = requireAdmin(c)
     const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
-    const segmentId = segmentIdOf(body.segmentId)
+    const channelId = channelIdOf(body.channelId)
     const path = String(body.path ?? '').trim()
     const title = capCp(String(body.title ?? '').trim(), 200)
     const section = capCp(String(body.section ?? '').trim(), 40)
@@ -1240,19 +1456,19 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
     let rows: unknown[]
     try {
       const result = await pool.query(
-        `INSERT INTO media_articles (id, segment_id, path, title, section, published_at, word_count, status, origin)
+        `INSERT INTO media_articles (id, channel_id, path, title, section, published_at, word_count, status, origin)
          VALUES ($1, $2, $3, $4, $5, $6::date, $7, $8, 'seed')
          RETURNING ${ARTICLE_COLS}`,
-        [id, segmentId, path, title, section, publishedAt, wordCount, status])
+        [id, channelId, path, title, section, publishedAt, wordCount, status])
       rows = result.rows
     } catch (e) {
-      // 部分一意 INDEX（segment_id, path WHERE active）違反 = 再送・二重クリックの重複登録（m5。冪等の案内）
+      // 部分一意 INDEX（channel_id, path WHERE active）違反 = 再送・二重クリックの重複登録（m5。冪等の案内）
       if ((e as { code?: string }).code === '23505') {
         throw err('AKO-MEDIA-008', '同じパスの記事が既に登録されています', 409)
       }
       throw e
     }
-    await clearMetricsCache(pool, segmentId)
+    await clearMetricsCache(pool, channelId)
     await audit(pool, {
       actorId: user.id, action: 'create', entity: 'media_articles', entityId: id,
       detail: `記事を登録: ${title}`,
@@ -1264,10 +1480,10 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
   app.post('/articles/:id/deactivate', async (c) => {
     const user = requireAdmin(c)
     const id = c.req.param('id')
-    const { rows } = await pool.query<{ segmentId: string }>(
-      `UPDATE media_articles SET active = false, updated_at = now() WHERE id = $1 RETURNING segment_id AS "segmentId"`, [id])
+    const { rows } = await pool.query<{ channelId: string }>(
+      `UPDATE media_articles SET active = false, updated_at = now() WHERE id = $1 RETURNING channel_id AS "channelId"`, [id])
     if (!rows[0]) throw err('AKO-MEDIA-007', '対象の記事が見つかりません', 404)
-    await clearMetricsCache(pool, rows[0].segmentId)
+    await clearMetricsCache(pool, rows[0].channelId)
     await audit(pool, { actorId: user.id, action: 'update', entity: 'media_articles', entityId: id, detail: '記事を取消（論理削除）' })
     return c.json({ data: { id } })
   })
@@ -1275,10 +1491,10 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
   app.post('/articles/:id/restore', async (c) => {
     const user = requireAdmin(c)
     const id = c.req.param('id')
-    let rows: { segmentId: string }[]
+    let rows: { channelId: string }[]
     try {
-      const result = await pool.query<{ segmentId: string }>(
-        `UPDATE media_articles SET active = true, updated_at = now() WHERE id = $1 RETURNING segment_id AS "segmentId"`, [id])
+      const result = await pool.query<{ channelId: string }>(
+        `UPDATE media_articles SET active = true, updated_at = now() WHERE id = $1 RETURNING channel_id AS "channelId"`, [id])
       rows = result.rows
     } catch (e) {
       // 同一パスの有効な記事が既に存在する場合（取消後に再登録された等）は復元できない（部分一意 INDEX との整合）
@@ -1288,7 +1504,7 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
       throw e
     }
     if (!rows[0]) throw err('AKO-MEDIA-007', '対象の記事が見つかりません', 404)
-    await clearMetricsCache(pool, rows[0].segmentId)
+    await clearMetricsCache(pool, rows[0].channelId)
     await audit(pool, { actorId: user.id, action: 'update', entity: 'media_articles', entityId: id, detail: '記事を復元' })
     return c.json({ data: { id } })
   })
@@ -1297,7 +1513,7 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
   app.post('/articles/generate', async (c) => {
     const user = c.get('user')
     const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
-    const segmentId = segmentIdOf(body.segmentId)
+    const channelId = channelIdOf(body.channelId)
     const topic = capCp(String(body.topic ?? '').trim(), 100)
     const keyword = capCp(String(body.keyword ?? '').trim(), 100)
     if (!topic && !keyword) throw err('AKO-MEDIA-011', 'お題またはキーワードを入力してください', 400)
@@ -1308,22 +1524,21 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
     if (!(ARTICLE_QUALITIES as string[]).includes(quality)) throw err('AKO-GEN-001', 'quality が不正です', 400)
     if (!(ARTICLE_TONES as string[]).includes(tone)) throw err('AKO-GEN-001', 'tone が不正です', 400)
     const fromInsightId = typeof body.fromInsightId === 'string' && body.fromInsightId ? body.fromInsightId : null
-    // セグメント名はクライアントから受ける（表示・文面用途のみ。business_segments はテーブル化済みだが
-    // サーバー解決への引き上げは Phase C の参照整合判断と併せて行う = 挙動維持）
+    // チャンネル名/連携業態名はクライアントから受ける（表示・文面用途のみ）
     const segmentName = capCp(String(body.segmentName ?? '').trim(), 100)
 
-    const { rows: settingRows } = await pool.query<{ siteName: string; targetAudience: string }>(
-      `SELECT site_name AS "siteName", target_audience AS "targetAudience" FROM media_settings WHERE segment_id = $1`,
-      [segmentId])
-    const setting = settingRows[0]
+    const { rows: channelRows } = await pool.query<{ siteName: string; targetAudience: string; name: string }>(
+      `SELECT site_name AS "siteName", target_audience AS "targetAudience", name FROM media_channels WHERE id = $1`,
+      [channelId])
+    const setting = channelRows[0]
     const audience = capCp(String(body.audience ?? '').trim(), 200) || setting?.targetAudience || '読者'
 
     // 過去分析からの生成: 保管済みメディアインサイトのヒント文を生成の前提に添える
     let insightHints: string[] = []
     if (fromInsightId) {
       const { rows } = await pool.query<{ insight: unknown }>(
-        `SELECT insight FROM media_insights WHERE id = $1 AND segment_id = $2 AND scope = 'media'`,
-        [fromInsightId, segmentId])
+        `SELECT insight FROM media_insights WHERE id = $1 AND channel_id = $2 AND scope = 'media'`,
+        [fromInsightId, channelId])
       insightHints = rows[0] ? insightHintsOf(rows[0].insight) : []
     }
 
@@ -1331,8 +1546,8 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
       topic, keyword,
       purpose: purpose as ArticlePurpose, quality: quality as ArticleQuality, tone: tone as ArticleTone,
       audience,
-      siteName: setting?.siteName || segmentName || 'メディア',
-      segmentName: segmentName || setting?.siteName || 'メディア',
+      siteName: setting?.siteName || setting?.name || segmentName || 'メディア',
+      segmentName: segmentName || setting?.name || setting?.siteName || 'メディア',
       insightHints,
     }
     // Vertex AI → 失敗・無効環境は決定的テンプレート合成へフォールバック（原則4。llm フラグで区別）
@@ -1345,13 +1560,13 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
     try {
       await client.query('BEGIN')
       await client.query(
-        `INSERT INTO media_article_briefs (id, segment_id, topic, keyword, purpose, quality, tone, audience, from_insight_id, created_by)
+        `INSERT INTO media_article_briefs (id, channel_id, topic, keyword, purpose, quality, tone, audience, from_insight_id, created_by)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-        [briefId, segmentId, topic, keyword, purpose, quality, tone, audience, fromInsightId, user.id])
+        [briefId, channelId, topic, keyword, purpose, quality, tone, audience, fromInsightId, user.id])
       await client.query(
-        `INSERT INTO media_generated_articles (id, segment_id, brief_id, payload, llm, created_by)
+        `INSERT INTO media_generated_articles (id, channel_id, brief_id, payload, llm, created_by)
          VALUES ($1, $2, $3, $4, $5, $6)`,
-        [genId, segmentId, briefId, JSON.stringify(draft), !!llmDraft, user.id])
+        [genId, channelId, briefId, JSON.stringify(draft), !!llmDraft, user.id])
       await client.query('COMMIT')
     } catch (e) {
       await client.query('ROLLBACK').catch(() => {})
@@ -1366,10 +1581,10 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
 
   // ---- 生成記事の一覧（取消済み含む全件。表示側でフィルタ）----
   app.get('/generated', async (c) => {
-    const segmentId = segmentIdOf(c.req.query('segmentId'))
+    const channelId = channelIdOf(c.req.query('channelId'))
     const { rows } = await pool.query<GeneratedRow>(
       `SELECT ${GENERATED_COLS} FROM media_generated_articles g
-       WHERE g.segment_id = $1 ORDER BY g.created_at DESC, g.id LIMIT 500`, [segmentId])
+       WHERE g.channel_id = $1 ORDER BY g.created_at DESC, g.id LIMIT 500`, [channelId])
     return c.json({ data: rows.map(flattenGenerated) })
   })
 
@@ -1393,15 +1608,15 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
       const articleId = newId('ma')
       // 分析の集計基準は前日（asOf）。採用直後に期間へ入るよう公開日を前日にする（mockup adopt と同じ判断）
       await client.query(
-        `INSERT INTO media_articles (id, segment_id, path, title, section, published_at, word_count, status, origin, generated_article_id)
+        `INSERT INTO media_articles (id, channel_id, path, title, section, published_at, word_count, status, origin, generated_article_id)
          VALUES ($1, $2, $3, $4, $5, $6::date, $7, 'published', 'generated', $8)`,
-        [articleId, g.segmentId, `/blog/gen-${articleId}`, capCp(g.payload.title, 200), section,
+        [articleId, g.channelId, `/blog/gen-${articleId}`, capCp(g.payload.title, 200), section,
           addDays(todayJst(), -1), g.payload.estWordCount, g.id])
       await client.query(
         `UPDATE media_generated_articles SET adopted_article_id = $2, updated_at = now() WHERE id = $1`,
         [id, articleId])
       await client.query('COMMIT')
-      await clearMetricsCache(pool, g.segmentId)
+      await clearMetricsCache(pool, g.channelId)
       await audit(pool, { actorId: user.id, action: 'create', entity: 'media_articles', entityId: articleId, detail: `生成記事を採用: ${g.payload.title}` })
       return c.json({ data: { id, articleId } })
     } catch (e) {
@@ -1427,7 +1642,7 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
       await client.query(`UPDATE media_articles SET active = false, updated_at = now() WHERE id = $1`, [g.adoptedArticleId])
       await client.query(`UPDATE media_generated_articles SET adopted_article_id = NULL, updated_at = now() WHERE id = $1`, [id])
       await client.query('COMMIT')
-      await clearMetricsCache(pool, g.segmentId)
+      await clearMetricsCache(pool, g.channelId)
       await audit(pool, { actorId: user.id, action: 'update', entity: 'media_articles', entityId: g.adoptedArticleId, detail: '生成記事の採用を取消' })
       return c.json({ data: { id } })
     } catch (e) {
@@ -1455,7 +1670,7 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
       await client.query(
         `UPDATE media_generated_articles SET active = false, adopted_article_id = NULL, updated_at = now() WHERE id = $1`, [id])
       await client.query('COMMIT')
-      await clearMetricsCache(pool, g.segmentId)
+      await clearMetricsCache(pool, g.channelId)
       await audit(pool, { actorId: user.id, action: 'update', entity: 'media_generated_articles', entityId: id, detail: '生成記事を取消（論理削除）' })
       return c.json({ data: { id } })
     } catch (e) {
@@ -1477,6 +1692,72 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
     return c.json({ data: { id } })
   })
 
+  // ---- 外部投稿記事（media インサイト生成の材料。取消/復元 = 原則9.5）----
+  app.get('/external-articles', async (c) => {
+    const channelId = channelIdOf(c.req.query('channelId'))
+    const includeInactive = c.req.query('includeInactive') === '1'
+    const { rows } = await pool.query(
+      `SELECT ${EXTERNAL_COLS} FROM media_external_articles
+       WHERE channel_id = $1 ${includeInactive ? '' : 'AND active = true'}
+       ORDER BY COALESCE(published_at, created_at::date) DESC, created_at DESC, id LIMIT 500`, [channelId])
+    return c.json({ data: rows })
+  })
+
+  app.post('/external-articles', async (c) => {
+    const user = requireAdmin(c)
+    const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
+    const channelId = channelIdOf(body.channelId)
+    const input = externalArticleInputOf(body)
+    const id = newId('mx')
+    const { rows } = await pool.query(
+      `INSERT INTO media_external_articles (id, channel_id, title, url, source, published_at, body, notes, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6::date, $7, $8, $9)
+       RETURNING ${EXTERNAL_COLS}`,
+      [id, channelId, input.title, input.url, input.source, input.publishedAt || null, input.body, input.notes, user.id])
+    // 外部記事は media インサイト生成の材料 → 導出キャッシュ（インサイト側は再生成で更新）に影響しないが
+    // 一貫性のため audit を残す
+    await audit(pool, {
+      actorId: user.id, action: 'create', entity: 'media_external_articles', entityId: id,
+      detail: `外部投稿記事を登録: ${input.title}`,
+    })
+    return c.json({ data: rows[0] }, 201)
+  })
+
+  app.patch('/external-articles/:id', async (c) => {
+    const user = requireAdmin(c)
+    const id = c.req.param('id')
+    const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
+    const input = externalArticleInputOf(body)
+    const { rows } = await pool.query(
+      `UPDATE media_external_articles
+       SET title = $2, url = $3, source = $4, published_at = $5::date, body = $6, notes = $7, updated_at = now()
+       WHERE id = $1 RETURNING ${EXTERNAL_COLS}`,
+      [id, input.title, input.url, input.source, input.publishedAt || null, input.body, input.notes])
+    if (!rows[0]) throw err('AKO-MEDIA-024', '対象の外部投稿記事が見つかりません', 404)
+    await audit(pool, { actorId: user.id, action: 'update', entity: 'media_external_articles', entityId: id, detail: '外部投稿記事を更新' })
+    return c.json({ data: rows[0] })
+  })
+
+  app.post('/external-articles/:id/archive', async (c) => {
+    const user = requireAdmin(c)
+    const id = c.req.param('id')
+    const { rowCount } = await pool.query(
+      `UPDATE media_external_articles SET active = false, updated_at = now() WHERE id = $1`, [id])
+    if (rowCount === 0) throw err('AKO-MEDIA-024', '対象の外部投稿記事が見つかりません', 404)
+    await audit(pool, { actorId: user.id, action: 'update', entity: 'media_external_articles', entityId: id, detail: '外部投稿記事を取消（論理削除）' })
+    return c.json({ data: { id } })
+  })
+
+  app.post('/external-articles/:id/restore', async (c) => {
+    const user = requireAdmin(c)
+    const id = c.req.param('id')
+    const { rowCount } = await pool.query(
+      `UPDATE media_external_articles SET active = true, updated_at = now() WHERE id = $1`, [id])
+    if (rowCount === 0) throw err('AKO-MEDIA-024', '対象の外部投稿記事が見つかりません', 404)
+    await audit(pool, { actorId: user.id, action: 'update', entity: 'media_external_articles', entityId: id, detail: '外部投稿記事を復元' })
+    return c.json({ data: { id } })
+  })
+
   // 保管済みインサイトの参照列（warning = 劣化データ由来の告知。閲覧者にも生成時の集計状態を明示する）
   const INSIGHT_COLS = `mi.id, mi.period_key AS "periodKey", mi.metrics, mi.insight, mi.llm, mi.warning,
               to_char(mi.generated_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"') AS "generatedAt",
@@ -1484,25 +1765,24 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
 
   // ---- AI インサイト（保管済みの取得。未生成は null）----
   app.get('/insights', async (c) => {
-    const segmentId = segmentIdOf(c.req.query('segmentId'))
+    const channelId = channelIdOf(c.req.query('channelId'))
     const scope = c.req.query('scope')
     if (scope !== 'media' && scope !== 'integrated') throw err('AKO-GEN-001', 'scope は media / integrated を指定してください', 400)
     const { rows } = await pool.query(
       `SELECT ${INSIGHT_COLS}
        FROM media_insights mi LEFT JOIN members m ON m.id = mi.generated_by
-       WHERE mi.segment_id = $1 AND mi.scope = $2`, [segmentId, scope])
+       WHERE mi.channel_id = $1 AND mi.scope = $2`, [channelId, scope])
     return c.json({ data: rows[0] ?? null })
   })
 
   // ---- AI インサイトの生成・再生成（生成 → 保管 → 再生成で upsert 上書き = weekly_insights と同型）----
   // 認可の設計判断: 生成は全ロール可（mockup の分析ページと同じ可視性。generated_by を保存 = 誰の操作か追跡可能）。
-  // scope=integrated は Phase C で**サーバー組み立て**（buildIntegratedMetrics = 売上軸 sales_records +
-  // メディア軸 GA）へ引き上げ、クライアントからのメトリクス受領を廃止した = 申告値の改ざん余地なし
-  // （M2 の受容判断は解消。旧 normalizeIntegratedMetrics / AKO-MEDIA-016 は撤去 = 016 は欠番）
+  // scope=media は GA 集計 + 外部投稿記事の原文を材料に生成する。
+  // scope=integrated は連携済みチャンネルでのみ（buildIntegratedMetrics が未連携を AKO-MEDIA-022 で拒否）。
   app.post('/insights/generate', async (c) => {
     const user = c.get('user')
     const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
-    const segmentId = segmentIdOf(body.segmentId)
+    const channelId = channelIdOf(body.channelId)
     const scope = body.scope
     if (scope !== 'media' && scope !== 'integrated') throw err('AKO-GEN-001', 'scope は media / integrated を指定してください', 400)
 
@@ -1514,19 +1794,26 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
     if (scope === 'media') {
       // メディア単体: サーバーが GA から集計を組み立てる（キャッシュ利用）。
       // 内訳の部分失敗（warning）は捨てずに保管・返却する（劣化データ由来の告知 = 原則4。m11）
-      const result = await fetchMediaMetrics(pool, env, segmentId, 28, false)
+      const result = await fetchMediaMetrics(pool, env, channelId, 28, false)
+      // 外部投稿記事の原文を材料に取り込む（active のみ。新機能。原則4: heuristic/LLM の両経路へ反映）
+      const { rows: extRows } = await pool.query<{ title: string; source: string; body: string }>(
+        `SELECT title, source, body FROM media_external_articles
+         WHERE channel_id = $1 AND active = true ORDER BY COALESCE(published_at, created_at::date) DESC LIMIT 20`,
+        [channelId])
+      const materials = externalMaterialOf(extRows)
       metrics = result.metrics
       warning = result.warning ? `部分的な集計から生成: ${result.warning}` : null
-      const llmRes = await llmMediaInsight(env, result.metrics)
-      insight = llmRes ?? heuristicMediaInsight(result.metrics)
+      const llmRes = await llmMediaInsight(env, result.metrics, materials)
+      insight = applyExternalMaterial(llmRes ?? heuristicMediaInsight(result.metrics), materials)
       llm = !!llmRes
       periodKey = `${result.metrics.periodFrom}_${result.metrics.periodTo}`
     } else {
-      // 統合（業務 × メディア）: サーバー組み立て（Phase C）。GA 連携済みで月次が取れない場合は
-      // 生成しない（メディア軸 0 の虚偽データ由来インサイトを保管させない = M1 をサーバー側でも強制）
+      // 統合（業務 × メディア）: サーバー組み立て（Phase C）。連携済みチャンネルのみ（buildIntegratedMetrics が
+      // 未連携を AKO-MEDIA-022 で拒否）。GA 連携済みで月次が取れない場合は生成しない（メディア軸 0 の
+      // 虚偽データ由来インサイトを保管させない = M1 をサーバー側でも強制）
       const monthsRaw = Number(body.months ?? 6)
       const monthsCount = Math.min(12, Math.max(2, Number.isFinite(monthsRaw) ? Math.round(monthsRaw) : 6))
-      const built = await buildIntegratedMetrics(pool, env, segmentId, monthsCount, false)
+      const built = await buildIntegratedMetrics(pool, env, channelId, monthsCount, false)
       if (built.mediaFailed) {
         throw err('AKO-MEDIA-004', 'Google Analytics の月次トレンドを取得できないため、統合インサイトを生成できません。時間をおいて再試行してください', 502)
       }
@@ -1538,16 +1825,16 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
     }
 
     await pool.query(
-      `INSERT INTO media_insights (id, segment_id, scope, period_key, metrics, insight, llm, warning, generated_by)
+      `INSERT INTO media_insights (id, channel_id, scope, period_key, metrics, insight, llm, warning, generated_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       ON CONFLICT (segment_id, scope) DO UPDATE SET
+       ON CONFLICT (channel_id, scope) DO UPDATE SET
          period_key = EXCLUDED.period_key, metrics = EXCLUDED.metrics, insight = EXCLUDED.insight,
          llm = EXCLUDED.llm, warning = EXCLUDED.warning, generated_by = EXCLUDED.generated_by, generated_at = now()`,
-      [newId('mi'), segmentId, scope, periodKey, JSON.stringify(metrics), JSON.stringify(insight), llm, warning, user.id])
+      [newId('mi'), channelId, scope, periodKey, JSON.stringify(metrics), JSON.stringify(insight), llm, warning, user.id])
     const { rows } = await pool.query(
       `SELECT ${INSIGHT_COLS}
        FROM media_insights mi LEFT JOIN members m ON m.id = mi.generated_by
-       WHERE mi.segment_id = $1 AND mi.scope = $2`, [segmentId, scope])
+       WHERE mi.channel_id = $1 AND mi.scope = $2`, [channelId, scope])
     return c.json({ data: rows[0] })
   })
 

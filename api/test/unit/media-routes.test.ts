@@ -10,10 +10,12 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
+  applyExternalMaterial, externalArticleInputOf, externalMaterialOf,
   gaErrorDetailOf, gaFailReasonOf, insightHintsOf, normalizeArticleDraft,
   normalizeIntegratedInsight, normalizeMediaInsight, settingsPatchOf, shouldFanOut,
 } from '../../src/routes/media'
 import type { ArticleGenInput } from '../../../shared/domain/media-article'
+import type { MediaInsight } from '../../../shared/domain/media-insight'
 import { heuristicIntegratedInsight, type IntegratedMetrics } from '../../../shared/domain/media-integrated'
 
 describe('settingsPatchOf（部分更新のキーフィルタ）', () => {
@@ -45,6 +47,69 @@ describe('settingsPatchOf（部分更新のキーフィルタ）', () => {
   it('有効な区分値は通る', () => {
     expect(settingsPatchOf({ analysisGoal: 'leadgen', defaultTone: 'expert' }))
       .toEqual({ analysisGoal: 'leadgen', defaultTone: 'expert' })
+  })
+
+  it('name / segmentId も送ったキーのみ反映（segmentId="" は連携解除 = null）', () => {
+    expect(settingsPatchOf({ name: ' チャンネルA ' })).toEqual({ name: 'チャンネルA' })
+    expect(settingsPatchOf({ segmentId: 'seg-01' })).toEqual({ segmentId: 'seg-01' })
+    // 空 segmentId は単体化（null）。キーは存在するが値は null
+    const unlink = settingsPatchOf({ segmentId: '' })
+    expect(Object.hasOwn(unlink, 'segmentId')).toBe(true)
+    expect(unlink.segmentId).toBeNull()
+    // name/segmentId を送らなければキーは存在しない（未送信フィールドの保持）
+    expect(Object.hasOwn(settingsPatchOf({ siteName: 'x' }), 'name')).toBe(false)
+    expect(Object.hasOwn(settingsPatchOf({ siteName: 'x' }), 'segmentId')).toBe(false)
+  })
+})
+
+describe('externalArticleInputOf（外部投稿記事の入力検証）', () => {
+  it('title / body 必須（AKO-MEDIA-023）', () => {
+    expect(() => externalArticleInputOf({ body: 'b' })).toThrowError(/タイトル/)
+    expect(() => externalArticleInputOf({ title: 't' })).toThrowError(/原文/)
+  })
+
+  it('publishedAt は空可・不正形式は 400', () => {
+    expect(externalArticleInputOf({ title: 't', body: 'b' }).publishedAt).toBeNull()
+    expect(externalArticleInputOf({ title: 't', body: 'b', publishedAt: '2026-03-01' }).publishedAt).toBe('2026-03-01')
+    expect(() => externalArticleInputOf({ title: 't', body: 'b', publishedAt: '2026/03/01' })).toThrowError(/publishedAt/)
+  })
+
+  it('任意フィールドは trim して返す', () => {
+    const out = externalArticleInputOf({ title: ' T ', body: ' B ', url: ' u ', source: ' s ', notes: ' n ' })
+    expect(out).toMatchObject({ title: 'T', body: 'B', url: 'u', source: 's', notes: 'n' })
+  })
+})
+
+describe('externalMaterialOf / applyExternalMaterial（外部投稿記事のインサイト材料反映）', () => {
+  it('原文は 400 字で抜粋・title 空は除外・最大 20 件', () => {
+    const rows = [
+      { title: '記事1', source: 'note', body: 'あ'.repeat(500) },
+      { title: '', source: 'x', body: 'b' }, // title 空 = 除外
+    ]
+    const mats = externalMaterialOf(rows)
+    expect(mats).toHaveLength(1)
+    expect([...mats[0]!.bodyExcerpt].length).toBe(400)
+  })
+
+  it('材料 0 件はインサイトを素通し（変更なし）', () => {
+    const insight: MediaInsight = { executiveSummary: 's', siteStructure: [], articles: [], actions: [] }
+    expect(applyExternalMaterial(insight, [])).toBe(insight)
+  })
+
+  it('材料ありは articles 先頭に「外部投稿 N 件」の機会を追記する（heuristic/LLM 両経路へ同一適用）', () => {
+    const insight: MediaInsight = {
+      executiveSummary: 's',
+      siteStructure: [],
+      articles: [{ kind: 'win', title: '既存', detail: 'd' }],
+      actions: [],
+    }
+    const out = applyExternalMaterial(insight, [
+      { title: 'A', source: 'note', bodyExcerpt: '...' },
+      { title: 'B', source: '暮らしメディア', bodyExcerpt: '...' },
+    ])
+    expect(out.articles[0]!.kind).toBe('opportunity')
+    expect(out.articles[0]!.title).toContain('外部投稿 2 件')
+    expect(out.articles).toHaveLength(2) // 既存 + 追記
   })
 })
 

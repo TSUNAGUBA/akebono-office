@@ -28,7 +28,7 @@ import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
 import { generateJson } from '../lib/llm'
 import { activePermissionRules, subjectOf } from '../lib/permissions'
-import { buildIntegratedMetrics } from './media'
+import { buildSegmentIntegratedMetrics } from './media'
 
 /** 集計・トレンドの対象月数（mockup useDashboardInsight の MONTHS と一致） */
 const MONTHS = 6
@@ -79,12 +79,16 @@ interface SnapshotBuild {
 async function buildSnapshot(
   pool: pg.Pool, env: Env, segmentId: string, mediaAvailable: boolean,
 ): Promise<SnapshotBuild> {
-  const built = await buildIntegratedMetrics(pool, env, segmentId, MONTHS, false)
+  // F-41 は業態基点。業態に連携したメディアチャンネル（あれば）から統合メトリクスを組み立てる
+  const built = await buildSegmentIntegratedMetrics(pool, env, segmentId, MONTHS, false)
   const im = built.metrics
   const { rows: segRows } = await pool.query<{ name: string; industryType: string }>(
     `SELECT name, industry_type AS "industryType" FROM business_segments WHERE id = $1`, [segmentId])
+  // 記事数は業態に連携したチャンネル配下の記事を合算（0048 で media_articles は channel_id keying へ移行）
   const { rows: artRows } = await pool.query<{ count: number }>(
-    `SELECT COUNT(*)::int AS count FROM media_articles WHERE segment_id = $1 AND active`, [segmentId])
+    `SELECT COUNT(*)::int AS count FROM media_articles a
+       JOIN media_channels c ON c.id = a.channel_id
+      WHERE c.segment_id = $1 AND c.active AND a.active`, [segmentId])
   // メディア機能トグルが無効なら GA 連携済みでもメディア軸を無効化（指標・レポート・全社ロールアップを一貫）
   const connected = mediaAvailable && built.mediaConnected
   const snapshot: SegmentSnapshot = {

@@ -3879,27 +3879,53 @@ describe('オペレーター指示 2026-07-22: 明日の予定・全員の週報
   })
 })
 
-describe('メディア分析 F-40 の本実装（GA 連携・設定・記事インベントリ・生成・インサイト）', () => {
-  const SEG = 'seg-media-test'
+describe('メディア分析 F-40（独立チャンネル + 任意の業態連携。GA/設定/記事/生成/インサイト/外部記事）', () => {
+  let LINKED = '' // 連携チャンネル（segmentId = 'seg-media-linked'）
+  let SOLO = ''   // 単体チャンネル（segmentId = null）
+
+  it('チャンネル作成: name 必須（020）・作成は管理者のみ・連携/単体を一覧で区別', async () => {
+    // name 無しは AKO-MEDIA-020
+    const bad = await api('POST', '/v1/media/channels', { as: ADMIN, body: { segmentId: 'seg-media-linked' } })
+    expect(bad.status).toBe(400)
+    expect(bad.json.error?.code).toBe('AKO-MEDIA-020')
+    // 作成は管理者のみ
+    const denied = await api('POST', '/v1/media/channels', { as: MEMBER, body: { name: 'x' } })
+    expect(denied.status).toBe(403)
+    // 連携チャンネル（業態連携あり）
+    const linked = await api('POST', '/v1/media/channels', { as: ADMIN, body: { name: '連携メディア', segmentId: 'seg-media-linked' } })
+    expect(linked.status).toBe(201)
+    LINKED = (linked.json.data as { id: string; segmentId: string | null }).id
+    expect((linked.json.data as { segmentId: string | null }).segmentId).toBe('seg-media-linked')
+    // 単体チャンネル（連携は必須でない）
+    const solo = await api('POST', '/v1/media/channels', { as: ADMIN, body: { name: '単体メディア' } })
+    expect(solo.status).toBe(201)
+    SOLO = (solo.json.data as { id: string; segmentId: string | null }).id
+    expect((solo.json.data as { segmentId: string | null }).segmentId).toBeNull()
+    // 一覧に両方出る（GA 未設定 = gaConnected false）
+    const list = await api('GET', '/v1/media/channels', { as: MEMBER })
+    const rows = list.json.data as { id: string; segmentId: string | null; gaConnected: boolean }[]
+    expect(rows.find(c => c.id === LINKED)).toMatchObject({ segmentId: 'seg-media-linked', gaConnected: false })
+    expect(rows.find(c => c.id === SOLO)).toMatchObject({ segmentId: null, gaConnected: false })
+  })
 
   it('GA 未設定環境: status は enabled=false・集計/同意 URL は AKO-MEDIA-005', async () => {
-    const status = await api('GET', `/v1/media/status?segmentId=${SEG}`, { as: MEMBER })
+    const status = await api('GET', `/v1/media/status?channelId=${LINKED}`, { as: MEMBER })
     expect(status.status).toBe(200)
     expect(status.json.data).toMatchObject({ enabled: false, connected: false })
-    const metrics = await api('GET', `/v1/media/metrics?segmentId=${SEG}`, { as: MEMBER })
+    const metrics = await api('GET', `/v1/media/metrics?channelId=${LINKED}`, { as: MEMBER })
     expect(metrics.status).toBe(409)
     expect(metrics.json.error?.code).toBe('AKO-MEDIA-005')
-    const url = await api('GET', `/v1/media/oauth/url?segmentId=${SEG}`, { as: ADMIN })
+    const url = await api('GET', `/v1/media/oauth/url?channelId=${LINKED}`, { as: ADMIN })
     expect(url.status).toBe(409)
     expect(url.json.error?.code).toBe('AKO-MEDIA-005')
   })
 
-  it('メディア設定: 部分更新は送ったキーのみ上書き = 送っていないフィールドが保持される（Zod v4 注意の回帰）', async () => {
-    // 初回保存（materialize）
+  it('チャンネル設定: 部分更新は送ったキーのみ上書き = 送っていないフィールドが保持される（Zod v4 注意の回帰）', async () => {
+    // 全設定を保存
     const first = await api('PUT', '/v1/media/settings', {
       as: ADMIN,
       body: {
-        segmentId: SEG, siteName: '器マガジン', siteUrl: 'https://example.com',
+        channelId: LINKED, siteName: '暮らしの器マガジン', siteUrl: 'https://example.com',
         analysisGoal: 'conversion', targetAudience: '30〜50 代', defaultTone: 'friendly',
         keywords: ['器', '選び方'],
       },
@@ -3907,159 +3933,227 @@ describe('メディア分析 F-40 の本実装（GA 連携・設定・記事イ�
     expect(first.status).toBe(200)
     // siteName のみ送る部分更新
     const patch = await api('PUT', '/v1/media/settings', {
-      as: ADMIN, body: { segmentId: SEG, siteName: '暮らしの器マガジン' },
+      as: ADMIN, body: { channelId: LINKED, siteName: '暮らしの器マガジン（改）' },
     })
     expect(patch.status).toBe(200)
-    const got = await api('GET', `/v1/media/settings?segmentId=${SEG}`, { as: MEMBER })
-    const row = got.json.data as { siteName: string; siteUrl: string; analysisGoal: string; targetAudience: string; defaultTone: string; keywords: string[] }
-    expect(row.siteName).toBe('暮らしの器マガジン')
+    const got = await api('GET', `/v1/media/settings?channelId=${LINKED}`, { as: MEMBER })
+    const row = got.json.data as { siteName: string; siteUrl: string; analysisGoal: string; targetAudience: string; defaultTone: string; keywords: string[]; segmentId: string | null }
+    expect(row.siteName).toBe('暮らしの器マガジン（改）')
     // 送っていないフィールドが既定値で上書きされていないこと（部分更新の要）
     expect(row.siteUrl).toBe('https://example.com')
     expect(row.analysisGoal).toBe('conversion')
     expect(row.targetAudience).toBe('30〜50 代')
     expect(row.defaultTone).toBe('friendly')
     expect(row.keywords).toEqual(['器', '選び方'])
+    expect(row.segmentId).toBe('seg-media-linked') // 連携も保持
   })
 
-  it('メディア設定: 書込は管理者のみ（AKO-AUTH-003）・不正な区分値は AKO-GEN-001', async () => {
-    const denied = await api('PUT', '/v1/media/settings', { as: MEMBER, body: { segmentId: SEG, siteName: 'x' } })
+  it('設定・チャンネル編集は管理者のみ（AKO-AUTH-003）・不正な区分値は AKO-GEN-001・未存在は 021', async () => {
+    const denied = await api('PUT', '/v1/media/settings', { as: MEMBER, body: { channelId: LINKED, siteName: 'x' } })
     expect(denied.status).toBe(403)
     expect(denied.json.error?.code).toBe('AKO-AUTH-003')
-    const bad = await api('PUT', '/v1/media/settings', { as: ADMIN, body: { segmentId: SEG, analysisGoal: 'hack' } })
+    const bad = await api('PUT', '/v1/media/settings', { as: ADMIN, body: { channelId: LINKED, analysisGoal: 'hack' } })
     expect(bad.status).toBe(400)
     expect(bad.json.error?.code).toBe('AKO-GEN-001')
+    const missing = await api('PUT', '/v1/media/settings', { as: ADMIN, body: { channelId: 'mc-nope', siteName: 'x' } })
+    expect(missing.status).toBe(404)
+    expect(missing.json.error?.code).toBe('AKO-MEDIA-021')
   })
 
   it('記事インベントリ: 手動登録（管理者）→ 一覧 → 取消（論理削除）→ 復元（原則9.5）', async () => {
     const denied = await api('POST', '/v1/media/articles', {
-      as: MEMBER, body: { segmentId: SEG, path: '/x', title: 'x', section: 'ブログ', publishedAt: '2026-01-01' },
+      as: MEMBER, body: { channelId: LINKED, path: '/x', title: 'x', section: 'ブログ', publishedAt: '2026-01-01' },
     })
     expect(denied.status).toBe(403)
     const created = await api('POST', '/v1/media/articles', {
       as: ADMIN,
-      body: { segmentId: SEG, path: '/blog/utsuwa', title: '器の選び方', section: 'ブログ', publishedAt: '2026-01-10', wordCount: 2000 },
+      body: { channelId: LINKED, path: '/blog/utsuwa', title: '器の選び方', section: 'ブログ', publishedAt: '2026-01-10', wordCount: 2000 },
     })
     expect(created.status).toBe(201)
     const articleId = (created.json.data as { id: string }).id
-    const list = await api('GET', `/v1/media/articles?segmentId=${SEG}`, { as: MEMBER })
+    const list = await api('GET', `/v1/media/articles?channelId=${LINKED}`, { as: MEMBER })
     expect((list.json.data as { id: string }[]).some(a => a.id === articleId)).toBe(true)
     // 取消 → 既定一覧から消える（includeInactive では見える）→ 復元
     expect((await api('POST', `/v1/media/articles/${articleId}/deactivate`, { as: ADMIN })).status).toBe(200)
-    const afterDeact = await api('GET', `/v1/media/articles?segmentId=${SEG}`, { as: MEMBER })
+    const afterDeact = await api('GET', `/v1/media/articles?channelId=${LINKED}`, { as: MEMBER })
     expect((afterDeact.json.data as { id: string }[]).some(a => a.id === articleId)).toBe(false)
-    const withInactive = await api('GET', `/v1/media/articles?segmentId=${SEG}&includeInactive=1`, { as: MEMBER })
+    const withInactive = await api('GET', `/v1/media/articles?channelId=${LINKED}&includeInactive=1`, { as: MEMBER })
     expect((withInactive.json.data as { id: string }[]).some(a => a.id === articleId)).toBe(true)
     expect((await api('POST', `/v1/media/articles/${articleId}/restore`, { as: ADMIN })).status).toBe(200)
   })
 
   it('記事の手動登録は同一パスの重複を 409（AKO-MEDIA-008）で拒否・取消後は再登録可・復元は衝突で 409（m5 = 冪等）', async () => {
-    const body = { segmentId: SEG, path: '/blog/dup-check', title: '重複検証', section: 'ブログ', publishedAt: '2026-02-01' }
+    const body = { channelId: LINKED, path: '/blog/dup-check', title: '重複検証', section: 'ブログ', publishedAt: '2026-02-01' }
     const first = await api('POST', '/v1/media/articles', { as: ADMIN, body })
     expect(first.status).toBe(201)
     const firstId = (first.json.data as { id: string }).id
-    // 再送・二重クリック相当の再登録は 409（重複行を作らない = 原則2）
     const dup = await api('POST', '/v1/media/articles', { as: ADMIN, body })
     expect(dup.status).toBe(409)
     expect(dup.json.error?.code).toBe('AKO-MEDIA-008')
-    // 取消（論理削除）後は同一パスを再登録できる（部分一意 = active 行のみ）
     expect((await api('POST', `/v1/media/articles/${firstId}/deactivate`, { as: ADMIN })).status).toBe(200)
     const second = await api('POST', '/v1/media/articles', { as: ADMIN, body })
     expect(second.status).toBe(201)
-    // 有効な同一パスが存在する状態での復元は 409（黙って重複させない）
     const restore = await api('POST', `/v1/media/articles/${firstId}/restore`, { as: ADMIN })
     expect(restore.status).toBe(409)
     expect(restore.json.error?.code).toBe('AKO-MEDIA-008')
   })
 
-  it('記事生成（LLM 無効 = 決定的フォールバック）→ 採用 → 二重採用は no-op + warning → 採用取消 → 取消 → 復元', async () => {
+  it('単体チャンネルでも記事生成が動く（要件1）→ 採用 → 二重採用 no-op → 採用取消 → 取消 → 復元', async () => {
+    // 未連携（単体）チャンネルでも AI 記事生成・採用が利用できること（連携は必須でない）
     const gen = await api('POST', '/v1/media/articles/generate', {
       as: MEMBER,
       body: {
-        segmentId: SEG, topic: '器の手入れ', keyword: '陶磁器 手入れ',
-        purpose: 'seo', quality: 'standard', tone: 'friendly', segmentName: 'テスト業態',
+        channelId: SOLO, topic: '器の手入れ', keyword: '陶磁器 手入れ',
+        purpose: 'seo', quality: 'standard', tone: 'friendly', segmentName: '単体メディア',
       },
     })
     expect(gen.status).toBe(201)
-    const article = gen.json.data as { id: string; title: string; body: string; llm: boolean; adoptedArticleId: string | null }
+    const article = gen.json.data as { id: string; title: string; body: string; llm: boolean; adoptedArticleId: string | null; channelId: string }
     expect(article.llm).toBe(false) // LLM 無効環境 = 決定的フォールバック（原則4）
-    expect(article.title.length).toBeGreaterThan(0)
+    expect(article.channelId).toBe(SOLO)
     expect(article.body).toContain('器の手入れ')
     expect(article.adoptedArticleId).toBeNull()
 
-    // お題・キーワード両方空は AKO-MEDIA-011
     const empty = await api('POST', '/v1/media/articles/generate', {
-      as: MEMBER, body: { segmentId: SEG, topic: '', keyword: '', purpose: 'seo', quality: 'draft', tone: 'formal' },
+      as: MEMBER, body: { channelId: SOLO, topic: '', keyword: '', purpose: 'seo', quality: 'draft', tone: 'formal' },
     })
     expect(empty.status).toBe(400)
     expect(empty.json.error?.code).toBe('AKO-MEDIA-011')
 
-    // 採用 → インベントリへ登録（origin=generated）
     const adopt = await api('POST', `/v1/media/generated/${article.id}/adopt`, { as: MEMBER, body: { section: 'ブログ' } })
     expect(adopt.status).toBe(200)
     const adoptedId = (adopt.json.data as { articleId: string }).articleId
-    const inv = await api('GET', `/v1/media/articles?segmentId=${SEG}`, { as: MEMBER })
+    const inv = await api('GET', `/v1/media/articles?channelId=${SOLO}`, { as: MEMBER })
     const invRow = (inv.json.data as { id: string; origin: string; generatedArticleId: string }[]).find(a => a.id === adoptedId)
     expect(invRow?.origin).toBe('generated')
     expect(invRow?.generatedArticleId).toBe(article.id)
 
-    // 二重採用は no-op + warning（冪等）
     const again = await api('POST', `/v1/media/generated/${article.id}/adopt`, { as: MEMBER, body: { section: 'ブログ' } })
     expect(again.status).toBe(200)
     expect((again.json.data as { warning?: string }).warning).toBeTruthy()
     expect((again.json.data as { articleId: string }).articleId).toBe(adoptedId)
 
-    // 採用取消 → インベントリ側は論理削除・リンク解除
     expect((await api('POST', `/v1/media/generated/${article.id}/unadopt`, { as: MEMBER })).status).toBe(200)
-    const afterUnadopt = await api('GET', `/v1/media/articles?segmentId=${SEG}`, { as: MEMBER })
-    expect((afterUnadopt.json.data as { id: string }[]).some(a => a.id === adoptedId)).toBe(false)
     const unadoptTwice = await api('POST', `/v1/media/generated/${article.id}/unadopt`, { as: MEMBER })
     expect(unadoptTwice.status).toBe(400)
     expect(unadoptTwice.json.error?.code).toBe('AKO-MEDIA-014')
 
-    // 取消（論理削除）→ 復元
     expect((await api('POST', `/v1/media/generated/${article.id}/remove`, { as: MEMBER })).status).toBe(200)
-    const listAll = await api('GET', `/v1/media/generated?segmentId=${SEG}`, { as: MEMBER })
+    const listAll = await api('GET', `/v1/media/generated?channelId=${SOLO}`, { as: MEMBER })
     const g = (listAll.json.data as { id: string; active: boolean }[]).find(x => x.id === article.id)
     expect(g?.active).toBe(false)
     expect((await api('POST', `/v1/media/generated/${article.id}/restore`, { as: MEMBER })).status).toBe(200)
   })
 
-  it('統合インサイト: サーバー組み立てで生成・保管（upsert）・取得（Phase C = metrics 受領廃止）。scope=media は GA 未設定で 409', async () => {
-    // Phase C: scope=integrated はサーバーが sales_records + GA から組み立てる（クライアント合成の
-    // metrics ボディは受領しない = 送っても無視される。旧 AKO-MEDIA-016 検証は撤去 = 016 欠番）。
-    // 本セグメントは売上なし + GA 未連携（テスト env）= 全軸 0 の器で生成される
+  it('外部投稿記事: CRUD（追加は管理者のみ・title/body 必須 = 023）・取消/復元（原則9.5）', async () => {
+    // 追加は管理者のみ
+    const denied = await api('POST', '/v1/media/external-articles', { as: MEMBER, body: { channelId: LINKED, title: 't', body: 'b' } })
+    expect(denied.status).toBe(403)
+    // title / body 必須（AKO-MEDIA-023）
+    const noBody = await api('POST', '/v1/media/external-articles', { as: ADMIN, body: { channelId: LINKED, title: 'タイトルのみ' } })
+    expect(noBody.status).toBe(400)
+    expect(noBody.json.error?.code).toBe('AKO-MEDIA-023')
+    // 正常登録
+    const created = await api('POST', '/v1/media/external-articles', {
+      as: ADMIN,
+      body: { channelId: LINKED, title: '外部寄稿の器コラム', source: '暮らしメディア', publishedAt: '2026-03-01', body: '外部媒体へ投稿した記事の原文です。', notes: 'メモ' },
+    })
+    expect(created.status).toBe(201)
+    const xid = (created.json.data as { id: string }).id
+    const list = await api('GET', `/v1/media/external-articles?channelId=${LINKED}`, { as: MEMBER })
+    expect((list.json.data as { id: string; title: string }[]).find(x => x.id === xid)?.title).toBe('外部寄稿の器コラム')
+    // 編集
+    const patched = await api('PATCH', `/v1/media/external-articles/${xid}`, {
+      as: ADMIN, body: { title: '外部寄稿の器コラム（改）', body: '更新した原文', source: '', publishedAt: '' },
+    })
+    expect(patched.status).toBe(200)
+    expect((patched.json.data as { title: string; publishedAt: string | null }).title).toBe('外部寄稿の器コラム（改）')
+    // 取消 → 既定一覧から消える（includeInactive で見える）→ 復元
+    expect((await api('POST', `/v1/media/external-articles/${xid}/archive`, { as: ADMIN })).status).toBe(200)
+    const afterArch = await api('GET', `/v1/media/external-articles?channelId=${LINKED}`, { as: MEMBER })
+    expect((afterArch.json.data as { id: string }[]).some(x => x.id === xid)).toBe(false)
+    const withInactive = await api('GET', `/v1/media/external-articles?channelId=${LINKED}&includeInactive=1`, { as: MEMBER })
+    expect((withInactive.json.data as { id: string }[]).some(x => x.id === xid)).toBe(true)
+    expect((await api('POST', `/v1/media/external-articles/${xid}/restore`, { as: ADMIN })).status).toBe(200)
+    // 未存在は 024
+    const missing = await api('POST', '/v1/media/external-articles/mx-nope/archive', { as: ADMIN })
+    expect(missing.status).toBe(404)
+    expect(missing.json.error?.code).toBe('AKO-MEDIA-024')
+  })
+
+  it('統合インサイト: 連携チャンネルはサーバー組み立てで生成・保管（upsert）。単体は AKO-MEDIA-022、scope=media は GA 未設定で 409', async () => {
+    // 連携チャンネル（seg-media-linked。売上なし + GA 未連携 = 全軸 0 の器で生成）
     const gen = await api('POST', '/v1/media/insights/generate', {
-      as: MEMBER, body: { segmentId: SEG, scope: 'integrated' },
+      as: MEMBER, body: { channelId: LINKED, scope: 'integrated' },
     })
     expect(gen.status).toBe(200)
-    const view = gen.json.data as { llm: boolean; periodKey: string; warning: string | null; insight: { executiveSummary: string }; metrics: { salesAmount: number; siteName: string } }
+    const view = gen.json.data as { llm: boolean; periodKey: string; warning: string | null; metrics: { salesAmount: number; siteName: string } }
     expect(view.llm).toBe(false) // LLM 無効 = heuristicIntegratedInsight
     expect(view.periodKey).toMatch(/^\d{4}-\d{2}$/)
     expect(view.metrics.salesAmount).toBe(0)
-    expect(view.metrics.siteName).toBe('暮らしの器マガジン') // media_settings から解決
+    expect(view.metrics.siteName).toBe('暮らしの器マガジン（改）') // channel から解決
     expect(view.warning).toBeNull()
 
     // クライアントが metrics を送っても無視される（申告値は保管されない = 改ざん余地なし）
     const regen = await api('POST', '/v1/media/insights/generate', {
       as: MEMBER,
-      body: { segmentId: SEG, scope: 'integrated', metrics: { salesAmount: 99999999, periodMonth: '2026-06' } },
+      body: { channelId: LINKED, scope: 'integrated', metrics: { salesAmount: 99999999, periodMonth: '2026-06' } },
     })
     expect(regen.status).toBe(200)
     expect((regen.json.data as { metrics: { salesAmount: number } }).metrics.salesAmount).toBe(0)
     // 再生成は upsert 上書き（レコードは 1 行のまま）
     const { rows } = await pool.query(
-      `SELECT count(*)::int AS n FROM media_insights WHERE segment_id = $1 AND scope = 'integrated'`, [SEG])
+      `SELECT count(*)::int AS n FROM media_insights WHERE channel_id = $1 AND scope = 'integrated'`, [LINKED])
     expect(rows[0].n).toBe(1)
 
-    const got = await api('GET', `/v1/media/insights?segmentId=${SEG}&scope=integrated`, { as: MEMBER })
+    const got = await api('GET', `/v1/media/insights?channelId=${LINKED}&scope=integrated`, { as: MEMBER })
     expect((got.json.data as { periodKey: string }).periodKey).toBe(view.periodKey)
+
+    // 単体チャンネルは統合分析不可（連携必須。AKO-MEDIA-022）
+    const soloIntegrated = await api('POST', '/v1/media/insights/generate', {
+      as: MEMBER, body: { channelId: SOLO, scope: 'integrated' },
+    })
+    expect(soloIntegrated.status).toBe(400)
+    expect(soloIntegrated.json.error?.code).toBe('AKO-MEDIA-022')
+    const soloGet = await api('GET', `/v1/media/integrated?channelId=${SOLO}`, { as: MEMBER })
+    expect(soloGet.status).toBe(400)
+    expect(soloGet.json.error?.code).toBe('AKO-MEDIA-022')
 
     // scope=media はサーバーが GA から集計する = GA 未設定環境では 409（AKO-MEDIA-005）
     const media = await api('POST', '/v1/media/insights/generate', {
-      as: MEMBER, body: { segmentId: SEG, scope: 'media' },
+      as: MEMBER, body: { channelId: LINKED, scope: 'media' },
     })
     expect(media.status).toBe(409)
     expect(media.json.error?.code).toBe('AKO-MEDIA-005')
+  })
+
+  it('チャンネルの取消・復元（原則9.5。管理者のみ）', async () => {
+    const denied = await api('POST', `/v1/media/channels/${SOLO}/archive`, { as: MEMBER })
+    expect(denied.status).toBe(403)
+    expect((await api('POST', `/v1/media/channels/${SOLO}/archive`, { as: ADMIN })).status).toBe(200)
+    const list = await api('GET', '/v1/media/channels', { as: MEMBER })
+    expect((list.json.data as { id: string }[]).some(c => c.id === SOLO)).toBe(false)
+    const withInactive = await api('GET', '/v1/media/channels?includeInactive=1', { as: MEMBER })
+    expect((withInactive.json.data as { id: string }[]).some(c => c.id === SOLO)).toBe(true)
+    expect((await api('POST', `/v1/media/channels/${SOLO}/restore`, { as: ADMIN })).status).toBe(200)
+    const missing = await api('POST', '/v1/media/channels/mc-nope/restore', { as: ADMIN })
+    expect(missing.status).toBe(404)
+    expect(missing.json.error?.code).toBe('AKO-MEDIA-021')
+  })
+
+  it('下位互換: channel.id = 旧 segment_id 値のチャンネルは、その値を channel_id に持つ子行（記事）を解決する', async () => {
+    // 0048 の設計（channel.id = 旧 segment_id）の下位互換を検証する。旧 segment_id 値をそのまま id/連携先に
+    // 持つチャンネルと、その値を channel_id に持つ子行（記事 = 列名 rename 後の既存データ相当）を直接投入し、
+    // API がその値で子行を解決できることを確認する（child 行の UPDATE 不要 = 移行の要）。
+    await pool.query(
+      `INSERT INTO media_channels (id, name, segment_id, site_name) VALUES ('seg-01', '暮らしの器マガジン', 'seg-01', '暮らしの器マガジン')`)
+    await pool.query(
+      `INSERT INTO media_articles (id, channel_id, path, title, section, published_at)
+       VALUES ('ma-compat-1', 'seg-01', '/legacy', '既存記事', 'ブログ', '2026-01-01')`)
+    const list = await api('GET', '/v1/media/articles?channelId=seg-01', { as: MEMBER })
+    expect((list.json.data as { id: string }[]).some(a => a.id === 'ma-compat-1')).toBe(true)
+    const setting = await api('GET', '/v1/media/settings?channelId=seg-01', { as: MEMBER })
+    expect((setting.json.data as { segmentId: string | null }).segmentId).toBe('seg-01')
   })
 })
 
@@ -4613,7 +4707,10 @@ describe('Phase C: Akebono 記録系の API 永続化（商品・伝票・在庫
   })
 
   it('統合メトリクス: サーバー組み立て（売上軸 = sales_records・赤黒は元月へ帰属・GA 未連携はメディア軸 0）+ 生成はメトリクス受領なし', async () => {
-    const res = await api('GET', `/v1/media/integrated?segmentId=seg-01&months=6`, { as: MEMBER })
+    // 統合分析は seg-01 と連携したメディアチャンネル経由で行う（売上軸 = channel.segmentId で解決）
+    const ch = await api('POST', '/v1/media/channels', { as: ADMIN, body: { name: 'seg-01 統合検証', segmentId: 'seg-01' } })
+    const CH = (ch.json.data as { id: string }).id
+    const res = await api('GET', `/v1/media/integrated?channelId=${CH}&months=6`, { as: MEMBER })
     expect(res.status).toBe(200)
     const data = res.json.data as {
       metrics: { periodMonth: string; salesAmount: number; orders: number; sessions: number }
@@ -4631,7 +4728,7 @@ describe('Phase C: Akebono 記録系の API 永続化（商品・伝票・在庫
 
     // scope=integrated の生成はサーバー組み立て（metrics ボディ不要・段階版の旧受領は廃止）
     const gen = await api('POST', '/v1/media/insights/generate', {
-      as: MEMBER, body: { segmentId: 'seg-01', scope: 'integrated' },
+      as: MEMBER, body: { channelId: CH, scope: 'integrated' },
     })
     expect(gen.status).toBe(200)
     const stored = gen.json.data as { periodKey: string; metrics: { salesAmount: number }; insight: { executiveSummary: string } }
@@ -4883,7 +4980,9 @@ describe('Phase C レビュー 2 巡目（外部ボット PR #84 Codex・P1×3�
     // 訂正行の salesDate は当月（= 窓外）。元伝票（prevMonth）の月へ帰属して相殺されなければならない
     expect((corrected.json.data as { salesDate: string }).salesDate.slice(0, 7)).not.toBe(prevMonth)
 
-    const res = await api('GET', '/v1/media/integrated?segmentId=seg-04&months=6', { as: MEMBER })
+    const ch = await api('POST', '/v1/media/channels', { as: ADMIN, body: { name: 'seg-04 統合検証', segmentId: 'seg-04' } })
+    const CH = (ch.json.data as { id: string }).id
+    const res = await api('GET', `/v1/media/integrated?channelId=${CH}&months=6`, { as: MEMBER })
     expect(res.status).toBe(200)
     const data = res.json.data as { metrics: { periodMonth: string; salesAmount: number; orders: number } }
     expect(data.metrics.periodMonth).toBe(prevMonth)
