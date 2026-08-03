@@ -95,7 +95,7 @@
 | `CalendarEvent`（app 発） | id, memberId, date, from, to, title, source=`app`, syncedToGoogle, projectId | 本人管理のタスク（編集・削除可。SoT は本アプリ） | C2 |
 | `HearingLog` | id, memberId, date, kind(`qa`=ヒアリング回答/`memo`=ぽいぽいポスト), calendarEventId, question, answer, at | 記録系（追記のみ・巻き戻し禁止） | C3（課題回答を含み `DailyReport` と同水準） |
 | `TaskPlan`（F-14） | id, memberId, date（実施予定日）, calendarEventId（null=手動）, title, purpose（目的）, doneCriteria（達成条件）, approach（段取り）, aiComment/aiCommentAt（AI レビュー。status を問わず後追い取得可・上書きのみ）, status(`planned`/`done`), outcome（結果）, reflection（所感）, resultAt, createdAt/updatedAt | ハイブリッド（本人管理）: **planned/done とも本人が編集・再記録・削除できる（誤登録の訂正。オペレーター指示 2026-07-21）**。done の訂正は**監査ログ付き** + 初回記録日時 `resultAt` は保持（原則2 の巻き戻し防止を「監査ログ付き訂正」へ緩和 = 提出済み日報と同型）。他メンバーの参照は F-16-7 の許可制（既定 = 参照不可・readonly） | C3（業務内容の原文を含み `DailyReport` と同水準） |
-| `AppConfigItem` | key, value（例: reportInputMode = `form`/`assist`/`both`。**バッチ7h 追加キー: `teamVisibleMemberIds` = チームタブ表示メンバーの JSON 配列（''/空 = 既定表示 = マトリクスは社員・契約・アルバイト / タイムラインは全員。バッチ7k で候補 = 在籍中の全メンバー）・`menu-categories-dashboard` / `menu-categories-masters` = メニューカテゴリ定義の JSON（'' = 既定構成）**） | 設定系（upsert 更新可。SoT は本アプリ） | C1 |
+| `AppConfigItem` | key, value（例: reportInputMode = `form`/`assist`/`both`。**バッチ7h 追加キー: `teamVisibleMemberIds` = チームタブ表示メンバーの JSON 配列（''/空 = 既定表示 = マトリクスは社員・契約・アルバイト / タイムラインは全員。バッチ7k で候補 = 在籍中の全メンバー）・`menu-categories-dashboard` / `menu-categories-masters` = メニューカテゴリ定義の JSON（'' = 既定構成）・**`dashboard-layout` = ダッシュボードの表示・配置（`DashboardLayout` の JSON。テナント全社既定。'' = 未設定 → `menu-categories-dashboard` 下位互換 or デフォルト。F-13-9・2026-08-03）**） | 設定系（upsert 更新可。SoT は本アプリ） | C1 |
 | `WeeklyInsightRecord`（weekly_insights・バッチ7j） | id, weekStart, audience（`company` = 全体共通 / `member:<id>` = 個別）, metrics, insight, llm, generatedBy, generatedAt。週 × audience で一意 | **導出キャッシュ**（SoT は集計元の各テーブル。再生成 = upsert 上書き・記録系ではない）。全体は配信時に閲覧者マスク（売上 = sales 権限・memberHours/issues = F-16-6） | C2（全体の洞察本文は個人名・売上に言及しない形で生成） |
 
 > **SoT 宣言（カレンダー）:** `source='google'` の予定は **Google カレンダーが SoT**（本アプリはキャッシュ。編集・削除不可、決定的 id によるべき等 upsert で同期）。`source='app'` の予定は**本アプリが SoT**（`syncedToGoogle` で Google への反映状態を持つ）。連携解除後もキャッシュは表示用に保持し、**未連携メンバーには初期キャッシュを投入しない**（連携＝同意して初めて同期される、を再現）。HearingLog は記録系（追記のみ）。日報ドラフトは保存せずフォームへ流し込むのみで、**提出済み日報は再生成で上書きしない**（ai-manager の confirmed 保護と同型）。
@@ -245,8 +245,8 @@ Phase B（設定系）・Phase C（記録系 + 売上軸）に続く**最終フ�
 | 列 | 型 | 説明 |
 |---|---|---|
 | member_id | text (FK members ON DELETE CASCADE) | 対象ユーザー |
-| key | text | 設定キー（`^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$`。現状 `currentSegmentId`） |
-| value | jsonb | 設定値（現状は業態 id 文字列。将来の個人 UI 設定も同型で追加可） |
+| key | text | 設定キー（`^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$`。`currentSegmentId` / `currentChannelId` / **`dashboardLayout`（ダッシュボードの表示・配置。2026-08-03）**） |
+| value | jsonb | 設定値（業態/チャンネル id 文字列・**`dashboardLayout` は `DashboardLayout` オブジェクト**〔templateId + sections + options〕。将来の個人 UI 設定も同型で追加可） |
 | updated_at | timestamptz | 更新時刻 |
 
 - PK = `(member_id, key)`。**設定系（per-user）**で SoT は本テーブル。app_configs（テナント全体）と役割分担。
@@ -254,6 +254,24 @@ Phase B（設定系）・Phase C（記録系 + 売上軸）に続く**最終フ�
   が upsert する（本人のみ・冪等）。value は実バイト 4KB 上限・新規キーは 1 ユーザー 100 件上限（storage 暴走防止）。
   **シードしない**（未設定はアプリ既定へフォールバック）。members マスタには載せない
   （`/v1/masters/members` で全員へ露出させない・マスタ CRUD の巻き戻し対象にしない = 原則7 の分離）。
+- **ダッシュボードレイアウト（`dashboardLayout`。F-13-9・オペレーター指示 2026-08-03）**: 保存値 =
+  `DashboardLayout`（テンプレート適用時は `materializeLayout`・手動セクション編集時は `buildCustomLayout`
+  〔templateId=`custom`・**保存先スコープ自身の層**の options を維持 = `pickBaseLayout`。§53 MAJOR 対応〕した JSON。
+  全テンプレート + 現実的な最大セクション構成〔全基本
+  メニュー + 外部リンク + AKEBONO 業態アプリ〕で 4KB 上限に収まることをテストで担保 = `tests/dashboard-layout.test.ts`）。
+  ユーザー層 = 本テーブル、テナント層 = `app_configs.dashboard-layout`。
+  **解決順 = ユーザー設定 > テナント設定 > デフォルト**（`useDashboardLayout` / `resolveDashboardLayout`）。
+  セクション配置（どのメニューをどのセクションに置くか）もこの 3 階層で保持・解決される（#25。
+  `saveSections(sections, scope)` が options を維持したまま sections を差し替えて該当層へ保存）。
+  テナント新キー未設定時は従来の `app_configs.menu-categories-dashboard`（F-13-8）を default options と組み合わせ
+  テナント層として解釈（下位互換 = 原則7）。壊れた JSON・不正構造は 1 段フォールバックで表示を壊さない。
+  mock モードのユーザー層は端末ローカル（localStorage `ako.dashboard-layout.v1`）。
+- **AKEBONO 業態アプリカード（メニューカテゴリ配置。#24・2026-08-03）**: 新規テーブルは追加しない。
+  active な各業態（`business_segments`）を実行時に `MenuCard`（安定 id = `akebono-seg:<segmentId>`）へ写像し
+  （`useAkebonoAppCards` / 純関数 `akebonoSegmentCard`）、セクション定義の `cardIds` にはこの安定 id を保持する。
+  業態は動的（増減）のため、`cardIds` に残った未存在業態の id は `categorizeCards` が単に無視する（既存挙動）。
+  二重表示防止: セクションへ割当済みの業態はセクション配置側に、未割当業態は専用「AKEBONO 業務（業態別）」
+  セクションに出す（`planDashboardCards`。純関数・テスト済み）。
 
 ## 2. スタースキーマ接続（akebono-scm-platform `mart` 規約準拠）
 

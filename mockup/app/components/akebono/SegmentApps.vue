@@ -5,12 +5,23 @@
  * （従来の「単一 AKEBONO カード → ヘッダで業態切替」を、業態別アプリの直接入場に置き換える）。
  * - 表示名（appName）とアイコン（画像 or 選択式）で業態アプリを直感識別（AkebonoSegmentIcon）。
  * - 押下先は /akebono?seg=<id>。入場時に現在業態を切り替える（pages/akebono/index.vue）。
+ * - segmentIds（任意）: 指定時はその業態のみ表示（順序も指定順）。未指定は従来どおり全 active 業態
+ *   （ダッシュボードのメニューカテゴリ配置で「未割当業態のみ」を専用セクションに出すために使う。2026-08-03 #24）。
  */
 import { ChevronRight } from 'lucide-vue-next'
 import { INDUSTRY_TYPE_LABELS, segmentAppName } from '~/utils/akebono'
 
+const props = defineProps<{ segmentIds?: string[] }>()
+
 const { activeSegments } = useCurrentSegment()
 const apps = useAkebonoApps()
+
+/** 表示対象の業態（segmentIds 指定時はその順で絞り込み・無効 id は除外） */
+const shownSegments = computed(() => {
+  if (!props.segmentIds) return activeSegments.value
+  const byId = new Map(activeSegments.value.map(s => [s.id, s]))
+  return props.segmentIds.map(id => byId.get(id)).filter((s): s is (typeof activeSegments.value)[number] => !!s)
+})
 
 /** 各業態で使用中のアプリ数（この業態でいくつの業務が使えるか） */
 function enabledCount(segmentId: string): number {
@@ -19,8 +30,8 @@ function enabledCount(segmentId: string): number {
 </script>
 
 <template>
-  <ul v-if="activeSegments.length > 0" class="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-    <li v-for="s in activeSegments" :key="s.id">
+  <ul v-if="shownSegments.length > 0" class="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+    <li v-for="s in shownSegments" :key="s.id">
       <NuxtLink
         :to="`/akebono?seg=${s.id}`"
         class="card group flex h-full items-center gap-3 p-3 transition-colors hover:border-brand"

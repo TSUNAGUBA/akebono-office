@@ -144,6 +144,39 @@ save(defs) / reset(): Promise<void>              // SoT = configs `menu-categori
 // カード定義の SoT = mockup/app/utils/menu-registry.ts（バッジ・機能トグル・権限のランタイム反映はページ側）
 // ページ間導線（親リンク・関連ドロップダウン）の SoT = mockup/app/utils/nav-map.ts（レイアウトヘッダーが描画）
 
+// useDashboardLayout（F-13-9・オペレーター指示 2026-08-03。ダッシュボードの表示・配置カスタマイズ）
+useDashboardLayout()
+effectiveLayout: ComputedRef<DashboardLayout>    // 解決結果（ユーザー > テナント > デフォルト）
+resolvedScope:  ComputedRef<'user'|'tenant'|'default'>  // どの層が効いているか（表示用）
+activeTemplateId: ComputedRef<string>            // 有効レイアウトの由来テンプレート id
+templates: DashboardTemplate[]                   // テンプレート一覧（5 種。SoT = utils/dashboard-layout.ts）
+userLayout / tenantLayout: ComputedRef<DashboardLayout|null>  // 各層に保存済みのレイアウト（tenantLayout は下位互換 legacy 込み。ドラフト土台に使用）
+tenantLayoutOwn: ComputedRef<DashboardLayout|null>  // テナント新キー自身のみ（legacy を含まない。ハイライト・解除可否の SoT）
+hasUserLayout / hasTenantLayout: ComputedRef<boolean>          // hasTenantLayout は legacy 込み（メッセージ表示用）
+hasTenantLayoutOwn: ComputedRef<boolean>                       // 新キー自身のみ（解除ボタン活性・ハイライト用。§53 MINOR 対応）
+baseLayoutForScope(scope: 'user'|'tenant'): DashboardLayout    // 保存先層自身を土台に取る（pickBaseLayout。tenant は user 層へ落ちない = §53 MAJOR 対応）
+applyTemplate(templateId, scope: 'user'|'tenant'): Promise<{ ok }>  // materialize → 該当層へ保存（tenant は管理者のみ）
+saveSections(sections: MenuCategoryDef[], scope: 'user'|'tenant'): Promise<{ ok }>
+  // 保存先スコープ自身の層の options（baseLayoutForScope。effectiveLayout ではない = §53 MAJOR 対応）を
+  // 維持したまま sections を差し替えた DashboardLayout（templateId='custom'）を該当層へ保存（#25）。
+  // 保存経路は applyTemplate と共通（persistLayout）。tenant は管理者のみ（非管理者は警告 no-op = 非ブロッキング）。
+resetLayout(scope: 'user'|'tenant'): Promise<{ ok }>               // 該当層を解除（新キーのみ・取消フロー・原則9.5）
+// 解決・categorize・型・テンプレート・buildCustomLayout・planDashboardCards の純ロジック SoT = mockup/app/utils/dashboard-layout.ts
+// 保存: ユーザー層 = /v1/me/preferences 'dashboardLayout'（saveMePreference。mock=localStorage）
+//       テナント層 = /v1/configs 'dashboard-layout'（setConfig）。**新規 API・マイグレーション不要**（既存の汎用 key/value を利用）
+
+// useExternalLinkCards（F-13-3 → ダッシュボードのメニューカテゴリ配置。2026-08-03）
+useExternalLinkCards()
+externalCards: ComputedRef<MenuCard[]>  // active な外部リンクを MenuCard 化（id=外部リンク id `el-*`・href で別タブ）
+
+// useAkebonoAppCards（F-01-5 → メニューカテゴリ配置。#24・2026-08-03。useExternalLinkCards と同型）
+useAkebonoAppCards()
+akebonoCards: ComputedRef<MenuCard[]>
+  // active な各業態を MenuCard 化（id=`akebono-seg:<segmentId>`・title=segmentAppName・
+  //   description=`<業種ラベル>・<使用アプリ数> アプリ`・icon=業種タイプ別 lucide〔INDUSTRY_CARD_ICON〕・
+  //   to=`/akebono?seg=<id>`）。写像の純関数 SoT = utils/akebono.akebonoSegmentCard。**新規 API 不要**
+  //   （業態は businessSegments・アプリ数は akebonoAppConfigs〔enabledAppsOf〕の既存経路を利用）
+
 ```
 
 ## 3. 将来 API 移行マッピング
@@ -181,7 +214,7 @@ save(defs) / reset(): Promise<void>              // SoT = configs `menu-categori
 | usePermissions | ルール = `/v1/masters/permission-rules`（汎用マスタ）。判定は shared/domain/permissions.ts をフロント/API で共有（個人 > 役職 > ロール・同一レイヤは deny 優先・同一レイヤ内は明示キー → 一括キー（マスタ全体 = field null / 全メンバー = member:*）→ の順で参照（バッチ7m）・どのレイヤにも無ければアプリ既定値 = 機能・表示項目は allow）。機能ガード = API middleware（/v1/masters・/v1/configs・/v1/notifications・/v1/escalations はデータ面のため対象外）+ フロントのメニュー/ページ非表示。表示項目レベルはマスタ GET 応答からサーバーが剥がす（マスタ全体 deny はカタログ = shared/domain/permission-catalog の全項目を剥がす） |
 | useAiCompany | `GET/POST /v1/ai-company/tasks`（+ `/:id/approve|progress|block|cancel` = FOR UPDATE の状態機械・活動ログ・完了通知・AI 社員 status 同期）・`GET /v1/ai-company/logs`・`POST /v1/ai-company/daily-reports`（冪等生成 → daily_reports author_kind='ai'）・`POST /v1/ai-company/workload-check`（停滞/過負荷 → エスカレーション）・ロール/AI 社員 = `/v1/masters/ai-roles`・`ai-employees`（**実装・フロント接続済み = バッチ6a**。分解 = Vertex AI 構造化出力 → 失敗時 shared/domain/ai-tasks。機能ガード 'ai-company'）。**AI 社員間の依頼・連携（バッチ7b・オペレーター指示 2026-07-19 #3): AiRole.permissions の `delegate` 権限（= マネージャーロール）を持つ AI 社員への依頼は、承認と同時に他の有効 AI 社員へ分担を子タスク化（requester_ai_employee_id + parent_task_id。割当 = LLM 構造化出力 → 失敗時 shared planDelegation の字句類似・決定的）。子は即 in_progress（人間の承認は親 1 回のみ = 依頼を一挙に引き受ける）・完了は親へロールアップ（全分担完了で親 done + 統合報告通知）・ブロックは親へエスカレーション + 依頼者通知・親の中止は子へ連鎖。子からの再連携なし = 連鎖の暴走防止**。**実遂行（バッチ7f・オペレーター指示 2026-07-19 #7）: POST /tasks は添付（attachments = .md/.txt/.pdf/.docx/.pptx/.jpg/.png。原本 = ai_task_files・テキスト抽出 + 画像はマルチモーダルで材料化）を受付。「進める」= ステップの実遂行（Vertex AI が成果物を生成 → ai_tasks.outputs へ追記。LLM 無効はヒューリスティック縮退）。人間のアクションが必要なら依頼者へ質問（ai_task_questions）+ blocked + 通知 → `POST /tasks/:id/answer`（依頼者 or 管理者・添付可）で再開。`GET /files/:id`（依頼者 + 管理者）。AI 社員の増減 = /v1/masters/ai-employees（/ai-company/employees 画面）**。**全自動実行 + Web 調査（バッチ7i・オペレーター指示 2026-07-19 #11）: 承認・回答・ブロック解除・手動「進める」を起点に、サーバーが fire-and-forget の自動実行ループ（autoRunTask。上限 12 ステップ・競合 009 は 1 回再試行・停止条件 005/006/014 は静かに終了）で完了・質問・中止まで走り切る（HTTP 応答はブロックしない = 進捗は一覧の再取得・フロントは承認後 3 秒間隔 ×8 回のポーリングで追跡）。各ステップの遂行前に generateGroundedText（Vertex Google 検索グラウンディング。構造化出力と併用しない 2 段構成・失敗は調査なしで続行 = 原則4）でWeb 調査メモ + 出典 URL を材料化し、成果物へ「参考」として出典を明記。依頼者への質問は「自社・顧客のドメイン情報が不可欠」「重要な意思決定が必要」のみに限定（ヒューリスティックは 10 字未満 or 内部参照 + 30 字未満のみ・LLM はプロンプトで限定・上限 3 回）。「進める」ボタンは自動実行が止まった場合の「再開」フォールバックとして残置（サーバー再起動時等 = 冪等・二重実行は状態機械が排他）** |
 | プロフィール（/profile） | `GET /v1/me`（avatar + **prefs = 本人の UI 設定**を含む。prefs = user_preferences の本人分オブジェクト。0039）・`PUT /v1/me/profile`（本人のアイコン画像 = data:image/png・jpeg・webp の base64 のみ許可（SVG 等は拒否 = スクリプト混入防止）・300KB 上限・空文字で削除・監査ログ記録。バッチ5e）。パスワード変更は Firebase Auth（reauthenticate → updatePassword）でクライアント完結・Google SSO アカウントは対象外。ログアウト = Firebase signOut + /v1/me キャッシュ破棄 |
-| 個人 UI 設定（端末間同期） | `PUT /v1/me/preferences/:key`（本人のみ・upsert = 冪等。key = `^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$`・value(jsonb) 実バイト 4KB 上限・新規キーは per-user 100 件まで。現状 `currentSegmentId` = **どの端末からログインしても同じ業態で開ける**。オペレーター指示 2026-07-30）。取得は `GET /v1/me` の `prefs`。app_configs（テナント全体）の per-user 版で、監査ログは記録しない（高頻度・非セキュリティな UI 状態）。フロントは useCurrentSegment（API モード = SoT サーバー / モックモード = localStorage）。詳細は implementation-status §41 |
+| 個人 UI 設定（端末間同期） | `PUT /v1/me/preferences/:key`（本人のみ・upsert = 冪等。key = `^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$`・value(jsonb) 実バイト 4KB 上限・新規キーは per-user 100 件まで。`currentSegmentId` = **どの端末からログインしても同じ業態で開ける**。オペレーター指示 2026-07-30。`currentChannelId` = メディアチャンネル。**`dashboardLayout` = ダッシュボードの表示・配置レイアウト（F-13-9・2026-08-03。DashboardLayout の JSON）**）。取得は `GET /v1/me` の `prefs`。app_configs（テナント全体）の per-user 版で、監査ログは記録しない（高頻度・非セキュリティな UI 状態）。フロントは useCurrentSegment / useCurrentChannel / useDashboardLayout（API モード = SoT サーバー / モックモード = localStorage）。詳細は implementation-status §41・§51 |
 | useBusinessDay | 祝日 = `/v1/masters/holidays`（汎用マスタ。date 一意・物理削除可・日付順）+ `POST /v1/holidays/import`（管理者のみ。内閣府「国民の祝日」CSV = Shift_JIS を取得して date 一意で upsert = 冪等・再取込可。csvText / csvBase64 のオフライン取込にも対応 = 公式サイト障害時の手動アップロード経路）。翌営業日計算は shared/domain/business-day（workingWeekdays / holidayAware = attendance_rules で勤務体系ごとに制御・祝日 Set を注入）をフロント/API（/v1/assist/report-draft の「明日の予定」）で共有（**オペレーター報告 2026-07-18 #4**） |
 | useNotes（ぽいぽいポスト・議事録） | `GET/POST /v1/notes`（?kind=poipoi/minutes。poipoi = 本人のみ・minutes = 全員。任意で projectId/companyId/workCategoryId。一覧は `active=true` のみ）・`POST /v1/notes/import`（.md/.txt/.pdf/.docx = extract-text 再利用・原本 = note_files。UI は選択で即アップロードせずステージ → 取込ボタン押下で実行 = バッチ7d）・`POST /v1/notes/:noteId/archive`・`/restore`（**取消 = 論理削除 + 監査ログ、復元 = 取消の取消（原則 9.5 の対称性）。どちらも poipoi = 本人 / minutes = 登録者 or 管理者。冪等 = 状態不一致は警告 no-op。取消済みは `GET /v1/notes?includeArchived=1` で復元権限者にのみ見える。バッチ7d**）・`GET /v1/notes/:id/files`・`/files/:id`（poipoi は本人ガード。**取消済みノートの原本は復元権限者のみ** = 誤アップロード原本を晒し続けない）。**管理者の全ポスト閲覧 = `GET /v1/notes?kind=poipoi&scope=all`（管理者のみ 200・active のみ。バッチ7e = フィードバック用途。poipoi 原本も本人 + 管理者が参照可）**。機能ガード poipoi / minutes（F-16）。書込・取消後は検索インデックスへ自動反映（poipoi は owner_member_id = 本人スコープ = C3。ノートの紐付け（companyId/projectId）は search_docs.links に保持し、チャットボット/アシストが**言及された顧客・PJ と異なる紐付けのノートを文脈から除外** = 混入防止。バッチ7c/7d）。業務種別 = `/v1/masters/work-categories` |
 | useCustomerLogs（顧客ログ = 2026-07-30 → 項目拡張 2026-07-31） | `GET /v1/customer-logs`（既定 = 本人。`?memberId=` で他メンバーを readonly 参照 = canViewMemberCustomerLog で enforcement・未許可 403 AKO-PRM-002・自分は常に可。`?from=&to=&companyId=&contactId=&includeArchived=1`（取消済みは本人のみ））・`POST /v1/customer-logs`（本人。logDate 必須・**logTime = 開始時刻（任意・分は 15 分単位から選択 = UI 制約。API は HH:MM 許容 = 旧データ互換）・endTime = 終了時刻（任意・開始必須・開始より後）・tags = 属性タグ（商談/取材/イベント等。最大 10 件・各 30cp・重複除去）・staffMemberId = 自社の担当者（未指定 = ログインユーザー）・body = 担当者メモ / minutesMemo = 議事録メモ（どちらか必須）**・会社は `companyId` **または `newCompanyName`（コンボボックス自由入力 = 未登録名なら同一トランザクションで companies へ新規登録・正規化名の完全一致は既存へ名寄せ）**・担当者は `contactId`（会社所属を検証 = AKO-CLG-003）**または `newContactName`（同一会社内の氏名一致で名寄せ・なければ contacts へ新規登録）**。入力不正 = AKO-CLG-001）・`PATCH /v1/customer-logs/:id`（本人のみ・**部分更新 = 送られたキーのみ更新し未指定は現状維持（新項目 tags/endTime/staffMemberId/minutesMemo も同様）**・newCompanyName/newContactName も受付・マージ後に時刻範囲/メモ必須を全体検証・監査ログ）・`POST /:id/archive` `/:id/restore`（取消 = 論理削除 + 監査ログ・復元 = 取消の取消（原則9.5 の対称性）・冪等 = 状態不一致は警告 no-op・本人のみ = AKO-CLG-002）（**実装・フロント接続済み**。機能ガード 'customer-log'（F-16・既定 allow）。**入力検証（日付・時刻・範囲・タグ・メモ・会社指定）のロジック・メッセージ・適用順の SoT = `shared/domain/customer-log`（API/モック共有 = パリティを構造的に担保。2026-07-31 レビューで集約）**。デュアルモード = モックは customerLogs コレクション（コンボボックス新規登録もモック側で同一規則）。書込後は検索インデックスへ自動反映 = source_kind 'customer-log'・segments に属性タグ/自社担当者/担当者メモ/議事録メモを含む・owner_member_id = 記録者（本人スコープ = 他メンバーのログは AI 文脈へ供給しない）・links.companyId で顧客混入防止。**新規マスタ登録は監査ログ（companies/contacts の create）+ フロントは companies/contacts キャッシュを再取得 = SoT → キャッシュ**） |

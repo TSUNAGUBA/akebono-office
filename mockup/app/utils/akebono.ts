@@ -11,7 +11,7 @@ import type {
   PoStatus, ProductionStatus, PartnerRole,
 } from '~/types/akebono'
 import type { Company } from '~/types/domain'
-import type { Tone } from '~/types/ui'
+import type { MenuCard, Tone } from '~/types/ui'
 
 // ---------- ラベル（区分値の表示。SoT） ----------
 
@@ -247,6 +247,56 @@ export function segmentIconKey(segment: Pick<BusinessSegment, 'industryType' | '
 /** 業態アプリの表示名を解決する（appName 優先・未設定は業態名） */
 export function segmentAppName(segment: Pick<BusinessSegment, 'name' | 'appName'>): string {
   return segment.appName?.trim() || segment.name
+}
+
+// ---------- 業態アプリのメニューカード化（ダッシュボードのメニューカテゴリ配置。2026-08-03 #24） ----------
+
+/**
+ * メニューカテゴリ（セクション）に配置する AKEBONO 業態アプリカードの id 接頭辞。
+ * 基本メニュー（menu-registry の静的 id）・外部リンク（`el-*`）と衝突しない安定 id を作る。
+ * セクション定義の cardIds はこの id を保持する（業態の増減で id が揺れないよう segmentId を埋め込む）。
+ */
+export const AKEBONO_SEGMENT_CARD_PREFIX = 'akebono-seg:'
+
+/** 業態 id から安定カード id（`akebono-seg:<segmentId>`）を作る */
+export function akebonoSegmentCardId(segmentId: string): string {
+  return `${AKEBONO_SEGMENT_CARD_PREFIX}${segmentId}`
+}
+
+/** カード id が AKEBONO 業態アプリカードなら業態 id を返す（違えば null） */
+export function parseAkebonoSegmentCardId(cardId: string): string | null {
+  return cardId.startsWith(AKEBONO_SEGMENT_CARD_PREFIX)
+    ? cardId.slice(AKEBONO_SEGMENT_CARD_PREFIX.length)
+    : null
+}
+
+/**
+ * 業種タイプ別のメニューカードアイコン（lucide キー）。基本メニューと同じ lucide アイコン方式で統一する
+ * （トップ配置の AkebonoSegmentIcon は画像対応の別系統。カテゴリ配置カードは UiCardMenu の lucide 描画に合わせる）。
+ */
+export const INDUSTRY_CARD_ICON: Record<IndustryType, string> = {
+  retail: 'Store',
+  maker: 'Factory',
+  logistics: 'Truck',
+  it_service: 'MonitorSmartphone',
+  other: 'LayoutGrid',
+}
+
+/**
+ * AKEBONO 業態アプリを MenuCard へ写像する純関数（useAkebonoAppCards の中核・単体テスト対象）。
+ * appCount は呼び出し側で enabledAppsOf(segment.id).length（その業態で使用中のアプリ数）を渡す。
+ */
+export function akebonoSegmentCard(
+  segment: Pick<BusinessSegment, 'id' | 'name' | 'appName' | 'industryType'>,
+  appCount: number,
+): MenuCard {
+  return {
+    id: akebonoSegmentCardId(segment.id),
+    title: segmentAppName(segment),
+    description: `${INDUSTRY_TYPE_LABELS[segment.industryType]}・${appCount} アプリ`,
+    icon: INDUSTRY_CARD_ICON[segment.industryType],
+    to: `/akebono?seg=${segment.id}`,
+  }
 }
 
 /** 商品登録フォームで自動適用する既定値（業態設定に集約。通常フォームでは編集不可） */

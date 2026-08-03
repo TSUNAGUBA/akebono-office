@@ -71,6 +71,18 @@ const { formSchemaFor } = useCustomFields()   // → FieldDef[] を UiSchemaForm
 // 設定
 const { isEnabled, getConfig, setConfig } = useAppSettings()
 
+// メニューカテゴリ（F-13-8。SoT = configs `menu-categories-<area>`。categorize/save/reset。純ロジックは utils/dashboard-layout.ts と共有）
+const mcat = useMenuCategories('dashboard')   // categories / categorize(cards) / save(defs) / reset()
+
+// ダッシュボードのレイアウト（表示・配置 + セクション配置。F-13-9・2026-08-03。純ロジック/型/テンプレート SoT = utils/dashboard-layout.ts）
+// 解決順 = ユーザー設定 > テナント設定 > デフォルト（セクション配置も同 3 階層 = #25）。ユーザー層=/v1/me pref 'dashboardLayout'（mock=localStorage 'ako.dashboard-layout.v1'）/ テナント層=configs 'dashboard-layout'（未設定は menu-categories-dashboard 下位互換）
+const dl = useDashboardLayout()   // effectiveLayout / resolvedScope / activeTemplateId / templates / baseLayoutForScope(scope) / applyTemplate(id, scope) / saveSections(sections, scope)〔保存先層自身の options 維持で sections 差替・templateId=custom〕 / resetLayout(scope)（取消・原則9.5。tenant は管理者のみ）
+
+// カードメニュー写像（ダッシュボードのメニューカテゴリ配置用。基本メニュー MENU_CARDS.dashboard と同じ MenuCard 形へ）
+const { externalCards } = useExternalLinkCards()  // F-13-3 の外部リンク → MenuCard（id=`el-*`・href で別タブ）
+const { akebonoCards } = useAkebonoAppCards()      // #24 の active 業態 → MenuCard（id=`akebono-seg:<segmentId>`。写像純関数 = utils/akebono.akebonoSegmentCard）
+// 二重表示防止は純関数 planDashboardCards（utils/dashboard-layout.ts）: 割当済み業態=セクション配置 / 未割当=専用「AKEBONO 業務」セクション
+
 // カレンダー連携（F-06-8。google 発の SoT は Google・アプリ発の SoT は本アプリ）
 const cal = useCalendar()   // isConnected / connect / syncFromGoogle / addTask / pushToGoogle
 
@@ -143,7 +155,7 @@ const di = useDashboardInsight() // buildSegmentSummary/buildCompanySummary（�
 | `UiFormField` | label, required, error, hint |
 | `UiSchemaForm` | fields(FieldDef[]), v-model(Record), errors |
 | `UiStatusBadge` | tone, label, dot |
-| `UiCardMenu` | items(MenuCard[]), cols |
+| `UiCardMenu` | items(MenuCard[]), cols, dense（compact でカード余白を詰める = ダッシュボード density 用） |
 | `UiAvatar` | name, kind('human'/'ai'), size |
 | `UiEmptyState` | icon, title, hint + #action |
 | `ChartsLineChartCard` / `ChartsBarChartCard` / `ChartsDonutChartCard` | title, labels/series or items, yFormatter |
@@ -154,7 +166,12 @@ const di = useDashboardInsight() // buildSegmentSummary/buildCompanySummary（�
 | `WidgetsWeeklyInsight` | initialWeekStart。週次 AI インサイト（**保存済みを表示・「生成/再生成」で保管 = バッチ7j**。あなた向けインサイト（個別）+ 集計 KPI + チャート + エグゼクティブサマリー/SWOT/リスク/アクション。集計は前日（asOf）まで基準。週ナビ + 生成日時表示。バッチ7g/7j） |
 | `UiMarkdown` | source。安全なサブセットのマークダウン描画（utils/markdown.ts の AST を VNode 直接生成 = v-html 不使用。見出し・リスト・引用・コード・強調・http(s) リンクのみ。バッチ7e） |
 | `MastersPermissionMatrix` | 権限表モード（props なし = ruleCrud を内部利用）。ページ > 機能 > 項目 の 3 階層ツリー × ロール/役職/個人（バッチ7m）。セルは常に可否を表示（明示 = 濃色 / 上位一括・既定値 = 薄色破線）・クリックで反転・引き継ぎ値へ戻すと明示ルール解除。表ヘッダは内部スクロール + sticky |
-| `SettingsMenuCategoryEditor` | props なし。メニューカテゴリのカスタマイズ（F-13-8。エリア切替 + カテゴリ CRUD/並び替え/カード割当 + 既定に戻す。バッチ7h） |
+| `SettingsMenuCategoryEditor` | props なし。メニューカテゴリのカスタマイズ（F-13-8。エリア切替 + カテゴリ CRUD/並び替え/カード割当 + 既定に戻す。バッチ7h。編集 UI は `UiMenuSectionEditor` 共用・ダッシュボードタブは外部リンク/AKEBONO も割当候補 + 3 階層はレイアウトへ案内） |
+| `UiMenuSectionEditor` | modelValue(MenuCategoryDef[]) / cardOptions / emptyHint。メニューセクション編集の共通 UI（追加・削除・改名・並び替え・カード割当 = UiMultiCombobox）。保存/リセット/スコープは呼び出し側（#25。原則3。MenuCategoryEditor と DashboardSectionEditor が共用） |
+| `OfficeDashboardNotifications` | props なし。ダッシュボードの通知欄（エスカレーション/承認依頼/稟議タブ + 未読のみフィルタ・直近 8 件）。index.vue から分離し通知位置（side/bottom）で配置切替可能に（2026-08-03） |
+| `OfficeDashboardLayoutPreview` | layout(DashboardLayout)。レイアウトの軽量プレビュー（実データ不要。セクション見出し + カード数チップ + 通知位置図示 + AKEBONO/密度反映。F-13-9） |
+| `OfficeDashboardLayoutPicker` | props なし。ダッシュボードのレイアウト選択。「テンプレート」/「セクションを編集」タブ切替 + 適用スコープ〔自分/全社〕+ 現在有効層表示 + 解除。ヘッダの「レイアウト」ボタン → UiModal 内で使用（F-13-9・2026-08-03） |
+| `OfficeDashboardSectionEditor` | props なし。ダッシュボードのセクション構成を 3 階層（自分/全社/アプリ既定）で編集・保存（saveSections）。割当候補 = 基本メニュー + 外部リンク + AKEBONO 業態アプリ。UiMenuSectionEditor を利用（#25・2026-08-03） |
 | `MediaChannelBar` | props なし。メディア分析の対象チャンネル切替バー（現在チャンネル + 連携業態バッジ + GA 連携バッジ + 設定導線）。全メディア画面の先頭に置く（F-40。2026-08-03 で MediaSegmentBar から改称・チャンネル化） |
 | `MediaGaConnect` | channelId?（未指定=現在チャンネル）, variant（'gate'/'bar'）。Google Analytics 連携ゲート（モック = 擬似 OAuth / API = Google OAuth 2.0 リダイレクト + 復帰クエリ `?ga=` 処理 + GA4 プロパティ選択モーダル。needsProperty の中間状態も再開可）。連携済みは状態バー + 解除（F-40。CalendarConnectGate と同型） |
 | `MediaFunnel` | stages（{label,value}[]）。流入→受注の簡易ファネル（幅バー + 前段比。Chart.js 不使用。F-40） |
