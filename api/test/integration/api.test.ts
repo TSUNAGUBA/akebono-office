@@ -3078,6 +3078,43 @@ describe('バッチ7c: ぽいぽいポスト/議事録 + 業務種別マスタ +
     })).json.error?.code).toBe('AKO-NOTE-001')
   })
 
+  it('議事録の Google Meet 連携（③b）: 未設定 env は status=false・未接続は AKO-DOC-006・既定フォルダは管理者のみ・meet リンクの往復と検証', async () => {
+    // OAuth 未設定（テスト env）: status は available/connected=false（UI 非表示 = documents ドライブ取込と同型）
+    const st = (await api('GET', '/v1/notes/meet/status', { as: MEMBER })).json.data as
+      { available: boolean; connected: boolean; driveScope: boolean }
+    expect(st).toMatchObject({ available: false, connected: false, driveScope: false })
+    // フォルダ/ファイル一覧は未接続で AKO-DOC-006（Drive 共通の再接続導線を共用）
+    expect((await api('GET', '/v1/notes/meet/folders', { as: MEMBER })).json.error?.code).toBe('AKO-DOC-006')
+    expect((await api('GET', '/v1/notes/meet/files', { as: MEMBER })).json.error?.code).toBe('AKO-DOC-006')
+    // 既定保管フォルダ: member は 403 / admin は設定 → 応答に反映 → id 空でクリア
+    expect((await api('PUT', '/v1/notes/meet/default-folder', {
+      as: MEMBER, body: { id: 'f1', name: 'Meet Recordings' },
+    })).status).toBe(403)
+    const set = await api('PUT', '/v1/notes/meet/default-folder', { as: ADMIN, body: { id: 'f1', name: 'Meet Recordings' } })
+    expect(set.json.data).toEqual({ id: 'f1', name: 'Meet Recordings' })
+    const cleared = await api('PUT', '/v1/notes/meet/default-folder', { as: ADMIN, body: { id: '' } })
+    expect(cleared.json.data).toBeNull()
+    // 議事録の Meet リンク往復（webViewLink は *.google.com のみ受理）
+    const linked = await api('POST', '/v1/notes', { as: ADMIN, body: {
+      kind: 'minutes', body: 'Meet 連携テスト議事録',
+      meetFileId: 'gdoc-1', meetFileName: 'AIメモ 7/20', meetWebLink: 'https://docs.google.com/document/d/gdoc-1/edit',
+    } })
+    expect((linked.json.data as { meetFileId: string; meetFileName: string; meetWebLink: string })).toMatchObject({
+      meetFileId: 'gdoc-1', meetFileName: 'AIメモ 7/20', meetWebLink: 'https://docs.google.com/document/d/gdoc-1/edit',
+    })
+    // 不正 webViewLink（非 google ドメイン）は null 化・id 無しは name/link も null（不整合を持ち込まない）
+    const bad = await api('POST', '/v1/notes', { as: ADMIN, body: {
+      kind: 'minutes', body: '不正リンク', meetFileId: 'gdoc-2', meetWebLink: 'https://evil.example.com/x',
+    } })
+    expect((bad.json.data as { meetFileId: string; meetWebLink: string | null }))
+      .toMatchObject({ meetFileId: 'gdoc-2', meetWebLink: null })
+    const noId = await api('POST', '/v1/notes', { as: ADMIN, body: {
+      kind: 'minutes', body: 'id 無し', meetFileName: 'orphan', meetWebLink: 'https://docs.google.com/x',
+    } })
+    expect((noId.json.data as { meetFileId: string | null; meetFileName: string | null }))
+      .toMatchObject({ meetFileId: null, meetFileName: null })
+  })
+
   it('AI 参照統合: 議事録は全員の検索文脈へ・ぽいぽいポストは本人のみ（owner スコープ = C3）', async () => {
     expect((await api('POST', '/v1/search/reindex', { as: ADMIN })).status).toBe(200)
     // 議事録（minutes）は他メンバーの文脈にも載る

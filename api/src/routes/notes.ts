@@ -6,7 +6,11 @@
  * - アップロード（.md/.txt/.pdf/.docx = lib/extract-text 再利用）は原本を note_files へ保全
  * - 書込後は検索インデックスを再生成（poipoi は owner スコープ付きで AI が参照 = search-index 側）
  * - 機能ガード: poipoi / minutes（F-16）
- * エラー: AKO-NOTE-001 非対応形式 / 002 サイズ超過 / 003 抽出不能（KNW と同型）
+ * - 議事録の Google Meet 連携（2026-08-03 ③b）: カレンダー OAuth（drive.readonly）を共用して Drive 上の
+ *   Meet AI メモ（Google ドキュメント）/ 録画（動画）を選び、議事録へ参照リンク（meet_file_id 等）を保持する。
+ *   保管フォルダは tenant 既定（app_configs 'meet-default-folder'）を初期表示し、違う場合のみ選び直す。
+ * エラー: AKO-NOTE-001 非対応形式 / 002 サイズ超過 / 003 抽出不能（KNW と同型）/
+ *         004 Meet(Drive) API 失敗 / 005 保管フォルダ未指定。未接続は Drive 共通の AKO-DOC-006。
  */
 import { Hono } from 'hono'
 import type pg from 'pg'
@@ -23,6 +27,9 @@ import { notify } from '../lib/notify'
 import { activePermissionRules, subjectOf } from '../lib/permissions'
 import { scheduleSearchRebuild } from '../lib/search-index'
 import { capCp } from '../lib/text'
+import { googleOauthEnabled } from './calendar'
+// Google Meet 連携（議事録）は Drive 連携（カレンダー OAuth + drive.readonly）を共用（原則3）
+import { driveForbiddenHint, driveTokenState, DRIVE_FILES_URL, googleErrorDetail, requireDriveToken } from './documents'
 
 /** ぽいぽいポスト登録時に、設定（app_configs 'poipoi-notify-recipients'）の宛先へ原文を通知する。
  *  宛先は「ロール/役職/個人」指定を解決した在籍メンバー（投稿者本人は除外）。非ブロッキング（原則4）。
@@ -58,7 +65,36 @@ const BODY_CAP = 20_000
 // フロントは文字列を直接パースするため UTC の "Z" ISO を返すと日付キー比較・表示が最大 9 時間ずれる）
 const NOTE_COLS = `id, member_id AS "memberId", kind, title, body, project_id AS "projectId",
   company_id AS "companyId", work_category_id AS "workCategoryId", source, active,
+  meet_file_id AS "meetFileId", meet_file_name AS "meetFileName", meet_web_link AS "meetWebLink",
   to_char(created_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"') AS "createdAt"`
+
+/** Meet 連携ファイル（Drive 参照）の正規化。id が空なら全て null（不整合を持ち込まない）。
+ *  webViewLink は https の *.google.com のみ受理（不正 URL を保存しない）。オペレーター指示 2026-08-03 ③b */
+function meetLinkOf(b: Record<string, unknown>): { id: string | null; name: string | null; webLink: string | null } {
+  const id = typeof b.meetFileId === 'string' ? b.meetFileId.trim().slice(0, 200) : ''
+  if (!id) return { id: null, name: null, webLink: null }
+  const name = typeof b.meetFileName === 'string' ? capCp(b.meetFileName.trim(), 300) : ''
+  const webRaw = typeof b.meetWebLink === 'string' ? b.meetWebLink.trim().slice(0, 1000) : ''
+  const webLink = /^https:\/\/[a-z0-9.-]+\.google\.com\//i.test(webRaw) ? webRaw : ''
+  return { id, name: name || null, webLink: webLink || null }
+}
+
+const MEET_DEFAULT_FOLDER_KEY = 'meet-default-folder'
+
+/** 議事録の Meet 既定保管フォルダ（tenant 設定 = app_configs）。未設定/壊れは null（原則4） */
+async function meetDefaultFolder(pool: pg.Pool): Promise<{ id: string; name: string } | null> {
+  const { rows } = await pool.query<{ value: unknown }>(
+    `SELECT value FROM app_configs WHERE key = $1`, [MEET_DEFAULT_FOLDER_KEY])
+  const raw = rows[0]?.value
+  // configs は JSON.stringify した値を jsonb 保存するため、文字列で返る場合と object の両方に対応
+  let obj: unknown = raw
+  if (typeof raw === 'string') { try { obj = JSON.parse(raw) } catch { obj = null } }
+  if (obj && typeof obj === 'object' && typeof (obj as { id?: unknown }).id === 'string' && (obj as { id: string }).id) {
+    const o = obj as { id: string; name?: unknown }
+    return { id: o.id, name: typeof o.name === 'string' ? o.name : '' }
+  }
+  return null
+}
 
 const EXT_MIME: Record<string, string> = {
   md: 'text/markdown',
@@ -142,12 +178,15 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
     const body = capCp(String(b.body ?? '').trim(), BODY_CAP)
     if (!body) throw err('AKO-GEN-001', '本文を入力してください', 400)
     const id = newId('nt')
+    const meet = meetLinkOf(b)
     try {
       await pool.query(
-        `INSERT INTO notes (id, member_id, kind, title, body, project_id, company_id, work_category_id, source)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'text')`,
+        `INSERT INTO notes (id, member_id, kind, title, body, project_id, company_id, work_category_id, source,
+           meet_file_id, meet_file_name, meet_web_link)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'text', $9, $10, $11)`,
         [id, user.id, kind, titleFrom(b.title, body), body,
-          refOrNull(b.projectId), refOrNull(b.companyId), refOrNull(b.workCategoryId)])
+          refOrNull(b.projectId), refOrNull(b.companyId), refOrNull(b.workCategoryId),
+          meet.id, meet.name, meet.webLink])
     } catch (e) {
       if ((e as { code?: string }).code === '23503') {
         throw err('AKO-GEN-001', '紐付け先（プロジェクト・顧客・業務種別）が見つかりません', 400)
@@ -193,14 +232,17 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
     const specifiedTitle = typeof b.title === 'string' ? b.title.trim() : ''
     const firstLine = text.split('\n').map(l => l.replace(/^#+\s*/, '').trim()).find(Boolean) ?? ''
     const title = capCp(specifiedTitle || capCp(firstLine, 40) || filename.replace(/\.[^.]+$/, ''), 200)
+    const meet = meetLinkOf(b)
     const client = await pool.connect()
     try {
       await client.query('BEGIN')
       await client.query(
-        `INSERT INTO notes (id, member_id, kind, title, body, project_id, company_id, work_category_id, source)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'upload')`,
+        `INSERT INTO notes (id, member_id, kind, title, body, project_id, company_id, work_category_id, source,
+           meet_file_id, meet_file_name, meet_web_link)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'upload', $9, $10, $11)`,
         [id, user.id, kind, title, capCp(text, BODY_CAP),
-          refOrNull(b.projectId), refOrNull(b.companyId), refOrNull(b.workCategoryId)])
+          refOrNull(b.projectId), refOrNull(b.companyId), refOrNull(b.workCategoryId),
+          meet.id, meet.name, meet.webLink])
       await client.query(
         `INSERT INTO note_files (id, note_id, filename, mime, size_bytes, bytes, uploaded_by)
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
@@ -222,6 +264,121 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
     scheduleSearchRebuild(pool, env, `notes:import`)
     const { rows } = await pool.query(`SELECT ${NOTE_COLS} FROM notes WHERE id = $1`, [id])
     return c.json({ data: rows[0] }, 201)
+  })
+
+  // ---------- Google Meet 連携（議事録の AI メモ/録画リンク。カレンダー OAuth + drive.readonly を共用） ----------
+  // 連携認証は AI アシスタントのカレンダー連携（drive.readonly を含む）を再利用（documents のドライブ取込と同型）。
+  // /meet/* は /:noteId/* より前に登録（静的パス優先。Hono は静的 > パラメータだが順序でも保証する）。
+  // エラー: AKO-NOTE-004（Drive API 失敗）/ 005（保管フォルダ未指定）。未接続は requireDriveToken が AKO-DOC-006。
+
+  const escDriveQ = (s: string): string => s.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+
+  // 連携状態（available = OAuth 構成 / connected + driveScope = カレンダートークンに drive.readonly / 既定フォルダ）
+  app.get('/meet/status', async (c) => {
+    const user = c.get('user')
+    if (!googleOauthEnabled(env)) {
+      return c.json({ data: { available: false, connected: false, driveScope: false, defaultFolder: null } })
+    }
+    const state = await driveTokenState(pool, user.id)
+    return c.json({ data: {
+      available: true, connected: state.connected, driveScope: state.driveScope,
+      defaultFolder: await meetDefaultFolder(pool),
+    } })
+  })
+
+  // 保管フォルダの一覧（既定の設定・連携先の変更用。読取のみ・ごみ箱除外）
+  app.get('/meet/folders', async (c) => {
+    const user = c.get('user')
+    const token = await requireDriveToken(pool, env, user.id)
+    const q = String(c.req.query('q') ?? '').trim().slice(0, 100)
+    const conditions = [`mimeType = 'application/vnd.google-apps.folder'`, 'trashed = false']
+    if (q) conditions.push(`name contains '${escDriveQ(q)}'`)
+    const params = new URLSearchParams({
+      q: conditions.join(' and '), pageSize: '50', orderBy: 'modifiedTime desc', fields: 'files(id,name)',
+      supportsAllDrives: 'true', includeItemsFromAllDrives: 'true',
+    })
+    const res = await fetch(`${DRIVE_FILES_URL}?${params}`, {
+      headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15_000),
+    })
+    if (!res.ok) {
+      const g = await googleErrorDetail(res)
+      throw err('AKO-NOTE-004', `フォルダ一覧の取得に失敗しました（HTTP ${res.status}${g.detail ? ` / ${g.detail}` : ''}）${driveForbiddenHint(res.status, g.raw)}`, 502)
+    }
+    const body = await res.json() as { files?: { id: string; name: string }[] }
+    return c.json({ data: (body.files ?? []).map(f => ({ id: f.id, name: f.name })) })
+  })
+
+  // 選択フォルダ内のファイル一覧（Meet の AI メモ = Google ドキュメント / 録画 = 動画。folderId 未指定は既定フォルダ）
+  app.get('/meet/files', async (c) => {
+    const user = c.get('user')
+    const token = await requireDriveToken(pool, env, user.id)
+    let folderId = String(c.req.query('folderId') ?? '').trim()
+    if (!folderId) folderId = (await meetDefaultFolder(pool))?.id ?? ''
+    if (!folderId) throw err('AKO-NOTE-005', '保管フォルダを指定してください（既定フォルダが未設定です）', 400)
+    const q = String(c.req.query('q') ?? '').trim().slice(0, 100)
+    const conditions = [`'${escDriveQ(folderId)}' in parents`, 'trashed = false',
+      `mimeType != 'application/vnd.google-apps.folder'`]
+    if (q) conditions.push(`name contains '${escDriveQ(q)}'`)
+    const params = new URLSearchParams({
+      q: conditions.join(' and '), pageSize: '50', orderBy: 'modifiedTime desc',
+      fields: 'files(id,name,mimeType,webViewLink,modifiedTime)',
+      supportsAllDrives: 'true', includeItemsFromAllDrives: 'true',
+    })
+    const res = await fetch(`${DRIVE_FILES_URL}?${params}`, {
+      headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15_000),
+    })
+    if (!res.ok) {
+      const g = await googleErrorDetail(res)
+      throw err('AKO-NOTE-004', `ファイル一覧の取得に失敗しました（HTTP ${res.status}${g.detail ? ` / ${g.detail}` : ''}）${driveForbiddenHint(res.status, g.raw)}`, 502)
+    }
+    const body = await res.json() as {
+      files?: { id: string; name: string; mimeType: string; webViewLink?: string; modifiedTime?: string }[]
+    }
+    return c.json({ data: (body.files ?? []).map(f => ({
+      id: f.id, name: f.name, mimeType: f.mimeType, webViewLink: f.webViewLink ?? '', modifiedTime: f.modifiedTime ?? '',
+      // AI メモ = Google ドキュメント / 録画 = 動画 / その他（判別は UI アイコン用）
+      fileKind: f.mimeType.startsWith('video/') ? 'recording'
+        : f.mimeType === 'application/vnd.google-apps.document' ? 'notes' : 'other',
+    })) })
+  })
+
+  // AI メモ（Google ドキュメント）を text/plain でエクスポート（議事録本文へ取り込む材料。本文へは UI で反映）
+  app.get('/meet/file-text', async (c) => {
+    const user = c.get('user')
+    const token = await requireDriveToken(pool, env, user.id)
+    const fileId = String(c.req.query('fileId') ?? '').trim()
+    if (!fileId) throw err('AKO-GEN-001', 'fileId を指定してください', 400)
+    const res = await fetch(
+      `${DRIVE_FILES_URL}/${encodeURIComponent(fileId)}/export?mimeType=text%2Fplain`,
+      { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000) })
+    if (!res.ok) {
+      const g = await googleErrorDetail(res)
+      throw err('AKO-NOTE-004', `AI メモの取得に失敗しました（Google ドキュメント形式のみ本文取込に対応。HTTP ${res.status}${g.detail ? ` / ${g.detail}` : ''}）`, 502)
+    }
+    const text = (await res.text()).replace(/\r\n/g, '\n').trim()
+    return c.json({ data: { text: capCp(text, BODY_CAP) } })
+  })
+
+  // 既定の保管フォルダを設定/クリア（管理者のみ = tenant 設定 app_configs。id 空でクリア）
+  app.put('/meet/default-folder', async (c) => {
+    const user = c.get('user')
+    if (user.role !== 'admin') throw err('AKO-PRM-001', '既定フォルダの設定は管理者のみです', 403)
+    const b = await c.req.json().catch(() => ({})) as Record<string, unknown>
+    const id = typeof b.id === 'string' ? b.id.trim().slice(0, 200) : ''
+    const name = typeof b.name === 'string' ? capCp(b.name.trim(), 300) : ''
+    if (!id) {
+      await pool.query(`DELETE FROM app_configs WHERE key = $1`, [MEET_DEFAULT_FOLDER_KEY])
+    } else {
+      await pool.query(
+        `INSERT INTO app_configs (key, value) VALUES ($1, $2)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+        [MEET_DEFAULT_FOLDER_KEY, JSON.stringify({ id, name })])
+    }
+    await audit(pool, {
+      actorId: user.id, action: 'update', entity: 'app_configs', entityId: MEET_DEFAULT_FOLDER_KEY,
+      detail: id ? `Meet 既定保管フォルダを設定（${name || id}）` : 'Meet 既定保管フォルダをクリア',
+    })
+    return c.json({ data: await meetDefaultFolder(pool) })
   })
 
   // 取消（論理削除。本アプリ共通原則: 操作の取消可能性 = オペレーター指示 2026-07-19 #5）。

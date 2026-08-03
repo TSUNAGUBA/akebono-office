@@ -40,6 +40,10 @@ export interface NoteInput {
   projectId: string | null
   companyId: string | null
   workCategoryId: string | null
+  /** 議事録の Google Meet 連携（AI メモ/録画の Drive 参照。API モードのみ設定される。2026-08-03 ③b） */
+  meetFileId?: string | null
+  meetFileName?: string | null
+  meetWebLink?: string | null
 }
 
 export function useNotes(kind: NoteKind) {
@@ -130,6 +134,9 @@ export function useNotes(kind: NoteKind) {
       workCategoryId: input.workCategoryId,
       source: 'text',
       createdAt: nowJstIso(),
+      meetFileId: input.meetFileId ?? null,
+      meetFileName: input.meetFileName ?? null,
+      meetWebLink: input.meetWebLink ?? null,
     }]
     commit()
     // ぽいぽいポストは設定された宛先へ原文を通知（mock。API はサーバー発火。オペレーター指示 2026-08-03）。

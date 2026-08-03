@@ -281,6 +281,11 @@ AI 機能（日報 AI アシスト・タスク計画の AI コメント等）は
    スコープに `drive.readonly` が追加されている。デプロイが `drive.googleapis.com` を自動有効化する。
    **バッチ7l 以前に連携済みのユーザーは、AI アシスタントのカレンダー連携から Google に再接続すると
    ドライブ取込が使えるようになる**（旧トークンのままでもカレンダーは従来どおり動作）
+5. **議事録の Google Meet 連携（③b・2026-08-03）:** 議事録（/minutes）で Google Meet の AI メモ/録画を
+   Drive から選んでリンクする機能も、上記 4 と**同じカレンダー連携トークン（`drive.readonly`）・同じ Drive API を
+   共用**するため追加の設定は不要（新スコープ・新 API・新コールバックなし）。AI メモの本文取込は Google ドキュメントを
+   `drive.googleapis.com` の export（text/plain）で取得する。**API モード限定**（実 Drive 連携が必要）で、
+   未接続時は本機能から AI アシスタントのカレンダー連携へ誘導する
 
 ## 1-9b. メディア分析の Google Analytics 連携（F-40）
 

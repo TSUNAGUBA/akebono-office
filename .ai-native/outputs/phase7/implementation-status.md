@@ -1748,3 +1748,61 @@
   - **MAJOR-3（本番デプロイ手当て漏れ = 原則1/5）**: 新 OAuth コールバック・新スコープ・Sheets API が deploy 自動化/手順書に未反映。→ `deploy.yml` に `sheets.googleapis.com` の自動有効化を追加、`deploy-guide.md` に **§1-9c**（コールバック URI・`spreadsheets.readonly` スコープ〔機微スコープ注記〕・Sheets API 有効化・トラブルシュート）を追加。
   - **NIT**: `MAX_SHEET_ROWS` のコメントを実挙動（フェッチ安全弁 = 受理上限 MAX_IMPORT_ROWS とは別）に修正。requireEnabled→requireAdmin 順序・status 非管理者可・disconnect 無確認は calendar/media と同型のため許容（原則3 の一貫性）。
 - [x] **再検証**: 上記是正後に mockup 221 / API unit 273 / API integration 230 いずれも green（是正で新たな回帰なしを確認 = 原則9「直した結果も問題ない」）。
+
+## 57. 議事録の Google Meet 連携（AI メモ/録画リンク。バッチ5 ③b。オペレーター指示 2026-08-03）の完了条件（Definition of Done）
+
+> オペレーター指示 2026-08-03 ③b「Google MEET による AI メモや録画との連動機能を追加。カレンダー同期の認証と同様に連携し、
+> 対象の保管フォルダを指定（デフォルトを初期表示し違う場合のみ任意指定）、対象ファイルを選ぶ」への**フル実装**。
+> 議事録（notes.kind='minutes'）に Drive 上の Meet 生成物（AI メモ=Google ドキュメント / 録画=動画）を選んで参照リンクする。
+> ブランチ `claude/reports-customer-log-updates-k6on2x`。
+
+### 57-1 方針（記録）
+- **連携認証はカレンダー連携を再利用**（0009 の calendar_tokens・`drive.readonly` スコープ）。ドキュメント管理の「ドライブから取込」と
+  同型で、別途の connect は持たず未接続時は AI アシスタントのカレンダー連携へ誘導する（原則3 = 既存 Drive 基盤の再利用）。
+- **API モード限定**（実 Drive 連携が必要）。モックは available=false で UI を隠す（documents のドライブ取込と同じ扱い）。
+- リンクは**参照のみ保持**（meet_file_id/名称/webViewLink）。ファイル実体は複製しない（Drive が SoT）。
+
+### 57-2 実装（API）
+- [x] **DB（migration 0052）**: `notes` に meet_file_id / meet_file_name / meet_web_link を追加（ADD COLUMN IF NOT EXISTS =
+  冪等・NULL 許容 = 既存議事録/ぽいぽいポスト非破壊 = 原則7）。NOTE_COLS へ 3 列を追加。
+- [x] **notes.ts**: POST / import が meetLinkOf で検証した Meet リンクを保持（webViewLink は https の *.google.com のみ受理・
+  id 空は全 null = 不整合を持ち込まない）。Meet ブラウズ endpoint 群を追加（`/:noteId/*` より前に登録 = 静的パス優先）:
+  `GET /meet/status`（driveTokenState + 既定フォルダ）・`GET /meet/folders`・`GET /meet/files`（folderId 省略時は既定フォルダ・
+  AI メモ/録画/その他を fileKind で分類）・`GET /meet/file-text`（Google ドキュメントを text/plain export = 本文取込の材料）・
+  `PUT /meet/default-folder`（管理者のみ = app_configs `meet-default-folder`・id 空でクリア）。エラー AKO-NOTE-004/005・
+  未接続は Drive 共通の AKO-DOC-006。
+- [x] **documents.ts**: driveTokenState / requireDriveToken / DRIVE_FILES_URL を export（notes.ts と共用 = 原則3。
+  googleErrorDetail / driveForbiddenHint は既存 export を再利用）。
+
+### 57-3 実装（フロント）
+- [x] **shared/domain/types.ts**: Note に meetFileId?/meetFileName?/meetWebLink? を追加（任意 = 原則7）。
+- [x] **useMeetLink.ts（新規）**: status/refreshStatus/listFolders/listFiles/fetchFileText/setDefaultFolder。API モード限定
+  （mock は available=false）。connect は持たず（カレンダー連携を再利用）。
+- [x] **useNotes.ts**: NoteInput に meet フィールドを追加。mock add はそのまま保持（API モードのみ設定される）。
+- [x] **NotesPanel.vue（議事録のみ・API モード）**: 入力モーダルに Meet 連携セクション（未接続=カレンダー連携誘導 /
+  連携済=保管フォルダ〔既定を初期表示・別フォルダ選択・管理者は既定設定〕→ ファイル一覧から選択 → 選択チップ +
+  「AI メモを本文へ取込」）。一覧行/詳細に Meet バッジ・詳細は webViewLink リンク。登録成功で選択をクリア。
+
+### 57-4 検証（実測値。この環境で実行）
+- [x] `cd mockup && npm run typecheck` green / `npm test` **221 passed**（件数不変）
+- [x] `cd api && npm run typecheck` green / unit **273 passed**（件数不変）/ `npm run test:integration`（使い捨て
+  PostgreSQL・migration 0052 適用）**231 passed**（Meet の status/folders/files 未接続・既定フォルダ管理者ゲート・
+  meet リンクの往復と検証〔非 google URL は null 化・id 無しは全 null〕を追加）
+- [x] **migration 0052 冪等性**: ADD COLUMN IF NOT EXISTS は再適用安全。テスト env（GOOGLE_OAUTH_* 未設定）は
+  available=false で UI を隠す経路・未接続は AKO-DOC-006 を検証。
+
+### 57-5 設計判断（記録）
+- **API モード限定**: documents のドライブ取込の前例に合わせ、実 Drive 連携が必要な機能はモックで simulate せず
+  available=false で隠す（① Sheets は疑似同意で simulate したが、③b は Drive 基盤〔calendar_tokens〕を全面再利用する
+  ため実 API 前提の方が一貫。demo では非表示になる旨を画面挙動で明示）。
+- **取消可能性（原則9.5）**: Meet リンクは議事録作成時に付与し、議事録自体の取消/復元（既存フロー）で立ち戻れる。
+  作成前は選択チップの「リンクを解除」でクリア可能。既定フォルダの設定も id 空でクリア可能。
+
+### 57-x 反復レビュー（原則9）
+- [x] **セルフレビュー（Push 前チェック）**: 手動ステップなし（連携はカレンダー再利用）/ 冪等（0052・default-folder upsert・
+  meetLinkOf 正規化は再送安全）/ 既存コード再利用（driveTokenState/requireDriveToken/googleErrorDetail・calendar OAuth）/
+  非ブロッキング（フォルダ/ファイル取得失敗はトースト・主フロー継続 = 原則4）/ ドキュメント全件更新（functional-requirements
+  F-06b-8・data-design・api-design・screen-design・deploy-guide §1-9 step5・本 §57）/ 波及は Grep で確認（NOTE_COLS/POST/import
+  の meet 列・/meet ルートと /:noteId の順序）/ SoT→キャッシュ（notes 書込 → 一覧再取得）/ 下位互換（列追加は NULL 許容 =
+  原則7）/ レスポンシブ（フォルダ/ファイルリストは max-h スクロール・flex-wrap）/ 取消可能性（57-5）。
+- [ ] **独立レビュー / 監査**: 実施予定（コードレビュアー + システム監査官）。指摘があれば是正しゼロまで反復。

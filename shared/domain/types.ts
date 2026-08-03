@@ -87,6 +87,10 @@ export interface Note {
   createdAt: string
   /** 取消（論理削除）済みは false。既存データ・モック旧データは未設定 = 有効（原則7） */
   active?: boolean
+  /** 議事録の Google Meet 連携（AI メモ/録画の Drive 参照。2026-08-03 ③b。未連携は null/未設定 = 原則7） */
+  meetFileId?: string | null
+  meetFileName?: string | null
+  meetWebLink?: string | null
 }
 
 /**
