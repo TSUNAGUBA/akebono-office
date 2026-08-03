@@ -478,7 +478,7 @@ export interface PaymentReceipt {
 
 // ---------- データ取込（F-32） ----------
 
-export type ImportMethod = 'file_csv' | 'file_fixed' | 'file_json' | 'api_pull'
+export type ImportMethod = 'file_csv' | 'file_fixed' | 'file_json' | 'api_pull' | 'sheets_pull'
 export type ImportTargetEntity = 'product' | 'sku' | 'company' | 'sales_record' | 'inventory'
 export type ImportRunStatus = 'staged' | 'validated' | 'applied' | 'failed' | 'reverted'
 
@@ -498,6 +498,16 @@ export interface ImportSourceConfig {
   authValue?: string
   /** JSON/API: レコード配列のルートパス（空 = 応答自体が配列 or 単一オブジェクト） */
   jsonRootPath?: string
+  /** Sheets: 対象スプレッドシートの id（Drive のファイル id。2026-08-03） */
+  spreadsheetId?: string
+  /** Sheets: 対象スプレッドシートの表示名（UI 表示用に保持） */
+  spreadsheetName?: string
+  /** Sheets: 対象シート（タブ）名 */
+  sheetName?: string
+  /** Sheets: ヘッダ行の行番号（1 始まり = 開始行。既定 1。これ以降がデータ） */
+  headerRow?: number
+  /** Sheets: 開始列（A1 記法の列。既定 'A'） */
+  startColumn?: string
 }
 
 export interface ImportSource {

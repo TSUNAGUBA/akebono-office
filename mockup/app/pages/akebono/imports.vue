@@ -16,9 +16,24 @@ import { parseCsvColumns, extractJsonKeys } from '~/utils/import-parse'
 import { fmtDateTime, fmtInt } from '~/utils/format'
 
 const imp = useAkebonoImports()
+const sheets = useSheetsImport()
 const toast = useToast()
 const confirm = useConfirm()
 const isApi = useApiMode()
+const route = useRoute()
+const router = useRouter()
+
+// Google スプレッドシート連携のコールバック（sheets.ts が /akebono/imports?sheets=connected|error へ戻す）
+onMounted(async () => {
+  const s = route.query.sheets
+  if (s === 'connected') {
+    await sheets.refreshStatus()
+    toast.show('Google スプレッドシートに連携しました', 'ok')
+  } else if (s === 'error') {
+    toast.show(`Google スプレッドシートの連携に失敗しました（${String(route.query.reason ?? '不明')}）`, 'crit')
+  }
+  if (s) router.replace({ query: { ...route.query, sheets: undefined, reason: undefined } })
+})
 
 // ---------- 取込元一覧 ----------
 
@@ -183,9 +198,19 @@ const mapMethod = computed(() => selectedSource.value?.method ?? 'file_csv')
 // v-model 摩擦回避のため具体型（全項目 required）。保存時に ImportSourceConfig へ渡す
 const cfgDraft = ref<{
   hasHeader: boolean; delimiter: string; endpoint: string; authType: string; authValue: string; jsonRootPath: string
-}>({ hasHeader: true, delimiter: ',', endpoint: '', authType: 'none', authValue: '', jsonRootPath: '' })
+  spreadsheetId: string; spreadsheetName: string; sheetName: string; headerRow: number; startColumn: string
+}>({
+  hasHeader: true, delimiter: ',', endpoint: '', authType: 'none', authValue: '', jsonRootPath: '',
+  spreadsheetId: '', spreadsheetName: '', sheetName: '', headerRow: 1, startColumn: 'A',
+})
 const parseText = ref('') // JSON/API 貼付
 const parseError = ref('')
+
+// Google スプレッドシート取込（sheets_pull）: 連携状態・ブック検索/一覧・タブ一覧
+const sheetsSearch = ref('')
+const sheetsList = ref<{ id: string; name: string }[]>([])
+const sheetsTabs = ref<string[]>([])
+const sheetsBusy = ref(false)
 
 const AUTH_TYPE_OPTIONS = [
   { value: 'none', label: '認証なし' }, { value: 'bearer', label: 'Bearer トークン' },
@@ -195,22 +220,27 @@ const AUTH_TYPE_OPTIONS = [
 /** マッピング行のグリッド列（方式で左辺の項目数が異なる。全列を文字列リテラルで JIT に露出） */
 const rowGridClass = computed(() => {
   switch (mapMethod.value) {
-    case 'file_csv': return 'grid-cols-[52px_1fr_16px_1.3fr_0.8fr_34px]'
+    case 'file_csv': case 'sheets_pull': return 'grid-cols-[52px_1fr_16px_1.3fr_0.8fr_34px]'
     case 'file_fixed': return 'grid-cols-[64px_64px_1fr_16px_1.3fr_0.8fr_34px]'
     default: return 'grid-cols-[1fr_16px_1.3fr_0.8fr_34px]'
   }
 })
 
-function openMapEditor(): void {
+async function openMapEditor(): Promise<void> {
   const src = selectedSource.value
   if (!src) return
   cfgDraft.value = {
     hasHeader: src.config?.hasHeader ?? true, delimiter: src.config?.delimiter ?? ',',
     endpoint: src.config?.endpoint ?? '', authType: src.config?.authType ?? 'none',
     authValue: src.config?.authValue ?? '', jsonRootPath: src.config?.jsonRootPath ?? '',
+    spreadsheetId: src.config?.spreadsheetId ?? '', spreadsheetName: src.config?.spreadsheetName ?? '',
+    sheetName: src.config?.sheetName ?? '', headerRow: src.config?.headerRow ?? 1, startColumn: src.config?.startColumn ?? 'A',
   }
   parseText.value = ''
   parseError.value = ''
+  sheetsSearch.value = ''
+  sheetsList.value = []
+  sheetsTabs.value = []
   const active = imp.activeMappingOf(src.id)
   mapDraft.value = active && active.fields.length > 0
     ? active.fields.map(f => ({
@@ -219,6 +249,67 @@ function openMapEditor(): void {
       }))
     : [blankRow()]
   mapOpen.value = true
+  // Sheets 方式は連携状態を取得し、設定済みブックのタブ一覧を復元（非ブロッキング = 原則4）
+  if (src.method === 'sheets_pull') {
+    await sheets.refreshStatus()
+    if (cfgDraft.value.spreadsheetId && sheets.status.value.connected) {
+      try { sheetsTabs.value = await sheets.listTabs(cfgDraft.value.spreadsheetId) } catch { /* 復元失敗は無視 */ }
+    }
+  }
+}
+
+// ---------- Google スプレッドシート取込（sheets_pull）の操作 ----------
+
+/** 対象スプレッドシートを検索（名称部分一致・空で最近更新順） */
+async function searchSpreadsheets(): Promise<void> {
+  if (sheetsBusy.value) return
+  sheetsBusy.value = true
+  try {
+    sheetsList.value = await sheets.listSpreadsheets(sheetsSearch.value)
+    if (sheetsList.value.length === 0) toast.show('該当するスプレッドシートが見つかりませんでした', 'warn')
+  } catch (e) {
+    toast.show(`スプレッドシートの取得に失敗しました（${(e as Error).message}）`, 'crit')
+  } finally { sheetsBusy.value = false }
+}
+
+/** ブックを選択 → タブ一覧を取得（シート選択・列検出をリセット） */
+async function selectSpreadsheet(s: { id: string; name: string }): Promise<void> {
+  cfgDraft.value.spreadsheetId = s.id
+  cfgDraft.value.spreadsheetName = s.name
+  cfgDraft.value.sheetName = ''
+  sheetsTabs.value = []
+  if (sheetsBusy.value) return
+  sheetsBusy.value = true
+  try {
+    sheetsTabs.value = await sheets.listTabs(s.id)
+    if (sheetsTabs.value.length > 0 && !sheetsTabs.value.includes(cfgDraft.value.sheetName)) {
+      cfgDraft.value.sheetName = sheetsTabs.value[0]!
+    }
+  } catch (e) {
+    toast.show(`シート一覧の取得に失敗しました（${(e as Error).message}）`, 'crit')
+  } finally { sheetsBusy.value = false }
+}
+
+/** 開始行/列を指定して列定義（ヘッダ行の各セル）を取得 → 左辺を自動生成 */
+async function detectSheetColumns(): Promise<void> {
+  if (!cfgDraft.value.spreadsheetId || !cfgDraft.value.sheetName) {
+    parseError.value = '対象のスプレッドシートとシートを選択してください'
+    return
+  }
+  if (sheetsBusy.value) return
+  sheetsBusy.value = true
+  try {
+    const cols = await sheets.detectColumns(
+      cfgDraft.value.spreadsheetId, cfgDraft.value.sheetName, cfgDraft.value.headerRow, cfgDraft.value.startColumn,
+    )
+    if (cols.length === 0) { parseError.value = '列を検出できませんでした（開始行・開始列をご確認ください）'; return }
+    // 開始列でスライス済みのため columnIndex は 0 始まり（extractCsvRecords と一致）
+    mapDraft.value = cols.map((name, i) => ({ ...blankRow(), sourceField: name, columnIndex: i }))
+    parseError.value = ''
+    toast.show(`${cols.length} 列を検出しました。各列の右辺（アプリ項目）を選択してください`, 'ok')
+  } catch (e) {
+    parseError.value = `列の取得に失敗しました: ${(e as Error).message}`
+  } finally { sheetsBusy.value = false }
 }
 
 /** CSV アップロード → 列（index＋論理名）抽出 → 左辺を自動生成 */
@@ -262,6 +353,11 @@ async function saveMapping(): Promise<void> {
     toast.show('取込元項目と対象アプリ項目を 1 行以上設定してください', 'crit')
     return
   }
+  // Sheets 方式は取込元（ブック・シート）の指定を必須にする（実行時 AKO-SHEETS-003 を事前に防ぐ）
+  if (src.method === 'sheets_pull' && (!cfgDraft.value.spreadsheetId || !cfgDraft.value.sheetName)) {
+    toast.show('対象のスプレッドシートとシートを選択してください', 'crit')
+    return
+  }
   if (mapBusy.value) return
   mapBusy.value = true
   try {
@@ -272,7 +368,8 @@ async function saveMapping(): Promise<void> {
     const res = await imp.saveMapping(src.id, valid.map(f => ({
       sourceField: f.sourceField.trim(), targetItemKey: f.targetItemKey.trim(), transform: f.transform.trim(),
       // 方式別ロケータのみ保持し他方式の残骸を混入させない（JSON/API は sourceField = JSON キー）
-      columnIndex: method === 'file_csv' ? f.columnIndex : null,
+      // Sheets は開始列でスライス済みの CSV として扱うため CSV と同じ columnIndex を保持する
+      columnIndex: (method === 'file_csv' || method === 'sheets_pull') ? f.columnIndex : null,
       byteStart: method === 'file_fixed' ? f.byteStart : null,
       byteEnd: method === 'file_fixed' ? f.byteEnd : null,
       jsonKey: (method === 'file_json' || method === 'api_pull') ? f.sourceField.trim() : null,
@@ -581,6 +678,89 @@ function openRun(row: Record<string, unknown>): void {
             </p>
           </template>
 
+          <!-- Google スプレッドシート（連携認証 → ブック検索/選択 → シート選択 → 開始行/列 → 列検出） -->
+          <template v-else-if="mapMethod === 'sheets_pull'">
+            <div v-if="!sheets.status.value.enabled" class="card border-warn bg-warn-soft p-2.5 text-[12px] text-ink">
+              Google スプレッドシート連携が未設定です（サーバーの GOOGLE_OAUTH_* を設定してください）。
+            </div>
+            <div v-else-if="!sheets.status.value.connected" class="grid gap-2">
+              <p class="text-[12px] text-sub">
+                Google カレンダー連携と同様に、Google アカウントで連携すると対象のスプレッドシートを検索・選択できます。
+              </p>
+              <div>
+                <button type="button" class="btn btn-sm btn-primary" :disabled="!sheets.isAdmin.value" @click="sheets.connect()">
+                  <Upload class="h-4 w-4" aria-hidden="true" />
+                  Google スプレッドシートと連携
+                </button>
+              </div>
+            </div>
+            <template v-else>
+              <div class="flex items-center justify-between">
+                <p class="text-[11px] font-semibold text-ok">連携済み</p>
+                <button type="button" class="btn btn-ghost btn-sm text-crit" @click="sheets.disconnect()">連携を解除</button>
+              </div>
+
+              <!-- 1) 対象スプレッドシートの検索・選択 -->
+              <div class="grid gap-1.5">
+                <span class="text-[11px] font-semibold text-muted">対象スプレッドシートを検索</span>
+                <div class="flex gap-2">
+                  <input
+                    v-model="sheetsSearch" class="input flex-1" type="text"
+                    placeholder="ブック名で検索（空で最近更新順）" aria-label="スプレッドシート検索"
+                    @keyup.enter="searchSpreadsheets"
+                  >
+                  <button type="button" class="btn btn-sm" :disabled="sheetsBusy" @click="searchSpreadsheets">検索</button>
+                </div>
+                <div v-if="sheetsList.length > 0" class="max-h-40 overflow-y-auto rounded border border-line">
+                  <button
+                    v-for="s in sheetsList" :key="s.id" type="button"
+                    class="flex w-full items-center justify-between border-b border-line px-2.5 py-1.5 text-left text-[12px] last:border-b-0 hover:bg-page"
+                    :class="{ 'bg-brand-soft text-brand': s.id === cfgDraft.spreadsheetId }"
+                    @click="selectSpreadsheet(s)"
+                  >
+                    <span>{{ s.name }}</span>
+                    <span v-if="s.id === cfgDraft.spreadsheetId" class="text-[11px]">選択中</span>
+                  </button>
+                </div>
+                <p v-if="cfgDraft.spreadsheetName" class="text-[12px] text-sub">
+                  対象ブック: <span class="font-semibold text-ink">{{ cfgDraft.spreadsheetName }}</span>
+                </p>
+              </div>
+
+              <!-- 2) シート（タブ）選択 -->
+              <label v-if="sheetsTabs.length > 0" class="grid gap-1 text-[11px] font-semibold text-muted">
+                シート（タブ）
+                <select v-model="cfgDraft.sheetName" class="select" aria-label="シート">
+                  <option value="">（選択）</option>
+                  <option v-for="t in sheetsTabs" :key="t" :value="t">{{ t }}</option>
+                </select>
+              </label>
+
+              <!-- 3) 開始行・開始列 → 列検出 -->
+              <div class="flex flex-wrap items-end gap-3">
+                <label class="grid gap-1 text-[11px] font-semibold text-muted">
+                  開始行（ヘッダ行・1 始まり）
+                  <input v-model.number="cfgDraft.headerRow" class="input w-28" type="number" min="1" aria-label="開始行">
+                </label>
+                <label class="grid gap-1 text-[11px] font-semibold text-muted">
+                  開始列（A1 記法）
+                  <input v-model="cfgDraft.startColumn" class="input w-20" type="text" maxlength="3" placeholder="A" aria-label="開始列">
+                </label>
+                <button
+                  type="button" class="btn btn-sm"
+                  :disabled="sheetsBusy || !cfgDraft.spreadsheetId || !cfgDraft.sheetName"
+                  @click="detectSheetColumns"
+                >
+                  <Upload class="h-4 w-4" aria-hidden="true" />
+                  {{ sheetsBusy ? '取得中…' : '列を取得' }}
+                </button>
+              </div>
+              <p class="text-[11px] text-muted">
+                指定した開始行を項目名（ヘッダ）とし、開始列以降の各列が左辺に展開されます。右辺（アプリ項目）を選択してください。
+              </p>
+            </template>
+          </template>
+
           <!-- JSON / API -->
           <template v-else>
             <template v-if="mapMethod === 'api_pull'">
@@ -636,8 +816,8 @@ function openRun(row: Record<string, unknown>): void {
         <div class="overflow-x-auto">
           <div class="grid gap-2" :class="mapMethod === 'file_fixed' ? 'min-w-[620px]' : 'min-w-[540px]'">
             <div v-for="(r, i) in mapDraft" :key="i" class="grid items-center gap-2" :class="rowGridClass">
-              <!-- 左辺: 取込元項目（方式別） -->
-              <template v-if="mapMethod === 'file_csv'">
+              <!-- 左辺: 取込元項目（方式別。Sheets は開始列でスライス済みのため CSV と同じ列番号表現） -->
+              <template v-if="mapMethod === 'file_csv' || mapMethod === 'sheets_pull'">
                 <span class="rounded border border-line bg-surface px-1 py-0.5 text-center text-[11px] tabular-nums text-muted">
                   {{ r.columnIndex != null ? `列${r.columnIndex + 1}` : '—' }}
                 </span>

@@ -25,14 +25,16 @@ import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
 import { safeFetch } from '../lib/safe-fetch'
 import { capCp } from '../lib/text'
-import { normalizeFieldLocators, normalizeImportSourceConfig } from '../../../shared/domain/import-parse'
+import { normalizeFieldLocators, normalizeImportSourceConfig, rowsToCsv } from '../../../shared/domain/import-parse'
 import {
   extractCsvRecords, extractFixedRecords, extractJsonRecords, MAX_IMPORT_ROWS,
   type ImportExtractResult, type ImportRecord, type ImportRunFieldDef,
 } from '../../../shared/domain/import-run'
+import type { Env } from '../env'
+import { fetchSheetRows } from './sheets'
 import { nextDocCode, postInventory } from './akebono-trade'
 
-const IMPORT_METHODS = ['file_csv', 'file_fixed', 'file_json', 'api_pull']
+const IMPORT_METHODS = ['file_csv', 'file_fixed', 'file_json', 'api_pull', 'sheets_pull']
 const IMPORT_ENTITIES = ['product', 'sku', 'company', 'sales_record', 'inventory']
 
 const SRC_COLS = `id, name, method, encoding, target_entity AS "targetEntity", schedule, active, config`
@@ -529,7 +531,7 @@ async function requireSource(db: pg.Pool | pg.PoolClient, id: string): Promise<v
   if (rows.length === 0) throw err('AKO-GEN-002', '取込元が見つかりません', 404)
 }
 
-export function akebonoImportsRoutes(pool: pg.Pool): Hono {
+export function akebonoImportsRoutes(pool: pg.Pool, env: Env): Hono {
   const app = new Hono()
 
   // ---------- 参照（全員可。書込判定はメニューの管理者ゲートに任せ、ハイドレーションを妨げない） ----------
@@ -673,6 +675,11 @@ export function akebonoImportsRoutes(pool: pg.Pool): Hono {
         throw err('AKO-IMP-007', `API 接続に失敗しました（HTTP ${res.status}）。エンドポイント・認証設定をご確認ください`, 502)
       }
       bytes = res.body
+    } else if (source.method === 'sheets_pull') {
+      // Google スプレッドシートの指定範囲（開始行/列）を読み取り CSV 化 → 既存 CSV 抽出へ流す（2026-08-03）。
+      // fetchSheetRows は未連携・対象未設定・API 失敗を AKO-SHEETS-* で投げる（非該当なら伝播）
+      const rows = await fetchSheetRows(pool, env, cfg)
+      bytes = Buffer.from(rowsToCsv(rows), 'utf8')
     } else {
       const contentBase64 = String(body.contentBase64 ?? '')
       if (!contentBase64) throw err('AKO-IMP-004', '取込ファイルを添付してください', 400)
@@ -690,10 +697,12 @@ export function akebonoImportsRoutes(pool: pg.Pool): Hono {
     if (source.method === 'file_fixed') {
       const lineBytes = splitLineBytes(bytes)
       extracted = extractFixedRecords(lineBytes, mapping.fields, b => decodeImportBytes(Buffer.from(b), source.encoding))
-    } else if (source.method === 'file_csv') {
-      extracted = extractCsvRecords(decodeImportBytes(bytes, source.encoding), mapping.fields, {
-        hasHeader: cfg.hasHeader !== false,
-        delimiter: typeof cfg.delimiter === 'string' && cfg.delimiter ? cfg.delimiter : ',',
+    } else if (source.method === 'file_csv' || source.method === 'sheets_pull') {
+      // sheets_pull は rowsToCsv 済み（UTF-8・区切り ','・開始行スライスでヘッダ行が先頭 = hasHeader:true）
+      const isSheets = source.method === 'sheets_pull'
+      extracted = extractCsvRecords(decodeImportBytes(bytes, isSheets ? 'utf8' : source.encoding), mapping.fields, {
+        hasHeader: isSheets ? true : cfg.hasHeader !== false,
+        delimiter: isSheets ? ',' : (typeof cfg.delimiter === 'string' && cfg.delimiter ? cfg.delimiter : ','),
       })
     } else {
       extracted = extractJsonRecords(decodeImportBytes(bytes, source.encoding), mapping.fields,

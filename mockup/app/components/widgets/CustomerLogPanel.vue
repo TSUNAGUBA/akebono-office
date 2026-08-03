@@ -2,7 +2,7 @@
 /**
  * 顧客ログパネル（オペレーター指示 2026-07-30 → 項目拡張 2026-07-31）。
  * 「いつ（開始/終了時刻は任意・15 分単位）・どの顧客（会社/人 = コンボボックス・未登録は新規マスタ登録）と・
- * 誰（自社担当者 = 既定ログインユーザー）が・どんな会話（属性タグ + 担当者メモ/議事録メモ）をしたか」を
+ * 誰（自社担当者 = 既定ログインユーザー）が・どんな会話（属性タグ + 担当者メモ）をしたか」を
  * 記録・一覧・編集・取消/復元する。
  * - 本人の記録は常に表示。権限（canViewMemberCustomerLog）で許可された他メンバーの記録は readonly 参照。
  * - 記録は AI（チャットボット・日報アシスト）の参照対象（本人スコープ）。
@@ -66,9 +66,9 @@ function fmtWhen(l: CustomerLog): string {
   if (!l.logTime) return date
   return `${date} ${l.logTime}${l.endTime ? `〜${l.endTime}` : ''}`
 }
-/** 一覧プレビュー（担当者メモ優先・空なら議事録メモ）*/
+/** 一覧プレビュー（担当者メモ）*/
 function previewOf(l: CustomerLog): string {
-  return l.body || l.minutesMemo
+  return l.body
 }
 
 const logs = computed(() => {
@@ -77,7 +77,7 @@ const logs = computed(() => {
   return rows.filter((l) => {
     if (companyFilter.value && l.companyId !== companyFilter.value) return false
     if (!q) return true
-    return [l.title, l.body, l.minutesMemo, companyName(l.companyId), contactName(l.contactId),
+    return [l.title, l.body, companyName(l.companyId), contactName(l.contactId),
       memberName(l.staffMemberId), ...(l.tags ?? [])]
       .some(v => (v ?? '').toLowerCase().includes(q))
   })
@@ -101,7 +101,6 @@ const form = ref({
   tags: [] as string[],
   title: '',
   body: '',
-  minutesMemo: '',
 })
 
 /** 時刻の選択肢（15 分単位。オペレーター指示: 分は 15 分単位から選択）*/
@@ -200,7 +199,6 @@ function openCreate(): void {
     tags: [],
     title: '',
     body: '',
-    minutesMemo: '',
   })
   newTag.value = ''
   composeOpen.value = true
@@ -219,7 +217,6 @@ function openEdit(l: CustomerLog): void {
     tags: [...(l.tags ?? [])],
     title: l.title,
     body: l.body,
-    minutesMemo: l.minutesMemo ?? '',
   })
   newTag.value = ''
   detailLog.value = null
@@ -242,7 +239,6 @@ async function submit(): Promise<void> {
       tags: form.value.tags,
       title: form.value.title,
       body: form.value.body,
-      minutesMemo: form.value.minutesMemo,
     }
     const willCreateCompany = !input.companyId && !!input.newCompanyName.trim()
     const willCreateContact = !input.contactId && !!input.newContactName.trim()
@@ -474,20 +470,12 @@ const showArchived = ref(false)
         <UiFormField label="件名（任意）">
           <input v-model="form.title" type="text" class="input" placeholder="例）SCM 追加提案の打診" aria-label="件名">
         </UiFormField>
-        <UiFormField label="担当者メモ" hint="議事録メモとどちらか一方は必須">
+        <UiFormField label="担当者メモ" required>
           <textarea
             v-model="form.body"
             class="textarea min-h-24"
             placeholder="担当者としての所感・要点・次アクションなど"
             aria-label="担当者メモ"
-          />
-        </UiFormField>
-        <UiFormField label="議事録メモ" hint="担当者メモとどちらか一方は必須">
-          <textarea
-            v-model="form.minutesMemo"
-            class="textarea min-h-24"
-            placeholder="会話の記録（決定事項・宿題・発言メモなど）"
-            aria-label="議事録メモ"
           />
         </UiFormField>
       </div>
@@ -526,10 +514,6 @@ const showArchived = ref(false)
         <div v-if="detailLog.body">
           <p class="label">担当者メモ</p>
           <p class="whitespace-pre-wrap text-[13px] leading-relaxed">{{ detailLog.body }}</p>
-        </div>
-        <div v-if="detailLog.minutesMemo">
-          <p class="label">議事録メモ</p>
-          <p class="whitespace-pre-wrap text-[13px] leading-relaxed">{{ detailLog.minutesMemo }}</p>
         </div>
       </div>
       <template v-if="detailLog && !isReadonly" #footer>

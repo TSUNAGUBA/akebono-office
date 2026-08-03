@@ -281,6 +281,11 @@ AI 機能（日報 AI アシスト・タスク計画の AI コメント等）は
    スコープに `drive.readonly` が追加されている。デプロイが `drive.googleapis.com` を自動有効化する。
    **バッチ7l 以前に連携済みのユーザーは、AI アシスタントのカレンダー連携から Google に再接続すると
    ドライブ取込が使えるようになる**（旧トークンのままでもカレンダーは従来どおり動作）
+5. **議事録の Google Meet 連携（③b・2026-08-03）:** 議事録（/minutes）で Google Meet の AI メモ/録画を
+   Drive から選んでリンクする機能も、上記 4 と**同じカレンダー連携トークン（`drive.readonly`）・同じ Drive API を
+   共用**するため追加の設定は不要（新スコープ・新 API・新コールバックなし）。AI メモの本文取込は Google ドキュメントを
+   `drive.googleapis.com` の export（text/plain）で取得する。**API モード限定**（実 Drive 連携が必要）で、
+   未接続時は本機能から AI アシスタントのカレンダー連携へ誘導する
 
 ## 1-9b. メディア分析の Google Analytics 連携（F-40）
 
@@ -314,6 +319,32 @@ AI 機能（日報 AI アシスト・タスク計画の AI コメント等）は
      -d '{"segmentId":"seg-01","path":"/blog/example","title":"記事タイトル","section":"ブログ","publishedAt":"2026-01-10","wordCount":2000}'
    ```
    誤登録は `POST /v1/media/articles/<id>/deactivate`（取消・論理削除）→ `/restore`（復元）で戻せる（原則9.5）
+
+## 1-9c. データ取込の Google スプレッドシート連携（F-32 `sheets_pull`・2026-08-03）
+
+データ取込・連携（/akebono/imports）で Google スプレッドシートを取込元にする機能。カレンダー連携（§1-9）と
+**同じ OAuth クライアント・同じ TOKEN_ENCRYPTION_KEY を共用**するため、§1-9 のセットアップ済み環境で追加の
+secrets は不要。連携は**テナント（全社）単位の単一接続**で、管理者がマッピング設定画面から画面操作のみで行う
+（同意 → 対象ブック検索・選択 → シート選択 → 開始行/列指定 → 列取得）。
+
+1. OAuth クライアントの「承認済みのリダイレクト URI」に**スプレッドシート用のコールバックパスを追加**する
+   （§1-9 のカレンダー用・§1-9b のメディア用 URI とは別に 1 行必要）:
+   ```
+   https://<cloud-run-url>/v1/akebono/sheets/oauth/callback
+   ```
+2. GCP プロジェクトで **Google Sheets API を有効化**する（値の読取に必要。ブック一覧は §1-9 の Drive API を使う。
+   デプロイが `sheets.googleapis.com` を自動有効化する。権限不足で警告が出た場合はオーナー権限で実行）:
+   ```bash
+   gcloud services enable sheets.googleapis.com --project <project-id>
+   ```
+   OAuth のトークン交換は Sheets API 無効でも成功するため、「連携はできるがシート一覧・列取得・取込が失敗する」
+   場合はまずこの有効化を確認する（カレンダーの §4 トラブルシュートと同じ構図・エラーコード AKO-SHEETS-002）。
+3. スコープは `spreadsheets.readonly`（値の読取）+ `drive.readonly`（ブック一覧。§1-9 の drive 取込と共用）で、
+   **カレンダー・メディアとは別の同意・別トークン**（`sheets_tokens` に単一接続で保管）。`spreadsheets.readonly` は
+   Google の**機微スコープ**に該当するため、公開アプリでは OAuth 同意画面の審査が必要になる場合がある（社内利用は
+   テスト/内部公開で可）。連携する Google アカウントは AKEBONO Office 登録済みの会社アカウント（members.email と突合）。
+4. secrets 未設定の間、スプレッドシート連携 UI は自動的に非表示（enabled=false。他機能に影響しない）。連携解除は
+   マッピング設定画面の「連携を解除」から（トークン物理削除 + revoke。再連携でいつでも復帰 = 原則9.5）。
 
 ## 1-10. ドキュメント保管（Firebase の Cloud Storage・バッチ7l）
 

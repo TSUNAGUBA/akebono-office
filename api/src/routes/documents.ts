@@ -32,7 +32,8 @@ const EXTRACT_CAP = 20_000
 /** ドライブ取込の 1 回あたり上限件数 */
 const MAX_DRIVE_IMPORT = 10
 
-const DRIVE_FILES_URL = 'https://www.googleapis.com/drive/v3/files'
+/** Drive files API のベース URL（議事録の Meet 連携 = notes.ts でも共用 = 原則3） */
+export const DRIVE_FILES_URL = 'https://www.googleapis.com/drive/v3/files'
 
 /**
  * Google API エラー応答から原因（reason / message）を取り出す（オペレーター報告 2026-07-20:
@@ -192,14 +193,16 @@ interface DriveTokenState {
   driveScope: boolean
 }
 
-async function driveTokenState(pool: pg.Pool, memberId: string): Promise<DriveTokenState> {
+/** Drive 連携状態（カレンダートークンに drive.readonly スコープがあるか）。notes.ts の Meet 連携でも共用 */
+export async function driveTokenState(pool: pg.Pool, memberId: string): Promise<DriveTokenState> {
   const { rows } = await pool.query<{ scope: string | null }>(
     `SELECT scope FROM calendar_tokens WHERE member_id = $1`, [memberId])
   if (!rows[0]) return { connected: false, driveScope: false }
   return { connected: true, driveScope: (rows[0].scope ?? '').includes(DRIVE_SCOPE) }
 }
 
-async function requireDriveToken(pool: pg.Pool, env: Env, memberId: string): Promise<string> {
+/** Drive 読取トークンを要求（未接続/スコープ不足/期限切れは AKO-DOC-006）。notes.ts の Meet 連携でも共用 */
+export async function requireDriveToken(pool: pg.Pool, env: Env, memberId: string): Promise<string> {
   if (!googleOauthEnabled(env)) {
     throw err('AKO-DOC-006', 'Google 連携が未設定です（GOOGLE_OAUTH_* を設定してください）', 409)
   }

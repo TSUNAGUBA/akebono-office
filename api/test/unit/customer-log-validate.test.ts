@@ -67,12 +67,11 @@ describe('cleanCustomerLogTags / customerLogTagsError（属性タグ）', () => 
   })
 })
 
-describe('customerLogMemoError（担当者メモ / 議事録メモ = どちらか必須）', () => {
-  it('両方空（空白のみ含む）はエラー・どちらか一方があれば null', () => {
-    expect(customerLogMemoError('', '')).toBe('担当者メモまたは議事録メモを入力してください')
-    expect(customerLogMemoError('  ', '\n')).toBe('担当者メモまたは議事録メモを入力してください')
-    expect(customerLogMemoError('担当者メモ', '')).toBeNull()
-    expect(customerLogMemoError('', '議事録メモ')).toBeNull()
+describe('customerLogMemoError（担当者メモ必須。議事録メモは 2026-08-03 廃止）', () => {
+  it('空（空白のみ含む）はエラー・担当者メモがあれば null', () => {
+    expect(customerLogMemoError('')).toBe('担当者メモを入力してください')
+    expect(customerLogMemoError('  \n')).toBe('担当者メモを入力してください')
+    expect(customerLogMemoError('担当者メモ')).toBeNull()
   })
 })
 

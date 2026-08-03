@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  extractJsonKeys, normalizeFieldLocators, normalizeImportSourceConfig, numOrNull, parseCsvColumns, parseCsvLine,
+  a1ColToIndex, extractJsonKeys, normalizeFieldLocators, normalizeImportSourceConfig, numOrNull,
+  parseCsvColumns, parseCsvLine, rowsToCsv, splitCsvRows,
 } from '../../../shared/domain/import-parse'
 
 describe('parseCsvLine（CSV 行分割）', () => {
@@ -12,6 +13,22 @@ describe('parseCsvLine（CSV 行分割）', () => {
   })
   it('区切り文字を指定できる（タブ）', () => {
     expect(parseCsvLine('a\tb\tc', '\t')).toEqual(['a', 'b', 'c'])
+  })
+})
+
+describe('splitCsvRows（CSV 全体 → 論理行。引用符内の改行を保持）', () => {
+  it('基本: 各行をセル配列へ・末尾改行で幻の空行を作らない', () => {
+    expect(splitCsvRows('a,b,c\n1,2,3\n')).toEqual([['a', 'b', 'c'], ['1', '2', '3']])
+  })
+  it('引用符内の改行・区切り・"" エスケープを保持（複数行セル）', () => {
+    expect(splitCsvRows('code,note\nP1,"1行目\n2行目"\nP2,"a,b ""x"""'))
+      .toEqual([['code', 'note'], ['P1', '1行目\n2行目'], ['P2', 'a,b "x"']])
+  })
+  it('完全な空行はスキップ・明示的な空セルは保持', () => {
+    expect(splitCsvRows('a,b\n\n,\n1,2')).toEqual([['a', 'b'], ['', ''], ['1', '2']])
+  })
+  it('CRLF/CR を LF に正規化・区切り指定（タブ）', () => {
+    expect(splitCsvRows('a\tb\r\n1\t2', '\t')).toEqual([['a', 'b'], ['1', '2']])
   })
 })
 
@@ -93,5 +110,47 @@ describe('normalizeImportSourceConfig（取込元の方式別設定 = モック�
       .toEqual({ endpoint: 'https://x/y', authType: 'bearer', authValue: 'tok', jsonRootPath: 'd' })
     expect(normalizeImportSourceConfig({ authType: 'bogus', authValue: 'tok' }, 'api_pull'))
       .toEqual({ endpoint: '', authType: 'none', authValue: '' })
+  })
+  it('Sheets: ブック/シート・開始行/列を保持（他方式の項目は落とす）', () => {
+    expect(normalizeImportSourceConfig(
+      { spreadsheetId: 'ss1', spreadsheetName: '売上台帳', sheetName: '明細', headerRow: 2, startColumn: 'b', endpoint: 'x' },
+      'sheets_pull',
+    )).toEqual({ spreadsheetId: 'ss1', spreadsheetName: '売上台帳', sheetName: '明細', headerRow: 2, startColumn: 'B' })
+  })
+  it('Sheets: headerRow 既定 1（不正・範囲外）・startColumn 既定 A（非 A-Z）', () => {
+    expect(normalizeImportSourceConfig({ headerRow: 0, startColumn: '1' }, 'sheets_pull'))
+      .toEqual({ spreadsheetId: '', spreadsheetName: '', sheetName: '', headerRow: 1, startColumn: 'A' })
+    expect(normalizeImportSourceConfig({ headerRow: 1.5, startColumn: 'AAAA' }, 'sheets_pull').headerRow).toBe(1)
+    expect(normalizeImportSourceConfig({ startColumn: 'AAAA' }, 'sheets_pull').startColumn).toBe('A')
+  })
+})
+
+describe('a1ColToIndex（A1 列 → 0 始まり index。Sheets 取込）', () => {
+  it('単一列: A=0・C=2・Z=25', () => {
+    expect(a1ColToIndex('A')).toBe(0)
+    expect(a1ColToIndex('C')).toBe(2)
+    expect(a1ColToIndex('Z')).toBe(25)
+  })
+  it('複数列: AA=26・AB=27・小文字/空白も許容', () => {
+    expect(a1ColToIndex('AA')).toBe(26)
+    expect(a1ColToIndex('AB')).toBe(27)
+    expect(a1ColToIndex(' b ')).toBe(1)
+  })
+  it('不正（数値・空・記号）は 0（A 相当）', () => {
+    expect(a1ColToIndex('1')).toBe(0)
+    expect(a1ColToIndex('')).toBe(0)
+    expect(a1ColToIndex('A1')).toBe(0)
+  })
+})
+
+describe('rowsToCsv（2 次元セル → CSV。RFC4180 引用）', () => {
+  it('通常セルはそのまま結合', () => {
+    expect(rowsToCsv([['a', 'b'], ['1', '2']])).toBe('a,b\n1,2')
+  })
+  it('カンマ/引用符/改行を含むセルは "" 囲み・内部 " は ""', () => {
+    expect(rowsToCsv([['a,1', 'b"x', 'c\nd']])).toBe('"a,1","b""x","c\nd"')
+  })
+  it('null/undefined セルは空文字', () => {
+    expect(rowsToCsv([[null as unknown as string, undefined as unknown as string, 'x']])).toBe(',,x')
   })
 })

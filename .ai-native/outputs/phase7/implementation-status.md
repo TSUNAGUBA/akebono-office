@@ -1252,7 +1252,7 @@
 
 ### 49-3 顧客ログの項目拡張
 - [x] DB（0047）: `end_time`（終了時刻）・`tags`（jsonb 属性タグ）・`staff_member_id`（自社担当者 = members FK。
-  **既存行は member_id でバックフィル + NOT NULL 化 = 原則7 のデータ更新パッチ**）・`minutes_memo`（議事録メモ）。
+  **既存行は member_id でバックフィル + NOT NULL 化 = 原則7 のデータ更新パッチ**）・`minutes_memo`（議事録メモ。**→ §55 で廃止（migration 0050・2026-08-03）**）。
   旧 `body` は「担当者メモ」として意味を引き継ぐ（列名・既存データ不変 = 下位互換）。
 - [x] API/モック検証（パリティ維持）: 開始/終了時刻（HH:MM・終了は開始必須 + 開始より後。**15 分単位は UI の選択肢制約**
   = 旧データの単位外時刻を API が拒否しない下位互換の設計判断）・タグ（trim・30cp cap・重複除去・最大 10 件 =
@@ -1679,3 +1679,130 @@
 - [x] **MINOR-2（監査）: mock のみドキュメント取込で通知発火（API・文書と不一致）**: mock の `importFile` が `add` 再利用で poipoi 通知を発火していた（API `/import` は非発火・§54-5 の設計判断とも矛盾）。→ `add` に `opts.notifyPoipoi` を追加し `importFile` は `false` を渡して非発火に統一。
 - [x] **NIT-1（監査）: 必須マーカーが提出済み編集でも常時表示**: ぽいぽい欄の `required`（アスタリスク）を `:required="!editingSubmitted"` にし、必須が実際に効く初回提出コンテキストでのみ表示（提出済み編集での誤った再投稿を防ぐ）。
 - [x] **再検証**: `cd mockup && npm run typecheck` green・`npm test` **221 passed** / `cd api && npm run typecheck` green・unit **259**・integration **229**（挙動の是正のみでテスト件数不変。既存アサーションは全て緑）。以上で未解決の指摘ゼロ。
+
+## 55. 顧客ログの議事録メモ廃止 + 議事録フォーム再構成（バッチ5 の一部。オペレーター指示 2026-08-03）の完了条件（Definition of Done）
+
+> オペレーター指示 2026-08-03（3 件）のうち、②顧客ログ「議事録メモ」の廃止 と ③a 議事録フォームの再構成 + プロジェクト→顧客補完 を実装した。
+> ①Akebono アプリのスプレッドシート取込・連携 と ③b Google Meet 連携（いずれも Google 外部連携を伴う大型機能）は
+> 可否回答 + 設計提示の上でスコープ確認中（本 §55 の対象外）。ブランチ `claude/reports-customer-log-updates-k6on2x`。
+
+### 55-1 ② 顧客ログ「議事録メモ」の入力・保管を廃止
+- [x] **検証 SoT**: `shared/domain/customer-log.ts` `customerLogMemoError(body)` を単一引数（担当者メモ必須）へ変更。呼び出し 3 箇所（API POST/PATCH・mock validate）を追随。
+- [x] **型**: `CustomerLog.minutesMemo` を削除（`shared/domain/types.ts`）。
+- [x] **API**: `customer-logs.ts` の CLOG_COLS・POST/PATCH の INSERT/UPDATE から `minutes_memo` を除去。`ownLog` は CLOG_COLS 経由で追随。
+- [x] **mock**: `useCustomerLogs.ts`（Input/validate/payload/add/update）から minutesMemo を除去。
+- [x] **UI**: `CustomerLogPanel.vue` の議事録メモ入力欄・詳細表示・一覧プレビュー・検索対象・form state を除去。担当者メモを `required` 表示に。
+- [x] **AI 検索インデックス**: `search-index.ts` の customer_logs SELECT と「議事録メモ」セグメント生成を除去。
+- [x] **seed**: `data/seed/customer-logs.ts` から minutesMemo を除去。
+- [x] **DB（migration 0050）**: `customer_logs DROP COLUMN IF EXISTS minutes_memo`（冪等）。**下位互換の注意（原則7）**: 議事録メモ本文を破棄する破壊的変更。0047 で追加された比較的新しい項目で、オペレーターの明示指示に基づく廃止。必要内容は担当者メモへ集約する運用（保全が必要なら適用前にバックアップ）。マイグレーション冒頭に明記。
+- [x] **テスト**: `customer-log-validate.test.ts`（memo 検証を body 単独へ）・`api.test.ts`（顧客ログ項目拡張 2 テストを body 必須へ・minutesMemo 応答非含有と未知キー無視を確認）を更新。
+
+### 55-2 ③a 議事録フォームの再構成 + プロジェクト→顧客補完（frontend のみ）
+- [x] **フォーム上部化**: `NotesPanel.vue`（ぽいぽいポスト/議事録の共通パネル）で プロジェクト/顧客/業務種別のセレクトを本文の上へ移設。操作ボタン（プレビュー/ファイル選択/登録）は末尾行に分離。
+- [x] **プロジェクト→顧客補完**: `form.projectId` を watch し、選択プロジェクトの `companyId`（Project.companyId = SoT）で `form.companyId` を補完（手動変更は妨げず、選び直し時のみ上書き）。API/DB 変更なし（既存の projectId/companyId をそのまま送る）。
+- [x] **共通化の帰結（記録）**: 共通パネルのため ぽいぽいポストの入力モーダルも同じ並び・補完になる（両ノート種別で一貫。害なし）。
+
+### 55-3 検証（実測値。この環境で実行）
+- [x] `cd mockup && npm run typecheck` green / `npm test` **221 passed**（17 files。件数不変 = 既存テストが緑のまま追随）
+- [x] `cd api && npm run typecheck` green / unit **259 passed** / `npm run test:integration`（使い捨て PostgreSQL・migration 0050 適用）**229 passed**
+- [x] **migration 0050 冪等性**: `DROP COLUMN IF EXISTS` は再適用・未適用いずれでも安全（本質的に冪等）。
+
+### 55-x 反復レビュー（原則9）
+- [x] **セルフレビュー（Push 前チェック）**: 手動ステップなし / 冪等（0050 DROP IF EXISTS）/ 既存パターン再利用（CustomerLogPanel の watch 補完流儀・Project.companyId 直参照）/ 非ブロッキング該当なし / ドキュメント全件更新（functional-requirements F-18・F-06b / data-design / api-design / screen-design / 本 §55）/ 波及は Grep で確認（minutesMemo/minutes_memo の残存 = 廃止を説明するコメントと「無視される」検証のみ）/ 下位互換の破壊的変更（列 DROP）はオペレーター説明を migration に明記（原則7）/ 取消可能性（顧客ログの取消/復元は不変）。
+
+## 56. Google スプレッドシート取込（データ取込・連携 F-32 の方式 `sheets_pull`。バッチ5 ①。オペレーター指示 2026-08-03）の完了条件（Definition of Done）
+
+> オペレーター指示 2026-08-03 ①「/akebono の各セグメントのアプリで『データ取込・連携』のスプレッドシートを対象にできるか」への**フル実装**回答。
+> 要望どおり **Google カレンダー同期と同様の連携認証 → 対象ブック検索・選択 → シート選択 → 開始行・列指定 → 列定義取得 → 各列をアプリ項目へマッピング → 取込** の操作感を、既存の取込基盤（F-32）へ新方式 `sheets_pull` として追加した。ブランチ `claude/reports-customer-log-updates-k6on2x`。
+
+### 56-1 可否回答（記録）
+- **可能**。既存 F-32 は取込元方式が拡張可能な設計（method 別に config を正規化し、実取込は shared/domain の抽出器へ流す）。Google スプレッドシートは「開始行=ヘッダ・開始列以降」でスライスした 2 次元配列を CSV 化すれば既存 CSV 抽出器をそのまま再利用でき（原則3）、OAuth はカレンダー/GA の実装（token 暗号化・state ノンス・email 突合）と同型で追加できる。
+
+### 56-2 実装（API）
+- [x] **OAuth 連携（`api/src/routes/sheets.ts`・新規）**: カレンダー/GA と同型の認可コードフロー。scope = `spreadsheets.readonly` + `drive.readonly`。**テナント単位の単一接続**（`sheets_tokens` id='default'）。`sheetsAccess`（期限切れは refresh）・`fetchSheetRows`（値取得 → 開始行/列スライス・MAX_SHEET_ROWS=50000）・`sheetsOauthCallback`（復帰 `/akebono/imports?sheets=connected|error`・email 突合）・`sheetsRoutes`（status / oauth/url〔admin〕/ disconnect〔admin〕/ spreadsheets 検索〔Drive files.list〕/ :id/tabs / :id/columns）。エラー AKO-SHEETS-001（未連携）/002（API 失敗）/003（対象未指定）。
+- [x] **実取込（`akebono-imports.ts`）**: IMPORT_METHODS に `sheets_pull` を追加。`akebonoImportsRoutes(pool, env)` へ env を注入。run の材料取得で sheets_pull は `fetchSheetRows` → `rowsToCsv` → 既存 CSV 抽出（`extractCsvRecords`・hasHeader:true・区切り ','・utf8）へ流す。ファイル添付不要。
+- [x] **shared 純関数（`shared/domain/import-parse.ts`）**: `a1ColToIndex`（A1 列 → 0 始まり index）・`rowsToCsv`（RFC4180 引用）・`normalizeImportSourceConfig` に sheets_pull 分岐（spreadsheetId/spreadsheetName/sheetName/headerRow〔1〜100000・既定1〕/startColumn〔/^[A-Z]{1,3}$/・既定A〕）。フロント/API 共有 = 両モード parity。
+- [x] **DB（migration 0051）**: `sheets_tokens`（単一接続）・`sheets_oauth_states`（一回性 10 分 TTL）を新設（CREATE IF NOT EXISTS = 冪等）。**`import_sources.method` の CHECK 制約を 0035 のインライン定義から拡張**して `sheets_pull` を許容（DROP CONSTRAINT IF EXISTS → ADD。既存方式は不変 = 原則7）。
+- [x] **配線（`app.ts`）**: OAuth コールバックを認証前に登録・`sheetsRoutes` を `/v1/akebono` へマウント・`akebonoImportsRoutes(pool, env)` へ env 追加。
+
+### 56-3 実装（フロント）
+- [x] **mock composable（`useSheetsImport.ts`・新規）**: status/refreshStatus/connect/disconnect/listSpreadsheets/listTabs/detectColumns。API モードは `/v1/akebono/sheets/*`・モックは疑似同意（即接続）+ 決定的なダミーのブック/シート/列（実 Google 通信なし・SSR 安全）。
+- [x] **取込画面（`imports.vue`）**: マッピング編集モーダルの方式別設定に **sheets_pull** ブロックを追加（未設定=案内 / 未連携=連携ボタン / 連携済=ブック検索・選択 → シート選択 → 開始行/列 → 「列を取得」で左辺自動生成）。左辺は CSV と同じ列番号表現（開始列スライス済 = 0 始まり）。`saveMapping` は sheets_pull で columnIndex ロケータを保持し、ブック・シート未選択は保存前ガード。`?sheets=connected|error` のコールバック復帰をトースト表示。
+- [x] **method ラベル（`useAkebonoImports.ts`）**: IMPORT_METHOD_LABELS に `sheets_pull: 'Google スプレッドシート'`。
+
+### 56-4 検証（実測値。この環境で実行）
+- [x] `cd mockup && npm run typecheck` green / `npm test` **221 passed**（件数不変 = 既存テストが緑のまま追随）
+- [x] `cd api && npm run typecheck` green / unit **273 passed**（import-parse に a1ColToIndex/rowsToCsv/splitCsvRows/sheets_pull config・akebono-phase-d に複数行セル/空ヘッダ列の回帰 = 計 14 件を追加）/ `npm run test:integration`（使い捨て PostgreSQL・migration 0051 適用）**230 passed**（sheets_pull の status/URL/callback/config 往復/未連携実行 = AKO-SHEETS-001 を追加）
+- [x] **migration 0051 冪等性**: CREATE IF NOT EXISTS + DROP CONSTRAINT IF EXISTS → ADD は再適用安全。テスト env（GOOGLE_OAUTH_* 未設定）は enabled=false で連携 UI を隠す経路を検証。
+
+### 56-5 設計判断（記録）
+- **接続はテナント単位の単一接続**（sheets_tokens id='default'）。取込は管理者運用のため per-user ではない（GA のリソース単位とも異なる）。連携ブラウズ・取込設定・実行は管理者のみ（AKO-AUTH-003 と両モード一致）。
+- **CSV 抽出器の再利用**: 開始行/列スライス済みの値を `rowsToCsv` で CSV 化し `extractCsvRecords` へ流すことで、変換（trim/number/date/…）・参照解決・冪等 upsert・エラー行隔離を既存経路と完全共有（新規反映エンジンを書かない = 原則3・原則4）。
+- **取消可能性（原則9.5）**: 取込元 = 論理削除+復元・マッピング = 新版で上書き（旧版は履歴）・連携 = disconnect で解除、はいずれも既存フローを継承。反映済みデータの是正は各アプリの既存フロー。
+
+### 56-x 反復レビュー（原則9）
+- [x] **セルフレビュー（Push 前チェック）**: 手動ステップなし（連携はUIボタン→OAuth）/ 冪等（0051・token upsert・config 正規化は再送安全）/ 既存コード再利用（calendar/GA の OAuth 型・extractCsvRecords・normalizeImportSourceConfig・useAppFields）/ 非ブロッキング（連携失敗・タブ復元失敗はトースト/無視で主要フロー継続 = 原則4）/ ドキュメント全件更新（akebono-menu-design §5・data-design・api-design・本 §56）/ 波及は Grep で確認（IMPORT_METHODS/IMPORT_METHOD_LABELS/rowGridClass/method 分岐の網羅）/ SoT→キャッシュ順序（sheets_tokens 書込 → status 反映）/ 下位互換（新方式追加・CHECK 拡張は既存非破壊 = 原則7）/ レスポンシブ（検索・選択リストは flex/max-h スクロール）/ 取消可能性（56-5）。
+- [x] **独立レビュー / 監査の指摘是正（原則9・初回 = de8eb7a に対して）**: コードレビュアーとシステム監査官を並行実施し、MAJOR 3 件・NIT を是正。
+  - **MAJOR-1（複数行セルで行崩れ）**: `rowsToCsv` が生成しうる引用符内改行を、行単位 split の `extractCsvRecords` が別レコードに割ってしまい幻の行/誤取込を生む欠陥。→ shared に **`splitCsvRows`**（引用符内の改行・区切りを保持する全文パーサ）を新設し、`extractCsvRecords`・`parseCsvColumns` を全文パースへ切替（file_csv も同時に堅牢化）。回帰テスト追加。
+  - **MAJOR-2（空ヘッダ列で誤列取込）**: `/sheets/:id/columns` が `.filter(Boolean)` で空ヘッダセルを落とし、UI の `columnIndex=i`（filtered 位置）が実取込の絶対 index とズレる欠陥。→ エンドポイントを **空セルも「列N」として index を保存**（`parseCsvColumns` と同規約）へ修正。回帰テスト追加。
+  - **MAJOR-3（本番デプロイ手当て漏れ = 原則1/5）**: 新 OAuth コールバック・新スコープ・Sheets API が deploy 自動化/手順書に未反映。→ `deploy.yml` に `sheets.googleapis.com` の自動有効化を追加、`deploy-guide.md` に **§1-9c**（コールバック URI・`spreadsheets.readonly` スコープ〔機微スコープ注記〕・Sheets API 有効化・トラブルシュート）を追加。
+  - **NIT**: `MAX_SHEET_ROWS` のコメントを実挙動（フェッチ安全弁 = 受理上限 MAX_IMPORT_ROWS とは別）に修正。requireEnabled→requireAdmin 順序・status 非管理者可・disconnect 無確認は calendar/media と同型のため許容（原則3 の一貫性）。
+- [x] **再検証**: 上記是正後に mockup 221 / API unit 273 / API integration 230 いずれも green（是正で新たな回帰なしを確認 = 原則9「直した結果も問題ない」）。
+
+## 57. 議事録の Google Meet 連携（AI メモ/録画リンク。バッチ5 ③b。オペレーター指示 2026-08-03）の完了条件（Definition of Done）
+
+> オペレーター指示 2026-08-03 ③b「Google MEET による AI メモや録画との連動機能を追加。カレンダー同期の認証と同様に連携し、
+> 対象の保管フォルダを指定（デフォルトを初期表示し違う場合のみ任意指定）、対象ファイルを選ぶ」への**フル実装**。
+> 議事録（notes.kind='minutes'）に Drive 上の Meet 生成物（AI メモ=Google ドキュメント / 録画=動画）を選んで参照リンクする。
+> ブランチ `claude/reports-customer-log-updates-k6on2x`。
+
+### 57-1 方針（記録）
+- **連携認証はカレンダー連携を再利用**（0009 の calendar_tokens・`drive.readonly` スコープ）。ドキュメント管理の「ドライブから取込」と
+  同型で、別途の connect は持たず未接続時は AI アシスタントのカレンダー連携へ誘導する（原則3 = 既存 Drive 基盤の再利用）。
+- **API モード限定**（実 Drive 連携が必要）。モックは available=false で UI を隠す（documents のドライブ取込と同じ扱い）。
+- リンクは**参照のみ保持**（meet_file_id/名称/webViewLink）。ファイル実体は複製しない（Drive が SoT）。
+
+### 57-2 実装（API）
+- [x] **DB（migration 0052）**: `notes` に meet_file_id / meet_file_name / meet_web_link を追加（ADD COLUMN IF NOT EXISTS =
+  冪等・NULL 許容 = 既存議事録/ぽいぽいポスト非破壊 = 原則7）。NOTE_COLS へ 3 列を追加。
+- [x] **notes.ts**: POST / import が meetLinkOf で検証した Meet リンクを保持（webViewLink は https の *.google.com のみ受理・
+  id 空は全 null = 不整合を持ち込まない）。Meet ブラウズ endpoint 群を追加（`/:noteId/*` より前に登録 = 静的パス優先）:
+  `GET /meet/status`（driveTokenState + 既定フォルダ）・`GET /meet/folders`・`GET /meet/files`（folderId 省略時は既定フォルダ・
+  AI メモ/録画/その他を fileKind で分類）・`GET /meet/file-text`（Google ドキュメントを text/plain export = 本文取込の材料）・
+  `PUT /meet/default-folder`（管理者のみ = app_configs `meet-default-folder`・id 空でクリア）。エラー AKO-NOTE-004/005・
+  未接続は Drive 共通の AKO-DOC-006。
+- [x] **documents.ts**: driveTokenState / requireDriveToken / DRIVE_FILES_URL を export（notes.ts と共用 = 原則3。
+  googleErrorDetail / driveForbiddenHint は既存 export を再利用）。
+
+### 57-3 実装（フロント）
+- [x] **shared/domain/types.ts**: Note に meetFileId?/meetFileName?/meetWebLink? を追加（任意 = 原則7）。
+- [x] **useMeetLink.ts（新規）**: status/refreshStatus/listFolders/listFiles/fetchFileText/setDefaultFolder。API モード限定
+  （mock は available=false）。connect は持たず（カレンダー連携を再利用）。
+- [x] **useNotes.ts**: NoteInput に meet フィールドを追加。mock add はそのまま保持（API モードのみ設定される）。
+- [x] **NotesPanel.vue（議事録のみ・API モード）**: 入力モーダルに Meet 連携セクション（未接続=カレンダー連携誘導 /
+  連携済=保管フォルダ〔既定を初期表示・別フォルダ選択・管理者は既定設定〕→ ファイル一覧から選択 → 選択チップ +
+  「AI メモを本文へ取込」）。一覧行/詳細に Meet バッジ・詳細は webViewLink リンク。登録成功で選択をクリア。
+
+### 57-4 検証（実測値。この環境で実行）
+- [x] `cd mockup && npm run typecheck` green / `npm test` **221 passed**（件数不変）
+- [x] `cd api && npm run typecheck` green / unit **273 passed**（件数不変）/ `npm run test:integration`（使い捨て
+  PostgreSQL・migration 0052 適用）**231 passed**（Meet の status/folders/files 未接続・既定フォルダ管理者ゲート・
+  meet リンクの往復と検証〔非 google URL は null 化・id 無しは全 null〕を追加）
+- [x] **migration 0052 冪等性**: ADD COLUMN IF NOT EXISTS は再適用安全。テスト env（GOOGLE_OAUTH_* 未設定）は
+  available=false で UI を隠す経路・未接続は AKO-DOC-006 を検証。
+
+### 57-5 設計判断（記録）
+- **API モード限定**: documents のドライブ取込の前例に合わせ、実 Drive 連携が必要な機能はモックで simulate せず
+  available=false で隠す（① Sheets は疑似同意で simulate したが、③b は Drive 基盤〔calendar_tokens〕を全面再利用する
+  ため実 API 前提の方が一貫。demo では非表示になる旨を画面挙動で明示）。
+- **取消可能性（原則9.5）**: Meet リンクは議事録作成時に付与し、議事録自体の取消/復元（既存フロー）で立ち戻れる。
+  作成前は選択チップの「リンクを解除」でクリア可能。既定フォルダの設定も id 空でクリア可能。
+
+### 57-x 反復レビュー（原則9）
+- [x] **セルフレビュー（Push 前チェック）**: 手動ステップなし（連携はカレンダー再利用）/ 冪等（0052・default-folder upsert・
+  meetLinkOf 正規化は再送安全）/ 既存コード再利用（driveTokenState/requireDriveToken/googleErrorDetail・calendar OAuth）/
+  非ブロッキング（フォルダ/ファイル取得失敗はトースト・主フロー継続 = 原則4）/ ドキュメント全件更新（functional-requirements
+  F-06b-8・data-design・api-design・screen-design・deploy-guide §1-9 step5・本 §57）/ 波及は Grep で確認（NOTE_COLS/POST/import
+  の meet 列・/meet ルートと /:noteId の順序）/ SoT→キャッシュ（notes 書込 → 一覧再取得）/ 下位互換（列追加は NULL 許容 =
+  原則7）/ レスポンシブ（フォルダ/ファイルリストは max-h スクロール・flex-wrap）/ 取消可能性（57-5）。
+- [ ] **独立レビュー / 監査**: 実施予定（コードレビュアー + システム監査官）。指摘があれば是正しゼロまで反復。

@@ -3078,6 +3078,43 @@ describe('バッチ7c: ぽいぽいポスト/議事録 + 業務種別マスタ +
     })).json.error?.code).toBe('AKO-NOTE-001')
   })
 
+  it('議事録の Google Meet 連携（③b）: 未設定 env は status=false・未接続は AKO-DOC-006・既定フォルダは管理者のみ・meet リンクの往復と検証', async () => {
+    // OAuth 未設定（テスト env）: status は available/connected=false（UI 非表示 = documents ドライブ取込と同型）
+    const st = (await api('GET', '/v1/notes/meet/status', { as: MEMBER })).json.data as
+      { available: boolean; connected: boolean; driveScope: boolean }
+    expect(st).toMatchObject({ available: false, connected: false, driveScope: false })
+    // フォルダ/ファイル一覧は未接続で AKO-DOC-006（Drive 共通の再接続導線を共用）
+    expect((await api('GET', '/v1/notes/meet/folders', { as: MEMBER })).json.error?.code).toBe('AKO-DOC-006')
+    expect((await api('GET', '/v1/notes/meet/files', { as: MEMBER })).json.error?.code).toBe('AKO-DOC-006')
+    // 既定保管フォルダ: member は 403 / admin は設定 → 応答に反映 → id 空でクリア
+    expect((await api('PUT', '/v1/notes/meet/default-folder', {
+      as: MEMBER, body: { id: 'f1', name: 'Meet Recordings' },
+    })).status).toBe(403)
+    const set = await api('PUT', '/v1/notes/meet/default-folder', { as: ADMIN, body: { id: 'f1', name: 'Meet Recordings' } })
+    expect(set.json.data).toEqual({ id: 'f1', name: 'Meet Recordings' })
+    const cleared = await api('PUT', '/v1/notes/meet/default-folder', { as: ADMIN, body: { id: '' } })
+    expect(cleared.json.data).toBeNull()
+    // 議事録の Meet リンク往復（webViewLink は *.google.com のみ受理）
+    const linked = await api('POST', '/v1/notes', { as: ADMIN, body: {
+      kind: 'minutes', body: 'Meet 連携テスト議事録',
+      meetFileId: 'gdoc-1', meetFileName: 'AIメモ 7/20', meetWebLink: 'https://docs.google.com/document/d/gdoc-1/edit',
+    } })
+    expect((linked.json.data as { meetFileId: string; meetFileName: string; meetWebLink: string })).toMatchObject({
+      meetFileId: 'gdoc-1', meetFileName: 'AIメモ 7/20', meetWebLink: 'https://docs.google.com/document/d/gdoc-1/edit',
+    })
+    // 不正 webViewLink（非 google ドメイン）は null 化・id 無しは name/link も null（不整合を持ち込まない）
+    const bad = await api('POST', '/v1/notes', { as: ADMIN, body: {
+      kind: 'minutes', body: '不正リンク', meetFileId: 'gdoc-2', meetWebLink: 'https://evil.example.com/x',
+    } })
+    expect((bad.json.data as { meetFileId: string; meetWebLink: string | null }))
+      .toMatchObject({ meetFileId: 'gdoc-2', meetWebLink: null })
+    const noId = await api('POST', '/v1/notes', { as: ADMIN, body: {
+      kind: 'minutes', body: 'id 無し', meetFileName: 'orphan', meetWebLink: 'https://docs.google.com/x',
+    } })
+    expect((noId.json.data as { meetFileId: string | null; meetFileName: string | null }))
+      .toMatchObject({ meetFileId: null, meetFileName: null })
+  })
+
   it('AI 参照統合: 議事録は全員の検索文脈へ・ぽいぽいポストは本人のみ（owner スコープ = C3）', async () => {
     expect((await api('POST', '/v1/search/reindex', { as: ADMIN })).status).toBe(200)
     // 議事録（minutes）は他メンバーの文脈にも載る
@@ -5380,6 +5417,45 @@ describe('Phase D: データ取込（F-32）・ダッシュボード保管（F-4
       })
       expect(res.json.error?.code).toBe('AKO-IMP-005')
     })
+
+    it('Google スプレッドシート（sheets_pull）: 未設定は status=false・URL/一覧は AKO-SHEETS-001・コールバックはエラーリダイレクト・config 往復・未連携実行は AKO-SHEETS-001', async () => {
+      // OAuth 未設定（テスト env）: status は enabled/connected=false（カレンダー/GA と同型）
+      const st = (await api('GET', '/v1/akebono/sheets/status', { as: MEMBER })).json.data as
+        { enabled: boolean; connected: boolean }
+      expect(st).toMatchObject({ enabled: false, connected: false })
+      // 同意 URL・ブック一覧は未設定で AKO-SHEETS-001（連携設定が先）
+      expect((await api('GET', '/v1/akebono/sheets/oauth/url', { as: ADMIN })).json.error?.code).toBe('AKO-SHEETS-001')
+      expect((await api('GET', '/v1/akebono/sheets/spreadsheets', { as: ADMIN })).json.error?.code).toBe('AKO-SHEETS-001')
+      // コールバックは認証なしで到達し、未設定はフロントへエラーリダイレクト（500 にしない）
+      const cb = await app.request('/v1/akebono/sheets/oauth/callback?state=x&code=y')
+      expect(cb.status).toBe(302)
+      expect(cb.headers.get('location')).toContain('sheets=error')
+
+      // 取込元 sheets_pull: config が正規化されて往復（開始列は大文字化・既定補完・他方式項目は落とす）
+      const src = await api('POST', '/v1/akebono/import-sources', {
+        as: ADMIN, body: {
+          name: 'スプレッドシート取込', method: 'sheets_pull', encoding: 'utf8', targetEntity: 'product',
+          config: { spreadsheetId: 'ss-1', spreadsheetName: '商品台帳', sheetName: '商品', headerRow: 2, startColumn: 'b', endpoint: 'x' },
+        },
+      })
+      expect(src.status).toBe(201)
+      const srcId = (src.json.data as { id: string }).id
+      expect((src.json.data as { method: string; config: Record<string, unknown> })).toMatchObject({
+        method: 'sheets_pull',
+        config: { spreadsheetId: 'ss-1', spreadsheetName: '商品台帳', sheetName: '商品', headerRow: 2, startColumn: 'B' },
+      })
+      // マッピング（Sheets は CSV と同じ columnIndex ロケータを保持）
+      const map = await api('POST', '/v1/akebono/import-mappings', {
+        as: ADMIN, body: { sourceId: srcId, fields: [
+          { sourceField: '商品コード', targetItemKey: 'code', columnIndex: 0 },
+          { sourceField: '商品名', targetItemKey: 'name', columnIndex: 1 },
+        ] },
+      })
+      expect((map.json.data as { fields: { columnIndex: number | null }[] }).fields.map(f => f.columnIndex)).toEqual([0, 1])
+      // 実行: 未連携のため AKO-SHEETS-001（実取込エンジンが fetchSheetRows で検出。ファイル添付は不要）
+      const run = await api('POST', '/v1/akebono/import-runs', { as: ADMIN, body: { sourceId: srcId } })
+      expect(run.json.error?.code).toBe('AKO-SHEETS-001')
+    })
   })
 
   // ---------- ダッシュボード AI レポート保管（F-41）: 導出キャッシュ upsert ----------
@@ -5669,35 +5745,37 @@ describe('顧客ログ', () => {
     expect(((await api('GET', '/v1/customer-logs', { as: MEMBER })).json.data as { id: string }[]).some(l => l.id === logId)).toBe(true)
   })
 
-  it('項目拡張: 開始/終了時刻・属性タグ・自社担当者・議事録メモ（オペレーター指示 2026-07-31）', async () => {
+  it('項目拡張: 開始/終了時刻・属性タグ・自社担当者・担当者メモ必須（2026-07-31 拡張・議事録メモは 2026-08-03 廃止）', async () => {
     // 終了のみ / 終了 <= 開始 / 終了の書式不正はいずれも AKO-CLG-001
     expect((await api('POST', '/v1/customer-logs', { as: MEMBER, body: { logDate: today, endTime: '15:00', companyId, body: 'x' } })).json.error?.code).toBe('AKO-CLG-001')
     expect((await api('POST', '/v1/customer-logs', { as: MEMBER, body: { logDate: today, logTime: '15:00', endTime: '15:00', companyId, body: 'x' } })).json.error?.code).toBe('AKO-CLG-001')
     expect((await api('POST', '/v1/customer-logs', { as: MEMBER, body: { logDate: today, logTime: '15:00', endTime: '99:99', companyId, body: 'x' } })).json.error?.code).toBe('AKO-CLG-001')
-    // 担当者メモ・議事録メモの両方空は AKO-CLG-001（どちらか一方があれば OK）
-    expect((await api('POST', '/v1/customer-logs', { as: MEMBER, body: { logDate: today, companyId, body: '', minutesMemo: '' } })).json.error?.code).toBe('AKO-CLG-001')
+    // 担当者メモ（body）が空は AKO-CLG-001（議事録メモ廃止後は body 単独必須）
+    expect((await api('POST', '/v1/customer-logs', { as: MEMBER, body: { logDate: today, companyId, body: '' } })).json.error?.code).toBe('AKO-CLG-001')
+    // 廃止済みの minutesMemo を送っても body が空なら弾く（未知キーは無視・保管もされない）
+    expect((await api('POST', '/v1/customer-logs', { as: MEMBER, body: { logDate: today, companyId, body: '', minutesMemo: '無視される' } })).json.error?.code).toBe('AKO-CLG-001')
     // タグ上限（10 件）超過は AKO-CLG-001
     expect((await api('POST', '/v1/customer-logs', {
       as: MEMBER, body: { logDate: today, companyId, body: 'x', tags: Array.from({ length: 11 }, (_, i) => `t${i}`) },
     })).json.error?.code).toBe('AKO-CLG-001')
-    // 議事録メモのみ + 開始/終了 + タグ（trim・重複除去）+ 自社担当者の明示指定
+    // 担当者メモ + 開始/終了 + タグ（trim・重複除去）+ 自社担当者の明示指定
     const created = await api('POST', '/v1/customer-logs', {
       as: MEMBER,
       body: {
         logDate: today, logTime: '10:00', endTime: '10:45', companyId, contactId,
-        tags: ['商談', '商談', ' 取材 '], minutesMemo: '議事録のみで登録', staffMemberId: HR,
+        tags: ['商談', '商談', ' 取材 '], body: '担当者メモで登録', staffMemberId: HR,
       },
     })
     expect(created.status).toBe(201)
     const row = created.json.data as {
-      logTime: string; endTime: string; tags: string[]; staffMemberId: string; body: string; minutesMemo: string
+      logTime: string; endTime: string; tags: string[]; staffMemberId: string; body: string
     }
     expect(row.logTime).toBe('10:00')
     expect(row.endTime).toBe('10:45')
     expect(row.tags).toEqual(['商談', '取材'])
     expect(row.staffMemberId).toBe(HR)
-    expect(row.body).toBe('')
-    expect(row.minutesMemo).toBe('議事録のみで登録')
+    expect(row.body).toBe('担当者メモで登録')
+    expect('minutesMemo' in row).toBe(false) // 廃止 = 応答に含まれない
     // 自社担当者の未指定はログインユーザー（既定 = 記録者）
     const defaulted = await api('POST', '/v1/customer-logs', { as: MEMBER, body: { logDate: today, companyId, body: '既定担当者の確認' } })
     expect((defaulted.json.data as { staffMemberId: string }).staffMemberId).toBe(MEMBER)
@@ -5705,26 +5783,25 @@ describe('顧客ログ', () => {
     expect((await api('POST', '/v1/customer-logs', { as: MEMBER, body: { logDate: today, companyId, body: 'x', staffMemberId: 'm-nope' } })).json.error?.code).toBe('AKO-CLG-001')
   })
 
-  it('部分更新: 新項目（タグ・終了時刻・自社担当者・議事録メモ）も送っていないフィールドが保持される', async () => {
+  it('部分更新: 新項目（タグ・終了時刻・自社担当者・担当者メモ）も送っていないフィールドが保持される', async () => {
     const created = await api('POST', '/v1/customer-logs', {
       as: MEMBER,
       body: {
         logDate: today, logTime: '09:00', endTime: '09:30', companyId, contactId,
-        tags: ['イベント'], staffMemberId: HR, title: '保持確認', body: '担当者メモ', minutesMemo: '議事録メモ',
+        tags: ['イベント'], staffMemberId: HR, title: '保持確認', body: '担当者メモ',
       },
     })
     const id = (created.json.data as { id: string }).id
     const upd = await api('PATCH', `/v1/customer-logs/${id}`, { as: MEMBER, body: { title: '保持確認（更新）' } })
     expect(upd.status).toBe(200)
     const row = upd.json.data as {
-      logTime: string; endTime: string; tags: string[]; staffMemberId: string; body: string; minutesMemo: string
+      logTime: string; endTime: string; tags: string[]; staffMemberId: string; body: string
     }
     expect(row.logTime).toBe('09:00')
     expect(row.endTime).toBe('09:30')
     expect(row.tags).toEqual(['イベント'])
     expect(row.staffMemberId).toBe(HR)
     expect(row.body).toBe('担当者メモ')
-    expect(row.minutesMemo).toBe('議事録メモ')
     // マージ後の全体検証: 開始時刻だけを終了時刻より後へ動かす更新は 400（AKO-CLG-001）
     expect((await api('PATCH', `/v1/customer-logs/${id}`, { as: MEMBER, body: { logTime: '10:00' } })).json.error?.code).toBe('AKO-CLG-001')
     // 検証順パリティ（2 巡目 MINOR-1 回帰）: 範囲不正 + タグ上限超過の同時指定は「範囲エラーが先」

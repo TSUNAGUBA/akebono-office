@@ -293,11 +293,11 @@ export async function buildSearchDocs(pool: pg.Pool): Promise<SearchDocInput[]> 
   const { rows: clogRows } = await pool.query<{
     id: string; memberId: string; logDate: string; logTime: string | null; endTime: string | null
     companyId: string; contactId: string | null; staffMemberId: string | null; tags: string[]
-    title: string; body: string; minutesMemo: string
+    title: string; body: string
   }>(
     `SELECT id, member_id AS "memberId", log_date::text AS "logDate", log_time AS "logTime",
             end_time AS "endTime", company_id AS "companyId", contact_id AS "contactId",
-            staff_member_id AS "staffMemberId", tags, title, body, minutes_memo AS "minutesMemo"
+            staff_member_id AS "staffMemberId", tags, title, body
      FROM customer_logs WHERE active = true ORDER BY id LIMIT 5000`)
   for (const cl of clogRows) {
     const segments: SearchSegment[] = []
@@ -315,7 +315,6 @@ export async function buildSearchDocs(pool: pg.Pool): Promise<SearchDocInput[]> 
     const author = memberName.get(cl.memberId)
     if (author) segments.push(seg(`記録者: ${author}`, c('members', 'name')))
     if (cl.body) segments.push(seg(`担当者メモ: ${capCp(cl.body, 1500)}`, c('customer_logs', 'body')))
-    if (cl.minutesMemo) segments.push(seg(`議事録メモ: ${capCp(cl.minutesMemo, 1500)}`, c('customer_logs', 'minutes_memo')))
     docs.push({
       sourceKind: 'customer-log', sourceId: cl.id,
       title: cl.title || `${co ?? '顧客'}との会話（${cl.logDate}）`, aliases: [], segments,

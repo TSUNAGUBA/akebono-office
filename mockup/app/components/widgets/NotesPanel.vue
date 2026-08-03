@@ -5,8 +5,9 @@
  * サマリー一覧（押下で詳細モーダル = 全文をマークダウン描画）。
  * ぽいぽいポストは管理者が全メンバーのオリジナルを閲覧できる（フィードバック・チーム改善用途。バッチ7e）
  */
-import { Eye, FileUp, Pencil, RefreshCw, RotateCcw, Send, Trash2, X } from 'lucide-vue-next'
+import { Eye, FileText, FileUp, Film, Link2, Pencil, RefreshCw, RotateCcw, Send, Trash2, Video, X } from 'lucide-vue-next'
 import type { Company, Note, NoteKind, Project, WorkCategory } from '~/types/domain'
+import type { MeetFile, MeetFolder } from '~/composables/useMeetLink'
 import { fmtDateLong } from '~/utils/format'
 
 const props = defineProps<{
@@ -33,18 +34,113 @@ const members = tbl('members')
 
 const form = ref({ title: '', body: '', projectId: '', companyId: '', workCategoryId: '' })
 const saving = ref(false)
+
+// プロジェクト選択で顧客を補完（プロジェクトマスタの顧客 = Project.companyId が SoT。オペレーター指示 2026-08-03）。
+// 顧客の手動変更は妨げない（プロジェクトを選び直した時のみ上書き）。
+watch(() => form.value.projectId, (pid) => {
+  if (!pid) return
+  const proj = projects.value.find(p => p.id === pid)
+  if (proj?.companyId) form.value.companyId = proj.companyId
+})
 // 入力モーダル（バッチ7h: 参照 = 基本ビュー・入力 = ボタン押下でモーダル表示。指示 #10 ④）
 const composeOpen = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 // マークダウンプレビュー（入力はプレーンテキストのまま = 記法はそのまま保存され、表示時に描画される）
 const previewing = ref(false)
 
-function meta(): { title: string; projectId: string | null; companyId: string | null; workCategoryId: string | null } {
+// ---------- Google Meet 連携（議事録の AI メモ/録画リンク。API モード限定 = documents のドライブ取込と同型） ----------
+const isApi = useApiMode()
+const meet = useMeetLink()
+const meetFile = ref<{ id: string; name: string; webLink: string } | null>(null)
+const meetFolderId = ref('')     // 現在参照中フォルダ（空 = 既定フォルダ）
+const meetFolderName = ref('')
+const meetFolders = ref<MeetFolder[]>([])
+const meetFiles = ref<MeetFile[]>([])
+const meetFolderSearch = ref('')
+const meetPickingFolder = ref(false)
+const meetBusy = ref(false)
+/** Meet 連携セクションを出すか（議事録 + API + OAuth 構成済み） */
+const showMeet = computed(() => props.kind === 'minutes' && isApi && !!meet.status.value?.available)
+const meetConnected = computed(() => !!meet.status.value?.connected && !!meet.status.value?.driveScope)
+
+async function loadMeetFiles(): Promise<void> {
+  const fid = meetFolderId.value || meet.status.value?.defaultFolder?.id || ''
+  if (!fid) { meetFiles.value = []; return } // フォルダ未選択（既定なし）= フォルダ選択を促す
+  meetBusy.value = true
+  try {
+    meetFiles.value = await meet.listFiles(fid)
+  } catch (e) {
+    show(`ファイル一覧の取得に失敗しました（${(e as Error).message}）`, 'crit')
+  } finally { meetBusy.value = false }
+}
+async function searchMeetFolders(): Promise<void> {
+  meetBusy.value = true
+  try {
+    meetFolders.value = await meet.listFolders(meetFolderSearch.value)
+  } catch (e) {
+    show(`フォルダ一覧の取得に失敗しました（${(e as Error).message}）`, 'crit')
+  } finally { meetBusy.value = false }
+}
+function toggleMeetFolderPicker(): void {
+  meetPickingFolder.value = !meetPickingFolder.value
+  if (meetPickingFolder.value && meetFolders.value.length === 0) void searchMeetFolders()
+}
+function selectMeetFolder(f: MeetFolder): void {
+  meetFolderId.value = f.id
+  meetFolderName.value = f.name
+  meetPickingFolder.value = false
+  void loadMeetFiles()
+}
+function pickMeetFile(f: MeetFile): void {
+  meetFile.value = { id: f.id, name: f.name, webLink: f.webViewLink }
+}
+function clearMeetFile(): void { meetFile.value = null }
+async function importMeetNotes(): Promise<void> {
+  if (!meetFile.value || meetBusy.value) return
+  meetBusy.value = true
+  try {
+    const text = await meet.fetchFileText(meetFile.value.id)
+    if (!text) { show('AI メモの本文が空でした', 'warn'); return }
+    form.value.body = form.value.body ? `${form.value.body}\n\n${text}` : text
+    show('AI メモを本文へ取り込みました（内容を確認して登録してください）', 'ok')
+  } catch (e) {
+    show(`AI メモの取込に失敗しました（${(e as Error).message}）`, 'crit')
+  } finally { meetBusy.value = false }
+}
+/** 現在のフォルダを既定に設定（管理者のみ） */
+async function setMeetDefaultFolder(): Promise<void> {
+  const id = meetFolderId.value || meet.status.value?.defaultFolder?.id || ''
+  const name = meetFolderName.value || meet.status.value?.defaultFolder?.name || ''
+  if (!id) { show('先に保管フォルダを選択してください', 'warn'); return }
+  await meet.setDefaultFolder({ id, name })
+}
+
+// モーダルを開いたら連携状態を取得し、既定フォルダのファイルを読み込む（議事録 + API のみ）
+watch(composeOpen, async (open) => {
+  if (!open || props.kind !== 'minutes' || !isApi) return
+  meetFile.value = null
+  meetPickingFolder.value = false
+  meetFolders.value = []
+  meetFiles.value = []
+  await meet.refreshStatus()
+  const def = meet.status.value?.defaultFolder ?? null
+  meetFolderId.value = def?.id ?? ''
+  meetFolderName.value = def?.name ?? ''
+  if (meetConnected.value) await loadMeetFiles()
+})
+
+function meta(): {
+  title: string; projectId: string | null; companyId: string | null; workCategoryId: string | null
+  meetFileId: string | null; meetFileName: string | null; meetWebLink: string | null
+} {
   return {
     title: form.value.title,
     projectId: form.value.projectId || null,
     companyId: form.value.companyId || null,
     workCategoryId: form.value.workCategoryId || null,
+    meetFileId: meetFile.value?.id ?? null,
+    meetFileName: meetFile.value?.name ?? null,
+    meetWebLink: meetFile.value?.webLink ?? null,
   }
 }
 
@@ -59,6 +155,7 @@ async function submit(): Promise<void> {
     }
     show(`${noun.value}を登録しました（AI の参照対象になります）`)
     form.value = { ...form.value, title: '', body: '' }
+    meetFile.value = null
     previewing.value = false
     composeOpen.value = false
   } finally {
@@ -200,6 +297,7 @@ function authorOf(n: Note): string {
             <span class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
               <span class="text-[13px] font-bold">{{ n.title }}</span>
               <span v-if="n.source === 'upload'" class="rounded-full bg-surface-soft border border-line px-2 text-[10px] text-sub">取込</span>
+              <span v-if="n.meetFileId" class="inline-flex items-center gap-0.5 rounded-full bg-surface-soft border border-line px-2 text-[10px] text-sub"><Video class="h-3 w-3" aria-hidden="true" />Meet</span>
               <span class="num ml-auto text-[11px] text-muted">{{ fmtDateLong(n.createdAt) }}</span>
             </span>
             <span class="mt-0.5 block text-[12px] leading-relaxed text-sub">{{ summaryOf(n) }}</span>
@@ -254,6 +352,78 @@ function authorOf(n: Note): string {
             ? '思いついたこと・気づき・改善アイデアをそのまま。日報ドラフトの材料になり、AI の参照対象になります。管理者はフィードバック・チーム改善のためオリジナルを閲覧できます'
             : '会議の記録を蓄積します。全員が参照でき、AI チャットボット・AI業務アシスタントの参照対象になります' }}
         </p>
+        <!-- プロジェクト/顧客/業務種別（フォーム上部 = オペレーター指示 2026-08-03。プロジェクト選択で顧客を補完） -->
+        <div class="flex flex-wrap items-center gap-2">
+          <UiSelect v-model="form.projectId" :options="projects.map(p => ({ value: p.id, label: p.name }))" empty-label="プロジェクト（任意）" aria-label="プロジェクト" class="w-auto" />
+          <UiSelect v-model="form.companyId" :options="companies.map(c => ({ value: c.id, label: c.name }))" empty-label="顧客（任意）" aria-label="顧客" class="w-auto" />
+          <UiSelect v-model="form.workCategoryId" :options="workCategories.map(w => ({ value: w.id, label: w.name }))" empty-label="業務種別（任意）" aria-label="業務種別" class="w-auto" />
+        </div>
+
+        <!-- Google Meet 連携（議事録・API モードのみ。Drive の AI メモ/録画を選んで議事録へリンク） -->
+        <div v-if="showMeet" class="grid gap-2 rounded-lg border border-line bg-page p-2.5">
+          <div class="flex items-center gap-1.5 text-[12px] font-semibold text-muted">
+            <Video class="h-3.5 w-3.5" aria-hidden="true" />
+            Google Meet 連携（AI メモ・録画）
+          </div>
+          <!-- 未接続: カレンダー連携へ誘導（drive.readonly を含む = documents のドライブ取込と同型） -->
+          <p v-if="!meetConnected" class="text-[12px] text-sub">
+            Google ドライブ連携が未接続です。
+            <NuxtLink to="/ai-assistant" class="text-brand underline">AI アシスタントのカレンダー連携</NuxtLink>
+            から Google に接続してください（ドライブ読取の許可が追加され、Meet の AI メモ・録画を選べます）。
+          </p>
+          <template v-else>
+            <!-- 選択済みファイル -->
+            <div v-if="meetFile" class="flex flex-wrap items-center gap-2 rounded border border-brand bg-brand-soft px-2.5 py-1.5 text-[12px]">
+              <Link2 class="h-3.5 w-3.5 shrink-0 text-brand" aria-hidden="true" />
+              <span class="min-w-0 flex-1 truncate font-medium">{{ meetFile.name }}</span>
+              <button type="button" class="btn btn-ghost btn-sm" :disabled="meetBusy" @click="importMeetNotes">AI メモを本文へ取込</button>
+              <button type="button" class="btn btn-ghost btn-sm" aria-label="リンクを解除" @click="clearMeetFile">
+                <X class="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            </div>
+
+            <!-- 保管フォルダ（既定を初期表示・違う場合のみ選び直す） -->
+            <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px]">
+              <span class="text-muted">保管フォルダ:</span>
+              <span class="font-medium">{{ meetFolderName || meet.status.value?.defaultFolder?.name || '（未選択）' }}</span>
+              <span v-if="!meetFolderId && meet.status.value?.defaultFolder" class="rounded-full bg-surface-soft border border-line px-1.5 text-[10px] text-muted">既定</span>
+              <button type="button" class="btn btn-ghost btn-sm" @click="toggleMeetFolderPicker">別のフォルダを選ぶ</button>
+              <button
+                v-if="meet.isAdmin.value && (meetFolderId || meet.status.value?.defaultFolder)"
+                type="button" class="btn btn-ghost btn-sm" @click="setMeetDefaultFolder"
+              >このフォルダを既定に</button>
+            </div>
+
+            <!-- フォルダ選択 -->
+            <div v-if="meetPickingFolder" class="grid gap-1.5">
+              <div class="flex gap-2">
+                <input v-model="meetFolderSearch" class="input flex-1" type="text" placeholder="フォルダ名で検索（空で最近更新順）" aria-label="フォルダ検索" @keyup.enter="searchMeetFolders">
+                <button type="button" class="btn btn-sm" :disabled="meetBusy" @click="searchMeetFolders">検索</button>
+              </div>
+              <div v-if="meetFolders.length > 0" class="max-h-32 overflow-y-auto rounded border border-line">
+                <button v-for="f in meetFolders" :key="f.id" type="button" class="block w-full border-b border-line px-2.5 py-1.5 text-left text-[12px] last:border-b-0 hover:bg-surface" @click="selectMeetFolder(f)">
+                  {{ f.name }}
+                </button>
+              </div>
+            </div>
+
+            <!-- ファイル一覧（Meet の AI メモ = ドキュメント / 録画 = 動画） -->
+            <p v-if="meetBusy" class="text-[12px] text-muted">読み込み中…</p>
+            <div v-else-if="meetFiles.length > 0" class="max-h-40 overflow-y-auto rounded border border-line">
+              <button
+                v-for="f in meetFiles" :key="f.id" type="button"
+                class="flex w-full items-center gap-2 border-b border-line px-2.5 py-1.5 text-left text-[12px] last:border-b-0 hover:bg-surface"
+                :class="{ 'bg-brand-soft': f.id === meetFile?.id }"
+                @click="pickMeetFile(f)"
+              >
+                <component :is="f.fileKind === 'recording' ? Film : f.fileKind === 'notes' ? FileText : Link2" class="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden="true" />
+                <span class="min-w-0 flex-1 truncate">{{ f.name }}</span>
+              </button>
+            </div>
+            <p v-else class="text-[12px] text-muted">このフォルダに Meet のファイルが見つかりません（別のフォルダを選んでください）。</p>
+          </template>
+        </div>
+
         <input
           v-if="kind === 'minutes'"
           v-model="form.title"
@@ -274,25 +444,20 @@ function authorOf(n: Note): string {
           :placeholder="kind === 'poipoi' ? '例）A社の見積、明日までに単価見直しが必要そう' : '例）7/19 定例。決定事項: …'"
           :aria-label="kind === 'poipoi' ? 'ポスト本文' : '議事録本文'"
         />
-        <div class="flex flex-wrap items-center gap-2">
-          <UiSelect v-model="form.projectId" :options="projects.map(p => ({ value: p.id, label: p.name }))" empty-label="プロジェクト（任意）" aria-label="プロジェクト" class="w-auto" />
-          <UiSelect v-model="form.companyId" :options="companies.map(c => ({ value: c.id, label: c.name }))" empty-label="顧客（任意）" aria-label="顧客" class="w-auto" />
-          <UiSelect v-model="form.workCategoryId" :options="workCategories.map(w => ({ value: w.id, label: w.name }))" empty-label="業務種別（任意）" aria-label="業務種別" class="w-auto" />
-          <span class="ml-auto flex items-center gap-2">
-            <button type="button" class="btn btn-sm" :aria-pressed="previewing" @click="previewing = !previewing">
-              <component :is="previewing ? Pencil : Eye" class="h-3.5 w-3.5" aria-hidden="true" />
-              {{ previewing ? '編集に戻る' : 'プレビュー' }}
-            </button>
-            <input ref="fileInput" type="file" accept=".md,.txt,.pdf,.docx" class="hidden" @change="onFileSelected">
-            <button type="button" class="btn" :disabled="saving" @click="fileInput?.click()">
-              <FileUp class="h-4 w-4" aria-hidden="true" />
-              ファイル選択
-            </button>
-            <button type="button" class="btn btn-primary" :disabled="saving" @click="submit">
-              <Send class="h-4 w-4" aria-hidden="true" />
-              {{ saving ? '登録中…' : '登録' }}
-            </button>
-          </span>
+        <div class="flex flex-wrap items-center justify-end gap-2">
+          <button type="button" class="btn btn-sm" :aria-pressed="previewing" @click="previewing = !previewing">
+            <component :is="previewing ? Pencil : Eye" class="h-3.5 w-3.5" aria-hidden="true" />
+            {{ previewing ? '編集に戻る' : 'プレビュー' }}
+          </button>
+          <input ref="fileInput" type="file" accept=".md,.txt,.pdf,.docx" class="hidden" @change="onFileSelected">
+          <button type="button" class="btn" :disabled="saving" @click="fileInput?.click()">
+            <FileUp class="h-4 w-4" aria-hidden="true" />
+            ファイル選択
+          </button>
+          <button type="button" class="btn btn-primary" :disabled="saving" @click="submit">
+            <Send class="h-4 w-4" aria-hidden="true" />
+            {{ saving ? '登録中…' : '登録' }}
+          </button>
         </div>
         <!-- 選択済みファイルのステージ表示（即アップロードしない。取込ボタン押下で実行） -->
         <div
@@ -361,6 +526,17 @@ function authorOf(n: Note): string {
             class="rounded-full bg-surface-soft border border-line px-2 py-0.5"
           >{{ l }}</span>
         </div>
+        <a
+          v-if="detailNote.meetFileId"
+          :href="detailNote.meetWebLink || undefined"
+          :target="detailNote.meetWebLink ? '_blank' : undefined"
+          rel="noopener"
+          class="inline-flex w-fit items-center gap-1.5 text-[12px]"
+          :class="detailNote.meetWebLink ? 'text-brand hover:underline' : 'text-sub'"
+        >
+          <Video class="h-3.5 w-3.5" aria-hidden="true" />
+          Google Meet: {{ detailNote.meetFileName || 'リンク' }}
+        </a>
         <UiMarkdown :source="detailNote.body" />
       </div>
     </UiModal>

@@ -347,6 +347,10 @@ jobs:
           # ドキュメント管理のドライブ取込（バッチ7l）。OAuth 連携と同じ資格情報で drive.readonly を使う
           gcloud services enable drive.googleapis.com --project "$PROJECT" \
             || echo "::warning::drive.googleapis.com の有効化に失敗しました。オーナー権限で有効化してください（deploy-guide.md 参照）"
+          # データ取込の Google スプレッドシート連携（F-32 sheets_pull・2026-08-03）。値読取 = Sheets API /
+          # ブック一覧 = Drive API（上記）。OAuth のトークン交換は Sheets API 無効でも成功するため見落としやすい
+          gcloud services enable sheets.googleapis.com --project "$PROJECT" \
+            || echo "::warning::sheets.googleapis.com の有効化に失敗しました。オーナー権限で有効化してください（deploy-guide.md §1-9c 参照）"
           # メディア分析の GA 連携（F-40）。集計 = Data API / プロパティ一覧 = Admin API。
           # OAuth のトークン交換は両 API 無効でも成功するため見落としやすい（deploy-guide §1-9b）
           gcloud services enable analyticsdata.googleapis.com --project "$PROJECT" \

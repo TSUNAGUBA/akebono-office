@@ -87,6 +87,10 @@ export interface Note {
   createdAt: string
   /** 取消（論理削除）済みは false。既存データ・モック旧データは未設定 = 有効（原則7） */
   active?: boolean
+  /** 議事録の Google Meet 連携（AI メモ/録画の Drive 参照。2026-08-03 ③b。未連携は null/未設定 = 原則7） */
+  meetFileId?: string | null
+  meetFileName?: string | null
+  meetWebLink?: string | null
 }
 
 /**
@@ -115,10 +119,8 @@ export interface CustomerLog {
   tags: string[]
   /** 件名（任意。空なら会社名から導出表示）*/
   title: string
-  /** 担当者メモ（旧「会話内容」。既存データは本欄へ引き継ぐ = 原則7。議事録メモとどちらか必須）*/
+  /** 担当者メモ（旧「会話内容」。必須。議事録メモは 2026-08-03 に廃止 = オペレーター指示）*/
   body: string
-  /** 議事録メモ（担当者メモとどちらか必須）*/
-  minutesMemo: string
   createdAt: string
   updatedAt?: string
   /** 取消（論理削除）済みは false。モック旧データは未設定 = 有効（原則7） */

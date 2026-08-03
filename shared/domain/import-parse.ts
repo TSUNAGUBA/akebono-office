@@ -27,6 +27,69 @@ export function parseCsvLine(line: string, delimiter = ','): string[] {
   return out
 }
 
+/**
+ * CSV テキスト全体を論理行（セル配列）へ分割する。引用符（"…"）内の**改行・区切り文字**を保持し、
+ * "" はエスケープとして 1 個の " にする（RFC4180）。行区切りは LF（CRLF/CR は LF へ正規化）。
+ * 完全な空行（内容ゼロ）はスキップする（旧 filter(l => l.length > 0) と整合）。
+ * 行単位の split では複数行セル（rowsToCsv が生成しうる）を壊すため、抽出/列検出はこの関数を使う。
+ */
+export function splitCsvRows(text: string, delimiter = ','): string[][] {
+  const rows: string[][] = []
+  let row: string[] = []
+  let cur = ''
+  let inQuotes = false
+  let cellStarted = false // 現在行に何らかの文字（区切り含む）が現れたか = 空行判定に使う
+  const s = text.replace(/\r\n?/g, '\n')
+  const endRow = (): void => {
+    row.push(cur)
+    cur = ''
+    // 完全な空行（内容ゼロ）はスキップ。明示的な空セル（区切り/引用符あり）は保持
+    if (!(row.length === 1 && row[0] === '' && !cellStarted)) rows.push(row)
+    row = []
+    cellStarted = false
+  }
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]!
+    if (inQuotes) {
+      if (ch === '"') {
+        if (s[i + 1] === '"') { cur += '"'; i++ } else inQuotes = false
+      } else cur += ch
+      cellStarted = true
+    } else if (ch === '"') {
+      inQuotes = true
+      cellStarted = true
+    } else if (ch === delimiter) {
+      row.push(cur); cur = ''; cellStarted = true
+    } else if (ch === '\n') {
+      endRow()
+    } else {
+      cur += ch; cellStarted = true
+    }
+  }
+  // 末尾（改行で終わっていない最終行）。改行で終わっていれば cellStarted=false で push しない
+  if (cellStarted || cur !== '' || row.length > 0) endRow()
+  return rows
+}
+
+/** A1 記法の列（'A'/'C'/'AA'…）→ 0 始まりの列インデックス。不正は 0（'A'）。Google スプレッドシート取込で使用 */
+export function a1ColToIndex(col: string): number {
+  const s = String(col ?? '').trim().toUpperCase()
+  if (!/^[A-Z]+$/.test(s)) return 0
+  let n = 0
+  for (const ch of s) n = n * 26 + (ch.charCodeAt(0) - 64)
+  return n - 1
+}
+
+/** 2 次元セル配列を CSV 文字列へ直列化（RFC4180: カンマ/引用符/改行を含むセルは "" で囲み・内部 " を "" へ）。
+ *  Google スプレッドシートの取込値を既存 CSV 抽出（extractCsvRecords）へ流すために使う（純粋・単体テスト対象） */
+export function rowsToCsv(rows: string[][]): string {
+  const esc = (v: unknown): string => {
+    const s = v == null ? '' : String(v)
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+  }
+  return rows.map(r => r.map(esc).join(',')).join('\n')
+}
+
 export interface CsvColumn { index: number; name: string }
 export interface CsvParseResult { columns: CsvColumn[]; sampleRows: string[][] }
 
@@ -39,16 +102,17 @@ export function parseCsvColumns(
   opts: { hasHeader?: boolean; delimiter?: string; sampleLimit?: number } = {},
 ): CsvParseResult {
   const delimiter = opts.delimiter || ','
-  const lines = text.replace(/\r\n?/g, '\n').split('\n').filter(l => l.length > 0)
-  if (lines.length === 0) return { columns: [], sampleRows: [] }
+  // 引用符内の改行を保持する行分割（複数行セルで列がずれない = extractCsvRecords と同一規約）
+  const rows = splitCsvRows(text, delimiter)
+  if (rows.length === 0) return { columns: [], sampleRows: [] }
   const hasHeader = opts.hasHeader ?? true
-  const firstCells = parseCsvLine(lines[0]!, delimiter)
+  const firstCells = rows[0]!
   const columns: CsvColumn[] = firstCells.map((c, i) => ({
     index: i,
     name: hasHeader ? (c.trim() || `列${i + 1}`) : `列${i + 1}`,
   }))
-  const dataLines = hasHeader ? lines.slice(1) : lines
-  const sampleRows = dataLines.slice(0, opts.sampleLimit ?? 3).map(l => parseCsvLine(l, delimiter))
+  const dataRows = hasHeader ? rows.slice(1) : rows
+  const sampleRows = dataRows.slice(0, opts.sampleLimit ?? 3)
   return { columns, sampleRows }
 }
 
@@ -135,6 +199,16 @@ export function normalizeImportSourceConfig(raw: unknown, method: string): Recor
     const at = (IMPORT_AUTH_TYPES as readonly string[]).includes(String(o.authType)) ? String(o.authType) : 'none'
     cfg.authType = at
     cfg.authValue = at === 'none' ? '' : capCp(String(o.authValue ?? '').trim(), 500)
+  }
+  if (method === 'sheets_pull') {
+    // Google スプレッドシート取込（2026-08-03）: 対象ブック/シート・開始行（ヘッダ行）・開始列を保持
+    cfg.spreadsheetId = capCp(String(o.spreadsheetId ?? '').trim(), 200)
+    cfg.spreadsheetName = capCp(String(o.spreadsheetName ?? '').trim(), 300)
+    cfg.sheetName = capCp(String(o.sheetName ?? '').trim(), 200)
+    const hr = Number(o.headerRow)
+    cfg.headerRow = Number.isInteger(hr) && hr >= 1 && hr <= 100000 ? hr : 1
+    const col = String(o.startColumn ?? '').trim().toUpperCase()
+    cfg.startColumn = /^[A-Z]{1,3}$/.test(col) ? col : 'A'
   }
   return cfg
 }
