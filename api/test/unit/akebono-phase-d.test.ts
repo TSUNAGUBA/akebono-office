@@ -97,6 +97,26 @@ describe('extractCsvRecords（CSV → レコード）', () => {
       [{ ...FIELD, sourceField: 'ない列', targetItemKey: 'code' }])
     expect(mappingError).toContain('ない列')
   })
+  it('引用符内の改行を含むセルで行がずれない（rowsToCsv 出力の複数行セル = レビュー MAJOR 回帰）', () => {
+    // 2 データ行。1 行目の note セルに埋め込み改行 → 行単位 split だと "2行目" が幻の行になっていた
+    const csv = 'code,name,note\nP-1,商品A,"1行目\n2行目"\nP-2,商品B,ok\n'
+    const { records } = extractCsvRecords(csv, [
+      { ...FIELD, sourceField: 'code', targetItemKey: 'code', columnIndex: 0 },
+      { ...FIELD, sourceField: 'note', targetItemKey: 'note', columnIndex: 2 },
+    ])
+    expect(records).toHaveLength(2)
+    expect(records[0]!.values).toEqual({ code: 'P-1', note: '1行目\n2行目' })
+    expect(records[1]!.values).toEqual({ code: 'P-2', note: 'ok' })
+  })
+  it('ヘッダ中央に空セルがあっても columnIndex は絶対位置で解決する（Sheets 誤列取込 = レビュー MAJOR 回帰）', () => {
+    // ヘッダ ['売上日','','得意先'] のように中央が空。得意先は columnIndex=2（絶対位置）で読む
+    const csv = '売上日,,得意先\n2026-07-01,x,アケボノ商店\n'
+    const { records } = extractCsvRecords(csv, [
+      { ...FIELD, sourceField: '売上日', targetItemKey: 'salesDate', columnIndex: 0 },
+      { ...FIELD, sourceField: '得意先', targetItemKey: 'companyId', columnIndex: 2 },
+    ])
+    expect(records[0]!.values).toEqual({ salesDate: '2026-07-01', companyId: 'アケボノ商店' })
+  })
 })
 
 describe('extractFixedRecords（固定長 → レコード）', () => {

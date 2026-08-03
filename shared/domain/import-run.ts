@@ -8,7 +8,7 @@
  * - 固定長: byteStart / byteEnd（1 始まり・両端含む・バイト単位。Shift_JIS の全角 2 バイトを想定）
  * - JSON / API: jsonKey（ドットパス可）。null の場合は sourceField
  */
-import { parseCsvLine } from './import-parse'
+import { splitCsvRows } from './import-parse'
 
 export interface ImportRunFieldDef {
   sourceField: string
@@ -75,9 +75,10 @@ export function extractCsvRecords(
 ): ImportExtractResult {
   const delimiter = opts.delimiter || ','
   const hasHeader = opts.hasHeader ?? true
-  const lines = text.replace(/\r\n?/g, '\n').split('\n').filter(l => l.length > 0)
-  if (lines.length === 0) return { records: [], mappingError: null }
-  const header = hasHeader ? parseCsvLine(lines[0]!, delimiter).map(h => h.trim()) : []
+  // 引用符内の改行・区切りを保持した論理行分割（複数行セルで行/列がずれない = rowsToCsv 出力も安全）
+  const rows = splitCsvRows(text, delimiter)
+  if (rows.length === 0) return { records: [], mappingError: null }
+  const header = hasHeader ? rows[0]!.map(h => h.trim()) : []
   const resolved: { field: ImportRunFieldDef; index: number }[] = []
   for (const f of fields) {
     let index = f.columnIndex
@@ -90,14 +91,14 @@ export function extractCsvRecords(
     }
     resolved.push({ field: f, index })
   }
-  const dataLines = hasHeader ? lines.slice(1) : lines
-  const records: ImportRecord[] = dataLines.map((line, i) => {
-    const cells = parseCsvLine(line, delimiter)
+  const dataRows = hasHeader ? rows.slice(1) : rows
+  const records: ImportRecord[] = dataRows.map((cells, i) => {
     const values: Record<string, string> = {}
     for (const { field, index } of resolved) {
       values[field.targetItemKey] = applyImportTransform(cells[index] ?? '', field.transform)
     }
-    return { rowNo: i + 1, raw: capRaw(line), values }
+    // raw（エラー表示用）は論理行のセルを区切りで再構成（複数行セルは 1 行に畳まれる）
+    return { rowNo: i + 1, raw: capRaw(cells.join(delimiter)), values }
   })
   return { records, mappingError: null }
 }

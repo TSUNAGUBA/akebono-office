@@ -27,6 +27,50 @@ export function parseCsvLine(line: string, delimiter = ','): string[] {
   return out
 }
 
+/**
+ * CSV テキスト全体を論理行（セル配列）へ分割する。引用符（"…"）内の**改行・区切り文字**を保持し、
+ * "" はエスケープとして 1 個の " にする（RFC4180）。行区切りは LF（CRLF/CR は LF へ正規化）。
+ * 完全な空行（内容ゼロ）はスキップする（旧 filter(l => l.length > 0) と整合）。
+ * 行単位の split では複数行セル（rowsToCsv が生成しうる）を壊すため、抽出/列検出はこの関数を使う。
+ */
+export function splitCsvRows(text: string, delimiter = ','): string[][] {
+  const rows: string[][] = []
+  let row: string[] = []
+  let cur = ''
+  let inQuotes = false
+  let cellStarted = false // 現在行に何らかの文字（区切り含む）が現れたか = 空行判定に使う
+  const s = text.replace(/\r\n?/g, '\n')
+  const endRow = (): void => {
+    row.push(cur)
+    cur = ''
+    // 完全な空行（内容ゼロ）はスキップ。明示的な空セル（区切り/引用符あり）は保持
+    if (!(row.length === 1 && row[0] === '' && !cellStarted)) rows.push(row)
+    row = []
+    cellStarted = false
+  }
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]!
+    if (inQuotes) {
+      if (ch === '"') {
+        if (s[i + 1] === '"') { cur += '"'; i++ } else inQuotes = false
+      } else cur += ch
+      cellStarted = true
+    } else if (ch === '"') {
+      inQuotes = true
+      cellStarted = true
+    } else if (ch === delimiter) {
+      row.push(cur); cur = ''; cellStarted = true
+    } else if (ch === '\n') {
+      endRow()
+    } else {
+      cur += ch; cellStarted = true
+    }
+  }
+  // 末尾（改行で終わっていない最終行）。改行で終わっていれば cellStarted=false で push しない
+  if (cellStarted || cur !== '' || row.length > 0) endRow()
+  return rows
+}
+
 /** A1 記法の列（'A'/'C'/'AA'…）→ 0 始まりの列インデックス。不正は 0（'A'）。Google スプレッドシート取込で使用 */
 export function a1ColToIndex(col: string): number {
   const s = String(col ?? '').trim().toUpperCase()
@@ -58,16 +102,17 @@ export function parseCsvColumns(
   opts: { hasHeader?: boolean; delimiter?: string; sampleLimit?: number } = {},
 ): CsvParseResult {
   const delimiter = opts.delimiter || ','
-  const lines = text.replace(/\r\n?/g, '\n').split('\n').filter(l => l.length > 0)
-  if (lines.length === 0) return { columns: [], sampleRows: [] }
+  // 引用符内の改行を保持する行分割（複数行セルで列がずれない = extractCsvRecords と同一規約）
+  const rows = splitCsvRows(text, delimiter)
+  if (rows.length === 0) return { columns: [], sampleRows: [] }
   const hasHeader = opts.hasHeader ?? true
-  const firstCells = parseCsvLine(lines[0]!, delimiter)
+  const firstCells = rows[0]!
   const columns: CsvColumn[] = firstCells.map((c, i) => ({
     index: i,
     name: hasHeader ? (c.trim() || `列${i + 1}`) : `列${i + 1}`,
   }))
-  const dataLines = hasHeader ? lines.slice(1) : lines
-  const sampleRows = dataLines.slice(0, opts.sampleLimit ?? 3).map(l => parseCsvLine(l, delimiter))
+  const dataRows = hasHeader ? rows.slice(1) : rows
+  const sampleRows = dataRows.slice(0, opts.sampleLimit ?? 3)
   return { columns, sampleRows }
 }
 

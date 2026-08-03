@@ -23,7 +23,8 @@ const DRIVE_FILES_URL = 'https://www.googleapis.com/drive/v3/files'
 const SHEETS_BASE = 'https://sheets.googleapis.com/v4/spreadsheets'
 // カレンダー/GA とは別の同意・別トークン系。読取のみ（spreadsheets.readonly + ブック一覧 drive.readonly）
 const SCOPES = 'openid email https://www.googleapis.com/auth/spreadsheets.readonly https://www.googleapis.com/auth/drive.readonly'
-/** 取込 1 回の最大行数（akebono-imports の MAX_IMPORT_ROWS と整合。シート全体取得の暴走防止） */
+/** シート取得の上限行数（メモリ暴走防止）。実取込の受理上限は別途 MAX_IMPORT_ROWS(=5000) で、
+ *  これを超える行数は取込実行時に AKO-IMP-006 で弾かれる（本値はフェッチ段の安全弁） */
 const MAX_SHEET_ROWS = 50_000
 
 function requireEnabled(env: Env): void {
@@ -276,7 +277,9 @@ export function sheetsRoutes(pool: pg.Pool, env: Env): Hono {
     const startColumn = c.req.query('startColumn') ?? 'A'
     const rows = await fetchSheetRows(pool, env, { spreadsheetId, sheetName, headerRow, startColumn })
     const header = rows[0] ?? []
-    return c.json({ data: header.map(h => String(h ?? '').trim()).filter(Boolean) })
+    // 空ヘッダセルも「列N」として残す（.filter で落とすと columnIndex が実取込の unfiltered index と
+    // ずれ、ヘッダに空セルがある表で誤った列を取り込む = レビュー MAJOR。parseCsvColumns と同じ規約）
+    return c.json({ data: header.map((h, i) => String(h ?? '').trim() || `列${i + 1}`) })
   })
 
   return app

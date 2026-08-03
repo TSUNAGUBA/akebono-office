@@ -1732,7 +1732,7 @@
 
 ### 56-4 検証（実測値。この環境で実行）
 - [x] `cd mockup && npm run typecheck` green / `npm test` **221 passed**（件数不変 = 既存テストが緑のまま追随）
-- [x] `cd api && npm run typecheck` green / unit **267 passed**（import-parse に a1ColToIndex/rowsToCsv/sheets_pull config の 8 件を追加）/ `npm run test:integration`（使い捨て PostgreSQL・migration 0051 適用）**230 passed**（sheets_pull の status/URL/callback/config 往復/未連携実行 = AKO-SHEETS-001 を追加）
+- [x] `cd api && npm run typecheck` green / unit **273 passed**（import-parse に a1ColToIndex/rowsToCsv/splitCsvRows/sheets_pull config・akebono-phase-d に複数行セル/空ヘッダ列の回帰 = 計 14 件を追加）/ `npm run test:integration`（使い捨て PostgreSQL・migration 0051 適用）**230 passed**（sheets_pull の status/URL/callback/config 往復/未連携実行 = AKO-SHEETS-001 を追加）
 - [x] **migration 0051 冪等性**: CREATE IF NOT EXISTS + DROP CONSTRAINT IF EXISTS → ADD は再適用安全。テスト env（GOOGLE_OAUTH_* 未設定）は enabled=false で連携 UI を隠す経路を検証。
 
 ### 56-5 設計判断（記録）
@@ -1742,3 +1742,9 @@
 
 ### 56-x 反復レビュー（原則9）
 - [x] **セルフレビュー（Push 前チェック）**: 手動ステップなし（連携はUIボタン→OAuth）/ 冪等（0051・token upsert・config 正規化は再送安全）/ 既存コード再利用（calendar/GA の OAuth 型・extractCsvRecords・normalizeImportSourceConfig・useAppFields）/ 非ブロッキング（連携失敗・タブ復元失敗はトースト/無視で主要フロー継続 = 原則4）/ ドキュメント全件更新（akebono-menu-design §5・data-design・api-design・本 §56）/ 波及は Grep で確認（IMPORT_METHODS/IMPORT_METHOD_LABELS/rowGridClass/method 分岐の網羅）/ SoT→キャッシュ順序（sheets_tokens 書込 → status 反映）/ 下位互換（新方式追加・CHECK 拡張は既存非破壊 = 原則7）/ レスポンシブ（検索・選択リストは flex/max-h スクロール）/ 取消可能性（56-5）。
+- [x] **独立レビュー / 監査の指摘是正（原則9・初回 = de8eb7a に対して）**: コードレビュアーとシステム監査官を並行実施し、MAJOR 3 件・NIT を是正。
+  - **MAJOR-1（複数行セルで行崩れ）**: `rowsToCsv` が生成しうる引用符内改行を、行単位 split の `extractCsvRecords` が別レコードに割ってしまい幻の行/誤取込を生む欠陥。→ shared に **`splitCsvRows`**（引用符内の改行・区切りを保持する全文パーサ）を新設し、`extractCsvRecords`・`parseCsvColumns` を全文パースへ切替（file_csv も同時に堅牢化）。回帰テスト追加。
+  - **MAJOR-2（空ヘッダ列で誤列取込）**: `/sheets/:id/columns` が `.filter(Boolean)` で空ヘッダセルを落とし、UI の `columnIndex=i`（filtered 位置）が実取込の絶対 index とズレる欠陥。→ エンドポイントを **空セルも「列N」として index を保存**（`parseCsvColumns` と同規約）へ修正。回帰テスト追加。
+  - **MAJOR-3（本番デプロイ手当て漏れ = 原則1/5）**: 新 OAuth コールバック・新スコープ・Sheets API が deploy 自動化/手順書に未反映。→ `deploy.yml` に `sheets.googleapis.com` の自動有効化を追加、`deploy-guide.md` に **§1-9c**（コールバック URI・`spreadsheets.readonly` スコープ〔機微スコープ注記〕・Sheets API 有効化・トラブルシュート）を追加。
+  - **NIT**: `MAX_SHEET_ROWS` のコメントを実挙動（フェッチ安全弁 = 受理上限 MAX_IMPORT_ROWS とは別）に修正。requireEnabled→requireAdmin 順序・status 非管理者可・disconnect 無確認は calendar/media と同型のため許容（原則3 の一貫性）。
+- [x] **再検証**: 上記是正後に mockup 221 / API unit 273 / API integration 230 いずれも green（是正で新たな回帰なしを確認 = 原則9「直した結果も問題ない」）。

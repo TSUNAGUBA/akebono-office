@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   a1ColToIndex, extractJsonKeys, normalizeFieldLocators, normalizeImportSourceConfig, numOrNull,
-  parseCsvColumns, parseCsvLine, rowsToCsv,
+  parseCsvColumns, parseCsvLine, rowsToCsv, splitCsvRows,
 } from '../../../shared/domain/import-parse'
 
 describe('parseCsvLine（CSV 行分割）', () => {
@@ -13,6 +13,22 @@ describe('parseCsvLine（CSV 行分割）', () => {
   })
   it('区切り文字を指定できる（タブ）', () => {
     expect(parseCsvLine('a\tb\tc', '\t')).toEqual(['a', 'b', 'c'])
+  })
+})
+
+describe('splitCsvRows（CSV 全体 → 論理行。引用符内の改行を保持）', () => {
+  it('基本: 各行をセル配列へ・末尾改行で幻の空行を作らない', () => {
+    expect(splitCsvRows('a,b,c\n1,2,3\n')).toEqual([['a', 'b', 'c'], ['1', '2', '3']])
+  })
+  it('引用符内の改行・区切り・"" エスケープを保持（複数行セル）', () => {
+    expect(splitCsvRows('code,note\nP1,"1行目\n2行目"\nP2,"a,b ""x"""'))
+      .toEqual([['code', 'note'], ['P1', '1行目\n2行目'], ['P2', 'a,b "x"']])
+  })
+  it('完全な空行はスキップ・明示的な空セルは保持', () => {
+    expect(splitCsvRows('a,b\n\n,\n1,2')).toEqual([['a', 'b'], ['', ''], ['1', '2']])
+  })
+  it('CRLF/CR を LF に正規化・区切り指定（タブ）', () => {
+    expect(splitCsvRows('a\tb\r\n1\t2', '\t')).toEqual([['a', 'b'], ['1', '2']])
   })
 })
 
