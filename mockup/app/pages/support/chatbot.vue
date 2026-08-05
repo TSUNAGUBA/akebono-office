@@ -4,15 +4,17 @@
  * セッション管理: 「新しい会話」で新規開始・「履歴」ドロワーから過去セッションを再開（続きから質問できる）。
  * リンクはテキスト分解で描画（v-html 禁止）。Enter 送信 / Shift+Enter 改行 / 2000 字制限。
  */
-import { History, MessageSquarePlus, SendHorizontal } from 'lucide-vue-next'
+import { History, MessageSquarePlus, SendHorizontal, Share2, ThumbsDown, ThumbsUp } from 'lucide-vue-next'
 import type { ChatMessage } from '~/types/domain'
 import { fmtDateTime, fmtTime } from '~/utils/format'
 
 const { isEnabled } = useAppSettings()
 const {
-  messages, sessions, currentSessionId, isStreaming, streamingText,
+  messages, sessions, currentSessionId, currentSessionShared, isStreaming, streamingText,
   send, newSession, openSession, refresh, refreshSessions, finalize, escalate,
+  sendFeedback, clearFeedback, setSessionShared,
 } = useChatbot()
+const { canTrainChatbot } = usePermissions()
 const toast = useToast()
 
 const draft = ref('')
@@ -67,6 +69,75 @@ async function onSuggestion(msg: ChatMessage, s: string): Promise<void> {
     return
   }
   send(s)
+}
+
+// ---------- good/bad フィードバック（観測基盤 = オペレーター指示 2026-08-05） ----------
+
+/** bad 選択後の任意コメント入力の対象メッセージ id（null = 非表示） */
+const commentFor = ref<string | null>(null)
+const commentDraft = ref('')
+
+/**
+ * フィードバック対象の id（API モードのローカル表示 id「ch-l*」= サーバー未永続は対象外。
+ * モックモードとサーバー発番 id はそのまま対象にできる）
+ */
+function feedbackTargetId(m: ChatMessage): string | null {
+  return m.role === 'assistant' && !m.id.startsWith('ch-l') ? m.id : null
+}
+
+/** 評価の登録・変更。同じ評価をもう一度押すと取消（原則9.5） */
+async function onFeedback(m: ChatMessage, rating: 'good' | 'bad'): Promise<void> {
+  const id = feedbackTargetId(m)
+  if (!id) return
+  if (m.feedback === rating) {
+    const r = await clearFeedback(id)
+    if (r.ok) {
+      if (commentFor.value === id) commentFor.value = null
+      toast.show('評価を取り消しました')
+    } else {
+      toast.show(`${r.error.code}: ${r.error.message}`, 'warn')
+    }
+    return
+  }
+  const r = await sendFeedback(id, rating)
+  if (!r.ok) {
+    toast.show(`${r.error.code}: ${r.error.message}`, 'warn')
+    return
+  }
+  if (rating === 'bad') {
+    commentFor.value = id
+    commentDraft.value = ''
+    toast.show('記録しました。よろしければ改善のヒント（任意）も教えてください')
+  } else {
+    if (commentFor.value === id) commentFor.value = null
+    toast.show('フィードバックを記録しました')
+  }
+}
+
+/** bad の任意コメント送信（rating と一緒に上書き保存） */
+async function onSendComment(m: ChatMessage): Promise<void> {
+  const id = feedbackTargetId(m)
+  if (!id) return
+  const r = await sendFeedback(id, 'bad', commentDraft.value.trim())
+  if (r.ok) {
+    commentFor.value = null
+    toast.show('コメントを送信しました')
+  } else {
+    toast.show(`${r.error.code}: ${r.error.message}`, 'warn')
+  }
+}
+
+/** トレーナー共有の同意トグル（本文開示の明示同意。いつでも解除できる = 原則9.5） */
+async function onToggleShare(): Promise<void> {
+  const next = !currentSessionShared.value
+  const r = await setSessionShared(next)
+  if (r.ok) {
+    toast.show(next
+      ? 'この会話をトレーナーへ共有しました（回答本文が閲覧可能になります。いつでも解除できます）'
+      : 'トレーナーへの共有を解除しました')
+  } else {
+    toast.show(`${r.error.code}: ${r.error.message}`, 'warn')
+  }
 }
 
 /** フォールバック応答の直前のユーザー質問を取得（起票コンテキスト用） */
@@ -138,6 +209,21 @@ onBeforeUnmount(() => {
     <template v-else>
       <UiPageHeader title="AIチャットボット" description="社内データを参照して AI が回答します。会話はセッションとして保存され、履歴から続きを再開できます">
         <template #actions>
+          <NuxtLink v-if="canTrainChatbot" to="/support/chatbot-training" class="btn btn-ghost btn-sm">
+            トレーナー
+          </NuxtLink>
+          <button
+            v-if="currentSessionId"
+            type="button"
+            class="btn btn-ghost btn-sm"
+            :title="currentSessionShared
+              ? 'この会話の回答本文をトレーナーが閲覧できます（クリックで解除）'
+              : 'この会話の回答本文をトレーナーへ共有します（いつでも解除できます）'"
+            @click="onToggleShare"
+          >
+            <Share2 class="h-3.5 w-3.5" aria-hidden="true" />
+            {{ currentSessionShared ? '共有中' : 'トレーナー共有' }}
+          </button>
           <button type="button" class="btn btn-ghost btn-sm" @click="onOpenHistory">
             <History class="h-3.5 w-3.5" aria-hidden="true" />
             履歴
@@ -200,10 +286,51 @@ onBeforeUnmount(() => {
                   </template>
                 </div>
 
-                <!-- 出典バッジ + 時刻 -->
+                <!-- 応答種別 + 出典バッジ + 時刻 + フィードバック -->
                 <div class="mt-1 flex flex-wrap items-center gap-1" :class="m.role === 'user' ? 'justify-end' : ''">
+                  <UiStatusBadge
+                    v-if="m.role === 'assistant' && m.kind === 'fallback'"
+                    label="定型応答（AI回答ではありません）"
+                    tone="warn"
+                  />
                   <UiStatusBadge v-for="src in m.sources" :key="src" :label="src" tone="brand" />
                   <span class="num text-[10px] text-muted">{{ fmtTime(m.at) }}</span>
+                  <template v-if="feedbackTargetId(m)">
+                    <button
+                      type="button"
+                      class="rounded p-1 transition-colors"
+                      :class="m.feedback === 'good' ? 'text-ok' : 'text-muted hover:text-sub'"
+                      :aria-label="m.feedback === 'good' ? '「役に立った」を取り消す' : '役に立った'"
+                      :title="m.feedback === 'good' ? '「役に立った」を取り消す' : '役に立った'"
+                      @click="onFeedback(m, 'good')"
+                    >
+                      <ThumbsUp class="h-3.5 w-3.5" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      class="rounded p-1 transition-colors"
+                      :class="m.feedback === 'bad' ? 'text-crit' : 'text-muted hover:text-sub'"
+                      :aria-label="m.feedback === 'bad' ? '「役に立たなかった」を取り消す' : '役に立たなかった'"
+                      :title="m.feedback === 'bad' ? '「役に立たなかった」を取り消す' : '役に立たなかった'"
+                      @click="onFeedback(m, 'bad')"
+                    >
+                      <ThumbsDown class="h-3.5 w-3.5" aria-hidden="true" />
+                    </button>
+                  </template>
+                </div>
+
+                <!-- bad 選択後の任意コメント（改善ヒント） -->
+                <div v-if="commentFor === m.id" class="mt-1.5 flex items-center gap-1.5">
+                  <input
+                    v-model="commentDraft"
+                    type="text"
+                    maxlength="500"
+                    class="input flex-1 text-xs"
+                    placeholder="改善のヒント（任意。例: 先月分も知りたかった）"
+                    aria-label="フィードバックのコメント"
+                    @keydown.enter.prevent="onSendComment(m)"
+                  >
+                  <button type="button" class="btn btn-sm" @click="onSendComment(m)">送信</button>
                 </div>
 
                 <!-- サジェスト（最新の AI 応答のみ） -->

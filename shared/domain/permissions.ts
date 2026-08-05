@@ -40,6 +40,7 @@ export const FEATURE_PERMISSION_KEYS: { key: string; label: string }[] = [
   { key: 'akebono', label: 'AKEBONO（3D オフィス）' },
   { key: 'support', label: '業務支援ツール（ハブ）' },
   { key: 'chatbot', label: 'AIチャットボット' },
+  { key: 'chatbot-training', label: 'AIチャットボット・トレーナー（許可制。フィードバック閲覧・辞書管理）' },
   { key: 'documents', label: 'ドキュメント管理' },
   { key: 'sales', label: '売上管理' },
   { key: 'status', label: '提供システム稼働状況' },
@@ -267,6 +268,26 @@ export function canViewMemberCustomerLog(
   if (targetMemberId === subject.memberId) return true
   return resolve(rules, subject, 'customer-log',
     [`${CUSTOMER_LOG_MEMBER_FIELD_PREFIX}${targetMemberId}`, MEMBER_VIEW_ALL_FIELD], false)
+}
+
+// ---------- チャットボット・トレーナー（オペレーター指示 2026-08-05） ----------
+
+/**
+ * チャットボット・トレーナー機能（フィードバック閲覧・同義語辞書の管理）の利用可否。
+ * **許可制（既定 = 不可）**: フィードバック一覧は他メンバーの質問文・診断メタデータを含むため、
+ * 機能キー 'chatbot-training' の allow ルールで明示的に許可された対象者のみ利用できる。
+ * 管理者は常に利用可（権限ルール自体の管理者と同格 = 運用ロックアウト防止）。
+ * 回答本文の開示は本判定とは別に、セッション所有者の明示同意（chat_sessions.trainer_shared）を要する
+ * （トレーナー権限があっても同意のないセッションの回答本文・文脈は見えない = 権限モデルの迂回防止）。
+ */
+export const CHATBOT_TRAINING_FEATURE = 'chatbot-training'
+
+export function canTrainChatbot(
+  rules: PermissionRule[],
+  subject: PermissionSubject,
+): boolean {
+  if (subject.role === 'admin') return true
+  return resolve(rules, subject, CHATBOT_TRAINING_FEATURE, [null], false)
 }
 
 // ---------- 全員のタイムカードの参照（オペレーター指示 2026-07-22） ----------

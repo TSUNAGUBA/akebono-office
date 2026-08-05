@@ -8,7 +8,8 @@
  * 既定は allow（ルール未設定なら挙動不変）。既存のロールガードを緩めることはできない（制限レイヤ）。
  */
 import {
-  canUseFeature, canViewAllTimecards as canViewAllTimecardsShared,
+  canTrainChatbot as canTrainChatbotShared, canUseFeature,
+  canViewAllTimecards as canViewAllTimecardsShared,
   canViewMemberCustomerLog as canViewMemberCustomerLogShared, canViewField,
   canViewMemberReports as canViewMemberReportsShared,
   canViewMemberTaskPlans as canViewMemberTaskPlansShared,
@@ -63,8 +64,12 @@ export function usePermissions() {
   const canViewAllTimecards = computed(() =>
     canViewAllTimecardsShared(rules.value, subject.value))
 
+  /** チャットボット・トレーナー（フィードバック閲覧・辞書管理）。許可制（既定 = 管理者のみ） */
+  const canTrainChatbot = computed(() =>
+    canTrainChatbotShared(rules.value, subject.value))
+
   return {
     can, canPath, canField, canViewMemberReports, canViewMemberTaskPlans,
-    canViewMemberCustomerLog, canViewAllTimecards,
+    canViewMemberCustomerLog, canViewAllTimecards, canTrainChatbot,
   }
 }

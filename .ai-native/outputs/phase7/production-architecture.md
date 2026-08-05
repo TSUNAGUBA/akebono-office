@@ -50,7 +50,7 @@ flowchart LR
 | 休暇残数（FIFO 引当・失効・上限） | サーバー | `GET /v1/leave/balance` |
 | 打刻の状態機械・修正打刻の置換解決 | サーバー | `POST /v1/attendance/punches` ほか |
 | 日報の正規化・提出保護・工数乖離チェック | サーバー | `PUT /v1/reports/daily` |
-| LLM 呼び出し（AI コメント・日報ドラフト・チャットボット） | サーバー（**Vertex AI**・オペレーター決定 2026-07-17。Cloud Run 実行 SA の ADC 認証 = API キー不要。失敗時は決定的ヒューリスティックへフォールバック） | `api/src/lib/llm.ts`（generateContent + responseSchema）。エンドポイントはバッチ3 続きで実装: `POST /v1/assist/*` |
+| LLM 呼び出し（AI コメント・日報ドラフト・チャットボット） | サーバー（**Vertex AI**・オペレーター決定 2026-07-17。Cloud Run 実行 SA の ADC 認証 = API キー不要。失敗時は決定的ヒューリスティックへフォールバック） | `api/src/lib/llm.ts`（generateContent + responseSchema。チャットボットは **generateJsonWithTools = function calling ループ**（オペレーター指示 2026-08-05）: ツール宣言 + final_answer 強制でモデルが社内データを自律取得。権限はツール実装側 `chatbot-tools.ts` のコードで enforcement・トークン実測 usageMetadata を diag へ記録）。エンドポイントはバッチ3 続きで実装: `POST /v1/assist/*` |
 | mart ETL・周期有給付与などのバッチ | サーバー（Cloud Scheduler + Cloud Run jobs。バッチ2 以降） | — |
 | 表示射影（フィルタ済みデータの整形・グラフ描画・組織図ツリー化） | フロント | —（API のデータを純粋関数で射影） |
 

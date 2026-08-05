@@ -57,6 +57,147 @@ export interface GroundedTextRequest {
   maxTokens?: number
 }
 
+/** トークン実測（Vertex usageMetadata。観測基盤 = オペレーター指示 2026-08-05） */
+export interface LlmUsage {
+  promptTokens: number
+  outputTokens: number
+  totalTokens: number
+}
+
+/** ツール（function calling）の宣言。parameters は OpenAPI 形式 */
+export interface ToolDef {
+  name: string
+  description: string
+  parameters: Record<string, unknown>
+}
+
+export interface ToolLoopRequest {
+  system: string
+  prompt: string
+  /** 最終回答（final_answer）の構造化スキーマ（OpenAPI 形式の parameters） */
+  finalSchema: Record<string, unknown>
+  tools: ToolDef[]
+  /** ツール実行（権限チェックは実装側 = コードで enforcement。失敗は {error} を返すこと） */
+  execute: (name: string, args: Record<string, unknown>) => Promise<Record<string, unknown>>
+  maxTokens?: number
+  /** LLM 呼び出しの最大ラウンド数（最終ラウンドは final_answer を強制）。既定 5 */
+  maxRounds?: number
+}
+
+export interface ToolLoopResult<T> {
+  /** final_answer の引数（構造化回答）。取得できなかった場合は null = フォールバック契機 */
+  data: T | null
+  usage: LlmUsage
+  toolCalls: { name: string; ok: boolean }[]
+  rounds: number
+}
+
+const FINAL_TOOL = 'final_answer'
+
+interface VertexPart {
+  text?: string
+  functionCall?: { name: string; args?: Record<string, unknown> }
+}
+
+interface VertexToolResponse {
+  candidates?: { content?: { role?: string; parts?: VertexPart[] } }[]
+  usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number }
+}
+
+/**
+ * ツールユース付き構造化生成（エージェンティック RAG = オペレーター指示 2026-08-05）。
+ * モデルにツール群 + final_answer を渡し、必要な社内データをモデル自身が取得してから
+ * final_answer で回答を確定するループ。functionCallingConfig.mode = ANY でテキスト直返しを防ぎ、
+ * 最終ラウンドは allowedFunctionNames で final_answer を強制する。
+ * - グラウンディング同様、responseSchema とツールは併用不可のため、構造化は final_answer の
+ *   parameters（OpenAPI）で担保する（llm.ts 冒頭の 2 段構成の設計判断と同型）
+ * - 失敗（未設定・認証不可・初回 API エラー）は null（呼び出し側がフォールバック = 原則4）。
+ *   途中ラウンドの失敗は、それまでの usage を保った data: null で返す
+ */
+export async function generateJsonWithTools<T>(
+  env: Env,
+  req: ToolLoopRequest,
+): Promise<ToolLoopResult<T> | null> {
+  if (!env.vertexProjectId) return null
+  const token = await accessToken()
+  if (!token) return null
+  const maxRounds = req.maxRounds ?? 5
+  const usage: LlmUsage = { promptTokens: 0, outputTokens: 0, totalTokens: 0 }
+  const toolCalls: { name: string; ok: boolean }[] = []
+  const declarations = [
+    ...req.tools,
+    {
+      name: FINAL_TOOL,
+      description: '最終回答を確定する。必要な社内データが揃ったら（または追加取得が不要なら）必ずこの関数を呼ぶ。',
+      parameters: req.finalSchema,
+    },
+  ]
+  const contents: Record<string, unknown>[] = [{ role: 'user', parts: [{ text: req.prompt }] }]
+  let rounds = 0
+  const result = (data: T | null): ToolLoopResult<T> => ({ data, usage, toolCalls, rounds })
+  for (; rounds < maxRounds;) {
+    rounds++
+    const isLast = rounds >= maxRounds
+    let body: VertexToolResponse
+    try {
+      const res = await fetch(endpoint(env), {
+        method: 'POST',
+        headers: { 'authorization': `Bearer ${token}`, 'content-type': 'application/json' },
+        signal: AbortSignal.timeout(30_000),
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: req.system }] },
+          contents,
+          tools: [{ functionDeclarations: declarations }],
+          toolConfig: {
+            functionCallingConfig: {
+              mode: 'ANY',
+              ...(isLast ? { allowedFunctionNames: [FINAL_TOOL] } : {}),
+            },
+          },
+          generationConfig: { maxOutputTokens: req.maxTokens ?? 2048, temperature: 0.3 },
+        }),
+      })
+      if (!res.ok) {
+        console.warn(`vertex tool loop failed (non-blocking): ${res.status} ${(await res.text()).slice(0, 300)}`)
+        return rounds === 1 ? null : result(null)
+      }
+      body = await res.json() as VertexToolResponse
+    } catch (e) {
+      console.warn('vertex tool loop failed (non-blocking):', (e as Error).message)
+      return rounds === 1 ? null : result(null)
+    }
+    const u = body.usageMetadata
+    usage.promptTokens += u?.promptTokenCount ?? 0
+    usage.outputTokens += u?.candidatesTokenCount ?? 0
+    usage.totalTokens += u?.totalTokenCount ?? 0
+    const parts = body.candidates?.[0]?.content?.parts ?? []
+    const calls = parts.filter((p): p is Required<Pick<VertexPart, 'functionCall'>> => !!p.functionCall)
+    const final = calls.find(p => p.functionCall.name === FINAL_TOOL)
+    if (final) return result((final.functionCall.args ?? {}) as T)
+    if (calls.length === 0) return result(null) // mode=ANY では想定外（安全側 = フォールバック）
+    // ツールを順次実行し、モデルターン + functionResponse ターンを積んで次ラウンドへ。
+    // 個別のツール失敗は {error} としてモデルへ返し、ループ全体は止めない（原則4）
+    const responses: Record<string, unknown>[] = []
+    // 1 ラウンドの並列呼び出しは 4 件まで（functionCall と functionResponse の件数は一致させる）
+    const executed = calls.slice(0, 4)
+    for (const call of executed) {
+      const name = call.functionCall.name
+      let response: Record<string, unknown>
+      try {
+        response = await req.execute(name, call.functionCall.args ?? {})
+        toolCalls.push({ name, ok: !('error' in response) })
+      } catch (e) {
+        response = { error: `ツールの実行に失敗しました: ${(e as Error).message}` }
+        toolCalls.push({ name, ok: false })
+      }
+      responses.push({ functionResponse: { name, response } })
+    }
+    contents.push({ role: 'model', parts: executed.map(p => ({ functionCall: p.functionCall })) })
+    contents.push({ role: 'user', parts: responses })
+  }
+  return result(null)
+}
+
 /**
  * Google Search グラウンディング付きテキスト生成（バッチ7i・オペレーター指示 2026-07-19 #11）。
  * AI カンパニーのステップ遂行前の Web 調査に使う。構造化出力（responseSchema）とグラウンディングの

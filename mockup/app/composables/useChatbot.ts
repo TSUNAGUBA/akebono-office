@@ -23,6 +23,10 @@ interface BotAnswer {
   content: string
   sources: string[]
   suggestions: string[]
+  /** 応答種別（'ai' = LLM 応答 / 'fallback' = 決定的定型応答 = UI で明示。オペレーター報告 2026-08-05） */
+  kind?: 'ai' | 'fallback'
+  /** サーバーで永続化されたメッセージ id（good/bad フィードバックの対象。未永続は undefined） */
+  serverId?: string
 }
 
 // ---------- セッション状態（SPA・モジュールスコープ単一 = ページ遷移しても会話を維持） ----------
@@ -111,10 +115,11 @@ export function useChatbot() {
   let timer: ReturnType<typeof setInterval> | null = null
   let pendingAnswer: BotAnswer | null = null
 
-  function append(msg: Omit<ChatMessage, 'id' | 'at' | 'sessionId'>): void {
+  function append(msg: Omit<ChatMessage, 'id' | 'at' | 'sessionId'>, serverId?: string): void {
     const full: ChatMessage = {
       ...msg,
-      id: isApi ? `ch-l${++localSeq}` : nextId('chatMessages', 'ch'),
+      // サーバー永続済みの応答はサーバー発番の id を使う（フィードバック API の対象 id と一致させる）
+      id: serverId ?? (isApi ? `ch-l${++localSeq}` : nextId('chatMessages', 'ch')),
       sessionId: currentSessionId.value ?? undefined,
       at: nowJstIso(),
     }
@@ -139,7 +144,10 @@ export function useChatbot() {
       timer = null
     }
     if (pendingAnswer) {
-      append({ role: 'assistant', content: pendingAnswer.content, sources: pendingAnswer.sources, suggestions: pendingAnswer.suggestions })
+      append({
+        role: 'assistant', content: pendingAnswer.content, sources: pendingAnswer.sources,
+        suggestions: pendingAnswer.suggestions, kind: pendingAnswer.kind ?? null,
+      }, pendingAnswer.serverId)
       if (!isApi && currentSessionId.value) touchMockSession(currentSessionId.value)
       pendingAnswer = null
     }
@@ -245,9 +253,12 @@ export function useChatbot() {
     if (!isApi && currentSessionId.value) touchMockSession(currentSessionId.value)
     if (isApi) {
       isStreaming.value = true // LLM 応答待ちの間も入力を抑止し「考え中」を表示
+      // フォールバック時の診断（/ask が返す diag）。定型応答の追記に添付して観測基盤へ残す
+      let fallbackDiag: unknown = null
       try {
         const res = await apiFetch<{
           fallback: boolean; sessionId?: string; content?: string; sources?: string[]; suggestions?: string[]
+          messageId?: string; diag?: unknown
         }>('/v1/chatbot/ask', { method: 'POST', body: { question: text, sessionId: currentSessionId.value } })
         if (res.sessionId) currentSessionId.value = res.sessionId
         if (!res.fallback && res.content) {
@@ -255,9 +266,12 @@ export function useChatbot() {
             content: res.content,
             sources: res.sources ?? [],
             suggestions: (res.suggestions?.length ? res.suggestions : INITIAL_SUGGESTIONS.slice(0, 2)),
+            kind: 'ai',
+            serverId: res.messageId,
           })
           return
         }
+        fallbackDiag = res.diag ?? null
       } catch (e) {
         // 通信失敗も決定的応答へ縮退（下の共通経路）。
         // セッション不在（別アカウントの残骸等 = AKO-CHT-001）は保持をやめて新しい会話へ
@@ -293,16 +307,25 @@ export function useChatbot() {
         ['companies', 'industries', 'relationTypes', 'companyRelations', 'projects', 'knowledge', 'members', 'departments']
           .map(n => loadApiCollection(n)))
       const ans = resolveAnswer(text)
+      // 定型応答は kind='fallback' として追記し AI 応答と区別する（サーバー側で kind を強制）。
+      // 追記の成否を待って id を受け取り、フィードバックの対象にする（失敗しても表示は継続 = 非ブロッキング）
+      let serverId: string | undefined
       if (currentSessionId.value) {
-        void apiFetch(`/v1/chatbot/sessions/${currentSessionId.value}/messages`, {
-          method: 'POST',
-          body: { content: ans.content, sources: ans.sources, suggestions: ans.suggestions },
-        }).catch(() => { /* 追記失敗は表示を妨げない */ })
+        try {
+          serverId = (await apiFetch<{ id: string }>(`/v1/chatbot/sessions/${currentSessionId.value}/messages`, {
+            method: 'POST',
+            body: {
+              content: ans.content, sources: ans.sources, suggestions: ans.suggestions,
+              ...(fallbackDiag ? { diag: fallbackDiag } : {}),
+            },
+          })).id
+        } catch { /* 追記失敗は表示を妨げない */ }
       }
-      startStream(ans)
+      startStream({ ...ans, kind: 'fallback', serverId })
       return
     }
-    startStream(resolveAnswer(text))
+    // モックモードの応答も決定的ルーティング = 定型応答として明示する
+    startStream({ ...resolveAnswer(text), kind: 'fallback' })
   }
 
   /**
@@ -316,6 +339,93 @@ export function useChatbot() {
       context: `チャットボットが回答できなかった質問: 「${question}」`,
       dedupeKey: `chatbot:${currentUser.value.id}:${todayJst()}`,
     })
+  }
+
+  // ---------- good/bad フィードバック（観測基盤 = オペレーター指示 2026-08-05） ----------
+
+  /** 表示中メッセージの feedback ミラーを更新（SoT は API = chat_feedback / モック = chatFeedback） */
+  function mirrorFeedback(messageId: string, rating: 'good' | 'bad' | null): void {
+    const patch = (rows: ChatMessage[]): ChatMessage[] =>
+      rows.map(m => m.id === messageId ? { ...m, feedback: rating } : m)
+    if (isApi) {
+      apiMessages.value = patch(apiMessages.value)
+      return
+    }
+    mockMessages.value = patch(mockMessages.value)
+    commit()
+  }
+
+  /** 評価の登録・変更（同じ評価の再送は上書き = 冪等）。取消は clearFeedback（原則9.5） */
+  async function sendFeedback(messageId: string, rating: 'good' | 'bad', comment = ''): Promise<Result> {
+    if (isApi) {
+      try {
+        await apiFetch(`/v1/chatbot/messages/${messageId}/feedback`, {
+          method: 'PUT', body: { rating, comment },
+        })
+      } catch (e) {
+        return { ok: false, error: apiErrorOf(e) }
+      }
+      mirrorFeedback(messageId, rating)
+      return { ok: true, id: messageId }
+    }
+    const fb = tbl('chatFeedback')
+    const existing = fb.value.find(f => f.messageId === messageId && f.memberId === currentUser.value.id)
+    fb.value = existing
+      ? fb.value.map(f => f.id === existing.id ? { ...f, rating, comment, updatedAt: nowJstIso() } : f)
+      : [...fb.value, {
+          id: nextId('chatFeedback', 'cf'), messageId,
+          sessionId: currentSessionId.value ?? '', memberId: currentUser.value.id,
+          rating, comment, updatedAt: nowJstIso(),
+        }]
+    mirrorFeedback(messageId, rating)
+    return { ok: true, id: messageId }
+  }
+
+  /** 評価の取消（原則9.5: 誤操作の取り消しフロー） */
+  async function clearFeedback(messageId: string): Promise<Result> {
+    if (isApi) {
+      try {
+        await apiFetch(`/v1/chatbot/messages/${messageId}/feedback`, { method: 'DELETE' })
+      } catch (e) {
+        return { ok: false, error: apiErrorOf(e) }
+      }
+      mirrorFeedback(messageId, null)
+      return { ok: true, id: messageId }
+    }
+    const fb = tbl('chatFeedback')
+    fb.value = fb.value.filter(f => !(f.messageId === messageId && f.memberId === currentUser.value.id))
+    mirrorFeedback(messageId, null)
+    return { ok: true, id: messageId }
+  }
+
+  // ---------- トレーナー共有の同意（本文開示の明示同意。いつでも取消可 = 原則9.5） ----------
+
+  /** 表示中セッションの共有状態（セッション未確定・一覧未取得時は false） */
+  const currentSessionShared = computed<boolean>(() => {
+    const id = currentSessionId.value
+    if (!id) return false
+    const rows = isApi ? apiSessions.value : mockSessions.value
+    return rows.find(s => s.id === id)?.trainerShared === true
+  })
+
+  /** 表示中セッションの共有トグル */
+  async function setSessionShared(shared: boolean): Promise<Result> {
+    const id = currentSessionId.value
+    if (!id) return { ok: false, error: { code: 'AKO-CHT-001', message: '会話がまだ保存されていません' } }
+    if (isApi) {
+      try {
+        await apiFetch(`/v1/chatbot/sessions/${id}/share`, { method: 'PUT', body: { shared } })
+      } catch (e) {
+        return { ok: false, error: apiErrorOf(e) }
+      }
+      apiSessions.value = apiSessions.value.map(s => s.id === id ? { ...s, trainerShared: shared } : s)
+      // 一覧未取得のうちにトグルされた場合に備えて取り直す（表示の整合。失敗は無視 = 非ブロッキング）
+      if (!apiSessions.value.some(s => s.id === id)) void refreshSessions()
+      return { ok: true, id }
+    }
+    mockSessions.value = mockSessions.value.map(s => s.id === id ? { ...s, trainerShared: shared } : s)
+    commit()
+    return { ok: true, id }
   }
 
   // ---------- シナリオルーティング（実データ参照） ----------
@@ -609,6 +719,7 @@ export function useChatbot() {
     messages: sorted,
     sessions,
     currentSessionId,
+    currentSessionShared,
     isStreaming,
     streamingText,
     send,
@@ -618,5 +729,8 @@ export function useChatbot() {
     refreshSessions,
     finalize,
     escalate,
+    sendFeedback,
+    clearFeedback,
+    setSessionShared,
   }
 }

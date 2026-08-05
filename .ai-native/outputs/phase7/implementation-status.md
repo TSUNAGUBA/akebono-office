@@ -141,7 +141,7 @@
 | 業務支援ツール `/support` | F-09 | ✅ | ✅ | 外部リンクは接続済みマスタを参照。チャットボット（F-09-3）は PR #27 で接続済み。**ドキュメント管理はバッチ7l で本実装（§32 参照）= 全ドメイン移行完了** |
 | 売上管理 `/sales` | F-15 | ✅ | ✅ 売上接続済み（PR #36 = バッチ6b）: 月次実績 = `sales_monthly`（0017・冪等キー month × company × projectType の upsert）・`GET/POST /v1/sales`（登録は管理者のみ・一括取込 500 件）・実績登録モーダル（管理者）・会計年度計算 = shared/domain/fiscal をフロント/API 共有・機能ガード 'sales'（F-16）・チャットボット文脈に売上サマリ追加 + **mart ETL**: `fact_sales` / `mart_load_runs`（app_office 内 mart 互換 = オペレーター判断 2026-07-18）へ一方向 ETL（`POST /v1/sales/etl/run` + `/jobs/sales-mart-etl`） | 実績データのためマスタ初期値シードなし（新規環境は管理者登録 or 取込から） |
 | 提供システム稼働状況 `/status` | F-11 | ✅ | ✅ 稼働状況接続済み（PR #37 = バッチ6c）: サービス = `system_services`（0018・mockup と同一の 3 サービスをシード）・インシデント = `service_incidents`（記録系 = updates 追記のみ・正順の状態機械を FOR UPDATE で直列化・登録/更新で管理者通知）・uptime = `uptime_daily`（SoT はインシデント → shared/domain/uptime で日次導出・窓内 DELETE→INSERT で冪等。トリガ = 登録/更新時 + `/jobs/uptime-rollup` + 管理者の手動再計算）・`GET /v1/status` 一括ハイドレーション（90 日 operational 埋め）・機能ガード 'status'（F-16）・チャットボット文脈 + 決定的フォールバックも実データ化 | モックの乱数 uptime シードは本番へ持ち込まない（インシデント実績から導出） |
-| チャットボット（画面内ヘルプ） | F-09-3 | ✅ | ✅ チャットボット接続済み（PR #27）+ ✅ セッション管理（PR #30/#31・オペレーター指示 2026-07-17）: 会話は chat_sessions / chat_messages（0012）で DB 管理・同一セッション内は直近履歴 12 件を LLM へ渡すマルチターン・過去セッションの再開/新規開始（履歴ドロワー + 新しい会話）・本人のみ参照（AKO-CHT-001）・メッセージは追記のみ。fallback 応答もセッションへ追記（履歴の忠実性） | 旧「会話履歴はセッションローカル」設計判断は PR #30/#31 で置換。ドキュメントはバッチ7l で実データ化（search_docs 経由の参照 + 署名 URL 案内 = §32）。エスカレーション起票は PR #21 で接続済み |
+| チャットボット（画面内ヘルプ） | F-09-3 | ✅ | ✅ チャットボット接続済み（PR #27）+ ✅ セッション管理（PR #30/#31・オペレーター指示 2026-07-17）: 会話は chat_sessions / chat_messages（0012）で DB 管理・同一セッション内は直近履歴 12 件を LLM へ渡すマルチターン・過去セッションの再開/新規開始（履歴ドロワー + 新しい会話）・本人のみ参照（AKO-CHT-001）・メッセージは追記のみ。fallback 応答もセッションへ追記（履歴の忠実性）+ ✅ 観測・ツールユース・フィードバック還元ループ（§58・2026-08-05: 診断スナップショット / kind=ai・fallback の明示 / ツール 7 種のエージェンティック RAG / good・bad フィードバック / トレーナー画面 + 同義語辞書） | 旧「会話履歴はセッションローカル」設計判断は PR #30/#31 で置換。ドキュメントはバッチ7l で実データ化（search_docs 経由の参照 + 署名 URL 案内 = §32）。エスカレーション起票は PR #21 で接続済み |
 | mart（分析基盤）ETL: fact_attendance / fact_leave / fact_effort ほか | data-design §2 | —（写像可能な型のみ） | 🚧 fact_sales のみ本 PR（バッチ6b）で実装（app_office 内 mart 互換テーブル + mart_load_runs。data-design §2.3 の実装状況注記参照）。他ファクトは ⏳ | app_office → mart の一方向 ETL。mart 本体（akebono-scm-platform）への接続はテーブル移送 + ETL 先切替で対応（オペレーター判断 2026-07-18） |
 | メディア分析 `/media`（AKEBONO 業務配下） | F-40 | ✅ | ✅ メディア接続（§37 = 2026-07-28）: GA 連携 = Google OAuth 2.0（**セグメント単位**・analytics.readonly・state ノンス + email 突合・トークン AES-256-GCM 暗号化 = 0030）→ GA4 プロパティ選択（Admin API accountSummaries → PUT /v1/media/property）・集計 = GA4 Data API batchRunReports → MediaMetrics 整形（lib/ga.ts・30 分導出キャッシュ・conversions 廃止のため keyEvents 使用）・メディア設定（部分更新 = hasOwn フィルタ）・記事インベントリ（論理削除/復元）・AI 記事生成（Vertex AI → 決定的フォールバック・採用/取消）・AI インサイト（media/integrated = weekly_insights と同型の upsert 保管） | 記事インベントリは実データのためシードしない（採用・手動登録で育成）。統合メトリクス（PDCA）は Phase C（§39）でサーバー組み立てへ引き上げ = 売上軸も実データ（GET /v1/media/integrated） |
 | 業態/会社全体ダッシュボード `/akebono/dashboard`・`/akebono/company` | F-41 | ✅ | 🚧 ほぼ接続（Phase C = §39）: 集計（売上軸 = sales_records + メディア軸 = GA）はサーバー組み立ての実データ（/v1/media/integrated）。**AI レポートの保管（dashboardInsights）のみ未移行** = カードに「レポート保管 = ローカル」バッジ | 保管の media_insights 同型化は Phase D（§39-6）。ページ全体のモックバッジは撤去（M3 撤去条件成立） |
@@ -1820,3 +1820,26 @@
   - **NIT（監査）: HANDOFF スナップショットに /meet 未反映**。→ 追記（全件反映）。
   - 許容（是正不要）: webViewLink 正規化の末尾スラッシュ要求（サフィックス攻撃防御として意図的・実リンクは必ずパスあり）/ documents→notes の Drive ヘルパ import（循環なし・calendar→documents の前例あり = 原則3）/ 既定フォルダ名空時の「（未選択）」表示（選択経由では常に name 設定・直 API のみ・体裁）/ Meet リンクの実在検証なし（google.com ホスト制約 + C2 同一チーム信頼）。
 - [x] **再検証（是正後）**: mockup typecheck + `npm test` **221 passed** / api typecheck + unit **273 passed** / integration **231 passed**（新規回帰なし = 原則9「直した結果も問題ない」）。
+
+## 58. チャットボット回答精度の改善基盤（観測 + ツールユース + フィードバック還元ループ。オペレーター指示 2026-08-05）の完了条件（Definition of Done）
+
+> 背景: 「データがあるのに『回答できない』と返る」事象（オペレーター報告 2026-08-05 の実例 4 件）の机上トレースで、
+> ①文脈の粒度不足（日報 = 1 行要約のみ・他メンバーの予定はどの経路でも文脈に載らない）②話題判定の語彙ギャップ
+> ③低確信度時の定型応答が AI 回答と区別できない、の 3 根本原因を特定。マルチエージェント化ではなく
+> 「単一モデル + ツールユース + コード側権限 enforcement」の構成で対応（壁打ち決定 2026-08-05）。
+
+- [x] **観測基盤:** 応答ごとに診断スナップショット（`ChatDiag` = 発火ブロック・検索ヒット件数・文脈サイズ・ツール呼出・ラウンド数・トークン実測（Vertex usageMetadata）・confidence・破棄有無・所要時間）を `chat_messages.diag`（0053）へ保存。フォールバック時は /ask 応答の `diag` をクライアントが定型応答の追記に添付（テレメトリ用途 = 改竄前提でサイズ検証のみ）
+- [x] **応答種別の明示（偽装フォールバックの是正）:** `chat_messages.kind`（'ai' = LLM 応答 / 'fallback' = 決定的定型応答。旧データ NULL = 従来表示）。kind='ai' は /ask のサーバー永続化のみが付与（クライアントから偽装不可）。UI は定型応答に「定型応答（AI回答ではありません）」バッジ（モックモード含む）
+- [x] **ツールユース（エージェンティック RAG）:** `generateJsonWithTools`（llm.ts = functionCallingConfig.mode ANY + final_answer 強制・最大 5 ラウンド・並列 4 呼出/ラウンド・usage 集計）+ ツール 7 種（chatbot-tools.ts = 日報詳細 / メンバー予定 / 予定横断検索 / 任意月勤怠 / 有給残 / 稟議一覧 / 社内文書検索）。権限はツール実装側のコードで enforcement（機能 deny・本人スコープ C3・F-16-6/7・AI 参照範囲・表示項目 deny = 文脈ブロックと同一規約）。実測 4 例（日報詳しく・◯◯さん今日何を・訪問に行くのは誰・先月の勤怠）をツールで構造的に解消
+- [x] **文脈キャップ:** チャットボット経路の buildContext 出力へ全体キャップ 12000 cp（従来この経路のみ無制限だった穴の是正。assist は 4000 cp のまま）
+- [x] **good/bad フィードバック:** `chat_feedback`（0053・1 メッセージ × 1 人 = upsert）。`PUT/DELETE /v1/chatbot/messages/:id/feedback`（本人の assistant メッセージのみ・DELETE = 取消フロー 原則9.5）。UI は 👍/👎 トグル + bad 時の任意コメント。GET messages に kind + 本人評価を含める
+- [x] **トレーナー運用（許可制）:** `canTrainChatbot`（shared/permissions = 既定 deny・admin 常時可・機能キー 'chatbot-training' の allow で付与）。`GET /v1/chatbot/training/feedback` は**質問文 + 診断メタデータのみを既定開示し、回答本文はセッション所有者の明示同意（`chat_sessions.trainer_shared` = `PUT /sessions/:id/share`・いつでも取消可）がある場合のみ**（5 層権限モデルをチャットログ経由で迂回させないガード。文脈原文はどの場合も非開示・質問者名は members.name の表示項目 deny に従う）
+- [x] **同義語辞書（還元ループ）:** `chat_synonyms`（0053）+ トレーナー CRUD（POST = 同一ペア再登録で再有効化 = 冪等 / PUT active=false = 論理無効化 = 取消可能）。buildContext の話題コーパスへ正規語を追補（質問原文は不変・10 秒 TTL キャッシュ・ロード失敗は従来挙動で続行 = 原則4）。「休み → 休暇」等の語彙ギャップを運用で埋める
+- [x] **フロント:** useChatbot（kind/serverId/feedback ミラー・setSessionShared・モックモードは chatFeedback/chatSynonyms テーブル = SEED_VERSION 18）・chatbot.vue（バッジ・フィードバック UI・トレーナー共有トグル・トレーナー画面リンク）・`/support/chatbot-training`（フィードバック一覧 + 診断要約 + 辞書管理。権限なしは案内表示）
+- [x] **下位互換（原則7):** buildContext は文字列返却の互換ラッパーを維持（実体 = buildContextDetailed。assist.ts・既存テストは無変更で通過）。chat_messages への列追加は既存行 NULL = データパッチ不要。/ask・messages API は追加フィールドのみ（既存クライアント互換）
+- [x] **検証:** API 統合テスト 235（+4 = フィードバック upsert/取消/他人 404・トレーナー許可制と本文同意ガード・同義語 CRUD と buildContext 反映・LLM 無効時の従来挙動維持）/ 単体 273 / typecheck（api・mockup）
+
+**残課題（次バッチ以降）:**
+- ツールユースの実機評価: LLM 有効環境での 4 実例 + フィードバック failing set による回答品質の実測（観測基盤のログが物差し）
+- 検索リトリーバルの品質改善（チャンク分割・上位 K 拡大・閾値/スコアリング見直し・規模超過時の pgvector 移行）— 議事録・顧客ログ系の質問精度はここが本丸
+- フィードバック集計ビュー（good/bad 率・破棄率・ツール利用率の推移）と bad 事例 → 辞書/few-shot 還元の運用ガイド

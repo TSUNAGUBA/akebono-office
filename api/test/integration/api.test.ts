@@ -5986,3 +5986,154 @@ describe('日報・週報の既読管理（オペレーター指示 2026-07-31�
     }
   })
 })
+
+describe('チャットボット観測基盤 + トレーナー運用（オペレーター指示 2026-08-05）', () => {
+  const memberUser = { id: MEMBER, name: '一般 次郎', email: 'member@example.com', role: 'member' as const, title: '', avatar: '' }
+
+  /** テスト用セッション + assistant メッセージ（kind='fallback'）を作る */
+  async function seedConversation(as: string, question: string): Promise<{ sessionId: string; messageId: string }> {
+    const ask = await api('POST', '/v1/chatbot/ask', { as, body: { question } })
+    const sessionId = (ask.json.data as { sessionId: string }).sessionId
+    const bot = await api('POST', `/v1/chatbot/sessions/${sessionId}/messages`, {
+      as, body: { content: '定型応答です', sources: [], suggestions: [], diag: { v: 1, discarded: true } },
+    })
+    return { sessionId, messageId: (bot.json.data as { id: string }).id }
+  }
+
+  it('フィードバック: 登録は upsert・一覧に本人評価が載る・取消（DELETE）できる・他人のメッセージは 404', async () => {
+    const { sessionId, messageId } = await seedConversation(MEMBER, 'フィードバックのテスト質問')
+    // rating 不正は 400
+    expect((await api('PUT', `/v1/chatbot/messages/${messageId}/feedback`, {
+      as: MEMBER, body: { rating: 'meh' },
+    })).status).toBe(400)
+    // 登録 → 変更（upsert）
+    expect((await api('PUT', `/v1/chatbot/messages/${messageId}/feedback`, {
+      as: MEMBER, body: { rating: 'bad', comment: '先月分も知りたかった' },
+    })).status).toBe(200)
+    expect((await api('PUT', `/v1/chatbot/messages/${messageId}/feedback`, {
+      as: MEMBER, body: { rating: 'good' },
+    })).status).toBe(200)
+    const { rows } = await pool.query(
+      `SELECT rating FROM chat_feedback WHERE message_id = $1 AND member_id = $2`, [messageId, MEMBER])
+    expect(rows).toHaveLength(1) // upsert = 1 行のまま
+    expect(rows[0]!.rating).toBe('good')
+    // メッセージ一覧に kind と本人評価が載る
+    const msgs = (await api('GET', `/v1/chatbot/sessions/${sessionId}/messages`, { as: MEMBER })).json.data as
+      { id: string; kind: string | null; feedback: string | null }[]
+    const target = msgs.find(m => m.id === messageId)
+    expect(target?.kind).toBe('fallback')
+    expect(target?.feedback).toBe('good')
+    // 他人のメッセージへの評価・取消は 404（存在を漏らさない）
+    expect((await api('PUT', `/v1/chatbot/messages/${messageId}/feedback`, {
+      as: HR, body: { rating: 'good' },
+    })).status).toBe(404)
+    expect((await api('DELETE', `/v1/chatbot/messages/${messageId}/feedback`, { as: HR })).status).toBe(404)
+    // 本人は取消できる（原則9.5）
+    expect((await api('DELETE', `/v1/chatbot/messages/${messageId}/feedback`, { as: MEMBER })).status).toBe(200)
+    const after = await pool.query(`SELECT 1 FROM chat_feedback WHERE message_id = $1`, [messageId])
+    expect(after.rows).toHaveLength(0)
+  })
+
+  it('トレーナー: 許可制（member 403・admin 可・allow ルールで member にも付与）と本文の同意ガード', async () => {
+    const { sessionId, messageId } = await seedConversation(MEMBER, '共有ガードのテスト質問')
+    await api('PUT', `/v1/chatbot/messages/${messageId}/feedback`, { as: MEMBER, body: { rating: 'bad', comment: 'ヒント' } })
+
+    // 許可制: member は 403、admin は常に可
+    expect((await api('GET', '/v1/chatbot/training/feedback', { as: MEMBER })).status).toBe(403)
+    const adminView = await api('GET', '/v1/chatbot/training/feedback', { as: ADMIN })
+    expect(adminView.status).toBe(200)
+    const rows = adminView.json.data as {
+      question: string; kind: string | null; rating: string; comment: string; shared: boolean; answer?: string
+    }[]
+    const row = rows.find(r => r.question === '共有ガードのテスト質問')
+    expect(row).toBeTruthy()
+    expect(row!.rating).toBe('bad')
+    expect(row!.kind).toBe('fallback')
+    // 未共有セッション: 質問文・診断は見えるが回答本文は含まれない（明示同意ガード）
+    expect(row!.shared).toBe(false)
+    expect(row!.answer).toBeUndefined()
+
+    // 質問者が共有に同意 → 本文が見える。解除 → 再び見えない（取消可能 = 原則9.5）
+    expect((await api('PUT', `/v1/chatbot/sessions/${sessionId}/share`, {
+      as: MEMBER, body: { shared: true },
+    })).status).toBe(200)
+    const sharedRow = ((await api('GET', '/v1/chatbot/training/feedback', { as: ADMIN })).json.data as typeof rows)
+      .find(r => r.question === '共有ガードのテスト質問')
+    expect(sharedRow!.shared).toBe(true)
+    expect(sharedRow!.answer).toBe('定型応答です')
+    await api('PUT', `/v1/chatbot/sessions/${sessionId}/share`, { as: MEMBER, body: { shared: false } })
+    const revoked = ((await api('GET', '/v1/chatbot/training/feedback', { as: ADMIN })).json.data as typeof rows)
+      .find(r => r.question === '共有ガードのテスト質問')
+    expect(revoked!.answer).toBeUndefined()
+    // 他人は共有トグルを操作できない
+    expect((await api('PUT', `/v1/chatbot/sessions/${sessionId}/share`, {
+      as: HR, body: { shared: true },
+    })).status).toBe(404)
+
+    // allow ルールで member にもトレーナーを付与できる（許可制の付与経路）
+    await pool.query(
+      `INSERT INTO permission_rules (id, subject_kind, subject_id, resource, field, effect, active)
+       VALUES ('pr-test-trainer', 'member', $1, 'chatbot-training', NULL, 'allow', true)
+       ON CONFLICT (id) DO UPDATE SET active = true`, [MEMBER])
+    clearPermissionCache()
+    try {
+      expect((await api('GET', '/v1/chatbot/training/feedback', { as: MEMBER })).status).toBe(200)
+    } finally {
+      await pool.query(`DELETE FROM permission_rules WHERE id = 'pr-test-trainer'`)
+      clearPermissionCache()
+    }
+  })
+
+  it('同義語辞書: CRUD（トレーナーのみ）+ buildContext の話題判定へ反映される（語彙ギャップの還元ループ）', async () => {
+    const { buildContext } = await import('../../src/routes/chatbot')
+    const { clearChatSynonymCache } = await import('../../src/lib/chat-synonyms')
+    // 「休み」は勤怠の発火語彙に含まれない（実測された語彙ギャップ = オペレーター報告 2026-08-05 例2 同型）
+    expect(await buildContext(pool, memberUser, '来週の休みの相談', [])).not.toContain('本人の有給')
+
+    // トレーナーのみ登録できる（member 403）。バリデーション: 欠落・同一は 400
+    expect((await api('POST', '/v1/chatbot/training/synonyms', {
+      as: MEMBER, body: { term: '休み', canonical: '休暇' },
+    })).status).toBe(403)
+    expect((await api('POST', '/v1/chatbot/training/synonyms', {
+      as: ADMIN, body: { term: '休み' },
+    })).status).toBe(400)
+    expect((await api('POST', '/v1/chatbot/training/synonyms', {
+      as: ADMIN, body: { term: '休暇', canonical: '休暇' },
+    })).status).toBe(400)
+    expect((await api('POST', '/v1/chatbot/training/synonyms', {
+      as: ADMIN, body: { term: '休み', canonical: '休暇', note: 'テスト' },
+    })).status).toBe(201)
+    // 同一ペアの再登録は再有効化（冪等 = 原則2。エラーにならない）
+    expect((await api('POST', '/v1/chatbot/training/synonyms', {
+      as: ADMIN, body: { term: '休み', canonical: '休暇' },
+    })).status).toBe(201)
+
+    try {
+      // 登録後は「休み」でも勤怠文脈が届く（buildContext の話題コーパスへ正規語が追補される）
+      clearChatSynonymCache()
+      expect(await buildContext(pool, memberUser, '来週の休みの相談', [])).toContain('本人の有給')
+
+      // 無効化（取消）→ 反映されない。再有効化 → 戻る（原則9.5）
+      const list = (await api('GET', '/v1/chatbot/training/synonyms', { as: ADMIN })).json.data as
+        { id: string; term: string; active: boolean }[]
+      const syn = list.find(s => s.term === '休み')!
+      expect((await api('PUT', `/v1/chatbot/training/synonyms/${syn.id}`, {
+        as: ADMIN, body: { active: false },
+      })).status).toBe(200)
+      clearChatSynonymCache()
+      expect(await buildContext(pool, memberUser, '来週の休みの相談', [])).not.toContain('本人の有給')
+    } finally {
+      await pool.query(`DELETE FROM chat_synonyms WHERE term = '休み'`)
+      clearChatSynonymCache()
+    }
+  })
+
+  it('/ask のフォールバック応答には diag が付く（LLM 無効環境でも観測基盤が働く）', async () => {
+    const r = await api('POST', '/v1/chatbot/ask', { as: MEMBER, body: { question: '観測のテスト' } })
+    expect(r.status).toBe(200)
+    const data = r.json.data as { fallback: boolean; sessionId: string }
+    expect(data.fallback).toBe(true)
+    // LLM 無効（vertexProjectId 空）は文脈収集前に縮退するため diag なし = 従来挙動の維持を確認
+    expect('diag' in (r.json.data as Record<string, unknown>)).toBe(false)
+  })
+})

@@ -4,7 +4,7 @@
  */
 import type {
   AiActivityLog, AiEmployee, AiRole, AiTask, AkebonoWish, ApprovalLog,
-  AppConfigItem, AppNotification, AttendanceFixRequest, AttendanceRoute, AttendanceRule, AuditLog, CalendarEvent, ChatMessage, ChatSession, DirectRequest, PermissionRule,
+  AppConfigItem, AppNotification, AttendanceFixRequest, AttendanceRoute, AttendanceRule, AuditLog, CalendarEvent, ChatFeedback, ChatMessage, ChatSession, ChatSynonym, DirectRequest, PermissionRule,
   CodeMasterItem, Company, CompanyRelation, Contact, ContactRelation,
   CustomerLog, CustomFieldDef, DailyReport, DecisionLog, DecisionTheme, DelegateSetting, Department,
   DocumentNode, Escalation, EscalationRule, ExternalLink, FeatureToggle, HearingLog, Holiday,
@@ -95,6 +95,10 @@ export interface MockDbShape {
   documents: DocumentNode[]
   chatMessages: ChatMessage[]
   chatSessions: ChatSession[]
+  /** チャットボット応答への good/bad フィードバック（観測基盤 = オペレーター指示 2026-08-05） */
+  chatFeedback: ChatFeedback[]
+  /** チャットボット同義語辞書（トレーナー管理。API モードは chat_synonyms が SoT） */
+  chatSynonyms: ChatSynonym[]
   permissionRules: PermissionRule[]
   akebonoWishes: AkebonoWish[]
   auditLogs: AuditLog[]
@@ -213,6 +217,8 @@ export function buildSeed(): MockDbShape {
     documents: support.seedDocumentNodes,
     chatMessages: [],
     chatSessions: [],
+    chatFeedback: [],
+    chatSynonyms: [],
     // 権限の運用デフォルト（バッチ7f。API 側 migration 0025 と同一内容 = モック/API パリティ。
     // 経営情報（売上・意思決定）と管理 UI（マスタ・設定）を一般/人事から制限。個別例外は権限設定で上書き可）
     permissionRules: [

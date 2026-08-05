@@ -1034,6 +1034,37 @@ export interface ChatMessage {
   sources: string[]
   suggestions: string[]
   at: string
+  /**
+   * 応答種別（オペレーター報告 2026-08-05: 定型応答が AI 回答のように見える問題への対応）。
+   * 'ai' = LLM 応答 / 'fallback' = 決定的な定型応答（AI 回答ではない = UI で明示）。
+   * 未設定/null = 導入前の旧データ（種別不明 = 従来どおり表示）
+   */
+  kind?: 'ai' | 'fallback' | null
+  /** 本人の good/bad 評価（表示用ミラー。SoT は chat_feedback / モックは chatFeedback） */
+  feedback?: 'good' | 'bad' | null
+}
+
+/** チャットボット応答へのフィードバック（観測基盤 = オペレーター指示 2026-08-05。1 メッセージ × 1 人） */
+export interface ChatFeedback {
+  id: string
+  messageId: string
+  sessionId: string
+  memberId: string
+  rating: 'good' | 'bad'
+  comment: string
+  updatedAt: string
+}
+
+/**
+ * チャットボット同義語辞書（フィードバック還元ループ = オペレーター指示 2026-08-05）。
+ * term = ユーザーの言い回し / canonical = 話題判定へ追補する正規語。active=false = 取消（論理無効化）
+ */
+export interface ChatSynonym {
+  id: string
+  term: string
+  canonical: string
+  note: string
+  active: boolean
 }
 
 /**
@@ -1067,6 +1098,8 @@ export interface ChatSession {
   updatedAt: string
   /** API の一覧レスポンスのみ（表示用） */
   messageCount?: number
+  /** トレーナーへの回答本文共有の明示同意（既定 false・いつでも取消可 = 原則9.5） */
+  trainerShared?: boolean
 }
 
 export interface AkebonoWish {
