@@ -17,7 +17,8 @@ const route = useRoute()
       </h1>
       <p v-if="description" class="mt-0.5 text-xs text-sub">{{ description }}</p>
     </div>
-    <div v-if="$slots.actions" class="flex items-center gap-2">
+    <!-- モバイル幅でアクションが増えても横スクロールを作らない（原則8。折り返して収める） -->
+    <div v-if="$slots.actions" class="flex flex-wrap items-center gap-2">
       <slot name="actions" />
     </div>
   </div>

@@ -82,6 +82,9 @@ export interface ToolLoopRequest {
   maxTokens?: number
   /** LLM 呼び出しの最大ラウンド数（最終ラウンドは final_answer を強制）。既定 5 */
   maxRounds?: number
+  /** ループ全体の時間予算 ms。超過した次のラウンドで final_answer を強制する（既定 60000。
+   * ラウンド単発の 30 秒タイムアウトとは別 = /ask が理論上 150 秒超ブロックする事態を防ぐ） */
+  deadlineMs?: number
 }
 
 export interface ToolLoopResult<T> {
@@ -122,6 +125,7 @@ export async function generateJsonWithTools<T>(
   const token = await accessToken()
   if (!token) return null
   const maxRounds = req.maxRounds ?? 5
+  const deadlineAt = Date.now() + (req.deadlineMs ?? 60_000)
   const usage: LlmUsage = { promptTokens: 0, outputTokens: 0, totalTokens: 0 }
   const toolCalls: { name: string; ok: boolean }[] = []
   const declarations = [
@@ -137,7 +141,8 @@ export async function generateJsonWithTools<T>(
   const result = (data: T | null): ToolLoopResult<T> => ({ data, usage, toolCalls, rounds })
   for (; rounds < maxRounds;) {
     rounds++
-    const isLast = rounds >= maxRounds
+    // ラウンド上限 or 時間予算超過で final_answer を強制（手持ちの情報で回答を確定させる）
+    const isLast = rounds >= maxRounds || Date.now() >= deadlineAt
     let body: VertexToolResponse
     try {
       const res = await fetch(endpoint(env), {

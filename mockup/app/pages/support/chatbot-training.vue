@@ -38,7 +38,6 @@ interface TrainingFeedbackRow {
 
 const { canTrainChatbot } = usePermissions()
 const { tbl, commit, nextId } = useMockDb()
-const { currentUser } = useCurrentUser()
 const isApi = useApiMode()
 const toast = useToast()
 

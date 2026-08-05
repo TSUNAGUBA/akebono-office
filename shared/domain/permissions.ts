@@ -51,6 +51,9 @@ export const FEATURE_PERMISSION_KEYS: { key: string; label: string }[] = [
 
 /** ページパス → 機能キー（フロントのメニュー・ルートガード用。null = ガード対象外 = 常に表示可） */
 export function featureKeyOfPath(path: string): string | null {
+  // トレーナー画面はチャットボット機能の従属ページ（API 側も featureGuard('chatbot') + requireTrainer）。
+  // chatbot deny のトレーナーにページ殻だけ見えて API 403 になる不一致を防ぐ
+  if (path === '/support/chatbot-training' || path.startsWith('/support/chatbot-training/')) return 'chatbot'
   if (path === '/support/chatbot' || path.startsWith('/support/chatbot/')) return 'chatbot'
   if (path === '/support/documents' || path.startsWith('/support/documents/')) return 'documents'
   const seg = path.split('/')[1] ?? ''

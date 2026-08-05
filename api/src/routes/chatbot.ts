@@ -1000,6 +1000,8 @@ export function chatbotRoutes(pool: pg.Pool, env: Env): Hono {
     // 診断スナップショット（観測基盤）。フォールバック時も返し、クライアント経由で定型応答へ添付する
     const diag: ChatDiag = {
       v: 1,
+      // blocks は 12000cp キャップ前の発火一覧 = キャップで切り落とされたブロックも「発火」として残る
+      // （観測値の解釈注意。contextCp と合わせて読めば切り落とし発生は判別できる）
       blocks: built.blocks,
       searchHits: built.searchHits,
       contextCp: [...context].length,
@@ -1224,7 +1226,7 @@ export function chatbotRoutes(pool: pg.Pool, env: Env): Hono {
       [id,
         typeof body.note === 'string' ? capCp(body.note.trim(), 200) : null,
         typeof body.active === 'boolean' ? body.active : null])
-    if (rows.length === 0) throw err('AKO-GEN-001', '同義語が見つかりません', 404)
+    if (rows.length === 0) throw err('AKO-CHT-002', '同義語が見つかりません', 404)
     clearChatSynonymCache()
     return c.json({ data: { id } })
   })
