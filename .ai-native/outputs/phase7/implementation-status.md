@@ -1833,13 +1833,16 @@
 - [x] **ツールユース（エージェンティック RAG）:** `generateJsonWithTools`（llm.ts = functionCallingConfig.mode ANY + final_answer 強制・最大 5 ラウンド・並列 4 呼出/ラウンド・usage 集計）+ ツール 7 種（chatbot-tools.ts = 日報詳細 / メンバー予定 / 予定横断検索 / 任意月勤怠 / 有給残 / 稟議一覧 / 社内文書検索）。権限はツール実装側のコードで enforcement（機能 deny・本人スコープ C3・F-16-6/7・AI 参照範囲・表示項目 deny = 文脈ブロックと同一規約）。実測 4 例（日報詳しく・◯◯さん今日何を・訪問に行くのは誰・先月の勤怠）をツールで構造的に解消
 - [x] **文脈キャップ:** チャットボット経路の buildContext 出力へ全体キャップ 12000 cp（従来この経路のみ無制限だった穴の是正。assist は 4000 cp のまま）
 - [x] **good/bad フィードバック:** `chat_feedback`（0053・1 メッセージ × 1 人 = upsert）。`PUT/DELETE /v1/chatbot/messages/:id/feedback`（本人の assistant メッセージのみ・DELETE = 取消フロー 原則9.5）。UI は 👍/👎 トグル + bad 時の任意コメント。GET messages に kind + 本人評価を含める
-- [x] **トレーナー運用（許可制）:** `canTrainChatbot`（shared/permissions = 既定 deny・admin 常時可・機能キー 'chatbot-training' の allow で付与）。`GET /v1/chatbot/training/feedback` は**質問文 + 診断メタデータのみを既定開示し、回答本文はセッション所有者の明示同意（`chat_sessions.trainer_shared` = `PUT /sessions/:id/share`・いつでも取消可）がある場合のみ**（5 層権限モデルをチャットログ経由で迂回させないガード。文脈原文はどの場合も非開示・質問者名は members.name の表示項目 deny に従う）
+- [x] **トレーナー運用（許可制）:** `canTrainChatbot`（shared/permissions = 既定 deny・admin 常時可・機能キー 'chatbot-training' の allow で付与）。`GET /v1/chatbot/training/feedback` は**質問文 + 診断メタデータのみを既定開示（質問者は匿名）し、回答本文と質問者名はセッション所有者の明示同意（`chat_sessions.trainer_shared` = `PUT /sessions/:id/share`・いつでも取消可）がある場合のみ**（5 層権限モデルをチャットログ経由で迂回させないガード。文脈原文はどの場合も非開示・氏名は共有時も members.name の表示項目 deny に従う・diag.blocks は members/companies.name deny 保持トレーナーには件数へ縮退 = 監査指摘 2026-08-05 反映）。フィードバック UI は開示範囲（質問文・診断の匿名共有）をトースト文言で質問者へ告知
 - [x] **同義語辞書（還元ループ）:** `chat_synonyms`（0053）+ トレーナー CRUD（POST = 同一ペア再登録で再有効化 = 冪等 / PUT active=false = 論理無効化 = 取消可能）。buildContext の話題コーパスへ正規語を追補（質問原文は不変・10 秒 TTL キャッシュ・ロード失敗は従来挙動で続行 = 原則4）。「休み → 休暇」等の語彙ギャップを運用で埋める
 - [x] **フロント:** useChatbot（kind/serverId/feedback ミラー・setSessionShared・モックモードは chatFeedback/chatSynonyms テーブル = SEED_VERSION 18）・chatbot.vue（バッジ・フィードバック UI・トレーナー共有トグル・トレーナー画面リンク）・`/support/chatbot-training`（フィードバック一覧 + 診断要約 + 辞書管理。権限なしは案内表示）
 - [x] **下位互換（原則7):** buildContext は文字列返却の互換ラッパーを維持（実体 = buildContextDetailed。assist.ts・既存テストは無変更で通過）。chat_messages への列追加は既存行 NULL = データパッチ不要。/ask・messages API は追加フィールドのみ（既存クライアント互換）
+- [x] **⚠️ 下位互換の影響（要オペレーター周知 = 原則7）: AI 参照範囲 'ai-assistant' = 'all' の意味拡大。** 従来 'all' が AI へ供給するのは「チームの本日のタスク計画」のみだったが、本改修のツール（get_member_schedule / search_calendar_events）により**他メンバーのカレンダー予定タイトル（Google カレンダー同期分を含む）も AI 参照対象**になる（「訪問に行くのは誰？」等の担当者特定 = 実例4 対応に必要な意図的拡大）。**既に 'all' を付与済みの環境では付与対象者の AI が他メンバーの予定タイトルを参照できるようになる**ため、運用で予定を秘匿したいメンバーがいる場合は権限設定の見直しが必要。権限設定 UI のラベルは「タスク計画・カレンダー予定」へ更新済み（AI_SCOPE_FEATURES）。データ更新パッチは不要（権限ルールの意味変更のみ・スキーマ/データ無変更）
 - [x] **検証:** API 統合テスト 235（+4 = フィードバック upsert/取消/他人 404・トレーナー許可制と本文同意ガード・同義語 CRUD と buildContext 反映・LLM 無効時の従来挙動維持）/ 単体 273 / typecheck（api・mockup）
 
 **残課題（次バッチ以降）:**
 - ツールユースの実機評価: LLM 有効環境での 4 実例 + フィードバック failing set による回答品質の実測（観測基盤のログが物差し）
 - 検索リトリーバルの品質改善（チャンク分割・上位 K 拡大・閾値/スコアリング見直し・規模超過時の pgvector 移行）— 議事録・顧客ログ系の質問精度はここが本丸
 - フィードバック集計ビュー（good/bad 率・破棄率・ツール利用率の推移）と bad 事例 → 辞書/few-shot 還元の運用ガイド
+- /ask のユーザー単位レートリミット（監査指摘 MINOR: ツールループで 1 リクエストの Vertex 呼出が最大 5 回になり増幅率が上がった。API 全体のレートリミット未整備は既存課題）
+- kind='fallback' 行の diag はクライアント経由の自己申告値のため、トレーナー UI 上で「参考値」表示に区別する（現状は防御的パースでクラッシュのみ防止）

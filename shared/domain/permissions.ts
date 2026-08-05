@@ -165,8 +165,12 @@ export const AI_SCOPE_FIELD = 'ai-scope'
 export const AI_SCOPE_FEATURES: { key: string; label: string; defaultScope: 'all' | 'own' }[] = [
   { key: 'poipoi', label: 'ぽいぽいポスト', defaultScope: 'all' },
   { key: 'attendance', label: '勤怠（労働時間・有給）', defaultScope: 'own' },
-  // 'all' で供給されるのはチームのタスク計画のみ（カレンダー予定は本人分に限る）。ラベルは実挙動に合わせる
-  { key: 'ai-assistant', label: 'タスク計画', defaultScope: 'own' },
+  // 'all' の供給範囲: チームのタスク計画（文脈ブロック）+ チャットボットのツール経由の
+  // 他メンバーのタスク計画・カレンダー予定（オペレーター指示 2026-08-05: 「訪問に行くのは誰？」等の
+  // 担当者特定に対応。**従来はタスク計画のみだった範囲の拡大** = 既存の 'all' 付与環境では
+  // 他メンバーの予定タイトルも AI 参照対象になる。影響は implementation-status §58 の下位互換注記を参照）。
+  // ラベルは実挙動に合わせる
+  { key: 'ai-assistant', label: 'タスク計画・カレンダー予定', defaultScope: 'own' },
 ]
 
 /**

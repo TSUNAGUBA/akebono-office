@@ -71,7 +71,8 @@ function buildMockFeedback(): TrainingFeedbackRow[] {
         kind: msg?.kind ?? null,
         diag: null, // モックモードは診断スナップショットなし（LLM 経路がないため）
         question: question.slice(0, 500),
-        askerName: members.find(m => m.id === f.memberId)?.name ?? '',
+        // API と同じプライバシーガード: 質問者は既定匿名。共有同意セッションのみ氏名を開示
+        askerName: shared ? (members.find(m => m.id === f.memberId)?.name ?? '') : '',
         shared,
         ...(shared && msg ? { answer: msg.content.slice(0, 1000) } : {}),
       }
@@ -165,16 +166,32 @@ async function onToggleSynonym(s: ChatSynonym): Promise<void> {
   await reload()
 }
 
-/** 診断の要約行（トレーナーが原因を一目で判別するための圧縮表示） */
+/**
+ * 診断の要約行（トレーナーが原因を一目で判別するための圧縮表示）。
+ * diag はフォールバック経路でクライアントを経由した改竄可能な値のため、
+ * 形の崩れた値でも描画が落ちないよう全フィールドを防御的に読む（監査指摘 2026-08-05）
+ */
 function diagSummary(d: TrainingDiag | null): string {
-  if (!d) return '診断なし'
+  if (!d || typeof d !== 'object') return '診断なし'
   const parts: string[] = []
-  if (d.discarded) parts.push('低確信度で破棄')
-  if (typeof d.confidence === 'number') parts.push(`確信度 ${d.confidence.toFixed(2)}`)
-  parts.push(`文脈ブロック ${d.blocks?.length ?? 0} 件`)
-  parts.push(`検索ヒット ${d.searchHits ?? 0} 件`)
-  if (d.toolCalls?.length) parts.push(`ツール: ${d.toolCalls.map(t => `${t.name}${t.ok ? '' : '(失敗)'}`).join('・')}`)
-  if (d.usage) parts.push(`${d.usage.totalTokens.toLocaleString('ja-JP')} tokens`)
+  if (d.discarded === true) parts.push('低確信度で破棄')
+  if (typeof d.confidence === 'number' && Number.isFinite(d.confidence)) {
+    parts.push(`確信度 ${d.confidence.toFixed(2)}`)
+  }
+  const blocksCount = Array.isArray(d.blocks)
+    ? d.blocks.length
+    : (typeof (d as { blocksCount?: unknown }).blocksCount === 'number'
+        ? (d as { blocksCount: number }).blocksCount
+        : 0)
+  parts.push(`文脈ブロック ${blocksCount} 件`)
+  parts.push(`検索ヒット ${typeof d.searchHits === 'number' ? d.searchHits : 0} 件`)
+  if (Array.isArray(d.toolCalls) && d.toolCalls.length > 0) {
+    parts.push(`ツール: ${d.toolCalls
+      .filter(t => t && typeof t.name === 'string')
+      .map(t => `${t.name}${t.ok ? '' : '(失敗)'}`).join('・')}`)
+  }
+  const total = d.usage && typeof d.usage.totalTokens === 'number' ? d.usage.totalTokens : null
+  if (total !== null) parts.push(`${total.toLocaleString('ja-JP')} tokens`)
   return parts.join(' / ')
 }
 </script>
@@ -236,7 +253,7 @@ function diagSummary(d: TrainingDiag | null): string {
                 tone="warn"
               />
               <UiStatusBadge v-else-if="f.kind === 'ai'" label="AI応答" tone="brand" />
-              <span class="text-xs text-sub">{{ f.askerName || '（名前非表示）' }}</span>
+              <span class="text-xs text-sub">{{ f.askerName || '（匿名）' }}</span>
               <span class="num text-[11px] text-muted">{{ fmtDateTime(f.updatedAt) }}</span>
             </div>
             <p class="mt-1 break-words text-[13px] font-semibold">Q: {{ f.question || '（質問不明）' }}</p>

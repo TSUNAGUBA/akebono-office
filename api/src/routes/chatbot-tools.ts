@@ -10,8 +10,10 @@
  * 権限は各ツールの実装側（コード）で enforcement する = エージェント境界をセキュリティ境界にしない:
  * - 機能 deny（canUseFeature）→ ツールは {error} を返す（文脈ブロックと同じ「deny で供給しない」規約）
  * - 本人スコープ（C3）: 他人の日報 = 提出済み + canViewMemberReports、他人の予定/タスク =
- *   canViewMemberTaskPlans または AI 参照範囲 'all'（チームブロックと同じ基準）、
- *   他人の勤怠 = AI 参照範囲 'all' のみ
+ *   canViewMemberTaskPlans または AI 参照範囲 'all'（タスク計画はチームブロックと同じ基準。
+ *   **カレンダー予定は従来どの経路でも他人分を供給していなかったが、本ツールで 'all' の範囲へ拡大**
+ *   = オペレーター指示 2026-08-05。AI_SCOPE_FEATURES のラベル・implementation-status §58 の
+ *   下位互換注記と同期済み）、他人の勤怠 = AI 参照範囲 'all' のみ
  * - 表示項目 deny: members.name 等は canField / stripDeniedFields を通す（既存パターン）
  * ツールの失敗は {error} で返し、応答フロー全体を止めない（原則4）。
  */
@@ -133,17 +135,23 @@ export function makeChatToolExecutor(
 
   const str = (v: unknown): string => typeof v === 'string' ? v.trim() : ''
 
-  /** 名前からメンバーを解決（照合は buildContext の nameHit と同じ方針 = 空白除去 + 敬称除去 + 部分一致） */
+  /**
+   * 名前からメンバーを解決（照合は buildContext の nameHit と同じ方針 = 空白除去 + 敬称除去 + 部分一致）。
+   * 完全一致を部分一致より優先する（「山田」で「山田 太郎」「小山田 花子」が並ぶときの誤解決を減らす。
+   * 同順位は ORDER BY id の先勝ち = 決定的）
+   */
   async function resolveMember(name: string): Promise<ResolvedMember | null> {
     const norm = (s: string): string => s.replace(/\s+/g, '').replace(/(さん|氏|くん|君)$/, '')
     const q = norm(name)
     if (q.length < 2) return null
     const { rows } = await pool.query<ResolvedMember>(
       `SELECT id, name FROM members WHERE active = true ORDER BY id LIMIT 300`)
-    return rows.find((m) => {
-      const n = norm(m.name)
-      return n === q || n.includes(q) || q.includes(n)
-    }) ?? null
+    return rows.find(m => norm(m.name) === q)
+      ?? rows.find((m) => {
+        const n = norm(m.name)
+        return n.includes(q) || q.includes(n)
+      })
+      ?? null
   }
 
   /** 期間の検証（YYYY-MM-DD × 2・最大スパン）。不正は理由文字列を返す */

@@ -910,7 +910,7 @@ export function chatbotRoutes(pool: pg.Pool, env: Env): Hono {
       [id, sessionId, role, content,
         JSON.stringify((Array.isArray(body.sources) ? body.sources.map(String) : []).slice(0, 5)),
         JSON.stringify((Array.isArray(body.suggestions) ? body.suggestions.map(String) : []).slice(0, 3)),
-        nowJstIso(), role === 'assistant' ? 'fallback' : null, diag])
+        nowJstIso(), role === 'assistant' ? 'fallback' : null, role === 'assistant' ? diag : null])
     await pool.query(`UPDATE chat_sessions SET updated_at = now() WHERE id = $1`, [sessionId])
     return c.json({ data: { id } }, 201)
   })
@@ -1115,11 +1115,13 @@ export function chatbotRoutes(pool: pg.Pool, env: Env): Hono {
   }
 
   /**
-   * フィードバック一覧（トレーナーのみ）。プライバシーガード:
-   * - 既定開示は「質問文 + 診断メタデータ + 評価・コメント」まで
-   * - 回答本文（answer）はセッション所有者が trainer_shared = true にした場合のみ含める
-   *   （5 層権限モデルをチャットログ経由で迂回させない。文脈原文はどの場合も開示しない）
-   * - 質問者名は members.name の表示項目 deny に従う
+   * フィードバック一覧（トレーナーのみ）。プライバシーガード（監査指摘 2026-08-05 反映）:
+   * - 既定開示は「質問文 + 診断メタデータ + 評価・コメント」まで（質問者は**匿名**）
+   * - 回答本文（answer）と質問者名（askerName）はセッション所有者が trainer_shared = true に
+   *   した場合のみ含める（5 層権限モデルをチャットログ経由で迂回させない。文脈原文は常に非開示）
+   * - 質問者名は共有時も members.name の表示項目 deny に従う
+   * - diag.blocks は文脈見出し（メンバー名・顧客名を含み得る）のため、トレーナーが
+   *   members.name / companies.name の表示 deny を持つ場合は件数のみに縮退する
    */
   app.get('/training/feedback', async (c) => {
     const user = c.get('user')
@@ -1147,7 +1149,15 @@ export function chatbotRoutes(pool: pg.Pool, env: Env): Hono {
        ${ratingFilter ? 'WHERE f.rating = $1' : ''}
        ORDER BY f.updated_at DESC LIMIT 100`,
       ratingFilter ? [ratingFilter] : [])
-    const nameOk = canViewField(rules, subjectOf(user), 'members', 'name')
+    const subject = subjectOf(user)
+    const nameOk = canViewField(rules, subject, 'members', 'name')
+    // diag.blocks の見出しはメンバー名・顧客名を含み得る = 表示項目 deny 保持者には件数へ縮退
+    const blocksOk = nameOk && canViewField(rules, subject, 'companies', 'name')
+    const sanitizeDiag = (d: unknown): unknown => {
+      if (!d || typeof d !== 'object' || blocksOk) return d ?? null
+      const { blocks, ...rest } = d as Record<string, unknown>
+      return { ...rest, blocksCount: Array.isArray(blocks) ? blocks.length : 0 }
+    }
     return c.json({
       data: rows.map(r => ({
         id: r.id,
@@ -1155,9 +1165,10 @@ export function chatbotRoutes(pool: pg.Pool, env: Env): Hono {
         comment: r.comment,
         updatedAt: r.updatedAt,
         kind: r.kind,
-        diag: r.diag ?? null,
+        diag: sanitizeDiag(r.diag),
         question: capCp(r.question ?? '', 500),
-        askerName: nameOk ? (r.askerName ?? '') : '',
+        // 質問者は既定匿名。共有同意セッションのみ開示（members.name deny には共有時も従う）
+        askerName: r.shared && nameOk ? (r.askerName ?? '') : '',
         shared: r.shared,
         // 回答本文は明示同意（trainer_shared）のあるセッションのみ
         ...(r.shared ? { answer: capCp(r.answer, 1000) } : {}),
@@ -1180,7 +1191,14 @@ export function chatbotRoutes(pool: pg.Pool, env: Env): Hono {
     const term = capCp(String(body.term ?? '').trim(), 40)
     const canonical = capCp(String(body.canonical ?? '').trim(), 40)
     if (!term || !canonical) throw err('AKO-GEN-001', 'term と canonical を指定してください', 400)
+    // 1 文字の term（例:「の」）は全質問に一致し文脈を常時肥大化させるため 2 文字以上に限定
+    if ([...term].length < 2) throw err('AKO-GEN-001', 'term は 2 文字以上で指定してください', 400)
     if (term === canonical) throw err('AKO-GEN-001', 'term と canonical が同一です', 400)
+    // 実行時ロードの LIMIT 500（chat-synonyms.ts）と揃えた総件数上限（超過分の無音欠落を防ぐ）
+    const { rows: cnt } = await pool.query<{ n: string }>(`SELECT count(*)::text AS n FROM chat_synonyms`)
+    if (Number(cnt[0]?.n ?? 0) >= 500) {
+      throw err('AKO-GEN-001', '同義語の登録上限（500 件）に達しています。不要な項目を無効化してください', 400)
+    }
     const id = newId('syn')
     // 同一ペアの再登録は既存行の再有効化（冪等 = 原則2。無効化済みの辞書を復元する取消フローも兼ねる）
     await pool.query(

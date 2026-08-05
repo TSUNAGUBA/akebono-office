@@ -104,13 +104,15 @@ async function onFeedback(m: ChatMessage, rating: 'good' | 'bad'): Promise<void>
     toast.show(`${r.error.code}: ${r.error.message}`, 'warn')
     return
   }
+  // 開示範囲の告知（監査指摘 2026-08-05）: フィードバックは質問文・コメント・診断情報が
+  // 匿名でトレーナーへ共有される。氏名・回答本文は「トレーナー共有」に同意した会話のみ
   if (rating === 'bad') {
     commentFor.value = id
     commentDraft.value = ''
-    toast.show('記録しました。よろしければ改善のヒント（任意）も教えてください')
+    toast.show('記録しました（質問文と診断情報が匿名でトレーナーに共有されます）。よろしければ改善のヒント（任意）も教えてください')
   } else {
     if (commentFor.value === id) commentFor.value = null
-    toast.show('フィードバックを記録しました')
+    toast.show('フィードバックを記録しました（質問文と診断情報が匿名でトレーナーに共有されます）')
   }
 }
 
@@ -133,7 +135,7 @@ async function onToggleShare(): Promise<void> {
   const r = await setSessionShared(next)
   if (r.ok) {
     toast.show(next
-      ? 'この会話をトレーナーへ共有しました（回答本文が閲覧可能になります。いつでも解除できます）'
+      ? 'この会話をトレーナーへ共有しました（回答本文とお名前が閲覧可能になります。いつでも解除できます）'
       : 'トレーナーへの共有を解除しました')
   } else {
     toast.show(`${r.error.code}: ${r.error.message}`, 'warn')

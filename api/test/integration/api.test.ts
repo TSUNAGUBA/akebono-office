@@ -6043,15 +6043,17 @@ describe('チャットボット観測基盤 + トレーナー運用（オペレ�
     const adminView = await api('GET', '/v1/chatbot/training/feedback', { as: ADMIN })
     expect(adminView.status).toBe(200)
     const rows = adminView.json.data as {
-      question: string; kind: string | null; rating: string; comment: string; shared: boolean; answer?: string
+      question: string; kind: string | null; rating: string; comment: string; shared: boolean
+      answer?: string; askerName: string
     }[]
     const row = rows.find(r => r.question === '共有ガードのテスト質問')
     expect(row).toBeTruthy()
     expect(row!.rating).toBe('bad')
     expect(row!.kind).toBe('fallback')
-    // 未共有セッション: 質問文・診断は見えるが回答本文は含まれない（明示同意ガード）
+    // 未共有セッション: 質問文・診断は見えるが回答本文は含まれず、質問者は匿名（明示同意ガード）
     expect(row!.shared).toBe(false)
     expect(row!.answer).toBeUndefined()
+    expect(row!.askerName).toBe('')
 
     // 質問者が共有に同意 → 本文が見える。解除 → 再び見えない（取消可能 = 原則9.5）
     expect((await api('PUT', `/v1/chatbot/sessions/${sessionId}/share`, {
@@ -6061,10 +6063,12 @@ describe('チャットボット観測基盤 + トレーナー運用（オペレ�
       .find(r => r.question === '共有ガードのテスト質問')
     expect(sharedRow!.shared).toBe(true)
     expect(sharedRow!.answer).toBe('定型応答です')
+    expect(sharedRow!.askerName).toBe('一般 次郎') // 氏名も共有同意時のみ開示
     await api('PUT', `/v1/chatbot/sessions/${sessionId}/share`, { as: MEMBER, body: { shared: false } })
     const revoked = ((await api('GET', '/v1/chatbot/training/feedback', { as: ADMIN })).json.data as typeof rows)
       .find(r => r.question === '共有ガードのテスト質問')
     expect(revoked!.answer).toBeUndefined()
+    expect(revoked!.askerName).toBe('')
     // 他人は共有トグルを操作できない
     expect((await api('PUT', `/v1/chatbot/sessions/${sessionId}/share`, {
       as: HR, body: { shared: true },
@@ -6099,6 +6103,10 @@ describe('チャットボット観測基盤 + トレーナー運用（オペレ�
     })).status).toBe(400)
     expect((await api('POST', '/v1/chatbot/training/synonyms', {
       as: ADMIN, body: { term: '休暇', canonical: '休暇' },
+    })).status).toBe(400)
+    // 1 文字 term は全質問に一致して文脈を肥大化させるため拒否（監査指摘）
+    expect((await api('POST', '/v1/chatbot/training/synonyms', {
+      as: ADMIN, body: { term: 'の', canonical: '休暇' },
     })).status).toBe(400)
     expect((await api('POST', '/v1/chatbot/training/synonyms', {
       as: ADMIN, body: { term: '休み', canonical: '休暇', note: 'テスト' },
