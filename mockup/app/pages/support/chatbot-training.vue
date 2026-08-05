@@ -36,7 +36,7 @@ interface TrainingFeedbackRow {
   answer?: string
 }
 
-const { canTrainChatbot } = usePermissions()
+const { canTrainChatbot, canField } = usePermissions()
 const { tbl, commit, nextId } = useMockDb()
 const isApi = useApiMode()
 const toast = useToast()
@@ -70,8 +70,11 @@ function buildMockFeedback(): TrainingFeedbackRow[] {
         kind: msg?.kind ?? null,
         diag: null, // モックモードは診断スナップショットなし（LLM 経路がないため）
         question: question.slice(0, 500),
-        // API と同じプライバシーガード: 質問者は既定匿名。共有同意セッションのみ氏名を開示
-        askerName: shared ? (members.find(m => m.id === f.memberId)?.name ?? '') : '',
+        // API と同じプライバシーガード: 質問者は既定匿名。共有同意セッション かつ
+        // members.name の表示 deny がない場合のみ氏名を開示
+        askerName: shared && canField('members', 'name')
+          ? (members.find(m => m.id === f.memberId)?.name ?? '')
+          : '',
         shared,
         ...(shared && msg ? { answer: msg.content.slice(0, 1000) } : {}),
       }
@@ -111,6 +114,11 @@ async function onAddSynonym(): Promise<void> {
   const canonical = canonicalDraft.value.trim()
   if (!term || !canonical) {
     toast.show('言い回しと正規語の両方を入力してください', 'info')
+    return
+  }
+  // API と同じバリデーション: 1 文字 term は全質問に一致するため拒否
+  if ([...term].length < 2) {
+    toast.show('言い回しは 2 文字以上で入力してください', 'info')
     return
   }
   if (term === canonical) {

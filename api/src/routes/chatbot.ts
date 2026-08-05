@@ -1196,10 +1196,17 @@ export function chatbotRoutes(pool: pg.Pool, env: Env): Hono {
     // 1 文字の term（例:「の」）は全質問に一致し文脈を常時肥大化させるため 2 文字以上に限定
     if ([...term].length < 2) throw err('AKO-GEN-001', 'term は 2 文字以上で指定してください', 400)
     if (term === canonical) throw err('AKO-GEN-001', 'term と canonical が同一です', 400)
-    // 実行時ロードの LIMIT 500（chat-synonyms.ts）と揃えた総件数上限（超過分の無音欠落を防ぐ）
-    const { rows: cnt } = await pool.query<{ n: string }>(`SELECT count(*)::text AS n FROM chat_synonyms`)
-    if (Number(cnt[0]?.n ?? 0) >= 500) {
-      throw err('AKO-GEN-001', '同義語の登録上限（500 件）に達しています。不要な項目を無効化してください', 400)
+    // 実行時ロード（chat-synonyms.ts = active のみ LIMIT 500）と揃えた**有効件数**上限。
+    // 既存ペアの再登録（行を増やさない再有効化 = 原則2 の冪等・原則9.5 の復元）は上限に達していても
+    // 拒否しない（2 巡目レビュー指摘: 全行カウントだと無効化しても解消できず恒久的に登録不能になる）
+    const { rows: existing } = await pool.query<{ id: string }>(
+      `SELECT id FROM chat_synonyms WHERE term = $1 AND canonical = $2`, [term, canonical])
+    if (existing.length === 0) {
+      const { rows: cnt } = await pool.query<{ n: string }>(
+        `SELECT count(*)::text AS n FROM chat_synonyms WHERE active = true`)
+      if (Number(cnt[0]?.n ?? 0) >= 500) {
+        throw err('AKO-GEN-001', '同義語の登録上限（有効 500 件）に達しています。不要な項目を無効化してください', 400)
+      }
     }
     const id = newId('syn')
     // 同一ペアの再登録は既存行の再有効化（冪等 = 原則2。無効化済みの辞書を復元する取消フローも兼ねる）
