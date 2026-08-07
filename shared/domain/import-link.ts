@@ -131,6 +131,17 @@ export function validateImportMapping(
       return `対象項目「${f.targetItemKey}」の突合キー「${lf}」は${target.refLabel}マスタでは使えません`
     }
   }
+  // 参照項目の重複割当は全対象で禁止: 値の抽出は「最後の行」勝ちのため、行ごとに異なる突合キーを
+  // 設定できると値と突合キーの組が不定になる（レビュー指摘 2026-08-07）。非参照項目は従来どおり許容
+  const refCounts = new Map<string, number>()
+  for (const f of fields) {
+    if (importRefTargetOf(targetEntity, f.targetItemKey)) {
+      refCounts.set(f.targetItemKey, (refCounts.get(f.targetItemKey) ?? 0) + 1)
+    }
+  }
+  for (const [key, n] of refCounts) {
+    if (n > 1) return `参照項目「${key}」が複数行に割り当てられています（1 行にしてください）`
+  }
   if (targetEntity === 'product_variant') {
     const keys = fields.map(f => f.targetItemKey)
     const counts = new Map<string, number>()

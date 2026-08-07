@@ -119,10 +119,10 @@ export function useAkebonoImports() {
   async function saveMapping(sourceId: string, fields: Omit<ImportFieldMap, 'id'>[]): Promise<Result> {
     const denied = adminGuard(); if (denied) return denied
     // 突合キー・バリアント軸取込の構造検証（API POST /import-mappings と同一の共有関数 = 両モード parity）。
-    // 検証対象は保存される行（空行を除外した集合）に揃える（API 側は importFieldsOf の除外後に検証）
+    // 検証対象は保存される行（trim 後に空の行を除外した集合）= API 側 importFieldsOf の除外条件と一致させる
     const targetEntity = sourceById(sourceId)?.targetEntity
     if (targetEntity) {
-      const mapErr = validateImportMapping(targetEntity, fields.filter(f => f.sourceField && f.targetItemKey))
+      const mapErr = validateImportMapping(targetEntity, fields.filter(f => f.sourceField.trim() && f.targetItemKey.trim()))
       if (mapErr) return { ok: false, error: { code: 'AKO-IMP-008', message: mapErr } }
     }
     if (isApi) {
@@ -137,7 +137,7 @@ export function useAkebonoImports() {
     const mapping: ImportMapping = {
       id, sourceId, version: nextVersion, status: 'active', createdAt: nowJstIso(),
       // ロケータは shared normalizeFieldLocators で正規化（API importFieldsOf と同一関数 = '' → null 等を両モード一致）
-      fields: fields.filter(f => f.sourceField && f.targetItemKey).map((f, i) => ({
+      fields: fields.filter(f => f.sourceField.trim() && f.targetItemKey.trim()).map((f, i) => ({
         id: `${id}-f${i}`, sourceField: f.sourceField, targetItemKey: f.targetItemKey, transform: f.transform,
         ...normalizeFieldLocators(f as unknown as Record<string, unknown>),
       })),

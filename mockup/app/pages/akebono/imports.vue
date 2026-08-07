@@ -911,6 +911,13 @@ function openRun(row: Record<string, unknown>): void {
                 <select v-model="r.lookupField" class="select w-auto max-w-[240px]" aria-label="突合キー">
                   <option :value="null">{{ defaultLookupLabel(r.targetItemKey) }}</option>
                   <option v-for="o in lookupOptionsOf(r.targetItemKey)" :key="o.value" :value="o.value">{{ o.label }}</option>
+                  <!-- 保存済みだが現在の候補に無いキー（定義を削除されたカスタム項目等）: 黙って消さず可視化する -->
+                  <option
+                    v-if="r.lookupField && !lookupOptionsOf(r.targetItemKey).some(o => o.value === r.lookupField)"
+                    :value="r.lookupField"
+                  >
+                    {{ r.lookupField }}（候補に無いキー）
+                  </option>
                 </select>
               </div>
             </div>

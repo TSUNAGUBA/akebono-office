@@ -1852,13 +1852,20 @@
   → モック saveMapping / API importFieldsOf の双方が同一関数で保持（parity）。
 - [x] **akebono-imports.ts**: 参照解決を `refLookupOf`（突合キー対応の解決器）へ集約。既定は従来の loadNameLookup +
   resolveByIdOrName を再利用（原則3）。custom.<key> はパラメータバインド・テーブル/列識別子はカタログ経由のみ（SQL 注入防止）。
-  SKU 参照は `skuCondOf`（id / code / janCode / 既定 = id→code）で per-row 解決。apply 系（product/company/sales_record/
-  inventory）を解決器経由に置換・隔離メッセージは突合キー名を明示（既定は従来文言 = 互換）。
+  **許可リスト（id/name/custom.*）外・refEntity='sku' の誤用は暗黙フォールバックせず AKO-IMP-008 で遮断**（独立監査是正）。
+  SKU 参照は `skuCondOf`（id / code / janCode = いずれも有効行のみ・既定 = id→code の従来挙動）で per-row 解決。
+  重複割当の旧版マッピングでは lookupField を**最終行採用**（値の抽出 = 最後の行勝ちと整合。新規保存は重複割当自体を拒否）。
+  apply 系（product/company/sales_record/inventory）を解決器経由に置換・隔離メッセージは突合キー名を明示（既定は従来文言 = 互換）。
 - [x] **applyProductVariants（新規）**: 検証（AKO-IMP-008 = productCode/code 必須・軸2 は軸1 が前提・対象項目の重複禁止）→
-  グルーピング（出現順・商品項目はグループ先頭の非空値 = 決定的）→ 商品 upsert（(segment, code) 有効行キー = applyProducts と
-  同一・空セルは既存値保持・軸ラベル更新）→ SKU upsert（有効行の code 一致・別商品に登録済みの code は隔離・空セルは保持）→
+  グルーピング（出現順・商品項目はグループ先頭の非空値 = 決定的）→ **行レベル事前検証（価格・SKU コード衝突）→ 商品 upsert →
+  SKU upsert の順**（全行隔離のグループは商品を書かない = 検証起因の status='failed' はデータを変更しない。独立レビュー是正）。
+  商品は (segment, code) 有効行キー = applyProducts と同一・空セルは既存値保持・軸ラベル更新。SKU 突合は**有効な実 SKU
+  （NOT is_default）のみ** = 既定 SKU コード（商品コード）と衝突する行は実 SKU として新規作成し、後段の既定 SKU 無効化で
+  置き換える（更新→無効化の非冪等を排除 = 独立レビュー MAJOR 是正）。グループ内の同一 SKU コード行は後勝ち更新に収束。
   実 SKU が新規に入った商品の既定 SKU を無効化（SKU マトリクス生成と同一挙動）。新規商品は既定 SKU を作らない。
   商品レベルの失敗はグループ全行を隔離・SKU レベルは行単位隔離（原則4）。再実行は upsert = 冪等（原則2）。
+  **product_variant の run はエンティティ単位 advisory lock でも直列化**（取込元をまたぐ同一 SKU コードの並行 INSERT 防止。
+  SKU コードに DB 一意 INDEX を張らない理由は §58-5）。
 - [x] **POST /import-mappings**: 保存時に validateImportMapping（突合キー不正・バリアント構造不備 = AKO-IMP-008 400）。
   requireSource が target_entity を返すよう拡張。実行時にも refLookupSpec / applyProductVariants が再検証（旧データ防衛）。
 
@@ -1873,14 +1880,16 @@
 - [x] **utils/import-link.ts（新規）**: shared/domain/import-link の再エクスポート（utils/import-parse と同型）。
 
 ### 58-4 検証（実測値。この環境で実行）
-- [x] `cd api && npm run typecheck` green / unit **287 passed**（import-link.test.ts 新規 = カタログ・検証・軸ラベル 14 件＋
-  normalizeFieldLocators / importFieldsOf の lookupField 追試）
-- [x] `cd api && npm run test:integration`（使い捨て PostgreSQL・migration 0053 適用）**233 passed**（+2）:
+- [x] `cd api && npm run typecheck` green / unit **288 passed**（import-link.test.ts 新規 = カタログ・検証・軸ラベル・参照項目の
+  重複割当拒否 15 件＋ normalizeFieldLocators / importFieldsOf の lookupField 追試）
+- [x] `cd api && npm run test:integration`（使い捨て PostgreSQL・migration 0053 適用）**234 passed**（+3）:
   - バリアント軸取込: 構造検証（AKO-IMP-008）→ アパレル形式 CSV（商品id/skuid/カラー/サイズ）取込 = 商品 1 件＋SKU 3 件・
     軸ラベル = 列名・固有 ID 欠落行は隔離（商品も作らない）・**再実行で商品/SKU が増えない（冪等）**・既存商品への実 SKU
     追加で既定 SKU 無効化・別商品に登録済みの SKU コードは隔離
   - 突合キー: 取引先 custom.extCode ＋ SKU janCode で売上明細を突合取込・不正キーは保存時 AKO-IMP-008・未解決行は
     突合キー名入りメッセージで隔離・**複数一致（同 extCode の 2 社）は解決せず隔離**
+  - バリアント境界（独立レビュー是正の回帰）: **既定 SKU コード衝突行 = 実 SKU 新規作成 + 既定 SKU 無効化・再実行冪等**・
+    未送信フィールド（JAN 空セル）の保持・グループ内重複 SKU コードの後勝ち収束・グループ全行隔離時は商品を作らない
 - [x] `cd mockup && npm run typecheck` green / `npm test` **221 passed**（件数不変）
 - [x] **migration 0053 冪等性**: DROP CONSTRAINT IF EXISTS → ADD は再適用安全。既存 target_entity 値はすべて許容 = 非破壊。
 
@@ -1896,3 +1905,39 @@
   実現する（custom jsonb を持つのは取引先のみ = allowCustom を company に限定）。
 - **取消可能性（原則9.5）**: 新設の取込対象・突合キーは既存の取消フローに乗る（取込元 = 論理削除/復元・マッピング = 新版
   上書きで旧版履歴・反映済み商品/SKU = 編集/無効化）。§48-1 の残課題（取込の一括取消）はスコープ外のまま変わらず。
+- **SKU コードに DB 一意 INDEX を張らない判断（監査 MINOR-3 への対処記録）**: 商品コードの一意性は
+  「セグメント × 有効行」（products_segment_code_active_idx）のため、**セグメント違いの同一商品コード = 同一の
+  既定 SKU コードが正当な既存データとして存在しうる**（applySkus / applySalesRecords が「一意でない = 隔離」を
+  持つのはこのため）。`product_skus (code) WHERE active` の一意 INDEX はこの正当データを破壊する（原則7 違反）ため
+  採用せず、①アプリ層の LIMIT 2 検査（既存パターン）②product_variant run のエンティティ単位 advisory lock
+  （取込元をまたぐ並行 INSERT の直列化）で防御する。
+
+### 58-x 反復レビュー（原則9）
+- [x] **セルフレビュー（Push 前チェック）**: 手動ステップなし（マッピング UI で完結）/ 冪等（0053 冪等・商品/SKU upsert・
+  再実行で増殖しない = 統合テスト実測）/ 既存コード再利用（loadNameLookup/resolveByIdOrName・rowWrite・capCp・
+  マトリクス生成の既定 SKU 無効化と同型）/ 非ブロッキング（既定 SKU 無効化の失敗は握りつぶし = 原則4）/
+  ドキュメント全件更新（functional-requirements F-32-2・akebono-menu-design・api-design §2/§4・architecture・
+  data-design・本 §58）/ 波及は Grep で確認（ImportTargetEntity・IMPORT_ENTITY_LABELS・normalizeFieldLocators 消費箇所）/
+  SoT→キャッシュ（run 後に products/productSkus 再ロード）/ 下位互換（lookupField 未設定 = 従来解決・既存 5 対象の
+  文言/挙動不変）/ レスポンシブ（追加 UI は flex-wrap・既存スクロール容器内）/ 取消可能性（§58-5）。
+- [x] **独立レビュー / 監査（コードレビュアー + システム監査官・並行）第 1 巡**: MAJOR 1・MINOR 計 6（重複含む）・NIT 計 6。
+  - **MAJOR（レビュー）: 既定 SKU コード衝突行の非冪等**（既定 SKU を UPDATE → 直後の無効化で消え、再実行と結果が分岐）
+    → SKU 突合を `AND NOT is_default` に変更（衝突行は実 SKU として新規作成 → 無効化で置き換え = マトリクス生成と同じ収束）。
+  - **MINOR（両者）: product_variant の counts/status が商品書込を反映しない**（全行隔離でも商品が書かれ status='failed' と
+    実書込が乖離）→ 行レベル検証（価格・SKU 衝突・新規作成の前提）を商品書込前へ移動し、全行隔離グループは商品を書かない。
+  - **MINOR（監査）: refLookupOf のカタログ外キーの暗黙 id フォールバック** → 許可リスト外・sku 誤用を AKO-IMP-008 で遮断。
+  - **MINOR（レビュー）: 重複 targetItemKey 時の lookupField 先頭行採用 vs 値の最後行勝ちの不整合** → 保存時に参照項目の
+    重複割当を全対象で拒否 + 実行時（旧版）は findLast で値抽出と整合。
+  - **MINOR（レビュー）: skuCondOf('id') に active 条件がなく宣言と矛盾** → `AND s.active = true` を追加（既定パスの
+    id 素通しは従来挙動のため不変 = 下位互換）。
+  - **MINOR（監査）: product_skus.code の DB 一意制約なし（並行 INSERT の重複）** → 一意 INDEX は既存正当データを壊すため
+    不採用（上記 §58-5 に判断を記録）。エンティティ単位 advisory lock で並行実行を直列化。
+  - **MINOR（レビュー）: 未送信フィールド保持の回帰テスト欠落（CLAUDE.md Zod v4 節の方針）** → JAN 空セル再取込での保持・
+    グループ隔離・グループ内重複コードの統合テストを追加（integration +1 = 234）。
+  - **NIT（両者）: モック saveMapping の空行除外が trim なしで API と微差** → trim に統一。
+  - **NIT（監査）: 消滅したカスタム項目キーが UI セレクトで空表示** → 「（候補に無いキー）」として可視化（黙って消さない）。
+  - **NIT（監査）: セグメント未割当の新規商品グループの隔離メッセージが空鉤括弧** → 文言分岐（「事業セグメントが空のため隔離…」）。
+  - 許容（是正不要）: custom.<key> の実在検証は行わない（定義削除後も companies.custom に実データが残存しうるため、
+    保存拒否は正当な突合を塞ぐ。UI の可視化で対処）/ 既定解決（id 素通し）の active 非限定は従来挙動の維持（原則7）。
+- [x] **再検証（是正後）**: api typecheck green・unit **288 passed**・integration **234 passed**・mockup typecheck green・
+  **221 passed**（原則9「直した結果も問題ない」）。

@@ -5539,6 +5539,72 @@ describe('Phase D: データ取込（F-32）・ダッシュボード保管（F-4
       expect(run3.errors[0]!.message).toContain('別の商品')
     })
 
+    it('バリアント軸取込の境界: 既定 SKU コード衝突の冪等・未送信フィールド保持・グループ内重複・グループ隔離（独立レビュー是正）', async () => {
+      const b64 = (s: string): string => Buffer.from(s, 'utf8').toString('base64')
+      const src = await api('POST', '/v1/akebono/import-sources', {
+        as: ADMIN, body: {
+          name: 'バリアント境界CSV', method: 'file_csv', encoding: 'utf8', targetEntity: 'product_variant',
+          config: { hasHeader: true, delimiter: ',' },
+        },
+      })
+      const srcId = (src.json.data as { id: string }).id
+      await api('POST', '/v1/akebono/import-mappings', {
+        as: ADMIN, body: { sourceId: srcId, fields: [
+          { sourceField: '商品id', targetItemKey: 'productCode', columnIndex: 0 },
+          { sourceField: 'skuid', targetItemKey: 'code', columnIndex: 1 },
+          { sourceField: 'カラー', targetItemKey: 'axis1Value', columnIndex: 2 },
+          { sourceField: 'サイズ', targetItemKey: 'axis2Value', columnIndex: 3 },
+          { sourceField: '商品名', targetItemKey: 'productName', columnIndex: 4 },
+          { sourceField: 'セグメント', targetItemKey: 'segmentId', columnIndex: 5 },
+          { sourceField: '売価', targetItemKey: 'sellPrice', transform: 'number', columnIndex: 6 },
+          { sourceField: 'JAN', targetItemKey: 'janCode', columnIndex: 7 },
+        ] },
+      })
+      // 既定 SKU（コード = 商品コード）を持つ既存商品を用意（ベース行を含むバリアント表の現実ケース）
+      const prd = await api('POST', '/v1/akebono/products', {
+        as: ADMIN, body: { code: 'VAR2-P1', name: 'ベース行商品', segmentId: 'seg-01' },
+      })
+      const pId = (prd.json.data as { id: string }).id
+      const header = '商品id,skuid,カラー,サイズ,商品名,セグメント,売価,JAN\n'
+      // 行1 = 既定 SKU とコード衝突（実 SKU として新規作成される）・行3/4 = グループ内重複（後勝ち更新）・
+      // 行5 = 新規商品グループでセグメント未解決（グループ全行隔離・商品を作らない）
+      const csv1 = header
+        + 'VAR2-P1,VAR2-P1,赤,S,,,1000,4900000000010\n'
+        + 'VAR2-P1,VAR2-P1-BL,青,M,,,1200,\n'
+        + 'VAR2-P1,VAR2-P1-GD,金,L,,,1300,\n'
+        + 'VAR2-P1,VAR2-P1-GD,金,L,,,1350,\n'
+        + 'VAR2-NG,VAR2-NG-1,赤,S,NG商品,未知セグメント,100,\n'
+      const r1 = await api('POST', '/v1/akebono/import-runs', { as: ADMIN, body: { sourceId: srcId, contentBase64: b64(csv1) } })
+      const run1 = r1.json.data as { counts: Record<string, number>; errors: { message: string }[] }
+      expect(run1.counts).toMatchObject({ staged: 5, applied: 4, failed: 1 })
+      expect(run1.errors[0]!.message).toContain('事業セグメント')
+      type SkuRow = { id: string; productId: string; code: string; janCode: string | null; axis1Value: string | null; axis2Value: string | null; sellPrice: number | null; isDefault: boolean; active: boolean }
+      type ProductRow = { id: string; code: string; name: string }
+      const skus1 = ((await api('GET', '/v1/akebono/product-skus', { as: ADMIN })).json.data as SkuRow[]).filter(s => s.productId === pId)
+      // 既定 SKU は無効化・実 SKU 3 件（衝突行 VAR2-P1 は既定 SKU の更新ではなく新規の実 SKU）・重複行は 1 件に収束（後勝ち 1350）
+      expect(skus1.find(s => s.isDefault)!.active).toBe(false)
+      const real1 = skus1.filter(s => !s.isDefault)
+      expect(real1).toHaveLength(3)
+      expect(real1.find(s => s.code === 'VAR2-P1')).toMatchObject({ axis1Value: '赤', axis2Value: 'S', janCode: '4900000000010', active: true })
+      expect(real1.find(s => s.code === 'VAR2-P1-GD')).toMatchObject({ sellPrice: 1350 })
+      // グループ全行隔離の商品は作られない（status=failed の run がデータを変えない不変条件の系）
+      const products1 = (await api('GET', '/v1/akebono/products', { as: ADMIN })).json.data as ProductRow[]
+      expect(products1.some(p => p.code === 'VAR2-NG')).toBe(false)
+      // 商品名は空セルのため既存値を保持
+      expect(products1.find(p => p.id === pId)!.name).toBe('ベース行商品')
+      // 同一ファイル再実行 = 冪等（SKU が増えない・衝突行は実 SKU への更新に収束）
+      const r2 = await api('POST', '/v1/akebono/import-runs', { as: ADMIN, body: { sourceId: srcId, contentBase64: b64(csv1) } })
+      expect((r2.json.data as { counts: Record<string, number> }).counts).toMatchObject({ staged: 5, applied: 4, failed: 1 })
+      const skus2 = ((await api('GET', '/v1/akebono/product-skus', { as: ADMIN })).json.data as SkuRow[]).filter(s => s.productId === pId)
+      expect(skus2.filter(s => !s.isDefault)).toHaveLength(3)
+      expect(skus2.filter(s => s.code === 'VAR2-P1' && s.active)).toHaveLength(1)
+      // 未送信フィールドの保持（CLAUDE.md Zod v4 節の回帰方針）: JAN 空のファイルを再取込しても jan_code が消えない
+      const csv2 = header + 'VAR2-P1,VAR2-P1,赤,S,,,1000,\n'
+      await api('POST', '/v1/akebono/import-runs', { as: ADMIN, body: { sourceId: srcId, contentBase64: b64(csv2) } })
+      const skus3 = ((await api('GET', '/v1/akebono/product-skus', { as: ADMIN })).json.data as SkuRow[]).filter(s => s.productId === pId)
+      expect(skus3.find(s => s.code === 'VAR2-P1' && !s.isDefault)).toMatchObject({ janCode: '4900000000010', axis1Value: '赤' })
+    })
+
     it('マスタ間連携キー（突合キー）: 取引先カスタム項目・SKU JAN で突合して取込・複数一致は隔離（0053）', async () => {
       const b64 = (s: string): string => Buffer.from(s, 'utf8').toString('base64')
       // 突合先: custom.extCode を持つ取引先と、JAN コードを振った SKU

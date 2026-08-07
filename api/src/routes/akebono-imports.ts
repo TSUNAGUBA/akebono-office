@@ -202,7 +202,8 @@ function refLookupSpec(
 ): { target: ImportRefTarget; lookupField: string | null } {
   const target = importRefTargetOf(targetEntity, itemKey)
   if (!target) throw err('AKO-IMP-008', `対象項目「${itemKey}」は参照項目ではありません（内部不整合）`, 400)
-  const lf = fields.find(f => f.targetItemKey === itemKey)?.lookupField ?? null
+  // 重複割当は保存時に拒否済みだが、旧版マッピングでは値の抽出（最後の行勝ち）と揃え最終行を採用する
+  const lf = fields.findLast(f => f.targetItemKey === itemKey)?.lookupField ?? null
   if (lf && !isValidLookupField(target, lf)) {
     throw err('AKO-IMP-008', `対象項目「${itemKey}」の突合キー「${lf}」は使えません（マッピングを保存し直してください）`, 400)
   }
@@ -217,18 +218,28 @@ function refLookupSpec(
 async function refLookupOf(
   db: pg.Pool | pg.PoolClient, target: ImportRefTarget, lookupField: string | null,
 ): Promise<RefLookup> {
+  // SKU 参照はテーブル構造が異なる（name 列なし・code/janCode）ため per-row の skuCondOf 経由のみ。
+  // 誤ってここへ来たら暗黙のフォールバックで誤突合させず止める（監査指摘 2026-08-07）
+  if (target.refEntity === 'sku') {
+    throw err('AKO-IMP-008', 'SKU 参照はマスタ表引きでは解決できません（内部不整合）', 400)
+  }
   const table = REF_TABLES[target.refEntity]
   if (!lookupField) {
     const map = await loadNameLookup(db, table)
     return { resolve: v => resolveByIdOrName(map, v), keyLabel: null }
   }
   const params: unknown[] = []
-  let expr = 'id'
-  if (lookupField === 'name') {
+  let expr: string
+  if (lookupField === 'id') {
+    expr = 'id'
+  } else if (lookupField === 'name') {
     expr = 'name'
   } else if (lookupField.startsWith('custom.')) {
     expr = 'custom->>$1'
     params.push(lookupField.slice('custom.'.length))
+  } else {
+    // カタログ検証（refLookupSpec）を通過しないキーの暗黙 id フォールバックは誤突合の温床のため遮断
+    throw err('AKO-IMP-008', `突合キー「${lookupField}」は使えません（マッピングを保存し直してください）`, 400)
   }
   const { rows } = await db.query<{ id: string; v: string | null }>(
     `SELECT id, ${expr} AS v FROM ${table} WHERE active = true`, params)
@@ -261,10 +272,11 @@ function unresolvedRefMsg(label: string, raw: string, lk: RefLookup): string {
     : `${label}「${raw}」がマスタ未登録のため隔離`
 }
 
-/** SKU 参照の突合条件（product_skus s に対する WHERE 断片。値は $1）。null = 既定（ID → 有効 SKU コード） */
+/** SKU 参照の突合条件（product_skus s に対する WHERE 断片。値は $1）。null = 既定（ID → 有効 SKU コード）。
+ *  明示指定時は有効行のみ（refLookupOf と同じ宣言）。既定の id 素通しは従来挙動の維持（下位互換） */
 function skuCondOf(lookupField: string | null): { cond: string; keyLabel: string | null } {
   switch (lookupField) {
-    case 'id': return { cond: 's.id = $1', keyLabel: 'ID' }
+    case 'id': return { cond: 's.id = $1 AND s.active = true', keyLabel: 'ID' }
     case 'code': return { cond: 's.code = $1 AND s.active = true', keyLabel: 'SKUコード' }
     case 'janCode': return { cond: 's.jan_code = $1 AND s.active = true', keyLabel: 'JANコード' }
     default: return { cond: '(s.id = $1 OR (s.code = $1 AND s.active = true))', keyLabel: null }
@@ -478,6 +490,10 @@ async function applySkus(
  * 新規商品は既定 SKU を作らない（実 SKU が本取込で入る）。既存商品へ実 SKU が新規追加されたら
  * 既定 SKU を無効化する（SKU マトリクス生成 POST /products/:id/skus/matrix と同一挙動）。
  * 再実行は商品・SKU とも upsert = 冪等（原則2）。商品レベルの失敗はグループ全行を隔離する。
+ * 検証順序: グループ検証 → 行検証（価格・SKU 衝突）→ 商品書込 → SKU 書込。全行隔離のグループは
+ * 商品を書かない = status='failed' の run はデータを変更しない（検証起因の隔離に限る。独立レビュー是正）。
+ * SKU 突合は有効な実 SKU（NOT is_default）のみ = 既定 SKU コードとの衝突行は新規 SKU として作成し
+ * 無効化で置き換える（更新→無効化の非冪等を防ぐ）。
  */
 async function applyProductVariants(
   db: pg.PoolClient, records: ImportRecord[], fields: ImportRunFieldDef[],
@@ -530,7 +546,7 @@ async function applyProductVariants(
       }
     }
 
-    // 商品の upsert（applyProducts と同じ (segment, code) 有効行キー）
+    // 商品の特定（applyProducts と同じ (segment, code) 有効行キー。書込はまだ行わない）
     const { rows: existing } = await db.query<{ id: string; custom: Record<string, unknown> }>(
       `SELECT id, custom FROM products WHERE code = $1 AND active = true
          AND ($2::text IS NULL OR segment_id = $2) ORDER BY created_at LIMIT 2`,
@@ -538,6 +554,44 @@ async function applyProductVariants(
     if (existing.length > 1) { failGroup(`商品コード「${productCode}」が複数セグメントに存在します（セグメント列を指定してください）`); continue }
     let productId = existing[0]?.id ?? null
 
+    // 新規作成の前提（code・name・segmentId 必須 = POST /products と同じ）も商品書込前に確定する
+    if (!productId) {
+      if (!name) { failGroup(`商品「${productCode}」は未登録のため新規作成が必要ですが商品名が空のため隔離`); continue }
+      if (!seg) { failGroup('事業セグメントが空のため隔離（新規商品の作成に必須。セグメント列の割り当てと値が必要です）'); continue }
+    }
+
+    // 行レベルの事前検証（価格・SKU コード衝突）を商品書込より前に確定する:
+    // 全行隔離になるグループは商品を書かず、「status=failed なのに商品が変わる」経路を作らない（監査/レビュー指摘）。
+    // SKU 突合は**既定 SKU を除外**（既定 SKU のコード = 商品コードと衝突する行は実 SKU として新規作成し、
+    // 既定 SKU は後段の無効化で置き換える = マトリクス生成と同じ収束。更新→無効化の非冪等を防ぐ = レビュー MAJOR）
+    interface RowPlan { rec: ImportRecord; sellPrice: number | null; costPrice: number | null; skuId: string | null }
+    const plans: RowPlan[] = []
+    for (const rec of recs) {
+      const v = rec.values
+      const fail = (message: string): void => { out.issues.push({ rowNo: rec.rowNo, rawText: rec.raw, message }) }
+      const sellPrice = numOf(v.sellPrice)
+      const costPrice = numOf(v.costPrice)
+      if (sellPrice === undefined || costPrice === undefined) { fail('SKU 価格が数値でないため隔離'); continue }
+      if ((sellPrice !== null && (sellPrice < 0 || sellPrice > 1e12))
+        || (costPrice !== null && (costPrice < 0 || costPrice > 1e12))) {
+        fail('SKU 価格が範囲外（0〜1 兆）のため隔離')
+        continue
+      }
+      const { rows: skuRows } = await db.query<{ id: string; productId: string }>(
+        `SELECT id, product_id AS "productId" FROM product_skus
+          WHERE code = $1 AND active = true AND NOT is_default LIMIT 2`, [v.code!])
+      if (skuRows.length > 1) { fail(`SKUコード「${v.code}」が一意でないため隔離`); continue }
+      const hit = skuRows[0] ?? null
+      // 商品未登録（これから作成）のときに既存の実 SKU がヒット = 必ず別商品の SKU
+      if (hit && (!productId || hit.productId !== productId)) { fail(`SKUコード「${v.code}」は別の商品に登録済みのため隔離`); continue }
+      plans.push({ rec, sellPrice, costPrice, skuId: hit?.id ?? null })
+    }
+    if (plans.length === 0) continue // 全行隔離 = 商品も書かない
+    const failPlans = (message: string): void => {
+      for (const p of plans) out.issues.push({ rowNo: p.rec.rowNo, rawText: p.rec.raw, message })
+    }
+
+    // 商品の upsert（有効な行が 1 行以上あるときのみ）
     if (productId) {
       // 空セルは「変更しない」（取込で既存値を消さない）。軸ラベルはマッピングで軸を割り当てたときのみ更新
       const sets: string[] = []
@@ -555,16 +609,14 @@ async function applyProductVariants(
         try {
           await rowWrite(db, () => db.query(`UPDATE products SET ${sets.join(', ')}, updated_at = now() WHERE id = $1`, params))
         } catch (e) {
-          failGroup((e as { code?: string }).code === '23505'
+          failPlans((e as { code?: string }).code === '23505'
             ? `商品コード「${productCode}」が移動先セグメントと衝突するため隔離`
             : `商品「${productCode}」の更新に失敗したため隔離（${(e as Error).message}）`)
           continue
         }
       }
     } else {
-      // 新規作成（code・name・segmentId 必須 = POST /products と同じ）。既定 SKU は作らない
-      if (!name) { failGroup(`商品「${productCode}」は未登録のため新規作成が必要ですが商品名が空のため隔離`); continue }
-      if (!seg) { failGroup(`事業セグメント「${segRaw}」を解決できないため隔離（新規商品の作成に必須）`); continue }
+      // 新規作成（前提は検証済み）。既定 SKU は作らない（実 SKU が本取込で入る）
       try {
         productId = await rowWrite(db, async () => {
           const id = newId('prd')
@@ -577,34 +629,24 @@ async function applyProductVariants(
           return id
         })
       } catch (e) {
-        failGroup(`商品「${productCode}」の作成に失敗したため隔離（${(e as Error).message}）`)
+        failPlans(`商品「${productCode}」の作成に失敗したため隔離（${(e as Error).message}）`)
         continue
       }
     }
 
-    // SKU の upsert（code = レコード固有 ID の有効行一致。既定 SKU とは独立の実 SKU を管理）
+    // SKU の upsert（code = レコード固有 ID の有効な実 SKU 一致。既定 SKU は対象外）
     let createdSkus = 0
-    for (const rec of recs) {
+    /** グループ内の同一 SKU コード行: 2 行目以降は 1 行目の INSERT 結果への更新に収束させる */
+    const insertedByCode = new Map<string, string>()
+    for (const { rec, sellPrice, costPrice, skuId } of plans) {
       const v = rec.values
       const fail = (message: string): void => { out.issues.push({ rowNo: rec.rowNo, rawText: rec.raw, message }) }
       const skuCode = v.code!
-      const sellPrice = numOf(v.sellPrice)
-      const costPrice = numOf(v.costPrice)
-      if (sellPrice === undefined || costPrice === undefined) { fail('SKU 価格が数値でないため隔離'); continue }
-      if ((sellPrice !== null && (sellPrice < 0 || sellPrice > 1e12))
-        || (costPrice !== null && (costPrice < 0 || costPrice > 1e12))) {
-        fail('SKU 価格が範囲外（0〜1 兆）のため隔離')
-        continue
-      }
-      const { rows: skuRows } = await db.query<{ id: string; productId: string }>(
-        `SELECT id, product_id AS "productId" FROM product_skus WHERE code = $1 AND active = true LIMIT 2`, [skuCode])
-      if (skuRows.length > 1) { fail(`SKUコード「${skuCode}」が一意でないため隔離`); continue }
-      const hit = skuRows[0]
-      if (hit && hit.productId !== productId) { fail(`SKUコード「${skuCode}」は別の商品に登録済みのため隔離`); continue }
-      if (hit) {
+      const effectiveId = skuId ?? insertedByCode.get(skuCode) ?? null
+      if (effectiveId) {
         // 空セルは「変更しない」（既存値の意図しないクリアを防ぐ = applySkus と同じ）
         const sets: string[] = []
-        const params: unknown[] = [hit.id]
+        const params: unknown[] = [effectiveId]
         const push = (col: string, val: unknown): void => { params.push(val); sets.push(`${col} = $${params.length}`) }
         if ((v.janCode ?? '') !== '') push('jan_code', capCp(v.janCode!, 100))
         if ((v.axis1Value ?? '') !== '') push('axis1_value', capCp(v.axis1Value!, 100))
@@ -621,14 +663,16 @@ async function applyProductVariants(
         continue
       }
       try {
+        const newSkuId = newId('sku')
         await rowWrite(db, () => db.query(
           `INSERT INTO product_skus (id, product_id, code, jan_code, axis1_value, axis2_value, sell_price, cost_price)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-          [newId('sku'), productId, skuCode,
+          [newSkuId, productId, skuCode,
             (v.janCode ?? '') !== '' ? capCp(v.janCode!, 100) : null,
             (v.axis1Value ?? '') !== '' ? capCp(v.axis1Value!, 100) : null,
             (v.axis2Value ?? '') !== '' ? capCp(v.axis2Value!, 100) : null,
             sellPrice, costPrice]))
+        insertedByCode.set(skuCode, newSkuId)
         createdSkus++
         out.applied++
       } catch (e) {
@@ -1024,6 +1068,13 @@ export function akebonoImportsRoutes(pool: pg.Pool, env: Env): Hono {
     const id = newId('impr')
     const created = await inTxn(pool, async (db) => {
       await db.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`imprun:${sourceId}`])
+      if (source.targetEntity === 'product_variant') {
+        // SKU の新規 INSERT を持つ唯一の取込対象。SKU コードは DB 一意制約を持たない
+        // （セグメント違いの同一商品コード = 同一既定 SKU コードが正当な既存データのため INDEX は張れない = 原則7）。
+        // 取込元をまたぐ並行実行での同一コード二重 INSERT はエンティティ単位の直列化で防ぐ（監査指摘 2026-08-07）。
+        // ロック順は常に「取込元 → エンティティ」= 循環しない（デッドロックなし）
+        await db.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, ['imprun-entity:product_variant'])
+      }
       const records = extracted.records
       let outcome: ApplyOutcome
       switch (source.targetEntity) {

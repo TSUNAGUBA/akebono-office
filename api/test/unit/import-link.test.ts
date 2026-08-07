@@ -80,8 +80,14 @@ describe('validateImportMapping（保存前検証 = モック↔API parity）', 
       f('productCode', '商品id'), f('code', 'skuid'), f('axis1Value', 'カラー'), f('axis1Value', '色'),
     ])).toContain('複数行')
   })
-  it('product_variant 以外は構造検証なし（既存マッピングを壊さない = 下位互換）', () => {
-    expect(validateImportMapping('product', [f('name', '商品名')])).toBeNull()
+  it('参照項目の重複割当は全対象で拒否（値 = 最後の行・突合キーの組が不定になるため）', () => {
+    expect(validateImportMapping('sales_record', [
+      f('companyId', '会社名'), f('companyId', '外部コード', 'custom.extCode'),
+    ])).toContain('複数行')
+    expect(validateImportMapping('product', [f('segmentId', 'seg1'), f('segmentId', 'seg2')])).toContain('複数行')
+  })
+  it('非参照項目の重複・product_variant 以外の構造は従来どおり許容（下位互換）', () => {
+    expect(validateImportMapping('product', [f('name', '商品名'), f('name', '商品名2')])).toBeNull()
     expect(validateImportMapping('sku', [f('code', 'sku'), f('code', 'sku2')])).toBeNull()
   })
   it('バリアント項目カタログはグルーピングキー・固有ID・軸1/2 を含む', () => {
