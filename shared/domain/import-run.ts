@@ -18,6 +18,9 @@ export interface ImportRunFieldDef {
   byteStart: number | null
   byteEnd: number | null
   jsonKey: string | null
+  /** 参照項目の突合キー（import-link）。抽出（本ファイル）では使わず、反映（API 側）の参照解決で使う。
+   *  旧版マッピング（0053 以前の保存分）には存在しないため optional（下位互換 = 原則7） */
+  lookupField?: string | null
 }
 
 export interface ImportRecord {

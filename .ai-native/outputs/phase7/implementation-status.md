@@ -1171,7 +1171,8 @@
 - [x] **レコード抽出**: `shared/domain/import-run.ts`（純粋関数・単体テスト対象）= CSV（列番号 or ヘッダ名解決・引用対応）/ 固定長（1 始まり両端含む**バイト範囲**スライス = Shift_JIS の全角対応）/ JSON（ルートパス・ドットパスキー）+ transform（trim/number/date/upper/lower）。上限 5000 行（AKO-IMP-006）
 - [x] **対象別の反映（検証 → 反映を同一トランザクション・取込元単位の advisory lock で直列化）**:
   - product = (segment, code) upsert（参照 = セグメント/カテゴリ/仕入先/税区分/単位を id or 有効行名称で解決・未解決は隔離・**空セルは既存値を保持**・新規は既定 SKU 同時生成 = POST /products と同型・custom.* は custom jsonb へマージ）
-  - sku = SKU コード一致の更新のみ（親商品を表現できないため新規作成は対象外と明記）
+  - sku = SKU コード一致の更新のみ（親商品を表現できないため新規作成は対象外と明記。→ **§58 のバリアント軸取込
+    （product_variant）がグルーピングキーで親商品を表現し、商品＋SKU の同時取込に対応**（2026-08-07））
   - company = 会社名完全一致 upsert（業界解決・同名複数は隔離）
   - sales_record = `source_ref` = **行フィンガープリント（sha256）で冪等追記**（0046 部分一意 INDEX + ON CONFLICT DO NOTHING → 再実行は skipped = 売上の二重計上なし）。原価・課金区分は SKU/商品から解決（POST /sales-records と同一）
   - inventory = adjust/棚卸のみ受理し `ref_line_id` = フィンガープリントで台帳へ冪等追記（既存 UNIQUE(ref_type, ref_line_id, kind) を再利用）
@@ -1820,3 +1821,78 @@
   - **NIT（監査）: HANDOFF スナップショットに /meet 未反映**。→ 追記（全件反映）。
   - 許容（是正不要）: webViewLink 正規化の末尾スラッシュ要求（サフィックス攻撃防御として意図的・実リンクは必ずパスあり）/ documents→notes の Drive ヘルパ import（循環なし・calendar→documents の前例あり = 原則3）/ 既定フォルダ名空時の「（未選択）」表示（選択経由では常に name 設定・直 API のみ・体裁）/ Meet リンクの実在検証なし（google.com ホスト制約 + C2 同一チーム信頼）。
 - [x] **再検証（是正後）**: mockup typecheck + `npm test` **221 passed** / api typecheck + unit **273 passed** / integration **231 passed**（新規回帰なし = 原則9「直した結果も問題ない」）。
+
+## 58. バリアント軸取込（product_variant）＋ マスタ間連携キー（突合キー lookupField）（オペレーター指示 2026-08-07）の完了条件（Definition of Done）
+
+> オペレーター指示 2026-08-07「①バリアント軸を含む取込の際に、グルーピングキーの列とバリアント軸を成す軸を指定して
+> 取り込めるようにする（例: アパレルの 商品id / skuid / カラー / サイズ → skuid = レコード固有 ID・商品id = グルーピングキー・
+> カラー / サイズ = バリアント軸として 2 次元表・2 次元データから取込）②マスタ間・マスタ×トランザクションのデータ連携を
+> 指定できるようにする（別マスタのどの項目と取込対象のどの項目の一致を突合して連携するかの設定）」への実装。
+> ブランチ `claude/akebono-import-linking-scsqkq`。
+
+### 58-1 方針（記録）
+- **共有カタログ `shared/domain/import-link.ts`（新規・純粋関数）** に ①参照項目カタログ（取込対象 × 対象項目 → 参照先マスタ +
+  突合キー候補 = `IMPORT_REF_TARGETS`）②バリアント軸取込の対象項目カタログ（`VARIANT_IMPORT_FIELDS`）③保存前検証
+  （`validateImportMapping`）④軸ラベル決定（`variantAxisLabelsOf` = axis1Value/axis2Value に割り当てた列の論理名）を集約。
+  フロント（マッピング UI の選択肢・モック保存検証）と API（保存時検証・実行時解決）が同一関数を共有（原則3・6 = 両モード parity）。
+- **① バリアント軸取込 = 新しい取込対象 `product_variant`（商品＋SKU バリアント展開）**: 既存の product（既定 SKU のみ）と
+  sku（更新のみ・親商品を表現できない = §48-1 の明記済み制約）の間を埋める。グルーピングキー（productCode）で行を商品へ束ね、
+  SKU コード（code）をレコード固有 ID として SKU を upsert。軸の指定は「カラー・サイズ列を axis1Value/axis2Value へ割り当てる」
+  操作そのもので、列名がそのまま商品の軸ラベル（variant_axis1_label/2）になる（カラー×サイズの 2 次元バリアント表の縦持ちを想定）。
+- **② マスタ間連携キー = マッピング行ごとの突合キー `lookupField`**: 参照項目（得意先・セグメント・カテゴリ・SKU・倉庫・業界・
+  税区分・単位・仕入先）を「参照先マスタのどの項目と突合して解決するか」を設定可能に。未設定 = 従来の既定
+  （ID → 有効行の名称完全一致 / SKU は ID → SKU コード）で**下位互換**（原則7 = 既存マッピングは挙動不変・データパッチ不要）。
+  設定時は指定項目（id / name / SKU code / janCode / 取引先 custom.<key>）の**有効行完全一致・一意のときのみ**解決
+  （0 件・複数一致は隔離 = 誤リンク防止）。
+
+### 58-2 実装（API）
+- [x] **DB（migration 0053）**: import_sources.target_entity の CHECK に 'product_variant' を追加（DROP IF EXISTS → ADD =
+  0051 と同型・冪等）。lookupField は import_mappings.fields（既存 jsonb）の要素へ追加 = テーブル変更なし（0043 と同判断）。
+- [x] **shared/domain/import-parse**: normalizeFieldLocators が lookupField を正規化（trim・120cp 切詰め・空 = null）
+  → モック saveMapping / API importFieldsOf の双方が同一関数で保持（parity）。
+- [x] **akebono-imports.ts**: 参照解決を `refLookupOf`（突合キー対応の解決器）へ集約。既定は従来の loadNameLookup +
+  resolveByIdOrName を再利用（原則3）。custom.<key> はパラメータバインド・テーブル/列識別子はカタログ経由のみ（SQL 注入防止）。
+  SKU 参照は `skuCondOf`（id / code / janCode / 既定 = id→code）で per-row 解決。apply 系（product/company/sales_record/
+  inventory）を解決器経由に置換・隔離メッセージは突合キー名を明示（既定は従来文言 = 互換）。
+- [x] **applyProductVariants（新規）**: 検証（AKO-IMP-008 = productCode/code 必須・軸2 は軸1 が前提・対象項目の重複禁止）→
+  グルーピング（出現順・商品項目はグループ先頭の非空値 = 決定的）→ 商品 upsert（(segment, code) 有効行キー = applyProducts と
+  同一・空セルは既存値保持・軸ラベル更新）→ SKU upsert（有効行の code 一致・別商品に登録済みの code は隔離・空セルは保持）→
+  実 SKU が新規に入った商品の既定 SKU を無効化（SKU マトリクス生成と同一挙動）。新規商品は既定 SKU を作らない。
+  商品レベルの失敗はグループ全行を隔離・SKU レベルは行単位隔離（原則4）。再実行は upsert = 冪等（原則2）。
+- [x] **POST /import-mappings**: 保存時に validateImportMapping（突合キー不正・バリアント構造不備 = AKO-IMP-008 400）。
+  requireSource が target_entity を返すよう拡張。実行時にも refLookupSpec / applyProductVariants が再検証（旧データ防衛）。
+
+### 58-3 実装（フロント）
+- [x] **types/akebono.ts**: ImportTargetEntity に 'product_variant'・ImportFieldMap に lookupField?。
+- [x] **useAkebonoImports.ts**: IMPORT_ENTITY_LABELS「商品＋SKU（バリアント展開）」・RELOAD_BY_ENTITY（products/productSkus）・
+  saveMapping が保存前に validateImportMapping（API と同一関数・空行除外後の集合で検証 = サーバーと同じ対象）。
+- [x] **imports.vue**: product_variant の右辺候補 = VARIANT_IMPORT_FIELDS ＋ 商品カスタム項目。バリアント軸取込の説明カード
+  （グルーピングキー・固有 ID・軸割り当て = 列名が軸ラベルの例示）。参照項目の行下に**連携キー（突合項目）セレクト**
+  （既定〔ID → 名称/SKUコード〕・参照先マスタの項目・取引先はカスタム項目も列挙 = useAppFields('company')）。右辺変更時に
+  無効な突合キーを持ち越さない（onTargetItemChange）・保存時は参照項目のみ lookupField を保持（ロケータと同じ残骸防止）。
+- [x] **utils/import-link.ts（新規）**: shared/domain/import-link の再エクスポート（utils/import-parse と同型）。
+
+### 58-4 検証（実測値。この環境で実行）
+- [x] `cd api && npm run typecheck` green / unit **287 passed**（import-link.test.ts 新規 = カタログ・検証・軸ラベル 14 件＋
+  normalizeFieldLocators / importFieldsOf の lookupField 追試）
+- [x] `cd api && npm run test:integration`（使い捨て PostgreSQL・migration 0053 適用）**233 passed**（+2）:
+  - バリアント軸取込: 構造検証（AKO-IMP-008）→ アパレル形式 CSV（商品id/skuid/カラー/サイズ）取込 = 商品 1 件＋SKU 3 件・
+    軸ラベル = 列名・固有 ID 欠落行は隔離（商品も作らない）・**再実行で商品/SKU が増えない（冪等）**・既存商品への実 SKU
+    追加で既定 SKU 無効化・別商品に登録済みの SKU コードは隔離
+  - 突合キー: 取引先 custom.extCode ＋ SKU janCode で売上明細を突合取込・不正キーは保存時 AKO-IMP-008・未解決行は
+    突合キー名入りメッセージで隔離・**複数一致（同 extCode の 2 社）は解決せず隔離**
+- [x] `cd mockup && npm run typecheck` green / `npm test` **221 passed**（件数不変）
+- [x] **migration 0053 冪等性**: DROP CONSTRAINT IF EXISTS → ADD は再適用安全。既存 target_entity 値はすべて許容 = 非破壊。
+
+### 58-5 設計判断（記録）
+- **「2 次元表・2 次元データ」の解釈**: 指示の例（商品id / skuid / カラー / サイズが**列**として存在）に基づき、
+  カラー×サイズの 2 軸（= 2 次元）バリアントマトリクスの**縦持ち（long 形式）**を取込対象とした。行 = SKU（固有 ID）・
+  2 軸の値列 = マトリクスの座標であり、取込結果は商品 × 軸1 × 軸2 の 2 次元表を構成する。ピボット済み（サイズが列見出しに
+  展開された横持ち）の取込は固有 ID 列を持てないため対象外（必要になれば別方式として追加）。
+- **軸ラベル = 列の論理名**: 「どの列が軸を成すか」の指定（axis1Value/axis2Value への割り当て）だけで軸ラベルまで決まる
+  （追加入力なし = 原則1）。既存の variant_axis1_label/2（0032）・SKU axis1_value/2 をそのまま使い、スキーマ追加なし。
+- **突合キーのカタログ制**: 参照先マスタに実在する列のみ許可（segments 等 = id/name・SKU = id/code/janCode・取引先 =
+  id/name + custom.<key>）。companies に code 列は無いため、外部システムコードでの突合は**取引先カスタム項目**（F-31）で
+  実現する（custom jsonb を持つのは取引先のみ = allowCustom を company に限定）。
+- **取消可能性（原則9.5）**: 新設の取込対象・突合キーは既存の取消フローに乗る（取込元 = 論理削除/復元・マッピング = 新版
+  上書きで旧版履歴・反映済み商品/SKU = 編集/無効化）。§48-1 の残課題（取込の一括取消）はスコープ外のまま変わらず。

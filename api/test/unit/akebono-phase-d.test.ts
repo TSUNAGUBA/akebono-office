@@ -10,8 +10,8 @@ import {
 import { decodeImportBytes, importFieldsOf, splitLineBytes } from '../../src/routes/akebono-imports'
 import { normalizeDashboardInsight } from '../../src/routes/akebono-dashboard'
 
-// 方式別ロケータの既定（未指定は全て null）
-const NO_LOC = { columnIndex: null, byteStart: null, byteEnd: null, jsonKey: null }
+// 方式別ロケータ・突合キーの既定（未指定は全て null）
+const NO_LOC = { columnIndex: null, byteStart: null, byteEnd: null, jsonKey: null, lookupField: null }
 
 describe('importFieldsOf（マッピング項目の検証・正規化）', () => {
   it('配列でなければ null', () => {
@@ -48,15 +48,26 @@ describe('importFieldsOf（マッピング項目の検証・正規化）', () =>
       { sourceField: 'code', targetItemKey: 'code', jsonKey: 'code' },
     ])
     expect(out).toEqual([
-      { id: 'm1-f0', sourceField: '売上日', targetItemKey: 'soldAt', transform: '', columnIndex: 0, byteStart: null, byteEnd: null, jsonKey: null },
-      { id: 'm1-f1', sourceField: '金額', targetItemKey: 'amount', transform: '', columnIndex: null, byteStart: 11, byteEnd: 20, jsonKey: null },
-      { id: 'm1-f2', sourceField: 'code', targetItemKey: 'code', transform: '', columnIndex: null, byteStart: null, byteEnd: null, jsonKey: 'code' },
+      { id: 'm1-f0', sourceField: '売上日', targetItemKey: 'soldAt', transform: '', ...NO_LOC, columnIndex: 0 },
+      { id: 'm1-f1', sourceField: '金額', targetItemKey: 'amount', transform: '', ...NO_LOC, byteStart: 11, byteEnd: 20 },
+      { id: 'm1-f2', sourceField: 'code', targetItemKey: 'code', transform: '', ...NO_LOC, jsonKey: 'code' },
     ])
   })
 
   it('数値でないロケータ・空 jsonKey は null に落とす', () => {
     const out = importFieldsOf('m1', [{ sourceField: 'a', targetItemKey: 'b', columnIndex: 'x', byteStart: '', jsonKey: '  ' }])
     expect(out).toEqual([{ id: 'm1-f0', sourceField: 'a', targetItemKey: 'b', transform: '', ...NO_LOC }])
+  })
+
+  it('突合キー lookupField を保持（空は null。0053 マスタ間連携キー）', () => {
+    const out = importFieldsOf('m1', [
+      { sourceField: 'customer', targetItemKey: 'companyId', lookupField: 'custom.extCode' },
+      { sourceField: 'sku', targetItemKey: 'skuId', lookupField: '' },
+    ])
+    expect(out).toEqual([
+      { id: 'm1-f0', sourceField: 'customer', targetItemKey: 'companyId', transform: '', ...NO_LOC, lookupField: 'custom.extCode' },
+      { id: 'm1-f1', sourceField: 'sku', targetItemKey: 'skuId', transform: '', ...NO_LOC },
+    ])
   })
 })
 // 注: normalizeImportSourceConfig の正規化テストは shared 直テストの import-parse.test.ts に集約（重複排除）

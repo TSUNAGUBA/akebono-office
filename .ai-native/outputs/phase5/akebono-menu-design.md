@@ -271,8 +271,8 @@ flowchart LR
 
 | エンティティ | 主要属性 |
 |---|---|
-| `ImportSource` | id, name, method(`file_csv`/`file_fixed`/`file_json`/`api_pull`/`sheets_pull`〔Google スプレッドシート・2026-08-03〕), encoding(`utf8`/`sjis`), targetEntity(`product`/`sku`/`company`/`sales_record`/`inventory`/…), apiConfig?(url, authKind, secretRef), sheetsConfig?(spreadsheetId, spreadsheetName, sheetName, headerRow, startColumn), schedule?(`manual`/`daily`), active |
-| `ImportMapping` | id, sourceId, version, status(`draft`/`active`/`superseded`), fields[{sourceField(列名 or 固定長項目名 or JSON パス), targetItemKey, transforms[]}], createdBy | active 版は不変。改訂は新版作成 → 切替 |
+| `ImportSource` | id, name, method(`file_csv`/`file_fixed`/`file_json`/`api_pull`/`sheets_pull`〔Google スプレッドシート・2026-08-03〕), encoding(`utf8`/`sjis`), targetEntity(`product`/`sku`/`company`/`sales_record`/`inventory`/`product_variant`〔商品＋SKU バリアント展開・2026-08-07〕/…), apiConfig?(url, authKind, secretRef), sheetsConfig?(spreadsheetId, spreadsheetName, sheetName, headerRow, startColumn), schedule?(`manual`/`daily`), active |
+| `ImportMapping` | id, sourceId, version, status(`draft`/`active`/`superseded`), fields[{sourceField(列名 or 固定長項目名 or JSON パス), targetItemKey, transforms[], lookupField?(参照項目の突合キー = 参照先マスタのどの項目と突合するか。2026-08-07)}], createdBy | active 版は不変。改訂は新版作成 → 切替 |
 | `FixedLayout` | id, sourceId, fields[{name, start, length, type, trim}] | Shift_JIS はバイト位置で切り出し（warehouse RecordLayout 参考） |
 | `ImportRun` | id, sourceId, mappingVersion, fileRef?, startedAt, finishedAt, status(`staged`/`validated`/`applied`/`failed`/`reverted`), counts{staged, applied, skipped, failed}, commitToken, executedBy | 記録系（追記のみ） |
 | `ImportRowError` | runId, rowNo, rawText, errorCode, message | 記録系。CSV ダウンロード可 |

@@ -12,6 +12,8 @@ import {
 } from '~/composables/useAkebonoImports'
 import type { ImportMapping, ImportRun, ImportSource, ImportSourceConfig } from '~/types/akebono'
 import type { FieldDef, TableColumn } from '~/types/ui'
+import { importRefTargetOf, isValidLookupField, VARIANT_IMPORT_FIELDS } from '~/utils/import-link'
+import type { ImportRefTarget } from '~/utils/import-link'
 import { parseCsvColumns, extractJsonKeys } from '~/utils/import-parse'
 import { fmtDateTime, fmtInt } from '~/utils/format'
 
@@ -171,7 +173,8 @@ const COMPANY_IMPORT_FIELDS: { key: string; label: string }[] = [
   { key: 'name', label: '会社名' }, { key: 'kind', label: '区分（self/customer）' }, { key: 'industryId', label: '業界' },
   { key: 'size', label: '規模' }, { key: 'location', label: '所在地' }, { key: 'description', label: '備考' },
 ]
-/** 右辺の候補（対象アプリの既定＋カスタム項目）。company は CRM 会社項目＋会社カスタム項目 */
+/** 右辺の候補（対象アプリの既定＋カスタム項目）。company は CRM 会社項目＋会社カスタム項目。
+ *  product_variant はバリアント軸取込の専用カタログ（グルーピングキー・SKU 固有 ID・軸1/2）＋商品カスタム項目 */
 const targetFieldOptions = computed<{ value: string; label: string }[]>(() => {
   const ent = selectedSource.value?.targetEntity
   if (!ent) return []
@@ -180,15 +183,54 @@ const targetFieldOptions = computed<{ value: string; label: string }[]>(() => {
     const customs = appFields('company').filter(f => f.source === 'custom').map(f => ({ value: f.key, label: `${f.label}（カスタム）` }))
     return [...builtins, ...customs]
   }
+  if (ent === 'product_variant') {
+    const builtins = VARIANT_IMPORT_FIELDS.map(f => ({ value: f.key, label: f.label }))
+    const customs = appFields('product').filter(f => f.source === 'custom').map(f => ({ value: f.key, label: `${f.label}（カスタム・商品）` }))
+    return [...builtins, ...customs]
+  }
   return appFields(ent).map(f => ({ value: f.key, label: f.source === 'custom' ? `${f.label}（カスタム）` : f.label }))
 })
+
+// ---------- マスタ間連携キー（突合キー。参照項目の右辺を選ぶと連携キー選択を表示） ----------
+
+/** 参照項目の突合先（取込対象 × 対象項目 → 参照先マスタ）。null = 参照項目ではない */
+function refTargetOf(itemKey: string): ImportRefTarget | null {
+  const ent = selectedSource.value?.targetEntity
+  return ent ? importRefTargetOf(ent, itemKey) : null
+}
+
+/** 突合キーの選択肢（参照先マスタの項目＋取引先はカスタム項目も可） */
+function lookupOptionsOf(itemKey: string): { value: string; label: string }[] {
+  const t = refTargetOf(itemKey)
+  if (!t) return []
+  const opts: { value: string; label: string }[] = [...t.fields]
+  if (t.allowCustom && t.refEntity === 'company') {
+    for (const f of appFields('company').filter(x => x.source === 'custom')) {
+      opts.push({ value: f.key, label: `${f.label}（カスタム）` })
+    }
+  }
+  return opts
+}
+
+/** 既定解決の表示名（SKU は ID → SKU コード・他マスタは ID → 名称） */
+function defaultLookupLabel(itemKey: string): string {
+  return refTargetOf(itemKey)?.refEntity === 'sku' ? '既定（ID → SKUコードの自動判定）' : '既定（ID → 名称の自動判定）'
+}
+
+/** 右辺変更時に無効な突合キーを持ち越さない（非参照項目・参照先変更の残骸を除去） */
+function onTargetItemChange(r: MapDraftRow): void {
+  const t = refTargetOf(r.targetItemKey)
+  if (!t || (r.lookupField && !isValidLookupField(t, r.lookupField))) r.lookupField = null
+}
 
 type MapDraftRow = {
   sourceField: string; targetItemKey: string; transform: string
   columnIndex: number | null; byteStart: number | null; byteEnd: number | null; jsonKey: string | null
+  /** 参照項目の突合キー（null = 既定の ID → 名称/コード解決） */
+  lookupField: string | null
 }
 function blankRow(): MapDraftRow {
-  return { sourceField: '', targetItemKey: '', transform: '', columnIndex: null, byteStart: null, byteEnd: null, jsonKey: null }
+  return { sourceField: '', targetItemKey: '', transform: '', columnIndex: null, byteStart: null, byteEnd: null, jsonKey: null, lookupField: null }
 }
 
 const mapOpen = ref(false)
@@ -246,6 +288,7 @@ async function openMapEditor(): Promise<void> {
     ? active.fields.map(f => ({
         sourceField: f.sourceField, targetItemKey: f.targetItemKey, transform: f.transform,
         columnIndex: f.columnIndex ?? null, byteStart: f.byteStart ?? null, byteEnd: f.byteEnd ?? null, jsonKey: f.jsonKey ?? null,
+        lookupField: f.lookupField ?? null,
       }))
     : [blankRow()]
   mapOpen.value = true
@@ -373,6 +416,8 @@ async function saveMapping(): Promise<void> {
       byteStart: method === 'file_fixed' ? f.byteStart : null,
       byteEnd: method === 'file_fixed' ? f.byteEnd : null,
       jsonKey: (method === 'file_json' || method === 'api_pull') ? f.sourceField.trim() : null,
+      // 突合キーは参照項目のみ保持（非参照項目の残骸を混入させない = ロケータと同じ思想）
+      lookupField: refTargetOf(f.targetItemKey.trim()) ? f.lookupField : null,
     })))
     if (!res.ok) { toast.show(`${res.error.code}: ${res.error.message}`, 'crit'); return }
     toast.show('マッピングを新しい版として保存しました', 'ok')
@@ -645,6 +690,17 @@ function openRun(row: Record<string, unknown>): void {
           保存すると新しい版になり、既存の有効版は旧版になります。
         </p>
 
+        <!-- バリアント軸取込（product_variant）の説明: グルーピングキー・固有ID・バリアント軸の役割 -->
+        <div v-if="selectedSource.targetEntity === 'product_variant'" class="card border-line bg-info-soft p-3 text-[12px] leading-relaxed text-sub">
+          <span class="font-semibold text-ink">バリアント軸取込:</span>
+          「<span class="font-semibold text-ink">商品コード（グルーピングキー）</span>」で行を商品へまとめ、
+          「<span class="font-semibold text-ink">SKUコード（固有ID）</span>」を各データ行の固有 ID として SKU を登録・更新します。
+          カラー・サイズのような軸の列は「<span class="font-semibold text-ink">バリアント軸1/2の値</span>」へ割り当ててください。
+          割り当てた<span class="font-semibold text-ink">列の論理名（例: カラー / サイズ）がそのまま商品のバリアント軸ラベル</span>になり、
+          カラー×サイズ等の 2 次元バリアント表（縦持ち）を商品＋SKU として取り込めます。
+          例）「商品id / skuid / カラー / サイズ」の列なら、商品id → 商品コード・skuid → SKUコード・カラー → 軸1・サイズ → 軸2。
+        </div>
+
         <!-- 方式別の接続 / 解析設定 -->
         <div class="card border-line bg-page p-3 grid gap-2.5">
           <p class="text-[11px] font-semibold text-muted">{{ IMPORT_METHOD_LABELS[selectedSource.method] }} の設定</p>
@@ -815,34 +871,48 @@ function openRun(row: Record<string, unknown>): void {
 
         <div class="overflow-x-auto">
           <div class="grid gap-2" :class="mapMethod === 'file_fixed' ? 'min-w-[620px]' : 'min-w-[540px]'">
-            <div v-for="(r, i) in mapDraft" :key="i" class="grid items-center gap-2" :class="rowGridClass">
-              <!-- 左辺: 取込元項目（方式別。Sheets は開始列でスライス済みのため CSV と同じ列番号表現） -->
-              <template v-if="mapMethod === 'file_csv' || mapMethod === 'sheets_pull'">
-                <span class="rounded border border-line bg-surface px-1 py-0.5 text-center text-[11px] tabular-nums text-muted">
-                  {{ r.columnIndex != null ? `列${r.columnIndex + 1}` : '—' }}
-                </span>
-                <input v-model="r.sourceField" class="input" type="text" placeholder="列の論理名" aria-label="取込元の列名">
-              </template>
-              <template v-else-if="mapMethod === 'file_fixed'">
-                <input v-model.number="r.byteStart" class="input" type="number" min="1" placeholder="開始" aria-label="開始バイト">
-                <input v-model.number="r.byteEnd" class="input" type="number" min="1" placeholder="終了" aria-label="終了バイト">
-                <input v-model="r.sourceField" class="input" type="text" placeholder="項目名" aria-label="取込元の項目名">
-              </template>
-              <template v-else>
-                <input v-model="r.sourceField" class="input" type="text" placeholder="JSON キー" aria-label="取込元の JSON キー">
-              </template>
+            <div v-for="(r, i) in mapDraft" :key="i" class="grid gap-1">
+              <div class="grid items-center gap-2" :class="rowGridClass">
+                <!-- 左辺: 取込元項目（方式別。Sheets は開始列でスライス済みのため CSV と同じ列番号表現） -->
+                <template v-if="mapMethod === 'file_csv' || mapMethod === 'sheets_pull'">
+                  <span class="rounded border border-line bg-surface px-1 py-0.5 text-center text-[11px] tabular-nums text-muted">
+                    {{ r.columnIndex != null ? `列${r.columnIndex + 1}` : '—' }}
+                  </span>
+                  <input v-model="r.sourceField" class="input" type="text" placeholder="列の論理名" aria-label="取込元の列名">
+                </template>
+                <template v-else-if="mapMethod === 'file_fixed'">
+                  <input v-model.number="r.byteStart" class="input" type="number" min="1" placeholder="開始" aria-label="開始バイト">
+                  <input v-model.number="r.byteEnd" class="input" type="number" min="1" placeholder="終了" aria-label="終了バイト">
+                  <input v-model="r.sourceField" class="input" type="text" placeholder="項目名" aria-label="取込元の項目名">
+                </template>
+                <template v-else>
+                  <input v-model="r.sourceField" class="input" type="text" placeholder="JSON キー" aria-label="取込元の JSON キー">
+                </template>
 
-              <span class="text-center text-muted" aria-hidden="true">→</span>
+                <span class="text-center text-muted" aria-hidden="true">→</span>
 
-              <!-- 右辺: 対象アプリ項目（既定＋カスタム） -->
-              <select v-model="r.targetItemKey" class="select" aria-label="対象アプリ項目">
-                <option value="">（未選択）</option>
-                <option v-for="o in targetFieldOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
-              </select>
-              <input v-model="r.transform" class="input" type="text" placeholder="変換" aria-label="変換">
-              <button type="button" class="btn btn-ghost btn-sm" aria-label="行を削除" @click="removeMapRow(i)">
-                <Trash2 class="h-4 w-4 text-crit" aria-hidden="true" />
-              </button>
+                <!-- 右辺: 対象アプリ項目（既定＋カスタム） -->
+                <select v-model="r.targetItemKey" class="select" aria-label="対象アプリ項目" @change="onTargetItemChange(r)">
+                  <option value="">（未選択）</option>
+                  <option v-for="o in targetFieldOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+                </select>
+                <input v-model="r.transform" class="input" type="text" placeholder="変換" aria-label="変換">
+                <button type="button" class="btn btn-ghost btn-sm" aria-label="行を削除" @click="removeMapRow(i)">
+                  <Trash2 class="h-4 w-4 text-crit" aria-hidden="true" />
+                </button>
+              </div>
+
+              <!-- マスタ間連携キー（参照項目のみ）: 参照先マスタのどの項目と突合して解決するか -->
+              <div
+                v-if="refTargetOf(r.targetItemKey)"
+                class="flex flex-wrap items-center gap-1.5 pl-2 text-[11px] text-muted"
+              >
+                <span>連携キー（{{ refTargetOf(r.targetItemKey)!.refLabel }}マスタとの突合項目）:</span>
+                <select v-model="r.lookupField" class="select w-auto max-w-[240px]" aria-label="突合キー">
+                  <option :value="null">{{ defaultLookupLabel(r.targetItemKey) }}</option>
+                  <option v-for="o in lookupOptionsOf(r.targetItemKey)" :key="o.value" :value="o.value">{{ o.label }}</option>
+                </select>
+              </div>
             </div>
           </div>
         </div>
