@@ -140,7 +140,7 @@ office: `IsometricOffice`（アイソメトリック空間）、`AiEmployeeCard`
 | `useMediaInsight` | メディア/統合 AI インサイト（F-40。デュアルモード: API = `/v1/media/insights(/generate)` = media_insights が SoT・Vertex AI → heuristic・劣化告知 warning 保持。生成 → 保管 → 再生成で上書き = weekly_insights と同思想） |
 | `useMediaArticles` | AI 記事生成・採用・取消/復元（F-40。デュアルモード: API = `/v1/media/articles/generate` ほか = Vertex AI → 決定的フォールバック。採用は冪等・論理削除で取消可 = 原則9.5） |
 | `useDashboardInsight` | 業態別/会社全体ダッシュボードの集計 + AI レポート/インサイト（F-41。集計材料は integratedMetricsFor を再利用 = Phase C から API モードはサーバー組み立ての実データ。保管 = dashboardInsights のみ未移行モックコレクション（Phase D）。生成前に ensureIntegratedLoaded を await・取得失敗時は生成しない） |
-| `useAkebonoImports` | データ取込・連携（F-32。デュアルモード: API = `/v1/akebono/import-sources`〔config = 方式別設定〕・`/import-mappings`〔方式別ロケータ〕・`/import-runs`。取込元 = 論理削除で取消/復元・マッピング = 新版で上書き〔旧版は履歴〕= 原則9.5）。方式別マッピング編集の左辺 = 取込元（CSV 列/固定長バイト範囲/JSON キー）・右辺 = `useAppFields(targetEntity)` の有効項目。解析は純関数 `shared/domain/import-parse`（parseCsvColumns/extractJsonKeys）をフロント/API 共有 |
+| `useAkebonoImports` | データ取込・連携（F-32。デュアルモード: API = `/v1/akebono/import-sources`〔config = 方式別設定〕・`/import-mappings`〔方式別ロケータ〕・`/import-runs`。取込元 = 論理削除で取消/復元・マッピング = 新版で上書き〔旧版は履歴〕= 原則9.5）。方式別マッピング編集の左辺 = 取込元（CSV 列/固定長バイト範囲/JSON キー）・右辺 = `useAppFields(targetEntity)` の有効項目。解析は純関数 `shared/domain/import-parse`（parseCsvColumns/extractJsonKeys）をフロント/API 共有。バリアント軸取込（product_variant = グルーピングキー＋バリアント軸列の指定）と参照項目の突合キー（lookupField）のカタログ/検証は `shared/domain/import-link` を共有（2026-08-07） |
 | `useDocuments` | ドキュメントツリー・タグ・検索 |
 | `useToast` / `useConfirm` | UI フィードバック |
 | `useAppSettings` | 外部リンク・機能トグル・各種ルール設定・汎用設定（`appConfigs` の getConfig/setConfig）・デモリセット |

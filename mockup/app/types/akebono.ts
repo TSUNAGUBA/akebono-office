@@ -479,7 +479,8 @@ export interface PaymentReceipt {
 // ---------- データ取込（F-32） ----------
 
 export type ImportMethod = 'file_csv' | 'file_fixed' | 'file_json' | 'api_pull' | 'sheets_pull'
-export type ImportTargetEntity = 'product' | 'sku' | 'company' | 'sales_record' | 'inventory'
+/** product_variant = 商品＋SKU バリアント展開（グルーピングキー＋バリアント軸列で取込。0053） */
+export type ImportTargetEntity = 'product' | 'sku' | 'company' | 'sales_record' | 'inventory' | 'product_variant'
 export type ImportRunStatus = 'staged' | 'validated' | 'applied' | 'failed' | 'reverted'
 
 export type ImportAuthType = 'none' | 'bearer' | 'api_key' | 'basic'
@@ -538,6 +539,8 @@ export interface ImportFieldMap {
   byteEnd?: number | null
   /** JSON/API: JSON キー（ドットパス可。0043） */
   jsonKey?: string | null
+  /** 参照項目の突合キー（参照先マスタのどの項目と突合するか。null/未設定 = 既定の ID → 名称/コード解決。0053） */
+  lookupField?: string | null
 }
 
 export interface ImportMapping {

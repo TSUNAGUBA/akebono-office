@@ -12,9 +12,16 @@
  *   SSRF 対策 = lib/safe-fetch）から取得 → マッピング適用（shared/domain/import-run）→ 検証 →
  *   対象テーブルへ反映（商品/SKU/取引先 = upsert・売上/在庫 = フィンガープリント冪等の追記）。
  *   エラー行は隔離して残りを反映する（原則4）。再実行は upsert / ON CONFLICT スキップで冪等（原則2）。
+ * - バリアント軸取込（target_entity = 'product_variant'。2026-08-07）: グルーピングキー（商品コード）で
+ *   行を商品へ束ね、SKU コード = レコード固有 ID・バリアント軸1/2 の値列（列名 = 軸ラベル）で
+ *   商品＋SKU を同時に upsert する（カラー×サイズ等の 2 次元バリアント表の縦持ちデータを想定）。
+ * - マスタ間連携キー（突合キー lookupField。2026-08-07）: 参照項目（得意先・セグメント・SKU 等）を
+ *   参照先マスタのどの項目（ID/名称/SKU コード/JAN/取引先カスタム項目）と突合して解決するかを
+ *   マッピング行ごとに設定できる（shared/domain/import-link のカタログで検証。未設定 = 従来の既定解決）。
  * - エラーコード: AKO-IMP-001（取込元名未入力）/ AKO-IMP-002（有効マッピングなし）/
  *   AKO-IMP-003（マッピング項目なし）/ AKO-IMP-004（取込内容なし・復号不可）/ AKO-IMP-005（取込元が無効）/
- *   AKO-IMP-006（行数超過）/ AKO-IMP-007（API 接続失敗）/ AKO-IMP-008（マッピング定義不備）。台帳 = api-design §4。
+ *   AKO-IMP-006（行数超過）/ AKO-IMP-007（API 接続失敗）/ AKO-IMP-008（マッピング定義不備 =
+ *   突合キー不正・バリアント必須項目欠落を含む。保存時と実行時の両方で検証）。台帳 = api-design §4。
  */
 import { createHash } from 'node:crypto'
 import { Hono } from 'hono'
@@ -25,6 +32,10 @@ import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
 import { safeFetch } from '../lib/safe-fetch'
 import { capCp } from '../lib/text'
+import {
+  importRefTargetOf, isValidLookupField, lookupKeyLabel, validateImportMapping, variantAxisLabelsOf,
+  VARIANT_IMPORT_FIELDS, type ImportRefTarget,
+} from '../../../shared/domain/import-link'
 import { normalizeFieldLocators, normalizeImportSourceConfig, rowsToCsv } from '../../../shared/domain/import-parse'
 import {
   extractCsvRecords, extractFixedRecords, extractJsonRecords, MAX_IMPORT_ROWS,
@@ -35,7 +46,7 @@ import { fetchSheetRows } from './sheets'
 import { nextDocCode, postInventory } from './akebono-trade'
 
 const IMPORT_METHODS = ['file_csv', 'file_fixed', 'file_json', 'api_pull', 'sheets_pull']
-const IMPORT_ENTITIES = ['product', 'sku', 'company', 'sales_record', 'inventory']
+const IMPORT_ENTITIES = ['product', 'sku', 'company', 'sales_record', 'inventory', 'product_variant']
 
 const SRC_COLS = `id, name, method, encoding, target_entity AS "targetEntity", schedule, active, config`
 const MAP_COLS = `id, source_id AS "sourceId", version, status, fields,
@@ -54,6 +65,8 @@ export interface ImportFieldInput {
   byteStart: number | null
   byteEnd: number | null
   jsonKey: string | null
+  /** 参照項目の突合キー（import-link カタログで検証。null = 既定の ID → 名称/コード解決） */
+  lookupField: string | null
 }
 
 /**
@@ -164,6 +177,112 @@ async function loadNameLookup(db: pg.Pool | pg.PoolClient, table: string): Promi
   return new Map(rows.map(r => [r.id, r.name]))
 }
 
+// ---------- マスタ間連携キー（突合キー lookupField。2026-08-07） ----------
+
+/** 参照先マスタ（import-link の refEntity）→ 実テーブル。SQL への識別子はこの表経由のみ（注入防止） */
+const REF_TABLES: Record<ImportRefTarget['refEntity'], string> = {
+  segment: 'business_segments', category: 'product_categories', company: 'companies',
+  tax_rate: 'tax_rates', unit: 'units', industry: 'industries', warehouse: 'warehouses',
+  sku: 'product_skus',
+}
+
+interface RefLookup {
+  resolve: (value: string) => string | null
+  /** 突合キーの表示名（隔離メッセージ用）。null = 既定（ID → 名称の自動解決） */
+  keyLabel: string | null
+}
+
+/**
+ * マッピング項目の突合キー（lookupField）を取り出しカタログで検証する。
+ * 保存時（validateImportMapping）に検証済みだが、旧版マッピングや手組みデータへの再防衛として
+ * 実行時にも不正はマッピング定義エラー（AKO-IMP-008）で止める。
+ */
+function refLookupSpec(
+  targetEntity: string, fields: ImportRunFieldDef[], itemKey: string,
+): { target: ImportRefTarget; lookupField: string | null } {
+  const target = importRefTargetOf(targetEntity, itemKey)
+  if (!target) throw err('AKO-IMP-008', `対象項目「${itemKey}」は参照項目ではありません（内部不整合）`, 400)
+  // 重複割当は保存時に拒否済みだが、旧版マッピングでは値の抽出（最後の行勝ち）と揃え最終行を採用する
+  const lf = fields.findLast(f => f.targetItemKey === itemKey)?.lookupField ?? null
+  if (lf && !isValidLookupField(target, lf)) {
+    throw err('AKO-IMP-008', `対象項目「${itemKey}」の突合キー「${lf}」は使えません（マッピングを保存し直してください）`, 400)
+  }
+  return { target, lookupField: lf }
+}
+
+/**
+ * 参照マスタの解決器を作る。突合キー未設定（null）は従来の既定（ID → 有効行の名称完全一致）で解決し、
+ * 設定時は指定項目（id / name / custom.<key>）の有効行完全一致・一意のときのみ解決する
+ * （0 件・複数一致は null = 呼び出し側で隔離）。custom キーはパラメータで渡す（注入防止）。
+ */
+async function refLookupOf(
+  db: pg.Pool | pg.PoolClient, target: ImportRefTarget, lookupField: string | null,
+): Promise<RefLookup> {
+  // SKU 参照はテーブル構造が異なる（name 列なし・code/janCode）ため per-row の skuCondOf 経由のみ。
+  // 誤ってここへ来たら暗黙のフォールバックで誤突合させず止める（監査指摘 2026-08-07）
+  if (target.refEntity === 'sku') {
+    throw err('AKO-IMP-008', 'SKU 参照はマスタ表引きでは解決できません（内部不整合）', 400)
+  }
+  const table = REF_TABLES[target.refEntity]
+  if (!lookupField) {
+    const map = await loadNameLookup(db, table)
+    return { resolve: v => resolveByIdOrName(map, v), keyLabel: null }
+  }
+  const params: unknown[] = []
+  let expr: string
+  if (lookupField === 'id') {
+    expr = 'id'
+  } else if (lookupField === 'name') {
+    expr = 'name'
+  } else if (lookupField.startsWith('custom.')) {
+    expr = 'custom->>$1'
+    params.push(lookupField.slice('custom.'.length))
+  } else {
+    // カタログ検証（refLookupSpec）を通過しないキーの暗黙 id フォールバックは誤突合の温床のため遮断
+    throw err('AKO-IMP-008', `突合キー「${lookupField}」は使えません（マッピングを保存し直してください）`, 400)
+  }
+  const { rows } = await db.query<{ id: string; v: string | null }>(
+    `SELECT id, ${expr} AS v FROM ${table} WHERE active = true`, params)
+  const map = new Map<string, string[]>()
+  for (const r of rows) {
+    if (r.v == null || r.v === '') continue
+    map.set(r.v, [...(map.get(r.v) ?? []), r.id])
+  }
+  return {
+    resolve: (v) => {
+      const ids = map.get(v)
+      return ids && ids.length === 1 ? ids[0]! : null
+    },
+    keyLabel: lookupKeyLabel(target, lookupField),
+  }
+}
+
+/** 参照項目の解決器（突合キーの検証込み）。apply 系が対象項目ごとに 1 回だけ作る */
+async function importRefLookup(
+  db: pg.Pool | pg.PoolClient, targetEntity: string, fields: ImportRunFieldDef[], itemKey: string,
+): Promise<RefLookup> {
+  const { target, lookupField } = refLookupSpec(targetEntity, fields, itemKey)
+  return refLookupOf(db, target, lookupField)
+}
+
+/** 参照未解決の隔離メッセージ（突合キー設定時はキー名を明示。既定は従来文言 = 下位互換） */
+function unresolvedRefMsg(label: string, raw: string, lk: RefLookup): string {
+  return lk.keyLabel
+    ? `${label}「${raw}」を突合キー（${lk.keyLabel}）で解決できない（未登録・複数一致・無効）ため隔離`
+    : `${label}「${raw}」がマスタ未登録のため隔離`
+}
+
+/** SKU 参照の突合条件（product_skus s に対する WHERE 断片。値は $1）。null = 既定（ID → 有効 SKU コード）。
+ *  明示指定時は有効行のみ（refLookupOf と同じ宣言）。既定の id 素通しは従来挙動の維持（下位互換） */
+function skuCondOf(lookupField: string | null): { cond: string; keyLabel: string | null } {
+  switch (lookupField) {
+    case 'id': return { cond: 's.id = $1 AND s.active = true', keyLabel: 'ID' }
+    case 'code': return { cond: 's.code = $1 AND s.active = true', keyLabel: 'SKUコード' }
+    case 'janCode': return { cond: 's.jan_code = $1 AND s.active = true', keyLabel: 'JANコード' }
+    default: return { cond: '(s.id = $1 OR (s.code = $1 AND s.active = true))', keyLabel: null }
+  }
+}
+
 const NUM_RE = /^-?\d+(\.\d+)?$/
 
 /** 数値項目のパース（空 = null。非数値は undefined = 呼び出し側で隔離） */
@@ -205,11 +324,11 @@ async function applyProducts(
     'code', 'name', 'segmentId', 'categoryId', 'defaultSupplierCompanyId', 'listPrice', 'standardCost',
     'taxRateId', 'unitId', 'variantAxes', 'billingType', 'description',
   ]), true)
-  const segments = await loadNameLookup(db, 'business_segments')
-  const categories = await loadNameLookup(db, 'product_categories')
-  const companies = await loadNameLookup(db, 'companies')
-  const taxRates = await loadNameLookup(db, 'tax_rates')
-  const units = await loadNameLookup(db, 'units')
+  const segments = await importRefLookup(db, 'product', fields, 'segmentId')
+  const categories = await importRefLookup(db, 'product', fields, 'categoryId')
+  const companies = await importRefLookup(db, 'product', fields, 'defaultSupplierCompanyId')
+  const taxRates = await importRefLookup(db, 'product', fields, 'taxRateId')
+  const units = await importRefLookup(db, 'product', fields, 'unitId')
   const out: ApplyOutcome = { applied: 0, skipped: 0, issues: [] }
 
   for (const rec of records) {
@@ -218,8 +337,9 @@ async function applyProducts(
     const code = v.code ?? ''
     const name = v.name ?? ''
     if (!code) { fail('商品コードが空のため隔離'); continue }
-    const seg = v.segmentId ? resolveByIdOrName(segments, v.segmentId) : null
-    // 参照解決（id or 有効行の名称完全一致）。未解決は隔離（マスタ整備 → 再実行で取り込める = 冪等）
+    const seg = v.segmentId ? segments.resolve(v.segmentId) : null
+    // 参照解決（既定 = id or 有効行の名称完全一致・突合キー設定時は指定項目）。未解決は隔離
+    // （マスタ整備 → 再実行で取り込める = 冪等）
     const refs: Record<string, string | null> = {}
     let refError = ''
     for (const [key, lookup, label] of [
@@ -228,8 +348,8 @@ async function applyProducts(
     ] as const) {
       const raw = v[key] ?? ''
       if (raw === '') { refs[key] = null; continue }
-      const id = resolveByIdOrName(lookup, raw)
-      if (!id) { refError = `${label}「${raw}」がマスタ未登録のため隔離`; break }
+      const id = lookup.resolve(raw)
+      if (!id) { refError = unresolvedRefMsg(label, raw, lookup); break }
       refs[key] = id
     }
     if (refError) { fail(refError); continue }
@@ -291,7 +411,12 @@ async function applyProducts(
 
     // 新規作成（作成必須 = code・name・segmentId は POST /products と同じ）
     if (!name) { fail(`商品「${code}」は未登録のため新規作成が必要ですが商品名が空のため隔離`); continue }
-    if (!seg) { fail(`事業セグメント「${v.segmentId ?? ''}」を解決できないため隔離`); continue }
+    if (!seg) {
+      fail(segments.keyLabel
+        ? unresolvedRefMsg('事業セグメント', v.segmentId ?? '', segments)
+        : `事業セグメント「${v.segmentId ?? ''}」を解決できないため隔離`)
+      continue
+    }
     try {
       await rowWrite(db, async () => {
         const id = newId('prd')
@@ -358,12 +483,229 @@ async function applySkus(
   return out
 }
 
+/**
+ * 商品＋SKU バリアント展開（product_variant。2026-08-07）: グルーピングキー（productCode）で行を商品へ
+ * 束ね、SKU コード（code = レコード固有 ID）で SKU を upsert する。バリアント軸ラベルは
+ * axis1Value / axis2Value に割り当てた取込元列の論理名（sourceField。例: カラー/サイズ）。
+ * 新規商品は既定 SKU を作らない（実 SKU が本取込で入る）。既存商品へ実 SKU が新規追加されたら
+ * 既定 SKU を無効化する（SKU マトリクス生成 POST /products/:id/skus/matrix と同一挙動）。
+ * 再実行は商品・SKU とも upsert = 冪等（原則2）。商品レベルの失敗はグループ全行を隔離する。
+ * 検証順序: グループ検証 → 行検証（価格・SKU 衝突）→ 商品書込 → SKU 書込。全行隔離のグループは
+ * 商品を書かない = status='failed' の run はデータを変更しない（検証起因の隔離に限る。独立レビュー是正）。
+ * SKU 突合は有効な実 SKU（NOT is_default）のみ = 既定 SKU コードとの衝突行は新規 SKU として作成し
+ * 無効化で置き換える（更新→無効化の非冪等を防ぐ）。
+ */
+async function applyProductVariants(
+  db: pg.PoolClient, records: ImportRecord[], fields: ImportRunFieldDef[],
+): Promise<ApplyOutcome> {
+  assertKnownTargets(fields, new Set(VARIANT_IMPORT_FIELDS.map(f => f.key)), true)
+  // 保存時検証の再防衛（旧データ・手組みマッピングでも実行前に構造不備を止める）
+  const structErr = validateImportMapping('product_variant', fields)
+  if (structErr) throw err('AKO-IMP-008', structErr, 400)
+  const { axis1Label, axis2Label } = variantAxisLabelsOf(fields)
+  const segments = await importRefLookup(db, 'product_variant', fields, 'segmentId')
+  const categories = await importRefLookup(db, 'product_variant', fields, 'categoryId')
+  const out: ApplyOutcome = { applied: 0, skipped: 0, issues: [] }
+
+  // グルーピングキー（productCode）で商品グループへ（出現順維持）。キー欠落行は先に隔離
+  const groups = new Map<string, ImportRecord[]>()
+  for (const rec of records) {
+    const fail = (message: string): void => { out.issues.push({ rowNo: rec.rowNo, rawText: rec.raw, message }) }
+    if (!(rec.values.productCode ?? '')) { fail('商品コード（グルーピングキー）が空のため隔離'); continue }
+    if (!(rec.values.code ?? '')) { fail('SKUコード（固有ID）が空のため隔離'); continue }
+    const key = rec.values.productCode!
+    groups.set(key, [...(groups.get(key) ?? []), rec])
+  }
+
+  for (const [productCode, recs] of groups) {
+    const failGroup = (message: string): void => {
+      for (const rec of recs) out.issues.push({ rowNo: rec.rowNo, rawText: rec.raw, message })
+    }
+    // 商品項目はグループ先頭の非空値を採用（同一キーの行間で値が割れても先勝ち = 決定的）
+    const firstOf = (key: string): string => recs.map(r => r.values[key] ?? '').find(s => s !== '') ?? ''
+    const name = firstOf('productName')
+    const segRaw = firstOf('segmentId')
+    const seg = segRaw ? segments.resolve(segRaw) : null
+    if (segRaw && !seg) { failGroup(unresolvedRefMsg('事業セグメント', segRaw, segments)); continue }
+    const catRaw = firstOf('categoryId')
+    const cat = catRaw ? categories.resolve(catRaw) : null
+    if (catRaw && !cat) { failGroup(unresolvedRefMsg('商品カテゴリ', catRaw, categories)); continue }
+    const listPrice = numOf(firstOf('listPrice'))
+    const standardCost = numOf(firstOf('standardCost'))
+    if (listPrice === undefined || standardCost === undefined) { failGroup('商品価格が数値でないため隔離'); continue }
+    if ((listPrice !== null && (listPrice < 0 || listPrice > 1e12))
+      || (standardCost !== null && (standardCost < 0 || standardCost > 1e12))) {
+      failGroup('商品価格が範囲外（0〜1 兆）のため隔離')
+      continue
+    }
+    // 商品カスタム項目（custom.*）: グループ内の先勝ちでマージ
+    const custom: Record<string, string> = {}
+    for (const rec of recs) {
+      for (const [k, cv] of Object.entries(customOf(rec.values))) {
+        if (!(k in custom)) custom[k] = cv
+      }
+    }
+
+    // 商品の特定（applyProducts と同じ (segment, code) 有効行キー。書込はまだ行わない）
+    const { rows: existing } = await db.query<{ id: string; custom: Record<string, unknown> }>(
+      `SELECT id, custom FROM products WHERE code = $1 AND active = true
+         AND ($2::text IS NULL OR segment_id = $2) ORDER BY created_at LIMIT 2`,
+      [productCode, seg])
+    if (existing.length > 1) { failGroup(`商品コード「${productCode}」が複数セグメントに存在します（セグメント列を指定してください）`); continue }
+    let productId = existing[0]?.id ?? null
+
+    // 新規作成の前提（code・name・segmentId 必須 = POST /products と同じ）も商品書込前に確定する
+    if (!productId) {
+      if (!name) { failGroup(`商品「${productCode}」は未登録のため新規作成が必要ですが商品名が空のため隔離`); continue }
+      if (!seg) { failGroup('事業セグメントが空のため隔離（新規商品の作成に必須。セグメント列の割り当てと値が必要です）'); continue }
+    }
+
+    // 行レベルの事前検証（価格・SKU コード衝突）を商品書込より前に確定する:
+    // 全行隔離になるグループは商品を書かず、「status=failed なのに商品が変わる」経路を作らない（監査/レビュー指摘）。
+    // SKU 突合は**既定 SKU を除外**（既定 SKU のコード = 商品コードと衝突する行は実 SKU として新規作成し、
+    // 既定 SKU は後段の無効化で置き換える = マトリクス生成と同じ収束。更新→無効化の非冪等を防ぐ = レビュー MAJOR）
+    interface RowPlan { rec: ImportRecord; sellPrice: number | null; costPrice: number | null; skuId: string | null }
+    const plans: RowPlan[] = []
+    for (const rec of recs) {
+      const v = rec.values
+      const fail = (message: string): void => { out.issues.push({ rowNo: rec.rowNo, rawText: rec.raw, message }) }
+      const sellPrice = numOf(v.sellPrice)
+      const costPrice = numOf(v.costPrice)
+      if (sellPrice === undefined || costPrice === undefined) { fail('SKU 価格が数値でないため隔離'); continue }
+      if ((sellPrice !== null && (sellPrice < 0 || sellPrice > 1e12))
+        || (costPrice !== null && (costPrice < 0 || costPrice > 1e12))) {
+        fail('SKU 価格が範囲外（0〜1 兆）のため隔離')
+        continue
+      }
+      // 有効 SKU を既定も含めて取得: 別商品のヒットは既定/実を問わず隔離（誤マッピングの混線防止）。
+      // 自商品の既定 SKU ヒットのみ「更新せず新規の実 SKU を作成」（後段の無効化で置き換え = 非冪等の排除）
+      const { rows: skuRows } = await db.query<{ id: string; productId: string; isDefault: boolean }>(
+        `SELECT id, product_id AS "productId", is_default AS "isDefault" FROM product_skus
+          WHERE code = $1 AND active = true LIMIT 5`, [v.code!])
+      const realHits = skuRows.filter(s => !s.isDefault)
+      if (realHits.length > 1) { fail(`SKUコード「${v.code}」が一意でないため隔離`); continue }
+      const hit = realHits[0] ?? null
+      // 商品未登録（これから作成）のときのヒットは必ず別商品の SKU
+      if (hit && (!productId || hit.productId !== productId)) { fail(`SKUコード「${v.code}」は別の商品に登録済みのため隔離`); continue }
+      if (!hit && skuRows.some(s => s.isDefault && (!productId || s.productId !== productId))) {
+        fail(`SKUコード「${v.code}」は別の商品に登録済みのため隔離`)
+        continue
+      }
+      plans.push({ rec, sellPrice, costPrice, skuId: hit?.id ?? null })
+    }
+    if (plans.length === 0) continue // 全行隔離 = 商品も書かない
+    const failPlans = (message: string): void => {
+      for (const p of plans) out.issues.push({ rowNo: p.rec.rowNo, rawText: p.rec.raw, message })
+    }
+
+    // 商品の upsert（有効な行が 1 行以上あるときのみ）
+    if (productId) {
+      // 空セルは「変更しない」（取込で既存値を消さない）。軸ラベルはマッピングで軸を割り当てたときのみ更新
+      const sets: string[] = []
+      const params: unknown[] = [productId]
+      const push = (col: string, val: unknown): void => { params.push(val); sets.push(`${col} = $${params.length}`) }
+      if (name) push('name', capCp(name, 200))
+      if (seg) push('segment_id', seg)
+      if (cat) push('category_id', cat)
+      if (listPrice !== null) push('list_price', listPrice)
+      if (standardCost !== null) push('standard_cost', standardCost)
+      if (axis1Label) push('variant_axis1_label', axis1Label)
+      if (axis2Label) push('variant_axis2_label', axis2Label)
+      if (Object.keys(custom).length > 0) push('custom', JSON.stringify({ ...(existing[0]!.custom ?? {}), ...custom }))
+      if (sets.length > 0) {
+        try {
+          await rowWrite(db, () => db.query(`UPDATE products SET ${sets.join(', ')}, updated_at = now() WHERE id = $1`, params))
+        } catch (e) {
+          failPlans((e as { code?: string }).code === '23505'
+            ? `商品コード「${productCode}」が移動先セグメントと衝突するため隔離`
+            : `商品「${productCode}」の更新に失敗したため隔離（${(e as Error).message}）`)
+          continue
+        }
+      }
+    } else {
+      // 新規作成（前提は検証済み）。既定 SKU は作らない（実 SKU が本取込で入る）
+      try {
+        productId = await rowWrite(db, async () => {
+          const id = newId('prd')
+          await db.query(
+            `INSERT INTO products (id, code, name, segment_id, category_id, list_price, standard_cost,
+               variant_axis1_label, variant_axis2_label, custom)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+            [id, productCode, capCp(name, 200), seg, cat, listPrice ?? 0, standardCost ?? 0,
+              axis1Label, axis2Label, JSON.stringify(custom)])
+          return id
+        })
+      } catch (e) {
+        failPlans(`商品「${productCode}」の作成に失敗したため隔離（${(e as Error).message}）`)
+        continue
+      }
+    }
+
+    // SKU の upsert（code = レコード固有 ID の有効な実 SKU 一致。既定 SKU は対象外）
+    let createdSkus = 0
+    /** グループ内の同一 SKU コード行: 2 行目以降は 1 行目の INSERT 結果への更新に収束させる */
+    const insertedByCode = new Map<string, string>()
+    for (const { rec, sellPrice, costPrice, skuId } of plans) {
+      const v = rec.values
+      const fail = (message: string): void => { out.issues.push({ rowNo: rec.rowNo, rawText: rec.raw, message }) }
+      const skuCode = v.code!
+      const effectiveId = skuId ?? insertedByCode.get(skuCode) ?? null
+      if (effectiveId) {
+        // 空セルは「変更しない」（既存値の意図しないクリアを防ぐ = applySkus と同じ）
+        const sets: string[] = []
+        const params: unknown[] = [effectiveId]
+        const push = (col: string, val: unknown): void => { params.push(val); sets.push(`${col} = $${params.length}`) }
+        if ((v.janCode ?? '') !== '') push('jan_code', capCp(v.janCode!, 100))
+        if ((v.axis1Value ?? '') !== '') push('axis1_value', capCp(v.axis1Value!, 100))
+        if ((v.axis2Value ?? '') !== '') push('axis2_value', capCp(v.axis2Value!, 100))
+        if (sellPrice !== null) push('sell_price', sellPrice)
+        if (costPrice !== null) push('cost_price', costPrice)
+        if (sets.length === 0) { out.skipped++; continue }
+        try {
+          await rowWrite(db, () => db.query(`UPDATE product_skus SET ${sets.join(', ')}, updated_at = now() WHERE id = $1`, params))
+          out.applied++
+        } catch (e) {
+          fail(`SKU「${skuCode}」の更新に失敗したため隔離（${(e as Error).message}）`)
+        }
+        continue
+      }
+      try {
+        const newSkuId = newId('sku')
+        await rowWrite(db, () => db.query(
+          `INSERT INTO product_skus (id, product_id, code, jan_code, axis1_value, axis2_value, sell_price, cost_price)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [newSkuId, productId, skuCode,
+            (v.janCode ?? '') !== '' ? capCp(v.janCode!, 100) : null,
+            (v.axis1Value ?? '') !== '' ? capCp(v.axis1Value!, 100) : null,
+            (v.axis2Value ?? '') !== '' ? capCp(v.axis2Value!, 100) : null,
+            sellPrice, costPrice]))
+        insertedByCode.set(skuCode, newSkuId)
+        createdSkus++
+        out.applied++
+      } catch (e) {
+        fail(`SKU「${skuCode}」の作成に失敗したため隔離（${(e as Error).message}）`)
+      }
+    }
+
+    // 実 SKU が新規に入った商品は既定 SKU を無効化（SKU マトリクス生成と同一挙動 = 展開ありへ移行）。
+    // 補助処理のため失敗しても反映済み行は取り消さない（原則4）
+    if (createdSkus > 0) {
+      try {
+        await rowWrite(db, () => db.query(
+          `UPDATE product_skus SET active = false, updated_at = now() WHERE product_id = $1 AND is_default AND active`,
+          [productId]))
+      } catch { /* 既定 SKU の無効化失敗は無視（再実行・SKU 画面から回復可能） */ }
+    }
+  }
+  return out
+}
+
 /** 取引先（company）: 有効行の会社名完全一致の upsert（同名複数 = 隔離） */
 async function applyCompanies(
   db: pg.PoolClient, records: ImportRecord[], fields: ImportRunFieldDef[],
 ): Promise<ApplyOutcome> {
   assertKnownTargets(fields, new Set(['name', 'kind', 'industryId', 'size', 'location', 'description']), true)
-  const industries = await loadNameLookup(db, 'industries')
+  const industries = await importRefLookup(db, 'company', fields, 'industryId')
   const out: ApplyOutcome = { applied: 0, skipped: 0, issues: [] }
   for (const rec of records) {
     const v = rec.values
@@ -374,8 +716,8 @@ async function applyCompanies(
     const kind = kindRaw === '' ? null : (kindRaw === 'self' || kindRaw === '自社' ? 'self' : kindRaw === 'customer' || kindRaw === '顧客' ? 'customer' : undefined)
     if (kind === undefined) { fail(`区分「${kindRaw}」を解釈できないため隔離（self/customer）`); continue }
     const industryRaw = v.industryId ?? ''
-    const industryId = industryRaw === '' ? null : resolveByIdOrName(industries, industryRaw)
-    if (industryRaw !== '' && !industryId) { fail(`業界「${industryRaw}」がマスタ未登録のため隔離`); continue }
+    const industryId = industryRaw === '' ? null : industries.resolve(industryRaw)
+    if (industryRaw !== '' && !industryId) { fail(unresolvedRefMsg('業界', industryRaw, industries)); continue }
     const custom = customOf(v)
     const { rows } = await db.query<{ id: string; industryIds: string[]; custom: Record<string, unknown> }>(
       `SELECT id, industry_ids AS "industryIds", custom FROM companies WHERE name = $1 AND active = true LIMIT 2`, [name])
@@ -424,8 +766,9 @@ async function applySalesRecords(
   db: pg.PoolClient, sourceId: string, records: ImportRecord[], fields: ImportRunFieldDef[],
 ): Promise<ApplyOutcome> {
   assertKnownTargets(fields, new Set(['salesDate', 'companyId', 'segmentId', 'skuId', 'qty', 'unitPrice', 'channel']), true)
-  const segments = await loadNameLookup(db, 'business_segments')
-  const companies = await loadNameLookup(db, 'companies')
+  const segments = await importRefLookup(db, 'sales_record', fields, 'segmentId')
+  const companies = await importRefLookup(db, 'sales_record', fields, 'companyId')
+  const skuCond = skuCondOf(refLookupSpec('sales_record', fields, 'skuId').lookupField)
   /** ファイル内の同一内容行の出現序数（フィンガープリントの一部 = MINOR-7 対応） */
   const seen = new Map<string, number>()
   const out: ApplyOutcome = { applied: 0, skipped: 0, issues: [] }
@@ -434,17 +777,22 @@ async function applySalesRecords(
     const fail = (message: string): void => { out.issues.push({ rowNo: rec.rowNo, rawText: rec.raw, message }) }
     const salesDate = v.salesDate ?? ''
     if (!DATE_RE.test(salesDate)) { fail(`売上日「${salesDate}」が YYYY-MM-DD でないため隔離（変換に date を指定できます）`); continue }
-    const companyId = v.companyId ? resolveByIdOrName(companies, v.companyId) : null
-    if (!companyId) { fail(`得意先「${v.companyId ?? ''}」がマスタ未登録のため隔離`); continue }
-    const segmentId = v.segmentId ? resolveByIdOrName(segments, v.segmentId) : null
-    if (!segmentId) { fail(`事業セグメント「${v.segmentId ?? ''}」がマスタ未登録のため隔離`); continue }
-    // SKU は id → 有効 SKU コードの順で解決（取込ファイルは通常コードを持つ）
+    const companyId = v.companyId ? companies.resolve(v.companyId) : null
+    if (!companyId) { fail(unresolvedRefMsg('得意先', v.companyId ?? '', companies)); continue }
+    const segmentId = v.segmentId ? segments.resolve(v.segmentId) : null
+    if (!segmentId) { fail(unresolvedRefMsg('事業セグメント', v.segmentId ?? '', segments)); continue }
+    // SKU の突合（既定 = id → 有効 SKU コードの順。突合キー設定時は指定項目のみで解決）
     const skuRaw = v.skuId ?? ''
     const { rows: skuRows } = await db.query<{ id: string; costPrice: number | null; stdCost: number | null; billingType: string | null }>(
       `SELECT s.id, s.cost_price AS "costPrice", p.standard_cost AS "stdCost", p.billing_type AS "billingType"
        FROM product_skus s LEFT JOIN products p ON p.id = s.product_id
-       WHERE s.id = $1 OR (s.code = $1 AND s.active = true) LIMIT 2`, [skuRaw])
-    if (skuRows.length === 0) { fail(`SKU「${skuRaw}」がマスタ未登録のため隔離`); continue }
+       WHERE ${skuCond.cond} LIMIT 2`, [skuRaw])
+    if (skuRows.length === 0) {
+      fail(skuCond.keyLabel
+        ? `SKU「${skuRaw}」を突合キー（${skuCond.keyLabel}）で解決できないため隔離`
+        : `SKU「${skuRaw}」がマスタ未登録のため隔離`)
+      continue
+    }
     if (skuRows.length > 1) { fail(`SKU「${skuRaw}」が一意でないため隔離`); continue }
     const sku = skuRows[0]!
     const qty = Number(v.qty)
@@ -486,7 +834,8 @@ async function applyInventory(
   db: pg.PoolClient, sourceId: string, records: ImportRecord[], fields: ImportRunFieldDef[],
 ): Promise<ApplyOutcome> {
   assertKnownTargets(fields, new Set(['skuId', 'warehouseId', 'qty', 'kind', 'reason', 'occurredAt']), false)
-  const warehouses = await loadNameLookup(db, 'warehouses')
+  const warehouses = await importRefLookup(db, 'inventory', fields, 'warehouseId')
+  const skuCond = skuCondOf(refLookupSpec('inventory', fields, 'skuId').lookupField)
   const KIND_MAP: Record<string, string> = { adjust: 'adjust', stocktake: 'stocktake', 調整: 'adjust', 棚卸: 'stocktake' }
   const REASONS = new Set(['defective', 'lost', 'found', 'sample', 'stocktake', 'other'])
   const out: ApplyOutcome = { applied: 0, skipped: 0, issues: [] }
@@ -495,10 +844,13 @@ async function applyInventory(
     const fail = (message: string): void => { out.issues.push({ rowNo: rec.rowNo, rawText: rec.raw, message }) }
     const skuRaw = v.skuId ?? ''
     const { rows: skuRows } = await db.query<{ id: string }>(
-      `SELECT id FROM product_skus WHERE id = $1 OR (code = $1 AND active = true) LIMIT 2`, [skuRaw])
-    if (skuRows.length !== 1) { fail(`SKU「${skuRaw}」を特定できないため隔離`); continue }
-    const warehouseId = v.warehouseId ? resolveByIdOrName(warehouses, v.warehouseId) : null
-    if (!warehouseId) { fail(`倉庫「${v.warehouseId ?? ''}」がマスタ未登録のため隔離`); continue }
+      `SELECT s.id FROM product_skus s WHERE ${skuCond.cond} LIMIT 2`, [skuRaw])
+    if (skuRows.length !== 1) {
+      fail(`SKU「${skuRaw}」を特定できない${skuCond.keyLabel ? `（突合キー: ${skuCond.keyLabel}）` : ''}ため隔離`)
+      continue
+    }
+    const warehouseId = v.warehouseId ? warehouses.resolve(v.warehouseId) : null
+    if (!warehouseId) { fail(unresolvedRefMsg('倉庫', v.warehouseId ?? '', warehouses)); continue }
     const qty = Number(v.qty)
     if (!Number.isInteger(qty) || qty === 0 || Math.abs(qty) > 1_000_000) { fail(`増減数「${v.qty ?? ''}」が 0 以外の整数でないため隔離`); continue }
     const kind = KIND_MAP[v.kind ?? '']
@@ -526,9 +878,11 @@ async function applyInventory(
   return out
 }
 
-async function requireSource(db: pg.Pool | pg.PoolClient, id: string): Promise<void> {
-  const { rows } = await db.query(`SELECT 1 FROM import_sources WHERE id = $1`, [id])
+async function requireSource(db: pg.Pool | pg.PoolClient, id: string): Promise<{ targetEntity: string }> {
+  const { rows } = await db.query<{ targetEntity: string }>(
+    `SELECT target_entity AS "targetEntity" FROM import_sources WHERE id = $1`, [id])
   if (rows.length === 0) throw err('AKO-GEN-002', '取込元が見つかりません', 404)
+  return rows[0]!
 }
 
 export function akebonoImportsRoutes(pool: pg.Pool, env: Env): Hono {
@@ -609,10 +963,13 @@ export function akebonoImportsRoutes(pool: pg.Pool, env: Env): Hono {
     const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
     const sourceId = String(body.sourceId ?? '').trim()
     if (!sourceId) throw err('AKO-GEN-001', '取込元を指定してください', 400)
-    await requireSource(pool, sourceId)
+    const source = await requireSource(pool, sourceId)
     const id = newId('impm')
     const fields = importFieldsOf(id, body.fields)
     if (!fields) throw err('AKO-IMP-003', '取込元項目と対象項目キーを 1 行以上入力してください', 400)
+    // 突合キー・バリアント軸取込の構造検証（モック saveMapping と同一の共有関数 = 両モード parity）
+    const mapErr = validateImportMapping(source.targetEntity, fields)
+    if (mapErr) throw err('AKO-IMP-008', mapErr, 400)
     const created = await inTxn(pool, async (db) => {
       // 版番号の採番を直列化（並行 saveMapping の同一 version 二重採番 = 部分一意 INDEX 衝突を防ぐ = C-1 と同思想）
       await db.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`impmap:${sourceId}`])
@@ -718,11 +1075,21 @@ export function akebonoImportsRoutes(pool: pg.Pool, env: Env): Hono {
     const id = newId('impr')
     const created = await inTxn(pool, async (db) => {
       await db.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`imprun:${sourceId}`])
+      if (source.targetEntity === 'product_variant') {
+        // SKU の新規 INSERT を持つ唯一の取込対象。SKU コードは DB 一意制約を持たない
+        // （セグメント違いの同一商品コード = 同一既定 SKU コードが正当な既存データのため INDEX は張れない = 原則7）。
+        // 取込元をまたぐ並行実行での同一コード二重 INSERT はエンティティ単位の直列化で防ぐ（監査指摘 2026-08-07）。
+        // ロック順は常に「取込元 → エンティティ」= 循環しない（デッドロックなし）
+        await db.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, ['imprun-entity:product_variant'])
+      }
       const records = extracted.records
       let outcome: ApplyOutcome
       switch (source.targetEntity) {
         case 'product':
           outcome = await applyProducts(db, records, mapping.fields)
+          break
+        case 'product_variant':
+          outcome = await applyProductVariants(db, records, mapping.fields)
           break
         case 'sku':
           outcome = await applySkus(db, records, mapping.fields)

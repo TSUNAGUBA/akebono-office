@@ -83,12 +83,18 @@ describe('numOrNull / normalizeFieldLocators（方式別ロケータの正規化
   it('v-model.number 由来の空文字ロケータを null へ落とす（M1 の回帰防止）', () => {
     // 固定長で開始/終了を空にした行 = '' が来ても number|null に正規化される
     expect(normalizeFieldLocators({ byteStart: '', byteEnd: '' }))
-      .toEqual({ columnIndex: null, byteStart: null, byteEnd: null, jsonKey: null })
+      .toEqual({ columnIndex: null, byteStart: null, byteEnd: null, jsonKey: null, lookupField: null })
   })
   it('各ロケータを保持（columnIndex=0 も維持・空 jsonKey は null・trim）', () => {
     expect(normalizeFieldLocators({ columnIndex: 0, byteStart: 11, byteEnd: 20, jsonKey: ' code ' }))
-      .toEqual({ columnIndex: 0, byteStart: 11, byteEnd: 20, jsonKey: 'code' })
+      .toEqual({ columnIndex: 0, byteStart: 11, byteEnd: 20, jsonKey: 'code', lookupField: null })
     expect(normalizeFieldLocators({ jsonKey: '  ' }).jsonKey).toBeNull()
+  })
+  it('突合キー lookupField を保持（trim・空は null。0053 マスタ間連携キー）', () => {
+    expect(normalizeFieldLocators({ lookupField: ' custom.extCode ' }).lookupField).toBe('custom.extCode')
+    expect(normalizeFieldLocators({ lookupField: '' }).lookupField).toBeNull()
+    expect(normalizeFieldLocators({ lookupField: null }).lookupField).toBeNull()
+    expect(normalizeFieldLocators({}).lookupField).toBeNull()
   })
 })
 

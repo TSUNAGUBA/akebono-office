@@ -18,6 +18,7 @@ import type {
 import type { Result } from '~/types/domain'
 import { irange } from '~/utils/rng'
 import { nextCode } from '~/utils/akebono'
+import { validateImportMapping } from '~/utils/import-link'
 import { normalizeFieldLocators, normalizeImportSourceConfig } from '~/utils/import-parse'
 
 export const IMPORT_METHOD_LABELS: Record<ImportMethod, string> = {
@@ -28,12 +29,14 @@ export const IMPORT_METHOD_LABELS: Record<ImportMethod, string> = {
   sheets_pull: 'Google スプレッドシート',
 }
 export const IMPORT_ENTITY_LABELS: Record<ImportTargetEntity, string> = {
-  product: '商品', sku: 'SKU', company: '取引先', sales_record: '売上明細', inventory: '在庫',
+  product: '商品', product_variant: '商品＋SKU（バリアント展開）', sku: 'SKU',
+  company: '取引先', sales_record: '売上明細', inventory: '在庫',
 }
 
 /** 実取込の反映先コレクション（取込成功後にキャッシュを取り直す = 原則6） */
 const RELOAD_BY_ENTITY: Record<string, string[]> = {
   product: ['products', 'productSkus'],
+  product_variant: ['products', 'productSkus'],
   sku: ['productSkus'],
   company: ['companies'],
   sales_record: ['salesRecords'],
@@ -115,6 +118,13 @@ export function useAkebonoImports() {
   /** 新しいマッピング版を作成（既存 active は superseded に）。方式別に取込元を解析して人が確定する想定 */
   async function saveMapping(sourceId: string, fields: Omit<ImportFieldMap, 'id'>[]): Promise<Result> {
     const denied = adminGuard(); if (denied) return denied
+    // 突合キー・バリアント軸取込の構造検証（API POST /import-mappings と同一の共有関数 = 両モード parity）。
+    // 検証対象は保存される行（trim 後に空の行を除外した集合）= API 側 importFieldsOf の除外条件と一致させる
+    const targetEntity = sourceById(sourceId)?.targetEntity
+    if (targetEntity) {
+      const mapErr = validateImportMapping(targetEntity, fields.filter(f => f.sourceField.trim() && f.targetItemKey.trim()))
+      if (mapErr) return { ok: false, error: { code: 'AKO-IMP-008', message: mapErr } }
+    }
     if (isApi) {
       const res = await apiWrite<ImportMapping>('/v1/akebono/import-mappings', {
         body: { sourceId, fields }, reload: ['importMappings'],
@@ -127,7 +137,7 @@ export function useAkebonoImports() {
     const mapping: ImportMapping = {
       id, sourceId, version: nextVersion, status: 'active', createdAt: nowJstIso(),
       // ロケータは shared normalizeFieldLocators で正規化（API importFieldsOf と同一関数 = '' → null 等を両モード一致）
-      fields: fields.filter(f => f.sourceField && f.targetItemKey).map((f, i) => ({
+      fields: fields.filter(f => f.sourceField.trim() && f.targetItemKey.trim()).map((f, i) => ({
         id: `${id}-f${i}`, sourceField: f.sourceField, targetItemKey: f.targetItemKey, transform: f.transform,
         ...normalizeFieldLocators(f as unknown as Record<string, unknown>),
       })),

@@ -166,16 +166,20 @@ export interface ImportFieldLocators {
   byteStart: number | null
   byteEnd: number | null
   jsonKey: string | null
+  /** 参照項目の突合キー（参照先マスタのどの項目と突合するか。null = 既定の ID → 名称/コード解決） */
+  lookupField: string | null
 }
 
-/** マッピング項目の方式別ロケータを正規化（数値でない値・空 jsonKey は null）。モック saveMapping / API importFieldsOf が共有 */
+/** マッピング項目の方式別ロケータ・突合キーを正規化（数値でない値・空文字は null）。モック saveMapping / API importFieldsOf が共有 */
 export function normalizeFieldLocators(raw: Record<string, unknown>): ImportFieldLocators {
   const jk = raw.jsonKey != null && String(raw.jsonKey).trim() ? capCp(String(raw.jsonKey).trim(), 200) : null
+  const lf = raw.lookupField != null && String(raw.lookupField).trim() ? capCp(String(raw.lookupField).trim(), 120) : null
   return {
     columnIndex: numOrNull(raw.columnIndex),
     byteStart: numOrNull(raw.byteStart),
     byteEnd: numOrNull(raw.byteEnd),
     jsonKey: jk,
+    lookupField: lf,
   }
 }
 
