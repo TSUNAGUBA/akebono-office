@@ -1980,3 +1980,25 @@
 ### 59-2 検証（実測値）
 - [x] api typecheck green / unit **289 passed** / mockup typecheck green / **221 passed**（挙動変更なし = UI と
   カタログのみ。取込エンジン・保存形は不変のため integration は §58 の 234 から変更なし）
+### 59-x 反復レビュー（原則9）
+- [x] **独立レビュー / 監査（コードレビュアー + システム監査官・並行）第 1 巡**: MAJOR 0・MINOR 4（両者重複含む）・NIT 4。
+  全件是正:
+  - **MINOR（両者）: モックシードのマッピングが旧自由入力値（dateFormat/trim/numberFormat = no-op）のまま**で、
+    デモの初見が全行「（旧設定の値）」になる → カタログ値（date / '' / number / number）へ移行（設定系シードの整備。
+    実データ保護の原則7 対象外）。
+  - **MINOR（両者）: ImportFieldMap.transform の JSDoc が旧記述（dateFormat 等・空 = 恒等）** → カタログ参照＋実挙動
+    （'' = 変換なし・前後空白は常に除去・カタログ外は素通し）へ更新。
+  - **MINOR（両者）: akebono-menu-design §5.2 の変換値域（v1 構想 = zenhan/fixedValue/codeLookup 等）が実装と乖離** →
+    「実装済みの値域（SoT = IMPORT_TRANSFORMS）」の注記を追加（codeLookup 構想は lookupField として実装済みと明記）。
+    functional-requirements F-32-2 にも参照注記。
+  - **MINOR（監査）: 説明の伝達が title 属性のみでモバイルに届かない** → 変換選択中は行下に説明キャプションを常時表示
+    （可視テキスト。モーダル冒頭の散文列挙は要約へ縮約 = カタログとの二重管理も解消〔レビュー NIT〕）。
+  - **MINOR（レビュー）: select 化で最長ラベルが列の min-content を支配し横スクロールが早まる** → 右辺/変換列を
+    minmax(0, Nfr) 化（選択中は切詰め・ドロップダウンは全文）。
+  - **NIT（レビュー）: 「1:1 検証」テストは逆方向（switch 追加のカタログ更新漏れ）を検出できない** → テスト名を
+    「対応集合に固定」へ改め、変換追加時の 3 点同時更新（switch・カタログ・テスト）を注記。
+  - **NIT（レビュー）: 旧値 fallback option に title なし** → transformHint を付与。
+  - 許容（是正不要・記録）: 旧値からカタログ値へ切り替えると旧値 option が消える（キャンセルで復帰・版管理で旧版も
+    残る = 連携キーの既存パターンと同型）。
+- [x] **再検証（是正後）**: api typecheck green・unit **289 passed**・mockup typecheck green・**221 passed**。
+  第 2 巡で**指摘ゼロ**を確認して完了。

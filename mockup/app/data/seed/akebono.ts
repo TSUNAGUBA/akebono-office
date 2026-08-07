@@ -371,10 +371,12 @@ export const seedImportSources: ImportSource[] = [
 
 export const seedImportMappings: ImportMapping[] = [
   { id: 'impm-01', sourceId: 'imp-01', version: 1, status: 'active', createdAt: isoAt(midOf(M1)), fields: [
-    { id: 'impf-01', sourceField: '売上日', targetItemKey: 'salesDate', transform: 'dateFormat' },
-    { id: 'impf-02', sourceField: '商品コード', targetItemKey: 'skuCode', transform: 'trim' },
-    { id: 'impf-03', sourceField: '数量', targetItemKey: 'qty', transform: 'numberFormat' },
-    { id: 'impf-04', sourceField: '単価', targetItemKey: 'unitPrice', transform: 'numberFormat' },
+    // transform は IMPORT_TRANSFORMS（shared/domain/import-run）のカタログ値（選択式化 2026-08-07 ②。
+    // 旧自由入力値 dateFormat/numberFormat は no-op のためデモの見本としても不適だった）
+    { id: 'impf-01', sourceField: '売上日', targetItemKey: 'salesDate', transform: 'date' },
+    { id: 'impf-02', sourceField: '商品コード', targetItemKey: 'skuCode', transform: '' },
+    { id: 'impf-03', sourceField: '数量', targetItemKey: 'qty', transform: 'number' },
+    { id: 'impf-04', sourceField: '単価', targetItemKey: 'unitPrice', transform: 'number' },
   ] },
 ]
 

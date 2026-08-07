@@ -85,8 +85,10 @@ describe('applyImportTransform（値変換）', () => {
     expect(applyImportTransform('AbC', 'lower')).toBe('abc')
     expect(applyImportTransform('AbC', 'upper')).toBe('ABC')
   })
-  it('IMPORT_TRANSFORMS（UI 選択肢カタログ）は applyImportTransform の対応と 1:1（選択式化 2026-08-07）', () => {
-    // カタログの value 集合が実装の switch 分岐（'' = 既定 / number / date / upper / lower）と一致すること
+  it('IMPORT_TRANSFORMS（UI 選択肢カタログ）を現在の対応集合に固定（選択式化 2026-08-07）', () => {
+    // カタログの value 集合を実装の switch 分岐（'' = 既定 / number / date / upper / lower）に固定する。
+    // 注意: 逆方向（switch へ分岐を追加してカタログ更新を忘れる）は検出できない = 変換の追加時は
+    // applyImportTransform・IMPORT_TRANSFORMS・本テストの 3 点を同時に更新すること（カタログのコメントにも明記）
     expect(IMPORT_TRANSFORMS.map(t => t.value)).toEqual(['', 'number', 'date', 'upper', 'lower'])
     // 全選択肢にラベル・説明があること（UI の「何が起きるか」表示の材料）
     for (const t of IMPORT_TRANSFORMS) {

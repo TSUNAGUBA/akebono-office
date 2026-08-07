@@ -268,10 +268,12 @@ const AUTH_TYPE_OPTIONS = [
 
 /** マッピング行のグリッド列（方式で左辺の項目数が異なる。全列を文字列リテラルで JIT に露出） */
 const rowGridClass = computed(() => {
+  // select 列は minmax(0, Nfr) で min-content 拡張を抑止（選択式化で最長ラベルが列幅を支配しないように。
+  // 選択中の長いラベルは切詰め表示・ドロップダウン展開時は全文が読める）
   switch (mapMethod.value) {
-    case 'file_csv': case 'sheets_pull': return 'grid-cols-[52px_1fr_16px_1.3fr_0.8fr_34px]'
-    case 'file_fixed': return 'grid-cols-[64px_64px_1fr_16px_1.3fr_0.8fr_34px]'
-    default: return 'grid-cols-[1fr_16px_1.3fr_0.8fr_34px]'
+    case 'file_csv': case 'sheets_pull': return 'grid-cols-[52px_1fr_16px_minmax(0,1.3fr)_minmax(0,0.8fr)_34px]'
+    case 'file_fixed': return 'grid-cols-[64px_64px_1fr_16px_minmax(0,1.3fr)_minmax(0,0.8fr)_34px]'
+    default: return 'grid-cols-[1fr_16px_minmax(0,1.3fr)_minmax(0,0.8fr)_34px]'
   }
 })
 
@@ -694,8 +696,7 @@ function openRun(row: Record<string, unknown>): void {
         <p class="text-[12px] leading-relaxed text-sub">
           取込元の項目（左）を対象アプリ「{{ IMPORT_ENTITY_LABELS[selectedSource.targetEntity] }}」の項目（右）へ対応づけます。
           右辺の候補は対象アプリで有効な項目（既定＋カスタマイズ項目）です。
-          「変換」は取込時に値を整形する処理で、数値化（¥・カンマ除去）・日付化（YYYY-MM-DD へ統一）・大文字/小文字化から選べます
-          （「変換なし」= 値をそのまま。前後の空白は常に除去されます）。
+          「変換」は取込時に値を整形する処理で、選択式です（選ぶと行の下に説明を表示。前後の空白は常に除去されます）。
           保存すると新しい版になり、既存の有効版は旧版になります。
         </p>
 
@@ -905,13 +906,14 @@ function openRun(row: Record<string, unknown>): void {
                   <option value="">（未選択）</option>
                   <option v-for="o in targetFieldOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
                 </select>
-                <!-- 変換は選択式（何が起きるかを選択肢＋ツールチップで説明。オペレーター指示 2026-08-07 ②） -->
+                <!-- 変換は選択式（何が起きるかは行下の説明キャプションで表示 = title 非対応のモバイルにも届く） -->
                 <select v-model="r.transform" class="select" aria-label="変換" :title="transformHint(r.transform)">
                   <option v-for="o in IMPORT_TRANSFORMS" :key="o.value" :value="o.value" :title="o.hint">{{ o.label }}</option>
                   <!-- 旧版から読み込んだカタログ外の自由入力値: 黙って消さず可視化（連携キーの方針と同型） -->
                   <option
                     v-if="r.transform && !IMPORT_TRANSFORMS.some(o => o.value === r.transform)"
                     :value="r.transform"
+                    :title="transformHint(r.transform)"
                   >
                     {{ r.transform }}（旧設定の値）
                   </option>
@@ -920,6 +922,11 @@ function openRun(row: Record<string, unknown>): void {
                   <Trash2 class="h-4 w-4 text-crit" aria-hidden="true" />
                 </button>
               </div>
+
+              <!-- 変換の説明（選択中のみ。title ツールチップが出ないタッチ端末でも読める可視テキスト） -->
+              <p v-if="r.transform" class="pl-2 text-[11px] leading-relaxed text-muted">
+                変換: {{ transformHint(r.transform) }}
+              </p>
 
               <!-- マスタ間連携キー（参照項目のみ）: 参照先マスタのどの項目と突合して解決するか -->
               <div

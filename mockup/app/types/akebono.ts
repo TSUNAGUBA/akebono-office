@@ -529,7 +529,8 @@ export interface ImportFieldMap {
   sourceField: string
   /** 対象エンティティの項目キー（既定項目 itemKey または custom.<key>） */
   targetItemKey: string
-  /** 変換（trim / upper / dateFormat 等の識別子。空 = 恒等） */
+  /** 変換（IMPORT_TRANSFORMS = shared/domain/import-run のカタログ値。'' = 変換なし〔前後空白のみ除去〕。
+   *  カタログ外の旧自由入力値は素通し = '' と同挙動。UI は選択式 2026-08-07 ②） */
   transform: string
   /** CSV: 0 始まりの列番号（ヘッダ無し時の位置指定・ヘッダ有り時も併記。0043） */
   columnIndex?: number | null
