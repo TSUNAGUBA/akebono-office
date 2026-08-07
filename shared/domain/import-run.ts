@@ -47,7 +47,8 @@ function capRaw(s: string): string {
 
 /**
  * 変換の選択肢カタログ（マッピング UI の選択式表示 = オペレーター指示 2026-08-07 ②）。
- * applyImportTransform の対応と 1:1（変換を追加するときは両方を同時に更新すること）。
+ * applyImportTransform の対応と 1:1。変換を追加するときは applyImportTransform（switch）・本カタログ・
+ * api/test/unit/akebono-phase-d.test.ts の対応集合テストの 3 点を同時に更新すること（テストは片方向検証のため）。
  * value はマッピングの transform 列へそのまま保存される。'' = 変換なし（前後空白のみ除去）。
  */
 export const IMPORT_TRANSFORMS: { value: string; label: string; hint: string }[] = [
