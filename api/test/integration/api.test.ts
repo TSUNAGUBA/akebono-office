@@ -5603,6 +5603,18 @@ describe('Phase D: データ取込（F-32）・ダッシュボード保管（F-4
       await api('POST', '/v1/akebono/import-runs', { as: ADMIN, body: { sourceId: srcId, contentBase64: b64(csv2) } })
       const skus3 = ((await api('GET', '/v1/akebono/product-skus', { as: ADMIN })).json.data as SkuRow[]).filter(s => s.productId === pId)
       expect(skus3.find(s => s.code === 'VAR2-P1' && !s.isDefault)).toMatchObject({ janCode: '4900000000010', axis1Value: '赤' })
+      // 別商品の**既定 SKU** コード（= 他商品の商品コード）と衝突する行は隔離（第 2 巡監査 MINOR-A の回帰）
+      await api('POST', '/v1/akebono/products', {
+        as: ADMIN, body: { code: 'VAR2-OTHER', name: '別商品', segmentId: 'seg-01' },
+      })
+      const csv3 = header + 'VAR2-NEW,VAR2-OTHER,赤,S,誤マッピング商品,seg-01,100,\n'
+      const r4 = await api('POST', '/v1/akebono/import-runs', { as: ADMIN, body: { sourceId: srcId, contentBase64: b64(csv3) } })
+      const run4 = r4.json.data as { counts: Record<string, number>; errors: { message: string }[] }
+      expect(run4.counts).toMatchObject({ staged: 1, applied: 0, failed: 1 })
+      expect(run4.errors[0]!.message).toContain('別の商品')
+      // 全行隔離のためグループの商品も作られない
+      const products2 = (await api('GET', '/v1/akebono/products', { as: ADMIN })).json.data as ProductRow[]
+      expect(products2.some(p => p.code === 'VAR2-NEW')).toBe(false)
     })
 
     it('マスタ間連携キー（突合キー）: 取引先カスタム項目・SKU JAN で突合して取込・複数一致は隔離（0053）', async () => {

@@ -140,7 +140,11 @@ export function validateImportMapping(
     }
   }
   for (const [key, n] of refCounts) {
-    if (n > 1) return `参照項目「${key}」が複数行に割り当てられています（1 行にしてください）`
+    if (n > 1) {
+      // 他エラーと同じく和名で示す（参照先マスタ名 + 項目キー = UI の選択肢から特定可能な表記）
+      const refLabel = importRefTargetOf(targetEntity, key)!.refLabel
+      return `${refLabel}を参照する対象項目（${key}）が複数行に割り当てられています（1 行にしてください）`
+    }
   }
   if (targetEntity === 'product_variant') {
     const keys = fields.map(f => f.targetItemKey)

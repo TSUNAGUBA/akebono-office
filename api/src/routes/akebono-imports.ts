@@ -577,13 +577,20 @@ async function applyProductVariants(
         fail('SKU 価格が範囲外（0〜1 兆）のため隔離')
         continue
       }
-      const { rows: skuRows } = await db.query<{ id: string; productId: string }>(
-        `SELECT id, product_id AS "productId" FROM product_skus
-          WHERE code = $1 AND active = true AND NOT is_default LIMIT 2`, [v.code!])
-      if (skuRows.length > 1) { fail(`SKUコード「${v.code}」が一意でないため隔離`); continue }
-      const hit = skuRows[0] ?? null
-      // 商品未登録（これから作成）のときに既存の実 SKU がヒット = 必ず別商品の SKU
+      // 有効 SKU を既定も含めて取得: 別商品のヒットは既定/実を問わず隔離（誤マッピングの混線防止）。
+      // 自商品の既定 SKU ヒットのみ「更新せず新規の実 SKU を作成」（後段の無効化で置き換え = 非冪等の排除）
+      const { rows: skuRows } = await db.query<{ id: string; productId: string; isDefault: boolean }>(
+        `SELECT id, product_id AS "productId", is_default AS "isDefault" FROM product_skus
+          WHERE code = $1 AND active = true LIMIT 5`, [v.code!])
+      const realHits = skuRows.filter(s => !s.isDefault)
+      if (realHits.length > 1) { fail(`SKUコード「${v.code}」が一意でないため隔離`); continue }
+      const hit = realHits[0] ?? null
+      // 商品未登録（これから作成）のときのヒットは必ず別商品の SKU
       if (hit && (!productId || hit.productId !== productId)) { fail(`SKUコード「${v.code}」は別の商品に登録済みのため隔離`); continue }
+      if (!hit && skuRows.some(s => s.isDefault && (!productId || s.productId !== productId))) {
+        fail(`SKUコード「${v.code}」は別の商品に登録済みのため隔離`)
+        continue
+      }
       plans.push({ rec, sellPrice, costPrice, skuId: hit?.id ?? null })
     }
     if (plans.length === 0) continue // 全行隔離 = 商品も書かない
