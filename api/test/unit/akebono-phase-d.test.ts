@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  applyImportTransform, extractCsvRecords, extractFixedRecords, extractJsonRecords,
+  applyImportTransform, extractCsvRecords, extractFixedRecords, extractJsonRecords, IMPORT_TRANSFORMS,
 } from '../../../shared/domain/import-run'
 import { decodeImportBytes, importFieldsOf, splitLineBytes } from '../../src/routes/akebono-imports'
 import { normalizeDashboardInsight } from '../../src/routes/akebono-dashboard'
@@ -84,6 +84,15 @@ describe('applyImportTransform（値変換）', () => {
     expect(applyImportTransform('  abc ', '')).toBe('abc')
     expect(applyImportTransform('AbC', 'lower')).toBe('abc')
     expect(applyImportTransform('AbC', 'upper')).toBe('ABC')
+  })
+  it('IMPORT_TRANSFORMS（UI 選択肢カタログ）は applyImportTransform の対応と 1:1（選択式化 2026-08-07）', () => {
+    // カタログの value 集合が実装の switch 分岐（'' = 既定 / number / date / upper / lower）と一致すること
+    expect(IMPORT_TRANSFORMS.map(t => t.value)).toEqual(['', 'number', 'date', 'upper', 'lower'])
+    // 全選択肢にラベル・説明があること（UI の「何が起きるか」表示の材料）
+    for (const t of IMPORT_TRANSFORMS) {
+      expect(t.label.length).toBeGreaterThan(0)
+      expect(t.hint.length).toBeGreaterThan(0)
+    }
   })
 })
 

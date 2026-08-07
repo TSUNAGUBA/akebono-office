@@ -1959,3 +1959,24 @@
   監査 = 機能・セキュリティ・整合性の指摘ゼロ・文言 NIT 1 件（api-design §2 の「既定 SKU コード衝突」に自商品限定の修飾）
   → 即時是正（「自商品の既定 SKU コード衝突行のみ…別商品ヒットは既定/実を問わず隔離」へ追記）。
   **未解決指摘ゼロ = 原則9 の完了条件を充足し反復レビューを完了。**
+
+## 59. マッピング「変換」の選択式化（オペレーター指示 2026-08-07 ②）の完了条件（Definition of Done）
+
+> オペレーター指示 2026-08-07 ②「マッピングを設定の『変換』において、何を入力すべきなのか、入力すると何が起きるのかが
+> わからない。選択式にして説明付きにして選びやすいようにしてください」への対応。
+> ブランチ `claude/akebono-import-linking-scsqkq`（§58 マージ後に main から再作成）。
+
+### 59-1 実装
+- [x] **shared/domain/import-run.ts**: 変換カタログ `IMPORT_TRANSFORMS`（value/label/hint）を applyImportTransform と
+  同居で新設（1:1 を保つ = 変換追加時は両方更新のコメント明記。'' = 変換なし / number = 数値化〔¥・カンマ除去〕/
+  date = 日付化〔YYYY-MM-DD へ統一〕/ upper・lower = 大文字/小文字化。各選択肢に具体例つき説明）。
+- [x] **imports.vue**: 変換の自由入力（input）→ **選択式（select）**へ置換。選択肢ラベルに要約・title に具体例つき説明
+  （選択中の値の説明も select の title で表示）。モーダル冒頭の説明文も「変換 = 取込時に値を整形する処理」へ更新。
+  **旧版マッピングのカタログ外自由入力値（trim/dateFormat 等）は「（旧設定の値）」として可視化**（黙って消さない =
+  連携キーの消滅カスタムキー可視化と同型。実行時挙動は従来どおり素通し = 前後空白のみ除去で不変 = 原則7）。
+- [x] **utils/import-run.ts（新規）**: shared 再エクスポート（utils/import-parse・import-link と同型）。
+- [x] 単体テスト: IMPORT_TRANSFORMS の value 集合が applyImportTransform の分岐と一致・全選択肢に label/hint がある
+  ことを検証（api unit **289 passed** = +1）。
+### 59-2 検証（実測値）
+- [x] api typecheck green / unit **289 passed** / mockup typecheck green / **221 passed**（挙動変更なし = UI と
+  カタログのみ。取込エンジン・保存形は不変のため integration は §58 の 234 から変更なし）

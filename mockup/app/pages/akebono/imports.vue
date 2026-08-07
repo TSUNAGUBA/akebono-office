@@ -15,6 +15,7 @@ import type { FieldDef, TableColumn } from '~/types/ui'
 import { importRefTargetOf, isValidLookupField, VARIANT_IMPORT_FIELDS } from '~/utils/import-link'
 import type { ImportRefTarget } from '~/utils/import-link'
 import { parseCsvColumns, extractJsonKeys } from '~/utils/import-parse'
+import { IMPORT_TRANSFORMS } from '~/utils/import-run'
 import { fmtDateTime, fmtInt } from '~/utils/format'
 
 const imp = useAkebonoImports()
@@ -221,6 +222,12 @@ function defaultLookupLabel(itemKey: string): string {
 function onTargetItemChange(r: MapDraftRow): void {
   const t = refTargetOf(r.targetItemKey)
   if (!t || (r.lookupField && !isValidLookupField(t, r.lookupField))) r.lookupField = null
+}
+
+/** 変換の説明（選択中の値のツールチップ。カタログ外 = 旧設定の自由入力値は素通し挙動を明示） */
+function transformHint(value: string): string {
+  return IMPORT_TRANSFORMS.find(t => t.value === value)?.hint
+    ?? '旧設定の値です（未対応の変換名は「変換なし」と同じ挙動 = 前後の空白のみ除去）'
 }
 
 type MapDraftRow = {
@@ -686,7 +693,9 @@ function openRun(row: Record<string, unknown>): void {
       <div v-if="selectedSource" class="grid gap-3">
         <p class="text-[12px] leading-relaxed text-sub">
           取込元の項目（左）を対象アプリ「{{ IMPORT_ENTITY_LABELS[selectedSource.targetEntity] }}」の項目（右）へ対応づけます。
-          右辺の候補は対象アプリで有効な項目（既定＋カスタマイズ項目）です。変換に trim / upper / number / dateFormat 等を指定できます（空 = 恒等）。
+          右辺の候補は対象アプリで有効な項目（既定＋カスタマイズ項目）です。
+          「変換」は取込時に値を整形する処理で、数値化（¥・カンマ除去）・日付化（YYYY-MM-DD へ統一）・大文字/小文字化から選べます
+          （「変換なし」= 値をそのまま。前後の空白は常に除去されます）。
           保存すると新しい版になり、既存の有効版は旧版になります。
         </p>
 
@@ -896,7 +905,17 @@ function openRun(row: Record<string, unknown>): void {
                   <option value="">（未選択）</option>
                   <option v-for="o in targetFieldOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
                 </select>
-                <input v-model="r.transform" class="input" type="text" placeholder="変換" aria-label="変換">
+                <!-- 変換は選択式（何が起きるかを選択肢＋ツールチップで説明。オペレーター指示 2026-08-07 ②） -->
+                <select v-model="r.transform" class="select" aria-label="変換" :title="transformHint(r.transform)">
+                  <option v-for="o in IMPORT_TRANSFORMS" :key="o.value" :value="o.value" :title="o.hint">{{ o.label }}</option>
+                  <!-- 旧版から読み込んだカタログ外の自由入力値: 黙って消さず可視化（連携キーの方針と同型） -->
+                  <option
+                    v-if="r.transform && !IMPORT_TRANSFORMS.some(o => o.value === r.transform)"
+                    :value="r.transform"
+                  >
+                    {{ r.transform }}（旧設定の値）
+                  </option>
+                </select>
                 <button type="button" class="btn btn-ghost btn-sm" aria-label="行を削除" @click="removeMapRow(i)">
                   <Trash2 class="h-4 w-4 text-crit" aria-hidden="true" />
                 </button>
