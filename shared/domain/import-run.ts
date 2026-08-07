@@ -46,6 +46,20 @@ function capRaw(s: string): string {
 }
 
 /**
+ * 変換の選択肢カタログ（マッピング UI の選択式表示 = オペレーター指示 2026-08-07 ②）。
+ * applyImportTransform の対応と 1:1。変換を追加するときは applyImportTransform（switch）・本カタログ・
+ * api/test/unit/akebono-phase-d.test.ts の対応集合テストの 3 点を同時に更新すること（テストは片方向検証のため）。
+ * value はマッピングの transform 列へそのまま保存される。'' = 変換なし（前後空白のみ除去）。
+ */
+export const IMPORT_TRANSFORMS: { value: string; label: string; hint: string }[] = [
+  { value: '', label: '変換なし', hint: '値をそのまま取り込みます（前後の空白のみ除去）' },
+  { value: 'number', label: '数値化（¥・カンマ除去）', hint: '「¥12,300」→「12300」。価格・数量など数値の列に使います' },
+  { value: 'date', label: '日付化（YYYY-MM-DD へ統一）', hint: '「2026/7/3」「2026.07.03」「20260703」→「2026-07-03」。売上日など日付の列に使います' },
+  { value: 'upper', label: '大文字化（英字）', hint: '「abc-01」→「ABC-01」。コードの表記ゆれ統一に使います' },
+  { value: 'lower', label: '小文字化（英字）', hint: '「ABC-01」→「abc-01」。コードの表記ゆれ統一に使います' },
+]
+
+/**
  * 値変換（transform 列)。対応: trim / number（¥・カンマ・空白を除去）/
  * date（YYYY/MM/DD・YYYY.MM.DD・YYYYMMDD → YYYY-MM-DD）/ upper / lower。
  * 未知の transform・空文字は素通し（前後空白のみ除去）

@@ -277,7 +277,8 @@ flowchart LR
 | `ImportRun` | id, sourceId, mappingVersion, fileRef?, startedAt, finishedAt, status(`staged`/`validated`/`applied`/`failed`/`reverted`), counts{staged, applied, skipped, failed}, commitToken, executedBy | 記録系（追記のみ） |
 | `ImportRowError` | runId, rowNo, rawText, errorCode, message | 記録系。CSV ダウンロード可 |
 
-変換 transforms の値域（決定論的純関数のみ・v1）: `trim` / `zenhan`(全半角) / `upper`/`lower` / `dateFormat(from,to)` / `numberFormat`(桁区切り除去) / `fixedValue` / `codeLookup(mapTable)` / `concat(fields, sep)` / `split(sep, index)`。コード変換表はマッピング定義内に保持（外部コード → マスタ ID）。
+変換 transforms の値域（決定論的純関数のみ・v1 構想）: `trim` / `zenhan`(全半角) / `upper`/`lower` / `dateFormat(from,to)` / `numberFormat`(桁区切り除去) / `fixedValue` / `codeLookup(mapTable)` / `concat(fields, sep)` / `split(sep, index)`。コード変換表はマッピング定義内に保持（外部コード → マスタ ID）。
+> **実装済みの値域（SoT = `shared/domain/import-run.ts` の IMPORT_TRANSFORMS。2026-08-07 ② で UI 選択式化）**: `''`（変換なし = 前後空白のみ除去）/ `number`（¥・カンマ除去）/ `date`（YYYY-MM-DD へ統一）/ `upper` / `lower`。上記構想の残り（zenhan/fixedValue/codeLookup/concat/split 等）は未実装。外部コード → マスタ ID の突合は codeLookup ではなく**マスタ間連携キー（lookupField）**として実装済み。
 
 - **左辺の生成（実装済み・F-32 Part②）**: 取込方式ごとに取込元を解析して左辺（マッピング元）を生成する。CSV = ファイル読込で列（列番号＋論理名）、JSON/API = 貼付/サンプル応答からキー抽出、固定長 = 開始〜終了バイト。右辺は対象アプリの有効項目（既定＋カスタマイズ項目 = `useAppFields`）から**人が確定**する。
   - _AI 候補提示（Vertex AI で target 候補を構造化出力し人が確定）は当初構想。実装は上記の解析ベース検出で置換した（`/suggest` 未実装）。再導入する場合は解析ベース導線の上乗せとして扱う。_
