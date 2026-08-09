@@ -12,6 +12,7 @@
  * フロント（マッピング UI の選択肢・保存前検証）と API（保存時検証・実行時の解決）が共有する
  * （原則3 = 既存パターン再利用・原則6 = 両モード parity）。
  */
+import { masterImportDefOf } from './import-master'
 
 export interface ImportRefFieldOption { value: string; label: string }
 
@@ -44,6 +45,7 @@ const SKU: ImportRefTarget = {
 /**
  * 取込対象（targetEntity）× 対象項目（targetItemKey）→ 参照先マスタと突合キー候補。
  * ここに無い項目は参照ではない（突合キーを設定できない）。
+ * master_*（共通マスタ取込 2026-08-09）も参照項目は同じ機構で突合キーを選べる。
  */
 export const IMPORT_REF_TARGETS: Record<string, Record<string, ImportRefTarget>> = {
   product: { segmentId: SEGMENT, categoryId: CATEGORY, defaultSupplierCompanyId: COMPANY, taxRateId: TAX_RATE, unitId: UNIT },
@@ -51,6 +53,8 @@ export const IMPORT_REF_TARGETS: Record<string, Record<string, ImportRefTarget>>
   company: { industryId: INDUSTRY },
   sales_record: { companyId: COMPANY, segmentId: SEGMENT, skuId: SKU },
   inventory: { skuId: SKU, warehouseId: WAREHOUSE },
+  master_warehouse: { companyId: COMPANY },
+  master_category: { parentId: CATEGORY },
 }
 
 export function importRefTargetOf(targetEntity: string, itemKey: string): ImportRefTarget | null {
@@ -158,6 +162,18 @@ export function validateImportMapping(
     if (keys.includes('axis2Value') && !keys.includes('axis1Value')) {
       return 'バリアント軸2を使う場合はバリアント軸1のマッピングが必要です'
     }
+  }
+  // 共通マスタ取込（master_*）: 突合キー = 名称のため name の割当が必須。同一対象項目の重複割当も禁止
+  // （値の抽出は最後の行勝ちのため、重複は値が不定になる = バリアント軸取込と同じ判断）
+  const masterDef = masterImportDefOf(targetEntity)
+  if (masterDef) {
+    const keys = fields.map(f => f.targetItemKey)
+    const counts = new Map<string, number>()
+    for (const k of keys) counts.set(k, (counts.get(k) ?? 0) + 1)
+    for (const { key, label } of masterDef.fields) {
+      if ((counts.get(key) ?? 0) > 1) return `対象項目「${label}」が複数行に割り当てられています（1 行にしてください）`
+    }
+    if (!keys.includes('name')) return `名称（突合キー）のマッピングが必要です（${masterDef.label}は名称で照合して登録・更新します）`
   }
   return null
 }

@@ -232,26 +232,40 @@ const ledgerColumns: TableColumn[] = [
 
 // ========== 棚卸 ==========
 const stWh = ref('')
+// 実棚入力（skuId → 入力文字列）。倉庫切替でリセットするため常に「現在の倉庫」の入力のみを保持する
 const stCounts = ref<Record<string, string>>({})
+// 在庫0（理論在庫なし）の SKU も棚卸対象にするか。既定は在庫のある SKU のみだが、
+// 実在するのにシステム上0（found）の SKU を数えられるよう、全 SKU 表示へ切り替えられる（監査ギャップ是正）
+const stShowAll = ref(false)
+const stSearch = ref('')
 
 watch([() => masters.warehouses.value, tab], () => {
   if (tab.value !== 'stocktake') return
   if (!stWh.value) stWh.value = warehouseOptions.value[0]?.value ?? ''
 }, { immediate: true })
 
+/** 棚卸対象 SKU の母集団（在庫あり = 既定 / 全 SKU = トグル）。theory は倉庫の理論在庫（無ければ 0） */
 const stItems = computed(() => {
   if (!stWh.value) return []
-  return inv.balancesOfWarehouse(stWh.value)
-    .map(b => ({ skuId: b.skuId, skuLabel: skuLabelOf(b.skuId), theory: b.qty }))
+  const q = stSearch.value.trim().toLowerCase()
+  const rows = stShowAll.value
+    // 全アクティブ SKU（在庫0の found も数えられる。theory は残高導出で 0 になる）
+    ? p.activeSkus().map(s => ({ skuId: s.id, skuLabel: p.skuLabel(s), theory: inv.balanceOf(s.id, stWh.value) }))
+    // 在庫のある SKU のみ
+    : inv.balancesOfWarehouse(stWh.value).map(b => ({ skuId: b.skuId, skuLabel: skuLabelOf(b.skuId), theory: b.qty }))
+  return rows
+    .filter(it => !q || it.skuLabel.toLowerCase().includes(q))
     .sort((a, b) => a.skuLabel.localeCompare(b.skuLabel, 'ja'))
 })
 
-// 倉庫切替時に実棚入力を理論値で初期化
-watch(stWh, () => {
-  const next: Record<string, string> = {}
-  for (const it of stItems.value) next[it.skuId] = String(it.theory)
-  stCounts.value = next
-}, { immediate: true })
+// 倉庫切替時に実棚入力をリセット（別倉庫の入力を持ち越さない）。理論値では初期化せず未入力のままにし、
+// 「入力した行 = 数えた行」を明確にする（未入力 SKU を理論値で無変更計上するノイズを避ける）
+watch(stWh, () => { stCounts.value = {} })
+
+/** 実棚入力欄のプレースホルダ（理論値を薄く見せて、変更したい行だけ入力すればよいと示す） */
+function theoryPlaceholder(theory: number): string {
+  return `理論 ${theory}`
+}
 
 function diffOf(skuId: string, theory: number): number | null {
   const raw = stCounts.value[skuId]
@@ -261,11 +275,19 @@ function diffOf(skuId: string, theory: number): number | null {
   return actual - theory
 }
 
+/** 入力済み実棚数（現在の倉庫）を {skuId, actualQty} へ。表示中か否かに依らず全入力を対象にする（絞り込みで入力が消えない） */
+function enteredCounts(): { skuId: string; actualQty: number }[] {
+  const out: { skuId: string; actualQty: number }[] = []
+  for (const [skuId, raw] of Object.entries(stCounts.value)) {
+    if (raw === '' || !Number.isFinite(Number(raw))) continue
+    out.push({ skuId, actualQty: Number(raw) })
+  }
+  return out
+}
+
+// 差分あり件数は「入力済みかつ理論と異なる」行（表示フィルタに依らず全入力で数える）
 const stChangedCount = computed(() =>
-  stItems.value.filter(it => {
-    const d = diffOf(it.skuId, it.theory)
-    return d !== null && d !== 0
-  }).length,
+  enteredCounts().filter(c => c.actualQty !== inv.balanceOf(c.skuId, stWh.value)).length,
 )
 
 async function submitStocktake(): Promise<void> {
@@ -279,12 +301,7 @@ async function submitStocktakeInner(): Promise<void> {
     toast.show('倉庫を選択してください', 'crit')
     return
   }
-  const counts = stItems.value
-    .filter(it => {
-      const raw = stCounts.value[it.skuId]
-      return raw !== undefined && raw !== '' && Number.isFinite(Number(raw))
-    })
-    .map(it => ({ skuId: it.skuId, actualQty: Number(stCounts.value[it.skuId]) }))
+  const counts = enteredCounts()
   if (counts.length === 0) {
     toast.show('実棚数を入力してください', 'crit')
     return
@@ -301,6 +318,7 @@ async function submitStocktakeInner(): Promise<void> {
     return
   }
   toast.show(`棚卸を確定しました（調整 ${res.adjusted ?? 0} 件）`, 'ok')
+  stCounts.value = {}
 }
 </script>
 
@@ -398,6 +416,10 @@ async function submitStocktakeInner(): Promise<void> {
         <div class="w-48">
           <UiSelect v-model="stWh" :options="warehouseOptions" aria-label="棚卸対象の倉庫" />
         </div>
+        <UiSearchInput v-model="stSearch" placeholder="SKU 名で絞り込み" />
+        <label class="flex items-center gap-1.5 text-[12px] text-sub">
+          <input v-model="stShowAll" type="checkbox">在庫0の SKU も表示
+        </label>
         <template #trailing>
           <span class="text-[12px] text-muted">差分あり <span class="num font-semibold text-ink">{{ stChangedCount }}</span> 件</span>
           <button type="button" class="btn btn-primary btn-sm" :disabled="busy" @click="submitStocktake">
@@ -408,14 +430,14 @@ async function submitStocktakeInner(): Promise<void> {
 
       <UiSectionCard
         :title="`実棚入力（${stItems.length}件）`"
-        description="実棚数を入力すると理論在庫との差分をプレビューします。確定で差分のみ棚卸調整として台帳へ追記します。"
+        description="数えた SKU の実棚数だけ入力すれば、理論在庫との差分をプレビューし、確定で差分のみ棚卸調整として台帳へ追記します。システム上0でも実在する SKU は「在庫0の SKU も表示」で数えられます。"
         flush
       >
         <UiEmptyState
           v-if="stItems.length === 0"
           icon="PackageOpen"
-          title="この倉庫に在庫がありません"
-          hint="別の倉庫を選択してください"
+          :title="stSearch.trim() ? '該当する SKU がありません' : '対象の SKU がありません'"
+          :hint="stSearch.trim() ? '検索語を変えてください' : (stShowAll ? 'SKU（商品）を先に登録してください' : '「在庫0の SKU も表示」で全 SKU を対象にできます')"
         />
         <div v-else class="grid gap-2 p-3">
           <div
@@ -438,6 +460,7 @@ async function submitStocktakeInner(): Promise<void> {
                 type="number"
                 step="1"
                 class="input num w-24"
+                :placeholder="theoryPlaceholder(it.theory)"
                 :aria-label="`${it.skuLabel} の実棚数`"
               >
             </div>
