@@ -2063,3 +2063,20 @@
   （集計ダッシュボード・横断参照が全件在庫を前提）を伴う大規模・高リスク変更のため、設計合意の上で別途対応する。
 - **ai-office-suite（takahiro0428）の踏襲候補調査**: 別オーナーのため本セッション（tsunaguba）へ追加不可。
   TSUNAGUBA org へのフォーク/インポート後に着手可能。
+
+### 60-x 反復レビュー（原則9）
+- **独立レビュー / 監査 第 1 巡（実績）**: MAJOR/データ喪失/SQL インジェクション/デッドロックは無し。以下 MINOR/NIT を是正。
+  - **MINOR-1**: `master_warehouse.kind` は DB NOT NULL・既定値なしなのにカタログが `requiredOnCreate` 未設定 →
+    新規作成で空 INSERT が 23502 を漏らす。`requiredOnCreate: true` を付与（未割当は明示メッセージで隔離）。
+  - **MINOR-2**: マスタ `name` がカタログ `maxLen` で切詰められていない（他項目・他エンティティと不整合）→
+    `applyMasterEntity` で `capCp(name, maxLen)`。
+  - **MINOR-3**: 取込元セグメント注入時、旧版マッピングが `segmentId` に名称突合キーを持つと注入 id が解決不能 →
+    セグメント適用時はマッピングの `segmentId` 行を除外（既定 id→名称 解決に統一）。
+  - **MINOR-4**: 取込対象基準化で左辺を固定行スナップショットにしたため、遅延ハイドレーションのカスタム項目が
+    モーダル開後に反映されない → `targetFields` を watch し、入力を保ったまま新規対象項目行を追加。
+  - **NIT-6**: multiEnum の区切り文字のみセル（"," 等）が `[]` になり既存値を潰す → 実値なしは null（無変更）。
+  - **NIT-7**: 実行時にセグメントが無効化されていると行ごとに同一隔離が多発 → 実行前に単一エラー（AKO-IMP-009）で停止。
+  - 許容（記録）: **NIT-5** 商品カテゴリの親参照は循環ガードなし = 既存 CRUD の設計（UI が階層提示）と一貫のため
+    取込側だけに導入せず据え置き。
+- **再検証（是正後）**: api typecheck green・unit **301 passed**（`import-master` に NIT-6/MINOR-1 の回帰を追加）・
+  mockup typecheck green・**221 passed**。**未解決指摘ゼロ = 原則9 充足で完了。**

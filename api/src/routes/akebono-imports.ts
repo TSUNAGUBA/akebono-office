@@ -914,7 +914,8 @@ async function applyMasterEntity(
   for (const rec of records) {
     const v = rec.values
     const fail = (message: string): void => { out.issues.push({ rowNo: rec.rowNo, rawText: rec.raw, message }) }
-    const name = (v.name ?? '').trim()
+    // name はカタログの maxLen で切詰め（他項目は parseMasterFieldValue で cap 済み・他エンティティの name と一貫）
+    const name = capCp((v.name ?? '').trim(), fieldByKey.get('name')?.maxLen ?? 120)
     if (!name) { fail('名称が空のため隔離'); continue }
 
     // 各対象項目を解析（種別・値域の検証。ref は突合解決）。1 つでも失敗すれば行ごと隔離
@@ -1204,11 +1205,19 @@ export function akebonoImportsRoutes(pool: pg.Pool, env: Env): Hono {
     }
 
     // 事業セグメントを取込元単位で持つ取込対象（0054）: 設定されていれば全レコードへ共通注入する
-    // （列取込ではなく取込元で 1 度だけ選ぶ = オペレーター指示 2026-08-09。segment.resolve は id 一致を優先するため
-    // 実 ID を注入すれば既存の参照解決でそのまま解決される）。未設定（null）は従来のマッピング列解決へフォールバック（原則7）。
-    if (source.segmentId && SEGMENT_SCOPED_ENTITIES.has(source.targetEntity)) {
-      for (const rec of extracted.records) rec.values.segmentId = source.segmentId
+    // （列取込ではなく取込元で 1 度だけ選ぶ = オペレーター指示 2026-08-09）。未設定（null）は従来のマッピング列解決へ
+    // フォールバック（原則7）。実行時点でセグメントが無効化されていれば行ごとでなく単一エラーで止める（明確な導線）。
+    const injectSegment = Boolean(source.segmentId) && SEGMENT_SCOPED_ENTITIES.has(source.targetEntity)
+    if (injectSegment) {
+      const { rows: segRows } = await pool.query(`SELECT 1 FROM business_segments WHERE id = $1 AND active = true`, [source.segmentId])
+      if (segRows.length === 0) {
+        throw err('AKO-IMP-009', 'この取込元の事業セグメントが無効化されています（有効なセグメントに変更してから実行してください）', 409)
+      }
+      for (const rec of extracted.records) rec.values.segmentId = source.segmentId!
     }
+    // 取込元セグメント適用時はマッピングの segmentId 行を無視し、注入した実 ID を既定（id→名称）解決に統一する。
+    // 旧版マッピングが segmentId に名称突合キーを持つと、注入 id が名称解決器で解けず全行隔離になるのを防ぐ。
+    const applyFields = injectSegment ? mapping.fields.filter(f => f.targetItemKey !== 'segmentId') : mapping.fields
 
     // 3) 検証 → 反映 → 実行履歴を同一トランザクションで確定（同一取込元の並行実行は直列化 = 冪等判定を安定させる）
     const id = newId('impr')
@@ -1224,26 +1233,26 @@ export function akebonoImportsRoutes(pool: pg.Pool, env: Env): Hono {
       const records = extracted.records
       let outcome: ApplyOutcome
       if (masterDef) {
-        outcome = await applyMasterEntity(db, masterDef, records, mapping.fields)
+        outcome = await applyMasterEntity(db, masterDef, records, applyFields)
       } else {
         switch (source.targetEntity) {
           case 'product':
-            outcome = await applyProducts(db, records, mapping.fields)
+            outcome = await applyProducts(db, records, applyFields)
             break
           case 'product_variant':
-            outcome = await applyProductVariants(db, records, mapping.fields)
+            outcome = await applyProductVariants(db, records, applyFields)
             break
           case 'sku':
-            outcome = await applySkus(db, records, mapping.fields)
+            outcome = await applySkus(db, records, applyFields)
             break
           case 'company':
-            outcome = await applyCompanies(db, records, mapping.fields)
+            outcome = await applyCompanies(db, records, applyFields)
             break
           case 'sales_record':
-            outcome = await applySalesRecords(db, sourceId, records, mapping.fields)
+            outcome = await applySalesRecords(db, sourceId, records, applyFields)
             break
           default:
-            outcome = await applyInventory(db, sourceId, records, mapping.fields)
+            outcome = await applyInventory(db, sourceId, records, applyFields)
         }
       }
       const counts = {

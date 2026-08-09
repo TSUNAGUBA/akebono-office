@@ -78,7 +78,8 @@ export const MASTER_IMPORT_DEFS: Record<string, MasterImportDef> = {
     entity: 'master_warehouse', label: 'マスタ: 倉庫・保管場所', table: 'warehouses', idPrefix: 'wh', collection: 'warehouses',
     fields: [
       { key: 'name', label: '倉庫・保管場所名', column: 'name', kind: 'text', maxLen: 120 },
-      { key: 'kind', label: '種別（自社倉庫/店舗預け/外部委託）', column: 'kind', kind: 'enum', enumMap: WAREHOUSE_KIND_ENUM },
+      // kind は DB で NOT NULL・既定値なし = 新規作成に必須（未割当は隔離。空 INSERT で 23502 を出さない）
+      { key: 'kind', label: '種別（自社倉庫/店舗預け/外部委託）', column: 'kind', kind: 'enum', enumMap: WAREHOUSE_KIND_ENUM, requiredOnCreate: true },
       { key: 'companyId', label: '紐付く店舗（取引先）', column: 'company_id', kind: 'ref' },
       DISPLAY_ORDER,
     ],
@@ -196,6 +197,8 @@ export function parseMasterFieldValue(field: MasterImportField, raw: string): Ma
     }
     case 'multiEnum': {
       const parts = v.split(/[,、]/).map(s => s.trim()).filter(Boolean)
+      // 区切り文字のみ（"," 等）で実値が無いセルは「未指定」= null 扱い（更新で既存値を空配列に潰さない）
+      if (parts.length === 0) return { ok: true, value: null }
       const out: string[] = []
       for (const p of parts) {
         const mapped = field.enumMap?.[p]

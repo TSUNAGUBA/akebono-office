@@ -316,6 +316,17 @@ function buildMapDraft(): void {
   mapDraft.value = targetFields.value.map(tf => draftRowOf(tf, savedByKey.get(tf.key)))
 }
 
+// 対象項目が後から増える場合（API モードでカスタム項目が遅延ハイドレーションする等）、編集中の入力を
+// 保ったまま新規の対象項目行を追加する（固定行スナップショット化で失われた候補追従を復元 = レビュー MINOR-4）。
+watch(targetFields, (tfs) => {
+  if (!mapOpen.value) return
+  const have = new Set(mapDraft.value.map(r => r.targetItemKey))
+  const active = imp.activeMappingOf(selectedSource.value?.id ?? '')
+  const savedByKey = new Map((active?.fields ?? []).map(f => [f.targetItemKey, f]))
+  const additions = tfs.filter(tf => !have.has(tf.key)).map(tf => draftRowOf(tf, savedByKey.get(tf.key)))
+  if (additions.length > 0) mapDraft.value = [...mapDraft.value, ...additions]
+})
+
 /** CSV/Sheets の右辺入力変更時: 検出列に一致すれば列番号を追随、未検出時は保存済みの列番号を保持 */
 function onCsvSourceInput(r: MapDraftRow): void {
   if (detectedColumns.value.length > 0) r.columnIndex = columnIndexOf(r.sourceField.trim())

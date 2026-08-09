@@ -22,6 +22,15 @@ describe('MASTER_IMPORT_DEFS（共通マスタ取込カタログ）', () => {
       expect(def.collection).toBeTruthy()
     }
   })
+  it('DB で NOT NULL・既定値なしの列は requiredOnCreate（空 INSERT で 23502 を出さない = MINOR-1）', () => {
+    // 倉庫の kind / セグメントの業種 / 税率 / 締め日 / 軸ラベルは新規作成に必須
+    expect(MASTER_IMPORT_DEFS.master_warehouse!.fields.find(f => f.key === 'kind')?.requiredOnCreate).toBe(true)
+    expect(MASTER_IMPORT_DEFS.master_segment!.fields.find(f => f.key === 'industryType')?.requiredOnCreate).toBe(true)
+    expect(MASTER_IMPORT_DEFS.master_tax_rate!.fields.find(f => f.key === 'rate')?.requiredOnCreate).toBe(true)
+    expect(MASTER_IMPORT_DEFS.master_payment_term!.fields.find(f => f.key === 'closingDay')?.requiredOnCreate).toBe(true)
+    expect(MASTER_IMPORT_DEFS.master_axis_template!.fields.find(f => f.key === 'axis1Label')?.requiredOnCreate).toBe(true)
+    expect(MASTER_IMPORT_DEFS.master_axis_template!.fields.find(f => f.key === 'axis2Label')?.requiredOnCreate).toBe(true)
+  })
   it('entity 値はキーと一致し、委託条件は対象外', () => {
     for (const [key, def] of Object.entries(MASTER_IMPORT_DEFS)) expect(def.entity).toBe(key)
     expect(masterImportDefOf('master_segment')?.table).toBe('business_segments')
@@ -63,11 +72,13 @@ describe('parseMasterFieldValue（種別・値域の検証）', () => {
     expect(parseMasterFieldValue(industry, 'retail')).toEqual({ ok: true, value: 'retail' })
     expect(parseMasterFieldValue(industry, '製造')).toMatchObject({ ok: false })
   })
-  it('multiEnum: カンマ/読点区切りを写像し重複除去、未知は隔離', () => {
+  it('multiEnum: カンマ/読点区切りを写像し重複除去、未知は隔離、区切りのみは null（既存値を潰さない）', () => {
     const types = field({ kind: 'multiEnum', enumMap: { retail: 'retail', 小売業: 'retail', maker: 'maker', メーカー業: 'maker' } })
     expect(parseMasterFieldValue(types, '小売業、メーカー業')).toEqual({ ok: true, value: ['retail', 'maker'] })
     expect(parseMasterFieldValue(types, 'retail,retail')).toEqual({ ok: true, value: ['retail'] })
     expect(parseMasterFieldValue(types, '小売業,不明')).toMatchObject({ ok: false })
+    // 区切り文字だけで実値が無いセルは null（更新で industry_types を空配列に潰さない = NIT-6）
+    expect(parseMasterFieldValue(types, '、,')).toEqual({ ok: true, value: null })
   })
   it('text: maxLen でコードポイント切詰め（サロゲート安全）', () => {
     expect(parseMasterFieldValue(field({ kind: 'text', maxLen: 3 }), 'あいうえお')).toEqual({ ok: true, value: 'あいう' })
