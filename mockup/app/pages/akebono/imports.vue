@@ -11,9 +11,11 @@ import {
   IMPORT_METHOD_LABELS, IMPORT_ENTITY_LABELS,
 } from '~/composables/useAkebonoImports'
 import type { ImportMapping, ImportRun, ImportSource, ImportSourceConfig } from '~/types/akebono'
+import { SEGMENT_SCOPED_IMPORT_ENTITIES } from '~/types/akebono'
 import type { FieldDef, TableColumn } from '~/types/ui'
-import { importRefTargetOf, isValidLookupField, VARIANT_IMPORT_FIELDS } from '~/utils/import-link'
+import { importRefTargetOf, VARIANT_IMPORT_FIELDS } from '~/utils/import-link'
 import type { ImportRefTarget } from '~/utils/import-link'
+import { masterImportDefOf } from '~/utils/import-master'
 import { parseCsvColumns, extractJsonKeys } from '~/utils/import-parse'
 import { IMPORT_TRANSFORMS } from '~/utils/import-run'
 import { fmtDateTime, fmtInt } from '~/utils/format'
@@ -36,6 +38,16 @@ onMounted(async () => {
     toast.show(`Google スプレッドシートの連携に失敗しました（${String(route.query.reason ?? '不明')}）`, 'crit')
   }
   if (s) router.replace({ query: { ...route.query, sheets: undefined, reason: undefined } })
+  // 共通マスタ管理からの導線（/akebono/masters →「マスタ取込元を追加」）: 追加モーダルをマスタ向けに開く
+  if (route.query.add === 'master') {
+    if (imp.isAdmin.value) openAdd('master')
+    router.replace({ query: { ...route.query, add: undefined } })
+  }
+  // 取込元を指定して開く導線（マスタ一覧の各取込元カード → その取込元を選択状態にする）
+  if (typeof route.query.source === 'string' && imp.sourceById(route.query.source)) {
+    selectedSourceId.value = route.query.source
+    router.replace({ query: { ...route.query, source: undefined } })
+  }
 })
 
 // ---------- 取込元一覧 ----------
@@ -89,27 +101,48 @@ const addOpen = ref(false)
 const addForm = ref<Record<string, unknown>>({})
 const addErrors = ref<Record<string, string>>({})
 
-const addFields: FieldDef[] = [
-  { key: 'name', label: '取込元名', type: 'text', required: true, placeholder: '例）本社売上 CSV（日次）' },
-  {
-    key: 'method', label: '取込方式', type: 'select', required: true,
-    options: (Object.keys(IMPORT_METHOD_LABELS) as (keyof typeof IMPORT_METHOD_LABELS)[])
-      .map(k => ({ value: k, label: IMPORT_METHOD_LABELS[k] })),
-  },
-  {
-    key: 'encoding', label: '文字コード', type: 'select', required: true,
-    options: [{ value: 'utf8', label: 'UTF-8' }, { value: 'sjis', label: 'Shift_JIS' }],
-    hint: 'API 接続の場合も応答本文の文字コードを指定します',
-  },
-  {
-    key: 'targetEntity', label: '取込対象', type: 'select', required: true,
-    options: (Object.keys(IMPORT_ENTITY_LABELS) as (keyof typeof IMPORT_ENTITY_LABELS)[])
-      .map(k => ({ value: k, label: IMPORT_ENTITY_LABELS[k] })),
-  },
-]
+const masters = useAkebonoMasters()
 
-function openAdd(): void {
-  addForm.value = { name: '', method: 'file_csv', encoding: 'utf8', targetEntity: 'product' }
+/** 選択中の取込対象がセグメントを取込元単位で持つか（= 事業セグメント選択欄を出す） */
+const addNeedsSegment = computed(() =>
+  SEGMENT_SCOPED_IMPORT_ENTITIES.includes(addForm.value.targetEntity as ImportSource['targetEntity']))
+
+// 取込対象は「記録系」→「共通マスタ」の順で並べる（マスタは import-master のラベルに "マスタ: " 接頭辞あり）
+const addFields = computed<FieldDef[]>(() => {
+  const base: FieldDef[] = [
+    { key: 'name', label: '取込元名', type: 'text', required: true, placeholder: '例）本社売上 CSV（日次）' },
+    {
+      key: 'method', label: '取込方式', type: 'select', required: true,
+      options: (Object.keys(IMPORT_METHOD_LABELS) as (keyof typeof IMPORT_METHOD_LABELS)[])
+        .map(k => ({ value: k, label: IMPORT_METHOD_LABELS[k] })),
+    },
+    {
+      key: 'encoding', label: '文字コード', type: 'select', required: true,
+      options: [{ value: 'utf8', label: 'UTF-8' }, { value: 'sjis', label: 'Shift_JIS' }],
+      hint: 'API 接続の場合も応答本文の文字コードを指定します',
+    },
+    {
+      key: 'targetEntity', label: '取込対象', type: 'select', required: true,
+      options: (Object.keys(IMPORT_ENTITY_LABELS) as (keyof typeof IMPORT_ENTITY_LABELS)[])
+        .map(k => ({ value: k, label: IMPORT_ENTITY_LABELS[k] })),
+    },
+  ]
+  // 事業セグメントは取込元単位（オペレーター指示 2026-08-09）。セグメントを持つ取込対象でのみ選択させ、
+  // 配下の全マッピング定義で共通適用する（マッピング右辺の列取込からは外す）
+  if (addNeedsSegment.value) {
+    base.push({
+      key: 'segmentId', label: '事業セグメント', type: 'select', required: true,
+      options: masters.segmentOptions.value,
+      hint: 'この取込元で取り込む行に共通で適用します（各マッピングで列指定は不要）',
+    })
+  }
+  return base
+})
+
+function openAdd(scope?: 'master'): void {
+  // マスタ導線からは既定の取込対象を共通マスタ（事業セグメント）にする
+  const targetEntity = scope === 'master' ? 'master_segment' : 'product'
+  addForm.value = { name: '', method: 'file_csv', encoding: 'utf8', targetEntity, segmentId: '' }
   addErrors.value = {}
   addOpen.value = true
 }
@@ -118,6 +151,7 @@ const addBusy = ref(false)
 async function submitAdd(): Promise<void> {
   const e: Record<string, string> = {}
   if (!String(addForm.value.name ?? '').trim()) e.name = '取込元名は必須です'
+  if (addNeedsSegment.value && !String(addForm.value.segmentId ?? '').trim()) e.segmentId = '事業セグメントを選択してください'
   addErrors.value = e
   if (Object.keys(e).length > 0) {
     toast.show('必須項目を入力してください', 'crit')
@@ -131,6 +165,7 @@ async function submitAdd(): Promise<void> {
       method: addForm.value.method as ImportSource['method'],
       encoding: addForm.value.encoding as ImportSource['encoding'],
       targetEntity: addForm.value.targetEntity as ImportSource['targetEntity'],
+      segmentId: addNeedsSegment.value ? String(addForm.value.segmentId ?? '') : null,
     })
     if (!res.ok) {
       toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
@@ -174,22 +209,37 @@ const COMPANY_IMPORT_FIELDS: { key: string; label: string }[] = [
   { key: 'name', label: '会社名' }, { key: 'kind', label: '区分（self/customer）' }, { key: 'industryId', label: '業界' },
   { key: 'size', label: '規模' }, { key: 'location', label: '所在地' }, { key: 'description', label: '備考' },
 ]
-/** 右辺の候補（対象アプリの既定＋カスタム項目）。company は CRM 会社項目＋会社カスタム項目。
- *  product_variant はバリアント軸取込の専用カタログ（グルーピングキー・SKU 固有 ID・軸1/2）＋商品カスタム項目 */
-const targetFieldOptions = computed<{ value: string; label: string }[]>(() => {
+/**
+ * 取込対象の項目カタログ（マッピングの左辺 = 固定行。オペレーター指示 2026-08-09 ①）。
+ * 「取込対象に設定された項目」を列挙し、各項目に対して取込元のどの列/キーを割り当てるかを右辺で設定する。
+ * - 標準エンティティ（商品/SKU/売上明細/在庫）: 有効な既定項目＋カスタム項目（appFields）
+ * - company: CRM 会社項目＋会社カスタム項目 / product_variant: バリアント軸カタログ＋商品カスタム項目
+ * - master_*: 共通マスタ取込カタログ（import-master。#14 = 空ドロップダウンの是正）
+ * 事業セグメントは取込元単位で共通適用するため、取込元にセグメント設定済みなら列マッピングから外す（#12）。
+ */
+interface TargetField { key: string; label: string; required: boolean; isRef: boolean }
+
+const targetFields = computed<TargetField[]>(() => {
   const ent = selectedSource.value?.targetEntity
   if (!ent) return []
-  if (ent === 'company') {
-    const builtins = COMPANY_IMPORT_FIELDS.map(f => ({ value: f.key, label: f.label }))
-    const customs = appFields('company').filter(f => f.source === 'custom').map(f => ({ value: f.key, label: `${f.label}（カスタム）` }))
-    return [...builtins, ...customs]
+  let fields: { key: string; label: string; required: boolean }[]
+  const mdef = masterImportDefOf(ent)
+  if (mdef) {
+    fields = mdef.fields.map(f => ({ key: f.key, label: f.label, required: f.key === 'name' || Boolean(f.requiredOnCreate) }))
+  } else if (ent === 'company') {
+    const builtins = COMPANY_IMPORT_FIELDS.map(f => ({ key: f.key, label: f.label, required: f.key === 'name' }))
+    const customs = appFields('company').filter(f => f.source === 'custom').map(f => ({ key: f.key, label: `${f.label}（カスタム）`, required: f.required }))
+    fields = [...builtins, ...customs]
+  } else if (ent === 'product_variant') {
+    const builtins = VARIANT_IMPORT_FIELDS.map(f => ({ key: f.key, label: f.label, required: f.key === 'productCode' || f.key === 'code' }))
+    const customs = appFields('product').filter(f => f.source === 'custom').map(f => ({ key: f.key, label: `${f.label}（カスタム・商品）`, required: false }))
+    fields = [...builtins, ...customs]
+  } else {
+    fields = appFields(ent).map(f => ({ key: f.key, label: f.source === 'custom' ? `${f.label}（カスタム）` : f.label, required: f.required }))
   }
-  if (ent === 'product_variant') {
-    const builtins = VARIANT_IMPORT_FIELDS.map(f => ({ value: f.key, label: f.label }))
-    const customs = appFields('product').filter(f => f.source === 'custom').map(f => ({ value: f.key, label: `${f.label}（カスタム・商品）` }))
-    return [...builtins, ...customs]
-  }
-  return appFields(ent).map(f => ({ value: f.key, label: f.source === 'custom' ? `${f.label}（カスタム）` : f.label }))
+  // 事業セグメントは取込元単位で共通適用（取込元にセグメント設定済みなら列マッピングからは外す）
+  if (selectedSource.value?.segmentId) fields = fields.filter(f => f.key !== 'segmentId')
+  return fields.map(f => ({ ...f, isRef: importRefTargetOf(ent, f.key) != null }))
 })
 
 // ---------- マスタ間連携キー（突合キー。参照項目の右辺を選ぶと連携キー選択を表示） ----------
@@ -218,31 +268,73 @@ function defaultLookupLabel(itemKey: string): string {
   return refTargetOf(itemKey)?.refEntity === 'sku' ? '既定（ID → SKUコードの自動判定）' : '既定（ID → 名称の自動判定）'
 }
 
-/** 右辺変更時に無効な突合キーを持ち越さない（非参照項目・参照先変更の残骸を除去） */
-function onTargetItemChange(r: MapDraftRow): void {
-  const t = refTargetOf(r.targetItemKey)
-  if (!t || (r.lookupField && !isValidLookupField(t, r.lookupField))) r.lookupField = null
-}
-
 /** 変換の説明（選択中の値のツールチップ。カタログ外 = 旧設定の自由入力値は素通し挙動を明示） */
 function transformHint(value: string): string {
   return IMPORT_TRANSFORMS.find(t => t.value === value)?.hint
     ?? '旧設定の値です（未対応の変換名は「変換なし」と同じ挙動 = 前後の空白のみ除去）'
 }
 
+/**
+ * マッピング行（取込対象基準 = 左辺は固定の対象項目、右辺で取込元の列/キーを割り当てる）。
+ * sourceField 空 = 未マッピング（保存対象外）。columnIndex は CSV/Sheets の検出列に一致すれば保持
+ * （ヘッダ無し CSV の位置指定を失わない）、手入力は null = 実行時にヘッダ名で解決。
+ */
 type MapDraftRow = {
-  sourceField: string; targetItemKey: string; transform: string
-  columnIndex: number | null; byteStart: number | null; byteEnd: number | null; jsonKey: string | null
+  targetItemKey: string; targetLabel: string; required: boolean; isRef: boolean
+  sourceField: string; transform: string
+  columnIndex: number | null; byteStart: number | null; byteEnd: number | null
   /** 参照項目の突合キー（null = 既定の ID → 名称/コード解決） */
   lookupField: string | null
-}
-function blankRow(): MapDraftRow {
-  return { sourceField: '', targetItemKey: '', transform: '', columnIndex: null, byteStart: null, byteEnd: null, jsonKey: null, lookupField: null }
 }
 
 const mapOpen = ref(false)
 const mapDraft = ref<MapDraftRow[]>([])
+// 取込元の解析で検出した列（CSV/Sheets）・キー（JSON/API）。右辺の候補（datalist）＋列番号解決に使う
+const detectedColumns = ref<{ name: string; index: number }[]>([])
+const detectedKeys = ref<string[]>([])
 const mapMethod = computed(() => selectedSource.value?.method ?? 'file_csv')
+
+/** 検出済み列名 → 列番号（ヘッダ無し CSV の位置解決用。未検出・不一致は null = ヘッダ名で解決） */
+function columnIndexOf(name: string): number | null {
+  return detectedColumns.value.find(c => c.name === name)?.index ?? null
+}
+
+/** 対象項目 1 行へ取込元を割り当てる draft を作る（保存済みマッピングの復元にも使う） */
+function draftRowOf(tf: TargetField, saved?: ImportMapping['fields'][number]): MapDraftRow {
+  return {
+    targetItemKey: tf.key, targetLabel: tf.label, required: tf.required, isRef: tf.isRef,
+    sourceField: saved?.sourceField ?? '', transform: saved?.transform ?? '',
+    columnIndex: saved?.columnIndex ?? null, byteStart: saved?.byteStart ?? null, byteEnd: saved?.byteEnd ?? null,
+    lookupField: saved?.lookupField ?? null,
+  }
+}
+
+/** 対象項目の固定行に、保存済みマッピングの割当（sourceField/ロケータ/変換/突合キー）を重ねて draft を作る */
+function buildMapDraft(): void {
+  const active = imp.activeMappingOf(selectedSource.value?.id ?? '')
+  const savedByKey = new Map((active?.fields ?? []).map(f => [f.targetItemKey, f]))
+  mapDraft.value = targetFields.value.map(tf => draftRowOf(tf, savedByKey.get(tf.key)))
+}
+
+/** CSV/Sheets の右辺入力変更時: 検出列に一致すれば列番号を追随、未検出時は保存済みの列番号を保持 */
+function onCsvSourceInput(r: MapDraftRow): void {
+  if (detectedColumns.value.length > 0) r.columnIndex = columnIndexOf(r.sourceField.trim())
+}
+
+/** 検出した取込元列/キーを、名称一致する対象項目へ自動割当（論理名 = 対象ラベル or キーの完全一致） */
+function autoAssignDetected(): void {
+  const norm = (s: string): string => s.trim().toLowerCase()
+  for (const r of mapDraft.value) {
+    if (r.sourceField.trim()) continue // 既に割当済みは尊重
+    const hit = mapMethod.value === 'file_json' || mapMethod.value === 'api_pull'
+      ? detectedKeys.value.find(k => norm(k) === norm(r.targetLabel) || norm(k) === norm(r.targetItemKey))
+      : detectedColumns.value.find(c => norm(c.name) === norm(r.targetLabel) || norm(c.name) === norm(r.targetItemKey))?.name
+    if (hit) {
+      r.sourceField = hit
+      if (mapMethod.value === 'file_csv' || mapMethod.value === 'sheets_pull') r.columnIndex = columnIndexOf(hit)
+    }
+  }
+}
 // 方式別設定のドラフト（CSV: hasHeader/delimiter・API: endpoint/auth・JSON/API: jsonRootPath）。
 // v-model 摩擦回避のため具体型（全項目 required）。保存時に ImportSourceConfig へ渡す
 const cfgDraft = ref<{
@@ -266,16 +358,23 @@ const AUTH_TYPE_OPTIONS = [
   { value: 'api_key', label: 'API キー' }, { value: 'basic', label: 'Basic 認証' },
 ]
 
-/** マッピング行のグリッド列（方式で左辺の項目数が異なる。全列を文字列リテラルで JIT に露出） */
+/** マッピング行のグリッド列（左辺 = 対象項目〔固定〕→ 右辺 = 取込元の割当。方式で右辺の列数が異なる） */
 const rowGridClass = computed(() => {
-  // select 列は minmax(0, Nfr) で min-content 拡張を抑止（選択式化で最長ラベルが列幅を支配しないように。
-  // 選択中の長いラベルは切詰め表示・ドロップダウン展開時は全文が読める）
+  // minmax(0, Nfr) で min-content 拡張を抑止（長いラベルが列幅を支配しないように = 切詰め表示）
   switch (mapMethod.value) {
-    case 'file_csv': case 'sheets_pull': return 'grid-cols-[52px_1fr_16px_minmax(0,1.3fr)_minmax(0,0.8fr)_34px]'
-    case 'file_fixed': return 'grid-cols-[64px_64px_1fr_16px_minmax(0,1.3fr)_minmax(0,0.8fr)_34px]'
-    default: return 'grid-cols-[1fr_16px_minmax(0,1.3fr)_minmax(0,0.8fr)_34px]'
+    case 'file_fixed': return 'grid-cols-[minmax(0,1.1fr)_16px_64px_64px_minmax(0,1fr)_minmax(0,0.8fr)]'
+    default: return 'grid-cols-[minmax(0,1.1fr)_16px_minmax(0,1.3fr)_minmax(0,0.8fr)]'
   }
 })
+
+/** マッピング済み（取込元を割り当てた）対象項目の件数（未割当の必須項目の警告表示に使う） */
+const mappedCount = computed(() =>
+  mapDraft.value.filter(f => mapMethod.value === 'file_fixed' ? (f.byteStart != null && f.byteEnd != null) : f.sourceField.trim()).length,
+)
+/** 取込元未割当の必須対象項目（保存はできるが実行時に隔離される旨を事前提示） */
+const unmappedRequired = computed(() =>
+  mapDraft.value.filter(f => f.required && !(mapMethod.value === 'file_fixed' ? (f.byteStart != null && f.byteEnd != null) : f.sourceField.trim())),
+)
 
 async function openMapEditor(): Promise<void> {
   const src = selectedSource.value
@@ -292,14 +391,10 @@ async function openMapEditor(): Promise<void> {
   sheetsSearch.value = ''
   sheetsList.value = []
   sheetsTabs.value = []
-  const active = imp.activeMappingOf(src.id)
-  mapDraft.value = active && active.fields.length > 0
-    ? active.fields.map(f => ({
-        sourceField: f.sourceField, targetItemKey: f.targetItemKey, transform: f.transform,
-        columnIndex: f.columnIndex ?? null, byteStart: f.byteStart ?? null, byteEnd: f.byteEnd ?? null, jsonKey: f.jsonKey ?? null,
-        lookupField: f.lookupField ?? null,
-      }))
-    : [blankRow()]
+  detectedColumns.value = []
+  detectedKeys.value = []
+  // 左辺 = 取込対象の項目（固定）に、保存済みマッピングの割当を重ねる
+  buildMapDraft()
   mapOpen.value = true
   // Sheets 方式は連携状態を取得し、設定済みブックのタブ一覧を復元（非ブロッキング = 原則4）
   if (src.method === 'sheets_pull') {
@@ -356,15 +451,16 @@ async function detectSheetColumns(): Promise<void> {
     )
     if (cols.length === 0) { parseError.value = '列を検出できませんでした（開始行・開始列をご確認ください）'; return }
     // 開始列でスライス済みのため columnIndex は 0 始まり（extractCsvRecords と一致）
-    mapDraft.value = cols.map((name, i) => ({ ...blankRow(), sourceField: name, columnIndex: i }))
+    detectedColumns.value = cols.map((name, i) => ({ name, index: i }))
+    autoAssignDetected()
     parseError.value = ''
-    toast.show(`${cols.length} 列を検出しました。各列の右辺（アプリ項目）を選択してください`, 'ok')
+    toast.show(`${cols.length} 列を検出しました。各対象項目に取込元の列を割り当ててください（名称一致は自動割当済み）`, 'ok')
   } catch (e) {
     parseError.value = `列の取得に失敗しました: ${(e as Error).message}`
   } finally { sheetsBusy.value = false }
 }
 
-/** CSV アップロード → 列（index＋論理名）抽出 → 左辺を自動生成 */
+/** CSV アップロード → 列（index＋論理名）抽出 → 検出列に取り込み（対象項目へ名称一致で自動割当） */
 async function onCsvUpload(ev: Event): Promise<void> {
   const input = ev.target as HTMLInputElement
   const file = input.files?.[0]
@@ -375,34 +471,36 @@ async function onCsvUpload(ev: Event): Promise<void> {
   input.value = '' // 同一ファイル再選択を許可
   const { columns } = parseCsvColumns(text, { hasHeader: cfgDraft.value.hasHeader ?? true, delimiter: cfgDraft.value.delimiter || ',' })
   if (columns.length === 0) { parseError.value = '列を検出できませんでした（区切り文字・ヘッダ有無をご確認ください）'; return }
-  mapDraft.value = columns.map(c => ({ ...blankRow(), sourceField: c.name, columnIndex: c.index }))
+  detectedColumns.value = columns.map(c => ({ name: c.name, index: c.index }))
+  autoAssignDetected()
   parseError.value = ''
-  toast.show(`${columns.length} 列を検出しました。各列の右辺（アプリ項目）を選択してください`, 'ok')
+  toast.show(`${columns.length} 列を検出しました。各対象項目に取込元の列を割り当ててください（名称一致は自動割当済み）`, 'ok')
 }
 
-/** JSON/API: 貼付テキスト → キー抽出 → 左辺を自動生成 */
+/** JSON/API: 貼付テキスト → キー抽出 → 検出キーに取り込み（対象項目へ名称一致で自動割当） */
 function onJsonParse(): void {
   try {
     const { keys, recordCount } = extractJsonKeys(parseText.value, cfgDraft.value.jsonRootPath || undefined)
     if (keys.length === 0) { parseError.value = 'キーを検出できませんでした'; return }
-    mapDraft.value = keys.map(k => ({ ...blankRow(), sourceField: k, jsonKey: k }))
+    detectedKeys.value = keys
+    autoAssignDetected()
     parseError.value = ''
-    toast.show(`${keys.length} キー（${recordCount} 件）を検出しました。右辺（アプリ項目）を選択してください`, 'ok')
+    toast.show(`${keys.length} キー（${recordCount} 件）を検出しました。各対象項目に取込元のキーを割り当ててください（名称一致は自動割当済み）`, 'ok')
   } catch (e) {
     parseError.value = `JSON を解析できませんでした: ${(e as Error).message}`
   }
 }
 
-function addMapRow(): void { mapDraft.value = [...mapDraft.value, blankRow()] }
-function removeMapRow(i: number): void { mapDraft.value = mapDraft.value.filter((_, idx) => idx !== i) }
-
 const mapBusy = ref(false)
 async function saveMapping(): Promise<void> {
   const src = selectedSource.value
   if (!src) return
-  const valid = mapDraft.value.filter(f => f.sourceField.trim() && f.targetItemKey.trim())
+  const method = src.method
+  // 取込元（右辺）を割り当てた対象項目のみ保存対象。固定長は開始/終了バイトの指定を割当の条件にする
+  const valid = mapDraft.value.filter(f =>
+    method === 'file_fixed' ? (f.byteStart != null && f.byteEnd != null) : f.sourceField.trim())
   if (valid.length === 0) {
-    toast.show('取込元項目と対象アプリ項目を 1 行以上設定してください', 'crit')
+    toast.show('取込元（列・キー・バイト範囲）を 1 項目以上割り当ててください', 'crit')
     return
   }
   // Sheets 方式は取込元（ブック・シート）の指定を必須にする（実行時 AKO-SHEETS-003 を事前に防ぐ）
@@ -416,9 +514,10 @@ async function saveMapping(): Promise<void> {
     // 方式別設定を先に保存（SoT → キャッシュの順 = 原則6）→ マッピング新版
     const cfgRes = await imp.updateSourceConfig(src.id, cfgDraft.value as ImportSourceConfig)
     if (!cfgRes.ok) { toast.show(`${cfgRes.error.code}: ${cfgRes.error.message}`, 'crit'); return }
-    const method = src.method
     const res = await imp.saveMapping(src.id, valid.map(f => ({
-      sourceField: f.sourceField.trim(), targetItemKey: f.targetItemKey.trim(), transform: f.transform.trim(),
+      // 固定長は sourceField（項目名）任意 = 対象ラベルで補完。CSV/Sheets/JSON は入力した列名/キー
+      sourceField: (f.sourceField.trim() || (method === 'file_fixed' ? f.targetLabel : '')),
+      targetItemKey: f.targetItemKey, transform: f.transform.trim(),
       // 方式別ロケータのみ保持し他方式の残骸を混入させない（JSON/API は sourceField = JSON キー）
       // Sheets は開始列でスライス済みの CSV として扱うため CSV と同じ columnIndex を保持する
       columnIndex: (method === 'file_csv' || method === 'sheets_pull') ? f.columnIndex : null,
@@ -426,7 +525,7 @@ async function saveMapping(): Promise<void> {
       byteEnd: method === 'file_fixed' ? f.byteEnd : null,
       jsonKey: (method === 'file_json' || method === 'api_pull') ? f.sourceField.trim() : null,
       // 突合キーは参照項目のみ保持（非参照項目の残骸を混入させない = ロケータと同じ思想）
-      lookupField: refTargetOf(f.targetItemKey.trim()) ? f.lookupField : null,
+      lookupField: f.isRef ? f.lookupField : null,
     })))
     if (!res.ok) { toast.show(`${res.error.code}: ${res.error.message}`, 'crit'); return }
     toast.show('マッピングを新しい版として保存しました', 'ok')
@@ -515,7 +614,7 @@ function openRun(row: Record<string, unknown>): void {
       <label class="flex items-center gap-1.5 text-[12px] text-sub">
         <input v-model="showArchived" type="checkbox">無効も表示
       </label>
-      <button v-if="imp.isAdmin.value" type="button" class="btn btn-primary" @click="openAdd">
+      <button v-if="imp.isAdmin.value" type="button" class="btn btn-primary" @click="openAdd()">
         <Plus class="h-4 w-4" aria-hidden="true" />
         取込元を追加
       </button>
@@ -584,7 +683,7 @@ function openRun(row: Record<string, unknown>): void {
     </UiSectionCard>
 
     <!-- 選択取込元の詳細 -->
-    <UiSectionCard v-if="selectedSource" :title="`${selectedSource.name} の詳細`" :description="`${IMPORT_METHOD_LABELS[selectedSource.method]} / ${IMPORT_ENTITY_LABELS[selectedSource.targetEntity]} / ${selectedSource.encoding === 'utf8' ? 'UTF-8' : 'Shift_JIS'}`">
+    <UiSectionCard v-if="selectedSource" :title="`${selectedSource.name} の詳細`" :description="`${IMPORT_METHOD_LABELS[selectedSource.method]} / ${IMPORT_ENTITY_LABELS[selectedSource.targetEntity]} / ${selectedSource.encoding === 'utf8' ? 'UTF-8' : 'Shift_JIS'}${selectedSource.segmentId ? ` / 事業セグメント: ${masters.segmentName(selectedSource.segmentId)}` : ''}`">
       <template v-if="imp.isAdmin.value" #actions>
         <button type="button" class="btn btn-sm" @click="openMapEditor">
           <Upload class="h-4 w-4" aria-hidden="true" />
@@ -690,14 +789,17 @@ function openRun(row: Record<string, unknown>): void {
       </template>
     </UiModal>
 
-    <!-- マッピング編集モーダル（方式別。左辺=取込元・右辺=対象アプリ項目〔既定+カスタム〕） -->
+    <!-- マッピング編集モーダル（取込対象基準。左辺=対象項目〔固定〕・右辺=取込元の列/キーを割当） -->
     <UiModal :open="mapOpen" title="マッピングを設定（新しい版）" width="720px" @close="mapOpen = false">
       <div v-if="selectedSource" class="grid gap-3">
         <p class="text-[12px] leading-relaxed text-sub">
-          取込元の項目（左）を対象アプリ「{{ IMPORT_ENTITY_LABELS[selectedSource.targetEntity] }}」の項目（右）へ対応づけます。
-          右辺の候補は対象アプリで有効な項目（既定＋カスタマイズ項目）です。
+          対象「{{ IMPORT_ENTITY_LABELS[selectedSource.targetEntity] }}」の項目（左）に、取込元のどの列/キー（右）を割り当てるかを設定します。
+          左辺は取込対象に設定された項目（既定＋カスタマイズ項目）です。使わない項目は空欄のままで構いません。
           「変換」は取込時に値を整形する処理で、選択式です（選ぶと行の下に説明を表示。前後の空白は常に除去されます）。
           保存すると新しい版になり、既存の有効版は旧版になります。
+        </p>
+        <p v-if="selectedSource.segmentId" class="rounded border border-line bg-info-soft px-3 py-2 text-[12px] text-sub">
+          この取込元の<span class="font-semibold text-ink">事業セグメントは「{{ masters.segmentName(selectedSource.segmentId) }}」</span>で共通適用されます（各項目での列割当は不要です）。
         </p>
 
         <!-- バリアント軸取込（product_variant）の説明: グルーピングキー・固有ID・バリアント軸の役割 -->
@@ -866,46 +968,58 @@ function openRun(row: Record<string, unknown>): void {
           <p v-if="parseError" class="text-[12px] text-crit">{{ parseError }}</p>
         </div>
 
-        <!-- マッピング行 -->
-        <div class="flex items-center justify-between">
-          <p class="text-[12px] font-semibold text-muted">項目マッピング（{{ mapDraft.length }} 行）</p>
-          <button type="button" class="btn btn-sm" @click="addMapRow">
-            <Plus class="h-4 w-4" aria-hidden="true" />
-            行を追加
-          </button>
+        <!-- マッピング行（左辺 = 取込対象の項目〔固定〕・右辺 = 取込元の割当） -->
+        <div class="flex flex-wrap items-center justify-between gap-1">
+          <p class="text-[12px] font-semibold text-muted">
+            項目マッピング（{{ IMPORT_ENTITY_LABELS[selectedSource.targetEntity] }}の {{ mapDraft.length }} 項目・割当済み {{ mappedCount }}）
+          </p>
+          <p v-if="(detectedColumns.length > 0 || detectedKeys.length > 0)" class="text-[11px] text-muted">
+            取込元を検出済み（{{ detectedColumns.length || detectedKeys.length }} 件）。右辺の入力候補から選べます
+          </p>
         </div>
 
-        <div v-if="targetFieldOptions.length === 0" class="card border-warn bg-warn-soft p-2.5 text-[12px] text-ink">
-          対象アプリの項目候補がありません。項目カスタマイズ画面で項目を有効化してください。
+        <div v-if="mapDraft.length === 0" class="card border-warn bg-warn-soft p-2.5 text-[12px] text-ink">
+          対象の項目がありません。項目カスタマイズ画面で項目を有効化してください。
         </div>
+        <div v-else-if="unmappedRequired.length > 0" class="card border-warn bg-warn-soft p-2.5 text-[12px] text-ink">
+          必須項目（{{ unmappedRequired.map(f => f.targetLabel).join('・') }}）に取込元が未割当です。未割当のままでも保存できますが、実行時に該当行は隔離されます。
+        </div>
+
+        <!-- 検出済み取込元の候補（右辺入力の datalist）。CSV/Sheets = 列名・JSON/API = キー -->
+        <datalist id="import-source-options">
+          <option v-for="c in detectedColumns" :key="`c-${c.index}`" :value="c.name" />
+          <option v-for="k in detectedKeys" :key="`k-${k}`" :value="k" />
+        </datalist>
 
         <div class="overflow-x-auto">
-          <div class="grid gap-2" :class="mapMethod === 'file_fixed' ? 'min-w-[620px]' : 'min-w-[540px]'">
+          <div class="grid gap-2" :class="mapMethod === 'file_fixed' ? 'min-w-[620px]' : 'min-w-[520px]'">
             <div v-for="(r, i) in mapDraft" :key="i" class="grid gap-1">
               <div class="grid items-center gap-2" :class="rowGridClass">
-                <!-- 左辺: 取込元項目（方式別。Sheets は開始列でスライス済みのため CSV と同じ列番号表現） -->
-                <template v-if="mapMethod === 'file_csv' || mapMethod === 'sheets_pull'">
-                  <span class="rounded border border-line bg-surface px-1 py-0.5 text-center text-[11px] tabular-nums text-muted">
-                    {{ r.columnIndex != null ? `列${r.columnIndex + 1}` : '—' }}
-                  </span>
-                  <input v-model="r.sourceField" class="input" type="text" placeholder="列の論理名" aria-label="取込元の列名">
-                </template>
-                <template v-else-if="mapMethod === 'file_fixed'">
-                  <input v-model.number="r.byteStart" class="input" type="number" min="1" placeholder="開始" aria-label="開始バイト">
-                  <input v-model.number="r.byteEnd" class="input" type="number" min="1" placeholder="終了" aria-label="終了バイト">
-                  <input v-model="r.sourceField" class="input" type="text" placeholder="項目名" aria-label="取込元の項目名">
-                </template>
-                <template v-else>
-                  <input v-model="r.sourceField" class="input" type="text" placeholder="JSON キー" aria-label="取込元の JSON キー">
-                </template>
+                <!-- 左辺: 取込対象の項目（固定。必須はバッジ表示） -->
+                <div class="flex min-w-0 items-center gap-1.5">
+                  <span class="truncate text-[12px] font-medium text-ink" :title="r.targetLabel">{{ r.targetLabel }}</span>
+                  <UiStatusBadge v-if="r.required" tone="warn" label="必須" />
+                </div>
 
-                <span class="text-center text-muted" aria-hidden="true">→</span>
+                <span class="text-center text-muted" aria-hidden="true">←</span>
 
-                <!-- 右辺: 対象アプリ項目（既定＋カスタム） -->
-                <select v-model="r.targetItemKey" class="select" aria-label="対象アプリ項目" @change="onTargetItemChange(r)">
-                  <option value="">（未選択）</option>
-                  <option v-for="o in targetFieldOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
-                </select>
+                <!-- 右辺: 取込元の割当（方式別。CSV/Sheets/JSON は検出候補の datalist 付き入力・固定長はバイト範囲） -->
+                <template v-if="mapMethod === 'file_fixed'">
+                  <input v-model.number="r.byteStart" class="input" type="number" min="1" placeholder="開始" :aria-label="`${r.targetLabel} の開始バイト`">
+                  <input v-model.number="r.byteEnd" class="input" type="number" min="1" placeholder="終了" :aria-label="`${r.targetLabel} の終了バイト`">
+                  <input v-model="r.sourceField" class="input" type="text" placeholder="項目名（任意）" :aria-label="`${r.targetLabel} の取込元項目名`">
+                </template>
+                <input
+                  v-else
+                  v-model="r.sourceField"
+                  class="input"
+                  type="text"
+                  list="import-source-options"
+                  :placeholder="mapMethod === 'file_json' || mapMethod === 'api_pull' ? '取込元の JSON キー' : '取込元の列名'"
+                  :aria-label="`${r.targetLabel} に割り当てる取込元`"
+                  @input="onCsvSourceInput(r)"
+                >
+
                 <!-- 変換は選択式（何が起きるかは行下の説明キャプションで表示 = title 非対応のモバイルにも届く） -->
                 <select v-model="r.transform" class="select" aria-label="変換" :title="transformHint(r.transform)">
                   <option v-for="o in IMPORT_TRANSFORMS" :key="o.value" :value="o.value" :title="o.hint">{{ o.label }}</option>
@@ -918,9 +1032,6 @@ function openRun(row: Record<string, unknown>): void {
                     {{ r.transform }}（旧設定の値）
                   </option>
                 </select>
-                <button type="button" class="btn btn-ghost btn-sm" aria-label="行を削除" @click="removeMapRow(i)">
-                  <Trash2 class="h-4 w-4 text-crit" aria-hidden="true" />
-                </button>
               </div>
 
               <!-- 変換の説明（選択中のみ。title ツールチップが出ないタッチ端末でも読める可視テキスト） -->
@@ -930,7 +1041,7 @@ function openRun(row: Record<string, unknown>): void {
 
               <!-- マスタ間連携キー（参照項目のみ）: 参照先マスタのどの項目と突合して解決するか -->
               <div
-                v-if="refTargetOf(r.targetItemKey)"
+                v-if="r.isRef && refTargetOf(r.targetItemKey)"
                 class="flex flex-wrap items-center gap-1.5 pl-2 text-[11px] text-muted"
               >
                 <span>連携キー（{{ refTargetOf(r.targetItemKey)!.refLabel }}マスタとの突合項目）:</span>

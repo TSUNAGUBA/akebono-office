@@ -899,6 +899,9 @@ async function applyMasterEntity(
 ): Promise<ApplyOutcome> {
   const known = new Set(def.fields.map(f => f.key))
   assertKnownTargets(fields, known, false)
+  // 保存時検証の再防衛（旧データ・手組みマッピングでも実行前に構造不備 = name 未割当等を止める）
+  const structErr = validateImportMapping(def.entity, fields)
+  if (structErr) throw err('AKO-IMP-008', structErr, 400)
   const fieldByKey = new Map(def.fields.map(f => [f.key, f]))
   // 参照項目（ref）の解決器を対象項目ごとに 1 度だけ作る（突合キーの検証込み = importRefLookup）
   const refLookups = new Map<string, RefLookup>()
