@@ -23,6 +23,7 @@ import { nowJstIso, todayJst } from '../../../shared/domain/jst'
 import { audit } from '../lib/audit'
 import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
+import { runListQuery } from '../lib/list-query'
 import { capCp } from '../lib/text'
 
 // ---------- 共通ヘルパー ----------
@@ -488,8 +489,10 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
   // ========== 発注（F-23。状態機械 = shared PO_STATUS_NEXT） ==========
 
   app.get('/purchase-orders', async (c) => {
-    const { rows } = await pool.query(`SELECT ${PO_COLS} FROM purchase_orders ORDER BY order_date DESC, id LIMIT 5000`)
-    return c.json({ data: rows })
+    return c.json(await runListQuery(pool, c, {
+      table: 'purchase_orders', cols: PO_COLS, orderBy: 'order_date DESC, id', maxLimit: 5000,
+      searchCols: ['code', 'note', 'order_date::text', 'due_date::text'],
+    }))
   })
 
   app.post('/purchase-orders', async (c) => {
@@ -545,8 +548,10 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
   // ========== 生産（F-22。実績は results jsonb への追記のみ + 在庫入庫） ==========
 
   app.get('/production-orders', async (c) => {
-    const { rows } = await pool.query(`SELECT ${MFG_COLS} FROM production_orders ORDER BY due_date DESC, id LIMIT 5000`)
-    return c.json({ data: rows })
+    return c.json(await runListQuery(pool, c, {
+      table: 'production_orders', cols: MFG_COLS, orderBy: 'due_date DESC, id', maxLimit: 5000,
+      searchCols: ['code', 'due_date::text'],
+    }))
   })
 
   app.post('/production-orders', async (c) => {
@@ -632,13 +637,17 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
   // ========== 入荷（F-25。予定 = 設定系 / 実績 = 記録系・追記のみ + 在庫入庫） ==========
 
   app.get('/inbound-plans', async (c) => {
-    const { rows } = await pool.query(`SELECT ${IBP_COLS} FROM inbound_plans ORDER BY due_date DESC, id LIMIT 5000`)
-    return c.json({ data: rows })
+    return c.json(await runListQuery(pool, c, {
+      table: 'inbound_plans', cols: IBP_COLS, orderBy: 'due_date DESC, id', maxLimit: 5000,
+      searchCols: ['code', 'due_date::text'],
+    }))
   })
 
   app.get('/inbound-results', async (c) => {
-    const { rows } = await pool.query(`SELECT ${IBR_COLS} FROM inbound_results ORDER BY received_at DESC, id LIMIT 5000`)
-    return c.json({ data: rows })
+    return c.json(await runListQuery(pool, c, {
+      table: 'inbound_results', cols: IBR_COLS, orderBy: 'received_at DESC, id', maxLimit: 5000,
+      searchCols: ['code', 'received_at::text'],
+    }))
   })
 
   app.post('/inbound-plans', async (c) => {
@@ -750,8 +759,10 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
   // ========== 仕入（F-24。記録系・訂正は赤黒） ==========
 
   app.get('/purchase-records', async (c) => {
-    const { rows } = await pool.query(`SELECT ${PUR_COLS} FROM purchase_records ORDER BY purchase_date DESC, id LIMIT 5000`)
-    return c.json({ data: rows })
+    return c.json(await runListQuery(pool, c, {
+      table: 'purchase_records', cols: PUR_COLS, orderBy: 'purchase_date DESC, id', maxLimit: 5000,
+      searchCols: ['code', 'purchase_date::text'],
+    }))
   })
 
   // 仕入計上。warehouseId 指定時（= 入荷管理 OFF の業態。判定はアプリ設定を持つクライアント側 =
@@ -832,13 +843,17 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
   // ========== 出荷（F-26。指示 = 取消はステータス / 実績 = 記録系 + 出庫・店舗預け移動） ==========
 
   app.get('/outbound-plans', async (c) => {
-    const { rows } = await pool.query(`SELECT ${OBP_COLS} FROM outbound_plans ORDER BY due_date DESC, id LIMIT 5000`)
-    return c.json({ data: rows })
+    return c.json(await runListQuery(pool, c, {
+      table: 'outbound_plans', cols: OBP_COLS, orderBy: 'due_date DESC, id', maxLimit: 5000,
+      searchCols: ['code', 'due_date::text'],
+    }))
   })
 
   app.get('/outbound-results', async (c) => {
-    const { rows } = await pool.query(`SELECT ${OBR_COLS} FROM outbound_results ORDER BY shipped_at DESC, id LIMIT 5000`)
-    return c.json({ data: rows })
+    return c.json(await runListQuery(pool, c, {
+      table: 'outbound_results', cols: OBR_COLS, orderBy: 'shipped_at DESC, id', maxLimit: 5000,
+      searchCols: ['code', 'shipped_at::text'],
+    }))
   })
 
   app.post('/outbound-plans', async (c) => {
@@ -1024,8 +1039,10 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
   // 台帳の**表示用**明細（直近順・打ち切りあり）。残高はこの明細から導出しない（下の balances を使う）。
   // 打ち切り（LIMIT）は「新しい順に読める分だけ表示」用であり、残高計算の母集団ではない（Codex P1-2）
   app.get('/inventory-transactions', async (c) => {
-    const { rows } = await pool.query(`SELECT ${ITX_COLS} FROM inventory_transactions ORDER BY occurred_at DESC, id LIMIT 20000`)
-    return c.json({ data: rows })
+    return c.json(await runListQuery(pool, c, {
+      table: 'inventory_transactions', cols: ITX_COLS, orderBy: 'occurred_at DESC, id', maxLimit: 20000,
+      searchCols: ['kind', 'reason', 'ref_type', 'ref_line_id'],
+    }))
   })
 
   // SKU × 倉庫の**残高**（全量集約 = SUM(qty)）。台帳明細の表示打ち切り（LIMIT 20000）に依らず
@@ -1132,6 +1149,42 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
     })
     await audit(pool, { actorId: user.id, action: 'create', entity: 'inventory_transactions', entityId: warehouseId, detail: `棚卸確定（調整 ${adjusted} 件）` })
     return c.json({ data: { adjusted } })
+  })
+
+  // 在庫調整・移動・棚卸の取消（原則9.5）。台帳は追記のみのため物理削除せず、反対仕訳を追記して
+  // 残高を戻す（監査ログ付き = 記録系の取消の正しい形）。実績・入出荷は各画面の取消経路を使う。
+  // 冪等: 反対仕訳は ref_type='reverse' + ref_line_id=<元 refType:refLineId> で UNIQUE 制約により二重取消を防ぐ。
+  const REVERSIBLE_REFTYPES = new Set(['adjust', 'transfer', 'stocktake'])
+  app.post('/inventory/reverse', async (c) => {
+    const user = c.get('user')
+    const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
+    const transactionId = String(body.transactionId ?? '').trim()
+    if (!transactionId) throw err('AKO-INV-001', '取消対象の明細を指定してください', 400)
+    const reversed = await inTxn(pool, async (db) => {
+      const { rows: targetRows } = await db.query<{ refType: string; refLineId: string }>(
+        `SELECT ref_type AS "refType", ref_line_id AS "refLineId" FROM inventory_transactions WHERE id = $1`,
+        [transactionId])
+      const target = targetRows[0]
+      if (!target) throw err('AKO-GEN-002', '対象が見つかりません', 404)
+      if (!REVERSIBLE_REFTYPES.has(target.refType)) {
+        throw err('AKO-INV-007', 'この明細は取消できません（入出荷・仕入・生産の実績は各画面の取消をご利用ください）', 400)
+      }
+      const revRef = `${target.refType}:${target.refLineId}`
+      const { rows: existRev } = await db.query(
+        `SELECT 1 FROM inventory_transactions WHERE ref_type = 'reverse' AND ref_line_id = $1 LIMIT 1`, [revRef])
+      if (existRev.length > 0) throw err('AKO-INV-008', 'この明細は既に取消済みです', 409)
+      // グループ全体（移動は出/入の 2 行）を反対仕訳する
+      const { rows: group } = await db.query<{ skuId: string; warehouseId: string; qty: number; kind: string }>(
+        `SELECT sku_id AS "skuId", warehouse_id AS "warehouseId", qty, kind FROM inventory_transactions
+         WHERE ref_type = $1 AND ref_line_id = $2`, [target.refType, target.refLineId])
+      const entries: InventoryPostEntry[] = group.map(g => ({
+        skuId: g.skuId, warehouseId: g.warehouseId, qty: -g.qty, kind: g.kind, reason: null,
+        refType: 'reverse', refLineId: revRef,
+      }))
+      return postInventory(db, entries)
+    })
+    await audit(pool, { actorId: user.id, action: 'update', entity: 'inventory_transactions', entityId: transactionId, detail: '在庫調整の取消（反対仕訳）' })
+    return c.json({ data: { reversed } })
   })
 
   return app

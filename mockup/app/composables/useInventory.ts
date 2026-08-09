@@ -180,8 +180,58 @@ export function useInventory() {
     return { ok: true, adjusted: entries.length }
   }
 
+  // 反対仕訳（取消）まわり。調整/移動/棚卸のみ取消可（実績・入出荷は各画面の取消経路を使う）
+  const REVERSIBLE_REFTYPES = new Set(['adjust', 'transfer', 'stocktake'])
+  function reverseRefOf(t: { refType: string; refLineId: string }): string {
+    return `${t.refType}:${t.refLineId}`
+  }
+  /** 取消済みグループキー（反対仕訳の ref_line_id）の集合。状態判定を O(1) にする */
+  const reversedRefs = computed(() => {
+    const s = new Set<string>()
+    for (const t of txns.value) if (t.refType === 'reverse') s.add(t.refLineId)
+    return s
+  })
+
+  /**
+   * 台帳明細の取消状態（原則9.5）。
+   * - 'reversible': 調整/移動/棚卸で、まだ取消していない → 取消ボタンを出す
+   * - 'reversed': 反対仕訳済み → 取消済みバッジ
+   * - 'na': 実績・入出荷・既存の反対仕訳 → 取消不可（各画面の取消経路を使う）
+   */
+  function reverseStateOf(t: InventoryTransaction): 'reversible' | 'reversed' | 'na' {
+    if (t.refType === 'reverse' || !REVERSIBLE_REFTYPES.has(t.refType)) return 'na'
+    return reversedRefs.value.has(reverseRefOf(t)) ? 'reversed' : 'reversible'
+  }
+
+  /**
+   * 在庫調整・移動・棚卸の取消（原則9.5）。台帳は追記のみのため物理削除せず、反対仕訳を追記して
+   * 残高を戻す。移動は出/入の 2 行をまとめて反対仕訳する。冪等 = 既に取消済みなら弾く。
+   */
+  async function reverse(transactionId: string): Promise<Result> {
+    const target = txns.value.find(t => t.id === transactionId)
+    if (!target) return { ok: false, error: { code: 'AKO-GEN-002', message: '対象が見つかりません' } }
+    if (!REVERSIBLE_REFTYPES.has(target.refType)) {
+      return { ok: false, error: { code: 'AKO-INV-007', message: 'この明細は取消できません（入出荷・仕入・生産の実績は各画面の取消をご利用ください）' } }
+    }
+    if (isApi) {
+      return apiWrite('/v1/akebono/inventory/reverse', {
+        body: { transactionId }, reload: ['inventoryTransactions', 'inventoryBalances'], idempotent: true,
+      })
+    }
+    const revRef = reverseRefOf(target)
+    if (reversedRefs.value.has(revRef)) {
+      return { ok: false, error: { code: 'AKO-INV-008', message: 'この明細は既に取消済みです' } }
+    }
+    const group = txns.value.filter(t => t.refType === target.refType && t.refLineId === target.refLineId)
+    post(group.map(t => ({
+      skuId: t.skuId, warehouseId: t.warehouseId, qty: -t.qty, kind: t.kind, reason: null,
+      refType: 'reverse', refLineId: revRef,
+    })))
+    return { ok: true, id: revRef }
+  }
+
   return {
     txns, balances, balanceOf, totalOf, balancesOfWarehouse, ledgerOf,
-    post, adjust, transfer, stocktake,
+    post, adjust, transfer, stocktake, reverse, reverseStateOf,
   }
 }

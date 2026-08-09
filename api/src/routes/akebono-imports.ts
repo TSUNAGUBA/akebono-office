@@ -30,6 +30,7 @@ import { requireAdmin } from '../auth'
 import { audit } from '../lib/audit'
 import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
+import { runListQuery } from '../lib/list-query'
 import { safeFetch } from '../lib/safe-fetch'
 import { capCp } from '../lib/text'
 import {
@@ -1027,8 +1028,10 @@ export function akebonoImportsRoutes(pool: pg.Pool, env: Env): Hono {
   })
 
   app.get('/import-runs', async (c) => {
-    const { rows } = await pool.query(`SELECT ${RUN_COLS} FROM import_runs ORDER BY started_at DESC, id LIMIT 5000`)
-    return c.json({ data: rows })
+    return c.json(await runListQuery(pool, c, {
+      table: 'import_runs', cols: RUN_COLS, orderBy: 'started_at DESC, id', maxLimit: 5000,
+      searchCols: ['code', 'status', 'started_at::text'],
+    }))
   })
 
   // ---------- 取込元（設定系・CRUD・論理削除で取消 = 原則9.5） ----------

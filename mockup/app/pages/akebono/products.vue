@@ -56,7 +56,10 @@ const filtered = computed(() =>
     .sort((a, b) => a.code.localeCompare(b.code, 'ja')),
 )
 
-const tableRows = computed(() => filtered.value as unknown as Record<string, unknown>[])
+// クライアントページング（検索・フィルタは本ページの filtered が担い、ページングのみ共通化）
+const { page, pageSize, rows: pagedRows, total } = useListView<Product>({ source: filtered })
+watch([search, segmentFilter, statusFilter], () => { page.value = 1 })
+const tableRows = computed(() => pagedRows.value as unknown as Record<string, unknown>[])
 
 const columns: TableColumn[] = [
   { key: 'thumb', label: '', width: '48px' },
@@ -474,7 +477,7 @@ async function saveMatrix(): Promise<void> {
         <UiSelect v-model="statusFilter" :options="ACTIVE_FILTER_OPTIONS" aria-label="状態フィルタ" />
       </UiFilterBar>
 
-      <UiSectionCard :title="`商品一覧（${filtered.length}件）`" flush>
+      <UiSectionCard :title="`商品一覧（${total}件）`" flush>
         <UiDataTable
           :columns="columns"
           :rows="tableRows"
@@ -509,6 +512,7 @@ async function saveMatrix(): Promise<void> {
             />
           </template>
         </UiDataTable>
+        <UiPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
       </UiSectionCard>
     </div>
 

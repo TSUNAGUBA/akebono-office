@@ -2080,3 +2080,66 @@
     取込側だけに導入せず据え置き。
 - **再検証（是正後）**: api typecheck green・unit **301 passed**（`import-master` に NIT-6/MINOR-1 の回帰を追加）・
   mockup typecheck green・**221 passed**。**未解決指摘ゼロ = 原則9 充足で完了。**
+
+## 61. 一覧のサーバーページング＋検索の横展開・仕入先ビュー導線・在庫調整の取消（オペレーター指示 2026-08-09 ②）の完了条件（Definition of Done）
+
+- **背景**: データ件数の増加に耐える一覧（検索＋ページング）を全一覧へ横展開する。方式はサーバー側ページングを基本とし、
+  同一コレクションから集計・グラフ・横断導出を行う一覧は全件ハイドレーションを保ったままクライアント側ページングとする
+  （原則6 = 派生・KPI を壊さない I/F ファースト）。併せて仕入先ビューの導線改善と、追記系（在庫台帳）の取消フロー（原則9.5）を補完する。
+
+### 61-1 共通基盤（横展開の唯一の実装 = 原則3）
+- [x] `components/ui/UiPagination.vue`: レスポンシブなページング UI（PC=横並び／モバイル=折返し・原則8）。`page`（1 始まり）・
+  `pageSize`・`total` を props、`update:page`/`update:pageSize` を emit。件数 0 は非表示（空状態はテーブル側が担当）。
+- [x] `composables/useListView.ts`: 検索＋ページングのデュアルモード共通コントローラ。
+  - モック／`fetch` 未指定: `source`（全件 ref）をクライアント側で絞込・スライス。
+  - API モードかつ `fetch` 指定: `q/limit/offset` をサーバーへ渡し `{ rows, total }` を反映（検索は 250ms デバウンス・
+    ページ／件数変更は即時・遅延応答は seq ガードで破棄・取得失敗は非ブロッキング＝原則4）。
+  - 検索語・表示件数の変更で 1 ページ目へ戻す（両モード共通）。ソース縮小時のページはみ出しを補正。
+
+### 61-2 API（サーバーページング＋検索・下位互換）
+- [x] `api/src/lib/list-query.ts` `runListQuery`: `limit/offset/q` の**いずれも無いとき**は従来どおり maxLimit までの
+  bare 配列（`{ data }`）を返し、既存の全件ハイドレーション経路（`useApi.loadApiCollection`）を厳密に維持（原則7）。
+  パラメータが来たときのみ `COUNT(*)` を伴うページ取得へ切り替え、`total` を**兄弟キー**として付与（配列は依然 `data`）。
+  検索列はコード定義のみ・`q` はパラメータ化（インジェクション不可）。
+- [x] 適用エンドポイント（記録系一覧）: purchase-orders / production-orders / inbound-plans / inbound-results /
+  purchase-records / outbound-plans / outbound-results / inventory-transactions（trade）、sales-records / invoices /
+  payment-notices / payment-receipts（billing）、import-runs（imports）。検索列は各テーブルの code・状態・日付（`::text`）等。
+- [x] `useApi.ts`: `apiFetchList`（envelope から `total` を読む専用経路。`total` 無しは `rows.length` へフォールバック）＋
+  `apiListPage(collection, params)`（`CUSTOM_COLLECTION_ENDPOINTS` からパス解決）。認証ヘッダ生成を `authHeaders()` に共通化。
+
+### 61-3 フロント横展開
+- [x] **サーバーページング**（純粋な記録系一覧・同一コレクションの同ページ集計なし）: 発注 / 仕入 / 生産 / 入荷予定 / 出荷指示。
+  書込（作成・状態遷移・実績登録）後は `refresh()` で現在ページを取り直す（クライアントは自動追従）。
+  - 位置づけ: 一覧の**描画をページ単位**に絞り、**検索は全行に対してサーバー側**で効く（ハイドレーション済みの
+    可視分だけでなく全件対象）ことが主眼。詳細ドロワーや消込導出（`orderById`/`receivedQtyOf` 等）は従来どおり
+    ハイドレーション済みコレクションを参照するため全件ロード自体は残る（この設計上の判断を明記＝原則5）。
+    件数超大時に全件ロードを外すには詳細取得の単票 API 化が必要で、本バッチのスコープ外（同基盤の上に後続で対応可能）。
+- [x] **クライアントページング**（同一コレクションの集計・グラフ・横断導出を保つ）: 商品 / 顧客(会社) / 共通マスタ /
+  売上明細 / 在庫照会・受払台帳 / 取込実行履歴 / 請求（請求・マージン・支払通知・入金対象・入金履歴の 5 一覧）。
+- [x] 意図的に非対象（件数が構造的に小さい・据え置きを記録）: 業態別サマリー（company）・設定/業態・設定/項目・
+  取込元/マッピング一覧・ダッシュボード。今後件数が増える兆候が出た時点で同基盤で横展開する。
+
+### 61-4 仕入先ビューの導線改善
+- [x] 仕入先は別マスタではなく取引先（会社）に `partnerRoles='supplier'` で内包される。顧客(会社)マスタに
+  **取引ロールフィルタ**を追加し、メニューに「仕入先」カード（`/masters/customers?role=supplier` のディープリンク）を新設。
+  クエリ `role` は既知ロールのみ受理（不正値は無視）。「仕入先が別画面になくて分かりにくい」導線問題を解消。
+
+### 61-5 在庫調整の取消（原則9.5・追記系の正しい取消 = 反対仕訳）
+- [x] 在庫台帳は追記のみが SoT のため物理削除せず、**反対仕訳**（qty 反転・`ref_type='reverse'`・
+  `ref_line_id=<元 refType:refLineId>`）を追記して残高を戻す。監査ログ付き＝記録系の取消の正しい形。
+  移動は出/入の 2 行をまとめて反対仕訳。冪等 = UNIQUE(ref_type, ref_line_id, kind) + 二重取消は 409（AKO-INV-008）。
+  実績・入出荷・仕入・生産は各画面の取消経路があるため対象外（reverse は 400 = AKO-INV-007）。
+  API `POST /v1/akebono/inventory/reverse`・`useInventory.reverse/reverseStateOf`・受払台帳に取消ボタン／取消済みバッジ。
+- [x] これにより §60 で新設した**棚卸**の取消フロー未整備（原則9.5 の残課題）を解消。調整・移動も同経路でカバー。
+
+### 61-6 検証
+- [x] api typecheck green・mockup typecheck green。
+- [x] api unit **301 passed** / mockup unit **221 passed**。
+- [x] api 統合 **240 passed**（新規: パラメータ無し=bare 配列で `total` 無し＝下位互換／`limit/offset/total`＝offset 不変・
+  ページ跨ぎ非重複／検索 `q` で total 縮小・返却行の一致／在庫調整の取消で残高復帰・二重取消 409・反対仕訳の再取消 400／
+  移動の 2 行取消で残高復帰）。
+- [x] 独立レビュー / 監査の反復（原則9）: <!-- 反復レビュー結果をここに記載 -->
+
+### 61-7 下位互換・データ影響
+- [x] スキーマ変更なし（反対仕訳は既存 inventory_transactions への追記のみ・移行不要）。API 一覧はパラメータ無しで
+  従来レスポンス（bare 配列）を厳密維持するため、既存クライアント・全件ハイドレーション・統合テストは無改修で動作。

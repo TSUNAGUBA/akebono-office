@@ -50,7 +50,20 @@ const currentMeta = computed(() => m.meta.find(x => x.key === activeTab.value)!)
 const currentCrud = computed(() => m.cruds[activeTab.value] as unknown as LooseCrud)
 const columns = computed(() => AKEBONO_MASTER_COLUMNS[activeTab.value])
 const fields = computed<FieldDef[]>(() => m.fieldsFor(activeTab.value))
-const rows = computed<Row[]>(() => currentCrud.value.list.value)
+
+// 検索（名称・ID）＋ クライアントページング。タブ切替・検索で 1 ページ目へ戻す
+const search = ref('')
+const filteredRows = computed<Row[]>(() => {
+  const list = currentCrud.value.list.value
+  const q = search.value.trim().toLowerCase()
+  if (!q) return list
+  return list.filter(r =>
+    String((r as Record<string, unknown>).name ?? '').toLowerCase().includes(q)
+    || String((r as Record<string, unknown>).id ?? '').toLowerCase().includes(q))
+})
+const { page, pageSize, rows: pagedRows, total } = useListView<Row>({ source: filteredRows })
+watch([search, activeTab], () => { page.value = 1 })
+const rows = computed<Row[]>(() => pagedRows.value)
 
 const WAREHOUSE_KIND_LABELS: Record<WarehouseKind, string> = {
   own: '自社倉庫',
@@ -267,7 +280,10 @@ function asTerm(row: Row): ConsignmentTerm {
       <span class="text-sub">で設定できます。</span>
     </div>
 
-    <UiSectionCard :title="`${currentMeta.label}（${rows.length}件）`" :description="currentMeta.description" flush>
+    <UiSectionCard :title="`${currentMeta.label}（${total}件）`" :description="currentMeta.description" flush>
+      <UiFilterBar>
+        <UiSearchInput v-model="search" placeholder="名称・IDで検索" />
+      </UiFilterBar>
       <UiDataTable
         :columns="columns"
         :rows="rows"
@@ -311,6 +327,7 @@ function asTerm(row: Row): ConsignmentTerm {
           <UiStatusBadge :label="value === false ? '無効' : '有効'" :tone="value === false ? 'neutral' : 'ok'" dot />
         </template>
       </UiDataTable>
+      <UiPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
     </UiSectionCard>
 
     <template #drawer>

@@ -27,7 +27,13 @@ function skuLabelOf(skuId: string): string {
   return s ? products.skuLabel(s) : skuId
 }
 
-// ---------- 一覧 ----------
+// ---------- 一覧（検索 + ページング。モック=クライアント / API=サーバー） ----------
+const { query, page, pageSize, rows: pageRows, total, refresh } = useListView<InboundPlan>({
+  source: activePlans,
+  match: (pl, q) => pl.code.toLowerCase().includes(q) || pl.dueDate.includes(q),
+  fetch: params => apiListPage<InboundPlan>('inboundPlans', params),
+})
+
 const columns: TableColumn[] = [
   { key: 'code', label: 'コード', primary: true },
   { key: 'warehouse', label: '入荷先', primary: true },
@@ -37,7 +43,7 @@ const columns: TableColumn[] = [
 ]
 
 const tableRows = computed(() =>
-  activePlans.value.map(p => ({
+  pageRows.value.map(p => ({
     id: p.id,
     code: p.code,
     warehouse: warehouseName(p.warehouseId),
@@ -84,7 +90,7 @@ async function cancelSelected(): Promise<void> {
   )
   if (!ok) return
   const res = await inbound.cancelPlan(plan.id)
-  if (res.ok) toast.show('入荷予定を取消しました', 'warn')
+  if (res.ok) { toast.show('入荷予定を取消しました', 'warn'); refresh() }
   else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
 }
 
@@ -130,6 +136,7 @@ async function submitCreateInner(): Promise<void> {
   }
   toast.show('入荷予定を作成しました', 'ok')
   createOpen.value = false
+  refresh() // サーバーページング時は現在ページを取り直す（クライアントは自動追従）
 }
 
 // ---------- 直接入荷登録 ----------
@@ -165,6 +172,7 @@ async function submitDirectInner(): Promise<void> {
   }
   toast.show('入荷実績を登録しました（在庫へ入庫）', 'ok')
   directOpen.value = false
+  refresh() // サーバーページング時は現在ページを取り直す（実績で予定ステータスが変わるため）
 }
 
 // ---------- 予定に対する入荷実績登録（残数プリフィル） ----------
@@ -201,6 +209,7 @@ async function submitResultInner(): Promise<void> {
   }
   toast.show('入荷実績を登録しました（在庫へ入庫）', 'ok')
   resultOpen.value = false
+  refresh() // サーバーページング時は現在ページを取り直す（実績で予定ステータスが変わるため）
 }
 </script>
 
@@ -220,7 +229,10 @@ async function submitResultInner(): Promise<void> {
     </UiPageHeader>
 
     <div class="grid gap-3">
-      <UiSectionCard :title="`入荷予定（${activePlans.length}件）`" flush>
+      <UiSectionCard :title="`入荷予定（${total}件）`" flush>
+        <UiFilterBar>
+          <UiSearchInput v-model="query" placeholder="コード・予定日で検索" />
+        </UiFilterBar>
         <UiDataTable
           :columns="columns"
           :rows="tableRows"
@@ -243,6 +255,7 @@ async function submitResultInner(): Promise<void> {
             />
           </template>
         </UiDataTable>
+        <UiPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
       </UiSectionCard>
     </div>
 

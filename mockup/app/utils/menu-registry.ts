@@ -68,6 +68,7 @@ export const MENU_CARDS: Record<MenuArea, MenuCardDef[]> = {
     { id: 'holidays', title: '祝日', description: '内閣府の公式データ取込と手動管理。翌営業日計算・カレンダーへ反映', icon: 'CalendarDays', to: '/masters/holidays' },
     { id: 'company', title: '自社', description: '自社の会社情報・会計年度開始月（他社展開時の差し替え点）', icon: 'Building', to: '/masters/company' },
     { id: 'customers', title: '顧客(会社)', description: '会社名・業界（複数+主）・エイリアス・規模・担当', icon: 'Building2', to: '/masters/customers' },
+    { id: 'suppliers', title: '仕入先', description: '取引先のうち仕入先ロールのみを絞り込み表示（顧客(会社)マスタに内包）', icon: 'Truck', to: '/masters/customers?role=supplier' },
     { id: 'contacts', title: '顧客(人)', description: '氏名・所属会社・キーパーソン度・連絡先・メモ', icon: 'Contact', to: '/masters/contacts' },
     { id: 'relations-company', title: '顧客関係(会社)', description: '会社間の関係エッジ（納品先・競合など）。グラフ可視化', icon: 'Network', to: '/masters/relations-company' },
     { id: 'relations-contact', title: '顧客関係(人)', description: '人どうしの関係エッジ（上司部下・紹介など）。グラフ可視化', icon: 'Network', to: '/masters/relations-contact' },
@@ -94,7 +95,7 @@ export const DEFAULT_MENU_CATEGORIES: Record<MenuArea, MenuCategoryDef[]> = {
   masters: [
     { id: 'org', label: '組織・権限', cardIds: ['members', 'departments', 'titles', 'permissions'] },
     { id: 'hr', label: '勤怠・休暇', cardIds: ['leave-types', 'holidays'] },
-    { id: 'crm', label: '会社・顧客', cardIds: ['company', 'customers', 'contacts', 'relations-company', 'relations-contact', 'relation-types', 'industries'] },
+    { id: 'crm', label: '会社・顧客', cardIds: ['company', 'customers', 'suppliers', 'contacts', 'relations-company', 'relations-contact', 'relation-types', 'industries'] },
     { id: 'biz', label: '業務・ナレッジ', cardIds: ['projects', 'decision-themes', 'work-categories', 'knowledge', 'settings'] },
   ],
 }

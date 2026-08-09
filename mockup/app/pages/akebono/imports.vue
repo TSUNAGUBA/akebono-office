@@ -588,6 +588,11 @@ async function runImport(): Promise<void> {
 const runRows = computed(() =>
   (selectedSourceId.value ? imp.runsOf(selectedSourceId.value) : []) as unknown as Record<string, unknown>[],
 )
+// クライアントページング（取込元切替で 1 ページ目へ）
+const {
+  page: runPage, pageSize: runPageSize, rows: runPaged, total: runTotal,
+} = useListView<Record<string, unknown>>({ source: runRows, pageSize: 20 })
+watch(selectedSourceId, () => { runPage.value = 1 })
 const runColumns: TableColumn[] = [
   { key: 'code', label: 'コード', primary: true },
   { key: 'startedAt', label: '開始', primary: true },
@@ -751,7 +756,7 @@ function openRun(row: Record<string, unknown>): void {
           <p class="mb-1.5 text-[12px] font-semibold text-muted">実行履歴（行クリックでエラー明細）</p>
           <UiDataTable
             :columns="runColumns"
-            :rows="runRows"
+            :rows="runPaged"
             clickable
             empty-title="実行履歴がありません"
             empty-hint="「取込を実行」で取込を開始してください"
@@ -778,6 +783,7 @@ function openRun(row: Record<string, unknown>): void {
               </span>
             </template>
           </UiDataTable>
+          <UiPagination v-model:page="runPage" v-model:page-size="runPageSize" :total="runTotal" />
         </div>
       </div>
     </UiSectionCard>

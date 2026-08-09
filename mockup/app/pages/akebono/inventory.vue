@@ -91,6 +91,12 @@ const browseRows = computed(() => {
   return rows
 })
 
+// クライアントページング（検索・倉庫フィルタは browseRows が担い、ページングのみ共通化）
+const {
+  page: browsePage, pageSize: browsePageSize, rows: browsePaged, total: browseTotal,
+} = useListView<Record<string, unknown>>({ source: browseRows, pageSize: 50 })
+watch([browseSearch, browseWh], () => { browsePage.value = 1 })
+
 const browseColumns: TableColumn[] = [
   { key: 'skuLabel', label: 'SKU', primary: true },
   { key: 'warehouseName', label: '倉庫', primary: true },
@@ -218,8 +224,15 @@ const ledgerRows = computed(() =>
     kindLabel: INVENTORY_KIND_LABELS[t.kind],
     qty: t.qty,
     refType: t.refType,
+    reverseState: inv.reverseStateOf(t),
   })),
 )
+
+// クライアントページング（SKU・倉庫フィルタは ledgerRows が担い、ページングのみ共通化）
+const {
+  page: ledgerPage, pageSize: ledgerPageSize, rows: ledgerPaged, total: ledgerTotal,
+} = useListView<Record<string, unknown>>({ source: ledgerRows, pageSize: 50 })
+watch([ledgerSku, ledgerWh], () => { ledgerPage.value = 1 })
 
 const ledgerColumns: TableColumn[] = [
   { key: 'occurredAt', label: '日時', primary: true },
@@ -228,7 +241,21 @@ const ledgerColumns: TableColumn[] = [
   { key: 'kindLabel', label: '区分', primary: true },
   { key: 'qty', label: '数量', align: 'right', primary: true },
   { key: 'refType', label: '参照' },
+  { key: 'cancel', label: '取消', align: 'center' },
 ]
+
+/** 在庫調整・移動・棚卸の取消（反対仕訳を追記して残高を戻す = 原則9.5） */
+async function cancelLedger(id: string): Promise<void> {
+  const ok = await confirm.ask(
+    '在庫調整の取消',
+    'この明細を取消します。台帳は追記のみのため、反対仕訳を追記して残高を戻します（元の明細は監査のため残ります）。よろしいですか？',
+    { danger: true, confirmLabel: '取消する' },
+  )
+  if (!ok) return
+  const res = await inv.reverse(id)
+  if (res.ok) toast.show('取消しました（反対仕訳を追記）', 'warn')
+  else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
+}
 
 // ========== 棚卸 ==========
 const stWh = ref('')
@@ -350,10 +377,10 @@ async function submitStocktakeInner(): Promise<void> {
         <UiSearchInput v-model="browseSearch" placeholder="SKU 名で検索" />
       </UiFilterBar>
 
-      <UiSectionCard :title="`在庫一覧（${browseRows.length}件）`" flush>
+      <UiSectionCard :title="`在庫一覧（${browseTotal}件）`" flush>
         <UiDataTable
           :columns="browseColumns"
-          :rows="browseRows"
+          :rows="browsePaged"
           empty-title="在庫のある SKU × 倉庫がありません"
           empty-hint="入荷実績・仕入計上・生産実績・在庫調整で入庫すると残高が表示されます"
         >
@@ -373,6 +400,9 @@ async function submitStocktakeInner(): Promise<void> {
             >{{ fmtInt(Number(row.logical)) }}</span>
           </template>
         </UiDataTable>
+        <div class="px-3 pt-1">
+          <UiPagination v-model:page="browsePage" v-model:page-size="browsePageSize" :total="browseTotal" />
+        </div>
         <p class="px-3 py-2 text-[11px] text-muted">論理在庫 = 実在庫 + 未完了の入荷予定 − 未完了の出荷指示（予定を加味した見込み在庫）。</p>
       </UiSectionCard>
     </div>
@@ -388,10 +418,10 @@ async function submitStocktakeInner(): Promise<void> {
         </div>
       </UiFilterBar>
 
-      <UiSectionCard :title="`受払明細（${ledgerRows.length}件）`" flush>
+      <UiSectionCard :title="`受払明細（${ledgerTotal}件）`" flush>
         <UiDataTable
           :columns="ledgerColumns"
-          :rows="ledgerRows"
+          :rows="ledgerPaged"
           empty-title="該当する受払明細がありません"
         >
           <template #cell-skuLabel="{ row }">
@@ -406,7 +436,20 @@ async function submitStocktakeInner(): Promise<void> {
               :class="Number(row.qty) > 0 ? 'text-ok' : Number(row.qty) < 0 ? 'text-crit' : ''"
             >{{ Number(row.qty) > 0 ? '+' : '' }}{{ fmtInt(Number(row.qty)) }}</span>
           </template>
+          <template #cell-cancel="{ row }">
+            <button
+              v-if="row.reverseState === 'reversible'"
+              type="button"
+              class="btn btn-ghost btn-sm text-crit"
+              @click="cancelLedger(String(row.id))"
+            >取消</button>
+            <UiStatusBadge v-else-if="row.reverseState === 'reversed'" label="取消済み" tone="neutral" />
+            <span v-else class="text-muted">—</span>
+          </template>
         </UiDataTable>
+        <div class="px-3 pt-1">
+          <UiPagination v-model:page="ledgerPage" v-model:page-size="ledgerPageSize" :total="ledgerTotal" />
+        </div>
       </UiSectionCard>
     </div>
 
