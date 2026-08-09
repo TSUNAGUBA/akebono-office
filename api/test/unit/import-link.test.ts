@@ -16,9 +16,13 @@ describe('importRefTargetOf（取込対象 × 対象項目 → 参照先マス�
     expect(importRefTargetOf('sales_record', 'qty')).toBeNull()
     expect(importRefTargetOf('unknown_entity', 'companyId')).toBeNull()
   })
-  it('カタログの参照項目は全取込対象で定義されている（product/product_variant/company/sales_record/inventory）', () => {
+  it('カタログの参照項目は各取込対象で定義されている（記録系＋参照を持つ共通マスタ取込）', () => {
     expect(Object.keys(IMPORT_REF_TARGETS).sort())
-      .toEqual(['company', 'inventory', 'product', 'product_variant', 'sales_record'])
+      .toEqual(['company', 'inventory', 'master_category', 'master_warehouse', 'product', 'product_variant', 'sales_record'])
+  })
+  it('共通マスタ取込の参照項目（倉庫の店舗・カテゴリの親）も突合できる', () => {
+    expect(importRefTargetOf('master_warehouse', 'companyId')?.refEntity).toBe('company')
+    expect(importRefTargetOf('master_category', 'parentId')?.refEntity).toBe('category')
   })
 })
 

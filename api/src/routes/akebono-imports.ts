@@ -36,6 +36,10 @@ import {
   importRefTargetOf, isValidLookupField, lookupKeyLabel, validateImportMapping, variantAxisLabelsOf,
   VARIANT_IMPORT_FIELDS, type ImportRefTarget,
 } from '../../../shared/domain/import-link'
+import {
+  masterImportDefOf, parseMasterFieldValue, MASTER_IMPORT_ENTITIES,
+  type MasterImportDef, type MasterImportField,
+} from '../../../shared/domain/import-master'
 import { normalizeFieldLocators, normalizeImportSourceConfig, rowsToCsv } from '../../../shared/domain/import-parse'
 import {
   extractCsvRecords, extractFixedRecords, extractJsonRecords, MAX_IMPORT_ROWS,
@@ -46,9 +50,14 @@ import { fetchSheetRows } from './sheets'
 import { nextDocCode, postInventory } from './akebono-trade'
 
 const IMPORT_METHODS = ['file_csv', 'file_fixed', 'file_json', 'api_pull', 'sheets_pull']
-const IMPORT_ENTITIES = ['product', 'sku', 'company', 'sales_record', 'inventory', 'product_variant']
+const IMPORT_ENTITIES = ['product', 'sku', 'company', 'sales_record', 'inventory', 'product_variant',
+  ...MASTER_IMPORT_ENTITIES]
 
-const SRC_COLS = `id, name, method, encoding, target_entity AS "targetEntity", schedule, active, config`
+/** 事業セグメントを取込元単位で持つ取込対象（0054。列取込ではなく import_sources.segment_id を共通適用） */
+const SEGMENT_SCOPED_ENTITIES = new Set(['product', 'product_variant', 'sales_record'])
+
+const SRC_COLS = `id, name, method, encoding, target_entity AS "targetEntity", schedule, active, config,
+  segment_id AS "segmentId"`
 const MAP_COLS = `id, source_id AS "sourceId", version, status, fields,
   to_char(created_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"') AS "createdAt"`
 const RUN_COLS = `id, code, source_id AS "sourceId", mapping_version AS "mappingVersion",
@@ -878,6 +887,121 @@ async function applyInventory(
   return out
 }
 
+/**
+ * 共通マスタ取込（master_*。0054）: 名称（name）完全一致の upsert。
+ * カタログ（shared/domain/import-master）の宣言に従い、種別・値域を検証して隔離し、健全行のみ反映する。
+ * 一致 = 更新（空セルは変更しない = 既存値を消さない）・不一致 = 新規作成・同名複数 = 隔離。
+ * 参照項目（ref。倉庫の店舗・カテゴリの親）は突合キー機構で解決する（未解決は隔離）。
+ * 再実行は同じ結果へ収束（冪等 = 原則2）。委託条件は対象外（カタログの設計判断）。
+ */
+async function applyMasterEntity(
+  db: pg.PoolClient, def: MasterImportDef, records: ImportRecord[], fields: ImportRunFieldDef[],
+): Promise<ApplyOutcome> {
+  const known = new Set(def.fields.map(f => f.key))
+  assertKnownTargets(fields, known, false)
+  // 保存時検証の再防衛（旧データ・手組みマッピングでも実行前に構造不備 = name 未割当等を止める）
+  const structErr = validateImportMapping(def.entity, fields)
+  if (structErr) throw err('AKO-IMP-008', structErr, 400)
+  const fieldByKey = new Map(def.fields.map(f => [f.key, f]))
+  // 参照項目（ref）の解決器を対象項目ごとに 1 度だけ作る（突合キーの検証込み = importRefLookup）
+  const refLookups = new Map<string, RefLookup>()
+  for (const f of def.fields) {
+    if (f.kind === 'ref' && fields.some(x => x.targetItemKey === f.key)) {
+      refLookups.set(f.key, await importRefLookup(db, def.entity, fields, f.key))
+    }
+  }
+  const out: ApplyOutcome = { applied: 0, skipped: 0, issues: [] }
+  for (const rec of records) {
+    const v = rec.values
+    const fail = (message: string): void => { out.issues.push({ rowNo: rec.rowNo, rawText: rec.raw, message }) }
+    // name はカタログの maxLen で切詰め（他項目は parseMasterFieldValue で cap 済み・他エンティティの name と一貫）
+    const name = capCp((v.name ?? '').trim(), fieldByKey.get('name')?.maxLen ?? 120)
+    if (!name) { fail('名称が空のため隔離'); continue }
+
+    // 各対象項目を解析（種別・値域の検証。ref は突合解決）。1 つでも失敗すれば行ごと隔離
+    const cols: { column: string; value: unknown; kind: MasterImportField['kind'] }[] = []
+    let rowError = ''
+    for (const [key, raw] of Object.entries(v)) {
+      if (key === 'name') continue
+      const field = fieldByKey.get(key)
+      if (!field) continue // assertKnownTargets 済みのため通常起きない（防御）
+      if (field.kind === 'ref') {
+        if ((raw ?? '') === '') { cols.push({ column: field.column, value: null, kind: 'ref' }); continue }
+        const lk = refLookups.get(key)!
+        const id = lk.resolve(raw)
+        if (!id) { rowError = unresolvedRefMsg(field.label, raw, lk); break }
+        cols.push({ column: field.column, value: id, kind: 'ref' })
+        continue
+      }
+      const parsed = parseMasterFieldValue(field, raw)
+      if (!parsed.ok) { rowError = parsed.message; break }
+      cols.push({ column: field.column, value: parsed.value, kind: field.kind })
+    }
+    if (rowError) { fail(rowError); continue }
+
+    // 新規作成の必須（requiredOnCreate）チェックは対象行が新規のときのみ（後述）
+    const { rows: existing } = await db.query<{ id: string }>(
+      `SELECT id FROM ${def.table} WHERE name = $1 AND active = true ORDER BY created_at LIMIT 2`, [name])
+    if (existing.length > 1) { fail(`名称「${name}」が一意でないため隔離`); continue }
+    const target = existing[0]
+
+    const jsonbCols = new Set(def.fields.filter(f => f.kind === 'multiEnum').map(f => f.column))
+    const encode = (c: { column: string; value: unknown }): unknown =>
+      jsonbCols.has(c.column) ? JSON.stringify(c.value) : c.value
+
+    if (target) {
+      // 空セル（null）は「変更しない」（取込で既存値を消さない = 部分更新の思想）
+      const sets: string[] = []
+      const params: unknown[] = [target.id]
+      for (const c of cols) {
+        if (c.value === null) continue
+        params.push(encode(c))
+        sets.push(`${c.column} = $${params.length}`)
+      }
+      if (sets.length === 0) { out.skipped++; continue }
+      try {
+        await rowWrite(db, () => db.query(`UPDATE ${def.table} SET ${sets.join(', ')}, updated_at = now() WHERE id = $1`, params))
+        out.applied++
+      } catch (e) {
+        fail(`「${name}」の更新に失敗したため隔離（${(e as Error).message}）`)
+      }
+      continue
+    }
+
+    // 新規作成: requiredOnCreate の欠落を隔離（name は上で担保済み）
+    const missing = def.fields.find(f => f.requiredOnCreate && !cols.some(c => c.column === f.column && c.value !== null))
+    if (missing) { fail(`「${name}」は新規のため「${missing.label}」が必要ですが空のため隔離`); continue }
+    const insertCols = ['id', 'name', ...cols.filter(c => c.value !== null).map(c => c.column)]
+    const insertVals: unknown[] = [newId(def.idPrefix), name, ...cols.filter(c => c.value !== null).map(encode)]
+    const placeholders = insertVals.map((_, i) => `$${i + 1}`)
+    try {
+      await rowWrite(db, () => db.query(
+        `INSERT INTO ${def.table} (${insertCols.join(', ')}) VALUES (${placeholders.join(', ')})`, insertVals))
+      out.applied++
+    } catch (e) {
+      fail(`「${name}」の作成に失敗したため隔離（${(e as Error).message}）`)
+    }
+  }
+  return out
+}
+
+/**
+ * 取込元の事業セグメント（0054）を正規化・検証する。
+ * - 空/未指定 → null（従来のマッピング列解決へフォールバック）
+ * - セグメントを持たない取込対象（在庫・取引先・master_* 等）→ 常に null（無関係な値を保存しない）
+ * - 指定時は有効な事業セグメントのみ受理（不正 id は AKO-IMP-009）
+ */
+async function normalizeSourceSegment(
+  db: pg.Pool | pg.PoolClient, targetEntity: string, raw: unknown,
+): Promise<string | null> {
+  const segmentId = String(raw ?? '').trim()
+  if (!segmentId || !SEGMENT_SCOPED_ENTITIES.has(targetEntity)) return null
+  const { rows } = await db.query<{ id: string }>(
+    `SELECT id FROM business_segments WHERE id = $1 AND active = true`, [segmentId])
+  if (rows.length === 0) throw err('AKO-IMP-009', '選択した事業セグメントが見つかりません（有効なセグメントを選択してください）', 400)
+  return segmentId
+}
+
 async function requireSource(db: pg.Pool | pg.PoolClient, id: string): Promise<{ targetEntity: string }> {
   const { rows } = await db.query<{ targetEntity: string }>(
     `SELECT target_entity AS "targetEntity" FROM import_sources WHERE id = $1`, [id])
@@ -918,11 +1042,13 @@ export function akebonoImportsRoutes(pool: pg.Pool, env: Env): Hono {
     const encoding = String(body.encoding) === 'sjis' ? 'sjis' : 'utf8'
     const targetEntity = IMPORT_ENTITIES.includes(String(body.targetEntity)) ? String(body.targetEntity) : 'product'
     const config = normalizeImportSourceConfig(body.config, method)
+    // 事業セグメントは取込元単位（0054）。セグメントを持つ取込対象のみ保存し、有効なセグメントのみ受理
+    const segmentId = await normalizeSourceSegment(pool, targetEntity, body.segmentId)
     const id = newId('imp')
     const { rows } = await pool.query(
-      `INSERT INTO import_sources (id, name, method, encoding, target_entity, config)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING ${SRC_COLS}`,
-      [id, name, method, encoding, targetEntity, JSON.stringify(config)])
+      `INSERT INTO import_sources (id, name, method, encoding, target_entity, config, segment_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING ${SRC_COLS}`,
+      [id, name, method, encoding, targetEntity, JSON.stringify(config), segmentId])
     await audit(pool, { actorId: user.id, action: 'create', entity: 'import_sources', entityId: id, detail: `取込元を登録（${name}）` })
     return c.json({ data: rows[0] }, 201)
   })
@@ -932,14 +1058,19 @@ export function akebonoImportsRoutes(pool: pg.Pool, env: Env): Hono {
     const user = requireAdmin(c)
     const id = c.req.param('id')
     const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
-    const { rows: srows } = await pool.query<{ method: string }>(`SELECT method FROM import_sources WHERE id = $1`, [id])
+    const { rows: srows } = await pool.query<{ method: string; targetEntity: string }>(
+      `SELECT method, target_entity AS "targetEntity" FROM import_sources WHERE id = $1`, [id])
     if (srows.length === 0) throw err('AKO-GEN-002', '取込元が見つかりません', 404)
     const config = normalizeImportSourceConfig(body.config, srows[0]!.method)
+    // 事業セグメントの変更（0054）: body に segmentId があるときのみ更新。無ければ現状維持（部分更新）
+    const hasSegment = Object.hasOwn(body, 'segmentId')
+    const segmentId = hasSegment ? await normalizeSourceSegment(pool, srows[0]!.targetEntity, body.segmentId) : null
     const { rows } = await pool.query(
-      `UPDATE import_sources SET config = $2, updated_at = now() WHERE id = $1 RETURNING ${SRC_COLS}`,
-      [id, JSON.stringify(config)])
+      `UPDATE import_sources SET config = $2${hasSegment ? ', segment_id = $3' : ''}, updated_at = now()
+       WHERE id = $1 RETURNING ${SRC_COLS}`,
+      hasSegment ? [id, JSON.stringify(config), segmentId] : [id, JSON.stringify(config)])
     // 変更キー名のみ記録（秘匿値は残さない = 監査性と最小権限の両立。config は設定系のため上書き = §45-4）
-    await audit(pool, { actorId: user.id, action: 'update', entity: 'import_sources', entityId: id, detail: `取込元の方式別設定を更新（${Object.keys(config).join(', ') || '設定なし'}）` })
+    await audit(pool, { actorId: user.id, action: 'update', entity: 'import_sources', entityId: id, detail: `取込元の方式別設定を更新（${Object.keys(config).join(', ') || '設定なし'}${hasSegment ? '・事業セグメント' : ''}）` })
     return c.json({ data: rows[0] })
   })
 
@@ -997,9 +1128,11 @@ export function akebonoImportsRoutes(pool: pg.Pool, env: Env): Hono {
     const sourceId = String(body.sourceId ?? '').trim()
     if (!sourceId) throw err('AKO-GEN-001', '取込元を指定してください', 400)
     const { rows: srcRows } = await pool.query<{
-      method: string; encoding: string; targetEntity: string; active: boolean; config: Record<string, unknown> | null
+      method: string; encoding: string; targetEntity: string; active: boolean
+      config: Record<string, unknown> | null; segmentId: string | null
     }>(
-      `SELECT method, encoding, target_entity AS "targetEntity", active, config FROM import_sources WHERE id = $1`,
+      `SELECT method, encoding, target_entity AS "targetEntity", active, config, segment_id AS "segmentId"
+       FROM import_sources WHERE id = $1`,
       [sourceId])
     const source = srcRows[0]
     if (!source) throw err('AKO-GEN-002', '取込元が見つかりません', 404)
@@ -1071,37 +1204,56 @@ export function akebonoImportsRoutes(pool: pg.Pool, env: Env): Hono {
       throw err('AKO-IMP-006', `1 回の取込は ${MAX_IMPORT_ROWS} 行までです（分割して実行してください）`, 400)
     }
 
+    // 事業セグメントを取込元単位で持つ取込対象（0054）: 設定されていれば全レコードへ共通注入する
+    // （列取込ではなく取込元で 1 度だけ選ぶ = オペレーター指示 2026-08-09）。未設定（null）は従来のマッピング列解決へ
+    // フォールバック（原則7）。実行時点でセグメントが無効化されていれば行ごとでなく単一エラーで止める（明確な導線）。
+    const injectSegment = Boolean(source.segmentId) && SEGMENT_SCOPED_ENTITIES.has(source.targetEntity)
+    if (injectSegment) {
+      const { rows: segRows } = await pool.query(`SELECT 1 FROM business_segments WHERE id = $1 AND active = true`, [source.segmentId])
+      if (segRows.length === 0) {
+        throw err('AKO-IMP-009', 'この取込元の事業セグメントが無効化されています（有効なセグメントに変更してから実行してください）', 409)
+      }
+      for (const rec of extracted.records) rec.values.segmentId = source.segmentId!
+    }
+    // 取込元セグメント適用時はマッピングの segmentId 行を無視し、注入した実 ID を既定（id→名称）解決に統一する。
+    // 旧版マッピングが segmentId に名称突合キーを持つと、注入 id が名称解決器で解けず全行隔離になるのを防ぐ。
+    const applyFields = injectSegment ? mapping.fields.filter(f => f.targetItemKey !== 'segmentId') : mapping.fields
+
     // 3) 検証 → 反映 → 実行履歴を同一トランザクションで確定（同一取込元の並行実行は直列化 = 冪等判定を安定させる）
     const id = newId('impr')
     const created = await inTxn(pool, async (db) => {
       await db.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`imprun:${sourceId}`])
-      if (source.targetEntity === 'product_variant') {
-        // SKU の新規 INSERT を持つ唯一の取込対象。SKU コードは DB 一意制約を持たない
-        // （セグメント違いの同一商品コード = 同一既定 SKU コードが正当な既存データのため INDEX は張れない = 原則7）。
-        // 取込元をまたぐ並行実行での同一コード二重 INSERT はエンティティ単位の直列化で防ぐ（監査指摘 2026-08-07）。
+      const masterDef = masterImportDefOf(source.targetEntity)
+      if (source.targetEntity === 'product_variant' || masterDef) {
+        // 新規 INSERT を持つ取込対象は、名称/コードの DB 一意制約が無い（セグメント違いの同名等が正当なため）。
+        // 取込元をまたぐ並行実行での同一名二重 INSERT をエンティティ単位の直列化で防ぐ（監査指摘 2026-08-07）。
         // ロック順は常に「取込元 → エンティティ」= 循環しない（デッドロックなし）
-        await db.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, ['imprun-entity:product_variant'])
+        await db.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`imprun-entity:${source.targetEntity}`])
       }
       const records = extracted.records
       let outcome: ApplyOutcome
-      switch (source.targetEntity) {
-        case 'product':
-          outcome = await applyProducts(db, records, mapping.fields)
-          break
-        case 'product_variant':
-          outcome = await applyProductVariants(db, records, mapping.fields)
-          break
-        case 'sku':
-          outcome = await applySkus(db, records, mapping.fields)
-          break
-        case 'company':
-          outcome = await applyCompanies(db, records, mapping.fields)
-          break
-        case 'sales_record':
-          outcome = await applySalesRecords(db, sourceId, records, mapping.fields)
-          break
-        default:
-          outcome = await applyInventory(db, sourceId, records, mapping.fields)
+      if (masterDef) {
+        outcome = await applyMasterEntity(db, masterDef, records, applyFields)
+      } else {
+        switch (source.targetEntity) {
+          case 'product':
+            outcome = await applyProducts(db, records, applyFields)
+            break
+          case 'product_variant':
+            outcome = await applyProductVariants(db, records, applyFields)
+            break
+          case 'sku':
+            outcome = await applySkus(db, records, applyFields)
+            break
+          case 'company':
+            outcome = await applyCompanies(db, records, applyFields)
+            break
+          case 'sales_record':
+            outcome = await applySalesRecords(db, sourceId, records, applyFields)
+            break
+          default:
+            outcome = await applyInventory(db, sourceId, records, applyFields)
+        }
       }
       const counts = {
         staged: records.length,

@@ -5,19 +5,32 @@
  * 単位・税区分・回収支払条件・委託条件）をタブで切替。CRUD は useAkebonoMasters に集約し、
  * 本ページは薄い表示層に徹する（原則3）。書込は cruds[key].save/archive/restore のみ。
  */
-import { Plus, Sunrise } from 'lucide-vue-next'
+import { Plus, Sunrise, FileUp, Upload } from 'lucide-vue-next'
 import {
   AKEBONO_MASTER_COLUMNS, consignmentSummary,
   type AkebonoMasterKey,
 } from '~/composables/useAkebonoMasters'
+import { IMPORT_ENTITY_LABELS } from '~/composables/useAkebonoImports'
 import { INDUSTRY_TYPE_LABELS } from '~/utils/akebono'
-import type { ConsignmentTerm, WarehouseKind } from '~/types/akebono'
+import { MASTER_IMPORT_ENTITIES } from '~/utils/import-master'
+import type { ConsignmentTerm, ImportSource, WarehouseKind } from '~/types/akebono'
 import type { FieldDef } from '~/types/ui'
 import { fmtPct } from '~/utils/format'
 
 const m = useAkebonoMasters()
 const toast = useToast()
 const confirm = useConfirm()
+
+// ---------- 外部データ取込・連携（マスタ。/akebono/imports の共通コンソールを共有 = 原則3） ----------
+const imp = useAkebonoImports()
+const masterEntitySet = new Set(MASTER_IMPORT_ENTITIES)
+/** 共通マスタを対象にした取込元（有効のみ）。/akebono/imports と同一の SoT を参照 */
+const masterImportSources = computed(() =>
+  imp.activeSources.value.filter((s: ImportSource) => masterEntitySet.has(s.targetEntity)))
+function lastRunLabelOf(sourceId: string): string {
+  const runs = imp.runsOf(sourceId)
+  return runs.length > 0 ? `実行 ${runs.length} 回` : '未実行'
+}
 
 // ---------- CRUD の緩い型（動的タブキーで union を跨ぐため。Phase B で async 化） ----------
 interface CrudResult { ok: boolean; id?: string; error?: { code: string; message: string } }
@@ -206,6 +219,44 @@ function asTerm(row: Row): ConsignmentTerm {
         追加
       </button>
     </template>
+
+    <!-- 外部データ取込・連携（CSV / API / スプレッドシートから共通マスタを一括登録・更新。/akebono/imports を共有） -->
+    <UiSectionCard
+      title="外部データ取込・連携（マスタ）"
+      description="共通マスタも、データ取込・連携と同じ仕組みで外部データ（CSV・固定長・JSON・API 接続・Google スプレッドシート）から一括登録・更新できます。名称で照合し、一致は更新・未登録は新規作成します（管理者のみ）。"
+      flush
+    >
+      <template v-if="imp.isAdmin.value" #actions>
+        <NuxtLink to="/akebono/imports?add=master" class="btn btn-primary btn-sm">
+          <Plus class="h-4 w-4" aria-hidden="true" /> マスタ取込元を追加
+        </NuxtLink>
+        <NuxtLink to="/akebono/imports" class="btn btn-sm">
+          <Upload class="h-4 w-4" aria-hidden="true" /> 取込・連携を開く
+        </NuxtLink>
+      </template>
+
+      <UiEmptyState
+        v-if="masterImportSources.length === 0"
+        icon="FileUp"
+        title="マスタの取込元がまだありません"
+        :hint="imp.isAdmin.value ? '「マスタ取込元を追加」から、取り込みたいマスタ（事業セグメント・倉庫・商品カテゴリ 等）を選んで登録してください' : '取込元の登録・実行は管理者のみが行えます'"
+      />
+      <div v-else class="grid gap-2 p-1">
+        <NuxtLink
+          v-for="s in masterImportSources"
+          :key="s.id"
+          :to="`/akebono/imports?source=${s.id}`"
+          class="flex flex-wrap items-center justify-between gap-2 rounded-[10px] border border-line bg-page px-3 py-2 text-[13px] hover:border-brand/40"
+        >
+          <span class="flex items-center gap-2">
+            <FileUp class="h-4 w-4 text-muted" aria-hidden="true" />
+            <span class="font-medium">{{ s.name }}</span>
+            <UiStatusBadge :label="IMPORT_ENTITY_LABELS[s.targetEntity]" tone="info" />
+          </span>
+          <span class="text-[12px] text-muted">{{ lastRunLabelOf(s.id) }}</span>
+        </NuxtLink>
+      </div>
+    </UiSectionCard>
 
     <UiTabBar v-model="activeTab" :tabs="tabs" />
 

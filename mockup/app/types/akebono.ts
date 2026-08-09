@@ -479,8 +479,15 @@ export interface PaymentReceipt {
 // ---------- データ取込（F-32） ----------
 
 export type ImportMethod = 'file_csv' | 'file_fixed' | 'file_json' | 'api_pull' | 'sheets_pull'
-/** product_variant = 商品＋SKU バリアント展開（グルーピングキー＋バリアント軸列で取込。0053） */
-export type ImportTargetEntity = 'product' | 'sku' | 'company' | 'sales_record' | 'inventory' | 'product_variant'
+/**
+ * 取込対象エンティティ。
+ * - product_variant = 商品＋SKU バリアント展開（グルーピングキー＋バリアント軸列で取込。0053）
+ * - master_* = 共通マスタ取込（/akebono/masters の外部データ取込。0054。カタログ = shared/domain/import-master）
+ */
+export type ImportTargetEntity =
+  | 'product' | 'sku' | 'company' | 'sales_record' | 'inventory' | 'product_variant'
+  | 'master_segment' | 'master_warehouse' | 'master_category' | 'master_unit'
+  | 'master_tax_rate' | 'master_payment_term' | 'master_axis_template' | 'master_image_section'
 export type ImportRunStatus = 'staged' | 'validated' | 'applied' | 'failed' | 'reverted'
 
 export type ImportAuthType = 'none' | 'bearer' | 'api_key' | 'basic'
@@ -521,7 +528,16 @@ export interface ImportSource {
   active: boolean
   /** 方式別設定（0043 で追加。未設定 = 既定） */
   config?: ImportSourceConfig
+  /**
+   * 事業セグメント（取込元単位で共通。0054）。セグメントを持つ取込対象（商品・商品＋SKU・売上明細）で、
+   * 各マッピング行の列取込ではなく取込元で 1 度だけ選び、配下の全マッピング定義で共通適用する。
+   * null/未設定 = 従来どおりマッピングの segmentId 列で解決（下位互換 = 原則7）。
+   */
+  segmentId?: string | null
 }
+
+/** セグメントを取込元単位で選ぶ取込対象（imports UI・API 反映の両方が参照） */
+export const SEGMENT_SCOPED_IMPORT_ENTITIES: ImportTargetEntity[] = ['product', 'product_variant', 'sales_record']
 
 export interface ImportFieldMap {
   id: string

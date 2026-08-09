@@ -15,10 +15,12 @@
 import type {
   ImportFieldMap, ImportMapping, ImportMethod, ImportRun, ImportSource, ImportSourceConfig, ImportTargetEntity,
 } from '~/types/akebono'
+import { SEGMENT_SCOPED_IMPORT_ENTITIES } from '~/types/akebono'
 import type { Result } from '~/types/domain'
 import { irange } from '~/utils/rng'
 import { nextCode } from '~/utils/akebono'
 import { validateImportMapping } from '~/utils/import-link'
+import { MASTER_IMPORT_DEFS } from '~/utils/import-master'
 import { normalizeFieldLocators, normalizeImportSourceConfig } from '~/utils/import-parse'
 
 export const IMPORT_METHOD_LABELS: Record<ImportMethod, string> = {
@@ -31,6 +33,15 @@ export const IMPORT_METHOD_LABELS: Record<ImportMethod, string> = {
 export const IMPORT_ENTITY_LABELS: Record<ImportTargetEntity, string> = {
   product: '商品', product_variant: '商品＋SKU（バリアント展開）', sku: 'SKU',
   company: '取引先', sales_record: '売上明細', inventory: '在庫',
+  // 共通マスタ取込（0054。ラベルは import-master カタログの label と一致させる）
+  master_segment: MASTER_IMPORT_DEFS.master_segment!.label,
+  master_warehouse: MASTER_IMPORT_DEFS.master_warehouse!.label,
+  master_category: MASTER_IMPORT_DEFS.master_category!.label,
+  master_unit: MASTER_IMPORT_DEFS.master_unit!.label,
+  master_tax_rate: MASTER_IMPORT_DEFS.master_tax_rate!.label,
+  master_payment_term: MASTER_IMPORT_DEFS.master_payment_term!.label,
+  master_axis_template: MASTER_IMPORT_DEFS.master_axis_template!.label,
+  master_image_section: MASTER_IMPORT_DEFS.master_image_section!.label,
 }
 
 /** 実取込の反映先コレクション（取込成功後にキャッシュを取り直す = 原則6） */
@@ -41,6 +52,8 @@ const RELOAD_BY_ENTITY: Record<string, string[]> = {
   company: ['companies'],
   sales_record: ['salesRecords'],
   inventory: ['inventoryTransactions', 'inventoryBalances'],
+  // 共通マスタ取込（0054）: 反映先コレクションは import-master カタログの collection を使う
+  ...Object.fromEntries(Object.values(MASTER_IMPORT_DEFS).map(d => [d.entity, [d.collection]])),
 }
 
 export function useAkebonoImports() {
@@ -72,17 +85,19 @@ export function useAkebonoImports() {
   }
   const recentRuns = computed(() => runs.value.slice().sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1)))
 
-  async function addSource(input: { name: string; method: ImportMethod; encoding: 'utf8' | 'sjis'; targetEntity: ImportTargetEntity; config?: ImportSourceConfig }): Promise<Result> {
+  async function addSource(input: { name: string; method: ImportMethod; encoding: 'utf8' | 'sjis'; targetEntity: ImportTargetEntity; config?: ImportSourceConfig; segmentId?: string | null }): Promise<Result> {
     const denied = adminGuard(); if (denied) return denied
     if (!input.name.trim()) return { ok: false, error: { code: 'AKO-IMP-001', message: '取込元名は必須です' } }
+    // 事業セグメントを持つ取込対象のみ保存（在庫・取引先・master_* は無関係な値を持たせない = API と同判断）
+    const segmentId = SEGMENT_SCOPED_IMPORT_ENTITIES.includes(input.targetEntity) ? (input.segmentId ?? null) : null
     if (isApi) {
-      const res = await apiWrite<ImportSource>('/v1/akebono/import-sources', { body: input, reload: ['importSources'] })
+      const res = await apiWrite<ImportSource>('/v1/akebono/import-sources', { body: { ...input, segmentId }, reload: ['importSources'] })
       return res.ok ? { ok: true, id: res.data.id } : res
     }
     const id = nextId('importSources', 'imp')
     // config は method 別に正規化（API の normalizeImportSourceConfig と同一関数 = 両モード parity）
     const config = normalizeImportSourceConfig(input.config ?? {}, input.method) as ImportSourceConfig
-    sources.value = [...sources.value, { id, name: input.name.trim(), method: input.method, encoding: input.encoding, targetEntity: input.targetEntity, schedule: 'manual', active: true, config }]
+    sources.value = [...sources.value, { id, name: input.name.trim(), method: input.method, encoding: input.encoding, targetEntity: input.targetEntity, schedule: 'manual', active: true, config, segmentId }]
     commit()
     return { ok: true, id }
   }
