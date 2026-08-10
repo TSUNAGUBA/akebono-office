@@ -2301,7 +2301,8 @@
   表示名上書き・カスタム項目列を末尾付加。`opts.appendCustom:false` でカスタム列を出さない＝請求用）・`decorateRows(entity, rows)`
   （custom 値を型別整形して `row['custom.<key>']` へ平坦化＝UiDataTable 既定セルに載せる）・`fmtCustomValue`（boolean→はい/いいえ・date→fmtDate・
   multiselect→'・'結合・空→'—'）。既存 `#cell-*` スロット・行 id・派生列は不変（原則7）。
-- [x] **useAppFields.missingRequiredCustom(entity, custom)**: 必須カスタム項目の未入力チェック（最初の未入力ラベルを返す）＝全ページのフォーム保存前検証で共通利用（DRY）。
+- [x] **useAppFields.missingRequiredCustom(entity, custom)**: 必須カスタム項目の未入力チェック（最初の未入力ラベルを返す）＝**今回配線した各ページ**（発注・生産・仕入・入荷・出荷・在庫）の保存前検証で共通利用。
+  既存の products.vue／sales.vue は従来のインライン必須検証を保持（重複だが挙動は同一。将来 refactor 候補）。
 - [x] **型（mockup/types/akebono.ts）**: PurchaseOrder/ProductionOrder/InboundResult/PurchaseRecord/OutboundResult/InventoryTransaction に `custom?: CustomValues`（Product/SalesRecord は既存）。`shared/domain` の CustomValues は既存。
 - [x] **API（akebono-trade.ts）**: `customOf(body)` ヘルパー・PO/MFG/IBR/PUR/OBR/ITX の各 COLS へ `custom`・各 POST の INSERT に `custom`＋`JSON.stringify(customOf(body))`。
   `InventoryPostEntry.custom?`＋`postInventory` の INSERT に custom・`/inventory/adjust`・`/inventory/transfer`（両行に同一 custom）で受理。
@@ -2322,7 +2323,21 @@
 - [x] api typecheck green・mockup typecheck green・mockup unit **221 passed**。
 - [x] api 統合 **243 passed**（発注 POST の custom 往復＋新規テスト「生産/仕入/入荷/出荷/在庫調整が custom を保存し GET で返す」）。
 
-### 65-4 下位互換・データ影響（原則7）
+### 65-4 スコープ境界・独立レビュー是正（原則9）
+- **独立コードレビュー・システム監査（2巡）: MAJOR/正しさ/parity/下位互換の欠陥なし**を確認。INSERT の列×プレースホルダ×パラメータ個数の一致、
+  自動起票・赤黒訂正の custom 非引継ぎ、一覧ヘルパーの派生列温存・下位互換をレビュアーが実読で裏取り。MINOR/NIT を是正:
+  - **棚卸フォームは custom 非対象（意図的）**: 在庫の調整/移動は custom 対応だが、棚卸（bulk の実棚入力＝SKU 複数行を1確定で差分計上）は
+    1レコードのフォームでないため custom 非対象。棚卸由来の台帳行は custom = `{}`（必須カスタム項目の強制もされない）。同一 `inventory` 実体内の
+    意図的な限定として明記（将来、棚卸セッション単位のメタが必要になれば別途）。
+  - **SKU・請求の定義口をガード（レビュー MINOR 是正）**: `settings/items.vue` は SKU・請求タブでも「追加カスタム項目」を定義できてしまい反映先が無い
+    デッドエンドだった → **`CUSTOM_FORM_ENTITIES`（フォームを持つ8アプリ）以外では追加カスタム項目セクションを無効化し理由を明示**（「宣言だけあって
+    実態が伴わない」状態の解消 = 原則9.5 の趣旨）。SKU/請求は基本項目の表示・表示名調整のみ利用可。
+  - **ドキュメント全件（原則5）**: `data-design.md` の対象実体（発注/生産/入荷実績/仕入/出荷実績/在庫/SKU/売上）へ `custom jsonb` を追記・
+    `api-design.md` のトレード系エンドポイントに custom 永続化・返却の記述を追記。
+  - 据え置き（記録）: custom jsonb のキー数/値長上限は既存 products/sales と同一規約（本変更の回帰ではない）。在庫台帳「商品/SKU」列は §64 の
+    識別表示のため常時表示（skuId の一覧トグルは台帳に非反映＝設計判断・コードコメントに明記）。
+
+### 65-5 下位互換・データ影響（原則7）
 - [x] スキーマ変更なし（custom 列は 0042 で既存・既定 `{}`）。既存レコードは custom 未設定でも `{}` として整合。
   一覧ヘルパーはカスタム項目 0 件のエンティティでは実質ノーオペ（列も付かず decorate も素通し）。既存フォーム/一覧の挙動は
   カスタム項目・項目設定差分が無い限り不変。API 訂正/自動起票は custom 非引継ぎで既存挙動と一致。
