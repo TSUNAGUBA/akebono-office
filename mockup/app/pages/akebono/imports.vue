@@ -201,7 +201,7 @@ const MAPPING_STATUS: Record<ImportMapping['status'], { label: string; tone: 'ok
 }
 
 // ---------- マッピング編集（方式別。左辺=取込元・右辺=アプリ項目〔既定+カスタム〕） ----------
-const { appFields } = useAppFields()
+const { appFields, builtinResolved } = useAppFields()
 
 // company（取引先）取込は Akebono カタログを持たないため CRM 会社項目へフォールバック（§44-6）。
 // キーは companies マスタの実項目に一致させる（実取込の反映先。旧 email/phone 等は実列が無く反映不能だった）
@@ -231,7 +231,14 @@ const targetFields = computed<TargetField[]>(() => {
     const customs = appFields('company').filter(f => f.source === 'custom').map(f => ({ key: f.key, label: `${f.label}（カスタム）`, required: f.required }))
     fields = [...builtins, ...customs]
   } else if (ent === 'product_variant') {
-    const builtins = VARIANT_IMPORT_FIELDS.map(f => ({ key: f.key, label: f.label, required: f.key === 'productCode' || f.key === 'code' }))
+    // 商品カタログのラベル差分（テナントのリネーム。例: 既定仕入先→作家）を商品レベル項目へ反映する。
+    // code は SKU 固有 ID（商品コードではない）ため、商品カタログの code ラベルで上書きしない。
+    const productLabel = new Map(builtinResolved('product').map(r => [r.itemKey, r.labelDisplay]))
+    const builtins = VARIANT_IMPORT_FIELDS.map(f => ({
+      key: f.key,
+      label: f.key !== 'code' && productLabel.has(f.key) ? productLabel.get(f.key)! : f.label,
+      required: f.key === 'productCode' || f.key === 'code',
+    }))
     const customs = appFields('product').filter(f => f.source === 'custom').map(f => ({ key: f.key, label: `${f.label}（カスタム・商品）`, required: false }))
     fields = [...builtins, ...customs]
   } else {

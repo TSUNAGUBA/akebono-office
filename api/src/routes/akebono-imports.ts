@@ -515,6 +515,10 @@ async function applyProductVariants(
   const { axis1Label, axis2Label } = variantAxisLabelsOf(fields)
   const segments = await importRefLookup(db, 'product_variant', fields, 'segmentId')
   const categories = await importRefLookup(db, 'product_variant', fields, 'categoryId')
+  // 商品レベルの参照（既定仕入先＝作家・税区分・単位）を商品取込と同じ機構で解決する
+  const companies = await importRefLookup(db, 'product_variant', fields, 'defaultSupplierCompanyId')
+  const taxRates = await importRefLookup(db, 'product_variant', fields, 'taxRateId')
+  const units = await importRefLookup(db, 'product_variant', fields, 'unitId')
   const out: ApplyOutcome = { applied: 0, skipped: 0, issues: [] }
 
   // グルーピングキー（productCode）で商品グループへ（出現順維持）。キー欠落行は先に隔離
@@ -540,6 +544,21 @@ async function applyProductVariants(
     const catRaw = firstOf('categoryId')
     const cat = catRaw ? categories.resolve(catRaw) : null
     if (catRaw && !cat) { failGroup(unresolvedRefMsg('商品カテゴリ', catRaw, categories)); continue }
+    // 商品レベルの参照解決（未指定 = null で変更しない・未解決 = グループ隔離。applyProducts と同型）
+    const refs: Record<string, string | null> = {}
+    let refErr = ''
+    for (const [key, lookup, label] of [
+      ['defaultSupplierCompanyId', companies, '既定仕入先'],
+      ['taxRateId', taxRates, '税区分'], ['unitId', units, '単位'],
+    ] as const) {
+      const raw = firstOf(key)
+      if (raw === '') { refs[key] = null; continue }
+      const id = lookup.resolve(raw)
+      if (!id) { refErr = unresolvedRefMsg(label, raw, lookup); break }
+      refs[key] = id
+    }
+    if (refErr) { failGroup(refErr); continue }
+    const description = firstOf('description')
     const listPrice = numOf(firstOf('listPrice'))
     const standardCost = numOf(firstOf('standardCost'))
     if (listPrice === undefined || standardCost === undefined) { failGroup('商品価格が数値でないため隔離'); continue }
@@ -617,8 +636,12 @@ async function applyProductVariants(
       if (name) push('name', capCp(name, 200))
       if (seg) push('segment_id', seg)
       if (cat) push('category_id', cat)
+      if (refs.defaultSupplierCompanyId) push('default_supplier_company_id', refs.defaultSupplierCompanyId)
+      if (refs.taxRateId) push('tax_rate_id', refs.taxRateId)
+      if (refs.unitId) push('unit_id', refs.unitId)
       if (listPrice !== null) push('list_price', listPrice)
       if (standardCost !== null) push('standard_cost', standardCost)
+      if (description) push('description', capCp(description, 2000))
       if (axis1Label) push('variant_axis1_label', axis1Label)
       if (axis2Label) push('variant_axis2_label', axis2Label)
       if (Object.keys(custom).length > 0) push('custom', JSON.stringify({ ...(existing[0]!.custom ?? {}), ...custom }))
@@ -638,10 +661,12 @@ async function applyProductVariants(
         productId = await rowWrite(db, async () => {
           const id = newId('prd')
           await db.query(
-            `INSERT INTO products (id, code, name, segment_id, category_id, list_price, standard_cost,
+            `INSERT INTO products (id, code, name, segment_id, category_id, default_supplier_company_id,
+               tax_rate_id, unit_id, list_price, standard_cost, description,
                variant_axis1_label, variant_axis2_label, custom)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-            [id, productCode, capCp(name, 200), seg, cat, listPrice ?? 0, standardCost ?? 0,
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+            [id, productCode, capCp(name, 200), seg, cat, refs.defaultSupplierCompanyId,
+              refs.taxRateId, refs.unitId, listPrice ?? 0, standardCost ?? 0, capCp(description, 2000),
               axis1Label, axis2Label, JSON.stringify(custom)])
           return id
         })
