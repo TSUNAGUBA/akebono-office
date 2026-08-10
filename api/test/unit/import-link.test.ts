@@ -13,6 +13,10 @@ describe('importRefTargetOf（取込対象 × 対象項目 → 参照先マス�
     expect(importRefTargetOf('sales_record', 'skuId')?.refEntity).toBe('sku')
     expect(importRefTargetOf('product', 'segmentId')?.refEntity).toBe('segment')
     expect(importRefTargetOf('product_variant', 'categoryId')?.refEntity).toBe('category')
+    // バリアント取込も商品レベルの参照（既定仕入先＝作家・税区分・単位）を突合できる
+    expect(importRefTargetOf('product_variant', 'defaultSupplierCompanyId')?.refEntity).toBe('company')
+    expect(importRefTargetOf('product_variant', 'taxRateId')?.refEntity).toBe('tax_rate')
+    expect(importRefTargetOf('product_variant', 'unitId')?.refEntity).toBe('unit')
     expect(importRefTargetOf('sales_record', 'qty')).toBeNull()
     expect(importRefTargetOf('unknown_entity', 'companyId')).toBeNull()
   })
@@ -94,9 +98,13 @@ describe('validateImportMapping（保存前検証 = モック↔API parity）', 
     expect(validateImportMapping('product', [f('name', '商品名'), f('name', '商品名2')])).toBeNull()
     expect(validateImportMapping('sku', [f('code', 'sku'), f('code', 'sku2')])).toBeNull()
   })
-  it('バリアント項目カタログはグルーピングキー・固有ID・軸1/2 を含む', () => {
+  it('バリアント項目カタログはグルーピングキー・固有ID・軸1/2・商品レベル属性を含む', () => {
     const keys = VARIANT_IMPORT_FIELDS.map(x => x.key)
-    for (const k of ['productCode', 'productName', 'segmentId', 'code', 'axis1Value', 'axis2Value']) {
+    for (const k of [
+      'productCode', 'productName', 'segmentId', 'code', 'axis1Value', 'axis2Value',
+      // 商品レベル属性（既定仕入先＝作家・税区分・単位・説明）も商品取込と揃える
+      'defaultSupplierCompanyId', 'taxRateId', 'unitId', 'description',
+    ]) {
       expect(keys).toContain(k)
     }
   })

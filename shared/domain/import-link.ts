@@ -49,7 +49,8 @@ const SKU: ImportRefTarget = {
  */
 export const IMPORT_REF_TARGETS: Record<string, Record<string, ImportRefTarget>> = {
   product: { segmentId: SEGMENT, categoryId: CATEGORY, defaultSupplierCompanyId: COMPANY, taxRateId: TAX_RATE, unitId: UNIT },
-  product_variant: { segmentId: SEGMENT, categoryId: CATEGORY },
+  // バリアント軸取込も商品レベルの参照項目（既定仕入先＝作家・税区分・単位）を商品取込と同じ機構で突合できる
+  product_variant: { segmentId: SEGMENT, categoryId: CATEGORY, defaultSupplierCompanyId: COMPANY, taxRateId: TAX_RATE, unitId: UNIT },
   company: { industryId: INDUSTRY },
   sales_record: { companyId: COMPANY, segmentId: SEGMENT, skuId: SKU },
   inventory: { skuId: SKU, warehouseId: WAREHOUSE },
@@ -81,14 +82,21 @@ export function lookupKeyLabel(target: ImportRefTarget, lookupField: string): st
  * バリアント軸取込の対象項目カタログ（マッピング右辺の候補 = UI と API の許容集合）。
  * productCode = グルーピングキー / code = レコード固有 ID（SKU コード）/
  * axis1Value・axis2Value = バリアント軸を成す列（列名 = 軸ラベル）。custom.* は商品カスタム項目へ。
+ * 商品レベルの属性（既定仕入先＝作家・税区分・単位・説明）は商品取込（applyProducts）と同じ集合を
+ * 揃える。ここに無い billingType（IT サービス課金）・variantAxes（軸は列から導出）はバリアント取込では
+ * 扱わない。label は既定カタログ名。フロントはテナントのラベル差分（例: 既定仕入先→作家）を重ねて表示する。
  */
 export const VARIANT_IMPORT_FIELDS: { key: string; label: string }[] = [
   { key: 'productCode', label: '商品コード（グルーピングキー）' },
   { key: 'productName', label: '商品名' },
   { key: 'segmentId', label: '事業セグメント' },
   { key: 'categoryId', label: '商品カテゴリ' },
+  { key: 'defaultSupplierCompanyId', label: '既定仕入先' },
   { key: 'listPrice', label: '標準売価' },
   { key: 'standardCost', label: '標準原価' },
+  { key: 'taxRateId', label: '税区分' },
+  { key: 'unitId', label: '単位' },
+  { key: 'description', label: '説明' },
   { key: 'code', label: 'SKUコード（固有ID）' },
   { key: 'janCode', label: 'JANコード' },
   { key: 'axis1Value', label: 'バリアント軸1の値（列名＝軸ラベル）' },

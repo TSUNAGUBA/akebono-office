@@ -2143,3 +2143,35 @@
 ### 61-7 下位互換・データ影響
 - [x] スキーマ変更なし（反対仕訳は既存 inventory_transactions への追記のみ・移行不要）。API 一覧はパラメータ無しで
   従来レスポンス（bare 配列）を厳密維持するため、既存クライアント・全件ハイドレーション・統合テストは無改修で動作。
+
+## 62. バリアント軸取込に商品レベル属性（既定仕入先＝作家・税区分・単位・説明）を追加（オペレーター報告 2026-08-10）の完了条件（Definition of Done）
+
+> オペレーター報告「項目設定で編集した『作家』が取込・連携のマッピングに出てこない」。作家 = 商品の既定仕入先
+> （`defaultSupplierCompanyId`・item-settings のラベル差分で「作家」へリネーム）。原因は **バリアント軸取込
+> （`product_variant`）のマッピング左辺が `VARIANT_IMPORT_FIELDS` の固定カタログ＋商品カスタム項目のみ**で、
+> 既定項目（builtin）の `defaultSupplierCompanyId` が欠落していたこと（通常の `product` 取込は `appFields('product')`
+> 経由で表示されるため事象は `product_variant` に固有）。同クラスの商品レベル属性（税区分・単位・説明）も未対応だったため一括で是正。
+> ブランチ `claude/akebono-import-linking-scsqkq`（§61 マージ後に main から再作成）。
+
+### 62-1 実装
+- [x] **shared/domain/import-link.ts**: `VARIANT_IMPORT_FIELDS` に商品レベル属性 `defaultSupplierCompanyId`（既定仕入先）・
+  `taxRateId`（税区分）・`unitId`（単位）・`description`（説明）を追加（`product` 取込と同集合。billingType＝IT サービス課金・
+  variantAxes＝軸は列から導出、の 2 つは product_variant では対象外と明記）。`IMPORT_REF_TARGETS.product_variant` に
+  `defaultSupplierCompanyId: COMPANY`・`taxRateId: TAX_RATE`・`unitId: UNIT` を追加し、商品取込と同じ連携キー（突合キー）機構に乗せる。
+- [x] **api/src/routes/akebono-imports.ts（applyProductVariants）**: `importRefLookup` で作家/税区分/単位を解決（グループ先頭の
+  非空値・未指定=変更しない・未解決=グループ隔離。`unresolvedRefMsg` は既定カタログ名『既定仕入先』等で表示 = applyProducts と一致）。
+  商品 INSERT/UPDATE に `default_supplier_company_id`・`tax_rate_id`・`unit_id`・`description` を追加（空セルは変更しない = 既存値保護）。
+  `assertKnownTargets` は `VARIANT_IMPORT_FIELDS` 由来のため追加キーを自動許容。
+- [x] **imports.vue**: `product_variant` の左辺ラベルに**商品カタログのテナントラベル差分**（`builtinResolved('product')`）を重ねる
+  （例: 既定仕入先→作家）。`code` は SKU 固有 ID（商品コードではない）ため商品カタログの `code` ラベルでは上書きしない。
+
+### 62-2 検証
+- [x] api typecheck green・mockup typecheck green。
+- [x] api unit **301 passed**（import-link.test.ts に product_variant の参照＝company/tax_rate/unit・カタログ項目に商品レベル属性を追加）。
+- [x] api 統合 **241 passed**（+1: 作家＝既定仕入先を**名称で突合**して商品へ反映・税区分/単位を ID で突合・**未解決作家グループは
+  商品も作らず隔離**〔『既定仕入先』入りメッセージ〕）。既存のバリアント取込テスト（軸ラベル・冪等・別商品 SKU 衝突）は不変で通過。
+
+### 62-3 下位互換・データ影響（原則7）
+- [x] スキーマ変更なし（`products.default_supplier_company_id`/`tax_rate_id`/`unit_id`/`description` は既存列 = applyProducts が既に使用）。
+  マッピングは追記のみ（既存 `product_variant` マッピングは追加項目未割当 = 従来どおり動作）。`VARIANT_IMPORT_FIELDS` への項目追加は
+  カタログ拡張のみで既存の検証・保存・実行を破壊しない。フロントのラベル差分反映はテナント未リネーム時は既定カタログ名を表示（無影響）。

@@ -5559,6 +5559,50 @@ describe('Phase D: データ取込（F-32）・ダッシュボード保管（F-4
       expect(run3.errors[0]!.message).toContain('別の商品')
     })
 
+    it('バリアント軸取込: 商品レベルの作家（既定仕入先）・税区分・単位も突合して商品へ反映（作家 = 名称で解決・未解決はグループ隔離）', async () => {
+      const b64 = (s: string): string => Buffer.from(s, 'utf8').toString('base64')
+      // 作家（既定仕入先 = consignor_artist）を実取引先として登録
+      const artist = await api('POST', '/v1/masters/companies', {
+        as: ADMIN, body: { name: 'バリアント作家', partnerRoles: ['consignor_artist'] },
+      })
+      const artistId = (artist.json.data as { id: string }).id
+      const src = await api('POST', '/v1/akebono/import-sources', {
+        as: ADMIN, body: {
+          name: '作家付きバリアントCSV', method: 'file_csv', encoding: 'utf8', targetEntity: 'product_variant',
+          config: { hasHeader: true, delimiter: ',' },
+        },
+      })
+      const srcId = (src.json.data as { id: string }).id
+      // 作家 = 既定仕入先を名称で突合（連携キー未指定 = ID または名称の自動判定）・税区分/単位は ID で突合
+      await api('POST', '/v1/akebono/import-mappings', {
+        as: ADMIN, body: { sourceId: srcId, fields: [
+          { sourceField: '商品id', targetItemKey: 'productCode', columnIndex: 0 },
+          { sourceField: 'skuid', targetItemKey: 'code', columnIndex: 1 },
+          { sourceField: 'カラー', targetItemKey: 'axis1Value', columnIndex: 2 },
+          { sourceField: '商品名', targetItemKey: 'productName', columnIndex: 3 },
+          { sourceField: 'セグメント', targetItemKey: 'segmentId', columnIndex: 4 },
+          { sourceField: '作家', targetItemKey: 'defaultSupplierCompanyId', columnIndex: 5 },
+          { sourceField: '税区分', targetItemKey: 'taxRateId', columnIndex: 6 },
+          { sourceField: '単位', targetItemKey: 'unitId', columnIndex: 7 },
+        ] },
+      })
+      const csv = '商品id,skuid,カラー,商品名,セグメント,作家,税区分,単位\n'
+        + 'VARW-1,VARW-1-RD,赤,作家皿,seg-01,バリアント作家,tax-10,unit-02\n'
+        + 'VARW-2,VARW-2-RD,赤,未知作家皿,seg-01,存在しない作家,tax-10,unit-02\n'
+      const r = await api('POST', '/v1/akebono/import-runs', {
+        as: ADMIN, body: { sourceId: srcId, filename: 'v.csv', contentBase64: b64(csv) },
+      })
+      expect(r.status).toBe(201)
+      const run = r.json.data as { counts: Record<string, number>; errors: { message: string }[] }
+      expect(run.counts).toMatchObject({ applied: 1, failed: 1 })
+      expect(run.errors[0]!.message).toContain('既定仕入先') // 作家未解決グループは隔離
+      type ProductRow = { code: string; defaultSupplierCompanyId: string | null; taxRateId: string | null; unitId: string | null }
+      const products = (await api('GET', '/v1/akebono/products', { as: ADMIN })).json.data as ProductRow[]
+      expect(products.find(p => p.code === 'VARW-1'))
+        .toMatchObject({ defaultSupplierCompanyId: artistId, taxRateId: 'tax-10', unitId: 'unit-02' })
+      expect(products.some(p => p.code === 'VARW-2')).toBe(false) // 作家未解決グループは商品も作らない
+    })
+
     it('バリアント軸取込の境界: 既定 SKU コード衝突の冪等・未送信フィールド保持・グループ内重複・グループ隔離（独立レビュー是正）', async () => {
       const b64 = (s: string): string => Buffer.from(s, 'utf8').toString('base64')
       const src = await api('POST', '/v1/akebono/import-sources', {
