@@ -162,30 +162,40 @@ const IMAGE_COLS = `id, product_id AS "productId", sku_id AS "skuId", section_id
   display_order AS "displayOrder", filename, mime, data_url AS "dataUrl", active`
 
 const PO_COLS = `id, code, company_id AS "companyId", segment_id AS "segmentId", status,
-  order_date AS "orderDate", due_date AS "dueDate", lines, note`
+  order_date AS "orderDate", due_date AS "dueDate", lines, note, custom`
 
 const MFG_COLS = `id, code, sku_id AS "skuId", qty, warehouse_id AS "warehouseId",
-  due_date AS "dueDate", status, results`
+  due_date AS "dueDate", status, results, custom`
 
 const IBP_COLS = `id, code, po_id AS "poId", warehouse_id AS "warehouseId",
   due_date AS "dueDate", status, lines`
 
 const IBR_COLS = `id, code, plan_id AS "planId", warehouse_id AS "warehouseId",
-  ${JST_TS('received_at')} AS "receivedAt", lines`
+  ${JST_TS('received_at')} AS "receivedAt", lines, custom`
 
 const PUR_COLS = `id, code, company_id AS "companyId", segment_id AS "segmentId",
   purchase_date AS "purchaseDate", purchase_type AS "purchaseType",
   inbound_result_id AS "inboundResultId", warehouse_id AS "warehouseId", lines,
-  correction_of AS "correctionOf"`
+  correction_of AS "correctionOf", custom`
 
 const OBP_COLS = `id, code, company_id AS "companyId", warehouse_id AS "warehouseId",
   segment_id AS "segmentId", due_date AS "dueDate", status, lines`
 
 const OBR_COLS = `id, code, plan_id AS "planId", warehouse_id AS "warehouseId",
-  company_id AS "companyId", ${JST_TS('shipped_at')} AS "shippedAt", lines`
+  company_id AS "companyId", ${JST_TS('shipped_at')} AS "shippedAt", lines, custom`
 
 const ITX_COLS = `id, sku_id AS "skuId", warehouse_id AS "warehouseId", qty, kind, reason,
-  ref_type AS "refType", ref_line_id AS "refLineId", ${JST_TS('occurred_at')} AS "occurredAt"`
+  ref_type AS "refType", ref_line_id AS "refLineId", ${JST_TS('occurred_at')} AS "occurredAt", custom`
+
+/**
+ * custom（jsonb）の正規化: オブジェクトのみ採用（配列・非オブジェクト・null は {}）。
+ * products/sales と同一規約（項目カスタマイズ = 全業務アプリ展開 2026-08-10）。キーはテナント定義のため
+ * ホワイトリスト検証はしない（値型の検証はフォーム側 UiSchemaForm が担う）。
+ */
+function customOf(body: Record<string, unknown>): Record<string, unknown> {
+  const v = body.custom
+  return v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {}
+}
 
 /** 画像 data URI の検証（プロフィール画像・業態アイコンと同じ allowlist = SVG 等のスクリプト混入防止） */
 const IMAGE_DATA_RE = /^data:image\/(png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=]+$/
@@ -517,9 +527,9 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
       const code = await nextDocCode(db, 'PO')
       const orderLines = lines.map((l, idx) => ({ id: `${id}-${idx}`, ...l }))
       const { rows } = await db.query(
-        `INSERT INTO purchase_orders (id, code, company_id, segment_id, status, order_date, due_date, lines, note)
-         VALUES ($1, $2, $3, $4, 'ordered', $5, $6, $7, $8) RETURNING ${PO_COLS}`,
-        [id, code, companyId, segmentId, orderDate, dueDate, JSON.stringify(orderLines), capCp(String(body.note ?? '').trim(), 1000)])
+        `INSERT INTO purchase_orders (id, code, company_id, segment_id, status, order_date, due_date, lines, note, custom)
+         VALUES ($1, $2, $3, $4, 'ordered', $5, $6, $7, $8, $9) RETURNING ${PO_COLS}`,
+        [id, code, companyId, segmentId, orderDate, dueDate, JSON.stringify(orderLines), capCp(String(body.note ?? '').trim(), 1000), JSON.stringify(customOf(body))])
       return rows[0]
     })
     await audit(pool, { actorId: user.id, action: 'create', entity: 'purchase_orders', entityId: id, detail: '発注を登録' })

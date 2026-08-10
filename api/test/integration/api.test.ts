@@ -4543,13 +4543,16 @@ describe('Phase C: Akebono 記録系の API 永続化（商品・伝票・在庫
       as: MEMBER,
       body: {
         companyId: artistId, segmentId: 'seg-01', orderDate: todayJst(), dueDate: todayJst(),
+        // 項目カスタマイズ（F-31）: custom を保存し GET で返す
+        custom: { memo: '至急', priority: 3 },
         lines: [{ skuId: defaultSkuId, qty: 10, unitPrice: 800 }],
       },
     })
     expect(po.status).toBe(201)
-    const poRow = po.json.data as { id: string; code: string; status: string; lines: { id: string }[] }
+    const poRow = po.json.data as { id: string; code: string; status: string; custom?: Record<string, unknown>; lines: { id: string }[] }
     expect(poRow.code).toMatch(/^PO-\d{4}$/)
     expect(poRow.status).toBe('ordered')
+    expect(poRow.custom).toEqual({ memo: '至急', priority: 3 })
 
     // 状態機械: closed からの遷移は 409
     expect((await api('POST', `/v1/akebono/purchase-orders/${poRow.id}/status`, { as: MEMBER, body: { status: 'closed' } })).status).toBe(200)

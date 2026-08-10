@@ -6,13 +6,13 @@
  */
 import { Plus } from 'lucide-vue-next'
 import type { PoStatus, PurchaseOrder } from '~/types/akebono'
-import type { Company } from '~/types/domain'
-import type { TableColumn } from '~/types/ui'
+import type { Company, CustomValues } from '~/types/domain'
 import { PO_STATUS_LABELS, hasPartnerRole, poStatusTone } from '~/utils/akebono'
 import { fmtDate, fmtInt, fmtYen } from '~/utils/format'
 
 const po = usePurchaseOrders()
 const products = useProducts()
+const { missingRequiredCustom } = useAppFields()
 const { segmentOptions, segmentName } = useAkebonoMasters()
 const { effectiveSegmentId } = useCurrentSegment()
 const { tbl } = useMockDb()
@@ -45,29 +45,34 @@ const { query, page, pageSize, rows: pageRows, total, refresh } = useListView<Pu
   fetch: p => apiListPage<PurchaseOrder>('purchaseOrders', p),
 })
 
-const columns: TableColumn[] = [
-  { key: 'code', label: 'コード', primary: true },
-  { key: 'supplier', label: '仕入先', primary: true },
-  { key: 'segment', label: 'セグメント' },
-  { key: 'orderDate', label: '発注日' },
-  { key: 'dueDate', label: '納期', primary: true },
+const { listColumns, decorateRows } = useAppListView()
+// 一覧列は項目設定（表示 ON/OFF・表示名）で解決＋カスタム項目列を付加。派生列（金額・消込・状態）は itemKey 無し＝常時表示
+const columns = computed(() => listColumns('purchase_order', [
+  { key: 'code', label: 'コード', primary: true, itemKey: 'code' },
+  { key: 'supplier', label: '仕入先', primary: true, itemKey: 'companyId' },
+  { key: 'segment', label: 'セグメント', itemKey: 'segmentId' },
+  { key: 'orderDate', label: '発注日', itemKey: 'orderDate' },
+  { key: 'dueDate', label: '納期', primary: true, itemKey: 'dueDate' },
+  { key: 'note', label: '備考', itemKey: 'note' },
   { key: 'total', label: '金額', align: 'right', primary: true },
   { key: 'consumed', label: '消込', align: 'right' },
   { key: 'status', label: '状態', primary: true },
-]
+]))
 
 const tableRows = computed(() =>
-  pageRows.value.map(o => ({
+  decorateRows('purchase_order', pageRows.value.map(o => ({
     id: o.id,
     code: o.code,
     supplier: companyName(o.companyId),
     segment: segmentName(o.segmentId),
     orderDate: fmtDate(o.orderDate),
     dueDate: fmtDate(o.dueDate),
+    note: o.note,
     total: fmtYen(po.orderTotal(o)),
     consumed: `${fmtInt(po.receivedQtyOf(o.id))} / ${fmtInt(po.orderedQtyOf(o))}`,
     status: o.status,
-  })) as unknown as Record<string, unknown>[],
+    custom: o.custom ?? {},
+  }))) as unknown as Record<string, unknown>[],
 )
 
 // ---------- 詳細ドロワー ----------
@@ -127,8 +132,9 @@ const createForm = ref<{
   orderDate: string
   dueDate: string
   note: string
+  custom: CustomValues
   lines: { skuId: string; qty: number; price?: number }[]
-}>({ companyId: '', segmentId: '', orderDate: '', dueDate: '', note: '', lines: [] })
+}>({ companyId: '', segmentId: '', orderDate: '', dueDate: '', note: '', custom: {}, lines: [] })
 
 function openCreate(): void {
   createForm.value = {
@@ -137,6 +143,7 @@ function openCreate(): void {
     orderDate: '',
     dueDate: '',
     note: '',
+    custom: {},
     lines: [{ skuId: '', qty: 1, price: 0 }],
   }
   createOpen.value = true
@@ -166,12 +173,18 @@ async function submitCreateInner(): Promise<void> {
     toast.show('納期を入力してください', 'crit')
     return
   }
+  const missCustom = missingRequiredCustom('purchase_order', f.custom)
+  if (missCustom) {
+    toast.show(`${missCustom}は必須です`, 'crit')
+    return
+  }
   const res = await po.createOrder({
     companyId: f.companyId,
     segmentId: f.segmentId,
     orderDate: f.orderDate,
     dueDate: f.dueDate,
     note: f.note,
+    custom: f.custom,
     lines: f.lines.map(l => ({ skuId: l.skuId, qty: Number(l.qty), unitPrice: Number(l.price ?? 0) })),
   })
   if (!res.ok) {
@@ -330,6 +343,7 @@ async function submitCreateInner(): Promise<void> {
         <UiFormField label="発注明細" required>
           <WidgetsAkebonoLineItems v-model:model-value="createForm.lines" :sku-options="skuOptions" price-label="単価" />
         </UiFormField>
+        <WidgetsCustomFields entity="purchase_order" v-model="createForm" />
         <p class="text-[11px] text-muted">
           情報サービス業のセグメントでは、この発注は外注費（外注先への委託）として読み替えて計上されます。
         </p>

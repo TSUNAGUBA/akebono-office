@@ -265,6 +265,8 @@ export interface PurchaseOrder {
   dueDate: string
   lines: OrderLine[]
   note: string
+  /** 項目カスタマイズ（F-31）の追加項目値 */
+  custom?: CustomValues
 }
 
 /** 生産実績（F-22-2。追記のみ） */
@@ -286,6 +288,8 @@ export interface ProductionOrder {
   dueDate: string
   status: ProductionStatus
   results: ProductionResult[]
+  /** 項目カスタマイズ（F-31）の追加項目値 */
+  custom?: CustomValues
 }
 
 export interface StockLine {
@@ -315,6 +319,8 @@ export interface InboundResult {
   warehouseId: string
   receivedAt: string
   lines: StockLine[]
+  /** 項目カスタマイズ（F-31）の追加項目値 */
+  custom?: CustomValues
 }
 
 /** 仕入計上（F-24。記録系・訂正は赤黒） */
@@ -332,6 +338,8 @@ export interface PurchaseRecord {
   lines: { id: string; skuId: string; qty: number; costPrice: number }[]
   /** 赤黒訂正の元伝票 */
   correctionOf: string | null
+  /** 項目カスタマイズ（F-31）の追加項目値 */
+  custom?: CustomValues
 }
 
 /** 出荷指示（F-26-1。設定系。単独 DELETE 禁止 = 取消はステータス） */
@@ -356,6 +364,8 @@ export interface OutboundResult {
   companyId: string | null
   shippedAt: string
   lines: StockLine[]
+  /** 項目カスタマイズ（F-31）の追加項目値 */
+  custom?: CustomValues
 }
 
 /** 在庫トランザクション（§3.4。在庫の SoT・追記のみ） */
@@ -372,6 +382,8 @@ export interface InventoryTransaction {
   /** 発生元の明細行 id（冪等キー = UNIQUE(refType, refLineId, kind)） */
   refLineId: string
   occurredAt: string
+  /** 項目カスタマイズ（F-31）の追加項目値 */
+  custom?: CustomValues
 }
 
 // ---------- 売上・請求（確定系 / 記録系） ----------
