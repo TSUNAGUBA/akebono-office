@@ -126,6 +126,41 @@ export function useAkebonoSales() {
     return [...head, { label: 'その他', value: rest }]
   })
 
+  /**
+   * 売上明細の供給元（作家/仕入先）を解決する（改修 P2/P3）。
+   * 計上時点の supplierCompanyId（0055 スナップショット）を優先し、未設定（既存行）は
+   * 商品の現在の defaultSupplierCompanyId へフォールバック（精算の作家帰属解決と同一方針 = 原則6）。
+   */
+  function supplierIdOf(r: SalesRecord): string | null {
+    if (r.supplierCompanyId) return r.supplierCompanyId
+    const product = products.productById(products.skuById(r.skuId)?.productId ?? '')
+    return product?.defaultSupplierCompanyId ?? null
+  }
+
+  /**
+   * 仕入先（作家/窯元）別内訳（Top5 + その他 + 未設定。フィルタ適用）。改修 P2 = 窯元視点の売上分析。
+   * 供給元が解決できない明細は「未設定（仕入先未登録）」に集約し、データ整備の必要性を可視化する。
+   */
+  const supplierBreakdown = computed(() => {
+    const months = selectedFyMonths()
+    const map = new Map<string, number>()
+    let unattributed = 0
+    for (const r of filteredRecords.value) {
+      if (!months.has(monthOf(r))) continue
+      const sid = supplierIdOf(r)
+      if (!sid) { unattributed += r.amount; continue }
+      map.set(sid, (map.get(sid) ?? 0) + r.amount)
+    }
+    const sorted = [...map.entries()].map(([id, value]) => ({ label: companyName(id), value }))
+      .sort((a, b) => b.value - a.value)
+    const head = sorted.length <= 5 ? sorted : sorted.slice(0, 5)
+    const rest = sorted.length <= 5 ? 0 : sorted.slice(5).reduce((s, x) => s + x.value, 0)
+    const out = [...head]
+    if (rest > 0) out.push({ label: 'その他', value: rest })
+    if (unattributed > 0) out.push({ label: '未設定（仕入先未登録）', value: unattributed })
+    return out
+  })
+
   /** セグメント別合計（非フィルタ = activeRecords ベース。並列比較用に汚染させない） */
   function segmentTotalIn(months: Set<string>, segmentId: string): number {
     return activeRecords.value
@@ -163,6 +198,8 @@ export function useAkebonoSales() {
       salesDate: input.salesDate, companyId: input.companyId, segmentId: input.segmentId, skuId: input.skuId,
       qty: input.qty, unitPrice: input.unitPrice, amount: Math.round(input.qty * input.unitPrice),
       costPrice: sku ? products.costOf(sku) : null,
+      // 供給元（作家）を計上時点で凍結（0055。API の解決と一致 = 両モード同一結果）
+      supplierCompanyId: product?.defaultSupplierCompanyId ?? null,
       channel: input.channel ?? null, billingType: (product?.billingType ?? null) as BillingType | null,
       sourceKind: input.sourceKind ?? 'manual', sourceRef: null, invoiceId: null, correctionOf: null, active: true,
       custom: input.custom ?? {},
@@ -200,7 +237,7 @@ export function useAkebonoSales() {
     records, activeRecords, filteredRecords, activeSegments, segmentFilter, selectedFy,
     fiscalYearOptions, fiscalMonthLabels, currentFySeries, previousFySeries, currentMonth,
     currentMonthSales, currentMonthYoY, currentMonthMargin,
-    segmentBreakdown, customerBreakdown, segmentComparison,
+    segmentBreakdown, customerBreakdown, supplierBreakdown, segmentComparison,
     segmentName, companyName, monthOf, create, correct,
   }
 }

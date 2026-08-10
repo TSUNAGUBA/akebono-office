@@ -122,6 +122,33 @@ export function calcStoreMargin(salesAmount: number, snapshot: AkebonoSettlement
   return roundBy(salesAmount * (1 - storeShare), snapshot.rounding)
 }
 
+/**
+ * 三者精算における当社（弊社）取り分率 = 1 − 店舗取り分率 − 作家率（sales_rate 方式）。
+ * 上代を 100% として、販売店・弊社・作家（窯元）へ按分したときの弊社の残余率を返す。
+ * 負値 = 設定過剰（店舗取り分 + 作家率 > 100%）で当社が逆ざやになる状態（設定要確認）。
+ * 作家が purchase_cost 方式のときは率で評価できないため本関数の対象外（呼び出し側で除外する）。
+ */
+export function residualMarginRate(storeShare: number, artistRate: number): number {
+  return 1 - storeShare - artistRate
+}
+
+/**
+ * 委託条件の整合検証（設定過剰の検出）。店舗取り分率群 × sales_rate 作家率群 の全組で
+ * 最小の当社取り分（残余率）を返す。返り値 < 0 は「店舗取り分 + 作家率 > 100% の組があり
+ * 当社が逆ざやになる」= 設定要確認。組が無い（どちらかが空）ときは null。
+ * api-design §「店舗請求 − 作家支払 = 当社粗利 ≥ 0」の整合を設定段階で担保するための純関数。
+ */
+export function worstResidualMargin(storeShares: number[], artistRates: number[]): number | null {
+  if (storeShares.length === 0 || artistRates.length === 0) return null
+  let worst = Infinity
+  for (const s of storeShares) {
+    for (const a of artistRates) {
+      worst = Math.min(worst, residualMarginRate(s, a))
+    }
+  }
+  return worst
+}
+
 // ---------- 取引ロール ----------
 
 /** 取引先の取引ロール（未設定の下位互換: 顧客 = ['customer'] / 自社 = []） */
@@ -176,6 +203,8 @@ export interface ShipmentSaleLine {
   amount: number
   costPrice: number | null
   billingType: string | null
+  /** 計上時点の供給元（作家/仕入先）のスナップショット（0055。商品の defaultSupplierCompanyId を凍結） */
+  supplierCompanyId: string | null
   /** 発生元の出荷実績明細行 id 参照（二重計上防止キー = obr:<明細行id>） */
   sourceRef: string
 }
@@ -188,7 +217,7 @@ export interface ShipmentSaleLine {
  */
 export function buildShipmentSaleLines(
   resultLines: { id: string; skuId: string; qty: number }[],
-  resolve: (skuId: string) => { unitPrice: number; costPrice: number | null; billingType: string | null },
+  resolve: (skuId: string) => { unitPrice: number; costPrice: number | null; billingType: string | null; supplierCompanyId: string | null },
   existingCodes: string[],
 ): ShipmentSaleLine[] {
   const out: ShipmentSaleLine[] = []
@@ -202,6 +231,7 @@ export function buildShipmentSaleLines(
       amount: Math.round(l.qty * r.unitPrice),
       costPrice: r.costPrice,
       billingType: r.billingType,
+      supplierCompanyId: r.supplierCompanyId,
       sourceRef: `obr:${l.id}`,
     })
   }

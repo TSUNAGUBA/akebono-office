@@ -401,6 +401,11 @@ export interface SalesRecord {
   unitPrice: number
   amount: number
   costPrice: number | null
+  /**
+   * 計上時点の供給元（作家/仕入先）のスナップショット（0055。商品の defaultSupplierCompanyId を凍結）。
+   * null = 未設定（既存行・供給元未設定商品）→ 精算・分析は商品の現在値へフォールバック解決する。
+   */
+  supplierCompanyId?: string | null
   channel: string | null
   billingType: BillingType | null
   /** 発生源（manual = 手入力 / shipment = 出荷実績から / import = 取込 / monthly_bulk = 月次一括） */

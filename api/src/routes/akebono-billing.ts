@@ -39,7 +39,8 @@ const JST_TS = (col: string): string =>
 
 const SR_COLS = `id, code, sales_date AS "salesDate", company_id AS "companyId",
   segment_id AS "segmentId", sku_id AS "skuId", qty, unit_price AS "unitPrice", amount,
-  cost_price AS "costPrice", channel, billing_type AS "billingType", source_kind AS "sourceKind",
+  cost_price AS "costPrice", supplier_company_id AS "supplierCompanyId", channel,
+  billing_type AS "billingType", source_kind AS "sourceKind",
   source_ref AS "sourceRef", invoice_id AS "invoiceId", correction_of AS "correctionOf", active, custom`
 
 const INV_COLS = `id, code, company_id AS "companyId", segment_id AS "segmentId",
@@ -109,9 +110,10 @@ export function akebonoBillingRoutes(pool: pg.Pool): Hono {
     if (crows.length === 0) throw err('AKO-GEN-002', `得意先が見つかりません（${companyId}）`, 404)
     const { rows: srows } = await pool.query(`SELECT 1 FROM business_segments WHERE id = $1`, [segmentId])
     if (srows.length === 0) throw err('AKO-GEN-002', `事業セグメントが見つかりません（${segmentId}）`, 404)
-    // SKU → 原価・課金区分の解決（SKU 原価 → 商品標準原価 / 商品の billingType）
-    const { rows: skuRows } = await pool.query<{ costPrice: number | null; stdCost: number | null; billingType: string | null }>(
-      `SELECT s.cost_price AS "costPrice", p.standard_cost AS "stdCost", p.billing_type AS "billingType"
+    // SKU → 原価・課金区分・供給元（作家）の解決（SKU 原価 → 商品標準原価 / 商品の billingType / 商品の既定仕入先）
+    const { rows: skuRows } = await pool.query<{ costPrice: number | null; stdCost: number | null; billingType: string | null; supplierId: string | null }>(
+      `SELECT s.cost_price AS "costPrice", p.standard_cost AS "stdCost", p.billing_type AS "billingType",
+              p.default_supplier_company_id AS "supplierId"
        FROM product_skus s LEFT JOIN products p ON p.id = s.product_id WHERE s.id = $1`, [skuId])
     if (skuRows.length === 0) throw err('AKO-GEN-002', `SKU が見つかりません（${skuId}）`, 404)
     const sku = skuRows[0]!
@@ -120,10 +122,10 @@ export function akebonoBillingRoutes(pool: pg.Pool): Hono {
       const code = await nextDocCode(db, 'SR')
       const { rows } = await db.query(
         `INSERT INTO sales_records (id, code, sales_date, company_id, segment_id, sku_id, qty, unit_price, amount,
-           cost_price, channel, billing_type, source_kind, custom)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING ${SR_COLS}`,
+           cost_price, supplier_company_id, channel, billing_type, source_kind, custom)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING ${SR_COLS}`,
         [id, code, salesDate, companyId, segmentId, skuId, qty, unitPrice, Math.round(qty * unitPrice),
-          sku.costPrice ?? sku.stdCost ?? null, channel, sku.billingType, sourceKind, JSON.stringify(custom)])
+          sku.costPrice ?? sku.stdCost ?? null, sku.supplierId, channel, sku.billingType, sourceKind, JSON.stringify(custom)])
       return rows[0]
     })
     await audit(pool, { actorId: user.id, action: 'create', entity: 'sales_records', entityId: id, detail: '売上を計上' })
@@ -138,11 +140,12 @@ export function akebonoBillingRoutes(pool: pg.Pool): Hono {
     const created = await inTxn(pool, async (db) => {
       const { rows } = await db.query<{
         companyId: string; segmentId: string; skuId: string; qty: number; unitPrice: number; amount: number
-        costPrice: number | null; channel: string | null; billingType: string | null
+        costPrice: number | null; supplierCompanyId: string | null; channel: string | null; billingType: string | null
         invoiceId: string | null; correctionOf: string | null
       }>(
         `SELECT company_id AS "companyId", segment_id AS "segmentId", sku_id AS "skuId", qty,
-                unit_price AS "unitPrice", amount, cost_price AS "costPrice", channel,
+                unit_price AS "unitPrice", amount, cost_price AS "costPrice",
+                supplier_company_id AS "supplierCompanyId", channel,
                 billing_type AS "billingType", invoice_id AS "invoiceId", correction_of AS "correctionOf"
          FROM sales_records WHERE id = $1 FOR UPDATE`, [id])
       const src = rows[0]
@@ -153,12 +156,13 @@ export function akebonoBillingRoutes(pool: pg.Pool): Hono {
       const { rows: dup } = await db.query(`SELECT 1 FROM sales_records WHERE correction_of = $1 LIMIT 1`, [id])
       if (dup.length > 0) throw err('AKO-SLS-002', 'この明細は既に訂正済みです', 409)
       const code = await nextDocCode(db, 'SR')
+      // 供給元（作家）は元明細のスナップショットをそのまま引き継ぐ（相殺行が作家別分析で正しくネットされる）
       const { rows: out } = await db.query(
         `INSERT INTO sales_records (id, code, sales_date, company_id, segment_id, sku_id, qty, unit_price, amount,
-           cost_price, channel, billing_type, source_kind, correction_of)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'manual', $13) RETURNING ${SR_COLS}`,
+           cost_price, supplier_company_id, channel, billing_type, source_kind, correction_of)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'manual', $14) RETURNING ${SR_COLS}`,
         [revId, code, todayJst(), src.companyId, src.segmentId, src.skuId, -src.qty, src.unitPrice, -src.amount,
-          src.costPrice, src.channel, src.billingType, id])
+          src.costPrice, src.supplierCompanyId, src.channel, src.billingType, id])
       return out[0]
     })
     await audit(pool, { actorId: user.id, action: 'create', entity: 'sales_records', entityId: revId, detail: `売上を赤黒訂正（元 ${id}）` })
@@ -438,8 +442,9 @@ export function akebonoBillingRoutes(pool: pg.Pool): Hono {
       const { rows: stores } = await db.query<{ id: string }>(
         `SELECT id FROM companies WHERE partner_roles @> '"store"'::jsonb OR partner_roles @> '["store"]'::jsonb`)
       const storeIds = new Set(stores.map(s => s.id))
-      const { rows: sales } = await db.query<{ id: string; companyId: string; skuId: string; qty: number; amount: number; salesDate: string }>(
-        `SELECT id, company_id AS "companyId", sku_id AS "skuId", qty, amount, sales_date AS "salesDate"
+      const { rows: sales } = await db.query<{ id: string; companyId: string; skuId: string; qty: number; amount: number; salesDate: string; supplierCompanyId: string | null }>(
+        `SELECT id, company_id AS "companyId", sku_id AS "skuId", qty, amount, sales_date AS "salesDate",
+                supplier_company_id AS "supplierCompanyId"
          FROM sales_records
          WHERE active AND invoice_id IS NULL AND segment_id = $1
            AND sales_date >= $2 AND sales_date <= $3 AND qty > 0
@@ -483,12 +488,17 @@ export function akebonoBillingRoutes(pool: pg.Pool): Hono {
       }
 
       // --- 作家別支払通知 ---
+      // 作家帰属 = 売上明細の供給元スナップショット（0055）を優先し、未設定（既存行）は商品の現在値へフォールバック。
+      // これにより「精算後に商品の既定仕入先を付け替えても、計上済み売上の作家帰属は当時のまま」を保証する（原則6）。
       const byArtist = new Map<string, typeof rows>()
       for (const r of rows) {
-        const { rows: art } = await db.query<{ artistId: string | null }>(
-          `SELECT p.default_supplier_company_id AS "artistId"
-           FROM product_skus s LEFT JOIN products p ON p.id = s.product_id WHERE s.id = $1`, [r.skuId])
-        const artistId = art[0]?.artistId
+        let artistId = r.supplierCompanyId ?? null
+        if (!artistId) {
+          const { rows: art } = await db.query<{ artistId: string | null }>(
+            `SELECT p.default_supplier_company_id AS "artistId"
+             FROM product_skus s LEFT JOIN products p ON p.id = s.product_id WHERE s.id = $1`, [r.skuId])
+          artistId = art[0]?.artistId ?? null
+        }
         if (!artistId) continue
         byArtist.set(artistId, [...(byArtist.get(artistId) ?? []), r])
       }

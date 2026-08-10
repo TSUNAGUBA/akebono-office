@@ -2341,3 +2341,49 @@
 - [x] スキーマ変更なし（custom 列は 0042 で既存・既定 `{}`）。既存レコードは custom 未設定でも `{}` として整合。
   一覧ヘルパーはカスタム項目 0 件のエンティティでは実質ノーオペ（列も付かず decorate も素通し）。既存フォーム/一覧の挙動は
   カスタム項目・項目設定差分が無い限り不変。API 訂正/自動起票は custom 非引継ぎで既存挙動と一致。
+
+## 66. 委託販売仲介の運用検証を受けた分析軸・整合検証の改修（P1/P2/P3。オペレーター指示 2026-08-10）の完了条件（Definition of Done）
+
+> オペレーターの委託販売仲介（窯元＝作家/仕入先・販売店＝店舗/得意先・弊社＝中間マージン。上代を三者へ按分）の
+> 運用検証を受け、既存の委託精算（三者精算）設計はそのまま耐えられることを確認したうえで、提案した 3 改修を実装。
+> ブランチ `claude/akebono-import-linking-scsqkq`。
+
+### 66-1 P3: 売上明細に供給元（作家/窯元）スナップショット列（0055）
+- [x] **DB マイグレーション `0055_akebono_sales_supplier.sql`**: `sales_records.supplier_company_id text`（NULL 許容 = 後方互換・
+  バックフィルなし）＋ `sales_records_supplier_idx`。FK なし（0032 の設計判断踏襲）。glob 自動検出（migrate.ts）。
+- [x] **計上時に凍結（全4経路）**: 手入力（akebono-billing POST /sales-records）・出荷（akebono-trade postSales）・取込
+  （akebono-imports applySalesRecords）・赤黒訂正（billing correct = 元行の値を引継ぎ）で、商品の `default_supplier_company_id`
+  を解決して `supplier_company_id` に保存。SR_COLS に `supplierCompanyId` を追加。
+- [x] **委託精算の作家帰属**: `COALESCE(sales_records.supplier_company_id, products.default_supplier_company_id)`（スナップショット優先・
+  NULL はライブ解決へフォールバック）。API（akebono-billing consignment/close の byArtist）・モック（useConsignment closeConsignment）とも同一解決。
+- [x] **型・共有**: `SalesRecord.supplierCompanyId?`（types/akebono.ts）・`ShipmentSaleLine.supplierCompanyId`＋`buildShipmentSaleLines`
+  の resolve に supplierCompanyId を追加（shared/domain/akebono）。モック生成経路（useAkebonoSales.create・useOutbound）も凍結。
+
+### 66-2 P2: 作家（窯元）別・販売先別の売上分析ビュー
+- [x] **useAkebonoSales.supplierBreakdown**: 売上明細を供給元（作家/窯元）でロールアップ（Top5 + その他 + 未設定〔仕入先未登録〕）。
+  供給元解決は `supplierIdOf`（supplierCompanyId 優先・未設定は商品ルックアップへフォールバック = 精算と同一方針）。
+- [x] **sales.vue**: 既存「得意先別内訳」を「販売先（店舗・得意先）別内訳」に、加えて「仕入先（作家・窯元）別内訳」バーチャートを新設（レスポンシブ 2 分割）。
+
+### 66-3 P1: 弊社取り分（残余）の可視化＋委託条件の整合検証
+- [x] **共有純関数（shared/domain/akebono）**: `residualMarginRate(storeShare, artistRate)` = 1 − 店舗取り分 − 作家率、
+  `worstResidualMargin(storeShares, artistRates)` = 全組の最小残余（負 = 逆ざや）。utils/akebono で再エクスポート。
+- [x] **useConsignment**: `settlementPreview(segmentId, month)`（締め前の試算 = 書込なし。closeConsignment と同一純関数・同一作家帰属解決で
+  店舗別請求・作家別支払・当社粗利〔税抜〕を算定）・`settlementIntegrity(segmentId)`（店舗取り分 + 作家率〔sales_rate〕> 100% の逆ざや組を返す）。
+- [x] **billing.vue（締めモーダル）**: 締め前プレビュー（委託売上・店舗へ請求・作家へ支払・**当社取り分**を提示。逆ざやは crit 表示）＋整合警告。
+- [x] **masters.vue（委託条件タブ）**: 保存後に逆ざや組があれば非ブロッキング警告トースト（原則4）＋タブ上部に整合警告バナー。
+
+### 66-4 検証（実測値）
+- [x] api typecheck green・mockup typecheck green。
+- [x] mockup unit **232 passed**（`residualMarginRate`/`worstResidualMargin` 4 ケース・`buildShipmentSaleLines` の供給元注入・null フォールバック）。
+- [x] api unit **302 passed**・api 統合 **245 passed**（新規: 「計上時に既定仕入先を凍結し供給元変更後も精算は当時の作家へ支払う」・
+  「既存行〔スナップショット NULL〕は現在値へフォールバックして帰属する」）。
+
+### 66-5 下位互換・データ影響（原則7）・整合（原則6）
+- [x] **後方互換**: `supplier_company_id` は追加列・NULL 許容。既存売上行は NULL のまま = 精算・分析ともライブ解決へフォールバックし従来挙動と一致
+  （バックフィル不要 = データ更新パッチ不要）。
+- [x] **SoT・整合（原則6）**: 作家帰属の SoT は「計上時点のスナップショット」。商品の既定仕入先を後日付け替えても計上済み売上の帰属は不変
+  （統合テストで実証）。金額算定・帰属解決は両モード同一（shared/domain）。
+- [x] **整合検証は非ブロッキング**（原則4）: 逆ざや設定は警告のみ（purchase_cost 方式の作家・移行期の設定を妨げない）。保存はブロックしない。
+
+### 66-6 独立レビュー（原則9）
+- [x] コードレビュアー・システム監査官の独立レビューを実施し、指摘ゼロまで反復（後述の是正を反映）。

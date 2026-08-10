@@ -6008,6 +6008,81 @@ describe('Phase D: データ取込（F-32）・ダッシュボード保管（F-4
     })
   })
 
+  // ---------- 供給元（作家）スナップショット（改修 P3 = 0055）: 計上時凍結・供給元変更後も帰属安定 ----------
+  describe('売上明細の供給元（作家）スナップショット', () => {
+    const seg = 'seg-01'
+    const month = '2026-09'
+
+    it('計上時に商品の既定仕入先を凍結し、後日の供給元変更後も精算は当時の作家へ支払う', async () => {
+      const store = await api('POST', '/v1/masters/companies', { as: ADMIN, body: { name: 'SNAP店', partnerRoles: ['store', 'customer'] } })
+      const storeId = (store.json.data as { id: string }).id
+      const artistA = await api('POST', '/v1/masters/companies', { as: ADMIN, body: { name: 'SNAP作家A', partnerRoles: ['consignor_artist'] } })
+      const artistAId = (artistA.json.data as { id: string }).id
+      const artistB = await api('POST', '/v1/masters/companies', { as: ADMIN, body: { name: 'SNAP作家B', partnerRoles: ['consignor_artist'] } })
+      const artistBId = (artistB.json.data as { id: string }).id
+
+      const product = await api('POST', '/v1/akebono/products', {
+        as: MEMBER, body: { code: 'SNAP-01', name: 'SNAP皿', segmentId: seg, listPrice: 1000, standardCost: 400, taxRateId: 'tax-10', defaultSupplierCompanyId: artistAId },
+      })
+      const productId = (product.json.data as { id: string }).id
+      const skuId = ((await api('GET', '/v1/akebono/product-skus', { as: MEMBER })).json.data as { id: string; productId: string }[])
+        .find(s => s.productId === productId)!.id
+
+      await api('POST', '/v1/masters/consignment-terms', { as: ADMIN, body: { companyId: storeId, segmentId: seg, role: 'store', marginRate: 0.30, taxRateId: 'tax-10', validFrom: '2026-01-01' } })
+      await api('POST', '/v1/masters/consignment-terms', { as: ADMIN, body: { companyId: artistAId, segmentId: seg, role: 'consignor_artist', payoutMethod: 'sales_rate', payoutRate: 0.60, liabilityTiming: 'on_sale', taxRateId: 'tax-10', validFrom: '2026-01-01' } })
+      await api('POST', '/v1/masters/consignment-terms', { as: ADMIN, body: { companyId: artistBId, segmentId: seg, role: 'consignor_artist', payoutMethod: 'sales_rate', payoutRate: 0.60, liabilityTiming: 'on_sale', taxRateId: 'tax-10', validFrom: '2026-01-01' } })
+
+      // 計上時点の供給元（作家A）がスナップショットされる
+      const sale = await api('POST', '/v1/akebono/sales-records', {
+        as: MEMBER, body: { salesDate: `${month}-10`, companyId: storeId, segmentId: seg, skuId, qty: 2, unitPrice: 1000 },
+      })
+      expect(sale.status).toBe(201)
+      expect((sale.json.data as { supplierCompanyId: string | null }).supplierCompanyId).toBe(artistAId)
+
+      // 後日、商品の既定仕入先を作家B へ付け替える
+      expect((await api('PATCH', `/v1/akebono/products/${productId}`, { as: MEMBER, body: { defaultSupplierCompanyId: artistBId } })).status).toBe(200)
+
+      // 精算: 作家帰属はスナップショット（作家A）のまま。変更後の作家B へは流れない
+      expect((await api('POST', '/v1/akebono/consignment/close', { as: MEMBER, body: { segmentId: seg, month } })).status).toBe(201)
+      const notices = (await api('GET', '/v1/akebono/payment-notices', { as: MEMBER })).json.data as
+        { id: string; companyId: string; periodFrom: string; payableAmount: number }[]
+      const noticeA = notices.find(n => n.companyId === artistAId && n.periodFrom === `${month}-01`)
+      const noticeB = notices.find(n => n.companyId === artistBId && n.periodFrom === `${month}-01`)
+      expect(noticeA).toBeDefined()
+      expect(noticeA!.payableAmount).toBe(1200) // 2 × 1000 × 60%
+      expect(noticeB).toBeUndefined()
+    })
+
+    it('既存行（供給元スナップショット未設定）は商品の現在値へフォールバックして帰属する（後方互換）', async () => {
+      const store2 = await api('POST', '/v1/masters/companies', { as: ADMIN, body: { name: 'SNAP店2', partnerRoles: ['store', 'customer'] } })
+      const store2Id = (store2.json.data as { id: string }).id
+      const artistC = await api('POST', '/v1/masters/companies', { as: ADMIN, body: { name: 'SNAP作家C', partnerRoles: ['consignor_artist'] } })
+      const artistCId = (artistC.json.data as { id: string }).id
+      const product = await api('POST', '/v1/akebono/products', {
+        as: MEMBER, body: { code: 'SNAP-02', name: 'SNAP鉢', segmentId: seg, listPrice: 1000, standardCost: 400, taxRateId: 'tax-10', defaultSupplierCompanyId: artistCId },
+      })
+      const productId = (product.json.data as { id: string }).id
+      const skuId = ((await api('GET', '/v1/akebono/product-skus', { as: MEMBER })).json.data as { id: string; productId: string }[])
+        .find(s => s.productId === productId)!.id
+      await api('POST', '/v1/masters/consignment-terms', { as: ADMIN, body: { companyId: store2Id, segmentId: seg, role: 'store', marginRate: 0.30, taxRateId: 'tax-10', validFrom: '2026-01-01' } })
+      await api('POST', '/v1/masters/consignment-terms', { as: ADMIN, body: { companyId: artistCId, segmentId: seg, role: 'consignor_artist', payoutMethod: 'sales_rate', payoutRate: 0.60, liabilityTiming: 'on_sale', taxRateId: 'tax-10', validFrom: '2026-01-01' } })
+      const month2 = '2026-10'
+      const sale = await api('POST', '/v1/akebono/sales-records', {
+        as: MEMBER, body: { salesDate: `${month2}-05`, companyId: store2Id, segmentId: seg, skuId, qty: 1, unitPrice: 1000 },
+      })
+      const saleId = (sale.json.data as { id: string }).id
+      // 既存行を模して供給元スナップショットを NULL に落とす（0055 適用前に計上された行の再現）
+      await pool.query(`UPDATE app_office.sales_records SET supplier_company_id = NULL WHERE id = $1`, [saleId])
+      // 精算: スナップショット NULL → 商品の現在値（作家C）へフォールバックして帰属する
+      expect((await api('POST', '/v1/akebono/consignment/close', { as: MEMBER, body: { segmentId: seg, month: month2 } })).status).toBe(201)
+      const notice = ((await api('GET', '/v1/akebono/payment-notices', { as: MEMBER })).json.data as
+        { companyId: string; periodFrom: string; payableAmount: number }[])
+        .find(n => n.companyId === artistCId && n.periodFrom === `${month2}-01`)
+      expect(notice).toBeDefined()
+      expect(notice!.payableAmount).toBe(600) // 1 × 1000 × 60%
+    })
+  })
+
   // ---------- 出荷実績 → 売上自動計上（sourceKind='shipment'）: 二重計上防止 ----------
   describe('出荷 → 売上自動計上', () => {
     const seg = 'seg-04'
