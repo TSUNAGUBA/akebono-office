@@ -1,7 +1,7 @@
 /**
  * 項目カスタマイズ（F-31）
  * 基本項目カタログ（コード = 静的 SoT）に、テナント差分（itemSettings）を重ねて
- * フォーム/一覧の項目構成を解決する。基本項目は非表示化のみ（削除不可）。
+ * フォーム/一覧/検索フィルタの項目構成を解決する。基本項目は非表示化のみ（削除不可）。
  * F-16 の表示項目 deny は本モックでは扱わない（本実装で優先適用）。
  *
  * デュアルモード（Phase B = 0031）: API モードの差分 SoT はサーバー（item_settings =
@@ -12,6 +12,11 @@
 import type { ItemSetting } from '~/types/akebono'
 import type { IndustryType } from '~/types/akebono'
 import type { Result } from '~/types/domain'
+
+/** フィルタ種別（未指定 = フィルタ不可）。ref = マスタ参照（autocomplete）・text = 正規化部分一致・enum = 固定選択・date/number = 範囲 */
+export type FilterKind = 'text' | 'ref' | 'enum' | 'date' | 'number'
+/** ref 種別のとき参照するマスタ種別（AppFilterBar のオプション解決キー） */
+export type FilterRefKind = 'company' | 'segment' | 'sku' | 'warehouse' | 'category' | 'taxRate' | 'unit'
 
 export interface CatalogItem {
   itemKey: string
@@ -24,89 +29,95 @@ export interface CatalogItem {
   industryHint?: IndustryType
   /** 必須固定（カスタマイズで必須解除できない整合必須項目） */
   requiredFixed?: boolean
+  /** フィルタ種別（未指定 = 検索フィルタに使えない項目 = variantAxes 等の複合項目） */
+  filterKind?: FilterKind
+  /** ref 種別のとき参照するマスタ種別 */
+  filterRef?: FilterRefKind
+  /** 検索フィルタの既定表示（未指定 = false。settings/items で ON/OFF 可） */
+  filterDefault?: boolean
 }
 
-/** 基本項目カタログ（代表エンティティ。SoT） */
+/** 基本項目カタログ（代表エンティティ。SoT）。filterKind/filterRef/filterDefault = 検索フィルタのメタ */
 export const ITEM_CATALOG: Record<string, CatalogItem[]> = {
   product: [
-    { itemKey: 'code', label: '商品コード', formDefault: true, listDefault: true, required: true, requiredFixed: true },
-    { itemKey: 'name', label: '商品名', formDefault: true, listDefault: true, required: true, requiredFixed: true },
-    { itemKey: 'segmentId', label: '事業セグメント', formDefault: true, listDefault: true, required: true, requiredFixed: true },
-    { itemKey: 'categoryId', label: '商品カテゴリ', formDefault: true, listDefault: true, required: false },
-    { itemKey: 'defaultSupplierCompanyId', label: '既定仕入先', formDefault: true, listDefault: false, required: false },
-    { itemKey: 'listPrice', label: '標準売価', formDefault: true, listDefault: true, required: false },
-    { itemKey: 'standardCost', label: '標準原価', formDefault: true, listDefault: false, required: false },
-    { itemKey: 'taxRateId', label: '税区分', formDefault: true, listDefault: false, required: false },
-    { itemKey: 'unitId', label: '単位', formDefault: true, listDefault: false, required: false },
+    { itemKey: 'code', label: '商品コード', formDefault: true, listDefault: true, required: true, requiredFixed: true, filterKind: 'text', filterDefault: true },
+    { itemKey: 'name', label: '商品名', formDefault: true, listDefault: true, required: true, requiredFixed: true, filterKind: 'text', filterDefault: true },
+    { itemKey: 'segmentId', label: '事業セグメント', formDefault: true, listDefault: true, required: true, requiredFixed: true, filterKind: 'ref', filterRef: 'segment', filterDefault: true },
+    { itemKey: 'categoryId', label: '商品カテゴリ', formDefault: true, listDefault: true, required: false, filterKind: 'ref', filterRef: 'category', filterDefault: false },
+    { itemKey: 'defaultSupplierCompanyId', label: '既定仕入先', formDefault: true, listDefault: false, required: false, filterKind: 'ref', filterRef: 'company', filterDefault: true },
+    { itemKey: 'listPrice', label: '標準売価', formDefault: true, listDefault: true, required: false, filterKind: 'number', filterDefault: false },
+    { itemKey: 'standardCost', label: '標準原価', formDefault: true, listDefault: false, required: false, filterKind: 'number', filterDefault: false },
+    { itemKey: 'taxRateId', label: '税区分', formDefault: true, listDefault: false, required: false, filterKind: 'ref', filterRef: 'taxRate', filterDefault: false },
+    { itemKey: 'unitId', label: '単位', formDefault: true, listDefault: false, required: false, filterKind: 'ref', filterRef: 'unit', filterDefault: false },
     { itemKey: 'variantAxes', label: 'バリアント軸（カラー×サイズ 等）', formDefault: true, listDefault: false, required: false, industryHint: 'retail' },
-    { itemKey: 'billingType', label: '課金区分（買切/月額/従量）', formDefault: false, listDefault: false, required: false, industryHint: 'it_service' },
-    { itemKey: 'description', label: '説明', formDefault: true, listDefault: false, required: false },
+    { itemKey: 'billingType', label: '課金区分（買切/月額/従量）', formDefault: false, listDefault: false, required: false, industryHint: 'it_service', filterKind: 'enum', filterDefault: false },
+    { itemKey: 'description', label: '説明', formDefault: true, listDefault: false, required: false, filterKind: 'text', filterDefault: false },
   ],
   sales_record: [
-    { itemKey: 'salesDate', label: '売上日', formDefault: true, listDefault: true, required: true, requiredFixed: true },
-    { itemKey: 'companyId', label: '得意先', formDefault: true, listDefault: true, required: true, requiredFixed: true },
-    { itemKey: 'segmentId', label: '事業セグメント', formDefault: true, listDefault: true, required: true, requiredFixed: true },
-    { itemKey: 'skuId', label: 'SKU', formDefault: true, listDefault: true, required: true, requiredFixed: true },
-    { itemKey: 'qty', label: '数量', formDefault: true, listDefault: true, required: true, requiredFixed: true },
-    { itemKey: 'unitPrice', label: '単価', formDefault: true, listDefault: true, required: true, requiredFixed: true },
-    { itemKey: 'channel', label: 'チャネル', formDefault: true, listDefault: false, required: false, industryHint: 'retail' },
+    { itemKey: 'salesDate', label: '売上日', formDefault: true, listDefault: true, required: true, requiredFixed: true, filterKind: 'date', filterDefault: true },
+    { itemKey: 'companyId', label: '得意先', formDefault: true, listDefault: true, required: true, requiredFixed: true, filterKind: 'ref', filterRef: 'company', filterDefault: true },
+    { itemKey: 'segmentId', label: '事業セグメント', formDefault: true, listDefault: true, required: true, requiredFixed: true, filterKind: 'ref', filterRef: 'segment', filterDefault: true },
+    { itemKey: 'skuId', label: 'SKU', formDefault: true, listDefault: true, required: true, requiredFixed: true, filterKind: 'ref', filterRef: 'sku', filterDefault: true },
+    { itemKey: 'qty', label: '数量', formDefault: true, listDefault: true, required: true, requiredFixed: true, filterKind: 'number', filterDefault: false },
+    { itemKey: 'unitPrice', label: '単価', formDefault: true, listDefault: true, required: true, requiredFixed: true, filterKind: 'number', filterDefault: false },
+    { itemKey: 'channel', label: 'チャネル', formDefault: true, listDefault: false, required: false, industryHint: 'retail', filterKind: 'text', filterDefault: false },
   ],
   sku: [
-    { itemKey: 'code', label: 'SKUコード', formDefault: true, listDefault: true, required: true, requiredFixed: true },
-    { itemKey: 'janCode', label: 'JANコード', formDefault: true, listDefault: true, required: false },
-    { itemKey: 'axis1Value', label: 'バリアント軸1', formDefault: true, listDefault: true, required: false, industryHint: 'retail' },
-    { itemKey: 'axis2Value', label: 'バリアント軸2', formDefault: true, listDefault: true, required: false, industryHint: 'retail' },
-    { itemKey: 'sellPrice', label: 'SKU売価', formDefault: true, listDefault: false, required: false },
-    { itemKey: 'costPrice', label: 'SKU原価', formDefault: true, listDefault: false, required: false },
+    { itemKey: 'code', label: 'SKUコード', formDefault: true, listDefault: true, required: true, requiredFixed: true, filterKind: 'text', filterDefault: true },
+    { itemKey: 'janCode', label: 'JANコード', formDefault: true, listDefault: true, required: false, filterKind: 'text', filterDefault: true },
+    { itemKey: 'axis1Value', label: 'バリアント軸1', formDefault: true, listDefault: true, required: false, industryHint: 'retail', filterKind: 'text', filterDefault: false },
+    { itemKey: 'axis2Value', label: 'バリアント軸2', formDefault: true, listDefault: true, required: false, industryHint: 'retail', filterKind: 'text', filterDefault: false },
+    { itemKey: 'sellPrice', label: 'SKU売価', formDefault: true, listDefault: false, required: false, filterKind: 'number', filterDefault: false },
+    { itemKey: 'costPrice', label: 'SKU原価', formDefault: true, listDefault: false, required: false, filterKind: 'number', filterDefault: false },
   ],
   purchase_order: [
-    { itemKey: 'code', label: '発注番号', formDefault: true, listDefault: true, required: true, requiredFixed: true },
-    { itemKey: 'companyId', label: '仕入先', formDefault: true, listDefault: true, required: true, requiredFixed: true },
-    { itemKey: 'segmentId', label: '事業セグメント', formDefault: true, listDefault: true, required: true, requiredFixed: true },
-    { itemKey: 'orderDate', label: '発注日', formDefault: true, listDefault: true, required: true },
-    { itemKey: 'dueDate', label: '納期', formDefault: true, listDefault: true, required: false },
-    { itemKey: 'note', label: '備考', formDefault: true, listDefault: false, required: false },
+    { itemKey: 'code', label: '発注番号', formDefault: true, listDefault: true, required: true, requiredFixed: true, filterKind: 'text', filterDefault: true },
+    { itemKey: 'companyId', label: '仕入先', formDefault: true, listDefault: true, required: true, requiredFixed: true, filterKind: 'ref', filterRef: 'company', filterDefault: true },
+    { itemKey: 'segmentId', label: '事業セグメント', formDefault: true, listDefault: true, required: true, requiredFixed: true, filterKind: 'ref', filterRef: 'segment', filterDefault: true },
+    { itemKey: 'orderDate', label: '発注日', formDefault: true, listDefault: true, required: true, filterKind: 'date', filterDefault: true },
+    { itemKey: 'dueDate', label: '納期', formDefault: true, listDefault: true, required: false, filterKind: 'date', filterDefault: false },
+    { itemKey: 'note', label: '備考', formDefault: true, listDefault: false, required: false, filterKind: 'text', filterDefault: false },
   ],
   production_order: [
-    { itemKey: 'code', label: '生産指示番号', formDefault: true, listDefault: true, required: true, requiredFixed: true },
-    { itemKey: 'skuId', label: 'SKU', formDefault: true, listDefault: true, required: true, requiredFixed: true },
-    { itemKey: 'qty', label: '指示数量', formDefault: true, listDefault: true, required: true, requiredFixed: true },
-    { itemKey: 'warehouseId', label: '完成入庫先', formDefault: true, listDefault: false, required: true },
-    { itemKey: 'dueDate', label: '完成予定', formDefault: true, listDefault: true, required: false },
+    { itemKey: 'code', label: '生産指示番号', formDefault: true, listDefault: true, required: true, requiredFixed: true, filterKind: 'text', filterDefault: true },
+    { itemKey: 'skuId', label: 'SKU', formDefault: true, listDefault: true, required: true, requiredFixed: true, filterKind: 'ref', filterRef: 'sku', filterDefault: true },
+    { itemKey: 'qty', label: '指示数量', formDefault: true, listDefault: true, required: true, requiredFixed: true, filterKind: 'number', filterDefault: false },
+    { itemKey: 'warehouseId', label: '完成入庫先', formDefault: true, listDefault: false, required: true, filterKind: 'ref', filterRef: 'warehouse', filterDefault: true },
+    { itemKey: 'dueDate', label: '完成予定', formDefault: true, listDefault: true, required: false, filterKind: 'date', filterDefault: true },
   ],
   purchase_record: [
-    { itemKey: 'code', label: '仕入番号', formDefault: true, listDefault: true, required: true, requiredFixed: true },
-    { itemKey: 'companyId', label: '仕入先', formDefault: true, listDefault: true, required: true, requiredFixed: true },
-    { itemKey: 'segmentId', label: '事業セグメント', formDefault: true, listDefault: true, required: true, requiredFixed: true },
-    { itemKey: 'purchaseDate', label: '仕入日', formDefault: true, listDefault: true, required: true, requiredFixed: true },
-    { itemKey: 'purchaseType', label: '仕入区分', formDefault: true, listDefault: true, required: false },
+    { itemKey: 'code', label: '仕入番号', formDefault: true, listDefault: true, required: true, requiredFixed: true, filterKind: 'text', filterDefault: true },
+    { itemKey: 'companyId', label: '仕入先', formDefault: true, listDefault: true, required: true, requiredFixed: true, filterKind: 'ref', filterRef: 'company', filterDefault: true },
+    { itemKey: 'segmentId', label: '事業セグメント', formDefault: true, listDefault: true, required: true, requiredFixed: true, filterKind: 'ref', filterRef: 'segment', filterDefault: true },
+    { itemKey: 'purchaseDate', label: '仕入日', formDefault: true, listDefault: true, required: true, requiredFixed: true, filterKind: 'date', filterDefault: true },
+    { itemKey: 'purchaseType', label: '仕入区分', formDefault: true, listDefault: true, required: false, filterKind: 'enum', filterDefault: true },
   ],
   inbound: [
-    { itemKey: 'code', label: '入荷番号', formDefault: true, listDefault: true, required: true, requiredFixed: true },
-    { itemKey: 'warehouseId', label: '入荷倉庫', formDefault: true, listDefault: true, required: true, requiredFixed: true },
-    { itemKey: 'receivedAt', label: '入荷日時', formDefault: true, listDefault: true, required: true, requiredFixed: true },
+    { itemKey: 'code', label: '入荷番号', formDefault: true, listDefault: true, required: true, requiredFixed: true, filterKind: 'text', filterDefault: true },
+    { itemKey: 'warehouseId', label: '入荷倉庫', formDefault: true, listDefault: true, required: true, requiredFixed: true, filterKind: 'ref', filterRef: 'warehouse', filterDefault: true },
+    { itemKey: 'receivedAt', label: '入荷日時', formDefault: true, listDefault: true, required: true, requiredFixed: true, filterKind: 'date', filterDefault: true },
   ],
   outbound: [
-    { itemKey: 'code', label: '出荷番号', formDefault: true, listDefault: true, required: true, requiredFixed: true },
-    { itemKey: 'companyId', label: '出荷先', formDefault: true, listDefault: true, required: false },
-    { itemKey: 'warehouseId', label: '出荷倉庫', formDefault: true, listDefault: true, required: false },
-    { itemKey: 'shippedAt', label: '出荷日時', formDefault: true, listDefault: true, required: true, requiredFixed: true },
+    { itemKey: 'code', label: '出荷番号', formDefault: true, listDefault: true, required: true, requiredFixed: true, filterKind: 'text', filterDefault: true },
+    { itemKey: 'companyId', label: '出荷先', formDefault: true, listDefault: true, required: false, filterKind: 'ref', filterRef: 'company', filterDefault: true },
+    { itemKey: 'warehouseId', label: '出荷倉庫', formDefault: true, listDefault: true, required: false, filterKind: 'ref', filterRef: 'warehouse', filterDefault: true },
+    { itemKey: 'shippedAt', label: '出荷日時', formDefault: true, listDefault: true, required: true, requiredFixed: true, filterKind: 'date', filterDefault: true },
   ],
   inventory: [
-    { itemKey: 'skuId', label: 'SKU', formDefault: true, listDefault: true, required: true, requiredFixed: true },
-    { itemKey: 'warehouseId', label: '倉庫', formDefault: true, listDefault: true, required: true, requiredFixed: true },
-    { itemKey: 'qty', label: '増減数', formDefault: true, listDefault: true, required: true, requiredFixed: true },
-    { itemKey: 'kind', label: '区分', formDefault: true, listDefault: true, required: true, requiredFixed: true },
-    { itemKey: 'reason', label: '理由', formDefault: true, listDefault: false, required: false },
-    { itemKey: 'occurredAt', label: '発生日時', formDefault: true, listDefault: true, required: true, requiredFixed: true },
+    { itemKey: 'skuId', label: 'SKU', formDefault: true, listDefault: true, required: true, requiredFixed: true, filterKind: 'ref', filterRef: 'sku', filterDefault: true },
+    { itemKey: 'warehouseId', label: '倉庫', formDefault: true, listDefault: true, required: true, requiredFixed: true, filterKind: 'ref', filterRef: 'warehouse', filterDefault: true },
+    { itemKey: 'qty', label: '増減数', formDefault: true, listDefault: true, required: true, requiredFixed: true, filterKind: 'number', filterDefault: false },
+    { itemKey: 'kind', label: '区分', formDefault: true, listDefault: true, required: true, requiredFixed: true, filterKind: 'enum', filterDefault: true },
+    { itemKey: 'reason', label: '理由', formDefault: true, listDefault: false, required: false, filterKind: 'enum', filterDefault: false },
+    { itemKey: 'occurredAt', label: '発生日時', formDefault: true, listDefault: true, required: true, requiredFixed: true, filterKind: 'date', filterDefault: true },
   ],
   invoice: [
-    { itemKey: 'code', label: '請求番号', formDefault: true, listDefault: true, required: true, requiredFixed: true },
-    { itemKey: 'companyId', label: '請求先', formDefault: true, listDefault: true, required: true, requiredFixed: true },
-    { itemKey: 'segmentId', label: '事業セグメント', formDefault: true, listDefault: false, required: false },
-    { itemKey: 'periodFrom', label: '対象期間（開始）', formDefault: true, listDefault: true, required: true },
-    { itemKey: 'periodTo', label: '対象期間（終了）', formDefault: true, listDefault: true, required: true },
-    { itemKey: 'invoiceType', label: '請求種別', formDefault: true, listDefault: true, required: false },
+    { itemKey: 'code', label: '請求番号', formDefault: true, listDefault: true, required: true, requiredFixed: true, filterKind: 'text', filterDefault: true },
+    { itemKey: 'companyId', label: '請求先', formDefault: true, listDefault: true, required: true, requiredFixed: true, filterKind: 'ref', filterRef: 'company', filterDefault: true },
+    { itemKey: 'segmentId', label: '事業セグメント', formDefault: true, listDefault: false, required: false, filterKind: 'ref', filterRef: 'segment', filterDefault: false },
+    { itemKey: 'periodFrom', label: '対象期間（開始）', formDefault: true, listDefault: true, required: true, filterKind: 'date', filterDefault: true },
+    { itemKey: 'periodTo', label: '対象期間（終了）', formDefault: true, listDefault: true, required: true, filterKind: 'date', filterDefault: true },
+    { itemKey: 'invoiceType', label: '請求種別', formDefault: true, listDefault: true, required: false, filterKind: 'enum', filterDefault: true },
   ],
 }
 
@@ -126,6 +137,7 @@ export const ITEM_ENTITY_LABELS: Record<string, string> = {
 export interface ResolvedItem extends CatalogItem {
   formVisible: boolean
   listVisible: boolean
+  filterVisible: boolean
   labelDisplay: string
   overridden: boolean
 }
@@ -149,14 +161,21 @@ export function useItemSettings() {
         ...c,
         formVisible: ov?.formVisible ?? c.formDefault,
         listVisible: ov?.listVisible ?? c.listDefault,
+        // フィルタ非対応項目（filterKind 未指定）は常に false。差分は filterKind を持つ項目のみ効く
+        filterVisible: c.filterKind ? (ov?.filterVisible ?? c.filterDefault ?? false) : false,
         labelDisplay: ov?.labelOverride ?? c.label,
         overridden: Boolean(ov),
       }
     })
   }
 
+  /** 検索フィルタに表示する項目（filterVisible かつ filterKind を持つもの。表示順はカタログ順） */
+  function filterableItems(entity: string): ResolvedItem[] {
+    return resolve(entity).filter(r => r.filterVisible && r.filterKind)
+  }
+
   /** 差分の upsert（渡したキーのみ更新 = 未送信フィールドは保持。API モードはサーバーが hasOwn で保証） */
-  async function upsert(entity: string, itemKey: string, patch: Partial<Pick<ItemSetting, 'formVisible' | 'listVisible' | 'formRequired' | 'labelOverride'>>): Promise<Result> {
+  async function upsert(entity: string, itemKey: string, patch: Partial<Pick<ItemSetting, 'formVisible' | 'listVisible' | 'filterVisible' | 'formRequired' | 'labelOverride'>>): Promise<Result> {
     if (isApi) {
       try {
         const row = await apiFetch<ItemSetting>('/v1/akebono/item-settings', {
@@ -177,7 +196,8 @@ export function useItemSettings() {
       settings.value = [...settings.value, {
         id: nextId('itemSettings', 'is'), appKey, entity, itemKey,
         formVisible: patch.formVisible ?? null, formRequired: patch.formRequired ?? null,
-        listVisible: patch.listVisible ?? null, displayOrder: null, labelOverride: patch.labelOverride ?? null,
+        listVisible: patch.listVisible ?? null, filterVisible: patch.filterVisible ?? null,
+        displayOrder: null, labelOverride: patch.labelOverride ?? null,
       }]
     }
     commit()
@@ -198,5 +218,5 @@ export function useItemSettings() {
     return { ok: true }
   }
 
-  return { settings, resolve, upsert, resetEntity, entities: Object.keys(ITEM_CATALOG) }
+  return { settings, resolve, filterableItems, upsert, resetEntity, entities: Object.keys(ITEM_CATALOG) }
 }

@@ -35,7 +35,6 @@ const supplierOptions = computed(() =>
 const billingTypeOptions = Object.entries(BILLING_TYPE_LABELS).map(([value, label]) => ({ value, label }))
 
 // ---------- 一覧・フィルタ ----------
-const search = ref('')
 // 既定は現在の業態（毎回選ばせない導線）。ヘッダの業態スイッチャ切替に追随するが、
 // ユーザーが明示的に別の絞り込みへ変更していれば尊重する（非破壊 = 原則2）。
 const segmentFilter = ref(effectiveSegmentId.value)
@@ -49,16 +48,23 @@ const filtered = computed(() =>
     .filter((prod) => {
       if (!matchesActiveFilter(prod, statusFilter.value)) return false
       if (segmentFilter.value && prod.segmentId !== segmentFilter.value) return false
-      const q = search.value.trim().toLowerCase()
-      return !q || prod.code.toLowerCase().includes(q) || prod.name.toLowerCase().includes(q)
+      return true
     })
     .slice()
     .sort((a, b) => a.code.localeCompare(b.code, 'ja')),
 )
 
-// クライアントページング（検索・フィルタは本ページの filtered が担い、ページングのみ共通化）
-const { page, pageSize, rows: pagedRows, total } = useListView<Product>({ source: filtered })
-watch([search, segmentFilter, statusFilter], () => { page.value = 1 })
+// 構造化フィルタ（項目別。フリーテキスト検索の置換）＋ クライアントページング（状態・業態は本ページの filtered が担う）
+const {
+  fields: filterFields, optionsFor: filterOptionsFor, model: filterModel,
+  matchRow: filterMatchRow, queryParams: filterQueryParams, activeCount: filterActiveCount, clear: filterClear,
+} = useAppFilter('product')
+const { page, pageSize, rows: pagedRows, total } = useListView<Product>({
+  source: filtered,
+  filterPredicate: computed(() => (prod: Product) => filterMatchRow(prod as unknown as Record<string, unknown>)),
+  filterParams: filterQueryParams,
+})
+watch([segmentFilter, statusFilter], () => { page.value = 1 })
 const { listColumns, decorateRows } = useAppListView()
 // 一覧列は項目設定（表示 ON/OFF・表示名）で解決＋カスタム項目列を付加。派生列（サムネイル・SKU数・状態）は itemKey 無し＝常時表示
 const columns = computed(() => listColumns('product', [
@@ -471,7 +477,6 @@ async function saveMatrix(): Promise<void> {
 
     <div class="grid gap-3">
       <UiFilterBar>
-        <UiSearchInput v-model="search" placeholder="商品コード・商品名で検索" />
         <UiSelect
           v-model="segmentFilter"
           :options="segmentFilterOptions"
@@ -480,6 +485,11 @@ async function saveMatrix(): Promise<void> {
         />
         <UiSelect v-model="statusFilter" :options="ACTIVE_FILTER_OPTIONS" aria-label="状態フィルタ" />
       </UiFilterBar>
+
+      <AkebonoAppFilterBar
+        :fields="filterFields" :model="filterModel" :options-for="filterOptionsFor"
+        :active-count="filterActiveCount" @clear="filterClear"
+      />
 
       <UiSectionCard :title="`商品一覧（${total}件）`" flush>
         <UiDataTable

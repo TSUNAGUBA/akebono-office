@@ -6008,6 +6008,42 @@ describe('Phase D: データ取込（F-32）・ダッシュボード保管（F-4
     })
   })
 
+  // ---------- 一覧の構造化フィルタ（0056）: akebono_norm 正規化・eq・範囲 + item-settings.filter_visible ----------
+  describe('一覧の構造化フィルタ', () => {
+    it('text=正規化部分一致（全角クエリで半角データにヒット）・eq・date/number 範囲', async () => {
+      // channel は sales_record の text フィルタ項目。a は全角登録・クエリは半角（NFKC で吸収して一致するか）
+      await pool.query(`INSERT INTO app_office.sales_records (id, code, sales_date, company_id, segment_id, sku_id, qty, unit_price, amount, channel)
+        VALUES
+        ('sr-flt-a','SR-FLT-A','2026-03-05','c-flt-1','seg-01','sku-flt',5,100,500,'ＡＫＥＢＯＮＯ'),
+        ('sr-flt-b','SR-FLT-B','2026-04-10','c-flt-2','seg-01','sku-flt',20,100,2000,'YOKOHAMA'),
+        ('sr-flt-c','SR-FLT-C','2026-05-20','c-flt-1','seg-01','sku-flt',8,100,800,'GINZA')`)
+      try {
+        const get = async (qs: string): Promise<string[]> => {
+          const res = (await api('GET', `/v1/akebono/sales-records?${qs}`, { as: MEMBER })).json as { data: { id: string }[] }
+          return res.data.filter(r => r.id.startsWith('sr-flt-')).map(r => r.id).sort()
+        }
+        // text: 半角クエリ 'akebono' が全角登録 'ＡＫＥＢＯＮＯ' にヒット（NFKC + lower = akebono_norm）
+        expect(await get('f.channel=akebono')).toEqual(['sr-flt-a'])
+        // eq: companyId
+        expect(await get('f.companyId=c-flt-1')).toEqual(['sr-flt-a', 'sr-flt-c'])
+        // date 範囲
+        expect(await get('f.salesDate.from=2026-04-01&f.salesDate.to=2026-04-30')).toEqual(['sr-flt-b'])
+        // number 範囲
+        expect(await get('f.qty.min=10')).toEqual(['sr-flt-b'])
+      } finally {
+        await pool.query(`DELETE FROM app_office.sales_records WHERE id LIKE 'sr-flt-%'`)
+      }
+    })
+
+    it('item-settings.filter_visible を部分 upsert で保存・取得できる（未送信キーは保持）', async () => {
+      const put = await api('PUT', '/v1/akebono/item-settings', { as: ADMIN, body: { entity: 'sales_record', itemKey: 'channel', filterVisible: true } })
+      expect(put.status).toBe(200)
+      expect((put.json.data as { filterVisible: boolean | null }).filterVisible).toBe(true)
+      const list = (await api('GET', '/v1/akebono/item-settings', { as: MEMBER })).json.data as { entity: string; itemKey: string; filterVisible: boolean | null }[]
+      expect(list.find(r => r.entity === 'sales_record' && r.itemKey === 'channel')?.filterVisible).toBe(true)
+    })
+  })
+
   // ---------- 供給元（作家）スナップショット（改修 P3 = 0055）: 計上時凍結・供給元変更後も帰属安定 ----------
   describe('売上明細の供給元（作家）スナップショット', () => {
     const seg = 'seg-01'

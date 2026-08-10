@@ -2387,3 +2387,48 @@
 
 ### 66-6 独立レビュー（原則9）
 - [x] コードレビュアー・システム監査官の独立レビューを実施し、指摘ゼロまで反復（後述の是正を反映）。
+
+## 67. 各アプリの構造化フィルタ検索 + マスタ項目のオートコンプリート（オペレーター指示 2026-08-10）の完了条件（Definition of Done）
+
+> オペレーター指示「各アプリ内の検索をフリーテキストではなく項目別のフィルタフォームに。マスタ化項目は
+> autocomplete、大文字小文字・全角半角は PG で吸収。検索対象は /akebono/settings/items で定義可能に。
+> 合わせて登録・編集フォームのドロップダウンも可能な範囲で autocomplete に」。ブランチ `claude/akebono-import-linking-scsqkq`。
+
+### 67-1 基盤（正規化・migration）
+- [x] **共有正規化** `shared/domain/text-match.ts`: `normalizeSearch(s) = s.normalize('NFKC').toLowerCase()`・`normalizedIncludes`。
+  大文字小文字・全角半角（全角ASCII↔半角・半角カナ→全角カナ〔濁点合成〕）を吸収。utils/search.ts で再エクスポート。
+- [x] **migration 0056**: `app_office.akebono_norm(text) = lower(normalize(t, NFKC))`（IMMUTABLE・関数インデックス可）+
+  `item_settings.filter_visible boolean`（NULL = カタログ既定）。**PG16 の normalize(NFKC) = JS String.normalize('NFKC') を実測一致確認**。
+
+### 67-2 API（構造化フィルタ・filter_visible）
+- [x] **list-query.ts**: `filterCols`（キー=項目キー）で per-field フィルタを追加。text = `strpos(akebono_norm(col), akebono_norm($v))>0`・
+  ref/enum = 完全一致・date = `col::date` 範囲（timestamp 列は `(col AT TIME ZONE 'Asia/Tokyo')`）・number = 範囲。
+  クエリは `f.<key>` / `.from`・`.to` / `.min`・`.max`。従来の `q`（ILIKE）と併存（後方互換）。
+- [x] **各エンティティに filterCols 付与**: sales_records/invoices（billing）・purchase_orders/production_orders/inbound_results/
+  purchase_records/outbound_results/inventory_transactions（trade）。
+- [x] **item-settings に filter_visible を end-to-end**（akebono.ts: ItemSettingPatch/itemSettingPatchOf/COLS/PUT/INSERT）。
+
+### 67-3 カタログ・設定 UI
+- [x] **ITEM_CATALOG にフィルタメタ**（filterKind: text/ref/enum/date/number・filterRef・filterDefault）を全10エンティティへ付与。
+  useItemSettings に `filterVisibleOf`（resolve に filterVisible）・`filterableItems(entity)`。ItemSetting 型に filterVisible。
+- [x] **settings/items.vue**: 「検索対象（フィルタ）」トグル列を追加（form/list と同型。フィルタ不可項目は「—」）。
+
+### 67-4 フロント基盤・コンポーネント
+- [x] **useAppFilter(entity)**: フィルタ状態 + ref/enum のオプション解決（マスタ = useAkebonoMasters/useProducts、enum = 固定マップ）+
+  ① mock 用 `matchRow`（正規化部分一致・範囲・完全一致）② API 用 `queryParams`。
+- [x] **AppFilterBar.vue**: 種別ごとの入力（ref = UiMultiCombobox〔single〕autocomplete / enum = UiSelect / text / date 範囲 / number 範囲）。レスポンシブ。
+- [x] **useListView 拡張**: `filterPredicate`（client）・`filterParams`（server）。両モードでフィルタ変更→1ページ目・デバウンス再取得。
+- [x] **UiCombobox / UiMultiCombobox のオプション絞り込みを normalizeSearch 化**（全角半角吸収）= 既存フォームの autocomplete も表記ゆれ耐性を獲得。
+
+### 67-5 各リスト画面への適用（第1弾）
+- [x] フリーテキスト検索 → AppFilterBar へ置換: **売上・商品・仕入・発注・生産**（client + dual-mode の両系統・全フィルタ種別を網羅）。
+- [ ] **残（次弾・同一パターンで横展開）**: 入荷/出荷の実績一覧・在庫受払台帳・請求（invoice タブ）への AppFilterBar 適用、
+  各登録・編集フォームの master 参照 UiSelect → UiCombobox（autocomplete）置換。基盤・API・カタログは全エンティティ対応済みのため、残は画面配線のみ。
+
+### 67-6 検証（実測値）
+- [x] api/mockup typecheck green・mockup unit **232 passed**（正規化 6 ケース）・api unit **302**・api 統合 **247**
+  （akebono_norm の全角半角ヒット・eq・date/number 範囲・filter_visible 往復の新規テスト）。
+
+### 67-7 後方互換（原則7）
+- [x] filter_visible / akebono_norm は追加のみ。`q`（ILIKE）検索経路・レガシー bare 配列取得は不変。項目カタログのフィルタメタは任意
+  （未指定 = フィルタ不可）。既存 seed（itemSettings は空）・既存フォームの挙動は不変。

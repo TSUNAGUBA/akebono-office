@@ -20,6 +20,8 @@ export interface ListPageParams {
   q: string
   limit: number
   offset: number
+  /** 構造化フィルタのクエリパラメータ（f.<key> 系。0056。空 = フィルタなし） */
+  filter?: Record<string, string>
 }
 
 export interface UseListViewOptions<T> {
@@ -31,6 +33,9 @@ export interface UseListViewOptions<T> {
   fetch?: (params: ListPageParams) => Promise<{ rows: T[]; total: number }>
   /** 1 ページの既定表示件数（既定 20） */
   pageSize?: number
+  /** 構造化フィルタ（改修 2026-08-10）。client = 行述語 / server = クエリパラメータ。両方を渡す（両モード対応） */
+  filterPredicate?: Ref<(row: T) => boolean>
+  filterParams?: Ref<Record<string, string>>
 }
 
 export interface ListView<T> {
@@ -64,7 +69,11 @@ export function useListView<T>(opts: UseListViewOptions<T>): ListView<T> {
 
   // ---- クライアントモード ----
   const clientFiltered = computed<T[]>(() => {
-    const src = opts.source?.value ?? []
+    let src = opts.source?.value ?? []
+    // 構造化フィルタ（項目別）を先に適用
+    const pred = opts.filterPredicate?.value
+    if (pred) src = src.filter(pred)
+    // 従来のフリーテキスト検索（後方互換。フィルタ移行済みページは match/query を渡さない）
     const q = query.value.trim().toLowerCase()
     if (!q || !opts.match) return src
     return src.filter(r => opts.match!(r, q))
@@ -90,6 +99,7 @@ export function useListView<T>(opts: UseListViewOptions<T>): ListView<T> {
         q: query.value.trim(),
         limit: pageSize.value,
         offset: (page.value - 1) * pageSize.value,
+        filter: opts.filterParams?.value ?? {},
       })
       if (my !== seq) return // 遅延応答は破棄（最新のみ反映）
       serverRows.value = res.rows
@@ -113,14 +123,22 @@ export function useListView<T>(opts: UseListViewOptions<T>): ListView<T> {
       if (debounceT) clearTimeout(debounceT)
       debounceT = setTimeout(resetAndFetch, 250)
     })
+    // 構造化フィルタの変更もデバウンスして 1 ページ目から再取得（テキスト入力の連打を吸収）
+    if (opts.filterParams) {
+      watch(() => opts.filterParams!.value, () => {
+        if (debounceT) clearTimeout(debounceT)
+        debounceT = setTimeout(resetAndFetch, 250)
+      }, { deep: true })
+    }
     // 件数変更は 1 ページ目へ戻して取得
     watch(pageSize, resetAndFetch)
     // ページ送り（および resetAndFetch による page=1 変更）で取得
     watch(page, () => { void doFetch() })
     void doFetch() // 初回
   } else {
-    // クライアント: 検索・件数変更で 1 ページ目へ。ソース縮小時のページはみ出しを補正
+    // クライアント: 検索・件数・フィルタ変更で 1 ページ目へ。ソース縮小時のページはみ出しを補正
     watch([query, pageSize], () => { page.value = 1 })
+    if (opts.filterParams) watch(() => opts.filterParams!.value, () => { page.value = 1 }, { deep: true })
     watch(clientFiltered, () => {
       const pc = Math.max(1, Math.ceil(clientFiltered.value.length / pageSize.value))
       if (page.value > pc) page.value = pc

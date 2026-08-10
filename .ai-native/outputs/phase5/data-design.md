@@ -150,11 +150,16 @@ backfill により child 行の値は不変 = UPDATE 不要・下位互換。原
 | `ProductCategory`（product_categories） | id, name, parentId（自己参照階層。アプリ層解決）, displayOrder, active | 設定系（registry） | C1 |
 | `ProductImageSection`（product_image_sections） | id, name, isThumbnailPriority, **isSeed（既定シード = 無効化不可 AKO-AKB-002・名称変更可）**, displayOrder, active | 設定系（registry + 専用アーカイブガード） | C1 |
 | `AkebonoAppConfig`（akebono_app_configs） | **PK (segmentId, appKey)**, enabled, labelOverride, source(`preset`/`manual`) | 設定系（複合キー = registry に合わないため**専用 API** `/v1/akebono/app-configs` のバッチ upsert）。行が無い業態は業種プリセットへフォールバック（コード側既定） | C1 |
-| `ItemSetting`（item_settings） | id, **UNIQUE (appKey, entity, itemKey)**, formVisible/formRequired/listVisible/displayOrder/labelOverride（すべて nullable = 差分列） | 設定系（**差分テーブル** = 空はカタログ既定。専用 API `/v1/akebono/item-settings` の部分 upsert + エンティティ単位 reset = 取消フロー 原則9.5） | C1 |
+| `ItemSetting`（item_settings） | id, **UNIQUE (appKey, entity, itemKey)**, formVisible/formRequired/listVisible/**filterVisible（0056 = 検索対象フィルタ）**/displayOrder/labelOverride（すべて nullable = 差分列） | 設定系（**差分テーブル** = 空はカタログ既定。専用 API `/v1/akebono/item-settings` の部分 upsert + エンティティ単位 reset = 取消フロー 原則9.5） | C1 |
 
 > **SoT 宣言（Akebono 設定系）:** 上記テーブルが SoT（API モードのフロントは `apiCollection`
 > キャッシュへ SoT 書込 → 反映の順で更新）。**カタログ系の静的定義はフロントコードが SoT**
 > — アプリカタログ（APP_CATALOG）・業種プリセット・項目カタログ（ITEM_CATALOG）はコード定義で、
+> **一覧の構造化フィルタ（0056）:** 検索は「フリーテキスト（ILIKE の q）」に加え、項目別フィルタ（`f.<key>` = text/ref/enum/date/number）を
+> 提供する。text は `app_office.akebono_norm(t) = lower(normalize(t, NFKC))`（IMMUTABLE）で大文字小文字・全角半角（NFKC）を吸収した
+> 部分一致。両モードで同一ヒット挙動（フロントは shared/domain/text-match の normalizeSearch = 同一の NFKC + lower）。項目を検索対象に
+> するかは item_settings.filter_visible（未設定 = カタログ ITEM_CATALOG の filterDefault）で決まる。
+>
 > akebono_app_configs / item_settings は「業態ごとの選択・テナント差分」だけを持つ
 > （サーバーはキー形式のみ検証し存在検証しない = 設計判断。カタログ更新でサーバー再デプロイ不要）。
 > **初期データ:** 9 マスタはモックシードと同一 id・同一値を投入（業態軸の喪失防止 + 既存

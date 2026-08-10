@@ -174,11 +174,13 @@ export async function apiFetch<T = unknown>(
  * total が無いレスポンス（レガシー bare 配列）でも rows.length にフォールバックして壊れない。
  */
 export async function apiFetchList<T = unknown>(
-  path: string, params: { q: string; limit: number; offset: number },
+  path: string, params: { q: string; limit: number; offset: number; filter?: Record<string, string> },
 ): Promise<{ rows: T[]; total: number }> {
   const config = apiPublicConfig()
   const query: Record<string, string> = { limit: String(params.limit), offset: String(params.offset) }
   if (params.q) query.q = params.q
+  // 構造化フィルタ（f.<key> 系）を透過（0056。空値は付与しない）
+  if (params.filter) for (const [k, v] of Object.entries(params.filter)) if (v !== '') query[k] = v
   try {
     const res = await $fetch<{ data: T[]; total?: number }>(path, {
       baseURL: config.apiBase, method: 'GET', query, headers: await authHeaders(),
@@ -198,7 +200,7 @@ export async function apiFetchList<T = unknown>(
  * 未マイグレーション名は空ページを返す（API モードでも安全側にフォールバック = 原則4）。
  */
 export function apiListPage<T = unknown>(
-  collection: string, params: { q: string; limit: number; offset: number },
+  collection: string, params: { q: string; limit: number; offset: number; filter?: Record<string, string> },
 ): Promise<{ rows: T[]; total: number }> {
   const path = CUSTOM_COLLECTION_ENDPOINTS[collection]
   if (!path) return Promise.resolve({ rows: [], total: 0 })

@@ -28,9 +28,14 @@ function skuLabelOf(skuId: string): string {
 }
 
 // ---------- 一覧（検索 + ページング。モック=クライアント / API=サーバー） ----------
-const { query, page, pageSize, rows: pageRows, total, refresh } = useListView<ProductionOrder>({
+const {
+  fields: filterFields, optionsFor: filterOptionsFor, model: filterModel,
+  matchRow: filterMatchRow, queryParams: filterQueryParams, activeCount: filterActiveCount, clear: filterClear,
+} = useAppFilter('production_order')
+const { page, pageSize, rows: pageRows, total, refresh } = useListView<ProductionOrder>({
   source: prod.activeOrders,
-  match: (o, q) => o.code.toLowerCase().includes(q) || o.dueDate.includes(q),
+  filterPredicate: computed(() => (o: ProductionOrder) => filterMatchRow(o as unknown as Record<string, unknown>)),
+  filterParams: filterQueryParams,
   fetch: params => apiListPage<ProductionOrder>('productionOrders', params),
 })
 
@@ -193,9 +198,10 @@ async function submitCreateInner(): Promise<void> {
     </UiPageHeader>
 
     <UiSectionCard :title="`生産指示（${total}件）`" flush>
-      <UiFilterBar>
-        <UiSearchInput v-model="query" placeholder="コード・納期で検索" />
-      </UiFilterBar>
+      <AkebonoAppFilterBar
+        :fields="filterFields" :model="filterModel" :options-for="filterOptionsFor"
+        :active-count="filterActiveCount" @clear="filterClear"
+      />
       <UiDataTable
         :columns="columns"
         :rows="rows"

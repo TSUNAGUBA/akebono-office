@@ -610,6 +610,8 @@ export interface ItemSetting {
   formVisible: boolean | null
   formRequired: boolean | null
   listVisible: boolean | null
+  /** 検索フィルタに表示するか（0056。null = カタログ既定 filterDefault） */
+  filterVisible: boolean | null
   displayOrder: number | null
   labelOverride: string | null
 }

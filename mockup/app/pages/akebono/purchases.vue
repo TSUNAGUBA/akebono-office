@@ -50,9 +50,14 @@ function skuLabelOf(skuId: string): string {
 }
 
 // ---------- 一覧（検索 + ページング。モック=クライアント / API=サーバー） ----------
-const { query, page, pageSize, rows: pageRows, total, refresh } = useListView<PurchaseRecord>({
+const {
+  fields: filterFields, optionsFor: filterOptionsFor, model: filterModel,
+  matchRow: filterMatchRow, queryParams: filterQueryParams, activeCount: filterActiveCount, clear: filterClear,
+} = useAppFilter('purchase_record')
+const { page, pageSize, rows: pageRows, total, refresh } = useListView<PurchaseRecord>({
   source: purchases.activeRecords,
-  match: (r, q) => r.code.toLowerCase().includes(q) || r.purchaseDate.includes(q),
+  filterPredicate: computed(() => (r: PurchaseRecord) => filterMatchRow(r as unknown as Record<string, unknown>)),
+  filterParams: filterQueryParams,
   fetch: p => apiListPage<PurchaseRecord>('purchaseRecords', p),
 })
 
@@ -208,9 +213,10 @@ async function submitCreateInner(): Promise<void> {
 
     <div class="grid gap-3">
       <UiSectionCard :title="`仕入一覧（${total}件）`" flush>
-        <UiFilterBar>
-          <UiSearchInput v-model="query" placeholder="コード・日付で検索" />
-        </UiFilterBar>
+        <AkebonoAppFilterBar
+          :fields="filterFields" :model="filterModel" :options-for="filterOptionsFor"
+          :active-count="filterActiveCount" @clear="filterClear"
+        />
         <UiDataTable
           :columns="columns"
           :rows="tableRows"

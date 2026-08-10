@@ -15,6 +15,17 @@
 import type { Context } from 'hono'
 import type pg from 'pg'
 
+/** 構造化フィルタの種別（項目カスタマイズ ITEM_CATALOG の filterKind と対応） */
+export type FilterKind = 'text' | 'eq' | 'enum' | 'date' | 'number'
+
+/** フィルタ対象カラムの定義（キー = フィルタパラメータ名 = 項目キー） */
+export interface FilterColSpec {
+  /** SQL カラム式（col または col::text 等） */
+  col: string
+  /** 種別。text = 正規化部分一致 / eq・enum = 完全一致 / date・number = 範囲 */
+  kind: FilterKind
+}
+
 export interface ListQuerySpec {
   /** FROM 対象テーブル */
   table: string
@@ -26,6 +37,12 @@ export interface ListQuerySpec {
   maxLimit: number
   /** 検索対象カラム式（ILIKE。省略時は検索無効） */
   searchCols?: string[]
+  /**
+   * 構造化フィルタの対象カラム（キー = フィルタパラメータ名 = 項目キー）。
+   * クエリは `f.<key>`（text/eq/enum）・`f.<key>.from` / `.to`（date）・`f.<key>.min` / `.max`（number）で受ける。
+   * text は akebono_norm（NFKC + 小文字）で大文字小文字・全角半角を吸収した部分一致（0056）。
+   */
+  filterCols?: Record<string, FilterColSpec>
   /** ページ取得時の既定 limit（未指定 limit のとき使用。既定 50） */
   defaultLimit?: number
   /** ページ取得時の limit 上限（既定 500） */
@@ -34,6 +51,43 @@ export interface ListQuerySpec {
   baseWhere?: string
   /** baseWhere のバインド値 */
   baseParams?: unknown[]
+}
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+
+/**
+ * 構造化フィルタ句を組み立てる（副作用: where / params へ push）。適用したフィルタが 1 件でもあれば true。
+ * text = strpos(akebono_norm(col), akebono_norm($v)) > 0（NULL 列は非マッチ）/ eq・enum = 完全一致 /
+ * date = col::date の範囲 / number = 数値範囲。値が空・不正なものは黙って無視する（原則4）。
+ */
+function applyFilters(
+  c: Context, filterCols: Record<string, FilterColSpec>, where: string[], params: unknown[],
+): boolean {
+  let applied = false
+  const push = (clause: string, value: unknown): void => {
+    params.push(value)
+    where.push(clause.replace('$P', `$${params.length}`))
+    applied = true
+  }
+  for (const [key, spec] of Object.entries(filterCols)) {
+    if (spec.kind === 'date') {
+      const from = (c.req.query(`f.${key}.from`) ?? '').trim()
+      const to = (c.req.query(`f.${key}.to`) ?? '').trim()
+      if (DATE_RE.test(from)) push(`${spec.col}::date >= $P`, from)
+      if (DATE_RE.test(to)) push(`${spec.col}::date <= $P`, to)
+    } else if (spec.kind === 'number') {
+      const min = Number(c.req.query(`f.${key}.min`))
+      const max = Number(c.req.query(`f.${key}.max`))
+      if (Number.isFinite(min) && (c.req.query(`f.${key}.min`) ?? '') !== '') push(`${spec.col} >= $P`, min)
+      if (Number.isFinite(max) && (c.req.query(`f.${key}.max`) ?? '') !== '') push(`${spec.col} <= $P`, max)
+    } else {
+      const v = (c.req.query(`f.${key}`) ?? '').trim()
+      if (!v) continue
+      if (spec.kind === 'text') push(`strpos(app_office.akebono_norm(${spec.col}), app_office.akebono_norm($P)) > 0`, v)
+      else push(`${spec.col} = $P`, v) // eq / enum
+    }
+  }
+  return applied
 }
 
 function clampInt(raw: string | undefined, fallback: number, min: number, max: number): number {
@@ -52,7 +106,6 @@ export async function runListQuery(
   const limitRaw = c.req.query('limit')
   const offsetRaw = c.req.query('offset')
   const q = (c.req.query('q') ?? '').trim()
-  const paged = limitRaw != null || offsetRaw != null || q !== ''
 
   const where: string[] = []
   const params: unknown[] = [...(spec.baseParams ?? [])]
@@ -62,6 +115,9 @@ export async function runListQuery(
     const p = params.length
     where.push(`(${spec.searchCols.map(col => `${col} ILIKE $${p}`).join(' OR ')})`)
   }
+  // 構造化フィルタ（f.<key> 系）。1 件でも適用されればページ取得へ切り替える
+  const filtered = spec.filterCols ? applyFilters(c, spec.filterCols, where, params) : false
+  const paged = limitRaw != null || offsetRaw != null || q !== '' || filtered
   const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''
 
   if (!paged) {

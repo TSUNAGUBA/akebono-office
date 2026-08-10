@@ -61,6 +61,7 @@ export interface ItemSettingPatch {
   formVisible?: boolean | null
   formRequired?: boolean | null
   listVisible?: boolean | null
+  filterVisible?: boolean | null
   displayOrder?: number | null
   labelOverride?: string | null
 }
@@ -74,7 +75,7 @@ export function itemSettingPatchOf(body: Record<string, unknown>): ItemSettingPa
   const out: ItemSettingPatch = {}
   const boolOrNull = (v: unknown): boolean | null | undefined =>
     v === null ? null : v === true || v === false ? v : undefined
-  for (const key of ['formVisible', 'formRequired', 'listVisible'] as const) {
+  for (const key of ['formVisible', 'formRequired', 'listVisible', 'filterVisible'] as const) {
     if (!Object.hasOwn(body, key)) continue
     const v = boolOrNull(body[key])
     if (v === undefined) return null
@@ -173,7 +174,7 @@ export function akebonoRoutes(pool: pg.Pool): Hono {
 
   const ITEM_SETTING_COLS = `id, app_key AS "appKey", entity, item_key AS "itemKey",
     form_visible AS "formVisible", form_required AS "formRequired", list_visible AS "listVisible",
-    display_order AS "displayOrder", label_override AS "labelOverride"`
+    filter_visible AS "filterVisible", display_order AS "displayOrder", label_override AS "labelOverride"`
 
   app.get('/item-settings', async (c) => {
     const { rows } = await pool.query(
@@ -198,16 +199,17 @@ export function akebonoRoutes(pool: pg.Pool): Hono {
     if (patch.formVisible !== undefined) setCols.push('form_visible = EXCLUDED.form_visible')
     if (patch.formRequired !== undefined) setCols.push('form_required = EXCLUDED.form_required')
     if (patch.listVisible !== undefined) setCols.push('list_visible = EXCLUDED.list_visible')
+    if (patch.filterVisible !== undefined) setCols.push('filter_visible = EXCLUDED.filter_visible')
     if (patch.displayOrder !== undefined) setCols.push('display_order = EXCLUDED.display_order')
     if (patch.labelOverride !== undefined) setCols.push('label_override = EXCLUDED.label_override')
     const { rows } = await pool.query(
-      `INSERT INTO item_settings (id, app_key, entity, item_key, form_visible, form_required, list_visible, display_order, label_override)
-       VALUES ($1, 'akebono', $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO item_settings (id, app_key, entity, item_key, form_visible, form_required, list_visible, filter_visible, display_order, label_override)
+       VALUES ($1, 'akebono', $2, $3, $4, $5, $6, $7, $8, $9)
        ON CONFLICT (app_key, entity, item_key) DO UPDATE SET ${setCols.join(', ')}
        RETURNING ${ITEM_SETTING_COLS}`,
       [newId('is'), entity, itemKey,
         patch.formVisible ?? null, patch.formRequired ?? null, patch.listVisible ?? null,
-        patch.displayOrder ?? null, patch.labelOverride ?? null])
+        patch.filterVisible ?? null, patch.displayOrder ?? null, patch.labelOverride ?? null])
     await audit(pool, {
       actorId: user.id, action: 'update', entity: 'item_settings',
       entityId: `${entity}:${itemKey}`, detail: '項目カスタマイズを更新',

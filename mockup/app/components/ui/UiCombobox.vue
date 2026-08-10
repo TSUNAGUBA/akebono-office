@@ -10,6 +10,7 @@
  * - 候補リストの開閉方向は UiMultiCombobox と共通の実測ロジック（useDropdownDirection）
  */
 import { X } from 'lucide-vue-next'
+import { normalizeSearch } from '~/utils/search'
 
 const props = withDefaults(defineProps<{
   /** 選択中の既存項目 id（'' = 未選択 or 自由入力中） */
@@ -46,22 +47,23 @@ watch(open, (v) => {
 
 /** 入力文字列そのままの絞り込み結果（Enter の選択対象 = 見えている検索結果と一致させる） */
 const queryFiltered = computed(() => {
-  const q = props.text.trim().toLowerCase()
+  const q = normalizeSearch(props.text.trim())
   if (!q) return props.options
-  return props.options.filter(o => o.label.toLowerCase().includes(q) || o.value.toLowerCase().includes(q))
+  // 大文字小文字・全角半角を吸収して label / value を部分一致（0056）
+  return props.options.filter(o => normalizeSearch(o.label).includes(q) || normalizeSearch(o.value).includes(q))
 })
 
 /** 表示用の候補（選択済み = 入力が選択ラベルと一致しているときは全候補 = 選び直しやすさ優先） */
 const filtered = computed(() => {
-  const q = props.text.trim().toLowerCase()
-  if (!q || (props.modelValue && labelOf(props.modelValue).toLowerCase() === q)) return props.options
+  const q = normalizeSearch(props.text.trim())
+  if (!q || (props.modelValue && normalizeSearch(labelOf(props.modelValue)) === q)) return props.options
   return queryFiltered.value
 })
 
-/** 入力が既存ラベルと完全一致するか（trim・大小無視 = 重複登録の防止） */
+/** 入力が既存ラベルと完全一致するか（trim・大小/全角半角無視 = 重複登録の防止） */
 const exactMatch = computed(() => {
-  const q = props.text.trim().toLowerCase()
-  return q ? props.options.find(o => o.label.trim().toLowerCase() === q) : undefined
+  const q = normalizeSearch(props.text.trim())
+  return q ? props.options.find(o => normalizeSearch(o.label.trim()) === q) : undefined
 })
 
 /** 自由入力状態（未登録名）か。呼び出し側の「新規登録されます」表示と対 */
@@ -87,8 +89,9 @@ function onInput(e: Event): void {
   const v = (e.target as HTMLInputElement).value
   emit('update:text', v)
   open.value = true
-  // ラベル完全一致は自動選択・それ以外は選択解除（入力名と選択 id の不一致を残さない）
-  const hit = props.options.find(o => o.label.trim().toLowerCase() === v.trim().toLowerCase())
+  // ラベル完全一致は自動選択・それ以外は選択解除（入力名と選択 id の不一致を残さない。全角半角も吸収）
+  const nv = normalizeSearch(v.trim())
+  const hit = nv ? props.options.find(o => normalizeSearch(o.label.trim()) === nv) : undefined
   emit('update:modelValue', hit?.value ?? '')
 }
 
