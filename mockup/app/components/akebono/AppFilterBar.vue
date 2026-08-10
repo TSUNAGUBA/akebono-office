@@ -82,18 +82,18 @@ function enumOptions(f: ResolvedItem): FilterOption[] {
           :aria-label="`${f.labelDisplay}で絞り込み`"
         />
 
-        <!-- date: 期間 -->
+        <!-- date: 期間（狭幅で 2 入力が収まるよう min-w-0 で縮小可に） -->
         <div v-else-if="f.filterKind === 'date'" class="flex items-center gap-1">
-          <input v-model="dateVal(f).from" type="date" class="input" :aria-label="`${f.labelDisplay}（開始）`">
-          <span class="text-[11px] text-muted">〜</span>
-          <input v-model="dateVal(f).to" type="date" class="input" :aria-label="`${f.labelDisplay}（終了）`">
+          <input v-model="dateVal(f).from" type="date" class="input min-w-0 flex-1" :aria-label="`${f.labelDisplay}（開始）`">
+          <span class="shrink-0 text-[11px] text-muted">〜</span>
+          <input v-model="dateVal(f).to" type="date" class="input min-w-0 flex-1" :aria-label="`${f.labelDisplay}（終了）`">
         </div>
 
         <!-- number: 範囲 -->
         <div v-else-if="f.filterKind === 'number'" class="flex items-center gap-1">
-          <input v-model="numVal(f).min" type="number" class="input" :placeholder="`最小`" :aria-label="`${f.labelDisplay}（最小）`">
-          <span class="text-[11px] text-muted">〜</span>
-          <input v-model="numVal(f).max" type="number" class="input" :placeholder="`最大`" :aria-label="`${f.labelDisplay}（最大）`">
+          <input v-model="numVal(f).min" type="number" class="input min-w-0 flex-1" :placeholder="`最小`" :aria-label="`${f.labelDisplay}（最小）`">
+          <span class="shrink-0 text-[11px] text-muted">〜</span>
+          <input v-model="numVal(f).max" type="number" class="input min-w-0 flex-1" :placeholder="`最大`" :aria-label="`${f.labelDisplay}（最大）`">
         </div>
 
         <!-- text: 正規化部分一致 -->

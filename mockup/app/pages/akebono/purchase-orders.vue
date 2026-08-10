@@ -282,7 +282,7 @@ async function submitCreateInner(): Promise<void> {
         <div>
           <div class="mb-1.5 text-[11px] font-semibold text-muted">明細</div>
           <div class="grid gap-1.5">
-            <div class="grid grid-cols-[1fr_56px_88px_96px] gap-2 border-b border-line pb-1 text-[11px] font-semibold text-muted">
+            <div class="hidden grid-cols-[1fr_56px_88px_96px] gap-2 border-b border-line pb-1 text-[11px] font-semibold text-muted sm:grid">
               <span>SKU</span>
               <span class="text-right">数量</span>
               <span class="text-right">単価</span>
@@ -291,15 +291,16 @@ async function submitCreateInner(): Promise<void> {
             <div
               v-for="l in detailLines"
               :key="l.id"
-              class="grid grid-cols-[1fr_56px_88px_96px] items-center gap-2 border-b border-line pb-1.5 text-[13px] last:border-0"
+              class="grid gap-0.5 border-b border-line pb-1.5 text-[13px] last:border-0 sm:grid-cols-[1fr_56px_88px_96px] sm:items-center sm:gap-2"
             >
               <span class="flex min-w-0 items-center gap-2">
                 <AkebonoProductThumb :sku-id="l.skuId" :size="20" />
                 <span class="truncate">{{ l.label }}</span>
               </span>
-              <span class="num text-right tabular-nums">{{ fmtInt(l.qty) }}</span>
-              <span class="num text-right tabular-nums">{{ fmtYen(l.unitPrice) }}</span>
-              <span class="num text-right tabular-nums">{{ fmtYen(l.subtotal) }}</span>
+              <span class="num hidden text-right tabular-nums sm:block">{{ fmtInt(l.qty) }}</span>
+              <span class="num hidden text-right tabular-nums sm:block">{{ fmtYen(l.unitPrice) }}</span>
+              <span class="num hidden text-right tabular-nums sm:block">{{ fmtYen(l.subtotal) }}</span>
+              <span class="num text-[12px] text-sub tabular-nums sm:hidden">数量 {{ fmtInt(l.qty) }} × {{ fmtYen(l.unitPrice) }} = <span class="font-semibold text-ink">{{ fmtYen(l.subtotal) }}</span></span>
             </div>
             <div class="grid grid-cols-[1fr_auto] items-center gap-2 pt-1 text-[13px]">
               <span class="text-[11px] font-semibold text-muted">合計</span>

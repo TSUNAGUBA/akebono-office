@@ -17,7 +17,7 @@ const route = useRoute()
       </h1>
       <p v-if="description" class="mt-0.5 text-xs text-sub">{{ description }}</p>
     </div>
-    <div v-if="$slots.actions" class="flex items-center gap-2">
+    <div v-if="$slots.actions" class="flex flex-wrap items-center justify-end gap-2">
       <slot name="actions" />
     </div>
   </div>
