@@ -98,7 +98,10 @@ function onSwitchUser(id: string): void {
     <!-- メイン（サイドメニューは廃止: 遷移はダッシュボードのカード型メニュー起点） -->
     <div class="flex min-w-0 flex-1 flex-col">
       <!-- ヘッダー -->
-      <header class="sticky top-0 z-20 flex h-[var(--header-h)] items-center gap-3 border-b border-line bg-surface px-3 md:px-5">
+      <!-- gap はモバイルで詰める（gap-1.5）: AKEBONO 業務配下は業態スイッチャ + 戻る + 関連 + タイムカード + 通知 +
+           アカウントの固定幅コントロールが並び、gap-3 のままだとタイトルを 0 まで truncate しても右にはみ出す。
+           md 以上は余白があるため gap-3 に戻す -->
+      <header class="sticky top-0 z-20 flex h-[var(--header-h)] items-center gap-1.5 border-b border-line bg-surface px-3 md:gap-3 md:px-5">
         <NuxtLink to="/" class="flex shrink-0 items-center gap-2" aria-label="ダッシュボードへ戻る">
           <Sunrise class="h-5 w-5 text-brand" aria-hidden="true" />
           <span class="hidden text-[15px] font-bold tracking-tight sm:block">AKEBONO Office</span>

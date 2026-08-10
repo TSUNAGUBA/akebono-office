@@ -131,7 +131,9 @@ const shownSections = computed(() =>
     <!-- 通知位置に応じてレイアウトを切替。
          side = 2 カラム（左メニュー / 右通知欄・現行）。モバイルは縦積みで通知欄を先頭に置く。
          bottom = 1 カラム（メニュー下に通知欄）。hidden = 通知欄なし。 -->
-    <div class="grid items-start gap-4" :class="notifPlacement === 'side' ? 'lg:grid-cols-[minmax(0,1fr)_340px]' : ''">
+    <!-- grid-cols-[minmax(0,1fr)] を基底に置く: 暗黙 auto トラックだと通知の truncate（nowrap）が max-content で
+         トラックを押し広げ、モバイルで横はみ出しする。minmax(0,1fr) で 0 まで縮小可にし truncate を効かせる -->
+    <div class="grid grid-cols-[minmax(0,1fr)] items-start gap-4" :class="notifPlacement === 'side' ? 'lg:grid-cols-[minmax(0,1fr)_340px]' : ''">
       <!-- メイン: メニュー -->
       <div class="grid gap-3" :class="notifPlacement === 'side' ? 'order-2 lg:order-1' : ''">
         <!-- AKEBONO 業務（業態別アプリ。押下でその業態の業務へ入る = ヘッダ切替に依存しない導線）。
