@@ -82,6 +82,26 @@ async function waitAiTask(
   throw new Error(`AI task ${taskId} が期待状態に達しません（最終: ${last?.status}）`)
 }
 
+/**
+ * 通知が届くまでポーリング（AI カンパニーの完了・連携通知は fire-and-forget = トランザクション確定後に
+ * 発行されるため、タスク status が done でも通知はわずかに遅れて着信する。status を待つ waitAiTask と
+ * 同様に結果整合性を吸収する = CI フレーク防止。原則4: 通知は非ブロッキングで主要フローを止めない）
+ */
+async function waitNotification(
+  as: string,
+  pred: (n: { kind: string; title: string }) => boolean,
+  tries = 100,
+): Promise<void> {
+  let count = 0
+  for (let i = 0; i < tries; i++) {
+    const notes = (await api('GET', '/v1/notifications', { as })).json.data as { kind: string; title: string }[]
+    count = notes.length
+    if (notes.some(pred)) return
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  throw new Error(`期待した通知が届きません（最新 ${count} 件を確認）`)
+}
+
 beforeAll(async () => {
   if (!env.databaseUrl) throw new Error('DATABASE_URL が未設定です（test/run-integration.sh 経由で実行してください）')
   pool = createPool(env)
@@ -1850,8 +1870,8 @@ describe('AI カンパニー（F-08）', () => {
     const logs = (await api('GET', '/v1/ai-company/logs', { as: MEMBER })).json.data as { kind: string; taskId: string | null }[]
     const kinds = new Set(logs.filter(l => l.taskId === taskId).map(l => l.kind))
     expect(kinds.has('plan') && kinds.has('execute') && kinds.has('report')).toBe(true)
-    const notes = (await api('GET', '/v1/notifications', { as: MEMBER })).json.data as { kind: string; title: string }[]
-    expect(notes.some(n => n.kind === 'ai_report' && n.title.includes('市場動向の調査'))).toBe(true)
+    // 完了報告通知は fire-and-forget（トランザクション確定後に発行 = 原則4）のため、着信を待ってから検証する
+    await waitNotification(MEMBER, n => n.kind === 'ai_report' && n.title.includes('市場動向の調査'))
     expect(emps.length).toBeGreaterThan(0)
   })
 
@@ -2926,8 +2946,8 @@ describe('バッチ7b: カレンダー同期対象の選択 + AI 社員間の依
       // 分担は承認時の自動実行で走り切る（手動の「進める」は不要）→ 親のロールアップ完了を待つ
       const after = await waitAiTask(parent.id, t => t.status === 'done')
       expect(after.decomposition.every(s => s.done)).toBe(true)
-      const notifs = (await api('GET', '/v1/notifications', { as: MEMBER })).json.data as { title: string }[]
-      expect(notifs.some(n => n.title.startsWith('AI 連携完了報告'))).toBe(true)
+      // 連携完了報告通知も fire-and-forget（確定後に発行 = 原則4）のため、着信を待ってから検証する
+      await waitNotification(MEMBER, n => n.title.startsWith('AI 連携完了報告'))
     })
 
     it('分担先のブロックはマネージャーへエスカレーションされ、依頼者へ通知される', async () => {
