@@ -84,6 +84,9 @@ export function useAppFilter(entity: string) {
       const cell = rowValue(row, f.itemKey)
       if (f.filterKind === 'date') {
         const r = v as DateRange
+        // モックの日時は JST ISO 文字列（`YYYY-MM-DDThh:mm:ss+09:00`）or 日付 = 先頭10桁が JST 日付。
+        // サーバーは date 列 = col::date・timestamp 列 = (col AT TIME ZONE 'Asia/Tokyo')::date で JST 日付。
+        // モックは常に JST 保存（shared/domain/jst nowJstIso = +09:00）のため slice(0,10) が JST 日付 = サーバーと一致。
         const d = String(cell ?? '').slice(0, 10)
         if (r.from && (!d || d < r.from)) return false
         if (r.to && (!d || d > r.to)) return false
@@ -95,8 +98,8 @@ export function useAppFilter(entity: string) {
       } else if (typeof v === 'string' && v.trim()) {
         if (f.filterKind === 'text') {
           if (!normalizeSearch(String(cell ?? '')).includes(normalizeSearch(v.trim()))) return false
-        } else { // ref / enum = 完全一致
-          if (String(cell ?? '') !== v) return false
+        } else { // ref / enum = 完全一致（サーバーは値を trim して col = $v。同一に trim して比較）
+          if (String(cell ?? '') !== v.trim()) return false
         }
       }
     }

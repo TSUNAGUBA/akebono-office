@@ -321,6 +321,7 @@ const entryAmount = computed(() => {
           :model="filterModel"
           :options-for="filterOptionsFor"
           :active-count="filterActiveCount"
+          :exclude="['segmentId']"
           @clear="filterClear"
         />
         <UiDataTable
@@ -383,13 +384,13 @@ const entryAmount = computed(() => {
           <input v-model="entryForm.salesDate" type="date" class="input" aria-label="売上日">
         </UiFormField>
         <UiFormField label="得意先" required>
-          <UiSelect v-model="entryForm.companyId" :options="customerOptions" aria-label="得意先" />
+          <AkebonoAppRefSelect v-model="entryForm.companyId" :options="customerOptions" aria-label="得意先" placeholder="得意先を検索して選択" />
         </UiFormField>
         <UiFormField label="事業セグメント" required>
           <UiSelect v-model="entryForm.segmentId" :options="segmentOptions" aria-label="事業セグメント" />
         </UiFormField>
         <UiFormField label="SKU" required>
-          <UiSelect v-model="entryForm.skuId" :options="skuOptions" aria-label="SKU" @update:model-value="onSkuChange" />
+          <AkebonoAppRefSelect v-model="entryForm.skuId" :options="skuOptions" aria-label="SKU" placeholder="SKUを検索して選択" @update:model-value="onSkuChange" />
         </UiFormField>
         <div class="grid grid-cols-2 gap-3">
           <UiFormField label="数量" required>

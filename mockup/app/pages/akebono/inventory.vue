@@ -233,14 +233,15 @@ async function submitTransferInner(): Promise<void> {
 }
 
 // ========== 受払（台帳） ==========
-const ledgerSku = ref('')
-const ledgerWh = ref('')
+const {
+  fields: lgFilterFields, optionsFor: lgFilterOptionsFor, model: lgFilterModel,
+  matchRow: lgFilterMatchRow, queryParams: lgFilterQueryParams, activeCount: lgFilterActiveCount, clear: lgFilterClear,
+} = useAppFilter('inventory')
 
 const ledgerRows = computed(() =>
-  decorateRows('inventory', inv.ledgerOf({
-    skuId: ledgerSku.value || undefined,
-    warehouseId: ledgerWh.value || undefined,
-  }).map((t) => {
+  decorateRows('inventory', inv.ledgerOf()
+    .filter(t => lgFilterMatchRow(t as unknown as Record<string, unknown>))
+    .map((t) => {
     const idn = skuIdentityOf(t.skuId)
     return {
       id: t.id,
@@ -262,8 +263,7 @@ const ledgerRows = computed(() =>
 // クライアントページング（SKU・倉庫フィルタは ledgerRows が担い、ページングのみ共通化）
 const {
   page: ledgerPage, pageSize: ledgerPageSize, rows: ledgerPaged, total: ledgerTotal,
-} = useListView<Record<string, unknown>>({ source: ledgerRows, pageSize: 50 })
-watch([ledgerSku, ledgerWh], () => { ledgerPage.value = 1 })
+} = useListView<Record<string, unknown>>({ source: ledgerRows, filterParams: lgFilterQueryParams, pageSize: 50 })
 
 // 受払台帳（inventory_transactions）の列は項目設定で解決＋カスタム項目列を付加。
 // 「商品 / SKU」列は商品識別のため itemKey を付けず常時表示（オペレーター報告 2026-08-10・request①）。
@@ -447,14 +447,10 @@ async function submitStocktakeInner(): Promise<void> {
 
     <!-- ===== 受払（台帳） ===== -->
     <div v-else-if="tab === 'ledger'" class="grid gap-3">
-      <UiFilterBar>
-        <div class="w-56">
-          <UiSelect v-model="ledgerSku" :options="skuOptions" empty-label="すべての SKU" aria-label="SKU で絞り込み" />
-        </div>
-        <div class="w-48">
-          <UiSelect v-model="ledgerWh" :options="warehouseOptions" empty-label="すべての倉庫" aria-label="倉庫で絞り込み" />
-        </div>
-      </UiFilterBar>
+      <AkebonoAppFilterBar
+        :fields="lgFilterFields" :model="lgFilterModel" :options-for="lgFilterOptionsFor"
+        :active-count="lgFilterActiveCount" @clear="lgFilterClear"
+      />
 
       <UiSectionCard :title="`受払明細（${ledgerTotal}件）`" flush>
         <UiDataTable

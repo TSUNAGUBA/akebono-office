@@ -351,7 +351,7 @@ async function submitCreateInner(): Promise<void> {
     <UiModal :open="createOpen" title="生産指示を作成" @close="createOpen = false">
       <div class="grid gap-3">
         <UiFormField label="対象 SKU" required>
-          <UiSelect v-model="createForm.skuId" :options="skuOptions" aria-label="対象 SKU" />
+          <AkebonoAppRefSelect v-model="createForm.skuId" :options="skuOptions" aria-label="対象 SKU" placeholder="SKUを検索して選択" />
         </UiFormField>
         <UiFormField label="指示数" required>
           <input

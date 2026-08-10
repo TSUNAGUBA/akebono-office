@@ -54,6 +54,15 @@ export interface ListQuerySpec {
 }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+/** 実在する暦日か（YYYY-MM-DD・閏年考慮）。正規表現は通るが暦上あり得ない日（2026-13-45 等）で
+ *  `col::date` キャストが 22008 → 500 になるのを防ぐ（不正値は黙って無視 = 原則4）。 */
+function isRealDate(s: string): boolean {
+  if (!DATE_RE.test(s)) return false
+  const y = Number(s.slice(0, 4)); const m = Number(s.slice(5, 7)); const d = Number(s.slice(8, 10))
+  if (m < 1 || m > 12 || d < 1) return false
+  const days = [31, (y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0)) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1]!
+  return d <= days
+}
 
 /**
  * 構造化フィルタ句を組み立てる（副作用: where / params へ push）。適用したフィルタが 1 件でもあれば true。
@@ -73,8 +82,8 @@ function applyFilters(
     if (spec.kind === 'date') {
       const from = (c.req.query(`f.${key}.from`) ?? '').trim()
       const to = (c.req.query(`f.${key}.to`) ?? '').trim()
-      if (DATE_RE.test(from)) push(`${spec.col}::date >= $P`, from)
-      if (DATE_RE.test(to)) push(`${spec.col}::date <= $P`, to)
+      if (isRealDate(from)) push(`${spec.col}::date >= $P`, from)
+      if (isRealDate(to)) push(`${spec.col}::date <= $P`, to)
     } else if (spec.kind === 'number') {
       const min = Number(c.req.query(`f.${key}.min`))
       const max = Number(c.req.query(`f.${key}.max`))

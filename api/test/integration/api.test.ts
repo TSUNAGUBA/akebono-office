@@ -6015,15 +6015,17 @@ describe('Phase D: データ取込（F-32）・ダッシュボード保管（F-4
       await pool.query(`INSERT INTO app_office.sales_records (id, code, sales_date, company_id, segment_id, sku_id, qty, unit_price, amount, channel)
         VALUES
         ('sr-flt-a','SR-FLT-A','2026-03-05','c-flt-1','seg-01','sku-flt',5,100,500,'ＡＫＥＢＯＮＯ'),
-        ('sr-flt-b','SR-FLT-B','2026-04-10','c-flt-2','seg-01','sku-flt',20,100,2000,'YOKOHAMA'),
+        ('sr-flt-b','SR-FLT-B','2026-04-10','c-flt-2','seg-01','sku-flt',20,100,2000,'ｱｹﾎﾞﾉ'),
         ('sr-flt-c','SR-FLT-C','2026-05-20','c-flt-1','seg-01','sku-flt',8,100,800,'GINZA')`)
       try {
         const get = async (qs: string): Promise<string[]> => {
           const res = (await api('GET', `/v1/akebono/sales-records?${qs}`, { as: MEMBER })).json as { data: { id: string }[] }
           return res.data.filter(r => r.id.startsWith('sr-flt-')).map(r => r.id).sort()
         }
-        // text: 半角クエリ 'akebono' が全角登録 'ＡＫＥＢＯＮＯ' にヒット（NFKC + lower = akebono_norm）
+        // text（全角ASCII）: 半角クエリ 'akebono' が全角登録 'ＡＫＥＢＯＮＯ' にヒット（NFKC + lower = akebono_norm）
         expect(await get('f.channel=akebono')).toEqual(['sr-flt-a'])
+        // text（半角カナ×全角カナ = NFKC 濁点合成）: 全角クエリ 'アケボノ' が半角登録 'ｱｹﾎﾞﾉ' にヒット（PG 側の NFKC を固定）
+        expect(await get('f.channel=' + encodeURIComponent('アケボノ'))).toEqual(['sr-flt-b'])
         // eq: companyId
         expect(await get('f.companyId=c-flt-1')).toEqual(['sr-flt-a', 'sr-flt-c'])
         // date 範囲

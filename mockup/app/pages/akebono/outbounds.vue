@@ -66,11 +66,16 @@ function asPlan(row: Record<string, unknown>): OutboundPlan {
 // ---------- 出荷実績一覧（項目カスタマイズ F-31 = outbound_result エンティティ） ----------
 // 記録系（実績）の一覧。指示（plan）側の一覧とは別枠で、実績エンティティに項目カスタマイズを適用する。
 const {
-  query: resultQuery, page: resultPage, pageSize: resultPageSize,
+  fields: outFilterFields, optionsFor: outFilterOptionsFor, model: outFilterModel,
+  matchRow: outFilterMatchRow, queryParams: outFilterQueryParams, activeCount: outFilterActiveCount, clear: outFilterClear,
+} = useAppFilter('outbound')
+const {
+  page: resultPage, pageSize: resultPageSize,
   rows: resultPageRows, total: resultTotal, refresh: resultRefresh,
 } = useListView<OutboundResult>({
   source: computed(() => results.value.slice().sort((a, b) => (a.shippedAt < b.shippedAt ? 1 : -1))),
-  match: (r, q) => r.code.toLowerCase().includes(q) || r.shippedAt.includes(q),
+  filterPredicate: computed(() => (r: OutboundResult) => outFilterMatchRow(r as unknown as Record<string, unknown>)),
+  filterParams: outFilterQueryParams,
   fetch: params => apiListPage<OutboundResult>('outboundResults', params),
 })
 
@@ -312,7 +317,10 @@ async function saveResultInner(): Promise<void> {
 
       <UiSectionCard :title="`出荷実績（${resultTotal}件）`" flush>
         <UiFilterBar>
-          <UiSearchInput v-model="resultQuery" placeholder="出荷番号・出荷日で検索" />
+          <AkebonoAppFilterBar
+            :fields="outFilterFields" :model="outFilterModel" :options-for="outFilterOptionsFor"
+            :active-count="outFilterActiveCount" @clear="outFilterClear"
+          />
         </UiFilterBar>
         <UiDataTable
           :columns="resultColumns"
@@ -426,7 +434,7 @@ async function saveResultInner(): Promise<void> {
     <UiModal :open="planOpen" title="出荷指示を作成" width="560px" @close="planOpen = false">
       <div class="grid gap-3">
         <UiFormField label="出荷先（得意先）" required>
-          <UiSelect v-model="planForm.companyId" :options="customerOptions" aria-label="出荷先" />
+          <AkebonoAppRefSelect v-model="planForm.companyId" :options="customerOptions" aria-label="出荷先" placeholder="出荷先を検索して選択" />
         </UiFormField>
         <div class="grid grid-cols-2 gap-3">
           <UiFormField label="出荷元倉庫" required>
@@ -471,7 +479,7 @@ async function saveResultInner(): Promise<void> {
         </template>
         <template v-else>
           <UiFormField label="出荷先（得意先）">
-            <UiSelect v-model="resultForm.companyId" :options="customerOptions" aria-label="出荷先" />
+            <AkebonoAppRefSelect v-model="resultForm.companyId" :options="customerOptions" aria-label="出荷先" placeholder="出荷先を検索して選択" />
           </UiFormField>
           <UiFormField label="出荷元倉庫" required>
             <UiSelect v-model="resultForm.warehouseId" :options="warehouseOptions" aria-label="出荷元倉庫" />

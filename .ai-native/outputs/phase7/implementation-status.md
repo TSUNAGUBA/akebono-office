@@ -2420,10 +2420,15 @@
 - [x] **useListView 拡張**: `filterPredicate`（client）・`filterParams`（server）。両モードでフィルタ変更→1ページ目・デバウンス再取得。
 - [x] **UiCombobox / UiMultiCombobox のオプション絞り込みを normalizeSearch 化**（全角半角吸収）= 既存フォームの autocomplete も表記ゆれ耐性を獲得。
 
-### 67-5 各リスト画面への適用（第1弾）
-- [x] フリーテキスト検索 → AppFilterBar へ置換: **売上・商品・仕入・発注・生産**（client + dual-mode の両系統・全フィルタ種別を網羅）。
-- [ ] **残（次弾・同一パターンで横展開）**: 入荷/出荷の実績一覧・在庫受払台帳・請求（invoice タブ）への AppFilterBar 適用、
-  各登録・編集フォームの master 参照 UiSelect → UiCombobox（autocomplete）置換。基盤・API・カタログは全エンティティ対応済みのため、残は画面配線のみ。
+### 67-5 各リスト画面への適用（全業務アプリ）
+- [x] フリーテキスト検索 → AppFilterBar へ置換（全 9 リスト・全フィルタ種別を網羅）:
+  **売上・商品・仕入・発注・生産・入荷実績・出荷実績・在庫受払台帳・請求（invoice タブ）**。
+  在庫受払台帳は従来の SKU/倉庫セレクトを AppFilterBar に統合（ledgerOf() 全件 → matchRow で絞り込み）。
+  売上・商品は業態スイッチャと二重操作を避けるため AppFilterBar に `exclude=['segmentId']`（レビュー MINOR 対応）。
+- [x] **登録・編集フォームの master 参照ドロップダウンを autocomplete 化**: 単一 v-model のドロップイン
+  `AppRefSelect`（UiCombobox 選択専用ラッパ）を新設し、得意先/仕入先/出荷先（company）・SKU の長いマスタ選択を置換
+  （売上・発注・仕入・生産・出荷・請求締め）。事業セグメント/倉庫（短いリスト）は native select を維持。既存フォームの
+  UiCombobox 系はオプション絞り込みの normalizeSearch 化で全角半角耐性を獲得済み。
 
 ### 67-6 検証（実測値）
 - [x] api/mockup typecheck green・mockup unit **232 passed**（正規化 6 ケース）・api unit **302**・api 統合 **247**
@@ -2432,3 +2437,14 @@
 ### 67-7 後方互換（原則7）
 - [x] filter_visible / akebono_norm は追加のみ。`q`（ILIKE）検索経路・レガシー bare 配列取得は不変。項目カタログのフィルタメタは任意
   （未指定 = フィルタ不可）。既存 seed（itemSettings は空）・既存フォームの挙動は不変。
+
+### 67-8 独立レビュー（原則9）の指摘対応
+- [x] **不正日付ガード（MINOR）**: `list-query.ts` の date フィルタを `isRealDate`（暦日検証・閏年考慮）に変更 =
+  正規表現は通るが暦上あり得ない日（例 2026-13-45）で `col::date` が 22008 → 500 になるのを防ぎ、黙って無視（原則4）。
+- [x] **JST/UTC 整合（MAJOR-latent）の確認と明文化**: モック日時は常に JST ISO（`+09:00` = nowJstIso）で保存されるため
+  `slice(0,10)` が JST 日付 = サーバー（timestamp 列は `(col AT TIME ZONE 'Asia/Tokyo')::date`）と一致。useAppFilter に
+  不変条件をコメントで明記（次弾の timestamp 系ページ〔入荷/出荷/在庫〕でも同一述語で齟齬なしを裏取り済み）。
+- [x] **eq の trim 整合（NIT）**: mock の完全一致比較をサーバー同様 `v.trim()` に統一。
+- [x] **カナ NFKC の PG 側テスト（MINOR）**: 統合テストに「半角カナ登録 × 全角カナクエリ」の akebono_norm 一致アサートを追加。
+- [x] **二重セグメント操作（MINOR）**: AppFilterBar に `exclude` を追加し、業態スイッチャを持つ売上・商品で segmentId を除外。
+- 据え置き（follow-up）: text フィルタの関数インデックス（akebono_norm(col)）は現状 20,000 件上限内で seq scan 許容 = 将来のボリューム増で検討。

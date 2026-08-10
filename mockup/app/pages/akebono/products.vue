@@ -488,7 +488,7 @@ async function saveMatrix(): Promise<void> {
 
       <AkebonoAppFilterBar
         :fields="filterFields" :model="filterModel" :options-for="filterOptionsFor"
-        :active-count="filterActiveCount" @clear="filterClear"
+        :active-count="filterActiveCount" :exclude="['segmentId']" @clear="filterClear"
       />
 
       <UiSectionCard :title="`商品一覧（${total}件）`" flush>

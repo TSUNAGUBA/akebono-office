@@ -331,7 +331,7 @@ async function submitCreateInner(): Promise<void> {
       <div class="grid gap-3">
         <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
           <UiFormField label="仕入先" required>
-            <UiSelect v-model="createForm.companyId" :options="supplierOptions" aria-label="仕入先" />
+            <AkebonoAppRefSelect v-model="createForm.companyId" :options="supplierOptions" aria-label="仕入先" placeholder="仕入先を検索して選択" />
           </UiFormField>
           <UiFormField label="事業セグメント" required>
             <UiSelect v-model="createForm.segmentId" :options="segmentOptions" aria-label="事業セグメント" />

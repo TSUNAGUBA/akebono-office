@@ -16,8 +16,13 @@ const props = defineProps<{
   model: Record<string, string | DateRange | NumberRange>
   optionsFor: (item: ResolvedItem) => FilterOption[]
   activeCount: number
+  /** 表示しない項目キー（専用コントロールが別にある項目 = 例: segmentId を業態スイッチャに委ねる） */
+  exclude?: string[]
 }>()
 const emit = defineEmits<{ clear: [] }>()
+
+// 除外指定を差し引いた表示対象（専用コントロールとの二重操作を避ける）
+const shownFields = computed(() => props.fields.filter(f => !(props.exclude ?? []).includes(f.itemKey)))
 
 // 種別ごとの型付きアクセサ（テンプレートの union 展開を避ける）
 function dateVal(f: ResolvedItem): DateRange {
@@ -39,7 +44,7 @@ function enumOptions(f: ResolvedItem): FilterOption[] {
 </script>
 
 <template>
-  <div v-if="fields.length > 0" class="rounded-[12px] border border-line bg-surface p-3">
+  <div v-if="shownFields.length > 0" class="rounded-[12px] border border-line bg-surface p-3">
     <div class="mb-2 flex items-center justify-between">
       <span class="text-[11px] font-bold text-muted">
         絞り込み<span v-if="activeCount > 0" class="ml-1 text-brand">（{{ activeCount }}件適用中）</span>
@@ -55,7 +60,7 @@ function enumOptions(f: ResolvedItem): FilterOption[] {
     </div>
 
     <div class="grid grid-cols-1 gap-x-3 gap-y-2 sm:grid-cols-2 lg:grid-cols-3">
-      <div v-for="f in fields" :key="f.itemKey" class="grid gap-1">
+      <div v-for="f in shownFields" :key="f.itemKey" class="grid gap-1">
         <label class="text-[11px] font-semibold text-muted">{{ f.labelDisplay }}</label>
 
         <!-- ref: マスタ参照のオートコンプリート -->
