@@ -54,14 +54,15 @@ function capRaw(s: string): string {
 export const IMPORT_TRANSFORMS: { value: string; label: string; hint: string }[] = [
   { value: '', label: '変換なし', hint: '値をそのまま取り込みます（前後の空白のみ除去）' },
   { value: 'number', label: '数値化（¥・カンマ除去）', hint: '「¥12,300」→「12300」。価格・数量など数値の列に使います' },
-  { value: 'date', label: '日付化（YYYY-MM-DD へ統一）', hint: '「2026/7/3」「2026.07.03」「20260703」→「2026-07-03」。売上日など日付の列に使います' },
+  { value: 'date', label: '日付化（YYYY-MM-DD へ統一）', hint: '「2026/7/3」「2026.07.03」「20260703」「2026/08/09 19:40:48」→「2026-07-03」。時刻付き（日時）は日付部分だけを取り出します。売上日・発生日など日付の列に使います' },
   { value: 'upper', label: '大文字化（英字）', hint: '「abc-01」→「ABC-01」。コードの表記ゆれ統一に使います' },
   { value: 'lower', label: '小文字化（英字）', hint: '「ABC-01」→「abc-01」。コードの表記ゆれ統一に使います' },
 ]
 
 /**
  * 値変換（transform 列)。対応: trim / number（¥・カンマ・空白を除去）/
- * date（YYYY/MM/DD・YYYY.MM.DD・YYYYMMDD → YYYY-MM-DD）/ upper / lower。
+ * date（YYYY/MM/DD・YYYY.MM.DD・YYYYMMDD、および時刻付きの日時「YYYY/MM/DD HH:MM:SS」・
+ * ISO「YYYY-MM-DDThh:mm:ss(+09:00)」→ 日付部分の YYYY-MM-DD へ統一）/ upper / lower。
  * 未知の transform・空文字は素通し（前後空白のみ除去）
  */
 export function applyImportTransform(value: string, transform: string): string {
@@ -70,7 +71,9 @@ export function applyImportTransform(value: string, transform: string): string {
     case 'number':
       return v.replace(/[¥￥,\s]/g, '')
     case 'date': {
-      const m = v.match(/^(\d{4})[/.\-]?(\d{1,2})[/.\-]?(\d{1,2})$/)
+      // 日付部分（YYYY[区切り]M[区切り]D）を取り、以降に時刻等（空白 or 'T' で始まる）が続く場合は切り落とす。
+      // 例: 「2026/08/09 19:40:48」「2026-08-09T19:40:48+09:00」→「2026-08-09」（発生日など timestamptz 由来の値対応）
+      const m = v.match(/^(\d{4})[/.\-]?(\d{1,2})[/.\-]?(\d{1,2})(?:[T ].*)?$/)
       if (!m) return v
       return `${m[1]}-${m[2]!.padStart(2, '0')}-${m[3]!.padStart(2, '0')}`
     }

@@ -1126,7 +1126,9 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
       const o = r as Record<string, unknown>
       const skuId = String(o?.skuId ?? '').trim()
       const actualQty = Number(o?.actualQty)
-      if (!skuId || !Number.isInteger(actualQty) || actualQty < 0 || actualQty > 1_000_000) continue
+      // 実棚数（実物理在庫数）は負値も可（マイナス在庫を許容 = オペレーター指示 2026-08-10）。
+      // 整数かつ絶対値の上限のみを課す（モック useInventory.stocktake・フロント入力欄と parity）
+      if (!skuId || !Number.isInteger(actualQty) || Math.abs(actualQty) > 1_000_000) continue
       counts.push({ skuId, actualQty })
     }
     if (counts.length === 0) throw err('AKO-INV-002', '棚卸行を正しく入力してください', 400)

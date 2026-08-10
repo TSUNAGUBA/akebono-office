@@ -4618,6 +4618,20 @@ describe('Phase C: Akebono 記録系の API 永続化（商品・伝票・在庫
     const w2 = txns.filter(t => t.skuId === defaultSkuId && t.warehouseId === 'wh-02').reduce((s, t) => s + t.qty, 0)
     expect(w1).toBe(6)
     expect(w2).toBe(3)
+    // 実棚数は負値も可（マイナス在庫を許容 = 2026-08-10）。wh-01 実棚 −3（理論 6）→ −9 調整・残高 −3
+    const stNeg = await api('POST', '/v1/akebono/inventory/stocktake', {
+      as: MEMBER, body: { warehouseId: 'wh-01', counts: [{ skuId: defaultSkuId, actualQty: -3 }] },
+    })
+    expect(stNeg.status).toBe(200)
+    expect((stNeg.json.data as { adjusted: number }).adjusted).toBe(1)
+    const txns2 = (await api('GET', '/v1/akebono/inventory-transactions', { as: MEMBER })).json.data as
+      { skuId: string; warehouseId: string; qty: number }[]
+    const w1neg = txns2.filter(t => t.skuId === defaultSkuId && t.warehouseId === 'wh-01').reduce((s, t) => s + t.qty, 0)
+    expect(w1neg).toBe(-3)
+    // 後続テスト（この describe は台帳を跨いで状態を共有）のため wh-01 を元の 6 へ戻す（実棚 6 → +9 調整）
+    expect((await api('POST', '/v1/akebono/inventory/stocktake', {
+      as: MEMBER, body: { warehouseId: 'wh-01', counts: [{ skuId: defaultSkuId, actualQty: 6 }] },
+    })).status).toBe(200)
   })
 
   it('仕入: warehouseId 指定（入荷管理 OFF 経路）で在庫入庫・赤黒訂正で在庫も戻る・再訂正は 409', async () => {
