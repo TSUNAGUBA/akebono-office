@@ -9,6 +9,7 @@
  */
 import { X } from 'lucide-vue-next'
 import type { Tone } from '~/types/ui'
+import { normalizeSearch } from '~/utils/search'
 
 const props = withDefaults(defineProps<{
   modelValue: string[]
@@ -37,11 +38,11 @@ watch(open, (v) => {
 
 const selectedSet = computed(() => new Set(props.modelValue))
 const filtered = computed(() => {
-  const q = query.value.trim().toLowerCase()
-  // tag（区分バッジ）でも絞り込める（例: 「外注」で外注メンバーだけに絞る。PR #61 R1 N-2）
+  const q = normalizeSearch(query.value.trim())
+  // tag（区分バッジ）でも絞り込める（例: 「外注」で外注メンバーだけに絞る。PR #61 R1 N-2）。全角半角も吸収（0056）
   return props.options.filter(o =>
-    !q || o.label.toLowerCase().includes(q) || o.value.toLowerCase().includes(q)
-    || (o.tag ?? '').toLowerCase().includes(q))
+    !q || normalizeSearch(o.label).includes(q) || normalizeSearch(o.value).includes(q)
+    || normalizeSearch(o.tag ?? '').includes(q))
 })
 
 function labelOf(v: string): string {

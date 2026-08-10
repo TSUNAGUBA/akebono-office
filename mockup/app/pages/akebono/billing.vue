@@ -29,7 +29,17 @@ const receivableInvoices = computed(() =>
   con.invoices.value.filter(v => v.status === 'issued' || v.status === 'paid'))
 
 // クライアントページング（タブ別の 5 一覧。件数が増える請求・通知・入金履歴の一覧に共通適用）
-const { page: biPage, pageSize: biSize, rows: biRows, total: biTotal } = useListView<Invoice>({ source: salesInvoices, pageSize: 20 })
+// 請求（invoice）の構造化フィルタ（請求タブの一覧に適用）
+const {
+  fields: invFilterFields, optionsFor: invFilterOptionsFor, model: invFilterModel,
+  matchRow: invFilterMatchRow, queryParams: invFilterQueryParams, activeCount: invFilterActiveCount, clear: invFilterClear,
+} = useAppFilter('invoice')
+const { page: biPage, pageSize: biSize, rows: biRows, total: biTotal } = useListView<Invoice>({
+  source: salesInvoices,
+  filterPredicate: computed(() => (r: Invoice) => invFilterMatchRow(r as unknown as Record<string, unknown>)),
+  filterParams: invFilterQueryParams,
+  pageSize: 20,
+})
 const { page: mgPage, pageSize: mgSize, rows: mgRows, total: mgTotal } = useListView<Invoice>({ source: marginInvoices, pageSize: 20 })
 const { page: noPage, pageSize: noSize, rows: noRows, total: noTotal } = useListView<PaymentNotice>({ source: con.notices, pageSize: 20 })
 const { page: rePage, pageSize: reSize, rows: reRows, total: reTotal } = useListView<Invoice>({ source: receivableInvoices, pageSize: 20 })
@@ -306,6 +316,10 @@ async function cancelReceipt(id: string): Promise<void> {
 
     <!-- ============ 請求タブ ============ -->
     <div v-if="tab === 'billing'" class="grid gap-3">
+      <AkebonoAppFilterBar
+        :fields="invFilterFields" :model="invFilterModel" :options-for="invFilterOptionsFor"
+        :active-count="invFilterActiveCount" @clear="invFilterClear"
+      />
       <UiSectionCard :title="`請求一覧（${biTotal}件）`" description="行をタップで明細・発行・赤伝・入金消込" flush>
         <UiDataTable
           :columns="invoiceCols"
@@ -446,7 +460,7 @@ async function cancelReceipt(id: string): Promise<void> {
     <UiModal :open="closeBillOpen" title="請求を締める" @close="closeBillOpen = false">
       <div class="grid gap-3">
         <UiFormField label="得意先" required>
-          <UiSelect v-model="closeBillForm.companyId" :options="customerOptions" aria-label="得意先" />
+          <AkebonoAppRefSelect v-model="closeBillForm.companyId" :options="customerOptions" aria-label="得意先" placeholder="得意先を検索して選択" />
         </UiFormField>
         <div class="grid grid-cols-2 gap-3">
           <UiFormField label="期間（開始）" required>

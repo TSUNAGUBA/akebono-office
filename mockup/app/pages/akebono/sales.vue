@@ -5,6 +5,7 @@
  * 訂正は赤黒（記録系）= 誤登録の取消フロー（原則 9.5）。ルート /akebono/sales。管理者ゲート不要。
  */
 import { ArrowRight, Plus } from 'lucide-vue-next'
+import type { SalesRecord } from '~/types/akebono'
 import type { Company, CustomValues } from '~/types/domain'
 import { fmtDate, fmtPct, fmtYen, fmtYenCompact, todayJst } from '~/utils/format'
 
@@ -81,16 +82,17 @@ const columns = computed(() => listColumns('sales_record', [
   { key: 'amount', label: '金額', align: 'right', primary: true },
   { key: 'sourceKind', label: '発生源' },
 ]))
-// 検索（コード・売上日）＋ クライアントページング。集計・グラフは全件の salesRecords を使うため非影響
-const search = ref('')
-const searchedRecords = computed(() => {
-  const q = search.value.trim().toLowerCase()
-  if (!q) return filteredRecords.value
-  return filteredRecords.value.filter(r =>
-    String(r.code ?? '').toLowerCase().includes(q) || r.salesDate.includes(q))
+// 構造化フィルタ（項目別。フリーテキスト検索の置換）＋ クライアントページング。集計・グラフは全件の salesRecords を使うため非影響
+const {
+  fields: filterFields, optionsFor: filterOptionsFor, model: filterModel,
+  matchRow: filterMatchRow, queryParams: filterQueryParams, activeCount: filterActiveCount, clear: filterClear,
+} = useAppFilter('sales_record')
+const { page, pageSize, rows: pagedRecords, total } = useListView({
+  source: filteredRecords,
+  filterPredicate: computed(() => (r: SalesRecord) => filterMatchRow(r as unknown as Record<string, unknown>)),
+  filterParams: filterQueryParams,
 })
-const { page, pageSize, rows: pagedRecords, total } = useListView({ source: searchedRecords })
-watch([search, segmentFilter], () => { page.value = 1 })
+watch(segmentFilter, () => { page.value = 1 })
 const tableRows = computed(() =>
   decorateRows('sales_record', pagedRecords.value.map(r => ({ ...r, custom: r.custom ?? {} }))) as unknown as Record<string, unknown>[])
 function skuLabelOf(skuId: string): string {
@@ -314,9 +316,14 @@ const entryAmount = computed(() => {
 
       <!-- 明細一覧 -->
       <UiSectionCard :title="`売上明細（${total}件）`" description="行をクリックで赤黒訂正（取消）" flush>
-        <UiFilterBar>
-          <UiSearchInput v-model="search" placeholder="コード・売上日で検索" />
-        </UiFilterBar>
+        <AkebonoAppFilterBar
+          :fields="filterFields"
+          :model="filterModel"
+          :options-for="filterOptionsFor"
+          :active-count="filterActiveCount"
+          :exclude="['segmentId']"
+          @clear="filterClear"
+        />
         <UiDataTable
           :columns="columns"
           :rows="tableRows"
@@ -377,13 +384,13 @@ const entryAmount = computed(() => {
           <input v-model="entryForm.salesDate" type="date" class="input" aria-label="売上日">
         </UiFormField>
         <UiFormField label="得意先" required>
-          <UiSelect v-model="entryForm.companyId" :options="customerOptions" aria-label="得意先" />
+          <AkebonoAppRefSelect v-model="entryForm.companyId" :options="customerOptions" aria-label="得意先" placeholder="得意先を検索して選択" />
         </UiFormField>
         <UiFormField label="事業セグメント" required>
           <UiSelect v-model="entryForm.segmentId" :options="segmentOptions" aria-label="事業セグメント" />
         </UiFormField>
         <UiFormField label="SKU" required>
-          <UiSelect v-model="entryForm.skuId" :options="skuOptions" aria-label="SKU" @update:model-value="onSkuChange" />
+          <AkebonoAppRefSelect v-model="entryForm.skuId" :options="skuOptions" aria-label="SKU" placeholder="SKUを検索して選択" @update:model-value="onSkuChange" />
         </UiFormField>
         <div class="grid grid-cols-2 gap-3">
           <UiFormField label="数量" required>

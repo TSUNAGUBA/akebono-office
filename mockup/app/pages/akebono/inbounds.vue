@@ -59,11 +59,16 @@ const tableRows = computed(() =>
 // ---------- 入荷実績一覧（項目カスタマイズ F-31 = inbound_result エンティティ） ----------
 // 記録系（実績）の一覧。予定（plan）側の一覧とは別枠で、実績エンティティに項目カスタマイズを適用する。
 const {
-  query: resultQuery, page: resultPage, pageSize: resultPageSize,
+  fields: inFilterFields, optionsFor: inFilterOptionsFor, model: inFilterModel,
+  matchRow: inFilterMatchRow, queryParams: inFilterQueryParams, activeCount: inFilterActiveCount, clear: inFilterClear,
+} = useAppFilter('inbound')
+const {
+  page: resultPage, pageSize: resultPageSize,
   rows: resultPageRows, total: resultTotal, refresh: resultRefresh,
 } = useListView<InboundResult>({
   source: computed(() => results.value.slice().sort((a, b) => (a.receivedAt < b.receivedAt ? 1 : -1))),
-  match: (r, q) => r.code.toLowerCase().includes(q) || r.receivedAt.includes(q),
+  filterPredicate: computed(() => (r: InboundResult) => inFilterMatchRow(r as unknown as Record<string, unknown>)),
+  filterParams: inFilterQueryParams,
   fetch: params => apiListPage<InboundResult>('inboundResults', params),
 })
 
@@ -311,9 +316,10 @@ async function submitResultInner(): Promise<void> {
       </UiSectionCard>
 
       <UiSectionCard :title="`入荷実績（${resultTotal}件）`" flush>
-        <UiFilterBar>
-          <UiSearchInput v-model="resultQuery" placeholder="入荷番号・入荷日で検索" />
-        </UiFilterBar>
+        <AkebonoAppFilterBar
+          :fields="inFilterFields" :model="inFilterModel" :options-for="inFilterOptionsFor"
+          :active-count="inFilterActiveCount" @clear="inFilterClear"
+        />
         <UiDataTable
           :columns="resultColumns"
           :rows="resultRows"

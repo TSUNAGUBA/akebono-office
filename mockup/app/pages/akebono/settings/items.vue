@@ -42,9 +42,10 @@ function asItem(row: Record<string, unknown>): ResolvedItem {
 
 const columns: TableColumn[] = [
   { key: 'item', label: '項目', primary: true },
-  { key: 'form', label: 'フォーム表示', align: 'center', width: '120px', primary: true },
-  { key: 'list', label: '一覧表示', align: 'center', width: '110px', primary: true },
-  { key: 'label', label: '表示名の上書き', width: '220px' },
+  { key: 'form', label: 'フォーム表示', align: 'center', width: '110px', primary: true },
+  { key: 'list', label: '一覧表示', align: 'center', width: '100px', primary: true },
+  { key: 'filter', label: '検索対象', align: 'center', width: '100px', primary: true },
+  { key: 'label', label: '表示名の上書き', width: '200px' },
 ]
 
 // ---------- 変更ハンドラ ----------
@@ -62,6 +63,13 @@ async function toggleList(item: ResolvedItem, ev: Event): Promise<void> {
   const res = await its.upsert(current.value, item.itemKey, { listVisible: checked })
   if (!res.ok) { toast.show(`${res.error.code}: ${res.error.message}`, 'crit'); return }
   toast.show(`「${item.labelDisplay}」の一覧表示を${checked ? 'ON' : 'OFF'}にしました`, 'ok')
+}
+
+async function toggleFilter(item: ResolvedItem, ev: Event): Promise<void> {
+  const checked = (ev.target as HTMLInputElement).checked
+  const res = await its.upsert(current.value, item.itemKey, { filterVisible: checked })
+  if (!res.ok) { toast.show(`${res.error.code}: ${res.error.message}`, 'crit'); return }
+  toast.show(`「${item.labelDisplay}」の検索対象を${checked ? 'ON' : 'OFF'}にしました`, 'ok')
 }
 
 async function changeLabel(item: ResolvedItem, ev: Event): Promise<void> {
@@ -228,6 +236,19 @@ async function onCfRemove(d: CustomFieldDef): Promise<void> {
               @change="toggleList(asItem(row), $event)"
             >
           </label>
+        </template>
+
+        <template #cell-filter="{ row }">
+          <label v-if="asItem(row).filterKind" class="inline-flex items-center justify-center">
+            <input
+              type="checkbox"
+              class="h-4 w-4 accent-brand"
+              :checked="asItem(row).filterVisible"
+              :aria-label="`${asItem(row).labelDisplay} を検索対象にする`"
+              @change="toggleFilter(asItem(row), $event)"
+            >
+          </label>
+          <span v-else class="text-[11px] text-muted" title="この項目は検索フィルタに使えません">—</span>
         </template>
 
         <template #cell-label="{ row }">

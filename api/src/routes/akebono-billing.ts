@@ -83,6 +83,12 @@ export function akebonoBillingRoutes(pool: pg.Pool): Hono {
     return c.json(await runListQuery(pool, c, {
       table: 'sales_records', cols: SR_COLS, orderBy: 'sales_date DESC, id', maxLimit: 20000,
       searchCols: ['code', 'channel', 'sales_date::text'],
+      filterCols: {
+        salesDate: { col: 'sales_date', kind: 'date' }, companyId: { col: 'company_id', kind: 'eq' },
+        segmentId: { col: 'segment_id', kind: 'eq' }, skuId: { col: 'sku_id', kind: 'eq' },
+        qty: { col: 'qty', kind: 'number' }, unitPrice: { col: 'unit_price', kind: 'number' },
+        channel: { col: 'channel', kind: 'text' },
+      },
     }))
   })
 
@@ -175,6 +181,11 @@ export function akebonoBillingRoutes(pool: pg.Pool): Hono {
     return c.json(await runListQuery(pool, c, {
       table: 'invoices', cols: INV_COLS, orderBy: 'created_at DESC, id', maxLimit: 5000,
       searchCols: ['code', 'status', 'period_from::text', 'period_to::text'],
+      filterCols: {
+        code: { col: 'code', kind: 'text' }, companyId: { col: 'company_id', kind: 'eq' },
+        segmentId: { col: 'segment_id', kind: 'eq' }, periodFrom: { col: 'period_from', kind: 'date' },
+        periodTo: { col: 'period_to', kind: 'date' }, invoiceType: { col: 'invoice_type', kind: 'enum' },
+      },
     }))
   })
 

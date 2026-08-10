@@ -2387,3 +2387,64 @@
 
 ### 66-6 独立レビュー（原則9）
 - [x] コードレビュアー・システム監査官の独立レビューを実施し、指摘ゼロまで反復（後述の是正を反映）。
+
+## 67. 各アプリの構造化フィルタ検索 + マスタ項目のオートコンプリート（オペレーター指示 2026-08-10）の完了条件（Definition of Done）
+
+> オペレーター指示「各アプリ内の検索をフリーテキストではなく項目別のフィルタフォームに。マスタ化項目は
+> autocomplete、大文字小文字・全角半角は PG で吸収。検索対象は /akebono/settings/items で定義可能に。
+> 合わせて登録・編集フォームのドロップダウンも可能な範囲で autocomplete に」。ブランチ `claude/akebono-import-linking-scsqkq`。
+
+### 67-1 基盤（正規化・migration）
+- [x] **共有正規化** `shared/domain/text-match.ts`: `normalizeSearch(s) = s.normalize('NFKC').toLowerCase()`・`normalizedIncludes`。
+  大文字小文字・全角半角（全角ASCII↔半角・半角カナ→全角カナ〔濁点合成〕）を吸収。utils/search.ts で再エクスポート。
+- [x] **migration 0056**: `app_office.akebono_norm(text) = lower(normalize(t, NFKC))`（IMMUTABLE・関数インデックス可）+
+  `item_settings.filter_visible boolean`（NULL = カタログ既定）。**PG16 の normalize(NFKC) = JS String.normalize('NFKC') を実測一致確認**。
+
+### 67-2 API（構造化フィルタ・filter_visible）
+- [x] **list-query.ts**: `filterCols`（キー=項目キー）で per-field フィルタを追加。text = `strpos(akebono_norm(col), akebono_norm($v))>0`・
+  ref/enum = 完全一致・date = `col::date` 範囲（timestamp 列は `(col AT TIME ZONE 'Asia/Tokyo')`）・number = 範囲。
+  クエリは `f.<key>` / `.from`・`.to` / `.min`・`.max`。従来の `q`（ILIKE）と併存（後方互換）。
+- [x] **各エンティティに filterCols 付与**: sales_records/invoices（billing）・purchase_orders/production_orders/inbound_results/
+  purchase_records/outbound_results/inventory_transactions（trade）。
+- [x] **item-settings に filter_visible を end-to-end**（akebono.ts: ItemSettingPatch/itemSettingPatchOf/COLS/PUT/INSERT）。
+
+### 67-3 カタログ・設定 UI
+- [x] **ITEM_CATALOG にフィルタメタ**（filterKind: text/ref/enum/date/number・filterRef・filterDefault）を全10エンティティへ付与。
+  useItemSettings に `filterVisibleOf`（resolve に filterVisible）・`filterableItems(entity)`。ItemSetting 型に filterVisible。
+- [x] **settings/items.vue**: 「検索対象（フィルタ）」トグル列を追加（form/list と同型。フィルタ不可項目は「—」）。
+
+### 67-4 フロント基盤・コンポーネント
+- [x] **useAppFilter(entity)**: フィルタ状態 + ref/enum のオプション解決（マスタ = useAkebonoMasters/useProducts、enum = 固定マップ）+
+  ① mock 用 `matchRow`（正規化部分一致・範囲・完全一致）② API 用 `queryParams`。
+- [x] **AppFilterBar.vue**: 種別ごとの入力（ref = UiMultiCombobox〔single〕autocomplete / enum = UiSelect / text / date 範囲 / number 範囲）。レスポンシブ。
+- [x] **useListView 拡張**: `filterPredicate`（client）・`filterParams`（server）。両モードでフィルタ変更→1ページ目・デバウンス再取得。
+- [x] **UiCombobox / UiMultiCombobox のオプション絞り込みを normalizeSearch 化**（全角半角吸収）= 既存フォームの autocomplete も表記ゆれ耐性を獲得。
+
+### 67-5 各リスト画面への適用（全業務アプリ）
+- [x] フリーテキスト検索 → AppFilterBar へ置換（全 9 リスト・全フィルタ種別を網羅）:
+  **売上・商品・仕入・発注・生産・入荷実績・出荷実績・在庫受払台帳・請求（invoice タブ）**。
+  在庫受払台帳は従来の SKU/倉庫セレクトを AppFilterBar に統合（ledgerOf() 全件 → matchRow で絞り込み）。
+  売上・商品は業態スイッチャと二重操作を避けるため AppFilterBar に `exclude=['segmentId']`（レビュー MINOR 対応）。
+- [x] **登録・編集フォームの master 参照ドロップダウンを autocomplete 化**: 単一 v-model のドロップイン
+  `AppRefSelect`（UiCombobox 選択専用ラッパ）を新設し、得意先/仕入先/出荷先（company）・SKU の長いマスタ選択を置換
+  （売上・発注・仕入・生産・出荷・請求締め）。事業セグメント/倉庫（短いリスト）は native select を維持。既存フォームの
+  UiCombobox 系はオプション絞り込みの normalizeSearch 化で全角半角耐性を獲得済み。
+
+### 67-6 検証（実測値）
+- [x] api/mockup typecheck green・mockup unit **232 passed**（正規化 6 ケース）・api unit **302**・api 統合 **247**
+  （akebono_norm の全角半角ヒット・eq・date/number 範囲・filter_visible 往復の新規テスト）。
+
+### 67-7 後方互換（原則7）
+- [x] filter_visible / akebono_norm は追加のみ。`q`（ILIKE）検索経路・レガシー bare 配列取得は不変。項目カタログのフィルタメタは任意
+  （未指定 = フィルタ不可）。既存 seed（itemSettings は空）・既存フォームの挙動は不変。
+
+### 67-8 独立レビュー（原則9）の指摘対応
+- [x] **不正日付ガード（MINOR）**: `list-query.ts` の date フィルタを `isRealDate`（暦日検証・閏年考慮）に変更 =
+  正規表現は通るが暦上あり得ない日（例 2026-13-45）で `col::date` が 22008 → 500 になるのを防ぎ、黙って無視（原則4）。
+- [x] **JST/UTC 整合（MAJOR-latent）の確認と明文化**: モック日時は常に JST ISO（`+09:00` = nowJstIso）で保存されるため
+  `slice(0,10)` が JST 日付 = サーバー（timestamp 列は `(col AT TIME ZONE 'Asia/Tokyo')::date`）と一致。useAppFilter に
+  不変条件をコメントで明記（次弾の timestamp 系ページ〔入荷/出荷/在庫〕でも同一述語で齟齬なしを裏取り済み）。
+- [x] **eq の trim 整合（NIT）**: mock の完全一致比較をサーバー同様 `v.trim()` に統一。
+- [x] **カナ NFKC の PG 側テスト（MINOR）**: 統合テストに「半角カナ登録 × 全角カナクエリ」の akebono_norm 一致アサートを追加。
+- [x] **二重セグメント操作（MINOR）**: AppFilterBar に `exclude` を追加し、業態スイッチャを持つ売上・商品で segmentId を除外。
+- 据え置き（follow-up）: text フィルタの関数インデックス（akebono_norm(col)）は現状 20,000 件上限内で seq scan 許容 = 将来のボリューム増で検討。

@@ -505,6 +505,11 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
     return c.json(await runListQuery(pool, c, {
       table: 'purchase_orders', cols: PO_COLS, orderBy: 'order_date DESC, id', maxLimit: 5000,
       searchCols: ['code', 'note', 'order_date::text', 'due_date::text'],
+      filterCols: {
+        code: { col: 'code', kind: 'text' }, companyId: { col: 'company_id', kind: 'eq' },
+        segmentId: { col: 'segment_id', kind: 'eq' }, orderDate: { col: 'order_date', kind: 'date' },
+        dueDate: { col: 'due_date', kind: 'date' }, note: { col: 'note', kind: 'text' },
+      },
     }))
   })
 
@@ -564,6 +569,11 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
     return c.json(await runListQuery(pool, c, {
       table: 'production_orders', cols: MFG_COLS, orderBy: 'due_date DESC, id', maxLimit: 5000,
       searchCols: ['code', 'due_date::text'],
+      filterCols: {
+        code: { col: 'code', kind: 'text' }, skuId: { col: 'sku_id', kind: 'eq' },
+        qty: { col: 'qty', kind: 'number' }, warehouseId: { col: 'warehouse_id', kind: 'eq' },
+        dueDate: { col: 'due_date', kind: 'date' },
+      },
     }))
   })
 
@@ -660,6 +670,10 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
     return c.json(await runListQuery(pool, c, {
       table: 'inbound_results', cols: IBR_COLS, orderBy: 'received_at DESC, id', maxLimit: 5000,
       searchCols: ['code', 'received_at::text'],
+      filterCols: {
+        code: { col: 'code', kind: 'text' }, warehouseId: { col: 'warehouse_id', kind: 'eq' },
+        receivedAt: { col: "(received_at AT TIME ZONE 'Asia/Tokyo')", kind: 'date' },
+      },
     }))
   })
 
@@ -775,6 +789,11 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
     return c.json(await runListQuery(pool, c, {
       table: 'purchase_records', cols: PUR_COLS, orderBy: 'purchase_date DESC, id', maxLimit: 5000,
       searchCols: ['code', 'purchase_date::text'],
+      filterCols: {
+        code: { col: 'code', kind: 'text' }, companyId: { col: 'company_id', kind: 'eq' },
+        segmentId: { col: 'segment_id', kind: 'eq' }, purchaseDate: { col: 'purchase_date', kind: 'date' },
+        purchaseType: { col: 'purchase_type', kind: 'enum' },
+      },
     }))
   })
 
@@ -866,6 +885,11 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
     return c.json(await runListQuery(pool, c, {
       table: 'outbound_results', cols: OBR_COLS, orderBy: 'shipped_at DESC, id', maxLimit: 5000,
       searchCols: ['code', 'shipped_at::text'],
+      filterCols: {
+        code: { col: 'code', kind: 'text' }, companyId: { col: 'company_id', kind: 'eq' },
+        warehouseId: { col: 'warehouse_id', kind: 'eq' },
+        shippedAt: { col: "(shipped_at AT TIME ZONE 'Asia/Tokyo')", kind: 'date' },
+      },
     }))
   })
 
@@ -1056,6 +1080,12 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
     return c.json(await runListQuery(pool, c, {
       table: 'inventory_transactions', cols: ITX_COLS, orderBy: 'occurred_at DESC, id', maxLimit: 20000,
       searchCols: ['kind', 'reason', 'ref_type', 'ref_line_id'],
+      filterCols: {
+        skuId: { col: 'sku_id', kind: 'eq' }, warehouseId: { col: 'warehouse_id', kind: 'eq' },
+        qty: { col: 'qty', kind: 'number' }, kind: { col: 'kind', kind: 'enum' },
+        reason: { col: 'reason', kind: 'enum' },
+        occurredAt: { col: "(occurred_at AT TIME ZONE 'Asia/Tokyo')", kind: 'date' },
+      },
     }))
   })
 

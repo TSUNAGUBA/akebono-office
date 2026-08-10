@@ -39,9 +39,14 @@ function skuLabelOf(skuId: string): string {
 
 // ---------- 一覧（検索 + ページング。モック=クライアント / API=サーバー） ----------
 // サーバー検索はコード・日付（order_date/due_date）を対象とする。クライアントも同一基準で揃える。
-const { query, page, pageSize, rows: pageRows, total, refresh } = useListView<PurchaseOrder>({
+const {
+  fields: filterFields, optionsFor: filterOptionsFor, model: filterModel,
+  matchRow: filterMatchRow, queryParams: filterQueryParams, activeCount: filterActiveCount, clear: filterClear,
+} = useAppFilter('purchase_order')
+const { page, pageSize, rows: pageRows, total, refresh } = useListView<PurchaseOrder>({
   source: po.activeOrders,
-  match: (o, q) => o.code.toLowerCase().includes(q) || o.orderDate.includes(q) || o.dueDate.includes(q),
+  filterPredicate: computed(() => (o: PurchaseOrder) => filterMatchRow(o as unknown as Record<string, unknown>)),
+  filterParams: filterQueryParams,
   fetch: p => apiListPage<PurchaseOrder>('purchaseOrders', p),
 })
 
@@ -209,9 +214,10 @@ async function submitCreateInner(): Promise<void> {
 
     <div class="grid gap-3">
       <UiSectionCard :title="`発注一覧（${total}件）`" flush>
-        <UiFilterBar>
-          <UiSearchInput v-model="query" placeholder="コード・日付で検索" />
-        </UiFilterBar>
+        <AkebonoAppFilterBar
+          :fields="filterFields" :model="filterModel" :options-for="filterOptionsFor"
+          :active-count="filterActiveCount" @clear="filterClear"
+        />
         <UiDataTable
           :columns="columns"
           :rows="tableRows"
@@ -325,7 +331,7 @@ async function submitCreateInner(): Promise<void> {
       <div class="grid gap-3">
         <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
           <UiFormField label="仕入先" required>
-            <UiSelect v-model="createForm.companyId" :options="supplierOptions" aria-label="仕入先" />
+            <AkebonoAppRefSelect v-model="createForm.companyId" :options="supplierOptions" aria-label="仕入先" placeholder="仕入先を検索して選択" />
           </UiFormField>
           <UiFormField label="事業セグメント" required>
             <UiSelect v-model="createForm.segmentId" :options="segmentOptions" aria-label="事業セグメント" />
