@@ -4543,13 +4543,16 @@ describe('Phase C: Akebono 記録系の API 永続化（商品・伝票・在庫
       as: MEMBER,
       body: {
         companyId: artistId, segmentId: 'seg-01', orderDate: todayJst(), dueDate: todayJst(),
+        // 項目カスタマイズ（F-31）: custom を保存し GET で返す
+        custom: { memo: '至急', priority: 3 },
         lines: [{ skuId: defaultSkuId, qty: 10, unitPrice: 800 }],
       },
     })
     expect(po.status).toBe(201)
-    const poRow = po.json.data as { id: string; code: string; status: string; lines: { id: string }[] }
+    const poRow = po.json.data as { id: string; code: string; status: string; custom?: Record<string, unknown>; lines: { id: string }[] }
     expect(poRow.code).toMatch(/^PO-\d{4}$/)
     expect(poRow.status).toBe('ordered')
+    expect(poRow.custom).toEqual({ memo: '至急', priority: 3 })
 
     // 状態機械: closed からの遷移は 409
     expect((await api('POST', `/v1/akebono/purchase-orders/${poRow.id}/status`, { as: MEMBER, body: { status: 'closed' } })).status).toBe(200)
@@ -4883,6 +4886,42 @@ describe('Phase C: Akebono 記録系の API 永続化（商品・伝票・在庫
     expect(stored.periodKey).toBe(prevMonth)
     expect(stored.metrics.salesAmount).toBe(7800)
     expect(stored.insight.executiveSummary.length).toBeGreaterThan(0)
+  })
+
+  it('項目カスタマイズ（F-31）: 生産/仕入/入荷/出荷/在庫が custom を保存し GET で返す', async () => {
+    const custom = { memo: 'カスタム', level: 2 }
+    // 生産指示（在庫非連動）
+    const mfg = await api('POST', '/v1/akebono/production-orders', {
+      as: MEMBER, body: { skuId: defaultSkuId, qty: 5, warehouseId: 'wh-01', dueDate: todayJst(), custom },
+    })
+    expect(mfg.status).toBe(201)
+    expect((mfg.json.data as { custom?: Record<string, unknown> }).custom).toEqual(custom)
+    // 仕入計上（warehouseId 無し = 在庫非連動）
+    const pur = await api('POST', '/v1/akebono/purchase-records', {
+      as: MEMBER, body: { companyId: artistId, segmentId: 'seg-01', purchaseDate: todayJst(), purchaseType: 'outright', lines: [{ skuId: defaultSkuId, qty: 3, costPrice: 100 }], custom },
+    })
+    expect(pur.status).toBe(201)
+    expect((pur.json.data as { custom?: Record<string, unknown> }).custom).toEqual(custom)
+    // 入荷実績（直接登録 = 在庫入庫）
+    const ibr = await api('POST', '/v1/akebono/inbound-results', {
+      as: MEMBER, body: { warehouseId: 'wh-01', lines: [{ skuId: defaultSkuId, qty: 30 }], custom },
+    })
+    expect(ibr.status).toBe(201)
+    expect((ibr.json.data as { custom?: Record<string, unknown> }).custom).toEqual(custom)
+    // 出荷実績（在庫あり）
+    const obr = await api('POST', '/v1/akebono/outbound-results', {
+      as: MEMBER, body: { warehouseId: 'wh-01', companyId: artistId, lines: [{ skuId: defaultSkuId, qty: 2 }], custom },
+    })
+    expect(obr.status).toBe(201)
+    expect((obr.json.data as { custom?: Record<string, unknown> }).custom).toEqual(custom)
+    // 在庫調整 → 台帳の当該行に custom
+    const adj = await api('POST', '/v1/akebono/inventory/adjust', {
+      as: MEMBER, body: { skuId: defaultSkuId, warehouseId: 'wh-01', qty: 1, reason: 'found', custom },
+    })
+    expect(adj.status).toBe(201)
+    const adjId = (adj.json.data as { id: string }).id
+    const txns = (await api('GET', '/v1/akebono/inventory-transactions?limit=2000', { as: MEMBER })).json.data as { refLineId: string; kind: string; custom?: Record<string, unknown> }[]
+    expect(txns.find(t => t.refLineId === adjId && t.kind === 'adjust')?.custom).toEqual(custom)
   })
 })
 

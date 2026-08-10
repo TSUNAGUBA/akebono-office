@@ -6,15 +6,19 @@
  * 「出荷指示を作成」「直接出荷登録」はモーダルから composable の createPlan / registerResult を呼ぶ。
  */
 import { PackagePlus, Truck } from 'lucide-vue-next'
-import type { OutboundPlan } from '~/types/akebono'
+import type { OutboundPlan, OutboundResult } from '~/types/akebono'
+import type { CustomValues } from '~/types/domain'
 import { PLAN_STATUS_LABELS, planStatusTone } from '~/utils/akebono'
-import { fmtDate, fmtInt } from '~/utils/format'
+import { fmtDate, fmtDateTime, fmtInt } from '~/utils/format'
 import type { TableColumn } from '~/types/ui'
 import type { LineRow } from '~/components/widgets/AkebonoLineItems.vue'
 
 const out = useOutbound()
+const { results } = out
 const p = useProducts()
 const masters = useAkebonoMasters()
+const { listColumns, decorateRows } = useAppListView()
+const { missingRequiredCustom } = useAppFields()
 const { effectiveSegmentId } = useCurrentSegment()
 const { tbl } = useMockDb()
 const toast = useToast()
@@ -58,6 +62,38 @@ const rows = computed(() => pageRows.value as unknown as Record<string, unknown>
 function asPlan(row: Record<string, unknown>): OutboundPlan {
   return row as unknown as OutboundPlan
 }
+
+// ---------- 出荷実績一覧（項目カスタマイズ F-31 = outbound_result エンティティ） ----------
+// 記録系（実績）の一覧。指示（plan）側の一覧とは別枠で、実績エンティティに項目カスタマイズを適用する。
+const {
+  query: resultQuery, page: resultPage, pageSize: resultPageSize,
+  rows: resultPageRows, total: resultTotal, refresh: resultRefresh,
+} = useListView<OutboundResult>({
+  source: computed(() => results.value.slice().sort((a, b) => (a.shippedAt < b.shippedAt ? 1 : -1))),
+  match: (r, q) => r.code.toLowerCase().includes(q) || r.shippedAt.includes(q),
+  fetch: params => apiListPage<OutboundResult>('outboundResults', params),
+})
+
+// 一覧列は項目設定（表示 ON/OFF・表示名）で解決＋カスタム項目列を付加。派生列（明細数）は itemKey 無し＝常時表示
+const resultColumns = computed(() => listColumns('outbound', [
+  { key: 'code', label: '出荷番号', primary: true, itemKey: 'code' },
+  { key: 'company', label: '出荷先', primary: true, itemKey: 'companyId' },
+  { key: 'warehouse', label: '出荷倉庫', itemKey: 'warehouseId' },
+  { key: 'shippedAt', label: '出荷日時', primary: true, itemKey: 'shippedAt' },
+  { key: 'lineCount', label: '明細数', align: 'right', width: '90px' },
+]))
+
+const resultRows = computed(() =>
+  decorateRows('outbound', resultPageRows.value.map(r => ({
+    id: r.id,
+    code: r.code,
+    company: r.companyId ? companyName(r.companyId) : '—',
+    warehouse: r.warehouseId ? masters.warehouseName(r.warehouseId) : '—',
+    shippedAt: fmtDateTime(r.shippedAt),
+    lineCount: r.lines.length,
+    custom: r.custom ?? {},
+  }))) as unknown as Record<string, unknown>[],
+)
 
 // ---------- 指示ドロワー ----------
 const drawerOpen = ref(false)
@@ -140,8 +176,8 @@ async function savePlanInner(): Promise<void> {
 // ---------- 出荷実績登録モーダル（指示参照 / 直接） ----------
 const resultOpen = ref(false)
 const resultPlanId = ref<string | null>(null)
-const resultForm = ref<{ warehouseId: string; companyId: string; segmentId: string; lines: LineRow[]; postSales: boolean }>({
-  warehouseId: '', companyId: '', segmentId: '', lines: [], postSales: false,
+const resultForm = ref<{ warehouseId: string; companyId: string; segmentId: string; lines: LineRow[]; postSales: boolean; custom: CustomValues }>({
+  warehouseId: '', companyId: '', segmentId: '', lines: [], postSales: false, custom: {},
 })
 const resultPlan = computed<OutboundPlan | null>(() =>
   resultPlanId.value ? (out.planById(resultPlanId.value) ?? null) : null)
@@ -160,6 +196,7 @@ function openResultForPlan(): void {
     segmentId: plan.segmentId,
     lines: lines.length > 0 ? lines : [{ skuId: '', qty: 1 }],
     postSales: false,
+    custom: {},
   }
   resultOpen.value = true
 }
@@ -173,6 +210,7 @@ function openResultDirect(): void {
     segmentId: effectiveSegmentId.value || (segmentOptions.value[0]?.value ?? ''),
     lines: [{ skuId: '', qty: 1 }],
     postSales: false,
+    custom: {},
   }
   resultOpen.value = true
 }
@@ -192,12 +230,18 @@ async function saveResult(): Promise<void> {
 async function saveResultInner(): Promise<void> {
   const f = resultForm.value
   const plan = resultPlan.value
+  const missCustom = missingRequiredCustom('outbound', f.custom)
+  if (missCustom) {
+    toast.show(`${missCustom}は必須です`, 'crit')
+    return
+  }
   const res = await out.registerResult({
     planId: resultPlanId.value,
     warehouseId: f.warehouseId,
     companyId: f.companyId || null,
     segmentId: f.segmentId || null,
     postSales: f.postSales && canPostSales.value,
+    custom: f.custom,
     lines: f.lines.map(l => ({
       planLineId: plan ? (plan.lines.find(pl => pl.skuId === l.skuId)?.id ?? null) : null,
       skuId: l.skuId,
@@ -211,6 +255,7 @@ async function saveResultInner(): Promise<void> {
   toast.show(f.postSales && canPostSales.value ? '出荷実績を登録し、売上を計上しました' : '出荷実績を登録しました', 'ok')
   resultOpen.value = false
   refresh() // サーバーページング時は現在ページを取り直す（実績で指示ステータスが変わるため）
+  resultRefresh() // 実績一覧へ新規実績を反映
 }
 </script>
 
@@ -263,6 +308,26 @@ async function saveResultInner(): Promise<void> {
           </template>
         </UiDataTable>
         <UiPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
+      </UiSectionCard>
+
+      <UiSectionCard :title="`出荷実績（${resultTotal}件）`" flush>
+        <UiFilterBar>
+          <UiSearchInput v-model="resultQuery" placeholder="出荷番号・出荷日で検索" />
+        </UiFilterBar>
+        <UiDataTable
+          :columns="resultColumns"
+          :rows="resultRows"
+          empty-title="出荷実績がありません"
+          empty-hint="「直接出荷登録」または指示からの実績登録で記録されます"
+        >
+          <template #cell-code="{ row }">
+            <span class="font-medium">{{ row.code }}</span>
+          </template>
+          <template #cell-lineCount="{ row }">
+            <span class="num tabular-nums">{{ fmtInt(Number(row.lineCount)) }}</span>
+          </template>
+        </UiDataTable>
+        <UiPagination v-model:page="resultPage" v-model:page-size="resultPageSize" :total="resultTotal" />
       </UiSectionCard>
     </div>
 
@@ -439,6 +504,8 @@ async function saveResultInner(): Promise<void> {
             </span>
           </span>
         </label>
+
+        <WidgetsCustomFields entity="outbound" v-model="resultForm" />
       </div>
       <template #footer>
         <button type="button" class="btn btn-sm" @click="resultOpen = false">キャンセル</button>

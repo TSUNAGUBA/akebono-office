@@ -64,15 +64,17 @@ const customerSeries = computed(() => [
 ])
 
 // ---------- 明細一覧 ----------
-const columns = [
-  { key: 'salesDate', label: '売上日', primary: true },
-  { key: 'companyId', label: '得意先', primary: true },
-  { key: 'segmentId', label: 'セグメント' },
-  { key: 'skuId', label: 'SKU' },
-  { key: 'qty', label: '数量', align: 'right' as const },
-  { key: 'amount', label: '金額', align: 'right' as const, primary: true },
+const { listColumns, decorateRows } = useAppListView()
+// 一覧列は項目設定（表示 ON/OFF・表示名）で解決＋カスタム項目列を付加。派生列（金額・発生源）は itemKey 無し＝常時表示
+const columns = computed(() => listColumns('sales_record', [
+  { key: 'salesDate', label: '売上日', primary: true, itemKey: 'salesDate' },
+  { key: 'companyId', label: '得意先', primary: true, itemKey: 'companyId' },
+  { key: 'segmentId', label: 'セグメント', itemKey: 'segmentId' },
+  { key: 'skuId', label: 'SKU', itemKey: 'skuId' },
+  { key: 'qty', label: '数量', align: 'right', itemKey: 'qty' },
+  { key: 'amount', label: '金額', align: 'right', primary: true },
   { key: 'sourceKind', label: '発生源' },
-]
+]))
 // 検索（コード・売上日）＋ クライアントページング。集計・グラフは全件の salesRecords を使うため非影響
 const search = ref('')
 const searchedRecords = computed(() => {
@@ -83,7 +85,8 @@ const searchedRecords = computed(() => {
 })
 const { page, pageSize, rows: pagedRecords, total } = useListView({ source: searchedRecords })
 watch([search, segmentFilter], () => { page.value = 1 })
-const tableRows = computed(() => pagedRecords.value as unknown as Record<string, unknown>[])
+const tableRows = computed(() =>
+  decorateRows('sales_record', pagedRecords.value.map(r => ({ ...r, custom: r.custom ?? {} }))) as unknown as Record<string, unknown>[])
 function skuLabelOf(skuId: string): string {
   const sku = products.skuById(skuId)
   return sku ? products.skuLabel(sku) : skuId

@@ -8,7 +8,7 @@
  * inventory_transactions）。在庫不足チェック・店舗預け移動・予定ステータス再計算はサーバーが担う。
  */
 import type { BillingType, OutboundPlan, OutboundResult, PlanStatus, SalesRecord, Warehouse } from '~/types/akebono'
-import type { Company } from '~/types/domain'
+import type { Company, CustomValues } from '~/types/domain'
 import type { Result } from '~/types/domain'
 import type { PostEntry } from '~/composables/useInventory'
 import { buildShipmentSaleLines, hasPartnerRole, nextCode } from '~/utils/akebono'
@@ -84,7 +84,7 @@ export function useOutbound() {
    * postSales=true のときは出荷明細から売上を自動計上する（sourceKind='shipment'。F-28 連携）。
    * 店舗預け（consignment）の出荷は「販売」ではないため売上計上の対象外。二重計上は source_ref で防ぐ。
    */
-  async function registerResult(input: { planId?: string | null; warehouseId?: string; companyId?: string | null; segmentId?: string | null; lines: { planLineId?: string | null; skuId: string; qty: number }[]; postSales?: boolean }): Promise<Result> {
+  async function registerResult(input: { planId?: string | null; warehouseId?: string; companyId?: string | null; segmentId?: string | null; custom?: CustomValues; lines: { planLineId?: string | null; skuId: string; qty: number }[]; postSales?: boolean }): Promise<Result> {
     if (isApi) {
       const reload = ['outboundResults', 'inventoryTransactions', 'inventoryBalances', 'outboundPlans']
       if (input.postSales) reload.push('salesRecords')
@@ -136,6 +136,7 @@ export function useOutbound() {
     const created: OutboundResult = {
       id: resultId, code: nextCode(results.value.map(r => r.code), 'OBR'),
       planId: input.planId ?? null, warehouseId, companyId, shippedAt: nowJstIso(), lines: resultLines,
+      custom: input.custom ?? {},
     }
     results.value = [...results.value, created]
 

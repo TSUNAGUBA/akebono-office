@@ -8,7 +8,7 @@
  * プリセットがフロント静的 SoT のため。Phase B の設計判断と同一）。
  */
 import type { PurchaseRecord, PurchaseType } from '~/types/akebono'
-import type { Result } from '~/types/domain'
+import type { CustomValues, Result } from '~/types/domain'
 import { nextCode } from '~/utils/akebono'
 
 export function usePurchases() {
@@ -29,7 +29,7 @@ export function usePurchases() {
 
   async function create(input: {
     companyId: string; segmentId: string; purchaseDate: string; purchaseType: PurchaseType;
-    warehouseId?: string | null; lines: { skuId: string; qty: number; costPrice: number }[]
+    warehouseId?: string | null; custom?: CustomValues; lines: { skuId: string; qty: number; costPrice: number }[]
   }): Promise<Result> {
     if (!input.companyId) return { ok: false, error: { code: 'AKO-PCH-001', message: '仕入先を指定してください' } }
     if (!input.segmentId) return { ok: false, error: { code: 'AKO-PCH-001', message: '事業セグメントを指定してください' } }
@@ -53,6 +53,7 @@ export function usePurchases() {
       id, code: nextCode(records.value.map(r => r.code), 'PUR'),
       companyId: input.companyId, segmentId: input.segmentId, purchaseDate: input.purchaseDate,
       purchaseType: input.purchaseType, inboundResultId: null, warehouseId: postedWarehouseId, lines: recLines, correctionOf: null,
+      custom: input.custom ?? {},
     }
     records.value = [...records.value, created]
     if (postedWarehouseId) {
@@ -78,6 +79,7 @@ export function usePurchases() {
     const reversal: PurchaseRecord = {
       ...src, id: newId, code: nextCode(records.value.map(r => r.code), 'PUR'),
       purchaseDate: todayJst(), inboundResultId: null, warehouseId: src.warehouseId, correctionOf: id, lines: revLines,
+      custom: {}, // 赤黒訂正は custom を引き継がない（API と一致 = DB 既定 {}）
     }
     records.value = [...records.value, reversal]
     // 入荷OFF経路で入庫済みの場合は在庫も戻す（記録と在庫の乖離防止）

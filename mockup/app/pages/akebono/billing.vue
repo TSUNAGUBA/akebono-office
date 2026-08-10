@@ -222,13 +222,16 @@ async function doConfirmNotice(): Promise<void> {
 }
 
 // ---------- テーブル定義 ----------
-const invoiceCols: TableColumn[] = [
-  { key: 'code', label: 'コード', primary: true },
-  { key: 'companyId', label: '得意先', primary: true },
+// 請求一覧（invoice）は項目設定（表示 ON/OFF・表示名）で解決。請求は締めで自動生成され入力フォームが
+// 無いため、常に空になるカスタム項目列は付けない（appendCustom:false）。派生列（期間・金額・状態）は itemKey 無し＝常時表示。
+const { listColumns } = useAppListView()
+const invoiceCols = computed(() => listColumns('invoice', [
+  { key: 'code', label: 'コード', primary: true, itemKey: 'code' },
+  { key: 'companyId', label: '得意先', primary: true, itemKey: 'companyId' },
   { key: 'period', label: '期間' },
   { key: 'totalAmount', label: '金額', align: 'right', primary: true },
   { key: 'status', label: '状態', primary: true },
-]
+], { appendCustom: false }))
 const marginCols: TableColumn[] = [
   { key: 'code', label: 'コード', primary: true },
   { key: 'companyId', label: '店舗', primary: true },
@@ -242,13 +245,14 @@ const noticeCols: TableColumn[] = [
   { key: 'payableAmount', label: '支払額', align: 'right', primary: true },
   { key: 'status', label: '状態', primary: true },
 ]
-const receivableCols: TableColumn[] = [
-  { key: 'code', label: 'コード', primary: true },
-  { key: 'companyId', label: '得意先', primary: true },
+// 売掛/受取一覧（invoice）も同一エンジンで解決。入金済・状態は派生列（itemKey 無し）。custom 列は付けない。
+const receivableCols = computed(() => listColumns('invoice', [
+  { key: 'code', label: 'コード', primary: true, itemKey: 'code' },
+  { key: 'companyId', label: '得意先', primary: true, itemKey: 'companyId' },
   { key: 'totalAmount', label: '請求額', align: 'right', primary: true },
   { key: 'paid', label: '入金済', align: 'right' },
   { key: 'status', label: '状態', primary: true },
-]
+], { appendCustom: false }))
 const receiptCols: TableColumn[] = [
   { key: 'invoiceId', label: '請求', primary: true },
   { key: 'receivedAt', label: '入金日時', primary: true },

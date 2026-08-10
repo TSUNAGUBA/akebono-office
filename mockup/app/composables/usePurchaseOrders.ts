@@ -6,7 +6,7 @@
  * 書込は /v1/akebono/purchase-orders → 再ロード。導出（消込率等）は両モード共通。
  */
 import type { OrderLine, PoStatus, PurchaseOrder } from '~/types/akebono'
-import type { Result } from '~/types/domain'
+import type { CustomValues, Result } from '~/types/domain'
 import { nextCode } from '~/utils/akebono'
 
 export function usePurchaseOrders() {
@@ -37,7 +37,7 @@ export function usePurchaseOrders() {
     return o.lines.reduce((s, l) => s + l.qty, 0)
   }
 
-  async function createOrder(input: { companyId: string; segmentId: string; orderDate: string; dueDate: string; note?: string; lines: { skuId: string; qty: number; unitPrice: number }[] }): Promise<Result> {
+  async function createOrder(input: { companyId: string; segmentId: string; orderDate: string; dueDate: string; note?: string; custom?: CustomValues; lines: { skuId: string; qty: number; unitPrice: number }[] }): Promise<Result> {
     if (!input.companyId) return { ok: false, error: { code: 'AKO-POR-001', message: '仕入先を指定してください' } }
     if (!input.segmentId) return { ok: false, error: { code: 'AKO-POR-001', message: '事業セグメントを指定してください' } }
     const lines = input.lines.filter(l => l.skuId && l.qty > 0)
@@ -55,6 +55,7 @@ export function usePurchaseOrders() {
       id, code: nextCode(orders.value.map(o => o.code), 'PO'),
       companyId: input.companyId, segmentId: input.segmentId, status: 'ordered',
       orderDate: input.orderDate, dueDate: input.dueDate, note: input.note ?? '', lines: orderLines,
+      custom: input.custom ?? {},
     }
     orders.value = [...orders.value, created]
     commit()

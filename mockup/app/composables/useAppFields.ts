@@ -56,8 +56,22 @@ export function useAppFields() {
     return [...builtins, ...customs]
   }
 
+  /**
+   * 必須カスタム項目の未入力チェック（全アプリのフォーム保存前検証で使う = DRY）。
+   * 最初に見つかった未入力の必須項目ラベルを返す（無ければ null）。
+   */
+  function missingRequiredCustom(entity: string, custom: Record<string, unknown> | undefined): string | null {
+    const c = custom ?? {}
+    for (const d of cf.defsFor(entity as CustomFieldEntity)) {
+      if (!d.required) continue
+      const v = c[d.key]
+      if (v === null || v === undefined || v === '' || (Array.isArray(v) && v.length === 0)) return d.label
+    }
+    return null
+  }
+
   return {
-    appFields, builtinResolved, customDefs, customFormSchema,
+    appFields, builtinResolved, customDefs, customFormSchema, missingRequiredCustom,
     /** カスタマイズ対象エンティティ（ITEM_CATALOG のキー = 全 Akebono 業務アプリ） */
     entities: items.entities,
     entityLabels: ITEM_ENTITY_LABELS,

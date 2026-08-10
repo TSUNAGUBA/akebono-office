@@ -23,6 +23,15 @@ const tabs = computed<TabItem[]>(() =>
 )
 const current = ref<string>(its.entities[0] ?? '')
 
+// 追加カスタム項目がフォーム/一覧に反映される業務アプリ（入力フォームを持つもの）。
+// SKU（商品ページ内蔵）・請求（締めで自動生成・フォーム無し）はここに追加しても反映先が無いため、
+// 追加カスタム項目セクションを無効化して「宣言だけあって実態が伴わない」状態を防ぐ（レビュー指摘 2026-08-10）。
+const CUSTOM_FORM_ENTITIES = new Set([
+  'product', 'sales_record', 'purchase_order', 'production_order',
+  'purchase_record', 'inbound', 'outbound', 'inventory',
+])
+const customRenders = computed(() => CUSTOM_FORM_ENTITIES.has(current.value))
+
 const items = computed<ResolvedItem[]>(() => its.resolve(current.value))
 const rows = computed(() => items.value as unknown as Record<string, unknown>[])
 const overriddenCount = computed(() => items.value.filter(i => i.overridden).length)
@@ -237,15 +246,19 @@ async function onCfRemove(d: CustomFieldDef): Promise<void> {
     <!-- 追加カスタム項目（同一エンジンで全アプリ共通） -->
     <UiSectionCard
       :title="`${ITEM_ENTITY_LABELS[current] ?? current} の追加カスタム項目（${customDefs.length}件）`"
-      description="基本項目に無い項目を追加します。追加した項目は、フォーム反映に対応済みのアプリ（現在は商品・売上明細）で入力欄として表示され、データ取込・連携のマッピング項目としても選べます。一覧表示への反映は順次対応します。"
+      description="基本項目に無い項目を追加します。追加した項目は、各業務アプリ（商品・売上・発注・生産・仕入・入荷・出荷・在庫）の入力フォームに入力欄として表示され、一覧にも列として表示できます（表示 ON/OFF・表示名の変更も一覧に反映）。データ取込・連携のマッピング項目としても選べます。"
       flush
     >
       <template #actions>
-        <button type="button" class="btn" @click="openCfCreate">
+        <button v-if="customRenders" type="button" class="btn" @click="openCfCreate">
           <Plus class="h-4 w-4" aria-hidden="true" /> 項目を追加
         </button>
       </template>
+      <p v-if="!customRenders" class="rounded-[10px] border border-line bg-surface-soft px-3 py-2 text-[12px] text-muted">
+        「{{ ITEM_ENTITY_LABELS[current] ?? current }}」は専用の入力フォームを持たないため、追加カスタム項目の入力・表示先がありません（{{ current === 'sku' ? 'SKU は商品マスタ内で管理' : '請求は締めで自動生成' }}）。基本項目の表示・表示名の調整のみ利用できます。
+      </p>
       <UiDataTable
+        v-else
         :columns="cfColumns"
         :rows="cfRows"
         empty-title="カスタム項目はありません"

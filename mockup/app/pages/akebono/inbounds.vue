@@ -6,15 +6,18 @@
  * pending の予定は取消可能（実績があると取消不可 = composable 側でガード）。
  */
 import { PackagePlus, PlusCircle } from 'lucide-vue-next'
-import type { InboundPlan } from '~/types/akebono'
+import type { InboundPlan, InboundResult } from '~/types/akebono'
+import type { CustomValues } from '~/types/domain'
 import { PLAN_STATUS_LABELS, planStatusTone } from '~/utils/akebono'
-import { fmtDate, fmtInt } from '~/utils/format'
+import { fmtDate, fmtDateTime, fmtInt } from '~/utils/format'
 import type { TableColumn } from '~/types/ui'
 
 const inbound = useInbound()
 const products = useProducts()
 const { warehouseOptions, warehouseName } = useAkebonoMasters()
-const { activePlans } = inbound
+const { listColumns, decorateRows } = useAppListView()
+const { missingRequiredCustom } = useAppFields()
+const { activePlans, results } = inbound
 const toast = useToast()
 // 二重送信ガード(Phase C: API 書込の重複作成防止。§34 の実行中フィードバック)
 const busy = ref(false)
@@ -51,6 +54,38 @@ const tableRows = computed(() =>
     lineCount: p.lines.length,
     status: p.status,
   })) as unknown as Record<string, unknown>[],
+)
+
+// ---------- 入荷実績一覧（項目カスタマイズ F-31 = inbound_result エンティティ） ----------
+// 記録系（実績）の一覧。予定（plan）側の一覧とは別枠で、実績エンティティに項目カスタマイズを適用する。
+const {
+  query: resultQuery, page: resultPage, pageSize: resultPageSize,
+  rows: resultPageRows, total: resultTotal, refresh: resultRefresh,
+} = useListView<InboundResult>({
+  source: computed(() => results.value.slice().sort((a, b) => (a.receivedAt < b.receivedAt ? 1 : -1))),
+  match: (r, q) => r.code.toLowerCase().includes(q) || r.receivedAt.includes(q),
+  fetch: params => apiListPage<InboundResult>('inboundResults', params),
+})
+
+// 一覧列は項目設定（表示 ON/OFF・表示名）で解決＋カスタム項目列を付加。派生列（予定消込・明細数）は itemKey 無し＝常時表示
+const resultColumns = computed(() => listColumns('inbound', [
+  { key: 'code', label: '入荷番号', primary: true, itemKey: 'code' },
+  { key: 'warehouse', label: '入荷倉庫', primary: true, itemKey: 'warehouseId' },
+  { key: 'receivedAt', label: '入荷日時', primary: true, itemKey: 'receivedAt' },
+  { key: 'planCode', label: '予定消込' },
+  { key: 'lineCount', label: '明細数', align: 'right', width: '90px' },
+]))
+
+const resultRows = computed(() =>
+  decorateRows('inbound', resultPageRows.value.map(r => ({
+    id: r.id,
+    code: r.code,
+    warehouse: warehouseName(r.warehouseId),
+    receivedAt: fmtDateTime(r.receivedAt),
+    planCode: r.planId ? (inbound.planById(r.planId)?.code ?? '—') : '直接入荷',
+    lineCount: r.lines.length,
+    custom: r.custom ?? {},
+  }))) as unknown as Record<string, unknown>[],
 )
 
 // ---------- 詳細ドロワー ----------
@@ -141,14 +176,15 @@ async function submitCreateInner(): Promise<void> {
 
 // ---------- 直接入荷登録 ----------
 const directOpen = ref(false)
-const directForm = ref<{ warehouseId: string; lines: { skuId: string; qty: number }[] }>({
-  warehouseId: '', lines: [],
+const directForm = ref<{ warehouseId: string; lines: { skuId: string; qty: number }[]; custom: CustomValues }>({
+  warehouseId: '', lines: [], custom: {},
 })
 
 function openDirect(): void {
   directForm.value = {
     warehouseId: warehouseOptions.value[0]?.value ?? '',
     lines: [{ skuId: '', qty: 1 }],
+    custom: {},
   }
   directOpen.value = true
 }
@@ -165,7 +201,12 @@ async function submitDirectInner(): Promise<void> {
     toast.show('入荷先倉庫を選択してください', 'crit')
     return
   }
-  const res = await inbound.registerResult({ warehouseId: f.warehouseId, lines: f.lines })
+  const missCustom = missingRequiredCustom('inbound', f.custom)
+  if (missCustom) {
+    toast.show(`${missCustom}は必須です`, 'crit')
+    return
+  }
+  const res = await inbound.registerResult({ warehouseId: f.warehouseId, lines: f.lines, custom: f.custom })
   if (!res.ok) {
     toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
     return
@@ -173,11 +214,14 @@ async function submitDirectInner(): Promise<void> {
   toast.show('入荷実績を登録しました（在庫へ入庫）', 'ok')
   directOpen.value = false
   refresh() // サーバーページング時は現在ページを取り直す（実績で予定ステータスが変わるため）
+  resultRefresh() // 実績一覧へ新規実績を反映
 }
 
 // ---------- 予定に対する入荷実績登録（残数プリフィル） ----------
 const resultOpen = ref(false)
 const resultLines = ref<{ planLineId: string; skuId: string; label: string; qty: number }[]>([])
+// 予定参照の実績登録もカスタム項目を保持する（inbound_result エンティティ = 直接登録と同一）
+const resultCustom = ref<{ custom: CustomValues }>({ custom: {} })
 
 function openResult(): void {
   if (!selectedPlan.value) return
@@ -187,6 +231,7 @@ function openResult(): void {
     label: l.label,
     qty: l.remaining,
   }))
+  resultCustom.value = { custom: {} }
   resultOpen.value = true
 }
 
@@ -199,9 +244,15 @@ async function submitResult(): Promise<void> {
 async function submitResultInner(): Promise<void> {
   const plan = selectedPlan.value
   if (!plan) return
+  const missCustom = missingRequiredCustom('inbound', resultCustom.value.custom)
+  if (missCustom) {
+    toast.show(`${missCustom}は必須です`, 'crit')
+    return
+  }
   const res = await inbound.registerResult({
     planId: plan.id,
     lines: resultLines.value.map(l => ({ planLineId: l.planLineId, skuId: l.skuId, qty: Number(l.qty) })),
+    custom: resultCustom.value.custom,
   })
   if (!res.ok) {
     toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
@@ -210,6 +261,7 @@ async function submitResultInner(): Promise<void> {
   toast.show('入荷実績を登録しました（在庫へ入庫）', 'ok')
   resultOpen.value = false
   refresh() // サーバーページング時は現在ページを取り直す（実績で予定ステータスが変わるため）
+  resultRefresh() // 実績一覧へ新規実績を反映
 }
 </script>
 
@@ -256,6 +308,26 @@ async function submitResultInner(): Promise<void> {
           </template>
         </UiDataTable>
         <UiPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
+      </UiSectionCard>
+
+      <UiSectionCard :title="`入荷実績（${resultTotal}件）`" flush>
+        <UiFilterBar>
+          <UiSearchInput v-model="resultQuery" placeholder="入荷番号・入荷日で検索" />
+        </UiFilterBar>
+        <UiDataTable
+          :columns="resultColumns"
+          :rows="resultRows"
+          empty-title="入荷実績がありません"
+          empty-hint="「直接入荷登録」または予定からの実績登録で記録されます"
+        >
+          <template #cell-code="{ row }">
+            <span class="font-medium">{{ row.code }}</span>
+          </template>
+          <template #cell-lineCount="{ row }">
+            <span class="num tabular-nums">{{ fmtInt(Number(row.lineCount)) }}</span>
+          </template>
+        </UiDataTable>
+        <UiPagination v-model:page="resultPage" v-model:page-size="resultPageSize" :total="resultTotal" />
       </UiSectionCard>
     </div>
 
@@ -355,6 +427,7 @@ async function submitResultInner(): Promise<void> {
         <UiFormField label="入荷明細" required>
           <WidgetsAkebonoLineItems v-model:model-value="directForm.lines" :sku-options="skuOptions" />
         </UiFormField>
+        <WidgetsCustomFields entity="inbound" v-model="directForm" />
       </div>
       <template #footer>
         <button type="button" class="btn btn-sm" @click="directOpen = false">キャンセル</button>
@@ -385,6 +458,7 @@ async function submitResultInner(): Promise<void> {
             :aria-label="`${l.label} の入荷数`"
           >
         </div>
+        <WidgetsCustomFields entity="inbound" v-model="resultCustom" />
       </div>
       <template #footer>
         <button type="button" class="btn btn-sm" @click="resultOpen = false">キャンセル</button>
