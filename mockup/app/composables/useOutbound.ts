@@ -156,11 +156,15 @@ export function useOutbound() {
       const built = buildShipmentSaleLines(resultLines, (skuId) => {
         const sku = products.skuById(skuId)!
         const product = products.productOfSku(skuId)
-        return { unitPrice: products.sellPriceOf(sku), costPrice: products.costOf(sku), billingType: product?.billingType ?? null }
+        return {
+          unitPrice: products.sellPriceOf(sku), costPrice: products.costOf(sku),
+          billingType: product?.billingType ?? null, supplierCompanyId: product?.defaultSupplierCompanyId ?? null,
+        }
       }, sales.value.map(r => r.code))
       const newSales: SalesRecord[] = built.map((s, idx) => ({
         id: `${resultId}-sr${idx}`, code: s.code, salesDate: todayJst(), companyId, segmentId,
         skuId: s.skuId, qty: s.qty, unitPrice: s.unitPrice, amount: s.amount, costPrice: s.costPrice,
+        supplierCompanyId: s.supplierCompanyId,
         channel: null, billingType: s.billingType as BillingType | null,
         sourceKind: 'shipment', sourceRef: s.sourceRef, invoiceId: null, correctionOf: null, active: true,
       }))

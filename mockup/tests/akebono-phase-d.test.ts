@@ -35,9 +35,10 @@ describe('buildShipmentSaleLines（出荷実績 → 売上明細の組み立て 
     unitPrice: skuId === 'sku-a' ? 1500 : 800,
     costPrice: skuId === 'sku-a' ? 600 : 300,
     billingType: 'one_time' as string | null,
+    supplierCompanyId: skuId === 'sku-a' ? 'c-art-a' : null,
   })
 
-  it('明細ごとに amount = round(qty × unitPrice)・sourceRef = obr:<明細行id>・属性を注入', () => {
+  it('明細ごとに amount = round(qty × unitPrice)・sourceRef = obr:<明細行id>・属性（供給元含む）を注入', () => {
     const out = buildShipmentSaleLines(
       [{ id: 'obr-1-0', skuId: 'sku-a', qty: 3 }],
       resolve, [],
@@ -45,8 +46,16 @@ describe('buildShipmentSaleLines（出荷実績 → 売上明細の組み立て 
     expect(out).toHaveLength(1)
     expect(out[0]).toMatchObject({
       skuId: 'sku-a', qty: 3, unitPrice: 1500, amount: 4500, costPrice: 600,
-      billingType: 'one_time', sourceRef: 'obr:obr-1-0',
+      billingType: 'one_time', supplierCompanyId: 'c-art-a', sourceRef: 'obr:obr-1-0',
     })
+  })
+
+  it('供給元未設定（null）の SKU はスナップショットも null（分析はライブ解決へフォールバック）', () => {
+    const out = buildShipmentSaleLines(
+      [{ id: 'obr-2-0', skuId: 'sku-b', qty: 1 }],
+      resolve, [],
+    )
+    expect(out[0]!.supplierCompanyId).toBeNull()
   })
 
   it('同一出荷の複数行で SR コードが重複しない（累積採番。空既存 → SR-0001, SR-0002）', () => {

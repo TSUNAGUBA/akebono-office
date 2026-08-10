@@ -818,8 +818,9 @@ async function applySalesRecords(
     if (!segmentId) { fail(unresolvedRefMsg('事業セグメント', v.segmentId ?? '', segments)); continue }
     // SKU の突合（既定 = id → 有効 SKU コードの順。突合キー設定時は指定項目のみで解決）
     const skuRaw = v.skuId ?? ''
-    const { rows: skuRows } = await db.query<{ id: string; costPrice: number | null; stdCost: number | null; billingType: string | null }>(
-      `SELECT s.id, s.cost_price AS "costPrice", p.standard_cost AS "stdCost", p.billing_type AS "billingType"
+    const { rows: skuRows } = await db.query<{ id: string; costPrice: number | null; stdCost: number | null; billingType: string | null; supplierId: string | null }>(
+      `SELECT s.id, s.cost_price AS "costPrice", p.standard_cost AS "stdCost", p.billing_type AS "billingType",
+              p.default_supplier_company_id AS "supplierId"
        FROM product_skus s LEFT JOIN products p ON p.id = s.product_id
        WHERE ${skuCond.cond} LIMIT 2`, [skuRaw])
     if (skuRows.length === 0) {
@@ -848,11 +849,11 @@ async function applySalesRecords(
         const code = await nextDocCode(db, 'SR')
         const { rowCount: n } = await db.query(
           `INSERT INTO sales_records (id, code, sales_date, company_id, segment_id, sku_id, qty, unit_price, amount,
-             cost_price, channel, billing_type, source_kind, source_ref, custom)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'import', $13, $14)
+             cost_price, supplier_company_id, channel, billing_type, source_kind, source_ref, custom)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'import', $14, $15)
            ON CONFLICT (source_ref) WHERE source_kind = 'import' AND source_ref IS NOT NULL DO NOTHING`,
           [newId('sr'), code, salesDate, companyId, segmentId, sku.id, qty, unitPrice, Math.round(qty * unitPrice),
-            sku.costPrice ?? sku.stdCost ?? null, channel, sku.billingType, sourceRef, JSON.stringify(customOf(v))])
+            sku.costPrice ?? sku.stdCost ?? null, sku.supplierId, channel, sku.billingType, sourceRef, JSON.stringify(customOf(v))])
         return n ?? 0
       })
       if (rowCount === 0) out.skipped++ // 同一内容行の再取込（冪等 = 原則2）

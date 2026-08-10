@@ -18,6 +18,7 @@ import type { FieldDef } from '~/types/ui'
 import { fmtPct } from '~/utils/format'
 
 const m = useAkebonoMasters()
+const con = useConsignment()
 const toast = useToast()
 const confirm = useConfirm()
 
@@ -179,10 +180,24 @@ async function save(): Promise<void> {
       return
     }
     toast.show(mode.value === 'create' ? `${currentMeta.value.label}を追加しました` : `${currentMeta.value.label}を更新しました`)
+    // 委託条件の整合検証（改修 P1。保存後に店舗取り分 + 作家率 > 100% の逆ざや組があれば警告 = 非ブロッキング）
+    if (activeTab.value === 'consignmentTerms') {
+      const warnings = con.settlementIntegrity(String(payload.segmentId ?? ''))
+      if (warnings.length > 0) {
+        toast.show(`保存しました。ただし店舗取り分 + 作家率 が 100% を超える組が ${warnings.length} 件あり、当社取り分が逆ざやになります。委託条件を確認してください`, 'warn')
+      }
+    }
     if (res.id) selectedId.value = res.id
     mode.value = 'view'
   } finally { saving.value = false }
 }
+
+// ---------- 委託条件の整合警告バナー（改修 P1。設定過剰の全体可視化） ----------
+const consignmentWarnings = computed(() => {
+  if (activeTab.value !== 'consignmentTerms') return []
+  const segIds = [...new Set(m.consignmentTerms.value.map(t => t.segmentId))]
+  return segIds.flatMap(sid => con.settlementIntegrity(sid))
+})
 
 async function archiveSelected(): Promise<void> {
   const s = selected.value
@@ -278,6 +293,23 @@ function asTerm(row: Row): ConsignmentTerm {
       <span class="text-sub">トップに並ぶ業態アプリの表示名・アイコンや、商品登録の既定値（単位・課金区分・バリアント軸）は</span>
       <NuxtLink to="/akebono/settings/segments" class="link font-semibold">業態アプリ設定</NuxtLink>
       <span class="text-sub">で設定できます。</span>
+    </div>
+
+    <!-- 委託条件の整合警告（改修 P1。店舗取り分 + 作家率 > 100% の逆ざや組を提示） -->
+    <div
+      v-if="activeTab === 'consignmentTerms' && consignmentWarnings.length > 0"
+      class="rounded-[10px] border border-warn bg-warn-soft px-3 py-2 text-[12px] text-ink"
+    >
+      <div class="font-semibold text-warn">委託条件の設定を確認してください（当社取り分が逆ざやになる組が {{ consignmentWarnings.length }} 件）</div>
+      <ul class="mt-1 grid gap-0.5">
+        <li v-for="(w, i) in consignmentWarnings" :key="i">
+          {{ w.storeName }}（取り分 {{ fmtPct(w.storeShare, 0) }}）× {{ w.artistName }}（作家 {{ fmtPct(w.artistRate, 0) }}）
+          → 当社取り分 <span class="font-semibold text-crit">{{ fmtPct(w.residual, 0) }}</span>
+        </li>
+      </ul>
+      <div class="mt-1 text-[11px] text-muted">
+        店舗取り分率と作家率の合計が上代（100%）を超えると、弊社の取り分がマイナスになります。いずれかの率を見直してください。
+      </div>
     </div>
 
     <UiSectionCard :title="`${currentMeta.label}（${total}件）`" :description="currentMeta.description" flush>

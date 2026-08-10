@@ -183,7 +183,7 @@ akebono_wishes / sales_monthly / media_articles と同方針。各画面は空�
 | `OutboundPlan`（outbound_plans） | id, code, companyId, warehouseId, segmentId, dueDate, status, lines jsonb | 指示系（取消はステータス） | C2 |
 | `OutboundResult`（outbound_results） | id, code, planId, warehouseId, companyId, shippedAt, lines jsonb, **custom jsonb（F-31）** | **記録系（追記のみ）**。在庫不足 409・出庫(−) + 店舗納品（partner_roles=store × store_deposit 倉庫）は預け在庫へ transfer_in(+) | C2 |
 | `InventoryTransaction`（inventory_transactions) | id, skuId, warehouseId, qty(±), kind, reason, refType, refLineId, occurredAt, **custom jsonb（F-31）**。**UNIQUE(ref_type, ref_line_id, kind)** = 冪等キー・INDEX(sku_id, warehouse_id) | **在庫の SoT（台帳・追記のみ）**。残高 = Σqty。**API モードは残高 = サーバー全量集約 `GET /inventory-balances`（GROUP BY・HAVING SUM<>0）**（明細 GET は表示用の LIMIT 20000 打ち切りあり = 2 万行超で残高が壊れる Codex P1-2 の是正）。モックモードは全件ローカル shared foldBalances。調整/移動/棚卸は専用 API | C2 |
-| `SalesRecord`（sales_records） | id, code, salesDate, companyId, segmentId, skuId, qty, unitPrice, amount, costPrice/billingType（サーバーが SKU/商品から解決）, channel, sourceKind, invoiceId（請求リンク）, correctionOf, active, **custom jsonb（F-31）** | **売上の SoT（記録系・訂正は赤黒）**。統合メトリクス（/v1/media/integrated）の売上軸の源泉。請求済みの訂正は 409（請求側で赤伝） | C3（売上） |
+| `SalesRecord`（sales_records） | id, code, salesDate, companyId, segmentId, skuId, qty, unitPrice, amount, costPrice/billingType（サーバーが SKU/商品から解決）, **supplierCompanyId（供給元＝作家/窯元のスナップショット。0055 = 改修 P3。計上時に商品の default_supplier_company_id を凍結・null は現在値へフォールバック）**, channel, sourceKind, invoiceId（請求リンク）, correctionOf, active, **custom jsonb（F-31）** | **売上の SoT（記録系・訂正は赤黒）**。統合メトリクス（/v1/media/integrated）の売上軸の源泉。請求済みの訂正は 409（請求側で赤伝）。作家別分析・委託精算の作家帰属は supplierCompanyId を優先 | C3（売上） |
 | `Invoice`（invoices） | id, code, companyId, segmentId(null = 合算), periodFrom/To, invoiceType, status, issuedAt, totalAmount, creditFor, lines/snapshot/sourceRecordIds jsonb。**UNIQUE(company_id, period_from, period_to, invoice_type) WHERE draft**（0033 = 並行 close の二重ドラフト防止） | **確定系（issued 以降不変・訂正は赤伝 = マイナス請求の追記 + 売上リンク解除）**。draft は洗い替え可（設定系） | C3 |
 | `PaymentNotice`（payment_notices） | id, code, companyId(作家), segmentId, periodFrom/To, status, payableAmount, lines/snapshot jsonb | **確定系**（発行時点の委託条件をスナップショット凍結） | C3 |
 | `PaymentReceipt`（payment_receipts） | id, invoiceId, receivedAt, amount, method, **voidedAt/voidedBy（0033 = 監査列付き論理取消）** | **記録系（追記のみ・部分入金可）**。有効入金（voided_at IS NULL）の合計が全額で請求を paid・取消で paid → issued 再計算（取消フロー = 原則9.5） | C3 |
@@ -205,6 +205,22 @@ akebono_wishes / sales_monthly / media_articles と同方針。各画面は空�
 > 予定・指示 = ステータス取消 / **委託精算（マージン請求 + 支払通知の組）= Phase D（0037）で取消フロー実装済み**
 > （マージン請求の赤伝 + 支払通知の論理取消 voided_at + 売上リンク解除 = 再締め可能。§1.7 参照）。
 > 入荷/出荷/生産の実績は伝票レベルの補償手段は未対応（在庫の数量は adjust で補償可 = §40 残課題）。
+>
+> **委託仲介の分析軸・整合検証（改修 P1/P2/P3。オペレーター指示 2026-08-10）:**
+> - **P3（供給元スナップショット・0055）:** sales_records に `supplier_company_id`（作家/窯元）を追加し、
+>   計上時（手入力・出荷・取込・赤黒訂正の全経路）に商品の `default_supplier_company_id` を凍結する。
+>   委託精算の作家帰属・作家別分析は `COALESCE(sales_records.supplier_company_id, products.default_supplier_company_id)`
+>   で解決（NULL の既存行は現在値へフォールバック = 後方互換）。これにより商品の供給元を後日付け替えても
+>   計上済み売上の作家帰属が遡って変わらない（データフロー整合性 = 原則6・下位互換 = 原則7）。金額算定・帰属解決とも
+>   両モード同一（shared/domain/akebono）。
+> - **P2（作家別・販売店別分析）:** 売上の販売先軸（company_id = 店舗/得意先）に加え、供給元軸（作家/窯元）で
+>   ロールアップする（useAkebonoSales.supplierBreakdown = 売上ページの内訳）。供給元未解決の明細は「未設定」に集約し
+>   データ整備の要否を可視化する。
+> - **P1（弊社取り分の可視化・整合検証）:** 三者按分の弊社（当社）取り分率 = 1 − 店舗取り分率 − 作家率（sales_rate）を
+>   純関数化（shared/domain/akebono `residualMarginRate`）。委託精算の締め前プレビュー
+>   （useConsignment.settlementPreview = 書込なし試算）で当社取り分（税抜）を提示し、委託条件マスタ・締めモーダルで
+>   「店舗取り分 + 作家率 > 100%（逆ざや）」の組を非ブロッキング警告する（settlementIntegrity）。api-design の
+>   「店舗請求 − 作家支払 = 当社粗利 ≥ 0」の整合を設定段階で担保する。
 
 ### 1.7 Akebono 残記録系・導出系の API 永続化（Phase D。2026-07-29 追加・本実装 = migration 0035-0038 = 最終フェーズ）
 

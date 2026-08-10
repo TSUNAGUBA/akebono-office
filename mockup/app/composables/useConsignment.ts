@@ -15,8 +15,44 @@ import type {
 import type { Company, Result } from '~/types/domain'
 import {
   buildSettlementSnapshot, calcPayoutAmount, calcStoreMargin, calcTax,
-  consignmentCancelBlockReason, nextCode,
+  consignmentCancelBlockReason, nextCode, residualMarginRate,
 } from '~/utils/akebono'
+
+/** 委託条件の整合警告（sales_rate の作家率 × 店舗取り分率で当社取り分が負になる組。改修 P1） */
+export interface ConsignmentIntegrityWarning {
+  storeId: string
+  storeName: string
+  storeShare: number
+  artistId: string
+  artistName: string
+  artistRate: number
+  /** 当社取り分（残余率）= 1 − 店舗取り分 − 作家率（負 = 逆ざや） */
+  residual: number
+}
+
+/** 委託精算プレビュー: 締め前に当社取り分（残余）を可視化する（改修 P1） */
+export interface ConsignmentPreviewStore {
+  companyId: string
+  name: string
+  salesTotal: number
+  storeShare: number
+  billed: number
+}
+export interface ConsignmentPreviewArtist {
+  companyId: string
+  name: string
+  payable: number
+}
+export interface ConsignmentPreview {
+  stores: ConsignmentPreviewStore[]
+  artists: ConsignmentPreviewArtist[]
+  salesTotal: number
+  totalBilled: number
+  totalPayout: number
+  /** 当社粗利（税抜）= 店舗請求合計 − 作家支払合計。負 = 逆ざや（設定要確認） */
+  companyMargin: number
+  recordCount: number
+}
 
 export function useConsignment() {
   const { tbl, commit, nextId } = useMockDb()
@@ -266,10 +302,12 @@ export function useConsignment() {
     }
 
     // --- 作家別支払通知 ---
+    // 作家帰属 = 売上明細の供給元スナップショット（0055）を優先し、未設定（既存行）は商品の現在値へフォールバック。
+    // 精算後に商品の既定仕入先を付け替えても、計上済み売上の作家帰属は当時のまま（API と同一 = 原則6）。
     const byArtist = new Map<string, SalesRecord[]>()
     for (const r of rows) {
       const product = products.productById(products.skuById(r.skuId)?.productId ?? '')
-      const artistId = product?.defaultSupplierCompanyId
+      const artistId = r.supplierCompanyId ?? product?.defaultSupplierCompanyId
       if (!artistId) continue
       byArtist.set(artistId, [...(byArtist.get(artistId) ?? []), r])
     }
@@ -369,9 +407,84 @@ export function useConsignment() {
     return { ok: true, id }
   }
 
+  // ---------- 委託条件の整合検証・精算プレビュー（改修 P1: 弊社取り分の可視化） ----------
+
+  /**
+   * 委託条件の整合検証。対象セグメントの「店舗取り分率 × sales_rate 作家率」の全組で
+   * 当社取り分（残余 = 1 − 店舗取り分 − 作家率）が負になる組を返す（設定過剰の検出）。
+   * purchase_cost 方式の作家は率で評価できないため対象外。会社ごとに有効な最新条件（termOf）で評価する。
+   */
+  function settlementIntegrity(segmentId: string): ConsignmentIntegrityWarning[] {
+    const terms = (consignmentTerms.value as ConsignmentTerm[]).filter(t => t.active !== false && t.segmentId === segmentId)
+    const storeIds = [...new Set(terms.filter(t => t.role === 'store').map(t => t.companyId))]
+    const artistIds = [...new Set(terms.filter(t => t.role === 'consignor_artist').map(t => t.companyId))]
+    const out: ConsignmentIntegrityWarning[] = []
+    for (const sid of storeIds) {
+      const st = termOf(sid, segmentId, 'store')
+      if (st?.marginRate == null) continue
+      for (const aid of artistIds) {
+        const at = termOf(aid, segmentId, 'consignor_artist')
+        if (at?.payoutMethod !== 'sales_rate' || at.payoutRate == null) continue
+        const residual = residualMarginRate(st.marginRate, at.payoutRate)
+        if (residual < 0) {
+          out.push({
+            storeId: sid, storeName: companyName(sid), storeShare: st.marginRate,
+            artistId: aid, artistName: companyName(aid), artistRate: at.payoutRate, residual,
+          })
+        }
+      }
+    }
+    return out
+  }
+
+  /**
+   * 委託精算プレビュー（締め前の試算）。closeConsignment と同一の純関数・同一の作家帰属解決
+   * （供給元スナップショット 0055 優先）で、店舗別請求・作家別支払・当社粗利（税抜）を算定する。
+   * 書込は行わない（原則2 = 副作用なしの試算）。
+   */
+  function settlementPreview(segmentId: string, month: string): ConsignmentPreview {
+    const rows = consignableSales(segmentId, month)
+    // 店舗別請求
+    const byStore = new Map<string, SalesRecord[]>()
+    for (const r of rows) byStore.set(r.companyId, [...(byStore.get(r.companyId) ?? []), r])
+    const stores: ConsignmentPreviewStore[] = []
+    let totalBilled = 0
+    for (const [storeId, storeRows] of byStore) {
+      const storeTerm = termOf(storeId, segmentId, 'store')
+      const snapshot = buildSettlementSnapshot(storeTerm, undefined, taxRateValue(storeTerm?.taxRateId))
+      const salesTotal = storeRows.reduce((s, r) => s + r.amount, 0)
+      const billed = calcStoreMargin(salesTotal, snapshot)
+      totalBilled += billed
+      stores.push({ companyId: storeId, name: companyName(storeId), salesTotal, storeShare: snapshot.marginRate ?? 0, billed })
+    }
+    // 作家別支払（供給元スナップショット優先 = closeConsignment と同一解決）
+    const byArtist = new Map<string, SalesRecord[]>()
+    for (const r of rows) {
+      const product = products.productById(products.skuById(r.skuId)?.productId ?? '')
+      const artistId = r.supplierCompanyId ?? product?.defaultSupplierCompanyId
+      if (!artistId) continue
+      byArtist.set(artistId, [...(byArtist.get(artistId) ?? []), r])
+    }
+    const artists: ConsignmentPreviewArtist[] = []
+    let totalPayout = 0
+    for (const [artistId, artistRows] of byArtist) {
+      const artistTerm = termOf(artistId, segmentId, 'consignor_artist')
+      const snapshot = buildSettlementSnapshot(undefined, artistTerm, taxRateValue(artistTerm?.taxRateId))
+      const payable = artistRows.reduce((s, r) => s + calcPayoutAmount(r, snapshot, resolveUnitCost), 0)
+      totalPayout += payable
+      artists.push({ companyId: artistId, name: companyName(artistId), payable })
+    }
+    const salesTotal = rows.reduce((s, r) => s + r.amount, 0)
+    return {
+      stores, artists, salesTotal, totalBilled, totalPayout,
+      companyMargin: totalBilled - totalPayout, recordCount: rows.length,
+    }
+  }
+
   return {
     invoices, notices, receipts,
     companyName, termOf, resolveUnitCost, billableSales, consignableSales, paidAmountOf,
     closeBilling, issue, voidInvoice, recordReceipt, voidReceipt, closeConsignment, cancelConsignment, confirmNotice,
+    settlementIntegrity, settlementPreview,
   }
 }

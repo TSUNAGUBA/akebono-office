@@ -9,7 +9,7 @@ import { FileText, HandCoins, Plus, Wallet } from 'lucide-vue-next'
 import type { Invoice, PaymentNotice, PaymentNoticeStatus } from '~/types/akebono'
 import type { TableColumn, Tone } from '~/types/ui'
 import { INVOICE_STATUS_LABELS, PAYOUT_METHOD_LABELS, invoiceStatusTone } from '~/utils/akebono'
-import { fmtDateTime, fmtYen } from '~/utils/format'
+import { fmtDateTime, fmtPct, fmtYen } from '~/utils/format'
 
 const con = useConsignment()
 const sales = useAkebonoSales()
@@ -167,6 +167,15 @@ function openCloseConsign(): void {
   closeConsignForm.value = { segmentId: preferred ?? consignSegmentOptions.value[0]?.value ?? '', month: currentMonth }
   closeConsignOpen.value = true
 }
+// 締め前プレビュー（当社取り分 = 弊社の残余の可視化。改修 P1。書込なしの試算）
+const closePreview = computed(() =>
+  closeConsignForm.value.segmentId
+    ? con.settlementPreview(closeConsignForm.value.segmentId, closeConsignForm.value.month)
+    : null)
+// 委託条件の整合警告（店舗取り分 + 作家率 > 100% の逆ざや組。締め対象セグメント基準。改修 P1）
+const closeIntegrity = computed(() =>
+  closeConsignForm.value.segmentId ? con.settlementIntegrity(closeConsignForm.value.segmentId) : [])
+
 async function runCloseConsign(): Promise<void> {
   if (busy.value) return
   busy.value = true
@@ -464,6 +473,53 @@ async function cancelReceipt(id: string): Promise<void> {
         <UiFormField label="対象月" required>
           <input v-model="closeConsignForm.month" type="month" class="input" aria-label="対象月">
         </UiFormField>
+
+        <!-- 締め前プレビュー（当社取り分の可視化。改修 P1。書込なしの試算） -->
+        <div v-if="closePreview" class="rounded-[10px] border border-line bg-page">
+          <div class="border-b border-line px-3 py-2 text-[12px] font-semibold text-sub">
+            精算プレビュー（試算・{{ closePreview.recordCount }}件の未精算 店舗売上）
+          </div>
+          <div v-if="closePreview.recordCount === 0" class="px-3 py-3 text-[12px] text-muted">
+            対象の未精算 店舗売上がありません（この業態 × 月には締める売上がありません）。
+          </div>
+          <div v-else class="grid gap-2 p-3">
+            <div class="grid grid-cols-2 gap-2 text-[12px]">
+              <div class="flex items-center justify-between gap-2 rounded-[8px] bg-surface px-2.5 py-1.5">
+                <span class="text-muted">委託売上（上代）合計</span>
+                <span class="num tabular-nums font-semibold">{{ fmtYen(closePreview.salesTotal) }}</span>
+              </div>
+              <div class="flex items-center justify-between gap-2 rounded-[8px] bg-surface px-2.5 py-1.5">
+                <span class="text-muted">店舗へ請求（当社受取）</span>
+                <span class="num tabular-nums font-semibold">{{ fmtYen(closePreview.totalBilled) }}</span>
+              </div>
+              <div class="flex items-center justify-between gap-2 rounded-[8px] bg-surface px-2.5 py-1.5">
+                <span class="text-muted">作家へ支払</span>
+                <span class="num tabular-nums font-semibold">{{ fmtYen(closePreview.totalPayout) }}</span>
+              </div>
+              <div
+                class="flex items-center justify-between gap-2 rounded-[8px] px-2.5 py-1.5"
+                :class="closePreview.companyMargin < 0 ? 'bg-crit-soft' : 'bg-brand-soft'"
+              >
+                <span class="font-semibold" :class="closePreview.companyMargin < 0 ? 'text-crit' : 'text-brand'">当社取り分（税抜）</span>
+                <span class="num tabular-nums font-bold" :class="closePreview.companyMargin < 0 ? 'text-crit' : 'text-brand'">{{ fmtYen(closePreview.companyMargin) }}</span>
+              </div>
+            </div>
+            <p v-if="closePreview.companyMargin < 0" class="rounded-[8px] border border-crit bg-crit-soft px-2.5 py-1.5 text-[11px] text-crit">
+              当社取り分がマイナス（逆ざや）です。店舗取り分率と作家率の設定を確認してください。
+            </p>
+          </div>
+        </div>
+
+        <!-- 委託条件の整合警告（設定過剰 = 店舗取り分 + 作家率 > 100% の組。改修 P1） -->
+        <div v-if="closeIntegrity.length > 0" class="rounded-[8px] border border-warn bg-warn-soft px-3 py-2 text-[11px] text-ink">
+          <div class="font-semibold text-warn">委託条件の設定を確認してください（{{ closeIntegrity.length }}件）</div>
+          <ul class="mt-1 grid gap-0.5">
+            <li v-for="(w, i) in closeIntegrity" :key="i">
+              {{ w.storeName }}（取り分 {{ fmtPct(w.storeShare, 0) }}）× {{ w.artistName }}（作家 {{ fmtPct(w.artistRate, 0) }}）→ 当社取り分 {{ fmtPct(w.residual, 0) }}
+            </li>
+          </ul>
+        </div>
+
         <p class="text-[11px] text-muted">
           店舗別マージン請求と作家別支払通知を発行します。対象売上には精算リンクを張り、再精算を防ぎます（冪等）。
         </p>

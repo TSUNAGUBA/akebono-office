@@ -21,7 +21,7 @@ const {
   filteredRecords, activeSegments, segmentFilter, selectedFy,
   fiscalYearOptions, fiscalMonthLabels, currentFySeries, previousFySeries,
   currentMonthSales, currentMonthYoY, currentMonthMargin,
-  segmentBreakdown, customerBreakdown, segmentComparison,
+  segmentBreakdown, customerBreakdown, supplierBreakdown, segmentComparison,
   segmentName, companyName, create, correct,
 } = sales
 
@@ -62,6 +62,12 @@ const customerLabels = computed(() => customerBreakdown.value.map(c => c.label))
 const customerSeries = computed(() => [
   { label: '売上', data: customerBreakdown.value.map(c => c.value) },
 ])
+// 仕入先（作家/窯元）別内訳（改修 P2 = 窯元視点の売上分析）
+const supplierLabels = computed(() => supplierBreakdown.value.map(c => c.label))
+const supplierSeries = computed(() => [
+  { label: '売上', data: supplierBreakdown.value.map(c => c.value) },
+])
+const hasSupplierBreakdown = computed(() => supplierBreakdown.value.length > 0)
 
 // ---------- 明細一覧 ----------
 const { listColumns, decorateRows } = useAppListView()
@@ -272,10 +278,20 @@ const entryAmount = computed(() => {
           :value-formatter="fmtYenCompact"
         />
         <ChartsBarChartCard
-          class="lg:col-span-5"
-          :title="`得意先別内訳（${selectedFy}年度）`"
+          :class="hasSupplierBreakdown ? 'lg:col-span-3' : 'lg:col-span-5'"
+          :title="`販売先（店舗・得意先）別内訳（${selectedFy}年度）`"
           :labels="customerLabels"
           :series="customerSeries"
+          horizontal
+          :height="200"
+          :y-formatter="fmtYenCompact"
+        />
+        <ChartsBarChartCard
+          v-if="hasSupplierBreakdown"
+          class="lg:col-span-2"
+          :title="`仕入先（作家・窯元）別内訳（${selectedFy}年度）`"
+          :labels="supplierLabels"
+          :series="supplierSeries"
           horizontal
           :height="200"
           :y-formatter="fmtYenCompact"
