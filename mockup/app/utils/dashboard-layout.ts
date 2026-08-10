@@ -25,7 +25,10 @@ import {
   type MenuCategoryDef, OTHER_CATEGORY_ID, OTHER_CATEGORY_LABEL,
 } from '~/utils/menu-registry'
 
-/** 通知欄の位置。side=右サイド（現行） / bottom=メニュー下 / hidden=非表示 */
+/**
+ * 通知欄の位置（**PC シーン専用**）。side=右サイド（現行・lg+） / bottom=メニュー下（md+） / hidden=非表示。
+ * モバイルは本設定に依存せず、メニュー最優先・通知はヘッダーのベル/下部ナビ「通知」から開く（index.vue で分岐）。
+ */
 export type NotificationPlacement = 'side' | 'bottom' | 'hidden'
 /** カード密度（余白）。comfortable=標準 / compact=詰めて表示 */
 export type LayoutDensity = 'comfortable' | 'compact'

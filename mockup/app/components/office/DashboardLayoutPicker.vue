@@ -8,7 +8,7 @@
  * - 「セクションを編集」タブ（#25）: セクション構成そのものを 3 階層で編集（OfficeDashboardSectionEditor）
  * レスポンシブ（原則8）: テンプレートは 1 → 2 列で流し込む
  */
-import { Check, RotateCcw } from 'lucide-vue-next'
+import { Check, RotateCcw, Smartphone } from 'lucide-vue-next'
 import type { ApplyScope } from '~/composables/useDashboardLayout'
 
 const {
@@ -103,6 +103,15 @@ async function onReset(): Promise<void> {
       現在有効:
       <span class="font-bold text-brand">{{ SCOPE_LABELS[resolvedScope] }}</span>
       ／ テンプレート「<span class="font-semibold">{{ templateName(activeTemplateId) }}</span>」
+    </p>
+
+    <!-- モバイル/PC のシーン分離を明示（オペレーター指示 2026-08-10）。通知欄の配置は PC 表示に適用される -->
+    <p class="flex items-start gap-1.5 rounded-lg border border-line px-3 py-2 text-[11px] text-muted">
+      <Smartphone class="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+      <span>
+        モバイル表示は<b class="text-sub">メニューを最優先</b>し、通知はヘッダーのベル（未読バッジ付き）／下部ナビ「通知」から開きます。
+        下のテンプレート設定（<b class="text-sub">通知欄の位置</b>など）は主に<b class="text-sub">PC 表示</b>に適用されます（セクション構成・密度はモバイルにも反映）。
+      </span>
     </p>
 
     <!-- 適用スコープ -->
