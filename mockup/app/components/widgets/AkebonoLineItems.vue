@@ -43,11 +43,12 @@ function setField(idx: number, field: keyof LineRow, value: string): void {
     <div v-if="modelValue.length === 0" class="rounded-[8px] border border-dashed border-line px-3 py-4 text-center text-[12px] text-muted">
       明細がありません。「行を追加」で入力してください
     </div>
+    <!-- モバイル: SKU を全幅 → 数量/単価/削除を下段の 1 行に。PC(sm+): 1 行グリッド（sm:contents で子を格上げ） -->
     <div
       v-for="(row, idx) in modelValue"
       :key="idx"
-      class="grid items-center gap-2"
-      :class="priceLabel ? 'grid-cols-[1fr_72px_96px_36px]' : 'grid-cols-[1fr_72px_36px]'"
+      class="grid gap-2 rounded-[8px] border border-line p-2 sm:items-center sm:rounded-none sm:border-0 sm:p-0"
+      :class="priceLabel ? 'sm:grid-cols-[1fr_72px_96px_36px]' : 'sm:grid-cols-[1fr_72px_36px]'"
     >
       <UiSelect
         :model-value="row.skuId"
@@ -55,18 +56,20 @@ function setField(idx: number, field: keyof LineRow, value: string): void {
         aria-label="SKU"
         @update:model-value="setField(idx, 'skuId', $event)"
       />
-      <input
-        :value="row.qty" type="number" min="1" step="1" class="input text-right" aria-label="数量"
-        @input="setField(idx, 'qty', ($event.target as HTMLInputElement).value)"
-      >
-      <input
-        v-if="priceLabel"
-        :value="row.price ?? 0" type="number" min="0" step="1" class="input text-right" :aria-label="priceLabel"
-        @input="setField(idx, 'price', ($event.target as HTMLInputElement).value)"
-      >
-      <button type="button" class="btn btn-ghost btn-sm px-1.5" aria-label="行を削除" @click="removeRow(idx)">
-        <Trash2 class="h-4 w-4 text-crit" aria-hidden="true" />
-      </button>
+      <div class="flex items-center gap-2 sm:contents">
+        <input
+          :value="row.qty" type="number" min="1" step="1" class="input min-w-0 flex-1 text-right sm:flex-none" aria-label="数量"
+          @input="setField(idx, 'qty', ($event.target as HTMLInputElement).value)"
+        >
+        <input
+          v-if="priceLabel"
+          :value="row.price ?? 0" type="number" min="0" step="1" class="input min-w-0 flex-1 text-right sm:flex-none" :aria-label="priceLabel"
+          @input="setField(idx, 'price', ($event.target as HTMLInputElement).value)"
+        >
+        <button type="button" class="btn btn-ghost btn-sm shrink-0 px-1.5" aria-label="行を削除" @click="removeRow(idx)">
+          <Trash2 class="h-4 w-4 text-crit" aria-hidden="true" />
+        </button>
+      </div>
     </div>
     <div class="flex items-center justify-between">
       <button type="button" class="btn btn-sm" @click="addRow">

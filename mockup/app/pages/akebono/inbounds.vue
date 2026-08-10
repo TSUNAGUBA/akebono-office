@@ -360,7 +360,7 @@ async function submitResultInner(): Promise<void> {
         <div>
           <div class="mb-1.5 text-[11px] font-semibold text-muted">予定明細</div>
           <div class="grid gap-1.5">
-            <div class="grid grid-cols-[1fr_60px_60px_60px] gap-2 border-b border-line pb-1 text-[11px] font-semibold text-muted">
+            <div class="hidden grid-cols-[1fr_60px_60px_60px] gap-2 border-b border-line pb-1 text-[11px] font-semibold text-muted sm:grid">
               <span>SKU</span>
               <span class="text-right">予定数</span>
               <span class="text-right">入荷済</span>
@@ -369,15 +369,16 @@ async function submitResultInner(): Promise<void> {
             <div
               v-for="l in detailLines"
               :key="l.id"
-              class="grid grid-cols-[1fr_60px_60px_60px] items-center gap-2 border-b border-line pb-1.5 text-[13px] last:border-0"
+              class="grid gap-0.5 border-b border-line pb-1.5 text-[13px] last:border-0 sm:grid-cols-[1fr_60px_60px_60px] sm:items-center sm:gap-2"
             >
               <span class="flex min-w-0 items-center gap-2">
                 <AkebonoProductThumb :sku-id="l.skuId" :size="20" />
                 <span class="truncate">{{ l.label }}</span>
               </span>
-              <span class="num text-right tabular-nums">{{ fmtInt(l.planned) }}</span>
-              <span class="num text-right tabular-nums">{{ fmtInt(l.received) }}</span>
-              <span class="num text-right tabular-nums" :class="l.remaining > 0 ? 'text-warn font-semibold' : 'text-muted'">{{ fmtInt(l.remaining) }}</span>
+              <span class="num hidden text-right tabular-nums sm:block">{{ fmtInt(l.planned) }}</span>
+              <span class="num hidden text-right tabular-nums sm:block">{{ fmtInt(l.received) }}</span>
+              <span class="num hidden text-right tabular-nums sm:block" :class="l.remaining > 0 ? 'text-warn font-semibold' : 'text-muted'">{{ fmtInt(l.remaining) }}</span>
+              <span class="num text-[12px] text-sub tabular-nums sm:hidden">予定 {{ fmtInt(l.planned) }} / 入荷 {{ fmtInt(l.received) }} / 残 <span :class="l.remaining > 0 ? 'text-warn font-semibold' : ''">{{ fmtInt(l.remaining) }}</span></span>
             </div>
           </div>
         </div>
