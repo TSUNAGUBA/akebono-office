@@ -6,7 +6,7 @@
  * inventory_transactions）。実績登録は 1 リクエストで実績追記 + 入庫 + 予定ステータス再計算（トランザクション）。
  */
 import type { InboundPlan, InboundResult, PlanStatus } from '~/types/akebono'
-import type { Result } from '~/types/domain'
+import type { CustomValues, Result } from '~/types/domain'
 import { nextCode } from '~/utils/akebono'
 
 export function useInbound() {
@@ -67,7 +67,7 @@ export function useInbound() {
    * 入荷実績を登録（記録系・追記）。指示参照 or 直接登録。
    * 明細行ごとに在庫台帳へ入庫（+）を post。予定のステータスを再計算。
    */
-  async function registerResult(input: { planId?: string | null; warehouseId?: string; lines: { planLineId?: string | null; skuId: string; qty: number }[] }): Promise<Result> {
+  async function registerResult(input: { planId?: string | null; warehouseId?: string; custom?: CustomValues; lines: { planLineId?: string | null; skuId: string; qty: number }[] }): Promise<Result> {
     if (isApi) {
       const res = await apiWrite<InboundResult>('/v1/akebono/inbound-results', {
         body: input, reload: ['inboundResults', 'inventoryTransactions', 'inventoryBalances', 'inboundPlans'],
@@ -89,6 +89,7 @@ export function useInbound() {
     const created: InboundResult = {
       id: resultId, code: nextCode(results.value.map(r => r.code), 'IBR'),
       planId: input.planId ?? null, warehouseId, receivedAt: nowJstIso(), lines: resultLines,
+      custom: input.custom ?? {},
     }
     results.value = [...results.value, created]
     // 在庫台帳へ入庫（明細行単位）

@@ -6,7 +6,7 @@
  * inventory_transactions）。実績登録は 1 リクエストで実績追記 + 在庫入庫 + ステータス更新（トランザクション）。
  */
 import type { ProductionOrder, ProductionResult, ProductionStatus } from '~/types/akebono'
-import type { Result } from '~/types/domain'
+import type { CustomValues, Result } from '~/types/domain'
 import { nextCode } from '~/utils/akebono'
 
 export function useProduction() {
@@ -23,7 +23,7 @@ export function useProduction() {
     return o.results.reduce((s, r) => s + r.completedQty, 0)
   }
 
-  async function createOrder(input: { skuId: string; qty: number; warehouseId: string; dueDate: string }): Promise<Result> {
+  async function createOrder(input: { skuId: string; qty: number; warehouseId: string; dueDate: string; custom?: CustomValues }): Promise<Result> {
     if (!input.skuId) return { ok: false, error: { code: 'AKO-MFG-001', message: '対象 SKU を指定してください' } }
     if (!Number.isFinite(input.qty) || input.qty <= 0) return { ok: false, error: { code: 'AKO-MFG-002', message: '数量を正しく入力してください' } }
     if (isApi) {
@@ -34,7 +34,7 @@ export function useProduction() {
     const created: ProductionOrder = {
       id, code: nextCode(orders.value.map(o => o.code), 'MFG'),
       skuId: input.skuId, qty: input.qty, warehouseId: input.warehouseId, dueDate: input.dueDate,
-      status: 'instructed', results: [],
+      status: 'instructed', results: [], custom: input.custom ?? {},
     }
     orders.value = [...orders.value, created]
     commit()

@@ -6,13 +6,14 @@
  */
 import { Plus } from 'lucide-vue-next'
 import type { ProductionOrder, ProductionStatus } from '~/types/akebono'
-import type { TableColumn } from '~/types/ui'
+import type { CustomValues } from '~/types/domain'
 import { PRODUCTION_STATUS_LABELS, productionStatusTone } from '~/utils/akebono'
 import { fmtDate, fmtDateTime, fmtInt } from '~/utils/format'
 
 const prod = useProduction()
 const p = useProducts()
 const masters = useAkebonoMasters()
+const { missingRequiredCustom } = useAppFields()
 const { show } = useToast()
 // 二重送信ガード(Phase C: API 書込の重複作成防止。§34 の実行中フィードバック)
 const busy = ref(false)
@@ -33,17 +34,20 @@ const { query, page, pageSize, rows: pageRows, total, refresh } = useListView<Pr
   fetch: params => apiListPage<ProductionOrder>('productionOrders', params),
 })
 
-const columns: TableColumn[] = [
-  { key: 'code', label: 'コード', primary: true },
-  { key: 'sku', label: '対象 SKU', primary: true },
-  { key: 'qty', label: '指示数', align: 'right' },
+const { listColumns, decorateRows } = useAppListView()
+// 一覧列は項目設定（表示 ON/OFF・表示名）で解決＋カスタム項目列を付加。派生列（完成・状態）は itemKey 無し＝常時表示
+const columns = computed(() => listColumns('production_order', [
+  { key: 'code', label: 'コード', primary: true, itemKey: 'code' },
+  { key: 'sku', label: '対象 SKU', primary: true, itemKey: 'skuId' },
+  { key: 'qty', label: '指示数', align: 'right', itemKey: 'qty' },
   { key: 'completed', label: '完成', align: 'right' },
-  { key: 'dueDate', label: '納期' },
-  { key: 'warehouse', label: '入庫先' },
+  { key: 'dueDate', label: '納期', itemKey: 'dueDate' },
+  { key: 'warehouse', label: '入庫先', itemKey: 'warehouseId' },
   { key: 'status', label: '状態', primary: true },
-]
+]))
 
-const rows = computed(() => pageRows.value as unknown as Record<string, unknown>[])
+const rows = computed(() =>
+  decorateRows('production_order', pageRows.value.map(o => ({ ...o, custom: o.custom ?? {} }))) as unknown as Record<string, unknown>[])
 function asOrder(row: Record<string, unknown>): ProductionOrder {
   return row as unknown as ProductionOrder
 }
@@ -118,7 +122,13 @@ async function registerResultInner(): Promise<void> {
 
 // ---------- 指示作成 ----------
 const createOpen = ref(false)
-const createForm = ref({ skuId: '', qty: '', warehouseId: '', dueDate: '' })
+const createForm = ref<{
+  skuId: string
+  qty: string
+  warehouseId: string
+  dueDate: string
+  custom: CustomValues
+}>({ skuId: '', qty: '', warehouseId: '', dueDate: '', custom: {} })
 
 function openCreate(): void {
   createForm.value = {
@@ -126,6 +136,7 @@ function openCreate(): void {
     qty: '',
     warehouseId: masters.warehouseOptions.value[0]?.value ?? '',
     dueDate: '',
+    custom: {},
   }
   createOpen.value = true
 }
@@ -155,7 +166,12 @@ async function submitCreateInner(): Promise<void> {
     show('納期を入力してください', 'crit')
     return
   }
-  const res = await prod.createOrder({ skuId: f.skuId, qty, warehouseId: f.warehouseId, dueDate: f.dueDate })
+  const miss = missingRequiredCustom('production_order', f.custom)
+  if (miss) {
+    show(`${miss}は必須です`, 'crit')
+    return
+  }
+  const res = await prod.createOrder({ skuId: f.skuId, qty, warehouseId: f.warehouseId, dueDate: f.dueDate, custom: f.custom })
   if (!res.ok) {
     show(`${res.error.code}: ${res.error.message}`, 'crit')
     return
@@ -343,6 +359,7 @@ async function submitCreateInner(): Promise<void> {
         <UiFormField label="納期" required>
           <input v-model="createForm.dueDate" type="date" class="input" aria-label="納期">
         </UiFormField>
+        <WidgetsCustomFields entity="production_order" v-model="createForm" />
         <p class="text-[11px] text-muted">
           情報サービス業では「案件/開発タスク × 開発工数」に読み替えて運用します（在庫連動なし）。
         </p>

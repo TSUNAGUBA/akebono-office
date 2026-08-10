@@ -10,7 +10,7 @@
 import type {
   InventoryAdjustReason, InventoryTransaction, InventoryTxnKind,
 } from '~/types/akebono'
-import type { Result } from '~/types/domain'
+import type { CustomValues, Result } from '~/types/domain'
 import { balanceKey, foldBalances, nextCode } from '~/utils/akebono'
 
 export interface PostEntry {
@@ -22,6 +22,7 @@ export interface PostEntry {
   refType: string
   refLineId: string
   occurredAt?: string
+  custom?: CustomValues
 }
 
 export function useInventory() {
@@ -103,6 +104,7 @@ export function useInventory() {
         refType: e.refType,
         refLineId: e.refLineId,
         occurredAt: e.occurredAt ?? at,
+        custom: e.custom ?? {},
       })
     }
     if (toAdd.length > 0) {
@@ -123,7 +125,7 @@ export function useInventory() {
   }
 
   /** 在庫調整（F-27-2。理由必須） */
-  async function adjust(input: { skuId: string; warehouseId: string; qty: number; reason: InventoryAdjustReason }): Promise<Result> {
+  async function adjust(input: { skuId: string; warehouseId: string; qty: number; reason: InventoryAdjustReason; custom?: CustomValues }): Promise<Result> {
     if (!input.skuId || !input.warehouseId) {
       return { ok: false, error: { code: 'AKO-INV-001', message: 'SKU と倉庫を指定してください' } }
     }
@@ -137,7 +139,7 @@ export function useInventory() {
   }
 
   /** 倉庫間移動（F-27-3。出 + 入をアトミックに） */
-  async function transfer(input: { skuId: string; fromWarehouseId: string; toWarehouseId: string; qty: number }): Promise<Result> {
+  async function transfer(input: { skuId: string; fromWarehouseId: string; toWarehouseId: string; qty: number; custom?: CustomValues }): Promise<Result> {
     if (input.fromWarehouseId === input.toWarehouseId) {
       return { ok: false, error: { code: 'AKO-INV-003', message: '移動元と移動先が同じです' } }
     }
@@ -151,8 +153,8 @@ export function useInventory() {
     // 出/入の 2 行は同一 refLineId を共有（kind が異なるため冪等キーは衝突しない）。イベント間は一意
     const refLineId = nextRefLineId('trf')
     post([
-      { skuId: input.skuId, warehouseId: input.fromWarehouseId, qty: -input.qty, kind: 'transfer_out', refType: 'transfer', refLineId },
-      { skuId: input.skuId, warehouseId: input.toWarehouseId, qty: input.qty, kind: 'transfer_in', refType: 'transfer', refLineId },
+      { skuId: input.skuId, warehouseId: input.fromWarehouseId, qty: -input.qty, kind: 'transfer_out', refType: 'transfer', refLineId, custom: input.custom ?? {} },
+      { skuId: input.skuId, warehouseId: input.toWarehouseId, qty: input.qty, kind: 'transfer_in', refType: 'transfer', refLineId, custom: input.custom ?? {} },
     ])
     return { ok: true, id: refLineId }
   }

@@ -237,7 +237,7 @@ async function onCfRemove(d: CustomFieldDef): Promise<void> {
     <!-- 追加カスタム項目（同一エンジンで全アプリ共通） -->
     <UiSectionCard
       :title="`${ITEM_ENTITY_LABELS[current] ?? current} の追加カスタム項目（${customDefs.length}件）`"
-      description="基本項目に無い項目を追加します。追加した項目は、フォーム反映に対応済みのアプリ（現在は商品・売上明細）で入力欄として表示され、データ取込・連携のマッピング項目としても選べます。一覧表示への反映は順次対応します。"
+      description="基本項目に無い項目を追加します。追加した項目は、各業務アプリ（商品・売上・発注・生産・仕入・入荷・出荷・在庫）の入力フォームに入力欄として表示され、一覧にも列として表示できます（表示 ON/OFF・表示名の変更も一覧に反映）。データ取込・連携のマッピング項目としても選べます。"
       flush
     >
       <template #actions>

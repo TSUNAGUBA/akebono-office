@@ -70,6 +70,8 @@ export interface InventoryPostEntry {
   refType: string
   refLineId: string
   occurredAt?: string
+  /** 項目カスタマイズ（F-31）の追加項目値。自動起票（入荷/出荷/仕入/生産）は省略 = 既定 {} */
+  custom?: unknown
 }
 
 /**
@@ -82,10 +84,10 @@ export async function postInventory(db: pg.Pool | pg.PoolClient, entries: Invent
   for (const e of entries) {
     if (e.qty === 0) continue
     const { rowCount } = await db.query(
-      `INSERT INTO inventory_transactions (id, sku_id, warehouse_id, qty, kind, reason, ref_type, ref_line_id, occurred_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      `INSERT INTO inventory_transactions (id, sku_id, warehouse_id, qty, kind, reason, ref_type, ref_line_id, occurred_at, custom)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        ON CONFLICT (ref_type, ref_line_id, kind) DO NOTHING`,
-      [newId('itx'), e.skuId, e.warehouseId, e.qty, e.kind, e.reason ?? null, e.refType, e.refLineId, e.occurredAt ?? at])
+      [newId('itx'), e.skuId, e.warehouseId, e.qty, e.kind, e.reason ?? null, e.refType, e.refLineId, e.occurredAt ?? at, JSON.stringify(e.custom ?? {})])
     added += rowCount ?? 0
   }
   return added
@@ -580,9 +582,9 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
     const created = await inTxn(pool, async (db) => {
       const code = await nextDocCode(db, 'MFG')
       const { rows } = await db.query(
-        `INSERT INTO production_orders (id, code, sku_id, qty, warehouse_id, due_date, status)
-         VALUES ($1, $2, $3, $4, $5, $6, 'instructed') RETURNING ${MFG_COLS}`,
-        [id, code, skuId, qty, warehouseId, dueDate])
+        `INSERT INTO production_orders (id, code, sku_id, qty, warehouse_id, due_date, status, custom)
+         VALUES ($1, $2, $3, $4, $5, $6, 'instructed', $7) RETURNING ${MFG_COLS}`,
+        [id, code, skuId, qty, warehouseId, dueDate, JSON.stringify(customOf(body))])
       return rows[0]
     })
     await audit(pool, { actorId: user.id, action: 'create', entity: 'production_orders', entityId: id, detail: '生産指示を登録' })
@@ -726,9 +728,9 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
         id: `${id}-${idx}`, planLineId: l.planLineId ?? null, skuId: l.skuId, qty: l.qty,
       }))
       const { rows: out } = await db.query(
-        `INSERT INTO inbound_results (id, code, plan_id, warehouse_id, lines)
-         VALUES ($1, $2, $3, $4, $5) RETURNING ${IBR_COLS}`,
-        [id, code, planId, warehouseId, JSON.stringify(resultLines)])
+        `INSERT INTO inbound_results (id, code, plan_id, warehouse_id, lines, custom)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING ${IBR_COLS}`,
+        [id, code, planId, warehouseId, JSON.stringify(resultLines), JSON.stringify(customOf(body))])
       await postInventory(db, resultLines.map(l => ({
         skuId: l.skuId, warehouseId: warehouseId!, qty: l.qty, kind: 'inbound', refType: 'inbound_result', refLineId: l.id,
       })))
@@ -801,9 +803,9 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
       const code = await nextDocCode(db, 'PUR')
       const recLines = lines.map((l, idx) => ({ id: `${id}-${idx}`, ...l }))
       const { rows } = await db.query(
-        `INSERT INTO purchase_records (id, code, company_id, segment_id, purchase_date, purchase_type, warehouse_id, lines)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING ${PUR_COLS}`,
-        [id, code, companyId, segmentId, purchaseDate, purchaseType, warehouseId, JSON.stringify(recLines)])
+        `INSERT INTO purchase_records (id, code, company_id, segment_id, purchase_date, purchase_type, warehouse_id, lines, custom)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING ${PUR_COLS}`,
+        [id, code, companyId, segmentId, purchaseDate, purchaseType, warehouseId, JSON.stringify(recLines), JSON.stringify(customOf(body))])
       if (warehouseId) {
         await postInventory(db, recLines.map(l => ({
           skuId: l.skuId, warehouseId, qty: l.qty, kind: 'purchase_in', refType: 'purchase', refLineId: l.id,
@@ -960,9 +962,9 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
         id: `${id}-${idx}`, planLineId: l.planLineId ?? null, skuId: l.skuId, qty: l.qty,
       }))
       const { rows: out } = await db.query(
-        `INSERT INTO outbound_results (id, code, plan_id, warehouse_id, company_id, lines)
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING ${OBR_COLS}`,
-        [id, code, planId, warehouseId, companyId, JSON.stringify(resultLines)])
+        `INSERT INTO outbound_results (id, code, plan_id, warehouse_id, company_id, lines, custom)
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING ${OBR_COLS}`,
+        [id, code, planId, warehouseId, companyId, JSON.stringify(resultLines), JSON.stringify(customOf(body))])
       const posts: InventoryPostEntry[] = resultLines.map(l => ({
         skuId: l.skuId, warehouseId: warehouseId!, qty: -l.qty, kind: 'outbound', refType: 'outbound_result', refLineId: l.id,
       }))
@@ -1086,7 +1088,7 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
     await requireRef(pool, 'product_skus', skuId, 'SKU')
     await requireRef(pool, 'warehouses', warehouseId, '倉庫')
     const refLineId = newId('adj')
-    await postInventory(pool, [{ skuId, warehouseId, qty, kind: 'adjust', reason, refType: 'adjust', refLineId }])
+    await postInventory(pool, [{ skuId, warehouseId, qty, kind: 'adjust', reason, refType: 'adjust', refLineId, custom: customOf(body) }])
     await audit(pool, { actorId: user.id, action: 'create', entity: 'inventory_transactions', entityId: refLineId, detail: `在庫調整（${qty > 0 ? '+' : ''}${qty}）` })
     return c.json({ data: { id: refLineId } }, 201)
   })
@@ -1114,10 +1116,11 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
       if ((await balanceOf(db, skuId, fromWarehouseId)) < qty) {
         throw err('AKO-INV-004', '移動元の在庫が不足しています', 409)
       }
-      // 出/入の 2 行は同一 refLineId を共有（kind が異なるため冪等キーは衝突しない）
+      // 出/入の 2 行は同一 refLineId を共有（kind が異なるため冪等キーは衝突しない）。custom は両行に同一値
+      const custom = customOf(body)
       await postInventory(db, [
-        { skuId, warehouseId: fromWarehouseId, qty: -qty, kind: 'transfer_out', refType: 'transfer', refLineId },
-        { skuId, warehouseId: toWarehouseId, qty, kind: 'transfer_in', refType: 'transfer', refLineId },
+        { skuId, warehouseId: fromWarehouseId, qty: -qty, kind: 'transfer_out', refType: 'transfer', refLineId, custom },
+        { skuId, warehouseId: toWarehouseId, qty, kind: 'transfer_in', refType: 'transfer', refLineId, custom },
       ])
     })
     await audit(pool, { actorId: user.id, action: 'create', entity: 'inventory_transactions', entityId: refLineId, detail: `倉庫間移動（${qty}）` })

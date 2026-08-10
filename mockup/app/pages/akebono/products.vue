@@ -12,7 +12,7 @@ import { Layers, Plus, SlidersHorizontal } from 'lucide-vue-next'
 import { ACTIVE_FILTER_OPTIONS, matchesActiveFilter } from '~/components/masters/MasterShell.vue'
 import type { BillingType, Product, ProductSku } from '~/types/akebono'
 import type { Company, CustomValues } from '~/types/domain'
-import type { FieldDef, TableColumn } from '~/types/ui'
+import type { FieldDef } from '~/types/ui'
 import { BILLING_TYPE_LABELS, hasPartnerRole } from '~/utils/akebono'
 import { IMAGE_MAX_CHARS, imageToDataUri, thumbBoxClass, thumbFirstChar } from '~/utils/thumb'
 import { fmtYen } from '~/utils/format'
@@ -59,17 +59,21 @@ const filtered = computed(() =>
 // クライアントページング（検索・フィルタは本ページの filtered が担い、ページングのみ共通化）
 const { page, pageSize, rows: pagedRows, total } = useListView<Product>({ source: filtered })
 watch([search, segmentFilter, statusFilter], () => { page.value = 1 })
-const tableRows = computed(() => pagedRows.value as unknown as Record<string, unknown>[])
-
-const columns: TableColumn[] = [
+const { listColumns, decorateRows } = useAppListView()
+// 一覧列は項目設定（表示 ON/OFF・表示名）で解決＋カスタム項目列を付加。派生列（サムネイル・SKU数・状態）は itemKey 無し＝常時表示
+const columns = computed(() => listColumns('product', [
   { key: 'thumb', label: '', width: '48px' },
-  { key: 'code', label: '商品コード', primary: true },
-  { key: 'name', label: '商品名', primary: true },
-  { key: 'segment', label: 'セグメント' },
-  { key: 'listPrice', label: '標準売価', align: 'right', primary: true },
+  { key: 'code', label: '商品コード', primary: true, itemKey: 'code' },
+  { key: 'name', label: '商品名', primary: true, itemKey: 'name' },
+  { key: 'segment', label: 'セグメント', itemKey: 'segmentId' },
+  { key: 'listPrice', label: '標準売価', align: 'right', primary: true, itemKey: 'listPrice' },
   { key: 'skuCount', label: 'SKU数', align: 'right' },
   { key: 'active', label: '状態', primary: true },
-]
+]))
+
+const tableRows = computed(() =>
+  decorateRows('product', pagedRows.value.map(r => ({ ...r, custom: r.custom ?? {} }))) as unknown as Record<string, unknown>[],
+)
 
 function asProduct(row: Record<string, unknown>): Product {
   return row as unknown as Product

@@ -39,8 +39,11 @@ export function fmtCustomValue(def: CustomFieldDef, v: unknown): string {
 export function useAppListView() {
   const { builtinResolved, customDefs } = useAppFields()
 
-  /** 一覧列を項目設定で解決（表示 ON/OFF・表示名）＋カスタム項目列を末尾付加 */
-  function listColumns(entity: string, base: AppColumn[]): TableColumn[] {
+  /**
+   * 一覧列を項目設定で解決（表示 ON/OFF・表示名）＋カスタム項目列を末尾付加。
+   * opts.appendCustom=false でカスタム列を付けない（入力フォームが無く常に空になる請求 = invoice 用）。
+   */
+  function listColumns(entity: string, base: AppColumn[], opts: { appendCustom?: boolean } = {}): TableColumn[] {
     const resolved = new Map(builtinResolved(entity).map(r => [r.itemKey, r]))
     const cols: TableColumn[] = []
     for (const c of base) {
@@ -53,8 +56,10 @@ export function useAppListView() {
       }
       cols.push(col)
     }
-    for (const d of customDefs(entity)) {
-      cols.push({ key: `custom.${d.key}`, label: d.label, align: d.fieldType === 'number' ? 'right' : 'left' })
+    if (opts.appendCustom !== false) {
+      for (const d of customDefs(entity)) {
+        cols.push({ key: `custom.${d.key}`, label: d.label, align: d.fieldType === 'number' ? 'right' : 'left' })
+      }
     }
     return cols
   }

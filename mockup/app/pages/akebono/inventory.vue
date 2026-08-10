@@ -7,6 +7,7 @@
 import { ArrowLeftRight, SlidersHorizontal, ClipboardCheck } from 'lucide-vue-next'
 import type { TableColumn, TabItem } from '~/types/ui'
 import type { InventoryAdjustReason } from '~/types/akebono'
+import type { CustomValues } from '~/types/domain'
 import { INVENTORY_KIND_LABELS, ADJUST_REASON_LABELS } from '~/utils/akebono'
 import { fmtDateTime, fmtInt } from '~/utils/format'
 
@@ -19,6 +20,9 @@ const toast = useToast()
 // 二重送信ガード(Phase C: API 書込の重複作成防止。§34 の実行中フィードバック)
 const busy = ref(false)
 const confirm = useConfirm()
+// 項目カスタマイズ（F-31）: 受払台帳（inventory_transactions）の一覧カスタマイズ・調整/移動フォームの追加項目
+const { listColumns, decorateRows } = useAppListView()
+const { missingRequiredCustom } = useAppFields()
 
 // ---------- 論理在庫（F-27-5: 実在庫 + 未完了入荷予定 − 未完了出荷指示） ----------
 const logicalDelta = computed(() => {
@@ -114,7 +118,7 @@ const browseColumns: TableColumn[] = [
 
 // ---------- 在庫調整モーダル ----------
 const adjustOpen = ref(false)
-const adjustForm = ref({ skuId: '', warehouseId: '', qty: '', reason: 'defective' })
+const adjustForm = ref({ skuId: '', warehouseId: '', qty: '', reason: 'defective', custom: {} as CustomValues })
 
 function openAdjust(): void {
   adjustForm.value = {
@@ -122,6 +126,7 @@ function openAdjust(): void {
     warehouseId: warehouseOptions.value[0]?.value ?? '',
     qty: '',
     reason: 'defective',
+    custom: {},
   }
   adjustOpen.value = true
 }
@@ -149,7 +154,12 @@ async function submitAdjustInner(): Promise<void> {
     { confirmLabel: '調整する' },
   )
   if (!ok) return
-  const res = await inv.adjust({ skuId: f.skuId, warehouseId: f.warehouseId, qty, reason: f.reason as InventoryAdjustReason })
+  const missCustom = missingRequiredCustom('inventory', f.custom)
+  if (missCustom) {
+    toast.show(`${missCustom}は必須です`, 'crit')
+    return
+  }
+  const res = await inv.adjust({ skuId: f.skuId, warehouseId: f.warehouseId, qty, reason: f.reason as InventoryAdjustReason, custom: f.custom })
   if (!res.ok) {
     toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
     return
@@ -160,7 +170,7 @@ async function submitAdjustInner(): Promise<void> {
 
 // ---------- 倉庫間移動モーダル ----------
 const transferOpen = ref(false)
-const transferForm = ref({ skuId: '', fromWarehouseId: '', toWarehouseId: '', qty: '' })
+const transferForm = ref({ skuId: '', fromWarehouseId: '', toWarehouseId: '', qty: '', custom: {} as CustomValues })
 
 function openTransfer(): void {
   transferForm.value = {
@@ -168,6 +178,7 @@ function openTransfer(): void {
     fromWarehouseId: warehouseOptions.value[0]?.value ?? '',
     toWarehouseId: warehouseOptions.value[1]?.value ?? warehouseOptions.value[0]?.value ?? '',
     qty: '',
+    custom: {},
   }
   transferOpen.value = true
 }
@@ -201,11 +212,17 @@ async function submitTransferInner(): Promise<void> {
     { confirmLabel: '移動する' },
   )
   if (!ok) return
+  const missCustom = missingRequiredCustom('inventory', f.custom)
+  if (missCustom) {
+    toast.show(`${missCustom}は必須です`, 'crit')
+    return
+  }
   const res = await inv.transfer({
     skuId: f.skuId,
     fromWarehouseId: f.fromWarehouseId,
     toWarehouseId: f.toWarehouseId,
     qty,
+    custom: f.custom,
   })
   if (!res.ok) {
     toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
@@ -220,7 +237,7 @@ const ledgerSku = ref('')
 const ledgerWh = ref('')
 
 const ledgerRows = computed(() =>
-  inv.ledgerOf({
+  decorateRows('inventory', inv.ledgerOf({
     skuId: ledgerSku.value || undefined,
     warehouseId: ledgerWh.value || undefined,
   }).map((t) => {
@@ -234,10 +251,12 @@ const ledgerRows = computed(() =>
       warehouseName: masters.warehouseName(t.warehouseId),
       kindLabel: INVENTORY_KIND_LABELS[t.kind],
       qty: t.qty,
+      reason: t.reason ? (ADJUST_REASON_LABELS[t.reason] ?? t.reason) : '—',
       refType: t.refType,
       reverseState: inv.reverseStateOf(t),
+      custom: t.custom ?? {},
     }
-  }),
+  })),
 )
 
 // クライアントページング（SKU・倉庫フィルタは ledgerRows が担い、ページングのみ共通化）
@@ -246,15 +265,18 @@ const {
 } = useListView<Record<string, unknown>>({ source: ledgerRows, pageSize: 50 })
 watch([ledgerSku, ledgerWh], () => { ledgerPage.value = 1 })
 
-const ledgerColumns: TableColumn[] = [
-  { key: 'occurredAt', label: '日時', primary: true },
+// 受払台帳（inventory_transactions）の列は項目設定で解決＋カスタム項目列を付加。
+// 「商品 / SKU」列は商品識別のため itemKey を付けず常時表示（オペレーター報告 2026-08-10・request①）。
+const ledgerColumns = computed(() => listColumns('inventory', [
+  { key: 'occurredAt', label: '日時', primary: true, itemKey: 'occurredAt' },
   { key: 'skuLabel', label: '商品 / SKU', primary: true },
-  { key: 'warehouseName', label: '倉庫' },
-  { key: 'kindLabel', label: '区分', primary: true },
-  { key: 'qty', label: '数量', align: 'right', primary: true },
+  { key: 'warehouseName', label: '倉庫', itemKey: 'warehouseId' },
+  { key: 'kindLabel', label: '区分', primary: true, itemKey: 'kind' },
+  { key: 'qty', label: '数量', align: 'right', primary: true, itemKey: 'qty' },
+  { key: 'reason', label: '理由', itemKey: 'reason' },
   { key: 'refType', label: '参照' },
   { key: 'cancel', label: '取消', align: 'center' },
-]
+]))
 
 /** 在庫調整・移動・棚卸の取消（反対仕訳を追記して残高を戻す = 原則9.5） */
 async function cancelLedger(id: string): Promise<void> {
@@ -559,6 +581,7 @@ async function submitStocktakeInner(): Promise<void> {
         <UiFormField label="理由" required>
           <UiSelect v-model="adjustForm.reason" :options="reasonOptions" aria-label="調整理由" />
         </UiFormField>
+        <WidgetsCustomFields entity="inventory" v-model="adjustForm" />
       </div>
       <template #footer>
         <button type="button" class="btn btn-sm" @click="adjustOpen = false">キャンセル</button>
@@ -583,6 +606,7 @@ async function submitStocktakeInner(): Promise<void> {
         <UiFormField label="移動数量" required :hint="`移動元の在庫: ${fmtInt(transferAvail)}`">
           <input v-model="transferForm.qty" type="number" min="1" step="1" class="input num" placeholder="例: 5" aria-label="移動数量">
         </UiFormField>
+        <WidgetsCustomFields entity="inventory" v-model="transferForm" />
       </div>
       <template #footer>
         <button type="button" class="btn btn-sm" @click="transferOpen = false">キャンセル</button>

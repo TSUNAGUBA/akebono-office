@@ -2281,3 +2281,48 @@
 ### 64-2 検証・影響
 - [x] mockup typecheck green・unit 221 passed。`skuLabel` は不変のため他アプリ（売上・出荷入力等）の既存表示に影響なし（原則7）。
 - [x] API 変更なし（一覧はクライアントで SKU マスタ×残高から導出。商品名は既存の products キャッシュから取得）。
+
+## 65. 項目カスタマイズ（F-31）の全業務アプリ展開（オペレーター指示 2026-08-10）の完了条件（Definition of Done）
+
+> オペレーター指示「項目カスタマイズができないアプリがある。すべてのアプリの項目カスタマイズができるように」。
+> 確定スコープ（オペレーター確認）: **フォーム＋一覧**を、**入力フォームを持つ業務アプリ**（商品・売上・生産・発注・仕入・入荷・出荷・在庫）で対応。
+> 請求（invoice）は入力フォームが無いため**一覧のみ**（カスタム列は出さない）。SKU は商品ページ内・取引先/共通マスタは今回スコープ外。
+> ブランチ `claude/akebono-import-linking-scsqkq`（§64/PR #109 マージ後に main から再作成）。
+
+### 65-0 前提（調査で確定）
+- **DB マイグレーション不要**: `0042_akebono_custom_fields.sql` が対象全テーブル（product_skus/purchase_orders/production_orders/
+  inbound_results/purchase_records/outbound_results/inventory_transactions/sales_records/invoices・products は 0032）へ
+  `custom jsonb NOT NULL DEFAULT '{}'` を追加済み。残作業は **API 経路（COLS/INSERT）** と **フロント（フォーム/一覧）** のみ。
+- 項目定義 UI（`settings/items.vue`）は全10エンティティ対応済み（定義側の新規作業ゼロ）。
+- custom の検証は既存規約（オブジェクトのみ採用・配列/非オブジェクトは `{}`・`JSON.stringify` で jsonb 保存）。ホワイトリスト enum 無し（キーはテナント定義）。
+
+### 65-1 共通基盤
+- [x] **useAppListView.ts（新規）**: `listColumns(entity, base, opts?)`（base 列を builtinResolved の listVisible/labelDisplay で解決＝表示 ON/OFF・
+  表示名上書き・カスタム項目列を末尾付加。`opts.appendCustom:false` でカスタム列を出さない＝請求用）・`decorateRows(entity, rows)`
+  （custom 値を型別整形して `row['custom.<key>']` へ平坦化＝UiDataTable 既定セルに載せる）・`fmtCustomValue`（boolean→はい/いいえ・date→fmtDate・
+  multiselect→'・'結合・空→'—'）。既存 `#cell-*` スロット・行 id・派生列は不変（原則7）。
+- [x] **useAppFields.missingRequiredCustom(entity, custom)**: 必須カスタム項目の未入力チェック（最初の未入力ラベルを返す）＝全ページのフォーム保存前検証で共通利用（DRY）。
+- [x] **型（mockup/types/akebono.ts）**: PurchaseOrder/ProductionOrder/InboundResult/PurchaseRecord/OutboundResult/InventoryTransaction に `custom?: CustomValues`（Product/SalesRecord は既存）。`shared/domain` の CustomValues は既存。
+- [x] **API（akebono-trade.ts）**: `customOf(body)` ヘルパー・PO/MFG/IBR/PUR/OBR/ITX の各 COLS へ `custom`・各 POST の INSERT に `custom`＋`JSON.stringify(customOf(body))`。
+  `InventoryPostEntry.custom?`＋`postInventory` の INSERT に custom・`/inventory/adjust`・`/inventory/transfer`（両行に同一 custom）で受理。
+  **赤黒訂正（purchase-records/:id/correct）・システム自動起票（入荷/出荷/仕入/生産→在庫）は custom を写さず DB 既定 `{}`**（sales と同方針）。
+
+### 65-2 各アプリの配線
+- [x] **フォーム（追加カスタム項目の入力・保存）**: 商品・売上（既存）＋発注・生産・仕入・入荷（直接/予定参照の両経路）・出荷・在庫（調整/移動）。
+  各フォーム ref に `custom: {}`・`<WidgetsCustomFields entity="…" v-model="…" />`・`missingRequiredCustom` 検証・create/register へ custom を渡す。
+  mock CRUD（usePurchaseOrders/useProduction/useInbound/usePurchases/useOutbound/useInventory）も input へ `custom?` を透過し生成レコードへ `custom: input.custom ?? {}`。
+- [x] **一覧（表示 ON/OFF・表示名・カスタム列）**: 商品・売上・発注・仕入・生産・在庫（受払台帳）＋入荷実績・出荷実績。既定列に itemKey を付け
+  `listColumns` で解決、`decorateRows` でカスタム列を描画。派生列（金額・消込・状態・明細数等）は itemKey 無し＝常時表示。
+- [x] **入荷/出荷は実績一覧を新設**: 既存の一覧は予定（plan）一覧のみでカタログ対象（inbound/outbound＝実績）に対応する一覧が無かったため、
+  実績（inbound_results/outbound_results）の一覧を予定一覧とは別枠で追加し、項目カスタマイズを適用（予定一覧は不変で温存）。
+- [x] **在庫受払台帳**: `occurredAt/warehouseId/kind/qty/reason` に itemKey・「商品 / SKU」列は §64 の識別表示のため itemKey 無しで常時表示・カスタム列付加。
+- [x] **請求（billing）**: `invoiceCols`/`receivableCols` を `listColumns('invoice', …, { appendCustom:false })` で解決（表示 ON/OFF・表示名のみ・カスタム列は出さない）。マージン/支払通知/入金は invoice 外エンティティのため対象外。
+
+### 65-3 検証（実測値）
+- [x] api typecheck green・mockup typecheck green・mockup unit **221 passed**。
+- [x] api 統合 **243 passed**（発注 POST の custom 往復＋新規テスト「生産/仕入/入荷/出荷/在庫調整が custom を保存し GET で返す」）。
+
+### 65-4 下位互換・データ影響（原則7）
+- [x] スキーマ変更なし（custom 列は 0042 で既存・既定 `{}`）。既存レコードは custom 未設定でも `{}` として整合。
+  一覧ヘルパーはカスタム項目 0 件のエンティティでは実質ノーオペ（列も付かず decorate も素通し）。既存フォーム/一覧の挙動は
+  カスタム項目・項目設定差分が無い限り不変。API 訂正/自動起票は custom 非引継ぎで既存挙動と一致。
