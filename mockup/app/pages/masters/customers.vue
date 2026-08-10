@@ -47,21 +47,36 @@ function memberName(id: string | null): string {
 
 const search = ref('')
 const statusFilter = ref('active')
+// 取引ロール絞り込み（仕入先ビュー導線 = メニューから /masters/customers?role=supplier で来る）。
+// 仕入先は別マスタではなく取引先（会社）に partnerRoles で内包されるため、ここで絞り込んで一覧する。
+const route = useRoute()
+const KNOWN_ROLES = new Set(Object.keys(PARTNER_ROLE_LABELS))
+const initialRole = String(route.query.role ?? '')
+const roleFilter = ref(KNOWN_ROLES.has(initialRole) ? initialRole : '')
+const roleFilterOptions = [
+  { value: '', label: '取引ロール: すべて' },
+  ...Object.entries(PARTNER_ROLE_LABELS).map(([value, label]) => ({ value, label })),
+]
 
 const customers = computed(() => (crud.list.value as Company[]).filter(c => c.kind === 'customer'))
 
 const filtered = computed(() =>
   customers.value.filter((c) => {
     if (!matchesActiveFilter(c, statusFilter.value)) return false
+    if (roleFilter.value && !partnerRolesOf(c).includes(roleFilter.value as PartnerRole)) return false
     const q = search.value.trim().toLowerCase()
     if (!q) return true
     return [c.name, ...c.aliases, c.location].some(v => v.toLowerCase().includes(q))
   }),
 )
 
+// クライアントページング（検索・状態・ロールの絞り込みは filtered が担い、ページングのみ共通化）
+const { page, pageSize, rows: pagedCustomers, total } = useListView<Company>({ source: filtered })
+watch([search, statusFilter, roleFilter], () => { page.value = 1 })
+
 /** テーブル用行（ソート・表示用に JOIN 済み項目を付与） */
 const tableRows = computed(() =>
-  filtered.value.map(c => ({
+  pagedCustomers.value.map(c => ({
     ...c,
     primaryIndustryName: industryName(c.primaryIndustryId),
     ownerName: memberName(c.ownerMemberId),
@@ -277,10 +292,11 @@ async function restoreSelected(): Promise<void> {
 
     <template #filter>
       <UiSearchInput v-model="search" placeholder="会社名・エイリアスで検索" />
+      <UiSelect v-model="roleFilter" :options="roleFilterOptions" aria-label="取引ロールフィルタ" />
       <UiSelect v-model="statusFilter" :options="ACTIVE_FILTER_OPTIONS" aria-label="状態フィルタ" />
     </template>
 
-    <UiSectionCard :title="`顧客(会社)一覧（${filtered.length}件）`" flush>
+    <UiSectionCard :title="`顧客(会社)一覧（${total}件）`" flush>
       <UiDataTable
         :columns="columns"
         :rows="tableRows"
@@ -305,6 +321,7 @@ async function restoreSelected(): Promise<void> {
           <UiStatusBadge :label="asCompany(row).active ? '有効' : '無効'" :tone="asCompany(row).active ? 'ok' : 'neutral'" dot />
         </template>
       </UiDataTable>
+      <UiPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
     </UiSectionCard>
 
     <template #drawer>

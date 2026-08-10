@@ -37,7 +37,14 @@ function skuLabelOf(skuId: string): string {
   return s ? products.skuLabel(s) : skuId
 }
 
-// ---------- 一覧 ----------
+// ---------- 一覧（検索 + ページング。モック=クライアント / API=サーバー） ----------
+// サーバー検索はコード・日付（order_date/due_date）を対象とする。クライアントも同一基準で揃える。
+const { query, page, pageSize, rows: pageRows, total, refresh } = useListView<PurchaseOrder>({
+  source: po.activeOrders,
+  match: (o, q) => o.code.toLowerCase().includes(q) || o.orderDate.includes(q) || o.dueDate.includes(q),
+  fetch: p => apiListPage<PurchaseOrder>('purchaseOrders', p),
+})
+
 const columns: TableColumn[] = [
   { key: 'code', label: 'コード', primary: true },
   { key: 'supplier', label: '仕入先', primary: true },
@@ -50,7 +57,7 @@ const columns: TableColumn[] = [
 ]
 
 const tableRows = computed(() =>
-  po.activeOrders.value.map(o => ({
+  pageRows.value.map(o => ({
     id: o.id,
     code: o.code,
     supplier: companyName(o.companyId),
@@ -109,6 +116,7 @@ async function transition(status: PoStatus): Promise<void> {
     return
   }
   toast.show(`「${PO_STATUS_LABELS[status]}」にしました`, status === 'canceled' ? 'warn' : 'ok')
+  refresh() // サーバーページング時は現在ページを取り直す（クライアントは自動追従）
 }
 
 // ---------- 発注を作成 ----------
@@ -172,6 +180,7 @@ async function submitCreateInner(): Promise<void> {
   }
   toast.show('発注を作成しました（発注済み）', 'ok')
   createOpen.value = false
+  refresh() // サーバーページング時は現在ページを取り直す（クライアントは自動追従）
 }
 </script>
 
@@ -186,7 +195,10 @@ async function submitCreateInner(): Promise<void> {
     </UiPageHeader>
 
     <div class="grid gap-3">
-      <UiSectionCard :title="`発注一覧（${po.activeOrders.value.length}件）`" flush>
+      <UiSectionCard :title="`発注一覧（${total}件）`" flush>
+        <UiFilterBar>
+          <UiSearchInput v-model="query" placeholder="コード・日付で検索" />
+        </UiFilterBar>
         <UiDataTable
           :columns="columns"
           :rows="tableRows"
@@ -212,6 +224,11 @@ async function submitCreateInner(): Promise<void> {
             />
           </template>
         </UiDataTable>
+        <UiPagination
+          v-model:page="page"
+          v-model:page-size="pageSize"
+          :total="total"
+        />
       </UiSectionCard>
     </div>
 

@@ -131,11 +131,8 @@ export interface ApiCallError extends Error {
   code: string
 }
 
-/** API 呼び出し（{ data } を展開して返す。失敗は code 付き Error を throw） */
-export async function apiFetch<T = unknown>(
-  path: string,
-  opts: { method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'; body?: unknown; query?: Record<string, string> } = {},
-): Promise<T> {
+/** 認証ヘッダ（dev = x-dev-member-id / 本番 = Firebase ID トークン）。apiFetch/apiFetchList で共用 */
+async function authHeaders(): Promise<Record<string, string>> {
   const config = apiPublicConfig()
   const headers: Record<string, string> = {}
   if (config.devMemberId) {
@@ -144,6 +141,16 @@ export async function apiFetch<T = unknown>(
     const token = await getFirebaseIdToken()
     if (token) headers.Authorization = `Bearer ${token}`
   }
+  return headers
+}
+
+/** API 呼び出し（{ data } を展開して返す。失敗は code 付き Error を throw） */
+export async function apiFetch<T = unknown>(
+  path: string,
+  opts: { method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'; body?: unknown; query?: Record<string, string> } = {},
+): Promise<T> {
+  const config = apiPublicConfig()
+  const headers = await authHeaders()
   try {
     const res = await $fetch<{ data: T }>(path, {
       baseURL: config.apiBase,
@@ -159,6 +166,43 @@ export async function apiFetch<T = unknown>(
     error.code = data?.error?.code ?? 'AKO-GEN-NET'
     throw error
   }
+}
+
+/**
+ * サーバーページング用の一覧取得（q/limit/offset を渡し { rows, total } を返す）。
+ * apiFetch は res.data のみを返すため、兄弟キー total を読むにはこの専用経路を使う。
+ * total が無いレスポンス（レガシー bare 配列）でも rows.length にフォールバックして壊れない。
+ */
+export async function apiFetchList<T = unknown>(
+  path: string, params: { q: string; limit: number; offset: number },
+): Promise<{ rows: T[]; total: number }> {
+  const config = apiPublicConfig()
+  const query: Record<string, string> = { limit: String(params.limit), offset: String(params.offset) }
+  if (params.q) query.q = params.q
+  try {
+    const res = await $fetch<{ data: T[]; total?: number }>(path, {
+      baseURL: config.apiBase, method: 'GET', query, headers: await authHeaders(),
+    })
+    const rows = res.data ?? []
+    return { rows, total: res.total ?? rows.length }
+  } catch (e) {
+    const data = (e as { data?: { error?: { code?: string; message?: string } } }).data
+    const error = new Error(data?.error?.message ?? 'API との通信に失敗しました。ネットワークをご確認ください') as ApiCallError
+    error.code = data?.error?.code ?? 'AKO-GEN-NET'
+    throw error
+  }
+}
+
+/**
+ * コレクション名からエンドポイントを解決してサーバーページング取得する（useListView の fetch に渡す）。
+ * 未マイグレーション名は空ページを返す（API モードでも安全側にフォールバック = 原則4）。
+ */
+export function apiListPage<T = unknown>(
+  collection: string, params: { q: string; limit: number; offset: number },
+): Promise<{ rows: T[]; total: number }> {
+  const path = CUSTOM_COLLECTION_ENDPOINTS[collection]
+  if (!path) return Promise.resolve({ rows: [], total: 0 })
+  return apiFetchList<T>(path, params)
 }
 
 /** 例外を Result のエラー形式へ正規化する（apiResult を経由しない拡張レスポンス用） */

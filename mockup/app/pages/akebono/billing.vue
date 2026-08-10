@@ -28,6 +28,13 @@ const marginInvoices = computed(() => con.invoices.value.filter(v => v.invoiceTy
 const receivableInvoices = computed(() =>
   con.invoices.value.filter(v => v.status === 'issued' || v.status === 'paid'))
 
+// クライアントページング（タブ別の 5 一覧。件数が増える請求・通知・入金履歴の一覧に共通適用）
+const { page: biPage, pageSize: biSize, rows: biRows, total: biTotal } = useListView<Invoice>({ source: salesInvoices, pageSize: 20 })
+const { page: mgPage, pageSize: mgSize, rows: mgRows, total: mgTotal } = useListView<Invoice>({ source: marginInvoices, pageSize: 20 })
+const { page: noPage, pageSize: noSize, rows: noRows, total: noTotal } = useListView<PaymentNotice>({ source: con.notices, pageSize: 20 })
+const { page: rePage, pageSize: reSize, rows: reRows, total: reTotal } = useListView<Invoice>({ source: receivableInvoices, pageSize: 20 })
+const { page: rcPage, pageSize: rcSize, rows: rcRows, total: rcTotal } = useListView({ source: con.receipts, pageSize: 20 })
+
 const tabs = computed(() => [
   { key: 'billing', label: '請求', badge: salesInvoices.value.filter(v => v.status === 'draft').length },
   { key: 'consignment', label: '委託精算', badge: con.notices.value.filter(n => n.status === 'draft' && !n.voidedAt).length },
@@ -286,10 +293,10 @@ async function cancelReceipt(id: string): Promise<void> {
 
     <!-- ============ 請求タブ ============ -->
     <div v-if="tab === 'billing'" class="grid gap-3">
-      <UiSectionCard :title="`請求一覧（${salesInvoices.length}件）`" description="行をタップで明細・発行・赤伝・入金消込" flush>
+      <UiSectionCard :title="`請求一覧（${biTotal}件）`" description="行をタップで明細・発行・赤伝・入金消込" flush>
         <UiDataTable
           :columns="invoiceCols"
-          :rows="asRows(salesInvoices)"
+          :rows="asRows(biRows)"
           clickable
           empty-title="請求がありません"
           empty-hint="「締める」で得意先×期間の未請求売上をドラフト化します"
@@ -309,6 +316,7 @@ async function cancelReceipt(id: string): Promise<void> {
             />
           </template>
         </UiDataTable>
+        <UiPagination v-model:page="biPage" v-model:page-size="biSize" :total="biTotal" />
       </UiSectionCard>
     </div>
 
@@ -323,10 +331,10 @@ async function cancelReceipt(id: string): Promise<void> {
         </p>
       </UiSectionCard>
 
-      <UiSectionCard :title="`マージン請求（${marginInvoices.length}件）`" description="店舗への請求" flush>
+      <UiSectionCard :title="`マージン請求（${mgTotal}件）`" description="店舗への請求" flush>
         <UiDataTable
           :columns="marginCols"
-          :rows="asRows(marginInvoices)"
+          :rows="asRows(mgRows)"
           clickable
           empty-title="マージン請求がありません"
           empty-hint="「委託精算を締める」で店舗売上からマージン請求と支払通知を発行します"
@@ -340,12 +348,13 @@ async function cancelReceipt(id: string): Promise<void> {
             <span class="num">{{ fmtYen(Number(row.totalAmount)) }}</span>
           </template>
         </UiDataTable>
+        <UiPagination v-model:page="mgPage" v-model:page-size="mgSize" :total="mgTotal" />
       </UiSectionCard>
 
-      <UiSectionCard :title="`作家への支払通知（${con.notices.value.length}件）`" description="行をタップで明細・確定" flush>
+      <UiSectionCard :title="`作家への支払通知（${noTotal}件）`" description="行をタップで明細・確定" flush>
         <UiDataTable
           :columns="noticeCols"
-          :rows="asRows(con.notices.value)"
+          :rows="asRows(noRows)"
           clickable
           empty-title="支払通知がありません"
           @row-click="openNotice"
@@ -366,15 +375,16 @@ async function cancelReceipt(id: string): Promise<void> {
             />
           </template>
         </UiDataTable>
+        <UiPagination v-model:page="noPage" v-model:page-size="noSize" :total="noTotal" />
       </UiSectionCard>
     </div>
 
     <!-- ============ 入金タブ ============ -->
     <div v-else class="grid gap-3">
-      <UiSectionCard :title="`入金対象（${receivableInvoices.length}件）`" description="行をタップで入金を記録" flush>
+      <UiSectionCard :title="`入金対象（${reTotal}件）`" description="行をタップで入金を記録" flush>
         <UiDataTable
           :columns="receivableCols"
-          :rows="asRows(receivableInvoices)"
+          :rows="asRows(reRows)"
           clickable
           empty-title="入金対象の請求がありません"
           empty-hint="発行済みの請求がここに表示されます"
@@ -394,12 +404,13 @@ async function cancelReceipt(id: string): Promise<void> {
             />
           </template>
         </UiDataTable>
+        <UiPagination v-model:page="rePage" v-model:page-size="reSize" :total="reTotal" />
       </UiSectionCard>
 
-      <UiSectionCard :title="`入金履歴（${con.receipts.value.length}件）`" flush>
+      <UiSectionCard :title="`入金履歴（${rcTotal}件）`" flush>
         <UiDataTable
           :columns="receiptCols"
-          :rows="asRows(con.receipts.value)"
+          :rows="asRows(rcRows)"
           empty-title="入金履歴がありません"
         >
           <template #cell-invoiceId="{ row }">{{ invoiceCode(String(row.invoiceId)) }}</template>
@@ -414,6 +425,7 @@ async function cancelReceipt(id: string): Promise<void> {
             <button v-else type="button" class="btn btn-ghost btn-sm text-crit" @click="cancelReceipt(String(row.id))">取消</button>
           </template>
         </UiDataTable>
+        <UiPagination v-model:page="rcPage" v-model:page-size="rcSize" :total="rcTotal" />
       </UiSectionCard>
     </div>
 

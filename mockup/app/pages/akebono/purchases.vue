@@ -49,7 +49,13 @@ function skuLabelOf(skuId: string): string {
   return s ? products.skuLabel(s) : skuId
 }
 
-// ---------- 一覧 ----------
+// ---------- 一覧（検索 + ページング。モック=クライアント / API=サーバー） ----------
+const { query, page, pageSize, rows: pageRows, total, refresh } = useListView<PurchaseRecord>({
+  source: purchases.activeRecords,
+  match: (r, q) => r.code.toLowerCase().includes(q) || r.purchaseDate.includes(q),
+  fetch: p => apiListPage<PurchaseRecord>('purchaseRecords', p),
+})
+
 const columns: TableColumn[] = [
   { key: 'code', label: 'コード', primary: true },
   { key: 'supplier', label: '仕入先', primary: true },
@@ -60,7 +66,7 @@ const columns: TableColumn[] = [
 ]
 
 const tableRows = computed(() =>
-  purchases.activeRecords.value.map(r => ({
+  pageRows.value.map(r => ({
     id: r.id,
     code: r.code,
     supplier: companyName(r.companyId),
@@ -115,6 +121,7 @@ async function correctSelected(): Promise<void> {
   }
   toast.show('赤黒訂正の伝票を追加しました', 'warn')
   if (res.id) selectedId.value = res.id
+  refresh() // サーバーページング時は現在ページを取り直す（クライアントは自動追従）
 }
 
 // ---------- 仕入を計上 ----------
@@ -174,6 +181,7 @@ async function submitCreateInner(): Promise<void> {
   }
   toast.show('仕入を計上しました', 'ok')
   createOpen.value = false
+  refresh() // サーバーページング時は現在ページを取り直す（クライアントは自動追従）
 }
 </script>
 
@@ -188,7 +196,10 @@ async function submitCreateInner(): Promise<void> {
     </UiPageHeader>
 
     <div class="grid gap-3">
-      <UiSectionCard :title="`仕入一覧（${purchases.activeRecords.value.length}件）`" flush>
+      <UiSectionCard :title="`仕入一覧（${total}件）`" flush>
+        <UiFilterBar>
+          <UiSearchInput v-model="query" placeholder="コード・日付で検索" />
+        </UiFilterBar>
         <UiDataTable
           :columns="columns"
           :rows="tableRows"
@@ -212,6 +223,7 @@ async function submitCreateInner(): Promise<void> {
             <span class="num tabular-nums">{{ row.total }}</span>
           </template>
         </UiDataTable>
+        <UiPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
       </UiSectionCard>
     </div>
 

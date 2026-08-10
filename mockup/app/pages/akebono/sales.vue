@@ -73,7 +73,17 @@ const columns = [
   { key: 'amount', label: '金額', align: 'right' as const, primary: true },
   { key: 'sourceKind', label: '発生源' },
 ]
-const tableRows = computed(() => filteredRecords.value as unknown as Record<string, unknown>[])
+// 検索（コード・売上日）＋ クライアントページング。集計・グラフは全件の salesRecords を使うため非影響
+const search = ref('')
+const searchedRecords = computed(() => {
+  const q = search.value.trim().toLowerCase()
+  if (!q) return filteredRecords.value
+  return filteredRecords.value.filter(r =>
+    String(r.code ?? '').toLowerCase().includes(q) || r.salesDate.includes(q))
+})
+const { page, pageSize, rows: pagedRecords, total } = useListView({ source: searchedRecords })
+watch([search, segmentFilter], () => { page.value = 1 })
+const tableRows = computed(() => pagedRecords.value as unknown as Record<string, unknown>[])
 function skuLabelOf(skuId: string): string {
   const sku = products.skuById(skuId)
   return sku ? products.skuLabel(sku) : skuId
@@ -284,7 +294,10 @@ const entryAmount = computed(() => {
       </UiSectionCard>
 
       <!-- 明細一覧 -->
-      <UiSectionCard :title="`売上明細（${filteredRecords.length}件）`" description="行をクリックで赤黒訂正（取消）" flush>
+      <UiSectionCard :title="`売上明細（${total}件）`" description="行をクリックで赤黒訂正（取消）" flush>
+        <UiFilterBar>
+          <UiSearchInput v-model="search" placeholder="コード・売上日で検索" />
+        </UiFilterBar>
         <UiDataTable
           :columns="columns"
           :rows="tableRows"
@@ -324,6 +337,7 @@ const entryAmount = computed(() => {
             />
           </template>
         </UiDataTable>
+        <UiPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
       </UiSectionCard>
 
       <!-- 下部導線 -->

@@ -6206,3 +6206,106 @@ describe('日報・週報の既読管理（オペレーター指示 2026-07-31�
     }
   })
 })
+
+describe('サーバーページング + 検索（q/limit/offset/total）と在庫調整の取消（反対仕訳・原則9.5）', () => {
+  let skuId = ''
+
+  const balOf = async (warehouseId: string): Promise<number> => {
+    const bals = (await api('GET', '/v1/akebono/inventory-balances', { as: MEMBER })).json.data as
+      { skuId: string; warehouseId: string; qty: number }[]
+    return bals.find(b => b.skuId === skuId && b.warehouseId === warehouseId)?.qty ?? 0
+  }
+  const txnsOf = async (): Promise<{ id: string; skuId: string; warehouseId: string; qty: number; refType: string; kind: string }[]> =>
+    (await api('GET', '/v1/akebono/inventory-transactions?limit=1000', { as: MEMBER })).json.data as never
+
+  it('セットアップ: 商品と既定 SKU を作成', async () => {
+    const created = await api('POST', '/v1/akebono/products', {
+      as: MEMBER, body: { code: 'PGN-001', name: 'ページング検証', segmentId: 'seg-01', taxRateId: 'tax-10', unitId: 'unit-02' },
+    })
+    expect(created.status).toBe(201)
+    const pid = (created.json.data as { id: string }).id
+    const skus = (await api('GET', '/v1/akebono/product-skus', { as: MEMBER })).json.data as
+      { id: string; productId: string }[]
+    skuId = skus.find(s => s.productId === pid)!.id
+    expect(skuId).toBeTruthy()
+  })
+
+  it('下位互換: パラメータ無しの一覧は bare 配列（total 兄弟キー無し）', async () => {
+    const resp = await api('GET', '/v1/akebono/inventory-transactions', { as: MEMBER })
+    expect(Array.isArray(resp.json.data)).toBe(true)
+    expect((resp.json as { total?: number }).total).toBeUndefined()
+  })
+
+  it('limit/offset/total: 総件数を返し、offset に依らず total は一定・ページ跨ぎで重複しない', async () => {
+    for (const qty of [1, 2, 3]) {
+      expect((await api('POST', '/v1/akebono/inventory/adjust', {
+        as: MEMBER, body: { skuId, warehouseId: 'wh-01', qty, reason: 'found' },
+      })).status).toBe(201)
+    }
+    const p1 = await api('GET', '/v1/akebono/inventory-transactions?limit=2&offset=0', { as: MEMBER })
+    expect((p1.json.data as unknown[]).length).toBe(2)
+    const total1 = (p1.json as { total: number }).total
+    expect(total1).toBeGreaterThanOrEqual(3)
+    const p2 = await api('GET', '/v1/akebono/inventory-transactions?limit=2&offset=2', { as: MEMBER })
+    expect((p2.json as { total: number }).total).toBe(total1)
+    const ids1 = (p1.json.data as { id: string }[]).map(r => r.id)
+    const ids2 = (p2.json.data as { id: string }[]).map(r => r.id)
+    expect(ids1.filter(id => ids2.includes(id))).toHaveLength(0)
+  })
+
+  it('検索 q: kind/reason/refType の部分一致で total が縮み、返却行はすべて一致する', async () => {
+    expect((await api('POST', '/v1/akebono/inventory/stocktake', {
+      as: MEMBER, body: { warehouseId: 'wh-02', counts: [{ skuId, actualQty: 7 }] },
+    })).json.data).toMatchObject({ adjusted: 1 })
+    const all = await api('GET', '/v1/akebono/inventory-transactions?limit=1000', { as: MEMBER })
+    const totalAll = (all.json as { total: number }).total
+    const stk = await api('GET', '/v1/akebono/inventory-transactions?limit=1000&q=stocktake', { as: MEMBER })
+    const totalStk = (stk.json as { total: number }).total
+    expect(totalStk).toBeGreaterThanOrEqual(1)
+    expect(totalStk).toBeLessThan(totalAll)
+    for (const r of stk.json.data as { kind: string; reason: string | null; refType: string }[]) {
+      expect(`${r.kind}${r.reason ?? ''}${r.refType}`.includes('stocktake')).toBe(true)
+    }
+  })
+
+  it('在庫調整の取消: 反対仕訳で残高が戻る／二重取消は 409／反対仕訳の再取消は 400', async () => {
+    const before = await balOf('wh-01')
+    expect((await api('POST', '/v1/akebono/inventory/adjust', {
+      as: MEMBER, body: { skuId, warehouseId: 'wh-01', qty: 20, reason: 'found' },
+    })).status).toBe(201)
+    expect(await balOf('wh-01')).toBe(before + 20)
+    const target = (await txnsOf()).find(t => t.skuId === skuId && t.warehouseId === 'wh-01' && t.refType === 'adjust' && t.qty === 20)!
+    expect(target).toBeTruthy()
+    const rev = await api('POST', '/v1/akebono/inventory/reverse', { as: MEMBER, body: { transactionId: target.id } })
+    expect(rev.status).toBe(200)
+    expect((rev.json.data as { reversed: number }).reversed).toBe(1)
+    expect(await balOf('wh-01')).toBe(before)
+    const rev2 = await api('POST', '/v1/akebono/inventory/reverse', { as: MEMBER, body: { transactionId: target.id } })
+    expect(rev2.status).toBe(409)
+    expect(rev2.json.error?.code).toBe('AKO-INV-008')
+    const revTxn = (await txnsOf()).find(t => t.refType === 'reverse' && t.skuId === skuId && t.warehouseId === 'wh-01')!
+    expect(revTxn).toBeTruthy()
+    const rev3 = await api('POST', '/v1/akebono/inventory/reverse', { as: MEMBER, body: { transactionId: revTxn.id } })
+    expect(rev3.status).toBe(400)
+    expect(rev3.json.error?.code).toBe('AKO-INV-007')
+  })
+
+  it('倉庫間移動の取消: 出/入の 2 行をまとめて反対仕訳し残高が戻る', async () => {
+    expect((await api('POST', '/v1/akebono/inventory/adjust', {
+      as: MEMBER, body: { skuId, warehouseId: 'wh-01', qty: 6, reason: 'found' },
+    })).status).toBe(201)
+    const from0 = await balOf('wh-01')
+    const to0 = await balOf('wh-02')
+    expect((await api('POST', '/v1/akebono/inventory/transfer', {
+      as: MEMBER, body: { skuId, fromWarehouseId: 'wh-01', toWarehouseId: 'wh-02', qty: 2 },
+    })).status).toBe(201)
+    expect(await balOf('wh-01')).toBe(from0 - 2)
+    expect(await balOf('wh-02')).toBe(to0 + 2)
+    const leg = (await txnsOf()).find(t => t.refType === 'transfer' && t.skuId === skuId)!
+    const rev = await api('POST', '/v1/akebono/inventory/reverse', { as: MEMBER, body: { transactionId: leg.id } })
+    expect(rev.status).toBe(200)
+    expect((rev.json.data as { reversed: number }).reversed).toBe(2)
+    expect(await balOf('wh-01')).toBe(from0)
+    expect(await balOf('wh-02')).toBe(to0)
+  })
+})

@@ -21,6 +21,7 @@ import { todayJst } from '../../../shared/domain/jst'
 import { audit } from '../lib/audit'
 import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
+import { runListQuery } from '../lib/list-query'
 import { capCp } from '../lib/text'
 import { nextDocCode } from './akebono-trade'
 
@@ -78,8 +79,10 @@ export function akebonoBillingRoutes(pool: pg.Pool): Hono {
   // ========== 売上明細（F-28） ==========
 
   app.get('/sales-records', async (c) => {
-    const { rows } = await pool.query(`SELECT ${SR_COLS} FROM sales_records ORDER BY sales_date DESC, id LIMIT 20000`)
-    return c.json({ data: rows })
+    return c.json(await runListQuery(pool, c, {
+      table: 'sales_records', cols: SR_COLS, orderBy: 'sales_date DESC, id', maxLimit: 20000,
+      searchCols: ['code', 'channel', 'sales_date::text'],
+    }))
   })
 
   // 売上の計上。原価・課金区分はサーバーが SKU/商品マスタから解決（モック create と同一の導出）
@@ -165,18 +168,24 @@ export function akebonoBillingRoutes(pool: pg.Pool): Hono {
   // ========== 請求・入金（F-29-1/2/3） ==========
 
   app.get('/invoices', async (c) => {
-    const { rows } = await pool.query(`SELECT ${INV_COLS} FROM invoices ORDER BY created_at DESC, id LIMIT 5000`)
-    return c.json({ data: rows })
+    return c.json(await runListQuery(pool, c, {
+      table: 'invoices', cols: INV_COLS, orderBy: 'created_at DESC, id', maxLimit: 5000,
+      searchCols: ['code', 'status', 'period_from::text', 'period_to::text'],
+    }))
   })
 
   app.get('/payment-notices', async (c) => {
-    const { rows } = await pool.query(`SELECT ${PN_COLS} FROM payment_notices ORDER BY created_at DESC, id LIMIT 5000`)
-    return c.json({ data: rows })
+    return c.json(await runListQuery(pool, c, {
+      table: 'payment_notices', cols: PN_COLS, orderBy: 'created_at DESC, id', maxLimit: 5000,
+      searchCols: ['code', 'status', 'period_from::text', 'period_to::text'],
+    }))
   })
 
   app.get('/payment-receipts', async (c) => {
-    const { rows } = await pool.query(`SELECT ${RCPT_COLS} FROM payment_receipts ORDER BY received_at DESC, id LIMIT 5000`)
-    return c.json({ data: rows })
+    return c.json(await runListQuery(pool, c, {
+      table: 'payment_receipts', cols: RCPT_COLS, orderBy: 'received_at DESC, id', maxLimit: 5000,
+      searchCols: ['method', 'received_at::text'],
+    }))
   })
 
   async function taxRateValue(db: pg.Pool | pg.PoolClient, id: string | null | undefined): Promise<number> {

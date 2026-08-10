@@ -26,7 +26,13 @@ function skuLabelOf(skuId: string): string {
   return s ? p.skuLabel(s) : '—'
 }
 
-// ---------- 一覧 ----------
+// ---------- 一覧（検索 + ページング。モック=クライアント / API=サーバー） ----------
+const { query, page, pageSize, rows: pageRows, total, refresh } = useListView<ProductionOrder>({
+  source: prod.activeOrders,
+  match: (o, q) => o.code.toLowerCase().includes(q) || o.dueDate.includes(q),
+  fetch: params => apiListPage<ProductionOrder>('productionOrders', params),
+})
+
 const columns: TableColumn[] = [
   { key: 'code', label: 'コード', primary: true },
   { key: 'sku', label: '対象 SKU', primary: true },
@@ -37,7 +43,7 @@ const columns: TableColumn[] = [
   { key: 'status', label: '状態', primary: true },
 ]
 
-const rows = computed(() => prod.activeOrders.value as unknown as Record<string, unknown>[])
+const rows = computed(() => pageRows.value as unknown as Record<string, unknown>[])
 function asOrder(row: Record<string, unknown>): ProductionOrder {
   return row as unknown as ProductionOrder
 }
@@ -71,6 +77,7 @@ async function transition(status: ProductionStatus): Promise<void> {
   }
   const tone = status === 'canceled' ? 'warn' : 'ok'
   show(`状態を「${PRODUCTION_STATUS_LABELS[status]}」に更新しました`, tone)
+  refresh() // サーバーページング時は現在ページを取り直す（クライアントは自動追従）
 }
 
 // ---------- 実績登録 ----------
@@ -106,6 +113,7 @@ async function registerResultInner(): Promise<void> {
   }
   show('実績を登録しました（完成分を在庫へ入庫）', 'ok')
   resetResultForm()
+  refresh() // サーバーページング時は現在ページを取り直す（クライアントは自動追従）
 }
 
 // ---------- 指示作成 ----------
@@ -154,6 +162,7 @@ async function submitCreateInner(): Promise<void> {
   }
   show('生産指示を作成しました', 'ok')
   createOpen.value = false
+  refresh() // サーバーページング時は現在ページを取り直す（クライアントは自動追従）
 }
 </script>
 
@@ -167,7 +176,10 @@ async function submitCreateInner(): Promise<void> {
       </template>
     </UiPageHeader>
 
-    <UiSectionCard :title="`生産指示（${rows.length}件）`" flush>
+    <UiSectionCard :title="`生産指示（${total}件）`" flush>
+      <UiFilterBar>
+        <UiSearchInput v-model="query" placeholder="コード・納期で検索" />
+      </UiFilterBar>
       <UiDataTable
         :columns="columns"
         :rows="rows"
@@ -205,6 +217,7 @@ async function submitCreateInner(): Promise<void> {
           />
         </template>
       </UiDataTable>
+      <UiPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
     </UiSectionCard>
 
     <!-- 詳細ドロワー -->

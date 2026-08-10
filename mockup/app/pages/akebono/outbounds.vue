@@ -40,7 +40,13 @@ function skuName(skuId: string): string {
   return sku ? p.skuLabel(sku) : skuId
 }
 
-// ---------- 一覧 ----------
+// ---------- 一覧（検索 + ページング。モック=クライアント / API=サーバー） ----------
+const { query, page, pageSize, rows: pageRows, total, refresh } = useListView<OutboundPlan>({
+  source: out.activePlans,
+  match: (pl, q) => pl.code.toLowerCase().includes(q) || pl.dueDate.includes(q),
+  fetch: params => apiListPage<OutboundPlan>('outboundPlans', params),
+})
+
 const columns: TableColumn[] = [
   { key: 'code', label: 'コード', primary: true },
   { key: 'company', label: '出荷先', primary: true },
@@ -48,7 +54,7 @@ const columns: TableColumn[] = [
   { key: 'dueDate', label: '予定日', primary: true },
   { key: 'status', label: '状態', primary: true },
 ]
-const rows = computed(() => out.activePlans.value as unknown as Record<string, unknown>[])
+const rows = computed(() => pageRows.value as unknown as Record<string, unknown>[])
 function asPlan(row: Record<string, unknown>): OutboundPlan {
   return row as unknown as OutboundPlan
 }
@@ -86,7 +92,7 @@ async function cancelSelected(): Promise<void> {
   )
   if (!ok) return
   const res = await out.cancelPlan(plan.id)
-  if (res.ok) toast.show('出荷指示を取消しました', 'warn')
+  if (res.ok) { toast.show('出荷指示を取消しました', 'warn'); refresh() }
   else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
 }
 
@@ -128,6 +134,7 @@ async function savePlanInner(): Promise<void> {
   }
   toast.show('出荷指示を作成しました', 'ok')
   planOpen.value = false
+  refresh() // サーバーページング時は現在ページを取り直す（クライアントは自動追従）
 }
 
 // ---------- 出荷実績登録モーダル（指示参照 / 直接） ----------
@@ -203,6 +210,7 @@ async function saveResultInner(): Promise<void> {
   }
   toast.show(f.postSales && canPostSales.value ? '出荷実績を登録し、売上を計上しました' : '出荷実績を登録しました', 'ok')
   resultOpen.value = false
+  refresh() // サーバーページング時は現在ページを取り直す（実績で指示ステータスが変わるため）
 }
 </script>
 
@@ -222,7 +230,10 @@ async function saveResultInner(): Promise<void> {
     </UiPageHeader>
 
     <div class="grid gap-3">
-      <UiSectionCard :title="`出荷指示（${rows.length}件）`" flush>
+      <UiSectionCard :title="`出荷指示（${total}件）`" flush>
+        <UiFilterBar>
+          <UiSearchInput v-model="query" placeholder="コード・予定日で検索" />
+        </UiFilterBar>
         <UiDataTable
           :columns="columns"
           :rows="rows"
@@ -251,6 +262,7 @@ async function saveResultInner(): Promise<void> {
             />
           </template>
         </UiDataTable>
+        <UiPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
       </UiSectionCard>
     </div>
 
