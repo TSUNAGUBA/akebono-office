@@ -80,6 +80,17 @@ describe('applyImportTransform（値変換）', () => {
     expect(applyImportTransform('2026.07.03', 'date')).toBe('2026-07-03')
     expect(applyImportTransform('not-a-date', 'date')).toBe('not-a-date')
   })
+  it('date は時刻付き（日時）でも日付部分だけを取り出す（発生日 = timestamptz 由来の隔離を解消）', () => {
+    expect(applyImportTransform('2026/08/09 19:40:48', 'date')).toBe('2026-08-09')
+    expect(applyImportTransform('2026-08-09T19:40:48+09:00', 'date')).toBe('2026-08-09')
+    expect(applyImportTransform('2026.8.9 0:00', 'date')).toBe('2026-08-09')
+    expect(applyImportTransform('20260809 194048', 'date')).toBe('2026-08-09')
+    // 時刻だけ・不正形式は素通し（呼び出し側の DATE_RE で隔離される = 従来どおり）
+    expect(applyImportTransform('19:40:48', 'date')).toBe('19:40:48')
+    // 日付の後が時刻/TZ 様でない（自由記述・レンジ）値は変換せず素通し = ゴミを黙って日付へ強制しない
+    expect(applyImportTransform('2026-08-09 これは日付ではない', 'date')).toBe('2026-08-09 これは日付ではない')
+    expect(applyImportTransform('2026/1/1 to 2026-12-31', 'date')).toBe('2026/1/1 to 2026-12-31')
+  })
   it('未知の transform・空は前後空白のみ除去', () => {
     expect(applyImportTransform('  abc ', '')).toBe('abc')
     expect(applyImportTransform('AbC', 'lower')).toBe('abc')

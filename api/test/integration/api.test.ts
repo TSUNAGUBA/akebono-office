@@ -4618,6 +4618,20 @@ describe('Phase C: Akebono 記録系の API 永続化（商品・伝票・在庫
     const w2 = txns.filter(t => t.skuId === defaultSkuId && t.warehouseId === 'wh-02').reduce((s, t) => s + t.qty, 0)
     expect(w1).toBe(6)
     expect(w2).toBe(3)
+    // 実棚数は負値も可（マイナス在庫を許容 = 2026-08-10）。wh-01 実棚 −3（理論 6）→ −9 調整・残高 −3
+    const stNeg = await api('POST', '/v1/akebono/inventory/stocktake', {
+      as: MEMBER, body: { warehouseId: 'wh-01', counts: [{ skuId: defaultSkuId, actualQty: -3 }] },
+    })
+    expect(stNeg.status).toBe(200)
+    expect((stNeg.json.data as { adjusted: number }).adjusted).toBe(1)
+    const txns2 = (await api('GET', '/v1/akebono/inventory-transactions', { as: MEMBER })).json.data as
+      { skuId: string; warehouseId: string; qty: number }[]
+    const w1neg = txns2.filter(t => t.skuId === defaultSkuId && t.warehouseId === 'wh-01').reduce((s, t) => s + t.qty, 0)
+    expect(w1neg).toBe(-3)
+    // 後続テスト（この describe は台帳を跨いで状態を共有）のため wh-01 を元の 6 へ戻す（実棚 6 → +9 調整）
+    expect((await api('POST', '/v1/akebono/inventory/stocktake', {
+      as: MEMBER, body: { warehouseId: 'wh-01', counts: [{ skuId: defaultSkuId, actualQty: 6 }] },
+    })).status).toBe(200)
   })
 
   it('仕入: warehouseId 指定（入荷管理 OFF 経路）で在庫入庫・赤黒訂正で在庫も戻る・再訂正は 409', async () => {
@@ -5385,6 +5399,67 @@ describe('Phase D: データ取込（F-32）・ダッシュボード保管（F-4
         .toMatchObject({ staged: 5, applied: 0, skipped: 4, failed: 1 })
       const salesAfter = (await api('GET', '/v1/akebono/sales-records', { as: ADMIN })).json.data as SalesRow[]
       expect(salesAfter.filter(s => s.sourceKind === 'import' && s.companyId === companyId)).toHaveLength(4)
+    })
+
+    it('実取込（棚卸 CSV）: 実物理在庫数を絶対値として理論差分を計上・マイナス可・再取込は冪等（オペレーター指示 2026-08-10）', async () => {
+      const b64 = (s: string): string => Buffer.from(s, 'utf8').toString('base64')
+      // IMP-P1 の既定 SKU（商品 CSV 実取込で作成済み）を対象に wh-02 の棚卸を取り込む
+      const skus = (await api('GET', '/v1/akebono/product-skus', { as: ADMIN })).json.data as { id: string; code: string }[]
+      const skuId = skus.find(s => s.code === 'IMP-P1')!.id
+      const balOf = async (): Promise<number> => {
+        const txns = (await api('GET', '/v1/akebono/inventory-transactions?limit=20000', { as: ADMIN })).json.data as
+          { skuId: string; warehouseId: string; qty: number }[]
+        return txns.filter(t => t.skuId === skuId && t.warehouseId === 'wh-02').reduce((s, t) => s + t.qty, 0)
+      }
+      const src = await api('POST', '/v1/akebono/import-sources', {
+        as: ADMIN, body: {
+          name: '棚卸CSV実取込', method: 'file_csv', encoding: 'utf8', targetEntity: 'inventory',
+          config: { hasHeader: true, delimiter: ',' },
+        },
+      })
+      const srcId = (src.json.data as { id: string }).id
+      await api('POST', '/v1/akebono/import-mappings', {
+        as: ADMIN, body: { sourceId: srcId, fields: [
+          { sourceField: 'sku', targetItemKey: 'skuId', columnIndex: 0 },
+          { sourceField: 'warehouse', targetItemKey: 'warehouseId', columnIndex: 1 },
+          { sourceField: 'qty', targetItemKey: 'qty', columnIndex: 2 },
+          { sourceField: 'kind', targetItemKey: 'kind', columnIndex: 3 },
+        ] },
+      })
+      // 棚卸: 実物理在庫数 50 を取込む → 理論在庫に依らず残高が 50 になる（差分計上 = 手動棚卸と同一意味論）
+      const csv = `sku,warehouse,qty,kind\n${skuId},wh-02,50,stocktake\n`
+      const r1 = await api('POST', '/v1/akebono/import-runs', {
+        as: ADMIN, body: { sourceId: srcId, contentBase64: b64(csv) },
+      })
+      expect(r1.status).toBe(201)
+      expect((r1.json.data as { counts: Record<string, number> }).counts).toMatchObject({ staged: 1, applied: 1, failed: 0 })
+      expect(await balOf()).toBe(50)
+      // 同一ファイル再取込 = 冪等（差分 0 でスキップ・二重計上なし = 原則2）
+      const r2 = await api('POST', '/v1/akebono/import-runs', {
+        as: ADMIN, body: { sourceId: srcId, contentBase64: b64(csv) },
+      })
+      expect((r2.json.data as { counts: Record<string, number> }).counts).toMatchObject({ staged: 1, applied: 0, skipped: 1, failed: 0 })
+      expect(await balOf()).toBe(50)
+      // マイナス実棚数も可: -5 を取込む → 残高 -5（50 → -5 の差分 -55 を計上）
+      const csvNeg = `sku,warehouse,qty,kind\n${skuId},wh-02,-5,stocktake\n`
+      const rNeg = await api('POST', '/v1/akebono/import-runs', {
+        as: ADMIN, body: { sourceId: srcId, contentBase64: b64(csvNeg) },
+      })
+      expect((rNeg.json.data as { counts: Record<string, number> }).counts).toMatchObject({ staged: 1, applied: 1, failed: 0 })
+      expect(await balOf()).toBe(-5)
+      // 調整（adjust）取込は従来どおり増減数（デルタ）: −5 に +10 → 残高 5・同一ファイル再取込はスキップ（冪等）
+      const csvAdj = `sku,warehouse,qty,kind\n${skuId},wh-02,10,adjust\n`
+      const rAdj = await api('POST', '/v1/akebono/import-runs', { as: ADMIN, body: { sourceId: srcId, contentBase64: b64(csvAdj) } })
+      expect((rAdj.json.data as { counts: Record<string, number> }).counts).toMatchObject({ staged: 1, applied: 1, failed: 0 })
+      expect(await balOf()).toBe(5)
+      const rAdj2 = await api('POST', '/v1/akebono/import-runs', { as: ADMIN, body: { sourceId: srcId, contentBase64: b64(csvAdj) } })
+      expect((rAdj2.json.data as { counts: Record<string, number> }).counts).toMatchObject({ staged: 1, applied: 0, skipped: 1 })
+      expect(await balOf()).toBe(5)
+      // 同一 SKU×倉庫が同一ファイルに複数行: 実棚数へ収束し最終行が最終残高を決定（20 → 7 で残高 7）
+      const csvMulti = `sku,warehouse,qty,kind\n${skuId},wh-02,20,stocktake\n${skuId},wh-02,7,stocktake\n`
+      const rMulti = await api('POST', '/v1/akebono/import-runs', { as: ADMIN, body: { sourceId: srcId, contentBase64: b64(csvMulti) } })
+      expect((rMulti.json.data as { counts: Record<string, number> }).counts).toMatchObject({ staged: 2, applied: 2, failed: 0 })
+      expect(await balOf()).toBe(7)
     })
 
     it('API 接続（pull）: https 以外・内部アドレスは SSRF ガードで拒否（AKO-IMP-007）', async () => {

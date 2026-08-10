@@ -101,11 +101,12 @@ async function balanceOf(db: pg.Pool | pg.PoolClient, skuId: string, warehouseId
 
 /**
  * 在庫の check-then-act 直列化（レビュー C-1）。残高チェック → 台帳追記の間に並行トランザクションが
- * 同一 SKU × 倉庫へ出庫すると不変条件（残高 ≥ 0 前提のチェック）を突破できるため、
+ * 同一 SKU × 倉庫へ出庫すると不変条件（出庫は残高 ≥ 必要数のチェック）を突破できるため、
+ * （在庫調整・棚卸は意図的に負残高を作れる = このチェックを経ない。負残高からの出庫/移動は依然 409 で阻止）
  * pg_advisory_xact_lock（トランザクション終了で自動解放）でキー単位に直列化する。
  * キーは重複排除 + ソートして取得順を全呼び出しで一致させる（デッドロック防止）
  */
-async function lockInventoryKeys(db: pg.PoolClient, keys: { skuId: string; warehouseId: string }[]): Promise<void> {
+export async function lockInventoryKeys(db: pg.PoolClient, keys: { skuId: string; warehouseId: string }[]): Promise<void> {
   const uniq = [...new Set(keys.map(k => `inv:${k.skuId}::${k.warehouseId}`))].sort()
   for (const key of uniq) {
     await db.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [key])
@@ -1126,7 +1127,9 @@ export function akebonoTradeRoutes(pool: pg.Pool): Hono {
       const o = r as Record<string, unknown>
       const skuId = String(o?.skuId ?? '').trim()
       const actualQty = Number(o?.actualQty)
-      if (!skuId || !Number.isInteger(actualQty) || actualQty < 0 || actualQty > 1_000_000) continue
+      // 実棚数（実物理在庫数）は負値も可（マイナス在庫を許容 = オペレーター指示 2026-08-10）。
+      // 整数かつ絶対値の上限のみを課す（モック useInventory.stocktake・フロント入力欄と parity）
+      if (!skuId || !Number.isInteger(actualQty) || Math.abs(actualQty) > 1_000_000) continue
       counts.push({ skuId, actualQty })
     }
     if (counts.length === 0) throw err('AKO-INV-002', '棚卸行を正しく入力してください', 400)
