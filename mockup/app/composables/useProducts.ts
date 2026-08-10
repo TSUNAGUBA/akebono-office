@@ -51,6 +51,23 @@ export function useProducts() {
     const parts = [sku.axis1Value, sku.axis2Value].filter(Boolean)
     return parts.length > 0 ? parts.join(' / ') : sku.code
   }
+  /**
+   * 一覧・選択肢の SKU 識別（商品名 ＋ SKU 詳細）。バリアント SKU は skuLabel が軸値のみで
+   * 「どの商品か」が分からないため、商品名を主・SKU 詳細（軸値・コード）を従に分けて返す
+   * （在庫一覧の商品識別性を改善。オペレーター報告 2026-08-10）。
+   */
+  function skuIdentity(sku: ProductSku): { productName: string; detail: string } {
+    const productName = productById(sku.productId)?.name ?? sku.code
+    const axis = [sku.axis1Value, sku.axis2Value].filter(Boolean).join(' / ')
+    // 既定 SKU は商品そのもの = コードのみ。バリアントは軸値＋コード
+    const detail = sku.isDefault ? sku.code : (axis ? `${axis}・${sku.code}` : sku.code)
+    return { productName, detail }
+  }
+  /** SKU の完全ラベル「商品名（詳細）」。ドロップダウン表示・検索一致に使う（商品名で識別できる） */
+  function skuFullLabel(sku: ProductSku): string {
+    const { productName, detail } = skuIdentity(sku)
+    return `${productName}（${detail}）`
+  }
   /** SKU の売価（未設定は商品の listPrice） */
   function sellPriceOf(sku: ProductSku): number {
     return sku.sellPrice ?? productById(sku.productId)?.listPrice ?? 0
@@ -236,7 +253,7 @@ export function useProducts() {
   return {
     products, activeProducts, skus, images,
     productById, skuById, productOfSku, skusOf, activeSkus, imagesOf, activeSections,
-    skuLabel, sellPriceOf, costOf, thumbnailOf, supplierName,
+    skuLabel, skuIdentity, skuFullLabel, sellPriceOf, costOf, thumbnailOf, supplierName,
     saveProduct, archiveProduct, restoreProduct, ensureDefaultSku, saveMatrix, saveSku,
     addImage, archiveImage, restoreImage, setImageSection,
   }

@@ -45,13 +45,19 @@ const logicalDelta = computed(() => {
 })
 
 // ---------- 共通選択肢 ----------
-const skuOptions = computed(() => p.activeSkus().map(s => ({ value: s.id, label: p.skuLabel(s) })))
+// 選択肢は「商品名（詳細）」で表示 = バリアント SKU でもどの商品か識別できる（オペレーター報告 2026-08-10）
+const skuOptions = computed(() => p.activeSkus().map(s => ({ value: s.id, label: p.skuFullLabel(s) })))
 const warehouseOptions = computed(() => masters.warehouseOptions.value)
 const reasonOptions = Object.entries(ADJUST_REASON_LABELS).map(([value, label]) => ({ value, label }))
 
 function skuLabelOf(id: string): string {
   const s = p.skuById(id)
   return s ? p.skuLabel(s) : id
+}
+/** 一覧の SKU 識別（商品名＋詳細）。未登録 SKU は id をそのまま返す */
+function skuIdentityOf(id: string): { productName: string; detail: string } {
+  const s = p.skuById(id)
+  return s ? p.skuIdentity(s) : { productName: id, detail: '' }
 }
 
 // ---------- タブ ----------
@@ -70,8 +76,9 @@ const browseRows = computed(() => {
   const q = browseSearch.value.trim().toLowerCase()
   const rows: Record<string, unknown>[] = []
   for (const sku of p.activeSkus()) {
-    const label = p.skuLabel(sku)
-    if (q && !label.toLowerCase().includes(q)) continue
+    const { productName, detail } = p.skuIdentity(sku)
+    // 商品名・SKU 詳細（軸値・コード）のいずれかに一致すれば表示（商品名でも検索できる）
+    if (q && !`${productName} ${detail}`.toLowerCase().includes(q)) continue
     for (const wh of masters.warehouses.value) {
       if (browseWh.value && wh.id !== browseWh.value) continue
       const qty = inv.balanceOf(sku.id, wh.id)
@@ -81,7 +88,8 @@ const browseRows = computed(() => {
       rows.push({
         id: `${sku.id}::${wh.id}`,
         skuId: sku.id,
-        skuLabel: label,
+        productName,
+        skuDetail: detail,
         warehouseName: masters.warehouseName(wh.id),
         qty,
         logical: qty + delta,
@@ -98,7 +106,7 @@ const {
 watch([browseSearch, browseWh], () => { browsePage.value = 1 })
 
 const browseColumns: TableColumn[] = [
-  { key: 'skuLabel', label: 'SKU', primary: true },
+  { key: 'skuLabel', label: '商品 / SKU', primary: true },
   { key: 'warehouseName', label: '倉庫', primary: true },
   { key: 'qty', label: '実在庫', align: 'right', primary: true },
   { key: 'logical', label: '論理在庫', align: 'right' },
@@ -215,17 +223,21 @@ const ledgerRows = computed(() =>
   inv.ledgerOf({
     skuId: ledgerSku.value || undefined,
     warehouseId: ledgerWh.value || undefined,
-  }).map(t => ({
-    id: t.id,
-    skuId: t.skuId,
-    occurredAt: fmtDateTime(t.occurredAt),
-    skuLabel: skuLabelOf(t.skuId),
-    warehouseName: masters.warehouseName(t.warehouseId),
-    kindLabel: INVENTORY_KIND_LABELS[t.kind],
-    qty: t.qty,
-    refType: t.refType,
-    reverseState: inv.reverseStateOf(t),
-  })),
+  }).map((t) => {
+    const idn = skuIdentityOf(t.skuId)
+    return {
+      id: t.id,
+      skuId: t.skuId,
+      occurredAt: fmtDateTime(t.occurredAt),
+      productName: idn.productName,
+      skuDetail: idn.detail,
+      warehouseName: masters.warehouseName(t.warehouseId),
+      kindLabel: INVENTORY_KIND_LABELS[t.kind],
+      qty: t.qty,
+      refType: t.refType,
+      reverseState: inv.reverseStateOf(t),
+    }
+  }),
 )
 
 // クライアントページング（SKU・倉庫フィルタは ledgerRows が担い、ページングのみ共通化）
@@ -236,7 +248,7 @@ watch([ledgerSku, ledgerWh], () => { ledgerPage.value = 1 })
 
 const ledgerColumns: TableColumn[] = [
   { key: 'occurredAt', label: '日時', primary: true },
-  { key: 'skuLabel', label: 'SKU', primary: true },
+  { key: 'skuLabel', label: '商品 / SKU', primary: true },
   { key: 'warehouseName', label: '倉庫' },
   { key: 'kindLabel', label: '区分', primary: true },
   { key: 'qty', label: '数量', align: 'right', primary: true },
@@ -277,12 +289,13 @@ const stItems = computed(() => {
   const q = stSearch.value.trim().toLowerCase()
   const rows = stShowAll.value
     // 全アクティブ SKU（在庫0の found も数えられる。theory は残高導出で 0 になる）
-    ? p.activeSkus().map(s => ({ skuId: s.id, skuLabel: p.skuLabel(s), theory: inv.balanceOf(s.id, stWh.value) }))
+    ? p.activeSkus().map(s => ({ skuId: s.id, ...p.skuIdentity(s), theory: inv.balanceOf(s.id, stWh.value) }))
     // 在庫のある SKU のみ
-    : inv.balancesOfWarehouse(stWh.value).map(b => ({ skuId: b.skuId, skuLabel: skuLabelOf(b.skuId), theory: b.qty }))
+    : inv.balancesOfWarehouse(stWh.value).map(b => ({ skuId: b.skuId, ...skuIdentityOf(b.skuId), theory: b.qty }))
   return rows
-    .filter(it => !q || it.skuLabel.toLowerCase().includes(q))
-    .sort((a, b) => a.skuLabel.localeCompare(b.skuLabel, 'ja'))
+    // 商品名・SKU 詳細のいずれかで絞り込み・並びは商品名優先（同一商品のバリアントが隣接する）
+    .filter(it => !q || `${it.productName} ${it.detail}`.toLowerCase().includes(q))
+    .sort((a, b) => `${a.productName} ${a.detail}`.localeCompare(`${b.productName} ${b.detail}`, 'ja'))
 })
 
 // 倉庫切替時に実棚入力をリセット（別倉庫の入力を持ち越さない）。理論値では初期化せず未入力のままにし、
@@ -374,7 +387,7 @@ async function submitStocktakeInner(): Promise<void> {
         <div class="w-48">
           <UiSelect v-model="browseWh" :options="warehouseOptions" empty-label="すべての倉庫" aria-label="倉庫で絞り込み" />
         </div>
-        <UiSearchInput v-model="browseSearch" placeholder="SKU 名で検索" />
+        <UiSearchInput v-model="browseSearch" placeholder="商品名・SKU で検索" />
       </UiFilterBar>
 
       <UiSectionCard :title="`在庫一覧（${browseTotal}件）`" flush>
@@ -387,7 +400,10 @@ async function submitStocktakeInner(): Promise<void> {
           <template #cell-skuLabel="{ row }">
             <div class="flex items-center gap-2">
               <AkebonoProductThumb :sku-id="String(row.skuId)" :size="24" />
-              <span>{{ row.skuLabel }}</span>
+              <div class="min-w-0">
+                <div class="truncate font-medium">{{ row.productName }}</div>
+                <div class="truncate text-[11px] text-muted">{{ row.skuDetail }}</div>
+              </div>
             </div>
           </template>
           <template #cell-qty="{ row }">
@@ -427,7 +443,10 @@ async function submitStocktakeInner(): Promise<void> {
           <template #cell-skuLabel="{ row }">
             <div class="flex items-center gap-2">
               <AkebonoProductThumb :sku-id="String(row.skuId)" :size="24" />
-              <span>{{ row.skuLabel }}</span>
+              <div class="min-w-0">
+                <div class="truncate font-medium">{{ row.productName }}</div>
+                <div class="truncate text-[11px] text-muted">{{ row.skuDetail }}</div>
+              </div>
             </div>
           </template>
           <template #cell-qty="{ row }">
@@ -459,7 +478,7 @@ async function submitStocktakeInner(): Promise<void> {
         <div class="w-48">
           <UiSelect v-model="stWh" :options="warehouseOptions" aria-label="棚卸対象の倉庫" />
         </div>
-        <UiSearchInput v-model="stSearch" placeholder="SKU 名で絞り込み" />
+        <UiSearchInput v-model="stSearch" placeholder="商品名・SKU で絞り込み" />
         <label class="flex items-center gap-1.5 text-[12px] text-sub">
           <input v-model="stShowAll" type="checkbox">在庫0の SKU も表示
         </label>
@@ -488,9 +507,12 @@ async function submitStocktakeInner(): Promise<void> {
             :key="it.skuId"
             class="grid grid-cols-1 items-center gap-2 border-b border-line pb-2 last:border-0 sm:grid-cols-[1fr_auto_auto_auto]"
           >
-            <div class="flex items-center gap-2 text-[13px] font-medium">
+            <div class="flex items-center gap-2 text-[13px]">
               <AkebonoProductThumb :sku-id="it.skuId" :size="24" />
-              <span>{{ it.skuLabel }}</span>
+              <div class="min-w-0">
+                <div class="truncate font-medium">{{ it.productName }}</div>
+                <div class="truncate text-[11px] text-muted">{{ it.detail }}</div>
+              </div>
             </div>
             <div class="text-[12px] text-muted">
               理論 <span class="num tabular-nums">{{ fmtInt(it.theory) }}</span>
@@ -504,7 +526,7 @@ async function submitStocktakeInner(): Promise<void> {
                 step="1"
                 class="input num w-24"
                 :placeholder="theoryPlaceholder(it.theory)"
-                :aria-label="`${it.skuLabel} の実棚数`"
+                :aria-label="`${it.productName}（${it.detail}） の実棚数`"
               >
             </div>
             <div class="text-[12px] sm:text-right">
