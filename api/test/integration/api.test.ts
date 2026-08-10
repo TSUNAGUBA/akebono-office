@@ -5447,6 +5447,19 @@ describe('Phase D: データ取込（F-32）・ダッシュボード保管（F-4
       })
       expect((rNeg.json.data as { counts: Record<string, number> }).counts).toMatchObject({ staged: 1, applied: 1, failed: 0 })
       expect(await balOf()).toBe(-5)
+      // 調整（adjust）取込は従来どおり増減数（デルタ）: −5 に +10 → 残高 5・同一ファイル再取込はスキップ（冪等）
+      const csvAdj = `sku,warehouse,qty,kind\n${skuId},wh-02,10,adjust\n`
+      const rAdj = await api('POST', '/v1/akebono/import-runs', { as: ADMIN, body: { sourceId: srcId, contentBase64: b64(csvAdj) } })
+      expect((rAdj.json.data as { counts: Record<string, number> }).counts).toMatchObject({ staged: 1, applied: 1, failed: 0 })
+      expect(await balOf()).toBe(5)
+      const rAdj2 = await api('POST', '/v1/akebono/import-runs', { as: ADMIN, body: { sourceId: srcId, contentBase64: b64(csvAdj) } })
+      expect((rAdj2.json.data as { counts: Record<string, number> }).counts).toMatchObject({ staged: 1, applied: 0, skipped: 1 })
+      expect(await balOf()).toBe(5)
+      // 同一 SKU×倉庫が同一ファイルに複数行: 実棚数へ収束し最終行が最終残高を決定（20 → 7 で残高 7）
+      const csvMulti = `sku,warehouse,qty,kind\n${skuId},wh-02,20,stocktake\n${skuId},wh-02,7,stocktake\n`
+      const rMulti = await api('POST', '/v1/akebono/import-runs', { as: ADMIN, body: { sourceId: srcId, contentBase64: b64(csvMulti) } })
+      expect((rMulti.json.data as { counts: Record<string, number> }).counts).toMatchObject({ staged: 2, applied: 2, failed: 0 })
+      expect(await balOf()).toBe(7)
     })
 
     it('API 接続（pull）: https 以外・内部アドレスは SSRF ガードで拒否（AKO-IMP-007）', async () => {

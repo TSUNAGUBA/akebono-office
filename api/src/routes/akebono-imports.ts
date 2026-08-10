@@ -48,7 +48,7 @@ import {
 } from '../../../shared/domain/import-run'
 import type { Env } from '../env'
 import { fetchSheetRows } from './sheets'
-import { balanceOf, lockInventoryKeys, nextDocCode, postInventory } from './akebono-trade'
+import { lockInventoryKeys, nextDocCode, postInventory } from './akebono-trade'
 
 const IMPORT_METHODS = ['file_csv', 'file_fixed', 'file_json', 'api_pull', 'sheets_pull']
 const IMPORT_ENTITIES = ['product', 'sku', 'company', 'sales_record', 'inventory', 'product_variant',
@@ -927,15 +927,29 @@ async function applyInventory(
     plans.push({ rec, skuId: skuRows[0]!.id, warehouseId, value, kind, reason, dateRaw, occurredAt })
   }
 
-  // 棚卸の差分計上（read-then-post）を手動棚卸・出荷（C-1）と直列化。キーはソート取得でデッドロック回避。
-  if (plans.length > 0) {
-    await lockInventoryKeys(db, plans.map(p => ({ skuId: p.skuId, warehouseId: p.warehouseId })))
+  // 棚卸の差分計上（read-then-post）を手動棚卸・出荷/移動（C-1）と直列化。読取りが必要なのは棚卸キーのみ
+  // （調整は残高非依存のデルタ追記）。ソート取得でデッドロック回避。棚卸キーの残高は 1 クエリで先読みし
+  // （行ごとの SELECT SUM = N+1 を回避）、第2パスでは実際に追記された分だけメモリ上の残高を進める。
+  const keyOf = (skuId: string, warehouseId: string): string => `${skuId}::${warehouseId}`
+  const stPlans = plans.filter(p => p.kind === 'stocktake')
+  const bal = new Map<string, number>()
+  if (stPlans.length > 0) {
+    await lockInventoryKeys(db, stPlans.map(p => ({ skuId: p.skuId, warehouseId: p.warehouseId })))
+    for (const p of stPlans) bal.set(keyOf(p.skuId, p.warehouseId), 0) // 残高 0 のキーも追跡対象に含める
+    const { rows } = await db.query<{ skuId: string; warehouseId: string; sum: number }>(
+      `SELECT sku_id AS "skuId", warehouse_id AS "warehouseId", SUM(qty)::int AS sum
+         FROM inventory_transactions WHERE sku_id = ANY($1) AND warehouse_id = ANY($2)
+        GROUP BY sku_id, warehouse_id`,
+      [[...new Set(stPlans.map(p => p.skuId))], [...new Set(stPlans.map(p => p.warehouseId))]])
+    for (const r of rows) if (bal.has(keyOf(r.skuId, r.warehouseId))) bal.set(keyOf(r.skuId, r.warehouseId), r.sum)
   }
 
   // 第2パス: 反映（同一トランザクション内。棚卸=実棚数−残高の差分・調整=デルタ）。
   for (const p of plans) {
-    // 棚卸は理論在庫（残高）との差分。同一トランザクション内の先行行の反映も残高に含まれる（先勝ち収束）。
-    const qty = p.kind === 'stocktake' ? p.value - (await balanceOf(db, p.skuId, p.warehouseId)) : p.value
+    const key = keyOf(p.skuId, p.warehouseId)
+    // 棚卸は理論在庫（残高）との差分。同一 SKU×倉庫が複数行なら、先行行の反映後の残高を基準にするため
+    // 最終行が最終残高を決定する（＝実棚数へ収束）。調整は取込値をそのままデルタ追記。
+    const qty = p.kind === 'stocktake' ? p.value - (bal.get(key) ?? 0) : p.value
     // 冪等キーは取込値（棚卸=実棚数/調整=増減数）を含める = 同一ファイル再取込はスキップ（古い棚卸値の上書き防止）
     const refLineId = rowFingerprint(sourceId, [p.skuId, p.warehouseId, p.value, p.kind, p.dateRaw])
     try {
@@ -945,7 +959,11 @@ async function applyInventory(
       }]))
       // 差分 0（棚卸で実棚数＝残高）・同一内容行の再取込（UNIQUE 衝突）は追記なし = skipped
       if (added === 0) out.skipped++
-      else out.applied++
+      else {
+        out.applied++
+        // 実際に追記された分（qty）だけメモリ残高を進める。棚卸キーのみ追跡（後続行が正しい残高を見る）
+        if (bal.has(key)) bal.set(key, (bal.get(key) ?? 0) + qty)
+      }
     } catch (e) {
       fail(p.rec, `在庫トランザクションの登録に失敗したため隔離（${(e as Error).message}）`)
     }

@@ -92,7 +92,7 @@ export async function postInventory(db: pg.Pool | pg.PoolClient, entries: Invent
 }
 
 /** SKU × 倉庫の残高（台帳 Σqty） */
-export async function balanceOf(db: pg.Pool | pg.PoolClient, skuId: string, warehouseId: string): Promise<number> {
+async function balanceOf(db: pg.Pool | pg.PoolClient, skuId: string, warehouseId: string): Promise<number> {
   const { rows } = await db.query<{ sum: number | null }>(
     `SELECT SUM(qty)::int AS sum FROM inventory_transactions WHERE sku_id = $1 AND warehouse_id = $2`,
     [skuId, warehouseId])
