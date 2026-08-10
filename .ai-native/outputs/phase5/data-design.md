@@ -217,7 +217,7 @@ akebono_wishes / sales_monthly / media_articles と同方針。各画面は空�
 >   ロールアップする（useAkebonoSales.supplierBreakdown = 売上ページの内訳）。供給元未解決の明細は「未設定」に集約し
 >   データ整備の要否を可視化する。
 > - **P1（弊社取り分の可視化・整合検証）:** 三者按分の弊社（当社）取り分率 = 1 − 店舗取り分率 − 作家率（sales_rate）を
->   純関数化（shared/domain/akebono `residualMarginRate` / `worstResidualMargin`）。委託精算の締め前プレビュー
+>   純関数化（shared/domain/akebono `residualMarginRate`）。委託精算の締め前プレビュー
 >   （useConsignment.settlementPreview = 書込なし試算）で当社取り分（税抜）を提示し、委託条件マスタ・締めモーダルで
 >   「店舗取り分 + 作家率 > 100%（逆ざや）」の組を非ブロッキング警告する（settlementIntegrity）。api-design の
 >   「店舗請求 − 作家支払 = 当社粗利 ≥ 0」の整合を設定段階で担保する。

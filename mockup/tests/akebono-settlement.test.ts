@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { InventoryTransaction, SettlementSnapshot } from '~/types/akebono'
 import {
   balanceKey, calcPayoutAmount, calcStoreMargin, calcTax, foldBalances,
-  nextCode, presetAppsFor, residualMarginRate, roundBy, worstResidualMargin,
+  nextCode, presetAppsFor, residualMarginRate, roundBy,
 } from '~/utils/akebono'
 
 /** 委託精算の三者精算（決定#5 + 第2巡設定化）の整合を守るテスト（資金計算のリグレッション防止） */
@@ -49,18 +49,6 @@ describe('三者按分の当社取り分（残余）と整合検証', () => {
 
   it('設定過剰（店舗 + 作家 > 100%）は負値 = 逆ざや', () => {
     expect(residualMarginRate(0.40, 0.70)).toBeCloseTo(-0.10, 10)
-  })
-
-  it('worstResidualMargin は全組の最小残余を返す（負なら設定要確認）', () => {
-    // 店舗 {30%, 40%} × 作家 {60%, 70%} の最小残余 = 1 − 0.40 − 0.70 = −0.10
-    expect(worstResidualMargin([0.30, 0.40], [0.60, 0.70])).toBeCloseTo(-0.10, 10)
-    // すべて健全なら最小でも ≥ 0
-    expect(worstResidualMargin([0.30], [0.60])).toBeCloseTo(0.10, 10)
-  })
-
-  it('組が無い（店舗のみ / 作家のみ）ときは null（評価対象なし）', () => {
-    expect(worstResidualMargin([], [0.60])).toBeNull()
-    expect(worstResidualMargin([0.30], [])).toBeNull()
   })
 })
 

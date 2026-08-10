@@ -139,7 +139,6 @@ export function hasPartnerRole(company: Pick<Company, 'kind' | 'partnerRoles'>, 
 export {
   balanceKey, buildSettlementSnapshot, buildShipmentSaleLines, calcPayoutAmount, calcStoreMargin, calcTax,
   consignmentCancelBlockReason, foldBalances, nextCode, residualMarginRate, roundBy, totalStockOf,
-  worstResidualMargin,
 } from '../../../shared/domain/akebono'
 export type { ShipmentSaleLine } from '../../../shared/domain/akebono'
 

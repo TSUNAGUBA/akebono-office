@@ -2365,8 +2365,8 @@
 - [x] **sales.vue**: 既存「得意先別内訳」を「販売先（店舗・得意先）別内訳」に、加えて「仕入先（作家・窯元）別内訳」バーチャートを新設（レスポンシブ 2 分割）。
 
 ### 66-3 P1: 弊社取り分（残余）の可視化＋委託条件の整合検証
-- [x] **共有純関数（shared/domain/akebono）**: `residualMarginRate(storeShare, artistRate)` = 1 − 店舗取り分 − 作家率、
-  `worstResidualMargin(storeShares, artistRates)` = 全組の最小残余（負 = 逆ざや）。utils/akebono で再エクスポート。
+- [x] **共有純関数（shared/domain/akebono）**: `residualMarginRate(storeShare, artistRate)` = 1 − 店舗取り分 − 作家率
+  （負 = 逆ざや）。utils/akebono で再エクスポート。整合検証（cross-row の逆ざや検出）は composable 側 settlementIntegrity が担う。
 - [x] **useConsignment**: `settlementPreview(segmentId, month)`（締め前の試算 = 書込なし。closeConsignment と同一純関数・同一作家帰属解決で
   店舗別請求・作家別支払・当社粗利〔税抜〕を算定）・`settlementIntegrity(segmentId)`（店舗取り分 + 作家率〔sales_rate〕> 100% の逆ざや組を返す）。
 - [x] **billing.vue（締めモーダル）**: 締め前プレビュー（委託売上・店舗へ請求・作家へ支払・**当社取り分**を提示。逆ざやは crit 表示）＋整合警告。
@@ -2374,7 +2374,7 @@
 
 ### 66-4 検証（実測値）
 - [x] api typecheck green・mockup typecheck green。
-- [x] mockup unit **232 passed**（`residualMarginRate`/`worstResidualMargin` 4 ケース・`buildShipmentSaleLines` の供給元注入・null フォールバック）。
+- [x] mockup unit **226 passed**（`residualMarginRate` の按分・逆ざや 2 ケース・`buildShipmentSaleLines` の供給元注入・null フォールバック）。
 - [x] api unit **302 passed**・api 統合 **245 passed**（新規: 「計上時に既定仕入先を凍結し供給元変更後も精算は当時の作家へ支払う」・
   「既存行〔スナップショット NULL〕は現在値へフォールバックして帰属する」）。
 
