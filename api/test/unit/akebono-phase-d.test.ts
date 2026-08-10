@@ -87,6 +87,9 @@ describe('applyImportTransform（値変換）', () => {
     expect(applyImportTransform('20260809 194048', 'date')).toBe('2026-08-09')
     // 時刻だけ・不正形式は素通し（呼び出し側の DATE_RE で隔離される = 従来どおり）
     expect(applyImportTransform('19:40:48', 'date')).toBe('19:40:48')
+    // 日付の後が時刻/TZ 様でない（自由記述・レンジ）値は変換せず素通し = ゴミを黙って日付へ強制しない
+    expect(applyImportTransform('2026-08-09 これは日付ではない', 'date')).toBe('2026-08-09 これは日付ではない')
+    expect(applyImportTransform('2026/1/1 to 2026-12-31', 'date')).toBe('2026/1/1 to 2026-12-31')
   })
   it('未知の transform・空は前後空白のみ除去', () => {
     expect(applyImportTransform('  abc ', '')).toBe('abc')

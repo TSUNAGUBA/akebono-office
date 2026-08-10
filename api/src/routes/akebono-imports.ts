@@ -48,7 +48,7 @@ import {
 } from '../../../shared/domain/import-run'
 import type { Env } from '../env'
 import { fetchSheetRows } from './sheets'
-import { nextDocCode, postInventory } from './akebono-trade'
+import { balanceOf, lockInventoryKeys, nextDocCode, postInventory } from './akebono-trade'
 
 const IMPORT_METHODS = ['file_csv', 'file_fixed', 'file_json', 'api_pull', 'sheets_pull']
 const IMPORT_ENTITIES = ['product', 'sku', 'company', 'sales_record', 'inventory', 'product_variant',
@@ -864,7 +864,20 @@ async function applySalesRecords(
   return out
 }
 
-/** 在庫トランザクション（inventory）: adjust / stocktake のみ受理し台帳へ冪等追記 */
+/**
+ * 在庫トランザクション（inventory）: adjust / stocktake のみ受理し台帳へ冪等追記する。
+ * - adjust（調整）: qty = **増減数（デルタ）**。そのまま台帳へ追記（0 は無意味なため隔離）。
+ * - stocktake（棚卸）: qty = **実物理在庫数（絶対値）**。理論在庫（残高）との差分（実棚数 − 残高）を
+ *   計上する（手動棚卸 POST /inventory/stocktake と同一意味論。実物理在庫数はマイナスも 0 も可）。
+ *   オペレーター指示 2026-08-10「棚卸取込は実物理在庫数が取込元・マイナス在庫も可」への対応。
+ *
+ * 棚卸の差分計上は残高の read-then-post のため、SKU × 倉庫キーを**ソート取得**の advisory lock で
+ * 手動棚卸・出荷/移動（C-1）および他取込元の在庫取込と直列化する（キー順一致でデッドロック回避。
+ * ラン全体は imprun:sourceId ロック内 = 同一取込元は直列・別取込元とは在庫キー順で整合）。
+ * 冪等: refLineId フィンガープリント（取込元・SKU・倉庫・**取込値**〔棚卸=実棚数/調整=増減数〕・区分・
+ * 日付）＋ ON CONFLICT DO NOTHING。同一ファイルの再取込は同一フィンガープリントでスキップ（＝古い棚卸値
+ * による意図しない上書きも防ぐ = 原則2）。差分 0（実棚数＝残高）は postInventory が qty=0 でスキップ。
+ */
 async function applyInventory(
   db: pg.PoolClient, sourceId: string, records: ImportRecord[], fields: ImportRunFieldDef[],
 ): Promise<ApplyOutcome> {
@@ -874,40 +887,67 @@ async function applyInventory(
   const KIND_MAP: Record<string, string> = { adjust: 'adjust', stocktake: 'stocktake', 調整: 'adjust', 棚卸: 'stocktake' }
   const REASONS = new Set(['defective', 'lost', 'found', 'sample', 'stocktake', 'other'])
   const out: ApplyOutcome = { applied: 0, skipped: 0, issues: [] }
+  const fail = (rec: ImportRecord, message: string): void => { out.issues.push({ rowNo: rec.rowNo, rawText: rec.raw, message }) }
+
+  // 第1パス: 解決・検証（DB read のみ・書込前）。棚卸の残高は第2パスでロック取得後に読む。
+  interface InvPlan {
+    rec: ImportRecord; skuId: string; warehouseId: string; value: number
+    kind: string; reason: string; dateRaw: string; occurredAt?: string
+  }
+  const plans: InvPlan[] = []
   for (const rec of records) {
     const v = rec.values
-    const fail = (message: string): void => { out.issues.push({ rowNo: rec.rowNo, rawText: rec.raw, message }) }
     const skuRaw = v.skuId ?? ''
     const { rows: skuRows } = await db.query<{ id: string }>(
       `SELECT s.id FROM product_skus s WHERE ${skuCond.cond} LIMIT 2`, [skuRaw])
     if (skuRows.length !== 1) {
-      fail(`SKU「${skuRaw}」を特定できない${skuCond.keyLabel ? `（突合キー: ${skuCond.keyLabel}）` : ''}ため隔離`)
+      fail(rec, `SKU「${skuRaw}」を特定できない${skuCond.keyLabel ? `（突合キー: ${skuCond.keyLabel}）` : ''}ため隔離`)
       continue
     }
     const warehouseId = v.warehouseId ? warehouses.resolve(v.warehouseId) : null
-    if (!warehouseId) { fail(unresolvedRefMsg('倉庫', v.warehouseId ?? '', warehouses)); continue }
-    const qty = Number(v.qty)
-    if (!Number.isInteger(qty) || qty === 0 || Math.abs(qty) > 1_000_000) { fail(`増減数「${v.qty ?? ''}」が 0 以外の整数でないため隔離`); continue }
+    if (!warehouseId) { fail(rec, unresolvedRefMsg('倉庫', v.warehouseId ?? '', warehouses)); continue }
     const kind = KIND_MAP[v.kind ?? '']
-    if (!kind) { fail(`区分「${v.kind ?? ''}」は取込で使えません（adjust=調整 / stocktake=棚卸のみ）`); continue }
+    if (!kind) { fail(rec, `区分「${v.kind ?? ''}」は取込で使えません（adjust=調整 / stocktake=棚卸のみ）`); continue }
+    const value = Number(v.qty)
+    // 共通で整数・絶対値上限。調整はデルタ 0 が無意味なため隔離／棚卸は実棚数 0・マイナスとも可。
+    if (!Number.isInteger(value) || Math.abs(value) > 1_000_000 || (kind === 'adjust' && value === 0)) {
+      fail(rec, kind === 'stocktake'
+        ? `実在庫数「${v.qty ?? ''}」が整数でない（または範囲外）ため隔離`
+        : `増減数「${v.qty ?? ''}」が 0 以外の整数でないため隔離`)
+      continue
+    }
     const reason = v.reason && REASONS.has(v.reason) ? v.reason : kind === 'stocktake' ? 'stocktake' : 'other'
     // 発生日は YYYY-MM-DD のみ受理（不正文字列を timestamptz へ流すとトランザクション全体が壊れる = 隔離）
     const dateRaw = v.occurredAt ?? ''
     if (dateRaw !== '' && !DATE_RE.test(dateRaw)) {
-      fail(`発生日「${dateRaw}」が YYYY-MM-DD でないため隔離（変換に date を指定できます）`)
+      fail(rec, `発生日「${dateRaw}」が YYYY-MM-DD でないため隔離（変換に date を指定できます）`)
       continue
     }
     const occurredAt = dateRaw ? `${dateRaw}T00:00:00+09:00` : undefined
-    const refLineId = rowFingerprint(sourceId, [skuRows[0]!.id, warehouseId, qty, kind, dateRaw])
+    plans.push({ rec, skuId: skuRows[0]!.id, warehouseId, value, kind, reason, dateRaw, occurredAt })
+  }
+
+  // 棚卸の差分計上（read-then-post）を手動棚卸・出荷（C-1）と直列化。キーはソート取得でデッドロック回避。
+  if (plans.length > 0) {
+    await lockInventoryKeys(db, plans.map(p => ({ skuId: p.skuId, warehouseId: p.warehouseId })))
+  }
+
+  // 第2パス: 反映（同一トランザクション内。棚卸=実棚数−残高の差分・調整=デルタ）。
+  for (const p of plans) {
+    // 棚卸は理論在庫（残高）との差分。同一トランザクション内の先行行の反映も残高に含まれる（先勝ち収束）。
+    const qty = p.kind === 'stocktake' ? p.value - (await balanceOf(db, p.skuId, p.warehouseId)) : p.value
+    // 冪等キーは取込値（棚卸=実棚数/調整=増減数）を含める = 同一ファイル再取込はスキップ（古い棚卸値の上書き防止）
+    const refLineId = rowFingerprint(sourceId, [p.skuId, p.warehouseId, p.value, p.kind, p.dateRaw])
     try {
       const added = await rowWrite(db, () => postInventory(db, [{
-        skuId: skuRows[0]!.id, warehouseId, qty, kind, reason,
-        refType: 'import', refLineId, occurredAt,
+        skuId: p.skuId, warehouseId: p.warehouseId, qty, kind: p.kind, reason: p.reason,
+        refType: 'import', refLineId, occurredAt: p.occurredAt,
       }]))
-      if (added === 0) out.skipped++ // 同一内容行の再取込（UNIQUE(ref_type, ref_line_id, kind) = 冪等）
+      // 差分 0（棚卸で実棚数＝残高）・同一内容行の再取込（UNIQUE 衝突）は追記なし = skipped
+      if (added === 0) out.skipped++
       else out.applied++
     } catch (e) {
-      fail(`在庫トランザクションの登録に失敗したため隔離（${(e as Error).message}）`)
+      fail(p.rec, `在庫トランザクションの登録に失敗したため隔離（${(e as Error).message}）`)
     }
   }
   return out
