@@ -6600,3 +6600,89 @@ describe('サーバーページング + 検索（q/limit/offset/total）と在�
     expect(await balOf('wh-02')).toBe(to0)
   })
 })
+
+describe('改善要望（F-42）', () => {
+  interface Item { id: string; title: string; status: string; pagePaths: string[]; sourceRequestIds: string[]; archivedAt: string | null }
+
+  it('投稿は全員可・管理系は権限を持つ人のみ（deny-by-default）', async () => {
+    // 投稿（各ページから。認証済み全員可）
+    const posted = await api('POST', '/v1/improvements/requests', {
+      as: MEMBER, body: { body: '売上一覧で合計金額を大きく表示してほしい', pagePath: '/akebono/sales', pageLabel: 'AKEBONO 売上' },
+    })
+    expect(posted.status).toBe(201)
+    // 時刻は JST ウォールクロック文字列（+09:00）で返す（生 UTC "…Z" を返さない = 日付ずれ防止）
+    expect((posted.json.data as { createdAt: string }).createdAt).toMatch(/\+09:00$/)
+    // 未入力は AKO-REQ-001
+    expect((await api('POST', '/v1/improvements/requests', { as: MEMBER, body: { body: '  ' } })).json.error?.code).toBe('AKO-REQ-001')
+
+    // 一般は管理系を閲覧不可（AKO-PRM-001）・管理者は可
+    const memberList = await api('GET', '/v1/improvements/items', { as: MEMBER })
+    expect(memberList.status).toBe(403)
+    expect(memberList.json.error?.code).toBe('AKO-PRM-001')
+    expect((await api('GET', '/v1/improvements/items', { as: ADMIN })).status).toBe(200)
+
+    // 個人 allow を付与すると閲覧可能になる（権限設定 = F-16）
+    const grant = await api('POST', '/v1/masters/permission-rules', {
+      as: ADMIN, body: { subjectKind: 'member', subjectId: MEMBER, resource: 'improvements', effect: 'allow' },
+    })
+    expect(grant.status).toBe(201)
+    expect((await api('GET', '/v1/improvements/items', { as: MEMBER })).status).toBe(200)
+    // 後片付け（他テストへ影響させない）
+    await api('POST', `/v1/masters/permission-rules/${(grant.json.data as { id: string }).id}/archive`, { as: ADMIN })
+  })
+
+  it('AI 集約 → ステータス（状態機械・reopen）→ プロンプト出力', async () => {
+    // 集約対象の要望を投稿
+    await api('POST', '/v1/improvements/requests', {
+      as: MEMBER, body: { body: '打刻を取り消せるようにしてほしい', pagePath: '/timecard', pageLabel: 'タイムカード' },
+    })
+    // 集約（未集約の要望のみ処理・冪等）
+    const gen = await api('POST', '/v1/improvements/generate', { as: ADMIN })
+    expect(gen.status).toBe(200)
+    expect((gen.json.data as { clustered: number }).clustered).toBeGreaterThan(0)
+    // 再実行しても新規要望が無ければ 0 件（冪等 = 原則2）
+    expect((await api('POST', '/v1/improvements/generate', { as: ADMIN })).json.data as { clustered: number })
+      .toMatchObject({ clustered: 0 })
+
+    const items = (await api('GET', '/v1/improvements/items', { as: ADMIN })).json.data as Item[]
+    const tc = items.find(it => it.pagePaths.includes('/timecard'))!
+    expect(tc.status).toBe('triage')
+
+    // 不正遷移（triage → resolved）は 409
+    const bad = await api('POST', `/v1/improvements/items/${tc.id}/status`, { as: ADMIN, body: { status: 'resolved' } })
+    expect(bad.status).toBe(409)
+    expect(bad.json.error?.code).toBe('AKO-REQ-006')
+
+    // 正常遷移: triage → accepted → resolved
+    expect((await api('POST', `/v1/improvements/items/${tc.id}/status`, { as: ADMIN, body: { status: 'accepted' } })).status).toBe(200)
+    const resolved = await api('POST', `/v1/improvements/items/${tc.id}/status`, { as: ADMIN, body: { status: 'resolved' } })
+    expect(resolved.status).toBe(200)
+    expect((resolved.json.data as { status: string; resolvedAt: string | null }).status).toBe('resolved')
+    expect((resolved.json.data as { resolvedAt: string | null }).resolvedAt).not.toBeNull()
+
+    // reopen（解決 → 対応する。取消可能性 = 原則9.5）で resolvedAt が消える
+    const reopened = await api('POST', `/v1/improvements/items/${tc.id}/status`, { as: ADMIN, body: { status: 'accepted' } })
+    expect((reopened.json.data as { resolvedAt: string | null }).resolvedAt).toBeNull()
+
+    // 集約済みの要望は再集約で二重登録されない（item_id が付き未集約から外れる）
+    // プロンプト出力（未解決フィルター）に対象ページが含まれる
+    const prompt = await api('POST', '/v1/improvements/prompt', { as: ADMIN, body: { filter: 'open' } })
+    expect(prompt.status).toBe(200)
+    expect((prompt.json.data as { prompt: string }).prompt).toContain('/timecard')
+    // 一般はプロンプト出力も不可
+    expect((await api('POST', '/v1/improvements/prompt', { as: MEMBER, body: { filter: 'open' } })).status).toBe(403)
+  })
+
+  it('要望・改修単位の取消（論理削除）と復元（原則9.5）', async () => {
+    const posted = await api('POST', '/v1/improvements/requests', {
+      as: MEMBER, body: { body: '一時的な要望（取消テスト）', pagePath: '/x', pageLabel: 'X' },
+    })
+    const reqId = (posted.json.data as { id: string }).id
+    // 投稿者本人は自分の要望を取消できる
+    expect((await api('POST', `/v1/improvements/requests/${reqId}/archive`, { as: MEMBER })).status).toBe(200)
+    // 復元もできる
+    expect((await api('POST', `/v1/improvements/requests/${reqId}/restore`, { as: MEMBER })).status).toBe(200)
+    // 他人（権限なし）は取消できない（本人以外は管理権限が必要 = 403）
+    expect((await api('POST', `/v1/improvements/requests/${reqId}/archive`, { as: HR })).status).toBe(403)
+  })
+})

@@ -1,0 +1,442 @@
+/**
+ * 改善要望（F-42）のドメイン純関数（フロント/API 共有 = パリティの SoT）。
+ *
+ * 概要（オペレーター指示 2026-08-11）:
+ * - 各ページから改善・改修の要望を記録する（investRequest = 追記系。SoT）。
+ * - 要望は AI が「改修単位（ImprovementItem）」へ集約する（既存要望も含めて分解・まとめ）。
+ *   AI は Vertex AI（api/src/lib/llm）を一次に使い、失敗時は本モジュールの決定的
+ *   ヒューリスティック（heuristicClusterRequests）へフォールバックする（モックは常にこちら）。
+ * - 改修単位は単一ステータス（未判定 → 対応する → 解決済み／対応しない）で管理し、
+ *   解決済/未解決・対応可否でフィルターできる。
+ * - フィルター結果を、コーディング AI エージェント向けの詳細プロンプト（buildCodingPrompt）へ出力する。
+ *
+ * データフロー整合性（原則6）:
+ * - SoT = improvement_requests（生の要望・追記のみ・巻き戻さない）。
+ * - improvement_items は要望から導出する集約キャッシュだが、**人手で付与したステータスは記録系**であり
+ *   再集約で巻き戻してはならない（原則2）。このため集約は「未集約の要望のみ」を対象にし、
+ *   既存 item は status='triage'（未判定・人手未対応）のものにのみ追記する。判定済み item は不変。
+ */
+
+import type { Result } from './types'
+
+// ---------- ステータス（単一ステータスで一元管理。原則: 状態機械で活性と遷移検証を一致させる） ----------
+
+/**
+ * 改修単位の状態。
+ * - triage   未判定（AI 集約直後。対応可否を人手で判定する前）
+ * - accepted 対応する（対応可・未解決）
+ * - resolved 解決済み（改修完了）
+ * - rejected 対応しない（対応不可・見送り）
+ */
+export type ImprovementStatus = 'triage' | 'accepted' | 'resolved' | 'rejected'
+
+export const IMPROVEMENT_STATUSES: ImprovementStatus[] = ['triage', 'accepted', 'resolved', 'rejected']
+
+/** ステータスの表示メタ（label・トーン・「未解決か」）。ラベルの SoT はここ。tone は UI の Tone 値と対応 */
+export const IMPROVEMENT_STATUS_META: Record<
+  ImprovementStatus,
+  { label: string; tone: 'neutral' | 'info' | 'ok' | 'warn'; open: boolean }
+> = {
+  triage: { label: '未判定', tone: 'neutral', open: true },
+  accepted: { label: '対応する', tone: 'info', open: true },
+  resolved: { label: '解決済み', tone: 'ok', open: false },
+  rejected: { label: '対応しない', tone: 'warn', open: false },
+}
+
+/** 「未解決」= まだ改修が必要な状態（未判定・対応する）。解決済み/対応しないは決着済み */
+export function isOpenStatus(status: ImprovementStatus): boolean {
+  return IMPROVEMENT_STATUS_META[status]?.open ?? false
+}
+
+/**
+ * 状態遷移（フロントのボタン活性と API の遷移検証を一致させる）。
+ * 取消可能性（原則9.5）: 解決済み → 対応する（解決の取消 = reopen）、対応しない → 未判定/対応する
+ * （見送りの撤回）を許可し、「誤って解決/見送りにしたら詰む」導線を作らない。
+ */
+export const IMPROVEMENT_STATUS_NEXT: Record<ImprovementStatus, ImprovementStatus[]> = {
+  triage: ['accepted', 'rejected'],
+  accepted: ['resolved', 'rejected', 'triage'],
+  resolved: ['accepted'],
+  rejected: ['triage', 'accepted'],
+}
+
+/** 遷移が許可されているか */
+export function canTransition(from: ImprovementStatus, to: ImprovementStatus): boolean {
+  return (IMPROVEMENT_STATUS_NEXT[from] ?? []).includes(to)
+}
+
+// ---------- 一覧フィルター（解決済/未解決 + 対応可否を 1 つの選択で束ねる） ----------
+
+export type ImprovementFilter = 'all' | 'open' | 'triage' | 'accepted' | 'resolved' | 'rejected'
+
+/** フィルターの選択肢（UI と共有。all = すべて / open = 未解決） */
+export const IMPROVEMENT_FILTER_OPTIONS: { value: ImprovementFilter; label: string }[] = [
+  { value: 'all', label: 'すべて' },
+  { value: 'open', label: '未解決' },
+  { value: 'triage', label: '未判定' },
+  { value: 'accepted', label: '対応する' },
+  { value: 'resolved', label: '解決済み' },
+  { value: 'rejected', label: '対応しない' },
+]
+
+/** 改修単位がフィルターに一致するか */
+export function matchesImprovementFilter(status: ImprovementStatus, filter: ImprovementFilter): boolean {
+  if (filter === 'all') return true
+  if (filter === 'open') return isOpenStatus(status)
+  return status === filter
+}
+
+// ---------- 型 ----------
+
+/**
+ * 生の改善要望（SoT・追記系）。各ページの「要望を送る」から作られる。
+ * pagePath / pageLabel は投稿元ページを記録し、改修プロンプトの対象ページ特定に使う。
+ */
+export interface ImprovementRequest {
+  id: string
+  /** 投稿者 */
+  memberId: string
+  /** 投稿者名（スナップショット。閲覧時のマスタ参照を避ける） */
+  memberName: string
+  /** 投稿元ページのパス（例: '/akebono/sales'。空 = 不明） */
+  pagePath: string
+  /** 投稿元ページの表示名（例: 'AKEBONO 売上'。空 = 不明） */
+  pageLabel: string
+  /** 要望本文 */
+  body: string
+  /** 集約先の改修単位 id（null = 未集約） */
+  itemId: string | null
+  /** 取消（論理削除）時刻。null = 有効（原則9.5） */
+  archivedAt: string | null
+  createdAt: string
+}
+
+/**
+ * AI が集約した改修単位（改修 1 件の粒度）。ステータス・タイトル・改修内容は人手で編集しうる（記録系）。
+ */
+export interface ImprovementItem {
+  id: string
+  /** 改修単位の見出し */
+  title: string
+  /** 要約（一覧・プロンプト冒頭に使う 1〜2 文） */
+  summary: string
+  /** 改修内容の詳細（対象ページ・機能名・改修方針。マークダウン） */
+  detail: string
+  status: ImprovementStatus
+  /** 対象ページのパス（集約元の要望から集約。重複なし） */
+  pagePaths: string[]
+  /** 集約元の要望 id（トレーサビリティ） */
+  sourceRequestIds: string[]
+  /** 直近の集約が LLM 生成か（false = ヒューリスティック/手動） */
+  llm: boolean
+  /** 取消（論理削除）時刻。null = 有効（原則9.5） */
+  archivedAt: string | null
+  createdAt: string
+  updatedAt: string
+  /** 解決済みにした時刻（null = 未解決） */
+  resolvedAt: string | null
+}
+
+// ---------- 入力検証（api = AKO-REQ-*（400）へ変換 / mock = Result のエラーへ変換） ----------
+
+export const IMPROVEMENT_BODY_CAP = 4_000
+export const IMPROVEMENT_PAGE_LABEL_CAP = 120
+export const IMPROVEMENT_PAGE_PATH_CAP = 200
+export const IMPROVEMENT_TITLE_CAP = 200
+export const IMPROVEMENT_SUMMARY_CAP = 500
+export const IMPROVEMENT_DETAIL_CAP = 20_000
+
+/** コードポイント単位で cap（絵文字等を境界で壊さない。customer-log capCodePoints と同義の共有版） */
+export function capCodePoints(s: string, n: number): string {
+  const cps = [...s]
+  return cps.length > n ? cps.slice(0, n).join('') : s
+}
+
+/** 要望本文の検証（必須・上限）。エラーメッセージ | null */
+export function improvementBodyError(body: string): string | null {
+  if (!body.trim()) return '要望の内容を入力してください'
+  if ([...body].length > IMPROVEMENT_BODY_CAP) return `要望は ${IMPROVEMENT_BODY_CAP} 文字までで入力してください`
+  return null
+}
+
+/** 改修単位の見出し検証（編集時。必須・上限） */
+export function improvementTitleError(title: string): string | null {
+  if (!title.trim()) return '見出しを入力してください'
+  if ([...title].length > IMPROVEMENT_TITLE_CAP) return `見出しは ${IMPROVEMENT_TITLE_CAP} 文字までです`
+  return null
+}
+
+// ---------- 集約（クラスタリング） ----------
+
+/** 集約対象の生要望（構造的最小型 = mock 行・DB 行どちらからも渡せる） */
+export interface ClusterRequestInput {
+  id: string
+  pagePath: string
+  pageLabel: string
+  body: string
+}
+
+/** 集約先候補の既存改修単位（未集約要望の追記先判定に使う） */
+export interface ClusterOpenItem {
+  id: string
+  status: ImprovementStatus
+  pagePaths: string[]
+}
+
+/**
+ * 集約計画（純粋な指示データ。永続化は呼び出し側 = route/composable）。
+ * - appends: 既存の未判定 item へ要望を追記する
+ * - creates: 新しい改修単位を作る（tempKey は creates 内の一意キー = LLM/呼出側の参照用）
+ */
+export interface ClusterPlan {
+  appends: { itemId: string; requestIds: string[] }[]
+  creates: { title: string; summary: string; detail: string; pagePaths: string[]; requestIds: string[] }[]
+}
+
+/** 投稿元ページのグルーピングキー（パス優先・空はページ名・どちらも空は '全般'） */
+function groupKeyOf(r: ClusterRequestInput): string {
+  return r.pagePath.trim() || r.pageLabel.trim() || '全般'
+}
+
+/** ページ表示名（パスから引けないときのフォールバックは '全般'） */
+function labelOf(reqs: ClusterRequestInput[]): string {
+  return reqs.find(r => r.pageLabel.trim())?.pageLabel.trim()
+    || reqs.find(r => r.pagePath.trim())?.pagePath.trim()
+    || '全般'
+}
+
+/** 改修単位の詳細本文（対象ページ + 元要望の列挙）を組み立てる */
+export function buildItemDetail(reqs: ClusterRequestInput[]): string {
+  const label = labelOf(reqs)
+  const paths = [...new Set(reqs.map(r => r.pagePath.trim()).filter(Boolean))]
+  const lines: string[] = []
+  lines.push(`### 対象ページ: ${label}${paths.length ? `（${paths.map(p => `\`${p}\``).join(' / ')}）` : ''}`)
+  lines.push('')
+  lines.push(`**寄せられた要望 ${reqs.length} 件:**`)
+  reqs.forEach((r, i) => {
+    lines.push(`${i + 1}. ${r.body.trim().replace(/\s*\n\s*/g, ' ')}`)
+  })
+  return capCodePoints(lines.join('\n'), IMPROVEMENT_DETAIL_CAP)
+}
+
+/**
+ * 決定的な集約（LLM 無効・失敗時のフォールバック / モックの唯一のロジック）。
+ * 未集約の要望を投稿元ページ単位でまとめ、同じページを対象にした既存の **未判定（triage）** item が
+ * あればそこへ追記、無ければ新しい改修単位を作る。判定済み（accepted/resolved/rejected）item には
+ * 触れない = 人手のステータス・編集を巻き戻さない（原則2）。
+ */
+export function heuristicClusterRequests(
+  openItems: ClusterOpenItem[],
+  requests: ClusterRequestInput[],
+): ClusterPlan {
+  const plan: ClusterPlan = { appends: [], creates: [] }
+  // 追記先にできるのは未判定の item のみ（判定済みは不変）
+  const triageItems = openItems.filter(it => it.status === 'triage')
+
+  // ページ単位にグルーピング（安定順 = requests の登場順）
+  const groups = new Map<string, ClusterRequestInput[]>()
+  for (const r of requests) {
+    const key = groupKeyOf(r)
+    const arr = groups.get(key)
+    if (arr) arr.push(r)
+    else groups.set(key, [r])
+  }
+
+  for (const [key, reqs] of groups) {
+    const existing = triageItems.find(it => it.pagePaths.includes(key))
+    if (existing) {
+      plan.appends.push({ itemId: existing.id, requestIds: reqs.map(r => r.id) })
+      continue
+    }
+    const label = labelOf(reqs)
+    const paths = [...new Set(reqs.map(r => r.pagePath.trim()).filter(Boolean))]
+    plan.creates.push({
+      title: capCodePoints(`「${label}」の改善要望（${reqs.length} 件）`, IMPROVEMENT_TITLE_CAP),
+      summary: capCodePoints(reqs[0]!.body.trim().replace(/\s*\n\s*/g, ' '), IMPROVEMENT_SUMMARY_CAP),
+      detail: buildItemDetail(reqs),
+      pagePaths: paths.length ? paths : [key],
+      requestIds: reqs.map(r => r.id),
+    })
+  }
+  return plan
+}
+
+// ---------- LLM 集約（Vertex AI の構造化 JSON 出力用スキーマ + 正規化） ----------
+
+/**
+ * LLM への出力スキーマ（generateJson の responseSchema）。
+ * appends/creates とも requestIds で元要望を指す。creates は改修単位の見出し・要約・詳細を LLM が起こす。
+ */
+export const CLUSTER_LLM_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    appends: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          itemId: { type: 'string' },
+          requestIds: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['itemId', 'requestIds'],
+      },
+    },
+    creates: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          summary: { type: 'string' },
+          detail: { type: 'string' },
+          pagePaths: { type: 'array', items: { type: 'string' } },
+          requestIds: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['title', 'summary', 'detail', 'requestIds'],
+      },
+    },
+  },
+  required: ['creates'],
+}
+
+/**
+ * LLM の集約出力を検証・正規化する。無効な id を捨て、1 要望が二重に割り当てられないようにし、
+ * 未割当の要望はヒューリスティックで補完する。全く使えない出力なら null（呼び出し側でフォールバック）。
+ */
+export function normalizeClusterPlan(
+  raw: unknown,
+  requests: ClusterRequestInput[],
+  openItems: ClusterOpenItem[],
+): ClusterPlan | null {
+  if (!raw || typeof raw !== 'object') return null
+  const reqById = new Map(requests.map(r => [r.id, r]))
+  const triageIds = new Set(openItems.filter(it => it.status === 'triage').map(it => it.id))
+  const used = new Set<string>()
+  const plan: ClusterPlan = { appends: [], creates: [] }
+
+  const takeReqs = (ids: unknown): ClusterRequestInput[] => {
+    if (!Array.isArray(ids)) return []
+    const out: ClusterRequestInput[] = []
+    for (const id of ids) {
+      const key = String(id ?? '')
+      const r = reqById.get(key)
+      if (r && !used.has(key)) {
+        used.add(key)
+        out.push(r)
+      }
+    }
+    return out
+  }
+
+  const rawObj = raw as { appends?: unknown; creates?: unknown }
+  for (const a of Array.isArray(rawObj.appends) ? rawObj.appends : []) {
+    if (!a || typeof a !== 'object') continue
+    const itemId = String((a as { itemId?: unknown }).itemId ?? '')
+    if (!triageIds.has(itemId)) continue // 追記先は未判定 item のみ（判定済みは保護）
+    const reqs = takeReqs((a as { requestIds?: unknown }).requestIds)
+    if (reqs.length) plan.appends.push({ itemId, requestIds: reqs.map(r => r.id) })
+  }
+  for (const c of Array.isArray(rawObj.creates) ? rawObj.creates : []) {
+    if (!c || typeof c !== 'object') continue
+    const obj = c as Record<string, unknown>
+    const reqs = takeReqs(obj.requestIds)
+    if (!reqs.length) continue
+    const title = capCodePoints(String(obj.title ?? '').trim() || `「${labelOf(reqs)}」の改善要望`, IMPROVEMENT_TITLE_CAP)
+    const paths = Array.isArray(obj.pagePaths)
+      ? [...new Set(obj.pagePaths.map(p => String(p ?? '').trim()).filter(Boolean))]
+      : [...new Set(reqs.map(r => r.pagePath.trim()).filter(Boolean))]
+    plan.creates.push({
+      title,
+      summary: capCodePoints(String(obj.summary ?? '').trim() || reqs[0]!.body.trim(), IMPROVEMENT_SUMMARY_CAP),
+      detail: capCodePoints(String(obj.detail ?? '').trim() || buildItemDetail(reqs), IMPROVEMENT_DETAIL_CAP),
+      pagePaths: paths.length ? paths : [groupKeyOf(reqs[0]!)],
+      requestIds: reqs.map(r => r.id),
+    })
+  }
+
+  // 未割当の要望はヒューリスティックで補完（LLM が取りこぼしても要望を失わない）
+  const leftover = requests.filter(r => !used.has(r.id))
+  if (leftover.length) {
+    const supplement = heuristicClusterRequests(openItems, leftover)
+    plan.appends.push(...supplement.appends)
+    plan.creates.push(...supplement.creates)
+  }
+
+  if (plan.appends.length === 0 && plan.creates.length === 0) return null
+  return plan
+}
+
+// ---------- 改修プロンプト出力（フィルター結果 → コーディング AI エージェント向けプロンプト） ----------
+
+/** プロンプト化する改修単位（item + 集約元の要望本文） */
+export interface PromptItemInput {
+  title: string
+  summary: string
+  detail: string
+  status: ImprovementStatus
+  pagePaths: string[]
+  requests: { pageLabel: string; pagePath: string; body: string }[]
+}
+
+const DEFAULT_PROMPT_INTRO =
+  'あなたは本リポジトリ（Nuxt 4 SPA = `mockup/` + Hono/PostgreSQL API = `api/` + 共有ドメイン = `shared/domain/`）を'
+  + '改修するコーディングエージェントです。以下の改修単位を、対象ページのパス・機能名・改修内容に従って実装してください。'
+  + '各単位には根拠となる利用者の要望を添えています。既存の実装規約（mockup/CONVENTIONS.md・CLAUDE.md）に従い、'
+  + 'テストとドキュメントも更新してください。'
+
+/**
+ * 改修単位の配列から、コーディング AI エージェント向けの詳細プロンプト（マークダウン）を組み立てる。
+ * 迷いを与えないよう、対象ページのパス・機能名（ページ表示名）・改修内容・元の要望・受入基準を明記する。
+ * 純粋・決定的（同じ入力 → 同じ出力）。
+ */
+export function buildCodingPrompt(items: PromptItemInput[], opts?: { intro?: string }): string {
+  const out: string[] = []
+  out.push('# 改善要望に基づく改修依頼')
+  out.push('')
+  out.push(opts?.intro ?? DEFAULT_PROMPT_INTRO)
+  out.push('')
+  out.push(`対象の改修単位: ${items.length} 件`)
+  out.push('')
+  items.forEach((it, idx) => {
+    const label = it.requests.find(r => r.pageLabel.trim())?.pageLabel.trim()
+      || it.pagePaths[0]
+      || '（対象ページ不明）'
+    out.push(`## ${idx + 1}. ${it.title}`)
+    out.push('')
+    out.push(`- **対象ページ / 機能:** ${label}`)
+    if (it.pagePaths.length) out.push(`- **対象パス:** ${it.pagePaths.map(p => `\`${p}\``).join(' , ')}`)
+    out.push(`- **現在の状態:** ${IMPROVEMENT_STATUS_META[it.status]?.label ?? it.status}`)
+    if (it.summary.trim()) {
+      out.push('')
+      out.push(`**概要:** ${it.summary.trim()}`)
+    }
+    if (it.detail.trim()) {
+      out.push('')
+      out.push('**改修内容:**')
+      out.push('')
+      out.push(it.detail.trim())
+    }
+    if (it.requests.length) {
+      out.push('')
+      out.push('**根拠となった利用者の要望:**')
+      it.requests.forEach((r) => {
+        const where = r.pageLabel.trim() || r.pagePath.trim()
+        out.push(`- ${where ? `［${where}］ ` : ''}${r.body.trim().replace(/\s*\n\s*/g, ' ')}`)
+      })
+    }
+    out.push('')
+    out.push('**受入基準:** 対象ページで上記の改修が反映され、`npm run build` / `npx nuxi typecheck` が通り、'
+      + 'モバイル幅（375px）で崩れず、主要操作にフィードバックがあること。')
+    out.push('')
+    out.push('---')
+    out.push('')
+  })
+  return out.join('\n').trimEnd() + '\n'
+}
+
+// ---------- Result ヘルパ（呼び出し側のエラー整形の共通化。任意利用） ----------
+
+/** バリデーションエラー（文字列）→ Result エラー（mock 用） */
+export function improvementResultError(code: string, message: string): Result {
+  return { ok: false, error: { code, message } }
+}

@@ -23,6 +23,7 @@ import { configsRoutes } from './routes/configs'
 import { customerLogsRoutes } from './routes/customer-logs'
 import { escalationsRoutes } from './routes/escalations'
 import { holidaysRoutes } from './routes/holidays'
+import { improvementsRoutes } from './routes/improvements'
 import { knowledgeRoutes } from './routes/knowledge'
 import { leaveRoutes, runPeriodicGrants } from './routes/leave'
 import { notesRoutes } from './routes/notes'
@@ -213,6 +214,8 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
   app.route('/v1/knowledge', knowledgeRoutes(pool, env))
   app.route('/v1/documents', documentsRoutes(pool, env))
   app.route('/v1/media', mediaRoutes(pool, env))
+  // F-42（0057）: 改善要望。投稿は全員可・管理系はルート内で canManageImprovements ガード（featureGuard 非対象）
+  app.route('/v1/improvements', improvementsRoutes(pool, env))
 
   app.notFound(c => c.json({ error: { code: 'AKO-GEN-404', message: 'エンドポイントが見つかりません' } }, 404))
 

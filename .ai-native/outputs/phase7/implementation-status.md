@@ -2480,3 +2480,34 @@
   `dashboard-layout.test.ts` 47 件を含む全スイート green。表示層のみの変更で options 形状は不変）。
 - [x] **既知の設計判断**: モバイルは「固定の最適シーン（メニュー最優先 + ベル導線）」とし、モバイル専用の可変設定は設けない
   （通知をトップに戻す選択肢を作らない = 指摘の再発防止）。タブレット（md–lg）は `side` 時にベル導線（340px 右カラムは lg+ のみ）。
+
+## 69. 改善要望の記録 + AI 集約 + 改修プロンプト出力（F-42。オペレーター指示 2026-08-11）の完了条件（Definition of Done）
+
+各ページから改善・改修の要望を記録し、AI が改修単位に集約、権限を持つ人のみが閲覧・ステータス管理し、フィルター条件に従って
+コーディング AI 向けのプロンプトを出力する。**API+DB / フロント接続の両方を本バッチで実装**（マイグレーション 0057）。
+
+- [x] **共有ドメイン（SoT・両モード共有）**: `shared/domain/improvement.ts` に型（`ImprovementRequest`／`ImprovementItem`）・
+  単一ステータスの状態機械（`triage → accepted → resolved／rejected`・reopen 可）・決定的集約 `heuristicClusterRequests`・
+  LLM 出力の正規化 `normalizeClusterPlan`（無効 id を捨て未割当は補完・判定済み item への追記を捨てる）・改修プロンプト組み立て
+  `buildCodingPrompt`（対象パス・機能名・改修内容・元要望・受入基準を明記）・入力検証を集約。
+- [x] **DB（0057）**: `improvement_requests`（追記系・SoT。取消 = `archived_at` 論理削除）／`improvement_items`（導出だが人手の
+  ステータス・編集を持つ）。未集約抽出の部分索引・ステータス索引。FK は張らない（0032 と同判断）。記録系はシードしない。
+- [x] **API（`/v1/improvements`）**: 投稿（`POST /requests` = 認証済み全員可・featureGuard 非対象）／管理系（一覧・`generate`・
+  `status`・編集・`archive`/`restore`・`prompt`）は `requireManage`（`canManageImprovements` = deny-by-default + 管理者常時可）で
+  ルート内ガード。集約は Vertex AI → 決定的ヒューリスティックにフォールバック（`env.vertexProjectId` 未設定は即ヒューリスティック）。
+  **未集約の要望のみ処理し、判定済み item のステータス・編集は巻き戻さない（原則2）**。監査ログは非ブロッキング（原則4）。エラーは `AKO-REQ-*`／`AKO-PRM-001`。
+- [x] **権限（F-16 連携）**: 機能キー `improvements` を `FEATURE_PERMISSION_KEYS`・`featureKeyOfPath` に追加。閲覧は
+  **既定 deny（権限を持つ人のみ）・管理者は常時可**（`canManageImprovements`）。権限表（`PermissionMatrix`）は当該行を
+  `defaultAllowOf`（timecard-all と同型）で「管理者=既定許可／他=既定不可」と実挙動に一致表示。オペレーターがロール/役職/個人へ allow を付与可。
+- [x] **フロント（デュアルモード）**: `useImprovements`（mock = `useMockDb` + 決定的集約 / API = `apiWrite`/`apiFetch`。投稿は
+  管理 GET を誤発火しない）。全ページ共通ヘッダーに `WidgetsImprovementSubmit`（投稿元パス・表示名を自動付与・UiModal）。
+  管理ページ `pages/improvements.vue`（KPI・チップフィルタ〔未解決/解決済み/対応可否/取消済み〕・`UiDataTable`・ドロワー詳細で
+  ステータス操作/編集/元要望/取消・プロンプト出力モーダル + コピー）。ナビ登録（`navigation`/`nav-map`/`menu-registry`）。
+- [x] **取消可能性（原則9.5）**: 要望・改修単位とも取消（論理削除）/復元、ステータスは解決/見送りの reopen 可。投稿者は自分の要望を取消可。
+- [x] **下位互換（原則7）**: 追加コレクションは MockDbShape 欠落キー補完で既存 localStorage を破壊しない（SEED_VERSION 据え置き）。
+  新権限キー・ルールは加算的（既存ルールに影響なし）。既存 API・データへの破壊的変更なし。
+- [x] **検証（実測値）**: API `npm run typecheck` green・`npm test` **313 passed**（`improvement` 11 件含む）・
+  `npm run test:integration` **250 passed**（改善要望 3 件 + 0057 マイグレーション適用含む）。
+  mockup `npx nuxi typecheck` green・`npm test` **242 passed**（`improvement` 10 件含む）・`npm run build` green。
+- [x] **ドキュメント整合（原則5）**: functional-requirements（F-42）・data-design・api-design・screen-design・本節・
+  `CONVENTIONS.md`（基盤 API 早見表 = useImprovements / UI 在庫 = WidgetsImprovementSubmit）を更新。
