@@ -3,7 +3,8 @@
  * 改善要望の対応予定期間ガントチャート（F-42）。
  * スケール（月次=1年 / 週次=3か月 / 日次=1か月）を切り替え、前後の期間へページ送り、
  * 「今月/今週/本日」で現在の期間へスナップする。バーは各案件の planStart〜planEnd。
- * 列計算・バー配置は shared/domain/gantt の純関数。横スクロール + ラベル列は sticky（原則8）。
+ * 列計算・バー配置は shared/domain/gantt の純関数。
+ * 列は画面幅に合わせて等分に伸縮（flex）。狭い画面では最小幅で横スクロール・ラベル列は sticky（原則8）。
  */
 import { ChevronLeft, ChevronRight } from 'lucide-vue-next'
 import {
@@ -12,6 +13,7 @@ import {
 } from '~/types/gantt'
 import { IMPROVEMENT_STATUS_META, type ImprovementItem } from '~/types/improvement'
 import { fmtDate } from '~/utils/format'
+import { pageDisplay } from '~/utils/page-label'
 
 const props = defineProps<{ items: ImprovementItem[] }>()
 const emit = defineEmits<{ open: [item: ImprovementItem] }>()
@@ -20,14 +22,15 @@ const today = todayJst()
 const scale = ref<GanttScale>('month')
 const anchor = ref<string>(ganttAnchorForToday('month', today))
 
-/** 列幅（px）。列数が多い日次ほど狭く。全体は横スクロール */
-const COL_W: Record<GanttScale, number> = { month: 64, week: 52, day: 34 }
-const LABEL_W = 184
-const colW = computed(() => COL_W[scale.value])
+/** 列の最小幅（px）。画面が広ければ flex で等分に伸び、狭ければこの幅で横スクロール */
+const MIN_COL_W: Record<GanttScale, number> = { month: 56, week: 44, day: 30 }
+const LABEL_W = 200
+const minColW = computed(() => MIN_COL_W[scale.value])
 
 const columns = computed(() => ganttColumns(scale.value, anchor.value, today))
 const rangeLabel = computed(() => ganttRangeLabel(columns.value))
-const gridWidth = computed(() => LABEL_W + columns.value.length * colW.value)
+/** 狭い画面での横スクロール下限（列は最小幅・ラベル固定）。広ければ 100% に伸びて等分 */
+const minWidth = computed(() => `${LABEL_W + columns.value.length * minColW.value}px`)
 
 const scheduled = computed(() =>
   props.items.filter(it => it.planStart)
@@ -35,11 +38,12 @@ const scheduled = computed(() =>
     .sort((a, b) => (a.planStart ?? '').localeCompare(b.planStart ?? '')))
 const unscheduled = computed(() => props.items.filter(it => !it.planStart))
 
-/** 各案件のバー（可視範囲内の列インデックス範囲。範囲外は null） */
+/** 予定期間バーの位置（トラック幅に対する割合。列の等分伸縮に追従する） */
 function barOf(it: ImprovementItem): { left: number; width: number } | null {
   const span = ganttBar(it.planStart, it.planEnd, columns.value)
   if (!span) return null
-  return { left: span.startIdx * colW.value, width: (span.endIdx - span.startIdx + 1) * colW.value }
+  const n = columns.value.length
+  return { left: (span.startIdx / n) * 100, width: ((span.endIdx - span.startIdx + 1) / n) * 100 }
 }
 function barTone(it: ImprovementItem): string {
   const tone = IMPROVEMENT_STATUS_META[it.status]?.tone ?? 'neutral'
@@ -50,6 +54,9 @@ function planText(it: ImprovementItem): string {
   return it.planEnd && it.planEnd !== it.planStart
     ? `${fmtDate(it.planStart)}〜${fmtDate(it.planEnd)}`
     : fmtDate(it.planStart)
+}
+function pagesText(it: ImprovementItem): string {
+  return it.pagePaths.map(pageDisplay).join(' / ')
 }
 
 function setScale(v: string): void { scale.value = v as GanttScale }
@@ -90,19 +97,21 @@ const nowLabel = computed(() => GANTT_SCALES.find(s => s.value === scale.value)?
 
     <p class="text-[12px] text-muted">表示範囲: <span class="num font-semibold text-sub">{{ rangeLabel }}</span></p>
 
-    <!-- ガント本体（横スクロール・ラベル列は sticky） -->
+    <!-- ガント本体（列は等分伸縮・狭い画面は横スクロール・ラベル列は sticky） -->
     <div v-if="scheduled.length > 0" class="overflow-x-auto rounded-xl border border-line">
-      <div :style="{ minWidth: `${gridWidth}px` }">
+      <div :style="{ minWidth }">
         <!-- ヘッダー行 -->
         <div class="flex border-b border-line bg-surface-soft">
           <div class="gantt-label shrink-0 px-2 py-1.5 text-[11px] font-bold text-muted" :style="{ width: `${LABEL_W}px` }">改修案件</div>
-          <div
-            v-for="c in columns"
-            :key="c.key"
-            class="shrink-0 border-l border-line py-1.5 text-center text-[10px]"
-            :class="c.isToday ? 'bg-brand-soft font-bold text-brand' : 'text-muted'"
-            :style="{ width: `${colW}px` }"
-          >{{ c.label }}</div>
+          <div class="flex flex-1">
+            <div
+              v-for="c in columns"
+              :key="c.key"
+              class="flex-1 border-l border-line py-1.5 text-center text-[10px]"
+              :class="c.isToday ? 'bg-brand-soft font-bold text-brand' : 'text-muted'"
+              :style="{ minWidth: `${minColW}px` }"
+            >{{ c.label }}</div>
+          </div>
         </div>
 
         <!-- 案件行 -->
@@ -113,26 +122,29 @@ const nowLabel = computed(() => GANTT_SCALES.find(s => s.value === scale.value)?
         >
           <button
             type="button"
-            class="gantt-label shrink-0 truncate px-2 py-2 text-left text-[12px] font-semibold text-ink hover:text-brand"
+            class="gantt-label shrink-0 px-2 py-1.5 text-left"
             :style="{ width: `${LABEL_W}px` }"
-            :title="it.title"
+            :title="`${it.title}｜${pagesText(it)}`"
             @click="emit('open', it)"
-          >{{ it.title }}</button>
+          >
+            <span class="block truncate text-[12px] font-semibold text-ink hover:text-brand">{{ it.title }}</span>
+            <span v-if="pagesText(it)" class="block truncate text-[10px] text-muted">{{ pagesText(it) }}</span>
+          </button>
 
-          <div class="relative flex shrink-0" :style="{ height: '36px' }">
+          <div class="relative flex flex-1">
             <div
               v-for="c in columns"
               :key="c.key"
-              class="shrink-0 border-l border-line"
+              class="flex-1 border-l border-line"
               :class="c.isToday ? 'bg-brand-soft' : ''"
-              :style="{ width: `${colW}px` }"
+              :style="{ minWidth: `${minColW}px` }"
             />
             <button
               v-if="barOf(it)"
               type="button"
               class="absolute top-1/2 flex h-5 -translate-y-1/2 items-center overflow-hidden rounded px-1.5 text-[10px] font-semibold text-white"
               :class="barTone(it)"
-              :style="{ left: `${barOf(it)!.left + 2}px`, width: `${barOf(it)!.width - 4}px` }"
+              :style="{ left: `calc(${barOf(it)!.left}% + 2px)`, width: `calc(${barOf(it)!.width}% - 4px)` }"
               :title="`${it.title}（${planText(it)}）`"
               @click="emit('open', it)"
             >
@@ -155,7 +167,7 @@ const nowLabel = computed(() => GANTT_SCALES.find(s => s.value === scale.value)?
           :key="it.id"
           type="button"
           class="rounded-lg border border-line px-2.5 py-1.5 text-left text-[12px] hover:border-brand"
-          :title="it.title"
+          :title="`${it.title}｜${pagesText(it)}`"
           @click="emit('open', it)"
         >
           <UiStatusBadge :tone="IMPROVEMENT_STATUS_META[it.status].tone" :label="IMPROVEMENT_STATUS_META[it.status].label" dot />

@@ -10,6 +10,7 @@ import {
   type ImprovementItem, type ImprovementStatus,
 } from '~/types/improvement'
 import { fmtDate } from '~/utils/format'
+import { pageDisplay } from '~/utils/page-label'
 
 const props = defineProps<{ items: ImprovementItem[]; reqCount: (id: string) => number }>()
 const emit = defineEmits<{ open: [item: ImprovementItem]; status: [id: string, to: ImprovementStatus] }>()
@@ -55,7 +56,7 @@ function statusLabel(s: ImprovementStatus): string { return IMPROVEMENT_STATUS_M
             @click="emit('open', it)"
           >{{ it.title }}</button>
           <div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted">
-            <span v-if="it.pagePaths.length" class="truncate">{{ it.pagePaths.join(' / ') }}</span>
+            <span v-if="it.pagePaths.length" class="max-w-full truncate" :title="it.pagePaths.map(pageDisplay).join(' / ')">{{ it.pagePaths.map(pageDisplay).join(' / ') }}</span>
             <span class="num">要望 {{ reqCount(it.id) }}</span>
           </div>
           <p v-if="it.planStart" class="mt-1 inline-flex items-center gap-1 rounded bg-brand-soft px-1.5 py-0.5 text-[11px] text-brand">

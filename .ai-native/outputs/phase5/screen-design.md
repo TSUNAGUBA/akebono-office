@@ -346,7 +346,11 @@ graph TD
     カードは許可遷移（`IMPROVEMENT_STATUS_NEXT`）のクイック操作ボタン + クリックで詳細ドロワー。列は横スクロール（原則8）。
   - **ガント**（`ImprovementsGantt`）: 各改修案件の対応予定期間をバー表示。スケール = 月次（1年=12列）/週次（3か月=13列）/
     日次（当月日数）を `GANTT_SCALES` で切替。ツールバーの `[前] [今月/今週/本日] [次]` で期間送り/現在スナップ
-    （`ganttStep`/`ganttAnchorForToday`）。列生成・バー配置は `shared/domain/gantt` の純関数。ラベル列は sticky・本体は横スクロール。
+    （`ganttStep`/`ganttAnchorForToday`）。列生成・バー配置は `shared/domain/gantt` の純関数。**列は画面幅に合わせて等分に伸縮
+    （flex）し横幅を使い切る。狭い画面では列の最小幅で横スクロール**・ラベル列は sticky・バー位置はトラック幅に対する割合（%）。
     予定未定の案件は別枠にチップ表示（クリックで登録へ）。
+- **ページ名の表示（フィードバック 2026-08-11）**: 一覧の対象ページ列・カンバンカード・ガントの行ラベルは、パスだけでなく
+  ページ名も表示する（`utils/page-label.ts` の `pageDisplay` = 「名称（パス）」）。名称は NAV_GROUPS + MENU_CARDS から
+  前方一致で解決（`resolvePageLabel`）。投稿ウィジェットの投稿元ページ名も同解決を用いる（サブページも名称化）。
   - **対応予定期間の登録**: 詳細ドロワーに開始日・終了日（`<input type=date>`・終了は任意 = 単日）+ 保存/クリア。
     検証は `improvementPlanError`（実在日・終了>=開始）。保存でガントに即反映（両モード）。
