@@ -32,6 +32,7 @@ import {
   type ImprovementFilter,
   type ImprovementStatus,
   improvementBodyError,
+  improvementPlanError,
   improvementTitleError,
   matchesImprovementFilter,
   normalizeClusterPlan,
@@ -56,7 +57,8 @@ const REQ_COLS = `id, member_id AS "memberId", member_name AS "memberName",
 const ITEM_COLS = `id, title, summary, detail, status, page_paths AS "pagePaths",
   source_request_ids AS "sourceRequestIds", llm, to_char(archived_at ${JST}) AS "archivedAt",
   to_char(created_at ${JST}) AS "createdAt", to_char(updated_at ${JST}) AS "updatedAt",
-  to_char(resolved_at ${JST}) AS "resolvedAt"`
+  to_char(resolved_at ${JST}) AS "resolvedAt",
+  plan_start AS "planStart", plan_end AS "planEnd"`
 
 /** トランザクション補助（akebono-trade と同型 = 原則3） */
 async function inTxn<T>(pool: pg.Pool, fn: (db: pg.PoolClient) => Promise<T>): Promise<T> {
@@ -302,6 +304,15 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
     if (Object.hasOwn(body, 'detail')) {
       params.push(capCodePoints(String(body.detail ?? '').trim(), IMPROVEMENT_DETAIL_CAP))
       sets.push(`detail = $${params.length}`)
+    }
+    // 対応予定期間（ガント用・任意）。開始/終了はまとめて更新（空文字 = クリア = NULL・単日は終了なし）
+    if (Object.hasOwn(body, 'planStart') || Object.hasOwn(body, 'planEnd')) {
+      const ps = String(body.planStart ?? '').trim()
+      const pe = String(body.planEnd ?? '').trim()
+      const msg = improvementPlanError(ps, pe)
+      if (msg) throw err('AKO-REQ-007', msg, 400)
+      params.push(ps || null); sets.push(`plan_start = $${params.length}`)
+      params.push(pe || null); sets.push(`plan_end = $${params.length}`)
     }
     if (sets.length === 0) throw err('AKO-REQ-004', '更新する項目がありません', 400)
     const { rows } = await pool.query(

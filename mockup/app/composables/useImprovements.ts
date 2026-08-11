@@ -26,6 +26,7 @@ import {
   type ImprovementRequest,
   type ImprovementStatus,
   improvementBodyError,
+  improvementPlanError,
   matchesImprovementFilter,
   type PromptItemInput,
 } from '~/types/improvement'
@@ -133,6 +134,7 @@ export function useImprovements() {
         id, title: cr.title, summary: cr.summary, detail: cr.detail, status: 'triage',
         pagePaths: cr.pagePaths, sourceRequestIds: cr.requestIds, llm: false,
         archivedAt: null, createdAt: now, updatedAt: now, resolvedAt: null,
+        planStart: null, planEnd: null,
       })
       cr.requestIds.forEach(rid => reqPatch.set(rid, id))
     }
@@ -194,7 +196,16 @@ export function useImprovements() {
     return { ok: true, id }
   }
 
-  async function editItem(id: string, patch: { title?: string; summary?: string; detail?: string }): Promise<Result> {
+  async function editItem(
+    id: string,
+    patch: { title?: string; summary?: string; detail?: string; planStart?: string; planEnd?: string },
+  ): Promise<Result> {
+    // 対応予定期間の検証（両モード。実在日・終了>=開始）
+    const hasPlan = patch.planStart !== undefined || patch.planEnd !== undefined
+    if (hasPlan) {
+      const msg = improvementPlanError(patch.planStart ?? '', patch.planEnd ?? '')
+      if (msg) return { ok: false, error: { code: 'AKO-REQ-007', message: msg } }
+    }
     if (isApi) {
       const res = await apiWrite(`/v1/improvements/items/${id}`, { body: patch })
       if (res.ok) await refresh()
@@ -211,6 +222,10 @@ export function useImprovements() {
           ...(patch.title !== undefined ? { title: capCodePoints(patch.title.trim(), IMPROVEMENT_TITLE_CAP) } : {}),
           ...(patch.summary !== undefined ? { summary: capCodePoints(patch.summary.trim(), IMPROVEMENT_SUMMARY_CAP) } : {}),
           ...(patch.detail !== undefined ? { detail: capCodePoints(patch.detail.trim(), IMPROVEMENT_DETAIL_CAP) } : {}),
+          // 予定期間は開始/終了をまとめて更新（空 = クリア = null。API と同じ挙動）
+          ...(hasPlan
+            ? { planStart: (patch.planStart ?? '').trim() || null, planEnd: (patch.planEnd ?? '').trim() || null }
+            : {}),
           updatedAt: now,
         }
       : it))

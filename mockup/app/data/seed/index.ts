@@ -282,7 +282,7 @@ export function buildSeed(): MockDbShape {
     mediaExternalArticles: media.seedMediaExternalArticles,
     dashboardInsights: [], // ダッシュボードインサイトは生成時に保管（シードなし = 「生成」ボタンから作る）
     // ---- 改善要望（F-42） ----
-    improvementRequests: misc.seedImprovementRequests, // デモの生要望（未集約）
-    improvementItems: [], // 改修単位は「AI で集約」で生成（シードなし）
+    improvementRequests: misc.seedImprovementRequests, // デモの生要望（集約済み + 未集約）
+    improvementItems: misc.seedImprovementItems, // 改修単位デモ（カンバン/ガント初期表示。対応予定期間あり）
   }
 }

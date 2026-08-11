@@ -146,6 +146,46 @@ function reqCount(itemId: string): number {
   return imp.requestsForItem(itemId).length
 }
 
+// ---------- ビュー切替（一覧 / カンバン / ガント） ----------
+const view = ref<string>('list')
+const VIEW_OPTIONS = [
+  { value: 'list', label: '一覧' },
+  { value: 'kanban', label: 'カンバン' },
+  { value: 'gantt', label: 'ガント' },
+]
+
+/** カンバン/ガントからの詳細ドロワー起動（item を直接受け取る） */
+function openDrawerItem(it: ImprovementItem): void {
+  selectedId.value = it.id
+  editing.value = false
+}
+/** カンバンのクイック操作（id 指定のステータス変更） */
+async function onKanbanStatus(id: string, to: ImprovementStatus): Promise<void> {
+  const res = await imp.setStatus(id, to)
+  if (res.ok) toast.show(`ステータスを「${statusLabel(to)}」に変更しました`, 'ok')
+  else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
+}
+
+// ---------- 対応予定期間（ドロワーで登録・ガントに反映） ----------
+const planForm = ref({ start: '', end: '' })
+watch(() => selected.value?.id, () => {
+  planForm.value = { start: selected.value?.planStart ?? '', end: selected.value?.planEnd ?? '' }
+}, { immediate: true })
+
+async function savePlan(): Promise<void> {
+  if (!selected.value) return
+  const res = await imp.editItem(selected.value.id, { planStart: planForm.value.start, planEnd: planForm.value.end })
+  if (res.ok) toast.show('対応予定期間を更新しました', 'ok')
+  else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
+}
+async function clearPlan(): Promise<void> {
+  if (!selected.value) return
+  planForm.value = { start: '', end: '' }
+  const res = await imp.editItem(selected.value.id, { planStart: '', planEnd: '' })
+  if (res.ok) toast.show('対応予定期間をクリアしました', 'ok')
+  else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
+}
+
 // ---------- 改修プロンプト出力 ----------
 const promptOpen = ref(false)
 const promptFilter = ref<string>('open')
@@ -209,7 +249,26 @@ async function copyPrompt(): Promise<void> {
         <UiKpiCard label="対応しない" :value="String(counts.rejected)" sub="見送り" icon="MinusCircle" />
       </div>
 
-      <UiSectionCard flush>
+      <!-- 表示切替（一覧 / カンバン / ガント） -->
+      <UiChipTabs v-model="view" :options="VIEW_OPTIONS" />
+
+      <!-- カンバン: ステータス別に進捗を一望 -->
+      <ImprovementsKanban
+        v-if="view === 'kanban'"
+        :items="imp.activeItems.value"
+        :req-count="reqCount"
+        @open="openDrawerItem"
+        @status="onKanbanStatus"
+      />
+
+      <!-- ガント: 対応予定期間を月次/週次/日次で可視化 -->
+      <ImprovementsGantt
+        v-else-if="view === 'gantt'"
+        :items="imp.activeItems.value"
+        @open="openDrawerItem"
+      />
+
+      <UiSectionCard v-else flush>
         <template #actions>
           <UiSearchInput v-model="search" placeholder="改修単位・対象ページを検索" />
         </template>
@@ -272,6 +331,23 @@ async function copyPrompt(): Promise<void> {
               （この状態からの変更はありません）
             </span>
           </div>
+        </div>
+
+        <!-- 対応予定期間（任意・ガントに反映） -->
+        <div v-if="!selected.archivedAt" class="grid gap-2">
+          <p class="label">対応予定期間（任意）</p>
+          <div class="flex flex-wrap items-end gap-2">
+            <UiFormField label="開始日">
+              <input v-model="planForm.start" class="input" type="date">
+            </UiFormField>
+            <span class="pb-2 text-muted">〜</span>
+            <UiFormField label="終了日">
+              <input v-model="planForm.end" class="input" type="date">
+            </UiFormField>
+            <button type="button" class="btn btn-primary btn-sm" @click="savePlan">保存</button>
+            <button v-if="selected.planStart" type="button" class="btn btn-ghost btn-sm" @click="clearPlan">クリア</button>
+          </div>
+          <p class="text-[11px] text-muted">終了日は任意（未入力なら単日）。登録するとガントチャートにバーで表示されます。</p>
         </div>
 
         <!-- 改修内容 -->
