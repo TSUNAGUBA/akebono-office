@@ -16,6 +16,7 @@ import type {
 import type { WeeklyInsightRecord } from '../../../../shared/domain/weekly-insight'
 import type { MediaInsightRecord } from '../../../../shared/domain/media-insight'
 import type { DashboardInsightRecord } from '../../../../shared/domain/portfolio-insight'
+import type { ImprovementItem, ImprovementRequest } from '../../../../shared/domain/improvement'
 import type {
   AkebonoAppConfig, BusinessSegment, ConsignmentTerm, ImportMapping, ImportRun, ImportSource,
   InboundPlan, InboundResult, InventoryTransaction, Invoice, ItemSetting, OutboundPlan,
@@ -150,6 +151,9 @@ export interface MockDbShape {
    * セグメント別/会社全体の「サマリー + AI レポート + AI インサイト」を保持する（F-41）。
    */
   dashboardInsights: DashboardInsightRecord[]
+  // ---- 改善要望（F-42）。生要望（SoT・追記系）+ AI 集約の改修単位 ----
+  improvementRequests: ImprovementRequest[]
+  improvementItems: ImprovementItem[]
 }
 
 export function buildSeed(): MockDbShape {
@@ -277,5 +281,8 @@ export function buildSeed(): MockDbShape {
     generatedArticles: media.seedGeneratedArticles,
     mediaExternalArticles: media.seedMediaExternalArticles,
     dashboardInsights: [], // ダッシュボードインサイトは生成時に保管（シードなし = 「生成」ボタンから作る）
+    // ---- 改善要望（F-42） ----
+    improvementRequests: misc.seedImprovementRequests, // デモの生要望（未集約）
+    improvementItems: [], // 改修単位は「AI で集約」で生成（シードなし）
   }
 }

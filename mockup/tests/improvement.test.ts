@@ -1,0 +1,77 @@
+/**
+ * 改善要望（F-42）の権限ゲートと集約・プロンプトの純ロジック。
+ * canManageImprovements = deny-by-default（管理者は常時可・明示 allow で付与）。
+ */
+import { describe, expect, it } from 'vitest'
+import { canManageImprovements, type PermissionSubject } from '../../shared/domain/permissions'
+import type { PermissionRule } from '../../shared/domain/types'
+import {
+  buildCodingPrompt, canTransition, heuristicClusterRequests,
+  IMPROVEMENT_STATUS_META, matchesImprovementFilter,
+} from '../../shared/domain/improvement'
+
+function rule(p: Partial<PermissionRule>): PermissionRule {
+  return {
+    id: p.id ?? 'r', subjectKind: p.subjectKind ?? 'role', subjectId: p.subjectId ?? 'member',
+    resource: p.resource ?? 'improvements', field: p.field ?? null, effect: p.effect ?? 'allow',
+    active: p.active ?? true,
+  }
+}
+const admin: PermissionSubject = { memberId: 'm-admin', title: '', role: 'admin' }
+const member: PermissionSubject = { memberId: 'm-1', title: '主任', role: 'member' }
+
+describe('canManageImprovements（deny-by-default）', () => {
+  it('管理者は常時可（ルール無しでも）', () => {
+    expect(canManageImprovements([], admin)).toBe(true)
+  })
+  it('一般は既定で不可（ルール無し = deny）', () => {
+    expect(canManageImprovements([], member)).toBe(false)
+  })
+  it('個人 allow を付与すると閲覧可（明示許可）', () => {
+    const rules = [rule({ subjectKind: 'member', subjectId: 'm-1', resource: 'improvements', effect: 'allow' })]
+    expect(canManageImprovements(rules, member)).toBe(true)
+  })
+  it('役職 allow でも付与できる', () => {
+    const rules = [rule({ subjectKind: 'title', subjectId: '主任', resource: 'improvements', effect: 'allow' })]
+    expect(canManageImprovements(rules, member)).toBe(true)
+  })
+  it('無関係リソースの allow では付与されない', () => {
+    const rules = [rule({ subjectKind: 'member', subjectId: 'm-1', resource: 'sales', effect: 'allow' })]
+    expect(canManageImprovements(rules, member)).toBe(false)
+  })
+})
+
+describe('集約・ステータス・プロンプト（純ロジック）', () => {
+  it('未判定 item へ追記し、新規ページは作成する', () => {
+    const plan = heuristicClusterRequests(
+      [{ id: 'i1', status: 'triage', pagePaths: ['/a'] }],
+      [
+        { id: 'r1', pagePath: '/a', pageLabel: 'A', body: 'x' },
+        { id: 'r2', pagePath: '/b', pageLabel: 'B', body: 'y' },
+      ],
+    )
+    expect(plan.appends).toEqual([{ itemId: 'i1', requestIds: ['r1'] }])
+    expect(plan.creates).toHaveLength(1)
+    expect(plan.creates[0]!.requestIds).toEqual(['r2'])
+  })
+  it('解決済み → 対応する（reopen）ができる（取消可能性）', () => {
+    expect(canTransition('resolved', 'accepted')).toBe(true)
+    expect(canTransition('resolved', 'triage')).toBe(false)
+  })
+  it('open フィルターは未解決（triage/accepted）のみ', () => {
+    expect(matchesImprovementFilter('triage', 'open')).toBe(true)
+    expect(matchesImprovementFilter('resolved', 'open')).toBe(false)
+  })
+  it('ステータスメタの tone は UI Tone と対応（neutral/info/ok/warn）', () => {
+    expect(IMPROVEMENT_STATUS_META.triage.tone).toBe('neutral')
+    expect(IMPROVEMENT_STATUS_META.resolved.tone).toBe('ok')
+  })
+  it('プロンプトに対象パスと元要望が含まれる', () => {
+    const prompt = buildCodingPrompt([{
+      title: 't', summary: 's', detail: 'd', status: 'accepted', pagePaths: ['/a'],
+      requests: [{ pageLabel: 'A', pagePath: '/a', body: '直したい' }],
+    }])
+    expect(prompt).toContain('/a')
+    expect(prompt).toContain('直したい')
+  })
+})

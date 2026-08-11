@@ -134,6 +134,11 @@ const outb = useOutbound()      // createPlan / registerResult（Phase D: postSa
 const imp = useAkebonoImports() // addSource / archiveSource・restoreSource（論理削除で取消）/ saveMapping（版管理）/ runImport（記録系・追記）
 // ダッシュボード AI レポート（F-41。Phase D で導出キャッシュをサーバー化 = media_insights 同型）
 const di = useDashboardInsight() // buildSegmentSummary/buildCompanySummary（常時ライブ集計）/ loadSegment・generateSegment / loadCompany・generateCompany（async。生成→保管→再生成で upsert・API = Vertex AI → ヒューリスティック）
+
+// 改善要望（F-42。各ページからの投稿 → AI 集約 → 権限を持つ人のみ管理 → 改修プロンプト出力。純ロジック SoT = shared/domain/improvement）
+// 投稿は全員可（submit は管理 GET を誤発火しない）。閲覧・管理は canManageImprovements（deny-by-default + 管理者常時可 = usePermissions）。
+// 集約は未集約要望のみ処理・判定済み item のステータスは巻き戻さない（原則2）。API = Vertex AI → 決定的ヒューリスティック（heuristicClusterRequests）
+const imp = useImprovements()  // submit / refresh / activeItems・archivedItems・unclusteredRequests / generate（集約）/ setStatus / editItem / setItemArchived・setRequestArchived（取消/復元）/ buildPrompt(filter)
 ```
 
 ## UI コンポーネント在庫（新規に作る前にここを見る）
@@ -176,6 +181,7 @@ const di = useDashboardInsight() // buildSegmentSummary/buildCompanySummary（�
 | `MediaChannelBar` | props なし。メディア分析の対象チャンネル切替バー（現在チャンネル + 連携業態バッジ + GA 連携バッジ + 設定導線）。全メディア画面の先頭に置く（F-40。2026-08-03 で MediaSegmentBar から改称・チャンネル化） |
 | `MediaGaConnect` | channelId?（未指定=現在チャンネル）, variant（'gate'/'bar'）。Google Analytics 連携ゲート（モック = 擬似 OAuth / API = Google OAuth 2.0 リダイレクト + 復帰クエリ `?ga=` 処理 + GA4 プロパティ選択モーダル。needsProperty の中間状態も再開可）。連携済みは状態バー + 解除（F-40。CalendarConnectGate と同型） |
 | `MediaFunnel` | stages（{label,value}[]）。流入→受注の簡易ファネル（幅バー + 前段比。Chart.js 不使用。F-40） |
+| `WidgetsImprovementSubmit` | props なし。全ページ共通ヘッダーの「要望を送る」導線（F-42）。投稿元ページのパス・表示名を自動付与して UiModal で投稿。投稿は認証済み全員可（layouts/default.vue に 1 つ設置で全ページに出る） |
 
 **ページ間導線・メニュー定義の SoT（バッチ7h）:** 親ページへ戻る・関連ページは `app/utils/nav-map.ts`、
 ダッシュボード / マスタハブのカード定義と既定カテゴリは `app/utils/menu-registry.ts` が SoT。

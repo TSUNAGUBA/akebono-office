@@ -46,6 +46,7 @@ export const FEATURE_PERMISSION_KEYS: { key: string; label: string }[] = [
   { key: 'inbox', label: '通知・エスカレーション' },
   { key: 'masters', label: 'マスタメンテナンス' },
   { key: 'settings', label: '設定' },
+  { key: 'improvements', label: '改善要望管理' },
 ]
 
 /** ページパス → 機能キー（フロントのメニュー・ルートガード用。null = ガード対象外 = 常に表示可） */
@@ -56,6 +57,7 @@ export function featureKeyOfPath(path: string): string | null {
   const known = [
     'timecard', 'attendance', 'shift', 'reports', 'ai-assistant', 'workflow', 'decision', 'ai-company',
     'akebono', 'support', 'sales', 'status', 'inbox', 'masters', 'settings', 'poipoi', 'minutes', 'customer-log',
+    'improvements',
   ]
   return known.includes(seg) ? seg : null
 }
@@ -290,4 +292,25 @@ export function canViewAllTimecards(
   subject: PermissionSubject,
 ): boolean {
   return resolve(rules, subject, 'attendance', [TIMECARD_ALL_FIELD], timecardAllDefault(subject.role))
+}
+
+// ---------- 改善要望管理（F-42・オペレーター指示 2026-08-11 = 権限を持つ人のみ閲覧） ----------
+
+/**
+ * 改善要望の一覧・集約・ステータス管理ページ（/improvements）と管理系 API を閲覧・操作できるか。
+ *
+ * 要件「権限を持つ人のみが閲覧できる」= **既定は参照不可（deny-by-default）**。
+ * 管理者は常時可（masters/settings と同思想 = 権限設定の編集手段を失わないためのロックアウト防止で、
+ * かつ機微な要望データの初期閲覧者を管理者に限定する）。それ以外のロール/役職/個人へは
+ * 権限設定（権限表・ルール一覧）で resource='improvements' の allow を付与して初めて閲覧できる。
+ * 解決レイヤ（個人 > 役職 > ロール・同一レイヤ deny 優先）は canViewField と同一。
+ *
+ * 注: 要望の「投稿」（各ページの「要望を送る」）は認証済み全員が可能で、本ゲートの対象外。
+ */
+export function canManageImprovements(
+  rules: PermissionRule[],
+  subject: PermissionSubject,
+): boolean {
+  if (subject.role === 'admin') return true
+  return resolve(rules, subject, 'improvements', [null], false)
 }

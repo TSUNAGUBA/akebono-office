@@ -215,6 +215,9 @@ function onSwitchUser(id: string): void {
           >{{ unreadCount }}</span>
         </NuxtLink>
 
+        <!-- 改善要望の投稿（全ページ共通・F-42）。どの画面からでもこのページの要望を送れる -->
+        <WidgetsImprovementSubmit />
+
         <!-- アカウントメニュー（API モード: プロフィール・ログアウト / モックモード: 加えてデモユーザー切替） -->
         <div class="relative">
           <button

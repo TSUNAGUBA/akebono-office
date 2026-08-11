@@ -368,6 +368,22 @@ flowchart LR
 - モックの型定義（`app/types/`）は上記ファクトへ写像可能な形（バケット分解済み勤怠・イベント型有給・ステップ型承認ログ）で持つ
 - 意思決定支援・売上サマリの画面に「mart メトリクス相当」のコード（例 `AKO-MET-ATT-001 総労働時間`）を出典バッジで表示し、分析基盤接続の意図を体感できるようにする（**モックアップ未実装。本実装フェーズで追加予定**）
 
+### 2.6 改善要望（F-42。マイグレーション 0057）
+
+各ページから寄せられた改善・改修の要望を記録し、AI が改修単位へ集約する。
+
+| テーブル | 区分 | 主な列 | 備考 |
+|---|---|---|---|
+| `improvement_requests` | 記録系（追記のみ・**SoT**） | `id`／`member_id`／`member_name`（スナップショット）／`page_path`・`page_label`（投稿元）／`body`／`item_id`（集約先・NULL=未集約）／`archived_at`（取消）／`created_at` | 投稿は認証済み全員可。取消は論理削除（`archived_at`）で復元可（原則9.5） |
+| `improvement_items` | 導出（人手のステータス・編集を持つ） | `id`／`title`／`summary`／`detail`／`status`（`triage`/`accepted`/`resolved`/`rejected`）／`page_paths`（jsonb）／`source_request_ids`（jsonb）／`llm`／`archived_at`／`created_at`・`updated_at`／`resolved_at` | AI 集約で生成。**再集約は未集約要望のみ処理し判定済み item を巻き戻さない（原則2）**。取消/復元可 |
+
+- **SoT → 導出:** requests が SoT。items は集約キャッシュだが、人手で付与した `status` と編集内容は記録系として保護する
+  （再集約は `item_id IS NULL AND archived_at IS NULL` の要望のみ、追記先は `status='triage'` の item のみ）。
+- **AI:** 集約ロジックの純関数は `shared/domain/improvement.ts`（API/フロント共有）。API は Vertex AI → 同純関数へフォールバック、
+  モックは同純関数を直接使用（両モード一致）。改修プロンプト（`buildCodingPrompt`）も同モジュールの決定的組み立て。
+- **アクセス制御:** 閲覧・管理は機能キー `improvements`（deny-by-default・管理者常時可・F-16 で付与）。投稿はガード対象外。
+- FK は張らない（0032 と同判断 = 参照整合は API 書込パスで担保）。記録系のためシードしない。
+
 ## 3. 変更時の必須確認（CLAUDE.md 開発原則 6 への回答）
 
 1. 新しい書込はすべて `useMockDb`（SoT）へ先に行い、通知・バッジ等の派生は computed/イベントで後続反映する

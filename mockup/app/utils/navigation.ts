@@ -67,6 +67,7 @@ export const NAV_GROUPS: NavGroup[] = [
     id: 'admin',
     label: '管理',
     items: [
+      { path: '/improvements', label: '改善要望', icon: 'MessageSquarePlus' },
       { path: '/masters', label: 'マスタメンテナンス', icon: 'Database', adminOnly: true, matchPrefix: true },
       { path: '/settings', label: '設定', icon: 'Settings', adminOnly: true, matchPrefix: true },
     ],

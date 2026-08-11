@@ -180,6 +180,25 @@ const tree = computed<MatrixNode[]>(() => FEATURE_PERMISSION_KEYS.map((f) => {
       })),
     })))
   }
+  // 改善要望管理（F-42）は既定 deny（権限を持つ人のみ・管理者は常時可）。timecard-all と同様に
+  // 列（対象）ごとに既定を解決する = 権限表の既定表示を実挙動（canManageImprovements）へ一致させる
+  if (f.key === 'improvements') {
+    return {
+      resource: 'improvements',
+      field: null,
+      label: f.label,
+      depth: 0 as const,
+      vocab: 'feature' as const,
+      defaultAllow: false,
+      defaultAllowOf: (subjectId: string) => {
+        if (matrixLayer.value === 'role') return subjectId === 'admin'
+        if (matrixLayer.value === 'member') {
+          return ((memberCrud.byId(subjectId) as Member | undefined)?.role ?? 'member') === 'admin'
+        }
+        return false // 役職レイヤ: 該当者のロールに依存するため保守的に「不可」で表示
+      },
+    }
+  }
   return {
     resource: f.key,
     field: null,
@@ -266,12 +285,15 @@ function cellInfo(subjectId: string, node: MatrixNode): CellInfo {
 }
 
 /**
- * admin のマスタ・設定 deny はロックアウト防止のため無視される（shared/domain/permissions.ts の
- * canUseFeature と同期。保護は利用者属性ベース = ロール列の admin と、role が admin の個人列が対象。
- * 役職レイヤは対象者が静的に決まらないため脚注での言及に留める）
+ * admin の deny が実挙動で無視されるリソースは、表でも管理者セルを保護（クリック不可・常に許可表示）する。
+ * - masters / settings: canUseFeature がロックアウト防止で admin の deny を無視
+ * - improvements（F-42）: canManageImprovements が admin を常時許可（機微な要望データの初期閲覧者を管理者に限定）
+ * これらで管理者セルにクリックで deny を作れると「表は拒否・実挙動は許可」の乖離になるため保護する。
+ * 保護は利用者属性ベース = ロール列の admin と role が admin の個人列が対象（役職レイヤは静的に決まらず脚注で言及）。
  */
 function isLockoutProtected(subjectId: string, node: MatrixNode): boolean {
-  if (!(node.resource === 'masters' || node.resource === 'settings') || node.field !== null) return false
+  const protectedResource = node.resource === 'masters' || node.resource === 'settings' || node.resource === 'improvements'
+  if (!protectedResource || node.field !== null) return false
   if (matrixLayer.value === 'role') return subjectId === 'admin'
   if (matrixLayer.value === 'member') {
     return (memberCrud.byId(subjectId) as Member | undefined)?.role === 'admin'
@@ -488,7 +510,7 @@ function cellClass(subjectId: string, node: MatrixNode): string[] {
       </table>
     </div>
     <p class="border-t border-line px-4 py-2 text-[11px] text-muted">
-      ※ 管理者（ロール列の管理者・権限ロールが管理者の個人。役職経由で該当する場合も同様）の「マスタメンテナンス」「設定」への拒否、および参照対象の本人セルはロックアウト防止のため操作できません。「全員のタイムカードの参照」の既定は管理者・人事のみ参照可です（役職列の既定表示は「参照不可」ですが、明示ルールが無い場合の実判定は本人のロール既定に従います）。AI 参照範囲行は ✓ = すべて / × = 自分のみ、参照対象行は ✓ = 参照可 / × = 参照不可 を表します。マスタ項目の表示制御はページの利用可否とは独立に、アプリ全体のマスタ応答へ適用されます（ドキュメントのみページ行が項目の一括既定を兼ねます）。個々のルールの無効化・復元の履歴はルール一覧モードで確認できます
+      ※ 管理者（ロール列の管理者・権限ロールが管理者の個人。役職経由で該当する場合も同様）の「マスタメンテナンス」「設定」「改善要望管理」への拒否、および参照対象の本人セルはロックアウト防止のため操作できません（改善要望管理は管理者を常時許可）。「全員のタイムカードの参照」の既定は管理者・人事のみ参照可です（役職列の既定表示は「参照不可」ですが、明示ルールが無い場合の実判定は本人のロール既定に従います）。AI 参照範囲行は ✓ = すべて / × = 自分のみ、参照対象行は ✓ = 参照可 / × = 参照不可 を表します。マスタ項目の表示制御はページの利用可否とは独立に、アプリ全体のマスタ応答へ適用されます（ドキュメントのみページ行が項目の一括既定を兼ねます）。個々のルールの無効化・復元の履歴はルール一覧モードで確認できます
     </p>
   </UiSectionCard>
 </template>

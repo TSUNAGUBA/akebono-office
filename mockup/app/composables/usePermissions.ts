@@ -8,6 +8,7 @@
  * 既定は allow（ルール未設定なら挙動不変）。既存のロールガードを緩めることはできない（制限レイヤ）。
  */
 import {
+  canManageImprovements as canManageImprovementsShared,
   canUseFeature, canViewAllTimecards as canViewAllTimecardsShared,
   canViewMemberCustomerLog as canViewMemberCustomerLogShared, canViewField,
   canViewMemberReports as canViewMemberReportsShared,
@@ -37,8 +38,14 @@ export function usePermissions() {
     // attendance deny のままページだけ出すと API モードで全操作が 403 になるため、
     // メニュー・ページ表示も attendance との AND で判定し UI と API の挙動を一致させる
     if (key === 'timecard') return can('timecard') && can('attendance')
+    // 改善要望管理は既定 deny（権限を持つ人のみ・管理者は常時可）。canUseFeature（allow 既定）でなく専用判定を使う
+    if (key === 'improvements') return canManageImprovements.value
     return can(key)
   }
+
+  /** 改善要望の閲覧・管理ができるか（既定 deny・管理者は常時可・権限設定で付与）。F-42 */
+  const canManageImprovements = computed(() =>
+    canManageImprovementsShared(rules.value, subject.value))
 
   function canField(resource: string, field: string): boolean {
     return canViewField(rules.value, subject.value, resource, field)
@@ -65,6 +72,6 @@ export function usePermissions() {
 
   return {
     can, canPath, canField, canViewMemberReports, canViewMemberTaskPlans,
-    canViewMemberCustomerLog, canViewAllTimecards,
+    canViewMemberCustomerLog, canViewAllTimecards, canManageImprovements,
   }
 }

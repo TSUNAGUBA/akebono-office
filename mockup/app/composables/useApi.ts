@@ -294,6 +294,12 @@ const CUSTOM_COLLECTION_ENDPOINTS: Record<string, string> = {
   importSources: '/v1/akebono/import-sources',
   importMappings: '/v1/akebono/import-mappings',
   importRuns: '/v1/akebono/import-runs',
+  // F-42（0057）: 改善要望。管理系の読み取り（一覧 GET）は管理権限者のみ = 非権限者は 403 で空フォールバック。
+  // 実際の管理ページは useImprovements が専用 ref（includeArchived 付き）でロードし tbl() を経由しない。
+  // ここに登録するのは①投稿の apiWrite/②isMigratedCollection でモックコレクション扱いを外すため
+  // （API モードで tbl('improvementItems') を触っても localStorage の空データでなくサーバー値〔管理者〕/403 空になる）
+  improvementRequests: '/v1/improvements/requests',
+  improvementItems: '/v1/improvements/items',
 }
 
 /**

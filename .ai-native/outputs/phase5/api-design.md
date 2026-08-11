@@ -410,3 +410,23 @@ akebonoCards: ComputedRef<MenuCard[]>
 | AKO-MEDIA-022 | 統合分析には連携する業態（channel.segmentId）が必要（未連携チャンネルで integrated 要求） | ✅ |
 | AKO-MEDIA-023 | 外部投稿記事の入力不正（title/body 必須・publishedAt 形式） | ✅ |
 | AKO-MEDIA-024 | 対象の外部投稿記事が見つからない（編集・取消/復元） | ✅ |
+| AKO-REQ-001 | 改善要望の本文が未入力（F-42・投稿） | ✅ |
+| AKO-REQ-002 | 対象の要望／改修単位が見つからない（F-42） | ✅ |
+| AKO-REQ-003 | 改修単位の見出しが未入力（F-42・編集） | ✅ |
+| AKO-REQ-004 | 改修単位の更新項目がない（F-42・部分更新） | ✅ |
+| AKO-REQ-005 | ステータス値が不正（F-42） | ✅ |
+| AKO-REQ-006 | 許可されないステータス遷移（F-42・状態機械。409） | ✅ |
+
+**改善要望（F-42。`/v1/improvements`。投稿は認証済み全員可・管理系は `canManageImprovements` = deny-by-default + 管理者常時可）:**
+
+| メソッド・パス | 用途 | 認可 |
+|---|---|---|
+| `POST /v1/improvements/requests` | 要望の投稿（`body`／`pagePath`／`pageLabel`） | 認証済み全員 |
+| `GET /v1/improvements/requests` | 生要望の一覧（`itemId`／`unclustered`／`includeArchived`） | 管理 |
+| `POST /v1/improvements/requests/:id/archive`・`/restore` | 要望の取消／復元 | 投稿者本人 or 管理 |
+| `GET /v1/improvements/items` | 改修単位の一覧（`filter`／`includeArchived`） | 管理 |
+| `POST /v1/improvements/generate` | AI 集約（Vertex → ヒューリスティック。未集約要望のみ・冪等） | 管理 |
+| `POST /v1/improvements/items/:id` | 改修単位の編集（`title`／`summary`／`detail` の部分更新） | 管理 |
+| `POST /v1/improvements/items/:id/status` | ステータス変更（状態機械・reopen 可） | 管理 |
+| `POST /v1/improvements/items/:id/archive`・`/restore` | 改修単位の取消／復元 | 管理 |
+| `POST /v1/improvements/prompt` | フィルター条件に従う改修プロンプト出力（`filter`） | 管理 |
