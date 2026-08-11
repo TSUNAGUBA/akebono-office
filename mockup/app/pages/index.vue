@@ -4,6 +4,8 @@
  * カード型メニュー + 通知フィードを配置する（2026-07-16 オペレーター指示）。
  * 表示・配置（セクション構成・メニュー要素の配置・通知欄の位置）はテンプレートから選択でき、
  * ユーザー設定 > テナント設定 > デフォルト の順で解決する（useDashboardLayout。2026-08-03）。
+ * - モバイル/PC でシーンを分離（2026-08-10）: 通知欄の配置（options.notifications）は PC 専用。
+ *   モバイルはメニュー最優先で通知欄をトップに出さず、通知はヘッダーのベル（未読バッジ）/下部ナビ「通知」から開く。
  * - 打刻はヘッダーの「タイムカード」ボタン → モーダル（layouts/default.vue）
  * - 売上サマリは 売上管理（/sales）、稼働状況サマリは 提供システム稼働状況（/status）へ独立
  */
@@ -128,14 +130,14 @@ const shownSections = computed(() =>
       </template>
     </UiPageHeader>
 
-    <!-- 通知位置に応じてレイアウトを切替。
-         side = 2 カラム（左メニュー / 右通知欄・現行）。モバイルは縦積みで通知欄を先頭に置く。
-         bottom = 1 カラム（メニュー下に通知欄）。hidden = 通知欄なし。 -->
+    <!-- 通知欄の配置は「PC シーン」専用。モバイルはメニュー最優先で、通知はヘッダーのベル（未読バッジ付き）/
+         下部ナビ「通知」から開く（= トップに通知欄を出さない。毎回スクロールしてメニューへ辿り着く問題を解消）。
+         PC: side = 2 カラム（左メニュー / 右通知欄。lg+）・bottom = メニュー下（md+）・hidden = 通知欄なし。 -->
     <!-- grid-cols-[minmax(0,1fr)] を基底に置く: 暗黙 auto トラックだと通知の truncate（nowrap）が max-content で
          トラックを押し広げ、モバイルで横はみ出しする。minmax(0,1fr) で 0 まで縮小可にし truncate を効かせる -->
     <div class="grid grid-cols-[minmax(0,1fr)] items-start gap-4" :class="notifPlacement === 'side' ? 'lg:grid-cols-[minmax(0,1fr)_340px]' : ''">
-      <!-- メイン: メニュー -->
-      <div class="grid gap-3" :class="notifPlacement === 'side' ? 'order-2 lg:order-1' : ''">
+      <!-- メイン: メニュー（モバイル・PC 共通で最上部 = メニュー最優先。順序反転はしない） -->
+      <div class="grid gap-3">
         <!-- AKEBONO 業務（業態別アプリ。押下でその業態の業務へ入る = ヘッダ切替に依存しない導線）。
              メニューカテゴリへ割り当てた業態はセクション配置側に出るため、ここは未割当業態のみを表示する
              （= 二重表示を防ぐ。全業態が割当済みなら専用セクションごと出さない。2026-08-03 #24） -->
@@ -159,12 +161,14 @@ const shownSections = computed(() =>
           </div>
         </section>
 
-        <!-- 通知欄（bottom = メニュー下に全幅で配置） -->
-        <OfficeDashboardNotifications v-if="notifPlacement === 'bottom'" />
+        <!-- 通知欄（bottom = PC のみメニュー下に全幅配置。モバイルはベル/下部ナビ「通知」が導線） -->
+        <div v-if="notifPlacement === 'bottom'" class="hidden md:block">
+          <OfficeDashboardNotifications />
+        </div>
       </div>
 
-      <!-- 通知欄（side = 右カラム。lg では上部に張り付く） -->
-      <aside v-if="notifPlacement === 'side'" class="order-1 lg:sticky lg:top-3 lg:order-2" aria-label="通知">
+      <!-- 通知欄（side = PC〔lg+〕のみ右カラムに固定。モバイル/タブレットはベル/下部ナビ「通知」が導線） -->
+      <aside v-if="notifPlacement === 'side'" class="hidden lg:sticky lg:top-3 lg:block" aria-label="通知">
         <OfficeDashboardNotifications />
       </aside>
     </div>

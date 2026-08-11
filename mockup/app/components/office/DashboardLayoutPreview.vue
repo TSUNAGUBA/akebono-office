@@ -1,10 +1,12 @@
 <script setup lang="ts">
 /**
  * ダッシュボードレイアウトの軽量プレビュー（実データ不要のミニ描画。オペレーター指示 2026-08-03）。
- * セクション見出し + 各セクションのカード数チップ + 通知欄の位置を図示する。
- * テンプレート選択時に「適用するとどう並ぶか」を掴めるようにするための概念図（実カードは描画しない）。
+ * PC シーンとモバイルシーンを分けて図示する（2026-08-10）:
+ *  - PC: セクション見出し + カード数チップ + 通知欄の位置（side/bottom/hidden）を反映。
+ *  - モバイル: メニュー最優先（通知欄はトップに出さない）。通知はヘッダーのベル（未読バッジ付き）から開く。
+ * テンプレート選択時に「PC ではどう並ぶか」「モバイルでは常にメニュー最優先」を掴むための概念図（実カードは描画しない）。
  */
-import { Bell, BellOff } from 'lucide-vue-next'
+import { Bell, BellOff, Monitor, Smartphone } from 'lucide-vue-next'
 import type { DashboardLayout } from '~/utils/dashboard-layout'
 import { MENU_CARDS } from '~/utils/menu-registry'
 
@@ -18,60 +20,97 @@ const sections = computed(() =>
     .map(s => ({ id: s.id, label: s.label, count: s.cardIds.filter(id => knownIds.has(id)).length }))
     .filter(s => s.count > 0))
 
+/** 通知欄の位置（PC シーン専用。モバイルは常にベル導線） */
 const notif = computed(() => props.layout.options.notifications)
 </script>
 
 <template>
-  <div
-    class="rounded-lg border border-line bg-[var(--c-bg,transparent)] p-2"
-    aria-hidden="true"
-  >
-    <!-- AKEBONO 業務バンド（表示時のみ） -->
-    <div
-      v-if="layout.options.showAkebono"
-      class="mb-1.5 rounded bg-brand-soft px-1.5 py-1 text-[9px] font-bold text-brand"
-    >
-      AKEBONO 業務
+  <div class="grid gap-1.5" aria-hidden="true">
+    <!-- PC シーン: 通知欄の配置（side/bottom/hidden）はここに適用される -->
+    <div class="rounded-lg border border-line bg-[var(--c-bg,transparent)] p-2">
+      <p class="mb-1 flex items-center gap-1 text-[9px] font-bold text-muted">
+        <Monitor class="h-2.5 w-2.5" /> PC
+      </p>
+
+      <!-- AKEBONO 業務バンド（表示時のみ） -->
+      <div
+        v-if="layout.options.showAkebono"
+        class="mb-1.5 rounded bg-brand-soft px-1.5 py-1 text-[9px] font-bold text-brand"
+      >
+        AKEBONO 業務
+      </div>
+
+      <!-- side: 左にセクション・右に通知バー / それ以外: セクションを縦積み -->
+      <div class="flex gap-1.5" :class="notif === 'side' ? '' : 'flex-col'">
+        <div class="flex-1 grid gap-1">
+          <div
+            v-for="s in sections"
+            :key="s.id"
+            class="rounded border border-line px-1.5 py-1"
+          >
+            <div class="flex items-center justify-between gap-1">
+              <span class="truncate text-[9px] font-semibold text-sub">{{ s.label }}</span>
+              <span class="num shrink-0 rounded-full bg-line px-1 text-[8px] leading-3 text-muted">{{ s.count }}</span>
+            </div>
+            <!-- カード枠のダミー（密度で高さを変える） -->
+            <div class="mt-0.5 grid grid-cols-3 gap-0.5">
+              <span
+                v-for="i in Math.min(s.count, 3)"
+                :key="i"
+                class="rounded bg-line"
+                :class="layout.options.density === 'compact' ? 'h-1' : 'h-1.5'"
+              />
+            </div>
+          </div>
+          <p v-if="sections.length === 0" class="text-[9px] text-muted">（すべて「その他」に表示）</p>
+        </div>
+
+        <!-- 通知バー -->
+        <div
+          v-if="notif !== 'hidden'"
+          class="rounded border border-line bg-brand-soft/40 px-1.5 py-1"
+          :class="notif === 'side' ? 'w-12 shrink-0' : 'w-full'"
+        >
+          <span class="flex items-center gap-1 text-[9px] font-semibold text-brand">
+            <Bell class="h-2.5 w-2.5" /> 通知
+          </span>
+        </div>
+        <div v-else class="flex items-center gap-1 text-[9px] text-muted">
+          <BellOff class="h-2.5 w-2.5" /> 通知オフ
+        </div>
+      </div>
     </div>
 
-    <!-- side: 左にセクション・右に通知バー / それ以外: セクションを縦積み -->
-    <div class="flex gap-1.5" :class="notif === 'side' ? '' : 'flex-col'">
-      <div class="flex-1 grid gap-1">
-        <div
-          v-for="s in sections"
-          :key="s.id"
-          class="rounded border border-line px-1.5 py-1"
-        >
-          <div class="flex items-center justify-between gap-1">
-            <span class="truncate text-[9px] font-semibold text-sub">{{ s.label }}</span>
-            <span class="num shrink-0 rounded-full bg-line px-1 text-[8px] leading-3 text-muted">{{ s.count }}</span>
-          </div>
-          <!-- カード枠のダミー（密度で高さを変える） -->
-          <div class="mt-0.5 grid grid-cols-3 gap-0.5">
-            <span
-              v-for="i in Math.min(s.count, 3)"
-              :key="i"
-              class="rounded bg-line"
-              :class="layout.options.density === 'compact' ? 'h-1' : 'h-1.5'"
-            />
-          </div>
-        </div>
-        <p v-if="sections.length === 0" class="text-[9px] text-muted">（すべて「その他」に表示）</p>
+    <!-- モバイルシーン: メニュー最優先（通知欄はトップに出さない）・通知はヘッダーのベルから開く -->
+    <div class="rounded-lg border border-line bg-[var(--c-bg,transparent)] p-2">
+      <p class="mb-1 flex items-center justify-between text-[9px] font-bold text-muted">
+        <span class="flex items-center gap-1"><Smartphone class="h-2.5 w-2.5" /> モバイル</span>
+        <!-- 疑似ヘッダーのベル（未読バッジ付き） -->
+        <span class="relative inline-flex items-center">
+          <Bell class="h-2.5 w-2.5 text-brand" />
+          <span class="absolute -right-0.5 -top-0.5 h-1 w-1 rounded-full bg-crit" />
+        </span>
+      </p>
+
+      <!-- AKEBONO 業務バンド（表示条件は PC と共通） -->
+      <div
+        v-if="layout.options.showAkebono"
+        class="mb-1 rounded bg-brand-soft px-1.5 py-0.5 text-[9px] font-bold text-brand"
+      >
+        AKEBONO 業務
       </div>
 
-      <!-- 通知バー -->
-      <div
-        v-if="notif !== 'hidden'"
-        class="rounded border border-line bg-brand-soft/40 px-1.5 py-1"
-        :class="notif === 'side' ? 'w-12 shrink-0' : 'w-full'"
-      >
-        <span class="flex items-center gap-1 text-[9px] font-semibold text-brand">
-          <Bell class="h-2.5 w-2.5" /> 通知
-        </span>
+      <!-- メニューを縦積みで最優先（通知欄はここに出さない = 毎回スクロールしない） -->
+      <div class="grid gap-0.5">
+        <div
+          v-for="s in (sections.length > 0 ? sections : [{ id: 'other', label: 'メニュー', count: 0 }])"
+          :key="s.id"
+          class="flex items-center gap-1 rounded border border-line px-1.5 py-0.5"
+        >
+          <span class="truncate text-[9px] font-semibold text-sub">{{ s.label }}</span>
+        </div>
       </div>
-      <div v-else class="flex items-center gap-1 text-[9px] text-muted">
-        <BellOff class="h-2.5 w-2.5" /> 通知オフ
-      </div>
+      <p class="mt-1 text-[8px] leading-tight text-muted">通知はヘッダーのベルから</p>
     </div>
   </div>
 </template>
