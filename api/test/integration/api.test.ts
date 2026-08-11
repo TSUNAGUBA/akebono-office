@@ -6685,4 +6685,23 @@ describe('改善要望（F-42）', () => {
     // 他人（権限なし）は取消できない（本人以外は管理権限が必要 = 403）
     expect((await api('POST', `/v1/improvements/requests/${reqId}/archive`, { as: HR })).status).toBe(403)
   })
+
+  it('対応予定期間（ガント用）の登録・検証・クリア（0058）', async () => {
+    const items = (await api('GET', '/v1/improvements/items', { as: ADMIN })).json.data as { id: string }[]
+    expect(items.length).toBeGreaterThan(0)
+    const id = items[0]!.id
+    // 正常: 開始 <= 終了。date 列は 'YYYY-MM-DD' 文字列で返る（TZ 非依存）
+    const ok = await api('POST', `/v1/improvements/items/${id}`, { as: ADMIN, body: { planStart: '2026-03-01', planEnd: '2026-03-20' } })
+    expect(ok.status).toBe(200)
+    expect(ok.json.data as { planStart: string; planEnd: string }).toMatchObject({ planStart: '2026-03-01', planEnd: '2026-03-20' })
+    // 逆転（終了<開始）は AKO-REQ-007
+    expect((await api('POST', `/v1/improvements/items/${id}`, { as: ADMIN, body: { planStart: '2026-03-20', planEnd: '2026-03-01' } }))
+      .json.error?.code).toBe('AKO-REQ-007')
+    // クリア（空文字 → NULL）
+    const cleared = await api('POST', `/v1/improvements/items/${id}`, { as: ADMIN, body: { planStart: '', planEnd: '' } })
+    expect((cleared.json.data as { planStart: string | null; planEnd: string | null }).planStart).toBeNull()
+    expect((cleared.json.data as { planEnd: string | null }).planEnd).toBeNull()
+    // 権限: 一般は編集不可（403）
+    expect((await api('POST', `/v1/improvements/items/${id}`, { as: MEMBER, body: { planStart: '2026-03-01' } })).status).toBe(403)
+  })
 })

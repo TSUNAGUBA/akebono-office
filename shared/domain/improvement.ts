@@ -17,6 +17,7 @@
  *   既存 item は status='triage'（未判定・人手未対応）のものにのみ追記する。判定済み item は不変。
  */
 
+import { isRealDateKey } from './jst'
 import type { Result } from './types'
 
 // ---------- ステータス（単一ステータスで一元管理。原則: 状態機械で活性と遷移検証を一致させる） ----------
@@ -135,6 +136,10 @@ export interface ImprovementItem {
   updatedAt: string
   /** 解決済みにした時刻（null = 未解決） */
   resolvedAt: string | null
+  /** 対応予定の開始日（YYYY-MM-DD・任意。null = 未定）。ガントチャートのバー開始 */
+  planStart: string | null
+  /** 対応予定の終了日（YYYY-MM-DD・任意。null = 開始日のみ = 単日）。ガントチャートのバー終了 */
+  planEnd: string | null
 }
 
 // ---------- 入力検証（api = AKO-REQ-*（400）へ変換 / mock = Result のエラーへ変換） ----------
@@ -163,6 +168,21 @@ export function improvementBodyError(body: string): string | null {
 export function improvementTitleError(title: string): string | null {
   if (!title.trim()) return '見出しを入力してください'
   if ([...title].length > IMPROVEMENT_TITLE_CAP) return `見出しは ${IMPROVEMENT_TITLE_CAP} 文字までです`
+  return null
+}
+
+/**
+ * 対応予定期間の検証（任意）。開始・終了は空文字（= 未設定/クリア）を許容。
+ * 設定する場合は実在日で、終了は開始以降であること。エラーメッセージ | null。
+ * 終了のみ指定（開始なし）は不可（バーの起点が定まらない）。
+ */
+export function improvementPlanError(planStart: string, planEnd: string): string | null {
+  const s = planStart.trim()
+  const e = planEnd.trim()
+  if (s && !isRealDateKey(s)) return '対応予定の開始日が正しくありません'
+  if (e && !isRealDateKey(e)) return '対応予定の終了日が正しくありません'
+  if (e && !s) return '終了日を設定する場合は開始日も設定してください'
+  if (s && e && e < s) return '対応予定の終了日は開始日以降にしてください'
   return null
 }
 

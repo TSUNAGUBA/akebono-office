@@ -416,6 +416,7 @@ akebonoCards: ComputedRef<MenuCard[]>
 | AKO-REQ-004 | 改修単位の更新項目がない（F-42・部分更新） | ✅ |
 | AKO-REQ-005 | ステータス値が不正（F-42） | ✅ |
 | AKO-REQ-006 | 許可されないステータス遷移（F-42・状態機械。409） | ✅ |
+| AKO-REQ-007 | 対応予定期間が不正（実在日でない／終了<開始／終了のみ指定。F-42・0058） | ✅ |
 
 **改善要望（F-42。`/v1/improvements`。投稿は認証済み全員可・管理系は `canManageImprovements` = deny-by-default + 管理者常時可）:**
 
@@ -426,7 +427,7 @@ akebonoCards: ComputedRef<MenuCard[]>
 | `POST /v1/improvements/requests/:id/archive`・`/restore` | 要望の取消／復元 | 投稿者本人 or 管理 |
 | `GET /v1/improvements/items` | 改修単位の一覧（`filter`／`includeArchived`） | 管理 |
 | `POST /v1/improvements/generate` | AI 集約（Vertex → ヒューリスティック。未集約要望のみ・冪等） | 管理 |
-| `POST /v1/improvements/items/:id` | 改修単位の編集（`title`／`summary`／`detail` の部分更新） | 管理 |
+| `POST /v1/improvements/items/:id` | 改修単位の編集（`title`／`summary`／`detail`／`planStart`／`planEnd`〔対応予定期間・0058〕の部分更新） | 管理 |
 | `POST /v1/improvements/items/:id/status` | ステータス変更（状態機械・reopen 可） | 管理 |
 | `POST /v1/improvements/items/:id/archive`・`/restore` | 改修単位の取消／復元 | 管理 |
 | `POST /v1/improvements/prompt` | フィルター条件に従う改修プロンプト出力（`filter`） | 管理 |

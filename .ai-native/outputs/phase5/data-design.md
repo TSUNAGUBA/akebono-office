@@ -375,7 +375,7 @@ flowchart LR
 | テーブル | 区分 | 主な列 | 備考 |
 |---|---|---|---|
 | `improvement_requests` | 記録系（追記のみ・**SoT**） | `id`／`member_id`／`member_name`（スナップショット）／`page_path`・`page_label`（投稿元）／`body`／`item_id`（集約先・NULL=未集約）／`archived_at`（取消）／`created_at` | 投稿は認証済み全員可。取消は論理削除（`archived_at`）で復元可（原則9.5） |
-| `improvement_items` | 導出（人手のステータス・編集を持つ） | `id`／`title`／`summary`／`detail`／`status`（`triage`/`accepted`/`resolved`/`rejected`）／`page_paths`（jsonb）／`source_request_ids`（jsonb）／`llm`／`archived_at`／`created_at`・`updated_at`／`resolved_at` | AI 集約で生成。**再集約は未集約要望のみ処理し判定済み item を巻き戻さない（原則2）**。取消/復元可 |
+| `improvement_items` | 導出（人手のステータス・編集を持つ） | `id`／`title`／`summary`／`detail`／`status`（`triage`/`accepted`/`resolved`/`rejected`）／`page_paths`（jsonb）／`source_request_ids`（jsonb）／`llm`／`archived_at`／`created_at`・`updated_at`／`resolved_at`／**`plan_start`・`plan_end`（date・任意 = 対応予定期間。0058）** | AI 集約で生成。**再集約は未集約要望のみ処理し判定済み item を巻き戻さない（原則2）**。取消/復元可。予定期間はガントチャートで可視化 |
 
 - **SoT → 導出:** requests が SoT。items は集約キャッシュだが、人手で付与した `status` と編集内容は記録系として保護する
   （再集約は `item_id IS NULL AND archived_at IS NULL` の要望のみ、追記先は `status='triage'` の item のみ）。

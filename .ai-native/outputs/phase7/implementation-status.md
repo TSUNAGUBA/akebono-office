@@ -2511,3 +2511,27 @@
   mockup `npx nuxi typecheck` green・`npm test` **242 passed**（`improvement` 10 件含む）・`npm run build` green。
 - [x] **ドキュメント整合（原則5）**: functional-requirements（F-42）・data-design・api-design・screen-design・本節・
   `CONVENTIONS.md`（基盤 API 早見表 = useImprovements / UI 在庫 = WidgetsImprovementSubmit）を更新。
+
+## 70. 改善要望のカンバン + 対応予定期間 + ガントチャート（F-42 追補・オペレーター指示 2026-08-11）の完了条件（Definition of Done）
+
+改修要望の進捗・ステータスをカンバンで一望し、各改修案件に対応予定期間を任意登録してガントチャート（月次/週次/日次）で
+可視化できるようにする（§69 の続き。マイグレーション 0058）。
+
+- [x] **対応予定期間（0058）**: `improvement_items` へ `plan_start`・`plan_end`（date・任意）を追加（`IF NOT EXISTS`・下位互換）。
+  共有型 `ImprovementItem` に planStart/planEnd、検証 `improvementPlanError`（実在日・終了>=開始・終了のみ不可）。
+  API 編集エンドポイントで planStart/planEnd を部分更新（空文字 = NULL クリア・逆転は AKO-REQ-007）。date 列は 'YYYY-MM-DD' 文字列で返す（TZ 非依存）。
+- [x] **ガント純関数（`shared/domain/gantt.ts`）**: `ganttColumns`（month=12/week=13/day=当月日数）・`ganttBar`（可視範囲へクランプ・
+  単日/範囲外対応）・`ganttStep`（前後=表示範囲ぶん送り）・`ganttAnchorForToday`（今へスナップ）・`addMonths`/`mondayOf`・
+  `ganttRangeLabel`。純粋・決定的（Date のローカル TZ に依存しない月/週演算）。
+- [x] **カンバン（`ImprovementsKanban`）**: ステータス別カラム・カード（見出し/対象ページ/要望数/予定バッジ）・許可遷移のクイック操作・
+  クリックで詳細ドロワー。列は横スクロール（原則8）。
+- [x] **ガント（`ImprovementsGantt`）**: スケール切替（月次/週次/日次）+ `[前][今][次]` ページャ + 表示範囲ラベル。
+  バーはステータス色。ラベル列 sticky・本体横スクロール。予定未定は別枠チップ。
+- [x] **ページ統合**: `pages/improvements.vue` に `UiChipTabs` のビュー切替（一覧/カンバン/ガント）。ドロワーに対応予定期間
+  （開始/終了 + 保存/クリア）。`useImprovements.editItem` を planStart/planEnd 対応に拡張（両モードで検証）。mock は
+  `mockGenerate` の新規 item を plan 未定で作成、デモシード（改修単位 2 件・予定期間あり + 未集約要望）を追加（SEED_VERSION 18）。
+- [x] **下位互換（原則7）**: 追加列のみ・既存 item は plan NULL。SEED_VERSION を 18 に上げデモ更新（モックは日次再シードのため軽微）。
+- [x] **検証（実測値）**: API `npm run typecheck` green・`npm test` **327 passed**（`gantt` 14 含む）・`npm run test:integration` **251 passed**
+  （予定期間の登録・検証 + 0058 適用含む）。mockup `npx nuxi typecheck` green・`npm test` **247 passed**（`gantt` 5 含む）・`npm run build` green。
+- [x] **ドキュメント整合（原則5）**: functional-requirements（F-42-7〜9）・data-design（plan列）・api-design（AKO-REQ-007・編集）・
+  screen-design（5.7 カンバン/ガント）・本節・CONVENTIONS（UI 在庫 = ImprovementsKanban/ImprovementsGantt）を更新。
