@@ -7,8 +7,8 @@
  * 送信後は同じモーダル内で「取り消す」導線を出す（投稿者本人の取消 = 原則9.5。誤送信で詰まない）。
  */
 import { MessageSquarePlus } from 'lucide-vue-next'
-import { isActivePath, NAV_GROUPS } from '~/utils/navigation'
 import { IMPROVEMENT_BODY_CAP } from '~/types/improvement'
+import { resolvePageLabel } from '~/utils/page-label'
 
 const route = useRoute()
 const { submit, setRequestArchived } = useImprovements()
@@ -22,15 +22,8 @@ const sent = ref(false)
 const lastId = ref('')
 const lastBody = ref('')
 
-/** 投稿元ページの表示名（ナビ定義から解決・無ければパス） */
-const pageLabel = computed(() => {
-  for (const g of NAV_GROUPS) {
-    for (const i of g.items) {
-      if (isActivePath(route.path, i)) return i.label
-    }
-  }
-  return route.path
-})
+/** 投稿元ページの表示名（ナビ/カードメニュー定義から解決・サブページは前方一致・無ければパス） */
+const pageLabel = computed(() => resolvePageLabel(route.path))
 
 // 画面遷移したら閉じる（開いたまま別ページを覆わない）
 watch(() => route.path, () => { open.value = false })

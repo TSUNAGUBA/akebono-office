@@ -18,6 +18,7 @@ import {
   matchesImprovementFilter,
 } from '~/types/improvement'
 import { fmtDate } from '~/utils/format'
+import { pageDisplay } from '~/utils/page-label'
 
 const { canManageImprovements } = usePermissions()
 const imp = useImprovements()
@@ -41,7 +42,8 @@ const rows = computed<ImprovementItem[]>(() => {
     it.title.toLowerCase().includes(q)
     || it.summary.toLowerCase().includes(q)
     || it.detail.toLowerCase().includes(q)
-    || it.pagePaths.some(p => p.toLowerCase().includes(q)))
+    // 表示中の「名称（パス）」で検索できるようにする（名称でも生パスでも一致）
+    || it.pagePaths.some(p => pageDisplay(p).toLowerCase().includes(q)))
 })
 
 // UiDataTable は Record<string, unknown>[] を要求するため表示用に変換（セルは個別にキャストして参照）
@@ -288,7 +290,7 @@ async function copyPrompt(): Promise<void> {
             <UiStatusBadge :tone="statusTone(row.status as ImprovementStatus)" :label="statusLabel(row.status as ImprovementStatus)" dot />
           </template>
           <template #cell-pages="{ row }">
-            <span class="text-[12px] text-sub">{{ (row.pagePaths as string[]).join(' / ') || '—' }}</span>
+            <span class="text-[12px] text-sub">{{ (row.pagePaths as string[]).map(pageDisplay).join(' / ') || '—' }}</span>
           </template>
           <template #cell-count="{ row }">
             <span class="num">{{ reqCount(row.id as string) }}</span>
