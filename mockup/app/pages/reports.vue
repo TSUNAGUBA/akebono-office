@@ -654,6 +654,20 @@ const drawerGap = computed(() => {
   return reports.gapOf(r)
 })
 
+/**
+ * 日報詳細に合わせて表示する、同じ著者・同じ日付のぽいぽいポスト（オペレーター要望: 個別の日報閲覧に
+ * ぽいぽいポストの投稿内容も合わせて見られるようにする）。可視範囲は既存の poipoi 可視モデルに従う
+ * （本人の list + 管理者の全ポスト adminList）= ここで権限を広げない。AI 社員（memberId=null）は対象外。
+ */
+const drawerPoipoiPosts = computed(() => {
+  const r = drawerReport.value
+  if (!r || !r.memberId) return []
+  const pool = [...poipoiNotes.list.value, ...poipoiNotes.adminList.value]
+  return pool
+    .filter(n => n.memberId === r.memberId && n.createdAt.slice(0, 10) === r.date)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+})
+
 function cellClass(memberId: string, date: string): string {
   const s = displayCellStatus(memberId, date)
   if (s === 'submitted') return 'bg-ok-soft text-ok hover:brightness-95'
@@ -756,7 +770,8 @@ function isDailyUnread(r: DailyReport): boolean {
   return !isOwnDaily(r) && !reports.isReportRead('daily', r.id)
 }
 
-const allUnreadOnly = ref(false)
+// 既定 = 未読のみに統一（通知・日報のデフォルト表示を未読のみに揃える。オペレーター指示）
+const allUnreadOnly = ref(true)
 const allUnreadCount = computed(() => allReports.value.filter(isDailyUnread).length)
 const allVisibleReports = computed(() =>
   allUnreadOnly.value ? allReports.value.filter(isDailyUnread) : allReports.value)
@@ -944,7 +959,8 @@ function isWeeklyUnread(w: WeeklyReport): boolean {
   return w.memberId !== currentUserId.value && !reports.isReportRead('weekly', w.id)
 }
 
-const waUnreadOnly = ref(false)
+// 既定 = 未読のみに統一（通知・日報のデフォルト表示を未読のみに揃える。オペレーター指示）
+const waUnreadOnly = ref(true)
 const waUnreadCount = computed(() => allWeeklies.value.filter(isWeeklyUnread).length)
 const visibleWeeklies = computed(() =>
   waUnreadOnly.value ? allWeeklies.value.filter(isWeeklyUnread) : allWeeklies.value)
@@ -1419,14 +1435,14 @@ async function onMarkUnreadWeekly(): Promise<void> {
             </UiFormField>
             <UiFormField label="本日の課題">
               <div class="grid gap-1.5">
+                <div v-if="dailyMdPreview" class="min-h-[72px] rounded-lg border border-line p-2.5"><UiMarkdown :source="editIssues" /></div>
+                <textarea v-else v-model="editIssues" class="textarea" placeholder="困っていること・ブロッカー" />
                 <UiSelect
                   v-model="editIssueCategory"
                   :options="issueCategoryOptions"
-                  empty-label="種別を選択（任意）"
-                  aria-label="本日の課題の種別"
+                  empty-label="課題要因を選択"
+                  aria-label="本日の課題の課題要因"
                 />
-                <div v-if="dailyMdPreview" class="min-h-[72px] rounded-lg border border-line p-2.5"><UiMarkdown :source="editIssues" /></div>
-                <textarea v-else v-model="editIssues" class="textarea" placeholder="困っていること・ブロッカー" />
               </div>
             </UiFormField>
           </div>
@@ -1938,9 +1954,9 @@ async function onMarkUnreadWeekly(): Promise<void> {
           <div class="grid gap-3 md:grid-cols-2">
             <div><p class="label">今週の成果・達成感</p><UiMarkdown v-if="selWeekly.goalReview" :source="selWeekly.goalReview" /><p v-else class="text-[13px]">—</p></div>
             <div><p class="label">今週の主要業務</p><UiMarkdown v-if="selWeekly.mainWork" :source="selWeekly.mainWork" /><p v-else class="text-[13px]">—</p></div>
-            <div><p class="label">課題・原因仮説</p><UiMarkdown v-if="selWeekly.issues" :source="selWeekly.issues" /><p v-else class="text-[13px]">—</p></div>
+            <div><p class="label">今週の課題・原因仮説</p><UiMarkdown v-if="selWeekly.issues" :source="selWeekly.issues" /><p v-else class="text-[13px]">—</p></div>
+            <div><p class="label">今週うまくいったこと・続けたいこと</p><UiMarkdown v-if="selWeekly.goodPoints" :source="selWeekly.goodPoints" /><p v-else class="text-[13px]">—</p></div>
             <div><p class="label">来週の最重要テーマ（最大3つ）</p><UiMarkdown v-if="selWeekly.nextWeek" :source="selWeekly.nextWeek" /><p v-else class="text-[13px]">—</p></div>
-            <div><p class="label">うまくいったこと・続けたいこと</p><UiMarkdown v-if="selWeekly.goodPoints" :source="selWeekly.goodPoints" /><p v-else class="text-[13px]">—</p></div>
             <div><p class="label">チーム共有事項</p><p class="text-[13px]">{{ selWeekly.teamShareKind || WEEKLY_TEAM_SHARE_DEFAULT }}{{ selWeekly.teamShareNote ? `／${selWeekly.teamShareNote}` : '' }}</p></div>
           </div>
         </div>
@@ -1974,17 +1990,17 @@ async function onMarkUnreadWeekly(): Promise<void> {
               <div v-if="wkMdPreview" class="min-h-[72px] rounded-lg border border-line p-2.5"><UiMarkdown :source="wkMain" /></div>
               <textarea v-else v-model="wkMain" class="textarea" placeholder="今週の主な業務" />
             </UiFormField>
-            <UiFormField label="課題・原因仮説">
+            <UiFormField label="今週の課題・原因仮説">
               <div v-if="wkMdPreview" class="min-h-[72px] rounded-lg border border-line p-2.5"><UiMarkdown :source="wkIssues" /></div>
               <textarea v-else v-model="wkIssues" class="textarea" placeholder="課題と、その原因と考えられること" />
+            </UiFormField>
+            <UiFormField label="今週うまくいったこと・続けたいこと">
+              <div v-if="wkMdPreview" class="min-h-[72px] rounded-lg border border-line p-2.5"><UiMarkdown :source="wkGoodPoints" /></div>
+              <textarea v-else v-model="wkGoodPoints" class="textarea" placeholder="今週うまくいったこと・来週も続けたいこと" />
             </UiFormField>
             <UiFormField label="来週の最重要テーマ（最大3つ）">
               <div v-if="wkMdPreview" class="min-h-[72px] rounded-lg border border-line p-2.5"><UiMarkdown :source="wkNext" /></div>
               <textarea v-else v-model="wkNext" class="textarea" placeholder="来週の最重要テーマ（最大 3 つ）" />
-            </UiFormField>
-            <UiFormField label="うまくいったこと・続けたいこと">
-              <div v-if="wkMdPreview" class="min-h-[72px] rounded-lg border border-line p-2.5"><UiMarkdown :source="wkGoodPoints" /></div>
-              <textarea v-else v-model="wkGoodPoints" class="textarea" placeholder="今週うまくいったこと・来週も続けたいこと" />
             </UiFormField>
           </div>
 
@@ -2120,6 +2136,21 @@ async function onMarkUnreadWeekly(): Promise<void> {
             <UiMarkdown v-else-if="drawerReport.tomorrow" :source="drawerReport.tomorrow" />
             <p v-else class="text-[13px]">—</p>
           </div>
+
+          <!-- ぽいぽいポスト連携（同じ著者・同じ日付の投稿を日報詳細に合わせて表示。可視範囲は poipoi の既存モデル） -->
+          <div v-if="drawerPoipoiPosts.length > 0">
+            <p class="label">ぽいぽいポスト</p>
+            <ul class="grid gap-2">
+              <li
+                v-for="p in drawerPoipoiPosts"
+                :key="p.id"
+                class="rounded-lg border border-line bg-surface-soft p-2.5"
+              >
+                <p class="num mb-1 text-[11px] text-muted">{{ fmtTime(p.createdAt) }}</p>
+                <UiMarkdown :source="p.body" />
+              </li>
+            </ul>
+          </div>
         </div>
 
         <WidgetsCommentThread :report-id="drawerReport.id" />
@@ -2153,9 +2184,9 @@ async function onMarkUnreadWeekly(): Promise<void> {
         </div>
         <div><p class="label">今週の成果・達成感</p><UiMarkdown v-if="weeklyDrawer.goalReview" :source="weeklyDrawer.goalReview" /><p v-else class="text-[13px]">—</p></div>
         <div><p class="label">今週の主要業務</p><UiMarkdown v-if="weeklyDrawer.mainWork" :source="weeklyDrawer.mainWork" /><p v-else class="text-[13px]">—</p></div>
-        <div><p class="label">課題・原因仮説</p><UiMarkdown v-if="weeklyDrawer.issues" :source="weeklyDrawer.issues" /><p v-else class="text-[13px]">—</p></div>
+        <div><p class="label">今週の課題・原因仮説</p><UiMarkdown v-if="weeklyDrawer.issues" :source="weeklyDrawer.issues" /><p v-else class="text-[13px]">—</p></div>
+        <div><p class="label">今週うまくいったこと・続けたいこと</p><UiMarkdown v-if="weeklyDrawer.goodPoints" :source="weeklyDrawer.goodPoints" /><p v-else class="text-[13px]">—</p></div>
         <div><p class="label">来週の最重要テーマ（最大3つ）</p><UiMarkdown v-if="weeklyDrawer.nextWeek" :source="weeklyDrawer.nextWeek" /><p v-else class="text-[13px]">—</p></div>
-        <div><p class="label">うまくいったこと・続けたいこと</p><UiMarkdown v-if="weeklyDrawer.goodPoints" :source="weeklyDrawer.goodPoints" /><p v-else class="text-[13px]">—</p></div>
         <div><p class="label">チーム共有事項</p><p class="text-[13px]">{{ weeklyDrawer.teamShareKind || WEEKLY_TEAM_SHARE_DEFAULT }}{{ weeklyDrawer.teamShareNote ? `／${weeklyDrawer.teamShareNote}` : '' }}</p></div>
       </div>
     </UiDrawer>

@@ -25,7 +25,7 @@ const GRANT_MAX_DAYS = 40
 const GRANT_COLS = `id, member_id AS "memberId", leave_type_id AS "leaveTypeId",
   grant_date AS "grantDate", days, kind, expire_date AS "expireDate", granted_by AS "grantedBy"`
 const REQUEST_COLS = `id, member_id AS "memberId", leave_type_id AS "leaveTypeId",
-  date, unit, status, reason, decided_by AS "decidedBy"`
+  date, unit, status, reason, decided_by AS "decidedBy", created_at AS "createdAt"`
 
 async function leaveTypeOf(db: pg.Pool | pg.PoolClient, id: string): Promise<LeaveType | undefined> {
   const { rows } = await db.query(
@@ -111,7 +111,7 @@ export function leaveRoutes(pool: pg.Pool): Hono {
     const { rows } = await pool.query(
       `SELECT ${REQUEST_COLS} FROM leave_requests
        WHERE ($1 OR member_id = $2) AND ($3 = '' OR status = $3)
-       ORDER BY date DESC`,
+       ORDER BY created_at DESC`,
       [all, user.id, status])
     return c.json({ data: rows })
   })

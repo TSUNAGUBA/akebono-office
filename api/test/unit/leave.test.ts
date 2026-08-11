@@ -22,7 +22,8 @@ function grant(over: Partial<LeaveGrant>): LeaveGrant {
 function req(over: Partial<LeaveRequest>): LeaveRequest {
   return {
     id: 'r', memberId: 'm-01', leaveTypeId: 'lt-paid', date: '2025-06-01',
-    unit: 'full', status: 'approved', reason: '', decidedBy: 'm-99', ...over,
+    unit: 'full', status: 'approved', reason: '', decidedBy: 'm-99',
+    createdAt: '2025-06-01T09:00:00+09:00', ...over,
   }
 }
 

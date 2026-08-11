@@ -361,7 +361,7 @@ export function attendanceRoutes(pool: pg.Pool): Hono {
       `SELECT id, member_id AS "memberId", to_char(date,'YYYY-MM-DD') AS date, kind,
               requested_at AS "requestedAt", reason, status, decided_by AS "decidedBy",
               current_step AS "currentStep", route_snapshot AS "routeSnapshot",
-              direct_request_id AS "directRequestId"
+              direct_request_id AS "directRequestId", created_at AS "createdAt"
        FROM attendance_fix_requests
        WHERE ($1 = '' OR status = $1) AND ($2 OR member_id = $3)
        ORDER BY created_at DESC`,
