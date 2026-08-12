@@ -167,7 +167,8 @@ resetLayout(scope: 'user'|'tenant'): Promise<{ ok }>               // 該当層�
 
 // useExternalLinkCards（F-13-3 → ダッシュボードのメニューカテゴリ配置。2026-08-03）
 useExternalLinkCards()
-externalCards: ComputedRef<MenuCard[]>  // active な外部リンクを MenuCard 化（id=外部リンク id `el-*`・href で別タブ）
+externalCards: ComputedRef<MenuCard[]>  // active な外部リンクを MenuCard 化（id=外部リンク id `el-*`・href で別タブ・iconImage を引き継ぎ UiCardMenu が画像優先描画）
+// external-links マスタ（POST/PATCH /v1/masters/external-links）は iconImage を受理（0060。data URI = png/jpeg/webp base64・上限 400,000 字・NULL 許容 = 下位互換。business_segments.appIconImage と同 allowlist）
 
 // useAkebonoAppCards（F-01-5 → メニューカテゴリ配置。#24・2026-08-03。useExternalLinkCards と同型）
 useAkebonoAppCards()

@@ -2616,3 +2616,29 @@
   `npm run build` green。API は不変（`api/` 変更なし）。
 - [x] **ドキュメント整合（原則5）**: functional-requirements（F-42-9）・screen-design（5.7 ガント色分け/フィルタ・プロンプトのコピーして閉じる）・
   CONVENTIONS（ImprovementsGantt）・本節を更新。
+
+## 74. 外部リンクアイコン設定の改善（プレビュー選択式 + 画像アップロード。改善要望・オペレーター指示 2026-08-12）の完了条件（Definition of Done）
+
+設定（`/settings`）> 外部リンクのアイコン設定を、文字列指定からプレビュー選択式へ改善し、画像アップロードによるカスタムアイコンを追加する。
+業態アプリ設定（segments の appIcon/appIconImage・0031）と同じデータモデル・allowlist を external_links にミラーする（原則3・再利用）。
+
+- [x] **データモデル（下位互換 = 原則7）**: `shared/domain/types.ts` の `ExternalLink` に `iconImage?: string | null` を追加（任意 = 既存データ非破壊）。
+  `MenuCard` にも `iconImage?` を追加（カードメニューの画像描画）。
+- [x] **DB（0060）**: `external_links` に `icon_image text`（NULL 許容）を `ADD COLUMN IF NOT EXISTS`（冪等 = 原則2）。camel↔snake は masters の汎用マッピングが自動処理。
+- [x] **API**: `masters/registry.ts` の `external-links` スキーマに `iconImage`（既存の `iconImage` ヘルパー = `data:image/(png|jpeg|webp);base64,…`・上限 400,000 字）。
+  部分 PATCH は既存の hasOwn フィルタで未送信フィールドを保持（Zod v4 `.partial()` 対策は既存経路）。
+- [x] **共通コンポーネント（原則3）**: `UiIconGlyph`（画像 or lucide を角丸枠で描画 = AkebonoSegmentIcon の汎用版）／
+  `SettingsIconPicker`（v-model:icon/image/busy。プレビュー付きプリセット選択 `LINK_ICON_CHOICES` ＋ 画像アップロード〔160px 縮小・`imageToDataUri` 再利用〕＋「アイコンに戻す」取消）。
+- [x] **画面**: `pages/settings.vue` の外部リンク追加/編集モーダルのアイコン欄を `SettingsIconPicker` に置換（従来の文字列入力を廃止）。
+  処理中は保存ボタン無効化（フィードバック）。設定一覧の行アイコン・`/support`・ダッシュボード（`useExternalLinkCards`）・`UiCardMenu` を `UiIconGlyph` で画像優先描画。
+- [x] **取消可能性（原則9.5）**: 画像設定後は「アイコンに戻す」で選択式アイコンへ戻せる。再編集で上書き可能。
+- [x] **グレースフル（原則4）**: 画像以外/縮小後も上限超過は警告して中断（主フロー継続）。モック（localStorage）は容量超過時に警告（segments と同型）。
+- [x] **レスポンシブ（原則8）**: プリセットグリッド・アップロード操作列は `flex-wrap`。375px で崩れない（プレビュー枠固定・グリッド折返し）。
+- [x] **テスト**: mockup `tests/link-icons.test.ts`（`LINK_ICON_CHOICES` の lucide 実在性・重複なし・フォールバック）。
+  API `test/integration/api.test.ts` に external-links の iconImage 検証（SVG=400・PNG=200・未指定作成=null・title 保持・null で取消）。
+- [x] **検証（実測値）**: mockup `npx nuxi typecheck` green・`npm test` **287 passed**（+3）・`npm run build` green。
+  API `npm run typecheck` green・`npm run test:integration` **253 passed**（+1・0060 適用含む）・`npm run build` green。
+- [x] **ドキュメント整合（原則5）**: data-design（ExternalLink.iconImage）・api-design（external-links iconImage・useExternalLinkCards）・
+  screen-design（5.x /settings 外部リンクのアイコンピッカー）・CONVENTIONS（UiIconGlyph・SettingsIconPicker・UiCardMenu）・本節を更新。
+- [x] **独立レビュー（原則9）**: correctness バグなし。minor 3 件を反映 = ①保存の多重送信ガード（`linkSaving`・API モードの重複 POST 防止・segments と同型）／
+  ②設定一覧の行アイコンを装飾扱い（alt 空・隣接タイトルがラベル = 二重読み上げ回避）／③プリセットグリッドに一覧外の現在アイコンを末尾追加（旧・文字列指定の下位互換・原則7）。

@@ -1,6 +1,5 @@
 <script setup lang="ts">
 /** カード型メニュー（ダッシュボード・業務支援ツールハブ共用。内部遷移/外部リンク混在対応） */
-import * as icons from 'lucide-vue-next'
 import { ExternalLink as ExternalLinkIcon } from 'lucide-vue-next'
 // resolveComponent('NuxtLink') は本番ビルドで解決できず <nuxtlink> 要素になり
 // クリック無反応になるため、#components から実体を import して :is に渡す
@@ -14,10 +13,6 @@ defineProps<{
   /** 密度（compact でカード余白を詰める。ダッシュボードのレイアウト density 用） */
   dense?: boolean
 }>()
-
-function iconOf(name: string) {
-  return (icons as Record<string, unknown>)[name] ?? icons.LayoutGrid
-}
 </script>
 
 <template>
@@ -32,9 +27,7 @@ function iconOf(name: string) {
         class="card group flex h-full items-start transition-colors"
         :class="[item.disabled ? 'opacity-55' : 'hover:border-brand', dense ? 'gap-2 p-2' : 'gap-3 p-3']"
       >
-        <span class="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-soft text-brand">
-          <component :is="iconOf(item.icon)" class="h-5 w-5" aria-hidden="true" />
-        </span>
+        <UiIconGlyph :icon="item.icon" :image="item.iconImage" :size="36" fallback="LayoutGrid" class="mt-0.5" />
         <span class="min-w-0 flex-1">
           <span class="flex items-center gap-1.5">
             <span class="text-[13px] font-bold">{{ item.title }}</span>

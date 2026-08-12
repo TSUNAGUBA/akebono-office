@@ -25,7 +25,7 @@
 | `AiEmployee` | id, name, roleId, status(`idle`/`working`/`waiting_approval`), deskPosition{x,y}, active | C1 |
 | `CustomFieldDef` | id, entity, key, label, fieldType(`text`/`number`/`date`/`select`/`multiselect`/`boolean`), options[], required, displayOrder, active | C1 |
 | `CodeMaster` | id, category(dept/title/projectStatus/…), code, label, displayOrder, active | C1 |
-| `ExternalLink` | id, title, url, description, icon, displayOrder, active | C1 |
+| `ExternalLink` | id, title, url, description, icon(lucide キー), **iconImage?(アイコン画像 data URI。0060。設定時は icon より優先。business_segments.app_icon_image と同じ allowlist〔png/jpeg/webp base64・上限 400,000 字〕。NULL 許容 = 下位互換)**, displayOrder, active | C1 |
 | `WorkflowRoute` | id, category(稟議区分), minAmount, maxAmount, steps[`ApprovalRouteStep`], active | C1 |
 | `ApprovalRouteStep`（稟議・勤怠 共通の承認ステップ。0041） | order, **approverType(`title`=役職/`role`=ロール/`member`=個人。PermissionRule.subjectKind と同モデル)**, approverTitle?(役職ラベル), approverRole?(`admin`/`hr`/`member`), approverMemberId?(個人), mode(`serial`/`all`/`majority`)。解決は共有 `pickApprover`（役職一致/ロール一致/個人指定 → id 昇順先頭・不在は管理者フォールバック。旧 manager/director/president/hr も吸収） | — |
 | `AttendanceRule` | id, name, appliesTo(employmentType[]・選択可能な雇用区分), defaultFor(employmentType[]・既定とする雇用区分。区分ごとに 1 ルールのみ=保存時排他), workStart, workEnd, breakMinutes, flex{coreStart,coreEnd,settlementMonths}, closingDay, legalHolidayWeekday, workingWeekdays(営業曜日 0-6。既定 [1-5]), holidayAware(祝日を非営業日扱い。既定 true), active（workingWeekdays / holidayAware は 0020 で追加 = 外注等の週末稼働を勤務体系ごとに表現。翌営業日計算が参照） | C1 |

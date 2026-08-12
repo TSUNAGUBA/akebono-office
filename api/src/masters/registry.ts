@@ -224,6 +224,8 @@ const schemas = {
     url: z.string().trim().min(1, 'URL は必須です'),
     description: z.string().default(''),
     icon: z.string().default(''),
+    // アイコン画像（data URI。business_segments.app_icon_image と同じ allowlist + 上限。設定時は icon より優先）
+    iconImage: iconImage,
     displayOrder: z.number().int().default(1),
   }),
   'attendance-rules': z.object({

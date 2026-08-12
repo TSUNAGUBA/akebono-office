@@ -20,6 +20,7 @@ export function useExternalLinkCards() {
         title: el.title,
         description: el.description,
         icon: el.icon,
+        iconImage: el.iconImage ?? null,
         href: el.url,
       })))
 

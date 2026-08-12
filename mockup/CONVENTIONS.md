@@ -174,7 +174,8 @@ const imp = useImprovements()  // submit / refresh / activeItems・archivedItems
 | `UiFormField` | label, required, error, hint |
 | `UiSchemaForm` | fields(FieldDef[]), v-model(Record), errors |
 | `UiStatusBadge` | tone, label, dot |
-| `UiCardMenu` | items(MenuCard[]), cols, dense（compact でカード余白を詰める = ダッシュボード density 用） |
+| `UiCardMenu` | items(MenuCard[]), cols, dense（compact でカード余白を詰める = ダッシュボード density 用）。MenuCard.iconImage があれば画像優先（UiIconGlyph） |
+| `UiIconGlyph` | icon(lucide名), image(data URI・優先), size, alt, fallback。画像 or アイコンを角丸枠で描画（外部リンクの設定一覧/カードメニュー/ピッカーで共有 = AkebonoSegmentIcon の汎用版・原則3） |
 | `UiAvatar` | name, kind('human'/'ai'), size |
 | `UiEmptyState` | icon, title, hint + #action |
 | `ChartsLineChartCard` / `ChartsBarChartCard` / `ChartsDonutChartCard` | title, labels/series or items, yFormatter |
@@ -188,6 +189,7 @@ const imp = useImprovements()  // submit / refresh / activeItems・archivedItems
 | `SettingsMenuCategoryEditor` | props なし。メニューカテゴリのカスタマイズ（F-13-8。エリア切替 + カテゴリ CRUD/並び替え/カード割当 + 既定に戻す。バッチ7h。編集 UI は `UiMenuSectionEditor` 共用・ダッシュボードタブは外部リンク/AKEBONO も割当候補 + 3 階層はレイアウトへ案内） |
 | `UiMenuSectionEditor` | modelValue(MenuCategoryDef[]) / cardOptions / emptyHint。メニューセクション編集の共通 UI（追加・削除・改名・並び替え・カード割当 = UiMultiCombobox）。保存/リセット/スコープは呼び出し側（#25。原則3。MenuCategoryEditor と DashboardSectionEditor が共用） |
 | `SettingsNotifyRecipientsEditor` | modelValue(NotifyRecipientTarget[])。通知の宛先を「ロール/役職/個人」で複数指定（ApproverSteps と同 3 種・順序/モードなし）。各行に解決人数プレビュー・空許容。設定「ぽいぽいポストの通知先」で使用（F-12-5・F-13-10・2026-08-03。解決 = 共有 resolveNotifyRecipientIds） |
+| `SettingsIconPicker` | v-model:icon(lucide名) / v-model:image(data URI or null) / v-model:busy。外部リンクのアイコン設定（プレビュー付きプリセット選択 = LINK_ICON_CHOICES ／ 画像アップロード = 160px 縮小 data URI ／「アイコンに戻す」で取消）。segments のインライン実装を共通化（改善要望・2026-08-12。原則3/9.5） |
 | `OfficeDashboardNotifications` | props なし。ダッシュボードの通知欄（「すべて」+ 設定されたカテゴリタブ〔エスカレーション/承認依頼/稟議/日報/顧客ログ/議事録〕 + 未読のみフィルタ・直近 8 件）。表示タブは useNotificationTabs 駆動。index.vue から分離し通知位置（side/bottom）で配置切替可能に（2026-08-03 / タブ設定化 2026-08-12） |
 | `OfficeDashboardLayoutPreview` | layout(DashboardLayout)。レイアウトの軽量プレビュー（実データ不要。セクション見出し + カード数チップ + 通知位置図示 + AKEBONO/密度反映。F-13-9） |
 | `OfficeDashboardLayoutPicker` | props なし。ダッシュボードのレイアウト選択。「テンプレート」/「セクションを編集」/「アプリヘッダー」/「通知タブ」タブ切替 + 適用スコープ〔自分/全社〕+ 現在有効層表示 + 解除。ヘッダの「レイアウト」ボタン → UiModal 内で使用（F-13-9・2026-08-03。アプリヘッダー/通知タブ 追加 2026-08-12） |
