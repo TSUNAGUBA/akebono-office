@@ -35,7 +35,7 @@ function statusLabel(s: ImprovementStatus): string { return IMPROVEMENT_STATUS_M
     <section
       v-for="col in columns"
       :key="col.status"
-      class="flex w-64 shrink-0 flex-col rounded-xl border border-line bg-surface-soft"
+      class="flex w-64 shrink-0 flex-col overflow-hidden rounded-xl border border-line bg-surface-soft"
     >
       <header class="flex items-center justify-between gap-2 border-b border-line px-3 py-2">
         <UiStatusBadge :tone="col.meta.tone" :label="col.meta.label" dot />
@@ -47,7 +47,7 @@ function statusLabel(s: ImprovementStatus): string { return IMPROVEMENT_STATUS_M
         <article
           v-for="it in col.items"
           :key="it.id"
-          class="card p-2.5 transition focus-within:border-brand hover:border-brand"
+          class="card min-w-0 p-2.5 transition focus-within:border-brand hover:border-brand"
         >
           <button
             type="button"
@@ -56,7 +56,7 @@ function statusLabel(s: ImprovementStatus): string { return IMPROVEMENT_STATUS_M
             @click="emit('open', it)"
           >{{ it.title }}</button>
           <div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted">
-            <span v-if="it.pagePaths.length" class="max-w-full truncate" :title="it.pagePaths.map(pageDisplay).join(' / ')">{{ it.pagePaths.map(pageDisplay).join(' / ') }}</span>
+            <span v-if="it.pagePaths.length" class="min-w-0 max-w-full truncate" :title="it.pagePaths.map(pageDisplay).join(' / ')">{{ it.pagePaths.map(pageDisplay).join(' / ') }}</span>
             <span class="num">要望 {{ reqCount(it.id) }}</span>
           </div>
           <p v-if="it.planStart" class="mt-1 inline-flex items-center gap-1 rounded bg-brand-soft px-1.5 py-0.5 text-[11px] text-brand">
