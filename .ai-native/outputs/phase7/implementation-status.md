@@ -2596,3 +2596,23 @@
   （メモ追加/一覧/reject/プロンプト加味/取消・復元/権限 + 0059 適用を含む）。
 - [x] **ドキュメント整合（原則5）**: functional-requirements（F-42-10・F-01-3）・data-design（improvement_notes）・api-design（notes 3 経路・AKO-REQ-008）・
   screen-design（5.7 メモ・トップのタイムカード・/inbox タブ順共通化）・CONVENTIONS（useImprovements・notificationTabViews）・本節を更新。
+
+## 73. 改修プロンプトの「コピーして閉じる」修正＋ガントのステータスフィルタ/色分け（改善要望 2 件・オペレーター指示 2026-08-12）の完了条件（Definition of Done）
+
+改善要望（F-42）から出た 2 改修単位への対応（mockup フロントのみ・API/DB/shared 変更なし）。
+
+- [x] **(1) 「コピーして閉じる」がモーダルを閉じる**: `pages/improvements.vue` の改修プロンプト出力モーダルで、フッターの
+  「コピーして閉じる」がコピー後に閉じなかった不具合を修正。`copyPrompt` を成否 boolean 化し、`copyAndClose` が
+  **コピー成功時のみ `promptOpen=false`**（失敗時は手動選択できるよう開いたまま + 警告トースト = グレースフル）。
+- [x] **(2) ガントのステータスフィルタ + 色分け**: `components/improvements/Gantt.vue`。
+  - **フィルタ**: ツールバー下に `UiChipTabs`（選択肢・判定は一覧と共有 = `IMPROVEMENT_FILTER_OPTIONS`/`matchesImprovementFilter` = 原則3）。
+    **既定 = 「対応する」（accepted = 実装が決まっていて未完了）**。フィルタは予定あり（バー）・予定未定チップの双方に適用。
+  - **色分け**: ステータス別バー色（対応する=`bg-brand`／未判定=`bg-warn`／解決済み〔完了〕=`bg-muted`グレー／対応しない=`bg-crit`）。
+    決着済み（完了・見送り）は `opacity-80` で退色し「終わった案件」を視覚的に沈める。表示中ステータスの**凡例**を範囲ラベル横に表示。
+    バーの title に予定期間 + ステータス名を併記。空表示はフィルタ有無で文言を出し分け。レスポンシブ（原則8）= チップ/凡例は wrap・本体は横スクロール維持。
+- [x] **フィードバック（原則）**: コピー成功/失敗はトースト。フィルタ切替は即時反映。
+- [x] **下位互換（原則7）**: 表示・挙動の変更のみ（データ/型/API 不変）。データ移行パッチ不要。
+- [x] **検証（実測値）**: mockup `npx nuxi typecheck` green・`npm test` **284 passed**（`improvement` に「ガント既定フィルタ = accepted」アサート追加）・
+  `npm run build` green。API は不変（`api/` 変更なし）。
+- [x] **ドキュメント整合（原則5）**: functional-requirements（F-42-9）・screen-design（5.7 ガント色分け/フィルタ・プロンプトのコピーして閉じる）・
+  CONVENTIONS（ImprovementsGantt）・本節を更新。

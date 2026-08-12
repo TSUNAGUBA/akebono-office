@@ -62,6 +62,13 @@ describe('集約・ステータス・プロンプト（純ロジック）', () =
     expect(matchesImprovementFilter('triage', 'open')).toBe(true)
     expect(matchesImprovementFilter('resolved', 'open')).toBe(false)
   })
+  it('ガント既定フィルタ（accepted = 実装が決まっていて未完了）は accepted のみ選ぶ', () => {
+    // ImprovementsGantt は既定 statusFilter='accepted' でこの判定を使う（実装決定・未完了だけを初期表示）
+    expect(matchesImprovementFilter('accepted', 'accepted')).toBe(true)
+    expect(matchesImprovementFilter('triage', 'accepted')).toBe(false)
+    expect(matchesImprovementFilter('resolved', 'accepted')).toBe(false)
+    expect(matchesImprovementFilter('rejected', 'accepted')).toBe(false)
+  })
   it('ステータスメタの tone は UI Tone と対応（neutral/info/ok/warn）', () => {
     expect(IMPROVEMENT_STATUS_META.triage.tone).toBe('neutral')
     expect(IMPROVEMENT_STATUS_META.resolved.tone).toBe('ok')
