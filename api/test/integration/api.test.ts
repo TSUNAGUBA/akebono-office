@@ -684,6 +684,38 @@ describe('マスタ CRUD', () => {
     expect(hr.name).toBe('人事 花子')
   })
 
+  it('外部リンク: アイコン画像は data:image base64 のみ許可（SVG 等は 400）・未指定作成は非破壊（改善要望）', async () => {
+    // 画像なしで作成できる（既存互換 = icon_image は NULL 許容。下位互換 = 原則7）
+    const created = await api('POST', '/v1/masters/external-links', {
+      as: ADMIN, body: { title: 'アイコンなしリンク', url: 'https://example.com/a', icon: 'Link' },
+    })
+    expect(created.status).toBe(201)
+    const link = created.json.data as { id: string; iconImage: string | null }
+    expect(link.iconImage).toBeNull()
+
+    // SVG（スクリプト混入形式）は 400
+    const bad = await api('PATCH', `/v1/masters/external-links/${link.id}`, {
+      as: ADMIN, body: { iconImage: 'data:image/svg+xml;base64,PHN2Zz4=' },
+    })
+    expect(bad.status).toBe(400)
+
+    // PNG data URI は 200・title は未送信でも保持される（Zod v4 .partial() の回帰）
+    const good = await api('PATCH', `/v1/masters/external-links/${link.id}`, {
+      as: ADMIN, body: { iconImage: 'data:image/png;base64,iVBORw0KGgo=' },
+    })
+    expect(good.status).toBe(200)
+    const updated = good.json.data as { iconImage: string; title: string }
+    expect(updated.iconImage).toBe('data:image/png;base64,iVBORw0KGgo=')
+    expect(updated.title).toBe('アイコンなしリンク')
+
+    // 画像を外す（null で取消 = アイコン表示へ戻す。原則9.5）
+    const cleared = await api('PATCH', `/v1/masters/external-links/${link.id}`, {
+      as: ADMIN, body: { iconImage: null },
+    })
+    expect(cleared.status).toBe(200)
+    expect((cleared.json.data as { iconImage: string | null }).iconImage).toBeNull()
+  })
+
   it('部署: 循環する親子は AKO-DEP-003', async () => {
     const a = (await api('POST', '/v1/masters/departments', { as: ADMIN, body: { name: 'A' } })).json.data as { id: string }
     const b = (await api('POST', '/v1/masters/departments', { as: ADMIN, body: { name: 'B', parentId: a.id } })).json.data as { id: string }

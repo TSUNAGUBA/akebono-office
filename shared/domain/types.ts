@@ -310,7 +310,9 @@ export interface ExternalLink {
   title: string
   url: string
   description: string
-  icon: string // lucide アイコン名
+  icon: string // lucide アイコン名（プリセットから選択。iconImage 未設定時に使用）
+  /** アイコン画像（data URI。設定時は icon より優先。未設定 = null/undefined でアイコン表示。下位互換のため任意） */
+  iconImage?: string | null
   displayOrder: number
   active: boolean
 }

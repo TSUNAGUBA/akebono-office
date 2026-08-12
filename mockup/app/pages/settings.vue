@@ -5,7 +5,6 @@
  * e) エスカレーションルール f) 勤怠ルール/承認経路への導線 g) 監査ログ h) デモデータリセット
  * i) メニューカテゴリ（F-13-8・バッチ7h = SettingsMenuCategoryEditor）
  */
-import * as icons from 'lucide-vue-next'
 import { ArrowRight, Plus } from 'lucide-vue-next'
 import type {
   CustomFieldDef, CustomFieldType, EscalationRule, ExternalLink, FeatureToggle,
@@ -18,15 +17,11 @@ import { fmtDateTime } from '~/utils/format'
 const { isAdmin } = useCurrentUser()
 const toast = useToast()
 const confirm = useConfirm()
-const { tbl } = useMockDb()
+const { tbl, commit } = useMockDb()
 const members = tbl('members')
 
 function memberName(id: string): string {
   return members.value.find(m => m.id === id)?.name ?? id
-}
-
-function iconOf(name: string) {
-  return (icons as Record<string, unknown>)[name] ?? icons.LayoutGrid
 }
 
 // ---------- a) 外部リンク ----------
@@ -35,9 +30,10 @@ const sortedLinks = computed(() =>
   [...linkCrud.list.value].sort((a, b) => Number(b.active) - Number(a.active) || a.displayOrder - b.displayOrder))
 
 const linkModalOpen = ref(false)
-const linkForm = reactive({ id: '', title: '', url: '', description: '', icon: 'Link', displayOrder: 1 })
+const linkForm = reactive({ id: '', title: '', url: '', description: '', icon: 'Link', iconImage: null as string | null, displayOrder: 1 })
 const linkErrors = reactive<Record<string, string>>({})
-const linkIconFound = computed(() => (icons as Record<string, unknown>)[linkForm.icon] !== undefined)
+/** アイコン画像の処理中フラグ（処理中は保存を無効化して未完了の data URI 保存を防ぐ） */
+const linkIconBusy = ref(false)
 
 async function openLinkModal(link?: ExternalLink): Promise<void> {
   linkForm.id = link?.id ?? ''
@@ -45,8 +41,10 @@ async function openLinkModal(link?: ExternalLink): Promise<void> {
   linkForm.url = link?.url ?? 'https://'
   linkForm.description = link?.description ?? ''
   linkForm.icon = link?.icon ?? 'Link'
+  linkForm.iconImage = link?.iconImage ?? null
   linkForm.displayOrder = link?.displayOrder
     ?? Math.max(0, ...linkCrud.list.value.map(l => l.displayOrder)) + 1
+  linkIconBusy.value = false
   Object.keys(linkErrors).forEach(k => delete linkErrors[k])
   linkModalOpen.value = true
 }
@@ -62,6 +60,7 @@ async function saveLink(): Promise<void> {
     url: linkForm.url.trim(),
     description: linkForm.description.trim(),
     icon: linkForm.icon.trim() || 'Link',
+    iconImage: linkForm.iconImage,
     displayOrder: Number(linkForm.displayOrder) || 1,
   })
   if (!r.ok) {
@@ -69,7 +68,13 @@ async function saveLink(): Promise<void> {
     return
   }
   linkModalOpen.value = false
-  toast.show('外部リンクを保存しました', 'ok', { label: '確認', to: '/support' })
+  // モックモード: 画像アイコンは data URI で嵩むため localStorage 容量超過で永続化に失敗しうる。
+  // 業態アプリ設定（segments.vue）と同様に警告する（API モードはサーバー保管のため対象外）
+  if (!apiMode && linkForm.iconImage && commit() === false) {
+    toast.show('外部リンクを保存しましたが、画像アイコンは保存容量の上限により再読込時に失われる可能性があります。小さい画像や選択式アイコンをお試しください', 'warn')
+  } else {
+    toast.show('外部リンクを保存しました', 'ok', { label: '確認', to: '/support' })
+  }
 }
 
 async function toggleLinkActive(link: ExternalLink): Promise<void> {
@@ -376,9 +381,7 @@ async function onResetDemo(): Promise<void> {
               class="flex items-center gap-2.5 rounded-lg border border-line px-2.5 py-2"
               :class="link.active ? '' : 'opacity-55'"
             >
-              <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-soft text-brand">
-                <component :is="iconOf(link.icon)" class="h-4 w-4" aria-hidden="true" />
-              </span>
+              <UiIconGlyph :icon="link.icon" :image="link.iconImage" :size="32" :alt="link.title" fallback="Link" />
               <span class="min-w-0 flex-1">
                 <span class="flex items-center gap-1.5">
                   <span class="text-[13px] font-bold">{{ link.title }}</span>
@@ -650,16 +653,12 @@ async function onResetDemo(): Promise<void> {
           <UiFormField label="説明">
             <input v-model="linkForm.description" type="text" class="input" placeholder="カードに表示される説明文">
           </UiFormField>
-          <UiFormField
-            label="アイコン名（lucide）"
-            :hint="linkIconFound ? '' : '該当するアイコンが見つかりません（LayoutGrid で表示されます）'"
-          >
-            <div class="flex items-center gap-2">
-              <input v-model="linkForm.icon" type="text" class="input flex-1" placeholder="例: Table2, Receipt, BookOpen">
-              <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-soft text-brand" aria-label="アイコンプレビュー">
-                <component :is="iconOf(linkForm.icon)" class="h-5 w-5" aria-hidden="true" />
-              </span>
-            </div>
+          <UiFormField label="アイコン" hint="プレビューから選ぶか、画像をアップロードします">
+            <SettingsIconPicker
+              v-model:icon="linkForm.icon"
+              v-model:image="linkForm.iconImage"
+              v-model:busy="linkIconBusy"
+            />
           </UiFormField>
           <UiFormField label="表示順" hint="小さいほど先頭に表示されます">
             <input v-model.number="linkForm.displayOrder" type="number" min="1" class="input num w-24">
@@ -667,7 +666,7 @@ async function onResetDemo(): Promise<void> {
         </div>
         <template #footer>
           <button type="button" class="btn" @click="linkModalOpen = false">キャンセル</button>
-          <button type="button" class="btn btn-primary" @click="saveLink">保存</button>
+          <button type="button" class="btn btn-primary" :disabled="linkIconBusy" @click="saveLink">保存</button>
         </template>
       </UiModal>
 

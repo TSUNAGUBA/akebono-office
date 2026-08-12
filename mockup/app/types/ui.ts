@@ -30,7 +30,8 @@ export interface MenuCard {
   id: string
   title: string
   description: string
-  icon: string // lucide アイコン名
+  icon: string // lucide アイコン名（iconImage 未設定時に使用）
+  iconImage?: string | null // アイコン画像（data URI。設定時は icon より優先。外部リンクのカスタムアイコン）
   to?: string
   href?: string // 外部リンク
   badge?: number | string
