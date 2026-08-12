@@ -1,6 +1,6 @@
 /** ドメイン別シードデータ（このファイルは担当機能の実装者が所有・拡充する） */
 import type { AkebonoWish, AuditLog } from '~/types/domain'
-import type { ImprovementItem, ImprovementRequest } from '~/types/improvement'
+import type { ImprovementItem, ImprovementNote, ImprovementRequest } from '~/types/improvement'
 import { addDays } from '~/utils/format'
 import { seedToday } from './history'
 
@@ -60,6 +60,23 @@ export const seedImprovementItems: ImprovementItem[] = [
     resolvedAt: null,
     planStart: null,
     planEnd: null,
+  },
+]
+
+/**
+ * 改修単位の時系列メモのデモ（F-42 追補・2026-08-12）。
+ * 改修方針の検討過程を 1 件ずつ時系列で残す。AI 改修プロンプト生成時にも加味される。
+ */
+export const seedImprovementNotes: ImprovementNote[] = [
+  {
+    id: 'imnote-0001', itemId: 'imp-0001', memberId: 'm-03', memberName: '葛西 大輔',
+    body: '合計の強調は既存の UiKpiCard を流用できそう。税込/税抜トグルは会社設定の既定税率を参照する方針で。',
+    kind: 'note', archivedAt: null, createdAt: `${addDays(today, -3)}T10:12:00+09:00`,
+  },
+  {
+    id: 'imnote-0002', itemId: 'imp-0001', memberId: 'm-01', memberName: '山下 誠',
+    body: '得意先ごとの既定（税込/税抜）は将来対応。まずは画面上のトグルのみで着手する。',
+    kind: 'note', archivedAt: null, createdAt: `${addDays(today, -2)}T14:40:00+09:00`,
   },
 ]
 

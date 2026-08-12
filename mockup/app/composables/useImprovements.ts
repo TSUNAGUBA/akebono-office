@@ -17,15 +17,19 @@ import {
   heuristicClusterRequests,
   IMPROVEMENT_BODY_CAP,
   IMPROVEMENT_DETAIL_CAP,
+  IMPROVEMENT_NOTE_CAP,
   IMPROVEMENT_PAGE_LABEL_CAP,
   IMPROVEMENT_PAGE_PATH_CAP,
   IMPROVEMENT_SUMMARY_CAP,
   IMPROVEMENT_TITLE_CAP,
   type ImprovementFilter,
   type ImprovementItem,
+  type ImprovementNote,
+  type ImprovementNoteKind,
   type ImprovementRequest,
   type ImprovementStatus,
   improvementBodyError,
+  improvementNoteError,
   improvementPlanError,
   matchesImprovementFilter,
   type PromptItemInput,
@@ -49,10 +53,12 @@ export function useImprovements() {
   // mock モードは tbl（localStorage）をそのまま参照する（リアクティブ）。
   const apiItems = ref<ImprovementItem[]>([])
   const apiRequests = ref<ImprovementRequest[]>([])
+  const apiNotes = ref<ImprovementNote[]>([])
 
   // isApi 分岐で tbl を触るのは mock モードのみ = API モードで管理 GET を誤発火しない
   const allItems = computed<ImprovementItem[]>(() => (isApi ? apiItems.value : tbl('improvementItems').value))
   const allRequests = computed<ImprovementRequest[]>(() => (isApi ? apiRequests.value : tbl('improvementRequests').value))
+  const allNotes = computed<ImprovementNote[]>(() => (isApi ? apiNotes.value : tbl('improvementNotes').value))
 
   /** 有効な改修単位（取消済みを除く）。ステータスは含めall */
   const activeItems = computed(() => allItems.value.filter(it => !it.archivedAt))
@@ -64,6 +70,13 @@ export function useImprovements() {
   /** ある改修単位の元要望（有効なもの） */
   function requestsForItem(itemId: string): ImprovementRequest[] {
     return allRequests.value.filter(r => r.itemId === itemId && !r.archivedAt)
+  }
+
+  /** ある改修単位の時系列メモ（有効なもの・古い順） */
+  function notesForItem(itemId: string): ImprovementNote[] {
+    return allNotes.value
+      .filter(n => n.itemId === itemId && !n.archivedAt)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
   }
 
   // ---------- 投稿（各ページから。全員可） ----------
@@ -103,12 +116,15 @@ export function useImprovements() {
   /** 管理データを取得（API モードのみ実フェッチ。mock はライブ computed のため no-op） */
   async function refresh(): Promise<void> {
     if (!isApi) return
-    const [items, reqs] = await Promise.all([
+    const [items, reqs, notes] = await Promise.all([
       apiFetch<ImprovementItem[]>('/v1/improvements/items', { query: { includeArchived: '1' } }).catch(() => [] as ImprovementItem[]),
       apiFetch<ImprovementRequest[]>('/v1/improvements/requests', { query: { includeArchived: '1' } }).catch(() => [] as ImprovementRequest[]),
+      // メモは有効なもののみ（取消済みは UI に出さない = 追加操作の取消は確認ダイアログで担保。原則9.5）
+      apiFetch<ImprovementNote[]>('/v1/improvements/notes').catch(() => [] as ImprovementNote[]),
     ])
     apiItems.value = items
     apiRequests.value = reqs
+    apiNotes.value = notes
   }
 
   // ---------- AI 集約（生成・再生成） ----------
@@ -266,6 +282,50 @@ export function useImprovements() {
     return { ok: true, id }
   }
 
+  // ---------- 時系列メモ（改修方針・保留/見送り理由。AI プロンプトに加味） ----------
+
+  /** メモを追加（kind='note' 既定 / 'reject' = 「対応しない」理由）。改修方針の検討を時系列で残す */
+  async function addNote(itemId: string, body: string, kind: ImprovementNoteKind = 'note'): Promise<Result> {
+    const text = (body ?? '').trim()
+    const msg = improvementNoteError(text)
+    if (msg) return { ok: false, error: { code: 'AKO-REQ-008', message: msg } }
+    if (isApi) {
+      const res = await apiWrite(`/v1/improvements/items/${itemId}/notes`, {
+        body: { body: capCodePoints(text, IMPROVEMENT_NOTE_CAP), kind },
+      })
+      if (res.ok) await refresh()
+      return res.ok ? { ok: true, id: itemId } : res
+    }
+    const itemsRef = tbl('improvementItems')
+    if (!itemsRef.value.some(it => it.id === itemId && !it.archivedAt)) {
+      return { ok: false, error: { code: 'AKO-REQ-002', message: '対象の改修単位が見つかりません' } }
+    }
+    const notesRef = tbl('improvementNotes')
+    const id = nextId('improvementNotes', 'imnote')
+    notesRef.value = [...notesRef.value, {
+      id, itemId, memberId: currentUser.value.id, memberName: currentUser.value.name,
+      body: capCodePoints(text, IMPROVEMENT_NOTE_CAP), kind, archivedAt: null, createdAt: nowJstIso(),
+    }]
+    commit()
+    return { ok: true, id }
+  }
+
+  /** メモの取消（論理削除）/ 復元（原則9.5） */
+  async function setNoteArchived(id: string, archived: boolean): Promise<Result> {
+    if (isApi) {
+      const res = await apiWrite(`/v1/improvements/notes/${id}/${archived ? 'archive' : 'restore'}`, {})
+      if (res.ok) await refresh()
+      return res.ok ? { ok: true, id } : res
+    }
+    const notesRef = tbl('improvementNotes')
+    if (!notesRef.value.some(n => n.id === id)) {
+      return { ok: false, error: { code: 'AKO-REQ-002', message: '対象のメモが見つかりません' } }
+    }
+    notesRef.value = notesRef.value.map(n => (n.id === id ? { ...n, archivedAt: archived ? nowJstIso() : null } : n))
+    commit()
+    return { ok: true, id }
+  }
+
   // ---------- 改修プロンプト出力（フィルター結果 → コーディング AI 向け） ----------
 
   async function buildPrompt(filter: ImprovementFilter): Promise<{ ok: true; prompt: string; count: number } | { ok: false; error: { code: string; message: string } }> {
@@ -283,14 +343,17 @@ export function useImprovements() {
     const promptItems: PromptItemInput[] = matched.map(it => ({
       title: it.title, summary: it.summary, detail: it.detail, status: it.status, pagePaths: it.pagePaths,
       requests: requestsForItem(it.id).map(r => ({ pageLabel: r.pageLabel, pagePath: r.pagePath, body: r.body })),
+      // 時系列メモも加味（古い順。notesForItem がソート済み）
+      notes: notesForItem(it.id).map(n => ({ body: n.body, kind: n.kind })),
     }))
     return { ok: true, prompt: buildCodingPrompt(promptItems), count: promptItems.length }
   }
 
   return {
     // データ
-    activeItems, archivedItems, unclusteredRequests, requestsForItem, refresh,
+    activeItems, archivedItems, unclusteredRequests, requestsForItem, notesForItem, refresh,
     // 操作
-    submit, generate, setStatus, editItem, setItemArchived, setRequestArchived, buildPrompt,
+    submit, generate, setStatus, editItem, setItemArchived, setRequestArchived,
+    addNote, setNoteArchived, buildPrompt,
   }
 }

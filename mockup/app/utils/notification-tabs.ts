@@ -42,6 +42,24 @@ export function notificationTabOf(id: string): NotificationTabDef | undefined {
   return NOTIFICATION_TAB_CATALOG.find(t => t.id === id)
 }
 
+/** 通知タブの表示要素（バッジは呼び出し側で付与） */
+export interface NotificationTabView {
+  key: string
+  label: string
+}
+
+/**
+ * 表示するタブの並びを組み立てる（「すべて」を常に先頭 + 設定されたカテゴリタブをカタログ順）。
+ * ダッシュボードの通知カードと /inbox で共用し、両者のタブ順を必ず一致させる（原則3・オペレーター指示 2026-08-12）。
+ * バッジ（未読件数等）は呼び出し側が付与する。
+ */
+export function notificationTabViews(effectiveIds: string[]): NotificationTabView[] {
+  return [
+    { key: 'all', label: 'すべて' },
+    ...effectiveIds.map(id => ({ key: id, label: notificationTabOf(id)?.label ?? id })),
+  ]
+}
+
 export type NotificationTabsScope = 'user' | 'tenant' | 'default'
 
 /**

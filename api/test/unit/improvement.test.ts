@@ -6,6 +6,8 @@ import {
   type ClusterRequestInput,
   heuristicClusterRequests,
   improvementBodyError,
+  IMPROVEMENT_NOTE_CAP,
+  improvementNoteError,
   IMPROVEMENT_STATUS_NEXT,
   matchesImprovementFilter,
   normalizeClusterPlan,
@@ -120,6 +122,44 @@ describe('buildCodingPrompt', () => {
       requests: [{ pageLabel: 'AKEBONO 売上', pagePath: '/akebono/sales', body: '合計を大きく' }],
     }])
     expect(prompt).toEqual(again)
+  })
+})
+
+describe('improvementNoteError', () => {
+  it('空はエラー・上限超過はエラー・通常は null', () => {
+    expect(improvementNoteError('  ')).not.toBeNull()
+    expect(improvementNoteError('保留理由: 影響大のため見送り')).toBeNull()
+    expect(improvementNoteError('あ'.repeat(IMPROVEMENT_NOTE_CAP))).toBeNull()
+    expect(improvementNoteError('あ'.repeat(IMPROVEMENT_NOTE_CAP + 1))).not.toBeNull()
+  })
+})
+
+describe('buildCodingPrompt（メモの加味）', () => {
+  it('時系列メモを含める・reject は「対応しない理由」として明示', () => {
+    const prompt = buildCodingPrompt([{
+      title: 't', summary: 's', detail: 'd', status: 'rejected', pagePaths: ['/x'],
+      requests: [{ pageLabel: 'X', pagePath: '/x', body: '直したい' }],
+      notes: [
+        { body: '既存 UiKpiCard を流用できそう', kind: 'note' },
+        { body: '影響範囲が大きいため次期対応', kind: 'reject' },
+      ],
+    }])
+    expect(prompt).toContain('担当者メモ')
+    expect(prompt).toContain('既存 UiKpiCard を流用できそう')
+    expect(prompt).toContain('［対応しない理由］ 影響範囲が大きいため次期対応')
+  })
+  it('メモが無い/空ならメモ節を出さない', () => {
+    const noNotes = buildCodingPrompt([{
+      title: 't', summary: 's', detail: 'd', status: 'accepted', pagePaths: ['/x'],
+      requests: [{ pageLabel: 'X', pagePath: '/x', body: '直したい' }],
+    }])
+    expect(noNotes).not.toContain('担当者メモ')
+    const emptyNotes = buildCodingPrompt([{
+      title: 't', summary: 's', detail: 'd', status: 'accepted', pagePaths: ['/x'],
+      requests: [{ pageLabel: 'X', pagePath: '/x', body: '直したい' }],
+      notes: [{ body: '   ', kind: 'note' }],
+    }])
+    expect(emptyNotes).not.toContain('担当者メモ')
   })
 })
 

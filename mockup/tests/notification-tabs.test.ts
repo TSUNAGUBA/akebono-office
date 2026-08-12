@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_NOTIFICATION_TAB_IDS, NOTIFICATION_TAB_CATALOG,
-  notificationTabOf, parseNotificationTabIds, resolveNotificationTabIds,
+  notificationTabOf, notificationTabViews, parseNotificationTabIds, resolveNotificationTabIds,
 } from '../app/utils/notification-tabs'
 
 describe('parseNotificationTabIds', () => {
@@ -74,5 +74,24 @@ describe('カタログ', () => {
   it('カタログ id は NotificationCategory と一致（other を除く全カテゴリ）', () => {
     expect(NOTIFICATION_TAB_CATALOG.map(t => t.id))
       .toEqual(['escalation', 'approval', 'workflow', 'report', 'customer-log', 'minutes'])
+  })
+})
+
+describe('notificationTabViews（通知欄と /inbox で順序共有）', () => {
+  it('「すべて」を先頭に + 設定 id をそのまま並べる', () => {
+    expect(notificationTabViews(['report', 'minutes'])).toEqual([
+      { key: 'all', label: 'すべて' },
+      { key: 'report', label: '日報' },
+      { key: 'minutes', label: '議事録' },
+    ])
+  })
+  it('空設定なら「すべて」のみ', () => {
+    expect(notificationTabViews([])).toEqual([{ key: 'all', label: 'すべて' }])
+  })
+  it('ダッシュボード通知カードと /inbox が同じ入力から同じタブ順を得る（順序一致の保証）', () => {
+    const ids = [...DEFAULT_NOTIFICATION_TAB_IDS]
+    // 両画面ともこの純関数でタブ並びを組み立てるため、キー列は必ず一致する
+    const keys = notificationTabViews(ids).map(v => v.key)
+    expect(keys).toEqual(['all', 'escalation', 'approval', 'workflow', 'report', 'customer-log', 'minutes'])
   })
 })

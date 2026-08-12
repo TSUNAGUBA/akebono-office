@@ -376,6 +376,7 @@ flowchart LR
 |---|---|---|---|
 | `improvement_requests` | 記録系（追記のみ・**SoT**） | `id`／`member_id`／`member_name`（スナップショット）／`page_path`・`page_label`（投稿元）／`body`／`item_id`（集約先・NULL=未集約）／`archived_at`（取消）／`created_at` | 投稿は認証済み全員可。取消は論理削除（`archived_at`）で復元可（原則9.5） |
 | `improvement_items` | 導出（人手のステータス・編集を持つ） | `id`／`title`／`summary`／`detail`／`status`（`triage`/`accepted`/`resolved`/`rejected`）／`page_paths`（jsonb）／`source_request_ids`（jsonb）／`llm`／`archived_at`／`created_at`・`updated_at`／`resolved_at`／**`plan_start`・`plan_end`（date・任意 = 対応予定期間。0058）** | AI 集約で生成。**再集約は未集約要望のみ処理し判定済み item を巻き戻さない（原則2）**。取消/復元可。予定期間はガントチャートで可視化 |
+| `improvement_notes` | 記録系（追記のみ。0059） | `id`／`item_id`（紐づく改修単位）／`member_id`／`member_name`（スナップショット）／`body`／`kind`（`note`/`reject`）／`archived_at`（取消）／`created_at` | 各改修案件の検討過程・保留/見送り理由を **時系列で 1 件ずつ**記録。`kind='reject'`=「対応しない」判断の理由。**改修プロンプト生成時に AI が加味**（buildCodingPrompt）。取消は論理削除（`archived_at`）で復元可（原則9.5）。FK は張らず参照整合は API 書込パスで担保（0057 と同方針） |
 
 - **SoT → 導出:** requests が SoT。items は集約キャッシュだが、人手で付与した `status` と編集内容は記録系として保護する
   （再集約は `item_id IS NULL AND archived_at IS NULL` の要望のみ、追記先は `status='triage'` の item のみ）。

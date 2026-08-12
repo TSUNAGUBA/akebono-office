@@ -17,7 +17,7 @@ import {
   type ImprovementStatus,
   matchesImprovementFilter,
 } from '~/types/improvement'
-import { fmtDate } from '~/utils/format'
+import { fmtDate, fmtDateTime } from '~/utils/format'
 import { pageDisplay } from '~/utils/page-label'
 
 const { canManageImprovements } = usePermissions()
@@ -120,6 +120,58 @@ async function changeStatus(to: ImprovementStatus): Promise<void> {
   else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
 }
 
+// 「対応しない」への変更は理由メモ（任意）を添えられる。他のステータスは即時変更（理由入力は閉じる）
+function onStatusClick(to: ImprovementStatus): void {
+  if (to === 'rejected') { rejectMode.value = true; rejectReason.value = '' }
+  else { rejectMode.value = false; void changeStatus(to) }
+}
+async function confirmReject(): Promise<void> {
+  // 二重送信ガード（rejectBusy）: 連打や addNote 成功→setStatus 失敗後の再クリックで reject メモが重複登録されるのを防ぐ
+  if (!selected.value || rejectBusy.value) return
+  rejectBusy.value = true
+  try {
+    const reason = rejectReason.value.trim()
+    // 任意: 理由があれば「対応しない理由」メモとして先に残す（ステータス変更前に記録）
+    if (reason) {
+      const nr = await imp.addNote(selected.value.id, reason, 'reject')
+      if (!nr.ok) { toast.show(`${nr.error.code}: ${nr.error.message}`, 'crit'); return }
+    }
+    const res = await imp.setStatus(selected.value.id, 'rejected')
+    if (res.ok) {
+      toast.show(reason ? '「対応しない」にしました（理由をメモに記録）' : '「対応しない」にしました', 'ok')
+      rejectMode.value = false
+      rejectReason.value = ''
+    }
+    else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
+  } finally {
+    rejectBusy.value = false
+  }
+}
+
+// ---------- 時系列メモ ----------
+const itemNotes = computed(() => (selected.value ? imp.notesForItem(selected.value.id) : []))
+const noteInput = ref('')
+const noteBusy = ref(false)
+const rejectMode = ref(false)
+const rejectReason = ref('')
+const rejectBusy = ref(false)
+
+async function addNote(): Promise<void> {
+  if (!selected.value || !noteInput.value.trim() || noteBusy.value) return
+  noteBusy.value = true
+  const res = await imp.addNote(selected.value.id, noteInput.value)
+  noteBusy.value = false
+  if (res.ok) { noteInput.value = ''; toast.show('メモを追加しました', 'ok') }
+  else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
+}
+async function removeNote(id: string): Promise<void> {
+  const ok = await confirm.ask('メモの取消', 'このメモを取り消します（一覧から消えます）。', { danger: true })
+  if (!ok) return
+  const res = await imp.setNoteArchived(id, true)
+  if (res.ok) toast.show('メモを取り消しました', 'ok')
+  else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
+}
+
 async function archiveItem(): Promise<void> {
   if (!selected.value) return
   const ok = await confirm.ask('改修単位の取消', 'この改修単位を取り消します（一覧から隠れます）。取消済みからいつでも戻せます。', { danger: true })
@@ -172,6 +224,10 @@ async function onKanbanStatus(id: string, to: ImprovementStatus): Promise<void> 
 const planForm = ref({ start: '', end: '' })
 watch(() => selected.value?.id, () => {
   planForm.value = { start: selected.value?.planStart ?? '', end: selected.value?.planEnd ?? '' }
+  // 対象を切り替えたらメモ入力・「対応しない」理由入力をリセット（前の対象の入力を持ち越さない）
+  noteInput.value = ''
+  rejectMode.value = false
+  rejectReason.value = ''
 }, { immediate: true })
 
 async function savePlan(): Promise<void> {
@@ -324,14 +380,29 @@ async function copyPrompt(): Promise<void> {
               :key="to"
               type="button"
               class="btn btn-sm"
-              :class="to === 'resolved' ? 'btn-primary' : to === 'rejected' ? 'btn-ghost' : 'btn-ghost'"
-              @click="changeStatus(to)"
+              :class="to === 'resolved' ? 'btn-primary' : 'btn-ghost'"
+              @click="onStatusClick(to)"
             >
               {{ statusLabel(to) }}へ
             </button>
             <span v-if="IMPROVEMENT_STATUS_NEXT[selected.status].length === 0" class="text-[12px] text-muted">
               （この状態からの変更はありません）
             </span>
+          </div>
+          <!-- 「対応しない」への変更: 任意で理由をメモとして残せる（原則9.5 の判断根拠の記録） -->
+          <div v-if="rejectMode" class="grid gap-2 rounded-lg border border-line bg-surface-soft p-2.5">
+            <UiFormField label="対応しない理由（任意・メモに記録されます）">
+              <textarea
+                v-model="rejectReason"
+                class="textarea"
+                rows="3"
+                placeholder="例: 影響範囲が大きく、次期リプレイスで対応するため今回は見送り"
+              />
+            </UiFormField>
+            <div class="flex justify-end gap-2">
+              <button type="button" class="btn btn-ghost btn-sm" :disabled="rejectBusy" @click="rejectMode = false">キャンセル</button>
+              <button type="button" class="btn btn-primary btn-sm" :disabled="rejectBusy" @click="confirmReject">「対応しない」にする</button>
+            </div>
           </div>
         </div>
 
@@ -396,6 +467,56 @@ async function copyPrompt(): Promise<void> {
             </li>
             <li v-if="sourceRequests.length === 0" class="text-[12px] text-muted">有効な元要望がありません</li>
           </ul>
+        </div>
+
+        <!-- 時系列メモ（改修方針の検討・保留/見送り理由。AI 改修プロンプトにも加味される） -->
+        <div class="grid gap-2">
+          <p class="label">メモ（時系列・{{ itemNotes.length }} 件）</p>
+          <p class="text-[11px] text-muted">
+            改修方針の検討過程や保留理由などを時系列で 1 件ずつ残せます。「改修プロンプトを出力」時に AI がこのメモも加味します。
+          </p>
+          <ul v-if="itemNotes.length" class="grid gap-2">
+            <li v-for="n in itemNotes" :key="n.id" class="card p-3">
+              <div class="flex items-start justify-between gap-2">
+                <div class="min-w-0">
+                  <UiStatusBadge v-if="n.kind === 'reject'" class="mb-1" tone="warn" label="対応しない理由" />
+                  <p class="whitespace-pre-wrap break-words text-[13px] text-ink">{{ n.body }}</p>
+                  <p class="mt-1 text-[11px] text-muted">{{ n.memberName }}・{{ fmtDateTime(n.createdAt) }}</p>
+                </div>
+                <button
+                  v-if="!selected.archivedAt"
+                  type="button"
+                  class="btn btn-ghost btn-sm shrink-0"
+                  title="このメモを取消"
+                  @click="removeNote(n.id)"
+                >
+                  取消
+                </button>
+              </div>
+            </li>
+          </ul>
+          <p v-else class="text-[12px] text-muted">メモはまだありません</p>
+
+          <!-- メモ追加（改修単位が有効なときのみ） -->
+          <div v-if="!selected.archivedAt" class="grid gap-1.5">
+            <textarea
+              v-model="noteInput"
+              class="textarea"
+              rows="2"
+              placeholder="メモを追加（改修方針・検討メモ・保留理由など）"
+              aria-label="メモを追加"
+            />
+            <div class="flex justify-end">
+              <button
+                type="button"
+                class="btn btn-primary btn-sm"
+                :disabled="!noteInput.trim() || noteBusy"
+                @click="addNote"
+              >
+                メモを追加
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 

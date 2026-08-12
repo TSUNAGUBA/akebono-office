@@ -142,6 +142,33 @@ export interface ImprovementItem {
   planEnd: string | null
 }
 
+/** 改修案件メモの種別（note = 一般メモ / reject = 「対応しない」判断の理由） */
+export type ImprovementNoteKind = 'note' | 'reject'
+
+export const IMPROVEMENT_NOTE_KINDS: ImprovementNoteKind[] = ['note', 'reject']
+
+/**
+ * 改修単位に紐づく時系列メモ（記録系・追記のみ）。
+ * 改修方針の検討過程・保留理由・「対応しない」の判断理由などを 1 件ずつ時系列で残す。
+ * AI 改修プロンプト生成時にも加味される（buildCodingPrompt）。取消は archivedAt（論理削除 = 原則9.5）。
+ */
+export interface ImprovementNote {
+  id: string
+  /** 紐づく改修単位 id */
+  itemId: string
+  /** 記入者 */
+  memberId: string
+  /** 記入者名（スナップショット。閲覧時のマスタ参照を避ける） */
+  memberName: string
+  /** メモ本文 */
+  body: string
+  /** 種別（note = 一般 / reject = 「対応しない」理由） */
+  kind: ImprovementNoteKind
+  /** 取消（論理削除）時刻。null = 有効（原則9.5） */
+  archivedAt: string | null
+  createdAt: string
+}
+
 // ---------- 入力検証（api = AKO-REQ-*（400）へ変換 / mock = Result のエラーへ変換） ----------
 
 export const IMPROVEMENT_BODY_CAP = 4_000
@@ -150,6 +177,7 @@ export const IMPROVEMENT_PAGE_PATH_CAP = 200
 export const IMPROVEMENT_TITLE_CAP = 200
 export const IMPROVEMENT_SUMMARY_CAP = 500
 export const IMPROVEMENT_DETAIL_CAP = 20_000
+export const IMPROVEMENT_NOTE_CAP = 2_000
 
 /** コードポイント単位で cap（絵文字等を境界で壊さない。customer-log capCodePoints と同義の共有版） */
 export function capCodePoints(s: string, n: number): string {
@@ -168,6 +196,13 @@ export function improvementBodyError(body: string): string | null {
 export function improvementTitleError(title: string): string | null {
   if (!title.trim()) return '見出しを入力してください'
   if ([...title].length > IMPROVEMENT_TITLE_CAP) return `見出しは ${IMPROVEMENT_TITLE_CAP} 文字までです`
+  return null
+}
+
+/** メモ本文の検証（追加時。必須・上限）。エラーメッセージ | null */
+export function improvementNoteError(body: string): string | null {
+  if (!body.trim()) return 'メモの内容を入力してください'
+  if ([...body].length > IMPROVEMENT_NOTE_CAP) return `メモは ${IMPROVEMENT_NOTE_CAP} 文字までで入力してください`
   return null
 }
 
@@ -388,7 +423,7 @@ export function normalizeClusterPlan(
 
 // ---------- 改修プロンプト出力（フィルター結果 → コーディング AI エージェント向けプロンプト） ----------
 
-/** プロンプト化する改修単位（item + 集約元の要望本文） */
+/** プロンプト化する改修単位（item + 集約元の要望本文 + 時系列メモ） */
 export interface PromptItemInput {
   title: string
   summary: string
@@ -396,6 +431,8 @@ export interface PromptItemInput {
   status: ImprovementStatus
   pagePaths: string[]
   requests: { pageLabel: string; pagePath: string; body: string }[]
+  /** 担当者の時系列メモ（改修方針の検討過程・保留/見送り理由。プロンプトに加味する）。時系列（古い順）。省略/空可 */
+  notes?: { body: string; kind: ImprovementNoteKind }[]
 }
 
 const DEFAULT_PROMPT_INTRO =
@@ -442,6 +479,16 @@ export function buildCodingPrompt(items: PromptItemInput[], opts?: { intro?: str
       it.requests.forEach((r) => {
         const where = r.pageLabel.trim() || r.pagePath.trim()
         out.push(`- ${where ? `［${where}］ ` : ''}${r.body.trim().replace(/\s*\n\s*/g, ' ')}`)
+      })
+    }
+    // 担当者の時系列メモ（改修方針・保留/見送り理由）。AI がプロンプトを起こす際にこれも加味する
+    const notes = (it.notes ?? []).filter(n => n.body.trim())
+    if (notes.length) {
+      out.push('')
+      out.push('**担当者メモ（時系列・改修方針に加味すること）:**')
+      notes.forEach((n) => {
+        const tag = n.kind === 'reject' ? '［対応しない理由］ ' : ''
+        out.push(`- ${tag}${n.body.trim().replace(/\s*\n\s*/g, ' ')}`)
       })
     }
     out.push('')

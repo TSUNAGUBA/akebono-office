@@ -87,8 +87,9 @@ const dl = useDashboardLayout()   // effectiveLayout / resolvedScope / activeTem
 const hqa = useHeaderQuickAccess()  // effectiveIds / resolvedScope / userIds / tenantIds / isAdmin / persist(ids, scope) / reset(scope)（取消・原則9.5。tenant は管理者のみ）
 
 // 通知タブ（通知欄・/inbox に出すカテゴリタブの設定）。解決順 = ユーザー > 組織 > 既定（既定 = 全カテゴリ）。「すべて」は常時表示。
-// 純ロジック SoT = utils/notification-tabs.ts（カタログ・parse〔配列/文字列両対応〕・resolve）。永続化 = ユーザー層 /v1/me pref 'notificationTabs'
+// 純ロジック SoT = utils/notification-tabs.ts（カタログ・parse〔配列/文字列両対応〕・resolve・notificationTabViews）。永続化 = ユーザー層 /v1/me pref 'notificationTabs'
 // （mock=localStorage 'ako.notification-tabs.v1'）/ 組織層 configs 'notification-tabs'。設定 UI = OfficeNotificationTabsPicker（レイアウト → 「通知タブ」タブ）。
+// タブの並びは notificationTabViews(effectiveIds)（「すべて」先頭 + カテゴリ）で組み立て、通知欄（OfficeDashboardNotifications）と /inbox のタブ順を一致させる（2026-08-12）。
 const nt = useNotificationTabs()  // effectiveIds / resolvedScope / userIds / tenantIds / isAdmin / persist(ids, scope) / reset(scope)（取消・原則9.5。tenant は管理者のみ）
 
 // カードメニュー写像（ダッシュボードのメニューカテゴリ配置用。基本メニュー MENU_CARDS.dashboard と同じ MenuCard 形へ）
@@ -151,7 +152,7 @@ const di = useDashboardInsight() // buildSegmentSummary/buildCompanySummary（�
 // 改善要望（F-42。各ページからの投稿 → AI 集約 → 権限を持つ人のみ管理 → 改修プロンプト出力。純ロジック SoT = shared/domain/improvement）
 // 投稿は全員可（submit は管理 GET を誤発火しない）。閲覧・管理は canManageImprovements（deny-by-default + 管理者常時可 = usePermissions）。
 // 集約は未集約要望のみ処理・判定済み item のステータスは巻き戻さない（原則2）。API = Vertex AI → 決定的ヒューリスティック（heuristicClusterRequests）
-const imp = useImprovements()  // submit / refresh / activeItems・archivedItems・unclusteredRequests / generate（集約）/ setStatus / editItem（title/summary/detail + planStart/planEnd 対応予定期間 = ガント）/ setItemArchived・setRequestArchived（取消/復元）/ buildPrompt(filter)
+const imp = useImprovements()  // submit / refresh / activeItems・archivedItems・unclusteredRequests / requestsForItem / notesForItem（時系列メモ・古い順）/ generate（集約）/ setStatus / editItem（title/summary/detail + planStart/planEnd 対応予定期間 = ガント）/ setItemArchived・setRequestArchived（取消/復元）/ addNote(itemId, body, kind?='note'|'reject')・setNoteArchived（メモ追加・取消/復元 = 0059。buildCodingPrompt に加味）/ buildPrompt(filter)
 ```
 
 ## UI コンポーネント在庫（新規に作る前にここを見る）
