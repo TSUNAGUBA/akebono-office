@@ -77,7 +77,6 @@ const listRows = computed<WorkflowRequest[]>(() => {
 })
 
 const columns: TableColumn[] = [
-  { key: 'id', label: '決裁番号', width: '110px' },
   { key: 'title', label: '件名', primary: true },
   { key: 'category', label: '区分', width: '80px' },
   { key: 'amount', label: '金額', width: '110px', align: 'right', primary: true },
@@ -559,9 +558,6 @@ async function onRemoveDelegate(d: DelegateSetting): Promise<void> {
           empty-hint="「新規申請」から稟議を作成できます"
           @row-click="openRow"
         >
-          <template #cell-id="{ row }">
-            <span class="num font-semibold text-brand">{{ row.id }}</span>
-          </template>
           <template #cell-amount="{ row }">
             <span class="num">{{ rowYen(row) }}</span>
           </template>

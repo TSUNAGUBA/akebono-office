@@ -41,16 +41,16 @@ export const seedDirectRequests: DirectRequest[] = [
  * currentStep=1・routeSnapshot=[] = 経路未設定の単段承認（下位互換）。
  */
 export const seedAttendanceFixRequests: AttendanceFixRequest[] = [
-  { id: 'fix-0001', memberId: 'm-07', date: pastWeekday(3), kind: 'out', requestedAt: `${pastWeekday(3)}T19:30:00+09:00`, reason: '退勤打刻を忘れて帰宅したため', status: 'pending', decidedBy: null, currentStep: 1, routeSnapshot: [], directRequestId: null },
-  { id: 'fix-0002', memberId: 'm-05', date: pastWeekday(7), kind: 'in', requestedAt: `${pastWeekday(7)}T08:55:00+09:00`, reason: '客先直行のため出勤打刻ができなかった', status: 'approved', decidedBy: 'm-03', currentStep: 1, routeSnapshot: [], directRequestId: 'dr-0002' },
+  { id: 'fix-0001', memberId: 'm-07', date: pastWeekday(3), kind: 'out', requestedAt: `${pastWeekday(3)}T19:30:00+09:00`, reason: '退勤打刻を忘れて帰宅したため', status: 'pending', decidedBy: null, currentStep: 1, routeSnapshot: [], directRequestId: null, createdAt: `${pastWeekday(3)}T20:05:00+09:00` },
+  { id: 'fix-0002', memberId: 'm-05', date: pastWeekday(7), kind: 'in', requestedAt: `${pastWeekday(7)}T08:55:00+09:00`, reason: '客先直行のため出勤打刻ができなかった', status: 'approved', decidedBy: 'm-03', currentStep: 1, routeSnapshot: [], directRequestId: 'dr-0002', createdAt: `${pastWeekday(7)}T09:10:00+09:00` },
 ]
 
 /** 休暇申請（有給 4 件 + 特別休暇 2 件。休暇管理の一覧・明細デモを兼ねる） */
 export const seedLeaveRequests: LeaveRequest[] = [
-  { id: 'lv-0001', memberId: 'm-06', leaveTypeId: 'lt-paid', date: futureWeekday(7), unit: 'full', status: 'pending', reason: '私用のため', decidedBy: null },
-  { id: 'lv-0002', memberId: 'm-04', leaveTypeId: 'lt-paid', date: pastWeekday(14), unit: 'full', status: 'approved', reason: '家族旅行', decidedBy: 'm-03' },
-  { id: 'lv-0003', memberId: 'm-10', leaveTypeId: 'lt-paid', date: pastWeekday(5), unit: 'half', status: 'approved', reason: '通院のため', decidedBy: 'm-01' },
-  { id: 'lv-0004', memberId: 'm-04', leaveTypeId: 'lt-paid', date: futureWeekday(3), unit: 'full', status: 'rejected', reason: '帰省のため', decidedBy: 'm-03' },
-  { id: 'lv-0005', memberId: 'm-05', leaveTypeId: 'lt-summer', date: pastWeekday(10), unit: 'full', status: 'approved', reason: '夏季休暇の取得', decidedBy: 'm-10' },
-  { id: 'lv-0006', memberId: 'm-06', leaveTypeId: 'lt-wedding', date: futureWeekday(14), unit: 'full', status: 'approved', reason: '結婚式のため', decidedBy: 'm-10' },
+  { id: 'lv-0001', memberId: 'm-06', leaveTypeId: 'lt-paid', date: futureWeekday(7), unit: 'full', status: 'pending', reason: '私用のため', decidedBy: null, createdAt: `${pastWeekday(1)}T09:20:00+09:00` },
+  { id: 'lv-0002', memberId: 'm-04', leaveTypeId: 'lt-paid', date: pastWeekday(14), unit: 'full', status: 'approved', reason: '家族旅行', decidedBy: 'm-03', createdAt: `${pastWeekday(21)}T10:00:00+09:00` },
+  { id: 'lv-0003', memberId: 'm-10', leaveTypeId: 'lt-paid', date: pastWeekday(5), unit: 'half', status: 'approved', reason: '通院のため', decidedBy: 'm-01', createdAt: `${pastWeekday(9)}T14:30:00+09:00` },
+  { id: 'lv-0004', memberId: 'm-04', leaveTypeId: 'lt-paid', date: futureWeekday(3), unit: 'full', status: 'rejected', reason: '帰省のため', decidedBy: 'm-03', createdAt: `${pastWeekday(2)}T11:15:00+09:00` },
+  { id: 'lv-0005', memberId: 'm-05', leaveTypeId: 'lt-summer', date: pastWeekday(10), unit: 'full', status: 'approved', reason: '夏季休暇の取得', decidedBy: 'm-10', createdAt: `${pastWeekday(15)}T08:45:00+09:00` },
+  { id: 'lv-0006', memberId: 'm-06', leaveTypeId: 'lt-wedding', date: futureWeekday(14), unit: 'full', status: 'approved', reason: '結婚式のため', decidedBy: 'm-10', createdAt: `${pastWeekday(4)}T16:40:00+09:00` },
 ]

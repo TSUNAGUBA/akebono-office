@@ -1,6 +1,7 @@
 <script setup lang="ts">
-/** モバイル用の全機能メニュー（ナビ SoT から導出） */
+/** モバイル用の全機能メニュー（ナビ SoT から導出）。プロフィール・個人設定もここへ統合（ヘッダー過密回避） */
 import * as icons from 'lucide-vue-next'
+import { UserCog } from 'lucide-vue-next'
 import { isActivePath, NAV_GROUPS } from '~/utils/navigation'
 
 const route = useRoute()
@@ -40,6 +41,21 @@ const visibleGroups = computed(() =>
           <component :is="iconOf(item.icon)" class="h-4.5 w-4.5 text-sub" aria-hidden="true" />
           {{ item.label }}
           <UiMockBadge v-if="isMockPage(item.path)" label="モック" />
+        </NuxtLink>
+      </div>
+    </div>
+
+    <!-- アカウント（プロフィール・個人設定。モバイルはヘッダーから外し、ここへ統合） -->
+    <div class="mb-4">
+      <p class="mb-1.5 text-[11px] font-bold text-muted">アカウント</p>
+      <div class="card divide-y divide-[var(--c-line)] overflow-hidden">
+        <NuxtLink
+          to="/profile"
+          class="flex items-center gap-3 px-3 py-2.5 text-[13px] font-medium"
+          :class="route.path === '/profile' ? 'text-brand' : ''"
+        >
+          <UserCog class="h-4.5 w-4.5 text-sub" aria-hidden="true" />
+          プロフィール・個人設定
         </NuxtLink>
       </div>
     </div>

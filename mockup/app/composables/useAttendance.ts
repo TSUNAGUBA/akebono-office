@@ -425,6 +425,7 @@ export function useAttendance() {
       date: input.date, kind: input.kind, requestedAt: input.requestedAt,
       reason: input.reason, status: snapshot.length > 0 ? 'in_review' : 'pending', decidedBy: null,
       currentStep: 1, routeSnapshot: snapshot, directRequestId: input.directRequestId ?? null,
+      createdAt: nowJstIso(),
     }]
     commit()
     const approverId = currentApproverId(snapshot, 1)

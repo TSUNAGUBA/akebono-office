@@ -293,6 +293,7 @@ export function useLeave() {
       status: 'pending',
       reason: input.reason,
       decidedBy: null,
+      createdAt: nowJstIso(),
     }]
     commit()
     // 管理者への通知は補助処理（失敗しても申請は成立）

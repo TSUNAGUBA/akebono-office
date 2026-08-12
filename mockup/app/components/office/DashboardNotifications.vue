@@ -9,23 +9,10 @@ import type { AppNotification } from '~/types/domain'
 import type { TabItem } from '~/types/ui'
 import { fmtDateTime } from '~/utils/format'
 import { NOTIFICATION_KIND_LABELS } from '~/utils/labels'
+import { type NotificationCategory, notificationCategoryOf as categoryOf } from '~/utils/notification-category'
 
 const { mine, unreadCount, markRead, markAllRead } = useNotifications()
 const { show } = useToast()
-
-type NotificationCategory = 'escalation' | 'approval' | 'workflow' | 'other'
-
-/**
- * 通知のカテゴリ判定。稟議 = リンク先が /workflow の通知（承認依頼・決裁・却下・差戻し）、
- * 承認依頼 = それ以外の approval 通知（打刻修正・休暇など）、エスカレーション = kind そのまま
- */
-function categoryOf(n: AppNotification): NotificationCategory {
-  if (n.kind === 'escalation') return 'escalation'
-  const bare = (n.link || '').split('?')[0] ?? ''
-  if (bare === '/workflow' || bare.startsWith('/workflow/')) return 'workflow'
-  if (n.kind === 'approval') return 'approval'
-  return 'other'
-}
 
 const notifTab = ref('all')
 const notifTabs = computed<TabItem[]>(() => {
@@ -39,8 +26,8 @@ const notifTabs = computed<TabItem[]>(() => {
   ]
 })
 
-/** 未読のみ表示（オペレーター指示 2026-08-03）。ダッシュボードのサイド通知欄でも既読を隠して確認できる */
-const unreadOnly = ref(false)
+/** 未読のみ表示（既定 = 未読のみに統一。オペレーター指示。解除で既読も表示できる） */
+const unreadOnly = ref(true)
 
 /** カテゴリタブ ∩ 未読フィルタを適用した通知（サイド欄は件数に余裕があるため 8 件まで） */
 const filteredNotifications = computed(() =>

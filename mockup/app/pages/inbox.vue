@@ -9,6 +9,7 @@ import type { AppNotification, Escalation, EscalationResolutionType, KnowledgeDo
 import type { TabItem, Tone } from '~/types/ui'
 import { fmtDateTime, fmtPct } from '~/utils/format'
 import { ESCALATION_RESOLUTION_LABELS, KNOWLEDGE_DOMAIN_LABELS, NOTIFICATION_KIND_LABELS } from '~/utils/labels'
+import { type NotificationCategory, notificationCategoryOf } from '~/utils/notification-category'
 
 const { isAdmin } = useCurrentUser()
 const { mine, unreadCount, markRead, markAllRead } = useNotifications()
@@ -27,11 +28,25 @@ const relationTypes = tbl('relationTypes')
 const companyRelations = tbl('companyRelations')
 const projects = tbl('projects')
 
-// ---------- タブ ----------
+// ---------- タブ（通知はカテゴリ別に分割。承認依頼・稟議タブを追加。オペレーター指示） ----------
 const tab = ref('notifications')
 
+/** タブ → 通知カテゴリの絞り込み（'notifications' = すべて = 絞り込みなし） */
+function tabCategory(t: string): NotificationCategory | null {
+  if (t === 'approval') return 'approval'
+  if (t === 'workflow') return 'workflow'
+  return null
+}
+
+const unreadOfCategory = (c: NotificationCategory): number =>
+  mine.value.filter(n => !n.read && notificationCategoryOf(n) === c).length
+
 const tabs = computed<TabItem[]>(() => {
-  const base: TabItem[] = [{ key: 'notifications', label: '通知', badge: unreadCount.value }]
+  const base: TabItem[] = [
+    { key: 'notifications', label: '通知', badge: unreadCount.value },
+    { key: 'approval', label: '承認依頼', badge: unreadOfCategory('approval') },
+    { key: 'workflow', label: '稟議', badge: unreadOfCategory('workflow') },
+  ]
   if (isAdmin.value) base.push({ key: 'escalations', label: 'エスカレーション', badge: openCount.value })
   return base
 })
@@ -53,10 +68,13 @@ const KIND_TONES: Record<NotificationKind, Tone> = {
   poipoi: 'info',
 }
 
-/** 未読のみ表示（オペレーター指示 2026-08-03。ダッシュボードのサイド通知欄と同じ絞り込みを一覧にも） */
-const unreadOnly = ref(false)
+/** 未読のみ表示（既定 = 未読のみに統一。オペレーター指示。解除で既読も表示できる） */
+const unreadOnly = ref(true)
+const notifCategory = computed(() => tabCategory(tab.value))
 const visibleNotifications = computed(() =>
-  unreadOnly.value ? mine.value.filter(n => !n.read) : mine.value)
+  mine.value
+    .filter(n => !notifCategory.value || notificationCategoryOf(n) === notifCategory.value)
+    .filter(n => !unreadOnly.value || !n.read))
 
 function openNotification(n: AppNotification): void {
   markRead(n.id)
@@ -178,8 +196,8 @@ async function submitRespond(): Promise<void> {
 
     <UiTabBar v-model="tab" :tabs="tabs" class="mb-3" />
 
-    <!-- ================= 通知タブ ================= -->
-    <div v-if="tab === 'notifications'" class="grid gap-3">
+    <!-- ================= 通知タブ（通知 / 承認依頼 / 稟議 のカテゴリ別） ================= -->
+    <div v-if="tab !== 'escalations'" class="grid gap-3">
       <UiSectionCard title="自分宛ての通知" :description="`未読 ${unreadCount} 件${unreadOnly ? '（未読のみ表示中）' : ''}`" flush>
         <template #actions>
           <button

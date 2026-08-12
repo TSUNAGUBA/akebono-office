@@ -477,6 +477,8 @@ export interface AttendanceFixRequest {
   routeSnapshot: AttendanceRouteStep[]
   /** 直行/直帰申請との紐付け（直行/直帰起因の打刻修正のみ設定。null = 通常の修正） */
   directRequestId: string | null
+  /** 申請日時（JST ISO）。一覧の既定並び順（申請日時の降順）に使用 */
+  createdAt: string
 }
 
 /**
@@ -522,6 +524,8 @@ export interface LeaveRequest {
   status: 'pending' | 'approved' | 'rejected'
   reason: string
   decidedBy: string | null
+  /** 申請日時（JST ISO）。一覧の既定並び順（申請日時の降順）に使用 */
+  createdAt: string
 }
 
 export type ShiftPeriodStatus = 'draft' | 'open' | 'closed' | 'adjusting' | 'published'

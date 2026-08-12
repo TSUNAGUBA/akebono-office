@@ -1,15 +1,17 @@
 <script setup lang="ts">
 import * as icons from 'lucide-vue-next'
-import { ArrowLeft, Bell, ChevronDown, Clock3, Layers, Link2, LogOut, Sunrise, UserCog } from 'lucide-vue-next'
+import { ArrowLeft, Bell, ChevronDown, Layers, Link2, LogOut, SlidersHorizontal, Sunrise, UserCog } from 'lucide-vue-next'
 import { signOutFirebase } from '~/utils/firebase-auth'
 import { EMPLOYMENT_TYPE_LABELS } from '~/utils/labels'
 import { INDUSTRY_TYPE_LABELS } from '~/utils/akebono'
 import { navEntryOf } from '~/utils/nav-map'
 import { isActivePath, MOBILE_NAV, NAV_GROUPS } from '~/utils/navigation'
+import { type QuickAccessItem, quickAccessItemOf, quickAccessPermPath } from '~/utils/header-quick-access'
 
 const route = useRoute()
 const { currentUser, isAdmin, switchableUsers, switchUser } = useCurrentUser()
 const { unreadCount } = useNotifications()
+const { isEnabled } = useAppSettings()
 const { show: showToast } = useToast()
 
 // ---------- 業態（事業セグメント）スイッチャ（マルチ業態。F-20 拡張） ----------
@@ -44,6 +46,8 @@ async function logout(): Promise<void> {
 const userMenuOpen = ref(false)
 /** タイムカードモーダル（ヘッダーからどの画面でも打刻できる） */
 const punchModalOpen = ref(false)
+/** ヘッダーのクイックアクセス設定モーダル（ヘッダーカスタマイズ） */
+const quickAccessOpen = ref(false)
 
 // モーダル内のリンク（勤怠管理へ等）で遷移したら閉じる（開いたまま画面を覆わない）
 watch(() => route.path, () => {
@@ -51,6 +55,7 @@ watch(() => route.path, () => {
   userMenuOpen.value = false
   relatedOpen.value = false
   segmentMenuOpen.value = false
+  quickAccessOpen.value = false
 })
 
 // ページ間導線（バッチ7h）: 親ページへ戻る + 関連ページ・設定（nav-map.ts が SoT）
@@ -78,6 +83,19 @@ const pageTitle = computed(() => {
 // 権限ルールで deny された機能はモバイル下部ナビ・ヘッダー導線（打刻/通知）からも隠す（F-16）
 const { canPath } = usePermissions()
 const visibleMobileNav = computed(() => MOBILE_NAV.filter(i => canPath(i.path)))
+
+// ヘッダーのクイックアクセス（ヘッダーカスタマイズ。ユーザー > 組織 > 既定。ユーザー優先）。
+// 権限・機能トグルで利用不可の項目は表示しない（F-16 と同じ絞り込み）。
+const { effectiveIds: quickAccessIds } = useHeaderQuickAccess()
+const quickAccessItems = computed<QuickAccessItem[]>(() =>
+  quickAccessIds.value
+    .map(id => quickAccessItemOf(id))
+    .filter((i): i is QuickAccessItem => !!i)
+    .filter((i) => {
+      if (i.featureKey && !isEnabled(i.featureKey)) return false
+      const p = quickAccessPermPath(i)
+      return !p || canPath(p)
+    }))
 
 // 遷移時のガードは permissions.global.ts。ここは「滞在中に deny になった」場合の補完:
 // API モードのルール非同期ハイドレーション完了時・モックモードのユーザー切替時に現在ページを再判定する
@@ -164,8 +182,9 @@ function onSwitchUser(id: string): void {
           <span class="hidden md:inline">{{ parentLink.label }}</span>
         </NuxtLink>
 
-        <!-- 関連ページ・関連設定（nav-map.ts。権限・管理者フィルタ後に空なら非表示） -->
-        <div v-if="relatedLinks.length > 0" class="relative">
+        <!-- 関連ページ・関連設定（nav-map.ts。権限・管理者フィルタ後に空なら非表示）。
+             モバイルはヘッダー過密回避のため非表示 = 下部ナビ「メニュー」から辿る（オペレーター指示） -->
+        <div v-if="relatedLinks.length > 0" class="relative hidden md:block">
           <button
             type="button"
             class="btn btn-ghost btn-sm"
@@ -202,9 +221,38 @@ function onSwitchUser(id: string): void {
           </Transition>
         </div>
 
-        <button v-if="canPath('/attendance')" type="button" class="btn btn-ghost btn-sm" @click="punchModalOpen = true">
-          <Clock3 class="h-4 w-4" aria-hidden="true" />
-          <span class="hidden sm:inline">タイムカード</span>
+        <!-- クイックアクセス（ヘッダーカスタマイズ。ユーザー > 組織 > 既定）。
+             タイムカード等の打刻アクションは従来どおり全幅表示・ページ導線は PC のみ（モバイル過密回避）。
+             「タイムカード」はカスタマイズ（表示）ボタンの左に並ぶ（オペレーター指示） -->
+        <template v-for="q in quickAccessItems" :key="q.id">
+          <button
+            v-if="q.action === 'punch'"
+            type="button"
+            class="btn btn-ghost btn-sm"
+            @click="punchModalOpen = true"
+          >
+            <component :is="iconOf(q.icon)" class="h-4 w-4" aria-hidden="true" />
+            <span class="hidden sm:inline">{{ q.label }}</span>
+          </button>
+          <NuxtLink
+            v-else-if="q.to"
+            :to="q.to"
+            class="btn btn-ghost btn-sm hidden md:inline-flex"
+          >
+            <component :is="iconOf(q.icon)" class="h-4 w-4" aria-hidden="true" />
+            <span class="hidden lg:inline">{{ q.label }}</span>
+          </NuxtLink>
+        </template>
+
+        <!-- クイックアクセスのカスタマイズ（PC のみ・全ページ共通） -->
+        <button
+          type="button"
+          class="btn btn-ghost btn-sm hidden md:inline-flex"
+          aria-label="ヘッダーのクイックアクセスを設定"
+          @click="quickAccessOpen = true"
+        >
+          <SlidersHorizontal class="h-4 w-4" aria-hidden="true" />
+          <span class="hidden lg:inline">表示</span>
         </button>
 
         <NuxtLink v-if="canPath('/inbox')" to="/inbox" class="btn btn-ghost btn-sm relative" aria-label="通知">
@@ -239,10 +287,11 @@ function onSwitchUser(id: string): void {
               role="menu"
               aria-label="アカウントメニュー"
             >
+              <!-- モバイルでは非表示（フッターの「メニュー」からアクセス）。ヘッダー過密回避（オペレーター指示） -->
               <NuxtLink
                 to="/profile"
                 role="menuitem"
-                class="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] font-semibold hover:bg-brand-soft"
+                class="hidden w-full items-center gap-2 px-3 py-2 text-left text-[13px] font-semibold hover:bg-brand-soft md:flex"
                 @click="userMenuOpen = false"
               >
                 <UserCog class="h-4 w-4 text-muted" aria-hidden="true" />
@@ -316,6 +365,11 @@ function onSwitchUser(id: string): void {
     <!-- タイムカードモーダル（打刻カードをそのまま表示・操作） -->
     <UiModal :open="punchModalOpen" title="タイムカード" @close="punchModalOpen = false">
       <WidgetsPunchClock flat />
+    </UiModal>
+
+    <!-- ヘッダーのクイックアクセス設定（ヘッダーカスタマイズ。全ページ共通） -->
+    <UiModal :open="quickAccessOpen" title="ヘッダーのクイックアクセス" width="520px" @close="quickAccessOpen = false">
+      <OfficeHeaderQuickAccessPicker />
     </UiModal>
 
     <UiToastHost />

@@ -479,6 +479,16 @@ async function submitLeave(): Promise<void> {
 
 // ---------- 申請タブ ----------
 
+/**
+ * 申請日時（JST ISO）の降順比較。オフセット付き ISO は getTime 差分で正しく比較できる（CONVENTIONS）。
+ * 未設定（下位互換: createdAt を持たない旧データ）は末尾へ寄せる。
+ */
+function byCreatedAtDesc(a: string | undefined, b: string | undefined): number {
+  const ta = a ? new Date(a).getTime() : 0
+  const tb = b ? new Date(b).getTime() : 0
+  return tb - ta
+}
+
 const myRequestColumns: TableColumn[] = [
   { key: 'type', label: '種類', width: '90px', primary: true },
   { key: 'date', label: '対象日', width: '110px', primary: true },
@@ -510,6 +520,7 @@ const myRequestRows = computed(() => {
       reason: f.reason,
       status: f.status,
       decidedBy: f.decidedBy ? memberName(f.decidedBy) : '—',
+      createdAt: f.createdAt,
     }))
   const directRows = directRequests.value
     .filter(d => d.memberId === me)
@@ -522,6 +533,7 @@ const myRequestRows = computed(() => {
       reason: d.reason,
       status: d.status,
       decidedBy: d.decidedBy ? memberName(d.decidedBy) : '—',
+      createdAt: d.createdAt,
     }))
   const lvRows = leave.requestsOf(me).map(r => ({
     id: r.id,
@@ -532,8 +544,10 @@ const myRequestRows = computed(() => {
     reason: r.reason,
     status: r.status,
     decidedBy: r.decidedBy ? memberName(r.decidedBy) : '—',
+    createdAt: r.createdAt,
   }))
-  return [...fixRows, ...directRows, ...lvRows].sort((a, b) => b.date.localeCompare(a.date))
+  // 既定の並び順 = 申請日時（createdAt）の降順（新しい申請が上）。列ヘッダのソートは UiDataTable が担う（維持）
+  return [...fixRows, ...directRows, ...lvRows].sort((a, b) => byCreatedAtDesc(a.createdAt, b.createdAt))
 })
 
 const pendingColumns: TableColumn[] = [

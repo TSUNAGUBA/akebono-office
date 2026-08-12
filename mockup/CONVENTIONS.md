@@ -78,6 +78,12 @@ const mcat = useMenuCategories('dashboard')   // categories / categorize(cards) 
 // 解決順 = ユーザー設定 > テナント設定 > デフォルト（セクション配置も同 3 階層 = #25）。ユーザー層=/v1/me pref 'dashboardLayout'（mock=localStorage 'ako.dashboard-layout.v1'）/ テナント層=configs 'dashboard-layout'（未設定は menu-categories-dashboard 下位互換）
 const dl = useDashboardLayout()   // effectiveLayout / resolvedScope / activeTemplateId / templates / baseLayoutForScope(scope) / applyTemplate(id, scope) / saveSections(sections, scope)〔保存先層自身の options 維持で sections 差替・templateId=custom〕 / resetLayout(scope)（取消・原則9.5。tenant は管理者のみ）
 
+// ヘッダーのクイックアクセス（ヘッダーカスタマイズ = 全ページ共通）。解決順 = ユーザー > 組織 > 既定（ユーザー優先）。
+// 純ロジック（候補カタログ・パース・解決）の SoT = utils/header-quick-access.ts。永続化はデュアルモード
+// （ユーザー層=/v1/me pref 'headerQuickAccess'（mock=localStorage 'ako.header-quick-access.v1'）/ 組織層=configs 'header-quick-access'）。
+// 新 API ルート/マイグレーションは不要（既存の汎用 key/value を利用）。設定 UI = OfficeHeaderQuickAccessPicker（scope=自分/全社）
+const hqa = useHeaderQuickAccess()  // effectiveIds / resolvedScope / userIds / tenantIds / isAdmin / persist(ids, scope) / reset(scope)（取消・原則9.5。tenant は管理者のみ）
+
 // カードメニュー写像（ダッシュボードのメニューカテゴリ配置用。基本メニュー MENU_CARDS.dashboard と同じ MenuCard 形へ）
 const { externalCards } = useExternalLinkCards()  // F-13-3 の外部リンク → MenuCard（id=`el-*`・href で別タブ）
 const { akebonoCards } = useAkebonoAppCards()      // #24 の active 業態 → MenuCard（id=`akebono-seg:<segmentId>`。写像純関数 = utils/akebono.akebonoSegmentCard）
@@ -177,6 +183,7 @@ const imp = useImprovements()  // submit / refresh / activeItems・archivedItems
 | `OfficeDashboardNotifications` | props なし。ダッシュボードの通知欄（エスカレーション/承認依頼/稟議タブ + 未読のみフィルタ・直近 8 件）。index.vue から分離し通知位置（side/bottom）で配置切替可能に（2026-08-03） |
 | `OfficeDashboardLayoutPreview` | layout(DashboardLayout)。レイアウトの軽量プレビュー（実データ不要。セクション見出し + カード数チップ + 通知位置図示 + AKEBONO/密度反映。F-13-9） |
 | `OfficeDashboardLayoutPicker` | props なし。ダッシュボードのレイアウト選択。「テンプレート」/「セクションを編集」タブ切替 + 適用スコープ〔自分/全社〕+ 現在有効層表示 + 解除。ヘッダの「レイアウト」ボタン → UiModal 内で使用（F-13-9・2026-08-03） |
+| `OfficeHeaderQuickAccessPicker` | props なし。ヘッダーのクイックアクセス設定（ヘッダーカスタマイズ = 全ページ共通）。候補カタログから表示メニューを選択 + 適用スコープ〔自分/全社〕+ 既定に戻す。純ロジック SoT = utils/header-quick-access.ts・解決/保存 = useHeaderQuickAccess。layouts/default.vue のヘッダー「表示」ボタン → UiModal 内で使用 |
 | `OfficeDashboardSectionEditor` | props なし。ダッシュボードのセクション構成を 3 階層（自分/全社/アプリ既定）で編集・保存（saveSections）。割当候補 = 基本メニュー + 外部リンク + AKEBONO 業態アプリ。UiMenuSectionEditor を利用（#25・2026-08-03） |
 | `MediaChannelBar` | props なし。メディア分析の対象チャンネル切替バー（現在チャンネル + 連携業態バッジ + GA 連携バッジ + 設定導線）。全メディア画面の先頭に置く（F-40。2026-08-03 で MediaSegmentBar から改称・チャンネル化） |
 | `MediaGaConnect` | channelId?（未指定=現在チャンネル）, variant（'gate'/'bar'）。Google Analytics 連携ゲート（モック = 擬似 OAuth / API = Google OAuth 2.0 リダイレクト + 復帰クエリ `?ga=` 処理 + GA4 プロパティ選択モーダル。needsProperty の中間状態も再開可）。連携済みは状態バー + 解除（F-40。CalendarConnectGate と同型） |
