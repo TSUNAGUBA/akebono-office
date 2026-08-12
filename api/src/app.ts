@@ -36,6 +36,7 @@ import { runUptimeRollup, statusRoutes } from './routes/status'
 import { assistRoutes } from './routes/assist'
 import { calendarOauthCallback, calendarRoutes } from './routes/calendar'
 import { mediaOauthCallback, mediaRoutes } from './routes/media'
+import { noteMediaRoutes, runNoteSyncAll } from './routes/note-media'
 import { chatbotRoutes } from './routes/chatbot'
 import { decisionsRoutes } from './routes/decisions'
 import { documentsRoutes } from './routes/documents'
@@ -103,6 +104,16 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
       throw err('AKO-AUTH-001', 'ジョブ実行キーが無効です', 401)
     }
     const result = await runUptimeRollup(pool)
+    return c.json({ data: result })
+  })
+
+  // note 反応の日次同期（Cloud Scheduler → 共有鍵。全連携チャンネル。チャンネル単位の失敗は他を止めない）
+  app.post('/jobs/note-sync', async (c) => {
+    const secret = process.env.CRON_SECRET ?? ''
+    if (!secret || c.req.header('x-cron-key') !== secret) {
+      throw err('AKO-AUTH-001', 'ジョブ実行キーが無効です', 401)
+    }
+    const result = await runNoteSyncAll(pool)
     return c.json({ data: result })
   })
 
@@ -214,6 +225,7 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
   app.route('/v1/knowledge', knowledgeRoutes(pool, env))
   app.route('/v1/documents', documentsRoutes(pool, env))
   app.route('/v1/media', mediaRoutes(pool, env))
+  app.route('/v1/media', noteMediaRoutes(pool, env))
   // F-42（0057）: 改善要望。投稿は全員可・管理系はルート内で canManageImprovements ガード（featureGuard 非対象）
   app.route('/v1/improvements', improvementsRoutes(pool, env))
 

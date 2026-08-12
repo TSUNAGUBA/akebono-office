@@ -223,6 +223,22 @@ gcloud scheduler jobs create http uptime-rollup \
 再計算は窓内 DELETE→INSERT のトランザクションで冪等。手動回復は管理者 API
 `POST /v1/status/uptime/recompute`（直近 90 日・serviceId 指定可）でいつでも実行できる。
 
+## 1-7d. note 反応の日次同期（Cloud Scheduler・任意。note 連携 §76）
+
+note 連携済みチャンネルの反応（スキ・コメント）を日次スナップショットへ収集する。画面（または API
+`POST /v1/media/note/sync`）から手動同期もできるため Scheduler は任意。1-7 と同じ `CRON_SECRET` を使い:
+
+```bash
+gcloud scheduler jobs create http note-sync \
+  --schedule "15 6 * * *" --time-zone "Asia/Tokyo" \
+  --uri "https://<cloud-run-url>/jobs/note-sync" \
+  --http-method POST --headers "x-cron-key=<CRON_SECRET と同じ値>"
+```
+
+スナップショットは `UNIQUE(channel_id, note_key, snapshot_date)` の upsert で冪等（同日再実行は当日行の
+更新のみ・過去日は不変）。チャンネル単位の失敗は他チャンネルを止めず、応答の `failed` に理由が載る。
+note は非公式 API のため、繰り返し失敗する場合は仕様変更の可能性がある（`api/src/lib/note-api.ts` 冒頭参照）。
+
 ## 1-8. AI 機能（Vertex AI）
 
 AI 機能（日報 AI アシスト・タスク計画の AI コメント等）は **Vertex AI**（オペレーター決定 2026-07-17）を

@@ -6781,3 +6781,107 @@ describe('改善要望（F-42）', () => {
     expect((await api('POST', `/v1/improvements/items/${id}/notes`, { as: MEMBER, body: { body: 'x' } })).status).toBe(403)
   })
 })
+
+describe('note 連携（F-40 拡張。オペレーター指示 2026-08-12）', () => {
+  let channelId = ''
+  let postId = ''
+
+  it('連携の登録は管理者のみ・urlname だけで成立する（Cookie は任意）', async () => {
+    const ch = await api('POST', '/v1/media/channels', { as: ADMIN, body: { name: 'note発信' } })
+    channelId = (ch.json.data as { id: string }).id
+
+    // 未連携の状態
+    const before = (await api('GET', `/v1/media/note/status?channelId=${channelId}`, { as: MEMBER })).json.data as Record<string, unknown>
+    expect(before).toMatchObject({ connected: false, urlname: null, hasCookie: false, cookieStorable: true })
+
+    // 一般ロールは登録不可
+    expect((await api('PUT', '/v1/media/note/connection', { as: MEMBER, body: { channelId, urlname: 'tsunaguba' } })).status).toBe(403)
+    // 不正 urlname
+    const bad = await api('PUT', '/v1/media/note/connection', { as: ADMIN, body: { channelId, urlname: 'https://note.com/x' } })
+    expect(bad.status).toBe(400)
+    expect(bad.json.error?.code).toBe('AKO-MEDIA-031')
+
+    // urlname のみで登録（@ 前置は剥がされる）
+    const put = await api('PUT', '/v1/media/note/connection', { as: ADMIN, body: { channelId, urlname: '@tsunaguba' } })
+    expect(put.status).toBe(200)
+    const status = (await api('GET', `/v1/media/note/status?channelId=${channelId}`, { as: MEMBER })).json.data as Record<string, unknown>
+    expect(status).toMatchObject({ connected: true, urlname: 'tsunaguba', hasCookie: false })
+
+    // Cookie 登録（暗号化保存）→ 未送信キー（urlname）は保持される（部分更新）
+    await api('PUT', '/v1/media/note/connection', { as: ADMIN, body: { channelId, sessionCookie: '_note_session_v5=abc; Path=/' } })
+    const withCookie = (await api('GET', `/v1/media/note/status?channelId=${channelId}`, { as: MEMBER })).json.data as Record<string, unknown>
+    expect(withCookie).toMatchObject({ connected: true, urlname: 'tsunaguba', hasCookie: true })
+    // Cookie クリア（空文字 = 明示的クリア）
+    await api('PUT', '/v1/media/note/connection', { as: ADMIN, body: { channelId, sessionCookie: '' } })
+    expect(((await api('GET', `/v1/media/note/status?channelId=${channelId}`, { as: MEMBER })).json.data as Record<string, unknown>).hasCookie).toBe(false)
+  })
+
+  it('記事原稿の CRUD: 作成 → 部分更新（未送信フィールド保持）→ 取消/復元（原則9.5）', async () => {
+    const created = await api('POST', '/v1/media/note/posts', {
+      as: MEMBER, body: { channelId, title: 'AIネイティブ開発とは', body: '# 見出し\n本文です。' },
+    })
+    expect(created.status).toBe(201)
+    const post = created.json.data as { id: string; status: string }
+    postId = post.id
+    expect(post.status).toBe('local_draft')
+
+    // タイトル未入力は 400
+    expect((await api('POST', '/v1/media/note/posts', { as: MEMBER, body: { channelId } })).json.error?.code).toBe('AKO-MEDIA-035')
+
+    // 部分更新: body のみ送信 → title は保持される（Zod v4 事故の回帰テスト）
+    const patched = await api('PATCH', `/v1/media/note/posts/${postId}`, { as: MEMBER, body: { body: '更新後の本文' } })
+    expect((patched.json.data as { title: string; body: string }).title).toBe('AIネイティブ開発とは')
+    expect((patched.json.data as { title: string; body: string }).body).toBe('更新後の本文')
+
+    // 取消 → 一覧から消える → 復元で戻る
+    await api('POST', `/v1/media/note/posts/${postId}/archive`, { as: MEMBER })
+    const afterArchive = (await api('GET', `/v1/media/note/posts?channelId=${channelId}`, { as: MEMBER })).json.data as { id: string }[]
+    expect(afterArchive.map(p => p.id)).not.toContain(postId)
+    await api('POST', `/v1/media/note/posts/${postId}/restore`, { as: MEMBER })
+    const afterRestore = (await api('GET', `/v1/media/note/posts?channelId=${channelId}`, { as: MEMBER })).json.data as { id: string }[]
+    expect(afterRestore.map(p => p.id)).toContain(postId)
+  })
+
+  it('下書きプッシュのガード: 管理者のみ・Cookie 未設定は AKO-MEDIA-034（note へは接続しない）', async () => {
+    expect((await api('POST', `/v1/media/note/posts/${postId}/push`, { as: MEMBER })).status).toBe(403)
+    const noCookie = await api('POST', `/v1/media/note/posts/${postId}/push`, { as: ADMIN })
+    expect(noCookie.status).toBe(409)
+    expect(noCookie.json.error?.code).toBe('AKO-MEDIA-034')
+  })
+
+  it('同期は連携必須（AKO-MEDIA-030）・集計とフィードバックはスナップショットから生成（LLM 無効 = ヒューリスティック）', async () => {
+    // 未連携チャンネルの同期は 409
+    const ch2 = await api('POST', '/v1/media/channels', { as: ADMIN, body: { name: 'note未連携' } })
+    const sync = await api('POST', '/v1/media/note/sync', { as: MEMBER, body: { channelId: (ch2.json.data as { id: string }).id } })
+    expect(sync.status).toBe(409)
+    expect(sync.json.error?.code).toBe('AKO-MEDIA-030')
+
+    // スナップショットを直接投入（同期の代替。note への実接続は統合テストでは行わない）
+    const today = todayJst()
+    const before = addDays(today, -7)
+    for (const [d, likes] of [[before, 3], [today, 10]] as const) {
+      await pool.query(
+        `INSERT INTO note_metrics (id, channel_id, note_key, snapshot_date, title, like_count, comment_count)
+         VALUES ($1, $2, 'nkey1', $3::date, '検証記事', $4, 1)
+         ON CONFLICT (channel_id, note_key, snapshot_date) DO UPDATE SET like_count = EXCLUDED.like_count`,
+        [`nm-test-${d}`, channelId, d, likes])
+    }
+    const metrics = (await api('GET', `/v1/media/note/metrics?channelId=${channelId}&days=28`, { as: MEMBER })).json.data as {
+      totalLikes: number
+      articles: { noteKey: string; likeDelta: number }[]
+    }
+    expect(metrics.articles[0]).toMatchObject({ noteKey: 'nkey1', likeDelta: 7 })
+    expect(metrics.totalLikes).toBe(10)
+
+    // フィードバック生成（LLM 無効 → ヒューリスティック）→ 保管は media_insights scope='note'
+    const gen = await api('POST', '/v1/media/note/feedback/generate', { as: MEMBER, body: { channelId, days: 28 } })
+    expect(gen.status).toBe(200)
+    const fb = gen.json.data as { llm: boolean; insight: { executiveSummary: string; nextTopics: string[] } }
+    expect(fb.llm).toBe(false)
+    expect(fb.insight.executiveSummary).toContain('スキ計')
+
+    // 参照は既存 GET /v1/media/insights?scope=note（原則3 = 保管先の再利用）
+    const stored = await api('GET', `/v1/media/insights?channelId=${channelId}&scope=note`, { as: MEMBER })
+    expect((stored.json.data as { insight: { executiveSummary: string } }).insight.executiveSummary).toContain('スキ計')
+  })
+})

@@ -2661,3 +2661,50 @@
   オーバーフローを判定できない）。回帰は `improvement`/`gantt` の既存テスト green + build/typecheck で担保。
 - [x] **検証（実測値）**: mockup `npx nuxi typecheck` green・`npm test` **287 passed**・`npm run build` green。API は不変（`api/` 変更なし）。
 - [x] **ドキュメント整合（原則5）**: screen-design（5.7 カンバンのカード折返し/クリップ）・本節を更新。
+
+## 76. note（note.com）連携 — 記事投稿・反応収集・AI フィードバックの PDCA（オペレーター指示 2026-08-12）の完了条件（Definition of Done）
+
+メディア分析（F-40）の拡張として、note への記事発信を「原稿管理 → 下書きプッシュ → 反応収集 →
+AI フィードバック → 次の記事生成」の循環で回す API を実装（目的: AI ネイティブ開発手法の発信による顧問先獲得）。
+
+- [x] **前提の明示（重要）**: note に公式 API はなく**非公式エンドポイント**を利用する（`api/src/lib/note-api.ts` 冒頭に
+  前提・リスク・パス集約を文書化）。仕様変更で失敗した場合は AKO-MEDIA-033 が note 応答の抜粋付きで返り、運用者が自己診断できる。
+  自動ログインは行わない（reCAPTCHA 必須のため）— ブラウザでログイン済みの `_note_session_v5` Cookie を管理者が登録する方式。
+- [x] **書込は下書きまで（設計判断）**: 公開エンドポイントは呼ばない。**公開は必ず人間が note 管理画面で行う**
+  （誤公開という取り消し困難な操作を構造的に作らない = 原則9.5 の予防的適用。利用規約リスクの低減も兼ねる）。
+  反応収集は公開エンドポイント（認証不要）が主経路のため、urlname 登録だけで Cookie なしでも動く（グレースフル = 原則4）。
+- [x] **DB（0061）**: note_connections（連携設定。Cookie は AES-256-GCM 暗号化 = media_ga_tokens と同型）/
+  note_posts（記事原稿。SoT = 本アプリ。論理削除 = 原則9.5）/ note_metrics（反応の日次スナップショット。
+  `UNIQUE(channel_id, note_key, snapshot_date)` upsert = 同日は当日行のみ更新・過去日不変 = 原則2）/
+  media_insights.scope へ 'note' を追加（フィードバック保管先の再利用 = 原則3。CHECK 制約の広げのみ = 下位互換・原則7）。
+- [x] **API（`/v1/media/note/*`。routes/note-media.ts）**: 連携 status/connection/disconnect（管理者）/
+  posts CRUD + archive/restore（部分更新は Object.hasOwn フィルタ = Zod v4 注意への構造的対応）/
+  posts/:id/push（管理者。マークダウン → note HTML 変換・再プッシュは同一下書きの更新 = 冪等・公開済みは 409）/
+  sync（当日スナップショット + 公開検知 = pushed → published の一方向・巻き戻しなし）/ metrics（期間内デルタ集計）/
+  feedback/generate（Vertex AI → 失敗時 heuristicNoteFeedback = 原則4。scope='note' で media_insights へ upsert）。
+- [x] **PDCA の接続（原則3）**: フィードバックは MediaInsight 互換の骨格 + nextTopics で保管し、既存の記事生成
+  `POST /v1/media/articles/generate` の `fromInsightId` が scope='note' も受けるよう拡張（insightHintsOf 互換）。
+  生成記事は `POST /v1/media/note/posts`（fromGeneratedId）で原稿に取り込める = 「反応 → 次の記事」が既存機構で閉じる。
+- [x] **ジョブ**: `POST /jobs/note-sync`（CRON_SECRET 共有鍵 = 既存ジョブと同型。チャンネル単位の失敗は他を止めない）。
+  Scheduler 設定は deploy-guide §1-7d。
+- [x] **エラーコード**: AKO-MEDIA-030〜036 を台帳（api-design.md §4）へ起番。
+- [x] **テスト**: 単体 `test/unit/note-media.test.ts`（部分更新のキーフィルタ・非公式 API 応答の型崩れ防御・
+  公開検知の一方向性・デルタ集計・ヒューリスティックの決定性・HTML 変換のエスケープ・LLM 出力正規化）。
+  統合 `test/integration/api.test.ts` に note 連携 4 ケース（連携の認可と部分更新・原稿 CRUD と取消/復元・
+  プッシュのガード（note へ実接続しない範囲）・スナップショット集計とフィードバック生成/保管参照）。
+- [x] **検証（実測値）**: API `npm run typecheck` green・`npm test` **353 passed**（+25）・
+  `npm run test:integration` **257 passed**（+4・0061 適用含む）。
+- [x] **独立レビュー（原則9）**: 1 巡目 8 件を全て反映 = ①fromInsightId が note フィードバックの nextTopics を
+  落とす（insightHintsOf を topics 優先へ拡張・media は下位互換）／②プッシュ失敗時の孤児下書き
+  （枠確保成功 → 本文保存失敗でも draftId を保存しリトライで再利用）／③note 側で下書き削除後の詰み
+  （draft_save 404 → 新枠で自己回復）／④連携登録の channelId 存在検証（021）／⑤プッシュ UPDATE の
+  published 巻き戻し競合（status <> 'published' ガード + 409）／⑥ページ上限打ち切りの無告知（warning 付与）／
+  ⑦data-design・api-design §3 の追記漏れ／⑧正規化ヘルパの重複（media.ts から export し共用）。
+  2 巡目で新規指摘なしを確認。
+- [x] **ドキュメント整合（原則5）**: api-design §3（エンドポイント）・§4（エラーコード）・data-design（新エンティティ +
+  scope 拡張の SoT/機密度宣言）・deploy-guide §1-7d（Scheduler）・api/README（対象ドメイン）・
+  blog/README（note 運用フロー）・本節を更新。
+- [ ] **残課題**: ①mockup（Nuxt SPA）の note 連携 UI は未実装（API 先行。画面はメディア分析ページへの追加を想定し、
+  実装時に原則8 レスポンシブを適用）。②view_count（PV）は note ダッシュボード API（要 Cookie）からの取得を未実装
+  （note_metrics.view_count 列は確保済み・NULL = 欠測）。③非公式 API の仕様変更監視は運用対応
+  （AKO-MEDIA-033 の発生をエスカレーションの契機とする）。④コメント本文の収集（現状は件数のみ）。

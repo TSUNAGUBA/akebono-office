@@ -116,8 +116,11 @@ backfill により child 行の値は不変 = UPDATE 不要・下位互換。原
 | `MediaArticle`(media_articles) | id, **channelId**, path, title, section, publishedAt, wordCount, status, origin(`seed`/`generated`), generatedArticleId, active | 設定系/資産（サイトのコンテンツ資産インベントリ。**集計値は持たない = GA が SoT**）。論理削除で取消・復元（原則9.5）。**UNIQUE(channelId, path) WHERE active** = 重複登録防止 | C1 |
 | `ArticleBrief`(media_article_briefs) | id, **channelId**, topic, keyword, purpose, quality, tone, audience, fromInsightId, createdBy, createdAt | 記録系（生成依頼の記録 = 追記のみ） | C2 |
 | `GeneratedArticle`(media_generated_articles) | id, **channelId**, briefId, payload(GeneratedArticleDraft), llm, adoptedArticleId, active, createdBy, createdAt | 生成物（論理削除で取消・復元。採用でインベントリ化 = 冪等） | C2 |
-| `MediaInsightRecord`(media_insights) | id, **channelId** × scope(`media`/`integrated`)(一意), periodKey, metrics, insight, llm, warning（劣化データ由来の告知）, generatedBy, generatedAt | **導出キャッシュ**（weekly_insights と同型 = 再生成で upsert 上書き）。scope=integrated は連携済みチャンネルのみ | C2 |
+| `MediaInsightRecord`(media_insights) | id, **channelId** × scope(`media`/`integrated`/`note`)(一意), periodKey, metrics, insight, llm, warning（劣化データ由来の告知）, generatedBy, generatedAt | **導出キャッシュ**（weekly_insights と同型 = 再生成で upsert 上書き）。scope=integrated は連携済みチャンネルのみ。scope=note は note 反応フィードバック（0061 で CHECK を広げ = 下位互換・原則7） | C2 |
 | `MediaExternalArticle`(media_external_articles) | id, **channelId**, title（必須）, url, source, publishedAt, body（原文・必須）, notes, createdBy, active | **外部投稿記事の原文**（media インサイト生成の材料。0048 新規）。論理削除で取消・復元（原則9.5） | C2 |
+| `note_connections` | **channelId(PK)**, urlname（note クリエイター ID）, sessionCookieEnc（AES-256-GCM。空 = 未設定 = 収集のみ可）, connectedBy, createdAt/updatedAt | 設定系（0061 新規。media_ga_tokens と同型のチャンネル単位連携）。Cookie は note ログイン発行物 = 喪失・失効時は再登録で回復 | C3（暗号化保管・クライアントへ出さない = status は有無のみ返す） |
+| `NotePost`(note_posts) | id, **channelId**, generatedArticleId, title, body（マークダウン）, status(`local_draft`/`pushed`/`published`), noteKey, noteDraftId, noteUrl, pushedAt, publishedAt, createdBy, active | 記事原稿（**SoT = 本アプリ**。下書きプッシュで note へ一方向反映）。status/publishedAt は note からの同期による導出（pushed→published の一方向 = 巻き戻しなし）。論理削除で取消・復元（原則9.5） | C1 |
+| `note_metrics` | id, **channelId** × noteKey × snapshotDate(一意), title, likeCount, commentCount, viewCount（NULL = 欠測）, fetchedAt | **記録系スナップショット**（SoT = note。同日 upsert = 当日行のみ更新・過去日不変 = 原則2） | C1 |
 
 > **SoT 宣言（メディア分析）:** GA 由来の集計値（セッション・PV・CV 等）は **Google Analytics が SoT**
 > （本アプリの metrics キャッシュ・保管済みインサイトの metrics は導出）。**メディアチャンネルは独立

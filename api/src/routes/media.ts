@@ -26,7 +26,7 @@
  *         012 生成記事なし / 014 未採用 / 020 チャンネル名必須 / 021 対象チャンネルなし /
  *         022 統合分析には連携業態が必要 / 023 外部記事の入力不正 / 024 対象の外部記事なし
  *         （001・002・010・013・016 はモック専用/欠番。013 の二重採用は API では no-op + warning = 冪等。
- *          009・015 は欠番）
+ *          009・015 は欠番。030〜036 = note 連携は routes/note-media.ts）
  */
 import { randomBytes } from 'node:crypto'
 import type { Context } from 'hono'
@@ -78,8 +78,8 @@ function requireEnabled(env: Env): void {
   }
 }
 
-/** channelId クエリ/ボディの検証（形式のみ。存在検証は各ハンドラの行取得で行う） */
-function channelIdOf(v: unknown): string {
+/** channelId クエリ/ボディの検証（形式のみ。存在検証は各ハンドラの行取得で行う。note-media でも再利用） */
+export function channelIdOf(v: unknown): string {
   const id = String(v ?? '').trim()
   if (!id || id.length > 64) throw err('AKO-GEN-001', 'channelId を指定してください', 400)
   return id
@@ -626,24 +626,33 @@ function channelUpdateParts(patch: MediaSettingsPatch): { assigns: string[]; val
 
 // ---------- インサイトのヒント抽出・LLM 出力の正規化（純粋関数・単体テスト対象） ----------
 
-/** 保管済みメディアインサイトから記事生成のヒント文を取り出す（mockup hintsFromInsight と同一ロジック） */
+/**
+ * 保管済みインサイトから記事生成のヒント文を取り出す（scope='media' は mockup hintsFromInsight と同一ロジック）。
+ * note フィードバック（scope='note'）の nextTopics は「次の記事のテーマ案」そのもの = 最優先でヒント化する
+ * （nextTopics を持たない media インサイトでは従来挙動のまま = 下位互換）。
+ */
 export function insightHintsOf(insight: unknown): string[] {
-  const rec = insight as { articles?: unknown; siteStructure?: unknown } | null
-  const findings = [
+  const rec = insight as { articles?: unknown; siteStructure?: unknown; nextTopics?: unknown } | null
+  const topics = (Array.isArray(rec?.nextTopics) ? rec.nextTopics : [])
+    .map(t => capCp(String(t ?? ''), 80))
+    .filter(Boolean)
+  const found = [
     ...(Array.isArray(rec?.articles) ? rec.articles : []),
     ...(Array.isArray(rec?.siteStructure) ? rec.siteStructure : []),
   ] as { kind?: string; title?: string }[]
-  return findings
+  const hints = found
     .filter(f => f && (f.kind === 'opportunity' || f.kind === 'issue'))
     .map(f => capCp(String(f.title ?? ''), 80))
     .filter(Boolean)
-    .slice(0, 3)
+  return [...topics, ...hints].slice(0, 3)
 }
 
-const strArr = (v: unknown, max: number, cap: number): string[] =>
+/** 文字列配列の正規化（上限・文字数キャップ。note-media でも再利用） */
+export const strArr = (v: unknown, max: number, cap: number): string[] =>
   (Array.isArray(v) ? v : []).slice(0, max).map(x => capCp(String(x), cap))
 
-function findings(v: unknown): MediaFinding[] {
+/** LLM 出力の findings 正規化（kind の既定 = opportunity。note-media でも再利用） */
+export function findings(v: unknown): MediaFinding[] {
   return (Array.isArray(v) ? v : [])
     .filter((f): f is Record<string, unknown> => !!f && typeof f === 'object')
     .slice(0, 6)
@@ -655,7 +664,8 @@ function findings(v: unknown): MediaFinding[] {
     .filter(f => f.title.length > 0)
 }
 
-function mediaActions(v: unknown): MediaAction[] {
+/** LLM 出力の actions 正規化（priority の既定 = mid。note-media でも再利用） */
+export function mediaActions(v: unknown): MediaAction[] {
   return (Array.isArray(v) ? v : [])
     .filter((a): a is Record<string, unknown> => !!a && typeof a === 'object')
     .slice(0, 6)
@@ -1533,11 +1543,12 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
     const setting = channelRows[0]
     const audience = capCp(String(body.audience ?? '').trim(), 200) || setting?.targetAudience || '読者'
 
-    // 過去分析からの生成: 保管済みメディアインサイトのヒント文を生成の前提に添える
+    // 過去分析からの生成: 保管済みインサイトのヒント文を生成の前提に添える
+    // （scope='media' = GA 分析 / scope='note' = note 反応フィードバック。後者が「反応 → 次の記事」の接続点）
     let insightHints: string[] = []
     if (fromInsightId) {
       const { rows } = await pool.query<{ insight: unknown }>(
-        `SELECT insight FROM media_insights WHERE id = $1 AND channel_id = $2 AND scope = 'media'`,
+        `SELECT insight FROM media_insights WHERE id = $1 AND channel_id = $2 AND scope IN ('media', 'note')`,
         [fromInsightId, channelId])
       insightHints = rows[0] ? insightHintsOf(rows[0].insight) : []
     }
@@ -1764,10 +1775,13 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
               m.name AS "generatedByName"`
 
   // ---- AI インサイト（保管済みの取得。未生成は null）----
+  // scope='note' は note 反応フィードバック（生成は routes/note-media.ts の /note/feedback/generate）
   app.get('/insights', async (c) => {
     const channelId = channelIdOf(c.req.query('channelId'))
     const scope = c.req.query('scope')
-    if (scope !== 'media' && scope !== 'integrated') throw err('AKO-GEN-001', 'scope は media / integrated を指定してください', 400)
+    if (scope !== 'media' && scope !== 'integrated' && scope !== 'note') {
+      throw err('AKO-GEN-001', 'scope は media / integrated / note を指定してください', 400)
+    }
     const { rows } = await pool.query(
       `SELECT ${INSIGHT_COLS}
        FROM media_insights mi LEFT JOIN members m ON m.id = mi.generated_by

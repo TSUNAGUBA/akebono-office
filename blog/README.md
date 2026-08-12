@@ -64,3 +64,18 @@ hero_image_prompt: "画像生成プロンプト"
 | テクニカルライター | 記事本文の執筆・構造化・読者向け表現 |
 | エデュケーター | 方法論の正確性検証・読者への教育的価値の担保 |
 | ユーザー・運用サポート | ペルソナ検証・読者視点でのレビュー |
+
+## note の API 運用（AKEBONO Office 連携）
+
+note への投稿・反応収集・フィードバックは AKEBONO Office API（`api/src/routes/note-media.ts`・
+`/v1/media/note/*`）で PDCA を回せる（implementation-status.md §76）:
+
+1. **原稿**: 本ディレクトリの記事、または AI 記事生成（`fromGeneratedId`）から `POST /v1/media/note/posts` で原稿化
+2. **下書きプッシュ**: `POST /v1/media/note/posts/{id}/push` — note の下書きに送信される。
+   **公開は必ず note の管理画面で人間が行う**（自動公開はしない設計）
+3. **反応収集**: `POST /v1/media/note/sync`（または日次ジョブ `/jobs/note-sync`）でスキ・コメントを日次スナップショット化
+4. **フィードバック**: `POST /v1/media/note/feedback/generate` — AI が「何が刺さったか」と次のテーマ案（nextTopics）を生成
+5. **次の記事**: フィードバックのインサイト id を記事生成の `fromInsightId` に渡して次の記事を生成 → 1 に戻る
+
+> **注意:** note に公式 API はなく非公式エンドポイントを利用している（仕様変更リスク・詳細は
+> `api/src/lib/note-api.ts` 冒頭）。連携設定（urlname・セッション Cookie）はメディア設定から管理者が登録する。

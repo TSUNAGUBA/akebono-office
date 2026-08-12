@@ -32,7 +32,7 @@ src/
 ├── db/              # プール・マイグレーションランナー
 ├── domain/          # 純粋な業務ロジック（休暇 FIFO・勤怠集計。shared/domain を利用）
 ├── masters/         # 汎用マスタ CRUD の台帳（zod スキーマ・テーブルマッピング・ガード）
-├── routes/          # エンドポイント（attendance / leave / reports / masters / configs / media = GA 連携 ほか）
+├── routes/          # エンドポイント（attendance / leave / reports / masters / configs / media = GA 連携 / note-media = note 連携 ほか）
 └── lib/             # エラー（AKO コード）・id 生成・監査ログ
 test/
 ├── unit/            # ドメインロジックの単体テスト
