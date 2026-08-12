@@ -52,11 +52,12 @@ function onMarkAllRead(): void {
     title="通知"
     :description="`未読 ${unreadCount} 件${unreadOnly ? '（未読のみ表示中）' : ''}`"
     flush
+    fill
   >
     <template #actions>
       <NuxtLink to="/inbox" class="link text-xs font-semibold">すべて見る</NuxtLink>
     </template>
-    <div class="grid gap-2 px-3 pt-1">
+    <div class="grid shrink-0 gap-2 px-3 pt-1">
       <UiTabBar v-model="notifTab" :tabs="notifTabs" aria-label="通知カテゴリ" />
       <div class="flex items-center justify-between gap-2">
         <button
@@ -80,7 +81,8 @@ function onMarkAllRead(): void {
       :title="unreadOnly ? '未読の通知はありません' : '通知はありません'"
       :hint="unreadOnly ? '「未読のみ」を解除すると既読も表示されます' : undefined"
     />
-    <ul v-else class="divide-y divide-[var(--c-line)]">
+    <!-- 高さ上限を超えた分はここ（本文リスト）を内部スクロール（タブ・ヘッダーは固定） -->
+    <ul v-else class="min-h-0 flex-1 divide-y divide-[var(--c-line)] overflow-y-auto">
       <li v-for="n in recentNotifications" :key="n.id">
         <button
           type="button"

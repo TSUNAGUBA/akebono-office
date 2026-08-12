@@ -167,9 +167,16 @@ const shownSections = computed(() =>
         </div>
       </div>
 
-      <!-- 通知欄（side = PC〔lg+〕のみ右カラムに固定。モバイル/タブレットはベル/下部ナビ「通知」が導線） -->
-      <aside v-if="notifPlacement === 'side'" class="hidden lg:sticky lg:top-3 lg:block" aria-label="通知">
-        <OfficeDashboardNotifications />
+      <!-- 通知欄（side = PC〔lg+〕のみ右カラムに固定。モバイル/タブレットはベル/下部ナビ「通知」が導線）。
+           sticky はアプリヘッダー（sticky top-0・高さ --header-h）の下へ配置し背後に潜り込ませない。
+           高さ上限 = ヘッダーを除いた有効高さいっぱい。超過分はカード内（通知リスト）で内部スクロール -->
+      <aside
+        v-if="notifPlacement === 'side'"
+        class="hidden lg:sticky lg:flex lg:flex-col"
+        :style="{ top: 'calc(var(--header-h) + 0.75rem)', maxHeight: 'calc(100dvh - var(--header-h) - 1.5rem)' }"
+        aria-label="通知"
+      >
+        <OfficeDashboardNotifications class="min-h-0" />
       </aside>
     </div>
 

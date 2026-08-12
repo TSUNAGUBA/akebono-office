@@ -326,6 +326,10 @@ graph TD
   showAkebono が false（focus 等）のときは業態カードを通常メニューへ混ぜ未割当は「その他」へ。akebonoAccessible が
   false のときは業態カードをどこにも出さない。既存のカテゴリチップ絞り込み・外部リンク合流・通知の未読フィルタ/
   カテゴリタブは不変。通知欄は `OfficeDashboardNotifications` に分離し配置を切替可能にした。
+- **通知欄 side の追従（フィードバック 2026-08-11）**: side 配置の通知カードは sticky をアプリヘッダー（`sticky top-0`・
+  高さ `--header-h`）の**下**に配置し背後に潜り込ませない（`top: calc(var(--header-h) + 0.75rem)`）。高さ上限は
+  ヘッダーを除いた有効高さいっぱい（`max-height: calc(100dvh - var(--header-h) - 1.5rem)`）とし、超過分はカード内の
+  通知リスト（`UiSectionCard` の `fill`）を内部スクロール（タブ・ヘッダーは固定）。bottom 配置は高さ非制約のため従来どおり。
 
 ### 5.7 改善要望（F-42・オペレーター指示 2026-08-11）
 
