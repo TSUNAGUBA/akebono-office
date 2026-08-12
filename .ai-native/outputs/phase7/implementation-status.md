@@ -2642,3 +2642,22 @@
   screen-design（5.x /settings 外部リンクのアイコンピッカー）・CONVENTIONS（UiIconGlyph・SettingsIconPicker・UiCardMenu）・本節を更新。
 - [x] **独立レビュー（原則9）**: correctness バグなし。minor 3 件を反映 = ①保存の多重送信ガード（`linkSaving`・API モードの重複 POST 防止・segments と同型）／
   ②設定一覧の行アイコンを装飾扱い（alt 空・隣接タイトルがラベル = 二重読み上げ回避）／③プリセットグリッドに一覧外の現在アイコンを末尾追加（旧・文字列指定の下位互換・原則7）。
+
+## 75. カンバンカードのはみ出し修正（改善要望・オペレーター指示 2026-08-12）の完了条件（Definition of Done）
+
+改善要望（`/improvements`）のカンバンで、各改修案件カードがステータス枠（列）をはみ出す事象の修正（mockup フロントのみ・API/DB/shared 不変）。
+
+- [x] **原因**: `ImprovementsKanban` のカード（`<article>`）は grid アイテムで既定 `min-width: auto`。タイトル（`truncate` = nowrap）の
+  min-content が列幅（`w-64` = 256px）を超えると、カードが列幅より広がり枠外へはみ出していた（truncate が効かない典型パターン）。
+- [x] **修正（`components/improvements/Kanban.vue`・CSS/テンプレートのみ）**:
+  - カード `<article>` に `min-w-0` を付与 → grid トラック幅に収まり、タイトルの `truncate` が有効化。
+  - 対象ページ名の span（`max-w-full truncate`）に `min-w-0` を追加 → nowrap の長い「名称（パス）」も確実に省略。
+  - 列 `<section>` に `overflow-hidden` を付与 → 角丸枠にクリップし、万一の残余はみ出しも枠内に収める（多重防御）。
+- [x] **表示の担保**: 長いタイトル・対象ページ名は `truncate` で省略し全文は `title` 属性（ホバーで確認）。予定チップ（日付 = `fmtDate` は短い）・
+  遷移ボタン（`flex-wrap`）は従来どおり。フィードバック = カード/ボタンの hover・focus-within 状態は不変。
+- [x] **レスポンシブ（原則8）**: 列は `w-64` 固定で親が横スクロール（既存）。375px でもカードは列内に収まり崩れない。
+- [x] **下位互換（原則7）**: 表示（CSS）のみの変更。データ・型・API・ロジック不変。データ移行パッチ不要。
+- [x] **テスト**: ロジック追加がないため新規単体テストなし（純 CSS/テンプレート修正・mockup の vitest は DOM レイアウトを持たず
+  オーバーフローを判定できない）。回帰は `improvement`/`gantt` の既存テスト green + build/typecheck で担保。
+- [x] **検証（実測値）**: mockup `npx nuxi typecheck` green・`npm test` **287 passed**・`npm run build` green。API は不変（`api/` 変更なし）。
+- [x] **ドキュメント整合（原則5）**: screen-design（5.7 カンバンのカード折返し/クリップ）・本節を更新。
