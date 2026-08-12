@@ -23,11 +23,17 @@ const SCOPE_LABELS: Record<string, string> = {
   user: '自分の設定', tenant: '全社設定', default: 'デフォルト表示',
 }
 
-/** 編集モード: テンプレート選択 / セクション構成の手動編集（#25） */
-const mode = ref<'templates' | 'sections'>('templates')
+/**
+ * 編集モード: テンプレート選択 / セクション構成の手動編集（#25）/ アプリヘッダー（クイックアクセス）/
+ * 通知タブ（何を表示するか）。ヘッダー・通知の設定はヘッダーから撤去しここへ集約した（オペレーター指示 2026-08-12）。
+ */
+type LayoutMode = 'templates' | 'sections' | 'header' | 'notifications'
+const mode = ref<LayoutMode>('templates')
 const modeChips = [
   { value: 'templates', label: 'テンプレート' },
   { value: 'sections', label: 'セクションを編集' },
+  { value: 'header', label: 'アプリヘッダー' },
+  { value: 'notifications', label: '通知タブ' },
 ]
 
 /** 適用先スコープ（既定は自分。管理者のみ全社を選べる） */
@@ -91,11 +97,17 @@ async function onReset(): Promise<void> {
       :model-value="mode"
       :options="modeChips"
       aria-label="レイアウト編集モード"
-      @update:model-value="(v: string) => { mode = v as 'templates' | 'sections' }"
+      @update:model-value="(v: string) => { mode = v as LayoutMode }"
     />
 
     <!-- セクション構成の手動編集（3 階層。#25） -->
     <OfficeDashboardSectionEditor v-if="mode === 'sections'" />
+
+    <!-- アプリヘッダー（クイックアクセス）の設定。ヘッダーから撤去しここへ集約（2026-08-12） -->
+    <OfficeHeaderQuickAccessPicker v-else-if="mode === 'header'" />
+
+    <!-- 通知タブ（何を表示するか）の設定 -->
+    <OfficeNotificationTabsPicker v-else-if="mode === 'notifications'" />
 
     <template v-else>
     <!-- 現在有効な層 -->

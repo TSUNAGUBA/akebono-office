@@ -28,8 +28,26 @@ describe('notificationCategoryOf', () => {
     expect(notificationCategoryOf(n({ kind: 'approval', link: '' }))).toBe('approval')
   })
 
-  it('承認・稟議・エスカ以外は other', () => {
-    expect(notificationCategoryOf(n({ kind: 'comment', link: '/reports' }))).toBe('other')
+  it('リンク先が /reports の通知は日報（report）', () => {
+    expect(notificationCategoryOf(n({ kind: 'comment', link: '/reports' }))).toBe('report')
+    expect(notificationCategoryOf(n({ kind: 'reminder', link: '/reports?tab=weekly' }))).toBe('report')
+  })
+
+  it('リンク先が /customer-log の通知は顧客ログ（customer-log）', () => {
+    expect(notificationCategoryOf(n({ kind: 'comment', link: '/customer-log' }))).toBe('customer-log')
+    expect(notificationCategoryOf(n({ kind: 'comment', link: '/customer-log/c-1' }))).toBe('customer-log')
+  })
+
+  it('リンク先が /minutes の通知は議事録（minutes）', () => {
+    expect(notificationCategoryOf(n({ kind: 'reminder', link: '/minutes' }))).toBe('minutes')
+  })
+
+  it('リンク基準のカテゴリは approval 種別より優先する（日報の承認通知は report）', () => {
+    expect(notificationCategoryOf(n({ kind: 'approval', link: '/reports' }))).toBe('report')
+  })
+
+  it('上記いずれにも該当しないものは other', () => {
+    expect(notificationCategoryOf(n({ kind: 'ai_report', link: '/ai-company' }))).toBe('other')
     expect(notificationCategoryOf(n({ kind: 'poipoi', link: '/poipoi' }))).toBe('other')
   })
 })

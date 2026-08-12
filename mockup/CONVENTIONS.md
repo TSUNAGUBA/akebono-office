@@ -81,8 +81,15 @@ const dl = useDashboardLayout()   // effectiveLayout / resolvedScope / activeTem
 // ヘッダーのクイックアクセス（ヘッダーカスタマイズ = 全ページ共通）。解決順 = ユーザー > 組織 > 既定（ユーザー優先）。
 // 純ロジック（候補カタログ・パース・解決）の SoT = utils/header-quick-access.ts。永続化はデュアルモード
 // （ユーザー層=/v1/me pref 'headerQuickAccess'（mock=localStorage 'ako.header-quick-access.v1'）/ 組織層=configs 'header-quick-access'）。
-// 新 API ルート/マイグレーションは不要（既存の汎用 key/value を利用）。設定 UI = OfficeHeaderQuickAccessPicker（scope=自分/全社）
+// 新 API ルート/マイグレーションは不要（既存の汎用 key/value を利用）。設定 UI = OfficeHeaderQuickAccessPicker（scope=自分/全社）。
+// 設定導線はダッシュボード → レイアウト → 「アプリヘッダー」タブ（2026-08-12。従来ヘッダー「表示」ボタンは撤去）。
+// 注意: parse は配列（API の JSONB）と JSON 文字列（mock/localStorage）の両方を受理する（片方限定にすると API モードで反映されない実障害）。
 const hqa = useHeaderQuickAccess()  // effectiveIds / resolvedScope / userIds / tenantIds / isAdmin / persist(ids, scope) / reset(scope)（取消・原則9.5。tenant は管理者のみ）
+
+// 通知タブ（通知欄・/inbox に出すカテゴリタブの設定）。解決順 = ユーザー > 組織 > 既定（既定 = 全カテゴリ）。「すべて」は常時表示。
+// 純ロジック SoT = utils/notification-tabs.ts（カタログ・parse〔配列/文字列両対応〕・resolve）。永続化 = ユーザー層 /v1/me pref 'notificationTabs'
+// （mock=localStorage 'ako.notification-tabs.v1'）/ 組織層 configs 'notification-tabs'。設定 UI = OfficeNotificationTabsPicker（レイアウト → 「通知タブ」タブ）。
+const nt = useNotificationTabs()  // effectiveIds / resolvedScope / userIds / tenantIds / isAdmin / persist(ids, scope) / reset(scope)（取消・原則9.5。tenant は管理者のみ）
 
 // カードメニュー写像（ダッシュボードのメニューカテゴリ配置用。基本メニュー MENU_CARDS.dashboard と同じ MenuCard 形へ）
 const { externalCards } = useExternalLinkCards()  // F-13-3 の外部リンク → MenuCard（id=`el-*`・href で別タブ）
@@ -180,10 +187,11 @@ const imp = useImprovements()  // submit / refresh / activeItems・archivedItems
 | `SettingsMenuCategoryEditor` | props なし。メニューカテゴリのカスタマイズ（F-13-8。エリア切替 + カテゴリ CRUD/並び替え/カード割当 + 既定に戻す。バッチ7h。編集 UI は `UiMenuSectionEditor` 共用・ダッシュボードタブは外部リンク/AKEBONO も割当候補 + 3 階層はレイアウトへ案内） |
 | `UiMenuSectionEditor` | modelValue(MenuCategoryDef[]) / cardOptions / emptyHint。メニューセクション編集の共通 UI（追加・削除・改名・並び替え・カード割当 = UiMultiCombobox）。保存/リセット/スコープは呼び出し側（#25。原則3。MenuCategoryEditor と DashboardSectionEditor が共用） |
 | `SettingsNotifyRecipientsEditor` | modelValue(NotifyRecipientTarget[])。通知の宛先を「ロール/役職/個人」で複数指定（ApproverSteps と同 3 種・順序/モードなし）。各行に解決人数プレビュー・空許容。設定「ぽいぽいポストの通知先」で使用（F-12-5・F-13-10・2026-08-03。解決 = 共有 resolveNotifyRecipientIds） |
-| `OfficeDashboardNotifications` | props なし。ダッシュボードの通知欄（エスカレーション/承認依頼/稟議タブ + 未読のみフィルタ・直近 8 件）。index.vue から分離し通知位置（side/bottom）で配置切替可能に（2026-08-03） |
+| `OfficeDashboardNotifications` | props なし。ダッシュボードの通知欄（「すべて」+ 設定されたカテゴリタブ〔エスカレーション/承認依頼/稟議/日報/顧客ログ/議事録〕 + 未読のみフィルタ・直近 8 件）。表示タブは useNotificationTabs 駆動。index.vue から分離し通知位置（side/bottom）で配置切替可能に（2026-08-03 / タブ設定化 2026-08-12） |
 | `OfficeDashboardLayoutPreview` | layout(DashboardLayout)。レイアウトの軽量プレビュー（実データ不要。セクション見出し + カード数チップ + 通知位置図示 + AKEBONO/密度反映。F-13-9） |
-| `OfficeDashboardLayoutPicker` | props なし。ダッシュボードのレイアウト選択。「テンプレート」/「セクションを編集」タブ切替 + 適用スコープ〔自分/全社〕+ 現在有効層表示 + 解除。ヘッダの「レイアウト」ボタン → UiModal 内で使用（F-13-9・2026-08-03） |
-| `OfficeHeaderQuickAccessPicker` | props なし。ヘッダーのクイックアクセス設定（ヘッダーカスタマイズ = 全ページ共通）。候補カタログから表示メニューを選択 + 適用スコープ〔自分/全社〕+ 既定に戻す。純ロジック SoT = utils/header-quick-access.ts・解決/保存 = useHeaderQuickAccess。layouts/default.vue のヘッダー「表示」ボタン → UiModal 内で使用 |
+| `OfficeDashboardLayoutPicker` | props なし。ダッシュボードのレイアウト選択。「テンプレート」/「セクションを編集」/「アプリヘッダー」/「通知タブ」タブ切替 + 適用スコープ〔自分/全社〕+ 現在有効層表示 + 解除。ヘッダの「レイアウト」ボタン → UiModal 内で使用（F-13-9・2026-08-03。アプリヘッダー/通知タブ 追加 2026-08-12） |
+| `OfficeHeaderQuickAccessPicker` | props なし。ヘッダーのクイックアクセス設定（ヘッダーカスタマイズ = 全ページ共通）。候補カタログから表示メニューを選択 + 適用スコープ〔自分/全社〕+ 既定に戻す。純ロジック SoT = utils/header-quick-access.ts・解決/保存 = useHeaderQuickAccess。**レイアウトモーダルの「アプリヘッダー」タブ内で使用**（2026-08-12。従来のヘッダー「表示」ボタンは撤去） |
+| `OfficeNotificationTabsPicker` | props なし。通知タブ（通知欄・/inbox に出すカテゴリタブ）の設定。カタログから表示タブを選択 + 適用スコープ〔自分/全社〕+ 既定に戻す。純ロジック SoT = utils/notification-tabs.ts・解決/保存 = useNotificationTabs。レイアウトモーダルの「通知タブ」タブ内で使用（2026-08-12） |
 | `OfficeDashboardSectionEditor` | props なし。ダッシュボードのセクション構成を 3 階層（自分/全社/アプリ既定）で編集・保存（saveSections）。割当候補 = 基本メニュー + 外部リンク + AKEBONO 業態アプリ。UiMenuSectionEditor を利用（#25・2026-08-03） |
 | `MediaChannelBar` | props なし。メディア分析の対象チャンネル切替バー（現在チャンネル + 連携業態バッジ + GA 連携バッジ + 設定導線）。全メディア画面の先頭に置く（F-40。2026-08-03 で MediaSegmentBar から改称・チャンネル化） |
 | `MediaGaConnect` | channelId?（未指定=現在チャンネル）, variant（'gate'/'bar'）。Google Analytics 連携ゲート（モック = 擬似 OAuth / API = Google OAuth 2.0 リダイレクト + 復帰クエリ `?ga=` 処理 + GA4 プロパティ選択モーダル。needsProperty の中間状態も再開可）。連携済みは状態バー + 解除（F-40。CalendarConnectGate と同型） |

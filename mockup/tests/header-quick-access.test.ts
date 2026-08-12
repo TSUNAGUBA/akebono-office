@@ -25,6 +25,20 @@ describe('parseQuickAccessIds', () => {
   it('空配列は「クイックアクセスを出さない」設定として尊重する（null ではない）', () => {
     expect(parseQuickAccessIds('[]')).toEqual([])
   })
+
+  it('API モード（JSONB）でデシリアライズ済みの配列をそのまま受理する（実障害の回帰）', () => {
+    // /v1/me の prefs は JSONB のため、文字列ではなく配列が渡る。
+    // 文字列限定だと null 扱いになり「ヘッダーの表示設定が反映されない」不具合になっていた。
+    expect(parseQuickAccessIds(['timecard', 'reports', 'timecard', '__nope__']))
+      .toEqual(['timecard', 'reports'])
+    expect(parseQuickAccessIds([])).toEqual([])
+  })
+
+  it('配列以外・null・undefined は null', () => {
+    expect(parseQuickAccessIds(null)).toBeNull()
+    expect(parseQuickAccessIds(undefined)).toBeNull()
+    expect(parseQuickAccessIds({ a: 1 })).toBeNull()
+  })
 })
 
 describe('resolveQuickAccessIds', () => {
