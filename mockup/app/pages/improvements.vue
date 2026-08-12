@@ -126,20 +126,26 @@ function onStatusClick(to: ImprovementStatus): void {
   else { rejectMode.value = false; void changeStatus(to) }
 }
 async function confirmReject(): Promise<void> {
-  if (!selected.value) return
-  const reason = rejectReason.value.trim()
-  // 任意: 理由があれば「対応しない理由」メモとして先に残す（ステータス変更前に記録）
-  if (reason) {
-    const nr = await imp.addNote(selected.value.id, reason, 'reject')
-    if (!nr.ok) { toast.show(`${nr.error.code}: ${nr.error.message}`, 'crit'); return }
+  // 二重送信ガード（rejectBusy）: 連打や addNote 成功→setStatus 失敗後の再クリックで reject メモが重複登録されるのを防ぐ
+  if (!selected.value || rejectBusy.value) return
+  rejectBusy.value = true
+  try {
+    const reason = rejectReason.value.trim()
+    // 任意: 理由があれば「対応しない理由」メモとして先に残す（ステータス変更前に記録）
+    if (reason) {
+      const nr = await imp.addNote(selected.value.id, reason, 'reject')
+      if (!nr.ok) { toast.show(`${nr.error.code}: ${nr.error.message}`, 'crit'); return }
+    }
+    const res = await imp.setStatus(selected.value.id, 'rejected')
+    if (res.ok) {
+      toast.show(reason ? '「対応しない」にしました（理由をメモに記録）' : '「対応しない」にしました', 'ok')
+      rejectMode.value = false
+      rejectReason.value = ''
+    }
+    else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
+  } finally {
+    rejectBusy.value = false
   }
-  const res = await imp.setStatus(selected.value.id, 'rejected')
-  if (res.ok) {
-    toast.show(reason ? '「対応しない」にしました（理由をメモに記録）' : '「対応しない」にしました', 'ok')
-    rejectMode.value = false
-    rejectReason.value = ''
-  }
-  else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
 }
 
 // ---------- 時系列メモ ----------
@@ -148,6 +154,7 @@ const noteInput = ref('')
 const noteBusy = ref(false)
 const rejectMode = ref(false)
 const rejectReason = ref('')
+const rejectBusy = ref(false)
 
 async function addNote(): Promise<void> {
   if (!selected.value || !noteInput.value.trim() || noteBusy.value) return
@@ -393,8 +400,8 @@ async function copyPrompt(): Promise<void> {
               />
             </UiFormField>
             <div class="flex justify-end gap-2">
-              <button type="button" class="btn btn-ghost btn-sm" @click="rejectMode = false">キャンセル</button>
-              <button type="button" class="btn btn-primary btn-sm" @click="confirmReject">「対応しない」にする</button>
+              <button type="button" class="btn btn-ghost btn-sm" :disabled="rejectBusy" @click="rejectMode = false">キャンセル</button>
+              <button type="button" class="btn btn-primary btn-sm" :disabled="rejectBusy" @click="confirmReject">「対応しない」にする</button>
             </div>
           </div>
         </div>
