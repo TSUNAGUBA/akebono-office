@@ -210,7 +210,7 @@ async function submitRespond(): Promise<void> {
 
     <UiTabBar v-model="tab" :tabs="tabs" class="mb-3" />
 
-    <!-- ================= 通知タブ（通知 / 承認依頼 / 稟議 のカテゴリ別） ================= -->
+    <!-- ================= 通知（「すべて」+ 設定されたカテゴリタブ。設定 = レイアウト → 通知タブ） ================= -->
     <div v-if="tab !== 'escalations'" class="grid gap-3">
       <UiSectionCard title="自分宛ての通知" :description="`未読 ${unreadCount} 件${unreadOnly ? '（未読のみ表示中）' : ''}`" flush>
         <template #actions>

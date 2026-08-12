@@ -97,7 +97,7 @@ async function onReset(): Promise<void> {
       :model-value="mode"
       :options="modeChips"
       aria-label="レイアウト編集モード"
-      @update:model-value="(v: string) => { mode = v as 'templates' | 'sections' }"
+      @update:model-value="(v: string) => { mode = v as LayoutMode }"
     />
 
     <!-- セクション構成の手動編集（3 階層。#25） -->
