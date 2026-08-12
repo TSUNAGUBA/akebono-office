@@ -10,9 +10,11 @@ import type { TabItem, Tone } from '~/types/ui'
 import { fmtDateTime, fmtPct } from '~/utils/format'
 import { ESCALATION_RESOLUTION_LABELS, KNOWLEDGE_DOMAIN_LABELS, NOTIFICATION_KIND_LABELS } from '~/utils/labels'
 import { type NotificationCategory, notificationCategoryOf } from '~/utils/notification-category'
+import { notificationTabOf } from '~/utils/notification-tabs'
 
 const { isAdmin } = useCurrentUser()
 const { mine, unreadCount, markRead, markAllRead } = useNotifications()
+const { effectiveIds: tabIds } = useNotificationTabs()
 const { open, resolved, openCount, refluxRate, resolve, byId, refresh: refreshEscalations } = useEscalations()
 
 // サーバー側で起票されたエスカレーション（日報提出・36協定等）を表示時に最新化する
@@ -28,14 +30,15 @@ const relationTypes = tbl('relationTypes')
 const companyRelations = tbl('companyRelations')
 const projects = tbl('projects')
 
-// ---------- タブ（通知はカテゴリ別に分割。承認依頼・稟議タブを追加。オペレーター指示） ----------
-const tab = ref('notifications')
+// ---------- タブ（通知はカテゴリ別に分割。表示するカテゴリタブは設定駆動。オペレーター指示 2026-08-12） ----------
+// カテゴリタブ（承認依頼・稟議・日報・顧客ログ・議事録・エスカレーション）は「ダッシュボード → レイアウト → 通知タブ」
+// の設定（ユーザー > 全社 > 既定）に従う。「すべて」は常に先頭固定。管理者の「エスカレーション対応」は別枠（管理ビュー）。
+const tab = ref('all')
 
-/** タブ → 通知カテゴリの絞り込み（'notifications' = すべて = 絞り込みなし） */
+/** タブ → 通知カテゴリの絞り込み（'all' = 絞り込みなし。'escalations' は管理ビューでカテゴリ絞り込み対象外） */
 function tabCategory(t: string): NotificationCategory | null {
-  if (t === 'approval') return 'approval'
-  if (t === 'workflow') return 'workflow'
-  return null
+  if (t === 'all' || t === 'escalations') return null
+  return t as NotificationCategory
 }
 
 const unreadOfCategory = (c: NotificationCategory): number =>
@@ -43,17 +46,28 @@ const unreadOfCategory = (c: NotificationCategory): number =>
 
 const tabs = computed<TabItem[]>(() => {
   const base: TabItem[] = [
-    { key: 'notifications', label: '通知', badge: unreadCount.value },
-    { key: 'approval', label: '承認依頼', badge: unreadOfCategory('approval') },
-    { key: 'workflow', label: '稟議', badge: unreadOfCategory('workflow') },
+    { key: 'all', label: 'すべて', badge: unreadCount.value },
+    ...tabIds.value.map(id => ({
+      key: id,
+      label: notificationTabOf(id)?.label ?? id,
+      badge: unreadOfCategory(id as NotificationCategory),
+    })),
   ]
-  if (isAdmin.value) base.push({ key: 'escalations', label: 'エスカレーション', badge: openCount.value })
+  // 管理者のみ: エスカレーション「対応」センター（open/解決の管理）。カテゴリ絞り込みの「エスカレーション」タブとは別物のため区別する
+  if (isAdmin.value) base.push({ key: 'escalations', label: 'エスカレーション対応', badge: openCount.value })
   return base
 })
 
 // デモユーザー切替で管理者でなくなったらタブを戻す
 watch(isAdmin, (v) => {
-  if (!v && tab.value === 'escalations') tab.value = 'notifications'
+  if (!v && tab.value === 'escalations') tab.value = 'all'
+})
+
+// 選択中カテゴリタブが設定変更で消えたら「すべて」へ戻す（管理ビュー・すべて は対象外）
+watchEffect(() => {
+  if (tab.value !== 'all' && tab.value !== 'escalations' && !tabs.value.some(t => t.key === tab.value)) {
+    tab.value = 'all'
+  }
 })
 
 // ---------- 通知タブ ----------

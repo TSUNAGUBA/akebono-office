@@ -2535,3 +2535,34 @@
   （予定期間の登録・検証 + 0058 適用含む）。mockup `npx nuxi typecheck` green・`npm test` **247 passed**（`gantt` 5 含む）・`npm run build` green。
 - [x] **ドキュメント整合（原則5）**: functional-requirements（F-42-7〜9）・data-design（plan列）・api-design（AKO-REQ-007・編集）・
   screen-design（5.7 カンバン/ガント）・本節・CONVENTIONS（UI 在庫 = ImprovementsKanban/ImprovementsGantt）を更新。
+
+## 71. アプリヘッダー設定の不具合修正＋設定のレイアウト集約＋通知タブの拡張・設定化（オペレーター指示 2026-08-12）の完了条件（Definition of Done）
+
+オペレーター報告 4 点への対応: (1) ヘッダーの表示設定（クイックアクセス）を変更しても反映されない不具合の修正、
+(2) アプリヘッダーの設定をヘッダーから撤去し、ダッシュボード導線のある「レイアウト」設定内へ集約、
+(3) 通知に「日報」「顧客ログ」「議事録」カテゴリを追加、(4) 通知に何を表示するか（カテゴリタブ）を設定可能に。
+
+- [x] **(1) 不具合修正（実障害）**: `parseQuickAccessIds`（`utils/header-quick-access.ts`）が **JSON 文字列のみ**を受理し、
+  API モードで `/v1/me` の prefs（JSONB）が**配列**で渡ると `null` 扱い → 解決がテナント/既定へフォールバックし、
+  ユーザーの表示設定が**反映されない**（在／セッション内・リロード後とも）。`parseDashboardLayout` と同じく
+  **配列（API）と JSON 文字列（mock/localStorage）の両方を受理**するよう修正。回帰テストを追加。
+- [x] **(2) 設定のレイアウト集約**: ヘッダー（`layouts/default.vue`）から「表示」ボタン（`SlidersHorizontal`）とクイックアクセス設定
+  モーダルを撤去（クイックアクセス項目自体の表示・打刻は不変）。ダッシュボードの「レイアウト」モーダル
+  （`OfficeDashboardLayoutPicker`）に **「アプリヘッダー」タブ**を追加し `OfficeHeaderQuickAccessPicker` をそこで開く。
+- [x] **(3) 通知カテゴリ追加**: `notification-category.ts` の `NotificationCategory` に `report`/`customer-log`/`minutes` を追加。
+  判定はリンク先（`/reports`・`/customer-log`・`/minutes` の先頭一致）。**リンク基準カテゴリ（workflow/report/customer-log/
+  minutes）は `kind='approval'` 判定より先**に評価（機能別分類を種別より優先）。デモ通知を 2 件追加（顧客ログ・議事録。inbox seed）。
+- [x] **(4) 通知タブの設定化**: 純ロジック `utils/notification-tabs.ts`（カタログ・`parse`〔配列/文字列両対応〕・`resolve`〔ユーザー>
+  テナント>既定〕）+ 合成 `useNotificationTabs`（pref `notificationTabs` / configs `notification-tabs`。既存 key/value 利用で
+  新 API・マイグレーション不要）+ ピッカー `OfficeNotificationTabsPicker`。レイアウトモーダルに **「通知タブ」タブ**を追加。
+  `OfficeDashboardNotifications` と `/inbox` のカテゴリタブを設定駆動に（「すべて」は常時先頭固定・選択中タブが設定変更で
+  消えたら「すべて」へ戻す防御）。**既定は全カテゴリ表示**（追加 3 種を含む）。/inbox の管理者タブは「エスカレーション対応」に改称
+  （カテゴリ絞り込みの「エスカレーション」タブと区別）。
+- [x] **3 階層・取消（原則9.5）**: ヘッダークイックアクセス・通知タブとも ユーザー > 全社（管理者のみ）> 既定 で解決し、各層に
+  「既定に戻す（解除）」を提供。全社設定は管理者のみ・非管理者は警告して no-op（非ブロッキング。原則4）。
+- [x] **下位互換（原則7）**: 追加のみで既存 I/F・データに破壊的変更なし。(1) は既存の壊れた挙動を修復する方向のみ（保存済み
+  ユーザー設定が**やっと反映される**ようになる。誤設定が残る場合はレイアウト → アプリヘッダーで解除可）。新規 pref/config キーは
+  未設定なら既定にフォールバック。データ移行パッチ不要。
+- [x] **検証（実測値）**: mockup `npx nuxi typecheck` green・`npm test` **280 passed**（`header-quick-access` 11 / `notification-tabs` 11 /
+  `notification-category` 8 を含む）・`npm run build` green。API は不変（`api/` 変更なし）。
+- [x] **ドキュメント整合（原則5）**: screen-design（トップ通知フィード・レイアウトモーダルのタブ・5.6 選択 UI・/inbox タブ）・本節を更新。

@@ -50,26 +50,31 @@ export function quickAccessPermPath(item: QuickAccessItem): string | undefined {
 export type QuickAccessScope = 'user' | 'tenant' | 'default'
 
 /**
- * 保存値（JSON 配列）をパース。カタログに存在する id のみ・重複除去。
- * 未設定・不正 JSON は null（= 設定なし）。空配列は「クイックアクセスを出さない」設定として尊重する。
+ * 保存値をパース。カタログに存在する id のみ・重複除去。
+ * 未設定・不正値は null（= 設定なし）。空配列は「クイックアクセスを出さない」設定として尊重する。
+ *
+ * 保存経路の二態を両方受理する（parseDashboardLayout と同じ流儀）:
+ *  - mock / localStorage: JSON 文字列（例 '["timecard"]'）
+ *  - API モード: /v1/me の prefs は JSONB のためデシリアライズ済みの配列がそのまま渡る
+ * 文字列だけを前提にすると、API モードで配列が来たときに null 扱いになり設定が反映されない（実障害）。
  */
 export function parseQuickAccessIds(raw: unknown): string[] | null {
-  if (typeof raw !== 'string' || !raw.trim()) return null
-  try {
-    const v: unknown = JSON.parse(raw)
-    if (!Array.isArray(v)) return null
-    const seen = new Set<string>()
-    const ids: string[] = []
-    for (const x of v) {
-      if (typeof x === 'string' && CATALOG_IDS.has(x) && !seen.has(x)) {
-        seen.add(x)
-        ids.push(x)
-      }
-    }
-    return ids
-  } catch {
-    return null
+  if (raw === null || raw === undefined) return null
+  let arr: unknown = raw
+  if (typeof raw === 'string') {
+    if (!raw.trim()) return null
+    try { arr = JSON.parse(raw) } catch { return null }
   }
+  if (!Array.isArray(arr)) return null
+  const seen = new Set<string>()
+  const ids: string[] = []
+  for (const x of arr) {
+    if (typeof x === 'string' && CATALOG_IDS.has(x) && !seen.has(x)) {
+      seen.add(x)
+      ids.push(x)
+    }
+  }
+  return ids
 }
 
 /** 解決: ユーザー > テナント > 既定 */

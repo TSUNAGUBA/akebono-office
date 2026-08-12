@@ -12,6 +12,8 @@ export const seedNotifications: AppNotification[] = [
   { id: 'nt-0003', memberId: 'm-03', kind: 'system', title: 'インシデント発生: UNDEUX Sales Suite', body: '分析画面の一部レポートで表示遅延が発生しています（調査中）', link: '/status/svc-02', read: false, at: `${today}T08:42:00+09:00` },
   { id: 'nt-0004', memberId: 'm-03', kind: 'comment', title: '三浦さんが日報にコメントしました', body: '「北都物流の KPI 定義、次回定例で共有をお願いします」', link: '/reports', read: false, at: `${addDays(today, -1)}T09:15:30+09:00` },
   { id: 'nt-0005', memberId: 'm-03', kind: 'escalation', title: 'エスカレーション: 過負荷', body: '小野寺さんの保有タスクが 8 件になりました（しきい値 7 件）', link: '/inbox', read: false, at: `${today}T09:05:00+09:00` },
+  { id: 'nt-0010', memberId: 'm-03', kind: 'comment', title: '顧客ログにメンションがありました', body: '「北都物流 定例（8/8）: 次回までに KPI 定義案を共有」— 三浦', link: '/customer-log', read: false, at: `${today}T11:20:00+09:00` },
+  { id: 'nt-0011', memberId: 'm-03', kind: 'reminder', title: '議事録の未確定項目があります', body: '経営会議（8/7）の決定事項 2 件が未記入です。確定をお願いします', link: '/minutes', read: false, at: `${addDays(today, -1)}T15:40:00+09:00` },
   // ---- m-03 宛て / 既読 ----
   { id: 'nt-0006', memberId: 'm-03', kind: 'ai_report', title: 'AI社員 ソラ の日次報告', body: '売上マートで前月比の異常値 2 件を検知し、明細をまとめました', link: '/ai-company', read: true, at: `${addDays(today, -1)}T17:30:00+09:00` },
   { id: 'nt-0007', memberId: 'm-03', kind: 'reminder', title: '週報の提出期限が近づいています', body: '今週の週報は金曜 18:00 までに提出してください', link: '/reports', read: true, at: `${addDays(today, -2)}T09:00:00+09:00` },

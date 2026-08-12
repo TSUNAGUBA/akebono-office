@@ -1,8 +1,9 @@
 <script setup lang="ts">
 /**
- * ダッシュボードの通知欄（F-01。エスカレーション / 承認依頼 / 稟議 のタブ分け + 未読のみフィルタ）。
+ * ダッシュボードの通知欄（F-01。「すべて」+ 設定されたカテゴリタブ + 未読のみフィルタ）。
  * index.vue から分離し、レイアウト設定（通知欄の位置 = side / bottom）で配置を切り替えられるようにした
- * （オペレーター指示 2026-08-03）。挙動は従来の index.vue の通知サイド欄と同一（未読フィルタ・8 件表示）。
+ * （オペレーター指示 2026-08-03）。表示するカテゴリタブ（エスカレーション/承認依頼/稟議/日報/顧客ログ/議事録）は
+ * useNotificationTabs 駆動（ユーザー > 全社 > 既定。設定はレイアウト → 通知タブ。2026-08-12）。「すべて」は常時先頭固定。
  */
 import { CheckCheck } from 'lucide-vue-next'
 import type { AppNotification } from '~/types/domain'
@@ -10,20 +11,33 @@ import type { TabItem } from '~/types/ui'
 import { fmtDateTime } from '~/utils/format'
 import { NOTIFICATION_KIND_LABELS } from '~/utils/labels'
 import { type NotificationCategory, notificationCategoryOf as categoryOf } from '~/utils/notification-category'
+import { notificationTabOf } from '~/utils/notification-tabs'
 
 const { mine, unreadCount, markRead, markAllRead } = useNotifications()
+const { effectiveIds: tabIds } = useNotificationTabs()
 const { show } = useToast()
 
+// 表示するカテゴリタブは設定駆動（ユーザー > 全社 > 既定。ダッシュボード → レイアウト → 通知タブ で設定）。
+// 「すべて」は常に先頭固定。
 const notifTab = ref('all')
 const notifTabs = computed<TabItem[]>(() => {
   const unreadOf = (c: NotificationCategory): number =>
     mine.value.filter(n => !n.read && categoryOf(n) === c).length
   return [
     { key: 'all', label: 'すべて', badge: unreadCount.value },
-    { key: 'escalation', label: 'エスカレーション', badge: unreadOf('escalation') },
-    { key: 'approval', label: '承認依頼', badge: unreadOf('approval') },
-    { key: 'workflow', label: '稟議', badge: unreadOf('workflow') },
+    ...tabIds.value.map(id => ({
+      key: id,
+      label: notificationTabOf(id)?.label ?? id,
+      badge: unreadOf(id as NotificationCategory),
+    })),
   ]
+})
+
+// 選択中タブが設定変更で消えた場合は「すべて」へ戻す（index.vue のカテゴリチップと同じ防御）
+watchEffect(() => {
+  if (notifTab.value !== 'all' && !notifTabs.value.some(t => t.key === notifTab.value)) {
+    notifTab.value = 'all'
+  }
 })
 
 /** 未読のみ表示（既定 = 未読のみに統一。オペレーター指示。解除で既読も表示できる） */

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import * as icons from 'lucide-vue-next'
-import { ArrowLeft, Bell, ChevronDown, Layers, Link2, LogOut, SlidersHorizontal, Sunrise, UserCog } from 'lucide-vue-next'
+import { ArrowLeft, Bell, ChevronDown, Layers, Link2, LogOut, Sunrise, UserCog } from 'lucide-vue-next'
 import { signOutFirebase } from '~/utils/firebase-auth'
 import { EMPLOYMENT_TYPE_LABELS } from '~/utils/labels'
 import { INDUSTRY_TYPE_LABELS } from '~/utils/akebono'
@@ -46,8 +46,6 @@ async function logout(): Promise<void> {
 const userMenuOpen = ref(false)
 /** タイムカードモーダル（ヘッダーからどの画面でも打刻できる） */
 const punchModalOpen = ref(false)
-/** ヘッダーのクイックアクセス設定モーダル（ヘッダーカスタマイズ） */
-const quickAccessOpen = ref(false)
 
 // モーダル内のリンク（勤怠管理へ等）で遷移したら閉じる（開いたまま画面を覆わない）
 watch(() => route.path, () => {
@@ -55,7 +53,6 @@ watch(() => route.path, () => {
   userMenuOpen.value = false
   relatedOpen.value = false
   segmentMenuOpen.value = false
-  quickAccessOpen.value = false
 })
 
 // ページ間導線（バッチ7h）: 親ページへ戻る + 関連ページ・設定（nav-map.ts が SoT）
@@ -223,7 +220,7 @@ function onSwitchUser(id: string): void {
 
         <!-- クイックアクセス（ヘッダーカスタマイズ。ユーザー > 組織 > 既定）。
              タイムカード等の打刻アクションは従来どおり全幅表示・ページ導線は PC のみ（モバイル過密回避）。
-             「タイムカード」はカスタマイズ（表示）ボタンの左に並ぶ（オペレーター指示） -->
+             設定 UI はヘッダーから撤去し、ダッシュボード → レイアウト → アプリヘッダー に集約（2026-08-12） -->
         <template v-for="q in quickAccessItems" :key="q.id">
           <button
             v-if="q.action === 'punch'"
@@ -243,17 +240,6 @@ function onSwitchUser(id: string): void {
             <span class="hidden lg:inline">{{ q.label }}</span>
           </NuxtLink>
         </template>
-
-        <!-- クイックアクセスのカスタマイズ（PC のみ・全ページ共通） -->
-        <button
-          type="button"
-          class="btn btn-ghost btn-sm hidden md:inline-flex"
-          aria-label="ヘッダーのクイックアクセスを設定"
-          @click="quickAccessOpen = true"
-        >
-          <SlidersHorizontal class="h-4 w-4" aria-hidden="true" />
-          <span class="hidden lg:inline">表示</span>
-        </button>
 
         <NuxtLink v-if="canPath('/inbox')" to="/inbox" class="btn btn-ghost btn-sm relative" aria-label="通知">
           <Bell class="h-4 w-4" />
@@ -365,11 +351,6 @@ function onSwitchUser(id: string): void {
     <!-- タイムカードモーダル（打刻カードをそのまま表示・操作） -->
     <UiModal :open="punchModalOpen" title="タイムカード" @close="punchModalOpen = false">
       <WidgetsPunchClock flat />
-    </UiModal>
-
-    <!-- ヘッダーのクイックアクセス設定（ヘッダーカスタマイズ。全ページ共通） -->
-    <UiModal :open="quickAccessOpen" title="ヘッダーのクイックアクセス" width="520px" @close="quickAccessOpen = false">
-      <OfficeHeaderQuickAccessPicker />
     </UiModal>
 
     <UiToastHost />
