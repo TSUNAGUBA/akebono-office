@@ -16,7 +16,7 @@ import type {
 import type { WeeklyInsightRecord } from '../../../../shared/domain/weekly-insight'
 import type { MediaInsightRecord } from '../../../../shared/domain/media-insight'
 import type { DashboardInsightRecord } from '../../../../shared/domain/portfolio-insight'
-import type { ImprovementItem, ImprovementRequest } from '../../../../shared/domain/improvement'
+import type { ImprovementItem, ImprovementNote, ImprovementRequest } from '../../../../shared/domain/improvement'
 import type {
   AkebonoAppConfig, BusinessSegment, ConsignmentTerm, ImportMapping, ImportRun, ImportSource,
   InboundPlan, InboundResult, InventoryTransaction, Invoice, ItemSetting, OutboundPlan,
@@ -151,9 +151,10 @@ export interface MockDbShape {
    * セグメント別/会社全体の「サマリー + AI レポート + AI インサイト」を保持する（F-41）。
    */
   dashboardInsights: DashboardInsightRecord[]
-  // ---- 改善要望（F-42）。生要望（SoT・追記系）+ AI 集約の改修単位 ----
+  // ---- 改善要望（F-42）。生要望（SoT・追記系）+ AI 集約の改修単位 + 時系列メモ ----
   improvementRequests: ImprovementRequest[]
   improvementItems: ImprovementItem[]
+  improvementNotes: ImprovementNote[]
 }
 
 export function buildSeed(): MockDbShape {
@@ -284,5 +285,6 @@ export function buildSeed(): MockDbShape {
     // ---- 改善要望（F-42） ----
     improvementRequests: misc.seedImprovementRequests, // デモの生要望（集約済み + 未集約）
     improvementItems: misc.seedImprovementItems, // 改修単位デモ（カンバン/ガント初期表示。対応予定期間あり）
+    improvementNotes: misc.seedImprovementNotes, // 改修単位の時系列メモ（デモ）
   }
 }

@@ -24,14 +24,17 @@ import {
   heuristicClusterRequests,
   IMPROVEMENT_BODY_CAP,
   IMPROVEMENT_DETAIL_CAP,
+  IMPROVEMENT_NOTE_CAP,
   IMPROVEMENT_PAGE_LABEL_CAP,
   IMPROVEMENT_PAGE_PATH_CAP,
   IMPROVEMENT_STATUSES,
   IMPROVEMENT_SUMMARY_CAP,
   IMPROVEMENT_TITLE_CAP,
   type ImprovementFilter,
+  type ImprovementNoteKind,
   type ImprovementStatus,
   improvementBodyError,
+  improvementNoteError,
   improvementPlanError,
   improvementTitleError,
   matchesImprovementFilter,
@@ -59,6 +62,8 @@ const ITEM_COLS = `id, title, summary, detail, status, page_paths AS "pagePaths"
   to_char(created_at ${JST}) AS "createdAt", to_char(updated_at ${JST}) AS "updatedAt",
   to_char(resolved_at ${JST}) AS "resolvedAt",
   plan_start AS "planStart", plan_end AS "planEnd"`
+const NOTE_COLS = `id, item_id AS "itemId", member_id AS "memberId", member_name AS "memberName",
+  body, kind, to_char(archived_at ${JST}) AS "archivedAt", to_char(created_at ${JST}) AS "createdAt"`
 
 /** トランザクション補助（akebono-trade と同型 = 原則3） */
 async function inTxn<T>(pool: pg.Pool, fn: (db: pg.PoolClient) => Promise<T>): Promise<T> {
@@ -355,6 +360,72 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
     return c.json({ data: updated })
   })
 
+  // ---- 改修単位のメモ（時系列・記録系・追記のみ）。一覧・追加・取消/復元 ----
+  // 一覧: itemId 指定でその改修単位のメモ / 未指定は全件（管理ページの一括ロード用）。既定は有効メモのみ
+  app.get('/notes', async (c) => {
+    await requireManage(c, pool)
+    const itemId = String(c.req.query('itemId') ?? '').trim()
+    const includeArchived = c.req.query('includeArchived') === '1'
+    const where: string[] = []
+    const params: unknown[] = []
+    if (itemId) { params.push(itemId); where.push(`item_id = $${params.length}`) }
+    if (!includeArchived) where.push('archived_at IS NULL')
+    const sql = `SELECT ${NOTE_COLS} FROM improvement_notes`
+      + (where.length ? ` WHERE ${where.join(' AND ')}` : '')
+      + ' ORDER BY created_at, id' // 時系列（古い順）
+    const { rows } = await pool.query(sql, params)
+    return c.json({ data: rows })
+  })
+
+  // 追加: 対応可否の検討過程・保留/見送り理由を時系列で残す（kind=note 既定 / reject=「対応しない」理由）
+  app.post('/items/:id/notes', async (c) => {
+    const user = await requireManage(c, pool)
+    const id = c.req.param('id')
+    const body = await c.req.json().catch(() => ({})) as { body?: unknown; kind?: unknown }
+    const text = String(body.body ?? '').trim()
+    const msg = improvementNoteError(text)
+    if (msg) throw err('AKO-REQ-008', msg, 400)
+    const kind: ImprovementNoteKind = body.kind === 'reject' ? 'reject' : 'note'
+    // 紐づけ先の改修単位が存在し有効であること（取消済み item にはメモを付けない）
+    const { rows: itemRows } = await pool.query(
+      `SELECT 1 FROM improvement_items WHERE id = $1 AND archived_at IS NULL`, [id])
+    if (itemRows.length === 0) throw err('AKO-REQ-002', '対象の改修単位が見つかりません', 404)
+    const noteId = newId('imnote')
+    const { rows } = await pool.query(
+      `INSERT INTO improvement_notes (id, item_id, member_id, member_name, body, kind)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING ${NOTE_COLS}`,
+      [noteId, id, user.id, user.name, capCodePoints(text, IMPROVEMENT_NOTE_CAP), kind])
+    await audit(pool, { actorId: user.id, action: 'create', entity: 'improvement_notes', entityId: noteId, detail: `メモ追加（${kind}）` })
+    return c.json({ data: rows[0] }, 201)
+  })
+
+  // メモの取消（論理削除）/ 復元。記入者本人または管理権限者（原則9.5）
+  app.post('/notes/:id/archive', async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+    const { rows } = await pool.query<{ memberId: string }>(
+      `SELECT member_id AS "memberId" FROM improvement_notes WHERE id = $1`, [id])
+    if (rows.length === 0) throw err('AKO-REQ-002', '対象のメモが見つかりません', 404)
+    if (rows[0]!.memberId !== user.id) await requireManage(c, pool)
+    const { rows: out } = await pool.query(
+      `UPDATE improvement_notes SET archived_at = now() WHERE id = $1 RETURNING ${NOTE_COLS}`, [id])
+    await audit(pool, { actorId: user.id, action: 'archive', entity: 'improvement_notes', entityId: id, detail: 'メモを取消' })
+    return c.json({ data: out[0] })
+  })
+
+  app.post('/notes/:id/restore', async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+    const { rows } = await pool.query<{ memberId: string }>(
+      `SELECT member_id AS "memberId" FROM improvement_notes WHERE id = $1`, [id])
+    if (rows.length === 0) throw err('AKO-REQ-002', '対象のメモが見つかりません', 404)
+    if (rows[0]!.memberId !== user.id) await requireManage(c, pool)
+    const { rows: out } = await pool.query(
+      `UPDATE improvement_notes SET archived_at = NULL WHERE id = $1 RETURNING ${NOTE_COLS}`, [id])
+    await audit(pool, { actorId: user.id, action: 'restore', entity: 'improvement_notes', entityId: id, detail: 'メモの取消を戻す' })
+    return c.json({ data: out[0] })
+  })
+
   // ---- 改修単位の取消（論理削除）/ 復元 ----
   app.post('/items/:id/archive', async (c) => {
     const user = await requireManage(c, pool)
@@ -393,6 +464,7 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
     // 各改修単位の元要望（有効なもの）を 1 クエリでまとめて取得し JS でグルーピング（N+1 回避）
     const ids = matched.map(m => m.id)
     const byItem = new Map<string, { pageLabel: string; pagePath: string; body: string }[]>()
+    const notesByItem = new Map<string, { body: string; kind: ImprovementNoteKind }[]>()
     if (ids.length > 0) {
       const { rows: reqRows } = await pool.query<{ itemId: string; pageLabel: string; pagePath: string; body: string }>(
         `SELECT item_id AS "itemId", page_label AS "pageLabel", page_path AS "pagePath", body
@@ -404,10 +476,21 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
         if (arr) arr.push(entry)
         else byItem.set(r.itemId, [entry])
       }
+      // 時系列メモ（有効・古い順）を改修単位ごとに束ねる（プロンプトに加味 = 原則3）
+      const { rows: noteRows } = await pool.query<{ itemId: string; body: string; kind: ImprovementNoteKind }>(
+        `SELECT item_id AS "itemId", body, kind FROM improvement_notes
+         WHERE item_id = ANY($1::text[]) AND archived_at IS NULL ORDER BY created_at, id`, [ids])
+      for (const n of noteRows) {
+        const arr = notesByItem.get(n.itemId)
+        const entry = { body: n.body, kind: n.kind }
+        if (arr) arr.push(entry)
+        else notesByItem.set(n.itemId, [entry])
+      }
     }
     const promptItems: PromptItemInput[] = matched.map(it => ({
       title: it.title, summary: it.summary, detail: it.detail, status: it.status,
       pagePaths: it.pagePaths ?? [], requests: byItem.get(it.id) ?? [],
+      notes: notesByItem.get(it.id) ?? [],
     }))
     return c.json({ data: { prompt: buildCodingPrompt(promptItems), count: promptItems.length } })
   })

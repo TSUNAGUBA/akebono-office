@@ -417,6 +417,7 @@ akebonoCards: ComputedRef<MenuCard[]>
 | AKO-REQ-005 | ステータス値が不正（F-42） | ✅ |
 | AKO-REQ-006 | 許可されないステータス遷移（F-42・状態機械。409） | ✅ |
 | AKO-REQ-007 | 対応予定期間が不正（実在日でない／終了<開始／終了のみ指定。F-42・0058） | ✅ |
+| AKO-REQ-008 | 改修単位メモの本文が未入力／上限超過（F-42・0059） | ✅ |
 
 **改善要望（F-42。`/v1/improvements`。投稿は認証済み全員可・管理系は `canManageImprovements` = deny-by-default + 管理者常時可）:**
 
@@ -430,4 +431,7 @@ akebonoCards: ComputedRef<MenuCard[]>
 | `POST /v1/improvements/items/:id` | 改修単位の編集（`title`／`summary`／`detail`／`planStart`／`planEnd`〔対応予定期間・0058〕の部分更新） | 管理 |
 | `POST /v1/improvements/items/:id/status` | ステータス変更（状態機械・reopen 可） | 管理 |
 | `POST /v1/improvements/items/:id/archive`・`/restore` | 改修単位の取消／復元 | 管理 |
-| `POST /v1/improvements/prompt` | フィルター条件に従う改修プロンプト出力（`filter`） | 管理 |
+| `GET /v1/improvements/notes` | 時系列メモの一覧（`itemId`／`includeArchived`。古い順。0059） | 管理 |
+| `POST /v1/improvements/items/:id/notes` | メモ追加（`body`／`kind`〔note/reject〕。改修方針・保留/見送り理由。0059） | 管理 |
+| `POST /v1/improvements/notes/:id/archive`・`/restore` | メモの取消／復元（論理削除・原則9.5。0059） | 記入者本人 or 管理 |
+| `POST /v1/improvements/prompt` | フィルター条件に従う改修プロンプト出力（`filter`。**時系列メモも加味**・0059） | 管理 |

@@ -10,7 +10,7 @@ import type { TabItem, Tone } from '~/types/ui'
 import { fmtDateTime, fmtPct } from '~/utils/format'
 import { ESCALATION_RESOLUTION_LABELS, KNOWLEDGE_DOMAIN_LABELS, NOTIFICATION_KIND_LABELS } from '~/utils/labels'
 import { type NotificationCategory, notificationCategoryOf } from '~/utils/notification-category'
-import { notificationTabOf } from '~/utils/notification-tabs'
+import { notificationTabViews } from '~/utils/notification-tabs'
 
 const { isAdmin } = useCurrentUser()
 const { mine, unreadCount, markRead, markAllRead } = useNotifications()
@@ -45,14 +45,11 @@ const unreadOfCategory = (c: NotificationCategory): number =>
   mine.value.filter(n => !n.read && notificationCategoryOf(n) === c).length
 
 const tabs = computed<TabItem[]>(() => {
-  const base: TabItem[] = [
-    { key: 'all', label: 'すべて', badge: unreadCount.value },
-    ...tabIds.value.map(id => ({
-      key: id,
-      label: notificationTabOf(id)?.label ?? id,
-      badge: unreadOfCategory(id as NotificationCategory),
-    })),
-  ]
+  // タブの並びは共有の notificationTabViews で組み立て、ダッシュボード通知カードと順序を一致させる（原則3）
+  const base: TabItem[] = notificationTabViews(tabIds.value).map(v => ({
+    ...v,
+    badge: v.key === 'all' ? unreadCount.value : unreadOfCategory(v.key as NotificationCategory),
+  }))
   // 管理者のみ: エスカレーション「対応」センター（open/解決の管理）。カテゴリ絞り込みの「エスカレーション」タブとは別物のため区別する
   if (isAdmin.value) base.push({ key: 'escalations', label: 'エスカレーション対応', badge: openCount.value })
   return base

@@ -6704,4 +6704,48 @@ describe('改善要望（F-42）', () => {
     // 権限: 一般は編集不可（403）
     expect((await api('POST', `/v1/improvements/items/${id}`, { as: MEMBER, body: { planStart: '2026-03-01' } })).status).toBe(403)
   })
+
+  it('改修単位の時系列メモ: 追加・一覧・reject 理由・プロンプト加味・取消/復元・権限（0059）', async () => {
+    interface Note { id: string; body: string; kind: string; createdAt: string }
+    // 集約して改修単位を 1 つ用意（ユニークなページ = 新規 item になる）
+    await api('POST', '/v1/improvements/requests', {
+      as: MEMBER, body: { body: 'メモ機能テスト用の要望', pagePath: '/memo-test', pageLabel: 'メモテスト' },
+    })
+    await api('POST', '/v1/improvements/generate', { as: ADMIN })
+    const items = (await api('GET', '/v1/improvements/items', { as: ADMIN })).json.data as Item[]
+    const id = items.find(it => it.pagePaths.includes('/memo-test'))!.id
+
+    // 追加（既定 note）: JST ウォールクロック文字列（+09:00）で返る
+    const n1 = await api('POST', `/v1/improvements/items/${id}/notes`, { as: ADMIN, body: { body: '既存部品を流用する方針' } })
+    expect(n1.status).toBe(201)
+    expect((n1.json.data as Note).kind).toBe('note')
+    expect((n1.json.data as Note).createdAt).toMatch(/\+09:00$/)
+    // 追加（reject 理由）
+    expect((await api('POST', `/v1/improvements/items/${id}/notes`, { as: ADMIN, body: { body: '影響大のため見送り', kind: 'reject' } })).status).toBe(201)
+    // 空本文は AKO-REQ-008
+    expect((await api('POST', `/v1/improvements/items/${id}/notes`, { as: ADMIN, body: { body: '  ' } })).json.error?.code).toBe('AKO-REQ-008')
+    // 存在しない改修単位への追加は 404
+    expect((await api('POST', '/v1/improvements/items/nope/notes', { as: ADMIN, body: { body: 'x' } })).status).toBe(404)
+
+    // 一覧（時系列・古い順）
+    const notes = (await api('GET', `/v1/improvements/notes?itemId=${id}`, { as: ADMIN })).json.data as Note[]
+    expect(notes.map(n => n.kind)).toEqual(['note', 'reject'])
+
+    // プロンプトにメモが加味される（対象を未解決にして filter=open）
+    await api('POST', `/v1/improvements/items/${id}/status`, { as: ADMIN, body: { status: 'accepted' } })
+    const prompt = (await api('POST', '/v1/improvements/prompt', { as: ADMIN, body: { filter: 'open' } })).json.data as { prompt: string }
+    expect(prompt.prompt).toContain('担当者メモ')
+    expect(prompt.prompt).toContain('既存部品を流用する方針')
+    expect(prompt.prompt).toContain('［対応しない理由］ 影響大のため見送り')
+
+    // 取消（論理削除）で一覧から消える → 復元で戻る（原則9.5）
+    expect((await api('POST', `/v1/improvements/notes/${notes[0]!.id}/archive`, { as: ADMIN })).status).toBe(200)
+    const afterArchive = (await api('GET', `/v1/improvements/notes?itemId=${id}`, { as: ADMIN })).json.data as Note[]
+    expect(afterArchive.map(n => n.id)).not.toContain(notes[0]!.id)
+    expect((await api('POST', `/v1/improvements/notes/${notes[0]!.id}/restore`, { as: ADMIN })).status).toBe(200)
+
+    // 権限: 一般はメモ一覧・追加とも不可（403 = deny-by-default）
+    expect((await api('GET', '/v1/improvements/notes', { as: MEMBER })).status).toBe(403)
+    expect((await api('POST', `/v1/improvements/items/${id}/notes`, { as: MEMBER, body: { body: 'x' } })).status).toBe(403)
+  })
 })

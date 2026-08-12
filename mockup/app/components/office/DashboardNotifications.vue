@@ -11,26 +11,22 @@ import type { TabItem } from '~/types/ui'
 import { fmtDateTime } from '~/utils/format'
 import { NOTIFICATION_KIND_LABELS } from '~/utils/labels'
 import { type NotificationCategory, notificationCategoryOf as categoryOf } from '~/utils/notification-category'
-import { notificationTabOf } from '~/utils/notification-tabs'
+import { notificationTabViews } from '~/utils/notification-tabs'
 
 const { mine, unreadCount, markRead, markAllRead } = useNotifications()
 const { effectiveIds: tabIds } = useNotificationTabs()
 const { show } = useToast()
 
 // 表示するカテゴリタブは設定駆動（ユーザー > 全社 > 既定。ダッシュボード → レイアウト → 通知タブ で設定）。
-// 「すべて」は常に先頭固定。
+// タブの並びは共有の notificationTabViews で組み立て、/inbox と順序を一致させる（原則3）。「すべて」は常に先頭固定。
 const notifTab = ref('all')
 const notifTabs = computed<TabItem[]>(() => {
   const unreadOf = (c: NotificationCategory): number =>
     mine.value.filter(n => !n.read && categoryOf(n) === c).length
-  return [
-    { key: 'all', label: 'すべて', badge: unreadCount.value },
-    ...tabIds.value.map(id => ({
-      key: id,
-      label: notificationTabOf(id)?.label ?? id,
-      badge: unreadOf(id as NotificationCategory),
-    })),
-  ]
+  return notificationTabViews(tabIds.value).map(v => ({
+    ...v,
+    badge: v.key === 'all' ? unreadCount.value : unreadOf(v.key as NotificationCategory),
+  }))
 })
 
 // 選択中タブが設定変更で消えた場合は「すべて」へ戻す（index.vue のカテゴリチップと同じ防御）

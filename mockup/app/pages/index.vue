@@ -9,7 +9,7 @@
  * - 打刻はヘッダーの「タイムカード」ボタン → モーダル（layouts/default.vue）
  * - 売上サマリは 売上管理（/sales）、稼働状況サマリは 提供システム稼働状況（/status）へ独立
  */
-import { LayoutTemplate } from 'lucide-vue-next'
+import { Clock3, LayoutTemplate } from 'lucide-vue-next'
 import type { MenuCard } from '~/types/ui'
 import { categorizeCards, planDashboardCards } from '~/utils/dashboard-layout'
 import { fmtDateLong } from '~/utils/format'
@@ -36,6 +36,9 @@ const canCompanyDashboard = computed(() => can('sales'))
 // ---------- レイアウト（表示・配置カスタマイズ。ユーザー > テナント > デフォルトで解決） ----------
 const { effectiveLayout } = useDashboardLayout()
 const layoutOpen = ref(false)
+// タイムカード（ヘッダーの「タイムカード」と同一挙動 = 打刻モーダル。ダッシュボードにも配置。オペレーター指示 2026-08-12）。
+// ヘッダーのモーダル状態はレイアウト側にありページから参照できないため、ここでローカルに同じモーダルを持つ（挙動は同一）
+const punchOpen = ref(false)
 /** 通知欄の位置（side=右カラム / bottom=メニュー下 / hidden=非表示） */
 const notifPlacement = computed(() => effectiveLayout.value.options.notifications)
 /** カード密度（compact = 余白を詰める） */
@@ -123,6 +126,11 @@ const shownSections = computed(() =>
       :description="todayLong"
     >
       <template #actions>
+        <!-- タイムカード（ヘッダーの「タイムカード」と同一挙動。レイアウトボタンの左に配置） -->
+        <button v-if="canPath('/attendance')" type="button" class="btn btn-sm" @click="punchOpen = true">
+          <Clock3 class="h-3.5 w-3.5" aria-hidden="true" />
+          タイムカード
+        </button>
         <button type="button" class="btn btn-sm" @click="layoutOpen = true">
           <LayoutTemplate class="h-3.5 w-3.5" aria-hidden="true" />
           レイアウト
@@ -179,6 +187,11 @@ const shownSections = computed(() =>
         <OfficeDashboardNotifications class="min-h-0" />
       </aside>
     </div>
+
+    <!-- タイムカードモーダル（ヘッダーの「タイムカード」と同一 = PunchClock を flat 表示・操作） -->
+    <UiModal :open="punchOpen" title="タイムカード" @close="punchOpen = false">
+      <WidgetsPunchClock flat />
+    </UiModal>
 
     <!-- レイアウト選択（テンプレート + プレビュー + 適用スコープ） -->
     <UiModal :open="layoutOpen" title="ダッシュボードのレイアウト" width="780px" @close="layoutOpen = false">

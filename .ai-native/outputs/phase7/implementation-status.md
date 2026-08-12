@@ -2566,3 +2566,33 @@
 - [x] **検証（実測値）**: mockup `npx nuxi typecheck` green・`npm test` **280 passed**（`header-quick-access` 11 / `notification-tabs` 11 /
   `notification-category` 8 を含む）・`npm run build` green。API は不変（`api/` 変更なし）。
 - [x] **ドキュメント整合（原則5）**: screen-design（トップ通知フィード・レイアウトモーダルのタブ・5.6 選択 UI・/inbox タブ）・本節を更新。
+
+## 72. 通知タブ順の共通化＋改修案件の時系列メモ＋ダッシュボードのタイムカードボタン（改善要望 3 件・オペレーター指示 2026-08-12）の完了条件（Definition of Done）
+
+改善要望（F-42）から出た 3 改修単位への対応。
+
+- [x] **(1) /inbox タブ順をダッシュボード通知カードに合わせる**: タブ並びを組み立てる純関数 `notificationTabViews(effectiveIds)`
+  （「すべて」先頭 + 設定カテゴリをカタログ順）を `utils/notification-tabs.ts` に追加し、`OfficeDashboardNotifications` と
+  `/inbox` の両方で使用（原則3）。両画面のカテゴリタブ順が構造的に一致し、将来のドリフトも防ぐ。/inbox は管理者の
+  「エスカレーション対応」（管理ビュー）を末尾に付す点のみ従来どおり。
+- [x] **(2) 改修案件の時系列メモ（F-42-10）**: 各改修単位に検討過程・保留/見送り理由を **1 件ずつ時系列で記録**できる。
+  - **データ（0059 `improvement_notes`）**: 記録系・追記のみ（`item_id`／`member_id`／`member_name`／`body`／`kind`〔note/reject〕／
+    `archived_at`／`created_at`）。取消は論理削除（原則9.5）。FK 非設定は 0057 と同方針。
+  - **shared**: `ImprovementNote`／`ImprovementNoteKind`／`improvementNoteError`／`IMPROVEMENT_NOTE_CAP`。`PromptItemInput.notes` を
+    追加し **`buildCodingPrompt` がメモを「担当者メモ（時系列）」節として出力**（reject は「対応しない理由」と明示）。空メモは節を出さない。
+  - **API**: `GET /notes`（itemId/includeArchived・古い順）・`POST /items/:id/notes`（body/kind・存在item検証）・`POST /notes/:id/archive|restore`
+    （記入者本人 or 管理）。`/prompt` はメモを join して加味。エラー `AKO-REQ-008`（本文未入力/上限）。監査ログ記録。
+  - **フロント**: `useImprovements` に `notesForItem`／`addNote`／`setNoteArchived`（両モード）。`improvements.vue` 詳細ドロワーに
+    メモ時系列 + 追加 + 取消（確認ダイアログ）。**「対応しない」への変更は任意の理由入力 → reject メモとして記録してから遷移**。
+    プロンプト出力（mock/API とも）にメモを渡す。デモseed 2 件（SEED_VERSION 19）。
+- [x] **(3) ダッシュボードのタイムカードボタン**: `pages/index.vue` の「レイアウト」ボタン左に「タイムカード」ボタンを追加。
+  押下でヘッダーと同一挙動（`WidgetsPunchClock flat` のモーダル）。ヘッダーのモーダル状態はレイアウト側でページから
+  参照不可のため、ページローカルに同一モーダルを持つ。`/attendance` 権限保持時のみ表示（ヘッダーのタイムカードと同じ絞り込み）。
+- [x] **取消可能性（原則9.5）**: メモ追加の取消 = 確認ダイアログ + 論理削除（復元 API も提供）。改修案件の判断（対応しない）は
+  理由メモで根拠を残せる。既存の要望/改修単位の取消・reopen は不変。
+- [x] **下位互換（原則7）**: 追加のみ（新テーブル 0059・新 API・`notes` は省略可）。既存データ・I/F への破壊的変更なし。データ移行パッチ不要。
+- [x] **検証（実測値）**: mockup `npx nuxi typecheck` green・`npm test` **283 passed**（`improvement` 10 / `notification-tabs` 14 含む）・`npm run build` green。
+  API `npm run typecheck` green・`npm test` **330 passed**（`improvement` 単体にメモ検証/プロンプト加味を追加）・`npm run test:integration` **252 passed**
+  （メモ追加/一覧/reject/プロンプト加味/取消・復元/権限 + 0059 適用を含む）。
+- [x] **ドキュメント整合（原則5）**: functional-requirements（F-42-10・F-01-3）・data-design（improvement_notes）・api-design（notes 3 経路・AKO-REQ-008）・
+  screen-design（5.7 メモ・トップのタイムカード・/inbox タブ順共通化）・CONVENTIONS（useImprovements・notificationTabViews）・本節を更新。
