@@ -199,7 +199,7 @@ const imp = useImprovements()  // submit / refresh / activeItems・archivedItems
 | `MediaFunnel` | stages（{label,value}[]）。流入→受注の簡易ファネル（幅バー + 前段比。Chart.js 不使用。F-40） |
 | `WidgetsImprovementSubmit` | props なし。全ページ共通ヘッダーの「要望を送る」導線（F-42）。投稿元ページのパス・表示名を自動付与して UiModal で投稿。投稿は認証済み全員可（layouts/default.vue に 1 つ設置で全ページに出る） |
 | `ImprovementsKanban` | items（ImprovementItem[]）・reqCount(id)。ステータス別カラムのカンバン（F-42）。emit: open(item)・status(id,to)。許可遷移のクイック操作・横スクロール |
-| `ImprovementsGantt` | items（ImprovementItem[]）。対応予定期間のガント（F-42。月次/週次/日次切替・前後送り・今スナップ）。列/バーは `shared/domain/gantt` 純関数。emit: open(item) |
+| `ImprovementsGantt` | items（ImprovementItem[]）。対応予定期間のガント（F-42。月次/週次/日次切替・前後送り・今スナップ）。列/バーは `shared/domain/gantt` 純関数。**ステータスフィルタ（既定=accepted=実装決定・未完了。選択肢/判定は `IMPROVEMENT_FILTER_OPTIONS`/`matchesImprovementFilter` 共有）+ バー色分け（対応する=brand/未判定=warn/解決済み=muted〔完了グレー〕/対応しない=crit・決着済みは退色）+ 凡例。2026-08-12** emit: open(item) |
 
 **ページ間導線・メニュー定義の SoT（バッチ7h）:** 親ページへ戻る・関連ページは `app/utils/nav-map.ts`、
 ダッシュボード / マスタハブのカード定義と既定カテゴリは `app/utils/menu-registry.ts` が SoT。

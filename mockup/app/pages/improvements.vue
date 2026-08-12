@@ -262,13 +262,19 @@ async function refreshPrompt(): Promise<void> {
   if (res.ok) { promptText.value = res.prompt; promptCount.value = res.count }
   else { promptText.value = ''; promptCount.value = 0; toast.show(`${res.error.code}: ${res.error.message}`, 'crit') }
 }
-async function copyPrompt(): Promise<void> {
+async function copyPrompt(): Promise<boolean> {
   try {
     await navigator.clipboard.writeText(promptText.value)
     toast.show('プロンプトをコピーしました', 'ok')
+    return true
   } catch {
     toast.show('コピーできませんでした。テキストを選択してコピーしてください', 'warn')
+    return false
   }
+}
+/** コピーして閉じる: コピー成功時のみモーダルを閉じる（失敗時は手動コピーできるよう開いたまま残す） */
+async function copyAndClose(): Promise<void> {
+  if (await copyPrompt()) promptOpen.value = false
 }
 </script>
 
@@ -554,7 +560,7 @@ async function copyPrompt(): Promise<void> {
       </div>
       <template #footer>
         <button type="button" class="btn btn-ghost" @click="promptOpen = false">閉じる</button>
-        <button type="button" class="btn btn-primary" :disabled="!promptText" @click="copyPrompt">コピーして閉じる</button>
+        <button type="button" class="btn btn-primary" :disabled="!promptText" @click="copyAndClose">コピーして閉じる</button>
       </template>
     </UiModal>
   </div>
