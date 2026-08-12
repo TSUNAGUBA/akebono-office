@@ -32,6 +32,20 @@ function iconOf(name: string) {
   return (icons as Record<string, unknown>)[name] ?? icons.Link
 }
 
+/**
+ * 表示するプリセット。現在のアイコンが一覧外でも有効な lucide キーなら末尾に加える。
+ * 旧・文字列指定（任意の lucide 名）で登録済みのリンクを編集したとき、現在値を選択済みとして
+ * 見せ、意図せず変わらないようにする（下位互換・原則7）。
+ */
+const displayChoices = computed<string[]>(() => {
+  const base = LINK_ICON_CHOICES as readonly string[]
+  const cur = props.icon
+  if (cur && !base.includes(cur) && (icons as Record<string, unknown>)[cur]) {
+    return [...base, cur]
+  }
+  return [...base]
+})
+
 /** アイコンを選ぶ（画像を使っていた場合はアイコン表示へ戻す = 二者択一） */
 function pickIcon(key: string): void {
   emit('update:icon', key)
@@ -97,7 +111,7 @@ function clearImage(): void {
     <!-- プリセット選択（画像未使用時） -->
     <div v-if="!props.image" class="flex flex-wrap gap-1.5">
       <button
-        v-for="key in LINK_ICON_CHOICES"
+        v-for="key in displayChoices"
         :key="key"
         type="button"
         class="flex h-9 w-9 items-center justify-center rounded-lg border transition-colors"

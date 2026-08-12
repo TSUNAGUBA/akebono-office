@@ -34,6 +34,8 @@ const linkForm = reactive({ id: '', title: '', url: '', description: '', icon: '
 const linkErrors = reactive<Record<string, string>>({})
 /** アイコン画像の処理中フラグ（処理中は保存を無効化して未完了の data URI 保存を防ぐ） */
 const linkIconBusy = ref(false)
+/** 保存の多重送信ガード（API モードで保存ボタン連打による重複 POST を防ぐ。segments と同型） */
+const linkSaving = ref(false)
 
 async function openLinkModal(link?: ExternalLink): Promise<void> {
   linkForm.id = link?.id ?? ''
@@ -50,30 +52,36 @@ async function openLinkModal(link?: ExternalLink): Promise<void> {
 }
 
 async function saveLink(): Promise<void> {
+  if (linkSaving.value) return // 多重送信ガード（重複 POST 防止）
   Object.keys(linkErrors).forEach(k => delete linkErrors[k])
   if (!linkForm.title.trim()) linkErrors.title = 'タイトルを入力してください'
   if (!/^https?:\/\/.+/.test(linkForm.url.trim())) linkErrors.url = 'http(s):// から始まる URL を入力してください'
   if (Object.keys(linkErrors).length > 0) return
-  const r = await linkCrud.save({
-    ...(linkForm.id ? { id: linkForm.id } : {}),
-    title: linkForm.title.trim(),
-    url: linkForm.url.trim(),
-    description: linkForm.description.trim(),
-    icon: linkForm.icon.trim() || 'Link',
-    iconImage: linkForm.iconImage,
-    displayOrder: Number(linkForm.displayOrder) || 1,
-  })
-  if (!r.ok) {
-    toast.show(r.error.message, 'crit')
-    return
-  }
-  linkModalOpen.value = false
-  // モックモード: 画像アイコンは data URI で嵩むため localStorage 容量超過で永続化に失敗しうる。
-  // 業態アプリ設定（segments.vue）と同様に警告する（API モードはサーバー保管のため対象外）
-  if (!apiMode && linkForm.iconImage && commit() === false) {
-    toast.show('外部リンクを保存しましたが、画像アイコンは保存容量の上限により再読込時に失われる可能性があります。小さい画像や選択式アイコンをお試しください', 'warn')
-  } else {
-    toast.show('外部リンクを保存しました', 'ok', { label: '確認', to: '/support' })
+  linkSaving.value = true
+  try {
+    const r = await linkCrud.save({
+      ...(linkForm.id ? { id: linkForm.id } : {}),
+      title: linkForm.title.trim(),
+      url: linkForm.url.trim(),
+      description: linkForm.description.trim(),
+      icon: linkForm.icon.trim() || 'Link',
+      iconImage: linkForm.iconImage,
+      displayOrder: Number(linkForm.displayOrder) || 1,
+    })
+    if (!r.ok) {
+      toast.show(r.error.message, 'crit')
+      return
+    }
+    linkModalOpen.value = false
+    // モックモード: 画像アイコンは data URI で嵩むため localStorage 容量超過で永続化に失敗しうる。
+    // 業態アプリ設定（segments.vue）と同様に警告する（API モードはサーバー保管のため対象外）
+    if (!apiMode && linkForm.iconImage && commit() === false) {
+      toast.show('外部リンクを保存しましたが、画像アイコンは保存容量の上限により再読込時に失われる可能性があります。小さい画像や選択式アイコンをお試しください', 'warn')
+    } else {
+      toast.show('外部リンクを保存しました', 'ok', { label: '確認', to: '/support' })
+    }
+  } finally {
+    linkSaving.value = false
   }
 }
 
@@ -381,7 +389,8 @@ async function onResetDemo(): Promise<void> {
               class="flex items-center gap-2.5 rounded-lg border border-line px-2.5 py-2"
               :class="link.active ? '' : 'opacity-55'"
             >
-              <UiIconGlyph :icon="link.icon" :image="link.iconImage" :size="32" :alt="link.title" fallback="Link" />
+              <!-- タイトルが隣接ラベルになるためアイコンは装飾扱い（alt 空 = 二重読み上げ回避） -->
+              <UiIconGlyph :icon="link.icon" :image="link.iconImage" :size="32" fallback="Link" />
               <span class="min-w-0 flex-1">
                 <span class="flex items-center gap-1.5">
                   <span class="text-[13px] font-bold">{{ link.title }}</span>
@@ -666,7 +675,7 @@ async function onResetDemo(): Promise<void> {
         </div>
         <template #footer>
           <button type="button" class="btn" @click="linkModalOpen = false">キャンセル</button>
-          <button type="button" class="btn btn-primary" :disabled="linkIconBusy" @click="saveLink">保存</button>
+          <button type="button" class="btn btn-primary" :disabled="linkIconBusy || linkSaving" @click="saveLink">{{ linkSaving ? '保存中…' : '保存' }}</button>
         </template>
       </UiModal>
 
