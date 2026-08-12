@@ -2640,3 +2640,5 @@
   API `npm run typecheck` green・`npm run test:integration` **253 passed**（+1・0060 適用含む）・`npm run build` green。
 - [x] **ドキュメント整合（原則5）**: data-design（ExternalLink.iconImage）・api-design（external-links iconImage・useExternalLinkCards）・
   screen-design（5.x /settings 外部リンクのアイコンピッカー）・CONVENTIONS（UiIconGlyph・SettingsIconPicker・UiCardMenu）・本節を更新。
+- [x] **独立レビュー（原則9）**: correctness バグなし。minor 3 件を反映 = ①保存の多重送信ガード（`linkSaving`・API モードの重複 POST 防止・segments と同型）／
+  ②設定一覧の行アイコンを装飾扱い（alt 空・隣接タイトルがラベル = 二重読み上げ回避）／③プリセットグリッドに一覧外の現在アイコンを末尾追加（旧・文字列指定の下位互換・原則7）。
