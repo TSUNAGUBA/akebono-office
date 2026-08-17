@@ -5419,6 +5419,48 @@ describe('Phase D: データ取込（F-32）・ダッシュボード保管（F-4
       expect(after.find(p => p.code === 'IMP-P1')).toMatchObject({ name: '取込商品1改', listPrice: 1500 })
     })
 
+    it('実取込（取引先 CSV）: 取引ロールを和名/キーで取込・不正ロールは隔離・空は既存値を保持（2026-08-17）', async () => {
+      const b64 = (s: string): string => Buffer.from(s, 'utf8').toString('base64')
+      const src = await api('POST', '/v1/akebono/import-sources', {
+        as: ADMIN, body: {
+          name: '取引先CSV（ロール付き）', method: 'file_csv', encoding: 'utf8', targetEntity: 'company',
+          config: { hasHeader: true, delimiter: ',' },
+        },
+      })
+      const srcId = (src.json.data as { id: string }).id
+      await api('POST', '/v1/akebono/import-mappings', {
+        as: ADMIN, body: { sourceId: srcId, fields: [
+          { sourceField: 'name', targetItemKey: 'name', columnIndex: 0 },
+          { sourceField: 'kind', targetItemKey: 'kind', columnIndex: 1 },
+          { sourceField: 'roles', targetItemKey: 'partnerRoles', columnIndex: 2 },
+        ] },
+      })
+      // 和名/キー混在・複数ロール・不正ロール行の 3 パターン
+      const csv = 'name,kind,roles\n'
+        + 'ロール取込商店,customer,得意先/店舗\n'
+        + 'ロール取込工房,customer,consignor_artist\n'
+        + 'ロール不正商店,customer,謎ロール\n'
+      const r1 = await api('POST', '/v1/akebono/import-runs', {
+        as: ADMIN, body: { sourceId: srcId, filename: 'companies.csv', contentBase64: b64(csv) },
+      })
+      expect(r1.status).toBe(201)
+      const run1 = r1.json.data as { counts: Record<string, number>; errors: { message: string }[] }
+      expect(run1.counts).toMatchObject({ staged: 3, applied: 2, failed: 1 })
+      expect(run1.errors[0]!.message).toContain('取引ロール')
+      type CompanyRow = { id: string; name: string; partnerRoles: string[] }
+      const companies = (await api('GET', '/v1/masters/companies', { as: ADMIN })).json.data as CompanyRow[]
+      expect(companies.find(c => c.name === 'ロール取込商店')!.partnerRoles).toEqual(['customer', 'store'])
+      expect(companies.find(c => c.name === 'ロール取込工房')!.partnerRoles).toEqual(['consignor_artist'])
+      expect(companies.some(c => c.name === 'ロール不正商店')).toBe(false) // 隔離行は作られない
+      // 再実行（upsert）: ロール列が空 or 区切りのみの行は既存ロールを保持（未指定フィールド保持 = CLAUDE.md Zod v4 節の回帰方針）
+      const csv2 = 'name,kind,roles\nロール取込商店,customer,\nロール取込商店,customer,/\nロール取込工房,customer,作家・外注先\n'
+      const r2 = await api('POST', '/v1/akebono/import-runs', { as: ADMIN, body: { sourceId: srcId, contentBase64: b64(csv2) } })
+      expect((r2.json.data as { counts: Record<string, number> }).counts).toMatchObject({ staged: 3, applied: 3, failed: 0 })
+      const after = (await api('GET', '/v1/masters/companies', { as: ADMIN })).json.data as CompanyRow[]
+      expect(after.find(c => c.name === 'ロール取込商店')!.partnerRoles).toEqual(['customer', 'store']) // 空・区切りのみ = 保持
+      expect(after.find(c => c.name === 'ロール取込工房')!.partnerRoles).toEqual(['consignor_artist', 'subcontractor']) // 指定 = 更新（略記も解釈）
+    })
+
     it('実取込（売上 JSON）: SKU コード解決 + 同一内容の再実行はスキップ（フィンガープリント冪等 = 原則2）', async () => {
       const b64 = (s: string): string => Buffer.from(s, 'utf8').toString('base64')
       // 取込先の得意先（会社）を用意
@@ -6661,6 +6703,46 @@ describe('改善要望（F-42）', () => {
     expect((await api('GET', '/v1/improvements/items', { as: MEMBER })).status).toBe(200)
     // 後片付け（他テストへ影響させない）
     await api('POST', `/v1/masters/permission-rules/${(grant.json.data as { id: string }).id}/archive`, { as: ADMIN })
+  })
+
+  it('添付（URL リンク・画像）の投稿・往復・検証・プロンプト加味（0061・2026-08-17）', async () => {
+    const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+    // 添付付きで投稿 → links / images がそのまま返る（往復）
+    const posted = await api('POST', '/v1/improvements/requests', {
+      as: MEMBER, body: {
+        body: '手順書と画面ショットを添付します', pagePath: '/attach-test', pageLabel: '添付テスト',
+        links: [' https://ref.example/manual ', 'https://ref.example/manual'],
+        images: [{ filename: 'shot.png', mime: 'image/png', dataUrl: png }],
+      },
+    })
+    expect(posted.status).toBe(201)
+    const req = posted.json.data as { links: string[]; images: { filename: string; dataUrl: string }[] }
+    expect(req.links).toEqual(['https://ref.example/manual']) // trim + 重複除去
+    // 投稿応答は画像実体をエコーしない（アップロードした data URI をそのまま返さない = 転送量削減。実体は itemId GET で検証）
+    expect(req.images).toEqual([])
+    // 添付なしの旧形式の投稿も従来どおり（links/images は空配列で返る = 下位互換）
+    const plain = await api('POST', '/v1/improvements/requests', { as: MEMBER, body: { body: '添付なし', pagePath: '/attach-test', pageLabel: '添付テスト' } })
+    expect((plain.json.data as { links: string[]; images: unknown[] })).toMatchObject({ links: [], images: [] })
+    // 不正リンクは AKO-REQ-009・不正画像（SVG 等 allowlist 外）は AKO-REQ-010
+    expect((await api('POST', '/v1/improvements/requests', { as: MEMBER, body: { body: 'x', links: ['ftp://a'] } })).json.error?.code)
+      .toBe('AKO-REQ-009')
+    expect((await api('POST', '/v1/improvements/requests', {
+      as: MEMBER, body: { body: 'x', images: [{ filename: 'a.svg', mime: 'image/svg+xml', dataUrl: 'data:image/svg+xml;base64,PHN2Zz4=' }] },
+    })).json.error?.code).toBe('AKO-REQ-010')
+    // 集約 → プロンプトに参考リンク・添付画像の件数が加味される
+    await api('POST', '/v1/improvements/generate', { as: ADMIN })
+    const prompt = (await api('POST', '/v1/improvements/prompt', { as: ADMIN, body: { filter: 'open' } })).json.data as { prompt: string }
+    expect(prompt.prompt).toContain('参考リンク: https://ref.example/manual')
+    expect(prompt.prompt).toContain('添付画像 1 件')
+    // 一覧 GET は画像の実体を返さない（転送量削減）。itemId 指定 GET でのみ実体を返す（ドロワーの遅延ロード）
+    type ReqRow = { id: string; pagePath: string; images: { dataUrl: string }[]; itemId: string | null }
+    const postedId = (posted.json.data as { id: string }).id
+    const listed = (await api('GET', '/v1/improvements/requests?includeArchived=1', { as: ADMIN })).json.data as ReqRow[]
+    const mine = listed.find(r => r.id === postedId)!
+    expect(mine.itemId).not.toBeNull() // 集約済み
+    expect(mine.images).toEqual([]) // 一覧では実体を返さない
+    const byItem = (await api('GET', `/v1/improvements/requests?itemId=${mine.itemId}`, { as: ADMIN })).json.data as ReqRow[]
+    expect(byItem.find(r => r.id === postedId)!.images[0]).toMatchObject({ dataUrl: png })
   })
 
   it('AI 集約 → ステータス（状態機械・reopen）→ プロンプト出力', async () => {

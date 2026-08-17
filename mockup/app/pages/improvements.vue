@@ -6,7 +6,7 @@
  *   未解決/解決済み・対応可否でフィルターできる。
  * - フィルター結果を、コーディング AI エージェント向けの詳細プロンプトとして出力する。
  */
-import { ClipboardCopy, Sparkles, Undo2, Wand2 } from 'lucide-vue-next'
+import { ClipboardCopy, ExternalLink, Sparkles, Undo2, Wand2 } from 'lucide-vue-next'
 import type { TableColumn, Tone } from '~/types/ui'
 import {
   IMPROVEMENT_FILTER_OPTIONS,
@@ -14,6 +14,7 @@ import {
   IMPROVEMENT_STATUS_NEXT,
   type ImprovementFilter,
   type ImprovementItem,
+  type ImprovementRequestImage,
   type ImprovementStatus,
   matchesImprovementFilter,
 } from '~/types/improvement'
@@ -94,12 +95,17 @@ const selected = computed<ImprovementItem | null>(() =>
   ?? null)
 const sourceRequests = computed(() => (selected.value ? imp.requestsForItem(selected.value.id) : []))
 
+// 添付画像の拡大表示（要望の画像を押下 → topmost モーダル = ドロワーより前面。閉じるで戻る）
+const previewImage = ref<ImprovementRequestImage | null>(null)
+
 // 編集
 const editing = ref(false)
 const editForm = ref({ title: '', summary: '', detail: '' })
 function openDrawer(row: Record<string, unknown>): void {
   selectedId.value = String(row.id)
   editing.value = false
+  // 添付画像の遅延ロード（API モード。全件一覧は画像を含まないためドロワー表示時に取得 = 非ブロッキング）
+  void imp.loadRequestImages(selectedId.value)
 }
 function startEdit(): void {
   if (!selected.value) return
@@ -212,6 +218,7 @@ const VIEW_OPTIONS = [
 function openDrawerItem(it: ImprovementItem): void {
   selectedId.value = it.id
   editing.value = false
+  void imp.loadRequestImages(it.id)
 }
 /** カンバンのクイック操作（id 指定のステータス変更） */
 async function onKanbanStatus(id: string, to: ImprovementStatus): Promise<void> {
@@ -224,10 +231,11 @@ async function onKanbanStatus(id: string, to: ImprovementStatus): Promise<void> 
 const planForm = ref({ start: '', end: '' })
 watch(() => selected.value?.id, () => {
   planForm.value = { start: selected.value?.planStart ?? '', end: selected.value?.planEnd ?? '' }
-  // 対象を切り替えたらメモ入力・「対応しない」理由入力をリセット（前の対象の入力を持ち越さない）
+  // 対象を切り替えたらメモ入力・「対応しない」理由入力・画像プレビューをリセット（前の対象の状態を持ち越さない）
   noteInput.value = ''
   rejectMode.value = false
   rejectReason.value = ''
+  previewImage.value = null
 }, { immediate: true })
 
 async function savePlan(): Promise<void> {
@@ -460,8 +468,37 @@ async function copyAndClose(): Promise<void> {
           <ul class="grid gap-2">
             <li v-for="r in sourceRequests" :key="r.id" class="card p-3">
               <div class="flex items-start justify-between gap-2">
-                <div class="min-w-0">
+                <div class="min-w-0 flex-1">
                   <p class="text-[13px] text-ink">{{ r.body }}</p>
+                  <!-- 添付リンク（押下で別タブに開く） -->
+                  <ul v-if="(r.links ?? []).length > 0" class="mt-1.5 grid gap-1">
+                    <li v-for="l in r.links" :key="l" class="min-w-0">
+                      <a
+                        :href="l"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="link inline-flex max-w-full items-center gap-1 text-[12px]"
+                        :title="`${l}（別タブで開く）`"
+                      >
+                        <ExternalLink class="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                        <span class="truncate">{{ l }}</span>
+                      </a>
+                    </li>
+                  </ul>
+                  <!-- 添付画像（押下で拡大表示） -->
+                  <div v-if="(r.images ?? []).length > 0" class="mt-1.5 flex flex-wrap gap-1.5">
+                    <button
+                      v-for="(img, i) in r.images"
+                      :key="i"
+                      type="button"
+                      class="rounded-lg border border-line focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand"
+                      :aria-label="`画像「${img.filename}」を拡大表示`"
+                      :title="`${img.filename}（押下で拡大）`"
+                      @click="previewImage = img"
+                    >
+                      <img :src="img.dataUrl" :alt="img.filename" class="h-14 w-14 rounded-lg object-cover">
+                    </button>
+                  </div>
                   <p class="mt-1 text-[11px] text-muted">
                     {{ r.memberName }}・{{ r.pageLabel || r.pagePath || 'ページ不明' }}・{{ fmtDate(r.createdAt) }}
                   </p>
@@ -561,6 +598,25 @@ async function copyAndClose(): Promise<void> {
       <template #footer>
         <button type="button" class="btn btn-ghost" @click="promptOpen = false">閉じる</button>
         <button type="button" class="btn btn-primary" :disabled="!promptText" @click="copyAndClose">コピーして閉じる</button>
+      </template>
+    </UiModal>
+
+    <!-- 添付画像の拡大表示（topmost = ドロワーより前面。閉じる/背景クリックで戻る = 原則9.5） -->
+    <UiModal
+      :open="!!previewImage"
+      :title="previewImage?.filename || '添付画像'"
+      width="760px"
+      topmost
+      @close="previewImage = null"
+    >
+      <img
+        v-if="previewImage"
+        :src="previewImage.dataUrl"
+        :alt="previewImage.filename"
+        class="mx-auto max-h-[70dvh] w-auto max-w-full rounded-lg"
+      >
+      <template #footer>
+        <button type="button" class="btn btn-ghost" @click="previewImage = null">閉じる</button>
       </template>
     </UiModal>
   </div>

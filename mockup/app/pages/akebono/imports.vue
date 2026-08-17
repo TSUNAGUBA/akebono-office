@@ -204,9 +204,11 @@ const MAPPING_STATUS: Record<ImportMapping['status'], { label: string; tone: 'ok
 const { appFields, builtinResolved } = useAppFields()
 
 // company（取引先）取込は Akebono カタログを持たないため CRM 会社項目へフォールバック（§44-6）。
-// キーは companies マスタの実項目に一致させる（実取込の反映先。旧 email/phone 等は実列が無く反映不能だった）
+// キーは companies マスタの実項目に一致させる（実取込の反映先。旧 email/phone 等は実列が無く反映不能だった）。
+// partnerRoles = 取引ロール（複数可。キー〔customer 等〕/和名〔得意先 等〕を / 等の区切りで列挙 = parsePartnerRoles。2026-08-17）
 const COMPANY_IMPORT_FIELDS: { key: string; label: string }[] = [
-  { key: 'name', label: '会社名' }, { key: 'kind', label: '区分（self/customer）' }, { key: 'industryId', label: '業界' },
+  { key: 'name', label: '会社名' }, { key: 'kind', label: '区分（self/customer）' },
+  { key: 'partnerRoles', label: '取引ロール（複数可・/区切り）' }, { key: 'industryId', label: '業界' },
   { key: 'size', label: '規模' }, { key: 'location', label: '所在地' }, { key: 'description', label: '備考' },
 ]
 /**

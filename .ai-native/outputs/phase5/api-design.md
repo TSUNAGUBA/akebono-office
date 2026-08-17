@@ -424,8 +424,8 @@ akebonoCards: ComputedRef<MenuCard[]>
 
 | メソッド・パス | 用途 | 認可 |
 |---|---|---|
-| `POST /v1/improvements/requests` | 要望の投稿（`body`／`pagePath`／`pageLabel`） | 認証済み全員 |
-| `GET /v1/improvements/requests` | 生要望の一覧（`itemId`／`unclustered`／`includeArchived`） | 管理 |
+| `POST /v1/improvements/requests` | 要望の投稿（`body`／`pagePath`／`pageLabel`／**`links`〔URL 配列・最大 5 件・http(s) のみ = AKO-REQ-009〕／`images`〔`{filename,mime,dataUrl}` 配列・最大 4 件・PNG/JPEG/WebP/GIF data URI = AKO-REQ-010。0061〕**） | 認証済み全員 |
+| `GET /v1/improvements/requests` | 生要望の一覧（`itemId`／`unclustered`／`includeArchived`）。**添付画像の実体（data URI）は `itemId` 指定時のみ返す**（全件一覧は `images: []` = 転送量削減。フロントはドロワー表示時に遅延ロード・0061） | 管理 |
 | `POST /v1/improvements/requests/:id/archive`・`/restore` | 要望の取消／復元 | 投稿者本人 or 管理 |
 | `GET /v1/improvements/items` | 改修単位の一覧（`filter`／`includeArchived`） | 管理 |
 | `POST /v1/improvements/generate` | AI 集約（Vertex → ヒューリスティック。未集約要望のみ・冪等） | 管理 |
@@ -435,4 +435,4 @@ akebonoCards: ComputedRef<MenuCard[]>
 | `GET /v1/improvements/notes` | 時系列メモの一覧（`itemId`／`includeArchived`。古い順。0059） | 管理 |
 | `POST /v1/improvements/items/:id/notes` | メモ追加（`body`／`kind`〔note/reject〕。改修方針・保留/見送り理由。0059） | 管理 |
 | `POST /v1/improvements/notes/:id/archive`・`/restore` | メモの取消／復元（論理削除・原則9.5。0059） | 記入者本人 or 管理 |
-| `POST /v1/improvements/prompt` | フィルター条件に従う改修プロンプト出力（`filter`。**時系列メモも加味**・0059） | 管理 |
+| `POST /v1/improvements/prompt` | フィルター条件に従う改修プロンプト出力（`filter`。**時系列メモも加味**・0059。**要望の添付 = 参考リンクの列挙・画像件数の言及も含む**・0061） | 管理 |

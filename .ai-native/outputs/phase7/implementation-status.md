@@ -2661,3 +2661,69 @@
   オーバーフローを判定できない）。回帰は `improvement`/`gantt` の既存テスト green + build/typecheck で担保。
 - [x] **検証（実測値）**: mockup `npx nuxi typecheck` green・`npm test` **287 passed**・`npm run build` green。API は不変（`api/` 変更なし）。
 - [x] **ドキュメント整合（原則5）**: screen-design（5.7 カンバンのカード折返し/クリップ）・本節を更新。
+
+## 76. 改善要望への URL リンク・画像添付（F-42-11・改善要望・2026-08-17）の完了条件（Definition of Done）
+
+改善要望（`/improvements`）の投稿にURLリンク（複数）と画像（複数）を添付できるようにし、参照時はリンク = **別タブで開く**・画像 = **押下で拡大表示**にする。
+
+- [x] **データモデル（下位互換 = 原則7）**: `shared/domain/improvement.ts` の `ImprovementRequest` に `links?: string[]`・
+  `images?: ImprovementRequestImage[]`（`{filename, mime, dataUrl}`）を**任意フィールドで追加**（旧データ = 未定義 = 添付なし）。
+  検証・正規化は shared の共有関数（`normalizeImprovementLinks`/`improvementLinksError`〔http(s) のみ・最大 5 件・500 字/件〕・
+  `normalizeImprovementImages`/`improvementImagesError`〔PNG/JPEG/WebP/GIF data URI・最大 4 件・400,000 字/件 = 商品画像と同 allowlist〕）で両モード一致。
+- [x] **DB（0061）**: `improvement_requests` に `links jsonb NOT NULL DEFAULT '[]'`・`images jsonb NOT NULL DEFAULT '[]'` を
+  `ADD COLUMN IF NOT EXISTS`（冪等 = 原則2・既存行は「添付なし」= 非破壊）。
+- [x] **API**: `POST /v1/improvements/requests` が `links`/`images` を受理（不正は AKO-REQ-009/010 の 400）。`REQ_COLS` に列を追加し
+  一覧・投稿応答で往復。`POST /prompt` は要望ごとの**参考リンクを列挙・添付画像は件数を言及**（`buildCodingPrompt` の
+  `requests[].links`/`imageCount` = 省略可 → 旧呼び出しの下位互換）。
+- [x] **画面（投稿 = `WidgetsImprovementSubmit`）**: 「リンクを追加」（行ごとの URL 入力 + 削除）・「画像を追加」
+  （`imageToDataUri` で縮小 = 商品画像と同型・複数選択可・サムネイルプレビュー + 個別削除）。形式・上限エラーは警告トーストで中断
+  （原則4）。送信ボタンは処理中無効化（フィードバック）。
+- [x] **画面（参照 = `/improvements` ドロワー）**: 元要望カードにリンク（`target="_blank" rel="noopener noreferrer"`・truncate +
+  外部リンクアイコン）とサムネイルを表示。画像押下で `UiModal topmost`（ドロワーより前面）に拡大表示（ファイル名タイトル・閉じるで戻る）。
+  対象切替時にプレビューをリセット。
+- [x] **モック parity**: `useImprovements.submit` が同じ共有検証で links/images を保存。`buildPrompt` も API と同じ添付加味。
+  シードに添付付きデモ（imreq-0001）を追加し `SEED_VERSION 19 → 20`。
+- [x] **取消可能性（原則9.5）**: 添付は送信前に行/枚単位で削除可。送信後は既存の「取り消す」（要望の論理削除・復元）に内包。
+- [x] **レスポンシブ（原則8）**: リンク行は flex + truncate・サムネイルは flex-wrap・拡大画像は `max-h-[70dvh] max-w-full`。375px で崩れない。
+- [x] **テスト**: 単体 = `api/test/unit/improvement.test.ts`（リンク/画像の正規化・検証・`improvementRequestInputOf` の
+  AKO-REQ-009/010・プロンプト添付加味）+ `mockup/tests/improvement.test.ts`（同観点の共有関数）。統合 = 添付付き投稿の往復・
+  trim/重複除去・旧形式の下位互換（links/images = 空配列）・不正添付の 400・プロンプト加味の 1 テスト追加。
+- [x] **検証（実測値）**: mockup `npx nuxi typecheck` green・`npm test` **290 passed**（+3）・`npm run build` green。
+  API `npm run typecheck` green・`npm test` **340 passed**・`npm run test:integration` **255 passed**（+2〔§77 分含む〕・0061 適用含む）・`npm run build` green。
+- [x] **ドキュメント整合（原則5）**: functional-requirements（F-42-11）・screen-design（5.7 投稿の添付・ドロワーの添付表示）・
+  data-design（improvement_requests.links/images）・api-design（POST /requests・GET /requests・/prompt）・CONVENTIONS（useImprovements・WidgetsImprovementSubmit）・本節を更新。
+- [x] **独立レビュー（原則9・2 巡実施）**: R1 = correctness 2 件 + minor 3 件を検出し全件反映 →
+  ①モック submit が `commit()` の失敗（localStorage 容量超過）を握り潰していた = `persisted` を返し UI が警告（useProducts.addImage と同型）
+  ②一覧 GET が全要望の画像 data URI を含み応答が肥大 = **一覧は `images: []`・itemId 指定 GET でのみ実体**を返し、
+  フロントはドロワー表示時に `loadRequestImages` で遅延ロード（refresh はロード済み画像を引き継ぐ = 要望は追記系で画像不変のため安全）
+  ③mockup `types/akebono.ts` の `PartnerRole` 手書き union を shared 再エクスポートへ（ドリフト防止）〔§77 関連〕
+  ④保存 mime を縮小後 data URI から導出（file.type との不一致解消）⑤（§77）区切りのみのロールセルの保護。
+  R2 = 効率/整合 3 件を反映 → ⑥masters registry の `partnerRoles` z.enum を shared `PARTNER_ROLES` 由来へ（二重定義解消）
+  ⑦`loadRequestImages` にロード済みガード（再オープンの再取得なし。集約後はフラグ破棄 = 追記された画像付き要望を取りこぼさない）
+  ⑧投稿/取消の RETURNING も画像をエコーしない（クライアントは id しか読まない）。R3 相当の再検証 = 全テスト green・残指摘ゼロ。
+
+## 77. 取引先取込に取引ロールのマッピングを追加（F-32・AKEBONO 改善要望・2026-08-17）の完了条件（Definition of Done）
+
+データ取込・連携（`/akebono/imports`）の取込対象「取引先」のマッピング項目に**取引ロール**（得意先/仕入先/委託仕入先（作家）/店舗/外注先・複数保持）を追加し、取引先と同時に取引ロールも取り込めるようにする。
+
+- [x] **共有ドメイン（原則3・SoT 移設）**: `shared/domain/akebono.ts` に `PARTNER_ROLES`・`PARTNER_ROLE_LABELS`（従来 mockup
+  `utils/akebono.ts` ローカル定義だったラベルを shared へ移設 = 取込の和名解釈と共有）・`parsePartnerRoles(raw)` を追加。
+  パースはキー（`customer` 等）と和名（得意先 等）の混在・複数値（`/` `,` `、` `;` `・` 空白区切り）・全角/半角括弧のゆれ・
+  略記（委託仕入先・作家）を受理し、解釈不能トークンは `invalid` で返す（呼び出し側で隔離判断）。mockup 側は再エクスポートで既存 import 不変（原則7）。
+- [x] **マッピング UI**: `imports.vue` の `COMPANY_IMPORT_FIELDS` に `partnerRoles`（「取引ロール（複数可・/区切り）」）を追加
+  （左辺 = 対象項目の固定行に出現・右辺で取込元の列/キーを割当。既存マッピングは影響なし）。
+- [x] **API 反映（applyCompanies）**: `assertKnownTargets` に `partnerRoles` を追加。値あり = `parsePartnerRoles` で解釈し
+  `companies.partner_roles`（0032 の jsonb 列）へ反映（更新 = ロール全置換・新規 = 指定ロールで作成）。**空 = 既存ロールを保持**
+  （未指定フィールド保持 = CLAUDE.md Zod v4 節の回帰方針と同思想）。解釈不能トークンを含む行は許容値を明示して**隔離**（原則4・他行は反映）。
+- [x] **冪等性・状態保護（原則2）**: 会社名完全一致 upsert の既存挙動を維持。同一ファイル再取込はロールも同値へ収束（巻き戻しなし）。
+- [x] **下位互換（原則7）**: 既存マッピング定義（partnerRoles 無し）は従来どおり動作。`partner_roles` 未設定の下位互換
+  （顧客 = `['customer']` 相当）は既存 `partnerRolesOf` のまま不変。データ更新パッチ不要（追加マッピング項目のみ）。
+- [x] **テスト**: 単体 = `api/test/unit/akebono-phase-d.test.ts` に `parsePartnerRoles`（キー/和名混在・区切り・括弧ゆれ・略記・
+  invalid・重複除去）。統合 = 取引先 CSV 取込で「和名/キーのロール反映・不正ロール行の隔離・**空値で既存ロール保持**・再取込での更新」を検証。
+- [x] **検証（実測値）**: §76 と同一ラン（mockup typecheck/test/build green・API typecheck/unit 340/統合 255/build green）。
+- [x] **ドキュメント整合（原則5）**: akebono-menu-functional-requirements（F-32-2 に取引ロール）・本節を更新
+  （company 取込キー空間の履歴 = §45-3 は当時の決定記録として不変。現行カタログの SoT は `imports.vue` の
+  `COMPANY_IMPORT_FIELDS` + API `applyCompanies` の許容集合で、本節が追加を記録する）。
+- [x] **独立レビュー（原則9）**: **区切り文字のみのロールセル（例: "/"）が `[]` として既存ロールを上書きし
+  「空 = 保持」の宣言と矛盾**する指摘を検出 → `roles`・`invalid` とも空なら未指定（保持）扱いへ是正 + 単体/統合の回帰を追加。
+  あわせて mockup `types/akebono.ts` の `PartnerRole` を shared `PARTNER_ROLES` 由来の再エクスポートへ（二重定義のドリフト防止）。再検証 = 再レビューで指摘ゼロ。
