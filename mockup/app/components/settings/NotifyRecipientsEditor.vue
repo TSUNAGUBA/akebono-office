@@ -18,7 +18,10 @@ const { tbl } = useMockDb()
 const { itemsOf } = useCodeMaster()
 const members = tbl('members')
 
-const typeOptions = (Object.keys(APPROVER_TYPE_LABELS) as ApproverType[]).map(value => ({ value, label: APPROVER_TYPE_LABELS[value] }))
+// applicant（申請者本人）は稟議の経路設定専用（通知宛先では解決先がなく無効になるため除外 = レビュー指摘 2026-08-17）
+const typeOptions = (Object.keys(APPROVER_TYPE_LABELS) as ApproverType[])
+  .filter(t => t !== 'applicant')
+  .map(value => ({ value, label: APPROVER_TYPE_LABELS[value] }))
 // 通知は周知用途もあるためロール 3 種すべて提示（承認 = admin/hr のみ とは異なる）
 const roleOptions = (['admin', 'hr', 'member'] as MemberRole[]).map(value => ({ value, label: MEMBER_ROLE_LABELS[value] }))
 const titleOptions = computed(() => itemsOf('title')) // [{ value: label, label }]

@@ -10,6 +10,8 @@ interface FlowStepItem {
   label: string
   name: string
   state: 'done' | 'current' | 'future' | 'rejected' | 'remanded'
+  /** ステップ種別（承認/決裁/確認）の表示ラベル（改善要望 2026-08-17。省略可 = 旧呼び出し互換） */
+  kindLabel?: string
 }
 
 const props = defineProps<{ steps: FlowStepItem[] }>()
@@ -66,6 +68,10 @@ function lineClass(i: number): string {
         <template v-else>{{ i + 1 }}</template>
       </span>
       <div class="min-w-0">
+        <!-- ステップ種別（承認/決裁/確認）の可視化バッジ（改善要望 2026-08-17） -->
+        <p v-if="s.kindLabel" class="mb-0.5">
+          <span class="inline-block rounded-full border border-line px-1.5 text-[10px] font-semibold text-sub">{{ s.kindLabel }}</span>
+        </p>
         <p class="text-[10px] font-semibold text-muted">{{ s.label }}</p>
         <p
           class="truncate text-xs font-semibold"

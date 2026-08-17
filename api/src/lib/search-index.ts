@@ -259,7 +259,7 @@ export async function buildSearchDocs(pool: pg.Pool): Promise<SearchDocInput[]> 
   const projCompany = new Map(projectsQ.rows.map(x => [x.id, x.companyId]))
   for (const n of noteRows) {
     const segments: SearchSegment[] = []
-    segments.push(seg(n.kind === 'poipoi' ? '種別: ぽいぽいポスト' : '種別: 議事録', c('notes', 'kind')))
+    segments.push(seg(n.kind === 'poipoi' ? '種別: 改善のタネ' : '種別: 議事録', c('notes', 'kind')))
     const links: string[] = []
     const linkChecks: SegmentCheck[] = []
     const pj = n.projectId ? projName.get(n.projectId) : undefined

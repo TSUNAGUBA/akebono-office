@@ -17,9 +17,11 @@ import type {
   WorkflowFile, WorkflowRequest, WorkflowRouteStep,
 } from '~/types/domain'
 import { resolveRoute } from '~/utils/approval-route'
-import { pickApprover } from '~/utils/approver'
+import { pickApprover, resolveApplicantSteps, stepKindOf } from '~/utils/approver'
 import { fmtYen } from '~/utils/format'
-import { approverTargetLabel, APPROVAL_ACTION_LABELS, WORKFLOW_CATEGORY_LABELS } from '~/utils/labels'
+import {
+  approverTargetLabel, APPROVAL_ACTION_LABELS, APPROVAL_STEP_KIND_LABELS, WORKFLOW_CATEGORY_LABELS,
+} from '~/utils/labels'
 
 export interface WorkflowInput {
   category: WorkflowCategory
@@ -109,6 +111,8 @@ export interface FlowStepView {
   label: string
   name: string
   state: 'done' | 'current' | 'future' | 'rejected' | 'remanded'
+  /** ステップ種別（承認/決裁/確認）の表示ラベル（改善要望 2026-08-17。省略可 = 旧呼び出し互換） */
+  kindLabel?: string
 }
 
 export function useWorkflow() {
@@ -269,9 +273,8 @@ export function useWorkflow() {
   // ---------- 表示射影（ApprovalFlow 用） ----------
 
   function flowSteps(req: Pick<WorkflowRequest, 'routeSnapshot' | 'status' | 'currentStep'>): FlowStepView[] {
-    return [...req.routeSnapshot]
-      .sort((a, b) => a.order - b.order)
-      .map((s) => {
+    const sorted = [...req.routeSnapshot].sort((a, b) => a.order - b.order)
+    return sorted.map((s, i) => {
         let state: FlowStepView['state'] = 'future'
         if (req.status === 'approved' || s.order < req.currentStep) {
           state = 'done'
@@ -284,6 +287,8 @@ export function useWorkflow() {
           label: approverTargetLabel(s),
           name: stepApprover(s)?.name ?? '未設定',
           state,
+          // 種別（承認/決裁/確認）の可視化（未設定の旧スナップショットは 最終=決裁・他=承認）
+          kindLabel: APPROVAL_STEP_KIND_LABELS[stepKindOf(s, i === sorted.length - 1)],
         }
       })
   }
@@ -292,10 +297,12 @@ export function useWorkflow() {
   function previewSteps(category: WorkflowCategory, amount: number): FlowStepView[] | null {
     const route = resolveRouteFor(category, amount)
     if (!route) return null
-    return route.map(s => ({
+    return route.map((s, i) => ({
+      // 申請者本人（applicant）はプレビュー時点では自分に解決される（提出時に凍結）
       label: approverTargetLabel(s),
-      name: stepApprover(s)?.name ?? '未設定',
+      name: s.approverType === 'applicant' ? `${currentUser.value.name}（申請者）` : (stepApprover(s)?.name ?? '未設定'),
       state: 'future' as const,
+      kindLabel: APPROVAL_STEP_KIND_LABELS[stepKindOf(s, i === route.length - 1)],
     }))
   }
 
@@ -405,6 +412,9 @@ export function useWorkflow() {
 
     // File オブジェクト等の API 専用フィールドをモック保存へ持ち込まない（localStorage 直列化対象外）
     const { newFiles: _nf, keepFileIds: _kf, ...data } = input
+    // 経路の凍結: 申請者本人（applicant）ステップは member（この申請の申請者 id）へ解決して保存する
+    // （共有 resolveApplicantSteps = API submit と同一関数 = 両モード parity）
+    const snapshot: WorkflowRouteStep[] = resolveApplicantSteps(route, currentUser.value.id)
     let id: string
     if (requestId) {
       const existing = byId(requestId)
@@ -415,7 +425,7 @@ export function useWorkflow() {
       }
       id = requestId
       // 旧本文はフォームが content へ読み込み済み = 再申請で body を空にして移行完了（API と同一挙動）
-      patch(id, { ...data, body: '', status: 'in_review', currentStep: 1, routeSnapshot: route })
+      patch(id, { ...data, body: '', status: 'in_review', currentStep: 1, routeSnapshot: snapshot })
     } else {
       id = nextId('workflowRequests', 'WF')
       requests.value = [...requests.value, {
@@ -425,7 +435,7 @@ export function useWorkflow() {
         requesterId: currentUser.value.id,
         status: 'in_review',
         currentStep: 1,
-        routeSnapshot: route,
+        routeSnapshot: snapshot,
         createdAt: nowJstIso(),
       }]
     }
@@ -433,7 +443,7 @@ export function useWorkflow() {
     commit()
 
     // 補助処理: step1 承認者へ通知（失敗しても提出は成立）
-    const first = route[0]
+    const first = snapshot[0]
     const approver = first ? stepApprover(first) : undefined
     if (approver && approver.id !== currentUser.value.id) {
       notify(
@@ -441,15 +451,16 @@ export function useWorkflow() {
         'approval',
         `承認依頼: ${input.title}`,
         `${currentUser.value.name} さんから${WORKFLOW_CATEGORY_LABELS[input.category]}稟議（${fmtYen(input.amount)}）が届いています`,
-        '/workflow',
+        `/workflow?open=${id}`, // 通知から対象申請の詳細を直接開く（改善要望 2026-08-17）
       )
     }
     return { ok: true, id }
   }
 
-  function notifySafe(memberId: string, title: string, body: string): void {
+  /** 通知（対象申請のディープリンク付き = /workflow?open=<id>。通知から詳細へ即到達 = 改善要望 2026-08-17） */
+  function notifySafe(memberId: string, title: string, body: string, requestId: string): void {
     if (memberId !== currentUser.value.id) {
-      notify(memberId, 'approval', title, body, '/workflow')
+      notify(memberId, 'approval', title, body, `/workflow?open=${requestId}`)
     }
   }
 
@@ -507,7 +518,7 @@ export function useWorkflow() {
       if (isLast) {
         patch(req.id, { status: 'approved' })
         commit()
-        notifySafe(req.requesterId, `決裁: ${req.title}`, `${WORKFLOW_CATEGORY_LABELS[req.category]}稟議（${fmtYen(req.amount)}）が決裁されました`)
+        notifySafe(req.requesterId, `決裁: ${req.title}`, `${WORKFLOW_CATEGORY_LABELS[req.category]}稟議（${fmtYen(req.amount)}）が決裁されました`, req.id)
       } else {
         const nextStep = req.currentStep + 1
         patch(req.id, { currentStep: nextStep })
@@ -515,7 +526,7 @@ export function useWorkflow() {
         const ns = req.routeSnapshot[nextStep - 1]
         const nextApprover = ns ? stepApprover(ns) : undefined
         if (nextApprover) {
-          notifySafe(nextApprover.id, `承認依頼: ${req.title}`, `${memberName(req.requesterId)} さんの${WORKFLOW_CATEGORY_LABELS[req.category]}稟議（${fmtYen(req.amount)}）が step${nextStep} に到達しました`)
+          notifySafe(nextApprover.id, `承認依頼: ${req.title}`, `${memberName(req.requesterId)} さんの${WORKFLOW_CATEGORY_LABELS[req.category]}稟議（${fmtYen(req.amount)}）が step${nextStep} に到達しました`, req.id)
         }
       }
       return { ok: true, id: req.id }
@@ -525,7 +536,7 @@ export function useWorkflow() {
     patch(req.id, { status: action === 'reject' ? 'rejected' : 'remanded' })
     appendLog(req.id, req.currentStep, action, comment, delegateForId)
     commit()
-    notifySafe(req.requesterId, `${APPROVAL_ACTION_LABELS[action]}: ${req.title}`, comment)
+    notifySafe(req.requesterId, `${APPROVAL_ACTION_LABELS[action]}: ${req.title}`, comment, req.id)
     return { ok: true, id: req.id }
   }
 

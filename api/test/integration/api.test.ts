@@ -1158,6 +1158,46 @@ describe('ワークフロー・稟議', () => {
     expect(((await api('GET', `/v1/workflows/${legacyId}/files`, { as: HR })).json.data as FileRow[]).length).toBe(0)
   })
 
+  it('経路ステップ種別（承認/決裁/確認）+ 申請者本人の確認ステップ（改善要望 2026-08-17）', async () => {
+    // 種別付き経路: 決裁（管理者）→ 確認（申請者本人）。hiring の高額帯（既存経路と重ならない帯）
+    const route = await api('POST', '/v1/masters/workflow-routes', {
+      as: ADMIN, body: {
+        category: 'hiring', minAmount: 90_000_000, maxAmount: null,
+        steps: [
+          { order: 1, approverType: 'role', approverRole: 'admin', stepKind: 'decision' },
+          { order: 2, approverType: 'applicant', stepKind: 'confirm' },
+        ],
+      },
+    })
+    expect(route.status).toBe(201)
+    const routeId = (route.json.data as { id: string }).id
+    const saved = (route.json.data as { steps: { stepKind: string | null; approverType: string }[] })
+    expect(saved.steps.map(s => s.stepKind)).toEqual(['decision', 'confirm'])
+    expect(saved.steps[1]!.approverType).toBe('applicant')
+
+    // 提出: 申請者本人ステップは member（申請者 id）へ解決して凍結される（承認ロジックは従来型のみを扱う）
+    const submitted = await api('POST', '/v1/workflows/submit', {
+      as: MEMBER, body: { category: 'hiring', title: '種別テスト申請', amount: 95_000_000, purpose: 'p', content: 'c', attachments: [] },
+    })
+    expect(submitted.status).toBe(201)
+    const wfId = (submitted.json.data as { id: string }).id
+    type WfRow = { id: string; status: string; currentStep: number; routeSnapshot: { approverType: string; approverMemberId: string | null; stepKind: string | null }[] }
+    const mine = ((await api('GET', '/v1/workflows', { as: MEMBER })).json.data as WfRow[]).find(r => r.id === wfId)!
+    expect(mine.routeSnapshot).toHaveLength(2)
+    expect(mine.routeSnapshot[1]).toMatchObject({ approverType: 'member', approverMemberId: MEMBER, stepKind: 'confirm' })
+
+    // 決裁（管理者）→ 確認ステップへ進む → 申請者本人が確認（approve）して完了
+    expect((await api('POST', `/v1/workflows/${wfId}/actions`, { as: ADMIN, body: { action: 'approve' } })).status).toBe(200)
+    const afterDecide = ((await api('GET', '/v1/workflows', { as: MEMBER })).json.data as WfRow[]).find(r => r.id === wfId)!
+    expect(afterDecide).toMatchObject({ status: 'in_review', currentStep: 2 })
+    expect((await api('POST', `/v1/workflows/${wfId}/actions`, { as: MEMBER, body: { action: 'approve' } })).status).toBe(200)
+    const done = ((await api('GET', '/v1/workflows', { as: MEMBER })).json.data as WfRow[]).find(r => r.id === wfId)!
+    expect(done.status).toBe('approved')
+
+    // 後片付け（他テストの経路解決に影響させない）
+    await api('POST', `/v1/masters/workflow-routes/${routeId}/archive`, { as: ADMIN })
+  })
+
   it('経路マスタ: 上限 <= 下限・順序重複はサーバー側でも拒否（AKO-GEN-001）', async () => {
     const bad = await api('POST', '/v1/masters/workflow-routes', {
       as: ADMIN,
@@ -6785,6 +6825,34 @@ describe('改善要望（F-42）', () => {
     expect((prompt.json.data as { prompt: string }).prompt).toContain('/timecard')
     // 一般はプロンプト出力も不可
     expect((await api('POST', '/v1/improvements/prompt', { as: MEMBER, body: { filter: 'open' } })).status).toBe(403)
+  })
+
+  it('要望ステータス（open/resolved/dismissed）の変更とプロンプト再生成への反映（0062・2026-08-17）', async () => {
+    // 対象要望を投稿 → 集約（ユニークなページ = 新規 item）
+    const posted = await api('POST', '/v1/improvements/requests', {
+      as: MEMBER, body: { body: 'ステータス管理テスト用の要望', pagePath: '/req-status-test', pageLabel: 'ステータステスト' },
+    })
+    const reqId = (posted.json.data as { id: string; status: string }).id
+    expect((posted.json.data as { status: string }).status).toBe('open') // 既定 = 未対応
+    await api('POST', '/v1/improvements/generate', { as: ADMIN })
+
+    // 不正値は AKO-REQ-011・一般（管理権限なし）は 403
+    expect((await api('POST', `/v1/improvements/requests/${reqId}/status`, { as: ADMIN, body: { status: 'bogus' } }))
+      .json.error?.code).toBe('AKO-REQ-011')
+    expect((await api('POST', `/v1/improvements/requests/${reqId}/status`, { as: MEMBER, body: { status: 'resolved' } })).status).toBe(403)
+
+    // 変更（resolved）→ 一覧に反映・プロンプト再生成で【対応済み】が明記される
+    const set = await api('POST', `/v1/improvements/requests/${reqId}/status`, { as: ADMIN, body: { status: 'resolved' } })
+    expect(set.status).toBe(200)
+    expect((set.json.data as { status: string }).status).toBe('resolved')
+    const prompt1 = (await api('POST', '/v1/improvements/prompt', { as: ADMIN, body: { filter: 'open' } })).json.data as { prompt: string }
+    expect(prompt1.prompt).toContain('【対応済み】 ステータス管理テスト用の要望')
+    expect(prompt1.prompt).toContain('再改修しないこと')
+
+    // 戻せる（resolved → open。遷移自由 = 原則9.5）→ 再生成でタグが消える
+    expect((await api('POST', `/v1/improvements/requests/${reqId}/status`, { as: ADMIN, body: { status: 'open' } })).status).toBe(200)
+    const prompt2 = (await api('POST', '/v1/improvements/prompt', { as: ADMIN, body: { filter: 'open' } })).json.data as { prompt: string }
+    expect(prompt2.prompt).not.toContain('【対応済み】 ステータス管理テスト用の要望')
   })
 
   it('要望・改修単位の取消（論理削除）と復元（原則9.5）', async () => {

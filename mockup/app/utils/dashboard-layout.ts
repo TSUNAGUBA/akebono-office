@@ -26,10 +26,11 @@ import {
 } from '~/utils/menu-registry'
 
 /**
- * 通知欄の位置（**PC シーン専用**）。side=右サイド（現行・lg+） / bottom=メニュー下（md+） / hidden=非表示。
+ * 通知欄の位置（**PC シーン専用**）。side=右サイド（現行・lg+） / bottom=メニュー下（md+） /
+ * top=メニュー上（md+。通知を最上段に = 改善要望 2026-08-17） / hidden=非表示。
  * モバイルは本設定に依存せず、メニュー最優先・通知はヘッダーのベル/下部ナビ「通知」から開く（index.vue で分岐）。
  */
-export type NotificationPlacement = 'side' | 'bottom' | 'hidden'
+export type NotificationPlacement = 'side' | 'bottom' | 'top' | 'hidden'
 /** カード密度（余白）。comfortable=標準 / compact=詰めて表示 */
 export type LayoutDensity = 'comfortable' | 'compact'
 
@@ -68,7 +69,7 @@ export interface CategorizedCards {
   cards: MenuCard[]
 }
 
-const NOTIFICATION_PLACEMENTS: readonly NotificationPlacement[] = ['side', 'bottom', 'hidden']
+const NOTIFICATION_PLACEMENTS: readonly NotificationPlacement[] = ['side', 'bottom', 'top', 'hidden']
 const LAYOUT_DENSITIES: readonly LayoutDensity[] = ['comfortable', 'compact']
 
 /** テンプレート未指定時のオプション既定値 */
@@ -163,6 +164,16 @@ export const DASHBOARD_TEMPLATES: DashboardTemplate[] = [
         { id: 'menu', label: 'メニュー', cardIds: [...ALL_DASHBOARD_CARD_IDS] },
       ],
       options: { notifications: 'bottom', showAkebono: false, density: 'compact' },
+    },
+  },
+  {
+    id: 'notify-first',
+    name: '通知ファースト',
+    description: '通知を最上段に全幅で配置し、届いた依頼・共有から一日を始めるレイアウト。メニュー構成は標準と同じです。',
+    layout: {
+      templateId: 'notify-first',
+      sections: cloneSections(DEFAULT_MENU_CATEGORIES.dashboard),
+      options: { notifications: 'top', showAkebono: true, density: 'comfortable' },
     },
   },
 ]

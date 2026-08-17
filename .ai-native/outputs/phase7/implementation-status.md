@@ -2727,3 +2727,85 @@
 - [x] **独立レビュー（原則9）**: **区切り文字のみのロールセル（例: "/"）が `[]` として既存ロールを上書きし
   「空 = 保持」の宣言と矛盾**する指摘を検出 → `roles`・`invalid` とも空なら未指定（保持）扱いへ是正 + 単体/統合の回帰を追加。
   あわせて mockup `types/akebono.ts` の `PartnerRole` を shared `PARTNER_ROLES` 由来の再エクスポートへ（二重定義のドリフト防止）。再検証 = 再レビューで指摘ゼロ。
+
+## 78. 要望ごとのステータス管理とプロンプト再生成（F-42-12・改善要望 2026-08-17）の完了条件（Definition of Done）
+
+改善要望（`/improvements`）で元となった要望（request）ごとにステータスを動かせるようにし、改修プロンプトの再生成に反映する。
+
+- [x] **データモデル**: `ImprovementRequest.status?`（`open` 未対応 / `resolved` 対応済み / `dismissed` 見送り。未定義 = 旧データ = open = 原則7）。
+  改修単位（item）のステータスとは独立の進捗タグ（部分対応を表現）。遷移自由（誤操作はいつでも戻せる = 原則9.5）。DB は 0062（`ADD COLUMN IF NOT EXISTS` + CHECK・既定 'open' = 冪等・非破壊）。
+- [x] **API**: `POST /v1/improvements/requests/:id/status`（管理のみ・不正値 AKO-REQ-011）。`/prompt` は要望ステータスを取得し
+  `buildCodingPrompt` へ渡す。プロンプトは open 以外の要望に **【対応済み】【見送り】** を明記 + 注意書き（再改修/実装をしない）を出力（全 open なら従来と同一 = 下位互換）。
+- [x] **画面**: ドロワーの各要望カードにステータスバッジ + 変更セレクト（変更トーストで再生成への反映を案内）。
+  プロンプト出力モーダルに**「再生成」ボタン**を追加（フィルタ変更でも再生成）。モック parity = `setRequestStatus` / `buildPrompt` が同一挙動。
+- [x] **テスト**: 単体 = `requestStatusOf` の既定・プロンプトのタグ/注意書き/下位互換。統合 = 既定 open・不正値 400・非管理 403・
+  resolved → プロンプト反映 → open へ戻すとタグが消える（遷移自由）。
+- [x] **ドキュメント整合（原則5）**: functional-requirements（F-42-12）・screen-design（5.7）・data-design・api-design・CONVENTIONS・本節。
+
+## 79. 日報・週報の改善 6 件（F-06 追補・改善要望 2026-08-17）の完了条件（Definition of Done）
+
+- [x] **①月・横スクロールを既定**: 自分の日報の `mineView` 既定を 'month'（月ビュー形式の既定は従来から 'scroll'）。
+- [x] **②Google カレンダー予定の読込・取込**: エディタ上部に連携ゲート（未連携 = `WidgetsCalendarConnectGate` 再利用 = 原則3）/
+  連携済み = 「カレンダーから予定を取込」（`syncFromGoogle` → `eventsOf` をエントリ行へ変換。時間 = `toQuarterHours`・
+  同名（内容一致）はスキップ = 再取込で増殖しない〔冪等 = 原則2〕・空行は置換・同期失敗は手元の予定で続行〔原則4〕・取消 = 行削除〔原則9.5〕）。
+- [x] **③「ぽいぽいポスト」→「改善のタネ」改称**: 表示名のみ全面改称（labels/menu-registry/nav-map/poipoi.vue/reports.vue/
+  ai-assistant.vue/settings.vue/work-categories.vue/NotesPanel（名詞「ポスト」→「タネ」）/WeeklyInsight/useNotes 通知タイトル/
+  shared permissions・report-draft・weekly-insight/API notes.ts 通知・監査文言/search-index）。**内部キー（'poipoi'）・ルート
+  （/poipoi）・config キー・DB 値は不変（原則7）** = テスト・既存データへ影響なし。
+- [x] **④位置入替**: フォームの改善のタネ欄を明日の予定の上へ移動。
+- [x] **⑤⑥本日の課題の表現**: 「（管理者へ共有済み）」表記を削除し、参照表示（提出済みカード・詳細ドロワー）を
+  本日の所感と同じプレーン表現へ（warn 背景・カード化を廃止。種別チップ・エスカレーション動作は不変）。
+- [x] **ドキュメント整合（原則5）**: functional-requirements（F-06 追補・F-06b 改称）・screen-design（/reports）・CONVENTIONS・本節。
+
+## 80. ダッシュボードの改善 6 件（F-13 追補・改善要望 2026-08-17）の完了条件（Definition of Done）
+
+- [x] **①通知最上段テンプレート**: `NotificationPlacement` に 'top' を追加し、テンプレート **notify-first（通知ファースト）** を新設
+  （6 種目）。index.vue はメニュー上に全幅描画（md+。モバイルは従来どおりベル導線）・プレビューも対応。テンプレート健全性テスト更新。
+- [x] **②セクション内カードの並び替え**: `UiMenuSectionEditor` に「並び順」リスト（割当 2 件以上で表示）。
+  **ドラッグ&ドロップ（HTML5 DnD）+ ↑/↓ ボタン**（タッチ端末の主導線 = 原則8）。cardIds の配列順 = 表示順（categorizeCards が既にその順で描画 = 追加の描画変更なし）。
+- [x] **③アプリヘッダー候補追加**: `QUICK_ACCESS_CATALOG` に AIチャットボット（/support/chatbot・featureKey 'chatbot'）と
+  改善のタネ（/poipoi）を追加（権限・機能トグルの絞り込みは既存機構）。
+- [x] **④通知ディープリンク**: 稟議の全通知 = `/workflow?open=<申請id>`（workflow.vue が ?open= で詳細ドロワーを直接開き query を除去）・
+  日報コメント通知 = `/reports?date=<日付>`（対象日を初期表示）。mock/API 両モードの通知発行を更新（parity）。勤怠・休暇は従来から ?tab= で対象タブ直行。
+  その他の通知源（シフト・AI カンパニー・改善のタネ等）は同パターンで順次対応（残課題として本節に記録）。
+- [x] **⑤要望送信の対象ページ選択**: §82 参照（ImprovementSubmit に対象ページセレクト = 既定 現在ページ・全体・新設ページ）。
+- [x] **⑥パンくず全階層化**: ヘッダーのパス表示を nav-map の parent 連鎖による全階層 + 現在ページ名（`resolvePageLabel` =
+  ナビ + カードメニュー + **nav-map 導線ラベルの合併**〔2 階層目のサブページも固有名。page-label のラベル解決を拡張・テスト更新〕）へ。
+  **各階層は NuxtLink で押下遷移可**。中間階層は sm+ のみ表示・現在ページ名は常時表示（truncate = 原則8）。
+- [x] **ドキュメント整合（原則5）**: screen-design（/ ダッシュボード・パンくず・通知遷移）・CONVENTIONS（UiMenuSectionEditor）・本節。
+
+## 81. 稟議の改善 2 件（F-07 追補・改善要望 2026-08-17）の完了条件（Definition of Done）
+
+- [x] **①区分の説明**: `WORKFLOW_CATEGORY_DESCRIPTIONS`（labels.ts = SoT。文言はオペレーター指定の 6 区分）を新規申請フォームの
+  区分セレクト下にヒント表示（選択に追従）。
+- [x] **②経路ステップ種別（承認/決裁/確認）**: `ApprovalRouteStep.stepKind?`（任意 = 旧データ/旧スナップショット互換）+
+  `stepKindOf`（未設定は表示上 最終=決裁・他=承認）。`ApproverType` に **applicant（申請者本人）** を追加し、
+  **提出時に member（その申請の申請者 id）へ解決して routeSnapshot へ凍結**（mock/API 同一 = 承認の状態機械・pickApprover は不変）。
+  経路エディタ（`WidgetsApproverSteps` = withKind/allowApplicant で opt-in・勤怠側は従来 UI のまま）で種別 + 申請者本人を設定でき、
+  「確認」選択時の既定担当 = 申請者本人。新規経路の既定 = 決裁（管理者）→ 確認（申請者本人）。
+  可視化 = 経路設定チップ・ApprovalFlow ノードに種別バッジ。zod（approverStepSchema）は stepKind nullable default null = 旧クライアント互換。
+- [x] **テスト**: 単体 = `stepKindOf`（既定/明示）。統合 = 種別付き経路の保存・申請者本人の凍結解決（snapshot = member/申請者 id）・
+  決裁 → 確認（申請者が approve）→ approved の全フロー・後片付け。既存の経路/承認テストは無変更で green（下位互換）。
+- [x] **ドキュメント整合（原則5）**: functional-requirements（F-07-1/5）・screen-design（/workflow）・data-design（WorkflowRoute）・本節。
+
+## 82. 改善要望の対象ページ選択・添付・起票者表示（F-42-13 ほか・改善要望 2026-08-17）の完了条件（Definition of Done）
+
+- [x] **対象ページの選択（F-42-13）**: `WidgetsImprovementSubmit` に「対象ページ」セレクト。既定 = 開いているページ・
+  「全体（全ページに波及）」「新設ページ」+ 既知ページ一覧（`listKnownPages` = ナビ + カードメニュー + nav-map 2 階層目の合併。page-label.ts へ新設）。
+  全体/新設ページは pagePath 空 + pageLabel で区別（既存 API は自由文字列を受理済み = 変更不要・下位互換）。
+- [x] **リンク・画像添付**: PR #126 で実装済み（§76）。本バッチでは変更なし。
+- [x] **起票者の記録と表示**: 既対応の確認 = 投稿時に memberId/memberName（スナップショット）を記録し、
+  改修単位ドロワーの各要望カードに記入者名を表示済み（§57 の初期実装から）。追加改修なし。
+- [x] **ドキュメント整合（原則5）**: functional-requirements（F-42-13）・screen-design（5.7）・CONVENTIONS・本節。
+
+> **§78〜§82 共通の検証（実測値）**: mockup `npx nuxi typecheck` green・`npm test` **293 passed**・`npm run build` green。
+> API `npm run typecheck` green・`npm test` **343 passed**・`npm run test:integration` **257 passed**（0062 適用込み）・`npm run build` green。
+> 取引先インポートの取引ロール（今回プロンプトの単位 2）は PR #126（§77）で実装・マージ済みのため本バッチでは変更なし。
+>
+> **独立レビュー（原則9・§78〜§82 一括）**: 指摘 6 件を全件反映 →
+> ①通知宛先エディタ（NotifyRecipientsEditor）に applicant（申請者本人）が漏れ出て解決先のない宛先を保存できた = 選択肢から除外
+> ②勤怠経路の zod が applicant を受理し未解決のまま管理者へ誤ルーティングしうる = スキーマを稟議用/勤怠用に分離（勤怠は従来 3 種のみ）
+> ③経路エディタの種別セレクト既定が一覧チップ（stepKindOf = 最終=決裁）と不一致 = stepKindOf に統一
+> ④日報のカレンダー取込が部分失敗 warning を握り潰していた = ai-assistant と同様にトースト報告（原則4）
+> ⑤applicant → member の凍結解決が mock/API に重複実装 = 共有 `resolveApplicantSteps`（shared/domain/approver）へ集約（原則3）
+> ⑥経路チップ描画で sortedSteps を二重呼出 = r.steps.length で代替。再検証 = 全テスト green・残指摘ゼロ。

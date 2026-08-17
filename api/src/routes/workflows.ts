@@ -13,7 +13,7 @@
 import { Hono } from 'hono'
 import type pg from 'pg'
 import { resolveRoute } from '../../../shared/domain/approval-route'
-import { pickApprover, type ApproverStepLike } from '../../../shared/domain/approver'
+import { pickApprover, resolveApplicantSteps, type ApproverStepLike } from '../../../shared/domain/approver'
 import { nowJstIso, todayJst } from '../../../shared/domain/jst'
 import type {
   ApprovalAction, Member, WorkflowCategory, WorkflowRoute, WorkflowRouteStep,
@@ -372,6 +372,9 @@ export function workflowsRoutes(pool: pg.Pool): Hono {
     if (!route || route.length === 0) {
       throw err('AKO-WFL-003', 'この区分・金額に該当する承認経路がありません。経路設定を確認してください', 409)
     }
+    // 経路の凍結: 申請者本人（applicant）ステップは member（この申請の申請者 id）へ解決して保存する
+    // （共有 resolveApplicantSteps = mock submit と同一関数 = 両モード parity）
+    const snapshot = resolveApplicantSteps(route, user.id)
 
     const client = await pool.connect()
     let id: string
@@ -394,7 +397,7 @@ export function workflowsRoutes(pool: pg.Pool): Hono {
                status = 'in_review', current_step = 1, route_snapshot = $8, updated_at = now()
            WHERE id = $1`,
           [id, input.category, input.title, input.amount, input.body, input.purpose, input.content,
-            JSON.stringify(route)])
+            JSON.stringify(snapshot)])
       } else {
         id = newId('WF')
         await client.query(
@@ -402,7 +405,7 @@ export function workflowsRoutes(pool: pg.Pool): Hono {
              (id, category, title, amount, body, purpose, content, requester_id, status, current_step, route_snapshot, created_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'in_review', 1, $9, $10)`,
           [id, input.category, input.title, input.amount, input.body, input.purpose, input.content,
-            user.id, JSON.stringify(route), nowJstIso()])
+            user.id, JSON.stringify(snapshot), nowJstIso()])
       }
       // 添付実体の同期（SoT = workflow_files）→ 表示名一覧（attachments）を反映（原則6）
       const names = await syncRequestFiles(client, id, user.id, input)
@@ -419,11 +422,11 @@ export function workflowsRoutes(pool: pg.Pool): Hono {
 
     // 補助処理: step1 承認者へ通知（承認者解決を含め、失敗しても提出は成立 = コミット済みを 500 にしない）
     try {
-      const first = route[0]
+      const first = snapshot[0]
       const approver = first ? await stepApprover(pool, first) : undefined
       if (approver && approver.id !== user.id) {
         await notify(pool, approver.id, 'approval', `承認依頼: ${input.title}`,
-          `${user.name} さんから${CATEGORY_LABELS[input.category]}稟議（${fmtYen(input.amount)}）が届いています`, '/workflow')
+          `${user.name} さんから${CATEGORY_LABELS[input.category]}稟議（${fmtYen(input.amount)}）が届いています`, `/workflow?open=${id}`)
       }
     } catch (e) {
       console.warn('submit notify failed (non-blocking):', (e as Error).message)
@@ -510,15 +513,15 @@ export function workflowsRoutes(pool: pg.Pool): Hono {
       if (isLast) {
         if (req.requesterId !== user.id) {
           await notify(pool, req.requesterId, 'approval', `決裁: ${req.title}`,
-            `${label}稟議（${fmtYen(req.amount)}）が決裁されました`, '/workflow')
+            `${label}稟議（${fmtYen(req.amount)}）が決裁されました`, `/workflow?open=${requestId}`)
         }
       } else if (nextApprover && nextApprover.id !== user.id) {
         await notify(pool, nextApprover.id, 'approval', `承認依頼: ${req.title}`,
-          `${label}稟議（${fmtYen(req.amount)}）が step${req.currentStep + 1} に到達しました`, '/workflow')
+          `${label}稟議（${fmtYen(req.amount)}）が step${req.currentStep + 1} に到達しました`, `/workflow?open=${requestId}`)
       }
     } else if (req.requesterId !== user.id) {
       await notify(pool, req.requesterId, 'approval',
-        `${ACTION_LABELS[action as 'reject' | 'remand']}: ${req.title}`, comment, '/workflow')
+        `${ACTION_LABELS[action as 'reject' | 'remand']}: ${req.title}`, comment, `/workflow?open=${requestId}`)
     }
     return c.json({ data: { id: requestId } })
   })

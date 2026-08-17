@@ -546,7 +546,7 @@ export function useReports() {
     commit()
     // 補助処理: 日報作成者へ通知（自分の日報・AI 日報は除く）
     if (report.authorKind === 'human' && report.memberId && report.memberId !== currentUser.value.id) {
-      notify(report.memberId, 'comment', `日報（${report.date}）にコメント`, `${currentUser.value.name}: ${text.slice(0, 60)}`, '/reports')
+      notify(report.memberId, 'comment', `日報（${report.date}）にコメント`, `${currentUser.value.name}: ${text.slice(0, 60)}`, `/reports?date=${report.date}`)
     }
     return { ok: true, id }
   }

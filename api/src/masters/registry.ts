@@ -35,15 +35,19 @@ const iconImage = z.string()
 /**
  * 承認ステップの基底（稟議・勤怠 共通）。承認者は type で出し分け（役職/ロール/個人）。
  * PermissionRule.subjectKind（role|title|member）と同じ 3 種。type ごとに必須フィールドを superRefine で検証。
+ * applicant（申請者本人）は**稟議のみ許容**: 稟議は提出時に member（申請者 id）へ解決して凍結するが、
+ * 勤怠は解決処理を持たないため許容しない（未解決 applicant が管理者フォールバックへ流れる誤ルーティング防止 = レビュー指摘 2026-08-17）。
  */
-const approverStepSchema = z.object({
+const approverStepSchemaOf = (types: [string, ...string[]]) => z.object({
   order: z.number().int().min(1),
-  approverType: z.enum(['title', 'role', 'member']).default('role'),
+  approverType: z.enum(types).default('role'),
   // ロールは承認権限を持つ 管理者/人事 のみ（一般は承認者として無意味なため非許容）
   approverRole: z.enum(['admin', 'hr']).nullable().default(null),
   approverTitle: z.string().nullable().default(null),
   approverMemberId: z.string().nullable().default(null),
   mode: z.enum(['serial', 'all', 'majority']).default('serial'),
+  // ステップ種別（承認/決裁/確認）。null = 旧データ（表示側 stepKindOf が既定を補完 = 原則7）
+  stepKind: z.enum(['approval', 'decision', 'confirm']).nullable().default(null),
 }).superRefine((s, ctx) => {
   if (s.approverType === 'role' && !s.approverRole) {
     ctx.addIssue({ code: 'custom', path: ['approverRole'], message: 'ロールを選択してください' })
@@ -55,20 +59,24 @@ const approverStepSchema = z.object({
     ctx.addIssue({ code: 'custom', path: ['approverMemberId'], message: '承認者（個人）を選択してください' })
   }
 })
+/** 稟議用（applicant = 申請者本人 を許容。提出時に解決 = 2026-08-17） */
+const workflowStepSchema = approverStepSchemaOf(['title', 'role', 'member', 'applicant'])
+/** 勤怠用（従来 3 種のみ） */
+const attendanceStepSchema = approverStepSchemaOf(['title', 'role', 'member'])
 
 /** workflow-routes の基底（PATCH は .partial() を使うためクロスフィールド検証前の形を保持） */
 const workflowRouteBase = z.object({
   category: z.enum(['purchase', 'contract', 'expense', 'hiring', 'trip', 'other']),
   minAmount: z.number().min(0).default(0),
   maxAmount: z.number().min(0).nullable().default(null),
-  steps: z.array(approverStepSchema).min(1, '承認ステップを 1 つ以上設定してください'),
+  steps: z.array(workflowStepSchema).min(1, '承認ステップを 1 つ以上設定してください'),
   active: z.boolean().default(true),
 })
 
 /** attendance-routes の基底（勤怠承認経路 = 稟議 workflowRouteBase の勤怠版。金額帯なし） */
 const attendanceRouteBase = z.object({
   category: z.enum(['direct', 'fix']),
-  steps: z.array(approverStepSchema).min(1, '承認ステップを 1 つ以上設定してください'),
+  steps: z.array(attendanceStepSchema).min(1, '承認ステップを 1 つ以上設定してください'),
   active: z.boolean().default(true),
 })
 

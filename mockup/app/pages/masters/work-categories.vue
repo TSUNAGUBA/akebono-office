@@ -57,7 +57,7 @@ const drawerTitle = computed(() =>
 const formFields: FieldDef[] = [
   {
     key: 'name', label: '業務種別名', type: 'text', required: true, placeholder: '例）定例会議',
-    hint: 'ぽいぽいポスト・議事録の分類に使います（例: 定例会議・顧客対応）',
+    hint: '改善のタネ・議事録の分類に使います（例: 定例会議・顧客対応）',
   },
   { key: 'displayOrder', label: '表示順', type: 'number', min: 1, step: 1 },
 ]
@@ -146,7 +146,7 @@ async function restoreSelected(): Promise<void> {
 <template>
   <MastersMasterShell
     title="業務種別マスタ"
-    description="ぽいぽいポスト・議事録の任意分類を管理します。名称と表示順のみのシンプルなマスタです"
+    description="改善のタネ・議事録の任意分類を管理します。名称と表示順のみのシンプルなマスタです"
   >
     <template #actions>
       <button type="button" class="btn btn-primary" @click="openCreate">

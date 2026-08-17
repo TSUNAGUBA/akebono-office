@@ -12,9 +12,11 @@ import type {
 } from '~/types/domain'
 import { addDays, fmtDateTime, fmtYen } from '~/utils/format'
 import {
-  approverTargetLabel, APPROVAL_ACTION_LABELS, WORKFLOW_CATEGORY_LABELS, WORKFLOW_STATUS_LABELS,
+  approverTargetLabel, APPROVAL_ACTION_LABELS, APPROVAL_STEP_KIND_LABELS,
+  WORKFLOW_CATEGORY_DESCRIPTIONS, WORKFLOW_CATEGORY_LABELS, WORKFLOW_STATUS_LABELS,
   WORKFLOW_STATUS_TONES,
 } from '~/utils/labels'
+import { stepKindOf } from '~/utils/approver'
 import { workflowTemplatesFor } from '~/utils/workflow-templates'
 import type { ApproverStepForm } from '~/components/widgets/ApproverSteps.vue'
 import type { TabItem, TableColumn, Tone } from '~/types/ui'
@@ -53,6 +55,17 @@ const queryTab = typeof route.query.tab === 'string' ? route.query.tab : ''
 const tab = ref<string>(['mine', 'pending', 'all', 'routes'].includes(queryTab) ? queryTab : 'mine')
 watchEffect(() => {
   if (!tabs.value.some(t => t.key === tab.value)) tab.value = 'mine'
+})
+
+// 通知ディープリンク: ?open=<申請id> で詳細ドロワーを直接開く（通知の対象へ即到達 = 改善要望 2026-08-17）。
+// API モードはキャッシュ到着後に selectedReq が解決される（computed のためデータ到着で自動的に開く）
+const router = useRouter()
+onMounted(() => {
+  const open = typeof route.query.open === 'string' ? route.query.open.trim() : ''
+  if (open) {
+    selectedId.value = open
+    void router.replace({ query: { ...route.query, open: undefined } }) // URL を汚さない（再読込で再度開かない）
+  }
 })
 
 // ---------- 一覧 ----------
@@ -422,16 +435,22 @@ const routeCategoryModel = computed({
   set: (v: string) => { routeForm.category = v as WorkflowCategory },
 })
 
-/** 新規ステップの既定（ロール=管理者） */
+/** 新規ステップの既定（種別=決裁・ロール=管理者。確認ステップの前に置く決裁の既定） */
 function defaultStep(): ApproverStepForm {
-  return { approverType: 'role', approverRole: 'admin', approverTitle: null, approverMemberId: null }
+  return { approverType: 'role', approverRole: 'admin', approverTitle: null, approverMemberId: null, stepKind: 'decision' }
+}
+
+/** 確認ステップの既定（担当 = 申請者本人。改善要望 2026-08-17） */
+function defaultConfirmStep(): ApproverStepForm {
+  return { approverType: 'applicant', approverRole: null, approverTitle: null, approverMemberId: null, stepKind: 'confirm' }
 }
 
 function openRouteCreate(category: WorkflowCategory): void {
   routeEditingId.value = null
   routeForm.category = category
   routeForm.minAmount = 0
-  routeForm.steps = [defaultStep()]
+  // 新規経路の既定 = 決裁（管理者）→ 確認（申請者本人）。確認には申請者本人が既定で入る（改善要望 2026-08-17）
+  routeForm.steps = [defaultStep(), defaultConfirmStep()]
   routeForm.active = true
   routeMaxStr.value = ''
   routeModalOpen.value = true
@@ -444,13 +463,14 @@ function openRouteEdit(r: WorkflowRoute): void {
   routeForm.steps = sortedSteps(r).map(s => ({
     approverType: s.approverType, approverRole: s.approverRole,
     approverTitle: s.approverTitle, approverMemberId: s.approverMemberId,
+    stepKind: s.stepKind ?? null,
   }))
   routeForm.active = r.active
   routeMaxStr.value = r.maxAmount === null ? '' : String(r.maxAmount)
   routeModalOpen.value = true
 }
 
-/** ステップの指定内容が未入力なら弾く（役職/ロール/個人 の必須） */
+/** ステップの指定内容が未入力なら弾く（役職/ロール/個人 の必須。申請者本人は追加指定なし） */
 function stepIncomplete(s: ApproverStepForm): boolean {
   return (s.approverType === 'title' && !s.approverTitle)
     || (s.approverType === 'role' && !s.approverRole)
@@ -478,6 +498,7 @@ async function onRouteSave(): Promise<void> {
     approverTitle: s.approverTitle,
     approverMemberId: s.approverMemberId,
     mode: 'serial',
+    stepKind: s.stepKind ?? null,
   }))
   const res = await routesCrud.save({
     ...(routeEditingId.value ? { id: routeEditingId.value } : {}),
@@ -593,10 +614,11 @@ async function onRemoveDelegate(d: DelegateSetting): Promise<void> {
               :class="r.active ? '' : 'text-muted line-through'"
             >{{ bandLabel(r) }}</span>
             <span class="flex min-w-0 flex-1 flex-wrap items-center gap-1">
+              <!-- 各ステップの種別（承認/決裁/確認）を可視化（改善要望 2026-08-17。未設定の旧経路は 最終=決裁・他=承認） -->
               <template v-for="(s, i) in sortedSteps(r)" :key="i">
                 <span v-if="i > 0" class="text-xs text-muted" aria-hidden="true">→</span>
                 <span class="whitespace-nowrap rounded-full bg-brand-soft px-2 py-0.5 text-[11px] font-semibold text-brand">
-                  {{ i + 1 }}. {{ approverTargetLabel(s) }}（{{ wf.stepApprover(s)?.name ?? '未設定' }}）
+                  {{ i + 1 }}. 【{{ APPROVAL_STEP_KIND_LABELS[stepKindOf(s, i === r.steps.length - 1)] }}】{{ approverTargetLabel(s) }}（{{ s.approverType === 'applicant' ? '申請者' : (wf.stepApprover(s)?.name ?? '未設定') }}）
                 </span>
               </template>
             </span>
@@ -788,7 +810,8 @@ async function onRemoveDelegate(d: DelegateSetting): Promise<void> {
     >
       <div class="grid gap-3">
         <div class="grid gap-3 md:grid-cols-2">
-          <UiFormField label="区分" required>
+          <!-- 区分の説明は選択に追従してヒント表示（改善要望 2026-08-17。文言 SoT = WORKFLOW_CATEGORY_DESCRIPTIONS） -->
+          <UiFormField label="区分" required :hint="WORKFLOW_CATEGORY_DESCRIPTIONS[form.category]">
             <UiSelect v-model="categoryModel" :options="categoryOptions" aria-label="区分" class="!w-full" />
           </UiFormField>
           <UiFormField label="金額（円）" required hint="金額で承認経路が変わります">
@@ -936,8 +959,12 @@ async function onRemoveDelegate(d: DelegateSetting): Promise<void> {
             <input v-model="routeMaxStr" type="number" min="0" step="10000" class="input num text-right" placeholder="上限なし" aria-label="上限金額">
           </UiFormField>
         </div>
-        <UiFormField label="承認ステップ" required hint="上から順に直列承認されます。承認者は役職／ロール／個人から指定できます">
-          <WidgetsApproverSteps v-model="routeForm.steps" />
+        <UiFormField
+          label="承認ステップ"
+          required
+          hint="上から順に直列で進みます。各ステップの種別（承認／決裁／確認）と担当（役職／ロール／個人／申請者本人）を設定できます。「確認」の既定担当は申請者本人です"
+        >
+          <WidgetsApproverSteps v-model="routeForm.steps" with-kind allow-applicant />
         </UiFormField>
         <label class="flex items-center gap-2 text-[13px]">
           <input v-model="routeForm.active" type="checkbox" class="h-4 w-4 accent-[var(--c-brand)]">

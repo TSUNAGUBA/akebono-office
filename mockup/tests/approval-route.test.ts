@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { WorkflowRoute, WorkflowRouteStep } from '~/types/domain'
 import { resolveRoute } from '~/utils/approval-route'
+import { stepKindOf } from '~/utils/approver'
 
 // 承認ステップ（役職指定）。resolveRoute は order/category/amount/active のみ参照するため承認者は代表値でよい
 const st = (order: number, approverTitle: string): WorkflowRouteStep => ({
@@ -38,5 +39,18 @@ describe('resolveRoute（職務権限マトリクス）', () => {
 
   it('該当区分がなければ null', () => {
     expect(resolveRoute(routes, 'hiring', 0)).toBeNull()
+  })
+})
+
+describe('stepKindOf（経路ステップ種別。改善要望 2026-08-17）', () => {
+  it('未設定（旧データ）は 最終ステップ = 決裁・それ以外 = 承認 として扱う（下位互換）', () => {
+    expect(stepKindOf({}, false)).toBe('approval')
+    expect(stepKindOf({}, true)).toBe('decision')
+    expect(stepKindOf({ stepKind: null }, true)).toBe('decision')
+  })
+  it('明示された種別を優先する', () => {
+    expect(stepKindOf({ stepKind: 'confirm' }, true)).toBe('confirm')
+    expect(stepKindOf({ stepKind: 'approval' }, true)).toBe('approval')
+    expect(stepKindOf({ stepKind: 'decision' }, false)).toBe('decision')
   })
 })

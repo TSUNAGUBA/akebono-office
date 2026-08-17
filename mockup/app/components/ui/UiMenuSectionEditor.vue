@@ -6,12 +6,16 @@
  * （settings.MenuCategoryEditor / office.DashboardSectionEditor の両方から利用）。
  * カテゴリ削除でカードは消えない（未割当カードは categorize が自動的に「その他」へ回す）。
  *
+ * カード（メニュー）の並び替え（改善要望 2026-08-17）: 割当済みカードを「並び順」リストで表示し、
+ * ドラッグ&ドロップ（HTML5 DnD）または ↑/↓ ボタンで順番を入れ替えられる。cardIds の配列順が
+ * そのまま表示順（categorizeCards は cardIds 順に描画）。タッチ端末はボタンで操作（原則8）。
+ *
  * 内部に編集バッファ `rows` を持ち、カテゴリ名入力は v-model（IME 合成に安全 = 日本語入力が壊れない）。
  * 変更は都度クローンして emit する。親からの modelValue 変化は、自分が emit した配列（参照一致）なら取り込まず
  * （自己エコーの無限ループ回避 + 入力中の再バインド防止）、外部由来（ハイドレーション・リセット）のときだけ再同期。
  * レスポンシブ（原則8）: 行内の操作は flex-wrap で折り返す。取消（原則9.5）は親のリセット導線で担保。
  */
-import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-vue-next'
+import { ArrowDown, ArrowUp, GripVertical, Plus, Trash2 } from 'lucide-vue-next'
 import type { MenuCategoryDef } from '~/utils/menu-registry'
 
 const props = withDefaults(defineProps<{
@@ -76,6 +80,64 @@ function setCardIds(index: number, cardIds: string[]): void {
   row.cardIds = cardIds
   commit()
 }
+
+// ---------- セクション内カードの並び替え（改善要望 2026-08-17。cardIds の配列順 = 表示順） ----------
+
+const labelByCardId = computed(() => new Map(props.cardOptions.map(o => [o.value, o.label])))
+
+function cardLabel(id: string): string {
+  return labelByCardId.value.get(id) ?? id
+}
+
+/** カードを同一セクション内で移動（↑/↓ ボタン。タッチ端末の主導線 = 原則8） */
+function moveCard(sectionIndex: number, cardIndex: number, delta: number): void {
+  const row = rows.value[sectionIndex]
+  if (!row) return
+  const target = cardIndex + delta
+  if (target < 0 || target >= row.cardIds.length) return
+  const next = [...row.cardIds]
+  const [id] = next.splice(cardIndex, 1)
+  next.splice(target, 0, id!)
+  row.cardIds = next
+  commit()
+}
+
+/** ドラッグ中のカード（セクションを跨ぐ移動はしない = 割当は上のコンボボックスで行う） */
+const dragging = ref<{ section: number; card: number } | null>(null)
+
+function onCardDragStart(sectionIndex: number, cardIndex: number, ev: DragEvent): void {
+  dragging.value = { section: sectionIndex, card: cardIndex }
+  if (ev.dataTransfer) {
+    ev.dataTransfer.effectAllowed = 'move'
+    ev.dataTransfer.setData('text/plain', String(cardIndex)) // Firefox で DnD を有効化するため必須
+  }
+}
+
+/** ドロップ先の行の上でドラッグ中の行を並べ替える（同一セクション内のみ） */
+function onCardDragOver(sectionIndex: number, cardIndex: number, ev: DragEvent): void {
+  const d = dragging.value
+  if (!d || d.section !== sectionIndex) return
+  ev.preventDefault() // drop を許可
+  if (d.card === cardIndex) return
+  const row = rows.value[sectionIndex]
+  if (!row) return
+  const next = [...row.cardIds]
+  const [id] = next.splice(d.card, 1)
+  next.splice(cardIndex, 0, id!)
+  row.cardIds = next
+  dragging.value = { section: sectionIndex, card: cardIndex }
+}
+
+function onCardDrop(ev: DragEvent): void {
+  ev.preventDefault()
+  if (dragging.value) commit() // 並び替え結果を確定
+  dragging.value = null
+}
+
+function onCardDragEnd(): void {
+  if (dragging.value) commit() // ドロップ先が行外でも途中までの並びを確定（取消は親のリセット = 原則9.5）
+  dragging.value = null
+}
 </script>
 
 <template>
@@ -116,6 +178,40 @@ function setCardIds(index: number, cardIds: string[]): void {
             :aria-label="`${cat.label || 'カテゴリ'}のメニュー割当`"
             @update:model-value="(v: string[]) => setCardIds(i, v)"
           />
+        </div>
+
+        <!-- 並び順（割当が 2 件以上のとき。ドラッグ&ドロップ or ↑/↓ で入れ替え = 改善要望 2026-08-17） -->
+        <div v-if="cat.cardIds.length > 1" class="mt-2 grid gap-1">
+          <p class="text-[11px] font-semibold text-muted">並び順（ドラッグ&ドロップ または ↑/↓ で入れ替え。上から順に表示されます）</p>
+          <ol class="grid gap-1">
+            <li
+              v-for="(cardId, ci) in cat.cardIds"
+              :key="cardId"
+              class="flex items-center gap-1.5 rounded border border-line bg-surface px-2 py-1"
+              :class="{ 'opacity-60 ring-2 ring-brand-soft': dragging && dragging.section === i && dragging.card === ci }"
+              draggable="true"
+              @dragstart="onCardDragStart(i, ci, $event)"
+              @dragover="onCardDragOver(i, ci, $event)"
+              @drop="onCardDrop($event)"
+              @dragend="onCardDragEnd"
+            >
+              <GripVertical class="h-3.5 w-3.5 shrink-0 cursor-grab text-muted" aria-hidden="true" />
+              <span class="num w-4 shrink-0 text-center text-[11px] text-muted">{{ ci + 1 }}</span>
+              <span class="min-w-0 flex-1 truncate text-[12px] text-ink">{{ cardLabel(cardId) }}</span>
+              <button
+                type="button" class="btn btn-sm" :disabled="ci === 0"
+                :aria-label="`${cardLabel(cardId)} を上へ移動`" @click="moveCard(i, ci, -1)"
+              >
+                <ArrowUp class="h-3 w-3" aria-hidden="true" />
+              </button>
+              <button
+                type="button" class="btn btn-sm" :disabled="ci === cat.cardIds.length - 1"
+                :aria-label="`${cardLabel(cardId)} を下へ移動`" @click="moveCard(i, ci, 1)"
+              >
+                <ArrowDown class="h-3 w-3" aria-hidden="true" />
+              </button>
+            </li>
+          </ol>
         </div>
       </li>
     </ul>

@@ -23,7 +23,7 @@ const confirm = useConfirm()
 const { currentUser, isAdmin } = useCurrentUser()
 
 /** 表示名詞（poipoi = ポスト / minutes = 議事録。バッチ7e で「メモ」から改称） */
-const noun = computed(() => (props.kind === 'poipoi' ? 'ポスト' : '議事録'))
+const noun = computed(() => (props.kind === 'poipoi' ? 'タネ' : '議事録'))
 
 const projects = computed(() => (tbl('projects').value as Project[]).filter(p => p.active))
 const companies = computed(() => (tbl('companies').value as Company[]).filter(c => c.active))
@@ -277,14 +277,14 @@ function authorOf(n: Note): string {
       <template #actions>
         <button type="button" class="btn btn-primary btn-sm" @click="composeOpen = true">
           <Send class="h-3.5 w-3.5" aria-hidden="true" />
-          {{ kind === 'poipoi' ? 'ポストを投げ込む' : '議事録を登録する' }}
+          {{ kind === 'poipoi' ? 'タネを投げ込む' : '議事録を登録する' }}
         </button>
       </template>
       <UiEmptyState
         v-if="notes.list.value.length === 0"
         icon="StickyNote"
         :title="`まだ${noun}がありません`"
-        :hint="`「${kind === 'poipoi' ? 'ポストを投げ込む' : '議事録を登録する'}」からテキスト登録またはファイル取込ができます`"
+        :hint="`「${kind === 'poipoi' ? 'タネを投げ込む' : '議事録を登録する'}」からテキスト登録またはファイル取込ができます`"
       />
       <ul v-else class="divide-y divide-line">
         <li v-for="n in notes.list.value" :key="n.id" class="flex items-start gap-1 px-4 py-2.5">
@@ -342,7 +342,7 @@ function authorOf(n: Note): string {
     <!-- 入力モーダル（テキスト登録 + ファイル取込。バッチ7h で一覧上部の同居フォームから移設） -->
     <UiModal
       :open="composeOpen"
-      :title="kind === 'poipoi' ? 'ポストを投げ込む' : '議事録を登録する'"
+      :title="kind === 'poipoi' ? 'タネを投げ込む' : '議事録を登録する'"
       width="680px"
       @close="composeOpen = false"
     >
@@ -442,7 +442,7 @@ function authorOf(n: Note): string {
           v-model="form.body"
           class="textarea min-h-24"
           :placeholder="kind === 'poipoi' ? '例）A社の見積、明日までに単価見直しが必要そう' : '例）7/19 定例。決定事項: …'"
-          :aria-label="kind === 'poipoi' ? 'ポスト本文' : '議事録本文'"
+          :aria-label="kind === 'poipoi' ? 'タネ本文' : '議事録本文'"
         />
         <div class="flex flex-wrap items-center justify-end gap-2">
           <button type="button" class="btn btn-sm" :aria-pressed="previewing" @click="previewing = !previewing">
@@ -481,18 +481,18 @@ function authorOf(n: Note): string {
          0 件でもセクションを出す = 再読み込みボタンで新着を確認できる導線を常設 -->
     <UiSectionCard
       v-if="kind === 'poipoi' && isAdmin"
-      :title="`メンバーのポスト（管理者・${notes.adminList.value.length}件）`"
-      description="チーム改善のフィードバックとしてオリジナルを閲覧できます（自分のポストは上の一覧に表示。AI の参照対象は投稿者本人のみ・取消も本人のみ）"
+      :title="`メンバーのタネ（管理者・${notes.adminList.value.length}件）`"
+      description="チーム改善のフィードバックとしてオリジナルを閲覧できます（自分のタネは上の一覧に表示。AI の参照対象は投稿者本人のみ・取消も本人のみ）"
       flush
     >
       <template #actions>
-        <button type="button" class="btn btn-ghost btn-sm" aria-label="メンバーのポストを再読み込み" @click="notes.refresh()">
+        <button type="button" class="btn btn-ghost btn-sm" aria-label="メンバーのタネを再読み込み" @click="notes.refresh()">
           <RefreshCw class="h-3.5 w-3.5" aria-hidden="true" />
           再読み込み
         </button>
       </template>
       <p v-if="notes.adminList.value.length === 0" class="px-4 py-3 text-[12px] text-muted">
-        メンバーのポストはまだありません（自分のポストは上の一覧に表示されます）
+        メンバーのタネはまだありません（自分のタネは上の一覧に表示されます）
       </p>
       <ul v-else class="divide-y divide-line">
         <li v-for="n in notes.adminList.value" :key="n.id">

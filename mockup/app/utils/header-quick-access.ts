@@ -30,6 +30,9 @@ export const QUICK_ACCESS_CATALOG: QuickAccessItem[] = [
   { id: 'ai-assistant', label: 'AI業務アシスタント', icon: 'Sparkles', to: '/ai-assistant' },
   { id: 'shift', label: 'シフト表', icon: 'CalendarRange', to: '/shift', featureKey: 'shift' },
   { id: 'sales', label: '売上管理', icon: 'TrendingUp', to: '/sales' },
+  // AIチャットボット・改善のタネ（旧称: ぽいぽいポスト）を候補に追加（改善要望 2026-08-17）
+  { id: 'chatbot', label: 'AIチャットボット', icon: 'Bot', to: '/support/chatbot', featureKey: 'chatbot' },
+  { id: 'poipoi', label: '改善のタネ', icon: 'StickyNote', to: '/poipoi' },
 ]
 
 /** 既定のクイックアクセス（従来のヘッダー = タイムカードのみ。ユーザー/組織が未設定のときの表示） */

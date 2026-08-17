@@ -4,7 +4,7 @@ import type {
   EmploymentType, EscalationReason, EscalationResolutionType, IncidentImpact,
   IncidentStatus, KnowledgeDomain, MemberRole, NotificationKind, ProjectStatus, ProjectType,
   PunchKind, ShiftPeriodStatus, ShiftWishKind, WorkflowCategory, WorkflowStatus,
-  ApproverType, AttendanceRequestCategory, DirectType,
+  ApprovalStepKind, ApproverType, AttendanceRequestCategory, DirectType,
 } from '~/types/domain'
 import { normalizeApproverStep, type ApproverStepLike } from '~/utils/approver'
 import type { Tone } from '~/types/ui'
@@ -52,11 +52,20 @@ export const ATTENDANCE_ROUTE_CATEGORY_LABELS: Record<AttendanceRequestCategory,
   fix: '打刻修正申請',
 }
 
-/** 承認者の指定方法ラベル（役職/ロール/個人。稟議・勤怠 共通の経路設定） */
+/** 承認者の指定方法ラベル（役職/ロール/個人/申請者本人。稟議・勤怠 共通の経路設定。
+ *  applicant は稟議の経路設定のみ提示（WidgetsApproverSteps の allowApplicant） */
 export const APPROVER_TYPE_LABELS: Record<ApproverType, string> = {
   title: '役職',
   role: 'ロール',
   member: '個人',
+  applicant: '申請者本人',
+}
+
+/** 経路ステップ種別ラベル（承認/決裁/確認 = 改善要望 2026-08-17。値域 SoT = shared/domain/approver） */
+export const APPROVAL_STEP_KIND_LABELS: Record<ApprovalStepKind, string> = {
+  approval: '承認',
+  decision: '決裁',
+  confirm: '確認',
 }
 
 /**
@@ -64,6 +73,8 @@ export const APPROVER_TYPE_LABELS: Record<ApproverType, string> = {
  * title=役職ラベル / role=ロール名（MEMBER_ROLE_LABELS）/ member=「個人指定」。旧形式も normalize が吸収。
  */
 export function approverTargetLabel(step: ApproverStepLike): string {
+  // applicant は normalize 前に判定（normalize は member/null へ落とすため表示名が失われる）
+  if (step.approverType === 'applicant') return '申請者本人'
   const spec = normalizeApproverStep(step)
   if (spec.type === 'title') return spec.title ?? '役職'
   if (spec.type === 'role') return spec.role ? MEMBER_ROLE_LABELS[spec.role] : 'ロール'
@@ -92,6 +103,16 @@ export const WORKFLOW_CATEGORY_LABELS: Record<WorkflowCategory, string> = {
   hiring: '採用',
   trip: '出張',
   other: 'その他',
+}
+
+/** 稟議区分の説明（新規申請フォームのヒント表示 = 改善要望 2026-08-17。文言はオペレーター指定） */
+export const WORKFLOW_CATEGORY_DESCRIPTIONS: Record<WorkflowCategory, string> = {
+  purchase: '購買：物品・備品・ソフトウェア・SaaS等の購入',
+  expense: '経費：会食・研修・広告・イベント等の費用支出',
+  trip: '出張：交通・宿泊を伴う出張の事前申請',
+  contract: '契約：業務委託・顧問等の契約締結・更新',
+  hiring: '採用：求人・採用活動・雇用に関する申請',
+  other: 'その他：上記に該当しない申請',
 }
 
 export const WORKFLOW_STATUS_LABELS: Record<WorkflowStatus, string> = {
@@ -158,7 +179,7 @@ export const NOTIFICATION_KIND_LABELS: Record<NotificationKind, string> = {
   ai_report: 'AI報告',
   system: 'システム',
   escalation: 'エスカレーション',
-  poipoi: 'ぽいぽいポスト',
+  poipoi: '改善のタネ', // 旧称: ぽいぽいポスト（2026-08-17 改称。キーは不変）
 }
 
 export const ESCALATION_REASON_LABELS: Record<EscalationReason, string> = {

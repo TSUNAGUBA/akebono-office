@@ -12,7 +12,7 @@ import {
   IMPROVEMENT_BODY_CAP, IMPROVEMENT_IMAGE_MAX_CHARS, IMPROVEMENT_IMAGES_MAX, IMPROVEMENT_LINKS_MAX,
   type ImprovementRequestImage, improvementLinksError,
 } from '~/types/improvement'
-import { resolvePageLabel } from '~/utils/page-label'
+import { listKnownPages, pageDisplay, resolvePageLabel } from '~/utils/page-label'
 import { imageToDataUri } from '~/utils/thumb'
 
 const route = useRoute()
@@ -22,6 +22,35 @@ const { show: showToast } = useToast()
 const open = ref(false)
 const body = ref('')
 const busy = ref(false)
+
+// ---------- 対象ページの選択（改善要望 2026-08-17。既定 = 開いているページ・全体/新設ページも選べる） ----------
+
+/** 特別な対象（実ページ以外）。value はページ選択の内部値（送信時に pagePath/pageLabel へ変換） */
+const TARGET_ALL = '__all__'
+const TARGET_NEW = '__new__'
+
+/** 対象ページの選択値（既定 = 現在のページ。モーダルを開くたびにリセット） */
+const targetPage = ref('')
+
+const targetOptions = computed(() => {
+  const pages = listKnownPages().map(p => ({ value: p.path, label: pageDisplay(p.path) }))
+  // 現在ページがカタログ外（動的ルート等）でも選択肢に含める（既定値が消えない）
+  if (!pages.some(p => p.value === route.path)) {
+    pages.unshift({ value: route.path, label: pageDisplay(route.path) })
+  }
+  return [
+    { value: TARGET_ALL, label: '全体（すべてのページに波及する要望）' },
+    { value: TARGET_NEW, label: '新設ページ（新しい画面がほしい要望）' },
+    ...pages,
+  ]
+})
+
+/** 送信時の対象（pagePath/pageLabel）。全体・新設ページはパスなし + ラベルで区別（表示側はラベル優先表示） */
+const targetOf = computed<{ pagePath: string; pageLabel: string }>(() => {
+  if (targetPage.value === TARGET_ALL) return { pagePath: '', pageLabel: '全体' }
+  if (targetPage.value === TARGET_NEW) return { pagePath: '', pageLabel: '新設ページ' }
+  return { pagePath: targetPage.value, pageLabel: resolvePageLabel(targetPage.value) }
+})
 /** 添付リンク入力欄（複数。空欄は送信時に除外） */
 const links = ref<string[]>([])
 /** 添付画像（縮小済み data URI。プレビュー表示 + 個別削除可） */
@@ -33,9 +62,6 @@ const sent = ref(false)
 const lastId = ref('')
 const lastBody = ref('')
 
-/** 投稿元ページの表示名（ナビ/カードメニュー定義から解決・サブページは前方一致・無ければパス） */
-const pageLabel = computed(() => resolvePageLabel(route.path))
-
 // 画面遷移したら閉じる（開いたまま別ページを覆わない）
 watch(() => route.path, () => { open.value = false })
 
@@ -43,6 +69,7 @@ function openModal(): void {
   body.value = ''
   links.value = []
   images.value = []
+  targetPage.value = route.path // 既定 = 開いているページ（選び直し可 = 改善要望 2026-08-17）
   sent.value = false
   lastId.value = ''
   lastBody.value = ''
@@ -109,7 +136,7 @@ async function send(): Promise<void> {
   }
   busy.value = true
   const res = await submit({
-    body: body.value, pagePath: route.path, pageLabel: pageLabel.value,
+    body: body.value, pagePath: targetOf.value.pagePath, pageLabel: targetOf.value.pageLabel,
     links: trimmedLinks, images: images.value,
   })
   busy.value = false
@@ -155,9 +182,12 @@ async function undo(): Promise<void> {
     <!-- 入力 -->
     <div v-if="!sent" class="grid gap-3">
       <p class="text-[13px] text-sub">
-        このページ「<span class="font-semibold text-ink">{{ pageLabel }}</span>」について、改善・改修の要望を送れます。
-        内容は権限を持つ担当者が AI で整理し、改修の検討に活用します。
+        改善・改修の要望を送れます。内容は権限を持つ担当者が AI で整理し、改修の検討に活用します。
       </p>
+      <!-- 対象ページ（既定 = 開いているページ。全体・新設ページ・他ページへ選び直せる = 改善要望 2026-08-17） -->
+      <UiFormField label="対象ページ" hint="既定は今開いているページです。すべてのページに波及する要望は「全体」、新しい画面の要望は「新設ページ」を選んでください">
+        <UiSelect v-model="targetPage" :options="targetOptions" aria-label="要望の対象ページ" class="!w-full" />
+      </UiFormField>
       <UiFormField label="要望の内容" required>
         <textarea
           v-model="body"
