@@ -6,11 +6,18 @@ import {
   type ClusterRequestInput,
   heuristicClusterRequests,
   improvementBodyError,
+  IMPROVEMENT_IMAGE_MAX_CHARS,
+  IMPROVEMENT_IMAGES_MAX,
+  IMPROVEMENT_LINKS_MAX,
   IMPROVEMENT_NOTE_CAP,
+  improvementImagesError,
+  improvementLinksError,
   improvementNoteError,
   IMPROVEMENT_STATUS_NEXT,
   matchesImprovementFilter,
   normalizeClusterPlan,
+  normalizeImprovementImages,
+  normalizeImprovementLinks,
 } from '../../../shared/domain/improvement'
 import { improvementRequestInputOf } from '../../src/routes/improvements'
 
@@ -163,12 +170,83 @@ describe('buildCodingPrompt（メモの加味）', () => {
   })
 })
 
+const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+
+describe('添付リンク（normalizeImprovementLinks / improvementLinksError）', () => {
+  it('trim・空除去・重複除去し、http(s) URL のみ許可する', () => {
+    expect(normalizeImprovementLinks([' https://a.example ', '', 'https://a.example', 'https://b.example']))
+      .toEqual(['https://a.example', 'https://b.example'])
+    expect(normalizeImprovementLinks('not-array')).toEqual([])
+    expect(improvementLinksError(['https://a.example', 'http://b.example'])).toBeNull()
+    expect(improvementLinksError(['ftp://x.example'])).not.toBeNull()
+    expect(improvementLinksError(['javascript:alert(1)'])).not.toBeNull()
+    expect(improvementLinksError(['https://a b'])).not.toBeNull() // 空白を含む URL は不可
+  })
+  it('件数・長さの上限を検証する', () => {
+    const many = Array.from({ length: IMPROVEMENT_LINKS_MAX + 1 }, (_, i) => `https://example.com/${i}`)
+    expect(improvementLinksError(many)).not.toBeNull()
+    expect(improvementLinksError(many.slice(0, IMPROVEMENT_LINKS_MAX))).toBeNull()
+    expect(improvementLinksError([`https://example.com/${'a'.repeat(600)}`])).not.toBeNull()
+  })
+})
+
+describe('添付画像（normalizeImprovementImages / improvementImagesError）', () => {
+  it('filename を補完・mime は data URI から導出し、allowlist・上限を検証する', () => {
+    const imgs = normalizeImprovementImages([{ dataUrl: PNG }, { filename: 'a.png', mime: 'image/webp', dataUrl: PNG }])
+    expect(imgs).toHaveLength(2)
+    expect(imgs[0]).toMatchObject({ filename: 'image', mime: 'image/png' }) // mime は dataUrl の実体から
+    expect(imgs[1]!.mime).toBe('image/png') // 入力 mime（縮小前の型）よりも dataUrl を信頼する
+    expect(improvementImagesError(imgs)).toBeNull()
+    expect(improvementImagesError([{ filename: 'x.svg', mime: 'image/svg+xml', dataUrl: 'data:image/svg+xml;base64,PHN2Zz4=' }]))
+      .not.toBeNull() // SVG はスクリプト混入リスクがあるため不可（商品画像と同じ allowlist）
+    expect(improvementImagesError([{ filename: 'x', mime: 'image/png', dataUrl: `data:image/png;base64,${'A'.repeat(IMPROVEMENT_IMAGE_MAX_CHARS)}` }]))
+      .not.toBeNull() // 上限超過
+  })
+  it('件数上限・dataUrl 空の除外', () => {
+    expect(normalizeImprovementImages([{ dataUrl: '' }, null, 'x'])).toEqual([])
+    const many = Array.from({ length: IMPROVEMENT_IMAGES_MAX + 1 }, () => ({ filename: 'a', mime: 'image/png', dataUrl: PNG }))
+    expect(improvementImagesError(many)).not.toBeNull()
+    expect(improvementImagesError(many.slice(0, IMPROVEMENT_IMAGES_MAX))).toBeNull()
+  })
+})
+
+describe('buildCodingPrompt（添付の加味）', () => {
+  it('参考リンクを列挙し、添付画像は件数を言及する', () => {
+    const prompt = buildCodingPrompt([{
+      title: 't', summary: 's', detail: 'd', status: 'accepted', pagePaths: ['/x'],
+      requests: [{ pageLabel: 'X', pagePath: '/x', body: '直したい', links: ['https://ref.example/doc'], imageCount: 2 }],
+    }])
+    expect(prompt).toContain('参考リンク: https://ref.example/doc')
+    expect(prompt).toContain('添付画像 2 件')
+  })
+  it('添付が無ければ言及しない（旧呼び出しの下位互換）', () => {
+    const prompt = buildCodingPrompt([{
+      title: 't', summary: 's', detail: 'd', status: 'accepted', pagePaths: ['/x'],
+      requests: [{ pageLabel: 'X', pagePath: '/x', body: '直したい' }],
+    }])
+    expect(prompt).not.toContain('参考リンク')
+    expect(prompt).not.toContain('添付画像')
+  })
+})
+
 describe('improvementRequestInputOf', () => {
-  it('trim + ページ情報を保持・空本文は AKO-REQ-001', () => {
+  it('trim + ページ情報を保持・空本文は AKO-REQ-001・添付未指定は空配列', () => {
     expect(improvementRequestInputOf({ body: ' 直したい ', pagePath: '/x', pageLabel: 'X' }))
-      .toEqual({ body: '直したい', pagePath: '/x', pageLabel: 'X' })
+      .toEqual({ body: '直したい', pagePath: '/x', pageLabel: 'X', links: [], images: [] })
     let code = ''
     try { improvementRequestInputOf({ body: '  ' }) } catch (e) { code = (e as { code?: string }).code ?? '' }
     expect(code).toBe('AKO-REQ-001')
+  })
+  it('添付リンク・画像を正規化して保持し、不正は AKO-REQ-009 / AKO-REQ-010', () => {
+    const ok = improvementRequestInputOf({
+      body: '直したい', links: [' https://a.example '], images: [{ filename: 'a.png', mime: 'image/png', dataUrl: PNG }],
+    })
+    expect(ok.links).toEqual(['https://a.example'])
+    expect(ok.images).toEqual([{ filename: 'a.png', mime: 'image/png', dataUrl: PNG }])
+    let code = ''
+    try { improvementRequestInputOf({ body: 'x', links: ['ftp://a'] }) } catch (e) { code = (e as { code?: string }).code ?? '' }
+    expect(code).toBe('AKO-REQ-009')
+    try { improvementRequestInputOf({ body: 'x', images: [{ dataUrl: 'data:text/html;base64,PGI+' }] }) } catch (e) { code = (e as { code?: string }).code ?? '' }
+    expect(code).toBe('AKO-REQ-010')
   })
 })

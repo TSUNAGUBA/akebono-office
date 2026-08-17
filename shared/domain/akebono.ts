@@ -135,6 +135,19 @@ export function residualMarginRate(storeShare: number, artistRate: number): numb
 
 // ---------- 取引ロール ----------
 
+/** 取引ロールのキー一覧（companies.partner_roles の許容値。DB CHECK は無く API/フロントで検証） */
+export const PARTNER_ROLES = ['customer', 'supplier', 'consignor_artist', 'store', 'subcontractor'] as const
+export type PartnerRole = (typeof PARTNER_ROLES)[number]
+
+/** 取引ロールの表示ラベル（SoT。フロントの選択肢・取込の和名解釈で共有 = 原則3） */
+export const PARTNER_ROLE_LABELS: Record<PartnerRole, string> = {
+  customer: '得意先',
+  supplier: '仕入先',
+  consignor_artist: '委託仕入先（作家）',
+  store: '店舗',
+  subcontractor: '外注先',
+}
+
 /** 取引先の取引ロール（未設定の下位互換: 顧客 = ['customer'] / 自社 = []） */
 export function partnerRolesOf(company: { kind: string; partnerRoles?: string[] | null }): string[] {
   if (company.partnerRoles && company.partnerRoles.length > 0) return company.partnerRoles
@@ -143,6 +156,36 @@ export function partnerRolesOf(company: { kind: string; partnerRoles?: string[] 
 
 export function hasPartnerRole(company: { kind: string; partnerRoles?: string[] | null }, role: string): boolean {
   return partnerRolesOf(company).includes(role)
+}
+
+/**
+ * 取引ロール文字列のパース（データ取込 F-32 の取引先マッピング用。API/フロント共有）。
+ * 「得意先/仕入先」「customer,supplier」のような複数値を区切り（/ , 、 ; ・ 空白）で分割し、
+ * キー（customer 等）と和名ラベル（得意先 等）の両方を受理する。全角/半角括弧のゆれ・
+ * 「委託仕入先」「作家」の略記も許容。解釈できないトークンは invalid に返す（呼び出し側で隔離判断）。
+ * 重複は除去し、返却順はトークンの出現順。
+ */
+export function parsePartnerRoles(raw: string): { roles: PartnerRole[]; invalid: string[] } {
+  const roles: PartnerRole[] = []
+  const invalid: string[] = []
+  // ラベル逆引き（全角括弧 → 半角へ正規化した表記で照合）
+  const norm = (s: string): string => s.replace(/（/g, '(').replace(/）/g, ')').trim().toLowerCase()
+  const byToken = new Map<string, PartnerRole>()
+  for (const role of PARTNER_ROLES) {
+    byToken.set(role, role)
+    byToken.set(norm(PARTNER_ROLE_LABELS[role]), role)
+  }
+  // 略記の許容（委託仕入先（作家）の部分表記）
+  byToken.set('委託仕入先', 'consignor_artist')
+  byToken.set('作家', 'consignor_artist')
+  for (const token of raw.split(/[/,、;・\s]+/)) {
+    const t = norm(token)
+    if (!t) continue
+    const role = byToken.get(t)
+    if (!role) invalid.push(token.trim())
+    else if (!roles.includes(role)) roles.push(role)
+  }
+  return { roles, invalid }
 }
 
 // ---------- 採番 ----------

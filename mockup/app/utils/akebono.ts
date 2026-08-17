@@ -23,13 +23,9 @@ export const INDUSTRY_TYPE_LABELS: Record<IndustryType, string> = {
   other: 'その他',
 }
 
-export const PARTNER_ROLE_LABELS: Record<PartnerRole, string> = {
-  customer: '得意先',
-  supplier: '仕入先',
-  consignor_artist: '委託仕入先（作家）',
-  store: '店舗',
-  subcontractor: '外注先',
-}
+// 取引ロールのキー・ラベル・パースは shared/domain/akebono が SoT（データ取込の和名解釈と共有 = 原則3）。
+// 既存 import（~/utils/akebono からの参照）を不変に保つため再エクスポートする（原則7）
+export { PARTNER_ROLE_LABELS, PARTNER_ROLES, parsePartnerRoles } from '../../../shared/domain/akebono'
 
 export const BILLING_TYPE_LABELS: Record<BillingType, string> = {
   one_time: '買い切り',

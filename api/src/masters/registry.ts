@@ -7,6 +7,7 @@
  * - バリデーションは API の責務（モックでは画面側の責務だったが、公開 I/F になるためここで担保）
  */
 import { z } from 'zod'
+import { PARTNER_ROLES } from '../../../shared/domain/akebono'
 import { PROJECT_TYPES } from '../../../shared/domain/types'
 
 const dateKey = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日付は YYYY-MM-DD 形式で入力してください')
@@ -147,8 +148,9 @@ const schemas = {
     description: z.string().default(''),
     ownerMemberId: z.string().default(''),
     fiscalStartMonth: z.number().int().min(1).max(12).nullable().default(null),
-    // Akebono 拡張（F-30-1 = Phase C 0032 で物理列化。空 = customer は ['customer'] 相当のアプリ層互換）
-    partnerRoles: z.array(z.enum(['customer', 'supplier', 'consignor_artist', 'store', 'subcontractor'])).default([]),
+    // Akebono 拡張（F-30-1 = Phase C 0032 で物理列化。空 = customer は ['customer'] 相当のアプリ層互換）。
+    // 値域の SoT = shared/domain/akebono PARTNER_ROLES（取込の和名解釈・フロント選択肢と同源 = ドリフト防止）
+    partnerRoles: z.array(z.enum(PARTNER_ROLES)).default([]),
     paymentTermId: z.string().nullable().default(null).transform(v => (v ? v : null)),
     billingTermId: z.string().nullable().default(null).transform(v => (v ? v : null)),
     custom: z.record(z.string(), z.unknown()).default({}),

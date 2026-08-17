@@ -89,6 +89,16 @@ export function matchesImprovementFilter(status: ImprovementStatus, filter: Impr
 
 // ---------- 型 ----------
 
+/** 要望への添付画像（縮小済み data URI。参照時は押下で拡大表示） */
+export interface ImprovementRequestImage {
+  /** 元ファイル名（表示・alt 用） */
+  filename: string
+  /** MIME タイプ（例: 'image/png'） */
+  mime: string
+  /** 縮小済み画像の data URI（IMPROVEMENT_IMAGE_DATA_RE / IMPROVEMENT_IMAGE_MAX_CHARS で検証） */
+  dataUrl: string
+}
+
 /**
  * 生の改善要望（SoT・追記系）。各ページの「要望を送る」から作られる。
  * pagePath / pageLabel は投稿元ページを記録し、改修プロンプトの対象ページ特定に使う。
@@ -105,6 +115,10 @@ export interface ImprovementRequest {
   pageLabel: string
   /** 要望本文 */
   body: string
+  /** 添付の URL リンク（複数可。参照時は別タブで開く）。旧データは未定義 = 無し（原則7） */
+  links?: string[]
+  /** 添付画像（複数可。参照時は押下で拡大）。旧データは未定義 = 無し（原則7） */
+  images?: ImprovementRequestImage[]
   /** 集約先の改修単位 id（null = 未集約） */
   itemId: string | null
   /** 取消（論理削除）時刻。null = 有効（原則9.5） */
@@ -189,6 +203,69 @@ export function capCodePoints(s: string, n: number): string {
 export function improvementBodyError(body: string): string | null {
   if (!body.trim()) return '要望の内容を入力してください'
   if ([...body].length > IMPROVEMENT_BODY_CAP) return `要望は ${IMPROVEMENT_BODY_CAP} 文字までで入力してください`
+  return null
+}
+
+// ---------- 添付（URL リンク・画像。api = AKO-REQ-009/010（400）/ mock = Result エラー） ----------
+
+export const IMPROVEMENT_LINKS_MAX = 5
+export const IMPROVEMENT_LINK_CAP = 500
+export const IMPROVEMENT_IMAGES_MAX = 4
+/** 画像 data URI の上限文字数（フロント utils/thumb の IMAGE_MAX_CHARS・商品画像 API と一致） */
+export const IMPROVEMENT_IMAGE_MAX_CHARS = 400_000
+export const IMPROVEMENT_IMAGE_NAME_CAP = 200
+
+/** 添付画像の data URI 形式 allowlist（akebono-trade の商品画像と同一 = 原則3） */
+export const IMPROVEMENT_IMAGE_DATA_RE = /^data:image\/(png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=]+$/
+
+/** リンク入力の正規化（未知形の入力 → trim 済み・空除去・重複除去の string[]。件数上限は error 関数で検証） */
+export function normalizeImprovementLinks(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  const out: string[] = []
+  for (const v of raw) {
+    const s = String(v ?? '').trim()
+    if (s && !out.includes(s)) out.push(s)
+  }
+  return out
+}
+
+/** 添付リンクの検証（任意・複数）。エラーメッセージ | null */
+export function improvementLinksError(links: string[]): string | null {
+  if (links.length > IMPROVEMENT_LINKS_MAX) return `リンクは ${IMPROVEMENT_LINKS_MAX} 件までです`
+  for (const url of links) {
+    if ([...url].length > IMPROVEMENT_LINK_CAP) return `リンク URL は ${IMPROVEMENT_LINK_CAP} 文字までです`
+    if (!/^https?:\/\/\S+$/i.test(url)) return 'リンクは http(s):// で始まる URL を入力してください'
+  }
+  return null
+}
+
+/** 画像入力の正規化（未知形の入力 → filename/mime を補完した配列。形式・上限は error 関数で検証） */
+export function normalizeImprovementImages(raw: unknown): ImprovementRequestImage[] {
+  if (!Array.isArray(raw)) return []
+  const out: ImprovementRequestImage[] = []
+  for (const v of raw) {
+    if (!v || typeof v !== 'object') continue
+    const o = v as Record<string, unknown>
+    const dataUrl = String(o.dataUrl ?? '').trim()
+    if (!dataUrl) continue
+    // mime は data URI から導出（入力の mime は元ファイルの型で、縮小再エンコード後の実体とずれうる = 保存しない）
+    const mimeOfDataUrl = /^data:([a-z0-9.+/-]+);/i.exec(dataUrl)?.[1]
+    out.push({
+      filename: capCodePoints(String(o.filename ?? '').trim() || 'image', IMPROVEMENT_IMAGE_NAME_CAP),
+      mime: capCodePoints(mimeOfDataUrl ?? (String(o.mime ?? '').trim() || 'image/*'), 100),
+      dataUrl,
+    })
+  }
+  return out
+}
+
+/** 添付画像の検証（任意・複数）。エラーメッセージ | null */
+export function improvementImagesError(images: ImprovementRequestImage[]): string | null {
+  if (images.length > IMPROVEMENT_IMAGES_MAX) return `画像は ${IMPROVEMENT_IMAGES_MAX} 件までです`
+  for (const img of images) {
+    if (img.dataUrl.length > IMPROVEMENT_IMAGE_MAX_CHARS) return '画像が大きすぎます（縮小しても上限を超えています。別の画像をお試しください）'
+    if (!IMPROVEMENT_IMAGE_DATA_RE.test(img.dataUrl)) return '画像の形式が不正です（PNG / JPEG / WebP / GIF のみ添付できます）'
+  }
   return null
 }
 
@@ -430,7 +507,8 @@ export interface PromptItemInput {
   detail: string
   status: ImprovementStatus
   pagePaths: string[]
-  requests: { pageLabel: string; pagePath: string; body: string }[]
+  /** links / imageCount は要望の添付（省略可 = 旧呼び出しの下位互換。リンクはプロンプトに列挙・画像は件数のみ言及） */
+  requests: { pageLabel: string; pagePath: string; body: string; links?: string[]; imageCount?: number }[]
   /** 担当者の時系列メモ（改修方針の検討過程・保留/見送り理由。プロンプトに加味する）。時系列（古い順）。省略/空可 */
   notes?: { body: string; kind: ImprovementNoteKind }[]
 }
@@ -479,6 +557,10 @@ export function buildCodingPrompt(items: PromptItemInput[], opts?: { intro?: str
       it.requests.forEach((r) => {
         const where = r.pageLabel.trim() || r.pagePath.trim()
         out.push(`- ${where ? `［${where}］ ` : ''}${r.body.trim().replace(/\s*\n\s*/g, ' ')}`)
+        // 添付（リンクは参照先として列挙・画像はアプリ内参照のため件数のみ言及）
+        const links = (r.links ?? []).map(l => l.trim()).filter(Boolean)
+        for (const link of links) out.push(`  - 参考リンク: ${link}`)
+        if ((r.imageCount ?? 0) > 0) out.push(`  - 添付画像 ${r.imageCount} 件（改善要望ページの要望詳細で参照可能）`)
       })
     }
     // 担当者の時系列メモ（改修方針・保留/見送り理由）。AI がプロンプトを起こす際にこれも加味する

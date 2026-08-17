@@ -32,13 +32,18 @@ import {
   IMPROVEMENT_TITLE_CAP,
   type ImprovementFilter,
   type ImprovementNoteKind,
+  type ImprovementRequestImage,
   type ImprovementStatus,
   improvementBodyError,
+  improvementImagesError,
+  improvementLinksError,
   improvementNoteError,
   improvementPlanError,
   improvementTitleError,
   matchesImprovementFilter,
   normalizeClusterPlan,
+  normalizeImprovementImages,
+  normalizeImprovementLinks,
   type PromptItemInput,
 } from '../../../shared/domain/improvement'
 import { canManageImprovements } from '../../../shared/domain/permissions'
@@ -54,8 +59,14 @@ import { generateJson } from '../lib/llm'
 // フロントの fmtDate は文字列をそのまま表示するため、生 timestamptz（UTC "…Z"）を返すと
 // 0〜9 時台の登録が前日表示になる日付ずれ + モードのパリティ崩れになる = CONVENTIONS「時刻の扱い」）
 const JST = `AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"'`
-const REQ_COLS = `id, member_id AS "memberId", member_name AS "memberName",
-  page_path AS "pagePath", page_label AS "pageLabel", body, item_id AS "itemId",
+/**
+ * 要望列（withImages=false は images を空配列で返す = 全件一覧の転送量削減。
+ * 添付画像の data URI は 1 件最大 400,000 字のため、全件 GET に含めると応答が肥大する。
+ * 画像の実体は itemId 指定の GET（ドロワーの遅延ロード）でのみ返す）
+ */
+const reqColsOf = (withImages: boolean): string => `id, member_id AS "memberId", member_name AS "memberName",
+  page_path AS "pagePath", page_label AS "pageLabel", body, links,
+  ${withImages ? 'images' : `'[]'::jsonb AS images`}, item_id AS "itemId",
   to_char(archived_at ${JST}) AS "archivedAt", to_char(created_at ${JST}) AS "createdAt"`
 const ITEM_COLS = `id, title, summary, detail, status, page_paths AS "pagePaths",
   source_request_ids AS "sourceRequestIds", llm, to_char(archived_at ${JST}) AS "archivedAt",
@@ -82,19 +93,29 @@ async function inTxn<T>(pool: pg.Pool, fn: (db: pg.PoolClient) => Promise<T>): P
 }
 
 /**
- * 投稿本文の検証（投稿 API・単体テストから利用）。エラーは AKO-REQ-001（400）へ変換して throw。
+ * 投稿本文の検証（投稿 API・単体テストから利用）。エラーは AKO-REQ-001（本文）/
+ * AKO-REQ-009（リンク）/ AKO-REQ-010（画像）の 400 へ変換して throw。
  * ページ情報は投稿元の記録であり、上限で切り詰めるのみ（必須ではない）。
+ * リンク・画像は任意の添付（正規化 + 件数/形式/上限を shared 検証 = mock と両モード parity）。
  */
 export function improvementRequestInputOf(body: Record<string, unknown>): {
-  body: string; pagePath: string; pageLabel: string
+  body: string; pagePath: string; pageLabel: string; links: string[]; images: ImprovementRequestImage[]
 } {
   const text = String(body.body ?? '').trim()
   const msg = improvementBodyError(text)
   if (msg) throw err('AKO-REQ-001', msg, 400)
+  const links = normalizeImprovementLinks(body.links)
+  const linksMsg = improvementLinksError(links)
+  if (linksMsg) throw err('AKO-REQ-009', linksMsg, 400)
+  const images = normalizeImprovementImages(body.images)
+  const imagesMsg = improvementImagesError(images)
+  if (imagesMsg) throw err('AKO-REQ-010', imagesMsg, 400)
   return {
     body: capCodePoints(text, IMPROVEMENT_BODY_CAP),
     pagePath: capCodePoints(String(body.pagePath ?? '').trim(), IMPROVEMENT_PAGE_PATH_CAP),
     pageLabel: capCodePoints(String(body.pageLabel ?? '').trim(), IMPROVEMENT_PAGE_LABEL_CAP),
+    links,
+    images,
   }
 }
 
@@ -138,10 +159,13 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
     const user = c.get('user')
     const input = improvementRequestInputOf(await c.req.json().catch(() => ({})) as Record<string, unknown>)
     const id = newId('imreq')
+    // RETURNING は画像実体を含めない（クライアントは id しか読まず、アップロードした data URI をそのまま
+    // 返すのは転送量の無駄 = 一覧 GET と同じ姿勢。実体は itemId 指定 GET でのみ返す）
     const { rows } = await pool.query(
-      `INSERT INTO improvement_requests (id, member_id, member_name, page_path, page_label, body)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING ${REQ_COLS}`,
-      [id, user.id, user.name, input.pagePath, input.pageLabel, input.body])
+      `INSERT INTO improvement_requests (id, member_id, member_name, page_path, page_label, body, links, images)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING ${reqColsOf(false)}`,
+      [id, user.id, user.name, input.pagePath, input.pageLabel, input.body,
+        JSON.stringify(input.links), JSON.stringify(input.images)])
     return c.json({ data: rows[0] }, 201)
   })
 
@@ -156,7 +180,8 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
     if (itemId) { params.push(itemId); where.push(`item_id = $${params.length}`) }
     if (unclustered) where.push('item_id IS NULL')
     if (!includeArchived) where.push('archived_at IS NULL')
-    const sql = `SELECT ${REQ_COLS} FROM improvement_requests`
+    // 画像の実体は itemId 指定時のみ（全件一覧は '[]' = ドロワー表示時に遅延ロード。レビュー指摘 2026-08-17）
+    const sql = `SELECT ${reqColsOf(Boolean(itemId))} FROM improvement_requests`
       + (where.length ? ` WHERE ${where.join(' AND ')}` : '')
       + ' ORDER BY created_at DESC, id'
     const { rows } = await pool.query(sql, params)
@@ -172,7 +197,7 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
     if (rows.length === 0) throw err('AKO-REQ-002', '対象の要望が見つかりません', 404)
     if (rows[0]!.memberId !== user.id) await requireManage(c, pool)
     const { rows: out } = await pool.query(
-      `UPDATE improvement_requests SET archived_at = now() WHERE id = $1 RETURNING ${REQ_COLS}`, [id])
+      `UPDATE improvement_requests SET archived_at = now() WHERE id = $1 RETURNING ${reqColsOf(false)}`, [id])
     await audit(pool, { actorId: user.id, action: 'archive', entity: 'improvement_requests', entityId: id, detail: '要望を取消' })
     return c.json({ data: out[0] })
   })
@@ -185,7 +210,7 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
     if (rows.length === 0) throw err('AKO-REQ-002', '対象の要望が見つかりません', 404)
     if (rows[0]!.memberId !== user.id) await requireManage(c, pool)
     const { rows: out } = await pool.query(
-      `UPDATE improvement_requests SET archived_at = NULL WHERE id = $1 RETURNING ${REQ_COLS}`, [id])
+      `UPDATE improvement_requests SET archived_at = NULL WHERE id = $1 RETURNING ${reqColsOf(false)}`, [id])
     await audit(pool, { actorId: user.id, action: 'restore', entity: 'improvement_requests', entityId: id, detail: '要望の取消を戻す' })
     return c.json({ data: out[0] })
   })
@@ -463,16 +488,22 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
     const matched = itemRows.filter(r => matchesImprovementFilter(r.status, filter))
     // 各改修単位の元要望（有効なもの）を 1 クエリでまとめて取得し JS でグルーピング（N+1 回避）
     const ids = matched.map(m => m.id)
-    const byItem = new Map<string, { pageLabel: string; pagePath: string; body: string }[]>()
+    const byItem = new Map<string, { pageLabel: string; pagePath: string; body: string; links: string[]; imageCount: number }[]>()
     const notesByItem = new Map<string, { body: string; kind: ImprovementNoteKind }[]>()
     if (ids.length > 0) {
-      const { rows: reqRows } = await pool.query<{ itemId: string; pageLabel: string; pagePath: string; body: string }>(
-        `SELECT item_id AS "itemId", page_label AS "pageLabel", page_path AS "pagePath", body
+      const { rows: reqRows } = await pool.query<{
+        itemId: string; pageLabel: string; pagePath: string; body: string; links: string[]; imageCount: number
+      }>(
+        `SELECT item_id AS "itemId", page_label AS "pageLabel", page_path AS "pagePath", body,
+           links, jsonb_array_length(images) AS "imageCount"
          FROM improvement_requests WHERE item_id = ANY($1::text[]) AND archived_at IS NULL
          ORDER BY created_at, id`, [ids])
       for (const r of reqRows) {
         const arr = byItem.get(r.itemId)
-        const entry = { pageLabel: r.pageLabel, pagePath: r.pagePath, body: r.body }
+        const entry = {
+          pageLabel: r.pageLabel, pagePath: r.pagePath, body: r.body,
+          links: r.links ?? [], imageCount: Number(r.imageCount ?? 0),
+        }
         if (arr) arr.push(entry)
         else byItem.set(r.itemId, [entry])
       }

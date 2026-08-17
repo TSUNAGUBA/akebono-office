@@ -7,7 +7,8 @@ import { canManageImprovements, type PermissionSubject } from '../../shared/doma
 import type { PermissionRule } from '../../shared/domain/types'
 import {
   buildCodingPrompt, canTransition, heuristicClusterRequests,
-  IMPROVEMENT_STATUS_META, matchesImprovementFilter,
+  IMPROVEMENT_STATUS_META, improvementImagesError, improvementLinksError,
+  matchesImprovementFilter, normalizeImprovementLinks,
 } from '../../shared/domain/improvement'
 
 function rule(p: Partial<PermissionRule>): PermissionRule {
@@ -80,5 +81,26 @@ describe('集約・ステータス・プロンプト（純ロジック）', () =
     }])
     expect(prompt).toContain('/a')
     expect(prompt).toContain('直したい')
+  })
+  it('要望の添付（参考リンク・画像件数）がプロンプトに加味される（2026-08-17）', () => {
+    const prompt = buildCodingPrompt([{
+      title: 't', summary: 's', detail: 'd', status: 'accepted', pagePaths: ['/a'],
+      requests: [{ pageLabel: 'A', pagePath: '/a', body: '直したい', links: ['https://ref.example'], imageCount: 1 }],
+    }])
+    expect(prompt).toContain('参考リンク: https://ref.example')
+    expect(prompt).toContain('添付画像 1 件')
+  })
+})
+
+describe('添付の検証（投稿フォーム = ImprovementSubmit / useImprovements.submit と共有）', () => {
+  it('リンクは http(s) のみ・正規化で空/重複を除く', () => {
+    expect(normalizeImprovementLinks([' https://a.example ', '', ' https://a.example'])).toEqual(['https://a.example'])
+    expect(improvementLinksError(['https://a.example'])).toBeNull()
+    expect(improvementLinksError(['example.com'])).not.toBeNull()
+  })
+  it('画像は data:image の allowlist（PNG/JPEG/WebP/GIF）のみ', () => {
+    const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+    expect(improvementImagesError([{ filename: 'a.png', mime: 'image/png', dataUrl: png }])).toBeNull()
+    expect(improvementImagesError([{ filename: 'a.svg', mime: 'image/svg+xml', dataUrl: 'data:image/svg+xml;base64,PHN2Zz4=' }])).not.toBeNull()
   })
 })

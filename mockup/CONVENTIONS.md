@@ -152,7 +152,7 @@ const di = useDashboardInsight() // buildSegmentSummary/buildCompanySummary（�
 // 改善要望（F-42。各ページからの投稿 → AI 集約 → 権限を持つ人のみ管理 → 改修プロンプト出力。純ロジック SoT = shared/domain/improvement）
 // 投稿は全員可（submit は管理 GET を誤発火しない）。閲覧・管理は canManageImprovements（deny-by-default + 管理者常時可 = usePermissions）。
 // 集約は未集約要望のみ処理・判定済み item のステータスは巻き戻さない（原則2）。API = Vertex AI → 決定的ヒューリスティック（heuristicClusterRequests）
-const imp = useImprovements()  // submit / refresh / activeItems・archivedItems・unclusteredRequests / requestsForItem / notesForItem（時系列メモ・古い順）/ generate（集約）/ setStatus / editItem（title/summary/detail + planStart/planEnd 対応予定期間 = ガント）/ setItemArchived・setRequestArchived（取消/復元）/ addNote(itemId, body, kind?='note'|'reject')・setNoteArchived（メモ追加・取消/復元 = 0059。buildCodingPrompt に加味）/ buildPrompt(filter)
+const imp = useImprovements()  // submit（body + 任意添付 links〔URL 最大5〕・images〔縮小 data URI 最大4〕= 0061。mock は persisted=false で容量超過を通知）/ refresh / loadRequestImages(itemId)（添付画像の遅延ロード = API の全件 GET は images を含まない）/ activeItems・archivedItems・unclusteredRequests / requestsForItem / notesForItem（時系列メモ・古い順）/ generate（集約）/ setStatus / editItem（title/summary/detail + planStart/planEnd 対応予定期間 = ガント）/ setItemArchived・setRequestArchived（取消/復元）/ addNote(itemId, body, kind?='note'|'reject')・setNoteArchived（メモ追加・取消/復元 = 0059。buildCodingPrompt に加味）/ buildPrompt(filter)（添付リンク・画像件数も加味）
 ```
 
 ## UI コンポーネント在庫（新規に作る前にここを見る）
@@ -199,7 +199,7 @@ const imp = useImprovements()  // submit / refresh / activeItems・archivedItems
 | `MediaChannelBar` | props なし。メディア分析の対象チャンネル切替バー（現在チャンネル + 連携業態バッジ + GA 連携バッジ + 設定導線）。全メディア画面の先頭に置く（F-40。2026-08-03 で MediaSegmentBar から改称・チャンネル化） |
 | `MediaGaConnect` | channelId?（未指定=現在チャンネル）, variant（'gate'/'bar'）。Google Analytics 連携ゲート（モック = 擬似 OAuth / API = Google OAuth 2.0 リダイレクト + 復帰クエリ `?ga=` 処理 + GA4 プロパティ選択モーダル。needsProperty の中間状態も再開可）。連携済みは状態バー + 解除（F-40。CalendarConnectGate と同型） |
 | `MediaFunnel` | stages（{label,value}[]）。流入→受注の簡易ファネル（幅バー + 前段比。Chart.js 不使用。F-40） |
-| `WidgetsImprovementSubmit` | props なし。全ページ共通ヘッダーの「要望を送る」導線（F-42）。投稿元ページのパス・表示名を自動付与して UiModal で投稿。投稿は認証済み全員可（layouts/default.vue に 1 つ設置で全ページに出る） |
+| `WidgetsImprovementSubmit` | props なし。全ページ共通ヘッダーの「要望を送る」導線（F-42）。投稿元ページのパス・表示名を自動付与して UiModal で投稿。投稿は認証済み全員可（layouts/default.vue に 1 つ設置で全ページに出る）。**添付（F-42-11・2026-08-17）: 参考リンク（複数・行削除可）+ 画像（複数・`imageToDataUri` 縮小・プレビュー/個別削除）。参照はリンク=別タブ・画像=押下で拡大（/improvements ドロワー）** |
 | `ImprovementsKanban` | items（ImprovementItem[]）・reqCount(id)。ステータス別カラムのカンバン（F-42）。emit: open(item)・status(id,to)。許可遷移のクイック操作・横スクロール |
 | `ImprovementsGantt` | items（ImprovementItem[]）。対応予定期間のガント（F-42。月次/週次/日次切替・前後送り・今スナップ）。列/バーは `shared/domain/gantt` 純関数。**ステータスフィルタ（既定=accepted=実装決定・未完了。選択肢/判定は `IMPROVEMENT_FILTER_OPTIONS`/`matchesImprovementFilter` 共有）+ バー色分け（対応する=brand/未判定=warn/解決済み=muted〔完了グレー〕/対応しない=crit・決着済みは退色）+ 凡例。2026-08-12** emit: open(item) |
 

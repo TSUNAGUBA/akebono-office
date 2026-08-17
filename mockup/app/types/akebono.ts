@@ -17,8 +17,9 @@ export type IndustryType = 'retail' | 'maker' | 'logistics' | 'it_service' | 'ot
 
 export const INDUSTRY_TYPES: IndustryType[] = ['retail', 'maker', 'logistics', 'it_service', 'other']
 
-/** 取引先の取引ロール（Company.partnerRoles。§3.3 / F-30-1） */
-export type PartnerRole = 'customer' | 'supplier' | 'consignor_artist' | 'store' | 'subcontractor'
+/** 取引先の取引ロール（Company.partnerRoles。§3.3 / F-30-1）。SoT = shared/domain/akebono の PARTNER_ROLES
+ *  （取込の和名解釈・ラベルと同源 = 追加時に片側だけ増えるドリフトを防ぐ。2026-08-17） */
+export type { PartnerRole } from '../../../shared/domain/akebono'
 
 /** 課金区分（情報サービス業のサービス品目。null = 物販。F-21-1） */
 export type BillingType = 'one_time' | 'monthly' | 'usage'

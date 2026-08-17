@@ -4,6 +4,7 @@
  * - normalizeDashboardInsight（ダッシュボード AI レポートの LLM 出力正規化 F-41）
  */
 import { describe, expect, it } from 'vitest'
+import { parsePartnerRoles } from '../../../shared/domain/akebono'
 import {
   applyImportTransform, extractCsvRecords, extractFixedRecords, extractJsonRecords, IMPORT_TRANSFORMS,
 } from '../../../shared/domain/import-run'
@@ -233,5 +234,29 @@ describe('normalizeDashboardInsight（LLM 出力 → DashboardInsight）', () =>
   it('findings/actions が配列でなくても空配列で通す（本文があれば有効）', () => {
     const out = normalizeDashboardInsight({ executiveSummary: '本文のみ', findings: null, actions: 'x' })
     expect(out).toEqual({ executiveSummary: '本文のみ', findings: [], actions: [] })
+  })
+})
+
+describe('parsePartnerRoles（取引先取込の取引ロール解釈。2026-08-17）', () => {
+  it('キー・和名の混在と各種区切り（/ , 、 ・ 空白）を受理し、出現順・重複除去で返す', () => {
+    expect(parsePartnerRoles('customer/supplier')).toEqual({ roles: ['customer', 'supplier'], invalid: [] })
+    expect(parsePartnerRoles('得意先、店舗')).toEqual({ roles: ['customer', 'store'], invalid: [] })
+    expect(parsePartnerRoles('仕入先・外注先 仕入先')).toEqual({ roles: ['supplier', 'subcontractor'], invalid: [] })
+    expect(parsePartnerRoles('store,customer')).toEqual({ roles: ['store', 'customer'], invalid: [] })
+  })
+  it('委託仕入先（作家）は全角/半角括弧・略記（委託仕入先・作家）を許容する', () => {
+    expect(parsePartnerRoles('委託仕入先（作家）').roles).toEqual(['consignor_artist'])
+    expect(parsePartnerRoles('委託仕入先(作家)').roles).toEqual(['consignor_artist'])
+    expect(parsePartnerRoles('作家').roles).toEqual(['consignor_artist'])
+    expect(parsePartnerRoles('委託仕入先').roles).toEqual(['consignor_artist'])
+  })
+  it('解釈できないトークンは invalid に返す（呼び出し側で行を隔離）', () => {
+    const out = parsePartnerRoles('得意先/取引先X')
+    expect(out.roles).toEqual(['customer'])
+    expect(out.invalid).toEqual(['取引先X'])
+    expect(parsePartnerRoles('')).toEqual({ roles: [], invalid: [] })
+    // 区切り文字のみのセルは空と同義（invalid ではない = applyCompanies が既存ロールを保持する契機）
+    expect(parsePartnerRoles('/')).toEqual({ roles: [], invalid: [] })
+    expect(parsePartnerRoles(' 、 ')).toEqual({ roles: [], invalid: [] })
   })
 })

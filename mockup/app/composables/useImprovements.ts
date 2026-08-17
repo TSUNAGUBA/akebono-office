@@ -27,11 +27,16 @@ import {
   type ImprovementNote,
   type ImprovementNoteKind,
   type ImprovementRequest,
+  type ImprovementRequestImage,
   type ImprovementStatus,
   improvementBodyError,
+  improvementImagesError,
+  improvementLinksError,
   improvementNoteError,
   improvementPlanError,
   matchesImprovementFilter,
+  normalizeImprovementImages,
+  normalizeImprovementLinks,
   type PromptItemInput,
 } from '~/types/improvement'
 
@@ -81,16 +86,26 @@ export function useImprovements() {
 
   // ---------- 投稿（各ページから。全員可） ----------
 
-  async function submit(input: { body: string; pagePath?: string; pageLabel?: string }): Promise<Result> {
+  async function submit(input: {
+    body: string; pagePath?: string; pageLabel?: string
+    links?: string[]; images?: ImprovementRequestImage[]
+  }): Promise<Result & { persisted?: boolean }> {
     const body = (input.body ?? '').trim()
     const msg = improvementBodyError(body)
     if (msg) return { ok: false, error: { code: 'AKO-REQ-001', message: msg } }
+    // 添付（URL リンク・画像。任意）。検証は shared の共有関数 = API と両モード parity
+    const links = normalizeImprovementLinks(input.links ?? [])
+    const linksMsg = improvementLinksError(links)
+    if (linksMsg) return { ok: false, error: { code: 'AKO-REQ-009', message: linksMsg } }
+    const images = normalizeImprovementImages(input.images ?? [])
+    const imagesMsg = improvementImagesError(images)
+    if (imagesMsg) return { ok: false, error: { code: 'AKO-REQ-010', message: imagesMsg } }
     const pagePath = capCodePoints((input.pagePath ?? '').trim(), IMPROVEMENT_PAGE_PATH_CAP)
     const pageLabel = capCodePoints((input.pageLabel ?? '').trim(), IMPROVEMENT_PAGE_LABEL_CAP)
     if (isApi) {
       // 管理 GET は権限者のみのため reload しない（投稿者は一覧を見ない）
       const res = await apiWrite<{ id: string }>('/v1/improvements/requests', {
-        body: { body: capCodePoints(body, IMPROVEMENT_BODY_CAP), pagePath, pageLabel },
+        body: { body: capCodePoints(body, IMPROVEMENT_BODY_CAP), pagePath, pageLabel, links, images },
       })
       return res.ok ? { ok: true, id: res.id } : res
     }
@@ -103,12 +118,15 @@ export function useImprovements() {
       pagePath,
       pageLabel,
       body: capCodePoints(body, IMPROVEMENT_BODY_CAP),
+      links,
+      images,
       itemId: null,
       archivedAt: null,
       createdAt: nowJstIso(),
     }]
-    commit()
-    return { ok: true, id }
+    // 画像添付で localStorage 容量超過になりうる。永続化可否を返し UI が警告できるようにする（useProducts.addImage と同型）
+    const persisted = commit()
+    return { ok: true, id, persisted }
   }
 
   // ---------- 管理データのロード（管理ページから） ----------
@@ -123,8 +141,32 @@ export function useImprovements() {
       apiFetch<ImprovementNote[]>('/v1/improvements/notes').catch(() => [] as ImprovementNote[]),
     ])
     apiItems.value = items
-    apiRequests.value = reqs
+    // 全件 GET は画像を含まない（転送量削減）。遅延ロード済みの画像は引き継ぐ
+    // （要望は追記系で画像は不変のため、キャッシュが古くなることはない）
+    const prevImages = new Map(apiRequests.value.filter(r => (r.images ?? []).length > 0).map(r => [r.id, r.images!]))
+    apiRequests.value = reqs.map(r =>
+      ((r.images ?? []).length === 0 && prevImages.has(r.id) ? { ...r, images: prevImages.get(r.id)! } : r))
     apiNotes.value = notes
+  }
+
+  /** 画像ロード済みの改修単位 id（画像は追記系で不変のため無効化不要 = 再オープンは再取得しない） */
+  const imagesLoadedFor = new Set<string>()
+
+  /**
+   * ある改修単位の元要望の添付画像を遅延ロード（API モードのみ。全件 GET は画像を含まないため、
+   * ドロワーを開いたタイミングで itemId 指定の GET から画像込み行を取得して差し替える）。
+   * 失敗しても本文表示は妨げない（原則4）。mock は画像を常に保持しているため no-op。
+   */
+  async function loadRequestImages(itemId: string): Promise<void> {
+    if (!isApi || !itemId || imagesLoadedFor.has(itemId)) return
+    try {
+      const rows = await apiFetch<ImprovementRequest[]>('/v1/improvements/requests', {
+        query: { itemId, includeArchived: '1' },
+      })
+      const byId = new Map(rows.map(r => [r.id, r]))
+      apiRequests.value = apiRequests.value.map(r => byId.get(r.id) ?? r)
+      imagesLoadedFor.add(itemId)
+    } catch { /* 画像の遅延ロード失敗は無視（本文・リンクは表示済み。次回オープンで再試行） */ }
   }
 
   // ---------- AI 集約（生成・再生成） ----------
@@ -183,6 +225,8 @@ export function useImprovements() {
       const res = await apiWrite<{ created: number; appended: number; clustered: number; llm: boolean }>(
         '/v1/improvements/generate', {})
       if (!res.ok) return { ok: false, error: res.error }
+      // 集約で要望の紐付け先が変わる（画像付き要望が既存 item へ追記されうる）ため、画像ロード済みフラグを破棄
+      imagesLoadedFor.clear()
       await refresh()
       return { ok: true, ...res.data }
     }
@@ -342,7 +386,11 @@ export function useImprovements() {
     const matched = activeItems.value.filter(it => matchesImprovementFilter(it.status, filter))
     const promptItems: PromptItemInput[] = matched.map(it => ({
       title: it.title, summary: it.summary, detail: it.detail, status: it.status, pagePaths: it.pagePaths,
-      requests: requestsForItem(it.id).map(r => ({ pageLabel: r.pageLabel, pagePath: r.pagePath, body: r.body })),
+      requests: requestsForItem(it.id).map(r => ({
+        pageLabel: r.pageLabel, pagePath: r.pagePath, body: r.body,
+        // 添付（リンクはプロンプトに列挙・画像は件数のみ。API /prompt と同じ内容 = 両モード parity）
+        links: r.links ?? [], imageCount: (r.images ?? []).length,
+      })),
       // 時系列メモも加味（古い順。notesForItem がソート済み）
       notes: notesForItem(it.id).map(n => ({ body: n.body, kind: n.kind })),
     }))
@@ -351,7 +399,7 @@ export function useImprovements() {
 
   return {
     // データ
-    activeItems, archivedItems, unclusteredRequests, requestsForItem, notesForItem, refresh,
+    activeItems, archivedItems, unclusteredRequests, requestsForItem, notesForItem, refresh, loadRequestImages,
     // 操作
     submit, generate, setStatus, editItem, setItemArchived, setRequestArchived,
     addNote, setNoteArchived, buildPrompt,

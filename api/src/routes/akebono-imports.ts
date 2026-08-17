@@ -41,6 +41,7 @@ import {
   masterImportDefOf, parseMasterFieldValue, MASTER_IMPORT_ENTITIES,
   type MasterImportDef, type MasterImportField,
 } from '../../../shared/domain/import-master'
+import { parsePartnerRoles } from '../../../shared/domain/akebono'
 import { normalizeFieldLocators, normalizeImportSourceConfig, rowsToCsv } from '../../../shared/domain/import-parse'
 import {
   extractCsvRecords, extractFixedRecords, extractJsonRecords, MAX_IMPORT_ROWS,
@@ -739,7 +740,7 @@ async function applyProductVariants(
 async function applyCompanies(
   db: pg.PoolClient, records: ImportRecord[], fields: ImportRunFieldDef[],
 ): Promise<ApplyOutcome> {
-  assertKnownTargets(fields, new Set(['name', 'kind', 'industryId', 'size', 'location', 'description']), true)
+  assertKnownTargets(fields, new Set(['name', 'kind', 'partnerRoles', 'industryId', 'size', 'location', 'description']), true)
   const industries = await importRefLookup(db, 'company', fields, 'industryId')
   const out: ApplyOutcome = { applied: 0, skipped: 0, issues: [] }
   for (const rec of records) {
@@ -750,6 +751,18 @@ async function applyCompanies(
     const kindRaw = v.kind ?? ''
     const kind = kindRaw === '' ? null : (kindRaw === 'self' || kindRaw === '自社' ? 'self' : kindRaw === 'customer' || kindRaw === '顧客' ? 'customer' : undefined)
     if (kind === undefined) { fail(`区分「${kindRaw}」を解釈できないため隔離（self/customer）`); continue }
+    // 取引ロール（複数可。キー/和名を区切りで列挙 = parsePartnerRoles。空 = 変更しない・解釈不能トークンは隔離）
+    const rolesRaw = v.partnerRoles ?? ''
+    let partnerRoles: string[] | null = null
+    if (rolesRaw !== '') {
+      const parsed = parsePartnerRoles(rolesRaw)
+      if (parsed.invalid.length > 0) {
+        fail(`取引ロール「${parsed.invalid.join('/')}」を解釈できないため隔離（customer/supplier/consignor_artist/store/subcontractor または 得意先/仕入先/委託仕入先（作家）/店舗/外注先）`)
+        continue
+      }
+      // 区切り文字のみのセル（例: "/"）は「空 = 既存ロールを保持」と同義に扱う（[] で既存値を消さない）
+      partnerRoles = parsed.roles.length > 0 ? parsed.roles : null
+    }
     const industryRaw = v.industryId ?? ''
     const industryId = industryRaw === '' ? null : industries.resolve(industryRaw)
     if (industryRaw !== '' && !industryId) { fail(unresolvedRefMsg('業界', industryRaw, industries)); continue }
@@ -763,6 +776,7 @@ async function applyCompanies(
       const params: unknown[] = [target.id]
       const push = (col: string, val: unknown): void => { params.push(val); sets.push(`${col} = $${params.length}`) }
       if (kind) push('kind', kind)
+      if (partnerRoles) push('partner_roles', JSON.stringify(partnerRoles))
       if (industryId) {
         push('primary_industry_id', industryId)
         const ids = Array.isArray(target.industryIds) ? target.industryIds : []
@@ -783,9 +797,10 @@ async function applyCompanies(
     }
     try {
       await rowWrite(db, () => db.query(
-        `INSERT INTO companies (id, kind, name, industry_ids, primary_industry_id, size, location, description, custom)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-        [newId('c'), kind ?? 'customer', capCp(name, 200), JSON.stringify(industryId ? [industryId] : []),
+        `INSERT INTO companies (id, kind, name, partner_roles, industry_ids, primary_industry_id, size, location, description, custom)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        [newId('c'), kind ?? 'customer', capCp(name, 200), JSON.stringify(partnerRoles ?? []),
+          JSON.stringify(industryId ? [industryId] : []),
           industryId ?? '', capCp(v.size ?? '', 100), capCp(v.location ?? '', 200),
           capCp(v.description ?? '', 2000), JSON.stringify(custom)]))
       out.applied++
