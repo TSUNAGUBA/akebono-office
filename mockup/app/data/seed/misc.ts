@@ -1,6 +1,6 @@
 /** ドメイン別シードデータ（このファイルは担当機能の実装者が所有・拡充する） */
 import type { AkebonoWish, AuditLog } from '~/types/domain'
-import type { ImprovementItem, ImprovementNote, ImprovementRequest } from '~/types/improvement'
+import type { ImprovementItem, ImprovementNote, ImprovementRequest, ImprovementRequestComment } from '~/types/improvement'
 import { addDays } from '~/utils/format'
 import { seedToday } from './history'
 
@@ -20,12 +20,21 @@ export const seedAkebonoWishes: AkebonoWish[] = [
 const DEMO_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
 
 export const seedImprovementRequests: ImprovementRequest[] = [
-  // imreq-0001 は添付（参考リンク + 画像）のデモ。参照時はリンク = 別タブ / 画像 = 押下で拡大（2026-08-17）
-  { id: 'imreq-0001', memberId: 'm-04', memberName: '三浦 彩', pagePath: '/akebono/sales', pageLabel: 'AKEBONO 売上', body: '売上一覧で合計金額をもっと大きく目立たせてほしい。月次の締めで一番見る数字なので。', links: ['https://example.com/monthly-close-manual'], images: [{ filename: 'sales-screenshot.png', mime: 'image/png', dataUrl: DEMO_PNG }], itemId: 'imp-0001', archivedAt: null, createdAt: `${addDays(today, -8)}T10:12:00+09:00` },
-  { id: 'imreq-0002', memberId: 'm-05', memberName: '小野寺 岳', pagePath: '/akebono/sales', pageLabel: 'AKEBONO 売上', body: '税込・税抜の表示を切り替えられるようにしたい。得意先によって見たい方が違う。', itemId: 'imp-0001', archivedAt: null, createdAt: `${addDays(today, -7)}T14:40:00+09:00` },
-  { id: 'imreq-0003', memberId: 'm-03', memberName: '葛西 大輔', pagePath: '/timecard', pageLabel: 'タイムカード', body: '打刻を押し間違えたときに取り消せるようにしてほしい。今は修正申請しかなく手間。', itemId: 'imp-0002', archivedAt: null, createdAt: `${addDays(today, -5)}T09:03:00+09:00` },
-  { id: 'imreq-0004', memberId: 'm-04', memberName: '三浦 彩', pagePath: '/reports', pageLabel: '日報・週報', body: '日報の下書きを前日分からコピーできるようにしてほしい。定型の作業報告が多いので。', itemId: null, archivedAt: null, createdAt: `${addDays(today, -2)}T18:30:00+09:00` },
-  { id: 'imreq-0005', memberId: 'm-05', memberName: '小野寺 岳', pagePath: '/masters/members', pageLabel: 'メンバー管理', body: 'メンバー一覧を部署で絞り込めるようにしてほしい。人数が増えて探しづらい。', itemId: null, archivedAt: null, createdAt: `${addDays(today, -1)}T13:15:00+09:00` },
+  // imreq-0001 は添付（参考リンク + 画像）のデモ。参照時はリンク = 別タブ / 画像 = 押下で拡大（2026-08-17）。
+  // adoption（選別）: 集約済み = adopted / imreq-0004 = 採用済み・未集約（「AI で集約」対象のデモ）/
+  // imreq-0005 = 未選別 / imreq-0006 = 不採用（コメントで理由を残すデモ）= 2026-08-17 第 2 弾
+  { id: 'imreq-0001', memberId: 'm-04', memberName: '三浦 彩', pagePath: '/akebono/sales', pageLabel: 'AKEBONO 売上', body: '売上一覧で合計金額をもっと大きく目立たせてほしい。月次の締めで一番見る数字なので。', adoption: 'adopted', links: ['https://example.com/monthly-close-manual'], images: [{ filename: 'sales-screenshot.png', mime: 'image/png', dataUrl: DEMO_PNG }], itemId: 'imp-0001', archivedAt: null, createdAt: `${addDays(today, -8)}T10:12:00+09:00` },
+  { id: 'imreq-0002', memberId: 'm-05', memberName: '小野寺 岳', pagePath: '/akebono/sales', pageLabel: 'AKEBONO 売上', body: '税込・税抜の表示を切り替えられるようにしたい。得意先によって見たい方が違う。', adoption: 'adopted', itemId: 'imp-0001', archivedAt: null, createdAt: `${addDays(today, -7)}T14:40:00+09:00` },
+  { id: 'imreq-0003', memberId: 'm-03', memberName: '葛西 大輔', pagePath: '/timecard', pageLabel: 'タイムカード', body: '打刻を押し間違えたときに取り消せるようにしてほしい。今は修正申請しかなく手間。', adoption: 'adopted', itemId: 'imp-0002', archivedAt: null, createdAt: `${addDays(today, -5)}T09:03:00+09:00` },
+  { id: 'imreq-0004', memberId: 'm-04', memberName: '三浦 彩', pagePath: '/reports', pageLabel: '日報・週報', body: '日報の下書きを前日分からコピーできるようにしてほしい。定型の作業報告が多いので。', adoption: 'adopted', itemId: null, archivedAt: null, createdAt: `${addDays(today, -2)}T18:30:00+09:00` },
+  { id: 'imreq-0005', memberId: 'm-05', memberName: '小野寺 岳', pagePath: '/masters/members', pageLabel: 'メンバー管理', body: 'メンバー一覧を部署で絞り込めるようにしてほしい。人数が増えて探しづらい。', adoption: 'pending', itemId: null, archivedAt: null, createdAt: `${addDays(today, -1)}T13:15:00+09:00` },
+  { id: 'imreq-0006', memberId: 'm-03', memberName: '葛西 大輔', pagePath: '/settings', pageLabel: '設定', body: '画面の配色を自分好みに完全カスタマイズできるようにしてほしい。', adoption: 'declined', itemId: null, archivedAt: null, createdAt: `${addDays(today, -1)}T16:45:00+09:00` },
+]
+
+/** 生要望へのコメント（選別のやり取りデモ = 2026-08-17 第 2 弾。不採用理由・確認事項を時系列で残す） */
+export const seedImprovementRequestComments: ImprovementRequestComment[] = [
+  { id: 'imcmt-0001', requestId: 'imreq-0006', memberId: 'm-01', memberName: '山下 誠', body: 'ブランド統一のため配色の完全カスタマイズは見送ります（ダッシュボードのレイアウト・密度設定で近いことは可能です）。', archivedAt: null, createdAt: `${addDays(today, -1)}T17:10:00+09:00` },
+  { id: 'imcmt-0002', requestId: 'imreq-0005', memberId: 'm-01', memberName: '山下 誠', body: '対象は「全員のタイムカード」の絞り込みと同じ部署セレクトの想定で良いですか？', archivedAt: null, createdAt: `${addDays(today, 0)}T09:20:00+09:00` },
 ]
 
 /**

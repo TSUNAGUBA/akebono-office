@@ -4,12 +4,16 @@ import {
   canTransition,
   type ClusterOpenItem,
   type ClusterRequestInput,
+  clusterTargetRequests,
   heuristicClusterRequests,
   improvementBodyError,
+  improvementCommentError,
+  IMPROVEMENT_COMMENT_CAP,
   IMPROVEMENT_IMAGE_MAX_CHARS,
   IMPROVEMENT_IMAGES_MAX,
   IMPROVEMENT_LINKS_MAX,
   IMPROVEMENT_NOTE_CAP,
+  IMPROVEMENT_REQUEST_ADOPTION_META,
   IMPROVEMENT_REQUEST_STATUS_META,
   improvementImagesError,
   improvementLinksError,
@@ -19,6 +23,7 @@ import {
   normalizeClusterPlan,
   normalizeImprovementImages,
   normalizeImprovementLinks,
+  requestAdoptionOf,
   requestStatusOf,
 } from '../../../shared/domain/improvement'
 import { improvementRequestInputOf } from '../../src/routes/improvements'
@@ -240,6 +245,44 @@ describe('要望ステータス（requestStatusOf / buildCodingPrompt の再生�
     }])
     expect(prompt).not.toContain('【')
     expect(prompt).not.toContain('再改修しないこと')
+  })
+})
+
+describe('要望の選別（requestAdoptionOf。2026-08-17 第 2 弾）', () => {
+  it('adoption 未定義（旧データ）は集約済みなら adopted・未集約なら pending（下位互換 = 原則7）', () => {
+    expect(requestAdoptionOf({})).toBe('pending')
+    expect(requestAdoptionOf({ adoption: null, itemId: null })).toBe('pending')
+    expect(requestAdoptionOf({ itemId: 'imp-1' })).toBe('adopted')
+  })
+  it('adoption 明示値を優先する（不正値は無視して補完）', () => {
+    expect(requestAdoptionOf({ adoption: 'declined', itemId: null })).toBe('declined')
+    expect(requestAdoptionOf({ adoption: 'pending', itemId: null })).toBe('pending')
+    expect(requestAdoptionOf({ adoption: 'bogus' as never, itemId: 'imp-1' })).toBe('adopted')
+  })
+  it('選別メタは 未選別/採用/不採用 のラベルと tone を持つ', () => {
+    expect(IMPROVEMENT_REQUEST_ADOPTION_META.pending.label).toBe('未選別')
+    expect(IMPROVEMENT_REQUEST_ADOPTION_META.adopted).toMatchObject({ label: '採用', tone: 'ok' })
+    expect(IMPROVEMENT_REQUEST_ADOPTION_META.declined).toMatchObject({ label: '不採用', tone: 'warn' })
+  })
+  it('clusterTargetRequests は未集約・有効・採用済みのみ選ぶ（mock 集約と generate SQL の共有条件 = 原則6）', () => {
+    const rows = [
+      { id: 'a', itemId: null, archivedAt: null, adoption: 'adopted' as const },
+      { id: 'b', itemId: null, archivedAt: null, adoption: 'pending' as const },
+      { id: 'c', itemId: null, archivedAt: null, adoption: 'declined' as const },
+      { id: 'd', itemId: 'imp-1', archivedAt: null, adoption: 'adopted' as const }, // 集約済みは対象外
+      { id: 'e', itemId: null, archivedAt: '2026-08-17T00:00:00+09:00', adoption: 'adopted' as const }, // 取消済みは対象外
+      { id: 'f', itemId: null, archivedAt: null }, // 旧データ（adoption 未定義 = 未選別扱い）も対象外
+    ]
+    expect(clusterTargetRequests(rows).map(r => r.id)).toEqual(['a'])
+  })
+})
+
+describe('improvementCommentError（生要望コメント。2026-08-17 第 2 弾）', () => {
+  it('空はエラー・上限超過はエラー・通常は null', () => {
+    expect(improvementCommentError('  ')).not.toBeNull()
+    expect(improvementCommentError('部署セレクトと同じ想定で良いですか？')).toBeNull()
+    expect(improvementCommentError('あ'.repeat(IMPROVEMENT_COMMENT_CAP))).toBeNull()
+    expect(improvementCommentError('あ'.repeat(IMPROVEMENT_COMMENT_CAP + 1))).not.toBeNull()
   })
 })
 

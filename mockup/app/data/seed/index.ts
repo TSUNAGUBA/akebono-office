@@ -16,7 +16,7 @@ import type {
 import type { WeeklyInsightRecord } from '../../../../shared/domain/weekly-insight'
 import type { MediaInsightRecord } from '../../../../shared/domain/media-insight'
 import type { DashboardInsightRecord } from '../../../../shared/domain/portfolio-insight'
-import type { ImprovementItem, ImprovementNote, ImprovementRequest } from '../../../../shared/domain/improvement'
+import type { ImprovementItem, ImprovementNote, ImprovementRequest, ImprovementRequestComment } from '../../../../shared/domain/improvement'
 import type {
   AkebonoAppConfig, BusinessSegment, ConsignmentTerm, ImportMapping, ImportRun, ImportSource,
   InboundPlan, InboundResult, InventoryTransaction, Invoice, ItemSetting, OutboundPlan,
@@ -155,6 +155,7 @@ export interface MockDbShape {
   improvementRequests: ImprovementRequest[]
   improvementItems: ImprovementItem[]
   improvementNotes: ImprovementNote[]
+  improvementRequestComments: ImprovementRequestComment[]
 }
 
 export function buildSeed(): MockDbShape {
@@ -286,5 +287,6 @@ export function buildSeed(): MockDbShape {
     improvementRequests: misc.seedImprovementRequests, // デモの生要望（集約済み + 未集約）
     improvementItems: misc.seedImprovementItems, // 改修単位デモ（カンバン/ガント初期表示。対応予定期間あり）
     improvementNotes: misc.seedImprovementNotes, // 改修単位の時系列メモ（デモ）
+    improvementRequestComments: misc.seedImprovementRequestComments, // 生要望へのコメント（選別のやり取りデモ）
   }
 }

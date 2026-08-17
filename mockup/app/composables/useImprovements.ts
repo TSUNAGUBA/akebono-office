@@ -22,16 +22,21 @@ import {
   IMPROVEMENT_PAGE_PATH_CAP,
   IMPROVEMENT_SUMMARY_CAP,
   IMPROVEMENT_TITLE_CAP,
+  IMPROVEMENT_COMMENT_CAP,
+  IMPROVEMENT_REQUEST_ADOPTIONS,
   IMPROVEMENT_REQUEST_STATUSES,
   type ImprovementFilter,
   type ImprovementItem,
   type ImprovementNote,
   type ImprovementNoteKind,
   type ImprovementRequest,
+  type ImprovementRequestAdoption,
+  type ImprovementRequestComment,
   type ImprovementRequestImage,
   type ImprovementRequestStatus,
   type ImprovementStatus,
   improvementBodyError,
+  improvementCommentError,
   improvementImagesError,
   improvementLinksError,
   improvementNoteError,
@@ -39,6 +44,8 @@ import {
   matchesImprovementFilter,
   normalizeImprovementImages,
   normalizeImprovementLinks,
+  clusterTargetRequests,
+  requestAdoptionOf,
   type PromptItemInput,
 } from '~/types/improvement'
 
@@ -61,18 +68,27 @@ export function useImprovements() {
   const apiItems = ref<ImprovementItem[]>([])
   const apiRequests = ref<ImprovementRequest[]>([])
   const apiNotes = ref<ImprovementNote[]>([])
+  const apiComments = ref<ImprovementRequestComment[]>([])
 
   // isApi 分岐で tbl を触るのは mock モードのみ = API モードで管理 GET を誤発火しない
   const allItems = computed<ImprovementItem[]>(() => (isApi ? apiItems.value : tbl('improvementItems').value))
   const allRequests = computed<ImprovementRequest[]>(() => (isApi ? apiRequests.value : tbl('improvementRequests').value))
   const allNotes = computed<ImprovementNote[]>(() => (isApi ? apiNotes.value : tbl('improvementNotes').value))
+  const allComments = computed<ImprovementRequestComment[]>(() =>
+    (isApi ? apiComments.value : tbl('improvementRequestComments').value))
 
   /** 有効な改修単位（取消済みを除く）。ステータスは含めall */
   const activeItems = computed(() => allItems.value.filter(it => !it.archivedAt))
   /** 取消済みの改修単位 */
   const archivedItems = computed(() => allItems.value.filter(it => it.archivedAt))
-  /** 未集約かつ有効な生要望（「AI で集約」対象の件数バッジ等に使う） */
+  /** 未集約かつ有効な生要望 */
   const unclusteredRequests = computed(() => allRequests.value.filter(r => !r.itemId && !r.archivedAt))
+  /** 採用済み・未集約の生要望（「AI で集約」の対象 = 件数バッジ。改善要望 2026-08-17 第 2 弾）。
+   *  判定は shared の clusterTargetRequests（API generate の SQL 条件と同一 = 原則6） */
+  const adoptedUnclustered = computed(() => clusterTargetRequests(allRequests.value))
+  /** 未選別の生要望（管理者の確認待ち = 受付箱バッジ） */
+  const pendingRequests = computed(() =>
+    unclusteredRequests.value.filter(r => requestAdoptionOf(r) === 'pending'))
 
   /** ある改修単位の元要望（有効なもの） */
   function requestsForItem(itemId: string): ImprovementRequest[] {
@@ -83,6 +99,13 @@ export function useImprovements() {
   function notesForItem(itemId: string): ImprovementNote[] {
     return allNotes.value
       .filter(n => n.itemId === itemId && !n.archivedAt)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+  }
+
+  /** ある生要望のコメント（有効なもの・古い順。選別のやり取り = 改善要望 2026-08-17 第 2 弾） */
+  function commentsForRequest(requestId: string): ImprovementRequestComment[] {
+    return allComments.value
+      .filter(cm => cm.requestId === requestId && !cm.archivedAt)
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
   }
 
@@ -120,6 +143,7 @@ export function useImprovements() {
       pagePath,
       pageLabel,
       body: capCodePoints(body, IMPROVEMENT_BODY_CAP),
+      adoption: 'pending', // 投稿直後は未選別（管理者の取捨選択が先 = 改善要望 2026-08-17 第 2 弾）
       links,
       images,
       itemId: null,
@@ -136,13 +160,15 @@ export function useImprovements() {
   /** 管理データを取得（API モードのみ実フェッチ。mock はライブ computed のため no-op） */
   async function refresh(): Promise<void> {
     if (!isApi) return
-    const [items, reqs, notes] = await Promise.all([
+    const [items, reqs, notes, comments] = await Promise.all([
       apiFetch<ImprovementItem[]>('/v1/improvements/items', { query: { includeArchived: '1' } }).catch(() => [] as ImprovementItem[]),
       apiFetch<ImprovementRequest[]>('/v1/improvements/requests', { query: { includeArchived: '1' } }).catch(() => [] as ImprovementRequest[]),
-      // メモは有効なもののみ（取消済みは UI に出さない = 追加操作の取消は確認ダイアログで担保。原則9.5）
+      // メモ・コメントは有効なもののみ（取消済みは UI に出さない = 追加操作の取消は確認ダイアログで担保。原則9.5）
       apiFetch<ImprovementNote[]>('/v1/improvements/notes').catch(() => [] as ImprovementNote[]),
+      apiFetch<ImprovementRequestComment[]>('/v1/improvements/request-comments').catch(() => [] as ImprovementRequestComment[]),
     ])
     apiItems.value = items
+    apiComments.value = comments
     // 全件 GET は画像を含まない（転送量削減）。遅延ロード済みの画像は引き継ぐ
     // （要望は追記系で画像は不変のため、キャッシュが古くなることはない）
     const prevImages = new Map(apiRequests.value.filter(r => (r.images ?? []).length > 0).map(r => [r.id, r.images!]))
@@ -171,14 +197,37 @@ export function useImprovements() {
     } catch { /* 画像の遅延ロード失敗は無視（本文・リンクは表示済み。次回オープンで再試行） */ }
   }
 
+  /** 画像ロード済みの未集約要望 id（loadRequestImagesFor 用。画像は不変のため無効化不要） */
+  const unclusteredImagesLoaded = new Set<string>()
+
+  /**
+   * 生要望ドロワー用の添付画像の遅延ロード（API モードのみ）。集約済みは itemId 指定ロードへ委譲し、
+   * 未集約は unclustered=1 の GET（画像込み）で差し替える。失敗しても本文表示は妨げない（原則4）。
+   */
+  async function loadRequestImagesFor(r: ImprovementRequest): Promise<void> {
+    if (!isApi) return
+    if (r.itemId) return loadRequestImages(r.itemId)
+    if (unclusteredImagesLoaded.has(r.id)) return
+    try {
+      // includeArchived: 取消済み（復元判断で添付を見る）も対象。省略すると API が archived を除外し、
+      // 取消済み行の画像が永久にロードされず毎回空振りフェッチになる（レビュー指摘 2026-08-17）
+      const rows = await apiFetch<ImprovementRequest[]>('/v1/improvements/requests', {
+        query: { unclustered: '1', includeArchived: '1' },
+      })
+      const byId = new Map(rows.map(x => [x.id, x]))
+      apiRequests.value = apiRequests.value.map(x => byId.get(x.id) ?? x)
+      rows.forEach(x => unclusteredImagesLoaded.add(x.id))
+    } catch { /* 画像の遅延ロード失敗は無視（次回オープンで再試行） */ }
+  }
+
   // ---------- AI 集約（生成・再生成） ----------
 
-  /** mock モードの決定的集約（API の Vertex→ヒューリスティックのフォールバックと同一ロジック） */
+  /** mock モードの決定的集約（API の Vertex→ヒューリスティックのフォールバックと同一ロジック）。
+   *  対象は**採用（adopted）済み**の未集約要望のみ（未選別・不採用は集約しない = 2026-08-17 第 2 弾） */
   function mockGenerate(): GenerateResult {
     const reqsRef = tbl('improvementRequests')
     const itemsRef = tbl('improvementItems')
-    const unclustered = reqsRef.value
-      .filter(r => !r.itemId && !r.archivedAt)
+    const unclustered = clusterTargetRequests(reqsRef.value)
       .map(r => ({ id: r.id, pagePath: r.pagePath, pageLabel: r.pageLabel, body: r.body }))
     if (unclustered.length === 0) return { ok: true, created: 0, appended: 0, clustered: 0, llm: false }
     const openItems = itemsRef.value
@@ -313,6 +362,74 @@ export function useImprovements() {
     return { ok: true, id }
   }
 
+  /**
+   * 要望の選別（採用/不採用/未選別へ戻す。遷移自由 = 選び直しはいつでも可 = 原則9.5）。
+   * 採用のみ AI 集約対象。集約済み（itemId あり）の要望は変更不可（API は AKO-REQ-013 = 記録保護）。
+   */
+  async function setRequestAdoption(id: string, adoption: ImprovementRequestAdoption): Promise<Result> {
+    if (!IMPROVEMENT_REQUEST_ADOPTIONS.includes(adoption)) {
+      return { ok: false, error: { code: 'AKO-REQ-012', message: 'adoption が不正です（pending / adopted / declined）' } }
+    }
+    if (isApi) {
+      const res = await apiWrite(`/v1/improvements/requests/${id}/adoption`, { body: { adoption } })
+      if (res.ok) await refresh()
+      return res.ok ? { ok: true, id } : res
+    }
+    const reqsRef = tbl('improvementRequests')
+    const cur = reqsRef.value.find(r => r.id === id)
+    if (!cur) return { ok: false, error: { code: 'AKO-REQ-002', message: '対象の要望が見つかりません' } }
+    if (cur.itemId) {
+      return { ok: false, error: { code: 'AKO-REQ-013', message: '集約済みの要望は選別を変更できません（対象から外す場合は要望を取り消してください）' } }
+    }
+    reqsRef.value = reqsRef.value.map(r => (r.id === id ? { ...r, adoption } : r))
+    commit()
+    return { ok: true, id }
+  }
+
+  // ---------- 生要望へのコメント（選別のやり取り。記録系・追記のみ = 2026-08-17 第 2 弾） ----------
+
+  /** コメントを追加（管理権限者 + 投稿者本人。API 側で権限判定） */
+  async function addRequestComment(requestId: string, body: string): Promise<Result> {
+    const text = (body ?? '').trim()
+    const msg = improvementCommentError(text)
+    if (msg) return { ok: false, error: { code: 'AKO-REQ-014', message: msg } }
+    if (isApi) {
+      const res = await apiWrite(`/v1/improvements/requests/${requestId}/comments`, {
+        body: { body: capCodePoints(text, IMPROVEMENT_COMMENT_CAP) },
+      })
+      if (res.ok) await refresh()
+      return res.ok ? { ok: true, id: requestId } : res
+    }
+    const reqsRef = tbl('improvementRequests')
+    if (!reqsRef.value.some(r => r.id === requestId && !r.archivedAt)) {
+      return { ok: false, error: { code: 'AKO-REQ-002', message: '対象の要望が見つかりません' } }
+    }
+    const commentsRef = tbl('improvementRequestComments')
+    const id = nextId('improvementRequestComments', 'imcmt')
+    commentsRef.value = [...commentsRef.value, {
+      id, requestId, memberId: currentUser.value.id, memberName: currentUser.value.name,
+      body: capCodePoints(text, IMPROVEMENT_COMMENT_CAP), archivedAt: null, createdAt: nowJstIso(),
+    }]
+    commit()
+    return { ok: true, id }
+  }
+
+  /** コメントの取消（論理削除）/ 復元（原則9.5） */
+  async function setRequestCommentArchived(id: string, archived: boolean): Promise<Result> {
+    if (isApi) {
+      const res = await apiWrite(`/v1/improvements/request-comments/${id}/${archived ? 'archive' : 'restore'}`, {})
+      if (res.ok) await refresh()
+      return res.ok ? { ok: true, id } : res
+    }
+    const commentsRef = tbl('improvementRequestComments')
+    if (!commentsRef.value.some(cm => cm.id === id)) {
+      return { ok: false, error: { code: 'AKO-REQ-002', message: '対象のコメントが見つかりません' } }
+    }
+    commentsRef.value = commentsRef.value.map(cm => (cm.id === id ? { ...cm, archivedAt: archived ? nowJstIso() : null } : cm))
+    commit()
+    return { ok: true, id }
+  }
+
   /** 要望 1 件ずつのステータス変更（open/resolved/dismissed。遷移自由 = 誤操作はいつでも戻せる = 原則9.5） */
   async function setRequestStatus(id: string, status: ImprovementRequestStatus): Promise<Result> {
     if (!IMPROVEMENT_REQUEST_STATUSES.includes(status)) {
@@ -420,9 +537,11 @@ export function useImprovements() {
 
   return {
     // データ
-    activeItems, archivedItems, unclusteredRequests, requestsForItem, notesForItem, refresh, loadRequestImages,
+    activeItems, archivedItems, unclusteredRequests, adoptedUnclustered, pendingRequests, allRequests,
+    requestsForItem, notesForItem, commentsForRequest, refresh, loadRequestImages, loadRequestImagesFor,
     // 操作
     submit, generate, setStatus, editItem, setItemArchived, setRequestArchived, setRequestStatus,
+    setRequestAdoption, addRequestComment, setRequestCommentArchived,
     addNote, setNoteArchived, buildPrompt,
   }
 }

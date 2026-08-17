@@ -419,17 +419,27 @@ akebonoCards: ComputedRef<MenuCard[]>
 | AKO-REQ-006 | 許可されないステータス遷移（F-42・状態機械。409） | ✅ |
 | AKO-REQ-007 | 対応予定期間が不正（実在日でない／終了<開始／終了のみ指定。F-42・0058） | ✅ |
 | AKO-REQ-008 | 改修単位メモの本文が未入力／上限超過（F-42・0059） | ✅ |
+| AKO-REQ-009 | 添付リンクが不正（http(s) 以外／件数・長さ超過。F-42-11・0061） | ✅ |
+| AKO-REQ-010 | 添付画像が不正（allowlist 外／件数・サイズ超過。F-42-11・0061） | ✅ |
+| AKO-REQ-011 | 要望ステータス値が不正（open/resolved/dismissed 以外。F-42-12・0062） | ✅ |
+| AKO-REQ-012 | 要望の選別値が不正（pending/adopted/declined 以外。F-42-14・0063） | ✅ |
+| AKO-REQ-013 | 集約済み要望の選別変更（記録保護 = 409。F-42-14・0063） | ✅ |
+| AKO-REQ-014 | 生要望コメントの本文が未入力／上限超過（F-42-15・0063） | ✅ |
 
 **改善要望（F-42。`/v1/improvements`。投稿は認証済み全員可・管理系は `canManageImprovements` = deny-by-default + 管理者常時可）:**
 
 | メソッド・パス | 用途 | 認可 |
 |---|---|---|
 | `POST /v1/improvements/requests` | 要望の投稿（`body`／`pagePath`／`pageLabel`／**`links`〔URL 配列・最大 5 件・http(s) のみ = AKO-REQ-009〕／`images`〔`{filename,mime,dataUrl}` 配列・最大 4 件・PNG/JPEG/WebP/GIF data URI = AKO-REQ-010。0061〕**） | 認証済み全員 |
-| `GET /v1/improvements/requests` | 生要望の一覧（`itemId`／`unclustered`／`includeArchived`）。**添付画像の実体（data URI）は `itemId` 指定時のみ返す**（全件一覧は `images: []` = 転送量削減。フロントはドロワー表示時に遅延ロード・0061） | 管理 |
+| `GET /v1/improvements/requests` | 生要望の一覧（`itemId`／`unclustered`／`includeArchived`）。**添付画像の実体（data URI）は `itemId` または `unclustered=1` 指定時のみ返す**（全件一覧は `images: []` = 転送量削減。フロントはドロワー表示時に遅延ロード・0061／0063） | 管理 |
 | `POST /v1/improvements/requests/:id/archive`・`/restore` | 要望の取消／復元 | 投稿者本人 or 管理 |
 | `POST /v1/improvements/requests/:id/status` | **要望単位のステータス変更（`status` = open/resolved/dismissed。不正は AKO-REQ-011。遷移自由 = 原則9.5。プロンプト再生成に反映・0062）** | 管理 |
+| `POST /v1/improvements/requests/:id/adoption` | **生要望の選別（`adoption` = pending/adopted/declined。不正は AKO-REQ-012。集約済み要望は変更不可 = AKO-REQ-013〔409〕。採用のみ AI 集約対象・0063）** | 管理 |
+| `GET /v1/improvements/request-comments` | **生要望コメントの一覧（`requestId`／`includeArchived`。古い順。0063）** | 管理 |
+| `POST /v1/improvements/requests/:id/comments` | **生要望へのコメント追加（`body`・最大 2,000 字。空/超過は AKO-REQ-014。選別のやり取りを時系列で記録・0063）** | 投稿者本人 or 管理 |
+| `POST /v1/improvements/request-comments/:id/archive`・`/restore` | **コメントの取消／復元（論理削除・原則9.5。0063）** | 記入者本人 or 管理 |
 | `GET /v1/improvements/items` | 改修単位の一覧（`filter`／`includeArchived`） | 管理 |
-| `POST /v1/improvements/generate` | AI 集約（Vertex → ヒューリスティック。未集約要望のみ・冪等） | 管理 |
+| `POST /v1/improvements/generate` | AI 集約（Vertex → ヒューリスティック。**採用済み（`adoption='adopted'`）** かつ未集約の要望のみ・冪等。0063） | 管理 |
 | `POST /v1/improvements/items/:id` | 改修単位の編集（`title`／`summary`／`detail`／`planStart`／`planEnd`〔対応予定期間・0058〕の部分更新） | 管理 |
 | `POST /v1/improvements/items/:id/status` | ステータス変更（状態機械・reopen 可） | 管理 |
 | `POST /v1/improvements/items/:id/archive`・`/restore` | 改修単位の取消／復元 | 管理 |

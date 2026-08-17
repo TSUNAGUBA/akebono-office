@@ -29,14 +29,18 @@ import {
   IMPROVEMENT_PAGE_PATH_CAP,
   IMPROVEMENT_STATUSES,
   IMPROVEMENT_SUMMARY_CAP,
+  IMPROVEMENT_COMMENT_CAP,
+  IMPROVEMENT_REQUEST_ADOPTIONS,
   IMPROVEMENT_REQUEST_STATUSES,
   IMPROVEMENT_TITLE_CAP,
   type ImprovementFilter,
   type ImprovementNoteKind,
+  type ImprovementRequestAdoption,
   type ImprovementRequestImage,
   type ImprovementRequestStatus,
   type ImprovementStatus,
   improvementBodyError,
+  improvementCommentError,
   improvementImagesError,
   improvementLinksError,
   improvementNoteError,
@@ -67,7 +71,7 @@ const JST = `AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"'`
  * 画像の実体は itemId 指定の GET（ドロワーの遅延ロード）でのみ返す）
  */
 const reqColsOf = (withImages: boolean): string => `id, member_id AS "memberId", member_name AS "memberName",
-  page_path AS "pagePath", page_label AS "pageLabel", body, status, links,
+  page_path AS "pagePath", page_label AS "pageLabel", body, status, adoption, links,
   ${withImages ? 'images' : `'[]'::jsonb AS images`}, item_id AS "itemId",
   to_char(archived_at ${JST}) AS "archivedAt", to_char(created_at ${JST}) AS "createdAt"`
 const ITEM_COLS = `id, title, summary, detail, status, page_paths AS "pagePaths",
@@ -77,6 +81,8 @@ const ITEM_COLS = `id, title, summary, detail, status, page_paths AS "pagePaths"
   plan_start AS "planStart", plan_end AS "planEnd"`
 const NOTE_COLS = `id, item_id AS "itemId", member_id AS "memberId", member_name AS "memberName",
   body, kind, to_char(archived_at ${JST}) AS "archivedAt", to_char(created_at ${JST}) AS "createdAt"`
+const COMMENT_COLS = `id, request_id AS "requestId", member_id AS "memberId", member_name AS "memberName",
+  body, to_char(archived_at ${JST}) AS "archivedAt", to_char(created_at ${JST}) AS "createdAt"`
 
 /** トランザクション補助（akebono-trade と同型 = 原則3） */
 async function inTxn<T>(pool: pg.Pool, fn: (db: pg.PoolClient) => Promise<T>): Promise<T> {
@@ -182,8 +188,9 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
     if (itemId) { params.push(itemId); where.push(`item_id = $${params.length}`) }
     if (unclustered) where.push('item_id IS NULL')
     if (!includeArchived) where.push('archived_at IS NULL')
-    // 画像の実体は itemId 指定時のみ（全件一覧は '[]' = ドロワー表示時に遅延ロード。レビュー指摘 2026-08-17）
-    const sql = `SELECT ${reqColsOf(Boolean(itemId))} FROM improvement_requests`
+    // 画像の実体は絞り込み指定時のみ（itemId = 改修単位ドロワー / unclustered=1 = 生要望ドロワーの遅延ロード。
+    // 全件一覧は '[]' = 転送量削減。レビュー指摘 2026-08-17）
+    const sql = `SELECT ${reqColsOf(Boolean(itemId) || unclustered)} FROM improvement_requests`
       + (where.length ? ` WHERE ${where.join(' AND ')}` : '')
       + ' ORDER BY created_at DESC, id'
     const { rows } = await pool.query(sql, params)
@@ -217,6 +224,92 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
     return c.json({ data: out[0] })
   })
 
+  // ---- 要望の選別（採用/不採用。管理）。採用のみ AI 集約対象（改善要望 2026-08-17 第 2 弾） ----
+  app.post('/requests/:id/adoption', async (c) => {
+    const user = await requireManage(c, pool)
+    const id = c.req.param('id')
+    const adoption = String(((await c.req.json().catch(() => ({}))) as { adoption?: unknown }).adoption ?? '')
+    if (!IMPROVEMENT_REQUEST_ADOPTIONS.includes(adoption as ImprovementRequestAdoption)) {
+      throw err('AKO-REQ-012', 'adoption が不正です（pending / adopted / declined）', 400)
+    }
+    // 集約済み（item_id あり）の要望は選別対象外（改修単位へ取り込み済みの記録を巻き戻さない = 原則2。
+    // 対象から外すときは要望の取消 = archive を使う）
+    const { rows } = await pool.query(
+      `UPDATE improvement_requests SET adoption = $2
+       WHERE id = $1 AND item_id IS NULL RETURNING ${reqColsOf(false)}`, [id, adoption])
+    if (rows.length === 0) {
+      const { rows: exists } = await pool.query(`SELECT item_id AS "itemId" FROM improvement_requests WHERE id = $1`, [id])
+      if (exists.length === 0) throw err('AKO-REQ-002', '対象の要望が見つかりません', 404)
+      throw err('AKO-REQ-013', '集約済みの要望は選別を変更できません（対象から外す場合は要望を取り消してください）', 409)
+    }
+    await audit(pool, { actorId: user.id, action: 'update', entity: 'improvement_requests', entityId: id, detail: `要望の選別 → ${adoption}` })
+    return c.json({ data: rows[0] })
+  })
+
+  // ---- 生要望へのコメント（やり取り。記録系・追記のみ = 改善要望 2026-08-17 第 2 弾） ----
+  // 一覧: requestId 指定でその要望のコメント / 未指定は全件（管理ページの一括ロード用）。既定は有効のみ
+  app.get('/request-comments', async (c) => {
+    await requireManage(c, pool)
+    const requestId = String(c.req.query('requestId') ?? '').trim()
+    const includeArchived = c.req.query('includeArchived') === '1'
+    const where: string[] = []
+    const params: unknown[] = []
+    if (requestId) { params.push(requestId); where.push(`request_id = $${params.length}`) }
+    if (!includeArchived) where.push('archived_at IS NULL')
+    const sql = `SELECT ${COMMENT_COLS} FROM improvement_request_comments`
+      + (where.length ? ` WHERE ${where.join(' AND ')}` : '')
+      + ' ORDER BY created_at, id' // 時系列（古い順）
+    const { rows } = await pool.query(sql, params)
+    return c.json({ data: rows })
+  })
+
+  // 追加: 管理権限者 or 投稿者本人（採用/不採用の検討・確認事項のやり取りを時系列で残す）
+  app.post('/requests/:id/comments', async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+    const text = String(((await c.req.json().catch(() => ({}))) as { body?: unknown }).body ?? '').trim()
+    const msg = improvementCommentError(text)
+    if (msg) throw err('AKO-REQ-014', msg, 400)
+    const { rows: reqRows } = await pool.query<{ memberId: string }>(
+      `SELECT member_id AS "memberId" FROM improvement_requests WHERE id = $1 AND archived_at IS NULL`, [id])
+    if (reqRows.length === 0) throw err('AKO-REQ-002', '対象の要望が見つかりません', 404)
+    if (reqRows[0]!.memberId !== user.id) await requireManage(c, pool)
+    const commentId = newId('imcmt')
+    const { rows } = await pool.query(
+      `INSERT INTO improvement_request_comments (id, request_id, member_id, member_name, body)
+       VALUES ($1, $2, $3, $4, $5) RETURNING ${COMMENT_COLS}`,
+      [commentId, id, user.id, user.name, capCodePoints(text, IMPROVEMENT_COMMENT_CAP)])
+    await audit(pool, { actorId: user.id, action: 'create', entity: 'improvement_request_comments', entityId: commentId, detail: '要望へコメント' })
+    return c.json({ data: rows[0] }, 201)
+  })
+
+  // コメントの取消（論理削除）/ 復元。記入者本人または管理権限者（原則9.5）
+  app.post('/request-comments/:id/archive', async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+    const { rows } = await pool.query<{ memberId: string }>(
+      `SELECT member_id AS "memberId" FROM improvement_request_comments WHERE id = $1`, [id])
+    if (rows.length === 0) throw err('AKO-REQ-002', '対象のコメントが見つかりません', 404)
+    if (rows[0]!.memberId !== user.id) await requireManage(c, pool)
+    const { rows: out } = await pool.query(
+      `UPDATE improvement_request_comments SET archived_at = now() WHERE id = $1 RETURNING ${COMMENT_COLS}`, [id])
+    await audit(pool, { actorId: user.id, action: 'archive', entity: 'improvement_request_comments', entityId: id, detail: 'コメントを取消' })
+    return c.json({ data: out[0] })
+  })
+
+  app.post('/request-comments/:id/restore', async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+    const { rows } = await pool.query<{ memberId: string }>(
+      `SELECT member_id AS "memberId" FROM improvement_request_comments WHERE id = $1`, [id])
+    if (rows.length === 0) throw err('AKO-REQ-002', '対象のコメントが見つかりません', 404)
+    if (rows[0]!.memberId !== user.id) await requireManage(c, pool)
+    const { rows: out } = await pool.query(
+      `UPDATE improvement_request_comments SET archived_at = NULL WHERE id = $1 RETURNING ${COMMENT_COLS}`, [id])
+    await audit(pool, { actorId: user.id, action: 'restore', entity: 'improvement_request_comments', entityId: id, detail: 'コメントの取消を戻す' })
+    return c.json({ data: out[0] })
+  })
+
   // ---- 要望ステータス変更（管理）。要望 1 件ずつの対応状況タグ（open/resolved/dismissed。遷移自由 = 原則9.5） ----
   app.post('/requests/:id/status', async (c) => {
     const user = await requireManage(c, pool)
@@ -245,13 +338,15 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
     return c.json({ data })
   })
 
-  // ---- AI 集約（生成・再生成）。未集約の要望のみ処理・判定済み item は不変（原則2） ----
+  // ---- AI 集約（生成・再生成）。**採用（adopted）済み**かつ未集約の要望のみ処理・判定済み item は不変（原則2）。
+  //      未選別・不採用の要望は集約されない（管理者の取捨選択が先 = 改善要望 2026-08-17 第 2 弾） ----
   app.post('/generate', async (c) => {
     const user = await requireManage(c, pool)
-    // 未集約かつ有効な要望
+    // 採用済み・未集約かつ有効な要望
     const { rows: reqRows } = await pool.query<ClusterRequestInput>(
       `SELECT id, page_path AS "pagePath", page_label AS "pageLabel", body
-       FROM improvement_requests WHERE item_id IS NULL AND archived_at IS NULL ORDER BY created_at, id`)
+       FROM improvement_requests
+       WHERE item_id IS NULL AND archived_at IS NULL AND adoption = 'adopted' ORDER BY created_at, id`)
     if (reqRows.length === 0) {
       return c.json({ data: { created: 0, appended: 0, clustered: 0, llm: false } })
     }
@@ -276,7 +371,7 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
         const itemId = newId('imp')
         const { rows: claimed } = await db.query<{ id: string }>(
           `UPDATE improvement_requests SET item_id = $1
-           WHERE id = ANY($2::text[]) AND item_id IS NULL AND archived_at IS NULL RETURNING id`,
+           WHERE id = ANY($2::text[]) AND item_id IS NULL AND archived_at IS NULL AND adoption = 'adopted' RETURNING id`,
           [itemId, cr.requestIds])
         if (claimed.length === 0) continue
         const claimedIds = claimed.map(r => r.id)
@@ -300,7 +395,7 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
         if (itemRows.length === 0) continue
         const { rows: claimed } = await db.query<{ id: string }>(
           `UPDATE improvement_requests SET item_id = $1
-           WHERE id = ANY($2::text[]) AND item_id IS NULL AND archived_at IS NULL RETURNING id`,
+           WHERE id = ANY($2::text[]) AND item_id IS NULL AND archived_at IS NULL AND adoption = 'adopted' RETURNING id`,
           [ap.itemId, ap.requestIds])
         if (claimed.length === 0) continue
         const cur = itemRows[0]!
