@@ -6,20 +6,23 @@
  *   未解決/解決済み・対応可否でフィルターできる。
  * - フィルター結果を、コーディング AI エージェント向けの詳細プロンプトとして出力する。
  */
-import { ClipboardCopy, ExternalLink, RefreshCw, Sparkles, Undo2, Wand2 } from 'lucide-vue-next'
+import { ClipboardCopy, ExternalLink, Inbox, RefreshCw, Sparkles, Undo2, Wand2 } from 'lucide-vue-next'
 import type { TableColumn, Tone } from '~/types/ui'
 import {
   IMPROVEMENT_FILTER_OPTIONS,
+  IMPROVEMENT_REQUEST_ADOPTION_META,
   IMPROVEMENT_REQUEST_STATUS_META,
   IMPROVEMENT_REQUEST_STATUSES,
   IMPROVEMENT_STATUS_META,
   IMPROVEMENT_STATUS_NEXT,
   type ImprovementFilter,
   type ImprovementItem,
+  type ImprovementRequest,
   type ImprovementRequestImage,
   type ImprovementRequestStatus,
   type ImprovementStatus,
   matchesImprovementFilter,
+  requestAdoptionOf,
   requestStatusOf,
 } from '~/types/improvement'
 import { fmtDate, fmtDateTime } from '~/utils/format'
@@ -72,23 +75,143 @@ const columns: TableColumn[] = [
 function statusLabel(s: ImprovementStatus): string { return IMPROVEMENT_STATUS_META[s]?.label ?? s }
 function statusTone(s: ImprovementStatus): Tone { return IMPROVEMENT_STATUS_META[s]?.tone ?? 'neutral' }
 
-// ---------- AI 集約 ----------
+// ---------- 生要望（受付箱 = 選別。改善要望 2026-08-17 第 2 弾） ----------
+
+/** 生要望一覧の絞り込み（既定 = 未選別。選別 → 採用分のみ AI 集約へ進むフロー） */
+const rawFilter = ref<string>('pending')
+const RAW_FILTER_OPTIONS = [
+  { value: 'pending', label: '未選別' },
+  { value: 'adopted', label: '採用（集約待ち）' },
+  { value: 'declined', label: '不採用' },
+  { value: 'clustered', label: '集約済み' },
+  { value: 'all', label: 'すべて' },
+  { value: 'archived', label: '取消済み' },
+]
+
+const rawRequests = computed<ImprovementRequest[]>(() => {
+  // 新しい順に明示ソート（API の GET は降順・mock の tbl は挿入順 = 昇順のため、
+  // ここで揃えないと両モードで並びが逆転する = 原則6。レビュー指摘 2026-08-17）
+  const all = [...imp.allRequests.value]
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))
+  const f = rawFilter.value
+  if (f === 'archived') return all.filter(r => r.archivedAt)
+  const active = all.filter(r => !r.archivedAt)
+  if (f === 'clustered') return active.filter(r => !!r.itemId)
+  if (f === 'all') return active
+  return active.filter(r => !r.itemId && requestAdoptionOf(r) === f)
+})
+const rawTableRows = computed(() => rawRequests.value as unknown as Record<string, unknown>[])
+
+const RAW_COLUMNS: TableColumn[] = [
+  { key: 'body', label: '要望', primary: true },
+  { key: 'adoption', label: '選別', width: '90px' },
+  { key: 'memberName', label: '投稿者', width: '110px' },
+  { key: 'page', label: '対象ページ', width: '180px' },
+  { key: 'comments', label: 'コメント', width: '80px', align: 'right' },
+  { key: 'createdAt', label: '投稿日', width: '110px' },
+]
+
+// 生要望の詳細ドロワー（選別・コメント・添付の参照）
+const selectedRequestId = ref<string | null>(null)
+const selectedRequest = computed<ImprovementRequest | null>(() =>
+  imp.allRequests.value.find(r => r.id === selectedRequestId.value) ?? null)
+const requestComments = computed(() => (selectedRequest.value ? imp.commentsForRequest(selectedRequest.value.id) : []))
+const commentInput = ref('')
+const commentBusy = ref(false)
+
+function openRequestDrawer(row: Record<string, unknown>): void {
+  selectedRequestId.value = String(row.id)
+  commentInput.value = ''
+  const r = imp.allRequests.value.find(x => x.id === selectedRequestId.value)
+  if (r) void imp.loadRequestImagesFor(r) // 添付画像の遅延ロード（非ブロッキング）
+}
+
+/** 選別の変更（採用 / 不採用 / 未選別に戻す。遷移自由 = 原則9.5。採用分のみ AI 集約対象） */
+async function changeAdoption(id: string, to: 'pending' | 'adopted' | 'declined'): Promise<void> {
+  const res = await imp.setRequestAdoption(id, to)
+  if (res.ok) {
+    const label = IMPROVEMENT_REQUEST_ADOPTION_META[to].label
+    toast.show(to === 'adopted' ? `「${label}」にしました（「AI で集約」の対象になります）` : `「${label}」にしました`, 'ok')
+  } else {
+    toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
+  }
+}
+
+async function addComment(): Promise<void> {
+  if (!selectedRequest.value || !commentInput.value.trim() || commentBusy.value) return
+  commentBusy.value = true
+  const res = await imp.addRequestComment(selectedRequest.value.id, commentInput.value)
+  commentBusy.value = false
+  if (res.ok) { commentInput.value = ''; toast.show('コメントを追加しました', 'ok') }
+  else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
+}
+
+async function removeComment(id: string): Promise<void> {
+  const ok = await confirm.ask('コメントの取消', 'このコメントを取り消します（一覧から消えます）。', { danger: true })
+  if (!ok) return
+  const res = await imp.setRequestCommentArchived(id, true)
+  if (res.ok) toast.show('コメントを取り消しました', 'ok')
+  else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
+}
+
+/** 生要望ドロワーからの取消/復元（原則9.5） */
+async function archiveSelectedRequest(): Promise<void> {
+  if (!selectedRequest.value) return
+  const ok = await confirm.ask('要望の取消', 'この要望を取り消します（選別・集約の対象から外れます）。取消済みからいつでも戻せます。', { danger: true })
+  if (!ok) return
+  const res = await imp.setRequestArchived(selectedRequest.value.id, true)
+  if (res.ok) { toast.show('要望を取り消しました', 'ok'); selectedRequestId.value = null }
+  else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
+}
+async function restoreSelectedRequest(): Promise<void> {
+  if (!selectedRequest.value) return
+  const res = await imp.setRequestArchived(selectedRequest.value.id, false)
+  if (res.ok) toast.show('要望の取消を戻しました', 'ok')
+  else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
+}
+
+/** 集約済み要望のドロワーから改修単位の詳細へ（生要望 → 改修単位の導線） */
+function openItemOfRequest(): void {
+  const itemId = selectedRequest.value?.itemId
+  if (!itemId) return
+  selectedRequestId.value = null
+  selectedId.value = itemId
+  editing.value = false
+  void imp.loadRequestImages(itemId)
+}
+
+// ---------- AI 集約（採用済みの未集約要望のみ対象 = 選別が先のフロー） ----------
 const generating = ref(false)
 async function runGenerate(): Promise<void> {
   if (generating.value) return
+  // refresh を跨いだ再クリックの二重発火を防ぐため、フラグは最初に立てる（try/finally で必ず解除）
   generating.value = true
-  const res = await imp.generate()
-  generating.value = false
-  if (!res.ok) {
-    toast.show(`${res.error?.code}: ${res.error?.message}`, 'crit')
-    return
+  try {
+    // 採用済みの集約待ちが無いときは、先に選別を促す（未選別が残っている場合はその旨も案内）。
+    // 判定前に最新化（他端末・別タブで採用された直後でも古いキャッシュでブロックしない = レビュー指摘 2026-08-17。mock は no-op）
+    if (imp.adoptedUnclustered.value.length === 0) {
+      await imp.refresh()
+      if (imp.adoptedUnclustered.value.length === 0) {
+        toast.show(imp.pendingRequests.value.length > 0
+          ? '採用済みの要望がありません。生要望一覧で「採用」してから集約してください'
+          : '集約する要望がありません（採用済みの集約待ちが 0 件です）', 'info')
+        return
+      }
+    }
+    const res = await imp.generate()
+    if (!res.ok) {
+      toast.show(`${res.error?.code}: ${res.error?.message}`, 'crit')
+      return
+    }
+    if ((res.clustered ?? 0) === 0) {
+      toast.show('新しく集約する要望はありませんでした', 'info')
+      return
+    }
+    const how = res.llm ? 'AI（LLM）' : 'ルールベース'
+    toast.show(`${how}で集約しました（改修単位 新規${res.created}・追記${res.appended}／要望${res.clustered}件）`, 'ok')
+  } finally {
+    generating.value = false
   }
-  if ((res.clustered ?? 0) === 0) {
-    toast.show('新しく集約する要望はありませんでした', 'info')
-    return
-  }
-  const how = res.llm ? 'AI（LLM）' : 'ルールベース'
-  toast.show(`${how}で集約しました（改修単位 新規${res.created}・追記${res.appended}／要望${res.clustered}件）`, 'ok')
 }
 
 // ---------- 詳細ドロワー ----------
@@ -302,14 +425,15 @@ async function copyAndClose(): Promise<void> {
   <div>
     <UiPageHeader
       title="改善要望"
-      description="各ページから寄せられた要望を AI で改修単位に整理し、対応可否・解決状況を管理します"
+      description="寄せられた生の要望をまず確認・選別し、採用した要望を AI で改修単位に整理して、対応可否・解決状況を管理します"
     >
       <template #actions>
+        <!-- AI 集約の対象 = 採用済み・集約待ちの要望のみ（選別が先 = 改善要望 2026-08-17 第 2 弾） -->
         <button type="button" class="btn btn-ghost" :disabled="generating" @click="runGenerate">
           <Wand2 class="h-4 w-4" aria-hidden="true" />
-          {{ generating ? '集約中…' : 'AI で集約' }}
-          <span v-if="imp.unclusteredRequests.value.length > 0" class="num ml-1 rounded-full bg-brand-soft px-1.5 text-[11px] font-bold text-brand">
-            {{ imp.unclusteredRequests.value.length }}
+          {{ generating ? '集約中…' : '採用済みを AI で集約' }}
+          <span v-if="imp.adoptedUnclustered.value.length > 0" class="num ml-1 rounded-full bg-brand-soft px-1.5 text-[11px] font-bold text-brand">
+            {{ imp.adoptedUnclustered.value.length }}
           </span>
         </button>
         <button type="button" class="btn btn-primary" @click="openPrompt">
@@ -325,7 +449,68 @@ async function copyAndClose(): Promise<void> {
     </div>
 
     <div v-else class="mt-4 grid gap-3">
-      <!-- ステータス別サマリー -->
+      <!-- ① 生要望（受付箱）: まず投稿された生の一覧を確認し、採用/不採用を選別する（改善要望 2026-08-17 第 2 弾）。
+           採用された要望のみが「AI で集約」の対象になる。行クリックで詳細（本文全文・添付・コメントのやり取り・選別） -->
+      <UiSectionCard
+        flush
+        title="生要望（受付箱）"
+        description="投稿された生の要望を確認し、採用／不採用を選別します。採用した要望だけが「AI で集約」の対象になります。行クリックでコメントのやり取り・添付の参照ができます"
+      >
+        <template #actions>
+          <span
+            v-if="imp.pendingRequests.value.length > 0"
+            class="inline-flex items-center gap-1 rounded-full bg-warn-soft px-2 py-0.5 text-[11px] font-bold text-warn"
+          >
+            <Inbox class="h-3.5 w-3.5" aria-hidden="true" />
+            未選別 <span class="num">{{ imp.pendingRequests.value.length }}</span> 件
+          </span>
+        </template>
+        <div class="border-b border-line p-2">
+          <UiChipTabs v-model="rawFilter" :options="RAW_FILTER_OPTIONS" />
+        </div>
+        <UiDataTable
+          :columns="RAW_COLUMNS"
+          :rows="rawTableRows"
+          clickable
+          empty-title="該当する要望はありません"
+          :empty-hint="rawFilter === 'pending' ? '未選別の要望はありません。新しい投稿を待つか、他の絞り込みを確認してください' : '絞り込みを変えて確認してください'"
+          @row-click="openRequestDrawer"
+        >
+          <template #cell-body="{ row }">
+            <span class="line-clamp-2 text-[13px] text-ink">{{ row.body }}</span>
+          </template>
+          <template #cell-adoption="{ row }">
+            <UiStatusBadge
+              v-if="(row as unknown as ImprovementRequest).itemId"
+              tone="info"
+              label="集約済み"
+              dot
+            />
+            <UiStatusBadge
+              v-else
+              :tone="IMPROVEMENT_REQUEST_ADOPTION_META[requestAdoptionOf(row as unknown as ImprovementRequest)].tone"
+              :label="IMPROVEMENT_REQUEST_ADOPTION_META[requestAdoptionOf(row as unknown as ImprovementRequest)].label"
+              dot
+            />
+          </template>
+          <template #cell-memberName="{ row }">
+            <span class="text-[12px] text-sub">{{ row.memberName }}</span>
+          </template>
+          <template #cell-page="{ row }">
+            <span class="text-[12px] text-sub">{{ String(row.pageLabel || row.pagePath || 'ページ不明') }}</span>
+          </template>
+          <template #cell-comments="{ row }">
+            <span class="num" :class="imp.commentsForRequest(String(row.id)).length > 0 ? 'font-semibold text-brand' : 'text-muted'">
+              {{ imp.commentsForRequest(String(row.id)).length }}
+            </span>
+          </template>
+          <template #cell-createdAt="{ row }">
+            <span class="text-[12px] text-muted">{{ fmtDate(row.createdAt as string) }}</span>
+          </template>
+        </UiDataTable>
+      </UiSectionCard>
+
+      <!-- ② 改修単位（採用 → AI 集約後）: ステータス別サマリー -->
       <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <UiKpiCard label="未判定" :value="String(counts.triage)" sub="対応可否の判定待ち" icon="HelpCircle" />
         <UiKpiCard label="対応する" :value="String(counts.accepted)" sub="改修予定（未解決）" icon="Wrench" />
@@ -384,7 +569,8 @@ async function copyAndClose(): Promise<void> {
       </UiSectionCard>
 
       <p class="text-[12px] text-muted">
-        未集約の要望が {{ imp.unclusteredRequests.value.length }} 件あります。「AI で集約」で改修単位に整理できます。
+        未選別 {{ imp.pendingRequests.value.length }} 件・採用済み（集約待ち）{{ imp.adoptedUnclustered.value.length }} 件。
+        生要望（受付箱）で選別し、「採用済みを AI で集約」で改修単位に整理できます。
       </p>
     </div>
 
@@ -599,6 +785,146 @@ async function copyAndClose(): Promise<void> {
           改修単位を取消
         </button>
         <button v-else-if="selected && selected.archivedAt" type="button" class="btn btn-ghost" @click="restoreItem">
+          <Undo2 class="h-4 w-4" aria-hidden="true" /> 取消を戻す
+        </button>
+      </template>
+    </UiDrawer>
+
+    <!-- 生要望の詳細ドロワー（選別・コメントのやり取り・添付の参照 = 改善要望 2026-08-17 第 2 弾） -->
+    <UiDrawer :open="!!selectedRequest" title="生要望の詳細" width="520px" @close="selectedRequestId = null">
+      <div v-if="selectedRequest" class="grid gap-4">
+        <div class="flex flex-wrap items-center gap-2">
+          <UiStatusBadge
+            v-if="selectedRequest.itemId"
+            tone="info"
+            label="集約済み"
+            dot
+          />
+          <UiStatusBadge
+            v-else
+            :tone="IMPROVEMENT_REQUEST_ADOPTION_META[requestAdoptionOf(selectedRequest)].tone"
+            :label="IMPROVEMENT_REQUEST_ADOPTION_META[requestAdoptionOf(selectedRequest)].label"
+            dot
+          />
+          <span v-if="selectedRequest.archivedAt" class="text-[12px] text-crit">取消済み</span>
+          <span class="text-[12px] text-muted">
+            {{ selectedRequest.memberName }}・{{ selectedRequest.pageLabel || selectedRequest.pagePath || 'ページ不明' }}・{{ fmtDate(selectedRequest.createdAt) }}
+          </span>
+        </div>
+
+        <!-- 本文 + 添付 -->
+        <div class="card p-3">
+          <p class="whitespace-pre-wrap break-words text-[13px] text-ink">{{ selectedRequest.body }}</p>
+          <ul v-if="(selectedRequest.links ?? []).length > 0" class="mt-2 grid gap-1">
+            <li v-for="l in selectedRequest.links" :key="l" class="min-w-0">
+              <a
+                :href="l"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="link inline-flex max-w-full items-center gap-1 text-[12px]"
+                :title="`${l}（別タブで開く）`"
+              >
+                <ExternalLink class="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                <span class="truncate">{{ l }}</span>
+              </a>
+            </li>
+          </ul>
+          <div v-if="(selectedRequest.images ?? []).length > 0" class="mt-2 flex flex-wrap gap-1.5">
+            <button
+              v-for="(img, i) in selectedRequest.images"
+              :key="i"
+              type="button"
+              class="rounded-lg border border-line focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand"
+              :aria-label="`画像「${img.filename}」を拡大表示`"
+              :title="`${img.filename}（押下で拡大）`"
+              @click="previewImage = img"
+            >
+              <img :src="img.dataUrl" :alt="img.filename" class="h-14 w-14 rounded-lg object-cover">
+            </button>
+          </div>
+        </div>
+
+        <!-- 選別（採用/不採用。集約済みは変更不可 = 記録保護。取消可能性 = いつでも選び直せる） -->
+        <div v-if="!selectedRequest.archivedAt" class="grid gap-2">
+          <p class="label">選別</p>
+          <template v-if="selectedRequest.itemId">
+            <p class="text-[12px] text-muted">この要望は改修単位へ集約済みです（選別は変更できません。対象から外す場合は要望を取り消してください）。</p>
+            <div>
+              <button type="button" class="btn btn-sm" @click="openItemOfRequest">集約先の改修単位を開く</button>
+            </div>
+          </template>
+          <div v-else class="flex flex-wrap gap-2">
+            <button
+              v-if="requestAdoptionOf(selectedRequest) !== 'adopted'"
+              type="button" class="btn btn-primary btn-sm"
+              @click="changeAdoption(selectedRequest.id, 'adopted')"
+            >採用する（AI 集約の対象）</button>
+            <button
+              v-if="requestAdoptionOf(selectedRequest) !== 'declined'"
+              type="button" class="btn btn-ghost btn-sm"
+              @click="changeAdoption(selectedRequest.id, 'declined')"
+            >不採用にする</button>
+            <button
+              v-if="requestAdoptionOf(selectedRequest) !== 'pending'"
+              type="button" class="btn btn-ghost btn-sm"
+              @click="changeAdoption(selectedRequest.id, 'pending')"
+            >未選別に戻す</button>
+          </div>
+        </div>
+
+        <!-- コメント（やり取り。時系列・追記のみ。取消 = 論理削除 = 原則9.5） -->
+        <div class="grid gap-2">
+          <p class="label">コメント（時系列・{{ requestComments.length }} 件）</p>
+          <p class="text-[11px] text-muted">
+            採用/不採用の検討過程・不採用理由・確認事項などを時系列で残せます（このページを閲覧できる管理メンバー内の記録です）。
+          </p>
+          <ul v-if="requestComments.length" class="grid gap-2">
+            <li v-for="cm in requestComments" :key="cm.id" class="card p-3">
+              <div class="flex items-start justify-between gap-2">
+                <div class="min-w-0">
+                  <p class="whitespace-pre-wrap break-words text-[13px] text-ink">{{ cm.body }}</p>
+                  <p class="mt-1 text-[11px] text-muted">{{ cm.memberName }}・{{ fmtDateTime(cm.createdAt) }}</p>
+                </div>
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-sm shrink-0"
+                  title="このコメントを取消"
+                  @click="removeComment(cm.id)"
+                >
+                  取消
+                </button>
+              </div>
+            </li>
+          </ul>
+          <p v-else class="text-[12px] text-muted">コメントはまだありません</p>
+
+          <div v-if="!selectedRequest.archivedAt" class="grid gap-1.5">
+            <textarea
+              v-model="commentInput"
+              class="textarea"
+              rows="2"
+              placeholder="コメントを追加（採用/不採用の検討・確認事項など）"
+              aria-label="コメントを追加"
+            />
+            <div class="flex justify-end">
+              <button
+                type="button"
+                class="btn btn-primary btn-sm"
+                :disabled="!commentInput.trim() || commentBusy"
+                @click="addComment"
+              >
+                コメントを追加
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <template #footer>
+        <button v-if="selectedRequest && !selectedRequest.archivedAt" type="button" class="btn btn-danger" @click="archiveSelectedRequest">
+          要望を取消
+        </button>
+        <button v-else-if="selectedRequest && selectedRequest.archivedAt" type="button" class="btn btn-ghost" @click="restoreSelectedRequest">
           <Undo2 class="h-4 w-4" aria-hidden="true" /> 取消を戻す
         </button>
       </template>

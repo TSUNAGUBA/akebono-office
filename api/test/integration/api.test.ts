@@ -6769,14 +6769,26 @@ describe('改善要望（F-42）', () => {
     expect((await api('POST', '/v1/improvements/requests', {
       as: MEMBER, body: { body: 'x', images: [{ filename: 'a.svg', mime: 'image/svg+xml', dataUrl: 'data:image/svg+xml;base64,PHN2Zz4=' }] },
     })).json.error?.code).toBe('AKO-REQ-010')
-    // 集約 → プロンプトに参考リンク・添付画像の件数が加味される
+    type ReqRow = { id: string; pagePath: string; images: { dataUrl: string }[]; itemId: string | null }
+    const postedId = (posted.json.data as { id: string }).id
+    // 未集約の要望は unclustered=1 指定で画像の実体を返す（生要望ドロワーの遅延ロード = 0063。
+    // フロントは includeArchived=1 も付けて取消済みの復元判断でも添付を参照できる）
+    const preRows = (await api('GET', '/v1/improvements/requests?unclustered=1&includeArchived=1', { as: ADMIN })).json.data as ReqRow[]
+    expect(preRows.find(r => r.id === postedId)!.images[0]).toMatchObject({ dataUrl: png })
+    // 取消済みの未集約行でも includeArchived=1 なら画像実体が返る（復元判断の材料 = フロントの遅延ロードが
+    // includeArchived を付ける根拠。省略すると archived 行が空振りし続ける退行の回帰ピン）
+    await api('POST', `/v1/improvements/requests/${postedId}/archive`, { as: MEMBER })
+    const archivedRows = (await api('GET', '/v1/improvements/requests?unclustered=1&includeArchived=1', { as: ADMIN })).json.data as ReqRow[]
+    expect(archivedRows.find(r => r.id === postedId)!.images[0]).toMatchObject({ dataUrl: png })
+    await api('POST', `/v1/improvements/requests/${postedId}/restore`, { as: MEMBER })
+    // 選別（採用）→ 集約 → プロンプトに参考リンク・添付画像の件数が加味される（採用のみ集約対象 = 2026-08-17 第 2 弾）
+    await api('POST', `/v1/improvements/requests/${postedId}/adoption`, { as: ADMIN, body: { adoption: 'adopted' } })
+    await api('POST', `/v1/improvements/requests/${(plain.json.data as { id: string }).id}/adoption`, { as: ADMIN, body: { adoption: 'adopted' } })
     await api('POST', '/v1/improvements/generate', { as: ADMIN })
     const prompt = (await api('POST', '/v1/improvements/prompt', { as: ADMIN, body: { filter: 'open' } })).json.data as { prompt: string }
     expect(prompt.prompt).toContain('参考リンク: https://ref.example/manual')
     expect(prompt.prompt).toContain('添付画像 1 件')
     // 一覧 GET は画像の実体を返さない（転送量削減）。itemId 指定 GET でのみ実体を返す（ドロワーの遅延ロード）
-    type ReqRow = { id: string; pagePath: string; images: { dataUrl: string }[]; itemId: string | null }
-    const postedId = (posted.json.data as { id: string }).id
     const listed = (await api('GET', '/v1/improvements/requests?includeArchived=1', { as: ADMIN })).json.data as ReqRow[]
     const mine = listed.find(r => r.id === postedId)!
     expect(mine.itemId).not.toBeNull() // 集約済み
@@ -6786,11 +6798,17 @@ describe('改善要望（F-42）', () => {
   })
 
   it('AI 集約 → ステータス（状態機械・reopen）→ プロンプト出力', async () => {
-    // 集約対象の要望を投稿
-    await api('POST', '/v1/improvements/requests', {
+    // 集約対象の要望を投稿（既定 = 未選別）
+    const posted = await api('POST', '/v1/improvements/requests', {
       as: MEMBER, body: { body: '打刻を取り消せるようにしてほしい', pagePath: '/timecard', pageLabel: 'タイムカード' },
     })
-    // 集約（未集約の要望のみ処理・冪等）
+    // 未選別のままでは集約されない（採用済みのみ AI 集約対象 = 2026-08-17 第 2 弾）
+    expect((await api('POST', '/v1/improvements/generate', { as: ADMIN })).json.data as { clustered: number })
+      .toMatchObject({ clustered: 0 })
+    await api('POST', `/v1/improvements/requests/${(posted.json.data as { id: string }).id}/adoption`, {
+      as: ADMIN, body: { adoption: 'adopted' },
+    })
+    // 集約（採用済み・未集約の要望のみ処理・冪等）
     const gen = await api('POST', '/v1/improvements/generate', { as: ADMIN })
     expect(gen.status).toBe(200)
     expect((gen.json.data as { clustered: number }).clustered).toBeGreaterThan(0)
@@ -6834,6 +6852,7 @@ describe('改善要望（F-42）', () => {
     })
     const reqId = (posted.json.data as { id: string; status: string }).id
     expect((posted.json.data as { status: string }).status).toBe('open') // 既定 = 未対応
+    await api('POST', `/v1/improvements/requests/${reqId}/adoption`, { as: ADMIN, body: { adoption: 'adopted' } })
     await api('POST', '/v1/improvements/generate', { as: ADMIN })
 
     // 不正値は AKO-REQ-011・一般（管理権限なし）は 403
@@ -6853,6 +6872,78 @@ describe('改善要望（F-42）', () => {
     expect((await api('POST', `/v1/improvements/requests/${reqId}/status`, { as: ADMIN, body: { status: 'open' } })).status).toBe(200)
     const prompt2 = (await api('POST', '/v1/improvements/prompt', { as: ADMIN, body: { filter: 'open' } })).json.data as { prompt: string }
     expect(prompt2.prompt).not.toContain('【対応済み】 ステータス管理テスト用の要望')
+  })
+
+  it('生要望の選別（採用/不採用）: 採用のみ集約対象・集約済みは変更不可（0063・2026-08-17 第 2 弾）', async () => {
+    // 2 件投稿（ユニークなページ）→ A = 採用 / B = 不採用 に選別する
+    const a = await api('POST', '/v1/improvements/requests', {
+      as: MEMBER, body: { body: '選別テスト A（採用する要望）', pagePath: '/triage-a', pageLabel: '選別A' },
+    })
+    const b = await api('POST', '/v1/improvements/requests', {
+      as: MEMBER, body: { body: '選別テスト B（不採用にする要望）', pagePath: '/triage-b', pageLabel: '選別B' },
+    })
+    const aId = (a.json.data as { id: string }).id
+    const bId = (b.json.data as { id: string }).id
+    // 既定は未選別（pending）
+    expect((a.json.data as { adoption: string }).adoption).toBe('pending')
+    // 不正値は AKO-REQ-012・一般（管理権限なし）は 403・存在しない要望は 404
+    expect((await api('POST', `/v1/improvements/requests/${aId}/adoption`, { as: ADMIN, body: { adoption: 'bogus' } }))
+      .json.error?.code).toBe('AKO-REQ-012')
+    expect((await api('POST', `/v1/improvements/requests/${aId}/adoption`, { as: MEMBER, body: { adoption: 'adopted' } })).status).toBe(403)
+    expect((await api('POST', '/v1/improvements/requests/nope/adoption', { as: ADMIN, body: { adoption: 'adopted' } })).status).toBe(404)
+    // 選別（A = 採用 / B = 不採用）
+    expect(((await api('POST', `/v1/improvements/requests/${aId}/adoption`, { as: ADMIN, body: { adoption: 'adopted' } }))
+      .json.data as { adoption: string }).adoption).toBe('adopted')
+    expect(((await api('POST', `/v1/improvements/requests/${bId}/adoption`, { as: ADMIN, body: { adoption: 'declined' } }))
+      .json.data as { adoption: string }).adoption).toBe('declined')
+    // 集約 → 採用のみ item_id が付き、不採用は未集約のまま残る（不採用を勝手にまとめない）
+    await api('POST', '/v1/improvements/generate', { as: ADMIN })
+    type Row = { id: string; itemId: string | null; adoption: string }
+    const listed = (await api('GET', '/v1/improvements/requests', { as: ADMIN })).json.data as Row[]
+    expect(listed.find(r => r.id === aId)!.itemId).not.toBeNull()
+    expect(listed.find(r => r.id === bId)!).toMatchObject({ itemId: null, adoption: 'declined' })
+    // 集約済み要望の選別変更は 409（改修単位へ取り込み済みの記録を保護 = 原則2。外すには要望の取消を使う）
+    const locked = await api('POST', `/v1/improvements/requests/${aId}/adoption`, { as: ADMIN, body: { adoption: 'declined' } })
+    expect(locked.status).toBe(409)
+    expect(locked.json.error?.code).toBe('AKO-REQ-013')
+  })
+
+  it('生要望へのコメント: 追加・一覧・権限・取消/復元（0063・2026-08-17 第 2 弾）', async () => {
+    interface Comment { id: string; requestId: string; memberId: string; body: string; createdAt: string }
+    const posted = await api('POST', '/v1/improvements/requests', {
+      as: MEMBER, body: { body: 'コメントテスト用の要望', pagePath: '/comment-test', pageLabel: 'コメントテスト' },
+    })
+    const reqId = (posted.json.data as { id: string }).id
+    // 投稿者本人はコメント可（管理権限が無くても自分の要望のやり取りは可能）
+    const mine = await api('POST', `/v1/improvements/requests/${reqId}/comments`, {
+      as: MEMBER, body: { body: '補足: 対象は一覧画面だけで OK です' },
+    })
+    expect(mine.status).toBe(201)
+    expect((mine.json.data as Comment).createdAt).toMatch(/\+09:00$/) // JST ウォールクロック
+    // 管理権限者もコメント可
+    expect((await api('POST', `/v1/improvements/requests/${reqId}/comments`, {
+      as: ADMIN, body: { body: '承知しました。採用の方向で検討します' },
+    })).status).toBe(201)
+    // 本人でも管理でもない人は 403・空本文は AKO-REQ-014・存在しない要望は 404
+    expect((await api('POST', `/v1/improvements/requests/${reqId}/comments`, { as: HR, body: { body: 'x' } })).status).toBe(403)
+    expect((await api('POST', `/v1/improvements/requests/${reqId}/comments`, { as: ADMIN, body: { body: '  ' } }))
+      .json.error?.code).toBe('AKO-REQ-014')
+    expect((await api('POST', '/v1/improvements/requests/nope/comments', { as: ADMIN, body: { body: 'x' } })).status).toBe(404)
+    // 一覧は管理のみ（403 = deny-by-default）。時系列（古い順）で返る
+    expect((await api('GET', '/v1/improvements/request-comments', { as: MEMBER })).status).toBe(403)
+    const listed = (await api('GET', `/v1/improvements/request-comments?requestId=${reqId}`, { as: ADMIN })).json.data as Comment[]
+    expect(listed.map(cm => cm.body)).toEqual(['補足: 対象は一覧画面だけで OK です', '承知しました。採用の方向で検討します'])
+    // 取消（記入者本人）→ 既定一覧から消える → includeArchived=1 では見える → 復元で戻る（原則9.5）
+    const target = listed[0]!
+    expect((await api('POST', `/v1/improvements/request-comments/${target.id}/archive`, { as: MEMBER })).status).toBe(200)
+    const afterArchive = (await api('GET', `/v1/improvements/request-comments?requestId=${reqId}`, { as: ADMIN })).json.data as Comment[]
+    expect(afterArchive.map(cm => cm.id)).not.toContain(target.id)
+    const withArchived = (await api('GET', `/v1/improvements/request-comments?requestId=${reqId}&includeArchived=1`, { as: ADMIN }))
+      .json.data as Comment[]
+    expect(withArchived.map(cm => cm.id)).toContain(target.id)
+    expect((await api('POST', `/v1/improvements/request-comments/${target.id}/restore`, { as: MEMBER })).status).toBe(200)
+    // 他人のコメントは取消不可（記入者本人 or 管理のみ = 403）
+    expect((await api('POST', `/v1/improvements/request-comments/${target.id}/archive`, { as: HR })).status).toBe(403)
   })
 
   it('要望・改修単位の取消（論理削除）と復元（原則9.5）', async () => {
@@ -6889,9 +6980,12 @@ describe('改善要望（F-42）', () => {
 
   it('改修単位の時系列メモ: 追加・一覧・reject 理由・プロンプト加味・取消/復元・権限（0059）', async () => {
     interface Note { id: string; body: string; kind: string; createdAt: string }
-    // 集約して改修単位を 1 つ用意（ユニークなページ = 新規 item になる）
-    await api('POST', '/v1/improvements/requests', {
+    // 集約して改修単位を 1 つ用意（採用 → 集約。ユニークなページ = 新規 item になる）
+    const memoReq = await api('POST', '/v1/improvements/requests', {
       as: MEMBER, body: { body: 'メモ機能テスト用の要望', pagePath: '/memo-test', pageLabel: 'メモテスト' },
+    })
+    await api('POST', `/v1/improvements/requests/${(memoReq.json.data as { id: string }).id}/adoption`, {
+      as: ADMIN, body: { adoption: 'adopted' },
     })
     await api('POST', '/v1/improvements/generate', { as: ADMIN })
     const items = (await api('GET', '/v1/improvements/items', { as: ADMIN })).json.data as Item[]

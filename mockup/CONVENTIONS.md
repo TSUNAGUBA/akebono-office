@@ -149,10 +149,10 @@ const imp = useAkebonoImports() // addSource / archiveSource・restoreSource（�
 // ダッシュボード AI レポート（F-41。Phase D で導出キャッシュをサーバー化 = media_insights 同型）
 const di = useDashboardInsight() // buildSegmentSummary/buildCompanySummary（常時ライブ集計）/ loadSegment・generateSegment / loadCompany・generateCompany（async。生成→保管→再生成で upsert・API = Vertex AI → ヒューリスティック）
 
-// 改善要望（F-42。各ページからの投稿 → AI 集約 → 権限を持つ人のみ管理 → 改修プロンプト出力。純ロジック SoT = shared/domain/improvement）
+// 改善要望（F-42。各ページからの投稿 → 生要望の選別〔採用/不採用〕→ 採用分のみ AI 集約 → 権限を持つ人のみ管理 → 改修プロンプト出力。純ロジック SoT = shared/domain/improvement）
 // 投稿は全員可（submit は管理 GET を誤発火しない）。閲覧・管理は canManageImprovements（deny-by-default + 管理者常時可 = usePermissions）。
-// 集約は未集約要望のみ処理・判定済み item のステータスは巻き戻さない（原則2）。API = Vertex AI → 決定的ヒューリスティック（heuristicClusterRequests）
-const imp = useImprovements()  // submit（body + 対象ページ〔既定=開いているページ・全体/新設ページ可〕+ 任意添付 links〔URL 最大5〕・images〔縮小 data URI 最大4〕= 0061。mock は persisted=false で容量超過を通知）/ refresh / loadRequestImages(itemId)（添付画像の遅延ロード = API の全件 GET は images を含まない）/ setRequestStatus(id, 'open'|'resolved'|'dismissed')（要望単位の進捗タグ = 0062。プロンプト再生成に【対応済み】【見送り】で反映）/ activeItems・archivedItems・unclusteredRequests / requestsForItem / notesForItem（時系列メモ・古い順）/ generate（集約）/ setStatus / editItem（title/summary/detail + planStart/planEnd 対応予定期間 = ガント）/ setItemArchived・setRequestArchived（取消/復元）/ addNote(itemId, body, kind?='note'|'reject')・setNoteArchived（メモ追加・取消/復元 = 0059。buildCodingPrompt に加味）/ buildPrompt(filter)（添付リンク・画像件数も加味）
+// 集約は「採用済み（adoption='adopted'）かつ未集約」の要望のみ処理・判定済み item のステータスは巻き戻さない（原則2）。API = Vertex AI → 決定的ヒューリスティック（heuristicClusterRequests）
+const imp = useImprovements()  // submit（body + 対象ページ〔既定=開いているページ・全体/新設ページ可〕+ 任意添付 links〔URL 最大5〕・images〔縮小 data URI 最大4〕= 0061。mock は persisted=false で容量超過を通知）/ refresh / loadRequestImages(itemId)・loadRequestImagesFor(request)（添付画像の遅延ロード = API の全件 GET は images を含まない。未集約は ?unclustered=1）/ setRequestStatus(id, 'open'|'resolved'|'dismissed')（要望単位の進捗タグ = 0062。プロンプト再生成に【対応済み】【見送り】で反映）/ setRequestAdoption(id, 'pending'|'adopted'|'declined')（生要望の選別 = 0063。採用のみ集約対象・集約済みは変更不可〔AKO-REQ-013〕）/ addRequestComment(requestId, body)・setRequestCommentArchived(id, bool)・commentsForRequest(requestId)（生要望コメント = 選別のやり取り・古い順 = 0063）/ activeItems・archivedItems・unclusteredRequests・adoptedUnclustered（集約待ち）・pendingRequests（未選別）・allRequests / requestsForItem / notesForItem（時系列メモ・古い順）/ generate（集約 = 採用分のみ）/ setStatus / editItem（title/summary/detail + planStart/planEnd 対応予定期間 = ガント）/ setItemArchived・setRequestArchived（取消/復元）/ addNote(itemId, body, kind?='note'|'reject')・setNoteArchived（メモ追加・取消/復元 = 0059。buildCodingPrompt に加味）/ buildPrompt(filter)（添付リンク・画像件数も加味）
 ```
 
 ## UI コンポーネント在庫（新規に作る前にここを見る）

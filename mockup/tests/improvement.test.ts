@@ -6,9 +6,10 @@ import { describe, expect, it } from 'vitest'
 import { canManageImprovements, type PermissionSubject } from '../../shared/domain/permissions'
 import type { PermissionRule } from '../../shared/domain/types'
 import {
-  buildCodingPrompt, canTransition, heuristicClusterRequests,
-  IMPROVEMENT_STATUS_META, improvementImagesError, improvementLinksError,
-  matchesImprovementFilter, normalizeImprovementLinks,
+  buildCodingPrompt, canTransition, clusterTargetRequests, heuristicClusterRequests,
+  IMPROVEMENT_REQUEST_ADOPTION_META, IMPROVEMENT_STATUS_META,
+  improvementCommentError, improvementImagesError, improvementLinksError,
+  matchesImprovementFilter, normalizeImprovementLinks, requestAdoptionOf,
 } from '../../shared/domain/improvement'
 
 function rule(p: Partial<PermissionRule>): PermissionRule {
@@ -89,6 +90,33 @@ describe('集約・ステータス・プロンプト（純ロジック）', () =
     }])
     expect(prompt).toContain('参考リンク: https://ref.example')
     expect(prompt).toContain('添付画像 1 件')
+  })
+})
+
+describe('生要望の選別（requestAdoptionOf。2026-08-17 第 2 弾）', () => {
+  it('adoption 未定義の旧データは集約済み = adopted / 未集約 = pending に補完（下位互換）', () => {
+    expect(requestAdoptionOf({ itemId: 'imp-1' })).toBe('adopted')
+    expect(requestAdoptionOf({ itemId: null })).toBe('pending')
+    expect(requestAdoptionOf({ adoption: 'declined', itemId: null })).toBe('declined')
+  })
+  it('選別メタのラベル（未選別/採用/不採用）と tone', () => {
+    expect(IMPROVEMENT_REQUEST_ADOPTION_META.pending.label).toBe('未選別')
+    expect(IMPROVEMENT_REQUEST_ADOPTION_META.adopted.tone).toBe('ok')
+    expect(IMPROVEMENT_REQUEST_ADOPTION_META.declined.tone).toBe('warn')
+  })
+  it('コメント本文の検証（空・上限）', () => {
+    expect(improvementCommentError(' ')).not.toBeNull()
+    expect(improvementCommentError('確認: 対象は部署セレクトの想定で良いですか？')).toBeNull()
+  })
+  it('mock の集約対象 = clusterTargetRequests（未集約・有効・採用のみ。未選別/不採用/取消済みは集約されない）', () => {
+    // useImprovements.mockGenerate はこの共有関数で対象を選ぶ（API generate の SQL 条件と同一 = 原則6）
+    expect(clusterTargetRequests([
+      { id: 'a', itemId: null, archivedAt: null, adoption: 'adopted' as const },
+      { id: 'b', itemId: null, archivedAt: null, adoption: 'pending' as const },
+      { id: 'c', itemId: null, archivedAt: null, adoption: 'declined' as const },
+      { id: 'd', itemId: 'imp-1', archivedAt: null, adoption: 'adopted' as const },
+      { id: 'e', itemId: null, archivedAt: '2026-08-17T00:00:00+09:00', adoption: 'adopted' as const },
+    ]).map(r => r.id)).toEqual(['a'])
   })
 })
 

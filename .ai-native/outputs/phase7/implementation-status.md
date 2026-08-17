@@ -2809,3 +2809,41 @@
 > ④日報のカレンダー取込が部分失敗 warning を握り潰していた = ai-assistant と同様にトースト報告（原則4）
 > ⑤applicant → member の凍結解決が mock/API に重複実装 = 共有 `resolveApplicantSteps`（shared/domain/approver）へ集約（原則3）
 > ⑥経路チップ描画で sortedSteps を二重呼出 = r.steps.length で代替。再検証 = 全テスト green・残指摘ゼロ。
+
+## 83. 要望処理フローの改善 = 生要望の選別 → 採用分のみ AI 集約（F-42-14/15・改善要望 2026-08-17 第 2 弾）の完了条件（Definition of Done）
+
+- [x] **生要望の選別（F-42-14）**: `improvement_requests.adoption`（pending/adopted/declined・既定 pending。0063）。
+  管理者の初手を「生要望（受付箱）一覧 → 取捨選択」に変更し、**採用した要望だけが AI 集約の対象**
+  （generate の WHERE と claim UPDATE に `adoption='adopted'` を追加。mock は `requestAdoptionOf` で同条件）。
+  集約済み要望の選別変更は 409（AKO-REQ-013 = 記録保護・原則2。外すには要望の取消）。未選別へ戻す・不採用→採用のやり直し可（原則9.5）。
+  既存の集約済み行は 0063 で `adoption='adopted'` へバックフィル・未定義はヘルパーが補完（下位互換 = 原則7）。
+- [x] **生要望へのコメント（F-42-15）**: `improvement_request_comments`（記録系・追記のみ。0063）。
+  採用/不採用の検討・確認のやり取りを時系列（古い順）で記録。追加 = 管理権限者 + 投稿者本人（AKO-REQ-014 = 空/2,000 字超過）。
+  取消 = 論理削除 + 復元（記入者本人 or 管理 = 原則9.5）。
+- [x] **画面の並び替え**: `/improvements` を「① 生要望（受付箱）→ KPI → ② 改修単位」の順に再構成（まず生の投稿を見る）。
+  受付箱はチップフィルタ（未選別〔既定〕/採用/不採用/集約済み/すべて/取消済み）+ 選別バッジ・コメント件数列 + 詳細ドロワー
+  （選別ボタン・コメントスレッド・添付参照・取消/復元）。ヘッダーの集約ボタンは「採用済みを AI で集約」（集約待ち件数バッジ）。
+  採用済み 0 件での集約は選別を促すトーストで案内（未選別が残ればその旨も添える）。モバイル = テーブル自動カード化（原則8）。
+- [x] **API / モック同挙動**: `POST /requests/:id/adoption`・`GET /request-comments`・`POST /requests/:id/comments`・
+  `POST /request-comments/:id/archive|restore`（api-design 参照）。未集約要望の画像は `?unclustered=1` の遅延ロードで参照
+  （全件 GET は images を返さない方針を維持）。シード v21 に選別・コメントのデモを追加。
+- [x] **テスト**: unit = requestAdoptionOf の下位互換・選別メタ・improvementCommentError。
+  integration = 選別（既定 pending・AKO-REQ-012/403/404・採用のみ集約・集約済み 409）・コメント（追加・権限・一覧・取消/復元）。
+  既存の集約系テストは「採用 → 集約」の新フローへ更新。
+- [x] **ドキュメント整合（原則5）**: functional-requirements（F-42-2 修正 + F-42-14/15 新設）・screen-design（5.7）・
+  data-design（2.6）・api-design（エラーコード 009〜014 追記 + エンドポイント表）・CONVENTIONS（useImprovements）・本節。
+
+**残課題（宣言と実態の乖離を作らない = 原則9.5 の記録方針）:**
+- 投稿者本人が自分の要望へのコメントを閲覧・返信できる導線が未提供（一覧 GET は管理権限者のみ。
+  API の追加/取消は本人も許可済み = 将来の投稿者向け UI の土台。不採用理由を本人へ伝える手段は現状オフライン）。
+  対応時は「自分の要望一覧 + コメントスレッド表示（本人分のみの GET 分岐）」を ImprovementSubmit 系導線に追加する。
+
+> **§83 の検証（実測値）**: mockup `npm test` **297 passed**・`npx nuxi typecheck` green・`npm run build` green。
+> API `npm run typecheck` green・`npm test` **348 passed**・`npm run test:integration` **259 passed**（0063 適用込み）・`npm run build` green。
+>
+> **独立レビュー（原則9・3 イテレーション）**: R1 = コードレビュアー + システム監査官の並行レビューで指摘 5 件
+> （①未集約×取消済み行の画像遅延ロードが includeArchived 欠落で空振り ②受付箱の並び順が mock/API で逆転
+> ③「投稿者へ伝わります」文言と実装の乖離 → 文言修正 + 残課題化 ④集約 0 件ガードが古いキャッシュでブロック → 判定前 refresh
+> ⑤mock 集約フィルタ・unclustered 画像 GET の回帰テスト欠如 → 共有 clusterTargetRequests 抽出 + テスト追加）を全件反映。
+> R2 = 修正検証で追加指摘 2 件（generating フラグを refresh 前に立てる・archived 行の画像回帰ピン）を反映。
+> R3 = 最終検証で**指摘ゼロ**・全テスト green を確認して完了。

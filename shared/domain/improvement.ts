@@ -118,6 +118,51 @@ export function requestStatusOf(r: { status?: ImprovementRequestStatus | null })
   return r.status ?? 'open'
 }
 
+// ---------- 要望の選別（採用/不採用。AI 集約前の取捨選択 = 改善要望 2026-08-17 第 2 弾） ----------
+
+/**
+ * 生要望の選別状態。投稿された要望はまず管理者が一覧で確認・取捨選択し、
+ * **採用（adopted）された要望のみが AI 集約の対象**になる（未選別・不採用は集約されない）。
+ * - pending  未選別（投稿直後。管理者の確認待ち）
+ * - adopted  採用（AI 集約の対象）
+ * - declined 不採用（集約対象外。理由はコメントで残せる）
+ * 遷移は自由（選び直しはいつでも可 = 原則9.5）。ただし集約済み（itemId あり）の要望は選別対象外
+ * （既に改修単位へ取り込まれた記録 = 巻き戻さない。外すときは要望の取消 = archive を使う）。
+ */
+export type ImprovementRequestAdoption = 'pending' | 'adopted' | 'declined'
+
+export const IMPROVEMENT_REQUEST_ADOPTIONS: ImprovementRequestAdoption[] = ['pending', 'adopted', 'declined']
+
+/** 選別状態の表示メタ（label・トーン）。tone は UI の Tone 値と対応 */
+export const IMPROVEMENT_REQUEST_ADOPTION_META: Record<
+  ImprovementRequestAdoption,
+  { label: string; tone: 'neutral' | 'info' | 'ok' | 'warn' }
+> = {
+  pending: { label: '未選別', tone: 'neutral' },
+  adopted: { label: '採用', tone: 'ok' },
+  declined: { label: '不採用', tone: 'warn' },
+}
+
+/**
+ * 要望の選別状態（下位互換 = 原則7）。旧データ（adoption 未定義）は、
+ * 集約済み（itemId あり）= 採用相当 / 未集約 = 未選別 として扱う。
+ */
+export function requestAdoptionOf(r: { adoption?: ImprovementRequestAdoption | null; itemId?: string | null }): ImprovementRequestAdoption {
+  if (r.adoption && IMPROVEMENT_REQUEST_ADOPTIONS.includes(r.adoption)) return r.adoption
+  return r.itemId ? 'adopted' : 'pending'
+}
+
+/**
+ * AI 集約の対象要望（未集約・有効・採用済み）を選ぶ。
+ * mock の集約と API の generate SQL（`item_id IS NULL AND archived_at IS NULL AND adoption='adopted'`）の
+ * 条件を共有する定義（両モード同挙動 = 原則6。「採用のみ集約」フローの単一の判定点）。
+ */
+export function clusterTargetRequests<T extends { itemId?: string | null; archivedAt?: string | null; adoption?: ImprovementRequestAdoption | null }>(
+  requests: T[],
+): T[] {
+  return requests.filter(r => !r.itemId && !r.archivedAt && requestAdoptionOf(r) === 'adopted')
+}
+
 /** 要望への添付画像（縮小済み data URI。参照時は押下で拡大表示） */
 export interface ImprovementRequestImage {
   /** 元ファイル名（表示・alt 用） */
@@ -146,6 +191,8 @@ export interface ImprovementRequest {
   body: string
   /** 要望単位のステータス（未定義 = open。改修単位のステータスとは独立の進捗タグ = 原則7） */
   status?: ImprovementRequestStatus
+  /** 選別状態（未定義 = 旧データ = requestAdoptionOf が補完。採用のみ AI 集約対象 = 原則7） */
+  adoption?: ImprovementRequestAdoption
   /** 添付の URL リンク（複数可。参照時は別タブで開く）。旧データは未定義 = 無し（原則7） */
   links?: string[]
   /** 添付画像（複数可。参照時は押下で拡大）。旧データは未定義 = 無し（原則7） */
@@ -185,6 +232,27 @@ export interface ImprovementItem {
   planStart: string | null
   /** 対応予定の終了日（YYYY-MM-DD・任意。null = 開始日のみ = 単日）。ガントチャートのバー終了 */
   planEnd: string | null
+}
+
+/**
+ * 生要望へのコメント（記録系・追記のみ = 改善要望 2026-08-17 第 2 弾）。
+ * 採用/不採用の検討過程・不採用理由・確認事項などのやり取りを要望単位で時系列に残す。
+ * 一覧参照は改善要望の管理権限者のみ / 追加・取消は管理権限者 + 投稿者本人（本人向けの閲覧導線は
+ * 未提供 = implementation-status の残課題。現状は管理ページ内の記録）。取消は archivedAt（論理削除 = 原則9.5）。
+ */
+export interface ImprovementRequestComment {
+  id: string
+  /** 紐づく生要望 id */
+  requestId: string
+  /** 記入者 */
+  memberId: string
+  /** 記入者名（スナップショット。閲覧時のマスタ参照を避ける） */
+  memberName: string
+  /** コメント本文 */
+  body: string
+  /** 取消（論理削除）時刻。null = 有効（原則9.5） */
+  archivedAt: string | null
+  createdAt: string
 }
 
 /** 改修案件メモの種別（note = 一般メモ / reject = 「対応しない」判断の理由） */
@@ -311,6 +379,15 @@ export function improvementTitleError(title: string): string | null {
 export function improvementNoteError(body: string): string | null {
   if (!body.trim()) return 'メモの内容を入力してください'
   if ([...body].length > IMPROVEMENT_NOTE_CAP) return `メモは ${IMPROVEMENT_NOTE_CAP} 文字までで入力してください`
+  return null
+}
+
+export const IMPROVEMENT_COMMENT_CAP = 2_000
+
+/** 生要望コメント本文の検証（追加時。必須・上限）。エラーメッセージ | null */
+export function improvementCommentError(body: string): string | null {
+  if (!body.trim()) return 'コメントの内容を入力してください'
+  if ([...body].length > IMPROVEMENT_COMMENT_CAP) return `コメントは ${IMPROVEMENT_COMMENT_CAP} 文字までで入力してください`
   return null
 }
 
