@@ -29,10 +29,12 @@ import {
   IMPROVEMENT_PAGE_PATH_CAP,
   IMPROVEMENT_STATUSES,
   IMPROVEMENT_SUMMARY_CAP,
+  IMPROVEMENT_REQUEST_STATUSES,
   IMPROVEMENT_TITLE_CAP,
   type ImprovementFilter,
   type ImprovementNoteKind,
   type ImprovementRequestImage,
+  type ImprovementRequestStatus,
   type ImprovementStatus,
   improvementBodyError,
   improvementImagesError,
@@ -65,7 +67,7 @@ const JST = `AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"'`
  * 画像の実体は itemId 指定の GET（ドロワーの遅延ロード）でのみ返す）
  */
 const reqColsOf = (withImages: boolean): string => `id, member_id AS "memberId", member_name AS "memberName",
-  page_path AS "pagePath", page_label AS "pageLabel", body, links,
+  page_path AS "pagePath", page_label AS "pageLabel", body, status, links,
   ${withImages ? 'images' : `'[]'::jsonb AS images`}, item_id AS "itemId",
   to_char(archived_at ${JST}) AS "archivedAt", to_char(created_at ${JST}) AS "createdAt"`
 const ITEM_COLS = `id, title, summary, detail, status, page_paths AS "pagePaths",
@@ -213,6 +215,21 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
       `UPDATE improvement_requests SET archived_at = NULL WHERE id = $1 RETURNING ${reqColsOf(false)}`, [id])
     await audit(pool, { actorId: user.id, action: 'restore', entity: 'improvement_requests', entityId: id, detail: '要望の取消を戻す' })
     return c.json({ data: out[0] })
+  })
+
+  // ---- 要望ステータス変更（管理）。要望 1 件ずつの対応状況タグ（open/resolved/dismissed。遷移自由 = 原則9.5） ----
+  app.post('/requests/:id/status', async (c) => {
+    const user = await requireManage(c, pool)
+    const id = c.req.param('id')
+    const status = String(((await c.req.json().catch(() => ({}))) as { status?: unknown }).status ?? '')
+    if (!IMPROVEMENT_REQUEST_STATUSES.includes(status as ImprovementRequestStatus)) {
+      throw err('AKO-REQ-011', 'status が不正です（open / resolved / dismissed）', 400)
+    }
+    const { rows } = await pool.query(
+      `UPDATE improvement_requests SET status = $2 WHERE id = $1 RETURNING ${reqColsOf(false)}`, [id, status])
+    if (rows.length === 0) throw err('AKO-REQ-002', '対象の要望が見つかりません', 404)
+    await audit(pool, { actorId: user.id, action: 'update', entity: 'improvement_requests', entityId: id, detail: `要望ステータス → ${status}` })
+    return c.json({ data: rows[0] })
   })
 
   // ---- 改修単位一覧（管理）。filter で 未解決/解決済み/対応可否を絞る ----
@@ -488,21 +505,23 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
     const matched = itemRows.filter(r => matchesImprovementFilter(r.status, filter))
     // 各改修単位の元要望（有効なもの）を 1 クエリでまとめて取得し JS でグルーピング（N+1 回避）
     const ids = matched.map(m => m.id)
-    const byItem = new Map<string, { pageLabel: string; pagePath: string; body: string; links: string[]; imageCount: number }[]>()
+    const byItem = new Map<string, PromptItemInput['requests']>()
     const notesByItem = new Map<string, { body: string; kind: ImprovementNoteKind }[]>()
     if (ids.length > 0) {
       const { rows: reqRows } = await pool.query<{
-        itemId: string; pageLabel: string; pagePath: string; body: string; links: string[]; imageCount: number
+        itemId: string; pageLabel: string; pagePath: string; body: string
+        status: ImprovementRequestStatus; links: string[]; imageCount: number
       }>(
         `SELECT item_id AS "itemId", page_label AS "pageLabel", page_path AS "pagePath", body,
-           links, jsonb_array_length(images) AS "imageCount"
+           status, links, jsonb_array_length(images) AS "imageCount"
          FROM improvement_requests WHERE item_id = ANY($1::text[]) AND archived_at IS NULL
          ORDER BY created_at, id`, [ids])
       for (const r of reqRows) {
         const arr = byItem.get(r.itemId)
         const entry = {
           pageLabel: r.pageLabel, pagePath: r.pagePath, body: r.body,
-          links: r.links ?? [], imageCount: Number(r.imageCount ?? 0),
+          // 要望単位のステータスを加味（open 以外は【対応済み】【見送り】で明記 = プロンプト再生成に反映）
+          status: r.status, links: r.links ?? [], imageCount: Number(r.imageCount ?? 0),
         }
         if (arr) arr.push(entry)
         else byItem.set(r.itemId, [entry])

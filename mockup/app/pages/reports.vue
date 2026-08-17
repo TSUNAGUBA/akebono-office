@@ -10,13 +10,15 @@
  * 参照 = 基本ビュー・入力 = ボタン押下で表示（バッチ7h・オペレーター指示 2026-07-19 #10 ④）
  */
 import {
-  BellRing, Check, ChevronLeft, ChevronRight, Eye, Minus, Pencil, Plus, Send, Settings2, Sparkles, Trash2,
+  BellRing, CalendarDays, Check, ChevronLeft, ChevronRight, Eye, Minus, Pencil, Plus, Send, Settings2, Sparkles, Trash2,
 } from 'lucide-vue-next'
 import type { DailyReport, ReportEntry, TomorrowPlan, WeeklyReport } from '~/types/domain'
 import {
   DAILY_ISSUE_CATEGORY_PRESETS, TOMORROW_PLANS_MAX, WEEKLY_TEAM_SHARE_DEFAULT, WEEKLY_TEAM_SHARE_KINDS,
 } from '../../../shared/domain/types'
 import { REPORT_STATUS_LABELS } from '~/composables/useReports'
+import { hhmmToMin } from '../../../shared/domain/jst'
+import { toQuarterHours } from '../../../shared/domain/report-draft'
 import { addDays, daysInMonth, fmtDate, fmtDateLong, fmtMinutes, fmtTime, weekdayOf } from '~/utils/format'
 import { EMPLOYMENT_TYPE_LABELS, EMPLOYMENT_TYPE_TONES } from '~/utils/labels'
 import { parseTeamVisibleIds } from '~/utils/team-visibility'
@@ -115,11 +117,16 @@ function matchesMemberFilter(memberId: string | null | undefined, deptId: string
 
 // ---------- 自分の日報タブ ----------
 
-const selDate = ref(todayJst())
+// 通知ディープリンク: ?date=YYYY-MM-DD で対象日を初期表示（日報コメント通知から対象の日報へ即到達 = 改善要望 2026-08-17）
+const queryDate = typeof route.query.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(route.query.date)
+  ? route.query.date
+  : ''
+const selDate = ref(queryDate || todayJst())
 const myReport = computed(() => reports.myReportOn(selDate.value))
 
-/** 表示モード（週 / 月）と月ビューの形式（横スクロール / カレンダー） */
-const mineView = ref<'week' | 'month'>('week')
+/** 表示モード（週 / 月）と月ビューの形式（横スクロール / カレンダー）。
+ *  既定 = 月表示の横スクロール（改善要望 2026-08-17。従来の既定は週） */
+const mineView = ref<'week' | 'month'>('month')
 const mineMonthView = ref<'scroll' | 'calendar'>('scroll')
 const mineMonth = computed(() => selDate.value.slice(0, 7))
 const mineMonthDays = computed(() => daysOfMonth(mineMonth.value))
@@ -378,11 +385,11 @@ async function onSaveDraft(): Promise<void> {
 }
 
 async function onSubmit(): Promise<void> {
-  // ぽいぽいポストは提出時の必須項目（オペレーター指示 2026-08-03）。入力欄が空でも、当日すでに
-  // ぽいぽいポストを登録済み（下書き保存時に投稿済み等）なら要件を満たす扱いとし二重投稿を防ぐ。
+  // 改善のタネ（旧称: ぽいぽいポスト）は提出時の必須項目（オペレーター指示 2026-08-03）。入力欄が空でも、
+  // 当日すでに登録済み（下書き保存時に投稿済み等）なら要件を満たす扱いとし二重投稿を防ぐ。
   // ※ confirmStep はここで触らない（アシストモードでは confirmStep=false がエディタごと隠してしまうため）
   if (!poipoiDraft.value.trim() && !hasPoipoiForDay.value) {
-    show('ぽいぽいポストを入力してください（提出には必須です）', 'warn')
+    show('改善のタネを入力してください（提出には必須です）', 'warn')
     return
   }
   await run('mine-submit', async () => {
@@ -404,10 +411,10 @@ async function onSubmit(): Promise<void> {
   }, { message: '日報を提出しています…' })
 }
 
-// ---------- ぽいぽいポストの同時登録（オペレーター指示 2026-07-31: 日報フォーム最下部） ----------
+// ---------- 改善のタネ（旧称: ぽいぽいポスト）の同時登録（オペレーター指示 2026-07-31: 日報フォーム内） ----------
 
-/** 日報フォーム内のぽいぽいポスト入力。保存・提出の成立時に通常経路（useNotes 'poipoi' = トップメニューの
- * ぽいぽいポストと同一経路）で登録する。日付・ユーザー切替でクリア（別日の日報への持ち越しを防ぐ） */
+/** 日報フォーム内の改善のタネ入力。保存・提出の成立時に通常経路（useNotes 'poipoi' = トップメニューの
+ * 改善のタネと同一経路）で登録する。日付・ユーザー切替でクリア（別日の日報への持ち越しを防ぐ） */
 const poipoiDraft = ref('')
 watch([selDate, currentUserId], () => { poipoiDraft.value = '' })
 
@@ -419,10 +426,55 @@ async function submitPoipoiIfAny(): Promise<void> {
   const res = await poipoiNotes.add({ title: '', body: text, projectId: null, companyId: null, workCategoryId: null })
   if (res.ok) {
     poipoiDraft.value = ''
-    show('ぽいぽいポストを登録しました')
+    show('改善のタネを登録しました')
   } else {
-    show(`ぽいぽいポストの登録に失敗しました（${res.error.message}）。入力は保持されています`, 'warn')
+    show(`改善のタネの登録に失敗しました（${res.error.message}）。入力は保持されています`, 'warn')
   }
+}
+
+// ---------- Google カレンダー予定の読込・取込（改善要望 2026-08-17。AI業務アシスタント F-14 と同じ useCalendar） ----------
+
+const cal = useCalendar()
+const calConnected = cal.isConnected
+const calEnabled = cal.isEnabled
+const calStatusLoaded = cal.isStatusLoaded
+
+/** 選択日のカレンダー予定（連携済みのとき。API モードは参照キー単位の遅延ロード） */
+const dayCalEvents = computed(() =>
+  calConnected.value ? cal.eventsOf(currentUserId.value, selDate.value) : [])
+
+/**
+ * カレンダー予定を日報エントリへ取り込む（同期 → 予定を行へ変換）。
+ * 既存エントリと同名（内容一致）の予定はスキップ = 再取込しても増殖しない（冪等 = 原則2）。
+ * 取り込んだ行はその後自由に編集・削除できる（取消フロー = 行削除。原則9.5）。
+ */
+async function importCalendarEvents(): Promise<void> {
+  await run('mine-cal-import', async () => {
+    // 連携済みなら最新を同期してから読み込む。同期失敗は手元の予定で続行（非ブロッキング = 原則4）
+    const sync = await cal.syncFromGoogle(currentUserId.value, selDate.value)
+    if (!sync.ok) show('カレンダー同期に失敗しました。取得済みの予定で続行します', 'warn')
+    else if (sync.warning) show(sync.warning, 'warn') // 一部カレンダーの取得失敗等 = 欠落を報告（ai-assistant と同じ扱い）
+    const events = cal.eventsOf(currentUserId.value, selDate.value)
+    if (events.length === 0) {
+      show('この日のカレンダー予定はありません', 'info')
+      return
+    }
+    const existing = new Set(editEntries.value.map(e => e.task.trim()).filter(Boolean))
+    const rows: ReportEntry[] = events
+      .filter(e => !existing.has(e.title.trim()))
+      .map(e => ({
+        theme: '', projectId: '', task: e.title,
+        hours: toQuarterHours(Math.max(0, hhmmToMin(e.to) - hhmmToMin(e.from))), progress: 0,
+      }))
+    if (rows.length === 0) {
+      show('この日の予定はすべて取込済みです', 'info')
+      return
+    }
+    // 未入力の初期行（空行）は取り込んだ行で置き換える（空行が先頭に残らない）
+    const nonEmpty = editEntries.value.filter(e => e.task.trim() || (e.theme ?? '').trim())
+    editEntries.value = [...nonEmpty, ...rows]
+    show(`カレンダーから ${rows.length} 件の予定を取り込みました`)
+  }, { message: 'カレンダーの予定を読み込んでいます…' })
 }
 
 // ---------- AI アシスト入力（F-06-7。材料の入力は AI業務アシスタント F-14 へ移設） ----------
@@ -1231,8 +1283,9 @@ async function onMarkUnreadWeekly(): Promise<void> {
               <UiMarkdown v-if="myReport.reflection" :source="myReport.reflection" />
               <p v-else class="text-[13px]">—</p>
             </div>
-            <div :class="myReport.issues ? 'rounded-lg bg-warn-soft p-2.5' : ''">
-              <p class="label" :class="myReport.issues ? '!text-warn' : ''">本日の課題{{ myReport.issues ? '（管理者へ共有済み）' : '' }}</p>
+            <!-- 本日の課題は所感と同じプレーン表現（背景色・カード化なし。「（管理者へ共有済み）」表記も削除 = 改善要望 2026-08-17） -->
+            <div>
+              <p class="label">本日の課題</p>
               <span
                 v-if="myReport.issueCategory"
                 class="mb-1 inline-block rounded-full border border-brand bg-brand-soft px-2 py-0.5 text-[11px] font-medium text-brand"
@@ -1270,7 +1323,7 @@ async function onMarkUnreadWeekly(): Promise<void> {
         <!-- 材料サマリ（計画・メモ・回答の入力は AI業務アシスタント F-14 で行う） -->
         <UiSectionCard
           title="AI アシストの材料"
-          description="タスク計画の結果・ぽいぽいポスト・ヒアリング回答を材料に AI が下書きを作ります。材料の入力は AI業務アシスタントで"
+          description="タスク計画の結果・改善のタネ・ヒアリング回答を材料に AI が下書きを作ります。材料の入力は AI業務アシスタントで"
         >
           <template #actions>
             <NuxtLink to="/ai-assistant" class="btn btn-sm btn-primary">
@@ -1286,7 +1339,7 @@ async function onMarkUnreadWeekly(): Promise<void> {
               </p>
             </li>
             <li class="rounded-lg border border-line p-2.5 text-center">
-              <p class="text-[11px] font-bold text-muted">ぽいぽいポスト</p>
+              <p class="text-[11px] font-bold text-muted">改善のタネ</p>
               <p class="num mt-0.5 text-[15px] font-bold">{{ dayMemoCount }}<span class="text-xs text-muted"> 件</span></p>
             </li>
             <li class="rounded-lg border border-line p-2.5 text-center">
@@ -1299,7 +1352,7 @@ async function onMarkUnreadWeekly(): Promise<void> {
         </UiSectionCard>
 
         <!-- ドラフト生成 -->
-        <UiSectionCard title="日報ドラフト生成" description="スケジュール・回答・ぽいぽいポストを材料に AI が下書きを作ります">
+        <UiSectionCard title="日報ドラフト生成" description="スケジュール・回答・改善のタネを材料に AI が下書きを作ります">
           <div class="grid gap-2">
             <UiButton
               variant="primary"
@@ -1364,6 +1417,27 @@ async function onMarkUnreadWeekly(): Promise<void> {
                 ・{{ p.theme || '—' }}{{ p.purpose ? `（目的: ${p.purpose}）` : '' }}
               </li>
             </ul>
+          </div>
+
+          <!-- Google カレンダー予定の読込・取込（改善要望 2026-08-17。F-14 と同じ useCalendar。
+               未連携時は連携ゲート = WidgetsCalendarConnectGate〔擬似 OAuth / OAuth リダイレクト〕を表示） -->
+          <WidgetsCalendarConnectGate v-if="calStatusLoaded && calEnabled && !calConnected" />
+          <div
+            v-else-if="calConnected"
+            class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line bg-page px-3 py-2"
+          >
+            <p class="text-[12px] text-sub">
+              Google カレンダー連携済み。この日の予定（<span class="num font-semibold">{{ dayCalEvents.length }}</span> 件）を日報エントリへ取り込めます
+            </p>
+            <button
+              type="button"
+              class="btn btn-sm"
+              :disabled="isRunning('mine-cal-import')"
+              @click="importCalendarEvents"
+            >
+              <CalendarDays class="h-4 w-4" aria-hidden="true" />
+              {{ isRunning('mine-cal-import') ? '読込中…' : 'カレンダーから予定を取込' }}
+            </button>
           </div>
 
           <!-- 通常入力: テーブル形式（共通ヘッダ 1 行 + 各セルへの入力 = オペレーター指示 2026-07-22）。
@@ -1447,6 +1521,19 @@ async function onMarkUnreadWeekly(): Promise<void> {
             </UiFormField>
           </div>
 
+          <!-- 改善のタネ（旧称: ぽいぽいポスト。明日の予定より上に配置 = 改善要望 2026-08-17。
+               トップメニューの改善のタネと同一経路（useNotes 'poipoi'）で登録。
+               入力があれば日報の保存と合わせて登録・空欄ならスキップ） -->
+          <!-- 必須マーカーは初回提出コンテキストのみ（提出済み編集・下書きでは非強制のため誤認防止 = §54 NIT-1） -->
+          <UiFormField label="改善のタネ" :required="!editingSubmitted">
+            <textarea
+              v-model="poipoiDraft"
+              class="textarea"
+              placeholder="思いついたこと・気づき・改善アイデアを投げ込む"
+              aria-label="改善のタネ"
+            />
+          </UiFormField>
+
           <!-- 明日の予定（最大 3 件。翌営業日の日報へ自動反映） -->
           <UiFormField label="明日の予定" :hint="`最大 ${TOMORROW_PLANS_MAX} 件。登録すると翌営業日の日報エントリへ自動反映されます`">
             <div v-if="editPlans.length > 0" class="overflow-x-auto scroll-slim">
@@ -1506,18 +1593,6 @@ async function onMarkUnreadWeekly(): Promise<void> {
             <p v-if="editTomorrow" class="mt-1.5 text-[11px] text-muted">
               旧形式の明日の予定（自由記述）が保存されています: 「{{ editTomorrow }}」（保存時にそのまま保持されます）
             </p>
-          </UiFormField>
-
-          <!-- ぽいぽいポスト（フォーム最下部 = オペレーター指示 2026-07-31。トップメニューのぽいぽいポストと
-               同一経路（useNotes 'poipoi'）で登録。入力があれば日報の保存と合わせて登録・空欄ならスキップ） -->
-          <!-- 必須マーカーは初回提出コンテキストのみ（提出済み編集・下書きでは非強制のため誤認防止 = §54 NIT-1） -->
-          <UiFormField label="ぽいぽいポスト" :required="!editingSubmitted">
-            <textarea
-              v-model="poipoiDraft"
-              class="textarea"
-              placeholder="思いついたこと・気づき・改善アイデアを投げ込む"
-              aria-label="ぽいぽいポスト"
-            />
           </UiFormField>
 
           <div class="flex flex-wrap items-center justify-end gap-2">
@@ -2108,8 +2183,9 @@ async function onMarkUnreadWeekly(): Promise<void> {
             <UiMarkdown v-if="drawerReport.reflection" :source="drawerReport.reflection" />
             <p v-else class="text-[13px]">—</p>
           </div>
-          <div v-if="drawerReport.issues" class="rounded-lg bg-warn-soft p-2.5">
-            <p class="label !text-warn">本日の課題（管理者へ共有済み）</p>
+          <!-- 本日の課題は所感と同じプレーン表現（背景色・カード化なし。「（管理者へ共有済み）」表記も削除 = 改善要望 2026-08-17） -->
+          <div v-if="drawerReport.issues">
+            <p class="label">本日の課題</p>
             <span
               v-if="drawerReport.issueCategory"
               class="mb-1 inline-block rounded-full border border-brand bg-brand-soft px-2 py-0.5 text-[11px] font-medium text-brand"
@@ -2137,9 +2213,9 @@ async function onMarkUnreadWeekly(): Promise<void> {
             <p v-else class="text-[13px]">—</p>
           </div>
 
-          <!-- ぽいぽいポスト連携（同じ著者・同じ日付の投稿を日報詳細に合わせて表示。可視範囲は poipoi の既存モデル） -->
+          <!-- 改善のタネ連携（同じ著者・同じ日付の投稿を日報詳細に合わせて表示。可視範囲は poipoi の既存モデル） -->
           <div v-if="drawerPoipoiPosts.length > 0">
-            <p class="label">ぽいぽいポスト</p>
+            <p class="label">改善のタネ</p>
             <ul class="grid gap-2">
               <li
                 v-for="p in drawerPoipoiPosts"

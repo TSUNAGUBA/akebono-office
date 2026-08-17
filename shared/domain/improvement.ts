@@ -89,6 +89,35 @@ export function matchesImprovementFilter(status: ImprovementStatus, filter: Impr
 
 // ---------- 型 ----------
 
+// ---------- 要望（request）単位のステータス（2026-08-17。改修単位のステータスとは独立） ----------
+
+/**
+ * 生要望のステータス。改修単位（item）のステータスが「改修 1 件」の進捗を表すのに対し、
+ * こちらは**元となった要望 1 件ずつ**の対応状況を表す（部分的に対応済みの改修単位を表現できる）。
+ * - open      未対応（既定。旧データ = status 未定義も open として扱う）
+ * - resolved  対応済み（この要望の内容は反映済み）
+ * - dismissed 見送り（この要望の内容は対応しない）
+ * 遷移は自由（軽量な進捗タグ。誤操作はいつでも戻せる = 原則9.5）。
+ */
+export type ImprovementRequestStatus = 'open' | 'resolved' | 'dismissed'
+
+export const IMPROVEMENT_REQUEST_STATUSES: ImprovementRequestStatus[] = ['open', 'resolved', 'dismissed']
+
+/** 要望ステータスの表示メタ（label・トーン）。tone は UI の Tone 値と対応 */
+export const IMPROVEMENT_REQUEST_STATUS_META: Record<
+  ImprovementRequestStatus,
+  { label: string; tone: 'neutral' | 'info' | 'ok' | 'warn' }
+> = {
+  open: { label: '未対応', tone: 'info' },
+  resolved: { label: '対応済み', tone: 'ok' },
+  dismissed: { label: '見送り', tone: 'warn' },
+}
+
+/** 要望のステータス（未定義 = 旧データは open。下位互換 = 原則7） */
+export function requestStatusOf(r: { status?: ImprovementRequestStatus | null }): ImprovementRequestStatus {
+  return r.status ?? 'open'
+}
+
 /** 要望への添付画像（縮小済み data URI。参照時は押下で拡大表示） */
 export interface ImprovementRequestImage {
   /** 元ファイル名（表示・alt 用） */
@@ -115,6 +144,8 @@ export interface ImprovementRequest {
   pageLabel: string
   /** 要望本文 */
   body: string
+  /** 要望単位のステータス（未定義 = open。改修単位のステータスとは独立の進捗タグ = 原則7） */
+  status?: ImprovementRequestStatus
   /** 添付の URL リンク（複数可。参照時は別タブで開く）。旧データは未定義 = 無し（原則7） */
   links?: string[]
   /** 添付画像（複数可。参照時は押下で拡大）。旧データは未定義 = 無し（原則7） */
@@ -507,8 +538,12 @@ export interface PromptItemInput {
   detail: string
   status: ImprovementStatus
   pagePaths: string[]
-  /** links / imageCount は要望の添付（省略可 = 旧呼び出しの下位互換。リンクはプロンプトに列挙・画像は件数のみ言及） */
-  requests: { pageLabel: string; pagePath: string; body: string; links?: string[]; imageCount?: number }[]
+  /** links / imageCount は要望の添付（省略可 = 旧呼び出しの下位互換。リンクはプロンプトに列挙・画像は件数のみ言及）。
+   *  status は要望単位のステータス（省略/open 以外は【対応済み】【見送り】として明記 = プロンプト再生成に反映） */
+  requests: {
+    pageLabel: string; pagePath: string; body: string
+    status?: ImprovementRequestStatus; links?: string[]; imageCount?: number
+  }[]
   /** 担当者の時系列メモ（改修方針の検討過程・保留/見送り理由。プロンプトに加味する）。時系列（古い順）。省略/空可 */
   notes?: { body: string; kind: ImprovementNoteKind }[]
 }
@@ -554,9 +589,15 @@ export function buildCodingPrompt(items: PromptItemInput[], opts?: { intro?: str
     if (it.requests.length) {
       out.push('')
       out.push('**根拠となった利用者の要望:**')
+      if (it.requests.some(r => requestStatusOf(r) !== 'open')) {
+        out.push('（【対応済み】の要望は反映済みのため再改修しないこと・【見送り】の要望は実装しないこと）')
+      }
       it.requests.forEach((r) => {
         const where = r.pageLabel.trim() || r.pagePath.trim()
-        out.push(`- ${where ? `［${where}］ ` : ''}${r.body.trim().replace(/\s*\n\s*/g, ' ')}`)
+        // 要望単位のステータス（open 以外は明記 = 対応済み分の再改修・見送り分の実装を防ぐ）
+        const status = requestStatusOf(r)
+        const statusTag = status === 'open' ? '' : `【${IMPROVEMENT_REQUEST_STATUS_META[status].label}】 `
+        out.push(`- ${where ? `［${where}］ ` : ''}${statusTag}${r.body.trim().replace(/\s*\n\s*/g, ' ')}`)
         // 添付（リンクは参照先として列挙・画像はアプリ内参照のため件数のみ言及）
         const links = (r.links ?? []).map(l => l.trim()).filter(Boolean)
         for (const link of links) out.push(`  - 参考リンク: ${link}`)

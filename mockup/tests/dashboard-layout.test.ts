@@ -198,11 +198,15 @@ describe('categorizeCards（useMenuCategories と共有ロジック）', () => {
 describe('テンプレート定義の健全性', () => {
   const dashboardIds = new Set(MENU_CARDS.dashboard.map(c => c.id))
 
-  it('テンプレートは 5 種・id は一意', () => {
-    expect(DASHBOARD_TEMPLATES).toHaveLength(5)
+  it('テンプレートは 6 種・id は一意（notify-first = 通知最上段。改善要望 2026-08-17）', () => {
+    expect(DASHBOARD_TEMPLATES).toHaveLength(6)
     const ids = DASHBOARD_TEMPLATES.map(t => t.id)
-    expect(new Set(ids).size).toBe(5)
-    expect(ids).toEqual(['default', 'operations', 'sales', 'executive', 'focus'])
+    expect(new Set(ids).size).toBe(6)
+    expect(ids).toEqual(['default', 'operations', 'sales', 'executive', 'focus', 'notify-first'])
+  })
+
+  it('notify-first テンプレートは通知を最上段（top）に配置する', () => {
+    expect(templateById('notify-first')!.layout.options.notifications).toBe('top')
   })
 
   it('全テンプレートの全 cardId が MENU_CARDS.dashboard に存在する（外部リンクは categorize が処理）', () => {
@@ -219,7 +223,7 @@ describe('テンプレート定義の健全性', () => {
     for (const t of DASHBOARD_TEMPLATES) {
       expect(t.name.length).toBeGreaterThan(0)
       expect(t.description.length).toBeGreaterThan(0)
-      expect(['side', 'bottom', 'hidden']).toContain(t.layout.options.notifications)
+      expect(['side', 'bottom', 'top', 'hidden']).toContain(t.layout.options.notifications)
       expect(['comfortable', 'compact']).toContain(t.layout.options.density)
       expect(typeof t.layout.options.showAkebono).toBe('boolean')
     }

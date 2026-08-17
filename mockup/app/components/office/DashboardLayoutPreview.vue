@@ -40,8 +40,17 @@ const notif = computed(() => props.layout.options.notifications)
         AKEBONO 業務
       </div>
 
-      <!-- side: 左にセクション・右に通知バー / それ以外: セクションを縦積み -->
+      <!-- side: 左にセクション・右に通知バー / top: 通知バーを先頭に / それ以外: セクションを縦積み -->
       <div class="flex gap-1.5" :class="notif === 'side' ? '' : 'flex-col'">
+        <!-- 通知バー（top = 最上段に全幅配置。改善要望 2026-08-17） -->
+        <div
+          v-if="notif === 'top'"
+          class="w-full rounded border border-line bg-brand-soft/40 px-1.5 py-1"
+        >
+          <span class="flex items-center gap-1 text-[9px] font-semibold text-brand">
+            <Bell class="h-2.5 w-2.5" /> 通知
+          </span>
+        </div>
         <div class="flex-1 grid gap-1">
           <div
             v-for="s in sections"
@@ -65,9 +74,9 @@ const notif = computed(() => props.layout.options.notifications)
           <p v-if="sections.length === 0" class="text-[9px] text-muted">（すべて「その他」に表示）</p>
         </div>
 
-        <!-- 通知バー -->
+        <!-- 通知バー（side = 右カラム / bottom = 最下段。top は上で描画済み） -->
         <div
-          v-if="notif !== 'hidden'"
+          v-if="notif === 'side' || notif === 'bottom'"
           class="rounded border border-line bg-brand-soft/40 px-1.5 py-1"
           :class="notif === 'side' ? 'w-12 shrink-0' : 'w-full'"
         >
@@ -75,7 +84,7 @@ const notif = computed(() => props.layout.options.notifications)
             <Bell class="h-2.5 w-2.5" /> 通知
           </span>
         </div>
-        <div v-else class="flex items-center gap-1 text-[9px] text-muted">
+        <div v-else-if="notif === 'hidden'" class="flex items-center gap-1 text-[9px] text-muted">
           <BellOff class="h-2.5 w-2.5" /> 通知オフ
         </div>
       </div>

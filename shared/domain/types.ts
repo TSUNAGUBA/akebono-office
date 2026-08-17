@@ -324,13 +324,28 @@ export type ApprovalMode = 'serial' | 'all' | 'majority'
  * 承認者の指定方法（PermissionRule.subjectKind と同じ 3 種）。
  * title=役職（CodeMaster category 'title' のラベル）/ role=ロール（MemberRole）/ member=個人。
  */
-export type ApproverType = 'title' | 'role' | 'member'
+/**
+ * 承認者の指定方法。applicant = 申請者本人（2026-08-17。経路マスタでのみ使用し、
+ * 申請提出時に routeSnapshot へ凍結する際 member（申請者の id）へ解決する = 承認ロジックは不変）
+ */
+export type ApproverType = 'title' | 'role' | 'member' | 'applicant'
+
+/**
+ * 経路ステップの種別（改善要望 2026-08-17）。
+ * - approval 承認（中間の承認ステップ）
+ * - decision 決裁（最終的な意思決定ステップ）
+ * - confirm  確認（結果の確認。既定の担当は申請者本人 = approverType 'applicant'）
+ * 未設定（旧データ・旧スナップショット）は表示上「最終ステップ = 決裁・それ以外 = 承認」として扱う
+ * （stepKindOf。下位互換 = 原則7。進行の状態機械は種別に依らず直列で不変）。
+ */
+export type ApprovalStepKind = 'approval' | 'decision' | 'confirm'
 
 /**
  * 承認経路のステップ（稟議・勤怠 共通）。approverType により承認対象を出し分ける:
  *   - title:  approverTitle（役職ラベル）に一致する在籍者
  *   - role:   approverRole（admin/hr/member）に一致する在籍者
  *   - member: approverMemberId（個人指定）
+ *   - applicant: 申請者本人（稟議の経路マスタのみ。提出時に member へ解決して凍結）
  * 解決は shared/domain/approver.ts の pickApprover に一本化（旧形式のフォールバックも同関数が吸収）。
  */
 export interface ApprovalRouteStep {
@@ -340,6 +355,8 @@ export interface ApprovalRouteStep {
   approverTitle: string | null
   approverMemberId: string | null
   mode: ApprovalMode
+  /** ステップ種別（承認/決裁/確認）。未設定 = 旧データ（stepKindOf が表示既定を補完 = 原則7） */
+  stepKind?: ApprovalStepKind | null
 }
 
 /** 稟議の承認ステップ（共通 ApprovalRouteStep のエイリアス） */

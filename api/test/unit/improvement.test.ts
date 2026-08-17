@@ -10,6 +10,7 @@ import {
   IMPROVEMENT_IMAGES_MAX,
   IMPROVEMENT_LINKS_MAX,
   IMPROVEMENT_NOTE_CAP,
+  IMPROVEMENT_REQUEST_STATUS_META,
   improvementImagesError,
   improvementLinksError,
   improvementNoteError,
@@ -18,6 +19,7 @@ import {
   normalizeClusterPlan,
   normalizeImprovementImages,
   normalizeImprovementLinks,
+  requestStatusOf,
 } from '../../../shared/domain/improvement'
 import { improvementRequestInputOf } from '../../src/routes/improvements'
 
@@ -207,6 +209,37 @@ describe('添付画像（normalizeImprovementImages / improvementImagesError）'
     const many = Array.from({ length: IMPROVEMENT_IMAGES_MAX + 1 }, () => ({ filename: 'a', mime: 'image/png', dataUrl: PNG }))
     expect(improvementImagesError(many)).not.toBeNull()
     expect(improvementImagesError(many.slice(0, IMPROVEMENT_IMAGES_MAX))).toBeNull()
+  })
+})
+
+describe('要望ステータス（requestStatusOf / buildCodingPrompt の再生成反映。2026-08-17）', () => {
+  it('status 未定義（旧データ）は open として扱う（下位互換 = 原則7）', () => {
+    expect(requestStatusOf({})).toBe('open')
+    expect(requestStatusOf({ status: null })).toBe('open')
+    expect(requestStatusOf({ status: 'resolved' })).toBe('resolved')
+    expect(IMPROVEMENT_REQUEST_STATUS_META.open.label).toBe('未対応')
+  })
+  it('resolved / dismissed の要望は【対応済み】【見送り】として明記され、注意書きが入る', () => {
+    const prompt = buildCodingPrompt([{
+      title: 't', summary: 's', detail: 'd', status: 'accepted', pagePaths: ['/x'],
+      requests: [
+        { pageLabel: 'X', pagePath: '/x', body: '直したい A' },
+        { pageLabel: 'X', pagePath: '/x', body: '直したい B', status: 'resolved' },
+        { pageLabel: 'X', pagePath: '/x', body: '直したい C', status: 'dismissed' },
+      ],
+    }])
+    expect(prompt).toContain('【対応済み】 直したい B')
+    expect(prompt).toContain('【見送り】 直したい C')
+    expect(prompt).not.toContain('【未対応】') // open は無印
+    expect(prompt).toContain('再改修しないこと')
+  })
+  it('全要望が open なら注意書き・タグを出さない（従来プロンプトと同一 = 下位互換）', () => {
+    const prompt = buildCodingPrompt([{
+      title: 't', summary: 's', detail: 'd', status: 'accepted', pagePaths: ['/x'],
+      requests: [{ pageLabel: 'X', pagePath: '/x', body: '直したい' }],
+    }])
+    expect(prompt).not.toContain('【')
+    expect(prompt).not.toContain('再改修しないこと')
   })
 })
 

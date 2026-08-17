@@ -6,17 +6,21 @@
  *   未解決/解決済み・対応可否でフィルターできる。
  * - フィルター結果を、コーディング AI エージェント向けの詳細プロンプトとして出力する。
  */
-import { ClipboardCopy, ExternalLink, Sparkles, Undo2, Wand2 } from 'lucide-vue-next'
+import { ClipboardCopy, ExternalLink, RefreshCw, Sparkles, Undo2, Wand2 } from 'lucide-vue-next'
 import type { TableColumn, Tone } from '~/types/ui'
 import {
   IMPROVEMENT_FILTER_OPTIONS,
+  IMPROVEMENT_REQUEST_STATUS_META,
+  IMPROVEMENT_REQUEST_STATUSES,
   IMPROVEMENT_STATUS_META,
   IMPROVEMENT_STATUS_NEXT,
   type ImprovementFilter,
   type ImprovementItem,
   type ImprovementRequestImage,
+  type ImprovementRequestStatus,
   type ImprovementStatus,
   matchesImprovementFilter,
+  requestStatusOf,
 } from '~/types/improvement'
 import { fmtDate, fmtDateTime } from '~/utils/format'
 import { pageDisplay } from '~/utils/page-label'
@@ -198,6 +202,14 @@ async function archiveRequest(id: string): Promise<void> {
   if (!ok) return
   const res = await imp.setRequestArchived(id, true)
   if (res.ok) toast.show('要望を取り消しました', 'ok')
+  else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
+}
+
+/** 要望 1 件ずつのステータス変更（進捗タグ。遷移自由 = いつでも戻せる = 原則9.5。プロンプト再生成に反映） */
+async function changeRequestStatus(id: string, ev: Event): Promise<void> {
+  const to = (ev.target as HTMLSelectElement).value as ImprovementRequestStatus
+  const res = await imp.setRequestStatus(id, to)
+  if (res.ok) toast.show(`要望を「${IMPROVEMENT_REQUEST_STATUS_META[to].label}」にしました（プロンプト再生成に反映されます）`, 'ok')
   else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
 }
 
@@ -502,6 +514,25 @@ async function copyAndClose(): Promise<void> {
                   <p class="mt-1 text-[11px] text-muted">
                     {{ r.memberName }}・{{ r.pageLabel || r.pagePath || 'ページ不明' }}・{{ fmtDate(r.createdAt) }}
                   </p>
+                  <!-- 要望単位のステータス（進捗タグ）。変更はプロンプト再生成に反映（【対応済み】【見送り】明記） -->
+                  <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
+                    <UiStatusBadge
+                      :tone="IMPROVEMENT_REQUEST_STATUS_META[requestStatusOf(r)].tone"
+                      :label="IMPROVEMENT_REQUEST_STATUS_META[requestStatusOf(r)].label"
+                      dot
+                    />
+                    <select
+                      v-if="!selected.archivedAt"
+                      class="select w-auto py-1 text-[12px]"
+                      :value="requestStatusOf(r)"
+                      :aria-label="`この要望のステータスを変更`"
+                      @change="changeRequestStatus(r.id, $event)"
+                    >
+                      <option v-for="s in IMPROVEMENT_REQUEST_STATUSES" :key="s" :value="s">
+                        {{ IMPROVEMENT_REQUEST_STATUS_META[s].label }}
+                      </option>
+                    </select>
+                  </div>
                 </div>
                 <button type="button" class="btn btn-ghost btn-sm shrink-0" title="この要望を取消" @click="archiveRequest(r.id)">
                   取消
@@ -578,12 +609,16 @@ async function copyAndClose(): Promise<void> {
       <div class="grid gap-3">
         <p class="text-[13px] text-sub">
           フィルター条件に合う改修単位を、コーディング AI エージェント向けの詳細プロンプト（対象ページ・機能名・改修内容・元要望・受入基準）として出力します。
+          要望ごとのステータス変更後は「再生成」で最新の状態（【対応済み】【見送り】の明記）を反映できます。
         </p>
         <div class="flex flex-wrap items-center gap-2">
           <span class="label">対象</span>
           <UiSelect v-model="promptFilter" :options="IMPROVEMENT_FILTER_OPTIONS" @update:model-value="refreshPrompt" />
           <span class="text-[12px] text-muted">{{ promptCount }} 件</span>
-          <button type="button" class="btn btn-ghost btn-sm ml-auto" :disabled="!promptText" @click="copyPrompt">
+          <button type="button" class="btn btn-ghost btn-sm ml-auto" :disabled="promptBusy" @click="refreshPrompt">
+            <RefreshCw class="h-4 w-4" aria-hidden="true" /> {{ promptBusy ? '生成中…' : '再生成' }}
+          </button>
+          <button type="button" class="btn btn-ghost btn-sm" :disabled="!promptText" @click="copyPrompt">
             <ClipboardCopy class="h-4 w-4" aria-hidden="true" /> コピー
           </button>
         </div>

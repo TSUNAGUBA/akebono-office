@@ -65,7 +65,7 @@ export const NAV_MAP: Record<string, NavMapEntry> = {
     parent: HOME,
     related: [
       { to: '/ai-assistant', label: 'AI業務アシスタント' },
-      { to: '/poipoi', label: 'ぽいぽいポスト' },
+      { to: '/poipoi', label: '改善のタネ' },
       WORK_CATEGORIES,
       PROJECTS,
       PERMISSIONS,
@@ -91,7 +91,7 @@ export const NAV_MAP: Record<string, NavMapEntry> = {
   '/minutes': {
     parent: HOME,
     related: [
-      { to: '/poipoi', label: 'ぽいぽいポスト' },
+      { to: '/poipoi', label: '改善のタネ' },
       WORK_CATEGORIES,
       CUSTOMERS,
       PROJECTS,
@@ -223,7 +223,7 @@ export const NAV_MAP: Record<string, NavMapEntry> = {
   '/masters/work-categories': {
     parent: MASTERS,
     related: [
-      { to: '/poipoi', label: 'ぽいぽいポスト' },
+      { to: '/poipoi', label: '改善のタネ' },
       { to: '/minutes', label: '議事録' },
     ],
   },

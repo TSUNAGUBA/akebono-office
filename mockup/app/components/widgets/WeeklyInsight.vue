@@ -161,7 +161,7 @@ const SWOT_QUADRANTS = [
         <UiKpiCard label="課題・エスカレ" :value="`${m.issues.length} / ${m.escalationRaised}`" :sub="`エスカレ解決 ${m.escalationResolved}`" icon="TriangleAlert" />
         <UiKpiCard label="稟議" :value="`${m.workflowSubmitted}件`" :sub="`承認 ${m.workflowApproved} 件`" icon="Stamp" />
         <UiKpiCard label="AI タスク完了" :value="`${m.aiTasksDone}件`" :sub="`進行中 ${m.aiTasksActive} 件`" icon="Bot" />
-        <UiKpiCard label="議事録 / ポスト" :value="`${m.minutesCount} / ${m.poipoiCount}`" sub="週内の登録" icon="StickyNote" />
+        <UiKpiCard label="議事録 / タネ" :value="`${m.minutesCount} / ${m.poipoiCount}`" sub="週内の登録" icon="StickyNote" />
         <UiKpiCard
           v-if="m.salesMonthAmount !== null"
           label="当月売上"

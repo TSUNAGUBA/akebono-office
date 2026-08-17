@@ -65,7 +65,7 @@ export function useNotes(kind: NoteKind) {
       if (targets.length === 0) return
       const recipientIds = resolveNotifyRecipientIds(targets, tbl('members').value as Member[], currentUser.value.id)
       if (recipientIds.length === 0) return
-      const title = `新しいぽいぽいポスト（${currentUser.value.name}）`
+      const title = `新しい改善のタネ（${currentUser.value.name}）`
       const preview = [...body].slice(0, 140).join('')
       for (const mid of recipientIds) notifications.notify(mid, 'poipoi', title, preview, '/poipoi')
     } catch {

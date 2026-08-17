@@ -106,7 +106,7 @@ export function heuristicWeeklyInsight(m: WeeklyMetrics): WeeklyInsight {
   }
   if (m.aiTasksDone > 0) strengths.push(`AI 社員の完了タスク ${m.aiTasksDone} 件（業務の自動化が回っている）`)
   if (m.minutesCount + m.poipoiCount > 0) {
-    opportunities.push(`議事録 ${m.minutesCount} 件・ぽいぽいポスト ${m.poipoiCount} 件の現場情報が蓄積（AI 参照で活用可能）`)
+    opportunities.push(`議事録 ${m.minutesCount} 件・改善のタネ ${m.poipoiCount} 件の現場情報が蓄積（AI 参照で活用可能）`)
   }
   if (m.workflowSubmitted > m.workflowApproved + 2) {
     weaknesses.push(`承認待ちの稟議が滞留（提出 ${m.workflowSubmitted} / 承認 ${m.workflowApproved}）`)

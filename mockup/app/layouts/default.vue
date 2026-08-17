@@ -6,6 +6,7 @@ import { EMPLOYMENT_TYPE_LABELS } from '~/utils/labels'
 import { INDUSTRY_TYPE_LABELS } from '~/utils/akebono'
 import { navEntryOf } from '~/utils/nav-map'
 import { isActivePath, MOBILE_NAV, NAV_GROUPS } from '~/utils/navigation'
+import { resolvePageLabel } from '~/utils/page-label'
 import { type QuickAccessItem, quickAccessItemOf, quickAccessPermPath } from '~/utils/header-quick-access'
 
 const route = useRoute()
@@ -77,6 +78,35 @@ const pageTitle = computed(() => {
   return '' // ナビ定義にないルート（404 等）はタイトル非表示
 })
 
+// ---------- ヘッダーのパス表示（パンくず。改善要望 2026-08-17） ----------
+
+/**
+ * 現在ページの祖先チェーン（nav-map の parent 連鎖）。ホームはブランドリンクが担うため除外。
+ * 各階層は押下でその場所へ遷移できる。循環ガード付き（related の横リンクと違い parent は木構造の想定）。
+ */
+const breadcrumbs = computed<{ to: string; label: string }[]>(() => {
+  if (route.path === '/') return []
+  const chain: { to: string; label: string }[] = []
+  const seen = new Set<string>([route.path])
+  let entry = navEntryOf(route.path)
+  while (entry?.parent && entry.parent.to !== '/' && !seen.has(entry.parent.to)) {
+    seen.add(entry.parent.to)
+    chain.unshift({ to: entry.parent.to, label: entry.parent.label })
+    entry = navEntryOf(entry.parent.to)
+  }
+  return chain
+})
+
+/**
+ * 現在ページの表示名。下ったページも固有名で表現する（resolvePageLabel = ナビ + カードメニュー +
+ * nav-map 導線ラベルの合併）。解決できないルート（404 等）は従来どおり非表示（pageTitle フォールバック）。
+ */
+const currentPageLabel = computed(() => {
+  if (route.path === '/') return ''
+  const label = resolvePageLabel(route.path)
+  return label !== route.path ? label : pageTitle.value
+})
+
 // 権限ルールで deny された機能はモバイル下部ナビ・ヘッダー導線（打刻/通知）からも隠す（F-16）
 const { canPath } = usePermissions()
 const visibleMobileNav = computed(() => MOBILE_NAV.filter(i => canPath(i.path)))
@@ -121,9 +151,20 @@ function onSwitchUser(id: string): void {
           <Sunrise class="h-5 w-5 text-brand" aria-hidden="true" />
           <span class="hidden text-[15px] font-bold tracking-tight sm:block">AKEBONO Office</span>
         </NuxtLink>
-        <template v-if="route.path !== '/' && pageTitle">
-          <span class="hidden text-line-strong sm:block" aria-hidden="true">/</span>
-          <h1 class="min-w-0 flex-1 truncate text-[15px] font-bold">{{ pageTitle }}</h1>
+        <!-- パス表示（パンくず）: 全階層を表現し、各階層は押下でその場所へ遷移できる（改善要望 2026-08-17）。
+             中間階層はモバイルでは幅の都合で隠す（sm+）。現在ページ名は常に表示（truncate） -->
+        <template v-if="route.path !== '/' && currentPageLabel">
+          <nav class="flex min-w-0 flex-1 items-center gap-1.5 md:gap-3" aria-label="パンくず">
+            <template v-for="c in breadcrumbs" :key="c.to">
+              <span class="hidden text-line-strong sm:block" aria-hidden="true">/</span>
+              <NuxtLink
+                :to="c.to"
+                class="hidden max-w-40 shrink-0 truncate text-[15px] font-bold text-sub hover:text-brand hover:underline sm:block"
+              >{{ c.label }}</NuxtLink>
+            </template>
+            <span class="hidden text-line-strong sm:block" aria-hidden="true">/</span>
+            <h1 class="min-w-0 flex-1 truncate text-[15px] font-bold">{{ currentPageLabel }}</h1>
+          </nav>
         </template>
         <div v-else class="flex-1" />
 

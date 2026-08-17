@@ -442,7 +442,7 @@ async function onResetDemo(): Promise<void> {
         <!-- b2) 日報の入力方式（F-13-7） -->
         <UiSectionCard
           title="日報の入力方式"
-          description="AI アシスト入力はオプション機能です。カレンダー予定・ぽいぽいポスト・AI ヒアリングから日報ドラフトを生成し、本人が確認・修正してから提出します"
+          description="AI アシスト入力はオプション機能です。カレンダー予定・改善のタネ・AI ヒアリングから日報ドラフトを生成し、本人が確認・修正してから提出します"
         >
           <div class="max-w-xs">
             <UiSelect v-model="reportInputMode" :options="REPORT_INPUT_MODE_OPTIONS" aria-label="日報の入力方式" />
@@ -454,8 +454,8 @@ async function onResetDemo(): Promise<void> {
 
         <!-- b3) ぽいぽいポストの通知先（ロール/役職/個人。オペレーター指示 2026-08-03） -->
         <UiSectionCard
-          title="ぽいぽいポストの通知先"
-          description="ぽいぽいポストが登録されると、原文を下記の宛先へ通知します。宛先はロール・役職・個人で指定できます（投稿者本人は除外）。未設定の場合は通知しません"
+          title="改善のタネの通知先"
+          description="改善のタネが登録されると、原文を下記の宛先へ通知します。宛先はロール・役職・個人で指定できます（投稿者本人は除外）。未設定の場合は通知しません"
         >
           <SettingsNotifyRecipientsEditor v-model="poipoiNotifyRecipients" />
         </UiSectionCard>

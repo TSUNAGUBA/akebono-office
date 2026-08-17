@@ -48,7 +48,7 @@ async function notifyPoipoiRecipients(
       `SELECT id, role, title, active FROM members`)
     const recipientIds = resolveNotifyRecipientIds(targets, members, author.id)
     if (recipientIds.length === 0) return
-    const title = `新しいぽいぽいポスト（${author.name}）`
+    const title = `新しい改善のタネ（${author.name}）`
     const preview = capCp(body, 140)
     for (const mid of recipientIds) {
       await notify(db, mid, 'poipoi', title, preview, '/poipoi')
@@ -196,7 +196,7 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
     }
     await audit(pool, {
       actorId: user.id, action: 'create', entity: 'notes', entityId: id,
-      detail: kind === 'poipoi' ? 'ぽいぽいポストを登録' : '議事録を登録',
+      detail: kind === 'poipoi' ? '改善のタネを登録' : '議事録を登録',
     })
     // ぽいぽいポストは設定された宛先へ原文を通知（非ブロッキング。オペレーター指示 2026-08-03）
     if (kind === 'poipoi') await notifyPoipoiRecipients(pool, user, body)
@@ -260,7 +260,7 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
     }
     await audit(pool, {
       actorId: user.id, action: 'import', entity: 'notes', entityId: id,
-      detail: `${kind === 'poipoi' ? 'ぽいぽいポスト' : '議事録'}へドキュメント取込（${filename}）`,
+      detail: `${kind === 'poipoi' ? '改善のタネ' : '議事録'}へドキュメント取込（${filename}）`,
     })
     scheduleSearchRebuild(pool, env, `notes:import`)
     const { rows } = await pool.query(`SELECT ${NOTE_COLS} FROM notes WHERE id = $1`, [id])
@@ -403,7 +403,7 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
     if (upd.rowCount === 0) return c.json({ data: { id: noteId, warning: 'すでに取消済みです' } })
     await audit(pool, {
       actorId: user.id, action: 'archive', entity: 'notes', entityId: noteId,
-      detail: `${note.kind === 'poipoi' ? 'ぽいぽいポスト' : '議事録'}「${capCp(note.title, 40)}」を取消`,
+      detail: `${note.kind === 'poipoi' ? '改善のタネ' : '議事録'}「${capCp(note.title, 40)}」を取消`,
     })
     scheduleSearchRebuild(pool, env, 'notes:archive')
     return c.json({ data: { id: noteId } })
@@ -423,7 +423,7 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
     if (upd.rowCount === 0) return c.json({ data: { id: noteId, warning: '取消されていません' } })
     await audit(pool, {
       actorId: user.id, action: 'restore', entity: 'notes', entityId: noteId,
-      detail: `${note.kind === 'poipoi' ? 'ぽいぽいポスト' : '議事録'}「${capCp(note.title, 40)}」を復元`,
+      detail: `${note.kind === 'poipoi' ? '改善のタネ' : '議事録'}「${capCp(note.title, 40)}」を復元`,
     })
     scheduleSearchRebuild(pool, env, 'notes:restore')
     return c.json({ data: { id: noteId } })

@@ -31,7 +31,7 @@ export const FEATURE_PERMISSION_KEYS: { key: string; label: string }[] = [
   { key: 'shift', label: 'シフト表' },
   { key: 'reports', label: '日報・週報' },
   { key: 'ai-assistant', label: 'AI業務アシスタント（カレンダー連携含む）' },
-  { key: 'poipoi', label: 'ぽいぽいポスト' },
+  { key: 'poipoi', label: '改善のタネ' },
   { key: 'minutes', label: '議事録' },
   { key: 'customer-log', label: '顧客ログ' },
   { key: 'workflow', label: '稟議' },
@@ -164,7 +164,7 @@ export const AI_SCOPE_FIELD = 'ai-scope'
  * 勤怠・タスク計画/カレンダーは「自分のみ」（C3 = 安全側。管理職等へは権限設定で「すべて」を付与する運用）
  */
 export const AI_SCOPE_FEATURES: { key: string; label: string; defaultScope: 'all' | 'own' }[] = [
-  { key: 'poipoi', label: 'ぽいぽいポスト', defaultScope: 'all' },
+  { key: 'poipoi', label: '改善のタネ', defaultScope: 'all' },
   { key: 'attendance', label: '勤怠（労働時間・有給）', defaultScope: 'own' },
   // 'all' で供給されるのはチームのタスク計画のみ（カレンダー予定は本人分に限る）。ラベルは実挙動に合わせる
   { key: 'ai-assistant', label: 'タスク計画', defaultScope: 'own' },

@@ -603,14 +603,14 @@ const showInsights = computed(() => isAdmin.value && !isReadonly.value)
 
             <!-- ぽいぽいポスト -->
             <div class="rounded-lg border border-line p-2.5">
-              <p class="text-[11px] font-bold text-muted">ぽいぽいポスト（計画外の出来事も一言でぽいっと）</p>
+              <p class="text-[11px] font-bold text-muted">改善のタネ（計画外の出来事も一言でぽいっと）</p>
               <div v-if="!isReadonly" class="mt-1.5 flex gap-1.5">
                 <input
                   v-model="memoText"
                   type="text"
                   class="input min-w-0 flex-1"
                   placeholder="例: 見積の前提を確認済み"
-                  aria-label="ぽいぽいポスト"
+                  aria-label="改善のタネ"
                   @keydown.enter="onMemoKeydown"
                 >
                 <UiButton variant="primary" class="shrink-0" :loading="isRunning('poipoi')" @click="onPoipoi">
@@ -624,7 +624,7 @@ const showInsights = computed(() => isAdmin.value && !isReadonly.value)
                   <span class="min-w-0 text-[13px]">{{ m.answer }}</span>
                 </li>
               </ul>
-              <p v-else-if="isReadonly" class="mt-1.5 text-[11px] text-muted">この日のぽいぽいポストはありません</p>
+              <p v-else-if="isReadonly" class="mt-1.5 text-[11px] text-muted">この日の改善のタネはありません</p>
             </div>
 
             <!-- AI ヒアリング -->

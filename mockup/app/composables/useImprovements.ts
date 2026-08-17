@@ -22,12 +22,14 @@ import {
   IMPROVEMENT_PAGE_PATH_CAP,
   IMPROVEMENT_SUMMARY_CAP,
   IMPROVEMENT_TITLE_CAP,
+  IMPROVEMENT_REQUEST_STATUSES,
   type ImprovementFilter,
   type ImprovementItem,
   type ImprovementNote,
   type ImprovementNoteKind,
   type ImprovementRequest,
   type ImprovementRequestImage,
+  type ImprovementRequestStatus,
   type ImprovementStatus,
   improvementBodyError,
   improvementImagesError,
@@ -311,6 +313,25 @@ export function useImprovements() {
     return { ok: true, id }
   }
 
+  /** 要望 1 件ずつのステータス変更（open/resolved/dismissed。遷移自由 = 誤操作はいつでも戻せる = 原則9.5） */
+  async function setRequestStatus(id: string, status: ImprovementRequestStatus): Promise<Result> {
+    if (!IMPROVEMENT_REQUEST_STATUSES.includes(status)) {
+      return { ok: false, error: { code: 'AKO-REQ-011', message: 'status が不正です（open / resolved / dismissed）' } }
+    }
+    if (isApi) {
+      const res = await apiWrite(`/v1/improvements/requests/${id}/status`, { body: { status } })
+      if (res.ok) await refresh()
+      return res.ok ? { ok: true, id } : res
+    }
+    const reqsRef = tbl('improvementRequests')
+    if (!reqsRef.value.some(r => r.id === id)) {
+      return { ok: false, error: { code: 'AKO-REQ-002', message: '対象の要望が見つかりません' } }
+    }
+    reqsRef.value = reqsRef.value.map(r => (r.id === id ? { ...r, status } : r))
+    commit()
+    return { ok: true, id }
+  }
+
   async function setRequestArchived(id: string, archived: boolean): Promise<Result> {
     if (isApi) {
       const res = await apiWrite(`/v1/improvements/requests/${id}/${archived ? 'archive' : 'restore'}`, {})
@@ -388,8 +409,8 @@ export function useImprovements() {
       title: it.title, summary: it.summary, detail: it.detail, status: it.status, pagePaths: it.pagePaths,
       requests: requestsForItem(it.id).map(r => ({
         pageLabel: r.pageLabel, pagePath: r.pagePath, body: r.body,
-        // 添付（リンクはプロンプトに列挙・画像は件数のみ。API /prompt と同じ内容 = 両モード parity）
-        links: r.links ?? [], imageCount: (r.images ?? []).length,
+        // 要望ステータス + 添付（リンクは列挙・画像は件数のみ。API /prompt と同じ内容 = 両モード parity）
+        status: r.status, links: r.links ?? [], imageCount: (r.images ?? []).length,
       })),
       // 時系列メモも加味（古い順。notesForItem がソート済み）
       notes: notesForItem(it.id).map(n => ({ body: n.body, kind: n.kind })),
@@ -401,7 +422,7 @@ export function useImprovements() {
     // データ
     activeItems, archivedItems, unclusteredRequests, requestsForItem, notesForItem, refresh, loadRequestImages,
     // 操作
-    submit, generate, setStatus, editItem, setItemArchived, setRequestArchived,
+    submit, generate, setStatus, editItem, setItemArchived, setRequestArchived, setRequestStatus,
     addNote, setNoteArchived, buildPrompt,
   }
 }

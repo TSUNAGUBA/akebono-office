@@ -146,6 +146,11 @@ const shownSections = computed(() =>
     <div class="grid grid-cols-[minmax(0,1fr)] items-start gap-4" :class="notifPlacement === 'side' ? 'lg:grid-cols-[minmax(0,1fr)_340px]' : ''">
       <!-- メイン: メニュー（モバイル・PC 共通で最上部 = メニュー最優先。順序反転はしない） -->
       <div class="grid gap-3">
+        <!-- 通知欄（top = PC のみメニュー上に全幅配置 = 改善要望 2026-08-17。モバイルは従来どおりベル/下部ナビ） -->
+        <div v-if="notifPlacement === 'top'" class="hidden md:block">
+          <OfficeDashboardNotifications />
+        </div>
+
         <!-- AKEBONO 業務（業態別アプリ。押下でその業態の業務へ入る = ヘッダ切替に依存しない導線）。
              メニューカテゴリへ割り当てた業態はセクション配置側に出るため、ここは未割当業態のみを表示する
              （= 二重表示を防ぐ。全業態が割当済みなら専用セクションごと出さない。2026-08-03 #24） -->
