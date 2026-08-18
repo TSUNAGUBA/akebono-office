@@ -36,6 +36,7 @@ import {
   type ImprovementRequestStatus,
   type ImprovementStatus,
   improvementBodyError,
+  improvementEditError,
   improvementCommentError,
   improvementImagesError,
   improvementLinksError,
@@ -62,6 +63,7 @@ export function useImprovements() {
   const { tbl, commit, nextId } = useMockDb()
   const isApi = useApiMode()
   const { currentUser } = useCurrentUser()
+  const { canManageImprovements } = usePermissions()
 
   // API モードの管理データ（includeArchived で取消済みも取得。refresh で更新）。
   // mock モードは tbl（localStorage）をそのまま参照する（リアクティブ）。
@@ -108,6 +110,16 @@ export function useImprovements() {
       .filter(cm => cm.requestId === requestId && !cm.archivedAt)
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
   }
+
+  /** 要望 id → 有効コメント件数（一覧セル用。行ごとの全件フィルタを避け 1 パスで集計 = レビュー R9） */
+  const commentCountByRequest = computed<Map<string, number>>(() => {
+    const counts = new Map<string, number>()
+    for (const cm of allComments.value) {
+      if (cm.archivedAt) continue
+      counts.set(cm.requestId, (counts.get(cm.requestId) ?? 0) + 1)
+    }
+    return counts
+  })
 
   // ---------- 投稿（各ページから。全員可） ----------
 
@@ -449,6 +461,45 @@ export function useImprovements() {
     return { ok: true, id }
   }
 
+  /**
+   * 要望本文の編集（改修依頼 2026-08-18）。投稿者本人または管理権限者（API 側ガードと同一）。
+   * 編集は上書きだが editedAt を記録して「編集済み」を明示する（再編集で戻せる = 原則9.5）。
+   * 取消済みは編集不可（先に復元する）。集約済みは編集可（プロンプト再生成が現行本文を読む）。
+   */
+  async function editRequest(id: string, body: string): Promise<Result & { persisted?: boolean }> {
+    const text = body.trim()
+    const msg = improvementBodyError(text)
+    if (msg) return { ok: false, error: { code: 'AKO-REQ-001', message: msg } }
+    if (isApi) {
+      const res = await apiWrite(`/v1/improvements/requests/${id}/edit`, { body: { body: text } })
+      // 再取得は管理権限者のみ（管理 GET は非管理者に 403。投稿者本人の編集〔送信直後の修正〕は
+      // ローカル表示のみで完結する = submit が管理 GET を誤発火しないのと同じ配慮）
+      if (res.ok && canManageImprovements.value) await refresh()
+      return res.ok ? { ok: true, id } : res
+    }
+    const reqsRef = tbl('improvementRequests')
+    const target = reqsRef.value.find(r => r.id === id)
+    // 判定は共有の improvementEditError（API ルートと同一の順序・コード。単体テストで固定 = parity）
+    const guard = improvementEditError(target, currentUser.value.id, canManageImprovements.value)
+    if (guard) return { ok: false, error: guard }
+    if (!target) return { ok: false, error: { code: 'AKO-REQ-002', message: '対象の要望が見つかりません' } } // 型ナローイング用（guard が先に返る）
+    reqsRef.value = reqsRef.value.map(r => (r.id === id ? { ...r, body: text, editedAt: nowJstIso() } : r))
+    // 記録系（原則2）の本文上書きは変更前の本文を監査ログへ残す（API の audit_logs と同じ復元可能性の担保 = parity）
+    const logs = tbl('auditLogs')
+    logs.value = [...logs.value, {
+      id: nextId('auditLogs', 'aud'),
+      actorId: currentUser.value.id,
+      action: 'update',
+      entity: 'improvement_requests',
+      entityId: id,
+      detail: `要望本文を編集（変更前: ${target.body}）`,
+      at: nowJstIso(),
+    }]
+    // 永続化可否を返し UI が警告できるようにする（submit と同型 = localStorage 容量超過で編集が消える事故を黙認しない）
+    const persisted = commit()
+    return { ok: true, id, persisted }
+  }
+
   async function setRequestArchived(id: string, archived: boolean): Promise<Result> {
     if (isApi) {
       const res = await apiWrite(`/v1/improvements/requests/${id}/${archived ? 'archive' : 'restore'}`, {})
@@ -538,10 +589,10 @@ export function useImprovements() {
   return {
     // データ
     activeItems, archivedItems, unclusteredRequests, adoptedUnclustered, pendingRequests, allRequests,
-    requestsForItem, notesForItem, commentsForRequest, refresh, loadRequestImages, loadRequestImagesFor,
+    requestsForItem, notesForItem, commentsForRequest, commentCountByRequest, refresh, loadRequestImages, loadRequestImagesFor,
     // 操作
     submit, generate, setStatus, editItem, setItemArchived, setRequestArchived, setRequestStatus,
-    setRequestAdoption, addRequestComment, setRequestCommentArchived,
+    setRequestAdoption, editRequest, addRequestComment, setRequestCommentArchived,
     addNote, setNoteArchived, buildPrompt,
   }
 }

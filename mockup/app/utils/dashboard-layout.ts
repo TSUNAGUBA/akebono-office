@@ -35,8 +35,16 @@ export type NotificationPlacement = 'side' | 'bottom' | 'top' | 'hidden'
 export type LayoutDensity = 'comfortable' | 'compact'
 
 export interface DashboardLayoutOptions {
-  /** 通知欄の位置 */
+  /** 通知欄の位置（配置キー未設定時のフォールバック値。2026-08-18 の分離以降、SoT は配置専用キー） */
   notifications: NotificationPlacement
+  /**
+   * true = このレイアウトは通知配置を「自分では指定しない」（配置キー・下位層へ委譲する）。
+   * 2026-08-18 の分離**後**に保存されたレイアウトが立てる。未定義（分離前の保存値）は
+   * 「ユーザーがレイアウトで配置を選んだ」当時の意思として尊重し、ユーザー層ではテナント配置キーより優先する（原則7）。
+   * これが無いと、テンプレート適用時に書き込むフォールバック値（テナント由来など）がユーザー層に固定され、
+   * 以後のテナント配置変更・自分の配置解除が効かなくなる（レビュー R5）。
+   */
+  notificationsInherit?: boolean
   /** AKEBONO 業務（業態別）セクションを表示するか（実表示は権限・業態数と AND で判定） */
   showAkebono: boolean
   /** カード密度（任意。余白の調整のみ） */
@@ -72,6 +80,92 @@ export interface CategorizedCards {
 const NOTIFICATION_PLACEMENTS: readonly NotificationPlacement[] = ['side', 'bottom', 'top', 'hidden']
 const LAYOUT_DENSITIES: readonly LayoutDensity[] = ['comfortable', 'compact']
 
+/**
+ * 通知配置の選択肢（レイアウト設定 = 通知の配置に特化。改修依頼 2026-08-18）。
+ * 「上」「右」「下」「非表示」の 4 択を UI（DashboardLayoutPicker）へ提供する。
+ */
+export const NOTIFICATION_PLACEMENT_OPTIONS: readonly {
+  value: NotificationPlacement
+  label: string
+  description: string
+}[] = [
+  { value: 'top', label: '上', description: 'メニューの上に全幅で表示（通知から一日を始める配置）' },
+  { value: 'side', label: '右', description: '右サイドに常時表示（画面幅が広い PC 向けの標準配置）' },
+  { value: 'bottom', label: '下', description: 'メニューの下に全幅で表示（メニュー優先の配置）' },
+  { value: 'hidden', label: '非表示', description: '通知欄を表示しない（通知はヘッダーのベルから開く）' },
+]
+
+/** レイアウトの通知配置だけを差し替えた複製を返す（レイアウト設定とセクション設定の分離 = 純関数） */
+export function withNotificationPlacement(
+  layout: DashboardLayout,
+  placement: NotificationPlacement,
+): DashboardLayout {
+  return {
+    templateId: layout.templateId,
+    sections: cloneSections(layout.sections),
+    options: { ...layout.options, notifications: placement },
+  }
+}
+
+/**
+ * 通知配置の保存値をパース（専用キー。文字列 / JSON 引用文字列の両対応 = configs / prefs の保存経路差を吸収）。
+ * 未設定・不正値は null（= 設定なし。レイアウト由来の配置へフォールバック）。
+ */
+export function parseNotificationPlacement(raw: unknown): NotificationPlacement | null {
+  if (raw === null || raw === undefined) return null
+  let value: unknown = raw
+  if (typeof raw === 'string') {
+    const t = raw.trim()
+    if (t === '') return null
+    // JSON.stringify された文字列（'"top"'）も受理する（configs の保存流儀と生文字列の両対応）
+    if (t.startsWith('"')) {
+      try { value = JSON.parse(t) } catch { return null }
+    } else {
+      value = t
+    }
+  }
+  return NOTIFICATION_PLACEMENTS.includes(value as NotificationPlacement)
+    ? value as NotificationPlacement
+    : null
+}
+
+/**
+ * 通知配置の解決（層整合。2026-08-18）。専用キーとレイアウト由来の配置を**同じ層の優先順位**で解決する:
+ *   ユーザー配置キー > ユーザー層レイアウトの options.notifications > テナント配置キー > 解決レイアウト由来
+ * レイアウト設定を「通知の配置」に特化させた際、配置をレイアウト本体（sections を含む JSON）と別キーで
+ * 保存することで「配置だけ変えたのにセクション構成が層に固定される」副作用を避ける（レビュー R1）。
+ * さらに、**専用キー導入前にユーザー層レイアウト（テンプレート等）で配置を選んでいた既存ユーザー**の選択を
+ * 新しいテナント配置キーが上書きしないよう、ユーザー層レイアウト由来をテナントキーより優先する（原則7・レビュー R2）。
+ */
+/** 層ごとのレイアウト由来の配置（placement = options.notifications / inherit = 配置を指定しない委譲マーカー） */
+export interface LayerPlacement {
+  placement: NotificationPlacement
+  inherit?: boolean
+}
+
+export function resolveNotificationPlacement(inputs: {
+  userRaw?: unknown
+  tenantRaw?: unknown
+  /** ユーザー層レイアウト由来の配置（層に無ければ null）。inherit = 分離後の保存 = 配置を指定しない */
+  userLayout?: LayerPlacement | null
+  /** テナント層レイアウト由来の配置（層に無ければ null。従来 menu-categories の下位互換解釈も含む） */
+  tenantLayout?: LayerPlacement | null
+}): { placement: NotificationPlacement; source: 'user' | 'tenant' | 'layout' | 'default' } {
+  const user = parseNotificationPlacement(inputs.userRaw)
+  if (user) return { placement: user, source: 'user' }
+  // 分離前のユーザー層レイアウト（inherit なし）は「当時レイアウトで配置を選んだ」意思としてテナントキーより優先（原則7）。
+  // inherit 付き（分離後の保存）はフォールバック値を層に固定せず下位へ委譲する（レビュー R5/R8 = 値の凍結を作らない）
+  if (inputs.userLayout && !inputs.userLayout.inherit) {
+    return { placement: inputs.userLayout.placement, source: 'layout' }
+  }
+  const tenant = parseNotificationPlacement(inputs.tenantRaw)
+  if (tenant) return { placement: tenant, source: 'tenant' }
+  if (inputs.tenantLayout && !inputs.tenantLayout.inherit) {
+    return { placement: inputs.tenantLayout.placement, source: 'layout' }
+  }
+  return { placement: DEFAULT_LAYOUT_OPTIONS.notifications, source: 'default' }
+}
+
 /** テンプレート未指定時のオプション既定値 */
 export const DEFAULT_LAYOUT_OPTIONS: DashboardLayoutOptions = {
   notifications: 'side',
@@ -87,15 +181,17 @@ function cloneSections(sections: MenuCategoryDef[]): MenuCategoryDef[] {
 }
 
 /**
- * テンプレート定義（5 種。世の中の業務アプリを参考にセクション/メニュー配置を設計）。
+ * テンプレート定義（6 種。世の中の業務アプリを参考にセクション/メニュー配置を設計）。
  * すべて同じ MENU_CARDS.dashboard の id を、別の section 構成/順序 + options で配置する。
  * cardIds は既存カード id のみを参照する（未割当カード + 外部リンクは categorize が「その他」へ回す）。
+ * 2026-08-18 分離: 通知の配置はレイアウト設定（専用キー）が SoT。options.notifications は
+ * 「配置キー未設定時のフォールバック値」としてのみ使われる（applyTemplate は適用先層の現行配置を維持する）。
  */
 export const DASHBOARD_TEMPLATES: DashboardTemplate[] = [
   {
     id: 'default',
     name: '標準',
-    description: '現行の標準レイアウト。意思決定・業務ツール・経営状況をバランス良く配置し、通知は右サイドに常時表示します。',
+    description: '現行の標準レイアウト。意思決定・業務ツール・経営状況をバランス良く配置します。',
     layout: {
       templateId: 'default',
       // 現行構成（menu-registry の既定カテゴリ）を流用
@@ -141,7 +237,7 @@ export const DASHBOARD_TEMPLATES: DashboardTemplate[] = [
   {
     id: 'executive',
     name: '経営',
-    description: '売上・稼働状況・AIカンパニー・意思決定を最上部に。全体を俯瞰するエグゼクティブ・コックピット。通知は下部にまとめます。',
+    description: '売上・稼働状況・AIカンパニー・意思決定を最上部に。全体を俯瞰するエグゼクティブ・コックピットです。',
     layout: {
       templateId: 'executive',
       sections: [
@@ -157,7 +253,7 @@ export const DASHBOARD_TEMPLATES: DashboardTemplate[] = [
   {
     id: 'focus',
     name: '集中（ミニマル）',
-    description: '全メニューを 1 つのリストにまとめ、余白を抑えたミニマル表示。通知は下部・AKEBONO 業務セクションは非表示。',
+    description: '全メニューを 1 つのリストにまとめ、余白を抑えたミニマル表示。AKEBONO 業務セクションは非表示。',
     layout: {
       templateId: 'focus',
       sections: [
@@ -169,7 +265,7 @@ export const DASHBOARD_TEMPLATES: DashboardTemplate[] = [
   {
     id: 'notify-first',
     name: '通知ファースト',
-    description: '通知を最上段に全幅で配置し、届いた依頼・共有から一日を始めるレイアウト。メニュー構成は標準と同じです。',
+    description: 'メニュー構成は標準と同じです。通知から一日を始める運用向け（通知を最上段にするには「レイアウト」タブで配置「上」を選択してください）。',
     layout: {
       templateId: 'notify-first',
       sections: cloneSections(DEFAULT_MENU_CATEGORIES.dashboard),
@@ -254,7 +350,7 @@ export function parseMenuSections(raw: unknown): MenuCategoryDef[] | null {
 /** オプションの正規化（不正値・欠落は既定へ。将来のフィールド追加に耐える） */
 function normalizeOptions(raw: unknown): DashboardLayoutOptions {
   const rec = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw as Record<string, unknown> : {}
-  return {
+  const options: DashboardLayoutOptions = {
     notifications: NOTIFICATION_PLACEMENTS.includes(rec.notifications as NotificationPlacement)
       ? rec.notifications as NotificationPlacement
       : DEFAULT_LAYOUT_OPTIONS.notifications,
@@ -263,6 +359,9 @@ function normalizeOptions(raw: unknown): DashboardLayoutOptions {
       ? rec.density as LayoutDensity
       : DEFAULT_LAYOUT_OPTIONS.density,
   }
+  // 分離後の保存レイアウトの「配置はキーへ委譲」マーカー（未定義 = 分離前の保存値 = 立てない。原則7）
+  if (rec.notificationsInherit === true) options.notificationsInherit = true
+  return options
 }
 
 /**
@@ -391,4 +490,96 @@ export function planDashboardCards(input: {
     else unassigned.push(segId)
   }
   return { pool: [...base, ...assignedCards], unassignedAkebonoSegmentIds: unassigned }
+}
+
+// ---------- セクション構成のお気に入り（自由設定の保存・呼び出し。改修依頼 2026-08-18） ----------
+
+/** セクション構成のお気に入り（自由設定に名前を付けて保存・呼び出しできる。ユーザー個人のもの） */
+export interface SectionFavorite {
+  id: string
+  name: string
+  sections: MenuCategoryDef[]
+  /** 保存日時（JST ISO。表示用） */
+  savedAt: string
+}
+
+/** お気に入りの件数上限（user_preferences の value 4KB 上限に収まる範囲で余裕を持たせる） */
+export const MAX_SECTION_FAVORITES = 10
+
+/**
+ * お気に入り保存値（配列全体）の合計サイズ上限（バイト）。API の user_preferences は value 4KB
+ * （実バイト 4096）でサーバー拒否されるため、保存前に余裕を持って検証しユーザーへ案内する（原則4）。
+ */
+export const SECTION_FAVORITES_MAX_BYTES = 3800
+
+/**
+ * お気に入り保存値のパース（JSON 文字列 / 配列の両対応 = parseQuickAccessIds と同じ流儀）。
+ * 未設定・不正値は null。壊れたエントリは**その 1 件だけ落とす**（お気に入りは独立した記録の集まりで、
+ * 1 件の破損で全件を失わせない = 原則2 の状態保護）。
+ */
+export function parseSectionFavorites(raw: unknown): SectionFavorite[] | null {
+  if (raw === null || raw === undefined) return null
+  let value: unknown = raw
+  if (typeof raw === 'string') {
+    if (raw.trim() === '') return null
+    try { value = JSON.parse(raw) } catch { return null }
+  }
+  if (!Array.isArray(value)) return null
+  const out: SectionFavorite[] = []
+  const seenIds = new Set<string>()
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue
+    const rec = item as Record<string, unknown>
+    const sections = parseMenuSections(rec.sections)
+    if (typeof rec.id !== 'string' || rec.id === '' || seenIds.has(rec.id)) continue
+    if (typeof rec.name !== 'string' || rec.name.trim() === '') continue
+    if (sections === null) continue
+    seenIds.add(rec.id)
+    out.push({
+      id: rec.id,
+      name: rec.name,
+      sections,
+      savedAt: typeof rec.savedAt === 'string' ? rec.savedAt : '',
+    })
+  }
+  return out
+}
+
+/**
+ * お気に入りへ保存する（純関数）。同名は上書き（id・並び順維持 = 呼び出し側が確認済み）、
+ * 新規は末尾へ追加。上限超過はエラー（呼び出し側が警告表示）。id は savedAt 由来 + 衝突時連番。
+ */
+export function upsertSectionFavorite(
+  list: SectionFavorite[],
+  input: { name: string; sections: MenuCategoryDef[]; savedAt: string },
+): { ok: true; list: SectionFavorite[]; overwritten: boolean } | { ok: false; error: string } {
+  const name = input.name.trim()
+  if (!name) return { ok: false, error: 'お気に入りの名前を入力してください' }
+  const sections = input.sections.map(s => ({ id: s.id, label: s.label, cardIds: [...s.cardIds] }))
+  const existing = list.find(f => f.name === name)
+  let next: SectionFavorite[]
+  let overwritten: boolean
+  if (existing) {
+    overwritten = true
+    next = list.map(f => f.id === existing.id ? { ...f, name, sections, savedAt: input.savedAt } : f)
+  } else {
+    if (list.length >= MAX_SECTION_FAVORITES) {
+      return { ok: false, error: `お気に入りは最大 ${MAX_SECTION_FAVORITES} 件までです（不要なものを削除してください）` }
+    }
+    overwritten = false
+    const base = `fav-${input.savedAt.replace(/\D/g, '')}`
+    let id = base
+    for (let i = 2; list.some(f => f.id === id); i++) id = `${base}-${i}`
+    next = [...list, { id, name, sections, savedAt: input.savedAt }]
+  }
+  // 保存値は 1 キー（user_preferences）に収める必要があるため、合計サイズも検証する（4KB のサーバー上限より手前で案内）
+  if (new TextEncoder().encode(JSON.stringify(next)).length > SECTION_FAVORITES_MAX_BYTES) {
+    return { ok: false, error: 'お気に入りの合計サイズが上限に達しました。不要なお気に入りを削除するか、セクション数を減らしてください' }
+  }
+  return { ok: true, list: next, overwritten }
+}
+
+/** お気に入りを削除する（純関数。取消フロー = 原則 9.5 の「呼び出しで戻せる」記録の整理用） */
+export function removeSectionFavorite(list: SectionFavorite[], id: string): SectionFavorite[] {
+  return list.filter(f => f.id !== id)
 }

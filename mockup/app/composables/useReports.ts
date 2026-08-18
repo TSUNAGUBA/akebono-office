@@ -509,7 +509,8 @@ export function useReports() {
     if (isApi) {
       return apiResult(() => apiFetch('/v1/reports/remind', { method: 'POST', body: { memberId, date } }))
     }
-    notify(memberId, 'reminder', '日報リマインド', `${date} の日報が未提出です。提出をお願いします`, '/reports')
+    // リンクは対象日の日報へのディープリンク（?date= で対象日を初期表示。改修依頼 2026-08-18）
+    notify(memberId, 'reminder', '日報リマインド', `${date} の日報が未提出です。提出をお願いします`, `/reports?date=${date}`)
     return { ok: true }
   }
 

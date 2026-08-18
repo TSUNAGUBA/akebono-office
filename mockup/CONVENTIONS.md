@@ -65,6 +65,11 @@ const ok = await useConfirm().ask('確認', '削除しますか？', { danger: t
 useNotifications().notify(memberId, 'approval', title, body, '/link')
 useEscalations().raise({ reason: 'issue_reported', targetMemberId, context, dedupeKey: `issue:${id}:${date}` })
 
+// 通知ディープリンク（?open= / ?task= 等）の共通取り込み（2026-08-18・原則3。workflow/inbox/ai-company/NotesPanel で共用）
+// 初期表示 = onMounted・滞在中の同一ページ内クエリ変化 = watch で取り込み、URL から対象クエリのみ除去（再読込で再度開かない）
+const dlk = useRouteDeepLink('open', id => { /* 即時に開く */ })  // or: dlk.pending を監視 → データ到着で dlk.consume() して開く
+useRouteTabSync(tab, { valid: ['confirmed', 'wish'] })  // ?tab= の一方向取り込み（shift/inbox。双方向同期が必要な attendance は従来実装）
+
 // カスタム項目（マスタフォームに合成）
 const { formSchemaFor } = useCustomFields()   // → FieldDef[] を UiSchemaForm に渡す
 
@@ -76,7 +81,15 @@ const mcat = useMenuCategories('dashboard')   // categories / categorize(cards) 
 
 // ダッシュボードのレイアウト（表示・配置 + セクション配置。F-13-9・2026-08-03。純ロジック/型/テンプレート SoT = utils/dashboard-layout.ts）
 // 解決順 = ユーザー設定 > テナント設定 > デフォルト（セクション配置も同 3 階層 = #25）。ユーザー層=/v1/me pref 'dashboardLayout'（mock=localStorage 'ako.dashboard-layout.v1'）/ テナント層=configs 'dashboard-layout'（未設定は menu-categories-dashboard 下位互換）
-const dl = useDashboardLayout()   // effectiveLayout / resolvedScope / activeTemplateId / templates / baseLayoutForScope(scope) / applyTemplate(id, scope) / saveSections(sections, scope)〔保存先層自身の options 維持で sections 差替・templateId=custom〕 / resetLayout(scope)（取消・原則9.5。tenant は管理者のみ）
+// 2026-08-18 分離: レイアウト設定 = 通知の配置（上/右/下/非表示）に特化・セクション設定 = テンプレート + 自由設定。
+// 通知配置は**レイアウト本体と別の専用キー**（user pref 'dashboardNotificationPlacement'〔mock=localStorage
+// 'ako.dashboard-notification-placement.v1'〕/ configs 'dashboard-notification-placement'）に保存し、
+// 解決 = 層整合: ユーザー配置キー > ユーザー層レイアウト由来（**分離前の保存値のみ**。分離後の保存は options.notificationsInherit=true で配置をキー・下位層へ委譲 = フォールバック値を層に固定しない）> テナント配置キー > テナント層レイアウト由来（分離前のみ）> アプリ既定（既存レイアウトの配置選択を新キーが上書きしない = 原則7。レイアウト本体へ書くと配置変更でセクション構成が層に固定される = レビュー対応）
+const dl = useDashboardLayout()   // effectiveLayout〔配置キーの上書き適用済み〕 / resolvedScope / placementSource / activeTemplateId / templates / userPlacement / tenantPlacement / baseLayoutForScope(scope) / applyTemplate(id, scope)〔通知配置は変更しない〕 / saveNotificationPlacement(placement, scope)・resetNotificationPlacement(scope)〔配置キーのみ・取消 = 原則9.5〕 / saveSections(sections, scope)〔保存先層自身の options 維持で sections 差替・templateId=custom〕 / resetLayout(scope)（取消・原則9.5。tenant は管理者のみ。配置キーは触らない）
+
+// セクション構成のお気に入り（自由設定の保存・呼び出し。ユーザー個人・上限 10 件・2026-08-18。純ロジック SoT = utils/dashboard-layout.ts の parseSectionFavorites/upsertSectionFavorite/removeSectionFavorite）
+// 永続化 = /v1/me pref 'dashboardSectionFavorites'（mock=localStorage 'ako.dashboard-section-favorites.v1'）。同名は上書き（確認後）・壊れたエントリは 1 件だけ落とす
+const sf = useSectionFavorites()  // favorites / saveFavorite(name, sections) / deleteFavorite(id)（取消 = 原則9.5）
 
 // ヘッダーのクイックアクセス（ヘッダーカスタマイズ = 全ページ共通）。解決順 = ユーザー > 組織 > 既定（ユーザー優先）。
 // 純ロジック（候補カタログ・パース・解決）の SoT = utils/header-quick-access.ts。永続化はデュアルモード
@@ -84,6 +97,9 @@ const dl = useDashboardLayout()   // effectiveLayout / resolvedScope / activeTem
 // 新 API ルート/マイグレーションは不要（既存の汎用 key/value を利用）。設定 UI = OfficeHeaderQuickAccessPicker（scope=自分/全社）。
 // 設定導線はダッシュボード → レイアウト → 「アプリヘッダー」タブ（2026-08-12。従来ヘッダー「表示」ボタンは撤去）。
 // 注意: parse は配列（API の JSONB）と JSON 文字列（mock/localStorage）の両方を受理する（片方限定にすると API モードで反映されない実障害）。
+// 2026-08-18: 候補に「通知（inbox）」を追加（既定 = タイムカード + 通知）。ヘッダーの通知ベル（未読バッジ付き）は本設定の
+// 'inbox' で表示制御される（レイアウトヘッダーが特別描画。モバイル下部ナビの「通知」は独立）。保存形式は v2（{ v: 2, ids }）で、
+// v1（素の id 配列 = inbox が候補になる前の保存値）は parse が inbox を補完する下位互換（原則7）。
 const hqa = useHeaderQuickAccess()  // effectiveIds / resolvedScope / userIds / tenantIds / isAdmin / persist(ids, scope) / reset(scope)（取消・原則9.5。tenant は管理者のみ）
 
 // 通知タブ（通知欄・/inbox に出すカテゴリタブの設定）。解決順 = ユーザー > 組織 > 既定（既定 = 全カテゴリ）。「すべて」は常時表示。
@@ -152,7 +168,7 @@ const di = useDashboardInsight() // buildSegmentSummary/buildCompanySummary（�
 // 改善要望（F-42。各ページからの投稿 → 生要望の選別〔採用/不採用〕→ 採用分のみ AI 集約 → 権限を持つ人のみ管理 → 改修プロンプト出力。純ロジック SoT = shared/domain/improvement）
 // 投稿は全員可（submit は管理 GET を誤発火しない）。閲覧・管理は canManageImprovements（deny-by-default + 管理者常時可 = usePermissions）。
 // 集約は「採用済み（adoption='adopted'）かつ未集約」の要望のみ処理・判定済み item のステータスは巻き戻さない（原則2）。API = Vertex AI → 決定的ヒューリスティック（heuristicClusterRequests）
-const imp = useImprovements()  // submit（body + 対象ページ〔既定=開いているページ・全体/新設ページ可〕+ 任意添付 links〔URL 最大5〕・images〔縮小 data URI 最大4〕= 0061。mock は persisted=false で容量超過を通知）/ refresh / loadRequestImages(itemId)・loadRequestImagesFor(request)（添付画像の遅延ロード = API の全件 GET は images を含まない。未集約は ?unclustered=1）/ setRequestStatus(id, 'open'|'resolved'|'dismissed')（要望単位の進捗タグ = 0062。プロンプト再生成に【対応済み】【見送り】で反映）/ setRequestAdoption(id, 'pending'|'adopted'|'declined')（生要望の選別 = 0063。採用のみ集約対象・集約済みは変更不可〔AKO-REQ-013〕）/ addRequestComment(requestId, body)・setRequestCommentArchived(id, bool)・commentsForRequest(requestId)（生要望コメント = 選別のやり取り・古い順 = 0063）/ activeItems・archivedItems・unclusteredRequests・adoptedUnclustered（集約待ち）・pendingRequests（未選別）・allRequests / requestsForItem / notesForItem（時系列メモ・古い順）/ generate（集約 = 採用分のみ）/ setStatus / editItem（title/summary/detail + planStart/planEnd 対応予定期間 = ガント）/ setItemArchived・setRequestArchived（取消/復元）/ addNote(itemId, body, kind?='note'|'reject')・setNoteArchived（メモ追加・取消/復元 = 0059。buildCodingPrompt に加味）/ buildPrompt(filter)（添付リンク・画像件数も加味）
+const imp = useImprovements()  // submit（body + 対象ページ〔既定=開いているページ・全体/新設ページ可〕+ 任意添付 links〔URL 最大5〕・images〔縮小 data URI 最大4〕= 0061。mock は persisted=false で容量超過を通知）/ refresh / loadRequestImages(itemId)・loadRequestImagesFor(request)（添付画像の遅延ロード = API の全件 GET は images を含まない。未集約は ?unclustered=1）/ setRequestStatus(id, 'open'|'resolved'|'dismissed')（要望単位の進捗タグ = 0062。プロンプト再生成に【対応済み】【見送り】で反映）/ setRequestAdoption(id, 'pending'|'adopted'|'declined')（生要望の選別 = 0063。採用のみ集約対象・集約済みは変更不可〔AKO-REQ-013〕）/ editRequest(id, body)（生要望本文の編集 = 0064・2026-08-18。本人or管理権限者・取消済み不可〔AKO-REQ-015〕・editedAt 記録で「編集済み」明示 = 原則9.5）/ addRequestComment(requestId, body)・setRequestCommentArchived(id, bool)・commentsForRequest(requestId)（生要望コメント = 選別のやり取り・古い順 = 0063）/ activeItems・archivedItems・unclusteredRequests・adoptedUnclustered（集約待ち）・pendingRequests（未選別）・allRequests / requestsForItem / notesForItem（時系列メモ・古い順）/ generate（集約 = 採用分のみ）/ setStatus / editItem（title/summary/detail + planStart/planEnd 対応予定期間 = ガント）/ setItemArchived・setRequestArchived（取消/復元）/ addNote(itemId, body, kind?='note'|'reject')・setNoteArchived（メモ追加・取消/復元 = 0059。buildCodingPrompt に加味）/ buildPrompt(filter)（添付リンク・画像件数も加味）
 ```
 
 ## UI コンポーネント在庫（新規に作る前にここを見る）
@@ -192,14 +208,16 @@ const imp = useImprovements()  // submit（body + 対象ページ〔既定=開�
 | `SettingsIconPicker` | v-model:icon(lucide名) / v-model:image(data URI or null) / v-model:busy。外部リンクのアイコン設定（プレビュー付きプリセット選択 = LINK_ICON_CHOICES ／ 画像アップロード = 160px 縮小 data URI ／「アイコンに戻す」で取消）。segments のインライン実装を共通化（改善要望・2026-08-12。原則3/9.5） |
 | `OfficeDashboardNotifications` | props なし。ダッシュボードの通知欄（「すべて」+ 設定されたカテゴリタブ〔エスカレーション/承認依頼/稟議/日報/顧客ログ/議事録〕 + 未読のみフィルタ・直近 8 件）。表示タブは useNotificationTabs 駆動。index.vue から分離し通知位置（side/bottom）で配置切替可能に（2026-08-03 / タブ設定化 2026-08-12） |
 | `OfficeDashboardLayoutPreview` | layout(DashboardLayout)。レイアウトの軽量プレビュー（実データ不要。セクション見出し + カード数チップ + 通知位置図示 + AKEBONO/密度反映。F-13-9） |
-| `OfficeDashboardLayoutPicker` | props なし。ダッシュボードのレイアウト選択。「テンプレート」/「セクションを編集」/「アプリヘッダー」/「通知タブ」タブ切替 + 適用スコープ〔自分/全社〕+ 現在有効層表示 + 解除。ヘッダの「レイアウト」ボタン → UiModal 内で使用（F-13-9・2026-08-03。アプリヘッダー/通知タブ 追加 2026-08-12） |
-| `OfficeHeaderQuickAccessPicker` | props なし。ヘッダーのクイックアクセス設定（ヘッダーカスタマイズ = 全ページ共通）。候補カタログから表示メニューを選択 + 適用スコープ〔自分/全社〕+ 既定に戻す。純ロジック SoT = utils/header-quick-access.ts・解決/保存 = useHeaderQuickAccess。**レイアウトモーダルの「アプリヘッダー」タブ内で使用**（2026-08-12。従来のヘッダー「表示」ボタンは撤去） |
+| `OfficeDashboardLayoutPicker` | props なし。ダッシュボードのレイアウト設定モーダル。「レイアウト（通知の配置）」/「セクション設定」/「アプリヘッダー」/「通知タブ」タブ切替（**2026-08-18 分離: レイアウト = 通知の配置〔上/右/下/非表示〕に特化・テンプレートはセクション設定へ移設**）+ 適用スコープ〔自分/全社〕+ 現在有効層表示。ヘッダの「レイアウト」ボタン → UiModal 内で使用（F-13-9・2026-08-03。アプリヘッダー/通知タブ 追加 2026-08-12） |
+| `OfficeHeaderQuickAccessPicker` | props なし。ヘッダーのクイックアクセス設定（ヘッダーカスタマイズ = 全ページ共通）。候補カタログから表示メニューを選択 + 適用スコープ〔自分/全社〕+ 既定に戻す。**候補に「通知」（ベルの表示制御・既定 ON = 2026-08-18）**。純ロジック SoT = utils/header-quick-access.ts・解決/保存 = useHeaderQuickAccess。**レイアウトモーダルの「アプリヘッダー」タブ内で使用**（2026-08-12。従来のヘッダー「表示」ボタンは撤去） |
 | `OfficeNotificationTabsPicker` | props なし。通知タブ（通知欄・/inbox に出すカテゴリタブ）の設定。カタログから表示タブを選択 + 適用スコープ〔自分/全社〕+ 既定に戻す。純ロジック SoT = utils/notification-tabs.ts・解決/保存 = useNotificationTabs。レイアウトモーダルの「通知タブ」タブ内で使用（2026-08-12） |
-| `OfficeDashboardSectionEditor` | props なし。ダッシュボードのセクション構成を 3 階層（自分/全社/アプリ既定）で編集・保存（saveSections）。割当候補 = 基本メニュー + 外部リンク + AKEBONO 業態アプリ。UiMenuSectionEditor を利用（#25・2026-08-03） |
+| `OfficeDashboardSectionEditor` | props なし。ダッシュボードのセクション設定を 3 階層（自分/全社/アプリ既定）で編集・保存（saveSections）。**サブモード「テンプレート」（6 種から適用。通知の配置は保存先層の現行値を維持）/「自由設定」（手動編集 + お気に入り保存・呼び出し・削除 = useSectionFavorites。2026-08-18）**。割当候補 = 基本メニュー + 外部リンク + AKEBONO 業態アプリ。UiMenuSectionEditor を利用（#25・2026-08-03） |
 | `MediaChannelBar` | props なし。メディア分析の対象チャンネル切替バー（現在チャンネル + 連携業態バッジ + GA 連携バッジ + 設定導線）。全メディア画面の先頭に置く（F-40。2026-08-03 で MediaSegmentBar から改称・チャンネル化） |
 | `MediaGaConnect` | channelId?（未指定=現在チャンネル）, variant（'gate'/'bar'）。Google Analytics 連携ゲート（モック = 擬似 OAuth / API = Google OAuth 2.0 リダイレクト + 復帰クエリ `?ga=` 処理 + GA4 プロパティ選択モーダル。needsProperty の中間状態も再開可）。連携済みは状態バー + 解除（F-40。CalendarConnectGate と同型） |
 | `MediaFunnel` | stages（{label,value}[]）。流入→受注の簡易ファネル（幅バー + 前段比。Chart.js 不使用。F-40） |
-| `WidgetsImprovementSubmit` | props なし。全ページ共通ヘッダーの「要望を送る」導線（F-42）。**対象ページを選択可（既定 = 開いているページ。「全体」「新設ページ」+ 全ページ = `listKnownPages`。2026-08-17）**。投稿は認証済み全員可（layouts/default.vue に 1 つ設置で全ページに出る）。**添付（F-42-11・2026-08-17）: 参考リンク（複数・行削除可）+ 画像（複数・`imageToDataUri` 縮小・プレビュー/個別削除）。参照はリンク=別タブ・画像=押下で拡大（/improvements ドロワー）** |
+| `WidgetsImprovementSubmit` | props なし。全ページ共通ヘッダーの「要望を送る」導線（F-42）。**対象ページを選択可（既定 = 開いているページ。「全体」「新設ページ」+ 全ページ = `listKnownPages`。2026-08-17）**。投稿は認証済み全員可（layouts/default.vue に 1 つ設置で全ページに出る）。**添付（F-42-11・2026-08-17）: 参考リンク（複数・行削除可）+ 画像（複数・`imageToDataUri` 縮小・プレビュー/個別削除）。画像はファイル選択に加え、ドロップエリアへのドラッグ&ドロップとクリップボード貼り付け（Ctrl+V / ⌘V。入力ビュー全体で受ける）でも添付可（2026-08-18）。参照はリンク=別タブ・画像=押下で拡大（/improvements ドロワー）。**送信後ビューに「内容を修正する」= 投稿者本人の本文編集（F-42-16・editRequest。2026-08-18）** |
+| `ImprovementsAttachmentList` | links, images。要望添付の表示共通部品（参考リンク = 別タブ・画像サムネイル = @preview で拡大 emit。F-42-11。/improvements の改修単位ドロワー元要望と生要望ドロワーで共用 = 原則3・2026-08-18） |
+| `ImprovementsBodyEditForm` | initial（編集開始時の本文）, busy。要望本文の編集フォーム共通部品（textarea + 文字数カウンタ + 保存/キャンセル emit。F-42-16。/improvements の生要望ドロワーと ImprovementSubmit の送信直後修正で共用 = 原則3・2026-08-18） |
 | `ImprovementsKanban` | items（ImprovementItem[]）・reqCount(id)。ステータス別カラムのカンバン（F-42）。emit: open(item)・status(id,to)。許可遷移のクイック操作・横スクロール |
 | `ImprovementsGantt` | items（ImprovementItem[]）。対応予定期間のガント（F-42。月次/週次/日次切替・前後送り・今スナップ）。列/バーは `shared/domain/gantt` 純関数。**ステータスフィルタ（既定=accepted=実装決定・未完了。選択肢/判定は `IMPROVEMENT_FILTER_OPTIONS`/`matchesImprovementFilter` 共有）+ バー色分け（対応する=brand/未判定=warn/解決済み=muted〔完了グレー〕/対応しない=crit・決着済みは退色）+ 凡例。2026-08-12** emit: open(item) |
 

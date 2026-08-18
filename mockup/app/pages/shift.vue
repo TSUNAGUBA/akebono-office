@@ -45,9 +45,13 @@ const tabs = computed<TabItem[]>(() => {
   }
   return base
 })
+// 通知ディープリンク: ?tab=confirmed / adjust 等で対象タブを直接開く（シフト通知から対象の行が
+// 見える一覧へ即到達 = 改修依頼 2026-08-18。取り込みは共通の useRouteTabSync = 原則3）。
+// 有効タブの検証は下の watchEffect が担う（tabs 定義と重複する固定リストを持たない = 定義変更に追従）
 const tab = ref('confirmed')
-watch(tabs, (list) => {
-  if (!list.some(t => t.key === tab.value)) tab.value = 'confirmed'
+useRouteTabSync(tab)
+watchEffect(() => {
+  if (!tabs.value.some(t => t.key === tab.value)) tab.value = 'confirmed'
 })
 
 function dayTextClass(date: string): string {

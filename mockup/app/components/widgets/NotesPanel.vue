@@ -243,6 +243,34 @@ function openDetail(n: Note, withAuthor: boolean): void {
   detailWithAuthor.value = withAuthor
 }
 
+// 通知ディープリンク: ?open=<ノートid> で詳細モーダルを直接開く（改善のタネ通知から対象ポストへ即到達 =
+// 改修依頼 2026-08-18。取り込み・URL 除去は共通の useRouteDeepLink = 原則3）。
+// 自分のノート → 管理者閲覧一覧の順で探し、API モードは取得完了後に見つかった時点で一度だけ開く。
+// 参照権限が無い（一覧に現れない）場合は開かず一覧表示のまま（非ブロッキング）
+const openDeepLink = useRouteDeepLink('open')
+watchEffect(() => {
+  if (!openDeepLink.pending.value) return
+  const own = notes.list.value.find(n => n.id === openDeepLink.pending.value)
+  const fromAdmin = own ? undefined : notes.adminList.value.find(n => n.id === openDeepLink.pending.value)
+  const target = own ?? fromAdmin
+  if (!target) return
+  openDeepLink.consume()
+  openDetail(target, !!fromAdmin)
+})
+// デモユーザー切替時は滞留した対象 id を破棄する（参照権限が無く開けなかった対象が、切替後
+// 〔管理者化等〕に操作なしでモーダルを開いてしまう滞留を作らない = inbox の非管理者破棄と同趣旨）
+watch(() => currentUser.value.id, () => openDeepLink.consume())
+// 見つからないまま（取消済み・権限外等）の対象 id は一定時間で破棄する（レビュー R15）。
+// 破棄しないと、後の再読込で対象が再出現した瞬間（例: 投稿者が復元）に操作なしでモーダルが開いてしまう。
+// API の非同期初期ロードには十分な猶予を取る
+const DEEP_LINK_WAIT_MS = 15_000
+watch(() => openDeepLink.pending.value, (v) => {
+  if (!v) return
+  setTimeout(() => {
+    if (openDeepLink.pending.value === v) openDeepLink.consume()
+  }, DEEP_LINK_WAIT_MS)
+}, { immediate: true })
+
 /** 一覧のサマリー（冒頭 160 字。全文は詳細モーダルで。コードポイント単位 = 絵文字等を境界で壊さない） */
 function summaryOf(n: Note): string {
   const chars = [...n.body.replace(/\s+/g, ' ').trim()]

@@ -631,11 +631,12 @@ describe('バッチ4: 日報/週報の項目拡張 + ぽいぽいポスト通知
     })
     const post = await api('POST', '/v1/notes', { as: MEMBER, body: { kind: 'poipoi', body: '改善アイデア: 朝会を短縮する' } })
     expect(post.status).toBe(201)
-    // ADMIN（role=admin）は通知を受け取り、本文に原文プレビュー・リンクは /poipoi
+    const postedNoteId = (post.json.data as { id: string }).id
+    // ADMIN（role=admin）は通知を受け取り、本文に原文プレビュー・リンクは対象ポストへのディープリンク（2026-08-18）
     const adminNotes = (await api('GET', '/v1/notifications?unread=1', { as: ADMIN })).json.data as { kind: string; body: string; link: string }[]
     const n = adminNotes.find(x => x.kind === 'poipoi' && x.body.includes('朝会を短縮する'))
     expect(n).toBeTruthy()
-    expect(n!.link).toBe('/poipoi')
+    expect(n!.link).toBe(`/poipoi?open=${postedNoteId}`)
     // 投稿者 MEMBER（role=member だが本人）は自分のポスト通知を受け取らない
     const memberNotes = (await api('GET', '/v1/notifications', { as: MEMBER })).json.data as { kind: string; body: string }[]
     expect(memberNotes.some(x => x.kind === 'poipoi' && x.body.includes('朝会を短縮する'))).toBe(false)
@@ -6872,6 +6873,49 @@ describe('改善要望（F-42）', () => {
     expect((await api('POST', `/v1/improvements/requests/${reqId}/status`, { as: ADMIN, body: { status: 'open' } })).status).toBe(200)
     const prompt2 = (await api('POST', '/v1/improvements/prompt', { as: ADMIN, body: { filter: 'open' } })).json.data as { prompt: string }
     expect(prompt2.prompt).not.toContain('【対応済み】 ステータス管理テスト用の要望')
+  })
+
+  it('要望本文の編集（本人/管理者可・editedAt 記録・取消済みは不可。0064・2026-08-18）', async () => {
+    const posted = await api('POST', '/v1/improvements/requests', {
+      as: MEMBER,
+      body: {
+        body: '編集前の本文', pagePath: '/req-edit-test', pageLabel: '編集テスト',
+        links: ['https://example.com/edit-ref'],
+      },
+    })
+    expect(posted.status).toBe(201)
+    const reqId = (posted.json.data as { id: string; editedAt: string | null }).id
+    expect((posted.json.data as { editedAt: string | null }).editedAt).toBeNull() // 未編集 = null
+
+    // 本人が編集できる（body 更新 + editedAt 記録 = 「編集済み」の明示）。
+    // 部分更新の鉄則: 送っていないフィールド（投稿元・添付・選別・ステータス・集約先）が保持されることもアサートする
+    const edited = await api('POST', `/v1/improvements/requests/${reqId}/edit`, { as: MEMBER, body: { body: '編集後の本文（本人）' } })
+    expect(edited.status).toBe(200)
+    expect(edited.json.data as Record<string, unknown>).toMatchObject({
+      body: '編集後の本文（本人）',
+      pagePath: '/req-edit-test',
+      pageLabel: '編集テスト',
+      links: ['https://example.com/edit-ref'],
+      status: 'open',
+      adoption: 'pending',
+      itemId: null,
+      memberId: MEMBER,
+    })
+    expect((edited.json.data as { editedAt: string | null }).editedAt).toMatch(/\+09:00$/)
+
+    // 管理権限者も編集できる・本人でも管理権限者でもない第三者は 403（deny-by-default）
+    expect((await api('POST', `/v1/improvements/requests/${reqId}/edit`, { as: ADMIN, body: { body: '編集後の本文（管理者）' } })).status).toBe(200)
+    expect((await api('POST', `/v1/improvements/requests/${reqId}/edit`, { as: HR, body: { body: '第三者の編集' } })).status).toBe(403)
+
+    // 空・存在しない要望はエラー
+    expect((await api('POST', `/v1/improvements/requests/${reqId}/edit`, { as: MEMBER, body: { body: '  ' } })).json.error?.code).toBe('AKO-REQ-001')
+    expect((await api('POST', '/v1/improvements/requests/nope/edit', { as: ADMIN, body: { body: 'x' } })).status).toBe(404)
+
+    // 取消済みは編集不可（AKO-REQ-015。先に復元する）→ 復元後は再び編集できる
+    await api('POST', `/v1/improvements/requests/${reqId}/archive`, { as: MEMBER })
+    expect((await api('POST', `/v1/improvements/requests/${reqId}/edit`, { as: MEMBER, body: { body: 'x' } })).json.error?.code).toBe('AKO-REQ-015')
+    await api('POST', `/v1/improvements/requests/${reqId}/restore`, { as: MEMBER })
+    expect((await api('POST', `/v1/improvements/requests/${reqId}/edit`, { as: MEMBER, body: { body: '復元後の編集' } })).status).toBe(200)
   })
 
   it('生要望の選別（採用/不採用）: 採用のみ集約対象・集約済みは変更不可（0063・2026-08-17 第 2 弾）', async () => {

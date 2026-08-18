@@ -428,7 +428,7 @@ export function useShifts() {
     // 通知は補助処理: useNotifications 側で失敗を握りつぶす（主フローを止めない）
     for (const memberId of targets) {
       notify(memberId, 'system', 'シフトが確定しました',
-        `${p.label}（${fmtDate(p.startDate)}〜${fmtDate(p.endDate)}）のシフトが公開されました`, '/shift')
+        `${p.label}（${fmtDate(p.startDate)}〜${fmtDate(p.endDate)}）のシフトが公開されました`, '/shift?tab=confirmed')
     }
     return { ok: true, id: periodId }
   }
@@ -466,7 +466,7 @@ export function useShifts() {
       x.id === assignmentId ? { ...x, from, to, status: 'change_requested' as const, consentAt: null } : x)
     commit()
     notify(a.memberId, 'system', 'シフト変更の合意依頼',
-      `${fmtDateLong(a.date)} のシフトを ${from}〜${to} へ変更する申請があります。確認して合意してください`, '/shift')
+      `${fmtDateLong(a.date)} のシフトを ${from}〜${to} へ変更する申請があります。確認して合意してください`, '/shift?tab=confirmed')
     return { ok: true, id: assignmentId }
   }
 
@@ -491,7 +491,7 @@ export function useShifts() {
       x.id === assignmentId ? { ...x, status: 'confirmed' as const, consentAt: nowJstIso() } : x)
     commit()
     notifyAdmins('system', 'シフト変更に本人が合意',
-      `${currentUser.value.name} さんが ${fmtDateLong(a.date)} のシフト変更（${a.from}〜${a.to}）に合意しました`, '/shift')
+      `${currentUser.value.name} さんが ${fmtDateLong(a.date)} のシフト変更（${a.from}〜${a.to}）に合意しました`, '/shift?tab=adjust')
     return { ok: true, id: assignmentId }
   }
 

@@ -74,7 +74,8 @@ export async function raiseEscalation(
         signal.context, signal.dedupeKey, nowJstIso()])
     // 管理者への暗黙の情報共有（通知失敗は起票を巻き戻さない）
     await notifyAdmins(db, 'escalation',
-      `エスカレーション: ${ESCALATION_REASON_LABELS[signal.reason]}`, signal.context, '/inbox')
+      `エスカレーション: ${ESCALATION_REASON_LABELS[signal.reason]}`, signal.context,
+      `/inbox?tab=escalations&open=${id}`)
     return { raised: true, id }
   } catch (e) {
     console.warn('raiseEscalation failed (non-blocking):', (e as Error).message)

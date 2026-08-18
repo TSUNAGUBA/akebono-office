@@ -212,7 +212,7 @@ export function shiftsRoutes(pool: pg.Pool): Hono {
     // 補助処理: 通知（コミット後・非ブロッキング）
     for (const memberId of notifyTargets) {
       await notify(pool, memberId, 'system', 'シフトが確定しました',
-        `${period.label}（${jpDate(period.startDate)}〜${jpDate(period.endDate)}）のシフトが公開されました`, '/shift')
+        `${period.label}（${jpDate(period.startDate)}〜${jpDate(period.endDate)}）のシフトが公開されました`, '/shift?tab=confirmed')
     }
     return c.json({ data: { id: periodId, status: next } })
   })
@@ -378,7 +378,7 @@ export function shiftsRoutes(pool: pg.Pool): Hono {
       client.release()
     }
     await notify(pool, target.memberId, 'system', 'シフト変更の合意依頼',
-      `${jpDateLong(target.date)} のシフトを ${body.from}〜${body.to} へ変更する申請があります。確認して合意してください`, '/shift')
+      `${jpDateLong(target.date)} のシフトを ${body.from}〜${body.to} へ変更する申請があります。確認して合意してください`, '/shift?tab=confirmed')
     return c.json({ data: { id: assignmentId } })
   })
 
@@ -413,7 +413,7 @@ export function shiftsRoutes(pool: pg.Pool): Hono {
       client.release()
     }
     await notifyAdmins(pool, 'system', 'シフト変更に本人が合意',
-      `${user.name} さんが ${jpDateLong(consented.date)} のシフト変更（${consented.from}〜${consented.to}）に合意しました`, '/shift')
+      `${user.name} さんが ${jpDateLong(consented.date)} のシフト変更（${consented.from}〜${consented.to}）に合意しました`, '/shift?tab=adjust')
     return c.json({ data: { id: assignmentId } })
   })
 

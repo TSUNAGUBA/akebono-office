@@ -268,7 +268,7 @@ export function useAiCompany() {
     if (allChildrenDone) {
       addLog(parent.aiEmployeeId, parent.id, 'report', `「${parent.title}」の全分担が完了、成果を統合して報告`)
       notify(parent.requesterId, 'ai_report', `AI 連携完了報告: ${parent.title}`,
-        `${employeeById(parent.aiEmployeeId)?.name ?? 'マネージャー'} が分担タスクの成果を統合して完了しました`, '/ai-company')
+        `${employeeById(parent.aiEmployeeId)?.name ?? 'マネージャー'} が分担タスクの成果を統合して完了しました`, `/ai-company?task=${parent.id}`)
     }
     syncEmployeeStatus(parent.aiEmployeeId)
   }
@@ -455,7 +455,7 @@ export function useAiCompany() {
       commit()
       const emp = employeeById(task.aiEmployeeId)
       notify(task.requesterId, 'ai_report', `AI 確認依頼: ${task.title}`,
-        `${emp?.name ?? 'AI社員'} から確認: ${question}（/ai-company で回答してください）`, '/ai-company')
+        `${emp?.name ?? 'AI社員'} から確認: ${question}（/ai-company で回答してください）`, `/ai-company?task=${taskId}`)
       return { ok: true, id: taskId }
     }
     // 実遂行: 材料（依頼文 + 回答済み Q&A）から成果物を生成（API フォールバックと同一関数）
@@ -491,7 +491,7 @@ export function useAiCompany() {
     if (finished && !task.parentTaskId) {
       const emp = employeeById(task.aiEmployeeId)
       notify(task.requesterId, 'ai_report', `AI 完了報告: ${task.title}`,
-        `${emp?.name ?? 'AI社員'} がタスクを完了しました`, '/ai-company')
+        `${emp?.name ?? 'AI社員'} がタスクを完了しました`, `/ai-company?task=${taskId}`)
     }
     // 手動「再開」でも残りのステップは自動で走り切る（バッチ7i・R1 M-3 = API と同一挙動。
     // autoRunMock からの呼び出し時はループ側が継続を担うため再帰しない）
@@ -558,7 +558,7 @@ export function useAiCompany() {
         if (parent) {
           addLog(parent.aiEmployeeId, parent.id, 'escalate', `分担先で「${task.title}」がブロック、対応を検討`)
           notify(parent.requesterId, 'ai_report', `AI 連携ブロック: ${task.title}`,
-            '分担先のタスクがブロックされました。/ai-company で状況を確認してください', '/ai-company')
+            '分担先のタスクがブロックされました。/ai-company で状況を確認してください', `/ai-company?task=${parent.id}`)
         }
       }
     } else if (task.status === 'blocked') {

@@ -434,6 +434,7 @@ akebonoCards: ComputedRef<MenuCard[]>
 | `GET /v1/improvements/requests` | 生要望の一覧（`itemId`／`unclustered`／`includeArchived`）。**添付画像の実体（data URI）は `itemId` または `unclustered=1` 指定時のみ返す**（全件一覧は `images: []` = 転送量削減。フロントはドロワー表示時に遅延ロード・0061／0063） | 管理 |
 | `POST /v1/improvements/requests/:id/archive`・`/restore` | 要望の取消／復元 | 投稿者本人 or 管理 |
 | `POST /v1/improvements/requests/:id/status` | **要望単位のステータス変更（`status` = open/resolved/dismissed。不正は AKO-REQ-011。遷移自由 = 原則9.5。プロンプト再生成に反映・0062）** | 管理 |
+| `POST /v1/improvements/requests/:id/edit` | **要望本文の編集（`body`・最大 4,000 字。空/超過は AKO-REQ-001。取消済みは AKO-REQ-015〔409〕= 先に復元。`edited_at` を記録して「編集済み」を明示 = 再編集で戻せる〔原則9.5〕。**変更前本文は監査ログへ全文記録・FOR UPDATE + 同一トランザクション = 並行編集でも直前本文を喪失しない**。集約済みも編集可 = プロンプト再生成が現行本文を読む。0064・2026-08-18）** | 投稿者本人 or 管理 |
 | `POST /v1/improvements/requests/:id/adoption` | **生要望の選別（`adoption` = pending/adopted/declined。不正は AKO-REQ-012。集約済み要望は変更不可 = AKO-REQ-013〔409〕。採用のみ AI 集約対象・0063）** | 管理 |
 | `GET /v1/improvements/request-comments` | **生要望コメントの一覧（`requestId`／`includeArchived`。古い順。0063）** | 管理 |
 | `POST /v1/improvements/requests/:id/comments` | **生要望へのコメント追加（`body`・最大 2,000 字。空/超過は AKO-REQ-014。選別のやり取りを時系列で記録・0063）** | 投稿者本人 or 管理 |

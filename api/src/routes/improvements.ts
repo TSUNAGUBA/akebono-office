@@ -73,7 +73,8 @@ const JST = `AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"'`
 const reqColsOf = (withImages: boolean): string => `id, member_id AS "memberId", member_name AS "memberName",
   page_path AS "pagePath", page_label AS "pageLabel", body, status, adoption, links,
   ${withImages ? 'images' : `'[]'::jsonb AS images`}, item_id AS "itemId",
-  to_char(archived_at ${JST}) AS "archivedAt", to_char(created_at ${JST}) AS "createdAt"`
+  to_char(archived_at ${JST}) AS "archivedAt", to_char(edited_at ${JST}) AS "editedAt",
+  to_char(created_at ${JST}) AS "createdAt"`
 const ITEM_COLS = `id, title, summary, detail, status, page_paths AS "pagePaths",
   source_request_ids AS "sourceRequestIds", llm, to_char(archived_at ${JST}) AS "archivedAt",
   to_char(created_at ${JST}) AS "createdAt", to_char(updated_at ${JST}) AS "updatedAt",
@@ -222,6 +223,52 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
       `UPDATE improvement_requests SET archived_at = NULL WHERE id = $1 RETURNING ${reqColsOf(false)}`, [id])
     await audit(pool, { actorId: user.id, action: 'restore', entity: 'improvement_requests', entityId: id, detail: '要望の取消を戻す' })
     return c.json({ data: out[0] })
+  })
+
+  // ---- 要望本文の編集（投稿者本人または管理権限者。改修依頼 2026-08-18） ----
+  // 編集は上書きだが edited_at を記録して「編集済み」を明示（再編集で戻せる = 原則9.5）。
+  // 取消済みは編集不可（先に復元する = 論理削除の状態保護）。集約済みは編集可
+  // （改修プロンプトは再生成時に現行本文を読むため、明確化の編集が反映される）
+  app.post('/requests/:id/edit', async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+    const text = String(((await c.req.json().catch(() => ({}))) as { body?: unknown }).body ?? '').trim()
+    const msg = improvementBodyError(text)
+    if (msg) throw err('AKO-REQ-001', msg, 400)
+    // 権限確認を先に行う（mock と同一の判定順 = 権限の無い第三者へ取消状態を漏らさない。member_id は不変のため tx 外で可）
+    const { rows: reqRows } = await pool.query<{ memberId: string }>(
+      `SELECT member_id AS "memberId" FROM improvement_requests WHERE id = $1`, [id])
+    if (reqRows.length === 0) throw err('AKO-REQ-002', '対象の要望が見つかりません', 404)
+    if (reqRows[0]!.memberId !== user.id) await requireManage(c, pool)
+    // 変更前本文の捕捉 → 上書き → 監査記録を同一トランザクション（FOR UPDATE 直列化）で原子的に行う:
+    // 並行編集でも各監査行が「直前の本文」を正しく残し（レビュー R4）、取消との競合も締め出す。
+    // 記録系（原則2）の本文上書きでは監査記録の全文保存が復元可能性の担保 = 主フローの一部のため、
+    // 非ブロッキングの audit() ではなく tx 内 INSERT を使う（失敗 = ROLLBACK で本文を失わない）
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+      const { rows: prev } = await client.query<{ body: string; archivedAt: string | null }>(
+        `SELECT body, to_char(archived_at ${JST}) AS "archivedAt"
+         FROM improvement_requests WHERE id = $1 FOR UPDATE`, [id])
+      if (prev.length === 0) throw err('AKO-REQ-002', '対象の要望が見つかりません', 404)
+      if (prev[0]!.archivedAt) throw err('AKO-REQ-015', '取消済みの要望は編集できません（先に復元してください）', 409)
+      // 単一行の応答は images の実体も返す（'[]' で伏せると、応答をキャッシュへマージする
+      // クライアントが添付を消してしまう = 保存データを正しく表現する。レビュー R14）
+      const { rows } = await client.query(
+        `UPDATE improvement_requests SET body = $2, edited_at = now()
+         WHERE id = $1 RETURNING ${reqColsOf(true)}`,
+        [id, capCodePoints(text, IMPROVEMENT_BODY_CAP)])
+      await client.query(
+        `INSERT INTO audit_logs (actor_id, action, entity, entity_id, detail) VALUES ($1, 'update', 'improvement_requests', $2, $3)`,
+        [user.id, id, `要望本文を編集（変更前: ${prev[0]!.body}）`])
+      await client.query('COMMIT')
+      return c.json({ data: rows[0] })
+    } catch (e) {
+      await client.query('ROLLBACK')
+      throw e
+    } finally {
+      client.release()
+    }
   })
 
   // ---- 要望の選別（採用/不採用。管理）。採用のみ AI 集約対象（改善要望 2026-08-17 第 2 弾） ----

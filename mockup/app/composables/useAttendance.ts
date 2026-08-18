@@ -430,9 +430,9 @@ export function useAttendance() {
     commit()
     const approverId = currentApproverId(snapshot, 1)
     if (approverId && approverId !== currentUser.value.id) {
-      notify(approverId, 'approval', '打刻修正申請', `${currentUser.value.name} さんから ${input.date} の修正申請`, '/attendance')
+      notify(approverId, 'approval', '打刻修正申請', `${currentUser.value.name} さんから ${input.date} の修正申請`, '/attendance?tab=requests')
     } else if (!approverId) {
-      notifyAdmins('approval', '打刻修正申請', `${currentUser.value.name} さんから ${input.date} の修正申請`, '/attendance')
+      notifyAdmins('approval', '打刻修正申請', `${currentUser.value.name} さんから ${input.date} の修正申請`, '/attendance?tab=requests')
     }
     return { ok: true, id }
   }
@@ -514,9 +514,9 @@ export function useAttendance() {
     commit()
     const approverId = currentApproverId(snapshot, 1)
     if (approverId && approverId !== currentUser.value.id) {
-      notify(approverId, 'approval', '直行/直帰申請', `${currentUser.value.name} さんから ${input.date} の${DIRECT_TYPE_LABELS[input.type]}申請`, '/attendance')
+      notify(approverId, 'approval', '直行/直帰申請', `${currentUser.value.name} さんから ${input.date} の${DIRECT_TYPE_LABELS[input.type]}申請`, '/attendance?tab=requests')
     } else if (!approverId) {
-      notifyAdmins('approval', '直行/直帰申請', `${currentUser.value.name} さんから ${input.date} の${DIRECT_TYPE_LABELS[input.type]}申請`, '/attendance')
+      notifyAdmins('approval', '直行/直帰申請', `${currentUser.value.name} さんから ${input.date} の${DIRECT_TYPE_LABELS[input.type]}申請`, '/attendance?tab=requests')
     }
     return { ok: true, id }
   }

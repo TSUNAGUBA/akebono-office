@@ -343,10 +343,10 @@ export function attendanceRoutes(pool: pg.Pool): Hono {
     const approverId = await currentApproverId(pool, snapshot, 1)
     if (approverId && approverId !== user.id) {
       await notify(pool, approverId, 'approval', '打刻修正申請',
-        `${user.name} さんから ${body.date} の修正申請`, '/attendance')
+        `${user.name} さんから ${body.date} の修正申請`, '/attendance?tab=requests')
     } else if (!approverId) {
       await notifyAdmins(pool, 'approval', '打刻修正申請',
-        `${user.name} さんから ${body.date} の修正申請`, '/attendance')
+        `${user.name} さんから ${body.date} の修正申請`, '/attendance?tab=requests')
     }
     return c.json({ data: { id } }, 201)
   })
@@ -442,7 +442,7 @@ export function attendanceRoutes(pool: pg.Pool): Hono {
     // 次ステップ承認者への通知（補助処理・非ブロッキング）
     if (advanced && !advanced.finalized && advanced.nextApproverId && advanced.nextApproverId !== user.id) {
       await notify(pool, advanced.nextApproverId, 'approval', '打刻修正申請',
-        `${advanced.date} の修正申請が次の承認へ進みました`, '/attendance')
+        `${advanced.date} の修正申請が次の承認へ進みました`, '/attendance?tab=requests')
     }
     return c.json({ data: { id: fixId } })
   })
@@ -470,10 +470,10 @@ export function attendanceRoutes(pool: pg.Pool): Hono {
     const approverId = await currentApproverId(pool, snapshot, 1)
     if (approverId && approverId !== user.id) {
       await notify(pool, approverId, 'approval', '直行/直帰申請',
-        `${user.name} さんから ${body.date} の${DIRECT_TYPE_LABELS[body.type]}申請`, '/attendance')
+        `${user.name} さんから ${body.date} の${DIRECT_TYPE_LABELS[body.type]}申請`, '/attendance?tab=requests')
     } else if (!approverId) {
       await notifyAdmins(pool, 'approval', '直行/直帰申請',
-        `${user.name} さんから ${body.date} の${DIRECT_TYPE_LABELS[body.type]}申請`, '/attendance')
+        `${user.name} さんから ${body.date} の${DIRECT_TYPE_LABELS[body.type]}申請`, '/attendance?tab=requests')
     }
     return c.json({ data: { id } }, 201)
   })
@@ -553,7 +553,7 @@ export function attendanceRoutes(pool: pg.Pool): Hono {
     await audit(pool, { actorId: user.id, action: body.action!, entity: 'direct_requests', entityId: id })
     if (next && next.approverId && next.approverId !== user.id) {
       await notify(pool, next.approverId, 'approval', '直行/直帰申請',
-        `${next.date} の直行/直帰申請が次の承認へ進みました`, '/attendance')
+        `${next.date} の直行/直帰申請が次の承認へ進みました`, '/attendance?tab=requests')
     }
     return c.json({ data: { id } })
   })

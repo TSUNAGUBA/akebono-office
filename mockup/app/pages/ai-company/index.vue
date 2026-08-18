@@ -173,6 +173,11 @@ function openDetail(taskId: string): void {
   answerFiles.value = []
 }
 
+// 通知ディープリンク: ?task=<タスクid> で詳細モーダルを直接開く（AI 報告通知から対象タスクへ即到達 =
+// 改修依頼 2026-08-18。取り込み・URL 除去は共通の useRouteDeepLink = 原則3）。
+// API モードはキャッシュ到着後に detailTask が解決される（computed のためデータ到着で自動的に開く）
+useRouteDeepLink('task', taskId => openDetail(taskId))
+
 function onAnswerFilesSelected(ev: Event): void {
   const list = (ev.target as HTMLInputElement).files
   if (answerFileInput.value) answerFileInput.value.value = ''

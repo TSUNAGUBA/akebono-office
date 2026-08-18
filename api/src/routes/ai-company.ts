@@ -439,7 +439,7 @@ async function delegateOnApprove(
 async function rollUpToParent(
   client: pg.PoolClient,
   child: AiTask & { decomposition: { title: string; done: boolean }[] },
-): Promise<{ requesterId: string; title: string; managerId: string } | null> {
+): Promise<{ id: string; requesterId: string; title: string; managerId: string } | null> {
   const { rows: pRows } = await client.query<AiTask & { decomposition: { title: string; done: boolean }[] }>(
     `SELECT ${TASK_COLS} FROM ai_tasks WHERE id = $1 FOR UPDATE`, [child.parentTaskId])
   const parent = pRows[0]
@@ -481,7 +481,7 @@ async function rollUpToParent(
   }
   await syncEmployeeStatus(client, parent.aiEmployeeId)
   return allChildrenDone
-    ? { requesterId: parent.requesterId, title: parent.title, managerId: parent.aiEmployeeId }
+    ? { id: parent.id, requesterId: parent.requesterId, title: parent.title, managerId: parent.aiEmployeeId }
     : null
 }
 
@@ -492,10 +492,12 @@ interface ProgressResult {
   requesterId?: string
   title?: string
   aiEmployeeId?: string
+  /** 通知ディープリンク用の対象タスク id（progressTaskOnce が設定。改修依頼 2026-08-18） */
+  taskId?: string
   notifyHuman?: boolean
   questionAsked?: string
-  parentFinished?: { requesterId: string; title: string; managerId: string }
-  childBlocked?: { requesterId: string; title: string }
+  parentFinished?: { id: string; requesterId: string; title: string; managerId: string }
+  childBlocked?: { requesterId: string; title: string; parentTaskId: string }
 }
 
 /**
@@ -585,6 +587,7 @@ async function progressTaskOnce(pool: pg.Pool, env: Env, taskId: string): Promis
     }
     await syncEmployeeStatus(client, task.aiEmployeeId)
     result.aiEmployeeId = task.aiEmployeeId
+    result.taskId = taskId
     await client.query('COMMIT')
   } catch (e) {
     await client.query('ROLLBACK')
@@ -618,25 +621,28 @@ async function notifyTaskEventsInner(pool: pg.Pool, result: ProgressResult): Pro
       `SELECT name FROM ai_employees WHERE id = $1`, [result.aiEmployeeId])
     await notify(pool, result.requesterId, 'ai_report', `AI 確認依頼: ${result.title}`,
       `${rows[0]?.name ?? 'AI社員'} から確認: ${capCp(result.questionAsked, 80)}（/ai-company で回答してください）`,
-      '/ai-company')
+      result.taskId ? `/ai-company?task=${result.taskId}` : '/ai-company')
   }
   if (result.notifyHuman && result.requesterId) {
     const { rows } = await pool.query<{ name: string }>(
       `SELECT name FROM ai_employees WHERE id = $1`, [result.aiEmployeeId])
     await notify(pool, result.requesterId, 'ai_report', `AI 完了報告: ${result.title}`,
-      `${rows[0]?.name ?? 'AI社員'} がタスクを完了しました`, '/ai-company')
+      `${rows[0]?.name ?? 'AI社員'} がタスクを完了しました`,
+      result.taskId ? `/ai-company?task=${result.taskId}` : '/ai-company')
   }
   if (result.parentFinished) {
     const { rows } = await pool.query<{ name: string }>(
       `SELECT name FROM ai_employees WHERE id = $1`, [result.parentFinished.managerId])
     await notify(pool, result.parentFinished.requesterId, 'ai_report',
       `AI 連携完了報告: ${result.parentFinished.title}`,
-      `${rows[0]?.name ?? 'マネージャー'} が分担タスクの成果を統合して完了しました`, '/ai-company')
+      `${rows[0]?.name ?? 'マネージャー'} が分担タスクの成果を統合して完了しました`,
+      `/ai-company?task=${result.parentFinished.id}`)
   }
   if (result.childBlocked) {
     await notify(pool, result.childBlocked.requesterId, 'ai_report',
       `AI 連携ブロック: ${result.childBlocked.title}`,
-      '分担先のタスクがブロックされました。/ai-company で状況を確認してください', '/ai-company')
+      '分担先のタスクがブロックされました。/ai-company で状況を確認してください',
+      `/ai-company?task=${result.childBlocked.parentTaskId}`)
   }
 }
 
@@ -840,7 +846,7 @@ export function aiCompanyRoutes(pool: pg.Pool, env: Env): Hono {
             if (p[0]) {
               await addLog(client, p[0].aiEmployeeId, task.parentTaskId, 'escalate',
                 `分担先で「${task.title}」がブロック、対応を検討`)
-              result.childBlocked = { requesterId: p[0].requesterId, title: task.title }
+              result.childBlocked = { requesterId: p[0].requesterId, title: task.title, parentTaskId: task.parentTaskId }
             }
           }
         } else if (task.status === 'blocked') {
