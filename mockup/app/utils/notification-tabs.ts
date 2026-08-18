@@ -3,7 +3,7 @@
  *
  * ダッシュボードの通知欄（DashboardNotifications）と通知センター（/inbox）で共用する（原則3）。
  * 「すべて（all）」は常に先頭に固定表示し、それ以外のカテゴリタブ（エスカレーション・承認依頼・稟議・
- * 日報・顧客ログ・議事録）を表示するかどうかをユーザー / 全社（テナント）で設定できる。
+ * 日報・顧客活動・議事録）を表示するかどうかをユーザー / 全社（テナント）で設定できる。
  *
  * 解決順 = ユーザー設定 > 組織（テナント）設定 > 既定。ユーザー個人設定が優先（ヘッダーのクイックアクセスと同じ流儀）。
  * 永続化はデュアルモード（useNotificationTabs）: ユーザー層 = /v1/me pref（mock=localStorage）/
@@ -23,13 +23,13 @@ export const NOTIFICATION_TAB_CATALOG: NotificationTabDef[] = [
   { id: 'approval', label: '承認依頼' },
   { id: 'workflow', label: '稟議' },
   { id: 'report', label: '日報' },
-  { id: 'customer-log', label: '顧客ログ' },
+  { id: 'customer-log', label: '顧客活動' },
   { id: 'minutes', label: '議事録' },
 ]
 
 /**
  * 既定の表示タブ（ユーザー/組織が未設定のときの表示）。
- * 従来の既存 3 種（エスカレーション・承認依頼・稟議）に加え、今回追加の 3 種（日報・顧客ログ・議事録）も
+ * 従来の既存 3 種（エスカレーション・承認依頼・稟議）に加え、今回追加の 3 種（日報・顧客活動・議事録）も
  * 既定で表示する（= 追加要望に応え、多すぎる場合は設定で間引ける）。
  */
 export const DEFAULT_NOTIFICATION_TAB_IDS: string[] =

@@ -18,6 +18,7 @@ import { akebonoDashboardRoutes } from './routes/akebono-dashboard'
 import { akebonoImportsRoutes } from './routes/akebono-imports'
 import { sheetsOauthCallback, sheetsRoutes } from './routes/sheets'
 import { akebonoTradeRoutes } from './routes/akebono-trade'
+import { partnerActivitiesRoutes, salesActivitiesRoutes, supportActivitiesRoutes } from './routes/activities'
 import { attendanceRoutes } from './routes/attendance'
 import { configsRoutes } from './routes/configs'
 import { customerLogsRoutes } from './routes/customer-logs'
@@ -211,6 +212,10 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
   app.route('/v1/search', searchRoutes(pool, env))
   app.route('/v1/notes', notesRoutes(pool, env))
   app.route('/v1/customer-logs', customerLogsRoutes(pool, env))
+  // 活動記録 3 種（0067）: サポート/営業/ビジネスパートナー活動（チーム共有の記録系。改修依頼 2026-08-18）
+  app.route('/v1/support-activities', supportActivitiesRoutes(pool))
+  app.route('/v1/sales-activities', salesActivitiesRoutes(pool))
+  app.route('/v1/partner-activities', partnerActivitiesRoutes(pool))
   app.route('/v1/knowledge', knowledgeRoutes(pool, env))
   app.route('/v1/documents', documentsRoutes(pool, env))
   app.route('/v1/media', mediaRoutes(pool, env))

@@ -32,8 +32,12 @@ const rtColumns: TableColumn[] = [
   { key: 'active', label: '状態', primary: true },
 ]
 
+// クライアントページング（関係種別一覧。1 ページ 20 件 = 改修依頼 2026-08-18）
+const rtList = computed(() => rtCrud.list.value as RelationType[])
+const { page, pageSize, rows: pagedRts, total } = useListView<RelationType>({ source: rtList })
+
 const rtRows = computed(() =>
-  (rtCrud.list.value as RelationType[]).map(t => ({
+  pagedRts.value.map(t => ({
     ...t,
     usage: usageCount(t.id),
   })) as unknown as Record<string, unknown>[])
@@ -191,6 +195,7 @@ async function deleteRt(): Promise<void> {
           <UiStatusBadge :label="asRt(row).active ? '有効' : '無効'" :tone="asRt(row).active ? 'ok' : 'neutral'" dot />
         </template>
       </UiDataTable>
+      <UiPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
     </UiSectionCard>
 
     <template #drawer>

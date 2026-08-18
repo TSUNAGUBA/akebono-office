@@ -41,9 +41,17 @@ const companyGraphEdges = computed(() =>
   }),
 )
 
-const companyEdgeRows = computed(() =>
+/** エッジ一覧の絞り込み（選択ノードに関する関係のみ。グラフは全件表示のまま） */
+const filteredCompanyRelations = computed(() =>
   (crCrud.list.value as CompanyRelation[])
-    .filter(r => !selCompany.value || r.fromCompanyId === selCompany.value || r.toCompanyId === selCompany.value)
+    .filter(r => !selCompany.value || r.fromCompanyId === selCompany.value || r.toCompanyId === selCompany.value))
+
+// クライアントページング（エッジ一覧テーブルのみ。RelationGraph は対象外）
+const { page, pageSize, rows: pagedCompanyRelations, total } = useListView<CompanyRelation>({ source: filteredCompanyRelations })
+watch(selCompany, () => { page.value = 1 })
+
+const companyEdgeRows = computed(() =>
+  pagedCompanyRelations.value
     .map(r => ({
       id: r.id,
       fromName: companyName(r.fromCompanyId),
@@ -173,6 +181,7 @@ async function deleteCompanyRelation(row: Record<string, unknown>): Promise<void
           <button type="button" class="btn btn-danger btn-sm" @click="deleteCompanyRelation(row)">削除</button>
         </template>
       </UiDataTable>
+      <UiPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
 
     </UiSectionCard>
 

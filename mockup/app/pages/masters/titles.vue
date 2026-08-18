@@ -34,7 +34,11 @@ const filtered = computed(() =>
     .sort((a, b) => a.displayOrder - b.displayOrder),
 )
 
-const tableRows = computed(() => filtered.value as unknown as Record<string, unknown>[])
+// クライアントページング（検索・状態の絞り込みは filtered が担い、ページングのみ共通化）
+const { page, pageSize, rows: pagedTitles, total } = useListView<CodeMasterItem>({ source: filtered })
+watch([search, statusFilter], () => { page.value = 1 })
+
+const tableRows = computed(() => pagedTitles.value as unknown as Record<string, unknown>[])
 
 const columns: TableColumn[] = [
   { key: 'label', label: '役職名', primary: true },
@@ -173,7 +177,7 @@ async function restoreSelected(): Promise<void> {
       <UiSelect v-model="statusFilter" :options="ACTIVE_FILTER_OPTIONS" aria-label="状態フィルタ" />
     </template>
 
-    <UiSectionCard :title="`役職一覧（${filtered.length}件）`" flush>
+    <UiSectionCard :title="`役職一覧（${total}件）`" flush>
       <UiDataTable
         :columns="columns"
         :rows="tableRows"
@@ -189,6 +193,7 @@ async function restoreSelected(): Promise<void> {
           <UiStatusBadge :label="asItem(row).active ? '有効' : '無効'" :tone="asItem(row).active ? 'ok' : 'neutral'" dot />
         </template>
       </UiDataTable>
+      <UiPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
     </UiSectionCard>
 
     <template #drawer>

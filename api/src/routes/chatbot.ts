@@ -689,7 +689,7 @@ export async function buildContext(
     // 「別の顧客/プロジェクトに紐付くノート」は関係のない情報として文脈から除外する。
     // 紐付けなしのノートは対象外（全般メモとして従来どおりスコア勝負）
     const noteHits = hits.some(h => h.sourceKind === 'note')
-    // 顧客ログも会社紐付けの混入防止フィルタ対象（別顧客のログを今回の顧客の文脈へ混ぜない）
+    // 顧客活動も会社紐付けの混入防止フィルタ対象（別顧客の記録を今回の顧客の文脈へ混ぜない）
     const clogHits = hits.some(h => h.sourceKind === 'customer-log')
     let mentionedCompanyId: string | null = null
     let mentionedProjectId: string | null = null
@@ -704,7 +704,7 @@ export async function buildContext(
     }
     if (noteHits) {
       // プロジェクトも同じ優先順 + 正規化・最長一致（生 includes の「最初の一致」では別 PJ の誤除外が起きる）。
-      // プロジェクト紐付けはノートのみ = 顧客ログは会社紐付けのみのため noteHits 時だけ解決する
+      // プロジェクト紐付けはノートのみ = 顧客活動は会社紐付けのみのため noteHits 時だけ解決する
       const { rows: pjs } = await pool.query<{ id: string; name: string }>(
         `SELECT id, name FROM projects WHERE active = true ORDER BY id LIMIT 1000`)
       mentionedProjectId = findMentionedIn(question, historyUserTexts, pjs)?.id ?? null
@@ -718,13 +718,13 @@ export async function buildContext(
       if (h.sourceKind === 'note' && !can(h.ownerMemberId ? 'poipoi' : 'minutes')) continue
       // 保管ドキュメント（バッチ7l）も機能ガードに従う
       if (h.sourceKind === 'document' && !can('documents')) continue
-      // 顧客ログも機能ガードに従う。owner スコープにより hits は本人のログのみ（search-index 側 = 他人は非供給）
+      // 顧客活動も機能ガードに従う。owner スコープにより hits は本人の記録のみ（search-index 側 = 他人は非供給）
       if (h.sourceKind === 'customer-log' && !can('customer-log')) continue
       if (h.sourceKind === 'note') {
         if (mentionedCompanyId && h.links.companyId && h.links.companyId !== mentionedCompanyId) continue
         if (mentionedProjectId && h.links.projectId && h.links.projectId !== mentionedProjectId) continue
       }
-      // 顧客ログの混入防止（会社紐付けのみ）: 今回の顧客に解決されたら別顧客のログを除外
+      // 顧客活動の混入防止（会社紐付けのみ）: 今回の顧客に解決されたら別顧客の記録を除外
       if (h.sourceKind === 'customer-log'
         && mentionedCompanyId && h.links.companyId && h.links.companyId !== mentionedCompanyId) continue
       const titleCheck = TITLE_CHECKS[h.sourceKind]

@@ -73,6 +73,10 @@ const fileRows = computed<DocumentNode[]>(() => {
   return base.filter(f => tagFilter.value.some(t => f.tags.includes(t)))
 })
 
+// 一覧のページング（1 ページ 20 件 = 改修依頼 2026-08-18。検索・タグ・フォルダの絞り込みは fileRows が担い、ページングのみ共通化）
+const { page, pageSize, rows: pagedFiles, total } = useListView<DocumentNode>({ source: fileRows })
+watch([query, tagFilter, selectedFolderId], () => { page.value = 1 })
+
 function memberName(id: string): string {
   return members.value.find(m => m.id === id)?.name ?? id
 }
@@ -86,7 +90,7 @@ const columns: TableColumn[] = [
 ]
 
 const tableRows = computed(() =>
-  fileRows.value.map(f => ({
+  pagedFiles.value.map(f => ({
     id: f.id,
     name: f.name,
     tags: f.tags.join(' '),
@@ -464,6 +468,7 @@ async function doCreateFolder(): Promise<void> {
               </span>
             </template>
           </UiDataTable>
+          <UiPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
 
           <!-- アーカイブ済み（取消フロー = 原則 9.5。復元できることを常に見える場所に置く） -->
           <div v-if="docs.archivedFiles.value.length > 0" class="mt-3">

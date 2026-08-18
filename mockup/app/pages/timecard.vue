@@ -90,6 +90,10 @@ const rows = computed(() => {
   })
 })
 
+// 一覧のページング（1 ページ 20 件 = 改修依頼 2026-08-18。クライアントページング）
+const { page, pageSize, rows: pagedRows, total } = useListView({ source: rows })
+watch([from, to], () => { page.value = 1 })
+
 const totalWorkMinutes = computed(() => {
   const me = currentUser.value.id
   const range = new Set(dates.value)
@@ -152,10 +156,11 @@ const totalWorkMinutes = computed(() => {
 
         <UiDataTable
           :columns="columns"
-          :rows="rows"
+          :rows="pagedRows"
           empty-title="この期間の打刻がありません"
           empty-hint="上の打刻カード、またはヘッダーの「タイムカード」から打刻できます"
         />
+        <UiPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
       </UiSectionCard>
     </div>
   </div>

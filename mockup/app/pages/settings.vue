@@ -343,6 +343,10 @@ const auditRows = computed(() =>
       detail: l.detail,
     })))
 
+// 監査ログのページング（1 ページ 20 件 = 改修依頼 2026-08-18。max-height の内部スクロールを廃止して置換。
+// ページ独自フィルタはないため page リセット watch は不要）
+const { page: auditPage, pageSize: auditPageSize, rows: pagedAuditRows, total: auditTotal } = useListView({ source: auditRows })
+
 // ---------- h) デモデータ ----------
 async function onResetDemo(): Promise<void> {
   const ok = await confirm.ask(
@@ -627,8 +631,7 @@ async function onResetDemo(): Promise<void> {
         >
           <UiDataTable
             :columns="auditColumns"
-            :rows="auditRows"
-            max-height="340px"
+            :rows="pagedAuditRows"
             empty-title="操作履歴はまだありません"
             empty-hint="マスタや設定を変更すると記録されます"
           >
@@ -637,6 +640,7 @@ async function onResetDemo(): Promise<void> {
               <span class="block text-[11px] text-muted">{{ row.detail }}</span>
             </template>
           </UiDataTable>
+          <UiPagination v-model:page="auditPage" v-model:page-size="auditPageSize" :total="auditTotal" />
         </UiSectionCard>
 
         <!-- h) デモデータ（モックモード専用。API モードでは SoT が PostgreSQL のため非表示） -->

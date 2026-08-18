@@ -29,7 +29,7 @@ export const QUICK_ACCESS_CATALOG: QuickAccessItem[] = [
   { id: 'attendance', label: '勤怠管理', icon: 'Clock', to: '/attendance' },
   { id: 'reports', label: '日報・週報', icon: 'NotebookPen', to: '/reports' },
   { id: 'workflow', label: '稟議', icon: 'GitPullRequestArrow', to: '/workflow' },
-  { id: 'customer-log', label: '顧客ログ', icon: 'MessageSquare', to: '/customer-log' },
+  { id: 'customer-log', label: '顧客活動', icon: 'MessageSquare', to: '/customer-log' },
   { id: 'ai-assistant', label: 'AI業務アシスタント', icon: 'Sparkles', to: '/ai-assistant' },
   { id: 'shift', label: 'シフト表', icon: 'CalendarRange', to: '/shift', featureKey: 'shift' },
   { id: 'sales', label: '売上管理', icon: 'TrendingUp', to: '/sales' },

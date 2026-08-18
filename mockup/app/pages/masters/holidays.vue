@@ -35,7 +35,11 @@ const filtered = computed(() =>
     .sort((a, b) => a.date.localeCompare(b.date)),
 )
 
-const tableRows = computed(() => filtered.value as unknown as Record<string, unknown>[])
+// クライアントページング（検索・年の絞り込みは filtered が担い、ページングのみ共通化）
+const { page, pageSize, rows: pagedHolidays, total } = useListView<Holiday>({ source: filtered })
+watch([search, yearFilter], () => { page.value = 1 })
+
+const tableRows = computed(() => pagedHolidays.value as unknown as Record<string, unknown>[])
 
 const columns: TableColumn[] = [
   { key: 'date', label: '日付', primary: true, width: '130px' },
@@ -193,7 +197,7 @@ async function removeHoliday(h: Holiday): Promise<void> {
       <UiSelect v-model="yearFilter" :options="years" aria-label="年フィルタ" />
     </template>
 
-    <UiSectionCard :title="`祝日一覧（${filtered.length}件）`" flush>
+    <UiSectionCard :title="`祝日一覧（${total}件）`" flush>
       <UiDataTable
         :columns="columns"
         :rows="tableRows"
@@ -220,6 +224,7 @@ async function removeHoliday(h: Holiday): Promise<void> {
           </button>
         </template>
       </UiDataTable>
+      <UiPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
     </UiSectionCard>
 
     <template #drawer>

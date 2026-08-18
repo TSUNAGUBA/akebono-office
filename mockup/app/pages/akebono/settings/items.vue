@@ -36,6 +36,12 @@ const items = computed<ResolvedItem[]>(() => its.resolve(current.value))
 const rows = computed(() => items.value as unknown as Record<string, unknown>[])
 const overriddenCount = computed(() => items.value.filter(i => i.overridden).length)
 
+// 項目一覧のページング（1 ページ 20 件 = 改修依頼 2026-08-18。エンティティ切替で 1 ページ目へ）
+const {
+  page: itemPage, pageSize: itemPageSize, rows: itemPaged, total: itemTotal,
+} = useListView<Record<string, unknown>>({ source: rows })
+watch(current, () => { itemPage.value = 1 })
+
 function asItem(row: Record<string, unknown>): ResolvedItem {
   return row as unknown as ResolvedItem
 }
@@ -110,6 +116,12 @@ const cfTypeOptions = (Object.keys(CF_TYPE_LABELS) as CustomFieldType[]).map(k =
 const customDefs = computed<CustomFieldDef[]>(() => cf.defsFor(current.value as CustomFieldEntity))
 const cfRows = computed(() => customDefs.value as unknown as Record<string, unknown>[])
 function asDef(row: Record<string, unknown>): CustomFieldDef { return row as unknown as CustomFieldDef }
+
+// カスタム項目一覧のページング（1 ページ 20 件 = 改修依頼 2026-08-18。エンティティ切替で 1 ページ目へ）
+const {
+  page: cfPage, pageSize: cfPageSize, rows: cfPaged, total: cfTotal,
+} = useListView<Record<string, unknown>>({ source: cfRows })
+watch(current, () => { cfPage.value = 1 })
 
 const cfColumns: TableColumn[] = [
   { key: 'label', label: '項目名', primary: true },
@@ -195,7 +207,7 @@ async function onCfRemove(d: CustomFieldDef): Promise<void> {
     >
       <UiDataTable
         :columns="columns"
-        :rows="rows"
+        :rows="itemPaged"
         empty-title="項目がありません"
       >
         <template #cell-item="{ row }">
@@ -262,6 +274,7 @@ async function onCfRemove(d: CustomFieldDef): Promise<void> {
           >
         </template>
       </UiDataTable>
+      <UiPagination v-model:page="itemPage" v-model:page-size="itemPageSize" :total="itemTotal" />
     </UiSectionCard>
 
     <!-- 追加カスタム項目（同一エンジンで全アプリ共通） -->
@@ -281,7 +294,7 @@ async function onCfRemove(d: CustomFieldDef): Promise<void> {
       <UiDataTable
         v-else
         :columns="cfColumns"
-        :rows="cfRows"
+        :rows="cfPaged"
         empty-title="カスタム項目はありません"
         empty-hint="「項目を追加」から、このアプリ独自の管理項目を追加できます"
       >
@@ -307,6 +320,7 @@ async function onCfRemove(d: CustomFieldDef): Promise<void> {
           </span>
         </template>
       </UiDataTable>
+      <UiPagination v-if="customRenders" v-model:page="cfPage" v-model:page-size="cfPageSize" :total="cfTotal" />
     </UiSectionCard>
 
     <UiModal :open="cfOpen" :title="`カスタム項目を${cfForm.id ? '編集' : '追加'}（${ITEM_ENTITY_LABELS[current] ?? current}）`" @close="cfOpen = false">

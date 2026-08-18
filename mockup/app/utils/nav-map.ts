@@ -100,9 +100,34 @@ export const NAV_MAP: Record<string, NavMapEntry> = {
   '/customer-log': {
     parent: HOME,
     related: [
+      { to: '/support-activity', label: 'サポート活動' },
+      { to: '/sales-activity', label: '営業活動' },
       CUSTOMERS,
       { to: '/masters/contacts', label: '顧客（人）マスタ', adminOnly: true },
       PERMISSIONS,
+    ],
+  },
+  '/support-activity': {
+    parent: HOME,
+    related: [
+      { to: '/customer-log', label: '顧客活動' },
+      { to: '/sales-activity', label: '営業活動' },
+      CUSTOMERS,
+    ],
+  },
+  '/sales-activity': {
+    parent: HOME,
+    related: [
+      { to: '/customer-log', label: '顧客活動' },
+      { to: '/partner-activity', label: 'ビジネスパートナー活動' },
+      CUSTOMERS,
+    ],
+  },
+  '/partner-activity': {
+    parent: HOME,
+    related: [
+      { to: '/sales-activity', label: '営業活動' },
+      { to: '/customer-log', label: '顧客活動' },
     ],
   },
   '/workflow': {

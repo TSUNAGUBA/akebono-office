@@ -15,7 +15,7 @@ Nuxt 4 SPA（ssr:false, hashMode）/ TypeScript strict / Tailwind v4 + CSS 変�
 
 1. **全操作が反応する**（X-1）: ボタン・行・カードは必ず 遷移 / ドロワー / モーダル / トースト / 状態変化 のいずれかを返す。飾りのボタンを作らない
 2. **データは useMockDb 経由のみ**: `const { tbl, commit, nextId } = useMockDb()`。書込後は必ず `commit()`。ID は `nextId(collection, prefix)`
-   - **API モード（バッチ2a〜）:** マイグレーション済みコレクション（マスタ 31 種 = useApi.ts の MIGRATED_MASTERS・専用エンドポイント 21 種 = CUSTOM_COLLECTION_ENDPOINTS（akebonoAppConfigs / itemSettings = Phase B + 記録系 16 = Phase C + 取込 importSources/importMappings/importRuns = Phase D）・監査ログ・設定）は `tbl()` が API キャッシュを返す（参照はそのまま）。**書込は `useMasterCrudAsync` / `useAppSettings` / 各ドメイン composable の API 経路（apiWrite = 書込 → 影響コレクション再ロード）のみ**。`tbl().value = ...` の直接書込やモック版 `useMasterCrud` での書込を追加しない（キャッシュ汚染 = SoT 逆流。原則6）。導出キャッシュ（mediaInsights / dashboardInsights）はコレクションでなくキー単位の遅延ロード（apiLoadOnce）= 各 composable が管理する（**Phase D で dashboardInsights もサーバー化 = API モードで localStorage 保管のモックコレクションは 0**）
+   - **API モード（バッチ2a〜）:** マイグレーション済みコレクション（マスタ 31 種 = useApi.ts の MIGRATED_MASTERS・専用エンドポイント 26 種 = CUSTOM_COLLECTION_ENDPOINTS（akebonoAppConfigs / itemSettings = Phase B + 記録系 16 = Phase C + 取込 importSources/importMappings/importRuns = Phase D + 改善要望 improvementRequests/improvementItems = F-42 + 活動記録 supportActivities/salesActivities/partnerActivities = 2026-08-18）・監査ログ・設定）は `tbl()` が API キャッシュを返す（参照はそのまま）。**書込は `useMasterCrudAsync` / `useAppSettings` / 各ドメイン composable の API 経路（apiWrite = 書込 → 影響コレクション再ロード）のみ**。`tbl().value = ...` の直接書込やモック版 `useMasterCrud` での書込を追加しない（キャッシュ汚染 = SoT 逆流。原則6）。導出キャッシュ（mediaInsights / dashboardInsights）はコレクションでなくキー単位の遅延ロード（apiLoadOnce）= 各 composable が管理する（**Phase D で dashboardInsights もサーバー化 = API モードで localStorage 保管のモックコレクションは 0**）
 3. **記録系は追記のみ**: 打刻・承認ログ・活動ログ等を書き換え・削除しない。マスタは論理削除（`active:false`）のみ
 4. **Math.random / v-html 禁止**: 乱数は `~/utils/rng`（決定的）。リッチ表示はテキスト分解で
 5. **アイコンは lucide-vue-next のみ**。絵文字をアイコン代わりにしない
@@ -24,6 +24,7 @@ Nuxt 4 SPA（ssr:false, hashMode）/ TypeScript strict / Tailwind v4 + CSS 変�
    - 設計判断: 汎用区分マスタ（useCodeMaster）の選択肢 value は現状 **label 文字列を保存**する（モック簡略化）。本実装では **code 参照 + 表示時 label 解決**に変更する
 8. **通知・エスカレーションは非ブロッキング**: `useNotifications().notify/notifyAdmins`、`useEscalations().raise` は主フロー成功後に呼ぶ。失敗しても主フローは成立
 9. **レスポンシブ必須**: 一覧は `UiDataTable`（自動カード化）。独自グリッドは `<768px` で縦積みかコンテナ内横スクロール。タッチターゲット 44px
+   - **一覧のページング必須（X-7 = 改修依頼 2026-08-18）**: データが蓄積する一覧は `useListView`（既定 20 件/ページ）+ `UiPagination` を適用する。モックはクライアントページング（`source` に絞込済み computed・ページ独自フィルタは page=1 リセット watch）・API モードでサーバーページングにする場合は `fetch: apiListPage(collection, p)` を併用。対象外 = 直近 N 件の意図的ウィジェット・カンバン/ガント/マトリクス/グリッド/グラフ/会話 UI・件数が構造的に小さい設定 UI
 10. **アクセシビリティ**: 対話 UI は role/aria を付与（UiModal/UiDrawer/UiTabBar は対応済み）。色だけに頼らずラベル併記
 11. **エラーコード**: composable 層の想定エラーは `AKO-{領域}-{番号}` を必須付与（`error: { code, message }`）。画面内のフォーム必須チェック等 UI 完結のバリデーションはコード不要
 12. **動的コンポーネントで `resolveComponent('NuxtLink')` を使わない**: 本番ビルドで解決されず `<nuxtlink>` という無反応なカスタム要素になる（実バグ事例）。`import { NuxtLink } from '#components'` で実体を import して `:is` に渡すか、`v-if/v-else` でタグを静的に分岐する
@@ -125,6 +126,16 @@ const tp = useTaskPlans()   // plansOf / upsertPlan / removePlan / aiReview / re
 // 部署（F-10-9。所属の SoT は Member.departmentId。CRUD は useMasterCrud('departments')）
 const depts = useDepartments()   // nameOf / options / membersOf / tree
 
+// 顧客活動（旧: 顧客ログ = F-18。一覧は全メンバー閲覧可・編集/取消は本人のみ・AI 参照は本人スコープ。2026-08-18）
+const cl = useCustomerLogs()   // allLogs / archivedOf(自分) / ensureLoaded / add / update / archive / restore / refresh
+
+// 活動記録 3 種（F-43/F-44/F-45。チーム共有 = 全員が閲覧・登録・編集可・取消/復元 = 原則9.5。検証 SoT = shared/domain/activity。2026-08-18）
+const sup = useSupportActivities()   // list / archivedList / save(id|null, input) / archive / restore / refresh
+const sal = useSalesActivities()     // 同上 + byId（パートナー活動の関連商談リンク解決）
+const pact = usePartnerActivities()  // 同上（関連商談 relatedSalesActivityId は営業活動への任意リンク）
+// 顧客(会社)コンボボックスの名寄せ・新規登録（モック側の共通実装。API 側は api/src/lib/company-resolve）
+const { lookupCompany, createCompany } = useCompanyResolve()
+
 // 休暇（F-04-5/9。種別別残数。付与は管理者/人事のみ・同日同種別はスキップ=冪等）
 const leave = useLeave()   // balance(memberId, leaveTypeId?) / request / decide / grant / bulkGrant / activeLeaveTypes
 
@@ -186,7 +197,7 @@ const imp = useImprovements()  // submit（body + 対象ページ〔既定=開�
 | `UiSearchInput` / `UiSelect` / `UiChipSelect` | v-model |
 | `UiChipTabs` | v-model(string), options({value,label}[])。単一選択のチップ行（カードメニューのカテゴリ切替等。バッチ7h） |
 | `UiMultiCombobox` | v-model(string[]), options({value,label,tag?,tagTone?}[]), single（単一選択モード）。論理名で検索する複数選択オートコンプリート（権限設定の項目指定等）。tag/tagTone は候補行・選択チップの区分バッジ（雇用区分等。バッチ7k）。候補リストの開閉方向・最大高は `useDropdownDirection` 共通ロジック（UiCombobox と共有 = 2026-07-31）で下に収まらないとき上方向に開く（モバイルのボトムシートモーダル対応） |
-| `UiCombobox` | v-model(string = 選択 id・'' = 未選択/自由入力), v-model:text(string = 入力表示文字列), options({value,label}[]), allowCreate（自由入力の許可。既定 true）, createHint, disabled。**単一選択 + 自由入力**のオートコンプリート（顧客ログの会社・担当者 = 未登録名を「新規登録名」として呼び出し側へ渡す。2026-07-31）。ラベル完全一致は自動選択（重複マスタ防止）。開閉方向は `useDropdownDirection`（UiMultiCombobox と共有） |
+| `UiCombobox` | v-model(string = 選択 id・'' = 未選択/自由入力), v-model:text(string = 入力表示文字列), options({value,label}[]), allowCreate（自由入力の許可。既定 true）, createHint, disabled。**単一選択 + 自由入力**のオートコンプリート（顧客活動・サポート/営業活動の会社 = 未登録名を「新規登録名」として呼び出し側へ渡す。2026-07-31）。ラベル完全一致は自動選択（重複マスタ防止）。開閉方向は `useDropdownDirection`（UiMultiCombobox と共有） |
 | `UiFormField` | label, required, error, hint |
 | `UiSchemaForm` | fields(FieldDef[]), v-model(Record), errors |
 | `UiStatusBadge` | tone, label, dot |
@@ -196,6 +207,10 @@ const imp = useImprovements()  // submit（body + 対象ページ〔既定=開�
 | `UiEmptyState` | icon, title, hint + #action |
 | `ChartsLineChartCard` / `ChartsBarChartCard` / `ChartsDonutChartCard` | title, labels/series or items, yFormatter |
 | `WidgetsPunchClock` | 打刻 = タイムカード（flat: モーダル内等でカード枠を外す） |
+| `WidgetsCustomerLogPanel` | props なし。顧客活動（/customer-log）の実体（一覧 20 件ページング + 検索/顧客/記録者フィルタ・登録/編集モーダル〔活動目的チップ + 活動手段 UiChipTabs + 会社/担当者コンボボックス〕・詳細モーダル・取消/復元。全メンバー閲覧可・編集は本人のみ。2026-08-18 改修） |
+| `WidgetsSupportActivityPanel` | props なし。サポート活動（/support-activity）の実体（一覧 20 件ページング〔API = サーバーページング〕+ 検索/ステータス/種別フィルタ・詳細ドロワー view/edit/create・取消/復元。F-43・2026-08-18） |
+| `WidgetsSalesActivityPanel` | props なし。営業活動（/sales-activity）の実体（フェーズバッジ・金額/確度・Next Action。構成は SupportActivityPanel と同型。F-44・2026-08-18） |
+| `WidgetsPartnerActivityPanel` | props なし。ビジネスパートナー活動（/partner-activity）の実体（関連商談 = 営業活動への任意リンク表示付き。構成は SupportActivityPanel と同型。F-45・2026-08-18） |
 | `WidgetsCalendarConnectGate` | Google カレンダー連携ゲート（擬似 OAuth 同意・props なし）。連携済みバーに「同期カレンダー」選択モーダル（バッチ7b） |
 | `MastersDeptOrgNode` | 組織図の再帰ノード（node: DeptNode, depth）。`@select` で部署詳細へ |
 | `WidgetsNotesPanel` | kind('poipoi'/'minutes'), showAuthor。ノート共通パネル（**一覧が基本ビュー・登録/ファイル取込はヘッダーボタン → 入力モーダル（バッチ7h）**。マークダウンプレビュー・ステージ → 取込ボタン・サマリー一覧（押下で詳細モーダル）+ 行単位の取消/復元 + 管理者の全ポスト閲覧（poipoi）。バッチ7c/7d/7e/7h） |
@@ -206,7 +221,7 @@ const imp = useImprovements()  // submit（body + 対象ページ〔既定=開�
 | `UiMenuSectionEditor` | modelValue(MenuCategoryDef[]) / cardOptions / emptyHint。メニューセクション編集の共通 UI（追加・削除・改名・並び替え・カード割当 = UiMultiCombobox。**セクション内カードの並び替え = D&D + ↑/↓ ボタン〔cardIds 配列順 = 表示順〕2026-08-17**）。保存/リセット/スコープは呼び出し側（#25。原則3。MenuCategoryEditor と DashboardSectionEditor が共用） |
 | `SettingsNotifyRecipientsEditor` | modelValue(NotifyRecipientTarget[])。通知の宛先を「ロール/役職/個人」で複数指定（ApproverSteps と同 3 種・順序/モードなし）。各行に解決人数プレビュー・空許容。設定「改善のタネの通知先」で使用（F-12-5・F-13-10・2026-08-03。解決 = 共有 resolveNotifyRecipientIds） |
 | `SettingsIconPicker` | v-model:icon(lucide名) / v-model:image(data URI or null) / v-model:busy。外部リンクのアイコン設定（プレビュー付きプリセット選択 = LINK_ICON_CHOICES ／ 画像アップロード = 160px 縮小 data URI ／「アイコンに戻す」で取消）。segments のインライン実装を共通化（改善要望・2026-08-12。原則3/9.5） |
-| `OfficeDashboardNotifications` | props なし。ダッシュボードの通知欄（「すべて」+ 設定されたカテゴリタブ〔エスカレーション/承認依頼/稟議/日報/顧客ログ/議事録〕 + 未読のみフィルタ・直近 8 件）。表示タブは useNotificationTabs 駆動。index.vue から分離し通知位置（side/bottom）で配置切替可能に（2026-08-03 / タブ設定化 2026-08-12） |
+| `OfficeDashboardNotifications` | props なし。ダッシュボードの通知欄（「すべて」+ 設定されたカテゴリタブ〔エスカレーション/承認依頼/稟議/日報/顧客活動/議事録〕 + 未読のみフィルタ・直近 8 件）。表示タブは useNotificationTabs 駆動。index.vue から分離し通知位置（side/bottom）で配置切替可能に（2026-08-03 / タブ設定化 2026-08-12） |
 | `OfficeDashboardLayoutPreview` | layout(DashboardLayout)。レイアウトの軽量プレビュー（実データ不要。セクション見出し + カード数チップ + 通知位置図示 + AKEBONO/密度反映。F-13-9） |
 | `OfficeDashboardLayoutPicker` | props なし。ダッシュボードのレイアウト設定モーダル。「レイアウト（通知の配置）」/「セクション設定」/「アプリヘッダー」/「通知タブ」タブ切替（**2026-08-18 分離: レイアウト = 通知の配置〔上/右/下/非表示〕に特化・テンプレートはセクション設定へ移設**）+ 適用スコープ〔自分/全社〕+ 現在有効層表示。ヘッダの「レイアウト」ボタン → UiModal 内で使用（F-13-9・2026-08-03。アプリヘッダー/通知タブ 追加 2026-08-12） |
 | `OfficeHeaderQuickAccessPicker` | props なし。ヘッダーのクイックアクセス設定（ヘッダーカスタマイズ = 全ページ共通）。候補カタログから表示メニューを選択 + 適用スコープ〔自分/全社〕+ 既定に戻す。**候補に「通知」（ベルの表示制御・既定 ON = 2026-08-18）**。純ロジック SoT = utils/header-quick-access.ts・解決/保存 = useHeaderQuickAccess。**レイアウトモーダルの「アプリヘッダー」タブ内で使用**（2026-08-12。従来のヘッダー「表示」ボタンは撤去） |

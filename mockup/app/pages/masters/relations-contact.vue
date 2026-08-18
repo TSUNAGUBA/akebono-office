@@ -54,9 +54,17 @@ const contactGraphEdges = computed(() =>
   }),
 )
 
-const contactEdgeRows = computed(() =>
+/** エッジ一覧の絞り込み（選択ノードに関する関係のみ。グラフは全件表示のまま） */
+const filteredContactRelations = computed(() =>
   (prCrud.list.value as ContactRelation[])
-    .filter(r => !selContact.value || r.fromContactId === selContact.value || r.toContactId === selContact.value)
+    .filter(r => !selContact.value || r.fromContactId === selContact.value || r.toContactId === selContact.value))
+
+// クライアントページング（エッジ一覧テーブルのみ。RelationGraph は対象外）
+const { page, pageSize, rows: pagedContactRelations, total } = useListView<ContactRelation>({ source: filteredContactRelations })
+watch(selContact, () => { page.value = 1 })
+
+const contactEdgeRows = computed(() =>
+  pagedContactRelations.value
     .map(r => ({
       id: r.id,
       fromName: contactLabel(r.fromContactId),
@@ -184,6 +192,7 @@ async function deleteContactRelation(row: Record<string, unknown>): Promise<void
           <button type="button" class="btn btn-danger btn-sm" @click="deleteContactRelation(row)">削除</button>
         </template>
       </UiDataTable>
+      <UiPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
 
     </UiSectionCard>
 

@@ -434,6 +434,10 @@ const leaveHistoryRows = computed(() => {
   return [...grantRows, ...reqRows].sort((a, b) => b.date.localeCompare(a.date))
 })
 
+// 一覧のページング（1 ページ 20 件 = 改修依頼 2026-08-18。クライアントページング）
+const { page: lhPage, pageSize: lhPageSize, rows: pagedLeaveHistoryRows, total: lhTotal } = useListView({ source: leaveHistoryRows })
+watch([tab, () => currentUser.value.id], () => { lhPage.value = 1 })
+
 function leaveStatusLabel(s: unknown): string {
   return LEAVE_REQUEST_STATUS_LABELS[s as LeaveRequest['status']] ?? ''
 }
@@ -550,6 +554,10 @@ const myRequestRows = computed(() => {
   return [...fixRows, ...directRows, ...lvRows].sort((a, b) => byCreatedAtDesc(a.createdAt, b.createdAt))
 })
 
+// 一覧のページング（1 ページ 20 件 = 改修依頼 2026-08-18。クライアントページング）
+const { page: mrPage, pageSize: mrPageSize, rows: pagedMyRequestRows, total: mrTotal } = useListView({ source: myRequestRows })
+watch([tab, () => currentUser.value.id], () => { mrPage.value = 1 })
+
 const pendingColumns: TableColumn[] = [
   { key: 'member', label: '申請者', width: '110px', primary: true },
   { key: 'type', label: '種類', width: '90px', primary: true },
@@ -593,6 +601,10 @@ const pendingRows = computed(() => {
   }))
   return [...fixRows, ...directRows, ...lvRows].sort((a, b) => a.date.localeCompare(b.date))
 })
+
+// 一覧のページング（1 ページ 20 件 = 改修依頼 2026-08-18。クライアントページング）
+const { page: pdPage, pageSize: pdPageSize, rows: pagedPendingRows, total: pdTotal } = useListView({ source: pendingRows })
+watch(tab, () => { pdPage.value = 1 })
 
 async function onDecide(row: Record<string, unknown>, action: 'approved' | 'rejected'): Promise<void> {
   const id = String(row.id)
@@ -801,6 +813,10 @@ const timecardRows = computed(() => {
     }))
 })
 
+// 一覧のページング（1 ページ 20 件 = 改修依頼 2026-08-18。クライアントページング）
+const { page: tcPage, pageSize: tcPageSize, rows: pagedTimecardRows, total: tcTotal } = useListView({ source: timecardRows })
+watch([tab, tcFrom, tcTo, tcDeptId, tcName], () => { tcPage.value = 1 })
+
 /**
  * 全員のタイムカードの行クリック → 日次タブでその日・そのメンバーを開く。
  * 日次詳細（打刻タイムライン）の他メンバー閲覧は従来どおり管理者/人事のみ
@@ -853,6 +869,9 @@ const laSummaryRows = computed(() =>
       }]
     })))
 
+// 一覧のページング（1 ページ 20 件 = 改修依頼 2026-08-18。クライアントページング）
+const { page: lasPage, pageSize: lasPageSize, rows: pagedLaSummaryRows, total: lasTotal } = useListView({ source: laSummaryRows })
+
 const laDetailColumns: TableColumn[] = [
   { key: 'date', label: '取得日付', width: '110px', primary: true },
   { key: 'name', label: '名前', primary: true },
@@ -870,6 +889,10 @@ const laDetailRows = computed(() =>
       name: memberName(r.memberId),
       typeName: `${leave.leaveTypeName(r.leaveTypeId)}（${LEAVE_UNIT_LABELS[r.unit]}）`,
     })))
+
+// 一覧のページング（1 ページ 20 件 = 改修依頼 2026-08-18。クライアントページング。一覧/明細の切替でも 1 ページ目へ）
+const { page: ladPage, pageSize: ladPageSize, rows: pagedLaDetailRows, total: ladTotal } = useListView({ source: laDetailRows })
+watch([tab, laMode], () => { lasPage.value = 1; ladPage.value = 1 })
 
 // 個別付与モーダル
 const grantOpen = ref(false)
@@ -1501,7 +1524,7 @@ async function submitRule(): Promise<void> {
         <UiSectionCard title="付与・取得履歴" flush>
           <UiDataTable
             :columns="leaveHistoryColumns"
-            :rows="leaveHistoryRows"
+            :rows="pagedLeaveHistoryRows"
             empty-title="付与・取得の履歴がありません"
             empty-hint="入社6ヶ月経過後に付与されます"
           >
@@ -1513,6 +1536,7 @@ async function submitRule(): Promise<void> {
               <span v-else class="text-muted">—</span>
             </template>
           </UiDataTable>
+          <UiPagination v-model:page="lhPage" v-model:page-size="lhPageSize" :total="lhTotal" />
         </UiSectionCard>
       </div>
     </div>
@@ -1527,7 +1551,7 @@ async function submitRule(): Promise<void> {
       >
         <UiDataTable
           :columns="pendingColumns"
-          :rows="pendingRows"
+          :rows="pagedPendingRows"
           empty-title="承認待ちの申請はありません"
         >
           <template #cell-actions="{ row }">
@@ -1541,12 +1565,13 @@ async function submitRule(): Promise<void> {
             </span>
           </template>
         </UiDataTable>
+        <UiPagination v-model:page="pdPage" v-model:page-size="pdPageSize" :total="pdTotal" />
       </UiSectionCard>
 
       <UiSectionCard title="自分の申請" description="打刻修正・直行/直帰・休暇の申請状況（承認前の直行/直帰は取下げできます）" flush>
         <UiDataTable
           :columns="myRequestColumns"
-          :rows="myRequestRows"
+          :rows="pagedMyRequestRows"
           empty-title="申請はまだありません"
           empty-hint="日次タブの「直行/直帰を申請」「打刻修正を申請」、休暇タブの「休暇を申請」から作成できます"
         >
@@ -1565,6 +1590,7 @@ async function submitRule(): Promise<void> {
             <span v-else class="text-muted">—</span>
           </template>
         </UiDataTable>
+        <UiPagination v-model:page="mrPage" v-model:page-size="mrPageSize" :total="mrTotal" />
       </UiSectionCard>
     </div>
 
@@ -1615,12 +1641,13 @@ async function submitRule(): Promise<void> {
 
         <UiDataTable
           :columns="timecardColumns"
-          :rows="timecardRows"
+          :rows="pagedTimecardRows"
           clickable
           empty-title="該当する打刻がありません"
           empty-hint="日付・部署・氏名のフィルターを見直してください"
           @row-click="openTimecardRow"
         />
+        <UiPagination v-model:page="tcPage" v-model:page-size="tcPageSize" :total="tcTotal" />
       </UiSectionCard>
     </div>
 
@@ -1662,10 +1689,11 @@ async function submitRule(): Promise<void> {
       >
         <UiDataTable
           :columns="laSummaryColumns"
-          :rows="laSummaryRows"
+          :rows="pagedLaSummaryRows"
           empty-title="付与実績がありません"
           empty-hint="「個別付与」「一括付与」から休暇を付与できます"
         />
+        <UiPagination v-model:page="lasPage" v-model:page-size="lasPageSize" :total="lasTotal" />
       </UiSectionCard>
 
       <UiSectionCard
@@ -1676,9 +1704,10 @@ async function submitRule(): Promise<void> {
       >
         <UiDataTable
           :columns="laDetailColumns"
-          :rows="laDetailRows"
+          :rows="pagedLaDetailRows"
           empty-title="取得明細がありません"
         />
+        <UiPagination v-model:page="ladPage" v-model:page-size="ladPageSize" :total="ladTotal" />
       </UiSectionCard>
     </div>
 

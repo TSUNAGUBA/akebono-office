@@ -64,6 +64,9 @@ const overview = computed(() => activeChannels.value.map((ch) => {
   }
 }))
 
+// 一覧のページング（1 ページ 20 件 = 改修依頼 2026-08-18。クライアントページング）
+const { page, pageSize, rows: pagedOverview, total } = useListView({ source: overview })
+
 // ---------- チャンネル追加 ----------
 const createOpen = ref(false)
 const createForm = ref<{ name: string; segmentId: string }>({ name: '', segmentId: '' })
@@ -160,7 +163,7 @@ const segmentOptions = computed(() => [
       <!-- 全チャンネルの状況 -->
       <UiSectionCard title="メディアチャンネル" description="各チャンネルの連携状況と直近 28 日の主要指標（連携済み/単体を区別）" flush>
         <ul class="divide-y divide-line">
-          <li v-for="o in overview" :key="o.id" class="flex flex-wrap items-center gap-2 px-3 py-2.5">
+          <li v-for="o in pagedOverview" :key="o.id" class="flex flex-wrap items-center gap-2 px-3 py-2.5">
             <component :is="o.linkedName ? Link2 : Radio" class="h-4 w-4 shrink-0 text-muted" aria-hidden="true" />
             <div class="min-w-0 flex-1">
               <div class="flex flex-wrap items-center gap-1.5">
@@ -181,6 +184,7 @@ const segmentOptions = computed(() => [
             </button>
           </li>
         </ul>
+        <UiPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
       </UiSectionCard>
     </div>
 

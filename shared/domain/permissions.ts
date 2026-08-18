@@ -33,7 +33,10 @@ export const FEATURE_PERMISSION_KEYS: { key: string; label: string }[] = [
   { key: 'ai-assistant', label: 'AI業務アシスタント（カレンダー連携含む）' },
   { key: 'poipoi', label: '改善のタネ' },
   { key: 'minutes', label: '議事録' },
-  { key: 'customer-log', label: '顧客ログ' },
+  { key: 'customer-log', label: '顧客活動' },
+  { key: 'support-activity', label: 'サポート活動' },
+  { key: 'sales-activity', label: '営業活動' },
+  { key: 'partner-activity', label: 'ビジネスパートナー活動' },
   { key: 'workflow', label: '稟議' },
   { key: 'decision', label: '意思決定支援' },
   { key: 'ai-company', label: 'AIネイティブカンパニー' },
@@ -57,7 +60,7 @@ export function featureKeyOfPath(path: string): string | null {
   const known = [
     'timecard', 'attendance', 'shift', 'reports', 'ai-assistant', 'workflow', 'decision', 'ai-company',
     'akebono', 'support', 'sales', 'status', 'inbox', 'masters', 'settings', 'poipoi', 'minutes', 'customer-log',
-    'improvements',
+    'improvements', 'support-activity', 'sales-activity', 'partner-activity',
   ]
   return known.includes(seg) ? seg : null
 }
@@ -243,33 +246,11 @@ export function canViewMemberTaskPlans(
     [`${ASSIST_MEMBER_FIELD_PREFIX}${targetMemberId}`, MEMBER_VIEW_ALL_FIELD], false)
 }
 
-// ---------- 顧客ログの参照対象（オペレーター指示 2026-07-30 = 顧客ログ機能） ----------
-
-/**
- * 顧客ログの参照対象の擬似フィールド（permission_rules.field）。
- * resource = 'customer-log'・field = `member:<対象メンバー id>`・effect: allow = その対象者のログを readonly 参照可。
- *
- * AI業務アシスタント（canViewMemberTaskPlans）と同型の **許可制（既定 = 参照不可）**。
- * 顧客とのやり取りは個人の記録であり、他人の記録は allow で明示的に許可された対象者のみ参照できる。
- * 自分のログは常に参照可（deny ルールの設定ミスで本人の記録が見えなくなる事故を防ぐ）。
- * 解決レイヤ（個人 > 役職 > ロール・同一レイヤ deny 優先）は canViewField と同一。
- */
-export const CUSTOMER_LOG_MEMBER_FIELD_PREFIX = 'member:'
-
-/**
- * 対象メンバーの顧客ログを readonly 参照できるか。
- * 自分のログは常に参照可。既定 = 参照不可（allow ルールで明示的に許可した対象者のみ）。
- * 適用範囲: 顧客ログページの対象メンバー切替（readonly 表示）・API の他メンバーログ取得。
- */
-export function canViewMemberCustomerLog(
-  rules: PermissionRule[],
-  subject: PermissionSubject,
-  targetMemberId: string,
-): boolean {
-  if (targetMemberId === subject.memberId) return true
-  return resolve(rules, subject, 'customer-log',
-    [`${CUSTOMER_LOG_MEMBER_FIELD_PREFIX}${targetMemberId}`, MEMBER_VIEW_ALL_FIELD], false)
-}
+// ---------- 顧客活動の参照対象（撤去 = 改修依頼 2026-08-18） ----------
+// 旧「顧客ログの参照対象」（resource='customer-log'・field='member:<id>' の許可制 =
+// canViewMemberCustomerLog）は、改修依頼 2026-08-18「一覧は全メンバーの登録データを全員が閲覧できる」に
+// 伴い撤去した。既存の当該ルールは migration 0066 で無効化（active=false = 監査可能な論理無効化）済み。
+// 編集・取消の本人限定は permission_rules ではなく API/モックの所有チェック（AKO-CLG-002）が引き続き担う。
 
 // ---------- 全員のタイムカードの参照（オペレーター指示 2026-07-22） ----------
 

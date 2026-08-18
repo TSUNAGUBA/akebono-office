@@ -30,6 +30,9 @@ const historyRows = computed(() =>
     decidedByName: members.value.find(m => m.id === l.decidedBy)?.name ?? l.decidedBy,
     atText: fmtDateTime(l.at),
   })))
+
+// 判断履歴のページング（1 ページ 20 件 = 改修依頼 2026-08-18。クライアントページング）
+const { page: historyPage, pageSize: historyPageSize, rows: pagedHistoryRows, total: historyTotal } = useListView({ source: historyRows })
 </script>
 
 <template>
@@ -74,7 +77,7 @@ const historyRows = computed(() =>
     <UiSectionCard class="mt-4" title="判断履歴" description="記録された意思決定ログ（分析基盤への蓄積対象）" flush>
       <UiDataTable
         :columns="historyColumns"
-        :rows="historyRows"
+        :rows="pagedHistoryRows"
         clickable
         empty-title="判断履歴はまだありません"
         empty-hint="テーマを検討して「判断を記録」すると、ここに履歴が残ります"
@@ -84,6 +87,7 @@ const historyRows = computed(() =>
           <UiStatusBadge :label="`選択肢 ${value}`" tone="brand" />
         </template>
       </UiDataTable>
+      <UiPagination v-model:page="historyPage" v-model:page-size="historyPageSize" :total="historyTotal" />
     </UiSectionCard>
   </div>
 </template>

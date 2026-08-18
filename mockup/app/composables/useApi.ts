@@ -300,6 +300,12 @@ const CUSTOM_COLLECTION_ENDPOINTS: Record<string, string> = {
   // （API モードで tbl('improvementItems') を触っても localStorage の空データでなくサーバー値〔管理者〕/403 空になる）
   improvementRequests: '/v1/improvements/requests',
   improvementItems: '/v1/improvements/items',
+  // 活動記録 3 種（0067。改修依頼 2026-08-18）: チーム共有の記録系。読み取りは一覧 GET
+  // （パラメータ無し = 取消済み込みの全件ハイドレーション・useListView の fetch = apiListPage で
+  // サーバーページング）・書込は各 composable（useSupportActivities 等）の apiWrite 経路
+  supportActivities: '/v1/support-activities',
+  salesActivities: '/v1/sales-activities',
+  partnerActivities: '/v1/partner-activities',
 }
 
 /**

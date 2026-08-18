@@ -47,8 +47,12 @@ const filtered = computed(() =>
   }),
 )
 
+// クライアントページング（検索・状態の絞り込みは filtered が担い、ページングのみ共通化）
+const { page, pageSize, rows: pagedProjects, total } = useListView<Project>({ source: filtered })
+watch([search, statusFilter], () => { page.value = 1 })
+
 const tableRows = computed(() =>
-  filtered.value.map(p => ({
+  pagedProjects.value.map(p => ({
     ...p,
     companyName: companyName(p.companyId),
     ownerName: memberName(p.ownerMemberId),
@@ -254,7 +258,7 @@ async function restoreSelected(): Promise<void> {
       <UiSelect v-model="statusFilter" :options="ACTIVE_FILTER_OPTIONS" aria-label="状態フィルタ" />
     </template>
 
-    <UiSectionCard :title="`プロジェクト一覧（${filtered.length}件）`" flush>
+    <UiSectionCard :title="`プロジェクト一覧（${total}件）`" flush>
       <UiDataTable
         :columns="columns"
         :rows="tableRows"
@@ -286,6 +290,7 @@ async function restoreSelected(): Promise<void> {
           <span class="num">{{ asProject(row).budget > 0 ? fmtYenCompact(asProject(row).budget) : '—' }}</span>
         </template>
       </UiDataTable>
+      <UiPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
     </UiSectionCard>
 
     <template #drawer>

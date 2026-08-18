@@ -10,7 +10,7 @@
 import {
   canManageImprovements as canManageImprovementsShared,
   canUseFeature, canViewAllTimecards as canViewAllTimecardsShared,
-  canViewMemberCustomerLog as canViewMemberCustomerLogShared, canViewField,
+  canViewField,
   canViewMemberReports as canViewMemberReportsShared,
   canViewMemberTaskPlans as canViewMemberTaskPlansShared,
   featureKeyOfPath, type PermissionSubject,
@@ -61,10 +61,8 @@ export function usePermissions() {
     return canViewMemberTaskPlansShared(rules.value, subject.value, targetMemberId)
   }
 
-  /** 対象メンバーの顧客ログを readonly 参照できるか（自分は常に可・未設定 = 不可 = 許可制） */
-  function canViewMemberCustomerLog(targetMemberId: string): boolean {
-    return canViewMemberCustomerLogShared(rules.value, subject.value, targetMemberId)
-  }
+  // 旧 canViewMemberCustomerLog（顧客ログの参照対象・許可制）は改修依頼 2026-08-18 で撤去
+  // （顧客活動の一覧は全メンバーの記録を全員が閲覧できる = shared/domain/permissions.ts 参照）
 
   /** 全員のタイムカードを参照できるか（既定 = 管理者/人事。権限表の明示ルールで変更可） */
   const canViewAllTimecards = computed(() =>
@@ -72,6 +70,6 @@ export function usePermissions() {
 
   return {
     can, canPath, canField, canViewMemberReports, canViewMemberTaskPlans,
-    canViewMemberCustomerLog, canViewAllTimecards, canManageImprovements,
+    canViewAllTimecards, canManageImprovements,
   }
 }

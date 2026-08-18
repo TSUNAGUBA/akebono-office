@@ -106,7 +106,7 @@ const browseRows = computed(() => {
 // クライアントページング（検索・倉庫フィルタは browseRows が担い、ページングのみ共通化）
 const {
   page: browsePage, pageSize: browsePageSize, rows: browsePaged, total: browseTotal,
-} = useListView<Record<string, unknown>>({ source: browseRows, pageSize: 50 })
+} = useListView<Record<string, unknown>>({ source: browseRows })
 watch([browseSearch, browseWh], () => { browsePage.value = 1 })
 
 const browseColumns: TableColumn[] = [
@@ -263,7 +263,7 @@ const ledgerRows = computed(() =>
 // クライアントページング（SKU・倉庫フィルタは ledgerRows が担い、ページングのみ共通化）
 const {
   page: ledgerPage, pageSize: ledgerPageSize, rows: ledgerPaged, total: ledgerTotal,
-} = useListView<Record<string, unknown>>({ source: ledgerRows, filterParams: lgFilterQueryParams, pageSize: 50 })
+} = useListView<Record<string, unknown>>({ source: ledgerRows, filterParams: lgFilterQueryParams })
 
 // 受払台帳（inventory_transactions）の列は項目設定で解決＋カスタム項目列を付加。
 // 「商品 / SKU」列は商品識別のため itemKey を付けず常時表示（オペレーター報告 2026-08-10・request①）。

@@ -94,10 +94,11 @@ export interface Note {
 }
 
 /**
- * 顧客ログ（顧客とのやり取りの記録。オペレーター指示 2026-07-30）。
+ * 顧客活動（旧「顧客ログ」= 改修依頼 2026-08-18 で改称。顧客とのやり取りの記録。オペレーター指示 2026-07-30）。
  * いつ（logDate 必須・logTime 任意）どの顧客（会社 companyId 必須 / 人 contactId 任意）と
- * どんな会話をしたか（body 必須）を本人が記録する。AI の参照対象（本人スコープ）。
+ * どんな活動をしたか（body 必須）を本人が記録する。AI の参照対象（本人スコープ）。
  * 記録系 = 追記 + 本人編集（監査）+ 取消/復元（原則2/9.5）。本人所有・本人のみ操作可。
+ * 一覧は全メンバーの記録を全員が閲覧できる（改修依頼 2026-08-18。編集・取消は従来どおり本人のみ）。
  */
 export interface CustomerLog {
   id: string
@@ -115,8 +116,10 @@ export interface CustomerLog {
   contactId: string | null
   /** 自社の担当者（Member 参照。既定 = ログインユーザー = 記録者）*/
   staffMemberId: string
-  /** 属性タグ（商談/取材/イベント等。プリセット + 自由入力 = CUSTOMER_LOG_TAG_PRESETS）*/
+  /** 活動目的（旧「属性タグ」= 改修依頼 2026-08-18 で改称。商談/取材/イベント等。プリセット + 自由入力 = CUSTOMER_LOG_TAG_PRESETS。キー名 tags は下位互換のため維持 = 原則7）*/
   tags: string[]
+  /** 活動手段（訪問/Web会議/電話等 = CUSTOMER_LOG_METHOD_PRESETS。任意・'' = 未設定。改修依頼 2026-08-18）*/
+  method: string
   /** 件名（任意。空なら会社名から導出表示）*/
   title: string
   /** 担当者メモ（旧「会話内容」。必須。議事録メモは 2026-08-03 に廃止 = オペレーター指示）*/
@@ -127,11 +130,162 @@ export interface CustomerLog {
   active?: boolean
 }
 
-/** 顧客ログの属性タグ推奨プリセット（「商談/取材/イベント等」= 自由入力も可。UI 候補と検証上限の SoT） */
+/** 顧客活動の活動目的（旧「属性タグ」）推奨プリセット（「商談/取材/イベント等」= 自由入力も可。UI 候補と検証上限の SoT） */
 export const CUSTOMER_LOG_TAG_PRESETS = ['商談', '取材', 'イベント', '定例', '会食', '電話', 'その他'] as const
-/** 属性タグの最大数・1 タグの最大文字数（コードポイント） */
+/** 活動目的の最大数・1 件の最大文字数（コードポイント） */
 export const CUSTOMER_LOG_TAGS_MAX = 10
 export const CUSTOMER_LOG_TAG_CAP = 30
+/** 顧客活動の活動手段（単一選択・任意。「値=ラベル」方式 = DAILY_ISSUE_CATEGORY_PRESETS と同型。改修依頼 2026-08-18） */
+export const CUSTOMER_LOG_METHOD_PRESETS = ['訪問', 'Web会議', '電話', 'メール', 'チャット', 'その他'] as const
+
+// ---------- 活動記録（サポート/営業/ビジネスパートナー。改修依頼 2026-08-18・F-43/F-44/F-45） ----------
+// 3 種ともチーム共有の記録系: 全員が閲覧・登録・編集できる（顧客活動の本人所有と異なり、対応状況を
+// チームで引き継ぐ運用のため編集も全員可 = 監査ログで訂正履歴を残す）。取消 = 論理削除 + 復元（原則9.5）。
+// 区分値は「値=ラベル」方式（CUSTOMER_LOG_TAG_PRESETS と同型 = UI 候補と検証の SoT をここに置く）。
+
+/** サポート活動の問い合わせ種別 */
+export const SUPPORT_ACTIVITY_CATEGORIES = ['操作', '不具合', '設定', 'データ', '要望', 'その他'] as const
+/** サポート活動の優先度 */
+export const SUPPORT_ACTIVITY_PRIORITIES = ['低', '通常', '高', '緊急'] as const
+/** サポート活動のステータス */
+export const SUPPORT_ACTIVITY_STATUSES = ['未対応', '対応中', '顧客確認待ち', '保留', '解決'] as const
+
+/**
+ * サポート活動（顧客サポートの受付〜解決の記録。改修依頼 2026-08-18・F-43）。
+ * 受付日時・顧客・問い合わせ内容・対応/原因/解決・改善ナレッジのタネを 1 件として管理する。
+ */
+export interface SupportActivity {
+  id: string
+  /** 記録者（表示用。編集は全員可） */
+  memberId: string
+  /** 受付日（YYYY-MM-DD・必須） */
+  receivedDate: string
+  /** 受付時刻（HH:MM・任意） */
+  receivedTime: string | null
+  /** 顧客(会社)（必須） */
+  companyId: string
+  /** 問い合わせ者（顧客側の氏名。自由入力・任意） */
+  inquirerName: string
+  /** 対象システム（自由入力・任意） */
+  targetSystem: string
+  /** 問い合わせ種別（SUPPORT_ACTIVITY_CATEGORIES） */
+  category: string
+  /** 件名（必須） */
+  title: string
+  /** 問い合わせ内容（必須） */
+  body: string
+  /** 優先度（SUPPORT_ACTIVITY_PRIORITIES） */
+  priority: string
+  /** ステータス（SUPPORT_ACTIVITY_STATUSES） */
+  status: string
+  /** 自社担当者（Member 参照。既定 = ログインユーザー） */
+  staffMemberId: string
+  /** 対応内容（任意） */
+  response: string
+  /** 原因（任意） */
+  cause: string
+  /** 解決内容（任意） */
+  resolution: string
+  /** 完了日（YYYY-MM-DD・任意） */
+  completedDate: string | null
+  /** 完了時刻（HH:MM・任意。完了日がある場合のみ） */
+  completedTime: string | null
+  /** 改善・ナレッジのタネ（任意） */
+  knowledgeNote: string
+  createdAt: string
+  updatedAt?: string
+  /** 取消（論理削除）済みは false */
+  active?: boolean
+}
+
+/** 営業活動の商談種別 */
+export const SALES_ACTIVITY_DEAL_TYPES = ['新規', '追加', '更新'] as const
+/** 営業活動の商談フェーズ */
+export const SALES_ACTIVITY_PHASES = ['初回', 'ヒアリング', '提案', '見積', '稟議', '受注', '失注'] as const
+
+/**
+ * 営業活動（商談の履歴と進捗の管理。改修依頼 2026-08-18・F-44）。
+ * 顧客 × 商談名を 1 件として、フェーズ・金額・確度・Next Action を追跡する。
+ */
+export interface SalesActivity {
+  id: string
+  /** 記録者（表示用。編集は全員可） */
+  memberId: string
+  /** 顧客(会社)（必須） */
+  companyId: string
+  /** 商談名（必須） */
+  title: string
+  /** 商談種別（SALES_ACTIVITY_DEAL_TYPES） */
+  dealType: string
+  /** 担当者（Member 参照。既定 = ログインユーザー） */
+  staffMemberId: string
+  /** 商談フェーズ（SALES_ACTIVITY_PHASES） */
+  phase: string
+  /** 商談金額（円・任意。null = 未定） */
+  amount: number | null
+  /** 受注確度（%・0〜100・任意。null = 未定） */
+  probability: number | null
+  /** 受注予定日（YYYY-MM-DD・任意） */
+  expectedCloseDate: string | null
+  /** 顧客課題（任意） */
+  customerIssue: string
+  /** 提案概要（任意） */
+  proposal: string
+  /** Next Action（任意） */
+  nextAction: string
+  /** Next Action日（YYYY-MM-DD・任意） */
+  nextActionDate: string | null
+  createdAt: string
+  updatedAt?: string
+  /** 取消（論理削除）済みは false */
+  active?: boolean
+}
+
+/** ビジネスパートナー活動の活動区分 */
+export const PARTNER_ACTIVITY_TYPES = ['紹介', '共創', '案件支援', '情報交換', 'その他'] as const
+/** ビジネスパートナー活動のステータス */
+export const PARTNER_ACTIVITY_STATUSES = ['情報収集', '検討', '接続予定', '進行中', '案件化', '完了'] as const
+
+/**
+ * ビジネスパートナー活動（パートナー連携のテーマ管理。改修依頼 2026-08-18・F-45）。
+ * パートナー・関連企業は自由入力（パートナーは個人名も多く、関連企業は顧客マスタ対象外の企業も
+ * あり得るため、マスタ参照にしない設計判断）。案件化したら関連商談（営業活動）へリンクする。
+ */
+export interface PartnerActivity {
+  id: string
+  /** 記録者（表示用。編集は全員可） */
+  memberId: string
+  /** パートナー（人・会社の名前。自由入力・必須） */
+  partnerName: string
+  /** テーマ名（必須） */
+  theme: string
+  /** 関連企業（自由入力・任意） */
+  relatedCompany: string
+  /** 活動区分（PARTNER_ACTIVITY_TYPES） */
+  activityType: string
+  /** ステータス（PARTNER_ACTIVITY_STATUSES） */
+  status: string
+  /** 概要（任意） */
+  summary: string
+  /** 現在状況（任意） */
+  currentState: string
+  /** Next Action（任意） */
+  nextAction: string
+  /** Next Action日（YYYY-MM-DD・任意） */
+  nextActionDate: string | null
+  /** 自社担当者（Member 参照。既定 = ログインユーザー） */
+  staffMemberId: string
+  /** 関連MTG（自由入力・任意） */
+  relatedMeeting: string
+  /** 関連商談（営業活動への任意リンク。案件化したら紐付ける） */
+  relatedSalesActivityId: string | null
+  /** メモ（任意） */
+  memo: string
+  createdAt: string
+  updatedAt?: string
+  /** 取消（論理削除）済みは false */
+  active?: boolean
+}
 
 export interface Industry {
   id: string

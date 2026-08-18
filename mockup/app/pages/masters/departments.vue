@@ -35,8 +35,12 @@ const filtered = computed(() =>
     .sort((a, b) => a.displayOrder - b.displayOrder),
 )
 
+// クライアントページング（一覧表示のみ。組織図ツリーは対象外）
+const { page, pageSize, rows: pagedDepartments, total } = useListView<Department>({ source: filtered })
+watch([search, statusFilter], () => { page.value = 1 })
+
 const tableRows = computed(() =>
-  filtered.value.map(d => ({
+  pagedDepartments.value.map(d => ({
     ...d,
     parentName: d.parentId ? departments.nameOf(d.parentId) : '—',
     managerName: memberName(d.managerId),
@@ -324,7 +328,7 @@ async function unassignMember(m: Member): Promise<void> {
     </UiSectionCard>
 
     <!-- 一覧 -->
-    <UiSectionCard v-else :title="`部署一覧（${filtered.length}件）`" flush>
+    <UiSectionCard v-else :title="`部署一覧（${total}件）`" flush>
       <UiDataTable
         :columns="columns"
         :rows="tableRows"
@@ -339,6 +343,7 @@ async function unassignMember(m: Member): Promise<void> {
           <UiStatusBadge :label="asDept(row).active ? '有効' : '無効'" :tone="asDept(row).active ? 'ok' : 'neutral'" dot />
         </template>
       </UiDataTable>
+      <UiPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
     </UiSectionCard>
 
     <template #drawer>

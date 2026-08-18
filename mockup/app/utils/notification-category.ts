@@ -3,7 +3,7 @@
  * - escalation = kind='escalation'（エスカレーション起票の通知）
  * - workflow（稟議）= リンク先が /workflow の通知（承認依頼・決裁・却下・差戻し）
  * - report（日報）= リンク先が /reports の通知（日報・週報のコメント・リマインド）
- * - customer-log（顧客ログ）= リンク先が /customer-log の通知
+ * - customer-log（顧客活動）= リンク先が /customer-log の通知
  * - minutes（議事録）= リンク先が /minutes の通知
  * - approval（承認依頼）= それ以外の approval 通知（打刻修正・休暇など）
  * - other = 上記以外（AI 報告・システム・ぽいぽい等）
