@@ -30,6 +30,8 @@ export const seedImprovementRequests: ImprovementRequest[] = [
   { id: 'imreq-0004', memberId: 'm-04', memberName: '三浦 彩', pagePath: '/reports', pageLabel: '日報・週報', body: '日報の下書きを前日分からコピーできるようにしてほしい。定型の作業報告が多いので。', adoption: 'adopted', tags: ['entrust'], itemId: null, archivedAt: null, createdAt: `${addDays(today, -2)}T18:30:00+09:00` },
   { id: 'imreq-0005', memberId: 'm-05', memberName: '小野寺 岳', pagePath: '/masters/members', pageLabel: 'メンバー管理', body: 'メンバー一覧を部署で絞り込めるようにしてほしい。人数が増えて探しづらい。', adoption: 'pending', tags: ['brainstorm'], itemId: null, archivedAt: null, createdAt: `${addDays(today, -1)}T13:15:00+09:00` },
   { id: 'imreq-0006', memberId: 'm-03', memberName: '葛西 大輔', pagePath: '/settings', pageLabel: '設定', body: '画面の配色を自分好みに完全カスタマイズできるようにしてほしい。', adoption: 'declined', itemId: null, archivedAt: null, createdAt: `${addDays(today, -1)}T16:45:00+09:00` },
+  // imreq-0007 = 対応中（in_progress）デモの元要望（改修依頼 2026-08-18: カンバンの「対応中」列）
+  { id: 'imreq-0007', memberId: 'm-05', memberName: '小野寺 岳', pagePath: '/shift', pageLabel: 'シフト表', body: '確定シフトを CSV でダウンロードできるようにしてほしい。給与計算の突合に使いたい。', adoption: 'adopted', itemId: 'imp-0003', archivedAt: null, createdAt: `${addDays(today, -9)}T11:05:00+09:00` },
 ]
 
 /** 生要望へのコメント（選別のやり取りデモ = 2026-08-17 第 2 弾。不採用理由・確認事項を時系列で残す） */
@@ -40,7 +42,8 @@ export const seedImprovementRequestComments: ImprovementRequestComment[] = [
 
 /**
  * 改修単位のデモ（F-42。AI 集約の結果を模した初期データ）。
- * imp-0001 = 対応する（対応予定期間あり = ガントにバー表示）／imp-0002 = 未判定（予定未定）。
+ * imp-0001 = 対応する（対応予定期間あり = ガントにバー表示）／imp-0002 = 未判定（予定未定）／
+ * imp-0003 = 対応中（着手済み = カンバン「対応中」列のデモ。改修依頼 2026-08-18）。
  */
 export const seedImprovementItems: ImprovementItem[] = [
   {
@@ -74,6 +77,22 @@ export const seedImprovementItems: ImprovementItem[] = [
     resolvedAt: null,
     planStart: null,
     planEnd: null,
+  },
+  {
+    id: 'imp-0003',
+    title: '「シフト表」の確定シフト CSV ダウンロード',
+    summary: '確定シフトを CSV でダウンロードできるようにする（給与計算の突合用）。',
+    detail: '### 対象ページ: シフト表（`/shift`）\n\n**寄せられた要望 1 件:**\n1. 確定シフトを CSV でダウンロードできるようにしてほしい（給与計算の突合に使いたい）',
+    status: 'in_progress',
+    pagePaths: ['/shift'],
+    sourceRequestIds: ['imreq-0007'],
+    llm: false,
+    archivedAt: null,
+    createdAt: `${addDays(today, -9)}T12:00:00+09:00`,
+    updatedAt: `${addDays(today, -1)}T15:30:00+09:00`,
+    resolvedAt: null,
+    planStart: addDays(today, -3),
+    planEnd: addDays(today, 4),
   },
 ]
 

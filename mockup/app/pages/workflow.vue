@@ -40,6 +40,9 @@ const routesCrud = useMasterCrudAsync('workflowRoutes', 'wr')
 
 const pendingRows = computed(() => wf.pendingFor(currentUserId.value))
 
+// タブ利用可否（権限表の `tab:<key>` 擬似フィールド = 改修依頼 2026-08-18。既定 = 全タブ利用可。
+// 管理者限定タブ（全件・経路設定）のロールガードが基底で、権限ルールは deny 方向にのみ働く）
+const { canTab } = usePermissions()
 const tabs = computed<TabItem[]>(() => {
   const t: TabItem[] = [
     { key: 'mine', label: '自分の申請' },
@@ -49,12 +52,14 @@ const tabs = computed<TabItem[]>(() => {
     t.push({ key: 'all', label: '全件' })
     t.push({ key: 'routes', label: '経路設定' })
   }
-  return t
+  return t.filter(x => canTab('workflow', x.key))
 })
 const queryTab = typeof route.query.tab === 'string' ? route.query.tab : ''
 const tab = ref<string>(['mine', 'pending', 'all', 'routes'].includes(queryTab) ? queryTab : 'mine')
 watchEffect(() => {
-  if (!tabs.value.some(t => t.key === tab.value)) tab.value = 'mine'
+  // 権限・ロールで消えたタブは先頭の利用可能タブへ退避。全タブ deny の場合は空値にして
+  // どのタブ内容も描画しない（フェイルクローズ = R1 レビュー反映）
+  if (!tabs.value.some(t => t.key === tab.value)) tab.value = tabs.value[0]?.key ?? ''
 })
 
 // 通知ディープリンク: ?open=<申請id> で詳細ドロワーを直接開く（通知の対象へ即到達 = 改善要望 2026-08-17。
@@ -272,7 +277,15 @@ async function applyTemplate(): Promise<void> {
   form.content = tpl.body
 }
 
-const categoryOptions = Object.entries(WORKFLOW_CATEGORY_LABELS).map(([value, label]) => ({ value, label }))
+// 区分の選択肢（全区分の説明を常時表示して選べるカード = 改修依頼 2026-08-18。文言 SoT = labels.ts）。
+// 説明文の「購買：」等の接頭辞はカードのラベルと重複するため、表示用にのみ外す（SoT の文言は変更しない）。
+// description は UiSelect（経路設定の区分選択）では無視されるため共用のまま
+const categoryOptions = (Object.keys(WORKFLOW_CATEGORY_LABELS) as WorkflowCategory[]).map((value) => {
+  const label = WORKFLOW_CATEGORY_LABELS[value]
+  const desc = WORKFLOW_CATEGORY_DESCRIPTIONS[value]
+  const prefix = `${label}：`
+  return { value, label, description: desc.startsWith(prefix) ? desc.slice(prefix.length) : desc }
+})
 const categoryModel = computed({
   get: () => form.category as string,
   set: (v: string) => { form.category = v as WorkflowCategory },
@@ -557,9 +570,12 @@ async function onRemoveDelegate(d: DelegateSetting): Promise<void> {
     </UiPageHeader>
 
     <UiTabBar v-model="tab" :tabs="tabs" class="mb-3" />
+    <!-- 全タブ deny 時の空状態（タブ内容は tab='' のためどれも描画されない = フェイルクローズ） -->
+    <p v-if="tabs.length === 0" class="card p-6 text-center text-[13px] text-sub">利用できるタブがありません（権限設定で制限されています。管理者にお問い合わせください）</p>
 
     <!-- ================= 一覧タブ（自分の申請 / 承認待ち / 全件） ================= -->
-    <div v-if="tab !== 'routes'" class="grid gap-3">
+    <!-- タブキーの明示列挙: tab=''（全タブ deny の退避値）でフォールバック描画しない = フェイルクローズ（R2 レビュー反映） -->
+    <div v-if="tab === 'mine' || tab === 'pending' || tab === 'all'" class="grid gap-3">
       <UiFilterBar>
         <UiSearchInput v-model="q" placeholder="件名・決裁番号で検索" />
         <UiSelect v-model="statusFilter" :options="statusOptions" empty-label="すべての状態" aria-label="状態フィルタ" />
@@ -592,7 +608,7 @@ async function onRemoveDelegate(d: DelegateSetting): Promise<void> {
     </div>
 
     <!-- ================= 経路設定タブ（管理者） ================= -->
-    <div v-else class="grid gap-3">
+    <div v-else-if="tab === 'routes'" class="grid gap-3">
       <UiSectionCard
         v-for="g in routeGroups"
         :key="g.category"
@@ -808,11 +824,11 @@ async function onRemoveDelegate(d: DelegateSetting): Promise<void> {
       @close="modalOpen = false"
     >
       <div class="grid gap-3">
+        <!-- 区分は全区分の説明を常時表示して確認しながら選択（改修依頼 2026-08-18。文言 SoT = WORKFLOW_CATEGORY_DESCRIPTIONS） -->
+        <UiFormField label="区分" required>
+          <UiRadioCards v-model="categoryModel" :options="categoryOptions" aria-label="区分" />
+        </UiFormField>
         <div class="grid gap-3 md:grid-cols-2">
-          <!-- 区分の説明は選択に追従してヒント表示（改善要望 2026-08-17。文言 SoT = WORKFLOW_CATEGORY_DESCRIPTIONS） -->
-          <UiFormField label="区分" required :hint="WORKFLOW_CATEGORY_DESCRIPTIONS[form.category]">
-            <UiSelect v-model="categoryModel" :options="categoryOptions" aria-label="区分" class="!w-full" />
-          </UiFormField>
           <UiFormField label="金額（円）" required hint="金額で承認経路が変わります">
             <input v-model.number="form.amount" type="number" min="0" step="1000" class="input num text-right" aria-label="金額">
           </UiFormField>

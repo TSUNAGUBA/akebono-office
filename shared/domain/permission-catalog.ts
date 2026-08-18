@@ -85,10 +85,69 @@ export const FIELD_CATALOG: Record<string, { value: string; label: string }[]> =
   ],
 }
 
+/**
+ * タブメニュー単位の権限カタログ（改修依頼 2026-08-18: メニュー（ページ）＞タブメニューの階層制御）。
+ * ここに載せたページのタブは、権限表で `tab:<key>` の擬似フィールドとして利用可否を制御できる
+ * （既定 allow・機能全体〔field=null〕のルールへフォールバック = 項目と同型）。
+ * - 管理者限定タブ（稟議の全件/経路設定・シフトの調整/募集期間）はロールガードが基底で、
+ *   権限ルールは deny 方向にのみ働く（allow で非管理者へ開放はできない = 制限レイヤの原則）。
+ * - 勤怠（attendance）のタブは既存の専用擬似フィールド（timecard-all）が担うため本カタログの対象外。
+ * - inbox のカテゴリタブは通知タブ設定（useNotificationTabs）が担うため対象外。
+ */
+export const TAB_PERMISSION_CATALOG: Record<string, { key: string; label: string }[]> = {
+  reports: [
+    { key: 'mine', label: '自分の日報' },
+    { key: 'weekly-mine', label: '自分の週報' },
+    { key: 'all', label: '全員の日報' },
+    { key: 'weekly-all', label: '全員の週報' },
+    { key: 'team', label: 'チーム' },
+  ],
+  workflow: [
+    { key: 'mine', label: '自分の申請' },
+    { key: 'pending', label: '承認待ち' },
+    { key: 'all', label: '全件' },
+    { key: 'routes', label: '経路設定' },
+  ],
+  improvements: [
+    { key: 'inbox', label: '受付箱' },
+    { key: 'items', label: '改修案件' },
+    { key: 'kanban', label: 'カンバン' },
+    { key: 'gantt', label: 'ガントチャート' },
+  ],
+  shift: [
+    { key: 'confirmed', label: '確定シフト' },
+    { key: 'wish', label: '希望提出' },
+    { key: 'adjust', label: '調整' },
+    { key: 'periods', label: '募集期間' },
+  ],
+}
+
+/** タブキーの論理名（カタログ外はキーをそのまま表示） */
+export function tabLabel(feature: string, tabKey: string): string {
+  return TAB_PERMISSION_CATALOG[feature]?.find(t => t.key === tabKey)?.label ?? tabKey
+}
+
 /** 項目キーの論理名（カタログ外 = 過去に手入力された物理名などはそのまま表示） */
 export function fieldLabel(resource: string, field: string | null | undefined): string {
   if (!field) return ''
   if (field === 'ai-scope') return 'AI 参照範囲' // バッチ7g の擬似フィールド（shared AI_SCOPE_FIELD）
   if (field === 'timecard-all') return '全員のタイムカードの参照' // 2026-07-22 の擬似フィールド（shared TIMECARD_ALL_FIELD）
+  // タブ利用可否の擬似フィールド（tab:<key> = 改修依頼 2026-08-18）
+  if (field.startsWith('tab:')) return `タブ: ${tabLabel(resource, field.slice('tab:'.length))}`
+  // 項目の更新権限の擬似フィールド（<item>:write = 改修依頼 2026-08-18。参照/更新の階層）
+  if (field.endsWith(':write')) {
+    const base = field.slice(0, -':write'.length)
+    return `${FIELD_CATALOG[resource]?.find(f => f.value === base)?.label ?? base}（更新）`
+  }
+  // AI 参照対象の擬似フィールド（ai-scope:<対象> = 改修依頼 2026-08-18。「AIの参照範囲」タブで設定）
+  if (field.startsWith('ai-scope:')) {
+    const target = field.slice('ai-scope:'.length)
+    if (target === '*') return 'AI参照対象: 全メンバー（一括既定）'
+    const [kind, ...rest] = target.split(':')
+    const id = rest.join(':')
+    const kindLabel = kind === 'role' ? 'ロール' : kind === 'title' ? '役職' : kind === 'member' ? '個人' : kind
+    const roleLabel = id === 'admin' ? '管理者' : id === 'hr' ? '人事' : id === 'member' ? '一般' : id
+    return `AI参照対象: ${kindLabel}=${kind === 'role' ? roleLabel : id}`
+  }
   return FIELD_CATALOG[resource]?.find(f => f.value === field)?.label ?? field
 }

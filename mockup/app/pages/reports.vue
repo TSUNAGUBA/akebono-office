@@ -53,19 +53,23 @@ function daysOfMonth(ym: string): string[] {
 // ---------- タブ ----------
 
 const TAB_KEYS = ['mine', 'weekly-mine', 'all', 'weekly-all', 'team'] as const
-const tabs = computed<TabItem[]>(() => [
+// タブ利用可否（権限表の `tab:<key>` 擬似フィールド = 改修依頼 2026-08-18。既定 = 全タブ利用可）
+const { canTab } = usePermissions()
+const tabs = computed<TabItem[]>(() => ([
   { key: 'mine', label: '自分の日報' },
   { key: 'weekly-mine', label: '自分の週報' },
   { key: 'all', label: '全員の日報' },
   { key: 'weekly-all', label: '全員の週報' },
   { key: 'team', label: 'チーム' },
-])
+] as TabItem[]).filter(t => canTab('reports', t.key)))
 // 旧タブキーのリンク互換（?tab=weekly = 旧・週報タブ → 自分の週報）
 const queryTabRaw = typeof route.query.tab === 'string' ? route.query.tab : ''
 const queryTab = queryTabRaw === 'weekly' ? 'weekly-mine' : queryTabRaw
 const tab = ref<string>((TAB_KEYS as readonly string[]).includes(queryTab) ? queryTab : 'mine')
 watchEffect(() => {
-  if (!tabs.value.some(t => t.key === tab.value)) tab.value = 'mine'
+  // 権限で消えたタブ・無効キーは先頭の利用可能タブへ退避。全タブ deny の場合は空値にして
+  // どのタブ内容も描画しない（フェイルクローズ = R1 レビュー反映）
+  if (!tabs.value.some(t => t.key === tab.value)) tab.value = tabs.value[0]?.key ?? ''
 })
 
 // ---------- 共通ヘルパー ----------
@@ -1061,6 +1065,8 @@ async function onMarkUnreadWeekly(): Promise<void> {
     <UiPageHeader title="日報・週報" description="日々の活動報告と週次のふりかえり。AI 社員の日次報告も同じタイムラインに届きます" />
 
     <UiTabBar v-model="tab" :tabs="tabs" class="mb-3" />
+    <!-- 全タブ deny 時の空状態（タブ内容は tab='' のためどれも描画されない = フェイルクローズ） -->
+    <p v-if="tabs.length === 0" class="card p-6 text-center text-[13px] text-sub">利用できるタブがありません（権限設定で制限されています。管理者にお問い合わせください）</p>
 
     <!-- ================= 自分の日報 ================= -->
     <div v-if="tab === 'mine'" class="grid gap-3">
@@ -1164,7 +1170,8 @@ async function onMarkUnreadWeekly(): Promise<void> {
       <!-- 月ビュー（横スクロール）: 1日〜末日を横一列で表示 -->
       <UiSectionCard v-else-if="mineMonthView === 'scroll'" :title="`月の提出状況（${Number(mineMonth.slice(0, 4))}年${Number(mineMonth.slice(5, 7))}月）`">
         <div class="overflow-x-auto scroll-slim">
-          <div class="flex w-max gap-1 pb-1">
+          <!-- py-1: 選択中セルの ring-2 が overflow-x-auto で上下にクリップされないよう逃げ余白を確保（改修依頼 2026-08-18） -->
+          <div class="flex w-max gap-1 py-1">
             <button
               v-for="d in mineMonthDays"
               :key="d"
@@ -1523,12 +1530,12 @@ async function onMarkUnreadWeekly(): Promise<void> {
           <div class="grid gap-3 md:grid-cols-2">
             <UiFormField label="本日の所感">
               <div v-if="dailyMdPreview" class="min-h-[72px] rounded-lg border border-line p-2.5"><UiMarkdown :source="editReflection" /></div>
-              <textarea v-else v-model="editReflection" class="textarea" placeholder="今日のふりかえり" />
+              <textarea v-else v-model="editReflection" class="textarea" placeholder="例）商品ページの改善を予定通り完了。レビューで出た修正点も反映できた。" />
             </UiFormField>
             <UiFormField label="本日の課題">
               <div class="grid gap-1.5">
                 <div v-if="dailyMdPreview" class="min-h-[72px] rounded-lg border border-line p-2.5"><UiMarkdown :source="editIssues" /></div>
-                <textarea v-else v-model="editIssues" class="textarea" placeholder="困っていること・ブロッカー" />
+                <textarea v-else v-model="editIssues" class="textarea" placeholder="例）商品データの更新に手作業が多く、想定より時間がかかった。" />
                 <UiSelect
                   v-model="editIssueCategory"
                   :options="issueCategoryOptions"
@@ -1547,7 +1554,7 @@ async function onMarkUnreadWeekly(): Promise<void> {
             <textarea
               v-model="poipoiDraft"
               class="textarea"
-              placeholder="思いついたこと・気づき・改善アイデアを投げ込む"
+              placeholder="例）商品データの更新を自動化できると効果的！"
               aria-label="改善のタネ"
             />
           </UiFormField>
@@ -2079,7 +2086,7 @@ async function onMarkUnreadWeekly(): Promise<void> {
           <div class="grid gap-3 md:grid-cols-2">
             <UiFormField label="今週の成果・達成感">
               <div v-if="wkMdPreview" class="min-h-[72px] rounded-lg border border-line p-2.5"><UiMarkdown :source="wkGoal" /></div>
-              <textarea v-else v-model="wkGoal" class="textarea" placeholder="例）顧客マスタの登録作業を完了。想定より確認作業に時間がかかり、達成度は80％" />
+              <textarea v-else v-model="wkGoal" class="textarea" placeholder="例）顧客マスタの登録作業を完了することができた。" />
             </UiFormField>
             <UiFormField label="今週の主要業務" required>
               <div v-if="wkMdPreview" class="min-h-[72px] rounded-lg border border-line p-2.5"><UiMarkdown :source="wkMain" /></div>
@@ -2087,15 +2094,15 @@ async function onMarkUnreadWeekly(): Promise<void> {
             </UiFormField>
             <UiFormField label="今週の課題・原因仮説">
               <div v-if="wkMdPreview" class="min-h-[72px] rounded-lg border border-line p-2.5"><UiMarkdown :source="wkIssues" /></div>
-              <textarea v-else v-model="wkIssues" class="textarea" placeholder="課題と、その原因と考えられること" />
+              <textarea v-else v-model="wkIssues" class="textarea" placeholder="例）マスタ設定の確認に時間がかかった。設定手順が複数箇所に分散していることが原因だと思う。" />
             </UiFormField>
             <UiFormField label="今週うまくいったこと・続けたいこと">
               <div v-if="wkMdPreview" class="min-h-[72px] rounded-lg border border-line p-2.5"><UiMarkdown :source="wkGoodPoints" /></div>
-              <textarea v-else v-model="wkGoodPoints" class="textarea" placeholder="今週うまくいったこと・来週も続けたいこと" />
+              <textarea v-else v-model="wkGoodPoints" class="textarea" placeholder="例）作業前に確認項目を一覧化したことで、入力ミスを減らせた。今後も作業開始前にチェックリストを作成する。" />
             </UiFormField>
             <UiFormField label="来週の最重要テーマ（最大3つ）">
               <div v-if="wkMdPreview" class="min-h-[72px] rounded-lg border border-line p-2.5"><UiMarkdown :source="wkNext" /></div>
-              <textarea v-else v-model="wkNext" class="textarea" placeholder="来週の最重要テーマ（最大 3 つ）" />
+              <textarea v-else v-model="wkNext" class="textarea" placeholder="例）クライアントのシステム稼働に向けた事前準備。主観で進めないようにメンバーとも壁打ちをしながら実施する。" />
             </UiFormField>
           </div>
 

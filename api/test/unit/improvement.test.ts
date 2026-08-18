@@ -19,9 +19,11 @@ import {
   improvementLinksError,
   improvementNoteError,
   IMPROVEMENT_STATUS_NEXT,
+  isInternalPagePath,
   matchesImprovementFilter,
   IMPROVEMENT_REQUEST_TAG_META,
   normalizeClusterPlan,
+  normalizeImprovementPagePath,
   normalizeImprovementImages,
   normalizeImprovementLinks,
   normalizeImprovementTags,
@@ -45,6 +47,16 @@ describe('canTransition / IMPROVEMENT_STATUS_NEXT', () => {
   it('解決済み → 対応する（reopen）が可能（取消可能性 = 原則9.5）', () => {
     expect(canTransition('resolved', 'accepted')).toBe(true)
   })
+  it('対応中（in_progress）の遷移（改修依頼 2026-08-18）: 対応する ⇄ 対応中 → 解決済み。直行も許可（原則7）', () => {
+    expect(IMPROVEMENT_STATUS_NEXT.accepted).toEqual(['in_progress', 'resolved', 'rejected', 'triage'])
+    expect(IMPROVEMENT_STATUS_NEXT.in_progress).toEqual(['resolved', 'accepted', 'rejected'])
+    expect(canTransition('accepted', 'in_progress')).toBe(true)
+    expect(canTransition('in_progress', 'resolved')).toBe(true)
+    expect(canTransition('in_progress', 'accepted')).toBe(true) // 着手の取消（差し戻し = 原則9.5）
+    expect(canTransition('accepted', 'resolved')).toBe(true) // 従来の直行も維持（下位互換 = 原則7）
+    expect(canTransition('triage', 'in_progress')).toBe(false) // 未判定からの直接着手は不可（判定を経る）
+    expect(canTransition('resolved', 'in_progress')).toBe(false)
+  })
 })
 
 describe('matchesImprovementFilter', () => {
@@ -58,6 +70,13 @@ describe('matchesImprovementFilter', () => {
     expect(matchesImprovementFilter('rejected', 'all')).toBe(true)
     expect(matchesImprovementFilter('resolved', 'resolved')).toBe(true)
     expect(matchesImprovementFilter('resolved', 'rejected')).toBe(false)
+  })
+  it('対応中は未解決（open）・committed = 対応する + 対応中（改修依頼 2026-08-18）', () => {
+    expect(matchesImprovementFilter('in_progress', 'open')).toBe(true)
+    expect(matchesImprovementFilter('accepted', 'committed')).toBe(true)
+    expect(matchesImprovementFilter('in_progress', 'committed')).toBe(true)
+    expect(matchesImprovementFilter('triage', 'committed')).toBe(false)
+    expect(matchesImprovementFilter('resolved', 'committed')).toBe(false)
   })
 })
 
@@ -361,5 +380,26 @@ describe('improvementRequestInputOf', () => {
     expect(code).toBe('AKO-REQ-009')
     try { improvementRequestInputOf({ body: 'x', images: [{ dataUrl: 'data:text/html;base64,PGI+' }] }) } catch (e) { code = (e as { code?: string }).code ?? '' }
     expect(code).toBe('AKO-REQ-010')
+  })
+})
+
+describe('normalizeImprovementPagePath / isInternalPagePath（F-42-20 の対象ページリンク化に伴う防御）', () => {
+  it('アプリ内パスのみ保持する', () => {
+    expect(normalizeImprovementPagePath('/akebono/sales')).toBe('/akebono/sales')
+    expect(normalizeImprovementPagePath('  /shift  ')).toBe('/shift')
+    expect(isInternalPagePath('/masters/members')).toBe(true)
+  })
+  it('プロトコル相対 URL・バックスラッシュ・空白入りは落とす（外部誘導リンクの防止 = R1 監査）', () => {
+    expect(normalizeImprovementPagePath('//evil.example')).toBe('')
+    expect(normalizeImprovementPagePath('/\\evil.example')).toBe('')
+    expect(normalizeImprovementPagePath('/a b')).toBe('')
+    expect(normalizeImprovementPagePath('https://evil.example')).toBe('')
+    expect(normalizeImprovementPagePath('javascript:alert(1)')).toBe('')
+    expect(isInternalPagePath('//evil.example')).toBe(false)
+  })
+  it("'' と非文字列は ''（全体/新設ページ扱い = 下位互換）", () => {
+    expect(normalizeImprovementPagePath('')).toBe('')
+    expect(normalizeImprovementPagePath(null)).toBe('')
+    expect(normalizeImprovementPagePath(undefined)).toBe('')
   })
 })

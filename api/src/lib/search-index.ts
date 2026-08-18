@@ -288,7 +288,7 @@ export async function buildSearchDocs(pool: pg.Pool): Promise<SearchDocInput[]> 
   }
 
   // ---- 顧客活動（旧「顧客ログ」。本人スコープ = 記録者のみ AI が参照。オペレーター指示 2026-07-30） ----
-  // owner_member_id = 記録者にすることで searchDocsFor は「本人の記録のみ」を返す（allOwners は note 限定 =
+  // owner_member_id = 記録者にすることで searchDocsFor は「本人の記録のみ」を返す（noteOwnerIds は note 限定 =
   // 他メンバーの顧客活動は AI 文脈へ供給しない安全側の既定。一覧 UI の全員閲覧化〔改修依頼 2026-08-18〕とは
   // 別軸で、AI 参照範囲は従来どおり本人スコープを維持する = 設計判断）
   const { rows: clogRows } = await pool.query<{
@@ -484,12 +484,15 @@ export interface SearchHit {
 
 /**
  * 質問に関連する検索ドキュメントの上位 K 件（字句 + 埋め込みのハイブリッド。埋め込み無効時は字句のみ）。
- * allOwners = true で本人スコープ（owner_member_id）の絞り込みを外す
- * （ぽいぽいポストの AI 参照範囲 'all' = 他メンバーの投稿も参照。バッチ7g・オペレーター指示 2026-07-19 #8）。
+ * noteOwnerIds = 本人以外に参照してよいぽいぽいポスト登録者の memberId（AI 参照範囲。
+ * 改修依頼 2026-08-18 で「全員 or 本人のみ」の二値から登録者単位の許可リストへ拡張。
+ * 呼び出し側が aiAllowedOwnerIds〔shared/domain/permissions〕で解決して渡す。空 = 本人のみ = 従来の 'own'。
+ * 許可リストは在籍メンバー由来のため、無効化済み（退職）メンバーのポストは本人以外へ供給されない =
+ * 旧 allOwners=true との意図的な差分〔安全側〕）。
  * owner_member_id を持つのは source_kind = 'note'（ぽいぽいポスト）と 'customer-log'（顧客活動）。
- * **allOwners が広げるのは 'note' のみ**（下の SQL の `AND source_kind = 'note'`）。顧客活動は常に本人スコープで、
+ * **noteOwnerIds が広げるのは 'note' のみ**（下の SQL の `AND source_kind = 'note'`）。顧客活動は常に本人スコープで、
  * どの ai-scope 設定でも他メンバーへは広がらない（安全側の意図的な制約）。
- * owner 付きの新種別をこの `allOwners` 分岐へ**追加しないこと**（追加すると他メンバーのデータが漏れる）。
+ * owner 付きの新種別をこの `noteOwnerIds` 分岐へ**追加しないこと**（追加すると他メンバーのデータが漏れる）。
  */
 export async function searchDocsFor(
   pool: pg.Pool,
@@ -497,7 +500,7 @@ export async function searchDocsFor(
   question: string,
   forMemberId: string,
   limit = 4,
-  allOwners = false,
+  noteOwnerIds: string[] = [],
 ): Promise<SearchHit[]> {
   const { rows } = await pool.query<{
     sourceKind: SearchDocInput['sourceKind']; sourceId: string; title: string
@@ -507,8 +510,9 @@ export async function searchDocsFor(
     `SELECT source_kind AS "sourceKind", source_id AS "sourceId", title, aliases, body, segments, embedding,
             owner_member_id AS "ownerMemberId", links
      FROM search_docs
-     WHERE owner_member_id IS NULL OR owner_member_id = $1 OR ($2::boolean AND source_kind = 'note')
-     ORDER BY id LIMIT 3000`, [forMemberId, allOwners])
+     WHERE owner_member_id IS NULL OR owner_member_id = $1
+        OR (source_kind = 'note' AND owner_member_id = ANY($2::text[]))
+     ORDER BY id LIMIT 3000`, [forMemberId, noteOwnerIds])
   // 全件を都度メモリへ載せる設計は SME 規模（〜数千件）前提。上限超過時も ORDER BY id で
   // 決定的な部分集合になる。件数がこの規模を超える場合は pgvector 等への移行を検討する
   if (rows.length === 0) return []

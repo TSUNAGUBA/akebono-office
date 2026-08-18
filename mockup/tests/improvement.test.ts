@@ -9,7 +9,7 @@ import {
   buildCodingPrompt, buildUnclusterNoteBody, canTransition, clusterTargetRequests, heuristicClusterRequests,
   IMPROVEMENT_REQUEST_ADOPTION_META, IMPROVEMENT_REQUEST_TAG_META, IMPROVEMENT_STATUS_META,
   improvementCommentError, improvementImagesError, improvementLinksError,
-  matchesImprovementFilter, normalizeImprovementLinks, normalizeImprovementTags, planAdoptionBulk, requestAdoptionOf,
+  matchesImprovementFilter, normalizeImprovementLinks, normalizeImprovementTags, planAdoptionBulk, PROMPT_NAVIGATOR_PREAMBLE, requestAdoptionOf,
   improvementAdoptionError,
   improvementEditError,
   improvementUnclusterError,
@@ -68,12 +68,22 @@ describe('集約・ステータス・プロンプト（純ロジック）', () =
     expect(matchesImprovementFilter('triage', 'open')).toBe(true)
     expect(matchesImprovementFilter('resolved', 'open')).toBe(false)
   })
-  it('ガント既定フィルタ（accepted = 実装が決まっていて未完了）は accepted のみ選ぶ', () => {
-    // ImprovementsGantt は既定 statusFilter='accepted' でこの判定を使う（実装決定・未完了だけを初期表示）
-    expect(matchesImprovementFilter('accepted', 'accepted')).toBe(true)
-    expect(matchesImprovementFilter('triage', 'accepted')).toBe(false)
-    expect(matchesImprovementFilter('resolved', 'accepted')).toBe(false)
-    expect(matchesImprovementFilter('rejected', 'accepted')).toBe(false)
+  it('ガント既定フィルタ（committed = 実装が決まっていて未完了 = 対応する + 対応中。2026-08-18）', () => {
+    // ImprovementsGantt は既定 statusFilter='committed' でこの判定を使う（実装決定・未完了だけを初期表示。
+    // 対応中の追加で accepted 単独から拡張 = 着手した案件がガントから消えない）
+    expect(matchesImprovementFilter('accepted', 'committed')).toBe(true)
+    expect(matchesImprovementFilter('in_progress', 'committed')).toBe(true)
+    expect(matchesImprovementFilter('triage', 'committed')).toBe(false)
+    expect(matchesImprovementFilter('resolved', 'committed')).toBe(false)
+    expect(matchesImprovementFilter('rejected', 'committed')).toBe(false)
+  })
+  it('対応中（in_progress）の遷移と表示メタ（改修依頼 2026-08-18）', () => {
+    expect(canTransition('accepted', 'in_progress')).toBe(true)
+    expect(canTransition('in_progress', 'resolved')).toBe(true)
+    expect(canTransition('in_progress', 'accepted')).toBe(true) // 着手の取消 = 原則9.5
+    expect(canTransition('triage', 'in_progress')).toBe(false)
+    expect(IMPROVEMENT_STATUS_META.in_progress.label).toBe('対応中')
+    expect(IMPROVEMENT_STATUS_META.in_progress.open).toBe(true)
   })
   it('ステータスメタの tone は UI Tone と対応（neutral/info/ok/warn）', () => {
     expect(IMPROVEMENT_STATUS_META.triage.tone).toBe('neutral')
@@ -86,6 +96,16 @@ describe('集約・ステータス・プロンプト（純ロジック）', () =
     }])
     expect(prompt).toContain('/a')
     expect(prompt).toContain('直したい')
+  })
+  it('プロンプト冒頭にナビゲーター定型文が必ず入る（改修依頼 2026-08-18）', () => {
+    const prompt = buildCodingPrompt([{
+      title: 't', summary: 's', detail: 'd', status: 'accepted', pagePaths: ['/a'], requests: [],
+    }])
+    expect(prompt.startsWith(PROMPT_NAVIGATOR_PREAMBLE)).toBe(true)
+    expect(prompt).toContain('あなたはナビゲーターです。')
+    expect(prompt).toContain('改修後は指摘事項がなくなるまでコードレビューとシステム監査を繰り返してください。')
+    // 定型文の後に区切りと従来の見出しが続く（冒頭 = 見出しより前）
+    expect(prompt.indexOf('あなたはナビゲーターです。')).toBeLessThan(prompt.indexOf('# 改善要望に基づく改修依頼'))
   })
   it('要望の添付（参考リンク・画像件数）がプロンプトに加味される（2026-08-17）', () => {
     const prompt = buildCodingPrompt([{

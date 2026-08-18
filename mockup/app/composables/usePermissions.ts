@@ -8,8 +8,10 @@
  * 既定は allow（ルール未設定なら挙動不変）。既存のロールガードを緩めることはできない（制限レイヤ）。
  */
 import {
+  canEditField as canEditFieldShared,
   canManageImprovements as canManageImprovementsShared,
-  canUseFeature, canViewAllTimecards as canViewAllTimecardsShared,
+  canUseFeature, canUseTab as canUseTabShared,
+  canViewAllTimecards as canViewAllTimecardsShared,
   canViewField,
   canViewMemberReports as canViewMemberReportsShared,
   canViewMemberTaskPlans as canViewMemberTaskPlansShared,
@@ -51,6 +53,16 @@ export function usePermissions() {
     return canViewField(rules.value, subject.value, resource, field)
   }
 
+  /** ページ内タブの利用可否（`tab:<key>` 擬似フィールド。既定 allow・改修依頼 2026-08-18） */
+  function canTab(feature: string, tabKey: string): boolean {
+    return canUseTabShared(rules.value, subject.value, feature, tabKey)
+  }
+
+  /** 項目の更新可否（参照＞更新の階層。`<項目>:write` 擬似フィールド・改修依頼 2026-08-18） */
+  function canEditField(resource: string, field: string): boolean {
+    return canEditFieldShared(rules.value, subject.value, resource, field)
+  }
+
   /** 対象メンバーの日報を参照できるか（F-16-6・バッチ7h。自分は常に可・未設定 = 可） */
   function canViewMemberReports(targetMemberId: string): boolean {
     return canViewMemberReportsShared(rules.value, subject.value, targetMemberId)
@@ -69,7 +81,7 @@ export function usePermissions() {
     canViewAllTimecardsShared(rules.value, subject.value))
 
   return {
-    can, canPath, canField, canViewMemberReports, canViewMemberTaskPlans,
+    can, canPath, canField, canTab, canEditField, canViewMemberReports, canViewMemberTaskPlans,
     canViewAllTimecards, canManageImprovements,
   }
 }

@@ -15,7 +15,7 @@ import type { Env } from '../env'
 import { audit } from '../lib/audit'
 import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
-import { clearPermissionCache, stripMasterFields } from '../lib/permissions'
+import { clearPermissionCache, stripMasterFields, stripMasterWriteKeys } from '../lib/permissions'
 import { scheduleSearchRebuild, SEARCH_RELEVANT_ENTITIES } from '../lib/search-index'
 import { camelToSnake, MASTERS, rowToCamel, type MasterEntity } from '../masters/registry'
 
@@ -211,9 +211,12 @@ export function mastersRoutes(pool: pg.Pool, env: Env): Hono {
     // そのまま UPDATE すると部分更新のつもりが未指定列を既定値で上書きしてしまう
     // （実障害: 部署配属 {departmentId} で members.email が空・role が member に巻き戻った）。
     // リクエスト body に実際に含まれるキーのみを更新対象にする。
-    const body = Object.fromEntries(
+    const requested = Object.fromEntries(
       Object.entries(parsed.data as Record<string, unknown>).filter(([k]) => Object.hasOwn(raw, k)))
-    if (Object.keys(body).length === 0) throw err('AKO-GEN-001', '更新内容がありません', 400)
+    if (Object.keys(requested).length === 0) throw err('AKO-GEN-001', '更新内容がありません', 400)
+    // 項目の更新権限（`<項目>:write` deny・参照 deny の項目は更新不可 = 改修依頼 2026-08-18）。
+    // 全キーが更新不可なら AKO-PRM-003 403。一部のみ不可なら残りを更新する（原則4）
+    const body = await stripMasterWriteKeys(pool, user, entity, requested)
 
     if (entity === 'leave-types') await leaveTypeStatutoryGuard(pool, id)
     if (entity === 'departments' && 'parentId' in body) {

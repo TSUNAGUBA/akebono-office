@@ -3265,3 +3265,112 @@
   サーバーページング化を検討する（現行スケールでは問題なし = R1 監査 n-2）
 - 活動記録 3 種はヘッダークイックアクセス候補（QUICK_ACCESS_CATALOG）未登録（要件外のため見送り。
   利用頻度が上がったら候補へ追加する = R1 監査 n-3）
+
+## 87. 改修依頼 2026-08-18 第 2 弾（8 件 = プロンプト定型文・対応中・権限拡張・稟議区分UI・受付箱添付・placeholder・青枠修正・プロンプト対象固定）の完了条件（Definition of Done）
+
+**要件（改修単位 8 件）:** ①改修プロンプトの冒頭にナビゲーター定型文を必ず記載 ②カンバンに「対応中」ステータス
+（「対応する」と「解決済み」の間）③権限設定の拡張 = メニュー（ページ）＞タブメニュー＞項目＞参照/更新の階層制御 +
+タブメニュー「AIの参照範囲」新設（F-16-8/9/10）④稟議「区分」を説明文を確認しながら選択できる UI へ ⑤改善要望
+受付箱でリンク・添付画像を直接確認（画像押下で拡大・対象ページへのリンクで遷移）⑥日報 3 項目・週報 4 項目の
+placeholder を指定の例文へ ⑦日報月横スクロールの選択中青枠の上部欠け修正 ⑧「改修プロンプトを出力」の対象を
+「対応する」のみに（未判定を除外）。
+
+### 87-1 プロンプト定型文 + 出力対象の固定（①⑧ = F-42-5 改訂）
+- [x] `PROMPT_NAVIGATOR_PREAMBLE`（あなたはナビゲーターです。／最適なロールを…／改修後は指摘事項がなくなるまで…）を
+  shared/domain/improvement.ts に定義し、`buildCodingPrompt` の冒頭（見出しの前・`---` 区切り付き）で必ず出力
+- [x] 出力対象 = accepted（対応する）に固定: UI はフィルター選択を撤去して説明文 + 「対応する」バッジ表示、
+  API `POST /v1/improvements/prompt` の filter 既定を 'open' → 'accepted'（filter 指定は下位互換で受理）
+
+### 87-2 「対応中」ステータス（② = F-42-3/4/7/9 改訂）
+- [x] shared: ImprovementStatus に `in_progress`（label 対応中・tone brand・open 扱い）。遷移 = accepted →
+  in_progress →（resolved/rejected）・accepted ⇄ in_progress の往復可（原則9.5）。フィルタに `committed`
+  （対応する・対応中）と `in_progress` を追加
+- [x] DB: migration 0068（improvement_items_status_check の CHECK 差替 = 既存 4 値は不変・冪等 = 原則2/7）
+- [x] UI: カンバン 5 列目・サマリーカード 6 枚（lg 6 列）・ガント bg-info バー + 既定フィルタ committed
+  （2026-08-12 指示「実装決定・未完了」の意図を維持）・一覧チップ。モックシードに in_progress のデモ 1 件
+  （SEED_VERSION 24）
+
+### 87-3 権限設定の拡張（③ = F-16-8/9/10 新設）
+- [x] shared/domain/permissions: `canUseTab`（`tab:<key>`・既定 allow・機能全体へフォールバック）・
+  `canEditField`/`stripDeniedWriteKeys`（`<項目>:write`・**参照＞更新** = 参照 deny は更新も不可）・
+  `canAiReferenceOwner`/`aiAllowedOwnerIds`（`ai-scope:<対象>`・既定 = 権限表の参照権限・レガシー二値
+  `ai-scope` はフォールバックで互換維持・本人は常に参照可）。permission-catalog に TAB_PERMISSION_CATALOG
+  （reports/workflow/improvements/shift）+ tabLabel + fieldLabel の擬似フィールド対応。スキーマ・migration 不要
+  （全て permission_rules.field の予約形式 = 下位互換）
+- [x] API enforcement: masters PATCH の write 剥がし（全キー不可 = AKO-PRM-003 403 起番・一部不可は残りを更新 =
+  原則4）。chatbot 文脈供給を登録者単位へ（勤怠チームサマリー・チームのタスク計画・他メンバー日報・ぽいぽい
+  検索リトリーバル = `searchDocsFor` を allOwners boolean → noteOwnerIds 配列へ変更。旧 aiReferenceScope 依存を置換）
+- [x] UI: 権限表に タブ行（利用可/不可）+ 項目の更新行（更新可/不可・参照不可時は操作不可 + 理由ツールチップ =
+  表示が実挙動）を追加（行ツリーを最大 4 階層へ）。権限設定に「AIの参照範囲」タブ新設（MastersAiScopeMatrix =
+  データ種類 × 参照者 × 登録者。参照可/参照不可/既定の三値循環・既定へ戻す = 論理削除 = 原則9.5・本人セル保護）。
+  ルール一覧の新擬似フィールドの論理名・語彙（利用可/更新可/参照可）対応
+- [x] ページ側タブガード: reports/workflow/improvements/shift の tabs を canTab でフィルタ + 直打ち・deny 化は
+  先頭の利用可能タブへ退避（watchEffect）
+- [x] enforcement の整理（設計判断の文書化）: タブ = フロント（画面整理の単位。/v1/media トグルと同じ整理）・
+  更新 = API（表示項目の剥がしと対称）・AI 参照対象 = チャットボット文脈供給
+
+### 87-4 稟議区分 UI・受付箱の添付・placeholder・青枠（④⑤⑥⑦）
+- [x] ④ `UiRadioCards` 新設（radiogroup/radio + aria-checked・sm 2 列・min-h-44px = 部品表へ追加）。稟議の区分を
+  説明文併記のカード型ラジオへ（WORKFLOW_CATEGORY_DESCRIPTIONS を並記・旧「選択中のみヒント表示」を置換）
+- [x] ⑤ 受付箱一覧に「添付」列（ImprovementsAttachmentList = リンク + サムネイル・@click.stop で行クリックと分離・
+  画像押下で拡大 = 既存ビューア再利用・表示ページ分のみ遅延ロード）。対象ページを NuxtLink 化（先頭 `/` の
+  実ページのみ。受付箱一覧・要望ドロワーヘッダ・改修単位ドロワーの元要望カード = F-42-20）
+- [x] ⑥ 日報 3 項目（本日の所感・本日の課題・改善のタネ）+ 週報 4 項目の placeholder を指定の例文へ（7 箇所）
+- [x] ⑦ 月・横スクロールの選択日ボタン `pb-1` → `py-1`（ring の上端欠け解消）
+
+### 87-5 検証・ドキュメント
+- [x] shared/api 単体 392（+ improvement 遷移/committed/preamble/pagePath 正規化・permission-extensions 27）・
+  統合 275（+ masters write 剥がし 2・AI 参照対象 3・prompt 既定 1。チーム勤怠見出しの改名追随）・
+  mockup 単体 353・両 typecheck・両 build green
+- [x] E2E: `e2e/batch2-e2e.cjs` 新設（モックモード 25 チェック = 対応中・プロンプト定型文/対象固定・
+  権限表のタブ/更新行・AIの参照範囲の三値循環・稟議区分カード・受付箱の添付列/ページリンク・
+  日報 placeholder・モバイル 375px の横スクロールなし）。`run-batch6b-stack.sh` へ登録
+- [x] docs（原則5）: functional-requirements（F-16-8/9/10・F-42-3/4/5/7/9/20・F-07-1）・data-design
+  （PermissionRule 擬似フィールド 3 種・improvement_items in_progress）・api-design（AKO-PRM-003 台帳・
+  masters PATCH・prompt 既定・usePermissions 行）・screen-design（5.8 新設・/workflow・/reports・/improvements・
+  ガント/カンバン）・implementation-status §87・CONVENTIONS.md（UiRadioCards 部品表）
+
+### 87-6 反復レビュー（原則9 = SP-8）
+- [x] R1 = 独立ロール 2 体（コードレビュアー + システム監査官）の並行レビュー。
+  **コード MAJOR 1 + 監査 MAJOR 1 + MINOR 5 + NIT 4 → 全件対応**:
+  ①（監査 MAJOR）受付箱の対象ページリンクにプロトコル相対 URL（`//host`）が通り外部誘導リンクになり得る →
+  shared `isInternalPagePath`/`normalizeImprovementPagePath` を新設し、登録（API/モック）と表示
+  （pageLinkOf = 旧データにも効く防御）の両方で遮断 + 単体テスト 3 本
+  ②（コード MAJOR）受付箱の添付先読みが完了メモのみで in-flight ガードがなく、ページ内 20 行の watch から
+  同一 API へ並列重複フェッチ → `useImprovements` に進行中 Promise の共有（itemId 別 Map + 未集約の単一スロット）を追加
+  ③（両 MINOR）全タブ deny 時に初期タブの内容が残るフェイルオープン → 4 ページとも退避先なしは `tab=''` で
+  内容非描画 + 「利用できるタブがありません」の空状態表示（フェイルクローズ）
+  ④（両 MINOR）退職（inactive）メンバーの登録データが AI 文脈から外れる挙動変更が未文書化 →
+  意図的な安全側の設計判断として chatbot.ts / search-index.ts / F-16-10 / AIの参照範囲タブ脚注に明記
+  ⑤（監査 MINOR）screen-design のサマリーカード「2→3→5 列」残存 → 6 列へ更新
+  ⑥（監査 MINOR）prompt の filter 省略既定にテストなし → 統合テスト 1 本追加（accepted のみ・open 下位互換）
+  ⑦（コード MINOR）権限表の更新セルは表示レイヤの参照不可で操作不可 = レイヤ跨ぎ設定の非対称 → 脚注に
+  「ルール一覧から設定可」を明記 ⑧（監査 NIT）タブ deny はデータ面の権限を変えない旨を権限表脚注へ追記
+  ⑨（監査 NIT）「登録者単位が優先」はレイヤ内の話である旨を AIの参照範囲タブ脚注で補強
+  ⑩（両 NIT）UiRadioCards に roving tabindex + 矢印キー移動（WAI-ARIA radio パターン）を実装
+  ⑪（監査 NIT）AIの参照範囲の行 = 登録者・列 = 参照者の配置は権限表（列 = 対象者）との UX 一貫性を
+  優先した設計判断として記録（依頼文言は「行 = 参照者」とも読める。転置が必要ならご指示ください）
+  ⑫（コード NIT）`usePermissions.canEditField` は現状フォーム未接続（下記残課題の宣言済み事項として記録）
+- [x] R2 = 再レビュー（両ロール）。**R1 対応③の修正不備 MAJOR 1（両ロールで一致）+ MINOR 3 + NIT 1 → 全件対応**:
+  ①（MAJOR）フェイルクローズが 4 ページ中 2 ページで実際には閉じていなかった（workflow = `tab !== 'routes'`
+  のフォールバック分岐で「自分の申請」一覧が描画・improvements = `v-else` で「改修案件」一覧が描画）→
+  タブ内容の分岐を全ページ「タブキーの明示指定のみ」へ（workflow = mine/pending/all の列挙 + routes 明示・
+  improvements = `v-else-if="tab === 'items'"`）。E2E に「全タブ deny → 空状態のみ・一覧/経路設定 非描画・
+  解除で復帰」の 3 チェックを追加（28 チェックへ）
+  ②（MINOR）リンク化規則の厳格化が F-42-20 / screen-design / api-design の旧記述（「先頭 `/` のみ」）のまま →
+  3 箇所へ isInternalPagePath / normalizeImprovementPagePath の仕様を明記
+  ③（MINOR）フェイルクローズ挙動の要件・画面設計への追記漏れ → F-16-8・screen-design 2 箇所へ明記
+  ④（MINOR）未集約の添付フェッチで応答に載らない stale 行（並行集約等）が逐次リフェッチのループになる →
+  要求元行の id も成功時にマークして収束させる（応答 = 未集約全件の正のため取りこぼしなし）
+  ⑤（NIT）AIの参照範囲タブ脚注の「既定値」がレイヤ内参照と読める → 「どのレイヤでも決まらない場合」へ修正
+- [x] R3 = R2 反映後の再確認（独立ロール）。R2 対応 5 件すべての正当性・4 ページのフェイルクローズの実効性・
+  E2E 28 チェックの実 PASS・退行なし（両単体 + typecheck green）を確認。検出は screen-design の
+  添付遅延ロード表現の同期漏れ NIT 1 件のみ → 修正案どおり反映（F-42-20 と同一表現へ）し、
+  **未解決の指摘ゼロで完了**
+
+**残課題（本改修で新設・未対応）:**
+- 項目の更新権限（F-16-9）の enforcement は API モードの masters PATCH のみ。モックモードのローカル書込と
+  マスタ編集フォームの項目単位 disable（UI 側の事前フィードバック）は未対応（表示項目の剥がしが API モード
+  のみで働く既存方針と対称の設計判断。フォーム側は権限表の設定が反映された結果 403/剥がしで気づける）
+- 「AIの参照範囲」タブの既定セル（破線）は「権限表の参照権限に従う」の表示に留まり、対象ごとの実効既定値
+  （参照可/不可）までは展開表示しない（ロール/役職行は登録者個人が静的に定まらないため。脚注で既定値を案内）

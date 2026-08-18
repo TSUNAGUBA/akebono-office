@@ -54,6 +54,7 @@ import {
   normalizeClusterPlan,
   normalizeImprovementImages,
   normalizeImprovementLinks,
+  normalizeImprovementPagePath,
   normalizeImprovementTags,
   type PromptItemInput,
 } from '../../../shared/domain/improvement'
@@ -129,7 +130,8 @@ export function improvementRequestInputOf(body: Record<string, unknown>): {
   if (imagesMsg) throw err('AKO-REQ-010', imagesMsg, 400)
   return {
     body: capCodePoints(text, IMPROVEMENT_BODY_CAP),
-    pagePath: capCodePoints(String(body.pagePath ?? '').trim(), IMPROVEMENT_PAGE_PATH_CAP),
+    // アプリ内パスのみ保持（'//host' 等は '' へ = 対象ページリンク化 F-42-20 に伴う防御。R1 監査 MAJOR-1）
+    pagePath: capCodePoints(normalizeImprovementPagePath(body.pagePath), IMPROVEMENT_PAGE_PATH_CAP),
     pageLabel: capCodePoints(String(body.pageLabel ?? '').trim(), IMPROVEMENT_PAGE_LABEL_CAP),
     links,
     images,
@@ -725,7 +727,9 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
   app.post('/prompt', async (c) => {
     await requireManage(c, pool)
     const body = await c.req.json().catch(() => ({})) as { filter?: unknown; includeArchived?: unknown }
-    const filter = (String(body.filter ?? 'open') as ImprovementFilter)
+    // 既定 = accepted（改修依頼 2026-08-18: プロンプト出力の対象は「対応する」のみ。未判定は含めない。
+    // filter パラメータ自体は下位互換のため維持 = 呼び出し側 UI は常に accepted を送る）
+    const filter = (String(body.filter ?? 'accepted') as ImprovementFilter)
     const { rows: itemRows } = await pool.query<{
       id: string; title: string; summary: string; detail: string;
       status: ImprovementStatus; pagePaths: string[]

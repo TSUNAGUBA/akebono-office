@@ -3597,7 +3597,7 @@ describe('バッチ7g: AI 参照範囲の権限化 + 週次 AI インサイト�
     // 当月の打刻を作る（チームサマリーの材料）
     await api('POST', '/v1/attendance/punches', { as: MEMBER, body: { kind: 'in' } })
     const before = await buildContext(pool, adminUser, '今月の労働時間は?', [])
-    expect(before).not.toContain('チーム全体の当月勤怠')
+    expect(before).not.toContain('チームの当月勤怠')
     const ruleRes = await api('POST', '/v1/masters/permission-rules', {
       as: ADMIN,
       body: { subjectKind: 'role', subjectId: 'admin', resource: 'attendance', field: 'ai-scope', effect: 'allow' },
@@ -3607,11 +3607,11 @@ describe('バッチ7g: AI 参照範囲の権限化 + 週次 AI インサイト�
     try {
       const rules = await activePermissionRules(pool)
       const after = await buildContext(pool, adminUser, '今月の労働時間は?', rules)
-      expect(after).toContain('チーム全体の当月勤怠')
+      expect(after).toContain('チームの当月勤怠')
       expect(after).toContain('一般 次郎') // 打刻したメンバーが載る
       // ルール対象外（member ロール）は own のまま
       const member = await buildContext(pool, memberUser, '今月の労働時間は?', rules)
-      expect(member).not.toContain('チーム全体の当月勤怠')
+      expect(member).not.toContain('チームの当月勤怠')
     } finally {
       await api('POST', `/v1/masters/permission-rules/${ruleId}/archive`, { as: ADMIN })
       clearPermissionCache()
@@ -3629,7 +3629,7 @@ describe('バッチ7g: AI 参照範囲の権限化 + 週次 AI インサイト�
     try {
       const rules = await activePermissionRules(pool)
       const ctx = await buildContext(pool, adminUser, '今月の労働時間は?', rules)
-      expect(ctx).not.toContain('チーム全体の当月勤怠')
+      expect(ctx).not.toContain('チームの当月勤怠')
       expect(ctx).not.toContain('一般 次郎')
     } finally {
       await api('POST', `/v1/masters/permission-rules/${scopeId}/archive`, { as: ADMIN })
@@ -7351,6 +7351,149 @@ describe('活動記録 3 種（サポート/営業/ビジネスパートナー�
     } finally {
       await pool.query(`DELETE FROM permission_rules WHERE id = 'pr-test-sup-deny'`)
       clearPermissionCache()
+    }
+  })
+})
+
+describe('権限設定の拡張（改修依頼 2026-08-18: 項目の更新権限 + 登録者単位の AI 参照対象）', () => {
+  const memberUser = { id: MEMBER, name: '一般 次郎', email: 'member@example.com', role: 'member' as const, title: '', avatar: '' }
+  const adminUser = { id: ADMIN, name: '管理 太郎', email: 'admin@example.com', role: 'admin' as const, title: '', avatar: '' }
+  let buildContext: (typeof import('../../src/routes/chatbot'))['buildContext']
+
+  beforeAll(async () => {
+    ;({ buildContext } = await import('../../src/routes/chatbot'))
+  })
+
+  /** 権限ルールを直接投入（テスト用。終了時に DELETE で掃除） */
+  async function seedRule(id: string, subjectKind: string, subjectId: string, resource: string, field: string | null, effect: string): Promise<void> {
+    await pool.query(
+      `INSERT INTO permission_rules (id, subject_kind, subject_id, resource, field, effect, active)
+       VALUES ($1, $2, $3, $4, $5, $6, true)
+       ON CONFLICT (id) DO UPDATE SET subject_kind = $2, subject_id = $3, resource = $4, field = $5, effect = $6, active = true`,
+      [id, subjectKind, subjectId, resource, field, effect])
+    clearPermissionCache()
+  }
+
+  async function dropRules(ids: string[]): Promise<void> {
+    await pool.query(`DELETE FROM permission_rules WHERE id = ANY($1::text[])`, [ids])
+    clearPermissionCache()
+  }
+
+  it('マスタ PATCH: <項目>:write の deny で当該キーのみ剥がして更新（他キーは反映 = 原則4）', async () => {
+    const created = await api('POST', '/v1/masters/companies', {
+      as: ADMIN, body: { kind: 'customer', name: '更新権限テスト社', description: '初期値' },
+    })
+    expect(created.status).toBe(201)
+    const coId = (created.json.data as { id: string }).id
+    await seedRule('pr-test-wr-1', 'role', 'admin', 'companies', 'description:write', 'deny')
+    try {
+      const patched = await api('PATCH', `/v1/masters/companies/${coId}`, {
+        as: ADMIN, body: { description: '書き換え試行', location: '東京都' },
+      })
+      expect(patched.status).toBe(200)
+      const row = patched.json.data as { description: string; location: string }
+      expect(row.description).toBe('初期値') // write deny キーは更新されない
+      expect(row.location).toBe('東京都') // 許可キーは更新される（グレースフルデグラデーション）
+    } finally {
+      await dropRules(['pr-test-wr-1'])
+      await api('POST', `/v1/masters/companies/${coId}/archive`, { as: ADMIN })
+    }
+  })
+
+  it('マスタ PATCH: 全キーが更新不可なら 403（AKO-PRM-003）・参照 deny も更新を閉じる（参照＞更新）', async () => {
+    const created = await api('POST', '/v1/masters/companies', {
+      as: ADMIN, body: { kind: 'customer', name: '更新権限テスト社2', description: '初期値' },
+    })
+    const coId = (created.json.data as { id: string }).id
+    await seedRule('pr-test-wr-2', 'role', 'admin', 'companies', 'description:write', 'deny')
+    try {
+      const denied = await api('PATCH', `/v1/masters/companies/${coId}`, {
+        as: ADMIN, body: { description: '書き換え試行' },
+      })
+      expect(denied.status).toBe(403)
+      expect(denied.json.error?.code).toBe('AKO-PRM-003')
+      // 参照 deny（項目の表示 deny）でも同キーの更新は閉じる（:write ルールなしで）
+      await seedRule('pr-test-wr-3', 'role', 'admin', 'companies', 'location', 'deny')
+      const viewDenied = await api('PATCH', `/v1/masters/companies/${coId}`, {
+        as: ADMIN, body: { location: '大阪府' },
+      })
+      expect(viewDenied.status).toBe(403)
+      expect(viewDenied.json.error?.code).toBe('AKO-PRM-003')
+    } finally {
+      await dropRules(['pr-test-wr-2', 'pr-test-wr-3'])
+      await api('POST', `/v1/masters/companies/${coId}/archive`, { as: ADMIN })
+    }
+  })
+
+  it('AI 参照対象: ai-scope:member:<id> の allow で当該登録者の勤怠だけチームブロックへ載る', async () => {
+    // MEMBER の当月打刻はバッチ7g テストで作成済み（同一ファイル内で直列実行）
+    const before = await buildContext(pool, adminUser, '今月の労働時間は?', [])
+    expect(before).not.toContain('チームの当月勤怠') // 既定 = 本人のみ（チームブロックなし）
+    await seedRule('pr-test-ai-1', 'role', 'admin', 'attendance', `ai-scope:member:${MEMBER}`, 'allow')
+    try {
+      const rules = await activePermissionRules(pool)
+      const after = await buildContext(pool, adminUser, '今月の労働時間は?', rules)
+      expect(after).toContain('チームの当月勤怠')
+      expect(after).toContain('一般 次郎')
+      // ルール対象外（member ロール）は本人のみのまま
+      const member = await buildContext(pool, memberUser, '今月の労働時間は?', rules)
+      expect(member).not.toContain('チームの当月勤怠')
+    } finally {
+      await dropRules(['pr-test-ai-1'])
+    }
+  })
+
+  it('AI 参照対象: レガシー二値（ai-scope allow）より登録者指定の deny が優先される', async () => {
+    await seedRule('pr-test-ai-2', 'role', 'admin', 'attendance', 'ai-scope', 'allow')
+    await seedRule('pr-test-ai-3', 'role', 'admin', 'attendance', `ai-scope:member:${MEMBER}`, 'deny')
+    try {
+      const rules = await activePermissionRules(pool)
+      const ctx = await buildContext(pool, adminUser, '今月の労働時間は?', rules)
+      expect(ctx).not.toContain('一般 次郎') // MEMBER の勤怠は対象指定 deny で除外
+    } finally {
+      await dropRules(['pr-test-ai-2', 'pr-test-ai-3'])
+    }
+  })
+
+  it('AI 参照対象: ぽいぽいポストも登録者指定の deny で当該投稿者だけ文脈から消える', async () => {
+    // HR の投稿はバッチ7g テストで作成・索引済み。既定（全員参照可）では載る
+    const before = await buildContext(pool, memberUser, '7gスコープ検証の改善アイデアは?', [])
+    expect(before).toContain('受注プロセスの改善アイデア')
+    await seedRule('pr-test-ai-4', 'role', 'member', 'poipoi', `ai-scope:member:${HR}`, 'deny')
+    try {
+      const rules = await activePermissionRules(pool)
+      const ctx = await buildContext(pool, memberUser, '7gスコープ検証の改善アイデアは?', rules)
+      expect(ctx).not.toContain('受注プロセスの改善アイデア')
+    } finally {
+      await dropRules(['pr-test-ai-4'])
+    }
+  })
+})
+
+describe('改修プロンプト出力の既定（改修依頼 2026-08-18: filter 省略 = 「対応する」のみ）', () => {
+  it('filter 省略で accepted のみ出力・未判定/対応中は含めない。冒頭はナビゲーター定型文', async () => {
+    await pool.query(
+      `INSERT INTO improvement_items (id, title, status, page_paths, source_request_ids)
+       VALUES
+         ('imp-t-acc',  'プロンプト既定検証Accepted', 'accepted',    '["/x"]'::jsonb, '[]'::jsonb),
+         ('imp-t-tri',  'プロンプト既定検証Triage',   'triage',      '["/x"]'::jsonb, '[]'::jsonb),
+         ('imp-t-prog', 'プロンプト既定検証Progress', 'in_progress', '["/x"]'::jsonb, '[]'::jsonb)
+       ON CONFLICT (id) DO NOTHING`)
+    try {
+      const res = await api('POST', '/v1/improvements/prompt', { as: ADMIN, body: {} })
+      expect(res.status).toBe(200)
+      const { prompt } = res.json.data as { prompt: string; count: number }
+      expect(prompt.startsWith('あなたはナビゲーターです。')).toBe(true)
+      expect(prompt).toContain('プロンプト既定検証Accepted')
+      expect(prompt).not.toContain('プロンプト既定検証Triage')
+      expect(prompt).not.toContain('プロンプト既定検証Progress')
+      // filter 指定は下位互換で受理（open = 未判定・対応する・対応中）
+      const open = await api('POST', '/v1/improvements/prompt', { as: ADMIN, body: { filter: 'open' } })
+      const openPrompt = (open.json.data as { prompt: string }).prompt
+      expect(openPrompt).toContain('プロンプト既定検証Triage')
+      expect(openPrompt).toContain('プロンプト既定検証Progress')
+    } finally {
+      await pool.query(`DELETE FROM improvement_items WHERE id IN ('imp-t-acc', 'imp-t-tri', 'imp-t-prog')`)
     }
   })
 })

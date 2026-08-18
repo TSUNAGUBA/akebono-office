@@ -22,6 +22,7 @@ import {
   type ImprovementRequestImage,
   type ImprovementRequestStatus,
   type ImprovementStatus,
+  isInternalPagePath,
   isOpenStatus,
   matchesImprovementFilter,
   requestAdoptionOf,
@@ -30,7 +31,7 @@ import {
 import { fmtDate, fmtDateTime, fmtDateTimeSec } from '~/utils/format'
 import { pageDisplay } from '~/utils/page-label'
 
-const { canManageImprovements } = usePermissions()
+const { canManageImprovements, canTab } = usePermissions()
 const imp = useImprovements()
 const toast = useToast()
 const confirm = useConfirm()
@@ -65,7 +66,7 @@ const tableRows = computed(() => pagedItems.value as unknown as Record<string, u
 
 /** ステータス別の件数（KPI 表示用） */
 const counts = computed(() => {
-  const c = { triage: 0, accepted: 0, resolved: 0, rejected: 0 } as Record<ImprovementStatus, number>
+  const c = { triage: 0, accepted: 0, in_progress: 0, resolved: 0, rejected: 0 } as Record<ImprovementStatus, number>
   for (const it of imp.activeItems.value) c[it.status] += 1
   return c
 })
@@ -110,6 +111,23 @@ const rawRequests = computed<ImprovementRequest[]>(() => {
 // 一括選別の選択（selectedReqIds）は行 id ベースのため、ページを跨いでも選択状態は維持される）
 const { page: rawPage, pageSize: rawPageSize, rows: pagedRawRequests, total: rawTotal } = useListView<ImprovementRequest>({ source: rawRequests })
 const rawTableRows = computed(() => pagedRawRequests.value as unknown as Record<string, unknown>[])
+// 受付箱の一覧に添付を直接表示するため、表示中ページの行の画像を先読みする（改修依頼 2026-08-18。
+// API モードの全件 GET は images を含まないため = 遅延ロード。未集約分は 1 リクエストのまとめ取得・
+// 集約済みは案件単位で、完了済み + 進行中の両方をメモ化して重複発行しない〔R1 レビュー反映〕。
+// 失敗は非ブロッキング〔原則4〕。モックモードは即時 no-op）
+watch(pagedRawRequests, (rows) => {
+  for (const r of rows) void imp.loadRequestImagesFor(r)
+}, { immediate: true })
+
+/**
+ * 対象ページへの遷移リンク（改修依頼 2026-08-18）。アプリ内パスのみリンク化（shared isInternalPagePath =
+ * '//host' のプロトコル相対 URL 等は外部遷移になるためリンクにしない。旧データにも効く表示側の防御 =
+ * R1 監査 MAJOR-1。'' = 全体/新設ページはテキストのまま）
+ */
+function pageLinkOf(pagePath: string | null | undefined): string | null {
+  const p = String(pagePath ?? '').trim()
+  return isInternalPagePath(p) ? p : null
+}
 /** 一覧行 → ImprovementRequest（UiDataTable の行型は Record<string, unknown> のため、キャストは 1 か所に集約 = レビュー R4） */
 function reqOf(row: Record<string, unknown>): ImprovementRequest {
   return row as unknown as ImprovementRequest
@@ -121,6 +139,8 @@ const RAW_COLUMNS: TableColumn[] = [
   // select / ops は行データにキーの無い仮想列 = ソート不可（飾りのソートボタンを出さない = X-1）
   { key: 'select', label: '選択', width: '44px', primary: true, sortable: false },
   { key: 'body', label: '要望', primary: true },
+  // attachments は行データにキーの無い仮想列（添付の直接確認 = 改修依頼 2026-08-18。リンク = 別タブ・画像 = 押下で拡大）
+  { key: 'attachments', label: '添付', width: '170px', primary: true, sortable: false },
   // adoption は表示値（集約済みバッジ・未定義の補完）が保存値と異なるためソート不可（並びが表示と矛盾しない = R10）
   { key: 'adoption', label: '選別', width: '90px', primary: true, sortable: false },
   { key: 'ops', label: '選別操作', width: '150px', primary: true, sortable: false },
@@ -541,13 +561,19 @@ function reqCount(itemId: string): number {
 // カンバン・ガントチャート = 既存ビュー を切り替える。?tab= のディープリンクは useRouteTabSync で取り込む
 const TAB_KEYS = ['inbox', 'items', 'kanban', 'gantt'] as const
 const tab = ref<string>('inbox')
-const tabs = computed<TabItem[]>(() => [
+// タブ利用可否（権限表の `tab:<key>` 擬似フィールド = 改修依頼 2026-08-18。既定 = 全タブ利用可）
+const tabs = computed<TabItem[]>(() => ([
   { key: 'inbox', label: '受付箱', badge: imp.pendingRequests.value.length },
   { key: 'items', label: '改修案件' },
   { key: 'kanban', label: 'カンバン' },
   { key: 'gantt', label: 'ガントチャート' },
-])
+] as TabItem[]).filter(t => canTab('improvements', t.key)))
 useRouteTabSync(tab, { valid: TAB_KEYS })
+watchEffect(() => {
+  // 権限で消えたタブは先頭の利用可能タブへ退避。全タブ deny の場合は空値にして
+  // どのタブ内容も描画しない（フェイルクローズ = R1 レビュー反映）
+  if (!tabs.value.some(t => t.key === tab.value)) tab.value = tabs.value[0]?.key ?? ''
+})
 
 // ページングの 1 ページ目リセット（tab がここで定義されるため watch もここに置く。
 // タブ切替・絞り込み・検索の変更で対象一覧を先頭ページから表示する = 改修依頼 2026-08-18）
@@ -571,7 +597,8 @@ function goItems(filter: ImprovementFilter): void {
 const summaryCards = computed(() => [
   { key: 'inbox', label: '受付箱', value: imp.pendingRequests.value.length, sub: '未選別（選別待ち）', icon: 'Inbox', inverse: false, aria: '受付箱タブを開く', go: goInbox },
   { key: 'triage', label: '未判定', value: counts.value.triage, sub: '対応可否の判定待ち', icon: 'HelpCircle', inverse: false, aria: '改修案件タブを未判定で開く', go: () => goItems('triage') },
-  { key: 'accepted', label: '対応する', value: counts.value.accepted, sub: '改修予定（未解決）', icon: 'Wrench', inverse: false, aria: '改修案件タブを対応するで開く', go: () => goItems('accepted') },
+  { key: 'accepted', label: '対応する', value: counts.value.accepted, sub: '改修予定（未着手）', icon: 'Wrench', inverse: false, aria: '改修案件タブを対応するで開く', go: () => goItems('accepted') },
+  { key: 'in_progress', label: '対応中', value: counts.value.in_progress, sub: '着手済み（未解決）', icon: 'Loader', inverse: false, aria: '改修案件タブを対応中で開く', go: () => goItems('in_progress') },
   { key: 'resolved', label: '解決済み', value: counts.value.resolved, sub: '改修完了', icon: 'CheckCircle2', inverse: true, aria: '改修案件タブを解決済みで開く', go: () => goItems('resolved') },
   { key: 'rejected', label: '対応しない', value: counts.value.rejected, sub: '見送り', icon: 'MinusCircle', inverse: false, aria: '改修案件タブを対応しないで開く', go: () => goItems('rejected') },
 ])
@@ -615,8 +642,9 @@ async function clearPlan(): Promise<void> {
 }
 
 // ---------- 改修プロンプト出力 ----------
+// 出力対象は「対応する」ステータスの改修単位のみ（改修依頼 2026-08-18。従来の既定 open は
+// 未判定も含んでいたため除外 = フィルタ選択 UI も撤去して対象を固定する）
 const promptOpen = ref(false)
-const promptFilter = ref<string>('open')
 const promptText = ref('')
 const promptCount = ref(0)
 const promptBusy = ref(false)
@@ -627,7 +655,7 @@ async function openPrompt(): Promise<void> {
 }
 async function refreshPrompt(): Promise<void> {
   promptBusy.value = true
-  const res = await imp.buildPrompt(promptFilter.value as ImprovementFilter)
+  const res = await imp.buildPrompt('accepted')
   promptBusy.value = false
   if (res.ok) { promptText.value = res.prompt; promptCount.value = res.count }
   else { promptText.value = ''; promptCount.value = 0; toast.show(`${res.error.code}: ${res.error.message}`, 'crit') }
@@ -677,7 +705,8 @@ async function copyAndClose(): Promise<void> {
 
     <div v-else class="mt-4 grid gap-3">
       <!-- サマリーカード（受付箱の件数 + 改修単位のステータス別件数 = 改修依頼 2026-08-18）。押下で該当タブへ直行 -->
-      <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+      <!-- 対応中の追加（2026-08-18）で 6 枚 = lg は 6 列で 1 行に収める -->
+      <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <UiKpiCard
           v-for="c in summaryCards"
           :key="c.key"
@@ -698,6 +727,8 @@ async function copyAndClose(): Promise<void> {
 
       <!-- タブメニュー（受付箱 / 改修案件 / カンバン / ガントチャート = 改修依頼 2026-08-18） -->
       <UiTabBar v-model="tab" :tabs="tabs" />
+      <!-- 全タブ deny 時の空状態（タブ内容は tab='' のためどれも描画されない = フェイルクローズ） -->
+      <p v-if="tabs.length === 0" class="card p-6 text-center text-[13px] text-sub">利用できるタブがありません（権限設定で制限されています。管理者にお問い合わせください）</p>
 
       <!-- ① 受付箱: まず投稿された生の一覧を確認し、採用/不採用を選別する（改善要望 2026-08-17 第 2 弾）。
            採用された要望のみが「AI で集約」の対象になる。一覧上の「採用」「不採用」ボタン・複数選択の
@@ -788,6 +819,21 @@ async function copyAndClose(): Promise<void> {
               <ImprovementsTagBadges :tags="reqOf(row).tags" wrapper-class="mt-0.5 flex flex-wrap gap-1" />
             </div>
           </template>
+          <!-- 添付の直接確認（改修依頼 2026-08-18）: リンク = 別タブ・画像 = 押下で拡大（既存の共通部品を共用）。
+               行クリック（ドロワー起動）と干渉しないよう click は止める -->
+          <template #cell-attachments="{ row }">
+            <div
+              v-if="(reqOf(row).links?.length ?? 0) > 0 || (reqOf(row).images?.length ?? 0) > 0"
+              @click.stop
+            >
+              <ImprovementsAttachmentList
+                :links="reqOf(row).links"
+                :images="reqOf(row).images"
+                @preview="(img) => { previewImage = img }"
+              />
+            </div>
+            <span v-else class="text-[11px] text-muted">—</span>
+          </template>
           <template #cell-adoption="{ row }">
             <UiStatusBadge
               v-if="reqOf(row).itemId"
@@ -837,8 +883,16 @@ async function copyAndClose(): Promise<void> {
           <template #cell-memberName="{ row }">
             <span class="text-[12px] text-sub">{{ row.memberName }}</span>
           </template>
+          <!-- 対象ページ（改修依頼 2026-08-18: 実パスは押下で当該ページへ遷移して確認できる） -->
           <template #cell-page="{ row }">
-            <span class="text-[12px] text-sub">{{ String(row.pageLabel || row.pagePath || 'ページ不明') }}</span>
+            <NuxtLink
+              v-if="pageLinkOf(reqOf(row).pagePath)"
+              :to="pageLinkOf(reqOf(row).pagePath)!"
+              class="link text-[12px]"
+              :aria-label="`対象ページ（${String(row.pageLabel || row.pagePath)}）を開く`"
+              @click.stop
+            >{{ String(row.pageLabel || row.pagePath) }}</NuxtLink>
+            <span v-else class="text-[12px] text-sub">{{ String(row.pageLabel || row.pagePath || 'ページ不明') }}</span>
           </template>
           <template #cell-comments="{ row }">
             <span class="num" :class="(imp.commentCountByRequest.value.get(String(row.id)) ?? 0) > 0 ? 'font-semibold text-brand' : 'text-muted'">
@@ -869,8 +923,9 @@ async function copyAndClose(): Promise<void> {
         @open="openDrawerItem"
       />
 
-      <!-- ② 改修案件（採用 → AI 集約後の一覧）: フィルターと一覧 -->
-      <UiSectionCard v-else flush>
+      <!-- ② 改修案件（採用 → AI 集約後の一覧）: フィルターと一覧。
+           タブキーの明示指定: tab=''（全タブ deny の退避値）でフォールバック描画しない = フェイルクローズ（R2 レビュー反映） -->
+      <UiSectionCard v-else-if="tab === 'items'" flush>
         <template #actions>
           <UiSearchInput v-model="search" placeholder="改修単位・対象ページを検索" />
         </template>
@@ -1010,7 +1065,11 @@ async function copyAndClose(): Promise<void> {
                     @preview="(img) => { previewImage = img }"
                   />
                   <p class="mt-1 text-[11px] text-muted">
-                    {{ r.memberName }}・{{ r.pageLabel || r.pagePath || 'ページ不明' }}・{{ fmtDate(r.createdAt) }}
+                    {{ r.memberName }}・<NuxtLink
+                      v-if="pageLinkOf(r.pagePath)"
+                      :to="pageLinkOf(r.pagePath)!"
+                      class="link"
+                    >{{ r.pageLabel || r.pagePath }}</NuxtLink><template v-else>{{ r.pageLabel || r.pagePath || 'ページ不明' }}</template>・{{ fmtDate(r.createdAt) }}
                   </p>
                   <!-- 要望単位のステータス（進捗タグ）。変更はプロンプト再生成に反映（【対応済み】【見送り】明記） -->
                   <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
@@ -1138,7 +1197,11 @@ async function copyAndClose(): Promise<void> {
           <ImprovementsTagBadges :tags="selectedRequest.tags" />
           <span v-if="selectedRequest.archivedAt" class="text-[12px] text-crit">取消済み</span>
           <span class="text-[12px] text-muted">
-            {{ selectedRequest.memberName }}・{{ selectedRequest.pageLabel || selectedRequest.pagePath || 'ページ不明' }}・{{ fmtDateTimeSec(selectedRequest.createdAt) }}
+            {{ selectedRequest.memberName }}・<NuxtLink
+              v-if="pageLinkOf(selectedRequest.pagePath)"
+              :to="pageLinkOf(selectedRequest.pagePath)!"
+              class="link"
+            >{{ selectedRequest.pageLabel || selectedRequest.pagePath }}</NuxtLink><template v-else>{{ selectedRequest.pageLabel || selectedRequest.pagePath || 'ページ不明' }}</template>・{{ fmtDateTimeSec(selectedRequest.createdAt) }}
           </span>
           <span v-if="selectedRequest.editedAt" class="text-[11px] text-muted">
             （編集済み {{ fmtDateTime(selectedRequest.editedAt) }}）
@@ -1285,12 +1348,12 @@ async function copyAndClose(): Promise<void> {
     <UiModal :open="promptOpen" title="改修プロンプトを出力" width="720px" @close="promptOpen = false">
       <div class="grid gap-3">
         <p class="text-[13px] text-sub">
-          フィルター条件に合う改修単位を、コーディング AI エージェント向けの詳細プロンプト（対象ページ・機能名・改修内容・元要望・受入基準）として出力します。
+          「対応する」ステータスの改修単位のみを、コーディング AI エージェント向けの詳細プロンプト（対象ページ・機能名・改修内容・元要望・受入基準）として出力します（未判定・対応中・解決済み・対応しないは含まれません = 改修依頼 2026-08-18）。
           要望ごとのステータス変更後は「再生成」で最新の状態（【対応済み】【見送り】の明記）を反映できます。
         </p>
         <div class="flex flex-wrap items-center gap-2">
           <span class="label">対象</span>
-          <UiSelect v-model="promptFilter" :options="IMPROVEMENT_FILTER_OPTIONS" @update:model-value="refreshPrompt" />
+          <UiStatusBadge label="対応する" tone="info" dot />
           <span class="text-[12px] text-muted">{{ promptCount }} 件</span>
           <button type="button" class="btn btn-ghost btn-sm ml-auto" :disabled="promptBusy" @click="refreshPrompt">
             <RefreshCw class="h-4 w-4" aria-hidden="true" /> {{ promptBusy ? '生成中…' : '再生成' }}

@@ -11,8 +11,9 @@ import { Plus } from 'lucide-vue-next'
 import type { Member, PermissionRule } from '~/types/domain'
 import type { TableColumn } from '~/types/ui'
 import {
-  AI_SCOPE_FEATURES, AI_SCOPE_FIELD, ASSIST_MEMBER_FIELD_PREFIX,
-  FEATURE_PERMISSION_KEYS, MEMBER_VIEW_ALL_FIELD, REPORT_MEMBER_FIELD_PREFIX, TIMECARD_ALL_FIELD,
+  AI_REFERENCE_DATATYPES, AI_SCOPE_FEATURES, AI_SCOPE_FIELD, AI_SCOPE_TARGET_PREFIX,
+  ASSIST_MEMBER_FIELD_PREFIX, FEATURE_PERMISSION_KEYS, MEMBER_VIEW_ALL_FIELD,
+  REPORT_MEMBER_FIELD_PREFIX, TAB_FIELD_PREFIX, TIMECARD_ALL_FIELD, WRITE_FIELD_SUFFIX,
 } from '../../../../shared/domain/permissions'
 import { FIELD_CATALOG, FIELD_RESOURCES, fieldLabel } from '../../../../shared/domain/permission-catalog'
 
@@ -30,10 +31,11 @@ const EFFECT_LABELS: Record<PermissionRule['effect'], string> = { allow: '許可
 
 // 項目カタログ（論理名）はルール一覧・権限表・API 剥がしで共有（shared/domain/permission-catalog）
 
-/** 表示モード: 権限表（既定）/ ルール一覧（並び・既定はオペレーター指示 2026-07-21） */
+/** 表示モード: 権限表（既定）/ AIの参照範囲（改修依頼 2026-08-18）/ ルール一覧（並び・既定はオペレーター指示 2026-07-21） */
 const viewTab = ref('matrix')
 const VIEW_TABS = [
   { key: 'matrix', label: '権限表' },
+  { key: 'ai-scope', label: 'AIの参照範囲' },
   { key: 'list', label: 'ルール一覧' },
 ]
 
@@ -96,6 +98,11 @@ function ruleResourceLabel(r: PermissionRule): string {
     const f = AI_SCOPE_FEATURES.find(x => x.key === r.resource)
     return `AI 参照範囲: ${f?.label ?? r.resource}`
   }
+  // 登録者単位の AI 参照対象（`ai-scope:<対象>` = 改修依頼 2026-08-18。「AIの参照範囲」タブで設定）
+  if ((r.field ?? '').startsWith(AI_SCOPE_TARGET_PREFIX)) {
+    const d = AI_REFERENCE_DATATYPES.find(x => x.key === r.resource)
+    return `AIの参照範囲: ${d?.label ?? r.resource}`
+  }
   if (isReportViewRule(r)) return '日報・週報の参照対象'
   if (isAssistViewRule(r)) return 'AI業務アシスタントの参照対象'
   if (isCustomerLogViewRule(r)) return '顧客活動の参照対象（廃止 = 全員閲覧可へ変更）'
@@ -103,9 +110,12 @@ function ruleResourceLabel(r: PermissionRule): string {
   return resourceLabel(r.resource)
 }
 
-/** 効果ラベル（ai-scope = すべて/自分のみ・参照対象 = 参照可/参照不可 の語彙） */
+/** 効果ラベル（ai-scope = すべて/自分のみ・参照対象 = 参照可/参照不可・タブ = 利用可/不可・更新 = 更新可/不可） */
 function ruleEffectLabel(r: PermissionRule): string {
   if ((r.field ?? null) === AI_SCOPE_FIELD) return r.effect === 'allow' ? 'すべて' : '自分のみ'
+  if ((r.field ?? '').startsWith(AI_SCOPE_TARGET_PREFIX)) return r.effect === 'allow' ? '参照可' : '参照不可'
+  if ((r.field ?? '').startsWith(TAB_FIELD_PREFIX)) return r.effect === 'allow' ? '利用可' : '利用不可'
+  if ((r.field ?? '').endsWith(WRITE_FIELD_SUFFIX)) return r.effect === 'allow' ? '更新可' : '更新不可'
   if (isReportViewRule(r) || isAssistViewRule(r) || isCustomerLogViewRule(r) || isTimecardViewRule(r)) {
     return r.effect === 'allow' ? '参照可' : '参照不可'
   }
@@ -114,6 +124,11 @@ function ruleEffectLabel(r: PermissionRule): string {
 
 /** 項目ラベル（参照対象は対象メンバー名・member:* は全メンバー一括を表示） */
 function ruleFieldLabel(r: PermissionRule): string {
+  // AI 参照対象（登録者単位）の個人指定はメンバー名で表示（fieldLabel は id のまま表示するため）
+  if ((r.field ?? '').startsWith(`${AI_SCOPE_TARGET_PREFIX}member:`)) {
+    const id = (r.field ?? '').slice(`${AI_SCOPE_TARGET_PREFIX}member:`.length)
+    return `AI参照対象: 個人=${(memberCrud.byId(id) as Member | undefined)?.name ?? id}`
+  }
   if (isReportViewRule(r) || isAssistViewRule(r) || isCustomerLogViewRule(r)) {
     if ((r.field ?? '') === MEMBER_VIEW_ALL_FIELD) return '全メンバー（一括既定）'
     const prefix = isReportViewRule(r)
@@ -388,6 +403,9 @@ async function restoreRule(): Promise<void> {
 
     <!-- v-show でタブ往復しても権限表の状態（レイヤ・個人列の選択）を保持する（レビュー M-6） -->
     <MastersPermissionMatrix v-show="viewTab === 'matrix'" />
+
+    <!-- AIの参照範囲（登録者単位の AI 参照制御 = 改修依頼 2026-08-18。v-show で選択状態を保持） -->
+    <MastersAiScopeMatrix v-show="viewTab === 'ai-scope'" />
 
     <UiSectionCard v-show="viewTab === 'list'" title="権限ルール" description="拒否ルールで機能を隠し、個人の許可ルールで例外を作れます。表示項目（項目列あり）は API モードでマスタ応答から除外されます" flush>
       <template #actions>

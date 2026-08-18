@@ -25,7 +25,8 @@ import { fiscalMonthsOf, fiscalYearOf } from '../../../shared/domain/fiscal'
 import { nowJstIso, todayJst } from '../../../shared/domain/jst'
 import { findCompanyIn, SELF_COMPANY_PATTERN } from '../../../shared/domain/name-match'
 import {
-  aiReferenceScope, canUseFeature, canViewField, canViewMemberReports, stripDeniedFields,
+  aiAllowedOwnerIds, canAiReferenceOwner, canUseFeature, canViewField,
+  type PermissionSubject, stripDeniedFields,
 } from '../../../shared/domain/permissions'
 import type { PermissionRule, PunchRecord, ReportEntry } from '../../../shared/domain/types'
 import type { AuthUser } from '../auth'
@@ -108,9 +109,23 @@ export async function buildContext(
   const topic = [question, ...historyUserTexts].join('\n')
   const subject = subjectOf(user)
   const can = (feature: string): boolean => canUseFeature(rules, subject, feature)
-  // AI 参照範囲（バッチ7g・オペレーター指示 2026-07-19 #8/#9: 'all' = 権限範囲内のすべてのデータ /
-  // 'own' = 自分の登録データのみ。権限設定の field='ai-scope' ルールで区分ごとに設定・機能 deny が最優先）
-  const aiScope = (feature: string): 'all' | 'own' => aiReferenceScope(rules, subject, feature)
+  // AI 参照範囲（改修依頼 2026-08-18 で登録者単位へ拡張。バッチ7g の二値 'ai-scope' はレガシー互換）:
+  // データ種類（機能キー）ごとに「参照できる登録者の memberId」を解決する。既定 = 権限表の参照権限
+  // （canAiReferenceOwner）。機能 deny が最優先である点は従来どおり。
+  // 登録者候補（在籍メンバーの属性）は最初の利用時に 1 回だけロードして使い回す。
+  // **候補は在籍（active）メンバーのみ = 無効化済み（退職）メンバーの登録データは本人以外の AI 文脈へ
+  // 供給しない**（旧 allOwners=true では owner 無制限で退職者のぽいぽいも載った。安全側への意図的変更 =
+  // R1 レビューで文書化）。LIMIT 1000 は SME 規模前提（search_docs の 3000 件上限と同水準の設計判断）
+  let ownerSubjectsCache: PermissionSubject[] | null = null
+  const ownerSubjects = async (): Promise<PermissionSubject[]> => {
+    ownerSubjectsCache ??= (await pool.query<PermissionSubject>(
+      `SELECT id AS "memberId", coalesce(title, '') AS title, role
+       FROM members WHERE active = true ORDER BY id LIMIT 1000`)).rows
+    return ownerSubjectsCache
+  }
+  /** feature のデータを AI 文脈へ供給してよい登録者の memberId（本人を常に含む） */
+  const aiOwnerIds = async (feature: string): Promise<string[]> =>
+    aiAllowedOwnerIds(rules, subject, feature, await ownerSubjects())
   const strip = <T extends Record<string, unknown>>(entity: string, rows: T[]): T[] =>
     stripDeniedFields(rules, subject, entity, rows)
   // JOIN で取り込んだ他エンティティ由来の単一項目（relation_types.label 等）の表示可否。
@@ -162,17 +177,22 @@ export async function buildContext(
       .filter((x): x is string => !!x)
   }
 
-  // 有給・当月勤怠（既定 = 本人分のみ（C3）。AI 参照範囲 'all' の対象者にはチーム全体のサマリーも供給）
+  // 有給・当月勤怠（既定 = 本人分のみ（C3）。AI 参照範囲で許可された登録者のサマリーも供給）
   if (can('attendance') && /有給|休暇|残業|勤怠|労働|打刻/.test(topic)) {
     // メンバー名の表示 deny（F-16-3）時はチームブロック自体を供給しない（氏名がサマリーの主キーのため）
-    if (aiScope('attendance') === 'all' && canField('members', 'name')) {
+    if (canField('members', 'name')) {
       await block(async () => {
+        // AI 参照範囲（登録者単位）で許可された対象者のみ。本人以外に対象がいなければ
+        // チームブロックは出さない（本人分は下の専用ブロックが担う = 従来の 'own' と同じ見え方）
+        const ownerIds = await aiOwnerIds('attendance')
+        if (!ownerIds.some(id => id !== user.id)) return
         const { rows } = await pool.query<PunchRecord & { memberName: string }>(
           `SELECT p.id, p.member_id AS "memberId", p.date::text AS date, p.kind, p.at, p.source,
                   p.fixed_from AS "fixedFrom", p.fix_reason AS "fixReason", p.approved_by AS "approvedBy",
                   m.name AS "memberName"
            FROM punch_records p JOIN members m ON m.id = p.member_id AND m.active = true
-           WHERE to_char(p.date, 'YYYY-MM') = $1 ORDER BY p.at, p.created_at LIMIT 8000`, [today.slice(0, 7)])
+           WHERE to_char(p.date, 'YYYY-MM') = $1 AND p.member_id = ANY($2::text[])
+           ORDER BY p.at, p.created_at LIMIT 8000`, [today.slice(0, 7), ownerIds])
         if (rows.length === 0) return
         const byMember = new Map<string, { name: string; byDate: Map<string, PunchRecord[]> }>()
         for (const r of rows) {
@@ -188,7 +208,7 @@ export async function buildContext(
           for (const [d, recs] of m.byDate) work += daySummary(recs, undefined, d).workMinutes
           lines.push(`- ${m.name}: 出勤 ${m.byDate.size} 日 / 総労働 ${Math.round(work / 6) / 10} 時間`)
         }
-        parts.push(`## チーム全体の当月勤怠（${today.slice(0, 7)}。AI 参照範囲 = すべて）\n${lines.join('\n')}`)
+        parts.push(`## チームの当月勤怠（${today.slice(0, 7)}。AI 参照範囲で許可された対象者のみ）\n${lines.join('\n')}`)
       })
     }
     await block(async () => {
@@ -266,8 +286,10 @@ export async function buildContext(
 部署 ${deptName || '未所属'} / 役職 ${String(m.title ?? '') || 'なし'}${m.email ? ` / メール ${String(m.email)}` : ''}${
   relLines.length > 0 ? `\n人の関係: ${relLines.join(' / ')}` : ''}`)
     // 他メンバーの日報は提出済みのみ（全員の日報タブ = scope=all と同じ基準）。
-    // 日報参照権限（F-16-6・バッチ7h）の deny 対象者は AI 文脈にも供給しない
-    if (can('reports') && matched.id !== user.id && canViewMemberReports(rules, subject, matched.id)) {
+    // AI 参照範囲（登録者単位。既定 = 日報参照権限 F-16-6）で不許可の対象者は AI 文脈にも供給しない
+    if (can('reports') && matched.id !== user.id && canAiReferenceOwner(rules, subject, 'reports', {
+      memberId: matched.id, title: String(matched.title ?? ''), role: matched.role as PermissionSubject['role'],
+    })) {
       const { rows } = await pool.query<{ date: string; entries: unknown; issues: string }>(
         `SELECT date::text AS date, entries, issues FROM daily_reports
          WHERE author_kind = 'human' AND member_id = $1 AND status = 'submitted'
@@ -325,17 +347,21 @@ export async function buildContext(
     })
   }
 
-  // タスク計画・当日予定（既定 = 本人分のみ。AI 参照範囲 'all' の対象者にはチーム全体の本日計画も供給）
+  // タスク計画・当日予定（既定 = 本人分のみ。AI 参照範囲で許可された登録者の本日計画も供給）
   if (can('ai-assistant') && /タスク|計画|予定|会議|ミーティング|カレンダー/.test(topic)) {
     // メンバー名の表示 deny（F-16-3）時はチームブロック自体を供給しない（C-1 対応と同一規約）
-    if (aiScope('ai-assistant') === 'all' && canField('members', 'name')) {
+    if (canField('members', 'name')) {
       await block(async () => {
+        // AI 参照範囲（登録者単位。既定 = タスク計画の参照権限 F-16-7 = 許可制）で許可された対象者のみ
+        const ownerIds = await aiOwnerIds('ai-assistant')
+        if (!ownerIds.some(id => id !== user.id)) return
         const { rows } = await pool.query<{ name: string; title: string; status: string }>(
           `SELECT m.name, t.title, t.status FROM task_plans t
            JOIN members m ON m.id = t.member_id AND m.active = true
-           WHERE t.date = $1::date ORDER BY m.id, t.created_at LIMIT 50`, [today])
+           WHERE t.date = $1::date AND t.member_id = ANY($2::text[])
+           ORDER BY m.id, t.created_at LIMIT 50`, [today, ownerIds])
         if (rows.length === 0) return
-        parts.push(`## チーム全体の本日のタスク計画（${today}。AI 参照範囲 = すべて）\n${rows.map(r =>
+        parts.push(`## チームの本日のタスク計画（${today}。AI 参照範囲で許可された対象者のみ）\n${rows.map(r =>
           `- ${r.name}:「${capCp(r.title, 50)}」${r.status === 'done' ? '（完了）' : ''}`).join('\n')}`)
       })
     }
@@ -683,8 +709,9 @@ export async function buildContext(
   // 字句バイグラム + 埋め込み（LLM 無効環境は字句のみ）で補足する。精密ブロック描画済みは除外。
   // 照合は生データ・描画は segments の表示項目チェック（canViewField）通過行のみ = 既存パターン）
   await block(async () => {
-    // ぽいぽいポストの AI 参照範囲（'all' = 他メンバーの投稿も参照 = 既定。'own' 設定時は本人のみ）
-    const hits = await searchDocsFor(pool, env, question, user.id, 4, aiScope('poipoi') === 'all')
+    // ぽいぽいポストの AI 参照範囲（登録者単位。既定 = 全員参照可）: 許可された登録者の投稿のみ広げる
+    const hits = await searchDocsFor(pool, env, question, user.id, 4,
+      can('poipoi') ? await aiOwnerIds('poipoi') : [])
     // 混入防止（オペレーター指示 2026-07-19 #5）: 質問が特定の顧客/プロジェクトに解決された場合、
     // 「別の顧客/プロジェクトに紐付くノート」は関係のない情報として文脈から除外する。
     // 紐付けなしのノートは対象外（全般メモとして従来どおりスコア勝負）

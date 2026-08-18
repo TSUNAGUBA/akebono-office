@@ -113,4 +113,7 @@ echo "==> モック回帰"
 echo "==> 活動記録 3 ページ + 顧客活動 + ページング（改修依頼 2026-08-18・モックモード）"
 (cd "$HERE" && BASE="http://127.0.0.1:$MOCK_STATIC_PORT" node activity-pages-e2e.cjs)
 
+echo "==> 第 2 弾 8 件（対応中・プロンプト・権限拡張・稟議区分・受付箱添付ほか。改修依頼 2026-08-18・モックモード）"
+(cd "$HERE" && BASE="http://127.0.0.1:$MOCK_STATIC_PORT" node batch2-e2e.cjs)
+
 echo "==> 全スイート green"
