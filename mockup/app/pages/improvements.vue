@@ -56,8 +56,12 @@ const rows = computed<ImprovementItem[]>(() => {
     || it.pagePaths.some(p => pageDisplay(p).toLowerCase().includes(q)))
 })
 
+// 一覧のページング（1 ページ 20 件 = 改修依頼 2026-08-18。クライアントページング。絞り込み・検索は rows が担う。
+// page リセット watch は tab 定義の後段〔タブ定義セクション〕にまとめて置く）
+const { page: itemPage, pageSize: itemPageSize, rows: pagedItems, total: itemTotal } = useListView<ImprovementItem>({ source: rows })
+
 // UiDataTable は Record<string, unknown>[] を要求するため表示用に変換（セルは個別にキャストして参照）
-const tableRows = computed(() => rows.value as unknown as Record<string, unknown>[])
+const tableRows = computed(() => pagedItems.value as unknown as Record<string, unknown>[])
 
 /** ステータス別の件数（KPI 表示用） */
 const counts = computed(() => {
@@ -102,7 +106,10 @@ const rawRequests = computed<ImprovementRequest[]>(() => {
   if (f === 'all') return active
   return active.filter(r => !r.itemId && requestAdoptionOf(r) === f)
 })
-const rawTableRows = computed(() => rawRequests.value as unknown as Record<string, unknown>[])
+// 一覧のページング（1 ページ 20 件 = 改修依頼 2026-08-18。クライアントページング。絞り込みは rawRequests が担う。
+// 一括選別の選択（selectedReqIds）は行 id ベースのため、ページを跨いでも選択状態は維持される）
+const { page: rawPage, pageSize: rawPageSize, rows: pagedRawRequests, total: rawTotal } = useListView<ImprovementRequest>({ source: rawRequests })
+const rawTableRows = computed(() => pagedRawRequests.value as unknown as Record<string, unknown>[])
 /** 一覧行 → ImprovementRequest（UiDataTable の行型は Record<string, unknown> のため、キャストは 1 か所に集約 = レビュー R4） */
 function reqOf(row: Record<string, unknown>): ImprovementRequest {
   return row as unknown as ImprovementRequest
@@ -542,6 +549,11 @@ const tabs = computed<TabItem[]>(() => [
 ])
 useRouteTabSync(tab, { valid: TAB_KEYS })
 
+// ページングの 1 ページ目リセット（tab がここで定義されるため watch もここに置く。
+// タブ切替・絞り込み・検索の変更で対象一覧を先頭ページから表示する = 改修依頼 2026-08-18）
+watch([tab, rawFilter], () => { rawPage.value = 1 })
+watch([tab, uiFilter, search], () => { itemPage.value = 1 })
+
 /** サマリーカードからのタブ直行（受付箱カード = 受付箱タブ / ステータスカード = 改修案件タブ + 絞り込み） */
 function goInbox(): void {
   tab.value = 'inbox'
@@ -837,6 +849,7 @@ async function copyAndClose(): Promise<void> {
             <span class="num text-[12px] text-muted">{{ fmtDateTimeSec(row.createdAt as string) }}</span>
           </template>
         </UiDataTable>
+        <UiPagination v-model:page="rawPage" v-model:page-size="rawPageSize" :total="rawTotal" />
       </UiSectionCard>
 
       <!-- カンバン: ステータス別に進捗を一望 -->
@@ -885,6 +898,7 @@ async function copyAndClose(): Promise<void> {
             <span class="text-[12px] text-muted">{{ fmtDate(row.updatedAt as string) }}</span>
           </template>
         </UiDataTable>
+        <UiPagination v-model:page="itemPage" v-model:page-size="itemPageSize" :total="itemTotal" />
       </UiSectionCard>
 
       <p class="text-[12px] text-muted">

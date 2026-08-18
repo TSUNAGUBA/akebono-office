@@ -870,8 +870,12 @@ function summaryOf(r: DailyReport): string {
   return r.entries.length > 1 ? `${head}（他 ${r.entries.length - 1} 件）` : (head || '—')
 }
 
+// 一覧のページング（1 ページ 20 件 = 改修依頼 2026-08-18。クライアントページング。絞り込みは allVisibleReports が担う）
+const { page: allPage, pageSize: allPageSize, rows: pagedAllReports, total: allTotal } = useListView<DailyReport>({ source: allVisibleReports })
+watch([tab, allMonth, allDeptId, allMemberId, allUnreadOnly], () => { allPage.value = 1 })
+
 const allRows = computed(() =>
-  allVisibleReports.value.map(r => ({
+  pagedAllReports.value.map(r => ({
     id: r.id,
     dateLabel: dayLabel(r.date),
     author: reports.authorOf(r).name,
@@ -988,6 +992,10 @@ async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
   }
 }
 
+// 過去の週報一覧のページング（1 ページ 20 件 = 改修依頼 2026-08-18。クライアントページング）
+const { page: mwPage, pageSize: mwPageSize, rows: pagedMyWeeklies, total: mwTotal } = useListView<WeeklyReport>({ source: reports.myWeeklies })
+watch([tab, currentUserId], () => { mwPage.value = 1 })
+
 // ---------- 全員の週報タブ（オペレーター指示 2026-07-22。参照権限 = 日報・週報の参照対象） ----------
 
 /** サブビュー（一覧 / 週次 AI インサイト = バッチ7g。インサイトは全登録データ横断のため本タブに置く） */
@@ -1022,6 +1030,10 @@ const waUnreadOnly = ref(true)
 const waUnreadCount = computed(() => allWeeklies.value.filter(isWeeklyUnread).length)
 const visibleWeeklies = computed(() =>
   waUnreadOnly.value ? allWeeklies.value.filter(isWeeklyUnread) : allWeeklies.value)
+
+// 一覧のページング（1 ページ 20 件 = 改修依頼 2026-08-18。クライアントページング。絞り込みは visibleWeeklies が担う）
+const { page: waPage, pageSize: waPageSize, rows: pagedWeeklies, total: waTotal } = useListView<WeeklyReport>({ source: visibleWeeklies })
+watch([tab, weeklyAllView, selAllWeekStart, waDeptId, waMemberId, waUnreadOnly], () => { waPage.value = 1 })
 
 // 詳細を開いたら既読にする（過去の週報一覧 = 自分の週報からの導線でも一貫。提出済みのみ）
 watch(weeklyDrawerId, (id) => {
@@ -1677,6 +1689,7 @@ async function onMarkUnreadWeekly(): Promise<void> {
             </span>
           </template>
         </UiDataTable>
+        <UiPagination v-model:page="allPage" v-model:page-size="allPageSize" :total="allTotal" />
       </UiSectionCard>
     </div>
 
@@ -1966,7 +1979,7 @@ async function onMarkUnreadWeekly(): Promise<void> {
             :hint="waUnreadOnly ? 'すべて既読です（「未読のみ」を解除すると全件表示されます）' : '「自分の週報」から提出すると、ここに表示されます（絞り込み条件も確認してください）'"
           />
           <ul v-else class="divide-y divide-line">
-            <li v-for="w in visibleWeeklies" :key="w.id">
+            <li v-for="w in pagedWeeklies" :key="w.id">
               <button
                 type="button"
                 class="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-brand-soft"
@@ -1984,6 +1997,7 @@ async function onMarkUnreadWeekly(): Promise<void> {
               </button>
             </li>
           </ul>
+          <UiPagination v-model:page="waPage" v-model:page-size="waPageSize" :total="waTotal" />
         </UiSectionCard>
       </template>
     </div>
@@ -2112,7 +2126,7 @@ async function onMarkUnreadWeekly(): Promise<void> {
       <UiSectionCard title="過去の週報" flush>
         <UiEmptyState v-if="reports.myWeeklies.value.length === 0" title="週報がまだありません" hint="今週の週報を作成すると一覧に表示されます" />
         <ul v-else class="divide-y divide-line">
-          <li v-for="w in reports.myWeeklies.value" :key="w.id">
+          <li v-for="w in pagedMyWeeklies" :key="w.id">
             <button
               type="button"
               class="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-brand-soft"
@@ -2123,6 +2137,7 @@ async function onMarkUnreadWeekly(): Promise<void> {
             </button>
           </li>
         </ul>
+        <UiPagination v-model:page="mwPage" v-model:page-size="mwPageSize" :total="mwTotal" />
       </UiSectionCard>
     </div>
 

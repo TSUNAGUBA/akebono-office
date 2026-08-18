@@ -32,6 +32,13 @@ const workCategories = computed(() =>
     .sort((a, b) => a.displayOrder - b.displayOrder))
 const members = tbl('members')
 
+// 一覧のページング（1 ページ 20 件 = 改修依頼 2026-08-18。クライアントページング。
+// 取消済み一覧は復元導線 = 少件数想定のため従来どおり全件表示）
+const { page: listPage, pageSize: listPageSize, rows: pagedNotes, total: listTotal } = useListView<Note>({ source: notes.list })
+const { page: adminPage, pageSize: adminPageSize, rows: pagedAdminNotes, total: adminTotal } = useListView<Note>({ source: notes.adminList })
+// デモユーザー切替で一覧の中身が入れ替わるため 1 ページ目へ戻す（件数減のはみ出しは useListView が自動補正）
+watch(() => currentUser.value.id, () => { listPage.value = 1; adminPage.value = 1 })
+
 const form = ref({ title: '', body: '', projectId: '', companyId: '', workCategoryId: '' })
 const saving = ref(false)
 
@@ -315,7 +322,7 @@ function authorOf(n: Note): string {
         :hint="`「${kind === 'poipoi' ? 'タネを投げ込む' : '議事録を登録する'}」からテキスト登録またはファイル取込ができます`"
       />
       <ul v-else class="divide-y divide-line">
-        <li v-for="n in notes.list.value" :key="n.id" class="flex items-start gap-1 px-4 py-2.5">
+        <li v-for="n in pagedNotes" :key="n.id" class="flex items-start gap-1 px-4 py-2.5">
           <button
             type="button"
             class="min-w-0 flex-1 rounded-md text-left transition-colors hover:bg-brand-soft"
@@ -349,6 +356,7 @@ function authorOf(n: Note): string {
           </button>
         </li>
       </ul>
+      <UiPagination v-model:page="listPage" v-model:page-size="listPageSize" :total="listTotal" />
       <!-- 取消済み（復元権限のある行のみ）。誤って取り消した場合の立ち戻り導線 -->
       <div v-if="notes.archived.value.length > 0" class="border-t border-line px-4 py-2">
         <button type="button" class="btn btn-ghost btn-sm" @click="showArchived = !showArchived">
@@ -523,7 +531,7 @@ function authorOf(n: Note): string {
         メンバーのタネはまだありません（自分のタネは上の一覧に表示されます）
       </p>
       <ul v-else class="divide-y divide-line">
-        <li v-for="n in notes.adminList.value" :key="n.id">
+        <li v-for="n in pagedAdminNotes" :key="n.id">
           <button
             type="button"
             class="w-full px-4 py-2.5 text-left transition-colors hover:bg-brand-soft"
@@ -539,6 +547,7 @@ function authorOf(n: Note): string {
           </button>
         </li>
       </ul>
+      <UiPagination v-model:page="adminPage" v-model:page-size="adminPageSize" :total="adminTotal" />
     </UiSectionCard>
 
     <!-- 詳細モーダル（全文をマークダウン描画） -->
