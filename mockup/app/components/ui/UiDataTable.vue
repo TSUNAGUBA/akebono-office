@@ -94,9 +94,11 @@ function onRowKeydown(e: KeyboardEvent, row: Record<string, unknown>): void {
                 :key="c.key"
                 :style="c.width ? { width: c.width } : {}"
                 :class="c.align === 'right' ? '!text-right' : c.align === 'center' ? '!text-center' : ''"
-                :aria-sort="ariaSortOf(c.key)"
+                :aria-sort="c.sortable !== false ? ariaSortOf(c.key) : undefined"
               >
+                <!-- sortable: false = 行データに対応キーが無い仮想列（選択・操作等）。飾りのソートボタンを出さない（X-1） -->
                 <button
+                  v-if="c.sortable !== false"
                   type="button"
                   class="inline-flex items-center gap-0.5 hover:text-ink"
                   @click="toggleSort(c.key)"
@@ -104,6 +106,7 @@ function onRowKeydown(e: KeyboardEvent, row: Record<string, unknown>): void {
                   {{ c.label }}
                   <span v-if="sortKey === c.key" aria-hidden="true">{{ sortDir === 1 ? '▲' : '▼' }}</span>
                 </button>
+                <span v-else>{{ c.label }}</span>
               </th>
             </tr>
           </thead>

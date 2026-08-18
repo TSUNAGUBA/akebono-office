@@ -9,6 +9,8 @@ export interface TableColumn {
   align?: 'left' | 'right' | 'center'
   /** モバイルカード表示で主要行に出すか */
   primary?: boolean
+  /** false = ソート不可（選択・操作ボタン等、行データに対応キーが無い仮想列。既定 = true） */
+  sortable?: boolean
 }
 
 export interface FieldDef {

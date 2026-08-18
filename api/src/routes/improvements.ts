@@ -15,6 +15,7 @@ import type pg from 'pg'
 import {
   buildCodingPrompt,
   buildItemDetail,
+  buildUnclusterNoteBody,
   canTransition,
   capCodePoints,
   CLUSTER_LLM_SCHEMA,
@@ -38,7 +39,9 @@ import {
   type ImprovementRequestAdoption,
   type ImprovementRequestImage,
   type ImprovementRequestStatus,
+  type ImprovementRequestTag,
   type ImprovementStatus,
+  improvementAdoptionError,
   improvementBodyError,
   improvementCommentError,
   improvementImagesError,
@@ -46,10 +49,12 @@ import {
   improvementNoteError,
   improvementPlanError,
   improvementTitleError,
+  improvementUnclusterError,
   matchesImprovementFilter,
   normalizeClusterPlan,
   normalizeImprovementImages,
   normalizeImprovementLinks,
+  normalizeImprovementTags,
   type PromptItemInput,
 } from '../../../shared/domain/improvement'
 import { canManageImprovements } from '../../../shared/domain/permissions'
@@ -71,8 +76,9 @@ const JST = `AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"'`
  * 画像の実体は itemId 指定の GET（ドロワーの遅延ロード）でのみ返す）
  */
 const reqColsOf = (withImages: boolean): string => `id, member_id AS "memberId", member_name AS "memberName",
-  page_path AS "pagePath", page_label AS "pageLabel", body, status, adoption, links,
+  page_path AS "pagePath", page_label AS "pageLabel", body, status, adoption, tags, links,
   ${withImages ? 'images' : `'[]'::jsonb AS images`}, item_id AS "itemId",
+  excluded_item_ids AS "excludedItemIds",
   to_char(archived_at ${JST}) AS "archivedAt", to_char(edited_at ${JST}) AS "editedAt",
   to_char(created_at ${JST}) AS "createdAt"`
 const ITEM_COLS = `id, title, summary, detail, status, page_paths AS "pagePaths",
@@ -106,9 +112,11 @@ async function inTxn<T>(pool: pg.Pool, fn: (db: pg.PoolClient) => Promise<T>): P
  * AKO-REQ-009（リンク）/ AKO-REQ-010（画像）の 400 へ変換して throw。
  * ページ情報は投稿元の記録であり、上限で切り詰めるのみ（必須ではない）。
  * リンク・画像は任意の添付（正規化 + 件数/形式/上限を shared 検証 = mock と両モード parity）。
+ * タグ（壁打ち/お任せ = F-42-17）は allowlist 正規化のみ（未知値は落とす = エラーにしない）。
  */
 export function improvementRequestInputOf(body: Record<string, unknown>): {
-  body: string; pagePath: string; pageLabel: string; links: string[]; images: ImprovementRequestImage[]
+  body: string; pagePath: string; pageLabel: string; links: string[]
+  images: ImprovementRequestImage[]; tags: ImprovementRequestTag[]
 } {
   const text = String(body.body ?? '').trim()
   const msg = improvementBodyError(text)
@@ -125,6 +133,7 @@ export function improvementRequestInputOf(body: Record<string, unknown>): {
     pageLabel: capCodePoints(String(body.pageLabel ?? '').trim(), IMPROVEMENT_PAGE_LABEL_CAP),
     links,
     images,
+    tags: normalizeImprovementTags(body.tags),
   }
 }
 
@@ -151,7 +160,8 @@ async function llmCluster(
       + '実際にコード改修する単位（改修単位）へ分解・集約します。関連する要望はまとめ、無関係なものは分けます。'
       + '既存の未判定の改修単位（openItems）に合致する要望は appends でその itemId に割り当て、'
       + '新しい単位は creates に起こします（title=40字以内の見出し・summary=1〜2文・detail=対象ページや'
-      + '機能名を含む改修方針のマークダウン）。requestIds には割り当てた要望の id のみを入れ、id を捏造しないこと。',
+      + '機能名を含む改修方針のマークダウン）。requestIds には割り当てた要望の id のみを入れ、id を捏造しないこと。'
+      + 'excludeItemIds を持つ要望は「集約の解除」でその改修単位から外されたものです。そこに含まれる itemId へは割り当てないこと。',
     prompt: `# 未判定の既存改修単位(openItems)\n${JSON.stringify(openForPrompt, null, 1)}\n\n`
       + `# 未集約の要望(requests)\n${JSON.stringify(requests, null, 1)}`,
     schema: CLUSTER_LLM_SCHEMA,
@@ -171,10 +181,10 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
     // RETURNING は画像実体を含めない（クライアントは id しか読まず、アップロードした data URI をそのまま
     // 返すのは転送量の無駄 = 一覧 GET と同じ姿勢。実体は itemId 指定 GET でのみ返す）
     const { rows } = await pool.query(
-      `INSERT INTO improvement_requests (id, member_id, member_name, page_path, page_label, body, links, images)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING ${reqColsOf(false)}`,
+      `INSERT INTO improvement_requests (id, member_id, member_name, page_path, page_label, body, tags, links, images)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING ${reqColsOf(false)}`,
       [id, user.id, user.name, input.pagePath, input.pageLabel, input.body,
-        JSON.stringify(input.links), JSON.stringify(input.images)])
+        JSON.stringify(input.tags), JSON.stringify(input.links), JSON.stringify(input.images)])
     return c.json({ data: rows[0] }, 201)
   })
 
@@ -280,17 +290,87 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
       throw err('AKO-REQ-012', 'adoption が不正です（pending / adopted / declined）', 400)
     }
     // 集約済み（item_id あり）の要望は選別対象外（改修単位へ取り込み済みの記録を巻き戻さない = 原則2。
-    // 対象から外すときは要望の取消 = archive を使う）
+    // 対象から外すときは「集約の解除」（/uncluster = F-42-19）または要望の取消 = archive を使う）。
+    // 取消済み（archived_at あり）も対象外（UI は取消済みに選別操作を出さない。一括選別の
+    // 古い選択が取消直後の行を黙って書き換えない = レビュー指摘 2026-08-18。先に復元する）
     const { rows } = await pool.query(
       `UPDATE improvement_requests SET adoption = $2
-       WHERE id = $1 AND item_id IS NULL RETURNING ${reqColsOf(false)}`, [id, adoption])
+       WHERE id = $1 AND item_id IS NULL AND archived_at IS NULL RETURNING ${reqColsOf(false)}`, [id, adoption])
     if (rows.length === 0) {
-      const { rows: exists } = await pool.query(`SELECT item_id AS "itemId" FROM improvement_requests WHERE id = $1`, [id])
-      if (exists.length === 0) throw err('AKO-REQ-002', '対象の要望が見つかりません', 404)
-      throw err('AKO-REQ-013', '集約済みの要望は選別を変更できません（対象から外す場合は要望を取り消してください）', 409)
+      // 理由の特定は共有ガード（存在 → 取消済み → 集約済み = mock・一括仕分けと同一判定 = 原則6）。
+      // archived_at は他ルート同様 to_char（生 timestamptz は Date で返り型宣言と食い違う）
+      const { rows: exists } = await pool.query<{ itemId: string | null; archivedAt: string | null }>(
+        `SELECT item_id AS "itemId", to_char(archived_at ${JST}) AS "archivedAt" FROM improvement_requests WHERE id = $1`, [id])
+      const guard = improvementAdoptionError(exists[0])
+        // UPDATE と SELECT の間に状態が戻った極小の競合窓: 変更は適用されていないため conflict として返す
+        // （019 = 取消済みとは別コード。復元では直らない一時競合のため再読み込みを案内 = レビュー R3）
+        ?? { code: 'AKO-REQ-020', message: '要望の状態が変わったため選別を変更できませんでした（再読み込みしてください）' }
+      throw err(guard.code, guard.message, guard.code === 'AKO-REQ-002' ? 404 : 409)
     }
     await audit(pool, { actorId: user.id, action: 'update', entity: 'improvement_requests', entityId: id, detail: `要望の選別 → ${adoption}` })
     return c.json({ data: rows[0] })
+  })
+
+  // ---- 集約の解除（F-42-19・改修依頼 2026-08-18。管理）。要望を改修単位から外し、
+  //      「採用済み（集約待ち）」へ戻す = 再度 AI 集約の対象にする（取消 archive と違い要望は生きたまま）。
+  //      item のステータス・本文には触れない（人手の記録は不変 = 原則2。表示・プロンプトの元要望は
+  //      request.item_id が SoT のため解除だけで外れる）。source_request_ids のトレースも除去して整合（原則6） ----
+  app.post('/requests/:id/uncluster', async (c) => {
+    const user = await requireManage(c, pool)
+    const id = c.req.param('id')
+    const updated = await inTxn(pool, async (db) => {
+      // ロック順を generate の追記（item → request）と揃える（逆順 = デッドロック窓 → 生の 500。レビュー R13）:
+      // 無ロックで対象 item を先読み → item をロック → request をロックし、間に item_id が
+      // 変わっていないか再検証する（変わっていれば競合 409 = 再読み込みを案内）
+      const { rows: peek } = await db.query<{ itemId: string | null }>(
+        `SELECT item_id AS "itemId" FROM improvement_requests WHERE id = $1`, [id])
+      if (peek.length === 0) throw err('AKO-REQ-002', '対象の要望が見つかりません', 404)
+      const peekItemId = peek[0]!.itemId
+      let lockedItem: { status: ImprovementStatus; archivedAt: string | null } | null = null
+      if (peekItemId) {
+        const { rows: itemRows } = await db.query<{ status: ImprovementStatus; archivedAt: string | null }>(
+          `SELECT status, to_char(archived_at ${JST}) AS "archivedAt"
+           FROM improvement_items WHERE id = $1 FOR UPDATE`, [peekItemId])
+        lockedItem = itemRows[0] ?? null
+      }
+      const { rows } = await db.query<{ itemId: string | null; archivedAt: string | null; body: string }>(
+        `SELECT item_id AS "itemId", to_char(archived_at ${JST}) AS "archivedAt", body
+         FROM improvement_requests WHERE id = $1 FOR UPDATE`, [id])
+      // 要望側のガード（存在/未集約/取消済み）→ 競合（020）→ item 側のガード（取消済み = 022・
+      // 決着済み = 021。item 情報は peekItemId のものと確定した後に適用する）の順で判定
+      const requestGuard = improvementUnclusterError(rows[0])
+      if (requestGuard) throw err(requestGuard.code, requestGuard.message, requestGuard.code === 'AKO-REQ-002' ? 404 : 409)
+      const itemId = rows[0]!.itemId!
+      if (itemId !== peekItemId) {
+        throw err('AKO-REQ-020', '要望の状態が変わったため集約を解除できませんでした（再読み込みしてください）', 409)
+      }
+      const guard = improvementUnclusterError(rows[0], lockedItem)
+      if (guard) throw err(guard.code, guard.message, 409)
+      // 解除後は採用済みへ明示的に戻す（旧データ = adoption 未定義でも clusterTargetRequests の対象になる）。
+      // excluded_item_ids へ元 item を追記（解除の履歴 = 蓄積・クリアしない）: 次回以降の集約で
+      // そこへは再追記しない（同じ単位への往復 + detail 重複・「対象外」メモとの矛盾を防ぐ = レビュー R6。
+      // 同一 item は履歴に一度外れると戻れないため重複追記は起きないが、@> ガードで冪等にする）
+      const { rows: out } = await db.query(
+        `UPDATE improvement_requests SET item_id = NULL, adoption = 'adopted',
+           excluded_item_ids = CASE WHEN excluded_item_ids @> to_jsonb($2::text)
+             THEN excluded_item_ids ELSE excluded_item_ids || to_jsonb($2::text) END
+         WHERE id = $1 RETURNING ${reqColsOf(false)}`, [id, itemId])
+      await db.query(
+        `UPDATE improvement_items SET source_request_ids = (
+           SELECT COALESCE(jsonb_agg(x), '[]'::jsonb)
+           FROM jsonb_array_elements_text(source_request_ids) AS t(x) WHERE x <> $2
+         ), updated_at = now() WHERE id = $1`, [itemId, id])
+      // 元 item の detail（人手編集されうる = 原則2で書き換えない）には解除した要望の記載が残るため、
+      // 「対象から外れた」修正メモを残す（buildCodingPrompt の担当者メモに載り、旧記載の再実装を防ぐ =
+      // プロンプト整合の担保 = 主フローの一部。文言は shared 共有 = mock と同一。レビュー R4）
+      await db.query(
+        `INSERT INTO improvement_notes (id, item_id, member_id, member_name, body, kind)
+         VALUES ($1, $2, $3, $4, $5, 'note')`,
+        [newId('imnote'), itemId, user.id, user.name, buildUnclusterNoteBody(rows[0]!.body)])
+      return out[0]
+    })
+    await audit(pool, { actorId: user.id, action: 'update', entity: 'improvement_requests', entityId: id, detail: '集約を解除（再度 AI 集約の対象へ）' })
+    return c.json({ data: updated })
   })
 
   // ---- 生要望へのコメント（やり取り。記録系・追記のみ = 改善要望 2026-08-17 第 2 弾） ----
@@ -389,18 +469,21 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
   //      未選別・不採用の要望は集約されない（管理者の取捨選択が先 = 改善要望 2026-08-17 第 2 弾） ----
   app.post('/generate', async (c) => {
     const user = await requireManage(c, pool)
-    // 採用済み・未集約かつ有効な要望
+    // 採用済み・未集約かつ有効な要望（excluded_item_ids = 「集約の解除」の履歴 = そこへは再追記しない）
     const { rows: reqRows } = await pool.query<ClusterRequestInput>(
-      `SELECT id, page_path AS "pagePath", page_label AS "pageLabel", body
+      `SELECT id, page_path AS "pagePath", page_label AS "pageLabel", body,
+         excluded_item_ids AS "excludeItemIds"
        FROM improvement_requests
        WHERE item_id IS NULL AND archived_at IS NULL AND adoption = 'adopted' ORDER BY created_at, id`)
     if (reqRows.length === 0) {
       return c.json({ data: { created: 0, appended: 0, clustered: 0, llm: false } })
     }
-    // 追記先候補 = 未判定・有効な改修単位
+    // 追記先候補 = 未判定・有効な改修単位。ORDER BY で追記先の選択を決定的にする
+    // （解除 → 再集約で同一ページの triage item が複数できるのは通常ケース。無順序だと追記先が
+    // 実行ごとに揺れ、mock の挿入順（作成順）ともずれる = 原則6。レビュー R12）
     const { rows: openRows } = await pool.query<ClusterOpenItem>(
       `SELECT id, status, page_paths AS "pagePaths" FROM improvement_items
-       WHERE status = 'triage' AND archived_at IS NULL`)
+       WHERE status = 'triage' AND archived_at IS NULL ORDER BY created_at, id`)
 
     const llmPlan = await llmCluster(env, openRows, reqRows)
     const plan = llmPlan ?? heuristicClusterRequests(openRows, reqRows)
@@ -416,6 +499,9 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
       // 要望を指す item）を作らない。確保 0 件なら item を作らない
       for (const cr of plan.creates) {
         const itemId = newId('imp')
+        // excluded_item_ids（解除の履歴）は集約後もクリアしない（過去に外した単位へ戻さない = レビュー R6）。
+        // 新規 item の id は採番直後 = どの要望の履歴にも入り得ないため、ここに除外の SQL 検証は不要
+        // （必要なのは既存 item へ戻す appends 側のみ = レビュー R13/R14）
         const { rows: claimed } = await db.query<{ id: string }>(
           `UPDATE improvement_requests SET item_id = $1
            WHERE id = ANY($2::text[]) AND item_id IS NULL AND archived_at IS NULL AND adoption = 'adopted' RETURNING id`,
@@ -440,9 +526,11 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
            FROM improvement_items WHERE id = $1 AND status = 'triage' AND archived_at IS NULL FOR UPDATE`,
           [ap.itemId])
         if (itemRows.length === 0) continue
+        // NOT @> = 除外の SQL 側最終防衛（creates と同じ = プラン snapshot と claim の間の競合対策。レビュー R13）
         const { rows: claimed } = await db.query<{ id: string }>(
           `UPDATE improvement_requests SET item_id = $1
-           WHERE id = ANY($2::text[]) AND item_id IS NULL AND archived_at IS NULL AND adoption = 'adopted' RETURNING id`,
+           WHERE id = ANY($2::text[]) AND item_id IS NULL AND archived_at IS NULL AND adoption = 'adopted'
+             AND NOT excluded_item_ids @> to_jsonb($1::text) RETURNING id`,
           [ap.itemId, ap.requestIds])
         if (claimed.length === 0) continue
         const cur = itemRows[0]!
@@ -653,9 +741,10 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
       const { rows: reqRows } = await pool.query<{
         itemId: string; pageLabel: string; pagePath: string; body: string
         status: ImprovementRequestStatus; links: string[]; imageCount: number
+        tags: ImprovementRequestTag[]
       }>(
         `SELECT item_id AS "itemId", page_label AS "pageLabel", page_path AS "pagePath", body,
-           status, links, jsonb_array_length(images) AS "imageCount"
+           status, tags, links, jsonb_array_length(images) AS "imageCount"
          FROM improvement_requests WHERE item_id = ANY($1::text[]) AND archived_at IS NULL
          ORDER BY created_at, id`, [ids])
       for (const r of reqRows) {
@@ -663,7 +752,9 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
         const entry = {
           pageLabel: r.pageLabel, pagePath: r.pagePath, body: r.body,
           // 要望単位のステータスを加味（open 以外は【対応済み】【見送り】で明記 = プロンプト再生成に反映）
+          // + 投稿時の任意タグ（〔壁打ち〕〔お任せ〕= F-42-17）
           status: r.status, links: r.links ?? [], imageCount: Number(r.imageCount ?? 0),
+          tags: r.tags ?? [],
         }
         if (arr) arr.push(entry)
         else byItem.set(r.itemId, [entry])

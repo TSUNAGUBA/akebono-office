@@ -12,6 +12,7 @@ import type { Result } from '~/types/domain'
 import {
   buildCodingPrompt,
   buildItemDetail,
+  buildUnclusterNoteBody,
   canTransition,
   capCodePoints,
   heuristicClusterRequests,
@@ -34,9 +35,12 @@ import {
   type ImprovementRequestComment,
   type ImprovementRequestImage,
   type ImprovementRequestStatus,
+  type ImprovementRequestTag,
   type ImprovementStatus,
+  improvementAdoptionError,
   improvementBodyError,
   improvementEditError,
+  improvementUnclusterError,
   improvementCommentError,
   improvementImagesError,
   improvementLinksError,
@@ -45,6 +49,8 @@ import {
   matchesImprovementFilter,
   normalizeImprovementImages,
   normalizeImprovementLinks,
+  normalizeImprovementTags,
+  planAdoptionBulk,
   clusterTargetRequests,
   requestAdoptionOf,
   type PromptItemInput,
@@ -57,6 +63,8 @@ export interface GenerateResult {
   appended?: number
   clustered?: number
   llm?: boolean
+  /** mock のみ: localStorage への永続化可否（false = 容量超過 = 再読込で消える可能性。レビュー R17） */
+  persisted?: boolean
 }
 
 export function useImprovements() {
@@ -125,7 +133,7 @@ export function useImprovements() {
 
   async function submit(input: {
     body: string; pagePath?: string; pageLabel?: string
-    links?: string[]; images?: ImprovementRequestImage[]
+    links?: string[]; images?: ImprovementRequestImage[]; tags?: ImprovementRequestTag[]
   }): Promise<Result & { persisted?: boolean }> {
     const body = (input.body ?? '').trim()
     const msg = improvementBodyError(body)
@@ -137,12 +145,14 @@ export function useImprovements() {
     const images = normalizeImprovementImages(input.images ?? [])
     const imagesMsg = improvementImagesError(images)
     if (imagesMsg) return { ok: false, error: { code: 'AKO-REQ-010', message: imagesMsg } }
+    // 任意タグ（壁打ち/お任せ = F-42-17）。allowlist 正規化のみ（未知値は落とす = API と同一）
+    const tags = normalizeImprovementTags(input.tags ?? [])
     const pagePath = capCodePoints((input.pagePath ?? '').trim(), IMPROVEMENT_PAGE_PATH_CAP)
     const pageLabel = capCodePoints((input.pageLabel ?? '').trim(), IMPROVEMENT_PAGE_LABEL_CAP)
     if (isApi) {
       // 管理 GET は権限者のみのため reload しない（投稿者は一覧を見ない）
       const res = await apiWrite<{ id: string }>('/v1/improvements/requests', {
-        body: { body: capCodePoints(body, IMPROVEMENT_BODY_CAP), pagePath, pageLabel, links, images },
+        body: { body: capCodePoints(body, IMPROVEMENT_BODY_CAP), pagePath, pageLabel, links, images, tags },
       })
       return res.ok ? { ok: true, id: res.id } : res
     }
@@ -156,6 +166,7 @@ export function useImprovements() {
       pageLabel,
       body: capCodePoints(body, IMPROVEMENT_BODY_CAP),
       adoption: 'pending', // 投稿直後は未選別（管理者の取捨選択が先 = 改善要望 2026-08-17 第 2 弾）
+      tags,
       links,
       images,
       itemId: null,
@@ -172,12 +183,14 @@ export function useImprovements() {
   /** 管理データを取得（API モードのみ実フェッチ。mock はライブ computed のため no-op） */
   async function refresh(): Promise<void> {
     if (!isApi) return
+    // 失敗時は最後に取得できたデータを保持する（[] を返すと 401/403/断線のたびに管理画面が白紙化する =
+    // レビュー R18。初回ロード失敗はキャッシュが空のため従来どおり空表示）
     const [items, reqs, notes, comments] = await Promise.all([
-      apiFetch<ImprovementItem[]>('/v1/improvements/items', { query: { includeArchived: '1' } }).catch(() => [] as ImprovementItem[]),
-      apiFetch<ImprovementRequest[]>('/v1/improvements/requests', { query: { includeArchived: '1' } }).catch(() => [] as ImprovementRequest[]),
+      apiFetch<ImprovementItem[]>('/v1/improvements/items', { query: { includeArchived: '1' } }).catch(() => apiItems.value),
+      apiFetch<ImprovementRequest[]>('/v1/improvements/requests', { query: { includeArchived: '1' } }).catch(() => apiRequests.value),
       // メモ・コメントは有効なもののみ（取消済みは UI に出さない = 追加操作の取消は確認ダイアログで担保。原則9.5）
-      apiFetch<ImprovementNote[]>('/v1/improvements/notes').catch(() => [] as ImprovementNote[]),
-      apiFetch<ImprovementRequestComment[]>('/v1/improvements/request-comments').catch(() => [] as ImprovementRequestComment[]),
+      apiFetch<ImprovementNote[]>('/v1/improvements/notes').catch(() => apiNotes.value),
+      apiFetch<ImprovementRequestComment[]>('/v1/improvements/request-comments').catch(() => apiComments.value),
     ])
     apiItems.value = items
     apiComments.value = comments
@@ -240,7 +253,8 @@ export function useImprovements() {
     const reqsRef = tbl('improvementRequests')
     const itemsRef = tbl('improvementItems')
     const unclustered = clusterTargetRequests(reqsRef.value)
-      .map(r => ({ id: r.id, pagePath: r.pagePath, pageLabel: r.pageLabel, body: r.body }))
+      // excludeItemIds = 「集約の解除」の履歴（そこへは再追記しない = F-42-19）
+      .map(r => ({ id: r.id, pagePath: r.pagePath, pageLabel: r.pageLabel, body: r.body, excludeItemIds: r.excludedItemIds ?? [] }))
     if (unclustered.length === 0) return { ok: true, created: 0, appended: 0, clustered: 0, llm: false }
     const openItems = itemsRef.value
       .filter(it => it.status === 'triage' && !it.archivedAt)
@@ -249,8 +263,13 @@ export function useImprovements() {
     const now = nowJstIso()
     const reqPatch = new Map<string, string>()
     const newItems: ImprovementItem[] = []
+    // nextId はコミット済みの行しか見ないため、ループ内で 2 件目以降を採番すると id が重複する
+    // （1 回の集約で複数ページ分の新規 item ができるのは通常ケース。id 重複 = 別 item への一括変更・
+    // v-for キー衝突の実バグ = レビュー R11）。基点を 1 回だけ取り、以降はローカルに加算する
+    let nextItemNum = Number(nextId('improvementItems', 'imp').slice('imp-'.length))
     for (const cr of plan.creates) {
-      const id = nextId('improvementItems', 'imp')
+      const id = `imp-${String(nextItemNum).padStart(4, '0')}`
+      nextItemNum += 1
       newItems.push({
         id, title: cr.title, summary: cr.summary, detail: cr.detail, status: 'triage',
         pagePaths: cr.pagePaths, sourceRequestIds: cr.requestIds, llm: false,
@@ -278,9 +297,11 @@ export function useImprovements() {
       ap.requestIds.forEach(rid => reqPatch.set(rid, ap.itemId))
     }
     itemsRef.value = [...itemsVal, ...newItems]
+    // excludedItemIds（解除の履歴）は集約後もクリアしない（過去に外した単位へ戻さない = レビュー R6・API と同一）
     reqsRef.value = reqsRef.value.map(r => (reqPatch.has(r.id) ? { ...r, itemId: reqPatch.get(r.id)! } : r))
-    commit()
-    return { ok: true, created: plan.creates.length, appended: plan.appends.length, clustered: reqPatch.size, llm: false }
+    // 永続化可否を返し UI が警告できるようにする（他の書込と同型 = 容量超過の変更消失を黙認しない。レビュー R17）
+    const persisted = commit()
+    return { ok: true, created: plan.creates.length, appended: plan.appends.length, clustered: reqPatch.size, llm: false, persisted }
   }
 
   async function generate(): Promise<GenerateResult> {
@@ -378,24 +399,156 @@ export function useImprovements() {
    * 要望の選別（採用/不採用/未選別へ戻す。遷移自由 = 選び直しはいつでも可 = 原則9.5）。
    * 採用のみ AI 集約対象。集約済み（itemId あり）の要望は変更不可（API は AKO-REQ-013 = 記録保護）。
    */
-  async function setRequestAdoption(id: string, adoption: ImprovementRequestAdoption): Promise<Result> {
+  async function setRequestAdoption(id: string, adoption: ImprovementRequestAdoption): Promise<Result & { persisted?: boolean }> {
     if (!IMPROVEMENT_REQUEST_ADOPTIONS.includes(adoption)) {
       return { ok: false, error: { code: 'AKO-REQ-012', message: 'adoption が不正です（pending / adopted / declined）' } }
     }
     if (isApi) {
-      const res = await apiWrite(`/v1/improvements/requests/${id}/adoption`, { body: { adoption } })
+      const res = await apiWrite<ImprovementRequest>(`/v1/improvements/requests/${id}/adoption`, { body: { adoption } })
+      if (!res.ok) return res
+      // 応答行（RETURNING）をキャッシュへ差し込む: 行内 採用/不採用 は選別のホットパスのため、
+      // 1 クリックごとの 4 コレクション全再取得（refresh）を避ける（レビュー R22）。
+      // 一覧応答は images を '[]' で伏せるため、遅延ロード済みの画像は既存キャッシュから引き継ぐ
+      const updated = res.data
+      apiRequests.value = apiRequests.value.map(r => (r.id === id
+        ? { ...updated, images: (updated.images ?? []).length > 0 ? updated.images : r.images }
+        : r))
+      return { ok: true, id }
+    }
+    const reqsRef = tbl('improvementRequests')
+    // ガード（存在 → 取消済み → 集約済み）は共有の improvementAdoptionError（API・一括仕分けと同一判定 = 原則6）
+    const guard = improvementAdoptionError(reqsRef.value.find(r => r.id === id))
+    if (guard) return { ok: false, error: guard }
+    reqsRef.value = reqsRef.value.map(r => (r.id === id ? { ...r, adoption } : r))
+    // 永続化可否を返し UI が警告できるようにする（submit / 一括選別と同型 = 容量超過の変更消失を黙認しない。レビュー R16）
+    const persisted = commit()
+    return { ok: true, id, persisted }
+  }
+
+  /**
+   * 要望の選別の一括変更（受付箱の複数選択 → まとめて採用/不採用 = 改修依頼 2026-08-18）。
+   * setRequestAdoption と同じ検証・ガード（集約済みは変更不可）を通し、一部が失敗しても
+   * 処理できた分は確定して done/failed で報告する（グレースフルデグラデーション = 原則4）。
+   * API モードは既存の 1 件エンドポイントを逐次呼び、再取得（refresh）は最後に 1 回だけ行う。
+   * 選別は遷移自由のため何度実行しても同じ結果（冪等 = 原則2）。
+   */
+  async function setRequestAdoptionBulk(
+    ids: string[], adoption: ImprovementRequestAdoption,
+  ): Promise<{
+    ok: boolean; done: number; failed: number; failedIds: string[]
+    error?: { code: string; message: string }; persisted?: boolean
+  }> {
+    // 重複除去は全経路で 1 回だけ行う（同一入力で failed 件数が揺れない = レビュー R14/R20）
+    const targets = [...new Set(ids)]
+    if (!IMPROVEMENT_REQUEST_ADOPTIONS.includes(adoption)) {
+      return { ok: false, done: 0, failed: targets.length, failedIds: targets, error: { code: 'AKO-REQ-012', message: 'adoption が不正です（pending / adopted / declined）' } }
+    }
+    if (targets.length === 0) {
+      return { ok: false, done: 0, failed: 0, failedIds: [], error: { code: 'AKO-REQ-016', message: '選別する要望が選択されていません' } }
+    }
+    let done = 0
+    let lastError: { code: string; message: string } | undefined
+    let persisted: boolean | undefined
+    const failedIds: string[] = []
+    // 以降の全滅が確定するエラー（認可断・認証断・ネットワーク断）: 残りへの逐次 POST と refresh を
+    // 打ち切る判定を 1 か所に（レビュー R15/R18/R19）
+    const isFatalBulkError = (code: string): boolean =>
+      code === 'AKO-PRM-001' || code.startsWith('AKO-AUTH-') || code === 'AKO-GEN-NET'
+    if (isApi) {
+      for (let i = 0; i < targets.length; i += 1) {
+        const id = targets[i]!
+        // 1 件 API（setRequestAdoption = 成功時に応答行をキャッシュへ即反映）を再利用する:
+        // 途中で打ち切られても成功分の表示が正しく残る（原則3・レビュー R24）
+        const res = await setRequestAdoption(id, adoption)
+        if (res.ok) {
+          done += 1
+          continue
+        }
+        lastError = res.error
+        failedIds.push(id)
+        if (isFatalBulkError(res.error.code)) {
+          failedIds.push(...targets.slice(i + 1))
+          break
+        }
+      }
+      // 成功分は setRequestAdoption がキャッシュへ反映済み。失敗があった場合のみ、他端末の先行変更
+      // （409 の原因 = 集約・取消済み）を取り込むため 1 回だけ refresh する（レビュー R2/R24）。
+      // 認可断・認証断・ネットワーク断は refresh の全 GET も失敗が確定しているため呼ばない
+      // （refresh 自体も失敗時は最後のデータを保持するが、無駄な 4 GET を避ける = レビュー R17/R18/R19）
+      if (failedIds.length > 0 && !(lastError && isFatalBulkError(lastError.code))) await refresh()
+    } else {
+      const reqsRef = tbl('improvementRequests')
+      // 仕分け（存在・集約済み・取消済み）は共有純関数（API 側の 1 件判定と同一 = 原則6。単体テストで固定）
+      const plan = planAdoptionBulk(targets, reqsRef.value)
+      const applicableSet = new Set(plan.applicable)
+      if (applicableSet.size > 0) {
+        reqsRef.value = reqsRef.value.map(r => (applicableSet.has(r.id) ? { ...r, adoption } : r))
+        // 永続化可否を返し UI が警告できるようにする（submit と同型 = 容量超過の変更消失を黙認しない。レビュー R7）
+        persisted = commit()
+      }
+      done = plan.applicable.length
+      lastError = plan.lastError ?? undefined
+      failedIds.push(...targets.filter(id => !applicableSet.has(id)))
+    }
+    const failed = targets.length - done
+    if (done === 0) {
+      return { ok: false, done, failed, failedIds, error: lastError ?? { code: 'AKO-REQ-002', message: '対象の要望が見つかりません' } }
+    }
+    return { ok: true, done, failed, failedIds, error: lastError, persisted }
+  }
+
+  /**
+   * 集約の解除（F-42-19・改修依頼 2026-08-18）。集約済みの要望を改修単位から外し、
+   * 「採用済み（集約待ち）」へ明示的に戻す = 次回の「AI で集約」の対象になる（取消 archive と違い
+   * 要望は生きたまま）。item のステータス・本文には触れない（人手の記録は不変 = 原則2）が、
+   * sourceRequestIds のトレースからは除去して導出値を整合させる（原則6）。ガードは共有の
+   * improvementUnclusterError（存在 → 未集約 → 取消済み = API ルートと同一判定・単体テストで固定）。
+   */
+  async function unclusterRequest(id: string): Promise<Result & { persisted?: boolean }> {
+    if (isApi) {
+      const res = await apiWrite(`/v1/improvements/requests/${id}/uncluster`, {})
       if (res.ok) await refresh()
       return res.ok ? { ok: true, id } : res
     }
     const reqsRef = tbl('improvementRequests')
-    const cur = reqsRef.value.find(r => r.id === id)
-    if (!cur) return { ok: false, error: { code: 'AKO-REQ-002', message: '対象の要望が見つかりません' } }
-    if (cur.itemId) {
-      return { ok: false, error: { code: 'AKO-REQ-013', message: '集約済みの要望は選別を変更できません（対象から外す場合は要望を取り消してください）' } }
-    }
-    reqsRef.value = reqsRef.value.map(r => (r.id === id ? { ...r, adoption } : r))
-    commit()
-    return { ok: true, id }
+    const itemsRef = tbl('improvementItems')
+    const target = reqsRef.value.find(r => r.id === id)
+    // 取消済み（AKO-REQ-022）・決着済み（AKO-REQ-021）item の元要望は解除不可（API と同一判定 = 原則6）
+    const guard = improvementUnclusterError(
+      target,
+      target?.itemId ? itemsRef.value.find(it => it.id === target.itemId) ?? null : null,
+    )
+    if (guard) return { ok: false, error: guard }
+    const itemId = target!.itemId!
+    // excludedItemIds へ元 item を追記（解除の履歴 = 蓄積・クリアしない。次回以降の集約でそこへは再追記しない）
+    reqsRef.value = reqsRef.value.map(r => (r.id === id
+      ? {
+          ...r,
+          itemId: null,
+          adoption: 'adopted' as const,
+          excludedItemIds: [...new Set([...(r.excludedItemIds ?? []), itemId])],
+        }
+      : r))
+    const now = nowJstIso()
+    itemsRef.value = itemsRef.value.map(it => (it.id === itemId
+      ? { ...it, sourceRequestIds: it.sourceRequestIds.filter(rid => rid !== id), updatedAt: now }
+      : it))
+    // 元 item の detail に残る旧記載を実装対象から外す修正メモ（buildCodingPrompt の担当者メモに載る。
+    // 文言は shared の buildUnclusterNoteBody = API と同一・原則6。レビュー R4）
+    const notesRef = tbl('improvementNotes')
+    notesRef.value = [...notesRef.value, {
+      id: nextId('improvementNotes', 'imnote'),
+      itemId,
+      memberId: currentUser.value.id,
+      memberName: currentUser.value.name,
+      body: buildUnclusterNoteBody(target!.body),
+      kind: 'note',
+      archivedAt: null,
+      createdAt: now,
+    }]
+    // 永続化可否を返し UI が警告できるようにする（submit と同型 = 容量超過の変更消失を黙認しない。レビュー R7）
+    const persisted = commit()
+    return { ok: true, id, persisted }
   }
 
   // ---------- 生要望へのコメント（選別のやり取り。記録系・追記のみ = 2026-08-17 第 2 弾） ----------
@@ -577,8 +730,8 @@ export function useImprovements() {
       title: it.title, summary: it.summary, detail: it.detail, status: it.status, pagePaths: it.pagePaths,
       requests: requestsForItem(it.id).map(r => ({
         pageLabel: r.pageLabel, pagePath: r.pagePath, body: r.body,
-        // 要望ステータス + 添付（リンクは列挙・画像は件数のみ。API /prompt と同じ内容 = 両モード parity）
-        status: r.status, links: r.links ?? [], imageCount: (r.images ?? []).length,
+        // 要望ステータス + 添付（リンクは列挙・画像は件数のみ）+ タグ（API /prompt と同じ内容 = 両モード parity）
+        status: r.status, links: r.links ?? [], imageCount: (r.images ?? []).length, tags: r.tags ?? [],
       })),
       // 時系列メモも加味（古い順。notesForItem がソート済み）
       notes: notesForItem(it.id).map(n => ({ body: n.body, kind: n.kind })),
@@ -592,7 +745,7 @@ export function useImprovements() {
     requestsForItem, notesForItem, commentsForRequest, commentCountByRequest, refresh, loadRequestImages, loadRequestImagesFor,
     // 操作
     submit, generate, setStatus, editItem, setItemArchived, setRequestArchived, setRequestStatus,
-    setRequestAdoption, editRequest, addRequestComment, setRequestCommentArchived,
+    setRequestAdoption, setRequestAdoptionBulk, unclusterRequest, editRequest, addRequestComment, setRequestCommentArchived,
     addNote, setNoteArchived, buildPrompt,
   }
 }

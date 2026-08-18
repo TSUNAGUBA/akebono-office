@@ -71,6 +71,19 @@ export function fmtDateTime(iso: string): string {
   return `${fmtDate(iso)} ${fmtTime(iso)}`
 }
 
+/**
+ * 「yyyy/MM/dd HH:mm:ss」形式（改善要望の受付箱など、投稿の前後関係を秒まで確認する表示用。
+ * 改修依頼 2026-08-18）。文字列の壁時計をそのまま表示する（TZ 変換しない）。
+ * 時刻部が無い・形式外の文字列はそのまま返す（他フォーマッタと同じフォールバック）。
+ */
+export function fmtDateTimeSec(iso: string): string {
+  const p = datePart(iso)
+  const t = iso.match(/T(\d{2}):(\d{2}):(\d{2})/)
+  if (!p || !t) return iso
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `${p.y}/${pad(p.mo)}/${pad(p.d)} ${t[1]}:${t[2]}:${t[3]}`
+}
+
 
 
 
