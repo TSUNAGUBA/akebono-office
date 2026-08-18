@@ -49,6 +49,7 @@ import {
   matchesImprovementFilter,
   normalizeImprovementImages,
   normalizeImprovementLinks,
+  normalizeImprovementPagePath,
   normalizeImprovementTags,
   planAdoptionBulk,
   clusterTargetRequests,
@@ -147,7 +148,8 @@ export function useImprovements() {
     if (imagesMsg) return { ok: false, error: { code: 'AKO-REQ-010', message: imagesMsg } }
     // 任意タグ（壁打ち/お任せ = F-42-17）。allowlist 正規化のみ（未知値は落とす = API と同一）
     const tags = normalizeImprovementTags(input.tags ?? [])
-    const pagePath = capCodePoints((input.pagePath ?? '').trim(), IMPROVEMENT_PAGE_PATH_CAP)
+    // アプリ内パスのみ保持（'//host' 等は '' へ = 対象ページリンク化 F-42-20 に伴う防御。API と同一規則）
+    const pagePath = capCodePoints(normalizeImprovementPagePath(input.pagePath), IMPROVEMENT_PAGE_PATH_CAP)
     const pageLabel = capCodePoints((input.pageLabel ?? '').trim(), IMPROVEMENT_PAGE_LABEL_CAP)
     if (isApi) {
       // 管理 GET は権限者のみのため reload しない（投稿者は一覧を見ない）
@@ -204,45 +206,68 @@ export function useImprovements() {
 
   /** 画像ロード済みの改修単位 id（画像は追記系で不変のため無効化不要 = 再オープンは再取得しない） */
   const imagesLoadedFor = new Set<string>()
+  /**
+   * 進行中フェッチの共有（itemId 単位）。受付箱の一覧 watch がページ内の全行を一括で呼ぶため、
+   * 完了メモだけでは同一 API へ並列重複フェッチが発行される（R1 コードレビュー MAJOR）。
+   * 進行中は同じ Promise を返し、失敗時はエントリを消して次回リトライ可能にする
+   */
+  const imagesLoading = new Map<string, Promise<void>>()
 
   /**
    * ある改修単位の元要望の添付画像を遅延ロード（API モードのみ。全件 GET は画像を含まないため、
-   * ドロワーを開いたタイミングで itemId 指定の GET から画像込み行を取得して差し替える）。
+   * 一覧表示・ドロワーオープン時に itemId 指定の GET から画像込み行を取得して差し替える）。
    * 失敗しても本文表示は妨げない（原則4）。mock は画像を常に保持しているため no-op。
    */
-  async function loadRequestImages(itemId: string): Promise<void> {
-    if (!isApi || !itemId || imagesLoadedFor.has(itemId)) return
-    try {
-      const rows = await apiFetch<ImprovementRequest[]>('/v1/improvements/requests', {
-        query: { itemId, includeArchived: '1' },
-      })
-      const byId = new Map(rows.map(r => [r.id, r]))
-      apiRequests.value = apiRequests.value.map(r => byId.get(r.id) ?? r)
-      imagesLoadedFor.add(itemId)
-    } catch { /* 画像の遅延ロード失敗は無視（本文・リンクは表示済み。次回オープンで再試行） */ }
+  function loadRequestImages(itemId: string): Promise<void> {
+    if (!isApi || !itemId || imagesLoadedFor.has(itemId)) return Promise.resolve()
+    const inflight = imagesLoading.get(itemId)
+    if (inflight) return inflight
+    const p = (async () => {
+      try {
+        const rows = await apiFetch<ImprovementRequest[]>('/v1/improvements/requests', {
+          query: { itemId, includeArchived: '1' },
+        })
+        const byId = new Map(rows.map(r => [r.id, r]))
+        apiRequests.value = apiRequests.value.map(r => byId.get(r.id) ?? r)
+        imagesLoadedFor.add(itemId)
+      } catch { /* 画像の遅延ロード失敗は無視（本文・リンクは表示済み。次回表示で再試行） */ } finally {
+        imagesLoading.delete(itemId)
+      }
+    })()
+    imagesLoading.set(itemId, p)
+    return p
   }
 
   /** 画像ロード済みの未集約要望 id（loadRequestImagesFor 用。画像は不変のため無効化不要） */
   const unclusteredImagesLoaded = new Set<string>()
+  /** 未集約分の進行中フェッチの共有（1 リクエストで未集約全件を取得するため単一スロット） */
+  let unclusteredImagesLoading: Promise<void> | null = null
 
   /**
-   * 生要望ドロワー用の添付画像の遅延ロード（API モードのみ）。集約済みは itemId 指定ロードへ委譲し、
-   * 未集約は unclustered=1 の GET（画像込み）で差し替える。失敗しても本文表示は妨げない（原則4）。
+   * 生要望一覧・ドロワー用の添付画像の遅延ロード（API モードのみ）。集約済みは itemId 指定ロードへ委譲し、
+   * 未集約は unclustered=1 の GET（画像込み・未集約全件を 1 回で取得）で差し替える。
+   * 進行中は同じ Promise を共有し重複発行しない。失敗しても本文表示は妨げない（原則4）。
    */
-  async function loadRequestImagesFor(r: ImprovementRequest): Promise<void> {
-    if (!isApi) return
+  function loadRequestImagesFor(r: ImprovementRequest): Promise<void> {
+    if (!isApi) return Promise.resolve()
     if (r.itemId) return loadRequestImages(r.itemId)
-    if (unclusteredImagesLoaded.has(r.id)) return
-    try {
-      // includeArchived: 取消済み（復元判断で添付を見る）も対象。省略すると API が archived を除外し、
-      // 取消済み行の画像が永久にロードされず毎回空振りフェッチになる（レビュー指摘 2026-08-17）
-      const rows = await apiFetch<ImprovementRequest[]>('/v1/improvements/requests', {
-        query: { unclustered: '1', includeArchived: '1' },
-      })
-      const byId = new Map(rows.map(x => [x.id, x]))
-      apiRequests.value = apiRequests.value.map(x => byId.get(x.id) ?? x)
-      rows.forEach(x => unclusteredImagesLoaded.add(x.id))
-    } catch { /* 画像の遅延ロード失敗は無視（次回オープンで再試行） */ }
+    if (unclusteredImagesLoaded.has(r.id)) return Promise.resolve()
+    if (unclusteredImagesLoading) return unclusteredImagesLoading
+    unclusteredImagesLoading = (async () => {
+      try {
+        // includeArchived: 取消済み（復元判断で添付を見る）も対象。省略すると API が archived を除外し、
+        // 取消済み行の画像が永久にロードされず毎回空振りフェッチになる（レビュー指摘 2026-08-17）
+        const rows = await apiFetch<ImprovementRequest[]>('/v1/improvements/requests', {
+          query: { unclustered: '1', includeArchived: '1' },
+        })
+        const byId = new Map(rows.map(x => [x.id, x]))
+        apiRequests.value = apiRequests.value.map(x => byId.get(x.id) ?? x)
+        rows.forEach(x => unclusteredImagesLoaded.add(x.id))
+      } catch { /* 画像の遅延ロード失敗は無視（次回表示で再試行） */ } finally {
+        unclusteredImagesLoading = null
+      }
+    })()
+    return unclusteredImagesLoading
   }
 
   // ---------- AI 集約（生成・再生成） ----------

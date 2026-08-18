@@ -57,8 +57,9 @@ const tabs = computed<TabItem[]>(() => {
 const queryTab = typeof route.query.tab === 'string' ? route.query.tab : ''
 const tab = ref<string>(['mine', 'pending', 'all', 'routes'].includes(queryTab) ? queryTab : 'mine')
 watchEffect(() => {
-  // 権限・ロールで消えたタブは先頭の利用可能タブへ退避（deny で URL 直打ちしても内容を出さない）
-  if (tabs.value.length > 0 && !tabs.value.some(t => t.key === tab.value)) tab.value = tabs.value[0]!.key
+  // 権限・ロールで消えたタブは先頭の利用可能タブへ退避。全タブ deny の場合は空値にして
+  // どのタブ内容も描画しない（フェイルクローズ = R1 レビュー反映）
+  if (!tabs.value.some(t => t.key === tab.value)) tab.value = tabs.value[0]?.key ?? ''
 })
 
 // 通知ディープリンク: ?open=<申請id> で詳細ドロワーを直接開く（通知の対象へ即到達 = 改善要望 2026-08-17。
@@ -569,6 +570,8 @@ async function onRemoveDelegate(d: DelegateSetting): Promise<void> {
     </UiPageHeader>
 
     <UiTabBar v-model="tab" :tabs="tabs" class="mb-3" />
+    <!-- 全タブ deny 時の空状態（タブ内容は tab='' のためどれも描画されない = フェイルクローズ） -->
+    <p v-if="tabs.length === 0" class="card p-6 text-center text-[13px] text-sub">利用できるタブがありません（権限設定で制限されています。管理者にお問い合わせください）</p>
 
     <!-- ================= 一覧タブ（自分の申請 / 承認待ち / 全件） ================= -->
     <div v-if="tab !== 'routes'" class="grid gap-3">

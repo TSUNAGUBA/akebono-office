@@ -54,8 +54,9 @@ const tabs = computed<TabItem[]>(() => {
 const tab = ref('confirmed')
 useRouteTabSync(tab)
 watchEffect(() => {
-  // 権限・ロールで消えたタブは先頭の利用可能タブへ退避（deny で ?tab= 直打ちしても内容を出さない）
-  if (tabs.value.length > 0 && !tabs.value.some(t => t.key === tab.value)) tab.value = tabs.value[0]!.key
+  // 権限・ロールで消えたタブは先頭の利用可能タブへ退避。全タブ deny の場合は空値にして
+  // どのタブ内容も描画しない（フェイルクローズ = R1 レビュー反映）
+  if (!tabs.value.some(t => t.key === tab.value)) tab.value = tabs.value[0]?.key ?? ''
 })
 
 function dayTextClass(date: string): string {
@@ -375,6 +376,8 @@ async function saveDemandRow(row: { date: string; from: string; to: string; requ
   <div>
     <UiPageHeader title="シフト表" description="募集期間の希望提出から調整・確定公開までを一元管理します" />
     <UiTabBar v-model="tab" :tabs="tabs" />
+    <!-- 全タブ deny 時の空状態（タブ内容は tab='' のためどれも描画されない = フェイルクローズ） -->
+    <p v-if="tabs.length === 0" class="card p-6 text-center text-[13px] text-sub">利用できるタブがありません（権限設定で制限されています。管理者にお問い合わせください）</p>
 
     <!-- ================= 確定シフト（本人ビュー） ================= -->
     <div v-if="tab === 'confirmed'" class="mt-3 grid gap-3">

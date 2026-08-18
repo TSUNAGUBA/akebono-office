@@ -112,7 +112,10 @@ export async function buildContext(
   // AI 参照範囲（改修依頼 2026-08-18 で登録者単位へ拡張。バッチ7g の二値 'ai-scope' はレガシー互換）:
   // データ種類（機能キー）ごとに「参照できる登録者の memberId」を解決する。既定 = 権限表の参照権限
   // （canAiReferenceOwner）。機能 deny が最優先である点は従来どおり。
-  // 登録者候補（在籍メンバーの属性）は最初の利用時に 1 回だけロードして使い回す
+  // 登録者候補（在籍メンバーの属性）は最初の利用時に 1 回だけロードして使い回す。
+  // **候補は在籍（active）メンバーのみ = 無効化済み（退職）メンバーの登録データは本人以外の AI 文脈へ
+  // 供給しない**（旧 allOwners=true では owner 無制限で退職者のぽいぽいも載った。安全側への意図的変更 =
+  // R1 レビューで文書化）。LIMIT 1000 は SME 規模前提（search_docs の 3000 件上限と同水準の設計判断）
   let ownerSubjectsCache: PermissionSubject[] | null = null
   const ownerSubjects = async (): Promise<PermissionSubject[]> => {
     ownerSubjectsCache ??= (await pool.query<PermissionSubject>(

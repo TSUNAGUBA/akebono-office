@@ -7469,3 +7469,31 @@ describe('権限設定の拡張（改修依頼 2026-08-18: 項目の更新権限
     }
   })
 })
+
+describe('改修プロンプト出力の既定（改修依頼 2026-08-18: filter 省略 = 「対応する」のみ）', () => {
+  it('filter 省略で accepted のみ出力・未判定/対応中は含めない。冒頭はナビゲーター定型文', async () => {
+    await pool.query(
+      `INSERT INTO improvement_items (id, title, status, page_paths, source_request_ids)
+       VALUES
+         ('imp-t-acc',  'プロンプト既定検証Accepted', 'accepted',    '["/x"]'::jsonb, '[]'::jsonb),
+         ('imp-t-tri',  'プロンプト既定検証Triage',   'triage',      '["/x"]'::jsonb, '[]'::jsonb),
+         ('imp-t-prog', 'プロンプト既定検証Progress', 'in_progress', '["/x"]'::jsonb, '[]'::jsonb)
+       ON CONFLICT (id) DO NOTHING`)
+    try {
+      const res = await api('POST', '/v1/improvements/prompt', { as: ADMIN, body: {} })
+      expect(res.status).toBe(200)
+      const { prompt } = res.json.data as { prompt: string; count: number }
+      expect(prompt.startsWith('あなたはナビゲーターです。')).toBe(true)
+      expect(prompt).toContain('プロンプト既定検証Accepted')
+      expect(prompt).not.toContain('プロンプト既定検証Triage')
+      expect(prompt).not.toContain('プロンプト既定検証Progress')
+      // filter 指定は下位互換で受理（open = 未判定・対応する・対応中）
+      const open = await api('POST', '/v1/improvements/prompt', { as: ADMIN, body: { filter: 'open' } })
+      const openPrompt = (open.json.data as { prompt: string }).prompt
+      expect(openPrompt).toContain('プロンプト既定検証Triage')
+      expect(openPrompt).toContain('プロンプト既定検証Progress')
+    } finally {
+      await pool.query(`DELETE FROM improvement_items WHERE id IN ('imp-t-acc', 'imp-t-tri', 'imp-t-prog')`)
+    }
+  })
+})

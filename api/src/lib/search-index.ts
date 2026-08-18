@@ -486,7 +486,9 @@ export interface SearchHit {
  * 質問に関連する検索ドキュメントの上位 K 件（字句 + 埋め込みのハイブリッド。埋め込み無効時は字句のみ）。
  * noteOwnerIds = 本人以外に参照してよいぽいぽいポスト登録者の memberId（AI 参照範囲。
  * 改修依頼 2026-08-18 で「全員 or 本人のみ」の二値から登録者単位の許可リストへ拡張。
- * 呼び出し側が aiAllowedOwnerIds〔shared/domain/permissions〕で解決して渡す。空 = 本人のみ = 従来の 'own'）。
+ * 呼び出し側が aiAllowedOwnerIds〔shared/domain/permissions〕で解決して渡す。空 = 本人のみ = 従来の 'own'。
+ * 許可リストは在籍メンバー由来のため、無効化済み（退職）メンバーのポストは本人以外へ供給されない =
+ * 旧 allOwners=true との意図的な差分〔安全側〕）。
  * owner_member_id を持つのは source_kind = 'note'（ぽいぽいポスト）と 'customer-log'（顧客活動）。
  * **noteOwnerIds が広げるのは 'note' のみ**（下の SQL の `AND source_kind = 'note'`）。顧客活動は常に本人スコープで、
  * どの ai-scope 設定でも他メンバーへは広がらない（安全側の意図的な制約）。

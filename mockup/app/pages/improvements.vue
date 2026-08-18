@@ -22,6 +22,7 @@ import {
   type ImprovementRequestImage,
   type ImprovementRequestStatus,
   type ImprovementStatus,
+  isInternalPagePath,
   isOpenStatus,
   matchesImprovementFilter,
   requestAdoptionOf,
@@ -111,16 +112,21 @@ const rawRequests = computed<ImprovementRequest[]>(() => {
 const { page: rawPage, pageSize: rawPageSize, rows: pagedRawRequests, total: rawTotal } = useListView<ImprovementRequest>({ source: rawRequests })
 const rawTableRows = computed(() => pagedRawRequests.value as unknown as Record<string, unknown>[])
 // 受付箱の一覧に添付を直接表示するため、表示中ページの行の画像を先読みする（改修依頼 2026-08-18。
-// API モードの全件 GET は images を含まないため = 遅延ロード。loadRequestImagesFor はメモ化済み・失敗は
-// 非ブロッキング〔原則4〕。モックモードは即時 no-op）
+// API モードの全件 GET は images を含まないため = 遅延ロード。未集約分は 1 リクエストのまとめ取得・
+// 集約済みは案件単位で、完了済み + 進行中の両方をメモ化して重複発行しない〔R1 レビュー反映〕。
+// 失敗は非ブロッキング〔原則4〕。モックモードは即時 no-op）
 watch(pagedRawRequests, (rows) => {
   for (const r of rows) void imp.loadRequestImagesFor(r)
 }, { immediate: true })
 
-/** 対象ページへの遷移リンク（改修依頼 2026-08-18）。実パスのみリンク化（'' = 全体/新設ページはテキストのまま） */
+/**
+ * 対象ページへの遷移リンク（改修依頼 2026-08-18）。アプリ内パスのみリンク化（shared isInternalPagePath =
+ * '//host' のプロトコル相対 URL 等は外部遷移になるためリンクにしない。旧データにも効く表示側の防御 =
+ * R1 監査 MAJOR-1。'' = 全体/新設ページはテキストのまま）
+ */
 function pageLinkOf(pagePath: string | null | undefined): string | null {
   const p = String(pagePath ?? '').trim()
-  return p.startsWith('/') ? p : null
+  return isInternalPagePath(p) ? p : null
 }
 /** 一覧行 → ImprovementRequest（UiDataTable の行型は Record<string, unknown> のため、キャストは 1 か所に集約 = レビュー R4） */
 function reqOf(row: Record<string, unknown>): ImprovementRequest {
@@ -564,8 +570,9 @@ const tabs = computed<TabItem[]>(() => ([
 ] as TabItem[]).filter(t => canTab('improvements', t.key)))
 useRouteTabSync(tab, { valid: TAB_KEYS })
 watchEffect(() => {
-  // 権限で消えたタブは先頭の利用可能タブへ退避（deny で ?tab= 直打ちしても内容を出さない）
-  if (tabs.value.length > 0 && !tabs.value.some(t => t.key === tab.value)) tab.value = tabs.value[0]!.key
+  // 権限で消えたタブは先頭の利用可能タブへ退避。全タブ deny の場合は空値にして
+  // どのタブ内容も描画しない（フェイルクローズ = R1 レビュー反映）
+  if (!tabs.value.some(t => t.key === tab.value)) tab.value = tabs.value[0]?.key ?? ''
 })
 
 // ページングの 1 ページ目リセット（tab がここで定義されるため watch もここに置く。
@@ -720,6 +727,8 @@ async function copyAndClose(): Promise<void> {
 
       <!-- タブメニュー（受付箱 / 改修案件 / カンバン / ガントチャート = 改修依頼 2026-08-18） -->
       <UiTabBar v-model="tab" :tabs="tabs" />
+      <!-- 全タブ deny 時の空状態（タブ内容は tab='' のためどれも描画されない = フェイルクローズ） -->
+      <p v-if="tabs.length === 0" class="card p-6 text-center text-[13px] text-sub">利用できるタブがありません（権限設定で制限されています。管理者にお問い合わせください）</p>
 
       <!-- ① 受付箱: まず投稿された生の一覧を確認し、採用/不採用を選別する（改善要望 2026-08-17 第 2 弾）。
            採用された要望のみが「AI で集約」の対象になる。一覧上の「採用」「不採用」ボタン・複数選択の

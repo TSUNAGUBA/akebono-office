@@ -3319,16 +3319,38 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
 - [x] ⑦ 月・横スクロールの選択日ボタン `pb-1` → `py-1`（ring の上端欠け解消）
 
 ### 87-5 検証・ドキュメント
-- [x] shared/api 単体 389（+ improvement 遷移/committed/preamble・permission-extensions 27）・
-  統合 274（+ masters write 剥がし 2・AI 参照対象 3。チーム勤怠見出しの改名追随）・mockup 単体 353・
-  両 typecheck・両 build green
+- [x] shared/api 単体 392（+ improvement 遷移/committed/preamble/pagePath 正規化・permission-extensions 27）・
+  統合 275（+ masters write 剥がし 2・AI 参照対象 3・prompt 既定 1。チーム勤怠見出しの改名追随）・
+  mockup 単体 353・両 typecheck・両 build green
+- [x] E2E: `e2e/batch2-e2e.cjs` 新設（モックモード 25 チェック = 対応中・プロンプト定型文/対象固定・
+  権限表のタブ/更新行・AIの参照範囲の三値循環・稟議区分カード・受付箱の添付列/ページリンク・
+  日報 placeholder・モバイル 375px の横スクロールなし）。`run-batch6b-stack.sh` へ登録
 - [x] docs（原則5）: functional-requirements（F-16-8/9/10・F-42-3/4/5/7/9/20・F-07-1）・data-design
   （PermissionRule 擬似フィールド 3 種・improvement_items in_progress）・api-design（AKO-PRM-003 台帳・
   masters PATCH・prompt 既定・usePermissions 行）・screen-design（5.8 新設・/workflow・/reports・/improvements・
   ガント/カンバン）・implementation-status §87・CONVENTIONS.md（UiRadioCards 部品表）
 
 ### 87-6 反復レビュー（原則9 = SP-8）
-- [ ] R1 = 独立ロール 2 体（コードレビュアー + システム監査官）の並行レビュー
+- [x] R1 = 独立ロール 2 体（コードレビュアー + システム監査官）の並行レビュー。
+  **コード MAJOR 1 + 監査 MAJOR 1 + MINOR 5 + NIT 4 → 全件対応**:
+  ①（監査 MAJOR）受付箱の対象ページリンクにプロトコル相対 URL（`//host`）が通り外部誘導リンクになり得る →
+  shared `isInternalPagePath`/`normalizeImprovementPagePath` を新設し、登録（API/モック）と表示
+  （pageLinkOf = 旧データにも効く防御）の両方で遮断 + 単体テスト 3 本
+  ②（コード MAJOR）受付箱の添付先読みが完了メモのみで in-flight ガードがなく、ページ内 20 行の watch から
+  同一 API へ並列重複フェッチ → `useImprovements` に進行中 Promise の共有（itemId 別 Map + 未集約の単一スロット）を追加
+  ③（両 MINOR）全タブ deny 時に初期タブの内容が残るフェイルオープン → 4 ページとも退避先なしは `tab=''` で
+  内容非描画 + 「利用できるタブがありません」の空状態表示（フェイルクローズ）
+  ④（両 MINOR）退職（inactive）メンバーの登録データが AI 文脈から外れる挙動変更が未文書化 →
+  意図的な安全側の設計判断として chatbot.ts / search-index.ts / F-16-10 / AIの参照範囲タブ脚注に明記
+  ⑤（監査 MINOR）screen-design のサマリーカード「2→3→5 列」残存 → 6 列へ更新
+  ⑥（監査 MINOR）prompt の filter 省略既定にテストなし → 統合テスト 1 本追加（accepted のみ・open 下位互換）
+  ⑦（コード MINOR）権限表の更新セルは表示レイヤの参照不可で操作不可 = レイヤ跨ぎ設定の非対称 → 脚注に
+  「ルール一覧から設定可」を明記 ⑧（監査 NIT）タブ deny はデータ面の権限を変えない旨を権限表脚注へ追記
+  ⑨（監査 NIT）「登録者単位が優先」はレイヤ内の話である旨を AIの参照範囲タブ脚注で補強
+  ⑩（両 NIT）UiRadioCards に roving tabindex + 矢印キー移動（WAI-ARIA radio パターン）を実装
+  ⑪（監査 NIT）AIの参照範囲の行 = 登録者・列 = 参照者の配置は権限表（列 = 対象者）との UX 一貫性を
+  優先した設計判断として記録（依頼文言は「行 = 参照者」とも読める。転置が必要ならご指示ください）
+  ⑫（コード NIT）`usePermissions.canEditField` は現状フォーム未接続（下記残課題の宣言済み事項として記録）
 - [ ] R2 = 指摘反映後の再レビューで未解決の指摘ゼロを確認
 
 **残課題（本改修で新設・未対応）:**

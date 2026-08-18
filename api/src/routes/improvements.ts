@@ -54,6 +54,7 @@ import {
   normalizeClusterPlan,
   normalizeImprovementImages,
   normalizeImprovementLinks,
+  normalizeImprovementPagePath,
   normalizeImprovementTags,
   type PromptItemInput,
 } from '../../../shared/domain/improvement'
@@ -129,7 +130,8 @@ export function improvementRequestInputOf(body: Record<string, unknown>): {
   if (imagesMsg) throw err('AKO-REQ-010', imagesMsg, 400)
   return {
     body: capCodePoints(text, IMPROVEMENT_BODY_CAP),
-    pagePath: capCodePoints(String(body.pagePath ?? '').trim(), IMPROVEMENT_PAGE_PATH_CAP),
+    // アプリ内パスのみ保持（'//host' 等は '' へ = 対象ページリンク化 F-42-20 に伴う防御。R1 監査 MAJOR-1）
+    pagePath: capCodePoints(normalizeImprovementPagePath(body.pagePath), IMPROVEMENT_PAGE_PATH_CAP),
     pageLabel: capCodePoints(String(body.pageLabel ?? '').trim(), IMPROVEMENT_PAGE_LABEL_CAP),
     links,
     images,

@@ -67,8 +67,9 @@ const queryTabRaw = typeof route.query.tab === 'string' ? route.query.tab : ''
 const queryTab = queryTabRaw === 'weekly' ? 'weekly-mine' : queryTabRaw
 const tab = ref<string>((TAB_KEYS as readonly string[]).includes(queryTab) ? queryTab : 'mine')
 watchEffect(() => {
-  // 権限で消えたタブ・無効キーは先頭の利用可能タブへ退避（deny で URL 直打ちしても内容を出さない）
-  if (tabs.value.length > 0 && !tabs.value.some(t => t.key === tab.value)) tab.value = tabs.value[0]!.key
+  // 権限で消えたタブ・無効キーは先頭の利用可能タブへ退避。全タブ deny の場合は空値にして
+  // どのタブ内容も描画しない（フェイルクローズ = R1 レビュー反映）
+  if (!tabs.value.some(t => t.key === tab.value)) tab.value = tabs.value[0]?.key ?? ''
 })
 
 // ---------- 共通ヘルパー ----------
@@ -1064,6 +1065,8 @@ async function onMarkUnreadWeekly(): Promise<void> {
     <UiPageHeader title="日報・週報" description="日々の活動報告と週次のふりかえり。AI 社員の日次報告も同じタイムラインに届きます" />
 
     <UiTabBar v-model="tab" :tabs="tabs" class="mb-3" />
+    <!-- 全タブ deny 時の空状態（タブ内容は tab='' のためどれも描画されない = フェイルクローズ） -->
+    <p v-if="tabs.length === 0" class="card p-6 text-center text-[13px] text-sub">利用できるタブがありません（権限設定で制限されています。管理者にお問い合わせください）</p>
 
     <!-- ================= 自分の日報 ================= -->
     <div v-if="tab === 'mine'" class="grid gap-3">

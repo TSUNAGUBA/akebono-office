@@ -217,6 +217,25 @@ export interface ImprovementRequestImage {
 }
 
 /**
+ * アプリ内ページパスか（NuxtLink の to に渡してよい形式か。F-42-20 の対象ページリンク化に伴う防御）。
+ * '/' 始まりのみ許可し、'//'（プロトコル相対 URL = 外部遷移）・'/\'・空白を含むものは拒否する。
+ * '' は対象外（全体/新設ページ = リンクにしない）。表示側 pageLinkOf と登録側の正規化が共に本判定を使う
+ */
+export function isInternalPagePath(p: string): boolean {
+  return p.startsWith('/') && !p.startsWith('//') && !p.startsWith('/\\') && !/\s/.test(p)
+}
+
+/**
+ * 投稿元ページパスの正規化（登録時。API/モック共通）。アプリ内パスのみ保持し、
+ * それ以外（'//evil.example' 等）は ''（全体/新設ページ扱い = pageLabel のみ）へ落とす。
+ * 表示名 pageLabel は別項目として保持されるため情報は失わない（レビュー R1 監査 MAJOR-1）
+ */
+export function normalizeImprovementPagePath(pagePath: unknown): string {
+  const p = String(pagePath ?? '').trim()
+  return isInternalPagePath(p) ? p : ''
+}
+
+/**
  * 生の改善要望（SoT・追記系）。各ページの「要望を送る」から作られる。
  * pagePath / pageLabel は投稿元ページを記録し、改修プロンプトの対象ページ特定に使う。
  */

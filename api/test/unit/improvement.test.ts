@@ -19,9 +19,11 @@ import {
   improvementLinksError,
   improvementNoteError,
   IMPROVEMENT_STATUS_NEXT,
+  isInternalPagePath,
   matchesImprovementFilter,
   IMPROVEMENT_REQUEST_TAG_META,
   normalizeClusterPlan,
+  normalizeImprovementPagePath,
   normalizeImprovementImages,
   normalizeImprovementLinks,
   normalizeImprovementTags,
@@ -378,5 +380,26 @@ describe('improvementRequestInputOf', () => {
     expect(code).toBe('AKO-REQ-009')
     try { improvementRequestInputOf({ body: 'x', images: [{ dataUrl: 'data:text/html;base64,PGI+' }] }) } catch (e) { code = (e as { code?: string }).code ?? '' }
     expect(code).toBe('AKO-REQ-010')
+  })
+})
+
+describe('normalizeImprovementPagePath / isInternalPagePath（F-42-20 の対象ページリンク化に伴う防御）', () => {
+  it('アプリ内パスのみ保持する', () => {
+    expect(normalizeImprovementPagePath('/akebono/sales')).toBe('/akebono/sales')
+    expect(normalizeImprovementPagePath('  /shift  ')).toBe('/shift')
+    expect(isInternalPagePath('/masters/members')).toBe(true)
+  })
+  it('プロトコル相対 URL・バックスラッシュ・空白入りは落とす（外部誘導リンクの防止 = R1 監査）', () => {
+    expect(normalizeImprovementPagePath('//evil.example')).toBe('')
+    expect(normalizeImprovementPagePath('/\\evil.example')).toBe('')
+    expect(normalizeImprovementPagePath('/a b')).toBe('')
+    expect(normalizeImprovementPagePath('https://evil.example')).toBe('')
+    expect(normalizeImprovementPagePath('javascript:alert(1)')).toBe('')
+    expect(isInternalPagePath('//evil.example')).toBe(false)
+  })
+  it("'' と非文字列は ''（全体/新設ページ扱い = 下位互換）", () => {
+    expect(normalizeImprovementPagePath('')).toBe('')
+    expect(normalizeImprovementPagePath(null)).toBe('')
+    expect(normalizeImprovementPagePath(undefined)).toBe('')
   })
 })
