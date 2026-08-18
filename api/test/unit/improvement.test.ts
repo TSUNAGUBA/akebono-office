@@ -45,6 +45,16 @@ describe('canTransition / IMPROVEMENT_STATUS_NEXT', () => {
   it('解決済み → 対応する（reopen）が可能（取消可能性 = 原則9.5）', () => {
     expect(canTransition('resolved', 'accepted')).toBe(true)
   })
+  it('対応中（in_progress）の遷移（改修依頼 2026-08-18）: 対応する ⇄ 対応中 → 解決済み。直行も許可（原則7）', () => {
+    expect(IMPROVEMENT_STATUS_NEXT.accepted).toEqual(['in_progress', 'resolved', 'rejected', 'triage'])
+    expect(IMPROVEMENT_STATUS_NEXT.in_progress).toEqual(['resolved', 'accepted', 'rejected'])
+    expect(canTransition('accepted', 'in_progress')).toBe(true)
+    expect(canTransition('in_progress', 'resolved')).toBe(true)
+    expect(canTransition('in_progress', 'accepted')).toBe(true) // 着手の取消（差し戻し = 原則9.5）
+    expect(canTransition('accepted', 'resolved')).toBe(true) // 従来の直行も維持（下位互換 = 原則7）
+    expect(canTransition('triage', 'in_progress')).toBe(false) // 未判定からの直接着手は不可（判定を経る）
+    expect(canTransition('resolved', 'in_progress')).toBe(false)
+  })
 })
 
 describe('matchesImprovementFilter', () => {
@@ -58,6 +68,13 @@ describe('matchesImprovementFilter', () => {
     expect(matchesImprovementFilter('rejected', 'all')).toBe(true)
     expect(matchesImprovementFilter('resolved', 'resolved')).toBe(true)
     expect(matchesImprovementFilter('resolved', 'rejected')).toBe(false)
+  })
+  it('対応中は未解決（open）・committed = 対応する + 対応中（改修依頼 2026-08-18）', () => {
+    expect(matchesImprovementFilter('in_progress', 'open')).toBe(true)
+    expect(matchesImprovementFilter('accepted', 'committed')).toBe(true)
+    expect(matchesImprovementFilter('in_progress', 'committed')).toBe(true)
+    expect(matchesImprovementFilter('triage', 'committed')).toBe(false)
+    expect(matchesImprovementFilter('resolved', 'committed')).toBe(false)
   })
 })
 

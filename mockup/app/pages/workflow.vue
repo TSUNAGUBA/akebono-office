@@ -272,7 +272,15 @@ async function applyTemplate(): Promise<void> {
   form.content = tpl.body
 }
 
-const categoryOptions = Object.entries(WORKFLOW_CATEGORY_LABELS).map(([value, label]) => ({ value, label }))
+// 区分の選択肢（全区分の説明を常時表示して選べるカード = 改修依頼 2026-08-18。文言 SoT = labels.ts）。
+// 説明文の「購買：」等の接頭辞はカードのラベルと重複するため、表示用にのみ外す（SoT の文言は変更しない）。
+// description は UiSelect（経路設定の区分選択）では無視されるため共用のまま
+const categoryOptions = (Object.keys(WORKFLOW_CATEGORY_LABELS) as WorkflowCategory[]).map((value) => {
+  const label = WORKFLOW_CATEGORY_LABELS[value]
+  const desc = WORKFLOW_CATEGORY_DESCRIPTIONS[value]
+  const prefix = `${label}：`
+  return { value, label, description: desc.startsWith(prefix) ? desc.slice(prefix.length) : desc }
+})
 const categoryModel = computed({
   get: () => form.category as string,
   set: (v: string) => { form.category = v as WorkflowCategory },
@@ -808,11 +816,11 @@ async function onRemoveDelegate(d: DelegateSetting): Promise<void> {
       @close="modalOpen = false"
     >
       <div class="grid gap-3">
+        <!-- 区分は全区分の説明を常時表示して確認しながら選択（改修依頼 2026-08-18。文言 SoT = WORKFLOW_CATEGORY_DESCRIPTIONS） -->
+        <UiFormField label="区分" required>
+          <UiRadioCards v-model="categoryModel" :options="categoryOptions" aria-label="区分" />
+        </UiFormField>
         <div class="grid gap-3 md:grid-cols-2">
-          <!-- 区分の説明は選択に追従してヒント表示（改善要望 2026-08-17。文言 SoT = WORKFLOW_CATEGORY_DESCRIPTIONS） -->
-          <UiFormField label="区分" required :hint="WORKFLOW_CATEGORY_DESCRIPTIONS[form.category]">
-            <UiSelect v-model="categoryModel" :options="categoryOptions" aria-label="区分" class="!w-full" />
-          </UiFormField>
           <UiFormField label="金額（円）" required hint="金額で承認経路が変わります">
             <input v-model.number="form.amount" type="number" min="0" step="1000" class="input num text-right" aria-label="金額">
           </UiFormField>

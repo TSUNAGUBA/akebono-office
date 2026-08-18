@@ -25,26 +25,28 @@ import type { Result } from './types'
 /**
  * 改修単位の状態。
  * - triage   未判定（AI 集約直後。対応可否を人手で判定する前）
- * - accepted 対応する（対応可・未解決）
+ * - accepted 対応する（対応可・未着手）
+ * - in_progress 対応中（着手済み・未解決。改修依頼 2026-08-18 で「対応する」と「解決済み」の間に追加）
  * - resolved 解決済み（改修完了）
  * - rejected 対応しない（対応不可・見送り）
  */
-export type ImprovementStatus = 'triage' | 'accepted' | 'resolved' | 'rejected'
+export type ImprovementStatus = 'triage' | 'accepted' | 'in_progress' | 'resolved' | 'rejected'
 
-export const IMPROVEMENT_STATUSES: ImprovementStatus[] = ['triage', 'accepted', 'resolved', 'rejected']
+export const IMPROVEMENT_STATUSES: ImprovementStatus[] = ['triage', 'accepted', 'in_progress', 'resolved', 'rejected']
 
 /** ステータスの表示メタ（label・トーン・「未解決か」）。ラベルの SoT はここ。tone は UI の Tone 値と対応 */
 export const IMPROVEMENT_STATUS_META: Record<
   ImprovementStatus,
-  { label: string; tone: 'neutral' | 'info' | 'ok' | 'warn'; open: boolean }
+  { label: string; tone: 'neutral' | 'info' | 'ok' | 'warn' | 'brand'; open: boolean }
 > = {
   triage: { label: '未判定', tone: 'neutral', open: true },
   accepted: { label: '対応する', tone: 'info', open: true },
+  in_progress: { label: '対応中', tone: 'brand', open: true },
   resolved: { label: '解決済み', tone: 'ok', open: false },
   rejected: { label: '対応しない', tone: 'warn', open: false },
 }
 
-/** 「未解決」= まだ改修が必要な状態（未判定・対応する）。解決済み/対応しないは決着済み */
+/** 「未解決」= まだ改修が必要な状態（未判定・対応する・対応中）。解決済み/対応しないは決着済み */
 export function isOpenStatus(status: ImprovementStatus): boolean {
   return IMPROVEMENT_STATUS_META[status]?.open ?? false
 }
@@ -52,11 +54,15 @@ export function isOpenStatus(status: ImprovementStatus): boolean {
 /**
  * 状態遷移（フロントのボタン活性と API の遷移検証を一致させる）。
  * 取消可能性（原則9.5）: 解決済み → 対応する（解決の取消 = reopen）、対応しない → 未判定/対応する
- * （見送りの撤回）を許可し、「誤って解決/見送りにしたら詰む」導線を作らない。
+ * （見送りの撤回）、対応中 → 対応する（着手の取消 = 差し戻し）を許可し、
+ * 「誤って解決/見送り/着手にしたら詰む」導線を作らない。
+ * 対応中の追加（2026-08-18）: 対応する → 対応中 → 解決済み が主経路。従来の 対応する → 解決済み の
+ * 直行も許可する（着手記録を経ない小さな改修の下位互換 = 原則7）。
  */
 export const IMPROVEMENT_STATUS_NEXT: Record<ImprovementStatus, ImprovementStatus[]> = {
   triage: ['accepted', 'rejected'],
-  accepted: ['resolved', 'rejected', 'triage'],
+  accepted: ['in_progress', 'resolved', 'rejected', 'triage'],
+  in_progress: ['resolved', 'accepted', 'rejected'],
   resolved: ['accepted'],
   rejected: ['triage', 'accepted'],
 }
@@ -68,14 +74,16 @@ export function canTransition(from: ImprovementStatus, to: ImprovementStatus): b
 
 // ---------- 一覧フィルター（解決済/未解決 + 対応可否を 1 つの選択で束ねる） ----------
 
-export type ImprovementFilter = 'all' | 'open' | 'triage' | 'accepted' | 'resolved' | 'rejected'
+export type ImprovementFilter = 'all' | 'open' | 'committed' | 'triage' | 'accepted' | 'in_progress' | 'resolved' | 'rejected'
 
-/** フィルターの選択肢（UI と共有。all = すべて / open = 未解決） */
+/** フィルターの選択肢（UI と共有。all = すべて / open = 未解決 / committed = 実装決定・未完了 = 対応する + 対応中） */
 export const IMPROVEMENT_FILTER_OPTIONS: { value: ImprovementFilter; label: string }[] = [
   { value: 'all', label: 'すべて' },
   { value: 'open', label: '未解決' },
+  { value: 'committed', label: '対応する・対応中' },
   { value: 'triage', label: '未判定' },
   { value: 'accepted', label: '対応する' },
+  { value: 'in_progress', label: '対応中' },
   { value: 'resolved', label: '解決済み' },
   { value: 'rejected', label: '対応しない' },
 ]
@@ -84,6 +92,8 @@ export const IMPROVEMENT_FILTER_OPTIONS: { value: ImprovementFilter; label: stri
 export function matchesImprovementFilter(status: ImprovementStatus, filter: ImprovementFilter): boolean {
   if (filter === 'all') return true
   if (filter === 'open') return isOpenStatus(status)
+  // committed = 「実装が決まっていて未完了」（対応中の追加 2026-08-18 で accepted 単独から拡張。ガント既定の意図を維持）
+  if (filter === 'committed') return status === 'accepted' || status === 'in_progress'
   return status === filter
 }
 
@@ -803,6 +813,15 @@ export interface PromptItemInput {
   notes?: { body: string; kind: ImprovementNoteKind }[]
 }
 
+/**
+ * プロンプト冒頭のナビゲーター定型文（改修依頼 2026-08-18: 冒頭に必ず記載する）。
+ * 受け取ったエージェントに「ロール招集 + レビュー/監査の反復」の進め方を指示する。
+ */
+export const PROMPT_NAVIGATOR_PREAMBLE =
+  'あなたはナビゲーターです。\n'
+  + '最適なロールを必要なだけ招集して以下のタスクを進めてください。\n'
+  + '改修後は指摘事項がなくなるまでコードレビューとシステム監査を繰り返してください。'
+
 const DEFAULT_PROMPT_INTRO =
   'あなたは本リポジトリ（Nuxt 4 SPA = `mockup/` + Hono/PostgreSQL API = `api/` + 共有ドメイン = `shared/domain/`）を'
   + '改修するコーディングエージェントです。以下の改修単位を、対象ページのパス・機能名・改修内容に従って実装してください。'
@@ -812,10 +831,14 @@ const DEFAULT_PROMPT_INTRO =
 /**
  * 改修単位の配列から、コーディング AI エージェント向けの詳細プロンプト（マークダウン）を組み立てる。
  * 迷いを与えないよう、対象ページのパス・機能名（ページ表示名）・改修内容・元の要望・受入基準を明記する。
- * 純粋・決定的（同じ入力 → 同じ出力）。
+ * 冒頭にナビゲーター定型文を必ず出力する（改修依頼 2026-08-18）。純粋・決定的（同じ入力 → 同じ出力）。
  */
 export function buildCodingPrompt(items: PromptItemInput[], opts?: { intro?: string }): string {
   const out: string[] = []
+  out.push(PROMPT_NAVIGATOR_PREAMBLE)
+  out.push('')
+  out.push('---')
+  out.push('')
   out.push('# 改善要望に基づく改修依頼')
   out.push('')
   out.push(opts?.intro ?? DEFAULT_PROMPT_INTRO)

@@ -26,9 +26,11 @@ const today = todayJst()
 const scale = ref<GanttScale>('month')
 const anchor = ref<string>(ganttAnchorForToday('month', today))
 
-// ステータスフィルタ（既定 = accepted = 実装が決まっていて未完了の案件。オペレーター指示 2026-08-12）。
+// ステータスフィルタ（既定 = committed = 実装が決まっていて未完了の案件 = 対応する + 対応中。
+// オペレーター指示 2026-08-12 の「既定 = accepted」は対応中の追加（改修依頼 2026-08-18）に伴い、
+// 同じ意図〔実装決定・未完了〕を保つ committed へ更新 = 着手した案件がガントから消えない）。
 // 一覧ビューと同じ選択肢・判定（IMPROVEMENT_FILTER_OPTIONS / matchesImprovementFilter）を共用する（原則3）。
-const statusFilter = ref<ImprovementFilter>('accepted')
+const statusFilter = ref<ImprovementFilter>('committed')
 const filteredItems = computed(() =>
   props.items.filter(it => matchesImprovementFilter(it.status, statusFilter.value)))
 
@@ -38,7 +40,8 @@ const filteredItems = computed(() =>
  */
 const GANTT_BAR_CLASS: Record<ImprovementStatus, string> = {
   triage: 'bg-warn', // 未判定 = 要判定（アンバー）
-  accepted: 'bg-brand', // 対応する = 予定・進行中（ブランド青。既定フィルタの主対象）
+  accepted: 'bg-brand', // 対応する = 予定（ブランド青。既定フィルタの主対象）
+  in_progress: 'bg-info', // 対応中 = 着手済み（改修依頼 2026-08-18 で追加。予定の青と区別する）
   resolved: 'bg-muted', // 解決済み = 完了（グレーで退色）
   rejected: 'bg-crit', // 対応しない = 見送り（レッド）
 }
@@ -125,7 +128,7 @@ const nowLabel = computed(() => GANTT_SCALES.find(s => s.value === scale.value)?
       </div>
     </div>
 
-    <!-- ステータスで絞り込み（既定 = 対応する = 実装が決まっていて未完了。一覧ビューと同じ選択肢） -->
+    <!-- ステータスで絞り込み（既定 = 対応する・対応中 = 実装が決まっていて未完了。一覧ビューと同じ選択肢） -->
     <UiChipTabs
       :model-value="statusFilter"
       :options="IMPROVEMENT_FILTER_OPTIONS"
