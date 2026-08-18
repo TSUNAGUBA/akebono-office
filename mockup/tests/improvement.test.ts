@@ -10,6 +10,7 @@ import {
   IMPROVEMENT_REQUEST_ADOPTION_META, IMPROVEMENT_STATUS_META,
   improvementCommentError, improvementImagesError, improvementLinksError,
   matchesImprovementFilter, normalizeImprovementLinks, requestAdoptionOf,
+  improvementEditError,
 } from '../../shared/domain/improvement'
 
 function rule(p: Partial<PermissionRule>): PermissionRule {
@@ -130,5 +131,35 @@ describe('添付の検証（投稿フォーム = ImprovementSubmit / useImprovem
     const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
     expect(improvementImagesError([{ filename: 'a.png', mime: 'image/png', dataUrl: png }])).toBeNull()
     expect(improvementImagesError([{ filename: 'a.svg', mime: 'image/svg+xml', dataUrl: 'data:image/svg+xml;base64,PHN2Zz4=' }])).not.toBeNull()
+  })
+})
+
+describe('improvementEditError（要望本文の編集可否。F-42-16・2026-08-18。API ルートと同一の判定順）', () => {
+  const active = { memberId: 'm-a', archivedAt: null }
+  const archived = { memberId: 'm-a', archivedAt: '2026-08-18T10:00:00+09:00' }
+
+  it('本人は編集できる（null = 許可）', () => {
+    expect(improvementEditError(active, 'm-a', false)).toBeNull()
+  })
+
+  it('管理権限者は他人の要望も編集できる', () => {
+    expect(improvementEditError(active, 'm-b', true)).toBeNull()
+  })
+
+  it('本人でも管理権限者でもない第三者は AKO-PRM-001', () => {
+    expect(improvementEditError(active, 'm-b', false)?.code).toBe('AKO-PRM-001')
+  })
+
+  it('存在しない要望は AKO-REQ-002', () => {
+    expect(improvementEditError(undefined, 'm-a', true)?.code).toBe('AKO-REQ-002')
+  })
+
+  it('取消済みは本人・管理権限者でも AKO-REQ-015（先に復元）', () => {
+    expect(improvementEditError(archived, 'm-a', false)?.code).toBe('AKO-REQ-015')
+    expect(improvementEditError(archived, 'm-b', true)?.code).toBe('AKO-REQ-015')
+  })
+
+  it('判定順 = 存在 → 権限 → 取消済み（権限の無い第三者へ取消状態を漏らさない）', () => {
+    expect(improvementEditError(archived, 'm-b', false)?.code).toBe('AKO-PRM-001')
   })
 })

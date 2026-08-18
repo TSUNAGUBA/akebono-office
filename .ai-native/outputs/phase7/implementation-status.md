@@ -2847,3 +2847,150 @@
 > ⑤mock 集約フィルタ・unclustered 画像 GET の回帰テスト欠如 → 共有 clusterTargetRequests 抽出 + テスト追加）を全件反映。
 > R2 = 修正検証で追加指摘 2 件（generating フラグを refresh 前に立てる・archived 行の画像回帰ピン）を反映。
 > R3 = 最終検証で**指摘ゼロ**・全テスト green を確認して完了。
+
+## 84. 通知バッジ・通知ディープリンク全面化・レイアウト設定の分離とお気に入り・要望画像の D&D/貼り付け（改修依頼 2026-08-18）の完了条件（Definition of Done）
+
+> 改修単位 3 件（①通知アイコンの未読数バッジ ②通知押下のディープリンク化 ③レイアウト設定の分離とセクション設定強化）
+> + 追加要望 2 件（④改善要望の画像添付にドロップエリアとクリップボード貼り付け ⑤登録済み改善要望の編集）。
+
+- [x] **①未読数バッジ（現状確認 + 補強）**: ヘッダーのベル・モバイル下部ナビの未読総数バッジは実装済みであることを確認
+  （`useNotifications().unreadCount` = 自分宛て未読の総和。API モードは 60 秒ポーリング）。**100 件以上は `99+` に丸め**て
+  モバイル幅（375px）のヘッダー崩れを防止（`unreadBadge`）+ ベルの aria-label に未読件数を含めた。
+- [x] **②通知ディープリンク全面化（mock/API parity）**: 通知リンクを「その行のデータ詳細が見える箇所」への直行リンクへ統一。
+  - エスカレーション起票 → `/inbox?tab=escalations&open=<id>`（inbox.vue に `?tab=` 追従 + `?open=` で**管理者の対応モーダルを直接開く**。
+    解決済みは開かず一覧のまま・query は開封後に除去・同一ページ内のクエリ遷移にも watch で追従）
+  - 改善のタネ → 管理者受信者は `/poipoi?open=<ノートid>`（NotesPanel が自分のノート → 管理者閲覧の順で解決し
+    詳細モーダルを表示。ユーザー切替時は滞留 id を破棄）・**閲覧権限の無い受信者〔役職/個人指定の非管理者〕には
+    従来どおり `/poipoi` を送る（開けないリンクを配らない = R8）**
+  - AI タスク（確認依頼/完了/連携完了/連携ブロック）→ `/ai-company?task=<タスクid>`（詳細モーダルを直接表示。連携系は親タスクへ）。
+    API 側は `ProgressResult.taskId` / `parentFinished.id` / `childBlocked.parentTaskId` を追加して伝搬
+  - シフト（確定/変更合意依頼 → `?tab=confirmed`・本人合意 → `?tab=adjust`）: shift.vue に `?tab=` 初期化を追加（権限外タブは戻す）
+  - 打刻修正・直行/直帰 → `/attendance?tab=requests`（既存のタブ同期を利用）・日報リマインド → `/reports?date=<日付>`
+  - 既存対応（稟議 `?open=`・日報コメント `?date=`・休暇 `?tab=`・稼働状況 `/status/<id>`）は §80 から継続。
+    通知カテゴリ判定（notification-category.ts）はクエリを除去して評価するため分類は不変（回帰なし）
+- [x] **③レイアウト設定の分離とセクション設定強化**:
+  - **レイアウト = 通知の配置に特化**: DashboardLayoutPicker の既定タブを「レイアウト（通知の配置）」へ再構成。
+    **上（top）/ 右（side）/ 下（bottom）/ 非表示（hidden）** の 4 択カード（`NOTIFICATION_PLACEMENT_OPTIONS` = SoT・ミニプレビュー付き）
+    + スコープ（自分/全社〔管理者のみ〕）+ 層ごとの「配置設定を解除」（原則9.5）。保存は**レイアウト本体と別の専用キー**
+    （user pref `dashboardNotificationPlacement`〔mock=localStorage〕/ configs `dashboard-notification-placement`）。
+    解決 = **層整合**: ユーザー配置キー > ユーザー層レイアウト由来 > テナント配置キー > レイアウト由来（`resolveNotificationPlacement`。
+    既存ユーザー層レイアウトの配置選択を新テナントキーが上書きしない = 原則7・R2）
+  - **セクション設定 = 配置と並び順に特化**: DashboardSectionEditor にサブモード「テンプレート」（6 種を移設。
+    **applyTemplate は保存先層の通知配置を維持**して sections + 表示オプションのみ適用 = 分離の徹底）/「自由設定」（従来の手動編集）
+  - **お気に入り**: 自由設定を名前付きで保存・呼び出し・削除（`useSectionFavorites`。ユーザー個人 = user_preferences
+    `dashboardSectionFavorites`〔mock = localStorage 'ako.dashboard-section-favorites.v1'〕・上限 10 件・同名は確認のうえ上書き
+    〔id/並び順維持〕・呼び出しはドラフトへ読み込み「保存」で反映。純ロジック = parseSectionFavorites〔壊れたエントリは 1 件だけ落とす =
+    原則2〕/ upsertSectionFavorite / removeSectionFavorite。取消 = 削除確認 + 呼び出しで戻せる = 原則9.5）
+  - **アプリヘッダーに「通知」**: `QUICK_ACCESS_CATALOG` に inbox（ベル）を追加・既定 = タイムカード + 通知。ヘッダーのベルは
+    本設定で表示制御（クイックアクセス一般ループとは別枠の特別描画 = 未読バッジ付き・位置不変。モバイル下部ナビは独立）。
+    **下位互換（原則7）**: 保存形式を v2（`{ v: 2, ids }`）へ拡張し、v1（素の id 配列 = inbox が候補になる前の保存値）は
+    parse が inbox を補完（= ベル常時表示時代の見え方を維持）。既存保存データの更新パッチは不要（読み替えで完結）
+- [x] **④要望画像の D&D / 貼り付け**: ImprovementSubmit にドロップエリア（ドラッグ中の強調・クリック/Enter/Space でファイル選択・
+  上限到達で非表示）+ クリップボード貼り付け（入力ビュー全体の @paste。画像を含む場合のみ preventDefault = テキスト貼り付けは既定動作）。
+  3 経路とも共通の `addImageFiles`（縮小・種別・上限チェック）へ集約（原則3）。
+- [x] **⑤登録済み改善要望の編集（F-42-16）**: 生要望ドロワーの本文に「編集」→ インライン編集フォーム（保存/キャンセル・文字数カウンタ）。
+  権限 = 投稿者本人または管理権限者（API 側ガード。archive/コメントと同型）。取消済みは編集不可（AKO-REQ-015 = 先に復元）。
+  編集は上書きだが **`edited_at`（0064 追加列・NULL=未編集 = 原則7 非破壊）を記録して「編集済み（日時）」を明示**
+  （再編集で戻せる = 原則9.5）。集約済みも編集可（改修プロンプトは再生成時に現行本文を読むため明確化が反映）。
+  mock/API parity（useImprovements.editRequest / POST /v1/improvements/requests/:id/edit）。
+  **投稿者本人の導線 = 要望モーダルの送信後ビュー「内容を修正する」**（/improvements は管理ゲートのため。
+  過去要望の投稿者向け一覧・編集導線は残課題）。**変更前本文は監査ログへ全文記録（FOR UPDATE + 同一 tx = 
+  並行編集・監査失敗でも直前本文を喪失しない）**。
+- [x] **テスト**: mockup 318 passed（header-quick-access = v1 補完/v2 尊重/serialize 往復/カタログ inbox・dashboard-layout =
+  配置 4 択/withNotificationPlacement 不変条件/お気に入り parse・upsert・remove〔上書き・上限・id 衝突・ディープコピー・冪等削除〕）。
+  API unit 348 passed + **統合 260 passed（使い捨て PostgreSQL。新規 = 要望編集の本人/管理者/第三者 403/空/404/取消済み 409/復元後再編集・
+  poipoi 通知リンクのディープリンク化に伴う既存アサーション更新）**・両パッケージ typecheck / mockup build green。
+- [x] **ドキュメント整合（原則5）**: functional-requirements（F-01-4・F-12-1/5・F-13-9・F-42-11・**F-42-16 新設**）・screen-design（/ ダッシュボード・
+  §5.6・/inbox・要望添付・生要望ドロワーの編集）・data-design（improvement_requests.edited_at = 0064）・
+  CONVENTIONS（useDashboardLayout/useSectionFavorites/useImprovements.editRequest/クイックアクセス v2/コンポーネント表）・本節。
+
+> **反復レビュー（原則9）:** R1 = 独立コードレビュー（high）で指摘 8 件 →全件反映:
+> ①配置保存がフォールバック層のセクション構成を保存先層へ固定する（MAJOR）→ 配置を**専用キー**
+> （`dashboardNotificationPlacement` / `dashboard-notification-placement`）へ分離し、解決を
+> 配置キー > レイアウト由来に変更（`parseNotificationPlacement`/`resolveNotificationPlacementOverride` + テスト）
+> ②テンプレート説明文の通知位置の記述が分離後の挙動と乖離 → 説明文から除去（notify-first は「レイアウト」タブへの
+> 案内に変更）+ 乖離防止の回帰テスト ③ドロップエリア外への画像ドロップでページ遷移し入力が失われる →
+> モーダル表示中はウィンドウ全体でファイルドロップの既定動作を抑止し添付として受ける（Files 型のみ・エリア上は stop で二重防止）
+> ④api-design.md に編集エンドポイント欠落 → 追記 ⑤編集 UPDATE に archived ガード欠落（競合窓）→
+> `AND archived_at IS NULL` + 0 行時の再判定 ⑥mock editRequest に権限ガード欠落（API と乖離）→
+> 本人 or canManageImprovements ガード追加 ⑦inbox の ?open= 除去がセットアップ中の router.replace で
+> 初期ナビゲーションと競合 → onMounted 化 ⑧ディープリンク取り込みの 4 重複実装 → 共通 composable
+> `useRouteDeepLink`（workflow/inbox/ai-company/NotesPanel を集約 = 原則3）。
+> R2 = 修正後の再レビューで追加指摘 6 件 → 全件反映: ①テナント配置キーが既存ユーザー層レイアウト由来の配置を
+> 上書きする（原則7 逆転）→ 解決を層整合（ユーザーキー > ユーザー層レイアウト > テナントキー > レイアウト）へ変更 + テスト
+> ②API 編集の取消済み判定が権限確認より先（mock と乖離・第三者へ取消状態が漏れる）→ 権限確認を先へ
+> ③記録系の本文上書きで変更前本文が失われる → 監査ログ detail へ変更前本文（500 字まで）を記録
+> ④送信後ビューでウィンドウドロップガードが無効（誤ドロップで取消導線ごと喪失）→ モーダル表示中は常に既定動作を抑止
+> ⑤shift.vue の ?tab= が初期化のみで同一ページ内クエリ変化に未追従 → watch 追加（inbox/attendance と同挙動）
+> ⑥inbox の未消費 ?open= が滞留し、後からの管理者切替で不意にモーダルが開く → 非管理者時は即破棄。
+> R3 = 再レビューで追加指摘 4 件 → 全件反映: ①applyTemplate/saveSections が配置キーを無視した
+> フォールバック配置を保存し、適用で有効配置が変わり得る → `placementForPersist`（user = 解決有効値 /
+> tenant = テナントキー > テナント層由来。管理者個人のキーをテナントへ漏らさない）で維持
+> ②編集監査ログの変更前本文が 500 字打ち切り（復元不能領域が残る）→ 全文記録へ
+> ③NotesPanel の未消費 ?open= がユーザー切替後に不意にモーダルを開き得る → 切替時に破棄
+> ④?tab= 取り込みの重複実装（shift/inbox）→ `useRouteTabSync` へ共通化。
+> R4 = 再レビューで追加指摘 3 件 → 全件反映: ①変更前本文の監査記録が非原子的（並行編集で直前本文を喪失・
+> 監査失敗を握りつぶす）→ FOR UPDATE + 同一トランザクション内 INSERT（記録保全は主フローの一部のため
+> 非ブロッキング audit() を使わない）②投稿者本人の編集権に UI 導線が無い → 要望モーダルの送信後ビューへ
+> 「内容を修正する」を追加（editRequest の再取得は管理権限者のみ = 非管理者の 403 誤発火防止）+ 残課題を文書化
+> ③useRouteTabSync が ?tab= を URL に残しリロードで選び直したタブが巻き戻る → 取り込み後に除去
+> （タブ反映はセットアップ時・除去は onMounted 以降 = 初期ナビゲーション競合回避）。
+> R5 = 再レビューで追加指摘 3 件 → 全件反映: ①同一 tick の複数クエリ消去（/inbox の ?tab= と ?open=）が
+> 相互に復元し合う → scheduleQueryStrip で 1 回の replace に束ねる ②placementForPersist が解決有効値
+> （テナントキー由来を含む）をユーザー層レイアウトへ固定し、以後のテナント配置変更・自分の配置解除が
+> 効かなくなる → `options.notificationsInherit`（分離後の保存 = 配置はキーへ委譲。分離前レイアウトの
+> 明示配置の置き換え時のみ従来意思を引き継ぐ）を導入し解決に反映 + テスト ③poipoi ディープリンクの
+> 詳細表示が管理者以外の受信者で開かない件のドキュメント過大主張 → 権限スコープを明記（非管理者受信者の
+> 単ノート閲覧は既存参照モデル外のため残課題）。
+> R6 = 再レビューで追加指摘 4 件 → 全件反映: ①「続けて送る」が修正フォームの残留状態を破棄せず、
+> 次の要望の本文を前の要望のテキストで上書きし得る → again() で editingSent/editBody もリセット
+> ②screen-design §5.6 の SoT 記述が旧情報（テンプレート 5 種・配置 3 値・inherit 無し）→ 6 種 + 'top' +
+> notificationsInherit へ更新 ③F-13-9 の旧タブ名（テンプレート/セクションを編集）・options 記述 → 現行へ更新
+> ④編集の統合テストが「送っていないフィールドの保持」を未検証 → pagePath/pageLabel/links/status/adoption/
+> itemId/memberId の保持アサーションを追加（CLAUDE.md 部分更新の鉄則）。
+> R7 = 再レビューで追加指摘 2 件（低〜中） → 全件反映: ①/reports の ?date= が URL に残留し
+> リロードで選び直した日付が巻き戻る・同一ページ内のクエリ変化に未追従 → useRouteDeepLink('date') で
+> 除去 + 追従（初期値は従来の同期初期化を維持 = ちらつき回避）②配置解除ダイアログの文言が分離前
+> レイアウト保持ユーザーの実際の解決順と乖離 → 適用順（自分のレイアウト → 全社設定 → 既定）を明記。
+> R8 = 再レビューで追加指摘 4 件 → 全件反映: ①レイアウト保存が配置キー由来の値をフォールバックとして
+> 層に焼き込み、キー解除後の巻き戻り先が陳腐化する → 解決を完全層別（ユーザーキー > ユーザー層レイアウト
+> 〔分離前のみ〕> テナントキー > テナント層レイアウト〔同〕> アプリ既定）にし、inherit 付きフォールバック値は
+> 解決で使わない + 分離前レイアウト置き換え時はその明示配置を温存（persistedPlacementOf）
+> ②poipoi ディープリンクが非管理者受信者に開けないリンクを配る → 受信者のロールで出し分け（管理者のみ ?open=）
+> ③要望編集フォームの二重実装（ImprovementSubmit / improvements.vue）→ 共通部品 ImprovementsBodyEditForm へ抽出
+> ④shift.vue の有効タブ固定リストが tabs 定義と重複 → 撤去（既存 watchEffect の検証に一本化）。
+> R9 = 再レビューで指摘 5 件（うち本改修由来 3 件）→ 反映: ①mock editRequest が commit() の永続化可否を
+> 無視（容量超過の編集が黙って消える）→ persisted を返し両編集 UI で警告（submit と同型）
+> ②要望添付表示ブロックの二重実装（改修単位/生要望ドロワー）→ 共通部品 ImprovementsAttachmentList へ抽出
+> ③受付箱のコメント件数セルが行×全件フィルタ×2 → commentCountByRequest（1 パス集計の Map）へ。
+> 残り 2 件は既存コード由来・本改修外のため残課題として記録: ④生要望コメントの投稿者向け閲覧導線
+> （GET が管理者のみ = 既存 0063 の既知の残課題・shared 型 docstring に記載済み）⑤取引ロール取込の
+> 全角区切り（／，）未対応（§77 の既存実装。別バッチで対応）。
+> R10 = 再レビューで指摘 3 件（低）→ 全件反映: ①クイックアクセス v2 パースの `v >= 2` が未知の将来版を
+> 誤読し「何も表示しない」扱いにし得る → 完全一致（`v === 2`）+ v3 拒否テスト ②セクション解除ダイアログの
+> 「配置はそのまま」が分離前レイアウト保持者で不正確 → 「レイアウトタブで設定した配置（あれば）は残る」へ修正
+> ③配置/テンプレートのプレビューが再描画ごとにディープコピー → computed 化（placementOptionViews/templateViews）。
+> R11 = 再レビューで指摘 2 件（低・確定バグなし）→ 反映: ①分離前レイアウトの配置が全社配置キーより
+> 優先される場合の回復導線が分かりにくい → レイアウトタブに由来の説明と変更手段の案内を表示
+> （placementSource === 'layout' のとき。優先順自体は原則7 の意図どおり維持）②BodyEditForm の
+> maxlength（UTF-16 単位）とカウンタ（コードポイント）の数え方不一致 → maxlength を撤去し、
+> 超過は保存ボタン無効 + カウンタ強調で伝える（サーバー側 capCodePoints と同じ数え方に統一）。
+> R12 = 再レビューで指摘 3 件（低〜中）→ 全件反映: ①レイアウトタブの案内文がテナント層レイアウト由来でも
+> 表示され主張が不正確 → 自分の分離前レイアウト由来（placementFromOwnLegacyLayout）のときのみ表示
+> ②セクション設定の全社スコープのテンプレートプレビューが管理者個人の有効配置で描画（層漏れ）→
+> 保存先スコープ視点の配置（previewPlacement = tenant はキー > 土台）へ ③mock editRequest が変更前本文を
+> 残さない（API の audit_logs と非対称）→ mock の auditLogs へ同型の記録を追加。
+> R13 = 再レビューで指摘 1 件（軽微）→ 反映: テナント層視点の配置フォールバックが inherit 付きの
+> 陳腐値を拾い、キー解除後の全社プレビュー・次回保存に復元される → `tenantEffectivePlacement`
+> （キー > 分離前レイアウト > アプリ既定 = 解決関数と同じ規則）へ一本化（プレビュー・persistedPlacementOf 共用）。
+> R14 = 再レビューで指摘 3 件（低・クリーンアップ）→ 全件反映: ①parseQuickAccessIds の docstring が
+> v1 空配列の挙動（inbox 補完）と矛盾 → 契約文を v2 限定に修正 ②編集 API の応答が images を '[]' で伏せ、
+> 応答マージするクライアントが添付を消し得る → 単一行応答は実体を返す（reqColsOf(true)）
+> ③/reports の ?date= 検証正規表現の二重定義 → 共通 const 化。
+> R15 = 再レビューで指摘 1 件（低）→ 反映: NotesPanel の未解決 ?open= が無期限に滞留し、対象の再出現
+> （取消 → 復元等）で操作なしにモーダルが開き得る → 15 秒で滞留 id を破棄（API 初期ロードには十分な猶予）。
+> R16 = 再レビューで指摘 3 件（低）→ 全件反映: ①画像処理中の貼り付け/ドロップが黙って捨てられる →
+> 警告トーストで理由を伝える（X-1）②mock editRequest のガードが単体テスト未固定 → 判定を共有純関数
+> `improvementEditError`（存在 → 権限 → 取消済み = API と同一順）へ抽出し 6 ケースをテスト固定
+> ③テストの describe 名に旧関数名（resolveNotificationPlacementOverride）が残留 → 現行名へ修正。
+> R17 = 最終レビューで指摘ゼロ・全テスト green（mockup 330 / API unit 348 / 統合 260・両 typecheck・build）を確認して完了。

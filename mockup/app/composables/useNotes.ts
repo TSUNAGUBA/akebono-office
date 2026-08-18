@@ -59,15 +59,23 @@ export function useNotes(kind: NoteKind) {
    * 宛先は「ロール/役職/個人」指定を解決した在籍メンバー（投稿者本人は除外）。非ブロッキング（原則4）。
    * API モードはサーバー（POST /v1/notes）が発火するため呼ばない（useNotifications.notify も API では no-op）。
    */
-  function firePoipoiNotify(body: string): void {
+  function firePoipoiNotify(body: string, noteId: string): void {
     try {
       const targets = parseNotifyRecipients(appSettings.getConfig('poipoi-notify-recipients', ''))
       if (targets.length === 0) return
-      const recipientIds = resolveNotifyRecipientIds(targets, tbl('members').value as Member[], currentUser.value.id)
+      const members = tbl('members').value as Member[]
+      const recipientIds = resolveNotifyRecipientIds(targets, members, currentUser.value.id)
       if (recipientIds.length === 0) return
       const title = `新しい改善のタネ（${currentUser.value.name}）`
       const preview = [...body].slice(0, 140).join('')
-      for (const mid of recipientIds) notifications.notify(mid, 'poipoi', title, preview, '/poipoi')
+      // リンクは対象ポストの詳細モーダルへのディープリンク（改修依頼 2026-08-18）。
+      // 他人のポスト詳細を開けるのは管理者のみ（/poipoi の参照モデル）のため、
+      // 閲覧権限の無い受信者には従来どおり一覧リンクを送る（開けないリンクを配らない = レビュー R8。API と同一）
+      const roleById = new Map(members.map(m => [m.id, m.role]))
+      for (const mid of recipientIds) {
+        const link = roleById.get(mid) === 'admin' ? `/poipoi?open=${noteId}` : '/poipoi'
+        notifications.notify(mid, 'poipoi', title, preview, link)
+      }
     } catch {
       // 補助処理: 通知失敗は主フロー（ポスト登録）を止めない（原則4）
     }
@@ -141,7 +149,7 @@ export function useNotes(kind: NoteKind) {
     commit()
     // ぽいぽいポストは設定された宛先へ原文を通知（mock。API はサーバー発火。オペレーター指示 2026-08-03）。
     // 取込（importFile）経由は notifyPoipoi=false で発火しない（API の /import と揃える）
-    if (kind === 'poipoi' && opts?.notifyPoipoi !== false) firePoipoiNotify(body)
+    if (kind === 'poipoi' && opts?.notifyPoipoi !== false) firePoipoiNotify(body, id)
     return { ok: true, id }
   }
 

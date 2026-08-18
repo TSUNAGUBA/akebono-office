@@ -17,12 +17,21 @@ import {
   defaultDashboardLayout,
   layoutFromLegacyCategories,
   materializeLayout,
+  MAX_SECTION_FAVORITES,
+  NOTIFICATION_PLACEMENT_OPTIONS,
   parseDashboardLayout,
   parseMenuSections,
+  parseNotificationPlacement,
+  parseSectionFavorites,
   pickBaseLayout,
   planDashboardCards,
+  removeSectionFavorite,
   resolveDashboardLayout,
+  resolveNotificationPlacement,
+  type SectionFavorite,
   templateById,
+  upsertSectionFavorite,
+  withNotificationPlacement,
 } from '~/utils/dashboard-layout'
 import {
   DEFAULT_MENU_CATEGORIES, MENU_CARDS, OTHER_CATEGORY_ID, OTHER_CATEGORY_LABEL,
@@ -451,5 +460,227 @@ describe('pickBaseLayout（保存先スコープ自身の層を土台にする�
     expect(saved.templateId).toBe('custom')
     expect(saved.options).toEqual(tenantLayout.options)
     expect(saved.options).not.toEqual(userLayout.options)
+  })
+})
+
+// ---------- 2026-08-18: レイアウト（通知配置）とセクション設定の分離 + お気に入り ----------
+
+describe('NOTIFICATION_PLACEMENT_OPTIONS / withNotificationPlacement（通知配置の分離）', () => {
+  it('選択肢は 上（top）・右（side）・下（bottom）・非表示（hidden）の 4 択', () => {
+    expect(NOTIFICATION_PLACEMENT_OPTIONS.map(o => o.value)).toEqual(['top', 'side', 'bottom', 'hidden'])
+    expect(NOTIFICATION_PLACEMENT_OPTIONS.map(o => o.label)).toEqual(['上', '右', '下', '非表示'])
+  })
+
+  it('withNotificationPlacement は通知配置だけを差し替える（sections・他 options は不変）', () => {
+    const base = materializeLayout('executive') // notifications: 'bottom'
+    const next = withNotificationPlacement(base, 'top')
+    expect(next.options.notifications).toBe('top')
+    expect(next.options.showAkebono).toBe(base.options.showAkebono)
+    expect(next.options.density).toBe(base.options.density)
+    expect(next.templateId).toBe(base.templateId)
+    expect(next.sections).toEqual(base.sections)
+  })
+
+  it('withNotificationPlacement はディープコピーを返す（元レイアウトを破壊しない）', () => {
+    const base = materializeLayout('default')
+    const next = withNotificationPlacement(base, 'hidden')
+    next.sections[0]!.cardIds.push('__mutated__')
+    expect(base.sections[0]!.cardIds).not.toContain('__mutated__')
+    expect(base.options.notifications).toBe('side')
+  })
+})
+
+describe('parseSectionFavorites（お気に入りのパース。壊れたエントリは 1 件だけ落とす）', () => {
+  const fav = { id: 'fav-1', name: '自分の定番', sections: [{ id: 's1', label: 'A', cardIds: ['timecard'] }], savedAt: '2026-08-18T09:00:00+09:00' }
+
+  it('JSON 文字列・配列（JSONB）の両方を受理する', () => {
+    expect(parseSectionFavorites(JSON.stringify([fav]))).toEqual([fav])
+    expect(parseSectionFavorites([fav])).toEqual([fav])
+  })
+
+  it('未設定・不正 JSON・非配列は null（= 設定なし）', () => {
+    expect(parseSectionFavorites('')).toBeNull()
+    expect(parseSectionFavorites(undefined)).toBeNull()
+    expect(parseSectionFavorites(null)).toBeNull()
+    expect(parseSectionFavorites('{')).toBeNull()
+    expect(parseSectionFavorites({ a: 1 })).toBeNull()
+  })
+
+  it('壊れたエントリはその 1 件だけ落とす（全件を失わせない = 原則2）', () => {
+    const broken = [
+      fav,
+      { id: '', name: 'id なし', sections: [], savedAt: '' },
+      { id: 'fav-2', name: '', sections: [], savedAt: '' },
+      { id: 'fav-3', name: 'sections 不正', sections: 'x', savedAt: '' },
+      { id: 'fav-4', name: '正常（空セクション）', sections: [], savedAt: '' },
+    ]
+    expect(parseSectionFavorites(broken)).toEqual([
+      fav,
+      { id: 'fav-4', name: '正常（空セクション）', sections: [], savedAt: '' },
+    ])
+  })
+
+  it('id 重複は先勝ちで除去する', () => {
+    const dup = { ...fav, name: '重複' }
+    expect(parseSectionFavorites([fav, dup])).toEqual([fav])
+  })
+})
+
+describe('upsertSectionFavorite / removeSectionFavorite（お気に入りの保存・削除）', () => {
+  const sections = [{ id: 's1', label: 'A', cardIds: ['timecard', 'reports'] }]
+  const at = '2026-08-18T09:00:00+09:00'
+
+  it('新規は末尾へ追加され、id は savedAt 由来で採番される', () => {
+    const r = upsertSectionFavorite([], { name: '定番', sections, savedAt: at })
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.overwritten).toBe(false)
+    expect(r.list).toHaveLength(1)
+    expect(r.list[0]!.id).toBe(`fav-${at.replace(/\D/g, '')}`)
+    expect(r.list[0]!.sections).toEqual(sections)
+  })
+
+  it('同名は上書き（id・並び順を維持）', () => {
+    const first = upsertSectionFavorite([], { name: '定番', sections, savedAt: at })
+    if (!first.ok) throw new Error('unreachable')
+    const updated = [{ id: 's2', label: 'B', cardIds: ['workflow'] }]
+    const r = upsertSectionFavorite(first.list, { name: '定番', sections: updated, savedAt: '2026-08-19T09:00:00+09:00' })
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.overwritten).toBe(true)
+    expect(r.list).toHaveLength(1)
+    expect(r.list[0]!.id).toBe(first.list[0]!.id)
+    expect(r.list[0]!.sections).toEqual(updated)
+  })
+
+  it('同時刻保存の id 衝突は連番サフィックスで回避する', () => {
+    const a = upsertSectionFavorite([], { name: 'A', sections, savedAt: at })
+    if (!a.ok) throw new Error('unreachable')
+    const b = upsertSectionFavorite(a.list, { name: 'B', sections, savedAt: at })
+    expect(b.ok).toBe(true)
+    if (!b.ok) return
+    expect(b.list.map(f => f.id)).toEqual([`fav-${at.replace(/\D/g, '')}`, `fav-${at.replace(/\D/g, '')}-2`])
+  })
+
+  it('空名はエラー・上限（MAX_SECTION_FAVORITES）超過はエラー', () => {
+    expect(upsertSectionFavorite([], { name: '  ', sections, savedAt: at }).ok).toBe(false)
+    let list: SectionFavorite[] = []
+    for (let i = 0; i < MAX_SECTION_FAVORITES; i++) {
+      const r = upsertSectionFavorite(list, { name: `fav-${i}`, sections, savedAt: at })
+      if (!r.ok) throw new Error('unreachable')
+      list = r.list
+    }
+    const over = upsertSectionFavorite(list, { name: 'もう 1 件', sections, savedAt: at })
+    expect(over.ok).toBe(false)
+    // 上限到達でも既存名の上書きはできる（枠を消費しない）
+    const overwrite = upsertSectionFavorite(list, { name: 'fav-0', sections, savedAt: at })
+    expect(overwrite.ok).toBe(true)
+  })
+
+  it('保存はディープコピー（呼び出し側 draft の後続編集がお気に入りへ波及しない）', () => {
+    const src = [{ id: 's1', label: 'A', cardIds: ['timecard'] }]
+    const r = upsertSectionFavorite([], { name: '定番', sections: src, savedAt: at })
+    if (!r.ok) throw new Error('unreachable')
+    src[0]!.cardIds.push('__mutated__')
+    expect(r.list[0]!.sections[0]!.cardIds).not.toContain('__mutated__')
+  })
+
+  it('removeSectionFavorite は指定 id のみを除去する', () => {
+    const a = upsertSectionFavorite([], { name: 'A', sections, savedAt: at })
+    if (!a.ok) throw new Error('unreachable')
+    const b = upsertSectionFavorite(a.list, { name: 'B', sections, savedAt: '2026-08-19T09:00:00+09:00' })
+    if (!b.ok) throw new Error('unreachable')
+    const removed = removeSectionFavorite(b.list, a.list[0]!.id)
+    expect(removed.map(f => f.name)).toEqual(['B'])
+    // 存在しない id は no-op（冪等）
+    expect(removeSectionFavorite(removed, 'fav-nope')).toEqual(removed)
+  })
+})
+
+describe('通知配置の専用キー（parseNotificationPlacement / resolveNotificationPlacement）', () => {
+  it('生文字列・JSON 引用文字列の両方を受理し、不正値・未設定は null', () => {
+    expect(parseNotificationPlacement('top')).toBe('top')
+    expect(parseNotificationPlacement('"side"')).toBe('side')
+    expect(parseNotificationPlacement(' bottom ')).toBe('bottom')
+    expect(parseNotificationPlacement('hidden')).toBe('hidden')
+    expect(parseNotificationPlacement('')).toBeNull()
+    expect(parseNotificationPlacement('  ')).toBeNull()
+    expect(parseNotificationPlacement('middle')).toBeNull()
+    expect(parseNotificationPlacement(null)).toBeNull()
+    expect(parseNotificationPlacement(undefined)).toBeNull()
+    expect(parseNotificationPlacement(42)).toBeNull()
+    expect(parseNotificationPlacement('"broken')).toBeNull()
+  })
+
+  it('解決は層整合: ユーザーキー > ユーザー層レイアウト由来 > テナントキー > テナント層レイアウト由来 > 既定', () => {
+    // ユーザーキーが最優先
+    expect(resolveNotificationPlacement({
+      userRaw: 'top', tenantRaw: 'bottom', userLayout: { placement: 'side' }, tenantLayout: null,
+    })).toEqual({ placement: 'top', source: 'user' })
+    // ユーザー層レイアウト（専用キー導入前の保存値 = inherit なし）で配置を選んでいた既存ユーザーを
+    // 新しいテナント配置キーが上書きしない（原則7 = レビュー R2）
+    expect(resolveNotificationPlacement({
+      userRaw: '', tenantRaw: 'hidden', userLayout: { placement: 'top' }, tenantLayout: null,
+    })).toEqual({ placement: 'top', source: 'layout' })
+    // ユーザー層レイアウトが無ければテナントキー
+    expect(resolveNotificationPlacement({
+      userRaw: '', tenantRaw: 'bottom', userLayout: null, tenantLayout: { placement: 'side' },
+    })).toEqual({ placement: 'bottom', source: 'tenant' })
+    // キーが無ければテナント層レイアウト由来（分離前の保存値）
+    expect(resolveNotificationPlacement({
+      userRaw: '', tenantRaw: '', userLayout: null, tenantLayout: { placement: 'bottom' },
+    })).toEqual({ placement: 'bottom', source: 'layout' })
+    // どの層にも無ければアプリ既定（side）
+    expect(resolveNotificationPlacement({ userRaw: '', tenantRaw: '', userLayout: null, tenantLayout: null }))
+      .toEqual({ placement: 'side', source: 'default' })
+    // 不正な上位層キーは 1 段スキップして下位層へ（表示を壊さない）
+    expect(resolveNotificationPlacement({
+      userRaw: 'bogus', tenantRaw: 'hidden', userLayout: null, tenantLayout: null,
+    })).toEqual({ placement: 'hidden', source: 'tenant' })
+  })
+
+  it('分離後の保存レイアウト（notificationsInherit）は配置をキー・下位層へ委譲する（レビュー R5/R8）', () => {
+    // inherit 付きユーザー層レイアウトはテナント配置キーに勝たない（フォールバック値を層に固定しない）
+    expect(resolveNotificationPlacement({
+      userRaw: '', tenantRaw: 'hidden', userLayout: { placement: 'bottom', inherit: true }, tenantLayout: null,
+    })).toEqual({ placement: 'hidden', source: 'tenant' })
+    // キーが無ければさらに下位層へ委譲し、凍結スナップショット（inherit 付きの placement 値）は使わない
+    // = テナントキー解除後も全員が同じ既定へ戻る（レビュー R8）
+    expect(resolveNotificationPlacement({
+      userRaw: '', tenantRaw: '', userLayout: { placement: 'bottom', inherit: true }, tenantLayout: null,
+    })).toEqual({ placement: 'side', source: 'default' })
+    // 下位のテナント層レイアウト（分離前の明示配置）があればそれへ委譲する
+    expect(resolveNotificationPlacement({
+      userRaw: '', tenantRaw: '', userLayout: { placement: 'side', inherit: true }, tenantLayout: { placement: 'bottom' },
+    })).toEqual({ placement: 'bottom', source: 'layout' })
+    // parse は inherit マーカーを保持する（未指定 = 分離前の保存値 = 立てない）
+    const withInherit = parseDashboardLayout(JSON.stringify({
+      sections: [], options: { notifications: 'top', notificationsInherit: true, showAkebono: true, density: 'comfortable' },
+    }))
+    expect(withInherit?.options.notificationsInherit).toBe(true)
+    const legacy = parseDashboardLayout(JSON.stringify({
+      sections: [], options: { notifications: 'top', showAkebono: true, density: 'comfortable' },
+    }))
+    expect(legacy?.options.notificationsInherit).toBeUndefined()
+  })
+
+  it('専用キー方式のため、配置保存はレイアウト本体（sections）へ書かない前提が成り立つ（回帰ピン）', () => {
+    // レイアウト本体の解決（sections）は配置キーと独立: テナントのセクション変更は
+    // 「配置だけ設定したユーザー」にもそのまま届く（配置キーはユーザー層にレイアウトを作らない）
+    const tenant = JSON.stringify(buildCustomLayout(
+      [{ id: 's1', label: '全社', cardIds: ['timecard'] }], DEFAULT_LAYOUT_OPTIONS))
+    const r = resolveDashboardLayout({ userRaw: undefined, tenantRaw: tenant })
+    expect(r.scope).toBe('tenant')
+    expect(r.layout.sections[0]!.label).toBe('全社')
+  })
+})
+
+describe('テンプレート説明の分離整合（通知位置の記述を持たない = レビュー対応）', () => {
+  it('テンプレートの説明文は通知位置を約束しない（配置はレイアウト設定が SoT）', () => {
+    for (const t of DASHBOARD_TEMPLATES) {
+      // notify-first のみ「レイアウト」タブへの案内として言及を許容する
+      if (t.id === 'notify-first') continue
+      expect(t.description).not.toMatch(/通知は/)
+    }
   })
 })

@@ -445,7 +445,7 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
     const member = await pool.query('SELECT id FROM members WHERE id = $1 AND active = true', [body.memberId])
     if (!member.rows[0]) throw err('AKO-GEN-002', '対象メンバーが見つかりません', 404)
     await notify(pool, body.memberId, 'reminder', '日報リマインド',
-      `${body.date} の日報が未提出です。提出をお願いします`, '/reports')
+      `${body.date} の日報が未提出です。提出をお願いします`, `/reports?date=${body.date}`)
     return c.json({ data: { ok: true } })
   })
 

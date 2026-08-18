@@ -118,10 +118,16 @@ function matchesMemberFilter(memberId: string | null | undefined, deptId: string
 // ---------- 自分の日報タブ ----------
 
 // 通知ディープリンク: ?date=YYYY-MM-DD で対象日を初期表示（日報コメント通知から対象の日報へ即到達 = 改善要望 2026-08-17）
-const queryDate = typeof route.query.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(route.query.date)
+const DEEP_LINK_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+const queryDate = typeof route.query.date === 'string' && DEEP_LINK_DATE_RE.test(route.query.date)
   ? route.query.date
   : ''
 const selDate = ref(queryDate || todayJst())
+// URL からの除去（選び直した日付がリロードで巻き戻らない）+ 滞在中の同一ページ内 ?date= 変化への追従は
+// 共通の useRouteDeepLink（原則3。初期値は上の同期初期化 = 初回描画のちらつき回避。2026-08-18）
+useRouteDeepLink('date', (v) => {
+  if (DEEP_LINK_DATE_RE.test(v)) selDate.value = v
+})
 const myReport = computed(() => reports.myReportOn(selDate.value))
 
 /** 表示モード（週 / 月）と月ビューの形式（横スクロール / カレンダー）。

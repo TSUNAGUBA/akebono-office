@@ -114,8 +114,10 @@ export function useEscalations() {
         raisedAt: nowJstIso(),
       }]
       commit()
-      // 管理者への暗黙の情報共有（通知失敗は起票を巻き戻さない）
-      notifyAdmins('escalation', `エスカレーション: ${ESCALATION_REASON_LABELS[signal.reason]}`, signal.context, '/inbox')
+      // 管理者への暗黙の情報共有（通知失敗は起票を巻き戻さない）。
+      // リンクは対応ビュー + 対象エスカレーションへのディープリンク（改修依頼 2026-08-18）
+      notifyAdmins('escalation', `エスカレーション: ${ESCALATION_REASON_LABELS[signal.reason]}`, signal.context,
+        `/inbox?tab=escalations&open=${id}`)
       return { ok: true, id }
     } catch {
       return { ok: false, error: { code: 'AKO-ESC-999', message: '起票に失敗しました（主フローは継続します）' } }

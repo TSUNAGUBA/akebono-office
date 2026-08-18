@@ -33,7 +33,10 @@ const projects = tbl('projects')
 // ---------- タブ（通知はカテゴリ別に分割。表示するカテゴリタブは設定駆動。オペレーター指示 2026-08-12） ----------
 // カテゴリタブ（承認依頼・稟議・日報・顧客ログ・議事録・エスカレーション）は「ダッシュボード → レイアウト → 通知タブ」
 // の設定（ユーザー > 全社 > 既定）に従う。「すべて」は常に先頭固定。管理者の「エスカレーション対応」は別枠（管理ビュー）。
+// 通知ディープリンク: ?tab=escalations 等で対象タブを直接開く（エスカレーション通知から対応ビューへ
+// 即到達 = 改修依頼 2026-08-18。取り込みは共通の useRouteTabSync = 原則3。不正タブは下の watchEffect が戻す）
 const tab = ref('all')
+useRouteTabSync(tab)
 
 /** タブ → 通知カテゴリの絞り込み（'all' = 絞り込みなし。'escalations' は管理ビューでカテゴリ絞り込み対象外） */
 function tabCategory(t: string): NotificationCategory | null {
@@ -55,9 +58,9 @@ const tabs = computed<TabItem[]>(() => {
   return base
 })
 
-// デモユーザー切替で管理者でなくなったらタブを戻す
-watch(isAdmin, (v) => {
-  if (!v && tab.value === 'escalations') tab.value = 'all'
+// デモユーザー切替・非管理者のディープリンクでは管理ビューを開かない（「すべて」へ戻す）
+watchEffect(() => {
+  if (!isAdmin.value && tab.value === 'escalations') tab.value = 'all'
 })
 
 // 選択中カテゴリタブが設定変更で消えたら「すべて」へ戻す（管理ビュー・すべて は対象外）
@@ -66,6 +69,12 @@ watchEffect(() => {
     tab.value = 'all'
   }
 })
+
+// 通知ディープリンク: ?open=<エスカレーションid> で対応モーダルを直接開く（管理者のみ。改修依頼 2026-08-18）。
+// 取り込み・URL 除去は共通の useRouteDeepLink（原則3）。API モードはエスカレーションの取得完了後に
+// 解決されるため、見つかるまで監視して一度だけ開く。解決済み（open に無い）場合はモーダルを開かず
+// 一覧表示のまま（対応履歴で確認できる）
+const openDeepLink = useRouteDeepLink('open')
 
 // ---------- 通知タブ ----------
 /** 種別トーン（共有 labels.ts は編集しないためローカル定義） */
@@ -160,6 +169,23 @@ function openRespond(e: Escalation): void {
   knowledgeTargetId.value = targetOptions.value[0]?.value ?? ''
   resError.value = ''
 }
+
+// ?open= のディープリンク解決（openRespond 定義後に配置 = セットアップ中の同期実行で TDZ を踏まない）。
+// API モードはエスカレーション取得完了後に見つかった時点で一度だけ開く。解決済み（open に無い）場合は
+// モーダルを開かず一覧のまま（対応履歴で確認できる）
+watchEffect(() => {
+  if (!openDeepLink.pending.value) return
+  // 非管理者は対象を開かず破棄する（滞留させると、後からのデモユーザー切替〔管理者化〕で
+  // 操作なしにモーダルが不意に開く = レビュー指摘。isAdmin はページ表示時点で解決済み〔認証ミドルウェア〕）
+  if (!isAdmin.value) {
+    openDeepLink.consume()
+    return
+  }
+  const target = open.value.find(e => e.id === openDeepLink.pending.value)
+  if (!target) return
+  openDeepLink.consume()
+  openRespond(target)
+})
 
 async function submitRespond(): Promise<void> {
   const target = respondTarget.value

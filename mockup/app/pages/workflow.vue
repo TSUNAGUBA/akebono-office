@@ -57,16 +57,10 @@ watchEffect(() => {
   if (!tabs.value.some(t => t.key === tab.value)) tab.value = 'mine'
 })
 
-// 通知ディープリンク: ?open=<申請id> で詳細ドロワーを直接開く（通知の対象へ即到達 = 改善要望 2026-08-17）。
+// 通知ディープリンク: ?open=<申請id> で詳細ドロワーを直接開く（通知の対象へ即到達 = 改善要望 2026-08-17。
+// 取り込み・URL 除去は共通の useRouteDeepLink へ集約 = 原則3・2026-08-18）。
 // API モードはキャッシュ到着後に selectedReq が解決される（computed のためデータ到着で自動的に開く）
-const router = useRouter()
-onMounted(() => {
-  const open = typeof route.query.open === 'string' ? route.query.open.trim() : ''
-  if (open) {
-    selectedId.value = open
-    void router.replace({ query: { ...route.query, open: undefined } }) // URL を汚さない（再読込で再度開かない）
-  }
-})
+useRouteDeepLink('open', (id) => { selectedId.value = id })
 
 // ---------- 一覧 ----------
 

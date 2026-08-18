@@ -113,9 +113,11 @@ const visibleMobileNav = computed(() => MOBILE_NAV.filter(i => canPath(i.path)))
 
 // ヘッダーのクイックアクセス（ヘッダーカスタマイズ。ユーザー > 組織 > 既定。ユーザー優先）。
 // 権限・機能トグルで利用不可の項目は表示しない（F-16 と同じ絞り込み）。
+// 「通知（inbox）」はベルアイコン（未読バッジ付き）として特別描画するため一般ループから除外する
 const { effectiveIds: quickAccessIds } = useHeaderQuickAccess()
 const quickAccessItems = computed<QuickAccessItem[]>(() =>
   quickAccessIds.value
+    .filter(id => id !== 'inbox')
     .map(id => quickAccessItemOf(id))
     .filter((i): i is QuickAccessItem => !!i)
     .filter((i) => {
@@ -123,6 +125,12 @@ const quickAccessItems = computed<QuickAccessItem[]>(() =>
       const p = quickAccessPermPath(i)
       return !p || canPath(p)
     }))
+
+// 通知ベル（アプリヘッダー設定の「通知」で表示を制御。既定 = 表示。改修依頼 2026-08-18）。
+// モバイル下部ナビの「通知」は本設定と独立（MOBILE_NAV 由来のまま）
+const showInboxBell = computed(() => quickAccessIds.value.includes('inbox') && canPath('/inbox'))
+/** 未読バッジ表示（100 件以上は 99+ に丸め、ヘッダー/下部ナビの幅崩れを防ぐ） */
+const unreadBadge = computed(() => unreadCount.value > 99 ? '99+' : String(unreadCount.value))
 
 // 遷移時のガードは permissions.global.ts。ここは「滞在中に deny になった」場合の補完:
 // API モードのルール非同期ハイドレーション完了時・モックモードのユーザー切替時に現在ページを再判定する
@@ -282,12 +290,18 @@ function onSwitchUser(id: string): void {
           </NuxtLink>
         </template>
 
-        <NuxtLink v-if="canPath('/inbox')" to="/inbox" class="btn btn-ghost btn-sm relative" aria-label="通知">
+        <!-- 通知ベル（未読総数バッジ付き）。表示はレイアウト → アプリヘッダー の「通知」で制御（既定 = 表示） -->
+        <NuxtLink
+          v-if="showInboxBell"
+          to="/inbox"
+          class="btn btn-ghost btn-sm relative"
+          :aria-label="unreadCount > 0 ? `通知（未読 ${unreadCount} 件）` : '通知'"
+        >
           <Bell class="h-4 w-4" />
           <span
             v-if="unreadCount > 0"
             class="num absolute -right-0.5 -top-0.5 rounded-full bg-crit px-1 text-[9px] font-bold leading-3.5 text-white"
-          >{{ unreadCount }}</span>
+          >{{ unreadBadge }}</span>
         </NuxtLink>
 
         <!-- 改善要望の投稿（全ページ共通・F-42）。どの画面からでもこのページの要望を送れる -->
@@ -385,7 +399,7 @@ function onSwitchUser(id: string): void {
         <span
           v-if="item.path === '/inbox' && unreadCount > 0"
           class="num absolute right-[22%] top-1 rounded-full bg-crit px-1 text-[9px] font-bold leading-3.5 text-white"
-        >{{ unreadCount }}</span>
+        >{{ unreadBadge }}</span>
       </NuxtLink>
     </nav>
 

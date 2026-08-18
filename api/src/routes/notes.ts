@@ -35,7 +35,7 @@ import { driveForbiddenHint, driveTokenState, DRIVE_FILES_URL, googleErrorDetail
  *  宛先は「ロール/役職/個人」指定を解決した在籍メンバー（投稿者本人は除外）。非ブロッキング（原則4）。
  *  オペレーター指示 2026-08-03。API モードのみサーバー発火（mock は useNotes が発火）。 */
 async function notifyPoipoiRecipients(
-  db: pg.Pool, author: AuthUser, body: string,
+  db: pg.Pool, author: AuthUser, body: string, noteId: string,
 ): Promise<void> {
   try {
     const { rows: cfg } = await db.query<{ value: unknown }>(
@@ -50,8 +50,13 @@ async function notifyPoipoiRecipients(
     if (recipientIds.length === 0) return
     const title = `新しい改善のタネ（${author.name}）`
     const preview = capCp(body, 140)
+    // リンクは対象ポストの詳細モーダルへのディープリンク（改修依頼 2026-08-18）。
+    // 他人のポスト詳細を開けるのは管理者のみ（/poipoi の参照モデル = 本人 + 管理者閲覧）のため、
+    // 閲覧権限の無い受信者には従来どおり一覧リンクを送る（開けないリンクを配らない = レビュー R8）
+    const roleById = new Map(members.map(m => [m.id, m.role]))
     for (const mid of recipientIds) {
-      await notify(db, mid, 'poipoi', title, preview, '/poipoi')
+      const link = roleById.get(mid) === 'admin' ? `/poipoi?open=${noteId}` : '/poipoi'
+      await notify(db, mid, 'poipoi', title, preview, link)
     }
   } catch (e) {
     console.warn('notifyPoipoiRecipients failed (non-blocking):', (e as Error).message)
@@ -199,7 +204,7 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
       detail: kind === 'poipoi' ? '改善のタネを登録' : '議事録を登録',
     })
     // ぽいぽいポストは設定された宛先へ原文を通知（非ブロッキング。オペレーター指示 2026-08-03）
-    if (kind === 'poipoi') await notifyPoipoiRecipients(pool, user, body)
+    if (kind === 'poipoi') await notifyPoipoiRecipients(pool, user, body, id)
     scheduleSearchRebuild(pool, env, `notes:${kind}`)
     const { rows } = await pool.query(`SELECT ${NOTE_COLS} FROM notes WHERE id = $1`, [id])
     return c.json({ data: rows[0] }, 201)

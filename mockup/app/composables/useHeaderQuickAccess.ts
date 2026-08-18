@@ -9,10 +9,13 @@
  *    / mock=端末ローカル（useState + localStorage 'ako.header-quick-access.v1'・SSR 安全）
  *  - テナント層: configs `header-quick-access`（getConfig/setConfig）
  *
- * 保存値は id 配列（JSON）。新 API ルート/マイグレーションの追加は不要（既存の汎用 key/value を利用）。
+ * 保存値は v2 形式 `{ v: 2, ids: [...] }`（JSON）。v1（素の id 配列）は「通知（inbox）が候補になる前」の
+ * 保存値としてパース時に inbox を補完する（下位互換 = 原則7）。新 API ルート/マイグレーションの追加は不要
+ * （既存の汎用 key/value を利用）。
  */
 import {
   parseQuickAccessIds, resolveQuickAccessIds, type QuickAccessScope,
+  serializeQuickAccessIds,
 } from '~/utils/header-quick-access'
 
 /** mock モードの端末ローカル保存キー */
@@ -61,19 +64,22 @@ export function useHeaderQuickAccess() {
    *  - tenant: 管理者のみ（非管理者は警告して no-op = 非ブロッキング）
    */
   async function persist(ids: string[], scope: QuickAccessApplyScope): Promise<{ ok: boolean }> {
+    // 保存は v2 形式（{ v: 2, ids }）。v1（素の配列）は「通知（inbox）が候補になる前」の保存値として
+    // パース時に inbox を補完するため、現行の保存で v1 を書くと「通知を外す」選択が保存できない（原則7）
+    const value = serializeQuickAccessIds(ids)
     if (scope === 'tenant') {
       if (!isAdmin.value) {
         toast.show('全社設定（組織のクイックアクセス）の変更は管理者のみ可能です', 'warn')
         return { ok: false }
       }
-      const res = await setConfig(TENANT_CONFIG_KEY, JSON.stringify(ids))
+      const res = await setConfig(TENANT_CONFIG_KEY, JSON.stringify(value))
       return { ok: res?.ok !== false }
     }
     if (isApi) {
-      const res = await saveMePreference(USER_PREF_KEY, ids)
+      const res = await saveMePreference(USER_PREF_KEY, value)
       return { ok: res.ok }
     }
-    const json = JSON.stringify(ids)
+    const json = JSON.stringify(value)
     mockUserRaw.value = json
     if (import.meta.client) {
       try { localStorage.setItem(USER_STORAGE_KEY, json) } catch { /* noop */ }

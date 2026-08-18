@@ -201,6 +201,8 @@ export interface ImprovementRequest {
   itemId: string | null
   /** 取消（論理削除）時刻。null = 有効（原則9.5） */
   archivedAt: string | null
+  /** 本文の最終編集時刻（改修依頼 2026-08-18）。未定義/null = 未編集（旧データ互換 = 原則7） */
+  editedAt?: string | null
   createdAt: string
 }
 
@@ -302,6 +304,26 @@ export function capCodePoints(s: string, n: number): string {
 export function improvementBodyError(body: string): string | null {
   if (!body.trim()) return '要望の内容を入力してください'
   if ([...body].length > IMPROVEMENT_BODY_CAP) return `要望は ${IMPROVEMENT_BODY_CAP} 文字までで入力してください`
+  return null
+}
+
+/**
+ * 要望本文の編集可否ガード（F-42-16・2026-08-18）。判定順は API ルートと同一
+ * （存在 404 → 権限 403 → 取消済み 409 = 権限の無い第三者へ取消状態を漏らさない）。
+ * mock（useImprovements.editRequest）が使用し、API と同じ判定を単体テストで固定する。
+ */
+export function improvementEditError(
+  target: { memberId: string; archivedAt: string | null } | undefined,
+  userId: string,
+  canManage: boolean,
+): { code: string; message: string } | null {
+  if (!target) return { code: 'AKO-REQ-002', message: '対象の要望が見つかりません' }
+  if (target.memberId !== userId && !canManage) {
+    return { code: 'AKO-PRM-001', message: '要望の編集は投稿者本人または管理権限者のみ可能です' }
+  }
+  if (target.archivedAt) {
+    return { code: 'AKO-REQ-015', message: '取消済みの要望は編集できません（先に復元してください）' }
+  }
   return null
 }
 

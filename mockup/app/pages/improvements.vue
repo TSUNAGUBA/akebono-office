@@ -6,7 +6,7 @@
  *   未解決/解決済み・対応可否でフィルターできる。
  * - フィルター結果を、コーディング AI エージェント向けの詳細プロンプトとして出力する。
  */
-import { ClipboardCopy, ExternalLink, Inbox, RefreshCw, Sparkles, Undo2, Wand2 } from 'lucide-vue-next'
+import { ClipboardCopy, Inbox, Pencil, RefreshCw, Sparkles, Undo2, Wand2 } from 'lucide-vue-next'
 import type { TableColumn, Tone } from '~/types/ui'
 import {
   IMPROVEMENT_FILTER_OPTIONS,
@@ -122,8 +122,36 @@ const commentBusy = ref(false)
 function openRequestDrawer(row: Record<string, unknown>): void {
   selectedRequestId.value = String(row.id)
   commentInput.value = ''
+  requestEditing.value = false
   const r = imp.allRequests.value.find(x => x.id === selectedRequestId.value)
   if (r) void imp.loadRequestImagesFor(r) // 添付画像の遅延ロード（非ブロッキング）
+}
+
+// ---------- 生要望本文の編集（改修依頼 2026-08-18。フォームは共通部品 ImprovementsBodyEditForm） ----------
+// 編集は上書きだが editedAt を記録して「編集済み」を明示（再編集で戻せる = 原則9.5）。取消済みは編集不可
+
+const requestEditing = ref(false)
+const requestEditBusy = ref(false)
+
+async function saveEditRequest(body: string): Promise<void> {
+  if (!selectedRequest.value || requestEditBusy.value) return
+  requestEditBusy.value = true
+  try {
+    const res = await imp.editRequest(selectedRequest.value.id, body)
+    if (res.ok) {
+      requestEditing.value = false
+      if (res.persisted === false) {
+        // mock の localStorage 容量超過（submit と同型の警告 = 消える編集を黙認しない）
+        toast.show('本文を編集しましたが、保存容量が上限に達したため再読込時に失われる可能性があります', 'warn')
+      } else {
+        toast.show('要望の本文を編集しました', 'ok')
+      }
+    } else {
+      toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
+    }
+  } finally {
+    requestEditBusy.value = false
+  }
 }
 
 /** 選別の変更（採用 / 不採用 / 未選別に戻す。遷移自由 = 原則9.5。採用分のみ AI 集約対象） */
@@ -500,8 +528,8 @@ async function copyAndClose(): Promise<void> {
             <span class="text-[12px] text-sub">{{ String(row.pageLabel || row.pagePath || 'ページ不明') }}</span>
           </template>
           <template #cell-comments="{ row }">
-            <span class="num" :class="imp.commentsForRequest(String(row.id)).length > 0 ? 'font-semibold text-brand' : 'text-muted'">
-              {{ imp.commentsForRequest(String(row.id)).length }}
+            <span class="num" :class="(imp.commentCountByRequest.value.get(String(row.id)) ?? 0) > 0 ? 'font-semibold text-brand' : 'text-muted'">
+              {{ imp.commentCountByRequest.value.get(String(row.id)) ?? 0 }}
             </span>
           </template>
           <template #cell-createdAt="{ row }">
@@ -669,34 +697,12 @@ async function copyAndClose(): Promise<void> {
                 <div class="min-w-0 flex-1">
                   <p class="text-[13px] text-ink">{{ r.body }}</p>
                   <!-- 添付リンク（押下で別タブに開く） -->
-                  <ul v-if="(r.links ?? []).length > 0" class="mt-1.5 grid gap-1">
-                    <li v-for="l in r.links" :key="l" class="min-w-0">
-                      <a
-                        :href="l"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        class="link inline-flex max-w-full items-center gap-1 text-[12px]"
-                        :title="`${l}（別タブで開く）`"
-                      >
-                        <ExternalLink class="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                        <span class="truncate">{{ l }}</span>
-                      </a>
-                    </li>
-                  </ul>
-                  <!-- 添付画像（押下で拡大表示） -->
-                  <div v-if="(r.images ?? []).length > 0" class="mt-1.5 flex flex-wrap gap-1.5">
-                    <button
-                      v-for="(img, i) in r.images"
-                      :key="i"
-                      type="button"
-                      class="rounded-lg border border-line focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand"
-                      :aria-label="`画像「${img.filename}」を拡大表示`"
-                      :title="`${img.filename}（押下で拡大）`"
-                      @click="previewImage = img"
-                    >
-                      <img :src="img.dataUrl" :alt="img.filename" class="h-14 w-14 rounded-lg object-cover">
-                    </button>
-                  </div>
+                  <!-- 添付（リンク = 別タブ・画像 = 押下で拡大。共通部品 = 生要望ドロワーと共用） -->
+                  <ImprovementsAttachmentList
+                    :links="r.links"
+                    :images="r.images"
+                    @preview="(img) => { previewImage = img }"
+                  />
                   <p class="mt-1 text-[11px] text-muted">
                     {{ r.memberName }}・{{ r.pageLabel || r.pagePath || 'ページ不明' }}・{{ fmtDate(r.createdAt) }}
                   </p>
@@ -810,38 +816,39 @@ async function copyAndClose(): Promise<void> {
           <span class="text-[12px] text-muted">
             {{ selectedRequest.memberName }}・{{ selectedRequest.pageLabel || selectedRequest.pagePath || 'ページ不明' }}・{{ fmtDate(selectedRequest.createdAt) }}
           </span>
+          <span v-if="selectedRequest.editedAt" class="text-[11px] text-muted">
+            （編集済み {{ fmtDateTime(selectedRequest.editedAt) }}）
+          </span>
         </div>
 
-        <!-- 本文 + 添付 -->
+        <!-- 本文 + 添付（本文は編集可 = 改修依頼 2026-08-18。編集済みは editedAt で明示） -->
         <div class="card p-3">
-          <p class="whitespace-pre-wrap break-words text-[13px] text-ink">{{ selectedRequest.body }}</p>
-          <ul v-if="(selectedRequest.links ?? []).length > 0" class="mt-2 grid gap-1">
-            <li v-for="l in selectedRequest.links" :key="l" class="min-w-0">
-              <a
-                :href="l"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="link inline-flex max-w-full items-center gap-1 text-[12px]"
-                :title="`${l}（別タブで開く）`"
-              >
-                <ExternalLink class="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                <span class="truncate">{{ l }}</span>
-              </a>
-            </li>
-          </ul>
-          <div v-if="(selectedRequest.images ?? []).length > 0" class="mt-2 flex flex-wrap gap-1.5">
+          <!-- 編集フォーム（共通部品。保存 = 上書き + editedAt 記録。キャンセルで破棄） -->
+          <ImprovementsBodyEditForm
+            v-if="requestEditing"
+            :initial="selectedRequest.body"
+            :busy="requestEditBusy"
+            @save="saveEditRequest"
+            @cancel="requestEditing = false"
+          />
+          <div v-else class="flex items-start gap-2">
+            <p class="min-w-0 flex-1 whitespace-pre-wrap break-words text-[13px] text-ink">{{ selectedRequest.body }}</p>
             <button
-              v-for="(img, i) in selectedRequest.images"
-              :key="i"
+              v-if="!selectedRequest.archivedAt"
               type="button"
-              class="rounded-lg border border-line focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand"
-              :aria-label="`画像「${img.filename}」を拡大表示`"
-              :title="`${img.filename}（押下で拡大）`"
-              @click="previewImage = img"
+              class="btn btn-ghost btn-sm shrink-0"
+              aria-label="要望の本文を編集"
+              @click="requestEditing = true"
             >
-              <img :src="img.dataUrl" :alt="img.filename" class="h-14 w-14 rounded-lg object-cover">
+              <Pencil class="h-3.5 w-3.5" aria-hidden="true" /> 編集
             </button>
           </div>
+          <!-- 添付（リンク = 別タブ・画像 = 押下で拡大。共通部品 = 改修単位ドロワーの元要望と共用） -->
+          <ImprovementsAttachmentList
+            :links="selectedRequest.links"
+            :images="selectedRequest.images"
+            @preview="(img) => { previewImage = img }"
+          />
         </div>
 
         <!-- 選別（採用/不採用。集約済みは変更不可 = 記録保護。取消可能性 = いつでも選び直せる） -->
