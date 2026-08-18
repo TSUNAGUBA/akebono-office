@@ -98,8 +98,12 @@ const filtered = computed(() =>
   }),
 )
 
+// クライアントページング（ドメインタブ・検索・状態の絞り込みは filtered が担い、ページングのみ共通化）
+const { page, pageSize, rows: pagedArticles, total } = useListView<KnowledgeArticle>({ source: filtered })
+watch([search, statusFilter, currentDomain], () => { page.value = 1 })
+
 const tableRows = computed(() =>
-  filtered.value.map(a => ({
+  pagedArticles.value.map(a => ({
     ...a,
     targetName: targetLabel(a.domain, a.targetId),
     tagsText: a.tags.join('、'),
@@ -374,7 +378,7 @@ async function downloadFile(f: KnowledgeFileMeta): Promise<void> {
 
     <div>
       <UiTabBar v-model="domainTab" :tabs="domainTabs" />
-      <UiSectionCard class="mt-3" :title="`${KNOWLEDGE_DOMAIN_LABELS[currentDomain]}のナレッジ（${filtered.length}件）`" flush>
+      <UiSectionCard class="mt-3" :title="`${KNOWLEDGE_DOMAIN_LABELS[currentDomain]}のナレッジ（${total}件）`" flush>
         <UiDataTable
           :columns="columns"
           :rows="tableRows"
@@ -409,6 +413,7 @@ async function downloadFile(f: KnowledgeFileMeta): Promise<void> {
             <UiStatusBadge :label="asArticle(row).active ? '有効' : '無効'" :tone="asArticle(row).active ? 'ok' : 'neutral'" dot />
           </template>
         </UiDataTable>
+        <UiPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
       </UiSectionCard>
     </div>
 

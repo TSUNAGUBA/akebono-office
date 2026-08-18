@@ -3179,3 +3179,64 @@
   誤解除した要望を **AI 集約で**元の item へ戻す経路は無い（確認ダイアログで誤操作は抑止・戻せるのは
   「別の単位として再集約」まで）。必要になったら「この item へ手動アタッチ（+ 履歴からの除去 +
   自動メモの打ち消し）」を管理操作として追加する。
+
+## 86. 一覧ページング全面適用 + 活動記録 3 ページ新設 + 顧客ログ → 顧客活動改修（改修依頼 2026-08-18）の完了条件（Definition of Done）
+
+**要件（改修単位 5 件）:** ①一覧表示を行う全ページにページング（1 ページ 20 件）を適用（= 横断要件 X-7 として明文化）
+②`/support-activity` サポート活動ページ新設（F-43）③`/sales-activity` 営業活動ページ新設（F-44）
+④`/partner-activity` ビジネスパートナー活動ページ新設（F-45）⑤顧客ログ → **顧客活動** へ改称・属性タグ →
+**活動目的** へ改称・**活動手段**（訪問/Web会議/電話/メール/チャット/その他）追加・一覧を全メンバー閲覧化（F-18 改訂）。
+
+### 86-1 一覧ページングの全面適用（X-7）
+- [x] 共通実装は既存の `useListView`（既定 pageSize 20）+ `UiPagination` の横展開（原則3 = 新規実装なし）。
+  クライアントページング = masters/customers.vue と同型（`source` に絞込済み computed・ページ独自フィルタは page=1 リセット watch）
+- [x] 適用: masters 系 15（contacts/members/departments 一覧/titles/leave-types/industries/work-categories/projects/
+  decision-themes/knowledge/holidays/permissions ルール一覧/relation-types/relations-company エッジ/relations-contact エッジ）・
+  ルート系（timecard/inbox 通知 + エスカレーション/workflow 申請一覧/shift 過去シフト + 募集期間/settings 監査ログ
+  〔max-height 内部スクロールを撤去〕/attendance 6 表/reports 全員の日報・週報一覧・自分の週報/improvements 受付箱 + 改修単位）・
+  widgets（NotesPanel 一覧 + 管理者一覧・CustomerLogPanel）・ai-company（ActivityTimeline/employees/roles）・
+  media（index/articles/settings 外部投稿記事/analytics ページ別）・support（documents/chatbot 履歴）・status/[id] インシデント・
+  decision（index 履歴/[id] テーマ履歴）・akebono（company/imports 取込元 + マッピング/settings/items 2 表・inventory は pageSize 50 → 既定 20 へ統一）
+- [x] 対象外の明文化（X-7）: 直近 N 件の意図的ウィジェット（ダッシュボード通知 8 件等）・カンバン/ガント/マトリクス/
+  グリッド/グラフ/会話 UI・件数が構造的に小さい設定 UI
+
+### 86-2 活動記録 3 種の新設（F-43/F-44/F-45）
+- [x] DB: `support_activities` / `sales_activities` / `partner_activities`（migration 0067。**チーム共有の記録系 =
+  全員が閲覧・登録・編集可**〔顧客活動の本人所有と異なる設計判断を DDL コメントに明記〕・論理削除 + 復元 = 原則9.5）
+- [x] API: `/v1/support-activities` `/v1/sales-activities` `/v1/partner-activities`（routes/activities.ts。一覧 = lib/list-query の
+  共通サーバーページング〔q + f.* + total〕・書込 = 部分更新 + 監査ログ・取消/復元は冪等。エラー AKO-SUP/SAL/PTN-001/002 起番）
+- [x] 検証の SoT: `shared/domain/activity.ts`（API/モック共有 = パリティ。区分値プリセットは shared/domain/types.ts に「値=ラベル」方式）
+- [x] 会社コンボボックス新規登録: customer-logs の resolveCompany を `api/src/lib/company-resolve.ts` へ抽出し
+  サポート/営業/顧客活動で共用（原則3。モック側も useCompanyResolve へ同様に抽出）
+- [x] パートナー・関連企業は自由入力（マスタ参照にしない設計判断 = types.ts に文書化）。関連商談 = sales_activities への
+  任意リンク（FK。「案件化したら商談へリンク」= 詳細ドロワーから /sales-activity へ遷移）
+- [x] モック: supportActivities/salesActivities/partnerActivities コレクション + シード（SEED_VERSION 23）+
+  CUSTOM_COLLECTION_ENDPOINTS 登録（API モードで tbl() = サーバーキャッシュ・useListView fetch = apiListPage）
+- [x] 画面: 3 ページ + 3 パネル（一覧 20 件ページング・検索 + 区分フィルタ・詳細ドロワー view/edit/create・
+  取消/復元・トースト・モバイルカード型）。導線 = navigation/menu-registry（業務ツール）/nav-map 登録
+  （listKnownPages は自動導出 = 改善要望の対象ページに自動反映）
+- [x] 権限: 機能キー support-activity/sales-activity/partner-activity（既定 allow）を FEATURE_PERMISSION_KEYS・
+  featureKeyOfPath・PATH_FEATURES へ登録
+- [x] AI 検索インデックスへは供給しない（参照範囲の拡大は別途の設計判断 = 安全側）
+
+### 86-3 顧客ログ → 顧客活動（F-18 改訂）
+- [x] 名称: ページ・メニュー・通知タブ・権限ラベル・クイックアクセス・レイアウト説明・トースト/確認/監査ログ文言を
+  「顧客活動」へ全件更新（パス `/customer-log`・API `/v1/customer-logs`・テーブル/列名は下位互換のため維持 = 原則7）
+- [x] 属性タグ → 活動目的（表示名・検証メッセージ・AI 検索セグメントラベル。キー名 tags は維持 = 原則7）
+- [x] 活動手段 method 追加（migration 0066。単一選択・任意・プリセット CUSTOMER_LOG_METHOD_PRESETS = 「値=ラベル」方式。
+  UI は活動目的の下に UiChipTabs〔未設定含む〕・一覧/詳細/AI 検索セグメントに表示・部分更新対応）
+- [x] 一覧の全員閲覧化: GET `?scope=all`（権限チェックなし）・記録者表示 + 記録者フィルタ・編集/取消は本人のみ維持・
+  他人の取消済みは晒さない・AI 参照は本人スコープ維持（設計判断）
+- [x] 旧・参照対象権限の撤去: shared canViewMemberCustomerLog / usePermissions ラッパ / permissions.vue 擬似リソース /
+  PermissionMatrix ノードを削除。**既存ルールは migration 0066 で論理無効化（active=false）= 原則7 のデータ更新パッチ**
+  （ルール一覧では「廃止」ラベルで表示・編集は不可の案内 = 宣言だけ残る状態を作らない）
+- [x] 一覧に 20 件ページング適用（86-1 と同時）
+
+### 86-4 検証・ドキュメント
+- [x] api 単体 360（+ activity-validate 13・customer-log-validate へ method 追加・customer-log-view は権限撤去に伴い削除）
+- [x] api 統合 269（顧客活動: method 検証/保持・scope=all・取消済み可視性・旧ルール無効化確認。活動記録 3 種:
+  検証・登録・部分更新・取消/復元・サーバーページング + 検索 + フィルタ・コンボボックス名寄せ・FK・機能ガード）
+- [x] mockup 単体 351（通知タブ/カテゴリのラベル更新）・`npm run build`・`npx nuxi typecheck`（api tsc も）
+- [x] docs（原則5）: functional-requirements（F-18 改訂・F-43/44/45 新設・X-7 追加）・data-design（3 エンティティ +
+  CustomerLog.method + 権限擬似フィールドの廃止）・api-design（3 エンドポイント群 + customer-logs 改訂 +
+  エラーコード台帳 AKO-SUP/SAL/PTN）・screen-design（3 画面新設 + /customer-log 改訂 + サイトマップ）・CONVENTIONS.md

@@ -5,7 +5,7 @@
  * リンクはテキスト分解で描画（v-html 禁止）。Enter 送信 / Shift+Enter 改行 / 2000 字制限。
  */
 import { History, MessageSquarePlus, SendHorizontal } from 'lucide-vue-next'
-import type { ChatMessage } from '~/types/domain'
+import type { ChatMessage, ChatSession } from '~/types/domain'
 import { fmtDateTime, fmtTime } from '~/utils/format'
 
 const { isEnabled } = useAppSettings()
@@ -83,6 +83,9 @@ function questionBefore(assistantId: string): string {
 
 const historyOpen = ref(false)
 
+// セッション一覧のページング（1 ページ 20 件 = 改修依頼 2026-08-18。クライアントページング）
+const { page: sessionPage, pageSize: sessionPageSize, rows: pagedSessions, total: sessionTotal } = useListView<ChatSession>({ source: sessions })
+
 function onNewSession(): void {
   newSession()
   toast.show('新しい会話を開始しました（過去の会話は履歴から再開できます）')
@@ -90,6 +93,7 @@ function onNewSession(): void {
 
 async function onOpenHistory(): Promise<void> {
   await refreshSessions()
+  sessionPage.value = 1 // 開き直すたびに 1 ページ目（最新のセッション）から表示
   historyOpen.value = true
 }
 
@@ -275,7 +279,7 @@ onBeforeUnmount(() => {
           hint="質問を送信すると会話がセッションとして保存されます"
         />
         <ul v-else class="grid gap-1.5">
-          <li v-for="s in sessions" :key="s.id">
+          <li v-for="s in pagedSessions" :key="s.id">
             <button
               type="button"
               class="w-full rounded-lg border p-2.5 text-left transition-colors hover:bg-surface-soft"
@@ -290,6 +294,7 @@ onBeforeUnmount(() => {
             </button>
           </li>
         </ul>
+        <UiPagination v-model:page="sessionPage" v-model:page-size="sessionPageSize" :total="sessionTotal" />
       </UiDrawer>
     </template>
   </div>

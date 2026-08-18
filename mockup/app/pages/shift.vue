@@ -66,6 +66,11 @@ function dayTextClass(date: string): string {
 const upcomingShifts = computed(() => myShifts.value.filter(a => a.date >= today))
 const pastShifts = computed(() => myShifts.value.filter(a => a.date < today).reverse())
 
+// 過去のシフトのページング（1 ページ 20 件 = 改修依頼 2026-08-18。クライアントページング）
+const { page: pastPage, pageSize: pastPageSize, rows: pagedPastShifts, total: pastTotal } = useListView({ source: pastShifts })
+// デモユーザー切替でリストが丸ごと入れ替わるため 1 ページ目へ戻す
+watch(() => currentUser.value.id, () => { pastPage.value = 1 })
+
 async function onConsent(assignmentId: string): Promise<void> {
   const r = await shifts.consent(assignmentId)
   if (r.ok) show('シフト変更に合意しました。管理者へ通知済みです', 'ok')
@@ -285,6 +290,9 @@ const periodRows = computed(() => sortedPeriods.value.map(p => ({
   status: p.status,
 })))
 
+// 募集期間一覧のページング（1 ページ 20 件 = 改修依頼 2026-08-18。ページ独自フィルタはないため page リセット watch は不要）
+const { page: periodPage, pageSize: periodPageSize, rows: pagedPeriodRows, total: periodTotal } = useListView({ source: periodRows })
+
 function nextActionLabelOf(row: Record<string, unknown>): string {
   const p = shifts.periodById(String(row.id))
   return p ? SHIFT_NEXT_ACTION_LABELS[p.status] : ''
@@ -411,7 +419,7 @@ async function saveDemandRow(row: { date: string; from: string; to: string; requ
       <UiSectionCard v-if="pastShifts.length > 0" title="過去のシフト">
         <ul class="grid gap-1">
           <li
-            v-for="a in pastShifts"
+            v-for="a in pagedPastShifts"
             :key="a.id"
             class="flex flex-wrap items-center justify-between gap-2 border-b border-line py-1.5 text-xs text-sub last:border-b-0"
           >
@@ -422,6 +430,7 @@ async function saveDemandRow(row: { date: string; from: string; to: string; requ
             </span>
           </li>
         </ul>
+        <UiPagination v-model:page="pastPage" v-model:page-size="pastPageSize" :total="pastTotal" />
       </UiSectionCard>
     </div>
 
@@ -582,7 +591,7 @@ async function saveDemandRow(row: { date: string; from: string; to: string; requ
         </template>
         <UiDataTable
           :columns="periodColumns"
-          :rows="periodRows"
+          :rows="pagedPeriodRows"
           empty-title="募集期間がありません"
           empty-hint="「新規作成」から募集期間を追加してください"
         >
@@ -609,6 +618,7 @@ async function saveDemandRow(row: { date: string; from: string; to: string; requ
             </div>
           </template>
         </UiDataTable>
+        <UiPagination v-model:page="periodPage" v-model:page-size="periodPageSize" :total="periodTotal" />
       </UiSectionCard>
     </div>
 

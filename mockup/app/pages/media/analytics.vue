@@ -156,6 +156,10 @@ const pageRows = computed(() => (metrics.value?.topPages ?? []).map(p => ({
   trend: p.prevPageviews > 0 ? (p.pageviews - p.prevPageviews) / p.prevPageviews : null,
 })))
 
+// 記事別パフォーマンス一覧のページング（1 ページ 20 件 = 改修依頼 2026-08-18。クライアントページング）
+const { page, pageSize, rows: pagedPageRows, total } = useListView({ source: pageRows })
+watch(effectiveChannelId, () => { page.value = 1 })
+
 // ---------- PDCA タブ ----------
 const trendChart = computed(() => {
   const m = integrated.value
@@ -381,7 +385,7 @@ const SEVERITY_META: Record<string, { label: string; tone: 'crit' | 'warn' | 'in
         </UiSectionCard>
 
         <UiSectionCard v-if="!na('topPages')" title="記事別パフォーマンス" :description="na('prevPages') ? 'PV 上位の記事の滞在・直帰率・CVR（前期比は取得できませんでした）' : 'PV 上位の記事の滞在・直帰率・CVR・前期比'">
-          <UiDataTable :columns="pageCols" :rows="pageRows" row-key="title">
+          <UiDataTable :columns="pageCols" :rows="pagedPageRows" row-key="title">
             <template #cell-bounceRate="{ value }">{{ fmtPct(Number(value)) }}</template>
             <template #cell-convRate="{ value }">{{ fmtPct(Number(value)) }}</template>
             <template #cell-trend="{ value }">
@@ -391,6 +395,7 @@ const SEVERITY_META: Record<string, { label: string; tone: 'crit' | 'warn' | 'in
               </span>
             </template>
           </UiDataTable>
+          <UiPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
         </UiSectionCard>
       </template>
 

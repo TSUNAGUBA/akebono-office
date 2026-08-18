@@ -219,7 +219,7 @@ export const DASHBOARD_TEMPLATES: DashboardTemplate[] = [
   {
     id: 'sales',
     name: '営業・顧客',
-    description: '顧客ログ・売上・メディア・稟議を上部に。商談と顧客対応を中心に据えた CRM 風レイアウト。',
+    description: '顧客活動・売上・メディア・稟議を上部に。商談と顧客対応を中心に据えた CRM 風レイアウト。',
     layout: {
       templateId: 'sales',
       sections: [

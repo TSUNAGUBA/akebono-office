@@ -62,6 +62,11 @@ const showArchived = ref(false)
 const sourceRows = computed(() =>
   (showArchived.value ? imp.sources.value : imp.activeSources.value) as unknown as Record<string, unknown>[],
 )
+// クライアントページング（1 ページ 20 件 = 改修依頼 2026-08-18。無効表示の切替で 1 ページ目へ）
+const {
+  page: sourcePage, pageSize: sourcePageSize, rows: sourcePaged, total: sourceTotal,
+} = useListView<Record<string, unknown>>({ source: sourceRows })
+watch(showArchived, () => { sourcePage.value = 1 })
 
 const sourceColumns = computed<TableColumn[]>(() => [
   { key: 'name', label: '名称', primary: true },
@@ -185,6 +190,11 @@ const mappingRows = computed<ImportMapping[]>(() =>
 const mappingTableRows = computed(() =>
   mappingRows.value as unknown as Record<string, unknown>[],
 )
+// クライアントページング（1 ページ 20 件 = 改修依頼 2026-08-18。取込元切替で 1 ページ目へ）
+const {
+  page: mapPage, pageSize: mapPageSize, rows: mapPaged, total: mapTotal,
+} = useListView<Record<string, unknown>>({ source: mappingTableRows })
+watch(selectedSourceId, () => { mapPage.value = 1 })
 const mappingColumns: TableColumn[] = [
   { key: 'version', label: '版', align: 'right', width: '70px', primary: true },
   { key: 'status', label: '状態', primary: true },
@@ -668,7 +678,7 @@ function openRun(row: Record<string, unknown>): void {
     <UiSectionCard :title="`取込元（${sourceRows.length}件）`" flush>
       <UiDataTable
         :columns="sourceColumns"
-        :rows="sourceRows"
+        :rows="sourcePaged"
         clickable
         empty-title="取込元がまだありません"
         empty-hint="「取込元を追加」から登録してください"
@@ -705,6 +715,7 @@ function openRun(row: Record<string, unknown>): void {
           </button>
         </template>
       </UiDataTable>
+      <UiPagination v-model:page="sourcePage" v-model:page-size="sourcePageSize" :total="sourceTotal" />
     </UiSectionCard>
 
     <!-- 選択取込元の詳細 -->
@@ -744,7 +755,7 @@ function openRun(row: Record<string, unknown>): void {
           <p class="mb-1.5 text-[12px] font-semibold text-muted">マッピング定義（版管理）</p>
           <UiDataTable
             :columns="mappingColumns"
-            :rows="mappingTableRows"
+            :rows="mapPaged"
             empty-title="マッピング未定義"
             empty-hint="「マッピングを設定」で取込元の列/キーを対象アプリ項目へ対応づけてください"
           >
@@ -758,6 +769,7 @@ function openRun(row: Record<string, unknown>): void {
               <span class="num tabular-nums">{{ asMapping(row).fields.length }}</span>
             </template>
           </UiDataTable>
+          <UiPagination v-model:page="mapPage" v-model:page-size="mapPageSize" :total="mapTotal" />
         </div>
 
         <!-- 実行履歴 -->

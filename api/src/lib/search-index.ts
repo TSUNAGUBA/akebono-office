@@ -287,17 +287,18 @@ export async function buildSearchDocs(pool: pg.Pool): Promise<SearchDocInput[]> 
     })
   }
 
-  // ---- 顧客ログ（本人スコープ = 記録者のみ AI が参照。オペレーター指示 2026-07-30） ----
-  // owner_member_id = 記録者にすることで searchDocsFor は「本人のログのみ」を返す（allOwners は note 限定 =
-  // 他メンバーの顧客ログは AI 文脈へ供給しない安全側の既定。UI の参照権限 canViewMemberCustomerLog とは別軸）
+  // ---- 顧客活動（旧「顧客ログ」。本人スコープ = 記録者のみ AI が参照。オペレーター指示 2026-07-30） ----
+  // owner_member_id = 記録者にすることで searchDocsFor は「本人の記録のみ」を返す（allOwners は note 限定 =
+  // 他メンバーの顧客活動は AI 文脈へ供給しない安全側の既定。一覧 UI の全員閲覧化〔改修依頼 2026-08-18〕とは
+  // 別軸で、AI 参照範囲は従来どおり本人スコープを維持する = 設計判断）
   const { rows: clogRows } = await pool.query<{
     id: string; memberId: string; logDate: string; logTime: string | null; endTime: string | null
     companyId: string; contactId: string | null; staffMemberId: string | null; tags: string[]
-    title: string; body: string
+    method: string; title: string; body: string
   }>(
     `SELECT id, member_id AS "memberId", log_date::text AS "logDate", log_time AS "logTime",
             end_time AS "endTime", company_id AS "companyId", contact_id AS "contactId",
-            staff_member_id AS "staffMemberId", tags, title, body
+            staff_member_id AS "staffMemberId", tags, method, title, body
      FROM customer_logs WHERE active = true ORDER BY id LIMIT 5000`)
   for (const cl of clogRows) {
     const segments: SearchSegment[] = []
@@ -306,7 +307,8 @@ export async function buildSearchDocs(pool: pg.Pool): Promise<SearchDocInput[]> 
       ? `${cl.logDate} ${cl.logTime}${cl.endTime ? `〜${cl.endTime}` : ''}`
       : cl.logDate
     segments.push(seg(`日時: ${when}`))
-    if ((cl.tags ?? []).length > 0) segments.push(seg(`属性タグ: ${cl.tags.join('、')}`, c('customer_logs', 'tags')))
+    if ((cl.tags ?? []).length > 0) segments.push(seg(`活動目的: ${cl.tags.join('、')}`, c('customer_logs', 'tags')))
+    if (cl.method) segments.push(seg(`活動手段: ${cl.method}`, c('customer_logs', 'method')))
     if (co) segments.push(seg(`顧客: ${co}`, c('companies', 'name')))
     const contact = cl.contactId ? contactName.get(cl.contactId) : undefined
     if (contact) segments.push(seg(`担当者: ${contact}`, c('contacts', 'name')))
@@ -474,7 +476,7 @@ export interface SearchHit {
   title: string
   segments: SearchSegment[]
   score: number
-  /** 所有者（null = 全員参照。値あり = 本人スコープ = poipoi または顧客ログ = customer-log） */
+  /** 所有者（null = 全員参照。値あり = 本人スコープ = poipoi または顧客活動 = customer-log） */
   ownerMemberId: string | null
   /** 紐付け（note・customer-log。混入防止フィルタ用 = companyId/projectId） */
   links: { companyId?: string; projectId?: string }
@@ -484,8 +486,8 @@ export interface SearchHit {
  * 質問に関連する検索ドキュメントの上位 K 件（字句 + 埋め込みのハイブリッド。埋め込み無効時は字句のみ）。
  * allOwners = true で本人スコープ（owner_member_id）の絞り込みを外す
  * （ぽいぽいポストの AI 参照範囲 'all' = 他メンバーの投稿も参照。バッチ7g・オペレーター指示 2026-07-19 #8）。
- * owner_member_id を持つのは source_kind = 'note'（ぽいぽいポスト）と 'customer-log'（顧客ログ）。
- * **allOwners が広げるのは 'note' のみ**（下の SQL の `AND source_kind = 'note'`）。顧客ログは常に本人スコープで、
+ * owner_member_id を持つのは source_kind = 'note'（ぽいぽいポスト）と 'customer-log'（顧客活動）。
+ * **allOwners が広げるのは 'note' のみ**（下の SQL の `AND source_kind = 'note'`）。顧客活動は常に本人スコープで、
  * どの ai-scope 設定でも他メンバーへは広がらない（安全側の意図的な制約）。
  * owner 付きの新種別をこの `allOwners` 分岐へ**追加しないこと**（追加すると他メンバーのデータが漏れる）。
  */

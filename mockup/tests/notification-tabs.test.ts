@@ -59,14 +59,14 @@ describe('resolveNotificationTabIds', () => {
 })
 
 describe('カタログ', () => {
-  it('既定は今回追加の 3 種（日報・顧客ログ・議事録）を含む', () => {
+  it('既定は今回追加の 3 種（日報・顧客活動・議事録）を含む', () => {
     expect(DEFAULT_NOTIFICATION_TAB_IDS).toEqual(
       expect.arrayContaining(['report', 'customer-log', 'minutes']))
   })
 
   it('notificationTabOf はカタログのラベルを返す', () => {
     expect(notificationTabOf('report')?.label).toBe('日報')
-    expect(notificationTabOf('customer-log')?.label).toBe('顧客ログ')
+    expect(notificationTabOf('customer-log')?.label).toBe('顧客活動')
     expect(notificationTabOf('minutes')?.label).toBe('議事録')
     expect(notificationTabOf('__nope__')).toBeUndefined()
   })

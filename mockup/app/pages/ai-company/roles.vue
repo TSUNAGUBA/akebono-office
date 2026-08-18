@@ -31,6 +31,9 @@ const rows = computed(() =>
     state: r.active ? '有効' : '無効',
   })))
 
+// 一覧のページング（1 ページ 20 件 = 改修依頼 2026-08-18。クライアントページング）
+const { page, pageSize, rows: pagedRows, total } = useListView({ source: rows })
+
 // ---------- 追加・編集モーダル ----------
 
 const modalOpen = ref(false)
@@ -137,7 +140,7 @@ async function changeAssignment(empId: string, roleId: string): Promise<void> {
       <UiSectionCard title="ロール一覧" description="行をクリックすると編集できます" flush>
         <UiDataTable
           :columns="columns"
-          :rows="rows"
+          :rows="pagedRows"
           clickable
           empty-title="ロールがありません"
           @row-click="row => openEdit(row as unknown as AiRole)"
@@ -149,6 +152,7 @@ async function changeAssignment(empId: string, roleId: string): Promise<void> {
             <UiStatusBadge :label="String(row.state)" :tone="row.active ? 'ok' : 'neutral'" dot />
           </template>
         </UiDataTable>
+        <UiPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
       </UiSectionCard>
 
       <UiSectionCard title="AI 社員への割当" description="ロールは AI 社員に割当できます。変更は即時反映されます">

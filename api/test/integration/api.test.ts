@@ -6301,7 +6301,7 @@ describe('Phase D: データ取込（F-32）・ダッシュボード保管（F-4
   })
 })
 
-describe('顧客ログ', () => {
+describe('顧客活動（旧: 顧客ログ）', () => {
   let companyId = ''
   let otherCompanyId = ''
   let contactId = ''
@@ -6487,33 +6487,59 @@ describe('顧客ログ', () => {
     expect(movedRow.contactId).toBeNull()
   })
 
-  it('他メンバーの記録は権限（customer-log + member:<id>）で許可された対象者のみ readonly 参照可', async () => {
-    // 既定 = 参照不可（AKO-PRM-002）。自分の memberId 指定は常に可
-    const denied = await api('GET', `/v1/customer-logs?memberId=${MEMBER}`, { as: HR })
-    expect(denied.status).toBe(403)
-    expect(denied.json.error?.code).toBe('AKO-PRM-002')
-    expect((await api('GET', `/v1/customer-logs?memberId=${MEMBER}`, { as: MEMBER })).status).toBe(200)
-    // HR に「MEMBER の顧客ログを参照可」を付与
-    await pool.query(
-      `INSERT INTO permission_rules (id, subject_kind, subject_id, resource, field, effect, active)
-       VALUES ('pr-test-clog-view', 'member', $1, 'customer-log', $2, 'allow', true)
-       ON CONFLICT (id) DO UPDATE SET active = true`,
-      [HR, `member:${MEMBER}`])
-    clearPermissionCache()
-    try {
-      const view = await api('GET', `/v1/customer-logs?memberId=${MEMBER}`, { as: HR })
-      expect(view.status).toBe(200)
-      const rows = view.json.data as { memberId: string }[]
-      expect(rows.length).toBeGreaterThanOrEqual(1)
-      expect(rows.every(l => l.memberId === MEMBER)).toBe(true) // 対象メンバーの行のみ
-      // 参照権限は編集権限を与えない（他人の記録は依然 403）
-      expect((await api('PATCH', `/v1/customer-logs/${logId}`, { as: HR, body: { body: 'x' } })).status).toBe(403)
-      // 無関係な第三者（ADMIN）指定は依然 403
-      expect((await api('GET', `/v1/customer-logs?memberId=${ADMIN}`, { as: HR })).json.error?.code).toBe('AKO-PRM-002')
-    } finally {
-      await pool.query(`DELETE FROM permission_rules WHERE id = 'pr-test-clog-view'`)
-      clearPermissionCache()
-    }
+  it('活動手段（method）: プリセット検証・保存・部分更新の保持（改修依頼 2026-08-18）', async () => {
+    // プリセット外は AKO-CLG-001
+    expect((await api('POST', '/v1/customer-logs', {
+      as: MEMBER, body: { logDate: today, companyId, body: 'x', method: 'テレパシー' },
+    })).json.error?.code).toBe('AKO-CLG-001')
+    // プリセット値は保存され応答に含まれる（未指定は '' = 未設定）
+    const created = await api('POST', '/v1/customer-logs', {
+      as: MEMBER, body: { logDate: today, companyId, body: '活動手段の確認', method: 'Web会議' },
+    })
+    expect(created.status).toBe(201)
+    expect((created.json.data as { method: string }).method).toBe('Web会議')
+    const id = (created.json.data as { id: string }).id
+    // method を送らない部分更新は保持される
+    const upd = await api('PATCH', `/v1/customer-logs/${id}`, { as: MEMBER, body: { title: '手段保持' } })
+    expect((upd.json.data as { method: string }).method).toBe('Web会議')
+    // method: '' で未設定へ戻せる
+    const cleared = await api('PATCH', `/v1/customer-logs/${id}`, { as: MEMBER, body: { method: '' } })
+    expect((cleared.json.data as { method: string }).method).toBe('')
+    const defaulted = await api('POST', '/v1/customer-logs', { as: MEMBER, body: { logDate: today, companyId, body: '手段未指定' } })
+    expect((defaulted.json.data as { method: string }).method).toBe('')
+  })
+
+  it('一覧の表示範囲: 全メンバーの記録を全員が閲覧できる（改修依頼 2026-08-18。取消済みは本人分のみ）', async () => {
+    // memberId 指定 = 権限チェックなしで対象メンバーの有効な記録を参照できる（旧 AKO-PRM-002 は廃止）
+    const byMember = await api('GET', `/v1/customer-logs?memberId=${MEMBER}`, { as: HR })
+    expect(byMember.status).toBe(200)
+    const memberRows = byMember.json.data as { memberId: string; id: string }[]
+    expect(memberRows.length).toBeGreaterThanOrEqual(1)
+    expect(memberRows.every(l => l.memberId === MEMBER)).toBe(true) // 対象メンバーの行のみ
+    // scope=all = 全メンバーの有効な記録
+    const all = await api('GET', '/v1/customer-logs?scope=all', { as: HR })
+    expect(all.status).toBe(200)
+    expect((all.json.data as { id: string }[]).some(l => l.id === logId)).toBe(true)
+    // 閲覧できても編集・取消は本人のみ（AKO-CLG-002 403）
+    expect((await api('PATCH', `/v1/customer-logs/${logId}`, { as: HR, body: { body: 'x' } })).status).toBe(403)
+    expect((await api('POST', `/v1/customer-logs/${logId}/archive`, { as: HR })).status).toBe(403)
+    // 他人の取消済みは includeArchived=1 でも晒さない（本人分のみ含まれる）
+    const archivedProbe = await api('POST', '/v1/customer-logs', { as: MEMBER, body: { logDate: today, companyId, body: '取消済み可視性の確認' } })
+    const archivedId = (archivedProbe.json.data as { id: string }).id
+    await api('POST', `/v1/customer-logs/${archivedId}/archive`, { as: MEMBER })
+    const hrView = await api('GET', '/v1/customer-logs?scope=all&includeArchived=1', { as: HR })
+    expect((hrView.json.data as { id: string }[]).some(l => l.id === archivedId)).toBe(false)
+    const ownView = await api('GET', '/v1/customer-logs?scope=all&includeArchived=1', { as: MEMBER })
+    expect((ownView.json.data as { id: string }[]).some(l => l.id === archivedId)).toBe(true)
+  })
+
+  it('旧・参照対象ルールは migration 0066 で無効化される（原則7 のデータ更新パッチ）', async () => {
+    // 0066 の UPDATE と同条件を再適用して検証（migration 自体はテスト起動時に適用済み =
+    // ここでは「有効な member:% ルールを入れても機能ガードに使われない」ことを確認する）
+    const { rows } = await pool.query(
+      `SELECT count(*)::int AS n FROM permission_rules
+       WHERE resource = 'customer-log' AND field LIKE 'member:%' AND active = true`)
+    expect(rows[0].n).toBe(0)
   })
 })
 
@@ -7165,5 +7191,166 @@ describe('改善要望（F-42）', () => {
     // 権限: 一般はメモ一覧・追加とも不可（403 = deny-by-default）
     expect((await api('GET', '/v1/improvements/notes', { as: MEMBER })).status).toBe(403)
     expect((await api('POST', `/v1/improvements/items/${id}/notes`, { as: MEMBER, body: { body: 'x' } })).status).toBe(403)
+  })
+})
+
+describe('活動記録 3 種（サポート/営業/ビジネスパートナー活動。改修依頼 2026-08-18・F-43/F-44/F-45）', () => {
+  const today = todayJst()
+  let companyId = ''
+  let supId = ''
+  let dealId = ''
+  let pactId = ''
+
+  beforeAll(async () => {
+    const co = await api('POST', '/v1/masters/companies', { as: ADMIN, body: { kind: 'customer', name: '活動記録テスト商事' } })
+    companyId = (co.json.data as { id: string }).id
+  })
+
+  it('サポート活動: 入力検証（AKO-SUP-001）と登録・部分更新・取消/復元（全員可）', async () => {
+    // 必須の欠落・プリセット外はいずれも AKO-SUP-001
+    expect((await api('POST', '/v1/support-activities', { as: MEMBER, body: { companyId, category: '操作', title: 'x', body: 'x', priority: '通常', status: '未対応' } })).json.error?.code).toBe('AKO-SUP-001')
+    expect((await api('POST', '/v1/support-activities', { as: MEMBER, body: { receivedDate: today, companyId, category: '爆発', title: 'x', body: 'x', priority: '通常', status: '未対応' } })).json.error?.code).toBe('AKO-SUP-001')
+    // 完了時刻のみ（完了日なし）は 400
+    expect((await api('POST', '/v1/support-activities', { as: MEMBER, body: { receivedDate: today, companyId, category: '操作', title: 'x', body: 'x', priority: '通常', status: '未対応', completedTime: '12:00' } })).json.error?.code).toBe('AKO-SUP-001')
+    const created = await api('POST', '/v1/support-activities', {
+      as: MEMBER,
+      body: {
+        receivedDate: today, receivedTime: '10:30', companyId, inquirerName: '山田様',
+        targetSystem: '在庫管理システム', category: 'データ', title: 'CSVが取り込めない',
+        body: 'アップロードするとエラー', priority: '高', status: '未対応',
+        knowledgeNote: '日付形式を自動変換できないか',
+      },
+    })
+    expect(created.status).toBe(201)
+    supId = (created.json.data as { id: string }).id
+    const row = created.json.data as { staffMemberId: string; receivedTime: string; knowledgeNote: string }
+    expect(row.staffMemberId).toBe(MEMBER) // 既定 = ログインユーザー
+    expect(row.receivedTime).toBe('10:30')
+    expect(row.knowledgeNote).toBe('日付形式を自動変換できないか')
+    // 編集は全員可（チーム共有）。送っていないフィールドは保持される
+    const upd = await api('PATCH', `/v1/support-activities/${supId}`, {
+      as: HR, body: { status: '対応中', response: 'フォーマット確認中' },
+    })
+    expect(upd.status).toBe(200)
+    const updated = upd.json.data as { status: string; response: string; title: string; priority: string }
+    expect(updated.status).toBe('対応中')
+    expect(updated.response).toBe('フォーマット確認中')
+    expect(updated.title).toBe('CSVが取り込めない')
+    expect(updated.priority).toBe('高')
+    // 取消（論理削除・冪等）→ 復元（全員可 = 原則9.5）
+    expect((await api('POST', `/v1/support-activities/${supId}/archive`, { as: HR })).status).toBe(200)
+    expect((await api('POST', `/v1/support-activities/${supId}/archive`, { as: HR })).status).toBe(200) // 冪等
+    expect((await api('POST', `/v1/support-activities/${supId}/restore`, { as: MEMBER })).status).toBe(200)
+    // 不在 id は 404（AKO-SUP-002）
+    expect((await api('PATCH', '/v1/support-activities/sup-nope', { as: MEMBER, body: { title: 'x' } })).status).toBe(404)
+  })
+
+  it('サポート活動: 一覧のサーバーページング + 検索 + フィルタ（q/limit/offset/total・f.status）', async () => {
+    // 追加で 2 件登録して total を確認
+    for (const [i, st] of (['解決', '保留'] as const).entries()) {
+      await api('POST', '/v1/support-activities', {
+        as: MEMBER,
+        body: { receivedDate: today, companyId, category: '操作', title: `ページング確認 ${i}`, body: '内容', priority: '低', status: st },
+      })
+    }
+    const paged = await api('GET', '/v1/support-activities?limit=2&offset=0&f.active=true', { as: MEMBER })
+    expect(paged.status).toBe(200)
+    expect((paged.json.data as unknown[]).length).toBeLessThanOrEqual(2)
+    const pagedTotal = (paged.json as { total?: number }).total
+    expect(typeof pagedTotal).toBe('number')
+    expect(pagedTotal as number).toBeGreaterThanOrEqual(3)
+    // 検索（顧客名 = JOIN した companies.name も対象）
+    const byCompany = await api('GET', `/v1/support-activities?q=${encodeURIComponent('活動記録テスト商事')}&limit=50`, { as: MEMBER })
+    expect((byCompany.json.data as { companyId: string }[]).every(r => r.companyId === companyId)).toBe(true)
+    expect(((byCompany.json as { total?: number }).total ?? 0)).toBeGreaterThanOrEqual(3)
+    // 構造化フィルタ（f.status）
+    const byStatus = await api('GET', `/v1/support-activities?f.status=${encodeURIComponent('保留')}&limit=50`, { as: MEMBER })
+    expect((byStatus.json.data as { status: string }[]).every(r => r.status === '保留')).toBe(true)
+  })
+
+  it('営業活動: 入力検証（AKO-SAL-001）・登録（コンボボックス新規会社）・数値範囲', async () => {
+    expect((await api('POST', '/v1/sales-activities', { as: MEMBER, body: { companyId, title: '', dealType: '新規', phase: '初回' } })).json.error?.code).toBe('AKO-SAL-001')
+    expect((await api('POST', '/v1/sales-activities', { as: MEMBER, body: { companyId, title: 'x', dealType: '新規', phase: '初回', probability: 150 } })).json.error?.code).toBe('AKO-SAL-001')
+    expect((await api('POST', '/v1/sales-activities', { as: MEMBER, body: { companyId, title: 'x', dealType: '新規', phase: '初回', amount: -5 } })).json.error?.code).toBe('AKO-SAL-001')
+    // 未登録の会社名はマスタへ新規登録して反映（customer-logs と同一規則）
+    const created = await api('POST', '/v1/sales-activities', {
+      as: MEMBER,
+      body: {
+        newCompanyName: '営業コンボ産業', title: '在庫管理DXプロジェクト', dealType: '新規',
+        phase: '提案', amount: 1500000, probability: 60, expectedCloseDate: '2026-09-30',
+        customerIssue: 'CSV加工に毎週3時間', proposal: 'CSV取込・変換自動化',
+        nextAction: 'デモ実施', nextActionDate: '2026-08-25',
+      },
+    })
+    expect(created.status).toBe(201)
+    dealId = (created.json.data as { id: string }).id
+    const row = created.json.data as { companyId: string; amount: number; probability: number }
+    expect(row.amount).toBe(1500000)
+    expect(row.probability).toBe(60)
+    const co = await pool.query(`SELECT kind, name FROM companies WHERE id = $1`, [row.companyId])
+    expect(co.rows[0]).toEqual({ kind: 'customer', name: '営業コンボ産業' })
+    // 正規化名の一致は既存へ名寄せ（重複マスタを作らない）
+    const merged = await api('POST', '/v1/sales-activities', {
+      as: HR, body: { newCompanyName: '株式会社 営業コンボ産業', title: '名寄せ確認', dealType: '追加', phase: '初回' },
+    })
+    expect((merged.json.data as { companyId: string }).companyId).toBe(row.companyId)
+    // 部分更新: フェーズだけ進めても金額・確度は保持
+    const upd = await api('PATCH', `/v1/sales-activities/${dealId}`, { as: HR, body: { phase: '見積' } })
+    const updated = upd.json.data as { phase: string; amount: number; probability: number }
+    expect(updated.phase).toBe('見積')
+    expect(updated.amount).toBe(1500000)
+    expect(updated.probability).toBe(60)
+  })
+
+  it('ビジネスパートナー活動: 入力検証（AKO-PTN-001）・関連商談リンク（FK）・取消/復元', async () => {
+    expect((await api('POST', '/v1/partner-activities', { as: MEMBER, body: { partnerName: '', theme: 'x', activityType: '紹介', status: '検討' } })).json.error?.code).toBe('AKO-PTN-001')
+    expect((await api('POST', '/v1/partner-activities', { as: MEMBER, body: { partnerName: '川上さん', theme: 'x', activityType: '爆買', status: '検討' } })).json.error?.code).toBe('AKO-PTN-001')
+    // 実在しない関連商談は 400（FK → AKO-PTN-001）
+    expect((await api('POST', '/v1/partner-activities', {
+      as: MEMBER, body: { partnerName: '川上さん', theme: 'x', activityType: '紹介', status: '検討', relatedSalesActivityId: 'deal-nope' },
+    })).json.error?.code).toBe('AKO-PTN-001')
+    const created = await api('POST', '/v1/partner-activities', {
+      as: MEMBER,
+      body: {
+        partnerName: '川上さん', theme: 'フローラ協業', relatedCompany: 'フローラ',
+        activityType: '共創', status: '進行中', summary: '協業テーマの検討',
+        nextAction: '3者MTG', nextActionDate: '2026-09-07', relatedSalesActivityId: dealId,
+        memo: '案件化したら商談へリンク',
+      },
+    })
+    expect(created.status).toBe(201)
+    pactId = (created.json.data as { id: string }).id
+    expect((created.json.data as { relatedSalesActivityId: string }).relatedSalesActivityId).toBe(dealId)
+    // 部分更新でリンク解除（null 化）できる・他フィールドは保持
+    const upd = await api('PATCH', `/v1/partner-activities/${pactId}`, { as: HR, body: { relatedSalesActivityId: '' } })
+    const updated = upd.json.data as { relatedSalesActivityId: string | null; theme: string }
+    expect(updated.relatedSalesActivityId).toBeNull()
+    expect(updated.theme).toBe('フローラ協業')
+    // 取消 → 一覧（f.active=true）から外れる → 復元で戻る
+    expect((await api('POST', `/v1/partner-activities/${pactId}/archive`, { as: MEMBER })).status).toBe(200)
+    const activeOnly = await api('GET', '/v1/partner-activities?f.active=true&limit=50', { as: MEMBER })
+    expect((activeOnly.json.data as { id: string }[]).some(r => r.id === pactId)).toBe(false)
+    expect((await api('POST', `/v1/partner-activities/${pactId}/restore`, { as: MEMBER })).status).toBe(200)
+    const restored = await api('GET', '/v1/partner-activities?f.active=true&limit=50', { as: MEMBER })
+    expect((restored.json.data as { id: string }[]).some(r => r.id === pactId)).toBe(true)
+  })
+
+  it('機能ガード: support-activity / sales-activity / partner-activity の deny で 403（AKO-PRM-001）', async () => {
+    await pool.query(
+      `INSERT INTO permission_rules (id, subject_kind, subject_id, resource, field, effect, active)
+       VALUES ('pr-test-sup-deny', 'member', $1, 'support-activity', NULL, 'deny', true)
+       ON CONFLICT (id) DO UPDATE SET active = true`, [MEMBER])
+    clearPermissionCache()
+    try {
+      const denied = await api('GET', '/v1/support-activities', { as: MEMBER })
+      expect(denied.status).toBe(403)
+      expect(denied.json.error?.code).toBe('AKO-PRM-001')
+      // 他の 2 機能はガードが独立（deny していないので通る）
+      expect((await api('GET', '/v1/sales-activities', { as: MEMBER })).status).toBe(200)
+      expect((await api('GET', '/v1/partner-activities', { as: MEMBER })).status).toBe(200)
+    } finally {
+      await pool.query(`DELETE FROM permission_rules WHERE id = 'pr-test-sup-deny'`)
+      clearPermissionCache()
+    }
   })
 })

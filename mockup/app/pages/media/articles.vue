@@ -133,6 +133,10 @@ const showInactive = ref(false)
 const list = computed(() => articles.generatedFor(effectiveChannelId.value, showInactive.value))
 const detail = ref<GeneratedArticle | null>(null)
 
+// 一覧のページング（1 ページ 20 件 = 改修依頼 2026-08-18。クライアントページング）
+const { page, pageSize, rows: pagedList, total } = useListView<GeneratedArticle>({ source: list })
+watch([effectiveChannelId, showInactive], () => { page.value = 1 })
+
 function scoreTone(score: number): 'ok' | 'info' | 'warn' {
   return score >= 85 ? 'ok' : score >= 70 ? 'info' : 'warn'
 }
@@ -231,7 +235,7 @@ function scoreTone(score: number): 'ok' | 'info' | 'warn' {
         </template>
         <UiEmptyState v-if="list.length === 0" icon="PenLine" title="まだ生成した記事はありません" hint="上のフォームから目的・質・雰囲気を指定して生成します" />
         <ul v-else class="divide-y divide-line">
-          <li v-for="g in list" :key="g.id" class="flex flex-wrap items-center gap-2 px-3 py-2.5" :class="g.active === false ? 'opacity-60' : ''">
+          <li v-for="g in pagedList" :key="g.id" class="flex flex-wrap items-center gap-2 px-3 py-2.5" :class="g.active === false ? 'opacity-60' : ''">
             <div class="min-w-0 flex-1">
               <p class="truncate text-[13px] font-bold">{{ g.title }}</p>
               <div class="mt-0.5 flex flex-wrap items-center gap-1">
@@ -254,6 +258,7 @@ function scoreTone(score: number): 'ok' | 'info' | 'warn' {
             </div>
           </li>
         </ul>
+        <UiPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
       </UiSectionCard>
     </div>
 

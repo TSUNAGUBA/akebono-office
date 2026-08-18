@@ -33,7 +33,7 @@ describe('notificationCategoryOf', () => {
     expect(notificationCategoryOf(n({ kind: 'reminder', link: '/reports?tab=weekly' }))).toBe('report')
   })
 
-  it('リンク先が /customer-log の通知は顧客ログ（customer-log）', () => {
+  it('リンク先が /customer-log の通知は顧客活動（customer-log）', () => {
     expect(notificationCategoryOf(n({ kind: 'comment', link: '/customer-log' }))).toBe('customer-log')
     expect(notificationCategoryOf(n({ kind: 'comment', link: '/customer-log/c-1' }))).toBe('customer-log')
   })

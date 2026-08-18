@@ -1,15 +1,19 @@
 <script setup lang="ts">
 /**
- * 顧客ログパネル（オペレーター指示 2026-07-30 → 項目拡張 2026-07-31）。
+ * 顧客活動パネル（旧「顧客ログ」= 改修依頼 2026-08-18 で改称。オペレーター指示 2026-07-30 → 項目拡張 2026-07-31）。
  * 「いつ（開始/終了時刻は任意・15 分単位）・どの顧客（会社/人 = コンボボックス・未登録は新規マスタ登録）と・
- * 誰（自社担当者 = 既定ログインユーザー）が・どんな会話（属性タグ + 担当者メモ）をしたか」を
+ * 誰（自社担当者 = 既定ログインユーザー）が・どんな活動（活動目的 + 活動手段 + 担当者メモ）をしたか」を
  * 記録・一覧・編集・取消/復元する。
- * - 本人の記録は常に表示。権限（canViewMemberCustomerLog）で許可された他メンバーの記録は readonly 参照。
- * - 記録は AI（チャットボット・日報アシスト）の参照対象（本人スコープ）。
+ * - 一覧の表示範囲（改修依頼 2026-08-18）: 全メンバーの記録を全員が閲覧できる（旧・許可制の参照権限は撤去）。
+ *   編集・取消は従来どおり本人の記録のみ。
+ * - 一覧は useListView（1 ページ 20 件・クライアントページング）+ UiPagination（改修依頼 2026-08-18）。
+ * - 記録は AI（チャットボット・日報アシスト）の参照対象（本人スコープのまま = 設計判断を維持）。
  * - 操作の取消可能性（原則9.5）: 取消（論理削除）+ 復元 + 本人編集。
  */
 import { Pencil, Plus, RefreshCw, RotateCcw, Trash2, User, Users } from 'lucide-vue-next'
-import { CUSTOMER_LOG_TAG_CAP, CUSTOMER_LOG_TAG_PRESETS, CUSTOMER_LOG_TAGS_MAX } from '../../../../shared/domain/types'
+import {
+  CUSTOMER_LOG_METHOD_PRESETS, CUSTOMER_LOG_TAG_CAP, CUSTOMER_LOG_TAG_PRESETS, CUSTOMER_LOG_TAGS_MAX,
+} from '../../../../shared/domain/types'
 import type { Company, Contact, CustomerLog, Member } from '~/types/domain'
 import { fmtDateLong } from '~/utils/format'
 
@@ -17,45 +21,25 @@ const cl = useCustomerLogs()
 const { tbl } = useMockDb()
 const { show } = useToast()
 const confirm = useConfirm()
-const { currentUser, currentUserId } = useCurrentUser()
-const { canViewMemberCustomerLog } = usePermissions()
+const { currentUserId } = useCurrentUser()
 
 const members = tbl('members')
 const companies = computed(() => (tbl('companies').value as Company[]).filter(c => c.active && c.kind === 'customer'))
 const contacts = computed(() => (tbl('contacts').value as Contact[]).filter(c => c.active))
 
-// ---------- 対象メンバー（本人 = 常に可 / 他メンバー = 権限で許可された対象者のみ readonly） ----------
-
-const viewMemberId = ref(currentUserId.value)
-const targetId = computed(() => {
-  const id = viewMemberId.value
-  if (id && id !== currentUserId.value && canViewMemberCustomerLog(id)) return id
-  return currentUserId.value
-})
-const isReadonly = computed(() => targetId.value !== currentUserId.value)
-const viewableMembers = computed(() =>
-  (members.value as Member[]).filter(m => m.active && canViewMemberCustomerLog(m.id)))
-const canViewOthers = computed(() => viewableMembers.value.some(m => m.id !== currentUserId.value))
-const memberSelectOptions = computed(() =>
-  viewableMembers.value.map(m => ({
-    value: m.id,
-    label: m.id === currentUserId.value ? `${m.name}（自分）` : m.name,
-  })))
-
-// 表示時・対象切替時にサーバー分を取り込む（API モード）
-onMounted(() => cl.ensureLoaded(targetId.value))
-watch(targetId, id => cl.ensureLoaded(id))
+// 表示時にサーバー分を取り込む（API モード。全メンバーの記録 + 本人の取消済み）
+onMounted(() => cl.ensureLoaded())
 
 // ---------- 一覧・フィルタ ----------
 
-const search = ref('')
 const companyFilter = ref('')
+const memberFilter = ref('')
 
 function companyName(id: string | null): string {
-  return id ? (companies.value.find(c => c.id === id)?.name ?? (tbl('companies').value as Company[]).find(c => c.id === id)?.name ?? id) : ''
+  return id ? ((tbl('companies').value as Company[]).find(c => c.id === id)?.name ?? id) : ''
 }
 function contactName(id: string | null): string {
-  return id ? (contacts.value.find(c => c.id === id)?.name ?? (tbl('contacts').value as Contact[]).find(c => c.id === id)?.name ?? '') : ''
+  return id ? ((tbl('contacts').value as Contact[]).find(c => c.id === id)?.name ?? '') : ''
 }
 function memberName(id: string): string {
   return (members.value as Member[]).find(m => m.id === id)?.name ?? id
@@ -70,19 +54,36 @@ function fmtWhen(l: CustomerLog): string {
 function previewOf(l: CustomerLog): string {
   return l.body
 }
+/** 本人の記録か（編集・取消ボタンの表示条件）*/
+function isOwn(l: CustomerLog): boolean {
+  return l.memberId === currentUserId.value
+}
 
-const logs = computed(() => {
-  const rows = cl.logsOf(targetId.value)
-  const q = search.value.trim().toLowerCase()
-  return rows.filter((l) => {
-    if (companyFilter.value && l.companyId !== companyFilter.value) return false
-    if (!q) return true
-    return [l.title, l.body, companyName(l.companyId), contactName(l.contactId),
-      memberName(l.staffMemberId), ...(l.tags ?? [])]
-      .some(v => (v ?? '').toLowerCase().includes(q))
-  })
+const memberFilterOptions = computed(() =>
+  (members.value as Member[]).filter(m => m.active).map(m => ({
+    value: m.id,
+    label: m.id === currentUserId.value ? `${m.name}（自分）` : m.name,
+  })))
+
+const filterPredicate = computed(() => (l: CustomerLog): boolean => {
+  if (companyFilter.value && l.companyId !== companyFilter.value) return false
+  if (memberFilter.value && l.memberId !== memberFilter.value) return false
+  return true
 })
-const archived = computed(() => (isReadonly.value ? [] : cl.archivedOf(currentUserId.value)))
+
+// 一覧のページング（1 ページ 20 件 = 改修依頼 2026-08-18。全件ハイドレーションキャッシュへの
+// クライアントページング = masters 系と同じ構成）
+const lv = useListView<CustomerLog>({
+  source: computed(() => cl.allLogs()),
+  match: (l, q) => [l.title, l.body, companyName(l.companyId), contactName(l.contactId),
+    memberName(l.staffMemberId), memberName(l.memberId), l.method ?? '', ...(l.tags ?? [])]
+    .some(v => (v ?? '').toLowerCase().includes(q)),
+  filterPredicate,
+})
+// フィルタ変更で 1 ページ目へ（filterPredicate 単独はリセット対象外のため明示 watch = customers.vue と同型）
+watch([companyFilter, memberFilter], () => { lv.page.value = 1 })
+
+const archived = computed(() => cl.archivedOf(currentUserId.value))
 
 // ---------- 登録・編集モーダル ----------
 
@@ -99,6 +100,7 @@ const form = ref({
   contactText: '',
   staffMemberId: '',
   tags: [] as string[],
+  method: '',
   title: '',
   body: '',
 })
@@ -124,16 +126,16 @@ const staffOptions = computed(() =>
     label: m.id === currentUserId.value ? `${m.name}（自分）` : m.name,
   })))
 
-/** 属性タグ（プリセット + 入力済みの自由タグをトグル可能に表示）*/
+/** 活動目的（プリセット + 入力済みの自由項目をトグル可能に表示）*/
 const tagOptions = computed(() => {
   const values = [...CUSTOMER_LOG_TAG_PRESETS] as string[]
   for (const t of form.value.tags) if (!values.includes(t)) values.push(t)
   return values.map(t => ({ value: t, label: t }))
 })
-/** タグ変更の共通ガード（プリセットトグル・自由入力とも上限超過は保存前に警告 = 400 まで気付けない事故を防ぐ）*/
+/** 活動目的変更の共通ガード（プリセットトグル・自由入力とも上限超過は保存前に警告 = 400 まで気付けない事故を防ぐ）*/
 function applyTags(next: string[]): void {
   if (next.length > CUSTOMER_LOG_TAGS_MAX) {
-    show(`属性タグは ${CUSTOMER_LOG_TAGS_MAX} 件までです`, 'warn')
+    show(`活動目的は ${CUSTOMER_LOG_TAGS_MAX} 件までです`, 'warn')
     return
   }
   form.value.tags = next
@@ -142,14 +144,20 @@ const newTag = ref('')
 function addTag(): void {
   const t = newTag.value.trim()
   if (!t) return
-  // 1 タグの文字数上限も保存前に警告（保存時の無警告切り詰めを防ぐ = 2 巡目 NIT-5）
+  // 1 件の文字数上限も保存前に警告（保存時の無警告切り詰めを防ぐ = 2 巡目 NIT-5）
   if ([...t].length > CUSTOMER_LOG_TAG_CAP) {
-    show(`属性タグは 1 件 ${CUSTOMER_LOG_TAG_CAP} 文字までです`, 'warn')
+    show(`活動目的は 1 件 ${CUSTOMER_LOG_TAG_CAP} 文字までです`, 'warn')
     return
   }
   if (!form.value.tags.includes(t)) applyTags([...form.value.tags, t])
   if (form.value.tags.includes(t)) newTag.value = ''
 }
+
+/** 活動手段の選択肢（単一選択・任意 = 「未設定」を含む。改修依頼 2026-08-18）*/
+const methodOptions = [
+  { value: '', label: '未設定' },
+  ...CUSTOMER_LOG_METHOD_PRESETS.map(m => ({ value: m, label: m })),
+]
 
 /** 会社コンボボックスの候補（有効な顧客(会社)）*/
 const companyOptions = computed(() => companies.value.map(c => ({ value: c.id, label: c.name })))
@@ -197,6 +205,7 @@ function openCreate(): void {
     contactText: '',
     staffMemberId: currentUserId.value, // 既定 = ログインユーザー
     tags: [],
+    method: '',
     title: '',
     body: '',
   })
@@ -204,6 +213,7 @@ function openCreate(): void {
   composeOpen.value = true
 }
 function openEdit(l: CustomerLog): void {
+  if (!isOwn(l)) return
   editingId.value = l.id
   fillForm({
     logDate: l.logDate,
@@ -215,6 +225,7 @@ function openEdit(l: CustomerLog): void {
     contactText: contactName(l.contactId),
     staffMemberId: l.staffMemberId || currentUserId.value,
     tags: [...(l.tags ?? [])],
+    method: l.method ?? '',
     title: l.title,
     body: l.body,
   })
@@ -237,6 +248,7 @@ async function submit(): Promise<void> {
       newContactName: form.value.contactId ? '' : form.value.contactText,
       staffMemberId: form.value.staffMemberId || currentUserId.value,
       tags: form.value.tags,
+      method: form.value.method,
       title: form.value.title,
       body: form.value.body,
     }
@@ -247,7 +259,7 @@ async function submit(): Promise<void> {
       show(`${res.error.code}: ${res.error.message}`, 'crit')
       return
     }
-    show(editingId.value ? '顧客ログを更新しました' : '顧客ログを登録しました（AI の参照対象になります）')
+    show(editingId.value ? '顧客活動を更新しました' : '顧客活動を登録しました（AI の参照対象になります）')
     if (willCreateCompany || willCreateContact) {
       // 実際に新規登録されたか（既存名への名寄せか）は保存結果で確定するため「未登録なら」の表現にする
       show('未登録の顧客・担当者はマスタへ登録し、記録に反映しました', 'info')
@@ -265,7 +277,7 @@ const restoring = ref(false)
 
 async function onArchive(l: CustomerLog): Promise<void> {
   const ok = await confirm.ask(
-    '顧客ログの取消',
+    '顧客活動の取消',
     `${fmtWhen(l)}「${companyName(l.companyId)}」の記録を取り消しますか？（一覧と AI の参照対象から外れます。あとから復元できます）`,
     { danger: true, confirmLabel: '取り消す' },
   )
@@ -294,33 +306,24 @@ const showArchived = ref(false)
 <template>
   <div class="grid gap-3">
     <UiSectionCard
-      :title="`顧客ログ一覧（${logs.length}件）`"
-      :description="isReadonly
-        ? `${memberName(targetId)} さんの記録を参照しています（閲覧のみ）`
-        : 'いつ・どの顧客と・どんな会話をしたかの記録。AI の参照対象（自分の記録のみ）になります'"
+      :title="`顧客活動一覧（${lv.total.value}件）`"
+      description="全メンバーの記録を閲覧できます（編集・取消は自分の記録のみ）。AI の参照対象は自分の記録のみです"
       flush
     >
       <template #actions>
         <div class="flex flex-wrap items-center gap-2">
-          <UiSelect
-            v-if="canViewOthers"
-            v-model="viewMemberId"
-            :options="memberSelectOptions"
-            aria-label="参照するメンバー"
-            class="w-auto"
-          />
-          <button v-if="!isReadonly" type="button" class="btn btn-primary btn-sm" @click="openCreate">
+          <button type="button" class="btn btn-primary btn-sm" @click="openCreate">
             <Plus class="h-3.5 w-3.5" aria-hidden="true" />
             記録する
           </button>
-          <button type="button" class="btn btn-ghost btn-sm" aria-label="再読み込み" @click="cl.refresh(targetId)">
+          <button type="button" class="btn btn-ghost btn-sm" aria-label="再読み込み" @click="cl.refresh()">
             <RefreshCw class="h-3.5 w-3.5" aria-hidden="true" />
           </button>
         </div>
       </template>
 
       <div class="flex flex-wrap items-center gap-2 border-b border-line px-4 py-2">
-        <UiSearchInput v-model="search" placeholder="会社名・担当者・タグ・内容で検索" />
+        <UiSearchInput v-model="lv.query.value" placeholder="会社名・担当者・活動目的・内容で検索" />
         <UiSelect
           v-model="companyFilter"
           :options="companyOptions"
@@ -328,45 +331,62 @@ const showArchived = ref(false)
           aria-label="顧客で絞り込み"
           class="w-auto"
         />
+        <UiSelect
+          v-model="memberFilter"
+          :options="memberFilterOptions"
+          empty-label="すべてのメンバー"
+          aria-label="記録者で絞り込み"
+          class="w-auto"
+        />
       </div>
 
       <UiEmptyState
-        v-if="logs.length === 0"
+        v-if="lv.total.value === 0"
         icon="MessageSquare"
-        title="該当する顧客ログがありません"
-        :hint="isReadonly ? '検索条件を見直してください' : '「記録する」から顧客とのやり取りを登録できます'"
+        title="該当する顧客活動がありません"
+        hint="「記録する」から顧客とのやり取りを登録できます"
       />
-      <ul v-else class="divide-y divide-line">
-        <li v-for="l in logs" :key="l.id" class="flex items-start gap-1 px-4 py-2.5">
-          <button
-            type="button"
-            class="min-w-0 flex-1 rounded-md text-left transition-colors hover:bg-brand-soft"
-            :aria-label="`${companyName(l.companyId)} の記録の詳細を表示`"
-            @click="detailLog = l"
-          >
-            <span class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-              <span class="num text-[11px] text-muted">{{ fmtWhen(l) }}</span>
-              <span class="text-[13px] font-bold">{{ companyName(l.companyId) }}</span>
-              <span v-if="contactName(l.contactId)" class="text-[12px] text-sub">{{ contactName(l.contactId) }}</span>
-              <span
-                v-for="t in (l.tags ?? [])"
-                :key="t"
-                class="rounded-full border border-brand bg-brand-soft px-1.5 py-px text-[10px] font-medium text-brand"
-              >{{ t }}</span>
-            </span>
-            <span v-if="l.title" class="mt-0.5 block text-[12px] font-semibold text-sub">{{ l.title }}</span>
-            <span class="mt-0.5 block truncate text-[12px] leading-relaxed text-sub">{{ previewOf(l) }}</span>
-          </button>
-          <template v-if="!isReadonly">
-            <button type="button" class="btn btn-ghost btn-sm shrink-0" :aria-label="`「${companyName(l.companyId)}」の記録を編集`" @click="openEdit(l)">
-              <Pencil class="h-3.5 w-3.5" aria-hidden="true" />
+      <template v-else>
+        <ul class="divide-y divide-line">
+          <li v-for="l in lv.rows.value" :key="l.id" class="flex items-start gap-1 px-4 py-2.5">
+            <button
+              type="button"
+              class="min-w-0 flex-1 rounded-md text-left transition-colors hover:bg-brand-soft"
+              :aria-label="`${companyName(l.companyId)} の記録の詳細を表示`"
+              @click="detailLog = l"
+            >
+              <span class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                <span class="num text-[11px] text-muted">{{ fmtWhen(l) }}</span>
+                <span class="text-[13px] font-bold">{{ companyName(l.companyId) }}</span>
+                <span v-if="contactName(l.contactId)" class="text-[12px] text-sub">{{ contactName(l.contactId) }}</span>
+                <span
+                  v-if="l.method"
+                  class="rounded-full border border-line-strong bg-surface px-1.5 py-px text-[10px] font-medium text-sub"
+                >{{ l.method }}</span>
+                <span
+                  v-for="t in (l.tags ?? [])"
+                  :key="t"
+                  class="rounded-full border border-brand bg-brand-soft px-1.5 py-px text-[10px] font-medium text-brand"
+                >{{ t }}</span>
+                <span class="ml-auto text-[11px] text-muted">記録: {{ memberName(l.memberId) }}</span>
+              </span>
+              <span v-if="l.title" class="mt-0.5 block text-[12px] font-semibold text-sub">{{ l.title }}</span>
+              <span class="mt-0.5 block truncate text-[12px] leading-relaxed text-sub">{{ previewOf(l) }}</span>
             </button>
-            <button type="button" class="btn btn-ghost btn-sm shrink-0" :aria-label="`「${companyName(l.companyId)}」の記録を取り消す`" @click="onArchive(l)">
-              <Trash2 class="h-3.5 w-3.5 text-crit" aria-hidden="true" />
-            </button>
-          </template>
-        </li>
-      </ul>
+            <template v-if="isOwn(l)">
+              <button type="button" class="btn btn-ghost btn-sm shrink-0" :aria-label="`「${companyName(l.companyId)}」の記録を編集`" @click="openEdit(l)">
+                <Pencil class="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+              <button type="button" class="btn btn-ghost btn-sm shrink-0" :aria-label="`「${companyName(l.companyId)}」の記録を取り消す`" @click="onArchive(l)">
+                <Trash2 class="h-3.5 w-3.5 text-crit" aria-hidden="true" />
+              </button>
+            </template>
+          </li>
+        </ul>
+        <div class="px-4 pb-3">
+          <UiPagination v-model:page="lv.page.value" v-model:page-size="lv.pageSize.value" :total="lv.total.value" />
+        </div>
+      </template>
 
       <!-- 取消済み（本人のみ）。誤って取り消した場合の立ち戻り導線（原則9.5） -->
       <div v-if="archived.length > 0" class="border-t border-line px-4 py-2">
@@ -389,7 +409,7 @@ const showArchived = ref(false)
     <!-- 登録・編集モーダル -->
     <UiModal
       :open="composeOpen"
-      :title="editingId ? '顧客ログを編集' : '顧客ログを記録'"
+      :title="editingId ? '顧客活動を編集' : '顧客活動を記録'"
       width="620px"
       @close="composeOpen = false"
     >
@@ -415,16 +435,16 @@ const showArchived = ref(false)
             />
           </UiFormField>
         </div>
-        <UiFormField label="属性タグ（任意）" hint="商談・取材・イベントなど。自由入力でも追加できます">
+        <UiFormField label="活動目的（任意）" hint="商談・取材・イベントなど。自由入力でも追加できます">
           <div class="grid gap-1.5">
-            <UiChipSelect :model-value="form.tags" :options="tagOptions" aria-label="属性タグ" @update:model-value="applyTags" />
+            <UiChipSelect :model-value="form.tags" :options="tagOptions" aria-label="活動目的" @update:model-value="applyTags" />
             <div class="flex items-center gap-1.5">
               <input
                 v-model="newTag"
                 type="text"
                 class="input w-40"
-                placeholder="タグを自由入力"
-                aria-label="属性タグを自由入力"
+                placeholder="活動目的を自由入力"
+                aria-label="活動目的を自由入力"
                 @keydown.enter.prevent="addTag"
               >
               <button type="button" class="btn btn-sm" :disabled="!newTag.trim()" @click="addTag">
@@ -433,6 +453,9 @@ const showArchived = ref(false)
               </button>
             </div>
           </div>
+        </UiFormField>
+        <UiFormField label="活動手段（任意）" hint="訪問・Web会議・電話など">
+          <UiChipTabs v-model="form.method" :options="methodOptions" aria-label="活動手段" />
         </UiFormField>
         <UiFormField label="顧客（会社）" required hint="未登録の会社名を入力すると、保存時にマスタへ新規登録されます">
           <UiCombobox
@@ -503,12 +526,16 @@ const showArchived = ref(false)
           <span>記録者: {{ memberName(detailLog.memberId) }}</span>
           <span v-if="detailLog.updatedAt && detailLog.updatedAt !== detailLog.createdAt">（{{ fmtDateLong(detailLog.updatedAt) }} 編集）</span>
         </div>
-        <div v-if="(detailLog.tags ?? []).length > 0" class="flex flex-wrap gap-1">
+        <div v-if="(detailLog.tags ?? []).length > 0 || detailLog.method" class="flex flex-wrap gap-1">
           <span
             v-for="t in detailLog.tags"
             :key="t"
             class="rounded-full border border-brand bg-brand-soft px-2 py-0.5 text-[11px] font-medium text-brand"
           >{{ t }}</span>
+          <span
+            v-if="detailLog.method"
+            class="rounded-full border border-line-strong bg-surface px-2 py-0.5 text-[11px] font-medium text-sub"
+          >活動手段: {{ detailLog.method }}</span>
         </div>
         <p v-if="detailLog.title" class="text-[14px] font-semibold">{{ detailLog.title }}</p>
         <div v-if="detailLog.body">
@@ -516,7 +543,7 @@ const showArchived = ref(false)
           <p class="whitespace-pre-wrap text-[13px] leading-relaxed">{{ detailLog.body }}</p>
         </div>
       </div>
-      <template v-if="detailLog && !isReadonly" #footer>
+      <template v-if="detailLog && isOwn(detailLog)" #footer>
         <div class="flex items-center justify-between gap-2">
           <button type="button" class="btn btn-danger btn-sm" @click="onArchive(detailLog)">取り消す</button>
           <button type="button" class="btn btn-primary" @click="openEdit(detailLog)">編集</button>

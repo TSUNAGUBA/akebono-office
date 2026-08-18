@@ -1,15 +1,15 @@
 /**
- * 顧客ログ入力検証（shared/domain/customer-log）の単体テスト。
+ * 顧客活動（旧「顧客ログ」）入力検証（shared/domain/customer-log）の単体テスト。
  * この共有モジュールは API（api/src/routes/customer-logs.ts）とモック（mockup useCustomerLogs）の
  * **パリティの SoT**（レビュー指摘 2026-07-31 で重複実装から集約）。ここでの検証が両者の挙動を同時に固定する。
  */
 import { describe, expect, it } from 'vitest'
 import {
   capCodePoints, cleanCustomerLogTags, customerLogCompanyError, customerLogDateError,
-  customerLogMemoError, customerLogTagsError, customerLogTimeError, customerLogTimeRangeError,
-  isRealDateKey,
+  customerLogMemoError, customerLogMethodError, customerLogTagsError, customerLogTimeError,
+  customerLogTimeRangeError, isRealDateKey,
 } from '../../../shared/domain/customer-log'
-import { CUSTOMER_LOG_TAG_CAP, CUSTOMER_LOG_TAGS_MAX } from '../../../shared/domain/types'
+import { CUSTOMER_LOG_METHOD_PRESETS, CUSTOMER_LOG_TAG_CAP, CUSTOMER_LOG_TAGS_MAX } from '../../../shared/domain/types'
 
 describe('customerLogDateError（日付・実在日）', () => {
   it('正常な日付は null', () => {
@@ -47,11 +47,11 @@ describe('customerLogTimeError / customerLogTimeRangeError（開始・終了時�
   })
 })
 
-describe('cleanCustomerLogTags / customerLogTagsError（属性タグ）', () => {
+describe('cleanCustomerLogTags / customerLogTagsError（活動目的 = 旧「属性タグ」）', () => {
   it('trim・重複除去・空要素の除去', () => {
     expect(cleanCustomerLogTags(['商談', '商談', ' 取材 ', '', '  '])).toEqual(['商談', '取材'])
   })
-  it('1 タグはコードポイント上限で切り詰め（絵文字を境界で壊さない）', () => {
+  it('1 件はコードポイント上限で切り詰め（絵文字を境界で壊さない）', () => {
     const long = 'あ'.repeat(CUSTOMER_LOG_TAG_CAP + 5)
     expect(cleanCustomerLogTags([long])).toEqual(['あ'.repeat(CUSTOMER_LOG_TAG_CAP)])
     expect(capCodePoints('👍'.repeat(3), 2)).toBe('👍👍')
@@ -59,11 +59,21 @@ describe('cleanCustomerLogTags / customerLogTagsError（属性タグ）', () => 
   it('未指定は許容・配列以外は形式エラー・正規化後の件数上限', () => {
     expect(customerLogTagsError(undefined)).toBeNull()
     expect(customerLogTagsError(null)).toBeNull()
-    expect(customerLogTagsError('商談')).toBe('属性タグの形式が正しくありません')
+    expect(customerLogTagsError('商談')).toBe('活動目的の形式が正しくありません')
     expect(customerLogTagsError(Array.from({ length: CUSTOMER_LOG_TAGS_MAX + 1 }, (_, i) => `t${i}`)))
-      .toBe(`属性タグは ${CUSTOMER_LOG_TAGS_MAX} 件までです`)
+      .toBe(`活動目的は ${CUSTOMER_LOG_TAGS_MAX} 件までです`)
     // 重複除去後に上限内へ収まる場合はエラーにしない
     expect(customerLogTagsError(Array.from({ length: CUSTOMER_LOG_TAGS_MAX + 1 }, () => '商談'))).toBeNull()
+  })
+})
+
+describe('customerLogMethodError（活動手段。改修依頼 2026-08-18）', () => {
+  it('空 = 未設定・プリセット値は許容', () => {
+    expect(customerLogMethodError('')).toBeNull()
+    for (const m of CUSTOMER_LOG_METHOD_PRESETS) expect(customerLogMethodError(m)).toBeNull()
+  })
+  it('プリセット外の値は拒否（「値=ラベル」方式の allowlist）', () => {
+    expect(customerLogMethodError('テレパシー')).toBe('活動手段の値が正しくありません')
   })
 })
 

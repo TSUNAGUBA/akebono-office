@@ -153,6 +153,9 @@ async function doRestoreChannel(id: string): Promise<void> {
 // ---------- 外部投稿記事 ----------
 const showInactiveExt = ref(false)
 const extList = computed(() => external.listFor(selectedId.value, showInactiveExt.value))
+// 一覧のページング（1 ページ 20 件 = 改修依頼 2026-08-18。クライアントページング）
+const { page: extPage, pageSize: extPageSize, rows: pagedExtList, total: extTotal } = useListView<MediaExternalArticle>({ source: extList })
+watch([selectedId, showInactiveExt], () => { extPage.value = 1 })
 const extOpen = ref(false)
 const extSaving = ref(false)
 const extEditId = ref<string | null>(null)
@@ -304,7 +307,7 @@ async function restoreExt(id: string): Promise<void> {
           </template>
           <UiEmptyState v-if="extList.length === 0" icon="FileText" title="外部投稿記事はまだありません" hint="外部媒体へ投稿した記事の原文を登録すると、AI インサイト生成の材料になります" />
           <ul v-else class="divide-y divide-line">
-            <li v-for="x in extList" :key="x.id" class="flex flex-wrap items-center gap-2 px-3 py-2.5" :class="x.active === false ? 'opacity-60' : ''">
+            <li v-for="x in pagedExtList" :key="x.id" class="flex flex-wrap items-center gap-2 px-3 py-2.5" :class="x.active === false ? 'opacity-60' : ''">
               <div class="min-w-0 flex-1">
                 <p class="truncate text-[13px] font-bold">{{ x.title }}</p>
                 <div class="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
@@ -323,6 +326,7 @@ async function restoreExt(id: string): Promise<void> {
               </div>
             </li>
           </ul>
+          <UiPagination v-model:page="extPage" v-model:page-size="extPageSize" :total="extTotal" />
         </UiSectionCard>
 
         <!-- チャンネルの取消 -->

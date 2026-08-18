@@ -25,6 +25,10 @@ const filtered = computed(() =>
     (!filterEmp.value || l.aiEmployeeId === filterEmp.value)
     && (!filterTask.value || l.taskId === filterTask.value)))
 
+// 一覧のページング（1 ページ 20 件 = 改修依頼 2026-08-18。クライアントページング）
+const { page, pageSize, rows: pagedLogs, total } = useListView<AiActivityLog>({ source: filtered })
+watch([filterEmp, filterTask], () => { page.value = 1 })
+
 const KIND_TONES: Record<AiActivityKind, Tone> = {
   plan: 'info',
   execute: 'ok',
@@ -71,7 +75,7 @@ function taskTitle(id: string | null): string {
 
     <ol v-else class="mt-2 grid gap-0">
       <li
-        v-for="l in filtered"
+        v-for="l in pagedLogs"
         :key="l.id"
         class="relative flex gap-3 border-l-2 border-line pb-4 pl-4 last:pb-0"
       >
@@ -97,5 +101,6 @@ function taskTitle(id: string | null): string {
         </div>
       </li>
     </ol>
+    <UiPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
   </div>
 </template>

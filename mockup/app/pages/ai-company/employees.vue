@@ -33,6 +33,9 @@ const rows = computed(() =>
     state: e.active ? '有効' : '無効',
   })))
 
+// 一覧のページング（1 ページ 20 件 = 改修依頼 2026-08-18。クライアントページング）
+const { page, pageSize, rows: pagedRows, total } = useListView({ source: rows })
+
 const activeRoleOptions = computed(() =>
   (roleCrud.activeList.value as AiRole[]).map(r => ({ value: r.id, label: r.name })))
 
@@ -141,7 +144,7 @@ async function toggleActive(): Promise<void> {
     >
       <UiDataTable
         :columns="columns"
-        :rows="rows"
+        :rows="pagedRows"
         clickable
         empty-title="AI 社員がいません"
         empty-hint="「AI 社員を追加」から増員できます"
@@ -157,6 +160,7 @@ async function toggleActive(): Promise<void> {
           <UiStatusBadge :label="String(row.state)" :tone="row.active ? 'ok' : 'neutral'" dot />
         </template>
       </UiDataTable>
+      <UiPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
     </UiSectionCard>
 
     <!-- 追加・編集モーダル -->

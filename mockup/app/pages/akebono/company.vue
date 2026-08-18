@@ -67,6 +67,9 @@ const segRows = computed(() =>
       connected: s.mediaConnected,
     })))
 
+// 業態別サマリーのページング（1 ページ 20 件 = 改修依頼 2026-08-18。件数は少ないが一覧ページングの横展開で統一）
+const { page: segPage, pageSize: segPageSize, rows: segPaged, total: segTotal } = useListView({ source: segRows })
+
 function openSegment(segmentId: string): void {
   switchSegment(segmentId)
   void router.push('/akebono/dashboard')
@@ -138,7 +141,7 @@ async function regenerate(): Promise<void> {
 
       <!-- セグメント別内訳（行クリックでその業態のダッシュボードへ。モバイルはカード型） -->
       <UiSectionCard title="業態別サマリー" description="各業態の売上・受注・メディア指標。クリックで業態ダッシュボードへ">
-        <UiDataTable :columns="segCols" :rows="segRows" row-key="id" clickable @row-click="openSegment(String($event.id))">
+        <UiDataTable :columns="segCols" :rows="segPaged" row-key="id" clickable @row-click="openSegment(String($event.id))">
           <template #cell-salesAmount="{ value }">{{ fmtYenCompact(Number(value)) }}</template>
           <template #cell-sessions="{ value }">
             <span v-if="value === null" class="text-muted">未連携</span>
@@ -149,6 +152,7 @@ async function regenerate(): Promise<void> {
             <span v-else class="num">{{ fmtPct(Number(value)) }}</span>
           </template>
         </UiDataTable>
+        <UiPagination v-model:page="segPage" v-model:page-size="segPageSize" :total="segTotal" />
       </UiSectionCard>
 
       <!-- ②③ AI レポート・AI インサイト -->

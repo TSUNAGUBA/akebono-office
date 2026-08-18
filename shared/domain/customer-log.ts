@@ -1,15 +1,15 @@
 /**
- * 顧客ログの入力検証（API サービス / mockup モックモードで共有 = パリティの SoT。
+ * 顧客活動（旧「顧客ログ」= 改修依頼 2026-08-18 で改称）の入力検証（API サービス / mockup モックモードで共有 = パリティの SoT。
  * レビュー指摘 2026-07-31: 両者の重複実装で検証順・メッセージ・法人格のみ会社名の扱いが割れたため、
  * 純関数へ集約する = 原則3）。
  * - 返り値は「エラーメッセージ | null」。API 側は AKO-CLG-001（400）へ変換して throw し、
  *   モック側は Result のエラーへ変換する（エラーコードの付与は各層の責務）。
- * - 検証順も本モジュールの並び（日付 → 開始 → 終了 → 範囲 → タグ → メモ → 会社）を両者で守る。
+ * - 検証順も本モジュールの並び（日付 → 開始 → 終了 → 範囲 → 活動目的 → 活動手段 → メモ → 会社）を両者で守る。
  * - 議事録メモ（minutesMemo）は 2026-08-03 のオペレーター指示で入力・保管とも廃止。メモ必須は担当者メモ（body）単独になった。
  */
 import { isRealDateKey } from './jst'
 import { normalizeCompanyName } from './name-match'
-import { CUSTOMER_LOG_TAG_CAP, CUSTOMER_LOG_TAGS_MAX } from './types'
+import { CUSTOMER_LOG_METHOD_PRESETS, CUSTOMER_LOG_TAG_CAP, CUSTOMER_LOG_TAGS_MAX } from './types'
 
 // 実在日判定は汎用ユーティリティ（shared/domain/jst）が SoT。既存の参照互換のため再エクスポートする
 export { isRealDateKey } from './jst'
@@ -49,7 +49,7 @@ export function customerLogTimeRangeError(logTime: string | null, endTime: strin
   return null
 }
 
-/** 属性タグの正規化（trim・上限 cap・重複除去）。件数上限の検証は customerLogTagsError */
+/** 活動目的（旧「属性タグ」）の正規化（trim・上限 cap・重複除去）。件数上限の検証は customerLogTagsError */
 export function cleanCustomerLogTags(tags: readonly unknown[]): string[] {
   const out: string[] = []
   for (const t of tags) {
@@ -59,12 +59,21 @@ export function cleanCustomerLogTags(tags: readonly unknown[]): string[] {
   return out
 }
 
-/** 属性タグの検証（配列であること・正規化後の件数上限） */
+/** 活動目的（旧「属性タグ」= 改修依頼 2026-08-18 で改称）の検証（配列であること・正規化後の件数上限） */
 export function customerLogTagsError(tags: unknown): string | null {
   if (tags === undefined || tags === null) return null
-  if (!Array.isArray(tags)) return '属性タグの形式が正しくありません'
+  if (!Array.isArray(tags)) return '活動目的の形式が正しくありません'
   if (cleanCustomerLogTags(tags).length > CUSTOMER_LOG_TAGS_MAX) {
-    return `属性タグは ${CUSTOMER_LOG_TAGS_MAX} 件までです`
+    return `活動目的は ${CUSTOMER_LOG_TAGS_MAX} 件までです`
+  }
+  return null
+}
+
+/** 活動手段（単一選択・任意。'' = 未設定。プリセット外の値は弾く。改修依頼 2026-08-18） */
+export function customerLogMethodError(method: string): string | null {
+  if (!method) return null
+  if (!(CUSTOMER_LOG_METHOD_PRESETS as readonly string[]).includes(method)) {
+    return '活動手段の値が正しくありません'
   }
   return null
 }

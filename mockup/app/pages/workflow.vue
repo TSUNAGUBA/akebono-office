@@ -83,6 +83,10 @@ const listRows = computed<WorkflowRequest[]>(() => {
     && (!q.value.trim() || r.title.includes(q.value.trim()) || r.id.includes(q.value.trim())))
 })
 
+// 一覧のページング（1 ページ 20 件 = 改修依頼 2026-08-18。クライアントページング）
+const { page, pageSize, rows: pagedListRows, total } = useListView<WorkflowRequest>({ source: listRows })
+watch([tab, q, statusFilter], () => { page.value = 1 })
+
 const columns: TableColumn[] = [
   { key: 'title', label: '件名', primary: true },
   { key: 'category', label: '区分', width: '80px' },
@@ -92,7 +96,7 @@ const columns: TableColumn[] = [
   { key: 'createdAt', label: '申請日時', width: '120px' },
 ]
 
-const tableRows = computed(() => listRows.value.map(r => ({
+const tableRows = computed(() => pagedListRows.value.map(r => ({
   id: r.id,
   title: r.title,
   category: WORKFLOW_CATEGORY_LABELS[r.category],
@@ -583,6 +587,7 @@ async function onRemoveDelegate(d: DelegateSetting): Promise<void> {
             <span class="num text-sub">{{ rowDate(row) }}</span>
           </template>
         </UiDataTable>
+        <UiPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
       </UiSectionCard>
     </div>
 

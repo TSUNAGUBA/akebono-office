@@ -5,7 +5,7 @@
  * 下段: 選択肢 A/B/C（AI 推奨 ★）+ 推奨理由 + シナリオスライダー（決定的予測の即時再計算）+ 判断の記録
  */
 import { ArrowUpRight, Info, Link2, ListChecks, Scale, Sparkles, Star } from 'lucide-vue-next'
-import type { DecisionSlot } from '~/types/domain'
+import type { DecisionLog, DecisionSlot } from '~/types/domain'
 import { fmtDateTime } from '~/utils/format'
 import { DECISION_ACTION_META } from '~/utils/labels'
 
@@ -69,6 +69,11 @@ async function submitRecord(): Promise<void> {
 }
 
 const themeLogs = computed(() => (theme.value ? logsOf(theme.value.id) : []))
+
+// このテーマの判断履歴のページング（1 ページ 20 件 = 改修依頼 2026-08-18。クライアントページング）
+const { page: logPage, pageSize: logPageSize, rows: pagedThemeLogs, total: logTotal } = useListView<DecisionLog>({ source: themeLogs })
+watch(() => theme.value?.id, () => { logPage.value = 1 }) // 別テーマへ遷移したら 1 ページ目へ
+
 function memberName(id: string): string {
   return members.value.find(m => m.id === id)?.name ?? id
 }
@@ -244,13 +249,14 @@ function memberName(id: string): string {
       description="記録済みの意思決定ログ"
     >
       <ul class="grid gap-2">
-        <li v-for="l in themeLogs" :key="l.id" class="flex flex-wrap items-center gap-2 rounded-lg border border-line px-3 py-2 text-xs">
+        <li v-for="l in pagedThemeLogs" :key="l.id" class="flex flex-wrap items-center gap-2 rounded-lg border border-line px-3 py-2 text-xs">
           <UiStatusBadge :label="`選択肢 ${l.chosenSlot}`" tone="brand" />
           <span class="min-w-0 flex-1 text-[13px]">{{ l.reason }}</span>
           <span class="text-muted">{{ memberName(l.decidedBy) }}</span>
           <span class="num text-muted">{{ fmtDateTime(l.at) }}</span>
         </li>
       </ul>
+      <UiPagination v-model:page="logPage" v-model:page-size="logPageSize" :total="logTotal" />
       <NuxtLink to="/decision" class="link mt-2 inline-flex items-center gap-1 text-xs">
         <Scale class="h-3.5 w-3.5" aria-hidden="true" />
         判断履歴の一覧（/decision）へ戻る

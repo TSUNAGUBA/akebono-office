@@ -31,7 +31,7 @@ const companyRelations = tbl('companyRelations')
 const projects = tbl('projects')
 
 // ---------- タブ（通知はカテゴリ別に分割。表示するカテゴリタブは設定駆動。オペレーター指示 2026-08-12） ----------
-// カテゴリタブ（承認依頼・稟議・日報・顧客ログ・議事録・エスカレーション）は「ダッシュボード → レイアウト → 通知タブ」
+// カテゴリタブ（承認依頼・稟議・日報・顧客活動・議事録・エスカレーション）は「ダッシュボード → レイアウト → 通知タブ」
 // の設定（ユーザー > 全社 > 既定）に従う。「すべて」は常に先頭固定。管理者の「エスカレーション対応」は別枠（管理ビュー）。
 // 通知ディープリンク: ?tab=escalations 等で対象タブを直接開く（エスカレーション通知から対応ビューへ
 // 即到達 = 改修依頼 2026-08-18。取り込みは共通の useRouteTabSync = 原則3。不正タブは下の watchEffect が戻す）
@@ -96,6 +96,10 @@ const visibleNotifications = computed(() =>
     .filter(n => !notifCategory.value || notificationCategoryOf(n) === notifCategory.value)
     .filter(n => !unreadOnly.value || !n.read))
 
+// 一覧のページング（1 ページ 20 件 = 改修依頼 2026-08-18。クライアントページング）
+const { page: notifPage, pageSize: notifPageSize, rows: pagedNotifications, total: notifTotal } = useListView<AppNotification>({ source: visibleNotifications })
+watch([tab, unreadOnly], () => { notifPage.value = 1 })
+
 function openNotification(n: AppNotification): void {
   markRead(n.id)
   if (n.link) navigateTo(n.link)
@@ -110,6 +114,11 @@ function onMarkAllRead(): void {
 const rulingCount = computed(() => resolved.value.filter(e => e.resolution?.type === 'ruling').length)
 const refluxedCount = computed(() =>
   resolved.value.filter(e => e.resolution?.type === 'ruling' && e.knowledgeReflected).length)
+
+// 一覧のページング（1 ページ 20 件 = 改修依頼 2026-08-18。open/resolved にページ独自フィルタはないため
+// page リセット watch は不要。件数減少時のはみ出しは useListView が自動補正）
+const { page: escOpenPage, pageSize: escOpenPageSize, rows: pagedOpen, total: escOpenTotal } = useListView<Escalation>({ source: open })
+const { page: escResolvedPage, pageSize: escResolvedPageSize, rows: pagedResolved, total: escResolvedTotal } = useListView<Escalation>({ source: resolved })
 
 // 対応モーダル
 const respondTarget = ref<Escalation | null>(null)
@@ -262,7 +271,7 @@ async function submitRespond(): Promise<void> {
           :hint="unreadOnly ? '「未読のみ」を解除すると既読も表示されます' : '承認依頼・コメント・AI 報告などがここに届きます'"
         />
         <ul v-else class="divide-y divide-[var(--c-line)]">
-          <li v-for="n in visibleNotifications" :key="n.id">
+          <li v-for="n in pagedNotifications" :key="n.id">
             <button
               type="button"
               class="flex w-full min-h-11 items-start gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-brand-soft"
@@ -285,6 +294,7 @@ async function submitRespond(): Promise<void> {
             </button>
           </li>
         </ul>
+        <UiPagination v-model:page="notifPage" v-model:page-size="notifPageSize" :total="notifTotal" />
       </UiSectionCard>
     </div>
 
@@ -312,20 +322,22 @@ async function submitRespond(): Promise<void> {
         />
         <div v-else class="grid gap-2">
           <WidgetsEscalationCard
-            v-for="e in open"
+            v-for="e in pagedOpen"
             :key="e.id"
             :escalation="e"
             @respond="openRespond(e)"
           />
         </div>
+        <UiPagination v-model:page="escOpenPage" v-model:page-size="escOpenPageSize" :total="escOpenTotal" />
       </UiSectionCard>
 
       <!-- 解決済み一覧 -->
       <UiSectionCard title="対応履歴" description="解決済みのエスカレーションと対応内容">
         <UiEmptyState v-if="resolved.length === 0" icon="History" title="解決済みの記録はありません" />
         <div v-else class="grid gap-2">
-          <WidgetsEscalationCard v-for="e in resolved" :key="e.id" :escalation="e" />
+          <WidgetsEscalationCard v-for="e in pagedResolved" :key="e.id" :escalation="e" />
         </div>
+        <UiPagination v-model:page="escResolvedPage" v-model:page-size="escResolvedPageSize" :total="escResolvedTotal" />
       </UiSectionCard>
     </div>
 

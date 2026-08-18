@@ -9,8 +9,8 @@ import type {
   CustomerLog, CustomFieldDef, DailyReport, DecisionLog, DecisionTheme, DelegateSetting, Department,
   DocumentNode, Escalation, EscalationRule, ExternalLink, FeatureToggle, HearingLog, Holiday,
   Industry, KnowledgeArticle, LeaveGrant, LeaveRequest, LeaveType, Member, Project,
-  PunchRecord, RelationType, ReportComment, ReportRead, SalesMonthly, ServiceIncident,
-  ShiftAssignment, ShiftDemand, ShiftPeriod, ShiftWish, SystemService,
+  PartnerActivity, PunchRecord, RelationType, ReportComment, ReportRead, SalesActivity, SalesMonthly, ServiceIncident,
+  ShiftAssignment, ShiftDemand, ShiftPeriod, ShiftWish, SupportActivity, SystemService,
   TaskPlan, UptimeDaily, WeeklyReport, WorkflowRequest, WorkflowRoute, WorkCategory, Note,
 } from '~/types/domain'
 import type { WeeklyInsightRecord } from '../../../../shared/domain/weekly-insight'
@@ -38,6 +38,7 @@ import * as decision from './decision'
 import * as support from './support'
 import * as misc from './misc'
 import { buildCustomerLogs } from './customer-logs'
+import { buildPartnerActivities, buildSalesActivities, buildSupportActivities } from './activities'
 import * as media from './media'
 import { buildCalendarEvents, buildLeaveGrants, buildPunchHistory, buildSalesMonthly, buildSpecialLeaveGrants, buildTaskPlans, buildUptimeDaily } from './history'
 
@@ -49,6 +50,10 @@ export interface MockDbShape {
   workCategories: WorkCategory[]
   notes: Note[]
   customerLogs: CustomerLog[]
+  // ---- 活動記録 3 種（チーム共有の記録系。改修依頼 2026-08-18・F-43/F-44/F-45） ----
+  supportActivities: SupportActivity[]
+  salesActivities: SalesActivity[]
+  partnerActivities: PartnerActivity[]
   companies: Company[]
   contacts: Contact[]
   relationTypes: RelationType[]
@@ -172,6 +177,9 @@ export function buildSeed(): MockDbShape {
     ],
     notes: [],
     customerLogs: buildCustomerLogs(),
+    supportActivities: buildSupportActivities(),
+    salesActivities: buildSalesActivities(),
+    partnerActivities: buildPartnerActivities(),
     companies: [...core.seedCompanies, ...akebono.seedAkebonoCompanies],
     contacts: core.seedContacts,
     relationTypes: core.seedRelationTypes,

@@ -34,6 +34,10 @@ const uptimeDays = computed(() => uptimeDaysOf(serviceId.value))
 const uptimePct = computed(() => fmtPct(uptimePctOf(serviceId.value), 2))
 const incidents = computed(() => incidentsOf(serviceId.value))
 
+// インシデント履歴のページング（1 ページ 20 件 = 改修依頼 2026-08-18。クライアントページング）
+const { page: incPage, pageSize: incPageSize, rows: pagedIncidents, total: incTotal } = useListView<ServiceIncident>({ source: incidents })
+watch(serviceId, () => { incPage.value = 1 }) // 別サービスへ遷移したら 1 ページ目へ
+
 // ---------- インシデント登録モーダル（管理者） ----------
 // UiSelect の v-model は string のため文字列で保持し、送信時に区分型へ絞り込む
 const registerOpen = ref(false)
@@ -187,7 +191,7 @@ function timelineOf(incident: ServiceIncident) {
             title="インシデントの記録はありません"
           />
           <div v-else class="divide-y divide-[var(--c-line)]">
-            <article v-for="inc in incidents" :key="inc.id" class="p-3">
+            <article v-for="inc in pagedIncidents" :key="inc.id" class="p-3">
               <div class="flex flex-wrap items-center gap-1.5">
                 <UiStatusBadge :label="INCIDENT_IMPACT_LABELS[inc.impact]" :tone="INCIDENT_IMPACT_TONES[inc.impact]" />
                 <UiStatusBadge
@@ -223,6 +227,7 @@ function timelineOf(incident: ServiceIncident) {
               </ol>
             </article>
           </div>
+          <UiPagination v-model:page="incPage" v-model:page-size="incPageSize" :total="incTotal" />
         </UiSectionCard>
       </div>
 
