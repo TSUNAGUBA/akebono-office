@@ -722,10 +722,11 @@ async function copyAndClose(): Promise<void> {
               class="h-4 w-4 accent-[var(--c-brand)]"
               :checked="allSelected"
               :disabled="bulkBusy"
-              aria-label="表示中の選別できる要望をすべて選択"
+              aria-label="絞り込み結果の選別できる要望をすべて選択（全ページ対象）"
               @change="toggleSelectAll"
             >
-            すべて選択
+            <!-- ページング導入後も対象は絞り込み結果の全件（全ページ）= 表示中の 20 件だけではない（R1 レビュー NIT-1 の明示） -->
+            すべて選択（全ページ）
           </label>
           <span class="num text-[12px]" :class="selectedReqIds.length > 0 ? 'font-semibold text-brand' : 'text-muted'">
             {{ selectedReqIds.length }} 件選択中

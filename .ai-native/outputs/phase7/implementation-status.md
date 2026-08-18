@@ -3237,6 +3237,31 @@
 - [x] api 統合 269（顧客活動: method 検証/保持・scope=all・取消済み可視性・旧ルール無効化確認。活動記録 3 種:
   検証・登録・部分更新・取消/復元・サーバーページング + 検索 + フィルタ・コンボボックス名寄せ・FK・機能ガード）
 - [x] mockup 単体 351（通知タブ/カテゴリのラベル更新）・`npm run build`・`npx nuxi typecheck`（api tsc も）
+- [x] E2E: `e2e/activity-pages-e2e.cjs` 新設（モックモード。新設 3 ページの描画・登録フィードバック・
+  コンボボックス新規マスタ登録・関連商談リンク・顧客活動の全員閲覧化/記録者フィルタ/活動目的/活動手段・
+  ページング UI・モバイル 375px の横スクロールなし = 18 チェック green）。`run-batch6b-stack.sh` のモック配信
+  セクションへ登録
 - [x] docs（原則5）: functional-requirements（F-18 改訂・F-43/44/45 新設・X-7 追加）・data-design（3 エンティティ +
   CustomerLog.method + 権限擬似フィールドの廃止）・api-design（3 エンドポイント群 + customer-logs 改訂 +
   エラーコード台帳 AKO-SUP/SAL/PTN）・screen-design（3 画面新設 + /customer-log 改訂 + サイトマップ）・CONVENTIONS.md
+
+### 86-5 反復レビュー（原則9 = SP-8）
+
+- [x] R1 = 独立ロール 2 体（コードレビュアー + システム監査官）の並行レビュー。**CRIT/MAJOR（コード）= 0**。
+  監査 MAJOR 1（本レビュー記録の §86 への追記 = 本節で解消）+ MINOR/NIT 計 12 件 → 全て反映:
+  ①CONVENTIONS 規則 2 の専用エンドポイント数 21 → 26 へ更新（改善要望 2 + 活動記録 3 の内訳追記）
+  ②F-01-2・data-design SearchDoc 行の「顧客ログ」残存 2 箇所を「顧客活動」へ更新
+  ③activities.ts の射影列の二重定義を xxxColsFor(alias) 一本へ統合（列追加時の一覧/単件の乖離防止）
+  ④モック archive/restore の状態不一致を no-op 化（API の警告 no-op とパリティ = updatedAt を動かさない）
+  ⑤useCustomerLogs のソートに id タイブレーカー追加（API ORDER BY と完全一致）
+  ⑥CustomerLogPanel にデモユーザー切替の page=1 リセット追加（NotesPanel と同型）
+  ⑦activities numOrNull を number/string に限定（`Number([])` = 0 の持込防止）
+  ⑧受付箱「すべて選択」を「すべて選択（全ページ）」へ（絞り込み結果全件が対象である旨の明示）
+- [x] R2 = 再レビュー（両ロール）で**未解決の指摘ゼロ**を確認して完了（全テスト・typecheck・build green）
+
+**残課題（本改修で新設・未対応）:**
+- API モードの取消済み一覧・関連商談の名前解決・記録者フィルタは全件ハイドレーション（maxLimit 1000 /
+  customer-logs LIMIT 1000）依存。1000 件超の蓄積で静かに欠落し得るため、いずれ取消済み・参照解決の
+  サーバーページング化を検討する（現行スケールでは問題なし = R1 監査 n-2）
+- 活動記録 3 種はヘッダークイックアクセス候補（QUICK_ACCESS_CATALOG）未登録（要件外のため見送り。
+  利用頻度が上がったら候補へ追加する = R1 監査 n-3）

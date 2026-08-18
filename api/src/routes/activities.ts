@@ -26,29 +26,44 @@ import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
 import { runListQuery } from '../lib/list-query'
 
-// created_at/updated_at は JST ウォールクロック文字列で返す（customer-logs と同一規約）
-const JST_STAMPS = `to_char(created_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"') AS "createdAt",
-  to_char(updated_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"') AS "updatedAt"`
+// created_at/updated_at は JST ウォールクロック文字列で返す（customer-logs と同一規約）。
+// 射影は xxxColsFor(alias) が唯一の定義（JOIN 用のエイリアス前置と単表取得で同一関数を使い、
+// 列追加時に一覧 GET と単件 SELECT のレスポンス形が乖離しないようにする = 監査 m-5）
+function jstStampsFor(t: string): string {
+  return `to_char(${t}.created_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"') AS "createdAt",
+  to_char(${t}.updated_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"') AS "updatedAt"`
+}
 
-const SUPPORT_COLS = `id, member_id AS "memberId", received_date::text AS "receivedDate",
-  received_time AS "receivedTime", company_id AS "companyId", inquirer_name AS "inquirerName",
-  target_system AS "targetSystem", category, title, body, priority, status,
-  staff_member_id AS "staffMemberId", response, cause, resolution,
-  completed_date::text AS "completedDate", completed_time AS "completedTime",
-  knowledge_note AS "knowledgeNote", active, ${JST_STAMPS}`
+function supportColsFor(t: string): string {
+  return `${t}.id, ${t}.member_id AS "memberId", ${t}.received_date::text AS "receivedDate",
+  ${t}.received_time AS "receivedTime", ${t}.company_id AS "companyId", ${t}.inquirer_name AS "inquirerName",
+  ${t}.target_system AS "targetSystem", ${t}.category, ${t}.title, ${t}.body, ${t}.priority, ${t}.status,
+  ${t}.staff_member_id AS "staffMemberId", ${t}.response, ${t}.cause, ${t}.resolution,
+  ${t}.completed_date::text AS "completedDate", ${t}.completed_time AS "completedTime",
+  ${t}.knowledge_note AS "knowledgeNote", ${t}.active, ${jstStampsFor(t)}`
+}
 
-const SALES_COLS = `id, member_id AS "memberId", company_id AS "companyId", title,
-  deal_type AS "dealType", staff_member_id AS "staffMemberId", phase,
-  amount::float8 AS "amount", probability, expected_close_date::text AS "expectedCloseDate",
-  customer_issue AS "customerIssue", proposal, next_action AS "nextAction",
-  next_action_date::text AS "nextActionDate", active, ${JST_STAMPS}`
+function salesColsFor(t: string): string {
+  return `${t}.id, ${t}.member_id AS "memberId", ${t}.company_id AS "companyId", ${t}.title,
+  ${t}.deal_type AS "dealType", ${t}.staff_member_id AS "staffMemberId", ${t}.phase,
+  ${t}.amount::float8 AS "amount", ${t}.probability, ${t}.expected_close_date::text AS "expectedCloseDate",
+  ${t}.customer_issue AS "customerIssue", ${t}.proposal, ${t}.next_action AS "nextAction",
+  ${t}.next_action_date::text AS "nextActionDate", ${t}.active, ${jstStampsFor(t)}`
+}
 
-const PARTNER_COLS = `id, member_id AS "memberId", partner_name AS "partnerName", theme,
-  related_company AS "relatedCompany", activity_type AS "activityType", status, summary,
-  current_state AS "currentState", next_action AS "nextAction",
-  next_action_date::text AS "nextActionDate", staff_member_id AS "staffMemberId",
-  related_meeting AS "relatedMeeting", related_sales_activity_id AS "relatedSalesActivityId",
-  memo, active, ${JST_STAMPS}`
+function partnerColsFor(t: string): string {
+  return `${t}.id, ${t}.member_id AS "memberId", ${t}.partner_name AS "partnerName", ${t}.theme,
+  ${t}.related_company AS "relatedCompany", ${t}.activity_type AS "activityType", ${t}.status, ${t}.summary,
+  ${t}.current_state AS "currentState", ${t}.next_action AS "nextAction",
+  ${t}.next_action_date::text AS "nextActionDate", ${t}.staff_member_id AS "staffMemberId",
+  ${t}.related_meeting AS "relatedMeeting", ${t}.related_sales_activity_id AS "relatedSalesActivityId",
+  ${t}.memo, ${t}.active, ${jstStampsFor(t)}`
+}
+
+// 単表取得用（FROM に同じ別名を付けて使う）
+const SUPPORT_COLS = supportColsFor('sa')
+const SALES_COLS = salesColsFor('sa')
+const PARTNER_COLS = partnerColsFor('pa')
 
 // ---------- 共通ヘルパー ----------
 
@@ -70,15 +85,17 @@ function strOrNull(v: unknown): string | null {
   return s || null
 }
 
-/** 任意の数値（null/'' = null。数値でない持込は NaN のまま渡し shared 検証で 400 にする） */
+/** 任意の数値（null/'' = null。number/string 以外（配列等）と数値でない文字列は NaN として
+ *  shared 検証で 400 にする = `Number([])` が 0 に化ける寛容さを許さない。R1 レビュー NIT-4） */
 function numOrNull(v: unknown): number | null {
   if (v === null || v === undefined || v === '') return null
+  if (typeof v !== 'number' && typeof v !== 'string') return Number.NaN
   return Number(v)
 }
 
-/** 対象 1 件の取得（不在・型は 404。取消済みも返す = 復元/編集 UI 用） */
-async function findRow<T extends pg.QueryResultRow>(pool: pg.Pool, code: ErrCode, cols: string, table: string, id: string, label: string): Promise<T> {
-  const { rows } = await pool.query<T>(`SELECT ${cols} FROM ${table} WHERE id = $1`, [id])
+/** 対象 1 件の取得（不在・型は 404。取消済みも返す = 復元/編集 UI 用）。from は cols の別名付き FROM 句 */
+async function findRow<T extends pg.QueryResultRow>(pool: pg.Pool, code: ErrCode, cols: string, from: string, id: string, label: string): Promise<T> {
+  const { rows } = await pool.query<T>(`SELECT ${cols} FROM ${from} WHERE id = $1`, [id])
   if (!rows[0]) throw err(`${code}-002`, `${label}が見つかりません`, 404)
   return rows[0]
 }
@@ -91,15 +108,16 @@ function refError(code: ErrCode, e: unknown, refsLabel: string): never {
   throw e
 }
 
-/** 取消/復元（論理削除。全員可・冪等: 条件付き UPDATE で同時実行でも監査ログは 1 回だけ） */
+/** 取消/復元（論理削除。全員可・冪等: 条件付き UPDATE で同時実行でも監査ログは 1 回だけ）。
+ * selectFrom = cols の別名付き FROM 句（例 'support_activities sa'）/ table = UPDATE 用の素のテーブル名 */
 function archiveRestoreRoutes(
-  app: Hono, pool: pg.Pool, table: string, entity: string, label: string,
+  app: Hono, pool: pg.Pool, table: string, selectFrom: string, entity: string, label: string,
   code: ErrCode, cols: string,
 ): void {
   app.post('/:id/archive', async (c) => {
     const user = c.get('user')
     const id = c.req.param('id')
-    await findRow(pool, code, cols, table, id, label)
+    await findRow(pool, code, cols, selectFrom, id, label)
     const upd = await pool.query(
       `UPDATE ${table} SET active = false, updated_at = now() WHERE id = $1 AND active = true`, [id])
     if (upd.rowCount === 0) return c.json({ data: { id, warning: 'すでに取消済みです' } })
@@ -110,7 +128,7 @@ function archiveRestoreRoutes(
   app.post('/:id/restore', async (c) => {
     const user = c.get('user')
     const id = c.req.param('id')
-    await findRow(pool, code, cols, table, id, label)
+    await findRow(pool, code, cols, selectFrom, id, label)
     const upd = await pool.query(
       `UPDATE ${table} SET active = true, updated_at = now() WHERE id = $1 AND active = false`, [id])
     if (upd.rowCount === 0) return c.json({ data: { id, warning: '取消されていません' } })
@@ -222,7 +240,7 @@ export function supportActivitiesRoutes(pool: pg.Pool): Hono {
             input.completedDate, input.completedTime, input.knowledgeNote])
       })
     await audit(pool, { actorId: user.id, action: 'create', entity: 'support_activities', entityId: id, detail: 'サポート活動を登録' })
-    const { rows } = await pool.query(`SELECT ${SUPPORT_COLS} FROM support_activities WHERE id = $1`, [id])
+    const { rows } = await pool.query(`SELECT ${SUPPORT_COLS} FROM support_activities sa WHERE id = $1`, [id])
     return c.json({ data: rows[0] }, 201)
   })
 
@@ -232,7 +250,7 @@ export function supportActivitiesRoutes(pool: pg.Pool): Hono {
     const id = c.req.param('id')
     const b = await c.req.json().catch(() => ({})) as Record<string, unknown>
     const cur = await findRow<SupportActivityInput & { companyId: string }>(
-      pool, 'AKO-SUP', SUPPORT_COLS, 'support_activities', id, 'サポート活動')
+      pool, 'AKO-SUP', SUPPORT_COLS, 'support_activities sa', id, 'サポート活動')
     // 送られたキーのみ更新（部分更新の安全側 = CLAUDE.md 部分更新原則）→ マージ後に shared 宣言順で全体検証
     const has = (k: string): boolean => Object.hasOwn(b, k)
     const touchesCompany = has('companyId') || has('newCompanyName')
@@ -272,11 +290,11 @@ export function supportActivitiesRoutes(pool: pg.Pool): Hono {
             merged.completedDate, merged.completedTime, merged.knowledgeNote])
       })
     await audit(pool, { actorId: user.id, action: 'update', entity: 'support_activities', entityId: id, detail: 'サポート活動を編集' })
-    const { rows } = await pool.query(`SELECT ${SUPPORT_COLS} FROM support_activities WHERE id = $1`, [id])
+    const { rows } = await pool.query(`SELECT ${SUPPORT_COLS} FROM support_activities sa WHERE id = $1`, [id])
     return c.json({ data: rows[0] })
   })
 
-  archiveRestoreRoutes(app, pool, 'support_activities', 'support_activities', 'サポート活動', 'AKO-SUP', SUPPORT_COLS)
+  archiveRestoreRoutes(app, pool, 'support_activities', 'support_activities sa', 'support_activities', 'サポート活動', 'AKO-SUP', SUPPORT_COLS)
   return app
 }
 
@@ -340,7 +358,7 @@ export function salesActivitiesRoutes(pool: pg.Pool): Hono {
             input.proposal, input.nextAction, input.nextActionDate])
       })
     await audit(pool, { actorId: user.id, action: 'create', entity: 'sales_activities', entityId: id, detail: '営業活動を登録' })
-    const { rows } = await pool.query(`SELECT ${SALES_COLS} FROM sales_activities WHERE id = $1`, [id])
+    const { rows } = await pool.query(`SELECT ${SALES_COLS} FROM sales_activities sa WHERE id = $1`, [id])
     return c.json({ data: rows[0] }, 201)
   })
 
@@ -348,7 +366,7 @@ export function salesActivitiesRoutes(pool: pg.Pool): Hono {
     const user = c.get('user')
     const id = c.req.param('id')
     const b = await c.req.json().catch(() => ({})) as Record<string, unknown>
-    const cur = await findRow<SalesActivityInput>(pool, 'AKO-SAL', SALES_COLS, 'sales_activities', id, '営業活動')
+    const cur = await findRow<SalesActivityInput>(pool, 'AKO-SAL', SALES_COLS, 'sales_activities sa', id, '営業活動')
     const has = (k: string): boolean => Object.hasOwn(b, k)
     const touchesCompany = has('companyId') || has('newCompanyName')
     const merged: SalesActivityInput = {
@@ -380,11 +398,11 @@ export function salesActivitiesRoutes(pool: pg.Pool): Hono {
             merged.proposal, merged.nextAction, merged.nextActionDate])
       })
     await audit(pool, { actorId: user.id, action: 'update', entity: 'sales_activities', entityId: id, detail: '営業活動を編集' })
-    const { rows } = await pool.query(`SELECT ${SALES_COLS} FROM sales_activities WHERE id = $1`, [id])
+    const { rows } = await pool.query(`SELECT ${SALES_COLS} FROM sales_activities sa WHERE id = $1`, [id])
     return c.json({ data: rows[0] })
   })
 
-  archiveRestoreRoutes(app, pool, 'sales_activities', 'sales_activities', '営業活動', 'AKO-SAL', SALES_COLS)
+  archiveRestoreRoutes(app, pool, 'sales_activities', 'sales_activities sa', 'sales_activities', '営業活動', 'AKO-SAL', SALES_COLS)
   return app
 }
 
@@ -414,7 +432,7 @@ export function partnerActivitiesRoutes(pool: pg.Pool): Hono {
 
   app.get('/', async (c) => {
     const res = await runListQuery(pool, c, {
-      table: 'partner_activities',
+      table: 'partner_activities pa',
       cols: PARTNER_COLS,
       orderBy: 'created_at DESC, id DESC',
       maxLimit: 1000,
@@ -449,7 +467,7 @@ export function partnerActivitiesRoutes(pool: pg.Pool): Hono {
       refError('AKO-PTN', e, REFS)
     }
     await audit(pool, { actorId: user.id, action: 'create', entity: 'partner_activities', entityId: id, detail: 'ビジネスパートナー活動を登録' })
-    const { rows } = await pool.query(`SELECT ${PARTNER_COLS} FROM partner_activities WHERE id = $1`, [id])
+    const { rows } = await pool.query(`SELECT ${PARTNER_COLS} FROM partner_activities pa WHERE id = $1`, [id])
     return c.json({ data: rows[0] }, 201)
   })
 
@@ -457,7 +475,7 @@ export function partnerActivitiesRoutes(pool: pg.Pool): Hono {
     const user = c.get('user')
     const id = c.req.param('id')
     const b = await c.req.json().catch(() => ({})) as Record<string, unknown>
-    const cur = await findRow<PartnerActivityInput>(pool, 'AKO-PTN', PARTNER_COLS, 'partner_activities', id, 'ビジネスパートナー活動')
+    const cur = await findRow<PartnerActivityInput>(pool, 'AKO-PTN', PARTNER_COLS, 'partner_activities pa', id, 'ビジネスパートナー活動')
     const has = (k: string): boolean => Object.hasOwn(b, k)
     const merged: PartnerActivityInput = {
       partnerName: has('partnerName') ? str(b.partnerName, NAME_CAP) : cur.partnerName,
@@ -490,35 +508,10 @@ export function partnerActivitiesRoutes(pool: pg.Pool): Hono {
       refError('AKO-PTN', e, REFS)
     }
     await audit(pool, { actorId: user.id, action: 'update', entity: 'partner_activities', entityId: id, detail: 'ビジネスパートナー活動を編集' })
-    const { rows } = await pool.query(`SELECT ${PARTNER_COLS} FROM partner_activities WHERE id = $1`, [id])
+    const { rows } = await pool.query(`SELECT ${PARTNER_COLS} FROM partner_activities pa WHERE id = $1`, [id])
     return c.json({ data: rows[0] })
   })
 
-  archiveRestoreRoutes(app, pool, 'partner_activities', 'partner_activities', 'ビジネスパートナー活動', 'AKO-PTN', PARTNER_COLS)
+  archiveRestoreRoutes(app, pool, 'partner_activities', 'partner_activities pa', 'partner_activities', 'ビジネスパートナー活動', 'AKO-PTN', PARTNER_COLS)
   return app
-}
-
-// ---------- JOIN 用の列前置（単表用 *_COLS の各列へテーブル別名を付ける） ----------
-
-/** SUPPORT_COLS を sa. 前置で組み立て直す（JOIN 時の曖昧列名を避ける） */
-function supportColsFor(t: string): string {
-  return `${t}.id, ${t}.member_id AS "memberId", ${t}.received_date::text AS "receivedDate",
-  ${t}.received_time AS "receivedTime", ${t}.company_id AS "companyId", ${t}.inquirer_name AS "inquirerName",
-  ${t}.target_system AS "targetSystem", ${t}.category, ${t}.title, ${t}.body, ${t}.priority, ${t}.status,
-  ${t}.staff_member_id AS "staffMemberId", ${t}.response, ${t}.cause, ${t}.resolution,
-  ${t}.completed_date::text AS "completedDate", ${t}.completed_time AS "completedTime",
-  ${t}.knowledge_note AS "knowledgeNote", ${t}.active,
-  to_char(${t}.created_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"') AS "createdAt",
-  to_char(${t}.updated_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"') AS "updatedAt"`
-}
-
-/** SALES_COLS を前置で組み立て直す（JOIN 時の曖昧列名を避ける） */
-function salesColsFor(t: string): string {
-  return `${t}.id, ${t}.member_id AS "memberId", ${t}.company_id AS "companyId", ${t}.title,
-  ${t}.deal_type AS "dealType", ${t}.staff_member_id AS "staffMemberId", ${t}.phase,
-  ${t}.amount::float8 AS "amount", ${t}.probability, ${t}.expected_close_date::text AS "expectedCloseDate",
-  ${t}.customer_issue AS "customerIssue", ${t}.proposal, ${t}.next_action AS "nextAction",
-  ${t}.next_action_date::text AS "nextActionDate", ${t}.active,
-  to_char(${t}.created_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"') AS "createdAt",
-  to_char(${t}.updated_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"') AS "updatedAt"`
 }

@@ -73,7 +73,7 @@ function validate(input: CustomerLogInput): { code: string; message: string } | 
   return message ? { code: 'AKO-CLG-001', message } : null
 }
 
-/** 表示順: 日付降順 → 時刻降順（未設定は後ろ）→ 作成降順 */
+/** 表示順: 日付降順 → 時刻降順（未設定は後ろ）→ 作成降順 → id 降順（API の ORDER BY と同一 = パリティ。R1 レビュー MINOR-2） */
 function byWhenDesc(a: CustomerLog, b: CustomerLog): number {
   if (a.logDate !== b.logDate) return b.logDate.localeCompare(a.logDate)
   const at = a.logTime ?? ''
@@ -83,7 +83,8 @@ function byWhenDesc(a: CustomerLog, b: CustomerLog): number {
     if (!bt) return -1
     return bt.localeCompare(at) // 時刻降順
   }
-  return (b.createdAt ?? '').localeCompare(a.createdAt ?? '')
+  if ((a.createdAt ?? '') !== (b.createdAt ?? '')) return (b.createdAt ?? '').localeCompare(a.createdAt ?? '')
+  return b.id.localeCompare(a.id)
 }
 
 export function useCustomerLogs() {
@@ -271,6 +272,8 @@ export function useCustomerLogs() {
     const target = (mockLogs.value as CustomerLog[]).find(l => l.id === id)
     if (!target) return { ok: false, error: { code: 'AKO-CLG-002', message: '顧客活動が見つかりません' } }
     if (target.memberId !== currentUser.value.id) return ownError(verb)
+    // 状態不一致（二重取消等）は no-op（API の警告 no-op と同じ冪等挙動 = updatedAt を動かさない。監査 n-1）
+    if ((target.active !== false) === active) return { ok: true, id }
     mockLogs.value = (mockLogs.value as CustomerLog[]).map(l => l.id === id ? { ...l, active, updatedAt: nowJstIso() } : l)
     commit()
     return { ok: true, id }

@@ -80,8 +80,9 @@ const lv = useListView<CustomerLog>({
     .some(v => (v ?? '').toLowerCase().includes(q)),
   filterPredicate,
 })
-// フィルタ変更で 1 ページ目へ（filterPredicate 単独はリセット対象外のため明示 watch = customers.vue と同型）
-watch([companyFilter, memberFilter], () => { lv.page.value = 1 })
+// フィルタ変更・デモユーザー切替で 1 ページ目へ（filterPredicate 単独はリセット対象外のため明示 watch =
+// customers.vue と同型。ユーザー切替は NotesPanel と同じ横展開 = R1 レビュー MINOR-3）
+watch([companyFilter, memberFilter, currentUserId], () => { lv.page.value = 1 })
 
 const archived = computed(() => cl.archivedOf(currentUserId.value))
 

@@ -140,6 +140,9 @@ export function useSalesActivities() {
     if (!all.some(r => r.id === id)) {
       return { ok: false, error: { code: 'AKO-SAL-002', message: '営業活動が見つかりません' } }
     }
+    // 状態不一致（二重取消等）は no-op（API の警告 no-op と同じ冪等挙動 = updatedAt を動かさない。監査 n-1）
+    const target = all.find(r => r.id === id)!
+    if ((target.active !== false) === active) return { ok: true, id }
     rows.value = all.map(r => r.id === id ? { ...r, active, updatedAt: nowJstIso() } : r)
     commit()
     return { ok: true, id }
