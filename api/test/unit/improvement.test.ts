@@ -20,9 +20,11 @@ import {
   improvementNoteError,
   IMPROVEMENT_STATUS_NEXT,
   matchesImprovementFilter,
+  IMPROVEMENT_REQUEST_TAG_META,
   normalizeClusterPlan,
   normalizeImprovementImages,
   normalizeImprovementLinks,
+  normalizeImprovementTags,
   requestAdoptionOf,
   requestStatusOf,
 } from '../../../shared/domain/improvement'
@@ -112,6 +114,14 @@ describe('normalizeClusterPlan', () => {
     expect(plan.appends).toHaveLength(0)
     // r1 は補完で create に回る
     expect(plan.creates.some(cr => cr.requestIds.includes('r1'))).toBe(true)
+  })
+  it('「集約の解除」の履歴（excludeItemIds）にある item への LLM append は捨て、補完で新規作成へ回す（F-42-19）', () => {
+    const open: ClusterOpenItem[] = [{ id: 'i-sales', status: 'triage', pagePaths: ['/akebono/sales'] }]
+    const excluded: ClusterRequestInput = { ...reqs[0]!, excludeItemIds: ['i-sales'] }
+    const raw = { appends: [{ itemId: 'i-sales', requestIds: ['r1'] }], creates: [] }
+    const plan = normalizeClusterPlan(raw, [excluded], open)!
+    expect(plan.appends).toHaveLength(0) // 元 item へは戻さない（detail 重複の往復防止）
+    expect(plan.creates.some(cr => cr.requestIds.includes('r1'))).toBe(true) // 取りこぼさず新規作成
   })
 })
 
@@ -305,13 +315,40 @@ describe('buildCodingPrompt（添付の加味）', () => {
   })
 })
 
+describe('要望タグ（壁打ち/お任せ = F-42-17・改修依頼 2026-08-18）', () => {
+  it('normalizeImprovementTags は allowlist（brainstorm/entrust）のみ・重複除去', () => {
+    expect(normalizeImprovementTags(['brainstorm', 'entrust'])).toEqual(['brainstorm', 'entrust'])
+    expect(normalizeImprovementTags(['entrust', 'entrust', 'bogus'])).toEqual(['entrust'])
+    expect(normalizeImprovementTags('entrust')).toEqual([])
+    expect(IMPROVEMENT_REQUEST_TAG_META.brainstorm.label).toBe('壁打ち')
+    expect(IMPROVEMENT_REQUEST_TAG_META.entrust.label).toBe('お任せ')
+  })
+  it('buildCodingPrompt は〔壁打ち〕〔お任せ〕を明記し、タグ無しは従来出力（下位互換 = 原則7）', () => {
+    const tagged = buildCodingPrompt([{
+      title: 't', summary: 's', detail: 'd', status: 'accepted', pagePaths: ['/x'],
+      requests: [{ pageLabel: 'X', pagePath: '/x', body: '直したい', tags: ['entrust'] }],
+    }])
+    expect(tagged).toContain('〔お任せ〕 直したい')
+    expect(tagged).toContain('開発側の解釈で進めてよい')
+    const plain = buildCodingPrompt([{
+      title: 't', summary: 's', detail: 'd', status: 'accepted', pagePaths: ['/x'],
+      requests: [{ pageLabel: 'X', pagePath: '/x', body: '直したい' }],
+    }])
+    expect(plain).not.toContain('〔')
+  })
+})
+
 describe('improvementRequestInputOf', () => {
   it('trim + ページ情報を保持・空本文は AKO-REQ-001・添付未指定は空配列', () => {
     expect(improvementRequestInputOf({ body: ' 直したい ', pagePath: '/x', pageLabel: 'X' }))
-      .toEqual({ body: '直したい', pagePath: '/x', pageLabel: 'X', links: [], images: [] })
+      .toEqual({ body: '直したい', pagePath: '/x', pageLabel: 'X', links: [], images: [], tags: [] })
     let code = ''
     try { improvementRequestInputOf({ body: '  ' }) } catch (e) { code = (e as { code?: string }).code ?? '' }
     expect(code).toBe('AKO-REQ-001')
+  })
+  it('タグは allowlist 正規化して保持する（未知値は落とす = エラーにしない。F-42-17）', () => {
+    expect(improvementRequestInputOf({ body: '直したい', tags: ['entrust', 'bogus'] }).tags).toEqual(['entrust'])
+    expect(improvementRequestInputOf({ body: '直したい', tags: 'entrust' }).tags).toEqual([])
   })
   it('添付リンク・画像を正規化して保持し、不正は AKO-REQ-009 / AKO-REQ-010', () => {
     const ok = improvementRequestInputOf({

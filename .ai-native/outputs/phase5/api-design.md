@@ -425,17 +425,27 @@ akebonoCards: ComputedRef<MenuCard[]>
 | AKO-REQ-012 | 要望の選別値が不正（pending/adopted/declined 以外。F-42-14・0063） | ✅ |
 | AKO-REQ-013 | 集約済み要望の選別変更（記録保護 = 409。F-42-14・0063） | ✅ |
 | AKO-REQ-014 | 生要望コメントの本文が未入力／上限超過（F-42-15・0063） | ✅ |
+| AKO-REQ-015 | 取消済み要望の本文編集（先に復元 = 409。F-42-16・0064） | ✅ |
+| AKO-REQ-016 | 一括選別の対象未選択（mock/フロント composable のみ。F-42-18・2026-08-18） | ✅ |
+| AKO-REQ-017 | 未集約の要望への集約解除（解除は不要 = 409。F-42-19・2026-08-18） | ✅ |
+| AKO-REQ-018 | 取消済み要望の集約解除（先に復元 = 409。F-42-19・2026-08-18） | ✅ |
+| AKO-REQ-019 | 取消済み要望の選別変更（先に復元 = 409。F-42-18・2026-08-18） | ✅ |
+| AKO-REQ-020 | 状態変化の競合（選別変更 = 判定と更新の間／集約解除 = 先読みとロックの間に要望の状態が変化 = 再読み込みを案内。409。F-42-18/19・2026-08-18） | ✅ |
+| AKO-REQ-021 | 決着済み（解決済み/対応しない）改修単位からの集約解除（記録保護 = 先に reopen。409。F-42-19・2026-08-18） | ✅ |
+| AKO-REQ-022 | 取消済み改修単位からの集約解除（論理削除中のトレース保護 = 先に item を復元。409。F-42-19・2026-08-18） | ✅ |
 
 **改善要望（F-42。`/v1/improvements`。投稿は認証済み全員可・管理系は `canManageImprovements` = deny-by-default + 管理者常時可）:**
 
 | メソッド・パス | 用途 | 認可 |
 |---|---|---|
-| `POST /v1/improvements/requests` | 要望の投稿（`body`／`pagePath`／`pageLabel`／**`links`〔URL 配列・最大 5 件・http(s) のみ = AKO-REQ-009〕／`images`〔`{filename,mime,dataUrl}` 配列・最大 4 件・PNG/JPEG/WebP/GIF data URI = AKO-REQ-010。0061〕**） | 認証済み全員 |
+| `POST /v1/improvements/requests` | 要望の投稿（`body`／`pagePath`／`pageLabel`／**`links`〔URL 配列・最大 5 件・http(s) のみ = AKO-REQ-009〕／`images`〔`{filename,mime,dataUrl}` 配列・最大 4 件・PNG/JPEG/WebP/GIF data URI = AKO-REQ-010。0061〕／`tags`〔任意タグ配列。`brainstorm`〔壁打ち〕/`entrust`〔お任せ〕の allowlist 正規化 = 未知値は落とす〔エラーにしない〕。0065・F-42-17〕**） | 認証済み全員 |
 | `GET /v1/improvements/requests` | 生要望の一覧（`itemId`／`unclustered`／`includeArchived`）。**添付画像の実体（data URI）は `itemId` または `unclustered=1` 指定時のみ返す**（全件一覧は `images: []` = 転送量削減。フロントはドロワー表示時に遅延ロード・0061／0063） | 管理 |
 | `POST /v1/improvements/requests/:id/archive`・`/restore` | 要望の取消／復元 | 投稿者本人 or 管理 |
 | `POST /v1/improvements/requests/:id/status` | **要望単位のステータス変更（`status` = open/resolved/dismissed。不正は AKO-REQ-011。遷移自由 = 原則9.5。プロンプト再生成に反映・0062）** | 管理 |
 | `POST /v1/improvements/requests/:id/edit` | **要望本文の編集（`body`・最大 4,000 字。空/超過は AKO-REQ-001。取消済みは AKO-REQ-015〔409〕= 先に復元。`edited_at` を記録して「編集済み」を明示 = 再編集で戻せる〔原則9.5〕。**変更前本文は監査ログへ全文記録・FOR UPDATE + 同一トランザクション = 並行編集でも直前本文を喪失しない**。集約済みも編集可 = プロンプト再生成が現行本文を読む。0064・2026-08-18）** | 投稿者本人 or 管理 |
-| `POST /v1/improvements/requests/:id/adoption` | **生要望の選別（`adoption` = pending/adopted/declined。不正は AKO-REQ-012。集約済み要望は変更不可 = AKO-REQ-013〔409〕。採用のみ AI 集約対象・0063）** | 管理 |
+| `POST /v1/improvements/requests/:id/adoption` | **生要望の選別（`adoption` = pending/adopted/declined。不正は AKO-REQ-012。集約済み要望は変更不可 = AKO-REQ-013〔409〕・取消済みも変更不可 = AKO-REQ-019〔409・先に復元。一括選別の古い選択が取消直後の行を黙って書き換えない = 2026-08-18〕。採用のみ AI 集約対象・0063）** | 管理 |
+| （一括選別はクライアント側の逐次呼び） | **受付箱の「まとめて採用/不採用」（F-42-18）は本エンドポイントを 1 件ずつ逐次呼び、再取得は最後に 1 回（`useImprovements.setRequestAdoptionBulk`。部分成功は done/failed で報告 = 原則4。専用一括 API は追加しない = 既存検証・監査の再利用〔原則3〕。逐次直列は fatal 打ち切り・キャッシュ整合を単純に保つ設計判断 = 大規模選択で遅くなったら並列プール or サーバー側バッチを検討）** | 管理 |
+| `POST /v1/improvements/requests/:id/uncluster` | **集約の解除（F-42-19・2026-08-18）。要望を改修単位から外し `adoption='adopted'` へ明示的に戻す = 再度 AI 集約の対象（集約待ち）。`excluded_item_ids`（履歴・蓄積 = クリアしない）へ元 item を追記し、**次回以降の集約でそれらの item へは再追記しない**（同じ単位への往復 + detail 重複・「対象外」メモとの矛盾防止。二重解除でも過去の単位へ戻らない）。item のステータス・本文は不変（原則2）・`source_request_ids` からは除去（原則6）。**元 item には「【集約の解除】…実装対象に含めないこと」の修正メモ（improvement_notes・kind=note）を自動で残す**（detail の旧記載による再実装を防ぐ = プロンプトの担当者メモに載る。文言 = shared `buildUnclusterNoteBody` で mock と同一）。存在しない = AKO-REQ-002〔404〕／未集約 = AKO-REQ-017〔409〕／取消済み = AKO-REQ-018〔409・先に復元〕／先読みとロックの間の状態変化 = AKO-REQ-020〔409・再読み込み〕／**決着済み（解決済み/対応しない）item の元要望 = AKO-REQ-021〔409・記録保護 = 先に reopen〕／取消済み item の元要望 = AKO-REQ-022〔409・先に item を復元〕**（共有ガード `improvementUnclusterError` = mock と同一判定）。ロック順は generate と同じ item → request（デッドロック回避）+ 同一トランザクション** | 管理 |
 | `GET /v1/improvements/request-comments` | **生要望コメントの一覧（`requestId`／`includeArchived`。古い順。0063）** | 管理 |
 | `POST /v1/improvements/requests/:id/comments` | **生要望へのコメント追加（`body`・最大 2,000 字。空/超過は AKO-REQ-014。選別のやり取りを時系列で記録・0063）** | 投稿者本人 or 管理 |
 | `POST /v1/improvements/request-comments/:id/archive`・`/restore` | **コメントの取消／復元（論理削除・原則9.5。0063）** | 記入者本人 or 管理 |
@@ -447,4 +457,4 @@ akebonoCards: ComputedRef<MenuCard[]>
 | `GET /v1/improvements/notes` | 時系列メモの一覧（`itemId`／`includeArchived`。古い順。0059） | 管理 |
 | `POST /v1/improvements/items/:id/notes` | メモ追加（`body`／`kind`〔note/reject〕。改修方針・保留/見送り理由。0059） | 管理 |
 | `POST /v1/improvements/notes/:id/archive`・`/restore` | メモの取消／復元（論理削除・原則9.5。0059） | 記入者本人 or 管理 |
-| `POST /v1/improvements/prompt` | フィルター条件に従う改修プロンプト出力（`filter`。**時系列メモも加味**・0059。**要望の添付 = 参考リンクの列挙・画像件数の言及も含む**・0061。**要望ステータスを加味 = 【対応済み】【見送り】を明記**・0062） | 管理 |
+| `POST /v1/improvements/prompt` | フィルター条件に従う改修プロンプト出力（`filter`。**時系列メモも加味**・0059。**要望の添付 = 参考リンクの列挙・画像件数の言及も含む**・0061。**要望ステータスを加味 = 【対応済み】【見送り】を明記**・0062。**タグを加味 = 〔壁打ち〕〔お任せ〕を明記**・0065） | 管理 |

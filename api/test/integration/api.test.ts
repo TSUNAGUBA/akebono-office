@@ -6952,6 +6952,104 @@ describe('改善要望（F-42）', () => {
     expect(locked.json.error?.code).toBe('AKO-REQ-013')
   })
 
+  it('要望タグ（壁打ち/お任せ）の投稿・往復・プロンプト明記 + 集約の解除（0065・F-42-17/19・2026-08-18）', async () => {
+    // タグ付きで投稿 → allowlist 正規化で往復（未知値・重複は落とす）
+    const posted = await api('POST', '/v1/improvements/requests', {
+      as: MEMBER,
+      body: { body: 'タグテスト用の要望', pagePath: '/tag-test', pageLabel: 'タグテスト', tags: ['entrust', 'bogus', 'entrust'] },
+    })
+    expect(posted.status).toBe(201)
+    const reqId = (posted.json.data as { id: string }).id
+    expect((posted.json.data as { tags: string[] }).tags).toEqual(['entrust'])
+    // タグ無しの旧形式の投稿は tags: [] で返る（下位互換 = 原則7）
+    const plain = await api('POST', '/v1/improvements/requests', { as: MEMBER, body: { body: 'タグなし', pagePath: '/tag-test-plain', pageLabel: 'タグなし' } })
+    expect((plain.json.data as { tags: string[] }).tags).toEqual([])
+
+    // 採用 → 集約 → プロンプトに〔お任せ〕と読み方の注記が明記される（F-42-17）
+    await api('POST', `/v1/improvements/requests/${reqId}/adoption`, { as: ADMIN, body: { adoption: 'adopted' } })
+    await api('POST', '/v1/improvements/generate', { as: ADMIN })
+    const prompt = (await api('POST', '/v1/improvements/prompt', { as: ADMIN, body: { filter: 'open' } })).json.data as { prompt: string }
+    expect(prompt.prompt).toContain('〔お任せ〕 タグテスト用の要望')
+    expect(prompt.prompt).toContain('開発側の解釈で進めてよい')
+
+    // 集約の解除（F-42-19）: 改修単位から外れ「採用済み（集約待ち）」へ戻る = 再度 AI 集約の対象
+    type Row = { id: string; itemId: string | null; adoption: string }
+    const before = (await api('GET', '/v1/improvements/requests', { as: ADMIN })).json.data as Row[]
+    const itemId = before.find(r => r.id === reqId)!.itemId!
+    // 一般（管理権限なし）は 403
+    expect((await api('POST', `/v1/improvements/requests/${reqId}/uncluster`, { as: MEMBER })).status).toBe(403)
+    const un = await api('POST', `/v1/improvements/requests/${reqId}/uncluster`, { as: ADMIN })
+    expect(un.status).toBe(200)
+    // excludedItemIds へ元 item を追記（解除の履歴 = 次回以降の集約でそこへは再追記しない）
+    expect(un.json.data as Record<string, unknown>).toMatchObject({ itemId: null, adoption: 'adopted', excludedItemIds: [itemId] })
+    // 未集約の要望への再解除は AKO-REQ-017（409）・存在しない要望は 404
+    const again = await api('POST', `/v1/improvements/requests/${reqId}/uncluster`, { as: ADMIN })
+    expect(again.status).toBe(409)
+    expect(again.json.error?.code).toBe('AKO-REQ-017')
+    expect((await api('POST', '/v1/improvements/requests/nope/uncluster', { as: ADMIN })).status).toBe(404)
+    // item の source_request_ids から除去される（導出トレースの整合 = 原則6。item 自体は不変 = 原則2）
+    interface TraceItem { id: string; sourceRequestIds: string[] }
+    const items = (await api('GET', '/v1/improvements/items', { as: ADMIN })).json.data as TraceItem[]
+    expect(items.find(it => it.id === itemId)!.sourceRequestIds).not.toContain(reqId)
+    // 元 item へ「対象から外れた」修正メモが自動で残り、プロンプトの担当者メモに載る
+    // （detail に残る旧記載の再実装を防ぐ = レビュー R4）
+    interface Note { itemId: string; body: string }
+    const notes = (await api('GET', `/v1/improvements/notes?itemId=${itemId}`, { as: ADMIN })).json.data as Note[]
+    expect(notes.some(n => n.body.includes('【集約の解除】') && n.body.includes('実装対象に含めないこと'))).toBe(true)
+    const promptAfter = (await api('POST', '/v1/improvements/prompt', { as: ADMIN, body: { filter: 'open' } })).json.data as { prompt: string }
+    expect(promptAfter.prompt).toContain('【集約の解除】')
+    // 解除後は再度 AI 集約の対象になるが、**解除した元 item へは戻らず新しい改修単位が作られる**
+    // （同じ単位への往復 + detail 重複の防止 = レビュー指摘 2026-08-18。解除履歴は蓄積 = 集約後もクリアしない）
+    await api('POST', '/v1/improvements/generate', { as: ADMIN })
+    const relisted = (await api('GET', '/v1/improvements/requests', { as: ADMIN })).json.data as (Row & { excludedItemIds: string[] })[]
+    const reclustered = relisted.find(r => r.id === reqId)!
+    expect(reclustered.itemId).not.toBeNull()
+    expect(reclustered.itemId).not.toBe(itemId)
+    expect(reclustered.excludedItemIds).toContain(itemId) // 解除の履歴は蓄積（クリアしない = 過去の単位へ戻らない）
+    // 取消済みは解除不可（AKO-REQ-018）・選別変更も不可（AKO-REQ-019 = 先に復元）
+    await api('POST', `/v1/improvements/requests/${reqId}/archive`, { as: MEMBER })
+    const archivedRes = await api('POST', `/v1/improvements/requests/${reqId}/uncluster`, { as: ADMIN })
+    expect(archivedRes.status).toBe(409)
+    expect(archivedRes.json.error?.code).toBe('AKO-REQ-018')
+    await api('POST', `/v1/improvements/requests/${reqId}/restore`, { as: MEMBER })
+
+    // 決着済み（resolved）の改修単位からは解除できない（AKO-REQ-021 = 記録保護・先に reopen。レビュー R18）
+    const newItemId = reclustered.itemId!
+    await api('POST', `/v1/improvements/items/${newItemId}/status`, { as: ADMIN, body: { status: 'accepted' } })
+    await api('POST', `/v1/improvements/items/${newItemId}/status`, { as: ADMIN, body: { status: 'resolved' } })
+    const decidedRes = await api('POST', `/v1/improvements/requests/${reqId}/uncluster`, { as: ADMIN })
+    expect(decidedRes.status).toBe(409)
+    expect(decidedRes.json.error?.code).toBe('AKO-REQ-021')
+    // reopen（resolved → accepted）すれば解除できる（導線は残る = 原則9.5）
+    await api('POST', `/v1/improvements/items/${newItemId}/status`, { as: ADMIN, body: { status: 'accepted' } })
+    expect((await api('POST', `/v1/improvements/requests/${reqId}/uncluster`, { as: ADMIN })).status).toBe(200)
+
+    // 取消済みの改修単位からも解除できない（AKO-REQ-022 = 先に item を復元。レビュー R24）
+    await api('POST', '/v1/improvements/generate', { as: ADMIN }) // 解除済み要望を再集約（除外により新規 item）
+    const relisted3 = (await api('GET', '/v1/improvements/requests', { as: ADMIN })).json.data as Row[]
+    const zId = relisted3.find(r => r.id === reqId)!.itemId!
+    await api('POST', `/v1/improvements/items/${zId}/archive`, { as: ADMIN })
+    const archivedItemRes = await api('POST', `/v1/improvements/requests/${reqId}/uncluster`, { as: ADMIN })
+    expect(archivedItemRes.status).toBe(409)
+    expect(archivedItemRes.json.error?.code).toBe('AKO-REQ-022')
+    await api('POST', `/v1/improvements/items/${zId}/restore`, { as: ADMIN })
+    expect((await api('POST', `/v1/improvements/requests/${reqId}/uncluster`, { as: ADMIN })).status).toBe(200)
+  })
+
+  it('取消済みの要望は選別を変更できない（AKO-REQ-019。一括選別の古い選択が取消直後の行を書き換えない = 2026-08-18）', async () => {
+    const posted = await api('POST', '/v1/improvements/requests', {
+      as: MEMBER, body: { body: '取消済み選別ガードのテスト', pagePath: '/archived-adoption-test', pageLabel: '取消選別テスト' },
+    })
+    const reqId = (posted.json.data as { id: string }).id
+    await api('POST', `/v1/improvements/requests/${reqId}/archive`, { as: MEMBER })
+    const res = await api('POST', `/v1/improvements/requests/${reqId}/adoption`, { as: ADMIN, body: { adoption: 'adopted' } })
+    expect(res.status).toBe(409)
+    expect(res.json.error?.code).toBe('AKO-REQ-019')
+    // 復元すれば選別できる（取消フロー = 原則9.5）
+    await api('POST', `/v1/improvements/requests/${reqId}/restore`, { as: MEMBER })
+    expect((await api('POST', `/v1/improvements/requests/${reqId}/adoption`, { as: ADMIN, body: { adoption: 'declined' } })).status).toBe(200)
+  })
+
   it('生要望へのコメント: 追加・一覧・権限・取消/復元（0063・2026-08-17 第 2 弾）', async () => {
     interface Comment { id: string; requestId: string; memberId: string; body: string; createdAt: string }
     const posted = await api('POST', '/v1/improvements/requests', {

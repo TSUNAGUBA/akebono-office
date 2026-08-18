@@ -127,7 +127,8 @@ export function requestStatusOf(r: { status?: ImprovementRequestStatus | null })
  * - adopted  採用（AI 集約の対象）
  * - declined 不採用（集約対象外。理由はコメントで残せる）
  * 遷移は自由（選び直しはいつでも可 = 原則9.5）。ただし集約済み（itemId あり）の要望は選別対象外
- * （既に改修単位へ取り込まれた記録 = 巻き戻さない。外すときは要望の取消 = archive を使う）。
+ * （既に改修単位へ取り込まれた記録 = 巻き戻さない。外すときは「集約の解除」（F-42-19・uncluster）
+ * または要望の取消 = archive を使う）。
  */
 export type ImprovementRequestAdoption = 'pending' | 'adopted' | 'declined'
 
@@ -163,6 +164,38 @@ export function clusterTargetRequests<T extends { itemId?: string | null; archiv
   return requests.filter(r => !r.itemId && !r.archivedAt && requestAdoptionOf(r) === 'adopted')
 }
 
+// ---------- 要望のタグ（壁打ち/お任せ。投稿時の任意の意思表示 = 改修依頼 2026-08-18） ----------
+
+/**
+ * 生要望の任意タグ（投稿時に複数付与できる意思表示）。
+ * - brainstorm 壁打ち: 起票した内容について、壁打ち（対話での要件整理）を経て案件化したい
+ * - entrust    お任せ: 受け取った内容を開発側の解釈で進めてよい
+ * 旧データは tags 未定義 = タグ無し（下位互換 = 原則7）。
+ */
+export type ImprovementRequestTag = 'brainstorm' | 'entrust'
+
+export const IMPROVEMENT_REQUEST_TAGS: ImprovementRequestTag[] = ['brainstorm', 'entrust']
+
+/** タグの表示メタ（label・トーン・意味）。ラベルの SoT はここ。tone は UI の Tone 値と対応 */
+export const IMPROVEMENT_REQUEST_TAG_META: Record<
+  ImprovementRequestTag,
+  { label: string; tone: 'neutral' | 'info' | 'ok' | 'warn'; description: string }
+> = {
+  brainstorm: { label: '壁打ち', tone: 'info', description: '壁打ち（対話での要件整理）を経て案件化したい' },
+  entrust: { label: 'お任せ', tone: 'ok', description: '受け取った内容を開発側の解釈で進めてよい' },
+}
+
+/** タグ入力の正規化（未知形の入力 → 既知タグのみ・重複除去の allowlist。不正値は落とす） */
+export function normalizeImprovementTags(raw: unknown): ImprovementRequestTag[] {
+  if (!Array.isArray(raw)) return []
+  const out: ImprovementRequestTag[] = []
+  for (const v of raw) {
+    const s = String(v ?? '') as ImprovementRequestTag
+    if (IMPROVEMENT_REQUEST_TAGS.includes(s) && !out.includes(s)) out.push(s)
+  }
+  return out
+}
+
 /** 要望への添付画像（縮小済み data URI。参照時は押下で拡大表示） */
 export interface ImprovementRequestImage {
   /** 元ファイル名（表示・alt 用） */
@@ -193,6 +226,15 @@ export interface ImprovementRequest {
   status?: ImprovementRequestStatus
   /** 選別状態（未定義 = 旧データ = requestAdoptionOf が補完。採用のみ AI 集約対象 = 原則7） */
   adoption?: ImprovementRequestAdoption
+  /** 任意タグ（壁打ち/お任せ。投稿時の意思表示 = 改修依頼 2026-08-18）。旧データは未定義 = 無し（原則7） */
+  tags?: ImprovementRequestTag[]
+  /**
+   * 「集約の解除」（F-42-19）で外した改修単位 id の履歴（蓄積・クリアしない）。次回以降の AI 集約で
+   * **これらの item へは再追記しない**（解除した要望が同じ単位へ戻り detail が重複する +
+   * 元 item に残した「対象外」メモと矛盾する再流入を防ぐ = レビュー R6。二重解除でも履歴が効く）。
+   * 未定義/空 = 制約なし（旧データ互換 = 原則7）。
+   */
+  excludedItemIds?: string[]
   /** 添付の URL リンク（複数可。参照時は別タブで開く）。旧データは未定義 = 無し（原則7） */
   links?: string[]
   /** 添付画像（複数可。参照時は押下で拡大）。旧データは未定義 = 無し（原則7） */
@@ -327,6 +369,93 @@ export function improvementEditError(
   return null
 }
 
+/**
+ * 選別変更の可否ガード（1 件。F-42-14/18/19）。判定順 = 存在（404）→ **取消済み（409）→ 集約済み（409）**。
+ * 取消済みを先に判定する: 取消済み + 集約済みの行で「集約の解除」を案内すると、解除も取消済みで
+ * AKO-REQ-018 になり案内が行き止まりになる（正しい最初の一手 = 復元 を先に伝える = レビュー R10）。
+ * mock の setRequestAdoption・planAdoptionBulk（一括仕分け）・API ルートの 3 か所で共有し、
+ * ガード条件とメッセージの分散コピーを作らない（原則3/6。レビュー R2）。
+ */
+export function improvementAdoptionError(
+  target: { itemId?: string | null; archivedAt?: string | null } | undefined,
+): { code: string; message: string } | null {
+  if (!target) return { code: 'AKO-REQ-002', message: '対象の要望が見つかりません' }
+  if (target.archivedAt) return { code: 'AKO-REQ-019', message: '取消済みの要望は選別を変更できません（先に復元してください）' }
+  if (target.itemId) return { code: 'AKO-REQ-013', message: '集約済みの要望は選別を変更できません（対象から外す場合は「集約の解除」または要望の取消を使ってください）' }
+  return null
+}
+
+/**
+ * 一括選別（F-42-18・改修依頼 2026-08-18）の対象仕分け（純関数）。ids を重複除去し、
+ * 「適用できる id」と「適用できない件数の最後の理由」へ仕分ける。判定は improvementAdoptionError
+ * （存在 AKO-REQ-002・取消済み AKO-REQ-019・集約済み AKO-REQ-013）を 1 件ずつ適用。
+ * mock の一括更新と単体テストで共有する（API モードは既存 1 件エンドポイントの逐次呼びで
+ * サーバー側が同じ判定を行う = 原則6）。done/failed の算定は
+ * done = applicable.length / failed = targets.length - done。
+ */
+export function planAdoptionBulk(
+  ids: string[],
+  requests: { id: string; itemId?: string | null; archivedAt?: string | null }[],
+): { targets: string[]; applicable: string[]; lastError: { code: string; message: string } | null } {
+  const targets = [...new Set(ids)]
+  const byId = new Map(requests.map(r => [r.id, r]))
+  const applicable: string[] = []
+  let lastError: { code: string; message: string } | null = null
+  for (const id of targets) {
+    const guard = improvementAdoptionError(byId.get(id))
+    if (guard) {
+      lastError = guard
+      continue
+    }
+    applicable.push(id)
+  }
+  return { targets, applicable, lastError }
+}
+
+/**
+ * 集約解除の可否ガード（F-42-19・改修依頼 2026-08-18）。集約済みの要望を改修単位から外し、
+ * 「採用済み（集約待ち）」へ戻す = 再度 AI 集約の対象にする操作の共通判定。
+ * 判定順 = 存在（404）→ 未集約（409）→ 取消済み（409）→ **取消済み item（409）→ 決着済み item（409）**。
+ * item（任意）を渡すと、集約先が取消済み（AKO-REQ-022 = 先に復元）または決着済み
+ * （解決済み/対応しない）の場合に AKO-REQ-021 を返す:
+ * 判定済み item の元要望トレースを黙って書き換えず、実装済み内容を再集約プールへ戻さない（原則2 =
+ * レビュー R18）。解除したい場合は先に reopen（ステータスを戻す）してから解除する（導線は残る = 原則9.5）。
+ * 管理権限の確認は呼び出し側（API = requireManage）。
+ * mock（useImprovements.unclusterRequest）と API ルートで共有し、単体テストで固定する（parity = 原則6）。
+ */
+export function improvementUnclusterError(
+  target: { itemId: string | null; archivedAt: string | null } | undefined,
+  item?: { status: ImprovementStatus; archivedAt?: string | null } | null,
+): { code: string; message: string } | null {
+  if (!target) return { code: 'AKO-REQ-002', message: '対象の要望が見つかりません' }
+  if (!target.itemId) return { code: 'AKO-REQ-017', message: 'この要望は集約されていません（解除は不要です）' }
+  if (target.archivedAt) return { code: 'AKO-REQ-018', message: '取消済みの要望は集約を解除できません（先に復元してください）' }
+  // 取消済みの item からも解除しない（論理削除中の記録のトレースを黙って書き換えない = レビュー R24。先に復元）
+  if (item?.archivedAt) {
+    return { code: 'AKO-REQ-022', message: '取消済みの改修単位からは解除できません（先に改修単位を復元してください）' }
+  }
+  if (item && !isOpenStatus(item.status)) {
+    return { code: 'AKO-REQ-021', message: '決着済み（解決済み/対応しない）の改修単位からは解除できません（先に改修単位のステータスを戻してから解除してください）' }
+  }
+  return null
+}
+
+/**
+ * 集約解除（F-42-19）時に**元の改修単位へ残す修正メモの本文**（mock/API 共有 = 同一文言・原則6）。
+ * item の detail（人手編集されうるテキスト = 原則2で書き換えない）には解除した要望の記載が残るため、
+ * 時系列メモとして「対象から外れた」ことを記録する。メモは buildCodingPrompt の担当者メモに載り、
+ * 旧記載の要望をコーディング AI が実装対象に含めないよう伝える。
+ */
+export function buildUnclusterNoteBody(requestBody: string): string {
+  const flat = requestBody.trim().replace(/\s*\n\s*/g, ' ')
+  const head = capCodePoints(flat, 60)
+  const ellipsis = [...flat].length > 60 ? '…' : ''
+  return capCodePoints(
+    `【集約の解除】元要望「${head}${ellipsis}」はこの改修単位の対象から外れました（改修内容の記載に残っていても実装対象に含めないこと）`,
+    IMPROVEMENT_NOTE_CAP,
+  )
+}
+
 // ---------- 添付（URL リンク・画像。api = AKO-REQ-009/010（400）/ mock = Result エラー） ----------
 
 export const IMPROVEMENT_LINKS_MAX = 5
@@ -436,6 +565,8 @@ export interface ClusterRequestInput {
   pagePath: string
   pageLabel: string
   body: string
+  /** 「集約の解除」で外した item の履歴（そこへは再追記しない = F-42-19）。省略/空 = 制約なし */
+  excludeItemIds?: string[] | null
 }
 
 /** 集約先候補の既存改修単位（未集約要望の追記先判定に使う） */
@@ -505,19 +636,36 @@ export function heuristicClusterRequests(
   }
 
   for (const [key, reqs] of groups) {
-    const existing = triageItems.find(it => it.pagePaths.includes(key))
-    if (existing) {
-      plan.appends.push({ itemId: existing.id, requestIds: reqs.map(r => r.id) })
-      continue
+    // 追記先は**要望ごと**に解決する。「集約の解除」で外された要望（excludeItemIds = 解除履歴）は
+    // その item 群を避け（F-42-19 = 解除 → 再集約が同じ単位への往復 + detail 重複にならない。
+    // 履歴は蓄積のため二重解除でも過去の item へ戻らない = レビュー R6）、
+    // 除外の無い要望は従来どおり最初に合致した triage item へ追記する（除外者と同じグループでも
+    // 巻き添えで新規作成へ流さない = normalizeClusterPlan の要望単位の除外と同じ規則。レビュー R2）。
+    // 追記先が見つからない要望だけをまとめて新規作成する
+    const appendsForItem = new Map<string, ClusterRequestInput[]>()
+    const rest: ClusterRequestInput[] = []
+    for (const r of reqs) {
+      const target = triageItems.find(it => it.pagePaths.includes(key) && !(r.excludeItemIds ?? []).includes(it.id))
+      if (target) {
+        const arr = appendsForItem.get(target.id)
+        if (arr) arr.push(r)
+        else appendsForItem.set(target.id, [r])
+      } else {
+        rest.push(r)
+      }
     }
-    const label = labelOf(reqs)
-    const paths = [...new Set(reqs.map(r => r.pagePath.trim()).filter(Boolean))]
+    for (const [itemId, rs] of appendsForItem) {
+      plan.appends.push({ itemId, requestIds: rs.map(r => r.id) })
+    }
+    if (rest.length === 0) continue
+    const label = labelOf(rest)
+    const paths = [...new Set(rest.map(r => r.pagePath.trim()).filter(Boolean))]
     plan.creates.push({
-      title: capCodePoints(`「${label}」の改善要望（${reqs.length} 件）`, IMPROVEMENT_TITLE_CAP),
-      summary: capCodePoints(reqs[0]!.body.trim().replace(/\s*\n\s*/g, ' '), IMPROVEMENT_SUMMARY_CAP),
-      detail: buildItemDetail(reqs),
+      title: capCodePoints(`「${label}」の改善要望（${rest.length} 件）`, IMPROVEMENT_TITLE_CAP),
+      summary: capCodePoints(rest[0]!.body.trim().replace(/\s*\n\s*/g, ' '), IMPROVEMENT_SUMMARY_CAP),
+      detail: buildItemDetail(rest),
       pagePaths: paths.length ? paths : [key],
-      requestIds: reqs.map(r => r.id),
+      requestIds: rest.map(r => r.id),
     })
   }
   return plan
@@ -596,7 +744,13 @@ export function normalizeClusterPlan(
     const itemId = String((a as { itemId?: unknown }).itemId ?? '')
     if (!triageIds.has(itemId)) continue // 追記先は未判定 item のみ（判定済みは保護）
     const reqs = takeReqs((a as { requestIds?: unknown }).requestIds)
-    if (reqs.length) plan.appends.push({ itemId, requestIds: reqs.map(r => r.id) })
+    // 「集約の解除」で外した item（履歴）への再追記は LLM 出力でも禁止（F-42-19）。
+    // 除外に当たった要望は未割当へ戻し、末尾のヒューリスティック補完（除外対応済み）で拾う
+    const allowed = reqs.filter(r => !(r.excludeItemIds ?? []).includes(itemId))
+    for (const r of reqs) {
+      if ((r.excludeItemIds ?? []).includes(itemId)) used.delete(r.id)
+    }
+    if (allowed.length) plan.appends.push({ itemId, requestIds: allowed.map(r => r.id) })
   }
   for (const c of Array.isArray(rawObj.creates) ? rawObj.creates : []) {
     if (!c || typeof c !== 'object') continue
@@ -638,10 +792,12 @@ export interface PromptItemInput {
   status: ImprovementStatus
   pagePaths: string[]
   /** links / imageCount は要望の添付（省略可 = 旧呼び出しの下位互換。リンクはプロンプトに列挙・画像は件数のみ言及）。
-   *  status は要望単位のステータス（省略/open 以外は【対応済み】【見送り】として明記 = プロンプト再生成に反映） */
+   *  status は要望単位のステータス（省略/open 以外は【対応済み】【見送り】として明記 = プロンプト再生成に反映）。
+   *  tags は投稿時の任意タグ（省略可。〔壁打ち〕〔お任せ〕として明記 = 開発側の進め方の意思表示） */
   requests: {
     pageLabel: string; pagePath: string; body: string
     status?: ImprovementRequestStatus; links?: string[]; imageCount?: number
+    tags?: ImprovementRequestTag[]
   }[]
   /** 担当者の時系列メモ（改修方針の検討過程・保留/見送り理由。プロンプトに加味する）。時系列（古い順）。省略/空可 */
   notes?: { body: string; kind: ImprovementNoteKind }[]
@@ -666,6 +822,16 @@ export function buildCodingPrompt(items: PromptItemInput[], opts?: { intro?: str
   out.push('')
   out.push(`対象の改修単位: ${items.length} 件`)
   out.push('')
+  // タグ（F-42-17）の normalize は全体で 1 回だけ行い、読み方の注記も**プロンプト全体で 1 回**出す
+  // （item ごとに同じ凡例を繰り返さない = レビュー R25。無タグは従来出力 = 下位互換）
+  const normalizedTagsByItem = items.map(it => it.requests.map(r => normalizeImprovementTags(r.tags)))
+  if (normalizedTagsByItem.some(arr => arr.some(tags => tags.length > 0))) {
+    const guide = IMPROVEMENT_REQUEST_TAGS
+      .map(t => `〔${IMPROVEMENT_REQUEST_TAG_META[t].label}〕= ${IMPROVEMENT_REQUEST_TAG_META[t].description}`)
+      .join(' ／ ')
+    out.push(`（タグの読み方: ${guide}）`)
+    out.push('')
+  }
   items.forEach((it, idx) => {
     const label = it.requests.find(r => r.pageLabel.trim())?.pageLabel.trim()
       || it.pagePaths[0]
@@ -691,12 +857,16 @@ export function buildCodingPrompt(items: PromptItemInput[], opts?: { intro?: str
       if (it.requests.some(r => requestStatusOf(r) !== 'open')) {
         out.push('（【対応済み】の要望は反映済みのため再改修しないこと・【見送り】の要望は実装しないこと）')
       }
-      it.requests.forEach((r) => {
+      // タグの行頭マークは冒頭で normalize 済みの値を使う（読み方の凡例はプロンプト冒頭に 1 回 = レビュー R18/R25）
+      const normalizedTags = normalizedTagsByItem[idx] ?? []
+      it.requests.forEach((r, ri) => {
         const where = r.pageLabel.trim() || r.pagePath.trim()
         // 要望単位のステータス（open 以外は明記 = 対応済み分の再改修・見送り分の実装を防ぐ）
         const status = requestStatusOf(r)
         const statusTag = status === 'open' ? '' : `【${IMPROVEMENT_REQUEST_STATUS_META[status].label}】 `
-        out.push(`- ${where ? `［${where}］ ` : ''}${statusTag}${r.body.trim().replace(/\s*\n\s*/g, ' ')}`)
+        // 投稿時の任意タグ（壁打ち/お任せ）を明記（未知値は normalize で落とす）
+        const tagMark = (normalizedTags[ri] ?? []).map(t => `〔${IMPROVEMENT_REQUEST_TAG_META[t].label}〕`).join('')
+        out.push(`- ${where ? `［${where}］ ` : ''}${statusTag}${tagMark ? `${tagMark} ` : ''}${r.body.trim().replace(/\s*\n\s*/g, ' ')}`)
         // 添付（リンクは参照先として列挙・画像はアプリ内参照のため件数のみ言及）
         const links = (r.links ?? []).map(l => l.trim()).filter(Boolean)
         for (const link of links) out.push(`  - 参考リンク: ${link}`)

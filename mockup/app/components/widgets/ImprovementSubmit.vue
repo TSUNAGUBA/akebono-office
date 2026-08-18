@@ -12,7 +12,8 @@
 import { ImagePlus, Link2, MessageSquarePlus, Pencil, X } from 'lucide-vue-next'
 import {
   IMPROVEMENT_BODY_CAP, IMPROVEMENT_IMAGE_MAX_CHARS, IMPROVEMENT_IMAGES_MAX, IMPROVEMENT_LINKS_MAX,
-  type ImprovementRequestImage, improvementLinksError,
+  IMPROVEMENT_REQUEST_TAG_META, IMPROVEMENT_REQUEST_TAGS,
+  type ImprovementRequestImage, type ImprovementRequestTag, improvementLinksError,
 } from '~/types/improvement'
 import { listKnownPages, pageDisplay, resolvePageLabel } from '~/utils/page-label'
 import { imageToDataUri } from '~/utils/thumb'
@@ -53,6 +54,9 @@ const targetOf = computed<{ pagePath: string; pageLabel: string }>(() => {
   if (targetPage.value === TARGET_NEW) return { pagePath: '', pageLabel: '新設ページ' }
   return { pagePath: targetPage.value, pageLabel: resolvePageLabel(targetPage.value) }
 })
+/** 任意タグ（壁打ち/お任せ = F-42-17・改修依頼 2026-08-18）。選択肢・ラベルの SoT = shared の TAG_META */
+const tags = ref<string[]>([])
+const TAG_OPTIONS = IMPROVEMENT_REQUEST_TAGS.map(t => ({ value: t, label: IMPROVEMENT_REQUEST_TAG_META[t].label }))
 /** 添付リンク入力欄（複数。空欄は送信時に除外） */
 const links = ref<string[]>([])
 /** 添付画像（縮小済み data URI。プレビュー表示 + 個別削除可） */
@@ -69,6 +73,7 @@ watch(() => route.path, () => { open.value = false })
 
 function openModal(): void {
   body.value = ''
+  tags.value = []
   links.value = []
   images.value = []
   targetPage.value = route.path // 既定 = 開いているページ（選び直し可 = 改善要望 2026-08-17）
@@ -205,7 +210,7 @@ async function send(): Promise<void> {
   busy.value = true
   const res = await submit({
     body: body.value, pagePath: targetOf.value.pagePath, pageLabel: targetOf.value.pageLabel,
-    links: trimmedLinks, images: images.value,
+    links: trimmedLinks, images: images.value, tags: tags.value as ImprovementRequestTag[],
   })
   busy.value = false
   if (res.ok) {
@@ -227,6 +232,7 @@ function again(): void {
   sent.value = false
   lastId.value = ''
   body.value = ''
+  tags.value = []
   links.value = []
   images.value = []
   editingSent.value = false
@@ -295,6 +301,14 @@ async function undo(): Promise<void> {
         />
       </UiFormField>
       <p class="text-right text-[11px] text-muted num">{{ [...body].length }} / {{ IMPROVEMENT_BODY_CAP }}</p>
+
+      <!-- 任意タグ（壁打ち/お任せ = F-42-17・改修依頼 2026-08-18。進め方の意思表示） -->
+      <UiFormField
+        label="タグ（任意）"
+        hint="「壁打ち」= 壁打ち（対話での要件整理）を経て案件化したい意思表示。「お任せ」= 受け取った内容を開発側の解釈で進めてよい"
+      >
+        <UiChipSelect v-model="tags" :options="TAG_OPTIONS" aria-label="要望のタグ" />
+      </UiFormField>
 
       <!-- 添付リンク（複数。参照時は別タブで開く） -->
       <div class="grid gap-1.5">
