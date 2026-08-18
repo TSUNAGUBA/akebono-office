@@ -275,6 +275,161 @@ export function canViewAllTimecards(
   return resolve(rules, subject, 'attendance', [TIMECARD_ALL_FIELD], timecardAllDefault(subject.role))
 }
 
+// ---------- タブメニュー単位の利用可否（改修依頼 2026-08-18: メニュー＞タブメニューの階層制御） ----------
+
+/**
+ * タブ利用可否の擬似フィールド（permission_rules.field = `tab:<タブキー>`）。
+ * resource = 機能キー（ページ）・タブキーは shared/domain/permission-catalog.ts の
+ * TAB_PERMISSION_CATALOG が SoT。既定 = allow（未設定環境では従来どおり全タブ表示 = 下位互換）。
+ * 明示ルールが無いレイヤでは機能全体（field=null）のルールへフォールバックする（項目と同型）。
+ */
+export const TAB_FIELD_PREFIX = 'tab:'
+
+/**
+ * ページ内タブの利用可否（タブ表示・タブ内容ガード共通）。
+ * 制限レイヤの原則: 管理者限定タブ（稟議の全件/経路設定等）のロールガードは本判定より優先で、
+ * allow ルールを置いても非管理者へは開放されない（呼び出し側のロールガードが基底）。
+ */
+export function canUseTab(
+  rules: PermissionRule[],
+  subject: PermissionSubject,
+  resource: string,
+  tabKey: string,
+): boolean {
+  return resolve(rules, subject, resource, [`${TAB_FIELD_PREFIX}${tabKey}`, null])
+}
+
+// ---------- 項目の更新権限（改修依頼 2026-08-18: 項目＞参照/更新の階層制御） ----------
+
+/**
+ * 項目の更新可否の擬似フィールド（permission_rules.field = `<項目キー>:write`）。
+ * 参照（canViewField）＞更新の階層: 参照 deny の項目は更新も不可（:write allow でも開かない）。
+ * 既定 = allow（未設定環境では従来どおり参照可能な項目は更新も可能 = 下位互換）。
+ * ':write' はカタログの物理キー（camelCase）と衝突しない予約サフィックス
+ */
+export const WRITE_FIELD_SUFFIX = ':write'
+
+/**
+ * 項目を更新できるか。参照不可なら常に更新不可（参照＞更新の階層）。
+ * 参照可の場合のみ `<項目キー>:write` のルールをレイヤ解決する（明示 deny のみ更新を閉じる）
+ */
+export function canEditField(
+  rules: PermissionRule[],
+  subject: PermissionSubject,
+  resource: string,
+  field: string,
+): boolean {
+  if (!canViewField(rules, subject, resource, field)) return false
+  return resolve(rules, subject, resource, [`${field}${WRITE_FIELD_SUFFIX}`])
+}
+
+/**
+ * 更新 body から更新不可の項目キーを取り除く（API の PATCH・モックの更新処理共通）。
+ * 対象 = ルールに現れた項目 ∪ カタログの全項目（stripDeniedFields と同じ考え方。
+ * id・active 等のカタログ外キーは制御対象外）。全キーが剥がされて空になったかは呼び出し側で判定する
+ */
+export function stripDeniedWriteKeys<T extends Record<string, unknown>>(
+  rules: PermissionRule[],
+  subject: PermissionSubject,
+  resource: string,
+  body: T,
+): T {
+  const controlled = new Set<string>([
+    ...rules.filter(r => r.active && r.resource === resource && r.field)
+      .map(r => r.field as string)
+      .map(f => (f.endsWith(WRITE_FIELD_SUFFIX) ? f.slice(0, -WRITE_FIELD_SUFFIX.length) : f)),
+    ...(FIELD_CATALOG[resource] ?? []).map(f => f.value),
+  ])
+  const denied = Object.keys(body).filter(k => controlled.has(k) && !canEditField(rules, subject, resource, k))
+  if (denied.length === 0) return body
+  const copy = { ...body }
+  for (const k of denied) delete (copy as Record<string, unknown>)[k]
+  return copy
+}
+
+// ---------- AI の参照対象（改修依頼 2026-08-18: 「AIの参照範囲」タブ = 登録者単位の参照制御） ----------
+
+/**
+ * AI 参照対象の擬似フィールド（permission_rules.field = `ai-scope:<対象種別>:<値>`）。
+ * resource = データ種類（機能キー）・対象 = `member:<id>` / `title:<役職名>` / `role:<ロール>`・
+ * `ai-scope:*` = 全メンバー一括。effect: allow = その登録者のデータを AI が参照可 / deny = 不可。
+ * 明示キー → 一括キー → レガシー二値（'ai-scope' = バッチ7g）の順で参照し、どのレイヤにも
+ * ルールが無ければ**権限表の参照権限に基づく既定**（aiReferenceOwnerDefault）へフォールバックする
+ * （改修依頼: 既定値は権限表の参照権限。AI参照範囲の設定を優先）
+ */
+export const AI_SCOPE_TARGET_PREFIX = 'ai-scope:'
+
+/** AI 参照対象の全メンバー一括キー（権限表の member:* と同じ「一括 → 個別優先」の考え方） */
+export const AI_SCOPE_TARGET_ALL_FIELD = 'ai-scope:*'
+
+/**
+ * 「AIの参照範囲」タブで設定できるデータ種類（メニュー単位）。
+ * 本人スコープ（登録者）を持ち AI の文脈供給に使われるドメインのみ。
+ * AI_SCOPE_FEATURES（レガシー二値）に日報・週報を加えた集合で、既定値は
+ * aiReferenceOwnerDefault が権限表の参照権限から導出する
+ */
+export const AI_REFERENCE_DATATYPES: { key: string; label: string }[] = [
+  { key: 'poipoi', label: '改善のタネ' },
+  { key: 'attendance', label: '勤怠（労働時間・有給）' },
+  { key: 'ai-assistant', label: 'タスク計画' },
+  { key: 'reports', label: '日報・週報' },
+]
+
+/**
+ * AI 参照対象の既定値（ai-scope 系ルールがどのレイヤにも無い場合）= 権限表の参照権限に揃える。
+ * - reports: 日報・週報の参照対象（canViewMemberReports = 既定 参照可・deny で絞る）
+ * - ai-assistant: タスク計画の参照対象（canViewMemberTaskPlans = 既定 参照不可・allow 許可制）
+ * - poipoi/attendance: レガシー既定（AI_SCOPE_FEATURES.defaultScope。all = 参照可 / own = 不可）
+ */
+function aiReferenceOwnerDefault(
+  rules: PermissionRule[],
+  subject: PermissionSubject,
+  resource: string,
+  ownerMemberId: string,
+): boolean {
+  if (resource === 'reports') return canViewMemberReports(rules, subject, ownerMemberId)
+  if (resource === 'ai-assistant') return canViewMemberTaskPlans(rules, subject, ownerMemberId)
+  return (AI_SCOPE_FEATURES.find(f => f.key === resource)?.defaultScope ?? 'own') === 'all'
+}
+
+/**
+ * AI（チャットボット・業務アシスタント）が対象登録者のデータを文脈に含めてよいか。
+ * 自分の登録データは常に参照可（設定ミスで本人のデータが AI から見えなくなる事故を防ぐ）。
+ * 機能自体の deny（canUseFeature）が最優先である点は従来どおり（呼び出し側でガード済み）。
+ * owner は登録者の属性（memberId・title・role）。解決順序:
+ * 個人指定 → 役職指定 → ロール指定 → 全メンバー一括 → レガシー二値 → 権限表既定
+ */
+export function canAiReferenceOwner(
+  rules: PermissionRule[],
+  subject: PermissionSubject,
+  resource: string,
+  owner: PermissionSubject,
+): boolean {
+  if (owner.memberId === subject.memberId) return true
+  const keys: (string | null)[] = [`${AI_SCOPE_TARGET_PREFIX}member:${owner.memberId}`]
+  if (owner.title) keys.push(`${AI_SCOPE_TARGET_PREFIX}title:${owner.title}`)
+  keys.push(`${AI_SCOPE_TARGET_PREFIX}role:${owner.role}`)
+  keys.push(AI_SCOPE_TARGET_ALL_FIELD)
+  keys.push(AI_SCOPE_FIELD)
+  return resolve(rules, subject, resource, keys,
+    aiReferenceOwnerDefault(rules, subject, resource, owner.memberId))
+}
+
+/**
+ * 参照可能な登録者の memberId 一覧（SQL の `= ANY($ids)` やモックの filter 用ヘルパー）。
+ * owners = 全登録者候補（通常は在籍メンバー全員）。自分は常に含まれる
+ */
+export function aiAllowedOwnerIds(
+  rules: PermissionRule[],
+  subject: PermissionSubject,
+  resource: string,
+  owners: PermissionSubject[],
+): string[] {
+  const ids = owners.filter(o => canAiReferenceOwner(rules, subject, resource, o)).map(o => o.memberId)
+  if (!ids.includes(subject.memberId)) ids.push(subject.memberId)
+  return ids
+}
+
 // ---------- 改善要望管理（F-42・オペレーター指示 2026-08-11 = 権限を持つ人のみ閲覧） ----------
 
 /**

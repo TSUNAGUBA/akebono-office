@@ -30,7 +30,7 @@ import {
 import { fmtDate, fmtDateTime, fmtDateTimeSec } from '~/utils/format'
 import { pageDisplay } from '~/utils/page-label'
 
-const { canManageImprovements } = usePermissions()
+const { canManageImprovements, canTab } = usePermissions()
 const imp = useImprovements()
 const toast = useToast()
 const confirm = useConfirm()
@@ -555,13 +555,18 @@ function reqCount(itemId: string): number {
 // カンバン・ガントチャート = 既存ビュー を切り替える。?tab= のディープリンクは useRouteTabSync で取り込む
 const TAB_KEYS = ['inbox', 'items', 'kanban', 'gantt'] as const
 const tab = ref<string>('inbox')
-const tabs = computed<TabItem[]>(() => [
+// タブ利用可否（権限表の `tab:<key>` 擬似フィールド = 改修依頼 2026-08-18。既定 = 全タブ利用可）
+const tabs = computed<TabItem[]>(() => ([
   { key: 'inbox', label: '受付箱', badge: imp.pendingRequests.value.length },
   { key: 'items', label: '改修案件' },
   { key: 'kanban', label: 'カンバン' },
   { key: 'gantt', label: 'ガントチャート' },
-])
+] as TabItem[]).filter(t => canTab('improvements', t.key)))
 useRouteTabSync(tab, { valid: TAB_KEYS })
+watchEffect(() => {
+  // 権限で消えたタブは先頭の利用可能タブへ退避（deny で ?tab= 直打ちしても内容を出さない）
+  if (tabs.value.length > 0 && !tabs.value.some(t => t.key === tab.value)) tab.value = tabs.value[0]!.key
+})
 
 // ページングの 1 ページ目リセット（tab がここで定義されるため watch もここに置く。
 // タブ切替・絞り込み・検索の変更で対象一覧を先頭ページから表示する = 改修依頼 2026-08-18）

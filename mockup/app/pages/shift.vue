@@ -35,6 +35,9 @@ const isStaff = computed(() => currentUser.value.employmentType === 'parttime')
 const myShifts = computed(() => shifts.myAssignments(currentUser.value.id))
 const consentPendingCount = computed(() => myShifts.value.filter(a => a.status === 'change_requested').length)
 
+// タブ利用可否（権限表の `tab:<key>` 擬似フィールド = 改修依頼 2026-08-18。既定 = 全タブ利用可。
+// 管理者限定タブ（調整・募集期間）のロールガードが基底で、権限ルールは deny 方向にのみ働く）
+const { canTab } = usePermissions()
 const tabs = computed<TabItem[]>(() => {
   const base: TabItem[] = [
     { key: 'confirmed', label: '確定シフト', badge: consentPendingCount.value },
@@ -43,7 +46,7 @@ const tabs = computed<TabItem[]>(() => {
   if (isAdmin.value) {
     base.push({ key: 'adjust', label: '調整' }, { key: 'periods', label: '募集期間' })
   }
-  return base
+  return base.filter(t => canTab('shift', t.key))
 })
 // 通知ディープリンク: ?tab=confirmed / adjust 等で対象タブを直接開く（シフト通知から対象の行が
 // 見える一覧へ即到達 = 改修依頼 2026-08-18。取り込みは共通の useRouteTabSync = 原則3）。
@@ -51,7 +54,8 @@ const tabs = computed<TabItem[]>(() => {
 const tab = ref('confirmed')
 useRouteTabSync(tab)
 watchEffect(() => {
-  if (!tabs.value.some(t => t.key === tab.value)) tab.value = 'confirmed'
+  // 権限・ロールで消えたタブは先頭の利用可能タブへ退避（deny で ?tab= 直打ちしても内容を出さない）
+  if (tabs.value.length > 0 && !tabs.value.some(t => t.key === tab.value)) tab.value = tabs.value[0]!.key
 })
 
 function dayTextClass(date: string): string {

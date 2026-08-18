@@ -40,6 +40,9 @@ const routesCrud = useMasterCrudAsync('workflowRoutes', 'wr')
 
 const pendingRows = computed(() => wf.pendingFor(currentUserId.value))
 
+// タブ利用可否（権限表の `tab:<key>` 擬似フィールド = 改修依頼 2026-08-18。既定 = 全タブ利用可。
+// 管理者限定タブ（全件・経路設定）のロールガードが基底で、権限ルールは deny 方向にのみ働く）
+const { canTab } = usePermissions()
 const tabs = computed<TabItem[]>(() => {
   const t: TabItem[] = [
     { key: 'mine', label: '自分の申請' },
@@ -49,12 +52,13 @@ const tabs = computed<TabItem[]>(() => {
     t.push({ key: 'all', label: '全件' })
     t.push({ key: 'routes', label: '経路設定' })
   }
-  return t
+  return t.filter(x => canTab('workflow', x.key))
 })
 const queryTab = typeof route.query.tab === 'string' ? route.query.tab : ''
 const tab = ref<string>(['mine', 'pending', 'all', 'routes'].includes(queryTab) ? queryTab : 'mine')
 watchEffect(() => {
-  if (!tabs.value.some(t => t.key === tab.value)) tab.value = 'mine'
+  // 権限・ロールで消えたタブは先頭の利用可能タブへ退避（deny で URL 直打ちしても内容を出さない）
+  if (tabs.value.length > 0 && !tabs.value.some(t => t.key === tab.value)) tab.value = tabs.value[0]!.key
 })
 
 // 通知ディープリンク: ?open=<申請id> で詳細ドロワーを直接開く（通知の対象へ即到達 = 改善要望 2026-08-17。

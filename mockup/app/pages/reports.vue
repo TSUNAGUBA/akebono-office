@@ -53,19 +53,22 @@ function daysOfMonth(ym: string): string[] {
 // ---------- タブ ----------
 
 const TAB_KEYS = ['mine', 'weekly-mine', 'all', 'weekly-all', 'team'] as const
-const tabs = computed<TabItem[]>(() => [
+// タブ利用可否（権限表の `tab:<key>` 擬似フィールド = 改修依頼 2026-08-18。既定 = 全タブ利用可）
+const { canTab } = usePermissions()
+const tabs = computed<TabItem[]>(() => ([
   { key: 'mine', label: '自分の日報' },
   { key: 'weekly-mine', label: '自分の週報' },
   { key: 'all', label: '全員の日報' },
   { key: 'weekly-all', label: '全員の週報' },
   { key: 'team', label: 'チーム' },
-])
+] as TabItem[]).filter(t => canTab('reports', t.key)))
 // 旧タブキーのリンク互換（?tab=weekly = 旧・週報タブ → 自分の週報）
 const queryTabRaw = typeof route.query.tab === 'string' ? route.query.tab : ''
 const queryTab = queryTabRaw === 'weekly' ? 'weekly-mine' : queryTabRaw
 const tab = ref<string>((TAB_KEYS as readonly string[]).includes(queryTab) ? queryTab : 'mine')
 watchEffect(() => {
-  if (!tabs.value.some(t => t.key === tab.value)) tab.value = 'mine'
+  // 権限で消えたタブ・無効キーは先頭の利用可能タブへ退避（deny で URL 直打ちしても内容を出さない）
+  if (tabs.value.length > 0 && !tabs.value.some(t => t.key === tab.value)) tab.value = tabs.value[0]!.key
 })
 
 // ---------- 共通ヘルパー ----------

@@ -1,7 +1,9 @@
 <script setup lang="ts">
 /**
- * 権限表モード（F-16-1・オペレーター指示 2026-07-19 #2 / 2026-07-21 バッチ7m で階層化）。
- * 行 = ページ > 機能 > 項目 の 3 階層ツリー（下位層は開閉可能）、列 = レイヤ内の対象（ロール / 役職 / 個人）。
+ * 権限表モード（F-16-1・オペレーター指示 2026-07-19 #2 / 2026-07-21 バッチ7m で階層化 /
+ * 改修依頼 2026-08-18 でタブ行・項目の更新行を追加）。
+ * 行 = ページ > タブ・機能 > 項目 > 項目の更新 の階層ツリー（下位層は開閉可能）、
+ * 列 = レイヤ内の対象（ロール / 役職 / 個人）。
  * - セルは常に 可否 のいずれかを表示する（未設定表示は廃止）。明示ルールが無いセルは
  *   上位階層の設定（マスタ全体 = field null・全メンバー = member:*）→ アプリ既定値 の順で
  *   引き継いだ値を薄色（破線）で表示する = shared/domain/permissions.ts のレイヤ内フォールバックと同一
@@ -16,9 +18,12 @@ import type { CodeMasterItem, Member, PermissionRule } from '~/types/domain'
 import {
   AI_SCOPE_FEATURES, AI_SCOPE_FIELD, ASSIST_MEMBER_FIELD_PREFIX,
   FEATURE_PERMISSION_KEYS,
-  MEMBER_VIEW_ALL_FIELD, REPORT_MEMBER_FIELD_PREFIX, TIMECARD_ALL_FIELD, timecardAllDefault,
+  MEMBER_VIEW_ALL_FIELD, REPORT_MEMBER_FIELD_PREFIX, TAB_FIELD_PREFIX,
+  TIMECARD_ALL_FIELD, timecardAllDefault, WRITE_FIELD_SUFFIX,
 } from '../../../../shared/domain/permissions'
-import { FIELD_CATALOG, FIELD_RESOURCES } from '../../../../shared/domain/permission-catalog'
+import {
+  FIELD_CATALOG, FIELD_RESOURCES, TAB_PERMISSION_CATALOG,
+} from '../../../../shared/domain/permission-catalog'
 
 const ruleCrud = useMasterCrudAsync('permissionRules', 'pm')
 const memberCrud = useMasterCrudAsync('members', 'm')
@@ -58,14 +63,14 @@ const columns = computed<{ id: string; label: string }[]>(() => {
 // ---------- 行ツリー（ページ > 機能 > 項目） ----------
 
 /** セルの値語彙（allow/deny の表示ラベル切替） */
-type CellVocab = 'feature' | 'ai-scope' | 'view'
+type CellVocab = 'feature' | 'ai-scope' | 'view' | 'tab' | 'edit'
 
 interface MatrixNode {
   resource: string
   field: string | null
   label: string
-  /** 0 = ページ / 1 = 機能 / 2 = 項目 */
-  depth: 0 | 1 | 2
+  /** 0 = ページ / 1 = タブ・機能 / 2 = 項目 / 3 = 項目の更新 */
+  depth: 0 | 1 | 2 | 3
   vocab: CellVocab
   /** どのレイヤにもルールが無い場合のアプリ既定値（true = 許可/すべて/参照可） */
   defaultAllow: boolean
@@ -106,12 +111,26 @@ function viewTargetNodes(resource: string, label: string, prefix: string, defaul
 
 /**
  * ルール一覧モードで設定できる全リソースを網羅する（差分ゼロ = オペレーター指示 2026-07-21）:
- * 機能 18 + AI 参照範囲 3 + 日報/AIアシスタントの参照対象（全メンバー一括 + メンバー個別）+ マスタ項目 6 資源。
+ * 機能 + タブ利用可否（TAB_PERMISSION_CATALOG = 改修依頼 2026-08-18）+ AI 参照範囲（一括の二値）+
+ * 日報/AIアシスタントの参照対象（全メンバー一括 + メンバー個別）+ マスタ項目 6 資源（項目ごとに更新行つき）。
  * documents はマスタ項目とページ利用可否が同一キー（resource=documents・field=null）のため、
- * ページ行がそのまま項目の一括既定を兼ねる（canViewField のフォールバック仕様と同一 = 表示が実挙動）
+ * ページ行がそのまま項目の一括既定を兼ねる（canViewField のフォールバック仕様と同一 = 表示が実挙動）。
+ * 更新行（`<項目>:write`）はマスタ項目のみ: API の enforcement（stripMasterWriteKeys）が
+ * /v1/masters の PATCH に限られるため、表もそれ以外へは出さない（表示 = 実挙動）。
+ * 登録者単位の AI 参照対象（ai-scope:*）は専用の「AIの参照範囲」タブで設定する（本表の対象外）
  */
 const tree = computed<MatrixNode[]>(() => FEATURE_PERMISSION_KEYS.map((f) => {
-  const children: MatrixNode[] = []
+  // タブ利用可否（`tab:<key>` = 改修依頼 2026-08-18: メニュー＞タブメニューの階層制御。既定 allow・
+  // ページ全体〔field=null〕の設定を引き継ぐ。管理者限定タブはロールガードが基底 = allow で開放不可）
+  const children: MatrixNode[] = (TAB_PERMISSION_CATALOG[f.key] ?? []).map(t => ({
+    resource: f.key,
+    field: `${TAB_FIELD_PREFIX}${t.key}`,
+    label: `タブ: ${t.label}`,
+    depth: 1 as const,
+    vocab: 'tab' as const,
+    defaultAllow: true,
+    parent: { resource: f.key, field: null },
+  }))
   const scope = AI_SCOPE_FEATURES.find(s => s.key === f.key)
   if (scope) {
     children.push({
@@ -175,6 +194,16 @@ const tree = computed<MatrixNode[]>(() => FEATURE_PERMISSION_KEYS.map((f) => {
         vocab: 'feature' as const,
         defaultAllow: true,
         parent: { resource: r.key, field: null },
+        // 項目の更新権限（`<項目>:write` = 改修依頼 2026-08-18: 項目＞参照/更新の階層。
+        // 参照不可の項目は更新も不可 = セルは操作不可で「更新不可」表示になる）
+        children: [{
+          resource: r.key,
+          field: `${fld.value}${WRITE_FIELD_SUFFIX}`,
+          label: `${fld.label}の更新`,
+          depth: 3 as const,
+          vocab: 'edit' as const,
+          defaultAllow: true,
+        }],
       })),
     })))
   }
@@ -195,6 +224,7 @@ const tree = computed<MatrixNode[]>(() => FEATURE_PERMISSION_KEYS.map((f) => {
         }
         return false // 役職レイヤ: 該当者のロールに依存するため保守的に「不可」で表示
       },
+      children: children.length > 0 ? children : undefined, // タブ行（受付箱/改修案件/カンバン/ガント）
     }
   }
   return {
@@ -277,9 +307,27 @@ function cellInfo(subjectId: string, node: MatrixNode): CellInfo {
   if (isLockoutProtected(subjectId, node) || isSelfView(subjectId, node)) {
     return { value: true, source: 'default' } // 判定時に deny が無視される保護セル（下記参照）は常に可
   }
+  // 更新セル（`<項目>:write`）: 参照＞更新の階層。項目の参照がこのレイヤで不可なら、
+  // 明示ルールの有無に関わらず更新も不可として表示する（canEditField と同一の優先順位）
+  if (isEditBlockedByView(subjectId, node)) return { value: false, source: 'inherited' }
   const ms = explicitRules(subjectId, node)
   if (ms.length > 0) return { value: ms.every(r => r.effect === 'allow'), source: 'explicit' } // 同一キー複数は deny 優先
   return inheritedInfo(subjectId, node)
+}
+
+/** このレイヤ・対象での項目の参照可否（明示 → マスタ全体 → 既定 allow。更新セルの表示・保護用） */
+function layerViewValue(subjectId: string, resource: string, field: string): boolean {
+  const fr = activeRules.value.filter(r => matchKey(r, subjectId, { resource, field }))
+  if (fr.length > 0) return fr.every(r => r.effect === 'allow')
+  const nr = activeRules.value.filter(r => matchKey(r, subjectId, { resource, field: null }))
+  if (nr.length > 0) return nr.every(r => r.effect === 'allow')
+  return true
+}
+
+/** 更新セルで、対応する項目の参照がこのレイヤで不可か（参照＞更新: 更新セルは操作不可・不可表示） */
+function isEditBlockedByView(subjectId: string, node: MatrixNode): boolean {
+  if (node.vocab !== 'edit' || !node.field) return false
+  return !layerViewValue(subjectId, node.resource, node.field.slice(0, -WRITE_FIELD_SUFFIX.length))
 }
 
 /**
@@ -308,12 +356,15 @@ function isSelfView(subjectId: string, node: MatrixNode): boolean {
 /** 保護セル（クリック不可）か */
 function isProtectedCell(subjectId: string, node: MatrixNode): boolean {
   return isLockoutProtected(subjectId, node) || isSelfView(subjectId, node)
+    || isEditBlockedByView(subjectId, node)
 }
 
 const VOCAB_LABELS: Record<CellVocab, { allow: string; deny: string }> = {
   'feature': { allow: '許可', deny: '拒否' },
   'ai-scope': { allow: 'すべて', deny: '自分のみ' },
   'view': { allow: '参照可', deny: '参照不可' },
+  'tab': { allow: '利用可', deny: '利用不可' },
+  'edit': { allow: '更新可', deny: '更新不可' },
 }
 const SOURCE_LABELS: Record<CellInfo['source'], string> = {
   explicit: '明示設定',
@@ -325,6 +376,7 @@ const SOURCE_LABELS: Record<CellInfo['source'], string> = {
 function stateLabel(subjectId: string, node: MatrixNode): string {
   if (isLockoutProtected(subjectId, node)) return '許可（ロックアウト防止のため管理者への拒否は無効）'
   if (isSelfView(subjectId, node)) return '参照可（本人は常に参照可）'
+  if (isEditBlockedByView(subjectId, node)) return '更新不可（項目の参照が不可のため。先に参照を許可してください）'
   const info = cellInfo(subjectId, node)
   const v = VOCAB_LABELS[node.vocab][info.value ? 'allow' : 'deny']
   return `${v}（${SOURCE_LABELS[info.source]}）`
@@ -392,7 +444,7 @@ async function toggleCell(subjectId: string, node: MatrixNode): Promise<void> {
   }
 }
 
-const INDENT: Record<number, string> = { 0: 'pl-3', 1: 'pl-8', 2: 'pl-14' }
+const INDENT: Record<number, string> = { 0: 'pl-3', 1: 'pl-8', 2: 'pl-14', 3: 'pl-20' }
 
 /** セルボタンの見た目（明示 = 実線濃色 / 引き継ぎ = 破線薄色。busy 中は薄色を上書きしない） */
 function cellClass(subjectId: string, node: MatrixNode): string[] {
@@ -414,7 +466,7 @@ function cellClass(subjectId: string, node: MatrixNode): string[] {
 <template>
   <UiSectionCard
     title="権限表"
-    description="ページ > 機能 > 項目 の階層で権限を設定します。セルは常に可否のいずれかを表示し、クリックで反転します（濃色 = このレイヤの明示設定 / 薄色破線 = 上位の一括設定・既定値に従う状態。反転を戻すと明示設定は解除されます）。最終的な可否は 個人 > 役職 > ロール の順で解決されます"
+    description="ページ > タブ・機能 > 項目 > 項目の更新 の階層で権限を設定します。セルは常に可否のいずれかを表示し、クリックで反転します（濃色 = このレイヤの明示設定 / 薄色破線 = 上位の一括設定・既定値に従う状態。反転を戻すと明示設定は解除されます）。最終的な可否は 個人 > 役職 > ロール の順で解決されます"
     flush
   >
     <div class="flex flex-wrap items-center gap-3 border-b border-line px-4 py-2.5">
@@ -432,8 +484,8 @@ function cellClass(subjectId: string, node: MatrixNode): string[] {
         <button type="button" class="btn btn-sm" @click="collapseAll">全て閉じる</button>
       </div>
       <div class="flex w-full items-center gap-3 text-[11px] text-muted">
-        <span class="inline-flex items-center gap-1"><X class="h-3 w-3 text-crit" aria-hidden="true" />拒否 / 自分のみ / 参照不可</span>
-        <span class="inline-flex items-center gap-1"><Check class="h-3 w-3 text-ok" aria-hidden="true" />許可 / すべて / 参照可</span>
+        <span class="inline-flex items-center gap-1"><X class="h-3 w-3 text-crit" aria-hidden="true" />拒否 / 利用不可 / 自分のみ / 参照不可 / 更新不可</span>
+        <span class="inline-flex items-center gap-1"><Check class="h-3 w-3 text-ok" aria-hidden="true" />許可 / 利用可 / すべて / 参照可 / 更新可</span>
         <span>薄色破線 = 上位の一括設定・既定値に従う</span>
       </div>
     </div>
@@ -508,7 +560,7 @@ function cellClass(subjectId: string, node: MatrixNode): string[] {
       </table>
     </div>
     <p class="border-t border-line px-4 py-2 text-[11px] text-muted">
-      ※ 管理者（ロール列の管理者・権限ロールが管理者の個人。役職経由で該当する場合も同様）の「マスタメンテナンス」「設定」「改善要望管理」への拒否、および参照対象の本人セルはロックアウト防止のため操作できません（改善要望管理は管理者を常時許可）。「全員のタイムカードの参照」の既定は管理者・人事のみ参照可です（役職列の既定表示は「参照不可」ですが、明示ルールが無い場合の実判定は本人のロール既定に従います）。AI 参照範囲行は ✓ = すべて / × = 自分のみ、参照対象行は ✓ = 参照可 / × = 参照不可 を表します。マスタ項目の表示制御はページの利用可否とは独立に、アプリ全体のマスタ応答へ適用されます（ドキュメントのみページ行が項目の一括既定を兼ねます）。個々のルールの無効化・復元の履歴はルール一覧モードで確認できます
+      ※ 管理者（ロール列の管理者・権限ロールが管理者の個人。役職経由で該当する場合も同様）の「マスタメンテナンス」「設定」「改善要望管理」への拒否、および参照対象の本人セルはロックアウト防止のため操作できません（改善要望管理は管理者を常時許可）。「全員のタイムカードの参照」の既定は管理者・人事のみ参照可です（役職列の既定表示は「参照不可」ですが、明示ルールが無い場合の実判定は本人のロール既定に従います）。タブ行は ✓ = 利用可 / × = 利用不可（管理者限定タブ〔稟議の全件・経路設定、シフトの調整・募集期間〕はロールガードが基底のため、利用可にしても非管理者へは開放されません）。AI 参照範囲行は ✓ = すべて / × = 自分のみ（登録者単位の細かい設定は「AIの参照範囲」タブで行えます）、参照対象行は ✓ = 参照可 / × = 参照不可 を表します。マスタ項目の表示制御はページの利用可否とは独立に、アプリ全体のマスタ応答へ適用されます（ドキュメントのみページ行が項目の一括既定を兼ねます）。項目の「更新」行は参照＞更新の階層です: 項目の参照が不可の場合は更新も不可となり、更新セルは操作できません。個々のルールの無効化・復元の履歴はルール一覧モードで確認できます
     </p>
   </UiSectionCard>
 </template>

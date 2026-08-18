@@ -16,7 +16,7 @@
 import type { MiddlewareHandler } from 'hono'
 import type pg from 'pg'
 import {
-  canUseFeature, type PermissionSubject, stripDeniedFields,
+  canUseFeature, type PermissionSubject, stripDeniedFields, stripDeniedWriteKeys,
 } from '../../../shared/domain/permissions'
 import type { PermissionRule } from '../../../shared/domain/types'
 import type { AuthUser } from '../auth'
@@ -107,4 +107,25 @@ export async function stripMasterFields<T extends Record<string, unknown>>(
   const rules = await activePermissionRules(pool)
   if (rules.length === 0) return rows
   return stripDeniedFields(rules, subjectOf(user), entity, rows)
+}
+
+/**
+ * マスタ PATCH body の更新不可項目剥がし（改修依頼 2026-08-18: 項目＞参照/更新の階層制御）。
+ * `<項目>:write` の deny、または参照 deny（参照＞更新）の項目を更新対象から取り除く。
+ * 全キーが剥がされて更新対象が空になった場合は 403（AKO-PRM-003）を投げる
+ * （部分的に剥がれた場合はできたところまで更新する = グレースフルデグラデーション。原則4）
+ */
+export async function stripMasterWriteKeys<T extends Record<string, unknown>>(
+  pool: pg.Pool,
+  user: AuthUser,
+  entity: string,
+  body: T,
+): Promise<T> {
+  const rules = await activePermissionRules(pool)
+  if (rules.length === 0) return body
+  const stripped = stripDeniedWriteKeys(rules, subjectOf(user), entity, body)
+  if (Object.keys(body).length > 0 && Object.keys(stripped).length === 0) {
+    throw err('AKO-PRM-003', '指定した項目を更新する権限がありません（管理者にお問い合わせください）', 403)
+  }
+  return stripped
 }
