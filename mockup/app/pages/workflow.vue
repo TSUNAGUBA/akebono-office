@@ -574,7 +574,8 @@ async function onRemoveDelegate(d: DelegateSetting): Promise<void> {
     <p v-if="tabs.length === 0" class="card p-6 text-center text-[13px] text-sub">利用できるタブがありません（権限設定で制限されています。管理者にお問い合わせください）</p>
 
     <!-- ================= 一覧タブ（自分の申請 / 承認待ち / 全件） ================= -->
-    <div v-if="tab !== 'routes'" class="grid gap-3">
+    <!-- タブキーの明示列挙: tab=''（全タブ deny の退避値）でフォールバック描画しない = フェイルクローズ（R2 レビュー反映） -->
+    <div v-if="tab === 'mine' || tab === 'pending' || tab === 'all'" class="grid gap-3">
       <UiFilterBar>
         <UiSearchInput v-model="q" placeholder="件名・決裁番号で検索" />
         <UiSelect v-model="statusFilter" :options="statusOptions" empty-label="すべての状態" aria-label="状態フィルタ" />
@@ -607,7 +608,7 @@ async function onRemoveDelegate(d: DelegateSetting): Promise<void> {
     </div>
 
     <!-- ================= 経路設定タブ（管理者） ================= -->
-    <div v-else class="grid gap-3">
+    <div v-else-if="tab === 'routes'" class="grid gap-3">
       <UiSectionCard
         v-for="g in routeGroups"
         :key="g.category"

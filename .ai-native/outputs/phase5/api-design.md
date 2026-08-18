@@ -449,7 +449,7 @@ akebonoCards: ComputedRef<MenuCard[]>
 
 | メソッド・パス | 用途 | 認可 |
 |---|---|---|
-| `POST /v1/improvements/requests` | 要望の投稿（`body`／`pagePath`／`pageLabel`／**`links`〔URL 配列・最大 5 件・http(s) のみ = AKO-REQ-009〕／`images`〔`{filename,mime,dataUrl}` 配列・最大 4 件・PNG/JPEG/WebP/GIF data URI = AKO-REQ-010。0061〕／`tags`〔任意タグ配列。`brainstorm`〔壁打ち〕/`entrust`〔お任せ〕の allowlist 正規化 = 未知値は落とす〔エラーにしない〕。0065・F-42-17〕**） | 認証済み全員 |
+| `POST /v1/improvements/requests` | 要望の投稿（`body`／`pagePath`〔**登録時に `normalizeImprovementPagePath` で正規化 = アプリ内パス（`/` 始まり・`//`/`/\`/空白含みを除外）以外は `''` として格納**。F-42-20 のリンク化に伴う防御 = 改修依頼 2026-08-18 R1〕／`pageLabel`／**`links`〔URL 配列・最大 5 件・http(s) のみ = AKO-REQ-009〕／`images`〔`{filename,mime,dataUrl}` 配列・最大 4 件・PNG/JPEG/WebP/GIF data URI = AKO-REQ-010。0061〕／`tags`〔任意タグ配列。`brainstorm`〔壁打ち〕/`entrust`〔お任せ〕の allowlist 正規化 = 未知値は落とす〔エラーにしない〕。0065・F-42-17〕**） | 認証済み全員 |
 | `GET /v1/improvements/requests` | 生要望の一覧（`itemId`／`unclustered`／`includeArchived`）。**添付画像の実体（data URI）は `itemId` または `unclustered=1` 指定時のみ返す**（全件一覧は `images: []` = 転送量削減。フロントはドロワー表示時に遅延ロード・0061／0063） | 管理 |
 | `POST /v1/improvements/requests/:id/archive`・`/restore` | 要望の取消／復元 | 投稿者本人 or 管理 |
 | `POST /v1/improvements/requests/:id/status` | **要望単位のステータス変更（`status` = open/resolved/dismissed。不正は AKO-REQ-011。遷移自由 = 原則9.5。プロンプト再生成に反映・0062）** | 管理 |

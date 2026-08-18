@@ -87,6 +87,38 @@ async function main() {
     check('AIの参照範囲: もう一度で「既定」へ戻る（取消フロー）',
       (await cell.getAttribute('title'))?.includes('既定') === true)
 
+    // 5b) タブガードのフェイルクローズ: 稟議の全タブを deny → 空状態のみ表示（一覧・経路設定は非描画）
+    await page.getByRole('tab', { name: '権限表' }).click()
+    const wfTabRows = ['タブ: 自分の申請', 'タブ: 承認待ち', 'タブ: 全件', 'タブ: 経路設定']
+    for (const rowLabel of wfTabRows) {
+      const cell = page.getByRole('button', { name: new RegExp(`^管理者 × ${rowLabel}:`) })
+      await cell.click()
+      await page.waitForFunction(
+        ([label]) => document.querySelector(`[aria-label^="管理者 × ${label}:"]`)?.getAttribute('title')?.includes('利用不可') ?? false,
+        [rowLabel],
+      )
+    }
+    await page.goto(`${BASE}/#/workflow`)
+    await page.getByText('利用できるタブがありません').waitFor()
+    check('稟議: 全タブ deny で空状態メッセージが出る', true)
+    check('稟議: 全タブ deny でどのタブ内容も描画されない（フェイルクローズ）',
+      (await page.getByRole('columnheader', { name: '件名' }).count()) === 0
+      && (await page.getByText('の承認経路').count()) === 0)
+    // 後片付け: 明示 deny を解除（引き継ぎ値へ戻す = 論理削除。以降のチェックへ影響させない）
+    await page.goto(`${BASE}/#/masters/permissions`)
+    await page.getByRole('button', { name: '全て展開' }).click()
+    for (const rowLabel of wfTabRows) {
+      const cell = page.getByRole('button', { name: new RegExp(`^管理者 × ${rowLabel}:`) })
+      await cell.click()
+      await page.waitForFunction(
+        ([label]) => document.querySelector(`[aria-label^="管理者 × ${label}:"]`)?.getAttribute('title')?.includes('利用可') ?? false,
+        [rowLabel],
+      )
+    }
+    await page.goto(`${BASE}/#/workflow`)
+    await page.getByRole('tab', { name: '自分の申請' }).waitFor()
+    check('稟議: deny 解除でタブが復帰する（取消フロー）', true)
+
     // 6) 日報: placeholder 例文（未作成の日は「日報を書く」で入力フォームを開く）
     await page.goto(`${BASE}/#/reports`)
     await page.getByRole('main').getByRole('heading', { level: 1 }).waitFor()

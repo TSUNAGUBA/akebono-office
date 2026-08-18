@@ -263,6 +263,10 @@ export function useImprovements() {
         const byId = new Map(rows.map(x => [x.id, x]))
         apiRequests.value = apiRequests.value.map(x => byId.get(x.id) ?? x)
         rows.forEach(x => unclusteredImagesLoaded.add(x.id))
+        // 要求元の行が応答に無くてもマークする（並行して集約された等の stale 行）。応答は未集約全件の
+        // 正であり以後も返らない = マークしても取りこぼしなし（集約後の画像は itemId 経由が担う）。
+        // マークしないと成功のたびに一覧 watch が再発火して逐次リフェッチが続く（R2 レビュー反映）
+        unclusteredImagesLoaded.add(r.id)
       } catch { /* 画像の遅延ロード失敗は無視（次回表示で再試行） */ } finally {
         unclusteredImagesLoading = null
       }

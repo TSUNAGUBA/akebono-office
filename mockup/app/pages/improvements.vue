@@ -923,8 +923,9 @@ async function copyAndClose(): Promise<void> {
         @open="openDrawerItem"
       />
 
-      <!-- ② 改修案件（採用 → AI 集約後の一覧）: フィルターと一覧 -->
-      <UiSectionCard v-else flush>
+      <!-- ② 改修案件（採用 → AI 集約後の一覧）: フィルターと一覧。
+           タブキーの明示指定: tab=''（全タブ deny の退避値）でフォールバック描画しない = フェイルクローズ（R2 レビュー反映） -->
+      <UiSectionCard v-else-if="tab === 'items'" flush>
         <template #actions>
           <UiSearchInput v-model="search" placeholder="改修単位・対象ページを検索" />
         </template>
