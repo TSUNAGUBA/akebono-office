@@ -3453,3 +3453,73 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
 - [x] R3 = R2 修正の独立再検証で **指摘ゼロを確認**（兄弟シナリオ〔item 画像ロード失敗窓でも B の添付が消えない〕の解消・
   成功パス〔マージ + refresh の prevImages 再注入〕の非退行・画像編集ゲート〔全経路で追加無効・開いた時点の判断を保存で使用〕を
   実コード追跡 + 全 typecheck/単体実走で確認）。これで独立ロールの反復レビューは指摘ゼロに収束（原則9 = SP-8 完了）
+
+## 89. 改修依頼 2026-08-19 第 4 弾（6 改修単位 = 活動記録のマスタ参照化 + Village マスタ・日報/週報/月報の 3 メニュー化と月報新設・改善要望の全員閲覧化とタブ再構成）の完了条件（Definition of Done）
+
+**要件（6 改修単位）:** ①営業活動: 事業区分(Village)・担当(顧客(人))・アプローチグループ・参考リンクを追加 ②日報・週報を
+日報/週報/月報の 3 トップレベルメニューへ分割し各に 自分/全員/チーム タブ・月報を週報と同型で新設 ③ビジネスパートナー活動:
+パートナー会社/担当/アプローチ企業を自由入力から顧客(会社/人)マスタ参照へ変更 + Village・アプローチグループ・参考リンク
+④サポート活動: 最初の問い合わせ手段・対象箇所・内容テンプレ・顧客/問い合わせ者の横並び・完了時刻削除 + Village・参考リンク
+⑤改善要望 5 件（投稿 UX 刷新・対象箇所・参考リンク既定 1 行・タグ順/既定・タブ再構成で全員閲覧可）⑥改修プロンプトに
+要望とコメントを時系列統合。**オペレーター選択:** 月報=週報と同型で新設 / 権限=単一キー `reports` ＋タブ拡張 / 改善要望=全要望を閲覧可。
+
+### 89-1 改善要望の投稿 UX 刷新 + プロンプトの要望×コメント統合（⑤の一部・⑥ = F-42-20/21・Phase A）
+- [x] 投稿 UX（⑤.1）: 「要望の内容」テキストエリア左下に「＋」ボタンを内蔵し画像添付、テキストエリア内での貼り付け（テキストは
+  そのまま・画像はファイルとして添付）に対応する新部品 `ImprovementsBodyImageInput` を新設。独立の画像フォームは撤去。
+  window ドロップ抑止はモジュールレベルのアクティブスタックで調停（投稿モーダル + 編集ドロワー同時 active でも二重添付を防ぐ）。
+- [x] 対象箇所（⑤.2）: `ImprovementRequest.targetSpot?`（上限 `IMPROVEMENT_TARGET_SPOT_CAP=120`）を対象ページの下に追加。
+  「要望の内容」の既定テンプレ `IMPROVEMENT_BODY_TEMPLATE`（要望：/現状：/改善：）を投稿時に挿入し、テンプレのみ送信はブロック。
+  API `improvement_requests.target_spot`（0069・NOT NULL DEFAULT ''）+ `reqColsOf`/`improvementRequestInputOf` 追加。
+- [x] 参考リンク既定 1 行（⑤.3）・タグ順「お任せ」→「壁打ち」で既定「お任せ」（⑤.4）: `IMPROVEMENT_REQUEST_TAGS=['entrust','brainstorm']`
+  へ並べ替え、投稿の既定 tags を `['entrust']`・links を `['']`（1 行開いた状態）に。
+- [x] プロンプト統合（⑥）: `buildCodingPrompt`（shared）は「要望」節を要望本文とコメントの**時系列統合**（createdAt 昇順・同時刻は
+  seq でタイブレーク）に変更。行頭は `- 【要望】 ［対象箇所］ statusタグ 本文` / `- 【コメント】 本文`。API `/prompt` は
+  requests・comments とも `to_char(created_at …)` を返し統合。`PromptItemInput.requests[].comments` を `{body,createdAt}[]` へ拡張。
+
+### 89-2 活動記録 3 ページのマスタ参照化 + Village マスタ（①③④ = F-43/F-44/F-45 改訂・Phase B）
+- [x] Village マスタ新設: `Village`（id/name/displayOrder/active）+ マイグレーション 0070（industries と同型）+ masters registry
+  `schemas.villages`/`MASTERS.villages` + masters ページ（industries.vue クローン）+ menu-registry/nav-map/masters 索引 + シード 3 件
+  （AKEBONO / つなぐば / コーポレート）。mock は `useMasterCrudAsync('villages','vil')`・`MIGRATED_MASTERS` 追加。
+- [x] 共通項目（①③④）: 3 活動の最上段に事業区分(Village)コンボ（自由入力→保存時にマスタ新規登録）と参考リンク
+  （改善要望と同一部品 `ImprovementsLinkEditor` を再利用 = 原則3）を追加。マイグレーション 0071（列追加のみ・非破壊・冪等）。
+- [x] 営業活動（①）: 担当（顧客(人)= Contact 参照・選択会社に所属・自由入力→新規登録）とアプローチグループを追加。
+- [x] サポート活動（④）: 最初の問い合わせ手段（`SUPPORT_FIRST_CONTACT_METHODS`・任意）・対象箇所(targetLocation)・
+  問い合わせ内容の既定テンプレ（`SUPPORT_ACTIVITY_BODY_TEMPLATE` = 内容：/状況：/対応：）。顧客/問い合わせ者を横並び、完了時刻入力を削除。
+- [x] パートナー活動（③）: パートナー会社（必須）/担当/アプローチ企業を自由入力から顧客(会社/人)マスタ参照へ移行
+  （`partnerCompanyId`/`partnerContactId`/`approachCompanyId`）。旧行の自由入力 `partner_name`/`related_company` は下位互換のため保持し、
+  FK 未設定の旧行の一覧/詳細表示にフォールバック（`partnerCompanyLabel`/`approachCompanyLabel`）。編集時は旧 `partnerName` を
+  会社コンボのテキストへ復元して選び直しを促す（移行導線）。
+- [x] 実装の共通化（原則3）: 顧客(人)解決を lib/contact-resolve（API）/ useContactResolve（mock）へ抽出し顧客活動・活動3種で共用。
+  事業区分解決は lib/village-resolve / useVillageResolve を新設。API 書込は `runInTx`（マスタ解決 → INSERT/UPDATE → コミット後監査）で
+  共通化し「SoT 先行の原子性」（検証失敗時に孤児マスタを残さない）を担保。検証は shared/domain/activity（API/mock 同一関数・同一順 = パリティ）。
+
+### 89-3 日報/週報/月報の 3 メニュー化 + 月報の新設（② = F-06 改訂・Phase C）
+- [x] 月報の新設（週報と同型）: `MonthlyReport` 型（週報と同一項目・期間キー `monthStart`）+ `ReportReadKind` に `'monthly'`。
+  マイグレーション 0072（`monthly_reports` = `weekly_reports` と同一構成 + 0049 拡張列。`report_reads` の CHECK に 'monthly' を追加・
+  非破壊冪等）。API `/v1/reports/monthly`（GET/PUT・週報 /weekly と同型。提出保護 AKO-REP-002）+ reads の monthly 分岐
+  （`guardMonthlyReadTarget` = 週報と同型の参照ガード）。mock `useReports` に月報関数群（週報の clone: `monthStartOf`/`myMonthlyOn`/
+  `myMonthlies`/`monthlyById`/`allSubmittedMonthlies`/`saveMonthly`/`draftFromWeeklies`）。月報シード 3 件。
+- [x] 3 メニュー化: 日報 `/reports`・週報 `/reports?kind=weekly`・月報 `/reports?kind=monthly` をトップレベルメニュー（ナビ 3 エントリ）へ。
+  各メニューに 自分/全員/チーム タブ。週報/月報共通の `ReportsPeriodPanel`（kind × view で 自分=編集・全員=提出済み一覧+未読・
+  チーム=期間の提出状況）を新設し、月報の全ビューと週報のチームで使用（週報の 自分/全員 は既存実装を据え置き = 回帰なし）。
+  月報の例文は `MONTHLY_REPORT_EXAMPLE` を追加。`featureKeyOfPath` はクエリ付きパス（?kind=）を先頭パス部分で解決するよう補強。
+- [x] 権限（単一キー＋タブ拡張）: `TAB_PERMISSION_CATALOG.reports` を 日報/週報/月報 × 自分/全員/チーム の 9 タブへ拡張
+  （既存キー mine/weekly-mine/all/weekly-all/team は後方互換で据え置き、weekly-team/monthly-mine/monthly-all/monthly-team を追加）。
+  資源キーは単一 `reports` のまま（参照対象の権限モデルは kind 非依存）。ナビ（menu-registry/navigation/header-quick-access/nav-map）を 3 化。
+
+### 89-4 改善要望の全員閲覧化 + タブの要望系/改修案件系分離（⑤.5 = F-42-22・Phase D）
+- [x] 全員閲覧化: API `GET /improvements/requests` のガードを撤去し認証済み全員可（取消済み includeArchived は管理権限者のみ）。
+  `/items`・選別（adoption）・ステータス変更・集約（generate）・プロンプトは requireManage のまま（member は 403）。
+  mock `canPath('/improvements')` を全員可へ、`refresh()` は非管理者では items のみ 403 → catch で握り潰し requests を反映。
+- [x] タブ分離: 一般 = 受付箱（全要望の読取専用リスト・自分の要望のみ編集）/ カンバン / ガント（要望系）。管理 = 加えて
+  改修案件 / 【改修案件】カンバン / 【改修案件】ガント。要望系タブは管理者には【要望】と明示。生要望のステータス別カンバン
+  （`ImprovementsRequestKanban`）と投稿タイムラインのガント（`ImprovementsRequestGantt`。shared/domain/gantt を共用 = 原則3）を新設。
+- [x] 権限ゲート: サマリーカード・AI 集約・プロンプト出力・選別・コメント・要望ステータス `<select>` は管理権限者のみ表示。
+  要望詳細ドロワーの編集/取消は本人 or 管理者（`canWriteSelectedRequest`）にゲート。`TAB_PERMISSION_CATALOG.improvements` に
+  req-kanban/req-gantt を追加（既存キーは後方互換で据え置き・kanban/gantt は【改修案件】へ改称）。
+
+### 89-5 検証（build / typecheck / テスト）
+- [x] typecheck: shared / api（tsc --noEmit）/ mockup（nuxt typecheck）すべて green。
+- [x] 単体: mockup 361 / api 403 すべて green。統合: api 277（月報 CRUD/提出保護/scope=all/既読・パートナー活動のマスタ解決・
+  要望の全員閲覧 + member のステータス変更 403 を追加）green。
+- [x] 本番ビルド: api（esbuild）/ mockup（nuxt build = SPA）ともに成功。
