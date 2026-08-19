@@ -591,11 +591,13 @@ export function partnerActivitiesRoutes(pool: pg.Pool): Hono {
     const id = c.req.param('id')
     const b = await c.req.json().catch(() => ({})) as Record<string, unknown>
     const cur = await findRow<PartnerActivityInput & {
-      villageId: string | null; partnerCompanyId: string | null; partnerContactId: string | null; approachCompanyId: string | null
+      villageId: string | null; partnerCompanyId: string | null; partnerContactId: string | null
+      approachCompanyId: string | null; relatedCompany: string
     }>(pool, 'AKO-PTN', PARTNER_COLS, 'partner_activities pa', id, 'ビジネスパートナー活動')
     const has = (k: string): boolean => Object.hasOwn(b, k)
     const touchesPartnerCompany = has('partnerCompanyId') || has('newPartnerCompanyName')
     const touchesPartnerContact = has('partnerContactId') || has('newPartnerContactName')
+    const touchesApproachCompany = has('approachCompanyId') || has('newApproachCompanyName')
     const merged: PartnerActivityInput = {
       villageId: (has('villageId') || has('newVillageName')) ? String(b.villageId ?? '').trim() : (cur.villageId ?? ''),
       newVillageName: (has('villageId') || has('newVillageName')) ? String(b.newVillageName ?? '') : '',
@@ -604,8 +606,8 @@ export function partnerActivitiesRoutes(pool: pg.Pool): Hono {
       // パートナー会社を変更した編集で担当を触っていない場合は担当をクリア（旧担当が別会社所属で所属エラーになるのを防ぐ）
       partnerContactId: touchesPartnerContact ? String(b.partnerContactId ?? '').trim() : (touchesPartnerCompany ? '' : (cur.partnerContactId ?? '')),
       newPartnerContactName: touchesPartnerContact ? String(b.newPartnerContactName ?? '') : '',
-      approachCompanyId: (has('approachCompanyId') || has('newApproachCompanyName')) ? String(b.approachCompanyId ?? '').trim() : (cur.approachCompanyId ?? ''),
-      newApproachCompanyName: (has('approachCompanyId') || has('newApproachCompanyName')) ? String(b.newApproachCompanyName ?? '') : '',
+      approachCompanyId: touchesApproachCompany ? String(b.approachCompanyId ?? '').trim() : (cur.approachCompanyId ?? ''),
+      newApproachCompanyName: touchesApproachCompany ? String(b.newApproachCompanyName ?? '') : '',
       approachGroup: has('approachGroup') ? str(b.approachGroup, NAME_CAP) : cur.approachGroup,
       theme: has('theme') ? str(b.theme, TITLE_CAP) : cur.theme,
       activityType: has('activityType') ? String(b.activityType ?? '').trim() : cur.activityType,
@@ -623,6 +625,9 @@ export function partnerActivitiesRoutes(pool: pg.Pool): Hono {
     assertValid('AKO-PTN', partnerActivityError(merged))
     await runInTx(pool, 'AKO-PTN', REFS, async (db) => {
       const refs = await resolvePartnerRefs(db, pool, user, merged)
+      // 旧行（approach_company_id 未設定 = 自由入力スナップショットのみ）でアプローチ企業を触っていない部分更新では、
+      // related_company の自由入力スナップショットを保持する（resolvePartnerRefs は FK 未解決 → '' にするため = R1 監査反映・原則7）
+      const relatedCompany = (!touchesApproachCompany && !cur.approachCompanyId) ? cur.relatedCompany : refs.relatedCompany
       await db.query(
         `UPDATE partner_activities
          SET village_id = $2, partner_company_id = $3, partner_contact_id = $4, approach_company_id = $5,
@@ -632,7 +637,7 @@ export function partnerActivitiesRoutes(pool: pg.Pool): Hono {
              links = $20, updated_at = now()
          WHERE id = $1`,
         [id, refs.villageId, refs.partnerCompanyId, refs.partnerContactId, refs.approachCompanyId,
-          merged.approachGroup, refs.partnerName, merged.theme, refs.relatedCompany, merged.activityType,
+          merged.approachGroup, refs.partnerName, merged.theme, relatedCompany, merged.activityType,
           merged.status, merged.summary, merged.currentState, merged.nextAction, merged.nextActionDate,
           merged.staffMemberId, merged.relatedMeeting, merged.relatedSalesActivityId, merged.memo, linksJson(merged.links)])
       return refs.audits

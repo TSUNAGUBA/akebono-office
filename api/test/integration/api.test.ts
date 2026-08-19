@@ -6798,10 +6798,23 @@ describe('改善要望（F-42）', () => {
     // 改修依頼 2026-08-19 第4弾: 生要望の一覧（/requests）は認証済み全員が閲覧できる（全要望を閲覧可）
     const reqList = await api('GET', '/v1/improvements/requests', { as: MEMBER })
     expect(reqList.status).toBe(200)
-    expect((reqList.json.data as { id: string }[]).some(r => r.id === (posted.json.data as { id: string }).id)).toBe(true)
-    // ただし取消済み（includeArchived）は一般には出さない（管理権限者のみ = archived_at IS NULL 固定）
-    const reqArchived = await api('GET', '/v1/improvements/requests?includeArchived=1', { as: MEMBER })
-    expect(reqArchived.status).toBe(200)
+    const reqRows = reqList.json.data as Record<string, unknown>[]
+    expect(reqRows.some(r => r.id === (posted.json.data as { id: string }).id)).toBe(true)
+    // 選別（adoption）・集約解除履歴（excludedItemIds）は一般には返さない（トリアージ状態 = 管理者のみ。R1 監査反映）
+    expect(reqRows.every(r => !('adoption' in r) && !('excludedItemIds' in r))).toBe(true)
+    // 管理者には adoption を返す（選別 UI の SoT）
+    const adminReqRows = (await api('GET', '/v1/improvements/requests', { as: ADMIN })).json.data as Record<string, unknown>[]
+    expect(adminReqRows.every(r => 'adoption' in r)).toBe(true)
+    // 一般利用者は自分の取消済み要望を閲覧・復元できる（原則9.5・R1 レビュー反映）。他者の取消済みは見えない
+    const ownReqId = (posted.json.data as { id: string }).id
+    expect((await api('POST', `/v1/improvements/requests/${ownReqId}/archive`, { as: MEMBER })).status).toBe(200)
+    const afterArchive = (await api('GET', '/v1/improvements/requests', { as: MEMBER })).json.data as { id: string; archivedAt: string | null }[]
+    const ownArchived = afterArchive.find(r => r.id === ownReqId)
+    expect(ownArchived?.archivedAt).toBeTruthy() // 自分の取消済みは自分の一覧に出る
+    // 他メンバー（HR）には他者の取消済みは出ない（active のみ + 自分の取消済み）
+    expect((((await api('GET', '/v1/improvements/requests', { as: HR })).json.data) as { id: string }[]).some(r => r.id === ownReqId)).toBe(false)
+    // 本人が復元できる（取消の取消 = 原則9.5）→ 後続テストへ影響させないため元に戻す
+    expect((await api('POST', `/v1/improvements/requests/${ownReqId}/restore`, { as: MEMBER })).status).toBe(200)
     // ステータス変更・選別など管理系の操作は一般不可（AKO-PRM-001）
     expect((await api('POST', `/v1/improvements/requests/${(posted.json.data as { id: string }).id}/status`, { as: MEMBER, body: { status: 'resolved' } })).status).toBe(403)
     // 改修案件（/items）は引き続き管理権限者のみ（AKO-PRM-001）・管理者は可
@@ -7472,6 +7485,26 @@ describe('活動記録 3 種（サポート/営業/ビジネスパートナー�
     expect((await api('POST', `/v1/partner-activities/${pactId}/restore`, { as: MEMBER })).status).toBe(200)
     const restored = await api('GET', '/v1/partner-activities?f.active=true&limit=50', { as: MEMBER })
     expect((restored.json.data as { id: string }[]).some(r => r.id === pactId)).toBe(true)
+  })
+
+  it('ビジネスパートナー活動: 旧行（アプローチ企業が自由入力スナップショットのみ）はアプローチ未変更の部分更新で related_company を保持（R1 監査反映・原則7）', async () => {
+    // アプローチ企業 FK 未設定で作成（related_company は空）→ 旧行を模して related_company を自由入力へ直接書き換え
+    const created = await api('POST', '/v1/partner-activities', {
+      as: MEMBER, body: { partnerCompanyId: companyId, theme: '旧行テスト', activityType: '紹介', status: '検討' },
+    })
+    const legacyId = (created.json.data as { id: string }).id
+    await pool.query(`UPDATE partner_activities SET approach_company_id = NULL, related_company = $2 WHERE id = $1`, [legacyId, '旧アプローチ企業'])
+    // アプローチ企業を触らない部分更新（memo だけ）→ related_company スナップショットが保持される
+    const upd = await api('PATCH', `/v1/partner-activities/${legacyId}`, { as: HR, body: { memo: 'レガシー保持テスト' } })
+    const row = upd.json.data as { relatedCompany: string; approachCompanyId: string | null; memo: string }
+    expect(row.relatedCompany).toBe('旧アプローチ企業')
+    expect(row.approachCompanyId).toBeNull()
+    expect(row.memo).toBe('レガシー保持テスト')
+    // アプローチ企業を明示指定すればマスタ参照へ移行しスナップショットも更新される
+    const upd2 = await api('PATCH', `/v1/partner-activities/${legacyId}`, { as: HR, body: { newApproachCompanyName: '新アプローチ企業' } })
+    const row2 = upd2.json.data as { relatedCompany: string; approachCompanyId: string | null }
+    expect(row2.relatedCompany).toBe('新アプローチ企業')
+    expect(row2.approachCompanyId).toBeTruthy()
   })
 
   it('機能ガード: support-activity / sales-activity / partner-activity の deny で 403（AKO-PRM-001）', async () => {

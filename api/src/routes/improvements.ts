@@ -210,13 +210,25 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
     const params: unknown[] = []
     if (itemId) { params.push(itemId); where.push(`item_id = $${params.length}`) }
     if (unclustered) where.push('item_id IS NULL')
-    if (!includeArchived) where.push('archived_at IS NULL')
+    if (canManage) {
+      if (!includeArchived) where.push('archived_at IS NULL')
+    } else {
+      // 一般利用者: 有効な全要望 + 自分の取消済み（自分の取消は本人が復元できる = 原則9.5）。他者の取消済みは非表示
+      params.push(user.id)
+      where.push(`(archived_at IS NULL OR member_id = $${params.length})`)
+    }
     // 画像の実体は絞り込み指定時のみ（itemId = 改修単位ドロワー / unclustered=1 = 生要望ドロワーの遅延ロード。
     // 全件一覧は '[]' = 転送量削減。レビュー指摘 2026-08-17）
     const sql = `SELECT ${reqColsOf(Boolean(itemId) || unclustered)} FROM improvement_requests`
       + (where.length ? ` WHERE ${where.join(' AND ')}` : '')
       + ' ORDER BY created_at DESC, id'
     const { rows } = await pool.query(sql, params)
+    // 選別（adoption）・集約解除履歴（excludedItemIds）は管理系のトリアージ状態のため一般利用者へは返さない
+    // （UI でも管理者のみ表示 = 情報開示の一貫性。R1 監査反映・改修依頼 2026-08-19 第4弾）。
+    // 要望本文・投稿者・要望ステータス（open/resolved/dismissed）は全員可（受付箱・要望カンバンで参照）。
+    if (!canManage) {
+      for (const r of rows as Record<string, unknown>[]) { delete r.adoption; delete r.excludedItemIds }
+    }
     return c.json({ data: rows })
   })
 

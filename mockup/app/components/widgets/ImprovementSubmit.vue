@@ -102,6 +102,11 @@ async function send(): Promise<void> {
     showToast('要望の内容を入力してください（テンプレの見出しだけでは送信できません）', 'warn')
     return
   }
+  // 上限超過は送信前にブロック（無言の切り詰めで末尾を失わない = 編集フォームと同一判定。R1 レビュー反映）
+  if (bodyOver.value) {
+    showToast(`要望の内容が長すぎます（${IMPROVEMENT_BODY_CAP} 文字以内）`, 'crit')
+    return
+  }
   // リンクの形式は送信前に検証してフォーム内で指摘（shared の共有検証 = API と同一判定）
   const trimmedLinks = links.value.map(l => l.trim()).filter(Boolean)
   const linksMsg = improvementLinksError(trimmedLinks)
@@ -270,7 +275,7 @@ async function undo(): Promise<void> {
     <template #footer>
       <template v-if="!sent">
         <button type="button" class="btn btn-ghost" @click="open = false">キャンセル</button>
-        <button type="button" class="btn btn-primary" :disabled="busy || imageBusy || !bodyHasContent" @click="send">
+        <button type="button" class="btn btn-primary" :disabled="busy || imageBusy || !bodyHasContent || bodyOver" @click="send">
           {{ busy ? '送信中…' : '送信する' }}
         </button>
       </template>

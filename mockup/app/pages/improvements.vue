@@ -213,6 +213,25 @@ const activeRequests = computed<ImprovementRequest[]>(() =>
 const { page: genPage, pageSize: genPageSize, rows: pagedGeneralRequests, total: genTotal } =
   useListView<ImprovementRequest>({ source: activeRequests })
 
+// 自分の取消済み要望（一般利用者も自分の取消は復元できる = 原則9.5。API は自分の取消済みを返す・mock は tbl 全件）
+const showMyArchivedRequests = ref(false)
+const myArchivedRequests = computed<ImprovementRequest[]>(() =>
+  [...imp.allRequests.value]
+    .filter(r => r.archivedAt && r.memberId === currentUserId.value)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id)))
+const restoringRequest = ref(false)
+async function restoreRequestFromList(r: ImprovementRequest): Promise<void> {
+  if (restoringRequest.value) return
+  restoringRequest.value = true
+  try {
+    const res = await imp.setRequestArchived(r.id, false)
+    if (res.ok) toast.show('要望の取消を戻しました', 'ok')
+    else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
+  } finally {
+    restoringRequest.value = false
+  }
+}
+
 // ---------- 生要望の編集（改修依頼 2026-08-18 → 2026-08-19 で本文以外の項目も編集可能に。共通部品 ImprovementsRequestEditForm） ----------
 // 編集は全項目の上書きだが editedAt を記録して「編集済み」を明示（再編集で戻せる = 原則9.5）。取消済みは編集不可
 
@@ -400,7 +419,9 @@ async function archiveSelectedRequest(): Promise<void> {
   const ok = await confirm.ask('要望の取消', 'この要望を取り消します（選別・集約の対象から外れます）。取消済みからいつでも戻せます。', { danger: true })
   if (!ok) return
   const res = await imp.setRequestArchived(selectedRequest.value.id, true)
-  if (res.ok) { toast.show('要望を取り消しました', 'ok'); selectedRequestId.value = null }
+  // ドロワーは閉じずに開いたままにする = フッターが「取消を戻す」へ切り替わり、その場で復元できる（原則9.5。R1 レビュー反映）。
+  // 取消済みは一般利用者にも「自分の取消済み」として一覧・復元できる（下記トグル）
+  if (res.ok) toast.show('要望を取り消しました', 'ok')
   else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
 }
 async function restoreSelectedRequest(): Promise<void> {
@@ -1013,6 +1034,22 @@ async function copyAndClose(): Promise<void> {
           </li>
         </ul>
         <UiPagination v-model:page="genPage" v-model:page-size="genPageSize" :total="genTotal" />
+
+        <!-- 自分の取消済み（復元 = 原則9.5。自分が取り消した要望はいつでも戻せる） -->
+        <div v-if="myArchivedRequests.length > 0" class="border-t border-line px-4 py-2">
+          <button type="button" class="btn btn-ghost btn-sm" @click="showMyArchivedRequests = !showMyArchivedRequests">
+            {{ showMyArchivedRequests ? '自分の取消済みを隠す' : `自分の取消済みを表示（${myArchivedRequests.length}件）` }}
+          </button>
+          <ul v-if="showMyArchivedRequests" class="mt-1 divide-y divide-line">
+            <li v-for="r in myArchivedRequests" :key="r.id" class="flex flex-wrap items-center gap-x-2 gap-y-0.5 py-2">
+              <span class="min-w-0 flex-1 truncate text-[13px] text-muted line-through">{{ reqBodyLine(r) }}</span>
+              <button type="button" class="btn btn-ghost btn-sm" :disabled="restoringRequest" :aria-label="`「${reqBodyLine(r)}」の取消を戻す`" @click="restoreRequestFromList(r)">
+                <Undo2 class="h-3.5 w-3.5" aria-hidden="true" />
+                取消を戻す
+              </button>
+            </li>
+          </ul>
+        </div>
       </UiSectionCard>
 
       <!-- 【要望】カンバン: 要望をステータス別（未対応/対応済み/見送り）に一望（全員閲覧可・参照専用） -->
@@ -1309,8 +1346,9 @@ async function copyAndClose(): Promise<void> {
             label="集約済み"
             dot
           />
+          <!-- 選別（採用/不採用）は管理系のトリアージ状態のため管理権限者のみ表示（R1 監査反映・改修依頼 2026-08-19 第4弾） -->
           <UiStatusBadge
-            v-else
+            v-else-if="canManageImprovements"
             :tone="IMPROVEMENT_REQUEST_ADOPTION_META[requestAdoptionOf(selectedRequest)].tone"
             :label="IMPROVEMENT_REQUEST_ADOPTION_META[requestAdoptionOf(selectedRequest)].label"
             dot
