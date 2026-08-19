@@ -3374,3 +3374,45 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   のみで働く既存方針と対称の設計判断。フォーム側は権限表の設定が反映された結果 403/剥がしで気づける）
 - 「AIの参照範囲」タブの既定セル（破線）は「権限表の参照権限に従う」の表示に留まり、対象ごとの実効既定値
   （参照可/不可）までは展開表示しない（ロール/役職行は登録者個人が静的に定まらないため。脚注で既定値を案内）
+
+## 88. 改修依頼 2026-08-19 第 3 弾（9 件 = プロンプトのコメント反映/タグ除外・要望編集の全項目化・受付箱列順・日報週報の 5 改善）の完了条件（Definition of Done）
+
+**要件（改修単位 9 件）:** ①改修プロンプトに受付箱/案件のコメントを反映し、壁打ち/お任せタグは除外 ②要望編集で
+登録時の全項目（タグ含む）を編集可能に ③日報・週報のチームタブ既定を月×横スクロールへ ④全員の週報タブに週報
+内容を表示 ⑤受付箱の列順を 対象ページ→要望→投稿者 へ ⑥要望詳細で URL・画像を編集/削除 ⑦全員の日報の改善の
+タネの時刻(hh:mm)を非表示 ⑧自分の日報に改善のタネを表示 ⑨自分の週報に例文挿入。
+
+### 88-1 改善要望（①②⑤⑥ = F-42-5/16/18 改訂）
+- [x] ① `buildCodingPrompt`（shared）: 各要望のサブ項目に受付箱コメント（`comments?: string[]`）を出力（`- コメント: …`）。
+  壁打ち/お任せタグの凡例・行頭マークを撤去（PromptItemInput.requests から `tags` を削除）。API `/prompt` は
+  `improvement_request_comments`（有効・古い順）を要望 id ごとに集約して渡し、tags の受け渡しを停止。mock buildPrompt も同様
+- [x] ②⑥ 要望編集を全項目化: shared `improvementRequestEditFields`（body 必須 + tags/links/images を投稿時と同一検証・
+  **部分更新 = 実在キーのみ返す**）を新設。API `POST /requests/:id/edit` は動的 SET で実在項目のみ更新（未指定は保持 =
+  CLAUDE.md 部分更新の鉄則・空配列は全削除）。mock editRequest も同型。UI: `ImprovementsRequestEditForm`（本文 + タグ +
+  参考リンク + 画像）を新設し生要望ドロワー・送信直後修正で共用。添付編集ロジックは `ImprovementsAttachmentEditor` へ
+  切り出し ImprovementSubmit と共用（原則3。3 経路の画像追加・window ドロップ抑止・貼り付けを内包）。旧 `BodyEditForm` は
+  `RequestEditForm` へ統合し削除
+- [x] ⑤ 受付箱 RAW_COLUMNS の列順を 対象ページ→要望→投稿者→（添付/選別/選別操作/コメント/投稿日時）へ。先頭の
+  選択チェックボックスは行選択の操作列のため列順対象外で先頭固定（`#cell-*` スロットはキー参照のため再配置不要）
+
+### 88-2 日報・週報（③④⑦⑧⑨ = F-06-1/2/3/9/11 改訂）
+- [x] ③ チームタブ既定を月×横スクロールへ（`teamView` 初期値 week→month。週/月トグルで週表示に切替可）
+- [x] ④ 全員の週報タブ: 一覧の各行に週レンジ + 主要項目（成果・主要業務・課題）のプレビューを追加。行クリックで
+  既存の週報詳細ドロワー（全項目）に到達（絞り込み = 提出済みのみ・未読は不変）
+- [x] ⑦ 全員の日報/チームの詳細ドロワーの改善のタネ表示から時刻 hh:mm を撤去（本文 UiMarkdown のみ）
+- [x] ⑧ 自分の日報の提出済み表示に、その日・本人の改善のタネを併記（時刻非表示 = ⑦と整合。共通純関数
+  `poipoiPostsOnDay` を全員の日報ドロワーと共用 = 原則3。該当日に投稿が無ければセクション非表示）
+- [x] ⑨ 自分の週報に「例文を挿入」ボタン（4 欄へ例文。入力済みは上書き確認 = 原則9.5。例文 SoT =
+  `utils/weekly-report-templates.ts` の `WEEKLY_REPORT_EXAMPLE`）
+
+### 88-3 検証・ドキュメント
+- [x] shared/api 単体 398（+ improvementRequestEditFields 4・prompt コメント/タグ非出力 3）・統合 276（+ 編集の全項目/
+  部分更新・プロンプトのコメント反映）・mockup 単体 360（+ reports-content 6・prompt テスト改訂）・両 typecheck・両 build green
+- [x] E2E: `e2e/batch3-e2e.cjs` 新設（モックモード 15 チェック = 受付箱列順・要望編集の全項目・プロンプトのタグ非出力・
+  チーム既定=月・全員の週報プレビュー・週報例文挿入・モバイル 375px）。`run-batch6b-stack.sh` へ登録
+- [x] docs（原則5）: functional-requirements（F-42-5/16/18・F-06-1/2/3/9/11）・api-design（/prompt コメント・/edit 全項目/
+  部分更新）・implementation-status §88・CONVENTIONS.md（RequestEditForm/AttachmentEditor 部品表・BodyEditForm 廃止）
+
+### 88-4 反復レビュー（原則9 = SP-8）
+- [ ] R1 = 独立ロール 2 体（コードレビュアー + システム監査官）の並行レビュー
+- [ ] R2 = 指摘反映後の再レビューで未解決の指摘ゼロを確認
