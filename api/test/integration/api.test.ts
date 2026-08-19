@@ -6778,13 +6778,18 @@ describe('改善要望（F-42）', () => {
     const posted = await api('POST', '/v1/improvements/requests', {
       as: MEMBER, body: {
         body: '手順書と画面ショットを添付します', pagePath: '/attach-test', pageLabel: '添付テスト',
+        targetSpot: ' 一覧の合計欄 ', // 対象箇所（改修依頼 2026-08-19 第4弾。trim して往復）
         links: [' https://ref.example/manual ', 'https://ref.example/manual'],
         images: [{ filename: 'shot.png', mime: 'image/png', dataUrl: png }],
       },
     })
     expect(posted.status).toBe(201)
-    const req = posted.json.data as { links: string[]; images: { filename: string; dataUrl: string }[] }
+    const req = posted.json.data as { links: string[]; images: { filename: string; dataUrl: string }[]; targetSpot: string }
     expect(req.links).toEqual(['https://ref.example/manual']) // trim + 重複除去
+    expect(req.targetSpot).toBe('一覧の合計欄') // 対象箇所が trim されて往復
+    // 対象箇所なしの投稿は空文字で返る（下位互換）
+    const noSpot = await api('POST', '/v1/improvements/requests', { as: MEMBER, body: { body: '箇所なし', pagePath: '/attach-test', pageLabel: '添付テスト' } })
+    expect((noSpot.json.data as { targetSpot: string }).targetSpot).toBe('')
     // 投稿応答は画像実体をエコーしない（アップロードした data URI をそのまま返さない = 転送量削減。実体は itemId GET で検証）
     expect(req.images).toEqual([])
     // 添付なしの旧形式の投稿も従来どおり（links/images は空配列で返る = 下位互換）
@@ -6982,7 +6987,7 @@ describe('改善要望（F-42）', () => {
     expect((await api('POST', `/v1/improvements/requests/${reqId}/edit`, { as: MEMBER, body: { body: '復元後の編集' } })).status).toBe(200)
   })
 
-  it('受付箱の要望コメントを改修プロンプトに反映する（改修依頼 2026-08-19）', async () => {
+  it('受付箱の要望コメントを改修プロンプトに時系列統合して反映する（改修依頼 2026-08-19 第4弾）', async () => {
     const posted = await api('POST', '/v1/improvements/requests', {
       as: MEMBER, body: { body: 'コメント反映テストの要望', pagePath: '/comment-prompt', pageLabel: 'コメント反映' },
     })
@@ -6992,7 +6997,10 @@ describe('改善要望（F-42）', () => {
     await api('POST', `/v1/improvements/requests/${reqId}/adoption`, { as: ADMIN, body: { adoption: 'adopted' } })
     await api('POST', '/v1/improvements/generate', { as: ADMIN })
     const prompt = (await api('POST', '/v1/improvements/prompt', { as: ADMIN, body: { filter: 'open' } })).json.data as { prompt: string }
-    expect(prompt.prompt).toContain('- コメント: 対象は一覧のみで良いか確認したい')
+    // 要望本文とコメントが時系列統合され【要望】【コメント】で明示される（投稿 → コメントの順）
+    expect(prompt.prompt).toContain('- 【要望】 ［コメント反映］ コメント反映テストの要望')
+    expect(prompt.prompt).toContain('- 【コメント】 対象は一覧のみで良いか確認したい')
+    expect(prompt.prompt.indexOf('コメント反映テストの要望')).toBeLessThan(prompt.prompt.indexOf('対象は一覧のみで良いか確認したい'))
     // 取消したコメントはプロンプトに載らない（有効コメントのみ = 記録保護と整合）
     const comments = (await api('GET', `/v1/improvements/request-comments?requestId=${reqId}`, { as: ADMIN }))
       .json.data as { id: string }[]

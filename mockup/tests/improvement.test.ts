@@ -185,12 +185,15 @@ describe('要望タグ（壁打ち/お任せ = F-42-17・改修依頼 2026-08-18
     expect(prompt).toContain('直したい A')
     expect(prompt).toContain('直したい B')
   })
-  it('buildCodingPrompt は受付箱の要望コメントを反映する（改修依頼 2026-08-19）', () => {
+  it('buildCodingPrompt は要望とコメントを時系列統合して反映する（改修依頼 2026-08-19 第4弾）', () => {
     const prompt = buildCodingPrompt([{
       title: 't', summary: 's', detail: 'd', status: 'accepted', pagePaths: ['/x'],
-      requests: [{ pageLabel: 'X', pagePath: '/x', body: '直したい', comments: ['配色の範囲を確認したい'] }],
+      requests: [{ pageLabel: 'X', pagePath: '/x', body: '直したい', createdAt: '2026-08-19T10:00:00+09:00',
+        comments: [{ body: '配色の範囲を確認したい', createdAt: '2026-08-19T11:00:00+09:00' }] }],
     }])
-    expect(prompt).toContain('- コメント: 配色の範囲を確認したい')
+    expect(prompt).toContain('- 【要望】 ［X］ 直したい')
+    expect(prompt).toContain('- 【コメント】 配色の範囲を確認したい')
+    expect(prompt.indexOf('直したい')).toBeLessThan(prompt.indexOf('配色の範囲を確認したい'))
   })
   it('タグ無し・コメント無しの要望はプロンプト出力が従来と同一（下位互換 = 原則7）', () => {
     const prompt = buildCodingPrompt([{
@@ -199,7 +202,7 @@ describe('要望タグ（壁打ち/お任せ = F-42-17・改修依頼 2026-08-18
     }])
     expect(prompt).not.toContain('〔')
     expect(prompt).not.toContain('お任せ')
-    expect(prompt).not.toContain('コメント:')
+    expect(prompt).not.toContain('【コメント】')
   })
 })
 

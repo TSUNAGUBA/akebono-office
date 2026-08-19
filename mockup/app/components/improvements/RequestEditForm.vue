@@ -3,7 +3,8 @@
  * 要望の編集フォーム（本文 + タグ + 参考リンク + 画像。改修依頼 2026-08-19）。
  * 登録時に入力できる項目をすべて編集できるようにする（F-42-16 の本文のみ編集を拡張）。
  * /improvements の生要望ドロワーと ImprovementSubmit の送信直後修正で共用する（原則3）。
- * 添付の追加/削除 UI は ImprovementsAttachmentEditor に集約（投稿フォームと同一部品 = 原則3）。
+ * 本文と画像添付は一体型の ImprovementsBodyImageInput（枠内左下の「+」/貼り付けで添付）、参考リンクは
+ * ImprovementsLinkEditor に集約し、投稿フォームと同一部品を使う（原則3。改修依頼 2026-08-19 第4弾）。
  * 本文の文字数上限・タグの allowlist・リンク/画像の形式は保存時に呼び出し側が shared 検証で確定する。
  */
 import {
@@ -19,7 +20,7 @@ const props = withDefaults(defineProps<{
   initialImages?: ImprovementRequestImage[]
   /** 保存中（ボタン無効化・ラベル差し替え） */
   busy?: boolean
-  /** ウィンドウ全体のドロップ抑止を有効にするか（表示中のみ true = AttachmentEditor へ委譲） */
+  /** ウィンドウ全体のドロップ抑止を有効にするか（表示中のみ true = BodyImageInput へ委譲） */
   active?: boolean
   /** 画像の編集を許可するか（既定 true）。API モードで既存画像の遅延ロードに失敗した編集では false =
    *  画像編集 UI を隠し現行添付を保持する（追加の無言喪失を防ぐ = レビュー R2 MINOR。呼び出し側が判定して渡す） */
@@ -35,7 +36,7 @@ const body = ref(props.initialBody)
 const tags = ref<string[]>([...(props.initialTags ?? [])])
 const links = ref<string[]>([...(props.initialLinks ?? [])])
 const images = ref<ImprovementRequestImage[]>([...(props.initialImages ?? [])])
-/** 画像処理中は保存を止める（縮小中に確定して添付が漏れないように = AttachmentEditor から通知） */
+/** 画像処理中は保存を止める（縮小中に確定して添付が漏れないように = BodyImageInput から通知） */
 const attachBusy = ref(false)
 
 const TAG_OPTIONS = IMPROVEMENT_REQUEST_TAGS.map(t => ({ value: t, label: IMPROVEMENT_REQUEST_TAG_META[t].label }))
@@ -59,11 +60,15 @@ function onSave(): void {
 <template>
   <div class="grid gap-3">
     <div class="grid gap-1">
-      <textarea
+      <!-- 本文 + 画像添付の一体型（枠内左下の「+」/貼り付けで画像添付 = 投稿フォームと共用・原則3） -->
+      <ImprovementsBodyImageInput
         v-model="body"
-        class="textarea"
-        rows="6"
-        aria-label="要望の本文を編集"
+        v-model:images="images"
+        v-model:busy="attachBusy"
+        :rows="6"
+        body-aria-label="要望の本文を編集"
+        :active="active"
+        :images-editable="imagesEditable"
       />
       <p class="text-right text-[11px] num" :class="over ? 'font-semibold text-crit' : 'text-muted'">
         {{ length }} / {{ IMPROVEMENT_BODY_CAP }}<template v-if="over">（上限を超えています）</template>
@@ -78,14 +83,8 @@ function onSave(): void {
       <UiChipSelect v-model="tags" :options="TAG_OPTIONS" aria-label="要望のタグ" />
     </UiFormField>
 
-    <!-- 参考リンク・画像の編集（投稿フォームと同一部品 = 原則3） -->
-    <ImprovementsAttachmentEditor
-      v-model:links="links"
-      v-model:images="images"
-      v-model:busy="attachBusy"
-      :active="active"
-      :images-editable="imagesEditable"
-    />
+    <!-- 参考リンクの編集（投稿フォームと同一部品 = 原則3） -->
+    <ImprovementsLinkEditor v-model:links="links" />
 
     <div class="flex justify-end gap-2">
       <button type="button" class="btn btn-sm" :disabled="busy" @click="emit('cancel')">キャンセル</button>

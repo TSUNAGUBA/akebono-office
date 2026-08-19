@@ -184,7 +184,9 @@ export function clusterTargetRequests<T extends { itemId?: string | null; archiv
  */
 export type ImprovementRequestTag = 'brainstorm' | 'entrust'
 
-export const IMPROVEMENT_REQUEST_TAGS: ImprovementRequestTag[] = ['brainstorm', 'entrust']
+// 表示順の SoT（UiChipSelect はこの配列順で描画）。改修依頼 2026-08-19 第4弾: 左から「お任せ」「壁打ち」。
+// 投稿フォームの既定選択は「お任せ」（entrust）= ImprovementSubmit 側で初期値を設定
+export const IMPROVEMENT_REQUEST_TAGS: ImprovementRequestTag[] = ['entrust', 'brainstorm']
 
 /** タグの表示メタ（label・トーン・意味）。ラベルの SoT はここ。tone は UI の Tone 値と対応 */
 export const IMPROVEMENT_REQUEST_TAG_META: Record<
@@ -249,6 +251,8 @@ export interface ImprovementRequest {
   pagePath: string
   /** 投稿元ページの表示名（例: 'AKEBONO 売上'。空 = 不明） */
   pageLabel: string
+  /** 対象箇所（ページ内のどこか = 自由入力・任意。改修依頼 2026-08-19 第4弾）。旧データは未定義 = 無し（原則7） */
+  targetSpot?: string
   /** 要望本文 */
   body: string
   /** 要望単位のステータス（未定義 = open。改修単位のステータスとは独立の進捗タグ = 原則7） */
@@ -360,6 +364,12 @@ export interface ImprovementNote {
 export const IMPROVEMENT_BODY_CAP = 4_000
 export const IMPROVEMENT_PAGE_LABEL_CAP = 120
 export const IMPROVEMENT_PAGE_PATH_CAP = 200
+/** 対象箇所（ページ内のどこか = 自由入力・任意。改修依頼 2026-08-19 第4弾） */
+export const IMPROVEMENT_TARGET_SPOT_CAP = 120
+
+/** 投稿フォームの本文テンプレ既定値（改修依頼 2026-08-19 第4弾。要望/現状/改善の型に沿って書きやすくする）。
+ *  テンプレのみ（内容未入力）の投稿は送信ガードで弾く = 見出しだけの空要望を作らない */
+export const IMPROVEMENT_BODY_TEMPLATE = '要望：\n現状：\n改善：\n'
 export const IMPROVEMENT_TITLE_CAP = 200
 export const IMPROVEMENT_SUMMARY_CAP = 500
 export const IMPROVEMENT_DETAIL_CAP = 20_000
@@ -881,12 +891,15 @@ export interface PromptItemInput {
   pagePaths: string[]
   /** links / imageCount は要望の添付（省略可 = 旧呼び出しの下位互換。リンクはプロンプトに列挙・画像は件数のみ言及）。
    *  status は要望単位のステータス（省略/open 以外は【対応済み】【見送り】として明記 = プロンプト再生成に反映）。
-   *  comments は受付箱で記録した要望への時系列コメント（省略/空可。プロンプトに反映 = 改修依頼 2026-08-19）。
+   *  createdAt / comments[].createdAt は要望とコメントを 1 本の時系列へ統合するための投稿時刻（省略可 = 下位互換。
+   *  省略時は投入順を保持する = 時刻が揃わない旧呼び出しでも決定的。改修依頼 2026-08-19 第4弾）。
+   *  comments は受付箱で記録した要望への時系列コメント（省略/空可。要望本文と時系列統合してプロンプトへ反映）。
    *  注: 投稿時の任意タグ（壁打ち/お任せ）は人間運用の意思表示のためプロンプトには含めない（改修依頼 2026-08-19）。 */
   requests: {
     pageLabel: string; pagePath: string; body: string
     status?: ImprovementRequestStatus; links?: string[]; imageCount?: number
-    comments?: string[]
+    createdAt?: string
+    comments?: { body: string; createdAt?: string }[]
   }[]
   /** 担当者の時系列メモ（改修方針の検討過程・保留/見送り理由。プロンプトに加味する）。時系列（古い順）。省略/空可 */
   notes?: { body: string; kind: ImprovementNoteKind }[]
@@ -947,24 +960,44 @@ export function buildCodingPrompt(items: PromptItemInput[], opts?: { intro?: str
     }
     if (it.requests.length) {
       out.push('')
-      out.push('**根拠となった利用者の要望:**')
+      out.push('**根拠となった利用者の要望（時系列・要望とコメントを統合）:**')
       if (it.requests.some(r => requestStatusOf(r) !== 'open')) {
         out.push('（【対応済み】の要望は反映済みのため再改修しないこと・【見送り】の要望は実装しないこと）')
       }
+      // 要望本文とコメントを 1 本の時系列に統合する（改修依頼 2026-08-19 第4弾）。
+      // 従来は「要望（親）＞コメント（子）」の親子構造だったが、要望とコメントを createdAt 昇順で
+      // 交互に並べ、検討の流れを時系列で再構成して「要望」として集約する。タイブレーク・時刻欠落は
+      // 投入順（seq）で決定的（buildCodingPrompt は決定的関数 = 同入力 → 同出力）。
+      interface TimelineEntry { at: string; seq: number; line: string; subs: string[] }
+      const timeline: TimelineEntry[] = []
+      let seq = 0
       it.requests.forEach((r) => {
         const where = r.pageLabel.trim() || r.pagePath.trim()
         // 要望単位のステータス（open 以外は明記 = 対応済み分の再改修・見送り分の実装を防ぐ）
         const status = requestStatusOf(r)
         const statusTag = status === 'open' ? '' : `【${IMPROVEMENT_REQUEST_STATUS_META[status].label}】 `
-        out.push(`- ${where ? `［${where}］ ` : ''}${statusTag}${r.body.trim().replace(/\s*\n\s*/g, ' ')}`)
-        // 添付（リンクは参照先として列挙・画像はアプリ内参照のため件数のみ言及）
-        const links = (r.links ?? []).map(l => l.trim()).filter(Boolean)
-        for (const link of links) out.push(`  - 参考リンク: ${link}`)
-        if ((r.imageCount ?? 0) > 0) out.push(`  - 添付画像 ${r.imageCount} 件（改善要望ページの要望詳細で参照可能）`)
-        // 受付箱で記録した要望への時系列コメント（改修依頼 2026-08-19。検討経緯を AI に伝える）
-        const comments = (r.comments ?? []).map(c => c.trim()).filter(Boolean)
-        for (const comment of comments) out.push(`  - コメント: ${comment.replace(/\s*\n\s*/g, ' ')}`)
+        // 添付（リンクは参照先として列挙・画像はアプリ内参照のため件数のみ言及）は該当要望行に付随
+        const subs: string[] = []
+        for (const link of (r.links ?? []).map(l => l.trim()).filter(Boolean)) subs.push(`  - 参考リンク: ${link}`)
+        if ((r.imageCount ?? 0) > 0) subs.push(`  - 添付画像 ${r.imageCount} 件（改善要望ページの要望詳細で参照可能）`)
+        timeline.push({
+          at: r.createdAt ?? '', seq: seq++, subs,
+          line: `- 【要望】 ${where ? `［${where}］ ` : ''}${statusTag}${r.body.trim().replace(/\s*\n\s*/g, ' ')}`,
+        })
+        // 受付箱で記録した要望への時系列コメント（検討経緯）を同じ時系列へ混ぜる
+        for (const c of (r.comments ?? [])) {
+          const body = c.body.trim()
+          if (!body) continue
+          timeline.push({
+            at: c.createdAt ?? r.createdAt ?? '', seq: seq++, subs: [],
+            line: `- 【コメント】 ${body.replace(/\s*\n\s*/g, ' ')}`,
+          })
+        }
       })
+      // createdAt 昇順（同一書式の JST 文字列で比較 = 1 回のプロンプト生成は同一ソースのため書式一致）。
+      // 同時刻・時刻欠落は投入順 seq で安定ソート = 決定的
+      timeline.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : a.seq - b.seq))
+      for (const t of timeline) { out.push(t.line); for (const s of t.subs) out.push(s) }
     }
     // 担当者の時系列メモ（改修方針・保留/見送り理由）。AI がプロンプトを起こす際にこれも加味する
     const notes = (it.notes ?? []).filter(n => n.body.trim())

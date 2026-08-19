@@ -28,6 +28,7 @@ import {
   IMPROVEMENT_NOTE_CAP,
   IMPROVEMENT_PAGE_LABEL_CAP,
   IMPROVEMENT_PAGE_PATH_CAP,
+  IMPROVEMENT_TARGET_SPOT_CAP,
   IMPROVEMENT_STATUSES,
   IMPROVEMENT_SUMMARY_CAP,
   IMPROVEMENT_COMMENT_CAP,
@@ -79,7 +80,7 @@ const JST = `AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"'`
  * 画像の実体は itemId 指定の GET（ドロワーの遅延ロード）でのみ返す）
  */
 const reqColsOf = (withImages: boolean): string => `id, member_id AS "memberId", member_name AS "memberName",
-  page_path AS "pagePath", page_label AS "pageLabel", body, status, adoption, tags, links,
+  page_path AS "pagePath", page_label AS "pageLabel", target_spot AS "targetSpot", body, status, adoption, tags, links,
   ${withImages ? 'images' : `'[]'::jsonb AS images`}, item_id AS "itemId",
   excluded_item_ids AS "excludedItemIds",
   to_char(archived_at ${JST}) AS "archivedAt", to_char(edited_at ${JST}) AS "editedAt",
@@ -118,7 +119,7 @@ async function inTxn<T>(pool: pg.Pool, fn: (db: pg.PoolClient) => Promise<T>): P
  * タグ（壁打ち/お任せ = F-42-17）は allowlist 正規化のみ（未知値は落とす = エラーにしない）。
  */
 export function improvementRequestInputOf(body: Record<string, unknown>): {
-  body: string; pagePath: string; pageLabel: string; links: string[]
+  body: string; pagePath: string; pageLabel: string; targetSpot: string; links: string[]
   images: ImprovementRequestImage[]; tags: ImprovementRequestTag[]
 } {
   const text = String(body.body ?? '').trim()
@@ -135,6 +136,8 @@ export function improvementRequestInputOf(body: Record<string, unknown>): {
     // アプリ内パスのみ保持（'//host' 等は '' へ = 対象ページリンク化 F-42-20 に伴う防御。R1 監査 MAJOR-1）
     pagePath: capCodePoints(normalizeImprovementPagePath(body.pagePath), IMPROVEMENT_PAGE_PATH_CAP),
     pageLabel: capCodePoints(String(body.pageLabel ?? '').trim(), IMPROVEMENT_PAGE_LABEL_CAP),
+    // 対象箇所（ページ内のどこか = 自由入力・任意。改修依頼 2026-08-19 第4弾）
+    targetSpot: capCodePoints(String(body.targetSpot ?? '').trim(), IMPROVEMENT_TARGET_SPOT_CAP),
     links,
     images,
     tags: normalizeImprovementTags(body.tags),
@@ -185,9 +188,9 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
     // RETURNING は画像実体を含めない（クライアントは id しか読まず、アップロードした data URI をそのまま
     // 返すのは転送量の無駄 = 一覧 GET と同じ姿勢。実体は itemId 指定 GET でのみ返す）
     const { rows } = await pool.query(
-      `INSERT INTO improvement_requests (id, member_id, member_name, page_path, page_label, body, tags, links, images)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING ${reqColsOf(false)}`,
-      [id, user.id, user.name, input.pagePath, input.pageLabel, input.body,
+      `INSERT INTO improvement_requests (id, member_id, member_name, page_path, page_label, target_spot, body, tags, links, images)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING ${reqColsOf(false)}`,
+      [id, user.id, user.name, input.pagePath, input.pageLabel, input.targetSpot, input.body,
         JSON.stringify(input.tags), JSON.stringify(input.links), JSON.stringify(input.images)])
     return c.json({ data: rows[0] }, 201)
   })
@@ -757,24 +760,27 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
     if (ids.length > 0) {
       const { rows: reqRows } = await pool.query<{
         id: string; itemId: string; pageLabel: string; pagePath: string; body: string
-        status: ImprovementRequestStatus; links: string[]; imageCount: number
+        status: ImprovementRequestStatus; links: string[]; imageCount: number; createdAt: string
       }>(
+        // createdAt を SELECT に加える（改修依頼 2026-08-19 第4弾: 要望とコメントをプロンプトで時系列統合）
         `SELECT id, item_id AS "itemId", page_label AS "pageLabel", page_path AS "pagePath", body,
-           status, links, jsonb_array_length(images) AS "imageCount"
+           status, links, jsonb_array_length(images) AS "imageCount", to_char(created_at ${JST}) AS "createdAt"
          FROM improvement_requests WHERE item_id = ANY($1::text[]) AND archived_at IS NULL
          ORDER BY created_at, id`, [ids])
-      // 受付箱で記録した要望への時系列コメント（有効・古い順）を要望 id ごとに束ねる
-      // （改修依頼 2026-08-19: コメントもプロンプトに反映。タグ〔壁打ち/お任せ〕は人間運用のため非対象）
+      // 受付箱で記録した要望への時系列コメント（有効・古い順）を要望 id ごとに束ねる（本文＋投稿時刻）。
+      // 要望本文と混ぜて createdAt 昇順に並べ替えるため、コメントも createdAt を持たせる（改修依頼 2026-08-19 第4弾）
       const reqIds = reqRows.map(r => r.id)
-      const commentsByReq = new Map<string, string[]>()
+      const commentsByReq = new Map<string, { body: string; createdAt: string }[]>()
       if (reqIds.length > 0) {
-        const { rows: commentRows } = await pool.query<{ requestId: string; body: string }>(
-          `SELECT request_id AS "requestId", body FROM improvement_request_comments
+        const { rows: commentRows } = await pool.query<{ requestId: string; body: string; createdAt: string }>(
+          `SELECT request_id AS "requestId", body, to_char(created_at ${JST}) AS "createdAt"
+           FROM improvement_request_comments
            WHERE request_id = ANY($1::text[]) AND archived_at IS NULL ORDER BY created_at, id`, [reqIds])
         for (const cm of commentRows) {
           const arr = commentsByReq.get(cm.requestId)
-          if (arr) arr.push(cm.body)
-          else commentsByReq.set(cm.requestId, [cm.body])
+          const entry = { body: cm.body, createdAt: cm.createdAt }
+          if (arr) arr.push(entry)
+          else commentsByReq.set(cm.requestId, [entry])
         }
       }
       for (const r of reqRows) {
@@ -783,7 +789,7 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
           pageLabel: r.pageLabel, pagePath: r.pagePath, body: r.body,
           // 要望単位のステータスを加味（open 以外は【対応済み】【見送り】で明記 = プロンプト再生成に反映）
           status: r.status, links: r.links ?? [], imageCount: Number(r.imageCount ?? 0),
-          comments: commentsByReq.get(r.id) ?? [],
+          createdAt: r.createdAt, comments: commentsByReq.get(r.id) ?? [],
         }
         if (arr) arr.push(entry)
         else byItem.set(r.itemId, [entry])
