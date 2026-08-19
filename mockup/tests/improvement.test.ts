@@ -11,7 +11,9 @@ import {
   improvementCommentError, improvementImagesError, improvementLinksError,
   matchesImprovementFilter, normalizeImprovementLinks, normalizeImprovementTags, planAdoptionBulk, PROMPT_NAVIGATOR_PREAMBLE, requestAdoptionOf,
   improvementAdoptionError,
+  improvementEditChangedLabel,
   improvementEditError,
+  improvementRequestEditFields,
   improvementUnclusterError,
 } from '../../shared/domain/improvement'
 import { fmtDateTimeSec } from '~/utils/format'
@@ -352,5 +354,18 @@ describe('planAdoptionBulk / improvementAdoptionError（受付箱の選別ガー
     const plan = planAdoptionBulk(['c', 'd'], rows)
     expect(plan.applicable).toEqual([])
     expect(plan.lastError).not.toBeNull()
+  })
+})
+
+describe('improvementEditChangedLabel（編集の変更項目ラベル = 監査ログ・API/モック共通）', () => {
+  it('本文は常に含み、部分更新で送った項目（タグ/リンク/画像）のみ順に並べる', () => {
+    // improvementRequestEditFields の value をそのまま渡す（実在キーのみラベルに出る = 部分更新の鉄則）
+    const bodyOnly = improvementRequestEditFields({ body: '本文だけ' })
+    expect(bodyOnly.ok && improvementEditChangedLabel(bodyOnly.value)).toBe('本文')
+    const full = improvementRequestEditFields({ body: 'x', tags: ['entrust'], links: [], images: [] })
+    expect(full.ok && improvementEditChangedLabel(full.value)).toBe('本文・タグ・リンク・画像')
+    // 明示 undefined は「未指定 = 保持」でラベルにも出ない（現行値保持と一貫）
+    const partial = improvementRequestEditFields({ body: 'x', links: ['https://a.example'] })
+    expect(partial.ok && improvementEditChangedLabel(partial.value)).toBe('本文・リンク')
   })
 })

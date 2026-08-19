@@ -42,6 +42,7 @@ import {
   improvementEditError,
   improvementUnclusterError,
   improvementCommentError,
+  improvementEditChangedLabel,
   improvementImagesError,
   improvementLinksError,
   improvementNoteError,
@@ -674,13 +675,17 @@ export function useImprovements() {
     if (isApi) {
       const res = await apiWrite<ImprovementRequest>(`/v1/improvements/requests/${id}/edit`, { body: fields })
       if (!res.ok) return res
-      // 応答は画像の実体を含む（API は reqColsOf(true) で返す）。キャッシュへマージし遅延ロード済みとして
-      // マークする（レビュー R1 MAJOR）: マージしないと refresh() の prevImages 再注入が「削除された画像を
-      // 復活」「追加した画像を取りこぼし」する（一覧 GET は images:[] スタブのため）。SoT の応答で上書きが正。
+      // 応答は画像の実体を含む（API は reqColsOf(true) で返す）。キャッシュへ上書きマージする（レビュー R1 MAJOR）:
+      // マージしないと refresh() の prevImages 再注入が「削除された画像を復活」「追加した画像を取りこぼし」する
+      // （一覧 GET は images:[] スタブのため）。削除/追加/保持の正しさはこの map 上書きだけで成立する。
       const row = res.data
       apiRequests.value = apiRequests.value.map(r => (r.id === id ? row : r))
-      if (row.itemId) imagesLoadedFor.add(row.itemId)
-      else unclusteredImagesLoaded.add(row.id)
+      // 集約済み（itemId あり）は imagesLoadedFor（item 単位フラグ）へマークしない（レビュー R2 CRITICAL）:
+      // このマークは「その item の全要望が画像込みでロード済み」を意味し、正当なセッタは全要望を取得する
+      // loadRequestImages(itemId) だけ。1 件の編集応答で item 全体を loaded 詐称すると、item 画像ロードが
+      // 失敗した窓で兄弟要望が images:[] スタブのまま loaded 扱いになり、その兄弟の編集で添付を無言全消しする。
+      // 未集約は要望 id 単位フラグのため、この行の画像が実体込みでマージ済み = 自分だけロード済みマークで安全。
+      if (!row.itemId) unclusteredImagesLoaded.add(row.id)
       // 再取得は管理権限者のみ（管理 GET は非管理者に 403。投稿者本人の編集〔送信直後の修正〕は
       // ローカル表示のみで完結する = submit が管理 GET を誤発火しないのと同じ配慮）。
       // マージ済みのため refresh の prevImages は編集後の画像を正しく引き継ぐ（削除は削除のまま）
@@ -704,11 +709,8 @@ export function useImprovements() {
           editedAt: nowJstIso(),
         }
       : r))
-    // 記録系（原則2）の上書きは変更前の本文＋変更項目を監査ログへ残す（API の audit_logs と同じ = parity）
-    const changedFields = ['本文',
-      ...(fields.tags !== undefined ? ['タグ'] : []),
-      ...(fields.links !== undefined ? ['リンク'] : []),
-      ...(fields.images !== undefined ? ['画像'] : [])].join('・')
+    // 記録系（原則2）の上書きは変更前の本文＋変更項目を監査ログへ残す（API の audit_logs と同じ = parity）。
+    // 変更項目ラベルは shared 純関数で API と共有（原則3。文言・順序のズレを作らない）
     const logs = tbl('auditLogs')
     logs.value = [...logs.value, {
       id: nextId('auditLogs', 'aud'),
@@ -716,7 +718,7 @@ export function useImprovements() {
       action: 'update',
       entity: 'improvement_requests',
       entityId: id,
-      detail: `要望を編集（変更項目: ${changedFields}／変更前本文: ${target.body}）`,
+      detail: `要望を編集（変更項目: ${improvementEditChangedLabel(fields)}／変更前本文: ${target.body}）`,
       at: nowJstIso(),
     }]
     // 永続化可否を返し UI が警告できるようにする（submit と同型 = localStorage 容量超過で編集が消える事故を黙認しない）

@@ -25,7 +25,10 @@ const props = withDefaults(defineProps<{
   images: ImprovementRequestImage[]
   /** ウィンドウ全体のファイルドロップ抑止を有効にするか（表示中のみ true。既定 true） */
   active?: boolean
-}>(), { active: true })
+  /** 画像の編集（追加/削除）を許可するか（既定 true）。API モードで既存画像の遅延ロードに失敗した
+   *  編集では false = 画像編集 UI を出さず現行添付を保持する（追加が無言で捨てられる事故の防止 = レビュー R2 MINOR） */
+  imagesEditable?: boolean
+}>(), { active: true, imagesEditable: true })
 
 const emit = defineEmits<{
   'update:links': [v: string[]]
@@ -59,7 +62,9 @@ function removeLink(i: number): void {
 
 /** 画像ファイル群を縮小して添付する（ファイル選択・ドラッグ&ドロップ・貼り付けの共通経路 = 原則3） */
 async function addImageFiles(files: File[]): Promise<void> {
-  if (files.length === 0) return
+  // 画像編集不可（遅延ロード失敗の編集）では window レベルの貼り付け/ドロップも受け付けない
+  // （UI は隠しているが window ハンドラは生きているため = 追加の無言喪失を全経路で防ぐ。レビュー R2 MINOR）
+  if (!props.imagesEditable || files.length === 0) return
   if (imageBusy.value) {
     // 連続入力（貼り付け・ドロップ）でも黙って捨てず理由を伝える（X-1 = 全操作が反応する）
     showToast('画像を処理中です。完了してからもう一度お試しください', 'warn')
@@ -196,8 +201,14 @@ onBeforeUnmount(() => {
       <p v-if="links.length > 0" class="text-[11px] text-muted">http(s):// で始まる URL を入力してください。参照時は別タブで開きます。</p>
     </div>
 
+    <!-- 画像を読み込めなかった編集（imagesEditable=false）: 追加が無言で捨てられないよう画像編集 UI を出さず、
+         現行添付が保持される旨を明示する（レビュー R2 MINOR。本文・タグ・リンクは通常どおり編集可） -->
+    <div v-if="!imagesEditable" class="rounded-[10px] border border-line bg-surface-soft px-3 py-2 text-[12px] text-sub">
+      画像を読み込めなかったため、この編集では画像を変更できません（現在の添付はそのまま保持されます）。画像を編集したい場合は一度閉じて開き直してください。
+    </div>
+
     <!-- 添付画像（複数。参照時は押下で拡大） -->
-    <div class="grid gap-1.5">
+    <div v-else class="grid gap-1.5">
       <div class="flex items-center justify-between">
         <p class="label">画像（任意・{{ IMPROVEMENT_IMAGES_MAX }} 件まで）</p>
         <button

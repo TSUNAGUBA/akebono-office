@@ -191,10 +191,15 @@ function openRequestDrawer(row: Record<string, unknown>): void {
 const requestEditing = ref(false)
 const requestEditBusy = ref(false)
 const requestEditOpening = ref(false)
+// 編集開始時点で画像が編集可能か（= 遅延ロード済みか）を確定して保持する。フォーム表示・保存の両方で
+// この 1 つの値を使い、開いてから保存までの間にロードが完了しても判断がぶれない（= 未ロードで開いた編集が
+// 途中の loaded 遷移で images:[] を「全削除」として送ってしまう事故を防ぐ = レビュー R2）
+const requestImagesEditable = ref(true)
 
 // 編集開始は添付画像のロード完了をゲートする（レビュー R1 CRIT）: API モードの一覧 GET は画像を含まない
 // （images:[] スタブ）ため、未ロードのまま編集フォームを開いて保存すると添付を全消ししてしまう。
-// ロード完了を待ってからフォームを表示する。ロードが失敗しても saveEditRequest 側で images を送らず保護する
+// ロード完了を待ってからフォームを表示する。ロードに失敗した場合は images を送らず現行添付を保持し、
+// フォームでも画像編集を無効化して追加の無言喪失を防ぐ（レビュー R2 MINOR）
 async function startRequestEdit(): Promise<void> {
   if (!selectedRequest.value || requestEditOpening.value) return
   requestEditOpening.value = true
@@ -202,7 +207,13 @@ async function startRequestEdit(): Promise<void> {
     await imp.loadRequestImagesFor(selectedRequest.value)
   } finally {
     requestEditOpening.value = false
-    if (selectedRequest.value && !selectedRequest.value.archivedAt) requestEditing.value = true
+    if (selectedRequest.value && !selectedRequest.value.archivedAt) {
+      requestImagesEditable.value = imp.imagesLoadedForRequest(selectedRequest.value)
+      if (!requestImagesEditable.value) {
+        toast.show('添付画像を読み込めませんでした。本文・タグ・リンクのみ編集できます（現在の添付は保持されます）', 'warn')
+      }
+      requestEditing.value = true
+    }
   }
 }
 
@@ -210,9 +221,9 @@ async function saveEditRequest(payload: { body: string; tags: string[]; links: s
   if (!selectedRequest.value || requestEditBusy.value) return
   requestEditBusy.value = true
   try {
-    // 添付画像が未ロード（遅延ロード失敗等）なら images をパッチから外し、現行の添付を保持する
-    // （部分更新の鉄則。フォームのスナップショットは空 = 消すつもりが無いのに全消しになる事故を防ぐ）
-    const patch = imp.imagesLoadedForRequest(selectedRequest.value)
+    // 画像が編集不可（遅延ロード失敗）で開いた編集は images をパッチから外し、現行の添付を保持する
+    // （部分更新の鉄則。開いた時点の判断を使う = 途中の loaded 遷移で空配列を全削除として送らない）
+    const patch = requestImagesEditable.value
       ? payload
       : { body: payload.body, tags: payload.tags, links: payload.links }
     const res = await imp.editRequest(selectedRequest.value.id, patch)
@@ -1242,6 +1253,7 @@ async function copyAndClose(): Promise<void> {
             :initial-images="selectedRequest.images ?? []"
             :busy="requestEditBusy"
             :active="requestEditing"
+            :images-editable="requestImagesEditable"
             @save="saveEditRequest"
             @cancel="requestEditing = false"
           />

@@ -3409,11 +3409,19 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
 ### 88-3 検証・ドキュメント
 - [x] shared/api 単体 399（+ improvementRequestEditFields 5〔全項目/部分更新/空配列全削除/明示 undefined 保持 = R1〕・
   prompt コメント/タグ非出力 3）・統合 276（+ 編集の全項目/部分更新・画像保持・監査ログの変更項目・プロンプトのコメント反映）・
-  mockup 単体 360（+ reports-content 6・prompt テスト改訂）・両 typecheck・両 build green
-- [x] E2E: `e2e/batch3-e2e.cjs`（モックモード = 受付箱列順・要望編集の全項目・プロンプトのタグ非出力・チーム既定=月・
-  全員の週報プレビュー・週報例文挿入〔4 欄それぞれをアサート = R1 でトートロジー除去〕・モバイル 375px）。`run-batch6b-stack.sh`
-  へ登録し全スイート green（batch6d の `{ name: 'AKEBONO' }` 部分一致による strict mode 違反 = 「AKEBONO への要望」節見出しとの
-  衝突を h1 厳密指定へ修正 = 既存スイートのセレクタ堅牢化）
+  mockup 単体 361（+ reports-content 6・prompt テスト改訂・改変項目ラベル 1 = R2）・両 typecheck・両 build green
+- [x] E2E: `e2e/batch3-e2e.cjs`（モックモード 17 チェック = 受付箱列順・要望編集の全項目・プロンプトのタグ非出力・
+  チーム既定=月・全員の週報プレビュー・週報例文挿入〔4 欄それぞれをアサート = R1 でトートロジー除去〕・モバイル 375px）を
+  モックビルドに対し実行 = **17 passed / 0 failed**。`run-batch6b-stack.sh` へ登録済み
+- [x] 既存 batch6d（AKEBONO・API モード）は業務アプリ本実装 F-20-1 で陳腐化していた（旧「要件定義中プレースホルダ +
+  構想ロードマップ」を検証・`{ name: 'AKEBONO' }` が「AKEBONO への要望」節見出しと strict mode 衝突）ため、現行ページ
+  （業務アプリハブ + 要望ボックス F-03-2 + モックバッジ全廃）へ検証内容を更新 = スイートの目的を維持したまま堅牢化
+- [ ] **フルスタック E2E の残課題（本改修と独立・別対応）:** `run-batch6b-stack.sh` の `team-visibility-e2e.cjs`（API モード）
+  が現状 red。原因は本改修（第3弾）の diff 範囲外で、①`UiMultiCombobox` の候補が native `<option>`〔クリック不可〕として
+  解決される ②API モード既定のマトリクス表示メンバーにシード社員が出ない、の 2 点。いずれも reports の team matrix/表示メンバー
+  設定コンポーネント側で、第3弾の `teamView` 既定変更（週→月）は当該行のレンダリング〔メンバー名は sticky-left で両ビュー同一〕に
+  影響しないことを確認済み（`git diff f9e1fb8..HEAD -- reports.vue` は既定値のみ）。テスト改変で real regression を隠さないため
+  別タスクとして起票し、本 §88 では扱わない（「宣言だけ先行」を作らない = 原則9.5）
 - [x] docs（原則5）: functional-requirements（F-42-5/16/18・F-06-1/2/3/9/11・F-42-17 のプロンプト非出力を明記 = R1）・
   api-design（/prompt コメント・/edit 全項目/部分更新）・data-design（tags 非出力）・screen-design（プロンプト非出力）・
   implementation-status §88・CONVENTIONS.md（RequestEditForm/AttachmentEditor 部品表・BodyEditForm 廃止・editRequest 署名更新）
@@ -3430,4 +3438,16 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   貼り付け画像の二重添付を防ぐ）⑥監査ログに変更項目（本文/タグ/リンク/画像）を記録（API/mock 両系。画像実体は肥大のため detail に
   残さず「再編集」= 原則9.5 が取消導線）⑦ドキュメントのプロンプト・タグ表記の齟齬を全件修正。回帰テスト追加（明示 undefined 保持・
   本文だけ編集で画像保持・監査ログの変更項目・E2E 例文 4 欄）
-- [ ] R2 = 指摘反映後の再レビュー（コードレビュアー + システム監査官）で未解決の指摘ゼロを確認（実施中）
+- [x] R2 = 指摘反映後の再レビュー（コードレビュアー + システム監査官の 2 体並行）。**重大 1 = R1 修正が持ち込んだ新規退行**を
+  両者が同定: R1 の ③「`editRequest` API 分岐で `imagesLoadedFor.add(row.itemId)`」が、item 単位フラグの不変条件
+  （「itemId マーク済み = その item の**全**要望が画像込みロード済み」= 正当なセッタは全要望を取得する `loadRequestImages` のみ）を破る。
+  1 件の編集応答で item 全体を loaded 詐称するため、item 画像ロードが失敗した窓で**同一改修単位の兄弟要望が images:[] スタブのまま
+  loaded 扱い**になり、その兄弟の編集で `images:[]` を送信して**添付を無言全消し**（R1 が塞いだ CRIT と同型を兄弟に再導入）。
+  **修正:** ①`editRequest` から item 単位マークを削除し `if (!row.itemId) unclusteredImagesLoaded.add(row.id)` のみに
+  （マージ = キャッシュ上書きだけで削除/追加/保持は成立。集約済みは `loadRequestImages` の再試行に委ねる = 兄弟汚染を断つ）。
+  **Minor（両者）:** 画像ロード失敗で開いた編集にユーザーが追加した画像が保存時に無言破棄される → 編集開始時に
+  `requestImagesEditable` を確定・保持し、未ロードなら警告トースト + `RequestEditForm`/`AttachmentEditor` に `images-editable=false`
+  を渡して画像編集 UI を隠し `addImageFiles` を全経路ガード（保存判定も開いた時点の値で行い loaded 遷移で全削除しない）。
+  **NIT（原則3）:** 監査ログの変更項目ラベルを shared `improvementEditChangedLabel` へ切り出し API/mock 共用。
+  回帰テスト追加（改変項目ラベル = mockup 単体）。§88-4 R2 チェックは本修正反映後に確定（宣言先行を作らない）
+- [ ] R3 = R2 修正（兄弟シナリオの解消・成功パス非退行・画像編集ゲート）の独立再検証で未解決の指摘ゼロを確認（実施中）

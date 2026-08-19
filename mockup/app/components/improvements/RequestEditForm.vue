@@ -21,7 +21,10 @@ const props = withDefaults(defineProps<{
   busy?: boolean
   /** ウィンドウ全体のドロップ抑止を有効にするか（表示中のみ true = AttachmentEditor へ委譲） */
   active?: boolean
-}>(), { active: true })
+  /** 画像の編集を許可するか（既定 true）。API モードで既存画像の遅延ロードに失敗した編集では false =
+   *  画像編集 UI を隠し現行添付を保持する（追加の無言喪失を防ぐ = レビュー R2 MINOR。呼び出し側が判定して渡す） */
+  imagesEditable?: boolean
+}>(), { active: true, imagesEditable: true })
 
 const emit = defineEmits<{
   save: [payload: { body: string; tags: string[]; links: string[]; images: ImprovementRequestImage[] }]
@@ -81,6 +84,7 @@ function onSave(): void {
       v-model:images="images"
       v-model:busy="attachBusy"
       :active="active"
+      :images-editable="imagesEditable"
     />
 
     <div class="flex justify-end gap-2">

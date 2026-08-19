@@ -446,6 +446,18 @@ export function improvementRequestEditFields(
 }
 
 /**
+ * 編集で変更した項目のラベル（監査ログ用。API/モック共通 = パリティ）。本文は常に更新対象、
+ * tags/links/images は部分更新で実在したもののみ（improvementRequestEditFields の value に基づく）。
+ * 画像実体は肥大するため監査 detail には残さず「どの項目を変更したか」だけを記録する（原則3・レビュー R2）。
+ */
+export function improvementEditChangedLabel(fields: ImprovementRequestEditFields): string {
+  return ['本文',
+    ...(fields.tags !== undefined ? ['タグ'] : []),
+    ...(fields.links !== undefined ? ['リンク'] : []),
+    ...(fields.images !== undefined ? ['画像'] : [])].join('・')
+}
+
+/**
  * 選別変更の可否ガード（1 件。F-42-14/18/19）。判定順 = 存在（404）→ **取消済み（409）→ 集約済み（409）**。
  * 取消済みを先に判定する: 取消済み + 集約済みの行で「集約の解除」を案内すると、解除も取消済みで
  * AKO-REQ-018 になり案内が行き止まりになる（正しい最初の一手 = 復元 を先に伝える = レビュー R10）。
