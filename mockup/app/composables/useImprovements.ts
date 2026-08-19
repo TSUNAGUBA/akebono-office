@@ -42,10 +42,12 @@ import {
   improvementEditError,
   improvementUnclusterError,
   improvementCommentError,
+  improvementEditChangedLabel,
   improvementImagesError,
   improvementLinksError,
   improvementNoteError,
   improvementPlanError,
+  improvementRequestEditFields,
   matchesImprovementFilter,
   normalizeImprovementImages,
   normalizeImprovementLinks,
@@ -272,6 +274,18 @@ export function useImprovements() {
       }
     })()
     return unclusteredImagesLoading
+  }
+
+  /**
+   * 要望の添付画像が遅延ロード済みか（API モードのみ意味を持つ。mock は常に画像を保持するため true）。
+   * 一覧 GET は画像を含まない（images:[] スタブ）ため、編集フォームが未ロードのスナップショットを
+   * そのまま保存すると添付を消してしまう。呼び出し側はこれで「編集開始前にロードをゲート」
+   * 「未ロード時は images をパッチから外す（= 現行値保持）」を判断する（レビュー R1 CRIT）。
+   * ロード成功後は画像が無い要望も true になる（= 「未確認」と「確認済みで画像なし」を区別できる）。
+   */
+  function imagesLoadedForRequest(r: ImprovementRequest): boolean {
+    if (!isApi) return true
+    return r.itemId ? imagesLoadedFor.has(r.itemId) : unclusteredImagesLoaded.has(r.id)
   }
 
   // ---------- AI 集約（生成・再生成） ----------
@@ -644,20 +658,39 @@ export function useImprovements() {
   }
 
   /**
-   * 要望本文の編集（改修依頼 2026-08-18）。投稿者本人または管理権限者（API 側ガードと同一）。
-   * 編集は上書きだが editedAt を記録して「編集済み」を明示する（再編集で戻せる = 原則9.5）。
-   * 取消済みは編集不可（先に復元する）。集約済みは編集可（プロンプト再生成が現行本文を読む）。
+   * 要望の編集（改修依頼 2026-08-18 で新設 → 2026-08-19 で本文以外の項目〔タグ・リンク・画像〕も編集可能に）。
+   * 投稿者本人または管理権限者（API 側ガードと同一）。編集は全項目の上書きだが editedAt を記録して
+   * 「編集済み」を明示する（再編集で戻せる = 原則9.5）。取消済みは編集不可（先に復元する）。
+   * 集約済みは編集可（プロンプト再生成が現行本文を読む）。本文・タグ・リンク・画像は投稿時と同一の
+   * shared 検証（improvementRequestEditFields）で正規化 = API とパリティ。
    */
-  async function editRequest(id: string, body: string): Promise<Result & { persisted?: boolean }> {
-    const text = body.trim()
-    const msg = improvementBodyError(text)
-    if (msg) return { ok: false, error: { code: 'AKO-REQ-001', message: msg } }
+  async function editRequest(
+    id: string,
+    // tags は UiChipSelect の string[] をそのまま受ける（shared 検証が allowlist 正規化する = 未知値は落とす）
+    patch: { body: string; tags?: string[]; links?: string[]; images?: ImprovementRequestImage[] },
+  ): Promise<Result & { persisted?: boolean }> {
+    const parsed = improvementRequestEditFields(patch)
+    if (!parsed.ok) return { ok: false, error: parsed.error }
+    const fields = parsed.value
     if (isApi) {
-      const res = await apiWrite(`/v1/improvements/requests/${id}/edit`, { body: { body: text } })
+      const res = await apiWrite<ImprovementRequest>(`/v1/improvements/requests/${id}/edit`, { body: fields })
+      if (!res.ok) return res
+      // 応答は画像の実体を含む（API は reqColsOf(true) で返す）。キャッシュへ上書きマージする（レビュー R1 MAJOR）:
+      // マージしないと refresh() の prevImages 再注入が「削除された画像を復活」「追加した画像を取りこぼし」する
+      // （一覧 GET は images:[] スタブのため）。削除/追加/保持の正しさはこの map 上書きだけで成立する。
+      const row = res.data
+      apiRequests.value = apiRequests.value.map(r => (r.id === id ? row : r))
+      // 集約済み（itemId あり）は imagesLoadedFor（item 単位フラグ）へマークしない（レビュー R2 CRITICAL）:
+      // このマークは「その item の全要望が画像込みでロード済み」を意味し、正当なセッタは全要望を取得する
+      // loadRequestImages(itemId) だけ。1 件の編集応答で item 全体を loaded 詐称すると、item 画像ロードが
+      // 失敗した窓で兄弟要望が images:[] スタブのまま loaded 扱いになり、その兄弟の編集で添付を無言全消しする。
+      // 未集約は要望 id 単位フラグのため、この行の画像が実体込みでマージ済み = 自分だけロード済みマークで安全。
+      if (!row.itemId) unclusteredImagesLoaded.add(row.id)
       // 再取得は管理権限者のみ（管理 GET は非管理者に 403。投稿者本人の編集〔送信直後の修正〕は
-      // ローカル表示のみで完結する = submit が管理 GET を誤発火しないのと同じ配慮）
-      if (res.ok && canManageImprovements.value) await refresh()
-      return res.ok ? { ok: true, id } : res
+      // ローカル表示のみで完結する = submit が管理 GET を誤発火しないのと同じ配慮）。
+      // マージ済みのため refresh の prevImages は編集後の画像を正しく引き継ぐ（削除は削除のまま）
+      if (canManageImprovements.value) await refresh()
+      return { ok: true, id }
     }
     const reqsRef = tbl('improvementRequests')
     const target = reqsRef.value.find(r => r.id === id)
@@ -665,8 +698,19 @@ export function useImprovements() {
     const guard = improvementEditError(target, currentUser.value.id, canManageImprovements.value)
     if (guard) return { ok: false, error: guard }
     if (!target) return { ok: false, error: { code: 'AKO-REQ-002', message: '対象の要望が見つかりません' } } // 型ナローイング用（guard が先に返る）
-    reqsRef.value = reqsRef.value.map(r => (r.id === id ? { ...r, body: text, editedAt: nowJstIso() } : r))
-    // 記録系（原則2）の本文上書きは変更前の本文を監査ログへ残す（API の audit_logs と同じ復元可能性の担保 = parity）
+    // 部分更新: fields に実在するキーのみ上書き（未指定の tags/links/images は現行値を保持 = API と同一）
+    reqsRef.value = reqsRef.value.map(r => (r.id === id
+      ? {
+          ...r,
+          body: fields.body,
+          ...(fields.tags !== undefined ? { tags: fields.tags } : {}),
+          ...(fields.links !== undefined ? { links: fields.links } : {}),
+          ...(fields.images !== undefined ? { images: fields.images } : {}),
+          editedAt: nowJstIso(),
+        }
+      : r))
+    // 記録系（原則2）の上書きは変更前の本文＋変更項目を監査ログへ残す（API の audit_logs と同じ = parity）。
+    // 変更項目ラベルは shared 純関数で API と共有（原則3。文言・順序のズレを作らない）
     const logs = tbl('auditLogs')
     logs.value = [...logs.value, {
       id: nextId('auditLogs', 'aud'),
@@ -674,7 +718,7 @@ export function useImprovements() {
       action: 'update',
       entity: 'improvement_requests',
       entityId: id,
-      detail: `要望本文を編集（変更前: ${target.body}）`,
+      detail: `要望を編集（変更項目: ${improvementEditChangedLabel(fields)}／変更前本文: ${target.body}）`,
       at: nowJstIso(),
     }]
     // 永続化可否を返し UI が警告できるようにする（submit と同型 = localStorage 容量超過で編集が消える事故を黙認しない）
@@ -759,8 +803,10 @@ export function useImprovements() {
       title: it.title, summary: it.summary, detail: it.detail, status: it.status, pagePaths: it.pagePaths,
       requests: requestsForItem(it.id).map(r => ({
         pageLabel: r.pageLabel, pagePath: r.pagePath, body: r.body,
-        // 要望ステータス + 添付（リンクは列挙・画像は件数のみ）+ タグ（API /prompt と同じ内容 = 両モード parity）
-        status: r.status, links: r.links ?? [], imageCount: (r.images ?? []).length, tags: r.tags ?? [],
+        // 要望ステータス + 添付（リンクは列挙・画像は件数のみ）+ 受付箱のコメント（API /prompt と同じ内容 =
+        // 両モード parity。改修依頼 2026-08-19: コメントを反映・タグ〔壁打ち/お任せ〕は人間運用のため非対象）
+        status: r.status, links: r.links ?? [], imageCount: (r.images ?? []).length,
+        comments: commentsForRequest(r.id).map(cm => cm.body),
       })),
       // 時系列メモも加味（古い順。notesForItem がソート済み）
       notes: notesForItem(it.id).map(n => ({ body: n.body, kind: n.kind })),
@@ -772,6 +818,7 @@ export function useImprovements() {
     // データ
     activeItems, archivedItems, unclusteredRequests, adoptedUnclustered, pendingRequests, allRequests,
     requestsForItem, notesForItem, commentsForRequest, commentCountByRequest, refresh, loadRequestImages, loadRequestImagesFor,
+    imagesLoadedForRequest,
     // 操作
     submit, generate, setStatus, editItem, setItemArchived, setRequestArchived, setRequestStatus,
     setRequestAdoption, setRequestAdoptionBulk, unclusterRequest, editRequest, addRequestComment, setRequestCommentArchived,

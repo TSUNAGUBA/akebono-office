@@ -4,19 +4,18 @@
  * 「このページの改善・改修の要望」を送れる。投稿元ページのパス・表示名を自動で添付する。
  * 投稿は認証済み全員が可能（閲覧・管理は権限を持つ人のみ = 別ページ）。UiModal は body へ
  * テレポートするため、ボタンをヘッダーに 1 つ置くだけで全ページに導線が出る。
- * 送信後は同じモーダル内で「取り消す」導線を出す（投稿者本人の取消 = 原則9.5。誤送信で詰まない）。
- * 添付（改善要望 2026-08-17）: URL リンク（複数）と画像（複数。縮小 data URI = 商品画像と同型）を添付できる。
- * 画像はファイル選択に加え、ドロップエリアへのドラッグ&ドロップとクリップボード貼り付けでも添付できる
- * （改修依頼 2026-08-18。3 経路とも共通の addImageFiles で縮小・上限・種別チェックを通す = 原則3）。
+ * 送信後は同じモーダル内で「取り消す」導線 + 修正フォームを出す（投稿者本人の取消/修正 = 原則9.5。誤送信で詰まない）。
+ * 添付（改善要望 2026-08-17）: URL リンク（複数）と画像（複数。縮小 data URI = 商品画像と同型。ファイル選択・
+ * ドラッグ&ドロップ・貼り付けの 3 経路）は共通部品 ImprovementsAttachmentEditor に集約し、要望編集
+ * （ImprovementsRequestEditForm）と共用する（改修依頼 2026-08-19 = 原則3）。
  */
-import { ImagePlus, Link2, MessageSquarePlus, Pencil, X } from 'lucide-vue-next'
+import { MessageSquarePlus, Pencil } from 'lucide-vue-next'
 import {
-  IMPROVEMENT_BODY_CAP, IMPROVEMENT_IMAGE_MAX_CHARS, IMPROVEMENT_IMAGES_MAX, IMPROVEMENT_LINKS_MAX,
+  IMPROVEMENT_BODY_CAP,
   IMPROVEMENT_REQUEST_TAG_META, IMPROVEMENT_REQUEST_TAGS,
   type ImprovementRequestImage, type ImprovementRequestTag, improvementLinksError,
 } from '~/types/improvement'
 import { listKnownPages, pageDisplay, resolvePageLabel } from '~/utils/page-label'
-import { imageToDataUri } from '~/utils/thumb'
 
 const route = useRoute()
 const { submit, setRequestArchived, editRequest } = useImprovements()
@@ -62,7 +61,6 @@ const links = ref<string[]>([])
 /** 添付画像（縮小済み data URI。プレビュー表示 + 個別削除可） */
 const images = ref<ImprovementRequestImage[]>([])
 const imageBusy = ref(false)
-const imageInput = ref<HTMLInputElement | null>(null)
 /** 送信後の確認 + 取消状態（true = 送信済みビュー） */
 const sent = ref(false)
 const lastId = ref('')
@@ -82,120 +80,6 @@ function openModal(): void {
   lastBody.value = ''
   editingSent.value = false
   open.value = true
-}
-
-// ---------- 添付リンク（複数。参照時は別タブで開く） ----------
-
-function addLink(): void {
-  if (links.value.length >= IMPROVEMENT_LINKS_MAX) return
-  links.value = [...links.value, '']
-}
-function removeLink(i: number): void {
-  links.value = links.value.filter((_, idx) => idx !== i)
-}
-
-// ---------- 添付画像（複数。参照時は押下で拡大） ----------
-
-/** 画像ファイル群を縮小して添付する（ファイル選択・ドラッグ&ドロップ・貼り付けの共通経路 = 原則3） */
-async function addImageFiles(files: File[]): Promise<void> {
-  if (files.length === 0) return
-  if (imageBusy.value) {
-    // 貼り付け・ドロップは連続入力が容易なため、黙って捨てずに理由を伝える（X-1 = 全操作が反応する）
-    showToast('画像を処理中です。完了してからもう一度お試しください', 'warn')
-    return
-  }
-  imageBusy.value = true
-  try {
-    for (const file of files) {
-      if (images.value.length >= IMPROVEMENT_IMAGES_MAX) {
-        showToast(`画像は ${IMPROVEMENT_IMAGES_MAX} 件までです`, 'warn')
-        break
-      }
-      if (!file.type.startsWith('image/')) {
-        showToast(`画像以外のファイルは添付できません（${file.name}）`, 'warn')
-        continue
-      }
-      try {
-        const uri = await imageToDataUri(file)
-        if (uri.length > IMPROVEMENT_IMAGE_MAX_CHARS) {
-          showToast(`画像を縮小しても大きすぎます（${file.name}）。別の画像をお試しください`, 'warn')
-          continue
-        }
-        // mime は縮小後の data URI から導出（imageToDataUri は PNG/JPEG へ再エンコードするため file.type とずれうる）
-        const mime = uri.slice('data:'.length, uri.indexOf(';'))
-        images.value = [...images.value, { filename: file.name, mime, dataUrl: uri }]
-      } catch (e) {
-        showToast((e as Error).message, 'crit')
-      }
-    }
-  } finally {
-    imageBusy.value = false
-  }
-}
-
-async function onImagePick(ev: Event): Promise<void> {
-  const input = ev.target as HTMLInputElement
-  const files = Array.from(input.files ?? [])
-  input.value = '' // 同一ファイル再選択を許可
-  await addImageFiles(files)
-}
-function removeImage(i: number): void {
-  images.value = images.value.filter((_, idx) => idx !== i)
-}
-
-// ---------- ドラッグ&ドロップ / クリップボード貼り付け（改修依頼 2026-08-18） ----------
-
-/** ドロップエリアの強調表示（ドラッグ中） */
-const dragActive = ref(false)
-
-async function onImageDrop(ev: DragEvent): Promise<void> {
-  dragActive.value = false
-  await addImageFiles(Array.from(ev.dataTransfer?.files ?? []))
-}
-
-/**
- * モーダル入力中はウィンドウ全体でファイルドロップの既定動作（画像ファイルへのページ遷移 =
- * 入力途中のフォームが失われる）を抑止し、ドロップエリア外に落とした画像も添付として受ける（レビュー指摘）。
- * ファイル以外のドラッグ（テキスト選択の D&D 等）は既定動作のまま = types に 'Files' を含むときだけ介入する。
- * ドロップエリア上のドロップは要素側ハンドラが処理し stopPropagation する（二重添付防止）。
- */
-function hasFileDrag(ev: DragEvent): boolean {
-  return !!ev.dataTransfer && Array.from(ev.dataTransfer.types).includes('Files')
-}
-function onWindowDragOver(ev: DragEvent): void {
-  if (!open.value || !hasFileDrag(ev)) return
-  ev.preventDefault()
-}
-function onWindowDrop(ev: DragEvent): void {
-  if (!open.value || !hasFileDrag(ev)) return
-  // 送信後ビュー（取消導線の表示中）でもページ遷移は抑止する（誤ドロップで SPA ごと失わない）。
-  // 添付の追加は入力ビューのみ（送信後は受け取らない）
-  ev.preventDefault()
-  if (sent.value) return
-  dragActive.value = false
-  void addImageFiles(Array.from(ev.dataTransfer?.files ?? []))
-}
-onMounted(() => {
-  window.addEventListener('dragover', onWindowDragOver)
-  window.addEventListener('drop', onWindowDrop)
-})
-onBeforeUnmount(() => {
-  window.removeEventListener('dragover', onWindowDragOver)
-  window.removeEventListener('drop', onWindowDrop)
-})
-
-/**
- * クリップボードからの画像貼り付け（入力ビュー全体で受ける = テキスト欄にフォーカスしたままでも貼れる）。
- * 画像を含まない貼り付け（テキスト等）は既定動作のまま = preventDefault しない。
- */
-async function onPaste(ev: ClipboardEvent): Promise<void> {
-  const files = Array.from(ev.clipboardData?.items ?? [])
-    .filter(item => item.kind === 'file' && item.type.startsWith('image/'))
-    .map(item => item.getAsFile())
-    .filter((f): f is File => !!f)
-  if (files.length === 0) return
-  ev.preventDefault() // 画像はテキストとして貼り込まず添付として扱う
-  await addImageFiles(files)
 }
 
 async function send(): Promise<void> {
@@ -238,25 +122,30 @@ function again(): void {
   editingSent.value = false
 }
 
-// ---------- 送信直後の本文修正（F-42-16。投稿者本人の編集権をここで行使できる = 改修依頼 2026-08-18） ----------
-// フォームは /improvements の生要望編集と共通部品 ImprovementsBodyEditForm を共用（原則3）
+// ---------- 送信直後の修正（F-42-16。投稿者本人の編集権をここで行使できる = 改修依頼 2026-08-18） ----------
+// フォームは /improvements の生要望編集と共通部品 ImprovementsRequestEditForm を共用（原則3）。
+// 改修依頼 2026-08-19: 本文だけでなくタグ・リンク・画像も修正できる（editRequest は全項目の上書き）。
 
 const editingSent = ref(false)
 const editBusy = ref(false)
 
-async function saveEditSent(body: string): Promise<void> {
+async function saveEditSent(payload: { body: string; tags: string[]; links: string[]; images: ImprovementRequestImage[] }): Promise<void> {
   if (!lastId.value || editBusy.value) return
   editBusy.value = true
   try {
-    const res = await editRequest(lastId.value, body)
+    const res = await editRequest(lastId.value, payload)
     if (res.ok) {
-      lastBody.value = body.trim()
+      // 送信済みビューの表示・再編集の初期値を最新化する（editRequest は全項目を上書きするため refs も揃える）
+      lastBody.value = payload.body.trim()
+      tags.value = payload.tags
+      links.value = payload.links
+      images.value = payload.images
       editingSent.value = false
       if (res.persisted === false) {
         // mock の localStorage 容量超過（submit と同型の警告 = 消える編集を黙認しない）
-        showToast('本文を修正しましたが、保存容量が上限に達したため再読込時に失われる可能性があります', 'warn')
+        showToast('要望を修正しましたが、保存容量が上限に達したため再読込時に失われる可能性があります', 'warn')
       } else {
-        showToast('送信した要望の本文を修正しました', 'ok')
+        showToast('送信した要望を修正しました', 'ok')
       }
     } else {
       showToast(`${res.error.code}: ${res.error.message}`, 'crit')
@@ -282,8 +171,8 @@ async function undo(): Promise<void> {
   </button>
 
   <UiModal :open="open" :title="sent ? '送信しました' : '要望を送る'" width="520px" @close="open = false">
-    <!-- 入力（@paste = 画像のクリップボード貼り付けをビュー全体で受ける。テキスト貼り付けは既定動作のまま） -->
-    <div v-if="!sent" class="grid gap-3" @paste="onPaste">
+    <!-- 入力（画像のクリップボード貼り付け・ドロップは AttachmentEditor が window で受ける） -->
+    <div v-if="!sent" class="grid gap-3">
       <p class="text-[13px] text-sub">
         改善・改修の要望を送れます。内容は権限を持つ担当者が AI で整理し、改修の検討に活用します。
       </p>
@@ -310,96 +199,13 @@ async function undo(): Promise<void> {
         <UiChipSelect v-model="tags" :options="TAG_OPTIONS" aria-label="要望のタグ" />
       </UiFormField>
 
-      <!-- 添付リンク（複数。参照時は別タブで開く） -->
-      <div class="grid gap-1.5">
-        <div class="flex items-center justify-between">
-          <p class="label">参考リンク（任意・{{ IMPROVEMENT_LINKS_MAX }} 件まで）</p>
-          <button
-            v-if="links.length < IMPROVEMENT_LINKS_MAX"
-            type="button" class="btn btn-ghost btn-sm" @click="addLink"
-          >
-            <Link2 class="h-4 w-4" aria-hidden="true" /> リンクを追加
-          </button>
-        </div>
-        <div v-for="(_, i) in links" :key="i" class="flex items-center gap-1.5">
-          <input
-            v-model="links[i]"
-            class="input flex-1"
-            type="url"
-            inputmode="url"
-            placeholder="https://example.com/..."
-            :aria-label="`参考リンク ${i + 1}`"
-          >
-          <button type="button" class="btn btn-ghost btn-sm shrink-0" :aria-label="`参考リンク ${i + 1} を削除`" @click="removeLink(i)">
-            <X class="h-4 w-4" aria-hidden="true" />
-          </button>
-        </div>
-        <p v-if="links.length > 0" class="text-[11px] text-muted">http(s):// で始まる URL を入力してください。参照時は別タブで開きます。</p>
-      </div>
-
-      <!-- 添付画像（複数。参照時は押下で拡大） -->
-      <div class="grid gap-1.5">
-        <div class="flex items-center justify-between">
-          <p class="label">画像（任意・{{ IMPROVEMENT_IMAGES_MAX }} 件まで）</p>
-          <button
-            v-if="images.length < IMPROVEMENT_IMAGES_MAX"
-            type="button" class="btn btn-ghost btn-sm" :disabled="imageBusy" @click="imageInput?.click()"
-          >
-            <ImagePlus class="h-4 w-4" aria-hidden="true" /> {{ imageBusy ? '読込中…' : '画像を追加' }}
-          </button>
-        </div>
-        <input
-          ref="imageInput"
-          type="file"
-          accept="image/*"
-          multiple
-          class="hidden"
-          aria-label="添付画像を選択"
-          @change="onImagePick"
-        >
-        <!-- ドロップエリア（ドラッグ&ドロップ / クリック選択 / 貼り付け。改修依頼 2026-08-18）。
-             上限到達時は「画像を追加」ボタンと同じく非表示（プレビューと削除だけ残す） -->
-        <div
-          v-if="images.length < IMPROVEMENT_IMAGES_MAX"
-          class="grid min-h-16 cursor-pointer place-items-center rounded-xl border-2 border-dashed px-3 py-2.5 text-center transition-colors"
-          :class="dragActive ? 'border-brand bg-brand-soft' : 'border-line hover:border-line-strong'"
-          role="button"
-          tabindex="0"
-          aria-label="画像をドラッグ&ドロップ、クリックで選択、または貼り付けで添付"
-          @click="imageInput?.click()"
-          @keydown.enter.prevent="imageInput?.click()"
-          @keydown.space.prevent="imageInput?.click()"
-          @dragover.prevent="dragActive = true"
-          @dragleave="dragActive = false"
-          @drop.prevent.stop="onImageDrop"
-        >
-          <!-- pointer-events-none: 子要素上の dragleave ちらつき防止 -->
-          <span class="pointer-events-none grid place-items-center gap-0.5 text-[12px] text-muted">
-            <ImagePlus class="h-5 w-5" aria-hidden="true" />
-            <span>{{ imageBusy ? '読込中…' : 'ここに画像をドラッグ&ドロップ（クリックで選択）' }}</span>
-            <span class="text-[11px]">スクリーンショットはコピーしてそのまま貼り付け（Ctrl+V / ⌘V）もできます</span>
-          </span>
-        </div>
-        <div v-if="images.length > 0" class="flex flex-wrap gap-2">
-          <div v-for="(img, i) in images" :key="i" class="relative">
-            <img
-              :src="img.dataUrl"
-              :alt="img.filename"
-              :title="img.filename"
-              class="h-16 w-16 rounded-lg border border-line object-cover"
-            >
-            <button
-              type="button"
-              class="absolute -right-1.5 -top-1.5 grid h-5 w-5 place-items-center rounded-full border border-line bg-surface text-muted shadow-sm hover:text-crit"
-              :aria-label="`画像「${img.filename}」を削除`"
-              @click="removeImage(i)"
-            >
-              <X class="h-3 w-3" aria-hidden="true" />
-            </button>
-          </div>
-        </div>
-        <p class="text-[11px] text-muted">スクリーンショット等を添付できます（ドラッグ&ドロップ・貼り付け対応。自動で縮小されます）。参照時は押下で拡大表示されます。</p>
-      </div>
+      <!-- 添付（参考リンク + 画像）。追加/削除・縮小・貼り付け/ドロップは共通部品 = 要望編集と共用（原則3） -->
+      <ImprovementsAttachmentEditor
+        v-model:links="links"
+        v-model:images="images"
+        v-model:busy="imageBusy"
+        :active="open && !sent"
+      />
     </div>
 
     <!-- 送信後（取消導線 + 本文の修正 = F-42-16。投稿者本人の編集） -->
@@ -415,10 +221,14 @@ async function undo(): Promise<void> {
           </button>
         </div>
       </template>
-      <ImprovementsBodyEditForm
+      <ImprovementsRequestEditForm
         v-else
-        :initial="lastBody"
+        :initial-body="lastBody"
+        :initial-tags="tags"
+        :initial-links="links"
+        :initial-images="images"
         :busy="editBusy"
+        :active="editingSent"
         @save="saveEditSent"
         @cancel="editingSent = false"
       />

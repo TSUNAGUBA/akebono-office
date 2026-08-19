@@ -6933,6 +6933,44 @@ describe('改善要望（F-42）', () => {
     expect((await api('POST', `/v1/improvements/requests/${reqId}/edit`, { as: ADMIN, body: { body: '編集後の本文（管理者）' } })).status).toBe(200)
     expect((await api('POST', `/v1/improvements/requests/${reqId}/edit`, { as: HR, body: { body: '第三者の編集' } })).status).toBe(403)
 
+    // 改修依頼 2026-08-19: タグ・リンク・画像も編集できる（全項目の編集）。送ったキーは置き換わる
+    const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+    const fullEdit = await api('POST', `/v1/improvements/requests/${reqId}/edit`, {
+      as: MEMBER,
+      body: {
+        body: '全項目を編集', tags: ['entrust', 'bogus'],
+        links: ['https://example.com/new-ref'],
+        images: [{ filename: 'a.png', mime: 'image/png', dataUrl: png }],
+      },
+    })
+    expect(fullEdit.status).toBe(200)
+    expect(fullEdit.json.data as Record<string, unknown>).toMatchObject({
+      body: '全項目を編集', tags: ['entrust'], links: ['https://example.com/new-ref'],
+    })
+    expect((fullEdit.json.data as { images: { dataUrl: string }[] }).images[0]).toMatchObject({ dataUrl: png })
+    // 監査ログは変更項目と変更前本文を残す（添付変更を後から追える = R1。画像実体は肥大するため detail に残さない）。
+    // 全項目編集の直後なので「画像」を変更項目に含む更新ログが 1 件ある（本文だけの編集ログは含まない）
+    const auditLogs = (await api('GET', '/v1/configs/audit-logs', { as: ADMIN })).json.data as { entity: string; entityId: string; action: string; detail: string }[]
+    const fullEditLog = auditLogs.find(l => l.entity === 'improvement_requests' && l.entityId === reqId && l.action === 'update' && l.detail.includes('画像'))
+    expect(fullEditLog?.detail).toContain('変更項目: 本文・タグ・リンク・画像')
+    expect(fullEditLog?.detail).toContain('変更前本文:')
+    // 部分更新: 本文だけ送ると tags/links/images は保持される（CLAUDE.md 部分更新の鉄則 = 現行値保護）。
+    // 画像の保持は特に重要（一覧 GET が images:[] スタブを返すため、未ロードのまま保存すると添付を消す危険 = R1 CRIT）。
+    // UI は未ロード時に images キーを送らない実装だが、SoT の API も「送らなければ保持」を保証する
+    const bodyOnly = await api('POST', `/v1/improvements/requests/${reqId}/edit`, { as: MEMBER, body: { body: '本文だけ更新' } })
+    expect(bodyOnly.json.data as Record<string, unknown>).toMatchObject({
+      body: '本文だけ更新', tags: ['entrust'], links: ['https://example.com/new-ref'],
+    })
+    expect((bodyOnly.json.data as { images: { dataUrl: string }[] }).images).toHaveLength(1) // 画像が消えていない
+    expect((bodyOnly.json.data as { images: { dataUrl: string }[] }).images[0]).toMatchObject({ dataUrl: png })
+    // 空配列を明示的に送れば「全削除」になる
+    const cleared = await api('POST', `/v1/improvements/requests/${reqId}/edit`, {
+      as: MEMBER, body: { body: '添付を全削除', tags: [], links: [], images: [] },
+    })
+    expect(cleared.json.data as Record<string, unknown>).toMatchObject({ tags: [], links: [], images: [] })
+    // 不正なリンク/画像は AKO-REQ-009 / AKO-REQ-010
+    expect((await api('POST', `/v1/improvements/requests/${reqId}/edit`, { as: MEMBER, body: { body: 'x', links: ['ftp://a'] } })).json.error?.code).toBe('AKO-REQ-009')
+
     // 空・存在しない要望はエラー
     expect((await api('POST', `/v1/improvements/requests/${reqId}/edit`, { as: MEMBER, body: { body: '  ' } })).json.error?.code).toBe('AKO-REQ-001')
     expect((await api('POST', '/v1/improvements/requests/nope/edit', { as: ADMIN, body: { body: 'x' } })).status).toBe(404)
@@ -6942,6 +6980,25 @@ describe('改善要望（F-42）', () => {
     expect((await api('POST', `/v1/improvements/requests/${reqId}/edit`, { as: MEMBER, body: { body: 'x' } })).json.error?.code).toBe('AKO-REQ-015')
     await api('POST', `/v1/improvements/requests/${reqId}/restore`, { as: MEMBER })
     expect((await api('POST', `/v1/improvements/requests/${reqId}/edit`, { as: MEMBER, body: { body: '復元後の編集' } })).status).toBe(200)
+  })
+
+  it('受付箱の要望コメントを改修プロンプトに反映する（改修依頼 2026-08-19）', async () => {
+    const posted = await api('POST', '/v1/improvements/requests', {
+      as: MEMBER, body: { body: 'コメント反映テストの要望', pagePath: '/comment-prompt', pageLabel: 'コメント反映' },
+    })
+    const reqId = (posted.json.data as { id: string }).id
+    // 受付箱で要望へコメントを追記（管理権限者）→ 採用 → 集約
+    await api('POST', `/v1/improvements/requests/${reqId}/comments`, { as: ADMIN, body: { body: '対象は一覧のみで良いか確認したい' } })
+    await api('POST', `/v1/improvements/requests/${reqId}/adoption`, { as: ADMIN, body: { adoption: 'adopted' } })
+    await api('POST', '/v1/improvements/generate', { as: ADMIN })
+    const prompt = (await api('POST', '/v1/improvements/prompt', { as: ADMIN, body: { filter: 'open' } })).json.data as { prompt: string }
+    expect(prompt.prompt).toContain('- コメント: 対象は一覧のみで良いか確認したい')
+    // 取消したコメントはプロンプトに載らない（有効コメントのみ = 記録保護と整合）
+    const comments = (await api('GET', `/v1/improvements/request-comments?requestId=${reqId}`, { as: ADMIN }))
+      .json.data as { id: string }[]
+    await api('POST', `/v1/improvements/request-comments/${comments[0]!.id}/archive`, { as: ADMIN })
+    const prompt2 = (await api('POST', '/v1/improvements/prompt', { as: ADMIN, body: { filter: 'open' } })).json.data as { prompt: string }
+    expect(prompt2.prompt).not.toContain('対象は一覧のみで良いか確認したい')
   })
 
   it('生要望の選別（採用/不採用）: 採用のみ集約対象・集約済みは変更不可（0063・2026-08-17 第 2 弾）', async () => {
@@ -6991,12 +7048,13 @@ describe('改善要望（F-42）', () => {
     const plain = await api('POST', '/v1/improvements/requests', { as: MEMBER, body: { body: 'タグなし', pagePath: '/tag-test-plain', pageLabel: 'タグなし' } })
     expect((plain.json.data as { tags: string[] }).tags).toEqual([])
 
-    // 採用 → 集約 → プロンプトに〔お任せ〕と読み方の注記が明記される（F-42-17）
+    // 採用 → 集約 → タグは人間運用用のためプロンプトに含めない（改修依頼 2026-08-19）。本文自体は出る
     await api('POST', `/v1/improvements/requests/${reqId}/adoption`, { as: ADMIN, body: { adoption: 'adopted' } })
     await api('POST', '/v1/improvements/generate', { as: ADMIN })
     const prompt = (await api('POST', '/v1/improvements/prompt', { as: ADMIN, body: { filter: 'open' } })).json.data as { prompt: string }
-    expect(prompt.prompt).toContain('〔お任せ〕 タグテスト用の要望')
-    expect(prompt.prompt).toContain('開発側の解釈で進めてよい')
+    expect(prompt.prompt).toContain('タグテスト用の要望')
+    expect(prompt.prompt).not.toContain('〔お任せ〕')
+    expect(prompt.prompt).not.toContain('タグの読み方')
 
     // 集約の解除（F-42-19）: 改修単位から外れ「採用済み（集約待ち）」へ戻る = 再度 AI 集約の対象
     type Row = { id: string; itemId: string | null; adoption: string }

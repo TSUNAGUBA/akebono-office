@@ -18,6 +18,7 @@ import {
   improvementImagesError,
   improvementLinksError,
   improvementNoteError,
+  improvementRequestEditFields,
   IMPROVEMENT_STATUS_NEXT,
   isInternalPagePath,
   matchesImprovementFilter,
@@ -334,7 +335,7 @@ describe('buildCodingPrompt（添付の加味）', () => {
   })
 })
 
-describe('要望タグ（壁打ち/お任せ = F-42-17・改修依頼 2026-08-18）', () => {
+describe('要望タグ（壁打ち/お任せ = F-42-17）', () => {
   it('normalizeImprovementTags は allowlist（brainstorm/entrust）のみ・重複除去', () => {
     expect(normalizeImprovementTags(['brainstorm', 'entrust'])).toEqual(['brainstorm', 'entrust'])
     expect(normalizeImprovementTags(['entrust', 'entrust', 'bogus'])).toEqual(['entrust'])
@@ -342,18 +343,39 @@ describe('要望タグ（壁打ち/お任せ = F-42-17・改修依頼 2026-08-18
     expect(IMPROVEMENT_REQUEST_TAG_META.brainstorm.label).toBe('壁打ち')
     expect(IMPROVEMENT_REQUEST_TAG_META.entrust.label).toBe('お任せ')
   })
-  it('buildCodingPrompt は〔壁打ち〕〔お任せ〕を明記し、タグ無しは従来出力（下位互換 = 原則7）', () => {
-    const tagged = buildCodingPrompt([{
+})
+
+describe('buildCodingPrompt: コメント反映 + タグ除外（改修依頼 2026-08-19）', () => {
+  it('受付箱で記録した要望コメントをプロンプトに反映する（時系列・サブ項目）', () => {
+    const prompt = buildCodingPrompt([{
       title: 't', summary: 's', detail: 'd', status: 'accepted', pagePaths: ['/x'],
-      requests: [{ pageLabel: 'X', pagePath: '/x', body: '直したい', tags: ['entrust'] }],
+      requests: [{
+        pageLabel: 'X', pagePath: '/x', body: '直したい',
+        comments: ['まず配色の範囲を確認したい', '対象は一覧のみで良い'],
+      }],
     }])
-    expect(tagged).toContain('〔お任せ〕 直したい')
-    expect(tagged).toContain('開発側の解釈で進めてよい')
-    const plain = buildCodingPrompt([{
+    expect(prompt).toContain('- コメント: まず配色の範囲を確認したい')
+    expect(prompt).toContain('- コメント: 対象は一覧のみで良い')
+  })
+  it('コメントが無ければ言及しない（下位互換 = 原則7）', () => {
+    const prompt = buildCodingPrompt([{
       title: 't', summary: 's', detail: 'd', status: 'accepted', pagePaths: ['/x'],
       requests: [{ pageLabel: 'X', pagePath: '/x', body: '直したい' }],
     }])
-    expect(plain).not.toContain('〔')
+    expect(prompt).not.toContain('コメント:')
+  })
+  it('壁打ち/お任せタグは人間運用のためプロンプトに含めない（凡例も行頭マークも出さない）', () => {
+    // tags は PromptItemInput の対象外だが、呼び出し側が余剰プロパティで渡しても出力に混ざらないことを固定
+    const withTags = buildCodingPrompt([{
+      title: 't', summary: 's', detail: 'd', status: 'accepted', pagePaths: ['/x'],
+      requests: [{ pageLabel: 'X', pagePath: '/x', body: '直したい', ...({ tags: ['entrust', 'brainstorm'] } as object) }],
+    }])
+    expect(withTags).not.toContain('〔')
+    expect(withTags).not.toContain('タグの読み方')
+    expect(withTags).not.toContain('お任せ')
+    expect(withTags).not.toContain('壁打ち')
+    // 本文自体は従来どおり出力される
+    expect(withTags).toContain('直したい')
   })
 })
 
@@ -380,6 +402,48 @@ describe('improvementRequestInputOf', () => {
     expect(code).toBe('AKO-REQ-009')
     try { improvementRequestInputOf({ body: 'x', images: [{ dataUrl: 'data:text/html;base64,PGI+' }] }) } catch (e) { code = (e as { code?: string }).code ?? '' }
     expect(code).toBe('AKO-REQ-010')
+  })
+})
+
+describe('improvementRequestEditFields（要望編集の全項目正規化 = 改修依頼 2026-08-19）', () => {
+  it('本文・タグ・リンク・画像を正規化して返す（投稿時と同一ルール）', () => {
+    const res = improvementRequestEditFields({
+      body: ' 直したい ', tags: ['entrust', 'bogus'], links: [' https://a.example '],
+      images: [{ filename: 'a.png', mime: 'image/png', dataUrl: PNG }],
+    })
+    expect(res.ok).toBe(true)
+    if (!res.ok) return
+    expect(res.value).toEqual({
+      body: '直したい', tags: ['entrust'], links: ['https://a.example'],
+      images: [{ filename: 'a.png', mime: 'image/png', dataUrl: PNG }],
+    })
+  })
+  it('空本文は AKO-REQ-001 / 不正リンクは AKO-REQ-009 / 不正画像は AKO-REQ-010（throw せず error を返す）', () => {
+    const empty = improvementRequestEditFields({ body: '  ' })
+    expect(empty.ok).toBe(false)
+    if (!empty.ok) expect(empty.error.code).toBe('AKO-REQ-001')
+    const badLink = improvementRequestEditFields({ body: 'x', links: ['ftp://a'] })
+    expect(badLink.ok).toBe(false)
+    if (!badLink.ok) expect(badLink.error.code).toBe('AKO-REQ-009')
+    const badImage = improvementRequestEditFields({ body: 'x', images: [{ dataUrl: 'data:text/html;base64,PGI+' }] })
+    expect(badImage.ok).toBe(false)
+    if (!badImage.ok) expect(badImage.error.code).toBe('AKO-REQ-010')
+  })
+  it('部分更新: 省略したキー（tags/links/images）は value に含めない（呼び出し側が現行値を保持）', () => {
+    const res = improvementRequestEditFields({ body: '本文だけ' })
+    expect(res.ok).toBe(true)
+    if (res.ok) expect(res.value).toEqual({ body: '本文だけ' }) // tags/links/images は不在 = 更新しない
+  })
+  it('空配列を明示的に送れば「全削除」になる（キーが実在するため value に含まれる）', () => {
+    const res = improvementRequestEditFields({ body: 'x', tags: [], links: [], images: [] })
+    expect(res.ok).toBe(true)
+    if (res.ok) expect(res.value).toEqual({ body: 'x', tags: [], links: [], images: [] })
+  })
+  it('明示的 undefined は「未指定 = 現行値保持」として扱う（mock 経路の { tags: undefined } を API 経路と揃える = R1 MINOR）', () => {
+    const res = improvementRequestEditFields({ body: 'x', tags: undefined, links: undefined, images: undefined })
+    expect(res.ok).toBe(true)
+    // undefined は空配列（全削除）と異なり value に含めない = 現行の tags/links/images を保持する
+    if (res.ok) expect(res.value).toEqual({ body: 'x' })
   })
 })
 

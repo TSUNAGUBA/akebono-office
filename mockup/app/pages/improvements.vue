@@ -136,17 +136,20 @@ function reqOf(row: Record<string, unknown>): ImprovementRequest {
 // select = 一括選別の複数選択 / ops = 行内の 採用/不採用（改修依頼 2026-08-18）。
 // primary 指定列はモバイルのカード表示にも出す（一覧上の選別操作をモバイルでも可能にする = 原則8）
 const RAW_COLUMNS: TableColumn[] = [
+  // 列順は「対象ページ → 要望 → 投稿者 → それ以外」（改修依頼 2026-08-19）。
+  // 先頭の select は一括選別のチェックボックス（データ列ではなく行選択の操作列）のため列順の対象外で先頭固定。
   // select / ops は行データにキーの無い仮想列 = ソート不可（飾りのソートボタンを出さない = X-1）
   { key: 'select', label: '選択', width: '44px', primary: true, sortable: false },
+  // page も行データにキーの無い仮想列（スロット描画 = pageLabel/リンク）= ソート不可
+  { key: 'page', label: '対象ページ', width: '180px', sortable: false },
   { key: 'body', label: '要望', primary: true },
+  { key: 'memberName', label: '投稿者', width: '110px' },
   // attachments は行データにキーの無い仮想列（添付の直接確認 = 改修依頼 2026-08-18。リンク = 別タブ・画像 = 押下で拡大）
   { key: 'attachments', label: '添付', width: '170px', primary: true, sortable: false },
   // adoption は表示値（集約済みバッジ・未定義の補完）が保存値と異なるためソート不可（並びが表示と矛盾しない = R10）
   { key: 'adoption', label: '選別', width: '90px', primary: true, sortable: false },
   { key: 'ops', label: '選別操作', width: '150px', primary: true, sortable: false },
-  { key: 'memberName', label: '投稿者', width: '110px' },
-  // page / comments も行データにキーの無い仮想列（スロット描画 = pageLabel/コメント集計）= ソート不可
-  { key: 'page', label: '対象ページ', width: '180px', sortable: false },
+  // comments も行データにキーの無い仮想列（スロット描画 = コメント集計）= ソート不可
   { key: 'comments', label: 'コメント', width: '70px', align: 'right', sortable: false },
   // タイムスタンプは秒まで表示（yyyy/MM/dd HH:mm:ss = 改修依頼 2026-08-18）
   { key: 'createdAt', label: '投稿日時', width: '160px', primary: true },
@@ -182,24 +185,55 @@ function openRequestDrawer(row: Record<string, unknown>): void {
   if (r) void imp.loadRequestImagesFor(r) // 添付画像の遅延ロード（非ブロッキング）
 }
 
-// ---------- 生要望本文の編集（改修依頼 2026-08-18。フォームは共通部品 ImprovementsBodyEditForm） ----------
-// 編集は上書きだが editedAt を記録して「編集済み」を明示（再編集で戻せる = 原則9.5）。取消済みは編集不可
+// ---------- 生要望の編集（改修依頼 2026-08-18 → 2026-08-19 で本文以外の項目も編集可能に。共通部品 ImprovementsRequestEditForm） ----------
+// 編集は全項目の上書きだが editedAt を記録して「編集済み」を明示（再編集で戻せる = 原則9.5）。取消済みは編集不可
 
 const requestEditing = ref(false)
 const requestEditBusy = ref(false)
+const requestEditOpening = ref(false)
+// 編集開始時点で画像が編集可能か（= 遅延ロード済みか）を確定して保持する。フォーム表示・保存の両方で
+// この 1 つの値を使い、開いてから保存までの間にロードが完了しても判断がぶれない（= 未ロードで開いた編集が
+// 途中の loaded 遷移で images:[] を「全削除」として送ってしまう事故を防ぐ = レビュー R2）
+const requestImagesEditable = ref(true)
 
-async function saveEditRequest(body: string): Promise<void> {
+// 編集開始は添付画像のロード完了をゲートする（レビュー R1 CRIT）: API モードの一覧 GET は画像を含まない
+// （images:[] スタブ）ため、未ロードのまま編集フォームを開いて保存すると添付を全消ししてしまう。
+// ロード完了を待ってからフォームを表示する。ロードに失敗した場合は images を送らず現行添付を保持し、
+// フォームでも画像編集を無効化して追加の無言喪失を防ぐ（レビュー R2 MINOR）
+async function startRequestEdit(): Promise<void> {
+  if (!selectedRequest.value || requestEditOpening.value) return
+  requestEditOpening.value = true
+  try {
+    await imp.loadRequestImagesFor(selectedRequest.value)
+  } finally {
+    requestEditOpening.value = false
+    if (selectedRequest.value && !selectedRequest.value.archivedAt) {
+      requestImagesEditable.value = imp.imagesLoadedForRequest(selectedRequest.value)
+      if (!requestImagesEditable.value) {
+        toast.show('添付画像を読み込めませんでした。本文・タグ・リンクのみ編集できます（現在の添付は保持されます）', 'warn')
+      }
+      requestEditing.value = true
+    }
+  }
+}
+
+async function saveEditRequest(payload: { body: string; tags: string[]; links: string[]; images: ImprovementRequestImage[] }): Promise<void> {
   if (!selectedRequest.value || requestEditBusy.value) return
   requestEditBusy.value = true
   try {
-    const res = await imp.editRequest(selectedRequest.value.id, body)
+    // 画像が編集不可（遅延ロード失敗）で開いた編集は images をパッチから外し、現行の添付を保持する
+    // （部分更新の鉄則。開いた時点の判断を使う = 途中の loaded 遷移で空配列を全削除として送らない）
+    const patch = requestImagesEditable.value
+      ? payload
+      : { body: payload.body, tags: payload.tags, links: payload.links }
+    const res = await imp.editRequest(selectedRequest.value.id, patch)
     if (res.ok) {
       requestEditing.value = false
       if (res.persisted === false) {
         // mock の localStorage 容量超過（submit と同型の警告 = 消える編集を黙認しない）
-        toast.show('本文を編集しましたが、保存容量が上限に達したため再読込時に失われる可能性があります', 'warn')
+        toast.show('要望を編集しましたが、保存容量が上限に達したため再読込時に失われる可能性があります', 'warn')
       } else {
-        toast.show('要望の本文を編集しました', 'ok')
+        toast.show('要望を編集しました', 'ok')
       }
     } else {
       toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
@@ -1208,34 +1242,42 @@ async function copyAndClose(): Promise<void> {
           </span>
         </div>
 
-        <!-- 本文 + 添付（本文は編集可 = 改修依頼 2026-08-18。編集済みは editedAt で明示） -->
+        <!-- 本文 + 添付（本文・タグ・リンク・画像を編集可 = 改修依頼 2026-08-19。編集済みは editedAt で明示） -->
         <div class="card p-3">
-          <!-- 編集フォーム（共通部品。保存 = 上書き + editedAt 記録。キャンセルで破棄） -->
-          <ImprovementsBodyEditForm
+          <!-- 編集フォーム（共通部品。本文・タグ・リンク・画像を編集。保存 = 上書き + editedAt 記録。キャンセルで破棄） -->
+          <ImprovementsRequestEditForm
             v-if="requestEditing"
-            :initial="selectedRequest.body"
+            :initial-body="selectedRequest.body"
+            :initial-tags="selectedRequest.tags ?? []"
+            :initial-links="selectedRequest.links ?? []"
+            :initial-images="selectedRequest.images ?? []"
             :busy="requestEditBusy"
+            :active="requestEditing"
+            :images-editable="requestImagesEditable"
             @save="saveEditRequest"
             @cancel="requestEditing = false"
           />
-          <div v-else class="flex items-start gap-2">
-            <p class="min-w-0 flex-1 whitespace-pre-wrap break-words text-[13px] text-ink">{{ selectedRequest.body }}</p>
-            <button
-              v-if="!selectedRequest.archivedAt"
-              type="button"
-              class="btn btn-ghost btn-sm shrink-0"
-              aria-label="要望の本文を編集"
-              @click="requestEditing = true"
-            >
-              <Pencil class="h-3.5 w-3.5" aria-hidden="true" /> 編集
-            </button>
-          </div>
-          <!-- 添付（リンク = 別タブ・画像 = 押下で拡大。共通部品 = 改修単位ドロワーの元要望と共用） -->
-          <ImprovementsAttachmentList
-            :links="selectedRequest.links"
-            :images="selectedRequest.images"
-            @preview="(img) => { previewImage = img }"
-          />
+          <template v-else>
+            <div class="flex items-start gap-2">
+              <p class="min-w-0 flex-1 whitespace-pre-wrap break-words text-[13px] text-ink">{{ selectedRequest.body }}</p>
+              <button
+                v-if="!selectedRequest.archivedAt"
+                type="button"
+                class="btn btn-ghost btn-sm shrink-0"
+                :disabled="requestEditOpening"
+                aria-label="要望を編集"
+                @click="startRequestEdit"
+              >
+                <Pencil class="h-3.5 w-3.5" aria-hidden="true" /> 編集
+              </button>
+            </div>
+            <!-- 添付（リンク = 別タブ・画像 = 押下で拡大。共通部品 = 改修単位ドロワーの元要望と共用） -->
+            <ImprovementsAttachmentList
+              :links="selectedRequest.links"
+              :images="selectedRequest.images"
+              @preview="(img) => { previewImage = img }"
+            />
+          </template>
         </div>
 
         <!-- 選別（採用/不採用。集約済みは変更不可 = 記録保護。取消可能性 = いつでも選び直せる） -->

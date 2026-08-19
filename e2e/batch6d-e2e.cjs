@@ -8,21 +8,24 @@ async function main() {
   await withPage(async (page) => {
     console.log('suite: batch6d AKEBONO（API モード）')
 
-    // 1) /akebono 表示: プレースホルダ + ロードマップ + モックバッジなし（= 全廃マイルストーン）
+    // 1) /akebono 表示: 業務アプリハブ（旧「要件定義中プレースホルダ + 構想ロードマップ」は業務アプリ本実装 F-20-1 で
+    //    撤去済み）+ 要望ボックス + モックバッジなし（= 全廃マイルストーン）
     await page.goto(`${BASE}/#/akebono`)
-    await page.getByRole('main').getByRole('heading', { name: 'AKEBONO' }).waitFor()
+    // h1 を厳密指定（{ name: 'AKEBONO' } は「AKEBONO への要望」節見出しにも部分一致し strict mode 違反になる）
+    await page.getByRole('main').getByRole('heading', { level: 1, name: 'AKEBONO 業務' }).waitFor()
     await page.waitForTimeout(800)
     check('AKEBONO ページが表示される', true)
-    await page.getByText('AKEBONO は要件定義中です').waitFor()
-    check('要件定義中バナーが表示される', true)
-    check('構想ロードマップが表示される',
-      (await page.getByText('構想ロードマップ').count()) > 0
-      && (await page.getByText('プロトタイプ開発').count()) > 0)
+    await page.getByRole('heading', { name: 'AKEBONO への要望' }).waitFor()
+    check('要望ボックス（F-03-2）が表示される', true)
     check('モックアップバッジが表示されない（全廃マイルストーン）',
       !(await page.getByText('モックアップ', { exact: true }).count()))
 
+    // 空入力では送信ボタンが無効（誤送信の防止 = 現行 UI。旧エラートースト方式から変更）
+    check('空入力では送信ボタンが無効',
+      await page.getByRole('button', { name: '送信' }).isDisabled())
+
     // 2) 要望の投稿 → 受付リストへ即時反映
-    await page.getByPlaceholder('例: 過去の提案書から勝ちパターンを提示してほしい')
+    await page.getByRole('textbox', { name: '要望', exact: true })
       .fill('E2E: 議事録から自動でタスク化してほしい')
     await page.getByRole('button', { name: '送信' }).click()
     await page.getByText('受け付けました。要件定義の参考にします').waitFor()
@@ -31,12 +34,7 @@ async function main() {
     check('要望が受付リストへ即時反映される', true)
     check('投稿者名が表示される', (await page.getByText('E2E 管理者').count()) > 0)
 
-    // 3) 空入力はエラー表示
-    await page.getByRole('button', { name: '送信' }).click()
-    await page.getByText('要望を入力してください').waitFor()
-    check('空入力のエラーが表示される', true)
-
-    // 4) リロードしても保持（DB が SoT）
+    // 3) リロードしても保持（DB が SoT）
     await page.reload()
     await page.getByText('E2E: 議事録から自動でタスク化してほしい').waitFor()
     check('リロード後も要望が保持される（API SoT）', true)

@@ -45,9 +45,11 @@ import {
   improvementBodyError,
   improvementCommentError,
   improvementImagesError,
+  improvementEditChangedLabel,
   improvementLinksError,
   improvementNoteError,
   improvementPlanError,
+  improvementRequestEditFields,
   improvementTitleError,
   improvementUnclusterError,
   matchesImprovementFilter,
@@ -244,9 +246,12 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
   app.post('/requests/:id/edit', async (c) => {
     const user = c.get('user')
     const id = c.req.param('id')
-    const text = String(((await c.req.json().catch(() => ({}))) as { body?: unknown }).body ?? '').trim()
-    const msg = improvementBodyError(text)
-    if (msg) throw err('AKO-REQ-001', msg, 400)
+    // 本文・タグ・リンク・画像を投稿時と同一ルールで検証する（shared = mock とパリティ。
+    // 改修依頼 2026-08-19: 登録時の項目をすべて編集可能に。全項目の置き換え = 現行値を初期表示して送る前提）
+    const raw = (await c.req.json().catch(() => ({}))) as Record<string, unknown>
+    const parsed = improvementRequestEditFields(raw)
+    if (!parsed.ok) throw err(parsed.error.code, parsed.error.message, 400)
+    const fields = parsed.value
     // 権限確認を先に行う（mock と同一の判定順 = 権限の無い第三者へ取消状態を漏らさない。member_id は不変のため tx 外で可）
     const { rows: reqRows } = await pool.query<{ memberId: string }>(
       `SELECT member_id AS "memberId" FROM improvement_requests WHERE id = $1`, [id])
@@ -264,15 +269,23 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
          FROM improvement_requests WHERE id = $1 FOR UPDATE`, [id])
       if (prev.length === 0) throw err('AKO-REQ-002', '対象の要望が見つかりません', 404)
       if (prev[0]!.archivedAt) throw err('AKO-REQ-015', '取消済みの要望は編集できません（先に復元してください）', 409)
+      // 部分更新: リクエストに実在した項目のみ SET する（未指定の tags/links/images は現行値を保持 =
+      // CLAUDE.md の部分更新の鉄則。UI は常に全項目を送るため実質は全項目編集）。body・edited_at は常に更新。
       // 単一行の応答は images の実体も返す（'[]' で伏せると、応答をキャッシュへマージする
       // クライアントが添付を消してしまう = 保存データを正しく表現する。レビュー R14）
+      const sets = ['body = $2', 'edited_at = now()']
+      const params: unknown[] = [id, fields.body]
+      if (fields.tags !== undefined) { params.push(JSON.stringify(fields.tags)); sets.push(`tags = $${params.length}`) }
+      if (fields.links !== undefined) { params.push(JSON.stringify(fields.links)); sets.push(`links = $${params.length}`) }
+      if (fields.images !== undefined) { params.push(JSON.stringify(fields.images)); sets.push(`images = $${params.length}`) }
       const { rows } = await client.query(
-        `UPDATE improvement_requests SET body = $2, edited_at = now()
-         WHERE id = $1 RETURNING ${reqColsOf(true)}`,
-        [id, capCodePoints(text, IMPROVEMENT_BODY_CAP)])
+        `UPDATE improvement_requests SET ${sets.join(', ')} WHERE id = $1 RETURNING ${reqColsOf(true)}`, params)
+      // 監査記録は「変更した項目」も残す（添付の変更を後から追える = 監査証跡。本文は復元可能なよう全文保存。
+      // 画像実体は data URI で肥大するため detail には残さない = 添付の取消導線は「再編集」〔原則9.5〕が担う）。
+      // 変更項目ラベルは shared 純関数で mock と共有（原則3。文言・順序のズレを作らない）
       await client.query(
         `INSERT INTO audit_logs (actor_id, action, entity, entity_id, detail) VALUES ($1, 'update', 'improvement_requests', $2, $3)`,
-        [user.id, id, `要望本文を編集（変更前: ${prev[0]!.body}）`])
+        [user.id, id, `要望を編集（変更項目: ${improvementEditChangedLabel(fields)}／変更前本文: ${prev[0]!.body}）`])
       await client.query('COMMIT')
       return c.json({ data: rows[0] })
     } catch (e) {
@@ -743,22 +756,34 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
     const notesByItem = new Map<string, { body: string; kind: ImprovementNoteKind }[]>()
     if (ids.length > 0) {
       const { rows: reqRows } = await pool.query<{
-        itemId: string; pageLabel: string; pagePath: string; body: string
+        id: string; itemId: string; pageLabel: string; pagePath: string; body: string
         status: ImprovementRequestStatus; links: string[]; imageCount: number
-        tags: ImprovementRequestTag[]
       }>(
-        `SELECT item_id AS "itemId", page_label AS "pageLabel", page_path AS "pagePath", body,
-           status, tags, links, jsonb_array_length(images) AS "imageCount"
+        `SELECT id, item_id AS "itemId", page_label AS "pageLabel", page_path AS "pagePath", body,
+           status, links, jsonb_array_length(images) AS "imageCount"
          FROM improvement_requests WHERE item_id = ANY($1::text[]) AND archived_at IS NULL
          ORDER BY created_at, id`, [ids])
+      // 受付箱で記録した要望への時系列コメント（有効・古い順）を要望 id ごとに束ねる
+      // （改修依頼 2026-08-19: コメントもプロンプトに反映。タグ〔壁打ち/お任せ〕は人間運用のため非対象）
+      const reqIds = reqRows.map(r => r.id)
+      const commentsByReq = new Map<string, string[]>()
+      if (reqIds.length > 0) {
+        const { rows: commentRows } = await pool.query<{ requestId: string; body: string }>(
+          `SELECT request_id AS "requestId", body FROM improvement_request_comments
+           WHERE request_id = ANY($1::text[]) AND archived_at IS NULL ORDER BY created_at, id`, [reqIds])
+        for (const cm of commentRows) {
+          const arr = commentsByReq.get(cm.requestId)
+          if (arr) arr.push(cm.body)
+          else commentsByReq.set(cm.requestId, [cm.body])
+        }
+      }
       for (const r of reqRows) {
         const arr = byItem.get(r.itemId)
         const entry = {
           pageLabel: r.pageLabel, pagePath: r.pagePath, body: r.body,
           // 要望単位のステータスを加味（open 以外は【対応済み】【見送り】で明記 = プロンプト再生成に反映）
-          // + 投稿時の任意タグ（〔壁打ち〕〔お任せ〕= F-42-17）
           status: r.status, links: r.links ?? [], imageCount: Number(r.imageCount ?? 0),
-          tags: r.tags ?? [],
+          comments: commentsByReq.get(r.id) ?? [],
         }
         if (arr) arr.push(entry)
         else byItem.set(r.itemId, [entry])
