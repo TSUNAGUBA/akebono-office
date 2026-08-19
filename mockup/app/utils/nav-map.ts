@@ -75,7 +75,7 @@ export const NAV_MAP: Record<string, NavMapEntry> = {
   '/ai-assistant': {
     parent: HOME,
     related: [
-      { to: '/reports', label: '日報・週報' },
+      { to: '/reports', label: '日報' },
       PROJECTS,
     ],
   },
@@ -168,7 +168,7 @@ export const NAV_MAP: Record<string, NavMapEntry> = {
     related: [
       { to: '/ai-company/employees', label: 'AI 社員の管理', adminOnly: true },
       { to: '/ai-company/roles', label: 'ロール設定', adminOnly: true },
-      { to: '/reports', label: '日報・週報' },
+      { to: '/reports', label: '日報' },
     ],
   },
   '/ai-company/employees': {

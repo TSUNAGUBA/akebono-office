@@ -8,7 +8,7 @@ import type {
   CodeMasterItem, Company, CompanyRelation, Contact, ContactRelation,
   CustomerLog, CustomFieldDef, DailyReport, DecisionLog, DecisionTheme, DelegateSetting, Department,
   DocumentNode, Escalation, EscalationRule, ExternalLink, FeatureToggle, HearingLog, Holiday,
-  Industry, KnowledgeArticle, LeaveGrant, LeaveRequest, LeaveType, Member, Project,
+  Industry, KnowledgeArticle, LeaveGrant, LeaveRequest, LeaveType, Member, MonthlyReport, Project,
   PartnerActivity, PunchRecord, RelationType, ReportComment, ReportRead, SalesActivity, SalesMonthly, ServiceIncident,
   ShiftAssignment, ShiftDemand, ShiftPeriod, ShiftWish, SupportActivity, SystemService,
   TaskPlan, UptimeDaily, Village, WeeklyReport, WorkflowRequest, WorkflowRoute, WorkCategory, Note,
@@ -85,6 +85,8 @@ export interface MockDbShape {
   shiftDemands: ShiftDemand[]
   dailyReports: DailyReport[]
   weeklyReports: WeeklyReport[]
+  /** 月報（改修依頼 2026-08-19 第4弾。週報と同型で新設） */
+  monthlyReports: MonthlyReport[]
   reportComments: ReportComment[]
   /** 日報・週報の既読（全員の日報/週報タブの未読可視化。オペレーター指示 2026-07-31） */
   reportReads: ReportRead[]
@@ -217,6 +219,7 @@ export function buildSeed(): MockDbShape {
     shiftDemands: shifts.seedShiftDemands,
     dailyReports: reports.seedDailyReports,
     weeklyReports: reports.seedWeeklyReports,
+    monthlyReports: reports.seedMonthlyReports,
     reportComments: reports.seedReportComments,
     reportReads: [], // 既読は空スタート（ユーザーの閲覧操作でのみ増える）
 

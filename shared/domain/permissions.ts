@@ -52,8 +52,11 @@ export const FEATURE_PERMISSION_KEYS: { key: string; label: string }[] = [
   { key: 'improvements', label: '改善要望管理' },
 ]
 
-/** ページパス → 機能キー（フロントのメニュー・ルートガード用。null = ガード対象外 = 常に表示可） */
-export function featureKeyOfPath(path: string): string | null {
+/** ページパス → 機能キー（フロントのメニュー・ルートガード用。null = ガード対象外 = 常に表示可）。
+ *  クエリ・ハッシュ付きパス（例 /reports?kind=weekly = 改修依頼 2026-08-19 第4弾の日報/週報/月報メニュー）も
+ *  正しく解決できるよう先頭のパス部分のみで判定する。 */
+export function featureKeyOfPath(pathWithQuery: string): string | null {
+  const path = pathWithQuery.split(/[?#]/)[0] ?? ''
   if (path === '/support/chatbot' || path.startsWith('/support/chatbot/')) return 'chatbot'
   if (path === '/support/documents' || path.startsWith('/support/documents/')) return 'documents'
   const seg = path.split('/')[1] ?? ''

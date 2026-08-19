@@ -563,6 +563,45 @@ describe('日報', () => {
     const again = await api('PUT', '/v1/reports/weekly', { as: MEMBER, body: { ...body, goalReview: '書換' } })
     expect(again.json.error?.code).toBe('AKO-REP-002')
   })
+
+  // 月報（改修依頼 2026-08-19 第4弾。週報と同型で新設 = /v1/reports/monthly + reads kind=monthly）
+  it('月報の CRUD・提出保護（AKO-REP-002）・scope=all・既読（reads kind=monthly）', async () => {
+    const monthStart = '2026-07-01'
+    // 主要業務なしの提出は AKO-GEN-001
+    expect((await api('PUT', '/v1/reports/monthly', { as: MEMBER, body: { monthStart, status: 'submitted' } })).json.error?.code).toBe('AKO-GEN-001')
+    // 下書き保存 → 取得（週報と同じ拡張項目を保持・種別プリセット外は空へ正規化）
+    const base = {
+      monthStart, goalReview: '今月の成果', mainWork: '主要業務', issues: '課題', nextWeek: '来月テーマ',
+      goodPoints: '良かった点', teamShareKind: '相談したい', teamShareNote: '相談メモ', status: 'draft' as const,
+    }
+    expect((await api('PUT', '/v1/reports/monthly', { as: MEMBER, body: base })).status).toBe(200)
+    const saved = await api('GET', '/v1/reports/monthly', { as: MEMBER })
+    const row = (saved.json.data as { monthStart: string; goodPoints: string; teamShareKind: string; nextWeek: string }[])
+      .find(r => r.monthStart === monthStart)!
+    expect(row.goodPoints).toBe('良かった点')
+    expect(row.teamShareKind).toBe('相談したい')
+    expect(row.nextWeek).toBe('来月テーマ')
+    expect((await api('PUT', '/v1/reports/monthly', { as: MEMBER, body: { ...base, teamShareKind: '謎' } })).status).toBe(200)
+    const afterKind = await api('GET', '/v1/reports/monthly', { as: MEMBER })
+    expect((afterKind.json.data as { monthStart: string; teamShareKind: string }[]).find(r => r.monthStart === monthStart)!.teamShareKind).toBe('')
+    // 提出 → 再編集は保護（AKO-REP-002）
+    expect((await api('PUT', '/v1/reports/monthly', { as: MEMBER, body: { ...base, status: 'submitted' } })).status).toBe(200)
+    const again = await api('PUT', '/v1/reports/monthly', { as: MEMBER, body: { ...base, goalReview: '書換' } })
+    expect(again.json.error?.code).toBe('AKO-REP-002')
+    // 全員（scope=all）で提出済みが見える
+    const all = await api('GET', `/v1/reports/monthly?scope=all&monthStart=${monthStart}`, { as: ADMIN })
+    const mine = (all.json.data as { id: string; memberId: string }[]).find(r => r.memberId === MEMBER)!
+    expect(mine).toBeTruthy()
+    // 既読（kind=monthly）: 提出済み月報を既読 → reads に出る → 未読へ戻す（冪等）
+    expect((await api('PUT', '/v1/reports/reads', { as: ADMIN, body: { kind: 'monthly', reportId: mine.id } })).status).toBe(200)
+    const reads = await api('GET', `/v1/reports/reads?kind=monthly&monthStart=${monthStart}`, { as: ADMIN })
+    expect((reads.json.data as string[]).includes(mine.id)).toBe(true)
+    expect((await api('DELETE', `/v1/reports/reads/monthly/${mine.id}`, { as: ADMIN })).status).toBe(200)
+    const reads2 = await api('GET', `/v1/reports/reads?kind=monthly&monthStart=${monthStart}`, { as: ADMIN })
+    expect((reads2.json.data as string[]).includes(mine.id)).toBe(false)
+    // 期間指定の形式検証（YYYY-MM-DD 以外は 400）
+    expect((await api('GET', '/v1/reports/reads?kind=monthly&monthStart=bad', { as: ADMIN })).status).toBe(400)
+  })
 })
 
 // バッチ4（オペレーター指示 2026-08-03）: 日報「本日の課題の種別」・週報の新規項目・ぽいぽいポストの宛先通知

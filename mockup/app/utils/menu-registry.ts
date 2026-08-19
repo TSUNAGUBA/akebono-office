@@ -42,7 +42,9 @@ export const MENU_CARDS: Record<MenuArea, MenuCardDef[]> = {
     { id: 'timecard', title: 'タイムカード', description: '自分の打刻と出退勤・労働時間の一覧', icon: 'Clock3', to: '/timecard' },
     { id: 'attendance', title: '勤怠管理', description: '打刻・月次集計・36 協定アラート・休暇', icon: 'Clock', to: '/attendance' },
     { id: 'shift', title: 'シフト表', description: '希望提出・調整・確定シフトの確認', icon: 'CalendarRange', to: '/shift', featureToggle: 'shift' },
-    { id: 'reports', title: '日報・週報', description: '日々の報告とチームの提出状況', icon: 'NotebookPen', to: '/reports' },
+    { id: 'reports', title: '日報', description: '日々の活動報告とチームの提出状況', icon: 'NotebookPen', to: '/reports' },
+    { id: 'reports-weekly', title: '週報', description: '週次のふりかえり（成果・課題・来週の最重要テーマ）', icon: 'CalendarDays', to: '/reports?kind=weekly' },
+    { id: 'reports-monthly', title: '月報', description: '月次のふりかえり（成果・課題・来月の最重要テーマ）', icon: 'CalendarClock', to: '/reports?kind=monthly' },
     { id: 'ai-assistant', title: 'AI業務アシスタント', description: '明日の計画と当日の振り返りを AI と。日報へ自動反映', icon: 'Sparkles', to: '/ai-assistant' },
     { id: 'poipoi', title: '改善のタネ', description: '気づき・改善アイデアを投げ込む改善のタネ。AI の参照対象・管理者はチーム改善のため閲覧可', icon: 'StickyNote', to: '/poipoi' },
     { id: 'minutes', title: '議事録', description: '会議の記録を蓄積。全員が参照でき AI の参照対象', icon: 'NotebookPen', to: '/minutes' },
@@ -91,7 +93,7 @@ export const MENU_CARDS: Record<MenuArea, MenuCardDef[]> = {
 export const DEFAULT_MENU_CATEGORIES: Record<MenuArea, MenuCategoryDef[]> = {
   dashboard: [
     { id: 'decision', label: '意思決定支援', cardIds: ['decision'] },
-    { id: 'work', label: '業務ツール', cardIds: ['timecard', 'attendance', 'shift', 'reports', 'ai-assistant', 'poipoi', 'minutes', 'customer-log', 'support-activity', 'sales-activity', 'partner-activity', 'workflow'] },
+    { id: 'work', label: '業務ツール', cardIds: ['timecard', 'attendance', 'shift', 'reports', 'reports-weekly', 'reports-monthly', 'ai-assistant', 'poipoi', 'minutes', 'customer-log', 'support-activity', 'sales-activity', 'partner-activity', 'workflow'] },
     { id: 'ai-company', label: 'AIネイティブカンパニー', cardIds: ['ai-company'] },
     { id: 'insights', label: '経営・状況', cardIds: ['sales', 'media', 'status'] },
     { id: 'support', label: '業務支援', cardIds: ['support', 'inbox'] },

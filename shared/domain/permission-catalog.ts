@@ -95,12 +95,18 @@ export const FIELD_CATALOG: Record<string, { value: string; label: string }[]> =
  * - inbox のカテゴリタブは通知タブ設定（useNotificationTabs）が担うため対象外。
  */
 export const TAB_PERMISSION_CATALOG: Record<string, { key: string; label: string }[]> = {
+  // 改修依頼 2026-08-19 第4弾: 日報/週報/月報の 3 メニュー化に伴いタブキーを拡張（単一キー `reports` は維持）。
+  // 既存キー（mine/weekly-mine/all/weekly-all/team）は後方互換のため据え置き（旧ルールがそのまま効く = 原則7）。
   reports: [
     { key: 'mine', label: '自分の日報' },
-    { key: 'weekly-mine', label: '自分の週報' },
     { key: 'all', label: '全員の日報' },
+    { key: 'team', label: 'チーム（日報）' },
+    { key: 'weekly-mine', label: '自分の週報' },
     { key: 'weekly-all', label: '全員の週報' },
-    { key: 'team', label: 'チーム' },
+    { key: 'weekly-team', label: 'チーム（週報）' },
+    { key: 'monthly-mine', label: '自分の月報' },
+    { key: 'monthly-all', label: '全員の月報' },
+    { key: 'monthly-team', label: 'チーム（月報）' },
   ],
   workflow: [
     { key: 'mine', label: '自分の申請' },

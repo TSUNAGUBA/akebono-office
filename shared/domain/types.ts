@@ -962,6 +962,34 @@ export interface WeeklyReport {
   status: 'draft' | 'submitted'
 }
 
+/**
+ * 月報（改修依頼 2026-08-19 第4弾で新設 = 週報と同型）。週報と同一項目・同一 DB 列構成で、
+ * 期間キーを monthStart（対象月の初日・YYYY-MM-01）に置き換えたもの。表示ラベルのみ月次へ読み替える
+ * （goalReview=今月の成果 / mainWork=今月の主要業務 / nextWeek=来月の最重要テーマ）。
+ * チーム共有種別は週報と共通（WEEKLY_TEAM_SHARE_KINDS）。
+ */
+export interface MonthlyReport {
+  id: string
+  memberId: string
+  /** 対象月の初日（YYYY-MM-01）。週報の weekStart に対応する期間キー */
+  monthStart: string
+  /** 今月の成果・達成感（週報 goalReview に対応） */
+  goalReview: string
+  /** 今月の主要業務（週報 mainWork に対応） */
+  mainWork: string
+  /** 課題・原因仮説 */
+  issues: string
+  /** 来月の最重要テーマ（週報と共通の next_week 列を用いる = 期間レポート共通の本文キー） */
+  nextWeek: string
+  /** うまくいったこと・続けたいこと。旧データは未設定 */
+  goodPoints?: string
+  /** チーム共有事項の種別（WEEKLY_TEAM_SHARE_KINDS のいずれか。既定 '特になし'）。旧データは未設定 */
+  teamShareKind?: string
+  /** チーム共有事項の自由入力（任意）。旧データは未設定 */
+  teamShareNote?: string
+  status: 'draft' | 'submitted'
+}
+
 export interface ReportComment {
   id: string
   reportId: string
@@ -971,8 +999,8 @@ export interface ReportComment {
   reactions: { memberId: string; emoji: string }[]
 }
 
-/** 日報・週報の対象種別（既読管理で共用） */
-export type ReportReadKind = 'daily' | 'weekly'
+/** 日報・週報・月報の対象種別（既読管理で共用。月報は改修依頼 2026-08-19 第4弾で追加） */
+export type ReportReadKind = 'daily' | 'weekly' | 'monthly'
 
 /**
  * 日報・週報の既読（全員の日報/全員の週報タブの未読可視化。オペレーター指示 2026-07-31）。
@@ -983,7 +1011,7 @@ export interface ReportRead {
   /** 閲覧者（既読を付けた本人）*/
   memberId: string
   reportKind: ReportReadKind
-  /** 対象の DailyReport.id / WeeklyReport.id */
+  /** 対象の DailyReport.id / WeeklyReport.id / MonthlyReport.id */
   reportId: string
   readAt: string
 }
