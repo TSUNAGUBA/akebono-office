@@ -190,12 +190,32 @@ function openRequestDrawer(row: Record<string, unknown>): void {
 
 const requestEditing = ref(false)
 const requestEditBusy = ref(false)
+const requestEditOpening = ref(false)
+
+// 編集開始は添付画像のロード完了をゲートする（レビュー R1 CRIT）: API モードの一覧 GET は画像を含まない
+// （images:[] スタブ）ため、未ロードのまま編集フォームを開いて保存すると添付を全消ししてしまう。
+// ロード完了を待ってからフォームを表示する。ロードが失敗しても saveEditRequest 側で images を送らず保護する
+async function startRequestEdit(): Promise<void> {
+  if (!selectedRequest.value || requestEditOpening.value) return
+  requestEditOpening.value = true
+  try {
+    await imp.loadRequestImagesFor(selectedRequest.value)
+  } finally {
+    requestEditOpening.value = false
+    if (selectedRequest.value && !selectedRequest.value.archivedAt) requestEditing.value = true
+  }
+}
 
 async function saveEditRequest(payload: { body: string; tags: string[]; links: string[]; images: ImprovementRequestImage[] }): Promise<void> {
   if (!selectedRequest.value || requestEditBusy.value) return
   requestEditBusy.value = true
   try {
-    const res = await imp.editRequest(selectedRequest.value.id, payload)
+    // 添付画像が未ロード（遅延ロード失敗等）なら images をパッチから外し、現行の添付を保持する
+    // （部分更新の鉄則。フォームのスナップショットは空 = 消すつもりが無いのに全消しになる事故を防ぐ）
+    const patch = imp.imagesLoadedForRequest(selectedRequest.value)
+      ? payload
+      : { body: payload.body, tags: payload.tags, links: payload.links }
+    const res = await imp.editRequest(selectedRequest.value.id, patch)
     if (res.ok) {
       requestEditing.value = false
       if (res.persisted === false) {
@@ -1232,8 +1252,9 @@ async function copyAndClose(): Promise<void> {
                 v-if="!selectedRequest.archivedAt"
                 type="button"
                 class="btn btn-ghost btn-sm shrink-0"
+                :disabled="requestEditOpening"
                 aria-label="要望を編集"
-                @click="requestEditing = true"
+                @click="startRequestEdit"
               >
                 <Pencil class="h-3.5 w-3.5" aria-hidden="true" /> 編集
               </button>

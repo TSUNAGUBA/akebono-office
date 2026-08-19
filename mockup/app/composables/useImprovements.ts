@@ -275,6 +275,18 @@ export function useImprovements() {
     return unclusteredImagesLoading
   }
 
+  /**
+   * 要望の添付画像が遅延ロード済みか（API モードのみ意味を持つ。mock は常に画像を保持するため true）。
+   * 一覧 GET は画像を含まない（images:[] スタブ）ため、編集フォームが未ロードのスナップショットを
+   * そのまま保存すると添付を消してしまう。呼び出し側はこれで「編集開始前にロードをゲート」
+   * 「未ロード時は images をパッチから外す（= 現行値保持）」を判断する（レビュー R1 CRIT）。
+   * ロード成功後は画像が無い要望も true になる（= 「未確認」と「確認済みで画像なし」を区別できる）。
+   */
+  function imagesLoadedForRequest(r: ImprovementRequest): boolean {
+    if (!isApi) return true
+    return r.itemId ? imagesLoadedFor.has(r.itemId) : unclusteredImagesLoaded.has(r.id)
+  }
+
   // ---------- AI 集約（生成・再生成） ----------
 
   /** mock モードの決定的集約（API の Vertex→ヒューリスティックのフォールバックと同一ロジック）。
@@ -660,11 +672,20 @@ export function useImprovements() {
     if (!parsed.ok) return { ok: false, error: parsed.error }
     const fields = parsed.value
     if (isApi) {
-      const res = await apiWrite(`/v1/improvements/requests/${id}/edit`, { body: fields })
+      const res = await apiWrite<ImprovementRequest>(`/v1/improvements/requests/${id}/edit`, { body: fields })
+      if (!res.ok) return res
+      // 応答は画像の実体を含む（API は reqColsOf(true) で返す）。キャッシュへマージし遅延ロード済みとして
+      // マークする（レビュー R1 MAJOR）: マージしないと refresh() の prevImages 再注入が「削除された画像を
+      // 復活」「追加した画像を取りこぼし」する（一覧 GET は images:[] スタブのため）。SoT の応答で上書きが正。
+      const row = res.data
+      apiRequests.value = apiRequests.value.map(r => (r.id === id ? row : r))
+      if (row.itemId) imagesLoadedFor.add(row.itemId)
+      else unclusteredImagesLoaded.add(row.id)
       // 再取得は管理権限者のみ（管理 GET は非管理者に 403。投稿者本人の編集〔送信直後の修正〕は
-      // ローカル表示のみで完結する = submit が管理 GET を誤発火しないのと同じ配慮）
-      if (res.ok && canManageImprovements.value) await refresh()
-      return res.ok ? { ok: true, id } : res
+      // ローカル表示のみで完結する = submit が管理 GET を誤発火しないのと同じ配慮）。
+      // マージ済みのため refresh の prevImages は編集後の画像を正しく引き継ぐ（削除は削除のまま）
+      if (canManageImprovements.value) await refresh()
+      return { ok: true, id }
     }
     const reqsRef = tbl('improvementRequests')
     const target = reqsRef.value.find(r => r.id === id)
@@ -683,7 +704,11 @@ export function useImprovements() {
           editedAt: nowJstIso(),
         }
       : r))
-    // 記録系（原則2）の上書きは変更前の本文を監査ログへ残す（API の audit_logs と同じ復元可能性の担保 = parity）
+    // 記録系（原則2）の上書きは変更前の本文＋変更項目を監査ログへ残す（API の audit_logs と同じ = parity）
+    const changedFields = ['本文',
+      ...(fields.tags !== undefined ? ['タグ'] : []),
+      ...(fields.links !== undefined ? ['リンク'] : []),
+      ...(fields.images !== undefined ? ['画像'] : [])].join('・')
     const logs = tbl('auditLogs')
     logs.value = [...logs.value, {
       id: nextId('auditLogs', 'aud'),
@@ -691,7 +716,7 @@ export function useImprovements() {
       action: 'update',
       entity: 'improvement_requests',
       entityId: id,
-      detail: `要望を編集（変更前本文: ${target.body}）`,
+      detail: `要望を編集（変更項目: ${changedFields}／変更前本文: ${target.body}）`,
       at: nowJstIso(),
     }]
     // 永続化可否を返し UI が警告できるようにする（submit と同型 = localStorage 容量超過で編集が消える事故を黙認しない）
@@ -791,6 +816,7 @@ export function useImprovements() {
     // データ
     activeItems, archivedItems, unclusteredRequests, adoptedUnclustered, pendingRequests, allRequests,
     requestsForItem, notesForItem, commentsForRequest, commentCountByRequest, refresh, loadRequestImages, loadRequestImagesFor,
+    imagesLoadedForRequest,
     // 操作
     submit, generate, setStatus, editItem, setItemArchived, setRequestArchived, setRequestStatus,
     setRequestAdoption, setRequestAdoptionBulk, unclusterRequest, editRequest, addRequestComment, setRequestCommentArchived,

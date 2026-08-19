@@ -13,6 +13,13 @@ import {
 } from '~/types/improvement'
 import { imageToDataUri } from '~/utils/thumb'
 
+// モジュールレベルの「アクティブなインスタンス」スタック（レビュー R1 MINOR）。
+// AttachmentEditor が複数同時マウントされても（投稿モーダル + 要望編集ドロワー等）、window レベルの
+// ドロップ/貼り付けを処理するのは最前面（最後に active になった）1 つだけにする。両方が active な瞬間に
+// 貼り付け画像が両フォームへ二重添付されるのを防ぐ。SPA（ssr:false）のためモジュール状態はクライアント限定。
+let attachmentEditorUidSeq = 0
+const attachmentEditorActiveStack: number[] = []
+
 const props = withDefaults(defineProps<{
   links: string[]
   images: ImprovementRequestImage[]
@@ -108,21 +115,34 @@ async function onImageDrop(ev: DragEvent): Promise<void> {
 // ドロップエリア外に落とした画像ファイルへのページ遷移（入力途中のフォーム喪失）を防ぐ。
 // ファイル以外のドラッグ（テキスト選択の D&D 等）は既定動作のまま = types に 'Files' を含むときだけ介入。
 
+// 自インスタンスが window イベントを処理する権利を持つか（active かつスタック最前面）
+const uid = ++attachmentEditorUidSeq
+function isTopActive(): boolean {
+  return attachmentEditorActiveStack.length > 0
+    && attachmentEditorActiveStack[attachmentEditorActiveStack.length - 1] === uid
+}
+// active の切替でスタックを更新（true = 最前面へ / false = 除去）。immediate で初期状態も反映
+watch(() => props.active, (v) => {
+  const i = attachmentEditorActiveStack.indexOf(uid)
+  if (v) { if (i === -1) attachmentEditorActiveStack.push(uid) }
+  else if (i !== -1) attachmentEditorActiveStack.splice(i, 1)
+}, { immediate: true })
+
 function hasFileDrag(ev: DragEvent): boolean {
   return !!ev.dataTransfer && Array.from(ev.dataTransfer.types).includes('Files')
 }
 function onWindowDragOver(ev: DragEvent): void {
-  if (!props.active || !hasFileDrag(ev)) return
+  if (!isTopActive() || !hasFileDrag(ev)) return
   ev.preventDefault()
 }
 function onWindowDrop(ev: DragEvent): void {
-  if (!props.active || !hasFileDrag(ev)) return
+  if (!isTopActive() || !hasFileDrag(ev)) return
   ev.preventDefault() // 誤ドロップで SPA ごとページ遷移しない
   dragActive.value = false
   void addImageFiles(Array.from(ev.dataTransfer?.files ?? []))
 }
 async function onWindowPaste(ev: ClipboardEvent): Promise<void> {
-  if (!props.active) return
+  if (!isTopActive()) return
   const files = Array.from(ev.clipboardData?.items ?? [])
     .filter(item => item.kind === 'file' && item.type.startsWith('image/'))
     .map(item => item.getAsFile())
@@ -141,6 +161,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('dragover', onWindowDragOver)
   window.removeEventListener('drop', onWindowDrop)
   window.removeEventListener('paste', onWindowPaste)
+  const i = attachmentEditorActiveStack.indexOf(uid)
+  if (i !== -1) attachmentEditorActiveStack.splice(i, 1)
 })
 </script>
 

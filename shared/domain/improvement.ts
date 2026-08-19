@@ -426,14 +426,17 @@ export function improvementRequestEditFields(
   const bodyMsg = improvementBodyError(text)
   if (bodyMsg) return { ok: false, error: { code: 'AKO-REQ-001', message: bodyMsg } }
   const value: ImprovementRequestEditFields = { body: capCodePoints(text, IMPROVEMENT_BODY_CAP) }
-  if (Object.hasOwn(raw, 'tags')) value.tags = normalizeImprovementTags(raw.tags)
-  if (Object.hasOwn(raw, 'links')) {
+  // 実在キー判定は `hasOwn && !== undefined`: API 経路は JSON 化で undefined キーが落ちる（hasOwn=false）が、
+  // mock 経路はオブジェクトを直接渡すため { tags: undefined } が hasOwn=true になり得る。両経路を揃え、
+  // 明示的 undefined は「未指定 = 現行値保持」として扱う（空配列 [] のみが「全削除」= パリティ・部分更新の鉄則）
+  if (Object.hasOwn(raw, 'tags') && raw.tags !== undefined) value.tags = normalizeImprovementTags(raw.tags)
+  if (Object.hasOwn(raw, 'links') && raw.links !== undefined) {
     const links = normalizeImprovementLinks(raw.links)
     const linksMsg = improvementLinksError(links)
     if (linksMsg) return { ok: false, error: { code: 'AKO-REQ-009', message: linksMsg } }
     value.links = links
   }
-  if (Object.hasOwn(raw, 'images')) {
+  if (Object.hasOwn(raw, 'images') && raw.images !== undefined) {
     const images = normalizeImprovementImages(raw.images)
     const imagesMsg = improvementImagesError(images)
     if (imagesMsg) return { ok: false, error: { code: 'AKO-REQ-010', message: imagesMsg } }

@@ -81,11 +81,13 @@ async function main() {
     await page.getByRole('button', { name: '例文を挿入' }).first().click()
     // 空欄なら確認なしで挿入 → トースト
     await page.getByText('例文を挿入しました').waitFor()
-    check('自分の週報: 例文挿入で各欄に例文が入る',
-      (await page.locator('textarea').filter({ hasText: '' }).count()) >= 0
-      && (await page.getByText('例文を挿入しました').count()) >= 1)
-    check('自分の週報: 成果欄に例文が挿入される',
-      (await page.locator('textarea').evaluateAll(els => els.some(e => e.value.includes('顧客マスタの登録作業を完了')))))
+    // 挿入対象の 4 欄すべてに例文が入ることを確認（成果・課題・うまくいったこと・来週の最重要テーマ）
+    const areaValues = await page.locator('textarea').evaluateAll(els => els.map(e => e.value))
+    const joined = areaValues.join('\n')
+    check('自分の週報: 成果欄に例文が挿入される', joined.includes('顧客マスタの登録作業を完了'))
+    check('自分の週報: 課題欄に例文が挿入される', joined.includes('マスタ設定の確認に時間がかかった'))
+    check('自分の週報: うまくいったこと欄に例文が挿入される', joined.includes('確認項目を一覧化した'))
+    check('自分の週報: 来週の最重要テーマ欄に例文が挿入される', joined.includes('システム稼働に向けた事前準備'))
 
     // ===== モバイル 375px：主要変更ページで横スクロールが出ない =====
     await page.setViewportSize({ width: 375, height: 800 })

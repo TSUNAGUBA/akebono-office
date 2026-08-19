@@ -3007,9 +3007,10 @@
   案件化したい〕/ entrust = お任せ〔受け取った内容を開発側の解釈で進めてよい〕）。allowlist 正規化
   （`normalizeImprovementTags` = 未知値は落とす）を mock/API で共有。DB は `improvement_requests.tags` jsonb
   （0065・既定 `[]` = 旧データ互換・原則7）。受付箱一覧・要望詳細・改修単位ドロワーの元要望にバッジ表示
-  （title で意味を提示）。改修プロンプトに〔壁打ち〕〔お任せ〕を明記 + 読み方の注記（タグ無しは従来出力 = 下位互換）。
+  （title で意味を提示）。改修プロンプトに〔壁打ち〕〔お任せ〕を明記 + 読み方の注記（タグ無しは従来出力 = 下位互換）
+  **【当時（2026-08-18）の挙動。改修依頼 2026-08-19〔§88〕でプロンプトからタグを除外 = 人間運用の意思表示のため。現行は非出力】**。
   取消可能性（原則9.5）: 誤タグは送信直後ビューの「取り消す」→ 再送で正せる（投稿直後のためコメント等の
-  付随記録は無い）。**タグ単体の後から編集（本文編集 F-42-16 のタグ版）は未対応 = 残課題**（下記）。
+  付随記録は無い）。**タグ単体の後から編集は §88 の要望編集の全項目化（F-42-16 改訂）で対応済み**。
 - [x] **(3) タブ再構成 + 一覧内/一括選別（F-42-18）**: 文言修正 生要望（受付箱）→ **受付箱**。ページ上部に
   **サマリーカード ×5**（受付箱 = 未選別件数 + ステータス別件数。押下で該当タブ・絞り込みへ直行 = X-1）→
   **`UiTabBar`（受付箱/改修案件/カンバン/ガントチャート。受付箱に未選別バッジ・`?tab=` は `useRouteTabSync`）**。
@@ -3406,13 +3407,27 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   `utils/weekly-report-templates.ts` の `WEEKLY_REPORT_EXAMPLE`）
 
 ### 88-3 検証・ドキュメント
-- [x] shared/api 単体 398（+ improvementRequestEditFields 4・prompt コメント/タグ非出力 3）・統合 276（+ 編集の全項目/
-  部分更新・プロンプトのコメント反映）・mockup 単体 360（+ reports-content 6・prompt テスト改訂）・両 typecheck・両 build green
-- [x] E2E: `e2e/batch3-e2e.cjs` 新設（モックモード 15 チェック = 受付箱列順・要望編集の全項目・プロンプトのタグ非出力・
-  チーム既定=月・全員の週報プレビュー・週報例文挿入・モバイル 375px）。`run-batch6b-stack.sh` へ登録
-- [x] docs（原則5）: functional-requirements（F-42-5/16/18・F-06-1/2/3/9/11）・api-design（/prompt コメント・/edit 全項目/
-  部分更新）・implementation-status §88・CONVENTIONS.md（RequestEditForm/AttachmentEditor 部品表・BodyEditForm 廃止）
+- [x] shared/api 単体 399（+ improvementRequestEditFields 5〔全項目/部分更新/空配列全削除/明示 undefined 保持 = R1〕・
+  prompt コメント/タグ非出力 3）・統合 276（+ 編集の全項目/部分更新・画像保持・監査ログの変更項目・プロンプトのコメント反映）・
+  mockup 単体 360（+ reports-content 6・prompt テスト改訂）・両 typecheck・両 build green
+- [x] E2E: `e2e/batch3-e2e.cjs`（モックモード = 受付箱列順・要望編集の全項目・プロンプトのタグ非出力・チーム既定=月・
+  全員の週報プレビュー・週報例文挿入〔4 欄それぞれをアサート = R1 でトートロジー除去〕・モバイル 375px）。`run-batch6b-stack.sh`
+  へ登録し全スイート green（batch6d の `{ name: 'AKEBONO' }` 部分一致による strict mode 違反 = 「AKEBONO への要望」節見出しとの
+  衝突を h1 厳密指定へ修正 = 既存スイートのセレクタ堅牢化）
+- [x] docs（原則5）: functional-requirements（F-42-5/16/18・F-06-1/2/3/9/11・F-42-17 のプロンプト非出力を明記 = R1）・
+  api-design（/prompt コメント・/edit 全項目/部分更新）・data-design（tags 非出力）・screen-design（プロンプト非出力）・
+  implementation-status §88・CONVENTIONS.md（RequestEditForm/AttachmentEditor 部品表・BodyEditForm 廃止・editRequest 署名更新）
 
 ### 88-4 反復レビュー（原則9 = SP-8）
-- [ ] R1 = 独立ロール 2 体（コードレビュアー + システム監査官）の並行レビュー
-- [ ] R2 = 指摘反映後の再レビューで未解決の指摘ゼロを確認
+- [x] R1 = 独立ロール 2 体（コードレビュアー + システム監査官）の並行レビュー。**重大同根 1**（API モードの一覧 GET は画像を
+  含まない〔`images:[]` スタブ〕ため、遅延ロード未完了/失敗のまま編集フォームを開いて保存すると全項目送信で添付画像を全消し =
+  CRIT。加えて refresh() の prevImages 再注入が「削除画像の復活/追加画像の取りこぼし」= MAJOR）+ 表記・防御の Minor/ニット を検出。
+  **全件修正:** ①編集開始は `loadRequestImagesFor` の完了をゲート（`startRequestEdit`）②保存時に未ロードなら `images` キーを
+  パッチから外す（`imagesLoadedForRequest` = 部分更新で現行値保持）③`editRequest` API 分岐は応答行〔画像実体込み = `reqColsOf(true)`〕を
+  キャッシュへマージし画像ロード済みマーク（refresh の prevImages が編集後の状態を正しく引き継ぐ）④`improvementRequestEditFields` の
+  実在キー判定を `hasOwn && !== undefined` に強化（mock 経路の `{tags: undefined}` を API 経路〔JSON で undefined 脱落〕と揃える）
+  ⑤`AttachmentEditor` の window リスナをモジュールレベルのアクティブスタックで調停（投稿モーダル + 編集ドロワー同時 active でも
+  貼り付け画像の二重添付を防ぐ）⑥監査ログに変更項目（本文/タグ/リンク/画像）を記録（API/mock 両系。画像実体は肥大のため detail に
+  残さず「再編集」= 原則9.5 が取消導線）⑦ドキュメントのプロンプト・タグ表記の齟齬を全件修正。回帰テスト追加（明示 undefined 保持・
+  本文だけ編集で画像保持・監査ログの変更項目・E2E 例文 4 欄）
+- [ ] R2 = 指摘反映後の再レビュー（コードレビュアー + システム監査官）で未解決の指摘ゼロを確認（実施中）

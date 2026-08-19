@@ -439,6 +439,12 @@ describe('improvementRequestEditFields（要望編集の全項目正規化 = 改
     expect(res.ok).toBe(true)
     if (res.ok) expect(res.value).toEqual({ body: 'x', tags: [], links: [], images: [] })
   })
+  it('明示的 undefined は「未指定 = 現行値保持」として扱う（mock 経路の { tags: undefined } を API 経路と揃える = R1 MINOR）', () => {
+    const res = improvementRequestEditFields({ body: 'x', tags: undefined, links: undefined, images: undefined })
+    expect(res.ok).toBe(true)
+    // undefined は空配列（全削除）と異なり value に含めない = 現行の tags/links/images を保持する
+    if (res.ok) expect(res.value).toEqual({ body: 'x' })
+  })
 })
 
 describe('normalizeImprovementPagePath / isInternalPagePath（F-42-20 の対象ページリンク化に伴う防御）', () => {

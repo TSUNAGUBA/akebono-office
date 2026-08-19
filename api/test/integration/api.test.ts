@@ -6948,11 +6948,21 @@ describe('改善要望（F-42）', () => {
       body: '全項目を編集', tags: ['entrust'], links: ['https://example.com/new-ref'],
     })
     expect((fullEdit.json.data as { images: { dataUrl: string }[] }).images[0]).toMatchObject({ dataUrl: png })
-    // 部分更新: 本文だけ送ると tags/links/images は保持される（CLAUDE.md 部分更新の鉄則 = 現行値保護）
+    // 監査ログは変更項目と変更前本文を残す（添付変更を後から追える = R1。画像実体は肥大するため detail に残さない）。
+    // 全項目編集の直後なので「画像」を変更項目に含む更新ログが 1 件ある（本文だけの編集ログは含まない）
+    const auditLogs = (await api('GET', '/v1/configs/audit-logs', { as: ADMIN })).json.data as { entity: string; entityId: string; action: string; detail: string }[]
+    const fullEditLog = auditLogs.find(l => l.entity === 'improvement_requests' && l.entityId === reqId && l.action === 'update' && l.detail.includes('画像'))
+    expect(fullEditLog?.detail).toContain('変更項目: 本文・タグ・リンク・画像')
+    expect(fullEditLog?.detail).toContain('変更前本文:')
+    // 部分更新: 本文だけ送ると tags/links/images は保持される（CLAUDE.md 部分更新の鉄則 = 現行値保護）。
+    // 画像の保持は特に重要（一覧 GET が images:[] スタブを返すため、未ロードのまま保存すると添付を消す危険 = R1 CRIT）。
+    // UI は未ロード時に images キーを送らない実装だが、SoT の API も「送らなければ保持」を保証する
     const bodyOnly = await api('POST', `/v1/improvements/requests/${reqId}/edit`, { as: MEMBER, body: { body: '本文だけ更新' } })
     expect(bodyOnly.json.data as Record<string, unknown>).toMatchObject({
       body: '本文だけ更新', tags: ['entrust'], links: ['https://example.com/new-ref'],
     })
+    expect((bodyOnly.json.data as { images: { dataUrl: string }[] }).images).toHaveLength(1) // 画像が消えていない
+    expect((bodyOnly.json.data as { images: { dataUrl: string }[] }).images[0]).toMatchObject({ dataUrl: png })
     // 空配列を明示的に送れば「全削除」になる
     const cleared = await api('POST', `/v1/improvements/requests/${reqId}/edit`, {
       as: MEMBER, body: { body: '添付を全削除', tags: [], links: [], images: [] },

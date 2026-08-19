@@ -10,7 +10,8 @@ async function main() {
 
     // 1) /akebono 表示: プレースホルダ + ロードマップ + モックバッジなし（= 全廃マイルストーン）
     await page.goto(`${BASE}/#/akebono`)
-    await page.getByRole('main').getByRole('heading', { name: 'AKEBONO' }).waitFor()
+    // h1 を厳密指定（{ name: 'AKEBONO' } は「AKEBONO への要望」セクション見出しにも部分一致し strict mode 違反になる）
+    await page.getByRole('main').getByRole('heading', { level: 1, name: 'AKEBONO 業務' }).waitFor()
     await page.waitForTimeout(800)
     check('AKEBONO ページが表示される', true)
     await page.getByText('AKEBONO は要件定義中です').waitFor()

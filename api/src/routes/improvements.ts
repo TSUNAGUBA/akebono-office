@@ -279,9 +279,15 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
       if (fields.images !== undefined) { params.push(JSON.stringify(fields.images)); sets.push(`images = $${params.length}`) }
       const { rows } = await client.query(
         `UPDATE improvement_requests SET ${sets.join(', ')} WHERE id = $1 RETURNING ${reqColsOf(true)}`, params)
+      // 監査記録は「変更した項目」も残す（添付の変更を後から追える = 監査証跡。本文は復元可能なよう全文保存。
+      // 画像実体は data URI で肥大するため detail には残さない = 添付の取消導線は「再編集」〔原則9.5〕が担う）
+      const changed = ['本文',
+        ...(fields.tags !== undefined ? ['タグ'] : []),
+        ...(fields.links !== undefined ? ['リンク'] : []),
+        ...(fields.images !== undefined ? ['画像'] : [])].join('・')
       await client.query(
         `INSERT INTO audit_logs (actor_id, action, entity, entity_id, detail) VALUES ($1, 'update', 'improvement_requests', $2, $3)`,
-        [user.id, id, `要望を編集（変更前本文: ${prev[0]!.body}）`])
+        [user.id, id, `要望を編集（変更項目: ${changed}／変更前本文: ${prev[0]!.body}）`])
       await client.query('COMMIT')
       return c.json({ data: rows[0] })
     } catch (e) {
