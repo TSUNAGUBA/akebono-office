@@ -78,6 +78,7 @@ export const MENU_CARDS: Record<MenuArea, MenuCardDef[]> = {
     { id: 'relations-contact', title: '顧客関係(人)', description: '人どうしの関係エッジ（上司部下・紹介など）。グラフ可視化', icon: 'Network', to: '/masters/relations-contact' },
     { id: 'relation-types', title: '関係種別', description: '顧客関係で使う関係の種類の定義（追加・編集・削除）', icon: 'Tags', to: '/masters/relation-types' },
     { id: 'industries', title: '業界', description: '業界名と表示順。直交軸で管理（複合値を作らない）', icon: 'Factory', to: '/masters/industries' },
+    { id: 'villages', title: '事業区分（Village）', description: '社内事業の区分。活動記録の最上段で参照・自由入力で新規登録可', icon: 'Building2', to: '/masters/villages' },
     { id: 'projects', title: 'プロジェクト', description: 'PJ 名・顧客・種別・状態・担当・期間・予算・目的', icon: 'FolderKanban', to: '/masters/projects' },
     { id: 'decision-themes', title: '判断テーマ', description: '意思決定支援のテーマ（意味・関係・制約と打ち手・選択肢）', icon: 'Scale', to: '/masters/decision-themes' },
     { id: 'work-categories', title: '業務種別', description: '改善のタネ・議事録の分類。名称と表示順', icon: 'Tags', to: '/masters/work-categories' },
@@ -100,6 +101,6 @@ export const DEFAULT_MENU_CATEGORIES: Record<MenuArea, MenuCategoryDef[]> = {
     { id: 'org', label: '組織・権限', cardIds: ['members', 'departments', 'titles', 'permissions'] },
     { id: 'hr', label: '勤怠・休暇', cardIds: ['leave-types', 'holidays'] },
     { id: 'crm', label: '会社・顧客', cardIds: ['company', 'customers', 'suppliers', 'contacts', 'relations-company', 'relations-contact', 'relation-types', 'industries'] },
-    { id: 'biz', label: '業務・ナレッジ', cardIds: ['projects', 'decision-themes', 'work-categories', 'knowledge', 'settings'] },
+    { id: 'biz', label: '業務・ナレッジ', cardIds: ['villages', 'projects', 'decision-themes', 'work-categories', 'knowledge', 'settings'] },
   ],
 }

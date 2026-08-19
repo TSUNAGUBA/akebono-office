@@ -294,6 +294,17 @@ export interface Industry {
   active: boolean
 }
 
+/**
+ * 事業区分（Village）マスタ（改修依頼 2026-08-19 第4弾）。社内事業の区分を表す最小マスタ。
+ * 活動記録（サポート/営業/パートナー活動）の最上段でコンボボックス参照し、自由入力で新規登録もできる。
+ */
+export interface Village {
+  id: string
+  name: string
+  displayOrder: number
+  active: boolean
+}
+
 export type CompanyKind = 'self' | 'customer'
 
 export interface Company {

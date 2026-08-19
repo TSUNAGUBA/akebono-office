@@ -253,6 +253,7 @@ export const NAV_MAP: Record<string, NavMapEntry> = {
     ],
   },
   '/masters/industries': { parent: MASTERS, related: [CUSTOMERS, { to: '/masters/knowledge', label: 'ナレッジマスタ', adminOnly: true }] },
+  '/masters/villages': { parent: MASTERS, related: [{ to: '/sales-activity', label: '営業活動' }, { to: '/support-activity', label: 'サポート活動' }, { to: '/partner-activity', label: 'ビジネスパートナー活動' }] },
   '/masters/holidays': { parent: MASTERS, related: [{ to: '/attendance', label: '勤怠管理' }] },
   '/masters/knowledge': { parent: MASTERS, related: [{ to: '/support/chatbot', label: 'AIチャットボット' }] },
   '/masters/relation-types': {

@@ -141,6 +141,10 @@ const schemas = {
     name: z.string().trim().min(1, '業界名は必須です'),
     displayOrder: z.number().int().default(1),
   }),
+  villages: z.object({
+    name: z.string().trim().min(1, '事業区分名は必須です'),
+    displayOrder: z.number().int().default(1),
+  }),
   'work-categories': z.object({
     name: z.string().trim().min(1, '業務種別名は必須です'),
     displayOrder: z.number().int().default(1),
@@ -417,6 +421,7 @@ export const MASTERS: Record<MasterEntity, MasterDef> = {
   'departments': { table: 'departments', idPrefix: 'dep', schema: schemas.departments, patchSchema: schemas.departments.partial(), jsonbFields: [] },
   'leave-types': { table: 'leave_types', idPrefix: 'lt', schema: schemas['leave-types'], patchSchema: schemas['leave-types'].partial().omit({ isStatutory: true }), jsonbFields: [] },
   'industries': { table: 'industries', idPrefix: 'ind', schema: schemas.industries, patchSchema: schemas.industries.partial(), jsonbFields: [] },
+  'villages': { table: 'villages', idPrefix: 'vil', schema: schemas.villages, patchSchema: schemas.villages.partial(), jsonbFields: [] },
   // 業務種別（ぽいぽいポスト・議事録の任意分類。バッチ7c）
   'work-categories': { table: 'work_categories', idPrefix: 'wc', schema: schemas['work-categories'], patchSchema: schemas['work-categories'].partial(), jsonbFields: [] },
   'companies': { table: 'companies', idPrefix: 'c', schema: schemas.companies, patchSchema: schemas.companies.partial(), jsonbFields: ['aliases', 'industryIds', 'partnerRoles', 'custom'] },
