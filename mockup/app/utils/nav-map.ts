@@ -75,7 +75,7 @@ export const NAV_MAP: Record<string, NavMapEntry> = {
   '/ai-assistant': {
     parent: HOME,
     related: [
-      { to: '/reports', label: '日報・週報' },
+      { to: '/reports', label: '日報' },
       PROJECTS,
     ],
   },
@@ -168,7 +168,7 @@ export const NAV_MAP: Record<string, NavMapEntry> = {
     related: [
       { to: '/ai-company/employees', label: 'AI 社員の管理', adminOnly: true },
       { to: '/ai-company/roles', label: 'ロール設定', adminOnly: true },
-      { to: '/reports', label: '日報・週報' },
+      { to: '/reports', label: '日報' },
     ],
   },
   '/ai-company/employees': {
@@ -253,6 +253,7 @@ export const NAV_MAP: Record<string, NavMapEntry> = {
     ],
   },
   '/masters/industries': { parent: MASTERS, related: [CUSTOMERS, { to: '/masters/knowledge', label: 'ナレッジマスタ', adminOnly: true }] },
+  '/masters/villages': { parent: MASTERS, related: [{ to: '/sales-activity', label: '営業活動' }, { to: '/support-activity', label: 'サポート活動' }, { to: '/partner-activity', label: 'ビジネスパートナー活動' }] },
   '/masters/holidays': { parent: MASTERS, related: [{ to: '/attendance', label: '勤怠管理' }] },
   '/masters/knowledge': { parent: MASTERS, related: [{ to: '/support/chatbot', label: 'AIチャットボット' }] },
   '/masters/relation-types': {

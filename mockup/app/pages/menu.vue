@@ -36,7 +36,7 @@ const visibleGroups = computed(() =>
           :key="item.path"
           :to="item.path"
           class="flex items-center gap-3 px-3 py-2.5 text-[13px] font-medium"
-          :class="isActivePath(route.path, item) ? 'text-brand' : ''"
+          :class="isActivePath(route.fullPath, item) ? 'text-brand' : ''"
         >
           <component :is="iconOf(item.icon)" class="h-4.5 w-4.5 text-sub" aria-hidden="true" />
           {{ item.label }}

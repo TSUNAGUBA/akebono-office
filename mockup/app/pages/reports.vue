@@ -52,25 +52,58 @@ function daysOfMonth(ym: string): string[] {
   return Array.from({ length: daysInMonth(y, m) }, (_, i) => `${ym}-${String(i + 1).padStart(2, '0')}`)
 }
 
-// ---------- タブ ----------
+// ---------- メニュー種別（日報 / 週報 / 月報）とタブ ----------
+// 改修依頼 2026-08-19 第4弾: 日報・週報・月報をトップレベルメニューへ分割（?kind で切替。ナビは 3 エントリ）。
+// 権限は単一キー `reports` のまま各 kind のタブキーを拡張する（オペレーター選択「単一キー＋タブ拡張」）。
 
-const TAB_KEYS = ['mine', 'weekly-mine', 'all', 'weekly-all', 'team'] as const
+/** メニュー種別（?kind=weekly / monthly。既定 = 日報） */
+const kind = computed<'daily' | 'weekly' | 'monthly'>(() => {
+  const k = route.query.kind
+  return k === 'weekly' ? 'weekly' : k === 'monthly' ? 'monthly' : 'daily'
+})
+
+/** メニュー種別ごとのページ見出し（トップレベルメニューとして 日報/週報/月報 を切り替える） */
+const pageHeader = computed(() => ({
+  daily: { title: '日報', description: '日々の活動報告。AI 社員の日次報告も同じタイムラインに届きます' },
+  weekly: { title: '週報', description: '週次のふりかえり。今週の成果・課題・来週の最重要テーマを記録します' },
+  monthly: { title: '月報', description: '月次のふりかえり。今月の成果・課題・来月の最重要テーマを記録します' },
+}[kind.value]))
+
+/** kind ごとの 自分/全員/チーム タブ（キーは権限カタログ `reports` と一致） */
+const TABS_BY_KIND: Record<'daily' | 'weekly' | 'monthly', { key: string; label: string }[]> = {
+  daily: [
+    { key: 'mine', label: '自分の日報' },
+    { key: 'all', label: '全員の日報' },
+    { key: 'team', label: 'チーム' },
+  ],
+  weekly: [
+    { key: 'weekly-mine', label: '自分の週報' },
+    { key: 'weekly-all', label: '全員の週報' },
+    { key: 'weekly-team', label: 'チーム' },
+  ],
+  monthly: [
+    { key: 'monthly-mine', label: '自分の月報' },
+    { key: 'monthly-all', label: '全員の月報' },
+    { key: 'monthly-team', label: 'チーム' },
+  ],
+}
+const ALL_TAB_KEYS = Object.values(TABS_BY_KIND).flatMap(ts => ts.map(t => t.key))
+
 // タブ利用可否（権限表の `tab:<key>` 擬似フィールド = 改修依頼 2026-08-18。既定 = 全タブ利用可）
 const { canTab } = usePermissions()
-const tabs = computed<TabItem[]>(() => ([
-  { key: 'mine', label: '自分の日報' },
-  { key: 'weekly-mine', label: '自分の週報' },
-  { key: 'all', label: '全員の日報' },
-  { key: 'weekly-all', label: '全員の週報' },
-  { key: 'team', label: 'チーム' },
-] as TabItem[]).filter(t => canTab('reports', t.key)))
-// 旧タブキーのリンク互換（?tab=weekly = 旧・週報タブ → 自分の週報）
+const tabs = computed<TabItem[]>(() =>
+  (TABS_BY_KIND[kind.value] as TabItem[]).filter(t => canTab('reports', t.key)))
+
+// 旧タブキーのリンク互換（?tab=weekly = 旧・週報タブ → 自分の週報。?tab=<key> は該当 kind の初期タブ指定）
 const queryTabRaw = typeof route.query.tab === 'string' ? route.query.tab : ''
 const queryTab = queryTabRaw === 'weekly' ? 'weekly-mine' : queryTabRaw
-const tab = ref<string>((TAB_KEYS as readonly string[]).includes(queryTab) ? queryTab : 'mine')
+const initialTab = ALL_TAB_KEYS.includes(queryTab) && TABS_BY_KIND[kind.value].some(t => t.key === queryTab)
+  ? queryTab
+  : (TABS_BY_KIND[kind.value][0]?.key ?? '')
+const tab = ref<string>(initialTab)
 watchEffect(() => {
-  // 権限で消えたタブ・無効キーは先頭の利用可能タブへ退避。全タブ deny の場合は空値にして
-  // どのタブ内容も描画しない（フェイルクローズ = R1 レビュー反映）
+  // kind 切替・権限で消えたタブ・無効キーは現 kind 先頭の利用可能タブへ退避。
+  // 全タブ deny の場合は空値にしてどのタブ内容も描画しない（フェイルクローズ = R1 レビュー反映）
   if (!tabs.value.some(t => t.key === tab.value)) tab.value = tabs.value[0]?.key ?? ''
 })
 
@@ -1109,7 +1142,7 @@ async function onMarkUnreadWeekly(): Promise<void> {
 
 <template>
   <div>
-    <UiPageHeader title="日報・週報" description="日々の活動報告と週次のふりかえり。AI 社員の日次報告も同じタイムラインに届きます" />
+    <UiPageHeader :title="pageHeader.title" :description="pageHeader.description" />
 
     <UiTabBar v-model="tab" :tabs="tabs" class="mb-3" />
     <!-- 全タブ deny 時の空状態（タブ内容は tab='' のためどれも描画されない = フェイルクローズ） -->
@@ -2224,6 +2257,14 @@ async function onMarkUnreadWeekly(): Promise<void> {
         <UiPagination v-model:page="mwPage" v-model:page-size="mwPageSize" :total="mwTotal" />
       </UiSectionCard>
     </div>
+
+    <!-- ================= チーム（週報の提出状況。改修依頼 2026-08-19 第4弾） ================= -->
+    <ReportsPeriodPanel v-else-if="tab === 'weekly-team'" kind="weekly" view="team" />
+
+    <!-- ================= 月報（自分 / 全員 / チーム。週報と同型 = 共通コンポーネント。改修依頼 2026-08-19 第4弾） ================= -->
+    <ReportsPeriodPanel v-else-if="tab === 'monthly-mine'" kind="monthly" view="mine" />
+    <ReportsPeriodPanel v-else-if="tab === 'monthly-all'" kind="monthly" view="all" />
+    <ReportsPeriodPanel v-else-if="tab === 'monthly-team'" kind="monthly" view="team" />
 
     <!-- 日報詳細ドロワー（チーム / 全員の日報） -->
     <UiDrawer

@@ -38,7 +38,9 @@ export const NAV_GROUPS: NavGroup[] = [
       { path: '/timecard', label: 'タイムカード', icon: 'Clock3' },
       { path: '/attendance', label: '勤怠管理', icon: 'Clock' },
       { path: '/shift', label: 'シフト表', icon: 'CalendarRange', featureKey: 'shift' },
-      { path: '/reports', label: '日報・週報', icon: 'NotebookPen' },
+      { path: '/reports', label: '日報', icon: 'NotebookPen' },
+      { path: '/reports?kind=weekly', label: '週報', icon: 'CalendarDays' },
+      { path: '/reports?kind=monthly', label: '月報', icon: 'CalendarClock' },
       { path: '/ai-assistant', label: 'AI業務アシスタント', icon: 'Sparkles' },
       { path: '/customer-log', label: '顧客活動', icon: 'MessageSquare' },
       { path: '/support-activity', label: 'サポート活動', icon: 'Headset' },
@@ -86,8 +88,17 @@ export const MOBILE_NAV: NavItem[] = [
   { path: '/menu', label: 'メニュー', icon: 'Menu' },
 ]
 
-/** 現在パスがナビ項目にマッチするか（最長一致は呼び出し側で） */
+/**
+ * 現在パスがナビ項目にマッチするか（最長一致は呼び出し側で）。current は route.fullPath を渡す。
+ * 改修依頼 2026-08-19 第4弾: 日報/週報/月報は同一パス /reports をクエリ ?kind で切り替えるため、
+ * クエリ付き項目は kind の一致で判定する（日報 = kind 無し）。
+ */
 export function isActivePath(current: string, item: NavItem): boolean {
-  if (item.matchPrefix) return current === item.path || current.startsWith(`${item.path}/`)
-  return current === item.path
+  const [curPath = '', curQuery = ''] = current.split('?')
+  const [itemPath = '', itemQuery = ''] = item.path.split('?')
+  if (item.matchPrefix) return curPath === itemPath || curPath.startsWith(`${itemPath}/`)
+  if (curPath !== itemPath) return false
+  const curKind = new URLSearchParams(curQuery).get('kind') ?? ''
+  const itemKind = new URLSearchParams(itemQuery).get('kind') ?? ''
+  return curKind === itemKind
 }

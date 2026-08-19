@@ -13,6 +13,7 @@ const members = tbl('members')
 const departments = tbl('departments')
 const leaveTypes = tbl('leaveTypes')
 const industries = tbl('industries')
+const villages = tbl('villages')
 const workCategories = tbl('workCategories')
 const companies = tbl('companies')
 const contacts = tbl('contacts')
@@ -37,6 +38,7 @@ const badgeOf = computed<Record<string, number | undefined>>(() => ({
   'titles': activeCount(codeMaster.value.filter(i => i.category === 'title')),
   'leave-types': activeCount(leaveTypes.value),
   'industries': activeCount(industries.value),
+  'villages': activeCount(villages.value),
   'work-categories': activeCount(workCategories.value),
   'company': companies.value.filter(c => c.kind === 'self' && c.active !== false).length,
   'customers': companies.value.filter(c => c.kind === 'customer' && c.active !== false).length,

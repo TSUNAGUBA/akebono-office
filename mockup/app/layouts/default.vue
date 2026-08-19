@@ -72,7 +72,7 @@ function iconOf(name: string) {
 const pageTitle = computed(() => {
   for (const g of NAV_GROUPS) {
     for (const i of g.items) {
-      if (isActivePath(route.path, i)) return i.label
+      if (isActivePath(route.fullPath, i)) return i.label
     }
   }
   return '' // ナビ定義にないルート（404 等）はタイトル非表示
@@ -392,7 +392,7 @@ function onSwitchUser(id: string): void {
         :key="item.path"
         :to="item.path"
         class="relative flex flex-1 flex-col items-center justify-center gap-0.5 text-[10px] font-semibold"
-        :class="isActivePath(route.path, item) ? 'text-brand' : 'text-muted'"
+        :class="isActivePath(route.fullPath, item) ? 'text-brand' : 'text-muted'"
       >
         <component :is="iconOf(item.icon)" class="h-5 w-5" aria-hidden="true" />
         {{ item.label }}

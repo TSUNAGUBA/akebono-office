@@ -268,12 +268,16 @@ describe('要望ステータス（requestStatusOf / buildCodingPrompt の再生�
     expect(prompt).not.toContain('【未対応】') // open は無印
     expect(prompt).toContain('再改修しないこと')
   })
-  it('全要望が open なら注意書き・タグを出さない（従来プロンプトと同一 = 下位互換）', () => {
+  it('全要望が open なら状態タグ・注意書きを出さない（【要望】マーク自体は時系列統合で常時付く）', () => {
     const prompt = buildCodingPrompt([{
       title: 't', summary: 's', detail: 'd', status: 'accepted', pagePaths: ['/x'],
       requests: [{ pageLabel: 'X', pagePath: '/x', body: '直したい' }],
     }])
-    expect(prompt).not.toContain('【')
+    // 状態タグ（対応済み/見送り/未対応）は open では出ない。時系列統合の【要望】行頭マークは別物で常時付く
+    expect(prompt).not.toContain('【対応済み】')
+    expect(prompt).not.toContain('【見送り】')
+    expect(prompt).not.toContain('【未対応】')
+    expect(prompt).toContain('- 【要望】 ［X］ 直したい')
     expect(prompt).not.toContain('再改修しないこと')
   })
 })
@@ -345,24 +349,47 @@ describe('要望タグ（壁打ち/お任せ = F-42-17）', () => {
   })
 })
 
-describe('buildCodingPrompt: コメント反映 + タグ除外（改修依頼 2026-08-19）', () => {
-  it('受付箱で記録した要望コメントをプロンプトに反映する（時系列・サブ項目）', () => {
+describe('buildCodingPrompt: 要望+コメントの時系列統合 + タグ除外（改修依頼 2026-08-19 第4弾）', () => {
+  it('要望本文とコメントを createdAt 昇順で 1 本の時系列に統合し【要望】【コメント】で明示する', () => {
+    // 2 要望 + それぞれのコメントを、投稿時刻の昇順で交互に並べる（親子構造ではなく時系列）
     const prompt = buildCodingPrompt([{
       title: 't', summary: 's', detail: 'd', status: 'accepted', pagePaths: ['/x'],
-      requests: [{
-        pageLabel: 'X', pagePath: '/x', body: '直したい',
-        comments: ['まず配色の範囲を確認したい', '対象は一覧のみで良い'],
-      }],
+      requests: [
+        { pageLabel: 'X', pagePath: '/x', body: '要望A', createdAt: '2026-08-19T10:00:00+09:00',
+          comments: [{ body: 'Aへのコメント', createdAt: '2026-08-19T13:00:00+09:00' }] },
+        { pageLabel: 'X', pagePath: '/x', body: '要望B', createdAt: '2026-08-19T11:00:00+09:00',
+          comments: [{ body: 'Bへのコメント', createdAt: '2026-08-19T12:00:00+09:00' }] },
+      ],
     }])
-    expect(prompt).toContain('- コメント: まず配色の範囲を確認したい')
-    expect(prompt).toContain('- コメント: 対象は一覧のみで良い')
+    expect(prompt).toContain('- 【要望】 ［X］ 要望A')
+    expect(prompt).toContain('- 【要望】 ［X］ 要望B')
+    expect(prompt).toContain('- 【コメント】 Aへのコメント')
+    expect(prompt).toContain('- 【コメント】 Bへのコメント')
+    // 時系列: 要望A(10) → 要望B(11) → Bへのコメント(12) → Aへのコメント(13)
+    const iA = prompt.indexOf('要望A'); const iB = prompt.indexOf('要望B')
+    const iCB = prompt.indexOf('Bへのコメント'); const iCA = prompt.indexOf('Aへのコメント')
+    expect(iA).toBeLessThan(iB)
+    expect(iB).toBeLessThan(iCB)
+    expect(iCB).toBeLessThan(iCA)
   })
-  it('コメントが無ければ言及しない（下位互換 = 原則7）', () => {
+  it('createdAt が無い旧呼び出しは投入順を保持する（決定的・下位互換 = 原則7）', () => {
+    const prompt = buildCodingPrompt([{
+      title: 't', summary: 's', detail: 'd', status: 'accepted', pagePaths: ['/x'],
+      requests: [{ pageLabel: 'X', pagePath: '/x', body: '直したい',
+        comments: [{ body: 'まず配色の範囲を確認したい' }, { body: '対象は一覧のみで良い' }] }],
+    }])
+    // 要望 → その要望のコメント（投入順）
+    expect(prompt).toContain('- 【要望】 ［X］ 直したい')
+    expect(prompt).toContain('- 【コメント】 まず配色の範囲を確認したい')
+    expect(prompt.indexOf('直したい')).toBeLessThan(prompt.indexOf('まず配色の範囲を確認したい'))
+    expect(prompt.indexOf('まず配色の範囲を確認したい')).toBeLessThan(prompt.indexOf('対象は一覧のみで良い'))
+  })
+  it('コメントが無ければ【コメント】行は出ない（下位互換 = 原則7）', () => {
     const prompt = buildCodingPrompt([{
       title: 't', summary: 's', detail: 'd', status: 'accepted', pagePaths: ['/x'],
       requests: [{ pageLabel: 'X', pagePath: '/x', body: '直したい' }],
     }])
-    expect(prompt).not.toContain('コメント:')
+    expect(prompt).not.toContain('【コメント】')
   })
   it('壁打ち/お任せタグは人間運用のためプロンプトに含めない（凡例も行頭マークも出さない）', () => {
     // tags は PromptItemInput の対象外だが、呼び出し側が余剰プロパティで渡しても出力に混ざらないことを固定
@@ -381,8 +408,8 @@ describe('buildCodingPrompt: コメント反映 + タグ除外（改修依頼 20
 
 describe('improvementRequestInputOf', () => {
   it('trim + ページ情報を保持・空本文は AKO-REQ-001・添付未指定は空配列', () => {
-    expect(improvementRequestInputOf({ body: ' 直したい ', pagePath: '/x', pageLabel: 'X' }))
-      .toEqual({ body: '直したい', pagePath: '/x', pageLabel: 'X', links: [], images: [], tags: [] })
+    expect(improvementRequestInputOf({ body: ' 直したい ', pagePath: '/x', pageLabel: 'X', targetSpot: ' 合計欄 ' }))
+      .toEqual({ body: '直したい', pagePath: '/x', pageLabel: 'X', targetSpot: '合計欄', links: [], images: [], tags: [] })
     let code = ''
     try { improvementRequestInputOf({ body: '  ' }) } catch (e) { code = (e as { code?: string }).code ?? '' }
     expect(code).toBe('AKO-REQ-001')

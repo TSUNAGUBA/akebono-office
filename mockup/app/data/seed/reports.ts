@@ -1,5 +1,5 @@
 /** ドメイン別シードデータ（このファイルは担当機能の実装者が所有・拡充する） */
-import type { DailyReport, ReportComment, WeeklyReport } from '~/types/domain'
+import type { DailyReport, MonthlyReport, ReportComment, WeeklyReport } from '~/types/domain'
 import { addDays, weekdayOf } from '~/utils/format'
 import { seedToday } from './history'
 
@@ -28,6 +28,15 @@ const b1 = bd[0]! // 直近営業日
 const b2 = bd[1]!
 const b3 = bd[2]!
 const lastWeekStart = addDays(mondayOf(today), -7)
+
+/** 前月の初日（YYYY-MM-01。月報シードの対象月） */
+function lastMonthStart(): string {
+  const [ty, tm] = today.split('-').map(Number) as [number, number]
+  const y = tm === 1 ? ty - 1 : ty
+  const m = tm === 1 ? 12 : tm - 1
+  return `${y}-${String(m).padStart(2, '0')}-01`
+}
+const prevMonthStart = lastMonthStart()
 
 export const seedDailyReports: DailyReport[] = [
   // ---- 直近営業日（b1）----
@@ -175,6 +184,40 @@ export const seedWeeklyReports: WeeklyReport[] = [
     mainWork: '・AI 分析画面の集計 API 実装\n・集計 API のスキーマ設計レビュー反映\n・アンケート分析画面のプロトタイプ作成',
     issues: '・PII 匿名化の仕様が未確定で手戻りの懸念',
     nextWeek: '・匿名化仕様の確定を受けて実装再開\n・プロトタイプの改善',
+    status: 'submitted',
+  },
+]
+
+/** 月報シード（改修依頼 2026-08-19 第4弾。週報と同型・前月分のデモ）。 */
+export const seedMonthlyReports: MonthlyReport[] = [
+  {
+    id: 'mo-0001', memberId: 'm-03', monthStart: prevMonthStart,
+    goalReview: '北都物流 KPI 体系を確定し現場運用を開始（達成）。SCM Phase2 の体制案合意（達成）',
+    mainWork: '・物流改善 KPI 体系の最終化と北都物流への提示\n・SCM Phase2 の体制案作成と合意形成\n・シーサイドホテルズ DX 構想の提案・受注',
+    issues: '・複数案件の並行で提案準備が逼迫。次月は前倒し着手で平準化する',
+    nextWeek: '・SCM Phase2 キックオフ\n・北都物流 KPI の月次レビュー運用の定着',
+    goodPoints: '・KPI を現場ボード 5 個に絞る裁定が奏功し、現場の納得感が高かった',
+    teamShareKind: '特になし', teamShareNote: '',
+    status: 'submitted',
+  },
+  // 全員の月報タブのデモ用（他メンバーの提出済み月報）
+  {
+    id: 'mo-0002', memberId: 'm-04', monthStart: prevMonthStart,
+    goalReview: '週次売上レポートの検収クローズ。みなみ食品 受発注フローの標準化方針を合意（達成）',
+    mainWork: '・週次売上レポートの検収対応\n・みなみ食品 受発注フローの標準化方針の提案\n・北都物流 庫内 KPI 定義のヒアリング',
+    issues: '・受発注の例外パターンが多く、標準化の合意に想定より時間を要した',
+    nextWeek: '・標準化方針に基づくフロー整備\n・庫内 KPI ダッシュボードの要件定義',
+    goodPoints: '', teamShareKind: '相談したい', teamShareNote: '例外パターンの取り扱いで判断を仰ぎたい',
+    status: 'submitted',
+  },
+  {
+    id: 'mo-0003', memberId: 'm-06', monthStart: prevMonthStart,
+    goalReview: 'AI 分析画面の集計 API を実装完了しプロトタイプ公開（達成見込み）',
+    mainWork: '・AI 分析画面の集計 API 実装と検証\n・アンケート分析画面のプロトタイプ作成\n・PII 匿名化仕様の確定対応',
+    issues: '・匿名化仕様の確定待ちで一部手戻りが発生。仕様凍結の運用を検討',
+    nextWeek: '・プロトタイプの改善とレビュー反映\n・本番データでの精度検証',
+    goodPoints: '・スキーマ設計レビューを先行したことで実装の手戻りを最小化できた',
+    teamShareKind: '特になし', teamShareNote: '',
     status: 'submitted',
   },
 ]

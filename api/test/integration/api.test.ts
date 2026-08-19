@@ -563,6 +563,45 @@ describe('日報', () => {
     const again = await api('PUT', '/v1/reports/weekly', { as: MEMBER, body: { ...body, goalReview: '書換' } })
     expect(again.json.error?.code).toBe('AKO-REP-002')
   })
+
+  // 月報（改修依頼 2026-08-19 第4弾。週報と同型で新設 = /v1/reports/monthly + reads kind=monthly）
+  it('月報の CRUD・提出保護（AKO-REP-002）・scope=all・既読（reads kind=monthly）', async () => {
+    const monthStart = '2026-07-01'
+    // 主要業務なしの提出は AKO-GEN-001
+    expect((await api('PUT', '/v1/reports/monthly', { as: MEMBER, body: { monthStart, status: 'submitted' } })).json.error?.code).toBe('AKO-GEN-001')
+    // 下書き保存 → 取得（週報と同じ拡張項目を保持・種別プリセット外は空へ正規化）
+    const base = {
+      monthStart, goalReview: '今月の成果', mainWork: '主要業務', issues: '課題', nextWeek: '来月テーマ',
+      goodPoints: '良かった点', teamShareKind: '相談したい', teamShareNote: '相談メモ', status: 'draft' as const,
+    }
+    expect((await api('PUT', '/v1/reports/monthly', { as: MEMBER, body: base })).status).toBe(200)
+    const saved = await api('GET', '/v1/reports/monthly', { as: MEMBER })
+    const row = (saved.json.data as { monthStart: string; goodPoints: string; teamShareKind: string; nextWeek: string }[])
+      .find(r => r.monthStart === monthStart)!
+    expect(row.goodPoints).toBe('良かった点')
+    expect(row.teamShareKind).toBe('相談したい')
+    expect(row.nextWeek).toBe('来月テーマ')
+    expect((await api('PUT', '/v1/reports/monthly', { as: MEMBER, body: { ...base, teamShareKind: '謎' } })).status).toBe(200)
+    const afterKind = await api('GET', '/v1/reports/monthly', { as: MEMBER })
+    expect((afterKind.json.data as { monthStart: string; teamShareKind: string }[]).find(r => r.monthStart === monthStart)!.teamShareKind).toBe('')
+    // 提出 → 再編集は保護（AKO-REP-002）
+    expect((await api('PUT', '/v1/reports/monthly', { as: MEMBER, body: { ...base, status: 'submitted' } })).status).toBe(200)
+    const again = await api('PUT', '/v1/reports/monthly', { as: MEMBER, body: { ...base, goalReview: '書換' } })
+    expect(again.json.error?.code).toBe('AKO-REP-002')
+    // 全員（scope=all）で提出済みが見える
+    const all = await api('GET', `/v1/reports/monthly?scope=all&monthStart=${monthStart}`, { as: ADMIN })
+    const mine = (all.json.data as { id: string; memberId: string }[]).find(r => r.memberId === MEMBER)!
+    expect(mine).toBeTruthy()
+    // 既読（kind=monthly）: 提出済み月報を既読 → reads に出る → 未読へ戻す（冪等）
+    expect((await api('PUT', '/v1/reports/reads', { as: ADMIN, body: { kind: 'monthly', reportId: mine.id } })).status).toBe(200)
+    const reads = await api('GET', `/v1/reports/reads?kind=monthly&monthStart=${monthStart}`, { as: ADMIN })
+    expect((reads.json.data as string[]).includes(mine.id)).toBe(true)
+    expect((await api('DELETE', `/v1/reports/reads/monthly/${mine.id}`, { as: ADMIN })).status).toBe(200)
+    const reads2 = await api('GET', `/v1/reports/reads?kind=monthly&monthStart=${monthStart}`, { as: ADMIN })
+    expect((reads2.json.data as string[]).includes(mine.id)).toBe(false)
+    // 期間指定の形式検証（YYYY-MM-DD 以外は 400）
+    expect((await api('GET', '/v1/reports/reads?kind=monthly&monthStart=bad', { as: ADMIN })).status).toBe(400)
+  })
 })
 
 // バッチ4（オペレーター指示 2026-08-03）: 日報「本日の課題の種別」・週報の新規項目・ぽいぽいポストの宛先通知
@@ -6756,7 +6795,29 @@ describe('改善要望（F-42）', () => {
     // 未入力は AKO-REQ-001
     expect((await api('POST', '/v1/improvements/requests', { as: MEMBER, body: { body: '  ' } })).json.error?.code).toBe('AKO-REQ-001')
 
-    // 一般は管理系を閲覧不可（AKO-PRM-001）・管理者は可
+    // 改修依頼 2026-08-19 第4弾: 生要望の一覧（/requests）は認証済み全員が閲覧できる（全要望を閲覧可）
+    const reqList = await api('GET', '/v1/improvements/requests', { as: MEMBER })
+    expect(reqList.status).toBe(200)
+    const reqRows = reqList.json.data as Record<string, unknown>[]
+    expect(reqRows.some(r => r.id === (posted.json.data as { id: string }).id)).toBe(true)
+    // 選別（adoption）・集約解除履歴（excludedItemIds）は一般には返さない（トリアージ状態 = 管理者のみ。R1 監査反映）
+    expect(reqRows.every(r => !('adoption' in r) && !('excludedItemIds' in r))).toBe(true)
+    // 管理者には adoption を返す（選別 UI の SoT）
+    const adminReqRows = (await api('GET', '/v1/improvements/requests', { as: ADMIN })).json.data as Record<string, unknown>[]
+    expect(adminReqRows.every(r => 'adoption' in r)).toBe(true)
+    // 一般利用者は自分の取消済み要望を閲覧・復元できる（原則9.5・R1 レビュー反映）。他者の取消済みは見えない
+    const ownReqId = (posted.json.data as { id: string }).id
+    expect((await api('POST', `/v1/improvements/requests/${ownReqId}/archive`, { as: MEMBER })).status).toBe(200)
+    const afterArchive = (await api('GET', '/v1/improvements/requests', { as: MEMBER })).json.data as { id: string; archivedAt: string | null }[]
+    const ownArchived = afterArchive.find(r => r.id === ownReqId)
+    expect(ownArchived?.archivedAt).toBeTruthy() // 自分の取消済みは自分の一覧に出る
+    // 他メンバー（HR）には他者の取消済みは出ない（active のみ + 自分の取消済み）
+    expect((((await api('GET', '/v1/improvements/requests', { as: HR })).json.data) as { id: string }[]).some(r => r.id === ownReqId)).toBe(false)
+    // 本人が復元できる（取消の取消 = 原則9.5）→ 後続テストへ影響させないため元に戻す
+    expect((await api('POST', `/v1/improvements/requests/${ownReqId}/restore`, { as: MEMBER })).status).toBe(200)
+    // ステータス変更・選別など管理系の操作は一般不可（AKO-PRM-001）
+    expect((await api('POST', `/v1/improvements/requests/${(posted.json.data as { id: string }).id}/status`, { as: MEMBER, body: { status: 'resolved' } })).status).toBe(403)
+    // 改修案件（/items）は引き続き管理権限者のみ（AKO-PRM-001）・管理者は可
     const memberList = await api('GET', '/v1/improvements/items', { as: MEMBER })
     expect(memberList.status).toBe(403)
     expect(memberList.json.error?.code).toBe('AKO-PRM-001')
@@ -6778,13 +6839,18 @@ describe('改善要望（F-42）', () => {
     const posted = await api('POST', '/v1/improvements/requests', {
       as: MEMBER, body: {
         body: '手順書と画面ショットを添付します', pagePath: '/attach-test', pageLabel: '添付テスト',
+        targetSpot: ' 一覧の合計欄 ', // 対象箇所（改修依頼 2026-08-19 第4弾。trim して往復）
         links: [' https://ref.example/manual ', 'https://ref.example/manual'],
         images: [{ filename: 'shot.png', mime: 'image/png', dataUrl: png }],
       },
     })
     expect(posted.status).toBe(201)
-    const req = posted.json.data as { links: string[]; images: { filename: string; dataUrl: string }[] }
+    const req = posted.json.data as { links: string[]; images: { filename: string; dataUrl: string }[]; targetSpot: string }
     expect(req.links).toEqual(['https://ref.example/manual']) // trim + 重複除去
+    expect(req.targetSpot).toBe('一覧の合計欄') // 対象箇所が trim されて往復
+    // 対象箇所なしの投稿は空文字で返る（下位互換）
+    const noSpot = await api('POST', '/v1/improvements/requests', { as: MEMBER, body: { body: '箇所なし', pagePath: '/attach-test', pageLabel: '添付テスト' } })
+    expect((noSpot.json.data as { targetSpot: string }).targetSpot).toBe('')
     // 投稿応答は画像実体をエコーしない（アップロードした data URI をそのまま返さない = 転送量削減。実体は itemId GET で検証）
     expect(req.images).toEqual([])
     // 添付なしの旧形式の投稿も従来どおり（links/images は空配列で返る = 下位互換）
@@ -6982,7 +7048,7 @@ describe('改善要望（F-42）', () => {
     expect((await api('POST', `/v1/improvements/requests/${reqId}/edit`, { as: MEMBER, body: { body: '復元後の編集' } })).status).toBe(200)
   })
 
-  it('受付箱の要望コメントを改修プロンプトに反映する（改修依頼 2026-08-19）', async () => {
+  it('受付箱の要望コメントを改修プロンプトに時系列統合して反映する（改修依頼 2026-08-19 第4弾）', async () => {
     const posted = await api('POST', '/v1/improvements/requests', {
       as: MEMBER, body: { body: 'コメント反映テストの要望', pagePath: '/comment-prompt', pageLabel: 'コメント反映' },
     })
@@ -6992,7 +7058,10 @@ describe('改善要望（F-42）', () => {
     await api('POST', `/v1/improvements/requests/${reqId}/adoption`, { as: ADMIN, body: { adoption: 'adopted' } })
     await api('POST', '/v1/improvements/generate', { as: ADMIN })
     const prompt = (await api('POST', '/v1/improvements/prompt', { as: ADMIN, body: { filter: 'open' } })).json.data as { prompt: string }
-    expect(prompt.prompt).toContain('- コメント: 対象は一覧のみで良いか確認したい')
+    // 要望本文とコメントが時系列統合され【要望】【コメント】で明示される（投稿 → コメントの順）
+    expect(prompt.prompt).toContain('- 【要望】 ［コメント反映］ コメント反映テストの要望')
+    expect(prompt.prompt).toContain('- 【コメント】 対象は一覧のみで良いか確認したい')
+    expect(prompt.prompt.indexOf('コメント反映テストの要望')).toBeLessThan(prompt.prompt.indexOf('対象は一覧のみで良いか確認したい'))
     // 取消したコメントはプロンプトに載らない（有効コメントのみ = 記録保護と整合）
     const comments = (await api('GET', `/v1/improvements/request-comments?requestId=${reqId}`, { as: ADMIN }))
       .json.data as { id: string }[]
@@ -7360,30 +7429,55 @@ describe('活動記録 3 種（サポート/営業/ビジネスパートナー�
     expect(updated.probability).toBe(60)
   })
 
-  it('ビジネスパートナー活動: 入力検証（AKO-PTN-001）・関連商談リンク（FK）・取消/復元', async () => {
-    expect((await api('POST', '/v1/partner-activities', { as: MEMBER, body: { partnerName: '', theme: 'x', activityType: '紹介', status: '検討' } })).json.error?.code).toBe('AKO-PTN-001')
-    expect((await api('POST', '/v1/partner-activities', { as: MEMBER, body: { partnerName: '川上さん', theme: 'x', activityType: '爆買', status: '検討' } })).json.error?.code).toBe('AKO-PTN-001')
+  it('ビジネスパートナー活動: 入力検証（AKO-PTN-001）・マスタ参照解決・関連商談リンク（FK）・取消/復元', async () => {
+    // パートナー会社（必須）の欠落は AKO-PTN-001（改修依頼 2026-08-19 第4弾でマスタ参照必須化）
+    expect((await api('POST', '/v1/partner-activities', { as: MEMBER, body: { theme: 'x', activityType: '紹介', status: '検討' } })).json.error?.code).toBe('AKO-PTN-001')
+    expect((await api('POST', '/v1/partner-activities', { as: MEMBER, body: { partnerCompanyId: companyId, theme: 'x', activityType: '爆買', status: '検討' } })).json.error?.code).toBe('AKO-PTN-001')
     // 実在しない関連商談は 400（FK → AKO-PTN-001）
     expect((await api('POST', '/v1/partner-activities', {
-      as: MEMBER, body: { partnerName: '川上さん', theme: 'x', activityType: '紹介', status: '検討', relatedSalesActivityId: 'deal-nope' },
+      as: MEMBER, body: { partnerCompanyId: companyId, theme: 'x', activityType: '紹介', status: '検討', relatedSalesActivityId: 'deal-nope' },
     })).json.error?.code).toBe('AKO-PTN-001')
+    // パートナー会社（既存 FK）＋パートナー担当（自由入力→新規登録）＋アプローチ企業（自由入力→新規登録）
     const created = await api('POST', '/v1/partner-activities', {
       as: MEMBER,
       body: {
-        partnerName: '川上さん', theme: 'フローラ協業', relatedCompany: 'フローラ',
-        activityType: '共創', status: '進行中', summary: '協業テーマの検討',
+        partnerCompanyId: companyId, newPartnerContactName: '川上 太郎',
+        newApproachCompanyName: 'アプローチ企業テスト', approachGroup: '紹介ルートA',
+        theme: 'フローラ協業', activityType: '共創', status: '進行中', summary: '協業テーマの検討',
         nextAction: '3者MTG', nextActionDate: '2026-09-07', relatedSalesActivityId: dealId,
-        memo: '案件化したら商談へリンク',
+        memo: '案件化したら商談へリンク', links: ['https://example.com/partner'],
       },
     })
     expect(created.status).toBe(201)
     pactId = (created.json.data as { id: string }).id
-    expect((created.json.data as { relatedSalesActivityId: string }).relatedSalesActivityId).toBe(dealId)
-    // 部分更新でリンク解除（null 化）できる・他フィールドは保持
+    const createdRow = created.json.data as {
+      relatedSalesActivityId: string; partnerCompanyId: string; partnerContactId: string
+      approachCompanyId: string; partnerName: string; relatedCompany: string; approachGroup: string; links: string[]
+    }
+    expect(createdRow.relatedSalesActivityId).toBe(dealId)
+    expect(createdRow.partnerCompanyId).toBe(companyId)
+    // partner_name/related_company は会社名スナップショット（表示・検索の下位互換）
+    expect(createdRow.partnerName).toBe('活動記録テスト商事')
+    expect(createdRow.relatedCompany).toBe('アプローチ企業テスト')
+    expect(createdRow.approachGroup).toBe('紹介ルートA')
+    expect(createdRow.links).toEqual(['https://example.com/partner'])
+    // 担当は選択会社（companyId）に所属して新規登録される
+    const pc = await pool.query(`SELECT company_id, name FROM contacts WHERE id = $1`, [createdRow.partnerContactId])
+    expect(pc.rows[0]).toEqual({ company_id: companyId, name: '川上 太郎' })
+    // アプローチ企業は顧客(会社)マスタへ新規登録される
+    const ac = await pool.query(`SELECT kind, name FROM companies WHERE id = $1`, [createdRow.approachCompanyId])
+    expect(ac.rows[0]).toEqual({ kind: 'customer', name: 'アプローチ企業テスト' })
+    // 実在しない担当（他社所属）を指定すると AKO-PTN-003（所属不一致）
+    expect((await api('POST', '/v1/partner-activities', {
+      as: MEMBER, body: { partnerCompanyId: companyId, partnerContactId: 'p-nope', theme: 'x', activityType: '紹介', status: '検討' },
+    })).json.error?.code).toBe('AKO-PTN-003')
+    // 部分更新でリンク解除（null 化）できる・他フィールドは保持（パートナー会社・担当・テーマ）
     const upd = await api('PATCH', `/v1/partner-activities/${pactId}`, { as: HR, body: { relatedSalesActivityId: '' } })
-    const updated = upd.json.data as { relatedSalesActivityId: string | null; theme: string }
+    const updated = upd.json.data as { relatedSalesActivityId: string | null; theme: string; partnerCompanyId: string; partnerContactId: string }
     expect(updated.relatedSalesActivityId).toBeNull()
     expect(updated.theme).toBe('フローラ協業')
+    expect(updated.partnerCompanyId).toBe(companyId)
+    expect(updated.partnerContactId).toBe(createdRow.partnerContactId)
     // 取消 → 一覧（f.active=true）から外れる → 復元で戻る
     expect((await api('POST', `/v1/partner-activities/${pactId}/archive`, { as: MEMBER })).status).toBe(200)
     const activeOnly = await api('GET', '/v1/partner-activities?f.active=true&limit=50', { as: MEMBER })
@@ -7391,6 +7485,26 @@ describe('活動記録 3 種（サポート/営業/ビジネスパートナー�
     expect((await api('POST', `/v1/partner-activities/${pactId}/restore`, { as: MEMBER })).status).toBe(200)
     const restored = await api('GET', '/v1/partner-activities?f.active=true&limit=50', { as: MEMBER })
     expect((restored.json.data as { id: string }[]).some(r => r.id === pactId)).toBe(true)
+  })
+
+  it('ビジネスパートナー活動: 旧行（アプローチ企業が自由入力スナップショットのみ）はアプローチ未変更の部分更新で related_company を保持（R1 監査反映・原則7）', async () => {
+    // アプローチ企業 FK 未設定で作成（related_company は空）→ 旧行を模して related_company を自由入力へ直接書き換え
+    const created = await api('POST', '/v1/partner-activities', {
+      as: MEMBER, body: { partnerCompanyId: companyId, theme: '旧行テスト', activityType: '紹介', status: '検討' },
+    })
+    const legacyId = (created.json.data as { id: string }).id
+    await pool.query(`UPDATE partner_activities SET approach_company_id = NULL, related_company = $2 WHERE id = $1`, [legacyId, '旧アプローチ企業'])
+    // アプローチ企業を触らない部分更新（memo だけ）→ related_company スナップショットが保持される
+    const upd = await api('PATCH', `/v1/partner-activities/${legacyId}`, { as: HR, body: { memo: 'レガシー保持テスト' } })
+    const row = upd.json.data as { relatedCompany: string; approachCompanyId: string | null; memo: string }
+    expect(row.relatedCompany).toBe('旧アプローチ企業')
+    expect(row.approachCompanyId).toBeNull()
+    expect(row.memo).toBe('レガシー保持テスト')
+    // アプローチ企業を明示指定すればマスタ参照へ移行しスナップショットも更新される
+    const upd2 = await api('PATCH', `/v1/partner-activities/${legacyId}`, { as: HR, body: { newApproachCompanyName: '新アプローチ企業' } })
+    const row2 = upd2.json.data as { relatedCompany: string; approachCompanyId: string | null }
+    expect(row2.relatedCompany).toBe('新アプローチ企業')
+    expect(row2.approachCompanyId).toBeTruthy()
   })
 
   it('機能ガード: support-activity / sales-activity / partner-activity の deny で 403（AKO-PRM-001）', async () => {

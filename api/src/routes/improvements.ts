@@ -28,6 +28,7 @@ import {
   IMPROVEMENT_NOTE_CAP,
   IMPROVEMENT_PAGE_LABEL_CAP,
   IMPROVEMENT_PAGE_PATH_CAP,
+  IMPROVEMENT_TARGET_SPOT_CAP,
   IMPROVEMENT_STATUSES,
   IMPROVEMENT_SUMMARY_CAP,
   IMPROVEMENT_COMMENT_CAP,
@@ -79,7 +80,7 @@ const JST = `AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"'`
  * 画像の実体は itemId 指定の GET（ドロワーの遅延ロード）でのみ返す）
  */
 const reqColsOf = (withImages: boolean): string => `id, member_id AS "memberId", member_name AS "memberName",
-  page_path AS "pagePath", page_label AS "pageLabel", body, status, adoption, tags, links,
+  page_path AS "pagePath", page_label AS "pageLabel", target_spot AS "targetSpot", body, status, adoption, tags, links,
   ${withImages ? 'images' : `'[]'::jsonb AS images`}, item_id AS "itemId",
   excluded_item_ids AS "excludedItemIds",
   to_char(archived_at ${JST}) AS "archivedAt", to_char(edited_at ${JST}) AS "editedAt",
@@ -118,7 +119,7 @@ async function inTxn<T>(pool: pg.Pool, fn: (db: pg.PoolClient) => Promise<T>): P
  * タグ（壁打ち/お任せ = F-42-17）は allowlist 正規化のみ（未知値は落とす = エラーにしない）。
  */
 export function improvementRequestInputOf(body: Record<string, unknown>): {
-  body: string; pagePath: string; pageLabel: string; links: string[]
+  body: string; pagePath: string; pageLabel: string; targetSpot: string; links: string[]
   images: ImprovementRequestImage[]; tags: ImprovementRequestTag[]
 } {
   const text = String(body.body ?? '').trim()
@@ -135,6 +136,8 @@ export function improvementRequestInputOf(body: Record<string, unknown>): {
     // アプリ内パスのみ保持（'//host' 等は '' へ = 対象ページリンク化 F-42-20 に伴う防御。R1 監査 MAJOR-1）
     pagePath: capCodePoints(normalizeImprovementPagePath(body.pagePath), IMPROVEMENT_PAGE_PATH_CAP),
     pageLabel: capCodePoints(String(body.pageLabel ?? '').trim(), IMPROVEMENT_PAGE_LABEL_CAP),
+    // 対象箇所（ページ内のどこか = 自由入力・任意。改修依頼 2026-08-19 第4弾）
+    targetSpot: capCodePoints(String(body.targetSpot ?? '').trim(), IMPROVEMENT_TARGET_SPOT_CAP),
     links,
     images,
     tags: normalizeImprovementTags(body.tags),
@@ -185,30 +188,47 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
     // RETURNING は画像実体を含めない（クライアントは id しか読まず、アップロードした data URI をそのまま
     // 返すのは転送量の無駄 = 一覧 GET と同じ姿勢。実体は itemId 指定 GET でのみ返す）
     const { rows } = await pool.query(
-      `INSERT INTO improvement_requests (id, member_id, member_name, page_path, page_label, body, tags, links, images)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING ${reqColsOf(false)}`,
-      [id, user.id, user.name, input.pagePath, input.pageLabel, input.body,
+      `INSERT INTO improvement_requests (id, member_id, member_name, page_path, page_label, target_spot, body, tags, links, images)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING ${reqColsOf(false)}`,
+      [id, user.id, user.name, input.pagePath, input.pageLabel, input.targetSpot, input.body,
         JSON.stringify(input.tags), JSON.stringify(input.links), JSON.stringify(input.images)])
     return c.json({ data: rows[0] }, 201)
   })
 
-  // ---- 要望一覧（管理）。itemId 指定 = その改修単位の元要望 / unclustered=1 = 未集約の有効要望 ----
+  // ---- 要望一覧。認証済み全員が閲覧できる（改修依頼 2026-08-19 第4弾: 全要望を閲覧可）。
+  // ただし取消済み（includeArchived）は管理権限者のみ = 一般利用者には有効な要望のみ返す。
+  // itemId 指定 = その改修単位の元要望 / unclustered=1 = 未集約の有効要望 ----
   app.get('/requests', async (c) => {
-    await requireManage(c, pool)
+    const user = c.get('user')
+    const rules = await activePermissionRules(pool)
+    const canManage = canManageImprovements(rules, subjectOf(user))
     const itemId = String(c.req.query('itemId') ?? '').trim()
     const unclustered = c.req.query('unclustered') === '1'
-    const includeArchived = c.req.query('includeArchived') === '1'
+    // 取消済みの閲覧は管理権限者のみ（一般利用者は archived_at IS NULL 固定 = 有効な全要望）
+    const includeArchived = canManage && c.req.query('includeArchived') === '1'
     const where: string[] = []
     const params: unknown[] = []
     if (itemId) { params.push(itemId); where.push(`item_id = $${params.length}`) }
     if (unclustered) where.push('item_id IS NULL')
-    if (!includeArchived) where.push('archived_at IS NULL')
+    if (canManage) {
+      if (!includeArchived) where.push('archived_at IS NULL')
+    } else {
+      // 一般利用者: 有効な全要望 + 自分の取消済み（自分の取消は本人が復元できる = 原則9.5）。他者の取消済みは非表示
+      params.push(user.id)
+      where.push(`(archived_at IS NULL OR member_id = $${params.length})`)
+    }
     // 画像の実体は絞り込み指定時のみ（itemId = 改修単位ドロワー / unclustered=1 = 生要望ドロワーの遅延ロード。
     // 全件一覧は '[]' = 転送量削減。レビュー指摘 2026-08-17）
     const sql = `SELECT ${reqColsOf(Boolean(itemId) || unclustered)} FROM improvement_requests`
       + (where.length ? ` WHERE ${where.join(' AND ')}` : '')
       + ' ORDER BY created_at DESC, id'
     const { rows } = await pool.query(sql, params)
+    // 選別（adoption）・集約解除履歴（excludedItemIds）は管理系のトリアージ状態のため一般利用者へは返さない
+    // （UI でも管理者のみ表示 = 情報開示の一貫性。R1 監査反映・改修依頼 2026-08-19 第4弾）。
+    // 要望本文・投稿者・要望ステータス（open/resolved/dismissed）は全員可（受付箱・要望カンバンで参照）。
+    if (!canManage) {
+      for (const r of rows as Record<string, unknown>[]) { delete r.adoption; delete r.excludedItemIds }
+    }
     return c.json({ data: rows })
   })
 
@@ -757,24 +777,27 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
     if (ids.length > 0) {
       const { rows: reqRows } = await pool.query<{
         id: string; itemId: string; pageLabel: string; pagePath: string; body: string
-        status: ImprovementRequestStatus; links: string[]; imageCount: number
+        status: ImprovementRequestStatus; links: string[]; imageCount: number; createdAt: string
       }>(
+        // createdAt を SELECT に加える（改修依頼 2026-08-19 第4弾: 要望とコメントをプロンプトで時系列統合）
         `SELECT id, item_id AS "itemId", page_label AS "pageLabel", page_path AS "pagePath", body,
-           status, links, jsonb_array_length(images) AS "imageCount"
+           status, links, jsonb_array_length(images) AS "imageCount", to_char(created_at ${JST}) AS "createdAt"
          FROM improvement_requests WHERE item_id = ANY($1::text[]) AND archived_at IS NULL
          ORDER BY created_at, id`, [ids])
-      // 受付箱で記録した要望への時系列コメント（有効・古い順）を要望 id ごとに束ねる
-      // （改修依頼 2026-08-19: コメントもプロンプトに反映。タグ〔壁打ち/お任せ〕は人間運用のため非対象）
+      // 受付箱で記録した要望への時系列コメント（有効・古い順）を要望 id ごとに束ねる（本文＋投稿時刻）。
+      // 要望本文と混ぜて createdAt 昇順に並べ替えるため、コメントも createdAt を持たせる（改修依頼 2026-08-19 第4弾）
       const reqIds = reqRows.map(r => r.id)
-      const commentsByReq = new Map<string, string[]>()
+      const commentsByReq = new Map<string, { body: string; createdAt: string }[]>()
       if (reqIds.length > 0) {
-        const { rows: commentRows } = await pool.query<{ requestId: string; body: string }>(
-          `SELECT request_id AS "requestId", body FROM improvement_request_comments
+        const { rows: commentRows } = await pool.query<{ requestId: string; body: string; createdAt: string }>(
+          `SELECT request_id AS "requestId", body, to_char(created_at ${JST}) AS "createdAt"
+           FROM improvement_request_comments
            WHERE request_id = ANY($1::text[]) AND archived_at IS NULL ORDER BY created_at, id`, [reqIds])
         for (const cm of commentRows) {
           const arr = commentsByReq.get(cm.requestId)
-          if (arr) arr.push(cm.body)
-          else commentsByReq.set(cm.requestId, [cm.body])
+          const entry = { body: cm.body, createdAt: cm.createdAt }
+          if (arr) arr.push(entry)
+          else commentsByReq.set(cm.requestId, [entry])
         }
       }
       for (const r of reqRows) {
@@ -783,7 +806,7 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
           pageLabel: r.pageLabel, pagePath: r.pagePath, body: r.body,
           // 要望単位のステータスを加味（open 以外は【対応済み】【見送り】で明記 = プロンプト再生成に反映）
           status: r.status, links: r.links ?? [], imageCount: Number(r.imageCount ?? 0),
-          comments: commentsByReq.get(r.id) ?? [],
+          createdAt: r.createdAt, comments: commentsByReq.get(r.id) ?? [],
         }
         if (arr) arr.push(entry)
         else byItem.set(r.itemId, [entry])

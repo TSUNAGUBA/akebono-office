@@ -14,7 +14,7 @@
  */
 import type { Ref } from 'vue'
 import type {
-  DailyReport, ReportComment, ReportEntry, ReportRead, ReportReadKind, Result, TomorrowPlan, WeeklyReport,
+  DailyReport, MonthlyReport, ReportComment, ReportEntry, ReportRead, ReportReadKind, Result, TomorrowPlan, WeeklyReport,
 } from '~/types/domain'
 import {
   DAILY_ISSUE_CATEGORY_PRESETS, TOMORROW_PLANS_MAX, WEEKLY_TEAM_SHARE_KINDS,
@@ -26,6 +26,7 @@ import { matrixVisible, parseTeamVisibleIds, timelineVisibleWith } from '~/utils
 
 const apiDaily = ref<DailyReport[]>([])
 const apiWeekly = ref<WeeklyReport[]>([])
+const apiMonthly = ref<MonthlyReport[]>([])
 const apiComments = ref<ReportComment[]>([])
 
 function mergeById<T extends { id: string }>(store: Ref<T[]>, rows: T[]): void {
@@ -70,6 +71,20 @@ function loadWeeklyAll(weekStart: string, force = false): Promise<void> {
   }, force)
 }
 
+// 月報（改修依頼 2026-08-19 第4弾。週報と同型の遅延ロード）
+function loadMonthly(force = false): Promise<void> {
+  return apiLoadOnce('rep:monthly', async () => {
+    mergeById(apiMonthly, await apiFetch<MonthlyReport[]>('/v1/reports/monthly'))
+  }, force)
+}
+
+/** 全員の提出済み月報（scope=all・単月指定。参照権限の絞り込みはサーバー側でも適用される） */
+function loadMonthlyAll(monthStart: string, force = false): Promise<void> {
+  return apiLoadOnce(`rep:monthly:all:${monthStart}`, async () => {
+    mergeById(apiMonthly, await apiFetch<MonthlyReport[]>('/v1/reports/monthly', { query: { scope: 'all', monthStart } }))
+  }, force)
+}
+
 function loadComments(reportId: string, force = false): Promise<void> {
   return apiLoadOnce(`rep:comments:${reportId}`, async () => {
     mergeById(apiComments, await apiFetch<ReportComment[]>(`/v1/reports/${reportId}/comments`))
@@ -82,7 +97,8 @@ function loadComments(reportId: string, force = false): Promise<void> {
  * 期間ロードは既存 Set との和集合で統合する（複数月・複数週の結果を合流させるため）。
  * 取得中に「未読に戻す」を行うと取得中スナップショットが id を再追加し既読表示へ戻る一時不整合があり得るが、
  * サーバー側（SoT）は正しく削除済みで次回ロードで自己修復するため受容する（レビュー n-3 = 設計判断） */
-const apiReadIds = ref<{ daily: Set<string>; weekly: Set<string> }>({ daily: new Set(), weekly: new Set() })
+const apiReadIds = ref<{ daily: Set<string>; weekly: Set<string>; monthly: Set<string> }>(
+  { daily: new Set(), weekly: new Set(), monthly: new Set() })
 
 function loadDailyReads(month: string, force = false): Promise<void> {
   return apiLoadOnce(`rep:reads:daily:${month}`, async () => {
@@ -98,12 +114,20 @@ function loadWeeklyReads(weekStart: string, force = false): Promise<void> {
   }, force)
 }
 
+function loadMonthlyReads(monthStart: string, force = false): Promise<void> {
+  return apiLoadOnce(`rep:reads:monthly:${monthStart}`, async () => {
+    const ids = await apiFetch<string[]>('/v1/reports/reads', { query: { kind: 'monthly', monthStart } })
+    apiReadIds.value = { ...apiReadIds.value, monthly: new Set([...apiReadIds.value.monthly, ...ids]) }
+  }, force)
+}
+
 // ログイン確立・切替時に取り直す（キーの解除は resetApiData が一括で行う）
 onApiReset(() => {
   apiDaily.value = []
   apiWeekly.value = []
+  apiMonthly.value = []
   apiComments.value = []
-  apiReadIds.value = { daily: new Set(), weekly: new Set() }
+  apiReadIds.value = { daily: new Set(), weekly: new Set(), monthly: new Set() }
 })
 
 export interface DailyReportInput {
@@ -130,6 +154,19 @@ export interface WeeklyReportInput {
   /** チーム共有事項の種別（WEEKLY_TEAM_SHARE_KINDS のいずれか。既定 '特になし'） */
   teamShareKind: string
   /** チーム共有事項の自由入力（任意） */
+  teamShareNote: string
+}
+
+/** 月報の入力（週報と同型。改修依頼 2026-08-19 第4弾。期間キーのみ monthStart） */
+export interface MonthlyReportInput {
+  monthStart: string
+  goalReview: string
+  mainWork: string
+  issues: string
+  /** 来月の最重要テーマ（週報と共通の本文キー nextWeek を用いる） */
+  nextWeek: string
+  goodPoints: string
+  teamShareKind: string
   teamShareNote: string
 }
 
@@ -167,12 +204,14 @@ export function useReports() {
   // API モードはキャッシュをバッキングにし、以降の射影ロジックを共通利用する
   const dailyReports = isApi ? (apiDaily as Ref<DailyReport[]>) : tbl('dailyReports')
   const weeklyReports = isApi ? (apiWeekly as Ref<WeeklyReport[]>) : tbl('weeklyReports')
+  const monthlyReports = isApi ? (apiMonthly as Ref<MonthlyReport[]>) : tbl('monthlyReports')
   const comments = isApi ? (apiComments as Ref<ReportComment[]>) : tbl('reportComments')
   const members = tbl('members')
   const aiEmployees = tbl('aiEmployees')
   if (isApi) {
     void loadMineMonth(todayJst().slice(0, 7))
     void loadWeekly()
+    void loadMonthly()
   }
 
   /** API モード時、参照された月の自分の日報を遅延ロードする（射影関数から fire-and-forget で呼ぶ） */
@@ -753,6 +792,122 @@ export function useReports() {
     }
   }
 
+  // ---------- 月報（改修依頼 2026-08-19 第4弾。週報と同型） ----------
+
+  /** 月の開始日（対象月の初日 YYYY-MM-01。週報の weekStartOf に対応） */
+  function monthStartOf(date: string): string {
+    return `${date.slice(0, 7)}-01`
+  }
+
+  function myMonthlyOn(monthStart: string): MonthlyReport | undefined {
+    return monthlyReports.value.find(r =>
+      r.memberId === currentUser.value.id && r.monthStart === monthStart)
+  }
+
+  const myMonthlies = computed(() =>
+    monthlyReports.value
+      .filter(r => r.memberId === currentUser.value.id)
+      .sort((a, b) => b.monthStart.localeCompare(a.monthStart)))
+
+  /** 月報を id で取得（全員の月報タブのドロワー用） */
+  function monthlyById(id: string): MonthlyReport | undefined {
+    return monthlyReports.value.find(r => r.id === id)
+  }
+
+  /** 全員の提出済み月報（週報 allSubmittedWeeklies と同型。参照可否は canViewMemberReports） */
+  function allSubmittedMonthlies(monthStart: string): MonthlyReport[] {
+    if (isApi) {
+      void loadMonthlyAll(monthStart)
+      void loadMonthlyReads(monthStart)
+    }
+    return monthlyReports.value
+      .filter(r => r.status === 'submitted' && r.monthStart === monthStart)
+      .filter(r => perms.canViewMemberReports(r.memberId))
+      .sort((a, b) => memberName(a.memberId).localeCompare(memberName(b.memberId), 'ja'))
+  }
+
+  async function saveMonthly(input: MonthlyReportInput, submitNow: boolean): Promise<Result> {
+    const existing = myMonthlyOn(input.monthStart)
+    if (existing && existing.status === 'submitted') {
+      return err('AKO-REP-002', '提出済みの月報は編集できません')
+    }
+    if (submitNow && !input.mainWork.trim()) {
+      return err('AKO-GEN-001', '今月の主要業務を入力してください')
+    }
+    const status = submitNow ? 'submitted' as const : 'draft' as const
+    const teamShareKind = cleanTeamShareKind(input.teamShareKind)
+    if (isApi) {
+      const res = await apiResult(() => apiFetch<{ id: string }>('/v1/reports/monthly', {
+        method: 'PUT',
+        body: {
+          monthStart: input.monthStart,
+          goalReview: input.goalReview,
+          mainWork: input.mainWork,
+          issues: input.issues,
+          nextWeek: input.nextWeek,
+          goodPoints: input.goodPoints,
+          teamShareKind,
+          teamShareNote: input.teamShareNote,
+          status,
+        },
+      }))
+      if (res.ok) await loadMonthly(true)
+      return res
+    }
+    if (existing) {
+      monthlyReports.value = monthlyReports.value.map(r => r.id === existing.id
+        ? { ...r, goalReview: input.goalReview, mainWork: input.mainWork, issues: input.issues, nextWeek: input.nextWeek,
+            goodPoints: input.goodPoints, teamShareKind, teamShareNote: input.teamShareNote, status }
+        : r)
+      commit()
+      return { ok: true, id: existing.id }
+    }
+    const id = nextId('monthlyReports', 'mo')
+    monthlyReports.value = [...monthlyReports.value, {
+      id,
+      memberId: currentUser.value.id,
+      monthStart: input.monthStart,
+      goalReview: input.goalReview,
+      mainWork: input.mainWork,
+      issues: input.issues,
+      nextWeek: input.nextWeek,
+      goodPoints: input.goodPoints,
+      teamShareKind,
+      teamShareNote: input.teamShareNote,
+      status,
+    }]
+    commit()
+    return { ok: true, id }
+  }
+
+  /** その月の自分の提出済み週報（mainWork / issues）から月報の下書きを生成（週報 draftFromDailies の月次版） */
+  async function draftFromWeeklies(monthStart: string): Promise<{ mainWork: string; issues: string }> {
+    const monthPrefix = monthStart.slice(0, 7)
+    if (isApi) await loadWeekly()
+    const mine = weeklyReports.value
+      .filter(r =>
+        r.memberId === currentUser.value.id
+        && r.status === 'submitted'
+        && r.weekStart.slice(0, 7) === monthPrefix)
+      .sort((a, b) => a.weekStart.localeCompare(b.weekStart))
+    const work: string[] = []
+    const issues: string[] = []
+    for (const r of mine) {
+      for (const line of r.mainWork.split('\n')) {
+        const t = line.replace(/^[・\-*\s]+/, '').trim()
+        if (t && !work.includes(t)) work.push(t)
+      }
+      for (const line of r.issues.split('\n')) {
+        const i = line.replace(/^[・\-*\s]+/, '').trim()
+        if (i && !issues.includes(i)) issues.push(i)
+      }
+    }
+    return {
+      mainWork: work.map(t => `・${t}`).join('\n'),
+      issues: issues.map(t => `・${t}`).join('\n'),
+    }
+  }
+
   return {
     dailyReports,
     weeklyReports,
@@ -789,5 +944,13 @@ export function useReports() {
     tomorrowPlansFor,
     saveWeekly,
     draftFromDailies,
+    monthlyReports,
+    monthStartOf,
+    myMonthlyOn,
+    myMonthlies,
+    monthlyById,
+    allSubmittedMonthlies,
+    saveMonthly,
+    draftFromWeeklies,
   }
 }

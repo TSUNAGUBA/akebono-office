@@ -5,13 +5,14 @@
  * 投稿は認証済み全員が可能（閲覧・管理は権限を持つ人のみ = 別ページ）。UiModal は body へ
  * テレポートするため、ボタンをヘッダーに 1 つ置くだけで全ページに導線が出る。
  * 送信後は同じモーダル内で「取り消す」導線 + 修正フォームを出す（投稿者本人の取消/修正 = 原則9.5。誤送信で詰まない）。
- * 添付（改善要望 2026-08-17）: URL リンク（複数）と画像（複数。縮小 data URI = 商品画像と同型。ファイル選択・
- * ドラッグ&ドロップ・貼り付けの 3 経路）は共通部品 ImprovementsAttachmentEditor に集約し、要望編集
- * （ImprovementsRequestEditForm）と共用する（改修依頼 2026-08-19 = 原則3）。
+ * 添付（改善要望 2026-08-17 → 改修依頼 2026-08-19 第4弾）: 本文と画像は一体型の ImprovementsBodyImageInput
+ * （「要望の内容」枠内左下の「+」ボタン・カーソルがある状態での貼り付けで画像添付 = Claude ライク。
+ * 独立した画像添付フォームは廃止）、参考リンクは ImprovementsLinkEditor に集約し、要望編集
+ * （ImprovementsRequestEditForm）と共用する（原則3）。
  */
 import { MessageSquarePlus, Pencil } from 'lucide-vue-next'
 import {
-  IMPROVEMENT_BODY_CAP,
+  IMPROVEMENT_BODY_CAP, IMPROVEMENT_BODY_TEMPLATE, IMPROVEMENT_TARGET_SPOT_CAP,
   IMPROVEMENT_REQUEST_TAG_META, IMPROVEMENT_REQUEST_TAGS,
   type ImprovementRequestImage, type ImprovementRequestTag, improvementLinksError,
 } from '~/types/improvement'
@@ -23,7 +24,17 @@ const { show: showToast } = useToast()
 
 const open = ref(false)
 const body = ref('')
+/** 対象箇所（ページ内のどこか = 自由入力・任意。改修依頼 2026-08-19 第4弾） */
+const targetSpot = ref('')
 const busy = ref(false)
+
+// テンプレのみ（見出しだけで内容未入力）の投稿は弾く = 空要望を作らない（改修依頼 2026-08-19 第4弾）
+const bodyHasContent = computed(() => {
+  const t = body.value.trim()
+  return t !== '' && t !== IMPROVEMENT_BODY_TEMPLATE.trim()
+})
+// 文字数はコードポイント基準（textarea の maxlength は絵文字等を半分で切るため使わず、超過は送信無効＋強調で伝える）
+const bodyOver = computed(() => [...body.value].length > IMPROVEMENT_BODY_CAP)
 
 // ---------- 対象ページの選択（改善要望 2026-08-17。既定 = 開いているページ・全体/新設ページも選べる） ----------
 
@@ -70,9 +81,11 @@ const lastBody = ref('')
 watch(() => route.path, () => { open.value = false })
 
 function openModal(): void {
-  body.value = ''
-  tags.value = []
-  links.value = []
+  // 本文はテンプレ既定・タグは「お任せ」既定・参考リンクは1件開いた状態（改修依頼 2026-08-19 第4弾）
+  body.value = IMPROVEMENT_BODY_TEMPLATE
+  targetSpot.value = ''
+  tags.value = ['entrust']
+  links.value = ['']
   images.value = []
   targetPage.value = route.path // 既定 = 開いているページ（選び直し可 = 改善要望 2026-08-17）
   sent.value = false
@@ -83,7 +96,17 @@ function openModal(): void {
 }
 
 async function send(): Promise<void> {
-  if (busy.value || !body.value.trim()) return
+  if (busy.value) return
+  // テンプレのみ・空は送信しない（見出しだけの空要望を作らない）
+  if (!bodyHasContent.value) {
+    showToast('要望の内容を入力してください（テンプレの見出しだけでは送信できません）', 'warn')
+    return
+  }
+  // 上限超過は送信前にブロック（無言の切り詰めで末尾を失わない = 編集フォームと同一判定。R1 レビュー反映）
+  if (bodyOver.value) {
+    showToast(`要望の内容が長すぎます（${IMPROVEMENT_BODY_CAP} 文字以内）`, 'crit')
+    return
+  }
   // リンクの形式は送信前に検証してフォーム内で指摘（shared の共有検証 = API と同一判定）
   const trimmedLinks = links.value.map(l => l.trim()).filter(Boolean)
   const linksMsg = improvementLinksError(trimmedLinks)
@@ -94,6 +117,7 @@ async function send(): Promise<void> {
   busy.value = true
   const res = await submit({
     body: body.value, pagePath: targetOf.value.pagePath, pageLabel: targetOf.value.pageLabel,
+    targetSpot: targetSpot.value,
     links: trimmedLinks, images: images.value, tags: tags.value as ImprovementRequestTag[],
   })
   busy.value = false
@@ -115,9 +139,11 @@ async function send(): Promise<void> {
 function again(): void {
   sent.value = false
   lastId.value = ''
-  body.value = ''
-  tags.value = []
-  links.value = []
+  // openModal と同じ既定（テンプレ・お任せ・リンク1件）へ戻す（改修依頼 2026-08-19 第4弾）
+  body.value = IMPROVEMENT_BODY_TEMPLATE
+  targetSpot.value = ''
+  tags.value = ['entrust']
+  links.value = ['']
   images.value = []
   editingSent.value = false
 }
@@ -171,7 +197,7 @@ async function undo(): Promise<void> {
   </button>
 
   <UiModal :open="open" :title="sent ? '送信しました' : '要望を送る'" width="520px" @close="open = false">
-    <!-- 入力（画像のクリップボード貼り付け・ドロップは AttachmentEditor が window で受ける） -->
+    <!-- 入力（画像のクリップボード貼り付けは本文欄 BodyImageInput が受ける。誤ドロップの遷移抑止は window で担保） -->
     <div v-if="!sent" class="grid gap-3">
       <p class="text-[13px] text-sub">
         改善・改修の要望を送れます。内容は権限を持つ担当者が AI で整理し、改修の検討に活用します。
@@ -180,32 +206,43 @@ async function undo(): Promise<void> {
       <UiFormField label="対象ページ" hint="既定は今開いているページです。すべてのページに波及する要望は「全体」、新しい画面の要望は「新設ページ」を選んでください">
         <UiSelect v-model="targetPage" :options="targetOptions" aria-label="要望の対象ページ" class="!w-full" />
       </UiFormField>
+      <!-- 対象箇所（ページ内のどこか = 自由入力・任意。改修依頼 2026-08-19 第4弾） -->
+      <UiFormField label="対象箇所（任意）" hint="ページ内のどこかを具体的に書けます（例: 一覧の合計欄・登録モーダルの日付）">
+        <input
+          v-model="targetSpot"
+          class="input !w-full"
+          type="text"
+          :maxlength="IMPROVEMENT_TARGET_SPOT_CAP"
+          placeholder="例）一覧の合計金額のセル"
+          aria-label="要望の対象箇所"
+        >
+      </UiFormField>
+      <!-- 要望の内容（本文 + 画像添付の一体型 = 枠内左下の「+」/貼り付けで添付。テンプレ既定・改修依頼 2026-08-19 第4弾） -->
       <UiFormField label="要望の内容" required>
-        <textarea
+        <ImprovementsBodyImageInput
           v-model="body"
-          class="textarea"
-          rows="5"
-          :maxlength="IMPROVEMENT_BODY_CAP"
+          v-model:images="images"
+          v-model:busy="imageBusy"
+          :rows="6"
+          body-aria-label="要望の内容"
           placeholder="例）売上一覧で合計金額をもっと大きく表示してほしい。締め作業で一番見る数字なので。"
+          :active="open && !sent"
         />
       </UiFormField>
-      <p class="text-right text-[11px] text-muted num">{{ [...body].length }} / {{ IMPROVEMENT_BODY_CAP }}</p>
+      <p class="text-right text-[11px] num" :class="bodyOver ? 'font-semibold text-crit' : 'text-muted'">
+        {{ [...body].length }} / {{ IMPROVEMENT_BODY_CAP }}<template v-if="bodyOver">（上限を超えています）</template>
+      </p>
 
-      <!-- 任意タグ（壁打ち/お任せ = F-42-17・改修依頼 2026-08-18。進め方の意思表示） -->
+      <!-- 任意タグ（お任せ/壁打ち = F-42-17。既定「お任せ」= 改修依頼 2026-08-19 第4弾。進め方の意思表示） -->
       <UiFormField
         label="タグ（任意）"
-        hint="「壁打ち」= 壁打ち（対話での要件整理）を経て案件化したい意思表示。「お任せ」= 受け取った内容を開発側の解釈で進めてよい"
+        hint="「お任せ」= 受け取った内容を開発側の解釈で進めてよい（既定）。「壁打ち」= 壁打ち（対話での要件整理）を経て案件化したい意思表示"
       >
         <UiChipSelect v-model="tags" :options="TAG_OPTIONS" aria-label="要望のタグ" />
       </UiFormField>
 
-      <!-- 添付（参考リンク + 画像）。追加/削除・縮小・貼り付け/ドロップは共通部品 = 要望編集と共用（原則3） -->
-      <ImprovementsAttachmentEditor
-        v-model:links="links"
-        v-model:images="images"
-        v-model:busy="imageBusy"
-        :active="open && !sent"
-      />
+      <!-- 参考リンク（既定で1件開いた状態 = 改修依頼 2026-08-19 第4弾。共通部品 = 要望編集と共用・原則3） -->
+      <ImprovementsLinkEditor v-model:links="links" />
     </div>
 
     <!-- 送信後（取消導線 + 本文の修正 = F-42-16。投稿者本人の編集） -->
@@ -238,7 +275,7 @@ async function undo(): Promise<void> {
     <template #footer>
       <template v-if="!sent">
         <button type="button" class="btn btn-ghost" @click="open = false">キャンセル</button>
-        <button type="button" class="btn btn-primary" :disabled="busy || imageBusy || !body.trim()" @click="send">
+        <button type="button" class="btn btn-primary" :disabled="busy || imageBusy || !bodyHasContent || bodyOver" @click="send">
           {{ busy ? '送信中…' : '送信する' }}
         </button>
       </template>

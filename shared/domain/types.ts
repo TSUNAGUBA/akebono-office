@@ -149,6 +149,11 @@ export const SUPPORT_ACTIVITY_CATEGORIES = ['操作', '不具合', '設定', '�
 export const SUPPORT_ACTIVITY_PRIORITIES = ['低', '通常', '高', '緊急'] as const
 /** サポート活動のステータス */
 export const SUPPORT_ACTIVITY_STATUSES = ['未対応', '対応中', '顧客確認待ち', '保留', '解決'] as const
+/** サポート活動の「最初の問い合わせ手段」（改修依頼 2026-08-19 第4弾。AI問合せを追加・任意選択） */
+export const SUPPORT_FIRST_CONTACT_METHODS = ['AI問合せ', 'メール', 'チャット', '電話', 'Web会議', '訪問', 'その他'] as const
+
+/** サポート活動の問い合わせ内容テンプレ（改修依頼 2026-08-19 第4弾。新規登録時の既定値） */
+export const SUPPORT_ACTIVITY_BODY_TEMPLATE = '内容：\n状況：\n対応：\n'
 
 /**
  * サポート活動（顧客サポートの受付〜解決の記録。改修依頼 2026-08-18・F-43）。
@@ -158,16 +163,22 @@ export interface SupportActivity {
   id: string
   /** 記録者（表示用。編集は全員可） */
   memberId: string
+  /** 事業区分（Village 参照・任意。改修依頼 2026-08-19 第4弾）。旧データは未定義（原則7） */
+  villageId?: string | null
   /** 受付日（YYYY-MM-DD・必須） */
   receivedDate: string
   /** 受付時刻（HH:MM・任意） */
   receivedTime: string | null
+  /** 最初の問い合わせ手段（SUPPORT_FIRST_CONTACT_METHODS・任意。改修依頼 2026-08-19 第4弾） */
+  firstContactMethod?: string
   /** 顧客(会社)（必須） */
   companyId: string
   /** 問い合わせ者（顧客側の氏名。自由入力・任意） */
   inquirerName: string
   /** 対象システム（自由入力・任意） */
   targetSystem: string
+  /** 対象箇所（自由入力・任意。改修依頼 2026-08-19 第4弾。「対象システム、対象箇所」の箇所側） */
+  targetLocation?: string
   /** 問い合わせ種別（SUPPORT_ACTIVITY_CATEGORIES） */
   category: string
   /** 件名（必須） */
@@ -192,6 +203,8 @@ export interface SupportActivity {
   completedTime: string | null
   /** 改善・ナレッジのタネ（任意） */
   knowledgeNote: string
+  /** 参考リンク URL（複数可・任意。改修依頼 2026-08-19 第4弾）。旧データは未定義（原則7） */
+  links?: string[]
   createdAt: string
   updatedAt?: string
   /** 取消（論理削除）済みは false */
@@ -211,8 +224,14 @@ export interface SalesActivity {
   id: string
   /** 記録者（表示用。編集は全員可） */
   memberId: string
+  /** 事業区分（Village 参照・任意。改修依頼 2026-08-19 第4弾）。旧データは未定義（原則7） */
+  villageId?: string | null
   /** 顧客(会社)（必須） */
   companyId: string
+  /** 担当（顧客(人)= Contact 参照・任意。改修依頼 2026-08-19 第4弾。選択会社に所属） */
+  contactId?: string | null
+  /** アプローチグループ（自由入力・任意。改修依頼 2026-08-19 第4弾） */
+  approachGroup?: string
   /** 商談名（必須） */
   title: string
   /** 商談種別（SALES_ACTIVITY_DEAL_TYPES） */
@@ -235,6 +254,8 @@ export interface SalesActivity {
   nextAction: string
   /** Next Action日（YYYY-MM-DD・任意） */
   nextActionDate: string | null
+  /** 参考リンク URL（複数可・任意。改修依頼 2026-08-19 第4弾）。旧データは未定義（原則7） */
+  links?: string[]
   createdAt: string
   updatedAt?: string
   /** 取消（論理削除）済みは false */
@@ -247,19 +268,31 @@ export const PARTNER_ACTIVITY_TYPES = ['紹介', '共創', '案件支援', '情�
 export const PARTNER_ACTIVITY_STATUSES = ['情報収集', '検討', '接続予定', '進行中', '案件化', '完了'] as const
 
 /**
- * ビジネスパートナー活動（パートナー連携のテーマ管理。改修依頼 2026-08-18・F-45）。
- * パートナー・関連企業は自由入力（パートナーは個人名も多く、関連企業は顧客マスタ対象外の企業も
- * あり得るため、マスタ参照にしない設計判断）。案件化したら関連商談（営業活動）へリンクする。
+ * ビジネスパートナー活動（パートナー連携のテーマ管理。改修依頼 2026-08-18・F-45 → 2026-08-19 第4弾で改訂）。
+ * 改修依頼 2026-08-19 第4弾: パートナー会社・担当・アプローチ企業を顧客(会社/人)マスタ参照へ変更
+ * （partnerCompanyId/partnerContactId/approachCompanyId。自由入力で新規登録もできる）。旧データの
+ * partnerName/relatedCompany（自由入力）は下位互換のため保持し、FK 未設定の旧行の表示に使う（原則7）。
+ * 案件化したら関連商談（営業活動）へリンクする。
  */
 export interface PartnerActivity {
   id: string
   /** 記録者（表示用。編集は全員可） */
   memberId: string
-  /** パートナー（人・会社の名前。自由入力・必須） */
+  /** 事業区分（Village 参照・任意。改修依頼 2026-08-19 第4弾）。旧データは未定義（原則7） */
+  villageId?: string | null
+  /** パートナー会社（顧客(会社)= Company 参照・改修依頼 2026-08-19 第4弾）。旧行は未設定 = partnerName で表示 */
+  partnerCompanyId?: string | null
+  /** パートナー担当（顧客(人)= Contact 参照・任意。改修依頼 2026-08-19 第4弾。パートナー会社に所属） */
+  partnerContactId?: string | null
+  /** アプローチ企業（顧客(会社)= Company 参照・任意。改修依頼 2026-08-19 第4弾） */
+  approachCompanyId?: string | null
+  /** アプローチグループ（自由入力・任意。改修依頼 2026-08-19 第4弾） */
+  approachGroup?: string
+  /** パートナー（人・会社の名前。自由入力）。**旧データの表示用に保持**（新規は partnerCompanyId で参照） */
   partnerName: string
   /** テーマ名（必須） */
   theme: string
-  /** 関連企業（自由入力・任意） */
+  /** 関連企業（自由入力）。**旧データの表示用に保持**（新規は approachCompanyId で参照） */
   relatedCompany: string
   /** 活動区分（PARTNER_ACTIVITY_TYPES） */
   activityType: string
@@ -281,6 +314,8 @@ export interface PartnerActivity {
   relatedSalesActivityId: string | null
   /** メモ（任意） */
   memo: string
+  /** 参考リンク URL（複数可・任意。改修依頼 2026-08-19 第4弾）。旧データは未定義（原則7） */
+  links?: string[]
   createdAt: string
   updatedAt?: string
   /** 取消（論理削除）済みは false */
@@ -288,6 +323,17 @@ export interface PartnerActivity {
 }
 
 export interface Industry {
+  id: string
+  name: string
+  displayOrder: number
+  active: boolean
+}
+
+/**
+ * 事業区分（Village）マスタ（改修依頼 2026-08-19 第4弾）。社内事業の区分を表す最小マスタ。
+ * 活動記録（サポート/営業/パートナー活動）の最上段でコンボボックス参照し、自由入力で新規登録もできる。
+ */
+export interface Village {
   id: string
   name: string
   displayOrder: number
@@ -916,6 +962,34 @@ export interface WeeklyReport {
   status: 'draft' | 'submitted'
 }
 
+/**
+ * 月報（改修依頼 2026-08-19 第4弾で新設 = 週報と同型）。週報と同一項目・同一 DB 列構成で、
+ * 期間キーを monthStart（対象月の初日・YYYY-MM-01）に置き換えたもの。表示ラベルのみ月次へ読み替える
+ * （goalReview=今月の成果 / mainWork=今月の主要業務 / nextWeek=来月の最重要テーマ）。
+ * チーム共有種別は週報と共通（WEEKLY_TEAM_SHARE_KINDS）。
+ */
+export interface MonthlyReport {
+  id: string
+  memberId: string
+  /** 対象月の初日（YYYY-MM-01）。週報の weekStart に対応する期間キー */
+  monthStart: string
+  /** 今月の成果・達成感（週報 goalReview に対応） */
+  goalReview: string
+  /** 今月の主要業務（週報 mainWork に対応） */
+  mainWork: string
+  /** 課題・原因仮説 */
+  issues: string
+  /** 来月の最重要テーマ（週報と共通の next_week 列を用いる = 期間レポート共通の本文キー） */
+  nextWeek: string
+  /** うまくいったこと・続けたいこと。旧データは未設定 */
+  goodPoints?: string
+  /** チーム共有事項の種別（WEEKLY_TEAM_SHARE_KINDS のいずれか。既定 '特になし'）。旧データは未設定 */
+  teamShareKind?: string
+  /** チーム共有事項の自由入力（任意）。旧データは未設定 */
+  teamShareNote?: string
+  status: 'draft' | 'submitted'
+}
+
 export interface ReportComment {
   id: string
   reportId: string
@@ -925,8 +999,8 @@ export interface ReportComment {
   reactions: { memberId: string; emoji: string }[]
 }
 
-/** 日報・週報の対象種別（既読管理で共用） */
-export type ReportReadKind = 'daily' | 'weekly'
+/** 日報・週報・月報の対象種別（既読管理で共用。月報は改修依頼 2026-08-19 第4弾で追加） */
+export type ReportReadKind = 'daily' | 'weekly' | 'monthly'
 
 /**
  * 日報・週報の既読（全員の日報/全員の週報タブの未読可視化。オペレーター指示 2026-07-31）。
@@ -937,7 +1011,7 @@ export interface ReportRead {
   /** 閲覧者（既読を付けた本人）*/
   memberId: string
   reportKind: ReportReadKind
-  /** 対象の DailyReport.id / WeeklyReport.id */
+  /** 対象の DailyReport.id / WeeklyReport.id / MonthlyReport.id */
   reportId: string
   readAt: string
 }

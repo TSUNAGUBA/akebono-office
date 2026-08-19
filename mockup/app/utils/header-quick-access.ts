@@ -27,7 +27,7 @@ export const QUICK_ACCESS_CATALOG: QuickAccessItem[] = [
   // レイアウトヘッダーは本 id を「未読バッジ付きベル」として特別描画する（一般のページ導線とは別枠）
   { id: 'inbox', label: '通知', icon: 'Bell', to: '/inbox' },
   { id: 'attendance', label: '勤怠管理', icon: 'Clock', to: '/attendance' },
-  { id: 'reports', label: '日報・週報', icon: 'NotebookPen', to: '/reports' },
+  { id: 'reports', label: '日報', icon: 'NotebookPen', to: '/reports' },
   { id: 'workflow', label: '稟議', icon: 'GitPullRequestArrow', to: '/workflow' },
   { id: 'customer-log', label: '顧客活動', icon: 'MessageSquare', to: '/customer-log' },
   { id: 'ai-assistant', label: 'AI業務アシスタント', icon: 'Sparkles', to: '/ai-assistant' },

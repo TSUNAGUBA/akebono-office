@@ -8,10 +8,10 @@ import type {
   CodeMasterItem, Company, CompanyRelation, Contact, ContactRelation,
   CustomerLog, CustomFieldDef, DailyReport, DecisionLog, DecisionTheme, DelegateSetting, Department,
   DocumentNode, Escalation, EscalationRule, ExternalLink, FeatureToggle, HearingLog, Holiday,
-  Industry, KnowledgeArticle, LeaveGrant, LeaveRequest, LeaveType, Member, Project,
+  Industry, KnowledgeArticle, LeaveGrant, LeaveRequest, LeaveType, Member, MonthlyReport, Project,
   PartnerActivity, PunchRecord, RelationType, ReportComment, ReportRead, SalesActivity, SalesMonthly, ServiceIncident,
   ShiftAssignment, ShiftDemand, ShiftPeriod, ShiftWish, SupportActivity, SystemService,
-  TaskPlan, UptimeDaily, WeeklyReport, WorkflowRequest, WorkflowRoute, WorkCategory, Note,
+  TaskPlan, UptimeDaily, Village, WeeklyReport, WorkflowRequest, WorkflowRoute, WorkCategory, Note,
 } from '~/types/domain'
 import type { WeeklyInsightRecord } from '../../../../shared/domain/weekly-insight'
 import type { MediaInsightRecord } from '../../../../shared/domain/media-insight'
@@ -47,6 +47,7 @@ export interface MockDbShape {
   departments: Department[]
   leaveTypes: LeaveType[]
   industries: Industry[]
+  villages: Village[]
   workCategories: WorkCategory[]
   notes: Note[]
   customerLogs: CustomerLog[]
@@ -84,6 +85,8 @@ export interface MockDbShape {
   shiftDemands: ShiftDemand[]
   dailyReports: DailyReport[]
   weeklyReports: WeeklyReport[]
+  /** 月報（改修依頼 2026-08-19 第4弾。週報と同型で新設） */
+  monthlyReports: MonthlyReport[]
   reportComments: ReportComment[]
   /** 日報・週報の既読（全員の日報/週報タブの未読可視化。オペレーター指示 2026-07-31） */
   reportReads: ReportRead[]
@@ -169,6 +172,12 @@ export function buildSeed(): MockDbShape {
     departments: core.seedDepartments,
     leaveTypes: core.seedLeaveTypes,
     industries: core.seedIndustries,
+    // 事業区分（Village）マスタ（改修依頼 2026-08-19 第4弾）。活動記録の最上段で参照・自由入力で新規登録可
+    villages: [
+      { id: 'vil-01', name: 'AKEBONO', displayOrder: 1, active: true },
+      { id: 'vil-02', name: 'つなぐば', displayOrder: 2, active: true },
+      { id: 'vil-03', name: 'コーポレート', displayOrder: 3, active: true },
+    ],
     workCategories: [
       { id: 'wc-01', name: '定例会議', displayOrder: 1, active: true },
       { id: 'wc-02', name: '顧客対応', displayOrder: 2, active: true },
@@ -210,6 +219,7 @@ export function buildSeed(): MockDbShape {
     shiftDemands: shifts.seedShiftDemands,
     dailyReports: reports.seedDailyReports,
     weeklyReports: reports.seedWeeklyReports,
+    monthlyReports: reports.seedMonthlyReports,
     reportComments: reports.seedReportComments,
     reportReads: [], // 既読は空スタート（ユーザーの閲覧操作でのみ増える）
 

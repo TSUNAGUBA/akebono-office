@@ -40,6 +40,11 @@ const WEEKLY_COLS = `id, member_id AS "memberId", week_start AS "weekStart",
   goal_review AS "goalReview", main_work AS "mainWork", issues, next_week AS "nextWeek",
   good_points AS "goodPoints", team_share_kind AS "teamShareKind", team_share_note AS "teamShareNote",
   status, submitted_at AS "submittedAt"`
+// 月報（改修依頼 2026-08-19 第4弾。週報と同型・列名も共通で month_start のみ差し替え）
+const MONTHLY_COLS = `id, member_id AS "memberId", month_start AS "monthStart",
+  goal_review AS "goalReview", main_work AS "mainWork", issues, next_week AS "nextWeek",
+  good_points AS "goodPoints", team_share_kind AS "teamShareKind", team_share_note AS "teamShareNote",
+  status, submitted_at AS "submittedAt"`
 
 /** 課題種別の正規化（プリセット外・未指定は '' = 未選択。オペレーター指示 2026-08-03） */
 function cleanIssueCategory(v: unknown): string {
@@ -434,6 +439,88 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
     return c.json({ data: { id, status } })
   })
 
+  // ---------- 月報（改修依頼 2026-08-19 第4弾。週報 /weekly と同型。期間キー = monthStart YYYY-MM-01） ----------
+  app.get('/monthly', async (c) => {
+    const user = c.get('user')
+    if (c.req.query('scope') === 'all') {
+      const monthStart = c.req.query('monthStart') ?? ''
+      if (monthStart && !/^\d{4}-\d{2}-\d{2}$/.test(monthStart)) {
+        throw err('AKO-GEN-001', 'monthStart は YYYY-MM-DD 形式で指定してください', 400)
+      }
+      // 形式のみ検証（月報の month_start は常に月初で保存されるため、非月初指定は空配列が返るだけ = 無害）
+      const rules = await activePermissionRules(pool)
+      const subject = subjectOf(user)
+      const { rows } = monthStart
+        ? await pool.query<{ memberId: string }>(
+          `SELECT ${MONTHLY_COLS} FROM monthly_reports
+           WHERE status = 'submitted' AND month_start = $1 ORDER BY month_start DESC`, [monthStart])
+        : await pool.query<{ memberId: string }>(
+          `SELECT ${MONTHLY_COLS} FROM monthly_reports
+           WHERE status = 'submitted' ORDER BY month_start DESC LIMIT 500`)
+      return c.json({ data: rows.filter(r => canViewMemberReports(rules, subject, r.memberId)) })
+    }
+    const memberId = c.req.query('memberId') ?? user.id
+    if (memberId !== user.id) requireAdmin(c)
+    const { rows } = await pool.query(
+      `SELECT ${MONTHLY_COLS} FROM monthly_reports WHERE member_id = $1 ORDER BY month_start DESC`,
+      [memberId])
+    return c.json({ data: rows })
+  })
+
+  app.put('/monthly', async (c) => {
+    const user = c.get('user')
+    const body = await c.req.json().catch(() => ({})) as {
+      monthStart?: string; goalReview?: string; mainWork?: string; issues?: string
+      nextWeek?: string; goodPoints?: string; teamShareKind?: string; teamShareNote?: string
+      status?: 'draft' | 'submitted'
+    }
+    if (!body.monthStart || !/^\d{4}-\d{2}-\d{2}$/.test(body.monthStart)) {
+      throw err('AKO-GEN-001', '月の開始日（monthStart）を指定してください', 400)
+    }
+    const status = body.status === 'submitted' ? 'submitted' : 'draft'
+    if (status === 'submitted' && !String(body.mainWork ?? '').trim()) {
+      throw err('AKO-GEN-001', '今月の主要業務を入力してください', 400)
+    }
+    const teamShareKind = cleanTeamShareKind(body.teamShareKind)
+    const submittedAt = status === 'submitted' ? nowJstIso() : null
+    const client = await pool.connect()
+    let id: string
+    try {
+      await client.query('BEGIN')
+      const existing = await client.query<{ id: string; status: string }>(
+        'SELECT id, status FROM monthly_reports WHERE member_id = $1 AND month_start = $2 FOR UPDATE',
+        [user.id, body.monthStart])
+      const row = existing.rows[0]
+      if (row?.status === 'submitted') {
+        throw err('AKO-REP-002', '提出済みの月報は編集できません', 409)
+      }
+      if (row) {
+        id = row.id
+        await client.query(
+          `UPDATE monthly_reports SET goal_review = $2, main_work = $3, issues = $4, next_week = $5,
+             good_points = $6, team_share_kind = $7, team_share_note = $8,
+             status = $9, submitted_at = $10, updated_at = now() WHERE id = $1`,
+          [id, body.goalReview ?? '', body.mainWork ?? '', body.issues ?? '', body.nextWeek ?? '',
+            body.goodPoints ?? '', teamShareKind, body.teamShareNote ?? '', status, submittedAt])
+      } else {
+        id = newId('mo')
+        await client.query(
+          `INSERT INTO monthly_reports
+             (id, member_id, month_start, goal_review, main_work, issues, next_week, good_points, team_share_kind, team_share_note, status, submitted_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+          [id, user.id, body.monthStart, body.goalReview ?? '', body.mainWork ?? '', body.issues ?? '', body.nextWeek ?? '',
+            body.goodPoints ?? '', teamShareKind, body.teamShareNote ?? '', status, submittedAt])
+      }
+      await client.query('COMMIT')
+    } catch (e) {
+      await client.query('ROLLBACK')
+      throw e
+    } finally {
+      client.release()
+    }
+    return c.json({ data: { id, status } })
+  })
+
   // 日報リマインド（管理者 → 未提出メンバーへ通知。mockup useReports.remind と同一挙動）
   app.post('/remind', async (c) => {
     requireAdmin(c)
@@ -557,6 +644,21 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
     }
   }
 
+  /** 月報の既読対象ガード（週報と同型。改修依頼 2026-08-19 第4弾） */
+  async function guardMonthlyReadTarget(user: AuthUser, reportId: string): Promise<void> {
+    const { rows } = await pool.query<{ memberId: string; status: string }>(
+      `SELECT member_id AS "memberId", status FROM monthly_reports WHERE id = $1`, [reportId])
+    const target = rows[0]
+    if (!target) throw err('AKO-GEN-002', '対象の月報が見つかりません', 404)
+    if (target.memberId !== user.id) {
+      if (target.status !== 'submitted') throw err('AKO-GEN-002', '対象の月報が見つかりません', 404)
+      const rules = await activePermissionRules(pool)
+      if (rules.length > 0 && !canViewMemberReports(rules, subjectOf(user), target.memberId)) {
+        throw err('AKO-GEN-002', '対象の月報が見つかりません', 404)
+      }
+    }
+  }
+
   // 既読済みレポート id 一覧（本人のみ。一覧表示と同じ期間指定を必須にし全履歴ダンプを許容しない
   // = daily scope=all の month 必須と同型）
   app.get('/reads', async (c) => {
@@ -585,7 +687,19 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
         [user.id, weekStart])
       return c.json({ data: rows.map(r => r.reportId) })
     }
-    throw err('AKO-GEN-001', 'kind（daily / weekly）を指定してください', 400)
+    if (kind === 'monthly') {
+      const monthStart = c.req.query('monthStart') ?? ''
+      if (!isRealDateKey(monthStart)) {
+        throw err('AKO-GEN-001', 'kind=monthly では monthStart（YYYY-MM-DD）を指定してください', 400)
+      }
+      const { rows } = await pool.query<{ reportId: string }>(
+        `SELECT rr.report_id AS "reportId" FROM report_reads rr
+         JOIN monthly_reports m ON m.id = rr.report_id
+         WHERE rr.member_id = $1 AND rr.report_kind = 'monthly' AND m.month_start = $2::date`,
+        [user.id, monthStart])
+      return c.json({ data: rows.map(r => r.reportId) })
+    }
+    throw err('AKO-GEN-001', 'kind（daily / weekly / monthly）を指定してください', 400)
   })
 
   // 既読にする（冪等: ON CONFLICT DO NOTHING = 再実行で read_at を巻き戻さない = 原則2）
@@ -596,7 +710,8 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
     if (!reportId) throw err('AKO-GEN-001', '対象レポート（reportId）を指定してください', 400)
     if (body.kind === 'daily') await guardCommentTarget(c, reportId)
     else if (body.kind === 'weekly') await guardWeeklyReadTarget(user, reportId)
-    else throw err('AKO-GEN-001', 'kind（daily / weekly）を指定してください', 400)
+    else if (body.kind === 'monthly') await guardMonthlyReadTarget(user, reportId)
+    else throw err('AKO-GEN-001', 'kind（daily / weekly / monthly）を指定してください', 400)
     await pool.query(
       `INSERT INTO report_reads (member_id, report_kind, report_id) VALUES ($1, $2, $3)
        ON CONFLICT (member_id, report_kind, report_id) DO NOTHING`,
@@ -609,7 +724,7 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
     const user = c.get('user')
     const kind = c.req.param('kind')
     const reportId = c.req.param('reportId')
-    if (kind !== 'daily' && kind !== 'weekly') throw err('AKO-GEN-001', 'kind（daily / weekly）を指定してください', 400)
+    if (kind !== 'daily' && kind !== 'weekly' && kind !== 'monthly') throw err('AKO-GEN-001', 'kind（daily / weekly / monthly）を指定してください', 400)
     await pool.query(
       `DELETE FROM report_reads WHERE member_id = $1 AND report_kind = $2 AND report_id = $3`,
       [user.id, kind, reportId])

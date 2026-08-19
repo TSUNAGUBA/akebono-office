@@ -35,6 +35,7 @@ const { canManageImprovements, canTab } = usePermissions()
 const imp = useImprovements()
 const toast = useToast()
 const confirm = useConfirm()
+const { currentUserId } = useCurrentUser()
 
 onMounted(() => { void imp.refresh() })
 
@@ -177,12 +178,58 @@ const requestComments = computed(() => (selectedRequest.value ? imp.commentsForR
 const commentInput = ref('')
 const commentBusy = ref(false)
 
+/** 選択中の要望が自分の投稿か（一般利用者は自分の要望のみ編集・コメント・取消できる = 改修依頼 2026-08-19 第4弾） */
+const isOwnSelectedRequest = computed(() => !!selectedRequest.value && selectedRequest.value.memberId === currentUserId.value)
+/** 選択中の要望に書込（編集・コメント・取消）できるか（本人または管理権限者。選別/ステータスは管理者のみ = 別ゲート） */
+const canWriteSelectedRequest = computed(() => isOwnSelectedRequest.value || canManageImprovements.value)
+
 function openRequestDrawer(row: Record<string, unknown>): void {
   selectedRequestId.value = String(row.id)
   commentInput.value = ''
   requestEditing.value = false
   const r = imp.allRequests.value.find(x => x.id === selectedRequestId.value)
   if (r) void imp.loadRequestImagesFor(r) // 添付画像の遅延ロード（非ブロッキング）
+}
+/** 生要望カンバン/ガント・一般の受付箱一覧から詳細ドロワーを開く（改修依頼 2026-08-19 第4弾） */
+function openRequestDetail(r: ImprovementRequest): void {
+  openRequestDrawer({ id: r.id })
+}
+/** 要望本文の 1 行プレビュー（改行を詰める。一般の受付箱一覧の表示用） */
+function reqBodyLine(r: ImprovementRequest): string {
+  return r.body.trim().replace(/\s*\n\s*/g, ' ')
+}
+/** 要望の投稿元表示（対象ページ名＋対象箇所） */
+function reqWhere(r: ImprovementRequest): string {
+  return [r.pageLabel || r.pagePath, r.targetSpot].filter(Boolean).join(' / ')
+}
+
+/** 有効な生要望（新しい順）。全利用者が閲覧できる（生要望カンバン/ガント・一般の受付箱の共通ソース） */
+const activeRequests = computed<ImprovementRequest[]>(() =>
+  [...imp.allRequests.value]
+    .filter(r => !r.archivedAt)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id)))
+// 一般利用者の受付箱一覧のページング（1 ページ 20 件。管理者は既存の選別テーブルを使う）。
+// 添付は一覧にサムネイル表示せず、詳細ドロワーを開いたとき（openRequestDrawer）に遅延ロードする
+const { page: genPage, pageSize: genPageSize, rows: pagedGeneralRequests, total: genTotal } =
+  useListView<ImprovementRequest>({ source: activeRequests })
+
+// 自分の取消済み要望（一般利用者も自分の取消は復元できる = 原則9.5。API は自分の取消済みを返す・mock は tbl 全件）
+const showMyArchivedRequests = ref(false)
+const myArchivedRequests = computed<ImprovementRequest[]>(() =>
+  [...imp.allRequests.value]
+    .filter(r => r.archivedAt && r.memberId === currentUserId.value)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id)))
+const restoringRequest = ref(false)
+async function restoreRequestFromList(r: ImprovementRequest): Promise<void> {
+  if (restoringRequest.value) return
+  restoringRequest.value = true
+  try {
+    const res = await imp.setRequestArchived(r.id, false)
+    if (res.ok) toast.show('要望の取消を戻しました', 'ok')
+    else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
+  } finally {
+    restoringRequest.value = false
+  }
 }
 
 // ---------- 生要望の編集（改修依頼 2026-08-18 → 2026-08-19 で本文以外の項目も編集可能に。共通部品 ImprovementsRequestEditForm） ----------
@@ -372,7 +419,9 @@ async function archiveSelectedRequest(): Promise<void> {
   const ok = await confirm.ask('要望の取消', 'この要望を取り消します（選別・集約の対象から外れます）。取消済みからいつでも戻せます。', { danger: true })
   if (!ok) return
   const res = await imp.setRequestArchived(selectedRequest.value.id, true)
-  if (res.ok) { toast.show('要望を取り消しました', 'ok'); selectedRequestId.value = null }
+  // ドロワーは閉じずに開いたままにする = フッターが「取消を戻す」へ切り替わり、その場で復元できる（原則9.5。R1 レビュー反映）。
+  // 取消済みは一般利用者にも「自分の取消済み」として一覧・復元できる（下記トグル）
+  if (res.ok) toast.show('要望を取り消しました', 'ok')
   else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
 }
 async function restoreSelectedRequest(): Promise<void> {
@@ -593,15 +642,28 @@ function reqCount(itemId: string): number {
 // ---------- タブ（受付箱 / 改修案件 / カンバン / ガントチャート = 改修依頼 2026-08-18） ----------
 // サマリーカードの下にタブメニューを置き、受付箱 = 生要望の選別 / 改修案件 = AI 集約後の一覧 /
 // カンバン・ガントチャート = 既存ビュー を切り替える。?tab= のディープリンクは useRouteTabSync で取り込む
-const TAB_KEYS = ['inbox', 'items', 'kanban', 'gantt'] as const
+// 改修依頼 2026-08-19 第4弾 項目5.5: 要望系（全員閲覧可）と改修案件系（管理者のみ）へタブを分離。
+// - 一般利用者: 受付箱（全要望を閲覧・自分のみ編集・ステータス変更不可）/ カンバン / ガント（いずれも要望系）。
+// - 管理権限者: 上記に加えて 改修案件 / 【改修案件】カンバン / 【改修案件】ガント。要望系タブは【要望】と明示。
+const TAB_KEYS = ['inbox', 'req-kanban', 'req-gantt', 'items', 'kanban', 'gantt'] as const
 const tab = ref<string>('inbox')
 // タブ利用可否（権限表の `tab:<key>` 擬似フィールド = 改修依頼 2026-08-18。既定 = 全タブ利用可）
-const tabs = computed<TabItem[]>(() => ([
-  { key: 'inbox', label: '受付箱', badge: imp.pendingRequests.value.length },
-  { key: 'items', label: '改修案件' },
-  { key: 'kanban', label: 'カンバン' },
-  { key: 'gantt', label: 'ガントチャート' },
-] as TabItem[]).filter(t => canTab('improvements', t.key)))
+const tabs = computed<TabItem[]>(() => {
+  const manage = canManageImprovements.value
+  const base: TabItem[] = [
+    { key: 'inbox', label: '受付箱', badge: manage ? imp.pendingRequests.value.length : undefined },
+    { key: 'req-kanban', label: manage ? '【要望】カンバン' : 'カンバン' },
+    { key: 'req-gantt', label: manage ? '【要望】ガント' : 'ガント' },
+  ]
+  const adminOnly: TabItem[] = manage
+    ? [
+        { key: 'items', label: '改修案件' },
+        { key: 'kanban', label: '【改修案件】カンバン' },
+        { key: 'gantt', label: '【改修案件】ガント' },
+      ]
+    : []
+  return [...base, ...adminOnly].filter(t => canTab('improvements', t.key))
+})
 useRouteTabSync(tab, { valid: TAB_KEYS })
 watchEffect(() => {
   // 権限で消えたタブは先頭の利用可能タブへ退避。全タブ deny の場合は空値にして
@@ -716,7 +778,8 @@ async function copyAndClose(): Promise<void> {
       title="改善要望"
       description="寄せられた生の要望をまず確認・選別し、採用した要望を AI で改修単位に整理して、対応可否・解決状況を管理します"
     >
-      <template #actions>
+      <!-- AI 集約・改修プロンプト出力は管理権限者のみ（改修依頼 2026-08-19 第4弾: 一般利用者は要望の閲覧・投稿のみ） -->
+      <template v-if="canManageImprovements" #actions>
         <!-- AI 集約の対象 = 採用済み・集約待ちの要望のみ（選別が先 = 改善要望 2026-08-17 第 2 弾） -->
         <button type="button" class="btn btn-ghost" :disabled="generating" @click="runGenerate">
           <Wand2 class="h-4 w-4" aria-hidden="true" />
@@ -732,15 +795,12 @@ async function copyAndClose(): Promise<void> {
       </template>
     </UiPageHeader>
 
-    <!-- 権限ガード（deny-by-default・防御的表示。ルート遷移ガードは permissions.global.ts） -->
-    <div v-if="!canManageImprovements" class="card mt-4 p-6 text-center text-sub">
-      改善要望を閲覧する権限がありません。管理者にお問い合わせください。
-    </div>
-
-    <div v-else class="mt-4 grid gap-3">
-      <!-- サマリーカード（受付箱の件数 + 改修単位のステータス別件数 = 改修依頼 2026-08-18）。押下で該当タブへ直行 -->
+    <!-- 改修依頼 2026-08-19 第4弾: 生要望の閲覧は全員可。改修案件系（サマリー・集約・プロンプト）は管理者のみ表示 -->
+    <div class="mt-4 grid gap-3">
+      <!-- サマリーカード（受付箱の件数 + 改修単位のステータス別件数 = 改修依頼 2026-08-18）。押下で該当タブへ直行。
+           改修単位の件数を含むため管理権限者のみ表示（一般利用者には出さない） -->
       <!-- 対応中の追加（2026-08-18）で 6 枚 = lg は 6 列で 1 行に収める -->
-      <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+      <div v-if="canManageImprovements" class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <UiKpiCard
           v-for="c in summaryCards"
           :key="c.key"
@@ -768,7 +828,7 @@ async function copyAndClose(): Promise<void> {
            採用された要望のみが「AI で集約」の対象になる。一覧上の「採用」「不採用」ボタン・複数選択の
            一括選別で直接選別できる（改修依頼 2026-08-18）。行クリックで詳細（本文全文・添付・コメント・選別） -->
       <UiSectionCard
-        v-if="tab === 'inbox'"
+        v-if="tab === 'inbox' && canManageImprovements"
         flush
         title="受付箱"
         description="投稿された生の要望を確認し、採用／不採用を選別します。採用した要望だけが「AI で集約」の対象になります。一覧の「採用」「不採用」で直接選別でき、複数選択してまとめて選別もできます。行クリックでコメントのやり取り・添付の参照ができます"
@@ -940,6 +1000,71 @@ async function copyAndClose(): Promise<void> {
         </UiDataTable>
         <UiPagination v-model:page="rawPage" v-model:page-size="rawPageSize" :total="rawTotal" />
       </UiSectionCard>
+
+      <!-- 受付箱（一般利用者）: 全要望を閲覧できる読み取り専用リスト。編集は自分の要望のみ・選別/ステータス変更は管理者のみ（改修依頼 2026-08-19 第4弾） -->
+      <UiSectionCard
+        v-else-if="tab === 'inbox'"
+        flush
+        title="受付箱（すべての要望）"
+        description="全メンバーから寄せられた要望を閲覧できます。編集できるのは自分が投稿した要望のみです。採用／不採用の選別・ステータス変更・AI 集約は管理者が行います。行クリックで詳細（本文全文・添付・コメント）を確認できます"
+      >
+        <UiEmptyState v-if="activeRequests.length === 0" title="まだ要望がありません" hint="各ページの「要望を送る」から投稿できます" />
+        <ul v-else class="divide-y divide-line">
+          <li v-for="r in pagedGeneralRequests" :key="r.id">
+            <button
+              type="button"
+              class="flex w-full items-start gap-3 px-3 py-2.5 text-left transition-colors hover:bg-brand-soft"
+              @click="openRequestDetail(r)"
+            >
+              <span class="min-w-0 flex-1">
+                <span class="line-clamp-2 text-[13px] font-semibold text-ink">{{ reqBodyLine(r) }}</span>
+                <span class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted">
+                  <span v-if="reqWhere(r)" class="truncate">{{ reqWhere(r) }}</span>
+                  <span>{{ r.memberName }}<span v-if="r.memberId === currentUserId" class="ml-0.5 text-brand">（自分）</span></span>
+                  <span class="num">{{ fmtDateTimeSec(r.createdAt) }}</span>
+                </span>
+              </span>
+              <UiStatusBadge
+                :tone="IMPROVEMENT_REQUEST_STATUS_META[requestStatusOf(r)].tone"
+                :label="IMPROVEMENT_REQUEST_STATUS_META[requestStatusOf(r)].label"
+                dot
+                class="shrink-0"
+              />
+            </button>
+          </li>
+        </ul>
+        <UiPagination v-model:page="genPage" v-model:page-size="genPageSize" :total="genTotal" />
+
+        <!-- 自分の取消済み（復元 = 原則9.5。自分が取り消した要望はいつでも戻せる） -->
+        <div v-if="myArchivedRequests.length > 0" class="border-t border-line px-4 py-2">
+          <button type="button" class="btn btn-ghost btn-sm" @click="showMyArchivedRequests = !showMyArchivedRequests">
+            {{ showMyArchivedRequests ? '自分の取消済みを隠す' : `自分の取消済みを表示（${myArchivedRequests.length}件）` }}
+          </button>
+          <ul v-if="showMyArchivedRequests" class="mt-1 divide-y divide-line">
+            <li v-for="r in myArchivedRequests" :key="r.id" class="flex flex-wrap items-center gap-x-2 gap-y-0.5 py-2">
+              <span class="min-w-0 flex-1 truncate text-[13px] text-muted line-through">{{ reqBodyLine(r) }}</span>
+              <button type="button" class="btn btn-ghost btn-sm" :disabled="restoringRequest" :aria-label="`「${reqBodyLine(r)}」の取消を戻す`" @click="restoreRequestFromList(r)">
+                <Undo2 class="h-3.5 w-3.5" aria-hidden="true" />
+                取消を戻す
+              </button>
+            </li>
+          </ul>
+        </div>
+      </UiSectionCard>
+
+      <!-- 【要望】カンバン: 要望をステータス別（未対応/対応済み/見送り）に一望（全員閲覧可・参照専用） -->
+      <ImprovementsRequestKanban
+        v-else-if="tab === 'req-kanban'"
+        :requests="activeRequests"
+        @open="openRequestDetail"
+      />
+
+      <!-- 【要望】ガント: 要望の投稿タイムライン（全員閲覧可・参照専用） -->
+      <ImprovementsRequestGantt
+        v-else-if="tab === 'req-gantt'"
+        :requests="activeRequests"
+        @open="openRequestDetail"
+      />
 
       <!-- カンバン: ステータス別に進捗を一望 -->
       <ImprovementsKanban
@@ -1221,8 +1346,9 @@ async function copyAndClose(): Promise<void> {
             label="集約済み"
             dot
           />
+          <!-- 選別（採用/不採用）は管理系のトリアージ状態のため管理権限者のみ表示（R1 監査反映・改修依頼 2026-08-19 第4弾） -->
           <UiStatusBadge
-            v-else
+            v-else-if="canManageImprovements"
             :tone="IMPROVEMENT_REQUEST_ADOPTION_META[requestAdoptionOf(selectedRequest)].tone"
             :label="IMPROVEMENT_REQUEST_ADOPTION_META[requestAdoptionOf(selectedRequest)].label"
             dot
@@ -1261,7 +1387,7 @@ async function copyAndClose(): Promise<void> {
             <div class="flex items-start gap-2">
               <p class="min-w-0 flex-1 whitespace-pre-wrap break-words text-[13px] text-ink">{{ selectedRequest.body }}</p>
               <button
-                v-if="!selectedRequest.archivedAt"
+                v-if="!selectedRequest.archivedAt && canWriteSelectedRequest"
                 type="button"
                 class="btn btn-ghost btn-sm shrink-0"
                 :disabled="requestEditOpening"
@@ -1280,8 +1406,8 @@ async function copyAndClose(): Promise<void> {
           </template>
         </div>
 
-        <!-- 選別（採用/不採用。集約済みは変更不可 = 記録保護。取消可能性 = いつでも選び直せる） -->
-        <div v-if="!selectedRequest.archivedAt" class="grid gap-2">
+        <!-- 選別（採用/不採用。集約済みは変更不可 = 記録保護。取消可能性 = いつでも選び直せる）。管理権限者のみ（改修依頼 2026-08-19 第4弾） -->
+        <div v-if="!selectedRequest.archivedAt && canManageImprovements" class="grid gap-2">
           <p class="label">選別</p>
           <template v-if="selectedRequest.itemId">
             <p class="text-[12px] text-muted">
@@ -1328,8 +1454,8 @@ async function copyAndClose(): Promise<void> {
           </div>
         </div>
 
-        <!-- コメント（やり取り。時系列・追記のみ。取消 = 論理削除 = 原則9.5） -->
-        <div class="grid gap-2">
+        <!-- コメント（やり取り。時系列・追記のみ。取消 = 論理削除 = 原則9.5）。選別検討の記録のため管理権限者のみ（改修依頼 2026-08-19 第4弾） -->
+        <div v-if="canManageImprovements" class="grid gap-2">
           <p class="label">コメント（時系列・{{ requestComments.length }} 件）</p>
           <p class="text-[11px] text-muted">
             採用/不採用の検討過程・不採用理由・確認事項などを時系列で残せます（このページを閲覧できる管理メンバー内の記録です）。
@@ -1377,10 +1503,11 @@ async function copyAndClose(): Promise<void> {
       </div>
 
       <template #footer>
-        <button v-if="selectedRequest && !selectedRequest.archivedAt" type="button" class="btn btn-danger" @click="archiveSelectedRequest">
+        <!-- 取消/復元は投稿者本人または管理権限者のみ（改修依頼 2026-08-19 第4弾。サーバーも同一判定） -->
+        <button v-if="selectedRequest && !selectedRequest.archivedAt && canWriteSelectedRequest" type="button" class="btn btn-danger" @click="archiveSelectedRequest">
           要望を取消
         </button>
-        <button v-else-if="selectedRequest && selectedRequest.archivedAt" type="button" class="btn btn-ghost" @click="restoreSelectedRequest">
+        <button v-else-if="selectedRequest && selectedRequest.archivedAt && canWriteSelectedRequest" type="button" class="btn btn-ghost" @click="restoreSelectedRequest">
           <Undo2 class="h-4 w-4" aria-hidden="true" /> 取消を戻す
         </button>
       </template>

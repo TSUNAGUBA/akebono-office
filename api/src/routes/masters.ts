@@ -138,7 +138,7 @@ export function mastersRoutes(pool: pg.Pool, env: Env): Hono {
     const where = def.noActive || c.req.query('includeInactive') === '1' ? '' : 'WHERE active = true'
     const order = def.noActive ? 'ORDER BY id' : 'ORDER BY display_order NULLS LAST, id'
     // display_order を持たないテーブルは id 順（祝日は日付順が自然なため date 順）
-    const hasOrder = ['departments', 'leave_types', 'industries', 'work_categories', 'custom_field_defs', 'code_masters', 'external_links',
+    const hasOrder = ['departments', 'leave_types', 'industries', 'villages', 'work_categories', 'custom_field_defs', 'code_masters', 'external_links',
       // Akebono 設定系（Phase B。payment_terms / consignment_terms は display_order 列なし = id 順）
       'business_segments', 'warehouses', 'units', 'tax_rates', 'variant_axis_templates', 'product_categories', 'product_image_sections'].includes(def.table)
     const orderBy = def.table === 'public_holidays' ? 'ORDER BY date' : hasOrder ? order : 'ORDER BY id'

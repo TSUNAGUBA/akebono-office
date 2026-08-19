@@ -12,11 +12,11 @@
  */
 import {
   capCodePoints as capCp, cleanCustomerLogTags as cleanTags,
-  CUSTOMER_LOG_BODY_CAP as BODY_CAP, CUSTOMER_LOG_NAME_CAP as NAME_CAP, CUSTOMER_LOG_TITLE_CAP as TITLE_CAP,
+  CUSTOMER_LOG_BODY_CAP as BODY_CAP, CUSTOMER_LOG_TITLE_CAP as TITLE_CAP,
   customerLogCompanyError, customerLogDateError, customerLogMemoError, customerLogMethodError,
   customerLogTagsError, customerLogTimeError, customerLogTimeRangeError,
 } from '../../../shared/domain/customer-log'
-import type { Contact, CustomerLog, Result } from '~/types/domain'
+import type { CustomerLog, Result } from '~/types/domain'
 
 /** 参照キャッシュ（全メンバーの記録 + 本人の取消済み = GET ?scope=all&includeArchived=1） */
 const apiLogs = ref<CustomerLog[]>([])
@@ -92,46 +92,11 @@ export function useCustomerLogs() {
   const { currentUser } = useCurrentUser()
   const isApi = useApiMode()
   const mockLogs = tbl('customerLogs')
-  const contactsTbl = tbl('contacts')
   const { lookupCompany, createCompany } = useCompanyResolve()
+  const { contactError, resolveContactMock } = useContactResolve()
 
-  /**
-   * 担当者が選択会社に属するか（モック検証。API は assertContact = AKO-CLG-003 と同一の順序:
-   * 存在チェック → 所属チェック）。companyId = null（新規会社 = 照合なし）は既存担当者が所属し得ないため所属エラー
-   */
-  function contactError(contactId: string | null, companyId: string | null): { code: string; message: string } | null {
-    if (!contactId) return null
-    const c = (contactsTbl.value as Contact[]).find(x => x.id === contactId)
-    if (!c) return { code: 'AKO-CLG-003', message: '指定した顧客担当者が見つかりません' }
-    if (c.companyId !== companyId) return { code: 'AKO-CLG-003', message: '顧客担当者は選択した会社に所属している必要があります' }
-    return null
-  }
-
-  /** 顧客担当者(人)の解決（モック）。同一会社内の氏名（空白除去・大小無視）完全一致 → なければ新規登録 */
-  function resolveContactMock(companyId: string, input: CustomerLogInput): string | null {
-    if (input.contactId) return input.contactId
-    const name = capCp(input.newContactName.trim(), NAME_CAP)
-    if (!name) return null
-    const norm = (s: string): string => s.replace(/\s+/g, '').toLowerCase()
-    const contacts = contactsTbl.value as Contact[]
-    const hit = contacts.find(c => c.active && c.companyId === companyId && norm(c.name) === norm(name))
-    if (hit) return hit.id
-    const id = nextId('contacts', 'p')
-    contactsTbl.value = [...contacts, {
-      id,
-      companyId,
-      name,
-      dept: '',
-      title: '',
-      keyPerson: 1,
-      email: '',
-      phone: '',
-      notes: '',
-      active: true,
-      custom: {},
-    } satisfies Contact]
-    return id
-  }
+  // 担当者の照合・所属検証・新規登録は共通 composable useContactResolve（活動記録と共用 = 原則3）。
+  // 顧客活動のエラー名前空間は AKO-CLG（-003 = 所属/存在）
 
   /** 一覧データの読み込みを保証する（API モードのみ。ページの初期表示で呼ぶ） */
   function ensureLoaded(): void {
@@ -192,10 +157,10 @@ export function useCustomerLogs() {
     // 会社は照合のみ先行し、担当者の所属検証を通過してから作成する（失敗時に孤児マスタを残さない）。
     // 新規会社（照合なし = companyId null）は contactError 側が「既存担当者は所属し得ない」を判定する
     const foundCompanyId = lookupCompany(input.companyId, input.newCompanyName)
-    const ce = contactError(input.contactId, foundCompanyId)
+    const ce = contactError(input.contactId, foundCompanyId, 'AKO-CLG')
     if (ce) return { ok: false, error: ce }
     const companyId = foundCompanyId ?? createCompany(input.newCompanyName)
-    const contactId = resolveContactMock(companyId, input)
+    const contactId = resolveContactMock(companyId, input.contactId, input.newContactName)
     const id = nextId('customerLogs', 'clog')
     const now = nowJstIso()
     mockLogs.value = [...(mockLogs.value as CustomerLog[]), {
@@ -233,10 +198,10 @@ export function useCustomerLogs() {
     if (e) return { ok: false, error: e }
     // add と同じ順序: 照合 → 所属検証 → 作成（失敗時に孤児マスタを残さない）
     const foundCompanyId = lookupCompany(input.companyId, input.newCompanyName)
-    const ce = contactError(input.contactId, foundCompanyId)
+    const ce = contactError(input.contactId, foundCompanyId, 'AKO-CLG')
     if (ce) return { ok: false, error: ce }
     const companyId = foundCompanyId ?? createCompany(input.newCompanyName)
-    const contactId = resolveContactMock(companyId, input)
+    const contactId = resolveContactMock(companyId, input.contactId, input.newContactName)
     mockLogs.value = (mockLogs.value as CustomerLog[]).map(l => l.id === id ? {
       ...l,
       logDate: input.logDate,

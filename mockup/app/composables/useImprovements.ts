@@ -2,9 +2,11 @@
  * 改善要望（F-42）の composable。デュアルモード（mock = useMockDb + 決定的集約 / API = /v1/improvements）。
  *
  * - submit(): 各ページの「要望を送る」から生要望を追記（認証済み全員可・読み取りしない）。
- * - 管理系（items / generate / setStatus / archive / buildPrompt）は改善要望管理ページ専用。
- *   API モードでは GET /items・/requests が管理権限者のみ（canManageImprovements）のため、
- *   非権限者はそもそも管理ページに到達しない（フロントの canPath ガード + サーバー 403）。
+ * - 生要望の閲覧（GET /requests）は認証済み全員可（改修依頼 2026-08-19 第4弾: 全要望を閲覧可）。
+ *   編集は投稿者本人のみ・ステータス変更/選別/集約は管理権限者のみ（improvementEditError + サーバー 403）。
+ * - 管理系（items / generate / setStatus / archive / buildPrompt）は管理権限者専用。
+ *   API モードでは GET /items が管理権限者のみ（canManageImprovements）のため、非管理者の refresh() は
+ *   items だけ 403 → catch で握り潰し requests のみ反映する（改修案件は管理者のみ到達）。
  * - 集約は shared/domain/improvement の決定的ヒューリスティックを使う（API は Vertex → 同関数へフォールバック）。
  *   未集約の要望のみ処理し、判定済み item のステータス・編集は巻き戻さない（原則2）。
  */
@@ -21,6 +23,7 @@ import {
   IMPROVEMENT_NOTE_CAP,
   IMPROVEMENT_PAGE_LABEL_CAP,
   IMPROVEMENT_PAGE_PATH_CAP,
+  IMPROVEMENT_TARGET_SPOT_CAP,
   IMPROVEMENT_SUMMARY_CAP,
   IMPROVEMENT_TITLE_CAP,
   IMPROVEMENT_COMMENT_CAP,
@@ -135,7 +138,7 @@ export function useImprovements() {
   // ---------- 投稿（各ページから。全員可） ----------
 
   async function submit(input: {
-    body: string; pagePath?: string; pageLabel?: string
+    body: string; pagePath?: string; pageLabel?: string; targetSpot?: string
     links?: string[]; images?: ImprovementRequestImage[]; tags?: ImprovementRequestTag[]
   }): Promise<Result & { persisted?: boolean }> {
     const body = (input.body ?? '').trim()
@@ -153,10 +156,12 @@ export function useImprovements() {
     // アプリ内パスのみ保持（'//host' 等は '' へ = 対象ページリンク化 F-42-20 に伴う防御。API と同一規則）
     const pagePath = capCodePoints(normalizeImprovementPagePath(input.pagePath), IMPROVEMENT_PAGE_PATH_CAP)
     const pageLabel = capCodePoints((input.pageLabel ?? '').trim(), IMPROVEMENT_PAGE_LABEL_CAP)
+    // 対象箇所（ページ内のどこか = 自由入力・任意。改修依頼 2026-08-19 第4弾。API と同一規則）
+    const targetSpot = capCodePoints((input.targetSpot ?? '').trim(), IMPROVEMENT_TARGET_SPOT_CAP)
     if (isApi) {
       // 管理 GET は権限者のみのため reload しない（投稿者は一覧を見ない）
       const res = await apiWrite<{ id: string }>('/v1/improvements/requests', {
-        body: { body: capCodePoints(body, IMPROVEMENT_BODY_CAP), pagePath, pageLabel, links, images, tags },
+        body: { body: capCodePoints(body, IMPROVEMENT_BODY_CAP), pagePath, pageLabel, targetSpot, links, images, tags },
       })
       return res.ok ? { ok: true, id: res.id } : res
     }
@@ -168,6 +173,7 @@ export function useImprovements() {
       memberName: currentUser.value.name,
       pagePath,
       pageLabel,
+      targetSpot,
       body: capCodePoints(body, IMPROVEMENT_BODY_CAP),
       adoption: 'pending', // 投稿直後は未選別（管理者の取捨選択が先 = 改善要望 2026-08-17 第 2 弾）
       tags,
@@ -801,13 +807,17 @@ export function useImprovements() {
     const matched = activeItems.value.filter(it => matchesImprovementFilter(it.status, filter))
     const promptItems: PromptItemInput[] = matched.map(it => ({
       title: it.title, summary: it.summary, detail: it.detail, status: it.status, pagePaths: it.pagePaths,
-      requests: requestsForItem(it.id).map(r => ({
-        pageLabel: r.pageLabel, pagePath: r.pagePath, body: r.body,
-        // 要望ステータス + 添付（リンクは列挙・画像は件数のみ）+ 受付箱のコメント（API /prompt と同じ内容 =
-        // 両モード parity。改修依頼 2026-08-19: コメントを反映・タグ〔壁打ち/お任せ〕は人間運用のため非対象）
-        status: r.status, links: r.links ?? [], imageCount: (r.images ?? []).length,
-        comments: commentsForRequest(r.id).map(cm => cm.body),
-      })),
+      // API /prompt は ORDER BY created_at で返すため mock も createdAt 昇順に揃える（時系列統合のパリティ = 原則6）
+      requests: [...requestsForItem(it.id)]
+        .sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : (a.id < b.id ? -1 : 1)))
+        .map(r => ({
+          pageLabel: r.pageLabel, pagePath: r.pagePath, body: r.body,
+          // 要望ステータス + 添付（リンクは列挙・画像は件数のみ）+ 受付箱のコメント（API /prompt と同じ内容 =
+          // 両モード parity）。改修依頼 2026-08-19 第4弾: 要望とコメントを createdAt で時系列統合するため双方に時刻を渡す
+          status: r.status, links: r.links ?? [], imageCount: (r.images ?? []).length,
+          createdAt: r.createdAt,
+          comments: commentsForRequest(r.id).map(cm => ({ body: cm.body, createdAt: cm.createdAt })),
+        })),
       // 時系列メモも加味（古い順。notesForItem がソート済み）
       notes: notesForItem(it.id).map(n => ({ body: n.body, kind: n.kind })),
     }))

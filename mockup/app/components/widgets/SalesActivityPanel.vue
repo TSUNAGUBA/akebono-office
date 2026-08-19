@@ -9,7 +9,7 @@
  */
 import { Plus, RefreshCw, RotateCcw } from 'lucide-vue-next'
 import { SALES_ACTIVITY_DEAL_TYPES, SALES_ACTIVITY_PHASES } from '../../../../shared/domain/types'
-import type { Company, Member, SalesActivity } from '~/types/domain'
+import type { Company, Contact, Member, SalesActivity, Village } from '~/types/domain'
 import type { TableColumn } from '~/types/ui'
 import { fmtYen } from '~/utils/format'
 
@@ -21,10 +21,21 @@ const { currentUserId } = useCurrentUser()
 
 const members = tbl('members')
 const companies = computed(() => (tbl('companies').value as Company[]).filter(c => c.active && c.kind === 'customer'))
+const villages = computed(() => (tbl('villages').value as Village[]).filter(v => v.active))
+const contacts = computed(() => (tbl('contacts').value as Contact[]).filter(c => c.active))
 
 function companyName(id: string): string {
   return (tbl('companies').value as Company[]).find(c => c.id === id)?.name ?? id
 }
+function villageName(id: string | null | undefined): string {
+  if (!id) return ''
+  return (tbl('villages').value as Village[]).find(v => v.id === id)?.name ?? ''
+}
+function contactName(id: string | null | undefined): string {
+  if (!id) return ''
+  return (tbl('contacts').value as Contact[]).find(c => c.id === id)?.name ?? ''
+}
+const villageOptions = computed(() => villages.value.map(v => ({ value: v.id, label: v.name })))
 function memberName(id: string): string {
   return (members.value as Member[]).find(m => m.id === id)?.name ?? id
 }
@@ -111,8 +122,13 @@ const drawerTitle = computed(() =>
   mode.value === 'create' ? '営業活動を登録' : mode.value === 'edit' ? '営業活動を編集' : '営業活動の詳細')
 
 const form = ref({
+  villageId: '',
+  villageText: '',
   companyId: '',
   companyText: '',
+  contactId: '',
+  contactText: '',
+  approachGroup: '',
   title: '',
   dealType: '新規',
   staffMemberId: '',
@@ -124,14 +140,27 @@ const form = ref({
   proposal: '',
   nextAction: '',
   nextActionDate: '',
+  links: [] as string[],
 })
 
 const companyOptions = computed(() => companies.value.map(c => ({ value: c.id, label: c.name })))
+/** 担当（顧客(人)）候補は選択会社に所属する contacts のみ（会社未選択時は空 = 担当欄 disabled） */
+const contactOptions = computed(() =>
+  form.value.companyId ? contacts.value.filter(c => c.companyId === form.value.companyId).map(c => ({ value: c.id, label: c.name })) : [])
+const hasCompanyInput = computed(() => !!form.value.companyId || !!form.value.companyText.trim())
 const staffOptions = computed(() =>
   (members.value as Member[]).filter(m => m.active).map(m => ({
     value: m.id,
     label: m.id === currentUserId.value ? `${m.name}（自分）` : m.name,
   })))
+
+// 会社を変更したら、別会社に属する担当の選択をクリアする（フォームの一括代入時は openEdit の restoring で抑止）
+const restoringForm = ref(false)
+watch(() => form.value.companyId, () => {
+  if (restoringForm.value) return
+  form.value.contactId = ''
+  form.value.contactText = ''
+})
 
 function openDetail(row: Record<string, unknown>): void {
   selectedId.value = String(row.id)
@@ -142,8 +171,13 @@ function openDetail(row: Record<string, unknown>): void {
 function openCreate(): void {
   selectedId.value = null
   form.value = {
+    villageId: '',
+    villageText: '',
     companyId: '',
     companyText: '',
+    contactId: '',
+    contactText: '',
+    approachGroup: '',
     title: '',
     dealType: '新規',
     staffMemberId: currentUserId.value,
@@ -155,6 +189,7 @@ function openCreate(): void {
     proposal: '',
     nextAction: '',
     nextActionDate: '',
+    links: [],
   }
   mode.value = 'create'
   drawerOpen.value = true
@@ -163,9 +198,16 @@ function openCreate(): void {
 function openEdit(): void {
   const s = selected.value
   if (!s) return
+  // 一括代入中は company watch による contact クリアを抑止（既存の担当を保持）
+  restoringForm.value = true
   form.value = {
+    villageId: s.villageId ?? '',
+    villageText: villageName(s.villageId),
     companyId: s.companyId,
     companyText: companyName(s.companyId),
+    contactId: s.contactId ?? '',
+    contactText: contactName(s.contactId),
+    approachGroup: s.approachGroup ?? '',
     title: s.title,
     dealType: s.dealType,
     staffMemberId: s.staffMemberId,
@@ -177,7 +219,9 @@ function openEdit(): void {
     proposal: s.proposal,
     nextAction: s.nextAction,
     nextActionDate: s.nextActionDate ?? '',
+    links: [...(s.links ?? [])],
   }
+  void nextTick(() => { restoringForm.value = false })
   mode.value = 'edit'
 }
 
@@ -197,8 +241,13 @@ async function save(): Promise<void> {
   saving.value = true
   try {
     const res = await sal.save(mode.value === 'edit' ? selectedId.value : null, {
+      villageId: form.value.villageId,
+      newVillageName: form.value.villageId ? '' : form.value.villageText,
       companyId: form.value.companyId,
       newCompanyName: form.value.companyId ? '' : form.value.companyText,
+      contactId: form.value.contactId,
+      newContactName: form.value.contactId ? '' : form.value.contactText,
+      approachGroup: form.value.approachGroup,
       title: form.value.title,
       dealType: form.value.dealType,
       staffMemberId: form.value.staffMemberId || currentUserId.value,
@@ -210,6 +259,7 @@ async function save(): Promise<void> {
       proposal: form.value.proposal,
       nextAction: form.value.nextAction,
       nextActionDate: form.value.nextActionDate || null,
+      links: form.value.links,
     })
     if (!res.ok) {
       show(`${res.error.code}: ${res.error.message}`, 'crit')
@@ -265,7 +315,10 @@ const detailRows = computed(() => {
   const s = selected.value
   if (!s) return []
   return [
+    { label: '事業区分', value: villageName(s.villageId) || '—' },
     { label: '顧客', value: companyName(s.companyId) },
+    { label: '担当', value: contactName(s.contactId) || '—' },
+    { label: 'アプローチグループ', value: s.approachGroup || '—' },
     { label: '商談名', value: s.title },
     { label: '商談種別', value: s.dealType },
     { label: '担当者', value: memberName(s.staffMemberId) },
@@ -277,6 +330,7 @@ const detailRows = computed(() => {
     { label: '提案概要', value: s.proposal || '—' },
     { label: 'Next Action', value: s.nextAction || '—' },
     { label: 'Next Action日', value: fmtDateKey(s.nextActionDate) },
+    { label: '参考リンク', value: (s.links ?? []).join('\n') || '—' },
     { label: '記録者', value: memberName(s.memberId) },
   ]
 })
@@ -346,15 +400,44 @@ const detailRows = computed(() => {
       </dl>
 
       <div v-else class="grid gap-3">
-        <UiFormField label="顧客（会社）" required hint="未登録の会社名を入力すると、保存時にマスタへ新規登録されます">
+        <!-- 事業区分（Village。最上段・任意・自由入力で新規登録可 = 改修依頼 2026-08-19 第4弾） -->
+        <UiFormField label="事業区分（Village・任意）" hint="社内事業の区分。未登録名を入力すると保存時にマスタへ新規登録されます">
           <UiCombobox
-            v-model="form.companyId"
-            v-model:text="form.companyText"
-            :options="companyOptions"
-            placeholder="会社名で検索・入力"
-            aria-label="顧客（会社）"
+            v-model="form.villageId"
+            v-model:text="form.villageText"
+            :options="villageOptions"
+            placeholder="事業区分で検索・入力"
+            aria-label="事業区分（Village）"
             create-hint="保存時にマスタへ新規登録されます"
           />
+        </UiFormField>
+        <!-- 顧客（会社）の右に担当（顧客(人)= contacts 参照。改修依頼 2026-08-19 第4弾） -->
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <UiFormField label="顧客（会社）" required hint="未登録の会社名を入力すると、保存時にマスタへ新規登録されます">
+            <UiCombobox
+              v-model="form.companyId"
+              v-model:text="form.companyText"
+              :options="companyOptions"
+              placeholder="会社名で検索・入力"
+              aria-label="顧客（会社）"
+              create-hint="保存時にマスタへ新規登録されます"
+            />
+          </UiFormField>
+          <UiFormField label="担当（任意）" hint="選択会社の担当者。未登録名を入力すると保存時にマスタへ新規登録されます">
+            <UiCombobox
+              v-model="form.contactId"
+              v-model:text="form.contactText"
+              :options="contactOptions"
+              :disabled="!hasCompanyInput"
+              placeholder="担当者名で検索・入力"
+              aria-label="担当"
+              create-hint="保存時にマスタへ新規登録されます"
+            />
+          </UiFormField>
+        </div>
+        <!-- アプローチグループ（自由入力・任意。改修依頼 2026-08-19 第4弾） -->
+        <UiFormField label="アプローチグループ（任意）">
+          <input v-model="form.approachGroup" type="text" class="input" placeholder="例）新規開拓A班" aria-label="アプローチグループ">
         </UiFormField>
         <UiFormField label="商談名" required>
           <input v-model="form.title" type="text" class="input" placeholder="例）在庫管理DXプロジェクト" aria-label="商談名">
@@ -395,6 +478,8 @@ const detailRows = computed(() => {
             <input v-model="form.nextActionDate" type="date" class="input" aria-label="Next Action日">
           </UiFormField>
         </div>
+        <!-- 参考リンク（改修依頼 2026-08-19 第4弾。改善要望と同じ部品を再利用 = 原則3） -->
+        <ImprovementsLinkEditor v-model:links="form.links" />
       </div>
 
       <template #footer>
