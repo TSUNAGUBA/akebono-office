@@ -7,7 +7,8 @@
  * - デュアルモード: API = /v1/sales-activities（サーバーページング対応）/ モック = salesActivities コレクション
  */
 import {
-  ACTIVITY_BODY_CAP as BODY_CAP, ACTIVITY_TITLE_CAP as TITLE_CAP,
+  ACTIVITY_BODY_CAP as BODY_CAP, ACTIVITY_NAME_CAP as NAME_CAP, ACTIVITY_TITLE_CAP as TITLE_CAP,
+  normalizeActivityLinks,
   salesActivityError, type SalesActivityInput,
 } from '../../../shared/domain/activity'
 import { capCodePoints as capCp } from '../../../shared/domain/customer-log'
@@ -31,12 +32,14 @@ function byCreatedDesc(a: SalesActivity, b: SalesActivity): number {
 function normalized(input: SalesActivityInput): SalesActivityInput {
   return {
     ...input,
+    approachGroup: capCp(input.approachGroup.trim(), NAME_CAP),
     title: capCp(input.title.trim(), TITLE_CAP),
     customerIssue: capCp(input.customerIssue.trim(), BODY_CAP),
     proposal: capCp(input.proposal.trim(), BODY_CAP),
     nextAction: capCp(input.nextAction.trim(), BODY_CAP),
     expectedCloseDate: input.expectedCloseDate || null,
     nextActionDate: input.nextActionDate || null,
+    links: normalizeActivityLinks(input.links),
   }
 }
 
@@ -46,6 +49,8 @@ export function useSalesActivities() {
   const isApi = useApiMode()
   const rows = tbl('salesActivities')
   const { lookupCompany, createCompany } = useCompanyResolve()
+  const { resolveVillage } = useVillageResolve()
+  const { contactError, resolveContactMock } = useContactResolve()
 
   /** 有効な一覧（クライアントページングのソース。API モードは全件ハイドレーションキャッシュ） */
   function list(): SalesActivity[] {
@@ -74,12 +79,20 @@ export function useSalesActivities() {
         ? await apiWrite(`/v1/sales-activities/${id}`, { method: 'PATCH', body: payloadOf(input), reload: ['salesActivities'] })
         : await apiWrite('/v1/sales-activities', { body: payloadOf(input), reload: ['salesActivities'] })
       if (res.ok && input.newCompanyName.trim()) await loadApiCollection('companies', true)
+      if (res.ok && input.newContactName.trim()) await loadApiCollection('contacts', true)
+      if (res.ok && input.newVillageName.trim()) await loadApiCollection('villages', true)
       return res.ok ? { ok: true, id: (res.data as { id?: string })?.id ?? id ?? undefined } : res
     }
     const n = normalized(input)
     const message = salesActivityError(n)
     if (message) return { ok: false, error: { code: 'AKO-SAL-001', message } }
-    const companyId = lookupCompany(n.companyId, n.newCompanyName) ?? createCompany(n.newCompanyName)
+    // 会社は照合のみ先行し、担当の所属検証を通過してから作成する（失敗時に孤児マスタを残さない = 顧客活動と同型）
+    const foundCompanyId = lookupCompany(n.companyId, n.newCompanyName)
+    const ce = contactError(n.contactId || null, foundCompanyId, 'AKO-SAL')
+    if (ce) return { ok: false, error: ce }
+    const companyId = foundCompanyId ?? createCompany(n.newCompanyName)
+    const contactId = resolveContactMock(companyId, n.contactId, n.newContactName)
+    const villageId = resolveVillage(n.villageId, n.newVillageName)
     const now = nowJstIso()
     const all = rows.value as SalesActivity[]
     if (id) {
@@ -87,7 +100,10 @@ export function useSalesActivities() {
       if (!target) return { ok: false, error: { code: 'AKO-SAL-002', message: '営業活動が見つかりません' } }
       rows.value = all.map(r => r.id === id ? {
         ...r,
+        villageId,
         companyId,
+        contactId,
+        approachGroup: n.approachGroup,
         title: n.title,
         dealType: n.dealType,
         staffMemberId: n.staffMemberId || currentUser.value.id,
@@ -99,6 +115,7 @@ export function useSalesActivities() {
         proposal: n.proposal,
         nextAction: n.nextAction,
         nextActionDate: n.nextActionDate,
+        links: n.links,
         updatedAt: now,
       } : r)
       commit()
@@ -108,7 +125,10 @@ export function useSalesActivities() {
     rows.value = [...all, {
       id: newId,
       memberId: currentUser.value.id,
+      villageId,
       companyId,
+      contactId,
+      approachGroup: n.approachGroup,
       title: n.title,
       dealType: n.dealType,
       staffMemberId: n.staffMemberId || currentUser.value.id,
@@ -120,6 +140,7 @@ export function useSalesActivities() {
       proposal: n.proposal,
       nextAction: n.nextAction,
       nextActionDate: n.nextActionDate,
+      links: n.links,
       createdAt: now,
       updatedAt: now,
       active: true,

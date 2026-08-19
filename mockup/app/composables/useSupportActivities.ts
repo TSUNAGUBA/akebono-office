@@ -8,6 +8,7 @@
  */
 import {
   ACTIVITY_BODY_CAP as BODY_CAP, ACTIVITY_NAME_CAP as NAME_CAP, ACTIVITY_TITLE_CAP as TITLE_CAP,
+  normalizeActivityLinks,
   supportActivityError, type SupportActivityInput,
 } from '../../../shared/domain/activity'
 import { capCodePoints as capCp } from '../../../shared/domain/customer-log'
@@ -37,6 +38,7 @@ function normalized(input: SupportActivityInput): SupportActivityInput {
     ...input,
     inquirerName: capCp(input.inquirerName.trim(), NAME_CAP),
     targetSystem: capCp(input.targetSystem.trim(), NAME_CAP),
+    targetLocation: capCp(input.targetLocation.trim(), NAME_CAP),
     title: capCp(input.title.trim(), TITLE_CAP),
     body: capCp(input.body.trim(), BODY_CAP),
     response: capCp(input.response.trim(), BODY_CAP),
@@ -46,6 +48,7 @@ function normalized(input: SupportActivityInput): SupportActivityInput {
     receivedTime: input.receivedTime || null,
     completedDate: input.completedDate || null,
     completedTime: input.completedTime || null,
+    links: normalizeActivityLinks(input.links),
   }
 }
 
@@ -55,6 +58,7 @@ export function useSupportActivities() {
   const isApi = useApiMode()
   const rows = tbl('supportActivities')
   const { lookupCompany, createCompany } = useCompanyResolve()
+  const { resolveVillage } = useVillageResolve()
 
   /** 有効な一覧（クライアントページングのソース。API モードは全件ハイドレーションキャッシュ） */
   function list(): SupportActivity[] {
@@ -66,9 +70,10 @@ export function useSupportActivities() {
     return (rows.value as SupportActivity[]).filter(r => r.active === false).slice().sort(byReceivedDesc)
   }
 
-  /** API 書込後の反映（新規会社があり得た場合はマスタキャッシュも取り直す = SoT → キャッシュ） */
+  /** API 書込後の反映（新規会社/事業区分があり得た場合はマスタキャッシュも取り直す = SoT → キャッシュ） */
   async function reloadAfterWrite(input: SupportActivityInput): Promise<void> {
     if (input.newCompanyName.trim()) await loadApiCollection('companies', true)
+    if (input.newVillageName.trim()) await loadApiCollection('villages', true)
   }
 
   function payloadOf(input: SupportActivityInput): Record<string, unknown> {
@@ -88,6 +93,7 @@ export function useSupportActivities() {
     const message = supportActivityError(n)
     if (message) return { ok: false, error: { code: 'AKO-SUP-001', message } }
     const companyId = lookupCompany(n.companyId, n.newCompanyName) ?? createCompany(n.newCompanyName)
+    const villageId = resolveVillage(n.villageId, n.newVillageName)
     const now = nowJstIso()
     const all = rows.value as SupportActivity[]
     if (id) {
@@ -95,11 +101,14 @@ export function useSupportActivities() {
       if (!target) return { ok: false, error: { code: 'AKO-SUP-002', message: 'サポート活動が見つかりません' } }
       rows.value = all.map(r => r.id === id ? {
         ...r,
+        villageId,
         receivedDate: n.receivedDate,
         receivedTime: n.receivedTime,
+        firstContactMethod: n.firstContactMethod,
         companyId,
         inquirerName: n.inquirerName,
         targetSystem: n.targetSystem,
+        targetLocation: n.targetLocation,
         category: n.category,
         title: n.title,
         body: n.body,
@@ -112,6 +121,7 @@ export function useSupportActivities() {
         completedDate: n.completedDate,
         completedTime: n.completedTime,
         knowledgeNote: n.knowledgeNote,
+        links: n.links,
         updatedAt: now,
       } : r)
       commit()
@@ -121,11 +131,14 @@ export function useSupportActivities() {
     rows.value = [...all, {
       id: newId,
       memberId: currentUser.value.id,
+      villageId,
       receivedDate: n.receivedDate,
       receivedTime: n.receivedTime,
+      firstContactMethod: n.firstContactMethod,
       companyId,
       inquirerName: n.inquirerName,
       targetSystem: n.targetSystem,
+      targetLocation: n.targetLocation,
       category: n.category,
       title: n.title,
       body: n.body,
@@ -138,6 +151,7 @@ export function useSupportActivities() {
       completedDate: n.completedDate,
       completedTime: n.completedTime,
       knowledgeNote: n.knowledgeNote,
+      links: n.links,
       createdAt: now,
       updatedAt: now,
       active: true,

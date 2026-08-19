@@ -26,7 +26,8 @@ import type { CustomerLog } from '../../../shared/domain/types'
 import type { AuthUser } from '../auth'
 import type { Env } from '../env'
 import { audit } from '../lib/audit'
-import { auditCreatedCompany, lockResolveKey, resolveCompany } from '../lib/company-resolve'
+import { auditCreatedCompany, resolveCompany } from '../lib/company-resolve'
+import { auditCreatedContact, resolveContact } from '../lib/contact-resolve'
 import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
 import { scheduleSearchRebuild } from '../lib/search-index'
@@ -81,16 +82,6 @@ function parseMethod(v: unknown): string {
 }
 
 /** 担当者(人)が選択した会社に属するか検証（FK では表現できない整合を API 層で担保） */
-async function assertContact(db: pg.Pool | pg.PoolClient, contactId: string, companyId: string): Promise<void> {
-  const { rows } = await db.query<{ companyId: string }>(
-    `SELECT company_id AS "companyId" FROM contacts WHERE id = $1`, [contactId])
-  const row = rows[0]
-  if (!row) throw err('AKO-CLG-003', '指定した顧客担当者が見つかりません', 400)
-  if (row.companyId !== companyId) {
-    throw err('AKO-CLG-003', '顧客担当者は選択した会社に所属している必要があります', 400)
-  }
-}
-
 /** 本人のログを取得（本人以外・不在は 403 = 存在を秘匿。task-plans ownPlan と同型） */
 async function ownLog(pool: pg.Pool, logId: string, memberId: string, message: string): Promise<CustomerLog> {
   const { rows } = await pool.query<CustomerLog>(`SELECT ${CLOG_COLS} FROM customer_logs WHERE id = $1`, [logId])
@@ -107,41 +98,15 @@ interface ResolvedRefs {
   createdContact: { id: string; name: string } | null
 }
 
-/**
- * 顧客担当者(人)の解決。newContactName があれば同一会社内の氏名（空白除去・大小無視）完全一致で照合し、
- * なければマスタへ新規登録する。contactId 指定時は所属整合を検証（AKO-CLG-003）。
- */
-async function resolveContact(
-  db: pg.PoolClient,
-  companyId: string,
-  contactId: string | null,
-  newContactName: string,
-): Promise<{ id: string | null; created: { id: string; name: string } | null }> {
-  if (contactId) {
-    await assertContact(db, contactId, companyId)
-    return { id: contactId, created: null }
-  }
-  const name = capCp(newContactName.trim(), NAME_CAP)
-  if (!name) return { id: null, created: null }
-  const norm = (s: string): string => s.replace(/\s+/g, '').toLowerCase()
-  await lockResolveKey(db, `clog-contact:${companyId}:${norm(name)}`)
-  const { rows } = await db.query<{ id: string; name: string }>(
-    `SELECT id, name FROM contacts WHERE company_id = $1 AND active = true ORDER BY id`, [companyId])
-  const hit = rows.find(r => norm(r.name) === norm(name))
-  if (hit) return { id: hit.id, created: null }
-  const id = newId('p')
-  await db.query(`INSERT INTO contacts (id, company_id, name) VALUES ($1, $2, $3)`, [id, companyId, name])
-  return { id, created: { id, name } }
-}
-
-/** 会社 + 担当者の一括解決（登録・編集で共用）。会社指定の検証は shared customerLogCompanyError（パリティの SoT） */
+/** 会社 + 担当者の一括解決（登録・編集で共用）。会社指定の検証は shared customerLogCompanyError（パリティの SoT）。
+ *  担当者解決は共通 lib contact-resolve（活動記録と共用 = 原則3）。エラーコード AKO-CLG・ロック接頭辞 clog-contact */
 async function resolveRefs(
   db: pg.PoolClient,
   input: { companyId: string | null; newCompanyName: string; contactId: string | null; newContactName: string },
 ): Promise<ResolvedRefs> {
   assertClg(customerLogCompanyError(input.companyId ?? '', input.newCompanyName))
   const company = await resolveCompany(db, input.companyId, input.newCompanyName)
-  const contact = await resolveContact(db, company.id, input.contactId, input.newContactName)
+  const contact = await resolveContact(db, company.id, input.contactId, input.newContactName, { errCode: 'AKO-CLG', lockPrefix: 'clog-contact' })
   return {
     companyId: company.id,
     contactId: contact.id,
@@ -153,12 +118,7 @@ async function resolveRefs(
 /** コンボボックス新規登録の監査ログ（コミット後。補助処理 = 主フロー成立後） */
 async function auditCreatedRefs(pool: pg.Pool, user: AuthUser, refs: ResolvedRefs): Promise<void> {
   await auditCreatedCompany(pool, user, refs.createdCompany, '顧客活動')
-  if (refs.createdContact) {
-    await audit(pool, {
-      actorId: user.id, action: 'create', entity: 'contacts', entityId: refs.createdContact.id,
-      detail: `顧客活動から顧客担当者「${refs.createdContact.name}」を新規登録`,
-    })
-  }
+  await auditCreatedContact(pool, user, refs.createdContact, '顧客活動')
 }
 
 /** FK 違反（23503）を入力エラーへ変換（紐付け先の不在 = 400） */

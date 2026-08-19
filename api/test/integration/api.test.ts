@@ -7368,30 +7368,55 @@ describe('活動記録 3 種（サポート/営業/ビジネスパートナー�
     expect(updated.probability).toBe(60)
   })
 
-  it('ビジネスパートナー活動: 入力検証（AKO-PTN-001）・関連商談リンク（FK）・取消/復元', async () => {
-    expect((await api('POST', '/v1/partner-activities', { as: MEMBER, body: { partnerName: '', theme: 'x', activityType: '紹介', status: '検討' } })).json.error?.code).toBe('AKO-PTN-001')
-    expect((await api('POST', '/v1/partner-activities', { as: MEMBER, body: { partnerName: '川上さん', theme: 'x', activityType: '爆買', status: '検討' } })).json.error?.code).toBe('AKO-PTN-001')
+  it('ビジネスパートナー活動: 入力検証（AKO-PTN-001）・マスタ参照解決・関連商談リンク（FK）・取消/復元', async () => {
+    // パートナー会社（必須）の欠落は AKO-PTN-001（改修依頼 2026-08-19 第4弾でマスタ参照必須化）
+    expect((await api('POST', '/v1/partner-activities', { as: MEMBER, body: { theme: 'x', activityType: '紹介', status: '検討' } })).json.error?.code).toBe('AKO-PTN-001')
+    expect((await api('POST', '/v1/partner-activities', { as: MEMBER, body: { partnerCompanyId: companyId, theme: 'x', activityType: '爆買', status: '検討' } })).json.error?.code).toBe('AKO-PTN-001')
     // 実在しない関連商談は 400（FK → AKO-PTN-001）
     expect((await api('POST', '/v1/partner-activities', {
-      as: MEMBER, body: { partnerName: '川上さん', theme: 'x', activityType: '紹介', status: '検討', relatedSalesActivityId: 'deal-nope' },
+      as: MEMBER, body: { partnerCompanyId: companyId, theme: 'x', activityType: '紹介', status: '検討', relatedSalesActivityId: 'deal-nope' },
     })).json.error?.code).toBe('AKO-PTN-001')
+    // パートナー会社（既存 FK）＋パートナー担当（自由入力→新規登録）＋アプローチ企業（自由入力→新規登録）
     const created = await api('POST', '/v1/partner-activities', {
       as: MEMBER,
       body: {
-        partnerName: '川上さん', theme: 'フローラ協業', relatedCompany: 'フローラ',
-        activityType: '共創', status: '進行中', summary: '協業テーマの検討',
+        partnerCompanyId: companyId, newPartnerContactName: '川上 太郎',
+        newApproachCompanyName: 'アプローチ企業テスト', approachGroup: '紹介ルートA',
+        theme: 'フローラ協業', activityType: '共創', status: '進行中', summary: '協業テーマの検討',
         nextAction: '3者MTG', nextActionDate: '2026-09-07', relatedSalesActivityId: dealId,
-        memo: '案件化したら商談へリンク',
+        memo: '案件化したら商談へリンク', links: ['https://example.com/partner'],
       },
     })
     expect(created.status).toBe(201)
     pactId = (created.json.data as { id: string }).id
-    expect((created.json.data as { relatedSalesActivityId: string }).relatedSalesActivityId).toBe(dealId)
-    // 部分更新でリンク解除（null 化）できる・他フィールドは保持
+    const createdRow = created.json.data as {
+      relatedSalesActivityId: string; partnerCompanyId: string; partnerContactId: string
+      approachCompanyId: string; partnerName: string; relatedCompany: string; approachGroup: string; links: string[]
+    }
+    expect(createdRow.relatedSalesActivityId).toBe(dealId)
+    expect(createdRow.partnerCompanyId).toBe(companyId)
+    // partner_name/related_company は会社名スナップショット（表示・検索の下位互換）
+    expect(createdRow.partnerName).toBe('活動記録テスト商事')
+    expect(createdRow.relatedCompany).toBe('アプローチ企業テスト')
+    expect(createdRow.approachGroup).toBe('紹介ルートA')
+    expect(createdRow.links).toEqual(['https://example.com/partner'])
+    // 担当は選択会社（companyId）に所属して新規登録される
+    const pc = await pool.query(`SELECT company_id, name FROM contacts WHERE id = $1`, [createdRow.partnerContactId])
+    expect(pc.rows[0]).toEqual({ company_id: companyId, name: '川上 太郎' })
+    // アプローチ企業は顧客(会社)マスタへ新規登録される
+    const ac = await pool.query(`SELECT kind, name FROM companies WHERE id = $1`, [createdRow.approachCompanyId])
+    expect(ac.rows[0]).toEqual({ kind: 'customer', name: 'アプローチ企業テスト' })
+    // 実在しない担当（他社所属）を指定すると AKO-PTN-003（所属不一致）
+    expect((await api('POST', '/v1/partner-activities', {
+      as: MEMBER, body: { partnerCompanyId: companyId, partnerContactId: 'p-nope', theme: 'x', activityType: '紹介', status: '検討' },
+    })).json.error?.code).toBe('AKO-PTN-003')
+    // 部分更新でリンク解除（null 化）できる・他フィールドは保持（パートナー会社・担当・テーマ）
     const upd = await api('PATCH', `/v1/partner-activities/${pactId}`, { as: HR, body: { relatedSalesActivityId: '' } })
-    const updated = upd.json.data as { relatedSalesActivityId: string | null; theme: string }
+    const updated = upd.json.data as { relatedSalesActivityId: string | null; theme: string; partnerCompanyId: string; partnerContactId: string }
     expect(updated.relatedSalesActivityId).toBeNull()
     expect(updated.theme).toBe('フローラ協業')
+    expect(updated.partnerCompanyId).toBe(companyId)
+    expect(updated.partnerContactId).toBe(createdRow.partnerContactId)
     // 取消 → 一覧（f.active=true）から外れる → 復元で戻る
     expect((await api('POST', `/v1/partner-activities/${pactId}/archive`, { as: MEMBER })).status).toBe(200)
     const activeOnly = await api('GET', '/v1/partner-activities?f.active=true&limit=50', { as: MEMBER })

@@ -149,6 +149,11 @@ export const SUPPORT_ACTIVITY_CATEGORIES = ['操作', '不具合', '設定', '�
 export const SUPPORT_ACTIVITY_PRIORITIES = ['低', '通常', '高', '緊急'] as const
 /** サポート活動のステータス */
 export const SUPPORT_ACTIVITY_STATUSES = ['未対応', '対応中', '顧客確認待ち', '保留', '解決'] as const
+/** サポート活動の「最初の問い合わせ手段」（改修依頼 2026-08-19 第4弾。AI問合せを追加・任意選択） */
+export const SUPPORT_FIRST_CONTACT_METHODS = ['AI問合せ', 'メール', 'チャット', '電話', 'Web会議', '訪問', 'その他'] as const
+
+/** サポート活動の問い合わせ内容テンプレ（改修依頼 2026-08-19 第4弾。新規登録時の既定値） */
+export const SUPPORT_ACTIVITY_BODY_TEMPLATE = '内容：\n状況：\n対応：\n'
 
 /**
  * サポート活動（顧客サポートの受付〜解決の記録。改修依頼 2026-08-18・F-43）。
@@ -158,16 +163,22 @@ export interface SupportActivity {
   id: string
   /** 記録者（表示用。編集は全員可） */
   memberId: string
+  /** 事業区分（Village 参照・任意。改修依頼 2026-08-19 第4弾）。旧データは未定義（原則7） */
+  villageId?: string | null
   /** 受付日（YYYY-MM-DD・必須） */
   receivedDate: string
   /** 受付時刻（HH:MM・任意） */
   receivedTime: string | null
+  /** 最初の問い合わせ手段（SUPPORT_FIRST_CONTACT_METHODS・任意。改修依頼 2026-08-19 第4弾） */
+  firstContactMethod?: string
   /** 顧客(会社)（必須） */
   companyId: string
   /** 問い合わせ者（顧客側の氏名。自由入力・任意） */
   inquirerName: string
   /** 対象システム（自由入力・任意） */
   targetSystem: string
+  /** 対象箇所（自由入力・任意。改修依頼 2026-08-19 第4弾。「対象システム、対象箇所」の箇所側） */
+  targetLocation?: string
   /** 問い合わせ種別（SUPPORT_ACTIVITY_CATEGORIES） */
   category: string
   /** 件名（必須） */
@@ -192,6 +203,8 @@ export interface SupportActivity {
   completedTime: string | null
   /** 改善・ナレッジのタネ（任意） */
   knowledgeNote: string
+  /** 参考リンク URL（複数可・任意。改修依頼 2026-08-19 第4弾）。旧データは未定義（原則7） */
+  links?: string[]
   createdAt: string
   updatedAt?: string
   /** 取消（論理削除）済みは false */
@@ -211,8 +224,14 @@ export interface SalesActivity {
   id: string
   /** 記録者（表示用。編集は全員可） */
   memberId: string
+  /** 事業区分（Village 参照・任意。改修依頼 2026-08-19 第4弾）。旧データは未定義（原則7） */
+  villageId?: string | null
   /** 顧客(会社)（必須） */
   companyId: string
+  /** 担当（顧客(人)= Contact 参照・任意。改修依頼 2026-08-19 第4弾。選択会社に所属） */
+  contactId?: string | null
+  /** アプローチグループ（自由入力・任意。改修依頼 2026-08-19 第4弾） */
+  approachGroup?: string
   /** 商談名（必須） */
   title: string
   /** 商談種別（SALES_ACTIVITY_DEAL_TYPES） */
@@ -235,6 +254,8 @@ export interface SalesActivity {
   nextAction: string
   /** Next Action日（YYYY-MM-DD・任意） */
   nextActionDate: string | null
+  /** 参考リンク URL（複数可・任意。改修依頼 2026-08-19 第4弾）。旧データは未定義（原則7） */
+  links?: string[]
   createdAt: string
   updatedAt?: string
   /** 取消（論理削除）済みは false */
@@ -247,19 +268,31 @@ export const PARTNER_ACTIVITY_TYPES = ['紹介', '共創', '案件支援', '情�
 export const PARTNER_ACTIVITY_STATUSES = ['情報収集', '検討', '接続予定', '進行中', '案件化', '完了'] as const
 
 /**
- * ビジネスパートナー活動（パートナー連携のテーマ管理。改修依頼 2026-08-18・F-45）。
- * パートナー・関連企業は自由入力（パートナーは個人名も多く、関連企業は顧客マスタ対象外の企業も
- * あり得るため、マスタ参照にしない設計判断）。案件化したら関連商談（営業活動）へリンクする。
+ * ビジネスパートナー活動（パートナー連携のテーマ管理。改修依頼 2026-08-18・F-45 → 2026-08-19 第4弾で改訂）。
+ * 改修依頼 2026-08-19 第4弾: パートナー会社・担当・アプローチ企業を顧客(会社/人)マスタ参照へ変更
+ * （partnerCompanyId/partnerContactId/approachCompanyId。自由入力で新規登録もできる）。旧データの
+ * partnerName/relatedCompany（自由入力）は下位互換のため保持し、FK 未設定の旧行の表示に使う（原則7）。
+ * 案件化したら関連商談（営業活動）へリンクする。
  */
 export interface PartnerActivity {
   id: string
   /** 記録者（表示用。編集は全員可） */
   memberId: string
-  /** パートナー（人・会社の名前。自由入力・必須） */
+  /** 事業区分（Village 参照・任意。改修依頼 2026-08-19 第4弾）。旧データは未定義（原則7） */
+  villageId?: string | null
+  /** パートナー会社（顧客(会社)= Company 参照・改修依頼 2026-08-19 第4弾）。旧行は未設定 = partnerName で表示 */
+  partnerCompanyId?: string | null
+  /** パートナー担当（顧客(人)= Contact 参照・任意。改修依頼 2026-08-19 第4弾。パートナー会社に所属） */
+  partnerContactId?: string | null
+  /** アプローチ企業（顧客(会社)= Company 参照・任意。改修依頼 2026-08-19 第4弾） */
+  approachCompanyId?: string | null
+  /** アプローチグループ（自由入力・任意。改修依頼 2026-08-19 第4弾） */
+  approachGroup?: string
+  /** パートナー（人・会社の名前。自由入力）。**旧データの表示用に保持**（新規は partnerCompanyId で参照） */
   partnerName: string
   /** テーマ名（必須） */
   theme: string
-  /** 関連企業（自由入力・任意） */
+  /** 関連企業（自由入力）。**旧データの表示用に保持**（新規は approachCompanyId で参照） */
   relatedCompany: string
   /** 活動区分（PARTNER_ACTIVITY_TYPES） */
   activityType: string
@@ -281,6 +314,8 @@ export interface PartnerActivity {
   relatedSalesActivityId: string | null
   /** メモ（任意） */
   memo: string
+  /** 参考リンク URL（複数可・任意。改修依頼 2026-08-19 第4弾）。旧データは未定義（原則7） */
+  links?: string[]
   createdAt: string
   updatedAt?: string
   /** 取消（論理削除）済みは false */

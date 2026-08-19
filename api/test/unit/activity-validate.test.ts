@@ -14,12 +14,16 @@ import {
 import { SUPPORT_ACTIVITY_CATEGORIES } from '../../../shared/domain/types'
 
 const supportBase: SupportActivityInput = {
+  villageId: '',
+  newVillageName: '',
   receivedDate: '2026-08-18',
   receivedTime: '10:30',
+  firstContactMethod: 'メール',
   companyId: 'c-01',
   newCompanyName: '',
   inquirerName: '山田様',
   targetSystem: '在庫管理システム',
+  targetLocation: '取込画面',
   category: 'データ',
   title: 'CSVが取り込めない',
   body: 'アップロードするとエラーになる',
@@ -32,11 +36,17 @@ const supportBase: SupportActivityInput = {
   completedDate: null,
   completedTime: null,
   knowledgeNote: '',
+  links: [],
 }
 
 const salesBase: SalesActivityInput = {
+  villageId: '',
+  newVillageName: '',
   companyId: 'c-01',
   newCompanyName: '',
+  contactId: '',
+  newContactName: '',
+  approachGroup: '',
   title: '在庫管理DXプロジェクト',
   dealType: '新規',
   staffMemberId: 'm-03',
@@ -48,12 +58,20 @@ const salesBase: SalesActivityInput = {
   proposal: '',
   nextAction: 'デモ実施',
   nextActionDate: '2026-08-25',
+  links: [],
 }
 
 const partnerBase: PartnerActivityInput = {
-  partnerName: '川上さん',
+  villageId: '',
+  newVillageName: '',
+  partnerCompanyId: 'c-02',
+  newPartnerCompanyName: '',
+  partnerContactId: '',
+  newPartnerContactName: '',
+  approachCompanyId: '',
+  newApproachCompanyName: '',
+  approachGroup: '',
   theme: 'フローラ社との協業検討',
-  relatedCompany: 'フローラ',
   activityType: '共創',
   status: '進行中',
   summary: '',
@@ -64,6 +82,7 @@ const partnerBase: PartnerActivityInput = {
   relatedMeeting: '',
   relatedSalesActivityId: null,
   memo: '',
+  links: [],
 }
 
 describe('共通ヘルパー', () => {
@@ -121,6 +140,15 @@ describe('supportActivityError（サポート活動）', () => {
   it('会社は新規名（コンボボックス自由入力）でも可', () => {
     expect(supportActivityError({ ...supportBase, companyId: '', newCompanyName: '株式会社サンプル' })).toBeNull()
   })
+  it('最初の問い合わせ手段は任意（空可）・プリセット外は不正（改修依頼 2026-08-19 第4弾）', () => {
+    expect(supportActivityError({ ...supportBase, firstContactMethod: '' })).toBeNull()
+    expect(supportActivityError({ ...supportBase, firstContactMethod: 'AI問合せ' })).toBeNull()
+    expect(supportActivityError({ ...supportBase, firstContactMethod: '念力' })).toBe('最初の問い合わせ手段の値が正しくありません')
+  })
+  it('参考リンクは http(s)・件数（改修依頼 2026-08-19 第4弾）', () => {
+    expect(supportActivityError({ ...supportBase, links: ['https://ref.example'] })).toBeNull()
+    expect(supportActivityError({ ...supportBase, links: ['ftp://a'] })).not.toBeNull()
+  })
 })
 
 describe('salesActivityError（営業活動）', () => {
@@ -140,18 +168,23 @@ describe('salesActivityError（営業活動）', () => {
   })
 })
 
-describe('partnerActivityError（ビジネスパートナー活動）', () => {
-  it('正常入力は null（関連企業・関連商談は任意）', () => {
+describe('partnerActivityError（ビジネスパートナー活動。改修依頼 2026-08-19 第4弾でマスタ参照へ改訂）', () => {
+  it('正常入力は null（アプローチ企業・関連商談は任意）', () => {
     expect(partnerActivityError(partnerBase)).toBeNull()
-    expect(partnerActivityError({ ...partnerBase, relatedCompany: '', nextActionDate: null })).toBeNull()
+    expect(partnerActivityError({ ...partnerBase, approachCompanyId: '', nextActionDate: null })).toBeNull()
   })
-  it('必須項目（パートナー・テーマ名・活動区分・ステータス）', () => {
-    expect(partnerActivityError({ ...partnerBase, partnerName: '  ' })).toBe('パートナーを入力してください')
+  it('パートナー会社は id か新規名のどちらか必須（自由入力→マスタ参照へ移行）', () => {
+    expect(partnerActivityError({ ...partnerBase, partnerCompanyId: '', newPartnerCompanyName: '  ' })).toBe('パートナー会社を選択してください')
+    // 新規名（コンボボックス自由入力）でも可
+    expect(partnerActivityError({ ...partnerBase, partnerCompanyId: '', newPartnerCompanyName: '株式会社フローラ' })).toBeNull()
+  })
+  it('必須項目（テーマ名・活動区分・ステータス）', () => {
     expect(partnerActivityError({ ...partnerBase, theme: '' })).toBe('テーマ名を入力してください')
     expect(partnerActivityError({ ...partnerBase, activityType: '' })).toBe('活動区分を選択してください')
     expect(partnerActivityError({ ...partnerBase, status: '爆進中' })).toBe('ステータスの値が正しくありません')
   })
-  it('Next Action日は実在日', () => {
+  it('Next Action日は実在日・参考リンクは http(s)', () => {
     expect(partnerActivityError({ ...partnerBase, nextActionDate: '2026-02-30' })).toBe('Next Action日が正しくありません')
+    expect(partnerActivityError({ ...partnerBase, links: ['ftp://a'] })).not.toBeNull()
   })
 })

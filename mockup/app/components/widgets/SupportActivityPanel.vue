@@ -8,8 +8,11 @@
  * - 取消（論理削除）+ 復元（原則9.5）。
  */
 import { Plus, RefreshCw, RotateCcw } from 'lucide-vue-next'
-import { SUPPORT_ACTIVITY_CATEGORIES, SUPPORT_ACTIVITY_PRIORITIES, SUPPORT_ACTIVITY_STATUSES } from '../../../../shared/domain/types'
-import type { Company, Member, SupportActivity } from '~/types/domain'
+import {
+  SUPPORT_ACTIVITY_BODY_TEMPLATE, SUPPORT_ACTIVITY_CATEGORIES, SUPPORT_ACTIVITY_PRIORITIES,
+  SUPPORT_ACTIVITY_STATUSES, SUPPORT_FIRST_CONTACT_METHODS,
+} from '../../../../shared/domain/types'
+import type { Company, Member, SupportActivity, Village } from '~/types/domain'
 import type { TableColumn } from '~/types/ui'
 
 const sup = useSupportActivities()
@@ -20,10 +23,17 @@ const { currentUserId } = useCurrentUser()
 
 const members = tbl('members')
 const companies = computed(() => (tbl('companies').value as Company[]).filter(c => c.active && c.kind === 'customer'))
+const villages = computed(() => (tbl('villages').value as Village[]).filter(v => v.active))
 
 function companyName(id: string): string {
   return (tbl('companies').value as Company[]).find(c => c.id === id)?.name ?? id
 }
+function villageName(id: string | null | undefined): string {
+  if (!id) return ''
+  return (tbl('villages').value as Village[]).find(v => v.id === id)?.name ?? ''
+}
+const villageOptions = computed(() => villages.value.map(v => ({ value: v.id, label: v.name })))
+const firstContactMethodOptions = SUPPORT_FIRST_CONTACT_METHODS.map(v => ({ value: v, label: v }))
 function memberName(id: string): string {
   return (members.value as Member[]).find(m => m.id === id)?.name ?? id
 }
@@ -108,12 +118,16 @@ const drawerTitle = computed(() =>
   mode.value === 'create' ? 'サポート活動を登録' : mode.value === 'edit' ? 'サポート活動を編集' : 'サポート活動の詳細')
 
 const form = ref({
+  villageId: '',
+  villageText: '',
   receivedDate: '',
   receivedTime: '',
+  firstContactMethod: '',
   companyId: '',
   companyText: '',
   inquirerName: '',
   targetSystem: '',
+  targetLocation: '',
   category: '',
   title: '',
   body: '',
@@ -126,6 +140,7 @@ const form = ref({
   completedDate: '',
   completedTime: '',
   knowledgeNote: '',
+  links: [] as string[],
 })
 
 const companyOptions = computed(() => companies.value.map(c => ({ value: c.id, label: c.name })))
@@ -144,15 +159,20 @@ function openDetail(row: Record<string, unknown>): void {
 function openCreate(): void {
   selectedId.value = null
   form.value = {
+    villageId: '',
+    villageText: '',
     receivedDate: todayJst(),
     receivedTime: '',
+    firstContactMethod: '',
     companyId: '',
     companyText: '',
     inquirerName: '',
     targetSystem: '',
+    targetLocation: '',
     category: '',
     title: '',
-    body: '',
+    // 問い合わせ内容はテンプレ既定（改修依頼 2026-08-19 第4弾）
+    body: SUPPORT_ACTIVITY_BODY_TEMPLATE,
     priority: '通常',
     status: '未対応',
     staffMemberId: currentUserId.value,
@@ -162,6 +182,7 @@ function openCreate(): void {
     completedDate: '',
     completedTime: '',
     knowledgeNote: '',
+    links: [],
   }
   mode.value = 'create'
   drawerOpen.value = true
@@ -171,12 +192,16 @@ function openEdit(): void {
   const s = selected.value
   if (!s) return
   form.value = {
+    villageId: s.villageId ?? '',
+    villageText: villageName(s.villageId),
     receivedDate: s.receivedDate,
     receivedTime: s.receivedTime ?? '',
+    firstContactMethod: s.firstContactMethod ?? '',
     companyId: s.companyId,
     companyText: companyName(s.companyId),
     inquirerName: s.inquirerName,
     targetSystem: s.targetSystem,
+    targetLocation: s.targetLocation ?? '',
     category: s.category,
     title: s.title,
     body: s.body,
@@ -189,6 +214,7 @@ function openEdit(): void {
     completedDate: s.completedDate ?? '',
     completedTime: s.completedTime ?? '',
     knowledgeNote: s.knowledgeNote,
+    links: [...(s.links ?? [])],
   }
   mode.value = 'edit'
 }
@@ -203,12 +229,16 @@ async function save(): Promise<void> {
   saving.value = true
   try {
     const res = await sup.save(mode.value === 'edit' ? selectedId.value : null, {
+      villageId: form.value.villageId,
+      newVillageName: form.value.villageId ? '' : form.value.villageText,
       receivedDate: form.value.receivedDate,
       receivedTime: form.value.receivedTime || null,
+      firstContactMethod: form.value.firstContactMethod,
       companyId: form.value.companyId,
       newCompanyName: form.value.companyId ? '' : form.value.companyText,
       inquirerName: form.value.inquirerName,
       targetSystem: form.value.targetSystem,
+      targetLocation: form.value.targetLocation,
       category: form.value.category,
       title: form.value.title,
       body: form.value.body,
@@ -221,6 +251,7 @@ async function save(): Promise<void> {
       completedDate: form.value.completedDate || null,
       completedTime: form.value.completedTime || null,
       knowledgeNote: form.value.knowledgeNote,
+      links: form.value.links,
     })
     if (!res.ok) {
       show(`${res.error.code}: ${res.error.message}`, 'crit')
@@ -276,10 +307,12 @@ const detailRows = computed(() => {
   const s = selected.value
   if (!s) return []
   return [
+    { label: '事業区分', value: villageName(s.villageId) || '—' },
     { label: '受付日時', value: fmtWhen(s) },
+    { label: '最初の問い合わせ手段', value: s.firstContactMethod || '—' },
     { label: '顧客', value: companyName(s.companyId) },
     { label: '問い合わせ者', value: s.inquirerName || '—' },
-    { label: '対象システム', value: s.targetSystem || '—' },
+    { label: '対象システム、対象箇所', value: [s.targetSystem, s.targetLocation].filter(Boolean).join(' / ') || '—' },
     { label: '問い合わせ種別', value: s.category },
     { label: '件名', value: s.title },
     { label: '問い合わせ内容', value: s.body },
@@ -291,6 +324,7 @@ const detailRows = computed(() => {
     { label: '解決内容', value: s.resolution || '—' },
     { label: '完了日時', value: fmtCompleted(s) },
     { label: '改善・ナレッジのタネ', value: s.knowledgeNote || '—' },
+    { label: '参考リンク', value: (s.links ?? []).join('\n') || '—' },
     { label: '記録者', value: memberName(s.memberId) },
   ]
 })
@@ -364,6 +398,17 @@ const detailRows = computed(() => {
       </dl>
 
       <div v-else class="grid gap-3">
+        <!-- 事業区分（Village。最上段・任意・自由入力で新規登録可 = 改修依頼 2026-08-19 第4弾） -->
+        <UiFormField label="事業区分（Village・任意）" hint="社内事業の区分。未登録名を入力すると保存時にマスタへ新規登録されます">
+          <UiCombobox
+            v-model="form.villageId"
+            v-model:text="form.villageText"
+            :options="villageOptions"
+            placeholder="事業区分で検索・入力"
+            aria-label="事業区分（Village）"
+            create-hint="保存時にマスタへ新規登録されます"
+          />
+        </UiFormField>
         <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <UiFormField label="受付日" required>
             <input v-model="form.receivedDate" type="date" class="input" aria-label="受付日" required>
@@ -372,22 +417,33 @@ const detailRows = computed(() => {
             <input v-model="form.receivedTime" type="time" class="input" aria-label="受付時刻">
           </UiFormField>
         </div>
-        <UiFormField label="顧客（会社）" required hint="未登録の会社名を入力すると、保存時にマスタへ新規登録されます">
-          <UiCombobox
-            v-model="form.companyId"
-            v-model:text="form.companyText"
-            :options="companyOptions"
-            placeholder="会社名で検索・入力"
-            aria-label="顧客（会社）"
-            create-hint="保存時にマスタへ新規登録されます"
-          />
+        <!-- 最初の問い合わせ手段（任意。改修依頼 2026-08-19 第4弾） -->
+        <UiFormField label="最初の問い合わせ手段（任意）">
+          <UiSelect v-model="form.firstContactMethod" :options="firstContactMethodOptions" empty-label="選択してください" aria-label="最初の問い合わせ手段" />
         </UiFormField>
+        <!-- 顧客・問い合わせ者を横並び（改修依頼 2026-08-19 第4弾） -->
         <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <UiFormField label="顧客（会社）" required hint="未登録の会社名を入力すると、保存時にマスタへ新規登録されます">
+            <UiCombobox
+              v-model="form.companyId"
+              v-model:text="form.companyText"
+              :options="companyOptions"
+              placeholder="会社名で検索・入力"
+              aria-label="顧客（会社）"
+              create-hint="保存時にマスタへ新規登録されます"
+            />
+          </UiFormField>
           <UiFormField label="問い合わせ者（任意）">
             <input v-model="form.inquirerName" type="text" class="input" placeholder="例）山田様" aria-label="問い合わせ者">
           </UiFormField>
+        </div>
+        <!-- 対象システム、対象箇所（改修依頼 2026-08-19 第4弾で 2 項目化） -->
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <UiFormField label="対象システム（任意）">
             <input v-model="form.targetSystem" type="text" class="input" placeholder="例）在庫管理システム" aria-label="対象システム">
+          </UiFormField>
+          <UiFormField label="対象箇所（任意）">
+            <input v-model="form.targetLocation" type="text" class="input" placeholder="例）取込画面" aria-label="対象箇所">
           </UiFormField>
         </div>
         <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -419,17 +475,15 @@ const detailRows = computed(() => {
         <UiFormField label="解決内容（任意）">
           <textarea v-model="form.resolution" class="textarea min-h-16" placeholder="解決に至った内容" aria-label="解決内容" />
         </UiFormField>
-        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <UiFormField label="完了日（任意）">
-            <input v-model="form.completedDate" type="date" class="input" aria-label="完了日">
-          </UiFormField>
-          <UiFormField label="完了時刻（任意）" hint="完了日を入力した場合のみ">
-            <input v-model="form.completedTime" type="time" class="input" aria-label="完了時刻">
-          </UiFormField>
-        </div>
+        <!-- 完了時刻は除外（改修依頼 2026-08-19 第4弾）。完了日のみ -->
+        <UiFormField label="完了日（任意）">
+          <input v-model="form.completedDate" type="date" class="input" aria-label="完了日">
+        </UiFormField>
         <UiFormField label="改善・ナレッジのタネ（任意）" hint="再発防止・自動化のアイデアなど">
           <textarea v-model="form.knowledgeNote" class="textarea min-h-16" placeholder="例）日付形式を自動変換できないか" aria-label="改善・ナレッジのタネ" />
         </UiFormField>
+        <!-- 参考リンク（改修依頼 2026-08-19 第4弾。改善要望と同じ部品を再利用 = 原則3） -->
+        <ImprovementsLinkEditor v-model:links="form.links" />
       </div>
 
       <template #footer>
