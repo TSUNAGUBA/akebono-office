@@ -10,7 +10,7 @@
  * 参照 = 基本ビュー・入力 = ボタン押下で表示（バッチ7h・オペレーター指示 2026-07-19 #10 ④）
  */
 import {
-  BellRing, CalendarDays, Check, ChevronLeft, ChevronRight, Eye, Minus, Pencil, Plus, Send, Settings2, Sparkles, Trash2,
+  BellRing, CalendarDays, Check, ChevronLeft, ChevronRight, Eye, FileText, Minus, Pencil, Plus, Send, Settings2, Sparkles, Trash2,
 } from 'lucide-vue-next'
 import type { DailyReport, ReportEntry, TomorrowPlan, WeeklyReport } from '~/types/domain'
 import {
@@ -22,6 +22,8 @@ import { toQuarterHours } from '../../../shared/domain/report-draft'
 import { addDays, daysInMonth, fmtDate, fmtDateLong, fmtMinutes, fmtTime, weekdayOf } from '~/utils/format'
 import { EMPLOYMENT_TYPE_LABELS, EMPLOYMENT_TYPE_TONES } from '~/utils/labels'
 import { parseTeamVisibleIds } from '~/utils/team-visibility'
+import { poipoiPostsOnDay } from '~/utils/report-poipoi'
+import { WEEKLY_REPORT_EXAMPLE } from '~/utils/weekly-report-templates'
 import type { TabItem, TableColumn, Tone } from '~/types/ui'
 
 const route = useRoute()
@@ -572,8 +574,9 @@ function openSavedDraft(): void {
 
 // ---------- チームタブ（バッチ7h で全員へ公開。リマインド・下書き表示は管理者のみ） ----------
 
-/** 表示モード（週 / 月）と月ビューの形式（横スクロール / カレンダー） */
-const teamView = ref<'week' | 'month'>('week')
+/** 表示モード（週 / 月）と月ビューの形式（横スクロール / カレンダー）。
+ *  既定 = 月・横スクロール（改修依頼 2026-08-19。従来の既定は週。週/月トグルで週表示にも切替可） */
+const teamView = ref<'week' | 'month'>('month')
 const teamMonthView = ref<'scroll' | 'calendar'>('scroll')
 const teamMonth = ref(todayJst().slice(0, 7))
 const teamMonthDays = computed(() => daysOfMonth(teamMonth.value))
@@ -724,11 +727,17 @@ const drawerGap = computed(() => {
 const drawerPoipoiPosts = computed(() => {
   const r = drawerReport.value
   if (!r || !r.memberId) return []
-  const pool = [...poipoiNotes.list.value, ...poipoiNotes.adminList.value]
-  return pool
-    .filter(n => n.memberId === r.memberId && n.createdAt.slice(0, 10) === r.date)
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+  // 可視範囲 = 本人の list + 管理者の全ポスト adminList（poipoi の既存モデル。ここで権限を広げない）
+  return poipoiPostsOnDay([...poipoiNotes.list.value, ...poipoiNotes.adminList.value], r.memberId, r.date)
 })
+
+/**
+ * 自分の日報（提出済み表示）に併記する、その日・本人の改善のタネ（改修8）。
+ * 本人の投稿は poipoiNotes.list（本人スコープ）に含まれるため adminList は不要。
+ * 抽出は drawerPoipoiPosts と同じ純関数を再利用（原則3）。時刻(hh:mm)は表示側で出さない（改修7 と整合）。
+ */
+const myPoipoiPosts = computed(() =>
+  poipoiPostsOnDay(poipoiNotes.list.value, currentUserId.value, selDate.value))
 
 function cellClass(memberId: string, date: string): string {
   const s = displayCellStatus(memberId, date)
@@ -961,6 +970,25 @@ async function generateFromDailies(): Promise<void> {
   }, { message: '日報から下書きを生成しています…' })
 }
 
+/**
+ * 例文を各欄へ挿入する（改修9。SoT = utils/weekly-report-templates.ts の WEEKLY_REPORT_EXAMPLE）。
+ * 稟議テンプレ（workflow.vue applyTemplate）と同様、挿入対象の欄に入力があれば上書き確認（誤操作で入力を
+ * 失わない = 原則9.5）。全て空なら確認なしで挿入する。挿入対象は例文を持つ 4 欄のみ（主要業務・
+ * チーム共有事項は書き手固有のため触らない）。
+ */
+async function insertWeeklyExample(): Promise<void> {
+  const filled = [wkGoal.value, wkIssues.value, wkGoodPoints.value, wkNext.value].some(v => v.trim())
+  if (filled) {
+    const ok = await ask('例文の挿入', '入力済みの欄を例文で置き換えます。よろしいですか？', { confirmLabel: '置き換える' })
+    if (!ok) return
+  }
+  wkGoal.value = WEEKLY_REPORT_EXAMPLE.goalReview
+  wkIssues.value = WEEKLY_REPORT_EXAMPLE.issues
+  wkGoodPoints.value = WEEKLY_REPORT_EXAMPLE.goodPoints
+  wkNext.value = WEEKLY_REPORT_EXAMPLE.nextWeek
+  show('例文を挿入しました')
+}
+
 async function onSaveWeekly(submitNow: boolean): Promise<void> {
   await run(submitNow ? 'wk-submit' : 'wk-draft', async () => {
     const res = await reports.saveWeekly({
@@ -1022,6 +1050,25 @@ const waMemberId = ref('')
 const allWeeklies = computed(() =>
   reports.allSubmittedWeeklies(selAllWeekStart.value)
     .filter(r => matchesMemberFilter(r.memberId, waDeptId.value, waMemberId.value)))
+
+/** 一覧プレビュー用の抜粋（改行・連続空白を 1 スペースへ畳んで先頭 max 文字。超過は … を付す） */
+function excerpt(text: string, max = 60): string {
+  const flat = text.replace(/\s+/g, ' ').trim()
+  const chars = [...flat]
+  return chars.length > max ? `${chars.slice(0, max).join('')}…` : flat
+}
+
+/**
+ * 全員の週報一覧の行プレビュー項目（改修4）。本文がある主要項目のラベル + 抜粋のみを返す。
+ * 全文は行クリックの週報詳細ドロワーで確認できる（一覧は要点のみ・過度に大きくしない）。
+ */
+function weeklyPreviewItems(w: WeeklyReport): { label: string; text: string }[] {
+  return [
+    { label: '今週の成果', text: excerpt(w.goalReview) },
+    { label: '主要業務', text: excerpt(w.mainWork) },
+    { label: '課題', text: excerpt(w.issues) },
+  ].filter(it => it.text)
+}
 
 // ---- 既読/未読の可視化（週報。日報と同じ扱い = 自分の週報は対象外） ----
 
@@ -1339,6 +1386,21 @@ async function onMarkUnreadWeekly(): Promise<void> {
             <UiMarkdown v-else-if="myReport.tomorrow" :source="myReport.tomorrow" />
             <p v-else class="text-[13px]">—</p>
           </div>
+          <!-- その日・本人の改善のタネ（改修8。全員の日報ドロワーの表示様式を再利用 = 原則3。
+               時刻(hh:mm)は非表示 = 改修7 と整合。該当日に投稿が無ければセクションごと非表示） -->
+          <div v-if="myPoipoiPosts.length > 0">
+            <p class="label">改善のタネ</p>
+            <ul class="grid gap-2">
+              <li
+                v-for="p in myPoipoiPosts"
+                :key="p.id"
+                class="rounded-lg border border-line bg-surface-soft p-2.5"
+              >
+                <UiMarkdown :source="p.body" />
+              </li>
+            </ul>
+          </div>
+
           <WidgetsCommentThread :report-id="myReport.id" />
         </div>
       </UiSectionCard>
@@ -1987,20 +2049,30 @@ async function onMarkUnreadWeekly(): Promise<void> {
           />
           <ul v-else class="divide-y divide-line">
             <li v-for="w in pagedWeeklies" :key="w.id">
+              <!-- 行クリックで週報詳細ドロワー（全項目）を開く。一覧は週レンジ + 主要項目のプレビュー
+                   （成果・主要業務・課題の抜粋。モバイルでも崩れないカード風リスト）= 改修4 -->
               <button
                 type="button"
-                class="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-brand-soft"
+                class="flex w-full items-start gap-3 px-3 py-2.5 text-left transition-colors hover:bg-brand-soft"
                 @click="weeklyDrawerId = w.id"
               >
                 <UiAvatar :name="reports.memberName(w.memberId)" size="sm" />
                 <span class="min-w-0 flex-1">
                   <span class="flex flex-wrap items-center gap-1.5">
                     <span class="text-[13px] font-bold">{{ reports.memberName(w.memberId) }}</span>
+                    <span class="num text-[11px] text-muted">{{ weekLabel(w.weekStart) }}</span>
                     <UiStatusBadge v-if="isWeeklyUnread(w)" tone="brand" label="未読" dot />
                   </span>
-                  <span class="block truncate text-xs text-sub">{{ w.mainWork || '—' }}</span>
+                  <span v-if="weeklyPreviewItems(w).length > 0" class="mt-1 grid gap-1">
+                    <span v-for="it in weeklyPreviewItems(w)" :key="it.label" class="grid gap-0.5">
+                      <span class="text-[10px] font-bold text-muted">{{ it.label }}</span>
+                      <span class="line-clamp-2 text-xs text-sub">{{ it.text }}</span>
+                    </span>
+                  </span>
+                  <span v-else class="mt-1 block text-xs text-muted">（本文の記載がありません）</span>
+                  <span class="mt-1.5 block text-[10px] text-muted">タップで全項目を表示</span>
                 </span>
-                <UiStatusBadge tone="ok" :label="REPORT_STATUS_LABELS.submitted" dot />
+                <UiStatusBadge tone="ok" :label="REPORT_STATUS_LABELS.submitted" dot class="shrink-0" />
               </button>
             </li>
           </ul>
@@ -2077,7 +2149,12 @@ async function onMarkUnreadWeekly(): Promise<void> {
 
         <!-- エディタ -->
         <div v-else class="grid gap-3">
-          <div class="flex items-center justify-end">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <!-- 例文を挿入（改修9。入力済みなら上書き確認 = 原則9.5。SoT = utils/weekly-report-templates.ts） -->
+            <button type="button" class="btn btn-sm" @click="insertWeeklyExample">
+              <FileText class="h-3.5 w-3.5" aria-hidden="true" />
+              例文を挿入
+            </button>
             <button type="button" class="btn btn-sm" :aria-pressed="wkMdPreview" @click="wkMdPreview = !wkMdPreview">
               <component :is="wkMdPreview ? Pencil : Eye" class="h-3.5 w-3.5" aria-hidden="true" />
               {{ wkMdPreview ? '編集に戻る' : 'プレビュー' }}
@@ -2241,7 +2318,8 @@ async function onMarkUnreadWeekly(): Promise<void> {
             <p v-else class="text-[13px]">—</p>
           </div>
 
-          <!-- 改善のタネ連携（同じ著者・同じ日付の投稿を日報詳細に合わせて表示。可視範囲は poipoi の既存モデル） -->
+          <!-- 改善のタネ連携（同じ著者・同じ日付の投稿を日報詳細に合わせて表示。可視範囲は poipoi の既存モデル。
+               時刻(hh:mm)は非表示 = 改修依頼 2026-08-19（他者の記録閲覧ビューでは本文のみで足りる）） -->
           <div v-if="drawerPoipoiPosts.length > 0">
             <p class="label">改善のタネ</p>
             <ul class="grid gap-2">
@@ -2250,7 +2328,6 @@ async function onMarkUnreadWeekly(): Promise<void> {
                 :key="p.id"
                 class="rounded-lg border border-line bg-surface-soft p-2.5"
               >
-                <p class="num mb-1 text-[11px] text-muted">{{ fmtTime(p.createdAt) }}</p>
                 <UiMarkdown :source="p.body" />
               </li>
             </ul>

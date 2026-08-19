@@ -169,25 +169,35 @@ describe('要望タグ（壁打ち/お任せ = F-42-17・改修依頼 2026-08-18
     expect(IMPROVEMENT_REQUEST_TAG_META.entrust.label).toBe('お任せ')
     expect(IMPROVEMENT_REQUEST_TAG_META.entrust.description).toContain('開発側の解釈')
   })
-  it('buildCodingPrompt はタグを〔壁打ち〕〔お任せ〕で明記し、読み方の注記を添える', () => {
+  it('buildCodingPrompt は壁打ち/お任せタグをプロンプトに含めない（人間運用用 = 改修依頼 2026-08-19）', () => {
     const prompt = buildCodingPrompt([{
       title: 't', summary: 's', detail: 'd', status: 'accepted', pagePaths: ['/x'],
       requests: [
-        { pageLabel: 'X', pagePath: '/x', body: '直したい A', tags: ['entrust'] },
-        { pageLabel: 'X', pagePath: '/x', body: '直したい B', tags: ['brainstorm', 'entrust'] },
+        { pageLabel: 'X', pagePath: '/x', body: '直したい A', ...({ tags: ['entrust'] } as object) },
+        { pageLabel: 'X', pagePath: '/x', body: '直したい B', ...({ tags: ['brainstorm', 'entrust'] } as object) },
       ],
     }])
-    expect(prompt).toContain('〔お任せ〕 直したい A')
-    expect(prompt).toContain('〔壁打ち〕〔お任せ〕 直したい B')
-    expect(prompt).toContain('開発側の解釈で進めてよい')
+    // タグの行頭マーク・読み方の凡例は出力しない。本文自体は従来どおり出る
+    expect(prompt).not.toContain('〔')
+    expect(prompt).not.toContain('タグの読み方')
+    expect(prompt).toContain('直したい A')
+    expect(prompt).toContain('直したい B')
   })
-  it('タグ無しの要望はプロンプト出力が従来と同一（下位互換 = 原則7）', () => {
+  it('buildCodingPrompt は受付箱の要望コメントを反映する（改修依頼 2026-08-19）', () => {
+    const prompt = buildCodingPrompt([{
+      title: 't', summary: 's', detail: 'd', status: 'accepted', pagePaths: ['/x'],
+      requests: [{ pageLabel: 'X', pagePath: '/x', body: '直したい', comments: ['配色の範囲を確認したい'] }],
+    }])
+    expect(prompt).toContain('- コメント: 配色の範囲を確認したい')
+  })
+  it('タグ無し・コメント無しの要望はプロンプト出力が従来と同一（下位互換 = 原則7）', () => {
     const prompt = buildCodingPrompt([{
       title: 't', summary: 's', detail: 'd', status: 'accepted', pagePaths: ['/x'],
       requests: [{ pageLabel: 'X', pagePath: '/x', body: '直したい' }],
     }])
     expect(prompt).not.toContain('〔')
     expect(prompt).not.toContain('お任せ')
+    expect(prompt).not.toContain('コメント:')
   })
 })
 

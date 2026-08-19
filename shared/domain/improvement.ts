@@ -398,6 +398,50 @@ export function improvementEditError(
   return null
 }
 
+/** 要望編集で更新できる項目（改修依頼 2026-08-19: 登録時の項目をすべて編集可能に）。
+ *  投稿元（pagePath/pageLabel）は記録として不変・編集対象外。
+ *  **部分更新**: body は常に必須だが tags/links/images はリクエストに実在するキーのみ返す
+ *  （送っていない項目は呼び出し側で保持する = CLAUDE.md「部分更新で未指定列を保持する」原則）。 */
+export interface ImprovementRequestEditFields {
+  body: string
+  tags?: ImprovementRequestTag[]
+  links?: string[]
+  images?: ImprovementRequestImage[]
+}
+
+/**
+ * 要望編集の入力を正規化 + 検証する純関数（API/モック共通 = パリティ）。
+ * 本文（必須・上限）・タグ（allowlist 正規化）・リンク（形式/件数）・画像（形式/件数/上限）を
+ * 投稿時（improvementRequestInputOf）と同一のルールで検証する。エラーは {code,message}
+ * （AKO-REQ-001 本文 / AKO-REQ-009 リンク / AKO-REQ-010 画像）、成功は正規化済みフィールドを返す。
+ * **部分更新**: リクエスト body に実在するキー（tags/links/images）のみ value に含める。
+ * 送っていない項目は更新対象から外し、呼び出し側が現行値を保持する（CLAUDE.md の部分更新の鉄則）。
+ * UI（RequestEditForm）は常に全項目を送るため実質的な全項目編集になるが、body だけの編集で
+ * 添付が消える事故は起きない。空配列を明示的に送れば「全削除」になる（キーが実在するため）。
+ */
+export function improvementRequestEditFields(
+  raw: { body?: unknown; tags?: unknown; links?: unknown; images?: unknown },
+): { ok: true; value: ImprovementRequestEditFields } | { ok: false; error: { code: string; message: string } } {
+  const text = String(raw.body ?? '').trim()
+  const bodyMsg = improvementBodyError(text)
+  if (bodyMsg) return { ok: false, error: { code: 'AKO-REQ-001', message: bodyMsg } }
+  const value: ImprovementRequestEditFields = { body: capCodePoints(text, IMPROVEMENT_BODY_CAP) }
+  if (Object.hasOwn(raw, 'tags')) value.tags = normalizeImprovementTags(raw.tags)
+  if (Object.hasOwn(raw, 'links')) {
+    const links = normalizeImprovementLinks(raw.links)
+    const linksMsg = improvementLinksError(links)
+    if (linksMsg) return { ok: false, error: { code: 'AKO-REQ-009', message: linksMsg } }
+    value.links = links
+  }
+  if (Object.hasOwn(raw, 'images')) {
+    const images = normalizeImprovementImages(raw.images)
+    const imagesMsg = improvementImagesError(images)
+    if (imagesMsg) return { ok: false, error: { code: 'AKO-REQ-010', message: imagesMsg } }
+    value.images = images
+  }
+  return { ok: true, value }
+}
+
 /**
  * 選別変更の可否ガード（1 件。F-42-14/18/19）。判定順 = 存在（404）→ **取消済み（409）→ 集約済み（409）**。
  * 取消済みを先に判定する: 取消済み + 集約済みの行で「集約の解除」を案内すると、解除も取消済みで
@@ -822,11 +866,12 @@ export interface PromptItemInput {
   pagePaths: string[]
   /** links / imageCount は要望の添付（省略可 = 旧呼び出しの下位互換。リンクはプロンプトに列挙・画像は件数のみ言及）。
    *  status は要望単位のステータス（省略/open 以外は【対応済み】【見送り】として明記 = プロンプト再生成に反映）。
-   *  tags は投稿時の任意タグ（省略可。〔壁打ち〕〔お任せ〕として明記 = 開発側の進め方の意思表示） */
+   *  comments は受付箱で記録した要望への時系列コメント（省略/空可。プロンプトに反映 = 改修依頼 2026-08-19）。
+   *  注: 投稿時の任意タグ（壁打ち/お任せ）は人間運用の意思表示のためプロンプトには含めない（改修依頼 2026-08-19）。 */
   requests: {
     pageLabel: string; pagePath: string; body: string
     status?: ImprovementRequestStatus; links?: string[]; imageCount?: number
-    tags?: ImprovementRequestTag[]
+    comments?: string[]
   }[]
   /** 担当者の時系列メモ（改修方針の検討過程・保留/見送り理由。プロンプトに加味する）。時系列（古い順）。省略/空可 */
   notes?: { body: string; kind: ImprovementNoteKind }[]
@@ -864,16 +909,8 @@ export function buildCodingPrompt(items: PromptItemInput[], opts?: { intro?: str
   out.push('')
   out.push(`対象の改修単位: ${items.length} 件`)
   out.push('')
-  // タグ（F-42-17）の normalize は全体で 1 回だけ行い、読み方の注記も**プロンプト全体で 1 回**出す
-  // （item ごとに同じ凡例を繰り返さない = レビュー R25。無タグは従来出力 = 下位互換）
-  const normalizedTagsByItem = items.map(it => it.requests.map(r => normalizeImprovementTags(r.tags)))
-  if (normalizedTagsByItem.some(arr => arr.some(tags => tags.length > 0))) {
-    const guide = IMPROVEMENT_REQUEST_TAGS
-      .map(t => `〔${IMPROVEMENT_REQUEST_TAG_META[t].label}〕= ${IMPROVEMENT_REQUEST_TAG_META[t].description}`)
-      .join(' ／ ')
-    out.push(`（タグの読み方: ${guide}）`)
-    out.push('')
-  }
+  // 投稿時の任意タグ（壁打ち/お任せ = F-42-17）は人間運用の意思表示のためプロンプトには含めない
+  // （改修依頼 2026-08-19。凡例も行頭マークも出さない。タグは受付箱の選別・検討用にのみ使う）
   items.forEach((it, idx) => {
     const label = it.requests.find(r => r.pageLabel.trim())?.pageLabel.trim()
       || it.pagePaths[0]
@@ -899,20 +936,19 @@ export function buildCodingPrompt(items: PromptItemInput[], opts?: { intro?: str
       if (it.requests.some(r => requestStatusOf(r) !== 'open')) {
         out.push('（【対応済み】の要望は反映済みのため再改修しないこと・【見送り】の要望は実装しないこと）')
       }
-      // タグの行頭マークは冒頭で normalize 済みの値を使う（読み方の凡例はプロンプト冒頭に 1 回 = レビュー R18/R25）
-      const normalizedTags = normalizedTagsByItem[idx] ?? []
-      it.requests.forEach((r, ri) => {
+      it.requests.forEach((r) => {
         const where = r.pageLabel.trim() || r.pagePath.trim()
         // 要望単位のステータス（open 以外は明記 = 対応済み分の再改修・見送り分の実装を防ぐ）
         const status = requestStatusOf(r)
         const statusTag = status === 'open' ? '' : `【${IMPROVEMENT_REQUEST_STATUS_META[status].label}】 `
-        // 投稿時の任意タグ（壁打ち/お任せ）を明記（未知値は normalize で落とす）
-        const tagMark = (normalizedTags[ri] ?? []).map(t => `〔${IMPROVEMENT_REQUEST_TAG_META[t].label}〕`).join('')
-        out.push(`- ${where ? `［${where}］ ` : ''}${statusTag}${tagMark ? `${tagMark} ` : ''}${r.body.trim().replace(/\s*\n\s*/g, ' ')}`)
+        out.push(`- ${where ? `［${where}］ ` : ''}${statusTag}${r.body.trim().replace(/\s*\n\s*/g, ' ')}`)
         // 添付（リンクは参照先として列挙・画像はアプリ内参照のため件数のみ言及）
         const links = (r.links ?? []).map(l => l.trim()).filter(Boolean)
         for (const link of links) out.push(`  - 参考リンク: ${link}`)
         if ((r.imageCount ?? 0) > 0) out.push(`  - 添付画像 ${r.imageCount} 件（改善要望ページの要望詳細で参照可能）`)
+        // 受付箱で記録した要望への時系列コメント（改修依頼 2026-08-19。検討経緯を AI に伝える）
+        const comments = (r.comments ?? []).map(c => c.trim()).filter(Boolean)
+        for (const comment of comments) out.push(`  - コメント: ${comment.replace(/\s*\n\s*/g, ' ')}`)
       })
     }
     // 担当者の時系列メモ（改修方針・保留/見送り理由）。AI がプロンプトを起こす際にこれも加味する
