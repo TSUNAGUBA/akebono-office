@@ -114,11 +114,15 @@ export const TAB_PERMISSION_CATALOG: Record<string, { key: string; label: string
     { key: 'all', label: '全件' },
     { key: 'routes', label: '経路設定' },
   ],
+  // 改修依頼 2026-08-19 第4弾 項目5.5: 要望系（全員閲覧可）と改修案件系（管理者のみ）へタブを分離。
+  // 既存キー（inbox/items/kanban/gantt）は後方互換で据え置き、要望系の req-kanban / req-gantt を追加（原則7）。
   improvements: [
     { key: 'inbox', label: '受付箱' },
+    { key: 'req-kanban', label: '【要望】カンバン' },
+    { key: 'req-gantt', label: '【要望】ガント' },
     { key: 'items', label: '改修案件' },
-    { key: 'kanban', label: 'カンバン' },
-    { key: 'gantt', label: 'ガントチャート' },
+    { key: 'kanban', label: '【改修案件】カンバン' },
+    { key: 'gantt', label: '【改修案件】ガント' },
   ],
   shift: [
     { key: 'confirmed', label: '確定シフト' },

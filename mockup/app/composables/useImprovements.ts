@@ -2,9 +2,11 @@
  * 改善要望（F-42）の composable。デュアルモード（mock = useMockDb + 決定的集約 / API = /v1/improvements）。
  *
  * - submit(): 各ページの「要望を送る」から生要望を追記（認証済み全員可・読み取りしない）。
- * - 管理系（items / generate / setStatus / archive / buildPrompt）は改善要望管理ページ専用。
- *   API モードでは GET /items・/requests が管理権限者のみ（canManageImprovements）のため、
- *   非権限者はそもそも管理ページに到達しない（フロントの canPath ガード + サーバー 403）。
+ * - 生要望の閲覧（GET /requests）は認証済み全員可（改修依頼 2026-08-19 第4弾: 全要望を閲覧可）。
+ *   編集は投稿者本人のみ・ステータス変更/選別/集約は管理権限者のみ（improvementEditError + サーバー 403）。
+ * - 管理系（items / generate / setStatus / archive / buildPrompt）は管理権限者専用。
+ *   API モードでは GET /items が管理権限者のみ（canManageImprovements）のため、非管理者の refresh() は
+ *   items だけ 403 → catch で握り潰し requests のみ反映する（改修案件は管理者のみ到達）。
  * - 集約は shared/domain/improvement の決定的ヒューリスティックを使う（API は Vertex → 同関数へフォールバック）。
  *   未集約の要望のみ処理し、判定済み item のステータス・編集は巻き戻さない（原則2）。
  */

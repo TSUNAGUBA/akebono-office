@@ -6795,7 +6795,16 @@ describe('改善要望（F-42）', () => {
     // 未入力は AKO-REQ-001
     expect((await api('POST', '/v1/improvements/requests', { as: MEMBER, body: { body: '  ' } })).json.error?.code).toBe('AKO-REQ-001')
 
-    // 一般は管理系を閲覧不可（AKO-PRM-001）・管理者は可
+    // 改修依頼 2026-08-19 第4弾: 生要望の一覧（/requests）は認証済み全員が閲覧できる（全要望を閲覧可）
+    const reqList = await api('GET', '/v1/improvements/requests', { as: MEMBER })
+    expect(reqList.status).toBe(200)
+    expect((reqList.json.data as { id: string }[]).some(r => r.id === (posted.json.data as { id: string }).id)).toBe(true)
+    // ただし取消済み（includeArchived）は一般には出さない（管理権限者のみ = archived_at IS NULL 固定）
+    const reqArchived = await api('GET', '/v1/improvements/requests?includeArchived=1', { as: MEMBER })
+    expect(reqArchived.status).toBe(200)
+    // ステータス変更・選別など管理系の操作は一般不可（AKO-PRM-001）
+    expect((await api('POST', `/v1/improvements/requests/${(posted.json.data as { id: string }).id}/status`, { as: MEMBER, body: { status: 'resolved' } })).status).toBe(403)
+    // 改修案件（/items）は引き続き管理権限者のみ（AKO-PRM-001）・管理者は可
     const memberList = await api('GET', '/v1/improvements/items', { as: MEMBER })
     expect(memberList.status).toBe(403)
     expect(memberList.json.error?.code).toBe('AKO-PRM-001')

@@ -40,8 +40,9 @@ export function usePermissions() {
     // attendance deny のままページだけ出すと API モードで全操作が 403 になるため、
     // メニュー・ページ表示も attendance との AND で判定し UI と API の挙動を一致させる
     if (key === 'timecard') return can('timecard') && can('attendance')
-    // 改善要望管理は既定 deny（権限を持つ人のみ・管理者は常時可）。canUseFeature（allow 既定）でなく専用判定を使う
-    if (key === 'improvements') return canManageImprovements.value
+    // 改善要望は認証済み全員が閲覧できる（改修依頼 2026-08-19 第4弾: 全要望を閲覧可）。
+    // ページ内の管理系操作（選別・ステータス変更・AI 集約・改修案件）は canManageImprovements で個別ガードする。
+    if (key === 'improvements') return true
     return can(key)
   }
 

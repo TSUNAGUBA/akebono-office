@@ -61,7 +61,7 @@ export const MENU_CARDS: Record<MenuArea, MenuCardDef[]> = {
     { id: 'status', title: '提供システム稼働状況', description: '提供システムの現在状態・稼働率・インシデント履歴', icon: 'Activity', to: '/status', featureToggle: 'status' },
     { id: 'support', title: '業務支援ツール', description: 'AI チャットボット・ドキュメント管理・外部ツール', icon: 'Wrench', to: '/support' },
     { id: 'inbox', title: '通知・エスカレーション', description: '通知の確認と、現場からの暗黙の情報共有への対応', icon: 'Inbox', to: '/inbox' },
-    { id: 'improvements', title: '改善要望', description: '各ページから寄せられた要望を AI で改修単位に整理し、対応可否・解決状況を管理', icon: 'MessageSquarePlus', to: '/improvements' },
+    { id: 'improvements', title: '改善要望', description: '各ページから寄せられた要望を全員が閲覧（自分の要望は編集可）。管理者は AI 集約・対応可否の管理も', icon: 'MessageSquarePlus', to: '/improvements' },
     { id: 'masters', title: 'マスタメンテナンス', description: 'メンバー・部署・顧客・案件・休暇種別等の基礎データ管理', icon: 'Database', to: '/masters', adminOnly: true },
     { id: 'settings', title: '設定', description: 'カスタム項目・汎用区分・外部リンク・機能トグル・監査ログ', icon: 'Settings', to: '/settings', adminOnly: true },
   ],

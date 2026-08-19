@@ -195,12 +195,17 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
     return c.json({ data: rows[0] }, 201)
   })
 
-  // ---- 要望一覧（管理）。itemId 指定 = その改修単位の元要望 / unclustered=1 = 未集約の有効要望 ----
+  // ---- 要望一覧。認証済み全員が閲覧できる（改修依頼 2026-08-19 第4弾: 全要望を閲覧可）。
+  // ただし取消済み（includeArchived）は管理権限者のみ = 一般利用者には有効な要望のみ返す。
+  // itemId 指定 = その改修単位の元要望 / unclustered=1 = 未集約の有効要望 ----
   app.get('/requests', async (c) => {
-    await requireManage(c, pool)
+    const user = c.get('user')
+    const rules = await activePermissionRules(pool)
+    const canManage = canManageImprovements(rules, subjectOf(user))
     const itemId = String(c.req.query('itemId') ?? '').trim()
     const unclustered = c.req.query('unclustered') === '1'
-    const includeArchived = c.req.query('includeArchived') === '1'
+    // 取消済みの閲覧は管理権限者のみ（一般利用者は archived_at IS NULL 固定 = 有効な全要望）
+    const includeArchived = canManage && c.req.query('includeArchived') === '1'
     const where: string[] = []
     const params: unknown[] = []
     if (itemId) { params.push(itemId); where.push(`item_id = $${params.length}`) }
