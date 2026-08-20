@@ -43,11 +43,12 @@ async function main() {
     await page.getByLabel('要望の本文を編集').waitFor()
     check('要望編集: 本文の編集欄がある', true)
     check('要望編集: タグ（壁打ち/お任せ）の編集欄がある',
-      (await page.getByText('タグ（任意）').count()) >= 1)
+      (await page.getByRole('radiogroup', { name: '要望のタグ' }).count()) >= 1)
     check('要望編集: 参考リンクの追加ができる',
       (await page.getByRole('button', { name: 'リンクを追加' }).count()) >= 1)
+    // 画像は本文一体型ツールバーの「画像を添付」ボタン（2026-08-20 のフォーム統合に追随）
     check('要望編集: 画像の追加ができる',
-      (await page.getByRole('button', { name: /画像を追加/ }).count()) >= 1)
+      (await page.getByRole('button', { name: /画像を添付/ }).count()) >= 1)
 
     // ===== 日報・週報 =====
     await page.goto(`${BASE}/#/reports`)
@@ -61,7 +62,9 @@ async function main() {
         return !!month && month.getAttribute('aria-pressed') === 'true'
       }))
 
-    // 改修4: 全員の週報タブに週報内容のプレビューが出る
+    // 改修4: 全員の週報タブに週報内容のプレビューが出る（週報はメニュー分割後 ?kind=weekly = 2026-08-19 第4弾に追随）
+    await page.goto(`${BASE}/#/reports?kind=weekly`)
+    await page.getByRole('main').getByRole('heading', { level: 1 }).waitFor()
     await page.getByRole('tab', { name: '全員の週報' }).click()
     // 週報プレビュー（項目ラベル）が一覧に出る（少なくとも1件のシード週報がある前提。無ければスキップ扱い）
     const hasWeeklyRows = (await page.locator('main').getByText(/今週の主要業務|今週の成果|今週の課題/).count()) > 0
@@ -69,13 +72,16 @@ async function main() {
       hasWeeklyRows || (await page.getByText(/週報がありません|提出済みの週報はありません|ありません/).count()) > 0)
 
     // 改修8: 自分の日報に改善のタネが表示される（シードで当日分がある想定。無ければセクション非表示でOK）
-    await page.getByRole('tab', { name: '自分の日報' }).click()
+    await page.goto(`${BASE}/#/reports`)
     await page.getByRole('main').getByRole('heading', { level: 1 }).waitFor()
+    await page.getByRole('tab', { name: '自分の日報' }).click()
     // 改善のタネのセクションは v-if。存在すれば「改善のタネ」ラベルが提出済み表示内に出る。
     // ここでは「例外なくクラッシュせず表示できる」ことと、改修9 の例文挿入ボタンの存在を主に確認する。
     check('自分の日報: ページが正しく描画される', true)
 
-    // 改修9: 自分の週報に「例文を挿入」ボタンがある
+    // 改修9: 自分の週報に「例文を挿入」ボタンがある（週報は ?kind=weekly ページ側）
+    await page.goto(`${BASE}/#/reports?kind=weekly`)
+    await page.getByRole('main').getByRole('heading', { level: 1 }).waitFor()
     await page.getByRole('tab', { name: '自分の週報' }).click()
     await page.getByRole('button', { name: '週報を書く' }).first().click().catch(() => {})
     await page.getByRole('button', { name: '例文を挿入' }).first().waitFor()
