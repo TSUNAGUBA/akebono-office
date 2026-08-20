@@ -43,6 +43,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { path: '/reports?kind=monthly', label: '月報', icon: 'CalendarClock' },
       { path: '/ai-assistant', label: 'AI業務アシスタント', icon: 'Sparkles' },
       { path: '/customer-log', label: '顧客活動', icon: 'MessageSquare' },
+      { path: '/customer-context', label: '顧客コンテキスト', icon: 'BookUser' },
       { path: '/support-activity', label: 'サポート活動', icon: 'Headset' },
       // 案件詳細（/sales-activity/<id> 等）でもアクティブ表示する（案件ヘッダー + 活動ログ構造 = 2026-08-20）
       { path: '/sales-activity', label: '営業活動', icon: 'Handshake', matchPrefix: true },

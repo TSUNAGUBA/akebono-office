@@ -319,6 +319,12 @@ const CUSTOM_COLLECTION_ENDPOINTS: Record<string, string> = {
   // 案件にネストする資源（/v1/sales-activities/:id/logs）で全量ハイドレーションに向かないため、
   // API モードでは案件詳細ページが都度フェッチする（useActivityLogs の pageFetch/loadArchived）。
   // モックモードのみ MockDbShape のコレクションを使う（この設計判断の詳細は useActivityLogs.ts の docblock）
+  // 顧客コンテキスト（0076。改修依頼 2026-08-20）: 定性情報（1社1行 = 顧客数が上限）とメモを
+  // 全量ハイドレーションする設計判断。メモは会社横断でも「顧客ごとの経営メモ」で件数が緩やかにしか
+  // 伸びないため全量を採る（活動ログのような案件ネスト資源とは性質が異なる。将来件数が問題になったら
+  // useActivityLogs と同じ会社単位の遅延フェッチへ切替える）。書込は useCustomerContext の専用経路
+  customerContexts: '/v1/customer-contexts',
+  customerContextNotes: '/v1/customer-contexts/notes',
 }
 
 /**

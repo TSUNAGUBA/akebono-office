@@ -49,6 +49,7 @@ export const MENU_CARDS: Record<MenuArea, MenuCardDef[]> = {
     { id: 'poipoi', title: '改善のタネ', description: '気づき・改善アイデアを投げ込む改善のタネ。AI の参照対象・管理者はチーム改善のため閲覧可', icon: 'StickyNote', to: '/poipoi' },
     { id: 'minutes', title: '議事録', description: '会議の記録を蓄積。全員が参照でき AI の参照対象', icon: 'NotebookPen', to: '/minutes' },
     { id: 'customer-log', title: '顧客活動', description: 'いつ・どの顧客と・どんな活動をしたかを記録（全員の記録を閲覧可）。AI の参照対象（自分の記録）', icon: 'MessageSquare', to: '/customer-log' },
+    { id: 'customer-context', title: '顧客コンテキスト', description: '顧客の基本情報・関係・定性/定量情報・メモを 1 画面で可視化。AI の Web 調査で定性情報を更新', icon: 'BookUser', to: '/customer-context' },
     { id: 'support-activity', title: 'サポート活動', description: '顧客サポートの受付〜解決の記録。対応・原因・解決と改善ナレッジのタネ', icon: 'Headset', to: '/support-activity' },
     { id: 'sales-activity', title: '営業活動', description: '商談を案件として管理し活動ログを記録。AI集約でフェーズ・金額・Next Action と経緯を確認', icon: 'Handshake', to: '/sales-activity' },
     { id: 'partner-activity', title: 'ビジネスパートナー活動', description: 'パートナー連携テーマを案件として管理し活動ログを記録。案件化したら商談へリンク', icon: 'Users', to: '/partner-activity' },
@@ -93,7 +94,7 @@ export const MENU_CARDS: Record<MenuArea, MenuCardDef[]> = {
 export const DEFAULT_MENU_CATEGORIES: Record<MenuArea, MenuCategoryDef[]> = {
   dashboard: [
     { id: 'decision', label: '意思決定支援', cardIds: ['decision'] },
-    { id: 'work', label: '業務ツール', cardIds: ['timecard', 'attendance', 'shift', 'reports', 'reports-weekly', 'reports-monthly', 'ai-assistant', 'poipoi', 'minutes', 'customer-log', 'support-activity', 'sales-activity', 'partner-activity', 'workflow'] },
+    { id: 'work', label: '業務ツール', cardIds: ['timecard', 'attendance', 'shift', 'reports', 'reports-weekly', 'reports-monthly', 'ai-assistant', 'poipoi', 'minutes', 'customer-log', 'customer-context', 'support-activity', 'sales-activity', 'partner-activity', 'workflow'] },
     { id: 'ai-company', label: 'AIネイティブカンパニー', cardIds: ['ai-company'] },
     { id: 'insights', label: '経営・状況', cardIds: ['sales', 'media', 'status'] },
     { id: 'support', label: '業務支援', cardIds: ['support', 'inbox'] },

@@ -7,6 +7,7 @@ import type {
   AiActivityLog, AiEmployee, AiRole, AiTask, AkebonoWish, ApprovalLog,
   AppConfigItem, AppNotification, AttendanceFixRequest, AttendanceRoute, AttendanceRule, AuditLog, CalendarEvent, ChatMessage, ChatSession, DirectRequest, PermissionRule,
   CodeMasterItem, Company, CompanyRelation, Contact, ContactRelation,
+  CustomerContext, CustomerContextNote,
   CustomerLog, CustomFieldDef, DailyReport, DecisionLog, DecisionTheme, DelegateSetting, Department,
   DocumentNode, Escalation, EscalationRule, ExternalLink, FeatureToggle, HearingLog, Holiday,
   Industry, KnowledgeArticle, LeaveGrant, LeaveRequest, LeaveType, Member, MonthlyReport, Project,
@@ -39,6 +40,7 @@ import * as decision from './decision'
 import * as support from './support'
 import * as misc from './misc'
 import { buildCustomerLogs } from './customer-logs'
+import { buildCustomerContextNotes, buildCustomerContexts } from './customer-context'
 import { buildPartnerActivities, buildPartnerActivityLogs, buildSalesActivities, buildSalesActivityLogs, buildSupportActivities } from './activities'
 import * as media from './media'
 import { buildCalendarEvents, buildLeaveGrants, buildPunchHistory, buildSalesMonthly, buildSpecialLeaveGrants, buildTaskPlans, buildUptimeDaily } from './history'
@@ -63,6 +65,13 @@ export interface MockDbShape {
    */
   salesActivityLogs: ActivityLog[]
   partnerActivityLogs: ActivityLog[]
+  /**
+   * 顧客コンテキスト（改修依頼 2026-08-20）: 顧客ごとの定性情報（1社1行 = 設定系・upsert）と
+   * 時系列メモ（記録系 = 追記 + 論理取消 archivedAt。research = AI リサーチ反映の自動追記）。
+   * API モードは /v1/customer-contexts（+ /notes）の全量ハイドレーション（CUSTOM_COLLECTION_ENDPOINTS）
+   */
+  customerContexts: CustomerContext[]
+  customerContextNotes: CustomerContextNote[]
   companies: Company[]
   contacts: Contact[]
   relationTypes: RelationType[]
@@ -199,6 +208,8 @@ export function buildSeed(): MockDbShape {
     partnerActivities: buildPartnerActivities(),
     salesActivityLogs: buildSalesActivityLogs(),
     partnerActivityLogs: buildPartnerActivityLogs(),
+    customerContexts: buildCustomerContexts(),
+    customerContextNotes: buildCustomerContextNotes(),
     companies: [...core.seedCompanies, ...akebono.seedAkebonoCompanies],
     contacts: core.seedContacts,
     relationTypes: core.seedRelationTypes,

@@ -21,6 +21,7 @@ import { akebonoTradeRoutes } from './routes/akebono-trade'
 import { partnerActivitiesRoutes, salesActivitiesRoutes, supportActivitiesRoutes } from './routes/activities'
 import { attendanceRoutes } from './routes/attendance'
 import { configsRoutes } from './routes/configs'
+import { customerContextsRoutes } from './routes/customer-contexts'
 import { customerLogsRoutes } from './routes/customer-logs'
 import { escalationsRoutes } from './routes/escalations'
 import { holidaysRoutes } from './routes/holidays'
@@ -239,6 +240,8 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
   app.route('/v1/search', searchRoutes(pool, env))
   app.route('/v1/notes', notesRoutes(pool, env))
   app.route('/v1/customer-logs', customerLogsRoutes(pool, env))
+  // 顧客コンテキスト（定性情報 + メモ + AI リサーチ。改修依頼 2026-08-20）
+  app.route('/v1/customer-contexts', customerContextsRoutes(pool, env))
   // 活動記録 3 種（0067）: サポート/営業/ビジネスパートナー活動（チーム共有の記録系。改修依頼 2026-08-18）
   app.route('/v1/support-activities', supportActivitiesRoutes(pool))
   app.route('/v1/sales-activities', salesActivitiesRoutes(pool))

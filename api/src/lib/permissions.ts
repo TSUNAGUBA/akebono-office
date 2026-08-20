@@ -76,6 +76,7 @@ const PATH_FEATURES: [string, string][] = [
   ['/v1/akebono', 'akebono'],
   ['/v1/documents', 'documents'],
   ['/v1/customer-logs', 'customer-log'],
+  ['/v1/customer-contexts', 'customer-context'],
   ['/v1/support-activities', 'support-activity'],
   ['/v1/sales-activities', 'sales-activity'],
   ['/v1/partner-activities', 'partner-activity'],

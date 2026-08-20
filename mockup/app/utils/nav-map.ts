@@ -107,6 +107,17 @@ export const NAV_MAP: Record<string, NavMapEntry> = {
       PERMISSIONS,
     ],
   },
+  // 顧客コンテキスト（改修依頼 2026-08-20）: 顧客軸の統合ビュー。関連 = 顧客系マスタと活動記録
+  '/customer-context': {
+    parent: HOME,
+    related: [
+      { to: '/customer-log', label: '顧客活動' },
+      { to: '/sales-activity', label: '営業活動' },
+      { to: '/support-activity', label: 'サポート活動' },
+      CUSTOMERS,
+      { to: '/masters/relations-company', label: '顧客関係(会社)マスタ', adminOnly: true },
+    ],
+  },
   '/support-activity': {
     parent: HOME,
     related: [
