@@ -207,7 +207,8 @@ export function useNotificationChannels() {
   /** テスト送信（API = 自分宛に実送信 / mock = デモ。トーストは呼び出し側で表示） */
   async function sendTest(service: ChatService): Promise<Result> {
     if (isApi) {
-      return apiResult(() => apiFetch(`/v1/notification-channels/${service}/test`, { method: 'POST' }))
+      // 実送信はリトライ（最大 1+2+4s）込みで長引きうるため延長（レビュー R1）
+      return apiResult(() => apiFetch(`/v1/notification-channels/${service}/test`, { method: 'POST', timeoutMs: 60_000 }))
     }
     const m = mockLinks.value[service]
     if (!m?.connected) {

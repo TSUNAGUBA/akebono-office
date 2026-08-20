@@ -1061,7 +1061,14 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
  */
 export async function runReportReminders(pool: pg.Pool): Promise<{ notified: number }> {
   let notified = 0
+  // Cloud Scheduler の重複起動・リトライが重なった場合の全員二重通知を防ぐ（レビュー R1）。
+  // advisory lock はセッション（接続）単位のため専用クライアントで取得し、finally で必ず解放する。
+  // 取れなければ他プロセスが実行中 = このランは何もしない（冪等・原則2）
+  const lockClient = await pool.connect()
   try {
+    const lockQ = await lockClient.query<{ locked: boolean }>(
+      `SELECT pg_try_advisory_lock(hashtext('jobs:report-reminders')) AS locked`)
+    if (!lockQ.rows[0]?.locked) return { notified: 0 }
     const { rows: cfgRows } = await pool.query<{ key: string; value: unknown }>(
       `SELECT key, value FROM app_configs WHERE key IN ('report-reminder', 'report-reminder-last-sent')`)
     const config = parseReportReminderConfig(cfgRows.find(r => r.key === 'report-reminder')?.value)
@@ -1099,6 +1106,14 @@ export async function runReportReminders(pool: pg.Pool): Promise<{ notified: num
       [JSON.stringify(today)])
   } catch (e) {
     console.warn('runReportReminders failed (non-blocking):', (e as Error).message)
+  } finally {
+    try {
+      await lockClient.query(`SELECT pg_advisory_unlock(hashtext('jobs:report-reminders'))`)
+      lockClient.release()
+    } catch (e) {
+      // unlock 失敗時はプールへ戻すとロックが残留するため、接続ごと破棄して確実に解放する
+      lockClient.release(e as Error)
+    }
   }
   return { notified }
 }

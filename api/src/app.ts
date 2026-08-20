@@ -244,8 +244,8 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
   app.route('/v1/customer-contexts', customerContextsRoutes(pool, env))
   // 活動記録 3 種（0067）: サポート/営業/ビジネスパートナー活動（チーム共有の記録系。改修依頼 2026-08-18）
   app.route('/v1/support-activities', supportActivitiesRoutes(pool))
-  app.route('/v1/sales-activities', salesActivitiesRoutes(pool))
-  app.route('/v1/partner-activities', partnerActivitiesRoutes(pool))
+  app.route('/v1/sales-activities', salesActivitiesRoutes(pool, env))
+  app.route('/v1/partner-activities', partnerActivitiesRoutes(pool, env))
   app.route('/v1/knowledge', knowledgeRoutes(pool, env))
   app.route('/v1/documents', documentsRoutes(pool, env))
   app.route('/v1/media', mediaRoutes(pool, env))

@@ -341,11 +341,29 @@ async function sendGoogleChatDm(
       { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(EXTERNAL_TIMEOUT_MS) })
     if (findRes.status === 429 || findRes.status >= 500) return 'retry'
     if (findRes.status === 401) return 'auth'
-    if (!findRes.ok) {
+    let space: string | undefined
+    if (findRes.ok) {
+      space = ((await findRes.json()) as { name?: string }).name
+    } else if (findRes.status === 404) {
+      // DM スペース未作成（本人が Google Chat で自分宛 DM を一度も開いていない）= spaces.setup で作成を試みる
+      // （レビュー R1: 見つからない → 全通知が黙って失われる、への対処。setup も失敗したら fail = 非ブロッキング）
+      const setupRes = await fetch(`${GOOGLE_CHAT_BASE}/spaces:setup`, {
+        method: 'POST',
+        headers: { 'authorization': `Bearer ${token}`, 'content-type': 'application/json' },
+        signal: AbortSignal.timeout(EXTERNAL_TIMEOUT_MS),
+        body: JSON.stringify({
+          space: { spaceType: 'DIRECT_MESSAGE', singleUserBotDm: false },
+          memberships: [{ member: { name: `users/${link.externalUserId}`, type: 'HUMAN' } }],
+        }),
+      })
+      if (setupRes.status === 429 || setupRes.status >= 500) return 'retry'
+      if (setupRes.status === 401) return 'auth'
+      if (setupRes.ok) space = ((await setupRes.json()) as { name?: string }).name
+      else console.warn('google chat spaces.setup failed:', setupRes.status)
+    } else {
       console.warn('google chat findDirectMessage failed:', findRes.status)
       return 'fail' // 403 等は設定不備の可能性（API 未有効化）= 失効扱いにしない
     }
-    const space = ((await findRes.json()) as { name?: string }).name
     if (!space) return 'fail'
     // ② メッセージ作成
     const res = await fetch(`${GOOGLE_CHAT_BASE}/${space}/messages`, {

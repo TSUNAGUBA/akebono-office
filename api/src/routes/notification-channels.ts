@@ -401,7 +401,9 @@ export function notificationChannelsRoutes(pool: pg.Pool, env: Env): Hono {
       throw err('AKO-NCH-004', `${label} の認証が無効になっています。再連携してからお試しください`, 502)
     }
     if (result === 'fail') {
-      throw err('AKO-NCH-004', `${label} へのテスト送信に失敗しました。時間をおいて再試行してください`, 502)
+      throw err('AKO-NCH-004', service === 'google_chat'
+        ? `${label} へのテスト送信に失敗しました。Google Chat API の有効化と、Chat で自分宛の DM が利用できるかを確認のうえ再試行してください`
+        : `${label} へのテスト送信に失敗しました。時間をおいて再試行してください`, 502)
     }
     return c.json({ data: { ok: true } })
   })

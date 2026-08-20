@@ -66,6 +66,9 @@ const PATH_FEATURES: [string, string][] = [
   ['/v1/workflows', 'workflow'],
   ['/v1/shifts', 'shift'],
   ['/v1/task-plans', 'ai-assistant'],
+  // AIで整形（format-text）は改善要望フォーム等の汎用入力サポート = 認証済み全員可（改修依頼 2026-08-20）。
+  // /v1/assist 全体の ai-assistant ゲートより先に最長一致で除外する（'' = ガード対象外。レビュー R1 対応）
+  ['/v1/assist/format-text', ''],
   ['/v1/assist', 'ai-assistant'],
   ['/v1/calendar', 'ai-assistant'],
   ['/v1/decisions', 'decision'],
@@ -87,7 +90,7 @@ export function featureGuard(pool: pg.Pool): MiddlewareHandler {
   return async (c, next) => {
     const path = new URL(c.req.url).pathname
     const hit = PATH_FEATURES.find(([p]) => path === p || path.startsWith(`${p}/`))
-    if (!hit) return next()
+    if (!hit || hit[1] === '') return next() // '' = 明示のガード対象外（認証のみで全員可）
     const rules = await activePermissionRules(pool)
     if (rules.length === 0) return next() // ルール未設定 = 既定 allow（下位互換）
     const user = c.get('user')

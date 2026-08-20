@@ -219,6 +219,16 @@ function openReport(r: PeriodReport): void {
   drawerId.value = r.id
   if (r.memberId !== currentUserId.value) void reports.markReportRead(props.kind, r.id)
 }
+
+/** 未読に戻す（自動既読の取消フロー = 原則9.5。週報/月報共通。レビュー R1 = 月報に取消導線が無かった） */
+async function onMarkUnread(): Promise<void> {
+  const r = drawerReport.value
+  if (!r) return
+  const res = await reports.markReportUnread(props.kind, r.id)
+  if (!res.ok) { show(`${res.error.code}: ${res.error.message}`, 'crit'); return }
+  drawerId.value = null
+  show('未読に戻しました')
+}
 </script>
 
 <template>
@@ -451,6 +461,10 @@ function openReport(r: PeriodReport): void {
         <div><p class="label">{{ L.cur }}うまくいったこと・続けたいこと</p><UiMarkdown v-if="drawerReport.goodPoints" :source="drawerReport.goodPoints" /><p v-else class="text-[13px]">—</p></div>
         <div><p class="label">{{ L.next }}の最重要テーマ（最大3つ）</p><UiMarkdown v-if="drawerReport.nextWeek" :source="drawerReport.nextWeek" /><p v-else class="text-[13px]">—</p></div>
         <div><p class="label">チーム共有事項</p><p class="text-[13px]">{{ drawerReport.teamShareKind || WEEKLY_TEAM_SHARE_DEFAULT }}{{ drawerReport.teamShareNote ? `／${drawerReport.teamShareNote}` : '' }}</p></div>
+        <!-- 自動既読の取消（他メンバーの提出済みのみ = 自分のレポートは既読管理の対象外。原則9.5） -->
+        <div v-if="drawerReport.memberId !== currentUserId" class="flex justify-end border-t border-line pt-2">
+          <button type="button" class="btn btn-ghost btn-sm" @click="onMarkUnread">未読に戻す</button>
+        </div>
       </div>
     </UiDrawer>
   </div>

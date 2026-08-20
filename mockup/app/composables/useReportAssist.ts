@@ -208,7 +208,7 @@ export function useReportAssist() {
   async function generateDraft(memberId: string, date: string): Promise<ReportDraft> {
     if (isApi) {
       try {
-        return await apiFetch<ReportDraft>('/v1/assist/report-draft', { method: 'POST', body: { date } })
+        return await apiFetch<ReportDraft>('/v1/assist/report-draft', { method: 'POST', body: { date }, timeoutMs: 60_000 })
       } catch {
         // API 断でもフォームを空で返さない（材料 = API キャッシュのヒューリスティック。
         // キャッシュ未到着分は空のまま = モックシードを事実として混入させない）

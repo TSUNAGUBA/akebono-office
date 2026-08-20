@@ -250,19 +250,6 @@ async function findLog(
   return rows[0]
 }
 
-/**
- * digest 生成用の Vertex 設定。activities のルートファクトリは pool のみを受け取る契約
- * （app.ts のマウント行を変えない）ため、generateJson が参照する 3 項目だけを loadEnv と
- * 同一の既定値で process.env から読む（他フィールドは digest 経路では未使用）。
- */
-function vertexEnv(): Env {
-  return {
-    vertexProjectId: process.env.VERTEX_PROJECT_ID ?? '',
-    vertexLocation: process.env.VERTEX_LOCATION ?? 'global',
-    vertexModel: process.env.VERTEX_MODEL ?? 'gemini-2.5-flash',
-  } as Env
-}
-
 const DIGEST_SCHEMA = {
   type: 'object',
   properties: {
@@ -274,9 +261,8 @@ const DIGEST_SCHEMA = {
 
 /** LLM 集約（Vertex → 正規化）。無効環境・失敗・空出力は null（呼び出し側でヒューリスティックへ = 原則4） */
 async function llmActivityDigest(
-  header: ActivityDigestHeader, logs: ActivityDigestLog[],
+  env: Env, header: ActivityDigestHeader, logs: ActivityDigestLog[],
 ): Promise<{ summary: string; highlights: string[] } | null> {
-  const env = vertexEnv()
   if (!env.vertexProjectId) return null
   const material = logs.map(l => ({
     loggedOn: l.loggedOn, kind: l.kind, title: l.title,
@@ -308,7 +294,7 @@ async function llmActivityDigest(
  * - digest はログ全量（有効のみ・時系列昇順）→ LLM → 失敗時ヒューリスティック → ai_digest へ上書き保管。
  *   導出キャッシュの再生成であり案件の updated_at は動かさない（記録の更新と区別する）
  */
-function activityLogRoutes(app: Hono, pool: pg.Pool, spec: ActivityLogSpec): void {
+function activityLogRoutes(app: Hono, pool: pg.Pool, env: Env, spec: ActivityLogSpec): void {
   const logFrom = `${spec.logTable} al`
 
   app.get('/:id/logs', async (c) => {
@@ -419,7 +405,7 @@ function activityLogRoutes(app: Hono, pool: pg.Pool, spec: ActivityLogSpec): voi
        FROM ${spec.logTable} WHERE activity_id = $1 AND active = true
        ORDER BY logged_on ASC, created_at ASC, id ASC`, [id])
     const header = spec.headerOf(parent)
-    const llm = await llmActivityDigest(header, logRows)
+    const llm = await llmActivityDigest(env, header, logRows)
     const result = llm ?? heuristicActivityDigest(header, logRows)
     const digest: ActivityAiDigest = { ...result, generatedAt: nowJstIso(), logCount: logRows.length, llm: llm !== null }
     // 導出キャッシュの上書きのみ（updated_at は動かさない = 記録の編集と区別）
@@ -612,7 +598,7 @@ function salesInputOf(b: Record<string, unknown>, userId: string): SalesActivity
   }
 }
 
-export function salesActivitiesRoutes(pool: pg.Pool): Hono {
+export function salesActivitiesRoutes(pool: pg.Pool, env: Env): Hono {
   const app = new Hono()
   const REFS = '顧客・担当者'
 
@@ -723,7 +709,7 @@ export function salesActivitiesRoutes(pool: pg.Pool): Hono {
   })
 
   // 活動ログ + AI集約（案件ヘッダー + 活動ログ構造。改修依頼 2026-08-20）
-  activityLogRoutes(app, pool, {
+  activityLogRoutes(app, pool, env, {
     code: 'AKO-SAL',
     parentTable: 'sales_activities',
     parentFrom: 'sales_activities sa',
@@ -799,7 +785,7 @@ async function resolvePartnerRefs(
   }
 }
 
-export function partnerActivitiesRoutes(pool: pg.Pool): Hono {
+export function partnerActivitiesRoutes(pool: pg.Pool, env: Env): Hono {
   const app = new Hono()
   const REFS = '自社担当者・関連商談'
 
@@ -910,7 +896,7 @@ export function partnerActivitiesRoutes(pool: pg.Pool): Hono {
   })
 
   // 活動ログ + AI集約（営業側と同一の共通実装 = 原則3）
-  activityLogRoutes(app, pool, {
+  activityLogRoutes(app, pool, env, {
     code: 'AKO-PTN',
     parentTable: 'partner_activities',
     parentFrom: 'partner_activities pa',

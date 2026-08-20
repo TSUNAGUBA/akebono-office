@@ -17,6 +17,7 @@ import { recentWeekStarts } from '~/utils/report-weeks'
 
 const reports = useReports()
 const { currentUserId } = useCurrentUser()
+const { show } = useToast()
 
 // ---------- 表示範囲（直近 4/8/12 週。既定 = 4 週） ----------
 
@@ -101,6 +102,16 @@ function openCell(c: MatrixCell): void {
   drawerId.value = c.report.id
   // 他人の提出済み週報は開いた時点で既読（PeriodPanel と同じ挙動。失敗は非ブロッキング）
   if (c.report.memberId !== currentUserId.value) void reports.markReportRead('weekly', c.report.id)
+}
+
+/** 未読に戻す（自動既読の取消フロー = 原則9.5・レビュー R1） */
+async function onMarkUnread(): Promise<void> {
+  const r = drawerReport.value
+  if (!r) return
+  const res = await reports.markReportUnread('weekly', r.id)
+  if (!res.ok) { show(`${res.error.code}: ${res.error.message}`, 'crit'); return }
+  drawerId.value = null
+  show('未読に戻しました')
 }
 
 const drawerItems = computed(() => (drawerReport.value
@@ -228,6 +239,10 @@ const drawerItems = computed(() => (drawerReport.value
           <p class="label">{{ it.label }}</p>
           <UiMarkdown v-if="it.text" :source="it.text" />
           <p v-else class="text-[13px]">—</p>
+        </div>
+        <!-- 自動既読の取消（他メンバーの提出済みのみ。原則9.5・レビュー R1） -->
+        <div v-if="drawerReport.memberId !== currentUserId" class="flex justify-end border-t border-line pt-2">
+          <button type="button" class="btn btn-ghost btn-sm" @click="onMarkUnread">未読に戻す</button>
         </div>
       </div>
     </UiDrawer>

@@ -144,4 +144,14 @@ jobs:
       - name: chromium を準備
         run: cd e2e && npx playwright install --with-deps chromium
       - name: モックモード E2E スイート実行
+        env:
+          LOG_DIR: ${{ github.workspace }}/.e2e-logs
         run: bash e2e/run-mock-stack.sh
+      - name: E2E ログを保存
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-gate-logs-e2e
+          path: .e2e-logs/
+          if-no-files-found: ignore
+          retention-days: 14

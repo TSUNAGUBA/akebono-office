@@ -360,7 +360,7 @@ export function useImprovements() {
   async function generate(): Promise<GenerateResult> {
     if (isApi) {
       const res = await apiWrite<{ created: number; appended: number; clustered: number; llm: boolean }>(
-        '/v1/improvements/generate', {})
+        '/v1/improvements/generate', { timeoutMs: 60_000 })
       if (!res.ok) return { ok: false, error: res.error }
       // 集約で要望の紐付け先が変わる（画像付き要望が既存 item へ追記されうる）ため、画像ロード済みフラグを破棄
       imagesLoadedFor.clear()
@@ -820,8 +820,8 @@ export function useImprovements() {
    * 再検討日（revisitOn）が到来した継続検討（deferred）の改修単位を管理者へ通知する。
    * API 版 runImprovementRevisitReminders（日次ジョブ）の mock 相当で、改善要望ページの表示時に呼ぶ。
    * - 管理者権限（canManageImprovements）のみ・API モードは no-op（サーバーのジョブが担う）。
-   * - 多重通知防止: localStorage に item ごとの直近通知日を持ち、同じ再検討日では 1 回だけ通知する
-   *   （deferred へ再遷移して期日を更新した場合は再通知される = API 版 revisit_notified_on と同じ規則）。
+   * - 多重通知防止: localStorage に item ごとの「通知済みの再検討日」を持ち、同じ再検討日では 1 回だけ通知する
+   *   （期日を**どの方向へ**変更しても再通知される = API 版 revisit_notified_on のリセットと同じ規則。レビュー R1）。
    * - 補助処理: 失敗しても表示フローを止めない（try/catch で握りつぶす = 原則4）。
    */
   async function checkRevisitReminders(): Promise<void> {
@@ -837,12 +837,12 @@ export function useImprovements() {
       for (const it of tbl('improvementItems').value) {
         const revisit = it.revisitOn ?? ''
         if (it.status !== 'deferred' || it.archivedAt || !revisit || revisit > today) continue
-        const mark = marks[it.id]
-        if (mark && mark >= revisit) continue // 同じ再検討日は通知済み（期日を更新したら再通知）
+        // マークには「通知済みの再検討日」を保存し、期日が変わったら（過去方向のリスケ含め）再通知する
+        if (marks[it.id] === revisit) continue
         notifications.notifyAdmins('reminder', '継続検討の再検討日です',
           `継続検討の再検討日です: ${it.title}（再検討日 ${revisit}）`,
           `/improvements?tab=items&open=${it.id}`)
-        marks[it.id] = today
+        marks[it.id] = revisit
         changed = true
       }
       if (changed) localStorage.setItem(KEY, JSON.stringify(marks))

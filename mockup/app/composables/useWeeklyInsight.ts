@@ -69,7 +69,7 @@ export function useWeeklyInsight() {
   async function generate(weekStart: string): Promise<WeeklyInsightBundle> {
     if (isApi) {
       return toBundle(await apiFetch<{ company: ApiStored | null; personal: ApiStored | null }>(
-        '/v1/reports/weekly-insight', { method: 'POST', body: { weekStart } }))
+        '/v1/reports/weekly-insight', { method: 'POST', body: { weekStart }, timeoutMs: 90_000 }))
     }
     mockGenerate(weekStart)
     return mockBundle(weekStart)

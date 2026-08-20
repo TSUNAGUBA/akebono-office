@@ -227,6 +227,9 @@ export function useDashboardLayout() {
     const persisted = persistedPlacementOf(scope)
     const layout = withNotificationPlacement(materializeLayout(templateId), persisted.placement)
     if (persisted.inherit) layout.options.notificationsInherit = true
+    // セクション「その他」の非表示は層の明示選択として温存する（通知配置と同じ規約 = テンプレートは
+    // セクション構成の差し替えであって表示オプションの取消ではない。戻すのは解除 or トグル操作。レビュー R1）
+    if (baseLayoutForScope(scope).options.showOther === false) layout.options.showOther = false
     return persistLayout(layout, scope)
   }
 

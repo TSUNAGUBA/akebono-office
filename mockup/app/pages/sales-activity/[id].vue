@@ -16,8 +16,12 @@ const { tbl } = useMockDb()
 const { show } = useToast()
 const confirm = useConfirm()
 
-// API モードで直リンク・リロードでも最新の案件行（aiDigest 含む）を取得する
-onMounted(() => { void sal.refresh() })
+// API モードで直リンク・リロードでも最新の案件行（aiDigest 含む）を取得する。
+// 初回ロード完了までは「見つかりません」を出さない（正しい URL への誤エラー表示防止 = レビュー R1）
+const loaded = ref(!useApiMode())
+onMounted(async () => {
+  try { await sal.refresh() } finally { loaded.value = true }
+})
 
 const id = computed(() => String(route.params.id))
 const activity = computed<SalesActivity | null>(() => sal.byId(id.value))
@@ -93,7 +97,11 @@ async function onRestore(): Promise<void> {
 </script>
 
 <template>
-  <div v-if="!activity">
+  <div v-if="!activity && !loaded" class="py-10 text-center text-[13px] text-muted" role="status" aria-live="polite">
+    案件を読み込んでいます…
+  </div>
+
+  <div v-else-if="!activity">
     <UiEmptyState icon="Handshake" title="案件が見つかりません" hint="URL が正しいか確認してください">
       <template #action>
         <NuxtLink to="/sales-activity" class="btn btn-primary btn-sm">案件一覧へ戻る</NuxtLink>

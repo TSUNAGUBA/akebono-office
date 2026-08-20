@@ -36,6 +36,9 @@ fi
 
 MOCK_STATIC_PORT="${MOCK_STATIC_PORT:-4173}"
 WORK="$(mktemp -d)"
+# LOG_DIR を指定するとビルドログを一時領域でなくそこへ書く（CI のアーティファクト保全用。未指定 = 従来どおり一時領域）
+LOG_DIR="${LOG_DIR:-$WORK}"
+mkdir -p "$LOG_DIR"
 PIDS=()
 cleanup() {
   for pid in "${PIDS[@]:-}"; do kill "$pid" >/dev/null 2>&1 || true; done
@@ -45,9 +48,9 @@ trap cleanup EXIT
 
 echo "==> フロントをビルド（モックモード → :$MOCK_STATIC_PORT）"
 (cd "$REPO/mockup" \
-  && npx nuxt generate >"$WORK/gen-mock.log" 2>&1 \
+  && npx nuxt generate >"$LOG_DIR/gen-mock.log" 2>&1 \
   && cp -r .output/public "$WORK/dist-mock") \
-  || { echo "generate 失敗"; tail -30 "$WORK/gen-mock.log"; exit 1; }
+  || { echo "generate 失敗"; tail -30 "$LOG_DIR/gen-mock.log"; exit 1; }
 
 node "$HERE/serve.cjs" "$WORK/dist-mock" "$MOCK_STATIC_PORT" >/dev/null 2>&1 &
 PIDS+=($!)

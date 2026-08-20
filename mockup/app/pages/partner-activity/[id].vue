@@ -17,7 +17,11 @@ const { show } = useToast()
 const confirm = useConfirm()
 
 // API モードで直リンク・リロードでも最新の案件行（aiDigest 含む）を取得する
-onMounted(() => { void pact.refresh() })
+// 初回ロード完了までは「見つかりません」を出さない（正しい URL への誤エラー表示防止 = レビュー R1）
+const loaded = ref(!useApiMode())
+onMounted(async () => {
+  try { await pact.refresh() } finally { loaded.value = true }
+})
 
 const id = computed(() => String(route.params.id))
 const activity = computed<PartnerActivity | null>(() => pact.byId(id.value))
@@ -105,7 +109,11 @@ async function onRestore(): Promise<void> {
 </script>
 
 <template>
-  <div v-if="!activity">
+  <div v-if="!activity && !loaded" class="py-10 text-center text-[13px] text-muted" role="status" aria-live="polite">
+    案件を読み込んでいます…
+  </div>
+
+  <div v-else-if="!activity">
     <UiEmptyState icon="Users" title="案件が見つかりません" hint="URL が正しいか確認してください">
       <template #action>
         <NuxtLink to="/partner-activity" class="btn btn-primary btn-sm">案件一覧へ戻る</NuxtLink>

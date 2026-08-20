@@ -24,7 +24,7 @@ export function useTextAssist() {
     if (isApi) {
       try {
         const data = await apiFetch<{ text: string; llm: boolean }>('/v1/assist/format-text', {
-          method: 'POST', body: { text },
+          method: 'POST', body: { text }, timeoutMs: 60_000,
         })
         return { ok: true, text: String(data.text ?? text), llm: Boolean(data.llm) }
       } catch {

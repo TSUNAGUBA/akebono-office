@@ -231,7 +231,7 @@ export function useDashboardInsight() {
       // サーバーが集計を組み立て（Phase C）、LLM → ヒューリスティックで洞察を生成・保管する。
       // GA 連携済みで月次が取れない場合はサーバーが AKO-MEDIA-004 で拒否する（M1）
       const row = await apiFetch<ApiDashboardRow>('/v1/akebono/dashboard-insights/generate', {
-        method: 'POST', body: { scope: 'segment', segmentId },
+        method: 'POST', body: { scope: 'segment', segmentId }, timeoutMs: 60_000,
       })
       apiDashboards.value = { ...apiDashboards.value, [apiKey('segment', segmentId)]: row }
       return apiViewOf<SegmentDashboardView>(row)!
@@ -270,7 +270,7 @@ export function useDashboardInsight() {
     if (isApi) {
       // サーバーが全業態をロールアップして生成・保管する（1 業態でも GA 取得失敗なら 004 で拒否 = M1）
       const row = await apiFetch<ApiDashboardRow>('/v1/akebono/dashboard-insights/generate', {
-        method: 'POST', body: { scope: 'company' },
+        method: 'POST', body: { scope: 'company' }, timeoutMs: 60_000,
       })
       apiDashboards.value = { ...apiDashboards.value, [apiKey('company', null)]: row }
       return apiViewOf<CompanyDashboardView>(row)!

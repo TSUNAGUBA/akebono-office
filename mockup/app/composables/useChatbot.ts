@@ -246,9 +246,11 @@ export function useChatbot() {
     if (isApi) {
       isStreaming.value = true // LLM 応答待ちの間も入力を抑止し「考え中」を表示
       try {
+        // LLM 応答（Web 調査併用時は長い）。既定 15s では正常応答を打ち切り、質問二重追記の補償パスを
+        // 恒常的に踏んでしまう（レビュー R1 MAJOR）ため、サーバー側予算（30〜45s×直列）に合わせて延長する
         const res = await apiFetch<{
           fallback: boolean; sessionId?: string; content?: string; sources?: string[]; suggestions?: string[]
-        }>('/v1/chatbot/ask', { method: 'POST', body: { question: text, sessionId: currentSessionId.value } })
+        }>('/v1/chatbot/ask', { method: 'POST', body: { question: text, sessionId: currentSessionId.value }, timeoutMs: 90_000 })
         if (res.sessionId) currentSessionId.value = res.sessionId
         if (!res.fallback && res.content) {
           startStream({
