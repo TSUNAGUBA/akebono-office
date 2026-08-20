@@ -136,12 +136,14 @@ const weeks = recentWeekStarts(todayJst(), 4)   // 直近 N 週の週開始（�
 // 本実装 = API の runReportReminders（/jobs/report-reminders・Cloud Scheduler）/ mock = 起動時のデモ簡易版
 // （plugins/report-reminder.client.ts・localStorage 'ako.report-reminder-last.v1'・非ブロッキング = 原則4）
 
-// 個人別マルチチャネル通知連携（Slack / Google Chat。改修依頼 2026-08-20。純ロジック SoT = shared/domain/notification-channels.ts）
+// 個人別マルチチャネル通知連携（Slack / Google Chat。改修依頼 2026-08-20 → AKEBONO HOME 名義化 2026-08-20。
+// 純ロジック SoT = shared/domain/notification-channels.ts）
 // matrix（通知種別×チャネルの ON/OFF）= user pref 'notificationChannels'（mock=localStorage 'ako.notification-matrix.v1'。
-// 既定: in_app=ON・外部=OFF。既定と同値のセルは書かない = 最小形）。連携 = API は user_chat_links（AES-256-GCM 暗号化・0075）/
-// mock は localStorage 'ako.chat-links.v1' + 擬似同意モーダル。外部配信は api/src/lib/notify.ts（fire-and-forget・
-// 指数バックオフ・401 で要再認証 + 催促。in_app は fail-open / 外部は fail-closed）。設定 UI = プロフィール（/profile）
-const nch = useNotificationChannels()   // links / matrix / cellOn / setCell / connect / disconnect / sendTest / refresh
+// 既定: in_app=ON・外部=OFF。既定と同値のセルは書かない = 最小形）。連携 = 1 クリックの宛先解決（送信元はアプリ
+// 「AKEBONO HOME」= テナント資格情報。API は user_chat_links を宛先キャッシュに縮小・0077 / mock は localStorage
+// 'ako.chat-links.v1' に即時連携）。外部配信は api/src/lib/notify.ts（fire-and-forget・指数バックオフ・宛先の自己修復。
+// in_app は fail-open / 外部は fail-closed）。設定 UI = プロフィール（/profile）
+const nch = useNotificationChannels()   // links / matrix / cellOn / setCell / connect / disconnect / sendTest
 
 // 顧客活動（旧: 顧客ログ = F-18。一覧は全メンバー閲覧可・編集/取消は本人のみ・AI 参照は本人スコープ。2026-08-18）
 const cl = useCustomerLogs()   // allLogs / archivedOf(自分) / ensureLoaded / add / update / archive / restore / refresh

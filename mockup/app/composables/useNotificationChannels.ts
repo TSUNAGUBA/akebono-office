@@ -1,16 +1,15 @@
 /**
- * 個人別マルチチャネル通知連携（Slack / Google Chat。改修依頼 2026-08-20）。
- * 連携状態（連携/解除/要再認証）と通知マトリクス（通知種別 × チャネルの ON/OFF）を扱う。
+ * 個人別マルチチャネル通知連携（Slack / Google Chat。改修依頼 2026-08-20 →
+ * AKEBONO HOME 名義化 2026-08-20: 送信元は通知アプリ「AKEBONO HOME」）。
+ * 連携状態と通知マトリクス（通知種別 × チャネルの ON/OFF）を扱う。
  * 純ロジック（カタログ・パース・既定値）は utils/notification-channels.ts（= shared/domain）が SoT。
  *
  * デュアルモード（useCalendar / useNotificationTabs の流儀 = 原則3):
- * - mock: 連携状態 = localStorage 'ako.chat-links.v1'（擬似同意モーダルは profile.vue が表示し、
- *   許可で connect() を呼ぶ）/ マトリクス = localStorage 'ako.notification-matrix.v1'。
- *   テスト送信はトーストのみのデモ（実送信なし）
+ * - mock: 連携状態 = localStorage 'ako.chat-links.v1' / マトリクス = localStorage
+ *   'ako.notification-matrix.v1'。連携はその場で完了・テスト送信はトーストのみのデモ（実送信なし）
  * - API: GET /v1/notification-channels（連携状態 + マトリクス）・PUT /matrix（保存）・
- *   POST /:service/oauth/url → OAuth 同意画面へフルリダイレクト（復帰は /#/profile?chat=connected|error
- *   クエリ。profile.vue の onMounted が refresh + トースト + クエリ除去を行う）・
- *   POST /:service/disconnect・POST /:service/test（自分宛に実送信）
+ *   POST /:service/link（1 クリック連携 = 登録メールアドレスで宛先解決。OAuth 同意・画面遷移なし）・
+ *   POST /:service/disconnect・POST /:service/test（AKEBONO HOME 名義で自分宛に実送信）
  *
  * リアルタイム受信はスコープ外: アプリ内通知は既存の 60 秒ポーリング（useNotifications）を維持し、
  * 即時性は外部チャネル（Slack / Google Chat の DM）が担う設計。
@@ -31,7 +30,7 @@ const MOCK_MATRIX_KEY = 'ako.notification-matrix.v1'
 export interface ChatLinkView {
   service: ChatService
   label: string
-  /** 連携機能が利用可能か（API モードで OAuth 未設定なら false = 連携導線を「未設定」表示に） */
+  /** 連携機能が利用可能か（API モードでテナント資格情報が未設定なら false = 連携導線を「未設定」表示に） */
   enabled: boolean
   connected: boolean
   status: ChatLinkStatus | null
@@ -163,23 +162,20 @@ export function useNotificationChannels() {
   }
 
   /**
-   * 連携を開始する。API モードは OAuth 同意画面へフルリダイレクト（このページから離れる。
-   * 復帰後の状態反映は profile.vue の ?chat= クエリ処理 + refresh が行う）。
-   * mock は擬似同意モーダルの「許可」後に呼ばれ、即時に連携済みへ（再連携 = 上書きで status 回復）。
+   * 連携する（1 クリック連携 = AKEBONO HOME 名義化 2026-08-20）。
+   * API モードは POST /:service/link（登録メールアドレスで宛先解決）→ 状態を取り直す。
+   * mock は即時に連携済みへ（再連携 = 上書き。冪等）。
    */
   async function connect(service: ChatService): Promise<Result> {
     if (isApi) {
-      try {
-        const { url } = await apiFetch<{ url: string }>(
-          `/v1/notification-channels/${service}/oauth/url`, { method: 'POST' })
-        window.location.href = url // 成功時はページ遷移するためここへは戻らない
-        return { ok: true }
-      } catch (e) {
-        return { ok: false, error: apiErrorOf(e) }
-      }
+      // 宛先解決のワースト（Google Chat）= SA トークン交換 10s + find/setup/再 find 各 15s ≒ 55s を包含する延長
+      const res = await apiResult(() =>
+        apiFetch(`/v1/notification-channels/${service}/link`, { method: 'POST', timeoutMs: 60_000 }))
+      if (res.ok) await loadChannels(true)
+      return res
     }
     const displayName = service === 'slack'
-      ? `AKEBONO ワークスペース / ${currentUser.value.name}`
+      ? currentUser.value.name
       : currentUser.value.email || currentUser.value.name
     mockLinks.value = {
       ...mockLinks.value,
@@ -204,10 +200,11 @@ export function useNotificationChannels() {
     return { ok: true }
   }
 
-  /** テスト送信（API = 自分宛に実送信 / mock = デモ。トーストは呼び出し側で表示） */
+  /** テスト送信（API = AKEBONO HOME 名義で自分宛に実送信 / mock = デモ。トーストは呼び出し側で表示） */
   async function sendTest(service: ChatService): Promise<Result> {
     if (isApi) {
-      // 実送信はリトライ（4 試行 × 15s + 待機 ≒ 最長 70s 弱）込みで長引きうるため延長（レビュー R1/R2）
+      // 実送信はリトライ + 宛先の自己修復込みで長引きうるため延長（総和は保証しない上限。
+      // 超過時もサーバー側は完了しうる = 再読込で結果が反映される）
       return apiResult(() => apiFetch(`/v1/notification-channels/${service}/test`, { method: 'POST', timeoutMs: 90_000 }))
     }
     const m = mockLinks.value[service]
@@ -220,12 +217,6 @@ export function useNotificationChannels() {
     return { ok: true }
   }
 
-  /** OAuth 復帰後などの状態の取り直し */
-  async function refresh(): Promise<void> {
-    if (!isApi) return
-    await loadChannels(true)
-  }
-
   function writeMockLinks(value: MockLinks): void {
     if (!import.meta.client) return
     try {
@@ -233,5 +224,5 @@ export function useNotificationChannels() {
     } catch { /* 保存不可でも画面上の反映は成立（次回リロードで既定に戻る） */ }
   }
 
-  return { isLoaded, links, matrix, cellOn, setCell, connect, disconnect, sendTest, refresh }
+  return { isLoaded, links, matrix, cellOn, setCell, connect, disconnect, sendTest }
 }

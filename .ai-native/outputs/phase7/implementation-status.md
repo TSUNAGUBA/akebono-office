@@ -3886,3 +3886,75 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   ユニットテスト・挙動マトリクス照合で確認）。その他の確認項目（デプロイ挙動の前後互換 4 通り・ps1 の
   スコープ/二重呼出安全性・fetch body の二重読取なし・バックグラウンド配信の挙動不変・ドキュメント整合）は
   指摘なしで PASS。
+
+## 95. 通知の AKEBONO HOME 名義化（オペレーター指示 2026-08-20）
+
+> 指示: 「Slack も Google Chat も自分宛て DM。共に『AKEBONO HOME』からの送信としたい」→ 表示名は
+> **AKEBONO HOME で確定**（同日）。§92-6（F-49）の個人 OAuth 方式を、テナント資格情報によるアプリ名義送信へ
+> 全面切替する設計変更。
+
+### 95-1 方式（トークン管理: 個人 → テナント）
+- [x] **Slack = Bot Token 方式**: Bot Token Scopes `chat:write` / `im:write` / `users:read` / `users:read.email`。
+  宛先解決 = `users.lookupByEmail(members.email)` → `conversations.open`（DM チャンネル）。送信 =
+  `chat.postMessage`（Bot 名義 = アプリ表示名 AKEBONO HOME）。資格情報 = repository secret `SLACK_BOT_TOKEN`。
+- [x] **Google Chat = Chat アプリ（サービスアカウント）方式**: SA の JWT Bearer（RFC 7523・scope `chat.bot`。
+  新規 lib/google-sa.ts = パース/アサーション構築は純関数で単体テスト）→ `spaces.findDirectMessage(users/{email})`
+  → 404 で `spaces.setup`（409 は再検索で回収 = 冪等）→ `messages.create`（アプリ名義 = Chat API 構成の表示名
+  AKEBONO HOME）。資格情報 = repository secret `GOOGLE_CHAT_SA_KEY`（鍵 JSON）。
+- [x] **連携 = 1 クリックの宛先解決**（POST /v1/notification-channels/:service/link）: OAuth 同意・リダイレクト・
+  state ノンスを廃止。誤リンク防止はメール突合そのもの。DM プリミティブは lib/chat-dm.ts に集約し
+  連携ルートと配信エンジンで共用（原則3）。
+- [x] **0077 マイグレーション**: `user_chat_links.dm_target` 追加（解決済み宛先のキャッシュ）+ データパッチ
+  （廃止した個人トークンの消去・`reauth_required` → `connected` 復帰。冪等 WHERE ガード = 原則2/7）。
+  `chat_oauth_states` は使用停止・残置。既存連携行は**再操作不要**（dm_target 空の行は送信時に解決して
+  UPDATE する自己修復で新方式へ移行。宛先の陳腐化 = channel_not_found / スペース 404 も一度だけ再解決）。
+- [x] **認証エラーの意味変更**: 個人トークン失効（reauth_required + 本人催促）という概念を廃止し、
+  テナント資格情報の不備（管理者側の問題）としてログ + テスト送信/連携の診断詳細（FailureDetailSink 併用）
+  で運用検知する。エラーコード追加: AKO-NCH-006（旧 /oauth/url 互換シム = 409 で再読み込み案内・原則7）/
+  AKO-NCH-007（宛先解決の失敗。診断詳細併記）。
+- [x] **deploy 自動配線の更新**: secrets 同期を `SLACK_BOT_TOKEN` / `GOOGLE_CHAT_SA_KEY` へ切替（旧
+  `SLACK_CLIENT_ID/SECRET` の配線は撤去・repository secrets は削除可）。`TOKEN_ENCRYPTION_KEY` は
+  カレンダー連携のみの前提へ戻す（通知連携はトークン非保管のため不要）。**chat.googleapis.com を API
+  自動有効化へ追加**（§94-2 の障害原因候補だった手動手順の解消 = 原則1）。ps1 は `-SlackBotTokenPath` /
+  `-GoogleChatSaKeyPath`（ファイル渡し）へ差替。
+- [x] フロント: /profile の連携カードを 1 クリック連携へ（擬似同意モーダル・?chat= 復帰処理・要再認証表示を
+  撤去。送信元 AKEBONO HOME の説明文言）。mock は即時連携のデモを維持。
+- [x] ドキュメント全件更新（原則5）: deploy-guide §1-12 全面改訂（Slack アプリの Bot 化手順・Chat アプリ構成
+  手順・旧 secrets の削除可）/ production-architecture（env 表）/ functional-requirements F-49-1/49-3 /
+  api-design（AKO-NCH 表）/ data-design §1.12 / screen-design / mockup CONVENTIONS。
+- [x] 制約の記録: api.slack.com / developers.google.com とも egress 制限で公式ドキュメント裏取り不能のため、
+  安定 API（Slack Web API / Chat REST v1 / RFC 7523）に基づき実装し、想定外の応答は診断詳細で本番から
+  自己診断できる構えにした（§94-2 と同じ設計判断）。
+
+### 95-2 反復レビュー（原則9）
+- [x] R1 = 独立レビュー 2 ロール並行（コードレビュアー + システム監査官）。**全指摘に対応**:
+  - **[MAJOR] Slack API の JSON ボディ非受理**（読取系 users.lookupByEmail は form のみ = 監査指摘）→
+    slackCall を form エンコードへ一括切替（公式クライアントと同じ方式。単体テストで body 形式を固定）
+  - **[MAJOR] `spaces.setup` のアプリ認証可否が裏取り不能**（両ロール指摘。ユーザー認証専用の可能性）→
+    確実に機能するフォールバックを整備: 失敗時のエラーメッセージ（AKO-NCH-007/004）とガイドで
+    「Google Chat で AKEBONO HOME アプリへ一度 DM → findDirectMessage で解決」を案内 +
+    管理コンソールからのドメイン一括インストール（DM 自動作成）も記載。setup 自体は残す（通る環境では
+    ワンステップ不要）。**本番初回のテスト送信が実地検証を兼ねる**（診断詳細で失敗ステップが特定できる）
+  - [MINOR] ローリングデプロイの重なり窓で旧コードが 'reauth_required' を書くと配信から不可視 →
+    status を配信判定から外し（行の有無のみ）、配信成功時に 'connected' へ自己修復
+  - [MINOR] バックグラウンド配信の失敗詳細がログに出ない（可観測性の後退）→ deliverViaLink が
+    ローカル sink を常設し、warn へ診断詳細を併記
+  - [MINOR] SA トークン交換の一時障害が auth（リトライなし）扱い → SaTokenResult 化
+    （5xx/タイムアウト = retry でバックオフ対象・鍵不備/4xx = auth + 診断詳細）
+  - [MINOR] 陳腐化した保存識別子で自己修復が空振り → Slack は user_not_found 時に現在の
+    members.email で再解決・Google は email ベース行で常に現在のメールを使用（改姓等に追随）
+  - [MINOR] 配信エンジンの制御フロー未テスト → fetch スタブの単体テスト 12 件を追加
+    （エラー分類表・find→404→setup→409→再検索・channel_not_found の一度きり再解決・sink 経路）
+  - [MINOR] 旧 Slack secrets 残存 + 新トークン未登録の移行漏れが notice のみ → deploy に ::warning 追加 /
+    フロントの連携タイムアウト 45s→60s（Google 最長 4 HTTP を包含）/ ps1 の旧コメント修正
+  - [NIT] auth 結果へ診断詳細付与・非 JSON 応答の fail 化（リトライで真因をぼかさない）・
+    chat_oauth_states の残行掃除（0077 に DELETE 追加）・死にコード refresh() と旧コメントの削除・
+    連携/テスト送信ボタンの多重実行ガード・プロバイダ側グラント残存の注記
+  - 残存リスクとして記録: 旧 OAuth コールバックへデプロイ跨ぎで戻るブラウザには 401 JSON が表示される
+    （数分の窓・実害なしと判断）/ Slack 429 の Retry-After 未参照とタイムアウト後リトライによる
+    DM 二重送信の可能性（旧実装からの持ち越し・発生率と実害から許容）
+- [x] R2 = 修正後の再レビュー: R1 全 10 修正の適用と制御フロー（無限ループ・二重送信・冪等性・sink
+  先勝ち）を検証し**機能面の指摘ゼロ**。修正が生んだ記述の陳腐化 4 件（CONVENTIONS の refresh 残存・
+  google-sa ヘッダー・テスト名注記・ChatService JSDoc の "OAuth"）→ 全修正。
+- [x] R3 = 残骸修正の確認レビューで**指摘ゼロ**（検証: api typecheck / 単体 454 / 統合 295 /
+  mockup typecheck・単体 476 / mockup generate / api build / YAML + bash -n すべて green）。

@@ -33,7 +33,7 @@ import { searchRoutes } from './routes/search'
 import { mastersRoutes } from './routes/masters'
 import { notificationsRoutes } from './routes/notifications'
 import { reportsRoutes, runReportReminders } from './routes/reports'
-import { notificationChannelOauthCallbackRoutes, notificationChannelsRoutes } from './routes/notification-channels'
+import { notificationChannelsRoutes } from './routes/notification-channels'
 import { runSalesEtl, salesRoutes } from './routes/sales'
 import { runUptimeRollup, statusRoutes } from './routes/status'
 import { assistRoutes } from './routes/assist'
@@ -136,8 +136,8 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
   app.get('/v1/calendar/oauth/callback', calendarOauthCallback(pool, env))
   app.get('/v1/media/oauth/callback', mediaOauthCallback(pool, env))
   app.get('/v1/akebono/sheets/oauth/callback', sheetsOauthCallback(pool, env))
-  // 個人別チャット連携（Slack / Google Chat）の OAuth コールバック（改修依頼 2026-08-20。上と同じ理由で認証前）
-  app.get('/v1/notification-channels/:service/oauth/callback', notificationChannelOauthCallbackRoutes(pool, env))
+  // 個人別チャット連携（Slack / Google Chat）の OAuth コールバックは AKEBONO HOME 名義化（0077）で廃止
+  // （連携 = 認証後の POST /v1/notification-channels/:service/link による宛先解決へ）
   app.use('/v1/*', authMiddleware(env, pool))
   // 機能単位の権限ガード（F-16。認証の後段。/v1/masters・/v1/configs はデータ面のため対象外 = lib/permissions 参照）
   app.use('/v1/*', featureGuard(pool))

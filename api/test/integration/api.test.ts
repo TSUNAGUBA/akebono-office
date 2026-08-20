@@ -7913,12 +7913,11 @@ describe('日報の自動リマインド（runReportReminders = /jobs/report-rem
   })
 })
 
-// ---------- 個人別マルチチャネル通知連携（Unit 7 = 0075。追記） ----------
+// ---------- 個人別マルチチャネル通知連携（Unit 7 = 0075 → AKEBONO HOME 名義化 = 0077。追記） ----------
 // 本ユニットでは app.ts へのマウントを行わないため、ルートをローカルの Hono へマウントして検証する
 // （notificationChannelsRoutes は自己完結のため、app.ts マウント後と同一の振る舞いになる）。
-// マウント用スニペット（app.ts）:
-//   app.get('/v1/notification-channels/:service/oauth/callback', notificationChannelOauthCallbackRoutes(pool, env))  // authMiddleware より前
-//   app.route('/v1/notification-channels', notificationChannelsRoutes(pool, env))                                   // authMiddleware より後
+// マウント用スニペット（app.ts。OAuth コールバックは 0077 で廃止）:
+//   app.route('/v1/notification-channels', notificationChannelsRoutes(pool, env))  // authMiddleware より後
 import { Hono as HonoRouter } from 'hono'
 import { authMiddleware } from '../../src/auth'
 import { errorResponse } from '../../src/lib/errors'
@@ -7951,7 +7950,7 @@ describe('個人別マルチチャネル通知連携（Unit 7: user_chat_links +
     return { status: res.status, json: await res.json() as never }
   }
 
-  it('連携状態: OAuth 未設定環境では enabled=false・未連携・マトリクスは空（全セル既定値）', async () => {
+  it('連携状態: テナント資格情報の未設定環境では enabled=false・未連携・マトリクスは空（全セル既定値）', async () => {
     const res = await nchApi('GET', '/v1/notification-channels', { as: MEMBER })
     expect(res.status).toBe(200)
     const data = res.json.data as {
@@ -7959,7 +7958,7 @@ describe('個人別マルチチャネル通知連携（Unit 7: user_chat_links +
       matrix: Record<string, unknown>
     }
     for (const service of ['slack', 'google_chat']) {
-      expect(data.services[service]?.enabled).toBe(false) // SLACK_CLIENT_* / GOOGLE_OAUTH_* 未投入
+      expect(data.services[service]?.enabled).toBe(false) // SLACK_BOT_TOKEN / GOOGLE_CHAT_SA_KEY 未投入
       expect(data.services[service]?.connected).toBe(false)
       expect(data.services[service]?.status).toBeNull()
     }
@@ -7995,13 +7994,17 @@ describe('個人別マルチチャネル通知連携（Unit 7: user_chat_links +
     }
   })
 
-  it('OAuth URL: 未設定環境は AKO-NCH-001・不正なサービス指定は AKO-NCH-002', async () => {
-    const slack = await nchApi('POST', '/v1/notification-channels/slack/oauth/url', { as: MEMBER })
+  it('連携（宛先解決）: 未設定環境は AKO-NCH-001・不正なサービス指定は AKO-NCH-002・旧 /oauth/url は AKO-NCH-006（409 = 原則7）', async () => {
+    const slack = await nchApi('POST', '/v1/notification-channels/slack/link', { as: MEMBER })
     expect(slack.status).toBe(400)
     expect(slack.json.error?.code).toBe('AKO-NCH-001')
-    const bogus = await nchApi('POST', '/v1/notification-channels/teams/oauth/url', { as: MEMBER })
+    const bogus = await nchApi('POST', '/v1/notification-channels/teams/link', { as: MEMBER })
     expect(bogus.status).toBe(400)
     expect(bogus.json.error?.code).toBe('AKO-NCH-002')
+    // 旧方式（個人 OAuth）の互換シム: 旧 SPA キャッシュからの呼び出しへ再読み込みを案内
+    const legacy = await nchApi('POST', '/v1/notification-channels/slack/oauth/url', { as: MEMBER })
+    expect(legacy.status).toBe(409)
+    expect(legacy.json.error?.code).toBe('AKO-NCH-006')
   })
 
   it('テスト送信は未連携なら AKO-NCH-003・解除は未連携でも成立（冪等 = 原則2）', async () => {
@@ -8010,6 +8013,35 @@ describe('個人別マルチチャネル通知連携（Unit 7: user_chat_links +
     expect(test.json.error?.code).toBe('AKO-NCH-003')
     const disc = await nchApi('POST', '/v1/notification-channels/google_chat/disconnect', { as: MEMBER })
     expect(disc.status).toBe(200)
+  })
+
+  it('連携行あり: GET は connected を返し、資格情報なしのテスト送信は AKO-NCH-004 + 診断詳細・解除で行が消える（0077）', async () => {
+    try {
+      // 連携行を直接投入（宛先キャッシュ = 0077。トークン列は空のまま = 新方式の行形）
+      await pool.query(
+        `INSERT INTO user_chat_links (member_id, service, external_user_id, display_name, dm_target)
+         VALUES ($1, 'slack', 'U_TEST', 'AKEBONO テスト', 'D_TEST')
+         ON CONFLICT (member_id, service) DO NOTHING`, [MEMBER])
+      const res = await nchApi('GET', '/v1/notification-channels', { as: MEMBER })
+      const data = res.json.data as {
+        services: Record<string, { connected: boolean; status: string | null; displayName: string }>
+      }
+      expect(data.services.slack?.connected).toBe(true)
+      expect(data.services.slack?.status).toBe('connected')
+      expect(data.services.slack?.displayName).toBe('AKEBONO テスト')
+      // 資格情報（SLACK_BOT_TOKEN）未投入のテスト送信 = 外部 HTTP なしで fail + 診断詳細（設定不備が自己診断できる）
+      const test = await nchApi('POST', '/v1/notification-channels/slack/test', { as: MEMBER })
+      expect(test.status).toBe(502)
+      expect(test.json.error?.code).toBe('AKO-NCH-004')
+      expect(test.json.error?.message).toContain('SLACK_BOT_TOKEN')
+      // 解除（取消フロー = 原則9.5）→ 未連携へ戻る
+      const disc = await nchApi('POST', '/v1/notification-channels/slack/disconnect', { as: MEMBER })
+      expect(disc.status).toBe(200)
+      const after = await nchApi('GET', '/v1/notification-channels', { as: MEMBER })
+      expect((after.json.data as typeof data).services.slack?.connected).toBe(false)
+    } finally {
+      await pool.query(`DELETE FROM user_chat_links WHERE member_id = $1`, [MEMBER])
+    }
   })
 
   it('配信エンジン: マトリクスの in_app=false でアプリ内通知をスキップし、既定へ戻すと再び届く', async () => {
