@@ -376,7 +376,9 @@ async function downloadFile(f: KnowledgeFileMeta): Promise<void> {
       <UiSelect v-model="statusFilter" :options="ACTIVE_FILTER_OPTIONS" aria-label="状態フィルタ" />
     </template>
 
-    <div>
+    <!-- min-w-0: 素の div 包みは min-content（nowrap タブ列の合計幅）を親 grid トラックへ伝播させ、
+         375px でページ全体が横スクロールする（UnitI 検出）。0 に抑えて UiTabBar の内部スクロールを効かせる -->
+    <div class="min-w-0">
       <UiTabBar v-model="domainTab" :tabs="domainTabs" />
       <UiSectionCard class="mt-3" :title="`${KNOWLEDGE_DOMAIN_LABELS[currentDomain]}のナレッジ（${total}件）`" flush>
         <UiDataTable

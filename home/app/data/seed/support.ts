@@ -42,7 +42,7 @@ export const seedDocumentNodes: DocumentNode[] = [
   { id: 'doc-0011', parentId: 'doc-root-designs', kind: 'file', name: 'トクタケAI_データモデル設計書.xlsx', tags: ['設計書'], updatedAt: at(6, '11:00:00'), updatedBy: 'm-09', size: '760KB', summary: '問い合わせ・アンケート分析のスタースキーマ定義。ファクト 2 種・ディメンション 6 種。半加法メジャーの集計注意点を記載。' },
 
   // ---------- ファイル: マニュアル ----------
-  { id: 'doc-0012', parentId: 'doc-root-manuals', kind: 'file', name: 'AKEBONO_Office_操作マニュアル.pdf', tags: ['マニュアル'], updatedAt: at(3, '10:00:00'), updatedBy: 'm-06', size: '2.4MB', summary: '社内オフィスアプリの操作手順。打刻・日報・稟議・シフト希望提出の基本操作を画面つきで収録。' },
+  { id: 'doc-0012', parentId: 'doc-root-manuals', kind: 'file', name: 'AKEBONO_Home_操作マニュアル.pdf', tags: ['マニュアル'], updatedAt: at(3, '10:00:00'), updatedBy: 'm-06', size: '2.4MB', summary: '社内オフィスアプリの操作手順。打刻・日報・稟議・シフト希望提出の基本操作を画面つきで収録。' },
   { id: 'doc-0013', parentId: 'doc-root-manuals', kind: 'file', name: '経費精算SaaS_利用マニュアル.pdf', tags: ['マニュアル'], updatedAt: at(40, '09:15:00'), updatedBy: 'm-10', size: '1.1MB', summary: '経費精算 SaaS のアカウント発行から精算申請・承認までの手順。経費精算規程とあわせて参照。' },
 ]
 

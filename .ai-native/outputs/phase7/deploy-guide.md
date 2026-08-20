@@ -448,14 +448,14 @@ AKEBONO Company（`company/`）と AKEBONO Intelligence（`intelligence/`）は�
 通知の外部チャット配信（本人宛 DM）に使用する。**送信元は通知アプリ「AKEBONO Home」**（オペレーター指示
 2026-08-20 で名義を確定。同日のアプリ名統一で表記は `AKEBONO HOME` → `AKEBONO Home` へ変更）:
 Slack は Bot Token 方式・Google Chat は Chat アプリ（サービスアカウント）方式で、
+資格情報は**テナント単位**（repository secrets → deploy が Secret Manager 経由で Cloud Run へ自動配線）。
+ユーザーごとの OAuth 同意・トークン保管は廃止した（`/profile` の「連携する」は登録メールアドレスによる
+宛先解決の 1 クリックで完結し、`TOKEN_ENCRYPTION_KEY` にも依存しない）。
 
 > **既に旧表記 `AKEBONO HOME` で外部アプリを作成済みの場合:** 機能への影響はない（送信・宛先解決は
 > トークン/SA で行われ、表示名には依存しない。アプリ検索も大文字小文字を区別しない）。表記を揃えたい
 > 場合のみ、Slack = アプリ設定の App Home で表示名を、Google Chat = Chat API の「構成」でアプリ名を
 > `AKEBONO Home` へ変更する（任意・いつでも可）。
-資格情報は**テナント単位**（repository secrets → deploy が Secret Manager 経由で Cloud Run へ自動配線）。
-ユーザーごとの OAuth 同意・トークン保管は廃止した（`/profile` の「連携する」は登録メールアドレスによる
-宛先解決の 1 クリックで完結し、`TOKEN_ENCRYPTION_KEY` にも依存しない）。
 
 > **旧方式（個人 OAuth。〜2026-08-20）からの移行:** repository secrets の `SLACK_CLIENT_ID` /
 > `SLACK_CLIENT_SECRET` と、Slack アプリの Redirect URLs・User Token Scopes、Google OAuth クライアントの

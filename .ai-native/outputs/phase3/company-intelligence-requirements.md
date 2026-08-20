@@ -9,13 +9,13 @@
 
 - 既存 AKEBONO Home（`home/`）から独立した 2 つの新アプリを、**フロントエンドのプロジェクトレベルで別建て**として新設する。公開 URL も別（Firebase Hosting のサイト分割）。
 - **Database（PostgreSQL）と API（`api/`）は共通・変更禁止。** 新アプリの機能は既存 API で実現できる範囲とし、それを超える機能は**フロントエンド内のモックとして実現**する（後日、共通 API にて本実装）。
-- 既存 AKEBONO Home（`home/`）は変更しない（下位互換の保護 = 開発原則7）。Office 内 F-08「AIネイティブカンパニー」メニューの整理（リンク化・撤去）は、AKEBONO Company 公開後の残課題として `phase7/implementation-status.md` に記録する。
+- 既存 AKEBONO Home（`home/`）は変更しない（下位互換の保護 = 開発原則7）。Home（旧 Office）内 F-08「AIネイティブカンパニー」メニューの整理（リンク化・撤去）は、AKEBONO Company 公開後の残課題として `phase7/implementation-status.md` に記録する。
 
 ## 1. AKEBONO Company（`company/`）
 
 **目的:** 共通基盤に蓄積されたデータを RAG として使いながら、AI の WebSearch や推論を駆使してタスクを自律的に完遂させる。AI 使用による予期せぬコスト増大を防ぐため、トークンと予測費用の可視化・抑制・制限を行う。
 
-既存 Office の F-08「AIネイティブカンパニー」（`/ai-company`）を切り出して独立させたもの。タスク自律遂行のドメインロジックは `shared/domain/ai-tasks.ts`（API と共通）を再利用する。
+既存 Home の F-08「AIネイティブカンパニー」（`/ai-company`）を切り出して独立させたもの。タスク自律遂行のドメインロジックは `shared/domain/ai-tasks.ts`（API と共通）を再利用する。
 
 ### FC-01 ダッシュボード（`/`）
 - KPI: 稼働 AI 社員数 / 進行中タスク数 / 当月消費トークン / 当月概算コスト（予算消化率つき）

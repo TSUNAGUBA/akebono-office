@@ -4127,8 +4127,15 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   旧表記 `AKEBONO HOME` で作成済みアプリの表示名変更は**任意**（deploy-guide §1-12 に手順注記を追加。
   アプリ検索は大文字小文字を区別しないためコード内の案内文とも不整合を生まない）。
 - [x] docs: ルート README（旧称注記付き）・home/README・deploy-guide・production-architecture・
-  functional-requirements ほか設計文書全件 + project-status.json。検証 = ブラウザ実測で title / ヘッダーロゴの
+  functional-requirements ほか設計文書全件（project-status.json はアプリ名の記載なし = 確認のみ・変更不要）。
+  検証 = ブラウザ実測で title / ヘッダーロゴの
   反映を確認（Playwright・1366px / 375px）。
+- [x] **反復レビュー（原則9）**: R1 [MINOR] モックシード文書名 `AKEBONO_Office_操作マニュアル.pdf`
+  （アンダースコア変種が置換に掛からず残存）→ `AKEBONO_Home_` へ / [MINOR] deploy-guide §1-12 の
+  旧表記注記が文の途中に挿入され引用ブロックが本文を吸い込む → 段落完結後へ移動 /
+  [NIT] 相対表記の取り残し 6 箇所（useIntelStore「Office と同様」・phase3/phase5 文書）→ Home へ /
+  [NIT] 本記録の project-status.json 表現を「確認のみ・変更不要」へ修正。可視箇所の置換漏れは変種スペル
+  網羅 grep でこの 1 件のみ・識別子誤爆ゼロ・regex/高さ計算は実行検証で整合をレビュアーが確認。
 
 ## 100. AI チャットボットページの高さ制御修正（改修依頼 2026-08-20）
 

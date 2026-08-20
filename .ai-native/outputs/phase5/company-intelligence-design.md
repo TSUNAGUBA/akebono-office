@@ -56,7 +56,7 @@ intelligence/                # AKEBONO Intelligence（独立 Nuxt 4 SPA。構成
 **設計判断:**
 - 両アプリは `home/` から UI 基盤（CSS トークン・`Ui*` コンポーネント・`useApi`/`useMockDb` パターン・認証 3 点セット）を**複製**して自己完結させる。`shared/` へのフロント共通コード追加は行わない（`shared/**` は API のデプロイトリガ・ビルド対象であり、API 無変更の制約と衝突するため）。「フロントエンドのプロジェクトレベルで別物として扱う」という要件にも一致する。
 - `shared/domain/`（型・`ai-tasks` ほか純粋ロジック）は既存ファイルを**読み取り専用で相対 import** する（home と同一パターン。`shared/` への変更は行わない）。
-- localStorage キーはアプリ別に分離: Office = `ako.*`（既存） / Company = `akc.*` / Intelligence = `aki.*`。同一オリジンで配信されるプレビュー時も衝突しない。
+- localStorage キーはアプリ別に分離: Home = `ako.*`（既存。プレフィクスは識別子のため不変） / Company = `akc.*` / Intelligence = `aki.*`。同一オリジンで配信されるプレビュー時も衝突しない。
 
 ## 3. モード設計（home と同一の 3 モード）
 
