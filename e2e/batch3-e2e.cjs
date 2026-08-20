@@ -16,6 +16,8 @@ async function main() {
 
     // 改修5: 受付箱の列順 = 対象ページ → 要望 → 投稿者（データ列の並び。先頭 select は行選択の操作列）
     await page.getByRole('tab', { name: /受付箱/ }).click()
+    // 投稿者フィルタの既定 = 自分のみ（2026-08-20）。以降の行操作が特定シード行に依存するため「全員」へ切替
+    await page.getByRole('tablist', { name: '投稿者で絞り込み' }).getByRole('tab', { name: '全員' }).click()
     await page.getByRole('columnheader', { name: '対象ページ' }).waitFor()
     const headerOrder = await page.evaluate(() => {
       const ths = [...document.querySelectorAll('main table thead th')].map(t => t.textContent.trim())

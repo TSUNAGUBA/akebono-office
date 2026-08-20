@@ -80,11 +80,11 @@ async function main() {
     // 閉じる
     await page.keyboard.press('Escape')
 
-    // ---- 4) 営業活動: 登録ボタンで登録される ----
+    // ---- 4) 営業活動: 登録ボタンで登録される（案件ヘッダー + 活動ログ構造 = 改修依頼 2026-08-20 に追随） ----
     await page.goto(`${BASE}/#/sales-activity`)
     await page.getByRole('main').getByRole('heading', { level: 1, name: '営業活動' }).waitFor()
-    await page.getByRole('button', { name: '登録する' }).click()
-    await page.getByRole('heading', { name: '営業活動を登録' }).waitFor()
+    await page.getByRole('button', { name: '案件を登録' }).click()
+    await page.getByRole('heading', { name: '営業活動（案件）を登録' }).waitFor()
     await page.getByLabel('商談名', { exact: true }).fill('E2E 営業商談テスト')
     // 顧客（会社）は combobox。既存のシード会社を検索して選ぶ
     const cust = page.getByLabel('顧客（会社）')
@@ -94,11 +94,11 @@ async function main() {
     await custOpt.waitFor()
     await custOpt.click()
     await page.getByRole('button', { name: '登録', exact: true }).click()
-    await page.getByText('営業活動を登録しました').waitFor()
+    await page.getByText('営業活動（案件）を登録しました').waitFor()
     check('4 営業活動: 登録ボタンで登録され、トーストが出る', true)
-    // 一覧に登録した商談名が出る
+    // 登録後は案件詳細ページへ遷移し、登録した商談名がヘッダーに出る
     await page.getByText('E2E 営業商談テスト').first().waitFor()
-    check('4 営業活動: 登録した商談が一覧に反映される', true)
+    check('4 営業活動: 登録した案件が詳細ページに反映される', true)
 
     // ---- モバイル幅 375px で主要ページが崩れない（横スクロール無し） ----
     await context.clearCookies()
