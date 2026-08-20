@@ -39,7 +39,7 @@ flowchart LR
     GA -->|静的ビルド deploy ×3| FH
 ```
 
-- **フロントエンド:** Nuxt 4 SPA ×3。`home/`（AKEBONO Office → 将来 `app/` へ改名予定）は Hosting デフォルトサイト、
+- **フロントエンド:** Nuxt 4 SPA ×3。`home/`（AKEBONO Office。旧 `mockup/` = 2026-08-20 改名。旧記述の「将来 app/ へ改名予定」はこの改名で置換済み）は Hosting デフォルトサイト、
   `company/`（AKEBONO Company = AI カンパニー切り出し）・`intelligence/`（AKEBONO Intelligence）は
   **同一 Firebase プロジェクト内の専用サイト**（マルチサイト）で別 URL 配信（2026-08-20 新設。設計 SoT =
   `../phase5/company-intelligence-design.md`）。3 アプリとも同一 Firebase Auth・同一 API を共有し、

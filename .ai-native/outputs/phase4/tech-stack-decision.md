@@ -31,7 +31,7 @@
 
 | 候補 | 不採用理由 |
 |---|---|
-| Vite + Vue 3 素構成（scm-platform home と同一） | 本アプリは将来そのまま本番 UI に育てる前提があり、Nuxt の規約（pages/layouts/auto-import）が middle〜long term で有利。undeux で Nuxt 4 実績あり |
+| Vite + Vue 3 素構成（scm-platform mockup と同一） | 本アプリは将来そのまま本番 UI に育てる前提があり、Nuxt の規約（pages/layouts/auto-import）が middle〜long term で有利。undeux で Nuxt 4 実績あり |
 | Next.js + React（tokutake 方式） | CLAUDE.md・他兄弟リポジトリの Vue 系規約と乖離。composables 資産の相互流用ができない |
 | three.js（3D オフィス） | モック目的に対して依存が過大。操作の体感はアイソメトリック表現で十分得られる |
 | Pinia / Vuex | useState + composables で足りる規模。兄弟リポジトリも不使用 |

@@ -22,7 +22,7 @@
 #
 # 必要な Repository secrets（scripts/setup-deploy-secrets.ps1 で設定。詳細は
 # .ai-native/outputs/phase7/deploy-guide.md）:
-#   [home]       FIREBASE_SERVICE_ACCOUNT, FIREBASE_PROJECT_ID（必須）
+#   [home]         FIREBASE_SERVICE_ACCOUNT, FIREBASE_PROJECT_ID（必須）
 #   [company]      FIREBASE_HOSTING_SITE_COMPANY（任意。未設定はスキップ）
 #   [intelligence] FIREBASE_HOSTING_SITE_INTELLIGENCE（任意。未設定はスキップ）
 #   [api]          GCP_SERVICE_ACCOUNT, GCP_PROJECT_ID, GCP_REGION, CLOUD_RUN_SERVICE,

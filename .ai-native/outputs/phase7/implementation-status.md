@@ -4074,14 +4074,16 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
 > 合わせて修正してください。」
 
 - [x] **ディレクトリ**: `git mv mockup home`（履歴は rename として保持）。
-- [x] **参照の網羅置換**（`git grep -il mockup` の全 83 ファイル。`mockup`→`home` / `MOCKUP`→`HOME`）:
+- [x] **参照の網羅置換**（`git grep -il mockup` の全 83 ファイル。`mockup`→`home` / `MOCKUP`→`HOME`。
+  chatbot.ts の docblock 1 件のみ、並行中のマークダウン描画レビュー対応との衝突回避で次コミットへ繰延べ）:
   - `.github/workflows/deploy.yml`（paths filter `home/**`・`cd home`・working-directory・
     `entryPoint: home`・job id `deploy-home`・`DEPLOY_HOME_RESULT`）/ `test-gate.yml` 同様
   - `scripts/run-test-stage.sh` / `scripts/setup-deploy-secrets.ps1` / `e2e/*.sh` / 各 README
   - `api/`・`shared/` の docblock 内パス参照 / `.ai-native/` の設計・運用ドキュメント全件 + `project-status.json`
   - `home/package.json` name = `akebono-office-home`（package-lock.json の name 行も追随）
 - [x] **置換の除外（意図的に残した mockup/mock）**:
-  - `akebono-scm-platform mockup 規範`（rng.ts ×3・tech-stack-decision.md）= **外部リポジトリの名称**であり
+  - `akebono-scm-platform mockup`（rng.ts ×3・tech-stack-decision.md ×2〔行 17「規範」+ 行 34 不採用候補の
+    比較対象。後者は監査 R1 で誤置換を検出し復元〕）= **外部リポジトリの名称**であり
     本リポジトリのディレクトリ名ではない
   - `mockUpsertContext`（useCustomerContext.ts）= mock + Upsert の合成語（モックモード概念）
   - モックモード概念名（`run-mock-stack.sh`・`dist-mock`・`gen-mock.log`・「モックモード」表記）は機能名のため維持
@@ -4090,3 +4092,9 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
 - [x] **外部リソースへの影響なしの確認**: Firebase Hosting は**デフォルトサイト**（サイト ID はプロジェクト ID）
   のため改名の影響なし。GCS・Cloud Run 等のリソース名にも mockup は不使用（`rg` で URL/リソース名を走査済み）。
   deploy 用 Repository secrets のキー名にも mockup なし = **オペレーター側の追加作業なし**（原則1・7）。
+- [x] **反復レビュー（原則9）= 監査 R1**: [MINOR] tech-stack-decision.md 行 34 の不採用候補比較
+  「scm-platform mockup と同一」が誤置換（外部リポジトリ参照の 2 件目）→ 復元 + 本除外一覧を ×2 へ訂正。
+  [MINOR] production-architecture.md の旧「将来 app/ へ改名予定」注記が失効したまま残存 → 本改名で
+  置換済みと明記。[NIT] deploy.yml ヘッダーコメントの桁揃え / architecture.md の対象宣言・
+  project-status.json の「モックアップ」表記を「旧 mockup/ = 昇格済み」へ実態化 / 繰延べ 1 件の本記録追記。
+  取り残し・過剰置換・workflow 整合・e2e/scripts・外部リソース波及は指摘ゼロ（監査報告）。
