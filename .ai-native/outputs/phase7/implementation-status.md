@@ -4200,3 +4200,10 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   エスカレーション行のクールダウンラベルも nowrap 対称化 + li に min-w-0（新設規約との自己整合）。
   TDZ 同型リスクは immediate watch 全 22 箇所の精査で残存ゼロ・min-w-0 の副作用なし・
   UiSectionCard のデスクトップ 1366px 崩れゼロをレビュアーが実測確認済み。
+  R2（R1 対応差分の収束確認）: 指摘ゼロ収束（M-1〜N-4 全 9 件の解消を実ファイル diff・実行挙動・
+  実配信で確認。`this.chart.width` の Chart.js 4.5.1 実体整合・home.json とページ実体の一致も検証済み）。
+  [NIT フォロー] 動的詳細ルート 4 件（deal-0001 / pact-0001 / svc-01 / dt-01 = 決定的シードで安定）を
+  home.json へ追記・sweep に最終 URL 記録（リダイレクト痕跡）・routesJson 読込エラーを exit 2 に区別。
+  BarChartCard の company/intel 複製版は horizontal 未使用（縦棒・短ラベルのみ）のため省略ロジックの
+  同期は見送り = 次回チャート改修時に同期する（複製 drift の認識記録）。
+  最終スイープ: R1 対応後ビルドで 3 アプリ全ルート（74/8/6 + 動的詳細）× 両プローブ全 CLEAN。

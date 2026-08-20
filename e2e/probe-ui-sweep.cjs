@@ -17,7 +17,13 @@ if (!baseUrl || !outDir || !routesJson) {
   console.error('usage: node probe-ui-sweep.cjs <baseUrl> <outDir> <routesJson>')
   process.exit(2)
 }
-const routes = JSON.parse(fs.readFileSync(routesJson, 'utf8'))
+let routes
+try {
+  routes = JSON.parse(fs.readFileSync(routesJson, 'utf8'))
+} catch (e) {
+  console.error(`routesJson を読めません: ${e.message}`)
+  process.exit(2)
+}
 fs.mkdirSync(outDir, { recursive: true })
 
 const overflowInfo = () => {
@@ -62,6 +68,8 @@ const overflowInfo = () => {
         await page.waitForTimeout(900)
         const info = await page.evaluate(overflowInfo)
         entry[label] = info
+        // 最終 URL を記録（クライアント側リダイレクトの痕跡。CLEAN でも別ページを見ていないか追える）
+        entry[`${label}_url`] = page.url()
         if (info.overflowPx > 1 || info.errorPage) findings++
         if (label === 'm' || info.overflowPx > 1) {
           await page.screenshot({ path: `${outDir}/${slug}--${label}.png`, fullPage: label === 'm' })

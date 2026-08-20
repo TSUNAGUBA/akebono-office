@@ -16,7 +16,13 @@ if (!baseUrl || !routesJson) {
   console.error('usage: node probe-truncate-break.cjs <baseUrl> <routesJson> [label]')
   process.exit(2)
 }
-const routes = JSON.parse(fs.readFileSync(routesJson, 'utf8'))
+let routes
+try {
+  routes = JSON.parse(fs.readFileSync(routesJson, 'utf8'))
+} catch (e) {
+  console.error(`routesJson を読めません: ${e.message}`)
+  process.exit(2)
+}
 
 const detect = () => {
   const vw = document.documentElement.clientWidth
