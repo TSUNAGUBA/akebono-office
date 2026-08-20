@@ -11,7 +11,7 @@ import { addDays } from './jst'
 
 export type ServiceState = UptimeDaily['worstState']
 
-/** 影響度 → 状態の写像（mockup useSystemStatus と同一） */
+/** 影響度 → 状態の写像（home useSystemStatus と同一） */
 export const IMPACT_TO_STATE: Record<IncidentImpact, ServiceState> = {
   minor: 'degraded',
   major: 'partial_outage',

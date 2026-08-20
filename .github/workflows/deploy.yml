@@ -7,10 +7,10 @@
 # Step Summary とアーティファクト（テストゲート: deploy-logs）に残る。
 #
 # 本アプリ固有の適用（テンプレートの構造 + 本アプリの実処理）:
-#   - デプロイ対象は 4 系統: mockup（Firebase Hosting デフォルトサイト）/
+#   - デプロイ対象は 4 系統: home（Firebase Hosting デフォルトサイト）/
 #     company・intelligence（Firebase Hosting マルチサイトの専用サイト）/ api（Cloud Run + RDS PostgreSQL）
 #   - テストゲートは repository variables ではなく本アプリの実コマンドを直接実行する
-#     （単体 = mockup/company/intelligence/api の vitest + typecheck、結合 = api の実 PostgreSQL 統合テスト、
+#     （単体 = home/company/intelligence/api の vitest + typecheck、結合 = api の実 PostgreSQL 統合テスト、
 #      シナリオ = デプロイ成果物のビルド検証 各フロント:generate + api:build）
 #   - 環境（environment）: production = Firebase live チャネル + Cloud Run 本番サービス、
 #     staging = Firebase プレビューチャネル（api の staging は別途プロビジョニングが必要なため対象外）
@@ -22,7 +22,7 @@
 #
 # 必要な Repository secrets（scripts/setup-deploy-secrets.ps1 で設定。詳細は
 # .ai-native/outputs/phase7/deploy-guide.md）:
-#   [mockup]       FIREBASE_SERVICE_ACCOUNT, FIREBASE_PROJECT_ID（必須）
+#   [home]         FIREBASE_SERVICE_ACCOUNT, FIREBASE_PROJECT_ID（必須）
 #   [company]      FIREBASE_HOSTING_SITE_COMPANY（任意。未設定はスキップ）
 #   [intelligence] FIREBASE_HOSTING_SITE_INTELLIGENCE（任意。未設定はスキップ）
 #   [api]          GCP_SERVICE_ACCOUNT, GCP_PROJECT_ID, GCP_REGION, CLOUD_RUN_SERVICE,
@@ -36,7 +36,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'mockup/**'
+      - 'home/**'
       - 'company/**'
       - 'intelligence/**'
       - 'api/**'
@@ -65,7 +65,7 @@ concurrency:
 jobs:
   # ---------------------------------------------------------------------------
   # 事前検証: デプロイ先環境を確定し、必要な設定値（secrets）の有無を最初に確認する。
-  # mockup（Firebase）に必要な secrets が欠けていれば即座に失敗させる。
+  # home（Firebase）に必要な secrets が欠けていれば即座に失敗させる。
   # api（Cloud Run）の secrets は任意で、欠けていれば api デプロイをスキップする（非ブロッキング）。
   # ---------------------------------------------------------------------------
   preflight:
@@ -93,7 +93,7 @@ jobs:
           ENVIRONMENT="${{ github.event.inputs.environment || 'production' }}"
           echo "environment=$ENVIRONMENT" >> "$GITHUB_OUTPUT"
 
-          # --- mockup（Firebase Hosting）は必須 ---
+          # --- home（Firebase Hosting）は必須 ---
           MISSING=""
           [ "$HAS_FIREBASE_SA" = "true" ]      || MISSING="${MISSING}\n- **FIREBASE_SERVICE_ACCOUNT**（repository secret）が未設定です"
           [ "$HAS_FIREBASE_PROJECT" = "true" ] || MISSING="${MISSING}\n- **FIREBASE_PROJECT_ID**（repository secret）が未設定です"
@@ -102,11 +102,11 @@ jobs:
             {
               echo "## ❌ 事前検証失敗 — デプロイを中断します（環境: ${ENVIRONMENT}）"
               echo ""
-              echo "mockup（Firebase Hosting）に必要な設定値が未登録です。\`scripts/setup-deploy-secrets.ps1\` で登録してください"
+              echo "home（Firebase Hosting）に必要な設定値が未登録です。\`scripts/setup-deploy-secrets.ps1\` で登録してください"
               echo "（手順書: \`.ai-native/outputs/phase7/deploy-guide.md\`）:"
               echo -e "$MISSING"
             } >> "$GITHUB_STEP_SUMMARY"
-            echo "::error::mockup デプロイに必要な設定値が不足しています。Step Summary を確認してください。"
+            echo "::error::home デプロイに必要な設定値が不足しています。Step Summary を確認してください。"
             exit 1
           fi
 
@@ -127,7 +127,7 @@ jobs:
           echo "api_ready=$API_READY" >> "$GITHUB_OUTPUT"
 
           {
-            echo "- ✅ **事前検証**: mockup 設定値は登録済み（環境: ${ENVIRONMENT}）"
+            echo "- ✅ **事前検証**: home 設定値は登録済み（環境: ${ENVIRONMENT}）"
             if [ "$COMPANY_READY" = "true" ]; then
               echo "- ✅ **company**: サイト設定あり（FIREBASE_HOSTING_SITE_COMPANY）"
             else
@@ -178,22 +178,22 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: |
-            mockup/package-lock.json
+            home/package-lock.json
             company/package-lock.json
             intelligence/package-lock.json
             api/package-lock.json
 
-      - name: 依存インストール（mockup / company / intelligence / api）
+      - name: 依存インストール（home / company / intelligence / api）
         run: |
-          ( cd mockup && npm ci )
+          ( cd home && npm ci )
           ( cd company && npm ci )
           ( cd intelligence && npm ci )
           ( cd api && npm ci )
 
-      - name: 単体テスト（mockup/company/intelligence/api の vitest + typecheck）
+      - name: 単体テスト（home/company/intelligence/api の vitest + typecheck）
         env:
           STAGE_CMD: >-
-            ( cd mockup && npm run typecheck && npm run test ) &&
+            ( cd home && npm run typecheck && npm run test ) &&
             ( cd company && npm run typecheck && npm run test ) &&
             ( cd intelligence && npm run typecheck && npm run test ) &&
             ( cd api && npm run typecheck && npm run test )
@@ -208,7 +208,7 @@ jobs:
       - name: シナリオテスト（デプロイ成果物のビルド検証）
         env:
           STAGE_CMD: >-
-            ( cd mockup && npm run generate ) &&
+            ( cd home && npm run generate ) &&
             ( cd company && npm run generate ) &&
             ( cd intelligence && npm run generate ) &&
             ( cd api && npm run build )
@@ -224,11 +224,11 @@ jobs:
           retention-days: 30
 
   # ---------------------------------------------------------------------------
-  # デプロイ（mockup / Firebase Hosting）: 全テストゲート通過時のみ実行。
+  # デプロイ（home / Firebase Hosting）: 全テストゲート通過時のみ実行。
   # 環境で配信チャネルを切り替える（production=live / staging=プレビュー）。
   # ---------------------------------------------------------------------------
-  deploy-mockup:
-    name: デプロイ実行（mockup / Firebase Hosting）
+  deploy-home:
+    name: デプロイ実行（home / Firebase Hosting）
     needs: [preflight, test]
     runs-on: ubuntu-latest
     environment: ${{ needs.preflight.outputs.environment }}
@@ -239,14 +239,14 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: mockup/package-lock.json
+          cache-dependency-path: home/package-lock.json
 
       - name: 依存インストール
-        working-directory: mockup
+        working-directory: home
         run: npm ci
 
       - name: 静的ビルド
-        working-directory: mockup
+        working-directory: home
         env:
           # 未設定なら完全モックモード（従来どおり）。API 接続版を配信する場合は
           # secrets API_BASE_URL / FIREBASE_WEB_CONFIG を設定する（setup-deploy-secrets.ps1）
@@ -270,12 +270,12 @@ jobs:
           firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           projectId: ${{ secrets.FIREBASE_PROJECT_ID }}
           channelId: ${{ steps.channel.outputs.channel }}
-          entryPoint: mockup
+          entryPoint: home
 
       - name: デプロイ結果をサマリーへ記録
         if: always()
         run: |
-          echo "- ✅ **mockup デプロイ**: 環境 ${{ needs.preflight.outputs.environment }} / チャネル ${{ steps.channel.outputs.channel }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- ✅ **home デプロイ**: 環境 ${{ needs.preflight.outputs.environment }} / チャネル ${{ steps.channel.outputs.channel }}" >> "$GITHUB_STEP_SUMMARY"
 
   # ---------------------------------------------------------------------------
   # デプロイ（company / Firebase Hosting マルチサイト）: 全テストゲート通過 +
@@ -674,7 +674,7 @@ jobs:
   # ---------------------------------------------------------------------------
   report:
     name: パイプライン結果レポート
-    needs: [preflight, test, deploy-mockup, deploy-company, deploy-intelligence, deploy-api]
+    needs: [preflight, test, deploy-home, deploy-company, deploy-intelligence, deploy-api]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -682,7 +682,7 @@ jobs:
         env:
           PREFLIGHT_RESULT: ${{ needs.preflight.result }}
           TEST_RESULT: ${{ needs.test.result }}
-          DEPLOY_MOCKUP_RESULT: ${{ needs.deploy-mockup.result }}
+          DEPLOY_HOME_RESULT: ${{ needs.deploy-home.result }}
           DEPLOY_COMPANY_RESULT: ${{ needs.deploy-company.result }}
           DEPLOY_INTELLIGENCE_RESULT: ${{ needs.deploy-intelligence.result }}
           DEPLOY_API_RESULT: ${{ needs.deploy-api.result }}
@@ -708,7 +708,7 @@ jobs:
             echo "|---------|------|"
             echo "| 事前検証 | $(to_mark "$PREFLIGHT_RESULT") |"
             echo "| テストゲート（単体・結合・シナリオ） | $(to_mark "$TEST_RESULT") |"
-            echo "| デプロイ（mockup / Firebase Hosting） | $(to_mark "$DEPLOY_MOCKUP_RESULT") |"
+            echo "| デプロイ（home / Firebase Hosting） | $(to_mark "$DEPLOY_HOME_RESULT") |"
             echo "| デプロイ（company / Firebase Hosting） | $(to_mark "$DEPLOY_COMPANY_RESULT") |"
             echo "| デプロイ（intelligence / Firebase Hosting） | $(to_mark "$DEPLOY_INTELLIGENCE_RESULT") |"
             echo "| デプロイ（api / Cloud Run） | $(to_mark "$DEPLOY_API_RESULT") |"
@@ -728,7 +728,7 @@ jobs:
               echo ""
             fi
             if [ "$PREFLIGHT_RESULT" = "success" ] && [ "$TEST_RESULT" = "success" ] \
-               && [ "$DEPLOY_MOCKUP_RESULT" = "success" ]; then
+               && [ "$DEPLOY_HOME_RESULT" = "success" ]; then
               echo "🎉 デプロイが完了しました（環境: ${TARGET_ENV:-production}）。"
             else
               echo "⚠️ デプロイは完了していません。失敗したステージの Step Summary と"

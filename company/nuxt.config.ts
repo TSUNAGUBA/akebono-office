@@ -1,6 +1,6 @@
 import tailwindcss from '@tailwindcss/vite'
 
-// AKEBONO Company（AIネイティブカンパニー独立アプリ）。SPA + ハッシュルーティング（mockup と同型）
+// AKEBONO Company（AIネイティブカンパニー独立アプリ）。SPA + ハッシュルーティング（home と同型）
 export default defineNuxtConfig({
   ssr: false,
   compatibilityDate: '2025-05-01',

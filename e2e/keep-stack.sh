@@ -24,7 +24,7 @@ $RUN "$PGBIN/psql" -h "$SOCKDIR" -U postgres -d akebono_e2e -q -c \
 curl -sf -X POST "http://127.0.0.1:$API_PORT/v1/masters/companies" -H 'x-dev-member-id: m-e2e' -H 'content-type: application/json' -d '{"kind":"self","name":"E2E 自社","fiscalStartMonth":4}' >/dev/null
 curl -sf -X POST "http://127.0.0.1:$API_PORT/v1/masters/companies" -H 'x-dev-member-id: m-e2e' -H 'content-type: application/json' -d '{"kind":"customer","name":"E2E商事"}' >/dev/null
 curl -sf -X POST "http://127.0.0.1:$API_PORT/v1/masters/companies" -H 'x-dev-member-id: m-e2e' -H 'content-type: application/json' -d '{"kind":"customer","name":"E2Eシステムズ"}' >/dev/null
-(cd "$REPO/mockup" && NUXT_PUBLIC_API_BASE="http://127.0.0.1:$API_PORT" NUXT_PUBLIC_DEV_MEMBER_ID=m-e2e npx nuxt generate >"$WORK/gen-api.log" 2>&1 && cp -r .output/public "$WORK/dist-api")
+(cd "$REPO/home" && NUXT_PUBLIC_API_BASE="http://127.0.0.1:$API_PORT" NUXT_PUBLIC_DEV_MEMBER_ID=m-e2e npx nuxt generate >"$WORK/gen-api.log" 2>&1 && cp -r .output/public "$WORK/dist-api")
 node "$HERE/serve.cjs" "$WORK/dist-api" 4174 >/dev/null 2>&1 &
 echo "stack ready (WORK=$WORK)"
 wait

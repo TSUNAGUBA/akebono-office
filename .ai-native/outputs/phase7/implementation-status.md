@@ -124,7 +124,7 @@
 
 > **モック表示の明示:** API モード（実データ運用）では、本表のモック実装ページ・機能に「モックアップ」バッジを表示する
 > （**バッチ6d で全ドメインの接続が完了し、現在バッジ対象ページはゼロ**。判定の仕組み = mock-status.ts は将来のモック先行ページに備えて残す）
-> （表示判定は `mockup/app/utils/mock-status.ts`。本表が SoT で、ドメインを接続したら両方から削除する）。
+> （表示判定は `home/app/utils/mock-status.ts`。本表が SoT で、ドメインを接続したら両方から削除する）。
 > モックモード（デモ配信）は全機能がモックのためバッジは表示しない。
 
 | メニュー / ページ | 機能ID | モックアップ | 本実装 | 予定 |
@@ -135,12 +135,12 @@
 | Google カレンダー連携（予定同期・タスク反映） | F-06-8 | ✅（モック同期） | ✅ カレンダー接続済み（PR #26/#27）: OAuth 2.0 認可コードフロー（state = 一回性・10 分 TTL の DB ノンス + Google アカウント email と members.email の突合・トークンは AES-256-GCM 暗号化保管 = C3）・予定同期（google 発のみ置換 upsert = SoT 分離）・アプリ発タスク（Google 反映は補助処理）・連携解除（revoke + トークン破棄）・日報ドラフト材料へ接続 | OAuth 未設定時は enabled=false で連携 UI 非表示（他機能に影響なし）。Webhook push は将来拡張（手動同期で開始） |
 | 稟議 `/workflow`（旧称: ワークフロー = §36 で改称） | F-07 | ✅ | ✅ ワークフロー接続済み（PR #22）: 申請・経路凍結・承認/却下/差戻し（クレームファースト）・代理承認・承認ログ・通知 + 承認経路マスタ | PR #23 で下書きの可視性を本人と管理者のみに制限（レビュー指摘対応）。§36 で本文を目的/内容へ分割（区分別テンプレート・旧 body は互換表示）。**添付は §48-2 で実ファイル化（workflow_files。従来はファイル名文字列のみ）** |
 | シフト表 `/shift` | F-05 | ✅ | ✅ シフト接続済み（PR #23） | 希望・割当の参照は管理者 = 全件 / 本人 = 自分のみのサーバースコープ |
-| 意思決定支援 `/decision` | F-02 | ✅ | ✅ 意思決定接続済み（PR #28）: 判断テーマ = 汎用マスタ `/v1/masters/decision-themes`（0011 で mockup seed を移行）・判断ログ = `/v1/decisions/logs`（追記のみ = 記録系保護。テーマ・選択肢・理由をサーバーで強制） | シナリオ予測（決定的線形モデル）は表示射影としてクライアント側に維持（設計判断）。**テーマの作成・編集 UI は §48-3 で新設（/masters/decision-themes。従来はシード 3 テーマ固定）** |
+| 意思決定支援 `/decision` | F-02 | ✅ | ✅ 意思決定接続済み（PR #28）: 判断テーマ = 汎用マスタ `/v1/masters/decision-themes`（0011 で home seed を移行）・判断ログ = `/v1/decisions/logs`（追記のみ = 記録系保護。テーマ・選択肢・理由をサーバーで強制） | シナリオ予測（決定的線形モデル）は表示射影としてクライアント側に維持（設計判断）。**テーマの作成・編集 UI は §48-3 で新設（/masters/decision-themes。従来はシード 3 テーマ固定）** |
 | AKEBONO（3D オフィス） `/akebono` | F-03 | ✅ | 🚧 AKEBONO 接続（本 PR = バッチ6d）: 要望ボックス = `akebono_wishes`（0019・記録系 = 追記のみ・編集/削除なし）・`GET/POST /v1/akebono/wishes`（本文必須 = AKO-AKB-001・2000 cp 切詰め・全員参照可 = 社内 C2）・useAkebono デュアルモード化・機能ガード 'akebono'（F-16）・チャットボット文脈に AKEBONO ブロック追加。プレースホルダ（バナー・ロードマップ）は静的表示 = フロントの責務 | **本 PR で mock-status が空 = API モードのモックバッジ全廃（マイルストーン）** |
 | AIネイティブカンパニー `/ai-company` | F-08 | ✅ | ✅ AI カンパニー接続済み（PR #35 = バッチ6a）: ロール/AI 社員 = 汎用マスタ（0015）・タスク依頼 → 分解（Vertex AI → 失敗時 shared/domain/ai-tasks の同一ヒューリスティック）→ 承認 → 実行 → 完了（FOR UPDATE 状態機械・活動ログ追記・依頼者へ通知・AI 社員 status 同期）・日次報告 = daily_reports（author_kind='ai'・冪等生成）・停滞/過負荷/低確信度エスカレーション・機能ガード 'ai-company'（F-16） | AI 社員の「実実行」（LLM がステップを自律実行）は将来拡張。現段階は進行操作を人が行うワークフロー |
 | 業務支援ツール `/support` | F-09 | ✅ | ✅ | 外部リンクは接続済みマスタを参照。チャットボット（F-09-3）は PR #27 で接続済み。**ドキュメント管理はバッチ7l で本実装（§32 参照）= 全ドメイン移行完了** |
 | 売上管理 `/sales` | F-15 | ✅ | ✅ 売上接続済み（PR #36 = バッチ6b）: 月次実績 = `sales_monthly`（0017・冪等キー month × company × projectType の upsert）・`GET/POST /v1/sales`（登録は管理者のみ・一括取込 500 件）・実績登録モーダル（管理者）・会計年度計算 = shared/domain/fiscal をフロント/API 共有・機能ガード 'sales'（F-16）・チャットボット文脈に売上サマリ追加 + **mart ETL**: `fact_sales` / `mart_load_runs`（app_office 内 mart 互換 = オペレーター判断 2026-07-18）へ一方向 ETL（`POST /v1/sales/etl/run` + `/jobs/sales-mart-etl`） | 実績データのためマスタ初期値シードなし（新規環境は管理者登録 or 取込から） |
-| 提供システム稼働状況 `/status` | F-11 | ✅ | ✅ 稼働状況接続済み（PR #37 = バッチ6c）: サービス = `system_services`（0018・mockup と同一の 3 サービスをシード）・インシデント = `service_incidents`（記録系 = updates 追記のみ・正順の状態機械を FOR UPDATE で直列化・登録/更新で管理者通知）・uptime = `uptime_daily`（SoT はインシデント → shared/domain/uptime で日次導出・窓内 DELETE→INSERT で冪等。トリガ = 登録/更新時 + `/jobs/uptime-rollup` + 管理者の手動再計算）・`GET /v1/status` 一括ハイドレーション（90 日 operational 埋め）・機能ガード 'status'（F-16）・チャットボット文脈 + 決定的フォールバックも実データ化 | モックの乱数 uptime シードは本番へ持ち込まない（インシデント実績から導出） |
+| 提供システム稼働状況 `/status` | F-11 | ✅ | ✅ 稼働状況接続済み（PR #37 = バッチ6c）: サービス = `system_services`（0018・home と同一の 3 サービスをシード）・インシデント = `service_incidents`（記録系 = updates 追記のみ・正順の状態機械を FOR UPDATE で直列化・登録/更新で管理者通知）・uptime = `uptime_daily`（SoT はインシデント → shared/domain/uptime で日次導出・窓内 DELETE→INSERT で冪等。トリガ = 登録/更新時 + `/jobs/uptime-rollup` + 管理者の手動再計算）・`GET /v1/status` 一括ハイドレーション（90 日 operational 埋め）・機能ガード 'status'（F-16）・チャットボット文脈 + 決定的フォールバックも実データ化 | モックの乱数 uptime シードは本番へ持ち込まない（インシデント実績から導出） |
 | チャットボット（画面内ヘルプ） | F-09-3 | ✅ | ✅ チャットボット接続済み（PR #27）+ ✅ セッション管理（PR #30/#31・オペレーター指示 2026-07-17）: 会話は chat_sessions / chat_messages（0012）で DB 管理・同一セッション内は直近履歴 12 件を LLM へ渡すマルチターン・過去セッションの再開/新規開始（履歴ドロワー + 新しい会話）・本人のみ参照（AKO-CHT-001）・メッセージは追記のみ。fallback 応答もセッションへ追記（履歴の忠実性） | 旧「会話履歴はセッションローカル」設計判断は PR #30/#31 で置換。ドキュメントはバッチ7l で実データ化（search_docs 経由の参照 + 署名 URL 案内 = §32）。エスカレーション起票は PR #21 で接続済み |
 | mart（分析基盤）ETL: fact_attendance / fact_leave / fact_effort ほか | data-design §2 | —（写像可能な型のみ） | 🚧 fact_sales のみ本 PR（バッチ6b）で実装（app_office 内 mart 互換テーブル + mart_load_runs。data-design §2.3 の実装状況注記参照）。他ファクトは ⏳ | app_office → mart の一方向 ETL。mart 本体（akebono-scm-platform）への接続はテーブル移送 + ETL 先切替で対応（オペレーター判断 2026-07-18） |
 | メディア分析 `/media`（AKEBONO 業務配下） | F-40 | ✅ | ✅ メディア接続（§37 = 2026-07-28）: GA 連携 = Google OAuth 2.0（**セグメント単位**・analytics.readonly・state ノンス + email 突合・トークン AES-256-GCM 暗号化 = 0030）→ GA4 プロパティ選択（Admin API accountSummaries → PUT /v1/media/property）・集計 = GA4 Data API batchRunReports → MediaMetrics 整形（lib/ga.ts・30 分導出キャッシュ・conversions 廃止のため keyEvents 使用）・メディア設定（部分更新 = hasOwn フィルタ）・記事インベントリ（論理削除/復元）・AI 記事生成（Vertex AI → 決定的フォールバック・採用/取消）・AI インサイト（media/integrated = weekly_insights と同型の upsert 保管） | 記事インベントリは実データのためシードしない（採用・手動登録で育成）。統合メトリクス（PDCA）は Phase C（§39）でサーバー組み立てへ引き上げ = 売上軸も実データ（GET /v1/media/integrated） |
@@ -157,7 +157,7 @@
 - [x] ヒューリスティック（計画レビュー・ドラフト生成）を shared/domain へ移設しモック実装を import へ置換（単一実装 = 原則3）
 - [x] useTaskPlans / useReportAssist デュアルモード化・ai-assistant.vue / reports.vue の await 変換・表示時 refresh・モックバッジ除去
 - [x] Vertex AI の GCP セットアップ（aiplatform 有効化 + 実行 SA へ roles/aiplatform.user）をオペレーターが Cloud Shell で実行済み（deploy の自動ステップでも冪等維持）
-- [x] 検証: API 統合テスト 51 / API モード実クリック E2E 8 スイート 87 チェック / モック回帰（ナビ + マスタ 4 + 日報 9）/ typecheck（api・mockup）
+- [x] 検証: API 統合テスト 51 / API モード実クリック E2E 8 スイート 87 チェック / モック回帰（ナビ + マスタ 4 + 日報 9）/ typecheck（api・home）
 
 ## 4. バッチ3e（PR #26・マージ済み）: カレンダー連携の完了条件（Definition of Done）
 
@@ -165,24 +165,24 @@
 - [x] `/v1/calendar`: status / oauth/url（state = HMAC 署名）/ oauth/callback（認証除外・交換・302 復帰）/ sync（google 発のみ置換 upsert・refresh 対応）/ events CRUD（アプリ発のみ削除可・Google 反映は補助処理）/ disconnect（revoke 非ブロッキング）
 - [x] デプロイ反映: deploy.yml（Secret Manager へ google-oauth-secret / token-encryption-key を冪等登録・CALENDAR_READY 時のみ有効化）/ setup-deploy-secrets.ps1（-GoogleOauthClientId / -GoogleOauthClientSecretPath・TOKEN_ENCRYPTION_KEY 初回自動生成）/ deploy-guide §1-9
 - [x] useCalendar デュアルモード化（connect = 同意画面リダイレクト・復帰クエリ処理・enabled=false 縮退）・assist ドラフト材料へ calendar_events を接続
-- [x] 検証: API 統合テスト 54 / 単体 19（crypto 追加）/ API モード実クリック E2E 9 スイート 92 チェック / モック回帰 / typecheck（api・mockup）
+- [x] 検証: API 統合テスト 54 / 単体 19（crypto 追加）/ API モード実クリック E2E 9 スイート 92 チェック / モック回帰 / typecheck（api・home）
 ## 5. バッチ4a（PR #27・マージ済み）: チャットボット応答 + 3e レビュー対応の完了条件（Definition of Done）
 
 - [x] `POST /v1/chatbot/ask`: Vertex AI 一次応答（本人スコープの文脈収集 = C3 保護・構造化出力・出力正規化）。LLM 無効/失敗/confidence<0.4 は fallback 指示 → クライアントの決定的ルーティングへ縮退（原則4）
 - [x] useChatbot デュアルモード化（send async 化・通信失敗も決定的応答へ）・モックバッジ除去
 - [x] バッチ3e レビュー指摘対応（重大 3): ①同期 upsert に source='google' 条件 = app 発予定の保護（回帰テスト追加） ②OAuth state を一回性・10 分 TTL の DB ノンス化（0010）+ Google アカウント email と members.email の突合（openid email スコープ追加） ③復帰リダイレクトをゲート設置ページ（/ai-assistant）へ
 - [x] バッチ3e レビュー指摘対応（軽微): 割当 push の FOR UPDATE 直列化 / addTask の SoT 先行書込化 / status の復号可否判定 / 同期打ち切り時の削除抑止（maxResults 250）/ HH:MM 値域検証 / ps1 の gh 失敗時ガード / ゲートの成功トースト誤表示・ローディング中バナー修正 / AKO-CAL 台帳の重複行整理・production-architecture §9 更新（※編集漏れが 4a レビューで判明 → バッチ4b で実施）
-- [x] 検証: API 統合テスト 56 / 単体 19 / API モード実クリック E2E 10 スイート 96 チェック / モック回帰 / typecheck（api・mockup）
+- [x] 検証: API 統合テスト 56 / 単体 19 / API モード実クリック E2E 10 スイート 96 チェック / モック回帰 / typecheck（api・home）
 
 ## 6. バッチ4b（PR #28・マージ済み）: 意思決定支援 + 4a レビュー対応 + フォント修正の完了条件（Definition of Done）
 
-- [x] decision_themes / decision_logs テーブル（0011。テーマは汎用マスタ・ログは追記のみ = 記録系保護。mockup seed dt-01〜03 を移行）
+- [x] decision_themes / decision_logs テーブル（0011。テーマは汎用マスタ・ログは追記のみ = 記録系保護。home seed dt-01〜03 を移行）
 - [x] `/v1/masters/decision-themes`（汎用マスタ登録 = スキーマ・jsonb フィールド・部分 PATCH）/ `/v1/decisions/logs`（GET 一覧・POST 記録 = AKO-DEC-001〜003 をサーバーで強制）
 - [x] useDecision デュアルモード化（テーマ = tbl() バッキングスワップ・ログ = API キャッシュ + 表示時 refresh）・decision ページ async 化・モックバッジ除去。シナリオ予測はクライアント維持（設計判断）
 - [x] バッチ4a レビュー指摘対応（重大): ①ドキュメント是正 = AKO-CAL 台帳の重複行を実削除・production-architecture §9 を実更新 ②chatbot 有給文脈を leave ドメインの残数計算（balanceOf = FIFO 引当・失効・保有上限）の再利用へ置換
 - [x] バッチ4a レビュー指摘対応（軽微): ILIKE の % _ エスケープ + ESCAPE 句 / confidence 欠落（NaN）を fallback 側へ倒す判定 / companies 照合の ORDER BY / app.ts の OAuth コメント陳腐化 / chatbot ページ説明の「モック応答」是正 + 未移行ドメイン回答のデモデータ明示 / カレンダー連携失敗の reason 別メッセージ（account-mismatch 等。denied 理由を callback に追加）/ 実装状況ドキュメントの見出し・行の過去バッチ化
 - [x] UI フォント修正（オペレーター報告 2026-07-17）: main.css の `font-feature-settings: 'palt'` を除去（Windows の Meiryo 系で句読点が潰れ文字が重なるため）+ フォールバックに Yu Gothic UI を追加
-- [x] 検証: API 統合テスト 57 / 単体 19 / API モード実クリック E2E 11 スイート 101 チェック / モック回帰（ナビ + マスタ 4 + 日報 9 + 勤怠 5）/ typecheck（api・mockup）
+- [x] 検証: API 統合テスト 57 / 単体 19 / API モード実クリック E2E 11 スイート 101 チェック / モック回帰（ナビ + マスタ 4 + 日報 9 + 勤怠 5）/ typecheck（api・home）
 - [x] バッチ5a へ続く（§7 参照）
 
 ## 7. バッチ5a（PR #29・マージ済み）: 顧客関係マスタ分割 + 本番修正 + 4b レビュー対応の完了条件（Definition of Done）
@@ -195,7 +195,7 @@
 - [x] AI アシスト旧バッジ除去: reports.vue に残っていた「モック（AI アシストはバッチ3 で本実装予定）」バッジ 2 箇所を削除（実装は PR #25 で完了済み = 表示だけが陳腐化。原則5 違反の是正）
 - [x] カレンダー同期失敗（本番報告）: 原因 = Google Calendar API 未有効化（OAuth 交換は API 無効でも成功するため連携済み表示と同期失敗が併存）。deploy.yml で `calendar-json.googleapis.com` を自動有効化 + 403 時のエラーメッセージを設定不備として明示 + deploy-guide トラブルシュート追記
 - [x] バッチ4b レビュー指摘対応（軽微 6）: implementation-status §1 の「本 PR」残存 3 箇所 / decision-themes スキーマの enum 強化（status・slot）+ options スロット重複ガード / API モードでアーカイブ済みテーマの表示除外 / OAuth error の denied 判定を access_denied のみに限定（他は oauth-error） / production-architecture §9 のバッチ5 反映 / 判断理由の 2000 字 cap
-- [x] 検証: API 統合テスト 58（提出済み編集 + 関係種別削除ガードを追加）/ 単体 19 / API モード実クリック E2E 12 スイート 111 チェック / モック回帰（ナビ + マスタ 4 + 日報 9 + 勤怠 5）/ typecheck（api・mockup）
+- [x] 検証: API 統合テスト 58（提出済み編集 + 関係種別削除ガードを追加）/ 単体 19 / API モード実クリック E2E 12 スイート 111 チェック / モック回帰（ナビ + マスタ 4 + 日報 9 + 勤怠 5）/ typecheck（api・home）
 - [x] バッチ5b へ続く（§8 参照）
 
 ## 8. バッチ5b（PR #30/#31・マージ済み）: チャットボットのセッション管理の完了条件（Definition of Done）
@@ -204,7 +204,7 @@
 - [x] `POST /v1/chatbot/ask` の拡張: sessionId 任意（未指定 = 新規セッション作成・タイトルは最初の質問 40 字）。user/assistant メッセージを永続化し、直近履歴 12 件（各 500 字）を LLM プロンプトへ含めるマルチターン
 - [x] `GET /v1/chatbot/sessions`（本人のみ・新しい順・件数つき）/ `GET /v1/chatbot/sessions/:id/messages`（再開用・seq 順）/ `POST /v1/chatbot/sessions/:id/messages`（fallback 応答の追記 = 履歴の忠実性）。他人のセッションは AKO-CHT-001（404 = 存在を漏らさない）
 - [x] useChatbot のセッション対応（デュアルモード）: API = DB が SoT / モック = chatSessions・chatMessages（localStorage）。セッション導入前のモック会話は「以前の会話」へ一度だけ移行（原則7）。「新しい会話」「履歴ドロワー（再開）」UI・ページ遷移しても会話を維持
-- [x] 検証: API 統合テスト 59（セッション管理を追加）/ 単体 19 / API モード実クリック E2E 13 スイート 117 チェック / モック回帰（ナビ + マスタ 4 + 日報 9 + 勤怠 5）/ typecheck（api・mockup）
+- [x] 検証: API 統合テスト 59（セッション管理を追加）/ 単体 19 / API モード実クリック E2E 13 スイート 117 チェック / モック回帰（ナビ + マスタ 4 + 日報 9 + 勤怠 5）/ typecheck（api・home）
 - [x] バッチ5c へ続く（§9 参照）
 
 ## 9. バッチ5c（PR #32・マージ済み）: 権限制御基盤 F-16 の完了条件（Definition of Done）
@@ -213,7 +213,7 @@
 - [x] API: 機能ガード middleware（URL → 機能キー・deny は AKO-PRM-001 403・10 秒キャッシュ + 変更時クリア。クリアはプロセスローカルのため複数インスタンス時は他インスタンスが TTL 10 秒で追随 = 許容する設計判断）+ マスタ GET の表示項目剥がし。/v1/masters・configs・notifications・escalations はデータ面のためガード対象外（設計判断: 機能 deny でアプリ全体が壊れない）
 - [x] 安全設計: 既存ロールガードを緩められない「制限レイヤ」+ 管理者の マスタ/設定 deny はロックアウト防止のため無視
 - [x] フロント: usePermissions（can/canPath/canField）・メニュー/ダッシュボードカード/モバイルナビ/業務支援ハブの非表示・ルートガード（permissions.global.ts）・権限設定ページ `/masters/permissions`（3 レイヤのルール CRUD）
-- [x] 検証: API 統合テスト 63（ロール deny 403・個人 allow 上書き・フィールド剥がし・復帰・subjectKind/subjectId ペア検証）/ 単体 19 / API モード実クリック E2E 14 スイート 124 チェック / モック回帰（ナビ + マスタ 4 + 日報 9 + 勤怠 5）/ typecheck（api・mockup）
+- [x] 検証: API 統合テスト 63（ロール deny 403・個人 allow 上書き・フィールド剥がし・復帰・subjectKind/subjectId ペア検証）/ 単体 19 / API モード実クリック E2E 14 スイート 124 チェック / モック回帰（ナビ + マスタ 4 + 日報 9 + 勤怠 5）/ typecheck（api・home）
 - [x] 独立レビュー第 1 巡の指摘対応: ヘッダーの打刻/通知導線を権限フィルタ + 滞在中 deny の再判定（layouts/default.vue の watchEffect）/ ルール全件ロード（LIMIT 撤去 = 部分ロードによる fail-open 防止）/ キャッシュ伝播（他インスタンス TTL 10 秒追随）の文書化 / subjectKind・subjectId ペア検証（registry superRefine）/ data-design §1.1・§1.2 に PermissionRule・DecisionTheme・ChatSession・ChatMessage を追記
 - [x] 独立レビュー第 2 巡: ブロッキング指摘ゼロで収束（軽微 2 件 = PATCH 保持アサート・data-design の SystemService 表崩れはバッチ5e で対応）
 
@@ -228,7 +228,7 @@
 - [x] ⑦ PC 表示で「業務テーマ」「作業内容」「工数」「進捗」を 1 行に（md 以上 5 カラムグリッド・モバイルは縦積み）
 - [x] ⑧ 日付ナビ再構成: 上段「← / 今日 / →」・下段「選択中の日付（直接選択可）」
 - [x] 5c レビュー第 2 巡の軽微 2 件: permission-rules PATCH の未送信フィールド保持アサート追加 / data-design §1.1 の SystemService 行を表内へ移動
-- [x] 検証: API 統合テスト 66（theme 提出 + テーマなし 400・scope=all 提出済みのみ・プロフィール画像の登録/検証/削除・permission-rules PATCH 保持）/ 単体 19 + 35 / API モード実クリック E2E 15 スイート 140 チェック / モック回帰（ナビ + マスタ 4 + 日報 11 + 勤怠 5）/ typecheck（api・mockup）
+- [x] 検証: API 統合テスト 66（theme 提出 + テーマなし 400・scope=all 提出済みのみ・プロフィール画像の登録/検証/削除・permission-rules PATCH 保持）/ 単体 19 + 35 / API モード実クリック E2E 15 スイート 140 チェック / モック回帰（ナビ + マスタ 4 + 日報 11 + 勤怠 5）/ typecheck（api・home）
 
 ## 11. バッチ5d（PR #34・マージ済み）: チャットボットの全 DB 参照化・権限準拠 + 5e レビュー指摘対応の完了条件（Definition of Done）
 
@@ -236,7 +236,7 @@
 - [x] 参照範囲は権限（F-16）に準拠: ドメインごとに canUseFeature で文脈生成可否を判定（5c の共有ロジック・10 秒キャッシュを再利用 = 原則3）・マスタ由来の文脈は stripDeniedFields で表示項目 deny を反映・本人スコープ（C3）維持
 - [x] ブロック単位の収集失敗は全体を止めない（原則4 = 部分文脈でも回答を試みる）。未移行ドメイン（ドキュメント・稼働状況・売上）は従来どおり文脈対象外・モックの決定的応答が担う（設計判断）
 - [x] 5e レビュー第 1 巡の指摘対応（マージ後着荷分）: ① avatar のサブタイプ allowlist 化（png/jpeg/webp の base64 のみ・SVG 拒否）② scope=all の month 必須化（全履歴ダンプ防止）③ ログアウト時のドメインキャッシュ破棄 + 未認証ポーリング停止 ④ dev 認証ではログアウト非表示 ⑤ 業務テーマ input に maxlength=100 ⑥ screen-design のヘッダー記述更新 ⑦ 全員の日報ドロワーで権限のない他人の工数乖離を計算しない（無駄な 403 の抑止）
-- [x] 検証: API 統合テスト 67（buildContext 直接検証 = reports deny で文脈消失・フィールド deny 反映・他人日報は提出済みのみ・workflow deny / avatar allowlist / scope=all month 必須）/ 単体 19 + 35 / API モード実クリック E2E 15 スイート 140 チェック / モック回帰（ナビ + マスタ 4 + 日報 11 + 勤怠 5）/ typecheck（api・mockup）
+- [x] 検証: API 統合テスト 67（buildContext 直接検証 = reports deny で文脈消失・フィールド deny 反映・他人日報は提出済みのみ・workflow deny / avatar allowlist / scope=all month 必須）/ 単体 19 + 35 / API モード実クリック E2E 15 スイート 140 チェック / モック回帰（ナビ + マスタ 4 + 日報 11 + 勤怠 5）/ typecheck（api・home）
 
 ## 12. バッチ6a（PR #35・マージ済み）: AI カンパニー F-08 の API 化 + 5d レビュー指摘対応の完了条件（Definition of Done）
 
@@ -244,8 +244,8 @@
 - [x] API `/v1/ai-company`: タスク依頼（分解 = Vertex AI 構造化出力 → 失敗時 shared/domain/ai-tasks の同一ヒューリスティック）→ 承認/進行/ブロック/中止（FOR UPDATE 直列化・AKO-AIC-001〜008・活動ログ・完了時 依頼者へ通知・AI 社員 status 同期）+ 日次報告の冪等生成 + 停滞/過負荷検知（workload-check・クールダウン冪等）。機能ガード 'ai-company'（F-16）+ チャットボット文脈へ AI タスクブロック追加
 - [x] フロント: useAiCompany デュアルモード化（API = /v1/ai-company キャッシュ + 移行済みマスタ ai-roles/ai-employees。ロール設定ページは useMasterCrudAsync 化）。/ai-company のモックバッジを解除
 - [x] 5d 独立レビュー指摘対応（マージ後着荷分・7 件）: ① チャットボットのエスカレーション文脈を issue_reported（本人の日報由来）に限定（他者起票の内部メモ・注入経路を遮断）② 見出し・会社名参照にも stripDeniedFields を適用（name deny 時はブロックごと非表示）③ 通知キャッシュの値クリア ④ ログアウトは clearApiData（再取得しない = 未認証バーストなし）⑤ nameHit の敬称限定（一般語との偽ヒット防止）⑥ workflow/task/calendar title の capCp ⑦ chatbot.ts の機能 ID を F-09-2 へ修正
-- [x] 6a 独立レビュー指摘対応（重大 2 + 軽微 6）: ① 日次報告の並行重複 → 部分一意インデックス `daily_reports_ai_uq`（0015）+ ON CONFLICT DO NOTHING + UI 二重押下防止（0015 は AI テーブル新設と同時に索引を張るため既存本番に重複日報は生じ得ず、データパッチ不要 = 設計判断）② AI ロール/社員の初期データ未投入 → 0015 で mockup シードと同一の AI ロール 4・AI 社員 5 を `ON CONFLICT DO NOTHING` 投入（decision_themes 0011 と同方針 = 新規環境でも手動投入なしで F-08 が動く。AI 社員の新規作成 UI は将来拡張・現状は割当変更のみ = 明記）③ lowconf dedupe キーを 2 セグメント（`lowconf:emp`）へ簡約 ④ モック AI 日報 entries を theme 形式へ統一 ⑤ addLog seq を当該社員件数に統一 ⑥ decompose へ trim 後 title を渡す ⑦ ai-employees patchSchema から派生値 status を omit
-- [x] 検証: API 統合テスト 72（マスタ CRUD・シード投入・status omit・状態機械 遷移/409・低確信度・日次報告の並行/逐次冪等・scope=all 掲載・機能 deny 403）/ 単体 19 + 35 / API モード実クリック E2E 16 スイート 150 チェック（6a = 依頼 → 分解 → 承認 → 完了 → 日次報告 → タイムライン掲載）/ モック回帰（ナビ + マスタ 4 + 日報 11 + 勤怠 5）/ typecheck（api・mockup）
+- [x] 6a 独立レビュー指摘対応（重大 2 + 軽微 6）: ① 日次報告の並行重複 → 部分一意インデックス `daily_reports_ai_uq`（0015）+ ON CONFLICT DO NOTHING + UI 二重押下防止（0015 は AI テーブル新設と同時に索引を張るため既存本番に重複日報は生じ得ず、データパッチ不要 = 設計判断）② AI ロール/社員の初期データ未投入 → 0015 で home シードと同一の AI ロール 4・AI 社員 5 を `ON CONFLICT DO NOTHING` 投入（decision_themes 0011 と同方針 = 新規環境でも手動投入なしで F-08 が動く。AI 社員の新規作成 UI は将来拡張・現状は割当変更のみ = 明記）③ lowconf dedupe キーを 2 セグメント（`lowconf:emp`）へ簡約 ④ モック AI 日報 entries を theme 形式へ統一 ⑤ addLog seq を当該社員件数に統一 ⑥ decompose へ trim 後 title を渡す ⑦ ai-employees patchSchema から派生値 status を omit
+- [x] 検証: API 統合テスト 72（マスタ CRUD・シード投入・status omit・状態機械 遷移/409・低確信度・日次報告の並行/逐次冪等・scope=all 掲載・機能 deny 403）/ 単体 19 + 35 / API モード実クリック E2E 16 スイート 150 チェック（6a = 依頼 → 分解 → 承認 → 完了 → 日次報告 → タイムライン掲載）/ モック回帰（ナビ + マスタ 4 + 日報 11 + 勤怠 5）/ typecheck（api・home）
 - [x] 売上 + mart ETL（F-15）はバッチ6b（§13）で実装 → 残り: 稼働状況（F-11）→ AKEBONO（F-03）
 
 ## 13. バッチ6b（PR #36・マージ済み）: 売上管理 F-15 + mart ETL 基盤の完了条件（Definition of Done）
@@ -256,18 +256,18 @@
 - [x] 会計年度計算を shared/domain/fiscal.ts へ切り出し（fiscalYearOf / fiscalMonthsOf / fiscalMonthNoOf / fiscalQuarterOf。useSales・ETL・チャットボット文脈で共有 = 原則3）
 - [x] フロント: useSales デュアルモード化（API キャッシュ + 表示時 refresh + upsert）・sales.vue に管理者の実績登録モーダル・mock-status から /sales 除去（モックバッジ解除）
 - [x] チャットボット文脈へ売上サマリブロック追加（can('sales')・年度累計/当月/前年同月比のみ = 明細は /sales へ誘導）
-- [x] 検証: API 統合テスト 80（一括 upsert 冪等・入力検証（件数/金額上限含む）・管理者ガード・ETL 冪等/margin/会計期非正規化/実行履歴・/jobs/sales-mart-etl の CRON_SECRET 保護・buildContext 売上ブロック（deny で文脈消失）・sales deny 403・自社無効化時の既定 4 月フォールバック）/ 単体 19+9（fiscal）+ 35 / API モード実クリック E2E 12 チェック + モック回帰 9 チェック（E2E スタックは旧セッションの scratchpad 消失に伴い再構築）/ typecheck（api・mockup）
+- [x] 検証: API 統合テスト 80（一括 upsert 冪等・入力検証（件数/金額上限含む）・管理者ガード・ETL 冪等/margin/会計期非正規化/実行履歴・/jobs/sales-mart-etl の CRON_SECRET 保護・buildContext 売上ブロック（deny で文脈消失）・sales deny 403・自社無効化時の既定 4 月フォールバック）/ 単体 19+9（fiscal）+ 35 / API モード実クリック E2E 12 チェック + モック回帰 9 チェック（E2E スタックは旧セッションの scratchpad 消失に伴い再構築）/ typecheck（api・home）
 - [x] 独立レビュー第 2 巡: **重大ゼロで収束**（第 1 巡対応の正しさ・回帰なしを確認）。推奨 1 件 = buildContext 売上テストの実時計依存（2026-08 以降に固定期待値が fail する時限性）を本 PR 内で修正（期待値を実データ + 共有 fiscal 関数から相対導出へ）。0017 の CHECK 追加が「適用済み migration の in-place 修正」にあたらないことを確認（deploy は main push のみ = 修正前版 0017 が恒久環境へ適用された事実なし）。軽微メモ（production-architecture の「ドキュメント」バッジ文言と MOCK_PAGE_PATHS の不一致 = 本 PR 以前からの状態・CRON_SECRET テストの env 前提 = 既存同型）は次バッチで対応
 - [x] 独立レビュー第 1 巡の指摘対応（重大 = ドキュメント整合 3 件: production-architecture の未移行ドメイン列挙・phase5/architecture の useSales 行・api-design useChatbot 行の文脈ドメイン列挙）+ 軽微 6 件（chatbot の自社会計月取得を selfFiscalStartMonth 再利用へ / useSales の自社解釈に active を追加 = サーバーと統一 / fact_sales.project_type に CHECK / 金額上限の番兵 AKO-SAL-001 / ETL 手動実行の監査ログ / テスト追補 3 本）。残る軽微（mart_load_runs の running 残留掃除・actor 列・PROJECT_TYPES 共有定数化・未来月登録の UX・ETL エラー経路テスト・初回表示の二重フェッチ）は次バッチで対応
 
 ## 14. バッチ6c（PR #37・マージ済み）: 提供システム稼働状況 F-11 の完了条件（Definition of Done）
 
-- [x] DB（0018）: `system_services`（マスタ的 + components jsonb。mockup シードと同一の 3 サービスを `ON CONFLICT DO NOTHING` 投入 = 新規環境でも手動投入なしで F-11 が動く・原則1）+ `service_incidents`（記録系: updates jsonb 追記のみ・status/resolved_at はその射影・started_at は JST ISO text）+ `uptime_daily`（日次集計。UNIQUE(service_id, date)・非 operational の日のみ格納）。インシデント・uptime はシードしない（モックの乱数 uptime は本番へ持ち込まない = 実績データの偽装防止・sales_monthly と同方針）
+- [x] DB（0018）: `system_services`（マスタ的 + components jsonb。home シードと同一の 3 サービスを `ON CONFLICT DO NOTHING` 投入 = 新規環境でも手動投入なしで F-11 が動く・原則1）+ `service_incidents`（記録系: updates jsonb 追記のみ・status/resolved_at はその射影・started_at は JST ISO text）+ `uptime_daily`（日次集計。UNIQUE(service_id, date)・非 operational の日のみ格納）。インシデント・uptime はシードしない（モックの乱数 uptime は本番へ持ち込まない = 実績データの偽装防止・sales_monthly と同方針）
 - [x] uptime 集計を shared/domain/uptime.ts の純粋関数へ切り出し（JST 日境界の区間分割・重なりは和集合で二重計上しない・最悪値ロールアップ・発生直後のゼロ長でも当日状態へ写像。影響度→状態の写像 IMPACT_TO_STATE はフロント/API 共有 = 原則3）。**SoT = インシデント → uptime_daily は導出**（窓内 DELETE→INSERT のトランザクションで冪等）。トリガ = インシデント登録/更新時（イベント）+ `/jobs/uptime-rollup`（Cloud Scheduler・CRON_SECRET = 周期有給付与と同型）+ `POST /v1/status/uptime/recompute`（管理者の手動回復パス）= 原則6 の両経路
 - [x] API `/v1/status`: GET 一括ハイドレーション（services + 全インシデント + 90 日 uptime を operational 埋めの密配列で返却 = フロント射影はモックと共通）/ POST incidents（管理者のみ・AKO-STS-001/002・初報 = updates[0]・管理者通知）/ POST incidents/:id/updates（管理者のみ・正順のみ = スキップ可・逆行 409 AKO-STS-004・FOR UPDATE 直列化・AKO-STS-003/005・resolved で resolvedAt）。機能ガード 'status'（F-16）
 - [x] フロント: useSystemStatus デュアルモード化（API = /v1/status キャッシュ + 表示時 refresh・登録/更新 async 化 + 二重送信防止・通知はサーバー発火）・チャットボットの決定的フォールバック answerStatus を useSystemStatus 経由へ（API モードでも実データで回答）・mock-status から /status 除去（残る モックバッジは /akebono のみ）
 - [x] チャットボット文脈へ稼働状況ブロック追加（can('status')・全体状態 + 対応中インシデント = 詳細は /status へ誘導）+ ページ説明の「稼働状況はデモデータ」記述を是正（原則5）
-- [x] 検証: API 統合テスト 85（GET 密配列・登録/更新の権限と状態機械・updates 追記・通知発火・uptime 導出 150 分/冪等/管理者ガード・/jobs/uptime-rollup・buildContext 稼働状況の allow/deny・機能 deny 403 復帰）/ 単体 19+9+9（uptime）+ 35 / API モード実クリック E2E 12+16 チェック + モック回帰 9 チェック / typecheck（api・mockup）
+- [x] 検証: API 統合テスト 85（GET 密配列・登録/更新の権限と状態機械・updates 追記・通知発火・uptime 導出 150 分/冪等/管理者ガード・/jobs/uptime-rollup・buildContext 稼働状況の allow/deny・機能 deny 403 復帰）/ 単体 19+9+9（uptime）+ 35 / API モード実クリック E2E 12+16 チェック + モック回帰 9 チェック / typecheck（api・home）
 - [x] 独立レビュー第 2 巡: **重大ゼロ・軽微ゼロで収束**（第 1 巡対応の正しさと新規問題なしを確認: FOR UPDATE OF i のロック範囲 = インシデント行のみでマスタと相互ブロックしない・ON CONFLICT 化後も単独実行の冪等性は同値・「窓内 DELETE→INSERT」の各記述は upsert 化後も正・ドキュメント矛盾の grep 全件確認）。観察 2 点（並行競合時の理論的な行残存 = 回復パス 3 経路で自己修復・許容）を記録
 - [x] 独立レビュー第 1 巡の指摘対応（重大 = ドキュメント整合 4 件: production-architecture の未移行ドメイン列挙・api-design useChatbot 行・本ファイル F-09-3 行の「稼働状況はデモデータ」+「本 PR」残存・phase5/architecture の useSystemStatus 行。**6b 第 1 巡と同一箇所の再発クラスのため、この 3 ファイル + 本ファイルの旧記述確認を毎バッチのセルフチェックに含めること**）+ 軽微 6 件中 4 件採用（AKO-STS-006 起番 = 影響度不正の専用コード / 状況更新のサービス名取得を FOR UPDATE トランザクション内へ = コミット後 500 経路の排除 / uptime 再計算の INSERT を ON CONFLICT DO UPDATE 化 = 並行再計算の一意制約違反防止 / GET インシデント上限 500 の台帳明記）。残る軽微（capCp の共通化 = 3 箇所重複・登録→当日反映テストの深夜 0 時跨ぎフレーク耐性）は次バッチで対応
 
@@ -279,7 +279,7 @@
 - [x] チャットボット文脈へ AKEBONO ブロック追加（can('akebono')・構想状況 + 直近の要望 3 件 = 詳細は /akebono へ誘導）
 - [x] 6b/6c 繰り越しの軽微指摘対応: ① capCp を lib/text.ts へ共通化（chatbot / ai-company / status / akebono の 4 箇所で共有 = 原則3）② PROJECT_TYPES を shared/domain/types の単一定義へ（registry の z.enum・sales の検証 Set が参照）③ 6c 統合テスト「登録 → 当日 uptime 反映」の深夜 0 時跨ぎフレーク耐性（昨日/今日のいずれかで判定）④ production-architecture の「未移行ドメイン」記述をバッジ全廃後の状態へ更新
 - [x] 6b/6c 繰り越しのうち対応しない項目（理由付きで残置）: mart_load_runs の running 残留掃除（クラッシュ時のみ・実害なし = 導出データで常に再実行可能）・actor 列（監査ログで代替済み）・ETL エラー経路テスト・未来月登録の UX 注記・初回表示の二重フェッチ（実害なし）
-- [x] 検証: API 統合テスト 88（投稿/一覧の可視性・trim・順序・未入力 AKO-AKB-001・2000 cp 切詰め・buildContext AKEBONO の allow/deny・機能 deny 403 復帰）/ 単体 19+9+9 + 35 / API モード実クリック E2E 12+16+11 チェック + モック回帰 10 チェック / typecheck（api・mockup）/ api build
+- [x] 検証: API 統合テスト 88（投稿/一覧の可視性・trim・順序・未入力 AKO-AKB-001・2000 cp 切詰め・buildContext AKEBONO の allow/deny・機能 deny 403 復帰）/ 単体 19+9+9 + 35 / API モード実クリック E2E 12+16+11 チェック + モック回帰 10 チェック / typecheck（api・home）/ api build
 - [x] 独立レビュー第 1 巡（PR #38 マージ後着荷 → フォローアップ PR で対応）: ランタイムコード・テスト・マイグレーションは指摘ゼロ。重大 2 件はいずれも再発クラスのドキュメント整合（api-design useChatbot 行へ AKEBONO 追記・phase5/architecture へ useAkebono 行追加）。軽微 1 件 = チャットボットの AKEBONO トリガ正規表現が顧客「アケボノ商事」・サービス「AKEBONO SCM」と衝突（文脈ノイズ。漏えいなし）→ negative lookahead で除外 + 回帰テスト追加
 - [x] 独立レビュー第 2 巡（フォローアップ PR #39）: **重大ゼロ・軽微ゼロで収束**（正規表現の正当トリガ/除外 16 ケースを実測検証・ドキュメント新規矛盾なし・再発クラス 4 ファイルの再 grep クリーン）。観察 1 点（顧客別名「アケボノ」単独言及の文脈ノイズ = 曖昧性解消不可・顧客ブロック並行生成で判別可能・許容）を記録 — **バッチ6b〜6d の反復レビュー（原則9）全て収束・残タスク完了**
 
@@ -289,7 +289,7 @@
 - [x] ① buildContext の話題判定を「今回の質問 + 直近のユーザー発言（3 件・各 200 cp）」へ拡張（キーワード・人名・顧客名・ナレッジ検索すべて。**権限判定（canUseFeature / stripDeniedFields）・本人スコープは不変** = 参照範囲は拡がらず話題の継続性のみ補う）
 - [x] ② フォールバックの 2 段ルーティング（route を null 許容に分離）: 今回の質問で判定 → 該当なしなら直近のユーザー発言を連結して再判定 → それでも不明なら従来の定型応答。モックモードにも同一適用
 - [x] ③ 表示中セッションをタブ内永続（sessionStorage）しリロード後に自動再開: onApiReset ではサーバーミラーのみ破棄しセッション ID は保持（復元可否はサーバーの所有チェックに委ねる = 他人・不在は 404 → refresh() が新しい会話へフォールバック。send 中の AKO-CHT-001 も同様にフォールバック）。ログイン切替の安全性はサーバー側 C3 チェックが担保
-- [x] 検証: API 統合テスト 89（フォローアップ文脈供給・履歴コーパスへの権限 deny・/ask 経由のセッション実データ検証を追加）/ 単体 37 + 35 / E2E フルスタック 12+16+11+**6（chatbot-multiturn-e2e = 2 段ルーティング・リロード自動再開・新しい会話の回帰）** + モック回帰 10 / typecheck（api・mockup）
+- [x] 検証: API 統合テスト 89（フォローアップ文脈供給・履歴コーパスへの権限 deny・/ask 経由のセッション実データ検証を追加）/ 単体 37 + 35 / E2E フルスタック 12+16+11+**6（chatbot-multiturn-e2e = 2 段ルーティング・リロード自動再開・新しい会話の回帰）** + モック回帰 10 / typecheck（api・home）
 - [x] 独立レビュー第 1 巡の指摘対応（重大 1 = 再発クラス: phase5/architecture の useChatbot 行をセッション管理・2 段ルーティング・sessionStorage 永続込みへ更新 / 軽微 4 = ①refresh の永続破棄を AKO-CHT-001（404）限定へ = 一時的な通信断では保持し再試行 ②2 段目のサブ分類（申請/取り方・規程トピック）を今回の質問のみで判定 = 履歴側キーワードの上書き防止（route(corpus, subText) 分離）③onApiReset コメントの自己矛盾修正 ④E2E をストリーミング完了の条件待ち + 固有文言の出現回数で弁別する形へ強化）。**権限境界・セッション所有チェックはレビュアーが全経路照合し問題なし**
 - [x] 独立レビュー第 2 巡: **重大ゼロ・軽微ゼロで収束**（route 分離の 1 段目挙動が従来とバイト同一・404 限定化で復元不能セッションの残留ループなし・E2E の弁別回数一致の妥当性・ドキュメント新規矛盾なしを確認）。観察 2 点（「じゃあ申請するには？」の 1 段目優先順は従来挙動・E2E の新しい会話後 500ms 待機は同期処理のため実害なし）を記録
 
@@ -301,7 +301,7 @@
 - [x] 新ブロック追加: 業界逆引き（業界マスタ × 顧客一覧）/ 部署・組織（一覧 + 人数 + 責任者。部署名の**最長一致**で所属メンバー展開 = 「文脈開発部」より「開発部」が勝つ誤りをテストで検出し修正）/ 休暇種別（申請可能な種別一覧）/ 外部リンク。人の関係（contact_relations = 端点は顧客担当者または自社メンバー）を顧客担当者・メンバー両ブロックへ併記
 - [x] 権限境界の維持: 全新規ブロックで canUseFeature / stripDeniedFields / 本人スコープの既存パターンを踏襲（companies.name deny で業界逆引きの顧客名が剥がれることをテストで検証）
 - [x] 供給対象外の設計判断（変更なし・理由付き）: ドキュメント管理（未移行 = デモデータ）・通知/監査ログ/権限ルール（運用・管理データで会話文脈に不適）・コードマスタ/カスタム項目定義（メタ設定）
-- [x] 検証: API 統合テスト 94（業界・自社担当・先方担当者・会社間の関係・別名照合・自社ブロック・業界逆引き + name deny 剥がし・人の関係の双方向・休暇種別・外部リンク・部署の所属展開）/ 単体 37+35 / E2E フルスタック 12+16+11+8（会社質問で業界・関係が返ることを追加）+ モック回帰 10 / typecheck（api・mockup）/ api build
+- [x] 検証: API 統合テスト 94（業界・自社担当・先方担当者・会社間の関係・別名照合・自社ブロック・業界逆引き + name deny 剥がし・人の関係の双方向・休暇種別・外部リンク・部署の所属展開）/ 単体 37+35 / E2E フルスタック 12+16+11+8（会社質問で業界・関係が返ることを追加）+ モック回帰 10 / typecheck（api・home）/ api build
 - [x] 反復レビュー（原則9・PR #41）: 独立レビュー R1 で重大 1（**strip 網羅の漏れ** = ①自社ブロックの primaryIndustryId / fiscalStartMonth が剥がし前の生値参照 ②補助マスタ = 業界名・関係種別ラベル・関係メモ・休暇種別・外部リンク・部署名・意思決定テーマ・AI 社員名が未 strip で「マスタ由来はすべて strip」の宣言と矛盾）+ 軽微 3（業界逆引きの industryIds deny 時 TypeError で該当ブロック消滅・フォールバック待機リストに departments 欠落・personRelations の相手解決が active 未絞り込み）を検出 → **全件コード側で修正**（補助マスタも strip 適用。JOIN 由来の単一項目 = relation_types.label / ai_employees.name は canViewField で判定。顧客担当者ブロックの所属会社名の生値参照も同クラスとして修正）。補助マスタ deny の反映は統合テスト（fiscalStartMonth / primaryIndustryId / industries.name / relation-types.label / company-relations.notes / leave-types.name / external-links.url / departments.name の 8 観点）で回帰固定。R2 で残 1（会社ブロックの関連プロジェクト行の strip 漏れ = R1 でも双方見落とし）+ 軽微 1（decision-themes.category deny 時に既定「(PJ)」を捏造表示）を検出 → 修正し、projects.name / decision-themes.category deny の 2 観点をテストへ追加（計 10 観点・統合 95 件）
 
 ## 18. 営業日・祝日基盤（オペレーター報告 2026-07-18 #4「明日の計画が 7/20 = 1日ズレ」対応）の完了条件（Definition of Done)
@@ -311,7 +311,7 @@
 - [x] 祝日マスタ: public_holidays（0020。date 一意・SoT）。内閣府「国民の祝日」CSV（Shift_JIS）の公式取込 = `POST /v1/holidays/import`（管理者・date 一意 upsert = 冪等・再取込可・csvText / csvBase64 のオフライン経路あり = 公式サイト障害時の手動アップロード代替）。/masters/holidays 画面から「公式データから更新」ボタンでいつでも更新可 + 手動追加・物理削除
 - [x] 翌営業日計算の共有化: shared/domain/business-day.ts（isWorkingDay / nextWorkingDay / workingDayRuleOf）を新設し、旧 report-draft.nextBusinessDay（土日固定スキップ）を全廃。クライアント = useBusinessDay（ruleFor を再利用）・API = /v1/assist/report-draft（ruleOf + holidaySetAfter）で同一ロジック
 - [x] カレンダー表示への反映: AI業務アシスタントの対象日ナビへ「翌営業日」バッジ（対象日 ≠ 暦日の明日のとき）と「祝: 名称」バッジを表示（明日の計画・今日の振り返りの両方）
-- [x] 検証: 単体 45（business-day 6 観点 = 週末スキップ・祝日スキップ・連休・週末稼働ルール・フォールバック・無限ループ打ち切り + CSV 解析 2 観点）/ API 統合 100（祝日マスタ CRUD・公式取込の冪等/Shift_JIS 自動判定/権限/解析エラー・勤怠ルールの営業日定義・日報ドラフトの祝日跨ぎ翌営業日）/ mockup 単体 35 / 両 typecheck / api build / E2E フルスタック 12+16+11+8 + モック回帰 10
+- [x] 検証: 単体 45（business-day 6 観点 = 週末スキップ・祝日スキップ・連休・週末稼働ルール・フォールバック・無限ループ打ち切り + CSV 解析 2 観点）/ API 統合 100（祝日マスタ CRUD・公式取込の冪等/Shift_JIS 自動判定/権限/解析エラー・勤怠ルールの営業日定義・日報ドラフトの祝日跨ぎ翌営業日）/ home 単体 35 / 両 typecheck / api build / E2E フルスタック 12+16+11+8 + モック回帰 10
 - [x] 運用ノート: 本番リリース後、管理者が /masters/holidays で「公式データから更新」を 1 回実行して祝日を初期投入する（外部サイトへの起動時自動フェッチは行わない設計判断 = 政府サイト障害時にデプロイへ影響させない。以後の祝日改定も同ボタンで反映）。公式サイトに接続できない場合は「CSV から取込」で手元のファイルをアップロード可。**取込は追加・更新のみで削除しない**ため、祝日の移動・取消が告示された場合は旧日付の行を画面から手動削除する（data-design の設計判断参照）
 - [x] 反復レビュー（原則9・PR #43 → フォローアップ PR）: 独立レビュー R1 で重大 1（**API モード初回表示のハイドレーション競合** = 祝日・勤怠ルールのロード完了前に既定対象日が確定し旧挙動へフォールバック → 手動変更まで既定値を再計算へ追随させる watch で修正）+ 軽微 7（存在しない UI を案内するエラーメッセージ → CSV アップロードボタンを実装 / 祝日移動の残留 → 設計判断を明文化 / 行クリック=削除の UX → 操作列の削除ボタンへ / CONVENTIONS.md の「15 種」陳腐化 → 21 種 / テスト間依存 → 祝日を自前登録 / 勤怠ルール SELECT 列の 3 箇所重複 → ATTENDANCE_RULE_COLS へ共通化 / モックの日付重複ガード → クライアント検証追加）を検出。**PR #43 はレビュー収束前にオペレーターがマージしたため、修正は全件フォローアップ PR で対応**
 
@@ -322,7 +322,7 @@
 - [x] 検索最適化データ（search_docs 0021 = **派生キャッシュ・SoT は各マスタ/ナレッジ本体で不変** = オペレーター指示「既存のマスタやナレッジは崩さない」準拠）: 会社（業界・担当・先方担当者・関係・PJ・ナレッジ込み）/ 顧客担当者（所属・人の関係込み）/ 業界（顧客逆引き・ナレッジ込み）/ プロジェクト / ナレッジ全文 を AI が探索・解釈しやすい平文 + (entity, field) タグ付き segments へフラット化。**更新時に自動再生成**（マスタ書込後フック = デバウンス 1.5s・非ブロッキング）+ 起動時再生成 + `POST /v1/search/reindex`（手動回復。原則1/6）。body_hash 差分のみ埋め込み再計算 = 冪等・安価
 - [x] インデックス/ベクター化: 字句 = 文字バイグラム被覆率（分かち書き・pg 拡張不要 = 環境可搬）+ ベクター = Vertex AI text-multilingual-embedding-002（RETRIEVAL_DOCUMENT/QUERY。LLM 無効環境は字句のみへ縮退 = 原則4）。ハイブリッドスコアの上位 4 件を「関連情報（社内データ検索）」ブロックとして LLM 文脈へ供給（精密ブロック描画済みは除外・照合は生データ・**描画は segments の表示項目チェック（canViewField）通過行のみ** = F-16 準拠）
 - [x] ナレッジのドキュメント取込: `POST /v1/knowledge/import`（.md/.txt/.pdf/.docx。PDF = pdfjs-dist（旧 pdf-parse は Node 22 非対応で不採用）・DOCX = mammoth・タイトルは指定 > md 見出し > ファイル名・本文 20,000cp/原本 10MB 上限）→ knowledge_articles 記事化（**既存スキーマ不変**）+ 原本を knowledge_files へ保全 → 検索インデックス自動反映。UI = /masters/knowledge「ドキュメント取込」+ 詳細ドロワーの添付一覧・ダウンロード
-- [x] 検証: 単体 51（name-match 正規化/最長一致/自社キーワード + bigram 境界）/ API 統合 106（reindex 権限・冪等 / 名寄せ・弊社・現在質問優先 / リトリーバル + knowledge.body/title deny の剥がし / md 取込のタイトル抽出・原本ラウンドトリップ・再インデックス反映 / txt・pdf・docx 抽出 / .doc 案内・破損 PDF 422・domain 検証）/ mockup 単体 35 / 両 typecheck / api build / E2E フルスタック 12+16+11+**10**（「弊社の取引先」の自社名寄せ実クリック 2 件追加）+ モック回帰 10
+- [x] 検証: 単体 51（name-match 正規化/最長一致/自社キーワード + bigram 境界）/ API 統合 106（reindex 権限・冪等 / 名寄せ・弊社・現在質問優先 / リトリーバル + knowledge.body/title deny の剥がし / md 取込のタイトル抽出・原本ラウンドトリップ・再インデックス反映 / txt・pdf・docx 抽出 / .doc 案内・破損 PDF 422・domain 検証）/ home 単体 35 / 両 typecheck / api build / E2E フルスタック 12+16+11+**10**（「弊社の取引先」の自社名寄せ実クリック 2 件追加）+ モック回帰 10
 - [x] 供給対象外の設計判断（§17 から変更なし）: ドキュメント管理（/support/documents = 未移行デモデータ）は検索インデックス対象外。ナレッジへ取り込んだドキュメントは対象
 - [x] 反復レビュー（原則9・PR #45）: 独立レビュー R1 で重大 3（いずれも漏えい方向: ①検索リトリーバルの segments チェック不足 = 先方担当者の役職・PJ の status/type・主業界マーク・業界所属・ナレッジ対象紐付けが deny を迂回 ②body_hash が segments を含まず checks 強化が既存行へ伝播しない = 手動 reindex が回復パスとして機能しない ③原本ダウンロード/添付一覧が knowledge.body/title の deny を迂回）+ 軽微 6（エスカレーション裁定還流の再生成フック欠落・埋め込み UPDATE の並行競合ガード・全件フェッチの決定性/規模コメント・旧実装コメント・未参照 devDependency・クライアント履歴照合の優先則差異）を検出 → **全件修正**（segments チェック網羅 + ハッシュへ segments 混入 + canViewField ガード + body_hash 条件付き埋め込み UPDATE + scheduleSearchRebuild フック + 履歴の新しい順 1 件ずつ再判定）。回帰テスト: contacts.title / companies.industryIds / projects.type の検索経路 deny・原本 DL 403・添付一覧空の 5 観点を追加（統合 108 件）
 
@@ -346,7 +346,7 @@
 - [x] データはルール一覧モードと同一の PermissionRule（1 項目 1 ルール・スキーマ/API 不変 = 原則7）。両モードは完全相互運用（一覧で作ったルールが表に反映・表の変更が一覧に 1 件だけ現れることを実クリックで固定）
 - [x] セルはそのレイヤの明示ルールを表示（同一キー複数はレイヤ内解決と同じ deny 優先で代表）。最終可否はレイヤ解決（個人 > 役職 > ロール）で決まる旨・admin のマスタ/設定 deny がロックアウト防止で無視される旨をヒント・脚注で明示
 - [x] レスポンシブ（原則8): マトリクスは overflow-x-auto + 先頭列 sticky
-- [x] 検証: mockup typecheck / 単体 35 / ブラウザ実クリックスモーク 17 チェック（従来 11 + 権限表 6 = 未設定表示・一覧作成ルールの反映・循環 3 状態・乱立なし）
+- [x] 検証: home typecheck / 単体 35 / ブラウザ実クリックスモーク 17 チェック（従来 11 + 権限表 6 = 未設定表示・一覧作成ルールの反映・循環 3 状態・乱立なし）
 - [x] 反復レビュー（原則9・PR #47）: R1 で重大 1（未設定→拒否の復元パスが restore → patch の順で、途中失敗時に無効だった allow ルールが有効化される = 拒否操作の失敗が権限を広げるフェイルオープン）+ 軽微 5（旧データの deny+allow 併存時の重複 allow 生成と解除の空振り / ロックアウト保護表示が個人レイヤの admin を対象外 / セクション見出しの sticky 不発 / aria-busy なし / タブ往復で権限表の状態破棄）を検出 → 全件修正（patch → restore の順へ入替 = フェイルセーフ・併存時は deny の論理削除 + 解除は全件論理削除で 1 クリック収束・member レイヤの admin 判定 + 脚注拡充・見出し内側 sticky・aria-busy・v-show 化）
 
 ## 22. バッチ7b: カレンダー同期対象の選択 + AI 社員間の依頼・連携（オペレーター指示 2026-07-19 #3）の完了条件（Definition of Done)
@@ -399,8 +399,8 @@
 - [x] 「ぽいぽいメモ」→「ぽいぽいポスト」改称: UI 全表記・権限カタログの論理名・監査ログ文言・検索セグメント（種別: ぽいぽいポスト）・ドキュメント全件。内部キー `poipoi`・API パスは不変（下位互換 = 原則7）
 - [x] 管理者の全ポスト閲覧（フィードバック・チーム改善用途）: `GET /v1/notes?kind=poipoi&scope=all`（管理者のみ・active のみ）+ poipoi 取込原本も本人 + 管理者が参照可へ変更。/poipoi に「全メンバーのポスト（管理者）」セクション（投稿者・日時・冒頭 → 押下で全文）。**取消は本人のみ・AI の参照スコープ（owner_member_id = 本人）は不変** = 管理者チャットボットに他人のポストは載らない（混入防止の設計維持）
 - [x] 議事録のサマリー一覧 + 詳細表示: 一覧は登録日時・投稿者・冒頭 160 字のサマリー、押下で詳細モーダル（全文マークダウン描画・紐付け・取込バッジ）。全メンバー参照可（従来どおり C2）
-- [x] マークダウン対応: `mockup/app/utils/markdown.ts`（安全なサブセットパーサ = 見出し/リスト/番号リスト/引用/コードブロック/強調/インラインコード/http(s) リンクのみ）+ `UiMarkdown.vue`（**AST → VNode 直接生成 = v-html 不使用（CONVENTIONS 絶対規則 4 準拠）で XSS が構造的に成立しない**。javascript: スキーム等はリンク化されず平文）。適用先: ノート詳細・日報（所感/課題/明日の予定の表示 + 編集プレビュー）・週報（4 欄の表示 + 編集プレビュー）・ノート登録フォームのプレビュートグル。**保存データはプレーンテキストのまま**（描画時解釈のみ = 下位互換・API 変更なし）
-- [x] 検証: mockup 単体 41（markdown パーサ 6 追加 = XSS 安全性含む）/ api 単体 58 / 統合 128 ×3（scope=all の権限・取消済み除外・原本の本人 + 管理者ガード。7c 期待値は 7e 仕様へ更新）/ 両 typecheck / api build / E2E 全スイート green（12+16+11+10+10）
+- [x] マークダウン対応: `home/app/utils/markdown.ts`（安全なサブセットパーサ = 見出し/リスト/番号リスト/引用/コードブロック/強調/インラインコード/http(s) リンクのみ）+ `UiMarkdown.vue`（**AST → VNode 直接生成 = v-html 不使用（CONVENTIONS 絶対規則 4 準拠）で XSS が構造的に成立しない**。javascript: スキーム等はリンク化されず平文）。適用先: ノート詳細・日報（所感/課題/明日の予定の表示 + 編集プレビュー）・週報（4 欄の表示 + 編集プレビュー）・ノート登録フォームのプレビュートグル。**保存データはプレーンテキストのまま**（描画時解釈のみ = 下位互換・API 変更なし）
+- [x] 検証: home 単体 41（markdown パーサ 6 追加 = XSS 安全性含む）/ api 単体 58 / 統合 128 ×3（scope=all の権限・取消済み除外・原本の本人 + 管理者ガード。7c 期待値は 7e 仕様へ更新）/ 両 typecheck / api build / E2E 全スイート green（12+16+11+10+10）
 - [x] 一回性コスト（オペレーター向け）: 検索セグメントの「種別: ぽいぽいポスト」改称で **poipoi ノートの body_hash が変化し、次回のインデックス再生成時に poipoi 分のみ Vertex 埋め込みの再計算が 1 回走る**（バッチ7d の全件再埋め込みと同型・自動回復・恒久コストなし。埋め込み無効環境は影響なし）
 - [x] 設計判断: 管理者閲覧は「一覧・原本の閲覧」のみで、取消済みポストは対象外（取消 = 本人の意思を尊重）。ai-assistant 内の旧経路ぽいぽいメモ（assist_logs）は §24 の残課題のまま（本バッチは notes 経路のみ）
 
@@ -413,7 +413,7 @@
 - [x] 依頼者インプットの拡張: フリーテキスト + **添付 .md/.txt/.pdf/.docx/.pptx（テキスト抽出）/.jpg/.png（マルチモーダル）**。10MB × 5 件・原本は ai_task_files 保全（DL = 依頼者 + 管理者）。**.pptx 抽出を extract-text へ追加**（jszip = mammoth 経由の既存実体を明示依存化。スライド順・XML エンティティ復元・ノートは対象外の設計判断）
 - [x] エラーコード: AKO-AIC-010（添付形式）/ 011（サイズ・件数）/ 012（回答対象なし）/ 013（回答権限）/ 014（回答待ち）を台帳へ追加
 - [x] UI: タスク詳細モーダル（成果物 = UiMarkdown 描画・質問/回答スレッド・回答フォーム（テキスト + 添付）・「次のステップを遂行」）。タスクボードに「回答待ち」表示 + 「回答する」導線 + 成果物件数。依頼フォームに添付ステージ（選択 → 一覧表示 → 個別解除 = 即送信しない）
-- [x] 検証: api 単体 62（pptx 抽出 4 追加 = zip 爆弾の打ち切り含む）/ 統合 132 ×3（権限デフォルトの再有効化検証 = member/hr の sales・decision 403・masters 参照 API 影響なし / AI 社員の増減・復元 / 実遂行 E2E = 質問 → 回答権限 403 → 回答 → 成果物 → 統合報告 / 添付バリデーション・原本 DL 権限）/ mockup 47 / 両 typecheck / api build / E2E 全スイート green
+- [x] 検証: api 単体 62（pptx 抽出 4 追加 = zip 爆弾の打ち切り含む）/ 統合 132 ×3（権限デフォルトの再有効化検証 = member/hr の sales・decision 403・masters 参照 API 影響なし / AI 社員の増減・復元 / 実遂行 E2E = 質問 → 回答権限 403 → 回答 → 成果物 → 統合報告 / 添付バリデーション・原本 DL 権限）/ home 47 / 両 typecheck / api build / E2E 全スイート green
 - [x] 設計判断（可視性 = レビュー R-5）: **タスクボードは従来どおり全員参照（C2）で、成果物・質問/回答（添付から抽出したテキストの引用を含む）も全員に見える** = 依頼と成果をチームで共有する前提。原本ファイル（バイナリ）のダウンロードのみ依頼者 + 管理者に制限。機密を含む資料は添付前に判断する運用
 - [x] 既知の限界（レビュー M-10・**バッチ7i R1 M-1 で対象拡大**）: 添付抽出テキスト・回答・ロール systemPrompt・**Web 調査メモ（Google 検索グラウンディング由来のページ本文・出典タイトル = バッチ7i）**は LLM プロンプトへ直接入る = **プロンプトインジェクションで成果物の内容・「参考」リンクが汚染され得る**。generateJson は構造化出力のみ（ツール実行なし）で、描画は UiMarkdown（v-html 不使用・http(s) リンクのみ）のため影響は成果物テキストの範囲に限定される。**出典 URL（groundingChunks.web.uri）は Vertex のリダイレクト URL で一定期間後に失効し得る（R1 M-2）= 成果物の「参考」リンクは恒久保証しない**
 - [x] 既知の境界（レビュー M-9/M-12）: 0025 のスキップガードは「有効ルールの有無」で判定 = 全ルールを意図的に無効化した環境には投入される / 分担中の親タスクを手動で進めると子と同名ステップの成果物が重複し得る（7b からの既存挙動。親 done の二重化はロールアップ側で防止済み）/ リクエストボディは 80MB の総量制限（AKO-GEN-004 = 413。**本番 Cloud Run は HTTP/1 リクエスト 32MB 上限があるため、大型添付の複数同時アップロードはプラットフォーム側で先に拒否され得る = UI 文言「10MB×5 件」の実効上限は環境依存**）を追加
@@ -427,7 +427,7 @@
 - [x] 週次 AI インサイト（F-06-10）: `GET /v1/reports/weekly-insight?weekStart=` = 該当週の全登録データ（提出済み日報（人間）・週報・タスク計画・稟議・エスカレーション・AI タスク・ノート・当月売上）を**決定的に集計**（WeeklyMetrics）→ Vertex AI が経営・営業・チーム視点の洞察（エグゼクティブサマリー・SWOT・リスク（high/mid/low）・推奨アクション）を構造化出力。**LLM 無効・失敗時は shared heuristicWeeklyInsight へ縮退（モックモードと同一関数 = パリティ）**。売上は can('sales') のみ供給・reports 機能 deny は 403
 - [x] UI: 週報タブへサブビュー「自分の週報 | AI インサイト」（WidgetsWeeklyInsight = KPI カード 8 種 + メンバー別/テーマ別工数・日別提出数チャート + サマリー/SWOT 4 象限/リスク/アクション/課題明細。週ナビ + 再生成。保存しない = 常に最新データから生成）
 - [x] 一回性コスト（オペレーター向け）: 検索ドキュメントへ投稿者セグメントを追加したため、**次回のインデックス再生成でノート分（poipoi + minutes の一部）の Vertex 埋め込み再計算が 1 回走る**（自動回復・恒久コストなし）
-- [x] 検証: api 単体 67（aiReferenceScope 5 追加）/ 統合 135 ×3（既定 all で他メンバーの投稿が文脈へ・ai-scope deny で自分のみへ制限・レイヤ対象外は不変 / 勤怠の既定 own → allow ルールでチームサマリー供給 / 週次インサイト = 400・集計・決定的洞察・売上の権限マスク。7c の「本人のみ」期待値は 7g 仕様へ更新）/ mockup 47 / 両 typecheck / api build / E2E 全スイート green
+- [x] 検証: api 単体 67（aiReferenceScope 5 追加）/ 統合 135 ×3（既定 all で他メンバーの投稿が文脈へ・ai-scope deny で自分のみへ制限・レイヤ対象外は不変 / 勤怠の既定 own → allow ルールでチームサマリー供給 / 週次インサイト = 400・集計・決定的洞察・売上の権限マスク。7c の「本人のみ」期待値は 7g 仕様へ更新）/ home 47 / 両 typecheck / api build / E2E 全スイート green
 - [x] 設計判断: モックモードのチャットボットはシナリオ応答（LLM なし）のため AI 参照範囲は API モードの文脈供給に適用（権限設定 UI・週次インサイトはモックでも動作）。日報ドラフト材料（本人の日報を書くための材料）は本人スコープのまま = ai-scope の対象外
 - [x] 独立レビュー R1 フォローアップ（PR #56 はレビュー完了前にマージ → 指摘は後続コミットで対応）: **C-1** チーム勤怠/チーム計画ブロックが members.name の表示 deny を反映しない → `canField('members','name')` deny 時はチームブロック自体を供給しない（+ 回帰テスト）/ **M-1** weekStart の暦不正・月曜以外は 400（以前は pg 500 / 黙って週ずれ）/ **M-2** 週ナビの競合 = 世代トークンで古いレスポンスを破棄 / **M-3** F-06-10 行の表分離を修正 / **M-4** モックの aiTasksDone を「最終成果物（無ければ作成）日時の週内判定」で API（updated_at 週内）に近似 = 差異は api-design に記載 / **M-5** ai-assistant の区分ラベルを実挙動に合わせ「タスク計画」へ / **M-6** searchDocsFor の allOwners を SQL 側でも source_kind='note' に限定（将来の owner 付き種別追加でも poipoi 設定で漏れない）/ **M-7** E2E ハーネスをリポジトリ `e2e/` へコミット（README + chromium パス可搬化）。瑣末: sales 権限なし時は sales_monthly を SELECT しない・LLM risks の null 要素ガード
 
@@ -437,7 +437,7 @@
 - [x] ②③ ナビゲーション導線（UX 設計 = screen-design §5）: `utils/nav-map.ts`（SoT）にルート → 親/関連を一元定義し、レイアウトヘッダーが全ページ共通で「親ページへ戻る」（構造上の親・モバイル常時表示）+「関連」ドロップダウン（関連マスタ・設定・関連機能。canPath/管理者フィルタ・空なら非表示）を描画。子詳細 4 ページ + α のアドホック戻るリンクを撤去（原則3）
 - [x] ④ 入力と参照の分離: ぽいぽいポスト/議事録 = 一覧基本ビュー + 入力モーダル（ファイル取込ステージ含む）/ 会社間・人間関係 = 追加ドロワー（マスタ標準に統一）/ 日報 mine = 参照カード（状態 + サマリ）→「日報を書く」でエディタ（AI アシスト材料・生成カードも入力時のみ表示・提出/閉じるで参照へ復帰）/ 週報 = 状態表示 →「週報を書く」でエディタ。打刻・AI アシスタントの計画入力は対象外（アクション/その場編集が適切 = 設計判断）
 - [x] ⑤ カードメニューのカテゴリカスタマイズ（F-13-8）: `utils/menu-registry.ts`（SoT）にダッシュボード/マスタハブの全カード + 既定カテゴリを一元定義（3 ページ分散のハードコードを置換）。カテゴリチップ（すべて + カテゴリ・sessionStorage 記憶・消えたカテゴリは「すべて」へ復帰）。設定 > メニューカテゴリ（SettingsMenuCategoryEditor）でカテゴリの追加・削除・名称変更・並び替え・カード割当（論理名検索）。SoT = configs `menu-categories-<area>`（'' = 既定 = 下位互換）。未割当カードは「その他」へ自動表示 = カードが消えない。取消フロー = 「既定に戻す」+ 再編集（原則 9.5）
-- [x] 検証: api 単体 72（canViewMemberReports 5 追加）/ 統合 138 ×3（チーム参照の公開 = 一般提出済みのみ・管理者下書き可 / 参照 deny で scope=all・team・チャットボット文脈・週次集計から除外・管理者/本人不変。既存「チーム参照は管理者のみ」期待値は 7h 仕様へ更新）/ mockup 51（nav-map 4 追加）/ 両 typecheck / api build / E2E 全スイート green（12+16+11+10+10 = リポジトリ e2e/ ハーネス）
+- [x] 検証: api 単体 72（canViewMemberReports 5 追加）/ 統合 138 ×3（チーム参照の公開 = 一般提出済みのみ・管理者下書き可 / 参照 deny で scope=all・team・チャットボット文脈・週次集計から除外・管理者/本人不変。既存「チーム参照は管理者のみ」期待値は 7h 仕様へ更新）/ home 51（nav-map 4 追加）/ 両 typecheck / api build / E2E 全スイート green（12+16+11+10+10 = リポジトリ e2e/ ハーネス）
 - [x] 設計判断: チームタブの表示メンバー設定は「表示の整理」（configs）・参照可否は「権限」（permission_rules）と役割分離。メニューカテゴリの選択状態は sessionStorage（アカウント設定にしない = 軽い状態）。scope=team の一般公開は提出済みのみ返す = 下書きの秘匿を API 側で担保
 - [x] 独立レビュー R2 フォローアップ（Critical 0 / Minor 3）: **Minor-1** M-1 の残余ウィンドウ（configs 到着前の編集開始）→ 設定ページを開いたら reloadConfigs し、完了まで保存・リセットを無効化（「読込中…」表示）。あわせて保存失敗時に編集内容を破棄しない（save/reset が Result を返す）/ **Minor-2** 表示メンバーを部分設定すると選択肢に出ない役員・業務委託がタイムラインから消える → 表示設定はマトリクス候補にのみ適用（候補外は参照権限のみで判定）/ **Minor-3** ルートコメント・機能マトリクス（F-06-5/6 行）の陳腐化記述を更新
 - [x] 独立レビュー R1 フォローアップ（PR #57・Critical 0 / Minor 7）: **M-1** メニューカテゴリ編集の API 非同期レース（configs 到着前の編集で保存済みカスタマイズを上書き）→ 非 dirty 時の再同期 watch / **M-2** scope=team も期間指定必須（400。scope=all と同じダンプ防止）/ **M-3** コメントスレッドに参照ガード（他人の下書き 404・F-16-6 deny 対象者は提出済みでも 404 = 存在秘匿・管理者は下書き可・deny は管理者にも適用 + 回帰テスト 3 系）/ **M-4** screen-design のカテゴリ configs キー表記を実装（`menu-categories-<area>`）に統一 / **M-5** タイムラインの人間日報は「表示設定 ∩ 参照権限」のみで絞る（マトリクス候補の雇用区分条件は課さない = 役員等の提出済みは従来どおり表示）/ **M-6** touchTeamWindow の陳腐化コメント修正 / **M-7** E2E ハーネスの REPO をスクリプト位置から導出（環境変数で上書き可）+ pkill 範囲の限定・README 追記。ニット: 関係マスタの追加ドロワーで前回バリデーションエラーを持ち越さない
@@ -448,7 +448,7 @@
 - [x] Web 調査（Google 検索グラウンディング）: 各ステップの遂行前に `generateGroundedText`（Vertex `tools: [{googleSearch: {}}]`。groundingChunks から出典 URL を抽出）で調査メモを生成し、材料に加えて遂行。成果物には「参考」として出典 URL を明記。グラウンディングと構造化出力は併用保証がないため 調査（テキスト）→ 遂行（構造化出力）の 2 段構成。調査失敗・LLM 無効環境は調査なしで続行（原則4。Web 調査は API モードのみの機能 = モックは決定的出力）
 - [x] 質問の限定: 依頼者への質問は「自社・顧客のドメイン情報が不可欠」「重要な意思決定・承認が必要」のみ（LLM プロンプトで限定 + ヒューリスティックは 実質空（10 字未満）or 内部参照（自社/弊社/当社/社内/顧客/お客様）+ 30 字未満 のみ。旧「? を含む」トリガーは廃止）。再質問上限 3 回・回答済み依頼へは再質問しない（不変）
 - [x] UI: タスクボード・詳細モーダルの「進める」を「自動実行中」表示 + フォールバックの「再開」（サーバー再起動等で自動実行が止まった場合用）へ変更。承認・回答・解除のトーストを自動実行の文言へ更新
-- [x] 検証: api 単体 76（質問ポリシー 4 追加）/ 統合 139 ×3（自動実行の収束待ち waitAiTask ヘルパー・十分な依頼に質問しないこと・自動質問 → 回答 → 自動再開 → 統合報告 / 分担の自動完了・ロールアップ。ブロックエスカレーション・中止分担のロールアップは自動実行と競合しない SQL セットアップへ再構成）/ mockup 51 / 両 typecheck / 両 build
+- [x] 検証: api 単体 76（質問ポリシー 4 追加）/ 統合 139 ×3（自動実行の収束待ち waitAiTask ヘルパー・十分な依頼に質問しないこと・自動質問 → 回答 → 自動再開 → 統合報告 / 分担の自動完了・ロールアップ。ブロックエスカレーション・中止分担のロールアップは自動実行と競合しない SQL セットアップへ再構成）/ home 51 / 両 typecheck / 両 build
 - [x] 設計判断: 自動実行は fire-and-forget（Cloud Run のリクエストタイムアウトに全ステップの LLM 実行を載せない）。進捗の SoT は ai_tasks（自動実行中の専用状態は持たない = in_progress のまま。サーバー再起動で自動実行が失われても「再開」ボタン・回答・解除から再開可能 = 冪等な状態機械が排他）。Vertex グラウンディングの API 形状は公式ドキュメントで裏取り済み（tools.googleSearch / groundingMetadata.groundingChunks.web）
 - [x] 独立レビュー R1 フォローアップ（PR #58 はレビュー完了前にマージ → 後続コミットで対応。Critical 2 / Minor 5）: **C-1** fire-and-forget 連鎖の未捕捉例外（通知の名前解決クエリ等）が未処理拒否 = プロセス終了に波及し得る → autoRunTask/autoRunAfterApprove を全体 try で非 reject 化・notifyTaskEvents を非スロー化・index.ts に unhandledRejection ハンドラ（深層防御）/ **C-2** Cloud Run のリクエスト課金では応答返却後の CPU がスロットリングされ自動実行が停止し得る → deploy.yml に `--no-cpu-throttling` を追加（**課金がインスタンス稼働時間ベースへ変わる。min-instances 0 のためアイドル時はゼロスケール = オペレーター周知事項**）/ **M-1/M-2** プロンプトインジェクション・出典 URL 失効の既知の限界を文書化（§26 追記）/ **M-3** モックの手動「再開」も残ステップを自動継続（API と同一挙動）/ **M-4** 自動実行中の「再開」競合（009）は「進行中」の案内トーストへ + 追跡ポーリングを 5 秒 ×36（約 3 分）に延長 / **M-5** Web 調査プロンプトに材料（Q&A・添付抜粋）を含める
 
@@ -458,7 +458,7 @@
 - [x] 前日まで前提: 集計基準日 asOf = min(週末, 前日)・経過営業日（public_holidays + 月〜金既定 = shared/domain/business-day）を WeeklyMetrics に追加。提出数（reportSubmitted・reporters）は asOf まで基準・提出率評価は「経過営業日 × メンバー数」分母（heuristicWeeklyInsight）。LLM プロンプトにも「前日分までが正常・当日以降を悲観評価しない」を明示。経過営業日ゼロの週は提出系評価をスキップ
 - [x] 全体/個別分離: 全体共通（company）= 全量集計を保管し、**配信時に閲覧者マスク**（売上 = sales 権限・メンバー別工数/課題 = F-16-6 の memberId 判定）。**全体の洞察本文は個人名・売上に言及しない形で生成**（全員が共有する保管物からの漏えい防止 = 設計判断）。個別（personal = `member:<id>`）= 本人の週次実績（提出・工数・テーマ・課題・計画・週報）+ ロール・役職・所属部署から heuristicPersonalInsight / llmPersonalInsight で生成し本人のみ配信（管理者 = 承認滞留・課題対応 / 人事 = 提出率フォロー / 一般 = 自身の実績、の視点切替）
 - [x] UI: 週報タブ「AI インサイト」= 保存済みロード（未生成は案内 + 生成ボタン）→「あなた向けインサイト」セクション（サマリー・注目ポイント・推奨アクション）+ 全体（KPI/チャート/サマリー/SWOT/リスク/アクション）。生成日時・生成者・集計基準日（前日まで）を明示
-- [x] 検証: api 単体 82（weekly-insight ヒューリスティック 6 追加）/ 統合 140 ×3（POST 保管 → GET 不変（generatedAt 一致）→ 再生成で上書き / 未生成 null / asOf = min(週末, 前日) / 当日提出は提出数に数えない（新設メンバーで検証）/ 個別は本人のみ（他ユーザーは personal null・全体は共有）/ 売上・F-16-6 の配信時マスク）/ mockup 51 / 両 typecheck / 両 build / E2E 全スイート green
+- [x] 検証: api 単体 82（weekly-insight ヒューリスティック 6 追加）/ 統合 140 ×3（POST 保管 → GET 不変（generatedAt 一致）→ 再生成で上書き / 未生成 null / asOf = min(週末, 前日) / 当日提出は提出数に数えない（新設メンバーで検証）/ 個別は本人のみ（他ユーザーは personal null・全体は共有）/ 売上・F-16-6 の配信時マスク）/ home 51 / 両 typecheck / 両 build / E2E 全スイート green
 - [x] 下位互換（原則7）: `GET /v1/reports/weekly-insight` の応答形が `{metrics, insight, llm}` → `{company, personal}` へ変更（消費者は本 SPA の useWeeklyInsight のみ = 同時更新。外部クライアントなし）。WeeklyMetrics へ asOf/businessDaysElapsed/memberId を追加（保存データはこのバッチで新設 = 旧形式の保存物なし）
 - [x] PR #58（バッチ7i）R1 フォローアップも本 PR に同梱（§29 の R1 フォローアップ項参照。C-1 = fire-and-forget の非 reject 化 + unhandledRejection 深層防御 / C-2 = deploy.yml に --no-cpu-throttling（**課金モデル変更 = オペレーター周知**）/ M-1〜M-5）
 - [x] 独立レビュー R1 フォローアップ（PR #59 はレビュー完了前にマージ → 後続 PR で対応。Critical 1 / Minor 5）: **C-1** generatedAt が timestamptz::text の生形式（スペース区切り・UTC）で返り表示が壊れる → リポジトリ規約どおり to_char の JST ISO へ / **M-1** 生成中の週送りで生成ボタンが永久無効化 → フラグを無条件復帰 + 生成中は週ナビも無効化 / **M-2** 全体洞察の個人名抑止をプロンプト指示だけに頼らない → 生成入力から個人名・memberId を剥がすデータ最小化（メンバー1/2… の匿名化）/ **M-4** 「前日まで」の適用範囲（提出系のみ。工数・グラフは週全量）へドキュメント表現を精緻化 / **M-5** featureGuard と重複する requireReportsFeature を除去（原則3）
@@ -466,10 +466,10 @@
 
 ## 31. バッチ7k: チームタブ表示メンバー候補の在籍全メンバー化 + 雇用区分バッジ（オペレーター指示 2026-07-19 #13）の完了条件（Definition of Done）
 
-- [x] 候補拡大: 表示メンバー設定の選択肢を「在籍中の社員・契約・アルバイト」→「在籍中の全メンバー（取締役・外注含む）」へ拡大。既定（設定未設定）は従来どおり = マトリクスは社員・契約・アルバイトのみ / タイムラインは全員。設定ありは「選択メンバー + 自分」でマトリクス・タイムラインを統一（§28 R2 Minor-2 の「候補外は設定の影響を受けない」特例のうち**在籍中の取締役・外注分**は、選択肢に出るようになったため廃止 = 選択状態がそのまま表示状態。**候補に出ない在籍外（退職者等）は引き続き設定の影響外 = タイムライン常時表示** = 「選択肢に出ない対象が部分設定で消える」導線を作らない原則を維持）。判定 SoT = `mockup/app/utils/team-visibility.ts`（純関数へ切り出し = 単体テスト対象）
+- [x] 候補拡大: 表示メンバー設定の選択肢を「在籍中の社員・契約・アルバイト」→「在籍中の全メンバー（取締役・外注含む）」へ拡大。既定（設定未設定）は従来どおり = マトリクスは社員・契約・アルバイトのみ / タイムラインは全員。設定ありは「選択メンバー + 自分」でマトリクス・タイムラインを統一（§28 R2 Minor-2 の「候補外は設定の影響を受けない」特例のうち**在籍中の取締役・外注分**は、選択肢に出るようになったため廃止 = 選択状態がそのまま表示状態。**候補に出ない在籍外（退職者等）は引き続き設定の影響外 = タイムライン常時表示** = 「選択肢に出ない対象が部分設定で消える」導線を作らない原則を維持）。判定 SoT = `home/app/utils/team-visibility.ts`（純関数へ切り出し = 単体テスト対象）
 - [x] 雇用区分バッジ: 設定モーダルの候補行（UiStatusBadge・トーン付き）と選択チップ（小テキスト）に雇用区分を表示。UiMultiCombobox に任意 props `tag`/`tagTone` を追加（未指定 = 従来表示 = 下位互換）。雇用区分トーンは EMPLOYMENT_TYPE_TONES として labels.ts へ集約（メンバー管理のローカル定義を移設 = 原則3）
 - [x] 文言: 「全員表示に戻す」→「既定の表示に戻す」（未設定の意味が「全員」から「既定表示」へ変わったため）。モーダル説明に既定の内訳（マトリクス = 社員・契約・アルバイト / タイムライン = 全員）を明記。取消フロー = 既定に戻す + 再設定（原則 9.5 = 従来どおり）
-- [x] 検証: mockup 単体 62（team-visibility 11 追加: parse 3 / 既定判定 2 / マトリクス 3 / タイムライン 3）/ mockup typecheck / api 影響なし（表示メンバー設定はクライアント側の表示の整理。API scope=team の応答・F-16-6 は不変）
+- [x] 検証: home 単体 62（team-visibility 11 追加: parse 3 / 既定判定 2 / マトリクス 3 / タイムライン 3）/ home typecheck / api 影響なし（表示メンバー設定はクライアント側の表示の整理。API scope=team の応答・F-16-6 は不変）
 - [x] 下位互換（原則7）: 表示メンバー設定を**保存済み**の環境では、設定に含まれない**在籍中の**取締役・外注の提出済み日報がタイムラインに出なくなる（従来は候補外特例で常時表示）。表示したい場合は設定モーダルで追加すればよく（候補に出る = 回復フロー）、データパッチは不要（configs の形式・キーは不変）。**在籍外（退職者等）は設定の影響外のまま = 挙動変化なし**（候補に出ない = 回復フローが成立しないため。R1 M-1）。設定未保存（既定）の環境は挙動変化なし。付随: 設定で選択した取締役・外注はマトリクスに載るため、未提出なら管理者の一括リマインド対象にもなる（表示 = 提出管理対象という自然な帰結。提出義務のないメンバーは設定に入れない運用）
 - [x] 独立レビュー R1 フォローアップ（Critical 0 / Minor 1 / ニット 4）: **M-1** 在籍外（退職者等 = 候補に出ない）が設定ありのときタイムラインから消え、回復フローが成立しない → timelineVisibleWith に selectable（在籍判定）を追加し、候補外は設定の影響外 = 常時表示へ（バッチ7h の原則を維持）+ 回帰テスト / **N-1** 保存済み設定に残る候補外 id が生 id チップ表示される → openTeamSettings で候補外 id をドラフトから除去（候補外は設定の影響外のため実挙動不変）/ **N-2** 候補検索を tag（雇用区分）にも対応（「外注」で絞り込み可）/ **N-3** リマインド対象の帰結を本 §31 に記載 / N-4 は型上到達しない防御的フォールバック = 修正不要
 - [x] 独立レビュー R2 フォローアップ（Critical 0 / Minor 0 / ニット 2）: **N2-1** 保存済み設定の全 id が候補外（選択メンバー全員が退職）のとき、モーダルは空ドラフトなのに保存値が残る「ゴースト設定」が見えない → 候補外 id を除外した場合はモーダルに除外数と「このまま保存すると除外後の内容で確定（未選択 = 既定の表示）」の案内を表示 / **N2-2** UiMultiCombobox ヘッダコメントのフィルタ対象（ラベル・値）を tag 込みへ更新
@@ -483,7 +483,7 @@
 - [x] UI（デュアルモード）: useDocuments を API 対応（/v1/documents キャッシュ + SoT 書込 → 取り直し）。実ファイルアップロード（10MB・抽出対象形式のヒント・抽出有無をトーストで通知）・「ドライブから取込」モーダル（連携状態 → 検索 → 複数選択 → 取込先フォルダ）・ドロワーに Drive/AI 検索対象バッジ + ダウンロード + 取込元リンク・**アーカイブ済み（n）トグル + 復元**（原則 9.5。API = /archive /restore + 監査ログ）。モックモードは従来のメタのみ動作を維持
 - [x] 権限（F-16）: featureGuard `/v1/documents` → 'documents'（機能キーは既存）。一覧は stripDeniedFields('documents')。権限 UI の項目カタログへ documents（ファイル名・タグ・概要 = 本文相当）を追加
 - [x] インフラ（deploy.yml・冪等・非ブロッキング）: `STORAGE_BUCKET` secret 登録時のみ = バケット作成（なければ）+ 実行 SA へ storage.objectAdmin + iam.serviceAccountTokenCreator（self）+ iamcredentials API 有効化。drive.googleapis.com を OAuth 構成時に有効化。setup-deploy-secrets.ps1 に -StorageBucket 追加。**未設定なら DB フォールバックで動作 = 手動ステップなしで最小構成が成立（原則1）**
-- [x] 検証: api 単体 87（documents 5 追加 = V4 署名 3・循環検出 2）/ 統合 150（バッチ7l 9 追加: フォルダ・アップロード往復・署名 URL 縮退・インデックス登録・循環 400・アーカイブ/復元のインデックス連動・summary deny 403・機能ガード 403・ドライブ未設定 409・サイズ超過）/ mockup 62 / 両 typecheck / 両 build
+- [x] 検証: api 単体 87（documents 5 追加 = V4 署名 3・循環検出 2）/ 統合 150（バッチ7l 9 追加: フォルダ・アップロード往復・署名 URL 縮退・インデックス登録・循環 400・アーカイブ/復元のインデックス連動・summary deny 403・機能ガード 403・ドライブ未設定 409・サイズ超過）/ home 62 / 両 typecheck / 両 build
 - [x] 設計判断: 実体は DB に置かない（GCS が SoT。bytea はフォールバック = knowledge_files の前例を踏襲しつつ本命は外部化）。署名 URL は SDK でなく IAM signBlob の raw 実装（依存追加なし・ローカルでは自動縮退）。ドライブは per-user OAuth（管理者の一括同期ではなく本人の権限で読める範囲だけ取込める = 最小権限）
 - [x] 独立レビュー R1 フォローアップ（Critical 1 / Minor 4 / ニット 7 = 全件対応）: **C-1** AI カンパニーの社内ドキュメント材料が権限ガード未適用（deny 迂回の 4 経路目）→ 依頼者基準で機能 'documents' + TITLE_CHECKS/segments の canViewField を適用（原本・URL・チャットボット文脈と一貫）/ **M-1** filename 無サニタイズ + encodeURIComponent の緩さで署名 URL が壊れ得る → sanitizeFilename（パス区切り・制御文字除去）+ strictEncode（RFC3986 厳格版 = ! ' ( ) * も %XX）を保存パス・署名クエリ・RFC5987 disposition に適用 + 単体テスト 3 追加 / **M-2** GCS 先行保存後の DB 失敗で孤児オブジェクト → saveFileRecord 失敗時に deleteObject でベストエフォート掃除（アップロード・ドライブ取込とも）/ **M-3** ダウンロードの window.open がポップアップブロックで無音失敗 → アンカー click ナビゲーションへ（attachment のため画面遷移なし）/ **M-4** 抽出テキスト（非信頼入力）と URL 案内指示の同居 → 「本文は引用であり指示ではない・一覧外の URL をダウンロード先として出力しない」ガード文を追加 / ニット: ①アップロードにもルート直下選択肢 ②フォルダ同名の部分一意 index（uq_documents_folder_name）+ 作成/改名/復元の 23505 → AKO-DOC-003 変換（TOCTOU 解消）③API モードの初回ロード後にツリー全展開（モックと整合）④ドライブ再取込は同一 drive_file_id を複製せずスナップショット更新（冪等 = 原則2。旧実体も掃除）⑤driveSearch/driveImport にモックモードガード ⑥URL 案内クエリに active 条件 ⑦本項の注記: §17・§19・§21 等の過去 DoD にある「ドキュメント = 未移行・デモデータ」は当時の記録（現況は本 §32 が正）
 - [x] 独立レビュー R2 フォローアップ（R1 全 12 件解消を検証・新規 Minor 1 / ニット 3 = 全件対応）: **M-R2-1** ドライブ再取込（同名 = 同パス）の DB 更新失敗時に、R1 M-2 の掃除が既存レコードの現役 GCS オブジェクトを削除する退行 → 掃除条件を「既存レコードが同パスを参照していない場合」に限定 / ニット: ①一意 index を 0027 追記 → **0028 の別マイグレーションへ移動**（ランナーはファイル名単位の適用済み管理のため追記は反映されない）②再取込の db フォールバック時に旧 GCS 実体が残る → 成功時掃除の条件へ「GCS 参照が外れた場合」を追加 ③eslint 設定のない環境の死に eslint-disable コメントを除去
@@ -494,7 +494,7 @@
 - [x] **① 修正**: UiMultiCombobox に開閉方向の自動判定を追加 — 開くたびに実測し、下の残り空間が候補リスト高（当時の実装 = 固定 max-h-56 + マージン。現行は R1 フォローアップ行のクリップ祖先基準 + 動的 max-height が正）に満たず上の方が広ければ**上方向（bottom-full）に開く**。汎用対応のため権限設定等の他の利用箇所でも同様に効く（下に収まる配置では従来どおり下開き。デスクトップでも下端付近では上開きになる = 意図した挙動）
 - [x] **② ドライブ HTTP 403 の原因分析**: 「HTTP 403」のみの表示では判別不能だが、スコープ検査（calendar_tokens.scope に drive.readonly）は通過済み = 403 は Google API 側。最有力は **OAuth クライアントのプロジェクトで Google Drive API が未有効**（deploy.yml の自動有効化は権限不足時に警告のみで続行する非ブロッキング設計）。次点はスコープの再同意漏れ・OAuth 同意画面の制限
 - [x] **② 修正（自己診断化）**: Google API エラー応答の reason / message を AKO-DOC-007 と取込 failed[].reason に含める（`accessNotConfigured` 等が画面に出る）+ 403 時は「Drive API の有効化（gcloud services enable drive.googleapis.com）/ 再接続」の運用ヒントを付記。deploy-guide §4 にトラブルシュート項を追加
-- [x] 検証: 新規 E2E スイート `e2e/team-visibility-e2e.cjs`（当時 10 チェック。R1 フォローアップで実可視性を加え 11 チェック: デスクトップの選択 → 保存 → 反映 → リロード維持 / モバイルの上方向展開・ビューポート内・実可視・タップ → 反映）を run-batch6b-stack.sh に登録し green。mockup 62 / api 単体 90（現行 95 = R1/R2 フォローアップで追加）/ 統合 150 / 両 typecheck / 両 build green
+- [x] 検証: 新規 E2E スイート `e2e/team-visibility-e2e.cjs`（当時 10 チェック。R1 フォローアップで実可視性を加え 11 チェック: デスクトップの選択 → 保存 → 反映 → リロード維持 / モバイルの上方向展開・ビューポート内・実可視・タップ → 反映）を run-batch6b-stack.sh に登録し green。home 62 / api 単体 90（現行 95 = R1/R2 フォローアップで追加）/ 統合 150 / 両 typecheck / 両 build green
 - [ ] 残課題（オペレーター側の運用確認）: 本番 GCP プロジェクトで `drive.googleapis.com` が有効かの確認（無効なら有効化）。修正デプロイ後のエラーメッセージに Google の理由が表示されるため、それで確定診断できる
 - [x] 独立レビュー R1 フォローアップ（PR #63 はレビュー完了前にマージ → 後続 PR で対応。Critical 0 / Minor 3 / ニット 4 = 全件対応）: **M-1** 方向判定がビューポート基準でクリップ祖先（モーダル本文の overflow 等）を見ておらず、未フィルタ時にリスト上端が切れ先頭候補が不可視になる残欠陥 → 可視境界を「クリップ祖先（overflow ≠ visible の祖先）とビューポートの交差」で実測し、開く側に収まらないときは max-height を残り空間へ動的縮小（下限 80px = リスト内スクロールで全候補到達可能）/ **M-2** googleErrorDetail・driveForbiddenHint の単体テスト追加（it 4 件: reason+message 結合・非 JSON 縮退・200cp cap・ヒント条件。R2 フォローアップで新形式 1 件を加え 5 件）/ **M-3** 403 ヒントを理由コードで条件化（calendar.ts の先行分類 + insufficient〜。レート超過 403 には出さない・理由不明は実用優先で出す）/ ニット: ①§33 の「デスクトップ従来挙動不変」を正確な記述へ ②deploy-guide の連続空行除去 ③E2E のシード API 成否検証 + lib.cjs の CHROMIUM_PATH を export して再利用 ④E2E モバイル検証に elementFromPoint の実可視性アサーションを追加（boundingBox だけではクリップを検出できない）
 - [x] 独立レビュー R2 フォローアップ（R1 全 7 件の解消を実機プローブ（未フィルタ 15 候補・視高 380px の権限表）込みで検証・新規 Minor 1 / ニット 2 = 全件対応）: **M-R2-1** driveForbiddenHint の判定が errors[0].reason のみで、新形式（実理由が error.status / details 側・errors[].reason は forbidden 等の汎用値）だと Drive API 未有効でもヒントが抑止され得る → calendar.ts の先行実装と同様に**エラーボディ全文**へ regex を当てる方式へ変更（設定不備が明示 or 理由不明 = ヒントあり / レート・クォータ系が明示 = ヒントなし）+ error.status を reason のフォールバックに追加 + 新形式の単体テスト 1 件追加（api 単体 95）/ ニット: ①§33 の履歴行に「当時の実装値」注記（現行値との混同防止）②テスト件数の表記を it 単位へ修正
@@ -549,7 +549,7 @@
 
 ### 35-6 検証・レビュー
 - [x] api 単体テスト: permission-fallback.test.ts 新設（マスタ全体フォールバック・個別優先・レイヤ優先・stripDeniedFields のカタログ剥がし・member:* の両既定 = 11 件）。単体 112 件（既存 101 + 新設 11）green・api typecheck green
-- [x] mockup typecheck / 単体 73 件 green。実クリック e2e（perm-combobox-e2e.cjs）を新仕様へ更新し**モック静的ビルドで 26 チェック green**: 既定タブ = 権限表・階層展開・常時可否表示・トグル・一括→下位の継承表示・個別優先・member:* の両モード一致・取消フロー（BASE 環境変数対応 = README と整合）。スクリーンショットでデスクトップ（内部スクロール後も thead 常時表示）・モバイル 390px（ページ横スクロールなし = 原則8）を目視確認
+- [x] home typecheck / 単体 73 件 green。実クリック e2e（perm-combobox-e2e.cjs）を新仕様へ更新し**モック静的ビルドで 26 チェック green**: 既定タブ = 権限表・階層展開・常時可否表示・トグル・一括→下位の継承表示・個別優先・member:* の両モード一致・取消フロー（BASE 環境変数対応 = README と整合）。スクリーンショットでデスクトップ（内部スクロール後も thead 常時表示）・モバイル 390px（ページ横スクロールなし = 原則8）を目視確認
 - [x] ドキュメント全件更新（原則5）: functional-requirements（F-16-1/2/3/5/6/7）・data-design（PermissionRule）・api-design（usePermissions）・screen-design（§5.4/5.5）・architecture（MastersPermissionMatrix）・CONVENTIONS（在庫表）・types.ts/permissions.ts の docstring・本表 §21 に置換注記
 
 ## 36. オペレーター指示 2026-07-22（稟議への改称・通知タブ分け / タイムカード切り出し・全員のタイムカード権限化 / 日報・週報のタブ再編・明日の予定・週月ビュー / 稟議の目的・内容分割 + テンプレート）の完了条件（Definition of Done）
@@ -563,7 +563,7 @@
 - [x] 既存タブは「全員のタイムカード」へ改称して維持。参照可否を権限表で管理: `shared/domain/permissions.ts` に `TIMECARD_ALL_FIELD='timecard-all'`・`canViewAllTimecards`（**既定 = 管理者/人事のみ = 従来ロールガードと同値の下位互換**。明示ルールで一般への付与・人事からの剥奪が可能）。権限表（PermissionMatrix）に「全員のタイムカードの参照」行（列対象ごとの既定値 = `defaultAllowOf`）を追加。API `GET /v1/attendance/timecard` のガードを requireHrOrAdmin → canViewAllTimecards へ変更（403 = AKO-ATT-004）
 - [x] 他メンバーの日次詳細への行クリック遷移は従来どおり管理者/人事のみ（API の guardTargetMember と同一 = UI と API の権限判断を一致。権限付与された一般メンバーは一覧まで・本人行は可。R1 監査 A-1 で hr 除外の退行を検出し修正）
 - [x] 休暇申請フォーム: 「任意。承認者への補足があれば記入してください」を hint から「理由」の placeholder へ移動
-- [x] 単体テスト: `mockup/tests/permissions-timecard.test.ts`（既定・付与・剥奪・レイヤ優先・論理削除 = 7 件）
+- [x] 単体テスト: `home/tests/permissions-timecard.test.ts`（既定・付与・剥奪・レイヤ優先・論理削除 = 7 件）
 
 ### 36-3 日報・週報
 - [x] タブ再編: 自分の日報 / 自分の週報 / 全員の日報 / 全員の週報 / チーム（旧 `?tab=weekly` は 自分の週報 へ互換マップ）。参照権限は権限表「日報・週報の参照対象」（F-16-6 canViewMemberReports。ラベルを「日報の参照対象」から改称）で管理
@@ -580,9 +580,9 @@
 - [x] 詳細ドロワーは 目的/内容（マークダウン描画）を表示し、旧データは「本文」として互換表示
 
 ### 36-5 検証・ドキュメント
-- [x] mockup typecheck / 単体 80 件（73 + 新設 7）green・api typecheck / 単体 112 件 green・**統合 156 件（既存 152 + 新設 4 = tomorrow_plans 往復・weekly scope=all（週指定・下書き秘匿・F-16-6 deny）・timecard-all（既定/付与/剥奪 = AKO-ATT-004）・稟議 purpose/content 往復）green**
+- [x] home typecheck / 単体 80 件（73 + 新設 7）green・api typecheck / 単体 112 件 green・**統合 156 件（既存 152 + 新設 4 = tomorrow_plans 往復・weekly scope=all（週指定・下書き秘匿・F-16-6 deny）・timecard-all（既定/付与/剥奪 = AKO-ATT-004）・稟議 purpose/content 往復）green**
 - [x] 反復レビュー（原則9）: 独立コードレビュー + システム監査の 2 ロールで実施。**R1** = 重大 3 件（API モードの旧稟議本文消失（?? → || 修正 + mock も body 移行で両モード一致）・明日の予定自動反映の初回不発（autoPlans computed + watch で遅延ロード到着に追従）・チーム月ビューの未ロード（touchTeamDates の明示タッチ = 誤リマインド防止））・中 3 件（AI 日報のフィルタバイパス・hr の日次詳細導線退行・timecard/attendance 依存）・軽微/表記ほかを修正。**R2** = R1 修正 10 項目すべて解消・機能デグレゼロを確認したうえで、残存の表記 3 件（AI ドラフト生成根拠の 業務テーマ/工数・権限設定の aria-label・e2e チェックラベル）+ 設計 SoT ドキュメント未追随 3 本（screen-design の /attendance・/timecard・/reports・/workflow 節 / data-design の DailyReport・WorkflowRequest・PermissionRule / api-design の weekly scope=all・timecard ガード）+ 本欄の完了宣言先行を指摘 → 全件修正（isPristineEditor の hours/progress 判定強化・weekStart 非月曜の設計判断コメントを含む）。修正後に typecheck・単体・統合の全スイートで再検証
-- [x] ドキュメント更新（原則5）: functional-requirements（F-01-2/F-04-8/F-04-10/F-06-1/F-06-3/F-06-9/F-06-11/F-06-10/F-07 見出し/F-07-1）・本表（タイムカード・稟議行）・mockup/README
+- [x] ドキュメント更新（原則5）: functional-requirements（F-01-2/F-04-8/F-04-10/F-06-1/F-06-3/F-06-9/F-06-11/F-06-10/F-07 見出し/F-07-1）・本表（タイムカード・稟議行）・home/README
 - 既知の制約: API モードの「明日の予定の自動反映」は自分の日報キャッシュ到着後に反映（遅延ロード）。AI 日報ドラフト（F-06-7）は明日の予定（構造化）を生成しない（従来の tomorrow 文字列のみ = 将来拡張）
 
 ## 37. メディア分析 F-40 の本実装（GA 連携・/media 全機能の API 化。2026-07-28）の完了条件（Definition of Done）
@@ -604,10 +604,10 @@
 
 ### 37-3 反復レビュー（原則9・1 巡目 = 独立コードレビュー + システム監査。major 3・minor 11）
 - [x] M1: GA 月次の取得失敗を「トラフィック 0」と区別（integratedReady = 取得成功のみ・integratedFailed 新設・PDCA タブに失敗表示 + 再試行導線）。失敗・未ロード状態では generateIntegrated / generateSegment / generateCompany を実行しない（AKO-MEDIA-004 でエラー = 虚偽の 0 由来インサイトを保管させない）
-- [x] M2: scope=integrated の受領検証を whitelist 正規化 + 全数値の有限・非負・範囲検証へ強化（normalizeIntegratedMetrics。不正は 400 = 500 を出さない・型崩れの保管と LLM プロンプトへの逐語挿入を遮断）。**メディア軸（sessions/conversions/engaged）は GA 連携済みならサーバー導出の月次で上書き**（applyServerMediaAxis = クライアント申告値を信頼しない。GA 一時障害時はクライアント値 + warning 告知で続行 = 原則4）。**改ざん耐性の受容判断**: 売上軸は salesRecords（未移行のモック側 SoT）でサーバー検証不能 = 範囲検証 + generated_by の監査可能性で緩和し、認証済み社内ユーザーの脅威モデルでは受容（routes/media.ts にコメント化。salesRecords の API 移行時にサーバー組み立てで解消）。生成の認可は全ロール可を維持（mockup の画面ゲートと一致・根拠を同コメントに記載）
+- [x] M2: scope=integrated の受領検証を whitelist 正規化 + 全数値の有限・非負・範囲検証へ強化（normalizeIntegratedMetrics。不正は 400 = 500 を出さない・型崩れの保管と LLM プロンプトへの逐語挿入を遮断）。**メディア軸（sessions/conversions/engaged）は GA 連携済みならサーバー導出の月次で上書き**（applyServerMediaAxis = クライアント申告値を信頼しない。GA 一時障害時はクライアント値 + warning 告知で続行 = 原則4）。**改ざん耐性の受容判断**: 売上軸は salesRecords（未移行のモック側 SoT）でサーバー検証不能 = 範囲検証 + generated_by の監査可能性で緩和し、認証済み社内ユーザーの脅威モデルでは受容（routes/media.ts にコメント化。salesRecords の API 移行時にサーバー組み立てで解消）。生成の認可は全ロール可を維持（home の画面ゲートと一致・根拠を同コメントに記載）
 - [x] M3: PDCA タブに「売上・受注 = デモデータ」バッジ + 注記を表示（API モード。実 GA × デモ売上の合成を実績と誤認させない。ダッシュボード（F-41）のモックバッジと基準を統一。salesRecords 移行時に撤去）
 - [x] m4: 統合ファネルの「主体的関与」を GA の engagedSessions 実測へ（/monthly に追加・MediaMonthlyPoint.engagedSessions。実測が無い場合のみ従来の 0.55 係数で近似 = モック不変）/ m5: media_articles に部分一意 INDEX（segment_id, path WHERE active）+ 重複登録・復元衝突は AKO-MEDIA-008 の 409 / m6: GA 403 の理由分類（API 未有効化 vs プロパティ権限なし）を分離し案内を修正 / m7: プロパティ確定・連携解除時にクライアント分析キャッシュを invalidate / m8: PUT /settings でサーバー metrics キャッシュ破棄 / m9: 月次の再試行に force を伝搬 / m11: インサイト生成の劣化データ warning を media_insights.warning へ保管し生成トースト・説明文に表示 / m12: phase3 機能要件（F-40/F-41）・phase5 データ設計 §1.4・アーキテクチャ・画面設計へ追記 / m13: media トグルはクライアント側のみの制御である旨を lib/permissions.ts に明記 / m14: OAuth 基礎処理を calendar と共通化しない判断根拠をコード内コメント化 + 記事手動登録の curl 手順を deploy-guide §1-9b へ記載
-- [x] **R2** = 1 巡目 14 件の全件 RESOLVED を両ロールが実行検証（テスト数値の実測一致・0030 直編集の安全性 = 「origin/main 未マージ・デプロイは main のみ・テスト DB 使い捨て」で確定。main マージ後は直編集不可の運用注意を記録）したうえで、新規 minor 3 件を指摘: N1 = ダッシュボード再生成が GA 一時障害後に同一セッション内でデッドエンド化 / A1 = §37-2 のエラーコード記述の文書内矛盾（008 欠番の残存）/ A2 = 認可コメント「メディア軸は改ざんが効かない」が GA 未連携セグメントで不成立 → 全件修正（ensureIntegratedLoaded に失敗確定検知 + 明示操作起点の 1 回 force 再試行 = M1 の無限リトライ封止・生成遮断は維持 / 記述の四者整合 / 「GA 連携済みなら」の限定 + 未連携時の受容判断明記）。**R3** = 両ロールが修正を検証し**指摘残ゼロを宣言**（N1: 呼び出し元 Grep 全件で computed/watch 経路ゼロ・force が /monthly の force=1 まで貫通・回帰テスト未追加は mockup テスト基盤が純関数のみ対象という制約を事実確認 / A1: §37-2・§37-3・api-design 台帳・media.ts ヘッダの四者整合 / A2: applyServerMediaAxis の適用条件と文言一致）。修正後に typecheck（api・mockup）・api 単体 155・統合 163・mockup 単体 148・build の全スイート再検証 green
+- [x] **R2** = 1 巡目 14 件の全件 RESOLVED を両ロールが実行検証（テスト数値の実測一致・0030 直編集の安全性 = 「origin/main 未マージ・デプロイは main のみ・テスト DB 使い捨て」で確定。main マージ後は直編集不可の運用注意を記録）したうえで、新規 minor 3 件を指摘: N1 = ダッシュボード再生成が GA 一時障害後に同一セッション内でデッドエンド化 / A1 = §37-2 のエラーコード記述の文書内矛盾（008 欠番の残存）/ A2 = 認可コメント「メディア軸は改ざんが効かない」が GA 未連携セグメントで不成立 → 全件修正（ensureIntegratedLoaded に失敗確定検知 + 明示操作起点の 1 回 force 再試行 = M1 の無限リトライ封止・生成遮断は維持 / 記述の四者整合 / 「GA 連携済みなら」の限定 + 未連携時の受容判断明記）。**R3** = 両ロールが修正を検証し**指摘残ゼロを宣言**（N1: 呼び出し元 Grep 全件で computed/watch 経路ゼロ・force が /monthly の force=1 まで貫通・回帰テスト未追加は home テスト基盤が純関数のみ対象という制約を事実確認 / A1: §37-2・§37-3・api-design 台帳・media.ts ヘッダの四者整合 / A2: applyServerMediaAxis の適用条件と文言一致）。修正後に typecheck（api・home）・api 単体 155・統合 163・home 単体 148・build の全スイート再検証 green
 
 ### 37-3b 外部ボットレビュー（PR #80 Codex・P2 × 3 件 = 全件採用）
 - [x] 指摘1: 28 日メトリクス系のゲート（ロード中・失敗・空）を**メディア分析タブ限定**へ（PDCA タブは 6 ヶ月の月次 + 売上を見る画面のため、直近 28 日が空でも月次側の状態のみでゲート。モックでも記事 0 件時に PDCA（売上軸）が見えるようになる = 両モード同一の整合的変更）
@@ -618,13 +618,13 @@
 - 症状: ①メディア分析タブに「内訳の取得に失敗したため総計のみ表示」が常態化 ②PDCA タブの「月次トレンドを取得中…」が永続
 - [x] 根本原因②（確定 = フロントのロード起動デッドロック）: analytics.vue の v-else-if 連鎖はローディング分岐で短絡し、ロードの唯一の起動点だったコンテンツ分岐（metricsFor / integrated computed）が評価されない → ロード未発火でスピナー永続。**状態判定関数（metricsReady / integratedReady）自身が遅延ロードを起動する**よう修正（読取り = 遅延ロードの既存イディオムへ統一。apiLoadOnce の一度きりセマンティクス維持 = M1 の無限リトライ封止は不変。訪問順・タブ順への依存を排除）。他画面（/media ハブ・ダッシュボード）は metricsFor / ensureIntegratedLoaded 経由で起動済みであることを点検
 - [x] 根本原因①（有力因子 = 内訳バッチの all-or-nothing + タイムアウト予算）: 内訳 5 レポートは 1 バッチ同梱のため 1 レポートの問題（互換性 400・クォータ 429・タイムアウト）で全滅する。limit 10000 × 2 を含む内訳は総計より重く 15 秒では不足しうる（※当時の外部リファレンス裏取りで「メトリクス名は全て正規」と判断したが、**後日 GA 応答で entrances のみ無効と確定** = 下の 2026-07-29 続報で訂正・削除）。対策 = **自己診断・自己回復設計**: ①バッチ失敗時は各レポートを個別 runReport で並行リトライし、取れた内訳だけ表示 + 失敗した内訳名のみ warning に列挙（原則4 の粒度を per-report へ）②GA の実エラー理由（error.message 先頭 150 字）を warning / エラーメッセージへ付加（gaErrorDetailOf。従来はサーバーログのみで画面から原因が見えなかった）③内訳・月次のタイムアウトを 15s → 25s（総計は 15s のまま）
-- [x] 検証: api 単体 160（gaErrorDetailOf 4 件追加）/ 統合 163 / mockup 単体 148 / typecheck・build 全 green。deploy-guide §4 トラブルシュートへ「画面 warning の GA 応答 + Cloud Run ログの `ga batchRunReports failed:` / `ga runReport failed:` 行で生エラーを確認」を追記
+- [x] 検証: api 単体 160（gaErrorDetailOf 4 件追加）/ 統合 163 / home 単体 148 / typecheck・build 全 green。deploy-guide §4 トラブルシュートへ「画面 warning の GA 応答 + Cloud Run ログの `ga batchRunReports failed:` / `ga runReport failed:` 行で生エラーを確認」を追記
 - 既知の制約: ②のロード起動はテンプレート短絡に依存しない設計へ変えたが、composable の API モード分岐は単体テスト基盤（純関数のみ）の対象外 = 実クリック e2e の領域（N1 と同じ判断）
 - [x] 続報（2026-07-29 = 本番で根本原因①が確定）: P1/P2 で仕込んだ GA 応答の surfacing が機能し、オペレーター画面に「**Field entrances is not a valid metric**」が表示された = 記事別（topPages）レポート単体失敗の根本原因は **`entrances` が GA4 Data API の無効メトリクス**だったこと（UA 時代の名前で GA4 の UI レポートには存在するが Data API には無い。外部リファレンスによる事前裏取り「entrances は正規」は誤りだったと訂正）。per-report フォールバックにより他の内訳は障害中も表示継続。対応: リクエストから除去 + **`MediaPageStat.entrances` を型ごと削除**（消費トレース: UI 列・インサイトヒューリスティック・LLM プロンプト整形のいずれにも実質消費なし = 偽ゼロ温存や代替レポート追加より削除が正。モック導出・テストフィクスチャも追随。保管済みインサイト metrics jsonb の旧キーは読み飛ばされ無害 = 原則7）
-- [x] 続き（PR #81 Codex レビュー P1/P2 = 全件採用）: **P1** = per-report 失敗の内訳が null 防御のゼロ埋めで「実トラフィック = 0」の顔で描画される穴を、`MetricsResult.unavailable`（'daily'〜'prevPages' の利用不能マーカー）のレスポンス貫通で封止 — フロントは該当ビジュアライゼーション（日別チャート・チャネル/デバイスドーナツ・記事別/セクション別・前期比列）を「取得できませんでした」表示へ置換しゼロ描画しない（M1 の原則を内訳へ適用。総計 KPI は総計レポート由来で影響なし・キャッシュは unavailable 空のときのみ = 従来どおり・モックは常に空 = 全表示）。**P2** = 失敗理由分類に quota（429 / RESOURCE_EXHAUSTED）を追加し、**quota・確定的失敗（API 無効・権限なし）では per-report ファンアウトをスキップ**（枯渇プロパティへの 5 本の追い打ちでクォータ消費を倍増させない。1 巡目 observation の「確定的失敗でも無害リトライ」も同時解消）。回帰テスト = media-fetch.test.ts 新設（fetch モック: 429 で 2 呼びのみ・部分失敗で unavailable 貫通 + 取れた内訳の整形）+ gaFailReasonOf / shouldFanOut の分類 4 件。検証: api 単体 166 / 統合 163 / mockup 148 / typecheck・build 全 green
+- [x] 続き（PR #81 Codex レビュー P1/P2 = 全件採用）: **P1** = per-report 失敗の内訳が null 防御のゼロ埋めで「実トラフィック = 0」の顔で描画される穴を、`MetricsResult.unavailable`（'daily'〜'prevPages' の利用不能マーカー）のレスポンス貫通で封止 — フロントは該当ビジュアライゼーション（日別チャート・チャネル/デバイスドーナツ・記事別/セクション別・前期比列）を「取得できませんでした」表示へ置換しゼロ描画しない（M1 の原則を内訳へ適用。総計 KPI は総計レポート由来で影響なし・キャッシュは unavailable 空のときのみ = 従来どおり・モックは常に空 = 全表示）。**P2** = 失敗理由分類に quota（429 / RESOURCE_EXHAUSTED）を追加し、**quota・確定的失敗（API 無効・権限なし）では per-report ファンアウトをスキップ**（枯渇プロパティへの 5 本の追い打ちでクォータ消費を倍増させない。1 巡目 observation の「確定的失敗でも無害リトライ」も同時解消）。回帰テスト = media-fetch.test.ts 新設（fetch モック: 429 で 2 呼びのみ・部分失敗で unavailable 貫通 + 取れた内訳の整形）+ gaFailReasonOf / shouldFanOut の分類 4 件。検証: api 単体 166 / 統合 163 / home 148 / typecheck・build 全 green
 
 ### 37-4 検証・残課題
-- [x] 検証（レビュー修正後の再実行）: api 単体 **156**（ga-report 20 + media-routes 24 を新設）/ api 統合 **163**（メディア 7 スイート = 部分更新の保持・重複登録/復元衝突・生成→採用→取消→復元・統合インサイト upsert + 受領検証・GA 未設定経路）/ mockup 単体 148 / typecheck（api・mockup）/ mockup build 全 green
+- [x] 検証（レビュー修正後の再実行）: api 単体 **156**（ga-report 20 + media-routes 24 を新設）/ api 統合 **163**（メディア 7 スイート = 部分更新の保持・重複登録/復元衝突・生成→採用→取消→復元・統合インサイト upsert + 受領検証・GA 未設定経路）/ home 単体 148 / typecheck（api・home）/ home build 全 green
 - [ ] 残課題: ~~統合メトリクスの売上月次・salesRecords の API 移行~~ → **Phase C（§39）で解消**（/v1/media/integrated のサーバー組み立て化 = 売上軸の改ざん耐性限界（M2）解消・AKO-MEDIA-016 欠番。businessSegments は Phase B = §38）。F-41 ダッシュボード**保管**（dashboardInsights）のみ Phase D（§39-6）。GA プロパティのタイムゾーンが JST 以外の場合の日単位ずれは許容（lib/ga.ts に設計判断を文書化）。記事インベントリ手動登録の専用 UI（現状は管理者 API + curl = deploy-guide §1-9b）
 
 ## 38. Akebono 設定・実データの本実装 Phase B: 設定系 11 コレクションの API 永続化（2026-07-29）の完了条件（Definition of Done）
@@ -653,7 +653,7 @@
 - [x] 取消可能性（原則9.5): マスタ = 論理削除 + 復元（既存パターン）。アプリ設定 = トグルの再操作で戻る（設定値の上書き）。項目カスタマイズ = null 指定で個別に既定へ戻す + reset でエンティティ単位の一括取消
 
 ### 38-4 検証・ドキュメント
-- [x] テスト: api 単体 **177**（akebono-configs 11 件新設 = appConfigRowsOf の後勝ち畳み込み・境界 / itemSettingPatchOf の hasOwn フィルタ・null 意味論）/ api 統合 **170**（Phase B 7 スイート新設 = 業態シード + **部分 PATCH で未送信フィールド保持**・iconImage 検証（SVG 拒否・403）・units CRUD・pis-01 の AKO-AKB-002 と名称変更可・POST isSeed=true の 409（B-1）・app-configs バッチ upsert（重複畳み込み・冪等・403/400）・item-settings 部分 upsert（labelOverride 保持）+ reset）/ mockup 単体 148 / typecheck（api・mockup）・build 全 green
+- [x] テスト: api 単体 **177**（akebono-configs 11 件新設 = appConfigRowsOf の後勝ち畳み込み・境界 / itemSettingPatchOf の hasOwn フィルタ・null 意味論）/ api 統合 **170**（Phase B 7 スイート新設 = 業態シード + **部分 PATCH で未送信フィールド保持**・iconImage 検証（SVG 拒否・403）・units CRUD・pis-01 の AKO-AKB-002 と名称変更可・POST isSeed=true の 409（B-1）・app-configs バッチ upsert（重複畳み込み・冪等・403/400）・item-settings 部分 upsert（labelOverride 保持）+ reset）/ home 単体 148 / typecheck（api・home）・build 全 green
 - [x] ドキュメント: data-design §1.5（テーブル一覧 + SoT 宣言 + 初期データ・FK 判断）・§1.4 の businessSegments 記述更新 / api-design §3（useAkebonoMasters / useAkebonoApps / useItemSettings）+ §4 台帳（AKO-AKB-002）/ CONVENTIONS（composable の async 化追随）/ 本節
 
 ### 38-4b 反復レビュー（原則9・1 巡目 = 独立コードレビュー + システム監査。minor 2 件のみ = 他項目全クリア）
@@ -682,7 +682,7 @@
 - [x] 商品: POST /products（既定 SKU 同時生成 = XA-1・コード重複 409）・PATCH（hasOwn 部分更新）・archive/restore・POST /:id/skus/matrix（既存組合せスキップ = 冪等・生成で既定 SKU 無効化）・PATCH /product-skus/:id・画像（POST /:id/images = **data:image png/jpeg/webp/gif base64・400,000 字上限 = SVG 拒否 AKO-PRD-004**・archive/restore・セクション変更）
 - [x] 伝票: 発注（状態機械 = shared PO_STATUS_NEXT を FOR UPDATE 検証）・生産（実績追記 + production_in + 全数完成判定を 1 トランザクション）・入荷/出荷（実績 = 追記のみ。在庫 post + 予定ステータス再計算を 1 トランザクション・実績ありの予定取消 409・出荷は在庫不足 409 + 店舗納品の預け倉庫 transfer_in をサーバー解決）・仕入（入荷管理 OFF 経路の warehouseId 指定で purchase_in・赤黒訂正で在庫戻し・二重訂正 409）
 - [x] 在庫: GET 台帳（残高はフロントが shared foldBalances で導出 = 両モード同一）・adjust / transfer（不足 409・出入 2 行を同一トランザクション）・stocktake（差分行のみ計上）。**postInventory = ON CONFLICT DO NOTHING の冪等追記（モック useInventory.post と同一意味論）**
-- [x] 売上・請求: sales-records（原価・課金区分をサーバーが SKU/商品から解決・赤黒 = 相殺行の追記・請求済みは 409）・billing/close（未発行ドラフトの洗い替え = 冪等）・issue / void（赤伝 = マイナス請求 + 売上リンク解除・paid は 409・委託マージンは AKO-BIL-008）・payment-receipts（部分入金・全額で paid）・**consignment/close（店舗マージン請求 + 作家支払通知の一括発行・委託条件スナップショット凍結・精算リンクで再締め冪等）**・payment-notices/:id/confirm。金額算定は **shared/domain/akebono**（calcTax / calcStoreMargin / calcPayoutAmount 等 = utils/akebono.ts から移設しモックと共有。mockup 側は再エクスポートで既存 import 不変）
+- [x] 売上・請求: sales-records（原価・課金区分をサーバーが SKU/商品から解決・赤黒 = 相殺行の追記・請求済みは 409）・billing/close（未発行ドラフトの洗い替え = 冪等）・issue / void（赤伝 = マイナス請求 + 売上リンク解除・paid は 409・委託マージンは AKO-BIL-008）・payment-receipts（部分入金・全額で paid）・**consignment/close（店舗マージン請求 + 作家支払通知の一括発行・委託条件スナップショット凍結・精算リンクで再締め冪等）**・payment-notices/:id/confirm。金額算定は **shared/domain/akebono**（calcTax / calcStoreMargin / calcPayoutAmount 等 = utils/akebono.ts から移設しモックと共有。home 側は再エクスポートで既存 import 不変）
 - [x] 認可: 参照・書込とも認証済み全員（モック画面に管理者ゲートなしの日常業務 = 社内 C2）。/v1/akebono は **featureGuard 'akebono'（F-16 = PATH_FEATURES）の対象**（機能 deny で全体遮断できる安全側。個別アプリの表示制御は業態×アプリ設定 = クライアント側。レビュー A2 で「対象外」の誤記述を訂正）。発行・精算・訂正・取消は監査ログ
 - [x] エラーコード: モック composable と同一の AKO-PRD/POR/MFG/INB/PCH/OUT/INV/SLS/BIL 系を台帳へ起番（新規 = AKO-PRD-004 のみ。api-design §4）
 
@@ -700,7 +700,7 @@
 - [x] 空状態の導線: 全記録ページの主要テーブルへ empty-hint（登録方法の案内）を整備（§39-1 実データ方針）
 
 ### 39-5 検証・オペレーター確認
-- [x] テスト: api 単体 **174**（akebono-integrated 6 件新設 = recentMonthKeys / foldBusinessMonthly の赤黒元月帰属 / composeIntegratedMetrics 派生値。旧 M2 テスト 9 件は機能撤去に伴い削除）/ api 統合 **179**（Phase C 8 スイート新設 = 商品/SKU/画像・発注→入荷→在庫・在庫操作・仕入赤黒・出荷店舗預け・売上/請求フロー・委託精算・統合メトリクス。旧「クライアント合成受領」統合テストは新契約へ書き換え）/ mockup 単体 148 / typecheck（api・mockup）・build 全 green
+- [x] テスト: api 単体 **174**（akebono-integrated 6 件新設 = recentMonthKeys / foldBusinessMonthly の赤黒元月帰属 / composeIntegratedMetrics 派生値。旧 M2 テスト 9 件は機能撤去に伴い削除）/ api 統合 **179**（Phase C 8 スイート新設 = 商品/SKU/画像・発注→入荷→在庫・在庫操作・仕入赤黒・出荷店舗預け・売上/請求フロー・委託精算・統合メトリクス。旧「クライアント合成受領」統合テストは新契約へ書き換え）/ home 単体 148 / typecheck（api・home）・build 全 green
 - [x] オペレーター確認手順: ①`/akebono/products` で商品登録（空状態から）→ SKU マトリクス → 画像 ②`/akebono/purchases` 仕入計上（在庫入庫）→ `/akebono/inventory` 残高・調整・移動・棚卸 ③`/akebono/sales` 売上計上 → `/media/analytics` PDCA タブに実売上が反映（デモバッジなし）④`/akebono/billing` 締め → 発行 → 入金 / 委託精算（事前に顧客マスタで取引先へ「店舗」「委託仕入先（作家）」ロール + 共通マスタで委託条件を実取引先で登録・**wh-02/03 の預け先を実店舗へ付け替え**）⑤いずれもリロード・翌日も保持されること
 ### 39-6 残課題（Phase D）→ **§40（Phase D）で消し込み完了（2026-07-29）**
 - [x] **委託精算の取消フロー** → **§40 で実装**（0037。マージン請求の赤伝 + 支払通知の論理取消 + 売上リンク解除 = 再締め可能・二重取消 AKO-BIL-010。AKO-BIL-008 は「単独赤伝不可 = consignment/cancel を使用」へ更新）
@@ -716,7 +716,7 @@
 - [x] **C-3（minor）**: `POST /products/:id/restore` の部分一意衝突（同コード再登録後の復元）を 23505 → **AKO-PRD-002 409 + 対処案内**へ（media_articles restore と同型。500 を出さない）
 - [x] **A2（minor・原則5）**: 「/v1/akebono は F-16 対象外」という実挙動（PATH_FEATURES で featureGuard 'akebono' の対象 = 安全側）と逆の記述 3 箇所（akebono-trade.ts ヘッダ・api-design §3・本書 §39-2）を訂正。実在しない「akebono.ts と同判断」引用も削除
 - [x] **A3（minor）**: §37-4 残課題行へ Phase C 完了を反映（サーバー組み立て化・M2 限界解消・016 欠番）
-- [x] 検証: api 単体 174 / 統合 **184**（レビュー対応 5 スイート新設 = C-1a 並行出荷・C-1b 一意 INDEX + 並行締め・C-2 入金ガード/取消/再入金・C-3 復元衝突）/ mockup 148・typecheck・build 全 green
+- [x] 検証: api 単体 174 / 統合 **184**（レビュー対応 5 スイート新設 = C-1a 並行出荷・C-1b 一意 INDEX + 並行締め・C-2 入金ガード/取消/再入金・C-3 復元衝突）/ home 148・typecheck・build 全 green
 
 ### 39-8 反復レビュー（外部ボット PR #84 Codex・P1×3・P2×1 = **スケール境界の取得ロジック** → 全件採用）
 > 全指摘とも本番規模（仕入 > 500 件・台帳/売上 > 2 万件）で顕在化する「取得窓に依存した誤集計」。
@@ -727,7 +727,7 @@
 - [x] **P1-3（統合メトリクスの売上取得が無順序 LIMIT 20000）**: `/v1/media/integrated` が売上を無順序 `LIMIT 20000` で取ってから `foldBusinessMonthly` に渡すため、2 万件超のセグメントで任意の部分集合になり売上総額・受注数・赤黒ペアリング・PDCA が誤った。**対象月窓（periodFrom〜periodTo）に絞って取得**へ是正。ただし赤黒訂正は「元伝票の計上月」へ帰属する意味論のため、`LEFT JOIN` で `COALESCE(元伝票.sales_date, 自身.sales_date)` が窓内の行を取る（**窓内の元伝票を offset する訂正は訂正日が当月=窓外でも拾う / 元伝票が窓外の訂正は帰属月も窓外で取得せず = 元不明フォールバックの暴発防止**）。`foldBusinessMonthly` の意味論は不変
 - [x] **P2-4（商品 PATCH が segmentId を無視 = モックと乖離）**: `productPatchOf` が作成時のみ segmentId をコピーし PATCH では無視 → 成功を返すのに旧セグメントのまま（モックは反映 = 乖離）。PATCH でも `Object.hasOwn` で受理 + 参照セグメントの存在検証（requireRef）を追加。別セグメントへの移動で同コード衝突 = 部分一意 INDEX (segment_id, code) WHERE active → 23505 → **AKO-PRD-002 409**（POST/restore と同型・文言をコード変更/移動の双方を案内する形に更新）
 - [x] **回帰テスト（スケール境界を小規模フィクスチャで決定的に検証）**: P1-1 = 対象 SKU の直近仕入を「別 SKU の新しい仕入の後」に置き作家支払 = 仕入単価 650×2=1300（標準原価 900 フォールバックなら 1800）で窓非依存を確認 / P1-2 = `inventory-balances` の Σ集約一致・0 残高非返却 / P1-3 = 元伝票が窓内・訂正日が当月（窓外）の赤黒が元月へ帰属して相殺（訂正日で単純フィルタする回帰なら 7000/2 件になる） / P2-4 = PATCH で segmentId 反映・不存在は 404・移動先の同コードは 409
-- [x] 検証: api 単体 174 / 統合 **188**（Codex 4 スイート新設 = P1-1 原価窓非依存・P1-2 残高集約・P1-3 統合メトリクス月窓 + 赤黒元月帰属・P2-4 segmentId PATCH）/ mockup 単体 148 / typecheck（api・mockup）・build 全 green
+- [x] 検証: api 単体 174 / 統合 **188**（Codex 4 スイート新設 = P1-1 原価窓非依存・P1-2 残高集約・P1-3 統合メトリクス月窓 + 赤黒元月帰属・P2-4 segmentId PATCH）/ home 単体 148 / typecheck（api・home）・build 全 green
 
 ## 40. Akebono 設定・実データの本実装 Phase D: 残記録系・導出系の API 永続化（データ取込 F-32・ダッシュボード保管 F-41・委託精算取消・出荷→売上。2026-07-29）の完了条件（Definition of Done）— **本実装プログラムの最終フェーズ**
 
@@ -807,7 +807,7 @@
 - **結論**: サーバー保存しない。ゆえに本フェーズ完了時点で「localStorage 保管のまま端末ローカル/日次消失する**設定・実データ**」は 0（currentSegment は設定・実データではない UI 状態）。
 
 ### 40-6 検証・オペレーター確認（テスト数はレビュー 1 巡目対応後の確定値 = §40-8）
-- [x] テスト: api 単体 **182**（akebono-phase-d 8 件新設 = importFieldsOf/simulateRun/normalizeDashboardInsight）/ api 統合 **198**（Phase D スイート新設 = 取込の版管理/実行履歴・ダッシュボード upsert（GA 未連携・会社全体・**売上権限ゲート**）・委託精算取消の冪等と再締め・**入金済み/確定済みの取消拒否**・出荷→売上の二重計上防止と店舗預け 409・**source_ref 一意 INDEX**。Phase C の close 応答へ settlementId 追随）/ mockup 単体 **155**（akebono-phase-d 7 件新設 = consignmentCancelBlockReason・buildShipmentSaleLines）/ typecheck（api・mockup）・build 全 green
+- [x] テスト: api 単体 **182**（akebono-phase-d 8 件新設 = importFieldsOf/simulateRun/normalizeDashboardInsight）/ api 統合 **198**（Phase D スイート新設 = 取込の版管理/実行履歴・ダッシュボード upsert（GA 未連携・会社全体・**売上権限ゲート**）・委託精算取消の冪等と再締め・**入金済み/確定済みの取消拒否**・出荷→売上の二重計上防止と店舗預け 409・**source_ref 一意 INDEX**。Phase C の close 応答へ settlementId 追随）/ home 単体 **155**（akebono-phase-d 7 件新設 = consignmentCancelBlockReason・buildShipmentSaleLines）/ typecheck（api・home）・build 全 green
 - [x] オペレーター確認手順:
   1. `/akebono/imports`（管理者）で取込元を追加 → マッピングを保存（v1 → v2 で版が上がる）→ 取込を実行（履歴が積み上がる）→ **リロード・翌日も保持**
   2. `/akebono/dashboard`（業態ダッシュボード）→ 「レポートを生成」→ AI レポート・インサイトが表示 → **リロードで保持（バッジ「レポート保管 = ローカル」が無いこと）**。`/akebono/company`（会社全体・売上権限）でも同様
@@ -822,17 +822,17 @@
 
 ### 40-8 反復レビュー（原則9・1 巡目 = 独立コードレビュアー + システム監査官・いずれも Opus。統合指摘 major 1・中 1・minor 6 → 全件対応）
 > Phase D の 1 巡目レビュー。財務整合の major 1 件・原則9.5 実態化の中 1 件を是正し、minor を全消し込み。
-- [x] **MAJOR-1（財務整合・両モード）: `consignment/cancel` が下流確定状態を無視して片側反転**（入金済み/部分入金のマージン請求は `status='issued'` 条件から外れ void されず孤児入金化・支払通知は期間一括 void で再締め時に片側消失）→ **バッチに有効入金のあるマージン請求（部分入金含む）or 確定済み支払通知が 1 件でもあれば取消を AKO-BIL-011 で拒否**（整合を壊さない拒否を採用。全反転は入金・確定という確定系の自動巻き戻しになり危険なため不採用）。先に入金取消（AKO-BIL-009）を行えば取消可能。判断は共有純関数 `consignmentCancelBlockReason`（API = SQL EXISTS + JS 純関数、モック = 同純関数 = 両モード一致）。統合テスト（入金済みは 409 → 入金取消後は 200・確定通知は 409）+ mockup 単体
+- [x] **MAJOR-1（財務整合・両モード）: `consignment/cancel` が下流確定状態を無視して片側反転**（入金済み/部分入金のマージン請求は `status='issued'` 条件から外れ void されず孤児入金化・支払通知は期間一括 void で再締め時に片側消失）→ **バッチに有効入金のあるマージン請求（部分入金含む）or 確定済み支払通知が 1 件でもあれば取消を AKO-BIL-011 で拒否**（整合を壊さない拒否を採用。全反転は入金・確定という確定系の自動巻き戻しになり危険なため不採用）。先に入金取消（AKO-BIL-009）を行えば取消可能。判断は共有純関数 `consignmentCancelBlockReason`（API = SQL EXISTS + JS 純関数、モック = 同純関数 = 両モード一致）。統合テスト（入金済みは 409 → 入金取消後は 200・確定通知は 409）+ home 単体
 - [x] **中（原則9.5）: 取込元 archive/restore が UI 未接続**（composable/API/統合テストは在るが imports.vue に導線なし = 宣言だけで実態が伴わない）→ imports.vue に **無効化（確認ダイアログ付き）+「無効も表示」トグル + 復元導線**を追加（既存マスタ画面の論理削除 UI パターン踏襲・原則8）
 - [x] **m1（テスト数の食い違い 182 vs 180）**: 2 巡目レビューで独立コードレビュアーが再び 182 を実測して不一致が残ったため、コーディネータが `80effd1` で `npm test`（JSON reporter 含む）を複数回実行し **api 単体 182**（skipped 0・条件付きスキップなし・安定）を確定値とした。1 巡目対応時の 180 は当該環境の一時的な計測差で誤り。§40-6/§40-8 を実測 182 へ是正
 - [x] **m2（出荷→売上の 23505 が生 500）**: outbound-results の inTxn に `.catch` を追加し 0038 部分一意衝突（source_ref 重複）を **AKO-OUT-005 409** へ変換（原則4）。DB 制約の直接検証テスト（同一 source_ref の 2 行 INSERT = 23505）を追加
 - [x] **m4（imports のモード差 = 非管理者が直 URL で書込可）**: useAkebonoImports の全書込に **admin ガード（AKO-AUTH-003）を両モードで追加**（API の requireAdmin と一致）+ imports.vue の書込 UI を isAdmin でゲート + 非管理者向け閲覧のみ注記
 - [x] **監査-2（原則5）: §40-2「事前検証を post の前に置く」が API 実装と不一致**（postInventory 後に検証していた）→ **API の postSales 事前検証 + 単価解決を postInventory の前へ移動**（モック useOutbound と同順序 = 記述を実態に一致・部分適用防止をトランザクション順序でも表現）
-- [x] **監査-3（原則9・テスト）: mock 新規ロジックの単体テストがゼロ**→ 新規ロジックを共有純関数へ抽出（`consignmentCancelBlockReason`・`buildShipmentSaleLines`）し **mockup 単体 7 件**を追加（SR コード累積採番・取消ガードの precedence を検証 = mock/API 乖離の検知）
+- [x] **監査-3（原則9・テスト）: mock 新規ロジックの単体テストがゼロ**→ 新規ロジックを共有純関数へ抽出（`consignmentCancelBlockReason`・`buildShipmentSaleLines`）し **home 単体 7 件**を追加（SR コード累積採番・取消ガードの precedence を検証 = mock/API 乖離の検知）
 - [x] **監査-4（原則6/認可）: 会社全体 dashboard（C3 = 売上含む）にサーバー側売上権限検証がない**→ scope=company の GET/生成に **`canUseFeature(rules, subject, 'sales')` サーバーゲート（AKO-PRM-001 403）**を追加（featureGuard と同型・ルール未設定は既定 allow）。統合テスト（売上 deny の member は 403・admin/業態単位は 200）
 - [x] **監査-5（原則5・既存不整合）: §38 タイトル「12 コレクション」**→ 本文/表/実装と一致する「**11**」へ是正
 - [x] 観察-6（用語基準・任意）: 対応見送り（「導出キャッシュ」「設定系/記録系/確定系」の呼称は data-design §1.5-1.7 で統一済み = 実害なし）
-- [x] 検証: api 単体 **182** / 統合 **198**（レビュー対応 3 スイート新設 = MAJOR-1 取消拒否・監査-4 売上権限ゲート・m2 source_ref 一意 INDEX）/ mockup 単体 **155**（監査-3 = 2 純関数）/ typecheck（api・mockup）・build 全 green
+- [x] 検証: api 単体 **182** / 統合 **198**（レビュー対応 3 スイート新設 = MAJOR-1 取消拒否・監査-4 売上権限ゲート・m2 source_ref 一意 INDEX）/ home 単体 **155**（監査-3 = 2 純関数）/ typecheck（api・home）・build 全 green
 
 ## 41. currentSegment（現在の業態）の per-user DB 永続化 = 端末間同期（オペレーター指示 2026-07-30）
 
@@ -840,7 +840,7 @@
 > 同じ状態で閲覧できるように DB へ永続化する」。§40-5 の「currentSegment は端末ローカルのまま」判断を上書きする。
 
 ### 41-1 調査結果（localStorage/sessionStorage の全走査）
-- 独立監査（Explore ロール）で `mockup/app` の全 `localStorage`/`sessionStorage` アクセスと、`commit()` を呼ぶ全 37 composable を精査。
+- 独立監査（Explore ロール）で `home/app` の全 `localStorage`/`sessionStorage` アクセスと、`commit()` を呼ぶ全 37 composable を精査。
 - **API モードで localStorage にのみ残る「業務・個人状態」は `currentSegment`（`ako.currentSegment.v1`）ただ 1 つ**と確定。
   - 他の localStorage キーは全てモックモード限定のフォールバック（`ako.mockdb.v1` / `ako.currentUser.v1` /
     `akebono-mock-calendar-selection` = いずれも `if (isApi)` の後段 or モック分岐からのみ到達）。
@@ -870,7 +870,7 @@
 - [x] mock-status.ts / useCurrentSegment.ts のヘッダコメントを是正。§40-4 参考・§40-5 に上書き注記。
 
 ### 41-6 検証
-- [x] api 単体 **182** / api 統合 **199**（`/v1/me` prefs + preferences upsert/取得/冪等/per-user 分離/キー・サイズ検証の 1 スイート新設）/ mockup 単体 **155** / typecheck（api・mockup）・build 全 green。
+- [x] api 単体 **182** / api 統合 **199**（`/v1/me` prefs + preferences upsert/取得/冪等/per-user 分離/キー・サイズ検証の 1 スイート新設）/ home 単体 **155** / typecheck（api・home）・build 全 green。
 - [x] オペレーター確認手順（API モード）: 端末 A で業態を切り替え → **別端末（or 別ブラウザ）で同じアカウントでログイン → 同じ業態で開く**。無効化された業態を選択済みでも先頭業態へフォールバック（壊れない）。モックモードは従来どおり端末ローカル。
 
 ### 41-7 反復レビュー（原則9・1 巡目 = 独立コードレビュアー + システム監査官・いずれも Explore/Opus）
@@ -881,7 +881,7 @@
 - [x] **監査-2（storage 暴走）: value サイズ上限はあるがキー数無制限**→ **新規キーは 1 ユーザー 100 件上限**（既存キー更新は常に可の WHERE ガード付き upsert・超過は AKO-GEN-001）。
 - [x] **監査-3（サイズ単位）: 4KB 上限が文字数（UTF-16）で「4KB」表記と不一致**→ **`Buffer.byteLength` の実バイトで判定**（表記と一致）。
 - [x] 監査で確認済み（是正不要）: SoT=サーバー・冪等 upsert・他ユーザー参照/書込不可（member_id は認証コンテキスト）・下位互換（新規テーブル + 任意フィールド）・featureGuard 対象外が妥当・ドキュメント整合・§40-5→§41 の上書き注記・統合テスト数 199 実測一致。
-- [x] 再検証（是正後）: api 単体 182 / 統合 199 / mockup 単体 155 / typecheck（api・mockup）・build 全 green（テスト本数は不変 = 既存 it へアサート追加）。
+- [x] 再検証（是正後）: api 単体 182 / 統合 199 / home 単体 155 / typecheck（api・home）・build 全 green（テスト本数は不変 = 既存 it へアサート追加）。
 
 ## 42. 勤怠承認ワークフロー: 直行/直帰の申請・承認 + 勤怠承認経路（稟議と同様の経路設定。オペレーター指示 2026-07-30）
 
@@ -917,8 +917,8 @@
   「次の承認へ進みました」）・**経路設定タブ**（区分ごとの承認ステップの追加/編集/無効化・復元 = 稟議 F-07-5 と同型）。labels 追加。
 
 ### 42-5 検証
-- [x] api 単体 **187**（attendance-route 5 本）/ api 統合 **202**（直行/直帰の経路なし・多段・取下げの 3 本）/ mockup 単体 155 /
-  typecheck（api・mockup）・build 全 green。
+- [x] api 単体 **187**（attendance-route 5 本）/ api 統合 **202**（直行/直帰の経路なし・多段・取下げの 3 本）/ home 単体 155 /
+  typecheck（api・home）・build 全 green。
 - [x] オペレーター確認手順: ①日次タブ「直行/直帰を申請」→ 申請タブで承認 → 承認済み日に「出勤打刻を申請」→ 承認で打刻反映
   ②経路設定タブで direct/fix に承認ステップ（例 manager→hr）を追加 → 申請が多段承認になる（各段の承認者のみ操作可）。
 
@@ -932,7 +932,7 @@
   - **管理者・承認者の自己承認を許容**: 経路未設定のフォールバック（管理者単段）で自己申請を承認できないと単独管理者環境でデッドロックする。従来の打刻修正も管理者は自己承認可だったため既存踏襲。一般社員は承認者ロールに解決されないため自己承認は構造的に不可（影響小）。
     > **注（2026-07-30・§43 で失効）:** §43 でロール選択肢を **管理者/人事のみ** に制限したため「一般社員は承認者に解決されない」は設計上も担保（role=一般 は選べない）。役職/個人指定で自己が承認者になり得る点は §43 の設計判断を参照。
   - **PATCH の order 重複チェック省略**: 稟議 workflow-routes と同一挙動（UI は常に order=i+1 を送出＝到達不能）。
-- [x] 再検証（是正後）: api 単体 187 / 統合 202 / mockup 単体 155 / typecheck（api・mockup）・build 全 green。
+- [x] 再検証（是正後）: api 単体 187 / 統合 202 / home 単体 155 / typecheck（api・home）・build 全 green。
 - [x] **2 巡目（是正の再確認・独立エージェント）: 指摘ゼロ**。4 修正すべて正しく、原指摘を解消し、新規欠陥なしを確認（決定性・取下げ UI の表示条件と本人ガード・ドキュメント整合・種別連動ラベル）。情報メモ 1 件（member id が将来 collation 依存文字を採ると `ORDER BY id` と JS `localeCompare` が理論上乖離し得る = 現行 `m-*` 形式では非顕在）。
 
 ### 42-7 残課題
@@ -967,7 +967,7 @@
 
 ### 43-3 検証
 - [x] api 単体 **195**（approver 8 本）/ api 統合 **202**（migration 0041 適用・稟議/勤怠の承認者解決を維持）/
-  mockup 単体 155 / typecheck（api・mockup）・build 全 green。
+  home 単体 155 / typecheck（api・home）・build 全 green。
 - [x] 下位互換確認: 稟議の既存経路 seed（wr-01..10）は役職ラベルへ移行しても解決メンバーが不変
   （マネージャー=葛西 / 取締役=佐伯 / 代表取締役=山下 / 人事=村瀬）。
   ただし旧 manager/director は「role+employmentType」解決だったのに対し新モデルは「役職(title)一致」解決のため、
@@ -978,9 +978,9 @@
 - [x] **ロール選択肢を 管理者/人事 のみに制限**（一般=任意の一般社員へ解決＝承認者として無意味・自己承認の温床）。UI（ApproverSteps.vue）+ Zod（approverStepSchema の approverRole を `['admin','hr']`）の双方で担保。
 - [x] **移行の「行動保存」表現を是正**: 旧 role+employmentType 解決 → 新 役職一致 解決の差異と、非標準役職名環境での確認事項を 0041 ヘッダ・§43-1/§43-3 に明記（原則7 のオペレーター説明）。
 - [x] **原則5 全件チェック**: §42 の旧承認者モデル記述（manager/director/president+hr）と「一般社員は承認者に解決されない」不変条件へ §43 への失効注記を追加。
-- [x] **straggler 是正**: `mockup/tests/approval-route.test.ts` の旧形状ステップを新形状（役職指定）へ更新。
+- [x] **straggler 是正**: `home/tests/approval-route.test.ts` の旧形状ステップを新形状（役職指定）へ更新。
 - [x] 是正不要（設計判断として記録）: 役職/個人指定で自己が承認者になり得る点は稟議の運用上許容（承認者名をプレビュー表示）。approverMemberId/approverTitle の実在チェックは既存 approverMemberId と同様に非強制（不在は管理者フォールバック）。migration のステップ単位ガードは all-or-nothing 変換のため到達不能。
-- [x] 再検証（是正後）: api 単体 195 / 統合 202 / mockup 単体 155 / typecheck（api・mockup）・build 全 green。
+- [x] 再検証（是正後）: api 単体 195 / 統合 202 / home 単体 155 / typecheck（api・home）・build 全 green。
 - [x] **2 巡目（是正の再確認・独立エージェント）: 指摘ゼロ**。5 修正すべて正しく原指摘を解消し、新規欠陥なし・回帰スイープ clean を確認（ロール制限は UI+Zod 双方・migration 本体は無変更で冪等維持・旧形式の凍結スナップショット解決は不変）。
 
 ## 44. 項目カスタマイズの全アプリ汎用化（F-31。オペレーター指示 2026-07-30 ①）
@@ -1007,7 +1007,7 @@
   も custom 対応（SR_COLS/INSERT）。統合テストで custom jsonb 往復を検証。
 
 ### 44-3 検証
-- [x] api 単体 195 / api 統合 202（migration 0042 適用・売上 custom 往復）/ mockup 単体 155 / typecheck（api・mockup）・build 全 green。
+- [x] api 単体 195 / api 統合 202（migration 0042 適用・売上 custom 往復）/ home 単体 155 / typecheck（api・home）・build 全 green。
 
 ### 44-4 本 PR のカバレッジと残作業
 - [x] 全 10 アプリ: **項目カスタマイズ設定（既定項目の表示/ラベル/必須 + 追加カスタム項目の定義）が可能**（エンジン+管理画面+保存列）。
@@ -1024,7 +1024,7 @@
 - [x] **m3/m4（原則5）**: §44-4 の残エンティティに SKU・一覧反映を追記。architecture.md に `useAppFields`・`WidgetsCustomFields` を登録。
 - [x] 是正不要（記録）: カスタム項目キー重複防止は `cf.list`（archived 含む）参照＝値保全のため意図的。`appFields` の scope 別可視性は未消費（Part② で消費）。CF_TYPE_LABELS の重複はリポジトリ方針（labels.ts 編集禁止）に沿う。
 - [ ] **残課題（軽微・follow-up）**: ①読み取りビュー（商品詳細・売上一覧/詳細）へのカスタム値表示、②一覧列へのカスタム反映、③売上フォームのカスタム必須エラーのインライン表示（現状トースト）。いずれもフォーム入出力は成立済みで、表示面の完全化を後続で行う。
-- [x] 再検証（是正後）: api 単体 195 / 統合 202 / mockup 単体 155 / typecheck（api・mockup）・build 全 green。
+- [x] 再検証（是正後）: api 単体 195 / 統合 202 / home 単体 155 / typecheck（api・home）・build 全 green。
 
 ### 44-6 Part ②（取込マッピング）への申し送り
 - **エンティティキー空間の整合（監査 M2）**: 取込の `ImportTargetEntity` は `company` を含むが `AkebonoEntity` には無く `ITEM_CATALOG['company']` も無い。取込右辺を `useAppFields(targetEntity)` で構成する際、`company` は Akebono 側カタログを持たず CRM 側 `company` カスタム項目（別画面 settings.vue 管理）と名前空間が衝突する。Part② 着手時に「company 用の Akebono カタログを追加」または「company 取込は CRM エンティティを明示的に参照」のいずれかを決定・文書化する。
@@ -1088,7 +1088,7 @@
 - [x] api 単体 **213**（import-parse に 解析＋正規化テストを集約 = CSV 行/列・JSON キー/空配列・numOrNull/normalizeFieldLocators〔`''→null`〕・
   normalizeImportSourceConfig〔method 別/delimiter 1 文字〕。akebono-phase-d に importFieldsOf ロケータ）/
   api 統合 **203**（config の method 別正規化・PUT /config の権限と正規化・**authValue の管理者限定/非管理者マスク**・
-  CSV 列/固定長バイト範囲/JSON キーのロケータ往復）/ typecheck（api・mockup）・mockup build 全 green。
+  CSV 列/固定長バイト範囲/JSON キーのロケータ往復）/ typecheck（api・home）・home build 全 green。
 
 ### 45-7 本 PR のカバレッジと残作業
 - [x] 4 方式すべてで**方式別のマッピング設定 UI・接続/解析設定・右辺のアプリ有効項目連動**が成立。
@@ -1124,7 +1124,7 @@
 - [x] docs: deploy-guide §1-4b（コールドスタート対策・`CLOUD_RUN_MIN_INSTANCES` の可変化・`--no-cpu-throttling` 併用のコスト注記）。
 
 ### 46-3 検証
-- [x] api 単体 213 / api 統合 203（pool 変更後も green）/ typecheck（api・mockup）・mockup build 全 green。
+- [x] api 単体 213 / api 統合 203（pool 変更後も green）/ typecheck（api・home）・home build 全 green。
 - [ ] 反映はデプロイ後（main マージ → deploy パイプライン）。コスト最優先なら `CLOUD_RUN_MIN_INSTANCES=0` で従来のゼロスケールへ戻せる。
 
 ## 47. 顧客ログ（新設メニュー。オペレーター指示 2026-07-30）の完了条件（Definition of Done）
@@ -1155,7 +1155,7 @@
   取消済み復元。モバイルはカード型。デュアルモード（API = /v1/customer-logs / モック = customerLogs コレクション + デモシード）。
 - [x] 検証: api 単体 222（顧客ログ参照権限 7 = 既定 deny・自分常時可・allow 付与・member:* 一括・レイヤ/deny 優先）/
   api 統合 208（登録検証・本人スコープ・部分更新の項目保持・取消/復元冪等・参照権限マトリクス = HR 403→allow で 200・編集は依然 403）/
-  mockup 単体 155 / typecheck（api・mockup）全 green。
+  home 単体 155 / typecheck（api・home）全 green。
 - [x] docs（原則5）: data-design（CustomerLog エンティティ・SearchDoc sourceKind・PermissionRule 擬似フィールド）・
   api-design（useCustomerLogs 契約・AKO-CLG-001/002/003）・screen-design（サイトマップ + 画面定義）を更新。
 
@@ -1203,7 +1203,7 @@
 - [x] あわせて useReports ヘッダの陳腐化コメント（「提出時エスカレーションは未発火」= バッチ3a で解消済み）を是正
 
 ### 48-6 検証
-- [x] api 単体 **238**（import-run 抽出/変換/復号 12 件 + safe-fetch SSRF 判定 7 件を新設・simulateRun テストを置換）/ api 統合 **214**（実取込 4 スイート = 商品 CSV upsert・売上 JSON 冪等〔同一内容行の序数含む〕・SSRF ガード〔IPv4/IPv6 リテラル〕・無効取込元 409 / 稟議添付 1 スイート = 保存・DL・差分同期・可視性・旧クライアント互換 / チャットボット回復経路 1 スイート）/ mockup 単体 **155** / typecheck（api・mockup）・build 全 green
+- [x] api 単体 **238**（import-run 抽出/変換/復号 12 件 + safe-fetch SSRF 判定 7 件を新設・simulateRun テストを置換）/ api 統合 **214**（実取込 4 スイート = 商品 CSV upsert・売上 JSON 冪等〔同一内容行の序数含む〕・SSRF ガード〔IPv4/IPv6 リテラル〕・無効取込元 409 / 稟議添付 1 スイート = 保存・DL・差分同期・可視性・旧クライアント互換 / チャットボット回復経路 1 スイート）/ home 単体 **155** / typecheck（api・home）・build 全 green
 - [x] オペレーター確認手順（API モード）:
   1. `/akebono/imports` で商品 CSV の取込元 + マッピング（列番号 or ヘッダ名）→ ファイルを選択 → 実行 → `/akebono/products` に実データが登録・同一ファイル再実行で二重登録なし
   2. `/workflow` で申請にファイルを添付 → 提出 → 承認者が詳細ドロワーからダウンロードできる
@@ -1221,7 +1221,7 @@
 - [x] **監査-MINOR-7（ファイル内の正当な同一内容行が skipped に収束）**: フィンガープリントへ出現序数を追加（再実行では序数も再現される = 冪等維持。統合テストで同一内容 2 行 → 2 件反映 → 再実行スキップを検証）
 - [x] 監査-MINOR-1〜4・8 / CR-n1（陳腐化コメント・akebono-menu-design/§45-7 の旧記述・F-32-5 取消の乖離記録・data-design 表列数・同名チップの二重削除）: 全件是正
 - [x] 受容（対応せず記録）: CR-m2/NIT-2 = skipped 行でも SR 採番が飛ぶ（記番ギャップのみ・機能影響なし）/ CR-n2 = /ask 受理済み + 応答喪失時の回復経路でセッションが二重化し得る（データ破壊なし・履歴の冗長のみ）
-- [x] 再検証（是正後）: api 単体 238 / api 統合 214 / mockup 単体 155 / typecheck（api・mockup）・build 全 green
+- [x] 再検証（是正後）: api 単体 238 / api 統合 214 / home 単体 155 / typecheck（api・home）・build 全 green
 
 ## 49. 日報・週報の既読管理 + 日報フォーム改修 + 顧客ログ項目拡張（オペレーター指示 2026-07-31）
 
@@ -1276,10 +1276,10 @@
 - [x] api 単体 **251**（+13 = shared 顧客ログ検証の単体テスト新設 = 49-5 R1 対応）/ **api 統合 221**（顧客ログ: 項目拡張 検証・
   部分更新の新項目保持・コンボボックス新規登録/名寄せ〔正規化名・aliases〕/PATCH 経路 = 3 スイート新設。
   既読管理: 期間必須（実在日検証含む）・冪等（read_at 不変）・未読戻し・404 秘匿（下書き・F-16-6 deny・クロス kind）= 4 スイート新設）/
-  mockup 単体 155 / typecheck（api・mockup）全 green。
+  home 単体 155 / typecheck（api・home）全 green。
 - [x] docs（原則5）: functional-requirements（F-06-1/9/11 更新・**F-18 顧客ログを新設** = R1 監査 MAJOR-1）・
   data-design（CustomerLog 拡張・ReportRead 新設 + §1.2 例外注記）・api-design（useCustomerLogs / useReports 契約・AKO-CLG-001）・
-  screen-design（/reports・/customer-log）・mockup/CONVENTIONS.md（UiCombobox / useDropdownDirection 在庫）・本ファイルを更新。
+  screen-design（/reports・/customer-log）・home/CONVENTIONS.md（UiCombobox / useDropdownDirection 在庫）・本ファイルを更新。
 
 ### 49-5 反復レビュー（原則9・1 巡目 = 独立コードレビュアー + システム監査官。CRITICAL 0・MAJOR 計 3〔重複 1〕→ 全件対応）
 - [x] **CR-M1（UiCombobox の Enter が無関係な先頭候補を選択）**: 完全一致入力・選択済み・空入力での Enter が
@@ -1314,7 +1314,7 @@
   バックフィルは単純な UPDATE + SET NOT NULL でレビュー確認済み = 設計判断）・ぽいぽい同時登録のフロント自動テスト
   （リポジトリにコンポーネントテスト基盤がなく、経路は既存の useNotes('poipoi').add = notes API の統合テスト済み経路。
   フォーム側は「成立時のみ・成功でクリア・失敗警告」の 3 分岐のみ = 手動確認 + レビューで担保する設計判断）。
-- [x] 再検証（是正後）: api 単体 251 / api 統合 221 / mockup 単体 155 / typecheck（api・mockup）全 green。
+- [x] 再検証（是正後）: api 単体 251 / api 統合 221 / home 単体 155 / typecheck（api・home）全 green。
 
 ### 49-6 反復レビュー（原則9・2 巡目。CRITICAL/MAJOR 0・MINOR 計 2・NIT 計 5 → 全件対応/受容記録）
 - [x] **監査（2 巡目）**: 1 巡目是正の実質確認（テスト件数の実測一致・F-18 と実装の突合・残課題/受容記録の妥当性）= 形骸化なし。
@@ -1332,12 +1332,12 @@
   - NIT-5（タグ 30cp 超の無警告切り詰め）→ addTag で 1 タグの文字数上限も保存前に警告
 - [x] 受容（対応せず記録）: CR NIT-4 = 候補リストの aria-activedescendant によるキーボードナビゲーション未実装
   （既存 UiMultiCombobox と同一パターン = 回帰ではない。Tab でリスト内ボタンへ到達可能。将来の a11y 改善候補として記録）。
-- [x] 再検証（2 巡目是正後）: api 単体 252 / api 統合 221 / mockup 単体 155 / typecheck（api・mockup）全 green。
+- [x] 再検証（2 巡目是正後）: api 単体 252 / api 統合 221 / home 単体 155 / typecheck（api・home）全 green。
 
 ## 50. メディア分析の独立チャンネル化 + 任意の業態連携 + 外部投稿記事（オペレーター指示 2026-08-03）の完了条件（Definition of Done）
 
 メディア分析を「事業セグメント（業態）と 1:1 結合」から「**独立したメディアチャンネル + 任意の Akebono
-業務アプリ（業態）連携**」へ両モード（mockup + API）で移行した。連携は必須でなく、未連携（単体）でも
+業務アプリ（業態）連携**」へ両モード（home + API）で移行した。連携は必須でなく、未連携（単体）でも
 分析・記事生成・単体 AI インサイトが動く。業務 × メディアの統合 PDCA は連携済みチャンネルでのみ利用可能。
 外部で投稿した記事原文を保管し media インサイト生成の材料に活用する機能を追加した。
 
@@ -1347,26 +1347,26 @@
   - child 7 テーブル（media_ga_tokens/oauth_states/metrics_cache/articles/article_briefs/generated_articles/insights）は `RENAME COLUMN segment_id TO channel_id`（索引名も命名整合で rename）
   - `media_external_articles`（外部投稿記事の原文。channel_id・title・body 必須・論理削除）を新設
   - DROP TABLE media_settings（データは移設済み）。全操作 IF NOT EXISTS / IF EXISTS / information_schema ガードで冪等
-- [x] **shared/domain/media-*.ts は不変**（純ロジックは opaque id 扱い。media スコープは channelId、integrated スコープは連携先 segmentId を渡す）。shared のテスト（mockup media-* / api unit media 系）は無変更で green
+- [x] **shared/domain/media-*.ts は不変**（純ロジックは opaque id 扱い。media スコープは channelId、integrated スコープは連携先 segmentId を渡す）。shared のテスト（home media-* / api unit media 系）は無変更で green
 - [x] **API（api/src/routes/media.ts）**: 全 segmentId → channelId re-key（segmentIdOf → channelIdOf）。新エンドポイント = チャンネル CRUD（GET/POST /channels・PUT/PATCH /:id・/:id/archive|restore）・外部記事 CRUD（GET/POST /external-articles・PATCH /:id・/:id/archive|restore）。設定/GA/記事/生成/インサイトは channelId keying。integrated は連携必須（channel.segmentId null は AKO-MEDIA-022）。media インサイト生成に外部記事原文を材料反映（LLM プロンプト + heuristic 両経路に applyExternalMaterial）。F-41 ダッシュボードは buildSegmentIntegratedMetrics（業態基点で連携チャンネルを解決）へ切替
 - [x] **新エラーコード**: AKO-MEDIA-020（チャンネル名必須）/ 021（対象チャンネルなし）/ 022（統合には連携業態が必要）/ 023（外部記事の入力不正）/ 024（対象外部記事なし）。既存 003/004/005/006/007/008/011/012/014 と重複なし・016 は欠番のまま
-- [x] **mockup**: types（MediaSetting → MediaChannel・child は channelId・MediaExternalArticle 新設）・seed（mediaChannels = 各業態連携 4 + 単体 mc-note・外部記事シード）・MockDbShape 更新・SEED_VERSION 16 → 17。composables = useMediaSettings → useMediaChannels（チャンネル CRUD + 設定 + GA）・useCurrentChannel（新設。mock localStorage 'ako.currentChannel.v1' / API pref 'currentChannelId'）・useMediaExternalArticles（新設）・analytics/articles/insight を channelId へ。components = MediaSegmentBar → MediaChannelBar・MediaGaConnect を channelId へ。pages = index（チャンネルハブ + 追加）・analytics（PDCA は連携時のみ・未連携は案内）・settings（チャンネル選択/追加/取消復元 + 連携業態選択（任意）+ AI 設定 + 外部記事管理）・akebono/dashboard は useMediaChannels へ
+- [x] **home**: types（MediaSetting → MediaChannel・child は channelId・MediaExternalArticle 新設）・seed（mediaChannels = 各業態連携 4 + 単体 mc-note・外部記事シード）・MockDbShape 更新・SEED_VERSION 16 → 17。composables = useMediaSettings → useMediaChannels（チャンネル CRUD + 設定 + GA）・useCurrentChannel（新設。mock localStorage 'ako.currentChannel.v1' / API pref 'currentChannelId'）・useMediaExternalArticles（新設）・analytics/articles/insight を channelId へ。components = MediaSegmentBar → MediaChannelBar・MediaGaConnect を channelId へ。pages = index（チャンネルハブ + 追加）・analytics（PDCA は連携時のみ・未連携は案内）・settings（チャンネル選択/追加/取消復元 + 連携業態選択（任意）+ AI 設定 + 外部記事管理）・akebono/dashboard は useMediaChannels へ
 - [x] **メニュー**: menu-registry の MENU_CARDS.dashboard に media カード追加（featureToggle:'media' = 既存トグル）・DEFAULT_MENU_CATEGORIES の 'insights'（経営・状況）へ 'media' 追加。AKEBONO_APP_CATALOG から media 撤去（トップメニュー化。AKEBONO_APP_KEYS には下位互換で残置 = 既存 app-configs 保護）。nav-map の /media を HOME 直下へ移動
 - [x] **下位互換（原則7）**: channel.id = 旧 segment_id の backfill により child 行の segment_id 値がそのまま channel_id として解決（0048 で child 行の値変更なし）。統合テストで「channel.id = 旧 segment_id 値のチャンネル + その値を channel_id に持つ子行が解決する」ことを検証。既存 app-configs の 'media' キー・プリセット件数は無変更
 - [x] **検証（実測値）**:
-  - `cd api && npx tsc --noEmit` green / `cd mockup && npm run typecheck` green
+  - `cd api && npx tsc --noEmit` green / `cd home && npm run typecheck` green
   - `cd api && npm test`（unit）: **259 passed**（旧 252 + 外部記事の純関数テスト 7 = externalArticleInputOf・externalMaterialOf・applyExternalMaterial・settingsPatchOf の name/segmentId）
   - `cd api && npm run test:integration`（実 PostgreSQL・0048 適用込み）: **225 passed**（メディア F-40 describe を新チャンネル API 形へ更新 = チャンネル CRUD・単体チャンネルの記事生成・連携チャンネルの integrated・単体は 022・external-articles CRUD・下位互換・チャンネル取消/復元。akebono-dashboard/billing/sales の integrated 参照を channelId へ更新）
-  - `cd mockup && npm test`: **155 passed**（既存 shared 純ロジックテストは無変更）
+  - `cd home && npm test`: **155 passed**（既存 shared 純ロジックテストは無変更）
 - [x] **既知の未検証（GA/Vertex はこの環境で E2E 検証不可）**: GA OAuth トークン交換・GA4 Data/Admin API 呼び出し・Vertex 生成はコード整合とユニット/統合（非 GA 経路・LLM 無効 = 決定的フォールバック）で担保。外部記事のインサイト材料反映は unit（applyExternalMaterial）で検証（統合は GA 未設定のため media インサイト生成が 005 = 生成経路は通せない）
 
 ### 50-x 反復レビュー（原則9・1 巡目 = 独立コードレビュアー + システム監査官。CRITICAL 0・MAJOR 3〔重複 1〕・MINOR 3・NIT → 全件対応/受容）
 - [x] **MAJOR（要件(d)の「AI活用」がモードで欠落 = 監査 MAJOR-2 / CR m-2）**: 外部投稿記事のインサイト材料化
   （externalMaterialOf / applyExternalMaterial）を **shared/domain/media-insight へ移設**し、API とモック
   （useMediaInsight の mock generateMedia）で同一ロジックを適用（原則3・両モードパリティ）。api/routes/media は再エクスポートで
-  既存 import 互換維持。mockup 単体テストを 2 件追加（外部材料の cap/抜粋・articles 先頭反映）。
+  既存 import 互換維持。home 単体テストを 2 件追加（外部材料の cap/抜粋・articles 先頭反映）。
 - [x] **MAJOR（現行リファレンス docs の更新漏れ = 監査 MAJOR-1）**: 削除済みシンボル（useMediaSettings / MediaSegmentBar）を
-  参照していた mockup/CONVENTIONS.md・.ai-native/outputs/phase5/architecture.md・mockup/README.md を
+  参照していた home/CONVENTIONS.md・.ai-native/outputs/phase5/architecture.md・home/README.md を
   新構成（useMediaChannels / useCurrentChannel / useMediaExternalArticles / MediaChannelBar・独立チャンネル + 任意連携）へ更新。
 - [x] **MAJOR（新規連携チャンネルの統合キャッシュ無効化漏れ = CR M-1）**: `invalidateIntegratedFor(segmentId)` を、
   引数 id 自身に加え **その segmentId に連携する全チャンネル id**（UI 作成で id=mc-xxxx のもの）も対象にするよう修正
@@ -1379,7 +1379,7 @@
   未 backfill のものからチャンネルを補完する step 2b を追加（RENAME 前・冪等）。
 - [x] **NIT（akebono-dashboard の記事数 JOIN）**: media_channels JOIN に `c.active` フィルタを追加（取消済みチャンネルの記事を数えない）。
 - [x] 受容（対応せず記録）: CR NIT（akebono の appKey 'media' 残置 = app-configs 件数保護の意図・無害。既にコメント済み）。
-- [x] 再検証（是正後）: api 単体 259 / api 統合 225 / mockup 単体 **158**（外部材料テスト +2 → 156、既存 +... = 158）/ typecheck（api・mockup）全 green。
+- [x] 再検証（是正後）: api 単体 259 / api 統合 225 / home 単体 **158**（外部材料テスト +2 → 156、既存 +... = 158）/ typecheck（api・home）全 green。
 
 ### 50-y 反復レビュー（原則9・2 巡目 = 最終確認。CRITICAL/MAJOR 0・MINOR 1・NIT 2 → 対応/記録）
 - [x] 1 巡目是正 6 件はいずれも実体として解消を独立ロールが確認（テスト実測一致・shared 移設の挙動不変・
@@ -1392,20 +1392,20 @@
   通常運用では顕在化しないが、ファイルの不変条件の整合性として是正）。
 - [x] NIT（0048 は本ブランチで新規追加＝未デプロイのため 0048 編集で正。既デプロイ環境がある場合のみ 0049 分離が必要）:
   0048 は本 PR で新設した未リリースのマイグレーションであり、編集で問題なし（デプロイ実績なし）。記録のみ。
-- [x] NIT（50-x のコミットメッセージ「2 件追加」は実際 3 件）: mockup 単体の追加 it は 3 件（155→158）。
+- [x] NIT（50-x のコミットメッセージ「2 件追加」は実際 3 件）: home 単体の追加 it は 3 件（155→158）。
   ヘッドライン件数 158 は正。記録を訂正（テスト件数の SoT は 158）。
-- [x] 再検証（是正後）: api 単体 259 / api 統合 225 / mockup 単体 158 / typecheck（api・mockup）全 green +
+- [x] 再検証（是正後）: api 単体 259 / api 統合 225 / home 単体 158 / typecheck（api・home）全 green +
   0048 の全適用 → 再適用の冪等性を実 PostgreSQL で確認。**未解決指摘ゼロで収束**。
 
 ## 51. ダッシュボードの表示・配置カスタマイズ（レイアウト。3 階層 + テンプレート。オペレーター指示 2026-08-03）の完了条件（Definition of Done）
 
 ダッシュボード（`/`）の表示・配置（セクション構成・メニュー要素の配置・通知欄の位置・AKEBONO 業務
 セクションの表示・カード密度）を、**世の中の業務アプリを参考にした 5 種のテンプレート（プレビュー付き）**
-から選択できるようにした（両モード = mockup + API）。設定は **ユーザー / テナント / アプリ既定の 3 階層**で、
+から選択できるようにした（両モード = home + API）。設定は **ユーザー / テナント / アプリ既定の 3 階層**で、
 解決順は **ユーザー設定 > テナント設定 > デフォルト表示（アプリ既定）**。既存の 3 機能（外部リンク配置・通知サイド欄・
 未読フィルタ）と現行メディア/顧客ログ等の挙動は不変。
 
-- [x] **型・テンプレート・純ロジック（新 SoT = `mockup/app/utils/dashboard-layout.ts`。新規 shared 不要）**:
+- [x] **型・テンプレート・純ロジック（新 SoT = `home/app/utils/dashboard-layout.ts`。新規 shared 不要）**:
   `DashboardLayout`（templateId + sections:MenuCategoryDef[] + options{notifications:'side'|'bottom'|'hidden' /
   showAkebono:boolean / density:'comfortable'|'compact'}）・`DashboardTemplate`。テンプレート 5 種:
   - `default`（標準）= 現行構成（DEFAULT_MENU_CATEGORIES.dashboard 流用）+ 通知 side + showAkebono
@@ -1421,7 +1421,7 @@
 - [x] **categorize ロジックの共通化（原則3）**: 従来 useMenuCategories 内にあった categorize / parseCategories を
   dashboard-layout.ts へ集約（`categorizeCards` / `parseMenuSections` / `CategorizedCards`）。useMenuCategories は
   それを再利用する薄いラッパへ（挙動不変 = 未割当→その他・空セクション除去・順序保持）。
-- [x] **解決 composable（新 `mockup/app/composables/useDashboardLayout.ts`）**: `effectiveLayout` /
+- [x] **解決 composable（新 `home/app/composables/useDashboardLayout.ts`）**: `effectiveLayout` /
   `resolvedScope`（'user'|'tenant'|'default'）/ `activeTemplateId` / `templates` / `userLayout` / `tenantLayout` /
   `tenantLayoutOwn`（新キー自身。解除可否・ハイライト用）/ `hasUserLayout` / `hasTenantLayout` /
   `hasTenantLayoutOwn` / `baseLayoutForScope(scope)`（保存先層自身を土台に取る = pickBaseLayout）/
@@ -1437,7 +1437,7 @@
     現在有効層・適用中テンプレート明示 + 層ごとの解除。管理者以外は「自分」のみ）
   - `OfficeDashboardNotifications`（通知欄を index.vue から分離 = 通知位置 side/bottom で再配置可能に。挙動不変）
   - ダッシュボードヘッダに「レイアウト」ボタン → UiModal で Picker を開く
-- [x] **反映（`mockup/app/pages/index.vue`）**: effectiveLayout に従いセクション（categorizeCards）・通知位置
+- [x] **反映（`home/app/pages/index.vue`）**: effectiveLayout に従いセクション（categorizeCards）・通知位置
   （side=右カラム / bottom=メニュー下 / hidden=非表示）・AKEBONO 表示（options.showAkebono ∧ 既存条件
   〔isEnabled('akebono')・canPath('/akebono')・活性業態数>0〕を AND で維持）・density（UiCardMenu の新 `dense` prop）。
   既存のカテゴリチップ絞り込み・外部リンク合流・通知の未読/カテゴリタブは不変。
@@ -1452,8 +1452,8 @@
   すべて未設定なら default テンプレート = 現行の見た目と一致。壊れた JSON・不正構造は 1 段フォールバックで
   表示を壊さない。ユーザー/テナント設定は「解除」で下位層へ戻せる（データ喪失なし）。
 - [x] **検証（実測値。この環境で実行）**:
-  - `cd mockup && npm run typecheck` green / `cd api && npm run typecheck`（tsc --noEmit）green
-  - `cd mockup && npm test`: **191 passed**（本節実装時点。以後 §52・§53 で増加 = 最新値は §53-3 が正）。
+  - `cd home && npm run typecheck` green / `cd api && npm run typecheck`（tsc --noEmit）green
+  - `cd home && npm test`: **191 passed**（本節実装時点。以後 §52・§53 で増加 = 最新値は §53-3 が正）。
     新規 `tests/dashboard-layout.test.ts` = 解決階層〔user>tenant>default〕・壊れ JSON の 1 段フォールバック・
     categorize 流用・テンプレート健全性〔全 cardId が MENU_CARDS.dashboard に存在・focus は全カード・
     default=DEFAULT_MENU_CATEGORIES・executive/focus の通知位置〕・materialize ディープコピー・下位互換・4KB 上限。
@@ -1485,15 +1485,15 @@
 > `claude/reports-customer-log-updates-k6on2x`（作業ツリーに残す・未コミット）。
 
 ### 52-1 要件1（#24）: AKEBONO 業態アプリのメニューカテゴリ配置
-- [x] **写像の純関数（SoT = `mockup/app/utils/akebono.ts`）**: `akebonoSegmentCardId(segmentId)` =
+- [x] **写像の純関数（SoT = `home/app/utils/akebono.ts`）**: `akebonoSegmentCardId(segmentId)` =
   `akebono-seg:<segmentId>`（安定 id）・`parseAkebonoSegmentCardId(cardId)`（逆写像・非該当は null）・
   `INDUSTRY_CARD_ICON`（業種タイプ別 lucide: retail=Store / maker=Factory / logistics=Truck /
   it_service=MonitorSmartphone / other=LayoutGrid）・`akebonoSegmentCard(segment, appCount)` = MenuCard
   （title=segmentAppName・description=`<業種ラベル>・<appCount> アプリ`・icon=業種別・to=`/akebono?seg=<id>`）。
-- [x] **新 composable（`mockup/app/composables/useAkebonoAppCards.ts`。useExternalLinkCards と同型）**:
+- [x] **新 composable（`home/app/composables/useAkebonoAppCards.ts`。useExternalLinkCards と同型）**:
   `akebonoCards` = active な各業態を `akebonoSegmentCard(s, enabledAppsOf(s.id).length)` で MenuCard 化。active のみ
   （activeSegments 由来）。アプリ数は既存 useAkebonoApps.enabledAppsOf（機能トグル反映）を利用 = **新規 API なし**。
-- [x] **二重表示防止（純関数 `planDashboardCards` = `mockup/app/utils/dashboard-layout.ts`）**:
+- [x] **二重表示防止（純関数 `planDashboardCards` = `home/app/utils/dashboard-layout.ts`）**:
   `assignedAkebonoSegmentIds(sections)` でセクションに割当済みの業態 id を集め、
   - showAkebono=true: 割当済み業態カードのみプールへ（categorize がセクション配置）・未割当業態は
     `unassignedAkebonoSegmentIds` として専用セクションが担当 → **未割当が「その他」へ落ちて二重表示になるのを防ぐ**。
@@ -1518,7 +1518,7 @@
   （templateId='custom'）を該当層へ保存。保存経路は applyTemplate と共通化した
   `persistLayout(layout, scope)`（原則3。user=saveMePreference/localStorage・tenant=setConfig〔管理者のみ・非管理者は
   警告 no-op〕）。組み立ては純関数 `buildCustomLayout(sections, options)`（dashboard-layout.ts・ディープコピー）。
-- [x] **共通編集部品 `UiMenuSectionEditor`（`mockup/app/components/ui/`。原則3）**: カテゴリの追加・削除・改名・
+- [x] **共通編集部品 `UiMenuSectionEditor`（`home/app/components/ui/`。原則3）**: カテゴリの追加・削除・改名・
   並び替え・カード割当（UiMultiCombobox）。v-model（MenuCategoryDef[]）で、更新はユーザー操作起点でのみ emit
   （親の dirty 判定を壊さない）。**MenuCategoryEditor もこれを使うよう refactor**（重複削減。既存の
   ハイドレーション/dirty/保存オーケストレーションは維持）。
@@ -1534,8 +1534,8 @@
   残す（削除しない）= 既存挙動（テナント `dashboard-layout` が `menu-categories-dashboard` を優先）を壊さない選択。
 
 ### 52-3 検証（実測値。この環境で実行）
-- [x] `cd mockup && npm run typecheck`（nuxt typecheck）**green**（exit 0）
-- [x] `cd mockup && npm test`: **207 passed**（16 files）。新規/追加テスト:
+- [x] `cd home && npm run typecheck`（nuxt typecheck）**green**（exit 0）
+- [x] `cd home && npm test`: **207 passed**（16 files）。新規/追加テスト:
   - `tests/akebono-multi-segment.test.ts`（22 = 従来 + 新規: akebonoSegmentCardId/parse 往復・INDUSTRY_CARD_ICON
     マッピング一致・akebonoSegmentCard 写像〔id 形式・appName 優先・業種別 icon・description〕）
   - `tests/dashboard-layout.test.ts`（42 = 従来 + 新規: assignedAkebonoSegmentIds・planDashboardCards〔showAkebono
@@ -1609,8 +1609,8 @@
 - [x] 純ロジック（pickBaseLayout）は utils に集約し composable は薄い委譲（原則3）。SoT→キャッシュ順序・下位互換は不変。
 
 ### 53-3 検証（実測値。この環境で実行）
-- [x] `cd mockup && npm run typecheck`（nuxt typecheck）**green**（exit 0）
-- [x] `cd mockup && npm test`: **212 passed**（16 files）。`tests/dashboard-layout.test.ts` は **47**
+- [x] `cd home && npm run typecheck`（nuxt typecheck）**green**（exit 0）
+- [x] `cd home && npm test`: **212 passed**（16 files）。`tests/dashboard-layout.test.ts` は **47**
   （§52 の 42 + 新規 `pickBaseLayout` 回帰テスト 5 = tenant 編集の土台がテナント層自身であること・管理者個人の user
   設定が tenant 編集へ紛れ込まないこと・tenant 層なしは user へフォールバックせず既定・user のフォールバック順・
   saveSections 相当の options 維持）
@@ -1633,13 +1633,13 @@
   これにより `hasTenantLayout`（legacy 込み）を再度 UI が消費 = 旧 NIT（デッド export）も解消。
 - [x] **NIT-2（スコープ切替で未保存ドラフトが無警告破棄）**: 他層汚染（MAJOR）防止のための無条件 re-seed は意図的設計。
   ドラフトは未永続（確定操作ではない）ため原則9.5 の必須対象外と判断し、確認ダイアログは追加しない（設計判断として記録）。
-- [x] **再検証**: 上記対応後 `cd mockup && npm run typecheck` green / `npm test` **212 passed**（挙動変更なし = テスト不変）。
+- [x] **再検証**: 上記対応後 `cd home && npm run typecheck` green / `npm test` **212 passed**（挙動変更なし = テスト不変）。
   以上で未解決の指摘ゼロ。
 
 ## 54. 日報・週報の項目拡張 + ぽいぽいポストの宛先通知（バッチ4。オペレーター指示 2026-08-03）の完了条件（Definition of Done）
 
 > 日報（自分の日報）・週報（自分の週報）のフォーム項目を改称・拡張し、ぽいぽいポストを提出必須化。さらに
-> ぽいぽいポスト原文を「ロール/役職/個人」で設定した宛先へ通知する仕組みを追加した（両モード = mockup + API）。
+> ぽいぽいポスト原文を「ロール/役職/個人」で設定した宛先へ通知する仕組みを追加した（両モード = home + API）。
 > ブランチ `claude/reports-customer-log-updates-k6on2x`。
 
 ### 54-1 要件1: 自分の日報
@@ -1659,8 +1659,8 @@
 - [x] **設定 UI**: `SettingsNotifyRecipientsEditor`（ロール/役職/個人を複数指定・解決人数プレビュー・空許容）を設定「ぽいぽいポストの通知先」に追加。SoT = configs `poipoi-notify-recipients`（JSON 文字列）。管理者のみ。
 
 ### 54-4 検証（実測値。この環境で実行）
-- [x] `cd mockup && npm run typecheck`（nuxt typecheck）**green** / `cd api && npm run typecheck`（tsc --noEmit）**green**
-- [x] `cd mockup && npm test`: **221 passed**（17 files。新規 `tests/notify-recipients.test.ts` 9 = parse/resolve〔role/title/member・退職者除外・重複排除・投稿者除外・空〕）
+- [x] `cd home && npm run typecheck`（nuxt typecheck）**green** / `cd api && npm run typecheck`（tsc --noEmit）**green**
+- [x] `cd home && npm test`: **221 passed**（17 files。新規 `tests/notify-recipients.test.ts` 9 = parse/resolve〔role/title/member・退職者除外・重複排除・投稿者除外・空〕）
 - [x] `cd api && npm test`（unit）: **259 passed**
 - [x] `cd api && npm run test:integration`（使い捨て PostgreSQL・migration 0049 適用）: **229 passed**（新規 4 = 日報 issueCategory 往復 + 正規化 / 週報 goodPoints・teamShareKind・teamShareNote 往復 + 正規化 / ぽいぽい設定なしで無通知 / ぽいぽい宛先ロールへ通知 + 投稿者除外）
 - [x] **migration 0049 冪等性**: 使い捨て PostgreSQL で二重適用を確認（ADD COLUMN IF NOT EXISTS の NOTICE スキップ・CHECK 張り替えは DROP IF EXISTS → ADD で再実行安全・poipoi 許可/bogus 拒否を実測）。
@@ -1679,7 +1679,7 @@
 - [x] **MINOR（コードレビュー）: 下書き投稿済みでも再提出で二重投稿を強要**: 必須判定が一時 ref `poipoiDraft` のみを見ていたため、下書き保存でぽいぽい投稿済み → 再オープン（poipoiDraft は空）→ 提出でブロックされ二重投稿していた。→ `hasPoipoiForDay`（当日の自分のぽいぽい登録有無）を追加し、`!poipoiDraft.trim() && !hasPoipoiForDay` のときのみブロック。
 - [x] **MINOR-2（監査）: mock のみドキュメント取込で通知発火（API・文書と不一致）**: mock の `importFile` が `add` 再利用で poipoi 通知を発火していた（API `/import` は非発火・§54-5 の設計判断とも矛盾）。→ `add` に `opts.notifyPoipoi` を追加し `importFile` は `false` を渡して非発火に統一。
 - [x] **NIT-1（監査）: 必須マーカーが提出済み編集でも常時表示**: ぽいぽい欄の `required`（アスタリスク）を `:required="!editingSubmitted"` にし、必須が実際に効く初回提出コンテキストでのみ表示（提出済み編集での誤った再投稿を防ぐ）。
-- [x] **再検証**: `cd mockup && npm run typecheck` green・`npm test` **221 passed** / `cd api && npm run typecheck` green・unit **259**・integration **229**（挙動の是正のみでテスト件数不変。既存アサーションは全て緑）。以上で未解決の指摘ゼロ。
+- [x] **再検証**: `cd home && npm run typecheck` green・`npm test` **221 passed** / `cd api && npm run typecheck` green・unit **259**・integration **229**（挙動の是正のみでテスト件数不変。既存アサーションは全て緑）。以上で未解決の指摘ゼロ。
 
 ## 55. 顧客ログの議事録メモ廃止 + 議事録フォーム再構成（バッチ5 の一部。オペレーター指示 2026-08-03）の完了条件（Definition of Done）
 
@@ -1704,7 +1704,7 @@
 - [x] **共通化の帰結（記録）**: 共通パネルのため ぽいぽいポストの入力モーダルも同じ並び・補完になる（両ノート種別で一貫。害なし）。
 
 ### 55-3 検証（実測値。この環境で実行）
-- [x] `cd mockup && npm run typecheck` green / `npm test` **221 passed**（17 files。件数不変 = 既存テストが緑のまま追随）
+- [x] `cd home && npm run typecheck` green / `npm test` **221 passed**（17 files。件数不変 = 既存テストが緑のまま追随）
 - [x] `cd api && npm run typecheck` green / unit **259 passed** / `npm run test:integration`（使い捨て PostgreSQL・migration 0050 適用）**229 passed**
 - [x] **migration 0050 冪等性**: `DROP COLUMN IF EXISTS` は再適用・未適用いずれでも安全（本質的に冪等）。
 
@@ -1732,7 +1732,7 @@
 - [x] **method ラベル（`useAkebonoImports.ts`）**: IMPORT_METHOD_LABELS に `sheets_pull: 'Google スプレッドシート'`。
 
 ### 56-4 検証（実測値。この環境で実行）
-- [x] `cd mockup && npm run typecheck` green / `npm test` **221 passed**（件数不変 = 既存テストが緑のまま追随）
+- [x] `cd home && npm run typecheck` green / `npm test` **221 passed**（件数不変 = 既存テストが緑のまま追随）
 - [x] `cd api && npm run typecheck` green / unit **273 passed**（import-parse に a1ColToIndex/rowsToCsv/splitCsvRows/sheets_pull config・akebono-phase-d に複数行セル/空ヘッダ列の回帰 = 計 14 件を追加）/ `npm run test:integration`（使い捨て PostgreSQL・migration 0051 適用）**230 passed**（sheets_pull の status/URL/callback/config 往復/未連携実行 = AKO-SHEETS-001 を追加）
 - [x] **migration 0051 冪等性**: CREATE IF NOT EXISTS + DROP CONSTRAINT IF EXISTS → ADD は再適用安全。テスト env（GOOGLE_OAUTH_* 未設定）は enabled=false で連携 UI を隠す経路を検証。
 
@@ -1748,7 +1748,7 @@
   - **MAJOR-2（空ヘッダ列で誤列取込）**: `/sheets/:id/columns` が `.filter(Boolean)` で空ヘッダセルを落とし、UI の `columnIndex=i`（filtered 位置）が実取込の絶対 index とズレる欠陥。→ エンドポイントを **空セルも「列N」として index を保存**（`parseCsvColumns` と同規約）へ修正。回帰テスト追加。
   - **MAJOR-3（本番デプロイ手当て漏れ = 原則1/5）**: 新 OAuth コールバック・新スコープ・Sheets API が deploy 自動化/手順書に未反映。→ `deploy.yml` に `sheets.googleapis.com` の自動有効化を追加、`deploy-guide.md` に **§1-9c**（コールバック URI・`spreadsheets.readonly` スコープ〔機微スコープ注記〕・Sheets API 有効化・トラブルシュート）を追加。
   - **NIT**: `MAX_SHEET_ROWS` のコメントを実挙動（フェッチ安全弁 = 受理上限 MAX_IMPORT_ROWS とは別）に修正。requireEnabled→requireAdmin 順序・status 非管理者可・disconnect 無確認は calendar/media と同型のため許容（原則3 の一貫性）。
-- [x] **再検証**: 上記是正後に mockup 221 / API unit 273 / API integration 230 いずれも green（是正で新たな回帰なしを確認 = 原則9「直した結果も問題ない」）。
+- [x] **再検証**: 上記是正後に home 221 / API unit 273 / API integration 230 いずれも green（是正で新たな回帰なしを確認 = 原則9「直した結果も問題ない」）。
 
 ## 57. 議事録の Google Meet 連携（AI メモ/録画リンク。バッチ5 ③b。オペレーター指示 2026-08-03）の完了条件（Definition of Done）
 
@@ -1785,7 +1785,7 @@
   「AI メモを本文へ取込」）。一覧行/詳細に Meet バッジ・詳細は webViewLink リンク。登録成功で選択をクリア。
 
 ### 57-4 検証（実測値。この環境で実行）
-- [x] `cd mockup && npm run typecheck` green / `npm test` **221 passed**（件数不変）
+- [x] `cd home && npm run typecheck` green / `npm test` **221 passed**（件数不変）
 - [x] `cd api && npm run typecheck` green / unit **273 passed**（件数不変）/ `npm run test:integration`（使い捨て
   PostgreSQL・migration 0052 適用）**231 passed**（Meet の status/folders/files 未接続・既定フォルダ管理者ゲート・
   meet リンクの往復と検証〔非 google URL は null 化・id 無しは全 null〕を追加）
@@ -1820,7 +1820,7 @@
   - **NIT: poipoi にも手製リクエストで meet 列が入りうる**。→ POST/import で `kind === 'minutes'` のときのみ meet を保持。
   - **NIT（監査）: HANDOFF スナップショットに /meet 未反映**。→ 追記（全件反映）。
   - 許容（是正不要）: webViewLink 正規化の末尾スラッシュ要求（サフィックス攻撃防御として意図的・実リンクは必ずパスあり）/ documents→notes の Drive ヘルパ import（循環なし・calendar→documents の前例あり = 原則3）/ 既定フォルダ名空時の「（未選択）」表示（選択経由では常に name 設定・直 API のみ・体裁）/ Meet リンクの実在検証なし（google.com ホスト制約 + C2 同一チーム信頼）。
-- [x] **再検証（是正後）**: mockup typecheck + `npm test` **221 passed** / api typecheck + unit **273 passed** / integration **231 passed**（新規回帰なし = 原則9「直した結果も問題ない」）。
+- [x] **再検証（是正後）**: home typecheck + `npm test` **221 passed** / api typecheck + unit **273 passed** / integration **231 passed**（新規回帰なし = 原則9「直した結果も問題ない」）。
 
 ## 58. バリアント軸取込（product_variant）＋ マスタ間連携キー（突合キー lookupField）（オペレーター指示 2026-08-07）の完了条件（Definition of Done）
 
@@ -1890,7 +1890,7 @@
     突合キー名入りメッセージで隔離・**複数一致（同 extCode の 2 社）は解決せず隔離**
   - バリアント境界（独立レビュー是正の回帰）: **既定 SKU コード衝突行 = 実 SKU 新規作成 + 既定 SKU 無効化・再実行冪等**・
     未送信フィールド（JAN 空セル）の保持・グループ内重複 SKU コードの後勝ち収束・グループ全行隔離時は商品を作らない
-- [x] `cd mockup && npm run typecheck` green / `npm test` **221 passed**（件数不変）
+- [x] `cd home && npm run typecheck` green / `npm test` **221 passed**（件数不変）
 - [x] **migration 0053 冪等性**: DROP CONSTRAINT IF EXISTS → ADD は再適用安全。既存 target_entity 値はすべて許容 = 非破壊。
 
 ### 58-5 設計判断（記録）
@@ -1942,7 +1942,7 @@
   - **NIT（監査）: セグメント未割当の新規商品グループの隔離メッセージが空鉤括弧** → 文言分岐（「事業セグメントが空のため隔離…」）。
   - 許容（是正不要）: custom.<key> の実在検証は行わない（定義削除後も companies.custom に実データが残存しうるため、
     保存拒否は正当な突合を塞ぐ。UI の可視化で対処）/ 既定解決（id 素通し）の active 非限定は従来挙動の維持（原則7）。
-- [x] **再検証（是正後）**: api typecheck green・unit **288 passed**・integration **234 passed**・mockup typecheck green・
+- [x] **再検証（是正後）**: api typecheck green・unit **288 passed**・integration **234 passed**・home typecheck green・
   **221 passed**（原則9「直した結果も問題ない」）。
 - [x] **独立レビュー / 監査 第 2 巡（同一 2 ロールによる是正差分の再検証）**: 第 1 巡指摘は**全件解消**を両ロールが確認。
   新規指摘は MINOR 1・NIT 2 → 全件是正・記録:
@@ -1953,7 +1953,7 @@
     表記へ統一（「〇〇を参照する対象項目（key）が複数行に…」）。
   - **NIT-B（監査）: 取込×手動 SKU 経路の並行競合の残余**（既存クラス・本変更による後退ではない）→ §58-5 に記録。
 - [x] **再検証（第 2 巡是正後）**: api typecheck green・unit **288 passed**・integration **234 passed**（別商品既定 SKU
-  衝突の隔離を追加）・mockup typecheck green・**221 passed**。
+  衝突の隔離を追加）・home typecheck green・**221 passed**。
 - [x] **独立レビュー / 監査 第 3 巡（最終確認）**: 両ロールとも第 2 巡指摘の**全件解消**と是正差分の**副作用なし**を確認。
   コードレビュー = **指摘ゼロ**（既定 SKU 衝突の全 7 ケースをマトリクス検証・混在ケースの更新継続は冪等性上必要と判定）。
   監査 = 機能・セキュリティ・整合性の指摘ゼロ・文言 NIT 1 件（api-design §2 の「既定 SKU コード衝突」に自商品限定の修飾）
@@ -1978,7 +1978,7 @@
 - [x] 単体テスト: IMPORT_TRANSFORMS の value 集合が applyImportTransform の分岐と一致・全選択肢に label/hint がある
   ことを検証（api unit **289 passed** = +1）。
 ### 59-2 検証（実測値）
-- [x] api typecheck green / unit **289 passed** / mockup typecheck green / **221 passed**（挙動変更なし = UI と
+- [x] api typecheck green / unit **289 passed** / home typecheck green / **221 passed**（挙動変更なし = UI と
   カタログのみ。取込エンジン・保存形は不変のため integration は §58 の 234 から変更なし）
 ### 59-x 反復レビュー（原則9）
 - [x] **独立レビュー / 監査（コードレビュアー + システム監査官・並行）第 1 巡**: MAJOR 0・MINOR 4（両者重複含む）・NIT 4。
@@ -2000,7 +2000,7 @@
   - **NIT（レビュー）: 旧値 fallback option に title なし** → transformHint を付与。
   - 許容（是正不要・記録）: 旧値からカタログ値へ切り替えると旧値 option が消える（キャンセルで復帰・版管理で旧版も
     残る = 連携キーの既存パターンと同型）。
-- [x] **再検証（是正後）**: api typecheck green・unit **289 passed**・mockup typecheck green・**221 passed**。
+- [x] **再検証（是正後）**: api typecheck green・unit **289 passed**・home typecheck green・**221 passed**。
 - [x] **独立レビュー / 監査 第 2 巡（実績）**: 監査 = **指摘ゼロ**（是正 8 件すべて妥当・新規問題なし）。
   レビュー = 第 1 巡指摘の全件解消を確認・新規は NIT 2 件（①カタログコメントの同時更新注記が switch＋カタログの
   2 点のままでテストに触れていない → 3 点同時更新へ修正 ②本記録の「第 2 巡で指摘ゼロ」が検証実施前に既成事実として
@@ -2055,7 +2055,7 @@
 
 ### 60-6 検証（実測値）
 - API: typecheck green・unit **300 passed**（`import-master` 10 件追加・`import-link` カタログ検証更新）。
-- mockup: typecheck green・unit **221 passed**。
+- home: typecheck green・unit **221 passed**。
 
 ### 60-7 未対応・別スコープ（記録）
 - **ページング＋検索（設定可能な検索項目）**: 全アプリの一覧が全件取得のため、表示単位のページングと、項目
@@ -2079,7 +2079,7 @@
   - 許容（記録）: **NIT-5** 商品カテゴリの親参照は循環ガードなし = 既存 CRUD の設計（UI が階層提示）と一貫のため
     取込側だけに導入せず据え置き。
 - **再検証（是正後）**: api typecheck green・unit **301 passed**（`import-master` に NIT-6/MINOR-1 の回帰を追加）・
-  mockup typecheck green・**221 passed**。**未解決指摘ゼロ = 原則9 充足で完了。**
+  home typecheck green・**221 passed**。**未解決指摘ゼロ = 原則9 充足で完了。**
 
 ## 61. 一覧のサーバーページング＋検索の横展開・仕入先ビュー導線・在庫調整の取消（オペレーター指示 2026-08-09 ②）の完了条件（Definition of Done）
 
@@ -2133,8 +2133,8 @@
 - [x] これにより §60 で新設した**棚卸**の取消フロー未整備（原則9.5 の残課題）を解消。調整・移動も同経路でカバー。
 
 ### 61-6 検証
-- [x] api typecheck green・mockup typecheck green。
-- [x] api unit **301 passed** / mockup unit **221 passed**。
+- [x] api typecheck green・home typecheck green。
+- [x] api unit **301 passed** / home unit **221 passed**。
 - [x] api 統合 **240 passed**（新規: パラメータ無し=bare 配列で `total` 無し＝下位互換／`limit/offset/total`＝offset 不変・
   ページ跨ぎ非重複／検索 `q` で total 縮小・返却行の一致／在庫調整の取消で残高復帰・二重取消 409・反対仕訳の再取消 400／
   移動の 2 行取消で残高復帰）。
@@ -2166,7 +2166,7 @@
   （例: 既定仕入先→作家）。`code` は SKU 固有 ID（商品コードではない）ため商品カタログの `code` ラベルでは上書きしない。
 
 ### 62-2 検証
-- [x] api typecheck green・mockup typecheck green。
+- [x] api typecheck green・home typecheck green。
 - [x] api unit **301 passed**（import-link.test.ts に product_variant の参照＝company/tax_rate/unit・カタログ項目に商品レベル属性を追加）。
 - [x] api 統合 **241 passed**（+1: 作家＝既定仕入先を**名称で突合**して商品へ反映・税区分/単位を ID で突合・**未解決作家グループは
   商品も作らず隔離**〔『既定仕入先』入りメッセージ〕）。既存のバリアント取込テスト（軸ラベル・冪等・別商品 SKU 衝突）は不変で通過。
@@ -2227,13 +2227,13 @@
   UI ラベルの kind 別出し分けは UX 追補として §63-7 に残課題化。
 
 ### 63-4 検証（実測値）
-- [x] api typecheck green・mockup typecheck green。
+- [x] api typecheck green・home typecheck green。
 - [x] api unit **302 passed**：`applyImportTransform` に日時ケース（`2026/08/09 19:40:48`・ISO・区切り差・時刻のみ素通し・
   時刻様でない後続は素通し）を追加。
 - [x] api 統合 **242 passed**：ⓐ 手動棚卸に**マイナス実棚数**（wh-01 実棚 −3〔理論 6〕→ −9 調整・残高 −3。後続用に 6 へ復元）・
   ⓑ **棚卸/調整 CSV 実取込**（棚卸: 実物理在庫数 50 → 残高 50・同一ファイル再取込は冪等スキップ・−5 取込で残高 −5／調整: +10 デルタ・
   再取込スキップ／同一 SKU×倉庫の複数行 20→7 で残高 7 に収束）を追加。
-- [x] mockup typecheck green・unit **221 passed**（モック `runImport` 非APIは合成ラン記録のみで実 apply を持たない = applyInventory の
+- [x] home typecheck green・unit **221 passed**（モック `runImport` 非APIは合成ラン記録のみで実 apply を持たない = applyInventory の
   parity 対象外。手動棚卸 `useInventory.stocktake` は元から差分計上・負値可でパリティ済み）。
 
 ### 63-5 下位互換・データ影響（原則7）
@@ -2258,7 +2258,7 @@
   - **NIT（コメント）**: 「先勝ち収束」は挙動と逆 → 「最終行が最終残高を決定（＝実棚数へ収束）」に修正。`balanceOf` の export は不要になり撤回。
   - 許容（記録）: 入庫（inbound/purchase_in/production_in）は在庫ロックを取らないため、棚卸取込の残高読取と入庫 COMMIT の間に理論上の
     ずれがあり得るが、これは**手動棚卸と完全同一の既存性質**（運用は在庫移動停止中に棚卸）・本改修の新規欠陥ではない = 据え置き。
-- **再検証（是正後）**: api typecheck green・unit 302・統合 242・mockup typecheck green・221。**未解決指摘ゼロ = 原則9 充足。**
+- **再検証（是正後）**: api typecheck green・unit 302・統合 242・home typecheck green・221。**未解決指摘ゼロ = 原則9 充足。**
 
 ### 63-7 未対応・別スコープ（記録）
 - **UI: 在庫取込マッピングで `kind=stocktake` 時の `qty` ラベル出し分け**（「増減数」→「実在庫数」の文脈表示）は UX 追補として
@@ -2279,7 +2279,7 @@
   検索は商品名・SKU 詳細のどちらでも一致（プレースホルダも「商品名・SKU で検索」）。並びは商品名優先（同一商品のバリアントが隣接）。
 
 ### 64-2 検証・影響
-- [x] mockup typecheck green・unit 221 passed。`skuLabel` は不変のため他アプリ（売上・出荷入力等）の既存表示に影響なし（原則7）。
+- [x] home typecheck green・unit 221 passed。`skuLabel` は不変のため他アプリ（売上・出荷入力等）の既存表示に影響なし（原則7）。
 - [x] API 変更なし（一覧はクライアントで SKU マスタ×残高から導出。商品名は既存の products キャッシュから取得）。
 
 ## 65. 項目カスタマイズ（F-31）の全業務アプリ展開（オペレーター指示 2026-08-10）の完了条件（Definition of Done）
@@ -2303,7 +2303,7 @@
   multiselect→'・'結合・空→'—'）。既存 `#cell-*` スロット・行 id・派生列は不変（原則7）。
 - [x] **useAppFields.missingRequiredCustom(entity, custom)**: 必須カスタム項目の未入力チェック（最初の未入力ラベルを返す）＝**今回配線した各ページ**（発注・生産・仕入・入荷・出荷・在庫）の保存前検証で共通利用。
   既存の products.vue／sales.vue は従来のインライン必須検証を保持（重複だが挙動は同一。将来 refactor 候補）。
-- [x] **型（mockup/types/akebono.ts）**: PurchaseOrder/ProductionOrder/InboundResult/PurchaseRecord/OutboundResult/InventoryTransaction に `custom?: CustomValues`（Product/SalesRecord は既存）。`shared/domain` の CustomValues は既存。
+- [x] **型（home/types/akebono.ts）**: PurchaseOrder/ProductionOrder/InboundResult/PurchaseRecord/OutboundResult/InventoryTransaction に `custom?: CustomValues`（Product/SalesRecord は既存）。`shared/domain` の CustomValues は既存。
 - [x] **API（akebono-trade.ts）**: `customOf(body)` ヘルパー・PO/MFG/IBR/PUR/OBR/ITX の各 COLS へ `custom`・各 POST の INSERT に `custom`＋`JSON.stringify(customOf(body))`。
   `InventoryPostEntry.custom?`＋`postInventory` の INSERT に custom・`/inventory/adjust`・`/inventory/transfer`（両行に同一 custom）で受理。
   **赤黒訂正（purchase-records/:id/correct）・システム自動起票（入荷/出荷/仕入/生産→在庫）は custom を写さず DB 既定 `{}`**（sales と同方針）。
@@ -2320,7 +2320,7 @@
 - [x] **請求（billing）**: `invoiceCols`/`receivableCols` を `listColumns('invoice', …, { appendCustom:false })` で解決（表示 ON/OFF・表示名のみ・カスタム列は出さない）。マージン/支払通知/入金は invoice 外エンティティのため対象外。
 
 ### 65-3 検証（実測値）
-- [x] api typecheck green・mockup typecheck green・mockup unit **221 passed**。
+- [x] api typecheck green・home typecheck green・home unit **221 passed**。
 - [x] api 統合 **243 passed**（発注 POST の custom 往復＋新規テスト「生産/仕入/入荷/出荷/在庫調整が custom を保存し GET で返す」）。
 
 ### 65-4 スコープ境界・独立レビュー是正（原則9）
@@ -2373,8 +2373,8 @@
 - [x] **masters.vue（委託条件タブ）**: 保存後に逆ざや組があれば非ブロッキング警告トースト（原則4）＋タブ上部に整合警告バナー。
 
 ### 66-4 検証（実測値）
-- [x] api typecheck green・mockup typecheck green。
-- [x] mockup unit **226 passed**（`residualMarginRate` の按分・逆ざや 2 ケース・`buildShipmentSaleLines` の供給元注入・null フォールバック）。
+- [x] api typecheck green・home typecheck green。
+- [x] home unit **226 passed**（`residualMarginRate` の按分・逆ざや 2 ケース・`buildShipmentSaleLines` の供給元注入・null フォールバック）。
 - [x] api unit **302 passed**・api 統合 **245 passed**（新規: 「計上時に既定仕入先を凍結し供給元変更後も精算は当時の作家へ支払う」・
   「既存行〔スナップショット NULL〕は現在値へフォールバックして帰属する」）。
 
@@ -2431,7 +2431,7 @@
   UiCombobox 系はオプション絞り込みの normalizeSearch 化で全角半角耐性を獲得済み。
 
 ### 67-6 検証（実測値）
-- [x] api/mockup typecheck green・mockup unit **232 passed**（正規化 6 ケース）・api unit **302**・api 統合 **247**
+- [x] api/home typecheck green・home unit **232 passed**（正規化 6 ケース）・api unit **302**・api 統合 **247**
   （akebono_norm の全角半角ヒット・eq・date/number 範囲・filter_visible 往復の新規テスト）。
 
 ### 67-7 後方互換（原則7）
@@ -2458,7 +2458,7 @@
 - [x] **モバイル導線は既存の基盤を再利用（原則3・新規実装なし）**: ヘッダーのベル（`layouts/default.vue`。アイコン + 未読
   バッジのみ・押下で `/inbox` へ遷移）と下部ナビ「通知」タブ（`MOBILE_NAV`。未読バッジ付き・`/inbox`）は既に存在。
   オペレーター要望「ベルはバッジのみ表示・押下で通知ページへ」は現状で充足済み = ヘッダーは無改修。
-- [x] **反映（`mockup/app/pages/index.vue`）= シーン分離の中核**:
+- [x] **反映（`home/app/pages/index.vue`）= シーン分離の中核**:
   - `options.notifications`（side/bottom/hidden）は **PC シーン専用**として解釈。
   - **モバイルは通知欄をトップに出さない**（従来 `side` 配置が `order-1` でモバイル最上部に通知を積み、メニューが下へ
     押し出されていた = 指摘の直接原因）。順序反転（`order-2 lg:order-1` / `order-1 lg:order-2`）を撤去し、DOM 順で
@@ -2476,7 +2476,7 @@
   レイアウト（user/tenant）はそのまま有効で、モバイル表示のみメニュー最優先に変わる（データ移行パッチ不要）。
 - [x] **ドキュメント整合（原則5）**: `dashboard-layout.ts` の `NotificationPlacement` doc・`index.vue` ヘッダ doc・
   `DashboardLayoutPreview` doc を「PC 専用配置 / モバイルはベル導線」に更新。§51（レイアウト）の通知位置記述と整合。
-- [x] **検証（実測値）**: `cd mockup && npm run typecheck` green・`npm test` **232 passed**（純ロジック不変のため
+- [x] **検証（実測値）**: `cd home && npm run typecheck` green・`npm test` **232 passed**（純ロジック不変のため
   `dashboard-layout.test.ts` 47 件を含む全スイート green。表示層のみの変更で options 形状は不変）。
 - [x] **既知の設計判断**: モバイルは「固定の最適シーン（メニュー最優先 + ベル導線）」とし、モバイル専用の可変設定は設けない
   （通知をトップに戻す選択肢を作らない = 指摘の再発防止）。タブレット（md–lg）は `side` 時にベル導線（340px 右カラムは lg+ のみ）。
@@ -2508,7 +2508,7 @@
   新権限キー・ルールは加算的（既存ルールに影響なし）。既存 API・データへの破壊的変更なし。
 - [x] **検証（実測値）**: API `npm run typecheck` green・`npm test` **313 passed**（`improvement` 11 件含む）・
   `npm run test:integration` **250 passed**（改善要望 3 件 + 0057 マイグレーション適用含む）。
-  mockup `npx nuxi typecheck` green・`npm test` **242 passed**（`improvement` 10 件含む）・`npm run build` green。
+  home `npx nuxi typecheck` green・`npm test` **242 passed**（`improvement` 10 件含む）・`npm run build` green。
 - [x] **ドキュメント整合（原則5）**: functional-requirements（F-42）・data-design・api-design・screen-design・本節・
   `CONVENTIONS.md`（基盤 API 早見表 = useImprovements / UI 在庫 = WidgetsImprovementSubmit）を更新。
 
@@ -2532,7 +2532,7 @@
   `mockGenerate` の新規 item を plan 未定で作成、デモシード（改修単位 2 件・予定期間あり + 未集約要望）を追加（SEED_VERSION 18）。
 - [x] **下位互換（原則7）**: 追加列のみ・既存 item は plan NULL。SEED_VERSION を 18 に上げデモ更新（モックは日次再シードのため軽微）。
 - [x] **検証（実測値）**: API `npm run typecheck` green・`npm test` **327 passed**（`gantt` 14 含む）・`npm run test:integration` **251 passed**
-  （予定期間の登録・検証 + 0058 適用含む）。mockup `npx nuxi typecheck` green・`npm test` **247 passed**（`gantt` 5 含む）・`npm run build` green。
+  （予定期間の登録・検証 + 0058 適用含む）。home `npx nuxi typecheck` green・`npm test` **247 passed**（`gantt` 5 含む）・`npm run build` green。
 - [x] **ドキュメント整合（原則5）**: functional-requirements（F-42-7〜9）・data-design（plan列）・api-design（AKO-REQ-007・編集）・
   screen-design（5.7 カンバン/ガント）・本節・CONVENTIONS（UI 在庫 = ImprovementsKanban/ImprovementsGantt）を更新。
 
@@ -2563,7 +2563,7 @@
 - [x] **下位互換（原則7）**: 追加のみで既存 I/F・データに破壊的変更なし。(1) は既存の壊れた挙動を修復する方向のみ（保存済み
   ユーザー設定が**やっと反映される**ようになる。誤設定が残る場合はレイアウト → アプリヘッダーで解除可）。新規 pref/config キーは
   未設定なら既定にフォールバック。データ移行パッチ不要。
-- [x] **検証（実測値）**: mockup `npx nuxi typecheck` green・`npm test` **280 passed**（`header-quick-access` 11 / `notification-tabs` 11 /
+- [x] **検証（実測値）**: home `npx nuxi typecheck` green・`npm test` **280 passed**（`header-quick-access` 11 / `notification-tabs` 11 /
   `notification-category` 8 を含む）・`npm run build` green。API は不変（`api/` 変更なし）。
 - [x] **ドキュメント整合（原則5）**: screen-design（トップ通知フィード・レイアウトモーダルのタブ・5.6 選択 UI・/inbox タブ）・本節を更新。
 
@@ -2591,7 +2591,7 @@
 - [x] **取消可能性（原則9.5）**: メモ追加の取消 = 確認ダイアログ + 論理削除（復元 API も提供）。改修案件の判断（対応しない）は
   理由メモで根拠を残せる。既存の要望/改修単位の取消・reopen は不変。
 - [x] **下位互換（原則7）**: 追加のみ（新テーブル 0059・新 API・`notes` は省略可）。既存データ・I/F への破壊的変更なし。データ移行パッチ不要。
-- [x] **検証（実測値）**: mockup `npx nuxi typecheck` green・`npm test` **283 passed**（`improvement` 10 / `notification-tabs` 14 含む）・`npm run build` green。
+- [x] **検証（実測値）**: home `npx nuxi typecheck` green・`npm test` **283 passed**（`improvement` 10 / `notification-tabs` 14 含む）・`npm run build` green。
   API `npm run typecheck` green・`npm test` **330 passed**（`improvement` 単体にメモ検証/プロンプト加味を追加）・`npm run test:integration` **252 passed**
   （メモ追加/一覧/reject/プロンプト加味/取消・復元/権限 + 0059 適用を含む）。
 - [x] **ドキュメント整合（原則5）**: functional-requirements（F-42-10・F-01-3）・data-design（improvement_notes）・api-design（notes 3 経路・AKO-REQ-008）・
@@ -2599,7 +2599,7 @@
 
 ## 73. 改修プロンプトの「コピーして閉じる」修正＋ガントのステータスフィルタ/色分け（改善要望 2 件・オペレーター指示 2026-08-12）の完了条件（Definition of Done）
 
-改善要望（F-42）から出た 2 改修単位への対応（mockup フロントのみ・API/DB/shared 変更なし）。
+改善要望（F-42）から出た 2 改修単位への対応（home フロントのみ・API/DB/shared 変更なし）。
 
 - [x] **(1) 「コピーして閉じる」がモーダルを閉じる**: `pages/improvements.vue` の改修プロンプト出力モーダルで、フッターの
   「コピーして閉じる」がコピー後に閉じなかった不具合を修正。`copyPrompt` を成否 boolean 化し、`copyAndClose` が
@@ -2612,7 +2612,7 @@
     バーの title に予定期間 + ステータス名を併記。空表示はフィルタ有無で文言を出し分け。レスポンシブ（原則8）= チップ/凡例は wrap・本体は横スクロール維持。
 - [x] **フィードバック（原則）**: コピー成功/失敗はトースト。フィルタ切替は即時反映。
 - [x] **下位互換（原則7）**: 表示・挙動の変更のみ（データ/型/API 不変）。データ移行パッチ不要。
-- [x] **検証（実測値）**: mockup `npx nuxi typecheck` green・`npm test` **284 passed**（`improvement` に「ガント既定フィルタ = accepted」アサート追加）・
+- [x] **検証（実測値）**: home `npx nuxi typecheck` green・`npm test` **284 passed**（`improvement` に「ガント既定フィルタ = accepted」アサート追加）・
   `npm run build` green。API は不変（`api/` 変更なし）。
 - [x] **ドキュメント整合（原則5）**: functional-requirements（F-42-9）・screen-design（5.7 ガント色分け/フィルタ・プロンプトのコピーして閉じる）・
   CONVENTIONS（ImprovementsGantt）・本節を更新。
@@ -2634,9 +2634,9 @@
 - [x] **取消可能性（原則9.5）**: 画像設定後は「アイコンに戻す」で選択式アイコンへ戻せる。再編集で上書き可能。
 - [x] **グレースフル（原則4）**: 画像以外/縮小後も上限超過は警告して中断（主フロー継続）。モック（localStorage）は容量超過時に警告（segments と同型）。
 - [x] **レスポンシブ（原則8）**: プリセットグリッド・アップロード操作列は `flex-wrap`。375px で崩れない（プレビュー枠固定・グリッド折返し）。
-- [x] **テスト**: mockup `tests/link-icons.test.ts`（`LINK_ICON_CHOICES` の lucide 実在性・重複なし・フォールバック）。
+- [x] **テスト**: home `tests/link-icons.test.ts`（`LINK_ICON_CHOICES` の lucide 実在性・重複なし・フォールバック）。
   API `test/integration/api.test.ts` に external-links の iconImage 検証（SVG=400・PNG=200・未指定作成=null・title 保持・null で取消）。
-- [x] **検証（実測値）**: mockup `npx nuxi typecheck` green・`npm test` **287 passed**（+3）・`npm run build` green。
+- [x] **検証（実測値）**: home `npx nuxi typecheck` green・`npm test` **287 passed**（+3）・`npm run build` green。
   API `npm run typecheck` green・`npm run test:integration` **253 passed**（+1・0060 適用含む）・`npm run build` green。
 - [x] **ドキュメント整合（原則5）**: data-design（ExternalLink.iconImage）・api-design（external-links iconImage・useExternalLinkCards）・
   screen-design（5.x /settings 外部リンクのアイコンピッカー）・CONVENTIONS（UiIconGlyph・SettingsIconPicker・UiCardMenu）・本節を更新。
@@ -2645,7 +2645,7 @@
 
 ## 75. カンバンカードのはみ出し修正（改善要望・オペレーター指示 2026-08-12）の完了条件（Definition of Done）
 
-改善要望（`/improvements`）のカンバンで、各改修案件カードがステータス枠（列）をはみ出す事象の修正（mockup フロントのみ・API/DB/shared 不変）。
+改善要望（`/improvements`）のカンバンで、各改修案件カードがステータス枠（列）をはみ出す事象の修正（home フロントのみ・API/DB/shared 不変）。
 
 - [x] **原因**: `ImprovementsKanban` のカード（`<article>`）は grid アイテムで既定 `min-width: auto`。タイトル（`truncate` = nowrap）の
   min-content が列幅（`w-64` = 256px）を超えると、カードが列幅より広がり枠外へはみ出していた（truncate が効かない典型パターン）。
@@ -2657,9 +2657,9 @@
   遷移ボタン（`flex-wrap`）は従来どおり。フィードバック = カード/ボタンの hover・focus-within 状態は不変。
 - [x] **レスポンシブ（原則8）**: 列は `w-64` 固定で親が横スクロール（既存）。375px でもカードは列内に収まり崩れない。
 - [x] **下位互換（原則7）**: 表示（CSS）のみの変更。データ・型・API・ロジック不変。データ移行パッチ不要。
-- [x] **テスト**: ロジック追加がないため新規単体テストなし（純 CSS/テンプレート修正・mockup の vitest は DOM レイアウトを持たず
+- [x] **テスト**: ロジック追加がないため新規単体テストなし（純 CSS/テンプレート修正・home の vitest は DOM レイアウトを持たず
   オーバーフローを判定できない）。回帰は `improvement`/`gantt` の既存テスト green + build/typecheck で担保。
-- [x] **検証（実測値）**: mockup `npx nuxi typecheck` green・`npm test` **287 passed**・`npm run build` green。API は不変（`api/` 変更なし）。
+- [x] **検証（実測値）**: home `npx nuxi typecheck` green・`npm test` **287 passed**・`npm run build` green。API は不変（`api/` 変更なし）。
 - [x] **ドキュメント整合（原則5）**: screen-design（5.7 カンバンのカード折返し/クリップ）・本節を更新。
 
 ## 76. 改善要望への URL リンク・画像添付（F-42-11・改善要望・2026-08-17）の完了条件（Definition of Done）
@@ -2686,9 +2686,9 @@
 - [x] **取消可能性（原則9.5）**: 添付は送信前に行/枚単位で削除可。送信後は既存の「取り消す」（要望の論理削除・復元）に内包。
 - [x] **レスポンシブ（原則8）**: リンク行は flex + truncate・サムネイルは flex-wrap・拡大画像は `max-h-[70dvh] max-w-full`。375px で崩れない。
 - [x] **テスト**: 単体 = `api/test/unit/improvement.test.ts`（リンク/画像の正規化・検証・`improvementRequestInputOf` の
-  AKO-REQ-009/010・プロンプト添付加味）+ `mockup/tests/improvement.test.ts`（同観点の共有関数）。統合 = 添付付き投稿の往復・
+  AKO-REQ-009/010・プロンプト添付加味）+ `home/tests/improvement.test.ts`（同観点の共有関数）。統合 = 添付付き投稿の往復・
   trim/重複除去・旧形式の下位互換（links/images = 空配列）・不正添付の 400・プロンプト加味の 1 テスト追加。
-- [x] **検証（実測値）**: mockup `npx nuxi typecheck` green・`npm test` **290 passed**（+3）・`npm run build` green。
+- [x] **検証（実測値）**: home `npx nuxi typecheck` green・`npm test` **290 passed**（+3）・`npm run build` green。
   API `npm run typecheck` green・`npm test` **340 passed**・`npm run test:integration` **255 passed**（+2〔§77 分含む〕・0061 適用含む）・`npm run build` green。
 - [x] **ドキュメント整合（原則5）**: functional-requirements（F-42-11）・screen-design（5.7 投稿の添付・ドロワーの添付表示）・
   data-design（improvement_requests.links/images）・api-design（POST /requests・GET /requests・/prompt）・CONVENTIONS（useImprovements・WidgetsImprovementSubmit）・本節を更新。
@@ -2696,7 +2696,7 @@
   ①モック submit が `commit()` の失敗（localStorage 容量超過）を握り潰していた = `persisted` を返し UI が警告（useProducts.addImage と同型）
   ②一覧 GET が全要望の画像 data URI を含み応答が肥大 = **一覧は `images: []`・itemId 指定 GET でのみ実体**を返し、
   フロントはドロワー表示時に `loadRequestImages` で遅延ロード（refresh はロード済み画像を引き継ぐ = 要望は追記系で画像不変のため安全）
-  ③mockup `types/akebono.ts` の `PartnerRole` 手書き union を shared 再エクスポートへ（ドリフト防止）〔§77 関連〕
+  ③home `types/akebono.ts` の `PartnerRole` 手書き union を shared 再エクスポートへ（ドリフト防止）〔§77 関連〕
   ④保存 mime を縮小後 data URI から導出（file.type との不一致解消）⑤（§77）区切りのみのロールセルの保護。
   R2 = 効率/整合 3 件を反映 → ⑥masters registry の `partnerRoles` z.enum を shared `PARTNER_ROLES` 由来へ（二重定義解消）
   ⑦`loadRequestImages` にロード済みガード（再オープンの再取得なし。集約後はフラグ破棄 = 追記された画像付き要望を取りこぼさない）
@@ -2706,10 +2706,10 @@
 
 データ取込・連携（`/akebono/imports`）の取込対象「取引先」のマッピング項目に**取引ロール**（得意先/仕入先/委託仕入先（作家）/店舗/外注先・複数保持）を追加し、取引先と同時に取引ロールも取り込めるようにする。
 
-- [x] **共有ドメイン（原則3・SoT 移設）**: `shared/domain/akebono.ts` に `PARTNER_ROLES`・`PARTNER_ROLE_LABELS`（従来 mockup
+- [x] **共有ドメイン（原則3・SoT 移設）**: `shared/domain/akebono.ts` に `PARTNER_ROLES`・`PARTNER_ROLE_LABELS`（従来 home
   `utils/akebono.ts` ローカル定義だったラベルを shared へ移設 = 取込の和名解釈と共有）・`parsePartnerRoles(raw)` を追加。
   パースはキー（`customer` 等）と和名（得意先 等）の混在・複数値（`/` `,` `、` `;` `・` 空白区切り）・全角/半角括弧のゆれ・
-  略記（委託仕入先・作家）を受理し、解釈不能トークンは `invalid` で返す（呼び出し側で隔離判断）。mockup 側は再エクスポートで既存 import 不変（原則7）。
+  略記（委託仕入先・作家）を受理し、解釈不能トークンは `invalid` で返す（呼び出し側で隔離判断）。home 側は再エクスポートで既存 import 不変（原則7）。
 - [x] **マッピング UI**: `imports.vue` の `COMPANY_IMPORT_FIELDS` に `partnerRoles`（「取引ロール（複数可・/区切り）」）を追加
   （左辺 = 対象項目の固定行に出現・右辺で取込元の列/キーを割当。既存マッピングは影響なし）。
 - [x] **API 反映（applyCompanies）**: `assertKnownTargets` に `partnerRoles` を追加。値あり = `parsePartnerRoles` で解釈し
@@ -2720,13 +2720,13 @@
   （顧客 = `['customer']` 相当）は既存 `partnerRolesOf` のまま不変。データ更新パッチ不要（追加マッピング項目のみ）。
 - [x] **テスト**: 単体 = `api/test/unit/akebono-phase-d.test.ts` に `parsePartnerRoles`（キー/和名混在・区切り・括弧ゆれ・略記・
   invalid・重複除去）。統合 = 取引先 CSV 取込で「和名/キーのロール反映・不正ロール行の隔離・**空値で既存ロール保持**・再取込での更新」を検証。
-- [x] **検証（実測値）**: §76 と同一ラン（mockup typecheck/test/build green・API typecheck/unit 340/統合 255/build green）。
+- [x] **検証（実測値）**: §76 と同一ラン（home typecheck/test/build green・API typecheck/unit 340/統合 255/build green）。
 - [x] **ドキュメント整合（原則5）**: akebono-menu-functional-requirements（F-32-2 に取引ロール）・本節を更新
   （company 取込キー空間の履歴 = §45-3 は当時の決定記録として不変。現行カタログの SoT は `imports.vue` の
   `COMPANY_IMPORT_FIELDS` + API `applyCompanies` の許容集合で、本節が追加を記録する）。
 - [x] **独立レビュー（原則9）**: **区切り文字のみのロールセル（例: "/"）が `[]` として既存ロールを上書きし
   「空 = 保持」の宣言と矛盾**する指摘を検出 → `roles`・`invalid` とも空なら未指定（保持）扱いへ是正 + 単体/統合の回帰を追加。
-  あわせて mockup `types/akebono.ts` の `PartnerRole` を shared `PARTNER_ROLES` 由来の再エクスポートへ（二重定義のドリフト防止）。再検証 = 再レビューで指摘ゼロ。
+  あわせて home `types/akebono.ts` の `PartnerRole` を shared `PARTNER_ROLES` 由来の再エクスポートへ（二重定義のドリフト防止）。再検証 = 再レビューで指摘ゼロ。
 
 ## 78. 要望ごとのステータス管理とプロンプト再生成（F-42-12・改善要望 2026-08-17）の完了条件（Definition of Done）
 
@@ -2798,7 +2798,7 @@
   改修単位ドロワーの各要望カードに記入者名を表示済み（§57 の初期実装から）。追加改修なし。
 - [x] **ドキュメント整合（原則5）**: functional-requirements（F-42-13）・screen-design（5.7）・CONVENTIONS・本節。
 
-> **§78〜§82 共通の検証（実測値）**: mockup `npx nuxi typecheck` green・`npm test` **293 passed**・`npm run build` green。
+> **§78〜§82 共通の検証（実測値）**: home `npx nuxi typecheck` green・`npm test` **293 passed**・`npm run build` green。
 > API `npm run typecheck` green・`npm test` **343 passed**・`npm run test:integration` **257 passed**（0062 適用込み）・`npm run build` green。
 > 取引先インポートの取引ロール（今回プロンプトの単位 2）は PR #126（§77）で実装・マージ済みのため本バッチでは変更なし。
 >
@@ -2838,7 +2838,7 @@
   API の追加/取消は本人も許可済み = 将来の投稿者向け UI の土台。不採用理由を本人へ伝える手段は現状オフライン）。
   対応時は「自分の要望一覧 + コメントスレッド表示（本人分のみの GET 分岐）」を ImprovementSubmit 系導線に追加する。
 
-> **§83 の検証（実測値）**: mockup `npm test` **297 passed**・`npx nuxi typecheck` green・`npm run build` green。
+> **§83 の検証（実測値）**: home `npm test` **297 passed**・`npx nuxi typecheck` green・`npm run build` green。
 > API `npm run typecheck` green・`npm test` **348 passed**・`npm run test:integration` **259 passed**（0063 適用込み）・`npm run build` green。
 >
 > **独立レビュー（原則9・3 イテレーション）**: R1 = コードレビュアー + システム監査官の並行レビューで指摘 5 件
@@ -2896,10 +2896,10 @@
   **投稿者本人の導線 = 要望モーダルの送信後ビュー「内容を修正する」**（/improvements は管理ゲートのため。
   過去要望の投稿者向け一覧・編集導線は残課題）。**変更前本文は監査ログへ全文記録（FOR UPDATE + 同一 tx = 
   並行編集・監査失敗でも直前本文を喪失しない）**。
-- [x] **テスト**: mockup 318 passed（header-quick-access = v1 補完/v2 尊重/serialize 往復/カタログ inbox・dashboard-layout =
+- [x] **テスト**: home 318 passed（header-quick-access = v1 補完/v2 尊重/serialize 往復/カタログ inbox・dashboard-layout =
   配置 4 択/withNotificationPlacement 不変条件/お気に入り parse・upsert・remove〔上書き・上限・id 衝突・ディープコピー・冪等削除〕）。
   API unit 348 passed + **統合 260 passed（使い捨て PostgreSQL。新規 = 要望編集の本人/管理者/第三者 403/空/404/取消済み 409/復元後再編集・
-  poipoi 通知リンクのディープリンク化に伴う既存アサーション更新）**・両パッケージ typecheck / mockup build green。
+  poipoi 通知リンクのディープリンク化に伴う既存アサーション更新）**・両パッケージ typecheck / home build green。
 - [x] **ドキュメント整合（原則5）**: functional-requirements（F-01-4・F-12-1/5・F-13-9・F-42-11・**F-42-16 新設**）・screen-design（/ ダッシュボード・
   §5.6・/inbox・要望添付・生要望ドロワーの編集）・data-design（improvement_requests.edited_at = 0064）・
   CONVENTIONS（useDashboardLayout/useSectionFavorites/useImprovements.editRequest/クイックアクセス v2/コンポーネント表）・本節。
@@ -2993,7 +2993,7 @@
 > 警告トーストで理由を伝える（X-1）②mock editRequest のガードが単体テスト未固定 → 判定を共有純関数
 > `improvementEditError`（存在 → 権限 → 取消済み = API と同一順）へ抽出し 6 ケースをテスト固定
 > ③テストの describe 名に旧関数名（resolveNotificationPlacementOverride）が残留 → 現行名へ修正。
-> R17 = 最終レビューで指摘ゼロ・全テスト green（mockup 330 / API unit 348 / 統合 260・両 typecheck・build）を確認して完了。
+> R17 = 最終レビューで指摘ゼロ・全テスト green（home 330 / API unit 348 / 統合 260・両 typecheck・build）を確認して完了。
 
 ## 85. 改善要望ページの改修 4 件 = 受付箱の秒表示・要望タグ・タブ再構成 + 一覧内/一括選別（F-42-17/18・改修依頼 2026-08-18）の完了条件（Definition of Done）
 
@@ -3031,7 +3031,7 @@
 - [x] **両モード parity（原則6）**: タグは shared の正規化を submit（mock）と `improvementRequestInputOf`（API）で
   共有。一括選別は mock = 1 コミット / API = 既存エンドポイント逐次 + refresh 1 回（AKO-REQ-013 等の
   ガードはサーバー側と同一判定）。
-- [x] **テスト**: mockup（タグ正規化・メタ・プロンプト反映・下位互換・fmtDateTimeSec）/ API unit
+- [x] **テスト**: home（タグ正規化・メタ・プロンプト反映・下位互換・fmtDateTimeSec）/ API unit
   （improvementRequestInputOf の tags・プロンプトのタグ明記）を追加し全 green。build / typecheck 通過。
 - [x] **ドキュメント整合（原則5）**: functional-requirements（F-42-17/18 新設）・screen-design（5.7 タブ構成・
   受付箱・秒表示・タグ）・data-design（tags 列）・api-design（POST /requests の tags・一括選別の方針・
@@ -3169,7 +3169,7 @@
 > 設計判断**として維持（api-design に将来の並列プール/サーバーバッチ検討を追記）②集約先 item が
 > キャッシュ欠落/陳腐のときドロワーの解除ボタン抑止が効かない縮退経路 = サーバー側ガード
 > （AKO-REQ-021/022）が同じ対処案内を含むメッセージで応答するため受理（表示は原則4 の
-> グレースフルデグラデーション）。**未解決の指摘ゼロ**・全テスト green（mockup 351 / API unit 352 /
+> グレースフルデグラデーション）。**未解決の指摘ゼロ**・全テスト green（home 351 / API unit 352 /
 > 統合 262・両 typecheck〔pipefail 検証〕・build）で完了。
 
 **残課題（本改修で新設・未対応）:**
@@ -3237,7 +3237,7 @@
 - [x] api 単体 360（+ activity-validate 13・customer-log-validate へ method 追加・customer-log-view は権限撤去に伴い削除）
 - [x] api 統合 269（顧客活動: method 検証/保持・scope=all・取消済み可視性・旧ルール無効化確認。活動記録 3 種:
   検証・登録・部分更新・取消/復元・サーバーページング + 検索 + フィルタ・コンボボックス名寄せ・FK・機能ガード）
-- [x] mockup 単体 351（通知タブ/カテゴリのラベル更新）・`npm run build`・`npx nuxi typecheck`（api tsc も）
+- [x] home 単体 351（通知タブ/カテゴリのラベル更新）・`npm run build`・`npx nuxi typecheck`（api tsc も）
 - [x] E2E: `e2e/activity-pages-e2e.cjs` 新設（モックモード。新設 3 ページの描画・登録フィードバック・
   コンボボックス新規マスタ登録・関連商談リンク・顧客活動の全員閲覧化/記録者フィルタ/活動目的/活動手段・
   ページング UI・モバイル 375px の横スクロールなし = 18 チェック green）。`run-batch6b-stack.sh` のモック配信
@@ -3322,7 +3322,7 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
 ### 87-5 検証・ドキュメント
 - [x] shared/api 単体 392（+ improvement 遷移/committed/preamble/pagePath 正規化・permission-extensions 27）・
   統合 275（+ masters write 剥がし 2・AI 参照対象 3・prompt 既定 1。チーム勤怠見出しの改名追随）・
-  mockup 単体 353・両 typecheck・両 build green
+  home 単体 353・両 typecheck・両 build green
 - [x] E2E: `e2e/batch2-e2e.cjs` 新設（モックモード 25 チェック = 対応中・プロンプト定型文/対象固定・
   権限表のタブ/更新行・AIの参照範囲の三値循環・稟議区分カード・受付箱の添付列/ページリンク・
   日報 placeholder・モバイル 375px の横スクロールなし）。`run-batch6b-stack.sh` へ登録
@@ -3409,7 +3409,7 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
 ### 88-3 検証・ドキュメント
 - [x] shared/api 単体 399（+ improvementRequestEditFields 5〔全項目/部分更新/空配列全削除/明示 undefined 保持 = R1〕・
   prompt コメント/タグ非出力 3）・統合 276（+ 編集の全項目/部分更新・画像保持・監査ログの変更項目・プロンプトのコメント反映）・
-  mockup 単体 361（+ reports-content 6・prompt テスト改訂・改変項目ラベル 1 = R2）・両 typecheck・両 build green
+  home 単体 361（+ reports-content 6・prompt テスト改訂・改変項目ラベル 1 = R2）・両 typecheck・両 build green
 - [x] E2E: `e2e/batch3-e2e.cjs`（モックモード 17 チェック = 受付箱列順・要望編集の全項目・プロンプトのタグ非出力・
   チーム既定=月・全員の週報プレビュー・週報例文挿入〔4 欄それぞれをアサート = R1 でトートロジー除去〕・モバイル 375px）を
   モックビルドに対し実行 = **17 passed / 0 failed**。`run-batch6b-stack.sh` へ登録済み
@@ -3449,7 +3449,7 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   `requestImagesEditable` を確定・保持し、未ロードなら警告トースト + `RequestEditForm`/`AttachmentEditor` に `images-editable=false`
   を渡して画像編集 UI を隠し `addImageFiles` を全経路ガード（保存判定も開いた時点の値で行い loaded 遷移で全削除しない）。
   **NIT（原則3）:** 監査ログの変更項目ラベルを shared `improvementEditChangedLabel` へ切り出し API/mock 共用。
-  回帰テスト追加（改変項目ラベル = mockup 単体）。§88-4 R2 チェックは本修正反映後に確定（宣言先行を作らない）
+  回帰テスト追加（改変項目ラベル = home 単体）。§88-4 R2 チェックは本修正反映後に確定（宣言先行を作らない）
 - [x] R3 = R2 修正の独立再検証で **指摘ゼロを確認**（兄弟シナリオ〔item 画像ロード失敗窓でも B の添付が消えない〕の解消・
   成功パス〔マージ + refresh の prevImages 再注入〕の非退行・画像編集ゲート〔全経路で追加無効・開いた時点の判断を保存で使用〕を
   実コード追跡 + 全 typecheck/単体実走で確認）。これで独立ロールの反復レビューは指摘ゼロに収束（原則9 = SP-8 完了）
@@ -3519,10 +3519,10 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   req-kanban/req-gantt を追加（既存キーは後方互換で据え置き・kanban/gantt は【改修案件】へ改称）。
 
 ### 89-5 検証（build / typecheck / テスト）
-- [x] typecheck: shared / api（tsc --noEmit）/ mockup（nuxt typecheck）すべて green。
-- [x] 単体: mockup 361 / api 403 すべて green。統合: api 277（月報 CRUD/提出保護/scope=all/既読・パートナー活動のマスタ解決・
+- [x] typecheck: shared / api（tsc --noEmit）/ home（nuxt typecheck）すべて green。
+- [x] 単体: home 361 / api 403 すべて green。統合: api 277（月報 CRUD/提出保護/scope=all/既読・パートナー活動のマスタ解決・
   要望の全員閲覧 + member のステータス変更 403 を追加）green。
-- [x] 本番ビルド: api（esbuild）/ mockup（nuxt build = SPA）ともに成功。
+- [x] 本番ビルド: api（esbuild）/ home（nuxt build = SPA）ともに成功。
 
 ### 89-6 反復レビュー（原則9 = SP-8）
 - [x] R1 = 独立ロール 2 体（コードレビュアー + システム監査官）の並行レビュー。
@@ -3538,19 +3538,19 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   管理者のみ表示（情報開示の一貫性）④LOW: パートナー活動 PATCH で旧行（アプローチ企業が自由入力スナップショットのみ）の
   部分更新時に related_company スナップショットを保持（原則7）。回帰テスト追加（一般の取消済み閲覧/本人復元・他者の取消済み
   非表示・adoption 非返却/管理者返却・旧行スナップショット保持 = api 統合、上限超過ブロックは実装ガード）。§89-6 R1 チェックは
-  本修正反映後に確定（宣言先行を作らない）。検証: shared/api/mockup typecheck・単体（mockup 361 / api 403）・統合（278）green。
+  本修正反映後に確定（宣言先行を作らない）。検証: shared/api/home typecheck・単体（home 361 / api 403）・統合（278）green。
 - [x] R2 = R1 修正の独立再検証で **指摘ゼロを確認**（converged）。①一般利用者の GET /requests の WHERE パラメータ
   索引が itemId/unclustered の有無に依らず正しく、他者の取消済みが如何なるパラメータ組合せでも漏れないこと
   ②取消後もドロワーが開いたまま復元でき、`refresh()` が自分の取消済み行をキャッシュへ戻すこと（API/mock 両モード）
   ③adoption/excludedItemIds の strip がキー名と一致し、mock 側も全 adoption 表示箇所が管理者ゲート済みで
   可視挙動が両モード一致すること ④パートナー PATCH のスナップショット保持が「未変更の旧行=保持／新規設定=FK 更新／
   明示クリア=クリア」の全分岐で正しいこと ⑤上限超過ブロックが厳密不等号で at-cap を通すこと、を実コード追跡で確認。
-  全 typecheck・単体（mockup 361 / api 403）・統合（278）実走 green。これで独立ロールの反復レビューは指摘ゼロに
+  全 typecheck・単体（home 361 / api 403）・統合（278）実走 green。これで独立ロールの反復レビューは指摘ゼロに
   収束（原則9 = SP-8 完了）。
 
 ## 90. 改修依頼 2026-08-20（6 改修単位 = 改善のタネ導線/要望フォーム表示改善/対象ページ検索/営業活動登録/ヘッダー統一/タグ二者択一）の完了条件（Definition of Done）
 
-対象: Nuxt 4 SPA（mockup/）中心。改善要望フォーム・ヘッダー・改善のタネ・営業活動の 6 件。
+対象: Nuxt 4 SPA（home/）中心。改善要望フォーム・ヘッダー・改善のタネ・営業活動の 6 件。
 
 ### 90-1 改善のタネのヘッダー導線をモーダル化（#1）
 - [x] ヘッダーの「改善のタネ」クイックアクセスを `/poipoi` 遷移から**登録フォーム（モーダル）直接表示**へ変更
@@ -3587,8 +3587,8 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   データ形は従来どおり `ImprovementRequestTag[]`（常に要素数 1）。集約プロンプトは従来どおりタグ非包含。
 
 ### 90-7 検証（typecheck / テスト / E2E）
-- [x] typecheck: mockup（nuxt typecheck）green。
-- [x] 単体: mockup vitest 361 すべて green（回帰なし）。
+- [x] typecheck: home（nuxt typecheck）green。
+- [x] 単体: home vitest 361 すべて green（回帰なし）。
 - [x] E2E（`e2e/improvements6-e2e.cjs`・Playwright・モックモード生成ビルド）: 6 件 + モバイル 375px 横スクロール無しの
   12 チェック green（通知ラベル/改善のタネ非遷移モーダル + 取消・タグ二者択一排他・対象ページ手入力検索・本文と画像非重複〔幾何〕・
   営業活動登録 + 一覧反映）。
@@ -3610,11 +3610,11 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
 ## 91. 新アプリ切り出し 2026-08-20（AKEBONO Company / AKEBONO Intelligence = Hosting マルチサイトの独立フロントエンド新設）の完了条件（Definition of Done）
 
 対象: 新規 `company/`（AKEBONO Company）・`intelligence/`（AKEBONO Intelligence）・`.github/workflows/deploy.yml`・
-`scripts/setup-deploy-secrets.ps1`・`e2e/`。**API / DB / shared / mockup は無変更**（制約 = 既存 API の範囲で実現し、
+`scripts/setup-deploy-secrets.ps1`・`e2e/`。**API / DB / shared / home は無変更**（制約 = 既存 API の範囲で実現し、
 超える機能はフロント内モック）。要件 = `../phase3/company-intelligence-requirements.md` / 設計 = `../phase5/company-intelligence-design.md`。
 
 ### 91-1 AKEBONO Company（company/ = F-08 AI カンパニーの切り出し独立アプリ）
-- [x] 独立 Nuxt 4 SPA を新設（mockup と同型の 3 モード: モック / dev / Firebase 認証。UI 基盤・CONVENTIONS を踏襲、ブランド色 = 紫系）。
+- [x] 独立 Nuxt 4 SPA を新設（home と同型の 3 モード: モック / dev / Firebase 認証。UI 基盤・CONVENTIONS を踏襲、ブランド色 = 紫系）。
 - [x] F-08 の全機能を移植: オフィス（アイソメトリック）→ ドロワー → タスク依頼 → 分解案 → 承認 → 自律実行 → 質問/回答 →
   統合報告・マネージャー分担・活動ログ・AI 日次報告（冪等生成）・AI 社員/ロール管理（admin・論理削除 + 復元）。
   API モードの SoT = 既存 `/v1/ai-company/*` + `/v1/masters/ai-roles|ai-employees`（AI 日次報告の射影は
@@ -3676,7 +3676,7 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
 - [ ] Company の通知: API モードでは共通 API が Office のパスで通知を発行するため、AI タスク・エスカレーション以外
   （Office 側ドメイン）の通知は「Office アプリで確認」の案内トーストにしている（`utils/notification-link.ts` = R1 #1 反映）。
   Office 本体 URL への外部リンク化（環境変数でのベース URL 注入）を将来検討する。
-- [ ] AKEBONO Office（mockup/）内 F-08「AIネイティブカンパニー」メニューの扱い: Company アプリ公開後に
+- [ ] AKEBONO Office（home/）内 F-08「AIネイティブカンパニー」メニューの扱い: Company アプリ公開後に
   リンク化（外部リンクカード）または段階的な撤去を判断する（今回は下位互換保護のため Office 側は無変更 = 原則7）。
 - [ ] オペレーター作業: Hosting サイト作成 + `FIREBASE_HOSTING_SITE_COMPANY` / `FIREBASE_HOSTING_SITE_INTELLIGENCE` 登録 +
   `API_CORS_ORIGINS` へ新サイトオリジン追加 + api 再デプロイ（deploy-guide.md §1-11。未実施の間、新アプリのデプロイはスキップされる）。
@@ -3716,7 +3716,7 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
 
 ## 92. 改修依頼 2026-08-20（9 改修単位 = 顧客関係グラフ/営業・BP活動再編/週報マトリクス/BP項目/顧客コンテキスト/日報リマインド/通知連携/その他トグル/改善要望4改修）の完了条件（Definition of Done）
 
-対象: mockup（Nuxt 4 SPA）+ api（Hono/PostgreSQL）+ shared/domain の全レイヤー。マイグレーション 0073〜0076。
+対象: home（Nuxt 4 SPA）+ api（Hono/PostgreSQL）+ shared/domain の全レイヤー。マイグレーション 0073〜0076。
 
 ### 92-1 顧客関係(会社)のノードグラフ化（#1）
 - [x] `WidgetsRelationGraph` を円環配置から **force-directed（バブル + 線）** へ刷新（顧客関係(会社)/(人) で共用）。
@@ -3778,7 +3778,7 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   要望カンバン/ガントは案件ステータス軸へ統一・投稿者フィルタ既定 = 自分のみ。
 
 ### 92-9 検証（typecheck / テスト / E2E）
-- [x] mockup: nuxt typecheck green・vitest **34 files / 459 tests** green・nuxt generate green。
+- [x] home: nuxt typecheck green・vitest **34 files / 459 tests** green・nuxt generate green。
 - [x] api: tsc green・unit **430** green・**統合 294**（実 PostgreSQL）green・esbuild green。
 - [x] E2E（モックモード・生成ビルドへの実クリック）: **6 スイート / 98 チェック green**
   （mock-regression 11 / activity-pages 18 / batch2 28 / batch3 17 / improvements6 12 / activity-cases 12）。
@@ -3799,7 +3799,7 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   advisory lock の対称化・記載訂正）。
 - [x] R3 = R2 修正の独立再検証で **指摘ゼロ（converged。原則9 = SP-8 完了）**。全 composables の
   LLM 同期エンドポイント × クライアントタイムアウトの対応表を全件照合（15 エンドポイント整合・漏れゼロ）。
-  mockup vitest 459 / api unit 430 / 双方 typecheck green を再確認。
+  home vitest 459 / api unit 430 / 双方 typecheck green を再確認。
 
 ### 92-11 残課題（原則9.5 台帳）
 - 通知マトリクスの mock 適用は**本人宛のみ**（localStorage が現在ユーザーの設定しか持てないため。API モードはサーバー側で全宛先に適用 = 本実装が正）。
@@ -3808,7 +3808,7 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
 
 ## 93. 改修依頼 2026-08-20 第2バッチ（フォームの「（任意）」表記排除 / 週報・月報の独立メニュー化と権限分離）の完了条件（Definition of Done）
 
-対象: mockup（全フォーム + 週報・月報ページ再編）・shared/domain（権限フォールバック）・api（PATH_FEATURES / reads の kind 別ガード）。DB 変更なし。
+対象: home（全フォーム + 週報・月報ページ再編）・shared/domain（権限フォールバック）・api（PATH_FEATURES / reads の kind 別ガード）。DB 変更なし。
 
 ### 93-1 フォームの「（任意）」表記排除（#1）
 - [x] 必須は「*」で表現される前提のもと、フォーム項目のラベル・凡例・placeholder から「（任意）」「(任意)」を全面削除
@@ -3837,7 +3837,7 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   独立運用へ移行した時点で新 URL 利用が前提 = reports.vue docblock に記載）
 
 ### 93-3 検証・反復レビュー（原則9 = SP-8）
-- [x] mockup vitest 476+ / api unit 438+ / 統合 294 / typecheck（mockup・api）/ nuxt generate 全 green
+- [x] home vitest 476+ / api unit 438+ / 統合 294 / typecheck（home・api）/ nuxt generate 全 green
 - [x] モック E2E 6 スイート全 green（旧 URL → /weekly-report 着地の回帰チェック・ナビ回帰の週報/月報行を追加）
 - [x] R1 = 独立レビュー（コードレビュアー + システム監査官統合）: MAJOR 1（リダイレクト watch 追加時の
   型注釈が typecheck を破壊）+ MINOR 4（reads の権限残置による機能劣化・任意表記の取り残し・F-47 見出し・
@@ -3846,7 +3846,7 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   意味論/新規露出なし・任意残存ゼロ・§93 数値実測一致）。新規指摘 = MINOR 2（いずれも同一内容の文書残存:
   permissions.ts の旧設計判断コメントが R1 修正と矛盾・F-06-12 の reads 配置記述）→ **両件修正**。
 - [x] R3 = R2 指摘（文書 2 箇所のみ・実行時影響なし）の反映を確認し **指摘ゼロ = converged（原則9 = SP-8 完了）**。
-  mockup vitest 476 / api unit 438 / typecheck 両 green を再確認。
+  home vitest 476 / api unit 438 / typecheck 両 green を再確認。
 
 ## 94. 本番障害対応 2026-08-20（Slack 連携の未配線 / Google Chat テスト送信失敗の診断強化）
 
@@ -3921,7 +3921,7 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   撤去。送信元 AKEBONO HOME の説明文言）。mock は即時連携のデモを維持。
 - [x] ドキュメント全件更新（原則5）: deploy-guide §1-12 全面改訂（Slack アプリの Bot 化手順・Chat アプリ構成
   手順・旧 secrets の削除可）/ production-architecture（env 表）/ functional-requirements F-49-1/49-3 /
-  api-design（AKO-NCH 表）/ data-design §1.12 / screen-design / mockup CONVENTIONS。
+  api-design（AKO-NCH 表）/ data-design §1.12 / screen-design / home CONVENTIONS。
 - [x] 制約の記録: api.slack.com / developers.google.com とも egress 制限で公式ドキュメント裏取り不能のため、
   安定 API（Slack Web API / Chat REST v1 / RFC 7523）に基づき実装し、想定外の応答は診断詳細で本番から
   自己診断できる構えにした（§94-2 と同じ設計判断）。
@@ -3957,7 +3957,7 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   先勝ち）を検証し**機能面の指摘ゼロ**。修正が生んだ記述の陳腐化 4 件（CONVENTIONS の refresh 残存・
   google-sa ヘッダー・テスト名注記・ChatService JSDoc の "OAuth"）→ 全修正。
 - [x] R3 = 残骸修正の確認レビューで**指摘ゼロ**（検証: api typecheck / 単体 454 / 統合 295 /
-  mockup typecheck・単体 476 / mockup generate / api build / YAML + bash -n すべて green）。
+  home typecheck・単体 476 / home generate / api build / YAML + bash -n すべて green）。
 
 ## 96. AI チャットのエージェント化（オペレーター指摘 2026-08-20）
 
@@ -4026,3 +4026,80 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   最悪 = 締切 55 秒 + 実行中ツール 1 件 ≒60 秒 + 最終ラウンド 30 秒 ≒ 145 秒 < 150 秒に有界）。
   [NIT] F-09-2 の sources 文言 / 空 content フォールバック時の提案二重表示（suggestions を空に）/
   正規化・締切の runToolLoop 経由テスト追加 → 全件反映。R3 = 修正差分の最終確認で指摘ゼロ収束。
+
+## 97. AI チャット回答のマークダウン描画対応（改修依頼 2026-08-20）
+
+> 指示: 「AIチャットボットの回答がマークダウン形式で生成されることがある。その場合は視認性を高めたい。
+> チャットボットとの対話をマークダウン描画に対応してください。」
+
+- [x] **描画**: `/support/chatbot` の AI 応答吹き出し（確定分 + 擬似ストリーミング中）を UiMarkdown 描画へ切替
+  （バッチ7e の安全なサブセット AST → VNode 直接生成 = v-html 禁止の規約どおり・XSS 構造的不成立）。
+  ユーザー発言はプレーン表示のまま。ストリーミング中の書きかけ記法はパーサのフェイルオープンで平文表示。
+- [x] **パーサ/描画の拡張（utils/markdown.ts + UiMarkdown.vue）**:
+  ①**パイプテーブル**（GFM 形式 = ヘッダー + 区切り行。LLM の表回答対応。表内横スクロール = 原則8。
+  区切り行がなければパラグラフへフェイルオープン = 本文中の | を壊さない。パーサ共通機能のため
+  議事録・日報等の全 UiMarkdown 呼び出し元にも適用される〔表記法を使わない既存文書は挙動不変〕。
+  本体中のダッシュ行は通常セル・セル数はヘッダーへ正規化 = レビュー R1）
+  ②**routes プロップ**（アプリ内パス → 表示名の許可リスト。text ノードの一致部分を画面リンク化 =
+  旧 segmentsOf の内部リンク機能をマークダウンと両立。ハッシュルーティングのため href="#<path>" の
+  アンカーで遷移 = NuxtLink 非依存〔規約 12 の resolveComponent 問題も回避〕。コード/リンク内はリンク化しない。
+  opt-in のため routes 未指定の既存呼び出し元は挙動不変）
+- [x] **サーバー**: AGENT_SYSTEM に「回答は Markdown で構造化してよい（見出し・リスト・表・太字・コード。
+  HTML タグは書かない）」を明記（描画側の対応とセット）。
+- [x] テスト: markdown.test.ts（テーブル分解・フェイルオープン・ダッシュ行/セル数正規化の回帰・
+  linkifyRoutes の最長一致/非破壊/コード除外）+
+  ui-markdown.test.ts（テーブル描画・ハッシュリンク描画・routes 未指定の挙動不変）。
+- [x] docs: F-09-2 / screen-design / CONVENTIONS（UiMarkdown 行）更新。
+- [x] **反復レビュー（原則9）**: R1 [MINOR] 本体中の `| - | - |` 行で表が分断（区切り行 regex が本体にも
+  マッチ）→ 本体ループは tableRowRe のみで継続 + セル数正規化。[MINOR] Markdown 許可と「提案:」行契約の
+  相互作用（`**提案:**` 等の装飾で抽出失敗 → 本文残留 + 既定候補の二重系）→ AGENT_SYSTEM に
+  「提案行は装飾なしプレーン 1 行」を明記 + splitSuggestions を装飾形（太字・リスト）にも耐性化 + 両形テスト。
+  [NIT] th scope=col / ストリーミングカーソル位置の設計コメント / 本ドキュメントの適用範囲文言 → 反映。
+  R2（R1 修正差分の再レビュー）: [MINOR] R1 の提案行 regex が候補末尾の閉じ ** だけを非対称に食い
+  `**B` のような壊れた候補を作る → 行末の一括除去をやめ、行全体・各候補の**対称ペアのみ**剥がす方式へ
+  （非対応ペアの誤剥がし防止に内部 * なしのときだけ適用）。[MINOR] `- 提案:` 許容が正当な箇条書き
+  （課題/提案の対）の最終行を chat_messages 保存前に恒久欠落させ得る（原則2）→ リスト形は契約形式の
+  特徴である | 区切りを含む場合のみ抽出（誤爆 = 本文欠落 > 取りこぼし = 既定候補、の非対称性で
+  取りこぼし側へ）。[NIT] isTableStart にセル数一致検査を追加し「GFM と同じ」を実挙動で担保
+  （複数列ヘッダー + 短い区切り行はパラグラフ + hr のまま）/ scope="col" のテスト固定 → 全件反映 + テスト。
+  R3（R2 修正差分の再レビュー）: [MINOR] コロン直後の `(?:\*\*)?` が素ラベル + 候補太字
+  （`提案: **A** | **B**`）で第 1 候補の開き ** を食い `A**` の鏡像壊れを作る → ラベル形を 3 択
+  （`**提案:**` / `**提案**:` / `提案:`）に限定し「** の片側だけを食う正規表現を置かない」構造へ +
+  再現 3 ケースのテスト固定。R2 指摘 2〜4 は解消・回帰なしを実行検証で確認済み（レビュアー報告）。
+  R4（R3 修正差分の再レビュー）: [MINOR] R3 で導入したリストマーカー分解 regex の `(.*)` が行終端子
+  （U+2028/U+2029/孤立 CR）に不一致 → exec null + non-null assertion で /ask が 500 になる新規例外パス
+  → `([\s\S]*)` へ全域化（行終端子入りは後段で自然に非抽出 = 本文無傷）+ no-throw テスト 3 ケース。
+  [NIT] 片側太字ラベル `**提案: A |` 形が非抽出へ変わる件は設計どおり（取りこぼし側 = 対応不要と判定）。
+  転記の正確性・鏡像壊れの解消・全 green はレビュアーが実行検証済み。
+
+## 98. メインフロントエンドのディレクトリ改名 mockup/ → home/（改修依頼 2026-08-20）
+
+> 指示: 「現在メインの frontend が mockup/ 配下に構成されています。最初にモックアップとして始めた名残です。
+> mockup/ を home/ に名称変更してください。github actions やドキュメント等で影響のある箇所を網羅的に走査して、
+> 合わせて修正してください。」
+
+- [x] **ディレクトリ**: `git mv mockup home`（履歴は rename として保持）。
+- [x] **参照の網羅置換**（`git grep -il mockup` の全 83 ファイル。`mockup`→`home` / `MOCKUP`→`HOME`。
+  chatbot.ts の docblock 1 件のみ、並行中のマークダウン描画レビュー対応との衝突回避で次コミットへ繰延べ）:
+  - `.github/workflows/deploy.yml`（paths filter `home/**`・`cd home`・working-directory・
+    `entryPoint: home`・job id `deploy-home`・`DEPLOY_HOME_RESULT`）/ `test-gate.yml` 同様
+  - `scripts/run-test-stage.sh` / `scripts/setup-deploy-secrets.ps1` / `e2e/*.sh` / 各 README
+  - `api/`・`shared/` の docblock 内パス参照 / `.ai-native/` の設計・運用ドキュメント全件 + `project-status.json`
+  - `home/package.json` name = `akebono-office-home`（package-lock.json の name 行も追随）
+- [x] **置換の除外（意図的に残した mockup/mock）**:
+  - `akebono-scm-platform mockup`（rng.ts ×3・tech-stack-decision.md ×2〔行 17「規範」+ 行 34 不採用候補の
+    比較対象。後者は監査 R1 で誤置換を検出し復元〕）= **外部リポジトリの名称**であり
+    本リポジトリのディレクトリ名ではない
+  - `mockUpsertContext`（useCustomerContext.ts）= mock + Upsert の合成語（モックモード概念）
+  - モックモード概念名（`run-mock-stack.sh`・`dist-mock`・`gen-mock.log`・「モックモード」表記）は機能名のため維持
+- [x] **表記の実態化**: ルート README / home/README の「モックアップ」説明を「メインフロントエンド
+  （旧 mockup/。モックアップとして始め本実装へ昇格、2026-08-20 改名）」へ更新（名残の解消 = 依頼の趣旨）。
+- [x] **外部リソースへの影響なしの確認**: Firebase Hosting は**デフォルトサイト**（サイト ID はプロジェクト ID）
+  のため改名の影響なし。GCS・Cloud Run 等のリソース名にも mockup は不使用（`rg` で URL/リソース名を走査済み）。
+  deploy 用 Repository secrets のキー名にも mockup なし = **オペレーター側の追加作業なし**（原則1・7）。
+- [x] **反復レビュー（原則9）= 監査 R1**: [MINOR] tech-stack-decision.md 行 34 の不採用候補比較
+  「scm-platform mockup と同一」が誤置換（外部リポジトリ参照の 2 件目）→ 復元 + 本除外一覧を ×2 へ訂正。
+  [MINOR] production-architecture.md の旧「将来 app/ へ改名予定」注記が失効したまま残存 → 本改名で
+  置換済みと明記。[NIT] deploy.yml ヘッダーコメントの桁揃え / architecture.md の対象宣言・
+  project-status.json の「モックアップ」表記を「旧 mockup/ = 昇格済み」へ実態化 / 繰延べ 1 件の本記録追記。
+  取り残し・過剰置換・workflow 整合・e2e/scripts・外部リソース波及は指摘ゼロ（監査報告）。

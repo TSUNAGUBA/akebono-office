@@ -944,9 +944,9 @@ export const PROMPT_NAVIGATOR_PREAMBLE =
   + '改修後は指摘事項がなくなるまでコードレビューとシステム監査を繰り返してください。'
 
 const DEFAULT_PROMPT_INTRO =
-  'あなたは本リポジトリ（Nuxt 4 SPA = `mockup/` + Hono/PostgreSQL API = `api/` + 共有ドメイン = `shared/domain/`）を'
+  'あなたは本リポジトリ（Nuxt 4 SPA = `home/` + Hono/PostgreSQL API = `api/` + 共有ドメイン = `shared/domain/`）を'
   + '改修するコーディングエージェントです。以下の改修単位を、対象ページのパス・機能名・改修内容に従って実装してください。'
-  + '各単位には根拠となる利用者の要望を添えています。既存の実装規約（mockup/CONVENTIONS.md・CLAUDE.md）に従い、'
+  + '各単位には根拠となる利用者の要望を添えています。既存の実装規約（home/CONVENTIONS.md・CLAUDE.md）に従い、'
   + 'テストとドキュメントも更新してください。'
 
 /**

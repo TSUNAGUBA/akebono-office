@@ -82,7 +82,7 @@ SELF_ID=$(curl -s "http://127.0.0.1:$API_PORT/v1/masters/companies" -H 'x-dev-me
 api POST /v1/masters/company-relations "{\"fromCompanyId\":\"$SELF_ID\",\"toCompanyId\":\"$CUST_ID\",\"relationTypeId\":\"$RT_ID\"}"
 
 echo "==> フロントをビルド（API モード → :$API_STATIC_PORT / モック → :$MOCK_STATIC_PORT）"
-(cd "$REPO/mockup" \
+(cd "$REPO/home" \
   && NUXT_PUBLIC_API_BASE="http://127.0.0.1:$API_PORT" NUXT_PUBLIC_DEV_MEMBER_ID=m-e2e \
      npx nuxt generate >"$WORK/gen-api.log" 2>&1 \
   && cp -r .output/public "$WORK/dist-api" \

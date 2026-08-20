@@ -1,5 +1,5 @@
 /**
- * Google カレンダー連携 API（F-06-8）。mockup useCalendar の API 版。
+ * Google カレンダー連携 API（F-06-8）。home useCalendar の API 版。
  * - OAuth 2.0 認可コードフロー（サーバーサイド）。トークンは AES-256-GCM で暗号化保管し
  *   クライアントへ出さない（C3 相当）。喪失時は再連携で再取得できる（設計判断）
  * - source='google' の予定は Google が SoT（同期で対象日の google 発のみ置換 upsert。app 発に触れない）
@@ -305,7 +305,7 @@ export function calendarRoutes(pool: pg.Pool, env: Env): Hono {
     return c.json({ data: { url: `${GOOGLE_AUTH_URL}?${params.toString()}` } })
   })
 
-  // 連携解除（revoke は補助処理・トークンは物理削除。同期済みキャッシュは保持 = mockup と同一）
+  // 連携解除（revoke は補助処理・トークンは物理削除。同期済みキャッシュは保持 = home と同一）
   app.post('/disconnect', async (c) => {
     const user = c.get('user')
     const token = calendarEnabled(env) ? await accessTokenFor(pool, env, user.id) : null

@@ -61,7 +61,7 @@ export function recentMonthKeys(currentYm: string, n: number, endBackMonths = 0)
   return out
 }
 
-/** 売上明細の月次集計に必要な最小構造（mockup SalesRecord / DB 行の双方から渡せる） */
+/** 売上明細の月次集計に必要な最小構造（home SalesRecord / DB 行の双方から渡せる） */
 export interface BusinessSalesRow {
   id: string
   salesDate: string

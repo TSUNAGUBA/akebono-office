@@ -1,5 +1,5 @@
 /**
- * 提供システム稼働状況 API（F-11）。mockup useSystemStatus の API 版。
+ * 提供システム稼働状況 API（F-11）。home useSystemStatus の API 版。
  * - system_services はマスタ的（0018 でシード投入。参照は認証済み全員 = 機能ガード 'status' が前段）
  * - service_incidents は記録系: updates への追記のみ。status / resolved_at はその射影。
  *   ライフサイクルは investigating → identified → monitoring → resolved の正順のみ（FOR UPDATE で直列化）

@@ -1,5 +1,5 @@
 /**
- * メディア分析 API（F-40）。mockup useMediaChannels / useMediaAnalytics / useMediaInsight /
+ * メディア分析 API（F-40）。home useMediaChannels / useMediaAnalytics / useMediaInsight /
  * useMediaArticles / useMediaExternalArticles の API 版。calendar.ts の Google OAuth 設計
  * （state ノンス・email 突合・AES-256-GCM トークン暗号化・非ブロッキング revoke）を踏襲する。
  *
@@ -17,7 +17,7 @@
  *   ヒューリスティックへフォールバック（原則4。weekly_insights と同じ「生成 → 保管 → 再生成で上書き」）
  * - media インサイト生成は **外部投稿記事（media_external_articles）の原文を材料**に取り込む（新機能）
  * - 認可: GA 連携・チャンネル/設定・インベントリ・外部記事の書込は admin のみ。
- *   参照・記事生成・採用・インサイト生成は全ロール可（mockup の画面ゲートと一致）
+ *   参照・記事生成・採用・インサイト生成は全ロール可（home の画面ゲートと一致）
  * - segment（連携先業態）の存在検証は行わない: business_segments はテーブル化済みだが FK・参照整合の
  *   引き上げは記録系移行の判断まで保留（data-design 参照。channel.segment_id は text 保持）
  *
@@ -69,7 +69,7 @@ const SCOPES = 'openid email https://www.googleapis.com/auth/analytics.readonly'
 
 /** GA 集計キャッシュの TTL（クォータ対策の短期キャッシュ。force=1 で再取得可） */
 const CACHE_TTL = '30 minutes'
-/** 分析目的の区分値（SoT はモックの MediaChannel（mockup/app/types/media.ts）。0048 の CHECK と一致させる） */
+/** 分析目的の区分値（SoT はモックの MediaChannel（home/app/types/media.ts）。0048 の CHECK と一致させる） */
 const MEDIA_GOALS = ['awareness', 'leadgen', 'nurturing', 'conversion', 'branding', 'retention']
 
 function requireEnabled(env: Env): void {
@@ -626,7 +626,7 @@ function channelUpdateParts(patch: MediaSettingsPatch): { assigns: string[]; val
 
 // ---------- インサイトのヒント抽出・LLM 出力の正規化（純粋関数・単体テスト対象） ----------
 
-/** 保管済みメディアインサイトから記事生成のヒント文を取り出す（mockup hintsFromInsight と同一ロジック） */
+/** 保管済みメディアインサイトから記事生成のヒント文を取り出す（home hintsFromInsight と同一ロジック） */
 export function insightHintsOf(insight: unknown): string[] {
   const rec = insight as { articles?: unknown; siteStructure?: unknown } | null
   const findings = [
@@ -1509,7 +1509,7 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
     return c.json({ data: { id } })
   })
 
-  // ---- AI 記事生成（全ロール可 = mockup の記事生成スタジオと同じ可視性）----
+  // ---- AI 記事生成（全ロール可 = home の記事生成スタジオと同じ可視性）----
   app.post('/articles/generate', async (c) => {
     const user = c.get('user')
     const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
@@ -1606,7 +1606,7 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
         return c.json({ data: { id, articleId: g.adoptedArticleId, warning: 'すでに採用済みです（変更はありません）' } })
       }
       const articleId = newId('ma')
-      // 分析の集計基準は前日（asOf）。採用直後に期間へ入るよう公開日を前日にする（mockup adopt と同じ判断）
+      // 分析の集計基準は前日（asOf）。採用直後に期間へ入るよう公開日を前日にする（home adopt と同じ判断）
       await client.query(
         `INSERT INTO media_articles (id, channel_id, path, title, section, published_at, word_count, status, origin, generated_article_id)
          VALUES ($1, $2, $3, $4, $5, $6::date, $7, 'published', 'generated', $8)`,
@@ -1776,7 +1776,7 @@ export function mediaRoutes(pool: pg.Pool, env: Env): Hono {
   })
 
   // ---- AI インサイトの生成・再生成（生成 → 保管 → 再生成で upsert 上書き = weekly_insights と同型）----
-  // 認可の設計判断: 生成は全ロール可（mockup の分析ページと同じ可視性。generated_by を保存 = 誰の操作か追跡可能）。
+  // 認可の設計判断: 生成は全ロール可（home の分析ページと同じ可視性。generated_by を保存 = 誰の操作か追跡可能）。
   // scope=media は GA 集計 + 外部投稿記事の原文を材料に生成する。
   // scope=integrated は連携済みチャンネルでのみ（buildIntegratedMetrics が未連携を AKO-MEDIA-022 で拒否）。
   app.post('/insights/generate', async (c) => {

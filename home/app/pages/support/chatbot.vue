@@ -2,7 +2,9 @@
 /**
  * F-09-2 AIチャットボット: 会話 UI（吹き出し・擬似ストリーミング・出典バッジ・サジェストチップ）
  * セッション管理: 「新しい会話」で新規開始・「履歴」ドロワーから過去セッションを再開（続きから質問できる）。
- * リンクはテキスト分解で描画（v-html 禁止）。Enter 送信 / Shift+Enter 改行 / 2000 字制限。
+ * AI 応答は UiMarkdown で描画（マークダウン対応 = 改修依頼 2026-08-20。安全なサブセット AST →
+ * VNode 直接生成 = v-html 禁止の規約どおり。アプリ内パスは routes 許可リストで画面リンク化）。
+ * ユーザー発言はプレーン表示。Enter 送信 / Shift+Enter 改行 / 2000 字制限。
  */
 import { History, MessageSquarePlus, SendHorizontal } from 'lucide-vue-next'
 import type { ChatMessage, ChatSession } from '~/types/domain'
@@ -20,19 +22,12 @@ const listEl = ref<HTMLElement | null>(null)
 
 const rows = computed(() => Math.min(4, Math.max(1, draft.value.split('\n').length)))
 
-/** 内部リンクのテキスト分解描画（content 中のパスをリンク化） */
+/** 内部リンクの許可リスト（content 中のパスを UiMarkdown の routes で画面リンク化） */
 const LINK_LABELS: Record<string, string> = {
   '/support/documents': 'ドキュメント管理',
   '/attendance': '勤怠管理',
   '/workflow': '稟議',
   '/status': '稼働状況',
-}
-const LINK_RE = /(\/support\/documents|\/attendance|\/workflow|\/status)/g
-
-function segmentsOf(content: string): { link: boolean; text: string }[] {
-  return content.split(LINK_RE)
-    .filter(s => s !== '')
-    .map(s => ({ link: LINK_LABELS[s] !== undefined, text: s }))
 }
 
 const lastAssistantId = computed(() => {
@@ -189,19 +184,16 @@ onBeforeUnmount(() => {
             >
               <UiAvatar v-if="m.role === 'assistant'" name="AI" kind="ai" size="sm" class="mt-1" />
               <div class="min-w-0 max-w-[85%] md:max-w-[72%]">
+                <!-- AI 応答はマークダウン描画（whitespace-pre-wrap は付けない = 改行は AST 側で保持。
+                     ユーザー発言はプレーン表示のまま） -->
                 <div
-                  class="whitespace-pre-wrap break-words rounded-xl px-3 py-2 text-[13px] leading-relaxed"
+                  class="break-words rounded-xl px-3 py-2 text-[13px] leading-relaxed"
                   :class="m.role === 'user'
-                    ? 'rounded-br-sm bg-brand text-white'
+                    ? 'whitespace-pre-wrap rounded-br-sm bg-brand text-white'
                     : 'rounded-bl-sm border border-line bg-surface-soft'"
                 >
                   <template v-if="m.role === 'user'">{{ m.content }}</template>
-                  <template v-else>
-                    <template v-for="(seg, i) in segmentsOf(m.content)" :key="i">
-                      <NuxtLink v-if="seg.link" :to="seg.text" class="link font-semibold">{{ LINK_LABELS[seg.text] }}</NuxtLink>
-                      <template v-else>{{ seg.text }}</template>
-                    </template>
-                  </template>
+                  <UiMarkdown v-else :source="m.content" :routes="LINK_LABELS" />
                 </div>
 
                 <!-- 出典バッジ + 時刻 -->
@@ -232,9 +224,12 @@ onBeforeUnmount(() => {
             <div v-if="isStreaming" class="flex gap-2">
               <UiAvatar name="AI" kind="ai" size="sm" class="mt-1" />
               <div class="min-w-0 max-w-[85%] md:max-w-[72%]">
-                <div class="whitespace-pre-wrap break-words rounded-xl rounded-bl-sm border border-line bg-surface-soft px-3 py-2 text-[13px] leading-relaxed">
+                <div class="break-words rounded-xl rounded-bl-sm border border-line bg-surface-soft px-3 py-2 text-[13px] leading-relaxed">
                   <span v-if="streamingText === ''" class="text-muted">回答を生成中…</span>
-                  <template v-else>{{ streamingText }}</template>
+                  <!-- ストリーミング中もマークダウン描画（書きかけの記法はパーサがフェイルオープンで平文表示）。
+                       カーソルはブロック描画の都合で本文の下の独立行に出る（末尾追従はブロック構造上
+                       困難なため生成中インジケータとしてこの位置を意図 = レビュー R1 で確認済み） -->
+                  <UiMarkdown v-else :source="streamingText" :routes="LINK_LABELS" />
                   <span class="typing-caret" aria-hidden="true" />
                 </div>
               </div>

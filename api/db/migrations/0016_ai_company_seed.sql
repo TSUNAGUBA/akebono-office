@@ -6,7 +6,7 @@
 -- 生成 API の ON CONFLICT DO NOTHING と合わせて並行実行でも重複しない = 冪等の DB 保証）
 CREATE UNIQUE INDEX IF NOT EXISTS daily_reports_ai_uq ON daily_reports (ai_employee_id, date) WHERE author_kind = 'ai';
 
--- 初期データ: mockup シード（seed/core.ts）と同一の AI ロール・AI 社員を移行する（0011 の
+-- 初期データ: home シード（seed/core.ts）と同一の AI ロール・AI 社員を移行する（0011 の
 -- decision_themes と同じ方針 = 新規環境でも F-08 が手動投入なしで動く。原則1）。
 -- 既存環境では何もしない（ON CONFLICT DO NOTHING）。status は派生値のため初期は idle。
 INSERT INTO ai_roles (id, name, mission, system_prompt, permissions, model_tier) VALUES

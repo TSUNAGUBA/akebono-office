@@ -1,6 +1,6 @@
 /**
  * 有給休暇の周期自動付与（労基法 39 条。F-04-5 / leave_types.grant_method='periodic'）
- * - 付与日 = 入社日 + 6 ヶ月 + n 年（JS setMonth 規約 = mockup シード history.ts と同一）
+ * - 付与日 = 入社日 + 6 ヶ月 + n 年（JS setMonth 規約 = home シード history.ts と同一）
  * - 日数 = leaveGrantDays（週所定 30h/5 日以上は通常テーブル、未満は比例付与テーブル）
  * - 失効 = 付与日 + 2 年（時効）
  * - 冪等: 既に失効した過去分は生成せず、挿入は UNIQUE(member × 種別 × 付与日) で重複スキップ

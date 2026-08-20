@@ -1,6 +1,6 @@
 /**
  * 顧客活動（旧「顧客ログ」）入力検証（shared/domain/customer-log）の単体テスト。
- * この共有モジュールは API（api/src/routes/customer-logs.ts）とモック（mockup useCustomerLogs）の
+ * この共有モジュールは API（api/src/routes/customer-logs.ts）とモック（home useCustomerLogs）の
  * **パリティの SoT**（レビュー指摘 2026-07-31 で重複実装から集約）。ここでの検証が両者の挙動を同時に固定する。
  */
 import { describe, expect, it } from 'vitest'

@@ -1,6 +1,6 @@
 import tailwindcss from '@tailwindcss/vite'
 
-// AKEBONO Intelligence（経営・顧客・案件の分析とフィードバックループ）。SPA + ハッシュルーティング（mockup と同型）
+// AKEBONO Intelligence（経営・顧客・案件の分析とフィードバックループ）。SPA + ハッシュルーティング（home と同型）
 export default defineNuxtConfig({
   ssr: false,
   compatibilityDate: '2025-05-01',

@@ -16,7 +16,7 @@
 | 状態管理 | Nuxt `useState` + composables（Pinia 不使用） | 兄弟リポジトリと同じ最小構成 |
 | モックデータ | 決定的シード生成（`Math.random` 禁止）+ localStorage 永続化 | akebono-scm-platform mockup 規範を踏襲 |
 | テスト/検証 | `nuxi typecheck`（vue-tsc）+ ビルド成功 + ユーティリティの単体テスト（vitest） | モック段階の最低ライン |
-| 配置 | リポジトリ直下 `mockup/` | akebono-scm-platform と同じ配置慣例 |
+| 配置 | リポジトリ直下 `home/` | akebono-scm-platform と同じ配置慣例 |
 
 ## 選定理由（要件との対応）
 

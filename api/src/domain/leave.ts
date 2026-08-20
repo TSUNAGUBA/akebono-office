@@ -1,5 +1,5 @@
 /**
- * 休暇残数の算出（純粋関数。mockup useLeave.balance の移植 = ロジック互換）
+ * 休暇残数の算出（純粋関数。home useLeave.balance の移植 = ロジック互換）
  * - approved 消化を付与へ FIFO（古い付与から）で引当て、失効超過分を除いた残数を返す
  * - 保有上限 40 日は法定有給（isStatutory）のみ適用
  * フロント接続完了後は本モジュールが残数計算の SoT となる（クライアント側計算は廃止予定）。
@@ -100,7 +100,7 @@ export interface LeaveObligation {
   warn: boolean
 }
 
-/** 年 5 日取得義務（年 10 日以上付与された直近付与日から 1 年以内に 5 日以上）。mockup useLeave.obligation の移植 */
+/** 年 5 日取得義務（年 10 日以上付与された直近付与日から 1 年以内に 5 日以上）。home useLeave.obligation の移植 */
 export function calcObligation(
   statutoryGrants: LeaveGrant[],
   approvedRequests: LeaveRequest[],
@@ -137,7 +137,7 @@ export function calcObligation(
   }
 }
 
-/** 付与日 + 種別の使用期限（expiryMonths）から失効日を算出（期限なしは 9999-12-31）。mockup と同一規約（JS setMonth） */
+/** 付与日 + 種別の使用期限（expiryMonths）から失効日を算出（期限なしは 9999-12-31）。home と同一規約（JS setMonth） */
 export function expireDateFor(expiryMonths: number | null, grantDate: string): string {
   if (expiryMonths == null) return '9999-12-31'
   const d = new Date(`${grantDate}T00:00:00`)

@@ -1,6 +1,6 @@
 /**
  * 顧客コンテキスト（改修依頼 2026-08-20）の入力検証 + AI リサーチの決定的ヒューリスティック。
- * API サービス / mockup モックモードで共有する = パリティの SoT（customer-log.ts / activity.ts と同じ設計）。
+ * API サービス / home モックモードで共有する = パリティの SoT（customer-log.ts / activity.ts と同じ設計）。
  * - 検証の返り値は「エラーメッセージ | null」。API 側は AKO-CTX-001（400）へ変換して throw し、
  *   モック側は Result のエラーへ変換する（エラーコードの付与は各層の責務）。
  * - ヒューリスティック（候補リスト生成・定性情報の構築）は決定的（hashStrShared。Math.random 禁止）:
@@ -85,7 +85,7 @@ function slugOf(key: string): string {
   return hashStrShared(key).toString(36)
 }
 
-/** キーから配列要素を決定的に選択（mockup utils/rng pick と同義。shared 側の自己完結実装） */
+/** キーから配列要素を決定的に選択（home utils/rng pick と同義。shared 側の自己完結実装） */
 function pickBy<T>(key: string, arr: readonly T[]): T {
   return arr[hashStrShared(key) % arr.length] as T
 }

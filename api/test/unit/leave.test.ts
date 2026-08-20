@@ -104,7 +104,7 @@ describe('expireDateFor', () => {
   it('期限なし（null）は 9999-12-31', () => {
     expect(expireDateFor(null, '2025-07-01')).toBe('9999-12-31')
   })
-  it('月数を加算する（JS setMonth 規約 = mockup と同一）', () => {
+  it('月数を加算する（JS setMonth 規約 = home と同一）', () => {
     expect(expireDateFor(3, '2025-07-01')).toBe('2025-10-01')
     expect(expireDateFor(24, '2025-04-01')).toBe('2027-04-01')
   })

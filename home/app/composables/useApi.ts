@@ -233,7 +233,7 @@ export async function apiResult(fn: () => Promise<{ id?: string } | void | unkno
 
 // ---------- マイグレーション済みコレクション（API ハイドレーション） ----------
 
-/** mockup コレクション名 → API マスタスラッグ */
+/** home コレクション名 → API マスタスラッグ */
 const MIGRATED_MASTERS: Record<string, string> = {
   members: 'members',
   departments: 'departments',

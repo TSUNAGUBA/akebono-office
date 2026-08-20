@@ -7,7 +7,7 @@
 import { bigramCoverage } from './text-match'
 import type { AiActivityKind, AiModelTier, AiTask } from './types'
 
-/** 文字列 → 32bit ハッシュ（FNV-1a。mockup utils/rng.ts の hashStr と同一実装 = 生成値の完全一致） */
+/** 文字列 → 32bit ハッシュ（FNV-1a。home utils/rng.ts の hashStr と同一実装 = 生成値の完全一致） */
 export function hashStrShared(s: string): number {
   let h = 0x811c9dc5
   for (let i = 0; i < s.length; i++) {

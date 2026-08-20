@@ -1,6 +1,6 @@
 -- 汎用区分マスタの初期データ（役職・文書タグ・会社規模）。
 -- メンバー登録の役職選択肢・顧客マスタの会社規模等はここを参照する。
--- mockup のシード（mockup/app/data/seed/core.ts seedCodeMaster）と同一内容。
+-- home のシード（home/app/data/seed/core.ts seedCodeMaster）と同一内容。
 -- 再実行・運用中の適用に安全: 既存 id はスキップ（ON CONFLICT DO NOTHING）し、
 -- 画面から編集済みの行を上書きしない（記録・設定データの保護 = 開発原則2）。
 INSERT INTO code_masters (id, category, code, label, display_order) VALUES

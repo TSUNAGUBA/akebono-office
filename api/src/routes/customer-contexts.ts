@@ -1,6 +1,6 @@
 /**
  * 顧客コンテキスト API（改修依頼 2026-08-20: トップ層メニュー「顧客コンテキスト」。0076）。
- * mockup useCustomerContext の API 版。
+ * home useCustomerContext の API 版。
  * - customer_contexts: 設定系（1社1行 = company_id UNIQUE の upsert。全員が上書き更新可・監査ログ）。
  *   部分更新は「リクエスト body に実在するキーのみ」を更新対象へフィルタ（Object.hasOwn = CLAUDE.md 部分更新原則）。
  * - customer_context_notes: 記録系（追記のみ + 論理取消/復元 = archived_at。原則9.5）。

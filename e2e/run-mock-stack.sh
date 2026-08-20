@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # モックモード専用 E2E ランナー（PR テストゲート用。改修依頼 2026-08-20）。
-# 使い捨て PostgreSQL / API を使わず、mockup をモックモードで generate → 静的配信して
+# 使い捨て PostgreSQL / API を使わず、home をモックモードで generate → 静的配信して
 # モックモードのスイートだけを実行する（フルスタック検証は run-batch6b-stack.sh）。
 #
 # - モックモードのスイート一覧の SoT は本ファイルの MOCK_SUITES（run-batch6b-stack.sh からも呼ばれる = 原則3）。
@@ -47,7 +47,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "==> フロントをビルド（モックモード → :$MOCK_STATIC_PORT）"
-(cd "$REPO/mockup" \
+(cd "$REPO/home" \
   && npx nuxt generate >"$LOG_DIR/gen-mock.log" 2>&1 \
   && cp -r .output/public "$WORK/dist-mock") \
   || { echo "generate 失敗"; tail -30 "$LOG_DIR/gen-mock.log"; exit 1; }

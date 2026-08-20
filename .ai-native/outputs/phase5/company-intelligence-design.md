@@ -9,7 +9,7 @@
 ```mermaid
 graph TB
     subgraph "Firebase Hosting（1 プロジェクト・マルチサイト）"
-        Office["AKEBONO Office<br/>mockup/（デフォルトサイト）<br/>https://&lt;project&gt;.web.app"]
+        Office["AKEBONO Office<br/>home/（デフォルトサイト）<br/>https://&lt;project&gt;.web.app"]
         Company["AKEBONO Company<br/>company/（新設サイト）<br/>https://&lt;company-site&gt;.web.app"]
         Intelligence["AKEBONO Intelligence<br/>intelligence/（新設サイト）<br/>https://&lt;intelligence-site&gt;.web.app"]
     end
@@ -32,7 +32,7 @@ graph TB
 - 3 サイトとも**同一 Firebase プロジェクト・同一 Firebase Auth・同一 API** を共有する。ユーザーは `members` 登録済みメールで全アプリへサインイン可能。
 - API の CORS は完全一致の許可リスト（`CORS_ORIGINS`）。**新サイトのオリジンを `API_CORS_ORIGINS` シークレットへ追加**しないと新アプリの API 接続は失敗する（→ §6）。
 
-## 2. ディレクトリ構成（新アプリは mockup と同型・自己完結）
+## 2. ディレクトリ構成（新アプリは home と同型・自己完結）
 
 ```
 company/                     # AKEBONO Company（独立 Nuxt 4 SPA）
@@ -54,11 +54,11 @@ intelligence/                # AKEBONO Intelligence（独立 Nuxt 4 SPA。構成
 ```
 
 **設計判断:**
-- 両アプリは `mockup/` から UI 基盤（CSS トークン・`Ui*` コンポーネント・`useApi`/`useMockDb` パターン・認証 3 点セット）を**複製**して自己完結させる。`shared/` へのフロント共通コード追加は行わない（`shared/**` は API のデプロイトリガ・ビルド対象であり、API 無変更の制約と衝突するため）。「フロントエンドのプロジェクトレベルで別物として扱う」という要件にも一致する。
-- `shared/domain/`（型・`ai-tasks` ほか純粋ロジック）は既存ファイルを**読み取り専用で相対 import** する（mockup と同一パターン。`shared/` への変更は行わない）。
+- 両アプリは `home/` から UI 基盤（CSS トークン・`Ui*` コンポーネント・`useApi`/`useMockDb` パターン・認証 3 点セット）を**複製**して自己完結させる。`shared/` へのフロント共通コード追加は行わない（`shared/**` は API のデプロイトリガ・ビルド対象であり、API 無変更の制約と衝突するため）。「フロントエンドのプロジェクトレベルで別物として扱う」という要件にも一致する。
+- `shared/domain/`（型・`ai-tasks` ほか純粋ロジック）は既存ファイルを**読み取り専用で相対 import** する（home と同一パターン。`shared/` への変更は行わない）。
 - localStorage キーはアプリ別に分離: Office = `ako.*`（既存） / Company = `akc.*` / Intelligence = `aki.*`。同一オリジンで配信されるプレビュー時も衝突しない。
 
-## 3. モード設計（mockup と同一の 3 モード）
+## 3. モード設計（home と同一の 3 モード）
 
 | モード | 条件 | データ |
 |--------|------|--------|
@@ -107,12 +107,12 @@ flowchart LR
 
 ## 6. デプロイ設計（Firebase Hosting マルチサイト）
 
-- `firebase.json` は各アプリ配下に置き、**`site` はデプロイ時に CI が `jq` で注入**する（リポジトリへプロジェクト固有値をハードコードしない現行方針を維持）。mockup は従来どおりデフォルトサイト（`site` 指定なし）で無変更。
+- `firebase.json` は各アプリ配下に置き、**`site` はデプロイ時に CI が `jq` で注入**する（リポジトリへプロジェクト固有値をハードコードしない現行方針を維持）。home は従来どおりデフォルトサイト（`site` 指定なし）で無変更。
 - deploy.yml の変更点:
   - `paths` トリガへ `company/**` `intelligence/**` を追加
   - `test` ジョブ: 単体ゲートへ両アプリの `typecheck + vitest`、シナリオゲートへ両アプリの `nuxt generate` を追加。npm キャッシュキーへ両 lock ファイルを追加
-  - `preflight`: `FIREBASE_HOSTING_SITE_COMPANY` / `FIREBASE_HOSTING_SITE_INTELLIGENCE` の有無から `company_ready` / `intelligence_ready` を出力。**未登録ならそのアプリのデプロイのみスキップ**（mockup・API のデプロイは従来どおり = 原則4）
-  - `deploy-company` / `deploy-intelligence` ジョブ: `deploy-mockup` と同型（`entryPoint` を各ディレクトリへ・site 注入ステップ付き・チャンネルは live/staging 共通ロジック）
+  - `preflight`: `FIREBASE_HOSTING_SITE_COMPANY` / `FIREBASE_HOSTING_SITE_INTELLIGENCE` の有無から `company_ready` / `intelligence_ready` を出力。**未登録ならそのアプリのデプロイのみスキップ**（home・API のデプロイは従来どおり = 原則4）
+  - `deploy-company` / `deploy-intelligence` ジョブ: `deploy-home` と同型（`entryPoint` を各ディレクトリへ・site 注入ステップ付き・チャンネルは live/staging 共通ロジック）
   - `report` ジョブへ両ジョブの結果行を追加
 - **必要な repository secrets（新規 2 件）:**
 

@@ -1,5 +1,5 @@
 /**
- * 汎用マスタ CRUD（/v1/masters/:entity）。mockup useMasterCrud の API 版。
+ * 汎用マスタ CRUD（/v1/masters/:entity）。home useMasterCrud の API 版。
  * - 参照は認証済みなら誰でも可（氏名・部署名等は全画面で必要）
  * - 変更は管理者のみ。休暇種別と勤怠ルールの変更は管理者または人事も可
  * - 論理削除（archive/restore）。関係エッジのみ物理 DELETE（監査ログ必須）

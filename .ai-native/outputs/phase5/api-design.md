@@ -144,8 +144,8 @@ useMenuCategories(area: 'dashboard' | 'masters')
 categories: ComputedRef<MenuCategoryDef[]>       // 有効なカテゴリ定義（カスタマイズ済み or menu-registry の既定）
 categorize(cards): { id, label, cards }[]        // カード一覧をカテゴリごとにグループ化（未割当は「その他」・空カテゴリは落とす）
 save(defs) / reset(): Promise<void>              // SoT = configs `menu-categories-<area>`（JSON。'' = 既定 = 下位互換）
-// カード定義の SoT = mockup/app/utils/menu-registry.ts（バッジ・機能トグル・権限のランタイム反映はページ側）
-// ページ間導線（親リンク・関連ドロップダウン）の SoT = mockup/app/utils/nav-map.ts（レイアウトヘッダーが描画）
+// カード定義の SoT = home/app/utils/menu-registry.ts（バッジ・機能トグル・権限のランタイム反映はページ側）
+// ページ間導線（親リンク・関連ドロップダウン）の SoT = home/app/utils/nav-map.ts（レイアウトヘッダーが描画）
 
 // useDashboardLayout（F-13-9・オペレーター指示 2026-08-03。ダッシュボードの表示・配置カスタマイズ）
 useDashboardLayout()
@@ -164,7 +164,7 @@ saveSections(sections: MenuCategoryDef[], scope: 'user'|'tenant'): Promise<{ ok 
   // 維持したまま sections を差し替えた DashboardLayout（templateId='custom'）を該当層へ保存（#25）。
   // 保存経路は applyTemplate と共通（persistLayout）。tenant は管理者のみ（非管理者は警告 no-op = 非ブロッキング）。
 resetLayout(scope: 'user'|'tenant'): Promise<{ ok }>               // 該当層を解除（新キーのみ・取消フロー・原則9.5）
-// 解決・categorize・型・テンプレート・buildCustomLayout・planDashboardCards の純ロジック SoT = mockup/app/utils/dashboard-layout.ts
+// 解決・categorize・型・テンプレート・buildCustomLayout・planDashboardCards の純ロジック SoT = home/app/utils/dashboard-layout.ts
 // 保存: ユーザー層 = /v1/me/preferences 'dashboardLayout'（saveMePreference。mock=localStorage）
 //       テナント層 = /v1/configs 'dashboard-layout'（setConfig）。**新規 API・マイグレーション不要**（既存の汎用 key/value を利用）
 

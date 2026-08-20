@@ -16,7 +16,7 @@ describe('parseReportReminderConfig', () => {
     expect(parseReportReminderConfig({ enabled: false, time: '23:59' })).toEqual({ enabled: false, time: '23:59' })
   })
 
-  it('JSON 文字列（mockup setConfig の JSON.stringify 経由）を受理する', () => {
+  it('JSON 文字列（home setConfig の JSON.stringify 経由）を受理する', () => {
     expect(parseReportReminderConfig('{"enabled":true,"time":"09:15"}')).toEqual({ enabled: true, time: '09:15' })
   })
 

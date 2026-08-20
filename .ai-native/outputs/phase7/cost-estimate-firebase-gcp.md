@@ -208,7 +208,7 @@ flowchart LR
 | **DB ストレージの逓増** | 記録系 + bytea 添付で年 +10〜20GB → +$3.3〜6.6/月ずつ増加（SSD + バックアップ） | アーカイブ/削除ジョブなし（implementation-status.md の残課題に該当）。10MB 添付の多用で加速 |
 | **Gemini 3 系への移行** | グラウンディングが「月 5,000 クエリ無料 + $14/1,000 クエリ（クエリ単位）」に変化 | 多用時はコスト特性が変わる |
 | **為替** | 本試算は 162.5 円/USD。±10 円で総額 ±約 6% | |
-| **Firebase Hosting のリリース履歴** | デプロイ頻度が高いとストレージ 10GB 超過 | 履歴保持数の制限設定を推奨（コンソールで設定可能）。**2026-08-20 以降はマルチサイト（mockup + company + intelligence の 3 サイト）でストレージ・転送量が最大 3 倍見当になる**ため、各サイトで履歴保持数を制限する |
+| **Firebase Hosting のリリース履歴** | デプロイ頻度が高いとストレージ 10GB 超過 | 履歴保持数の制限設定を推奨（コンソールで設定可能）。**2026-08-20 以降はマルチサイト（home + company + intelligence の 3 サイト）でストレージ・転送量が最大 3 倍見当になる**ため、各サイトで履歴保持数を制限する |
 | **Artifact Registry のイメージ蓄積** | SHA タグごとに蓄積 | クリーンアップポリシー（最新 N 世代保持）の設定を推奨 |
 
 ---
@@ -240,4 +240,4 @@ flowchart LR
 - AWS RDS（現行比較用）: https://aws.amazon.com/rds/pricing/
 - USD/JPY: https://tradingeconomics.com/japan/currency
 
-> 使用量パラメータ（ポーリング間隔・LLM 呼び出し箇所・maxOutputTokens・ジョブ数・Cloud Run フラグ等）はすべて本リポジトリのコード・設定・ドキュメントの実記述に基づく（`mockup/app/composables/useNotifications.ts`・`api/src/lib/llm.ts`・`api/src/routes/*`・`.github/workflows/deploy.yml`・`.ai-native/outputs/phase7/deploy-guide.md` ほか）。
+> 使用量パラメータ（ポーリング間隔・LLM 呼び出し箇所・maxOutputTokens・ジョブ数・Cloud Run フラグ等）はすべて本リポジトリのコード・設定・ドキュメントの実記述に基づく（`home/app/composables/useNotifications.ts`・`api/src/lib/llm.ts`・`api/src/routes/*`・`.github/workflows/deploy.yml`・`.ai-native/outputs/phase7/deploy-guide.md` ほか）。

@@ -1,7 +1,8 @@
-# AKEBONO Office モックアップ
+# AKEBONO Office フロントエンド（home）
 
-TSUNAGUBA 社内オフィスアプリのモックアップ（Nuxt 4 SPA）。
-**全ページの全機能が操作に反応する**ことを目的とした、体感検証用の実装です。
+TSUNAGUBA 社内オフィスアプリのメインフロントエンド（Nuxt 4 SPA）。
+モックアップ（旧 `mockup/`）として始まり本実装へ昇格した（ディレクトリ名は 2026-08-20 に `home/` へ改名）。
+API 未接続でも**全ページの全機能が操作に反応する**モックモードを備える（体感検証・E2E 用）。
 
 - 要件・設計の SoT: `../.ai-native/outputs/`（phase0〜5）
 - 実装規約: [`CONVENTIONS.md`](./CONVENTIONS.md)
@@ -9,7 +10,7 @@ TSUNAGUBA 社内オフィスアプリのモックアップ（Nuxt 4 SPA）。
 ## 起動方法
 
 ```bash
-cd mockup
+cd home
 npm install
 npm run dev        # http://localhost:3000
 ```
@@ -49,7 +50,7 @@ npm run build
 
 ## デプロイ（Firebase Hosting）
 
-`main` へのプッシュ（`mockup/` または `shared/` 配下の変更時）または手動実行で、GitHub Actions が自動デプロイします（`.github/workflows/deploy.yml`）。テスト → 型チェック → `nuxt generate` → Firebase Hosting の順で実行されます。
+`main` へのプッシュ（`home/` または `shared/` 配下の変更時）または手動実行で、GitHub Actions が自動デプロイします（`.github/workflows/deploy.yml`）。テスト → 型チェック → `nuxt generate` → Firebase Hosting の順で実行されます。
 
 > 本実装 API（`../api/` → Cloud Run + RDS PostgreSQL）のデプロイを含む全体手順は
 > `../.ai-native/outputs/phase7/deploy-guide.md` を参照してください。

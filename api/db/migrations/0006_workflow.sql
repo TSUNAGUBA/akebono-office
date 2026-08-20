@@ -61,7 +61,7 @@ CREATE TABLE delegate_settings (
 );
 CREATE INDEX delegate_settings_member_idx ON delegate_settings (member_id, active);
 
--- 職務権限マトリクスの初期経路（mockup シードと同一）。再実行安全・編集済みを上書きしない
+-- 職務権限マトリクスの初期経路（home シードと同一）。再実行安全・編集済みを上書きしない
 INSERT INTO workflow_routes (id, category, min_amount, max_amount, steps) VALUES
   ('wr-01', 'purchase', 0, 100000,
    '[{"order":1,"approverRole":"manager","approverMemberId":null,"mode":"serial"}]'),
