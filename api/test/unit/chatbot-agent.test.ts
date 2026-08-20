@@ -69,6 +69,13 @@ describe('splitSuggestions（回答末尾の提案行）', () => {
     expect(splitSuggestions('回答です。\n- **提案: A | B**').suggestions).toEqual(['A', 'B'])
   })
 
+  it('行終端子（U+2028 等）を含む入力でも例外を投げず非抽出で本文無傷（レビュー R4）', () => {
+    const ls = splitSuggestions('回答。\u2028提案: A | B')
+    expect(ls).toEqual({ content: '回答。\u2028提案: A | B', suggestions: [] })
+    expect(splitSuggestions('回答。\u2029提案: A | B').suggestions).toEqual([])
+    expect(splitSuggestions('回答。\r提案: A | B').suggestions).toEqual([])
+  })
+
   it('リスト形（- 提案:）は | 区切りを含む場合のみ抽出する（正当な箇条書きの本文を削らない = レビュー R2）', () => {
     const listPair = splitSuggestions('改善点は次のとおりです。\n- 課題: 承認の遅延\n- 提案: 経費精算の自動化')
     expect(listPair.content).toBe('改善点は次のとおりです。\n- 課題: 承認の遅延\n- 提案: 経費精算の自動化')

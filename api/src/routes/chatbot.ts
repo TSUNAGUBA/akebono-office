@@ -1010,7 +1010,9 @@ export function splitSuggestions(text: string): { content: string; suggestions: 
   // 太字は対称ペアのみ剥がす（内部に * を含む文字列は別々のペアの可能性があるため触らない）。
   // ** の片側だけを食う正規表現を置かないことが要点 = 壊れた候補（`**B`・`A**`）を作らない（レビュー R2/R3）
   const unbold = (s: string): string => s.replace(/^\*\*([^*]+)\*\*$/, '$1')
-  const lm = /^([-*]\s+)?(.*)$/.exec((lines[lines.length - 1] ?? '').trim())!
+  // [\s\S]* で任意文字列に必ずマッチさせる（. は U+2028 等の行終端子に不一致 = exec が null を
+  // 返し得るため。行終端子入りの行は後段の提案行 regex が不一致 → 非抽出で本文無傷。レビュー R4）
+  const lm = /^([-*]\s+)?([\s\S]*)$/.exec((lines[lines.length - 1] ?? '').trim())!
   const isList = lm[1] !== undefined
   const last = unbold(lm[2]!)
   // ラベル形は 3 択（**提案:** / **提案**: / 提案:）。素のラベルではコロン直後の ** を食わない
