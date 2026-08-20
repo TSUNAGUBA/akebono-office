@@ -12,6 +12,7 @@ import type {
 import type { TableColumn } from '~/types/ui'
 import type { NotifyRecipientTarget } from '~/utils/notify-recipients'
 import { parseNotifyRecipients } from '~/utils/notify-recipients'
+import { parseReportReminderConfig } from '../../../shared/domain/report-reminder'
 import { fmtDateTime } from '~/utils/format'
 
 const { isAdmin } = useCurrentUser()
@@ -119,6 +120,29 @@ const poipoiNotifyRecipients = computed<NotifyRecipientTarget[]>({
     setConfig('poipoi-notify-recipients', JSON.stringify(v))
   },
 })
+
+// ---------- 日報リマインド（改修要望: 設定時刻に前日まで未提出のメンバーへ通知） ----------
+// SoT = configs 'report-reminder'（{ enabled, time } の JSON。パースは shared/domain/report-reminder が両形対応）。
+// 実行はサーバー cron（/jobs/report-reminders）。モックモードは plugins/report-reminder.client.ts がデモ簡易実行
+
+const REMINDER_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/
+
+const reportReminder = computed(() => parseReportReminderConfig(getConfig('report-reminder', '')))
+
+function onToggleReportReminder(): void {
+  const next = { ...reportReminder.value, enabled: !reportReminder.value.enabled }
+  setConfig('report-reminder', JSON.stringify(next))
+  toast.show(next.enabled
+    ? `日報リマインドを有効にしました（毎日 ${next.time} 以降に通知します）`
+    : '日報リマインドを無効にしました')
+}
+
+function onReportReminderTime(e: Event): void {
+  const v = (e.target as HTMLInputElement).value
+  if (!REMINDER_TIME_RE.test(v)) return
+  setConfig('report-reminder', JSON.stringify({ ...reportReminder.value, time: v }))
+  toast.show(`日報リマインドの時刻を ${v} に変更しました`)
+}
 
 function onToggleFeature(t: FeatureToggle): void {
   setToggle(t.key, !t.enabled)
@@ -462,6 +486,46 @@ async function onResetDemo(): Promise<void> {
           description="改善のタネが登録されると、原文を下記の宛先へ通知します。宛先はロール・役職・個人で指定できます（投稿者本人は除外）。未設定の場合は通知しません"
         >
           <SettingsNotifyRecipientsEditor v-model="poipoiNotifyRecipients" />
+        </UiSectionCard>
+
+        <!-- b4) 日報リマインド（改修要望: 設定時刻に前日まで未提出のメンバーへ自動通知） -->
+        <UiSectionCard
+          title="日報リマインド"
+          description="設定時刻に、前日までの日報に未記載（未提出）があるメンバーへ通知します（各メンバーの通知設定に従って配信されます）"
+        >
+          <div class="flex flex-wrap items-center gap-x-5 gap-y-2">
+            <div class="flex items-center gap-2">
+              <button
+                type="button"
+                role="switch"
+                :aria-checked="reportReminder.enabled"
+                aria-label="日報リマインド"
+                class="relative h-6 w-11 shrink-0 rounded-full transition-colors"
+                :class="reportReminder.enabled ? 'bg-brand' : 'bg-line-strong'"
+                @click="onToggleReportReminder"
+              >
+                <span
+                  class="absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-all"
+                  :class="reportReminder.enabled ? 'left-[22px]' : 'left-0.5'"
+                  aria-hidden="true"
+                />
+              </button>
+              <span class="text-[13px] font-medium">{{ reportReminder.enabled ? '有効' : '無効' }}</span>
+            </div>
+            <label class="flex items-center gap-1.5 text-[13px] text-sub">
+              通知時刻
+              <input
+                type="time"
+                class="input num w-28"
+                :value="reportReminder.time"
+                aria-label="日報リマインドの通知時刻"
+                @change="onReportReminderTime"
+              >
+            </label>
+          </div>
+          <p class="mt-2 text-[11px] text-muted">
+            対象は前日までの直近 5 営業日（土日を除く・祝日は考慮しません）。提出済み以外（未作成・下書き）を未提出として扱い、送信は 1 日 1 回です
+          </p>
         </UiSectionCard>
 
         <!-- c) カスタム項目 -->

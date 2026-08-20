@@ -1138,6 +1138,15 @@ async function onMarkUnreadWeekly(): Promise<void> {
   weeklyDrawerId.value = null
   show('未読に戻しました')
 }
+
+// ---------- チーム（週報）タブの表示形式（複数週マトリクス / 単週。改修要望: 直近 4/8/12 週をまとめて確認） ----------
+
+/** 既定 = 複数週マトリクス（要望が「まとめて確認したい」のため）。単週は従来の PeriodPanel（詳細 + ドロワー） */
+const weeklyTeamView = ref('matrix')
+const WEEKLY_TEAM_VIEW_TABS = [
+  { value: 'matrix', label: '複数週まとめて' },
+  { value: 'single', label: '単週の詳細' },
+]
 </script>
 
 <template>
@@ -2258,8 +2267,12 @@ async function onMarkUnreadWeekly(): Promise<void> {
       </UiSectionCard>
     </div>
 
-    <!-- ================= チーム（週報の提出状況。改修依頼 2026-08-19 第4弾） ================= -->
-    <ReportsPeriodPanel v-else-if="tab === 'weekly-team'" kind="weekly" view="team" />
+    <!-- ================= チーム（週報の提出状況。改修依頼 2026-08-19 第4弾 → 複数週マトリクス追加） ================= -->
+    <div v-else-if="tab === 'weekly-team'" class="grid gap-3">
+      <UiChipTabs v-model="weeklyTeamView" :options="WEEKLY_TEAM_VIEW_TABS" aria-label="チーム週報の表示形式" />
+      <ReportsWeeklySubmissionMatrix v-if="weeklyTeamView === 'matrix'" />
+      <ReportsPeriodPanel v-else kind="weekly" view="team" />
+    </div>
 
     <!-- ================= 月報（自分 / 全員 / チーム。週報と同型 = 共通コンポーネント。改修依頼 2026-08-19 第4弾） ================= -->
     <ReportsPeriodPanel v-else-if="tab === 'monthly-mine'" kind="monthly" view="mine" />

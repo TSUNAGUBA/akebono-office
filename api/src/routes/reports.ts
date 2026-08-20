@@ -11,8 +11,11 @@
 import { Hono } from 'hono'
 import type pg from 'pg'
 import { DEFAULT_WORKING_DAY_RULE, isWorkingDay } from '../../../shared/domain/business-day'
-import { addDays, isRealDateKey, nowJstIso, todayJst } from '../../../shared/domain/jst'
+import { addDays, isRealDateKey, jstClock, nowJstIso, todayJst } from '../../../shared/domain/jst'
 import { canUseFeature, canViewMemberReports, type PermissionSubject } from '../../../shared/domain/permissions'
+import {
+  buildReminderMessage, missingReportDates, parseReportReminderConfig, reminderWindowDates, shouldFireReminder,
+} from '../../../shared/domain/report-reminder'
 import {
   DAILY_ISSUE_CATEGORY_PRESETS, TOMORROW_PLANS_MAX, WEEKLY_TEAM_SHARE_KINDS,
 } from '../../../shared/domain/types'
@@ -1044,4 +1047,58 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
   })
 
   return app
+}
+
+/**
+ * 日報の自動リマインド実行（Cloud Scheduler → POST /jobs/report-reminders から呼ぶ。app.ts で配線）。
+ * - 設定 SoT = app_configs 'report-reminder'（{ enabled, time }。JSON 文字列/オブジェクト両形を
+ *   shared/domain/report-reminder の parse が受理する = 原則7）
+ * - 送信済み管理 = app_configs 'report-reminder-last-sent'（日付キーの upsert）。
+ *   shouldFireReminder が「設定時刻以降 & 今日未送信」を判定 = 日次 1 回・再実行は再送しない（原則2）
+ * - 対象 = 在籍中（active）の全メンバー。前日までの直近 5 営業日（月〜金・祝日は考慮しない）に
+ *   提出済みの日報が無い日があれば通知（各メンバーの通知設定に従って配信 = notifications ドメインの責務）
+ * - notify は内部で失敗を握りつぶし、実行全体も try/catch（リマインドの失敗が cron を落とさない = 原則4）
+ */
+export async function runReportReminders(pool: pg.Pool): Promise<{ notified: number }> {
+  let notified = 0
+  try {
+    const { rows: cfgRows } = await pool.query<{ key: string; value: unknown }>(
+      `SELECT key, value FROM app_configs WHERE key IN ('report-reminder', 'report-reminder-last-sent')`)
+    const config = parseReportReminderConfig(cfgRows.find(r => r.key === 'report-reminder')?.value)
+    const lastRaw = cfgRows.find(r => r.key === 'report-reminder-last-sent')?.value
+    const lastSent = typeof lastRaw === 'string' ? lastRaw : ''
+    const today = todayJst()
+    const clock = jstClock()
+    if (!shouldFireReminder(config, `${clock.h}:${clock.m}`, lastSent, today)) return { notified: 0 }
+
+    const window = reminderWindowDates(today)
+    const from = window[0] ?? today
+    const to = window[window.length - 1] ?? today
+    const [membersQ, reportsQ] = await Promise.all([
+      pool.query<{ id: string }>(`SELECT id FROM members WHERE active = true`),
+      pool.query<{ memberId: string | null; date: string }>(
+        `SELECT member_id AS "memberId", date::text AS date FROM daily_reports
+         WHERE author_kind = 'human' AND status = 'submitted' AND date BETWEEN $1::date AND $2::date`,
+        [from, to]),
+    ])
+    const submitted = reportsQ.rows.map(r =>
+      ({ authorKind: 'human', memberId: r.memberId, date: r.date, status: 'submitted' }))
+    for (const m of membersQ.rows) {
+      const missing = missingReportDates(m.id, submitted, today)
+      const latest = missing[missing.length - 1]
+      if (!latest) continue
+      const { title, body } = buildReminderMessage(missing)
+      // リンクは最新の未提出日の日報へのディープリンク（?date= = 手動リマインド /remind と同型）
+      await notify(pool, m.id, 'reminder', title, body, `/reports?date=${latest}`)
+      notified++
+    }
+    // 送信済みの記録は通知発行後に upsert（設定系のみ更新・記録系は追記済み = 原則2）
+    await pool.query(
+      `INSERT INTO app_configs (key, value) VALUES ('report-reminder-last-sent', $1)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      [JSON.stringify(today)])
+  } catch (e) {
+    console.warn('runReportReminders failed (non-blocking):', (e as Error).message)
+  }
+  return { notified }
 }

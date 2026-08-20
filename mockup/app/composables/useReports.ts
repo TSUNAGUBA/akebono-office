@@ -20,6 +20,7 @@ import {
   DAILY_ISSUE_CATEGORY_PRESETS, TOMORROW_PLANS_MAX, WEEKLY_TEAM_SHARE_KINDS,
 } from '../../../shared/domain/types'
 import { addDays, weekdayOf } from '~/utils/format'
+import { weekStartOf as weekStartOfDate } from '~/utils/report-weeks'
 import { matrixVisible, parseTeamVisibleIds, timelineVisibleWith } from '~/utils/team-visibility'
 
 // ---------- API モードのキャッシュ（SPA・モジュールスコープ単一） ----------
@@ -672,10 +673,9 @@ export function useReports() {
 
   // ---------- 週報 ----------
 
-  /** 週の開始日（月曜） */
+  /** 週の開始日（月曜）。実装 SoT = utils/report-weeks.ts（週報マトリクスの週列生成と共有 = 原則3） */
   function weekStartOf(date: string): string {
-    const w = weekdayOf(date)
-    return addDays(date, w === 0 ? -6 : 1 - w)
+    return weekStartOfDate(date)
   }
 
   function myWeeklyOn(weekStart: string): WeeklyReport | undefined {
