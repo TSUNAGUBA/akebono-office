@@ -167,25 +167,27 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="grid gap-2">
+    <!-- 本文と画像添付ツールバーを 1 つの枠に見せる（Claude ライク）。ツールバーはテキストエリアの「下」に別要素として
+         積むため、テキストが長くスクロールしてもボタン・ヒントに文字が重ならない（改修依頼 2026-08-20。
+         従来の absolute 重ね + pb-11 は、途中までスクロールした際に下端の行がボタンに重なる問題があった）。 -->
     <div
-      class="relative"
-      :class="dragActive ? 'rounded-xl ring-2 ring-brand' : ''"
+      class="rounded-[var(--radius-ctl)] border bg-surface transition-shadow focus-within:outline focus-within:outline-2 focus-within:-outline-offset-1 focus-within:outline-brand"
+      :class="dragActive ? 'border-brand ring-2 ring-brand' : 'border-line-strong'"
       @dragover.prevent="dragActive = imagesEditable"
       @dragleave="dragActive = false"
       @drop="onDrop"
     >
       <textarea
         :value="modelValue"
-        class="textarea w-full"
-        :class="imagesEditable ? 'pb-11' : ''"
+        class="block w-full resize-y border-0 bg-transparent px-2.5 pb-1 pt-2 text-[13px] text-ink outline-none placeholder:text-muted"
         :rows="rows"
         :aria-label="bodyAriaLabel"
         :placeholder="placeholder"
         @input="emit('update:modelValue', ($event.target as HTMLTextAreaElement).value)"
         @paste="onPaste"
       />
-      <!-- 枠内左下の「+」ボタン（画像添付。Claude ライク）。textarea に下部パディングを取り重ならないようにする -->
-      <div v-if="imagesEditable" class="absolute bottom-2 left-2 flex items-center gap-2">
+      <!-- 枠内下部の画像添付ツールバー（テキストエリアの外＝下に積む。テキストと重ならない） -->
+      <div v-if="imagesEditable" class="flex flex-wrap items-center gap-x-2 gap-y-1 px-2 pb-2">
         <button
           type="button"
           class="btn btn-ghost btn-sm"

@@ -8,7 +8,7 @@
  * 本文の文字数上限・タグの allowlist・リンク/画像の形式は保存時に呼び出し側が shared 検証で確定する。
  */
 import {
-  IMPROVEMENT_BODY_CAP, IMPROVEMENT_REQUEST_TAG_META, IMPROVEMENT_REQUEST_TAGS,
+  IMPROVEMENT_BODY_CAP,
   type ImprovementRequestImage,
 } from '~/types/improvement'
 
@@ -38,8 +38,6 @@ const links = ref<string[]>([...(props.initialLinks ?? [])])
 const images = ref<ImprovementRequestImage[]>([...(props.initialImages ?? [])])
 /** 画像処理中は保存を止める（縮小中に確定して添付が漏れないように = BodyImageInput から通知） */
 const attachBusy = ref(false)
-
-const TAG_OPTIONS = IMPROVEMENT_REQUEST_TAGS.map(t => ({ value: t, label: IMPROVEMENT_REQUEST_TAG_META[t].label }))
 
 // 文字数はコードポイント基準（サーバー側 capCodePoints と同じ数え方）。textarea の maxlength は
 // UTF-16 単位で絵文字等が半分しか入らないため使わず、超過は保存ボタン無効 + カウンタ強調で伝える
@@ -75,12 +73,12 @@ function onSave(): void {
       </p>
     </div>
 
-    <!-- 任意タグ（壁打ち/お任せ = F-42-17。登録時と同じ選択肢・SoT = shared の TAG_META） -->
+    <!-- タグ（壁打ち/お任せ = F-42-17。登録時と同じ・改修依頼 2026-08-20: どちらか 1 つのみのトグル） -->
     <UiFormField
-      label="タグ（任意）"
-      hint="「壁打ち」= 壁打ち（対話での要件整理）を経て案件化したい意思表示。「お任せ」= 受け取った内容を開発側の解釈で進めてよい"
+      label="タグ"
+      hint="「お任せ」= 受け取った内容を開発側の解釈で進めてよい。「壁打ち」= 壁打ち（対話での要件整理）を経て案件化したい意思表示。どちらか 1 つを選びます"
     >
-      <UiChipSelect v-model="tags" :options="TAG_OPTIONS" aria-label="要望のタグ" />
+      <ImprovementsTagToggle v-model="tags" aria-label="要望のタグ" />
     </UiFormField>
 
     <!-- 参考リンクの編集（投稿フォームと同一部品 = 原則3） -->
