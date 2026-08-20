@@ -29,6 +29,19 @@ cd e2e && npm ci
   `BASE=http://127.0.0.1:4174 node perm-combobox-e2e.cjs` で個別実行できる
 - スタックを残して手動確認したい場合は `./keep-stack.sh`
 
+## 新アプリ（company / intelligence）のモックモード E2E（2026-08-20）
+
+```bash
+./run-new-apps-mock.sh          # 両アプリを nuxt generate → :4181/:4182 で配信 → 2 スイート実行
+SKIP_BUILD=1 ./run-new-apps-mock.sh   # ビルド済み .output/public を再利用（反復時の時短）
+```
+
+- `company-mock-e2e.cjs`（`:4181`）: AKEBONO Company。依頼 → 承認 → 自動実行・トークン管理
+  （予算保存 → 超過ブロック AKC-TOK-001 → 既定値リセット = 取消フロー）・日次報告生成・モバイル 375px
+- `intelligence-mock-e2e.cjs`（`:4182`）: AKEBONO Intelligence。インサイト生成のフィードバックループ反映
+  （reinforce / alternative / dedupe）・提案のアクション化・フィードバック記録・サイクル明細・モバイル 375px
+- PostgreSQL・API は不要（モックモードのみ）。API モードの E2E は共通 API に対する既存スイートが担う
+
 ## 新バッチのスイート追加
 
 `batchXX-e2e.cjs` を追加し、`run-batch6b-stack.sh` 末尾の `SUITES` に 1 行追記する

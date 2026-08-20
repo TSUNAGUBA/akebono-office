@@ -1,6 +1,6 @@
-# Phase 7: デプロイ手順（mockup: Firebase Hosting / api: Cloud Run + RDS PostgreSQL）
+# Phase 7: デプロイ手順（フロント 3 アプリ: Firebase Hosting / api: Cloud Run + RDS PostgreSQL）
 
-- **作成日:** 2026-07-17
+- **作成日:** 2026-07-17（2026-08-20 マルチサイト対応 = company / intelligence 追加）
 - **対象読者:** オペレーター（初回セットアップ）・開発者（日常デプロイ）
 - **原則:** 手動手順は初回セットアップとフォールバックのみ。日常デプロイは main への push で全自動（開発原則1）
 
@@ -8,10 +8,13 @@
 
 | コンポーネント | デプロイ先 | トリガー |
 |---|---|---|
-| `mockup/`（Nuxt SPA） | Firebase Hosting | main へ push（`mockup/` `shared/` 変更時）or 手動 |
+| `mockup/`（AKEBONO Office / Nuxt SPA） | Firebase Hosting（**デフォルトサイト**） | main へ push（対象パス変更時）or 手動 |
+| `company/`（AKEBONO Company / Nuxt SPA） | Firebase Hosting（**専用サイト** = マルチサイト） | 〃（`FIREBASE_HOSTING_SITE_COMPANY` 登録時のみ。§1-11） |
+| `intelligence/`（AKEBONO Intelligence / Nuxt SPA） | Firebase Hosting（**専用サイト** = マルチサイト） | 〃（`FIREBASE_HOSTING_SITE_INTELLIGENCE` 登録時のみ。§1-11） |
 | `api/`（Hono API） | Cloud Run | main へ push（`api/` `shared/` 変更時）or 手動 |
 | DB マイグレーション | RDS PostgreSQL | API コンテナ起動時に自動適用（冪等） |
 
+トリガーの対象パス: `mockup/` `company/` `intelligence/` `api/` `shared/`（+ ワークフロー自身）。
 日常運用で必要な操作は **main へのマージのみ**。以下は初回セットアップ手順。
 
 ### 0-1. デプロイパイプラインの構造（AI ネイティブ方法論テンプレート適用）
@@ -21,22 +24,27 @@
 ```mermaid
 flowchart LR
   P[事前検証<br/>preflight] --> T[テストゲート<br/>単体→結合→シナリオ]
-  T --> M[デプロイ<br/>mockup / Firebase Hosting]
+  T --> M[デプロイ<br/>mockup / Hosting デフォルトサイト]
+  T --> C[デプロイ<br/>company / Hosting 専用サイト]
+  T --> I[デプロイ<br/>intelligence / Hosting 専用サイト]
   T --> A[デプロイ<br/>api / Cloud Run]
   M --> R[結果レポート<br/>report]
+  C --> R
+  I --> R
   A --> R
 ```
 
 | ジョブ | 内容 |
 |---|---|
-| **preflight（事前検証）** | デプロイ先環境を確定し、必須 secrets（mockup 用 Firebase）の有無を確認。欠ければ即中断。api 用 secrets が欠ければ api デプロイをスキップ（非ブロッキング = 原則4） |
-| **test（テストゲート）** | 各ステージを `scripts/run-test-stage.sh` で実行しログをアーティファクト化。**単体** = mockup/api の `typecheck` + `vitest`、**結合** = api の実 PostgreSQL 統合テスト（`test:integration`）、**シナリオ** = デプロイ成果物のビルド検証（mockup `generate` + api `build`）。前段が失敗した時点で以降は実行されずデプロイは中断 |
-| **deploy-mockup** | Firebase Hosting へ配信。環境で配信チャネルを切替（production=`live` / staging=プレビューチャネル `staging`） |
+| **preflight（事前検証）** | デプロイ先環境を確定し、必須 secrets（mockup 用 Firebase）の有無を確認。欠ければ即中断。company / intelligence はサイト用 secret（`FIREBASE_HOSTING_SITE_*`）が無ければスキップ、api 用 secrets が欠ければ api デプロイをスキップ（非ブロッキング = 原則4） |
+| **test（テストゲート）** | 各ステージを `scripts/run-test-stage.sh` で実行しログをアーティファクト化。**単体** = mockup/company/intelligence/api の `typecheck` + `vitest`、**結合** = api の実 PostgreSQL 統合テスト（`test:integration`）、**シナリオ** = デプロイ成果物のビルド検証（各フロント `generate` + api `build`）。前段が失敗した時点で以降は実行されずデプロイは中断 |
+| **deploy-mockup** | Firebase Hosting のデフォルトサイトへ配信。環境で配信チャネルを切替（production=`live` / staging=プレビューチャネル `staging`） |
+| **deploy-company** / **deploy-intelligence** | Firebase Hosting の**専用サイト**へ配信（マルチサイト）。サイト ID は secrets（`FIREBASE_HOSTING_SITE_COMPANY` / `FIREBASE_HOSTING_SITE_INTELLIGENCE`）から受け取り、デプロイ時に `.firebaserc` を生成して `firebase.json` の hosting.target へ紐付ける。**secret 未登録ならスキップ**（他のデプロイは継続）。チャネル切替は mockup と同じ |
 | **deploy-api** | Cloud Run へ配信。**production かつ api secrets が揃うときのみ**実行。staging は別途プロビジョニングが必要なため対象外（preflight で通知） |
 | **report** | 成否にかかわらずパイプライン全体の結果を Step Summary へ記録 |
 
 **トリガーと環境:**
-- **main への push**（`mockup/` `api/` `shared/` 変更時）= 従来どおり **production へ自動デプロイ**（開発原則1「手動ステップを残さない」）。
+- **main への push**（`mockup/` `company/` `intelligence/` `api/` `shared/` 変更時）= 従来どおり **production へ自動デプロイ**（開発原則1「手動ステップを残さない」）。
 - **手動実行（workflow_dispatch）** = `staging` / `production` を選択可能。`staging` を選ぶと mockup は Firebase プレビューチャネル（本番と別 URL）へデプロイされ、api はスキップされる。
 
 > **テストゲートが失敗したら:** Actions の該当 run の Step Summary で失敗ステージを確認し、アーティファクト `deploy-logs` 内の該当ログ（`unit-test.log` / `integration-test.log` / `scenario-test.log`）で詳細を見る。修正後に再度 push または手動再実行する。
@@ -108,8 +116,10 @@ flowchart LR
 | `CLOUD_RUN_SERVICE` | 〃 | `akebono-office-api` |
 | `DATABASE_URL` | RDS 接続文字列（Secret Manager へ中継） | — |
 | `DB_SSL` | TLS モード | `require` |
-| `API_CORS_ORIGINS` | CORS 許可オリジン | `https://<project>.web.app` |
+| `API_CORS_ORIGINS` | CORS 許可オリジン | `https://<project>.web.app`（`-CompanyHostingSite` / `-IntelligenceHostingSite` 指定時は各サイトのオリジンも自動で含む） |
 | `STORAGE_BUCKET` | ドキュメント保管（`-StorageBucket` 指定時のみ。§1-10） | 未設定 = DB 保管フォールバック |
+| `FIREBASE_HOSTING_SITE_COMPANY` | AKEBONO Company のサイト ID（`-CompanyHostingSite` 指定時のみ。§1-11） | 未設定 = company デプロイをスキップ |
+| `FIREBASE_HOSTING_SITE_INTELLIGENCE` | AKEBONO Intelligence のサイト ID（`-IntelligenceHostingSite` 指定時のみ。§1-11） | 未設定 = intelligence デプロイをスキップ |
 
 > `-DatabaseUrl` を省略すると mockup 用 secrets のみ設定される（従来の使い方と完全互換）。
 > その場合 deploy-api ジョブは警告を出してスキップされ、mockup のデプロイは通常どおり動く。
@@ -164,7 +174,9 @@ Cloud Run は既定で **`--min-instances 1`**（常時 1 台を暖機）でデ�
      -FirebaseWebConfigJsonPath ./firebase-web-config.json -TriggerDeploy
    ```
    → 以後の `deploy-mockup` は `NUXT_PUBLIC_API_BASE` / `NUXT_PUBLIC_FIREBASE_CONFIG` 付きでビルドされ、
-   ログイン必須の API 接続版が配信される（`API_BASE_URL` secret を削除すればモックモードへ戻る）
+   ログイン必須の API 接続版が配信される（`API_BASE_URL` secret を削除すればモックモードへ戻る）。
+   **company / intelligence（§1-11）も同じ 2 つの secrets を共用して API 接続版でビルドされる**
+   （同一 Firebase プロジェクト・同一 API のため。別途 `API_CORS_ORIGINS` へ各サイトのオリジン追加が必要）
 4. 利用者の email を メンバーマスタに登録する（API はログイン email と `members.email` を突合する）。
    最初の管理者だけは SQL で投入する:
    ```sql
@@ -364,16 +376,50 @@ secrets は不要。連携は**テナント（全社）単位の単一接続**�
 4. **既存データの移行:** STORAGE_BUCKET 設定前にアップロードされたファイルは DB 保管（storage='db'）のまま
    動作し続ける（新規アップロードから GCS へ保存）。強制移行は不要
 
+## 1-11. 新アプリ（company / intelligence）の Hosting マルチサイト公開（2026-08-20 新設）
+
+AKEBONO Company（`company/`）と AKEBONO Intelligence（`intelligence/`）は、mockup と**同一 Firebase
+プロジェクト内の別 Hosting サイト**（マルチサイト）として別 URL で公開する。サイト ID はリポジトリに
+持たず repository secrets で渡すため、初回のみ以下を実施する。
+
+1. **Hosting サイトの作成**（プロジェクトごとに 1 回。サイト ID はグローバル一意）:
+   ```bash
+   firebase hosting:sites:create <company-site-id> --project <your-project>       # 例: akebono-company
+   firebase hosting:sites:create <intelligence-site-id> --project <your-project>  # 例: akebono-intelligence
+   ```
+2. **secrets の登録**（既存パラメータに追記して再実行 = 冪等）:
+   ```powershell
+   ./scripts/setup-deploy-secrets.ps1 -ProjectId <your-project> -ServiceAccountJsonPath ./deploy-sa.json `
+     -CompanyHostingSite <company-site-id> -IntelligenceHostingSite <intelligence-site-id> `
+     -DatabaseUrl 'postgresql://...'   # API 接続する場合。-CorsOrigins 省略なら各サイトのオリジンを既定 CORS へ自動で含める
+   ```
+   → `FIREBASE_HOSTING_SITE_COMPANY` / `FIREBASE_HOSTING_SITE_INTELLIGENCE` が登録され、以後の
+   deploy で company / intelligence も各サイトへ配信される（未登録の間は該当アプリのみスキップ）。
+3. **CORS の反映（API 接続する場合・重要）:** `CORS_ORIGINS` は Cloud Run の環境変数のため、
+   `API_CORS_ORIGINS` secret を更新したら **api の再デプロイが必要**（`gh workflow run deploy.yml -f environment=production`
+   または `api/` 配下の変更を main へ push）。反映順序は **API_CORS_ORIGINS 更新 → api 再デプロイ → フロント配信** が安全
+   （逆順だと新サイトからの API 呼び出しが CORS で失敗する。ログイン画面が「API に接続できません」を表示する）。
+4. **動作確認:** `https://<company-site-id>.web.app` / `https://<intelligence-site-id>.web.app` を開き、
+   モックモードなら画面が表示されること、API 接続版ならログイン → ダッシュボード表示まで確認する。
+
+> **補足:**
+> - 認証は 3 アプリ共通（同一 Firebase Auth・同一 `members` マスタ）。メンバー登録（§1-6 手順 4）は共用される。
+> - 使用 API はすべて既存エンドポイント（今回の切り出しで API / DB の変更はない）。
+> - `firebase.json` の `hosting.target`（`company` / `intelligence`）は静的な論理名で、サイト ID との
+>   紐付け（`.firebaserc`）はデプロイ時に CI が secrets から生成する（リポジトリへ固有値を持たない方針）。
+
 ## 2. 日常デプロイ（開発者）
 
 - **自動:** main へマージ → 変更パスに応じて production へ自動デプロイ（環境 = production）
-  - **テストゲート**（単体 → 結合 → シナリオ。§0-1）が **全て green の場合のみ** mockup / api がデプロイされる。
+  - **テストゲート**（単体 → 結合 → シナリオ。§0-1）が **全て green の場合のみ** フロント 3 アプリ / api がデプロイされる。
     いずれか失敗すればデプロイは中断され、`deploy-logs` アーティファクトに失敗内容が残る
-  - mockup と api はテストゲート通過後に並行デプロイされる（api は secrets が揃う場合のみ）
+  - mockup / company / intelligence / api はテストゲート通過後に並行デプロイされる
+    （company / intelligence はサイト用 secret、api は api 用 secrets が揃う場合のみ）
 - **手動:** `gh workflow run deploy.yml -f environment=staging`（または Actions 画面の `Run workflow` で環境を選択）
-  - `staging` = mockup を Firebase プレビューチャネル（本番と別 URL）へ配信。api はスキップ
+  - `staging` = フロント各アプリを Firebase プレビューチャネル（本番と別 URL）へ配信。api はスキップ
   - `production` = 本番へ配信（自動デプロイと同じ）
-- **ロールバック:** Cloud Run はリビジョン単位で保持される
+- **ロールバック:** Firebase Hosting は各サイト独立にコンソールの「リリース履歴」から直前リリースへ
+  ロールバックできる（静的 SPA のため git revert → main へ push でも復旧可能）。Cloud Run はリビジョン単位で保持される
   ```bash
   gcloud run services update-traffic akebono-office-api --region asia-northeast1 \
     --to-revisions <前リビジョン>=100

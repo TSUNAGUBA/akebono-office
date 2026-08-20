@@ -42,7 +42,7 @@
 - **本番構成（決定 2026-07-17・オペレーター指示）:** 静的配信（Firebase Hosting）+ **API = Node（Hono）/ Cloud Run** + **DB = AWS RDS PostgreSQL**（`app_office` 業務スキーマ + 将来 `mart` 分析スキーマ）。**重い処理（集計・LLM・バッチ）はすべてサーバーサイド**で実行する。詳細は `phase7/production-architecture.md`（本番構成の SoT）
   - API フレームワークの選定: Hono（Cloud Run のコールドスタートに有利な軽量さ・TypeScript ファースト・`app.request()` によるネットワーク不要のテスト容易性）。不採用: Nitro 単体（フロントの Nuxt と揃うが API 専用にはオートインポート等の暗黙が過剰）/ Express（型・メンテナンス性）/ .NET（フロントと言語が割れ `shared/domain` の共有ができない）
   - ドメインロジックは repo 直下 `shared/domain/`（型・勤怠計算・JST）をフロントと共有し二重実装を防ぐ
-- **モックアップの配信基盤（決定 2026-07-16・オペレーター承認）:** Firebase Hosting。GitHub Actions（`.github/workflows/deploy.yml`）で main への push 時に自動デプロイ。認証情報は Repository secrets で管理し、設定は `scripts/setup-deploy-secrets.ps1` で完結する（API 用 secrets も同スクリプトで設定）
+- **モックアップの配信基盤（決定 2026-07-16・オペレーター承認）:** Firebase Hosting。GitHub Actions（`.github/workflows/deploy.yml`）で main への push 時に自動デプロイ。認証情報は Repository secrets で管理し、設定は `scripts/setup-deploy-secrets.ps1` で完結する（API 用 secrets も同スクリプトで設定）。**2026-08-20 追加:** 新アプリ `company/`・`intelligence/` は同一 Firebase プロジェクトの **Hosting マルチサイト**（別サイト・別 URL）で配信する（`phase7/deploy-guide.md` §1-11）
 - 分析基盤: akebono-scm-platform の `mart` スキーマ規約に準拠（phase5/data-design.md）
 
 ## ゲート判定（Phase 4）
