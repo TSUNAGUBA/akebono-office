@@ -123,6 +123,7 @@ export function useMediaArticles() {
             // チャンネル名は表示・文面用途で渡す
             segmentName: channel.name,
           },
+          timeoutMs: 60_000, // LLM 記事生成（既定 15s では正常応答を打ち切る = レビュー R1）
         })
         apiGenerated.value = {
           ...apiGenerated.value,

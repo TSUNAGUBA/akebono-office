@@ -13,6 +13,7 @@ import { nowJstIso, todayJst } from '../../../shared/domain/jst'
 import { canViewMemberTaskPlans } from '../../../shared/domain/permissions'
 import type { DraftContext, ReportDraft } from '../../../shared/domain/report-draft'
 import { heuristicReportDraft, toQuarterHours } from '../../../shared/domain/report-draft'
+import { FORMAT_TEXT_CAP, heuristicFormatRequestText } from '../../../shared/domain/text-assist'
 import type { HearingLog, TaskPlan } from '../../../shared/domain/types'
 import type { Env } from '../env'
 import { err } from '../lib/errors'
@@ -158,6 +159,38 @@ export function assistRoutes(pool: pg.Pool, env: Env): Hono {
     }
     const draft = (await llmDraft(env, ctx, date, orgContext)) ?? heuristicReportDraft(ctx, date)
     return c.json({ data: draft })
+  })
+
+  // 入力テキストの「AIで整形」（改修依頼 2026-08-20。認証済み全員可 = 要望フォーム等の入力サポートの汎用型）。
+  // LLM（Vertex 構造化出力）を一次に使い、無効環境・失敗・空出力は shared の決定的ヒューリスティックへ
+  // フォールバックする（report-draft と同型 = 原則3/4）。結果は保存しない（何度でもやり直せる）。
+  // 応答 { text, llm }: llm=true は LLM 整形・false はルールベース（UI がフィードバックに使う）
+  app.post('/format-text', async (c) => {
+    const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
+    const text = String(body.text ?? '')
+    // 入力上限（コードポイント単位 = capCodePoints と同じ数え方）。コード体系は本ルート既存の AKO-RAS-*
+    if ([...text].length > FORMAT_TEXT_CAP) {
+      throw err('AKO-RAS-003', `整形できるテキストは ${FORMAT_TEXT_CAP} 文字までです`, 400)
+    }
+    // 空入力はそのまま返す（heuristicFormatRequestText と同じ規約 = 両モード parity。エラーにしない）
+    if (!text.trim()) return c.json({ data: { text, llm: false } })
+    const llmOut = await generateJson<{ formatted?: unknown }>(env, {
+      system: 'あなたは日本語ビジネス文書の整形アシスタントです。与えられたテキストを、意味・事実・固有名詞を'
+        + '一切変えずに読みやすく整形して JSON（formatted）で返します。事実の創作・要約・追記はしないこと。'
+        + '「要望：」「現状：」「改善：」のラベル行がある場合はその節構造を保つこと。無い場合もこの 3 見出しへの'
+        + '整理を推奨するが、内容が読み取れないときは無理に当てはめないこと。箇条書きは「- 」に統一し、'
+        + '段落の間は空行 1 行にすること。',
+      prompt: text,
+      schema: {
+        type: 'object',
+        properties: { formatted: { type: 'string' } },
+        required: ['formatted'],
+      },
+      maxTokens: 4000,
+    })
+    const formatted = typeof llmOut?.formatted === 'string' ? llmOut.formatted.trim() : ''
+    if (formatted) return c.json({ data: { text: formatted, llm: true } })
+    return c.json({ data: { text: heuristicFormatRequestText(text), llm: false } })
   })
 
   return app

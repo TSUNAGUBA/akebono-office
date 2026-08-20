@@ -309,8 +309,9 @@ export function useAiCompany() {
       // 分解はサーバー（Vertex AI → 失敗時 shared ヒューリスティック）。エスカレーションもサーバーが担う
       try {
         const attachments = await Promise.all(files.map(toAttachment))
+        // 依頼分解 LLM を同期 await（サーバー予算 30s）。15s 打ち切り→再送で ai_tasks が二重作成される（レビュー R2）
         const data = await apiFetch<{ id: string; confidence: AiTask['confidence'] }>('/v1/ai-company/tasks', {
-          method: 'POST', body: { aiEmployeeId, title: title.trim(), description: description.trim(), attachments },
+          method: 'POST', body: { aiEmployeeId, title: title.trim(), description: description.trim(), attachments }, timeoutMs: 60_000,
         })
         await reloadAi()
         return { ok: true, id: data.id, confidence: data.confidence }
@@ -361,7 +362,8 @@ export function useAiCompany() {
 
   /** タスクの状態遷移（API モード共通。サーバーが状態機械・ログ・通知・status 同期を担う） */
   async function transitionApi(taskId: string, action: 'approve' | 'progress' | 'block' | 'cancel'): Promise<Result> {
-    const res = await apiResult(() => apiFetch(`/v1/ai-company/tasks/${taskId}/${action}`, { method: 'POST' }))
+    // approve = 委任計画 LLM（30s）/ progress = Web 調査 45s + 遂行 30s の同期実行があるため延長（レビュー R2）
+    const res = await apiResult(() => apiFetch(`/v1/ai-company/tasks/${taskId}/${action}`, { method: 'POST', timeoutMs: 90_000 }))
     if (res.ok) await reloadAi()
     return res
   }

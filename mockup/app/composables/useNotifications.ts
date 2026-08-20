@@ -7,6 +7,21 @@
  */
 import type { Ref } from 'vue'
 import type { AppNotification, NotificationKind } from '~/types/domain'
+import { channelEnabled, parseNotificationMatrix } from '~/utils/notification-channels'
+
+/**
+ * mock モードの通知マトリクス判定（アプリ内 = in_app のみ。改修依頼 2026-08-20）。
+ * localStorage は現在ユーザーの設定のみ保持するため、宛先 = 本人の通知にだけ適用する（デモの限定事項）。
+ * 読取失敗は既定（in_app = ON）へフォールバック（非ブロッキング・原則4）。
+ */
+function mockInAppEnabled(kind: NotificationKind): boolean {
+  try {
+    const raw = localStorage.getItem('ako.notification-matrix.v1')
+    return channelEnabled(parseNotificationMatrix(raw), kind, 'in_app')
+  } catch {
+    return true
+  }
+}
 
 // ---------- API モードのキャッシュ（SPA・モジュールスコープ単一） ----------
 
@@ -98,6 +113,10 @@ export function useNotifications() {
   /** 通知を発行する（対象メンバーへ）。主フローを止めないため例外を投げない */
   function notify(memberId: string, kind: NotificationKind, title: string, body: string, link: string): void {
     try {
+      // 通知マトリクス（アプリ内 = in_app）の適用（改修依頼 2026-08-20・レビュー R1 = デュアルモードパリティ）。
+      // mock のマトリクスは localStorage = 現在ユーザーの分しか持てないため、宛先 = 本人のときのみ適用する
+      // （他メンバー宛はデモ上そのまま届く。API モードはサーバー側 notify.ts が全宛先に適用 = 本実装が正）
+      if (memberId === currentUserId.value && !mockInAppEnabled(kind)) return
       notifications.value = [...notifications.value, {
         id: nextId('notifications', 'nt'),
         memberId, kind, title, body, link,

@@ -8,6 +8,7 @@ import type { Hono } from 'hono'
 import pg from 'pg'
 import { addDays, todayJst } from '../../../shared/domain/jst'
 import { createApp } from '../../src/app'
+import { runReportReminders } from '../../src/routes/reports'
 import { migrate } from '../../src/db/migrate'
 import { activePermissionRules, clearPermissionCache } from '../../src/lib/permissions'
 import { createPool } from '../../src/db/pool'
@@ -7525,6 +7526,116 @@ describe('活動記録 3 種（サポート/営業/ビジネスパートナー�
       clearPermissionCache()
     }
   })
+
+  // ---------- 活動ログ + AI集約（案件ヘッダー + 活動ログ構造。改修依頼 2026-08-20・Units 2+4） ----------
+
+  it('活動ログ: 案件登録 → ログ登録 → 一覧ページング（20件/活動日降順）→ 部分更新 → 取消/復元', async () => {
+    // 親案件（営業活動 = 案件ヘッダー）を登録
+    const createdCase = await api('POST', '/v1/sales-activities', {
+      as: MEMBER, body: { companyId, title: 'ログ確認案件', dealType: '新規', phase: '初回' },
+    })
+    expect(createdCase.status).toBe(201)
+    const caseId = (createdCase.json.data as { id: string }).id
+    // 入力不正（活動日なし / 種別プリセット外 / 件名なし）は AKO-SAL-001
+    expect((await api('POST', `/v1/sales-activities/${caseId}/logs`, { as: MEMBER, body: { kind: '訪問', title: 'x' } })).json.error?.code).toBe('AKO-SAL-001')
+    expect((await api('POST', `/v1/sales-activities/${caseId}/logs`, { as: MEMBER, body: { loggedOn: today, kind: 'テレパシー', title: 'x' } })).json.error?.code).toBe('AKO-SAL-001')
+    expect((await api('POST', `/v1/sales-activities/${caseId}/logs`, { as: MEMBER, body: { loggedOn: today, kind: '訪問', title: ' ' } })).json.error?.code).toBe('AKO-SAL-001')
+    // 不在の親案件は 404（AKO-SAL-002）
+    expect((await api('POST', '/v1/sales-activities/deal-nope/logs', { as: MEMBER, body: { loggedOn: today, kind: '訪問', title: 'x' } })).status).toBe(404)
+
+    // 25 件登録（活動日を 1 日ずつ過去へ = 並び順検証）→ limit=20 で 20 件 + total=25、offset=20 で残り 5 件
+    let firstLogId = ''
+    for (let i = 0; i < 25; i++) {
+      const res = await api('POST', `/v1/sales-activities/${caseId}/logs`, {
+        as: MEMBER,
+        body: { loggedOn: addDays(today, -i), kind: '訪問', title: `ログ ${i}`, body: `内容 ${i}` },
+      })
+      expect(res.status).toBe(201)
+      if (i === 0) firstLogId = (res.json.data as { id: string }).id
+    }
+    const page1 = await api('GET', `/v1/sales-activities/${caseId}/logs?limit=20&offset=0&f.active=true`, { as: MEMBER })
+    expect(page1.status).toBe(200)
+    const page1Rows = page1.json.data as { loggedOn: string; memberName: string }[]
+    expect(page1Rows.length).toBe(20)
+    expect((page1.json as { total?: number }).total).toBe(25)
+    // 既定並び = 活動日降順（先頭が最新）+ 記録者名スナップショット
+    expect(page1Rows[0]!.loggedOn).toBe(today)
+    expect(page1Rows[0]!.memberName).toBeTruthy()
+    expect([...page1Rows].every((r, i, a) => i === 0 || a[i - 1]!.loggedOn >= r.loggedOn)).toBe(true)
+    const page2 = await api('GET', `/v1/sales-activities/${caseId}/logs?limit=20&offset=20&f.active=true`, { as: MEMBER })
+    expect((page2.json.data as unknown[]).length).toBe(5)
+
+    // 部分更新（title のみ）→ body/kind は保持（Object.hasOwn。編集は全員可 = チーム共有）
+    const upd = await api('PATCH', `/v1/sales-activities/${caseId}/logs/${firstLogId}`, { as: HR, body: { title: '更新済みログ' } })
+    expect(upd.status).toBe(200)
+    const updated = upd.json.data as { title: string; body: string; kind: string }
+    expect(updated.title).toBe('更新済みログ')
+    expect(updated.body).toBe('内容 0')
+    expect(updated.kind).toBe('訪問')
+    // 別案件の id と組み合わせた PATCH は 404（AKO-SAL-004 = 親案件スコープの検証）
+    expect((await api('PATCH', `/v1/sales-activities/deal-nope/logs/${firstLogId}`, { as: MEMBER, body: { title: 'x' } })).json.error?.code).toBe('AKO-SAL-004')
+
+    // 取消（冪等）→ f.active=true の一覧から外れる → 復元で戻る（原則9.5）
+    expect((await api('POST', `/v1/sales-activities/${caseId}/logs/${firstLogId}/archive`, { as: HR })).status).toBe(200)
+    expect((await api('POST', `/v1/sales-activities/${caseId}/logs/${firstLogId}/archive`, { as: HR })).status).toBe(200) // 冪等
+    const activeOnly = await api('GET', `/v1/sales-activities/${caseId}/logs?f.active=true&limit=50`, { as: MEMBER })
+    expect((activeOnly.json.data as { id: string }[]).some(r => r.id === firstLogId)).toBe(false)
+    expect((activeOnly.json as { total?: number }).total).toBe(24)
+    expect((await api('POST', `/v1/sales-activities/${caseId}/logs/${firstLogId}/restore`, { as: MEMBER })).status).toBe(200)
+
+    // AI集約: ログ全量（有効のみ・時系列）から生成し ai_digest へ保管（LLM 無効環境 = heuristic）
+    const digest1 = await api('POST', `/v1/sales-activities/${caseId}/digest`, { as: MEMBER })
+    expect(digest1.status).toBe(200)
+    const row1 = digest1.json.data as { aiDigest: { summary: string; logCount: number; llm: boolean; generatedAt: string } }
+    expect(row1.aiDigest.summary).toContain('ログ確認案件')
+    expect(row1.aiDigest.logCount).toBe(25)
+    expect(row1.aiDigest.llm).toBe(false)
+    // 一覧 GET でも aiDigest が返る（案件一覧の「AI集約 + ステータス」表示用）
+    const list = await api('GET', '/v1/sales-activities?f.active=true&limit=50', { as: MEMBER })
+    const listRow = (list.json.data as { id: string; aiDigest: { summary: string } | null }[]).find(r => r.id === caseId)
+    expect(listRow?.aiDigest?.summary).toBeTruthy()
+    // 再生成で上書き（ログを 1 件取消して logCount が追随）
+    await api('POST', `/v1/sales-activities/${caseId}/logs/${firstLogId}/archive`, { as: MEMBER })
+    const digest2 = await api('POST', `/v1/sales-activities/${caseId}/digest`, { as: MEMBER })
+    expect((digest2.json.data as { aiDigest: { logCount: number } }).aiDigest.logCount).toBe(24)
+  })
+
+  it('活動ログ（パートナー側）+ 取組内容（initiatives）: 営業側と同一の共通実装で動作・部分更新で保持', async () => {
+    // initiatives（取組内容）付きで案件を登録（「概要」→「背景・目的」は summary のままラベルのみ変更）
+    const createdCase = await api('POST', '/v1/partner-activities', {
+      as: MEMBER,
+      body: {
+        partnerCompanyId: companyId, theme: 'ログ確認テーマ', activityType: '共創', status: '進行中',
+        summary: '背景・目的のテキスト', initiatives: 'データ連携PoCの共同実施',
+      },
+    })
+    expect(createdCase.status).toBe(201)
+    const caseId = (createdCase.json.data as { id: string }).id
+    expect((createdCase.json.data as { initiatives: string }).initiatives).toBe('データ連携PoCの共同実施')
+    // 部分更新（status のみ）→ summary / initiatives は保持（送っていないフィールドの保持を必ずアサート）
+    const upd = await api('PATCH', `/v1/partner-activities/${caseId}`, { as: HR, body: { status: '案件化' } })
+    const updated = upd.json.data as { status: string; summary: string; initiatives: string }
+    expect(updated.status).toBe('案件化')
+    expect(updated.summary).toBe('背景・目的のテキスト')
+    expect(updated.initiatives).toBe('データ連携PoCの共同実施')
+    // ログ登録 → 一覧 → digest（営業側と同じ共通実装が partner 資源でも動く = 原則3 の回帰）
+    const log = await api('POST', `/v1/partner-activities/${caseId}/logs`, {
+      as: MEMBER,
+      body: { loggedOn: today, kind: 'Web会議', title: 'PoC キックオフ', body: '進め方を合意', nextAction: '週次定例の設定', nextActionDate: addDays(today, 7) },
+    })
+    expect(log.status).toBe(201)
+    const logId = (log.json.data as { id: string }).id
+    const logList = await api('GET', `/v1/partner-activities/${caseId}/logs?f.active=true&limit=20`, { as: MEMBER })
+    expect((logList.json as { total?: number }).total).toBe(1)
+    // 営業側の案件 id とパートナー側の logId は混在しない（クロス参照は 404）
+    expect((await api('PATCH', `/v1/sales-activities/${caseId}/logs/${logId}`, { as: MEMBER, body: { title: 'x' } })).status).toBe(404)
+    const digest = await api('POST', `/v1/partner-activities/${caseId}/digest`, { as: MEMBER })
+    expect(digest.status).toBe(200)
+    const row = digest.json.data as { aiDigest: { summary: string; logCount: number; llm: boolean } }
+    expect(row.aiDigest.logCount).toBe(1)
+    expect(row.aiDigest.summary).toContain('PoC キックオフ')
+    expect(row.aiDigest.summary).toContain('週次定例の設定')
+  })
 })
 
 describe('権限設定の拡張（改修依頼 2026-08-18: 項目の更新権限 + 登録者単位の AI 参照対象）', () => {
@@ -7667,5 +7778,457 @@ describe('改修プロンプト出力の既定（改修依頼 2026-08-18: filter
     } finally {
       await pool.query(`DELETE FROM improvement_items WHERE id IN ('imp-t-acc', 'imp-t-tri', 'imp-t-prog')`)
     }
+  })
+})
+
+describe('対応方針ステータス（運用対応/継続検討 = 改修依頼 2026-08-20・0073）', () => {
+  interface ItemRow { id: string; status: string; revisitOn: string | null }
+
+  it('継続検討は再検討日必須（AKO-REQ-023）・遷移/リスケジュール/運用対応の状態機械', async () => {
+    await pool.query(
+      `INSERT INTO improvement_items (id, title, status, page_paths, source_request_ids)
+       VALUES ('imp-t-defer', '対応方針検証Defer', 'triage', '["/x"]'::jsonb, '[]'::jsonb)
+       ON CONFLICT (id) DO NOTHING`)
+    try {
+      // 再検討日なしの deferred は 400（AKO-REQ-023）・不正な日付も 400
+      const noDate = await api('POST', '/v1/improvements/items/imp-t-defer/status', { as: ADMIN, body: { status: 'deferred' } })
+      expect(noDate.status).toBe(400)
+      expect(noDate.json.error?.code).toBe('AKO-REQ-023')
+      expect((await api('POST', '/v1/improvements/items/imp-t-defer/status', {
+        as: ADMIN, body: { status: 'deferred', revisitOn: '2026-02-30' },
+      })).json.error?.code).toBe('AKO-REQ-023')
+      // 再検討日つきの deferred は成功し revisitOn が往復する
+      const deferred = await api('POST', '/v1/improvements/items/imp-t-defer/status', {
+        as: ADMIN, body: { status: 'deferred', revisitOn: '2026-09-01' },
+      })
+      expect(deferred.status).toBe(200)
+      expect((deferred.json.data as ItemRow)).toMatchObject({ status: 'deferred', revisitOn: '2026-09-01' })
+      // 一覧 GET にも revisitOn が載る
+      const listed = (await api('GET', '/v1/improvements/items', { as: ADMIN })).json.data as ItemRow[]
+      expect(listed.find(r => r.id === 'imp-t-defer')?.revisitOn).toBe('2026-09-01')
+      // deferred → deferred は再検討日の変更（リスケジュール）として受理する（原則9.5）
+      const resched = await api('POST', '/v1/improvements/items/imp-t-defer/status', {
+        as: ADMIN, body: { status: 'deferred', revisitOn: '2026-10-01' },
+      })
+      expect((resched.json.data as ItemRow).revisitOn).toBe('2026-10-01')
+      // 継続検討 → 運用対応（結論）は可・deferred 以外への遷移でも revisit_on は保持（履歴保全 = クリアしない）
+      const toOps = await api('POST', '/v1/improvements/items/imp-t-defer/status', { as: ADMIN, body: { status: 'operational' } })
+      expect((toOps.json.data as ItemRow)).toMatchObject({ status: 'operational', revisitOn: '2026-10-01' })
+      // 運用対応 → 解決済み は不可（AKO-REQ-006）・運用対応 → 改善対応（見直し）は可
+      expect((await api('POST', '/v1/improvements/items/imp-t-defer/status', { as: ADMIN, body: { status: 'resolved' } })).json.error?.code)
+        .toBe('AKO-REQ-006')
+      expect((await api('POST', '/v1/improvements/items/imp-t-defer/status', { as: ADMIN, body: { status: 'accepted' } })).status).toBe(200)
+    } finally {
+      await pool.query(`DELETE FROM improvement_items WHERE id = 'imp-t-defer'`)
+    }
+  })
+
+  it('runImprovementRevisitReminders: 再検討日到来で管理者へ reminder 通知・多重通知しない（revisit_notified_on）', async () => {
+    const { runImprovementRevisitReminders } = await import('../../src/routes/improvements')
+    await pool.query(
+      `INSERT INTO improvement_items (id, title, status, page_paths, source_request_ids, revisit_on)
+       VALUES ('imp-t-remind', 'リマインド検証', 'deferred', '["/x"]'::jsonb, '[]'::jsonb, (now() AT TIME ZONE 'Asia/Tokyo')::date)
+       ON CONFLICT (id) DO NOTHING`)
+    try {
+      const countReminders = async (): Promise<number> => {
+        const notes = (await api('GET', '/v1/notifications', { as: ADMIN })).json.data as { kind: string; title: string; link: string }[]
+        return notes.filter(n => n.kind === 'reminder' && n.title === '継続検討の再検討日です' && n.link.includes('imp-t-remind')).length
+      }
+      const before = await countReminders()
+      const first = await runImprovementRevisitReminders(pool)
+      expect(first.notified).toBeGreaterThanOrEqual(1)
+      const afterFirst = await countReminders()
+      expect(afterFirst).toBe(before + 1) // 管理者へ 1 通・link は改修案件タブ + 対象ディープリンク
+      // 再実行は冪等（revisit_notified_on マーカーで同じ再検討日には再通知しない = 原則2）
+      await runImprovementRevisitReminders(pool)
+      expect(await countReminders()).toBe(afterFirst)
+      // deferred へ再遷移して期日を更新するとマーカーがリセットされ、新しい期日で再通知される
+      await api('POST', '/v1/improvements/items/imp-t-remind/status', { as: ADMIN, body: { status: 'accepted' } })
+      await api('POST', '/v1/improvements/items/imp-t-remind/status', {
+        as: ADMIN, body: { status: 'deferred', revisitOn: todayJst() },
+      })
+      await runImprovementRevisitReminders(pool)
+      expect(await countReminders()).toBe(afterFirst + 1)
+    } finally {
+      await pool.query(`DELETE FROM improvement_items WHERE id = 'imp-t-remind'`)
+      await pool.query(`DELETE FROM notifications WHERE link LIKE '%imp-t-remind%'`)
+    }
+  })
+})
+
+describe('AIで整形（POST /v1/assist/format-text = 改修依頼 2026-08-20）', () => {
+  it('認証済み全員が使える。LLM 無効環境は shared ヒューリスティックへフォールバック（llm=false）', async () => {
+    const res = await api('POST', '/v1/assist/format-text', {
+      as: MEMBER, body: { text: '要望: ボタンを大きくしたい\n現状：小さい\n\n\n改善：\n・+2px にする' },
+    })
+    expect(res.status).toBe(200)
+    const data = res.json.data as { text: string; llm: boolean }
+    expect(data.llm).toBe(false) // 統合テスト環境は vertexProjectId='' = ヒューリスティック
+    // 節整形（半角コロン → 全角・節の前に空行・連続空行の圧縮）+ 箇条書きの統一（・ → - ）
+    expect(data.text).toBe('要望：ボタンを大きくしたい\n\n現状：小さい\n\n改善：\n- +2px にする')
+  })
+  it('未認証は 401・空入力はそのまま返す・上限超過は AKO-RAS-003', async () => {
+    expect((await api('POST', '/v1/assist/format-text', { body: { text: 'x' } })).status).toBe(401)
+    const empty = await api('POST', '/v1/assist/format-text', { as: MEMBER, body: { text: '   ' } })
+    expect((empty.json.data as { text: string; llm: boolean })).toMatchObject({ text: '   ', llm: false })
+    const over = await api('POST', '/v1/assist/format-text', { as: MEMBER, body: { text: 'あ'.repeat(8001) } })
+    expect(over.status).toBe(400)
+    expect(over.json.error?.code).toBe('AKO-RAS-003')
+  })
+})
+
+describe('日報の自動リマインド（runReportReminders = /jobs/report-reminders の本体）', () => {
+  it('設定時刻以降の実行で未提出者へ通知し、同日の再実行は送信しない（日次 1 回 = 原則2）', async () => {
+    // 有効 + 時刻 00:00（実行時点で常に時刻超過）へ設定。last-sent はクリアして初回実行状態にする
+    expect((await api('PUT', '/v1/configs/report-reminder', {
+      as: ADMIN, body: { value: JSON.stringify({ enabled: true, time: '00:00' }) },
+    })).status).toBe(200)
+    await pool.query(`DELETE FROM app_configs WHERE key = 'report-reminder-last-sent'`)
+
+    const remindersOf = async (memberId: string) =>
+      ((await api('GET', '/v1/notifications', { as: memberId })).json.data as { kind: string; title: string }[])
+        .filter(n => n.kind === 'reminder' && n.title === '日報リマインド')
+
+    const before = (await remindersOf(MEMBER)).length
+    const first = await runReportReminders(pool)
+    // シードの直近営業日は日報が埋まっていないため、在籍メンバーが通知対象になる
+    expect(first.notified).toBeGreaterThan(0)
+    const after = await remindersOf(MEMBER)
+    expect(after.length).toBeGreaterThan(before)
+
+    // 同日の再実行は last-sent により送信 0（冪等・原則2）
+    const second = await runReportReminders(pool)
+    expect(second.notified).toBe(0)
+    expect((await remindersOf(MEMBER)).length).toBe(after.length)
+
+    // 無効設定では last-sent をクリアしても送信しない
+    await pool.query(`DELETE FROM app_configs WHERE key = 'report-reminder-last-sent'`)
+    expect((await api('PUT', '/v1/configs/report-reminder', {
+      as: ADMIN, body: { value: JSON.stringify({ enabled: false, time: '00:00' }) },
+    })).status).toBe(200)
+    expect((await runReportReminders(pool)).notified).toBe(0)
+
+    // 後続テストへ影響させない（設定・送信済みの後片付け）
+    await pool.query(`DELETE FROM app_configs WHERE key IN ('report-reminder', 'report-reminder-last-sent')`)
+  })
+})
+
+// ---------- 個人別マルチチャネル通知連携（Unit 7 = 0075。追記） ----------
+// 本ユニットでは app.ts へのマウントを行わないため、ルートをローカルの Hono へマウントして検証する
+// （notificationChannelsRoutes は自己完結のため、app.ts マウント後と同一の振る舞いになる）。
+// マウント用スニペット（app.ts）:
+//   app.get('/v1/notification-channels/:service/oauth/callback', notificationChannelOauthCallbackRoutes(pool, env))  // authMiddleware より前
+//   app.route('/v1/notification-channels', notificationChannelsRoutes(pool, env))                                   // authMiddleware より後
+import { Hono as HonoRouter } from 'hono'
+import { authMiddleware } from '../../src/auth'
+import { errorResponse } from '../../src/lib/errors'
+import { notify } from '../../src/lib/notify'
+import { notificationChannelsRoutes } from '../../src/routes/notification-channels'
+
+describe('個人別マルチチャネル通知連携（Unit 7: user_chat_links + 通知マトリクス）', () => {
+  let nchApp: Hono
+
+  beforeAll(() => {
+    nchApp = new HonoRouter()
+    nchApp.onError((e, c) => errorResponse(c, e))
+    nchApp.use('/v1/*', authMiddleware(env, pool))
+    nchApp.route('/v1/notification-channels', notificationChannelsRoutes(pool, env))
+  })
+
+  async function nchApi(
+    method: string,
+    path: string,
+    opts: { as?: string; body?: unknown } = {},
+  ): Promise<{ status: number; json: { data?: unknown; error?: { code: string; message: string } } }> {
+    const res = await nchApp.request(path, {
+      method,
+      headers: {
+        ...(opts.as ? { 'x-dev-member-id': opts.as } : {}),
+        ...(opts.body !== undefined ? { 'content-type': 'application/json' } : {}),
+      },
+      ...(opts.body !== undefined ? { body: JSON.stringify(opts.body) } : {}),
+    })
+    return { status: res.status, json: await res.json() as never }
+  }
+
+  it('連携状態: OAuth 未設定環境では enabled=false・未連携・マトリクスは空（全セル既定値）', async () => {
+    const res = await nchApi('GET', '/v1/notification-channels', { as: MEMBER })
+    expect(res.status).toBe(200)
+    const data = res.json.data as {
+      services: Record<string, { enabled: boolean; connected: boolean; status: string | null; displayName: string }>
+      matrix: Record<string, unknown>
+    }
+    for (const service of ['slack', 'google_chat']) {
+      expect(data.services[service]?.enabled).toBe(false) // SLACK_CLIENT_* / GOOGLE_OAUTH_* 未投入
+      expect(data.services[service]?.connected).toBe(false)
+      expect(data.services[service]?.status).toBeNull()
+    }
+    expect(data.matrix).toEqual({})
+  })
+
+  it('マトリクス保存: 未知キー・既定値セルを落として正規化し、本人のみに反映される', async () => {
+    try {
+      const put = await nchApi('PUT', '/v1/notification-channels/matrix', {
+        as: MEMBER,
+        body: { matrix: {
+          approval: { slack: true, in_app: false, __future_channel__: true },
+          __future_kind__: { slack: true },
+          comment: { in_app: true }, // 既定値と同じ = 省略される
+        } },
+      })
+      expect(put.status).toBe(200)
+      expect((put.json.data as { matrix: unknown }).matrix)
+        .toEqual({ approval: { slack: true, in_app: false } })
+      // GET で往復（本人）
+      const mine = await nchApi('GET', '/v1/notification-channels', { as: MEMBER })
+      expect((mine.json.data as { matrix: unknown }).matrix).toEqual({ approval: { slack: true, in_app: false } })
+      // 他ユーザーには影響しない（per-user 設定）
+      const admin = await nchApi('GET', '/v1/notification-channels', { as: ADMIN })
+      expect((admin.json.data as { matrix: unknown }).matrix).toEqual({})
+      // matrix 欠落は 400
+      const bad = await nchApi('PUT', '/v1/notification-channels/matrix', { as: MEMBER, body: {} })
+      expect(bad.status).toBe(400)
+      expect(bad.json.error?.code).toBe('AKO-NCH-005')
+    } finally {
+      await pool.query(
+        `DELETE FROM user_preferences WHERE member_id = $1 AND key = 'notificationChannels'`, [MEMBER])
+    }
+  })
+
+  it('OAuth URL: 未設定環境は AKO-NCH-001・不正なサービス指定は AKO-NCH-002', async () => {
+    const slack = await nchApi('POST', '/v1/notification-channels/slack/oauth/url', { as: MEMBER })
+    expect(slack.status).toBe(400)
+    expect(slack.json.error?.code).toBe('AKO-NCH-001')
+    const bogus = await nchApi('POST', '/v1/notification-channels/teams/oauth/url', { as: MEMBER })
+    expect(bogus.status).toBe(400)
+    expect(bogus.json.error?.code).toBe('AKO-NCH-002')
+  })
+
+  it('テスト送信は未連携なら AKO-NCH-003・解除は未連携でも成立（冪等 = 原則2）', async () => {
+    const test = await nchApi('POST', '/v1/notification-channels/slack/test', { as: MEMBER })
+    expect(test.status).toBe(400)
+    expect(test.json.error?.code).toBe('AKO-NCH-003')
+    const disc = await nchApi('POST', '/v1/notification-channels/google_chat/disconnect', { as: MEMBER })
+    expect(disc.status).toBe(200)
+  })
+
+  it('配信エンジン: マトリクスの in_app=false でアプリ内通知をスキップし、既定へ戻すと再び届く', async () => {
+    const notificationsOf = async (title: string) =>
+      ((await api('GET', '/v1/notifications', { as: MEMBER })).json.data as { title: string }[])
+        .filter(n => n.title === title)
+    try {
+      // in_app OFF（escalation 種別）→ INSERT スキップ
+      await nchApi('PUT', '/v1/notification-channels/matrix', {
+        as: MEMBER, body: { matrix: { escalation: { in_app: false } } },
+      })
+      await notify(pool, MEMBER, 'escalation', 'U7 in_app OFF 検証', '届かないはず', '/inbox')
+      expect(await notificationsOf('U7 in_app OFF 検証')).toHaveLength(0)
+      // マトリクスを既定（空）へ戻す = 取消フロー（原則9.5）→ 従来どおり届く
+      await nchApi('PUT', '/v1/notification-channels/matrix', { as: MEMBER, body: { matrix: {} } })
+      await notify(pool, MEMBER, 'escalation', 'U7 in_app ON 検証', '届くはず', '/inbox')
+      expect(await notificationsOf('U7 in_app ON 検証')).toHaveLength(1)
+    } finally {
+      await pool.query(
+        `DELETE FROM user_preferences WHERE member_id = $1 AND key = 'notificationChannels'`, [MEMBER])
+      await pool.query(`DELETE FROM notifications WHERE title LIKE 'U7 in_app%'`)
+    }
+  })
+})
+
+// ---------- 顧客コンテキスト（改修依頼 2026-08-20 = 0076。追記） ----------
+// 本ユニットでは app.ts へのマウントを行わないため、ルートをローカルの Hono へマウントして検証する
+// （customerContextsRoutes は自己完結のため、app.ts マウント後と同一の振る舞いになる）。
+// マウント用スニペット（app.ts）:
+//   app.route('/v1/customer-contexts', customerContextsRoutes(pool, env))  // authMiddleware より後
+import { customerContextsRoutes } from '../../src/routes/customer-contexts'
+
+describe('顧客コンテキスト（customer_contexts + notes + AI リサーチ 2 段フロー）', () => {
+  let cctxApp: Hono
+  const CCTX_COMPANY = 'c-cctx-test'
+
+  beforeAll(async () => {
+    cctxApp = new HonoRouter()
+    cctxApp.onError((e, c) => errorResponse(c, e))
+    cctxApp.use('/v1/*', authMiddleware(env, pool))
+    cctxApp.route('/v1/customer-contexts', customerContextsRoutes(pool, env))
+    await pool.query(
+      `INSERT INTO companies (id, name, location) VALUES ($1, 'コンテキスト検証株式会社', '東京都')
+       ON CONFLICT (id) DO NOTHING`, [CCTX_COMPANY])
+  })
+
+  afterAll(async () => {
+    await pool.query(`DELETE FROM customer_context_notes WHERE company_id = $1`, [CCTX_COMPANY])
+    await pool.query(`DELETE FROM customer_contexts WHERE company_id = $1`, [CCTX_COMPANY])
+  })
+
+  async function cctxApi(
+    method: string,
+    path: string,
+    opts: { as?: string; body?: unknown } = {},
+  ): Promise<{ status: number; json: { data?: unknown; error?: { code: string; message: string } } }> {
+    const res = await cctxApp.request(path, {
+      method,
+      headers: {
+        ...(opts.as ? { 'x-dev-member-id': opts.as } : {}),
+        ...(opts.body !== undefined ? { 'content-type': 'application/json' } : {}),
+      },
+      ...(opts.body !== undefined ? { body: JSON.stringify(opts.body) } : {}),
+    })
+    return { status: res.status, json: await res.json() as never }
+  }
+
+  interface CtxRow { id: string; companyId: string; vision: string; challenges: string; strategyNotes: string; updatedByMemberId: string; updatedByName: string }
+  interface NoteRow {
+    id: string; companyId: string; kind: string; body: string; memberName: string; archivedAt: string | null
+    payload: { sources?: { title: string; uri: string }[]; before?: { vision: string; challenges: string; strategyNotes: string }; revertedAt?: string } | null
+  }
+
+  it('定性情報の upsert: 新規作成 → 部分更新（送っていないフィールドが保持される = Zod v4 回帰の教訓）', async () => {
+    // 未登録の単件取得は data: null（「登録」導線）
+    const empty = await cctxApi('GET', `/v1/customer-contexts/${CCTX_COMPANY}`, { as: MEMBER })
+    expect(empty.status).toBe(200)
+    expect(empty.json.data).toBeNull()
+
+    // 新規作成（upsert）
+    const created = await cctxApi('PUT', `/v1/customer-contexts/${CCTX_COMPANY}`, {
+      as: MEMBER,
+      body: { vision: '初期ビジョン', challenges: '・課題A', strategyNotes: '補足' },
+    })
+    expect(created.status).toBe(200)
+    expect((created.json.data as CtxRow).vision).toBe('初期ビジョン')
+    expect((created.json.data as CtxRow).updatedByMemberId).toBe(MEMBER)
+
+    // 部分更新: vision のみ送信 → challenges / strategyNotes は**保持される**（Object.hasOwn フィルタ）
+    const patched = await cctxApi('PUT', `/v1/customer-contexts/${CCTX_COMPANY}`, {
+      as: ADMIN, body: { vision: '更新後ビジョン' },
+    })
+    expect(patched.status).toBe(200)
+    const row = patched.json.data as CtxRow
+    expect(row.vision).toBe('更新後ビジョン')
+    expect(row.challenges).toBe('・課題A') // 送っていないフィールドの保持
+    expect(row.strategyNotes).toBe('補足')
+    expect(row.updatedByMemberId).toBe(ADMIN) // 最終更新者スナップショット
+
+    // 1社1行: 一覧に同一会社の行は 1 件だけ（upsert = 冪等・原則2）
+    const list = await cctxApi('GET', `/v1/customer-contexts?f.companyId=${CCTX_COMPANY}`, { as: MEMBER })
+    expect((list.json.data as CtxRow[]).length).toBe(1)
+
+    // 全項目空にする更新は AKO-CTX-001・不在会社は AKO-CTX-002
+    const emptied = await cctxApi('PUT', `/v1/customer-contexts/${CCTX_COMPANY}`, {
+      as: MEMBER, body: { vision: '', challenges: '', strategyNotes: '' },
+    })
+    expect(emptied.status).toBe(400)
+    expect(emptied.json.error?.code).toBe('AKO-CTX-001')
+    const notFound = await cctxApi('PUT', '/v1/customer-contexts/c-no-such', { as: MEMBER, body: { vision: 'x' } })
+    expect(notFound.status).toBe(404)
+    expect(notFound.json.error?.code).toBe('AKO-CTX-002')
+  })
+
+  it('Memo: 追記（記録者名スナップショット）→ 論理取消 → 復元（冪等 = 原則2/9.5）', async () => {
+    const created = await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/notes`, {
+      as: MEMBER, body: { body: '面談メモ: 次年度は物流へ投資予定' },
+    })
+    expect(created.status).toBe(201)
+    const note = created.json.data as NoteRow
+    expect(note.kind).toBe('note')
+    expect(note.memberName).toBe('一般 次郎') // members シードの MEMBER 名スナップショット
+    expect(note.archivedAt).toBeNull()
+
+    // 空本文は 400
+    const bad = await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/notes`, { as: MEMBER, body: { body: ' ' } })
+    expect(bad.status).toBe(400)
+    expect(bad.json.error?.code).toBe('AKO-CTX-001')
+
+    // 取消（archived_at セット）→ 二重取消は警告 no-op → 復元
+    const arch = await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/notes/${note.id}/archive`, { as: ADMIN })
+    expect(arch.status).toBe(200)
+    const again = await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/notes/${note.id}/archive`, { as: ADMIN })
+    expect((again.json.data as { warning?: string }).warning).toBeTruthy()
+    const archivedList = await cctxApi('GET', `/v1/customer-contexts/notes?f.companyId=${CCTX_COMPANY}&f.active=false`, { as: MEMBER })
+    expect((archivedList.json.data as NoteRow[]).some(n => n.id === note.id)).toBe(true)
+    const rest = await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/notes/${note.id}/restore`, { as: MEMBER })
+    expect(rest.status).toBe(200)
+    const activeList = await cctxApi('GET', `/v1/customer-contexts/notes?f.companyId=${CCTX_COMPANY}&f.active=true`, { as: MEMBER })
+    expect((activeList.json.data as NoteRow[]).some(n => n.id === note.id)).toBe(true)
+    // 不在メモは 404
+    const noNote = await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/notes/cnote-none/archive`, { as: MEMBER })
+    expect(noNote.status).toBe(404)
+    expect(noNote.json.error?.code).toBe('AKO-CTX-003')
+  })
+
+  it('AI リサーチ 2 段: LLM 無効環境では決定的ヒューリスティックへフォールバック（llm=false・原則4）', async () => {
+    // ① 調査: 候補リスト（example.com のデモ候補）
+    const research = await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/research`, {
+      as: MEMBER, body: { address: '東京都', keywords: '検証' },
+    })
+    expect(research.status).toBe(200)
+    const r = research.json.data as { candidates: { title: string; uri: string; snippet: string }[]; llm: boolean }
+    expect(r.llm).toBe(false) // VERTEX_PROJECT_ID 未設定 = ヒューリスティック
+    expect(r.candidates.length).toBeGreaterThanOrEqual(3)
+    for (const cand of r.candidates) expect(cand.uri).toMatch(/^https:\/\/[a-z.]*example\.com\//)
+
+    // ② 構築: 採用ソース必須（空は 400）→ ヒューリスティック提案（llm=false）
+    const noSources = await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/research/build`, {
+      as: MEMBER, body: { sources: [] },
+    })
+    expect(noSources.status).toBe(400)
+    expect(noSources.json.error?.code).toBe('AKO-CTX-001')
+    const build = await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/research/build`, {
+      as: MEMBER, body: { sources: r.candidates.slice(0, 2).map(x => ({ title: x.title, uri: x.uri })) },
+    })
+    expect(build.status).toBe(200)
+    const b = build.json.data as { proposal: { vision: string; challenges: string; strategyNotes: string }; llm: boolean }
+    expect(b.llm).toBe(false)
+    expect(b.proposal.vision.length).toBeGreaterThan(0)
+    expect(b.proposal.challenges.length).toBeGreaterThan(0)
+  })
+
+  it('反映 → research ノート自動追記（採用ソース + 反映前の値）→ 反映の取消（payload.before から復元・原則9.5）', async () => {
+    // 反映前の値を確定させる（前テストの部分更新の続きでも良いが、独立性のため明示 upsert）
+    await cctxApi('PUT', `/v1/customer-contexts/${CCTX_COMPANY}`, {
+      as: MEMBER, body: { vision: '反映前ビジョン', challenges: '反映前課題', strategyNotes: '反映前補足' },
+    })
+    const sources = [{ title: '公式サイト（デモ）', uri: 'https://example.com/company/x/' }]
+
+    // ③ 反映: upsert + research ノート（同一トランザクション）
+    const applied = await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/research/apply`, {
+      as: ADMIN,
+      body: { vision: 'AI 構築ビジョン', challenges: '・AI 構築課題', strategyNotes: 'AI 補足', sources },
+    })
+    expect(applied.status).toBe(201)
+    const appliedData = applied.json.data as { context: CtxRow; note: NoteRow; id: string }
+    expect(appliedData.context.vision).toBe('AI 構築ビジョン')
+    expect(appliedData.note.kind).toBe('research')
+    expect(appliedData.note.payload?.sources).toEqual(sources)
+    expect(appliedData.note.payload?.before?.vision).toBe('反映前ビジョン') // 反映前の値を payload に保存
+    expect(appliedData.note.payload?.revertedAt).toBeUndefined()
+
+    // 採用ソースなしの反映は 400（リサーチノートの証跡なしで上書きさせない）
+    const noSrc = await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/research/apply`, {
+      as: ADMIN, body: { vision: 'x', challenges: '', strategyNotes: '', sources: [] },
+    })
+    expect(noSrc.status).toBe(400)
+
+    // ④ 取消: payload.before から復元 + revertedAt 追記（ノートは archive しない = 監査可能な取消）
+    const reverted = await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/research/${appliedData.id}/revert`, { as: MEMBER })
+    expect(reverted.status).toBe(200)
+    const revertedCtx = (reverted.json.data as { context: CtxRow }).context
+    expect(revertedCtx.vision).toBe('反映前ビジョン')
+    expect(revertedCtx.challenges).toBe('反映前課題')
+    const noteAfter = await cctxApi('GET', `/v1/customer-contexts/notes?f.companyId=${CCTX_COMPANY}&f.kind=research`, { as: MEMBER })
+    const revertedNote = (noteAfter.json.data as NoteRow[]).find(n => n.id === appliedData.id)
+    expect(revertedNote?.archivedAt).toBeNull() // archive されない
+    expect(revertedNote?.payload?.revertedAt).toBeTruthy() // 取消済みフラグの追記
+
+    // 二重取消は警告 no-op（冪等）・note 種別のメモの取消は AKO-CTX-004
+    const twice = await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/research/${appliedData.id}/revert`, { as: MEMBER })
+    expect((twice.json.data as { warning?: string }).warning).toBeTruthy()
+    const plainNote = await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/notes`, {
+      as: MEMBER, body: { body: '通常メモ' },
+    })
+    const plainId = (plainNote.json.data as NoteRow).id
+    const badRevert = await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/research/${plainId}/revert`, { as: MEMBER })
+    expect(badRevert.status).toBe(400)
+    expect(badRevert.json.error?.code).toBe('AKO-CTX-004')
   })
 })

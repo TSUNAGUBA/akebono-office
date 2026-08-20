@@ -1,21 +1,27 @@
 /**
- * ビジネスパートナー活動（改修依頼 2026-08-18・F-45 → 2026-08-19 第4弾で改訂）
+ * ビジネスパートナー活動（改修依頼 2026-08-18・F-45 → 2026-08-19 第4弾で改訂 →
+ * 2026-08-20 改修で「案件ヘッダー + 活動ログ」構造へ再編）
  * パートナー連携のテーマ（紹介/共創/案件支援等）を記録・管理する。チーム共有の記録系 =
  * 全員が閲覧・登録・編集できる（訂正履歴は API モードの監査ログで残す）。取消/復元 = 論理削除（原則9.5）。
  * - 改修依頼 2026-08-19 第4弾: パートナー会社・担当・アプローチ企業を顧客(会社/人)マスタ参照へ変更
  *   （自由入力→新規登録は useCompanyResolve / useContactResolve = 顧客活動と共通・原則3）。表示用に
  *   partnerName/relatedCompany へ会社名スナップショットを載せる（旧行の自由入力表示と同じ列で見える = 下位互換）。
+ * - 改修依頼 2026-08-20: 既存行はそのまま「案件ヘッダー」（原則7）。活動ログは useActivityLogs('partner')、
+ *   AI集約は generateDigest。「概要」→「背景・目的」はラベルのみ変更（summary 維持）+ 取組内容（initiatives）追加。
  * - 関連商談（relatedSalesActivityId）は営業活動への任意リンク。「案件化したら商談へリンク」の導線。
  * - 検証は shared/domain/activity（API と同一関数・同一順 = パリティの SoT）。
  * - デュアルモード: API = /v1/partner-activities（サーバーページング対応）/ モック = partnerActivities コレクション
+ * - commit() の戻り値を必ず検査（登録バグ根本対応 H1 = 保存失敗のサイレント化を許さない）。
  */
 import {
   ACTIVITY_BODY_CAP as BODY_CAP, ACTIVITY_NAME_CAP as NAME_CAP, ACTIVITY_TITLE_CAP as TITLE_CAP,
+  heuristicActivityDigest,
   normalizeActivityLinks,
   partnerActivityError, type PartnerActivityInput,
 } from '../../../shared/domain/activity'
 import { capCodePoints as capCp } from '../../../shared/domain/customer-log'
-import type { Company, PartnerActivity, Result, SalesActivity } from '~/types/domain'
+import { storageCommitError } from '~/composables/useActivityLogs'
+import type { ActivityLog, Company, PartnerActivity, Result, SalesActivity } from '~/types/domain'
 import type { Tone } from '~/types/ui'
 
 export type { PartnerActivityInput }
@@ -38,6 +44,7 @@ function normalized(input: PartnerActivityInput): PartnerActivityInput {
     approachGroup: capCp(input.approachGroup.trim(), NAME_CAP),
     theme: capCp(input.theme.trim(), TITLE_CAP),
     summary: capCp(input.summary.trim(), BODY_CAP),
+    initiatives: capCp(input.initiatives.trim(), BODY_CAP),
     currentState: capCp(input.currentState.trim(), BODY_CAP),
     nextAction: capCp(input.nextAction.trim(), BODY_CAP),
     relatedMeeting: capCp(input.relatedMeeting.trim(), NAME_CAP),
@@ -53,6 +60,7 @@ export function usePartnerActivities() {
   const { currentUser } = useCurrentUser()
   const isApi = useApiMode()
   const rows = tbl('partnerActivities')
+  const logRows = tbl('partnerActivityLogs') // AI集約の材料（モックモード専用。API は digest エンドポイントがログを読む）
   const salesRows = tbl('salesActivities')
   const companiesTbl = tbl('companies')
   const { lookupCompany, createCompany } = useCompanyResolve()
@@ -79,6 +87,12 @@ export function usePartnerActivities() {
   /** 取消済み一覧（復元 UI 用） */
   function archivedList(): PartnerActivity[] {
     return (rows.value as PartnerActivity[]).filter(r => r.active === false).slice().sort(byCreatedDesc)
+  }
+
+  /** id 参照（案件詳細ページの解決用。取消済みも引く = 復元導線） */
+  function byId(id: string | null): PartnerActivity | null {
+    if (!id) return null
+    return (rows.value as PartnerActivity[]).find(r => r.id === id) ?? null
   }
 
   /** 関連商談の実在検証（モック。API は FK が担う = AKO-PTN-001 400 と同等） */
@@ -122,6 +136,7 @@ export function usePartnerActivities() {
     const relatedCompany = companyNameOf(approachCompanyId)
     const now = nowJstIso()
     const all = rows.value as PartnerActivity[]
+    const prev = rows.value
     if (id) {
       const target = all.find(r => r.id === id)
       if (!target) return { ok: false, error: { code: 'AKO-PTN-002', message: 'ビジネスパートナー活動が見つかりません' } }
@@ -138,6 +153,7 @@ export function usePartnerActivities() {
         activityType: n.activityType,
         status: n.status,
         summary: n.summary,
+        initiatives: n.initiatives,
         currentState: n.currentState,
         nextAction: n.nextAction,
         nextActionDate: n.nextActionDate,
@@ -148,7 +164,10 @@ export function usePartnerActivities() {
         links: n.links,
         updatedAt: now,
       } : r)
-      commit()
+      if (!commit()) {
+        rows.value = prev // 永続化できなかった変更を画面に残さない（保存済みに見える取り違え防止）
+        return { ok: false, error: storageCommitError('AKO-PTN') }
+      }
       return { ok: true, id }
     }
     const newId = nextId('partnerActivities', 'pact')
@@ -166,6 +185,7 @@ export function usePartnerActivities() {
       activityType: n.activityType,
       status: n.status,
       summary: n.summary,
+      initiatives: n.initiatives,
       currentState: n.currentState,
       nextAction: n.nextAction,
       nextActionDate: n.nextActionDate,
@@ -178,7 +198,10 @@ export function usePartnerActivities() {
       updatedAt: now,
       active: true,
     } satisfies PartnerActivity]
-    commit()
+    if (!commit()) {
+      rows.value = prev
+      return { ok: false, error: storageCommitError('AKO-PTN') }
+    }
     return { ok: true, id: newId }
   }
 
@@ -197,18 +220,55 @@ export function usePartnerActivities() {
     // 状態不一致（二重取消等）は no-op（API の警告 no-op と同じ冪等挙動 = updatedAt を動かさない。監査 n-1）
     const target = all.find(r => r.id === id)!
     if ((target.active !== false) === active) return { ok: true, id }
+    const prev = rows.value
     rows.value = all.map(r => r.id === id ? { ...r, active, updatedAt: nowJstIso() } : r)
-    commit()
+    if (!commit()) {
+      rows.value = prev
+      return { ok: false, error: storageCommitError('AKO-PTN') }
+    }
     return { ok: true, id }
   }
 
   const archive = (id: string): Promise<Result> => setActive(id, false)
   const restore = (id: string): Promise<Result> => setActive(id, true)
 
+  /**
+   * AI集約の生成（活動ログの時系列集約 → 案件行の aiDigest へ保管。再生成で上書き = 導出キャッシュ）。
+   * モック = shared の決定的ヒューリスティック / API = POST digest（LLM → 失敗時ヒューリスティック = 原則4）。
+   */
+  async function generateDigest(id: string): Promise<Result> {
+    if (isApi) {
+      const res = await apiWrite<PartnerActivity>(`/v1/partner-activities/${encodeURIComponent(id)}/digest`, {
+        method: 'POST', timeoutMs: 60_000,
+      })
+      if (!res.ok) return res
+      setApiRow('partnerActivities', res.data) // SoT（サーバー保管）→ キャッシュ反映の順（原則6）
+      return { ok: true, id }
+    }
+    const all = rows.value as PartnerActivity[]
+    const target = all.find(r => r.id === id)
+    if (!target) return { ok: false, error: { code: 'AKO-PTN-002', message: 'ビジネスパートナー活動が見つかりません' } }
+    const logs = (logRows.value as ActivityLog[]).filter(l => l.activityId === id && l.active !== false)
+    const digest = heuristicActivityDigest(
+      { title: target.theme, status: target.status, nextAction: target.nextAction, nextActionDate: target.nextActionDate },
+      logs,
+    )
+    const prev = rows.value
+    // 導出キャッシュの上書きのみ（updatedAt は動かさない = 記録の編集と区別。API と同一挙動）
+    rows.value = all.map(r => r.id === id
+      ? { ...r, aiDigest: { ...digest, generatedAt: nowJstIso(), logCount: logs.length, llm: false } }
+      : r)
+    if (!commit()) {
+      rows.value = prev
+      return { ok: false, error: storageCommitError('AKO-PTN') }
+    }
+    return { ok: true, id }
+  }
+
   /** サーバーキャッシュの再取得（API モードのみ） */
   async function refresh(): Promise<void> {
     if (isApi) await loadApiCollection('partnerActivities', true)
   }
 
-  return { list, archivedList, save, archive, restore, refresh }
+  return { list, archivedList, byId, save, archive, restore, generateDigest, refresh }
 }

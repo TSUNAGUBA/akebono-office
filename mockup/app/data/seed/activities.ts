@@ -1,10 +1,13 @@
 /**
- * 活動記録 3 種のシード（サポート/営業/ビジネスパートナー活動。改修依頼 2026-08-18・F-43/F-44/F-45）。
- * デモ用・決定的・今日基準の相対日付。記録者（member）・会社（company）は core シードの id を参照する。
+ * 活動記録 3 種のシード（サポート/営業/ビジネスパートナー活動。改修依頼 2026-08-18・F-43/F-44/F-45）
+ * + 活動ログ（案件ヘッダー + 活動ログ構造。改修依頼 2026-08-20・Units 2+4）。
+ * デモ用・決定的・今日基準の相対日付（Math.random 禁止 = ~/utils/rng の決定的乱数のみ）。
+ * 記録者（member）・会社（company）は core シードの id を参照する。
  * チーム共有の記録系（全員が閲覧・編集できる）のため、記録者は m-03/m-04/m-05 に分散させる。
  */
-import type { PartnerActivity, SalesActivity, SupportActivity } from '~/types/domain'
+import { ACTIVITY_LOG_KINDS, type ActivityLog, type PartnerActivity, type SalesActivity, type SupportActivity } from '~/types/domain'
 import { addDays } from '~/utils/format'
+import { pick } from '~/utils/rng'
 
 export function buildSupportActivities(): SupportActivity[] {
   const today = todayJst()
@@ -134,6 +137,121 @@ export function buildSalesActivities(): SalesActivity[] {
     updatedAt: iso(r.back, r.at),
     active: true,
   }))
+}
+
+// ---------- 活動ログ（案件ヘッダーにぶら下がる時系列の記録。改修依頼 2026-08-20・Units 2+4） ----------
+
+/** ログ行の共通整形（createdAt/updatedAt = 活動日の 17:30 固定 = 決定的） */
+function logRow(
+  seq: number, prefix: 'slog' | 'plog', activityId: string, back: number,
+  fields: Pick<ActivityLog, 'memberId' | 'kind' | 'title' | 'body'> & Partial<Pick<ActivityLog, 'nextAction' | 'nextActionDate'>>,
+): ActivityLog {
+  const day = addDays(todayJst(), -back)
+  const at = `${day}T17:30:00+09:00`
+  return {
+    id: `${prefix}-${String(seq).padStart(4, '0')}`,
+    activityId,
+    memberId: fields.memberId,
+    loggedOn: day,
+    kind: fields.kind,
+    title: fields.title,
+    body: fields.body,
+    nextAction: fields.nextAction ?? '',
+    nextActionDate: fields.nextActionDate ?? null,
+    links: [],
+    createdAt: at,
+    updatedAt: at,
+    active: true,
+  }
+}
+
+/**
+ * 営業活動の活動ログ。deal-0001 は 26 件（20件/ページのページングが**実際に発生**するデモ = 2 ページ目あり）。
+ * 生成内容は rng（決定的）でトピック・種別・記録者を選ぶ。他案件は 2〜4 件の手書きログ。
+ */
+export function buildSalesActivityLogs(): ActivityLog[] {
+  const today = todayJst()
+  const f = (fwd: number): string => addDays(today, fwd)
+  const rows: ActivityLog[] = []
+  let seq = 0
+  const next = (): number => ++seq
+
+  // deal-0001（在庫管理DXプロジェクト）: 2 日おきに 26 件（back = 0, 2, 4, ... 50）
+  const topics = ['要件ヒアリング', '見積条件の調整', 'デモ環境の準備', '進捗共有', '技術質問への回答', '推進体制の確認', '日程調整', '課題の整理'] as const
+  const members = ['m-03', 'm-04', 'm-05'] as const
+  for (let i = 25; i >= 0; i--) {
+    const key = `slog-deal1-${i}`
+    const topic = pick(`${key}-topic`, topics)
+    rows.push(logRow(next(), 'slog', 'deal-0001', i * 2, {
+      memberId: pick(`${key}-member`, members),
+      kind: pick(`${key}-kind`, ACTIVITY_LOG_KINDS),
+      title: `${topic}（第${26 - i}回）`,
+      body: `${topic}を実施。先方担当者と論点を確認し、次回までの持ち帰り事項を整理した。`,
+      ...(i === 0 ? { nextAction: 'デモ実施の最終確認', nextActionDate: f(7) } : {}),
+    }))
+  }
+
+  // deal-0002（売上分析スイート更新）: 3 件
+  rows.push(
+    logRow(next(), 'slog', 'deal-0002', 10, { memberId: 'm-04', kind: '訪問', title: '更新要件のヒアリング', body: '前年比較機能の要件を確認。既存ダッシュボードの課題を整理した。' }),
+    logRow(next(), 'slog', 'deal-0002', 6, { memberId: 'm-04', kind: 'Web会議', title: '機能デモと概算提示', body: '前年比較のプロトタイプをデモ。概算金額に前向きな反応。' }),
+    logRow(next(), 'slog', 'deal-0002', 2, { memberId: 'm-04', kind: 'メール', title: '見積ドラフトの送付', body: '見積ドラフトを送付し、社内確認を依頼した。', nextAction: '見積書の提出', nextActionDate: f(3) }),
+  )
+
+  // deal-0003（生産管理システム刷新）: 2 件
+  rows.push(
+    logRow(next(), 'slog', 'deal-0003', 5, { memberId: 'm-05', kind: '訪問', title: '現行システムの棚卸し', body: '現行の紙運用と二重管理の実態をヒアリング。保守期限を確認した。' }),
+    logRow(next(), 'slog', 'deal-0003', 1, { memberId: 'm-05', kind: 'Web会議', title: 'RFP 骨子のすり合わせ', body: 'RFP の章立てと評価軸をすり合わせ。次回は要件優先度を確定する。', nextAction: '要件優先度のすり合わせMTG', nextActionDate: f(10) }),
+  )
+
+  // deal-0004（DX構想策定支援・受注済み）: 2 件
+  rows.push(
+    logRow(next(), 'slog', 'deal-0004', 8, { memberId: 'm-03', kind: '訪問', title: '最終提案とクロージング', body: '取締役会向けの最終提案を実施。予算・体制の合意を得た。' }),
+    logRow(next(), 'slog', 'deal-0004', 2, { memberId: 'm-03', kind: 'メール', title: '発注書の受領', body: '発注書を受領し受注確定。キックオフ日程の候補を送付した。', nextAction: 'キックオフ日程の確定', nextActionDate: f(5) }),
+  )
+
+  // deal-0005（冷凍ライン歩留まり分析・初回）: 1 件のみ（AI集約「ログ 1 件」の表示確認用）
+  rows.push(
+    logRow(next(), 'slog', 'deal-0005', 14, { memberId: 'm-04', kind: '電話', title: '初回コンタクト', body: '歩留まり目標未達の背景を電話でヒアリング。分析観点の提示を約束した。', nextAction: '分析観点の提示', nextActionDate: f(14) }),
+  )
+
+  return rows
+}
+
+/** ビジネスパートナー活動の活動ログ（各案件 2〜4 件・決定的） */
+export function buildPartnerActivityLogs(): ActivityLog[] {
+  const today = todayJst()
+  const f = (fwd: number): string => addDays(today, fwd)
+  const rows: ActivityLog[] = []
+  let seq = 0
+  const next = (): number => ++seq
+
+  // pact-0001（フローラ社との協業検討）: 3 件
+  rows.push(
+    logRow(next(), 'plog', 'pact-0001', 12, { memberId: 'm-03', kind: '訪問', title: '協業テーマの初回協議', body: '花き流通データ連携の協業可能性を協議。双方の狙いを確認した。' }),
+    logRow(next(), 'plog', 'pact-0001', 6, { memberId: 'm-03', kind: 'Web会議', title: 'データ提供範囲の調整', body: '提供データの範囲と契約形態を調整中。法務確認を依頼した。' }),
+    logRow(next(), 'plog', 'pact-0001', 2, { memberId: 'm-03', kind: 'メール', title: '3者MTG の日程打診', body: '3者MTG の候補日を打診。先方の回答待ち。', nextAction: '3者MTG', nextActionDate: f(20) }),
+  )
+
+  // pact-0002（製造業DX案件の紹介）: 2 件
+  rows.push(
+    logRow(next(), 'plog', 'pact-0002', 5, { memberId: 'm-05', kind: '訪問', title: '紹介案件の御礼と進捗共有', body: '紹介いただいた生産管理刷新案件の進捗を共有。毎週の共有を約束した。' }),
+    logRow(next(), 'plog', 'pact-0002', 1, { memberId: 'm-05', kind: 'メール', title: '週次の進捗レポート送付', body: 'RFP 作成支援の進捗レポートを送付した。', nextAction: '紹介元への進捗共有', nextActionDate: f(12) }),
+  )
+
+  // pact-0003（AI人材育成プログラム）: 2 件
+  rows.push(
+    logRow(next(), 'plog', 'pact-0003', 10, { memberId: 'm-05', kind: 'Web会議', title: '共同プログラム構想の情報交換', body: '自治体向け AI 人材育成の構想を意見交換。来期予算化を待つ方針。' }),
+    logRow(next(), 'plog', 'pact-0003', 4, { memberId: 'm-05', kind: '電話', title: '予算化タイミングの確認', body: '来期予算の検討状況を確認。年度末に再度連絡することで合意。', nextAction: '来期予算の確定状況を確認', nextActionDate: f(30) }),
+  )
+
+  // pact-0004（ホテル業界の紹介ネットワーク・完了）: 2 件
+  rows.push(
+    logRow(next(), 'plog', 'pact-0004', 15, { memberId: 'm-03', kind: '訪問', title: '取締役の紹介を受領', body: 'シーサイドホテルズ取締役を紹介いただき、DX構想支援の商談が発生。' }),
+    logRow(next(), 'plog', 'pact-0004', 3, { memberId: 'm-03', kind: 'その他', title: '受注の御礼（会食）', body: '紹介案件の受注を報告し御礼。今後も業界内の紹介が期待できる関係。' }),
+  )
+
+  return rows
 }
 
 export function buildPartnerActivities(): PartnerActivity[] {

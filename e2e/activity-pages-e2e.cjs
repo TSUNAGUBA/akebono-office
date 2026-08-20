@@ -36,13 +36,12 @@ async function main() {
     check('営業活動: 商談金額が ¥ 書式で表示される',
       (await page.getByText('¥1,500,000').count()) >= 1)
 
-    // 3) ビジネスパートナー活動: シード表示 + 詳細ドロワーの関連商談リンク
+    // 3) ビジネスパートナー活動: シード表示 + 案件詳細の関連商談リンク（2026-08-20: 行クリック = 詳細ページ遷移）
     await page.goto(`${BASE}/#/partner-activity`)
     await page.getByRole('main').getByRole('heading', { level: 1, name: 'ビジネスパートナー活動' }).waitFor()
     await page.getByText('製造業DX案件の紹介').first().click()
     await page.getByRole('link', { name: /生産管理システム刷新/ }).waitFor()
-    check('パートナー活動: 詳細ドロワーに関連商談（営業活動）へのリンクが出る', true)
-    await page.keyboard.press('Escape')
+    check('パートナー活動: 案件詳細に関連商談（営業活動）へのリンクが出る', true)
 
     // 4) 顧客活動（旧: 顧客ログ）: 改称 + 全員の記録の閲覧 + 記録者フィルタ + 活動手段
     await page.goto(`${BASE}/#/customer-log`)

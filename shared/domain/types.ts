@@ -256,10 +256,68 @@ export interface SalesActivity {
   nextActionDate: string | null
   /** 参考リンク URL（複数可・任意。改修依頼 2026-08-19 第4弾）。旧データは未定義（原則7） */
   links?: string[]
+  /** AI集約（活動ログの時系列集約・導出キャッシュ。改修依頼 2026-08-20）。未生成は未定義/null（原則7） */
+  aiDigest?: ActivityAiDigest | null
   createdAt: string
   updatedAt?: string
   /** 取消（論理削除）済みは false */
   active?: boolean
+}
+
+// ---------- 活動ログ / AI集約（案件ヘッダー + 活動ログ構造。改修依頼 2026-08-20） ----------
+
+/** 活動ログの活動種別（営業活動・ビジネスパートナー活動で共通のプリセット） */
+export const ACTIVITY_LOG_KINDS = ['訪問', '電話', 'Web会議', 'メール', 'その他'] as const
+
+/**
+ * 活動ログ（案件ヘッダー = 営業活動 / ビジネスパートナー活動にぶら下がる時系列の記録）。
+ * 既存の salesActivities / partnerActivities 行を「案件ヘッダー」と再解釈し（原則7・データパッチ不要）、
+ * 個々の接触・進捗はこのログへ積む。チーム共有の記録系（編集は全員可・訂正履歴は監査ログ）。
+ * 取消 = 論理削除（active=false）+ 復元（原則9.5）。
+ */
+export interface ActivityLog {
+  id: string
+  /** 親案件（営業活動 = deal-* / ビジネスパートナー活動 = pact-* の id） */
+  activityId: string
+  /** 記録者（表示用。編集は全員可） */
+  memberId: string
+  /** 記録者名スナップショット（表示用・任意。未設定時は members マスタから解決） */
+  memberName?: string
+  /** 活動日（YYYY-MM-DD・必須） */
+  loggedOn: string
+  /** 活動種別（ACTIVITY_LOG_KINDS） */
+  kind: string
+  /** 件名（必須） */
+  title: string
+  /** 内容（任意） */
+  body: string
+  /** Next Action（任意） */
+  nextAction?: string
+  /** Next Action日（YYYY-MM-DD・任意） */
+  nextActionDate?: string | null
+  /** 参考リンク URL（複数可・任意） */
+  links?: string[]
+  /** 取消（論理削除）済みは false */
+  active?: boolean
+  createdAt: string
+  updatedAt?: string
+}
+
+/**
+ * 案件の AI集約（活動ログを時系列で集約した導出キャッシュ。「生成→保管→再生成で上書き」）。
+ * API モード = LLM（失敗時ヒューリスティック = 原則4）/ モック = ヒューリスティックのみ。
+ */
+export interface ActivityAiDigest {
+  /** 集約サマリー（経緯 → 現在地 → 次アクション） */
+  summary: string
+  /** 要点の箇条書き（任意・最大 5 件） */
+  highlights?: string[]
+  /** 生成時刻（JST ISO） */
+  generatedAt: string
+  /** 生成時点の対象ログ件数（「ログ n 件時点」表示用） */
+  logCount: number
+  /** true = LLM 生成 / false = 決定的ヒューリスティック */
+  llm: boolean
 }
 
 /** ビジネスパートナー活動の活動区分 */
@@ -298,8 +356,10 @@ export interface PartnerActivity {
   activityType: string
   /** ステータス（PARTNER_ACTIVITY_STATUSES） */
   status: string
-  /** 概要（任意） */
+  /** 背景・目的（任意）。フィールド名は summary のまま維持しラベルのみ変更（改修依頼 2026-08-20・下位互換 = 原則7） */
   summary: string
+  /** 取組内容（任意。改修依頼 2026-08-20 で追加）。旧データは未定義（原則7） */
+  initiatives?: string
   /** 現在状況（任意） */
   currentState: string
   /** Next Action（任意） */
@@ -316,10 +376,91 @@ export interface PartnerActivity {
   memo: string
   /** 参考リンク URL（複数可・任意。改修依頼 2026-08-19 第4弾）。旧データは未定義（原則7） */
   links?: string[]
+  /** AI集約（活動ログの時系列集約・導出キャッシュ。改修依頼 2026-08-20）。未生成は未定義/null（原則7） */
+  aiDigest?: ActivityAiDigest | null
   createdAt: string
   updatedAt?: string
   /** 取消（論理削除）済みは false */
   active?: boolean
+}
+
+// ---------- 顧客コンテキスト（改修依頼 2026-08-20: トップ層メニュー「顧客コンテキスト」） ----------
+// 顧客(会社)を軸に、マスタの基本情報・関係に加えて定性情報（ビジョン・経営課題）と時系列メモを
+// 1 画面で可視化・編集する。定量情報（案件件数等）はライブ導出のみで保存しない（SoT = 各記録系）。
+
+/**
+ * 顧客コンテキスト（定性情報。1社1行 = companyId ユニークの upsert）。
+ * - 所有権: チーム共有の**設定系**データ。全員が閲覧・上書き更新できる（更新履歴は監査ログ +
+ *   AI リサーチ反映時の research ノートが担う。updatedBy* は最終更新者のスナップショット）。
+ * - 可視性: 認証済み全員（機能キー customer-context の権限 deny でのみ制限）。機密度 C3 相当
+ *   （経営課題・戦略メモ = 顧客の内部情報）。AI 検索インデックスへは供給しない（安全側の設計判断）。
+ * - 取消方式: 設定系のため上書き更新のみ（active は将来の論理削除用に保持。現行 UI は常に true）。
+ *   AI リサーチによる上書きは research ノートの payload.before から復元できる（原則9.5）。
+ * - SoT: API モード = customer_contexts テーブル / モックモード = customerContexts コレクション。
+ */
+export interface CustomerContext {
+  id: string
+  /** 顧客(会社)（必須・1社1行 = ユニーク） */
+  companyId: string
+  /** ビジョン（顧客が掲げる将来像・パーパス） */
+  vision: string
+  /** 経営課題（顧客の課題認識。改行区切りの箇条書き可） */
+  challenges: string
+  /** 補足メモ（戦略メモ等の任意の定性情報） */
+  strategyNotes: string
+  /** 最終更新者（Member 参照。表示用スナップショットは updatedByName） */
+  updatedByMemberId: string
+  /** 最終更新者名スナップショット（members 未ロードの画面でも表示できる） */
+  updatedByName: string
+  active: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+/** 顧客コンテキストメモの種別（note = 手入力の時系列メモ / research = AI リサーチ反映の自動追記） */
+export const CUSTOMER_CONTEXT_NOTE_KINDS = ['note', 'research'] as const
+export type CustomerContextNoteKind = (typeof CUSTOMER_CONTEXT_NOTE_KINDS)[number]
+
+/** AI リサーチの採用ソース（タイトル + URL） */
+export interface CustomerContextResearchSource {
+  title: string
+  uri: string
+}
+
+/**
+ * research ノートの構造化ペイロード（AI リサーチ反映の監査証跡）。
+ * before = 反映**前**の定性情報スナップショット（「反映を取り消す」= ここから復元。原則9.5）。
+ * revertedAt = 反映取消を実行した日時（ノート自体は archive せず追記フラグで監査可能に保つ）。
+ */
+export interface CustomerContextNotePayload {
+  sources?: CustomerContextResearchSource[]
+  before?: { vision: string; challenges: string; strategyNotes: string }
+  revertedAt?: string
+}
+
+/**
+ * 顧客コンテキストメモ（特定の顧客に紐づく時系列メモ。Memo 欄）。
+ * - 所有権: チーム共有の**記録系**（追記のみ。編集なし = 訂正は取消 + 再登録）。取消・復元は全員可。
+ * - 可視性: 認証済み全員（機能キー customer-context）。機密度 C3 相当。
+ * - 取消方式: 論理取消（archivedAt に取消日時をセット。null = 有効）+ 復元（原則9.5）。
+ *   research ノートの「反映取消」はノートの archive ではなく payload.revertedAt の追記で表す。
+ * - SoT: API モード = customer_context_notes テーブル / モック = customerContextNotes コレクション。
+ */
+export interface CustomerContextNote {
+  id: string
+  companyId: string
+  /** 記録者（表示用。取消は全員可 = チーム共有） */
+  memberId: string
+  /** 記録者名スナップショット（表示用） */
+  memberName: string
+  kind: CustomerContextNoteKind
+  /** メモ本文（必須） */
+  body: string
+  /** research ノートの構造化ペイロード（note 種別は null/未設定） */
+  payload?: CustomerContextNotePayload | null
+  /** 取消（論理削除）日時。null = 有効 */
+  archivedAt: string | null
+  createdAt: string
 }
 
 export interface Industry {

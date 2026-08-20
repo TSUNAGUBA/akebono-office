@@ -2,8 +2,11 @@
 /**
  * 改善要望管理（F-42）。権限を持つ人のみ閲覧（deny-by-default・管理者は常時可）。
  * - 各ページから寄せられた要望を「AI で集約」して改修単位（改修 1 件の粒度）へ整理する。
- * - 改修単位を単一ステータス（未判定 → 対応する → 解決済み／対応しない）で管理し、
- *   未解決/解決済み・対応可否でフィルターできる。
+ * - 改修単位を単一ステータス（未判定 → 改善対応/運用対応/継続検討 → 解決済み／対応見送り =
+ *   対応方針の語彙 2026-08-20）で管理し、未解決/決着・対応方針でフィルターできる。
+ *   継続検討（deferred）は再検討日が必須で、到来すると管理者へリマインド通知が届く。
+ * - タブは 受付箱（inbox・全員）/ 改修案件（items・管理者のみ）の 2 つ（改修依頼 2026-08-20 で再編）。
+ *   各タブ内の表示は 一覧 / カンバン / ガント の切替（?view=）。旧 ?tab=（req-kanban 等）も読み替える（原則7）。
  * - フィルター結果を、コーディング AI エージェント向けの詳細プロンプトとして出力する。
  */
 import { ClipboardCopy, Pencil, RefreshCw, Sparkles, Undo2, Wand2 } from 'lucide-vue-next'
@@ -11,11 +14,13 @@ import type { TabItem, TableColumn, Tone } from '~/types/ui'
 import {
   IMPROVEMENT_FILTER_OPTIONS,
   improvementAdoptionError,
+  improvementRevisitError,
   IMPROVEMENT_REQUEST_ADOPTION_META,
   IMPROVEMENT_REQUEST_STATUS_META,
   IMPROVEMENT_REQUEST_STATUSES,
   IMPROVEMENT_STATUS_META,
   IMPROVEMENT_STATUS_NEXT,
+  IMPROVEMENT_STATUSES,
   type ImprovementFilter,
   type ImprovementItem,
   type ImprovementRequest,
@@ -37,7 +42,11 @@ const toast = useToast()
 const confirm = useConfirm()
 const { currentUserId } = useCurrentUser()
 
-onMounted(() => { void imp.refresh() })
+onMounted(() => {
+  void imp.refresh()
+  // 継続検討の再検討日リマインド（mock モード・管理者のみ。日次デデュープ・非ブロッキング = 原則4）
+  void imp.checkRevisitReminders()
+})
 
 // ---------- フィルター（未解決/解決済み・対応可否 + 取消済み） ----------
 const FILTER_OPTIONS = [...IMPROVEMENT_FILTER_OPTIONS, { value: 'archived' as const, label: '取消済み' }]
@@ -65,16 +74,17 @@ const { page: itemPage, pageSize: itemPageSize, rows: pagedItems, total: itemTot
 // UiDataTable は Record<string, unknown>[] を要求するため表示用に変換（セルは個別にキャストして参照）
 const tableRows = computed(() => pagedItems.value as unknown as Record<string, unknown>[])
 
-/** ステータス別の件数（KPI 表示用） */
+/** ステータス別の件数（KPI 表示用）。キーは IMPROVEMENT_STATUSES（SoT）から生成 = ステータス追加に自動追随 */
 const counts = computed(() => {
-  const c = { triage: 0, accepted: 0, in_progress: 0, resolved: 0, rejected: 0 } as Record<ImprovementStatus, number>
+  const c = Object.fromEntries(IMPROVEMENT_STATUSES.map(s => [s, 0])) as Record<ImprovementStatus, number>
   for (const it of imp.activeItems.value) c[it.status] += 1
   return c
 })
 
 const columns: TableColumn[] = [
   { key: 'title', label: '改修単位', primary: true },
-  { key: 'status', label: 'ステータス', width: '110px' },
+  // 継続検討は再検討日を併記するため幅を確保（例: 継続検討（8/30 再検討））
+  { key: 'status', label: 'ステータス', width: '150px' },
   { key: 'pages', label: '対象ページ', width: '200px' },
   { key: 'count', label: '要望', width: '70px', align: 'right' },
   { key: 'updatedAt', label: '更新', width: '110px' },
@@ -83,7 +93,27 @@ const columns: TableColumn[] = [
 function statusLabel(s: ImprovementStatus): string { return IMPROVEMENT_STATUS_META[s]?.label ?? s }
 function statusTone(s: ImprovementStatus): Tone { return IMPROVEMENT_STATUS_META[s]?.tone ?? 'neutral' }
 
+/** ステータスバッジのラベル（継続検討は再検討日を併記。例: 継続検討（8/30 再検討）= 改修依頼 2026-08-20） */
+function statusBadgeLabelOf(it: ImprovementItem): string {
+  if (it.status === 'deferred' && it.revisitOn) {
+    const [, m, d] = it.revisitOn.split('-')
+    return `${statusLabel('deferred')}（${Number(m)}/${Number(d)} 再検討）`
+  }
+  return statusLabel(it.status)
+}
+
 // ---------- 生要望（受付箱 = 選別。改善要望 2026-08-17 第 2 弾） ----------
+
+// 投稿者フィルタ（自分のみ/全員 = 改修依頼 2026-08-20。既定 = 自分のみ。受付箱の一覧〔管理者テーブル・
+// 一般リスト〕とカンバン/ガントでページ内共有の 1 つの ref。純述語 = memberId 一致のみ）
+const authorFilter = ref<'mine' | 'all'>('mine')
+const AUTHOR_FILTER_OPTIONS = [
+  { value: 'mine', label: '自分の投稿のみ' },
+  { value: 'all', label: '全員' },
+]
+function matchesAuthor(r: ImprovementRequest): boolean {
+  return authorFilter.value === 'all' || r.memberId === currentUserId.value
+}
 
 /** 生要望一覧の絞り込み（既定 = 未選別。選別 → 採用分のみ AI 集約へ進むフロー） */
 const rawFilter = ref<string>('pending')
@@ -98,8 +128,10 @@ const RAW_FILTER_OPTIONS = [
 
 const rawRequests = computed<ImprovementRequest[]>(() => {
   // 新しい順に明示ソート（API の GET は降順・mock の tbl は挿入順 = 昇順のため、
-  // ここで揃えないと両モードで並びが逆転する = 原則6。レビュー指摘 2026-08-17）
+  // ここで揃えないと両モードで並びが逆転する = 原則6。レビュー指摘 2026-08-17）。
+  // 投稿者フィルタ（自分のみ/全員 = 2026-08-20）を先に適用する（一括選別バーの対象も表示中の絞り込みに一致）
   const all = [...imp.allRequests.value]
+    .filter(matchesAuthor)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))
   const f = rawFilter.value
   if (f === 'archived') return all.filter(r => r.archivedAt)
@@ -160,7 +192,7 @@ const RAW_COLUMNS: TableColumn[] = [
 const selectedRequestId = ref<string | null>(null)
 const selectedRequest = computed<ImprovementRequest | null>(() =>
   imp.allRequests.value.find(r => r.id === selectedRequestId.value) ?? null)
-/** 集約先の改修単位（集約済み表示・解除可否の判定用）。決着済み（解決済み/対応しない）は解除不可 = AKO-REQ-021 */
+/** 集約先の改修単位（集約済み表示・解除可否の判定用）。決着済み（運用対応/解決済み/対応見送り）は解除不可 = AKO-REQ-021 */
 const selectedRequestItem = computed<ImprovementItem | null>(() => {
   const iid = selectedRequest.value?.itemId
   if (!iid) return null
@@ -203,11 +235,25 @@ function reqWhere(r: ImprovementRequest): string {
   return [r.pageLabel || r.pagePath, r.targetSpot].filter(Boolean).join(' / ')
 }
 
-/** 有効な生要望（新しい順）。全利用者が閲覧できる（生要望カンバン/ガント・一般の受付箱の共通ソース） */
+/** 有効な生要望（新しい順・投稿者フィルタ適用後）。全利用者が閲覧できる
+ *  （生要望カンバン/ガント・一般の受付箱の共通ソース） */
 const activeRequests = computed<ImprovementRequest[]>(() =>
   [...imp.allRequests.value]
-    .filter(r => !r.archivedAt)
+    .filter(r => !r.archivedAt && matchesAuthor(r))
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id)))
+
+// ---------- 要望 → 表示ステータス（要望カンバン/ガントのステータス軸 = 改修依頼 2026-08-20） ----------
+// 紐づく改修単位（itemId → item.status）のステータスを継承する。未集約・item を参照できない場合
+// （一般利用者は改修案件を取得できない = 403 で items が空）は「未判定」として扱う（RequestKanban の docblock 参照）
+const itemStatusById = computed<Map<string, ImprovementStatus>>(() => {
+  const m = new Map<string, ImprovementStatus>()
+  for (const it of imp.archivedItems.value) m.set(it.id, it.status)
+  for (const it of imp.activeItems.value) m.set(it.id, it.status)
+  return m
+})
+function itemStatusOf(r: ImprovementRequest): ImprovementStatus {
+  return (r.itemId ? itemStatusById.value.get(r.itemId) : undefined) ?? 'triage'
+}
 // 一般利用者の受付箱一覧のページング（1 ページ 20 件。管理者は既存の選別テーブルを使う）。
 // 添付は一覧にサムネイル表示せず、詳細ドロワーを開いたとき（openRequestDrawer）に遅延ロードする
 const { page: genPage, pageSize: genPageSize, rows: pagedGeneralRequests, total: genTotal } =
@@ -336,8 +382,8 @@ watch(selectableRequests, (rows) => {
     selectedReqIds.value = selectedReqIds.value.filter(id => ok.has(id))
   }
 })
-// 絞り込みを変えたら選択をリセット（見えていない行への一括操作を防ぐ）
-watch(rawFilter, () => { selectedReqIds.value = [] })
+// 絞り込み（選別・投稿者）を変えたら選択をリセット（見えていない行への一括操作を防ぐ）
+watch([rawFilter, authorFilter], () => { selectedReqIds.value = [] })
 
 const allSelected = computed(() =>
   selectableRequests.value.length > 0 && selectedReqIds.value.length === selectableRequests.value.length)
@@ -551,10 +597,24 @@ async function changeStatus(to: ImprovementStatus): Promise<void> {
   else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
 }
 
-// 「対応しない」への変更は理由メモ（任意）を添えられる。他のステータスは即時変更（理由入力は閉じる）
+// 「対応見送り」への変更は理由メモ（任意）を、「継続検討」への変更は再検討日（必須）を添える。
+// 他のステータスは即時変更（インライン入力は閉じる）
 function onStatusClick(to: ImprovementStatus): void {
-  if (to === 'rejected') { rejectMode.value = true; rejectReason.value = '' }
-  else { rejectMode.value = false; void changeStatus(to) }
+  if (to === 'rejected') {
+    rejectMode.value = true
+    rejectReason.value = ''
+    deferMode.value = false
+  } else if (to === 'deferred') {
+    // 継続検討は再検討日が必須（improvementRevisitError）。既存の再検討日があれば初期値にする
+    deferMode.value = true
+    deferDate.value = selected.value?.revisitOn ?? ''
+    deferError.value = ''
+    rejectMode.value = false
+  } else {
+    rejectMode.value = false
+    deferMode.value = false
+    void changeStatus(to)
+  }
 }
 async function confirmReject(): Promise<void> {
   // 二重送信ガード（rejectBusy）: 連打や addNote 成功→setStatus 失敗後の再クリックで reject メモが重複登録されるのを防ぐ
@@ -562,20 +622,46 @@ async function confirmReject(): Promise<void> {
   rejectBusy.value = true
   try {
     const reason = rejectReason.value.trim()
-    // 任意: 理由があれば「対応しない理由」メモとして先に残す（ステータス変更前に記録）
+    // 任意: 理由があれば「対応見送りの理由」メモとして先に残す（ステータス変更前に記録）
     if (reason) {
       const nr = await imp.addNote(selected.value.id, reason, 'reject')
       if (!nr.ok) { toast.show(`${nr.error.code}: ${nr.error.message}`, 'crit'); return }
     }
     const res = await imp.setStatus(selected.value.id, 'rejected')
     if (res.ok) {
-      toast.show(reason ? '「対応しない」にしました（理由をメモに記録）' : '「対応しない」にしました', 'ok')
+      toast.show(reason ? `「${statusLabel('rejected')}」にしました（理由をメモに記録）` : `「${statusLabel('rejected')}」にしました`, 'ok')
       rejectMode.value = false
       rejectReason.value = ''
     }
     else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
   } finally {
     rejectBusy.value = false
+  }
+}
+
+// ---------- 継続検討（deferred）への変更・再検討日の変更（改修依頼 2026-08-20） ----------
+const deferMode = ref(false)
+const deferDate = ref('')
+const deferError = ref('')
+const deferBusy = ref(false)
+
+/** 継続検討にする / 継続検討中の再検討日を変更する（再検討日は必須 = インラインエラーで案内） */
+async function confirmDefer(): Promise<void> {
+  if (!selected.value || deferBusy.value) return
+  const msg = improvementRevisitError('deferred', deferDate.value)
+  if (msg) { deferError.value = msg; return }
+  deferBusy.value = true
+  try {
+    const res = await imp.setStatus(selected.value.id, 'deferred', deferDate.value)
+    if (res.ok) {
+      toast.show(`「${statusLabel('deferred')}」にしました（再検討日 ${fmtDate(deferDate.value)}）`, 'ok')
+      deferMode.value = false
+      deferError.value = ''
+    } else {
+      toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
+    }
+  } finally {
+    deferBusy.value = false
   }
 }
 
@@ -639,64 +725,121 @@ function reqCount(itemId: string): number {
   return imp.requestsForItem(itemId).length
 }
 
-// ---------- タブ（受付箱 / 改修案件 / カンバン / ガントチャート = 改修依頼 2026-08-18） ----------
-// サマリーカードの下にタブメニューを置き、受付箱 = 生要望の選別 / 改修案件 = AI 集約後の一覧 /
-// カンバン・ガントチャート = 既存ビュー を切り替える。?tab= のディープリンクは useRouteTabSync で取り込む
-// 改修依頼 2026-08-19 第4弾 項目5.5: 要望系（全員閲覧可）と改修案件系（管理者のみ）へタブを分離。
-// - 一般利用者: 受付箱（全要望を閲覧・自分のみ編集・ステータス変更不可）/ カンバン / ガント（いずれも要望系）。
-// - 管理権限者: 上記に加えて 改修案件 / 【改修案件】カンバン / 【改修案件】ガント。要望系タブは【要望】と明示。
-const TAB_KEYS = ['inbox', 'req-kanban', 'req-gantt', 'items', 'kanban', 'gantt'] as const
+// ---------- タブ（受付箱 / 改修案件）+ 表示切替（一覧 / カンバン / ガント = 改修依頼 2026-08-20） ----------
+// タブは 受付箱（inbox = 生要望・全員）/ 改修案件（items = AI 集約後・管理者のみ）の 2 つに再編し、
+// 旧タブのカンバン/ガントは各タブ内の表示切替（view。?view= と同期）へ移行した。
+// 下位互換（原則7）: 旧 ?tab= 値（req-kanban / req-gantt / kanban / gantt）は新体系へ読み替える
+// （reports.vue の ?tab=weekly 変換と同じ初期化時の読み替え）。
+const TAB_KEYS = ['inbox', 'items'] as const
+const VIEW_KEYS = ['list', 'kanban', 'gantt'] as const
 const tab = ref<string>('inbox')
+const view = ref<string>('list')
+
+// 旧 ?tab= 値 → 新タブ + 表示の読み替え（useRouteTabSync は valid 外の値を無視するため先に取り込む。
+// ?tab= 自体の URL 除去は useRouteTabSync が担う）
+const LEGACY_TAB_MAP: Record<string, { tab: string; view: string }> = {
+  'req-kanban': { tab: 'inbox', view: 'kanban' },
+  'req-gantt': { tab: 'inbox', view: 'gantt' },
+  'kanban': { tab: 'items', view: 'kanban' },
+  'gantt': { tab: 'items', view: 'gantt' },
+}
+const route = useRoute()
+{
+  const legacy = LEGACY_TAB_MAP[typeof route.query.tab === 'string' ? route.query.tab : '']
+  if (legacy) {
+    tab.value = legacy.tab
+    view.value = legacy.view
+  }
+  // ?view= の初期取り込み（明示指定は旧 ?tab= の読み替えより優先。URL 除去は useRouteDeepLink が担う）
+  const rawView = typeof route.query.view === 'string' ? route.query.view : ''
+  if ((VIEW_KEYS as readonly string[]).includes(rawView)) view.value = rawView
+}
+useRouteTabSync(tab, { valid: TAB_KEYS })
+// 滞在中の ?view= 変化の追従 + URL からの除去（?open= と同じ一方向規約 = useRouteDeepLink を共用。原則3）
+useRouteDeepLink('view', (v) => {
+  if ((VIEW_KEYS as readonly string[]).includes(v)) view.value = v
+})
+
 // タブ利用可否（権限表の `tab:<key>` 擬似フィールド = 改修依頼 2026-08-18。既定 = 全タブ利用可）
 const tabs = computed<TabItem[]>(() => {
   const manage = canManageImprovements.value
   const base: TabItem[] = [
     { key: 'inbox', label: '受付箱', badge: manage ? imp.pendingRequests.value.length : undefined },
-    { key: 'req-kanban', label: manage ? '【要望】カンバン' : 'カンバン' },
-    { key: 'req-gantt', label: manage ? '【要望】ガント' : 'ガント' },
   ]
-  const adminOnly: TabItem[] = manage
-    ? [
-        { key: 'items', label: '改修案件' },
-        { key: 'kanban', label: '【改修案件】カンバン' },
-        { key: 'gantt', label: '【改修案件】ガント' },
-      ]
-    : []
+  const adminOnly: TabItem[] = manage ? [{ key: 'items', label: '改修案件' }] : []
   return [...base, ...adminOnly].filter(t => canTab('improvements', t.key))
 })
-useRouteTabSync(tab, { valid: TAB_KEYS })
 watchEffect(() => {
   // 権限で消えたタブは先頭の利用可能タブへ退避。全タブ deny の場合は空値にして
   // どのタブ内容も描画しない（フェイルクローズ = R1 レビュー反映）
   if (!tabs.value.some(t => t.key === tab.value)) tab.value = tabs.value[0]?.key ?? ''
 })
 
-// ページングの 1 ページ目リセット（tab がここで定義されるため watch もここに置く。
-// タブ切替・絞り込み・検索の変更で対象一覧を先頭ページから表示する = 改修依頼 2026-08-18）
-watch([tab, rawFilter], () => { rawPage.value = 1 })
-watch([tab, uiFilter, search], () => { itemPage.value = 1 })
+// 表示切替の選択肢。カンバン/ガントの利用可否は**旧タブキー**（tab:req-kanban / tab:req-gantt /
+// tab:kanban / tab:gantt）の権限ルールでゲートする = 既存の deny ルールがタブ再編後もそのまま効く（原則7）
+const viewOptions = computed(() => {
+  const legacyKanban = tab.value === 'items' ? 'kanban' : 'req-kanban'
+  const legacyGantt = tab.value === 'items' ? 'gantt' : 'req-gantt'
+  return [
+    { value: 'list', label: '一覧' },
+    ...(canTab('improvements', legacyKanban) ? [{ value: 'kanban', label: 'カンバン' }] : []),
+    ...(canTab('improvements', legacyGantt) ? [{ value: 'gantt', label: 'ガント' }] : []),
+  ]
+})
+watchEffect(() => {
+  // 権限で消えた表示・無効値は一覧へ退避（一覧はタブ本体の権限でゲート済み）
+  if (!viewOptions.value.some(o => o.value === view.value)) view.value = 'list'
+})
+
+// ページングの 1 ページ目リセット（tab/view がここで定義されるため watch もここに置く。
+// タブ・表示・絞り込み・投稿者フィルタ・検索の変更で対象一覧を先頭ページから表示する）
+watch([tab, view, rawFilter, authorFilter], () => {
+  rawPage.value = 1
+  genPage.value = 1
+})
+watch([tab, view, uiFilter, search], () => { itemPage.value = 1 })
 
 /** サマリーカードからのタブ直行（受付箱カード = 受付箱タブ / ステータスカード = 改修案件タブ + 絞り込み） */
 function goInbox(): void {
   tab.value = 'inbox'
-  // カードの「未選別」件数どおりの一覧へ直行（残っていた絞り込みと食い違わせない = goItems と同じ規則）
+  view.value = 'list'
+  // カードの「未選別」件数どおりの一覧へ直行（残っていた絞り込みと食い違わせない = goItems と同じ規則）。
+  // 件数は全員の未選別のため投稿者フィルタも「全員」にする
   rawFilter.value = 'pending'
+  authorFilter.value = 'all'
 }
 function goItems(filter: ImprovementFilter): void {
   tab.value = 'items'
+  view.value = 'list'
   uiFilter.value = filter
   // 残っていた検索語で件数と一覧が食い違わないようにする（カードの件数どおりの一覧へ直行 = レビュー指摘）
   search.value = ''
 }
 
-/** サマリーカードの定義（v-for で 1 か所に描画 = クリック可能カードの boilerplate を複製しない。レビュー R4） */
+/** ステータスカードの補足文（サマリーカード用。ラベルは IMPROVEMENT_STATUS_META が SoT） */
+const STATUS_CARD_META: Record<ImprovementStatus, { sub: string; icon: string; inverse: boolean }> = {
+  triage: { sub: '対応方針の判定待ち', icon: 'HelpCircle', inverse: false },
+  accepted: { sub: '改修予定（未着手）', icon: 'Wrench', inverse: false },
+  in_progress: { sub: '着手済み（未解決）', icon: 'Loader', inverse: false },
+  operational: { sub: '運用でカバー（改修なし）', icon: 'Settings', inverse: false },
+  deferred: { sub: '再検討日まで持ち越し', icon: 'CalendarClock', inverse: false },
+  resolved: { sub: '改修完了', icon: 'CheckCircle2', inverse: true },
+  rejected: { sub: '見送り', icon: 'MinusCircle', inverse: false },
+}
+
+/** サマリーカードの定義（v-for で 1 か所に描画。ステータスは IMPROVEMENT_STATUSES から自動生成 = 追加に追随） */
 const summaryCards = computed(() => [
   { key: 'inbox', label: '受付箱', value: imp.pendingRequests.value.length, sub: '未選別（選別待ち）', icon: 'Inbox', inverse: false, aria: '受付箱タブを開く', go: goInbox },
-  { key: 'triage', label: '未判定', value: counts.value.triage, sub: '対応可否の判定待ち', icon: 'HelpCircle', inverse: false, aria: '改修案件タブを未判定で開く', go: () => goItems('triage') },
-  { key: 'accepted', label: '対応する', value: counts.value.accepted, sub: '改修予定（未着手）', icon: 'Wrench', inverse: false, aria: '改修案件タブを対応するで開く', go: () => goItems('accepted') },
-  { key: 'in_progress', label: '対応中', value: counts.value.in_progress, sub: '着手済み（未解決）', icon: 'Loader', inverse: false, aria: '改修案件タブを対応中で開く', go: () => goItems('in_progress') },
-  { key: 'resolved', label: '解決済み', value: counts.value.resolved, sub: '改修完了', icon: 'CheckCircle2', inverse: true, aria: '改修案件タブを解決済みで開く', go: () => goItems('resolved') },
-  { key: 'rejected', label: '対応しない', value: counts.value.rejected, sub: '見送り', icon: 'MinusCircle', inverse: false, aria: '改修案件タブを対応しないで開く', go: () => goItems('rejected') },
+  ...IMPROVEMENT_STATUSES.map(s => ({
+    key: s,
+    label: IMPROVEMENT_STATUS_META[s].label,
+    value: counts.value[s],
+    sub: STATUS_CARD_META[s].sub,
+    icon: STATUS_CARD_META[s].icon,
+    inverse: STATUS_CARD_META[s].inverse,
+    aria: `改修案件タブを${IMPROVEMENT_STATUS_META[s].label}で開く`,
+    go: () => goItems(s),
+  })),
 ])
 
 /** カンバン/ガントからの詳細ドロワー起動（item を直接受け取る） */
@@ -705,21 +848,47 @@ function openDrawerItem(it: ImprovementItem): void {
   editing.value = false
   void imp.loadRequestImages(it.id)
 }
-/** カンバンのクイック操作（id 指定のステータス変更） */
+/** カンバンのクイック操作（id 指定のステータス変更）。継続検討は再検討日が必須のためドロワーの入力へ誘導 */
 async function onKanbanStatus(id: string, to: ImprovementStatus): Promise<void> {
+  if (to === 'deferred') {
+    const it = imp.activeItems.value.find(x => x.id === id)
+    if (!it) return
+    openDrawerItem(it)
+    // ドロワー切替の watch（rejectMode/deferMode リセット）より後に日付入力を開く
+    void nextTick(() => onStatusClick('deferred'))
+    return
+  }
   const res = await imp.setStatus(id, to)
   if (res.ok) toast.show(`ステータスを「${statusLabel(to)}」に変更しました`, 'ok')
   else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
 }
 
+// 通知リンク等の ?open=<itemId> ディープリンク（再検討日リマインドの遷移先 = 改修依頼 2026-08-20。
+// API モードのロード完了を待って開く = pending を監視し、見つかった時点で consume）
+const openDeepLink = useRouteDeepLink('open')
+watchEffect(() => {
+  const id = openDeepLink.pending.value
+  if (!id) return
+  const target = imp.activeItems.value.find(it => it.id === id)
+    ?? imp.archivedItems.value.find(it => it.id === id)
+  if (target) {
+    openDeepLink.consume()
+    openDrawerItem(target)
+  }
+})
+
 // ---------- 対応予定期間（ドロワーで登録・ガントに反映） ----------
 const planForm = ref({ start: '', end: '' })
 watch(() => selected.value?.id, () => {
   planForm.value = { start: selected.value?.planStart ?? '', end: selected.value?.planEnd ?? '' }
-  // 対象を切り替えたらメモ入力・「対応しない」理由入力・画像プレビューをリセット（前の対象の状態を持ち越さない）
+  // 対象を切り替えたらメモ入力・「対応見送り」理由入力・「継続検討」日付入力・画像プレビューをリセット
+  // （前の対象の状態を持ち越さない）
   noteInput.value = ''
   rejectMode.value = false
   rejectReason.value = ''
+  deferMode.value = false
+  deferDate.value = ''
+  deferError.value = ''
   previewImage.value = null
 }, { immediate: true })
 
@@ -738,7 +907,7 @@ async function clearPlan(): Promise<void> {
 }
 
 // ---------- 改修プロンプト出力 ----------
-// 出力対象は「対応する」ステータスの改修単位のみ（改修依頼 2026-08-18。従来の既定 open は
+// 出力対象は「改善対応（accepted）」ステータスの改修単位のみ（改修依頼 2026-08-18。従来の既定 open は
 // 未判定も含んでいたため除外 = フィルタ選択 UI も撤去して対象を固定する）
 const promptOpen = ref(false)
 const promptText = ref('')
@@ -776,7 +945,7 @@ async function copyAndClose(): Promise<void> {
   <div>
     <UiPageHeader
       title="改善要望"
-      description="寄せられた生の要望をまず確認・選別し、採用した要望を AI で改修単位に整理して、対応可否・解決状況を管理します"
+      description="寄せられた生の要望をまず確認・選別し、採用した要望を AI で改修単位に整理して、対応方針（改善対応・運用対応・継続検討など）と解決状況を管理します"
     >
       <!-- AI 集約・改修プロンプト出力は管理権限者のみ（改修依頼 2026-08-19 第4弾: 一般利用者は要望の閲覧・投稿のみ） -->
       <template v-if="canManageImprovements" #actions>
@@ -799,8 +968,8 @@ async function copyAndClose(): Promise<void> {
     <div class="mt-4 grid gap-3">
       <!-- サマリーカード（受付箱の件数 + 改修単位のステータス別件数 = 改修依頼 2026-08-18）。押下で該当タブへ直行。
            改修単位の件数を含むため管理権限者のみ表示（一般利用者には出さない） -->
-      <!-- 対応中の追加（2026-08-18）で 6 枚 = lg は 6 列で 1 行に収める -->
-      <div v-if="canManageImprovements" class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+      <!-- 運用対応・継続検討の追加（2026-08-20）で 8 枚 = sm 4 列 × 2 行・xl は 8 列で 1 行に収める -->
+      <div v-if="canManageImprovements" class="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-8">
         <UiKpiCard
           v-for="c in summaryCards"
           :key="c.key"
@@ -819,16 +988,29 @@ async function copyAndClose(): Promise<void> {
         />
       </div>
 
-      <!-- タブメニュー（受付箱 / 改修案件 / カンバン / ガントチャート = 改修依頼 2026-08-18） -->
+      <!-- タブメニュー（受付箱 / 改修案件 = 改修依頼 2026-08-20 で 2 タブへ再編） -->
       <UiTabBar v-model="tab" :tabs="tabs" />
       <!-- 全タブ deny 時の空状態（タブ内容は tab='' のためどれも描画されない = フェイルクローズ） -->
       <p v-if="tabs.length === 0" class="card p-6 text-center text-[13px] text-sub">利用できるタブがありません（権限設定で制限されています。管理者にお問い合わせください）</p>
 
-      <!-- ① 受付箱: まず投稿された生の一覧を確認し、採用/不採用を選別する（改善要望 2026-08-17 第 2 弾）。
+      <!-- 表示切替（一覧 / カンバン / ガント = 旧カンバン・ガントタブの移行先）+ 受付箱の投稿者フィルタ
+           （自分のみ/全員。既定 = 自分のみ = 改修依頼 2026-08-20）。チップは折返し = モバイル 375px でも崩れない -->
+      <div v-if="tab" class="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <UiChipTabs v-model="view" :options="viewOptions" aria-label="表示切替" />
+        <UiChipTabs
+          v-if="tab === 'inbox'"
+          v-model="authorFilter"
+          :options="AUTHOR_FILTER_OPTIONS"
+          aria-label="投稿者で絞り込み"
+          class="sm:ml-auto"
+        />
+      </div>
+
+      <!-- ① 受付箱（一覧・管理者）: まず投稿された生の一覧を確認し、採用/不採用を選別する（改善要望 2026-08-17 第 2 弾）。
            採用された要望のみが「AI で集約」の対象になる。一覧上の「採用」「不採用」ボタン・複数選択の
            一括選別で直接選別できる（改修依頼 2026-08-18）。行クリックで詳細（本文全文・添付・コメント・選別） -->
       <UiSectionCard
-        v-if="tab === 'inbox' && canManageImprovements"
+        v-if="tab === 'inbox' && view === 'list' && canManageImprovements"
         flush
         title="受付箱"
         description="投稿された生の要望を確認し、採用／不採用を選別します。採用した要望だけが「AI で集約」の対象になります。一覧の「採用」「不採用」で直接選別でき、複数選択してまとめて選別もできます。行クリックでコメントのやり取り・添付の参照ができます"
@@ -1001,9 +1183,9 @@ async function copyAndClose(): Promise<void> {
         <UiPagination v-model:page="rawPage" v-model:page-size="rawPageSize" :total="rawTotal" />
       </UiSectionCard>
 
-      <!-- 受付箱（一般利用者）: 全要望を閲覧できる読み取り専用リスト。編集は自分の要望のみ・選別/ステータス変更は管理者のみ（改修依頼 2026-08-19 第4弾） -->
+      <!-- 受付箱（一覧・一般利用者）: 全要望を閲覧できる読み取り専用リスト。編集は自分の要望のみ・選別/ステータス変更は管理者のみ（改修依頼 2026-08-19 第4弾） -->
       <UiSectionCard
-        v-else-if="tab === 'inbox'"
+        v-else-if="tab === 'inbox' && view === 'list'"
         flush
         title="受付箱（すべての要望）"
         description="全メンバーから寄せられた要望を閲覧できます。編集できるのは自分が投稿した要望のみです。採用／不採用の選別・ステータス変更・AI 集約は管理者が行います。行クリックで詳細（本文全文・添付・コメント）を確認できます"
@@ -1052,39 +1234,42 @@ async function copyAndClose(): Promise<void> {
         </div>
       </UiSectionCard>
 
-      <!-- 【要望】カンバン: 要望をステータス別（未対応/対応済み/見送り）に一望（全員閲覧可・参照専用） -->
+      <!-- 受付箱のカンバン表示: 要望を改修案件と同じステータス軸（紐づく案件のステータスを継承）で一望
+           （全員閲覧可・参照専用 = 改修依頼 2026-08-20 でステータス統一） -->
       <ImprovementsRequestKanban
-        v-else-if="tab === 'req-kanban'"
+        v-else-if="tab === 'inbox' && view === 'kanban'"
         :requests="activeRequests"
+        :item-status-of="itemStatusOf"
         @open="openRequestDetail"
       />
 
-      <!-- 【要望】ガント: 要望の投稿タイムライン（全員閲覧可・参照専用） -->
+      <!-- 受付箱のガント表示: 要望の投稿タイムライン（全員閲覧可・参照専用。色/絞り込みは案件ステータス軸） -->
       <ImprovementsRequestGantt
-        v-else-if="tab === 'req-gantt'"
+        v-else-if="tab === 'inbox' && view === 'gantt'"
         :requests="activeRequests"
+        :item-status-of="itemStatusOf"
         @open="openRequestDetail"
       />
 
-      <!-- カンバン: ステータス別に進捗を一望 -->
+      <!-- 改修案件のカンバン表示: ステータス別（7 列）に進捗を一望 -->
       <ImprovementsKanban
-        v-else-if="tab === 'kanban'"
+        v-else-if="tab === 'items' && view === 'kanban' && canManageImprovements"
         :items="imp.activeItems.value"
         :req-count="reqCount"
         @open="openDrawerItem"
         @status="onKanbanStatus"
       />
 
-      <!-- ガントチャート: 対応予定期間を月次/週次/日次で可視化 -->
+      <!-- 改修案件のガント表示: 対応予定期間を月次/週次/日次で可視化 -->
       <ImprovementsGantt
-        v-else-if="tab === 'gantt'"
+        v-else-if="tab === 'items' && view === 'gantt' && canManageImprovements"
         :items="imp.activeItems.value"
         @open="openDrawerItem"
       />
 
       <!-- ② 改修案件（採用 → AI 集約後の一覧）: フィルターと一覧。
            タブキーの明示指定: tab=''（全タブ deny の退避値）でフォールバック描画しない = フェイルクローズ（R2 レビュー反映） -->
-      <UiSectionCard v-else-if="tab === 'items'" flush>
+      <UiSectionCard v-else-if="tab === 'items' && canManageImprovements" flush>
         <template #actions>
           <UiSearchInput v-model="search" placeholder="改修単位・対象ページを検索" />
         </template>
@@ -1101,7 +1286,8 @@ async function copyAndClose(): Promise<void> {
           @row-click="openDrawer"
         >
           <template #cell-status="{ row }">
-            <UiStatusBadge :tone="statusTone(row.status as ImprovementStatus)" :label="statusLabel(row.status as ImprovementStatus)" dot />
+            <!-- 継続検討は再検討日を併記（statusBadgeLabelOf。例: 継続検討（8/30 再検討）） -->
+            <UiStatusBadge :tone="statusTone(row.status as ImprovementStatus)" :label="statusBadgeLabelOf(row as unknown as ImprovementItem)" dot />
           </template>
           <template #cell-pages="{ row }">
             <span class="text-[12px] text-sub">{{ (row.pagePaths as string[]).map(pageDisplay).join(' / ') || '—' }}</span>
@@ -1126,7 +1312,8 @@ async function copyAndClose(): Promise<void> {
     <UiDrawer :open="!!selected" :title="selected?.title ?? '改修単位'" width="560px" @close="selectedId = null">
       <div v-if="selected" class="grid gap-4">
         <div class="flex flex-wrap items-center gap-2">
-          <UiStatusBadge :tone="statusTone(selected.status)" :label="statusLabel(selected.status)" dot />
+          <!-- 継続検討は再検討日を併記（例: 継続検討（8/30 再検討）= 改修依頼 2026-08-20） -->
+          <UiStatusBadge :tone="statusTone(selected.status)" :label="statusBadgeLabelOf(selected)" dot />
           <span v-if="selected.archivedAt" class="text-[12px] text-crit">取消済み</span>
           <span class="text-[12px] text-muted">更新 {{ fmtDate(selected.updatedAt) }}</span>
         </div>
@@ -1145,13 +1332,22 @@ async function copyAndClose(): Promise<void> {
             >
               {{ statusLabel(to) }}へ
             </button>
+            <!-- 継続検討中は再検討日だけの変更（リスケジュール）もできる（原則9.5 の選び直し導線） -->
+            <button
+              v-if="selected.status === 'deferred'"
+              type="button"
+              class="btn btn-ghost btn-sm"
+              @click="onStatusClick('deferred')"
+            >
+              再検討日を変更
+            </button>
             <span v-if="IMPROVEMENT_STATUS_NEXT[selected.status].length === 0" class="text-[12px] text-muted">
               （この状態からの変更はありません）
             </span>
           </div>
-          <!-- 「対応しない」への変更: 任意で理由をメモとして残せる（原則9.5 の判断根拠の記録） -->
+          <!-- 「対応見送り」への変更: 任意で理由をメモとして残せる（原則9.5 の判断根拠の記録） -->
           <div v-if="rejectMode" class="grid gap-2 rounded-lg border border-line bg-surface-soft p-2.5">
-            <UiFormField label="対応しない理由（任意・メモに記録されます）">
+            <UiFormField label="対応見送りの理由（任意・メモに記録されます）">
               <textarea
                 v-model="rejectReason"
                 class="textarea"
@@ -1161,7 +1357,25 @@ async function copyAndClose(): Promise<void> {
             </UiFormField>
             <div class="flex justify-end gap-2">
               <button type="button" class="btn btn-ghost btn-sm" :disabled="rejectBusy" @click="rejectMode = false">キャンセル</button>
-              <button type="button" class="btn btn-primary btn-sm" :disabled="rejectBusy" @click="confirmReject">「対応しない」にする</button>
+              <button type="button" class="btn btn-primary btn-sm" :disabled="rejectBusy" @click="confirmReject">「対応見送り」にする</button>
+            </div>
+          </div>
+          <!-- 「継続検討」への変更・再検討日の変更: 再検討日（必須）。到来すると管理者へリマインド通知が届く -->
+          <div v-if="deferMode" class="grid gap-2 rounded-lg border border-line bg-surface-soft p-2.5">
+            <UiFormField label="再検討日（必須）" required hint="再検討日になると管理者へリマインド通知が届きます">
+              <input
+                v-model="deferDate"
+                class="input"
+                type="date"
+                aria-label="継続検討の再検討日"
+              >
+            </UiFormField>
+            <p v-if="deferError" class="text-[12px] text-crit" role="alert">{{ deferError }}</p>
+            <div class="flex justify-end gap-2">
+              <button type="button" class="btn btn-ghost btn-sm" :disabled="deferBusy" @click="deferMode = false">キャンセル</button>
+              <button type="button" class="btn btn-primary btn-sm" :disabled="deferBusy" @click="confirmDefer">
+                {{ selected.status === 'deferred' ? '再検討日を保存' : '「継続検討」にする' }}
+              </button>
             </div>
           </div>
         </div>
@@ -1285,7 +1499,7 @@ async function copyAndClose(): Promise<void> {
             <li v-for="n in itemNotes" :key="n.id" class="card p-3">
               <div class="flex items-start justify-between gap-2">
                 <div class="min-w-0">
-                  <UiStatusBadge v-if="n.kind === 'reject'" class="mb-1" tone="warn" label="対応しない理由" />
+                  <UiStatusBadge v-if="n.kind === 'reject'" class="mb-1" tone="warn" label="対応見送りの理由" />
                   <p class="whitespace-pre-wrap break-words text-[13px] text-ink">{{ n.body }}</p>
                   <p class="mt-1 text-[11px] text-muted">{{ n.memberName }}・{{ fmtDateTime(n.createdAt) }}</p>
                 </div>
@@ -1417,7 +1631,7 @@ async function copyAndClose(): Promise<void> {
             </p>
             <!-- 決着済み/取消済みの改修単位からは解除不可（記録保護 = 原則2。先に reopen/復元する導線を案内） -->
             <p v-if="selectedRequestItemDecided" class="text-[12px] text-warn">
-              集約先の改修単位が決着済み（解決済み/対応しない）または取消済みのため解除できません。解除するには、先に改修単位のステータスを戻す／復元してください。
+              集約先の改修単位が決着済み（運用対応/解決済み/対応見送り）または取消済みのため解除できません。解除するには、先に改修単位のステータスを戻す／復元してください。
             </p>
             <div class="flex flex-wrap gap-2">
               <button type="button" class="btn btn-sm" @click="openItemOfRequest">集約先の改修単位を開く</button>
@@ -1517,12 +1731,12 @@ async function copyAndClose(): Promise<void> {
     <UiModal :open="promptOpen" title="改修プロンプトを出力" width="720px" @close="promptOpen = false">
       <div class="grid gap-3">
         <p class="text-[13px] text-sub">
-          「対応する」ステータスの改修単位のみを、コーディング AI エージェント向けの詳細プロンプト（対象ページ・機能名・改修内容・元要望・受入基準）として出力します（未判定・対応中・解決済み・対応しないは含まれません = 改修依頼 2026-08-18）。
+          「改善対応」ステータスの改修単位のみを、コーディング AI エージェント向けの詳細プロンプト（対象ページ・機能名・改修内容・元要望・受入基準）として出力します（未判定・対応中・運用対応・継続検討・解決済み・対応見送りは含まれません = 改修依頼 2026-08-18）。
           要望ごとのステータス変更後は「再生成」で最新の状態（【対応済み】【見送り】の明記）を反映できます。
         </p>
         <div class="flex flex-wrap items-center gap-2">
           <span class="label">対象</span>
-          <UiStatusBadge label="対応する" tone="info" dot />
+          <UiStatusBadge :label="IMPROVEMENT_STATUS_META.accepted.label" tone="info" dot />
           <span class="text-[12px] text-muted">{{ promptCount }} 件</span>
           <button type="button" class="btn btn-ghost btn-sm ml-auto" :disabled="promptBusy" @click="refreshPrompt">
             <RefreshCw class="h-4 w-4" aria-hidden="true" /> {{ promptBusy ? '生成中…' : '再生成' }}

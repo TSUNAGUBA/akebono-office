@@ -19,8 +19,12 @@ import {
   improvementLinksError,
   improvementNoteError,
   improvementRequestEditFields,
+  improvementRevisitError,
+  IMPROVEMENT_STATUS_META,
   IMPROVEMENT_STATUS_NEXT,
+  IMPROVEMENT_STATUSES,
   isInternalPagePath,
+  isOpenStatus,
   matchesImprovementFilter,
   IMPROVEMENT_REQUEST_TAG_META,
   normalizeClusterPlan,
@@ -40,16 +44,18 @@ const reqs: ClusterRequestInput[] = [
 ]
 
 describe('canTransition / IMPROVEMENT_STATUS_NEXT', () => {
-  it('triage からは対応する/対応しないへ遷移できる', () => {
-    expect(IMPROVEMENT_STATUS_NEXT.triage).toEqual(['accepted', 'rejected'])
+  it('triage からは改善対応/運用対応/継続検討/対応見送りへ遷移できる（対応方針の語彙 2026-08-20）', () => {
+    expect(IMPROVEMENT_STATUS_NEXT.triage).toEqual(['accepted', 'operational', 'deferred', 'rejected'])
     expect(canTransition('triage', 'accepted')).toBe(true)
+    expect(canTransition('triage', 'operational')).toBe(true)
+    expect(canTransition('triage', 'deferred')).toBe(true)
     expect(canTransition('triage', 'resolved')).toBe(false)
   })
-  it('解決済み → 対応する（reopen）が可能（取消可能性 = 原則9.5）', () => {
+  it('解決済み → 改善対応（reopen）が可能（取消可能性 = 原則9.5）', () => {
     expect(canTransition('resolved', 'accepted')).toBe(true)
   })
-  it('対応中（in_progress）の遷移（改修依頼 2026-08-18）: 対応する ⇄ 対応中 → 解決済み。直行も許可（原則7）', () => {
-    expect(IMPROVEMENT_STATUS_NEXT.accepted).toEqual(['in_progress', 'resolved', 'rejected', 'triage'])
+  it('対応中（in_progress）の遷移（改修依頼 2026-08-18）: 改善対応 ⇄ 対応中 → 解決済み。直行も許可（原則7）', () => {
+    expect(IMPROVEMENT_STATUS_NEXT.accepted).toEqual(['in_progress', 'deferred', 'resolved', 'rejected', 'triage'])
     expect(IMPROVEMENT_STATUS_NEXT.in_progress).toEqual(['resolved', 'accepted', 'rejected'])
     expect(canTransition('accepted', 'in_progress')).toBe(true)
     expect(canTransition('in_progress', 'resolved')).toBe(true)
@@ -57,6 +63,14 @@ describe('canTransition / IMPROVEMENT_STATUS_NEXT', () => {
     expect(canTransition('accepted', 'resolved')).toBe(true) // 従来の直行も維持（下位互換 = 原則7）
     expect(canTransition('triage', 'in_progress')).toBe(false) // 未判定からの直接着手は不可（判定を経る）
     expect(canTransition('resolved', 'in_progress')).toBe(false)
+  })
+  it('運用対応/継続検討（2026-08-20）: 継続検討からは結論（改善対応/運用対応/対応見送り/未判定）へ戻せる', () => {
+    expect(IMPROVEMENT_STATUS_NEXT.deferred).toEqual(['accepted', 'operational', 'rejected', 'triage'])
+    expect(IMPROVEMENT_STATUS_NEXT.operational).toEqual(['accepted']) // 運用判断の見直し（原則9.5）
+    expect(canTransition('deferred', 'operational')).toBe(true)
+    expect(canTransition('operational', 'accepted')).toBe(true)
+    expect(canTransition('operational', 'resolved')).toBe(false)
+    expect(canTransition('deferred', 'resolved')).toBe(false) // 継続検討からの直接解決は不可（方針を経る）
   })
 })
 
@@ -72,12 +86,20 @@ describe('matchesImprovementFilter', () => {
     expect(matchesImprovementFilter('resolved', 'resolved')).toBe(true)
     expect(matchesImprovementFilter('resolved', 'rejected')).toBe(false)
   })
-  it('対応中は未解決（open）・committed = 対応する + 対応中（改修依頼 2026-08-18）', () => {
+  it('対応中は未解決（open）・committed = 改善対応 + 対応中（改修依頼 2026-08-18）', () => {
     expect(matchesImprovementFilter('in_progress', 'open')).toBe(true)
     expect(matchesImprovementFilter('accepted', 'committed')).toBe(true)
     expect(matchesImprovementFilter('in_progress', 'committed')).toBe(true)
     expect(matchesImprovementFilter('triage', 'committed')).toBe(false)
     expect(matchesImprovementFilter('resolved', 'committed')).toBe(false)
+  })
+  it('運用対応は決着済み（open 対象外）・継続検討は未解決（open）・committed には含めない（2026-08-20）', () => {
+    expect(matchesImprovementFilter('operational', 'open')).toBe(false)
+    expect(matchesImprovementFilter('deferred', 'open')).toBe(true)
+    expect(matchesImprovementFilter('operational', 'committed')).toBe(false)
+    expect(matchesImprovementFilter('deferred', 'committed')).toBe(false)
+    expect(matchesImprovementFilter('operational', 'operational')).toBe(true)
+    expect(matchesImprovementFilter('deferred', 'deferred')).toBe(true)
   })
 })
 
@@ -492,5 +514,35 @@ describe('normalizeImprovementPagePath / isInternalPagePath（F-42-20 の対象�
     expect(normalizeImprovementPagePath('')).toBe('')
     expect(normalizeImprovementPagePath(null)).toBe('')
     expect(normalizeImprovementPagePath(undefined)).toBe('')
+  })
+})
+
+describe('対応方針の語彙（運用対応/継続検討 = 改修依頼 2026-08-20）', () => {
+  it('IMPROVEMENT_STATUSES の順序（カンバン列の SoT）に operational / deferred が入る', () => {
+    expect(IMPROVEMENT_STATUSES).toEqual(['triage', 'accepted', 'in_progress', 'operational', 'deferred', 'resolved', 'rejected'])
+  })
+  it('META: accepted=改善対応（info 維持）/ rejected=対応見送り（warn 維持）/ operational=運用対応（ok・決着）/ deferred=継続検討（info・未解決）', () => {
+    expect(IMPROVEMENT_STATUS_META.accepted).toMatchObject({ label: '改善対応', tone: 'info', open: true })
+    expect(IMPROVEMENT_STATUS_META.rejected).toMatchObject({ label: '対応見送り', tone: 'warn', open: false })
+    expect(IMPROVEMENT_STATUS_META.operational).toMatchObject({ label: '運用対応', tone: 'ok', open: false })
+    expect(IMPROVEMENT_STATUS_META.deferred).toMatchObject({ label: '継続検討', tone: 'info', open: true })
+    expect(isOpenStatus('operational')).toBe(false)
+    expect(isOpenStatus('deferred')).toBe(true)
+  })
+})
+
+describe('improvementRevisitError（継続検討の再検討日。mock/API 共有の検証 = 原則6）', () => {
+  it('deferred への遷移は再検討日が必須・実在日のみ', () => {
+    expect(improvementRevisitError('deferred', '')).not.toBeNull()
+    expect(improvementRevisitError('deferred', '  ')).not.toBeNull()
+    expect(improvementRevisitError('deferred', '2026-09-01')).toBeNull()
+    expect(improvementRevisitError('deferred', '2026-02-30')).not.toBeNull() // 実在しない日付
+    expect(improvementRevisitError('deferred', '9/1')).not.toBeNull() // 形式外
+  })
+  it('deferred 以外は再検討日なしで通る（渡された場合のみ形式検証。保持 = クリアしないは呼び出し側の責務）', () => {
+    expect(improvementRevisitError('accepted', '')).toBeNull()
+    expect(improvementRevisitError('resolved', '')).toBeNull()
+    expect(improvementRevisitError('accepted', '2026-09-01')).toBeNull()
+    expect(improvementRevisitError('accepted', 'bogus')).not.toBeNull()
   })
 })

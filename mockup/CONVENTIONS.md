@@ -15,7 +15,7 @@ Nuxt 4 SPA（ssr:false, hashMode）/ TypeScript strict / Tailwind v4 + CSS 変�
 
 1. **全操作が反応する**（X-1）: ボタン・行・カードは必ず 遷移 / ドロワー / モーダル / トースト / 状態変化 のいずれかを返す。飾りのボタンを作らない
 2. **データは useMockDb 経由のみ**: `const { tbl, commit, nextId } = useMockDb()`。書込後は必ず `commit()`。ID は `nextId(collection, prefix)`
-   - **API モード（バッチ2a〜）:** マイグレーション済みコレクション（マスタ 31 種 = useApi.ts の MIGRATED_MASTERS・専用エンドポイント 26 種 = CUSTOM_COLLECTION_ENDPOINTS（akebonoAppConfigs / itemSettings = Phase B + 記録系 16 = Phase C + 取込 importSources/importMappings/importRuns = Phase D + 改善要望 improvementRequests/improvementItems = F-42 + 活動記録 supportActivities/salesActivities/partnerActivities = 2026-08-18）・監査ログ・設定）は `tbl()` が API キャッシュを返す（参照はそのまま）。**書込は `useMasterCrudAsync` / `useAppSettings` / 各ドメイン composable の API 経路（apiWrite = 書込 → 影響コレクション再ロード）のみ**。`tbl().value = ...` の直接書込やモック版 `useMasterCrud` での書込を追加しない（キャッシュ汚染 = SoT 逆流。原則6）。導出キャッシュ（mediaInsights / dashboardInsights）はコレクションでなくキー単位の遅延ロード（apiLoadOnce）= 各 composable が管理する（**Phase D で dashboardInsights もサーバー化 = API モードで localStorage 保管のモックコレクションは 0**）
+   - **API モード（バッチ2a〜）:** マイグレーション済みコレクション（マスタ 33 種 = useApi.ts の MIGRATED_MASTERS・専用エンドポイント 28 種 = CUSTOM_COLLECTION_ENDPOINTS（akebonoAppConfigs / itemSettings = Phase B + 記録系 16 = Phase C + 取込 importSources/importMappings/importRuns = Phase D + 改善要望 improvementRequests/improvementItems = F-42 + 活動記録 supportActivities/salesActivities/partnerActivities = 2026-08-18 + 顧客コンテキスト customerContexts/customerContextNotes = 2026-08-20）・監査ログ・設定）は `tbl()` が API キャッシュを返す（参照はそのまま）。**書込は `useMasterCrudAsync` / `useAppSettings` / 各ドメイン composable の API 経路（apiWrite = 書込 → 影響コレクション再ロード）のみ**。`tbl().value = ...` の直接書込やモック版 `useMasterCrud` での書込を追加しない（キャッシュ汚染 = SoT 逆流。原則6）。導出キャッシュ（mediaInsights / dashboardInsights）はコレクションでなくキー単位の遅延ロード（apiLoadOnce）= 各 composable が管理する（**Phase D で dashboardInsights もサーバー化 = API モードで localStorage 保管のモックコレクションは 0**）
 3. **記録系は追記のみ**: 打刻・承認ログ・活動ログ等を書き換え・削除しない。マスタは論理削除（`active:false`）のみ
 4. **Math.random / v-html 禁止**: 乱数は `~/utils/rng`（決定的）。リッチ表示はテキスト分解で
 5. **アイコンは lucide-vue-next のみ**。絵文字をアイコン代わりにしない
@@ -86,7 +86,9 @@ const mcat = useMenuCategories('dashboard')   // categories / categorize(cards) 
 // 通知配置は**レイアウト本体と別の専用キー**（user pref 'dashboardNotificationPlacement'〔mock=localStorage
 // 'ako.dashboard-notification-placement.v1'〕/ configs 'dashboard-notification-placement'）に保存し、
 // 解決 = 層整合: ユーザー配置キー > ユーザー層レイアウト由来（**分離前の保存値のみ**。分離後の保存は options.notificationsInherit=true で配置をキー・下位層へ委譲 = フォールバック値を層に固定しない）> テナント配置キー > テナント層レイアウト由来（分離前のみ）> アプリ既定（既存レイアウトの配置選択を新キーが上書きしない = 原則7。レイアウト本体へ書くと配置変更でセクション構成が層に固定される = レビュー対応）
-const dl = useDashboardLayout()   // effectiveLayout〔配置キーの上書き適用済み〕 / resolvedScope / placementSource / activeTemplateId / templates / userPlacement / tenantPlacement / baseLayoutForScope(scope) / applyTemplate(id, scope)〔通知配置は変更しない〕 / saveNotificationPlacement(placement, scope)・resetNotificationPlacement(scope)〔配置キーのみ・取消 = 原則9.5〕 / saveSections(sections, scope)〔保存先層自身の options 維持で sections 差替・templateId=custom〕 / resetLayout(scope)（取消・原則9.5。tenant は管理者のみ。配置キーは触らない）
+const dl = useDashboardLayout()   // effectiveLayout〔配置キーの上書き適用済み〕 / resolvedScope / placementSource / activeTemplateId / templates / userPlacement / tenantPlacement / baseLayoutForScope(scope) / applyTemplate(id, scope)〔通知配置は変更しない〕 / saveNotificationPlacement(placement, scope)・resetNotificationPlacement(scope)〔配置キーのみ・取消 = 原則9.5〕 / saveSections(sections, scope, optionsPatch?)〔保存先層自身の options 維持で sections 差替・templateId=custom。optionsPatch = 表示オプションの部分更新（セクション「その他」トグル等。2026-08-20）— showOther は **false のときだけ永続化**（未定義/true = 表示 = 原則7）・notifications/notificationsInherit はパッチでは変更不可〕 / resetLayout(scope)（取消・原則9.5。tenant は管理者のみ。配置キーは触らない）
+// セクション「その他」の表示/非表示（改修依頼 2026-08-20）: options.showOther=false で未配置メニューを非表示
+// （categorizeCards の includeOther オプション。マスタハブ = useMenuCategories.categorize は従来挙動のまま）
 
 // セクション構成のお気に入り（自由設定の保存・呼び出し。ユーザー個人・上限 10 件・2026-08-18。純ロジック SoT = utils/dashboard-layout.ts の parseSectionFavorites/upsertSectionFavorite/removeSectionFavorite）
 // 永続化 = /v1/me pref 'dashboardSectionFavorites'（mock=localStorage 'ako.dashboard-section-favorites.v1'）。同名は上書き（確認後）・壊れたエントリは 1 件だけ落とす
@@ -126,15 +128,39 @@ const tp = useTaskPlans()   // plansOf / upsertPlan / removePlan / aiReview / re
 // 部署（F-10-9。所属の SoT は Member.departmentId。CRUD は useMasterCrud('departments')）
 const depts = useDepartments()   // nameOf / options / membersOf / tree
 
+// 週報マトリクスの週列（改修依頼 2026-08-20。月曜始まり weekStartOf の SoT = utils/report-weeks.ts）
+const weeks = recentWeekStarts(todayJst(), 4)   // 直近 N 週の週開始（昇順・右端 = 今週）
+
+// 日報の自動リマインド（改修依頼 2026-08-20。純ロジック SoT = shared/domain/report-reminder.ts。
+// configs 'report-reminder'（{enabled,time} JSON）/ 'report-reminder-last-sent'（日次 1 回の冪等マーカー = 原則2）。
+// 本実装 = API の runReportReminders（/jobs/report-reminders・Cloud Scheduler）/ mock = 起動時のデモ簡易版
+// （plugins/report-reminder.client.ts・localStorage 'ako.report-reminder-last.v1'・非ブロッキング = 原則4）
+
+// 個人別マルチチャネル通知連携（Slack / Google Chat。改修依頼 2026-08-20。純ロジック SoT = shared/domain/notification-channels.ts）
+// matrix（通知種別×チャネルの ON/OFF）= user pref 'notificationChannels'（mock=localStorage 'ako.notification-matrix.v1'。
+// 既定: in_app=ON・外部=OFF。既定と同値のセルは書かない = 最小形）。連携 = API は user_chat_links（AES-256-GCM 暗号化・0075）/
+// mock は localStorage 'ako.chat-links.v1' + 擬似同意モーダル。外部配信は api/src/lib/notify.ts（fire-and-forget・
+// 指数バックオフ・401 で要再認証 + 催促。in_app は fail-open / 外部は fail-closed）。設定 UI = プロフィール（/profile）
+const nch = useNotificationChannels()   // links / matrix / cellOn / setCell / connect / disconnect / sendTest / refresh
+
 // 顧客活動（旧: 顧客ログ = F-18。一覧は全メンバー閲覧可・編集/取消は本人のみ・AI 参照は本人スコープ。2026-08-18）
 const cl = useCustomerLogs()   // allLogs / archivedOf(自分) / ensureLoaded / add / update / archive / restore / refresh
 
 // 活動記録 3 種（F-43/F-44/F-45。チーム共有 = 全員が閲覧・登録・編集可・取消/復元 = 原則9.5。検証 SoT = shared/domain/activity。2026-08-18）
 const sup = useSupportActivities()   // list / archivedList / save(id|null, input) / archive / restore / refresh
-const sal = useSalesActivities()     // 同上 + byId（パートナー活動の関連商談リンク解決）
-const pact = usePartnerActivities()  // 同上（関連商談 relatedSalesActivityId は営業活動への任意リンク）
+const sal = useSalesActivities()     // 同上 + byId + generateDigest(id)（活動ログの AI 集約 = 生成→保管→再生成で上書き。2026-08-20）
+const pact = usePartnerActivities()  // 同上 + byId + generateDigest（関連商談 relatedSalesActivityId は営業活動への任意リンク。initiatives = 取組内容）
+// 活動ログ（案件ヘッダー + 活動ログ構造 = 2026-08-20。営業/BP 共通実装。API はネスト資源の都度フェッチ = コレクションキャッシュ非使用）
+const alog = useActivityLogs('sales' /* or 'partner' */)  // logsOf / archivedOf / pageFetch / save / archive / restore
+// mock 書込は commit() の戻り値を検査し、false はロールバック + AKO-***-090（保存容量不足）を返す（登録無反応バグの根本対応）
 // 顧客(会社)コンボボックスの名寄せ・新規登録（モック側の共通実装。API 側は api/src/lib/company-resolve）
 const { lookupCompany, createCompany } = useCompanyResolve()
+
+// 顧客コンテキスト（/customer-context。改修依頼 2026-08-20。定性情報 = 1社1行 upsert〔customer_contexts 0076〕・
+// Memo/リサーチ履歴 = 追記 + 論理取消〔customer_context_notes〕。AI リサーチ = 候補リスト化（API = grounded search /
+// mock = 決定的デモ）→ 採用 → AI 構築（LLM → shared/domain/customer-context のヒューリスティックへフォールバック）→
+// 反映（payload.before 保存）→ 「反映を取り消す」で復元 = 原則9.5。機能キー customer-context）
+const ctx = useCustomerContext()  // contextOf / notesOf / archivedNotesOf / saveContext / addNote / archiveNote / restoreNote / research / buildProposal / applyResearch / revertResearch / refresh
 
 // 休暇（F-04-5/9。種別別残数。付与は管理者/人事のみ・同日同種別はスキップ=冪等）
 const leave = useLeave()   // balance(memberId, leaveTypeId?) / request / decide / grant / bulkGrant / activeLeaveTypes
@@ -179,7 +205,7 @@ const di = useDashboardInsight() // buildSegmentSummary/buildCompanySummary（�
 // 改善要望（F-42。各ページからの投稿 → 生要望の選別〔採用/不採用〕→ 採用分のみ AI 集約 → 権限を持つ人のみ管理 → 改修プロンプト出力。純ロジック SoT = shared/domain/improvement）
 // 投稿は全員可（submit は管理 GET を誤発火しない）。閲覧・管理は canManageImprovements（deny-by-default + 管理者常時可 = usePermissions）。
 // 集約は「採用済み（adoption='adopted'）かつ未集約」の要望のみ処理・判定済み item のステータスは巻き戻さない（原則2）。API = Vertex AI → 決定的ヒューリスティック（heuristicClusterRequests）
-const imp = useImprovements()  // submit（body + 対象ページ〔既定=開いているページ・全体/新設ページ可〕+ 任意添付 links〔URL 最大5〕・images〔縮小 data URI 最大4〕= 0061 + 任意タグ tags〔壁打ち brainstorm/お任せ entrust = 0065・F-42-17。ラベル SoT = IMPROVEMENT_REQUEST_TAG_META・人間運用の意思表示のためプロンプトには含めない = 改修依頼 2026-08-19〕。mock は persisted=false で容量超過を通知）/ refresh / loadRequestImages(itemId)・loadRequestImagesFor(request)（添付画像の遅延ロード = API の全件 GET は images を含まない。未集約は ?unclustered=1）/ setRequestStatus(id, 'open'|'resolved'|'dismissed')（要望単位の進捗タグ = 0062。プロンプト再生成に【対応済み】【見送り】で反映）/ setRequestAdoption(id, 'pending'|'adopted'|'declined')（生要望の選別 = 0063。採用のみ集約対象・集約済みは変更不可〔AKO-REQ-013〕）/ setRequestAdoptionBulk(ids, adoption)（受付箱の一括選別 = F-42-18・2026-08-18。既存 1 件 API の逐次呼び + 反映 1 回・部分成功は done/failed で報告 = 原則4）/ unclusterRequest(id)（集約の解除 = F-42-19・2026-08-18。改修単位から外し「採用済み（集約待ち）」へ戻す = 再度 AI 集約の対象。解除した item は excludedItemIds（履歴・蓄積 = クリアしない）に記録し次回以降の集約でそこへは再追記しない〔往復 + detail 重複・「対象外」メモとの矛盾防止〕・元 item へ「対象から外れた」修正メモを自動追記〔buildUnclusterNoteBody = プロンプトに反映〕。ガード = 共有 improvementUnclusterError〔未集約 AKO-REQ-017・取消済み AKO-REQ-018・決着済み item AKO-REQ-021 = 先に reopen・取消済み item AKO-REQ-022 = 先に復元〕。選別は取消済み不可 = AKO-REQ-019）/ editRequest(id, {body, tags?, links?, images?})（生要望の編集 = 0064・2026-08-18 → 全項目編集へ拡張 2026-08-19。本人or管理権限者・取消済み不可〔AKO-REQ-015〕・部分更新〔送っていない項目は現行値を保持・空配列は全削除〕・API モードは応答行〔画像実体込み〕をキャッシュへマージ + 画像ロード済みマーク・editedAt 記録で「編集済み」明示 = 原則9.5）/ addRequestComment(requestId, body)・setRequestCommentArchived(id, bool)・commentsForRequest(requestId)（生要望コメント = 選別のやり取り・古い順 = 0063）/ activeItems・archivedItems・unclusteredRequests・adoptedUnclustered（集約待ち）・pendingRequests（未選別）・allRequests / requestsForItem / notesForItem（時系列メモ・古い順）/ generate（集約 = 採用分のみ）/ setStatus / editItem（title/summary/detail + planStart/planEnd 対応予定期間 = ガント）/ setItemArchived・setRequestArchived（取消/復元）/ addNote(itemId, body, kind?='note'|'reject')・setNoteArchived（メモ追加・取消/復元 = 0059。buildCodingPrompt に加味）/ buildPrompt(filter)（添付リンク・画像件数も加味）。**改修依頼 2026-08-19 第4弾: 生要望（GET /requests）は認証済み全員が閲覧可（非管理者の refresh は items のみ 403 → catch で握り潰し requests を反映）。submit/editRequest は targetSpot〔対象箇所・任意〕も受け付ける。選別・ステータス変更・generate・buildPrompt・改修案件（items）は管理権限者のみ**
+const imp = useImprovements()  // submit（body + 対象ページ〔既定=開いているページ・全体/新設ページ可〕+ 任意添付 links〔URL 最大5〕・images〔縮小 data URI 最大4〕= 0061 + 任意タグ tags〔壁打ち brainstorm/お任せ entrust = 0065・F-42-17。ラベル SoT = IMPROVEMENT_REQUEST_TAG_META・人間運用の意思表示のためプロンプトには含めない = 改修依頼 2026-08-19〕。mock は persisted=false で容量超過を通知）/ refresh / loadRequestImages(itemId)・loadRequestImagesFor(request)（添付画像の遅延ロード = API の全件 GET は images を含まない。未集約は ?unclustered=1）/ setRequestStatus(id, 'open'|'resolved'|'dismissed')（要望単位の進捗タグ = 0062。プロンプト再生成に【対応済み】【見送り】で反映）/ setRequestAdoption(id, 'pending'|'adopted'|'declined')（生要望の選別 = 0063。採用のみ集約対象・集約済みは変更不可〔AKO-REQ-013〕）/ setRequestAdoptionBulk(ids, adoption)（受付箱の一括選別 = F-42-18・2026-08-18。既存 1 件 API の逐次呼び + 反映 1 回・部分成功は done/failed で報告 = 原則4）/ unclusterRequest(id)（集約の解除 = F-42-19・2026-08-18。改修単位から外し「採用済み（集約待ち）」へ戻す = 再度 AI 集約の対象。解除した item は excludedItemIds（履歴・蓄積 = クリアしない）に記録し次回以降の集約でそこへは再追記しない〔往復 + detail 重複・「対象外」メモとの矛盾防止〕・元 item へ「対象から外れた」修正メモを自動追記〔buildUnclusterNoteBody = プロンプトに反映〕。ガード = 共有 improvementUnclusterError〔未集約 AKO-REQ-017・取消済み AKO-REQ-018・決着済み item AKO-REQ-021 = 先に reopen・取消済み item AKO-REQ-022 = 先に復元〕。選別は取消済み不可 = AKO-REQ-019）/ editRequest(id, {body, tags?, links?, images?})（生要望の編集 = 0064・2026-08-18 → 全項目編集へ拡張 2026-08-19。本人or管理権限者・取消済み不可〔AKO-REQ-015〕・部分更新〔送っていない項目は現行値を保持・空配列は全削除〕・API モードは応答行〔画像実体込み〕をキャッシュへマージ + 画像ロード済みマーク・editedAt 記録で「編集済み」明示 = 原則9.5）/ addRequestComment(requestId, body)・setRequestCommentArchived(id, bool)・commentsForRequest(requestId)（生要望コメント = 選別のやり取り・古い順 = 0063）/ activeItems・archivedItems・unclusteredRequests・adoptedUnclustered（集約待ち）・pendingRequests（未選別）・allRequests / requestsForItem / notesForItem（時系列メモ・古い順）/ generate（集約 = 採用分のみ）/ setStatus(id, status, revisitOn?)（対応方針 = 未判定/改善対応/対応中/運用対応/継続検討/解決済み/対応見送り〔改修依頼 2026-08-20。accepted/rejected は保存値不変・ラベルのみ変更 = 原則7〕。継続検討 deferred は再検討日必須 = AKO-REQ-023・到来で通知〔API = runImprovementRevisitReminders / mock = checkRevisitReminders〕）/ editItem（title/summary/detail + planStart/planEnd 対応予定期間 = ガント）/ setItemArchived・setRequestArchived（取消/復元）/ addNote(itemId, body, kind?='note'|'reject')・setNoteArchived（メモ追加・取消/復元 = 0059。buildCodingPrompt に加味）/ buildPrompt(filter)（添付リンク・画像件数も加味）。**改修依頼 2026-08-19 第4弾: 生要望（GET /requests）は認証済み全員が閲覧可（非管理者の refresh は items のみ 403 → catch で握り潰し requests を反映）。submit/editRequest は targetSpot〔対象箇所・任意〕も受け付ける。選別・ステータス変更・generate・buildPrompt・改修案件（items）は管理権限者のみ**
 ```
 
 ## UI コンポーネント在庫（新規に作る前にここを見る）
@@ -210,12 +236,17 @@ const imp = useImprovements()  // submit（body + 対象ページ〔既定=開�
 | `WidgetsPunchClock` | 打刻 = タイムカード（flat: モーダル内等でカード枠を外す） |
 | `WidgetsCustomerLogPanel` | props なし。顧客活動（/customer-log）の実体（一覧 20 件ページング + 検索/顧客/記録者フィルタ・登録/編集モーダル〔活動目的チップ + 活動手段 UiChipTabs + 会社/担当者コンボボックス〕・詳細モーダル・取消/復元。全メンバー閲覧可・編集は本人のみ。2026-08-18 改修） |
 | `WidgetsSupportActivityPanel` | props なし。サポート活動（/support-activity）の実体（一覧 20 件ページング〔API = サーバーページング〕+ 検索/ステータス/種別フィルタ・詳細ドロワー view/edit/create・取消/復元。F-43・2026-08-18） |
-| `WidgetsSalesActivityPanel` | props なし。営業活動（/sales-activity）の実体（フェーズバッジ・金額/確度・Next Action。構成は SupportActivityPanel と同型。F-44・2026-08-18） |
-| `WidgetsPartnerActivityPanel` | props なし。ビジネスパートナー活動（/partner-activity）の実体（関連商談 = 営業活動への任意リンク表示付き。構成は SupportActivityPanel と同型。F-45・2026-08-18） |
+| `WidgetsSalesActivityPanel` | props なし。営業活動の**案件一覧**（/sales-activity。2026-08-20 で案件ヘッダー + 活動ログ構造へ再編）。行クリック → `/sales-activity/<id>` 案件詳細ページへ遷移。AI集約サマリー列 + フェーズバッジ・新規登録 = `WidgetsSalesActivityFormDrawer`。F-44 |
+| `WidgetsPartnerActivityPanel` | props なし。BP活動の**案件一覧**（/partner-activity。同 2026-08-20 再編・「背景・目的」+「取組内容」）。行クリック → `/partner-activity/<id>` 詳細。新規登録 = `WidgetsPartnerActivityFormDrawer`。F-45 |
+| `WidgetsSalesActivityFormDrawer` / `WidgetsPartnerActivityFormDrawer` | open, mode('create'/'edit'), activity? + `@close` `@saved`。案件ヘッダーの登録/編集ドロワー（フッター直上に role="alert" のインラインエラー常設 = トースト非依存。BP は背景・目的/取組内容/活動区分のフィールド単位エラー。2026-08-20） |
+| `WidgetsActivityLogsCard` | kind('sales'/'partner'), activityId。案件詳細の活動ログカード（20件/ページ・活動日降順・検索/種別フィルタ・ログ詳細/編集/新規ドロワー・取消/復元。データは `useActivityLogs(kind)` = ネスト資源の都度フェッチ。2026-08-20） |
+| `WidgetsActivityDigestCard` | kind, activityId, digest?。AI集約カード（保存済み digest 表示 + 「AIで集約/再生成」・生成日時・ログ n 件時点・LLM/簡易集約バッジ。2026-08-20） |
 | `WidgetsCalendarConnectGate` | Google カレンダー連携ゲート（擬似 OAuth 同意・props なし）。連携済みバーに「同期カレンダー」選択モーダル（バッチ7b） |
 | `MastersDeptOrgNode` | 組織図の再帰ノード（node: DeptNode, depth）。`@select` で部署詳細へ |
 | `WidgetsNotesPanel` | kind('poipoi'/'minutes'), showAuthor。ノート共通パネル（**一覧が基本ビュー・登録/ファイル取込はヘッダーボタン → 入力モーダル（バッチ7h）**。マークダウンプレビュー・ステージ → 取込ボタン・サマリー一覧（押下で詳細モーダル）+ 行単位の取消/復元 + 管理者の全ポスト閲覧（poipoi）。バッチ7c/7d/7e/7h） |
 | `WidgetsWeeklyInsight` | initialWeekStart。週次 AI インサイト（**保存済みを表示・「生成/再生成」で保管 = バッチ7j**。あなた向けインサイト（個別）+ 集計 KPI + チャート + エグゼクティブサマリー/SWOT/リスク/アクション。集計は前日（asOf）まで基準。週ナビ + 生成日時表示。バッチ7g/7j） |
+| `WidgetsRelationGraph` | nodes / edges / selectedId + `@select`。**力学レイアウト（force-directed）の関係グラフ**（顧客関係(会社)/(人) で共用。改修依頼 2026-08-20 で円環配置から刷新）。ズーム（ホイール/ピンチ/ボタン）・パン・バブルドラッグ（物理追従）・選択で隣接エッジをハイライト。決定的シミュレーション（`~/utils/rng` シード・純ロジック SoT = `utils/force-graph.ts`）・reduced-motion は同期整定・375px はコンテナ内描画 |
+| `ReportsWeeklySubmissionMatrix` | props なし。週報のメンバー×週 提出状況マトリクス（直近 4/8/12 週切替・右端 = 今週・済/下書き/未のラベル併記・提出セルはドロワー詳細 + 既読化・sticky 名列 + 横スクロール。改修依頼 2026-08-20。週列 SoT = `utils/report-weeks.ts`） |
 | `UiMarkdown` | source。安全なサブセットのマークダウン描画（utils/markdown.ts の AST を VNode 直接生成 = v-html 不使用。見出し・リスト・引用・コード・強調・http(s) リンクのみ。バッチ7e） |
 | `MastersPermissionMatrix` | 権限表モード（props なし = ruleCrud を内部利用）。ページ > 機能 > 項目 の 3 階層ツリー × ロール/役職/個人（バッチ7m）。セルは常に可否を表示（明示 = 濃色 / 上位一括・既定値 = 薄色破線）・クリックで反転・引き継ぎ値へ戻すと明示ルール解除。表ヘッダは内部スクロール + sticky |
 | `SettingsMenuCategoryEditor` | props なし。メニューカテゴリのカスタマイズ（F-13-8。エリア切替 + カテゴリ CRUD/並び替え/カード割当 + 既定に戻す。バッチ7h。編集 UI は `UiMenuSectionEditor` 共用・ダッシュボードタブは外部リンク/AKEBONO も割当候補 + 3 階層はレイアウトへ案内） |
@@ -243,7 +274,7 @@ const imp = useImprovements()  // submit（body + 対象ページ〔既定=開�
 | `ImprovementsRequestGantt` | requests（ImprovementRequest[]）。**生要望の投稿タイムライン**（投稿日 createdAt に 1 目盛りバー・ステータス色・スケール月/週/日切替 = shared/domain/gantt 共用 = 原則3。参照専用・`open` emit。全員閲覧可 = 改修依頼 2026-08-19 第4弾） |
 | `ReportsPeriodPanel` | kind（'weekly'/'monthly'）/ view（'mine'/'all'/'team'）。**週報・月報の期間レポート共通パネル**（自分=編集〔例文挿入・下位粒度から下書き生成〕・全員=提出済み一覧 + 未読・チーム=期間の提出状況。週報と月報は同型のため kind で切替 = 原則3。月報の全ビューと週報のチームで使用。改修依頼 2026-08-19 第4弾） |
 | `ImprovementsKanban` | items（ImprovementItem[]）・reqCount(id)。ステータス別カラムのカンバン（F-42）。emit: open(item)・status(id,to)。許可遷移のクイック操作・横スクロール |
-| `ImprovementsGantt` | items（ImprovementItem[]）。対応予定期間のガント（F-42。月次/週次/日次切替・前後送り・今スナップ）。列/バーは `shared/domain/gantt` 純関数。**ステータスフィルタ（既定=accepted=実装決定・未完了。選択肢/判定は `IMPROVEMENT_FILTER_OPTIONS`/`matchesImprovementFilter` 共有）+ バー色分け（対応する=brand/未判定=warn/解決済み=muted〔完了グレー〕/対応しない=crit・決着済みは退色）+ 凡例。2026-08-12** emit: open(item) |
+| `ImprovementsGantt` | items（ImprovementItem[]）。対応予定期間のガント（F-42。月次/週次/日次切替・前後送り・今スナップ）。列/バーは `shared/domain/gantt` 純関数。**ステータスフィルタ（既定=accepted=実装決定・未完了。選択肢/判定は `IMPROVEMENT_FILTER_OPTIONS`/`matchesImprovementFilter` 共有）+ バー色分け（改善対応=brand/未判定=warn/運用対応=ok/継続検討=serious/解決済み=muted〔完了グレー〕/対応見送り=crit・決着済みは退色）+ 凡例。2026-08-12・対応方針語彙 2026-08-20** emit: open(item) |
 
 **ページ間導線・メニュー定義の SoT（バッチ7h）:** 親ページへ戻る・関連ページは `app/utils/nav-map.ts`、
 ダッシュボード / マスタハブのカード定義と既定カテゴリは `app/utils/menu-registry.ts` が SoT。

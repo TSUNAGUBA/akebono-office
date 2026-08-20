@@ -15,11 +15,13 @@ async function main() {
     await page.getByRole('main').getByRole('heading', { level: 1, name: '改善要望' }).waitFor()
     await page.getByRole('button', { name: /対応中/ }).first().waitFor()
     check('改善要望: サマリーカードに「対応中」が出る', true)
+    // タブ再編（2026-08-20: 受付箱/改修案件 + 表示切替）に追随: 改修案件タブ → カンバン表示
+    await page.getByRole('tab', { name: '改修案件' }).click()
     await page.getByRole('tab', { name: 'カンバン' }).click()
-    check('カンバン: 「対応中」列が「対応する」と「解決済み」の間にある', await page.evaluate(() => {
+    check('カンバン: 「対応中」列が「改善対応」と「解決済み」の間にある', await page.evaluate(() => {
       const heads = [...document.querySelectorAll('main h3, main h4, main [class*="font-semibold"]')]
         .map(el => el.textContent?.trim() ?? '')
-      const a = heads.findIndex(t => t.startsWith('対応する'))
+      const a = heads.findIndex(t => t.startsWith('改善対応'))
       const p = heads.findIndex(t => t.startsWith('対応中'))
       const r = heads.findIndex(t => t.startsWith('解決済み'))
       return a !== -1 && p !== -1 && r !== -1 && a < p && p < r
@@ -29,8 +31,8 @@ async function main() {
 
     // 2) 改修プロンプト: 対象 = 「対応する」のみ + ナビゲーター定型文
     await page.getByRole('button', { name: '改修プロンプトを出力' }).click()
-    await page.getByText('「対応する」ステータスの改修単位のみを').waitFor()
-    check('プロンプト: 対象が「対応する」のみである説明が出る', true)
+    await page.getByText('「改善対応」ステータスの改修単位のみを').waitFor()
+    check('プロンプト: 対象が「改善対応」のみである説明が出る', true)
     const promptText = await page.locator('textarea[readonly]').inputValue()
     check('プロンプト: 冒頭にナビゲーター定型文が入る',
       promptText.startsWith('あなたはナビゲーターです。')
@@ -40,6 +42,10 @@ async function main() {
 
     // 3) 受付箱: 添付列 + 対象ページのリンク化
     await page.getByRole('tab', { name: /受付箱/ }).click()
+    // 表示切替はタブ間で共有されるため、直前のカンバン表示から「一覧」へ戻す（2026-08-20 タブ再編）
+    await page.getByRole('tab', { name: '一覧' }).click()
+    // 投稿者フィルタの既定 = 自分のみ（2026-08-20）。他メンバー投稿の行を対象にするため「全員」へ切替
+    await page.getByRole('tablist', { name: '投稿者で絞り込み' }).getByRole('tab', { name: '全員' }).click()
     await page.getByRole('columnheader', { name: '添付' }).waitFor()
     check('受付箱: 一覧に「添付」列がある', true)
     // 既定フィルタ = 未選別（imreq-0005 = メンバー管理）。対象ページ列がリンクとして出る

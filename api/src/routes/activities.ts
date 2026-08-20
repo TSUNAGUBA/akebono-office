@@ -8,25 +8,34 @@
  * - 顧客(会社)のコンボボックス新規登録（サポート/営業）は lib/company-resolve（customer-logs と共通 = 原則3）。
  * - AI 検索インデックスへは供給しない（AI 参照範囲の拡大は別途の設計判断とする = 安全側）。
  * - 機能ガード: support-activity / sales-activity / partner-activity（F-16。既定 allow）。
- * エラー: AKO-SUP/SAL/PTN-001 入力不正（400）/ -002 対象なし（404）。
+ * - 営業/パートナーは「案件ヘッダー + 活動ログ」構造（改修依頼 2026-08-20）。既存行 = 案件ヘッダー
+ *   （原則7）。活動ログ CRUD と AI集約（digest）は資源名をパラメタ化した共通実装（原則3）。
+ * エラー: AKO-SUP/SAL/PTN-001 入力不正（400）/ -002 対象なし（404）/ -004 活動ログなし（404）。
  */
 import { Hono } from 'hono'
 import type pg from 'pg'
 import {
   ACTIVITY_BODY_CAP as BODY_CAP, ACTIVITY_NAME_CAP as NAME_CAP, ACTIVITY_TITLE_CAP as TITLE_CAP,
+  activityLogError, type ActivityLogInput,
+  type ActivityDigestHeader, type ActivityDigestLog,
+  heuristicActivityDigest,
   normalizeActivityLinks,
   partnerActivityError, type PartnerActivityInput,
   salesActivityError, type SalesActivityInput,
   supportActivityError, type SupportActivityInput,
 } from '../../../shared/domain/activity'
 import { capCodePoints } from '../../../shared/domain/customer-log'
+import { nowJstIso } from '../../../shared/domain/jst'
+import type { ActivityAiDigest } from '../../../shared/domain/types'
 import type { AuthUser } from '../auth'
+import type { Env } from '../env'
 import { audit } from '../lib/audit'
 import { auditCreatedCompany, resolveCompany } from '../lib/company-resolve'
 import { auditCreatedContact, resolveContact } from '../lib/contact-resolve'
 import { auditCreatedVillage, resolveVillage } from '../lib/village-resolve'
 import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
+import { generateJson } from '../lib/llm'
 import { runListQuery } from '../lib/list-query'
 
 // created_at/updated_at は JST ウォールクロック文字列で返す（customer-logs と同一規約）。
@@ -53,7 +62,7 @@ function salesColsFor(t: string): string {
   ${t}.deal_type AS "dealType", ${t}.staff_member_id AS "staffMemberId", ${t}.phase,
   ${t}.amount::float8 AS "amount", ${t}.probability, ${t}.expected_close_date::text AS "expectedCloseDate",
   ${t}.customer_issue AS "customerIssue", ${t}.proposal, ${t}.next_action AS "nextAction",
-  ${t}.next_action_date::text AS "nextActionDate", ${t}.links, ${t}.active, ${jstStampsFor(t)}`
+  ${t}.next_action_date::text AS "nextActionDate", ${t}.links, ${t}.ai_digest AS "aiDigest", ${t}.active, ${jstStampsFor(t)}`
 }
 
 function partnerColsFor(t: string): string {
@@ -61,10 +70,10 @@ function partnerColsFor(t: string): string {
   ${t}.partner_company_id AS "partnerCompanyId", ${t}.partner_contact_id AS "partnerContactId",
   ${t}.approach_company_id AS "approachCompanyId", ${t}.approach_group AS "approachGroup", ${t}.theme,
   ${t}.related_company AS "relatedCompany", ${t}.activity_type AS "activityType", ${t}.status, ${t}.summary,
-  ${t}.current_state AS "currentState", ${t}.next_action AS "nextAction",
+  ${t}.initiatives, ${t}.current_state AS "currentState", ${t}.next_action AS "nextAction",
   ${t}.next_action_date::text AS "nextActionDate", ${t}.staff_member_id AS "staffMemberId",
   ${t}.related_meeting AS "relatedMeeting", ${t}.related_sales_activity_id AS "relatedSalesActivityId",
-  ${t}.memo, ${t}.links, ${t}.active, ${jstStampsFor(t)}`
+  ${t}.memo, ${t}.links, ${t}.ai_digest AS "aiDigest", ${t}.active, ${jstStampsFor(t)}`
 }
 
 // 単表取得用（FROM に同じ別名を付けて使う）
@@ -189,6 +198,225 @@ async function runInTx(
     client.release()
   }
   for (const audit of postCommit) await audit()
+}
+
+// ---------- 活動ログ + AI集約（営業/パートナー共通。改修依頼 2026-08-20） ----------
+// 案件ヘッダー（既存の sales_activities / partner_activities 行 = 原則7）にぶら下がる時系列ログの CRUD と、
+// ログ全量の AI集約（digest）を、資源名をパラメタ化した共通実装で提供する（sales/partner で二重実装しない = 原則3）。
+
+/** ログ資源の定義（sales/partner の差分はこの spec に閉じ込める） */
+interface ActivityLogSpec {
+  code: ErrCode
+  /** 親案件のテーブル名（UPDATE 用の素の名前） */
+  parentTable: string
+  /** 親案件の別名付き FROM 句（findRow 用） */
+  parentFrom: string
+  /** 親案件の射影（別名込み） */
+  parentCols: string
+  parentLabel: string
+  /** ログテーブル名（= 監査ログの entity） */
+  logTable: string
+  /** ログ id のプレフィックス（slog / plog） */
+  idPrefix: string
+  /** 親案件行 → digest 材料のヘッダー（商談名/フェーズ・テーマ名/ステータスの写像） */
+  headerOf: (row: Record<string, unknown>) => ActivityDigestHeader
+}
+
+const LOG_COLS = `al.id, al.activity_id AS "activityId", al.member_id AS "memberId", al.member_name AS "memberName",
+  al.logged_on::text AS "loggedOn", al.kind, al.title, al.body,
+  al.next_action AS "nextAction", al.next_action_date::text AS "nextActionDate",
+  al.links, al.active, ${jstStampsFor('al')}`
+
+/** リクエスト body → ログ入力（cap 適用。検証は shared の activityLogError = モックとパリティ） */
+function logInputOf(b: Record<string, unknown>): ActivityLogInput {
+  return {
+    loggedOn: String(b.loggedOn ?? '').trim(),
+    kind: String(b.kind ?? '').trim(),
+    title: str(b.title, TITLE_CAP),
+    body: str(b.body, BODY_CAP),
+    nextAction: str(b.nextAction, BODY_CAP),
+    nextActionDate: strOrNull(b.nextActionDate),
+    links: normalizeActivityLinks(b.links),
+  }
+}
+
+/** ログ 1 件の取得（親案件スコープ付き。不在は -004 の 404。取消済みも返す = 復元/編集 UI 用） */
+async function findLog(
+  pool: pg.Pool, spec: ActivityLogSpec, activityId: string, logId: string,
+): Promise<ActivityLogInput & { id: string }> {
+  const { rows } = await pool.query<ActivityLogInput & { id: string }>(
+    `SELECT ${LOG_COLS} FROM ${spec.logTable} al WHERE al.id = $1 AND al.activity_id = $2`, [logId, activityId])
+  if (!rows[0]) throw err(`${spec.code}-004`, '活動ログが見つかりません', 404)
+  return rows[0]
+}
+
+const DIGEST_SCHEMA = {
+  type: 'object',
+  properties: {
+    summary: { type: 'string' },
+    highlights: { type: 'array', items: { type: 'string' } },
+  },
+  required: ['summary'],
+}
+
+/** LLM 集約（Vertex → 正規化）。無効環境・失敗・空出力は null（呼び出し側でヒューリスティックへ = 原則4） */
+async function llmActivityDigest(
+  env: Env, header: ActivityDigestHeader, logs: ActivityDigestLog[],
+): Promise<{ summary: string; highlights: string[] } | null> {
+  if (!env.vertexProjectId) return null
+  const material = logs.map(l => ({
+    loggedOn: l.loggedOn, kind: l.kind, title: l.title,
+    body: capCodePoints(l.body, 400),
+    ...(l.nextAction ? { nextAction: l.nextAction, nextActionDate: l.nextActionDate ?? null } : {}),
+  }))
+  const raw = await generateJson<{ summary?: unknown; highlights?: unknown }>(env, {
+    system: 'あなたは営業・パートナー連携の案件アシスタント AI です。案件の活動ログ（時系列・古い順）を読み、'
+      + '経緯と現在地がひと目でわかる要約を日本語で出力します。ログ・案件情報にある事実のみを根拠にし、'
+      + '推測で事実や数値を作らないこと。summary は 3〜5 文で「経緯 → 現在地 → 次のアクション」の順。'
+      + 'highlights は要点の箇条書き（最大 5 件・各 60 字以内）。',
+    prompt: `# 案件\n${JSON.stringify(header, null, 1)}\n\n# 活動ログ（古い順・全${logs.length}件）\n${JSON.stringify(material, null, 1)}`,
+    schema: DIGEST_SCHEMA,
+    maxTokens: 2048,
+  })
+  const summary = capCodePoints(String((raw as { summary?: unknown } | null)?.summary ?? '').trim(), 4000)
+  if (!summary) return null
+  const highlights = Array.isArray((raw as { highlights?: unknown } | null)?.highlights)
+    ? ((raw as { highlights: unknown[] }).highlights)
+        .map(h => capCodePoints(String(h ?? '').trim(), 200)).filter(Boolean).slice(0, 5)
+    : []
+  return { summary, highlights }
+}
+
+/**
+ * 活動ログの CRUD（一覧・登録・部分更新・取消/復元）+ AI集約（digest）を親ルートへ登録する。
+ * - 一覧 GET は runListQuery（既定並び = 活動日降順・登録降順。20件/ページのサーバーページング対応）
+ * - 書込は全員可（チーム共有の記録系）。取消 = 論理削除 + 復元（原則9.5・冪等）
+ * - digest はログ全量（有効のみ・時系列昇順）→ LLM → 失敗時ヒューリスティック → ai_digest へ上書き保管。
+ *   導出キャッシュの再生成であり案件の updated_at は動かさない（記録の更新と区別する）
+ */
+function activityLogRoutes(app: Hono, pool: pg.Pool, env: Env, spec: ActivityLogSpec): void {
+  const logFrom = `${spec.logTable} al`
+
+  app.get('/:id/logs', async (c) => {
+    const id = c.req.param('id')
+    await findRow(pool, spec.code, spec.parentCols, spec.parentFrom, id, spec.parentLabel)
+    const res = await runListQuery(pool, c, {
+      table: logFrom,
+      cols: LOG_COLS,
+      orderBy: 'al.logged_on DESC, al.created_at DESC, al.id DESC',
+      maxLimit: 1000,
+      defaultLimit: 20,
+      searchCols: ['al.title', 'al.body', 'al.next_action'],
+      filterCols: {
+        kind: { col: 'al.kind', kind: 'enum' },
+        active: { col: 'al.active::text', kind: 'eq' },
+      },
+      baseWhere: 'al.activity_id = $1',
+      baseParams: [id],
+    })
+    return c.json(res)
+  })
+
+  app.post('/:id/logs', async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+    await findRow(pool, spec.code, spec.parentCols, spec.parentFrom, id, spec.parentLabel)
+    const b = await c.req.json().catch(() => ({})) as Record<string, unknown>
+    const input = logInputOf(b)
+    assertValid(spec.code, activityLogError(input))
+    const logId = newId(spec.idPrefix)
+    // 記録者名スナップショット（表示用。members 未ロードの画面でも記録者名が出る）
+    const member = await pool.query<{ name: string }>(`SELECT name FROM members WHERE id = $1`, [user.id])
+    await pool.query(
+      `INSERT INTO ${spec.logTable}
+         (id, activity_id, member_id, member_name, logged_on, kind, title, body, next_action, next_action_date, links)
+       VALUES ($1, $2, $3, $4, $5::date, $6, $7, $8, $9, $10::date, $11)`,
+      [logId, id, user.id, member.rows[0]?.name ?? '', input.loggedOn, input.kind, input.title,
+        input.body, input.nextAction, input.nextActionDate, linksJson(input.links)])
+    await audit(pool, { actorId: user.id, action: 'create', entity: spec.logTable, entityId: logId, detail: `${spec.parentLabel}の活動ログを登録` })
+    const { rows } = await pool.query(`SELECT ${LOG_COLS} FROM ${logFrom} WHERE al.id = $1`, [logId])
+    return c.json({ data: rows[0] }, 201)
+  })
+
+  // 部分更新（送られたキーのみ更新 = Object.hasOwn。記録者 member_id/member_name は登録時のまま維持）
+  app.patch('/:id/logs/:logId', async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+    const logId = c.req.param('logId')
+    const cur = await findLog(pool, spec, id, logId)
+    const b = await c.req.json().catch(() => ({})) as Record<string, unknown>
+    const has = (k: string): boolean => Object.hasOwn(b, k)
+    const merged: ActivityLogInput = {
+      loggedOn: has('loggedOn') ? String(b.loggedOn ?? '').trim() : cur.loggedOn,
+      kind: has('kind') ? String(b.kind ?? '').trim() : cur.kind,
+      title: has('title') ? str(b.title, TITLE_CAP) : cur.title,
+      body: has('body') ? str(b.body, BODY_CAP) : cur.body,
+      nextAction: has('nextAction') ? str(b.nextAction, BODY_CAP) : cur.nextAction,
+      nextActionDate: has('nextActionDate') ? strOrNull(b.nextActionDate) : cur.nextActionDate,
+      links: has('links') ? normalizeActivityLinks(b.links) : (cur.links ?? []),
+    }
+    assertValid(spec.code, activityLogError(merged))
+    await pool.query(
+      `UPDATE ${spec.logTable}
+       SET logged_on = $2::date, kind = $3, title = $4, body = $5, next_action = $6,
+           next_action_date = $7::date, links = $8, updated_at = now()
+       WHERE id = $1`,
+      [logId, merged.loggedOn, merged.kind, merged.title, merged.body, merged.nextAction,
+        merged.nextActionDate, linksJson(merged.links)])
+    await audit(pool, { actorId: user.id, action: 'update', entity: spec.logTable, entityId: logId, detail: `${spec.parentLabel}の活動ログを編集` })
+    const { rows } = await pool.query(`SELECT ${LOG_COLS} FROM ${logFrom} WHERE al.id = $1`, [logId])
+    return c.json({ data: rows[0] })
+  })
+
+  // 取消/復元（論理削除。全員可・冪等: 条件付き UPDATE で同時実行でも監査ログは 1 回だけ = archiveRestoreRoutes と同型）
+  app.post('/:id/logs/:logId/archive', async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+    const logId = c.req.param('logId')
+    await findLog(pool, spec, id, logId)
+    const upd = await pool.query(
+      `UPDATE ${spec.logTable} SET active = false, updated_at = now() WHERE id = $1 AND active = true`, [logId])
+    if (upd.rowCount === 0) return c.json({ data: { id: logId, warning: 'すでに取消済みです' } })
+    await audit(pool, { actorId: user.id, action: 'archive', entity: spec.logTable, entityId: logId, detail: `${spec.parentLabel}の活動ログを取消` })
+    return c.json({ data: { id: logId } })
+  })
+
+  app.post('/:id/logs/:logId/restore', async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+    const logId = c.req.param('logId')
+    await findLog(pool, spec, id, logId)
+    const upd = await pool.query(
+      `UPDATE ${spec.logTable} SET active = true, updated_at = now() WHERE id = $1 AND active = false`, [logId])
+    if (upd.rowCount === 0) return c.json({ data: { id: logId, warning: '取消されていません' } })
+    await audit(pool, { actorId: user.id, action: 'restore', entity: spec.logTable, entityId: logId, detail: `${spec.parentLabel}の活動ログを復元` })
+    return c.json({ data: { id: logId } })
+  })
+
+  // AI集約（生成 → ai_digest へ保管 → 再生成で上書き）。応答は案件行（クライアントはキャッシュへ反映）
+  app.post('/:id/digest', async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+    const parent = await findRow<Record<string, unknown>>(pool, spec.code, spec.parentCols, spec.parentFrom, id, spec.parentLabel)
+    const { rows: logRows } = await pool.query<ActivityDigestLog>(
+      `SELECT logged_on::text AS "loggedOn",
+              to_char(created_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"') AS "createdAt",
+              kind, title, body, next_action AS "nextAction", next_action_date::text AS "nextActionDate"
+       FROM ${spec.logTable} WHERE activity_id = $1 AND active = true
+       ORDER BY logged_on ASC, created_at ASC, id ASC`, [id])
+    const header = spec.headerOf(parent)
+    const llm = await llmActivityDigest(env, header, logRows)
+    const result = llm ?? heuristicActivityDigest(header, logRows)
+    const digest: ActivityAiDigest = { ...result, generatedAt: nowJstIso(), logCount: logRows.length, llm: llm !== null }
+    // 導出キャッシュの上書きのみ（updated_at は動かさない = 記録の編集と区別）
+    await pool.query(`UPDATE ${spec.parentTable} SET ai_digest = $2 WHERE id = $1`, [id, JSON.stringify(digest)])
+    await audit(pool, {
+      actorId: user.id, action: 'update', entity: spec.parentTable, entityId: id,
+      detail: `AI集約を生成（${llm ? 'LLM' : 'heuristic'}・ログ${logRows.length}件時点）`,
+    })
+    const { rows } = await pool.query(`SELECT ${spec.parentCols} FROM ${spec.parentFrom} WHERE id = $1`, [id])
+    return c.json({ data: rows[0] })
+  })
 }
 
 // ---------- サポート活動（F-43） ----------
@@ -370,7 +598,7 @@ function salesInputOf(b: Record<string, unknown>, userId: string): SalesActivity
   }
 }
 
-export function salesActivitiesRoutes(pool: pg.Pool): Hono {
+export function salesActivitiesRoutes(pool: pg.Pool, env: Env): Hono {
   const app = new Hono()
   const REFS = '顧客・担当者'
 
@@ -480,6 +708,23 @@ export function salesActivitiesRoutes(pool: pg.Pool): Hono {
     return c.json({ data: rows[0] })
   })
 
+  // 活動ログ + AI集約（案件ヘッダー + 活動ログ構造。改修依頼 2026-08-20）
+  activityLogRoutes(app, pool, env, {
+    code: 'AKO-SAL',
+    parentTable: 'sales_activities',
+    parentFrom: 'sales_activities sa',
+    parentCols: SALES_COLS,
+    parentLabel: '営業活動',
+    logTable: 'sales_activity_logs',
+    idPrefix: 'slog',
+    headerOf: row => ({
+      title: String(row.title ?? ''),
+      status: String(row.phase ?? ''),
+      nextAction: String(row.nextAction ?? ''),
+      nextActionDate: (row.nextActionDate as string | null) ?? null,
+    }),
+  })
+
   archiveRestoreRoutes(app, pool, 'sales_activities', 'sales_activities sa', 'sales_activities', '営業活動', 'AKO-SAL', SALES_COLS)
   return app
 }
@@ -501,6 +746,7 @@ function partnerInputOf(b: Record<string, unknown>, userId: string): PartnerActi
     activityType: String(b.activityType ?? '').trim(),
     status: String(b.status ?? '').trim(),
     summary: str(b.summary, BODY_CAP),
+    initiatives: str(b.initiatives, BODY_CAP),
     currentState: str(b.currentState, BODY_CAP),
     nextAction: str(b.nextAction, BODY_CAP),
     nextActionDate: strOrNull(b.nextActionDate),
@@ -539,7 +785,7 @@ async function resolvePartnerRefs(
   }
 }
 
-export function partnerActivitiesRoutes(pool: pg.Pool): Hono {
+export function partnerActivitiesRoutes(pool: pg.Pool, env: Env): Hono {
   const app = new Hono()
   const REFS = '自社担当者・関連商談'
 
@@ -550,7 +796,7 @@ export function partnerActivitiesRoutes(pool: pg.Pool): Hono {
       orderBy: 'created_at DESC, id DESC',
       maxLimit: 1000,
       defaultLimit: 20,
-      searchCols: ['partner_name', 'theme', 'related_company', 'summary', 'current_state', 'next_action', 'memo'],
+      searchCols: ['partner_name', 'theme', 'related_company', 'summary', 'initiatives', 'current_state', 'next_action', 'memo'],
       filterCols: {
         status: { col: 'status', kind: 'enum' },
         activityType: { col: 'activity_type', kind: 'enum' },
@@ -571,13 +817,13 @@ export function partnerActivitiesRoutes(pool: pg.Pool): Hono {
       await db.query(
         `INSERT INTO partner_activities
            (id, member_id, village_id, partner_company_id, partner_contact_id, approach_company_id,
-            approach_group, partner_name, theme, related_company, activity_type, status, summary,
+            approach_group, partner_name, theme, related_company, activity_type, status, summary, initiatives,
             current_state, next_action, next_action_date, staff_member_id, related_meeting,
             related_sales_activity_id, memo, links)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::date, $17, $18, $19, $20, $21)`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::date, $18, $19, $20, $21, $22)`,
         [id, user.id, refs.villageId, refs.partnerCompanyId, refs.partnerContactId, refs.approachCompanyId,
           input.approachGroup, refs.partnerName, input.theme, refs.relatedCompany, input.activityType,
-          input.status, input.summary, input.currentState, input.nextAction, input.nextActionDate,
+          input.status, input.summary, input.initiatives, input.currentState, input.nextAction, input.nextActionDate,
           input.staffMemberId, input.relatedMeeting, input.relatedSalesActivityId, input.memo, linksJson(input.links)])
       return refs.audits
     })
@@ -613,6 +859,7 @@ export function partnerActivitiesRoutes(pool: pg.Pool): Hono {
       activityType: has('activityType') ? String(b.activityType ?? '').trim() : cur.activityType,
       status: has('status') ? String(b.status ?? '').trim() : cur.status,
       summary: has('summary') ? str(b.summary, BODY_CAP) : cur.summary,
+      initiatives: has('initiatives') ? str(b.initiatives, BODY_CAP) : cur.initiatives,
       currentState: has('currentState') ? str(b.currentState, BODY_CAP) : cur.currentState,
       nextAction: has('nextAction') ? str(b.nextAction, BODY_CAP) : cur.nextAction,
       nextActionDate: has('nextActionDate') ? strOrNull(b.nextActionDate) : cur.nextActionDate,
@@ -632,19 +879,37 @@ export function partnerActivitiesRoutes(pool: pg.Pool): Hono {
         `UPDATE partner_activities
          SET village_id = $2, partner_company_id = $3, partner_contact_id = $4, approach_company_id = $5,
              approach_group = $6, partner_name = $7, theme = $8, related_company = $9, activity_type = $10,
-             status = $11, summary = $12, current_state = $13, next_action = $14, next_action_date = $15::date,
-             staff_member_id = $16, related_meeting = $17, related_sales_activity_id = $18, memo = $19,
-             links = $20, updated_at = now()
+             status = $11, summary = $12, initiatives = $13, current_state = $14, next_action = $15,
+             next_action_date = $16::date, staff_member_id = $17, related_meeting = $18,
+             related_sales_activity_id = $19, memo = $20, links = $21, updated_at = now()
          WHERE id = $1`,
         [id, refs.villageId, refs.partnerCompanyId, refs.partnerContactId, refs.approachCompanyId,
           merged.approachGroup, refs.partnerName, merged.theme, relatedCompany, merged.activityType,
-          merged.status, merged.summary, merged.currentState, merged.nextAction, merged.nextActionDate,
-          merged.staffMemberId, merged.relatedMeeting, merged.relatedSalesActivityId, merged.memo, linksJson(merged.links)])
+          merged.status, merged.summary, merged.initiatives, merged.currentState, merged.nextAction,
+          merged.nextActionDate, merged.staffMemberId, merged.relatedMeeting, merged.relatedSalesActivityId,
+          merged.memo, linksJson(merged.links)])
       return refs.audits
     })
     await audit(pool, { actorId: user.id, action: 'update', entity: 'partner_activities', entityId: id, detail: 'ビジネスパートナー活動を編集' })
     const { rows } = await pool.query(`SELECT ${PARTNER_COLS} FROM partner_activities pa WHERE id = $1`, [id])
     return c.json({ data: rows[0] })
+  })
+
+  // 活動ログ + AI集約（営業側と同一の共通実装 = 原則3）
+  activityLogRoutes(app, pool, env, {
+    code: 'AKO-PTN',
+    parentTable: 'partner_activities',
+    parentFrom: 'partner_activities pa',
+    parentCols: PARTNER_COLS,
+    parentLabel: 'ビジネスパートナー活動',
+    logTable: 'partner_activity_logs',
+    idPrefix: 'plog',
+    headerOf: row => ({
+      title: String(row.theme ?? ''),
+      status: String(row.status ?? ''),
+      nextAction: String(row.nextAction ?? ''),
+      nextActionDate: (row.nextActionDate as string | null) ?? null,
+    }),
   })
 
   archiveRestoreRoutes(app, pool, 'partner_activities', 'partner_activities pa', 'partner_activities', 'ビジネスパートナー活動', 'AKO-PTN', PARTNER_COLS)

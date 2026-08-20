@@ -235,6 +235,41 @@ gcloud scheduler jobs create http uptime-rollup \
 再計算は窓内 DELETE→INSERT のトランザクションで冪等。手動回復は管理者 API
 `POST /v1/status/uptime/recompute`（直近 90 日・serviceId 指定可）でいつでも実行できる。
 
+## 1-7d. 日報の自動リマインド（Cloud Scheduler・任意。改修依頼 2026-08-20）
+
+管理者が設定画面（/settings「日報リマインド」= 有効トグル + 通知時刻）を有効にすると、設定時刻以降の
+最初の実行タイミングで、前日まで直近 5 営業日に未提出の日報があるメンバーへ通知する（F-48）。
+1-7 と同じ `CRON_SECRET` を使い:
+
+```bash
+gcloud scheduler jobs create http report-reminders \
+  --schedule "*/10 * * * *" --time-zone "Asia/Tokyo" \
+  --uri "https://<cloud-run-url>/jobs/report-reminders" \
+  --http-method POST --headers "x-cron-key=<CRON_SECRET と同じ値>"
+```
+
+**推奨周期は 5〜15 分毎**（例は 10 分毎。設定時刻からの通知遅延がこの周期の分だけ生じる）。
+「設定時刻を過ぎたか」「今日すでに送ったか」の判定は**ジョブ内部で自己制御**する
+（configs `report-reminder-last-sent` の日次 1 回 + `pg_try_advisory_lock` の advisory lock =
+重複起動・リトライでも二重通知しない）ため、**どの周期で叩いても安全**（冪等）。
+リマインドが無効（既定）の間は何もしないので、ジョブを先に作っておいても害はない。
+
+## 1-7e. 改修案件「継続検討」の再検討日リマインド（Cloud Scheduler・任意。改修依頼 2026-08-20）
+
+改善要望の改修案件で「継続検討」（deferred）にした案件の再検討日が到来したら、管理者へ通知する
+（F-42-3。リンクは対象案件のディープリンク）。日次実行を 1-7 と同じ `CRON_SECRET` で:
+
+```bash
+gcloud scheduler jobs create http improvement-revisit-reminders \
+  --schedule "0 7 * * *" --time-zone "Asia/Tokyo" \
+  --uri "https://<cloud-run-url>/jobs/improvement-revisit-reminders" \
+  --http-method POST --headers "x-cron-key=<CRON_SECRET と同じ値>"
+```
+
+通知済みマーカー（`improvement_items.revisit_notified_on`）で同一期日の再通知を防ぐため、
+多重実行しても二重通知されない（冪等）。継続検討へ再遷移して期日を更新するとマーカーが
+クリアされ、新しい期日で再度通知される。
+
 ## 1-8. AI 機能（Vertex AI）
 
 AI 機能（日報 AI アシスト・タスク計画の AI コメント等）は **Vertex AI**（オペレーター決定 2026-07-17）を
@@ -407,6 +442,59 @@ AKEBONO Company（`company/`）と AKEBONO Intelligence（`intelligence/`）は�
 > - 使用 API はすべて既存エンドポイント（今回の切り出しで API / DB の変更はない）。
 > - `firebase.json` の `hosting.target`（`company` / `intelligence`）は静的な論理名で、サイト ID との
 >   紐付け（`.firebaserc`）はデプロイ時に CI が secrets から生成する（リポジトリへ固有値を持たない方針）。
+
+## 1-12. 個人別通知連携（Slack / Google Chat・F-49。改修依頼 2026-08-20）
+
+通知の外部チャット配信（本人宛 DM）に使用する。連携はユーザーごとに `/profile` の画面操作（OAuth 同意）で行い、
+トークンは §1-9 と同じ `TOKEN_ENCRYPTION_KEY` で AES-256-GCM 暗号化のうえ DB 保管する（**§1-9 のセットアップ済みが前提**。
+`TOKEN_ENCRYPTION_KEY` 未設定の間は両サービスとも連携 UI が非活性 = AKO-NCH-001・他機能に影響しない）。
+
+### Slack 連携の有効化
+
+1. [api.slack.com/apps](https://api.slack.com/apps) で Slack アプリを作成し、**OAuth & Permissions** で:
+   - **User Token Scopes に `chat:write`** を追加する（**user token 方式** = authorize URL の `user_scope=chat:write`。
+     本人の権限で自分宛 DM へ投稿するため Bot Token Scopes は不要）
+   - **Redirect URLs** に Cloud Run の URL + コールバックパスを登録:
+     ```
+     https://<cloud-run-url>/v1/notification-channels/slack/oauth/callback
+     ```
+2. アプリの **Client ID / Client Secret** を Secret Manager へ登録し、Cloud Run へ注入する
+   （シークレットはファイル渡し = チャット・シェル履歴に残さない）:
+   ```bash
+   SERVICE=akebono-office-api
+   printf '%s' '<client-id>' | gcloud secrets create $SERVICE-slack-client-id --data-file=-
+   gcloud secrets create $SERVICE-slack-client-secret --data-file=./slack-client-secret.txt
+   gcloud run services update $SERVICE --region asia-northeast1 \
+     --update-secrets "SLACK_CLIENT_ID=$SERVICE-slack-client-id:latest,SLACK_CLIENT_SECRET=$SERVICE-slack-client-secret:latest"
+   ```
+   > **再デプロイ時の注意:** deploy ワークフローは `--set-env-vars` / `--set-secrets` で環境変数・secrets を
+   > **置き換える**ため、CI からの再デプロイ後は上記の `gcloud run services update` を再実行して再注入する
+   > （§1-7 の `CRON_SECRET` と同じ運用上の注意）。
+3. `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` 未設定の間、Slack 連携は自動的に無効
+   （AKO-NCH-001 = `/profile` の連携ボタンが非活性）でその他の機能に影響しない。連携解除は `/profile` の
+   「連携を解除」から（行の物理削除 + 再連携でいつでも再開 = 原則9.5）
+
+### Google Chat 連携の有効化
+
+Google Chat は **§1-9 と同じ OAuth クライアント（`GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET`）を
+再利用**するため追加の secrets は不要（同意時にスコープ `chat.spaces.readonly`〔DM スペース解決〕+
+`chat.messages.create`〔送信〕+ `openid email`〔members.email との突合〕を要求する。カレンダーとは別の同意・別トークン）。
+
+1. OAuth クライアントの「承認済みのリダイレクト URI」に**通知連携用のコールバックパスを追加**する
+   （§1-9 のカレンダー用・§1-9b のメディア用・§1-9c のシート用 URI とは別に 1 行必要）:
+   ```
+   https://<cloud-run-url>/v1/notification-channels/google_chat/oauth/callback
+   ```
+2. GCP プロジェクトで **Google Chat API を有効化**する:
+   ```bash
+   gcloud services enable chat.googleapis.com --project <project-id>
+   ```
+   OAuth のトークン交換は Chat API 無効でも成功するため、「連携はできるがテスト送信・DM 配信が失敗する」
+   場合はまずこの有効化を確認する（カレンダーの §4 トラブルシュートと同じ構図。テスト送信の
+   エラーメッセージにも有効化の確認を案内する = AKO-NCH-004）
+
+配信はマトリクス（`/profile` の「通知の配信先」）で ON のチャネルのみ・fire-and-forget（外部障害が主要フローを
+止めない）。トークン失効（401 等）は `reauth_required` へ遷移し本人へ再連携を催促する（連携し直せば復帰）。
 
 ## 2. 日常デプロイ（開発者）
 

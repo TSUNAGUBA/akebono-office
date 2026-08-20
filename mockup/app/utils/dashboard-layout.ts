@@ -47,6 +47,13 @@ export interface DashboardLayoutOptions {
   notificationsInherit?: boolean
   /** AKEBONO 業務（業態別）セクションを表示するか（実表示は権限・業態数と AND で判定） */
   showAkebono: boolean
+  /**
+   * セクション「その他」（どのセクションにも配置していないメニューの自動セクション）を表示するか
+   * （改修依頼 2026-08-20）。未定義 or true = 表示（既存保存値・テンプレートは未定義 = 従来挙動 = 原則7）
+   * / false = 非表示（未配置メニューはトップに出さない）。永続化は notificationsInherit と同じ流儀で
+   * **false のときだけ書く**（normalizeOptions が非 false を落とす = 既定値を層に凍結しない）。
+   */
+  showOther?: boolean
   /** カード密度（任意。余白の調整のみ） */
   density: LayoutDensity
 }
@@ -361,6 +368,8 @@ function normalizeOptions(raw: unknown): DashboardLayoutOptions {
   }
   // 分離後の保存レイアウトの「配置はキーへ委譲」マーカー（未定義 = 分離前の保存値 = 立てない。原則7）
   if (rec.notificationsInherit === true) options.notificationsInherit = true
+  // 「その他」の非表示は false のときだけ保持する（未定義・true・不正値 = 表示 = キーを書かない。原則7）
+  if (rec.showOther === false) options.showOther = false
   return options
 }
 
@@ -422,8 +431,14 @@ export function resolveDashboardLayout(inputs: {
 /**
  * カード一覧をセクションごとにグループ化する（カード側のフィルタ = 権限・トグルは呼び出し側で適用済み）。
  * 未割当カードは「その他」へ。空セクションは落とす。useMenuCategories.categorize と同一ロジック（原則3）。
+ * opts.includeOther=false（ダッシュボードの options.showOther=false 時。改修依頼 2026-08-20）は「その他」を付けず
+ * 未割当カードを表示対象から外す。省略・true = 従来挙動（既存呼び出し = マスタハブ等に影響しない）。
  */
-export function categorizeCards(cards: MenuCard[], sections: MenuCategoryDef[]): CategorizedCards[] {
+export function categorizeCards(
+  cards: MenuCard[],
+  sections: MenuCategoryDef[],
+  opts?: { includeOther?: boolean },
+): CategorizedCards[] {
   const byId = new Map(cards.map(c => [String(c.id), c]))
   const assigned = new Set<string>()
   const groups: CategorizedCards[] = []
@@ -432,8 +447,10 @@ export function categorizeCards(cards: MenuCard[], sections: MenuCategoryDef[]):
     for (const c of catCards) assigned.add(String(c.id))
     if (catCards.length > 0) groups.push({ id: cat.id, label: cat.label, cards: catCards })
   }
-  const rest = cards.filter(c => !assigned.has(String(c.id)))
-  if (rest.length > 0) groups.push({ id: OTHER_CATEGORY_ID, label: OTHER_CATEGORY_LABEL, cards: rest })
+  if (opts?.includeOther !== false) {
+    const rest = cards.filter(c => !assigned.has(String(c.id)))
+    if (rest.length > 0) groups.push({ id: OTHER_CATEGORY_ID, label: OTHER_CATEGORY_LABEL, cards: rest })
+  }
   return groups
 }
 

@@ -2,7 +2,8 @@
 # バッチ6b フルスタック E2E ランナー（旧セッションの run-batch2a-stack.sh を再構築）。
 # 使い捨て PostgreSQL + API（dev 認証・:8788）+ API モード静的配信（:4174）+ モック静的配信（:4173）で
 # E2E スイート（batch6b-e2e.cjs）とモック回帰（mock-regression-e2e.cjs）を実行する。
-# 新バッチの E2E は batchXX-e2e.cjs を追加し、末尾の SUITES に 1 行追記する。
+# 新バッチの E2E: API モードのスイートは末尾の SUITES に、モックモードのスイートは
+# run-mock-stack.sh の MOCK_SUITES に 1 行追記する（モック一覧の SoT は run-mock-stack.sh。2026-08-20）。
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 # リポジトリ直下の e2e/ に置かれる前提で親ディレクトリを既定にする（REPO 環境変数で上書き可）
@@ -107,16 +108,7 @@ for s in "${SUITES[@]}"; do
   (cd "$HERE" && BASE="http://127.0.0.1:$API_STATIC_PORT" node "$s")
 done
 
-echo "==> モック回帰"
-(cd "$HERE" && BASE="http://127.0.0.1:$MOCK_STATIC_PORT" node mock-regression-e2e.cjs)
-
-echo "==> 活動記録 3 ページ + 顧客活動 + ページング（改修依頼 2026-08-18・モックモード）"
-(cd "$HERE" && BASE="http://127.0.0.1:$MOCK_STATIC_PORT" node activity-pages-e2e.cjs)
-
-echo "==> 第 2 弾 8 件（対応中・プロンプト・権限拡張・稟議区分・受付箱添付ほか。改修依頼 2026-08-18・モックモード）"
-(cd "$HERE" && BASE="http://127.0.0.1:$MOCK_STATIC_PORT" node batch2-e2e.cjs)
-
-echo "==> 第 3 弾 9 件（プロンプトのコメント反映/タグ除外・要望編集拡張・受付箱列順・日報週報の各改善。改修依頼 2026-08-19・モックモード）"
-(cd "$HERE" && BASE="http://127.0.0.1:$MOCK_STATIC_PORT" node batch3-e2e.cjs)
+echo "==> モックモード スイート（一覧の SoT = run-mock-stack.sh の MOCK_SUITES。改修依頼 2026-08-20 で一本化）"
+BASE="http://127.0.0.1:$MOCK_STATIC_PORT" "$HERE/run-mock-stack.sh"
 
 echo "==> 全スイート green"

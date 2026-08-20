@@ -34,6 +34,7 @@ export const FEATURE_PERMISSION_KEYS: { key: string; label: string }[] = [
   { key: 'poipoi', label: '改善のタネ' },
   { key: 'minutes', label: '議事録' },
   { key: 'customer-log', label: '顧客活動' },
+  { key: 'customer-context', label: '顧客コンテキスト' },
   { key: 'support-activity', label: 'サポート活動' },
   { key: 'sales-activity', label: '営業活動' },
   { key: 'partner-activity', label: 'ビジネスパートナー活動' },
@@ -63,7 +64,7 @@ export function featureKeyOfPath(pathWithQuery: string): string | null {
   const known = [
     'timecard', 'attendance', 'shift', 'reports', 'ai-assistant', 'workflow', 'decision', 'ai-company',
     'akebono', 'support', 'sales', 'status', 'inbox', 'masters', 'settings', 'poipoi', 'minutes', 'customer-log',
-    'improvements', 'support-activity', 'sales-activity', 'partner-activity',
+    'customer-context', 'improvements', 'support-activity', 'sales-activity', 'partner-activity',
   ]
   return known.includes(seg) ? seg : null
 }

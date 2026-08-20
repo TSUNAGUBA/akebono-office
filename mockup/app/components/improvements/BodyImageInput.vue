@@ -6,10 +6,12 @@
  * 従来の独立した画像添付フォーム（ドロップゾーン + 「画像を追加」ボタン）は廃止し、この一体型に統合した。
  * 投稿フォーム（ImprovementSubmit）と要望編集（ImprovementsRequestEditForm）で共用する（原則3）。
  *
- * 本文は v-model、画像は v-model:images、画像処理中は v-model:busy で親と同期する。文字数カウンタ・
+ * 本文は v-model、画像は v-model:images、画像処理中/AI整形中は v-model:busy で親と同期する。文字数カウンタ・
  * 上限チェックは親が担う（textarea は maxlength を使わず = 絵文字等のコードポイント数え違いを避ける）。
+ * ツールバーの「AIで整形」（useTextAssist = 改修依頼 2026-08-20）は本文を読みやすく整形し、
+ * 直後は「整形前に戻す」で取り消せる（再編集したら undo は破棄 = 原則9.5）。
  */
-import { ImagePlus, X } from 'lucide-vue-next'
+import { ImagePlus, Loader2, Undo2, Wand2, X } from 'lucide-vue-next'
 import {
   IMPROVEMENT_IMAGE_MAX_CHARS, IMPROVEMENT_IMAGES_MAX,
   type ImprovementRequestImage,
@@ -36,9 +38,11 @@ const props = withDefaults(defineProps<{
   /** 画像の添付を許可するか（既定 true）。API モードで既存画像の遅延ロードに失敗した編集では false =
    *  画像 UI を隠し現行添付を保持する（追加の無言喪失を防ぐ = レビュー R2 の踏襲） */
   imagesEditable?: boolean
+  /** 「AIで整形」ボタンを出すか（既定 true。入力サポートの汎用型 = 改修依頼 2026-08-20） */
+  aiAssist?: boolean
   /** window レベルのドロップ抑止を有効にするか（表示中のみ true。既定 true） */
   active?: boolean
-}>(), { rows: 5, placeholder: '', bodyAriaLabel: '要望の内容', imagesEditable: true, active: true })
+}>(), { rows: 5, placeholder: '', bodyAriaLabel: '要望の内容', imagesEditable: true, aiAssist: true, active: true })
 
 const emit = defineEmits<{
   'update:modelValue': [v: string]
@@ -48,11 +52,62 @@ const emit = defineEmits<{
 }>()
 
 const { show: showToast } = useToast()
+const { formatText } = useTextAssist()
 
 const imageBusy = ref(false)
 const imageInput = ref<HTMLInputElement | null>(null)
 const dragActive = ref(false)
-watch(imageBusy, v => emit('update:busy', v))
+
+// ---------- 「AIで整形」（入力サポートの汎用型 = 改修依頼 2026-08-20） ----------
+
+const aiBusy = ref(false)
+// 画像処理中 or AI 整形中は親の送信/保存を止める（整形結果の反映前に確定させない）
+watch([imageBusy, aiBusy], ([img, ai]) => emit('update:busy', img || ai))
+/** 整形直前のテキスト（≠null = 「整形前に戻す」を表示。原則9.5 の取消フロー） */
+const undoSource = ref<string | null>(null)
+/** 整形で反映したテキスト（modelValue がこれ以外へ変わったら = 再編集されたら undo を破棄） */
+const formattedResult = ref('')
+
+watch(() => props.modelValue, (v) => {
+  if (undoSource.value !== null && v !== formattedResult.value) undoSource.value = null
+})
+
+/** AI で整形（mock = 決定的ヒューリスティック即時 / API = /v1/assist/format-text）。整形前を保持して戻せる */
+async function runAiFormat(): Promise<void> {
+  if (aiBusy.value) return
+  const current = props.modelValue
+  if (!current.trim()) {
+    showToast('整形するテキストを入力してください', 'info')
+    return
+  }
+  aiBusy.value = true
+  try {
+    const res = await formatText(current)
+    if (!res.ok) {
+      showToast(`${res.error.code}: ${res.error.message}`, 'crit')
+      return
+    }
+    if (res.text === current) {
+      showToast('整形の必要はありませんでした（変更なし）', 'info')
+      return
+    }
+    undoSource.value = current
+    formattedResult.value = res.text
+    emit('update:modelValue', res.text)
+    showToast(`AIで整形しました（${res.llm ? 'LLM' : 'ルールベース'}）`, 'ok')
+  } finally {
+    aiBusy.value = false
+  }
+}
+
+/** 整形前に戻す（整形後に再編集していない間だけ有効 = watch が破棄する） */
+function undoAiFormat(): void {
+  if (undoSource.value === null) return
+  const prev = undoSource.value
+  undoSource.value = null
+  emit('update:modelValue', prev)
+  showToast('整形前に戻しました', 'ok')
+}
 
 /** 画像ファイル群を縮小して添付する（+ ボタン・貼り付け・ドロップの共通経路 = 原則3） */
 async function addImageFiles(files: File[]): Promise<void> {
@@ -170,8 +225,12 @@ onBeforeUnmount(() => {
     <!-- 本文と画像添付ツールバーを 1 つの枠に見せる（Claude ライク）。ツールバーはテキストエリアの「下」に別要素として
          積むため、テキストが長くスクロールしてもボタン・ヒントに文字が重ならない（改修依頼 2026-08-20。
          従来の absolute 重ね + pb-11 は、途中までスクロールした際に下端の行がボタンに重なる問題があった）。 -->
+    <!-- フォーカス表現は外枠（グレー枠）の強調に一元化する（改修依頼 2026-08-20: 二重フォーカス枠の解消）。
+         従来の focus-within:outline は、textarea 自身の :focus-visible 既定リング（main.css）と重なって
+         枠が二重に見えた。外枠は border-brand + ring-1（.input のフォーカスと同じ brand トークン）で強調し、
+         textarea 側のリングは scoped CSS で消す（内包ボタンの focus-visible リングは維持 = a11y） -->
     <div
-      class="rounded-[var(--radius-ctl)] border bg-surface transition-shadow focus-within:outline focus-within:outline-2 focus-within:-outline-offset-1 focus-within:outline-brand"
+      class="rounded-[var(--radius-ctl)] border bg-surface transition-shadow focus-within:border-brand focus-within:ring-1 focus-within:ring-brand"
       :class="dragActive ? 'border-brand ring-2 ring-brand' : 'border-line-strong'"
       @dragover.prevent="dragActive = imagesEditable"
       @dragleave="dragActive = false"
@@ -186,9 +245,10 @@ onBeforeUnmount(() => {
         @input="emit('update:modelValue', ($event.target as HTMLTextAreaElement).value)"
         @paste="onPaste"
       />
-      <!-- 枠内下部の画像添付ツールバー（テキストエリアの外＝下に積む。テキストと重ならない） -->
-      <div v-if="imagesEditable" class="flex flex-wrap items-center gap-x-2 gap-y-1 px-2 pb-2">
+      <!-- 枠内下部のツールバー（画像添付 + AIで整形。テキストエリアの外＝下に積む。テキストと重ならない） -->
+      <div v-if="imagesEditable || aiAssist" class="flex flex-wrap items-center gap-x-2 gap-y-1 px-2 pb-2">
         <button
+          v-if="imagesEditable"
           type="button"
           class="btn btn-ghost btn-sm"
           :disabled="imageBusy || images.length >= IMPROVEMENT_IMAGES_MAX"
@@ -198,7 +258,31 @@ onBeforeUnmount(() => {
           <ImagePlus class="h-4 w-4" aria-hidden="true" />
           <span class="text-[12px]">{{ imageBusy ? '読込中…' : '画像' }}</span>
         </button>
-        <span class="text-[11px] text-muted">貼り付け（Ctrl+V / ⌘V）でも添付できます</span>
+        <!-- AIで整形（LLM → ルールベースのフォールバック）。整形直後は「整形前に戻す」で取り消せる（原則9.5） -->
+        <button
+          v-if="aiAssist"
+          type="button"
+          class="btn btn-ghost btn-sm"
+          :disabled="aiBusy || !modelValue.trim()"
+          aria-label="本文を AI で整形"
+          @click="runAiFormat"
+        >
+          <Loader2 v-if="aiBusy" class="h-4 w-4 animate-spin" aria-hidden="true" />
+          <Wand2 v-else class="h-4 w-4" aria-hidden="true" />
+          <span class="text-[12px]">{{ aiBusy ? '整形中…' : 'AIで整形' }}</span>
+        </button>
+        <button
+          v-if="aiAssist && undoSource !== null"
+          type="button"
+          class="btn btn-ghost btn-sm"
+          :disabled="aiBusy"
+          aria-label="AI 整形前のテキストに戻す"
+          @click="undoAiFormat"
+        >
+          <Undo2 class="h-4 w-4" aria-hidden="true" />
+          <span class="text-[12px]">整形前に戻す</span>
+        </button>
+        <span v-if="imagesEditable" class="text-[11px] text-muted">貼り付け（Ctrl+V / ⌘V）でも添付できます</span>
       </div>
       <input
         ref="imageInput"
@@ -238,3 +322,13 @@ onBeforeUnmount(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+/* 二重フォーカス枠の解消（改修依頼 2026-08-20）: フォーカス表現は外枠 div（focus-within の
+   border/ring 強調）に一元化する。main.css の既定 :focus-visible リングは unlayered で
+   Tailwind ユーティリティ（focus-visible:outline-none）より強いため、scoped CSS で textarea 側を消す。
+   内包ボタン類（画像/AIで整形）の keyboard focus-visible リングはそのまま維持する（a11y） */
+textarea:focus-visible {
+  outline: none;
+}
+</style>

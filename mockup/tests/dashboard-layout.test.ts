@@ -4,6 +4,7 @@
  * - 壊れた JSON・不正構造の 1 段フォールバック（表示を壊さない）
  * - categorize（未割当 → その他・空セクション除去。useMenuCategories と共有）
  * - テンプレート定義の健全性（全 cardId が MENU_CARDS.dashboard に存在・focus は全カード等）
+ * - セクション「その他」の表示/非表示（options.showOther / categorizeCards の includeOther。改修依頼 2026-08-20）
  */
 import { describe, expect, it } from 'vitest'
 import type { MenuCard } from '~/types/ui'
@@ -682,5 +683,95 @@ describe('テンプレート説明の分離整合（通知位置の記述を持�
       if (t.id === 'notify-first') continue
       expect(t.description).not.toMatch(/通知は/)
     }
+  })
+})
+
+// ---------- 2026-08-20: セクション「その他」の表示/非表示（showOther） ----------
+
+describe('categorizeCards — includeOther オプション（「その他」の表示/非表示。改修依頼 2026-08-20）', () => {
+  const cards = [card('a'), card('b'), card('c')]
+  const sections = [{ id: 's1', label: 'S1', cardIds: ['a'] }]
+
+  it('includeOther=false は「その他」を付けない（未配置カードは表示対象から外す）', () => {
+    const groups = categorizeCards(cards, sections, { includeOther: false })
+    expect(groups.map(g => g.id)).toEqual(['s1'])
+    expect(groups.some(g => g.id === OTHER_CATEGORY_ID)).toBe(false)
+  })
+
+  it('省略・includeOther=true は従来どおり「その他」へ（既存呼び出し = useMenuCategories に影響しない）', () => {
+    for (const groups of [
+      categorizeCards(cards, sections),
+      categorizeCards(cards, sections, { includeOther: true }),
+      categorizeCards(cards, sections, {}),
+    ]) {
+      const other = groups.find(g => g.id === OTHER_CATEGORY_ID)
+      expect(other?.label).toBe(OTHER_CATEGORY_LABEL)
+      expect(other?.cards.map(c => c.id)).toEqual(['b', 'c'])
+    }
+  })
+
+  it('includeOther=false でも割当済みセクションの順序・空セクション除去は不変', () => {
+    const groups = categorizeCards(cards, [
+      { id: 'empty', label: 'Empty', cardIds: ['zzz'] },
+      { id: 's1', label: 'S1', cardIds: ['b', 'a'] },
+    ], { includeOther: false })
+    expect(groups.map(g => g.id)).toEqual(['s1'])
+    expect(groups[0]?.cards.map(c => c.id)).toEqual(['b', 'a'])
+  })
+
+  it('全カード未配置 + includeOther=false は空配列（呼び出し側 index.vue が空状態を描画する）', () => {
+    expect(categorizeCards(cards, [], { includeOther: false })).toEqual([])
+  })
+})
+
+describe('options.showOther の永続化（false のときだけ書く = 原則7。改修依頼 2026-08-20）', () => {
+  const layoutJson = (options: Record<string, unknown>): string =>
+    JSON.stringify({ sections: [], options })
+
+  it('showOther:false はパース → 保存（JSON）→ 再パースのラウンドトリップで保持される', () => {
+    const parsed = parseDashboardLayout(layoutJson({
+      notifications: 'side', showAkebono: true, density: 'comfortable', showOther: false,
+    }))!
+    expect(parsed.options.showOther).toBe(false)
+    // normalizeOptions が未知フィールドとして落とさない（落とすと保存のたびに設定が消える）
+    const reparsed = parseDashboardLayout(JSON.stringify(parsed))!
+    expect(reparsed.options.showOther).toBe(false)
+  })
+
+  it('showOther:true・欠落・不正値はキー自体を書かない（未定義 = 表示）', () => {
+    expect(parseDashboardLayout(layoutJson({ showOther: true }))!.options).not.toHaveProperty('showOther')
+    expect(parseDashboardLayout(layoutJson({}))!.options).not.toHaveProperty('showOther')
+    expect(parseDashboardLayout(layoutJson({ showOther: 'no' }))!.options).not.toHaveProperty('showOther')
+  })
+
+  it('テンプレート・アプリ既定の options は showOther を持たない（未定義 = 表示 = 従来挙動）', () => {
+    expect(DEFAULT_LAYOUT_OPTIONS).not.toHaveProperty('showOther')
+    for (const t of DASHBOARD_TEMPLATES) {
+      expect(t.layout.options, t.id).not.toHaveProperty('showOther')
+    }
+  })
+
+  it('resolveDashboardLayout: showOther の無い既存保存値（レガシー）は従来どおり解決される（原則7）', () => {
+    // 既存のユーザー層・テナント層・従来 menu-categories のいずれも showOther 無し = 表示（挙動不変）
+    const r1 = resolveDashboardLayout({ userRaw: VALID_USER_LAYOUT })
+    expect(r1.scope).toBe('user')
+    expect(r1.layout.options.showOther).toBeUndefined()
+    const r2 = resolveDashboardLayout({ tenantRaw: VALID_TENANT_LAYOUT })
+    expect(r2.scope).toBe('tenant')
+    expect(r2.layout.options.showOther).toBeUndefined()
+    const r3 = resolveDashboardLayout({ legacyCategoriesRaw: LEGACY_CATEGORIES })
+    expect(r3.scope).toBe('tenant')
+    expect(r3.layout.options.showOther).toBeUndefined()
+  })
+
+  it('showOther:false の保存値は解決・配置差し替えを経ても false を保つ', () => {
+    const saved = buildCustomLayout(
+      [{ id: 's1', label: 'S1', cardIds: ['sales'] }],
+      { ...DEFAULT_LAYOUT_OPTIONS, showOther: false },
+    )
+    const r = resolveDashboardLayout({ userRaw: JSON.stringify(saved) })
+    expect(r.layout.options.showOther).toBe(false)
+    // effectiveLayout は配置キー適用で withNotificationPlacement を通る（showOther の見た目が配置変更で戻らない）
+    expect(withNotificationPlacement(r.layout, 'top').options.showOther).toBe(false)
   })
 })

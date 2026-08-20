@@ -24,7 +24,7 @@ cd e2e && npm ci
   実行する。**同一ホストで無関係な tsx プロセスを動かしている場合は注意**（専用環境での実行を推奨）
 
 - API スイート（batch6b/6c/6d/chatbot-multiturn/team-visibility）は `:4174`（API モード静的配信）に対して実行
-- モック回帰（mock-regression-e2e.cjs）は `:4173`（モックモード静的配信）に対して実行
+- モックモードのスイート（`run-mock-stack.sh` の `MOCK_SUITES` 全件）は `:4173`（モックモード静的配信）に対して実行
 - `perm-combobox-e2e.cjs` は権限設定 UI の単発スイート。スタック起動中に
   `BASE=http://127.0.0.1:4174 node perm-combobox-e2e.cjs` で個別実行できる
 - スタックを残して手動確認したい場合は `./keep-stack.sh`
@@ -44,5 +44,17 @@ SKIP_BUILD=1 ./run-new-apps-mock.sh   # ビルド済み .output/public を再利
 
 ## 新バッチのスイート追加
 
-`batchXX-e2e.cjs` を追加し、`run-batch6b-stack.sh` 末尾の `SUITES` に 1 行追記する
-（`lib.cjs` の `check/withPage/summary` を利用。失敗があれば exit 1 でランナーが止まる）。
+`batchXX-e2e.cjs` を追加し（`lib.cjs` の `check/withPage/summary` を利用。失敗があれば exit 1 でランナーが止まる）、
+実行モードに応じて登録する（2026-08-20 改修で一覧を分離）:
+
+- **API モードのスイート** → `run-batch6b-stack.sh` の `SUITES` に 1 行追記
+- **モックモードのスイート** → `run-mock-stack.sh` の `MOCK_SUITES` に 1 行追記（一覧の SoT。
+  フルスタックランナーと PR テストゲートの両方がこの一覧を使う）
+
+## PR テストゲート（CI）
+
+`.github/workflows/test-gate.yml` が PR ごとに 単体+typecheck / 結合（実 PostgreSQL）/
+ビルド検証 / **モックモード E2E（`run-mock-stack.sh`）** を実行する。従来の deploy.yml の
+ゲート（main への push 後）より前倒しで、登録フロー等の実クリック回帰をマージ前に検知する。
+モックモード E2E は DB 不要（`nuxt generate` + 静的配信のみ）なので単独でも
+`bash e2e/run-mock-stack.sh` でローカル実行できる。

@@ -93,8 +93,13 @@ const visibleCards = computed<MenuCard[]>(() => cardPlan.value.pool)
 // 専用「AKEBONO 業務（業態別）」セクションが担当する未割当業態 id（割当済み業態はセクション配置側で表示）
 const unassignedAkebonoIds = computed(() => cardPlan.value.unassignedAkebonoSegmentIds)
 
-// レイアウトのセクション構成でグループ化（未割当カードは「その他」・空セクションは除去）
-const menuSections = computed(() => categorizeCards(visibleCards.value, effectiveLayout.value.sections))
+// レイアウトのセクション構成でグループ化（未割当カードは「その他」・空セクションは除去）。
+// options.showOther=false（改修依頼 2026-08-20）のときは「その他」を出さない = 未配置メニューはトップに表示しない
+const menuSections = computed(() => categorizeCards(
+  visibleCards.value,
+  effectiveLayout.value.sections,
+  { includeOther: effectiveLayout.value.options.showOther !== false },
+))
 
 // カテゴリチップ（選択はページごとに sessionStorage 記憶 = 軽い状態。アカウント設定ではない）
 const selectedCategory = ref('all')
@@ -167,11 +172,27 @@ const shownSections = computed(() =>
 
         <!-- カード型メニュー（カテゴリチップで絞り込み） -->
         <section class="grid gap-3" aria-label="メニュー">
-          <UiChipTabs v-model="selectedCategory" :options="categoryChips" aria-label="メニューカテゴリ" />
-          <div v-for="sec in shownSections" :key="sec.id">
-            <p class="mb-1.5 text-[11px] font-bold text-muted">{{ sec.label }}</p>
-            <UiCardMenu :items="sec.cards" :dense="dense" />
-          </div>
+          <template v-if="menuSections.length > 0">
+            <UiChipTabs v-model="selectedCategory" :options="categoryChips" aria-label="メニューカテゴリ" />
+            <div v-for="sec in shownSections" :key="sec.id">
+              <p class="mb-1.5 text-[11px] font-bold text-muted">{{ sec.label }}</p>
+              <UiCardMenu :items="sec.cards" :dense="dense" />
+            </div>
+          </template>
+          <!-- 全メニュー未配置 + 「その他」非表示 = 出せるセクションがゼロ。無言にせず空状態で案内する（X-1） -->
+          <UiEmptyState
+            v-else
+            icon="LayoutGrid"
+            title="表示するメニューがありません"
+            hint="レイアウト設定でメニューをセクションに配置するか、セクション「その他」の表示をオンにしてください"
+          >
+            <template #action>
+              <button type="button" class="btn btn-sm" @click="layoutOpen = true">
+                <LayoutTemplate class="h-3.5 w-3.5" aria-hidden="true" />
+                レイアウト設定を開く
+              </button>
+            </template>
+          </UiEmptyState>
         </section>
 
         <!-- 通知欄（bottom = PC のみメニュー下に全幅配置。モバイルはベル/下部ナビ「通知」が導線） -->

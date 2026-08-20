@@ -14,7 +14,8 @@
  * API ルート/マイグレーションの新規追加は不要（既存の汎用 key/value を利用）。
  */
 import type {
-  DashboardLayout, DashboardScope, DashboardTemplate, NotificationPlacement, SectionFavorite,
+  DashboardLayout, DashboardLayoutOptions, DashboardScope, DashboardTemplate,
+  NotificationPlacement, SectionFavorite,
 } from '~/utils/dashboard-layout'
 import {
   buildCustomLayout, DASHBOARD_TEMPLATES, DEFAULT_LAYOUT_OPTIONS, layoutFromLegacyCategories,
@@ -226,6 +227,9 @@ export function useDashboardLayout() {
     const persisted = persistedPlacementOf(scope)
     const layout = withNotificationPlacement(materializeLayout(templateId), persisted.placement)
     if (persisted.inherit) layout.options.notificationsInherit = true
+    // セクション「その他」の非表示は層の明示選択として温存する（通知配置と同じ規約 = テンプレートは
+    // セクション構成の差し替えであって表示オプションの取消ではない。戻すのは解除 or トグル操作。レビュー R1）
+    if (baseLayoutForScope(scope).options.showOther === false) layout.options.showOther = false
     return persistLayout(layout, scope)
   }
 
@@ -295,9 +299,14 @@ export function useDashboardLayout() {
    * options（通知位置・AKEBONO 表示・密度）は「保存先スコープ自身」の設定を維持したまま sections だけ
    * 差し替える。effectiveLayout（解決結果）の options を使うと、管理者が全社を編集した際に自分の user 設定の
    * options がテナントへ漏れる（レビュー MAJOR）ため baseLayoutForScope で層ごとに土台を取る。
+   * optionsPatch = セクションと同時に保存する表示オプションの部分更新（セクション設定の「その他」トグル等。
+   * 改修依頼 2026-08-20）。土台 options の上へマージする。通知の配置は本パッチでは変更できない（notifications /
+   * notificationsInherit は persistedPlacementOf の結果が常に上書きする = 配置は専用キーの担当のまま）。
    * templateId は 'custom'（テンプレート由来ではない手動編集）。保存経路は applyTemplate と同一（原則3）。
    */
-  async function saveSections(sections: MenuCategoryDef[], scope: ApplyScope): Promise<{ ok: boolean }> {
+  async function saveSections(
+    sections: MenuCategoryDef[], scope: ApplyScope, optionsPatch?: Partial<DashboardLayoutOptions>,
+  ): Promise<{ ok: boolean }> {
     // options は保存先層自身の土台から取りつつ、通知配置は保存先層の現行有効値を維持する
     // （baseLayoutForScope のフォールバック値をそのまま書くと、配置キーで変えた見た目が
     // セクション保存で巻き戻る = レビュー R3。placementForPersist が層分離も担保）。
@@ -305,10 +314,14 @@ export function useDashboardLayout() {
     const persisted = persistedPlacementOf(scope)
     const options: DashboardLayout['options'] = {
       ...baseLayoutForScope(scope).options,
+      ...optionsPatch,
       notifications: persisted.placement,
     }
     if (persisted.inherit) options.notificationsInherit = true
     else delete options.notificationsInherit
+    // showOther は「false のときだけ書く」永続形式（原則7 = normalizeOptions と同じ規約）。
+    // パッチで true（表示 = 既定）へ戻したときはキー自体を消す = 既定値を層に凍結しない
+    if (options.showOther !== false) delete options.showOther
     return persistLayout(buildCustomLayout(sections, options), scope)
   }
 

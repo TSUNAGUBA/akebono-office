@@ -155,7 +155,7 @@ export function useMediaInsight() {
     if (isApi) {
       // サーバーが GA からメトリクスを組み立て、外部投稿記事を材料に、LLM → ヒューリスティックで洞察を生成・保管する
       const row = await apiFetch<ApiInsightRow>('/v1/media/insights/generate', {
-        method: 'POST', body: { channelId, scope: 'media' },
+        method: 'POST', body: { channelId, scope: 'media' }, timeoutMs: 60_000,
       })
       apiInsights.value = { ...apiInsights.value, [`${channelId}:media`]: row }
       return apiViewOf<MediaInsightView>(row)
@@ -198,7 +198,7 @@ export function useMediaInsight() {
           { code: 'AKO-MEDIA-004' })
       }
       const row = await apiFetch<ApiInsightRow>('/v1/media/insights/generate', {
-        method: 'POST', body: { channelId, scope: 'integrated', months: 6 },
+        method: 'POST', body: { channelId, scope: 'integrated', months: 6 }, timeoutMs: 60_000,
       })
       apiInsights.value = { ...apiInsights.value, [`${channelId}:integrated`]: row }
       return apiViewOf<IntegratedInsightView>(row)

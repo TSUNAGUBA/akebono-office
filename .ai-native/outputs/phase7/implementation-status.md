@@ -3706,3 +3706,95 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
 - [x] R3 = R2 反映（コミット b97ac7d）の収束確認。save() ロールバックの loadedForUser ガード整合・
   findings 文言の SoT 導出の決定性・記録と実測（typecheck / vitest 12+11 実走 green・E2E 20+20 チェック数照合）の
   一致・R2 指摘 6 件の反映漏れゼロを確認し、**新規・未解消の指摘 0 件 = converged（原則9 = SP-8 完了）**。
+
+## 92. 改修依頼 2026-08-20（9 改修単位 = 顧客関係グラフ/営業・BP活動再編/週報マトリクス/BP項目/顧客コンテキスト/日報リマインド/通知連携/その他トグル/改善要望4改修）の完了条件（Definition of Done）
+
+対象: mockup（Nuxt 4 SPA）+ api（Hono/PostgreSQL）+ shared/domain の全レイヤー。マイグレーション 0073〜0076。
+
+### 92-1 顧客関係(会社)のノードグラフ化（#1）
+- [x] `WidgetsRelationGraph` を円環配置から **force-directed（バブル + 線）** へ刷新（顧客関係(会社)/(人) で共用）。
+  ズーム（ホイール/ピンチ/44px ボタン）・パン・バブルドラッグ（物理追従・解放で整定）・クリックで隣接エッジをハイライト。
+- [x] 決定的シミュレーション（`~/utils/rng` シード・Math.random 不使用 = 規約4）。純ロジック SoT = `utils/force-graph.ts`（テスト 20 件）。
+- [x] reduced-motion は同期整定・375px はコンテナ内描画・キーボード操作/aria 維持。
+
+### 92-2 営業活動・BP活動の「案件ヘッダー + 活動ログ」再編 + 登録バグ修正（#2/#4）
+- [x] 既存行 = 案件ヘッダーとして再解釈（データパッチ不要 = 原則7）。活動ログ = 0074 の新テーブル（記録系チーム共有・取消/復元）。
+- [x] 一覧 → 行クリックで案件詳細ページ（`/sales-activity/:id`・`/partner-activity/:id`）。詳細 = 基本情報 → AI集約 → 活動ログ
+  （20件/ページ・活動日降順〔同日は登録降順〕・ログ詳細ドロワー）。ログ CRUD/digest は営業/BP 単一実装（原則3）。
+  ※要望文の「登録日の降順」に対し、既定の主キーは**活動日**（記録日と活動日が乖離しても時系列が保たれる設計判断。
+  活動日の既定 = 当日のため通常運用では両者は一致。functional-requirements F-44-4 と整合）。
+- [x] AI集約 = 時系列昇順走査の決定的ヒューリスティック（SoT = shared/domain/activity）。API は LLM → フォールバック（原則4）。
+- [x] BP: 「概要」→「背景・目的」（ラベルのみ・列名不変）+「取組内容」（initiatives）追加。
+- [x] **登録無反応バグの根本対応**: ①mock 書込の commit() 戻り値検査 + 失敗ロールバック（AKO-SAL/PTN-090）
+  ②全フォームドロワーへ role="alert" のインラインエラー常設（トースト非依存）③apiFetch 既定 15s タイムアウト
+  （LLM 系は 60〜90s へ個別延長 = R1 反映）。
+- [x] **テストゲート強化（担当者メモ）**: PR 時にコード検証が一切走らないギャップを `.github/workflows/test-gate.yml`
+  （単体+typecheck/結合〔実 PostgreSQL〕/ビルド/モック E2E）で解消。孤児化していた improvements6-e2e.cjs をランナーへ登録し、
+  モックスイート一覧の SoT を `e2e/run-mock-stack.sh` に一本化。案件+ログ構造の回帰 E2E（activity-cases-e2e.cjs = 12 チェック）を新設。
+
+### 92-3 週報のメンバー×週マトリクス（#3）
+- [x] weekly-team タブに「複数週まとめて」（既定）/「単週の詳細」切替。直近 4/8/12 週・右端 = 今週・済/下書き(自分)/未のラベル併記。
+- [x] 提出セル → ドロワーで内容確認 + 自動既読 + 「未読に戻す」（原則9.5 = R1 反映で月報側にも追加）。週列 SoT = `utils/report-weeks.ts`。
+
+### 92-4 顧客コンテキストページ新設（#5）
+- [x] トップ層メニュー `/customer-context`: 基本情報（本画面から編集可）・関係・定性情報（0076 = 1社1行 upsert）・
+  定量情報（記録系からのライブ導出 = 保存しない設計判断）・Memo（時系列・取消/復元）。
+- [x] AI リサーチ: 候補リスト化（API = grounded search / mock = 決定的デモ）→ 採用 → AI 構築（フォールバック付き）→ 差分 → 反映。
+  反映前値を research ノート payload.before に保存し「反映を取り消す」で復元（原則9.5・ノートは archive しない = 監査可能）。
+- [x] 権限（customer-context）・メニュー/ナビ/権限カタログ・SEED_VERSION 26 を同時更新（原則6-4）。
+
+### 92-5 日報の自動リマインド（#6）
+- [x] 設定（管理者）: 有効 + 時刻（configs 'report-reminder'）。純ロジック SoT = shared/domain/report-reminder.ts。
+- [x] API = `/jobs/report-reminders`（Cloud Scheduler・共有鍵・**設定時刻 + 日次1回 + advisory lock で冪等** = R1 反映）。
+  前日まで直近 5 営業日（土日除外・祝日非考慮 = 文書化済みの設計判断）の未提出者へ kind 'reminder' で通知。
+- [x] mock = 起動時のデモ簡易版（plugins/report-reminder.client.ts・localStorage 日次デデュープ・非ブロッキング）。
+
+### 92-6 個人別マルチチャネル通知連携（#7）
+- [x] Slack / Google Chat の OAuth 連携（個人設定 = プロフィール。state ノンス・AES-256-GCM 暗号化 = 0075・解除 = 取消フロー）。
+- [x] 通知種別×通知先マトリクス（in_app 既定 ON・未連携列は非活性 + 導線・保存は既定値セル省略の最小形）。
+- [x] 配信エンジン（lib/notify.ts・シグネチャ不変）: fire-and-forget・15s timeout・5xx/429 指数バックオフ・401 → 要再認証 + 催促
+  （in_app fail-open / 外部 fail-closed）。Google Chat は DM 未作成時に spaces.setup フォールバック（R1 反映）。
+- [x] mock パリティ: 本人宛の in_app マトリクス適用（R1 反映。他メンバー宛はデモ制約として文書化）。
+- [x] リアルタイム配信（WebSocket/SSE）は導入せず既存 60 秒ポーリングを維持（設計判断・要件からの意図的乖離として記録)。
+
+### 92-7 ダッシュボード「その他」表示切替（#8）
+- [x] `options.showOther`（false のときのみ永続化 = 原則7）+ セクション設定のトグル + 全メニュー非表示時の空状態導線。
+- [x] テンプレート適用・解除での温存/取消規則を通知配置と同規約に統一（R1 反映）。マスタハブは挙動不変。
+
+### 92-8 改善要望の4改修（#9）
+- [x] AIで整形（POST /v1/assist/format-text = LLM → 決定的整形。**認証済み全員可 = featureGuard 対象外**（R1 反映）。
+  「整形前に戻す」= 原則9.5）。SoT = shared/domain/text-assist.ts。
+- [x] 対応方針ステータス 7 値化（0073。accepted/rejected は保存値不変・ラベルのみ変更 = 原則7。継続検討 = 再検討日必須
+  AKO-REQ-023 + 到来時通知 `/jobs/improvement-revisit-reminders`・mock は同規則のデデュープ = R1 反映）。
+- [x] フォーカス枠: 外枠 border+ring 化 + :focus-visible 既定リングの scoped 打消し（グレー枠の位置にのみ青枠）。
+- [x] タブ再編（受付箱/改修案件 + 一覧/カンバン/ガント切替・旧 ?tab= 読み替え = 原則7・旧権限キーは表示切替ゲートとして存続）。
+  要望カンバン/ガントは案件ステータス軸へ統一・投稿者フィルタ既定 = 自分のみ。
+
+### 92-9 検証（typecheck / テスト / E2E）
+- [x] mockup: nuxt typecheck green・vitest **34 files / 459 tests** green・nuxt generate green。
+- [x] api: tsc green・unit **430** green・**統合 294**（実 PostgreSQL）green・esbuild green。
+- [x] E2E（モックモード・生成ビルドへの実クリック）: **6 スイート / 98 チェック green**
+  （mock-regression 11 / activity-pages 18 / batch2 28 / batch3 17 / improvements6 12 / activity-cases 12）。
+  陳腐化していた既存スペック（/reports 見出し・旧タブ名・週報タブの kind 分割前遷移等）も現行 UI へ追随（CI 未登録ゆえ検知されなかったもの = 本バッチのテストゲート新設で恒久防止）。
+- [x] PR テストゲート（test-gate.yml）は GitHub Actions 上でも全ジョブ成功を確認（run #7）。
+
+### 92-10 反復レビュー（原則9 = SP-8）
+- [x] R1 = 独立 2 ロール（コードレビュアー + システム監査官）の並行レビュー。**CRITICAL 0**。
+  コードレビュアー MAJOR 2（apiFetch 15s タイムアウトの LLM 系回帰・チャット履歴二重化）+ MINOR 4 + NIT 3、
+  監査官 MAJOR 4（運用/機能要件/画面設計/実装ステータスのドキュメント未追随 = 原則5）+ MINOR 3 + NIT 3 → **全件修正**
+  （タイムアウト個別延長・spaces.setup フォールバック・featureGuard 除外・mock マトリクス適用・詳細ページのローディング・
+  リスケ再通知の規則統一・advisory lock・showOther 温存・vertexEnv 解消・月報の未読に戻す・件数/README 追随・CI ログ保全・
+  設計/運用 4 文書の更新）。
+- [x] R2 = R1 修正の独立再検証。R1 修正 13 項目は**全て正しく適用**と確認。新規指摘 = MAJOR 1（同クラスの
+  タイムアウト取りこぼし 3 系統 = タスク計画 AI レビュー / AI社員の依頼登録〔再送で ai_tasks 二重作成の実害〕/
+  状態遷移の同期 LLM）+ MINOR 1（§92-2 の並び順記載）+ NIT 4（ロック解放ガード・接続取得位置・
+  revisit ジョブの完全同時重複・テスト送信の最悪ケース）→ **全件修正**（LLM 同期エンドポイントへ 60〜90s 明示・
+  advisory lock の対称化・記載訂正）。
+- [x] R3 = R2 修正の独立再検証で **指摘ゼロ（converged。原則9 = SP-8 完了）**。全 composables の
+  LLM 同期エンドポイント × クライアントタイムアウトの対応表を全件照合（15 エンドポイント整合・漏れゼロ）。
+  mockup vitest 459 / api unit 430 / 双方 typecheck green を再確認。
+
+### 92-11 残課題（原則9.5 台帳）
+- 通知マトリクスの mock 適用は**本人宛のみ**（localStorage が現在ユーザーの設定しか持てないため。API モードはサーバー側で全宛先に適用 = 本実装が正）。
+- 日報リマインドの営業日判定は**祝日非考慮**（holidays マスタとの連動は将来課題。コード docblock にも明記）。
+- 通知のリアルタイム配信（WebSocket/SSE）は未導入（既存 60 秒ポーリング維持の設計判断）。

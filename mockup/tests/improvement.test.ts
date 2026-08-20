@@ -7,13 +7,16 @@ import { canManageImprovements, type PermissionSubject } from '../../shared/doma
 import type { PermissionRule } from '../../shared/domain/types'
 import {
   buildCodingPrompt, buildUnclusterNoteBody, canTransition, clusterTargetRequests, heuristicClusterRequests,
+  IMPROVEMENT_FILTER_OPTIONS,
   IMPROVEMENT_REQUEST_ADOPTION_META, IMPROVEMENT_REQUEST_TAG_META, IMPROVEMENT_STATUS_META,
+  IMPROVEMENT_STATUSES,
   improvementCommentError, improvementImagesError, improvementLinksError,
   matchesImprovementFilter, normalizeImprovementLinks, normalizeImprovementTags, planAdoptionBulk, PROMPT_NAVIGATOR_PREAMBLE, requestAdoptionOf,
   improvementAdoptionError,
   improvementEditChangedLabel,
   improvementEditError,
   improvementRequestEditFields,
+  improvementRevisitError,
   improvementUnclusterError,
 } from '../../shared/domain/improvement'
 import { fmtDateTimeSec } from '~/utils/format'
@@ -357,6 +360,42 @@ describe('planAdoptionBulk / improvementAdoptionError（受付箱の選別ガー
     const plan = planAdoptionBulk(['c', 'd'], rows)
     expect(plan.applicable).toEqual([])
     expect(plan.lastError).not.toBeNull()
+  })
+})
+
+describe('対応方針の語彙 + 継続検討の再検討日（改修依頼 2026-08-20）', () => {
+  it('カンバン列（IMPROVEMENT_STATUSES）は 7 ステータス・META のラベルが対応方針の語彙になっている', () => {
+    // ImprovementsKanban / RequestKanban はこの配列から列を自動生成する（列の SoT）
+    expect(IMPROVEMENT_STATUSES).toEqual(['triage', 'accepted', 'in_progress', 'operational', 'deferred', 'resolved', 'rejected'])
+    expect(IMPROVEMENT_STATUS_META.accepted.label).toBe('改善対応')
+    expect(IMPROVEMENT_STATUS_META.rejected.label).toBe('対応見送り')
+    expect(IMPROVEMENT_STATUS_META.operational).toMatchObject({ label: '運用対応', tone: 'ok', open: false })
+    expect(IMPROVEMENT_STATUS_META.deferred).toMatchObject({ label: '継続検討', tone: 'info', open: true })
+  })
+  it('遷移: 未判定/改善対応 → 継続検討・継続検討 → 結論（改善対応/運用対応/対応見送り/未判定）', () => {
+    expect(canTransition('triage', 'deferred')).toBe(true)
+    expect(canTransition('triage', 'operational')).toBe(true)
+    expect(canTransition('accepted', 'deferred')).toBe(true)
+    expect(canTransition('deferred', 'accepted')).toBe(true)
+    expect(canTransition('deferred', 'operational')).toBe(true)
+    expect(canTransition('operational', 'accepted')).toBe(true) // 運用判断の見直し（原則9.5）
+    expect(canTransition('deferred', 'resolved')).toBe(false)
+    expect(canTransition('in_progress', 'deferred')).toBe(false) // 着手後は差し戻し（accepted）を経る
+  })
+  it('フィルタ: 継続検討は未解決（open）・運用対応は決着済み。選択肢に新ステータスが含まれる', () => {
+    expect(matchesImprovementFilter('deferred', 'open')).toBe(true)
+    expect(matchesImprovementFilter('operational', 'open')).toBe(false)
+    expect(IMPROVEMENT_FILTER_OPTIONS.map(o => o.value)).toContain('operational')
+    expect(IMPROVEMENT_FILTER_OPTIONS.map(o => o.value)).toContain('deferred')
+    // ラベルは META（SoT）から引かれ、旧語彙（対応する/対応しない）が残らない（原則5）
+    expect(IMPROVEMENT_FILTER_OPTIONS.find(o => o.value === 'accepted')?.label).toBe('改善対応')
+    expect(IMPROVEMENT_FILTER_OPTIONS.find(o => o.value === 'rejected')?.label).toBe('対応見送り')
+  })
+  it('improvementRevisitError: deferred は再検討日必須（実在日）・他ステータスは不要', () => {
+    expect(improvementRevisitError('deferred', '')).not.toBeNull()
+    expect(improvementRevisitError('deferred', '2026-09-01')).toBeNull()
+    expect(improvementRevisitError('deferred', '2026-02-30')).not.toBeNull()
+    expect(improvementRevisitError('accepted', '')).toBeNull()
   })
 })
 
