@@ -51,6 +51,7 @@ import {
   improvementNoteError,
   improvementPlanError,
   improvementRequestEditFields,
+  improvementRevisitError,
   matchesImprovementFilter,
   normalizeImprovementImages,
   normalizeImprovementLinks,
@@ -78,6 +79,9 @@ export function useImprovements() {
   const isApi = useApiMode()
   const { currentUser } = useCurrentUser()
   const { canManageImprovements } = usePermissions()
+  // 再検討日リマインドの通知発行は mock モードのみ（API モードはサーバーの日次ジョブ
+  // runImprovementRevisitReminders が担う = ここでは通知 composable を起動しない）
+  const notifications = isApi ? null : useNotifications()
 
   // API モードの管理データ（includeArchived で取消済みも取得。refresh で更新）。
   // mock モードは tbl（localStorage）をそのまま参照する（リアクティブ）。
@@ -368,22 +372,41 @@ export function useImprovements() {
 
   // ---------- ステータス・編集・取消 ----------
 
-  async function setStatus(id: string, status: ImprovementStatus): Promise<Result> {
+  /**
+   * ステータス変更（状態機械で検証。API ルートと同一判定 = 原則6）。
+   * 継続検討（deferred）への遷移は revisitOn（再検討日 YYYY-MM-DD）が必須（improvementRevisitError）。
+   * deferred 以外への遷移では revisitOn を保持する（クリアしない = 履歴保全）。
+   * deferred → deferred は再検討日の変更（リスケジュール）として受理する（原則9.5 の選び直し導線）。
+   */
+  async function setStatus(id: string, status: ImprovementStatus, revisitOn?: string): Promise<Result> {
+    const revisit = status === 'deferred' ? (revisitOn ?? '').trim() : ''
+    const revisitMsg = improvementRevisitError(status, revisit)
+    if (revisitMsg) return { ok: false, error: { code: 'AKO-REQ-023', message: revisitMsg } }
     if (isApi) {
-      const res = await apiWrite(`/v1/improvements/items/${id}/status`, { body: { status } })
+      const res = await apiWrite(`/v1/improvements/items/${id}/status`, {
+        body: { status, ...(status === 'deferred' ? { revisitOn: revisit } : {}) },
+      })
       if (res.ok) await refresh()
       return res.ok ? { ok: true, id } : res
     }
     const itemsRef = tbl('improvementItems')
     const cur = itemsRef.value.find(it => it.id === id)
     if (!cur) return { ok: false, error: { code: 'AKO-REQ-002', message: '対象の改修単位が見つかりません' } }
-    if (cur.status === status) return { ok: true, id } // 同一ステータスは no-op（再スタンプしない）
-    if (!canTransition(cur.status, status)) {
+    // 同一ステータスは no-op（再スタンプしない）。例外: deferred → deferred は再検討日の変更として通す
+    if (cur.status === status && status !== 'deferred') return { ok: true, id }
+    if (cur.status !== status && !canTransition(cur.status, status)) {
       return { ok: false, error: { code: 'AKO-REQ-006', message: `「${cur.status}」から「${status}」へは変更できません` } }
     }
     const now = nowJstIso()
     itemsRef.value = itemsRef.value.map(it => (it.id === id
-      ? { ...it, status, resolvedAt: status === 'resolved' ? now : null, updatedAt: now }
+      ? {
+          ...it,
+          status,
+          resolvedAt: status === 'resolved' ? now : null,
+          // 再検討日は deferred のときのみ更新（それ以外は保持 = 履歴保全）
+          ...(status === 'deferred' ? { revisitOn: revisit } : {}),
+          updatedAt: now,
+        }
       : it))
     commit()
     return { ok: true, id }
@@ -749,7 +772,7 @@ export function useImprovements() {
 
   // ---------- 時系列メモ（改修方針・保留/見送り理由。AI プロンプトに加味） ----------
 
-  /** メモを追加（kind='note' 既定 / 'reject' = 「対応しない」理由）。改修方針の検討を時系列で残す */
+  /** メモを追加（kind='note' 既定 / 'reject' = 「対応見送り」の理由）。改修方針の検討を時系列で残す */
   async function addNote(itemId: string, body: string, kind: ImprovementNoteKind = 'note'): Promise<Result> {
     const text = (body ?? '').trim()
     const msg = improvementNoteError(text)
@@ -789,6 +812,41 @@ export function useImprovements() {
     notesRef.value = notesRef.value.map(n => (n.id === id ? { ...n, archivedAt: archived ? nowJstIso() : null } : n))
     commit()
     return { ok: true, id }
+  }
+
+  // ---------- 継続検討の再検討日リマインド（改修依頼 2026-08-20。mock モードのみ） ----------
+
+  /**
+   * 再検討日（revisitOn）が到来した継続検討（deferred）の改修単位を管理者へ通知する。
+   * API 版 runImprovementRevisitReminders（日次ジョブ）の mock 相当で、改善要望ページの表示時に呼ぶ。
+   * - 管理者権限（canManageImprovements）のみ・API モードは no-op（サーバーのジョブが担う）。
+   * - 多重通知防止: localStorage に item ごとの直近通知日を持ち、同じ再検討日では 1 回だけ通知する
+   *   （deferred へ再遷移して期日を更新した場合は再通知される = API 版 revisit_notified_on と同じ規則）。
+   * - 補助処理: 失敗しても表示フローを止めない（try/catch で握りつぶす = 原則4）。
+   */
+  async function checkRevisitReminders(): Promise<void> {
+    if (isApi || !canManageImprovements.value || !notifications) return
+    try {
+      const today = todayJst()
+      const KEY = 'ako.improvement-revisit-notified.v1'
+      let marks: Record<string, string> = {}
+      try {
+        marks = JSON.parse(localStorage.getItem(KEY) ?? '{}') as Record<string, string>
+      } catch { marks = {} }
+      let changed = false
+      for (const it of tbl('improvementItems').value) {
+        const revisit = it.revisitOn ?? ''
+        if (it.status !== 'deferred' || it.archivedAt || !revisit || revisit > today) continue
+        const mark = marks[it.id]
+        if (mark && mark >= revisit) continue // 同じ再検討日は通知済み（期日を更新したら再通知）
+        notifications.notifyAdmins('reminder', '継続検討の再検討日です',
+          `継続検討の再検討日です: ${it.title}（再検討日 ${revisit}）`,
+          `/improvements?tab=items&open=${it.id}`)
+        marks[it.id] = today
+        changed = true
+      }
+      if (changed) localStorage.setItem(KEY, JSON.stringify(marks))
+    } catch { /* リマインドは補助処理（失敗しても一覧表示は続行 = 原則4） */ }
   }
 
   // ---------- 改修プロンプト出力（フィルター結果 → コーディング AI 向け） ----------
@@ -832,6 +890,6 @@ export function useImprovements() {
     // 操作
     submit, generate, setStatus, editItem, setItemArchived, setRequestArchived, setRequestStatus,
     setRequestAdoption, setRequestAdoptionBulk, unclusterRequest, editRequest, addRequestComment, setRequestCommentArchived,
-    addNote, setNoteArchived, buildPrompt,
+    addNote, setNoteArchived, buildPrompt, checkRevisitReminders,
   }
 }

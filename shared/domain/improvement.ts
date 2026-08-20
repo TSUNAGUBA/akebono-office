@@ -6,8 +6,8 @@
  * - 要望は AI が「改修単位（ImprovementItem）」へ集約する（既存要望も含めて分解・まとめ）。
  *   AI は Vertex AI（api/src/lib/llm）を一次に使い、失敗時は本モジュールの決定的
  *   ヒューリスティック（heuristicClusterRequests）へフォールバックする（モックは常にこちら）。
- * - 改修単位は単一ステータス（未判定 → 対応する → 解決済み／対応しない）で管理し、
- *   解決済/未解決・対応可否でフィルターできる。
+ * - 改修単位は単一ステータス（未判定 → 改善対応/運用対応/継続検討 → 解決済み／対応見送り）で管理し、
+ *   解決済/未解決・対応方針でフィルターできる（語彙の再編 = 改修依頼 2026-08-20）。
  * - フィルター結果を、コーディング AI エージェント向けの詳細プロンプト（buildCodingPrompt）へ出力する。
  *
  * データフロー整合性（原則6）:
@@ -23,16 +23,19 @@ import type { Result } from './types'
 // ---------- ステータス（単一ステータスで一元管理。原則: 状態機械で活性と遷移検証を一致させる） ----------
 
 /**
- * 改修単位の状態。
- * - triage   未判定（AI 集約直後。対応可否を人手で判定する前）
- * - accepted 対応する（対応可・未着手）
- * - in_progress 対応中（着手済み・未解決。改修依頼 2026-08-18 で「対応する」と「解決済み」の間に追加）
- * - resolved 解決済み（改修完了）
- * - rejected 対応しない（対応不可・見送り）
+ * 改修単位の状態（改修依頼 2026-08-20: ステータスを「対応方針」の語彙へ再編）。
+ * - triage      未判定（AI 集約直後。対応方針を人手で判定する前）
+ * - accepted    改善対応（コード改修で対応する・未着手。旧ラベル「対応する」）
+ * - in_progress 対応中（着手済み・未解決。改修依頼 2026-08-18 で追加）
+ * - operational 運用対応（改修せず運用でカバーする = 決着済み。改修依頼 2026-08-20 で追加）
+ * - deferred    継続検討（今は判断せず再検討日を決めて持ち越す = 未解決。改修依頼 2026-08-20 で追加。
+ *               deferred への遷移は revisitOn（再検討日）が必須 = improvementRevisitError）
+ * - resolved    解決済み（改修完了）
+ * - rejected    対応見送り（対応不可・見送り。旧ラベル「対応しない」）
  */
-export type ImprovementStatus = 'triage' | 'accepted' | 'in_progress' | 'resolved' | 'rejected'
+export type ImprovementStatus = 'triage' | 'accepted' | 'in_progress' | 'operational' | 'deferred' | 'resolved' | 'rejected'
 
-export const IMPROVEMENT_STATUSES: ImprovementStatus[] = ['triage', 'accepted', 'in_progress', 'resolved', 'rejected']
+export const IMPROVEMENT_STATUSES: ImprovementStatus[] = ['triage', 'accepted', 'in_progress', 'operational', 'deferred', 'resolved', 'rejected']
 
 /** ステータスの表示メタ（label・トーン・「未解決か」）。ラベルの SoT はここ。tone は UI の Tone 値と対応 */
 export const IMPROVEMENT_STATUS_META: Record<
@@ -40,29 +43,35 @@ export const IMPROVEMENT_STATUS_META: Record<
   { label: string; tone: 'neutral' | 'info' | 'ok' | 'warn' | 'brand'; open: boolean }
 > = {
   triage: { label: '未判定', tone: 'neutral', open: true },
-  accepted: { label: '対応する', tone: 'info', open: true },
+  accepted: { label: '改善対応', tone: 'info', open: true },
   in_progress: { label: '対応中', tone: 'brand', open: true },
+  operational: { label: '運用対応', tone: 'ok', open: false },
+  deferred: { label: '継続検討', tone: 'info', open: true },
   resolved: { label: '解決済み', tone: 'ok', open: false },
-  rejected: { label: '対応しない', tone: 'warn', open: false },
+  rejected: { label: '対応見送り', tone: 'warn', open: false },
 }
 
-/** 「未解決」= まだ改修が必要な状態（未判定・対応する・対応中）。解決済み/対応しないは決着済み */
+/** 「未解決」= まだ判断・改修が必要な状態（未判定・改善対応・対応中・継続検討）。運用対応/解決済み/対応見送りは決着済み */
 export function isOpenStatus(status: ImprovementStatus): boolean {
   return IMPROVEMENT_STATUS_META[status]?.open ?? false
 }
 
 /**
  * 状態遷移（フロントのボタン活性と API の遷移検証を一致させる）。
- * 取消可能性（原則9.5）: 解決済み → 対応する（解決の取消 = reopen）、対応しない → 未判定/対応する
- * （見送りの撤回）、対応中 → 対応する（着手の取消 = 差し戻し）を許可し、
- * 「誤って解決/見送り/着手にしたら詰む」導線を作らない。
- * 対応中の追加（2026-08-18）: 対応する → 対応中 → 解決済み が主経路。従来の 対応する → 解決済み の
+ * 取消可能性（原則9.5）: 解決済み → 改善対応（解決の取消 = reopen）、対応見送り → 未判定/改善対応
+ * （見送りの撤回）、対応中 → 改善対応（着手の取消 = 差し戻し）、運用対応 → 改善対応（運用判断の見直し）、
+ * 継続検討 → 未判定/改善対応/運用対応/対応見送り（再検討の結論）を許可し、
+ * 「誤ってどれかの決着にしたら詰む」導線を作らない。
+ * 対応中の追加（2026-08-18）: 改善対応 → 対応中 → 解決済み が主経路。従来の 改善対応 → 解決済み の
  * 直行も許可する（着手記録を経ない小さな改修の下位互換 = 原則7）。
+ * 運用対応/継続検討の追加（2026-08-20）: 未判定・改善対応・継続検討から選べる対応方針。
  */
 export const IMPROVEMENT_STATUS_NEXT: Record<ImprovementStatus, ImprovementStatus[]> = {
-  triage: ['accepted', 'rejected'],
-  accepted: ['in_progress', 'resolved', 'rejected', 'triage'],
+  triage: ['accepted', 'operational', 'deferred', 'rejected'],
+  accepted: ['in_progress', 'deferred', 'resolved', 'rejected', 'triage'],
   in_progress: ['resolved', 'accepted', 'rejected'],
+  deferred: ['accepted', 'operational', 'rejected', 'triage'],
+  operational: ['accepted'],
   resolved: ['accepted'],
   rejected: ['triage', 'accepted'],
 }
@@ -74,18 +83,15 @@ export function canTransition(from: ImprovementStatus, to: ImprovementStatus): b
 
 // ---------- 一覧フィルター（解決済/未解決 + 対応可否を 1 つの選択で束ねる） ----------
 
-export type ImprovementFilter = 'all' | 'open' | 'committed' | 'triage' | 'accepted' | 'in_progress' | 'resolved' | 'rejected'
+export type ImprovementFilter = 'all' | 'open' | 'committed' | 'triage' | 'accepted' | 'in_progress' | 'operational' | 'deferred' | 'resolved' | 'rejected'
 
-/** フィルターの選択肢（UI と共有。all = すべて / open = 未解決 / committed = 実装決定・未完了 = 対応する + 対応中） */
+/** フィルターの選択肢（UI と共有。all = すべて / open = 未解決 / committed = 実装決定・未完了 = 改善対応 + 対応中。
+ *  個別ステータスのラベルは IMPROVEMENT_STATUS_META（SoT）から引き、語彙のズレを作らない = 原則5） */
 export const IMPROVEMENT_FILTER_OPTIONS: { value: ImprovementFilter; label: string }[] = [
   { value: 'all', label: 'すべて' },
   { value: 'open', label: '未解決' },
-  { value: 'committed', label: '対応する・対応中' },
-  { value: 'triage', label: '未判定' },
-  { value: 'accepted', label: '対応する' },
-  { value: 'in_progress', label: '対応中' },
-  { value: 'resolved', label: '解決済み' },
-  { value: 'rejected', label: '対応しない' },
+  { value: 'committed', label: `${IMPROVEMENT_STATUS_META.accepted.label}・${IMPROVEMENT_STATUS_META.in_progress.label}` },
+  ...IMPROVEMENT_STATUSES.map(s => ({ value: s, label: IMPROVEMENT_STATUS_META[s].label })),
 ]
 
 /** 改修単位がフィルターに一致するか */
@@ -95,6 +101,21 @@ export function matchesImprovementFilter(status: ImprovementStatus, filter: Impr
   // committed = 「実装が決まっていて未完了」（対応中の追加 2026-08-18 で accepted 単独から拡張。ガント既定の意図を維持）
   if (filter === 'committed') return status === 'accepted' || status === 'in_progress'
   return status === filter
+}
+
+// ---------- 継続検討（deferred）の再検討日（改修依頼 2026-08-20） ----------
+
+/**
+ * 再検討日（revisitOn）の検証。deferred への遷移は再検討日が必須（実在日）。
+ * deferred 以外への遷移では revisitOn を要求しない（渡された場合のみ形式検証。保存値は保持 =
+ * クリアしない = 履歴保全）。mock（useImprovements.setStatus）と API（POST /items/:id/status）の
+ * 双方で使い、判定のパリティを保つ（原則6）。エラーメッセージ | null。
+ */
+export function improvementRevisitError(status: ImprovementStatus, revisitOn: string): string | null {
+  const v = revisitOn.trim()
+  if (status === 'deferred' && !v) return '継続検討にするには再検討日を設定してください'
+  if (v && !isRealDateKey(v)) return '再検討日が正しくありません（YYYY-MM-DD の実在日で指定してください）'
+  return null
 }
 
 // ---------- 型 ----------
@@ -311,6 +332,12 @@ export interface ImprovementItem {
   planStart: string | null
   /** 対応予定の終了日（YYYY-MM-DD・任意。null = 開始日のみ = 単日）。ガントチャートのバー終了 */
   planEnd: string | null
+  /**
+   * 再検討日（YYYY-MM-DD。継続検討〔deferred〕への遷移で必須 = improvementRevisitError）。
+   * deferred 以外への遷移でもクリアしない（履歴保全。表示は deferred のときのみ）。
+   * 旧データは未定義 = 無し（原則7）。改修依頼 2026-08-20。
+   */
+  revisitOn?: string | null
 }
 
 /**
@@ -535,7 +562,7 @@ export function improvementUnclusterError(
     return { code: 'AKO-REQ-022', message: '取消済みの改修単位からは解除できません（先に改修単位を復元してください）' }
   }
   if (item && !isOpenStatus(item.status)) {
-    return { code: 'AKO-REQ-021', message: '決着済み（解決済み/対応しない）の改修単位からは解除できません（先に改修単位のステータスを戻してから解除してください）' }
+    return { code: 'AKO-REQ-021', message: '決着済み（運用対応/解決済み/対応見送り）の改修単位からは解除できません（先に改修単位のステータスを戻してから解除してください）' }
   }
   return null
 }
@@ -715,8 +742,8 @@ export function buildItemDetail(reqs: ClusterRequestInput[]): string {
 /**
  * 決定的な集約（LLM 無効・失敗時のフォールバック / モックの唯一のロジック）。
  * 未集約の要望を投稿元ページ単位でまとめ、同じページを対象にした既存の **未判定（triage）** item が
- * あればそこへ追記、無ければ新しい改修単位を作る。判定済み（accepted/resolved/rejected）item には
- * 触れない = 人手のステータス・編集を巻き戻さない（原則2）。
+ * あればそこへ追記、無ければ新しい改修単位を作る。判定済み（triage 以外 = 改善対応/対応中/運用対応/
+ * 継続検討/解決済み/対応見送り）item には触れない = 人手のステータス・編集を巻き戻さない（原則2）。
  */
 export function heuristicClusterRequests(
   openItems: ClusterOpenItem[],

@@ -114,15 +114,17 @@ export const TAB_PERMISSION_CATALOG: Record<string, { key: string; label: string
     { key: 'all', label: '全件' },
     { key: 'routes', label: '経路設定' },
   ],
-  // 改修依頼 2026-08-19 第4弾 項目5.5: 要望系（全員閲覧可）と改修案件系（管理者のみ）へタブを分離。
-  // 既存キー（inbox/items/kanban/gantt）は後方互換で据え置き、要望系の req-kanban / req-gantt を追加（原則7）。
+  // 改修依頼 2026-08-20: タブを 受付箱（inbox）/ 改修案件（items）の 2 つへ再編し、カンバン/ガントは
+  // 各タブ内の表示切替（?view=）へ移行。旧タブキー（req-kanban/req-gantt/kanban/gantt）は
+  // 既存の permission_rules（field='tab:<旧キー>'）を無効化しないため**表示切替の利用可否**として残す
+  // （improvements.vue が view の選択肢を canTab(旧キー) でゲートする = 旧 deny ルールがそのまま効く。原則7）。
   improvements: [
     { key: 'inbox', label: '受付箱' },
-    { key: 'req-kanban', label: '【要望】カンバン' },
-    { key: 'req-gantt', label: '【要望】ガント' },
     { key: 'items', label: '改修案件' },
-    { key: 'kanban', label: '【改修案件】カンバン' },
-    { key: 'gantt', label: '【改修案件】ガント' },
+    { key: 'req-kanban', label: '受付箱: カンバン表示' },
+    { key: 'req-gantt', label: '受付箱: ガント表示' },
+    { key: 'kanban', label: '改修案件: カンバン表示' },
+    { key: 'gantt', label: '改修案件: ガント表示' },
   ],
   shift: [
     { key: 'confirmed', label: '確定シフト' },

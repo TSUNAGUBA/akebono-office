@@ -2,7 +2,11 @@
 /**
  * 改善要望のカンバン表示（F-42）。ステータス別の列に改修単位カードを並べ、進捗・状況を一望する。
  * カードクリックで詳細ドロワー（open）、許可された遷移先へのクイック操作（status）を親へ通知する。
- * 列は横スクロール（原則8: 広い内容は自身の overflow-x コンテナ内でスクロール）。
+ * 列は IMPROVEMENT_STATUSES（SoT）から自動生成 = ステータス追加（運用対応/継続検討 = 2026-08-20 で 7 列）に
+ * 自動追随する。列は横スクロール（原則8: モバイル 375px でも自身の overflow-x コンテナ内でスクロール）。
+ * 継続検討（deferred）のカードには再検討日（revisitOn）を併記する。
+ * 注: 継続検討への遷移は再検討日の入力が必須のため、親（improvements.vue）は status イベントの
+ * to='deferred' をドロワーの日付入力へ誘導する（このコンポーネントは遷移先の列挙のみ）。
  */
 import { Calendar } from 'lucide-vue-next'
 import {
@@ -62,6 +66,11 @@ function statusLabel(s: ImprovementStatus): string { return IMPROVEMENT_STATUS_M
           <p v-if="it.planStart" class="mt-1 inline-flex items-center gap-1 rounded bg-brand-soft px-1.5 py-0.5 text-[11px] text-brand">
             <Calendar class="h-3 w-3" aria-hidden="true" />
             <span class="num">{{ planLabel(it) }}</span>
+          </p>
+          <!-- 継続検討の再検討日（改修依頼 2026-08-20。バッジに revisitOn を併記） -->
+          <p v-if="it.status === 'deferred' && it.revisitOn" class="mt-1 inline-flex items-center gap-1 rounded bg-info-soft px-1.5 py-0.5 text-[11px] text-info">
+            <Calendar class="h-3 w-3" aria-hidden="true" />
+            <span class="num">{{ fmtDate(it.revisitOn) }} 再検討</span>
           </p>
           <div v-if="IMPROVEMENT_STATUS_NEXT[it.status].length" class="mt-2 flex flex-wrap gap-1">
             <button

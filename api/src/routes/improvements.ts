@@ -51,6 +51,7 @@ import {
   improvementNoteError,
   improvementPlanError,
   improvementRequestEditFields,
+  improvementRevisitError,
   improvementTitleError,
   improvementUnclusterError,
   matchesImprovementFilter,
@@ -61,6 +62,7 @@ import {
   normalizeImprovementTags,
   type PromptItemInput,
 } from '../../../shared/domain/improvement'
+import { todayJst } from '../../../shared/domain/jst'
 import { canManageImprovements } from '../../../shared/domain/permissions'
 import type { AuthUser } from '../auth'
 import type { Env } from '../env'
@@ -69,6 +71,7 @@ import { audit } from '../lib/audit'
 import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
 import { generateJson } from '../lib/llm'
+import { notifyAdmins } from '../lib/notify'
 
 // 時刻は JST ウォールクロック文字列で返す（customer-logs / akebono-trade と同一規約。
 // フロントの fmtDate は文字列をそのまま表示するため、生 timestamptz（UTC "…Z"）を返すと
@@ -89,7 +92,7 @@ const ITEM_COLS = `id, title, summary, detail, status, page_paths AS "pagePaths"
   source_request_ids AS "sourceRequestIds", llm, to_char(archived_at ${JST}) AS "archivedAt",
   to_char(created_at ${JST}) AS "createdAt", to_char(updated_at ${JST}) AS "updatedAt",
   to_char(resolved_at ${JST}) AS "resolvedAt",
-  plan_start AS "planStart", plan_end AS "planEnd"`
+  plan_start AS "planStart", plan_end AS "planEnd", revisit_on::text AS "revisitOn"`
 const NOTE_COLS = `id, item_id AS "itemId", member_id AS "memberId", member_name AS "memberName",
   body, kind, to_char(archived_at ${JST}) AS "archivedAt", to_char(created_at ${JST}) AS "createdAt"`
 const COMMENT_COLS = `id, request_id AS "requestId", member_id AS "memberId", member_name AS "memberName",
@@ -635,27 +638,43 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
     return c.json({ data: rows[0] })
   })
 
-  // ---- ステータス変更（状態機械で検証。解決 → 対応する等の reopen 可 = 原則9.5） ----
+  // ---- ステータス変更（状態機械で検証。解決 → 改善対応等の reopen 可 = 原則9.5）。
+  //      継続検討（deferred）への遷移は再検討日（revisitOn）が必須（改修依頼 2026-08-20）。
+  //      deferred 以外への遷移では revisit_on を保持する（クリアしない = 履歴保全） ----
   app.post('/items/:id/status', async (c) => {
     const user = await requireManage(c, pool)
     const id = c.req.param('id')
-    const status = String(((await c.req.json().catch(() => ({}))) as { status?: unknown }).status ?? '')
+    const body = (await c.req.json().catch(() => ({}))) as { status?: unknown; revisitOn?: unknown }
+    const status = String(body.status ?? '')
     if (!IMPROVEMENT_STATUSES.includes(status as ImprovementStatus)) {
       throw err('AKO-REQ-005', 'status が不正です', 400)
     }
+    const to = status as ImprovementStatus
+    // 再検討日は deferred のときだけ読む（deferred 以外の遷移で誤送信されても保存値を汚さない）
+    const revisitOn = to === 'deferred' ? String(body.revisitOn ?? '').trim() : ''
+    const revisitMsg = improvementRevisitError(to, revisitOn)
+    if (revisitMsg) throw err('AKO-REQ-023', revisitMsg, 400)
     const updated = await inTxn(pool, async (db) => {
       const { rows } = await db.query<{ status: ImprovementStatus }>(
         `SELECT status FROM improvement_items WHERE id = $1 AND archived_at IS NULL FOR UPDATE`, [id])
       if (rows.length === 0) throw err('AKO-REQ-002', '対象の改修単位が見つかりません', 404)
       const from = rows[0]!.status
-      const to = status as ImprovementStatus
-      // 同一ステータスの再送は no-op（resolved_at・updated_at を無用に上書きしない）
-      if (from === to) {
+      // 同一ステータスの再送は no-op（resolved_at・updated_at を無用に上書きしない）。
+      // 例外: deferred → deferred は再検討日の変更（リスケジュール）として受理し、
+      // 通知マーカーもリセットする（新しい期日で再通知 = 原則9.5 の選び直し導線）
+      if (from === to && to !== 'deferred') {
         const { rows: same } = await db.query(`SELECT ${ITEM_COLS} FROM improvement_items WHERE id = $1`, [id])
         return same[0]
       }
-      if (!canTransition(from, to)) {
+      if (from !== to && !canTransition(from, to)) {
         throw err('AKO-REQ-006', `「${from}」から「${to}」へは変更できません`, 409)
+      }
+      if (to === 'deferred') {
+        const { rows: out } = await db.query(
+          `UPDATE improvement_items
+           SET status = $2, revisit_on = $3::date, revisit_notified_on = NULL, resolved_at = NULL, updated_at = now()
+           WHERE id = $1 RETURNING ${ITEM_COLS}`, [id, to, revisitOn])
+        return out[0]
       }
       const resolvedExpr = to === 'resolved' ? 'now()' : 'NULL'
       const { rows: out } = await db.query(
@@ -663,7 +682,10 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
          WHERE id = $1 RETURNING ${ITEM_COLS}`, [id, to])
       return out[0]
     })
-    await audit(pool, { actorId: user.id, action: 'update', entity: 'improvement_items', entityId: id, detail: `ステータス → ${status}` })
+    await audit(pool, {
+      actorId: user.id, action: 'update', entity: 'improvement_items', entityId: id,
+      detail: `ステータス → ${status}${to === 'deferred' ? `（再検討日 ${revisitOn}）` : ''}`,
+    })
     return c.json({ data: updated })
   })
 
@@ -684,7 +706,7 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
     return c.json({ data: rows })
   })
 
-  // 追加: 対応可否の検討過程・保留/見送り理由を時系列で残す（kind=note 既定 / reject=「対応しない」理由）
+  // 追加: 対応方針の検討過程・保留/見送り理由を時系列で残す（kind=note 既定 / reject=「対応見送り」の理由）
   app.post('/items/:id/notes', async (c) => {
     const user = await requireManage(c, pool)
     const id = c.req.param('id')
@@ -760,7 +782,7 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
   app.post('/prompt', async (c) => {
     await requireManage(c, pool)
     const body = await c.req.json().catch(() => ({})) as { filter?: unknown; includeArchived?: unknown }
-    // 既定 = accepted（改修依頼 2026-08-18: プロンプト出力の対象は「対応する」のみ。未判定は含めない。
+    // 既定 = accepted（改修依頼 2026-08-18: プロンプト出力の対象は「改善対応」のみ。未判定は含めない。
     // filter パラメータ自体は下位互換のため維持 = 呼び出し側 UI は常に accepted を送る）
     const filter = (String(body.filter ?? 'accepted') as ImprovementFilter)
     const { rows: itemRows } = await pool.query<{
@@ -831,4 +853,40 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
   })
 
   return app
+}
+
+/**
+ * 継続検討（deferred）の再検討日リマインド（改修依頼 2026-08-20）。日次ジョブから呼ぶ想定
+ * （app.ts の /jobs/* と同型の配線はナビゲーターが統合。単体でも冪等に再実行できる = 原則2）。
+ * - 対象: status='deferred'・有効・revisit_on が今日（JST）以前の改修単位。
+ * - 通知: 管理者全員へ kind='reminder'（notifyAdmins = 非ブロッキング。原則4）。
+ *   リンクは改修案件タブ + 対象ドロワーのディープリンク（/improvements?tab=items&open=<id>）。
+ * - 多重通知防止: 通知後に revisit_notified_on = today を記録し、同じ再検討日では再通知しない
+ *   （revisit_notified_on < revisit_on の行だけ対象 = deferred へ再遷移して期日を更新すると
+ *   マーカーが NULL に戻り、新しい期日で再度通知される）。
+ * - 1 件の失敗は他の件へ波及させない（できたところまで進めて件数を報告 = 原則4）。
+ */
+export async function runImprovementRevisitReminders(pool: pg.Pool): Promise<{ notified: number }> {
+  const today = todayJst()
+  const { rows } = await pool.query<{ id: string; title: string; revisitOn: string }>(
+    `SELECT id, title, revisit_on::text AS "revisitOn" FROM improvement_items
+     WHERE status = 'deferred' AND archived_at IS NULL
+       AND revisit_on IS NOT NULL AND revisit_on <= $1::date
+       AND (revisit_notified_on IS NULL OR revisit_notified_on < revisit_on)
+     ORDER BY revisit_on, id`, [today])
+  let notified = 0
+  for (const it of rows) {
+    try {
+      await notifyAdmins(pool, 'reminder', '継続検討の再検討日です',
+        `継続検討の再検討日です: ${it.title}（再検討日 ${it.revisitOn}）`,
+        `/improvements?tab=items&open=${it.id}`)
+      // 通知マーカーは通知の後に記録（先に記録して通知に失敗すると永久に黙る方向の事故を避ける。
+      // notifyAdmins は非ブロッキングのため、最悪でも「翌日以降に再通知されない」側に倒れる）
+      await pool.query(`UPDATE improvement_items SET revisit_notified_on = $2::date WHERE id = $1`, [it.id, today])
+      notified += 1
+    } catch (e) {
+      console.warn('improvement revisit reminder failed (non-blocking):', (e as Error).message)
+    }
+  }
+  return { notified }
 }

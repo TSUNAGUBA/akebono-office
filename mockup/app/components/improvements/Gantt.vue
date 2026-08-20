@@ -40,13 +40,15 @@ const filteredItems = computed(() =>
  */
 const GANTT_BAR_CLASS: Record<ImprovementStatus, string> = {
   triage: 'bg-warn', // 未判定 = 要判定（アンバー）
-  accepted: 'bg-brand', // 対応する = 予定（ブランド青。既定フィルタの主対象）
+  accepted: 'bg-brand', // 改善対応 = 予定（ブランド青。既定フィルタの主対象）
   in_progress: 'bg-info', // 対応中 = 着手済み（改修依頼 2026-08-18 で追加。予定の青と区別する）
+  operational: 'bg-ok', // 運用対応 = 改修せず運用でカバー（グリーン = 決着。2026-08-20 で追加）
+  deferred: 'bg-serious', // 継続検討 = 再検討待ち（オレンジ = 未判定のアンバーと区別。2026-08-20 で追加）
   resolved: 'bg-muted', // 解決済み = 完了（グレーで退色）
-  rejected: 'bg-crit', // 対応しない = 見送り（レッド）
+  rejected: 'bg-crit', // 対応見送り（レッド）
 }
-/** 決着済み（完了・見送り）は退色させて「終わった案件」を視覚的に沈める */
-const CLOSED_STATUSES: ImprovementStatus[] = ['resolved', 'rejected']
+/** 決着済み（運用対応・完了・見送り = META.open が false のもの）は退色させて「終わった案件」を視覚的に沈める */
+const CLOSED_STATUSES: ImprovementStatus[] = ['operational', 'resolved', 'rejected']
 
 /** 列の最小幅（px）。画面が広ければ flex で等分に伸び、狭ければこの幅で横スクロール */
 const MIN_COL_W: Record<GanttScale, number> = { month: 56, week: 44, day: 30 }

@@ -27,10 +27,11 @@ const body = ref('')
 const targetSpot = ref('')
 const busy = ref(false)
 
-// テンプレのみ（見出しだけで内容未入力）の投稿は弾く = 空要望を作らない（改修依頼 2026-08-19 第4弾）
+// テンプレのみ（見出しだけで内容未入力）の投稿は弾く = 空要望を作らない（改修依頼 2026-08-19 第4弾）。
+// 空白・改行を除いて比較する（「AIで整形」でテンプレの空行が整っても、内容が無ければ送信させない = 2026-08-20）
 const bodyHasContent = computed(() => {
-  const t = body.value.trim()
-  return t !== '' && t !== IMPROVEMENT_BODY_TEMPLATE.trim()
+  const t = body.value.replace(/\s+/g, '')
+  return t !== '' && t !== IMPROVEMENT_BODY_TEMPLATE.replace(/\s+/g, '')
 })
 // 文字数はコードポイント基準（textarea の maxlength は絵文字等を半分で切るため使わず、超過は送信無効＋強調で伝える）
 const bodyOver = computed(() => [...body.value].length > IMPROVEMENT_BODY_CAP)
