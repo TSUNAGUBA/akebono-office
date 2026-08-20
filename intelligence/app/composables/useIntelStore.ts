@@ -137,9 +137,19 @@ export function useIntelStore() {
   const actions = isApi ? (apiActions as Ref<IntelAction[]>) : tbl('actions')
   const cycles = isApi ? (apiCycles as Ref<IntelCycle[]>) : tbl('cycles')
 
-  /** 書込を確定する（モック = mockdb commit / API モード = ユーザー別ストア保存）。失敗 = false */
+  /**
+   * 書込を確定する（モック = mockdb commit / API モード = ユーザー別ストア保存）。失敗 = false。
+   * API モードで保存に失敗した場合はメモリ上の変異を最終保存状態へ巻き戻す
+   * （エラートーストと画面表示を一致させ、幻の行が残り続けない = R2 監査 NIT-3。
+   *  モックモードのデモ DB は Office と同様に巻き戻さない = デモ限定の既存パターン）
+   */
   function save(): boolean {
-    return isApi ? persistApiStore() : commit()
+    if (!isApi) return commit()
+    if (persistApiStore()) return true
+    const uid = loadedForUser
+    clearApiRefs()
+    if (uid) ensureApiStore(uid)
+    return false
   }
 
   function newId(collection: 'insights' | 'actions' | 'cycles', prefix: string): string {

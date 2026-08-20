@@ -254,7 +254,8 @@ function analyzeManagement(data: EngineData, opts: EngineOptions): EngineResult 
   // 5) パートナー連携
   const partnerActive = partner.filter(p => ACTIVE_PARTNER_STATUSES.has(p.status))
   if (partnerActive.length > 0) {
-    findings.push(`ビジネスパートナー活動は進行中・接続予定・案件化が計 ${partnerActive.length} 件（当月新規 ${partnerThis.length} 件）。`)
+    // 文言も SoT 導出の集合から組み立てる（件数と文言の乖離防止 = R2 #3）
+    findings.push(`ビジネスパートナー活動は${[...ACTIVE_PARTNER_STATUSES].join('・')}が計 ${partnerActive.length} 件（当月新規 ${partnerThis.length} 件）。`)
   }
 
   const fb = applyFeedback('management', null, opts.pastActions)

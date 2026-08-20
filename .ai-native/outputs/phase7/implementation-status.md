@@ -3633,7 +3633,8 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   発見事項・根拠（参照データ明細）・提案・確信度を生成。**フィードバックループ**: 完了 + 高評価 → 継続強化提案（reinforce）/
   完了 + 低評価 → 代替提案（alternative）/ 実行中 → 重複提案の抑制（dedupe）。反映明細を必ず出力。
 - [x] 記録ストア（useIntelStore）: インサイト（アーカイブ/復元）・アクション（登録/編集/状態遷移〔完了・中止の取消含む = 原則9.5〕/
-  結果記録/フィードバック 5 段階）・サイクル（追記のみの記録系 = 原則2）。API モードは `aki.store.v1`（再シードなし = 記録保護）。
+  結果記録/フィードバック 5 段階）・サイクル（追記のみの記録系 = 原則2）。API モードは `aki.store.v1.<memberId>`
+  （ユーザー別名前空間 = R1 反映。再シードなし = 記録保護）。
 - [x] 画面: ダッシュボード（ループ概況）/ インサイト（生成 + アクション化）/ アクション / ループ履歴（サイクル明細）/ データソース。
   モック境界の明示: 生成 3 画面にモックバッジ + Web 検索は本実装時有効化の注記。
 
@@ -3653,7 +3654,8 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
 
 ### 91-5 検証（typecheck / テスト / E2E）
 - [x] typecheck: company / intelligence とも green（nuxt typecheck）。
-- [x] 単体: company vitest 8（トークン集計・予算正規化）/ intelligence vitest 11（分析エンジン・フィードバックループ・決定性）green。
+- [x] 単体: company vitest 12（トークン集計・予算正規化 8 + 通知リンク写像 4 = R1 追加）/
+  intelligence vitest 11（分析エンジン・フィードバックループ・決定性）green（以後の増減は §91-7 の反復レビュー記録が正）。
 - [x] ビルド: 両アプリ `nuxt generate` green（デプロイ成果物検証）。
 - [x] E2E（`e2e/run-new-apps-mock.sh` = モックモード生成ビルド + Playwright）: company 20 チェック / intelligence 20 チェック
   green（依頼 → 承認 → 自動実行・予算ブロック AKC-TOK-001 + リセット取消・日次報告生成・インサイト生成のループ反映
@@ -3668,6 +3670,9 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
 - [ ] Intelligence 分析エンジンの API 本実装: Vertex AI + RAG（search_docs 基盤の拡張）+ WebSearch。
   インサイト/アクション/サイクルのサーバー側 CRUD + localStorage（`aki.store.v1.<memberId>`）からの移行手順の提供。
   合わせて**記録件数の上限・肥大時の案内**（現状は追記のみで localStorage 上限へ単調接近 = R1 監査 MINOR-4）を解消する。
+  ※ 判断記録（R2 監査 NIT-2）: R1 で記録キーを非名前空間の `aki.store.v1` から `aki.store.v1.<memberId>` へ変更したが、
+  変更時点で本番未デプロイ（本節のオペレーター作業が未実施）のため実利用者データは存在せず、旧キーからの移行コードは
+  実装しない（原則7 の影響評価 = 影響なし。開発端末の旧キー残置は無害）。
 - [ ] Company の通知: API モードでは共通 API が Office のパスで通知を発行するため、AI タスク・エスカレーション以外
   （Office 側ドメイン）の通知は「Office アプリで確認」の案内トーストにしている（`utils/notification-link.ts` = R1 #1 反映）。
   Office 本体 URL への外部リンク化（環境変数でのベース URL 注入）を将来検討する。
@@ -3691,3 +3696,10 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   villages 未使用ハイドレーションの削除・絵文字アイコンの lucide 化・normalizeTokenBudget docblock 明文化・
   STORE_VERSION 移行の予約 docblock・e2e ランナーへ実行ビット付与・ps1 の CORS 失念警告・
   requirements/design/README のキー名・API マップ・FI-01 整合（原則5）。
+- [x] R2 = R1 修正の独立再検証（コードレビュアー + システム監査官の 2 体）。**R1 指摘は全件解消を確認**
+  （通知リンク写像は API 発行箇所と全件突合・名前空間化はログイン/ログアウト/切替の全経路トレース・
+  SoT 定数導出は従来集合と同一を実値照合。回帰なし = typecheck / vitest 12+11 / mock E2E 20+20 実走 green）。
+  **新規指摘 = MINOR 2 + NIT 4（CRITICAL/MAJOR 0）**: 本ファイル §91-2 の旧キー名残存・§91-5 のテスト数(8→12)・
+  findings 文言のステータス名直書き・旧キー移行の判断未記録・保存失敗時にメモリ変異が残る（幻の行）・
+  Hosting ロールバック記載（R1 で反映済みの再確認）→ **全件反映**（§91-2/91-5 修正・文言を SoT 導出化・
+  判断記録を §91-6 へ追記・save() 失敗時に最終保存状態へ巻き戻すロールバックを useIntelStore へ実装）。
