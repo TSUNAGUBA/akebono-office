@@ -62,7 +62,8 @@ const loopSteps = computed(() => [
       title="フィードバックループ"
       :description="latestCycle ? `直近の分析サイクル: ${fmtDateTime(latestCycle.at)}（${INSIGHT_THEME_LABELS[latestCycle.theme]} / ${latestCycle.targetName}）` : 'まだ分析サイクルがありません。インサイトから分析を実行してください'"
     >
-      <div class="grid grid-cols-2 gap-2 md:grid-cols-4">
+      <!-- モバイルは 1 列: 2 列だと見出しが「分析・インサイ/ト」と語中折返しする（UnitI 検出） -->
+      <div class="grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-4">
         <template v-for="(s, i) in loopSteps" :key="s.key">
           <NuxtLink
             :to="s.to"

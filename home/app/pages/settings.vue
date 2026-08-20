@@ -540,10 +540,12 @@ async function onResetDemo(): Promise<void> {
             </button>
           </template>
           <ul class="grid gap-1.5">
+            <!-- li の min-w-0: grid item の min-width:auto がバッジ列の内在幅まで行を広げ、
+                 ボタンがカード境界の外でぶつ切りになる（UnitI 検出） -->
             <li
               v-for="def in cfList"
               :key="def.id"
-              class="flex items-center gap-2.5 rounded-lg border border-line px-2.5 py-2"
+              class="flex min-w-0 items-center gap-2.5 rounded-lg border border-line px-2.5 py-2"
               :class="def.active ? '' : 'opacity-55'"
             >
               <span class="min-w-0 flex-1">
@@ -607,10 +609,12 @@ async function onResetDemo(): Promise<void> {
         <!-- e) エスカレーションルール -->
         <UiSectionCard title="エスカレーションルール" description="シグナル検知の有効/無効・閾値・クールダウンを調整します">
           <ul class="grid gap-1.5">
+            <!-- min-w-0: nowrap のラベル対（閾値・クールダウン）を持つため、親 grid の
+                 トラックを内在幅で押し広げない（CONVENTIONS「スタイル規約」との自己整合） -->
             <li
               v-for="r in escalationRules"
               :key="r.key"
-              class="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-line px-2.5 py-2"
+              class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-line px-2.5 py-2"
             >
               <button
                 type="button"
@@ -630,7 +634,7 @@ async function onResetDemo(): Promise<void> {
               <span class="min-w-0 flex-1 text-[13px] font-medium" :class="r.enabled ? '' : 'text-muted'">
                 {{ r.label }}
               </span>
-              <label v-if="r.threshold !== null" class="flex items-center gap-1 text-[11px] text-sub">
+              <label v-if="r.threshold !== null" class="flex items-center gap-1 whitespace-nowrap text-[11px] text-sub">
                 {{ r.thresholdLabel }}
                 <input
                   type="number"
@@ -641,7 +645,7 @@ async function onResetDemo(): Promise<void> {
                   @change="onRuleThreshold(r, $event)"
                 >
               </label>
-              <label class="flex items-center gap-1 text-[11px] text-sub">
+              <label class="flex items-center gap-1 whitespace-nowrap text-[11px] text-sub">
                 クールダウン
                 <input
                   type="number"

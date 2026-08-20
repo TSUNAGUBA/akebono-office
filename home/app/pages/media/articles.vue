@@ -37,6 +37,10 @@ const form = ref<Form>({
   topic: '', keyword: '', purpose: 'seo', quality: 'standard', tone: 'formal', audience: '', fromInsightId: null,
 })
 
+// preview は applyDefaults が参照するため、immediate な watch より前に宣言する
+// （宣言前だと TDZ でページ全体が 500 になる実障害 = UnitI 検出 2026-08-20。PR #85 由来）
+const preview = ref<GeneratedArticle | null>(null)
+
 /** セグメント切替時にフォーム既定を設定から流し込む（未入力欄のみ・入力中は保持しない=リセット） */
 function applyDefaults(): void {
   const s = setting.value
@@ -52,7 +56,6 @@ function applyDefaults(): void {
 }
 watch(effectiveChannelId, applyDefaults, { immediate: true })
 
-const preview = ref<GeneratedArticle | null>(null)
 const generating = ref(false)
 const adoptSection = ref<string>('ブログ')
 const sectionOptions = MEDIA_SECTION_CHOICES.map(s => ({ value: s, label: s }))

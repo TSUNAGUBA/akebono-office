@@ -247,7 +247,7 @@ onBeforeUnmount(() => {
                 maxlength="2000"
                 class="textarea flex-1"
                 style="min-height: 40px"
-                placeholder="質問を入力（Enter で送信 / Shift+Enter で改行）"
+                placeholder="質問を入力（Shift+Enter で改行）"
                 aria-label="質問を入力"
                 :disabled="isStreaming"
                 @keydown="onKeydown"
@@ -255,6 +255,7 @@ onBeforeUnmount(() => {
               <button
                 type="button"
                 class="btn btn-primary btn-lg shrink-0"
+                title="Enter でも送信できます"
                 :disabled="isStreaming || !draft.trim()"
                 @click="onSend"
               >

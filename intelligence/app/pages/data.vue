@@ -91,7 +91,8 @@ async function onRefresh(): Promise<void> {
     </UiPageHeader>
 
     <UiSectionCard title="ソース一覧" description="件数・期間はアクセス権の範囲で取得したデータに基づきます" flush>
-      <div class="overflow-x-auto">
+      <!-- scroll-slim: モバイルで末尾列が切れたときにスクロール可能と分かる手掛かり（UnitI） -->
+      <div class="overflow-x-auto pb-1 scroll-slim">
         <table class="tbl min-w-[560px]">
           <thead>
             <tr>

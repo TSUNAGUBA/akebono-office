@@ -256,7 +256,9 @@ const recentLogs = computed(() => logs.value.slice(0, 6))
         </template>
         <UiEmptyState v-if="recentLogs.length === 0" icon="Activity" title="活動ログがありません" />
         <ul v-else class="grid gap-2">
-          <li v-for="l in recentLogs" :key="l.id" class="flex items-start gap-2">
+          <!-- li の min-w-0: grid item の min-width:auto が nowrap 文の内在幅まで列を広げ、
+               truncate が死んでカード境界でぶつ切りになる（UnitI 検出） -->
+          <li v-for="l in recentLogs" :key="l.id" class="flex min-w-0 items-start gap-2">
             <UiAvatar :name="employeeById(l.aiEmployeeId)?.name ?? l.aiEmployeeId" kind="ai" size="sm" />
             <div class="min-w-0 flex-1">
               <p class="truncate text-[13px]">{{ l.summary }}</p>

@@ -298,7 +298,8 @@ async function restoreExt(id: string): Promise<void> {
         <!-- 外部投稿記事（AI インサイトの材料） -->
         <UiSectionCard title="外部投稿記事" description="外部媒体・SNS へ投稿した記事の原文を保管します。メディア AI インサイトの生成材料になります" flush>
           <template #actions>
-            <label class="flex items-center gap-1.5 text-[11px] text-sub">
+            <!-- shrink-0 + nowrap: ヘッダー内で幅を奪われると 1 文字幅の縦書きに潰れる（UnitI 検出） -->
+            <label class="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[11px] text-sub">
               <input v-model="showInactiveExt" type="checkbox"> 取消済みも表示
             </label>
             <button type="button" class="btn btn-sm btn-primary" @click="openExtAdd">

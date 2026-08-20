@@ -4127,8 +4127,15 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   旧表記 `AKEBONO HOME` で作成済みアプリの表示名変更は**任意**（deploy-guide §1-12 に手順注記を追加。
   アプリ検索は大文字小文字を区別しないためコード内の案内文とも不整合を生まない）。
 - [x] docs: ルート README（旧称注記付き）・home/README・deploy-guide・production-architecture・
-  functional-requirements ほか設計文書全件 + project-status.json。検証 = ブラウザ実測で title / ヘッダーロゴの
+  functional-requirements ほか設計文書全件（project-status.json はアプリ名の記載なし = 確認のみ・変更不要）。
+  検証 = ブラウザ実測で title / ヘッダーロゴの
   反映を確認（Playwright・1366px / 375px）。
+- [x] **反復レビュー（原則9）**: R1 [MINOR] モックシード文書名 `AKEBONO_Office_操作マニュアル.pdf`
+  （アンダースコア変種が置換に掛からず残存）→ `AKEBONO_Home_` へ / [MINOR] deploy-guide §1-12 の
+  旧表記注記が文の途中に挿入され引用ブロックが本文を吸い込む → 段落完結後へ移動 /
+  [NIT] 相対表記の取り残し 6 箇所（useIntelStore「Office と同様」・phase3/phase5 文書）→ Home へ /
+  [NIT] 本記録の project-status.json 表現を「確認のみ・変更不要」へ修正。可視箇所の置換漏れは変種スペル
+  網羅 grep でこの 1 件のみ・識別子誤爆ゼロ・regex/高さ計算は実行検証で整合をレビュアーが確認。
 
 ## 100. AI チャットボットページの高さ制御修正（改修依頼 2026-08-20）
 
@@ -4144,3 +4151,59 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   カードを潰さない（超過時は従来どおりページスクロール）。
 - [x] **検証**: Playwright 実測で card 下端の残余 = desktop 32px（= main の pb-8 ちょうど）/
   mobile 72px（= ボトムナビ 56px + pb 16px ちょうど）。375px で崩れなし（原則8）。typecheck / 単体全 green。
+
+## 101. UI 網羅調査と修正: 余白・モバイル横スクロール（改修依頼 2026-08-20）
+
+> 指示: 「ところどころに表示の崩れ。margin/padding が全くない箇所がありボーダーとの距離が近く見づらい。
+> モバイルで表示要素が有効な幅を超えて横スクロールが発生している箇所があった。全アプリ・全ページを
+> 網羅的に調査し、必要に応じて最適な UI 表現になるように修正して。」
+
+- [x] **調査手法**: ①Playwright 機械検査（`e2e/probe-ui-sweep.cjs` = 全ルートの 375px/1366px 巡回で
+  `scrollWidth` 超過とはみ出し要素を検出。home 70 + company 8 + intel 6 + 動的ルート詳細 + akebono
+  業態サブページ = 約 90 画面）②truncate 破れ検査（`e2e/probe-truncate-break.cjs` = nowrap 要素が
+  overflow-hidden のカード境界を超えてぶつ切りされる型。scrollWidth に出ないため①では検出不能）
+  ③全ページのフルページスクリーンショットを独立監査 3 ロールで視覚監査（余白欠落・崩れ）。
+- [x] **根本パターンの特定**: grid/flex item の `min-width: auto` が nowrap 子（タブ列・truncate 文・
+  バッジ・ボタン）の内在幅までトラックを押し広げ、(a) `overflow-x-auto` が発動せずページ全体が
+  横スクロール（/masters/knowledge・34px）(b) truncate の省略記号が出ずカード境界でぶつ切り
+  （company ダッシュボード「直近の活動」・settings「カスタム項目」）→ 包む要素へ `min-w-0` を付与。
+  規約化 = home/CONVENTIONS「スタイル規約」に追記（再発防止 + 回帰検査ハーネスを e2e/ に常設）。
+- [x] **実バグ発見**: `/media/articles` が**ページごと 500**（「Cannot access 'preview' before
+  initialization」= `watch(..., { immediate })` が `const preview` の宣言前に `applyDefaults()` を同期実行
+  する TDZ。PR #85 = 2026-07-29 から本番で記事生成画面が開けない状態だった）→ 宣言順を修正し復旧。
+- [x] **修正一覧（モバイル 375px）**:
+  - media: チャンネル一覧の名前が 2〜3 文字に潰れる（flex-1 basis 0 で指標に幅を奪われる）→ `min-w-40`
+  - media/analytics ほか横棒チャート共通: 長い項目ラベルが canvas 左端で先頭切断 → BarChartCard の
+    horizontal 時に 12 字 + … 省略（ツールチップは全文）
+  - media/settings: 「取消済みも表示」が 1 文字幅の縦書きに潰れる → `shrink-0 whitespace-nowrap`
+  - **UiSectionCard（共通）**: ヘッダーを `flex-wrap` 化 — actions が多いカード（akebono/masters の
+    取込カード・ai-assistant「明日の計画」・settings「汎用区分」ほか）でタイトルが幅 45px に縦潰れ・
+    ボタン見切れになる型を一括解消
+  - settings: エスカレーションルールの閾値ラベル語中折返し → nowrap（行は flex-wrap で折返す）
+  - profile / intelligence data: 通知配信先・ソース一覧テーブルの末尾列切れに手掛かりなし →
+    `pb-1 scroll-slim`（スクロールバー表示）
+  - support/chatbot: 入力欄プレースホルダ 2 行目が下端で半分切れる → 1 行に収まる文言へ短縮
+  - intelligence index: フィードバックループのタイル見出しが語中折返し → モバイル 1 列化
+- [x] **対応不要と判断（設計どおり）**: UiTabBar のタブ列・アイソメトリック図・フォルダチップ列の
+  右端切れ = `overflow-x-auto scroll-slim` の内部スクロール設計（実機はスワイプ + 細スクロールバー）。
+  フルページ撮影での固定ナビ写り込みは撮影アーティファクト。
+- [x] **検証**: 再ビルド後の全ルート再スイープで横スクロール 0 件・truncate 破れ 0 件。
+  home 486 / company 12 テスト・3 アプリ typecheck 全 green。修正 8 画面の目視確認済み。
+- [x] **反復レビュー（原則9）**: R1 [MINOR] UiSectionCard の flex-wrap 化が home のみで複製元同一の
+  company/intelligence 版に未適用（intel /insights で軽度発現を実測）→ 両アプリへ同修正 /
+  [MINOR] ハーネスの再現性（ルート一覧 JSON 未収録・README の参照先破損・「使い捨て」ヘッダーのまま・
+  chromium パスのハードコード）→ `e2e/ui-sweep-routes/` に収録 + 実行例を README へ直接記載 +
+  常設ヘッダーへ更新 + `lib.cjs` の CHROMIUM_PATH 解決を再利用 + 検出時 exit 1・エラーページ検知を追加 /
+  [MINOR] 横棒ラベルの 12 字固定省略がデスクトップでも情報を削る → チャート幅から上限字数を導出
+  （モバイル 12 字・デスクトップ ~46 字。コードポイント単位 = 絵文字を境界で壊さない〔NIT〕）/
+  [NIT] 送信ボタンへ「Enter でも送信できます」title（プレースホルダ短縮の発見性補完）/
+  エスカレーション行のクールダウンラベルも nowrap 対称化 + li に min-w-0（新設規約との自己整合）。
+  TDZ 同型リスクは immediate watch 全 22 箇所の精査で残存ゼロ・min-w-0 の副作用なし・
+  UiSectionCard のデスクトップ 1366px 崩れゼロをレビュアーが実測確認済み。
+  R2（R1 対応差分の収束確認）: 指摘ゼロ収束（M-1〜N-4 全 9 件の解消を実ファイル diff・実行挙動・
+  実配信で確認。`this.chart.width` の Chart.js 4.5.1 実体整合・home.json とページ実体の一致も検証済み）。
+  [NIT フォロー] 動的詳細ルート 4 件（deal-0001 / pact-0001 / svc-01 / dt-01 = 決定的シードで安定）を
+  home.json へ追記・sweep に最終 URL 記録（リダイレクト痕跡）・routesJson 読込エラーを exit 2 に区別。
+  BarChartCard の company/intel 複製版は horizontal 未使用（縦棒・短ラベルのみ）のため省略ロジックの
+  同期は見送り = 次回チャート改修時に同期する（複製 drift の認識記録）。
+  最終スイープ: R1 対応後ビルドで 3 アプリ全ルート（74/8/6 + 動的詳細）× 両プローブ全 CLEAN。

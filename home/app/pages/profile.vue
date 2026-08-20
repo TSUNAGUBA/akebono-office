@@ -373,7 +373,8 @@ const accountRows = computed(() => [
       description="通知の種類ごとに届けるチャネルを選べます（アプリ内は既定で ON）"
     >
       <!-- モバイル幅は横スクロール（行ヘッダーは sticky = 原則8） -->
-      <div class="overflow-x-auto">
+      <!-- scroll-slim: モバイルで末尾列（Google Chat）が切れたときにスクロール可能と分かる手掛かり（UnitI） -->
+      <div class="overflow-x-auto pb-1 scroll-slim">
         <table class="w-full min-w-[420px] border-collapse text-[13px]">
           <thead>
             <tr class="border-b border-line">
