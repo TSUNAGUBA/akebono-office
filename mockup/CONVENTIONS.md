@@ -148,8 +148,11 @@ const cl = useCustomerLogs()   // allLogs / archivedOf(自分) / ensureLoaded / 
 
 // 活動記録 3 種（F-43/F-44/F-45。チーム共有 = 全員が閲覧・登録・編集可・取消/復元 = 原則9.5。検証 SoT = shared/domain/activity。2026-08-18）
 const sup = useSupportActivities()   // list / archivedList / save(id|null, input) / archive / restore / refresh
-const sal = useSalesActivities()     // 同上 + byId（パートナー活動の関連商談リンク解決）
-const pact = usePartnerActivities()  // 同上（関連商談 relatedSalesActivityId は営業活動への任意リンク）
+const sal = useSalesActivities()     // 同上 + byId + generateDigest(id)（活動ログの AI 集約 = 生成→保管→再生成で上書き。2026-08-20）
+const pact = usePartnerActivities()  // 同上 + byId + generateDigest（関連商談 relatedSalesActivityId は営業活動への任意リンク。initiatives = 取組内容）
+// 活動ログ（案件ヘッダー + 活動ログ構造 = 2026-08-20。営業/BP 共通実装。API はネスト資源の都度フェッチ = コレクションキャッシュ非使用）
+const alog = useActivityLogs('sales' /* or 'partner' */)  // logsOf / archivedOf / pageFetch / save / archive / restore
+// mock 書込は commit() の戻り値を検査し、false はロールバック + AKO-***-090（保存容量不足）を返す（登録無反応バグの根本対応）
 // 顧客(会社)コンボボックスの名寄せ・新規登録（モック側の共通実装。API 側は api/src/lib/company-resolve）
 const { lookupCompany, createCompany } = useCompanyResolve()
 
@@ -227,8 +230,11 @@ const imp = useImprovements()  // submit（body + 対象ページ〔既定=開�
 | `WidgetsPunchClock` | 打刻 = タイムカード（flat: モーダル内等でカード枠を外す） |
 | `WidgetsCustomerLogPanel` | props なし。顧客活動（/customer-log）の実体（一覧 20 件ページング + 検索/顧客/記録者フィルタ・登録/編集モーダル〔活動目的チップ + 活動手段 UiChipTabs + 会社/担当者コンボボックス〕・詳細モーダル・取消/復元。全メンバー閲覧可・編集は本人のみ。2026-08-18 改修） |
 | `WidgetsSupportActivityPanel` | props なし。サポート活動（/support-activity）の実体（一覧 20 件ページング〔API = サーバーページング〕+ 検索/ステータス/種別フィルタ・詳細ドロワー view/edit/create・取消/復元。F-43・2026-08-18） |
-| `WidgetsSalesActivityPanel` | props なし。営業活動（/sales-activity）の実体（フェーズバッジ・金額/確度・Next Action。構成は SupportActivityPanel と同型。F-44・2026-08-18） |
-| `WidgetsPartnerActivityPanel` | props なし。ビジネスパートナー活動（/partner-activity）の実体（関連商談 = 営業活動への任意リンク表示付き。構成は SupportActivityPanel と同型。F-45・2026-08-18） |
+| `WidgetsSalesActivityPanel` | props なし。営業活動の**案件一覧**（/sales-activity。2026-08-20 で案件ヘッダー + 活動ログ構造へ再編）。行クリック → `/sales-activity/<id>` 案件詳細ページへ遷移。AI集約サマリー列 + フェーズバッジ・新規登録 = `WidgetsSalesActivityFormDrawer`。F-44 |
+| `WidgetsPartnerActivityPanel` | props なし。BP活動の**案件一覧**（/partner-activity。同 2026-08-20 再編・「背景・目的」+「取組内容」）。行クリック → `/partner-activity/<id>` 詳細。新規登録 = `WidgetsPartnerActivityFormDrawer`。F-45 |
+| `WidgetsSalesActivityFormDrawer` / `WidgetsPartnerActivityFormDrawer` | open, mode('create'/'edit'), activity? + `@close` `@saved`。案件ヘッダーの登録/編集ドロワー（フッター直上に role="alert" のインラインエラー常設 = トースト非依存。BP は背景・目的/取組内容/活動区分のフィールド単位エラー。2026-08-20） |
+| `WidgetsActivityLogsCard` | kind('sales'/'partner'), activityId。案件詳細の活動ログカード（20件/ページ・活動日降順・検索/種別フィルタ・ログ詳細/編集/新規ドロワー・取消/復元。データは `useActivityLogs(kind)` = ネスト資源の都度フェッチ。2026-08-20） |
+| `WidgetsActivityDigestCard` | kind, activityId, digest?。AI集約カード（保存済み digest 表示 + 「AIで集約/再生成」・生成日時・ログ n 件時点・LLM/簡易集約バッジ。2026-08-20） |
 | `WidgetsCalendarConnectGate` | Google カレンダー連携ゲート（擬似 OAuth 同意・props なし）。連携済みバーに「同期カレンダー」選択モーダル（バッチ7b） |
 | `MastersDeptOrgNode` | 組織図の再帰ノード（node: DeptNode, depth）。`@select` で部署詳細へ |
 | `WidgetsNotesPanel` | kind('poipoi'/'minutes'), showAuthor。ノート共通パネル（**一覧が基本ビュー・登録/ファイル取込はヘッダーボタン → 入力モーダル（バッチ7h）**。マークダウンプレビュー・ステージ → 取込ボタン・サマリー一覧（押下で詳細モーダル）+ 行単位の取消/復元 + 管理者の全ポスト閲覧（poipoi）。バッチ7c/7d/7e/7h） |
