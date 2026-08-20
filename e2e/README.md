@@ -61,13 +61,20 @@ SKIP_BUILD=1 ./run-new-apps-mock.sh   # ビルド済み .output/public を再利
 
 ## UI 網羅検査プローブ（UnitI・2026-08-20）
 
-CI には組み込まず、UI 改修時に手動で回す回帰検査ハーネス:
+CI には組み込まず、UI 改修時に手動で回す回帰検査ハーネス（検出ありは exit 1）:
 
 - `probe-ui-sweep.cjs <baseUrl> <outDir> <routesJson>` — 全ルートを 375px / 1366px で巡回し、
-  横スクロール（`scrollWidth` 超過）とはみ出し要素を検出 + フルページスクリーンショットを保存
+  横スクロール（`scrollWidth` 超過）・はみ出し要素・エラーページ（500 等の描画）を検出 +
+  フルページスクリーンショットを保存
 - `probe-truncate-break.cjs <baseUrl> <routesJson> [label]` — nowrap 要素（truncate・バッジ・ボタン）が
   overflow-hidden のカード境界を超えてぶつ切りされる型（grid/flex の min-width:auto 伝播）を検出。
-  横スクロールに現れないため sweep では拾えない
+  横スクロールに現れないため sweep では拾えない。**両方をセットで実行する**
 
-使い方: 対象アプリを `npm run generate` → `python3 -m http.server <port> -d .output/public` で配信し、
-ルート一覧の JSON 配列を渡して実行する（例は home/CONVENTIONS.md「スタイル規約」の回帰検査注記を参照）。
+ルート一覧は `ui-sweep-routes/`（home.json / company.json / intel.json）に収録。ページを増やしたら追記する。
+
+```bash
+# 例: home を検査（company/intel はポートと JSON を読み替え）
+( cd ../home && npm run generate && python3 -m http.server 4173 -d .output/public & )
+node probe-ui-sweep.cjs http://127.0.0.1:4173 /tmp/sweep-home ui-sweep-routes/home.json
+node probe-truncate-break.cjs http://127.0.0.1:4173 ui-sweep-routes/home.json home
+```

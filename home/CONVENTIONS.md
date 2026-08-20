@@ -300,7 +300,9 @@ const imp = useImprovements()  // submit（body + 対象ページ〔既定=開�
   境界でぶつ切りになる・`overflow-x-auto` の内部スクロールが発動せずページ全体が横スクロールする。
   `ul.grid` のリスト行（`li`）や `UiTabBar` を包む素の div には `min-w-0` を付ける。
   横スクロールが仕様のコンテナ（表・チップ列・アイソメ図）には `overflow-x-auto pb-1 scroll-slim` で
-  スクロール可能の手掛かりを見せる。回帰検査: `e2e/probe-ui-sweep.cjs`（横スクロール網羅）
+  スクロール可能の手掛かりを見せる。回帰検査 = `e2e/probe-ui-sweep.cjs`（横スクロール・エラーページ網羅）+
+  `e2e/probe-truncate-break.cjs`（truncate ぶつ切り型。横スクロールに現れないため sweep では検出不能）を
+  セットで実行（ルート一覧・実行例は `e2e/README.md`「UI 網羅検査プローブ」）
 
 ## 品質確認（担当分の完了条件）
 

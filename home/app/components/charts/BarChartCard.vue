@@ -40,11 +40,14 @@ const options = computed<ChartOptions<'bar'>>(() => ({
     [props.horizontal ? 'y' : 'x']: {
       grid: { display: false },
       // 横棒の項目ラベルは長文（記事タイトル等）だと canvas 幅を超えて先頭が切断される
-      // （モバイル・UnitI 検出）。表示のみ省略しツールチップは全文のまま
+      // （モバイル・UnitI 検出）。チャート幅から上限字数を導出して表示のみ省略（ツールチップは全文。
+      // デスクトップは広い分だけ長く表示 = レビュー R1）。コードポイント単位 = 絵文字を境界で壊さない
       ...(props.horizontal
-        ? { ticks: { callback(this: { getLabelForValue: (v: number) => string }, v: unknown) {
+        ? { ticks: { callback(this: { chart: { width: number }; getLabelForValue: (v: number) => string }, v: unknown) {
             const label = this.getLabelForValue(Number(v))
-            return label.length > 12 ? `${label.slice(0, 12)}…` : label
+            const max = Math.max(12, Math.floor(this.chart.width / 28))
+            const cps = [...label]
+            return cps.length > max ? `${cps.slice(0, max).join('')}…` : label
           } } }
         : {}),
     },

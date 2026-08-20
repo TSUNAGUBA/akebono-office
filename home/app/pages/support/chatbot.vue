@@ -255,6 +255,7 @@ onBeforeUnmount(() => {
               <button
                 type="button"
                 class="btn btn-primary btn-lg shrink-0"
+                title="Enter でも送信できます"
                 :disabled="isStreaming || !draft.trim()"
                 @click="onSend"
               >

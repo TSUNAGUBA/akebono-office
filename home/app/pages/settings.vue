@@ -609,10 +609,12 @@ async function onResetDemo(): Promise<void> {
         <!-- e) エスカレーションルール -->
         <UiSectionCard title="エスカレーションルール" description="シグナル検知の有効/無効・閾値・クールダウンを調整します">
           <ul class="grid gap-1.5">
+            <!-- min-w-0: nowrap のラベル対（閾値・クールダウン）を持つため、親 grid の
+                 トラックを内在幅で押し広げない（CONVENTIONS「スタイル規約」との自己整合） -->
             <li
               v-for="r in escalationRules"
               :key="r.key"
-              class="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-line px-2.5 py-2"
+              class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-line px-2.5 py-2"
             >
               <button
                 type="button"
@@ -643,7 +645,7 @@ async function onResetDemo(): Promise<void> {
                   @change="onRuleThreshold(r, $event)"
                 >
               </label>
-              <label class="flex items-center gap-1 text-[11px] text-sub">
+              <label class="flex items-center gap-1 whitespace-nowrap text-[11px] text-sub">
                 クールダウン
                 <input
                   type="number"

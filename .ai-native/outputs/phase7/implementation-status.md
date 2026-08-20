@@ -4189,3 +4189,14 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   フルページ撮影での固定ナビ写り込みは撮影アーティファクト。
 - [x] **検証**: 再ビルド後の全ルート再スイープで横スクロール 0 件・truncate 破れ 0 件。
   home 486 / company 12 テスト・3 アプリ typecheck 全 green。修正 8 画面の目視確認済み。
+- [x] **反復レビュー（原則9）**: R1 [MINOR] UiSectionCard の flex-wrap 化が home のみで複製元同一の
+  company/intelligence 版に未適用（intel /insights で軽度発現を実測）→ 両アプリへ同修正 /
+  [MINOR] ハーネスの再現性（ルート一覧 JSON 未収録・README の参照先破損・「使い捨て」ヘッダーのまま・
+  chromium パスのハードコード）→ `e2e/ui-sweep-routes/` に収録 + 実行例を README へ直接記載 +
+  常設ヘッダーへ更新 + `lib.cjs` の CHROMIUM_PATH 解決を再利用 + 検出時 exit 1・エラーページ検知を追加 /
+  [MINOR] 横棒ラベルの 12 字固定省略がデスクトップでも情報を削る → チャート幅から上限字数を導出
+  （モバイル 12 字・デスクトップ ~46 字。コードポイント単位 = 絵文字を境界で壊さない〔NIT〕）/
+  [NIT] 送信ボタンへ「Enter でも送信できます」title（プレースホルダ短縮の発見性補完）/
+  エスカレーション行のクールダウンラベルも nowrap 対称化 + li に min-w-0（新設規約との自己整合）。
+  TDZ 同型リスクは immediate watch 全 22 箇所の精査で残存ゼロ・min-w-0 の副作用なし・
+  UiSectionCard のデスクトップ 1366px 崩れゼロをレビュアーが実測確認済み。
