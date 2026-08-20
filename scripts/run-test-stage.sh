@@ -7,7 +7,7 @@
 # ステージ（単体テスト・結合テスト・シナリオテスト）から呼び出される。
 #
 # 本アプリでは repository variables ではなく、ワークフロー側で本アプリの実コマンドを
-# STAGE_CMD に直接渡して呼び出す（例: 単体 = mockup/api の vitest + typecheck）。
+# STAGE_CMD に直接渡して呼び出す（例: 単体 = home/api の vitest + typecheck）。
 #
 #   使い方:
 #     STAGE_CMD="cd api && npm run test:integration" \

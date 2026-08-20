@@ -1,5 +1,5 @@
 /**
- * シフト API（F-05）。mockup useShifts の API 版。
+ * シフト API（F-05）。home useShifts の API 版。
  * - 期間状態は draft→open→closed→adjusting→published の正順のみ（FOR UPDATE クレームで直列化）
  * - 希望は open かつ締切内・本人のみ（設定系 = UNIQUE upsert で上書き）。割当は adjusting 中のみ変更可
  * - 確定・公開は transition(published) が割当 confirmed 化 + スタッフ通知まで担う
@@ -20,7 +20,7 @@ import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
 import { notify, notifyAdmins } from '../lib/notify'
 
-/** シフト管理操作の権限ガード（mockup と同一のドメイン固有コード AKO-SFT-008） */
+/** シフト管理操作の権限ガード（home と同一のドメイン固有コード AKO-SFT-008） */
 function requireShiftAdmin(c: Context): AuthUser {
   const user = c.get('user')
   if (user.role !== 'admin') throw err('AKO-SFT-008', 'この操作には管理者権限が必要です', 403)
@@ -47,13 +47,13 @@ function isHhmm(v: unknown): v is string {
 
 const WEEKDAYS_JP = ['日', '月', '火', '水', '木', '金', '土'] as const
 
-/** YYYY-MM-DD → YYYY/M/D(曜)。mockup の fmtDateLong と同一表示（メッセージのモード間整合） */
+/** YYYY-MM-DD → YYYY/M/D(曜)。home の fmtDateLong と同一表示（メッセージのモード間整合） */
 function jpDateLong(dateKey: string): string {
   const [y, m, d] = dateKey.split('-').map(Number)
   return `${y}/${m}/${d}(${WEEKDAYS_JP[weekdayOf(dateKey)]})`
 }
 
-/** YYYY-MM-DD → M/D。mockup の fmtDate と同一表示 */
+/** YYYY-MM-DD → M/D。home の fmtDate と同一表示 */
 function jpDate(dateKey: string): string {
   return `${Number(dateKey.slice(5, 7))}/${Number(dateKey.slice(8, 10))}`
 }

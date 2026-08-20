@@ -1,5 +1,5 @@
 /**
- * 日報・週報 API。mockup useReports の API 版。
+ * 日報・週報 API。home useReports の API 版。
  * - 提出済み日報は本人が編集可（提出状態・初回提出時刻は維持・監査ログ記録。下書きへは戻せない = AKO-REP-001）
  * - 提出済み週報は編集不可（AKO-REP-002 = 記録系の状態保護）
  * - 工数乖離チェック（勤怠実労働との差 60 分超で hoursGapMinutes を返す = 画面が警告表示）
@@ -60,7 +60,7 @@ function cleanTeamShareKind(v: unknown): string {
   return (WEEKLY_TEAM_SHARE_KINDS as readonly string[]).includes(s) ? s : ''
 }
 
-/** エントリの正規化（mockup cleanEntries と同一: 0.25h 刻み・progress 0-100。theme = 業務テーマ自由入力・projectId は旧形式互換） */
+/** エントリの正規化（home cleanEntries と同一: 0.25h 刻み・progress 0-100。theme = 業務テーマ自由入力・projectId は旧形式互換） */
 function cleanEntries(entries: unknown): ReportEntry[] {
   if (!Array.isArray(entries)) return []
   return entries
@@ -75,7 +75,7 @@ function cleanEntries(entries: unknown): ReportEntry[] {
     }))
 }
 
-/** 明日の予定の正規化（mockup cleanTomorrowPlans と同一: 空行除去・0.25h 刻み・最大 TOMORROW_PLANS_MAX 件） */
+/** 明日の予定の正規化（home cleanTomorrowPlans と同一: 空行除去・0.25h 刻み・最大 TOMORROW_PLANS_MAX 件） */
 function cleanTomorrowPlans(plans: unknown): TomorrowPlan[] {
   if (!Array.isArray(plans)) return []
   return plans
@@ -341,7 +341,7 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
       })
     }
     const gap = status === 'submitted' ? await hoursGapMinutes(pool, user.id, body.date, entries) : null
-    // 提出成立後の補助処理: 課題記入あり → エスカレーション起票（mockup submit と同一挙動）。
+    // 提出成立後の補助処理: 課題記入あり → エスカレーション起票（home submit と同一挙動）。
     // クールダウン（AKO-ESC-001）は既に管理者へ共有済みとして escalated = true を返す
     let escalated = false
     if (status === 'submitted' && (body.issues ?? '').trim()) {
@@ -524,7 +524,7 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
     return c.json({ data: { id, status } })
   })
 
-  // 日報リマインド（管理者 → 未提出メンバーへ通知。mockup useReports.remind と同一挙動）
+  // 日報リマインド（管理者 → 未提出メンバーへ通知。home useReports.remind と同一挙動）
   app.post('/remind', async (c) => {
     requireAdmin(c)
     const body = await c.req.json().catch(() => ({})) as { memberId?: string; date?: string }
@@ -590,7 +590,7 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
     await pool.query(
       `INSERT INTO report_comments (id, report_id, member_id, body, at) VALUES ($1, $2, $3, $4, $5)`,
       [id, reportId, user.id, text, nowJstIso()])
-    // 補助処理: 日報作成者へ通知（自分の日報・AI 日報は除く。mockup と同一挙動）
+    // 補助処理: 日報作成者へ通知（自分の日報・AI 日報は除く。home と同一挙動）
     if (target.authorKind === 'human' && target.memberId && target.memberId !== user.id) {
       await notify(pool, target.memberId, 'comment',
         `日報（${target.date}）にコメント`, `${user.name}: ${[...text].slice(0, 60).join('')}`, `/reports?date=${target.date}`)
@@ -598,7 +598,7 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
     return c.json({ data: { id } }, 201)
   })
 
-  // リアクションのトグル（コメントに対して 1 人 1 絵文字 1 個。mockup toggleReaction と同一挙動）
+  // リアクションのトグル（コメントに対して 1 人 1 絵文字 1 個。home toggleReaction と同一挙動）
   app.post('/comments/:commentId/reactions', async (c) => {
     const user = c.get('user')
     const commentId = c.req.param('commentId')

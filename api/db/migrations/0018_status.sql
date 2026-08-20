@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS uptime_daily (
   UNIQUE (service_id, date)
 );
 
--- 提供サービスのマスタ初期値（mockup シードと同一。新規環境でも手動投入なしで F-11 が動く = 原則1。
+-- 提供サービスのマスタ初期値（home シードと同一。新規環境でも手動投入なしで F-11 が動く = 原則1。
 -- インシデント・uptime は記録系/導出データのためシードしない = sales_monthly と同方針）
 INSERT INTO system_services (id, name, description, url, components) VALUES
   ('svc-01', 'AKEBONO SCM', 'アケボノ商事向け SCM プラットフォーム', 'https://scm.example.com',

@@ -1,5 +1,5 @@
 /**
- * 汎用マスタ CRUD の台帳（mockup useMasterCrud の対応物）。
+ * 汎用マスタ CRUD の台帳（home useMasterCrud の対応物）。
  * - エンティティごとにテーブル・id プレフィックス・zod スキーマ・jsonb 列・ガードを宣言する
  * - 論理削除のみ（active=false）。例外: 関係エッジ（company/contact-relations）と
  *   未使用の関係種別（relation-types。参照ガードは masters.ts）は物理削除可
@@ -17,7 +17,7 @@ const hhmm = z.string().regex(/^\d{2}:\d{2}$/, '時刻は HH:mm 形式で入力�
 
 const employmentType = z.enum(['director', 'employee', 'contract', 'parttime', 'outsource'])
 
-// ---------- Akebono 設定系（Phase B = 0031。値域は mockup/app/types/akebono.ts の union が SoT） ----------
+// ---------- Akebono 設定系（Phase B = 0031。値域は home/app/types/akebono.ts の union が SoT） ----------
 
 const industryType = z.enum(['retail', 'maker', 'logistics', 'it_service', 'other'])
 /** 空文字を null として扱う任意文字列（画面の未選択・未入力と互換）。cap はコードポイントでなく length（ASCII 前提でない表示名は余裕を持たせる） */

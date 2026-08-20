@@ -7,9 +7,9 @@
 
 ## 0. 背景と制約
 
-- 既存 AKEBONO Office（`mockup/`）から独立した 2 つの新アプリを、**フロントエンドのプロジェクトレベルで別建て**として新設する。公開 URL も別（Firebase Hosting のサイト分割）。
+- 既存 AKEBONO Office（`home/`）から独立した 2 つの新アプリを、**フロントエンドのプロジェクトレベルで別建て**として新設する。公開 URL も別（Firebase Hosting のサイト分割）。
 - **Database（PostgreSQL）と API（`api/`）は共通・変更禁止。** 新アプリの機能は既存 API で実現できる範囲とし、それを超える機能は**フロントエンド内のモックとして実現**する（後日、共通 API にて本実装）。
-- 既存 AKEBONO Office（`mockup/`）は変更しない（下位互換の保護 = 開発原則7）。Office 内 F-08「AIネイティブカンパニー」メニューの整理（リンク化・撤去）は、AKEBONO Company 公開後の残課題として `phase7/implementation-status.md` に記録する。
+- 既存 AKEBONO Office（`home/`）は変更しない（下位互換の保護 = 開発原則7）。Office 内 F-08「AIネイティブカンパニー」メニューの整理（リンク化・撤去）は、AKEBONO Company 公開後の残課題として `phase7/implementation-status.md` に記録する。
 
 ## 1. AKEBONO Company（`company/`）
 
@@ -49,7 +49,7 @@
 - 既存 F-08 の踏襲（admin のみ）。論理削除 + 復元（原則9.5）
 
 ### FC-08 認証・権限
-- mockup と同一の 3 モード（モック / dev ヘッダ / Firebase ID トークン）。API モードは `/v1/me` によるメンバー照合、`/login` 画面
+- home と同一の 3 モード（モック / dev ヘッダ / Firebase ID トークン）。API モードは `/v1/me` によるメンバー照合、`/login` 画面
 
 ## 2. AKEBONO Intelligence（`intelligence/`）
 
@@ -91,7 +91,7 @@
 | N-2 | 既存デザインシステム（CSS 変数トークン・Ui コンポーネント群）を踏襲。ブランド色のみアプリ別（Company = 紫系 / Intelligence = ティール系） |
 | N-3 | エラーコード規約 `AKC-*`（Company）/ `AKI-*`（Intelligence）。API 由来は `AKO-*` を透過 |
 | N-4 | モック実装箇所は画面上に明示（バッジ・注記）し、API 本実装までの暫定であることを利用者へ伝える |
-| N-5 | 決定的動作（`Math.random` 禁止・`~/utils/rng`）・`v-html` 禁止・JST 壁時計 = mockup の CONVENTIONS を踏襲 |
+| N-5 | 決定的動作（`Math.random` 禁止・`~/utils/rng`）・`v-html` 禁止・JST 壁時計 = home の CONVENTIONS を踏襲 |
 | N-6 | 新規操作には取消フロー（論理削除・編集上書き・リセット）を用意する（原則9.5） |
 | N-7 | デプロイは既存パイプライン（deploy.yml）に統合。サイト用 secrets 未登録時は該当アプリのデプロイをスキップし、他のデプロイを止めない（原則4） |
 

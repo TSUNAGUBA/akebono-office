@@ -16,7 +16,7 @@
 | 状態管理 | Nuxt `useState` + composables（Pinia 不使用） | 兄弟リポジトリと同じ最小構成 |
 | モックデータ | 決定的シード生成（`Math.random` 禁止）+ localStorage 永続化 | akebono-scm-platform mockup 規範を踏襲 |
 | テスト/検証 | `nuxi typecheck`（vue-tsc）+ ビルド成功 + ユーティリティの単体テスト（vitest） | モック段階の最低ライン |
-| 配置 | リポジトリ直下 `mockup/` | akebono-scm-platform と同じ配置慣例 |
+| 配置 | リポジトリ直下 `home/` | akebono-scm-platform と同じ配置慣例 |
 
 ## 選定理由（要件との対応）
 
@@ -31,7 +31,7 @@
 
 | 候補 | 不採用理由 |
 |---|---|
-| Vite + Vue 3 素構成（scm-platform mockup と同一） | 本アプリは将来そのまま本番 UI に育てる前提があり、Nuxt の規約（pages/layouts/auto-import）が middle〜long term で有利。undeux で Nuxt 4 実績あり |
+| Vite + Vue 3 素構成（scm-platform home と同一） | 本アプリは将来そのまま本番 UI に育てる前提があり、Nuxt の規約（pages/layouts/auto-import）が middle〜long term で有利。undeux で Nuxt 4 実績あり |
 | Next.js + React（tokutake 方式） | CLAUDE.md・他兄弟リポジトリの Vue 系規約と乖離。composables 資産の相互流用ができない |
 | three.js（3D オフィス） | モック目的に対して依存が過大。操作の体感はアイソメトリック表現で十分得られる |
 | Pinia / Vuex | useState + composables で足りる規模。兄弟リポジトリも不使用 |

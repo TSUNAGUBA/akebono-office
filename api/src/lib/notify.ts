@@ -1,6 +1,6 @@
 /**
  * 通知の発行（補助処理・非ブロッキング: 失敗しても主フローを止めない。開発原則4）
- * mockup useNotifications.notify / notifyAdmins の API 版。
+ * home useNotifications.notify / notifyAdmins の API 版。
  *
  * 個人別マルチチャネル通知連携（改修依頼 2026-08-20）で配信エンジンを拡張。
  * AKEBONO HOME 名義化（オペレーター指示 2026-08-20）で外部送信をテナント資格情報へ切替。シグネチャは不変:
@@ -25,7 +25,7 @@
  *   ルートファクトリがマウント時に登録）後に動く。fire-and-forget は呼び出し元の db ハンドル
  *   （トランザクション中の PoolClient = 応答後に解放され得る）を使わず、登録された Pool を使う。
  * - リアルタイム配信（SSE/WebSocket）は導入しない設計判断: クライアントは既存の 60 秒ポーリング
- *   （mockup useNotifications）を維持し、即時性は外部チャネル（Slack / Google Chat の DM）が担う。
+ *   （home useNotifications）を維持し、即時性は外部チャネル（Slack / Google Chat の DM）が担う。
  */
 import type pg from 'pg'
 import { nowJstIso } from '../../../shared/domain/jst'
@@ -94,7 +94,7 @@ export async function notify(
   }
 }
 
-/** 管理者全員へ通知する（mockup と同一: role='admin' の在籍者） */
+/** 管理者全員へ通知する（home と同一: role='admin' の在籍者） */
 export async function notifyAdmins(
   db: pg.Pool | pg.PoolClient,
   kind: NotificationKind,

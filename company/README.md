@@ -1,12 +1,12 @@
 # AKEBONO Company
 
-AI ネイティブカンパニーの独立アプリ。AKEBONO Office（`../mockup/`）内の F-08「AIネイティブカンパニー」を
+AI ネイティブカンパニーの独立アプリ。AKEBONO Office（`../home/`）内の F-08「AIネイティブカンパニー」を
 **別 URL の独立フロントエンド**として切り出したものです。共通基盤のデータを RAG として使いながら、
 AI 社員がタスクを自律的に完遂し、トークン消費と予測費用の可視化・抑制・制限（トークン管理）を提供します。
 
 - 要件: [`../.ai-native/outputs/phase3/company-intelligence-requirements.md`](../.ai-native/outputs/phase3/company-intelligence-requirements.md)
 - 設計: [`../.ai-native/outputs/phase5/company-intelligence-design.md`](../.ai-native/outputs/phase5/company-intelligence-design.md)
-- 実装規約: [`../mockup/CONVENTIONS.md`](../mockup/CONVENTIONS.md) を踏襲（デザイントークン・決定的モック・JST 壁時計・エラーコード等）
+- 実装規約: [`../home/CONVENTIONS.md`](../home/CONVENTIONS.md) を踏襲（デザイントークン・決定的モック・JST 壁時計・エラーコード等）
 
 ## 画面
 

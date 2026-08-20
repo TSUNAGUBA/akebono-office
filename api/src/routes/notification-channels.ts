@@ -1,5 +1,5 @@
 /**
- * 個人別マルチチャネル通知連携 API（Slack / Google Chat。改修依頼 2026-08-20）。mockup useNotificationChannels の API 版。
+ * 個人別マルチチャネル通知連携 API（Slack / Google Chat。改修依頼 2026-08-20）。home useNotificationChannels の API 版。
  *
  * AKEBONO HOME 名義化（オペレーター指示 2026-08-20）で個人 OAuth を廃止し、テナント資格情報による
  * アプリ名義送信へ切替（0077。旧方式の設計判断は 0075 時点の本ファイル履歴を参照）:

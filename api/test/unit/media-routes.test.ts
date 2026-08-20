@@ -6,7 +6,7 @@
  * - 旧 normalizeIntegratedMetrics / applyServerMediaAxis（M2 = クライアント合成の受領検証）は
  *   Phase C のサーバー組み立て化（buildIntegratedMetrics）で撤去 = テストも削除
  *   （組み立ての検証は shared/domain の akebono-integrated.test + 統合テストが担う）
- * - insightHintsOf: 保管済みインサイトからのヒント抽出（mockup hintsFromInsight と同一挙動）
+ * - insightHintsOf: 保管済みインサイトからのヒント抽出（home hintsFromInsight と同一挙動）
  */
 import { describe, expect, it } from 'vitest'
 import {

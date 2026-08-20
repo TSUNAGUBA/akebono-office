@@ -1,5 +1,5 @@
 /**
- * エスカレーション API（F-12）。mockup useEscalations の API 版。
+ * エスカレーション API（F-12）。home useEscalations の API 版。
  * - 起票（POST /）: dedupeKey + クールダウンで冪等（AKO-ESC-001）。ルール無効は AKO-ESC-002
  * - 解決（POST /:id/resolution）: 管理者のみ。open → resolved のクレームファースト（AKO-ESC-003）。
  *   裁定はナレッジ還流（補助処理・失敗しても解決は成立）。回答は本人へ通知

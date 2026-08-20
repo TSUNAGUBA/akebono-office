@@ -4,7 +4,7 @@
   Repository secrets を PowerShell だけで設定するスクリプト。
 
 .DESCRIPTION
-  [mockup（Firebase Hosting）用 — 必須]
+  [home（Firebase Hosting）用 — 必須]
     - FIREBASE_SERVICE_ACCOUNT : Firebase Hosting デプロイ用サービスアカウント鍵 JSON
     - FIREBASE_PROJECT_ID      : Firebase プロジェクト ID
 
@@ -12,7 +12,7 @@
     - FIREBASE_HOSTING_SITE_COMPANY      : AKEBONO Company のサイト ID（-CompanyHostingSite）
     - FIREBASE_HOSTING_SITE_INTELLIGENCE : AKEBONO Intelligence のサイト ID（-IntelligenceHostingSite）
       ※ サイトは事前に `firebase hosting:sites:create <サイトID>` で作成する（deploy-guide.md §1-11）。
-        未設定のアプリはデプロイがスキップされる（mockup・api には影響しない）。
+        未設定のアプリはデプロイがスキップされる（home・api には影響しない）。
         API 接続にはサイトのオリジンを API_CORS_ORIGINS へ含める必要がある
         （本スクリプトは -CompanyHostingSite / -IntelligenceHostingSite 指定時、
          -CorsOrigins 省略なら既定 CORS に各サイトのオリジンを自動で含める）
@@ -46,7 +46,7 @@
     - 対象リポジトリへの admin 権限があること
 
   サービスアカウントの準備（初回のみ・GCP 側の操作。詳細は deploy-guide.md）:
-    mockup 用ロール: roles/firebasehosting.admin
+    home 用ロール: roles/firebasehosting.admin
     api 用ロール:    roles/run.admin, roles/artifactregistry.admin,
                      roles/iam.serviceAccountUser, roles/secretmanager.admin,
                      roles/serviceusage.serviceUsageAdmin（Vertex AI の API 有効化用）,
@@ -66,11 +66,11 @@
         --iam-account "github-actions-deploy@PROJECT_ID.iam.gserviceaccount.com"
 
 .EXAMPLE
-  # mockup のみ（従来と同じ使い方。下位互換）
+  # home のみ（従来と同じ使い方。下位互換）
   ./scripts/setup-deploy-secrets.ps1 -ProjectId my-firebase-project -ServiceAccountJsonPath ./firebase-sa.json
 
 .EXAMPLE
-  # mockup + api（Cloud Run。SA 鍵は共用）
+  # home + api（Cloud Run。SA 鍵は共用）
   ./scripts/setup-deploy-secrets.ps1 -ProjectId my-project -ServiceAccountJsonPath ./deploy-sa.json `
     -DatabaseUrl 'postgresql://app:PASS@mydb.xxxx.ap-northeast-1.rds.amazonaws.com:5432/akebono_office'
 
@@ -230,9 +230,9 @@ if ($firebaseSa.Parsed.project_id -and $firebaseSa.Parsed.project_id -ne $Projec
   Write-Warning "鍵の project_id ($($firebaseSa.Parsed.project_id)) と -ProjectId ($ProjectId) が一致しません。意図したプロジェクトか確認してください。"
 }
 
-# ---------- mockup 用 Secrets（冪等: 再実行すると同名 secret を上書き更新） ----------
+# ---------- home 用 Secrets（冪等: 再実行すると同名 secret を上書き更新） ----------
 
-Write-Step "Repository secrets を設定（mockup / Firebase Hosting）: $Repo"
+Write-Step "Repository secrets を設定（home / Firebase Hosting）: $Repo"
 Set-RepoSecret 'FIREBASE_SERVICE_ACCOUNT' $firebaseSa.Raw
 Set-RepoSecret 'FIREBASE_PROJECT_ID' $ProjectId
 
@@ -263,7 +263,7 @@ if ($DatabaseUrl) {
     $gcpSa = Read-ServiceAccountJson $GcpServiceAccountJsonPath
   }
   $effectiveGcpProject = if ($GcpProjectId) { $GcpProjectId } else { $ProjectId }
-  # 既定 CORS: mockup（デフォルトサイト）+ 指定された company / intelligence サイトのオリジン
+  # 既定 CORS: home（デフォルトサイト）+ 指定された company / intelligence サイトのオリジン
   $defaultOrigins = @("https://$effectiveGcpProject.web.app")
   if ($CompanyHostingSite) { $defaultOrigins += "https://$CompanyHostingSite.web.app" }
   if ($IntelligenceHostingSite) { $defaultOrigins += "https://$IntelligenceHostingSite.web.app" }
@@ -325,7 +325,7 @@ if ($DatabaseUrl) {
 else {
   Write-Host ''
   Write-Warning ('-DatabaseUrl が未指定のため API（Cloud Run）用 secrets は設定していません。' +
-    'deploy ワークフローの deploy-api ジョブは警告を出してスキップされます（mockup のみデプロイ）。')
+    'deploy ワークフローの deploy-api ジョブは警告を出してスキップされます（home のみデプロイ）。')
 }
 
 # ---------- フロントエンドの API 接続ビルド用（任意。未設定なら従来どおりモックモードで配信） ----------
@@ -361,5 +361,5 @@ if ($TriggerDeploy) {
 }
 
 Write-Host ''
-Write-Host '完了しました。main への push（mockup/ company/ intelligence/ api/ shared/ 配下の変更）または gh workflow run deploy.yml でデプロイされます。' -ForegroundColor Green
+Write-Host '完了しました。main への push（home/ company/ intelligence/ api/ shared/ 配下の変更）または gh workflow run deploy.yml でデプロイされます。' -ForegroundColor Green
 Write-Host 'RDS 側のネットワーク設定（Cloud Run からの到達性・SSL）は .ai-native/outputs/phase7/deploy-guide.md を参照してください。'

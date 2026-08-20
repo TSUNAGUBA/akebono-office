@@ -4,7 +4,7 @@
  * 時刻の方針: 業務時刻は JST のウォールクロック（"+09:00" 付き ISO 文字列）を正とする。
  * 保存時は nowJstIso() / todayJst() を使い、表示時は文字列から直接パースする。
  * これにより閲覧者・実行環境のタイムゾーンに依存せず、日本の労務時刻として一貫する。
- * （SoT: 旧 mockup/app/utils/format.ts から移設。mockup 側は再エクスポートで参照）
+ * （SoT: 旧 home/app/utils/format.ts から移設。home 側は再エクスポートで参照）
  */
 
 const JST_OFFSET_MS = 9 * 3600 * 1000

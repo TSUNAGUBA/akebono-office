@@ -6,7 +6,7 @@
 
 - 要件: [`../.ai-native/outputs/phase3/company-intelligence-requirements.md`](../.ai-native/outputs/phase3/company-intelligence-requirements.md)
 - 設計: [`../.ai-native/outputs/phase5/company-intelligence-design.md`](../.ai-native/outputs/phase5/company-intelligence-design.md)
-- 実装規約: [`../mockup/CONVENTIONS.md`](../mockup/CONVENTIONS.md) を踏襲（デザイントークン・決定的モック・JST 壁時計・エラーコード等）
+- 実装規約: [`../home/CONVENTIONS.md`](../home/CONVENTIONS.md) を踏襲（デザイントークン・決定的モック・JST 壁時計・エラーコード等）
 
 ## 画面
 

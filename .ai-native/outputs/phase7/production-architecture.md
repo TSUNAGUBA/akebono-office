@@ -13,7 +13,7 @@ flowchart LR
     end
     subgraph GCP["Google Cloud"]
         subgraph FH["Firebase Hosting（1 プロジェクト・マルチサイト）"]
-            H[デフォルトサイト<br/>AKEBONO Office（mockup/）]
+            H[デフォルトサイト<br/>AKEBONO Office（home/）]
             HC[専用サイト<br/>AKEBONO Company（company/）]
             HI[専用サイト<br/>AKEBONO Intelligence（intelligence/）]
         end
@@ -39,7 +39,7 @@ flowchart LR
     GA -->|静的ビルド deploy ×3| FH
 ```
 
-- **フロントエンド:** Nuxt 4 SPA ×3。`mockup/`（AKEBONO Office → 将来 `app/` へ改名予定）は Hosting デフォルトサイト、
+- **フロントエンド:** Nuxt 4 SPA ×3。`home/`（AKEBONO Office → 将来 `app/` へ改名予定）は Hosting デフォルトサイト、
   `company/`（AKEBONO Company = AI カンパニー切り出し）・`intelligence/`（AKEBONO Intelligence）は
   **同一 Firebase プロジェクト内の専用サイト**（マルチサイト）で別 URL 配信（2026-08-20 新設。設計 SoT =
   `../phase5/company-intelligence-design.md`）。3 アプリとも同一 Firebase Auth・同一 API を共有し、
@@ -135,8 +135,8 @@ Cloud Run（GCP）から RDS（AWS）への接続は次の 2 案。**v1 は案 A
 
 ```mermaid
 flowchart LR
-    P[main へ push<br/>mockup/ company/ intelligence/ api/ shared/] --> T[テストゲート<br/>単体（4 パッケージ）→ 結合 → シナリオ]
-    T --> M[deploy-mockup] --> H[Hosting デフォルトサイト]
+    P[main へ push<br/>home/ company/ intelligence/ api/ shared/] --> T[テストゲート<br/>単体（4 パッケージ）→ 結合 → シナリオ]
+    T --> M[deploy-home] --> H[Hosting デフォルトサイト]
     T --> C[deploy-company] --> HC[Hosting 専用サイト]
     T --> I[deploy-intelligence] --> HI[Hosting 専用サイト]
     T --> D[deploy-api]
@@ -145,7 +145,7 @@ flowchart LR
     D -->|gcloud run deploy| CR[Cloud Run]
 ```
 
-- API 用 secrets 未設定時は `deploy-api` を**警告付きスキップ**（mockup のみの運用を止めない = 開発原則4）
+- API 用 secrets 未設定時は `deploy-api` を**警告付きスキップ**（home のみの運用を止めない = 開発原則4）
 - company / intelligence はサイト用 secret（`FIREBASE_HOSTING_SITE_COMPANY` / `FIREBASE_HOSTING_SITE_INTELLIGENCE`）
   未設定時に**警告付きスキップ**。登録時はデプロイジョブが `.firebaserc` を生成してターゲットへ紐付ける
   （手順: deploy-guide.md §1-11。CORS 追加 = `API_CORS_ORIGINS` 更新 + api 再デプロイが必要）

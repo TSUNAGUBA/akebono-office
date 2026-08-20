@@ -1,5 +1,5 @@
 /**
- * 休暇 API（残数・年5日義務・申請/承認・付与）。mockup useLeave の API 版。
+ * 休暇 API（残数・年5日義務・申請/承認・付与）。home useLeave の API 版。
  * - 残数計算（FIFO 引当）はサーバーサイド（domain/leave.ts）
  * - 付与の冪等性は DB の UNIQUE 制約（member × 種別 × 付与日）+ ON CONFLICT DO NOTHING
  * - 付与・承認/却下は管理者/人事のみ
@@ -141,7 +141,7 @@ export function leaveRoutes(pool: pg.Pool): Hono {
        VALUES ($1, $2, $3, $4, $5, $6)`,
       [id, user.id, leaveTypeId, body.date, unit, body.reason ?? ''],
     )
-    // 管理者への通知は補助処理（失敗しても申請は成立。mockup と同一挙動）
+    // 管理者への通知は補助処理（失敗しても申請は成立。home と同一挙動）
     await notifyAdmins(pool, 'approval', `${type.name}申請`,
       `${user.name} さんから ${body.date}（${LEAVE_UNIT_LABELS[unit]}）の${type.name}申請`,
       '/attendance?tab=requests')

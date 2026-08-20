@@ -1,9 +1,9 @@
 /**
- * ワークフロー・稟議 API（F-07）。mockup useWorkflow の API 版。
+ * ワークフロー・稟議 API（F-07）。home useWorkflow の API 版。
  * - 経路解決は shared/domain/approval-route.resolveRoute（職務権限マトリクス = workflow_routes）
  * - 申請は routeSnapshot を凍結保存（経路変更の影響を受けない）。承認証跡は追記のみ
  * - 承認操作はクレームファースト（FOR UPDATE + 状態ガード）で二重処理を防ぐ
- * - 権限: 参照は認証済み全員（C2 社内情報・mockup と同一）。操作は本人/承認者/有効な代理人
+ * - 権限: 参照は認証済み全員（C2 社内情報・home と同一）。操作は本人/承認者/有効な代理人
  * - 添付（監査指摘 2026-07-30 ②）: 実体は workflow_files（bytea = ai_task_files と同型）。
  *   attachments(jsonb) は表示名一覧として維持（旧データ = 名前のみの互換表示。原則7）。
  *   files（新規 base64）+ keepFileIds（既存維持）を draft/submit で受領し、差分同期する
@@ -272,7 +272,7 @@ export function workflowsRoutes(pool: pg.Pool): Hono {
     return c.json({ data: { filename: f.filename, mime: f.mime, contentBase64: f.bytes.toString('base64') } })
   })
 
-  // 代理設定一覧（承認可否の射影に全員分が必要 = mockup と同一の可視性）
+  // 代理設定一覧（承認可否の射影に全員分が必要 = home と同一の可視性）
   app.get('/delegates', async (c) => {
     const { rows } = await pool.query(
       `SELECT ${DELEGATE_COLS} FROM delegate_settings WHERE active = true ORDER BY id`)
@@ -325,7 +325,7 @@ export function workflowsRoutes(pool: pg.Pool): Hono {
     try {
       await client.query('BEGIN')
       if (requestId) {
-        // エラー区分は mockup と同一（対象なし = AKO-GEN-002 / 本人・状態違反 = AKO-WFL-001）
+        // エラー区分は home と同一（対象なし = AKO-GEN-002 / 本人・状態違反 = AKO-WFL-001）
         const existing = await client.query<{ requesterId: string; status: string }>(
           `SELECT requester_id AS "requesterId", status FROM workflow_requests WHERE id = $1 FOR UPDATE`,
           [requestId])
@@ -506,7 +506,7 @@ export function workflowsRoutes(pool: pg.Pool): Hono {
       client.release()
     }
 
-    // 補助処理: 通知（自分宛てはスキップ = mockup と同一）
+    // 補助処理: 通知（自分宛てはスキップ = home と同一）
     const label = CATEGORY_LABELS[req.category]
     if (action === 'approve') {
       const isLast = req.currentStep >= req.routeSnapshot.length

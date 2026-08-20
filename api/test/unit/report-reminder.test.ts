@@ -1,7 +1,7 @@
 /**
  * 日報の自動リマインド判定（API 側）。
  * shared/domain/report-reminder が API 側からも import でき、代表ケースが同一挙動であることを確認する
- * （境界ケースの網羅は mockup/tests/report-reminder.test.ts が担う）
+ * （境界ケースの網羅は home/tests/report-reminder.test.ts が担う）
  */
 import { describe, expect, it } from 'vitest'
 import {
@@ -10,7 +10,7 @@ import {
 } from '../../../shared/domain/report-reminder'
 
 describe('parseReportReminderConfig（設定の両形対応）', () => {
-  it('JSON 文字列（mockup setConfig 経由）とオブジェクト（app_configs jsonb）の両方を受理する', () => {
+  it('JSON 文字列（home setConfig 経由）とオブジェクト（app_configs jsonb）の両方を受理する', () => {
     expect(parseReportReminderConfig('{"enabled":true,"time":"08:30"}')).toEqual({ enabled: true, time: '08:30' })
     expect(parseReportReminderConfig({ enabled: true, time: '08:30' })).toEqual({ enabled: true, time: '08:30' })
   })

@@ -1,11 +1,11 @@
 /**
  * Akebono 記録系ドメインの純関数（フロント/API 共有。Phase C = 0032）。
- * 元は mockup/app/utils/akebono.ts のモック専用実装だったものを、記録系の API 化に伴い
+ * 元は home/app/utils/akebono.ts のモック専用実装だったものを、記録系の API 化に伴い
  * サーバー（routes/akebono-trade / akebono-billing）と共有するためここへ移設した
- * （mockup/app/utils/akebono.ts は本モジュールを再エクスポートし既存 import を不変に保つ = 原則3・7）。
+ * （home/app/utils/akebono.ts は本モジュールを再エクスポートし既存 import を不変に保つ = 原則3・7）。
  *
  * 計算ポリシー（在庫残高・委託精算・税）は「設定データ + 純関数」で実装し、コード分岐を作らない。
- * 型は構造的最小（mockup の型と互換）で定義し、mockup 型・DB 行のどちらからも渡せる。
+ * 型は構造的最小（home の型と互換）で定義し、home 型・DB 行のどちらからも渡せる。
  */
 
 export type AkebonoRounding = 'floor' | 'ceil' | 'round'

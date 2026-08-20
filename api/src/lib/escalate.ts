@@ -1,5 +1,5 @@
 /**
- * エスカレーション起票（mockup useEscalations.raise の API 版）。
+ * エスカレーション起票（home useEscalations.raise の API 版）。
  * - ルール（app_configs 'escalationRules'）の enabled / cooldownDays を尊重
  * - dedupeKey の先頭 2 セグメント + reason + クールダウン期間で重複起票を抑止（冪等）
  * - 補助処理として呼ばれる前提: 例外を投げず結果を返す（開発原則4）
@@ -18,7 +18,7 @@ export const ESCALATION_REASON_LABELS: Record<EscalationReason, string> = {
   overtime_alert: '残業アラート',
 }
 
-/** ルール未設定時の既定クールダウン（日）。mockup と同一 */
+/** ルール未設定時の既定クールダウン（日）。home と同一 */
 const DEFAULT_COOLDOWN_DAYS = 3
 
 export interface EscalationSignal {
@@ -57,7 +57,7 @@ export async function raiseEscalation(
     if (rule && rule.enabled === false) return { raised: false, code: 'AKO-ESC-002' }
     const cooldownDays = typeof rule?.cooldownDays === 'number' ? rule.cooldownDays : DEFAULT_COOLDOWN_DAYS
     const cutoff = addDays(todayJst(), -cooldownDays)
-    // mockup と同一: dedupeKey の先頭 2 セグメント（例 issue:m-01）+ reason + クールダウン期間で判定
+    // home と同一: dedupeKey の先頭 2 セグメント（例 issue:m-01）+ reason + クールダウン期間で判定
     const prefix = signal.dedupeKey.split(':').slice(0, 2).join(':')
     const recent = await db.query<{ dedupe_key: string }>(
       'SELECT dedupe_key FROM escalations WHERE reason = $1 AND raised_at >= $2',

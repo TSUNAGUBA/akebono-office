@@ -9,7 +9,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
-      - 'mockup/**'
+      - 'home/**'
       - 'company/**'
       - 'intelligence/**'
       - 'api/**'
@@ -27,7 +27,7 @@ concurrency:
 
 jobs:
   unit:
-    name: 単体テスト + typecheck（mockup / company / intelligence / api）
+    name: 単体テスト + typecheck（home / company / intelligence / api）
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,20 +36,20 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: |
-            mockup/package-lock.json
+            home/package-lock.json
             company/package-lock.json
             intelligence/package-lock.json
             api/package-lock.json
-      - name: 依存インストール（mockup / company / intelligence / api）
+      - name: 依存インストール（home / company / intelligence / api）
         run: |
-          ( cd mockup && npm ci )
+          ( cd home && npm ci )
           ( cd company && npm ci )
           ( cd intelligence && npm ci )
           ( cd api && npm ci )
-      - name: 単体テスト（mockup/company/intelligence/api の vitest + typecheck。deploy.yml の単体ステージと同一範囲）
+      - name: 単体テスト（home/company/intelligence/api の vitest + typecheck。deploy.yml の単体ステージと同一範囲）
         env:
           STAGE_CMD: >-
-            ( cd mockup && npm run typecheck && npm run test ) &&
+            ( cd home && npm run typecheck && npm run test ) &&
             ( cd company && npm run typecheck && npm run test ) &&
             ( cd intelligence && npm run typecheck && npm run test ) &&
             ( cd api && npm run typecheck && npm run test )
@@ -103,7 +103,7 @@ jobs:
           retention-days: 14
 
   build:
-    name: ビルド検証（mockup generate / api build）
+    name: ビルド検証（home generate / api build）
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -112,16 +112,16 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: |
-            mockup/package-lock.json
+            home/package-lock.json
             api/package-lock.json
-      - name: 依存インストール（mockup / api）
+      - name: 依存インストール（home / api）
         run: |
-          ( cd mockup && npm ci )
+          ( cd home && npm ci )
           ( cd api && npm ci )
       - name: ビルド検証
         env:
           STAGE_CMD: >-
-            ( cd mockup && npm run generate ) &&
+            ( cd home && npm run generate ) &&
             ( cd api && npm run build )
         run: bash scripts/run-test-stage.sh "ビルド検証(PR)" pr-build-test
       - name: テストログを保存
@@ -143,11 +143,11 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: |
-            mockup/package-lock.json
+            home/package-lock.json
             e2e/package-lock.json
-      - name: 依存インストール（mockup / e2e）
+      - name: 依存インストール（home / e2e）
         run: |
-          ( cd mockup && npm ci )
+          ( cd home && npm ci )
           ( cd e2e && npm ci )
       - name: chromium を準備
         run: cd e2e && npx playwright install --with-deps chromium

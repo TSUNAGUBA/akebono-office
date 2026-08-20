@@ -7,7 +7,7 @@
  * - 洞察は Vertex AI（generateJson）→ 失敗時は shared/domain/portfolio-insight の決定的
  *   ヒューリスティックへフォールバック（原則4。llm フラグで区別）。
  * - scope='segment'（segment_id 参照）/ 'company'（会社全体・segment_id='' の番兵）で 1 レコード = upsert。
- * - 認可: 参照・生成とも認証済み全員（mockup ダッシュボードと同じ可視性。generated_by を記録）。
+ * - 認可: 参照・生成とも認証済み全員（home ダッシュボードと同じ可視性。generated_by を記録）。
  *   akebono featureGuard の配下。会社全体の閲覧導線はフロントが売上権限でゲート（他入口と一貫）。
  * - M1（虚偽データ由来の保管禁止）: GA 連携済みで月次が取得できない場合は生成しない（AKO-MEDIA-004）。
  *   会社全体は 1 業態でも取得失敗があれば生成しない（欠けた業態の「流入ゼロ」混入を防ぐ）。
@@ -30,10 +30,10 @@ import { generateJson } from '../lib/llm'
 import { activePermissionRules, subjectOf } from '../lib/permissions'
 import { buildSegmentIntegratedMetrics } from './media'
 
-/** 集計・トレンドの対象月数（mockup useDashboardInsight の MONTHS と一致） */
+/** 集計・トレンドの対象月数（home useDashboardInsight の MONTHS と一致） */
 const MONTHS = 6
 
-/** 業種タイプ表示名（mockup utils/akebono の INDUSTRY_TYPE_LABELS と一致 = 両モードで同一ラベル） */
+/** 業種タイプ表示名（home utils/akebono の INDUSTRY_TYPE_LABELS と一致 = 両モードで同一ラベル） */
 const INDUSTRY_TYPE_LABELS: Record<string, string> = {
   retail: '小売業',
   maker: 'メーカー業',
@@ -50,7 +50,7 @@ const INSIGHT_COLS = `di.id, di.period_key AS "periodKey", di.metrics, di.insigh
 /**
  * メディア機能トグル（'media' = m13）がサーバー視点で有効か。
  * app_configs の featureToggles 配列に 'media' があればその enabled、無ければシード既定 true
- * （mockup seedFeatureToggles の media = enabled:true と一致 = クライアント isEnabled('media') と同値）。
+ * （home seedFeatureToggles の media = enabled:true と一致 = クライアント isEnabled('media') と同値）。
  */
 export async function mediaFeatureEnabled(pool: pg.Pool): Promise<boolean> {
   const { rows } = await pool.query<{ value: unknown }>(
@@ -74,7 +74,7 @@ interface SnapshotBuild {
 /**
  * セグメント 1 件のスナップショット + トレンド（業務 × メディア）をサーバーで組み立てる。
  * メディア軸は「機能トグル有効 && GA 連携済み」のときのみ有効（それ以外は 0 = 事実を作らない）。
- * mockup useDashboardInsight.snapshotFor と同一の意味論（connected の判定・0 埋め）。
+ * home useDashboardInsight.snapshotFor と同一の意味論（connected の判定・0 埋め）。
  */
 async function buildSnapshot(
   pool: pg.Pool, env: Env, segmentId: string, mediaAvailable: boolean,
@@ -196,7 +196,7 @@ async function llmDashboardInsight(
  * 会社全体ダッシュボード（scope=company）は全社の売上を含む C3 = 売上権限（'sales'）をサーバーでも要求する
  * （監査-4。フロントの can('sales') ゲートと一致 = クライアントゲートのみに依存しない。原則6/認可）。
  * ルール未設定は既定 allow（下位互換 = featureGuard と同方針）。業態単位（scope=segment）は業態の日常業務
- * ビュー = 全ロール可（mockup と一致）。
+ * ビュー = 全ロール可（home と一致）。
  */
 async function requireCompanyDashboardAccess(pool: pg.Pool, user: AuthUser): Promise<void> {
   const rules = await activePermissionRules(pool)

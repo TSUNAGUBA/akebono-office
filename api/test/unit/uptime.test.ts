@@ -63,7 +63,7 @@ describe('computeUptimeDaily', () => {
 })
 
 describe('IMPACT_TO_STATE / worstOf', () => {
-  it('影響度写像は mockup と同一', () => {
+  it('影響度写像は home と同一', () => {
     expect(IMPACT_TO_STATE.minor).toBe('degraded')
     expect(IMPACT_TO_STATE.major).toBe('partial_outage')
     expect(IMPACT_TO_STATE.critical).toBe('major_outage')

@@ -336,7 +336,7 @@ export function buildMonthlyTrend(report: GaReport | null, months: string[]): Me
 
 /**
  * 直近 n ヶ月の月キー（古い順）。endBackMonths=1 で「直前の完了月」まで
- * （進行中の当月を締め前の数値で悲観評価しない = mockup useMediaAnalytics.recentMonths と同一ロジック）。
+ * （進行中の当月を締め前の数値で悲観評価しない = home useMediaAnalytics.recentMonths と同一ロジック）。
  * todayKey を引数に取る純関数（テスト可能・JST は呼び出し側が渡す）
  */
 export function recentMonthKeys(n: number, endBackMonths: number, todayKey: string): string[] {

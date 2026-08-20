@@ -1,5 +1,5 @@
 /**
- * 勤怠の集計ドメイン（純粋関数。mockup useAttendance の移植 = ロジック互換）
+ * 勤怠の集計ドメイン（純粋関数。home useAttendance の移植 = ロジック互換）
  * 6 バケット分解・打刻置換の解決は shared/domain/attendance-calc.ts を共有利用する。
  * 重い集計（月次・タイムカード・36 協定）はすべてサーバーサイドで実行する方針（Phase 7）。
  */
@@ -32,7 +32,7 @@ export function punchState(rows: PunchRecord[]): PunchState {
 }
 
 /**
- * メンバーに適用する勤怠ルールの解決（mockup ruleFor と同一優先順）。
+ * メンバーに適用する勤怠ルールの解決（home ruleFor と同一優先順）。
  * ①個別指定（attendanceRuleId・有効なもののみ） ②雇用区分の既定（defaultFor）
  * ③雇用区分で選択可能なルールの先頭 ④先頭ルール（最終フォールバック）
  */
@@ -129,7 +129,7 @@ export function monthSummary(
 }
 
 /**
- * 36 協定アラート（endMonth を最終月とする直近 6 ヶ月）。mockup alerts と同一判定。
+ * 36 協定アラート（endMonth を最終月とする直近 6 ヶ月）。home alerts と同一判定。
  * punchesByMonthDate: 6 ヶ月分の打刻を日付キーで分類したもの
  */
 export function article36Alerts(

@@ -1,6 +1,6 @@
 # フルスタック E2E ハーネス
 
-使い捨て PostgreSQL + 本実装 API（dev 認証）+ 静的配信した mockup（API モード / モックモード）を
+使い捨て PostgreSQL + 本実装 API（dev 認証）+ 静的配信した home（API モード / モックモード）を
 1 コマンドで組み上げ、Playwright（chromium）で実クリックの E2E スイートを回すハーネス。
 implementation-status の各バッチ検証にある「E2E 全スイート green」はこのハーネスの実行結果を指す。
 

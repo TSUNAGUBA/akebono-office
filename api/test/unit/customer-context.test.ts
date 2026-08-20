@@ -2,7 +2,7 @@
  * 顧客コンテキスト（改修依頼 2026-08-20）の純ロジック単体テスト（API 側）。
  * shared/domain/customer-context は API（routes/customer-contexts.ts）とモック（useCustomerContext）の
  * **パリティの SoT**。検証順・メッセージ・ヒューリスティックの決定性を API 側からも固定する
- * （mockup/tests/customer-context.test.ts と対）。
+ * （home/tests/customer-context.test.ts と対）。
  */
 import { describe, expect, it } from 'vitest'
 import {

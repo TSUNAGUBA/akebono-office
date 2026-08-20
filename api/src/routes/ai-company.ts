@@ -1,5 +1,5 @@
 /**
- * AI ネイティブカンパニー API（F-08）。mockup useAiCompany の API 版。
+ * AI ネイティブカンパニー API（F-08）。home useAiCompany の API 版。
  * - AI ロール / AI 社員は汎用マスタ（/v1/masters/ai-roles・ai-employees。管理者のみ変更）
  * - タスク依頼 → 分解（Vertex AI 構造化出力 → 失敗時 shared/domain/ai-tasks の同一ヒューリスティック）
  *   → 承認 → 実行 → 完了報告。状態機械は FOR UPDATE で直列化（proposed → in_progress → done / blocked / cancelled）

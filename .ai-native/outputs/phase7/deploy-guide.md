@@ -8,13 +8,13 @@
 
 | コンポーネント | デプロイ先 | トリガー |
 |---|---|---|
-| `mockup/`（AKEBONO Office / Nuxt SPA） | Firebase Hosting（**デフォルトサイト**） | main へ push（対象パス変更時）or 手動 |
+| `home/`（AKEBONO Office / Nuxt SPA） | Firebase Hosting（**デフォルトサイト**） | main へ push（対象パス変更時）or 手動 |
 | `company/`（AKEBONO Company / Nuxt SPA） | Firebase Hosting（**専用サイト** = マルチサイト） | 〃（`FIREBASE_HOSTING_SITE_COMPANY` 登録時のみ。§1-11） |
 | `intelligence/`（AKEBONO Intelligence / Nuxt SPA） | Firebase Hosting（**専用サイト** = マルチサイト） | 〃（`FIREBASE_HOSTING_SITE_INTELLIGENCE` 登録時のみ。§1-11） |
 | `api/`（Hono API） | Cloud Run | main へ push（`api/` `shared/` 変更時）or 手動 |
 | DB マイグレーション | RDS PostgreSQL | API コンテナ起動時に自動適用（冪等） |
 
-トリガーの対象パス: `mockup/` `company/` `intelligence/` `api/` `shared/`（+ ワークフロー自身）。
+トリガーの対象パス: `home/` `company/` `intelligence/` `api/` `shared/`（+ ワークフロー自身）。
 日常運用で必要な操作は **main へのマージのみ**。以下は初回セットアップ手順。
 
 ### 0-1. デプロイパイプラインの構造（AI ネイティブ方法論テンプレート適用）
@@ -24,7 +24,7 @@
 ```mermaid
 flowchart LR
   P[事前検証<br/>preflight] --> T[テストゲート<br/>単体→結合→シナリオ]
-  T --> M[デプロイ<br/>mockup / Hosting デフォルトサイト]
+  T --> M[デプロイ<br/>home / Hosting デフォルトサイト]
   T --> C[デプロイ<br/>company / Hosting 専用サイト]
   T --> I[デプロイ<br/>intelligence / Hosting 専用サイト]
   T --> A[デプロイ<br/>api / Cloud Run]
@@ -36,16 +36,16 @@ flowchart LR
 
 | ジョブ | 内容 |
 |---|---|
-| **preflight（事前検証）** | デプロイ先環境を確定し、必須 secrets（mockup 用 Firebase）の有無を確認。欠ければ即中断。company / intelligence はサイト用 secret（`FIREBASE_HOSTING_SITE_*`）が無ければスキップ、api 用 secrets が欠ければ api デプロイをスキップ（非ブロッキング = 原則4） |
-| **test（テストゲート）** | 各ステージを `scripts/run-test-stage.sh` で実行しログをアーティファクト化。**単体** = mockup/company/intelligence/api の `typecheck` + `vitest`、**結合** = api の実 PostgreSQL 統合テスト（`test:integration`）、**シナリオ** = デプロイ成果物のビルド検証（各フロント `generate` + api `build`）。前段が失敗した時点で以降は実行されずデプロイは中断 |
-| **deploy-mockup** | Firebase Hosting のデフォルトサイトへ配信。環境で配信チャネルを切替（production=`live` / staging=プレビューチャネル `staging`） |
-| **deploy-company** / **deploy-intelligence** | Firebase Hosting の**専用サイト**へ配信（マルチサイト）。サイト ID は secrets（`FIREBASE_HOSTING_SITE_COMPANY` / `FIREBASE_HOSTING_SITE_INTELLIGENCE`）から受け取り、デプロイ時に `.firebaserc` を生成して `firebase.json` の hosting.target へ紐付ける。**secret 未登録ならスキップ**（他のデプロイは継続）。チャネル切替は mockup と同じ |
+| **preflight（事前検証）** | デプロイ先環境を確定し、必須 secrets（home 用 Firebase）の有無を確認。欠ければ即中断。company / intelligence はサイト用 secret（`FIREBASE_HOSTING_SITE_*`）が無ければスキップ、api 用 secrets が欠ければ api デプロイをスキップ（非ブロッキング = 原則4） |
+| **test（テストゲート）** | 各ステージを `scripts/run-test-stage.sh` で実行しログをアーティファクト化。**単体** = home/company/intelligence/api の `typecheck` + `vitest`、**結合** = api の実 PostgreSQL 統合テスト（`test:integration`）、**シナリオ** = デプロイ成果物のビルド検証（各フロント `generate` + api `build`）。前段が失敗した時点で以降は実行されずデプロイは中断 |
+| **deploy-home** | Firebase Hosting のデフォルトサイトへ配信。環境で配信チャネルを切替（production=`live` / staging=プレビューチャネル `staging`） |
+| **deploy-company** / **deploy-intelligence** | Firebase Hosting の**専用サイト**へ配信（マルチサイト）。サイト ID は secrets（`FIREBASE_HOSTING_SITE_COMPANY` / `FIREBASE_HOSTING_SITE_INTELLIGENCE`）から受け取り、デプロイ時に `.firebaserc` を生成して `firebase.json` の hosting.target へ紐付ける。**secret 未登録ならスキップ**（他のデプロイは継続）。チャネル切替は home と同じ |
 | **deploy-api** | Cloud Run へ配信。**production かつ api secrets が揃うときのみ**実行。staging は別途プロビジョニングが必要なため対象外（preflight で通知） |
 | **report** | 成否にかかわらずパイプライン全体の結果を Step Summary へ記録 |
 
 **トリガーと環境:**
-- **main への push**（`mockup/` `company/` `intelligence/` `api/` `shared/` 変更時）= 従来どおり **production へ自動デプロイ**（開発原則1「手動ステップを残さない」）。
-- **手動実行（workflow_dispatch）** = `staging` / `production` を選択可能。`staging` を選ぶと mockup は Firebase プレビューチャネル（本番と別 URL）へデプロイされ、api はスキップされる。
+- **main への push**（`home/` `company/` `intelligence/` `api/` `shared/` 変更時）= 従来どおり **production へ自動デプロイ**（開発原則1「手動ステップを残さない」）。
+- **手動実行（workflow_dispatch）** = `staging` / `production` を選択可能。`staging` を選ぶと home は Firebase プレビューチャネル（本番と別 URL）へデプロイされ、api はスキップされる。
 
 > **テストゲートが失敗したら:** Actions の該当 run の Step Summary で失敗ステージを確認し、アーティファクト `deploy-logs` 内の該当ログ（`unit-test.log` / `integration-test.log` / `scenario-test.log`）で詳細を見る。修正後に再度 push または手動再実行する。
 
@@ -74,11 +74,11 @@ flowchart LR
 
 ### 1-2. GCP プロジェクトの準備（初回のみ）
 
-1. Firebase プロジェクト（mockup で使用中のもの）で以下の API を有効化:
+1. Firebase プロジェクト（home で使用中のもの）で以下の API を有効化:
    ```bash
    gcloud services enable run.googleapis.com artifactregistry.googleapis.com secretmanager.googleapis.com
    ```
-2. デプロイ用サービスアカウントを作成しロールを付与（mockup 用と共用する場合）:
+2. デプロイ用サービスアカウントを作成しロールを付与（home 用と共用する場合）:
    ```bash
    PROJECT_ID=<your-project>
    gcloud iam service-accounts create github-actions-deploy --project $PROJECT_ID
@@ -109,7 +109,7 @@ flowchart LR
 
 | Secret | 用途 | 既定値 |
 |---|---|---|
-| `FIREBASE_SERVICE_ACCOUNT` / `FIREBASE_PROJECT_ID` | mockup（従来どおり） | — |
+| `FIREBASE_SERVICE_ACCOUNT` / `FIREBASE_PROJECT_ID` | home（従来どおり） | — |
 | `GCP_SERVICE_ACCOUNT` | Cloud Run デプロイ | `-GcpServiceAccountJsonPath` 省略時は Firebase と共用 |
 | `GCP_PROJECT_ID` | 〃 | `-ProjectId` と同一 |
 | `GCP_REGION` | 〃 | `asia-northeast1` |
@@ -121,8 +121,8 @@ flowchart LR
 | `FIREBASE_HOSTING_SITE_COMPANY` | AKEBONO Company のサイト ID（`-CompanyHostingSite` 指定時のみ。§1-11） | 未設定 = company デプロイをスキップ |
 | `FIREBASE_HOSTING_SITE_INTELLIGENCE` | AKEBONO Intelligence のサイト ID（`-IntelligenceHostingSite` 指定時のみ。§1-11） | 未設定 = intelligence デプロイをスキップ |
 
-> `-DatabaseUrl` を省略すると mockup 用 secrets のみ設定される（従来の使い方と完全互換）。
-> その場合 deploy-api ジョブは警告を出してスキップされ、mockup のデプロイは通常どおり動く。
+> `-DatabaseUrl` を省略すると home 用 secrets のみ設定される（従来の使い方と完全互換）。
+> その場合 deploy-api ジョブは警告を出してスキップされ、home のデプロイは通常どおり動く。
 
 ### 1-4. 動作確認
 
@@ -173,7 +173,7 @@ Cloud Run は既定で **`--min-instances 1`**（常時 1 台を暖機）でデ�
      -ApiBaseUrl 'https://akebono-office-api-xxxx.a.run.app' `
      -FirebaseWebConfigJsonPath ./firebase-web-config.json -TriggerDeploy
    ```
-   → 以後の `deploy-mockup` は `NUXT_PUBLIC_API_BASE` / `NUXT_PUBLIC_FIREBASE_CONFIG` 付きでビルドされ、
+   → 以後の `deploy-home` は `NUXT_PUBLIC_API_BASE` / `NUXT_PUBLIC_FIREBASE_CONFIG` 付きでビルドされ、
    ログイン必須の API 接続版が配信される（`API_BASE_URL` secret を削除すればモックモードへ戻る）。
    **company / intelligence（§1-11）も同じ 2 つの secrets を共用して API 接続版でビルドされる**
    （同一 Firebase プロジェクト・同一 API のため。別途 `API_CORS_ORIGINS` へ各サイトのオリジン追加が必要）
@@ -187,7 +187,7 @@ Cloud Run は既定で **`--min-instances 1`**（常時 1 台を暖機）でデ�
 > **更新時の配信順序:** スキーマ・I/F を拡張する更新は必ず **API（migration 込み）→ フロント** の順で反映する。
 > 例: 2026-07-22 改修（migration 0029）の稟議は、新フロントが `purpose`/`content` を送り `body` を送らないため、
 > 旧 API が先に受けると本文が保存されない。
-> **注意:** deploy パイプラインは テストゲート通過後に mockup（Firebase）と api（Cloud Run）を**並行**デプロイするため、
+> **注意:** deploy パイプラインは テストゲート通過後に home（Firebase）と api（Cloud Run）を**並行**デプロイするため、
 > どちらが先に反映されるかは保証されない。破壊的なスキーマ・I/F 変更は **後方互換を保つ**（旧フロントからのリクエストも旧フィールドで受理する等）か、
 > **API 変更を先行してリリースしてからフロント変更をマージする**運用で回避する。
 
@@ -413,7 +413,7 @@ secrets は不要。連携は**テナント（全社）単位の単一接続**�
 
 ## 1-11. 新アプリ（company / intelligence）の Hosting マルチサイト公開（2026-08-20 新設）
 
-AKEBONO Company（`company/`）と AKEBONO Intelligence（`intelligence/`）は、mockup と**同一 Firebase
+AKEBONO Company（`company/`）と AKEBONO Intelligence（`intelligence/`）は、home と**同一 Firebase
 プロジェクト内の別 Hosting サイト**（マルチサイト）として別 URL で公開する。サイト ID はリポジトリに
 持たず repository secrets で渡すため、初回のみ以下を実施する。
 
@@ -535,7 +535,7 @@ AKEBONO Company（`company/`）と AKEBONO Intelligence（`intelligence/`）は�
 - **自動:** main へマージ → 変更パスに応じて production へ自動デプロイ（環境 = production）
   - **テストゲート**（単体 → 結合 → シナリオ。§0-1）が **全て green の場合のみ** フロント 3 アプリ / api がデプロイされる。
     いずれか失敗すればデプロイは中断され、`deploy-logs` アーティファクトに失敗内容が残る
-  - mockup / company / intelligence / api はテストゲート通過後に並行デプロイされる
+  - home / company / intelligence / api はテストゲート通過後に並行デプロイされる
     （company / intelligence はサイト用 secret、api は api 用 secrets が揃う場合のみ）
 - **手動:** `gh workflow run deploy.yml -f environment=staging`（または Actions 画面の `Run workflow` で環境を選択）
   - `staging` = フロント各アプリを Firebase プレビューチャネル（本番と別 URL）へ配信。api はスキップ

@@ -1,6 +1,6 @@
 /**
  * 活動記録（サポート/営業/ビジネスパートナー = 改修依頼 2026-08-18）入力検証の単体テスト。
- * shared/domain/activity は API（api/src/routes/activities.ts）とモック（mockup use*Activities）の
+ * shared/domain/activity は API（api/src/routes/activities.ts）とモック（home use*Activities）の
  * **パリティの SoT**。ここでの検証が両者の挙動を同時に固定する。
  */
 import { describe, expect, it } from 'vitest'

@@ -257,7 +257,7 @@ graph TD
 
 ### 5.1 ナビゲーション情報設計（NAV_MAP = 単一レジストリ）
 
-- **SoT**: `mockup/app/utils/nav-map.ts` に「ルート → { parent, related[] }」を一元定義する。
+- **SoT**: `home/app/utils/nav-map.ts` に「ルート → { parent, related[] }」を一元定義する。
   ページ個別のアドホックな戻るリンク・関連リンクは廃止し、レジストリ駆動へ寄せる（原則3）。
 - **戻る導線（parent）**: 階層を持つ全ページに親を宣言（例: `/masters/members` → `/masters`、
   `/support/chatbot` → `/support`、`/decision/:id` → `/decision`、トップレベル業務ページ → `/`）。
@@ -281,7 +281,7 @@ graph TD
 
 ### 5.3 カードメニューのカテゴリ化（カスタマイズ可能）
 
-- **メニューレジストリ**: `mockup/app/utils/menu-registry.ts` にダッシュボード / マスタハブの全カードを
+- **メニューレジストリ**: `home/app/utils/menu-registry.ts` にダッシュボード / マスタハブの全カードを
   安定 id 付きで一元定義（既存 3 ページのハードコード computed を置換。権限フィルタ・バッジ注入は不変）。
 - **カテゴリ設定（SoT = configs）**: `menu-categories-dashboard` / `menu-categories-masters` に
   `{ id, label, cardIds[] }[]` を保存（API モード = /v1/configs・モック = appConfigs。既定値は現行の
@@ -306,7 +306,7 @@ graph TD
   未設定 = 既定表示（マトリクス = 社員・契約・アルバイト / タイムライン = 全員 = 従来どおり）。
   設定あり = マトリクス・タイムラインとも「選択メンバー + 自分」で統一（バッチ7h の「候補外は常に表示」
   特例のうち在籍中の取締役・外注分は、選択肢に出るようになったため廃止。候補に出ない在籍外 =
-  退職者等は引き続き設定の影響外 = 常時表示）。判定 SoT = `mockup/app/utils/team-visibility.ts`。
+  退職者等は引き続き設定の影響外 = 常時表示）。判定 SoT = `home/app/utils/team-visibility.ts`。
 - **日報参照権限（PermissionRule 擬似フィールド）**: `resource='reports'` + `field='member:<memberId>'`
   + `effect=deny` で「その対象者の日報を参照できない」をレイヤ（ロール/役職/個人）ごとに設定
   （未設定 = 参照可 = 下位互換。**自分の日報は常に参照可**）。解決は既存 canViewField と同一。
@@ -344,7 +344,7 @@ graph TD
 **テンプレート（プレビュー付き）から選択**できるようにする。カテゴリ化（5.3）が「セクション定義の
 細粒度編集」なのに対し、本機能は「世の中の業務アプリを参考にした配置プリセットの一括適用」を担う。
 
-- **型・テンプレート（SoT = `mockup/app/utils/dashboard-layout.ts`）**: `DashboardLayout`
+- **型・テンプレート（SoT = `home/app/utils/dashboard-layout.ts`）**: `DashboardLayout`
   = `{ templateId, sections: MenuCategoryDef[], options: { notifications: 'top'|'side'|'bottom'|'hidden',
   notificationsInherit?: boolean（true = 配置は専用キーへ委譲。分離後の保存が立てる = 2026-08-18）,
   showAkebono: boolean, density: 'comfortable'|'compact' } }`。テンプレートは 6 種

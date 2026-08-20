@@ -57,7 +57,7 @@ AI アシスタント（F-14）・カレンダー・チャットボット（F-09
 プロフィール（F-17）・**AI カンパニー（F-08・6a）**
 
 ### 未接続ドメイン（残タスク = 本ドキュメントの主題）
-`mockup/app/utils/mock-status.ts` の `MOCK_PAGE_PATHS` に残る 3 ページ:
+`home/app/utils/mock-status.ts` の `MOCK_PAGE_PATHS` に残る 3 ページ:
 - `/sales` （F-15 売上管理）
 - `/status`（F-11 提供システム稼働状況）
 - `/akebono`（F-03 AKEBONO = プレースホルダ）
@@ -76,9 +76,9 @@ AI アシスタント（F-14）・カレンダー・チャットボット（F-09
 年度選択 → 月次推移・前年比・粗利率・顧客別/事業種別内訳の KPI + チャート。意思決定支援（F-02）への導線。
 
 ### モック実装（参照元）
-- `mockup/app/composables/useSales.ts`（163 行）: SoT = `salesMonthly` コレクション。会計年度は自社
+- `home/app/composables/useSales.ts`（163 行）: SoT = `salesMonthly` コレクション。会計年度は自社
   （companies kind='self'）の fiscalStartMonth 起点。表示射影はすべて純粋 computed
-- `mockup/app/pages/sales.vue`（100 行）
+- `home/app/pages/sales.vue`（100 行）
 - 型: `SalesMonthly`（shared/domain/types.ts）。seed = `buildSalesMonthly()`（data/seed）
 
 ### 設計方針
@@ -124,8 +124,8 @@ ETL の出力先を app_office 内の派生テーブルにするか、実際に 
   影響度 minor/major/critical・タイムスタンプ付きフィード（管理者操作に反応）
 
 ### モック実装（参照元）
-- `mockup/app/composables/useSystemStatus.ts`（205 行）
-- `mockup/app/pages/status/index.vue`・`status/[id].vue`
+- `home/app/composables/useSystemStatus.ts`（205 行）
+- `home/app/pages/status/index.vue`・`status/[id].vue`
 - 型: `SystemService`・`ServiceIncident`・`UptimeDaily`。seed = seedSystemServices / seedServiceIncidents /
   buildUptimeDaily()
 
@@ -208,9 +208,9 @@ ETL の出力先を app_office 内の派生テーブルにするか、実際に 
   - ハマりどころ: ①フロントは**ハッシュルーティング**（URL は `/#/sales` 形式）②healthz は DB エラーでも
     200 のため「最終マイグレーションの schema_migrations 登録」を待ってからシードする ③tsx プロセスの
     pkill パターンは `tsx/dist/loader.mjs src/index.ts`（`tsx src/index.ts` では一致しない）
-- ビルド: api = `npm run build`（dist に db/migrations コピー必須）/ mockup = `npx nuxt generate`
+- ビルド: api = `npm run build`（dist に db/migrations コピー必須）/ home = `npx nuxt generate`
   （モック版 = 環境変数なし / API 版 = `NUXT_PUBLIC_API_BASE=http://127.0.0.1:8788 NUXT_PUBLIC_DEV_MEMBER_ID=m-e2e`）
-- 各バッチ完了時: api typecheck / 単体 / 統合 / mockup typecheck / 単体 / E2E フルスタック / モック回帰
+- 各バッチ完了時: api typecheck / 単体 / 統合 / home typecheck / 単体 / E2E フルスタック / モック回帰
   を**全て green** にしてからコミット
 
 ### デュアルモード化の型（既存パターン = 原則3）
@@ -271,7 +271,7 @@ AKO-CHT（チャット）・AKO-REP（日報）など。売上は AKO-SAL、稼�
 
 設計（確定）:
 - migration 0023: `work_categories`(id,name,display_order,active) / `notes`(id, member_id, kind('poipoi'|'minutes'), title, body, project_id?, company_id?, work_category_id?, source('text'|'upload'), created_at。記録系=追記+論理削除なし・修正は将来) / `note_files`(knowledge_files と同型) / `search_docs` へ `owner_member_id text NULL` 追加（NULL=全員参照可。poipoi は本人のみ = C3）
-- MASTERS registry へ 'work-categories'（idPrefix 'wc'）。mockup: workCategories コレクション + MIGRATED_MASTERS + /masters カード + 汎用マスタページ（industries ページのパターン）
+- MASTERS registry へ 'work-categories'（idPrefix 'wc'）。home: workCategories コレクション + MIGRATED_MASTERS + /masters カード + 汎用マスタページ（industries ページのパターン）
 - API `/v1/notes`: GET（?kind=。poipoi=本人のみ / minutes=全員） POST（本文 + 任意 projectId/companyId/workCategoryId + 議事録は meetFileId/meetFileName/meetWebLink = ③b） POST /import（extract-text 再利用・note_files 原本保全・AKO-NOTE-001〜003 = KNW と同型） GET /:id/files・/files/:id（poipoi は本人ガード）。**議事録 Meet 連携（③b・2026-08-03・API 限定）: GET /meet/status・/meet/folders・/meet/files・/meet/file-text・PUT /meet/default-folder（カレンダー OAuth の drive.readonly を共用・AKO-NOTE-004/005・未接続 AKO-DOC-006・migration 0052 で notes に meet_* 列追加）**。書込後 scheduleSearchRebuild
 - FEATURE_PERMISSION_KEYS へ 'poipoi'（ぽいぽいメモ）・'minutes'（議事録）追加。featureKeyOfPath も
 - search-index: buildSearchDocs へ kind 'note' 追加（title=タイトル or 冒頭、segments= 本文/紐付け(PJ/顧客/業務種別名)。checks は notes.body 等 + 紐付け先 name）。poipoi → ownerMemberId=member / minutes → null。searchDocsFor へ user.id を渡し WHERE owner_member_id IS NULL OR = user
@@ -335,8 +335,8 @@ AKO-CHT（チャット）・AKO-REP（日報）など。売上は AKO-SAL、稼�
 ③戻る/関連ページ導線の整理（UX 設計） ④入力と参照の分離（参照 = 基本ビュー） ⑤カードメニューのカテゴリ化 + カスタマイズ。
 
 設計（確定。UX 設計の本文は screen-design §5）:
-- 導線 SoT = `mockup/app/utils/nav-map.ts`（parent/related）。レイアウトヘッダーが全ページ共通で描画（親リンク + 関連ドロップダウン）。ページ個別の戻るリンクは撤去済み — 新ページは nav-map へ登録する
-- メニュー SoT = `mockup/app/utils/menu-registry.ts`（カード定義 + 既定カテゴリ）。カスタマイズは configs `menu-categories-<area>`（useMenuCategories。'' = 既定）。未割当カードは「その他」へ自動表示
+- 導線 SoT = `home/app/utils/nav-map.ts`（parent/related）。レイアウトヘッダーが全ページ共通で描画（親リンク + 関連ドロップダウン）。ページ個別の戻るリンクは撤去済み — 新ページは nav-map へ登録する
+- メニュー SoT = `home/app/utils/menu-registry.ts`（カード定義 + 既定カテゴリ）。カスタマイズは configs `menu-categories-<area>`（useMenuCategories。'' = 既定）。未割当カードは「その他」へ自動表示
 - 日報参照権限 = PermissionRule 擬似フィールド `member:<対象 id>`（resource='reports'）。解決は shared `canViewMemberReports`（自分は常に可・未設定 = 可）。API scope=all/team・チャットボット他人日報・週次集計に同一適用。チームタブは全員公開（一般 = 提出済みのみ = API 側で下書き秘匿）
 - 表示メンバー設定 = configs `teamVisibleMemberIds`（自分は常に表示）。「表示の整理」と「権限」を役割分離。**バッチ7k（§17）で候補 = 在籍全メンバー・空 = 既定表示へ拡張**
 - テスト注意: scope=team の旧テスト（管理者のみ 403）は 7h 仕様（200・提出済みのみ）へ更新済み。参照 deny テストは clearPermissionCache + activePermissionRules の実ルールを渡す規約（§13 と同じ）
@@ -367,7 +367,7 @@ AKO-CHT（チャット）・AKO-REP（日報）など。売上は AKO-SAL、稼�
 要求: 表示メンバー設定の候補を在籍中の全メンバーへ拡大（既定は従来どおり社員・契約・アルバイト）+ 設定モーダルに雇用区分バッジ。
 
 設計（確定）:
-- 判定 SoT = `mockup/app/utils/team-visibility.ts`（純関数）。未設定 = 既定表示（マトリクス = 社員・契約・アルバイト / タイムライン = 全員 = 従来どおり）・設定あり = 「選択メンバー + 自分」でマトリクス・タイムラインを統一（7h の候補外特例のうち**在籍中の取締役・外注分**は廃止。**在籍外 = 退職者等は候補に出ないため引き続き設定の影響外 = 常時表示** = R1 M-1）。F-16-6 参照権限は常に別途適用
+- 判定 SoT = `home/app/utils/team-visibility.ts`（純関数）。未設定 = 既定表示（マトリクス = 社員・契約・アルバイト / タイムライン = 全員 = 従来どおり）・設定あり = 「選択メンバー + 自分」でマトリクス・タイムラインを統一（7h の候補外特例のうち**在籍中の取締役・外注分**は廃止。**在籍外 = 退職者等は候補に出ないため引き続き設定の影響外 = 常時表示** = R1 M-1）。F-16-6 参照権限は常に別途適用
 - バッジ = UiMultiCombobox の任意 props `tag`/`tagTone`（候補行 = UiStatusBadge・チップ = 小テキスト。未指定は従来表示）。雇用区分トーンは labels.ts の EMPLOYMENT_TYPE_TONES に集約
 - 下位互換注意: 設定を保存済みの環境では、設定に含まれない**在籍中の**取締役・外注がタイムラインに出なくなる（設定モーダルで追加 = 回復フロー。configs 形式は不変 = パッチ不要。在籍外は影響なし）
 
