@@ -8264,3 +8264,49 @@ describe('顧客コンテキスト（customer_contexts + notes + AI リサーチ
     expect(badRevert.json.error?.code).toBe('AKO-CTX-004')
   })
 })
+
+// ---------- エージェント型チャット（改修依頼 2026-08-20。追記） ----------
+// ツール供給経路 = buildContext の only 指定（キーワードゲートのバイパス + ブロック限定）を直接検証する。
+// エージェントループ自体（Vertex function calling）は外部 HTTP のためテストしない設計（llm.ts の慣例）。
+// /ask は LLM 無効環境（本テスト）で fallback: true を返す従来挙動を上のチャットボット応答テストが担保する
+
+describe('エージェント型チャット（buildContext の only 指定 = ツール供給経路）', () => {
+  const agentMemberUser = {
+    id: MEMBER, name: '一般 次郎', email: 'member@example.com', role: 'member' as const, title: '', avatar: '',
+  }
+
+  it('only 指定はキーワードゲートをバイパスし、指定外ブロックは供給しない', async () => {
+    const { buildContext } = await import('../../src/routes/chatbot')
+    // キーワードを含まない質問文でも attendance ブロックが供給される（ツール = 明示要求）
+    const att = await buildContext(pool, agentMemberUser, 'ツール実行', [], [], undefined, { only: ['attendance'] })
+    expect(att).toContain('本人の有給')
+    expect(att).toContain('休暇種別') // only 時は内側の /休暇|有給/ ゲートもバイパス
+    // 質問文に売上キーワードがあっても only 外の sales ブロックは供給されない
+    const attOnly = await buildContext(pool, agentMemberUser, '売上', [], [], undefined, { only: ['attendance'] })
+    expect(attOnly).not.toContain('売上サマリ')
+    // 従来経路（only なし）は挙動不変: キーワードなしでは attendance は供給されない
+    const legacy = await buildContext(pool, agentMemberUser, 'ツール実行', [])
+    expect(legacy).not.toContain('本人の有給')
+  })
+
+  it('only 指定でも権限ガード（F-16 の機能 deny）は従来どおり効く', async () => {
+    const { buildContext } = await import('../../src/routes/chatbot')
+    const denyAttendance = [{
+      id: 'pm-agent1', subjectKind: 'role' as const, subjectId: 'member', resource: 'attendance', field: null,
+      effect: 'deny' as const, active: true,
+    }]
+    const denied = await buildContext(
+      pool, agentMemberUser, 'ツール実行', denyAttendance, [], undefined, { only: ['attendance'] })
+    expect(denied).not.toContain('本人の有給')
+    // 名前照合系ツール（person_info 相当 = member ブロック）: 名前引数で照合・表示 deny も従来どおり
+    const person = await buildContext(pool, agentMemberUser, '一般 次郎さん', [], [], undefined, { only: ['member'] })
+    expect(person).toContain('メンバー「一般 次郎」')
+  })
+
+  it('回答末尾の提案行の抽出（splitSuggestions）が /ask の応答整形と同じ経路で動く', async () => {
+    const { splitSuggestions } = await import('../../src/routes/chatbot')
+    const r = splitSuggestions('回答本文です。\n提案: 次の質問A | 次の質問B')
+    expect(r.content).toBe('回答本文です。')
+    expect(r.suggestions).toEqual(['次の質問A', '次の質問B'])
+  })
+})
