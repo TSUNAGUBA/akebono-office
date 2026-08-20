@@ -3600,4 +3600,9 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   システム監査官 MAJOR/MINOR: ドキュメント整合（原則5）= CONVENTIONS.md（タグ/対象ページ/新規部品/showValue）・functional-requirements
   F-42-17（複数可 → 二者択一）・shared/domain/improvement.ts のコメント（UiChipSelect 参照）が旧記述 → **全件更新**。
   下位互換（タグ 0/2 件データ・normalize・TagBadges・API 受容）は非破壊であることを確認。
-- [x] R2 = R1 修正の独立再検証で **指摘ゼロを確認**（converged。原則9 = SP-8 完了）。
+- [x] R2 = R1 修正の独立再検証。R1 の修正（TagToggle の a11y・アイコン統一・各ドキュメント整合・下位互換）は
+  いずれも正しく反映と確認。**残 MINOR 1 件**: `shared/domain/improvement.ts` の `ImprovementRequestTag` 型の
+  docblock が「複数付与できる」のまま（隣接コメントは R1 で更新済みだが型 docblock が未修正 = 二者択一化と矛盾）
+  → **「どちらか 1 つを選ぶ二者択一」に修正**（型は配列のまま・下位互換の説明を追記）。
+- [x] R3 = R2 修正（docblock のみ・非挙動変更）の再確認で **指摘ゼロ**（converged。原則9 = SP-8 完了）。
+  typecheck / vitest 361 再走 green。mock E2E は挙動不変（コメントのみの変更）のため 90-7 の 12 チェック green を維持。
