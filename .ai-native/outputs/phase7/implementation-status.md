@@ -3547,3 +3547,62 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   明示クリア=クリア」の全分岐で正しいこと ⑤上限超過ブロックが厳密不等号で at-cap を通すこと、を実コード追跡で確認。
   全 typecheck・単体（mockup 361 / api 403）・統合（278）実走 green。これで独立ロールの反復レビューは指摘ゼロに
   収束（原則9 = SP-8 完了）。
+
+## 90. 改修依頼 2026-08-20（6 改修単位 = 改善のタネ導線/要望フォーム表示改善/対象ページ検索/営業活動登録/ヘッダー統一/タグ二者択一）の完了条件（Definition of Done）
+
+対象: Nuxt 4 SPA（mockup/）中心。改善要望フォーム・ヘッダー・改善のタネ・営業活動の 6 件。
+
+### 90-1 改善のタネのヘッダー導線をモーダル化（#1）
+- [x] ヘッダーの「改善のタネ」クイックアクセスを `/poipoi` 遷移から**登録フォーム（モーダル）直接表示**へ変更
+  （`WidgetsPoipoiSubmit` 新設・改善要望の投稿導線 `WidgetsImprovementSubmit` と操作統一）。
+- [x] 実データ経路は `/poipoi` と共通の `useNotes('poipoi')`（原則3）。本文 + 任意の紐付け（プロジェクト/顧客/業務種別）を登録。
+- [x] 送信後に「取り消す」導線（`notes.archive` = 投稿者本人の取消・原則9.5）+「続けて投げ込む」。
+- [x] layouts/default.vue: 一般クイックアクセスループから poipoi を除外し（inbox と同様）、`showPoipoiButton`
+  （poipoi をクイックアクセスに含み `/poipoi` 閲覧可）で描画。表示条件は従来リンクと一致（`hidden md:inline-flex`）。
+
+### 90-2 要望フォームの本文と添付画像が重ならない（#2）
+- [x] `ImprovementsBodyImageInput`: 画像添付ツールバー（「画像」ボタン + 貼り付けヒント）を textarea への
+  `absolute` 重ね + `pb-11` から、**textarea の下に積む別要素**へ是正。長文を途中までスクロールしても下端の行が
+  ボタンに重ならない。枠は focus-within アウトライン + トークン（`--radius-ctl`/`border-line-strong`）で 1 つの入力に見せる。
+
+### 90-3 対象ページ選択のオートコンプリート化（#3）
+- [x] `WidgetsImprovementSubmit` の「対象ページ」を `UiSelect` から `UiCombobox`（**手入力検索できるオートコンプリート**）へ変更。
+  既存の選択肢からのみ選ぶ（`allow-create=false`）・ラベルが「名称（パス）」を含むため value 併記を抑止（`show-value=false`）。
+  空送信時は開いているページを既定にする（空ターゲットを作らない）。
+- [x] `UiCombobox` に `showValue` prop 追加（既定 true = 既存の全呼び出し〔顧客/営業/パートナー活動・AppRefSelect〕は不変・原則7）。
+
+### 90-4 営業活動の登録（#4）
+- [x] 既存実装（`WidgetsSalesActivityPanel` + `useSalesActivities` + API `/v1/sales-activities`）で登録が機能することを確認。
+  回帰 E2E（`e2e/improvements6-e2e.cjs`）で「登録する → 商談名/顧客入力 → 登録 → トースト + 一覧反映」を検証。API 側は既存統合テストで担保。
+
+### 90-5 ヘッダーのアイコンメニュー表示統一（#5）
+- [x] アイコンのみだった通知ベルにメニュー名「通知」を併記（他の action ボタン〔打刻/要望〕と同じく sm 以上で表示）。
+  aria-label は未読件数を保持。
+
+### 90-6 改善要望タグの二者択一化（#6）
+- [x] `ImprovementsTagToggle` 新設: 「お任せ」「壁打ち」の**二者択一セグメント型トグル**（role=radiogroup/radio +
+  aria-checked + roving tabindex + 矢印キー移動 = UiRadioCards と同作法・原則3）。片方選択で他方が自動で外れ常に 1 つ。
+  既定 = お任せ。既存データ（0 件/2 件）はマウント時に 1 件へ正規化（原則7。表示は TagBadges が従来どおり全件バッジ）。
+- [x] `WidgetsImprovementSubmit`・`ImprovementsRequestEditForm` の `UiChipSelect`（複数選択）を本部品へ置換。
+  データ形は従来どおり `ImprovementRequestTag[]`（常に要素数 1）。集約プロンプトは従来どおりタグ非包含。
+
+### 90-7 検証（typecheck / テスト / E2E）
+- [x] typecheck: mockup（nuxt typecheck）green。
+- [x] 単体: mockup vitest 361 すべて green（回帰なし）。
+- [x] E2E（`e2e/improvements6-e2e.cjs`・Playwright・モックモード生成ビルド）: 6 件 + モバイル 375px 横スクロール無しの
+  12 チェック green（通知ラベル/改善のタネ非遷移モーダル + 取消・タグ二者択一排他・対象ページ手入力検索・本文と画像非重複〔幾何〕・
+  営業活動登録 + 一覧反映）。
+
+### 90-8 反復レビュー（原則9 = SP-8）
+- [x] R1 = 独立ロール 2 体（コードレビュアー + システム監査官）の並行レビュー。**重大（CRITICAL/MAJOR）コード指摘なし。**
+  コードレビュアー MINOR: TagToggle の radiogroup が roving tabindex/矢印キー未実装 → **UiRadioCards と同パターンで是正**。
+  NIT: ヘッダーの改善のタネアイコンが catalog（StickyNote）と不一致 → **PoipoiSubmit を StickyNote に統一**（picker/ダッシュボードカードと一致）。
+  システム監査官 MAJOR/MINOR: ドキュメント整合（原則5）= CONVENTIONS.md（タグ/対象ページ/新規部品/showValue）・functional-requirements
+  F-42-17（複数可 → 二者択一）・shared/domain/improvement.ts のコメント（UiChipSelect 参照）が旧記述 → **全件更新**。
+  下位互換（タグ 0/2 件データ・normalize・TagBadges・API 受容）は非破壊であることを確認。
+- [x] R2 = R1 修正の独立再検証。R1 の修正（TagToggle の a11y・アイコン統一・各ドキュメント整合・下位互換）は
+  いずれも正しく反映と確認。**残 MINOR 1 件**: `shared/domain/improvement.ts` の `ImprovementRequestTag` 型の
+  docblock が「複数付与できる」のまま（隣接コメントは R1 で更新済みだが型 docblock が未修正 = 二者択一化と矛盾）
+  → **「どちらか 1 つを選ぶ二者択一」に修正**（型は配列のまま・下位互換の説明を追記）。
+- [x] R3 = R2 修正（docblock のみ・非挙動変更）の再確認で **指摘ゼロ**（converged。原則9 = SP-8 完了）。
+  typecheck / vitest 361 再走 green。mock E2E は挙動不変（コメントのみの変更）のため 90-7 の 12 チェック green を維持。

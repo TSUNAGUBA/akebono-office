@@ -177,15 +177,17 @@ export function clusterTargetRequests<T extends { itemId?: string | null; archiv
 // ---------- 要望のタグ（壁打ち/お任せ。投稿時の任意の意思表示 = 改修依頼 2026-08-18） ----------
 
 /**
- * 生要望の任意タグ（投稿時に複数付与できる意思表示）。
+ * 生要望のタグ（投稿時にどちらか 1 つを選ぶ二者択一の意思表示。改修依頼 2026-08-20）。
+ * - entrust    お任せ: 受け取った内容を開発側の解釈で進めてよい（既定）
  * - brainstorm 壁打ち: 起票した内容について、壁打ち（対話での要件整理）を経て案件化したい
- * - entrust    お任せ: 受け取った内容を開発側の解釈で進めてよい
- * 旧データは tags 未定義 = タグ無し（下位互換 = 原則7）。
+ * UI（ImprovementsTagToggle）は常に要素数 1 の配列で保存する。型は配列（ImprovementRequestTag[]）のまま =
+ * 旧データ（tags 未定義 = タグ無し／複数付与）とも下位互換（表示は全件バッジ・編集時に 1 件へ正規化 = 原則7）。
  */
 export type ImprovementRequestTag = 'brainstorm' | 'entrust'
 
-// 表示順の SoT（UiChipSelect はこの配列順で描画）。改修依頼 2026-08-19 第4弾: 左から「お任せ」「壁打ち」。
-// 投稿フォームの既定選択は「お任せ」（entrust）= ImprovementSubmit 側で初期値を設定
+// 表示順の SoT（ImprovementsTagToggle・TagBadges はこの配列順で描画）。改修依頼 2026-08-19 第4弾: 左から
+// 「お任せ」「壁打ち」。投稿フォームの既定選択は「お任せ」（entrust）= ImprovementSubmit 側で初期値を設定。
+// 改修依頼 2026-08-20: タグは二者択一トグル（どちらか 1 つのみ）= 保存値は常に要素数 1 の配列
 export const IMPROVEMENT_REQUEST_TAGS: ImprovementRequestTag[] = ['entrust', 'brainstorm']
 
 /** タグの表示メタ（label・トーン・意味）。ラベルの SoT はここ。tone は UI の Tone 値と対応 */

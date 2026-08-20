@@ -113,11 +113,13 @@ const visibleMobileNav = computed(() => MOBILE_NAV.filter(i => canPath(i.path)))
 
 // ヘッダーのクイックアクセス（ヘッダーカスタマイズ。ユーザー > 組織 > 既定。ユーザー優先）。
 // 権限・機能トグルで利用不可の項目は表示しない（F-16 と同じ絞り込み）。
-// 「通知（inbox）」はベルアイコン（未読バッジ付き）として特別描画するため一般ループから除外する
+// 「通知（inbox）」はベルアイコン（未読バッジ付き）として特別描画するため一般ループから除外する。
+// 「改善のタネ（poipoi）」は遷移ではなくヘッダー上で登録フォーム（モーダル）を開く導線として
+// 特別描画するため一般ループから除外する（改修依頼 2026-08-20。改善要望の投稿導線と同じ操作感に統一）
 const { effectiveIds: quickAccessIds } = useHeaderQuickAccess()
 const quickAccessItems = computed<QuickAccessItem[]>(() =>
   quickAccessIds.value
-    .filter(id => id !== 'inbox')
+    .filter(id => id !== 'inbox' && id !== 'poipoi')
     .map(id => quickAccessItemOf(id))
     .filter((i): i is QuickAccessItem => !!i)
     .filter((i) => {
@@ -125,6 +127,9 @@ const quickAccessItems = computed<QuickAccessItem[]>(() =>
       const p = quickAccessPermPath(i)
       return !p || canPath(p)
     }))
+// 改善のタネのクイック投稿ボタン（poipoi をクイックアクセスに含み、かつ /poipoi の閲覧権限がある場合）。
+// 押下で遷移せずモーダル（WidgetsPoipoiSubmit）を開く（改修依頼 2026-08-20）
+const showPoipoiButton = computed(() => quickAccessIds.value.includes('poipoi') && canPath('/poipoi'))
 
 // 通知ベル（アプリヘッダー設定の「通知」で表示を制御。既定 = 表示。改修依頼 2026-08-18）。
 // モバイル下部ナビの「通知」は本設定と独立（MOBILE_NAV 由来のまま）
@@ -290,19 +295,25 @@ function onSwitchUser(id: string): void {
           </NuxtLink>
         </template>
 
-        <!-- 通知ベル（未読総数バッジ付き）。表示はレイアウト → アプリヘッダー の「通知」で制御（既定 = 表示） -->
+        <!-- 通知ベル（未読総数バッジ付き）。表示はレイアウト → アプリヘッダー の「通知」で制御（既定 = 表示）。
+             アイコンのみではなくメニュー名（通知）も併記して他のヘッダーメニューと表示を統一する
+             （改修依頼 2026-08-20。他の action ボタン〔打刻/要望〕と同じく sm 以上でラベル表示） -->
         <NuxtLink
           v-if="showInboxBell"
           to="/inbox"
           class="btn btn-ghost btn-sm relative"
           :aria-label="unreadCount > 0 ? `通知（未読 ${unreadCount} 件）` : '通知'"
         >
-          <Bell class="h-4 w-4" />
+          <Bell class="h-4 w-4" aria-hidden="true" />
+          <span class="hidden sm:inline">通知</span>
           <span
             v-if="unreadCount > 0"
             class="num absolute -right-0.5 -top-0.5 rounded-full bg-crit px-1 text-[9px] font-bold leading-3.5 text-white"
           >{{ unreadBadge }}</span>
         </NuxtLink>
+
+        <!-- 改善のタネのクイック投稿（改修依頼 2026-08-20）。押下で /poipoi へ遷移せずモーダルで即投稿できる -->
+        <WidgetsPoipoiSubmit v-if="showPoipoiButton" />
 
         <!-- 改善要望の投稿（全ページ共通・F-42）。どの画面からでもこのページの要望を送れる -->
         <WidgetsImprovementSubmit />

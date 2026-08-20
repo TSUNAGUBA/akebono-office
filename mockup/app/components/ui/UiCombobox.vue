@@ -25,12 +25,16 @@ const props = withDefaults(defineProps<{
   allowCreate?: boolean
   /** 自由入力時に候補リスト下部へ出す案内（例: 保存時に新規登録されます） */
   createHint?: string
+  /** 候補行の右端に value（id 等）を薄字で併記するか。既定 true（会社・担当など id が意味を持つ用途）。
+   *  ラベルに識別情報を含む用途（例: 対象ページ =「名称（パス）」）では false にして重複表示を避ける */
+  showValue?: boolean
 }>(), {
   placeholder: '入力して検索',
   ariaLabel: '項目を選択',
   disabled: false,
   allowCreate: true,
   createHint: '',
+  showValue: true,
 })
 
 const emit = defineEmits<{ 'update:modelValue': [v: string]; 'update:text': [v: string] }>()
@@ -185,7 +189,7 @@ function onFocusOut(e: FocusEvent): void {
         @click="select(o.value)"
       >
         <span>{{ o.label }}</span>
-        <span class="num text-[11px] text-muted">{{ o.value }}</span>
+        <span v-if="showValue" class="num text-[11px] text-muted">{{ o.value }}</span>
       </button>
       <p v-if="filtered.length === 0 && !isFreeInput" class="px-3 py-2 text-[12px] text-muted">該当する項目がありません</p>
       <!-- Enter の挙動とヒントを一致させる（2 巡目 NIT-3）: 部分一致候補がある間は Enter が先頭候補を選ぶ旨を明示 -->

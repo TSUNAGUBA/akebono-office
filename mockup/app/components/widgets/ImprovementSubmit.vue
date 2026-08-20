@@ -13,7 +13,6 @@
 import { MessageSquarePlus, Pencil } from 'lucide-vue-next'
 import {
   IMPROVEMENT_BODY_CAP, IMPROVEMENT_BODY_TEMPLATE, IMPROVEMENT_TARGET_SPOT_CAP,
-  IMPROVEMENT_REQUEST_TAG_META, IMPROVEMENT_REQUEST_TAGS,
   type ImprovementRequestImage, type ImprovementRequestTag, improvementLinksError,
 } from '~/types/improvement'
 import { listKnownPages, pageDisplay, resolvePageLabel } from '~/utils/page-label'
@@ -44,6 +43,8 @@ const TARGET_NEW = '__new__'
 
 /** 対象ページの選択値（既定 = 現在のページ。モーダルを開くたびにリセット） */
 const targetPage = ref('')
+/** オートコンプリート入力欄の表示文字列（UiCombobox と双方向同期。選択時 = ラベル / 検索中 = 入力文字列） */
+const targetPageText = ref('')
 
 const targetOptions = computed(() => {
   const pages = listKnownPages().map(p => ({ value: p.path, label: pageDisplay(p.path) }))
@@ -58,15 +59,22 @@ const targetOptions = computed(() => {
   ]
 })
 
-/** 送信時の対象（pagePath/pageLabel）。全体・新設ページはパスなし + ラベルで区別（表示側はラベル優先表示） */
+/** value（ページパス・特別値）→ 選択肢のラベル。UiCombobox の初期表示文字列に使う */
+function targetLabelOf(value: string): string {
+  return targetOptions.value.find(o => o.value === value)?.label ?? ''
+}
+
+/** 送信時の対象（pagePath/pageLabel）。全体・新設ページはパスなし + ラベルで区別（表示側はラベル優先表示）。
+ *  オートコンプリートを空にしたまま送信した場合は、開いているページを既定にする（空ターゲットを作らない） */
 const targetOf = computed<{ pagePath: string; pageLabel: string }>(() => {
-  if (targetPage.value === TARGET_ALL) return { pagePath: '', pageLabel: '全体' }
-  if (targetPage.value === TARGET_NEW) return { pagePath: '', pageLabel: '新設ページ' }
-  return { pagePath: targetPage.value, pageLabel: resolvePageLabel(targetPage.value) }
+  const v = targetPage.value || route.path
+  if (v === TARGET_ALL) return { pagePath: '', pageLabel: '全体' }
+  if (v === TARGET_NEW) return { pagePath: '', pageLabel: '新設ページ' }
+  return { pagePath: v, pageLabel: resolvePageLabel(v) }
 })
-/** 任意タグ（壁打ち/お任せ = F-42-17・改修依頼 2026-08-18）。選択肢・ラベルの SoT = shared の TAG_META */
+/** タグ（壁打ち/お任せ = F-42-17。改修依頼 2026-08-20: どちらか 1 つのみ。既定 = お任せ）。
+ *  ラベル・選択肢の SoT = shared の TAG_META。UI は ImprovementsTagToggle（常に要素数 1 を保つ） */
 const tags = ref<string[]>([])
-const TAG_OPTIONS = IMPROVEMENT_REQUEST_TAGS.map(t => ({ value: t, label: IMPROVEMENT_REQUEST_TAG_META[t].label }))
 /** 添付リンク入力欄（複数。空欄は送信時に除外） */
 const links = ref<string[]>([])
 /** 添付画像（縮小済み data URI。プレビュー表示 + 個別削除可） */
@@ -88,6 +96,7 @@ function openModal(): void {
   links.value = ['']
   images.value = []
   targetPage.value = route.path // 既定 = 開いているページ（選び直し可 = 改善要望 2026-08-17）
+  targetPageText.value = targetLabelOf(route.path) || pageDisplay(route.path) // オートコンプリート欄の初期表示
   sent.value = false
   lastId.value = ''
   lastBody.value = ''
@@ -202,9 +211,20 @@ async function undo(): Promise<void> {
       <p class="text-[13px] text-sub">
         改善・改修の要望を送れます。内容は権限を持つ担当者が AI で整理し、改修の検討に活用します。
       </p>
-      <!-- 対象ページ（既定 = 開いているページ。全体・新設ページ・他ページへ選び直せる = 改善要望 2026-08-17） -->
-      <UiFormField label="対象ページ" hint="既定は今開いているページです。すべてのページに波及する要望は「全体」、新しい画面の要望は「新設ページ」を選んでください">
-        <UiSelect v-model="targetPage" :options="targetOptions" aria-label="要望の対象ページ" class="!w-full" />
+      <!-- 対象ページ（既定 = 開いているページ。全体・新設ページ・他ページへ選び直せる = 改善要望 2026-08-17）。
+           改修依頼 2026-08-20: リスト選択に加え、手入力で検索して選べるオートコンプリート（UiCombobox）にする。
+           ページは既存の選択肢からのみ選ぶ（自由な新規名は作らない = allow-create=false）。
+           ラベルに「名称（パス）」を含むため候補右端の value 併記は抑止する（show-value=false） -->
+      <UiFormField label="対象ページ" hint="今開いているページが既定です。ページ名を入力して検索できます。すべてのページに波及する要望は「全体」、新しい画面の要望は「新設ページ」を選んでください">
+        <UiCombobox
+          v-model="targetPage"
+          v-model:text="targetPageText"
+          :options="targetOptions"
+          :allow-create="false"
+          :show-value="false"
+          placeholder="ページ名で検索・選択（例: 改善要望）"
+          aria-label="要望の対象ページ"
+        />
       </UiFormField>
       <!-- 対象箇所（ページ内のどこか = 自由入力・任意。改修依頼 2026-08-19 第4弾） -->
       <UiFormField label="対象箇所（任意）" hint="ページ内のどこかを具体的に書けます（例: 一覧の合計欄・登録モーダルの日付）">
@@ -233,12 +253,12 @@ async function undo(): Promise<void> {
         {{ [...body].length }} / {{ IMPROVEMENT_BODY_CAP }}<template v-if="bodyOver">（上限を超えています）</template>
       </p>
 
-      <!-- 任意タグ（お任せ/壁打ち = F-42-17。既定「お任せ」= 改修依頼 2026-08-19 第4弾。進め方の意思表示） -->
+      <!-- タグ（お任せ/壁打ち = F-42-17。既定「お任せ」。改修依頼 2026-08-20: どちらか 1 つのみ選択のトグルに変更） -->
       <UiFormField
-        label="タグ（任意）"
-        hint="「お任せ」= 受け取った内容を開発側の解釈で進めてよい（既定）。「壁打ち」= 壁打ち（対話での要件整理）を経て案件化したい意思表示"
+        label="タグ"
+        hint="「お任せ」= 受け取った内容を開発側の解釈で進めてよい（既定）。「壁打ち」= 壁打ち（対話での要件整理）を経て案件化したい意思表示。どちらか 1 つを選びます"
       >
-        <UiChipSelect v-model="tags" :options="TAG_OPTIONS" aria-label="要望のタグ" />
+        <ImprovementsTagToggle v-model="tags" aria-label="要望のタグ" />
       </UiFormField>
 
       <!-- 参考リンク（既定で1件開いた状態 = 改修依頼 2026-08-19 第4弾。共通部品 = 要望編集と共用・原則3） -->
