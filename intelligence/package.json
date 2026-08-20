@@ -1,0 +1,28 @@
+{
+  "name": "akebono-intelligence",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "nuxt dev",
+    "build": "nuxt build",
+    "generate": "nuxt generate",
+    "preview": "nuxt preview",
+    "typecheck": "nuxt typecheck",
+    "test": "nuxt prepare && vitest run"
+  },
+  "dependencies": {
+    "@tailwindcss/vite": "^4.3.0",
+    "chart.js": "^4.5.1",
+    "firebase": "^12.16.0",
+    "lucide-vue-next": "^1.0.0",
+    "nuxt": "^4.4.4",
+    "tailwindcss": "^4.3.0",
+    "vue-chartjs": "^5.3.3"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.8",
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.8",
+    "vue-tsc": "^3.2.9"
+  }
+}

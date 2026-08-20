@@ -10,6 +10,8 @@ on:
     types: [opened, synchronize, reopened]
     paths:
       - 'mockup/**'
+      - 'company/**'
+      - 'intelligence/**'
       - 'api/**'
       - 'shared/**'
       - 'e2e/**'
@@ -25,7 +27,7 @@ concurrency:
 
 jobs:
   unit:
-    name: 単体テスト + typecheck（mockup / api）
+    name: 単体テスト + typecheck（mockup / company / intelligence / api）
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,15 +37,21 @@ jobs:
           cache: npm
           cache-dependency-path: |
             mockup/package-lock.json
+            company/package-lock.json
+            intelligence/package-lock.json
             api/package-lock.json
-      - name: 依存インストール（mockup / api）
+      - name: 依存インストール（mockup / company / intelligence / api）
         run: |
           ( cd mockup && npm ci )
+          ( cd company && npm ci )
+          ( cd intelligence && npm ci )
           ( cd api && npm ci )
-      - name: 単体テスト（mockup/api の vitest + typecheck）
+      - name: 単体テスト（mockup/company/intelligence/api の vitest + typecheck。deploy.yml の単体ステージと同一範囲）
         env:
           STAGE_CMD: >-
             ( cd mockup && npm run typecheck && npm run test ) &&
+            ( cd company && npm run typecheck && npm run test ) &&
+            ( cd intelligence && npm run typecheck && npm run test ) &&
             ( cd api && npm run typecheck && npm run test )
         run: bash scripts/run-test-stage.sh "単体テスト(PR)" pr-unit-test
       - name: テストログを保存

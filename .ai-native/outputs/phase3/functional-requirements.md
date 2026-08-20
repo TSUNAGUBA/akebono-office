@@ -153,6 +153,10 @@ undeux-sales-suite の意思決定オントロジー・ビュー（①意味 ②
 
 ## F-08 AIネイティブカンパニー（`/ai-company`）
 
+> **切り出し版（2026-08-20）:** 本機能は独立アプリ **AKEBONO Company**（`company/` = Firebase Hosting 別サイト）として
+> 切り出し版が存在する（+ トークン管理機能を新設。要件 = `company-intelligence-requirements.md`）。
+> Office 内の本メニューは下位互換のため現状維持（整理は implementation-status.md §91-6 の残課題）。
+
 | ID | 機能 | 入力 | 処理 | 出力 |
 |---|---|---|---|---|
 | F-08-1 | 3D オフィス空間 | — | アイソメトリック表現のオフィスに AI社員を配置。状態（実行中/待機/承認待ち）をアニメーション表示 | クリックで AI社員詳細 |

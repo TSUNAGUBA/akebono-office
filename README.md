@@ -232,10 +232,13 @@ Phase 0 から開始します。
 ├── guides/                   # 利用ガイド
 ├── domain-context/           # プロジェクト横断の参考資料
 └── outputs/                  # プロジェクト成果物の出力先
-mockup/                       # Nuxt 4 SPA（モックアップ = 将来の本番 UI）
-api/                          # 本実装 API（Hono + PostgreSQL。Cloud Run で運用）
+mockup/                       # AKEBONO Office: Nuxt 4 SPA（モックアップ = 将来の本番 UI）
+company/                      # AKEBONO Company: 独立 Nuxt 4 SPA（AI カンパニー切り出し + トークン管理。Hosting 別サイト）
+intelligence/                 # AKEBONO Intelligence: 独立 Nuxt 4 SPA（分析・インサイト・フィードバックループ。Hosting 別サイト）
+api/                          # 本実装 API（Hono + PostgreSQL。Cloud Run で運用。3 フロントで共通）
 shared/domain/                # フロント/API 共有のドメイン層（型・勤怠計算・JST）
 scripts/                      # 運用スクリプト（デプロイ用 secrets 設定等）
+e2e/                          # フルスタック / モックモード E2E ハーネス
 ```
 
 `CLAUDE.md`（リポジトリルート）は Claude Code 環境固有の実装ルール（Push 前チェック、バグ修正手順など）を定義しています。
@@ -244,6 +247,11 @@ scripts/                      # 運用スクリプト（デプロイ用 secrets 
 - 実装状況マトリクス: [`/.ai-native/outputs/phase7/implementation-status.md`](.ai-native/outputs/phase7/implementation-status.md)
 - 本番アーキテクチャ: [`/.ai-native/outputs/phase7/production-architecture.md`](.ai-native/outputs/phase7/production-architecture.md)
 - デプロイ手順: [`/.ai-native/outputs/phase7/deploy-guide.md`](.ai-native/outputs/phase7/deploy-guide.md)
+
+新アプリ（AKEBONO Company / AKEBONO Intelligence = 2026-08-20 切り出し）:
+- 機能要件: [`/.ai-native/outputs/phase3/company-intelligence-requirements.md`](.ai-native/outputs/phase3/company-intelligence-requirements.md)
+- 基本設計: [`/.ai-native/outputs/phase5/company-intelligence-design.md`](.ai-native/outputs/phase5/company-intelligence-design.md)
+- 各アプリの README: [`company/README.md`](company/README.md) / [`intelligence/README.md`](intelligence/README.md)
 
 ---
 

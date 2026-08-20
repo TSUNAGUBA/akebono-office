@@ -12,7 +12,11 @@ flowchart LR
         B[ブラウザ / モバイル]
     end
     subgraph GCP["Google Cloud"]
-        H[Firebase Hosting<br/>Nuxt SPA（静的配信）]
+        subgraph FH["Firebase Hosting（1 プロジェクト・マルチサイト）"]
+            H[デフォルトサイト<br/>AKEBONO Office（mockup/）]
+            HC[専用サイト<br/>AKEBONO Company（company/）]
+            HI[専用サイト<br/>AKEBONO Intelligence（intelligence/）]
+        end
         A[Firebase Auth<br/>ID トークン発行]
         R[Cloud Run<br/>akebono-office-api<br/>Hono + Node 22]
         SM[Secret Manager<br/>DATABASE_URL]
@@ -24,7 +28,7 @@ flowchart LR
     subgraph GH["GitHub"]
         GA[GitHub Actions<br/>deploy.yml]
     end
-    B -->|静的アセット| H
+    B -->|静的アセット| FH
     B -->|ログイン| A
     B -->|"/v1/* + Bearer ID トークン"| R
     R -->|JWKS 検証（securetoken）| A
@@ -32,10 +36,14 @@ flowchart LR
     R -.->|起動時に参照| SM
     GA -->|イメージ push| AR
     GA -->|gcloud run deploy| R
-    GA -->|静的ビルド deploy| H
+    GA -->|静的ビルド deploy ×3| FH
 ```
 
-- **フロントエンド:** Nuxt 4 SPA（`mockup/` → 将来 `app/` へ改名予定）。Firebase Hosting で静的配信（現行どおり）
+- **フロントエンド:** Nuxt 4 SPA ×3。`mockup/`（AKEBONO Office → 将来 `app/` へ改名予定）は Hosting デフォルトサイト、
+  `company/`（AKEBONO Company = AI カンパニー切り出し）・`intelligence/`（AKEBONO Intelligence）は
+  **同一 Firebase プロジェクト内の専用サイト**（マルチサイト）で別 URL 配信（2026-08-20 新設。設計 SoT =
+  `../phase5/company-intelligence-design.md`）。3 アプリとも同一 Firebase Auth・同一 API を共有し、
+  新アプリは既存 API の範囲で動作する（API/DB 変更なし。範囲を超える機能はフロント内モック = 同設計書 §3）
 - **API:** `api/`（Hono + node-postgres）。Cloud Run（min 0 / max 3、8080）。コンテナは distroless 相当の node:22-slim・非 root 実行
 - **DB:** RDS PostgreSQL。業務データは `app_office` スキーマ（分析は akebono-scm-platform `mart` へ将来 ETL。逆流禁止）
 - **共有ドメイン層:** `shared/domain/`（型定義・勤怠計算・JST ユーティリティ）をフロント/API で共有し、業務ロジックの二重実装を防ぐ
@@ -86,7 +94,7 @@ flowchart LR
 - **バッチジョブ:** `/jobs/periodic-leave-grants`（周期有給付与）は Cloud Scheduler からの共有鍵認証
   （`x-cron-key` = 環境変数 `CRON_SECRET`。未設定時はエンドポイント無効 = 管理者/人事の手動実行のみ）
 - **エラーコード:** AKO-AUTH-001（未認証/トークン不正）/ 002（メンバー未登録）/ 003（権限不足）
-- Cloud Run は `--allow-unauthenticated`（IAM ではなくアプリ層で認証）。CORS は Hosting のオリジンのみ許可（`CORS_ORIGINS`）
+- Cloud Run は `--allow-unauthenticated`（IAM ではなくアプリ層で認証）。CORS は Hosting 各サイト（デフォルト + company + intelligence）のオリジンのみ許可（`CORS_ORIGINS` = 完全一致の許可リスト。新サイト追加時は `API_CORS_ORIGINS` secret 更新 + api 再デプロイ）
 
 ## 4. データベース設計（実装済み分）
 
@@ -127,16 +135,20 @@ Cloud Run（GCP）から RDS（AWS）への接続は次の 2 案。**v1 は案 A
 
 ```mermaid
 flowchart LR
-    P[main へ push<br/>mockup/ api/ shared/] --> T1[deploy-mockup<br/>test + typecheck + generate]
-    P --> T2[api-test<br/>typecheck + 単体 + 統合（PostgreSQL 16）+ build]
-    T1 --> H[Firebase Hosting]
-    T2 --> D[deploy-api]
+    P[main へ push<br/>mockup/ company/ intelligence/ api/ shared/] --> T[テストゲート<br/>単体（4 パッケージ）→ 結合 → シナリオ]
+    T --> M[deploy-mockup] --> H[Hosting デフォルトサイト]
+    T --> C[deploy-company] --> HC[Hosting 専用サイト]
+    T --> I[deploy-intelligence] --> HI[Hosting 専用サイト]
+    T --> D[deploy-api]
     D -->|イメージ build/push| AR[Artifact Registry]
     D -->|Secret 登録（変更時のみ）| SM[Secret Manager]
     D -->|gcloud run deploy| CR[Cloud Run]
 ```
 
 - API 用 secrets 未設定時は `deploy-api` を**警告付きスキップ**（mockup のみの運用を止めない = 開発原則4）
+- company / intelligence はサイト用 secret（`FIREBASE_HOSTING_SITE_COMPANY` / `FIREBASE_HOSTING_SITE_INTELLIGENCE`）
+  未設定時に**警告付きスキップ**。登録時はデプロイジョブが `.firebaserc` を生成してターゲットへ紐付ける
+  （手順: deploy-guide.md §1-11。CORS 追加 = `API_CORS_ORIGINS` 更新 + api 再デプロイが必要）
 - secrets の設定は `scripts/setup-deploy-secrets.ps1`（手順: deploy-guide.md）
 - DB マイグレーションは**コンテナ起動時に自動適用**（CI から DB へ直接接続しない = RDS を GitHub Actions へ開放しない）
 
@@ -164,7 +176,7 @@ flowchart LR
 | `SLACK_CLIENT_ID` | — | 個人別通知連携（F-49）の Slack OAuth クライアント ID。未設定 = Slack 連携無効（AKO-NCH-001 = 連携 UI 非活性・他機能に影響しない） |
 | `SLACK_CLIENT_SECRET` | — | 同シークレット（Secret Manager 経由。未設定 = Slack 連携無効・AKO-NCH-001） |
 
-> **Google Chat 連携（F-49・改修依頼 2026-08-20）の注記:** Google Chat 側は専用の環境変数を持たず、**既存の `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` を再利用**する（スコープに `chat.spaces.readonly` / `chat.messages.create` を追加した同意を求める。トークンの暗号化は同じ `TOKEN_ENCRYPTION_KEY`）。Slack / Google Chat とも `TOKEN_ENCRYPTION_KEY` 未設定時は連携無効。セットアップ手順は deploy-guide.md §1-11 参照。
+> **Google Chat 連携（F-49・改修依頼 2026-08-20）の注記:** Google Chat 側は専用の環境変数を持たず、**既存の `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` を再利用**する（スコープに `chat.spaces.readonly` / `chat.messages.create` を追加した同意を求める。トークンの暗号化は同じ `TOKEN_ENCRYPTION_KEY`）。Slack / Google Chat とも `TOKEN_ENCRYPTION_KEY` 未設定時は連携無効。セットアップ手順は deploy-guide.md §1-12 参照。
 
 ## 9. 段階移行計画（モック → 本番）
 
@@ -188,7 +200,10 @@ flowchart LR
 18. **バッチ6a（PR #35・マージ済み）:** AI カンパニー F-08（ロール/AI 社員 = 汎用マスタ・タスク状態機械・活動ログ・日次報告・停滞/過負荷検知。分解 = Vertex AI → 失敗時共有ヒューリスティック）— 完了
 19. **バッチ6b（PR #36・マージ済み）:** 売上管理 F-15（sales_monthly = 冪等 upsert・管理者の実績登録/取込・会計年度計算 = shared/domain/fiscal 共有）+ mart ETL 基盤（fact_sales / mart_load_runs = app_office 内 mart 互換テーブル・オペレーター判断 2026-07-18。手動実行 + Cloud Scheduler 日次の両経路）— 完了
 20. **バッチ6c（PR #37・マージ済み）:** 提供システム稼働状況 F-11（system_services シード・service_incidents = 正順状態機械 + updates 追記・uptime_daily = インシデントから shared/domain/uptime で日次導出・/jobs/uptime-rollup + 手動再計算の両経路）— 完了
-21. **バッチ6d（本 PR）:** AKEBONO F-03（akebono_wishes = 記録系の要望ボックス・useAkebono デュアルモード）— **全ドメインの接続が完了し、API モードのモックバッジ全廃（段階移行のマイルストーン達成）**
+21. **バッチ6d（マージ済み）:** AKEBONO F-03（akebono_wishes = 記録系の要望ボックス・useAkebono デュアルモード）— **全ドメインの接続が完了し、API モードのモックバッジ全廃（段階移行のマイルストーン達成）**
+22. **新アプリ切り出し（2026-08-20）:** AKEBONO Company（`company/` = F-08 AI カンパニーの独立アプリ + トークン管理）と
+    AKEBONO Intelligence（`intelligence/` = 分析・インサイト・フィードバックループ）を Hosting マルチサイトで新設。
+    **API / DB は無変更**（既存 API の範囲で実現。超える機能はフロント内モック = `../phase3/company-intelligence-requirements.md` §5）
 
 
 進捗の SoT: `implementation-status.md`（実装 PR ごとに更新）
