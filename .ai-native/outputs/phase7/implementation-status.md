@@ -4103,3 +4103,44 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   置換済みと明記。[NIT] deploy.yml ヘッダーコメントの桁揃え / architecture.md の対象宣言・
   project-status.json の「モックアップ」表記を「旧 mockup/ = 昇格済み」へ実態化 / 繰延べ 1 件の本記録追記。
   取り残し・過剰置換・workflow 整合・e2e/scripts・外部リソース波及は指摘ゼロ（監査報告）。
+
+## 99. アプリ名の変更と表記統一: AKEBONO Home（改修依頼 2026-08-20）
+
+> 指示: 「アプリ名を「AKEBONO Home」に変更し、アプリ内の表記も合わせて変更する。タイトルバー・設定画面・
+> ヘルプ・通知など、ユーザーが目にする全ての箇所。」（旧称: AKEBONO Office / 通知名義の旧表記: AKEBONO HOME）
+
+- [x] **ユーザー可視表記**: タイトルバー（nuxt.config `app.head.title` + description）・ヘッダーロゴ・
+  ログイン画面・OAuth 同意 UI（GA / カレンダー連携）・通知テスト送信文言・チャットボットの自己紹介
+  （AGENT_SYSTEM）・通知連携のエラーメッセージ / 連携詳細（旧 AKEBONO HOME 表記）・/profile の説明文・
+  company アプリのトースト（「Home アプリで確認」）を「AKEBONO Home」へ統一。
+- [x] **一括置換**: `AKEBONO Office` / `AKEBONO HOME` → `AKEBONO Home`（51 ファイル）。
+  除外 = implementation-status（追記型記録の保護）・適用済みマイグレーション（0077 コメント）・lockfile。
+  company / intelligence の相対表記（Office 版 / Office 側 / Office と同一 / Office の）も Home へ更新。
+- [x] **識別子は不変（下位互換 = 原則7）**: `app_office` DB スキーマ・`OfficeXxx` コンポーネント名 /
+  `components/office/`・リポジトリ名 / package name（akebono-office / akebono-office-home）・`pj-08` 等の ID。
+  モックシードの表示名（pj-08「AKEBONO Home 開発（自社）」等）は更新（mock は決定的シードのため無害）。
+  本番 DB の実データ（オペレーター登録のプロジェクト名等）はコードから変更しない = データパッチ不要
+  （マイグレーションにアプリ名を含むシードは無し = grep 確認済み）。
+- [x] **chatbot 文脈ゲート**: アプリ名言及の除外 regex を `AKEBONO(?!\s*(SCM|Office|Home))` へ
+  （「AKEBONO Home」への言及が業態アプリ（akebono）ブロックを誤発火しない。旧称 Office も除外を維持）。
+- [x] **外部アプリ（Slack / Google Chat）**: 送信・宛先解決は表示名に依存しないため機能影響なし。
+  旧表記 `AKEBONO HOME` で作成済みアプリの表示名変更は**任意**（deploy-guide §1-12 に手順注記を追加。
+  アプリ検索は大文字小文字を区別しないためコード内の案内文とも不整合を生まない）。
+- [x] docs: ルート README（旧称注記付き）・home/README・deploy-guide・production-architecture・
+  functional-requirements ほか設計文書全件 + project-status.json。検証 = ブラウザ実測で title / ヘッダーロゴの
+  反映を確認（Playwright・1366px / 375px）。
+
+## 100. AI チャットボットページの高さ制御修正（改修依頼 2026-08-20）
+
+> 指示: 「AIチャットボットページの高さの制御がおかしい。有効な高さいっぱいに使うよう修正してください。」
+> （症状: デスクトップでカード下に大きな空白 = 固定見積り `calc(100dvh - header - bottomnav - 150px)` が
+> デスクトップに存在しないボトムナビ 56px と過大な 150px を常に減算していた）
+
+- [x] **flex ラッパー方式へ変更**: UiPageHeader + カードを `flex flex-col` のラッパーで包み、ラッパーに
+  有効高さ（`100dvh` − アプリヘッダー − main の実余白のみ）を与え、カードは `flex-1 min-h-0` で残り全部を
+  占有。ページヘッダーの実高さ（説明文の折返しで可変）は flex が吸収するため**固定見積りを持たない**。
+- [x] **モバイル / デスクトップ分岐**: モバイル = `- var(--bottomnav-h) - 28px`（p-3 12px + pb 16px）、
+  md 以上 = `- 52px`（p-5 20px + pb-8 32px。ボトムナビは引かない）。極小ビューポートは `min-h-[420px]` で
+  カードを潰さない（超過時は従来どおりページスクロール）。
+- [x] **検証**: Playwright 実測で card 下端の残余 = desktop 32px（= main の pb-8 ちょうど）/
+  mobile 72px（= ボトムナビ 56px + pb 16px ちょうど）。375px で崩れなし（原則8）。typecheck / 単体全 green。

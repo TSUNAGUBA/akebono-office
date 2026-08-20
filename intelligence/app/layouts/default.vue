@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 共通レイアウト: ヘッダー（ブランド・PC ナビ・アカウント）+ モバイルボトムナビ。
- * AKEBONO Office のレイアウト構成を本アプリのメニューへ簡素化して踏襲。
+ * AKEBONO Home のレイアウト構成を本アプリのメニューへ簡素化して踏襲。
  */
 import * as icons from 'lucide-vue-next'
 import { Check, ChevronDown, LineChart, LogOut, RotateCcw } from 'lucide-vue-next'

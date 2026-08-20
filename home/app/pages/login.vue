@@ -109,7 +109,7 @@ async function logout(): Promise<void> {
     <div class="card w-full max-w-sm p-6">
       <div class="flex items-center gap-2">
         <Sunrise class="h-6 w-6 text-[var(--c-accent)]" aria-hidden="true" />
-        <h1 class="text-[18px] font-bold">AKEBONO Office</h1>
+        <h1 class="text-[18px] font-bold">AKEBONO Home</h1>
       </div>
       <p class="mt-1 text-xs text-sub">社内アカウントでログインしてください</p>
 

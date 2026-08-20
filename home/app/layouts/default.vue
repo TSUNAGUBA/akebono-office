@@ -162,7 +162,7 @@ function onSwitchUser(id: string): void {
       <header class="sticky top-0 z-20 flex h-[var(--header-h)] items-center gap-1.5 border-b border-line bg-surface px-3 md:gap-3 md:px-5">
         <NuxtLink to="/" class="flex shrink-0 items-center gap-2" aria-label="ダッシュボードへ戻る">
           <Sunrise class="h-5 w-5 text-brand" aria-hidden="true" />
-          <span class="hidden text-[15px] font-bold tracking-tight sm:block">AKEBONO Office</span>
+          <span class="hidden text-[15px] font-bold tracking-tight sm:block">AKEBONO Home</span>
         </NuxtLink>
         <!-- パス表示（パンくず）: 全階層を表現し、各階層は押下でその場所へ遷移できる（改善要望 2026-08-17）。
              中間階層はモバイルでは幅の都合で隠す（sm+）。現在ページ名は常に表示（truncate） -->

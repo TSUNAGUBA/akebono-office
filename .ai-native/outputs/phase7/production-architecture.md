@@ -13,7 +13,7 @@ flowchart LR
     end
     subgraph GCP["Google Cloud"]
         subgraph FH["Firebase Hosting（1 プロジェクト・マルチサイト）"]
-            H[デフォルトサイト<br/>AKEBONO Office（home/）]
+            H[デフォルトサイト<br/>AKEBONO Home（home/）]
             HC[専用サイト<br/>AKEBONO Company（company/）]
             HI[専用サイト<br/>AKEBONO Intelligence（intelligence/）]
         end
@@ -39,7 +39,7 @@ flowchart LR
     GA -->|静的ビルド deploy ×3| FH
 ```
 
-- **フロントエンド:** Nuxt 4 SPA ×3。`home/`（AKEBONO Office。旧 `mockup/` = 2026-08-20 改名。旧記述の「将来 app/ へ改名予定」はこの改名で置換済み）は Hosting デフォルトサイト、
+- **フロントエンド:** Nuxt 4 SPA ×3。`home/`（AKEBONO Home。旧 `mockup/` = 2026-08-20 改名。旧記述の「将来 app/ へ改名予定」はこの改名で置換済み）は Hosting デフォルトサイト、
   `company/`（AKEBONO Company = AI カンパニー切り出し）・`intelligence/`（AKEBONO Intelligence）は
   **同一 Firebase プロジェクト内の専用サイト**（マルチサイト）で別 URL 配信（2026-08-20 新設。設計 SoT =
   `../phase5/company-intelligence-design.md`）。3 アプリとも同一 Firebase Auth・同一 API を共有し、
@@ -173,10 +173,10 @@ flowchart LR
 | `GOOGLE_OAUTH_CLIENT_ID` | — | カレンダー連携の OAuth クライアント ID。未設定 = 連携無効 |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | — | 同シークレット（Secret Manager 経由） |
 | `TOKEN_ENCRYPTION_KEY` | — | OAuth トークンの AES-256-GCM 暗号化鍵（カレンダー連携用。Secret Manager 経由。変更すると保管済みトークンは復号不能 = 全員再連携） |
-| `SLACK_BOT_TOKEN` | — | 個人別通知連携（F-49）の Slack Bot Token（`xoxb-`…。**AKEBONO HOME 名義化 2026-08-20** = Bot 名義で DM 送信）。未設定 = Slack 連携無効（AKO-NCH-001 = 連携 UI 非活性・他機能に影響しない）。repository secret を登録するだけで deploy が Secret Manager `$SERVICE-slack-bot-token` 経由で自動注入する |
-| `GOOGLE_CHAT_SA_KEY` | — | 同 Google Chat の Chat アプリ（AKEBONO HOME）用サービスアカウント鍵 JSON（Secret Manager `$SERVICE-google-chat-sa-key` 経由で自動注入）。未設定 = Google Chat 連携無効（AKO-NCH-001） |
+| `SLACK_BOT_TOKEN` | — | 個人別通知連携（F-49）の Slack Bot Token（`xoxb-`…。**AKEBONO Home 名義化 2026-08-20** = Bot 名義で DM 送信）。未設定 = Slack 連携無効（AKO-NCH-001 = 連携 UI 非活性・他機能に影響しない）。repository secret を登録するだけで deploy が Secret Manager `$SERVICE-slack-bot-token` 経由で自動注入する |
+| `GOOGLE_CHAT_SA_KEY` | — | 同 Google Chat の Chat アプリ（AKEBONO Home）用サービスアカウント鍵 JSON（Secret Manager `$SERVICE-google-chat-sa-key` 経由で自動注入）。未設定 = Google Chat 連携無効（AKO-NCH-001） |
 
-> **通知連携の方式（AKEBONO HOME 名義化 2026-08-20）:** 送信はテナント資格情報によるアプリ名義（Slack = Bot Token / Google Chat = Chat アプリのサービスアカウント）で、個人 OAuth・ユーザーごとのトークン保管は廃止した（`TOKEN_ENCRYPTION_KEY` にも依存しない）。旧 `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` は不要（削除可）。セットアップ手順は deploy-guide.md §1-12 参照。
+> **通知連携の方式（AKEBONO Home 名義化 2026-08-20）:** 送信はテナント資格情報によるアプリ名義（Slack = Bot Token / Google Chat = Chat アプリのサービスアカウント）で、個人 OAuth・ユーザーごとのトークン保管は廃止した（`TOKEN_ENCRYPTION_KEY` にも依存しない）。旧 `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` は不要（削除可）。セットアップ手順は deploy-guide.md §1-12 参照。
 
 ## 9. 段階移行計画（モック → 本番）
 

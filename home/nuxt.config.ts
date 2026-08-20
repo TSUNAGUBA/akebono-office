@@ -27,10 +27,10 @@ export default defineNuxtConfig({
   app: {
     head: {
       htmlAttrs: { lang: 'ja' },
-      title: 'AKEBONO Office',
+      title: 'AKEBONO Home',
       meta: [
         { name: 'viewport', content: 'width=device-width, initial-scale=1' },
-        { name: 'description', content: 'TSUNAGUBA 社内オフィスアプリ（モックアップ）' },
+        { name: 'description', content: 'TSUNAGUBA 社内オフィスアプリ AKEBONO Home' },
       ],
       link: [
         { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' },

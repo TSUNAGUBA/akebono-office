@@ -1,6 +1,6 @@
 /**
  * 個人別マルチチャネル通知連携（Slack / Google Chat。改修依頼 2026-08-20 →
- * AKEBONO HOME 名義化 2026-08-20: 送信元は通知アプリ「AKEBONO HOME」）。
+ * AKEBONO Home 名義化 2026-08-20: 送信元は通知アプリ「AKEBONO Home」）。
  * 連携状態と通知マトリクス（通知種別 × チャネルの ON/OFF）を扱う。
  * 純ロジック（カタログ・パース・既定値）は utils/notification-channels.ts（= shared/domain）が SoT。
  *
@@ -9,7 +9,7 @@
  *   'ako.notification-matrix.v1'。連携はその場で完了・テスト送信はトーストのみのデモ（実送信なし）
  * - API: GET /v1/notification-channels（連携状態 + マトリクス）・PUT /matrix（保存）・
  *   POST /:service/link（1 クリック連携 = 登録メールアドレスで宛先解決。OAuth 同意・画面遷移なし）・
- *   POST /:service/disconnect・POST /:service/test（AKEBONO HOME 名義で自分宛に実送信）
+ *   POST /:service/disconnect・POST /:service/test（AKEBONO Home 名義で自分宛に実送信）
  *
  * リアルタイム受信はスコープ外: アプリ内通知は既存の 60 秒ポーリング（useNotifications）を維持し、
  * 即時性は外部チャネル（Slack / Google Chat の DM）が担う設計。
@@ -162,7 +162,7 @@ export function useNotificationChannels() {
   }
 
   /**
-   * 連携する（1 クリック連携 = AKEBONO HOME 名義化 2026-08-20）。
+   * 連携する（1 クリック連携 = AKEBONO Home 名義化 2026-08-20）。
    * API モードは POST /:service/link（登録メールアドレスで宛先解決）→ 状態を取り直す。
    * mock は即時に連携済みへ（再連携 = 上書き。冪等）。
    */
@@ -200,7 +200,7 @@ export function useNotificationChannels() {
     return { ok: true }
   }
 
-  /** テスト送信（API = AKEBONO HOME 名義で自分宛に実送信 / mock = デモ。トーストは呼び出し側で表示） */
+  /** テスト送信（API = AKEBONO Home 名義で自分宛に実送信 / mock = デモ。トーストは呼び出し側で表示） */
   async function sendTest(service: ChatService): Promise<Result> {
     if (isApi) {
       // 実送信はリトライ + 宛先の自己修復込みで長引きうるため延長（総和は保証しない上限。

@@ -1,4 +1,4 @@
-/** 区分値 → 日本語ラベル（表示の SoT。列挙は types/domain.ts が正。Office 版から本アプリで使う区分のみ抜粋） */
+/** 区分値 → 日本語ラベル（表示の SoT。列挙は types/domain.ts が正。Home 版から本アプリで使う区分のみ抜粋） */
 import type {
   AiEmployeeStatus, AiTaskStatus, EmploymentType, EscalationReason,
   EscalationResolutionType, MemberRole, NotificationKind,

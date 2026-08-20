@@ -136,7 +136,7 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
   app.get('/v1/calendar/oauth/callback', calendarOauthCallback(pool, env))
   app.get('/v1/media/oauth/callback', mediaOauthCallback(pool, env))
   app.get('/v1/akebono/sheets/oauth/callback', sheetsOauthCallback(pool, env))
-  // 個人別チャット連携（Slack / Google Chat）の OAuth コールバックは AKEBONO HOME 名義化（0077）で廃止
+  // 個人別チャット連携（Slack / Google Chat）の OAuth コールバックは AKEBONO Home 名義化（0077）で廃止
   // （連携 = 認証後の POST /v1/notification-channels/:service/link による宛先解決へ）
   app.use('/v1/*', authMiddleware(env, pool))
   // 機能単位の権限ガード（F-16。認証の後段。/v1/masters・/v1/configs はデータ面のため対象外 = lib/permissions 参照）

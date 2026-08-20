@@ -26,13 +26,13 @@ export const CHANNEL_META: Record<NotificationChannelType, { label: string }> = 
   google_chat: { label: 'Google Chat' },
 }
 
-/** 連携対象の外部チャットサービス（= in_app 以外のチャネル。送信名義はアプリ「AKEBONO HOME」） */
+/** 連携対象の外部チャットサービス（= in_app 以外のチャネル。送信名義はアプリ「AKEBONO Home」） */
 export type ChatService = 'slack' | 'google_chat'
 
 export const CHAT_SERVICES: ChatService[] = ['slack', 'google_chat']
 
 /**
- * 連携行の状態。AKEBONO HOME 名義化（0077・2026-08-20）以降は 'connected' のみ運用
+ * 連携行の状態。AKEBONO Home 名義化（0077・2026-08-20）以降は 'connected' のみ運用
  * （'reauth_required' は旧・個人 OAuth 方式の残置値 = DB CHECK 互換のため型に残す。新規書込なし）
  */
 export type ChatLinkStatus = 'connected' | 'reauth_required'

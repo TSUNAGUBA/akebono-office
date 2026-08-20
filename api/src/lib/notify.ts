@@ -3,7 +3,7 @@
  * home useNotifications.notify / notifyAdmins の API 版。
  *
  * 個人別マルチチャネル通知連携（改修依頼 2026-08-20）で配信エンジンを拡張。
- * AKEBONO HOME 名義化（オペレーター指示 2026-08-20）で外部送信をテナント資格情報へ切替。シグネチャは不変:
+ * AKEBONO Home 名義化（オペレーター指示 2026-08-20）で外部送信をテナント資格情報へ切替。シグネチャは不変:
  * - チャネル判定: 宛先ユーザーの通知マトリクス（user_preferences 'notificationChannels'。
  *   純ロジックは shared/domain/notification-channels.ts が SoT）を参照する。
  *   in_app が OFF の種別はアプリ内通知（INSERT）をスキップ。
@@ -12,7 +12,7 @@
  *   送らない（fail-closed。設定不明のまま外部サービスへ送る誤送信を作らない）。
  * - 外部配信（Slack / Google Chat の DM）は fire-and-forget（void + catch）。外部 API の失敗・
  *   遅延・リトライは主フロー（INSERT・呼び出し元のレスポンス）へ一切影響しない。
- *   送信名義はアプリ「AKEBONO HOME」（Slack = Bot Token / Google Chat = Chat アプリの
+ *   送信名義はアプリ「AKEBONO Home」（Slack = Bot Token / Google Chat = Chat アプリの
  *   サービスアカウント。プリミティブは lib/chat-dm.ts）。個人 OAuth トークンは 0077 で廃止。
  * - 宛先（user_chat_links.dm_target: Slack = DM チャンネル / Google Chat = スペース名）は連携時に
  *   解決済み。空の行（0075 時代の旧行）は送信時に解決して UPDATE する自己修復で新方式へ移行し、
@@ -270,7 +270,7 @@ async function persistDmTarget(
   link.dmTarget = resolved.dmTarget
 }
 
-// ---------- Slack（Bot Token 方式: AKEBONO HOME 名義で DM へ投稿） ----------
+// ---------- Slack（Bot Token 方式: AKEBONO Home 名義で DM へ投稿） ----------
 
 /**
  * Slack の宛先解決 + 保存（自己修復の共通経路）。保存済み userId が陳腐化していた場合
@@ -324,7 +324,7 @@ async function sendSlackDm(
   return stepToDelivery(posted, sink)
 }
 
-// ---------- Google Chat（Chat アプリ方式: AKEBONO HOME 名義で DM スペースへ投稿） ----------
+// ---------- Google Chat（Chat アプリ方式: AKEBONO Home 名義で DM スペースへ投稿） ----------
 
 /**
  * Google Chat の users/{...} 識別子。旧行（0075 の sub）はそのまま有効。email ベースの行は

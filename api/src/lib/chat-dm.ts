@@ -1,9 +1,9 @@
 /**
- * 外部チャット DM のプリミティブ（通知の AKEBONO HOME 名義化 2026-08-20）。
+ * 外部チャット DM のプリミティブ（通知の AKEBONO Home 名義化 2026-08-20）。
  * 連携（宛先解決 = routes/notification-channels.ts）と配信（lib/notify.ts）で共用する（原則3）。
  *
  * 送信名義はテナント単位の資格情報が決める:
- * - Slack: Bot Token（xoxb-…）。アプリの表示名/アイコン（AKEBONO HOME）は Slack アプリ設定側。
+ * - Slack: Bot Token（xoxb-…）。アプリの表示名/アイコン（AKEBONO Home）は Slack アプリ設定側。
  *   必要な Bot Token Scopes: chat:write（送信）/ im:write（DM オープン）/
  *   users:read + users:read.email（メールでの宛先解決）
  * - Google Chat: Chat アプリ（サービスアカウント・scope = chat.bot）。表示名/アバターは
@@ -136,7 +136,7 @@ export async function slackResolveDm(
   return { kind: 'ok', value: { userId, dmChannel: opened.value, displayName } }
 }
 
-/** DM チャンネルへ Bot 名義（AKEBONO HOME）で送信する（chat.postMessage） */
+/** DM チャンネルへ Bot 名義（AKEBONO Home）で送信する（chat.postMessage） */
 export function slackPostDm(botToken: string, channel: string, text: string): Promise<StepResult<true>> {
   return slackCall(botToken, 'chat.postMessage', { channel, text }, () => true)
 }
@@ -201,7 +201,7 @@ export async function googleChatFindOrCreateDm(token: string, userRef: string): 
   return setup
 }
 
-/** DM スペースへアプリ名義（AKEBONO HOME）で送信する（messages.create） */
+/** DM スペースへアプリ名義（AKEBONO Home）で送信する（messages.create） */
 export async function googleChatPostDm(token: string, space: string, text: string): Promise<StepResult<true>> {
   const result = await chatCall(token, 'messages.create',
     `${GOOGLE_CHAT_BASE}/${space}/messages`, { method: 'POST', body: JSON.stringify({ text }) })

@@ -1,4 +1,4 @@
-/** AI タスク・活動ログ・通知・エスカレーションのシード（AKEBONO Office の seed/ai-company.ts 由来） */
+/** AI タスク・活動ログ・通知・エスカレーションのシード（AKEBONO Home の seed/ai-company.ts 由来） */
 import type { AiActivityLog, AiTask, AppNotification, Escalation } from '~/types/domain'
 import { addDays } from '~/utils/format'
 

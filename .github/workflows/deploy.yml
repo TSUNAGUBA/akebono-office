@@ -470,12 +470,12 @@ jobs:
             --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
             --role="roles/secretmanager.secretAccessor" --quiet >/dev/null
 
-      # 外部連携（カレンダー F-06-8 / 通知の AKEBONO HOME 名義化 2026-08-20）: 資格情報を Secret Manager へ。
+      # 外部連携（カレンダー F-06-8 / 通知の AKEBONO Home 名義化 2026-08-20）: 資格情報を Secret Manager へ。
       # secrets 未設定の連携はスキップ（無効のままデプロイ継続 = 原則4）。repository secrets の登録だけで
       # 自動配線される（デプロイ障害 2026-08-20 の教訓: 手動の gcloud run services update 前提にしない = 原則1/3）
       # - カレンダー: GOOGLE_OAUTH_CLIENT_SECRET + TOKEN_ENCRYPTION_KEY（個人 OAuth トークンの暗号化鍵）
-      # - Slack: SLACK_BOT_TOKEN（Bot Token 方式 = AKEBONO HOME 名義。旧 SLACK_CLIENT_ID/SECRET は廃止）
-      # - Google Chat: GOOGLE_CHAT_SA_KEY（Chat アプリのサービスアカウント鍵 JSON = AKEBONO HOME 名義）
+      # - Slack: SLACK_BOT_TOKEN（Bot Token 方式 = AKEBONO Home 名義。旧 SLACK_CLIENT_ID/SECRET は廃止）
+      # - Google Chat: GOOGLE_CHAT_SA_KEY（Chat アプリのサービスアカウント鍵 JSON = AKEBONO Home 名義）
       - name: 外部連携の secrets を Secret Manager へ登録（冪等・任意）
         env:
           SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
@@ -517,13 +517,13 @@ jobs:
           else
             echo "::notice::TOKEN_ENCRYPTION_KEY が未設定のためカレンダー連携は無効のままデプロイします（setup-deploy-secrets.ps1 で設定）"
           fi
-          # 通知連携（AKEBONO HOME 名義）はトークンを保管しないため暗号化鍵に依存しない
+          # 通知連携（AKEBONO Home 名義）はトークンを保管しないため暗号化鍵に依存しない
           if [ -n "$SLACK_BOT_TOKEN" ]; then
             put_secret "$SERVICE-slack-bot-token" "$SLACK_BOT_TOKEN"
             echo "SLACK_READY=true" >> "$GITHUB_ENV"
           elif [ -n "$LEGACY_SLACK_CLIENT_SECRET" ]; then
             # 旧方式で稼働していた環境の移行漏れは notice では気づけないため warning にする（監査 R1 MINOR-1）
-            echo "::warning::旧方式の SLACK_CLIENT_SECRET を検出しましたが SLACK_BOT_TOKEN が未登録です。AKEBONO HOME 名義化により旧方式は廃止されたため、このままでは Slack 通知が停止します（deploy-guide.md §1-12 の移行手順で Bot Token を登録してください）"
+            echo "::warning::旧方式の SLACK_CLIENT_SECRET を検出しましたが SLACK_BOT_TOKEN が未登録です。AKEBONO Home 名義化により旧方式は廃止されたため、このままでは Slack 通知が停止します（deploy-guide.md §1-12 の移行手順で Bot Token を登録してください）"
           else
             echo "::notice::SLACK_BOT_TOKEN が未設定のため Slack 通知連携は無効のままデプロイします"
           fi
@@ -558,7 +558,7 @@ jobs:
             || echo "::warning::analyticsdata.googleapis.com の有効化に失敗しました。オーナー権限で有効化してください（deploy-guide.md §1-9b 参照）"
           gcloud services enable analyticsadmin.googleapis.com --project "$PROJECT" \
             || echo "::warning::analyticsadmin.googleapis.com の有効化に失敗しました。オーナー権限で有効化してください（deploy-guide.md §1-9b 参照）"
-          # 通知の Google Chat 連携（AKEBONO HOME 名義 = Chat アプリ）。従来は deploy-guide の手動手順のみで
+          # 通知の Google Chat 連携（AKEBONO Home 名義 = Chat アプリ）。従来は deploy-guide の手動手順のみで
           # 有効化漏れが本番障害（テスト送信 502）の原因候補だったため自動化へ含める（§94-2 / 原則1）
           gcloud services enable chat.googleapis.com --project "$PROJECT" \
             || echo "::warning::chat.googleapis.com の有効化に失敗しました。オーナー権限で有効化してください（deploy-guide.md §1-12 参照）"
@@ -633,7 +633,7 @@ jobs:
             # 片側登録の検知（シークレットのみ・ID 欠落 = 無言スキップにしない。レビュー R1）
             echo "::warning::GOOGLE_OAUTH_CLIENT_ID が未設定のためカレンダー連携は配線されません（GOOGLE_OAUTH_CLIENT_SECRET は登録済み。ID も repository secrets へ登録してください）"
           fi
-          # 通知連携（AKEBONO HOME 名義化 2026-08-20。repository secrets の登録だけで有効化。
+          # 通知連携（AKEBONO Home 名義化 2026-08-20。repository secrets の登録だけで有効化。
           # トークンを保管しないため TOKEN_ENCRYPTION_KEY には依存しない）
           if [ "${SLACK_READY:-false}" = "true" ]; then
             SECRET_FLAGS="$SECRET_FLAGS,SLACK_BOT_TOKEN=$SERVICE-slack-bot-token:latest"

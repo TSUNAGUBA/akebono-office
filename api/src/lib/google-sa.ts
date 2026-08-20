@@ -1,6 +1,6 @@
 /**
  * Google サービスアカウント（SA）認証: SA 鍵 JSON から OAuth 2.0 アクセストークンを取得する
- * （JWT Bearer フロー = RFC 7523。通知の AKEBONO HOME 名義化 2026-08-20）。
+ * （JWT Bearer フロー = RFC 7523。通知の AKEBONO Home 名義化 2026-08-20）。
  *
  * Google Chat の「アプリ名義」送信（scope = chat.bot）が利用する。個人 OAuth と異なり
  * ユーザー同意・refresh token が存在せず、SA の秘密鍵で署名した JWT を都度アクセストークンへ

@@ -1,9 +1,9 @@
 /**
  * 個人別マルチチャネル通知連携 API（Slack / Google Chat。改修依頼 2026-08-20）。home useNotificationChannels の API 版。
  *
- * AKEBONO HOME 名義化（オペレーター指示 2026-08-20）で個人 OAuth を廃止し、テナント資格情報による
+ * AKEBONO Home 名義化（オペレーター指示 2026-08-20）で個人 OAuth を廃止し、テナント資格情報による
  * アプリ名義送信へ切替（0077。旧方式の設計判断は 0075 時点の本ファイル履歴を参照）:
- * - 送信名義はアプリ「AKEBONO HOME」。Slack = Bot Token（SLACK_BOT_TOKEN）/
+ * - 送信名義はアプリ「AKEBONO Home」。Slack = Bot Token（SLACK_BOT_TOKEN）/
  *   Google Chat = Chat アプリのサービスアカウント（GOOGLE_CHAT_SA_KEY）。いずれも Secret Manager 経由の
  *   env で、ユーザーごとのトークン保管（旧 access_token_enc / refresh_token_enc）は行わない。
  * - 連携 = OAuth 同意ではなく**宛先解決**（POST /:service/link・1 クリック）。members.email を SoT に
@@ -51,7 +51,7 @@ function serviceEnabled(env: Env, service: ChatService): boolean {
 function requireEnabled(env: Env, service: ChatService): void {
   if (!serviceEnabled(env, service)) {
     throw err('AKO-NCH-001',
-      `${CHANNEL_META[service].label} 連携が未設定です（管理者が通知アプリ「AKEBONO HOME」を設定すると利用できます）`, 400)
+      `${CHANNEL_META[service].label} 連携が未設定です（管理者が通知アプリ「AKEBONO Home」を設定すると利用できます）`, 400)
   }
 }
 
@@ -169,14 +169,14 @@ export function notificationChannelsRoutes(pool: pg.Pool, env: Env): Hono {
       // フォールバック（ユーザーがアプリへ一度 DM → 既存スペースとして解決できる）を案内する（監査 R1 MAJOR-2）
       if (r.kind !== 'ok') {
         throw linkError(label, r,
-          'Google Chat で「AKEBONO HOME」アプリを検索して一度メッセージを送ってから、もう一度連携をお試しください')
+          'Google Chat で「AKEBONO Home」アプリを検索して一度メッセージを送ってから、もう一度連携をお試しください')
       }
       resolved = { externalUserId: email, displayName: email, dmTarget: r.value }
     }
     await upsertLink(pool, user.id, service, resolved)
     await audit(pool, {
       actorId: user.id, action: 'connect', entity: 'user_chat_links', entityId: `${user.id}:${service}`,
-      detail: `${label} 連携（${resolved.displayName}・AKEBONO HOME 名義）`,
+      detail: `${label} 連携（${resolved.displayName}・AKEBONO Home 名義）`,
     })
     return c.json({ data: { service, displayName: resolved.displayName } })
   })
@@ -201,7 +201,7 @@ export function notificationChannelsRoutes(pool: pg.Pool, env: Env): Hono {
     return c.json({ data: { ok: true } })
   })
 
-  // テスト送信（AKEBONO HOME 名義で自分宛に実送信。連携カードの「テスト送信」= 主要操作のフィードバック）
+  // テスト送信（AKEBONO Home 名義で自分宛に実送信。連携カードの「テスト送信」= 主要操作のフィードバック）
   app.post('/:service/test', async (c) => {
     const service = serviceOf(c.req.param('service'))
     const user = c.get('user')
@@ -209,7 +209,7 @@ export function notificationChannelsRoutes(pool: pg.Pool, env: Env): Hono {
     // 失敗ステップ・上流応答を診断用に受け取る（デプロイ障害対応 2026-08-20。テスト送信のみ = 配信経路は不変）
     const sink: FailureDetailSink = {}
     const result = await deliverToService(pool, env, user.id, service,
-      `【テスト送信】AKEBONO Office の通知連携テストです（${user.name}）。この通知が届いていれば設定は完了です。`, sink)
+      `【テスト送信】AKEBONO Home の通知連携テストです（${user.name}）。この通知が届いていれば設定は完了です。`, sink)
     if (result === 'not_connected') {
       throw err('AKO-NCH-003', `${label} が未連携です。連携してからテスト送信してください`, 400)
     }
@@ -219,7 +219,7 @@ export function notificationChannelsRoutes(pool: pg.Pool, env: Env): Hono {
     }
     if (result === 'fail') {
       const hint = service === 'google_chat'
-        ? `${label} へのテスト送信に失敗しました。Google Chat API の有効化と Chat アプリ（AKEBONO HOME）の構成を確認してください。DM スペース未作成が原因の場合は、Google Chat で「AKEBONO HOME」アプリへ一度メッセージを送ってから再試行すると解決できます`
+        ? `${label} へのテスト送信に失敗しました。Google Chat API の有効化と Chat アプリ（AKEBONO Home）の構成を確認してください。DM スペース未作成が原因の場合は、Google Chat で「AKEBONO Home」アプリへ一度メッセージを送ってから再試行すると解決できます`
         : `${label} へのテスト送信に失敗しました。時間をおいて再試行してください`
       throw err('AKO-NCH-004', sink.detail ? `${hint}（詳細: ${sink.detail}）` : hint, 502)
     }

@@ -308,7 +308,7 @@ export function buildCustomerLogs(count = 22): CustomerLog[] {
   return rows
 }
 
-/** 月次売上（過去 24 ヶ月 + 当月。Office の buildSalesMonthly と同一ロジック） */
+/** 月次売上（過去 24 ヶ月 + 当月。Home の buildSalesMonthly と同一ロジック） */
 export function buildSalesMonthly(): SalesMonthly[] {
   const rows: SalesMonthly[] = []
   const today = seedToday()

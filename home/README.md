@@ -1,7 +1,8 @@
-# AKEBONO Office フロントエンド（home）
+# AKEBONO Home フロントエンド（home）
 
-TSUNAGUBA 社内オフィスアプリのメインフロントエンド（Nuxt 4 SPA）。
-モックアップ（旧 `mockup/`）として始まり本実装へ昇格した（ディレクトリ名は 2026-08-20 に `home/` へ改名）。
+TSUNAGUBA 社内オフィスアプリ **AKEBONO Home**（旧称 AKEBONO Office）のメインフロントエンド（Nuxt 4 SPA）。
+モックアップ（旧 `mockup/`）として始まり本実装へ昇格した（ディレクトリ名は 2026-08-20 に `home/` へ改名。
+アプリ名も同日 AKEBONO Home へ変更）。
 API 未接続でも**全ページの全機能が操作に反応する**モックモードを備える（体感検証・E2E 用）。
 
 - 要件・設計の SoT: `../.ai-native/outputs/`（phase0〜5）

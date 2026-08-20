@@ -4,7 +4,7 @@
 
 8つの専門AIロールが相互に牽制し合い、品質を保証する開発方法論のテンプレート集です。
 
-> **このリポジトリの開発対象:** 本方法論に基づき、社内オフィスアプリ **AKEBONO Office** を開発しています。
+> **このリポジトリの開発対象:** 本方法論に基づき、社内オフィスアプリ **AKEBONO Home**（旧称 AKEBONO Office。2026-08-20 改名）を開発しています。
 > - メインフロントエンド: [`home/`](./home/README.md)（Nuxt 4 SPA。旧 `mockup/` — モックアップとして始め本実装へ昇格、2026-08-20 改名）
 > - 要件・設計ドキュメント: [`.ai-native/outputs/`](./.ai-native/outputs/)（Phase 0〜5）
 
@@ -232,7 +232,7 @@ Phase 0 から開始します。
 ├── guides/                   # 利用ガイド
 ├── domain-context/           # プロジェクト横断の参考資料
 └── outputs/                  # プロジェクト成果物の出力先
-home/                       # AKEBONO Office: メインフロントエンド Nuxt 4 SPA（旧 mockup/。2026-08-20 改名）
+home/                       # AKEBONO Home: メインフロントエンド Nuxt 4 SPA（旧 mockup/。2026-08-20 改名）
 company/                      # AKEBONO Company: 独立 Nuxt 4 SPA（AI カンパニー切り出し + トークン管理。Hosting 別サイト）
 intelligence/                 # AKEBONO Intelligence: 独立 Nuxt 4 SPA（分析・インサイト・フィードバックループ。Hosting 別サイト）
 api/                          # 本実装 API（Hono + PostgreSQL。Cloud Run で運用。3 フロントで共通）

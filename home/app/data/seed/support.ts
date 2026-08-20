@@ -31,7 +31,7 @@ export const seedDocumentNodes: DocumentNode[] = [
   // ---------- ファイル: 議事録 ----------
   { id: 'doc-0005', parentId: 'doc-sub-minutes-scm', kind: 'file', name: 'SCM定例_第12回_議事録.md', tags: ['議事録'], updatedAt: at(21, '18:10:00'), updatedBy: 'm-03', size: '24KB', summary: '在庫スナップショットの粒度を「日次×SKU×拠点」で合意。棚卸月（2月・8月）はバッチ停止枠を設ける。次回までに連携 IF 案を提示。' },
   { id: 'doc-0006', parentId: 'doc-sub-minutes-scm', kind: 'file', name: 'SCM定例_第13回_議事録.md', tags: ['議事録'], updatedAt: at(7, '17:30:00'), updatedBy: 'm-03', size: '26KB', summary: 'Phase2 スコープを確定。データ連携の異常検知アラート追加を検討。春日部長より性能要件の再確認依頼あり。' },
-  { id: 'doc-0007', parentId: 'doc-root-minutes', kind: 'file', name: '経営会議_2026-07_議事録.md', tags: ['議事録'], updatedAt: at(9, '19:00:00'), updatedBy: 'm-01', size: '18KB', summary: '月次業績レビューと下期採用計画の審議。AKEBONO Office の他社展開方針（設定・汎用化基盤の整備）を決定。' },
+  { id: 'doc-0007', parentId: 'doc-root-minutes', kind: 'file', name: '経営会議_2026-07_議事録.md', tags: ['議事録'], updatedAt: at(9, '19:00:00'), updatedBy: 'm-01', size: '18KB', summary: '月次業績レビューと下期採用計画の審議。AKEBONO Home の他社展開方針（設定・汎用化基盤の整備）を決定。' },
 
   // ---------- ファイル: 提案書 ----------
   { id: 'doc-0008', parentId: 'doc-root-proposals', kind: 'file', name: 'シーサイドホテルズ_DX構想策定_提案書_v2.pptx', tags: ['提案書'], updatedAt: at(12, '16:20:00'), updatedBy: 'm-03', size: '4.8MB', summary: '中期 DX ロードマップ策定支援の提案（3 フェーズ構成）。曙執行役員からの紹介案件。汐見取締役向けに投資対効果を前面に。' },

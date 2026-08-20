@@ -40,7 +40,7 @@ const chName = computed(() => channelById(cid.value)?.name ?? setting.value?.nam
 /** 連携失敗理由（callback の ?reason=）→ 利用者向けメッセージ（calendar の FAIL_REASONS と同じ語彙） */
 const FAIL_REASONS: Record<string, string> = {
   'account-mismatch': '会社アカウント以外の Google アカウントで同意されたため連携できませんでした。'
-    + 'AKEBONO Office に登録されたメールアドレスと同じ Google アカウントを選択してください',
+    + 'AKEBONO Home に登録されたメールアドレスと同じ Google アカウントを選択してください',
   'denied': 'Google の同意画面でアクセスがキャンセルされました。連携するには「許可」を選択してください',
   'invalid-state': '連携リクエストの有効期限が切れました（10 分以内に同意してください）。もう一度お試しください',
   'not-configured': 'Google Analytics 連携が未設定です。管理者に OAuth クライアントの設定を依頼してください',
@@ -231,7 +231,7 @@ async function disconnect(): Promise<void> {
     <UiModal :open="consentOpen" title="Google Analytics へのアクセス許可（モック）" width="460px" @close="consentOpen = false">
       <div class="grid gap-3">
         <p class="text-[13px]">
-          <span class="font-bold">AKEBONO Office</span> が「{{ chName }}」のアクセス解析データの参照を求めています:
+          <span class="font-bold">AKEBONO Home</span> が「{{ chName }}」のアクセス解析データの参照を求めています:
         </p>
         <ul class="grid gap-2">
           <li class="flex items-start gap-2 rounded-lg bg-surface-soft p-2.5">

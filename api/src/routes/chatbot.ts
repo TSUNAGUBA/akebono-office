@@ -484,9 +484,9 @@ export async function buildContext(
   }
 
   // AKEBONO（バッチ6d で移行済みドメイン。構想状況 + 直近の要望 = 詳細は /akebono へ誘導）。
-  // 顧客「アケボノ商事」・サービス「AKEBONO SCM」・アプリ名「AKEBONO Office」への言及では
+  // 顧客「アケボノ商事」・サービス「AKEBONO SCM」・アプリ名「AKEBONO Home」への言及では
   // 発火しない（顧客/稼働状況ブロックとの文脈ノイズ防止 = 6d レビュー指摘対応）
-  if (can('akebono') && wants('akebono', /AKEBONO(?!\s*(SCM|Office))|アケボノ(?!商事)|あけぼの|要望/i.test(topic))) {
+  if (can('akebono') && wants('akebono', /AKEBONO(?!\s*(SCM|Office|Home))|アケボノ(?!商事)|あけぼの|要望/i.test(topic))) {
     await block(async () => {
       const { rows } = await pool.query<{ body: string; at: string }>(
         `SELECT body, at FROM akebono_wishes ORDER BY at DESC, id LIMIT 3`)
@@ -977,7 +977,7 @@ const TOOL_EMPTY_NOTE = '該当するデータは見つかりませんでした�
 const TOOL_RESULT_CAP = 6000
 
 const AGENT_SYSTEM = (userName: string, today: string): string =>
-  'あなたは社内業務アシスタント（AKEBONO Office のチャットボット）です。'
+  'あなたは社内業務アシスタント（AKEBONO Home のチャットボット）です。'
   + `質問者は ${userName} さん、今日は ${today} です。\n`
   + '- 会話の流れ（履歴）から質問の意図を解釈し、回答に必要な社内データをツールで取得してから回答する。'
   + '複数ツールの組み合わせ・結果を踏まえた追加取得（深掘り）も積極的に行う\n'

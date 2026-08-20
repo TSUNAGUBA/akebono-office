@@ -32,7 +32,7 @@
     - GOOGLE_OAUTH_CLIENT_ID   : カレンダー連携の OAuth クライアント ID（-GoogleOauthClientId）
     - GOOGLE_OAUTH_CLIENT_SECRET : 同シークレット（-GoogleOauthClientSecretPath でファイル渡し）
     - SLACK_BOT_TOKEN          : Slack 通知連携の Bot Token（xoxb-…。-SlackBotTokenPath でファイル渡し。
-                                 AKEBONO HOME 名義化 2026-08-20。旧 SLACK_CLIENT_ID/SECRET は不要 = 削除可）
+                                 AKEBONO Home 名義化 2026-08-20。旧 SLACK_CLIENT_ID/SECRET は不要 = 削除可）
     - GOOGLE_CHAT_SA_KEY       : Google Chat 通知連携（Chat アプリ）のサービスアカウント鍵 JSON
                                  （-GoogleChatSaKeyPath でファイル渡し）
     - TOKEN_ENCRYPTION_KEY     : トークン暗号化鍵（カレンダー連携用。初回のみ自動生成。既存は変更しない）
@@ -128,12 +128,12 @@ param(
   # カレンダー連携: クライアントシークレットを 1 行で書いたファイルのパス（チャット・履歴に残さないためファイル渡し）
   [string]$GoogleOauthClientSecretPath = '',
 
-  # Slack 通知連携（AKEBONO HOME 名義化 2026-08-20）: Bot User OAuth Token（xoxb-…）を 1 行で書いた
+  # Slack 通知連携（AKEBONO Home 名義化 2026-08-20）: Bot User OAuth Token（xoxb-…）を 1 行で書いた
   # ファイルのパス（チャット・履歴に残さないためファイル渡し。repository secrets の登録だけで
   # deploy が Cloud Run へ自動配線する）
   [string]$SlackBotTokenPath = '',
 
-  # Google Chat 通知連携（AKEBONO HOME 名義化 2026-08-20）: Chat アプリのサービスアカウント鍵 JSON のパス
+  # Google Chat 通知連携（AKEBONO Home 名義化 2026-08-20）: Chat アプリのサービスアカウント鍵 JSON のパス
   [string]$GoogleChatSaKeyPath = '',
 
   # ドキュメント保管（バッチ7l）: Firebase の Cloud Storage バケット名（例: <project>.firebasestorage.app）。
@@ -300,7 +300,7 @@ if ($DatabaseUrl) {
     Write-Warning '-GoogleOauthClientId と -GoogleOauthClientSecretPath は両方指定してください（カレンダー連携 secrets は未設定のまま）。'
   }
 
-  # Slack 通知連携（AKEBONO HOME 名義化 2026-08-20）: Bot Token 方式。
+  # Slack 通知連携（AKEBONO Home 名義化 2026-08-20）: Bot Token 方式。
   # トークンを保管しないため TOKEN_ENCRYPTION_KEY は不要（カレンダー連携のみが使用）
   if ($SlackBotTokenPath) {
     if (-not (Test-Path $SlackBotTokenPath)) { throw "ファイルが見つかりません: $SlackBotTokenPath" }
@@ -309,17 +309,17 @@ if ($DatabaseUrl) {
     if ($slackBotToken -notmatch '^xoxb-') {
       Write-Warning 'Bot Token は通常 xoxb- で始まります（xoxp- はユーザートークン = 旧方式）。Slack アプリの「OAuth & Permissions」の Bot User OAuth Token を指定してください。'
     }
-    Write-Step "Repository secrets を設定（Slack 通知連携 / AKEBONO HOME 名義）: $Repo"
+    Write-Step "Repository secrets を設定（Slack 通知連携 / AKEBONO Home 名義）: $Repo"
     Set-RepoSecret 'SLACK_BOT_TOKEN' $slackBotToken
-    Write-Host '※ Slack アプリ側の前提: Bot Token Scopes = chat:write / im:write / users:read / users:read.email、表示名 = AKEBONO HOME、ワークスペースへインストール済み（deploy-guide.md §1-12）。' -ForegroundColor Yellow
+    Write-Host '※ Slack アプリ側の前提: Bot Token Scopes = chat:write / im:write / users:read / users:read.email、表示名 = AKEBONO Home、ワークスペースへインストール済み（deploy-guide.md §1-12）。' -ForegroundColor Yellow
   }
 
-  # Google Chat 通知連携（AKEBONO HOME 名義化 2026-08-20）: Chat アプリ（サービスアカウント）方式
+  # Google Chat 通知連携（AKEBONO Home 名義化 2026-08-20）: Chat アプリ（サービスアカウント）方式
   if ($GoogleChatSaKeyPath) {
     $chatSa = Read-ServiceAccountJson $GoogleChatSaKeyPath
-    Write-Step "Repository secrets を設定（Google Chat 通知連携 / AKEBONO HOME 名義）: $Repo"
+    Write-Step "Repository secrets を設定（Google Chat 通知連携 / AKEBONO Home 名義）: $Repo"
     Set-RepoSecret 'GOOGLE_CHAT_SA_KEY' $chatSa.Raw
-    Write-Host '※ GCP 側の前提: Chat API の有効化（deploy が自動実行）と Chat アプリ構成（表示名 = AKEBONO HOME・1:1 メッセージ受信 ON・このサービスアカウントを使用。deploy-guide.md §1-12）。' -ForegroundColor Yellow
+    Write-Host '※ GCP 側の前提: Chat API の有効化（deploy が自動実行）と Chat アプリ構成（表示名 = AKEBONO Home・1:1 メッセージ受信 ON・このサービスアカウントを使用。deploy-guide.md §1-12）。' -ForegroundColor Yellow
   }
 }
 else {
