@@ -37,7 +37,17 @@ const options = computed<ChartOptions<'bar'>>(() => ({
       ticks: props.yFormatter ? { callback: (v: unknown) => props.yFormatter!(Number(v)) } : {},
       grid: { color: CHART_GRID },
     },
-    [props.horizontal ? 'y' : 'x']: { grid: { display: false } },
+    [props.horizontal ? 'y' : 'x']: {
+      grid: { display: false },
+      // 横棒の項目ラベルは長文（記事タイトル等）だと canvas 幅を超えて先頭が切断される
+      // （モバイル・UnitI 検出）。表示のみ省略しツールチップは全文のまま
+      ...(props.horizontal
+        ? { ticks: { callback(this: { getLabelForValue: (v: number) => string }, v: unknown) {
+            const label = this.getLabelForValue(Number(v))
+            return label.length > 12 ? `${label.slice(0, 12)}…` : label
+          } } }
+        : {}),
+    },
   } as ChartOptions<'bar'>['scales'],
 }))
 </script>

@@ -540,10 +540,12 @@ async function onResetDemo(): Promise<void> {
             </button>
           </template>
           <ul class="grid gap-1.5">
+            <!-- li の min-w-0: grid item の min-width:auto がバッジ列の内在幅まで行を広げ、
+                 ボタンがカード境界の外でぶつ切りになる（UnitI 検出） -->
             <li
               v-for="def in cfList"
               :key="def.id"
-              class="flex items-center gap-2.5 rounded-lg border border-line px-2.5 py-2"
+              class="flex min-w-0 items-center gap-2.5 rounded-lg border border-line px-2.5 py-2"
               :class="def.active ? '' : 'opacity-55'"
             >
               <span class="min-w-0 flex-1">
@@ -630,7 +632,7 @@ async function onResetDemo(): Promise<void> {
               <span class="min-w-0 flex-1 text-[13px] font-medium" :class="r.enabled ? '' : 'text-muted'">
                 {{ r.label }}
               </span>
-              <label v-if="r.threshold !== null" class="flex items-center gap-1 text-[11px] text-sub">
+              <label v-if="r.threshold !== null" class="flex items-center gap-1 whitespace-nowrap text-[11px] text-sub">
                 {{ r.thresholdLabel }}
                 <input
                   type="number"

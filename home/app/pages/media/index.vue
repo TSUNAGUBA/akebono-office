@@ -165,7 +165,9 @@ const segmentOptions = computed(() => [
         <ul class="divide-y divide-line">
           <li v-for="o in pagedOverview" :key="o.id" class="flex flex-wrap items-center gap-2 px-3 py-2.5">
             <component :is="o.linkedName ? Link2 : Radio" class="h-4 w-4 shrink-0 text-muted" aria-hidden="true" />
-            <div class="min-w-0 flex-1">
+            <!-- min-w-40: flex-1(basis 0) のままだと右側の指標グループに幅を奪われ名前が 2〜3 文字に
+                 潰れる（モバイル・UnitI 検出）。下限を確保し、収まらない指標は flex-wrap で次行へ -->
+            <div class="min-w-40 flex-1">
               <div class="flex flex-wrap items-center gap-1.5">
                 <span class="truncate text-[13px] font-bold">{{ o.name }}</span>
                 <span v-if="o.siteName" class="truncate text-[11px] text-muted">{{ o.siteName }}</span>

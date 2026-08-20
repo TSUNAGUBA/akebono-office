@@ -58,3 +58,16 @@ SKIP_BUILD=1 ./run-new-apps-mock.sh   # ビルド済み .output/public を再利
 ゲート（main への push 後）より前倒しで、登録フロー等の実クリック回帰をマージ前に検知する。
 モックモード E2E は DB 不要（`nuxt generate` + 静的配信のみ）なので単独でも
 `bash e2e/run-mock-stack.sh` でローカル実行できる。
+
+## UI 網羅検査プローブ（UnitI・2026-08-20）
+
+CI には組み込まず、UI 改修時に手動で回す回帰検査ハーネス:
+
+- `probe-ui-sweep.cjs <baseUrl> <outDir> <routesJson>` — 全ルートを 375px / 1366px で巡回し、
+  横スクロール（`scrollWidth` 超過）とはみ出し要素を検出 + フルページスクリーンショットを保存
+- `probe-truncate-break.cjs <baseUrl> <routesJson> [label]` — nowrap 要素（truncate・バッジ・ボタン）が
+  overflow-hidden のカード境界を超えてぶつ切りされる型（grid/flex の min-width:auto 伝播）を検出。
+  横スクロールに現れないため sweep では拾えない
+
+使い方: 対象アプリを `npm run generate` → `python3 -m http.server <port> -d .output/public` で配信し、
+ルート一覧の JSON 配列を渡して実行する（例は home/CONVENTIONS.md「スタイル規約」の回帰検査注記を参照）。

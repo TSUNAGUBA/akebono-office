@@ -294,6 +294,13 @@ const imp = useImprovements()  // submit（body + 対象ページ〔既定=開�
 - 色トークン: `text-ink/sub/muted/brand/ok/warn/serious/crit/info`、`bg-surface/page/brand-soft/ok-soft/...`、`border-line/line-strong/brand`
 - 数値は `num` クラス（tabular-nums）。ステータス色をチャート系列に使わない
 - ページ構造: `UiPageHeader` → （`UiTabBar`）→ `UiFilterBar` → 本体グリッド（`grid gap-3`）
+- **grid/flex 内の nowrap 要素には `min-w-0` の親を必ず用意する**（UI 網羅調査 2026-08-20）。
+  grid item / flex item の `min-width: auto` は、子の nowrap 文（`truncate`・`num`・バッジ列・`UiTabBar` のタブ列・
+  `.btn`）の内在幅までトラック/行を押し広げる。結果、`truncate` の省略記号が出ずカード（`overflow-hidden`）の
+  境界でぶつ切りになる・`overflow-x-auto` の内部スクロールが発動せずページ全体が横スクロールする。
+  `ul.grid` のリスト行（`li`）や `UiTabBar` を包む素の div には `min-w-0` を付ける。
+  横スクロールが仕様のコンテナ（表・チップ列・アイソメ図）には `overflow-x-auto pb-1 scroll-slim` で
+  スクロール可能の手掛かりを見せる。回帰検査: `e2e/probe-ui-sweep.cjs`（横スクロール網羅）
 
 ## 品質確認（担当分の完了条件）
 

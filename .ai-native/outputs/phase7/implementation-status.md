@@ -4151,3 +4151,41 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   カードを潰さない（超過時は従来どおりページスクロール）。
 - [x] **検証**: Playwright 実測で card 下端の残余 = desktop 32px（= main の pb-8 ちょうど）/
   mobile 72px（= ボトムナビ 56px + pb 16px ちょうど）。375px で崩れなし（原則8）。typecheck / 単体全 green。
+
+## 101. UI 網羅調査と修正: 余白・モバイル横スクロール（改修依頼 2026-08-20）
+
+> 指示: 「ところどころに表示の崩れ。margin/padding が全くない箇所がありボーダーとの距離が近く見づらい。
+> モバイルで表示要素が有効な幅を超えて横スクロールが発生している箇所があった。全アプリ・全ページを
+> 網羅的に調査し、必要に応じて最適な UI 表現になるように修正して。」
+
+- [x] **調査手法**: ①Playwright 機械検査（`e2e/probe-ui-sweep.cjs` = 全ルートの 375px/1366px 巡回で
+  `scrollWidth` 超過とはみ出し要素を検出。home 70 + company 8 + intel 6 + 動的ルート詳細 + akebono
+  業態サブページ = 約 90 画面）②truncate 破れ検査（`e2e/probe-truncate-break.cjs` = nowrap 要素が
+  overflow-hidden のカード境界を超えてぶつ切りされる型。scrollWidth に出ないため①では検出不能）
+  ③全ページのフルページスクリーンショットを独立監査 3 ロールで視覚監査（余白欠落・崩れ）。
+- [x] **根本パターンの特定**: grid/flex item の `min-width: auto` が nowrap 子（タブ列・truncate 文・
+  バッジ・ボタン）の内在幅までトラックを押し広げ、(a) `overflow-x-auto` が発動せずページ全体が
+  横スクロール（/masters/knowledge・34px）(b) truncate の省略記号が出ずカード境界でぶつ切り
+  （company ダッシュボード「直近の活動」・settings「カスタム項目」）→ 包む要素へ `min-w-0` を付与。
+  規約化 = home/CONVENTIONS「スタイル規約」に追記（再発防止 + 回帰検査ハーネスを e2e/ に常設）。
+- [x] **実バグ発見**: `/media/articles` が**ページごと 500**（「Cannot access 'preview' before
+  initialization」= `watch(..., { immediate })` が `const preview` の宣言前に `applyDefaults()` を同期実行
+  する TDZ。PR #85 = 2026-07-29 から本番で記事生成画面が開けない状態だった）→ 宣言順を修正し復旧。
+- [x] **修正一覧（モバイル 375px）**:
+  - media: チャンネル一覧の名前が 2〜3 文字に潰れる（flex-1 basis 0 で指標に幅を奪われる）→ `min-w-40`
+  - media/analytics ほか横棒チャート共通: 長い項目ラベルが canvas 左端で先頭切断 → BarChartCard の
+    horizontal 時に 12 字 + … 省略（ツールチップは全文）
+  - media/settings: 「取消済みも表示」が 1 文字幅の縦書きに潰れる → `shrink-0 whitespace-nowrap`
+  - **UiSectionCard（共通）**: ヘッダーを `flex-wrap` 化 — actions が多いカード（akebono/masters の
+    取込カード・ai-assistant「明日の計画」・settings「汎用区分」ほか）でタイトルが幅 45px に縦潰れ・
+    ボタン見切れになる型を一括解消
+  - settings: エスカレーションルールの閾値ラベル語中折返し → nowrap（行は flex-wrap で折返す）
+  - profile / intelligence data: 通知配信先・ソース一覧テーブルの末尾列切れに手掛かりなし →
+    `pb-1 scroll-slim`（スクロールバー表示）
+  - support/chatbot: 入力欄プレースホルダ 2 行目が下端で半分切れる → 1 行に収まる文言へ短縮
+  - intelligence index: フィードバックループのタイル見出しが語中折返し → モバイル 1 列化
+- [x] **対応不要と判断（設計どおり）**: UiTabBar のタブ列・アイソメトリック図・フォルダチップ列の
+  右端切れ = `overflow-x-auto scroll-slim` の内部スクロール設計（実機はスワイプ + 細スクロールバー）。
+  フルページ撮影での固定ナビ写り込みは撮影アーティファクト。
+- [x] **検証**: 再ビルド後の全ルート再スイープで横スクロール 0 件・truncate 破れ 0 件。
+  home 486 / company 12 テスト・3 アプリ typecheck 全 green。修正 8 画面の目視確認済み。
