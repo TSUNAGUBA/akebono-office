@@ -1134,8 +1134,9 @@ export function chatbotRoutes(pool: pg.Pool, env: Env): Hono {
         return text ? capCp(text, TOOL_RESULT_CAP) : TOOL_EMPTY_NOTE
       },
       maxRounds: 6,
-      // クライアントのタイムアウト（useChatbot 150 秒）との整合: ツールラウンドの締切 55 秒 +
-      // 最終ラウンド fetch ≤30 秒 + ツール実行（embedQuery 20 秒等）でも余裕が残る予算（レビュー R1）
+      // クライアントのタイムアウト（useChatbot 150 秒）との整合: ツールラウンド・各ツール実行の
+      // 締切 55 秒（runToolLoop は各実行前にも締切判定 = レビュー R2）+ 実行中ツール最長 1 件
+      // （search_internal 最悪 ≒60 秒）+ 最終ラウンド fetch ≤30 秒 ≒ 最悪 145 秒 < 150 秒
       deadlineMs: 55_000,
       maxTokens: 1024,
     })
@@ -1150,9 +1151,13 @@ export function chatbotRoutes(pool: pg.Pool, env: Env): Hono {
     } else {
       const split = splitSuggestions(result.text)
       content = capCp(split.content, 4000)
-      // 回答が提案行のみだった場合の防御（空 content はクライアントがフォールバック扱いするため）
-      if (!content) content = capCp(result.text, 4000)
       suggestions = split.suggestions
+      // 回答が提案行のみだった場合の防御（空 content はクライアントがフォールバック扱いするため。
+      // 生テキストへ戻す際は suggestions を空に = 同内容の二重表示を作らない。レビュー R2）
+      if (!content) {
+        content = capCp(result.text, 4000)
+        suggestions = []
+      }
       // sources = 実際にデータを返したツール（真の出典。空応答・エラー・宣言外は出典に載せない。
       // 同一ツールは 1 回・5 件まで）
       sources = [...new Set(result.toolCalls

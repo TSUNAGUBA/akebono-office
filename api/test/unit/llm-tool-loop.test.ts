@@ -42,7 +42,10 @@ const TOOLS = [
 ]
 
 beforeEach(stubFetch)
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+  vi.unstubAllGlobals()
+  vi.useRealTimers()
+})
 
 describe('normalizeAgentMessages（contents の先頭 user / 交互制約の防御 = R1 MAJOR-2）', () => {
   it('先頭の model ターンを捨て、同ロール連続は結合する', () => {
@@ -153,6 +156,53 @@ describe('runToolLoop（ツール実行ループ）', () => {
     })
     expect(result.kind).toBe('ok')
     expect(vertexRequests[1]!.contents.at(-1).parts[0].functionResponse.response.result).toContain('エラー')
+  })
+
+  it('runToolLoop 経由でも非正規履歴（先頭 model・同ロール連続）が正規化されて送信される', async () => {
+    vertexResponses = [textResponse('回答')]
+    await runToolLoop(env, {
+      system: 'sys',
+      messages: [
+        { role: 'model', text: '迷子の回答' },
+        { role: 'user', text: '一つ前の質問' },
+        { role: 'user', text: '今回の質問' }, // 通信断補償の二重追記の形
+      ],
+      tools: TOOLS,
+      execute: async () => 'x',
+    })
+    const contents = vertexRequests[0]!.contents as { role: string; parts: { text: string }[] }[]
+    expect(contents).toHaveLength(1)
+    expect(contents[0]!.role).toBe('user')
+    expect(contents[0]!.parts[0]!.text).toBe('一つ前の質問\n今回の質問')
+  })
+
+  it('締切超過後のツールは実行せずエラー応答で打ち切り、次ラウンドで回答を強制する（R2 MINOR-1）', async () => {
+    // Vertex 応答が締切（1 秒）の後に返った状況を Date のフェイクで決定的に再現する
+    const base = Date.now()
+    vi.useFakeTimers({ now: base, toFake: ['Date'] })
+    vertexResponses = [callResponse([{ name: 'arg_tool', args: { q: 'x' } }]), textResponse('回答')]
+    vi.stubGlobal('fetch', async (url: unknown, init?: { body?: string }) => {
+      if (String(url).includes('metadata.google.internal')) {
+        return new Response(JSON.stringify({ access_token: 'test-token', expires_in: 3600 }), { status: 200 })
+      }
+      vertexRequests.push(JSON.parse(init?.body ?? '{}'))
+      if (vertexRequests.length === 1) vi.setSystemTime(base + 2_000) // 1 回目の応答で締切を跨ぐ
+      const next = vertexResponses.shift() ?? { json: {} }
+      return new Response(JSON.stringify(next.json), { status: next.status ?? 200 })
+    })
+    let executed = 0
+    const result = await runToolLoop(env, {
+      system: 'sys', messages: USER_MSG, tools: TOOLS, deadlineMs: 1_000,
+      execute: async () => {
+        executed++
+        return 'x'
+      },
+    })
+    expect(result).toMatchObject({ kind: 'ok', text: '回答' })
+    expect(executed).toBe(0) // 締切超過 = ツールは実行されない
+    const second = vertexRequests[1]!
+    expect(second.contents.at(-1).parts[0].functionResponse.response.result).toContain('時間切れ')
+    expect(second.toolConfig.functionCallingConfig.mode).toBe('NONE') // 次ラウンドは回答を強制
   })
 
   it('API エラー（非 2xx）は error・LLM 無効環境は disabled', async () => {

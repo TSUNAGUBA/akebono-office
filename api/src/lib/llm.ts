@@ -244,13 +244,18 @@ export async function runToolLoop(env: Env, req: ToolLoopRequest): Promise<ToolL
       return { kind: 'ok', text, toolCalls }
     }
     // モデルのターン（functionCall）を履歴へ → 各ツールを実行して functionResponse を返す。
-    // 上限超過分は実行せずエラー応答（functionCall と functionResponse の 1:1 対応は維持）
+    // 上限超過分・締切超過後は実行せずエラー応答（functionCall と functionResponse の 1:1 対応は維持）。
+    // **各実行前にも締切を判定**する（レビュー R2: ツール実行はラウンド開始時の判定の外で走るため、
+    // ここで打ち切らないと最悪値がクライアントのタイムアウトを超える。これにより最悪でも
+    // 「締切 + 実行中ツール 1 件 + 最終ラウンド fetch」に有界 = クライアント予算内）
     contents.push({ role: 'model', parts })
     const responses: VertexPart[] = []
     for (const [i, call] of calls.entries()) {
       let result: string
       if (i >= MAX_CALLS_PER_ROUND) {
         result = `エラー: 1 回のツール呼び出しが多すぎます（最大 ${MAX_CALLS_PER_ROUND} 件。必要なら次のラウンドで呼んでください）`
+      } else if (Date.now() > deadline) {
+        result = 'エラー: 時間切れのため実行できませんでした（ここまでの情報で回答してください）'
       } else {
         try {
           result = await req.execute(call.name, call.args)
