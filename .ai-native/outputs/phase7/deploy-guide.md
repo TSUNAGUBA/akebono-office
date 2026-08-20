@@ -443,63 +443,92 @@ AKEBONO Company（`company/`）と AKEBONO Intelligence（`intelligence/`）は�
 > - `firebase.json` の `hosting.target`（`company` / `intelligence`）は静的な論理名で、サイト ID との
 >   紐付け（`.firebaserc`）はデプロイ時に CI が secrets から生成する（リポジトリへ固有値を持たない方針）。
 
-## 1-12. 個人別通知連携（Slack / Google Chat・F-49。改修依頼 2026-08-20）
+## 1-12. 個人別通知連携（Slack / Google Chat・F-49。AKEBONO HOME 名義化 2026-08-20）
 
-通知の外部チャット配信（本人宛 DM）に使用する。連携はユーザーごとに `/profile` の画面操作（OAuth 同意）で行い、
-トークンは §1-9 と同じ `TOKEN_ENCRYPTION_KEY` で AES-256-GCM 暗号化のうえ DB 保管する（**§1-9 のセットアップ済みが前提**。
-`TOKEN_ENCRYPTION_KEY` 未設定の間は両サービスとも連携 UI が非活性 = AKO-NCH-001・他機能に影響しない）。
+通知の外部チャット配信（本人宛 DM）に使用する。**送信元は通知アプリ「AKEBONO HOME」**（オペレーター指示
+2026-08-20 で名義を確定）: Slack は Bot Token 方式・Google Chat は Chat アプリ（サービスアカウント）方式で、
+資格情報は**テナント単位**（repository secrets → deploy が Secret Manager 経由で Cloud Run へ自動配線）。
+ユーザーごとの OAuth 同意・トークン保管は廃止した（`/profile` の「連携する」は登録メールアドレスによる
+宛先解決の 1 クリックで完結し、`TOKEN_ENCRYPTION_KEY` にも依存しない）。
 
-### Slack 連携の有効化
+> **旧方式（個人 OAuth。〜2026-08-20）からの移行:** repository secrets の `SLACK_CLIENT_ID` /
+> `SLACK_CLIENT_SECRET` と、Slack アプリの Redirect URLs・User Token Scopes、Google OAuth クライアントの
+> `/v1/notification-channels/google_chat/oauth/callback` リダイレクト URI は**不要になった（削除してよい）**。
+> Secret Manager の `$SERVICE-slack-client-secret` も未参照になる（残置無害・削除可）。
+> 連携済みユーザーの扱い: **Slack は再操作不要**（既存の連携行は次回送信時に新方式の宛先へ自動移行する）。
+> **Google Chat は AKEBONO HOME アプリとの DM スペースが未作成のため**、自動作成（spaces.setup）が
+> 環境の制約で通らない場合は「アプリへ一度メッセージを送る」ワンステップが必要になり得る
+> （エラーメッセージとトラブルシュートで案内される）。
+> なお各ユーザーの Slack / Google アカウントに残る旧アプリへの許可（プロバイダ側のグラント）は
+> 使われなくなるだけで残る。気になる場合は各自のアカウント設定から取り消してよい（任意）。
 
-1. [api.slack.com/apps](https://api.slack.com/apps) で Slack アプリを作成し、**OAuth & Permissions** で:
-   - **User Token Scopes に `chat:write`** を追加する（**user token 方式** = authorize URL の `user_scope=chat:write`。
-     本人の権限で自分宛 DM へ投稿するため Bot Token Scopes は不要）
-   - **Redirect URLs** に Cloud Run の URL + コールバックパスを登録:
-     ```
-     https://<cloud-run-url>/v1/notification-channels/slack/oauth/callback
-     ```
-2. アプリの **Client ID / Client Secret** を **repository secrets `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET`** へ
-   登録する（シークレットはファイル渡し = チャット・シェル履歴に残さない）:
+### Slack 連携の有効化（Bot Token 方式）
+
+1. [api.slack.com/apps](https://api.slack.com/apps) の Slack アプリ（旧方式で作成済みならそのまま流用）で:
+   - **App Home / Basic Information**: アプリの**表示名を `AKEBONO HOME`** にし、必要ならアイコンを設定する
+     （DM の送信者としてこの名前・アイコンが表示される）
+   - **OAuth & Permissions → Bot Token Scopes** に以下を追加する（User Token Scopes・Redirect URLs は不要）:
+     `chat:write`（DM 送信）/ `im:write`（DM チャンネルのオープン）/
+     `users:read` + `users:read.email`（登録メールアドレスからの宛先解決）
+   - **Install App** でワークスペースへインストール（スコープ変更時は再インストール）し、
+     **Bot User OAuth Token（`xoxb-` で始まる）** を控える
+2. Bot Token を **repository secret `SLACK_BOT_TOKEN`** へ登録する（ファイル渡し = チャット・シェル履歴に残さない）:
    ```powershell
    ./scripts/setup-deploy-secrets.ps1 -ProjectId <project> -ServiceAccountJsonPath ./deploy-sa.json `
      -DatabaseUrl 'postgresql://...' `
-     -SlackClientId '<client-id>' -SlackClientSecretPath ./slack-client-secret.txt
+     -SlackBotTokenPath ./slack-bot-token.txt
    ```
    （**`-DatabaseUrl` は必須** = 連携 secrets は API 用ブロック内のため。§1-9 と同じく既存値の再指定でよい。
-   GitHub の Settings → Secrets へ `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` を直接登録しても同じ —
-   その場合は **2 つとも**登録すること（片方だけだとデプロイは成功するが配線されず warning が出る）。
-   `TOKEN_ENCRYPTION_KEY` 未設定なら ps1 が初回のみ自動生成）
-   > **以後のデプロイで自動配線される**（デプロイ障害対応 2026-08-20）: deploy ワークフローが
-   > `SLACK_CLIENT_SECRET` を Secret Manager（`$SERVICE-slack-client-secret`）へ冪等同期し、
-   > `--set-env-vars` / `--set-secrets` で Cloud Run へ注入する。**手動の `gcloud run services update` と
-   > 再デプロイ後の再注入は不要**（当初ドキュメントの手動手順は、CI が secrets を置き換えるため
-   > 再デプロイで消える + repository secrets を登録しても届かない構造だった = 実障害を受けて自動化・原則1）。
-   > 反映にはデプロイ 1 回が必要（`gh workflow run deploy.yml -f environment=production` か main への push）。
-3. `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` 未設定の間、Slack 連携は自動的に無効
-   （AKO-NCH-001 = `/profile` の連携ボタンが非活性）でその他の機能に影響しない。連携解除は `/profile` の
-   「連携を解除」から（行の物理削除 + 再連携でいつでも再開 = 原則9.5）
+   GitHub の Settings → Secrets へ `SLACK_BOT_TOKEN` を直接登録しても同じ）
+   > **以後のデプロイで自動配線される**: deploy ワークフローが `SLACK_BOT_TOKEN` を Secret Manager
+   > （`$SERVICE-slack-bot-token`）へ冪等同期し `--set-secrets` で Cloud Run へ注入する。手動の
+   > `gcloud run services update` は不要。反映にはデプロイ 1 回が必要
+   > （`gh workflow run deploy.yml -f environment=production` か main への push）。
+3. `SLACK_BOT_TOKEN` 未設定の間、Slack 連携は自動的に無効（AKO-NCH-001 = `/profile` の連携ボタンが非活性）で
+   その他の機能に影響しない。連携解除は `/profile` の「解除」から（行の物理削除 + 再連携でいつでも再開 = 原則9.5）
 
-### Google Chat 連携の有効化
+> **宛先解決の前提:** メンバーの `members.email` と Slack ワークスペースの登録メールが一致していること
+> （不一致のユーザーは連携時に AKO-NCH-007「ユーザーが見つかりません」になる）。
 
-Google Chat は **§1-9 と同じ OAuth クライアント（`GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET`）を
-再利用**するため追加の secrets は不要（同意時にスコープ `chat.spaces.readonly`〔DM スペース解決〕+
-`chat.messages.create`〔送信〕+ `openid email`〔members.email との突合〕を要求する。カレンダーとは別の同意・別トークン）。
+### Google Chat 連携の有効化（Chat アプリ方式）
 
-1. OAuth クライアントの「承認済みのリダイレクト URI」に**通知連携用のコールバックパスを追加**する
-   （§1-9 のカレンダー用・§1-9b のメディア用・§1-9c のシート用 URI とは別に 1 行必要）:
-   ```
-   https://<cloud-run-url>/v1/notification-channels/google_chat/oauth/callback
-   ```
-2. GCP プロジェクトで **Google Chat API を有効化**する:
+1. GCP プロジェクトで **Google Chat API を有効化**する（deploy ワークフローが冪等に自動実行する。
+   手動なら `gcloud services enable chat.googleapis.com --project <project-id>`）
+2. **サービスアカウントを作成し鍵 JSON を発行**する（ロール付与は不要。Chat アプリのアプリ認証は
+   API 構成への紐付けで機能する）:
    ```bash
-   gcloud services enable chat.googleapis.com --project <project-id>
+   gcloud iam service-accounts create akebono-home-chat --project <project-id>
+   gcloud iam service-accounts keys create ./akebono-home-chat.json \
+     --iam-account akebono-home-chat@<project-id>.iam.gserviceaccount.com
    ```
-   OAuth のトークン交換は Chat API 無効でも成功するため、「連携はできるがテスト送信・DM 配信が失敗する」
-   場合はまずこの有効化を確認する（カレンダーの §4 トラブルシュートと同じ構図。テスト送信の
-   エラーメッセージにも有効化の確認を案内する = AKO-NCH-004）
+3. GCP コンソール → **「Google Chat API」→「構成」**で Chat アプリを設定する（コンソールのみ・CLI 不可）:
+   - アプリ名: **AKEBONO HOME** / アバター URL・説明: 任意
+   - 機能: **「1:1 のメッセージを受信する」を ON**（アプリとユーザーの DM を許可する設定。
+     スペースへの追加は不要なら OFF のまま）
+   - 接続設定: HTTP エンドポイント等は**不要**（本システムは送信専用。応答 URL はダミーでよい設定項目が
+     ある場合は `https://example.com` 等で保存できる）
+   - 公開範囲: 組織内（ドメイン内のユーザーが利用可能）
+4. 鍵 JSON を **repository secret `GOOGLE_CHAT_SA_KEY`** へ登録する:
+   ```powershell
+   ./scripts/setup-deploy-secrets.ps1 -ProjectId <project> -ServiceAccountJsonPath ./deploy-sa.json `
+     -DatabaseUrl 'postgresql://...' `
+     -GoogleChatSaKeyPath ./akebono-home-chat.json
+   ```
+   以後のデプロイで Secret Manager（`$SERVICE-google-chat-sa-key`）経由で自動配線される（Slack と同じ流儀）。
+5. `GOOGLE_CHAT_SA_KEY` 未設定の間、Google Chat 連携は自動的に無効（AKO-NCH-001）でその他の機能に影響しない。
+
+> **トラブルシュート:** テスト送信の AKO-NCH-004・連携時の AKO-NCH-007 には失敗ステップ + 上流応答の
+> 要約が併記される（`spaces.findDirectMessage: HTTP 403 …SERVICE_DISABLED…` = Chat API 未有効 /
+> `HTTP 403 …PERMISSION_DENIED…` = Chat アプリ構成（手順 3）の未設定・公開範囲外 が典型）。
+> - **`spaces.setup` が 403 等で失敗する場合**（アプリ認証での DM 自動作成が組織のポリシー・API 制約で
+>   通らないケース）: ユーザーが **Google Chat で「AKEBONO HOME」アプリを検索して一度メッセージを送る**と
+>   DM スペースが作成され、以後の連携・配信は `spaces.findDirectMessage` で成立する（エラーメッセージにも
+>   この手順を案内している）。組織全体で解消するには、Google 管理コンソールから Chat アプリを
+>   ドメインへ一括インストールする方法もある（全ユーザーの DM が自動作成される）。
 
 配信はマトリクス（`/profile` の「通知の配信先」）で ON のチャネルのみ・fire-and-forget（外部障害が主要フローを
-止めない）。トークン失効（401 等）は `reauth_required` へ遷移し本人へ再連携を催促する（連携し直せば復帰）。
+止めない）。認証エラー（Bot Token 失効・SA 鍵無効）はテナント資格情報の問題としてログ + テスト送信の診断に
+出す（ユーザー行の状態遷移・本人への催促は行わない = 本人には直せないため）。
 
 ## 2. 日常デプロイ（開発者）
 

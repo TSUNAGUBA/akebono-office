@@ -2,7 +2,8 @@
  * 通知の発行（補助処理・非ブロッキング: 失敗しても主フローを止めない。開発原則4）
  * mockup useNotifications.notify / notifyAdmins の API 版。
  *
- * 個人別マルチチャネル通知連携（改修依頼 2026-08-20）で配信エンジンを拡張。シグネチャは不変:
+ * 個人別マルチチャネル通知連携（改修依頼 2026-08-20）で配信エンジンを拡張。
+ * AKEBONO HOME 名義化（オペレーター指示 2026-08-20）で外部送信をテナント資格情報へ切替。シグネチャは不変:
  * - チャネル判定: 宛先ユーザーの通知マトリクス（user_preferences 'notificationChannels'。
  *   純ロジックは shared/domain/notification-channels.ts が SoT）を参照する。
  *   in_app が OFF の種別はアプリ内通知（INSERT）をスキップ。
@@ -11,12 +12,15 @@
  *   送らない（fail-closed。設定不明のまま外部サービスへ送る誤送信を作らない）。
  * - 外部配信（Slack / Google Chat の DM）は fire-and-forget（void + catch）。外部 API の失敗・
  *   遅延・リトライは主フロー（INSERT・呼び出し元のレスポンス）へ一切影響しない。
- *   Slack = chat.postMessage（channel = 連携ユーザー id = 本人宛 DM）/
- *   Google Chat = spaces.findDirectMessage → messages.create。外部 HTTP は全て 15 秒タイムアウト。
+ *   送信名義はアプリ「AKEBONO HOME」（Slack = Bot Token / Google Chat = Chat アプリの
+ *   サービスアカウント。プリミティブは lib/chat-dm.ts）。個人 OAuth トークンは 0077 で廃止。
+ * - 宛先（user_chat_links.dm_target: Slack = DM チャンネル / Google Chat = スペース名）は連携時に
+ *   解決済み。空の行（0075 時代の旧行）は送信時に解決して UPDATE する自己修復で新方式へ移行し、
+ *   宛先の陳腐化（channel_not_found / スペース 404）も一度だけ再解決して回復する。
  * - リトライ: HTTP 5xx / 429（Slack の ratelimited 含む）は指数バックオフ（1s→2s→4s・計 3 回)。
- * - 失効処理: 401 / invalid_auth / token_expired 等は user_chat_links.status='reauth_required' へ
- *   更新し、アプリ内通知で再連携を催促する（status='connected' の行のみ更新 = 初回検知時だけ催促する
- *   冪等ガード。催促通知自体は外部配信しない = 再帰ループ防止）。
+ * - 認証エラー（invalid_auth / SA 鍵無効等）は**テナント資格情報の不備 = 管理者側の問題**。
+ *   ユーザー行の状態遷移（旧 reauth_required）や本人への再連携催促は行わない（本人には直せないため）。
+ *   ログ + テスト送信の診断詳細（FailureDetailSink）で運用者が検知する。
  * - 有効化: 外部配信は configureExternalDispatch(pool, env)（routes/notification-channels.ts の
  *   ルートファクトリがマウント時に登録）後に動く。fire-and-forget は呼び出し元の db ハンドル
  *   （トランザクション中の PoolClient = 応答後に解放され得る）を使わず、登録された Pool を使う。
@@ -27,18 +31,16 @@ import type pg from 'pg'
 import { nowJstIso } from '../../../shared/domain/jst'
 import type { NotificationKind } from '../../../shared/domain/types'
 import {
-  CHANNEL_META, channelEnabled, type ChatService, enabledExternalServices,
+  channelEnabled, type ChatService, enabledExternalServices,
   NOTIFICATION_CHANNELS_PREF_KEY, type NotificationMatrix, parseNotificationMatrix,
 } from '../../../shared/domain/notification-channels'
 import type { Env } from '../env'
-import { decryptSecret, encryptSecret } from './crypto'
+import {
+  GOOGLE_CHAT_APP_SCOPE, googleChatFindOrCreateDm, googleChatPostDm,
+  slackPostDm, slackResolveDm, type StepResult,
+} from './chat-dm'
+import { saAccessToken } from './google-sa'
 import { newId } from './ids'
-
-const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
-const GOOGLE_CHAT_BASE = 'https://chat.googleapis.com/v1'
-const SLACK_POST_MESSAGE_URL = 'https://slack.com/api/chat.postMessage'
-/** 外部 HTTP の共通タイムアウト */
-const EXTERNAL_TIMEOUT_MS = 15_000
 
 // ---------- 外部配信コンテキスト（notification-channels ルートのマウント時に登録） ----------
 
@@ -59,41 +61,6 @@ export async function notify(
   title: string,
   body: string,
   link: string,
-): Promise<void> {
-  await notifyInternal(db, memberId, kind, title, body, link, true)
-}
-
-/** 管理者全員へ通知する（mockup と同一: role='admin' の在籍者） */
-export async function notifyAdmins(
-  db: pg.Pool | pg.PoolClient,
-  kind: NotificationKind,
-  title: string,
-  body: string,
-  link: string,
-): Promise<void> {
-  try {
-    const { rows } = await db.query<{ id: string }>(
-      `SELECT id FROM members WHERE active = true AND role = 'admin'`)
-    for (const m of rows) {
-      await notify(db, m.id, kind, title, body, link)
-    }
-  } catch (e) {
-    console.warn('notifyAdmins failed (non-blocking):', (e as Error).message)
-  }
-}
-
-/**
- * 本体（external=false は「再連携のお願い」等の内部通知 = 外部配信しない。再帰ループ防止ガード）。
- * マトリクス参照 → in_app 判定 → INSERT → 外部配信の fire-and-forget、の順。
- */
-async function notifyInternal(
-  db: pg.Pool | pg.PoolClient,
-  memberId: string,
-  kind: NotificationKind,
-  title: string,
-  body: string,
-  link: string,
-  external: boolean,
 ): Promise<void> {
   // 宛先ユーザーの通知マトリクス（取得失敗 = null → in_app へ送る fail-open / 外部へは送らない fail-closed）
   let matrix: NotificationMatrix | null = null
@@ -118,7 +85,7 @@ async function notifyInternal(
   }
   // 外部配信は fire-and-forget（登録済み Pool を使用。呼び出し元の db が PoolClient でも安全）
   const ctx = dispatchCtx
-  if (external && matrix && ctx) {
+  if (matrix && ctx) {
     const services = enabledExternalServices(matrix, kind)
     if (services.length > 0) {
       void dispatchExternal(ctx, memberId, services, title, body, link)
@@ -127,21 +94,43 @@ async function notifyInternal(
   }
 }
 
+/** 管理者全員へ通知する（mockup と同一: role='admin' の在籍者） */
+export async function notifyAdmins(
+  db: pg.Pool | pg.PoolClient,
+  kind: NotificationKind,
+  title: string,
+  body: string,
+  link: string,
+): Promise<void> {
+  try {
+    const { rows } = await db.query<{ id: string }>(
+      `SELECT id FROM members WHERE active = true AND role = 'admin'`)
+    for (const m of rows) {
+      await notify(db, m.id, kind, title, body, link)
+    }
+  } catch (e) {
+    console.warn('notifyAdmins failed (non-blocking):', (e as Error).message)
+  }
+}
+
 // ---------- 外部配信エンジン ----------
 
 interface ChatLinkRow {
   service: ChatService
+  /** Slack = ユーザー id（U…）/ Google = users/{...} の識別子（旧行 = sub / 新行 = email）。空 = 未解決 */
   externalUserId: string
-  accessTokenEnc: string
-  refreshTokenEnc: string
+  /** 解決済みの DM 宛先（Slack = チャンネル id / Google = スペース名）。空 = 送信時に自己修復 */
+  dmTarget: string
   status: string
-  expiresAt: string | null
+  /** 宛先解決（メール突合）用の members.email */
+  email: string
 }
 
-const LINK_COLS = `service, external_user_id AS "externalUserId", access_token_enc AS "accessTokenEnc",
-  refresh_token_enc AS "refreshTokenEnc", status, expires_at AS "expiresAt"`
+const LINK_COLS = `l.service, l.external_user_id AS "externalUserId", l.dm_target AS "dmTarget",
+  l.status, lower(m.email) AS email`
+const LINK_FROM = `FROM user_chat_links l JOIN members m ON m.id = l.member_id`
 
-/** 1 回の送信試行の結果。retry = 一時障害（5xx/429/タイムアウト）/ auth = 失効（要再認証へ） */
+/** 1 回の送信試行の結果。retry = 一時障害（5xx/429/タイムアウト）/ auth = テナント資格情報の不備 */
 type DeliveryResult = 'ok' | 'auth' | 'retry' | 'fail'
 
 /**
@@ -160,17 +149,11 @@ export function backoffDelays(retries = 3): number[] {
 
 const wait = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
-/**
- * 外部 API のエラー応答から診断用の要約（先頭 160 字）を安全に取り出す（失敗は空文字 = 非ブロッキング）。
- * Google API はエラー詳細を JSON body で返すため、有効化未済（SERVICE_DISABLED）等の一次切り分けに使う
- */
-async function safeErrorSnippet(res: Response): Promise<string> {
-  try {
-    const text = (await res.text()).replace(/\s+/g, ' ').trim()
-    return text ? ` ${text.slice(0, 160)}` : ''
-  } catch {
-    return ''
-  }
+/** chat-dm の StepResult を DeliveryResult へ写像する（fail / auth の診断詳細は sink へ） */
+function stepToDelivery(step: StepResult<unknown>, sink?: FailureDetailSink): DeliveryResult {
+  if (step.kind === 'ok') return 'ok'
+  if (step.kind !== 'retry' && sink && !sink.detail && step.detail) sink.detail = step.detail
+  return step.kind === 'fail' ? 'fail' : step.kind === 'auth' ? 'auth' : 'retry'
 }
 
 /** 有効チャネルへ順次配信する（1 チャネルの失敗が他チャネルを止めないよう結果は個別処理） */
@@ -184,11 +167,12 @@ async function dispatchExternal(
 ): Promise<void> {
   const text = externalMessageText(ctx.env, title, body, link)
   const { rows } = await ctx.pool.query<ChatLinkRow>(
-    `SELECT ${LINK_COLS} FROM user_chat_links WHERE member_id = $1`, [memberId])
+    `SELECT ${LINK_COLS} ${LINK_FROM} WHERE l.member_id = $1`, [memberId])
   for (const service of services) {
     const linkRow = rows.find(r => r.service === service)
-    // 未連携・要再認証はスキップ（再連携催促は失効検知時に済んでいる = 通知スパム防止）
-    if (!linkRow || linkRow.status !== 'connected') continue
+    // 未連携（行なし）はスキップ。status は判定に使わない（旧方式の 'reauth_required' が
+    // ローリングデプロイの重なり窓で書かれても配信を止めない = レビュー R1 m-1。成功時に自己修復）
+    if (!linkRow) continue
     await deliverViaLink(ctx, memberId, linkRow, text)
   }
 }
@@ -201,7 +185,7 @@ function externalMessageText(env: Env, title: string, body: string, link: string
 }
 
 /**
- * 1 リンクへの配信（リトライ + 失効処理込み）。deliverToService（テスト送信）とも共用（原則3）。
+ * 1 リンクへの配信（リトライ込み）。deliverToService（テスト送信）とも共用（原則3）。
  * 戻り値は最終結果（retry を使い切った場合は 'fail'）。
  */
 async function deliverViaLink(
@@ -211,9 +195,11 @@ async function deliverViaLink(
   text: string,
   sink?: FailureDetailSink,
 ): Promise<Exclude<DeliveryResult, 'retry'>> {
+  // バックグラウンド配信（sink 未指定）でも失敗の一次原因をログへ残す（レビュー R1 m-2 = 可観測性）
+  const detailSink: FailureDetailSink = sink ?? {}
   const attempt = (): Promise<DeliveryResult> => link.service === 'slack'
-    ? sendSlackDm(ctx, link, text, sink)
-    : sendGoogleChatDm(ctx, memberId, link, text, sink)
+    ? sendSlackDm(ctx, memberId, link, text, detailSink)
+    : sendGoogleChatDm(ctx, memberId, link, text, detailSink)
   let result = await attempt()
   for (const delay of backoffDelays()) {
     if (result !== 'retry') break
@@ -222,15 +208,30 @@ async function deliverViaLink(
   }
   const final: Exclude<DeliveryResult, 'retry'> = result === 'retry' ? 'fail' : result
   // 再試行上限で fail に確定した場合も診断詳細を残す（レビュー R1。即時 fail は各送信関数が記録済み）
-  if (result === 'retry' && sink && !sink.detail) sink.detail = '再試行上限に到達（持続的な 5xx / 429 / タイムアウト）'
-  if (final === 'auth') await markReauthRequired(ctx, memberId, link.service)
-  if (final === 'fail') console.warn(`notify: external delivery failed: ${link.service} member=${memberId}`)
+  if (result === 'retry' && !detailSink.detail) detailSink.detail = '再試行上限に到達（持続的な 5xx / 429 / タイムアウト）'
+  // 認証エラー = テナント資格情報（Bot Token / SA 鍵）の不備。ユーザー操作では直らないため
+  // 本人向けの状態遷移・催促はせず、運用ログ + テスト送信の診断で検知する
+  const suffix = detailSink.detail ? ` (${detailSink.detail})` : ''
+  if (final === 'auth') console.warn(`notify: external delivery auth failed (tenant credential): ${link.service}${suffix}`)
+  if (final === 'fail') console.warn(`notify: external delivery failed: ${link.service} member=${memberId}${suffix}`)
+  // 配信成功した行の旧 status（'reauth_required' = ローリングデプロイの重なり窓で旧コードが書いた値）を
+  // 'connected' へ自己修復する（レビュー R1 m-1。冪等 WHERE ガード）
+  if (final === 'ok' && link.status !== 'connected') {
+    try {
+      await ctx.pool.query(
+        `UPDATE user_chat_links SET status = 'connected', updated_at = now()
+          WHERE member_id = $1 AND service = $2 AND status <> 'connected'`, [memberId, link.service])
+      link.status = 'connected'
+    } catch (e) {
+      console.warn('notify: status heal failed (non-blocking):', (e as Error).message)
+    }
+  }
   return final
 }
 
 /**
  * テスト送信等の単発配信（POST /v1/notification-channels/:service/test が利用）。
- * not_connected = 行なし・要再認証（送信は行わない）。
+ * not_connected = 行なし（送信は行わない）。
  */
 export async function deliverToService(
   pool: pg.Pool,
@@ -241,115 +242,114 @@ export async function deliverToService(
   sink?: FailureDetailSink,
 ): Promise<'ok' | 'auth' | 'fail' | 'not_connected'> {
   const { rows } = await pool.query<ChatLinkRow>(
-    `SELECT ${LINK_COLS} FROM user_chat_links WHERE member_id = $1 AND service = $2`, [memberId, service])
+    `SELECT ${LINK_COLS} ${LINK_FROM} WHERE l.member_id = $1 AND l.service = $2`, [memberId, service])
   const link = rows[0]
-  if (!link || link.status !== 'connected') return 'not_connected'
+  if (!link) return 'not_connected'
   return deliverViaLink({ pool, env }, memberId, link, text, sink)
 }
 
-/**
- * トークン失効の記録 + 再連携催促（アプリ内通知のみ = 外部配信しないので再帰しない）。
- * status='connected' の行だけ更新する WHERE ガードにより、連続失敗しても催促は初回の 1 回だけ（冪等）。
- */
-async function markReauthRequired(
+/** 解決済み宛先の保存（自己修復。display_name は解決で得られたときのみ更新 = 既存表示名を保護） */
+async function persistDmTarget(
   ctx: { pool: pg.Pool; env: Env },
   memberId: string,
-  service: ChatService,
+  link: ChatLinkRow,
+  resolved: { externalUserId: string; dmTarget: string; displayName: string },
 ): Promise<void> {
   try {
-    const { rowCount } = await ctx.pool.query(
-      `UPDATE user_chat_links SET status = 'reauth_required', updated_at = now()
-       WHERE member_id = $1 AND service = $2 AND status = 'connected'`, [memberId, service])
-    if ((rowCount ?? 0) > 0) {
-      await notifyInternal(ctx.pool, memberId, 'system', '再連携のお願い',
-        `${CHANNEL_META[service].label} の連携が無効になりました。プロフィール・個人設定から再連携してください`,
-        '/profile', false)
-    }
+    await ctx.pool.query(
+      `UPDATE user_chat_links
+          SET external_user_id = $3, dm_target = $4,
+              display_name = CASE WHEN $5 <> '' THEN $5 ELSE display_name END,
+              updated_at = now()
+        WHERE member_id = $1 AND service = $2`,
+      [memberId, link.service, resolved.externalUserId, resolved.dmTarget, resolved.displayName])
   } catch (e) {
-    console.warn('notify: mark reauth failed (non-blocking):', (e as Error).message)
+    console.warn('notify: persist dm target failed (non-blocking):', (e as Error).message)
   }
+  link.externalUserId = resolved.externalUserId
+  link.dmTarget = resolved.dmTarget
 }
 
-// ---------- Slack（user token 方式: chat.postMessage で本人宛 DM） ----------
+// ---------- Slack（Bot Token 方式: AKEBONO HOME 名義で DM へ投稿） ----------
 
-/** Slack Web API の失効系エラーコード（→ reauth_required） */
-const SLACK_AUTH_ERRORS = new Set([
-  'invalid_auth', 'token_revoked', 'token_expired', 'account_inactive', 'not_authed', 'missing_scope', 'no_permission',
-])
+/**
+ * Slack の宛先解決 + 保存（自己修復の共通経路）。保存済み userId が陳腐化していた場合
+ * （ユーザー再作成等で user_not_found）は現在の members.email で 1 回だけ再解決する（監査 R1 MINOR-2）
+ */
+async function resolveSlackDmForRow(
+  ctx: { pool: pg.Pool; env: Env },
+  memberId: string,
+  link: ChatLinkRow,
+  botToken: string,
+): Promise<StepResult<string>> {
+  let resolved = await slackResolveDm(botToken, { email: link.email, userId: link.externalUserId || undefined })
+  if (resolved.kind === 'fail' && link.externalUserId && /users?_not_found/.test(resolved.detail)) {
+    resolved = await slackResolveDm(botToken, { email: link.email })
+  }
+  if (resolved.kind !== 'ok') return resolved
+  await persistDmTarget(ctx, memberId, link, {
+    externalUserId: resolved.value.userId, dmTarget: resolved.value.dmChannel, displayName: resolved.value.displayName,
+  })
+  return { kind: 'ok', value: resolved.value.dmChannel }
+}
 
 async function sendSlackDm(
   ctx: { pool: pg.Pool; env: Env },
+  memberId: string,
   link: ChatLinkRow,
   text: string,
   sink?: FailureDetailSink,
 ): Promise<DeliveryResult> {
-  const token = decryptSecret(link.accessTokenEnc, ctx.env.tokenEncryptionKey)
-  if (!token) return 'auth' // 鍵ローテーション等で復号不可 = 再連携で回復（crypto.ts の設計と同じ）
-  try {
-    const res = await fetch(SLACK_POST_MESSAGE_URL, {
-      method: 'POST',
-      headers: { 'authorization': `Bearer ${token}`, 'content-type': 'application/json; charset=utf-8' },
-      signal: AbortSignal.timeout(EXTERNAL_TIMEOUT_MS),
-      // channel にユーザー id を渡すと本人との DM へ投稿される（user token = 自分宛の通知 DM）
-      body: JSON.stringify({ channel: link.externalUserId, text }),
-    })
-    if (res.status === 429 || res.status >= 500) return 'retry'
-    if (res.status === 401) return 'auth'
-    const body = await res.json() as { ok?: boolean; error?: string }
-    if (body.ok) return 'ok'
-    if (body.error && SLACK_AUTH_ERRORS.has(body.error)) return 'auth'
-    if (body.error === 'ratelimited') return 'retry'
-    console.warn('slack chat.postMessage failed:', body.error)
-    if (sink) sink.detail = `chat.postMessage: ${body.error ?? '不明なエラー'}`
+  const botToken = ctx.env.slackBotToken
+  if (!botToken) {
+    if (sink && !sink.detail) sink.detail = 'SLACK_BOT_TOKEN が未設定です（管理者設定）'
     return 'fail'
-  } catch {
-    return 'retry' // タイムアウト・接続断は一時障害として再試行
   }
+  // 宛先（DM チャンネル）の確保。未解決の旧行（0075 時代）はここで自己修復して新方式へ移行する
+  let target = link.dmTarget
+  let freshlyResolved = false
+  if (!target) {
+    const resolved = await resolveSlackDmForRow(ctx, memberId, link, botToken)
+    if (resolved.kind !== 'ok') return stepToDelivery(resolved, sink)
+    target = resolved.value
+    freshlyResolved = true
+  }
+  const posted = await slackPostDm(botToken, target, text)
+  // キャッシュ宛先の陳腐化（channel_not_found）は一度だけ再解決して再送する
+  if (!freshlyResolved && posted.kind === 'fail' && posted.detail.includes('channel_not_found')) {
+    const resolved = await resolveSlackDmForRow(ctx, memberId, link, botToken)
+    if (resolved.kind !== 'ok') return stepToDelivery(resolved, sink)
+    return stepToDelivery(await slackPostDm(botToken, resolved.value, text), sink)
+  }
+  return stepToDelivery(posted, sink)
 }
 
-// ---------- Google Chat（spaces.findDirectMessage → messages.create で本人宛 DM） ----------
+// ---------- Google Chat（Chat アプリ方式: AKEBONO HOME 名義で DM スペースへ投稿） ----------
 
-/** 有効なアクセストークン（期限切れは refresh_token で更新 = calendar.ts accessTokenFor と同型） */
-async function googleChatAccessToken(
+/**
+ * Google Chat の users/{...} 識別子。旧行（0075 の sub）はそのまま有効。email ベースの行は
+ * 保存値ではなく**現在の** members.email を使う（改姓等でメールが変わっても自己修復が働く =
+ * レビュー R1 m-5）
+ */
+function chatUserRef(link: ChatLinkRow): string {
+  const id = link.externalUserId
+  return `users/${id && !id.includes('@') ? id : link.email}`
+}
+
+/** Google Chat の宛先解決 + 保存（自己修復の共通経路） */
+async function resolveChatSpaceForRow(
   ctx: { pool: pg.Pool; env: Env },
   memberId: string,
   link: ChatLinkRow,
-): Promise<string | null> {
-  const notExpired = !link.expiresAt || new Date(link.expiresAt).getTime() > Date.now() + 60_000
-  if (notExpired) {
-    return decryptSecret(link.accessTokenEnc, ctx.env.tokenEncryptionKey)
-  }
-  const refreshToken = link.refreshTokenEnc
-    ? decryptSecret(link.refreshTokenEnc, ctx.env.tokenEncryptionKey)
-    : null
-  if (!refreshToken) return null
-  try {
-    const res = await fetch(GOOGLE_TOKEN_URL, {
-      method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      signal: AbortSignal.timeout(10_000),
-      body: new URLSearchParams({
-        client_id: ctx.env.googleOauthClientId,
-        client_secret: ctx.env.googleOauthClientSecret,
-        refresh_token: refreshToken,
-        grant_type: 'refresh_token',
-      }),
-    })
-    if (!res.ok) return null
-    const body = await res.json() as { access_token: string; expires_in: number }
-    const accessTokenEnc = encryptSecret(body.access_token, ctx.env.tokenEncryptionKey)
-    const expiresAt = new Date(Date.now() + body.expires_in * 1000).toISOString()
-    await ctx.pool.query(
-      `UPDATE user_chat_links SET access_token_enc = $2, expires_at = $3, updated_at = now()
-       WHERE member_id = $1 AND service = 'google_chat'`,
-      [memberId, accessTokenEnc, expiresAt])
-    // リトライ時に再 refresh しないよう、手元の行にも反映しておく
-    link.accessTokenEnc = accessTokenEnc
-    link.expiresAt = expiresAt
-    return body.access_token
-  } catch {
-    return null
-  }
+  token: string,
+): Promise<StepResult<string>> {
+  const userRef = chatUserRef(link)
+  const resolved = await googleChatFindOrCreateDm(token, userRef)
+  if (resolved.kind !== 'ok') return resolved
+  await persistDmTarget(ctx, memberId, link, {
+    externalUserId: userRef.slice('users/'.length), dmTarget: resolved.value, displayName: '',
+  })
+  return resolved
 }
 
 async function sendGoogleChatDm(
@@ -359,59 +359,33 @@ async function sendGoogleChatDm(
   text: string,
   sink?: FailureDetailSink,
 ): Promise<DeliveryResult> {
-  const token = await googleChatAccessToken(ctx, memberId, link)
-  if (!token) return 'auth' // 更新不能（refresh 失効・復号不可）= 再連携で回復
-  try {
-    // ① 本人との DM スペースを解決（external_user_id = id_token の sub）
-    const findRes = await fetch(
-      `${GOOGLE_CHAT_BASE}/spaces:findDirectMessage?name=${encodeURIComponent(`users/${link.externalUserId}`)}`,
-      { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(EXTERNAL_TIMEOUT_MS) })
-    if (findRes.status === 429 || findRes.status >= 500) return 'retry'
-    if (findRes.status === 401) return 'auth'
-    let space: string | undefined
-    if (findRes.ok) {
-      space = ((await findRes.json()) as { name?: string }).name
-    } else if (findRes.status === 404) {
-      // DM スペース未作成（本人が Google Chat で自分宛 DM を一度も開いていない）= spaces.setup で作成を試みる
-      // （レビュー R1: 見つからない → 全通知が黙って失われる、への対処。setup も失敗したら fail = 非ブロッキング）
-      const setupRes = await fetch(`${GOOGLE_CHAT_BASE}/spaces:setup`, {
-        method: 'POST',
-        headers: { 'authorization': `Bearer ${token}`, 'content-type': 'application/json' },
-        signal: AbortSignal.timeout(EXTERNAL_TIMEOUT_MS),
-        body: JSON.stringify({
-          space: { spaceType: 'DIRECT_MESSAGE', singleUserBotDm: false },
-          memberships: [{ member: { name: `users/${link.externalUserId}`, type: 'HUMAN' } }],
-        }),
-      })
-      if (setupRes.status === 429 || setupRes.status >= 500) return 'retry'
-      if (setupRes.status === 401) return 'auth'
-      if (setupRes.ok) space = ((await setupRes.json()) as { name?: string }).name
-      else {
-        console.warn('google chat spaces.setup failed:', setupRes.status)
-        if (sink) sink.detail = `spaces.setup: HTTP ${setupRes.status}${await safeErrorSnippet(setupRes)}`
-      }
-    } else {
-      console.warn('google chat findDirectMessage failed:', findRes.status)
-      if (sink) sink.detail = `spaces.findDirectMessage: HTTP ${findRes.status}${await safeErrorSnippet(findRes)}`
-      return 'fail' // 403 等は設定不備の可能性（API 未有効化）= 失効扱いにしない
-    }
-    if (!space) return 'fail'
-    // ② メッセージ作成
-    const res = await fetch(`${GOOGLE_CHAT_BASE}/${space}/messages`, {
-      method: 'POST',
-      headers: { 'authorization': `Bearer ${token}`, 'content-type': 'application/json' },
-      signal: AbortSignal.timeout(EXTERNAL_TIMEOUT_MS),
-      body: JSON.stringify({ text }),
-    })
-    if (res.status === 429 || res.status >= 500) return 'retry'
-    if (res.status === 401) return 'auth'
-    if (!res.ok) {
-      console.warn('google chat messages.create failed:', res.status)
-      if (sink) sink.detail = `messages.create: HTTP ${res.status}${await safeErrorSnippet(res)}`
-      return 'fail'
-    }
-    return 'ok'
-  } catch {
-    return 'retry' // タイムアウト・接続断は一時障害として再試行
+  const saKey = ctx.env.googleChatSaKey
+  if (!saKey) {
+    if (sink && !sink.detail) sink.detail = 'GOOGLE_CHAT_SA_KEY が未設定です（管理者設定）'
+    return 'fail'
   }
+  const tokenResult = await saAccessToken(saKey, GOOGLE_CHAT_APP_SCOPE)
+  if (tokenResult.kind !== 'ok') {
+    // retry = トークンエンドポイントの一時障害（バックオフ対象）/ auth = 鍵不備・交換拒否（診断詳細つき）
+    if (tokenResult.kind === 'auth' && sink && !sink.detail) sink.detail = tokenResult.detail
+    return tokenResult.kind
+  }
+  const token = tokenResult.token
+  // 宛先（DM スペース）の確保。旧行（users/{sub}）も新行（users/{email}）もそのまま解決できる
+  let space = link.dmTarget
+  let freshlyResolved = false
+  if (!space) {
+    const resolved = await resolveChatSpaceForRow(ctx, memberId, link, token)
+    if (resolved.kind !== 'ok') return stepToDelivery(resolved, sink)
+    space = resolved.value
+    freshlyResolved = true
+  }
+  const posted = await googleChatPostDm(token, space, text)
+  // キャッシュ宛先の陳腐化（スペース削除 = 404）は一度だけ再解決して再送する
+  if (!freshlyResolved && posted.kind === 'fail' && posted.detail.includes('HTTP 404')) {
+    const resolved = await resolveChatSpaceForRow(ctx, memberId, link, token)
+    if (resolved.kind !== 'ok') return stepToDelivery(resolved, sink)
+    return stepToDelivery(await googleChatPostDm(token, resolved.value, text), sink)
+  }
+  return stepToDelivery(posted, sink)
 }

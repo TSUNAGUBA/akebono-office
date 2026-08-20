@@ -172,11 +172,11 @@ flowchart LR
 | `VERTEX_EMBEDDING_MODEL` | — | 検索インデックスの埋め込みモデル ID（既定 `text-multilingual-embedding-002`。VERTEX_PROJECT_ID 未設定時は埋め込みなし = 字句検索のみ。追加の IAM/API は不要 = aiplatform.user のまま） |
 | `GOOGLE_OAUTH_CLIENT_ID` | — | カレンダー連携の OAuth クライアント ID。未設定 = 連携無効 |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | — | 同シークレット（Secret Manager 経由） |
-| `TOKEN_ENCRYPTION_KEY` | — | OAuth トークンの AES-256-GCM 暗号化鍵（Secret Manager 経由。変更すると保管済みトークンは復号不能 = 全員再連携） |
-| `SLACK_CLIENT_ID` | — | 個人別通知連携（F-49）の Slack OAuth クライアント ID。未設定 = Slack 連携無効（AKO-NCH-001 = 連携 UI 非活性・他機能に影響しない）。**repository secret を登録するだけで deploy が Cloud Run へ自動注入する**（デプロイ障害対応 2026-08-20） |
-| `SLACK_CLIENT_SECRET` | — | 同シークレット（deploy が repository secret → Secret Manager `$SERVICE-slack-client-secret` へ冪等同期して注入。未設定 = Slack 連携無効・AKO-NCH-001） |
+| `TOKEN_ENCRYPTION_KEY` | — | OAuth トークンの AES-256-GCM 暗号化鍵（カレンダー連携用。Secret Manager 経由。変更すると保管済みトークンは復号不能 = 全員再連携） |
+| `SLACK_BOT_TOKEN` | — | 個人別通知連携（F-49）の Slack Bot Token（`xoxb-`…。**AKEBONO HOME 名義化 2026-08-20** = Bot 名義で DM 送信）。未設定 = Slack 連携無効（AKO-NCH-001 = 連携 UI 非活性・他機能に影響しない）。repository secret を登録するだけで deploy が Secret Manager `$SERVICE-slack-bot-token` 経由で自動注入する |
+| `GOOGLE_CHAT_SA_KEY` | — | 同 Google Chat の Chat アプリ（AKEBONO HOME）用サービスアカウント鍵 JSON（Secret Manager `$SERVICE-google-chat-sa-key` 経由で自動注入）。未設定 = Google Chat 連携無効（AKO-NCH-001） |
 
-> **Google Chat 連携（F-49・改修依頼 2026-08-20）の注記:** Google Chat 側は専用の環境変数を持たず、**既存の `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` を再利用**する（スコープに `chat.spaces.readonly` / `chat.messages.create` を追加した同意を求める。トークンの暗号化は同じ `TOKEN_ENCRYPTION_KEY`）。Slack / Google Chat とも `TOKEN_ENCRYPTION_KEY` 未設定時は連携無効。セットアップ手順は deploy-guide.md §1-12 参照。
+> **通知連携の方式（AKEBONO HOME 名義化 2026-08-20）:** 送信はテナント資格情報によるアプリ名義（Slack = Bot Token / Google Chat = Chat アプリのサービスアカウント）で、個人 OAuth・ユーザーごとのトークン保管は廃止した（`TOKEN_ENCRYPTION_KEY` にも依存しない）。旧 `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` は不要（削除可）。セットアップ手順は deploy-guide.md §1-12 参照。
 
 ## 9. 段階移行計画（モック → 本番）
 

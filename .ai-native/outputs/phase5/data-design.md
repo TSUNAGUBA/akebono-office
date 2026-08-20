@@ -313,8 +313,8 @@ Phase B（設定系）・Phase C（記録系 + 売上軸）に続く**最終フ�
 
 | テーブル | 区分 | 主な列 | 備考 |
 |---|---|---|---|
-| `user_chat_links` | 設定系（機密 C3） | `member_id`(FK members ON DELETE CASCADE) + `service`(`slack`/`google_chat`) = PK／`external_user_id`／`display_name`／`access_token_enc`・`refresh_token_enc`（**AES-256-GCM 暗号化 = lib/crypto。TOKEN_ENCRYPTION_KEY**）／`status`（`connected`/`reauth_required` = 401 検知で遷移し再連携を催促）／`expires_at`／`created_at`・`updated_at` | 連携解除 = 行 DELETE（再連携で復元可のため物理削除。取消フロー = 原則9.5）。通知マトリクスは user_preferences `notificationChannels` を再利用（新テーブルなし = 設計判断） |
-| `chat_oauth_states` | 一時（ノンス） | `state` PK／`member_id`／`service`／`created_at` | 一回性・10 分 TTL（SELECT 時判定 = calendar と同型）。サービス一致も検証 |
+| `user_chat_links` | 設定系（宛先キャッシュ。**AKEBONO HOME 名義化 2026-08-20 = 0077 でトークン保管を廃止**） | `member_id`(FK members ON DELETE CASCADE) + `service`(`slack`/`google_chat`) = PK／`external_user_id`（Slack = ユーザー id / Google = users/{...} 識別子〔旧行 = sub・新行 = email〕）／`display_name`／`dm_target`（**0077 追加**: 解決済み DM 宛先。Slack = チャンネル id / Google = スペース名。空 = 送信時に自己修復）／`status`（`connected` のみ運用。`reauth_required` は旧方式の残置値 = 0077 で全行 connected へ戻し・新規書込なし）／`access_token_enc`・`refresh_token_enc`・`expires_at`（**旧方式の残置列 = 0077 で全行クリア・未使用**）／`created_at`・`updated_at` | 連携解除 = 行 DELETE（再連携 = 1 クリックで復元可のため物理削除。取消フロー = 原則9.5）。通知マトリクスは user_preferences `notificationChannels` を再利用（新テーブルなし = 設計判断）。SoT 注記: 宛先はテナント資格情報でいつでも再解決できるキャッシュ（バックアップ対象外） |
+| `chat_oauth_states` | 一時（ノンス） | `state` PK／`member_id`／`service`／`created_at` | **使用停止**（AKEBONO HOME 名義化 2026-08-20 で OAuth フロー廃止。テーブルは残置 = 破壊しない。旧行は最大 10 分で陳腐化する一時データのみ） |
 
 ## 2. スタースキーマ接続（akebono-scm-platform `mart` 規約準拠）
 

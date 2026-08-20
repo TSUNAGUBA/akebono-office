@@ -470,25 +470,26 @@ jobs:
             --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
             --role="roles/secretmanager.secretAccessor" --quiet >/dev/null
 
-      # 外部連携（カレンダー F-06-8 / Slack 通知連携 F-49）: OAuth クライアントシークレットと
-      # トークン暗号化鍵を Secret Manager へ。secrets 未設定の連携はスキップ（無効のままデプロイ継続 = 原則4）。
-      # Slack は repository secrets（SLACK_CLIENT_ID / SLACK_CLIENT_SECRET）の登録だけで自動配線される
-      # （デプロイ障害 2026-08-20: 手動の gcloud run services update 前提では CI 再デプロイで消え、
-      #   repository secrets を登録しても Cloud Run へ届かない構造だったため、カレンダーと同じ自動同期へ統一 = 原則1/3）
+      # 外部連携（カレンダー F-06-8 / 通知の AKEBONO HOME 名義化 2026-08-20）: 資格情報を Secret Manager へ。
+      # secrets 未設定の連携はスキップ（無効のままデプロイ継続 = 原則4）。repository secrets の登録だけで
+      # 自動配線される（デプロイ障害 2026-08-20 の教訓: 手動の gcloud run services update 前提にしない = 原則1/3）
+      # - カレンダー: GOOGLE_OAUTH_CLIENT_SECRET + TOKEN_ENCRYPTION_KEY（個人 OAuth トークンの暗号化鍵）
+      # - Slack: SLACK_BOT_TOKEN（Bot Token 方式 = AKEBONO HOME 名義。旧 SLACK_CLIENT_ID/SECRET は廃止）
+      # - Google Chat: GOOGLE_CHAT_SA_KEY（Chat アプリのサービスアカウント鍵 JSON = AKEBONO HOME 名義）
       - name: 外部連携の secrets を Secret Manager へ登録（冪等・任意）
         env:
           SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
           PROJECT: ${{ secrets.GCP_PROJECT_ID }}
           GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
-          SLACK_CLIENT_SECRET: ${{ secrets.SLACK_CLIENT_SECRET }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          GOOGLE_CHAT_SA_KEY: ${{ secrets.GOOGLE_CHAT_SA_KEY }}
           TOKEN_ENCRYPTION_KEY: ${{ secrets.TOKEN_ENCRYPTION_KEY }}
+          # 旧方式（個人 OAuth）の残存検知専用（読取のみ・配線しない。監査 R1 MINOR-1）
+          LEGACY_SLACK_CLIENT_SECRET: ${{ secrets.SLACK_CLIENT_SECRET }}
         run: |
           echo "CALENDAR_READY=false" >> "$GITHUB_ENV"
           echo "SLACK_READY=false" >> "$GITHUB_ENV"
-          if [ -z "$TOKEN_ENCRYPTION_KEY" ]; then
-            echo "::notice::TOKEN_ENCRYPTION_KEY が未設定のため外部連携（カレンダー / Slack / Google Chat）は無効のままデプロイします（setup-deploy-secrets.ps1 で設定）"
-            exit 0
-          fi
+          echo "GCHAT_READY=false" >> "$GITHUB_ENV"
           PROJECT_NUMBER="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')"
           put_secret() {
             local NAME="$1" VALUE="$2"
@@ -504,18 +505,33 @@ jobs:
               --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
               --role="roles/secretmanager.secretAccessor" --quiet >/dev/null
           }
-          put_secret "$SERVICE-token-encryption-key" "$TOKEN_ENCRYPTION_KEY"
-          if [ -n "$GOOGLE_OAUTH_CLIENT_SECRET" ]; then
-            put_secret "$SERVICE-google-oauth-secret" "$GOOGLE_OAUTH_CLIENT_SECRET"
-            echo "CALENDAR_READY=true" >> "$GITHUB_ENV"
+          # カレンダー連携（個人 OAuth）はトークン暗号化鍵が前提（保管トークンの暗号化に使用）
+          if [ -n "$TOKEN_ENCRYPTION_KEY" ]; then
+            put_secret "$SERVICE-token-encryption-key" "$TOKEN_ENCRYPTION_KEY"
+            if [ -n "$GOOGLE_OAUTH_CLIENT_SECRET" ]; then
+              put_secret "$SERVICE-google-oauth-secret" "$GOOGLE_OAUTH_CLIENT_SECRET"
+              echo "CALENDAR_READY=true" >> "$GITHUB_ENV"
+            else
+              echo "::notice::GOOGLE_OAUTH_CLIENT_SECRET が未設定のためカレンダー連携は無効のままデプロイします"
+            fi
           else
-            echo "::notice::GOOGLE_OAUTH_CLIENT_SECRET が未設定のためカレンダー / Google Chat 連携は無効のままデプロイします"
+            echo "::notice::TOKEN_ENCRYPTION_KEY が未設定のためカレンダー連携は無効のままデプロイします（setup-deploy-secrets.ps1 で設定）"
           fi
-          if [ -n "$SLACK_CLIENT_SECRET" ]; then
-            put_secret "$SERVICE-slack-client-secret" "$SLACK_CLIENT_SECRET"
+          # 通知連携（AKEBONO HOME 名義）はトークンを保管しないため暗号化鍵に依存しない
+          if [ -n "$SLACK_BOT_TOKEN" ]; then
+            put_secret "$SERVICE-slack-bot-token" "$SLACK_BOT_TOKEN"
             echo "SLACK_READY=true" >> "$GITHUB_ENV"
+          elif [ -n "$LEGACY_SLACK_CLIENT_SECRET" ]; then
+            # 旧方式で稼働していた環境の移行漏れは notice では気づけないため warning にする（監査 R1 MINOR-1）
+            echo "::warning::旧方式の SLACK_CLIENT_SECRET を検出しましたが SLACK_BOT_TOKEN が未登録です。AKEBONO HOME 名義化により旧方式は廃止されたため、このままでは Slack 通知が停止します（deploy-guide.md §1-12 の移行手順で Bot Token を登録してください）"
           else
-            echo "::notice::SLACK_CLIENT_SECRET が未設定のため Slack 連携は無効のままデプロイします"
+            echo "::notice::SLACK_BOT_TOKEN が未設定のため Slack 通知連携は無効のままデプロイします"
+          fi
+          if [ -n "$GOOGLE_CHAT_SA_KEY" ]; then
+            put_secret "$SERVICE-google-chat-sa-key" "$GOOGLE_CHAT_SA_KEY"
+            echo "GCHAT_READY=true" >> "$GITHUB_ENV"
+          else
+            echo "::notice::GOOGLE_CHAT_SA_KEY が未設定のため Google Chat 通知連携は無効のままデプロイします"
           fi
 
       # AI 機能（Vertex AI）とカレンダー同期（Calendar API）の有効化 + 実行 SA への権限付与。
@@ -542,6 +558,10 @@ jobs:
             || echo "::warning::analyticsdata.googleapis.com の有効化に失敗しました。オーナー権限で有効化してください（deploy-guide.md §1-9b 参照）"
           gcloud services enable analyticsadmin.googleapis.com --project "$PROJECT" \
             || echo "::warning::analyticsadmin.googleapis.com の有効化に失敗しました。オーナー権限で有効化してください（deploy-guide.md §1-9b 参照）"
+          # 通知の Google Chat 連携（AKEBONO HOME 名義 = Chat アプリ）。従来は deploy-guide の手動手順のみで
+          # 有効化漏れが本番障害（テスト送信 502）の原因候補だったため自動化へ含める（§94-2 / 原則1）
+          gcloud services enable chat.googleapis.com --project "$PROJECT" \
+            || echo "::warning::chat.googleapis.com の有効化に失敗しました。オーナー権限で有効化してください（deploy-guide.md §1-12 参照）"
           PROJECT_NUMBER="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')"
           gcloud projects add-iam-policy-binding "$PROJECT" \
             --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
@@ -590,7 +610,6 @@ jobs:
           VERTEX_LOCATION: ${{ secrets.VERTEX_LOCATION }}
           VERTEX_MODEL: ${{ secrets.VERTEX_MODEL }}
           GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
-          SLACK_CLIENT_ID: ${{ secrets.SLACK_CLIENT_ID }}
           STORAGE_BUCKET: ${{ secrets.STORAGE_BUCKET }}
           # 常時稼働インスタンス数（repository variable。未設定は 1 = 常に 1 台を暖機してコールドスタートを避ける）。
           # コスト最優先なら 0 に設定（アイドル時ゼロスケール = 従来。ただし初回リクエストにコールドスタート遅延が戻る）
@@ -606,26 +625,21 @@ jobs:
             ENV_VARS="$ENV_VARS@STORAGE_BUCKET=${STORAGE_BUCKET}"
           fi
           SECRET_FLAGS="DATABASE_URL=$SERVICE-database-url:latest"
-          # 外部連携（secrets 登録済みのときのみ有効化）。トークン暗号化鍵はカレンダー / Slack いずれかが
-          # 有効なら一度だけ注入する
-          TOKEN_KEY_ADDED=false
+          # 外部連携（secrets 登録済みのときのみ有効化）
           if [ "${CALENDAR_READY:-false}" = "true" ] && [ -n "$GOOGLE_OAUTH_CLIENT_ID" ]; then
             ENV_VARS="$ENV_VARS@GOOGLE_OAUTH_CLIENT_ID=${GOOGLE_OAUTH_CLIENT_ID}"
             SECRET_FLAGS="$SECRET_FLAGS,GOOGLE_OAUTH_CLIENT_SECRET=$SERVICE-google-oauth-secret:latest,TOKEN_ENCRYPTION_KEY=$SERVICE-token-encryption-key:latest"
-            TOKEN_KEY_ADDED=true
           elif [ "${CALENDAR_READY:-false}" = "true" ]; then
             # 片側登録の検知（シークレットのみ・ID 欠落 = 無言スキップにしない。レビュー R1）
-            echo "::warning::GOOGLE_OAUTH_CLIENT_ID が未設定のためカレンダー / Google Chat 連携は配線されません（GOOGLE_OAUTH_CLIENT_SECRET は登録済み。ID も repository secrets へ登録してください）"
+            echo "::warning::GOOGLE_OAUTH_CLIENT_ID が未設定のためカレンダー連携は配線されません（GOOGLE_OAUTH_CLIENT_SECRET は登録済み。ID も repository secrets へ登録してください）"
           fi
-          # Slack 通知連携（F-49。repository secrets の登録だけで有効化 = デプロイ障害 2026-08-20 対応）
-          if [ "${SLACK_READY:-false}" = "true" ] && [ -n "$SLACK_CLIENT_ID" ]; then
-            ENV_VARS="$ENV_VARS@SLACK_CLIENT_ID=${SLACK_CLIENT_ID}"
-            SECRET_FLAGS="$SECRET_FLAGS,SLACK_CLIENT_SECRET=$SERVICE-slack-client-secret:latest"
-            if [ "$TOKEN_KEY_ADDED" = "false" ]; then
-              SECRET_FLAGS="$SECRET_FLAGS,TOKEN_ENCRYPTION_KEY=$SERVICE-token-encryption-key:latest"
-            fi
-          elif [ "${SLACK_READY:-false}" = "true" ]; then
-            echo "::warning::SLACK_CLIENT_ID が未設定のため Slack 連携は配線されません（SLACK_CLIENT_SECRET は登録済み。ID も repository secrets へ登録してください）"
+          # 通知連携（AKEBONO HOME 名義化 2026-08-20。repository secrets の登録だけで有効化。
+          # トークンを保管しないため TOKEN_ENCRYPTION_KEY には依存しない）
+          if [ "${SLACK_READY:-false}" = "true" ]; then
+            SECRET_FLAGS="$SECRET_FLAGS,SLACK_BOT_TOKEN=$SERVICE-slack-bot-token:latest"
+          fi
+          if [ "${GCHAT_READY:-false}" = "true" ]; then
+            SECRET_FLAGS="$SECRET_FLAGS,GOOGLE_CHAT_SA_KEY=$SERVICE-google-chat-sa-key:latest"
           fi
           # --no-cpu-throttling: AI タスクの承認後自動実行（バッチ7i = HTTP 応答後のバックグラウンド
           # LLM 実行）を応答返却後も CPU 割当されたまま走らせるため（PR #58 R1 C-2）。

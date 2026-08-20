@@ -33,11 +33,13 @@ export interface Env {
   googleOauthClientSecret: string
   /** トークン暗号化鍵（Secret Manager 経由。空 = 連携無効） */
   tokenEncryptionKey: string
-  /** Slack OAuth クライアント ID（個人別通知連携 改修依頼 2026-08-20。空 = Slack 連携無効）。
-   * 既存の Env リテラル（テストのスタブ env）を壊さないため省略可能とし、loadEnv は常に設定する（原則7） */
-  slackClientId?: string
-  /** Slack OAuth クライアントシークレット（Secret Manager 経由） */
-  slackClientSecret?: string
+  /** Slack Bot User OAuth Token（xoxb-…。通知の AKEBONO HOME 名義化 2026-08-20。空 = Slack 連携無効。
+   * Secret Manager 経由。既存の Env リテラル（テストのスタブ env）を壊さないため省略可能とし、
+   * loadEnv は常に設定する（原則7） */
+  slackBotToken?: string
+  /** Google Chat アプリのサービスアカウント鍵 JSON（内容そのもの。Secret Manager 経由。
+   * 空 = Google Chat 連携無効） */
+  googleChatSaKey?: string
   /** ドキュメント実体の保管先 Cloud Storage バケット（Firebase の Cloud Storage。
    * 空 = DB bytea フォールバック（ローカル/CI/未設定環境でも動作 = 原則1・4）。署名 URL は GCS 時のみ */
   storageBucket: string
@@ -72,8 +74,8 @@ export function loadEnv(): Env {
     googleOauthClientId: process.env.GOOGLE_OAUTH_CLIENT_ID ?? '',
     googleOauthClientSecret: process.env.GOOGLE_OAUTH_CLIENT_SECRET ?? '',
     tokenEncryptionKey: process.env.TOKEN_ENCRYPTION_KEY ?? '',
-    slackClientId: process.env.SLACK_CLIENT_ID ?? '',
-    slackClientSecret: process.env.SLACK_CLIENT_SECRET ?? '',
+    slackBotToken: process.env.SLACK_BOT_TOKEN ?? '',
+    googleChatSaKey: process.env.GOOGLE_CHAT_SA_KEY ?? '',
     storageBucket: process.env.STORAGE_BUCKET ?? '',
   }
 }
