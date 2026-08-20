@@ -42,6 +42,8 @@ async function main() {
 
     // 3) 受付箱: 添付列 + 対象ページのリンク化
     await page.getByRole('tab', { name: /受付箱/ }).click()
+    // 表示切替はタブ間で共有されるため、直前のカンバン表示から「一覧」へ戻す（2026-08-20 タブ再編）
+    await page.getByRole('tab', { name: '一覧' }).click()
     // 投稿者フィルタの既定 = 自分のみ（2026-08-20）。他メンバー投稿の行を対象にするため「全員」へ切替
     await page.getByRole('tablist', { name: '投稿者で絞り込み' }).getByRole('tab', { name: '全員' }).click()
     await page.getByRole('columnheader', { name: '添付' }).waitFor()
