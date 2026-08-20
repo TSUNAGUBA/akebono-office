@@ -3,7 +3,10 @@
  * - セッション管理（オペレーター指示 2026-07-17）: 会話はセッション単位で永続し、同一セッション内は
  *   マルチターン（API モードはサーバーが直近履歴を LLM へ渡す）。過去セッションの再開・新規開始に対応
  * - SoT: API モード = chat_sessions / chat_messages（DB）。モックモード = chatSessions / chatMessages（localStorage）
- * - 応答: API モードは LLM 一次応答 → fallback 時は決定的ルーティング（応答はセッションへ追記して履歴を忠実に保つ）
+ * - 応答: API モードは **エージェント応答（改修依頼 2026-08-20: サーバー側 function calling ループ =
+ *   1 会話ごとに意図解釈 → 必要データをツールで取得 → 回答）**。fallback: true は LLM 無効環境のみで、
+ *   そのときだけ決定的ルーティングへ縮退する（縮退応答もセッションへ追記して履歴を忠実に保つ。
+ *   確信度フォールバックはサーバー側で廃止 = 本番で無関係な定型応答が出る経路はない）
  * - 擬似ストリーミング: 30-50 文字ずつ setInterval で流す。unmount 時は finalize() で確定保存
  */
 import { findCompanyIn, SELF_COMPANY_PATTERN } from '../../../shared/domain/name-match'
