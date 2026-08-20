@@ -369,7 +369,7 @@ async function submitRespond(): Promise<void> {
         <UiFormField
           label="本文"
           :required="resType !== 'no_action'"
-          :hint="resType === 'answer' ? '本人へ通知として届きます' : resType === 'ruling' ? '裁定内容として記録されます' : '補足があれば記入してください（任意）'"
+          :hint="resType === 'answer' ? '本人へ通知として届きます' : resType === 'ruling' ? '裁定内容として記録されます' : '補足があれば記入してください'"
         >
           <textarea
             v-model="resBody"

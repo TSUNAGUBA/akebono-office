@@ -101,6 +101,16 @@ function hasOwnResourceRules(rules: PermissionRule[], resource: string): boolean
 }
 
 /**
+ * 既読管理（/v1/reports/reads）の kind 別機能キー（改修依頼 2026-08-20 第2バッチ・レビュー R1）。
+ * reads は 3 kind 混在の共用エンドポイントのためパスガードでなくハンドラ内で kind 単位に判定する
+ * （'reports' 固定だと「日報 deny × 週報 allow」設定で週報・月報の既読管理まで 403 になる）。
+ * 判定時は resolveFeatureResource を通す = 新キー未設定の間の旧 'reports' 継承も同一規則
+ */
+export function reportReadsFeatureKey(kind: 'daily' | 'weekly' | 'monthly'): string {
+  return kind === 'weekly' ? 'weekly-report' : kind === 'monthly' ? 'monthly-report' : 'reports'
+}
+
+/**
  * 機能利用可否の判定に使う実効リソースキー（canUseFeature へ渡す前に解決する）。
  * weekly-report / monthly-report 以外のキーはそのまま返す
  */

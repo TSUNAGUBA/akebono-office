@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  canUseFeature, canUseTab, resolveFeatureResource, resolveTabPermission,
+  canUseFeature, canUseTab, reportReadsFeatureKey, resolveFeatureResource, resolveTabPermission,
 } from '../../../shared/domain/permissions'
 import type { PermissionRule } from '../../../shared/domain/types'
 
@@ -84,5 +84,22 @@ describe('タブ権限のフォールバック（resolveTabPermission）', () =>
       .toEqual({ resource: 'weekly-report', tabKey: 'mine' })
     expect(resolveTabPermission(rules, 'monthly-report', 'mine'))
       .toEqual({ resource: 'reports', tabKey: 'monthly-mine' }) // monthly は継承のまま
+  })
+})
+
+// reads（既読管理）の kind 別機能キー（レビュー R1: /v1/reports/reads はパスガード対象外にし
+// ハンドラ内で kind 単位に判定する。resolveFeatureResource との併用で旧 'reports' 継承も同一規則）
+describe('reportReadsFeatureKey', () => {
+  it('kind 別に独立後の機能キーへ写像する', () => {
+    expect(reportReadsFeatureKey('daily')).toBe('reports')
+    expect(reportReadsFeatureKey('weekly')).toBe('weekly-report')
+    expect(reportReadsFeatureKey('monthly')).toBe('monthly-report')
+  })
+
+  it('resolveFeatureResource との併用: 新キー未設定なら旧 reports を継承・設定後は独立', () => {
+    const legacyOnly = [rule({ resource: 'reports', effect: 'deny' })]
+    expect(resolveFeatureResource(legacyOnly, reportReadsFeatureKey('weekly'))).toBe('reports')
+    const withOwn = [...legacyOnly, rule({ id: 'r2', resource: 'weekly-report', effect: 'allow' })]
+    expect(resolveFeatureResource(withOwn, reportReadsFeatureKey('weekly'))).toBe('weekly-report')
   })
 })

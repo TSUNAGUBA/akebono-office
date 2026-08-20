@@ -12,7 +12,7 @@ import { Hono } from 'hono'
 import type pg from 'pg'
 import { DEFAULT_WORKING_DAY_RULE, isWorkingDay } from '../../../shared/domain/business-day'
 import { addDays, isRealDateKey, jstClock, nowJstIso, todayJst } from '../../../shared/domain/jst'
-import { canUseFeature, canViewMemberReports, type PermissionSubject } from '../../../shared/domain/permissions'
+import { canUseFeature, canViewMemberReports, type PermissionSubject, reportReadsFeatureKey, resolveFeatureResource } from '../../../shared/domain/permissions'
 import {
   buildReminderMessage, missingReportDates, parseReportReminderConfig, reminderWindowDates, shouldFireReminder,
 } from '../../../shared/domain/report-reminder'
@@ -662,11 +662,25 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
     }
   }
 
+  /**
+   * reads の kind 別機能ガード（/v1/reports/reads はパスガード対象外 = kind 混在のため。レビュー R1）。
+   * 判定は featureGuard と同一規則（ルール未設定 = 既定 allow・resolveFeatureResource で旧 'reports' 継承）
+   */
+  async function requireReadsFeature(user: AuthUser, kind: 'daily' | 'weekly' | 'monthly'): Promise<void> {
+    const rules = await activePermissionRules(pool)
+    if (rules.length === 0) return
+    const resource = resolveFeatureResource(rules, reportReadsFeatureKey(kind))
+    if (!canUseFeature(rules, subjectOf(user), resource)) {
+      throw err('AKO-PRM-001', 'この機能を利用する権限がありません（管理者にお問い合わせください）', 403)
+    }
+  }
+
   // 既読済みレポート id 一覧（本人のみ。一覧表示と同じ期間指定を必須にし全履歴ダンプを許容しない
   // = daily scope=all の month 必須と同型）
   app.get('/reads', async (c) => {
     const user = c.get('user')
     const kind = c.req.query('kind')
+    if (kind === 'daily' || kind === 'weekly' || kind === 'monthly') await requireReadsFeature(user, kind)
     if (kind === 'daily') {
       const month = c.req.query('month') ?? ''
       if (!/^\d{4}-\d{2}$/.test(month)) throw err('AKO-GEN-001', 'kind=daily では month（YYYY-MM）を指定してください', 400)
@@ -711,10 +725,13 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
     const body = await c.req.json().catch(() => ({})) as { kind?: string; reportId?: string }
     const reportId = String(body.reportId ?? '').trim()
     if (!reportId) throw err('AKO-GEN-001', '対象レポート（reportId）を指定してください', 400)
+    if (body.kind !== 'daily' && body.kind !== 'weekly' && body.kind !== 'monthly') {
+      throw err('AKO-GEN-001', 'kind（daily / weekly / monthly）を指定してください', 400)
+    }
+    await requireReadsFeature(user, body.kind)
     if (body.kind === 'daily') await guardCommentTarget(c, reportId)
     else if (body.kind === 'weekly') await guardWeeklyReadTarget(user, reportId)
-    else if (body.kind === 'monthly') await guardMonthlyReadTarget(user, reportId)
-    else throw err('AKO-GEN-001', 'kind（daily / weekly / monthly）を指定してください', 400)
+    else await guardMonthlyReadTarget(user, reportId)
     await pool.query(
       `INSERT INTO report_reads (member_id, report_kind, report_id) VALUES ($1, $2, $3)
        ON CONFLICT (member_id, report_kind, report_id) DO NOTHING`,
@@ -728,6 +745,7 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
     const kind = c.req.param('kind')
     const reportId = c.req.param('reportId')
     if (kind !== 'daily' && kind !== 'weekly' && kind !== 'monthly') throw err('AKO-GEN-001', 'kind（daily / weekly / monthly）を指定してください', 400)
+    await requireReadsFeature(user, kind)
     await pool.query(
       `DELETE FROM report_reads WHERE member_id = $1 AND report_kind = $2 AND report_id = $3`,
       [user.id, kind, reportId])

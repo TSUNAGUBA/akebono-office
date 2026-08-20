@@ -72,6 +72,10 @@ const PATH_FEATURES: [string, string][] = [
   ['/v1/reports/weekly-insight', 'weekly-report'],
   ['/v1/reports/weekly', 'weekly-report'],
   ['/v1/reports/monthly', 'monthly-report'],
+  // reads（既読管理）は kind = daily/weekly/monthly 混在のためパスガード対象外とし、
+  // ハンドラ内で kind 別の機能キー（reportReadsFeatureKey）により判定する
+  // （'reports' に残すと「日報 deny × 週報 allow」設定で週報の既読管理が全滅する = レビュー R1 対応）
+  ['/v1/reports/reads', ''],
   ['/v1/reports', 'reports'],
   ['/v1/workflows', 'workflow'],
   ['/v1/shifts', 'shift'],

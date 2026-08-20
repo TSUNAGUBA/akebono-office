@@ -254,7 +254,7 @@ async function restoreExt(id: string): Promise<void> {
               <UiFormField label="チャンネル名" hint="必須">
                 <input v-model="form.name" type="text" class="input" placeholder="例）暮らしの器マガジン" aria-label="チャンネル名">
               </UiFormField>
-              <UiFormField label="連携する Akebono 業務アプリ（業態）" hint="任意。連携すると売上との統合 PDCA が使えます">
+              <UiFormField label="連携する Akebono 業務アプリ（業態）" hint="連携すると売上との統合 PDCA が使えます">
                 <UiSelect v-model="form.segmentId" :options="segmentOptions" aria-label="連携する業態" />
               </UiFormField>
             </div>
@@ -342,7 +342,7 @@ async function restoreExt(id: string): Promise<void> {
         <UiFormField label="チャンネル名" hint="必須">
           <input v-model="createForm.name" type="text" class="input" placeholder="例）暮らしの器マガジン" aria-label="チャンネル名">
         </UiFormField>
-        <UiFormField label="連携する Akebono 業務アプリ（業態）" hint="任意">
+        <UiFormField label="連携する Akebono 業務アプリ（業態）">
           <UiSelect v-model="createForm.segmentId" :options="segmentOptions" aria-label="連携する業態" />
         </UiFormField>
       </div>
@@ -361,20 +361,20 @@ async function restoreExt(id: string): Promise<void> {
           <input v-model="extForm.title" type="text" class="input" placeholder="例）和食器の季節の楽しみ方" aria-label="タイトル">
         </UiFormField>
         <div class="grid gap-3 sm:grid-cols-2">
-          <UiFormField label="媒体名" hint="任意">
+          <UiFormField label="媒体名">
             <input v-model="extForm.source" type="text" class="input" placeholder="例）暮らしメディア / note" aria-label="媒体名">
           </UiFormField>
-          <UiFormField label="公開日" hint="任意">
+          <UiFormField label="公開日">
             <input v-model="extForm.publishedAt" type="date" class="input" aria-label="公開日">
           </UiFormField>
         </div>
-        <UiFormField label="投稿先 URL" hint="任意">
+        <UiFormField label="投稿先 URL">
           <input v-model="extForm.url" type="url" class="input" placeholder="https://example.com/article" aria-label="投稿先 URL">
         </UiFormField>
         <UiFormField label="原文（本文）" hint="必須。AI 分析の材料になります">
           <textarea v-model="extForm.body" rows="8" class="input" placeholder="投稿した記事の本文を貼り付けます" aria-label="原文"></textarea>
         </UiFormField>
-        <UiFormField label="メモ" hint="任意">
+        <UiFormField label="メモ">
           <input v-model="extForm.notes" type="text" class="input" placeholder="例）反応が良かったので自社ブログへ再構成予定" aria-label="メモ">
         </UiFormField>
       </div>

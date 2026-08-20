@@ -15,6 +15,7 @@
 import {
   BellRing, CalendarDays, Check, ChevronLeft, ChevronRight, Eye, Minus, Pencil, Plus, Send, Settings2, Sparkles, Trash2,
 } from 'lucide-vue-next'
+import type { LocationQueryRaw } from 'vue-router'
 import type { DailyReport, ReportEntry, TomorrowPlan } from '~/types/domain'
 import {
   DAILY_ISSUE_CATEGORY_PRESETS, TOMORROW_PLANS_MAX,
@@ -68,7 +69,7 @@ function daysOfMonth(ym: string): string[] {
 // 注: 旧 URL は本ページ（機能キー 'reports'）のルートガードを通過してからリダイレクトするため、
 // 日報 deny × 週報 allow の明示設定をした環境では旧 URL がダッシュボードへ退避する（新パスは正常）。
 // 新キーを明示設定する運用へ移った時点で新 URL の利用を前提とする設計判断。
-function legacyRedirectTarget(): { path: string; query: Record<string, unknown> } | null {
+function legacyRedirectTarget(): { path: string; query: LocationQueryRaw } | null {
   const legacyTabRaw = typeof route.query.tab === 'string' ? route.query.tab : ''
   const legacyKind
     = route.query.kind === 'weekly' ? 'weekly'

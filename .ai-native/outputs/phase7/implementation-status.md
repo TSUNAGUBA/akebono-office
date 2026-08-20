@@ -3805,3 +3805,41 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
 - 通知マトリクスの mock 適用は**本人宛のみ**（localStorage が現在ユーザーの設定しか持てないため。API モードはサーバー側で全宛先に適用 = 本実装が正）。
 - 日報リマインドの営業日判定は**祝日非考慮**（holidays マスタとの連動は将来課題。コード docblock にも明記）。
 - 通知のリアルタイム配信（WebSocket/SSE）は未導入（既存 60 秒ポーリング維持の設計判断）。
+
+## 93. 改修依頼 2026-08-20 第2バッチ（フォームの「（任意）」表記排除 / 週報・月報の独立メニュー化と権限分離）の完了条件（Definition of Done）
+
+対象: mockup（全フォーム + 週報・月報ページ再編）・shared/domain（権限フォールバック）・api（PATH_FEATURES / reads の kind 別ガード）。DB 変更なし。
+
+### 93-1 フォームの「（任意）」表記排除（#1）
+- [x] 必須は「*」で表現される前提のもと、フォーム項目のラベル・凡例・placeholder から「（任意）」「(任意)」を全面削除
+  （17+ ファイル。コメント・docblock・散文の説明文・テスト名は対象外として保持）。「任意」単発の placeholder /
+  hint="任意" も冗長表記として削除・言い換え（発注の備考・休暇申請の理由・メディア設定 5 箇所ほか）
+- [x] フォームごとに必須マーカーの整合を確認（バリデーション必須なのに * が無い = ノート系モーダルの本文へ
+  `UiFormField required` を付与。それ以外は既存で整合 or 必須項目なし）
+- [x] e2e（activity-pages）・screen-design の該当ラベル記載を追随
+
+### 93-2 週報・月報の独立化（#2）
+- [x] 物理パス分離: `/weekly-report`・`/monthly-report` を新設し `/reports` は日報専用へ（週報 UI は
+  WeeklyMinePanel / WeeklyAllPanel / WeeklyDetailDrawer へ移設 = 挙動不変のコード移動。月報 = PeriodPanel×3）
+- [x] 旧 URL 互換（原則7）: `/reports?kind=weekly|monthly`・旧 `?tab=weekly-*` 等を新パスへ読み替えリダイレクト
+  （setup + **同一パス内クエリ変化の watch** の二段構え。後者は E2E が検出した実バグ = /reports 表示中に
+  旧リンクを踏むと再マウントされず無反応 → 修正済み）
+- [x] パンくず・メニュー: nav-map 3 ページ独立（親 = ホーム）・NAV_GROUPS / メニューカード（**カード id 不変** = 原則7）・
+  通知カテゴリ・通知リンク・seed を追随
+- [x] 権限の独立: 機能キー `weekly-report` / `monthly-report` + タブカタログ（mine/all/team）新設。
+  **下位互換 = 新キーの明示ルールが無い間は旧 'reports' 設定を継承**（resolveFeatureResource /
+  resolveTabPermission = フロント usePermissions と API featureGuard が同一関数を共有）。
+  API は PATH_FEATURES を最長一致で分離し、**reads（既読管理・kind 混在）はパスガード対象外 +
+  ハンドラ内 kind 別判定**（reportReadsFeatureKey。「日報 deny × 週報 allow」で既読管理が全滅する組合せを解消 = R1）。
+  remind は日報専用のため 'reports' に残置（設計判断）
+- [x] 既知の制約（文書化）: 旧 URL は /reports（機能キー reports）のルートガード通過後にリダイレクトするため、
+  「日報 deny × 週報 allow」の明示設定環境では**旧 URL のみ**ダッシュボードへ退避する（新 URL は正常。
+  独立運用へ移行した時点で新 URL 利用が前提 = reports.vue docblock に記載）
+
+### 93-3 検証・反復レビュー（原則9 = SP-8）
+- [x] mockup vitest 476+ / api unit 438+ / 統合 294 / typecheck（mockup・api）/ nuxt generate 全 green
+- [x] モック E2E 6 スイート全 green（旧 URL → /weekly-report 着地の回帰チェック・ナビ回帰の週報/月報行を追加）
+- [x] R1 = 独立レビュー（コードレビュアー + システム監査官統合）: MAJOR 1（リダイレクト watch 追加時の
+  型注釈が typecheck を破壊）+ MINOR 4（reads の権限残置による機能劣化・任意表記の取り残し・F-47 見出し・
+  本台帳の未記載）→ **全件修正**（本節はその反映）
+- [ ] R2 = R1 修正の独立再検証（実施後に本行を更新する）
