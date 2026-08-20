@@ -979,7 +979,8 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
 
   // 保管済みインサイトの取得（バッチ7j: 生成しない = 再生成されるまで保存済みの結果を表示する）。
   // company = 全体共通（閲覧者ごとに売上・F-16-6 をマスク）/ personal = ログインユーザー向け。
-  // reports 機能の deny は app.ts の featureGuard（/v1/reports）が 403 を返す（重複ガードは持たない = R1 M-5）
+  // weekly-report 機能の deny は app.ts の featureGuard（/v1/reports/weekly-insight = 改修依頼
+  // 2026-08-20 第2バッチで週報キーへ独立）が 403 を返す（重複ガードは持たない = R1 M-5）
   app.get('/weekly-insight', async (c) => {
     const user = c.get('user')
     const weekStart = String(c.req.query('weekStart') ?? '')

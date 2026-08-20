@@ -33,6 +33,14 @@ describe('notificationCategoryOf', () => {
     expect(notificationCategoryOf(n({ kind: 'reminder', link: '/reports?tab=weekly' }))).toBe('report')
   })
 
+  it('リンク先が /weekly-report・/monthly-report の通知も report（改修依頼 2026-08-20: 独立パス）', () => {
+    expect(notificationCategoryOf(n({ kind: 'reminder', link: '/weekly-report' }))).toBe('report')
+    expect(notificationCategoryOf(n({ kind: 'reminder', link: '/weekly-report?tab=mine' }))).toBe('report')
+    expect(notificationCategoryOf(n({ kind: 'reminder', link: '/monthly-report' }))).toBe('report')
+    // 旧 /reports?kind=weekly リンクの既存通知も従来どおり report（下位互換）
+    expect(notificationCategoryOf(n({ kind: 'reminder', link: '/reports?kind=weekly' }))).toBe('report')
+  })
+
   it('リンク先が /customer-log の通知は顧客活動（customer-log）', () => {
     expect(notificationCategoryOf(n({ kind: 'comment', link: '/customer-log' }))).toBe('customer-log')
     expect(notificationCategoryOf(n({ kind: 'comment', link: '/customer-log/c-1' }))).toBe('customer-log')

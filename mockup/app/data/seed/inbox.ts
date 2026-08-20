@@ -16,7 +16,7 @@ export const seedNotifications: AppNotification[] = [
   { id: 'nt-0011', memberId: 'm-03', kind: 'reminder', title: '議事録の未確定項目があります', body: '経営会議（8/7）の決定事項 2 件が未記入です。確定をお願いします', link: '/minutes', read: false, at: `${addDays(today, -1)}T15:40:00+09:00` },
   // ---- m-03 宛て / 既読 ----
   { id: 'nt-0006', memberId: 'm-03', kind: 'ai_report', title: 'AI社員 ソラ の日次報告', body: '売上マートで前月比の異常値 2 件を検知し、明細をまとめました', link: '/ai-company', read: true, at: `${addDays(today, -1)}T17:30:00+09:00` },
-  { id: 'nt-0007', memberId: 'm-03', kind: 'reminder', title: '週報の提出期限が近づいています', body: '今週の週報は金曜 18:00 までに提出してください', link: '/reports', read: true, at: `${addDays(today, -2)}T09:00:00+09:00` },
+  { id: 'nt-0007', memberId: 'm-03', kind: 'reminder', title: '週報の提出期限が近づいています', body: '今週の週報は金曜 18:00 までに提出してください', link: '/weekly-report', read: true, at: `${addDays(today, -2)}T09:00:00+09:00` },
   { id: 'nt-0008', memberId: 'm-03', kind: 'system', title: 'インシデント解決: TOKUTAKE AI Platform', body: 'ETL ジョブ失敗による分析データ更新停止は解消し、経過観察を終了しました', link: '/status/svc-03', read: true, at: `${addDays(today, -19)}T16:05:00+09:00` },
   // ---- 他メンバー宛て（宛先フィルタの確認用） ----
   { id: 'nt-0009', memberId: 'm-01', kind: 'escalation', title: 'エスカレーション: 過負荷', body: '小野寺さんの保有タスクが 8 件になりました（しきい値 7 件）', link: '/inbox', read: false, at: `${today}T09:05:00+09:00` },

@@ -64,12 +64,32 @@ export const NAV_MAP: Record<string, NavMapEntry> = {
   '/reports': {
     parent: HOME,
     related: [
+      { to: '/weekly-report', label: '週報' },
+      { to: '/monthly-report', label: '月報' },
       { to: '/ai-assistant', label: 'AI業務アシスタント' },
       { to: '/poipoi', label: '改善のタネ' },
       WORK_CATEGORIES,
       PROJECTS,
       PERMISSIONS,
       { to: '/settings', label: '設定（日報の入力方式）', adminOnly: true },
+    ],
+  },
+  // 週報・月報（改修依頼 2026-08-20 第2バッチ: /reports から独立したトップレベルページ）。
+  // 親 = ホーム = パンくずに「日報」を親として出さない（本改修の眼目）。関連 = 相互 + 日報
+  '/weekly-report': {
+    parent: HOME,
+    related: [
+      { to: '/monthly-report', label: '月報' },
+      { to: '/reports', label: '日報' },
+      PERMISSIONS,
+    ],
+  },
+  '/monthly-report': {
+    parent: HOME,
+    related: [
+      { to: '/weekly-report', label: '週報' },
+      { to: '/reports', label: '日報' },
+      PERMISSIONS,
     ],
   },
   '/ai-assistant': {

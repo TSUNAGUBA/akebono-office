@@ -2,8 +2,9 @@
 /**
  * 期間レポート（週報・月報）の 自分/全員/チーム ビュー（改修依頼 2026-08-19 第4弾）。
  * 週報と月報は同型（期間キー = weekStart / monthStart のみ差異）のため 1 コンポーネントで共通化する（原則3）。
- * - kind='weekly' は「チーム」ビューでのみ本コンポーネントを使う（自分/全員は reports.vue に既存実装がある）。
- * - kind='monthly' は 自分/全員/チーム の全ビューを本コンポーネントで提供する（週報 UI と同等の体験）。
+ * - kind='weekly' は /weekly-report の「チーム」タブ（単週の詳細）でのみ本コンポーネントを使う
+ *   （自分/全員は WeeklyMinePanel / WeeklyAllPanel = 改修依頼 2026-08-20 第2バッチで独立ページ配下へ移設）。
+ * - kind='monthly' は /monthly-report の 自分/全員/チーム の全ビューを本コンポーネントで提供する（週報 UI と同等の体験）。
  * - 参照可否は日報・週報と同じ権限（canViewMemberReports）。既読・未読は kind 単位で管理（useReports）。
  * - モバイル前提のレスポンシブ（一覧はカード風リスト・入力は 1〜2 カラム。原則8）。
  */
@@ -18,7 +19,7 @@ type PeriodReport = WeeklyReport | MonthlyReport
 
 const props = defineProps<{
   kind: 'weekly' | 'monthly'
-  /** 表示するビュー（reports.vue のタブから指定） */
+  /** 表示するビュー（週報 /weekly-report・月報 /monthly-report ページのタブから指定） */
   view: 'mine' | 'all' | 'team'
 }>()
 
@@ -342,7 +343,7 @@ async function onMarkUnread(): Promise<void> {
                 :model-value="fShareKind" :options="teamShareKindOptions" aria-label="チーム共有事項の種別"
                 @update:model-value="(v: string) => { fShareKind = v }"
               />
-              <textarea v-model="fShareNote" class="textarea" placeholder="共有したい内容（任意）" aria-label="チーム共有事項の内容" />
+              <textarea v-model="fShareNote" class="textarea" placeholder="共有したい内容" aria-label="チーム共有事項の内容" />
             </div>
           </UiFormField>
           <div class="flex flex-wrap items-center justify-end gap-2">

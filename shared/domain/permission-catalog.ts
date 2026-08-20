@@ -95,18 +95,26 @@ export const FIELD_CATALOG: Record<string, { value: string; label: string }[]> =
  * - inbox のカテゴリタブは通知タブ設定（useNotificationTabs）が担うため対象外。
  */
 export const TAB_PERMISSION_CATALOG: Record<string, { key: string; label: string }[]> = {
-  // 改修依頼 2026-08-19 第4弾: 日報/週報/月報の 3 メニュー化に伴いタブキーを拡張（単一キー `reports` は維持）。
-  // 既存キー（mine/weekly-mine/all/weekly-all/team）は後方互換のため据え置き（旧ルールがそのまま効く = 原則7）。
+  // 改修依頼 2026-08-20 第2バッチ: 週報・月報を独立機能キー（weekly-report / monthly-report）へ分離
+  // （旧: 単一キー reports に weekly-*/monthly-* タブキーを内包 = 2026-08-19 第4弾）。
+  // 旧 reports の weekly-*/monthly-* タブキーはカタログから外すが、**保存済みルール**
+  // （resource='reports'・field='tab:weekly-mine' 等）は shared/domain/permissions.ts の
+  // resolveTabPermission が「新キーのルール未設定の間は旧 reports 設定を継承」する形で
+  // 参照し続けるため無効化しない（原則7。設計判断: カタログ = 新規設定の語彙・互換 = 解決層で担保）。
   reports: [
     { key: 'mine', label: '自分の日報' },
     { key: 'all', label: '全員の日報' },
-    { key: 'team', label: 'チーム（日報）' },
-    { key: 'weekly-mine', label: '自分の週報' },
-    { key: 'weekly-all', label: '全員の週報' },
-    { key: 'weekly-team', label: 'チーム（週報）' },
-    { key: 'monthly-mine', label: '自分の月報' },
-    { key: 'monthly-all', label: '全員の月報' },
-    { key: 'monthly-team', label: 'チーム（月報）' },
+    { key: 'team', label: 'チーム' },
+  ],
+  'weekly-report': [
+    { key: 'mine', label: '自分の週報' },
+    { key: 'all', label: '全員の週報' },
+    { key: 'team', label: 'チーム' },
+  ],
+  'monthly-report': [
+    { key: 'mine', label: '自分の月報' },
+    { key: 'all', label: '全員の月報' },
+    { key: 'team', label: 'チーム' },
   ],
   workflow: [
     { key: 'mine', label: '自分の申請' },
@@ -136,7 +144,18 @@ export const TAB_PERMISSION_CATALOG: Record<string, { key: string; label: string
 
 /** タブキーの論理名（カタログ外はキーをそのまま表示） */
 export function tabLabel(feature: string, tabKey: string): string {
-  return TAB_PERMISSION_CATALOG[feature]?.find(t => t.key === tabKey)?.label ?? tabKey
+  const hit = TAB_PERMISSION_CATALOG[feature]?.find(t => t.key === tabKey)?.label
+  if (hit) return hit
+  // 旧 reports リソースの週報・月報タブキー（保存済みルールの表示互換 = 原則7。
+  // 判定側は resolveTabPermission が新キーへ写像して参照し続ける）
+  if (feature === 'reports') {
+    const m = /^(weekly|monthly)-(mine|all|team)$/.exec(tabKey)
+    if (m) {
+      const label = TAB_PERMISSION_CATALOG[`${m[1]}-report`]?.find(t => t.key === m[2])?.label
+      if (label) return `${label}（旧キー）`
+    }
+  }
+  return tabKey
 }
 
 /** 項目キーの論理名（カタログ外 = 過去に手入力された物理名などはそのまま表示） */

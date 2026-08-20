@@ -12,8 +12,8 @@
  */
 import type { WeeklyReport } from '~/types/domain'
 import { REPORT_STATUS_LABELS } from '~/composables/useReports'
-import { addDays, fmtDate, todayJst } from '~/utils/format'
-import { recentWeekStarts } from '~/utils/report-weeks'
+import { fmtDate, todayJst } from '~/utils/format'
+import { recentWeekStarts, weekRangeLabel } from '~/utils/report-weeks'
 
 const reports = useReports()
 const { currentUserId } = useCurrentUser()
@@ -33,11 +33,6 @@ const currentWeekStart = computed(() => weekStarts.value[weekStarts.value.length
 /** 列ヘッダーのラベル（M/D週 = 週初め月曜の日付） */
 function weekHeadLabel(weekStart: string): string {
   return `${fmtDate(weekStart)}週`
-}
-
-/** 週の範囲ラベル（M/D〜M/D。ドロワー・aria 用） */
-function weekRangeLabel(weekStart: string): string {
-  return `${fmtDate(weekStart)}〜${fmtDate(addDays(weekStart, 6))}`
 }
 
 // ---------- マトリクス（行 = メンバー / 列 = 週） ----------

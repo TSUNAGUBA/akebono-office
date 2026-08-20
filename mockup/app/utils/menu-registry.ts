@@ -43,8 +43,10 @@ export const MENU_CARDS: Record<MenuArea, MenuCardDef[]> = {
     { id: 'attendance', title: '勤怠管理', description: '打刻・月次集計・36 協定アラート・休暇', icon: 'Clock', to: '/attendance' },
     { id: 'shift', title: 'シフト表', description: '希望提出・調整・確定シフトの確認', icon: 'CalendarRange', to: '/shift', featureToggle: 'shift' },
     { id: 'reports', title: '日報', description: '日々の活動報告とチームの提出状況', icon: 'NotebookPen', to: '/reports' },
-    { id: 'reports-weekly', title: '週報', description: '週次のふりかえり（成果・課題・来週の最重要テーマ）', icon: 'CalendarDays', to: '/reports?kind=weekly' },
-    { id: 'reports-monthly', title: '月報', description: '月次のふりかえり（成果・課題・来月の最重要テーマ）', icon: 'CalendarClock', to: '/reports?kind=monthly' },
+    // 週報・月報の to は独立パスへ変更（改修依頼 2026-08-20 第2バッチ）。カード id（reports-weekly /
+    // reports-monthly）は**変更しない**: ダッシュボードレイアウトの保存値（cardIds）が id を参照するため（原則7）
+    { id: 'reports-weekly', title: '週報', description: '週次のふりかえり（成果・課題・来週の最重要テーマ）', icon: 'CalendarDays', to: '/weekly-report' },
+    { id: 'reports-monthly', title: '月報', description: '月次のふりかえり（成果・課題・来月の最重要テーマ）', icon: 'CalendarClock', to: '/monthly-report' },
     { id: 'ai-assistant', title: 'AI業務アシスタント', description: '明日の計画と当日の振り返りを AI と。日報へ自動反映', icon: 'Sparkles', to: '/ai-assistant' },
     { id: 'poipoi', title: '改善のタネ', description: '気づき・改善アイデアを投げ込む改善のタネ。AI の参照対象・管理者はチーム改善のため閲覧可', icon: 'StickyNote', to: '/poipoi' },
     { id: 'minutes', title: '議事録', description: '会議の記録を蓄積。全員が参照でき AI の参照対象', icon: 'NotebookPen', to: '/minutes' },

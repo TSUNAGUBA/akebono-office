@@ -35,8 +35,10 @@ async function main() {
     // 4) 主要ページのナビ回帰（描画のみ）
     for (const [path, heading] of [
       ['/attendance', '勤怠管理'],
-      // /reports は kind 別タイトル（既定 = 日報。改修依頼 2026-08-19 第4弾で「日報・週報」から変更 → スペック追随 2026-08-20）
       ['/reports', '日報'],
+      // 週報・月報は独立ページ（改修依頼 2026-08-20 第2バッチ: /reports?kind= から物理パスへ分離）
+      ['/weekly-report', '週報'],
+      ['/monthly-report', '月報'],
       // 新設ページ（改修依頼 2026-08-20）
       ['/customer-context', '顧客コンテキスト'],
       ['/masters', 'マスタメンテナンス'],
