@@ -31,5 +31,17 @@ cd e2e && npm ci
 
 ## 新バッチのスイート追加
 
-`batchXX-e2e.cjs` を追加し、`run-batch6b-stack.sh` 末尾の `SUITES` に 1 行追記する
-（`lib.cjs` の `check/withPage/summary` を利用。失敗があれば exit 1 でランナーが止まる）。
+`batchXX-e2e.cjs` を追加し（`lib.cjs` の `check/withPage/summary` を利用。失敗があれば exit 1 でランナーが止まる）、
+実行モードに応じて登録する（2026-08-20 改修で一覧を分離）:
+
+- **API モードのスイート** → `run-batch6b-stack.sh` の `SUITES` に 1 行追記
+- **モックモードのスイート** → `run-mock-stack.sh` の `MOCK_SUITES` に 1 行追記（一覧の SoT。
+  フルスタックランナーと PR テストゲートの両方がこの一覧を使う）
+
+## PR テストゲート（CI）
+
+`.github/workflows/test-gate.yml` が PR ごとに 単体+typecheck / 結合（実 PostgreSQL）/
+ビルド検証 / **モックモード E2E（`run-mock-stack.sh`）** を実行する。従来の deploy.yml の
+ゲート（main への push 後）より前倒しで、登録フロー等の実クリック回帰をマージ前に検知する。
+モックモード E2E は DB 不要（`nuxt generate` + 静的配信のみ）なので単独でも
+`bash e2e/run-mock-stack.sh` でローカル実行できる。
