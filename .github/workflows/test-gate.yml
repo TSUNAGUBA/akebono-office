@@ -1,0 +1,147 @@
+# PR テストゲート（改修依頼 2026-08-20）。
+# 背景: 従来テストは deploy.yml（main への push 後）でしか走らず、「登録ボタンが無反応」級の
+# クライアント配線バグはマージ前に検知できなかった。本ワークフローで PR 時点に
+# 単体 + typecheck / 結合（実 PostgreSQL）/ ビルド / モックモード E2E（実クリック）を前倒しする。
+# モック E2E のスイート一覧の SoT は e2e/run-mock-stack.sh（deploy.yml のゲートと重複しない領域を担当）。
+name: テストゲート / Test Gate (PR)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'mockup/**'
+      - 'api/**'
+      - 'shared/**'
+      - 'e2e/**'
+      - 'scripts/run-test-stage.sh'
+      - '.github/workflows/test-gate.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: 単体テスト + typecheck（mockup / api）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            mockup/package-lock.json
+            api/package-lock.json
+      - name: 依存インストール（mockup / api）
+        run: |
+          ( cd mockup && npm ci )
+          ( cd api && npm ci )
+      - name: 単体テスト（mockup/api の vitest + typecheck）
+        env:
+          STAGE_CMD: >-
+            ( cd mockup && npm run typecheck && npm run test ) &&
+            ( cd api && npm run typecheck && npm run test )
+        run: bash scripts/run-test-stage.sh "単体テスト(PR)" pr-unit-test
+      - name: テストログを保存
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-gate-logs-unit
+          path: .deploy-logs/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  integration:
+    name: 結合テスト（api + 実 PostgreSQL）
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: akebono_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+      - name: 依存インストール（api）
+        run: cd api && npm ci
+      - name: 結合テスト
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/akebono_test
+          STAGE_CMD: cd api && npm run test:integration
+        run: bash scripts/run-test-stage.sh "結合テスト(PR)" pr-integration-test
+      - name: テストログを保存
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-gate-logs-integration
+          path: .deploy-logs/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  build:
+    name: ビルド検証（mockup generate / api build）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            mockup/package-lock.json
+            api/package-lock.json
+      - name: 依存インストール（mockup / api）
+        run: |
+          ( cd mockup && npm ci )
+          ( cd api && npm ci )
+      - name: ビルド検証
+        env:
+          STAGE_CMD: >-
+            ( cd mockup && npm run generate ) &&
+            ( cd api && npm run build )
+        run: bash scripts/run-test-stage.sh "ビルド検証(PR)" pr-build-test
+      - name: テストログを保存
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-gate-logs-build
+          path: .deploy-logs/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  e2e-mock:
+    name: モックモード E2E（実クリック・登録フロー回帰）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            mockup/package-lock.json
+            e2e/package-lock.json
+      - name: 依存インストール（mockup / e2e）
+        run: |
+          ( cd mockup && npm ci )
+          ( cd e2e && npm ci )
+      - name: chromium を準備
+        run: cd e2e && npx playwright install --with-deps chromium
+      - name: モックモード E2E スイート実行
+        run: bash e2e/run-mock-stack.sh
