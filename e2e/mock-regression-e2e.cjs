@@ -37,6 +37,8 @@ async function main() {
       ['/attendance', '勤怠管理'],
       // /reports は kind 別タイトル（既定 = 日報。改修依頼 2026-08-19 第4弾で「日報・週報」から変更 → スペック追随 2026-08-20）
       ['/reports', '日報'],
+      // 新設ページ（改修依頼 2026-08-20）
+      ['/customer-context', '顧客コンテキスト'],
       ['/masters', 'マスタメンテナンス'],
       ['/status', '提供システム稼働状況'],
       ['/akebono', 'AKEBONO'],
