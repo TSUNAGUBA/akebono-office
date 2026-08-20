@@ -3606,3 +3606,70 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   → **「どちらか 1 つを選ぶ二者択一」に修正**（型は配列のまま・下位互換の説明を追記）。
 - [x] R3 = R2 修正（docblock のみ・非挙動変更）の再確認で **指摘ゼロ**（converged。原則9 = SP-8 完了）。
   typecheck / vitest 361 再走 green。mock E2E は挙動不変（コメントのみの変更）のため 90-7 の 12 チェック green を維持。
+
+## 91. 新アプリ切り出し 2026-08-20（AKEBONO Company / AKEBONO Intelligence = Hosting マルチサイトの独立フロントエンド新設）の完了条件（Definition of Done）
+
+対象: 新規 `company/`（AKEBONO Company）・`intelligence/`（AKEBONO Intelligence）・`.github/workflows/deploy.yml`・
+`scripts/setup-deploy-secrets.ps1`・`e2e/`。**API / DB / shared / mockup は無変更**（制約 = 既存 API の範囲で実現し、
+超える機能はフロント内モック）。要件 = `../phase3/company-intelligence-requirements.md` / 設計 = `../phase5/company-intelligence-design.md`。
+
+### 91-1 AKEBONO Company（company/ = F-08 AI カンパニーの切り出し独立アプリ）
+- [x] 独立 Nuxt 4 SPA を新設（mockup と同型の 3 モード: モック / dev / Firebase 認証。UI 基盤・CONVENTIONS を踏襲、ブランド色 = 紫系）。
+- [x] F-08 の全機能を移植: オフィス（アイソメトリック）→ ドロワー → タスク依頼 → 分解案 → 承認 → 自律実行 → 質問/回答 →
+  統合報告・マネージャー分担・活動ログ・AI 日次報告（冪等生成）・AI 社員/ロール管理（admin・論理削除 + 復元）。
+  API モードの SoT = 既存 `/v1/ai-company/*` + `/v1/masters/ai-roles|ai-employees`（AI 日次報告の射影は
+  `/v1/reports/daily?scope=all` の月次キャッシュ）。モックモード = `shared/domain/ai-tasks` の決定的ロジック（読み取り参照のみ・shared 無変更）。
+- [x] **トークン管理（/tokens）新設**: 当月消費の可視化（日別/AI 社員別/ティア別チャート）・月末予測（日平均 × 月日数）・
+  予算設定（月間トークン/コスト・アラート閾値・超過時動作 = 警告/ブロック・AI 社員別上限）・依頼/承認の入口ガード
+  （AKC-TOK-001/002）。設定は編集上書き + 既定値リセット（原則9.5）。
+- [x] モック境界の明示（原則 N-4）: トークン実測値 = 決定的モック値・予算設定 = localStorage（`akc.tokenBudget.v1`）である旨を
+  画面に注記 + `/tokens` にモックバッジ（mock-status.ts）。API 本実装の移行方針は requirements §5 に宣言。
+
+### 91-2 AKEBONO Intelligence（intelligence/ = 分析・インサイト・フィードバックループ）
+- [x] 独立 Nuxt 4 SPA を新設（同上の 3 モード。ブランド色 = ティール系）。
+- [x] データ読み取り層（useIntelligenceData）: 日報/週報/月報（scope=all）・サポート/営業/BP/顧客活動・月次売上・マスタを
+  既存 API から読み取り専用で取得（権限フィルタ尊重・403 は空データ = 原則4）。モックモードは決定的シード（65 日分の業務データ）。
+- [x] 分析エンジン（insight-engine.ts = 決定的ヒューリスティック・モック）: 経営/顧客/案件の 3 テーマで
+  発見事項・根拠（参照データ明細）・提案・確信度を生成。**フィードバックループ**: 完了 + 高評価 → 継続強化提案（reinforce）/
+  完了 + 低評価 → 代替提案（alternative）/ 実行中 → 重複提案の抑制（dedupe）。反映明細を必ず出力。
+- [x] 記録ストア（useIntelStore）: インサイト（アーカイブ/復元）・アクション（登録/編集/状態遷移〔完了・中止の取消含む = 原則9.5〕/
+  結果記録/フィードバック 5 段階）・サイクル（追記のみの記録系 = 原則2）。API モードは `aki.store.v1`（再シードなし = 記録保護）。
+- [x] 画面: ダッシュボード（ループ概況）/ インサイト（生成 + アクション化）/ アクション / ループ履歴（サイクル明細）/ データソース。
+  モック境界の明示: 生成 3 画面にモックバッジ + Web 検索は本実装時有効化の注記。
+
+### 91-3 デプロイ（Firebase Hosting マルチサイト）
+- [x] deploy.yml: トリガパス追加・テストゲートへ両アプリの typecheck/vitest/generate 追加・`deploy-company` /
+  `deploy-intelligence` ジョブ新設（サイト用 secret 未登録は警告付きスキップ = 原則4。`.firebaserc` はデプロイ時に
+  secrets から生成 = リポジトリへ固有値を持たない）・report 拡張。
+- [x] firebase.json（各アプリ）: `hosting.target = company / intelligence`（静的な論理名のみ）。
+- [x] setup-deploy-secrets.ps1: `-CompanyHostingSite` / `-IntelligenceHostingSite` 追加（`FIREBASE_HOSTING_SITE_*` を登録。
+  既定 CORS へ各サイトのオリジンを自動包含）。手順書 = deploy-guide.md §1-11 新設。
+
+### 91-4 ドキュメント（原則5 全件チェック）
+- [x] 新規: phase3/company-intelligence-requirements.md・phase5/company-intelligence-design.md・company/README.md・intelligence/README.md。
+- [x] 更新: deploy-guide.md（§0/§0-1/§1-3/§1-6/§1-11/§2）・production-architecture.md（§1/§3/§7/§9）・
+  README.md（ディレクトリ構造）・phase3/functional-requirements.md（F-08 相互参照）・phase4/tech-stack-decision.md・
+  cost-estimate-firebase-gcp.md（マルチサイト注記）・e2e/README.md・本ファイル（§91）。
+
+### 91-5 検証（typecheck / テスト / E2E）
+- [x] typecheck: company / intelligence とも green（nuxt typecheck）。
+- [x] 単体: company vitest 8（トークン集計・予算正規化）/ intelligence vitest 11（分析エンジン・フィードバックループ・決定性）green。
+- [x] ビルド: 両アプリ `nuxt generate` green（デプロイ成果物検証）。
+- [x] E2E（`e2e/run-new-apps-mock.sh` = モックモード生成ビルド + Playwright）: company 20 チェック / intelligence 20 チェック
+  green（依頼 → 承認 → 自動実行・予算ブロック AKC-TOK-001 + リセット取消・日次報告生成・インサイト生成のループ反映
+  〔reinforce/alternative/dedupe〕・アクション化 + フィードバック記録・サイクル明細・モバイル 375px 横スクロール無し）。
+  E2E で実バグ 1 件検出・修正（tokens 設定フォーム: type=number の v-model が数値を返し `trim()` で TypeError → string | number 両対応へ）。
+
+### 91-6 残課題（本フェーズ後 = 共通 API での本実装ほか）
+- [ ] トークン管理の API 本実装: LLM 実測トークンの記録（ai_activity_logs）+ 予算テーブル + サーバー側の受付制御
+  （現状はフロント内モック = requirements §5。ブロックは UI 層の抑止でありサーバー強制ではない）。
+- [ ] Intelligence 分析エンジンの API 本実装: Vertex AI + RAG（search_docs 基盤の拡張）+ WebSearch。
+  インサイト/アクション/サイクルのサーバー側 CRUD + localStorage からの移行手順の提供。
+- [ ] AKEBONO Office（mockup/）内 F-08「AIネイティブカンパニー」メニューの扱い: Company アプリ公開後に
+  リンク化（外部リンクカード）または段階的な撤去を判断する（今回は下位互換保護のため Office 側は無変更 = 原則7）。
+- [ ] オペレーター作業: Hosting サイト作成 + `FIREBASE_HOSTING_SITE_COMPANY` / `FIREBASE_HOSTING_SITE_INTELLIGENCE` 登録 +
+  `API_CORS_ORIGINS` へ新サイトオリジン追加 + api 再デプロイ（deploy-guide.md §1-11。未実施の間、新アプリのデプロイはスキップされる）。
+- [ ] モック境界データ（トークン予算・インサイト/アクション/サイクル）は端末ローカル保存 = 端末間同期なし（API 本実装で解消）。
+
+### 91-7 反復レビュー（原則9 = SP-8）
+- [ ] R1 = 独立ロール 2 体（コードレビュアー + システム監査官）の並行レビュー（実施後に結果を記録）。

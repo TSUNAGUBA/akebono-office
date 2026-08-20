@@ -1,0 +1,111 @@
+# AKEBONO Company / AKEBONO Intelligence 機能要件（新規アプリ切り出し）
+
+> **作成日:** 2026-08-20
+> **スコープ:** Medium フロー（Phase 3-5 圧縮 → Phase 7-8）
+> **SoT:** 本ドキュメントは新設 2 アプリの機能要件の SoT。設計は `../phase5/company-intelligence-design.md` を参照。
+> **表記の決定:** オペレーター依頼文の「AKEBNO Intelligence」は「AKEBONO Intelligence」の誤記と判断し、全成果物で AKEBONO Intelligence 表記に統一する（要オペレーター確認）。
+
+## 0. 背景と制約
+
+- 既存 AKEBONO Office（`mockup/`）から独立した 2 つの新アプリを、**フロントエンドのプロジェクトレベルで別建て**として新設する。公開 URL も別（Firebase Hosting のサイト分割）。
+- **Database（PostgreSQL）と API（`api/`）は共通・変更禁止。** 新アプリの機能は既存 API で実現できる範囲とし、それを超える機能は**フロントエンド内のモックとして実現**する（後日、共通 API にて本実装）。
+- 既存 AKEBONO Office（`mockup/`）は変更しない（下位互換の保護 = 開発原則7）。Office 内 F-08「AIネイティブカンパニー」メニューの整理（リンク化・撤去）は、AKEBONO Company 公開後の残課題として `phase7/implementation-status.md` に記録する。
+
+## 1. AKEBONO Company（`company/`）
+
+**目的:** 共通基盤に蓄積されたデータを RAG として使いながら、AI の WebSearch や推論を駆使してタスクを自律的に完遂させる。AI 使用による予期せぬコスト増大を防ぐため、トークンと予測費用の可視化・抑制・制限を行う。
+
+既存 Office の F-08「AIネイティブカンパニー」（`/ai-company`）を切り出して独立させたもの。タスク自律遂行のドメインロジックは `shared/domain/ai-tasks.ts`（API と共通）を再利用する。
+
+### FC-01 ダッシュボード（`/`）
+- KPI: 稼働 AI 社員数 / 進行中タスク数 / 当月消費トークン / 当月概算コスト（予算消化率つき）
+- アイソメトリックオフィス表示（AI 社員の状態可視化。クリックでドロワー → タスク依頼）
+- 直近の活動ログ・予算アラートバナー（FC-06 の閾値超過時）
+
+### FC-02 タスク依頼と自律遂行（既存 F-08 の踏襲）
+- AI 社員へのタスク依頼（件名・詳細・添付）→ 分解案生成 → 承認 → 自律実行 → 質問（ブロック）→ 回答で再開 → 統合報告
+- マネージャーロール（delegate 権限）による他 AI 社員への分担連携・ロールアップ
+- 低確信度・停滞・過負荷のエスカレーション起票
+- **API モード:** `/v1/ai-company/*` が SoT（分解・実行・通知はサーバー = Vertex AI → ヒューリスティック）
+- **モックモード:** `shared/domain/ai-tasks` の決定的ロジック（API フォールバックと同一）
+
+### FC-03 タスクボード（`/tasks`）
+- 4 カラムかんばん（提案中 / 実行中 / ブロック / 完了）+ タスク詳細モーダル（`?task=` ディープリンク）
+
+### FC-04 活動ログ（`/activity`）
+- 時系列タイムライン（AI 社員・タスクでフィルタ、20 件/ページ）。各行にトークン消費・概算コストを表示
+
+### FC-05 AI 日次報告（`/reports`）
+- 日付指定で AI 社員ごとの日次報告を生成（冪等 UPSERT）・閲覧
+
+### FC-06 トークン管理（`/tokens`）★新設
+- **可視化:** 当月の日別トークン消費（棒グラフ）/ AI 社員別・モデルティア別内訳（ドーナツ）/ 累計と月末予測（日平均 × 月日数の線形予測）/ コスト換算（USD）
+- **予算設定:** 月間トークン予算・月間コスト予算（USD）・アラート閾値（%）・超過時動作（警告のみ / 新規依頼をブロック）・AI 社員別 月間トークン上限
+- **抑制・制限:** 予算超過時（動作 = ブロック設定時）は新規タスク依頼・承認を UI でガードし、理由（エラーコード付き）を明示。閾値超過時は警告バナー・トースト
+- **モック宣言:** トークン集計の元データは活動ログ（既存 API `/v1/ai-company/logs` の `tokens`/`costUsd` = 決定的モック値）。予算設定・制限の SoT はフロントエンド（localStorage）であり、**共通 API 本実装までのモック**であることを画面に明示する
+- 予算設定は編集で上書き・初期値へリセット可能（取消可能性 = 原則9.5）
+
+### FC-07 AI 社員・ロール管理（`/employees` `/roles`）
+- 既存 F-08 の踏襲（admin のみ）。論理削除 + 復元（原則9.5）
+
+### FC-08 認証・権限
+- mockup と同一の 3 モード（モック / dev ヘッダ / Firebase ID トークン）。API モードは `/v1/me` によるメンバー照合、`/login` 画面
+
+## 2. AKEBONO Intelligence（`intelligence/`）
+
+**目的:** 共通基盤に蓄積されたデータを RAG として使いながら、AI の WebSearch や推論を駆使して経営・各顧客・各案件（プロジェクト）に対する分析・インサイト・提案を得る。実行したアクションとその結果を記録してフィードバックを残し、次の回転ではそのアクション実績・フィードバックも加味した分析が得られる**フィードバックループ構造**を体現する。
+
+### FI-01 ダッシュボード（`/`）
+- データカバレッジ KPI（当月の日報・週報・月報・活動ログ件数）
+- 最新分析サイクルの概要 / 未完了アクション / 最新インサイト
+
+### FI-02 データソース（`/data`）
+- 参照データの状況一覧: 日報・週報・月報・サポート活動・営業活動・ビジネスパートナー活動・顧客活動・月次売上
+- 各ソースの件数・期間・月別件数チャート・再読込
+- **API モード:** 既存 API（`/v1/reports/*` `/v1/support-activities` `/v1/sales-activities` `/v1/partner-activities` `/v1/customer-logs` `/v1/sales` `/v1/masters/*`）から読み取り専用で取得。権限（F-16）によるサーバー側フィルタをそのまま尊重し、403 は空データとして扱う（原則4）
+
+### FI-03 インサイト生成（`/insights`）
+- テーマ選択（経営 / 顧客 / 案件）+ 対象（顧客・案件）選択で分析を実行
+- 生成結果: 要約 / 根拠（参照したデータソースと件数）/ 発見事項 / 提案（各提案は「アクション化」可能）/ 確信度 / **今回の分析に反映した過去アクション・フィードバックの明細**
+- インサイトのアーカイブ・復元（原則9.5）
+- **モック宣言:** 分析エンジンはフロントエンド内の決定的ヒューリスティック（**後日、共通 API の AI 推論 + RAG + WebSearch で本実装**）。参照データは API モードでは実データ。生成物の SoT はフロントエンド（localStorage）
+
+### FI-04 アクション管理（`/actions`）
+- 提案からのアクション化・手動登録 / ステータス管理（計画 / 実行中 / 完了 / 中止）
+- 結果の記録（実施内容・結果）+ フィードバック（5 段階評価・効果コメント・次回に活かす点）
+- アーカイブ・復元（原則9.5）
+
+### FI-05 フィードバックループ（`/cycles`）
+- 分析サイクル履歴: 各サイクルの入力スナップショット（データ件数 + 反映したアクション実績・フィードバック）→ 生成インサイト → 紐づくアクション → 結果
+- 次サイクルでは完了アクションの評価に応じて提案が変化する（高評価 → 継続強化 / 低評価 → 代替案 / 実行中 → 重複提案の抑制）ことをループ図と明細で可視化
+
+### FI-06 認証・権限
+- FC-08 と同一の 3 モード構成
+
+## 3. 非機能・共通要件
+
+| # | 要件 |
+|---|------|
+| N-1 | レスポンシブ対応（モバイル = カード型・ボトムナビ。原則8） |
+| N-2 | 既存デザインシステム（CSS 変数トークン・Ui コンポーネント群）を踏襲。ブランド色のみアプリ別（Company = 紫系 / Intelligence = ティール系） |
+| N-3 | エラーコード規約 `AKC-*`（Company）/ `AKI-*`（Intelligence）。API 由来は `AKO-*` を透過 |
+| N-4 | モック実装箇所は画面上に明示（バッジ・注記）し、API 本実装までの暫定であることを利用者へ伝える |
+| N-5 | 決定的動作（`Math.random` 禁止・`~/utils/rng`）・`v-html` 禁止・JST 壁時計 = mockup の CONVENTIONS を踏襲 |
+| N-6 | 新規操作には取消フロー（論理削除・編集上書き・リセット）を用意する（原則9.5） |
+| N-7 | デプロイは既存パイプライン（deploy.yml）に統合。サイト用 secrets 未登録時は該当アプリのデプロイをスキップし、他のデプロイを止めない（原則4） |
+
+## 4. 既存 API 使用マップ（変更禁止の確認）
+
+| アプリ | 使用エンドポイント（すべて既存・無変更） |
+|--------|------------------------------------------|
+| Company | `/v1/me` `/v1/me/preferences/:key` `/v1/ai-company/tasks` `/v1/ai-company/tasks/:id/{approve,progress,block,cancel}` `/v1/ai-company/tasks/:id/answer` `/v1/ai-company/logs` `/v1/ai-company/files/:id` `/v1/ai-company/daily-reports` `/v1/ai-company/workload-check` `/v1/reports/daily?scope=all` `/v1/masters/{ai-roles,ai-employees,members}` `/v1/escalations`（POST・GET は admin） `/v1/notifications` |
+| Intelligence | `/v1/me` `/v1/reports/daily?scope=all&month=` `/v1/reports/weekly?scope=all` `/v1/reports/monthly?scope=all` `/v1/support-activities` `/v1/sales-activities` `/v1/partner-activities` `/v1/customer-logs?scope=all` `/v1/sales` `/v1/masters/{members,companies,contacts,projects,villages,business-segments}` |
+
+## 5. モック境界の宣言（後日 API 本実装の対象）
+
+| 機能 | 現在の SoT | 本実装時の移行方針 |
+|------|-----------|-------------------|
+| Company: トークン予算・制限設定 | フロント localStorage（`akc.tokenBudget.v1`） | 共通 API へ予算テーブル + 実測トークン集計を新設し、サーバー側で依頼受付を制御 |
+| Company: トークン実測値 | 既存 `ai_activity_logs` の決定的モック値 | LLM 呼び出しの実測トークン数を記録するよう API 改修 |
+| Intelligence: インサイト生成 | フロント内決定的ヒューリスティック | 共通 API に分析エンドポイント新設（Vertex AI + RAG + WebSearch。`/v1/chatbot/ask` の RAG 基盤を拡張） |
+| Intelligence: インサイト・アクション・サイクル記録 | フロント localStorage（`aki.db.v1`） | 共通 API にテーブル + CRUD 新設・localStorage からの移行手順を提供 |

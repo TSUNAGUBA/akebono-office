@@ -8,6 +8,15 @@
     - FIREBASE_SERVICE_ACCOUNT : Firebase Hosting デプロイ用サービスアカウント鍵 JSON
     - FIREBASE_PROJECT_ID      : Firebase プロジェクト ID
 
+  [company / intelligence（Firebase Hosting マルチサイト）用 — 各サイトを公開する場合に設定]
+    - FIREBASE_HOSTING_SITE_COMPANY      : AKEBONO Company のサイト ID（-CompanyHostingSite）
+    - FIREBASE_HOSTING_SITE_INTELLIGENCE : AKEBONO Intelligence のサイト ID（-IntelligenceHostingSite）
+      ※ サイトは事前に `firebase hosting:sites:create <サイトID>` で作成する（deploy-guide.md §1-11）。
+        未設定のアプリはデプロイがスキップされる（mockup・api には影響しない）。
+        API 接続にはサイトのオリジンを API_CORS_ORIGINS へ含める必要がある
+        （本スクリプトは -CompanyHostingSite / -IntelligenceHostingSite 指定時、
+         -CorsOrigins 省略なら既定 CORS に各サイトのオリジンを自動で含める）
+
   [api（Cloud Run + RDS PostgreSQL）用 — -DatabaseUrl 指定時に設定]
     - GCP_SERVICE_ACCOUNT      : Cloud Run デプロイ用サービスアカウント鍵 JSON
                                  （省略時は FIREBASE_SERVICE_ACCOUNT と同じ鍵を流用）
@@ -119,6 +128,12 @@ param(
   # 未指定の場合ドキュメント実体は DB 保管（bytea フォールバック）で動作し、署名 URL は無効
   [string]$StorageBucket = '',
 
+  # AKEBONO Company の Firebase Hosting サイト ID（例: akebono-company。未指定なら company はデプロイスキップ）
+  [string]$CompanyHostingSite = '',
+
+  # AKEBONO Intelligence の Firebase Hosting サイト ID（例: akebono-intelligence。未指定なら intelligence はデプロイスキップ）
+  [string]$IntelligenceHostingSite = '',
+
   # フロントエンドを API 接続版でビルドする場合の API URL（Cloud Run の URL。初回 api デプロイ後に設定）
   [string]$ApiBaseUrl = '',
 
@@ -191,6 +206,15 @@ Write-Step "Repository secrets を設定（mockup / Firebase Hosting）: $Repo"
 Set-RepoSecret 'FIREBASE_SERVICE_ACCOUNT' $firebaseSa.Raw
 Set-RepoSecret 'FIREBASE_PROJECT_ID' $ProjectId
 
+# ---------- company / intelligence 用 Secrets（マルチサイト。指定時のみ） ----------
+
+if ($CompanyHostingSite -or $IntelligenceHostingSite) {
+  Write-Step "Repository secrets を設定（company / intelligence / Firebase Hosting マルチサイト）: $Repo"
+  if ($CompanyHostingSite) { Set-RepoSecret 'FIREBASE_HOSTING_SITE_COMPANY' $CompanyHostingSite }
+  if ($IntelligenceHostingSite) { Set-RepoSecret 'FIREBASE_HOSTING_SITE_INTELLIGENCE' $IntelligenceHostingSite }
+  Write-Host '※ サイトが未作成の場合は `firebase hosting:sites:create <サイトID>` で作成してください（deploy-guide.md §1-11）。' -ForegroundColor Yellow
+}
+
 # ---------- api 用 Secrets（-DatabaseUrl 指定時のみ） ----------
 
 if ($DatabaseUrl) {
@@ -203,7 +227,11 @@ if ($DatabaseUrl) {
     $gcpSa = Read-ServiceAccountJson $GcpServiceAccountJsonPath
   }
   $effectiveGcpProject = if ($GcpProjectId) { $GcpProjectId } else { $ProjectId }
-  $effectiveCors = if ($CorsOrigins) { $CorsOrigins } else { "https://$effectiveGcpProject.web.app" }
+  # 既定 CORS: mockup（デフォルトサイト）+ 指定された company / intelligence サイトのオリジン
+  $defaultOrigins = @("https://$effectiveGcpProject.web.app")
+  if ($CompanyHostingSite) { $defaultOrigins += "https://$CompanyHostingSite.web.app" }
+  if ($IntelligenceHostingSite) { $defaultOrigins += "https://$IntelligenceHostingSite.web.app" }
+  $effectiveCors = if ($CorsOrigins) { $CorsOrigins } else { $defaultOrigins -join ',' }
 
   Write-Step "Repository secrets を設定（api / Cloud Run + RDS PostgreSQL）: $Repo"
   Set-RepoSecret 'GCP_SERVICE_ACCOUNT' $gcpSa.Raw
@@ -288,5 +316,5 @@ if ($TriggerDeploy) {
 }
 
 Write-Host ''
-Write-Host '完了しました。main への push（mockup/ api/ shared/ 配下の変更）または gh workflow run deploy.yml でデプロイされます。' -ForegroundColor Green
+Write-Host '完了しました。main への push（mockup/ company/ intelligence/ api/ shared/ 配下の変更）または gh workflow run deploy.yml でデプロイされます。' -ForegroundColor Green
 Write-Host 'RDS 側のネットワーク設定（Cloud Run からの到達性・SSL）は .ai-native/outputs/phase7/deploy-guide.md を参照してください。'

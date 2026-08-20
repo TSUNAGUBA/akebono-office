@@ -1,0 +1,113 @@
+/**
+ * モックデータの中核ストア（SoT。AKEBONO Office の useMockDb と同型）
+ * - 初期値は決定的シード。ユーザー操作による変更のみ localStorage に永続化。
+ * - 「デモデータをリセット」でシード状態へ戻せる（記録系も含めて初期化 = デモ専用操作）。
+ * - 各業務 composable は必ずここを経由して読み書きする（SoT → 派生の一方向）。
+ */
+import type { Ref } from 'vue'
+import { buildSeed, type MockDbShape } from '~/data/seed'
+
+const STORAGE_KEY = 'akc.mockdb.v1'
+/** シード世代。シード構造を変えたらインクリメントすると保存済みデータを破棄して再生成する */
+const SEED_VERSION = 1 // v1: AKEBONO Company 初版（AI カンパニー切り出し）
+
+interface PersistedDb {
+  version: number
+  /** 生成日（日付が変わったら履歴系の鮮度のため再シードする。デモ仕様として README に明記） */
+  seededOn: string
+  data: MockDbShape
+}
+
+function todayKey(): string {
+  return todayJst()
+}
+
+/**
+ * ロード時に確定したシード基準日。persist はこの値を保持し続ける（押し直さない）。
+ * 日付が変わった後の commit で seededOn が更新されると「日付跨ぎで再シード」の
+ * 挙動が commit タイミング依存になるため、基準日はロード時点で固定する。
+ */
+let loadedSeededOn = ''
+
+function load(): MockDbShape {
+  loadedSeededOn = todayKey()
+  if (import.meta.client) {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY)
+      if (raw) {
+        const parsed = JSON.parse(raw) as PersistedDb
+        if (parsed.version === SEED_VERSION && parsed.seededOn === todayKey() && parsed.data) {
+          loadedSeededOn = parsed.seededOn
+          // 同一バージョン内でコレクションが増えた場合に旧保存データの欠落キーをシードで補完する
+          // （欠落キーで tbl() が undefined になるクラッシュの防止 = 原則7）
+          return { ...buildSeed(), ...parsed.data }
+        }
+      }
+    } catch {
+      // 壊れた保存データは捨ててシードから再生成（非ブロッキング）
+    }
+  }
+  return buildSeed()
+}
+
+export function useMockDb() {
+  const db = useState<MockDbShape>('akc-db', () => load())
+
+  /** 永続化する。成功なら true、容量超過等で失敗したら false（呼び出し側が必要に応じて警告できる） */
+  function persist(): boolean {
+    if (!import.meta.client) return true
+    try {
+      const payload: PersistedDb = { version: SEED_VERSION, seededOn: loadedSeededOn || todayKey(), data: db.value }
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
+      return true
+    } catch {
+      // 容量超過等は非致命（モック）。ただし false を返し、呼び出し側で誤った成功表示を避けられるようにする
+      return false
+    }
+  }
+
+  /**
+   * 型付きコレクション参照。変更後は commit() を呼ぶ。
+   * API モード（NUXT_PUBLIC_API_BASE 設定時）ではマイグレーション済みコレクションのみ
+   * API ハイドレーションキャッシュを返す（SoT は API/PostgreSQL）。
+   */
+  function tbl<K extends keyof MockDbShape>(name: K): Ref<MockDbShape[K]> {
+    if (useApiMode() && isMigratedCollection(name as string)) {
+      return apiCollection(name as string) as unknown as Ref<MockDbShape[K]>
+    }
+    return computed({
+      get: () => db.value[name],
+      set: (v) => { db.value[name] = v },
+    }) as Ref<MockDbShape[K]>
+  }
+
+  /** 変更を永続化する（書込系操作の最後に必ず呼ぶ）。成功可否を返す */
+  function commit(): boolean {
+    return persist()
+  }
+
+  /** prefix-#### 形式の次 ID を採番する */
+  function nextId(name: keyof MockDbShape, prefix: string): string {
+    const rows = db.value[name] as { id?: string }[]
+    let max = 0
+    for (const r of rows) {
+      const id = r.id ?? ''
+      if (id.startsWith(prefix)) {
+        const n = Number(id.slice(prefix.length).replace(/^-/, ''))
+        if (Number.isFinite(n) && n > max) max = n
+      }
+    }
+    return `${prefix}-${String(max + 1).padStart(4, '0')}`
+  }
+
+  /** デモデータをシード状態へ戻す（設定メニューからのみ呼ぶ） */
+  function resetDemo(): void {
+    loadedSeededOn = todayKey()
+    db.value = buildSeed()
+    if (import.meta.client) {
+      try { localStorage.removeItem(STORAGE_KEY) } catch { /* noop */ }
+    }
+  }
+
+  return { db, tbl, commit, nextId, resetDemo }
+}
