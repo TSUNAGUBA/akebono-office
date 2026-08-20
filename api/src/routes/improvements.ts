@@ -867,6 +867,31 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
  * - 1 件の失敗は他の件へ波及させない（できたところまで進めて件数を報告 = 原則4）。
  */
 export async function runImprovementRevisitReminders(pool: pg.Pool): Promise<{ notified: number }> {
+  // 完全同時の重複起動での二重通知を防ぐ（report-reminders と同型の advisory lock = レビュー R2。
+  // 取れなければ他プロセスが実行中 = このランは何もしない。取得済みのときだけ解放する）
+  let lockClient: pg.PoolClient | null = null
+  let locked = false
+  try {
+    lockClient = await pool.connect()
+    const lockQ = await lockClient.query<{ locked: boolean }>(
+      `SELECT pg_try_advisory_lock(hashtext('jobs:improvement-revisit-reminders')) AS locked`)
+    locked = Boolean(lockQ.rows[0]?.locked)
+    if (!locked) return { notified: 0 }
+    return await runImprovementRevisitRemindersLocked(pool)
+  } finally {
+    if (lockClient) {
+      try {
+        if (locked) await lockClient.query(`SELECT pg_advisory_unlock(hashtext('jobs:improvement-revisit-reminders'))`)
+        lockClient.release()
+      } catch (e) {
+        // unlock 失敗時はプールへ戻すとロックが残留するため、接続ごと破棄して確実に解放する
+        lockClient.release(e as Error)
+      }
+    }
+  }
+}
+
+async function runImprovementRevisitRemindersLocked(pool: pg.Pool): Promise<{ notified: number }> {
   const today = todayJst()
   const { rows } = await pool.query<{ id: string; title: string; revisitOn: string }>(
     `SELECT id, title, revisit_on::text AS "revisitOn" FROM improvement_items

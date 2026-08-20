@@ -191,7 +191,8 @@ export function useTaskPlans() {
   async function aiReview(planId: string): Promise<Result> {
     if (isApi) {
       // 生成は Vertex AI（サーバー）。失敗時はサーバー側で同一ヒューリスティックへフォールバック
-      const res = await apiResult(() => apiFetch(`/v1/task-plans/${planId}/ai-review`, { method: 'POST' }))
+      // LLM 同期実行（サーバー予算 30s）。既定 15s では正常応答を打ち切る（レビュー R2）
+      const res = await apiResult(() => apiFetch(`/v1/task-plans/${planId}/ai-review`, { method: 'POST', timeoutMs: 60_000 }))
       if (res.ok) await loadTaskPlans(true)
       return res
     }
