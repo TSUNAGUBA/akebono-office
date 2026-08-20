@@ -144,10 +144,17 @@ async function authHeaders(): Promise<Record<string, string>> {
   return headers
 }
 
+/**
+ * 既定のリクエストタイムアウト（ms）。従来はタイムアウト無しで、API のコールドスタートや接続断のとき
+ * 「登録ボタンを押しても無反応」に見える実障害があった（改修依頼 2026-08-20 バグ修正 H4）。
+ * 応答が返らない呼び出しは中断して AKO-GEN-NET へ正規化する（長時間かかる処理は timeoutMs で個別延長）。
+ */
+const API_TIMEOUT_MS = 15_000
+
 /** API 呼び出し（{ data } を展開して返す。失敗は code 付き Error を throw） */
 export async function apiFetch<T = unknown>(
   path: string,
-  opts: { method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'; body?: unknown; query?: Record<string, string> } = {},
+  opts: { method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'; body?: unknown; query?: Record<string, string>; timeoutMs?: number } = {},
 ): Promise<T> {
   const config = apiPublicConfig()
   const headers = await authHeaders()
@@ -158,6 +165,7 @@ export async function apiFetch<T = unknown>(
       body: opts.body as Record<string, unknown> | undefined,
       query: opts.query,
       headers,
+      timeout: opts.timeoutMs ?? API_TIMEOUT_MS,
     })
     return res.data
   } catch (e) {
@@ -183,7 +191,7 @@ export async function apiFetchList<T = unknown>(
   if (params.filter) for (const [k, v] of Object.entries(params.filter)) if (v !== '') query[k] = v
   try {
     const res = await $fetch<{ data: T[]; total?: number }>(path, {
-      baseURL: config.apiBase, method: 'GET', query, headers: await authHeaders(),
+      baseURL: config.apiBase, method: 'GET', query, headers: await authHeaders(), timeout: API_TIMEOUT_MS,
     })
     const rows = res.data ?? []
     return { rows, total: res.total ?? rows.length }
@@ -307,6 +315,10 @@ const CUSTOM_COLLECTION_ENDPOINTS: Record<string, string> = {
   supportActivities: '/v1/support-activities',
   salesActivities: '/v1/sales-activities',
   partnerActivities: '/v1/partner-activities',
+  // 活動ログ（salesActivityLogs / partnerActivityLogs。改修依頼 2026-08-20）は**意図的に載せない**:
+  // 案件にネストする資源（/v1/sales-activities/:id/logs）で全量ハイドレーションに向かないため、
+  // API モードでは案件詳細ページが都度フェッチする（useActivityLogs の pageFetch/loadArchived）。
+  // モックモードのみ MockDbShape のコレクションを使う（この設計判断の詳細は useActivityLogs.ts の docblock）
 }
 
 /**
@@ -316,19 +328,19 @@ const CUSTOM_COLLECTION_ENDPOINTS: Record<string, string> = {
  */
 export async function apiWrite<T = unknown>(
   path: string,
-  opts: { method?: 'POST' | 'PATCH' | 'PUT'; body?: unknown; reload?: string[]; idempotent?: boolean } = {},
+  opts: { method?: 'POST' | 'PATCH' | 'PUT'; body?: unknown; reload?: string[]; idempotent?: boolean; timeoutMs?: number } = {},
 ): Promise<{ ok: true; id?: string; data: T } | { ok: false; error: { code: string; message: string } }> {
   const method = opts.method ?? 'POST'
   try {
     let data: T
     try {
-      data = await apiFetch<T>(path, { method, body: opts.body })
+      data = await apiFetch<T>(path, { method, body: opts.body, timeoutMs: opts.timeoutMs })
     } catch (e) {
       // 冪等な書込のみ、ネットワーク層の失敗（応答なし = AKO-GEN-NET。コールドスタートのタイムアウト・
       // 接続断等）を 1 回だけ再試行する。非冪等な新規作成（POST）は二重作成の危険があるため再試行しない。
       if (opts.idempotent && apiErrorOf(e).code === 'AKO-GEN-NET') {
         await new Promise(resolve => setTimeout(resolve, 700))
-        data = await apiFetch<T>(path, { method, body: opts.body })
+        data = await apiFetch<T>(path, { method, body: opts.body, timeoutMs: opts.timeoutMs })
       } else {
         throw e
       }

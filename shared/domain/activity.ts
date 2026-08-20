@@ -10,6 +10,7 @@ import { capCodePoints, customerLogCompanyError } from './customer-log'
 import { improvementLinksError, normalizeImprovementLinks } from './improvement'
 import { isRealDateKey } from './jst'
 import {
+  ACTIVITY_LOG_KINDS,
   PARTNER_ACTIVITY_STATUSES, PARTNER_ACTIVITY_TYPES,
   SALES_ACTIVITY_DEAL_TYPES, SALES_ACTIVITY_PHASES,
   SUPPORT_ACTIVITY_CATEGORIES, SUPPORT_ACTIVITY_PRIORITIES, SUPPORT_ACTIVITY_STATUSES,
@@ -200,7 +201,10 @@ export interface PartnerActivityInput {
   theme: string
   activityType: string
   status: string
+  /** 背景・目的（任意）。フィールド名は summary のまま維持しラベルのみ変更（改修依頼 2026-08-20） */
   summary: string
+  /** 取組内容（任意。改修依頼 2026-08-20 で追加） */
+  initiatives: string
   currentState: string
   nextAction: string
   nextActionDate: string | null
@@ -225,4 +229,128 @@ export function partnerActivityError(input: PartnerActivityInput): string | null
     ?? activityEnumError(input.status, PARTNER_ACTIVITY_STATUSES, 'ステータス')
     ?? activityDateError(input.nextActionDate, 'Next Action日', false)
     ?? activityLinksError(input.links)
+}
+
+// ---------- 活動ログ（案件ヘッダー + 活動ログ構造。改修依頼 2026-08-20） ----------
+
+export interface ActivityLogInput {
+  /** 活動日（YYYY-MM-DD・必須） */
+  loggedOn: string
+  /** 活動種別（ACTIVITY_LOG_KINDS・必須） */
+  kind: string
+  /** 件名（必須） */
+  title: string
+  /** 内容（任意・BODY_CAP） */
+  body: string
+  /** Next Action（任意） */
+  nextAction: string
+  /** Next Action日（YYYY-MM-DD・任意） */
+  nextActionDate: string | null
+  /** 参考リンク URL（複数可・任意） */
+  links: string[]
+}
+
+/**
+ * 活動ログの入力検証（宣言順 = API/モック共通の適用順。営業/パートナーの両案件で同一）。
+ * 活動日 → 活動種別 → 件名 → Next Action日 → 参考リンク
+ */
+export function activityLogError(input: ActivityLogInput): string | null {
+  return activityDateError(input.loggedOn, '活動日', true)
+    ?? activityEnumError(input.kind, ACTIVITY_LOG_KINDS, '活動種別')
+    ?? activityRequiredTextError(input.title, '件名')
+    ?? activityDateError(input.nextActionDate, 'Next Action日', false)
+    ?? activityLinksError(input.links)
+}
+
+// ---------- AI集約（活動ログの時系列集約。純ロジックの SoT） ----------
+
+/** 集約対象の案件ヘッダー情報（営業 = 商談名/フェーズ・パートナー = テーマ名/ステータスを写像） */
+export interface ActivityDigestHeader {
+  /** 案件名（商談名 / テーマ名） */
+  title: string
+  /** 現在ステータス（商談フェーズ / 活動ステータス） */
+  status: string
+  /** 案件ヘッダーの Next Action（任意。ログ側に無いときのフォールバック） */
+  nextAction?: string
+  nextActionDate?: string | null
+}
+
+/** 集約対象のログ材料（ActivityLog のサブセット。API 行 / モック行の両方が満たす） */
+export interface ActivityDigestLog {
+  loggedOn: string
+  createdAt: string
+  kind: string
+  title: string
+  body: string
+  nextAction?: string
+  nextActionDate?: string | null
+}
+
+export interface ActivityDigestResult {
+  summary: string
+  highlights: string[]
+}
+
+const fmtDate = (s: string): string => s.replace(/-/g, '/')
+
+/** ログの時系列昇順（活動日 → 登録時刻 → 件名。決定的タイブレーク = 同一入力は常に同一順） */
+export function sortLogsChronologically<T extends ActivityDigestLog>(logs: readonly T[]): T[] {
+  return [...logs].sort((a, b) =>
+    a.loggedOn.localeCompare(b.loggedOn)
+    || a.createdAt.localeCompare(b.createdAt)
+    || a.title.localeCompare(b.title))
+}
+
+/**
+ * 決定的な AI集約（LLM 無効・失敗時のフォールバック / モックの唯一のロジック。乱数禁止）。
+ * ログを時系列（活動日 → 登録時刻）昇順で走査し、期間・件数・活動種別の内訳・直近の動き・
+ * 次のアクションを「経緯 → 現在地 → 次アクション」の順の要約文へ整形する。
+ * 空ログでも壊れず「未登録」の案内文を返す（生成日時・件数の付与は呼び出し側の責務 = 純関数）。
+ */
+export function heuristicActivityDigest(
+  header: ActivityDigestHeader, logs: readonly ActivityDigestLog[],
+): ActivityDigestResult {
+  if (logs.length === 0) {
+    return {
+      summary: `「${header.title}」（ステータス: ${header.status}）の活動ログはまだ登録されていません。`
+        + '活動ログを登録してから再生成すると、経緯の集約が表示されます。',
+      highlights: [],
+    }
+  }
+  const sorted = sortLogsChronologically(logs)
+  const first = sorted[0]!
+  const last = sorted[sorted.length - 1]!
+  const period = first.loggedOn === last.loggedOn
+    ? fmtDate(first.loggedOn)
+    : `${fmtDate(first.loggedOn)}〜${fmtDate(last.loggedOn)}`
+
+  // 活動種別の内訳（プリセット順 + 未知種別は名前順 = 決定的）
+  const counts = new Map<string, number>()
+  for (const l of sorted) counts.set(l.kind, (counts.get(l.kind) ?? 0) + 1)
+  const known = ACTIVITY_LOG_KINDS.filter(k => counts.has(k)).map(k => `${k}${counts.get(k)}件`)
+  const unknown = [...counts.keys()].filter(k => !(ACTIVITY_LOG_KINDS as readonly string[]).includes(k))
+    .sort((a, b) => a.localeCompare(b)).map(k => `${k}${counts.get(k)}件`)
+  const kindSummary = [...known, ...unknown].join('・')
+
+  // 直近の動き（最新 1 件 + 内容抜粋）と次のアクション（最新ログの nextAction → 案件ヘッダーへフォールバック）
+  const excerpt = capCodePoints(last.body.trim().replace(/\s+/g, ' '), 60)
+  const latestNext = [...sorted].reverse().find(l => (l.nextAction ?? '').trim())
+  const nextAction = (latestNext?.nextAction ?? header.nextAction ?? '').trim()
+  const nextActionDate = (latestNext ? latestNext.nextActionDate : header.nextActionDate) ?? null
+
+  const summary = `「${header.title}」（ステータス: ${header.status}）は、${period}に${sorted.length}件の活動を記録しています。`
+    + `内訳は${kindSummary}。`
+    + `直近の動きは ${fmtDate(last.loggedOn)} の「${last.title}」（${last.kind}）${excerpt ? `——${excerpt}` : ''}。`
+    + (nextAction
+      ? `次のアクションは「${nextAction}」${nextActionDate ? `（${fmtDate(nextActionDate)} 予定）` : ''}です。`
+      : '次のアクションは未設定です。')
+
+  const highlights = [
+    `期間: ${period}（全${sorted.length}件）`,
+    `内訳: ${kindSummary}`,
+    `直近: ${fmtDate(last.loggedOn)} ${last.title}（${last.kind}）`,
+    nextAction ? `次のアクション: ${nextAction}${nextActionDate ? `（${fmtDate(nextActionDate)}）` : ''}` : '',
+  ].filter(Boolean).slice(0, 5)
+
+  return { summary, highlights }
 }

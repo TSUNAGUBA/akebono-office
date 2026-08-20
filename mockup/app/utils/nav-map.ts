@@ -123,6 +123,8 @@ export const NAV_MAP: Record<string, NavMapEntry> = {
       CUSTOMERS,
     ],
   },
+  // 案件詳細（/sales-activity/<id>。案件ヘッダー + 活動ログ構造 = 2026-08-20）→ 親は案件一覧
+  '/sales-activity/': { prefix: true, parent: { to: '/sales-activity', label: '営業活動' } },
   '/partner-activity': {
     parent: HOME,
     related: [
@@ -130,6 +132,7 @@ export const NAV_MAP: Record<string, NavMapEntry> = {
       { to: '/customer-log', label: '顧客活動' },
     ],
   },
+  '/partner-activity/': { prefix: true, parent: { to: '/partner-activity', label: 'ビジネスパートナー活動' } },
   '/workflow': {
     parent: HOME,
     related: [

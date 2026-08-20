@@ -6,6 +6,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   activityDateError, activityEnumError, activityTimeError,
+  activityLogError, type ActivityLogInput,
+  type ActivityDigestLog,
+  heuristicActivityDigest,
   partnerActivityError, type PartnerActivityInput,
   salesActivityError, salesAmountError, salesProbabilityError, type SalesActivityInput,
   SALES_AMOUNT_MAX,
@@ -75,6 +78,7 @@ const partnerBase: PartnerActivityInput = {
   activityType: '共創',
   status: '進行中',
   summary: '',
+  initiatives: '',
   currentState: '',
   nextAction: '3者MTG',
   nextActionDate: '2026-09-07',
@@ -186,5 +190,66 @@ describe('partnerActivityError（ビジネスパートナー活動。改修依�
   it('Next Action日は実在日・参考リンクは http(s)', () => {
     expect(partnerActivityError({ ...partnerBase, nextActionDate: '2026-02-30' })).toBe('Next Action日が正しくありません')
     expect(partnerActivityError({ ...partnerBase, links: ['ftp://a'] })).not.toBeNull()
+  })
+  it('取組内容（initiatives）は任意 = 空でも可（改修依頼 2026-08-20）', () => {
+    expect(partnerActivityError({ ...partnerBase, initiatives: '' })).toBeNull()
+    expect(partnerActivityError({ ...partnerBase, initiatives: 'データ連携PoCの共同実施' })).toBeNull()
+  })
+})
+
+// ---------- 活動ログ + AI集約（案件ヘッダー + 活動ログ構造。改修依頼 2026-08-20・Units 2+4） ----------
+
+const logBase: ActivityLogInput = {
+  loggedOn: '2026-08-20',
+  kind: '訪問',
+  title: '初回訪問・要件ヒアリング',
+  body: '要件を確認した',
+  nextAction: '',
+  nextActionDate: null,
+  links: [],
+}
+
+describe('activityLogError（活動ログ。営業/パートナー共通の検証）', () => {
+  it('正常入力は null（内容・Next Action は任意）', () => {
+    expect(activityLogError(logBase)).toBeNull()
+    expect(activityLogError({ ...logBase, body: '' })).toBeNull()
+  })
+  it('必須項目（活動日・活動種別・件名）と形式', () => {
+    expect(activityLogError({ ...logBase, loggedOn: '' })).toBe('活動日を選択してください')
+    expect(activityLogError({ ...logBase, loggedOn: '2026-02-30' })).toBe('活動日が正しくありません')
+    expect(activityLogError({ ...logBase, kind: '' })).toBe('活動種別を選択してください')
+    expect(activityLogError({ ...logBase, kind: 'テレパシー' })).toBe('活動種別の値が正しくありません')
+    expect(activityLogError({ ...logBase, title: ' ' })).toBe('件名を入力してください')
+    expect(activityLogError({ ...logBase, nextActionDate: '2026-13-01' })).toBe('Next Action日が正しくありません')
+    expect(activityLogError({ ...logBase, links: ['ftp://a'] })).not.toBeNull()
+  })
+})
+
+describe('heuristicActivityDigest（AI集約のフォールバック = LLM 無効環境の唯一のロジック）', () => {
+  const header = { title: '在庫管理DXプロジェクト', status: '提案' }
+  const mk = (over: Partial<ActivityDigestLog>): ActivityDigestLog => ({
+    loggedOn: '2026-08-01', createdAt: '2026-08-01T10:00:00+09:00',
+    kind: '訪問', title: '訪問A', body: '本文', nextAction: '', nextActionDate: null,
+    ...over,
+  })
+
+  it('決定的（同一入力 = 同一出力・入力順序に依存しない）で時系列を考慮する', () => {
+    const logs = [
+      mk({ loggedOn: '2026-08-01', title: '初回訪問' }),
+      mk({ loggedOn: '2026-08-10', title: 'デモ実施', kind: 'Web会議', nextAction: '見積書の提出', nextActionDate: '2026-08-25' }),
+      mk({ loggedOn: '2026-08-05', title: '電話フォロー', kind: '電話' }),
+    ]
+    const a = heuristicActivityDigest(header, logs)
+    const b = heuristicActivityDigest(header, [logs[2]!, logs[0]!, logs[1]!])
+    expect(a).toEqual(b)
+    expect(a.summary).toContain('2026/08/01〜2026/08/10')
+    expect(a.summary).toContain('デモ実施') // 最新の活動が「直近の動き」
+    expect(a.summary).toContain('見積書の提出') // 最新の nextAction
+  })
+
+  it('空ログは「未登録」の案内文（生成は失敗しない = 原則4）', () => {
+    const d = heuristicActivityDigest(header, [])
+    expect(d.summary).toContain('まだ登録されていません')
+    expect(d.highlights).toEqual([])
   })
 })

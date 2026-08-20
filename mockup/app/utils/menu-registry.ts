@@ -50,8 +50,8 @@ export const MENU_CARDS: Record<MenuArea, MenuCardDef[]> = {
     { id: 'minutes', title: '議事録', description: '会議の記録を蓄積。全員が参照でき AI の参照対象', icon: 'NotebookPen', to: '/minutes' },
     { id: 'customer-log', title: '顧客活動', description: 'いつ・どの顧客と・どんな活動をしたかを記録（全員の記録を閲覧可）。AI の参照対象（自分の記録）', icon: 'MessageSquare', to: '/customer-log' },
     { id: 'support-activity', title: 'サポート活動', description: '顧客サポートの受付〜解決の記録。対応・原因・解決と改善ナレッジのタネ', icon: 'Headset', to: '/support-activity' },
-    { id: 'sales-activity', title: '営業活動', description: '商談の履歴と進捗。フェーズ・金額・受注確度・Next Action の管理', icon: 'Handshake', to: '/sales-activity' },
-    { id: 'partner-activity', title: 'ビジネスパートナー活動', description: 'パートナー連携（紹介・共創・案件支援）の記録。案件化したら商談へリンク', icon: 'Users', to: '/partner-activity' },
+    { id: 'sales-activity', title: '営業活動', description: '商談を案件として管理し活動ログを記録。AI集約でフェーズ・金額・Next Action と経緯を確認', icon: 'Handshake', to: '/sales-activity' },
+    { id: 'partner-activity', title: 'ビジネスパートナー活動', description: 'パートナー連携テーマを案件として管理し活動ログを記録。案件化したら商談へリンク', icon: 'Users', to: '/partner-activity' },
     { id: 'workflow', title: '稟議', description: '稟議の申請・承認（職務権限マトリクス準拠）', icon: 'GitPullRequestArrow', to: '/workflow' },
     { id: 'ai-company', title: 'AIネイティブカンパニー', description: 'AI 社員の執務室。タスク依頼と活動モニタリング', icon: 'Building2', to: '/ai-company', featureToggle: 'aiCompany' },
     // メディア分析（media）は独立したメディアチャンネル（任意で業態連携）としてトップメニュー化（2026-08-03）。

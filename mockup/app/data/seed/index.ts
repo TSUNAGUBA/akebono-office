@@ -3,6 +3,7 @@
  * コレクション名は MockDbShape のキーと 1:1。
  */
 import type {
+  ActivityLog,
   AiActivityLog, AiEmployee, AiRole, AiTask, AkebonoWish, ApprovalLog,
   AppConfigItem, AppNotification, AttendanceFixRequest, AttendanceRoute, AttendanceRule, AuditLog, CalendarEvent, ChatMessage, ChatSession, DirectRequest, PermissionRule,
   CodeMasterItem, Company, CompanyRelation, Contact, ContactRelation,
@@ -38,7 +39,7 @@ import * as decision from './decision'
 import * as support from './support'
 import * as misc from './misc'
 import { buildCustomerLogs } from './customer-logs'
-import { buildPartnerActivities, buildSalesActivities, buildSupportActivities } from './activities'
+import { buildPartnerActivities, buildPartnerActivityLogs, buildSalesActivities, buildSalesActivityLogs, buildSupportActivities } from './activities'
 import * as media from './media'
 import { buildCalendarEvents, buildLeaveGrants, buildPunchHistory, buildSalesMonthly, buildSpecialLeaveGrants, buildTaskPlans, buildUptimeDaily } from './history'
 
@@ -55,6 +56,13 @@ export interface MockDbShape {
   supportActivities: SupportActivity[]
   salesActivities: SalesActivity[]
   partnerActivities: PartnerActivity[]
+  /**
+   * 活動ログ（案件ヘッダー = 営業/パートナー活動にぶら下がる時系列の記録。改修依頼 2026-08-20・Units 2+4）。
+   * モックモード専用のコレクション。API モードはネスト資源（/v1/xxx-activities/:id/logs）を都度フェッチし、
+   * このコレクションキャッシュは使わない（設計判断の詳細は useActivityLogs.ts の docblock）
+   */
+  salesActivityLogs: ActivityLog[]
+  partnerActivityLogs: ActivityLog[]
   companies: Company[]
   contacts: Contact[]
   relationTypes: RelationType[]
@@ -189,6 +197,8 @@ export function buildSeed(): MockDbShape {
     supportActivities: buildSupportActivities(),
     salesActivities: buildSalesActivities(),
     partnerActivities: buildPartnerActivities(),
+    salesActivityLogs: buildSalesActivityLogs(),
+    partnerActivityLogs: buildPartnerActivityLogs(),
     companies: [...core.seedCompanies, ...akebono.seedAkebonoCompanies],
     contacts: core.seedContacts,
     relationTypes: core.seedRelationTypes,
