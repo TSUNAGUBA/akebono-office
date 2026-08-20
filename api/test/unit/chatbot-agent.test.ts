@@ -63,6 +63,12 @@ describe('splitSuggestions（回答末尾の提案行）', () => {
     expect(splitSuggestions('回答です。\n**提案: A | B**').suggestions).toEqual(['A', 'B'])
   })
 
+  it('素のラベル + 候補太字でも開き ** を食わない（A** のような鏡像の壊れ候補を作らない = レビュー R3）', () => {
+    expect(splitSuggestions('回答です。\n提案: **A** | **B**').suggestions).toEqual(['A', 'B'])
+    expect(splitSuggestions('回答です。\n提案: **A | B**').suggestions).toEqual(['A', 'B'])
+    expect(splitSuggestions('回答です。\n- **提案: A | B**').suggestions).toEqual(['A', 'B'])
+  })
+
   it('リスト形（- 提案:）は | 区切りを含む場合のみ抽出する（正当な箇条書きの本文を削らない = レビュー R2）', () => {
     const listPair = splitSuggestions('改善点は次のとおりです。\n- 課題: 承認の遅延\n- 提案: 経費精算の自動化')
     expect(listPair.content).toBe('改善点は次のとおりです。\n- 課題: 承認の遅延\n- 提案: 経費精算の自動化')

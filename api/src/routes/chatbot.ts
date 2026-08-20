@@ -1007,14 +1007,19 @@ const AGENT_SYSTEM = (userName: string, today: string): string =>
  */
 export function splitSuggestions(text: string): { content: string; suggestions: string[] } {
   const lines = text.trimEnd().split('\n')
-  // 行全体の太字（**提案: A | B**）は対称に剥がしてから解釈する。内部に * を含む行
-  // （**提案:** **A** 等 = 別々の太字ペア）を誤って剥がさないよう、内部が * なしの場合のみ
-  const last = (lines[lines.length - 1] ?? '').trim().replace(/^\*\*([^*]+)\*\*$/, '$1')
-  const m = /^(?:[-*]\s+)?(?:\*\*)?提案(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*(.+)$/.exec(last)
+  // 太字は対称ペアのみ剥がす（内部に * を含む文字列は別々のペアの可能性があるため触らない）。
+  // ** の片側だけを食う正規表現を置かないことが要点 = 壊れた候補（`**B`・`A**`）を作らない（レビュー R2/R3）
+  const unbold = (s: string): string => s.replace(/^\*\*([^*]+)\*\*$/, '$1')
+  const lm = /^([-*]\s+)?(.*)$/.exec((lines[lines.length - 1] ?? '').trim())!
+  const isList = lm[1] !== undefined
+  const last = unbold(lm[2]!)
+  // ラベル形は 3 択（**提案:** / **提案**: / 提案:）。素のラベルではコロン直後の ** を食わない
+  // = ラベルの閉じ ** としてのみ消費する（R3: 第 1 候補の開き ** を誤って食わない）
+  const m = /^(?:\*\*提案\s*[:：]\s*\*\*|\*\*提案\*\*\s*[:：]|提案\s*[:：])\s*(.+)$/.exec(last)
   if (!m) return { content: text.trim(), suggestions: [] }
-  if (/^[-*]\s/.test(last) && !/[|｜]/.test(m[1] ?? '')) return { content: text.trim(), suggestions: [] }
-  const suggestions = (m[1] ?? '').split(/[|｜]/)
-    .map(s => s.trim().replace(/^\*\*([^*]+)\*\*$/, '$1').trim())
+  if (isList && !/[|｜]/.test(m[1] ?? '')) return { content: text.trim(), suggestions: [] }
+  const suggestions = unbold((m[1] ?? '').trim()).split(/[|｜]/)
+    .map(s => unbold(s.trim()).trim())
     .filter(Boolean).slice(0, 3)
   return { content: lines.slice(0, -1).join('\n').trim(), suggestions }
 }
