@@ -302,7 +302,14 @@ Phase B（設定系）・Phase C（記録系 + 売上軸）に続く**最終フ�
   二重表示防止: セクションへ割当済みの業態はセクション配置側に、未割当業態は専用「AKEBONO 業務（業態別）」
   セクションに出す（`planDashboardCards`。純関数・テスト済み）。
 
-### 1.11 個人別チャット連携（`user_chat_links` / `chat_oauth_states`。0075 = 改修依頼 2026-08-20）
+### 1.11 顧客コンテキスト（`customer_contexts` / `customer_context_notes`。0076 = 改修依頼 2026-08-20）
+
+| テーブル | 区分 | 主な列 | 備考 |
+|---|---|---|---|
+| `customer_contexts` | 設定系（1社1行 upsert・**定性情報の SoT**） | `id`／`company_id`（UNIQUE REFERENCES companies）／`vision`（ビジョン）／`challenges`（経営課題）／`strategy_notes`（補足）／`updated_by_member_id`・`updated_by_name`（更新者スナップショット）／`active`／`created_at`・`updated_at` | チーム共有（全員閲覧・編集可）。**定量情報は保存しない = 各記録系（案件/活動ログ/顧客活動/サポート活動）からのライブ導出**という設計判断。AI リサーチの反映は upsert + research ノート自動追記の同一トランザクション |
+| `customer_context_notes` | 記録系（追記 + 論理取消） | `id`／`company_id`／`member_id`・`member_name`（スナップショット）／`kind`（`note`/`research`）／`body`／`payload` jsonb（research: `{ sources, before, revertedAt? }` = **反映前の値を保存し「反映を取り消す」で復元・取消済みは revertedAt 追記でノートは archive しない = 監査可能な取消（原則9.5）**）／`archived_at`（メモの論理取消）／`created_at` | Memo（時系列・20件ページング）と AI リサーチ履歴を兼ねる |
+
+### 1.12 個人別チャット連携（`user_chat_links` / `chat_oauth_states`。0075 = 改修依頼 2026-08-20）
 
 | テーブル | 区分 | 主な列 | 備考 |
 |---|---|---|---|

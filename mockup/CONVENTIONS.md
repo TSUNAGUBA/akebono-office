@@ -156,6 +156,12 @@ const alog = useActivityLogs('sales' /* or 'partner' */)  // logsOf / archivedOf
 // 顧客(会社)コンボボックスの名寄せ・新規登録（モック側の共通実装。API 側は api/src/lib/company-resolve）
 const { lookupCompany, createCompany } = useCompanyResolve()
 
+// 顧客コンテキスト（/customer-context。改修依頼 2026-08-20。定性情報 = 1社1行 upsert〔customer_contexts 0076〕・
+// Memo/リサーチ履歴 = 追記 + 論理取消〔customer_context_notes〕。AI リサーチ = 候補リスト化（API = grounded search /
+// mock = 決定的デモ）→ 採用 → AI 構築（LLM → shared/domain/customer-context のヒューリスティックへフォールバック）→
+// 反映（payload.before 保存）→ 「反映を取り消す」で復元 = 原則9.5。機能キー customer-context）
+const ctx = useCustomerContext()  // contextOf / notesOf / archivedNotesOf / saveContext / addNote / archiveNote / restoreNote / research / buildProposal / applyResearch / revertResearch / refresh
+
 // 休暇（F-04-5/9。種別別残数。付与は管理者/人事のみ・同日同種別はスキップ=冪等）
 const leave = useLeave()   // balance(memberId, leaveTypeId?) / request / decide / grant / bulkGrant / activeLeaveTypes
 

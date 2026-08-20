@@ -451,6 +451,11 @@ akebonoCards: ComputedRef<MenuCard[]>
 | AKO-NCH-003 | 未連携チャネルへの操作（テスト送信・解除等。400） | ✅ |
 | AKO-NCH-004 | チャネルテスト送信の失敗（外部 API エラー） | ✅ |
 | AKO-NCH-005 | 通知マトリクスの形式不正（400） | ✅ |
+| AKO-CTX-001 | 顧客コンテキストの入力不正（定性情報/メモ/リサーチソース。400。改修依頼 2026-08-20） | ✅ |
+| AKO-CTX-002 | 顧客コンテキストの対象会社なし（404） | ✅ |
+| AKO-CTX-003 | 顧客コンテキストのメモなし（404） | ✅ |
+| AKO-CTX-004 | 反映取消の復元データなし（research 以外・payload.before 欠落。400） | ✅ |
+| AKO-CTX-090 | 顧客コンテキストのモック保存容量不足（commit 失敗 + ロールバック。モック専用） | — |
 
 **改善要望（F-42。`/v1/improvements`。投稿は認証済み全員可・管理系は `canManageImprovements` = deny-by-default + 管理者常時可）:**
 
