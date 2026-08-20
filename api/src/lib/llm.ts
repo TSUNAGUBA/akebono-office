@@ -117,11 +117,16 @@ export async function generateGroundedText(
 
 // ---------- function calling（エージェント型チャット = 改修依頼 2026-08-20） ----------
 
-/** ツール宣言（Vertex functionDeclarations の 1 件。parameters は OpenAPI 形式） */
+/**
+ * ツール宣言（Vertex functionDeclarations の 1 件。parameters は OpenAPI 形式）。
+ * 引数なしツールは parameters を**省略**する（`{type:'object', properties:{}}` は Gemini/Vertex の
+ * スキーマ検証が「OBJECT は non-empty properties」を要求して 400 になる報告が多数 = レビュー R1 MAJOR-1。
+ * 省略は Google 公式の推奨ワークアラウンドと一致）
+ */
 export interface ToolDeclaration {
   name: string
   description: string
-  parameters: Record<string, unknown>
+  parameters?: Record<string, unknown>
 }
 
 /** 会話コンテンツ（Vertex contents の 1 件。パーツはループ内部で組み立てる） */
@@ -145,7 +150,7 @@ export interface ToolLoopRequest {
 }
 
 export type ToolLoopResult =
-  | { kind: 'ok'; text: string; toolCalls: { name: string; args: Record<string, unknown> }[] }
+  | { kind: 'ok'; text: string; toolCalls: { name: string; args: Record<string, unknown>; result: string }[] }
   | { kind: 'disabled' } // LLM 無効環境（未設定・メタデータサーバーなし）
   | { kind: 'error' }    // 設定済みだが API エラー（呼び出し側は正直なエラー応答へ）
 
@@ -167,6 +172,29 @@ export function functionCallsOf(parts: VertexPart[] | undefined): { name: string
 }
 
 /**
+ * 会話履歴の正規化（純関数・単体テスト対象。レビュー R1 MAJOR-2）。
+ * Gemini は「contents の先頭は user」「user/model の交互」を検証するモデル/バージョンがあり、
+ * 履歴ウィンドウの切詰め（LIMIT 12）や通信断補償の質問二重追記で崩れると 400 →
+ * セッションが恒久的にエラー化する。先頭の model ターンを捨て、同ロール連続は結合して防御する
+ */
+export function normalizeAgentMessages(messages: AgentMessage[]): AgentMessage[] {
+  const out: AgentMessage[] = []
+  for (const m of messages) {
+    if (out.length === 0 && m.role !== 'user') continue // 先頭は user から
+    const prev = out[out.length - 1]
+    if (prev && prev.role === m.role) {
+      prev.text = `${prev.text}\n${m.text}` // 同ロール連続は 1 ターンへ結合（交互制約の維持）
+    } else {
+      out.push({ ...m })
+    }
+  }
+  return out
+}
+
+/** 1 ラウンドで実行するツール呼び出しの上限（超過分は実行せずエラー応答を返す = 1:1 の応答対応は維持） */
+const MAX_CALLS_PER_ROUND = 5
+
+/**
  * function calling のエージェントループ（エージェント型チャット = 改修依頼 2026-08-20）。
  * モデルが必要と判断したツールを実行して functionResponse で返し、テキスト回答が出るまで繰り返す。
  * - ラウンド上限・時間予算の超過時は toolConfig: NONE でツールを禁止し、収集済みの情報で最終回答させる
@@ -178,9 +206,10 @@ export async function runToolLoop(env: Env, req: ToolLoopRequest): Promise<ToolL
   const token = await accessToken()
   if (!token) return { kind: 'disabled' }
   const maxRounds = req.maxRounds ?? 6
-  const deadline = Date.now() + (req.deadlineMs ?? 75_000)
-  const contents: VertexContent[] = req.messages.map(m => ({ role: m.role, parts: [{ text: m.text }] }))
-  const toolCalls: { name: string; args: Record<string, unknown> }[] = []
+  const deadline = Date.now() + (req.deadlineMs ?? 55_000)
+  const contents: VertexContent[] = normalizeAgentMessages(req.messages)
+    .map(m => ({ role: m.role, parts: [{ text: m.text }] }))
+  const toolCalls: { name: string; args: Record<string, unknown>; result: string }[] = []
   for (let round = 0; ; round++) {
     const finalForced = round >= maxRounds || Date.now() > deadline
     let body: { candidates?: { content?: { role?: string; parts?: VertexPart[] } }[] }
@@ -214,17 +243,22 @@ export async function runToolLoop(env: Env, req: ToolLoopRequest): Promise<ToolL
       if (!text) return { kind: 'error' }
       return { kind: 'ok', text, toolCalls }
     }
-    // モデルのターン（functionCall）を履歴へ → 各ツールを実行して functionResponse を返す
+    // モデルのターン（functionCall）を履歴へ → 各ツールを実行して functionResponse を返す。
+    // 上限超過分は実行せずエラー応答（functionCall と functionResponse の 1:1 対応は維持）
     contents.push({ role: 'model', parts })
     const responses: VertexPart[] = []
-    for (const call of calls) {
-      toolCalls.push(call)
+    for (const [i, call] of calls.entries()) {
       let result: string
-      try {
-        result = await req.execute(call.name, call.args)
-      } catch (e) {
-        result = `エラー: ツールの実行に失敗しました（${(e as Error).message}）`
+      if (i >= MAX_CALLS_PER_ROUND) {
+        result = `エラー: 1 回のツール呼び出しが多すぎます（最大 ${MAX_CALLS_PER_ROUND} 件。必要なら次のラウンドで呼んでください）`
+      } else {
+        try {
+          result = await req.execute(call.name, call.args)
+        } catch (e) {
+          result = `エラー: ツールの実行に失敗しました（${(e as Error).message}）`
+        }
       }
+      toolCalls.push({ ...call, result })
       responses.push({ functionResponse: { name: call.name, response: { result } } })
     }
     contents.push({ role: 'user', parts: responses })

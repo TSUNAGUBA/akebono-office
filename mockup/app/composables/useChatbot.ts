@@ -4,9 +4,10 @@
  *   マルチターン（API モードはサーバーが直近履歴を LLM へ渡す）。過去セッションの再開・新規開始に対応
  * - SoT: API モード = chat_sessions / chat_messages（DB）。モックモード = chatSessions / chatMessages（localStorage）
  * - 応答: API モードは **エージェント応答（改修依頼 2026-08-20: サーバー側 function calling ループ =
- *   1 会話ごとに意図解釈 → 必要データをツールで取得 → 回答）**。fallback: true は LLM 無効環境のみで、
- *   そのときだけ決定的ルーティングへ縮退する（縮退応答もセッションへ追記して履歴を忠実に保つ。
- *   確信度フォールバックはサーバー側で廃止 = 本番で無関係な定型応答が出る経路はない）
+ *   1 会話ごとに意図解釈 → 必要データをツールで取得 → 回答）**。決定的ルーティングへ縮退するのは
+ *   **fallback: true（LLM 無効環境）のみ**（縮退応答もセッションへ追記して履歴を忠実に保つ）。
+ *   確信度フォールバックはサーバー側で廃止し、通信断・タイムアウト・サーバーエラーは正直なエラー文で
+ *   応答する = 無関係な定型応答が出る経路を作らない（レビュー R1 で通信断経路も塞いだ）
  * - 擬似ストリーミング: 30-50 文字ずつ setInterval で流す。unmount 時は finalize() で確定保存
  */
 import { findCompanyIn, SELF_COMPANY_PATTERN } from '../../../shared/domain/name-match'
@@ -227,9 +228,10 @@ export function useChatbot() {
 
   /**
    * 質問を送信する（user メッセージ即保存 → 応答をストリーミング）。
-   * API モードは LLM 一次応答（POST /v1/chatbot/ask = セッション履歴つきマルチターン）を試み、
-   * fallback 指示・通信失敗時は決定的ルーティング応答へ縮退する。縮退応答もセッションへ
-   * 追記して履歴を忠実に保つ（POST /sessions/:id/messages・非ブロッキング）
+   * API モードはエージェント応答（POST /v1/chatbot/ask = セッション履歴つきマルチターン + ツール取得ループ）。
+   * fallback 指示（LLM 無効環境）のみ決定的ルーティング応答へ縮退し、通信失敗・タイムアウトは
+   * 正直なエラー文で応答する。いずれもセッションへ追記して履歴を忠実に保つ
+   * （POST /sessions/:id/messages・非ブロッキング）
    */
   async function send(rawText: string): Promise<void> {
     const text = [...rawText.trim()].slice(0, 2000).join('')
@@ -249,11 +251,12 @@ export function useChatbot() {
     if (isApi) {
       isStreaming.value = true // LLM 応答待ちの間も入力を抑止し「考え中」を表示
       try {
-        // LLM 応答（Web 調査併用時は長い）。既定 15s では正常応答を打ち切り、質問二重追記の補償パスを
-        // 恒常的に踏んでしまう（レビュー R1 MAJOR）ため、サーバー側予算（30〜45s×直列）に合わせて延長する
+        // エージェント応答はツール取得ループを伴い長引きうる。サーバー側予算（ツールラウンド締切 55s +
+        // 最終ラウンド fetch ≤30s + ツール実行）を確実に包含する値にする（レビュー R1: クライアントが先に
+        // 切れると質問二重追記 + 回答二重化の複合障害になる）
         const res = await apiFetch<{
           fallback: boolean; sessionId?: string; content?: string; sources?: string[]; suggestions?: string[]
-        }>('/v1/chatbot/ask', { method: 'POST', body: { question: text, sessionId: currentSessionId.value }, timeoutMs: 90_000 })
+        }>('/v1/chatbot/ask', { method: 'POST', body: { question: text, sessionId: currentSessionId.value }, timeoutMs: 150_000 })
         if (res.sessionId) currentSessionId.value = res.sessionId
         if (!res.fallback && res.content) {
           startStream({
@@ -289,8 +292,24 @@ export function useChatbot() {
             method: 'POST', body: { role: 'user', content: text },
           }).catch(() => { /* 追記失敗は表示を妨げない */ })
         }
+        // 通信断・タイムアウト・サーバーエラーは正直に伝える（決定的ルーティングへは落とさない =
+        // 定型応答は fallback: true〔LLM 無効環境〕のみ。レビュー R1: 無関係な定型応答の本番再発防止）
+        const failAns: BotAnswer = {
+          content: '申し訳ありません。通信エラーまたは応答のタイムアウトが発生しました。時間をおいてもう一度お試しください。',
+          sources: [],
+          suggestions: [ESCALATE_SUGGESTION, ...INITIAL_SUGGESTIONS.slice(0, 1)],
+        }
+        if (currentSessionId.value) {
+          void apiFetch(`/v1/chatbot/sessions/${currentSessionId.value}/messages`, {
+            method: 'POST',
+            body: { content: failAns.content, sources: failAns.sources, suggestions: failAns.suggestions },
+          }).catch(() => { /* 追記失敗は表示を妨げない */ })
+        }
+        startStream(failAns)
+        return
       }
-      // フォールバック: 決定的応答をセッションへ追記（履歴の忠実性。失敗しても表示は継続 = 非ブロッキング）。
+      // フォールバック（fallback: true = LLM 無効環境のみ）: 決定的応答をセッションへ追記
+      // （履歴の忠実性。失敗しても表示は継続 = 非ブロッキング）。
       // ルーティングが参照するマスタキャッシュ（会社・業界・関係・PJ・ナレッジ等）は遅延ロードのため、
       // 初回質問ではロード未完了で照合が空振りし「回答できません」になる競合があった
       // （オペレーター報告 2026-07-18 #2 の実原因の一つ）。ロード完了を待ってから判定する

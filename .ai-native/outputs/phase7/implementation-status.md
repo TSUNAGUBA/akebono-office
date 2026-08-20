@@ -4000,3 +4000,23 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   fallback: true・セッション管理・履歴は既存テストで挙動不変を担保。
 - [x] ドキュメント: functional-requirements F-09-2 / api-design useChatbot / useChatbot docblock を
   エージェント応答へ更新。
+
+### 96-3 反復レビュー（原則9）
+- [x] R1 = 独立レビュー（コードレビュアー + システム監査官の並行実施）: **MAJOR 2**
+  ①空 properties のツール宣言（`{type:'object', properties:{}}`）を Vertex/Gemini のスキーマ検証が
+  400 で拒否する報告多数 = 本番で /ask 全滅の恐れ → **引数なしツールは parameters を省略**
+  （ToolDeclaration.parameters を optional 化。公式推奨ワークアラウンドと一致）
+  ②contents の「先頭 user・user/model 交互」制約違反（履歴ウィンドウ切詰め・通信断補償の質問二重追記で
+  発生）→ セッション恒久エラー化 → **normalizeAgentMessages で防御的正規化**（先頭 model 破棄・同ロール結合）。
+  **MINOR 系**: タイムアウト予算の破綻（サーバー最悪 135 秒 > クライアント 90 秒 → 質問二重追記 + 定型応答の
+  本番再発経路）→ deadlineMs 55 秒 + クライアント 150 秒へ整合、**通信断・タイムアウト・5xx も正直な
+  エラー文へ**（決定的定型ルーティングは fallback: true = LLM 無効環境のみに完全限定）/
+  api-design.md の同一行内新旧矛盾・/ask ルートコメント・useChatbot docblock の旧記述 → 全て更新 /
+  runToolLoop 制御フロー未テスト → fetch スタブの単体テスト追加（宣言形状・NONE 強制・並列 call の 1:1 応答・
+  呼び出し上限・例外継続・error/disabled 分類）。
+  **NIT 系**: 1 ラウンドの functionCall 上限なし → 5 件で切詰め（超過分はエラー応答で 1:1 維持）/
+  空応答・エラーのツールが sources に載る → 実データを返したツールのみへ / 回答が提案行のみ → 本文フォールバック /
+  必須引数の欠落 → 実行せずモデルへエラー / エスカレーション導線の消失 → システム指示で
+  「回答できない場合は候補に『管理者に確認する』を含める」（クライアントの起票チップがそのまま作動）。
+  egress 制限で Vertex 公式 docs の裏取り不能のため、①②はエコシステムの障害報告で裏取り +
+  防御実装 + 形状の単体テスト固定で対応（§94-2 と同じ設計判断）。
