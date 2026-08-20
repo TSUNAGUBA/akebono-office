@@ -40,23 +40,51 @@ function pick(tag: ImprovementRequestTag): void {
   if (tag === selected.value && props.modelValue.length === 1) return
   emit('update:modelValue', [tag])
 }
+
+// WAI-ARIA ラジオグループの作法（UiRadioCards と同じ = 原則3）: Tab はグループへ 1 ストップ
+// （roving tabindex = 選択中のみ tabindex 0）・矢印キーで選択を移動する。
+const groupEl = ref<HTMLElement | null>(null)
+
+/** roving tabindex: 選択中タグのみ Tab ストップにする */
+function tabindexOf(tag: ImprovementRequestTag): number {
+  return tag === selected.value ? 0 : -1
+}
+
+/** 矢印キーで前後のタグへ移動して選択 + フォーカス（radiogroup の標準操作） */
+function onKeydown(e: KeyboardEvent, index: number): void {
+  const delta = e.key === 'ArrowRight' || e.key === 'ArrowDown'
+    ? 1
+    : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0
+  if (delta === 0) return
+  e.preventDefault()
+  const n = IMPROVEMENT_REQUEST_TAGS.length
+  if (n === 0) return
+  const nextIdx = (index + delta + n) % n
+  const next = IMPROVEMENT_REQUEST_TAGS[nextIdx]!
+  pick(next)
+  const btns = groupEl.value?.querySelectorAll<HTMLButtonElement>('[role="radio"]')
+  btns?.[nextIdx]?.focus()
+}
 </script>
 
 <template>
   <div
+    ref="groupEl"
     class="inline-flex rounded-full border border-line-strong bg-surface p-0.5"
     role="radiogroup"
     :aria-label="ariaLabel"
   >
     <button
-      v-for="t in IMPROVEMENT_REQUEST_TAGS"
+      v-for="(t, i) in IMPROVEMENT_REQUEST_TAGS"
       :key="t"
       type="button"
       role="radio"
       :aria-checked="selected === t"
+      :tabindex="tabindexOf(t)"
       class="min-h-8 rounded-full px-4 py-1 text-xs font-semibold transition-colors"
       :class="selected === t ? 'bg-brand text-white' : 'text-sub hover:text-ink'"
       @click="pick(t)"
+      @keydown="onKeydown($event, i)"
     >
       {{ IMPROVEMENT_REQUEST_TAG_META[t].label }}
     </button>

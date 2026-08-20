@@ -9,7 +9,7 @@
  * 業務種別）を登録できる。送信後は同じモーダル内に「取り消す」導線を出す（投稿者本人の取消 = 原則9.5）。
  * ファイル取込・マークダウンプレビュー・Meet 連携など /poipoi の高度な機能はページ側に残す（quick 投稿に特化）。
  */
-import { RotateCcw, Send, Sprout } from 'lucide-vue-next'
+import { RotateCcw, Send, StickyNote } from 'lucide-vue-next'
 import type { Company, Project, WorkCategory } from '~/types/domain'
 
 const notes = useNotes('poipoi')
@@ -100,7 +100,7 @@ async function undo(): Promise<void> {
     aria-label="改善のタネを投げ込む"
     @click="openModal"
   >
-    <Sprout class="h-4 w-4" aria-hidden="true" />
+    <StickyNote class="h-4 w-4" aria-hidden="true" />
     <span class="hidden lg:inline">改善のタネ</span>
   </button>
 

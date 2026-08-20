@@ -184,8 +184,9 @@ export function clusterTargetRequests<T extends { itemId?: string | null; archiv
  */
 export type ImprovementRequestTag = 'brainstorm' | 'entrust'
 
-// 表示順の SoT（UiChipSelect はこの配列順で描画）。改修依頼 2026-08-19 第4弾: 左から「お任せ」「壁打ち」。
-// 投稿フォームの既定選択は「お任せ」（entrust）= ImprovementSubmit 側で初期値を設定
+// 表示順の SoT（ImprovementsTagToggle・TagBadges はこの配列順で描画）。改修依頼 2026-08-19 第4弾: 左から
+// 「お任せ」「壁打ち」。投稿フォームの既定選択は「お任せ」（entrust）= ImprovementSubmit 側で初期値を設定。
+// 改修依頼 2026-08-20: タグは二者択一トグル（どちらか 1 つのみ）= 保存値は常に要素数 1 の配列
 export const IMPROVEMENT_REQUEST_TAGS: ImprovementRequestTag[] = ['entrust', 'brainstorm']
 
 /** タグの表示メタ（label・トーン・意味）。ラベルの SoT はここ。tone は UI の Tone 値と対応 */
