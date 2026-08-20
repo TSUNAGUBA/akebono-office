@@ -3707,6 +3707,13 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   findings 文言の SoT 導出の決定性・記録と実測（typecheck / vitest 12+11 実走 green・E2E 20+20 チェック数照合）の
   一致・R2 指摘 6 件の反映漏れゼロを確認し、**新規・未解消の指摘 0 件 = converged（原則9 = SP-8 完了）**。
 
+### 91-8 デプロイ障害対応（マージ後・2026-08-20）
+- [x] **api デプロイ失敗の修正**: マルチサイト化で `API_CORS_ORIGINS` が複数オリジンのカンマ区切りになり、
+  `gcloud run deploy --set-env-vars`（カンマ = 対の区切り）が `Bad syntax for dict arg` で失敗
+  （実障害: main の #136 マージ後デプロイ）。区切りを `^@^` 構文（gcloud topic escaping）で `@` へ変更し、
+  値にカンマを含む env を渡せるようにした（deploy.yml の api デプロイステップのみ・他ステップに
+  --set-env-vars は無いことを確認）。
+
 ## 92. 改修依頼 2026-08-20（9 改修単位 = 顧客関係グラフ/営業・BP活動再編/週報マトリクス/BP項目/顧客コンテキスト/日報リマインド/通知連携/その他トグル/改善要望4改修）の完了条件（Definition of Done）
 
 対象: mockup（Nuxt 4 SPA）+ api（Hono/PostgreSQL）+ shared/domain の全レイヤー。マイグレーション 0073〜0076。

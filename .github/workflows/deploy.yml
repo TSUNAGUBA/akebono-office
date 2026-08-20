@@ -580,15 +580,19 @@ jobs:
           # コスト最優先なら 0 に設定（アイドル時ゼロスケール = 従来。ただし初回リクエストにコールドスタート遅延が戻る）
           CLOUD_RUN_MIN_INSTANCES: ${{ vars.CLOUD_RUN_MIN_INSTANCES }}
         run: |
-          ENV_VARS="AUTH_MODE=firebase,FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID},DB_SSL=${DB_SSL:-require},CORS_ORIGINS=${API_CORS_ORIGINS},VERTEX_PROJECT_ID=${PROJECT},VERTEX_LOCATION=${VERTEX_LOCATION:-global},VERTEX_MODEL=${VERTEX_MODEL:-gemini-2.5-flash}"
+          # 区切りは gcloud の ^@^ 構文（gcloud topic escaping）で「@」にする（デプロイ障害 2026-08-20）:
+          # マルチサイト化（PR #137）で API_CORS_ORIGINS が複数オリジンのカンマ区切りになり、
+          # 既定のカンマ区切りでは CORS_ORIGINS の値が key=value 対として誤解釈され
+          # 「Bad syntax for dict arg」でデプロイが失敗するため（値にカンマを含められる区切りへ変更）
+          ENV_VARS="AUTH_MODE=firebase@FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID}@DB_SSL=${DB_SSL:-require}@CORS_ORIGINS=${API_CORS_ORIGINS}@VERTEX_PROJECT_ID=${PROJECT}@VERTEX_LOCATION=${VERTEX_LOCATION:-global}@VERTEX_MODEL=${VERTEX_MODEL:-gemini-2.5-flash}"
           # ドキュメント保管（バッチ7l）。未設定 = DB bytea フォールバック
           if [ -n "$STORAGE_BUCKET" ]; then
-            ENV_VARS="$ENV_VARS,STORAGE_BUCKET=${STORAGE_BUCKET}"
+            ENV_VARS="$ENV_VARS@STORAGE_BUCKET=${STORAGE_BUCKET}"
           fi
           SECRET_FLAGS="DATABASE_URL=$SERVICE-database-url:latest"
           # カレンダー連携（secrets 登録済みのときのみ有効化）
           if [ "${CALENDAR_READY:-false}" = "true" ] && [ -n "$GOOGLE_OAUTH_CLIENT_ID" ]; then
-            ENV_VARS="$ENV_VARS,GOOGLE_OAUTH_CLIENT_ID=${GOOGLE_OAUTH_CLIENT_ID}"
+            ENV_VARS="$ENV_VARS@GOOGLE_OAUTH_CLIENT_ID=${GOOGLE_OAUTH_CLIENT_ID}"
             SECRET_FLAGS="$SECRET_FLAGS,GOOGLE_OAUTH_CLIENT_SECRET=$SERVICE-google-oauth-secret:latest,TOKEN_ENCRYPTION_KEY=$SERVICE-token-encryption-key:latest"
           fi
           # --no-cpu-throttling: AI タスクの承認後自動実行（バッチ7i = HTTP 応答後のバックグラウンド
@@ -610,7 +614,7 @@ jobs:
             --max-instances 3 \
             --no-cpu-throttling \
             --cpu-boost \
-            --set-env-vars "$ENV_VARS" \
+            --set-env-vars "^@^$ENV_VARS" \
             --set-secrets "$SECRET_FLAGS"
           echo "デプロイ完了: $(gcloud run services describe "$SERVICE" --region "$REGION" --format='value(status.url)')"
 
