@@ -12,6 +12,11 @@ async function render(source: string): Promise<string> {
   return renderToString(createSSRApp({ render: () => h(UiMarkdown, { source }) }))
 }
 
+/** routes（アプリ内リンク許可リスト）付きの描画（AI チャット対応 2026-08-20） */
+async function renderWith(source: string, routes?: Record<string, string>): Promise<string> {
+  return renderToString(createSSRApp({ render: () => h(UiMarkdown, { source, routes }) }))
+}
+
 describe('UiMarkdown コンポーネント描画（XSS 安全性・リンク属性）', () => {
   it('リンクは href / target=_blank / rel=noopener noreferrer 付きの <a> になる', async () => {
     const html = await render('[社内](https://example.com/x)')
@@ -41,5 +46,24 @@ describe('UiMarkdown コンポーネント描画（XSS 安全性・リンク属�
     expect(html).toContain('<strong>太字</strong>')
     expect(html).toContain('<code')
     expect(html).toContain('start="3"')
+  })
+})
+
+describe('テーブル + ルートリンク描画（AI チャット対応 2026-08-20）', () => {
+  it('パイプテーブルは横スクロールラッパー付きの <table> で描画される', async () => {
+    const html = await renderWith('| 項目 | 値 |\n|---|---|\n| 有給 | 10 日 |')
+    expect(html).toContain('overflow-x-auto')
+    expect(html).toContain('<table')
+    expect(html).toContain('<th')
+    expect(html).toContain('>有給</td>')
+  })
+
+  it('routes 指定時は許可パスがハッシュリンク（href="#<path>"）になり、未指定時はプレーンのまま', async () => {
+    const withRoutes = await renderWith('詳細は /attendance を確認', { '/attendance': '勤怠管理' })
+    expect(withRoutes).toContain('href="#/attendance"')
+    expect(withRoutes).toContain('>勤怠管理</a>')
+    const without = await renderWith('詳細は /attendance を確認')
+    expect(without).not.toContain('<a')
+    expect(without).toContain('/attendance')
   })
 })

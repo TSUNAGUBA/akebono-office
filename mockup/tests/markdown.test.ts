@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseInline, parseMarkdown } from '../app/utils/markdown'
+import { linkifyRoutes, parseInline, parseMarkdown } from '../app/utils/markdown'
 
 describe('markdown パーサ（バッチ7e: 安全なサブセット）', () => {
   it('見出し・箇条書き・番号リスト・引用・水平線を分解する', () => {
@@ -68,5 +68,60 @@ describe('markdown パーサ（バッチ7e: 安全なサブセット）', () => 
       t: 'ul', items: [[{ t: 'text', text: '有効' }], [{ t: 'text', text: '有効2' }]],
     })
     expect(parseMarkdown('- \n本文').map(b => b.t)).toEqual(['paragraph'])
+  })
+})
+
+describe('パイプテーブル + ルートリンク化（AI チャット対応 2026-08-20）', () => {
+  it('ヘッダー + 区切り行 + 本体行をテーブルに分解する（外側パイプ除去・セル trim・インライン記法対応）', () => {
+    const blocks = parseMarkdown('| 項目 | **値** |\n|---|:---:|\n| 有給 | 10 日 |\n| 残業 | `5h` |')
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0]).toMatchObject({
+      t: 'table',
+      header: [[{ t: 'text', text: '項目' }], [{ t: 'bold', text: '値' }]],
+      rows: [
+        [[{ t: 'text', text: '有給' }], [{ t: 'text', text: '10 日' }]],
+        [[{ t: 'text', text: '残業' }], [{ t: 'code', text: '5h' }]],
+      ],
+    })
+  })
+
+  it('区切り行のないパイプ行はテーブルにせずパラグラフへフェイルオープン（本文中の | を壊さない）', () => {
+    expect(parseMarkdown('| これは表ではない |').map(b => b.t)).toEqual(['paragraph'])
+    expect(parseMarkdown('A | B のような本文').map(b => b.t)).toEqual(['paragraph'])
+  })
+
+  it('パラグラフ中にテーブルが始まったらパラグラフを区切ってテーブルとして分解する', () => {
+    const blocks = parseMarkdown('前置きの文\n| a | b |\n|---|---|\n| 1 | 2 |')
+    expect(blocks.map(b => b.t)).toEqual(['paragraph', 'table'])
+  })
+
+  it('linkifyRoutes は許可リストのパスだけを route ノード化する（最長一致・非破壊・リスト/表の中も対象）', () => {
+    const routes = { '/attendance': '勤怠管理', '/support/documents': 'ドキュメント管理' }
+    const src = parseMarkdown('- 詳細は /attendance を確認\n\n/support/documents と /unknown はどうか')
+    const linked = linkifyRoutes(src, routes)
+    expect(linked[0]).toMatchObject({
+      t: 'ul',
+      items: [[
+        { t: 'text', text: '詳細は ' },
+        { t: 'route', path: '/attendance', label: '勤怠管理' },
+        { t: 'text', text: ' を確認' },
+      ]],
+    })
+    expect(linked[1]).toMatchObject({
+      t: 'paragraph',
+      lines: [[
+        { t: 'route', path: '/support/documents', label: 'ドキュメント管理' },
+        { t: 'text', text: ' と /unknown はどうか' },
+      ]],
+    })
+    // 非破壊: 元の AST は変わらない
+    expect(src[0]).toMatchObject({ t: 'ul', items: [[{ t: 'text', text: '詳細は /attendance を確認' }]] })
+  })
+
+  it('linkifyRoutes はコードブロック・インラインコードの中はリンク化しない', () => {
+    const routes = { '/attendance': '勤怠管理' }
+    const linked = linkifyRoutes(parseMarkdown('```\n/attendance\n```\n\n`/attendance` はコード'), routes)
+    expect(linked[0]).toMatchObject({ t: 'codeblock', code: '/attendance' })
+    expect(linked[1]).toMatchObject({ t: 'paragraph', lines: [[{ t: 'code', text: '/attendance' }, { t: 'text', text: ' はコード' }]] })
   })
 })

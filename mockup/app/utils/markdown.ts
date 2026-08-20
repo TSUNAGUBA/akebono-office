@@ -6,7 +6,8 @@
  * - v-html を使わない（chatbot.vue と同じ規約）。HTML はエスケープではなく「そもそも生成しない」。
  *   生の HTML タグ（<script> 等）はただのテキストとして扱われるため XSS が構造的に成立しない
  * - 対応記法: 見出し(#〜####)・箇条書き(- または アスタリスク)・番号リスト(1.)・引用(>)・水平線(---)・
- *   コードブロック(```)・インラインコード(`)・強調(太字のみ)・リンク([t](https://…))
+ *   コードブロック(```)・インラインコード(`)・強調(太字のみ)・リンク([t](https://…))・
+ *   パイプテーブル(| a | b | + 区切り行。AI チャットの表回答対応 2026-08-20)
  * - 単独アスタリスクの斜体は**非対応**: `3*4 と 5*6` のような既存プレーン文で孤立した * 同士が
  *   クロスマッチして意図しない整形が起きるため（表示劣化 > 記法価値の判断。太字 ** は誤爆しない）
  * - リンクは http(s) のみ許可（javascript: 等のスキームは平文のまま）
@@ -17,6 +18,8 @@ export type MdInline =
   | { t: 'bold'; text: string }
   | { t: 'code'; text: string }
   | { t: 'link'; text: string; href: string }
+  /** アプリ内ルートリンク（linkifyRoutes が生成。パーサ自身は生成しない = 呼び出し側の許可リスト限定） */
+  | { t: 'route'; path: string; label: string }
 
 export type MdBlock =
   | { t: 'heading'; level: 1 | 2 | 3 | 4; inline: MdInline[] }
@@ -26,6 +29,8 @@ export type MdBlock =
   | { t: 'quote'; lines: MdInline[][] }
   | { t: 'codeblock'; code: string }
   | { t: 'hr' }
+  /** パイプテーブル（GFM 形式: ヘッダー行 + 区切り行 |---|。チャットボット対応 2026-08-20） */
+  | { t: 'table'; header: MdInline[][]; rows: MdInline[][][] }
 
 /** インライン記法の分解（太字 → コード → リンクの優先順で非貪欲に走査） */
 export function parseInline(src: string): MdInline[] {
@@ -50,11 +55,24 @@ function listItem(text: string): MdInline[] | null {
   return text.trim() === '' ? null : parseInline(text)
 }
 
+/** パイプテーブルの行か（`| a | b |`。先頭パイプ必須 = 本文中の `a | b` を誤爆させない） */
+const tableRowRe = /^\s*\|.*\|\s*$/
+/** テーブルの区切り行か（`|---|:---:|`。- : | 空白のみで構成され - を含む） */
+const tableSepRe = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/
+
+/** テーブル行をセル文字列へ分解（外側のパイプを除去して | で分割。\| エスケープは非対応 = サブセット） */
+function tableCells(line: string): string[] {
+  return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim())
+}
+
 /** ブロック分解。未知の行はパラグラフとして素通し（フェイルオープン = 情報を落とさない） */
 export function parseMarkdown(src: string): MdBlock[] {
   const lines = src.replace(/\r\n/g, '\n').split('\n')
   const blocks: MdBlock[] = []
   let i = 0
+  /** テーブルの開始位置か（ヘッダー行 + 直後に区切り行。区切りがなければパラグラフへフェイルオープン） */
+  const isTableStart = (at: number): boolean =>
+    tableRowRe.test(lines[at] ?? '') && tableSepRe.test(lines[at + 1] ?? '')
   while (i < lines.length) {
     const line = lines[i]!
     // コードブロック
@@ -112,6 +130,18 @@ export function parseMarkdown(src: string): MdBlock[] {
       if (items.length > 0) blocks.push({ t: 'ol', items, start })
       continue
     }
+    // パイプテーブル（AI チャットの表回答対応 2026-08-20。ヘッダー + 区切り行の 2 行が揃うときのみ）
+    if (isTableStart(i)) {
+      const header = tableCells(line).map(parseInline)
+      i += 2 // ヘッダー + 区切り行
+      const rows: MdInline[][][] = []
+      while (i < lines.length && tableRowRe.test(lines[i]!) && !tableSepRe.test(lines[i]!)) {
+        rows.push(tableCells(lines[i]!).map(parseInline))
+        i++
+      }
+      blocks.push({ t: 'table', header, rows })
+      continue
+    }
     // 引用
     if (/^\s*>\s?/.test(line)) {
       const qlines: MdInline[][] = []
@@ -122,11 +152,12 @@ export function parseMarkdown(src: string): MdBlock[] {
       blocks.push({ t: 'quote', lines: qlines })
       continue
     }
-    // パラグラフ（連続する通常行をまとめ、行ごとに改行を保持）
+    // パラグラフ（連続する通常行をまとめ、行ごとに改行を保持。テーブル開始行では区切る）
     const plines: MdInline[][] = []
     while (
       i < lines.length && lines[i]!.trim() !== ''
       && !/^```|^\s*[-*]\s+|^\s*\d+[.)]\s+|^\s*>\s?|^#{1,6}\s+|^\s*(---+|\*\*\*+)\s*$/.test(lines[i]!)
+      && !isTableStart(i)
     ) {
       plines.push(parseInline(lines[i]!))
       i++
@@ -134,4 +165,30 @@ export function parseMarkdown(src: string): MdBlock[] {
     blocks.push({ t: 'paragraph', lines: plines })
   }
   return blocks
+}
+
+/**
+ * アプリ内ルートのリンク化（AI チャット対応 2026-08-20）。text ノード中の許可リスト一致部分を
+ * route ノードへ分解する（パーサ自身は内部リンクを生成しない = 呼び出し側が渡した paths のみ。
+ * 最長一致優先 = /support/documents が /support より先に照合される）。非破壊（新しい AST を返す）
+ */
+export function linkifyRoutes(blocks: MdBlock[], routes: Record<string, string>): MdBlock[] {
+  const paths = Object.keys(routes).sort((a, b) => b.length - a.length)
+  if (paths.length === 0) return blocks
+  const re = new RegExp(`(${paths.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`)).join('|')})`, 'g')
+  const mapInline = (nodes: MdInline[]): MdInline[] => nodes.flatMap((n) => {
+    if (n.t !== 'text') return [n]
+    return n.text.split(re).filter(p => p !== '').map((p): MdInline => {
+      const label = routes[p]
+      return label !== undefined ? { t: 'route', path: p, label } : { t: 'text', text: p }
+    })
+  })
+  const mapLines = (ls: MdInline[][]): MdInline[][] => ls.map(mapInline)
+  return blocks.map((b) => {
+    if (b.t === 'heading') return { ...b, inline: mapInline(b.inline) }
+    if (b.t === 'paragraph' || b.t === 'quote') return { ...b, lines: mapLines(b.lines) }
+    if (b.t === 'ul' || b.t === 'ol') return { ...b, items: mapLines(b.items) }
+    if (b.t === 'table') return { ...b, header: mapLines(b.header), rows: b.rows.map(mapLines) }
+    return b
+  })
 }

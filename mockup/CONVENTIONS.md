@@ -249,7 +249,7 @@ const imp = useImprovements()  // submit（body + 対象ページ〔既定=開�
 | `WidgetsWeeklyInsight` | initialWeekStart。週次 AI インサイト（**保存済みを表示・「生成/再生成」で保管 = バッチ7j**。あなた向けインサイト（個別）+ 集計 KPI + チャート + エグゼクティブサマリー/SWOT/リスク/アクション。集計は前日（asOf）まで基準。週ナビ + 生成日時表示。バッチ7g/7j） |
 | `WidgetsRelationGraph` | nodes / edges / selectedId + `@select`。**力学レイアウト（force-directed）の関係グラフ**（顧客関係(会社)/(人) で共用。改修依頼 2026-08-20 で円環配置から刷新）。ズーム（ホイール/ピンチ/ボタン）・パン・バブルドラッグ（物理追従）・選択で隣接エッジをハイライト。決定的シミュレーション（`~/utils/rng` シード・純ロジック SoT = `utils/force-graph.ts`）・reduced-motion は同期整定・375px はコンテナ内描画 |
 | `ReportsWeeklySubmissionMatrix` | props なし。週報のメンバー×週 提出状況マトリクス（直近 4/8/12 週切替・右端 = 今週・済/下書き/未のラベル併記・提出セルはドロワー詳細 + 既読化・sticky 名列 + 横スクロール。改修依頼 2026-08-20。週列 SoT = `utils/report-weeks.ts`） |
-| `UiMarkdown` | source。安全なサブセットのマークダウン描画（utils/markdown.ts の AST を VNode 直接生成 = v-html 不使用。見出し・リスト・引用・コード・強調・http(s) リンクのみ。バッチ7e） |
+| `UiMarkdown` | source, routes?。安全なサブセットのマークダウン描画（utils/markdown.ts の AST を VNode 直接生成 = v-html 不使用。見出し・リスト・引用・コード・強調・http(s) リンク・**パイプテーブル**。routes = アプリ内パス → 表示名の許可リスト〔一致部分をハッシュリンク化。AI チャット対応 2026-08-20〕。バッチ7e） |
 | `MastersPermissionMatrix` | 権限表モード（props なし = ruleCrud を内部利用）。ページ > 機能 > 項目 の 3 階層ツリー × ロール/役職/個人（バッチ7m）。セルは常に可否を表示（明示 = 濃色 / 上位一括・既定値 = 薄色破線）・クリックで反転・引き継ぎ値へ戻すと明示ルール解除。表ヘッダは内部スクロール + sticky |
 | `SettingsMenuCategoryEditor` | props なし。メニューカテゴリのカスタマイズ（F-13-8。エリア切替 + カテゴリ CRUD/並び替え/カード割当 + 既定に戻す。バッチ7h。編集 UI は `UiMenuSectionEditor` 共用・ダッシュボードタブは外部リンク/AKEBONO も割当候補 + 3 階層はレイアウトへ案内） |
 | `UiMenuSectionEditor` | modelValue(MenuCategoryDef[]) / cardOptions / emptyHint。メニューセクション編集の共通 UI（追加・削除・改名・並び替え・カード割当 = UiMultiCombobox。**セクション内カードの並び替え = D&D + ↑/↓ ボタン〔cardIds 配列順 = 表示順〕2026-08-17**）。保存/リセット/スコープは呼び出し側（#25。原則3。MenuCategoryEditor と DashboardSectionEditor が共用） |
