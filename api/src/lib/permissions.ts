@@ -66,9 +66,8 @@ const PATH_FEATURES: [string, string][] = [
   // 週報・月報は独立機能キー（改修依頼 2026-08-20 第2バッチ）。/v1/reports より前に置き最長一致
   // （first-match）で解決する。判定時は resolveFeatureResource が旧 'reports' ルールへの互換
   // フォールバックを解決する（新キーのルール未設定の間は従来の reports 設定を継承）。
-  // 設計判断: /v1/reports/reads（既読 id のメタデータのみ・kind パラメータで日/週/月が混在）と
-  // /v1/reports/remind（日報リマインド専用）は従来どおり 'reports' に残す
-  // （reads は本文を持たない既読管理の横断面・remind は日報の催促のみを発行するため）。
+  // 設計判断: /v1/reports/remind（日報リマインド専用）は従来どおり 'reports' に残す。
+  // /v1/reports/reads は下記のとおりパスガード対象外 + ハンドラ内 kind 別判定（レビュー R1 で変更）。
   ['/v1/reports/weekly-insight', 'weekly-report'],
   ['/v1/reports/weekly', 'weekly-report'],
   ['/v1/reports/monthly', 'monthly-report'],
