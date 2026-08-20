@@ -45,4 +45,15 @@ describe('splitSuggestions（回答末尾の提案行）', () => {
     expect(mid.content).toBe('提案: を含む説明\n最終回答です。')
     expect(mid.suggestions).toEqual([])
   })
+
+  it('Markdown 装飾された提案行（**提案:** / - 提案:）も抽出する（指示違反への耐性 = レビュー R1）', () => {
+    const bold = splitSuggestions('回答です。\n**提案:** 今月の勤怠は？ | 休暇種別は？')
+    expect(bold.content).toBe('回答です。')
+    expect(bold.suggestions).toEqual(['今月の勤怠は？', '休暇種別は？'])
+    const boldLabel = splitSuggestions('回答です。\n**提案**: A | B')
+    expect(boldLabel.suggestions).toEqual(['A', 'B'])
+    const listed = splitSuggestions('回答です。\n- 提案: A | B')
+    expect(listed.content).toBe('回答です。')
+    expect(listed.suggestions).toEqual(['A', 'B'])
+  })
 })

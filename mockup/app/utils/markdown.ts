@@ -57,7 +57,11 @@ function listItem(text: string): MdInline[] | null {
 
 /** パイプテーブルの行か（`| a | b |`。先頭パイプ必須 = 本文中の `a | b` を誤爆させない） */
 const tableRowRe = /^\s*\|.*\|\s*$/
-/** テーブルの区切り行か（`|---|:---:|`。- : | 空白のみで構成され - を含む） */
+/**
+ * テーブルの区切り行か（`|---|:---:|`。- : | 空白のみで構成され - を含む）。
+ * パイプなしの `---` にもマッチするため「`| a |` の直後の水平線」は区切り行として消費され
+ * ヘッダーのみの表になる（GFM = GitHub の描画と同じ挙動。認識済みの仕様 = レビュー R1）
+ */
 const tableSepRe = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/
 
 /** テーブル行をセル文字列へ分解（外側のパイプを除去して | で分割。\| エスケープは非対応 = サブセット） */
@@ -130,13 +134,18 @@ export function parseMarkdown(src: string): MdBlock[] {
       if (items.length > 0) blocks.push({ t: 'ol', items, start })
       continue
     }
-    // パイプテーブル（AI チャットの表回答対応 2026-08-20。ヘッダー + 区切り行の 2 行が揃うときのみ）
+    // パイプテーブル（AI チャットの表回答対応 2026-08-20。ヘッダー + 区切り行の 2 行が揃うときのみ）。
+    // 本体中のダッシュ行（| - | - | = 空セルのプレースホルダ）は通常セルとして扱う（GFM と同じ。
+    // 区切り行と見なすのはヘッダー直後の 1 行のみ = レビュー R1: 表の途中分断を作らない）
     if (isTableStart(i)) {
       const header = tableCells(line).map(parseInline)
       i += 2 // ヘッダー + 区切り行
       const rows: MdInline[][][] = []
-      while (i < lines.length && tableRowRe.test(lines[i]!) && !tableSepRe.test(lines[i]!)) {
-        rows.push(tableCells(lines[i]!).map(parseInline))
+      while (i < lines.length && tableRowRe.test(lines[i]!)) {
+        // セル数はヘッダーに合わせて正規化（不足は空セル・超過は切詰め = 罫線のガタつき防止。GFM と同じ）
+        const cells = tableCells(lines[i]!).slice(0, header.length)
+        while (cells.length < header.length) cells.push('')
+        rows.push(cells.map(parseInline))
         i++
       }
       blocks.push({ t: 'table', header, rows })

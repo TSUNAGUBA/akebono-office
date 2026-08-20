@@ -63,7 +63,7 @@ function render(): VNode {
       // 横に長い表は表内スクロール（モバイル対応 = 原則8。吹き出し・カードの幅を壊さない）
       return h('div', { class: 'overflow-x-auto' }, h('table', { class: 'w-full border-collapse text-[12px]' }, [
         h('thead', h('tr', b.header.map(cell =>
-          h('th', { class: 'border border-line bg-surface-soft px-2 py-1 text-left font-semibold' }, inline(cell))))),
+          h('th', { scope: 'col', class: 'border border-line bg-surface-soft px-2 py-1 text-left font-semibold' }, inline(cell))))),
         h('tbody', b.rows.map(row => h('tr', row.map(cell =>
           h('td', { class: 'border border-line px-2 py-1 align-top' }, inline(cell)))))),
       ]))

@@ -95,6 +95,30 @@ describe('パイプテーブル + ルートリンク化（AI チャット対応 
     expect(blocks.map(b => b.t)).toEqual(['paragraph', 'table'])
   })
 
+  it('本体中のダッシュ行（| - | - |）は通常セルとして扱い表を分断しない（レビュー R1 回帰）', () => {
+    const blocks = parseMarkdown('| a | b |\n|---|---|\n| 1 | 2 |\n| - | - |\n| 3 | 4 |')
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0]).toMatchObject({
+      t: 'table',
+      rows: [
+        [[{ t: 'text', text: '1' }], [{ t: 'text', text: '2' }]],
+        [[{ t: 'text', text: '-' }], [{ t: 'text', text: '-' }]],
+        [[{ t: 'text', text: '3' }], [{ t: 'text', text: '4' }]],
+      ],
+    })
+  })
+
+  it('本体行のセル数はヘッダーに正規化する（不足は空セル・超過は切詰め = GFM と同じ）', () => {
+    const blocks = parseMarkdown('| a | b |\n|---|---|\n| 1 |\n| 2 | 3 | 4 |')
+    expect(blocks[0]).toMatchObject({
+      t: 'table',
+      rows: [
+        [[{ t: 'text', text: '1' }], []],
+        [[{ t: 'text', text: '2' }], [{ t: 'text', text: '3' }]],
+      ],
+    })
+  })
+
   it('linkifyRoutes は許可リストのパスだけを route ノード化する（最長一致・非破壊・リスト/表の中も対象）', () => {
     const routes = { '/attendance': '勤怠管理', '/support/documents': 'ドキュメント管理' }
     const src = parseMarkdown('- 詳細は /attendance を確認\n\n/support/documents と /unknown はどうか')

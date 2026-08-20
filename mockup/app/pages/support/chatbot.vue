@@ -226,7 +226,9 @@ onBeforeUnmount(() => {
               <div class="min-w-0 max-w-[85%] md:max-w-[72%]">
                 <div class="break-words rounded-xl rounded-bl-sm border border-line bg-surface-soft px-3 py-2 text-[13px] leading-relaxed">
                   <span v-if="streamingText === ''" class="text-muted">回答を生成中…</span>
-                  <!-- ストリーミング中もマークダウン描画（書きかけの記法はパーサがフェイルオープンで平文表示） -->
+                  <!-- ストリーミング中もマークダウン描画（書きかけの記法はパーサがフェイルオープンで平文表示）。
+                       カーソルはブロック描画の都合で本文の下の独立行に出る（末尾追従はブロック構造上
+                       困難なため生成中インジケータとしてこの位置を意図 = レビュー R1 で確認済み） -->
                   <UiMarkdown v-else :source="streamingText" :routes="LINK_LABELS" />
                   <span class="typing-caret" aria-hidden="true" />
                 </div>
