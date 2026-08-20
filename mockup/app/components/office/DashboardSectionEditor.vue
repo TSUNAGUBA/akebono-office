@@ -10,7 +10,10 @@
  * - ドラフト初期値 = 保存先スコープ自身の土台レイアウトの sections（baseLayoutForScope）。
  *   effectiveLayout（解決結果）を使うと管理者の user 設定が tenant 編集へ紛れ込む（レビュー MAJOR）ため層で分ける。
  * - 割当候補 = 基本メニュー + 外部リンク + AKEBONO 業態アプリ（原則3: MenuCategoryEditor と同じ流儀）
- * - 保存 = saveSections(draft, scope)。「この階層の設定を解除」= resetLayout(scope)（取消フロー = 原則9.5）
+ * - セクション「その他」（未配置メニューの自動セクション）の表示/非表示トグル（改修依頼 2026-08-20）。
+ *   ドラフトの一部として dirty 管理し、「保存」で saveSections の optionsPatch として一緒に永続化する。
+ *   解除（resetLayout）で既定 = 表示へ戻る（取消フロー = 原則9.5）。
+ * - 保存 = saveSections(draft, scope, { showOther })。「この階層の設定を解除」= resetLayout(scope)（取消フロー = 原則9.5）
  * - 現在有効な層（resolvedScope）と適用中テンプレートを明示
  * レスポンシブ（原則8）は UiMenuSectionEditor / チップ / テンプレート 1 → 2 列に委譲。
  */
@@ -111,8 +114,12 @@ const cardOptions = computed(() => [
 const draft = ref<MenuCategoryDef[]>([])
 const dirty = ref(false)
 const baseSections = computed(() => baseLayoutForScope(scope.value).sections)
+// セクション「その他」の表示（改修依頼 2026-08-20）。土台レイアウトの options.showOther を反映（未定義 = 表示 = 原則7）
+const baseShowOther = computed(() => baseLayoutForScope(scope.value).options.showOther !== false)
+const draftShowOther = ref(true)
 function syncDraft(): void {
   draft.value = baseSections.value.map(s => ({ id: s.id, label: s.label, cardIds: [...s.cardIds] }))
+  draftShowOther.value = baseShowOther.value
   dirty.value = false
 }
 // スコープ切替は明示操作 = 対象層の土台で必ず seed し直す（他層のドラフトを持ち越さない = レビュー MAJOR）
@@ -136,6 +143,12 @@ function onDraftUpdate(next: MenuCategoryDef[]): void {
   dirty.value = true
 }
 
+/** セクション「その他」トグル（ドラフトの一部 = dirty 化。永続化は「保存」ボタンで一括） */
+function onToggleShowOther(): void {
+  draftShowOther.value = !draftShowOther.value
+  dirty.value = true
+}
+
 const saving = ref(false)
 async function save(): Promise<void> {
   const invalid = draft.value.some(c => !c.label.trim())
@@ -145,7 +158,11 @@ async function save(): Promise<void> {
   }
   saving.value = true
   try {
-    const res = await saveSections(draft.value.map(c => ({ ...c, label: c.label.trim() })), scope.value)
+    const res = await saveSections(
+      draft.value.map(c => ({ ...c, label: c.label.trim() })),
+      scope.value,
+      { showOther: draftShowOther.value },
+    )
     if (!res.ok) return
     dirty.value = false
     show(`セクション構成を${scope.value === 'user' ? '自分' : '全社'}に保存しました`, 'ok')
@@ -351,6 +368,31 @@ async function onDeleteFavorite(id: string): Promise<void> {
         :card-options="cardOptions"
         @update:model-value="onDraftUpdate"
       />
+
+      <!-- セクション「その他」の表示/非表示（改修依頼 2026-08-20。dirty 管理し「保存」で永続化。解除で表示へ戻る = 原則9.5） -->
+      <div class="flex flex-wrap items-center gap-2 rounded-xl border border-line p-2.5">
+        <span class="min-w-0 flex-1">
+          <span class="block text-[13px] font-semibold">セクション「その他」を表示する</span>
+          <span class="block text-[11px] leading-relaxed text-muted">
+            オフにすると、どのセクションにも配置していないメニューはトップに表示されません。
+          </span>
+        </span>
+        <button
+          type="button"
+          role="switch"
+          :aria-checked="draftShowOther"
+          aria-label="セクション「その他」を表示する"
+          class="relative h-6 w-11 shrink-0 rounded-full transition-colors"
+          :class="draftShowOther ? 'bg-brand' : 'bg-line-strong'"
+          @click="onToggleShowOther"
+        >
+          <span
+            class="absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-all"
+            :class="draftShowOther ? 'left-[22px]' : 'left-0.5'"
+            aria-hidden="true"
+          />
+        </button>
+      </div>
 
       <!-- お気に入りに保存（現在の編集内容へ名前を付けて保存） -->
       <div class="flex flex-wrap items-center gap-2 rounded-xl border border-line p-2.5">

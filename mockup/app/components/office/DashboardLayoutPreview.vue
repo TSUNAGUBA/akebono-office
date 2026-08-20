@@ -3,6 +3,7 @@
  * ダッシュボードレイアウトの軽量プレビュー（実データ不要のミニ描画。オペレーター指示 2026-08-03）。
  * PC シーンとモバイルシーンを分けて図示する（2026-08-10）:
  *  - PC: セクション見出し + カード数チップ + 通知欄の位置（side/bottom/hidden）を反映。
+ *    options.showOther=false（「その他」非表示 = 改修依頼 2026-08-20）はヒント文で反映する（プレビューを誤解させない）。
  *  - モバイル: メニュー最優先（通知欄はトップに出さない）。通知はヘッダーのベル（未読バッジ付き）から開く。
  * テンプレート選択時に「PC ではどう並ぶか」「モバイルでは常にメニュー最優先」を掴むための概念図（実カードは描画しない）。
  */
@@ -22,6 +23,9 @@ const sections = computed(() =>
 
 /** 通知欄の位置（PC シーン専用。モバイルは常にベル導線） */
 const notif = computed(() => props.layout.options.notifications)
+
+/** セクション「その他」を表示するか（未定義 = 表示。false のとき未配置メニューは出ない = 改修依頼 2026-08-20） */
+const showOther = computed(() => props.layout.options.showOther !== false)
 </script>
 
 <template>
@@ -71,7 +75,10 @@ const notif = computed(() => props.layout.options.notifications)
               />
             </div>
           </div>
-          <p v-if="sections.length === 0" class="text-[9px] text-muted">（すべて「その他」に表示）</p>
+          <p v-if="sections.length === 0" class="text-[9px] text-muted">
+            {{ showOther ? '（すべて「その他」に表示）' : '（未配置メニューは非表示）' }}
+          </p>
+          <p v-else-if="!showOther" class="text-[9px] text-muted">その他は非表示</p>
         </div>
 
         <!-- 通知バー（side = 右カラム / bottom = 最下段。top は上で描画済み） -->
