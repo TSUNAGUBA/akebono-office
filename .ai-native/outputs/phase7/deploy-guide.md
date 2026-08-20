@@ -458,18 +458,23 @@ AKEBONO Company（`company/`）と AKEBONO Intelligence（`intelligence/`）は�
      ```
      https://<cloud-run-url>/v1/notification-channels/slack/oauth/callback
      ```
-2. アプリの **Client ID / Client Secret** を Secret Manager へ登録し、Cloud Run へ注入する
-   （シークレットはファイル渡し = チャット・シェル履歴に残さない）:
-   ```bash
-   SERVICE=akebono-office-api
-   printf '%s' '<client-id>' | gcloud secrets create $SERVICE-slack-client-id --data-file=-
-   gcloud secrets create $SERVICE-slack-client-secret --data-file=./slack-client-secret.txt
-   gcloud run services update $SERVICE --region asia-northeast1 \
-     --update-secrets "SLACK_CLIENT_ID=$SERVICE-slack-client-id:latest,SLACK_CLIENT_SECRET=$SERVICE-slack-client-secret:latest"
+2. アプリの **Client ID / Client Secret** を **repository secrets `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET`** へ
+   登録する（シークレットはファイル渡し = チャット・シェル履歴に残さない）:
+   ```powershell
+   ./scripts/setup-deploy-secrets.ps1 -ProjectId <project> -ServiceAccountJsonPath ./deploy-sa.json `
+     -DatabaseUrl 'postgresql://...' `
+     -SlackClientId '<client-id>' -SlackClientSecretPath ./slack-client-secret.txt
    ```
-   > **再デプロイ時の注意:** deploy ワークフローは `--set-env-vars` / `--set-secrets` で環境変数・secrets を
-   > **置き換える**ため、CI からの再デプロイ後は上記の `gcloud run services update` を再実行して再注入する
-   > （§1-7 の `CRON_SECRET` と同じ運用上の注意）。
+   （**`-DatabaseUrl` は必須** = 連携 secrets は API 用ブロック内のため。§1-9 と同じく既存値の再指定でよい。
+   GitHub の Settings → Secrets へ `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` を直接登録しても同じ —
+   その場合は **2 つとも**登録すること（片方だけだとデプロイは成功するが配線されず warning が出る）。
+   `TOKEN_ENCRYPTION_KEY` 未設定なら ps1 が初回のみ自動生成）
+   > **以後のデプロイで自動配線される**（デプロイ障害対応 2026-08-20）: deploy ワークフローが
+   > `SLACK_CLIENT_SECRET` を Secret Manager（`$SERVICE-slack-client-secret`）へ冪等同期し、
+   > `--set-env-vars` / `--set-secrets` で Cloud Run へ注入する。**手動の `gcloud run services update` と
+   > 再デプロイ後の再注入は不要**（当初ドキュメントの手動手順は、CI が secrets を置き換えるため
+   > 再デプロイで消える + repository secrets を登録しても届かない構造だった = 実障害を受けて自動化・原則1）。
+   > 反映にはデプロイ 1 回が必要（`gh workflow run deploy.yml -f environment=production` か main への push）。
 3. `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` 未設定の間、Slack 連携は自動的に無効
    （AKO-NCH-001 = `/profile` の連携ボタンが非活性）でその他の機能に影響しない。連携解除は `/profile` の
    「連携を解除」から（行の物理削除 + 再連携でいつでも再開 = 原則9.5）

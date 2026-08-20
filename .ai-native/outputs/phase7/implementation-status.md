@@ -3847,3 +3847,42 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   permissions.ts の旧設計判断コメントが R1 修正と矛盾・F-06-12 の reads 配置記述）→ **両件修正**。
 - [x] R3 = R2 指摘（文書 2 箇所のみ・実行時影響なし）の反映を確認し **指摘ゼロ = converged（原則9 = SP-8 完了）**。
   mockup vitest 476 / api unit 438 / typecheck 両 green を再確認。
+
+## 94. 本番障害対応 2026-08-20（Slack 連携の未配線 / Google Chat テスト送信失敗の診断強化）
+
+対象: `.github/workflows/deploy.yml`・`scripts/setup-deploy-secrets.ps1`・`api/src/lib/notify.ts`・`api/src/routes/notification-channels.ts`・運用ドキュメント 2 件。DB / フロント変更なし。
+
+### 94-1 Slack 連携が本番で「未連携（管理者が OAuth クライアントを設定すると利用できます）」のまま（オペレーター報告）
+- [x] **根本原因**: F-49 の当初手順は Cloud Run への手動 `gcloud run services update` を前提としており、
+  ①CI 再デプロイが `--set-env-vars`/`--set-secrets` で env を**置き換える**ため手動注入が消える、
+  ②オペレーターが repository secrets（SLACK_CLIENT_ID/SECRET）を登録しても **deploy がそれを参照する配線が無い**、
+  という二重の構造欠陥（原則1 違反 = 手動ステップの残存が障害化）。
+- [x] **修正**: deploy の「カレンダー連携の secrets 同期」ステップを「外部連携の secrets 同期」へ拡張し、
+  Slack も同じ流儀で自動配線（原則3）: repository secret `SLACK_CLIENT_SECRET` → Secret Manager
+  `$SERVICE-slack-client-secret` へ冪等同期（put_secret 共用）→ `SLACK_READY` フラグ → api デプロイで
+  `SLACK_CLIENT_ID`（env）+ `SLACK_CLIENT_SECRET`（secret）を注入。`TOKEN_ENCRYPTION_KEY` の同期を
+  カレンダー条件から独立させ、カレンダー未設定でも Slack 単独で有効化できる（鍵はどちらかが有効なら 1 回だけ注入）。
+- [x] `setup-deploy-secrets.ps1` に `-SlackClientId` / `-SlackClientSecretPath` を追加（Google 連携と同型・
+  鍵の初回自動生成は `Ensure-TokenEncryptionKey` へ共通化）。deploy-guide §1-12 / production-architecture の
+  手動注入・再注入の記述を自動配線へ全面書き換え（原則5）。
+
+### 94-2 Google Chat テスト送信が AKO-NCH-004（502）で失敗（オペレーター報告）
+- [x] 一次調査: 連携（OAuth）自体は成功しており、`spaces.findDirectMessage` → `spaces.setup` →
+  `messages.create` のいずれかの失敗。最有力は **GCP プロジェクトで Google Chat API（chat.googleapis.com）
+  未有効**（メッセージが案内済み）だが、現行実装ではサーバーログを見ないと確定できない。
+- [x] **診断強化**: 配信エンジンに失敗詳細の受け皿（`FailureDetailSink`）を追加し、**テスト送信のみ**
+  失敗ステップ + HTTP ステータス + 上流エラー本文の先頭 160 字（SERVICE_DISABLED 等が判読できる）を
+  AKO-NCH-004 のメッセージへ併記（例: `詳細: spaces.findDirectMessage: HTTP 403 {...SERVICE_DISABLED...}`）。
+  バックグラウンド配信の挙動は不変（sink 未指定 = 従来どおり）。
+- [x] 制約の記録: `spaces.setup` による自分宛 DM 作成の可否は公式ドキュメントが egress 制限で裏取り不能
+  （CLAUDE.md の WebFetch 手順を試行 → developers.google.com がブロック）。診断強化により次回のテスト送信で
+  失敗ステップが特定できるため、その結果を受けて追修正する方針。
+
+### 94-3 反復レビュー（原則9）
+- [x] R1 = 独立レビュー: **MAJOR 1**（deploy-guide §1-12 のコマンド例に `-DatabaseUrl` が無く、ps1 の連携ブロックが
+  DatabaseUrl ゲート内のためガイド通り実行すると Slack secrets が未登録のまま正常終了 = 障害の再生産）+
+  **MINOR 1**（ID/シークレットの片側登録が無言スキップ → deploy に ::warning 追加）+ **NIT 1**（再試行上限での
+  fail に診断詳細なし → 記録追加）→ **全件修正**（レビュー処方どおりの適用を YAML 検証・typecheck・
+  ユニットテスト・挙動マトリクス照合で確認）。その他の確認項目（デプロイ挙動の前後互換 4 通り・ps1 の
+  スコープ/二重呼出安全性・fetch body の二重読取なし・バックグラウンド配信の挙動不変・ドキュメント整合）は
+  指摘なしで PASS。
