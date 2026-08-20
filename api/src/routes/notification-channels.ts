@@ -40,7 +40,7 @@ import type { Env } from '../env'
 import { audit } from '../lib/audit'
 import { decryptSecret, encryptSecret } from '../lib/crypto'
 import { err } from '../lib/errors'
-import { configureExternalDispatch, deliverToService } from '../lib/notify'
+import { configureExternalDispatch, deliverToService, type FailureDetailSink } from '../lib/notify'
 import { emailFromIdToken } from './calendar'
 
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
@@ -392,8 +392,10 @@ export function notificationChannelsRoutes(pool: pg.Pool, env: Env): Hono {
     const service = serviceOf(c.req.param('service'))
     const user = c.get('user')
     const label = CHANNEL_META[service].label
+    // 失敗ステップ・上流応答を診断用に受け取る（デプロイ障害対応 2026-08-20。テスト送信のみ = 配信経路は不変）
+    const sink: FailureDetailSink = {}
     const result = await deliverToService(pool, env, user.id, service,
-      `【テスト送信】AKEBONO Office の通知連携テストです（${user.name}）。この通知が届いていれば設定は完了です。`)
+      `【テスト送信】AKEBONO Office の通知連携テストです（${user.name}）。この通知が届いていれば設定は完了です。`, sink)
     if (result === 'not_connected') {
       throw err('AKO-NCH-003', `${label} が未連携です。連携してからテスト送信してください`, 400)
     }
@@ -401,9 +403,10 @@ export function notificationChannelsRoutes(pool: pg.Pool, env: Env): Hono {
       throw err('AKO-NCH-004', `${label} の認証が無効になっています。再連携してからお試しください`, 502)
     }
     if (result === 'fail') {
-      throw err('AKO-NCH-004', service === 'google_chat'
+      const hint = service === 'google_chat'
         ? `${label} へのテスト送信に失敗しました。Google Chat API の有効化と、Chat で自分宛の DM が利用できるかを確認のうえ再試行してください`
-        : `${label} へのテスト送信に失敗しました。時間をおいて再試行してください`, 502)
+        : `${label} へのテスト送信に失敗しました。時間をおいて再試行してください`
+      throw err('AKO-NCH-004', sink.detail ? `${hint}（詳細: ${sink.detail}）` : hint, 502)
     }
     return c.json({ data: { ok: true } })
   })

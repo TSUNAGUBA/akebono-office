@@ -31,6 +31,8 @@
     - VERTEX_MODEL             : AI 機能の生成モデル ID（任意。既定: gemini-2.5-flash）
     - GOOGLE_OAUTH_CLIENT_ID   : カレンダー連携の OAuth クライアント ID（-GoogleOauthClientId）
     - GOOGLE_OAUTH_CLIENT_SECRET : 同シークレット（-GoogleOauthClientSecretPath でファイル渡し）
+    - SLACK_CLIENT_ID          : Slack 通知連携の OAuth クライアント ID（-SlackClientId）
+    - SLACK_CLIENT_SECRET      : 同シークレット（-SlackClientSecretPath でファイル渡し）
     - TOKEN_ENCRYPTION_KEY     : トークン暗号化鍵（初回のみ自動生成。既存は変更しない）
                                  ※ 認証は Cloud Run 実行 SA の ADC。API キーの secret は不要。
                                     aiplatform API 有効化と roles/aiplatform.user 付与は deploy
@@ -124,6 +126,11 @@ param(
   # カレンダー連携: クライアントシークレットを 1 行で書いたファイルのパス（チャット・履歴に残さないためファイル渡し）
   [string]$GoogleOauthClientSecretPath = '',
 
+  # Slack 通知連携（F-49）: OAuth クライアント（デプロイ障害対応 2026-08-20 = repository secrets の
+  # 登録だけで deploy が Cloud Run へ自動配線する。手動の gcloud run services update は不要）
+  [string]$SlackClientId = '',
+  [string]$SlackClientSecretPath = '',
+
   # ドキュメント保管（バッチ7l）: Firebase の Cloud Storage バケット名（例: <project>.firebasestorage.app）。
   # 未指定の場合ドキュメント実体は DB 保管（bytea フォールバック）で動作し、署名 URL は無効
   [string]$StorageBucket = '',
@@ -148,6 +155,24 @@ $ErrorActionPreference = 'Stop'
 
 function Write-Step([string]$Message) {
   Write-Host "==> $Message" -ForegroundColor Cyan
+}
+
+# トークン暗号化鍵の確保（初回のみ生成・既存は変更しない = 保管済みトークンの保護。カレンダー / Slack で共用）
+function Ensure-TokenEncryptionKey {
+  $secretList = gh secret list --repo $Repo
+  if ($LASTEXITCODE -ne 0) {
+    throw 'gh secret list に失敗しました。TOKEN_ENCRYPTION_KEY の存在確認ができないため中断します（誤って鍵を再生成すると保管済みトークンが全て復号不能になります）。'
+  }
+  $hasKey = $secretList -match 'TOKEN_ENCRYPTION_KEY'
+  if (-not $hasKey) {
+    $bytes = New-Object byte[] 32
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+    Set-RepoSecret 'TOKEN_ENCRYPTION_KEY' ([Convert]::ToBase64String($bytes))
+    Write-Host 'TOKEN_ENCRYPTION_KEY を自動生成しました（初回のみ）。' -ForegroundColor Yellow
+  }
+  else {
+    Write-Host 'TOKEN_ENCRYPTION_KEY は設定済みのため変更しません（保管済みトークンの保護）。' -ForegroundColor Yellow
+  }
 }
 
 # gh secret set の共通ラッパー（stdin 経由・UTF-8。PS 5.1 の引数エスケープ問題と旧 gh の --body-file 非対応を回避）
@@ -263,24 +288,26 @@ if ($DatabaseUrl) {
     Write-Step "Repository secrets を設定（カレンダー連携）: $Repo"
     Set-RepoSecret 'GOOGLE_OAUTH_CLIENT_ID' $GoogleOauthClientId
     Set-RepoSecret 'GOOGLE_OAUTH_CLIENT_SECRET' $oauthSecret
-    $secretList = gh secret list --repo $Repo
-    if ($LASTEXITCODE -ne 0) {
-      throw 'gh secret list に失敗しました。TOKEN_ENCRYPTION_KEY の存在確認ができないため中断します（誤って鍵を再生成すると保管済みトークンが全て復号不能になります）。'
-    }
-    $hasKey = $secretList -match 'TOKEN_ENCRYPTION_KEY'
-    if (-not $hasKey) {
-      $bytes = New-Object byte[] 32
-      [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
-      Set-RepoSecret 'TOKEN_ENCRYPTION_KEY' ([Convert]::ToBase64String($bytes))
-      Write-Host 'TOKEN_ENCRYPTION_KEY を自動生成しました（初回のみ）。' -ForegroundColor Yellow
-    }
-    else {
-      Write-Host 'TOKEN_ENCRYPTION_KEY は設定済みのため変更しません（保管済みトークンの保護）。' -ForegroundColor Yellow
-    }
+    Ensure-TokenEncryptionKey
     Write-Host '※ OAuth クライアントの「承認済みのリダイレクト URI」に <Cloud Run URL>/v1/calendar/oauth/callback を登録してください。' -ForegroundColor Yellow
   }
   elseif ($GoogleOauthClientId -or $GoogleOauthClientSecretPath) {
     Write-Warning '-GoogleOauthClientId と -GoogleOauthClientSecretPath は両方指定してください（カレンダー連携 secrets は未設定のまま）。'
+  }
+
+  # Slack 通知連携（F-49）: OAuth クライアント + トークン暗号化鍵（カレンダーと同型 = 原則3）
+  if ($SlackClientId -and $SlackClientSecretPath) {
+    if (-not (Test-Path $SlackClientSecretPath)) { throw "ファイルが見つかりません: $SlackClientSecretPath" }
+    $slackSecret = (Get-Content -Raw -Path $SlackClientSecretPath).Trim()
+    if (-not $slackSecret) { throw 'Slack クライアントシークレットのファイルが空です。' }
+    Write-Step "Repository secrets を設定（Slack 通知連携）: $Repo"
+    Set-RepoSecret 'SLACK_CLIENT_ID' $SlackClientId
+    Set-RepoSecret 'SLACK_CLIENT_SECRET' $slackSecret
+    Ensure-TokenEncryptionKey
+    Write-Host '※ Slack アプリの Redirect URLs に <Cloud Run URL>/v1/notification-channels/slack/oauth/callback を登録し、User Token Scopes に chat:write を追加してください。' -ForegroundColor Yellow
+  }
+  elseif ($SlackClientId -or $SlackClientSecretPath) {
+    Write-Warning '-SlackClientId と -SlackClientSecretPath は両方指定してください（Slack 連携 secrets は未設定のまま）。'
   }
 }
 else {

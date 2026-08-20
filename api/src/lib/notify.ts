@@ -145,6 +145,13 @@ const LINK_COLS = `service, external_user_id AS "externalUserId", access_token_e
 type DeliveryResult = 'ok' | 'auth' | 'retry' | 'fail'
 
 /**
+ * 失敗詳細の受け皿（テスト送信の診断用 = デプロイ障害対応 2026-08-20）。
+ * どのステップが何の応答で失敗したかを 1 行で記録し、テスト送信のエラーメッセージへ併記して
+ * オペレーターが自己診断できるようにする（バックグラウンド配信では未使用 = 挙動不変）
+ */
+export interface FailureDetailSink { detail?: string }
+
+/**
  * 指数バックオフの待ち時間列（1s→2s→4s。既定 3 回）。純関数（単体テスト対象）。
  */
 export function backoffDelays(retries = 3): number[] {
@@ -152,6 +159,19 @@ export function backoffDelays(retries = 3): number[] {
 }
 
 const wait = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
+
+/**
+ * 外部 API のエラー応答から診断用の要約（先頭 160 字）を安全に取り出す（失敗は空文字 = 非ブロッキング）。
+ * Google API はエラー詳細を JSON body で返すため、有効化未済（SERVICE_DISABLED）等の一次切り分けに使う
+ */
+async function safeErrorSnippet(res: Response): Promise<string> {
+  try {
+    const text = (await res.text()).replace(/\s+/g, ' ').trim()
+    return text ? ` ${text.slice(0, 160)}` : ''
+  } catch {
+    return ''
+  }
+}
 
 /** 有効チャネルへ順次配信する（1 チャネルの失敗が他チャネルを止めないよう結果は個別処理） */
 async function dispatchExternal(
@@ -189,10 +209,11 @@ async function deliverViaLink(
   memberId: string,
   link: ChatLinkRow,
   text: string,
+  sink?: FailureDetailSink,
 ): Promise<Exclude<DeliveryResult, 'retry'>> {
   const attempt = (): Promise<DeliveryResult> => link.service === 'slack'
-    ? sendSlackDm(ctx, link, text)
-    : sendGoogleChatDm(ctx, memberId, link, text)
+    ? sendSlackDm(ctx, link, text, sink)
+    : sendGoogleChatDm(ctx, memberId, link, text, sink)
   let result = await attempt()
   for (const delay of backoffDelays()) {
     if (result !== 'retry') break
@@ -200,6 +221,8 @@ async function deliverViaLink(
     result = await attempt()
   }
   const final: Exclude<DeliveryResult, 'retry'> = result === 'retry' ? 'fail' : result
+  // 再試行上限で fail に確定した場合も診断詳細を残す（レビュー R1。即時 fail は各送信関数が記録済み）
+  if (result === 'retry' && sink && !sink.detail) sink.detail = '再試行上限に到達（持続的な 5xx / 429 / タイムアウト）'
   if (final === 'auth') await markReauthRequired(ctx, memberId, link.service)
   if (final === 'fail') console.warn(`notify: external delivery failed: ${link.service} member=${memberId}`)
   return final
@@ -215,12 +238,13 @@ export async function deliverToService(
   memberId: string,
   service: ChatService,
   text: string,
+  sink?: FailureDetailSink,
 ): Promise<'ok' | 'auth' | 'fail' | 'not_connected'> {
   const { rows } = await pool.query<ChatLinkRow>(
     `SELECT ${LINK_COLS} FROM user_chat_links WHERE member_id = $1 AND service = $2`, [memberId, service])
   const link = rows[0]
   if (!link || link.status !== 'connected') return 'not_connected'
-  return deliverViaLink({ pool, env }, memberId, link, text)
+  return deliverViaLink({ pool, env }, memberId, link, text, sink)
 }
 
 /**
@@ -257,6 +281,7 @@ async function sendSlackDm(
   ctx: { pool: pg.Pool; env: Env },
   link: ChatLinkRow,
   text: string,
+  sink?: FailureDetailSink,
 ): Promise<DeliveryResult> {
   const token = decryptSecret(link.accessTokenEnc, ctx.env.tokenEncryptionKey)
   if (!token) return 'auth' // 鍵ローテーション等で復号不可 = 再連携で回復（crypto.ts の設計と同じ）
@@ -275,6 +300,7 @@ async function sendSlackDm(
     if (body.error && SLACK_AUTH_ERRORS.has(body.error)) return 'auth'
     if (body.error === 'ratelimited') return 'retry'
     console.warn('slack chat.postMessage failed:', body.error)
+    if (sink) sink.detail = `chat.postMessage: ${body.error ?? '不明なエラー'}`
     return 'fail'
   } catch {
     return 'retry' // タイムアウト・接続断は一時障害として再試行
@@ -331,6 +357,7 @@ async function sendGoogleChatDm(
   memberId: string,
   link: ChatLinkRow,
   text: string,
+  sink?: FailureDetailSink,
 ): Promise<DeliveryResult> {
   const token = await googleChatAccessToken(ctx, memberId, link)
   if (!token) return 'auth' // 更新不能（refresh 失効・復号不可）= 再連携で回復
@@ -359,9 +386,13 @@ async function sendGoogleChatDm(
       if (setupRes.status === 429 || setupRes.status >= 500) return 'retry'
       if (setupRes.status === 401) return 'auth'
       if (setupRes.ok) space = ((await setupRes.json()) as { name?: string }).name
-      else console.warn('google chat spaces.setup failed:', setupRes.status)
+      else {
+        console.warn('google chat spaces.setup failed:', setupRes.status)
+        if (sink) sink.detail = `spaces.setup: HTTP ${setupRes.status}${await safeErrorSnippet(setupRes)}`
+      }
     } else {
       console.warn('google chat findDirectMessage failed:', findRes.status)
+      if (sink) sink.detail = `spaces.findDirectMessage: HTTP ${findRes.status}${await safeErrorSnippet(findRes)}`
       return 'fail' // 403 等は設定不備の可能性（API 未有効化）= 失効扱いにしない
     }
     if (!space) return 'fail'
@@ -376,6 +407,7 @@ async function sendGoogleChatDm(
     if (res.status === 401) return 'auth'
     if (!res.ok) {
       console.warn('google chat messages.create failed:', res.status)
+      if (sink) sink.detail = `messages.create: HTTP ${res.status}${await safeErrorSnippet(res)}`
       return 'fail'
     }
     return 'ok'
