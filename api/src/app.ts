@@ -24,14 +24,15 @@ import { configsRoutes } from './routes/configs'
 import { customerLogsRoutes } from './routes/customer-logs'
 import { escalationsRoutes } from './routes/escalations'
 import { holidaysRoutes } from './routes/holidays'
-import { improvementsRoutes } from './routes/improvements'
+import { improvementsRoutes, runImprovementRevisitReminders } from './routes/improvements'
 import { knowledgeRoutes } from './routes/knowledge'
 import { leaveRoutes, runPeriodicGrants } from './routes/leave'
 import { notesRoutes } from './routes/notes'
 import { searchRoutes } from './routes/search'
 import { mastersRoutes } from './routes/masters'
 import { notificationsRoutes } from './routes/notifications'
-import { reportsRoutes } from './routes/reports'
+import { reportsRoutes, runReportReminders } from './routes/reports'
+import { notificationChannelOauthCallbackRoutes, notificationChannelsRoutes } from './routes/notification-channels'
 import { runSalesEtl, salesRoutes } from './routes/sales'
 import { runUptimeRollup, statusRoutes } from './routes/status'
 import { assistRoutes } from './routes/assist'
@@ -107,11 +108,35 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
     return c.json({ data: result })
   })
 
+  // 日報の自動リマインド（Cloud Scheduler → 共有鍵。改修依頼 2026-08-20。設定時刻・日次1回の判定はジョブ内部 =
+  // 任意の周期で安全・冪等。設定 = configs 'report-reminder'）
+  app.post('/jobs/report-reminders', async (c) => {
+    const secret = process.env.CRON_SECRET ?? ''
+    if (!secret || c.req.header('x-cron-key') !== secret) {
+      throw err('AKO-AUTH-001', 'ジョブ実行キーが無効です', 401)
+    }
+    const result = await runReportReminders(pool)
+    return c.json({ data: result })
+  })
+
+  // 改修案件「継続検討」の再検討日リマインド（Cloud Scheduler 日次 → 共有鍵。改修依頼 2026-08-20。
+  // 通知済みマーカー revisit_notified_on で多重通知を防止 = 冪等）
+  app.post('/jobs/improvement-revisit-reminders', async (c) => {
+    const secret = process.env.CRON_SECRET ?? ''
+    if (!secret || c.req.header('x-cron-key') !== secret) {
+      throw err('AKO-AUTH-001', 'ジョブ実行キーが無効です', 401)
+    }
+    const result = await runImprovementRevisitReminders(pool)
+    return c.json({ data: result })
+  })
+
   // OAuth コールバックはブラウザリダイレクト（認証ヘッダなし）で届くため認証より前に登録する。
   // 本人性は DB 保存の state ノンス（一回性・10 分 TTL）+ id_token の email と members.email の突合で担保する
   app.get('/v1/calendar/oauth/callback', calendarOauthCallback(pool, env))
   app.get('/v1/media/oauth/callback', mediaOauthCallback(pool, env))
   app.get('/v1/akebono/sheets/oauth/callback', sheetsOauthCallback(pool, env))
+  // 個人別チャット連携（Slack / Google Chat）の OAuth コールバック（改修依頼 2026-08-20。上と同じ理由で認証前）
+  app.get('/v1/notification-channels/:service/oauth/callback', notificationChannelOauthCallbackRoutes(pool, env))
   app.use('/v1/*', authMiddleware(env, pool))
   // 機能単位の権限ガード（F-16。認証の後段。/v1/masters・/v1/configs はデータ面のため対象外 = lib/permissions 参照）
   app.use('/v1/*', featureGuard(pool))
@@ -189,6 +214,8 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
   app.route('/v1/masters', mastersRoutes(pool, env))
   app.route('/v1/configs', configsRoutes(pool))
   app.route('/v1/notifications', notificationsRoutes(pool))
+  // 個人別マルチチャネル通知連携（Slack / Google Chat。改修依頼 2026-08-20。マウントで外部配信も有効化）
+  app.route('/v1/notification-channels', notificationChannelsRoutes(pool, env))
   app.route('/v1/escalations', escalationsRoutes(pool, env))
   app.route('/v1/workflows', workflowsRoutes(pool))
   app.route('/v1/shifts', shiftsRoutes(pool))
