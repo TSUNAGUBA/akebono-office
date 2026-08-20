@@ -9,7 +9,7 @@
 ```mermaid
 graph TB
     subgraph "Firebase Hosting（1 プロジェクト・マルチサイト）"
-        Office["AKEBONO Office<br/>home/（デフォルトサイト）<br/>https://&lt;project&gt;.web.app"]
+        Office["AKEBONO Home<br/>home/（デフォルトサイト）<br/>https://&lt;project&gt;.web.app"]
         Company["AKEBONO Company<br/>company/（新設サイト）<br/>https://&lt;company-site&gt;.web.app"]
         Intelligence["AKEBONO Intelligence<br/>intelligence/（新設サイト）<br/>https://&lt;intelligence-site&gt;.web.app"]
     end

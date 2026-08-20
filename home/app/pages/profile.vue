@@ -4,8 +4,8 @@
  * - アイコン画像の登録・削除（クライアントで 256px へ縮小 → data URI。SoT は members.avatar）
  * - パスワード変更（API モード + メール/パスワード認証のみ。Firebase が再認証の上で更新）
  * - アカウント情報の確認（氏名・メール・ロールは管理者のメンバーマスタが SoT のため読み取り専用）
- * - 外部チャット連携（Slack / Google Chat。改修依頼 2026-08-20 → AKEBONO HOME 名義化 2026-08-20:
- *   通知アプリ「AKEBONO HOME」からの DM。連携 = メール突合による宛先解決の 1 クリックで、OAuth 同意は不要）と
+ * - 外部チャット連携（Slack / Google Chat。改修依頼 2026-08-20 → AKEBONO Home 名義化 2026-08-20:
+ *   通知アプリ「AKEBONO Home」からの DM。連携 = メール突合による宛先解決の 1 クリックで、OAuth 同意は不要）と
  *   通知の配信先マトリクス（行=通知種別 × 列=チャネルの ON/OFF。useNotificationChannels）
  */
 import type { Component } from 'vue'
@@ -165,8 +165,8 @@ const confirm = useConfirm()
 const SERVICE_ICONS: Record<ChatService, Component> = { slack: MessageSquare, google_chat: MessagesSquare }
 
 const SERVICE_DESCRIPTIONS: Record<ChatService, string> = {
-  slack: '連携すると、通知アプリ「AKEBONO HOME」からあなた宛の通知が Slack の DM で届きます。',
-  google_chat: '連携すると、通知アプリ「AKEBONO HOME」からあなた宛の通知が Google Chat の DM で届きます。',
+  slack: '連携すると、通知アプリ「AKEBONO Home」からあなた宛の通知が Slack の DM で届きます。',
+  google_chat: '連携すると、通知アプリ「AKEBONO Home」からあなた宛の通知が Google Chat の DM で届きます。',
 }
 
 function chatLabel(service: ChatService): string {
@@ -177,14 +177,14 @@ const chatBusy = ref<ChatService | null>(null)
 
 /**
  * 連携開始（1 クリック連携: 登録メールアドレスで宛先を解決して完了。OAuth 同意・画面遷移なし =
- * AKEBONO HOME 名義化 2026-08-20）
+ * AKEBONO Home 名義化 2026-08-20）
  */
 async function startChatConnect(service: ChatService): Promise<void> {
   if (chatBusy.value) return // 連携・テスト送信の同時多重を防ぐ（busy は 1 サービスずつ）
   chatBusy.value = service
   const r = await channels.connect(service)
   chatBusy.value = null
-  if (r.ok) show(`${chatLabel(service)} を連携しました。「通知の配信先」で ON にすると AKEBONO HOME からの DM が届きます`)
+  if (r.ok) show(`${chatLabel(service)} を連携しました。「通知の配信先」で ON にすると AKEBONO Home からの DM が届きます`)
   else show(`${r.error.code}: ${r.error.message}`, 'warn')
 }
 
@@ -314,10 +314,10 @@ const accountRows = computed(() => [
       </p>
     </UiSectionCard>
 
-    <!-- 外部チャット連携（改修依頼 2026-08-20 → AKEBONO HOME 名義化 2026-08-20） -->
+    <!-- 外部チャット連携（改修依頼 2026-08-20 → AKEBONO Home 名義化 2026-08-20） -->
     <UiSectionCard
       title="外部チャット連携"
-      description="通知を Slack / Google Chat の DM でも受け取れます（送信元は通知アプリ「AKEBONO HOME」。いつでも解除できます）"
+      description="通知を Slack / Google Chat の DM でも受け取れます（送信元は通知アプリ「AKEBONO Home」。いつでも解除できます）"
     >
       <div class="grid gap-2 sm:grid-cols-2">
         <div v-for="l in channels.links.value" :key="l.service" class="rounded-lg border border-line p-3">
@@ -330,7 +330,7 @@ const accountRows = computed(() => [
           <!-- 状態取得中は誤った「未設定」表示を出さない -->
           <p v-if="!channels.isLoaded.value" class="mt-2 text-xs text-muted" aria-live="polite">状態を確認中…</p>
           <p v-else-if="!l.enabled" class="mt-2 text-xs text-muted">
-            連携が未設定です（管理者が通知アプリ「AKEBONO HOME」を設定すると利用できます）
+            連携が未設定です（管理者が通知アプリ「AKEBONO Home」を設定すると利用できます）
           </p>
           <template v-else-if="!l.connected">
             <p class="mt-2 text-xs text-sub">{{ SERVICE_DESCRIPTIONS[l.service] }}</p>
@@ -442,7 +442,7 @@ const accountRows = computed(() => [
           <Link2 class="h-3.5 w-3.5" aria-hidden="true" />
           {{ chatBusy === l.service ? '連携中…' : '連携する' }}
         </button>
-        <span v-else class="text-muted">（管理者による AKEBONO HOME の設定後に利用できます）</span>
+        <span v-else class="text-muted">（管理者による AKEBONO Home の設定後に利用できます）</span>
       </div>
       <p class="mt-2 text-[11px] text-muted">
         アプリ内通知の一覧は

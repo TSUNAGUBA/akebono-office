@@ -1,6 +1,6 @@
 /**
- * 中核マスタのシードデータ（決定的・固定値。AKEBONO Office の core.ts から本アプリで使う分を抜粋）
- * メンバーは Office のデモメンバーと同一（同じ世界観のデモにするため）。
+ * 中核マスタのシードデータ（決定的・固定値。AKEBONO Home の core.ts から本アプリで使う分を抜粋）
+ * メンバーは Home のデモメンバーと同一（同じ世界観のデモにするため）。
  */
 import type { AiEmployee, AiRole, EscalationRule, Member } from '~/types/domain'
 

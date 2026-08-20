@@ -2,7 +2,7 @@
 
 経営・各顧客・各案件に対する**分析・インサイト・提案**を得て、実行した**アクションと結果・フィードバック**を記録し、
 次の分析にそのフィードバックが反映される**ループ構造**を体現する独立フロントエンドです。
-共通基盤（AKEBONO Office の API）に蓄積されたデータを読み取り専用の RAG 入力として使います。
+共通基盤（AKEBONO Home の API）に蓄積されたデータを読み取り専用の RAG 入力として使います。
 
 - 要件: [`../.ai-native/outputs/phase3/company-intelligence-requirements.md`](../.ai-native/outputs/phase3/company-intelligence-requirements.md)
 - 設計: [`../.ai-native/outputs/phase5/company-intelligence-design.md`](../.ai-native/outputs/phase5/company-intelligence-design.md)
@@ -24,7 +24,7 @@
 月次売上（`/v1/sales`）・マスタ（顧客・案件・メンバー）。**API への変更はありません**。
 権限（F-16）によるサーバー側のフィルタはそのまま尊重します（見えるデータの範囲で分析）。
 
-## 動作モード（Office と同一の 3 モード）
+## 動作モード（Home と同一の 3 モード）
 
 | モード | 条件 | データ |
 |--------|------|--------|

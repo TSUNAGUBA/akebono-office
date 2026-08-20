@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { resolveNotificationLink } from '../app/utils/notification-link'
 
-describe('resolveNotificationLink（R1 #1: API モード通知の Office パス写像）', () => {
+describe('resolveNotificationLink（R1 #1: API モード通知の Home パス写像）', () => {
   it('/ai-company のタスクディープリンクを /tasks へ写像する', () => {
     expect(resolveNotificationLink('/ai-company?task=at-0001')).toBe('/tasks?task=at-0001')
     expect(resolveNotificationLink('/ai-company')).toBe('/tasks')
@@ -18,11 +18,11 @@ describe('resolveNotificationLink（R1 #1: API モード通知の Office パス�
     expect(resolveNotificationLink('/tokens')).toBe('/tokens')
   })
 
-  it('Office 側ドメインの通知は null（呼び出し側が案内表示。404 遷移を作らない）', () => {
+  it('Home 側ドメインの通知は null（呼び出し側が案内表示。404 遷移を作らない）', () => {
     expect(resolveNotificationLink('/inbox')).toBeNull()
     expect(resolveNotificationLink('/workflow?open=wf-1')).toBeNull()
     expect(resolveNotificationLink('/attendance')).toBeNull()
-    // Office の /reports（日報）は本アプリの /reports（AI 日次報告）と同名別物のため写像しない
+    // Home の /reports（日報）は本アプリの /reports（AI 日次報告）と同名別物のため写像しない
     expect(resolveNotificationLink('/reports')).toBeNull()
     expect(resolveNotificationLink('')).toBeNull()
   })

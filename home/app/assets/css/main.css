@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 /* =========================================================
-   AKEBONO Office デザイントークン（唯一の CSS SoT）
+   AKEBONO Home デザイントークン（唯一の CSS SoT）
    設計: .ai-native/outputs/phase5/screen-design.md §3
    方針: 白ベース + 低彩度グレー + 単一ブランドアクセント。
         色数を増やさない。影より罫線で面を区切る。

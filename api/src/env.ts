@@ -33,7 +33,7 @@ export interface Env {
   googleOauthClientSecret: string
   /** トークン暗号化鍵（Secret Manager 経由。空 = 連携無効） */
   tokenEncryptionKey: string
-  /** Slack Bot User OAuth Token（xoxb-…。通知の AKEBONO HOME 名義化 2026-08-20。空 = Slack 連携無効。
+  /** Slack Bot User OAuth Token（xoxb-…。通知の AKEBONO Home 名義化 2026-08-20。空 = Slack 連携無効。
    * Secret Manager 経由。既存の Env リテラル（テストのスタブ env）を壊さないため省略可能とし、
    * loadEnv は常に設定する（原則7） */
   slackBotToken?: string

@@ -20,7 +20,7 @@ const { show } = useToast()
 const { isAdmin } = useCurrentUser()
 
 const apiModeActive = useApiMode()
-// 承認後の自動実行は API モードではサーバー側で走るため、数回ポーリングして画面へ反映する（Office 版と同一）
+// 承認後の自動実行は API モードではサーバー側で走るため、数回ポーリングして画面へ反映する（Home 版と同一）
 let pollTimer: ReturnType<typeof setTimeout> | null = null
 function pollAutoRun(times = 36): void {
   if (!apiModeActive || times <= 0) return

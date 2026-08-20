@@ -7,9 +7,9 @@
 
 ## 0. 背景と制約
 
-- 既存 AKEBONO Office（`home/`）から独立した 2 つの新アプリを、**フロントエンドのプロジェクトレベルで別建て**として新設する。公開 URL も別（Firebase Hosting のサイト分割）。
+- 既存 AKEBONO Home（`home/`）から独立した 2 つの新アプリを、**フロントエンドのプロジェクトレベルで別建て**として新設する。公開 URL も別（Firebase Hosting のサイト分割）。
 - **Database（PostgreSQL）と API（`api/`）は共通・変更禁止。** 新アプリの機能は既存 API で実現できる範囲とし、それを超える機能は**フロントエンド内のモックとして実現**する（後日、共通 API にて本実装）。
-- 既存 AKEBONO Office（`home/`）は変更しない（下位互換の保護 = 開発原則7）。Office 内 F-08「AIネイティブカンパニー」メニューの整理（リンク化・撤去）は、AKEBONO Company 公開後の残課題として `phase7/implementation-status.md` に記録する。
+- 既存 AKEBONO Home（`home/`）は変更しない（下位互換の保護 = 開発原則7）。Office 内 F-08「AIネイティブカンパニー」メニューの整理（リンク化・撤去）は、AKEBONO Company 公開後の残課題として `phase7/implementation-status.md` に記録する。
 
 ## 1. AKEBONO Company（`company/`）
 

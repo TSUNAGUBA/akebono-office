@@ -1,6 +1,6 @@
 /**
- * 中核マスタのシードデータ（決定的・固定値。AKEBONO Office の core.ts から本アプリで使う分を抜粋）
- * メンバー・顧客・案件は Office のデモデータと同一（同じ世界観のデモにするため）。
+ * 中核マスタのシードデータ（決定的・固定値。AKEBONO Home の core.ts から本アプリで使う分を抜粋）
+ * メンバー・顧客・案件は Home のデモデータと同一（同じ世界観のデモにするため）。
  */
 import type { Company, Member, Project } from '~/types/domain'
 
@@ -40,5 +40,5 @@ export const seedProjects: Project[] = [
   { id: 'pj-05', name: 'みなみ食品 業務改善支援', companyId: 'c-05', type: 'biz_consulting', status: 'active', priority: 'low', ownerMemberId: 'm-04', memberIds: ['m-04'], startDate: '2026-03-01', endDate: '2026-10-31', budget: 8000000, objective: '受発注業務の標準化とペーパーレス化', active: true, custom: {} },
   { id: 'pj-06', name: 'グランメディア 記事生成 AI PoC', companyId: 'c-06', type: 'development', status: 'onhold', priority: 'low', ownerMemberId: 'm-06', memberIds: ['m-06'], startDate: '2026-02-01', endDate: '2026-06-30', budget: 4000000, objective: '記事生成ワークフローの PoC 検証', active: true, custom: {} },
   { id: 'pj-07', name: 'シーサイドホテルズ DX 構想策定', companyId: 'c-07', type: 'biz_consulting', status: 'planned', priority: 'mid', ownerMemberId: 'm-03', memberIds: ['m-03'], startDate: '2026-08-01', endDate: '2027-01-31', budget: 10000000, objective: '中期 DX ロードマップの策定', active: true, custom: {} },
-  { id: 'pj-08', name: 'AKEBONO Office 開発（自社）', companyId: 'c-self', type: 'internal', status: 'active', priority: 'high', ownerMemberId: 'm-01', memberIds: ['m-01', 'm-05', 'm-06', 'm-09'], startDate: '2026-06-01', endDate: null, budget: 0, objective: '社内オフィスアプリの構築と他社展開の土台づくり', active: true, custom: {} },
+  { id: 'pj-08', name: 'AKEBONO Home 開発（自社）', companyId: 'c-self', type: 'internal', status: 'active', priority: 'high', ownerMemberId: 'm-01', memberIds: ['m-01', 'm-05', 'm-06', 'm-09'], startDate: '2026-06-01', endDate: null, budget: 0, objective: '社内オフィスアプリの構築と他社展開の土台づくり', active: true, custom: {} },
 ]

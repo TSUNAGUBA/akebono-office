@@ -1,5 +1,5 @@
 /**
- * 擬似ログイン（デモ用ユーザー切替。AKEBONO Office の useCurrentUser と同型）
+ * 擬似ログイン（デモ用ユーザー切替。AKEBONO Home の useCurrentUser と同型）
  * API モードでは /v1/me（Firebase or dev 認証）が正。
  */
 import type { Member } from '~/types/domain'

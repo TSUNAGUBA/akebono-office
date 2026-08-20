@@ -8,7 +8,7 @@
 
 | コンポーネント | デプロイ先 | トリガー |
 |---|---|---|
-| `home/`（AKEBONO Office / Nuxt SPA） | Firebase Hosting（**デフォルトサイト**） | main へ push（対象パス変更時）or 手動 |
+| `home/`（AKEBONO Home / Nuxt SPA） | Firebase Hosting（**デフォルトサイト**） | main へ push（対象パス変更時）or 手動 |
 | `company/`（AKEBONO Company / Nuxt SPA） | Firebase Hosting（**専用サイト** = マルチサイト） | 〃（`FIREBASE_HOSTING_SITE_COMPANY` 登録時のみ。§1-11） |
 | `intelligence/`（AKEBONO Intelligence / Nuxt SPA） | Firebase Hosting（**専用サイト** = マルチサイト） | 〃（`FIREBASE_HOSTING_SITE_INTELLIGENCE` 登録時のみ。§1-11） |
 | `api/`（Hono API） | Cloud Run | main へ push（`api/` `shared/` 変更時）or 手動 |
@@ -354,7 +354,7 @@ AI 機能（日報 AI アシスト・タスク計画の AI コメント等）は
    ```
    OAuth のトークン交換は両 API 無効でも成功するため、「連携はできるがプロパティ一覧・集計が失敗する」
    場合はまずこの有効化を確認する（カレンダーの §4 トラブルシュートと同じ構図）
-3. 連携する Google アカウントは AKEBONO Office に登録済みの会社アカウント（members.email と突合）で、
+3. 連携する Google アカウントは AKEBONO Home に登録済みの会社アカウント（members.email と突合）で、
    対象の GA4 プロパティに閲覧権限があること。GA 集計は 30 分の短期キャッシュ（クォータ対策）で配信され、
    画面の再試行で強制再取得できる。secrets 未設定の間、GA 連携 UI は自動的に非表示（他機能に影響しない）
 4. **（任意）記事インベントリの手動登録:** 分析対象の記事一覧（セクション対応・記事数）は生成記事の
@@ -389,7 +389,7 @@ secrets は不要。連携は**テナント（全社）単位の単一接続**�
 3. スコープは `spreadsheets.readonly`（値の読取）+ `drive.readonly`（ブック一覧。§1-9 の drive 取込と共用）で、
    **カレンダー・メディアとは別の同意・別トークン**（`sheets_tokens` に単一接続で保管）。`spreadsheets.readonly` は
    Google の**機微スコープ**に該当するため、公開アプリでは OAuth 同意画面の審査が必要になる場合がある（社内利用は
-   テスト/内部公開で可）。連携する Google アカウントは AKEBONO Office 登録済みの会社アカウント（members.email と突合）。
+   テスト/内部公開で可）。連携する Google アカウントは AKEBONO Home 登録済みの会社アカウント（members.email と突合）。
 4. secrets 未設定の間、スプレッドシート連携 UI は自動的に非表示（enabled=false。他機能に影響しない）。連携解除は
    マッピング設定画面の「連携を解除」から（トークン物理削除 + revoke。再連携でいつでも復帰 = 原則9.5）。
 
@@ -443,10 +443,16 @@ AKEBONO Company（`company/`）と AKEBONO Intelligence（`intelligence/`）は�
 > - `firebase.json` の `hosting.target`（`company` / `intelligence`）は静的な論理名で、サイト ID との
 >   紐付け（`.firebaserc`）はデプロイ時に CI が secrets から生成する（リポジトリへ固有値を持たない方針）。
 
-## 1-12. 個人別通知連携（Slack / Google Chat・F-49。AKEBONO HOME 名義化 2026-08-20）
+## 1-12. 個人別通知連携（Slack / Google Chat・F-49。AKEBONO Home 名義化 2026-08-20）
 
-通知の外部チャット配信（本人宛 DM）に使用する。**送信元は通知アプリ「AKEBONO HOME」**（オペレーター指示
-2026-08-20 で名義を確定）: Slack は Bot Token 方式・Google Chat は Chat アプリ（サービスアカウント）方式で、
+通知の外部チャット配信（本人宛 DM）に使用する。**送信元は通知アプリ「AKEBONO Home」**（オペレーター指示
+2026-08-20 で名義を確定。同日のアプリ名統一で表記は `AKEBONO HOME` → `AKEBONO Home` へ変更）:
+Slack は Bot Token 方式・Google Chat は Chat アプリ（サービスアカウント）方式で、
+
+> **既に旧表記 `AKEBONO HOME` で外部アプリを作成済みの場合:** 機能への影響はない（送信・宛先解決は
+> トークン/SA で行われ、表示名には依存しない。アプリ検索も大文字小文字を区別しない）。表記を揃えたい
+> 場合のみ、Slack = アプリ設定の App Home で表示名を、Google Chat = Chat API の「構成」でアプリ名を
+> `AKEBONO Home` へ変更する（任意・いつでも可）。
 資格情報は**テナント単位**（repository secrets → deploy が Secret Manager 経由で Cloud Run へ自動配線）。
 ユーザーごとの OAuth 同意・トークン保管は廃止した（`/profile` の「連携する」は登録メールアドレスによる
 宛先解決の 1 クリックで完結し、`TOKEN_ENCRYPTION_KEY` にも依存しない）。
@@ -456,7 +462,7 @@ AKEBONO Company（`company/`）と AKEBONO Intelligence（`intelligence/`）は�
 > `/v1/notification-channels/google_chat/oauth/callback` リダイレクト URI は**不要になった（削除してよい）**。
 > Secret Manager の `$SERVICE-slack-client-secret` も未参照になる（残置無害・削除可）。
 > 連携済みユーザーの扱い: **Slack は再操作不要**（既存の連携行は次回送信時に新方式の宛先へ自動移行する）。
-> **Google Chat は AKEBONO HOME アプリとの DM スペースが未作成のため**、自動作成（spaces.setup）が
+> **Google Chat は AKEBONO Home アプリとの DM スペースが未作成のため**、自動作成（spaces.setup）が
 > 環境の制約で通らない場合は「アプリへ一度メッセージを送る」ワンステップが必要になり得る
 > （エラーメッセージとトラブルシュートで案内される）。
 > なお各ユーザーの Slack / Google アカウントに残る旧アプリへの許可（プロバイダ側のグラント）は
@@ -465,7 +471,7 @@ AKEBONO Company（`company/`）と AKEBONO Intelligence（`intelligence/`）は�
 ### Slack 連携の有効化（Bot Token 方式）
 
 1. [api.slack.com/apps](https://api.slack.com/apps) の Slack アプリ（旧方式で作成済みならそのまま流用）で:
-   - **App Home / Basic Information**: アプリの**表示名を `AKEBONO HOME`** にし、必要ならアイコンを設定する
+   - **App Home / Basic Information**: アプリの**表示名を `AKEBONO Home`** にし、必要ならアイコンを設定する
      （DM の送信者としてこの名前・アイコンが表示される）
    - **OAuth & Permissions → Bot Token Scopes** に以下を追加する（User Token Scopes・Redirect URLs は不要）:
      `chat:write`（DM 送信）/ `im:write`（DM チャンネルのオープン）/
@@ -502,7 +508,7 @@ AKEBONO Company（`company/`）と AKEBONO Intelligence（`intelligence/`）は�
      --iam-account akebono-home-chat@<project-id>.iam.gserviceaccount.com
    ```
 3. GCP コンソール → **「Google Chat API」→「構成」**で Chat アプリを設定する（コンソールのみ・CLI 不可）:
-   - アプリ名: **AKEBONO HOME** / アバター URL・説明: 任意
+   - アプリ名: **AKEBONO Home** / アバター URL・説明: 任意
    - 機能: **「1:1 のメッセージを受信する」を ON**（アプリとユーザーの DM を許可する設定。
      スペースへの追加は不要なら OFF のまま）
    - 接続設定: HTTP エンドポイント等は**不要**（本システムは送信専用。応答 URL はダミーでよい設定項目が
@@ -521,7 +527,7 @@ AKEBONO Company（`company/`）と AKEBONO Intelligence（`intelligence/`）は�
 > 要約が併記される（`spaces.findDirectMessage: HTTP 403 …SERVICE_DISABLED…` = Chat API 未有効 /
 > `HTTP 403 …PERMISSION_DENIED…` = Chat アプリ構成（手順 3）の未設定・公開範囲外 が典型）。
 > - **`spaces.setup` が 403 等で失敗する場合**（アプリ認証での DM 自動作成が組織のポリシー・API 制約で
->   通らないケース）: ユーザーが **Google Chat で「AKEBONO HOME」アプリを検索して一度メッセージを送る**と
+>   通らないケース）: ユーザーが **Google Chat で「AKEBONO Home」アプリを検索して一度メッセージを送る**と
 >   DM スペースが作成され、以後の連携・配信は `spaces.findDirectMessage` で成立する（エラーメッセージにも
 >   この手順を案内している）。組織全体で解消するには、Google 管理コンソールから Chat アプリを
 >   ドメインへ一括インストールする方法もある（全ユーザーの DM が自動作成される）。

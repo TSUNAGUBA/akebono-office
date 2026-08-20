@@ -1,5 +1,5 @@
 /**
- * API 接続の基盤（AKEBONO Office の useApi と同型。本アプリで使うコレクションのみへトリム）。
+ * API 接続の基盤（AKEBONO Home の useApi と同型。本アプリで使うコレクションのみへトリム）。
  * - API モード: NUXT_PUBLIC_API_BASE が設定されている場合のみ有効。未設定なら全機能がモック
  *   （useMockDb）で動作する（デモ環境の下位互換）
  * - 認証: Firebase ID トークン（本番）または x-dev-member-id ヘッダ（NUXT_PUBLIC_DEV_MEMBER_ID。ローカル/E2E 専用）
@@ -210,7 +210,7 @@ export async function loadApiCollection(name: string, force = false): Promise<vo
   const promise = (async () => {
     try {
       const rows = await apiFetch<unknown[]>(`/v1/masters/${MIGRATED_MASTERS[name]}`, { query: { includeInactive: '1' } })
-      // ストア未作成でも必ず作成して格納する（ロード結果が捨てられる実バグの再発防止 = Office 版と同一）
+      // ストア未作成でも必ず作成して格納する（ロード結果が捨てられる実バグの再発防止 = Home 版と同一）
       ensureStore(name).value = rows
       loadedCollections.add(name)
     } catch {

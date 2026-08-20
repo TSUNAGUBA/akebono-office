@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 共通レイアウト: ヘッダー（ブランド・PC ナビ・通知・アカウント）+ モバイルボトムナビ。
- * AKEBONO Office のレイアウト構成を本アプリのメニューへ簡素化して踏襲。
+ * AKEBONO Home のレイアウト構成を本アプリのメニューへ簡素化して踏襲。
  */
 import * as icons from 'lucide-vue-next'
 import { Bell, Bot, Check, ChevronDown, LogOut, RotateCcw } from 'lucide-vue-next'
@@ -38,10 +38,10 @@ watch(() => route.fullPath, closeMenus)
 async function openNotification(id: string, link: string): Promise<void> {
   await markRead(id)
   closeMenus()
-  // API モードの通知は Office のパスで届くため本アプリ内パスへ写像する（写像不能 = Office 側の機能）
+  // API モードの通知は Home のパスで届くため本アプリ内パスへ写像する（写像不能 = Home 側の機能）
   const target = resolveNotificationLink(link)
   if (!target) {
-    show('この通知は AKEBONO Office 側の機能です（Office アプリで確認してください）', 'info')
+    show('この通知は AKEBONO Home 側の機能です（Home アプリで確認してください）', 'info')
     return
   }
   await navigateTo(target)

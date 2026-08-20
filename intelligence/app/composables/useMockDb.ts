@@ -1,5 +1,5 @@
 /**
- * モックデータの中核ストア（SoT。AKEBONO Office の useMockDb と同型）
+ * モックデータの中核ストア（SoT。AKEBONO Home の useMockDb と同型）
  * - 初期値は決定的シード。ユーザー操作による変更のみ localStorage に永続化。
  * - 「デモデータをリセット」でシード状態へ戻せる（記録系も含めて初期化 = デモ専用操作）。
  * - 各業務 composable は必ずここを経由して読み書きする（SoT → 派生の一方向）。

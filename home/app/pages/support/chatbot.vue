@@ -135,133 +135,135 @@ onBeforeUnmount(() => {
     </UiEmptyState>
 
     <template v-else>
-      <UiPageHeader title="AIチャットボット" description="社内データを参照して AI が回答します。会話はセッションとして保存され、履歴から続きを再開できます">
-        <template #actions>
-          <button type="button" class="btn btn-ghost btn-sm" @click="onOpenHistory">
-            <History class="h-3.5 w-3.5" aria-hidden="true" />
-            履歴
-          </button>
-          <button type="button" class="btn btn-sm" :disabled="messages.length === 0 && !currentSessionId" @click="onNewSession">
-            <MessageSquarePlus class="h-3.5 w-3.5" aria-hidden="true" />
-            新しい会話
-          </button>
-        </template>
-      </UiPageHeader>
+      <!-- 有効高さいっぱいに使う（改修依頼 2026-08-20: 高さ制御）。ページヘッダーの実高さは flex が吸収する
+           ため固定見積りを持たない。差し引くのはアプリヘッダーと main の余白のみ: モバイル = p-3(12px) +
+           pb-[calc(var(--bottomnav-h)+16px)] / md = p-5(20px) + pb-8(32px)・ボトムナビなし -->
+      <div class="flex min-h-[420px] flex-col h-[calc(100dvh-var(--header-h)-var(--bottomnav-h)-28px)] md:h-[calc(100dvh-var(--header-h)-52px)]">
+        <UiPageHeader title="AIチャットボット" description="社内データを参照して AI が回答します。会話はセッションとして保存され、履歴から続きを再開できます">
+          <template #actions>
+            <button type="button" class="btn btn-ghost btn-sm" @click="onOpenHistory">
+              <History class="h-3.5 w-3.5" aria-hidden="true" />
+              履歴
+            </button>
+            <button type="button" class="btn btn-sm" :disabled="messages.length === 0 && !currentSessionId" @click="onNewSession">
+              <MessageSquarePlus class="h-3.5 w-3.5" aria-hidden="true" />
+              新しい会話
+            </button>
+          </template>
+        </UiPageHeader>
 
-      <div
-        class="card flex min-h-[320px] flex-col overflow-hidden"
-        style="height: calc(100dvh - var(--header-h) - var(--bottomnav-h) - 150px)"
-      >
-        <!-- メッセージ一覧 -->
-        <div ref="listEl" class="flex-1 overflow-y-auto p-3 scroll-slim" aria-live="polite">
-          <UiEmptyState
-            v-if="messages.length === 0 && !isStreaming"
-            icon="Bot"
-            title="AIチャットボットに質問してみましょう"
-            hint="勤怠・有給・顧客情報・売上・稼働状況・規程・保管ドキュメントを実データから回答します"
-          >
-            <template #action>
-              <div class="flex flex-wrap justify-center gap-1.5">
-                <button
-                  v-for="s in INITIAL_SUGGESTIONS"
-                  :key="s"
-                  type="button"
-                  class="rounded-full border border-line-strong bg-surface px-3 py-1.5 text-xs font-medium text-sub transition-colors hover:border-brand hover:text-brand"
-                  @click="send(s)"
-                >
-                  {{ s }}
-                </button>
-              </div>
-            </template>
-          </UiEmptyState>
-
-          <div v-else class="grid gap-3">
-            <div
-              v-for="m in messages"
-              :key="m.id"
-              class="flex gap-2"
-              :class="m.role === 'user' ? 'justify-end' : ''"
+        <div class="card flex min-h-0 flex-1 flex-col overflow-hidden">
+          <!-- メッセージ一覧 -->
+          <div ref="listEl" class="flex-1 overflow-y-auto p-3 scroll-slim" aria-live="polite">
+            <UiEmptyState
+              v-if="messages.length === 0 && !isStreaming"
+              icon="Bot"
+              title="AIチャットボットに質問してみましょう"
+              hint="勤怠・有給・顧客情報・売上・稼働状況・規程・保管ドキュメントを実データから回答します"
             >
-              <UiAvatar v-if="m.role === 'assistant'" name="AI" kind="ai" size="sm" class="mt-1" />
-              <div class="min-w-0 max-w-[85%] md:max-w-[72%]">
-                <!-- AI 応答はマークダウン描画（whitespace-pre-wrap は付けない = 改行は AST 側で保持。
-                     ユーザー発言はプレーン表示のまま） -->
-                <div
-                  class="break-words rounded-xl px-3 py-2 text-[13px] leading-relaxed"
-                  :class="m.role === 'user'
-                    ? 'whitespace-pre-wrap rounded-br-sm bg-brand text-white'
-                    : 'rounded-bl-sm border border-line bg-surface-soft'"
-                >
-                  <template v-if="m.role === 'user'">{{ m.content }}</template>
-                  <UiMarkdown v-else :source="m.content" :routes="LINK_LABELS" />
-                </div>
-
-                <!-- 出典バッジ + 時刻 -->
-                <div class="mt-1 flex flex-wrap items-center gap-1" :class="m.role === 'user' ? 'justify-end' : ''">
-                  <UiStatusBadge v-for="src in m.sources" :key="src" :label="src" tone="brand" />
-                  <span class="num text-[10px] text-muted">{{ fmtTime(m.at) }}</span>
-                </div>
-
-                <!-- サジェスト（最新の AI 応答のみ） -->
-                <div
-                  v-if="m.role === 'assistant' && m.id === lastAssistantId && !isStreaming && m.suggestions.length > 0"
-                  class="mt-1.5 flex flex-wrap gap-1.5"
-                >
+              <template #action>
+                <div class="flex flex-wrap justify-center gap-1.5">
                   <button
-                    v-for="s in m.suggestions"
+                    v-for="s in INITIAL_SUGGESTIONS"
                     :key="s"
                     type="button"
-                    class="rounded-full border border-line-strong bg-surface px-2.5 py-1.5 text-xs font-medium text-sub transition-colors hover:border-brand hover:text-brand"
-                    @click="onSuggestion(m, s)"
+                    class="rounded-full border border-line-strong bg-surface px-3 py-1.5 text-xs font-medium text-sub transition-colors hover:border-brand hover:text-brand"
+                    @click="send(s)"
                   >
                     {{ s }}
                   </button>
                 </div>
-              </div>
-            </div>
+              </template>
+            </UiEmptyState>
 
-            <!-- ストリーミング中の吹き出し -->
-            <div v-if="isStreaming" class="flex gap-2">
-              <UiAvatar name="AI" kind="ai" size="sm" class="mt-1" />
-              <div class="min-w-0 max-w-[85%] md:max-w-[72%]">
-                <div class="break-words rounded-xl rounded-bl-sm border border-line bg-surface-soft px-3 py-2 text-[13px] leading-relaxed">
-                  <span v-if="streamingText === ''" class="text-muted">回答を生成中…</span>
-                  <!-- ストリーミング中もマークダウン描画（書きかけの記法はパーサがフェイルオープンで平文表示）。
-                       カーソルはブロック描画の都合で本文の下の独立行に出る（末尾追従はブロック構造上
-                       困難なため生成中インジケータとしてこの位置を意図 = レビュー R1 で確認済み） -->
-                  <UiMarkdown v-else :source="streamingText" :routes="LINK_LABELS" />
-                  <span class="typing-caret" aria-hidden="true" />
+            <div v-else class="grid gap-3">
+              <div
+                v-for="m in messages"
+                :key="m.id"
+                class="flex gap-2"
+                :class="m.role === 'user' ? 'justify-end' : ''"
+              >
+                <UiAvatar v-if="m.role === 'assistant'" name="AI" kind="ai" size="sm" class="mt-1" />
+                <div class="min-w-0 max-w-[85%] md:max-w-[72%]">
+                  <!-- AI 応答はマークダウン描画（whitespace-pre-wrap は付けない = 改行は AST 側で保持。
+                       ユーザー発言はプレーン表示のまま） -->
+                  <div
+                    class="break-words rounded-xl px-3 py-2 text-[13px] leading-relaxed"
+                    :class="m.role === 'user'
+                      ? 'whitespace-pre-wrap rounded-br-sm bg-brand text-white'
+                      : 'rounded-bl-sm border border-line bg-surface-soft'"
+                  >
+                    <template v-if="m.role === 'user'">{{ m.content }}</template>
+                    <UiMarkdown v-else :source="m.content" :routes="LINK_LABELS" />
+                  </div>
+
+                  <!-- 出典バッジ + 時刻 -->
+                  <div class="mt-1 flex flex-wrap items-center gap-1" :class="m.role === 'user' ? 'justify-end' : ''">
+                    <UiStatusBadge v-for="src in m.sources" :key="src" :label="src" tone="brand" />
+                    <span class="num text-[10px] text-muted">{{ fmtTime(m.at) }}</span>
+                  </div>
+
+                  <!-- サジェスト（最新の AI 応答のみ） -->
+                  <div
+                    v-if="m.role === 'assistant' && m.id === lastAssistantId && !isStreaming && m.suggestions.length > 0"
+                    class="mt-1.5 flex flex-wrap gap-1.5"
+                  >
+                    <button
+                      v-for="s in m.suggestions"
+                      :key="s"
+                      type="button"
+                      class="rounded-full border border-line-strong bg-surface px-2.5 py-1.5 text-xs font-medium text-sub transition-colors hover:border-brand hover:text-brand"
+                      @click="onSuggestion(m, s)"
+                    >
+                      {{ s }}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- ストリーミング中の吹き出し -->
+              <div v-if="isStreaming" class="flex gap-2">
+                <UiAvatar name="AI" kind="ai" size="sm" class="mt-1" />
+                <div class="min-w-0 max-w-[85%] md:max-w-[72%]">
+                  <div class="break-words rounded-xl rounded-bl-sm border border-line bg-surface-soft px-3 py-2 text-[13px] leading-relaxed">
+                    <span v-if="streamingText === ''" class="text-muted">回答を生成中…</span>
+                    <!-- ストリーミング中もマークダウン描画（書きかけの記法はパーサがフェイルオープンで平文表示）。
+                         カーソルはブロック描画の都合で本文の下の独立行に出る（末尾追従はブロック構造上
+                         困難なため生成中インジケータとしてこの位置を意図 = レビュー R1 で確認済み） -->
+                    <UiMarkdown v-else :source="streamingText" :routes="LINK_LABELS" />
+                    <span class="typing-caret" aria-hidden="true" />
+                  </div>
                 </div>
               </div>
             </div>
           </div>
-        </div>
 
-        <!-- 入力欄 -->
-        <div class="border-t border-line p-2 md:p-3">
-          <div class="flex items-end gap-2">
-            <textarea
-              v-model="draft"
-              :rows="rows"
-              maxlength="2000"
-              class="textarea flex-1"
-              style="min-height: 40px"
-              placeholder="質問を入力（Enter で送信 / Shift+Enter で改行）"
-              aria-label="質問を入力"
-              :disabled="isStreaming"
-              @keydown="onKeydown"
-            />
-            <button
-              type="button"
-              class="btn btn-primary btn-lg shrink-0"
-              :disabled="isStreaming || !draft.trim()"
-              @click="onSend"
-            >
-              <SendHorizontal class="h-4 w-4" aria-hidden="true" />
-              送信
-            </button>
+          <!-- 入力欄 -->
+          <div class="border-t border-line p-2 md:p-3">
+            <div class="flex items-end gap-2">
+              <textarea
+                v-model="draft"
+                :rows="rows"
+                maxlength="2000"
+                class="textarea flex-1"
+                style="min-height: 40px"
+                placeholder="質問を入力（Enter で送信 / Shift+Enter で改行）"
+                aria-label="質問を入力"
+                :disabled="isStreaming"
+                @keydown="onKeydown"
+              />
+              <button
+                type="button"
+                class="btn btn-primary btn-lg shrink-0"
+                :disabled="isStreaming || !draft.trim()"
+                @click="onSend"
+              >
+                <SendHorizontal class="h-4 w-4" aria-hidden="true" />
+                送信
+              </button>
+            </div>
+            <p v-if="draft.length >= 1800" class="num mt-1 text-right text-[11px] text-muted">{{ draft.length }} / 2000</p>
           </div>
-          <p v-if="draft.length >= 1800" class="num mt-1 text-right text-[11px] text-muted">{{ draft.length }} / 2000</p>
         </div>
       </div>
 

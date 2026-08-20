@@ -7913,7 +7913,7 @@ describe('日報の自動リマインド（runReportReminders = /jobs/report-rem
   })
 })
 
-// ---------- 個人別マルチチャネル通知連携（Unit 7 = 0075 → AKEBONO HOME 名義化 = 0077。追記） ----------
+// ---------- 個人別マルチチャネル通知連携（Unit 7 = 0075 → AKEBONO Home 名義化 = 0077。追記） ----------
 // 本ユニットでは app.ts へのマウントを行わないため、ルートをローカルの Hono へマウントして検証する
 // （notificationChannelsRoutes は自己完結のため、app.ts マウント後と同一の振る舞いになる）。
 // マウント用スニペット（app.ts。OAuth コールバックは 0077 で廃止）:

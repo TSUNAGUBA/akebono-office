@@ -160,7 +160,7 @@ export function useEscalations() {
 
     // 裁定のナレッジ還流（補助処理・非ブロッキング）
     if (type === 'ruling' && reflectToKnowledge) {
-      // 還流先が未指定の呼び出し元（旧 I/F）向けフォールバック: 自社 PJ「AKEBONO Office 開発」へ還流する
+      // 還流先が未指定の呼び出し元（旧 I/F）向けフォールバック: 自社 PJ「AKEBONO Home 開発」へ還流する
       const reflectTarget = knowledgeTarget ?? { domain: 'project' as const, targetId: 'pj-08' }
       try {
         const knowledge = tbl('knowledge')

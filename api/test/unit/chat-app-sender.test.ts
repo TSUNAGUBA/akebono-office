@@ -1,5 +1,5 @@
 /**
- * 通知の AKEBONO HOME 名義化（2026-08-20）の純ロジック。
+ * 通知の AKEBONO Home 名義化（2026-08-20）の純ロジック。
  * - サービスアカウント鍵のパース + JWT Bearer アサーションの構築（lib/google-sa。
  *   トークン交換の HTTP は行わない = 「外部 HTTP はテストしない設計」を踏襲し、
  *   署名は Node 標準の createVerify で公開鍵検証する）
