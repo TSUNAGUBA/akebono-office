@@ -9,7 +9,7 @@ import { fmtInt } from '~/utils/format'
 
 const { employees } = useAiCompany()
 const {
-  settings, saveSettings, resetSettings, usage,
+  settings, saveSettings, resetSettings, usage, usageMayBeTruncated,
   tokenBudgetPct, costBudgetPct, budgetState, employeeUsage,
 } = useTokenBudget()
 const { isAdmin } = useCurrentUser()
@@ -122,6 +122,9 @@ async function onReset(): Promise<void> {
       <p class="text-sub">
         トークン実測値は現在モック値（決定的な擬似値）です。予算・制限の設定はこのブラウザに保存され（端末間同期なし）、
         依頼・承認のブロックは画面側の抑止です。<span class="font-semibold">いずれも共通 API での本実装までの暫定機能です。</span>
+        <span v-if="usageMayBeTruncated" class="font-semibold text-warn">
+          また、活動ログの取得は直近 200 件打ち切り（既存 API 仕様）のため、当月の集計・予測・予算判定が実際より小さい可能性があります。
+        </span>
       </p>
     </div>
 

@@ -8,7 +8,7 @@
 import type { Ref } from 'vue'
 import type {
   Company, CustomerLog, DailyReport, Member, MonthlyReport, PartnerActivity, Project,
-  SalesActivity, SalesMonthly, SupportActivity, Village, WeeklyReport,
+  SalesActivity, SalesMonthly, SupportActivity, WeeklyReport,
 } from '~/types/domain'
 import { addMonths } from '~/utils/insight-engine'
 
@@ -115,7 +115,6 @@ export function useIntelligenceData() {
   const companies = tbl('companies') as Ref<Company[]>
   const projects = tbl('projects') as Ref<Project[]>
   const members = tbl('members') as Ref<Member[]>
-  const villages = tbl('villages') as Ref<Village[]>
 
   const loading = computed(() => loadingCount.value > 0)
 
@@ -141,7 +140,7 @@ export function useIntelligenceData() {
 
   return {
     daily, weekly, monthly, support, sales, partner, customerLogs, salesMonthly,
-    companies, projects, members, villages,
+    companies, projects, members,
     loading, refresh, companyName, projectName, memberName,
   }
 }

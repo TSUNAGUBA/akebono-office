@@ -70,7 +70,7 @@ async function onGenerateReports(): Promise<void> {
         <dl class="mt-2 grid gap-1 border-t border-line pt-2 text-xs">
           <div class="flex gap-2">
             <dt class="shrink-0 font-semibold text-muted">所感</dt>
-            <dd class="num text-sub">{{ r.reflection }}</dd>
+            <dd class="text-sub">{{ r.reflection }}</dd>
           </div>
           <div v-if="r.issues" class="flex gap-2">
             <dt class="shrink-0 font-semibold text-warn">課題</dt>

@@ -418,7 +418,8 @@ AKEBONO Company（`company/`）と AKEBONO Intelligence（`intelligence/`）は�
 - **手動:** `gh workflow run deploy.yml -f environment=staging`（または Actions 画面の `Run workflow` で環境を選択）
   - `staging` = フロント各アプリを Firebase プレビューチャネル（本番と別 URL）へ配信。api はスキップ
   - `production` = 本番へ配信（自動デプロイと同じ）
-- **ロールバック:** Cloud Run はリビジョン単位で保持される
+- **ロールバック:** Firebase Hosting は各サイト独立にコンソールの「リリース履歴」から直前リリースへ
+  ロールバックできる（静的 SPA のため git revert → main へ push でも復旧可能）。Cloud Run はリビジョン単位で保持される
   ```bash
   gcloud run services update-traffic akebono-office-api --region asia-northeast1 \
     --to-revisions <前リビジョン>=100

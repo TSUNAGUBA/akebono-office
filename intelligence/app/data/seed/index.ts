@@ -1,16 +1,16 @@
 /**
  * AKEBONO Intelligence モック DB の形と決定的シード（デモ・体感検証用）。
- * API モードでは members / companies / projects / villages は API ハイドレーション、
+ * API モードでは members / companies / projects は API ハイドレーション、
  * 業務データ（日報・週報・月報・活動 4 種・月次売上）は共通 API が SoT となり、
  * ここは完全モック動作（NUXT_PUBLIC_API_BASE 未設定）のときのみ使われる。
  * インサイト・アクション・サイクルは API モードでも localStorage（モック境界 = requirements §5）。
  */
 import type {
   Company, CustomerLog, DailyReport, Member, MonthlyReport, PartnerActivity, Project,
-  SalesActivity, SalesMonthly, SupportActivity, Village, WeeklyReport,
+  SalesActivity, SalesMonthly, SupportActivity, WeeklyReport,
 } from '~/types/domain'
 import type { IntelAction, IntelCycle, IntelInsight } from '~/types/intelligence'
-import { seedCompanies, seedMembers, seedProjects, seedVillages } from './core'
+import { seedCompanies, seedMembers, seedProjects } from './core'
 import {
   buildCustomerLogs, buildDailyReports, buildMonthlyReports, buildPartnerActivities,
   buildSalesActivities, buildSalesMonthly, buildSupportActivities, buildWeeklyReports,
@@ -21,7 +21,6 @@ export interface MockDbShape {
   members: Member[]
   companies: Company[]
   projects: Project[]
-  villages: Village[]
   dailyReports: DailyReport[]
   weeklyReports: WeeklyReport[]
   monthlyReports: MonthlyReport[]
@@ -40,7 +39,6 @@ export function buildSeed(): MockDbShape {
     members: seedMembers,
     companies: seedCompanies,
     projects: seedProjects,
-    villages: seedVillages,
     dailyReports: buildDailyReports(),
     weeklyReports: buildWeeklyReports(),
     monthlyReports: buildMonthlyReports(),

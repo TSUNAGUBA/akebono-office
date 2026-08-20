@@ -213,6 +213,12 @@ if ($CompanyHostingSite -or $IntelligenceHostingSite) {
   if ($CompanyHostingSite) { Set-RepoSecret 'FIREBASE_HOSTING_SITE_COMPANY' $CompanyHostingSite }
   if ($IntelligenceHostingSite) { Set-RepoSecret 'FIREBASE_HOSTING_SITE_INTELLIGENCE' $IntelligenceHostingSite }
   Write-Host '※ サイトが未作成の場合は `firebase hosting:sites:create <サイトID>` で作成してください（deploy-guide.md §1-11）。' -ForegroundColor Yellow
+  if (-not $DatabaseUrl) {
+    # CORS の自動包含は -DatabaseUrl ブロック内でのみ行うため、失念を警告する（deploy-guide.md §1-11 手順3）
+    Write-Warning ('新サイトを API 接続する場合は、API_CORS_ORIGINS へ各サイトのオリジン' +
+      '（例: https://<サイトID>.web.app）を追加し、api を再デプロイしてください' +
+      '（本実行では -DatabaseUrl 未指定のため API_CORS_ORIGINS は更新していません）。')
+  }
 }
 
 # ---------- api 用 Secrets（-DatabaseUrl 指定時のみ） ----------

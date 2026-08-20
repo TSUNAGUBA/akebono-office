@@ -27,7 +27,12 @@ export const DEFAULT_TOKEN_BUDGET: TokenBudgetSettings = {
   perEmployeeMonthlyTokens: {},
 }
 
-/** 保存値を既定値へマージして返す（欠落キー・不正値があっても壊れない = 原則7） */
+/**
+ * 保存値を検証して正規化する（欠落キー・不正値があっても壊れない = 原則7）。
+ * 予算値（monthlyTokenBudget / monthlyCostBudgetUsd / 社員別上限）の欠落・不正は
+ * **既定値ではなく「未設定 = 制限なし」へ落とす**（ユーザーが明示的に空へ変更した状態を
+ * 既定予算で勝手に上書きしないための挙動 = R1 #10 で明文化）。閾値・動作のみ既定値へフォールバックする。
+ */
 export function normalizeTokenBudget(raw: unknown): TokenBudgetSettings {
   const r = (raw ?? {}) as Partial<TokenBudgetSettings>
   const intOrNull = (v: unknown): number | null =>

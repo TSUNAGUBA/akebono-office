@@ -29,7 +29,8 @@ export default defineNuxtPlugin(() => {
     const parsed = JSON.parse(config.firebaseConfig) as Record<string, unknown>
     void initFirebaseAuth(parsed, {
       onSignIn: () => { void ensureMeLoaded() },
-      onSignOut: () => { clearMe() },
+      // 受動サインアウト（トークン失効・別タブのサインアウト）でも API キャッシュを残さない（R1 監査指摘）
+      onSignOut: () => { clearMe(); clearApiData() },
     })
   } catch {
     console.warn('NUXT_PUBLIC_FIREBASE_CONFIG が JSON として解析できません')

@@ -4,7 +4,7 @@
  * ?task=<id> ディープリンクで詳細を直接開く（通知からの到達導線）。
  * 承認はトークン予算ガード（FC-06）を通す。
  */
-import { Paperclip, Send, X } from 'lucide-vue-next'
+import { Download, FileText, Paperclip, Send, X } from 'lucide-vue-next'
 import { AI_TASK_STATUS_LABELS } from '~/utils/labels'
 
 const {
@@ -147,7 +147,10 @@ function stepOutputs(t: { outputs?: { step: number }[] }): { step: number; title
 
 // ---------- ボード操作 ----------
 
+/** 承認の実行中フラグ（API モードの二重送信防止 = R1 監査指摘。ボードのボタン連打を再入で無視する） */
+let approveBusy = false
 async function onApprove(taskId: string): Promise<void> {
+  if (approveBusy) return
   // トークン予算ガード（FC-06。block 設定時のみ拒否）
   const task = tasks.value.find(t => t.id === taskId)
   const guard = guardSpend(task?.aiEmployeeId)
@@ -155,11 +158,16 @@ async function onApprove(taskId: string): Promise<void> {
     show(`${guard.error.code}: ${guard.error.message}`, 'warn', { label: 'トークン管理へ', to: '/tokens' })
     return
   }
-  const res = await approveTask(taskId)
-  show(res.ok
-    ? '承認しました。全ステップを自動で遂行します（確認が必要な場合・完了時は通知が届きます）'
-    : res.error.message, res.ok ? 'ok' : 'warn')
-  if (res.ok) pollAutoRun()
+  approveBusy = true
+  try {
+    const res = await approveTask(taskId)
+    show(res.ok
+      ? '承認しました。全ステップを自動で遂行します（確認が必要な場合・完了時は通知が届きます）'
+      : res.error.message, res.ok ? 'ok' : 'warn')
+    if (res.ok) pollAutoRun()
+  } finally {
+    approveBusy = false
+  }
 }
 
 async function onProgress(taskId: string): Promise<void> {
@@ -250,7 +258,8 @@ async function onCancel(taskId: string): Promise<void> {
                 class="rounded-full border border-line bg-surface-soft px-2.5 py-0.5 text-[11px] transition-colors hover:bg-brand-soft"
                 :aria-label="`「${f.filename}」をダウンロード`"
                 @click="downloadFile(f.id, f.filename)"
-              >{{ f.filename }}<span class="num text-muted">（{{ Math.ceil(f.sizeBytes / 1024) }}KB）</span> ⬇</button>
+              >{{ f.filename }}<span class="num text-muted">（{{ Math.ceil(f.sizeBytes / 1024) }}KB）</span>
+                <Download class="inline h-3 w-3" aria-hidden="true" /></button>
               <span v-else class="rounded-full border border-line bg-surface-soft px-2.5 py-0.5 text-[11px]">
                 {{ f.filename }}<span class="num text-muted">（{{ Math.ceil(f.sizeBytes / 1024) }}KB）</span>
               </span>
@@ -330,7 +339,8 @@ async function onCancel(taskId: string): Promise<void> {
             :open="o.step === -1"
           >
             <summary class="cursor-pointer px-3 py-2 text-[13px] font-semibold hover:bg-brand-soft">
-              {{ o.step === -1 ? '📄 ' : '' }}{{ o.title }}
+              <FileText v-if="o.step === -1" class="inline h-3.5 w-3.5 text-brand" aria-hidden="true" />
+              {{ o.title }}
               <span class="num ml-2 text-[11px] font-normal text-muted">{{ o.at.slice(0, 16).replace('T', ' ') }}</span>
             </summary>
             <div class="border-t border-line p-3">

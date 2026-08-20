@@ -56,7 +56,8 @@
 **目的:** 共通基盤に蓄積されたデータを RAG として使いながら、AI の WebSearch や推論を駆使して経営・各顧客・各案件（プロジェクト）に対する分析・インサイト・提案を得る。実行したアクションとその結果を記録してフィードバックを残し、次の回転ではそのアクション実績・フィードバックも加味した分析が得られる**フィードバックループ構造**を体現する。
 
 ### FI-01 ダッシュボード（`/`）
-- データカバレッジ KPI（当月の日報・週報・月報・活動ログ件数）
+- データカバレッジ KPI（当月の日報件数・活動ログ累計。週報・月報の件数は FI-02 データソース画面で確認）
+- フィードバックループ概況（データ → 分析 → アクション → フィードバックの 4 ステップと件数）
 - 最新分析サイクルの概要 / 未完了アクション / 最新インサイト
 
 ### FI-02 データソース（`/data`）
@@ -98,14 +99,17 @@
 
 | アプリ | 使用エンドポイント（すべて既存・無変更） |
 |--------|------------------------------------------|
-| Company | `/v1/me` `/v1/me/preferences/:key` `/v1/ai-company/tasks` `/v1/ai-company/tasks/:id/{approve,progress,block,cancel}` `/v1/ai-company/tasks/:id/answer` `/v1/ai-company/logs` `/v1/ai-company/files/:id` `/v1/ai-company/daily-reports` `/v1/ai-company/workload-check` `/v1/reports/daily?scope=all` `/v1/masters/{ai-roles,ai-employees,members}` `/v1/escalations`（POST・GET は admin） `/v1/notifications` |
-| Intelligence | `/v1/me` `/v1/reports/daily?scope=all&month=` `/v1/reports/weekly?scope=all` `/v1/reports/monthly?scope=all` `/v1/support-activities` `/v1/sales-activities` `/v1/partner-activities` `/v1/customer-logs?scope=all` `/v1/sales` `/v1/masters/{members,companies,contacts,projects,villages,business-segments}` |
+| Company | `/v1/me` `/v1/ai-company/tasks` `/v1/ai-company/tasks/:id/{approve,progress,block,cancel}` `/v1/ai-company/tasks/:id/answer` `/v1/ai-company/logs` `/v1/ai-company/files/:id` `/v1/ai-company/daily-reports` `/v1/ai-company/workload-check` `/v1/reports/daily?scope=all` `/v1/masters/{ai-roles,ai-employees,members}` `/v1/escalations`（POST・GET は admin） `/v1/notifications` |
+| Intelligence | `/v1/me` `/v1/reports/daily?scope=all&month=` `/v1/reports/weekly?scope=all` `/v1/reports/monthly?scope=all` `/v1/support-activities` `/v1/sales-activities` `/v1/partner-activities` `/v1/customer-logs?scope=all` `/v1/sales` `/v1/masters/{members,companies,projects}` |
+
+> **制約（既存 API 仕様）:** `GET /v1/ai-company/logs` は直近 200 件打ち切りのため、Company のトークン集計・
+> 予測・予算判定は月間ログが 200 件を超えると過小になり得る（画面に注記。サーバー側の月次集計 API が本実装課題 = §5）。
 
 ## 5. モック境界の宣言（後日 API 本実装の対象）
 
 | 機能 | 現在の SoT | 本実装時の移行方針 |
 |------|-----------|-------------------|
-| Company: トークン予算・制限設定 | フロント localStorage（`akc.tokenBudget.v1`） | 共通 API へ予算テーブル + 実測トークン集計を新設し、サーバー側で依頼受付を制御 |
+| Company: トークン予算・制限設定 | フロント localStorage（`akc.tokenBudget.v1`） | 共通 API へ予算テーブル + 実測トークン集計（月次集計エンドポイント = 200 件打ち切りの解消）を新設し、サーバー側で依頼受付を制御 |
 | Company: トークン実測値 | 既存 `ai_activity_logs` の決定的モック値 | LLM 呼び出しの実測トークン数を記録するよう API 改修 |
 | Intelligence: インサイト生成 | フロント内決定的ヒューリスティック | 共通 API に分析エンドポイント新設（Vertex AI + RAG + WebSearch。`/v1/chatbot/ask` の RAG 基盤を拡張） |
-| Intelligence: インサイト・アクション・サイクル記録 | フロント localStorage（`aki.db.v1`） | 共通 API にテーブル + CRUD 新設・localStorage からの移行手順を提供 |
+| Intelligence: インサイト・アクション・サイクル記録 | フロント localStorage（`aki.store.v1.<メンバーID>` = API モードはユーザー別に名前空間化。端末間同期なし・記録件数の上限なし〔肥大時の案内が残課題〕） | 共通 API にテーブル + CRUD 新設・localStorage からの移行手順を提供 |

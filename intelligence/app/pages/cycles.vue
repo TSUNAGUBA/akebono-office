@@ -3,7 +3,7 @@
  * フィードバックループ履歴（FI-05）: 分析サイクルの記録（追記のみの記録系）。
  * 各サイクルの入力スナップショット・反映フィードバック・生成インサイト・紐づくアクションを時系列で可視化する。
  */
-import { Database, Lightbulb, ListChecks, RefreshCw } from 'lucide-vue-next'
+import { Database, Info, Lightbulb, ListChecks, RefreshCw } from 'lucide-vue-next'
 import type { IntelCycle } from '~/types/intelligence'
 import {
   ACTION_STATUS_LABELS, ACTION_STATUS_TONES, FEEDBACK_EFFECT_LABELS,
@@ -35,6 +35,15 @@ function actionsOf(c: IntelCycle) {
       title="フィードバックループ履歴"
       description="分析のたびにサイクルを記録します（データ → 分析 → アクション → フィードバック → 次の分析）"
     />
+
+    <!-- モック境界の明示（N-4。R1 監査指摘: 記録の保存先と制約を画面で伝える） -->
+    <div class="mb-3 flex items-start gap-2 rounded-lg border border-info/40 bg-info-soft p-3 text-xs leading-relaxed">
+      <Info class="mt-0.5 h-4 w-4 shrink-0 text-info" aria-hidden="true" />
+      <p class="text-sub">
+        サイクル履歴は<span class="font-semibold">このブラウザに保存されます（端末間同期なし。ブラウザデータの消去で失われます）。</span>
+        共通 API での本実装（サーバー保存）までの暫定機能です。
+      </p>
+    </div>
 
     <!-- ループ構造の説明 -->
     <UiSectionCard class="mb-3">

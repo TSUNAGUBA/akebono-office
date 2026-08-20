@@ -3661,10 +3661,16 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   E2E で実バグ 1 件検出・修正（tokens 設定フォーム: type=number の v-model が数値を返し `trim()` で TypeError → string | number 両対応へ）。
 
 ### 91-6 残課題（本フェーズ後 = 共通 API での本実装ほか）
-- [ ] トークン管理の API 本実装: LLM 実測トークンの記録（ai_activity_logs）+ 予算テーブル + サーバー側の受付制御
+- [ ] トークン管理の API 本実装: LLM 実測トークンの記録（ai_activity_logs）+ 予算テーブル + サーバー側の受付制御 +
+  **月次トークン集計エンドポイント**（既存 `GET /v1/ai-company/logs` は直近 200 件打ち切りのため、月間 200 件超で
+  集計・予測・予算判定が過小になる = R1 #2。現状は画面・README に注記して運用）。
   （現状はフロント内モック = requirements §5。ブロックは UI 層の抑止でありサーバー強制ではない）。
 - [ ] Intelligence 分析エンジンの API 本実装: Vertex AI + RAG（search_docs 基盤の拡張）+ WebSearch。
-  インサイト/アクション/サイクルのサーバー側 CRUD + localStorage からの移行手順の提供。
+  インサイト/アクション/サイクルのサーバー側 CRUD + localStorage（`aki.store.v1.<memberId>`）からの移行手順の提供。
+  合わせて**記録件数の上限・肥大時の案内**（現状は追記のみで localStorage 上限へ単調接近 = R1 監査 MINOR-4）を解消する。
+- [ ] Company の通知: API モードでは共通 API が Office のパスで通知を発行するため、AI タスク・エスカレーション以外
+  （Office 側ドメイン）の通知は「Office アプリで確認」の案内トーストにしている（`utils/notification-link.ts` = R1 #1 反映）。
+  Office 本体 URL への外部リンク化（環境変数でのベース URL 注入）を将来検討する。
 - [ ] AKEBONO Office（mockup/）内 F-08「AIネイティブカンパニー」メニューの扱い: Company アプリ公開後に
   リンク化（外部リンクカード）または段階的な撤去を判断する（今回は下位互換保護のため Office 側は無変更 = 原則7）。
 - [ ] オペレーター作業: Hosting サイト作成 + `FIREBASE_HOSTING_SITE_COMPANY` / `FIREBASE_HOSTING_SITE_INTELLIGENCE` 登録 +
@@ -3672,4 +3678,16 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
 - [ ] モック境界データ（トークン予算・インサイト/アクション/サイクル）は端末ローカル保存 = 端末間同期なし（API 本実装で解消）。
 
 ### 91-7 反復レビュー（原則9 = SP-8）
-- [ ] R1 = 独立ロール 2 体（コードレビュアー + システム監査官）の並行レビュー（実施後に結果を記録）。
+- [x] R1 = 独立ロール 2 体（コードレビュアー + システム監査官）の並行レビュー。**CRITICAL 0**。
+  コードレビュアー: MAJOR 3（#1 API モード通知リンクが Office パスのままで 404 → `utils/notification-link.ts` の
+  写像 + Office 側通知の案内トーストへ是正・単体テスト追加 / #2 活動ログ 200 件打ち切りでトークン集計が過小
+  → `usageMayBeTruncated` 注記を /tokens・KPI・README・requirements へ追加 + 本実装課題化 / #3 insight-engine の
+  区分値直書き → shared/domain の SoT 定数から導出へ是正）+ MINOR 10 + NIT 4。
+  システム監査官: MAJOR 1（intelligence の API モード記録が localStorage でユーザー非依存 = 同一端末の別アカウントへ
+  露出 → `aki.store.v1.<memberId>` のユーザー別名前空間化 + onApiReset での読み替えへ是正）+ MINOR 4 + NIT 3。
+  その他の反映: useIntelStore の save() 失敗検査の統一（AKI-STO-001）+ ローカルエラーの AKI-STO-002 化・
+  依頼/承認の二重送信ガード（requesting/approving + ボード再入ガード）・エスカレーション `?open=` 強調表示・
+  /insights /actions /cycles へのローカル保存注記バナー + バッジ文言是正・受動サインアウト時の clearApiData・
+  villages 未使用ハイドレーションの削除・絵文字アイコンの lucide 化・normalizeTokenBudget docblock 明文化・
+  STORE_VERSION 移行の予約 docblock・e2e ランナーへ実行ビット付与・ps1 の CORS 失念警告・
+  requirements/design/README のキー名・API マップ・FI-01 整合（原則5）。

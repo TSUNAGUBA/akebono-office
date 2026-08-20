@@ -14,7 +14,7 @@ const {
   employees, employeesAll, roleOf, employeeById, tasks, tasksOf, logs,
   requestTask, approveTask, evaluateWorkloadSignals, reloadAi,
 } = useAiCompany()
-const { usage, budgetState, tokenBudgetPct, costBudgetPct, settings, guardSpend } = useTokenBudget()
+const { usage, budgetState, tokenBudgetPct, costBudgetPct, settings, guardSpend, usageMayBeTruncated } = useTokenBudget()
 const { open: openEscalations, resolve: resolveEscalation, refresh: refreshEscalations } = useEscalations()
 const { show } = useToast()
 const { isAdmin } = useCurrentUser()
@@ -103,6 +103,9 @@ const reqDesc = ref('')
 const reqError = ref('')
 const reqFiles = ref<File[]>([])
 const reqFileInput = ref<HTMLInputElement | null>(null)
+/** 依頼・承認の実行中フラグ（API モードの二重送信防止 = R1 監査指摘。submitAnswer の answering と同型） */
+const requesting = ref(false)
+const approving = ref(false)
 
 function onReqFilesSelected(ev: Event): void {
   const list = (ev.target as HTMLInputElement).files
@@ -120,6 +123,7 @@ const proposedTask = computed<AiTask | undefined>(() =>
   proposedTaskId.value ? tasks.value.find(t => t.id === proposedTaskId.value) : undefined)
 
 async function submitRequest(): Promise<void> {
+  if (requesting.value) return
   reqError.value = ''
   if (!selectedEmpId.value) return
   if (!reqTitle.value.trim()) {
@@ -132,42 +136,55 @@ async function submitRequest(): Promise<void> {
     show(`${guard.error.code}: ${guard.error.message}`, 'warn', { label: 'トークン管理へ', to: '/tokens' })
     return
   }
-  const res = await requestTask(selectedEmpId.value, reqTitle.value, reqDesc.value, reqFiles.value)
-  if (!res.ok) {
-    show(res.error.message, 'warn')
-    return
-  }
-  proposedTaskId.value = res.id
-  reqFiles.value = []
-  if (res.confidence === 'low') {
-    show('確信度が低いため、分解案の確認を推奨します（管理者へエスカレーション済み）', 'warn')
-  } else {
-    show('分解案を作成しました。内容を確認して承認してください')
+  requesting.value = true
+  try {
+    const res = await requestTask(selectedEmpId.value, reqTitle.value, reqDesc.value, reqFiles.value)
+    if (!res.ok) {
+      show(res.error.message, 'warn')
+      return
+    }
+    proposedTaskId.value = res.id
+    reqFiles.value = []
+    if (res.confidence === 'low') {
+      show('確信度が低いため、分解案の確認を推奨します（管理者へエスカレーション済み）', 'warn')
+    } else {
+      show('分解案を作成しました。内容を確認して承認してください')
+    }
+  } finally {
+    requesting.value = false
   }
 }
 
 async function approveProposal(): Promise<void> {
-  if (!proposedTaskId.value) return
+  if (approving.value || !proposedTaskId.value) return
   const guard = guardSpend(proposedTask.value?.aiEmployeeId)
   if (!guard.ok) {
     show(`${guard.error.code}: ${guard.error.message}`, 'warn', { label: 'トークン管理へ', to: '/tokens' })
     return
   }
-  const res = await approveTask(proposedTaskId.value)
-  if (!res.ok) {
-    show(res.error.message, 'warn')
-    return
+  approving.value = true
+  try {
+    const res = await approveTask(proposedTaskId.value)
+    if (!res.ok) {
+      show(res.error.message, 'warn')
+      return
+    }
+    show(`${selectedEmp.value?.name ?? 'AI社員'} が実行を開始しました。全ステップを自動で遂行します（確認が必要な場合・完了時は通知が届きます）`)
+    reqTitle.value = ''
+    reqDesc.value = ''
+    proposedTaskId.value = null
+    pollAutoRun()
+  } finally {
+    approving.value = false
   }
-  show(`${selectedEmp.value?.name ?? 'AI社員'} が実行を開始しました。全ステップを自動で遂行します（確認が必要な場合・完了時は通知が届きます）`)
-  reqTitle.value = ''
-  reqDesc.value = ''
-  proposedTaskId.value = null
-  pollAutoRun()
 }
 
 // ---------- エスカレーション対応（管理者） ----------
 
 const escAnswer = ref<Record<string, string>>({})
+// 通知ディープリンク（/?open=<エスカレーション id>）: 対象を強調表示する（R1 #9）
+const highlightEscId = ref('')
+useRouteDeepLink('open', (id) => { highlightEscId.value = id })
 
 async function onResolveEscalation(id: string, type: 'answer' | 'no_action'): Promise<void> {
   const res = await resolveEscalation(id, type, escAnswer.value[id] ?? '')
@@ -212,7 +229,7 @@ const recentLogs = computed(() => logs.value.slice(0, 6))
     <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
       <UiKpiCard label="稼働中の AI 社員" :value="`${workingCount} / ${employees.length}`" icon="Bot" />
       <UiKpiCard label="進行中タスク" :value="String(inProgressCount)" :sub="proposedCount > 0 ? `承認待ち ${proposedCount} 件` : ''" icon="ClipboardList" to="/tasks" />
-      <UiKpiCard label="当月トークン" :value="fmtInt(usage.totalTokens)" :sub="tokenBudgetPct !== null ? `予算の ${tokenBudgetPct}%` : '予算未設定'" icon="Gauge" to="/tokens" />
+      <UiKpiCard label="当月トークン" :value="fmtInt(usage.totalTokens)" :sub="usageMayBeTruncated ? '直近 200 件基準（過小の可能性）' : tokenBudgetPct !== null ? `予算の ${tokenBudgetPct}%` : '予算未設定'" icon="Gauge" to="/tokens" />
       <UiKpiCard label="当月概算コスト" :value="`$${usage.totalCostUsd.toFixed(2)}`" :sub="`月末予測 $${usage.forecastCostUsd.toFixed(2)}`" icon="CircleDollarSign" to="/tokens" />
     </div>
 
@@ -259,7 +276,12 @@ const recentLogs = computed(() => logs.value.slice(0, 6))
       >
         <UiEmptyState v-if="openEscalations.length === 0" icon="CircleCheck" title="未対応のエスカレーションはありません" />
         <ul v-else class="grid gap-2">
-          <li v-for="e in openEscalations" :key="e.id" class="rounded-lg border border-line p-2.5">
+          <li
+            v-for="e in openEscalations"
+            :key="e.id"
+            class="rounded-lg border p-2.5"
+            :class="e.id === highlightEscId ? 'border-brand ring-2 ring-brand/40' : 'border-line'"
+          >
             <div class="flex flex-wrap items-center gap-1.5">
               <UiStatusBadge :label="ESCALATION_REASON_LABELS[e.reason]" :tone="ESCALATION_REASON_TONES[e.reason]" />
               <span class="num text-[11px] text-muted">{{ fmtDateTime(e.raisedAt) }}</span>
@@ -362,7 +384,9 @@ const recentLogs = computed(() => logs.value.slice(0, 6))
                 </li>
               </ul>
             </div>
-            <button type="button" class="btn btn-primary" @click="submitRequest">分解案を作成</button>
+            <button type="button" class="btn btn-primary" :disabled="requesting" @click="submitRequest">
+              {{ requesting ? '作成中…' : '分解案を作成' }}
+            </button>
           </div>
 
           <!-- 分解案の即時表示 -->
@@ -381,7 +405,9 @@ const recentLogs = computed(() => logs.value.slice(0, 6))
               依頼内容が短い・曖昧なため確信度が低い分解案です。内容を具体化して再依頼するか、このまま承認してください。
             </p>
             <div v-if="proposedTask.status === 'proposed'" class="mt-2.5 flex flex-wrap gap-2">
-              <button type="button" class="btn btn-primary btn-sm" @click="approveProposal">この分解で承認</button>
+              <button type="button" class="btn btn-primary btn-sm" :disabled="approving" @click="approveProposal">
+                {{ approving ? '承認中…' : 'この分解で承認' }}
+              </button>
               <button type="button" class="btn btn-ghost btn-sm" @click="proposedTaskId = null">提案のまま保留</button>
             </div>
             <p v-else class="mt-2.5 text-[11px] font-semibold text-ok">承認済み。タスクボードで進捗を確認できます</p>

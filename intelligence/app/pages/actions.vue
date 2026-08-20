@@ -3,7 +3,7 @@
  * アクション管理（FI-04）: 提案からのアクション化・手動登録・ステータス管理・
  * 結果の記録・フィードバック（5 段階 + コメント）。フィードバックは次サイクルの分析に反映される。
  */
-import { Plus } from 'lucide-vue-next'
+import { Info, Plus } from 'lucide-vue-next'
 import type { InsightTheme, IntelAction } from '~/types/intelligence'
 import {
   ACTION_STATUS_LABELS, ACTION_STATUS_TONES, INSIGHT_THEME_LABELS, INSIGHT_THEME_TONES,
@@ -177,6 +177,16 @@ function onRestore(a: IntelAction): void {
         </button>
       </template>
     </UiPageHeader>
+
+    <!-- モック境界の明示（N-4。R1 監査指摘: 記録の保存先と制約を画面で伝える） -->
+    <div class="mb-3 flex items-start gap-2 rounded-lg border border-info/40 bg-info-soft p-3 text-xs leading-relaxed">
+      <Info class="mt-0.5 h-4 w-4 shrink-0 text-info" aria-hidden="true" />
+      <p class="text-sub">
+        アクション・結果・フィードバックの記録は
+        <span class="font-semibold">このブラウザに保存されます（端末間同期なし。ブラウザデータの消去で失われます）。</span>
+        共通 API での本実装（サーバー保存）までの暫定機能です。
+      </p>
+    </div>
 
     <UiFilterBar>
       <UiSelect v-model="filterStatus" :options="statusOptions" empty-label="ステータス: すべて" aria-label="ステータスで絞り込み" />

@@ -2,7 +2,7 @@
  * 中核マスタのシードデータ（決定的・固定値。AKEBONO Office の core.ts から本アプリで使う分を抜粋）
  * メンバー・顧客・案件は Office のデモデータと同一（同じ世界観のデモにするため）。
  */
-import type { Company, Member, Project, Village } from '~/types/domain'
+import type { Company, Member, Project } from '~/types/domain'
 
 export const seedMembers: Member[] = [
   { id: 'm-01', name: '山下 誠', email: 'yamashita@tsunaguba.co.jp', employmentType: 'director', departmentId: 'dp-01', title: '代表取締役', role: 'admin', hireDate: '2018-04-01', weeklyDays: 5, weeklyHours: 40, punchRequired: false, googleCalendarConnected: true, attendanceRuleId: null, birthDate: '1980-06-15', active: true, custom: {} },
@@ -41,12 +41,4 @@ export const seedProjects: Project[] = [
   { id: 'pj-06', name: 'グランメディア 記事生成 AI PoC', companyId: 'c-06', type: 'development', status: 'onhold', priority: 'low', ownerMemberId: 'm-06', memberIds: ['m-06'], startDate: '2026-02-01', endDate: '2026-06-30', budget: 4000000, objective: '記事生成ワークフローの PoC 検証', active: true, custom: {} },
   { id: 'pj-07', name: 'シーサイドホテルズ DX 構想策定', companyId: 'c-07', type: 'biz_consulting', status: 'planned', priority: 'mid', ownerMemberId: 'm-03', memberIds: ['m-03'], startDate: '2026-08-01', endDate: '2027-01-31', budget: 10000000, objective: '中期 DX ロードマップの策定', active: true, custom: {} },
   { id: 'pj-08', name: 'AKEBONO Office 開発（自社）', companyId: 'c-self', type: 'internal', status: 'active', priority: 'high', ownerMemberId: 'm-01', memberIds: ['m-01', 'm-05', 'm-06', 'm-09'], startDate: '2026-06-01', endDate: null, budget: 0, objective: '社内オフィスアプリの構築と他社展開の土台づくり', active: true, custom: {} },
-]
-
-
-/** 事業区分（Village）マスタ */
-export const seedVillages: Village[] = [
-  { id: 'vil-01', name: 'AKEBONO', displayOrder: 1, active: true },
-  { id: 'vil-02', name: 'つなぐば', displayOrder: 2, active: true },
-  { id: 'vil-03', name: 'コーポレート', displayOrder: 3, active: true },
 ]

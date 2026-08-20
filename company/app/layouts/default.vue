@@ -38,7 +38,13 @@ watch(() => route.fullPath, closeMenus)
 async function openNotification(id: string, link: string): Promise<void> {
   await markRead(id)
   closeMenus()
-  await navigateTo(link)
+  // API モードの通知は Office のパスで届くため本アプリ内パスへ写像する（写像不能 = Office 側の機能）
+  const target = resolveNotificationLink(link)
+  if (!target) {
+    show('この通知は AKEBONO Office 側の機能です（Office アプリで確認してください）', 'info')
+    return
+  }
+  await navigateTo(target)
 }
 
 async function onSwitchUser(id: string): Promise<void> {

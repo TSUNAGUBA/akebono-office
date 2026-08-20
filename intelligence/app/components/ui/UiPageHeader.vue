@@ -13,7 +13,7 @@ const route = useRoute()
     <div>
       <h1 class="flex flex-wrap items-center gap-2 text-lg font-bold leading-tight">
         {{ title }}
-        <UiMockBadge v-if="isMockPage(route.path)" label="モックアップ（デモデータ）" />
+        <UiMockBadge v-if="isMockPage(route.path)" label="モック実装（後日 API 本実装）" />
       </h1>
       <p v-if="description" class="mt-0.5 text-xs text-sub">{{ description }}</p>
     </div>

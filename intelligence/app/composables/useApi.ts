@@ -173,7 +173,6 @@ const MIGRATED_MASTERS: Record<string, string> = {
   members: 'members',
   companies: 'companies',
   projects: 'projects',
-  villages: 'villages',
 }
 
 /** API モード時に API が SoT となるコレクション（tbl() が API キャッシュを返す） */

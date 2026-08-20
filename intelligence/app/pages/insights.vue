@@ -4,7 +4,7 @@
  * 分析エンジンは決定的ヒューリスティック（モック。後日 AI 推論 + RAG + WebSearch で本実装）。
  * 生成のたびにサイクル（FI-05）を追記し、反映したフィードバックを明細で残す。
  */
-import { Globe, Lightbulb, Plus, Sparkles } from 'lucide-vue-next'
+import { Globe, Info, Plus, Sparkles } from 'lucide-vue-next'
 import type { EngineData } from '~/utils/insight-engine'
 import { generateInsightDraft } from '~/utils/insight-engine'
 import type { InsightTheme, IntelInsight } from '~/types/intelligence'
@@ -204,6 +204,16 @@ function onRestore(ins: IntelInsight): void {
         </button>
       </template>
     </UiPageHeader>
+
+    <!-- モック境界の明示（N-4。R1 監査指摘: 記録の保存先と制約を画面で伝える） -->
+    <div class="mb-3 flex items-start gap-2 rounded-lg border border-info/40 bg-info-soft p-3 text-xs leading-relaxed">
+      <Info class="mt-0.5 h-4 w-4 shrink-0 text-info" aria-hidden="true" />
+      <p class="text-sub">
+        分析エンジンは現在モック（決定的ヒューリスティック）です。生成したインサイト・アクション・サイクルは
+        <span class="font-semibold">このブラウザに保存されます（端末間同期なし。ブラウザデータの消去で失われます）。</span>
+        共通 API での本実装（AI 推論 + サーバー保存）までの暫定機能です。
+      </p>
+    </div>
 
     <UiFilterBar>
       <UiSelect v-model="filterTheme" :options="themeOptions" empty-label="テーマ: すべて" aria-label="テーマで絞り込み" />

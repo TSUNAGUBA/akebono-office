@@ -69,6 +69,15 @@ export function useTokenBudget() {
     empId => employeesAll.value.find(e => e.id === empId)?.name ?? empId,
   ))
 
+  /**
+   * 集計が打ち切られている可能性（R1 レビュー指摘 #2）。
+   * 既存 API の GET /v1/ai-company/logs は直近 200 件打ち切り（無変更制約）のため、
+   * 月間ログが 200 件を超えると当月集計・予測・予算ガードが過小評価になる。
+   * true のとき画面に注記を出す（サーバー側の月次集計エンドポイントが本実装課題 = §91-6）。
+   */
+  const API_LOGS_LIMIT = 200
+  const usageMayBeTruncated = computed<boolean>(() => useApiMode() && logs.value.length >= API_LOGS_LIMIT)
+
   /** 予算の消化率（% 整数。予算未設定は null） */
   const tokenBudgetPct = computed<number | null>(() => {
     const budget = settings.value.monthlyTokenBudget
@@ -126,6 +135,7 @@ export function useTokenBudget() {
     saveSettings,
     resetSettings,
     usage,
+    usageMayBeTruncated,
     tokenBudgetPct,
     costBudgetPct,
     budgetState,

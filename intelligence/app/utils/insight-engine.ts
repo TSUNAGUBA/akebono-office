@@ -15,6 +15,9 @@ import type {
   Company, CustomerLog, DailyReport, Member, MonthlyReport, PartnerActivity,
   Project, SalesActivity, SalesMonthly, SupportActivity, WeeklyReport,
 } from '~/types/domain'
+import {
+  PARTNER_ACTIVITY_STATUSES, SALES_ACTIVITY_PHASES, SUPPORT_ACTIVITY_STATUSES,
+} from '~/types/domain'
 import type {
   FeedbackConsidered, InsightConfidence, InsightEvidence, InsightProposal, InsightTheme, IntelAction,
 } from '~/types/intelligence'
@@ -77,8 +80,15 @@ function sinceDays(today: string, days: number): string {
   return addDays(today, -(days - 1))
 }
 
-const OPEN_SALES_PHASES = new Set(['初回', 'ヒアリング', '提案', '見積', '稟議'])
-const OPEN_SUPPORT_STATUSES = new Set(['未対応', '対応中', '顧客確認待ち', '保留'])
+// 区分値は shared/domain/types（SoT）から導出する（R1 #3: 直書き散在の禁止 = 追加値への自動追従）。
+// 終端側（受注/失注・解決・休眠系）のみ列挙し、進行中系は SoT から差し引いて求める。
+const PHASE_WON = '受注'
+const CLOSED_SALES_PHASES = new Set<string>([PHASE_WON, '失注'])
+const OPEN_SALES_PHASES = new Set<string>(SALES_ACTIVITY_PHASES.filter(p => !CLOSED_SALES_PHASES.has(p)))
+const RESOLVED_SUPPORT_STATUS = '解決'
+const OPEN_SUPPORT_STATUSES = new Set<string>(SUPPORT_ACTIVITY_STATUSES.filter(s => s !== RESOLVED_SUPPORT_STATUS))
+const DORMANT_PARTNER_STATUSES = new Set<string>(['情報収集', '検討', '完了'])
+const ACTIVE_PARTNER_STATUSES = new Set<string>(PARTNER_ACTIVITY_STATUSES.filter(s => !DORMANT_PARTNER_STATUSES.has(s)))
 
 function activeRows<T>(rows: T[]): T[] {
   return rows.filter(r => (r as { active?: boolean }).active !== false)
@@ -242,7 +252,7 @@ function analyzeManagement(data: EngineData, opts: EngineOptions): EngineResult 
   }
 
   // 5) パートナー連携
-  const partnerActive = partner.filter(p => p.status === '進行中' || p.status === '接続予定' || p.status === '案件化')
+  const partnerActive = partner.filter(p => ACTIVE_PARTNER_STATUSES.has(p.status))
   if (partnerActive.length > 0) {
     findings.push(`ビジネスパートナー活動は進行中・接続予定・案件化が計 ${partnerActive.length} 件（当月新規 ${partnerThis.length} 件）。`)
   }
@@ -311,7 +321,7 @@ function analyzeCustomer(data: EngineData, opts: EngineOptions): EngineResult {
   // 2) 商談状況
   const openDeals = sales.filter(s => OPEN_SALES_PHASES.has(s.phase))
   const stalled = openDeals.filter(d => !d.nextActionDate || d.nextActionDate < opts.today)
-  const won = sales.filter(s => s.phase === '受注')
+  const won = sales.filter(s => s.phase === PHASE_WON)
   if (sales.length > 0) {
     findings.push(`商談は全 ${sales.length} 件（進行中 ${openDeals.length} / 受注 ${won.length}）。進行中パイプラインは ${fmtMan(openDeals.reduce((s, d) => s + (d.amount ?? 0), 0))}。`)
   }
@@ -424,7 +434,9 @@ function analyzeProject(data: EngineData, opts: EngineOptions): EngineResult {
   // 3) 課題の言及
   const issueEntries = entries.filter(e => e.issues.trim().length > 0)
   if (issueEntries.length > 0) {
-    findings.push(`案件に従事した日の日報のうち ${issueEntries.length} 件に課題の記載あり（例: ${[...issueEntries[issueEntries.length - 1]!.issues].slice(0, 40).join('')}…）。`)
+    const lastIssue = [...issueEntries[issueEntries.length - 1]!.issues]
+    const excerpt = lastIssue.slice(0, 40).join('') + (lastIssue.length > 40 ? '…' : '')
+    findings.push(`案件に従事した日の日報のうち ${issueEntries.length} 件に課題の記載あり（例: ${excerpt}）。`)
     proposals.push({
       title: `${project.name} の課題レビュー会の実施`,
       description: `日報に記載された課題 ${issueEntries.length} 件を棚卸しし、対応方針をチームで決める。`,
