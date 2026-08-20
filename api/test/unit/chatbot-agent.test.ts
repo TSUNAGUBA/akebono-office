@@ -56,4 +56,18 @@ describe('splitSuggestions（回答末尾の提案行）', () => {
     expect(listed.content).toBe('回答です。')
     expect(listed.suggestions).toEqual(['A', 'B'])
   })
+
+  it('候補自体・行全体の太字は対称に剥がす（**B のような壊れた候補を作らない = レビュー R2）', () => {
+    expect(splitSuggestions('回答です。\n提案: A | **B**').suggestions).toEqual(['A', 'B'])
+    expect(splitSuggestions('回答です。\n**提案:** **A** | **B**').suggestions).toEqual(['A', 'B'])
+    expect(splitSuggestions('回答です。\n**提案: A | B**').suggestions).toEqual(['A', 'B'])
+  })
+
+  it('リスト形（- 提案:）は | 区切りを含む場合のみ抽出する（正当な箇条書きの本文を削らない = レビュー R2）', () => {
+    const listPair = splitSuggestions('改善点は次のとおりです。\n- 課題: 承認の遅延\n- 提案: 経費精算の自動化')
+    expect(listPair.content).toBe('改善点は次のとおりです。\n- 課題: 承認の遅延\n- 提案: 経費精算の自動化')
+    expect(listPair.suggestions).toEqual([])
+    // プレーンな提案行は | なし（候補 1 件）でも従来どおり抽出する
+    expect(splitSuggestions('回答です。\n提案: 管理者に確認する').suggestions).toEqual(['管理者に確認する'])
+  })
 })

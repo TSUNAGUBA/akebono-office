@@ -90,6 +90,13 @@ describe('パイプテーブル + ルートリンク化（AI チャット対応 
     expect(parseMarkdown('A | B のような本文').map(b => b.t)).toEqual(['paragraph'])
   })
 
+  it('ヘッダーと区切り行のセル数不一致はテーブルにしない（GFM 同様 = レビュー R2。水平線は hr のまま）', () => {
+    expect(parseMarkdown('| a | b |\n---\n本文').map(b => b.t)).toEqual(['paragraph', 'hr', 'paragraph'])
+    expect(parseMarkdown('| a | b |\n| --- |\n| 1 | 2 |').map(b => b.t)).toEqual(['paragraph'])
+    // 単一列はセル数が一致するため表になる（GitHub の描画と同じ）
+    expect(parseMarkdown('| a |\n|---|\n| 1 |').map(b => b.t)).toEqual(['table'])
+  })
+
   it('パラグラフ中にテーブルが始まったらパラグラフを区切ってテーブルとして分解する', () => {
     const blocks = parseMarkdown('前置きの文\n| a | b |\n|---|---|\n| 1 | 2 |')
     expect(blocks.map(b => b.t)).toEqual(['paragraph', 'table'])

@@ -59,8 +59,9 @@ function listItem(text: string): MdInline[] | null {
 const tableRowRe = /^\s*\|.*\|\s*$/
 /**
  * テーブルの区切り行か（`|---|:---:|`。- : | 空白のみで構成され - を含む）。
- * パイプなしの `---` にもマッチするため「`| a |` の直後の水平線」は区切り行として消費され
- * ヘッダーのみの表になる（GFM = GitHub の描画と同じ挙動。認識済みの仕様 = レビュー R1）
+ * パイプなしの `---` にもマッチするが、isTableStart のセル数一致検査（GFM 同様）により
+ * 複数列ヘッダー直後の水平線は区切り行にならずパラグラフ + hr のまま。単一列ヘッダー
+ * `| a |` + `---` のみ 1 セル同士が一致してヘッダーのみの表になる（GitHub の描画と同じ = レビュー R2）
  */
 const tableSepRe = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/
 
@@ -74,9 +75,13 @@ export function parseMarkdown(src: string): MdBlock[] {
   const lines = src.replace(/\r\n/g, '\n').split('\n')
   const blocks: MdBlock[] = []
   let i = 0
-  /** テーブルの開始位置か（ヘッダー行 + 直後に区切り行。区切りがなければパラグラフへフェイルオープン） */
+  /**
+   * テーブルの開始位置か（ヘッダー行 + 直後に区切り行 + セル数一致。GFM と同じ判定 = レビュー R2。
+   * 揃わなければパラグラフへフェイルオープン = 情報を落とさない）
+   */
   const isTableStart = (at: number): boolean =>
     tableRowRe.test(lines[at] ?? '') && tableSepRe.test(lines[at + 1] ?? '')
+    && tableCells(lines[at + 1]!).length === tableCells(lines[at]!).length
   while (i < lines.length) {
     const line = lines[i]!
     // コードブロック

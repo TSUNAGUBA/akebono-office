@@ -1,5 +1,5 @@
 /**
- * チャットボット応答 API（F-09-2）。mockup useChatbot の LLM 一次応答レイヤ。
+ * チャットボット応答 API（F-09-2）。home useChatbot の LLM 一次応答レイヤ。
  *
  * **エージェント型（改修依頼 2026-08-20）**: 1 会話ごとに「会話の流れを含めて意図を解釈 → 回答に必要な
  * データをモデル自身がツールで取得（function calling・複数回可）→ 回答を生成」のループで応答する
@@ -998,14 +998,24 @@ const AGENT_SYSTEM = (userName: string, today: string): string =>
  * 回答末尾の「提案:」行を suggestions として抽出する（純関数・単体テスト対象）。
  * 形式が無い・崩れている場合は本文そのまま + 空配列（クライアントが既定候補を表示）。
  * Markdown 許可（2026-08-20）に伴い、指示に反してモデルが装飾した形
- * （`**提案:** …`・`- 提案: …`）も抽出する（レビュー R1: 提案行が本文に残って二重表示になる事故を防ぐ）
+ * （`**提案:** …`・`- 提案: …`・候補自体の太字）も抽出する（レビュー R1/R2:
+ * 提案行が本文に残って二重表示になる事故と、装飾の食い残し = `**B` のような壊れた候補を防ぐ）。
+ * リスト形（`- 提案:`）は本文の正当な箇条書き（例:「課題/提案」の対）と衝突し得るため、
+ * 契約形式の特徴である | 区切りを含む場合のみ抽出する。誤爆 = 本文の恒久欠落（chat_messages へ
+ * 保存される前に削られる = 原則2 違反）・取りこぼし = 既定候補の表示のみ、という非対称性から
+ * 取りこぼし側に倒す（レビュー R2）
  */
 export function splitSuggestions(text: string): { content: string; suggestions: string[] } {
   const lines = text.trimEnd().split('\n')
-  const last = (lines[lines.length - 1] ?? '').trim()
-  const m = /^(?:[-*]\s+)?(?:\*\*)?提案(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*(.+?)(?:\*\*)?$/.exec(last)
+  // 行全体の太字（**提案: A | B**）は対称に剥がしてから解釈する。内部に * を含む行
+  // （**提案:** **A** 等 = 別々の太字ペア）を誤って剥がさないよう、内部が * なしの場合のみ
+  const last = (lines[lines.length - 1] ?? '').trim().replace(/^\*\*([^*]+)\*\*$/, '$1')
+  const m = /^(?:[-*]\s+)?(?:\*\*)?提案(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*(.+)$/.exec(last)
   if (!m) return { content: text.trim(), suggestions: [] }
-  const suggestions = (m[1] ?? '').split(/[|｜]/).map(s => s.trim()).filter(Boolean).slice(0, 3)
+  if (/^[-*]\s/.test(last) && !/[|｜]/.test(m[1] ?? '')) return { content: text.trim(), suggestions: [] }
+  const suggestions = (m[1] ?? '').split(/[|｜]/)
+    .map(s => s.trim().replace(/^\*\*([^*]+)\*\*$/, '$1').trim())
+    .filter(Boolean).slice(0, 3)
   return { content: lines.slice(0, -1).join('\n').trim(), suggestions }
 }
 

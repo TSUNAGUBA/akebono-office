@@ -55,6 +55,7 @@ describe('テーブル + ルートリンク描画（AI チャット対応 2026-0
     expect(html).toContain('overflow-x-auto')
     expect(html).toContain('<table')
     expect(html).toContain('<th')
+    expect(html).toContain('scope="col"')
     expect(html).toContain('>有給</td>')
   })
 
