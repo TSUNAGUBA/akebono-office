@@ -308,14 +308,14 @@ const detailRows = computed(() => {
         <UiFormField label="件名" required>
           <input v-model="form.title" type="text" class="input" placeholder="例）初回訪問・要件ヒアリング" aria-label="件名">
         </UiFormField>
-        <UiFormField label="内容（任意）">
+        <UiFormField label="内容">
           <textarea v-model="form.body" class="textarea min-h-24" placeholder="活動の内容・先方の反応・決まったことなど" aria-label="内容" />
         </UiFormField>
         <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <UiFormField label="Next Action（任意）">
+          <UiFormField label="Next Action">
             <input v-model="form.nextAction" type="text" class="input" placeholder="例）見積書の提出" aria-label="Next Action">
           </UiFormField>
-          <UiFormField label="Next Action日（任意）">
+          <UiFormField label="Next Action日">
             <input v-model="form.nextActionDate" type="date" class="input" aria-label="Next Action日">
           </UiFormField>
         </div>

@@ -4,6 +4,7 @@
  * （useReports.weekStartOf も本実装へ委譲する = 原則3）
  */
 import { addDays, weekdayOf } from '../../../shared/domain/jst'
+import { fmtDate } from './format'
 
 /** 週の開始日（月曜）。日曜は前週の月曜へ戻す（月曜始まりの週） */
 export function weekStartOf(date: string): string {
@@ -18,4 +19,12 @@ export function weekStartOf(date: string): string {
 export function recentWeekStarts(today: string, n: number): string[] {
   const current = weekStartOf(today)
   return Array.from({ length: n }, (_, i) => addDays(current, -7 * (n - 1 - i)))
+}
+
+/**
+ * 週レンジのラベル（M/D〜M/D）。自分の週報・全員の週報・週報詳細ドロワー・提出状況マトリクスで
+ * 共通（改修依頼 2026-08-20 第2バッチで reports.vue から週報パネルを分離するにあたり一元化 = 原則3）
+ */
+export function weekRangeLabel(weekStart: string): string {
+  return `${fmtDate(weekStart)}〜${fmtDate(addDays(weekStart, 6))}`
 }

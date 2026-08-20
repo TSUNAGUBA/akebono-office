@@ -29,7 +29,11 @@ export const FEATURE_PERMISSION_KEYS: { key: string; label: string }[] = [
   { key: 'timecard', label: 'タイムカード（自分の打刻）' },
   { key: 'attendance', label: '勤怠管理（休暇含む）' },
   { key: 'shift', label: 'シフト表' },
-  { key: 'reports', label: '日報・週報' },
+  { key: 'reports', label: '日報' },
+  // 週報・月報は独立機能キー（改修依頼 2026-08-20 第2バッチ。旧: 単一キー 'reports' に内包）。
+  // 既存テナントの 'reports' ルールとの互換は resolveFeatureResource / resolveTabPermission が担う
+  { key: 'weekly-report', label: '週報' },
+  { key: 'monthly-report', label: '月報' },
   { key: 'ai-assistant', label: 'AI業務アシスタント（カレンダー連携含む）' },
   { key: 'poipoi', label: '改善のタネ' },
   { key: 'minutes', label: '議事録' },
@@ -54,7 +58,7 @@ export const FEATURE_PERMISSION_KEYS: { key: string; label: string }[] = [
 ]
 
 /** ページパス → 機能キー（フロントのメニュー・ルートガード用。null = ガード対象外 = 常に表示可）。
- *  クエリ・ハッシュ付きパス（例 /reports?kind=weekly = 改修依頼 2026-08-19 第4弾の日報/週報/月報メニュー）も
+ *  クエリ・ハッシュ付きパス（例 /reports?date=2026-08-20 の通知ディープリンク）も
  *  正しく解決できるよう先頭のパス部分のみで判定する。 */
 export function featureKeyOfPath(pathWithQuery: string): string | null {
   const path = pathWithQuery.split(/[?#]/)[0] ?? ''
@@ -62,11 +66,72 @@ export function featureKeyOfPath(pathWithQuery: string): string | null {
   if (path === '/support/documents' || path.startsWith('/support/documents/')) return 'documents'
   const seg = path.split('/')[1] ?? ''
   const known = [
-    'timecard', 'attendance', 'shift', 'reports', 'ai-assistant', 'workflow', 'decision', 'ai-company',
+    'timecard', 'attendance', 'shift', 'reports', 'weekly-report', 'monthly-report',
+    'ai-assistant', 'workflow', 'decision', 'ai-company',
     'akebono', 'support', 'sales', 'status', 'inbox', 'masters', 'settings', 'poipoi', 'minutes', 'customer-log',
     'customer-context', 'improvements', 'support-activity', 'sales-activity', 'partner-activity',
   ]
   return known.includes(seg) ? seg : null
+}
+
+// ---------- 週報・月報の機能キー独立と旧 'reports' キー互換（改修依頼 2026-08-20 第2バッチ） ----------
+
+/**
+ * 週報・月報はトップレベル機能（/weekly-report・/monthly-report = 機能キー 'weekly-report' /
+ * 'monthly-report'）として日報（'reports'）から独立した。既存テナントの permission_rules は
+ * 単一キー 'reports' で週報・月報（タブキー weekly-* / monthly-*）も制御していたため、
+ * 下位互換（原則7）として次のフォールバックで解決する:
+ *
+ * - **新キーの active なルールが 1 件も無い間は、従来の 'reports' 設定を継承する**（機能・タブとも）
+ * - **新キーのルールを 1 件でも設定した時点で独立制御へ切り替わる**（以後、旧 'reports' の
+ *   ルールはその kind の判定に使わない。切替条件は resource 単位 = 機能/タブで分岐しない単純な仕様）
+ * - タブキーは旧 'reports' の 'weekly-mine' 等 → 新リソースの 'mine' 等へ写像する
+ *
+ * フロント（usePermissions.can / canTab）と API（featureGuard）は本ヘルパを共通で通る
+ * （UI と API の判定一致。判定ロジックの SoT はこのファイル）。
+ */
+const REPORT_SPLIT_FALLBACK: Record<string, { legacyResource: string; legacyTabPrefix: string }> = {
+  'weekly-report': { legacyResource: 'reports', legacyTabPrefix: 'weekly-' },
+  'monthly-report': { legacyResource: 'reports', legacyTabPrefix: 'monthly-' },
+}
+
+/** 新キーの明示ルールが存在するか（active のみ。resource 単位 = 独立制御への切替条件） */
+function hasOwnResourceRules(rules: PermissionRule[], resource: string): boolean {
+  return rules.some(r => r.active && r.resource === resource)
+}
+
+/**
+ * 既読管理（/v1/reports/reads）の kind 別機能キー（改修依頼 2026-08-20 第2バッチ・レビュー R1）。
+ * reads は 3 kind 混在の共用エンドポイントのためパスガードでなくハンドラ内で kind 単位に判定する
+ * （'reports' 固定だと「日報 deny × 週報 allow」設定で週報・月報の既読管理まで 403 になる）。
+ * 判定時は resolveFeatureResource を通す = 新キー未設定の間の旧 'reports' 継承も同一規則
+ */
+export function reportReadsFeatureKey(kind: 'daily' | 'weekly' | 'monthly'): string {
+  return kind === 'weekly' ? 'weekly-report' : kind === 'monthly' ? 'monthly-report' : 'reports'
+}
+
+/**
+ * 機能利用可否の判定に使う実効リソースキー（canUseFeature へ渡す前に解決する）。
+ * weekly-report / monthly-report 以外のキーはそのまま返す
+ */
+export function resolveFeatureResource(rules: PermissionRule[], resource: string): string {
+  const fb = REPORT_SPLIT_FALLBACK[resource]
+  return fb && !hasOwnResourceRules(rules, resource) ? fb.legacyResource : resource
+}
+
+/**
+ * タブ利用可否の判定に使う実効（リソース, タブキー）（canUseTab へ渡す前に解決する）。
+ * 例: 'weekly-report'/'mine' は新キー未設定の間 'reports'/'weekly-mine' の旧ルールで判定する
+ */
+export function resolveTabPermission(
+  rules: PermissionRule[],
+  resource: string,
+  tabKey: string,
+): { resource: string; tabKey: string } {
+  const fb = REPORT_SPLIT_FALLBACK[resource]
+  return fb && !hasOwnResourceRules(rules, resource)
+    ? { resource: fb.legacyResource, tabKey: `${fb.legacyTabPrefix}${tabKey}` }
+    : { resource, tabKey }
 }
 
 /** ルールが対象者に該当するか（レイヤ判定は呼び出し側） */

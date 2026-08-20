@@ -39,8 +39,10 @@ export const NAV_GROUPS: NavGroup[] = [
       { path: '/attendance', label: '勤怠管理', icon: 'Clock' },
       { path: '/shift', label: 'シフト表', icon: 'CalendarRange', featureKey: 'shift' },
       { path: '/reports', label: '日報', icon: 'NotebookPen' },
-      { path: '/reports?kind=weekly', label: '週報', icon: 'CalendarDays' },
-      { path: '/reports?kind=monthly', label: '月報', icon: 'CalendarClock' },
+      // 週報・月報は物理パスへ独立（改修依頼 2026-08-20 第2バッチ。旧 /reports?kind= は
+      // reports.vue が新パスへ replace リダイレクトする = 旧リンク互換）
+      { path: '/weekly-report', label: '週報', icon: 'CalendarDays' },
+      { path: '/monthly-report', label: '月報', icon: 'CalendarClock' },
       { path: '/ai-assistant', label: 'AI業務アシスタント', icon: 'Sparkles' },
       { path: '/customer-log', label: '顧客活動', icon: 'MessageSquare' },
       { path: '/customer-context', label: '顧客コンテキスト', icon: 'BookUser' },
@@ -92,15 +94,13 @@ export const MOBILE_NAV: NavItem[] = [
 
 /**
  * 現在パスがナビ項目にマッチするか（最長一致は呼び出し側で）。current は route.fullPath を渡す。
- * 改修依頼 2026-08-19 第4弾: 日報/週報/月報は同一パス /reports をクエリ ?kind で切り替えるため、
- * クエリ付き項目は kind の一致で判定する（日報 = kind 無し）。
+ * 改修依頼 2026-08-20 第2バッチ: 週報・月報が物理パス（/weekly-report・/monthly-report）へ独立し、
+ * ナビ項目からクエリ付きパス（旧 /reports?kind=）が無くなったため、旧 ?kind のクエリ比較は撤去して
+ * パスのみで判定する（簡素化の判断: 旧 URL は reports.vue が新パスへ replace リダイレクトするため、
+ * ここにクエリ互換を残す必要はない。滞在パスは常に新パスになる）。
  */
 export function isActivePath(current: string, item: NavItem): boolean {
-  const [curPath = '', curQuery = ''] = current.split('?')
-  const [itemPath = '', itemQuery = ''] = item.path.split('?')
-  if (item.matchPrefix) return curPath === itemPath || curPath.startsWith(`${itemPath}/`)
-  if (curPath !== itemPath) return false
-  const curKind = new URLSearchParams(curQuery).get('kind') ?? ''
-  const itemKind = new URLSearchParams(itemQuery).get('kind') ?? ''
-  return curKind === itemKind
+  const [curPath = ''] = current.split('?')
+  if (item.matchPrefix) return curPath === item.path || curPath.startsWith(`${item.path}/`)
+  return curPath === item.path
 }

@@ -349,7 +349,7 @@ async function submitCreateInner(): Promise<void> {
           <UiFormField label="区分" required>
             <UiSelect v-model="createForm.purchaseType" :options="purchaseTypeOptions" aria-label="区分" />
           </UiFormField>
-          <UiFormField label="入庫倉庫" hint="入荷管理 ON のときは入荷実績で入庫済み（任意）">
+          <UiFormField label="入庫倉庫" hint="入荷管理 ON のときは入荷実績で入庫済み">
             <UiSelect v-model="createForm.warehouseId" :options="warehouseOptions" empty-label="（指定しない）" aria-label="入庫倉庫" />
           </UiFormField>
         </div>

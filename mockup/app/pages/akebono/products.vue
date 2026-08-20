@@ -129,7 +129,7 @@ const customFields = computed<FieldDef[]>(() => [
   { key: 'unitId', label: '単位', type: 'select', options: masters.unitOptions.value, emptyLabel: '（未指定）' },
   { key: 'billingType', label: '課金区分', type: 'select', options: billingTypeOptions, emptyLabel: '（物販）' },
   { key: 'variantAxis1Label', label: 'バリアント軸1ラベル', type: 'text', placeholder: '例）カラー', hint: '入力すると SKU 展開商品になります' },
-  { key: 'variantAxis2Label', label: 'バリアント軸2ラベル', type: 'text', placeholder: '例）サイズ（任意）' },
+  { key: 'variantAxis2Label', label: 'バリアント軸2ラベル', type: 'text', placeholder: '例）サイズ' },
 ])
 
 /** フォームで採用中の既定値サマリ（カスタマイズ未使用時の透明性表示） */
@@ -687,7 +687,7 @@ async function saveMatrix(): Promise<void> {
         <!-- 画像（新規登録フォームで添付。保存時に商品へ登録） -->
         <section v-if="mode === 'create'">
           <div class="mb-2 flex items-center justify-between">
-            <h3 class="text-[11px] font-bold uppercase tracking-wide text-muted">画像（任意）</h3>
+            <h3 class="text-[11px] font-bold uppercase tracking-wide text-muted">画像</h3>
             <button type="button" class="btn btn-sm" @click="openImageModal">
               <Plus class="h-3.5 w-3.5" aria-hidden="true" /> 画像を追加
             </button>
@@ -768,7 +768,7 @@ async function saveMatrix(): Promise<void> {
         <UiFormField :label="`${selected?.variantAxis1Label || '軸1'} の値（カンマ区切り）`" required hint="例）赤, 青, 白">
           <input v-model="matrixForm.axis1" type="text" class="input" placeholder="赤, 青, 白" aria-label="軸1の値">
         </UiFormField>
-        <UiFormField :label="`${selected?.variantAxis2Label || '軸2'} の値（カンマ区切り・任意）`" hint="例）S, M, L">
+        <UiFormField :label="`${selected?.variantAxis2Label || '軸2'} の値（カンマ区切り）`" hint="例）S, M, L">
           <input v-model="matrixForm.axis2" type="text" class="input" placeholder="S, M, L" aria-label="軸2の値">
         </UiFormField>
         <p class="text-[11px] text-muted">

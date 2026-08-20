@@ -16,6 +16,7 @@ import {
   canViewMemberReports as canViewMemberReportsShared,
   canViewMemberTaskPlans as canViewMemberTaskPlansShared,
   featureKeyOfPath, type PermissionSubject,
+  resolveFeatureResource, resolveTabPermission,
 } from '../../../shared/domain/permissions'
 
 export function usePermissions() {
@@ -30,7 +31,9 @@ export function usePermissions() {
   }))
 
   function can(resource: string): boolean {
-    return canUseFeature(rules.value, subject.value, resource)
+    // weekly-report / monthly-report は新キーのルール未設定の間、旧 'reports' 設定を継承する
+    // （resolveFeatureResource = API featureGuard と共通のフォールバック解決。改修依頼 2026-08-20 第2バッチ）
+    return canUseFeature(rules.value, subject.value, resolveFeatureResource(rules.value, resource))
   }
 
   function canPath(path: string): boolean {
@@ -54,9 +57,12 @@ export function usePermissions() {
     return canViewField(rules.value, subject.value, resource, field)
   }
 
-  /** ページ内タブの利用可否（`tab:<key>` 擬似フィールド。既定 allow・改修依頼 2026-08-18） */
+  /** ページ内タブの利用可否（`tab:<key>` 擬似フィールド。既定 allow・改修依頼 2026-08-18）。
+   *  weekly-report / monthly-report は新キーのルール未設定の間、旧 `reports` の
+   *  `tab:weekly-mine` 等の保存済みルールへ写像してフォールバックする（原則7） */
   function canTab(feature: string, tabKey: string): boolean {
-    return canUseTabShared(rules.value, subject.value, feature, tabKey)
+    const eff = resolveTabPermission(rules.value, feature, tabKey)
+    return canUseTabShared(rules.value, subject.value, eff.resource, eff.tabKey)
   }
 
   /** 項目の更新可否（参照＞更新の階層。`<項目>:write` 擬似フィールド・改修依頼 2026-08-18） */

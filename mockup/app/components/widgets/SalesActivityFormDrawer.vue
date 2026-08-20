@@ -200,7 +200,7 @@ async function save(): Promise<void> {
   >
     <div class="grid gap-3">
       <!-- 事業区分（Village。最上段・任意・自由入力で新規登録可） -->
-      <UiFormField label="事業区分（Village・任意）" hint="社内事業の区分。未登録名を入力すると保存時にマスタへ新規登録されます">
+      <UiFormField label="事業区分（Village）" hint="社内事業の区分。未登録名を入力すると保存時にマスタへ新規登録されます">
         <UiCombobox
           v-model="form.villageId"
           v-model:text="form.villageText"
@@ -222,7 +222,7 @@ async function save(): Promise<void> {
             create-hint="保存時にマスタへ新規登録されます"
           />
         </UiFormField>
-        <UiFormField label="担当（任意）" hint="選択会社の担当者。未登録名を入力すると保存時にマスタへ新規登録されます">
+        <UiFormField label="担当" hint="選択会社の担当者。未登録名を入力すると保存時にマスタへ新規登録されます">
           <UiCombobox
             v-model="form.contactId"
             v-model:text="form.contactText"
@@ -234,7 +234,7 @@ async function save(): Promise<void> {
           />
         </UiFormField>
       </div>
-      <UiFormField label="アプローチグループ（任意）">
+      <UiFormField label="アプローチグループ">
         <input v-model="form.approachGroup" type="text" class="input" placeholder="例）新規開拓A班" aria-label="アプローチグループ">
       </UiFormField>
       <UiFormField label="商談名" required>
@@ -252,27 +252,27 @@ async function save(): Promise<void> {
         </UiFormField>
       </div>
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <UiFormField label="商談金額（円・任意）">
+        <UiFormField label="商談金額（円）">
           <input v-model="form.amount" type="number" min="0" step="1" class="input num" placeholder="1500000" aria-label="商談金額">
         </UiFormField>
-        <UiFormField label="受注確度（%・任意）">
+        <UiFormField label="受注確度（%）">
           <input v-model="form.probability" type="number" min="0" max="100" step="1" class="input num" placeholder="60" aria-label="受注確度">
         </UiFormField>
-        <UiFormField label="受注予定日（任意）">
+        <UiFormField label="受注予定日">
           <input v-model="form.expectedCloseDate" type="date" class="input" aria-label="受注予定日">
         </UiFormField>
       </div>
-      <UiFormField label="顧客課題（任意）">
+      <UiFormField label="顧客課題">
         <textarea v-model="form.customerIssue" class="textarea min-h-16" placeholder="例）CSV加工に毎週3時間" aria-label="顧客課題" />
       </UiFormField>
-      <UiFormField label="提案概要（任意）">
+      <UiFormField label="提案概要">
         <textarea v-model="form.proposal" class="textarea min-h-16" placeholder="例）CSV取込・変換自動化" aria-label="提案概要" />
       </UiFormField>
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <UiFormField label="Next Action（任意）">
+        <UiFormField label="Next Action">
           <input v-model="form.nextAction" type="text" class="input" placeholder="例）デモ実施" aria-label="Next Action">
         </UiFormField>
-        <UiFormField label="Next Action日（任意）">
+        <UiFormField label="Next Action日">
           <input v-model="form.nextActionDate" type="date" class="input" aria-label="Next Action日">
         </UiFormField>
       </div>

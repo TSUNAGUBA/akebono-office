@@ -399,7 +399,7 @@ const detailRows = computed(() => {
 
       <div v-else class="grid gap-3">
         <!-- 事業区分（Village。最上段・任意・自由入力で新規登録可 = 改修依頼 2026-08-19 第4弾） -->
-        <UiFormField label="事業区分（Village・任意）" hint="社内事業の区分。未登録名を入力すると保存時にマスタへ新規登録されます">
+        <UiFormField label="事業区分（Village）" hint="社内事業の区分。未登録名を入力すると保存時にマスタへ新規登録されます">
           <UiCombobox
             v-model="form.villageId"
             v-model:text="form.villageText"
@@ -413,12 +413,12 @@ const detailRows = computed(() => {
           <UiFormField label="受付日" required>
             <input v-model="form.receivedDate" type="date" class="input" aria-label="受付日" required>
           </UiFormField>
-          <UiFormField label="受付時刻（任意）">
+          <UiFormField label="受付時刻">
             <input v-model="form.receivedTime" type="time" class="input" aria-label="受付時刻">
           </UiFormField>
         </div>
         <!-- 最初の問い合わせ手段（任意。改修依頼 2026-08-19 第4弾） -->
-        <UiFormField label="最初の問い合わせ手段（任意）">
+        <UiFormField label="最初の問い合わせ手段">
           <UiSelect v-model="form.firstContactMethod" :options="firstContactMethodOptions" empty-label="選択してください" aria-label="最初の問い合わせ手段" />
         </UiFormField>
         <!-- 顧客・問い合わせ者を横並び（改修依頼 2026-08-19 第4弾） -->
@@ -433,16 +433,16 @@ const detailRows = computed(() => {
               create-hint="保存時にマスタへ新規登録されます"
             />
           </UiFormField>
-          <UiFormField label="問い合わせ者（任意）">
+          <UiFormField label="問い合わせ者">
             <input v-model="form.inquirerName" type="text" class="input" placeholder="例）山田様" aria-label="問い合わせ者">
           </UiFormField>
         </div>
         <!-- 対象システム、対象箇所（改修依頼 2026-08-19 第4弾で 2 項目化） -->
         <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <UiFormField label="対象システム（任意）">
+          <UiFormField label="対象システム">
             <input v-model="form.targetSystem" type="text" class="input" placeholder="例）在庫管理システム" aria-label="対象システム">
           </UiFormField>
-          <UiFormField label="対象箇所（任意）">
+          <UiFormField label="対象箇所">
             <input v-model="form.targetLocation" type="text" class="input" placeholder="例）取込画面" aria-label="対象箇所">
           </UiFormField>
         </div>
@@ -466,20 +466,20 @@ const detailRows = computed(() => {
         <UiFormField label="自社担当者" required hint="既定はログインユーザー">
           <UiSelect v-model="form.staffMemberId" :options="staffOptions" aria-label="自社担当者" />
         </UiFormField>
-        <UiFormField label="対応内容（任意）">
+        <UiFormField label="対応内容">
           <textarea v-model="form.response" class="textarea min-h-16" placeholder="実施した対応" aria-label="対応内容" />
         </UiFormField>
-        <UiFormField label="原因（任意）">
+        <UiFormField label="原因">
           <textarea v-model="form.cause" class="textarea min-h-16" placeholder="判明した原因" aria-label="原因" />
         </UiFormField>
-        <UiFormField label="解決内容（任意）">
+        <UiFormField label="解決内容">
           <textarea v-model="form.resolution" class="textarea min-h-16" placeholder="解決に至った内容" aria-label="解決内容" />
         </UiFormField>
         <!-- 完了時刻は除外（改修依頼 2026-08-19 第4弾）。完了日のみ -->
-        <UiFormField label="完了日（任意）">
+        <UiFormField label="完了日">
           <input v-model="form.completedDate" type="date" class="input" aria-label="完了日">
         </UiFormField>
-        <UiFormField label="改善・ナレッジのタネ（任意）" hint="再発防止・自動化のアイデアなど">
+        <UiFormField label="改善・ナレッジのタネ" hint="再発防止・自動化のアイデアなど">
           <textarea v-model="form.knowledgeNote" class="textarea min-h-16" placeholder="例）日付形式を自動変換できないか" aria-label="改善・ナレッジのタネ" />
         </UiFormField>
         <!-- 参考リンク（改修依頼 2026-08-19 第4弾。改善要望と同じ部品を再利用 = 原則3） -->

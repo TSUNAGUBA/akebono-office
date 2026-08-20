@@ -345,7 +345,7 @@ async function submitCreateInner(): Promise<void> {
           </UiFormField>
         </div>
         <UiFormField label="備考">
-          <textarea v-model="createForm.note" class="textarea" rows="2" placeholder="任意" aria-label="備考" />
+          <textarea v-model="createForm.note" class="textarea" rows="2" placeholder="補足があれば記入してください" aria-label="備考" />
         </UiFormField>
         <UiFormField label="発注明細" required>
           <WidgetsAkebonoLineItems v-model:model-value="createForm.lines" :sku-options="skuOptions" price-label="単価" />

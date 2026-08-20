@@ -1,20 +1,24 @@
 <script setup lang="ts">
 /**
- * 日報・週報（F-06）
- * タブ: 自分の日報 / 自分の週報 / 全員の日報 / 全員の週報 / チーム（オペレーター指示 2026-07-22 で再編）
+ * 日報（F-06）
+ * タブ: 自分の日報 / 全員の日報 / チーム
+ * - 週報・月報は独立したトップレベルページへ分離（/weekly-report・/monthly-report =
+ *   改修依頼 2026-08-20 第2バッチ。旧 /reports?kind=weekly|monthly は本ページが新パスへ
+ *   replace リダイレクトする = 旧リンク・通知・ブックマーク互換〔原則7〕）
  * - 参照権限は権限表の「日報・週報の参照対象」（F-16-6 canViewMemberReports）で管理する
  * - 自分の日報: 週/月の表示モード（月は横スクロール・カレンダーの 2 ビュー）+ テーブル形式の通常入力 +
  *   明日の予定（最大 3 件。翌営業日の日報へ自動反映）
- * - 全員の日報・全員の週報・チーム: 部署・メンバーで絞り込み
+ * - 全員の日報・チーム: 部署・メンバーで絞り込み
  * - チーム: 週/月の表示モード（月は横スクロールマトリクス・カレンダーの 2 ビュー）
  * 参照 = 基本ビュー・入力 = ボタン押下で表示（バッチ7h・オペレーター指示 2026-07-19 #10 ④）
  */
 import {
-  BellRing, CalendarDays, Check, ChevronLeft, ChevronRight, Eye, FileText, Minus, Pencil, Plus, Send, Settings2, Sparkles, Trash2,
+  BellRing, CalendarDays, Check, ChevronLeft, ChevronRight, Eye, Minus, Pencil, Plus, Send, Settings2, Sparkles, Trash2,
 } from 'lucide-vue-next'
-import type { DailyReport, ReportEntry, TomorrowPlan, WeeklyReport } from '~/types/domain'
+import type { LocationQueryRaw } from 'vue-router'
+import type { DailyReport, ReportEntry, TomorrowPlan } from '~/types/domain'
 import {
-  DAILY_ISSUE_CATEGORY_PRESETS, TOMORROW_PLANS_MAX, WEEKLY_TEAM_SHARE_DEFAULT, WEEKLY_TEAM_SHARE_KINDS,
+  DAILY_ISSUE_CATEGORY_PRESETS, TOMORROW_PLANS_MAX,
 } from '../../../shared/domain/types'
 import { REPORT_STATUS_LABELS } from '~/composables/useReports'
 import { hhmmToMin } from '../../../shared/domain/jst'
@@ -22,8 +26,9 @@ import { toQuarterHours } from '../../../shared/domain/report-draft'
 import { addDays, daysInMonth, fmtDate, fmtDateLong, fmtMinutes, fmtTime, weekdayOf } from '~/utils/format'
 import { EMPLOYMENT_TYPE_LABELS, EMPLOYMENT_TYPE_TONES } from '~/utils/labels'
 import { parseTeamVisibleIds } from '~/utils/team-visibility'
+import { matchesMemberFilter, memberFilterOptionsOf } from '~/utils/report-filters'
+import { weekRangeLabel } from '~/utils/report-weeks'
 import { poipoiPostsOnDay } from '~/utils/report-poipoi'
-import { WEEKLY_REPORT_EXAMPLE } from '~/utils/weekly-report-templates'
 import type { TabItem, TableColumn, Tone } from '~/types/ui'
 
 const route = useRoute()
@@ -52,57 +57,64 @@ function daysOfMonth(ym: string): string[] {
   return Array.from({ length: daysInMonth(y, m) }, (_, i) => `${ym}-${String(i + 1).padStart(2, '0')}`)
 }
 
-// ---------- メニュー種別（日報 / 週報 / 月報）とタブ ----------
-// 改修依頼 2026-08-19 第4弾: 日報・週報・月報をトップレベルメニューへ分割（?kind で切替。ナビは 3 エントリ）。
-// 権限は単一キー `reports` のまま各 kind のタブキーを拡張する（オペレーター選択「単一キー＋タブ拡張」）。
-
-/** メニュー種別（?kind=weekly / monthly。既定 = 日報） */
-const kind = computed<'daily' | 'weekly' | 'monthly'>(() => {
-  const k = route.query.kind
-  return k === 'weekly' ? 'weekly' : k === 'monthly' ? 'monthly' : 'daily'
+// ---------- 旧 URL 互換リダイレクト（改修依頼 2026-08-20 第2バッチ・原則7） ----------
+// 週報・月報は物理パス /weekly-report・/monthly-report へ独立した。既存の通知・ブックマーク
+// （/reports?kind=weekly 等）を生かすため、旧クエリを新パスへ写像して replace 遷移する:
+// - ?kind=weekly → /weekly-report ・ ?kind=monthly → /monthly-report
+// - 旧タブキー ?tab=weekly-mine|weekly-all|weekly-team → 新 ?tab=mine|all|team（monthly-* も同様。
+//   kind 無しで旧タブキーだけが付いた URL も対象）
+// - さらに古い ?tab=weekly（kind 導入前の週報タブリンク）→ /weekly-report?tab=mine
+// kind と tab が矛盾する場合（?kind=monthly&tab=weekly-mine 等）は kind を優先し tab は捨てる。
+// その他のクエリは持ち越す（kind/tab のみ写像）。
+// 注: 旧 URL は本ページ（機能キー 'reports'）のルートガードを通過してからリダイレクトするため、
+// 日報 deny × 週報 allow の明示設定をした環境では旧 URL がダッシュボードへ退避する（新パスは正常）。
+// 新キーを明示設定する運用へ移った時点で新 URL の利用を前提とする設計判断。
+function legacyRedirectTarget(): { path: string; query: LocationQueryRaw } | null {
+  const legacyTabRaw = typeof route.query.tab === 'string' ? route.query.tab : ''
+  const legacyKind
+    = route.query.kind === 'weekly' ? 'weekly'
+      : route.query.kind === 'monthly' ? 'monthly'
+        : legacyTabRaw === 'weekly' || legacyTabRaw.startsWith('weekly-') ? 'weekly'
+          : legacyTabRaw.startsWith('monthly-') ? 'monthly'
+            : null
+  if (!legacyKind) return null
+  const mappedTab = legacyTabRaw.startsWith(`${legacyKind}-`)
+    ? legacyTabRaw.slice(legacyKind.length + 1)
+    : legacyTabRaw === 'weekly' ? 'mine' : ''
+  const { kind: _kind, tab: _tab, ...restQuery } = route.query
+  return { path: `/${legacyKind}-report`, query: { ...restQuery, ...(mappedTab ? { tab: mappedTab } : {}) } }
+}
+{
+  const target = legacyRedirectTarget()
+  if (target) await navigateTo(target, { replace: true })
+}
+// 滞在中の同一パス内クエリ変化（/reports 表示中に旧 ?kind= リンクを踏む = ページ再マウントなし）でも
+// 読み替える（setup は再実行されないため watch で補完。useRouteDeepLink と同じ考え方 = 原則3）
+watch(() => [route.query.kind, route.query.tab], () => {
+  const target = legacyRedirectTarget()
+  if (target) void navigateTo(target, { replace: true })
 })
 
-/** メニュー種別ごとのページ見出し（トップレベルメニューとして 日報/週報/月報 を切り替える） */
-const pageHeader = computed(() => ({
-  daily: { title: '日報', description: '日々の活動報告。AI 社員の日次報告も同じタイムラインに届きます' },
-  weekly: { title: '週報', description: '週次のふりかえり。今週の成果・課題・来週の最重要テーマを記録します' },
-  monthly: { title: '月報', description: '月次のふりかえり。今月の成果・課題・来月の最重要テーマを記録します' },
-}[kind.value]))
+// ---------- タブ（自分の日報 / 全員の日報 / チーム） ----------
+// 週報・月報の分離後、本ページは日報専用（キーは権限カタログ `reports` と一致）
 
-/** kind ごとの 自分/全員/チーム タブ（キーは権限カタログ `reports` と一致） */
-const TABS_BY_KIND: Record<'daily' | 'weekly' | 'monthly', { key: string; label: string }[]> = {
-  daily: [
-    { key: 'mine', label: '自分の日報' },
-    { key: 'all', label: '全員の日報' },
-    { key: 'team', label: 'チーム' },
-  ],
-  weekly: [
-    { key: 'weekly-mine', label: '自分の週報' },
-    { key: 'weekly-all', label: '全員の週報' },
-    { key: 'weekly-team', label: 'チーム' },
-  ],
-  monthly: [
-    { key: 'monthly-mine', label: '自分の月報' },
-    { key: 'monthly-all', label: '全員の月報' },
-    { key: 'monthly-team', label: 'チーム' },
-  ],
-}
-const ALL_TAB_KEYS = Object.values(TABS_BY_KIND).flatMap(ts => ts.map(t => t.key))
+const TABS: { key: string; label: string }[] = [
+  { key: 'mine', label: '自分の日報' },
+  { key: 'all', label: '全員の日報' },
+  { key: 'team', label: 'チーム' },
+]
 
 // タブ利用可否（権限表の `tab:<key>` 擬似フィールド = 改修依頼 2026-08-18。既定 = 全タブ利用可）
 const { canTab } = usePermissions()
 const tabs = computed<TabItem[]>(() =>
-  (TABS_BY_KIND[kind.value] as TabItem[]).filter(t => canTab('reports', t.key)))
+  (TABS as TabItem[]).filter(t => canTab('reports', t.key)))
 
-// 旧タブキーのリンク互換（?tab=weekly = 旧・週報タブ → 自分の週報。?tab=<key> は該当 kind の初期タブ指定）
-const queryTabRaw = typeof route.query.tab === 'string' ? route.query.tab : ''
-const queryTab = queryTabRaw === 'weekly' ? 'weekly-mine' : queryTabRaw
-const initialTab = ALL_TAB_KEYS.includes(queryTab) && TABS_BY_KIND[kind.value].some(t => t.key === queryTab)
-  ? queryTab
-  : (TABS_BY_KIND[kind.value][0]?.key ?? '')
+// ?tab=<key> は初期タブ指定（旧・週報/月報系キーは上のリダイレクトが新ページへ写像済み）
+const queryTab = typeof route.query.tab === 'string' ? route.query.tab : ''
+const initialTab = TABS.some(t => t.key === queryTab) ? queryTab : (TABS[0]?.key ?? '')
 const tab = ref<string>(initialTab)
 watchEffect(() => {
-  // kind 切替・権限で消えたタブ・無効キーは現 kind 先頭の利用可能タブへ退避。
+  // 権限で消えたタブ・無効キーは先頭の利用可能タブへ退避。
   // 全タブ deny の場合は空値にしてどのタブ内容も描画しない（フェイルクローズ = R1 レビュー反映）
   if (!tabs.value.some(t => t.key === tab.value)) tab.value = tabs.value[0]?.key ?? ''
 })
@@ -135,24 +147,10 @@ function gapText(gap: number): string {
   return gap > 0 ? `+${fmtMinutes(gap)}` : fmtMinutes(gap)
 }
 
-// ---------- 部署・メンバー絞り込み（全員の日報 / 全員の週報 / チーム） ----------
+// ---------- 部署・メンバー絞り込み（全員の日報 / チーム） ----------
+// 判定・選択肢は utils/report-filters.ts（週報パネルと共通の純粋関数 = 原則3）
 
-const memberFilterOptions = computed(() =>
-  members.value.filter(m => m.active).map(m => ({ value: m.id, label: m.name })))
-
-/**
- * 部署・メンバーの絞り込み判定。memberId = null は AI 社員の日報
- * （メンバー・部署の属性を持たないため、絞り込み未指定のときのみ表示する）
- */
-function matchesMemberFilter(memberId: string | null | undefined, deptId: string, memId: string): boolean {
-  if (!memberId) return !deptId && !memId
-  if (memId && memberId !== memId) return false
-  if (deptId) {
-    const m = members.value.find(x => x.id === memberId)
-    if (!m || m.departmentId !== deptId) return false
-  }
-  return true
-}
+const memberFilterOptions = computed(() => memberFilterOptionsOf(members.value))
 
 // ---------- 自分の日報タブ ----------
 
@@ -651,13 +649,13 @@ const teamMemberId = ref('')
 
 /** マトリクス・タイムラインの表示メンバー（表示メンバー設定 ∩ 参照権限 ∩ 絞り込み） */
 const visibleTeamMembers = computed(() =>
-  reports.teamMembers.value.filter(m => matchesMemberFilter(m.id, teamDeptId.value, teamMemberId.value)))
+  reports.teamMembers.value.filter(m => matchesMemberFilter(members.value, m.id, teamDeptId.value, teamMemberId.value)))
 
 const teamTimeline = computed(() => {
   const dates = teamView.value === 'month' ? teamMonthDays.value : matrixDays.value
   // AI 社員（memberId=null）は matchesMemberFilter が「絞り込み未指定のときのみ表示」を判定する
   return reports.timelineForDates(dates)
-    .filter(r => matchesMemberFilter(r.memberId, teamDeptId.value, teamMemberId.value))
+    .filter(r => matchesMemberFilter(members.value, r.memberId, teamDeptId.value, teamMemberId.value))
 })
 
 /**
@@ -861,7 +859,7 @@ const allMemberId = ref('')
 // AI 社員（memberId=null）は matchesMemberFilter が「絞り込み未指定のときのみ表示」を判定する
 const allReports = computed(() =>
   reports.allSubmitted(allMonth.value)
-    .filter(r => matchesMemberFilter(r.memberId, allDeptId.value, allMemberId.value)))
+    .filter(r => matchesMemberFilter(members.value, r.memberId, allDeptId.value, allMemberId.value)))
 
 // ---- 既読/未読の可視化（オペレーター指示 2026-07-31。SoT = report_reads） ----
 
@@ -934,224 +932,11 @@ const allRows = computed(() =>
 function openAllRow(row: Record<string, unknown>): void {
   drawerReportId.value = String(row.id)
 }
-
-// ---------- 自分の週報タブ ----------
-
-// 参照する週を選択できる（オペレーター指示 2026-07-21 #2）。既定 = 今週（月曜始まり）
-const selWeekStart = ref(reports.weekStartOf(todayJst()))
-const selWeekly = computed(() => reports.myWeeklyOn(selWeekStart.value))
-const isThisWeek = computed(() => selWeekStart.value === reports.weekStartOf(todayJst()))
-
-function moveWeeklyWeek(delta: number): void {
-  selWeekStart.value = addDays(selWeekStart.value, delta * 7)
-}
-
-const wkGoal = ref('')
-const wkMain = ref('')
-const wkIssues = ref('')
-const wkNext = ref('')
-/** うまくいったこと・続けたいこと（オペレーター指示 2026-08-03） */
-const wkGoodPoints = ref('')
-/** チーム共有事項の種別（既定 '特になし'）と自由入力（任意） */
-const wkTeamShareKind = ref<string>(WEEKLY_TEAM_SHARE_DEFAULT)
-const wkTeamShareNote = ref('')
-/** チーム共有事項の種別チップ（値=ラベル） */
-const teamShareKindOptions = WEEKLY_TEAM_SHARE_KINDS.map(k => ({ value: k, label: k }))
-
-function loadWeeklyEditor(): void {
-  const r = selWeekly.value
-  if (r && r.status === 'draft') {
-    wkGoal.value = r.goalReview
-    wkMain.value = r.mainWork
-    wkIssues.value = r.issues
-    wkNext.value = r.nextWeek
-    wkGoodPoints.value = r.goodPoints ?? ''
-    // 旧下書きは種別未設定 → 既定「特になし」で表示する（原則7）
-    wkTeamShareKind.value = r.teamShareKind || WEEKLY_TEAM_SHARE_DEFAULT
-    wkTeamShareNote.value = r.teamShareNote ?? ''
-  } else {
-    // 下書き以外（未作成・提出済み）は全クリア。週送りで別週へ入力内容が残留し、
-    // 誤った週へ提出される事故を防ぐ（提出済みはエディタ非表示だが残留も断つ）
-    wkGoal.value = ''
-    wkMain.value = ''
-    wkIssues.value = ''
-    wkNext.value = ''
-    wkGoodPoints.value = ''
-    wkTeamShareKind.value = WEEKLY_TEAM_SHARE_DEFAULT
-    wkTeamShareNote.value = ''
-  }
-}
-// selWeekStart も監視: 未作成週→未作成週の移動では selWeekly が undefined→undefined で
-// 参照変化せず watcher が発火しないため、週初め自体を復元トリガに含める（入力残留の防止）。
-// selWeekly も監視: API モードでは週報データが非同期に届くため到着後に下書きを復元する
-watch([currentUserId, selWeekStart, selWeekly], loadWeeklyEditor, { immediate: true })
-
-function weekLabel(weekStart: string): string {
-  return `${fmtDate(weekStart)}〜${fmtDate(addDays(weekStart, 6))}`
-}
-
-async function generateFromDailies(): Promise<void> {
-  await run('wk-generate', async () => {
-    const d = await reports.draftFromDailies(selWeekStart.value)
-    if (!d.mainWork && !d.issues) {
-      show('この週の日報がまだありません', 'warn')
-      return
-    }
-    if (d.mainWork) wkMain.value = d.mainWork
-    if (d.issues) wkIssues.value = d.issues
-    show('日報から下書きを生成しました')
-  }, { message: '日報から下書きを生成しています…' })
-}
-
-/**
- * 例文を各欄へ挿入する（改修9。SoT = utils/weekly-report-templates.ts の WEEKLY_REPORT_EXAMPLE）。
- * 稟議テンプレ（workflow.vue applyTemplate）と同様、挿入対象の欄に入力があれば上書き確認（誤操作で入力を
- * 失わない = 原則9.5）。全て空なら確認なしで挿入する。挿入対象は例文を持つ 4 欄のみ（主要業務・
- * チーム共有事項は書き手固有のため触らない）。
- */
-async function insertWeeklyExample(): Promise<void> {
-  const filled = [wkGoal.value, wkIssues.value, wkGoodPoints.value, wkNext.value].some(v => v.trim())
-  if (filled) {
-    const ok = await ask('例文の挿入', '入力済みの欄を例文で置き換えます。よろしいですか？', { confirmLabel: '置き換える' })
-    if (!ok) return
-  }
-  wkGoal.value = WEEKLY_REPORT_EXAMPLE.goalReview
-  wkIssues.value = WEEKLY_REPORT_EXAMPLE.issues
-  wkGoodPoints.value = WEEKLY_REPORT_EXAMPLE.goodPoints
-  wkNext.value = WEEKLY_REPORT_EXAMPLE.nextWeek
-  show('例文を挿入しました')
-}
-
-async function onSaveWeekly(submitNow: boolean): Promise<void> {
-  await run(submitNow ? 'wk-submit' : 'wk-draft', async () => {
-    const res = await reports.saveWeekly({
-      weekStart: selWeekStart.value,
-      goalReview: wkGoal.value,
-      mainWork: wkMain.value,
-      issues: wkIssues.value,
-      nextWeek: wkNext.value,
-      goodPoints: wkGoodPoints.value,
-      teamShareKind: wkTeamShareKind.value,
-      teamShareNote: wkTeamShareNote.value,
-    }, submitNow)
-    if (!res.ok) {
-      show(res.error.message, 'warn')
-      return
-    }
-    show(submitNow ? '週報を提出しました' : '下書きを保存しました')
-  }, { message: submitNow ? '週報を提出しています…' : '下書きを保存しています…' })
-}
-
-const weeklyDrawerId = ref<string | null>(null)
-const weeklyDrawer = computed<WeeklyReport | null>(() =>
-  weeklyDrawerId.value ? reports.weeklyById(weeklyDrawerId.value) ?? null : null)
-
-/** 週報も参照 = 基本ビュー・入力はボタン押下（バッチ7h ④）。提出・週切替・ユーザー切替で参照へ戻す */
-const weeklyEditing = ref(false)
-watch([currentUserId, selWeekStart], () => { weeklyEditing.value = false })
-
-async function onSaveWeeklyAndClose(submitNow: boolean): Promise<void> {
-  await onSaveWeekly(submitNow)
-  if (submitNow && reports.myWeeklyOn(selWeekStart.value)?.status === 'submitted') {
-    weeklyEditing.value = false
-  }
-}
-
-// 過去の週報一覧のページング（1 ページ 20 件 = 改修依頼 2026-08-18。クライアントページング）
-const { page: mwPage, pageSize: mwPageSize, rows: pagedMyWeeklies, total: mwTotal } = useListView<WeeklyReport>({ source: reports.myWeeklies })
-watch([tab, currentUserId], () => { mwPage.value = 1 })
-
-// ---------- 全員の週報タブ（オペレーター指示 2026-07-22。参照権限 = 日報・週報の参照対象） ----------
-
-/** サブビュー（一覧 / 週次 AI インサイト = バッチ7g。インサイトは全登録データ横断のため本タブに置く） */
-const weeklyAllView = ref('list')
-const WEEKLY_ALL_VIEW_TABS = [
-  { key: 'list', label: '全員の週報' },
-  { key: 'insight', label: 'AI インサイト' },
-]
-
-const selAllWeekStart = ref(reports.weekStartOf(todayJst()))
-const isAllThisWeek = computed(() => selAllWeekStart.value === reports.weekStartOf(todayJst()))
-
-function moveAllWeeklyWeek(delta: number): void {
-  selAllWeekStart.value = addDays(selAllWeekStart.value, delta * 7)
-}
-
-const waDeptId = ref('')
-const waMemberId = ref('')
-
-const allWeeklies = computed(() =>
-  reports.allSubmittedWeeklies(selAllWeekStart.value)
-    .filter(r => matchesMemberFilter(r.memberId, waDeptId.value, waMemberId.value)))
-
-/** 一覧プレビュー用の抜粋（改行・連続空白を 1 スペースへ畳んで先頭 max 文字。超過は … を付す） */
-function excerpt(text: string, max = 60): string {
-  const flat = text.replace(/\s+/g, ' ').trim()
-  const chars = [...flat]
-  return chars.length > max ? `${chars.slice(0, max).join('')}…` : flat
-}
-
-/**
- * 全員の週報一覧の行プレビュー項目（改修4）。本文がある主要項目のラベル + 抜粋のみを返す。
- * 全文は行クリックの週報詳細ドロワーで確認できる（一覧は要点のみ・過度に大きくしない）。
- */
-function weeklyPreviewItems(w: WeeklyReport): { label: string; text: string }[] {
-  return [
-    { label: '今週の成果', text: excerpt(w.goalReview) },
-    { label: '主要業務', text: excerpt(w.mainWork) },
-    { label: '課題', text: excerpt(w.issues) },
-  ].filter(it => it.text)
-}
-
-// ---- 既読/未読の可視化（週報。日報と同じ扱い = 自分の週報は対象外） ----
-
-function isWeeklyUnread(w: WeeklyReport): boolean {
-  return w.memberId !== currentUserId.value && !reports.isReportRead('weekly', w.id)
-}
-
-// 既定 = 未読のみに統一（通知・日報のデフォルト表示を未読のみに揃える。オペレーター指示）
-const waUnreadOnly = ref(true)
-const waUnreadCount = computed(() => allWeeklies.value.filter(isWeeklyUnread).length)
-const visibleWeeklies = computed(() =>
-  waUnreadOnly.value ? allWeeklies.value.filter(isWeeklyUnread) : allWeeklies.value)
-
-// 一覧のページング（1 ページ 20 件 = 改修依頼 2026-08-18。クライアントページング。絞り込みは visibleWeeklies が担う）
-const { page: waPage, pageSize: waPageSize, rows: pagedWeeklies, total: waTotal } = useListView<WeeklyReport>({ source: visibleWeeklies })
-watch([tab, weeklyAllView, selAllWeekStart, waDeptId, waMemberId, waUnreadOnly], () => { waPage.value = 1 })
-
-// 詳細を開いたら既読にする（過去の週報一覧 = 自分の週報からの導線でも一貫。提出済みのみ）
-watch(weeklyDrawerId, (id) => {
-  if (!id) return
-  const w = reports.weeklyById(id)
-  if (w && w.status === 'submitted' && w.memberId !== currentUserId.value) void reports.markReportRead('weekly', id)
-})
-
-/** 未読に戻す（週報。既読の取消フロー = 原則9.5） */
-async function onMarkUnreadWeekly(): Promise<void> {
-  const w = weeklyDrawer.value
-  if (!w) return
-  const res = await reports.markReportUnread('weekly', w.id)
-  if (!res.ok) {
-    show(res.error.message, 'warn')
-    return
-  }
-  weeklyDrawerId.value = null
-  show('未読に戻しました')
-}
-
-// ---------- チーム（週報）タブの表示形式（複数週マトリクス / 単週。改修要望: 直近 4/8/12 週をまとめて確認） ----------
-
-/** 既定 = 複数週マトリクス（要望が「まとめて確認したい」のため）。単週は従来の PeriodPanel（詳細 + ドロワー） */
-const weeklyTeamView = ref('matrix')
-const WEEKLY_TEAM_VIEW_TABS = [
-  { value: 'matrix', label: '複数週まとめて' },
-  { value: 'single', label: '単週の詳細' },
-]
 </script>
 
 <template>
   <div>
-    <UiPageHeader :title="pageHeader.title" :description="pageHeader.description" />
+    <UiPageHeader title="日報" description="日々の活動報告。AI 社員の日次報告も同じタイムラインに届きます" />
 
     <UiTabBar v-model="tab" :tabs="tabs" class="mb-3" />
     <!-- 全タブ deny 時の空状態（タブ内容は tab='' のためどれも描画されない = フェイルクローズ） -->
@@ -1235,7 +1020,7 @@ const WEEKLY_TEAM_VIEW_TABS = [
       </UiFilterBar>
 
       <!-- 週ビュー: 選択日を含む週（月〜日）の提出状況ストリップ -->
-      <UiSectionCard v-if="mineView === 'week'" :title="`週の提出状況（${weekLabel(reports.weekStartOf(selDate))}）`">
+      <UiSectionCard v-if="mineView === 'week'" :title="`週の提出状況（${weekRangeLabel(reports.weekStartOf(selDate))}）`">
         <div class="grid grid-cols-7 gap-1">
           <button
             v-for="d in mineWeekDays"
@@ -1816,7 +1601,7 @@ const WEEKLY_TEAM_VIEW_TABS = [
           <button type="button" class="btn btn-sm" aria-label="次の週へ" @click="moveTeamWeek(1)">
             <ChevronRight class="h-4 w-4" aria-hidden="true" />
           </button>
-          <span class="num ml-1 whitespace-nowrap text-xs font-semibold">{{ weekLabel(teamWeekStart) }}</span>
+          <span class="num ml-1 whitespace-nowrap text-xs font-semibold">{{ weekRangeLabel(teamWeekStart) }}</span>
           <UiStatusBadge v-if="isTeamThisWeek" label="今週" tone="brand" />
         </div>
         <div v-else class="flex items-center gap-1.5">
@@ -2014,7 +1799,7 @@ const WEEKLY_TEAM_VIEW_TABS = [
       <UiSectionCard
         v-if="teamView === 'week'"
         title="タイムライン"
-        :description="`チームと AI 社員の日報（${weekLabel(teamWeekStart)}・新しい順）`"
+        :description="`チームと AI 社員の日報（${weekRangeLabel(teamWeekStart)}・新しい順）`"
         flush
       >
         <UiEmptyState v-if="teamTimeline.length === 0" title="提出済みの日報がありません" />
@@ -2041,243 +1826,6 @@ const WEEKLY_TEAM_VIEW_TABS = [
         </ul>
       </UiSectionCard>
     </div>
-
-    <!-- ================= 全員の週報（オペレーター指示 2026-07-22） ================= -->
-    <div v-else-if="tab === 'weekly-all'" class="grid gap-3">
-      <UiTabBar v-model="weeklyAllView" :tabs="WEEKLY_ALL_VIEW_TABS" />
-
-      <!-- 週次 AI インサイト（該当週の全登録データから経営・営業・チーム視点のレポート = バッチ7g） -->
-      <WidgetsWeeklyInsight v-if="weeklyAllView === 'insight'" :initial-week-start="selAllWeekStart" />
-
-      <template v-else>
-        <UiFilterBar>
-          <div class="flex items-center gap-1.5">
-            <button type="button" class="btn btn-sm" aria-label="前の週へ" @click="moveAllWeeklyWeek(-1)">
-              <ChevronLeft class="h-4 w-4" aria-hidden="true" />
-            </button>
-            <button type="button" class="btn btn-sm" :disabled="isAllThisWeek" @click="selAllWeekStart = reports.weekStartOf(todayJst())">今週</button>
-            <button type="button" class="btn btn-sm" aria-label="次の週へ" @click="moveAllWeeklyWeek(1)">
-              <ChevronRight class="h-4 w-4" aria-hidden="true" />
-            </button>
-            <span class="num ml-1 whitespace-nowrap text-xs font-semibold">{{ weekLabel(selAllWeekStart) }}</span>
-            <UiStatusBadge v-if="isAllThisWeek" label="今週" tone="brand" />
-          </div>
-          <UiSelect v-model="waDeptId" :options="deptOptions" empty-label="すべての部署" aria-label="部署で絞り込み" />
-          <UiSelect v-model="waMemberId" :options="memberFilterOptions" empty-label="すべてのメンバー" aria-label="メンバーで絞り込み" />
-          <button
-            type="button"
-            class="btn btn-sm"
-            :class="waUnreadOnly ? 'btn-primary' : ''"
-            :aria-pressed="waUnreadOnly"
-            @click="waUnreadOnly = !waUnreadOnly"
-          >
-            未読のみ
-          </button>
-          <template #trailing>
-            <UiStatusBadge v-if="waUnreadCount > 0" tone="brand" :label="`未読 ${waUnreadCount} 件`" dot />
-            <span class="num text-xs text-muted">{{ allWeeklies.length }} 件</span>
-          </template>
-        </UiFilterBar>
-
-        <UiSectionCard
-          title="全員の週報"
-          description="選択した週の提出済み週報。開くと既読になります。参照できる範囲は権限設定（日報・週報の参照対象）に従います"
-          flush
-        >
-          <UiEmptyState
-            v-if="visibleWeeklies.length === 0"
-            :title="waUnreadOnly ? '未読の週報はありません' : 'この週の提出済み週報がありません'"
-            :hint="waUnreadOnly ? 'すべて既読です（「未読のみ」を解除すると全件表示されます）' : '「自分の週報」から提出すると、ここに表示されます（絞り込み条件も確認してください）'"
-          />
-          <ul v-else class="divide-y divide-line">
-            <li v-for="w in pagedWeeklies" :key="w.id">
-              <!-- 行クリックで週報詳細ドロワー（全項目）を開く。一覧は週レンジ + 主要項目のプレビュー
-                   （成果・主要業務・課題の抜粋。モバイルでも崩れないカード風リスト）= 改修4 -->
-              <button
-                type="button"
-                class="flex w-full items-start gap-3 px-3 py-2.5 text-left transition-colors hover:bg-brand-soft"
-                @click="weeklyDrawerId = w.id"
-              >
-                <UiAvatar :name="reports.memberName(w.memberId)" size="sm" />
-                <span class="min-w-0 flex-1">
-                  <span class="flex flex-wrap items-center gap-1.5">
-                    <span class="text-[13px] font-bold">{{ reports.memberName(w.memberId) }}</span>
-                    <span class="num text-[11px] text-muted">{{ weekLabel(w.weekStart) }}</span>
-                    <UiStatusBadge v-if="isWeeklyUnread(w)" tone="brand" label="未読" dot />
-                  </span>
-                  <span v-if="weeklyPreviewItems(w).length > 0" class="mt-1 grid gap-1">
-                    <span v-for="it in weeklyPreviewItems(w)" :key="it.label" class="grid gap-0.5">
-                      <span class="text-[10px] font-bold text-muted">{{ it.label }}</span>
-                      <span class="line-clamp-2 text-xs text-sub">{{ it.text }}</span>
-                    </span>
-                  </span>
-                  <span v-else class="mt-1 block text-xs text-muted">（本文の記載がありません）</span>
-                  <span class="mt-1.5 block text-[10px] text-muted">タップで全項目を表示</span>
-                </span>
-                <UiStatusBadge tone="ok" :label="REPORT_STATUS_LABELS.submitted" dot class="shrink-0" />
-              </button>
-            </li>
-          </ul>
-          <UiPagination v-model:page="waPage" v-model:page-size="waPageSize" :total="waTotal" />
-        </UiSectionCard>
-      </template>
-    </div>
-
-    <!-- ================= 自分の週報 ================= -->
-    <div v-else-if="tab === 'weekly-mine'" class="grid gap-3">
-      <UiFilterBar>
-        <div class="flex items-center gap-1.5">
-          <button type="button" class="btn btn-sm" aria-label="前の週へ" @click="moveWeeklyWeek(-1)">
-            <ChevronLeft class="h-4 w-4" aria-hidden="true" />
-          </button>
-          <button type="button" class="btn btn-sm" :disabled="isThisWeek" @click="selWeekStart = reports.weekStartOf(todayJst())">今週</button>
-          <button type="button" class="btn btn-sm" aria-label="次の週へ" @click="moveWeeklyWeek(1)">
-            <ChevronRight class="h-4 w-4" aria-hidden="true" />
-          </button>
-          <span class="num ml-1 whitespace-nowrap text-xs font-semibold">{{ weekLabel(selWeekStart) }}</span>
-          <UiStatusBadge v-if="isThisWeek" label="今週" tone="brand" />
-        </div>
-        <template #trailing>
-          <UiStatusBadge
-            :tone="selWeekly?.status === 'submitted' ? 'ok' : selWeekly ? 'warn' : 'neutral'"
-            :label="selWeekly ? REPORT_STATUS_LABELS[selWeekly.status] : '未作成'"
-            dot
-          />
-        </template>
-      </UiFilterBar>
-
-      <!-- 選択した週の週報（参照 = 基本ビュー・入力は「週報を書く」から = バッチ7h ④） -->
-      <UiSectionCard
-        :title="`${isThisWeek ? '今週' : '選択週'}の週報（${weekLabel(selWeekStart)}）`"
-        :description="selWeekly?.status === 'submitted'
-          ? '提出済みです'
-          : weeklyEditing ? '日報から下書きを生成できます' : '「週報を書く」から入力できます'"
-      >
-        <template v-if="selWeekly?.status !== 'submitted'" #actions>
-          <button v-if="!weeklyEditing" type="button" class="btn btn-primary btn-sm" @click="weeklyEditing = true">
-            <Pencil class="h-3.5 w-3.5" aria-hidden="true" />
-            週報を書く
-          </button>
-          <UiButton v-else size="sm" :loading="isRunning('wk-generate')" @click="generateFromDailies">
-            <template #icon><Sparkles class="h-3.5 w-3.5" aria-hidden="true" /></template>
-            日報から下書き生成
-          </UiButton>
-        </template>
-
-        <!-- 提出済み: 読み取り表示 -->
-        <div v-if="selWeekly && selWeekly.status === 'submitted'" class="grid gap-3">
-          <UiStatusBadge tone="ok" :label="REPORT_STATUS_LABELS.submitted" dot class="justify-self-start" />
-          <div class="grid gap-3 md:grid-cols-2">
-            <div><p class="label">今週の成果・達成感</p><UiMarkdown v-if="selWeekly.goalReview" :source="selWeekly.goalReview" /><p v-else class="text-[13px]">—</p></div>
-            <div><p class="label">今週の主要業務</p><UiMarkdown v-if="selWeekly.mainWork" :source="selWeekly.mainWork" /><p v-else class="text-[13px]">—</p></div>
-            <div><p class="label">今週の課題・原因仮説</p><UiMarkdown v-if="selWeekly.issues" :source="selWeekly.issues" /><p v-else class="text-[13px]">—</p></div>
-            <div><p class="label">今週うまくいったこと・続けたいこと</p><UiMarkdown v-if="selWeekly.goodPoints" :source="selWeekly.goodPoints" /><p v-else class="text-[13px]">—</p></div>
-            <div><p class="label">来週の最重要テーマ（最大3つ）</p><UiMarkdown v-if="selWeekly.nextWeek" :source="selWeekly.nextWeek" /><p v-else class="text-[13px]">—</p></div>
-            <div><p class="label">チーム共有事項</p><p class="text-[13px]">{{ selWeekly.teamShareKind || WEEKLY_TEAM_SHARE_DEFAULT }}{{ selWeekly.teamShareNote ? `／${selWeekly.teamShareNote}` : '' }}</p></div>
-          </div>
-        </div>
-
-        <!-- 参照ビュー（未提出・未編集: 状態表示のみ） -->
-        <div v-else-if="!weeklyEditing" class="flex flex-wrap items-center gap-2">
-          <UiStatusBadge
-            :tone="selWeekly ? 'warn' : 'neutral'"
-            :label="selWeekly ? REPORT_STATUS_LABELS.draft : '未作成'"
-            dot
-          />
-          <span class="text-xs text-muted">
-            {{ selWeekly ? '下書きが保存されています。「週報を書く」から続きを編集できます' : `${isThisWeek ? '今週' : 'この週'}の週報はまだ作成されていません` }}
-          </span>
-        </div>
-
-        <!-- エディタ -->
-        <div v-else class="grid gap-3">
-          <div class="flex flex-wrap items-center justify-between gap-2">
-            <!-- 例文を挿入（改修9。入力済みなら上書き確認 = 原則9.5。SoT = utils/weekly-report-templates.ts） -->
-            <button type="button" class="btn btn-sm" @click="insertWeeklyExample">
-              <FileText class="h-3.5 w-3.5" aria-hidden="true" />
-              例文を挿入
-            </button>
-            <button type="button" class="btn btn-sm" :aria-pressed="wkMdPreview" @click="wkMdPreview = !wkMdPreview">
-              <component :is="wkMdPreview ? Pencil : Eye" class="h-3.5 w-3.5" aria-hidden="true" />
-              {{ wkMdPreview ? '編集に戻る' : 'プレビュー' }}
-            </button>
-          </div>
-          <div class="grid gap-3 md:grid-cols-2">
-            <UiFormField label="今週の成果・達成感">
-              <div v-if="wkMdPreview" class="min-h-[72px] rounded-lg border border-line p-2.5"><UiMarkdown :source="wkGoal" /></div>
-              <textarea v-else v-model="wkGoal" class="textarea" placeholder="例）顧客マスタの登録作業を完了することができた。" />
-            </UiFormField>
-            <UiFormField label="今週の主要業務" required>
-              <div v-if="wkMdPreview" class="min-h-[72px] rounded-lg border border-line p-2.5"><UiMarkdown :source="wkMain" /></div>
-              <textarea v-else v-model="wkMain" class="textarea" placeholder="今週の主な業務" />
-            </UiFormField>
-            <UiFormField label="今週の課題・原因仮説">
-              <div v-if="wkMdPreview" class="min-h-[72px] rounded-lg border border-line p-2.5"><UiMarkdown :source="wkIssues" /></div>
-              <textarea v-else v-model="wkIssues" class="textarea" placeholder="例）マスタ設定の確認に時間がかかった。設定手順が複数箇所に分散していることが原因だと思う。" />
-            </UiFormField>
-            <UiFormField label="今週うまくいったこと・続けたいこと">
-              <div v-if="wkMdPreview" class="min-h-[72px] rounded-lg border border-line p-2.5"><UiMarkdown :source="wkGoodPoints" /></div>
-              <textarea v-else v-model="wkGoodPoints" class="textarea" placeholder="例）作業前に確認項目を一覧化したことで、入力ミスを減らせた。今後も作業開始前にチェックリストを作成する。" />
-            </UiFormField>
-            <UiFormField label="来週の最重要テーマ（最大3つ）">
-              <div v-if="wkMdPreview" class="min-h-[72px] rounded-lg border border-line p-2.5"><UiMarkdown :source="wkNext" /></div>
-              <textarea v-else v-model="wkNext" class="textarea" placeholder="例）クライアントのシステム稼働に向けた事前準備。主観で進めないようにメンバーとも壁打ちをしながら実施する。" />
-            </UiFormField>
-          </div>
-
-          <!-- チーム共有事項（種別を選択して自由入力〔任意〕。オペレーター指示 2026-08-03） -->
-          <UiFormField label="チーム共有事項">
-            <div class="grid gap-1.5">
-              <UiChipTabs
-                :model-value="wkTeamShareKind"
-                :options="teamShareKindOptions"
-                aria-label="チーム共有事項の種別"
-                @update:model-value="(v: string) => { wkTeamShareKind = v }"
-              />
-              <textarea v-model="wkTeamShareNote" class="textarea" placeholder="共有したい内容（任意）" aria-label="チーム共有事項の内容" />
-            </div>
-          </UiFormField>
-          <div class="flex flex-wrap items-center justify-end gap-2">
-            <button type="button" class="btn" @click="weeklyEditing = false">閉じる</button>
-            <UiButton :loading="isRunning('wk-draft')" @click="onSaveWeekly(false)">下書き保存</UiButton>
-            <UiButton variant="primary" :loading="isRunning('wk-submit')" @click="onSaveWeeklyAndClose(true)">
-              <template #icon><Send class="h-3.5 w-3.5" aria-hidden="true" /></template>
-              提出
-            </UiButton>
-          </div>
-        </div>
-      </UiSectionCard>
-
-      <!-- 過去の週報 -->
-      <UiSectionCard title="過去の週報" flush>
-        <UiEmptyState v-if="reports.myWeeklies.value.length === 0" title="週報がまだありません" hint="今週の週報を作成すると一覧に表示されます" />
-        <ul v-else class="divide-y divide-line">
-          <li v-for="w in pagedMyWeeklies" :key="w.id">
-            <button
-              type="button"
-              class="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-brand-soft"
-              @click="weeklyDrawerId = w.id"
-            >
-              <span class="num flex-1 text-[13px] font-semibold">{{ weekLabel(w.weekStart) }}</span>
-              <UiStatusBadge :tone="w.status === 'submitted' ? 'ok' : 'warn'" :label="REPORT_STATUS_LABELS[w.status]" />
-            </button>
-          </li>
-        </ul>
-        <UiPagination v-model:page="mwPage" v-model:page-size="mwPageSize" :total="mwTotal" />
-      </UiSectionCard>
-    </div>
-
-    <!-- ================= チーム（週報の提出状況。改修依頼 2026-08-19 第4弾 → 複数週マトリクス追加） ================= -->
-    <div v-else-if="tab === 'weekly-team'" class="grid gap-3">
-      <UiChipTabs v-model="weeklyTeamView" :options="WEEKLY_TEAM_VIEW_TABS" aria-label="チーム週報の表示形式" />
-      <ReportsWeeklySubmissionMatrix v-if="weeklyTeamView === 'matrix'" />
-      <ReportsPeriodPanel v-else kind="weekly" view="team" />
-    </div>
-
-    <!-- ================= 月報（自分 / 全員 / チーム。週報と同型 = 共通コンポーネント。改修依頼 2026-08-19 第4弾） ================= -->
-    <ReportsPeriodPanel v-else-if="tab === 'monthly-mine'" kind="monthly" view="mine" />
-    <ReportsPeriodPanel v-else-if="tab === 'monthly-all'" kind="monthly" view="all" />
-    <ReportsPeriodPanel v-else-if="tab === 'monthly-team'" kind="monthly" view="team" />
 
     <!-- 日報詳細ドロワー（チーム / 全員の日報） -->
     <UiDrawer
@@ -2389,40 +1937,6 @@ const WEEKLY_TEAM_VIEW_TABS = [
         </div>
 
         <WidgetsCommentThread :report-id="drawerReport.id" />
-      </div>
-    </UiDrawer>
-
-    <!-- 週報詳細ドロワー（自分の週報の過去一覧 / 全員の週報） -->
-    <UiDrawer
-      :open="!!weeklyDrawer"
-      :title="weeklyDrawer ? `${weeklyDrawer.memberId === currentUserId ? '' : `${reports.memberName(weeklyDrawer.memberId)} の`}週報 ${weekLabel(weeklyDrawer.weekStart)}` : '週報'"
-      @close="weeklyDrawerId = null"
-    >
-      <div v-if="weeklyDrawer" class="grid gap-3">
-        <div class="flex flex-wrap items-center gap-2">
-          <UiAvatar :name="reports.memberName(weeklyDrawer.memberId)" size="sm" />
-          <span class="text-[13px] font-bold">{{ reports.memberName(weeklyDrawer.memberId) }}</span>
-          <UiStatusBadge
-            :tone="weeklyDrawer.status === 'submitted' ? 'ok' : 'warn'"
-            :label="REPORT_STATUS_LABELS[weeklyDrawer.status]"
-            dot
-          />
-          <!-- 未読に戻す（他人の提出済み週報のみ。開いた時点で既読になるため、その取消フロー = 原則9.5） -->
-          <button
-            v-if="weeklyDrawer.memberId !== currentUserId && weeklyDrawer.status === 'submitted' && reports.isReportRead('weekly', weeklyDrawer.id)"
-            type="button"
-            class="btn btn-sm ml-auto"
-            @click="onMarkUnreadWeekly"
-          >
-            未読に戻す
-          </button>
-        </div>
-        <div><p class="label">今週の成果・達成感</p><UiMarkdown v-if="weeklyDrawer.goalReview" :source="weeklyDrawer.goalReview" /><p v-else class="text-[13px]">—</p></div>
-        <div><p class="label">今週の主要業務</p><UiMarkdown v-if="weeklyDrawer.mainWork" :source="weeklyDrawer.mainWork" /><p v-else class="text-[13px]">—</p></div>
-        <div><p class="label">今週の課題・原因仮説</p><UiMarkdown v-if="weeklyDrawer.issues" :source="weeklyDrawer.issues" /><p v-else class="text-[13px]">—</p></div>
-        <div><p class="label">今週うまくいったこと・続けたいこと</p><UiMarkdown v-if="weeklyDrawer.goodPoints" :source="weeklyDrawer.goodPoints" /><p v-else class="text-[13px]">—</p></div>
-        <div><p class="label">来週の最重要テーマ（最大3つ）</p><UiMarkdown v-if="weeklyDrawer.nextWeek" :source="weeklyDrawer.nextWeek" /><p v-else class="text-[13px]">—</p></div>
-        <div><p class="label">チーム共有事項</p><p class="text-[13px]">{{ weeklyDrawer.teamShareKind || WEEKLY_TEAM_SHARE_DEFAULT }}{{ weeklyDrawer.teamShareNote ? `／${weeklyDrawer.teamShareNote}` : '' }}</p></div>
       </div>
     </UiDrawer>
 

@@ -272,7 +272,10 @@ const imp = useImprovements()  // submit（body + 対象ページ〔既定=開�
 | `ImprovementsLinkEditor` | v-model:links（string[]）。**参考リンク（URL 配列）の編集共通部品**（追加/削除/編集。改善要望の投稿・編集と活動記録 3 種で共用 = 原則3。改修依頼 2026-08-19 第4弾。旧 AttachmentEditor のリンク編集部分を抽出） |
 | `ImprovementsRequestKanban` | requests（ImprovementRequest[]）。**生要望のステータス別カンバン**（未対応/対応済み/見送り = IMPROVEMENT_REQUEST_STATUS_META。参照専用・カード押下で `open` emit。全員閲覧可 = 改修依頼 2026-08-19 第4弾） |
 | `ImprovementsRequestGantt` | requests（ImprovementRequest[]）。**生要望の投稿タイムライン**（投稿日 createdAt に 1 目盛りバー・ステータス色・スケール月/週/日切替 = shared/domain/gantt 共用 = 原則3。参照専用・`open` emit。全員閲覧可 = 改修依頼 2026-08-19 第4弾） |
-| `ReportsPeriodPanel` | kind（'weekly'/'monthly'）/ view（'mine'/'all'/'team'）。**週報・月報の期間レポート共通パネル**（自分=編集〔例文挿入・下位粒度から下書き生成〕・全員=提出済み一覧 + 未読・チーム=期間の提出状況。週報と月報は同型のため kind で切替 = 原則3。月報の全ビューと週報のチームで使用。改修依頼 2026-08-19 第4弾） |
+| `ReportsPeriodPanel` | kind（'weekly'/'monthly'）/ view（'mine'/'all'/'team'）。**週報・月報の期間レポート共通パネル**（自分=編集〔例文挿入・下位粒度から下書き生成〕・全員=提出済み一覧 + 未読・チーム=期間の提出状況。週報と月報は同型のため kind で切替 = 原則3。`/monthly-report` の全ビューと `/weekly-report` チームタブ「単週の詳細」で使用。改修依頼 2026-08-19 第4弾 → 独立ページ化 2026-08-20 第2バッチ） |
+| `ReportsWeeklyMinePanel` | props なし。自分の週報パネル（週ナビ + 参照/エディタ + 過去の週報一覧 + 詳細ドロワー）。改修依頼 2026-08-20 第2バッチで reports.vue のインライン実装から `/weekly-report` 配下へ移設（挙動不変） |
+| `ReportsWeeklyAllPanel` | props なし。全員の週報パネル（サブタブ〔一覧 / AI インサイト = WidgetsWeeklyInsight〕+ 週ナビ + 部署・メンバー絞り込み + 未読管理 + 詳細ドロワー）。同上の移設（挙動不変）。絞り込み判定は `utils/report-filters.ts`（日報側と共通 = 原則3） |
+| `ReportsWeeklyDetailDrawer` | reportId（string \| null）+ `@close`。週報詳細ドロワー共通部品（開くと他人の提出済みを既読化・「未読に戻す」= 原則9.5。WeeklyMinePanel / WeeklyAllPanel で共用。週レンジ表示 = `utils/report-weeks.ts` weekRangeLabel） |
 | `ImprovementsKanban` | items（ImprovementItem[]）・reqCount(id)。ステータス別カラムのカンバン（F-42）。emit: open(item)・status(id,to)。許可遷移のクイック操作・横スクロール |
 | `ImprovementsGantt` | items（ImprovementItem[]）。対応予定期間のガント（F-42。月次/週次/日次切替・前後送り・今スナップ）。列/バーは `shared/domain/gantt` 純関数。**ステータスフィルタ（既定=accepted=実装決定・未完了。選択肢/判定は `IMPROVEMENT_FILTER_OPTIONS`/`matchesImprovementFilter` 共有）+ バー色分け（改善対応=brand/未判定=warn/運用対応=ok/継続検討=serious/解決済み=muted〔完了グレー〕/対応見送り=crit・決着済みは退色）+ 凡例。2026-08-12・対応方針語彙 2026-08-20** emit: open(item) |
 

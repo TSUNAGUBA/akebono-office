@@ -1045,7 +1045,7 @@ function openRun(row: Record<string, unknown>): void {
                 <template v-if="mapMethod === 'file_fixed'">
                   <input v-model.number="r.byteStart" class="input" type="number" min="1" placeholder="開始" :aria-label="`${r.targetLabel} の開始バイト`">
                   <input v-model.number="r.byteEnd" class="input" type="number" min="1" placeholder="終了" :aria-label="`${r.targetLabel} の終了バイト`">
-                  <input v-model="r.sourceField" class="input" type="text" placeholder="項目名（任意）" :aria-label="`${r.targetLabel} の取込元項目名`">
+                  <input v-model="r.sourceField" class="input" type="text" placeholder="項目名" :aria-label="`${r.targetLabel} の取込元項目名`">
                 </template>
                 <input
                   v-else

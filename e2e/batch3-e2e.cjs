@@ -62,8 +62,15 @@ async function main() {
         return !!month && month.getAttribute('aria-pressed') === 'true'
       }))
 
-    // 改修4: 全員の週報タブに週報内容のプレビューが出る（週報はメニュー分割後 ?kind=weekly = 2026-08-19 第4弾に追随）
+    // 旧 URL 互換: /reports?kind=weekly は独立ページ /weekly-report へリダイレクトする
+    // （改修依頼 2026-08-20 第2バッチ。既存の通知・ブックマークが生き続けることの回帰チェック）
     await page.goto(`${BASE}/#/reports?kind=weekly`)
+    await page.getByRole('main').getByRole('heading', { level: 1, name: '週報' }).waitFor()
+    await page.waitForURL(url => String(url).includes('/weekly-report'))
+    check('旧 URL 互換: /reports?kind=weekly → /weekly-report へ着地する', true)
+
+    // 改修4: 全員の週報タブに週報内容のプレビューが出る（週報は独立ページ /weekly-report = 2026-08-20 第2バッチに追随）
+    await page.goto(`${BASE}/#/weekly-report`)
     await page.getByRole('main').getByRole('heading', { level: 1 }).waitFor()
     await page.getByRole('tab', { name: '全員の週報' }).click()
     // 週報プレビュー（項目ラベル）が一覧に出る（少なくとも1件のシード週報がある前提。無ければスキップ扱い）
@@ -79,8 +86,8 @@ async function main() {
     // ここでは「例外なくクラッシュせず表示できる」ことと、改修9 の例文挿入ボタンの存在を主に確認する。
     check('自分の日報: ページが正しく描画される', true)
 
-    // 改修9: 自分の週報に「例文を挿入」ボタンがある（週報は ?kind=weekly ページ側）
-    await page.goto(`${BASE}/#/reports?kind=weekly`)
+    // 改修9: 自分の週報に「例文を挿入」ボタンがある（週報は独立ページ /weekly-report 側）
+    await page.goto(`${BASE}/#/weekly-report`)
     await page.getByRole('main').getByRole('heading', { level: 1 }).waitFor()
     await page.getByRole('tab', { name: '自分の週報' }).click()
     await page.getByRole('button', { name: '週報を書く' }).first().click().catch(() => {})

@@ -228,7 +228,7 @@ async function undo(): Promise<void> {
         />
       </UiFormField>
       <!-- 対象箇所（ページ内のどこか = 自由入力・任意。改修依頼 2026-08-19 第4弾） -->
-      <UiFormField label="対象箇所（任意）" hint="ページ内のどこかを具体的に書けます（例: 一覧の合計欄・登録モーダルの日付）">
+      <UiFormField label="対象箇所" hint="ページ内のどこかを具体的に書けます（例: 一覧の合計欄・登録モーダルの日付）">
         <input
           v-model="targetSpot"
           class="input !w-full"

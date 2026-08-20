@@ -1347,7 +1347,7 @@ async function copyAndClose(): Promise<void> {
           </div>
           <!-- 「対応見送り」への変更: 任意で理由をメモとして残せる（原則9.5 の判断根拠の記録） -->
           <div v-if="rejectMode" class="grid gap-2 rounded-lg border border-line bg-surface-soft p-2.5">
-            <UiFormField label="対応見送りの理由（任意・メモに記録されます）">
+            <UiFormField label="対応見送りの理由（メモに記録されます）">
               <textarea
                 v-model="rejectReason"
                 class="textarea"
@@ -1382,7 +1382,7 @@ async function copyAndClose(): Promise<void> {
 
         <!-- 対応予定期間（任意・ガントに反映） -->
         <div v-if="!selected.archivedAt" class="grid gap-2">
-          <p class="label">対応予定期間（任意）</p>
+          <p class="label">対応予定期間</p>
           <div class="flex flex-wrap items-end gap-2">
             <UiFormField label="開始日">
               <input v-model="planForm.start" class="input" type="date">

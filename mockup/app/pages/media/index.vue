@@ -194,7 +194,7 @@ const segmentOptions = computed(() => [
         <UiFormField label="チャンネル名" hint="必須">
           <input v-model="createForm.name" type="text" class="input" placeholder="例）暮らしの器マガジン" aria-label="チャンネル名">
         </UiFormField>
-        <UiFormField label="連携する Akebono 業務アプリ（業態）" hint="任意。連携すると売上との統合 PDCA が使えます">
+        <UiFormField label="連携する Akebono 業務アプリ（業態）" hint="連携すると売上との統合 PDCA が使えます">
           <UiSelect v-model="createForm.segmentId" :options="segmentOptions" aria-label="連携する業態" />
         </UiFormField>
         <p class="text-[11px] text-muted">作成後、設定画面で GA 連携・サイト情報・AI 分析設定を行えます。</p>

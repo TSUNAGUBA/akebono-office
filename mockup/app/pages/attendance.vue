@@ -1869,7 +1869,7 @@ async function submitRule(): Promise<void> {
           <UiSelect v-model="leaveForm.unit" :options="leaveUnitOptions" aria-label="取得単位" />
         </UiFormField>
         <UiFormField label="理由">
-          <textarea v-model="leaveForm.reason" class="textarea" placeholder="任意。承認者への補足があれば記入してください" />
+          <textarea v-model="leaveForm.reason" class="textarea" placeholder="承認者への補足があれば記入してください" />
         </UiFormField>
         <p v-if="leaveError" class="text-[12px] font-medium text-crit" role="alert">{{ leaveError }}</p>
       </div>

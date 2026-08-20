@@ -494,7 +494,7 @@ async function restoreRule(): Promise<void> {
           </UiFormField>
           <UiFormField
             v-else-if="isFieldResource"
-            label="項目（任意）"
+            label="項目"
             :hint="editingId
               ? '項目名で検索して 1 件選択（未選択 = マスタ全体 = 全項目の一括既定。個別項目のルールが優先）'
               : '項目名で検索して選択。複数選択すると 1 項目 1 ルールで一括作成されます（未選択 = マスタ全体 = 全項目の一括既定。個別項目のルールが優先）'"

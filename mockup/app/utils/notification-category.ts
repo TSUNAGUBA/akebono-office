@@ -2,7 +2,8 @@
  * 通知のカテゴリ判定（SoT）。ダッシュボードの通知欄と通知・エスカレーションセンター（/inbox）で共用する（原則3）。
  * - escalation = kind='escalation'（エスカレーション起票の通知）
  * - workflow（稟議）= リンク先が /workflow の通知（承認依頼・決裁・却下・差戻し）
- * - report（日報）= リンク先が /reports の通知（日報・週報のコメント・リマインド）
+ * - report（日報・週報・月報）= リンク先が /reports・/weekly-report・/monthly-report の通知
+ *   （コメント・リマインド。週報・月報の独立パスは改修依頼 2026-08-20 第2バッチ）
  * - customer-log（顧客活動）= リンク先が /customer-log の通知
  * - minutes（議事録）= リンク先が /minutes の通知
  * - approval（承認依頼）= それ以外の approval 通知（打刻修正・休暇など）
@@ -20,6 +21,10 @@ export type NotificationCategory =
 const LINK_CATEGORY_RULES: { prefix: string; category: NotificationCategory }[] = [
   { prefix: '/workflow', category: 'workflow' },
   { prefix: '/reports', category: 'report' },
+  // 週報・月報の独立パス（改修依頼 2026-08-20 第2バッチ）。旧 /reports?kind= リンクの既存通知は
+  // 上の /reports ルールが従来どおり report に分類する（下位互換）
+  { prefix: '/weekly-report', category: 'report' },
+  { prefix: '/monthly-report', category: 'report' },
   { prefix: '/customer-log', category: 'customer-log' },
   { prefix: '/minutes', category: 'minutes' },
 ]

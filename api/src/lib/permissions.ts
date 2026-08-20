@@ -16,7 +16,8 @@
 import type { MiddlewareHandler } from 'hono'
 import type pg from 'pg'
 import {
-  canUseFeature, type PermissionSubject, stripDeniedFields, stripDeniedWriteKeys,
+  canUseFeature, type PermissionSubject, resolveFeatureResource,
+  stripDeniedFields, stripDeniedWriteKeys,
 } from '../../../shared/domain/permissions'
 import type { PermissionRule } from '../../../shared/domain/types'
 import type { AuthUser } from '../auth'
@@ -62,6 +63,18 @@ export function subjectOf(user: AuthUser): PermissionSubject {
 const PATH_FEATURES: [string, string][] = [
   ['/v1/attendance', 'attendance'],
   ['/v1/leave', 'attendance'],
+  // 週報・月報は独立機能キー（改修依頼 2026-08-20 第2バッチ）。/v1/reports より前に置き最長一致
+  // （first-match）で解決する。判定時は resolveFeatureResource が旧 'reports' ルールへの互換
+  // フォールバックを解決する（新キーのルール未設定の間は従来の reports 設定を継承）。
+  // 設計判断: /v1/reports/remind（日報リマインド専用）は従来どおり 'reports' に残す。
+  // /v1/reports/reads は下記のとおりパスガード対象外 + ハンドラ内 kind 別判定（レビュー R1 で変更）。
+  ['/v1/reports/weekly-insight', 'weekly-report'],
+  ['/v1/reports/weekly', 'weekly-report'],
+  ['/v1/reports/monthly', 'monthly-report'],
+  // reads（既読管理）は kind = daily/weekly/monthly 混在のためパスガード対象外とし、
+  // ハンドラ内で kind 別の機能キー（reportReadsFeatureKey）により判定する
+  // （'reports' に残すと「日報 deny × 週報 allow」設定で週報の既読管理が全滅する = レビュー R1 対応）
+  ['/v1/reports/reads', ''],
   ['/v1/reports', 'reports'],
   ['/v1/workflows', 'workflow'],
   ['/v1/shifts', 'shift'],
@@ -94,7 +107,10 @@ export function featureGuard(pool: pg.Pool): MiddlewareHandler {
     const rules = await activePermissionRules(pool)
     if (rules.length === 0) return next() // ルール未設定 = 既定 allow（下位互換）
     const user = c.get('user')
-    if (!canUseFeature(rules, subjectOf(user), hit[1])) {
+    // weekly-report / monthly-report は新キーのルール未設定の間、旧 'reports' 設定を継承する
+    // （resolveFeatureResource = フロント usePermissions.can と共通のフォールバック解決。原則7）
+    const resource = resolveFeatureResource(rules, hit[1])
+    if (!canUseFeature(rules, subjectOf(user), resource)) {
       throw err('AKO-PRM-001', 'この機能を利用する権限がありません（管理者にお問い合わせください）', 403)
     }
     return next()

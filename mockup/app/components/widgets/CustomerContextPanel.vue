@@ -612,7 +612,7 @@ async function onRevert(noteId: string): Promise<void> {
           <UiFormField label="経営課題" hint="改行区切りの箇条書きがおすすめです">
             <textarea v-model="ctxForm.challenges" class="textarea min-h-24" placeholder="例）・在庫最適化&#10;・データ活用人材の育成" aria-label="経営課題" />
           </UiFormField>
-          <UiFormField label="補足メモ（任意）" hint="戦略メモなどの任意の定性情報">
+          <UiFormField label="補足メモ" hint="戦略メモなどの任意の定性情報">
             <textarea v-model="ctxForm.strategyNotes" class="textarea min-h-20" aria-label="補足メモ" />
           </UiFormField>
           <div class="flex items-center justify-end gap-2">
@@ -773,24 +773,24 @@ async function onRevert(noteId: string): Promise<void> {
         <UiFormField label="会社名" required>
           <input v-model="companyForm.name" type="text" class="input" aria-label="会社名" required>
         </UiFormField>
-        <UiFormField label="かな・別名（任意）" hint="「、」またはカンマ区切りで複数入力できます">
+        <UiFormField label="かな・別名" hint="「、」またはカンマ区切りで複数入力できます">
           <input v-model="companyForm.aliasesText" type="text" class="input" placeholder="例）アケボノ、akebono" aria-label="かな・別名">
         </UiFormField>
         <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <UiFormField label="主業種（任意）">
+          <UiFormField label="主業種">
             <UiSelect v-model="companyForm.primaryIndustryId" :options="industryOptions" empty-label="未設定" aria-label="主業種" />
           </UiFormField>
-          <UiFormField label="規模（任意）">
+          <UiFormField label="規模">
             <input v-model="companyForm.size" type="text" class="input" placeholder="例）100-300名" aria-label="規模">
           </UiFormField>
         </div>
-        <UiFormField label="所在地（任意）">
+        <UiFormField label="所在地">
           <input v-model="companyForm.location" type="text" class="input" placeholder="例）東京都" aria-label="所在地">
         </UiFormField>
-        <UiFormField label="説明（任意）">
+        <UiFormField label="説明">
           <textarea v-model="companyForm.description" class="textarea min-h-20" aria-label="説明" />
         </UiFormField>
-        <UiFormField label="担当者（任意）">
+        <UiFormField label="担当者">
           <UiSelect v-model="companyForm.ownerMemberId" :options="memberOptions" empty-label="未設定" aria-label="担当者" />
         </UiFormField>
       </div>
@@ -818,14 +818,14 @@ async function onRevert(noteId: string): Promise<void> {
           同名企業と区別するためのヒント（任意）があると精度が上がります。
         </p>
         <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <UiFormField label="住所（任意）">
+          <UiFormField label="住所">
             <input v-model="hintForm.address" type="text" class="input" placeholder="例）東京都" aria-label="住所ヒント">
           </UiFormField>
-          <UiFormField label="電話番号（任意）">
+          <UiFormField label="電話番号">
             <input v-model="hintForm.phone" type="text" class="input" placeholder="例）03-1234-5678" aria-label="電話番号ヒント">
           </UiFormField>
         </div>
-        <UiFormField label="キーワード（任意）" hint="事業内容・ブランド名など">
+        <UiFormField label="キーワード" hint="事業内容・ブランド名など">
           <input v-model="hintForm.keywords" type="text" class="input" placeholder="例）小売 SCM" aria-label="キーワードヒント">
         </UiFormField>
       </div>
