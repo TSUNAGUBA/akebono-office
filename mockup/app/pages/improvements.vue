@@ -1382,7 +1382,7 @@ async function copyAndClose(): Promise<void> {
 
         <!-- 対応予定期間（任意・ガントに反映） -->
         <div v-if="!selected.archivedAt" class="grid gap-2">
-          <p class="label">対応予定期間（任意）</p>
+          <p class="label">対応予定期間</p>
           <div class="flex flex-wrap items-end gap-2">
             <UiFormField label="開始日">
               <input v-model="planForm.start" class="input" type="date">

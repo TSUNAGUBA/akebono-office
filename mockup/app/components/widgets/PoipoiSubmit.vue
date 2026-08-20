@@ -111,9 +111,9 @@ async function undo(): Promise<void> {
       </p>
       <!-- 紐付け（任意。/poipoi と同じ項目。プロジェクト選択で顧客を補完） -->
       <div class="flex flex-wrap items-center gap-2">
-        <UiSelect v-model="form.projectId" :options="projects.map(p => ({ value: p.id, label: p.name }))" empty-label="プロジェクト（任意）" aria-label="プロジェクト" class="w-auto" />
-        <UiSelect v-model="form.companyId" :options="companies.map(c => ({ value: c.id, label: c.name }))" empty-label="顧客（任意）" aria-label="顧客" class="w-auto" />
-        <UiSelect v-model="form.workCategoryId" :options="workCategories.map(w => ({ value: w.id, label: w.name }))" empty-label="業務種別（任意）" aria-label="業務種別" class="w-auto" />
+        <UiSelect v-model="form.projectId" :options="projects.map(p => ({ value: p.id, label: p.name }))" empty-label="プロジェクト" aria-label="プロジェクト" class="w-auto" />
+        <UiSelect v-model="form.companyId" :options="companies.map(c => ({ value: c.id, label: c.name }))" empty-label="顧客" aria-label="顧客" class="w-auto" />
+        <UiSelect v-model="form.workCategoryId" :options="workCategories.map(w => ({ value: w.id, label: w.name }))" empty-label="業務種別" aria-label="業務種別" class="w-auto" />
       </div>
       <UiFormField label="内容" required>
         <textarea

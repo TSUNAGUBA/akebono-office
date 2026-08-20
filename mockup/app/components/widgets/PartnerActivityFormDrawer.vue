@@ -231,7 +231,7 @@ async function save(): Promise<void> {
   >
     <div class="grid gap-3">
       <!-- 事業区分（Village。最上段・任意・自由入力で新規登録可） -->
-      <UiFormField label="事業区分（Village・任意）" hint="社内事業の区分。未登録名を入力すると保存時にマスタへ新規登録されます">
+      <UiFormField label="事業区分（Village）" hint="社内事業の区分。未登録名を入力すると保存時にマスタへ新規登録されます">
         <UiCombobox
           v-model="form.villageId"
           v-model:text="form.villageText"
@@ -253,7 +253,7 @@ async function save(): Promise<void> {
             create-hint="保存時にマスタへ新規登録されます"
           />
         </UiFormField>
-        <UiFormField label="パートナー担当（任意）" hint="選択会社の担当者。未登録名を入力すると保存時にマスタへ新規登録されます">
+        <UiFormField label="パートナー担当" hint="選択会社の担当者。未登録名を入力すると保存時にマスタへ新規登録されます">
           <UiCombobox
             v-model="form.partnerContactId"
             v-model:text="form.partnerContactText"
@@ -267,7 +267,7 @@ async function save(): Promise<void> {
       </div>
       <!-- アプローチ企業（顧客(会社)参照・任意）+ アプローチグループ（自由入力・任意） -->
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <UiFormField label="アプローチ企業（任意）" hint="未登録の会社名を入力すると、保存時にマスタへ新規登録されます">
+        <UiFormField label="アプローチ企業" hint="未登録の会社名を入力すると、保存時にマスタへ新規登録されます">
           <UiCombobox
             v-model="form.approachCompanyId"
             v-model:text="form.approachCompanyText"
@@ -277,7 +277,7 @@ async function save(): Promise<void> {
             create-hint="保存時にマスタへ新規登録されます"
           />
         </UiFormField>
-        <UiFormField label="アプローチグループ（任意）">
+        <UiFormField label="アプローチグループ">
           <input v-model="form.approachGroup" type="text" class="input" placeholder="例）紹介ルートA" aria-label="アプローチグループ">
         </UiFormField>
       </div>
@@ -296,33 +296,33 @@ async function save(): Promise<void> {
         </UiFormField>
       </div>
       <!-- 「概要」→「背景・目的」（ラベルのみ変更。フィールド名 summary は維持 = 改修依頼 2026-08-20） -->
-      <UiFormField label="背景・目的（任意）">
+      <UiFormField label="背景・目的">
         <textarea v-model="form.summary" class="textarea min-h-16" placeholder="活動テーマの背景・目的" aria-label="背景・目的" />
       </UiFormField>
       <!-- 取組内容（改修依頼 2026-08-20 で追加） -->
-      <UiFormField label="取組内容（任意）">
+      <UiFormField label="取組内容">
         <textarea v-model="form.initiatives" class="textarea min-h-16" placeholder="例）データ連携PoCの共同実施、勉強会の開催" aria-label="取組内容" />
       </UiFormField>
-      <UiFormField label="現在状況（任意）">
+      <UiFormField label="現在状況">
         <textarea v-model="form.currentState" class="textarea min-h-16" placeholder="例）先方担当者と初回協議済み" aria-label="現在状況" />
       </UiFormField>
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <UiFormField label="Next Action（任意）">
+        <UiFormField label="Next Action">
           <input v-model="form.nextAction" type="text" class="input" placeholder="例）3者MTG" aria-label="Next Action">
         </UiFormField>
-        <UiFormField label="Next Action日（任意）">
+        <UiFormField label="Next Action日">
           <input v-model="form.nextActionDate" type="date" class="input" aria-label="Next Action日">
         </UiFormField>
       </div>
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <UiFormField label="関連MTG（任意）">
+        <UiFormField label="関連MTG">
           <input v-model="form.relatedMeeting" type="text" class="input" placeholder="例）9/7 フローラMTG" aria-label="関連MTG">
         </UiFormField>
-        <UiFormField label="関連商談（任意）" hint="案件化したら営業活動へリンク">
+        <UiFormField label="関連商談" hint="案件化したら営業活動へリンク">
           <UiSelect v-model="form.relatedSalesActivityId" :options="salesOptions" empty-label="（未リンク）" aria-label="関連商談" />
         </UiFormField>
       </div>
-      <UiFormField label="メモ（任意）">
+      <UiFormField label="メモ">
         <textarea v-model="form.memo" class="textarea min-h-16" placeholder="その他のメモ" aria-label="メモ" />
       </UiFormField>
       <!-- 参考リンク（改善要望と同じ部品を再利用 = 原則3） -->

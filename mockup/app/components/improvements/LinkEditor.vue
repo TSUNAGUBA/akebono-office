@@ -32,7 +32,7 @@ function removeLink(i: number): void {
 <template>
   <div class="grid gap-1.5">
     <div class="flex items-center justify-between">
-      <p class="label">参考リンク（任意・{{ IMPROVEMENT_LINKS_MAX }} 件まで）</p>
+      <p class="label">参考リンク（{{ IMPROVEMENT_LINKS_MAX }} 件まで）</p>
       <button
         v-if="links.length < IMPROVEMENT_LINKS_MAX"
         type="button" class="btn btn-ghost btn-sm" @click="addLink"

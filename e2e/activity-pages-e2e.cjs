@@ -57,7 +57,7 @@ async function main() {
       (await page.getByText('Web会議').count()) >= 1)
     // 記録モーダル: 活動目的（旧: 属性タグ）+ 活動手段チップ
     await page.getByRole('button', { name: '記録する' }).click()
-    await page.getByText('活動目的（任意）').waitFor()
+    await page.getByText('活動目的').waitFor()
     check('顧客活動: フォームの「活動目的」（旧: 属性タグ）がある', true)
     const methodChips = page.getByRole('tablist', { name: '活動手段' })
     await methodChips.waitFor()

@@ -419,7 +419,7 @@ const showArchived = ref(false)
           <UiFormField label="日付" required>
             <input v-model="form.logDate" type="date" class="input" aria-label="日付" required>
           </UiFormField>
-          <UiFormField label="開始時間（任意）" hint="15 分単位">
+          <UiFormField label="開始時間" hint="15 分単位">
             <UiSelect
               v-model="form.logTime"
               :options="timeOptions(form.logTime)"
@@ -427,7 +427,7 @@ const showArchived = ref(false)
               aria-label="開始時間"
             />
           </UiFormField>
-          <UiFormField label="終了時間（任意）" hint="開始より後の時刻">
+          <UiFormField label="終了時間" hint="開始より後の時刻">
             <UiSelect
               v-model="form.endTime"
               :options="timeOptions(form.endTime)"
@@ -436,7 +436,7 @@ const showArchived = ref(false)
             />
           </UiFormField>
         </div>
-        <UiFormField label="活動目的（任意）" hint="商談・取材・イベントなど。自由入力でも追加できます">
+        <UiFormField label="活動目的" hint="商談・取材・イベントなど。自由入力でも追加できます">
           <div class="grid gap-1.5">
             <UiChipSelect :model-value="form.tags" :options="tagOptions" aria-label="活動目的" @update:model-value="applyTags" />
             <div class="flex items-center gap-1.5">
@@ -455,7 +455,7 @@ const showArchived = ref(false)
             </div>
           </div>
         </UiFormField>
-        <UiFormField label="活動手段（任意）" hint="訪問・Web会議・電話など">
+        <UiFormField label="活動手段" hint="訪問・Web会議・電話など">
           <UiChipTabs v-model="form.method" :options="methodOptions" aria-label="活動手段" />
         </UiFormField>
         <UiFormField label="顧客（会社）" required hint="未登録の会社名を入力すると、保存時にマスタへ新規登録されます">
@@ -469,7 +469,7 @@ const showArchived = ref(false)
           />
         </UiFormField>
         <UiFormField
-          label="担当者（人・任意）"
+          label="担当者（人）"
           :hint="hasCompanyInput
             ? '未登録の担当者名を入力すると、保存時にマスタへ新規登録されます'
             : '先に会社を選択・入力してください'"
@@ -491,7 +491,7 @@ const showArchived = ref(false)
             aria-label="自社の担当者"
           />
         </UiFormField>
-        <UiFormField label="件名（任意）">
+        <UiFormField label="件名">
           <input v-model="form.title" type="text" class="input" placeholder="例）SCM 追加提案の打診" aria-label="件名">
         </UiFormField>
         <UiFormField label="担当者メモ" required>

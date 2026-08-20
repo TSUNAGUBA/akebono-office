@@ -274,7 +274,7 @@ async function save(): Promise<void> {
               <input v-model="form.defaultVariantAxis1Label" type="text" class="input" placeholder="例）カラー" aria-label="既定のバリアント軸1ラベル">
             </UiFormField>
             <UiFormField label="既定のバリアント軸2ラベル">
-              <input v-model="form.defaultVariantAxis2Label" type="text" class="input" placeholder="例）サイズ（任意）" aria-label="既定のバリアント軸2ラベル">
+              <input v-model="form.defaultVariantAxis2Label" type="text" class="input" placeholder="例）サイズ" aria-label="既定のバリアント軸2ラベル">
             </UiFormField>
           </section>
         </div>

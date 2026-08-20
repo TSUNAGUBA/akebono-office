@@ -390,9 +390,9 @@ function authorOf(n: Note): string {
         </p>
         <!-- プロジェクト/顧客/業務種別（フォーム上部 = オペレーター指示 2026-08-03。プロジェクト選択で顧客を補完） -->
         <div class="flex flex-wrap items-center gap-2">
-          <UiSelect v-model="form.projectId" :options="projects.map(p => ({ value: p.id, label: p.name }))" empty-label="プロジェクト（任意）" aria-label="プロジェクト" class="w-auto" />
-          <UiSelect v-model="form.companyId" :options="companies.map(c => ({ value: c.id, label: c.name }))" empty-label="顧客（任意）" aria-label="顧客" class="w-auto" />
-          <UiSelect v-model="form.workCategoryId" :options="workCategories.map(w => ({ value: w.id, label: w.name }))" empty-label="業務種別（任意）" aria-label="業務種別" class="w-auto" />
+          <UiSelect v-model="form.projectId" :options="projects.map(p => ({ value: p.id, label: p.name }))" empty-label="プロジェクト" aria-label="プロジェクト" class="w-auto" />
+          <UiSelect v-model="form.companyId" :options="companies.map(c => ({ value: c.id, label: c.name }))" empty-label="顧客" aria-label="顧客" class="w-auto" />
+          <UiSelect v-model="form.workCategoryId" :options="workCategories.map(w => ({ value: w.id, label: w.name }))" empty-label="業務種別" aria-label="業務種別" class="w-auto" />
         </div>
 
         <!-- Google Meet 連携（議事録・API モードのみ。Drive の AI メモ/録画を選んで議事録へリンク） -->
@@ -468,18 +468,21 @@ function authorOf(n: Note): string {
           placeholder="タイトル（空欄 = 本文の先頭行）"
           aria-label="タイトル"
         >
-        <!-- 本文（マークダウン対応。プレビューはトグルで切替 = 入力そのものはプレーンな textarea） -->
-        <div v-if="previewing" class="rounded-lg border border-line bg-surface p-3 min-h-24">
-          <UiMarkdown v-if="form.body.trim()" :source="form.body" />
-          <p v-else class="text-[12px] text-muted">（本文が空です。「編集に戻る」から入力してください）</p>
-        </div>
-        <textarea
-          v-else
-          v-model="form.body"
-          class="textarea min-h-24"
-          :placeholder="kind === 'poipoi' ? '例）A社の見積、明日までに単価見直しが必要そう' : '例）7/19 定例。決定事項: …'"
-          :aria-label="kind === 'poipoi' ? 'タネ本文' : '議事録本文'"
-        />
+        <!-- 本文（マークダウン対応。プレビューはトグルで切替 = 入力そのものはプレーンな textarea。
+             テキスト登録では必須 = useNotes.add が空を拒否するため必須マーカーを明示（改修依頼 2026-08-20 第2バッチ） -->
+        <UiFormField label="本文" required>
+          <div v-if="previewing" class="rounded-lg border border-line bg-surface p-3 min-h-24">
+            <UiMarkdown v-if="form.body.trim()" :source="form.body" />
+            <p v-else class="text-[12px] text-muted">（本文が空です。「編集に戻る」から入力してください）</p>
+          </div>
+          <textarea
+            v-else
+            v-model="form.body"
+            class="textarea min-h-24"
+            :placeholder="kind === 'poipoi' ? '例）A社の見積、明日までに単価見直しが必要そう' : '例）7/19 定例。決定事項: …'"
+            :aria-label="kind === 'poipoi' ? 'タネ本文' : '議事録本文'"
+          />
+        </UiFormField>
         <div class="flex flex-wrap items-center justify-end gap-2">
           <button type="button" class="btn btn-sm" :aria-pressed="previewing" @click="previewing = !previewing">
             <component :is="previewing ? Pencil : Eye" class="h-3.5 w-3.5" aria-hidden="true" />
