@@ -86,7 +86,9 @@ const mcat = useMenuCategories('dashboard')   // categories / categorize(cards) 
 // 通知配置は**レイアウト本体と別の専用キー**（user pref 'dashboardNotificationPlacement'〔mock=localStorage
 // 'ako.dashboard-notification-placement.v1'〕/ configs 'dashboard-notification-placement'）に保存し、
 // 解決 = 層整合: ユーザー配置キー > ユーザー層レイアウト由来（**分離前の保存値のみ**。分離後の保存は options.notificationsInherit=true で配置をキー・下位層へ委譲 = フォールバック値を層に固定しない）> テナント配置キー > テナント層レイアウト由来（分離前のみ）> アプリ既定（既存レイアウトの配置選択を新キーが上書きしない = 原則7。レイアウト本体へ書くと配置変更でセクション構成が層に固定される = レビュー対応）
-const dl = useDashboardLayout()   // effectiveLayout〔配置キーの上書き適用済み〕 / resolvedScope / placementSource / activeTemplateId / templates / userPlacement / tenantPlacement / baseLayoutForScope(scope) / applyTemplate(id, scope)〔通知配置は変更しない〕 / saveNotificationPlacement(placement, scope)・resetNotificationPlacement(scope)〔配置キーのみ・取消 = 原則9.5〕 / saveSections(sections, scope)〔保存先層自身の options 維持で sections 差替・templateId=custom〕 / resetLayout(scope)（取消・原則9.5。tenant は管理者のみ。配置キーは触らない）
+const dl = useDashboardLayout()   // effectiveLayout〔配置キーの上書き適用済み〕 / resolvedScope / placementSource / activeTemplateId / templates / userPlacement / tenantPlacement / baseLayoutForScope(scope) / applyTemplate(id, scope)〔通知配置は変更しない〕 / saveNotificationPlacement(placement, scope)・resetNotificationPlacement(scope)〔配置キーのみ・取消 = 原則9.5〕 / saveSections(sections, scope, optionsPatch?)〔保存先層自身の options 維持で sections 差替・templateId=custom。optionsPatch = 表示オプションの部分更新（セクション「その他」トグル等。2026-08-20）— showOther は **false のときだけ永続化**（未定義/true = 表示 = 原則7）・notifications/notificationsInherit はパッチでは変更不可〕 / resetLayout(scope)（取消・原則9.5。tenant は管理者のみ。配置キーは触らない）
+// セクション「その他」の表示/非表示（改修依頼 2026-08-20）: options.showOther=false で未配置メニューを非表示
+// （categorizeCards の includeOther オプション。マスタハブ = useMenuCategories.categorize は従来挙動のまま）
 
 // セクション構成のお気に入り（自由設定の保存・呼び出し。ユーザー個人・上限 10 件・2026-08-18。純ロジック SoT = utils/dashboard-layout.ts の parseSectionFavorites/upsertSectionFavorite/removeSectionFavorite）
 // 永続化 = /v1/me pref 'dashboardSectionFavorites'（mock=localStorage 'ako.dashboard-section-favorites.v1'）。同名は上書き（確認後）・壊れたエントリは 1 件だけ落とす
@@ -125,6 +127,21 @@ const tp = useTaskPlans()   // plansOf / upsertPlan / removePlan / aiReview / re
 
 // 部署（F-10-9。所属の SoT は Member.departmentId。CRUD は useMasterCrud('departments')）
 const depts = useDepartments()   // nameOf / options / membersOf / tree
+
+// 週報マトリクスの週列（改修依頼 2026-08-20。月曜始まり weekStartOf の SoT = utils/report-weeks.ts）
+const weeks = recentWeekStarts(todayJst(), 4)   // 直近 N 週の週開始（昇順・右端 = 今週）
+
+// 日報の自動リマインド（改修依頼 2026-08-20。純ロジック SoT = shared/domain/report-reminder.ts。
+// configs 'report-reminder'（{enabled,time} JSON）/ 'report-reminder-last-sent'（日次 1 回の冪等マーカー = 原則2）。
+// 本実装 = API の runReportReminders（/jobs/report-reminders・Cloud Scheduler）/ mock = 起動時のデモ簡易版
+// （plugins/report-reminder.client.ts・localStorage 'ako.report-reminder-last.v1'・非ブロッキング = 原則4）
+
+// 個人別マルチチャネル通知連携（Slack / Google Chat。改修依頼 2026-08-20。純ロジック SoT = shared/domain/notification-channels.ts）
+// matrix（通知種別×チャネルの ON/OFF）= user pref 'notificationChannels'（mock=localStorage 'ako.notification-matrix.v1'。
+// 既定: in_app=ON・外部=OFF。既定と同値のセルは書かない = 最小形）。連携 = API は user_chat_links（AES-256-GCM 暗号化・0075）/
+// mock は localStorage 'ako.chat-links.v1' + 擬似同意モーダル。外部配信は api/src/lib/notify.ts（fire-and-forget・
+// 指数バックオフ・401 で要再認証 + 催促。in_app は fail-open / 外部は fail-closed）。設定 UI = プロフィール（/profile）
+const nch = useNotificationChannels()   // links / matrix / cellOn / setCell / connect / disconnect / sendTest / refresh
 
 // 顧客活動（旧: 顧客ログ = F-18。一覧は全メンバー閲覧可・編集/取消は本人のみ・AI 参照は本人スコープ。2026-08-18）
 const cl = useCustomerLogs()   // allLogs / archivedOf(自分) / ensureLoaded / add / update / archive / restore / refresh
@@ -216,6 +233,8 @@ const imp = useImprovements()  // submit（body + 対象ページ〔既定=開�
 | `MastersDeptOrgNode` | 組織図の再帰ノード（node: DeptNode, depth）。`@select` で部署詳細へ |
 | `WidgetsNotesPanel` | kind('poipoi'/'minutes'), showAuthor。ノート共通パネル（**一覧が基本ビュー・登録/ファイル取込はヘッダーボタン → 入力モーダル（バッチ7h）**。マークダウンプレビュー・ステージ → 取込ボタン・サマリー一覧（押下で詳細モーダル）+ 行単位の取消/復元 + 管理者の全ポスト閲覧（poipoi）。バッチ7c/7d/7e/7h） |
 | `WidgetsWeeklyInsight` | initialWeekStart。週次 AI インサイト（**保存済みを表示・「生成/再生成」で保管 = バッチ7j**。あなた向けインサイト（個別）+ 集計 KPI + チャート + エグゼクティブサマリー/SWOT/リスク/アクション。集計は前日（asOf）まで基準。週ナビ + 生成日時表示。バッチ7g/7j） |
+| `WidgetsRelationGraph` | nodes / edges / selectedId + `@select`。**力学レイアウト（force-directed）の関係グラフ**（顧客関係(会社)/(人) で共用。改修依頼 2026-08-20 で円環配置から刷新）。ズーム（ホイール/ピンチ/ボタン）・パン・バブルドラッグ（物理追従）・選択で隣接エッジをハイライト。決定的シミュレーション（`~/utils/rng` シード・純ロジック SoT = `utils/force-graph.ts`）・reduced-motion は同期整定・375px はコンテナ内描画 |
+| `ReportsWeeklySubmissionMatrix` | props なし。週報のメンバー×週 提出状況マトリクス（直近 4/8/12 週切替・右端 = 今週・済/下書き/未のラベル併記・提出セルはドロワー詳細 + 既読化・sticky 名列 + 横スクロール。改修依頼 2026-08-20。週列 SoT = `utils/report-weeks.ts`） |
 | `UiMarkdown` | source。安全なサブセットのマークダウン描画（utils/markdown.ts の AST を VNode 直接生成 = v-html 不使用。見出し・リスト・引用・コード・強調・http(s) リンクのみ。バッチ7e） |
 | `MastersPermissionMatrix` | 権限表モード（props なし = ruleCrud を内部利用）。ページ > 機能 > 項目 の 3 階層ツリー × ロール/役職/個人（バッチ7m）。セルは常に可否を表示（明示 = 濃色 / 上位一括・既定値 = 薄色破線）・クリックで反転・引き継ぎ値へ戻すと明示ルール解除。表ヘッダは内部スクロール + sticky |
 | `SettingsMenuCategoryEditor` | props なし。メニューカテゴリのカスタマイズ（F-13-8。エリア切替 + カテゴリ CRUD/並び替え/カード割当 + 既定に戻す。バッチ7h。編集 UI は `UiMenuSectionEditor` 共用・ダッシュボードタブは外部リンク/AKEBONO も割当候補 + 3 階層はレイアウトへ案内） |
