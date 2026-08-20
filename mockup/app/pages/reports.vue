@@ -68,23 +68,31 @@ function daysOfMonth(ym: string): string[] {
 // 注: 旧 URL は本ページ（機能キー 'reports'）のルートガードを通過してからリダイレクトするため、
 // 日報 deny × 週報 allow の明示設定をした環境では旧 URL がダッシュボードへ退避する（新パスは正常）。
 // 新キーを明示設定する運用へ移った時点で新 URL の利用を前提とする設計判断。
-const legacyTabRaw = typeof route.query.tab === 'string' ? route.query.tab : ''
-const legacyKind
-  = route.query.kind === 'weekly' ? 'weekly'
-    : route.query.kind === 'monthly' ? 'monthly'
-      : legacyTabRaw === 'weekly' || legacyTabRaw.startsWith('weekly-') ? 'weekly'
-        : legacyTabRaw.startsWith('monthly-') ? 'monthly'
-          : null
-if (legacyKind) {
+function legacyRedirectTarget(): { path: string; query: Record<string, unknown> } | null {
+  const legacyTabRaw = typeof route.query.tab === 'string' ? route.query.tab : ''
+  const legacyKind
+    = route.query.kind === 'weekly' ? 'weekly'
+      : route.query.kind === 'monthly' ? 'monthly'
+        : legacyTabRaw === 'weekly' || legacyTabRaw.startsWith('weekly-') ? 'weekly'
+          : legacyTabRaw.startsWith('monthly-') ? 'monthly'
+            : null
+  if (!legacyKind) return null
   const mappedTab = legacyTabRaw.startsWith(`${legacyKind}-`)
     ? legacyTabRaw.slice(legacyKind.length + 1)
     : legacyTabRaw === 'weekly' ? 'mine' : ''
   const { kind: _kind, tab: _tab, ...restQuery } = route.query
-  await navigateTo({
-    path: `/${legacyKind}-report`,
-    query: { ...restQuery, ...(mappedTab ? { tab: mappedTab } : {}) },
-  }, { replace: true })
+  return { path: `/${legacyKind}-report`, query: { ...restQuery, ...(mappedTab ? { tab: mappedTab } : {}) } }
 }
+{
+  const target = legacyRedirectTarget()
+  if (target) await navigateTo(target, { replace: true })
+}
+// 滞在中の同一パス内クエリ変化（/reports 表示中に旧 ?kind= リンクを踏む = ページ再マウントなし）でも
+// 読み替える（setup は再実行されないため watch で補完。useRouteDeepLink と同じ考え方 = 原則3）
+watch(() => [route.query.kind, route.query.tab], () => {
+  const target = legacyRedirectTarget()
+  if (target) void navigateTo(target, { replace: true })
+})
 
 // ---------- タブ（自分の日報 / 全員の日報 / チーム） ----------
 // 週報・月報の分離後、本ページは日報専用（キーは権限カタログ `reports` と一致）
