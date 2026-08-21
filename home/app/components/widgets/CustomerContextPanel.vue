@@ -3,7 +3,7 @@
  * 顧客コンテキストパネル（改修依頼 2026-08-20: トップ層メニュー「顧客コンテキスト」）。
  * 顧客(会社)セレクタ（URL クエリ ?company= と同期 = ディープリンク可・選び直しでも URL が追従）で
  * 会社を選ぶと、以下を 1 画面で可視化し、この画面から登録・修正できる:
- *  1. 基本情報（companies マスタ。編集ドロワー = useMasterCrudAsync('companies') の save）
+ *  1. 基本情報（companies マスタ。編集モーダル = useMasterCrudAsync('companies') の save。電話番号 = 0085 含む）
  *  2. 関係（companyRelations の当該会社エッジ + 担当者(人)一覧。マスタ画面への導線付き）
  *  3. 定性情報（customerContexts: ビジョン/経営課題/補足メモ/事業メモ〔2026-08-21〕。1社1行の upsert・更新者/更新日時表示）
  *  4. 定量情報（ライブ導出・保存しない: 案件/活動ログ/顧客活動/サポート活動の件数と直近活動日）
@@ -448,7 +448,7 @@ const diffRows = computed(() => {
       ? '（情報源から取得できませんでした。基本情報の電話番号は変更しません）'
       : canReflectPhone.value
         ? proposedPhone
-        : `（取得: ${proposedPhone}。基本情報への反映には管理者権限が必要なため変更しません）`,
+        : `（取得: ${proposedPhone}。基本情報への反映権限〔管理者 + 電話番号の項目権限〕がないため変更しません）`,
     changed: !!proposedPhone && proposedPhone !== curPhone && canReflectPhone.value,
   })
   return rows
@@ -472,10 +472,14 @@ async function applyProposal(): Promise<void> {
 }
 
 async function onRevert(noteId: string): Promise<void> {
+  // 電話番号の復元は「管理者 + 項目権限」のみ（canReflectPhone = 反映と対称）のため、文言も権限で出し分ける
+  // （表示と挙動の一致。権限がない実行者には「復元されない」ことを取消前に明示 = R2 レビュー）
+  const phoneNote = canReflectPhone.value
+    ? '（基本情報の電話番号を反映していた場合はそれも反映前へ戻ります。リサーチノートは監査のため残ります）'
+    : '（電話番号を反映していた場合、その復元には管理者権限が必要なため基本情報の電話番号は変更されません。リサーチノートは監査のため残ります）'
   const ok = await confirm.ask(
     '反映の取消',
-    'AI リサーチで反映した内容を取り消し、反映前の定性情報へ戻しますか？'
-    + '（基本情報の電話番号を反映していた場合はそれも反映前へ戻ります。リサーチノートは監査のため残ります）',
+    `AI リサーチで反映した内容を取り消し、反映前の定性情報へ戻しますか？${phoneNote}`,
     { danger: true, confirmLabel: '反映を取り消す' },
   )
   if (!ok) return

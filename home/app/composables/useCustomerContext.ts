@@ -94,11 +94,11 @@ export function useCustomerContext() {
       .sort(byCreatedDesc))
   }
 
-  /** 取消済みメモ（復元 UI 用） */
+  /** 取消済みメモ（復元 UI 用）。companyPhone の伏せは有効メモと同一規則（API = 全ノート対象と揃える） */
   function archivedNotesOf(companyId: string): CustomerContextNote[] {
-    return (noteRows.value as CustomerContextNote[])
+    return stripPhoneForViewer((noteRows.value as CustomerContextNote[])
       .filter(r => r.companyId === companyId && !!r.archivedAt)
-      .sort(byCreatedDesc)
+      .sort(byCreatedDesc))
   }
 
   /** モック: 定性情報の upsert（1社1行）。commit 検査 + 失敗ロールバック */
