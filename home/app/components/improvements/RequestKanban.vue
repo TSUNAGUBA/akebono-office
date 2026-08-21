@@ -1,40 +1,35 @@
 <script setup lang="ts">
 /**
- * 生要望（改善要望）のカンバン（改修依頼 2026-08-19 第4弾 → 2026-08-20 でステータス軸を再編）。
+ * 受付箱（生要望）のカンバン（改修依頼 2026-08-19 第4弾 → 2026-08-21 で受付箱ステータス軸へ再編）。
  *
- * 設計判断（2026-08-20）: 列 = 改修案件と同じ IMPROVEMENT_STATUSES（未判定/改善対応/対応中/運用対応/
- * 継続検討/解決済み/対応見送り = 7 列）。**要望の表示ステータスは、紐づく改修単位（itemId → item.status）の
- * ステータスを継承する**。未集約（itemId なし）・紐づく item を参照できない場合（一般利用者は改修案件を
- * 取得できない等）は「未判定」列に置く。要望カンバンと案件カンバンで語彙・列がずれない（原則5/6）。
+ * 設計判断（2026-08-21）: 列 = 受付箱ステータス（未確認/検討中/改善対応/運用対応/継続検討/対応見送り/
+ * 対応済み/解決済み = IMPROVEMENT_INBOX_STATUSES の 8 列）。表示ステータスは親から渡される
+ * `statusOf`（useImprovements.inboxStatusOf = improvementInboxStatusOf）で解決する:
+ * 集約済みは改修案件の進捗に連動（改善対応/対応済み）・解決済みは resolvedAt の記録が最優先（原則6 導出）。
  * - 全利用者が閲覧できる。カード押下で詳細（親のドロワー）を開く。本コンポーネントは参照専用。
- * - カードには要望単位のステータス（未対応/対応済み/見送り）バッジを併記する（列 = 案件の方針、
- *   バッジ = 要望 1 件の対応状況、の 2 軸を混同させない）。
- * - 列は横スクロール（原則8: 7 列でもモバイル 375px は自身の overflow-x コンテナ内でスクロール）。
+ * - カードには対象ページ + 対象箇所（targetSpot）・継続検討の再検討日を併記する。
+ * - 列は横スクロール（原則8: 8 列でもモバイル 375px は自身の overflow-x コンテナ内でスクロール）。
  */
+import { Calendar } from 'lucide-vue-next'
 import {
-  IMPROVEMENT_REQUEST_STATUS_META, IMPROVEMENT_STATUS_META, IMPROVEMENT_STATUSES,
-  type ImprovementRequest, type ImprovementStatus, requestStatusOf,
+  IMPROVEMENT_INBOX_STATUS_META, IMPROVEMENT_INBOX_STATUSES,
+  type ImprovementInboxStatus, type ImprovementRequest,
 } from '~/types/improvement'
 import { fmtDate } from '~/utils/format'
 import { pageDisplay } from '~/utils/page-label'
 
 const props = defineProps<{
   requests: ImprovementRequest[]
-  /** 要望 → 表示ステータス（紐づく item の status。親が items から解決して渡す。未指定 = 全件 triage） */
-  itemStatusOf?: (r: ImprovementRequest) => ImprovementStatus
+  /** 要望 → 受付箱表示ステータス（親が useImprovements.inboxStatusOf を渡す = 判定点の一元化・原則6） */
+  statusOf: (r: ImprovementRequest) => ImprovementInboxStatus
 }>()
 
 const emit = defineEmits<{ open: [request: ImprovementRequest] }>()
 
-/** 要望の表示ステータス（紐づく item の status を継承。未集約・不明は triage） */
-function statusOf(r: ImprovementRequest): ImprovementStatus {
-  return props.itemStatusOf?.(r) ?? 'triage'
-}
-
-const columns = computed(() => IMPROVEMENT_STATUSES.map(status => ({
+const columns = computed(() => IMPROVEMENT_INBOX_STATUSES.map(status => ({
   status,
-  meta: IMPROVEMENT_STATUS_META[status],
-  requests: props.requests.filter(r => statusOf(r) === status),
+  meta: IMPROVEMENT_INBOX_STATUS_META[status],
+  requests: props.requests.filter(r => props.statusOf(r) === status),
 })))
 
 /** 投稿元の表示（対象ページ名＋対象箇所） */
@@ -72,13 +67,13 @@ function bodyLine(r: ImprovementRequest): string {
           <span class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted">
             <span v-if="whereText(r)" class="min-w-0 max-w-full truncate" :title="whereText(r)">{{ whereText(r) }}</span>
           </span>
-          <!-- 要望 1 件のステータス（進捗タグ）。列（案件の方針）とは別軸のため明示する -->
-          <span class="mt-1.5 flex flex-wrap items-center gap-1.5">
-            <UiStatusBadge
-              :tone="IMPROVEMENT_REQUEST_STATUS_META[requestStatusOf(r)].tone"
-              :label="IMPROVEMENT_REQUEST_STATUS_META[requestStatusOf(r)].label"
-              dot
-            />
+          <!-- 継続検討の再検討日（到来で管理者へリマインド = 改修依頼 2026-08-21） -->
+          <span
+            v-if="col.status === 'deferred' && r.revisitOn"
+            class="mt-1 inline-flex items-center gap-1 rounded bg-info-soft px-1.5 py-0.5 text-[11px] text-info"
+          >
+            <Calendar class="h-3 w-3" aria-hidden="true" />
+            <span class="num">{{ fmtDate(r.revisitOn) }} 再検討</span>
           </span>
           <span class="mt-1 flex flex-wrap items-center gap-x-2 text-[11px] text-muted">
             <span class="truncate">{{ r.memberName }}</span>

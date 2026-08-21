@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildCodingPrompt,
+  canInboxTransition,
   canTransition,
   type ClusterOpenItem,
   type ClusterRequestInput,
@@ -11,20 +12,27 @@ import {
   IMPROVEMENT_COMMENT_CAP,
   IMPROVEMENT_IMAGE_MAX_CHARS,
   IMPROVEMENT_IMAGES_MAX,
+  IMPROVEMENT_INBOX_NEXT,
+  IMPROVEMENT_INBOX_STATUS_META,
+  IMPROVEMENT_INBOX_STATUSES,
+  IMPROVEMENT_ITEM_NEXT,
+  IMPROVEMENT_ITEM_STATUS_META,
+  IMPROVEMENT_ITEM_VIEWS,
   IMPROVEMENT_LINKS_MAX,
   IMPROVEMENT_NOTE_CAP,
-  IMPROVEMENT_REQUEST_ADOPTION_META,
-  IMPROVEMENT_REQUEST_STATUS_META,
   improvementImagesError,
+  improvementInboxStatusError,
+  improvementInboxStatusOf,
+  improvementItemViewOf,
   improvementLinksError,
   improvementNoteError,
   improvementRequestEditFields,
+  improvementResolveError,
   improvementRevisitError,
-  IMPROVEMENT_STATUS_META,
-  IMPROVEMENT_STATUS_NEXT,
-  IMPROVEMENT_STATUSES,
+  inboxStatusFromItem,
+  isClusterAppendTarget,
   isInternalPagePath,
-  isOpenStatus,
+  isOpenItemStatus,
   matchesImprovementFilter,
   IMPROVEMENT_REQUEST_TAG_META,
   normalizeClusterPlan,
@@ -35,9 +43,15 @@ import {
   OPERATIONAL_NOTE_MAX,
   operationalNoteBody,
   operationalNoteCapError,
+  planInboxStatusBulk,
+  promptRequestTag,
   requestAdoptionOf,
-  requestStatusOf,
 } from '../../../shared/domain/improvement'
+import {
+  assessRelatedDocs,
+  heuristicAssessRequest,
+  normalizeAssessment,
+} from '../../../shared/domain/improvement-assess'
 import { improvementRequestInputOf } from '../../src/routes/improvements'
 
 const reqs: ClusterRequestInput[] = [
@@ -46,63 +60,103 @@ const reqs: ClusterRequestInput[] = [
   { id: 'r3', pagePath: '/timecard', pageLabel: 'タイムカード', body: '打刻の取消を可能にしてほしい' },
 ]
 
-describe('canTransition / IMPROVEMENT_STATUS_NEXT', () => {
-  it('triage からは改善対応/運用対応/継続検討/対応見送りへ遷移できる（対応方針の語彙 2026-08-20）', () => {
-    expect(IMPROVEMENT_STATUS_NEXT.triage).toEqual(['accepted', 'operational', 'deferred', 'rejected'])
-    expect(canTransition('triage', 'accepted')).toBe(true)
-    expect(canTransition('triage', 'operational')).toBe(true)
-    expect(canTransition('triage', 'deferred')).toBe(true)
-    expect(canTransition('triage', 'resolved')).toBe(false)
+describe('改修案件の 3 状態機械（canTransition / IMPROVEMENT_ITEM_NEXT = 改修依頼 2026-08-21）', () => {
+  it('未対応 → 対応中 → 対応済 が主経路。直行・reopen・差し戻しを許可（原則7/9.5）', () => {
+    expect(IMPROVEMENT_ITEM_NEXT.todo).toEqual(['in_progress', 'done'])
+    expect(IMPROVEMENT_ITEM_NEXT.in_progress).toEqual(['done', 'todo'])
+    expect(IMPROVEMENT_ITEM_NEXT.done).toEqual(['in_progress'])
+    expect(canTransition('todo', 'in_progress')).toBe(true)
+    expect(canTransition('in_progress', 'done')).toBe(true)
+    expect(canTransition('done', 'in_progress')).toBe(true) // reopen
+    expect(canTransition('done', 'todo')).toBe(false)
   })
-  it('解決済み → 改善対応（reopen）が可能（取消可能性 = 原則9.5）', () => {
-    expect(canTransition('resolved', 'accepted')).toBe(true)
+  it('旧 7 値語彙の保存値は正規化して判定する（改修依頼 2026-08-21 の読替え = 原則7）', () => {
+    expect(improvementItemViewOf('triage')).toBe('todo')
+    expect(improvementItemViewOf('accepted')).toBe('todo')
+    expect(improvementItemViewOf('deferred')).toBe('todo')
+    expect(improvementItemViewOf('in_progress')).toBe('in_progress')
+    expect(improvementItemViewOf('resolved')).toBe('done')
+    expect(improvementItemViewOf('operational')).toBe('done')
+    expect(improvementItemViewOf('rejected')).toBe('done')
+    expect(canTransition('triage', 'in_progress')).toBe(true)
+    expect(canTransition('operational', 'in_progress')).toBe(true) // 旧決着 = 対応済ビュー → reopen
+    expect(isOpenItemStatus('deferred')).toBe(true)
+    expect(isOpenItemStatus('rejected')).toBe(false)
   })
-  it('対応中（in_progress）の遷移（改修依頼 2026-08-18）: 改善対応 ⇄ 対応中 → 解決済み。直行も許可（原則7）', () => {
-    expect(IMPROVEMENT_STATUS_NEXT.accepted).toEqual(['in_progress', 'deferred', 'resolved', 'rejected', 'triage'])
-    expect(IMPROVEMENT_STATUS_NEXT.in_progress).toEqual(['resolved', 'accepted', 'rejected'])
-    expect(canTransition('accepted', 'in_progress')).toBe(true)
-    expect(canTransition('in_progress', 'resolved')).toBe(true)
-    expect(canTransition('in_progress', 'accepted')).toBe(true) // 着手の取消（差し戻し = 原則9.5）
-    expect(canTransition('accepted', 'resolved')).toBe(true) // 従来の直行も維持（下位互換 = 原則7）
-    expect(canTransition('triage', 'in_progress')).toBe(false) // 未判定からの直接着手は不可（判定を経る）
-    expect(canTransition('resolved', 'in_progress')).toBe(false)
-  })
-  it('運用対応/継続検討（2026-08-20）: 継続検討からは結論（改善対応/運用対応/対応見送り/未判定）へ戻せる', () => {
-    expect(IMPROVEMENT_STATUS_NEXT.deferred).toEqual(['accepted', 'operational', 'rejected', 'triage'])
-    expect(IMPROVEMENT_STATUS_NEXT.operational).toEqual(['accepted']) // 運用判断の見直し（原則9.5）
-    expect(canTransition('deferred', 'operational')).toBe(true)
-    expect(canTransition('operational', 'accepted')).toBe(true)
-    expect(canTransition('operational', 'resolved')).toBe(false)
-    expect(canTransition('deferred', 'resolved')).toBe(false) // 継続検討からの直接解決は不可（方針を経る）
+  it('表示メタは新語彙（未対応/対応中/対応済）', () => {
+    expect(IMPROVEMENT_ITEM_VIEWS).toEqual(['todo', 'in_progress', 'done'])
+    expect(IMPROVEMENT_ITEM_STATUS_META.todo.label).toBe('未対応')
+    expect(IMPROVEMENT_ITEM_STATUS_META.in_progress.label).toBe('対応中')
+    expect(IMPROVEMENT_ITEM_STATUS_META.done.label).toBe('対応済')
   })
 })
 
-describe('matchesImprovementFilter', () => {
-  it('open は未判定・対応するのみ一致（解決済/対応しないは除外）', () => {
+describe('matchesImprovementFilter（3 状態 + open = 未完了）', () => {
+  it('open は未対応・対応中のみ一致（対応済は除外。旧語彙も正規化して判定）', () => {
+    expect(matchesImprovementFilter('todo', 'open')).toBe(true)
+    expect(matchesImprovementFilter('in_progress', 'open')).toBe(true)
+    expect(matchesImprovementFilter('done', 'open')).toBe(false)
     expect(matchesImprovementFilter('triage', 'open')).toBe(true)
-    expect(matchesImprovementFilter('accepted', 'open')).toBe(true)
-    expect(matchesImprovementFilter('resolved', 'open')).toBe(false)
     expect(matchesImprovementFilter('rejected', 'open')).toBe(false)
   })
-  it('all はすべて一致・個別ステータスは一致判定', () => {
+  it('all はすべて一致・個別ステータスは正規化一致', () => {
     expect(matchesImprovementFilter('rejected', 'all')).toBe(true)
-    expect(matchesImprovementFilter('resolved', 'resolved')).toBe(true)
-    expect(matchesImprovementFilter('resolved', 'rejected')).toBe(false)
+    expect(matchesImprovementFilter('resolved', 'done')).toBe(true)
+    expect(matchesImprovementFilter('accepted', 'todo')).toBe(true)
+    expect(matchesImprovementFilter('in_progress', 'todo')).toBe(false)
   })
-  it('対応中は未解決（open）・committed = 改善対応 + 対応中（改修依頼 2026-08-18）', () => {
-    expect(matchesImprovementFilter('in_progress', 'open')).toBe(true)
-    expect(matchesImprovementFilter('accepted', 'committed')).toBe(true)
-    expect(matchesImprovementFilter('in_progress', 'committed')).toBe(true)
-    expect(matchesImprovementFilter('triage', 'committed')).toBe(false)
-    expect(matchesImprovementFilter('resolved', 'committed')).toBe(false)
+})
+
+describe('受付箱ステータス（improvementInboxStatusOf / 遷移機械 = 改修依頼 2026-08-21）', () => {
+  it('表示ステータスは 8 種・遷移は 未確認 → 検討中 → 各対応方針', () => {
+    expect(IMPROVEMENT_INBOX_STATUSES).toEqual([
+      'unconfirmed', 'reviewing', 'planned', 'operational', 'deferred', 'dismissed', 'addressed', 'resolved',
+    ])
+    expect(IMPROVEMENT_INBOX_NEXT.unconfirmed).toEqual(['reviewing'])
+    expect(IMPROVEMENT_INBOX_NEXT.reviewing).toEqual(['planned', 'operational', 'deferred', 'dismissed', 'unconfirmed'])
+    expect(canInboxTransition('deferred', 'deferred')).toBe(true) // 再検討日の変更
+    expect(canInboxTransition('planned', 'reviewing')).toBe(true) // 見直し（原則9.5）
+    expect(canInboxTransition('unconfirmed', 'operational')).toBe(false)
+    expect(IMPROVEMENT_INBOX_STATUS_META.operational.label).toBe('運用対応')
+    expect(IMPROVEMENT_INBOX_STATUS_META.addressed.label).toBe('対応済み')
   })
-  it('運用対応は決着済み（open 対象外）・継続検討は未解決（open）・committed には含めない（2026-08-20）', () => {
-    expect(matchesImprovementFilter('operational', 'open')).toBe(false)
-    expect(matchesImprovementFilter('deferred', 'open')).toBe(true)
-    expect(matchesImprovementFilter('operational', 'committed')).toBe(false)
-    expect(matchesImprovementFilter('deferred', 'committed')).toBe(false)
-    expect(matchesImprovementFilter('operational', 'operational')).toBe(true)
-    expect(matchesImprovementFilter('deferred', 'deferred')).toBe(true)
+  it('resolver: 新語彙はそのまま・旧データは選別読替え・集約済みは item 連動・解決の記録は最優先', () => {
+    expect(improvementInboxStatusOf({ status: 'unconfirmed', itemId: null })).toBe('unconfirmed')
+    expect(improvementInboxStatusOf({ status: 'open', adoption: 'pending', itemId: null })).toBe('unconfirmed')
+    expect(improvementInboxStatusOf({ status: 'open', adoption: 'adopted', itemId: null })).toBe('planned')
+    expect(improvementInboxStatusOf({ status: 'open', adoption: 'declined', itemId: null })).toBe('dismissed')
+    expect(improvementInboxStatusOf({ status: 'planned', itemId: 'imp-1' }, 'in_progress')).toBe('planned')
+    expect(improvementInboxStatusOf({ status: 'planned', itemId: 'imp-1' }, 'done')).toBe('addressed')
+    expect(improvementInboxStatusOf({ status: 'planned', itemId: 'imp-1', resolvedAt: '2026-08-21T09:00:00+09:00' }, 'done')).toBe('resolved')
+    expect(improvementInboxStatusOf({ status: 'resolved', itemId: null })).toBe('resolved')
+    expect(inboxStatusFromItem('rejected')).toBe('dismissed')
+    expect(inboxStatusFromItem('deferred')).toBe('deferred')
+    expect(inboxStatusFromItem('operational')).toBe('operational')
+  })
+  it('improvementInboxStatusError: 存在 → 取消済み → 集約済み → 解決済み → 遷移検証の順', () => {
+    expect(improvementInboxStatusError(undefined, 'reviewing')?.code).toBe('AKO-REQ-002')
+    expect(improvementInboxStatusError({ status: 'unconfirmed', itemId: null, archivedAt: '2026-08-21T00:00:00+09:00' }, 'reviewing')?.code).toBe('AKO-REQ-019')
+    expect(improvementInboxStatusError({ status: 'planned', itemId: 'imp-1', archivedAt: null }, 'reviewing')?.code).toBe('AKO-REQ-013')
+    expect(improvementInboxStatusError({ status: 'operational', itemId: null, archivedAt: null, resolvedAt: '2026-08-21T00:00:00+09:00' }, 'reviewing')?.code).toBe('AKO-REQ-025')
+    expect(improvementInboxStatusError({ status: 'unconfirmed', itemId: null, archivedAt: null }, 'planned')?.code).toBe('AKO-REQ-006')
+    expect(improvementInboxStatusError({ status: 'reviewing', itemId: null, archivedAt: null }, 'planned')).toBeNull()
+  })
+  it('improvementResolveError: 運用対応/対応済みのみ解決できる・再実行は冪等', () => {
+    expect(improvementResolveError({ status: 'operational', itemId: null, archivedAt: null })).toBeNull()
+    expect(improvementResolveError({ status: 'planned', itemId: 'imp-1', archivedAt: null }, 'done')).toBeNull()
+    expect(improvementResolveError({ status: 'reviewing', itemId: null, archivedAt: null })?.code).toBe('AKO-REQ-026')
+    expect(improvementResolveError({ status: 'operational', itemId: null, archivedAt: null, resolvedAt: '2026-08-21T00:00:00+09:00' })).toBeNull()
+    expect(improvementResolveError({ status: 'operational', itemId: null, archivedAt: '2026-08-21T00:00:00+09:00' })?.code).toBe('AKO-REQ-019')
+  })
+  it('planInboxStatusBulk: 重複除去・部分成功の仕分け（API の逐次 1 件判定と同一 = 原則6）', () => {
+    const rows = [
+      { id: 'a', status: 'unconfirmed' as const, itemId: null, archivedAt: null },
+      { id: 'b', status: 'planned' as const, itemId: 'imp-1', archivedAt: null },
+    ]
+    const plan = planInboxStatusBulk(['a', 'a', 'b', 'nope'], rows, 'reviewing')
+    expect(plan.targets).toEqual(['a', 'b', 'nope'])
+    expect(plan.applicable).toEqual(['a'])
+    expect(plan.lastError?.code).toBe('AKO-REQ-002')
   })
 })
 
@@ -114,18 +168,23 @@ describe('improvementBodyError', () => {
 })
 
 describe('heuristicClusterRequests', () => {
-  it('ページ単位でまとめ、既存 triage item があれば追記・無ければ新規作成', () => {
-    const open: ClusterOpenItem[] = [{ id: 'i-sales', status: 'triage', pagePaths: ['/akebono/sales'] }]
+  it('ページ単位でまとめ、既存の未対応 item があれば追記・無ければ新規作成', () => {
+    const open: ClusterOpenItem[] = [{ id: 'i-sales', status: 'todo', pagePaths: ['/akebono/sales'] }]
     const plan = heuristicClusterRequests(open, reqs)
-    // 売上ページ（r1,r2）は既存 triage item へ追記
     expect(plan.appends).toEqual([{ itemId: 'i-sales', requestIds: ['r1', 'r2'] }])
-    // タイムカード（r3）は新規作成
     expect(plan.creates).toHaveLength(1)
     expect(plan.creates[0]!.requestIds).toEqual(['r3'])
     expect(plan.creates[0]!.pagePaths).toEqual(['/timecard'])
   })
-  it('判定済み（accepted）item には追記せず新規作成する（ステータス保護 = 原則2）', () => {
-    const open: ClusterOpenItem[] = [{ id: 'i-sales', status: 'accepted', pagePaths: ['/akebono/sales'] }]
+  it('旧 triage/accepted の item も未対応として追記先になる（読替え = 原則7）', () => {
+    expect(isClusterAppendTarget('triage')).toBe(true)
+    expect(isClusterAppendTarget('accepted')).toBe(true)
+    const open: ClusterOpenItem[] = [{ id: 'i-sales', status: 'triage', pagePaths: ['/akebono/sales'] }]
+    const plan = heuristicClusterRequests(open, reqs.slice(0, 2))
+    expect(plan.appends).toEqual([{ itemId: 'i-sales', requestIds: ['r1', 'r2'] }])
+  })
+  it('着手済み（対応中/対応済）item には追記せず新規作成する（ステータス保護 = 原則2）', () => {
+    const open: ClusterOpenItem[] = [{ id: 'i-sales', status: 'in_progress', pagePaths: ['/akebono/sales'] }]
     const plan = heuristicClusterRequests(open, reqs.slice(0, 2))
     expect(plan.appends).toHaveLength(0)
     expect(plan.creates).toHaveLength(1)
@@ -146,51 +205,56 @@ describe('normalizeClusterPlan', () => {
     const assigned = new Set<string>()
     for (const cr of plan.creates) cr.requestIds.forEach(id => assigned.add(id))
     for (const ap of plan.appends) ap.requestIds.forEach(id => assigned.add(id))
-    // r1 は create に入り、取りこぼした r2/r3 も補完される。bogus は落ちる
     expect(assigned.has('r1')).toBe(true)
     expect(assigned.has('r2')).toBe(true)
     expect(assigned.has('r3')).toBe(true)
     expect(assigned.has('bogus')).toBe(false)
   })
-  it('append 先が triage でない場合はその append を捨てる（保護）', () => {
-    const open: ClusterOpenItem[] = [{ id: 'i-acc', status: 'accepted', pagePaths: ['/x'] }]
+  it('append 先が着手済み（対応中）の場合はその append を捨てる（保護）', () => {
+    const open: ClusterOpenItem[] = [{ id: 'i-acc', status: 'in_progress', pagePaths: ['/x'] }]
     const raw = { appends: [{ itemId: 'i-acc', requestIds: ['r1'] }], creates: [] }
     const plan = normalizeClusterPlan(raw, [reqs[0]!], open)!
     expect(plan.appends).toHaveLength(0)
-    // r1 は補完で create に回る
     expect(plan.creates.some(cr => cr.requestIds.includes('r1'))).toBe(true)
   })
   it('「集約の解除」の履歴（excludeItemIds）にある item への LLM append は捨て、補完で新規作成へ回す（F-42-19）', () => {
-    const open: ClusterOpenItem[] = [{ id: 'i-sales', status: 'triage', pagePaths: ['/akebono/sales'] }]
+    const open: ClusterOpenItem[] = [{ id: 'i-sales', status: 'todo', pagePaths: ['/akebono/sales'] }]
     const excluded: ClusterRequestInput = { ...reqs[0]!, excludeItemIds: ['i-sales'] }
     const raw = { appends: [{ itemId: 'i-sales', requestIds: ['r1'] }], creates: [] }
     const plan = normalizeClusterPlan(raw, [excluded], open)!
-    expect(plan.appends).toHaveLength(0) // 元 item へは戻さない（detail 重複の往復防止）
-    expect(plan.creates.some(cr => cr.requestIds.includes('r1'))).toBe(true) // 取りこぼさず新規作成
+    expect(plan.appends).toHaveLength(0)
+    expect(plan.creates.some(cr => cr.requestIds.includes('r1'))).toBe(true)
   })
 })
 
 describe('buildCodingPrompt', () => {
-  it('対象パス・元要望・受入基準を含む決定的なプロンプトを生成', () => {
+  it('対象パス・元要望・受入基準を含む決定的なプロンプトを生成（現在の状態は 3 状態ラベル）', () => {
     const prompt = buildCodingPrompt([{
       title: '売上ページの表示改善',
       summary: '合計と税表示',
       detail: '合計金額を強調し、税込/税抜トグルを追加する',
-      status: 'accepted',
+      status: 'todo',
       pagePaths: ['/akebono/sales'],
       requests: [{ pageLabel: 'AKEBONO 売上', pagePath: '/akebono/sales', body: '合計を大きく' }],
     }])
     expect(prompt).toContain('/akebono/sales')
     expect(prompt).toContain('合計を大きく')
     expect(prompt).toContain('受入基準')
-    // 決定的（同入力 → 同出力）
+    expect(prompt).toContain('- **現在の状態:** 未対応')
     const again = buildCodingPrompt([{
       title: '売上ページの表示改善', summary: '合計と税表示',
-      detail: '合計金額を強調し、税込/税抜トグルを追加する', status: 'accepted',
+      detail: '合計金額を強調し、税込/税抜トグルを追加する', status: 'todo',
       pagePaths: ['/akebono/sales'],
       requests: [{ pageLabel: 'AKEBONO 売上', pagePath: '/akebono/sales', body: '合計を大きく' }],
     }])
     expect(prompt).toEqual(again)
+  })
+  it('対象箇所（targetSpot）は対象ページに併記される（改修依頼 2026-08-21）', () => {
+    const prompt = buildCodingPrompt([{
+      title: 't', summary: 's', detail: 'd', status: 'todo', pagePaths: ['/x'],
+      requests: [{ pageLabel: 'X', pagePath: '/x', targetSpot: '一覧の合計欄', body: '直したい' }],
+    }])
+    expect(prompt).toContain('- 【要望】 ［X / 一覧の合計欄］ 直したい')
   })
 })
 
@@ -206,7 +270,7 @@ describe('improvementNoteError', () => {
 describe('buildCodingPrompt（メモの加味）', () => {
   it('時系列メモを含める・reject は「対応しない理由」として明示', () => {
     const prompt = buildCodingPrompt([{
-      title: 't', summary: 's', detail: 'd', status: 'rejected', pagePaths: ['/x'],
+      title: 't', summary: 's', detail: 'd', status: 'todo', pagePaths: ['/x'],
       requests: [{ pageLabel: 'X', pagePath: '/x', body: '直したい' }],
       notes: [
         { body: '既存 UiKpiCard を流用できそう', kind: 'note' },
@@ -219,12 +283,12 @@ describe('buildCodingPrompt（メモの加味）', () => {
   })
   it('メモが無い/空ならメモ節を出さない', () => {
     const noNotes = buildCodingPrompt([{
-      title: 't', summary: 's', detail: 'd', status: 'accepted', pagePaths: ['/x'],
+      title: 't', summary: 's', detail: 'd', status: 'todo', pagePaths: ['/x'],
       requests: [{ pageLabel: 'X', pagePath: '/x', body: '直したい' }],
     }])
     expect(noNotes).not.toContain('担当者メモ')
     const emptyNotes = buildCodingPrompt([{
-      title: 't', summary: 's', detail: 'd', status: 'accepted', pagePaths: ['/x'],
+      title: 't', summary: 's', detail: 'd', status: 'todo', pagePaths: ['/x'],
       requests: [{ pageLabel: 'X', pagePath: '/x', body: '直したい' }],
       notes: [{ body: '   ', kind: 'note' }],
     }])
@@ -272,67 +336,55 @@ describe('添付画像（normalizeImprovementImages / improvementImagesError）'
   })
 })
 
-describe('要望ステータス（requestStatusOf / buildCodingPrompt の再生成反映。2026-08-17）', () => {
-  it('status 未定義（旧データ）は open として扱う（下位互換 = 原則7）', () => {
-    expect(requestStatusOf({})).toBe('open')
-    expect(requestStatusOf({ status: null })).toBe('open')
-    expect(requestStatusOf({ status: 'resolved' })).toBe('resolved')
-    expect(IMPROVEMENT_REQUEST_STATUS_META.open.label).toBe('未対応')
-  })
-  it('resolved / dismissed の要望は【対応済み】【見送り】として明記され、注意書きが入る', () => {
+describe('受付箱ステータスのプロンプト反映（promptRequestTag = 改修依頼 2026-08-21）', () => {
+  it('解決済み（旧 resolved / resolvedAt）と対応見送り（dismissed）に注記が付く', () => {
+    expect(promptRequestTag({ status: 'resolved' })).toBe('解決済み')
+    expect(promptRequestTag({ status: 'planned', resolvedAt: '2026-08-21T00:00:00+09:00' })).toBe('解決済み')
+    expect(promptRequestTag({ status: 'dismissed' })).toBe('対応見送り')
+    expect(promptRequestTag({ status: 'open' })).toBe('')
+    expect(promptRequestTag({})).toBe('')
     const prompt = buildCodingPrompt([{
-      title: 't', summary: 's', detail: 'd', status: 'accepted', pagePaths: ['/x'],
+      title: 't', summary: 's', detail: 'd', status: 'todo', pagePaths: ['/x'],
       requests: [
         { pageLabel: 'X', pagePath: '/x', body: '直したい A' },
         { pageLabel: 'X', pagePath: '/x', body: '直したい B', status: 'resolved' },
         { pageLabel: 'X', pagePath: '/x', body: '直したい C', status: 'dismissed' },
       ],
     }])
-    expect(prompt).toContain('【対応済み】 直したい B')
-    expect(prompt).toContain('【見送り】 直したい C')
-    expect(prompt).not.toContain('【未対応】') // open は無印
+    expect(prompt).toContain('【解決済み】 直したい B')
+    expect(prompt).toContain('【対応見送り】 直したい C')
     expect(prompt).toContain('再改修しないこと')
   })
-  it('全要望が open なら状態タグ・注意書きを出さない（【要望】マーク自体は時系列統合で常時付く）', () => {
+  it('全要望が通常状態なら注記・注意書きを出さない（【要望】マーク自体は時系列統合で常時付く）', () => {
     const prompt = buildCodingPrompt([{
-      title: 't', summary: 's', detail: 'd', status: 'accepted', pagePaths: ['/x'],
+      title: 't', summary: 's', detail: 'd', status: 'todo', pagePaths: ['/x'],
       requests: [{ pageLabel: 'X', pagePath: '/x', body: '直したい' }],
     }])
-    // 状態タグ（対応済み/見送り/未対応）は open では出ない。時系列統合の【要望】行頭マークは別物で常時付く
-    expect(prompt).not.toContain('【対応済み】')
-    expect(prompt).not.toContain('【見送り】')
-    expect(prompt).not.toContain('【未対応】')
+    expect(prompt).not.toContain('【解決済み】')
+    expect(prompt).not.toContain('【対応見送り】')
     expect(prompt).toContain('- 【要望】 ［X］ 直したい')
     expect(prompt).not.toContain('再改修しないこと')
   })
 })
 
-describe('要望の選別（requestAdoptionOf。2026-08-17 第 2 弾）', () => {
-  it('adoption 未定義（旧データ）は集約済みなら adopted・未集約なら pending（下位互換 = 原則7）', () => {
-    expect(requestAdoptionOf({})).toBe('pending')
-    expect(requestAdoptionOf({ adoption: null, itemId: null })).toBe('pending')
-    expect(requestAdoptionOf({ itemId: 'imp-1' })).toBe('adopted')
-  })
-  it('adoption 明示値を優先する（不正値は無視して補完）', () => {
-    expect(requestAdoptionOf({ adoption: 'declined', itemId: null })).toBe('declined')
-    expect(requestAdoptionOf({ adoption: 'pending', itemId: null })).toBe('pending')
-    expect(requestAdoptionOf({ adoption: 'bogus' as never, itemId: 'imp-1' })).toBe('adopted')
-  })
-  it('選別メタは 未選別/採用/不採用 のラベルと tone を持つ', () => {
-    expect(IMPROVEMENT_REQUEST_ADOPTION_META.pending.label).toBe('未選別')
-    expect(IMPROVEMENT_REQUEST_ADOPTION_META.adopted).toMatchObject({ label: '採用', tone: 'ok' })
-    expect(IMPROVEMENT_REQUEST_ADOPTION_META.declined).toMatchObject({ label: '不採用', tone: 'warn' })
-  })
-  it('clusterTargetRequests は未集約・有効・採用済みのみ選ぶ（mock 集約と generate SQL の共有条件 = 原則6）', () => {
+describe('集約対象（clusterTargetRequests = 「改善対応」のみ。改修依頼 2026-08-21）', () => {
+  it('未集約・有効・改善対応のみ選ぶ（generate SQL と同一条件 = 原則6。旧データは 採用+open を読替え）', () => {
     const rows = [
-      { id: 'a', itemId: null, archivedAt: null, adoption: 'adopted' as const },
-      { id: 'b', itemId: null, archivedAt: null, adoption: 'pending' as const },
-      { id: 'c', itemId: null, archivedAt: null, adoption: 'declined' as const },
-      { id: 'd', itemId: 'imp-1', archivedAt: null, adoption: 'adopted' as const }, // 集約済みは対象外
-      { id: 'e', itemId: null, archivedAt: '2026-08-17T00:00:00+09:00', adoption: 'adopted' as const }, // 取消済みは対象外
-      { id: 'f', itemId: null, archivedAt: null }, // 旧データ（adoption 未定義 = 未選別扱い）も対象外
+      { id: 'a', itemId: null, archivedAt: null, status: 'planned' as const },
+      { id: 'b', itemId: null, archivedAt: null, status: 'open' as const, adoption: 'adopted' as const }, // 旧・採用
+      { id: 'c', itemId: null, archivedAt: null, status: 'open' as const, adoption: 'declined' as const },
+      { id: 'd', itemId: 'imp-1', archivedAt: null, status: 'planned' as const }, // 集約済みは対象外
+      { id: 'e', itemId: null, archivedAt: '2026-08-17T00:00:00+09:00', status: 'planned' as const }, // 取消済みは対象外
+      { id: 'f', itemId: null, archivedAt: null }, // 旧データ（status/adoption 未定義 = 未確認扱い）も対象外
+      { id: 'g', itemId: null, archivedAt: null, status: 'reviewing' as const }, // 検討中は対象外
     ]
-    expect(clusterTargetRequests(rows).map(r => r.id)).toEqual(['a'])
+    expect(clusterTargetRequests(rows).map(r => r.id)).toEqual(['a', 'b'])
+  })
+  it('requestAdoptionOf（旧・選別の読替えヘルパ = 原則7）', () => {
+    expect(requestAdoptionOf({})).toBe('pending')
+    expect(requestAdoptionOf({ itemId: 'imp-1' })).toBe('adopted')
+    expect(requestAdoptionOf({ adoption: 'declined', itemId: null })).toBe('declined')
+    expect(requestAdoptionOf({ adoption: 'bogus' as never, itemId: 'imp-1' })).toBe('adopted')
   })
 })
 
@@ -348,7 +400,7 @@ describe('improvementCommentError（生要望コメント。2026-08-17 第 2 弾
 describe('buildCodingPrompt（添付の加味）', () => {
   it('参考リンクを列挙し、添付画像は件数を言及する', () => {
     const prompt = buildCodingPrompt([{
-      title: 't', summary: 's', detail: 'd', status: 'accepted', pagePaths: ['/x'],
+      title: 't', summary: 's', detail: 'd', status: 'todo', pagePaths: ['/x'],
       requests: [{ pageLabel: 'X', pagePath: '/x', body: '直したい', links: ['https://ref.example/doc'], imageCount: 2 }],
     }])
     expect(prompt).toContain('参考リンク: https://ref.example/doc')
@@ -356,7 +408,7 @@ describe('buildCodingPrompt（添付の加味）', () => {
   })
   it('添付が無ければ言及しない（旧呼び出しの下位互換）', () => {
     const prompt = buildCodingPrompt([{
-      title: 't', summary: 's', detail: 'd', status: 'accepted', pagePaths: ['/x'],
+      title: 't', summary: 's', detail: 'd', status: 'todo', pagePaths: ['/x'],
       requests: [{ pageLabel: 'X', pagePath: '/x', body: '直したい' }],
     }])
     expect(prompt).not.toContain('参考リンク')
@@ -376,9 +428,8 @@ describe('要望タグ（壁打ち/お任せ = F-42-17）', () => {
 
 describe('buildCodingPrompt: 要望+コメントの時系列統合 + タグ除外（改修依頼 2026-08-19 第4弾）', () => {
   it('要望本文とコメントを createdAt 昇順で 1 本の時系列に統合し【要望】【コメント】で明示する', () => {
-    // 2 要望 + それぞれのコメントを、投稿時刻の昇順で交互に並べる（親子構造ではなく時系列）
     const prompt = buildCodingPrompt([{
-      title: 't', summary: 's', detail: 'd', status: 'accepted', pagePaths: ['/x'],
+      title: 't', summary: 's', detail: 'd', status: 'todo', pagePaths: ['/x'],
       requests: [
         { pageLabel: 'X', pagePath: '/x', body: '要望A', createdAt: '2026-08-19T10:00:00+09:00',
           comments: [{ body: 'Aへのコメント', createdAt: '2026-08-19T13:00:00+09:00' }] },
@@ -390,7 +441,6 @@ describe('buildCodingPrompt: 要望+コメントの時系列統合 + タグ除�
     expect(prompt).toContain('- 【要望】 ［X］ 要望B')
     expect(prompt).toContain('- 【コメント】 Aへのコメント')
     expect(prompt).toContain('- 【コメント】 Bへのコメント')
-    // 時系列: 要望A(10) → 要望B(11) → Bへのコメント(12) → Aへのコメント(13)
     const iA = prompt.indexOf('要望A'); const iB = prompt.indexOf('要望B')
     const iCB = prompt.indexOf('Bへのコメント'); const iCA = prompt.indexOf('Aへのコメント')
     expect(iA).toBeLessThan(iB)
@@ -399,11 +449,10 @@ describe('buildCodingPrompt: 要望+コメントの時系列統合 + タグ除�
   })
   it('createdAt が無い旧呼び出しは投入順を保持する（決定的・下位互換 = 原則7）', () => {
     const prompt = buildCodingPrompt([{
-      title: 't', summary: 's', detail: 'd', status: 'accepted', pagePaths: ['/x'],
+      title: 't', summary: 's', detail: 'd', status: 'todo', pagePaths: ['/x'],
       requests: [{ pageLabel: 'X', pagePath: '/x', body: '直したい',
         comments: [{ body: 'まず配色の範囲を確認したい' }, { body: '対象は一覧のみで良い' }] }],
     }])
-    // 要望 → その要望のコメント（投入順）
     expect(prompt).toContain('- 【要望】 ［X］ 直したい')
     expect(prompt).toContain('- 【コメント】 まず配色の範囲を確認したい')
     expect(prompt.indexOf('直したい')).toBeLessThan(prompt.indexOf('まず配色の範囲を確認したい'))
@@ -411,22 +460,20 @@ describe('buildCodingPrompt: 要望+コメントの時系列統合 + タグ除�
   })
   it('コメントが無ければ【コメント】行は出ない（下位互換 = 原則7）', () => {
     const prompt = buildCodingPrompt([{
-      title: 't', summary: 's', detail: 'd', status: 'accepted', pagePaths: ['/x'],
+      title: 't', summary: 's', detail: 'd', status: 'todo', pagePaths: ['/x'],
       requests: [{ pageLabel: 'X', pagePath: '/x', body: '直したい' }],
     }])
     expect(prompt).not.toContain('【コメント】')
   })
   it('壁打ち/お任せタグは人間運用のためプロンプトに含めない（凡例も行頭マークも出さない）', () => {
-    // tags は PromptItemInput の対象外だが、呼び出し側が余剰プロパティで渡しても出力に混ざらないことを固定
     const withTags = buildCodingPrompt([{
-      title: 't', summary: 's', detail: 'd', status: 'accepted', pagePaths: ['/x'],
+      title: 't', summary: 's', detail: 'd', status: 'todo', pagePaths: ['/x'],
       requests: [{ pageLabel: 'X', pagePath: '/x', body: '直したい', ...({ tags: ['entrust', 'brainstorm'] } as object) }],
     }])
     expect(withTags).not.toContain('〔')
     expect(withTags).not.toContain('タグの読み方')
     expect(withTags).not.toContain('お任せ')
     expect(withTags).not.toContain('壁打ち')
-    // 本文自体は従来どおり出力される
     expect(withTags).toContain('直したい')
   })
 })
@@ -457,17 +504,17 @@ describe('improvementRequestInputOf', () => {
   })
 })
 
-describe('improvementRequestEditFields（要望編集の全項目正規化 = 改修依頼 2026-08-19）', () => {
-  it('本文・タグ・リンク・画像を正規化して返す（投稿時と同一ルール）', () => {
+describe('improvementRequestEditFields（要望編集の全項目正規化 = 改修依頼 2026-08-19 → 対象箇所 2026-08-21）', () => {
+  it('本文・タグ・リンク・画像・対象箇所を正規化して返す（投稿時と同一ルール）', () => {
     const res = improvementRequestEditFields({
       body: ' 直したい ', tags: ['entrust', 'bogus'], links: [' https://a.example '],
-      images: [{ filename: 'a.png', mime: 'image/png', dataUrl: PNG }],
+      images: [{ filename: 'a.png', mime: 'image/png', dataUrl: PNG }], targetSpot: ' 合計欄 ',
     })
     expect(res.ok).toBe(true)
     if (!res.ok) return
     expect(res.value).toEqual({
       body: '直したい', tags: ['entrust'], links: ['https://a.example'],
-      images: [{ filename: 'a.png', mime: 'image/png', dataUrl: PNG }],
+      images: [{ filename: 'a.png', mime: 'image/png', dataUrl: PNG }], targetSpot: '合計欄',
     })
   })
   it('空本文は AKO-REQ-001 / 不正リンクは AKO-REQ-009 / 不正画像は AKO-REQ-010（throw せず error を返す）', () => {
@@ -481,20 +528,19 @@ describe('improvementRequestEditFields（要望編集の全項目正規化 = 改
     expect(badImage.ok).toBe(false)
     if (!badImage.ok) expect(badImage.error.code).toBe('AKO-REQ-010')
   })
-  it('部分更新: 省略したキー（tags/links/images）は value に含めない（呼び出し側が現行値を保持）', () => {
+  it('部分更新: 省略したキー（tags/links/images/targetSpot）は value に含めない（呼び出し側が現行値を保持）', () => {
     const res = improvementRequestEditFields({ body: '本文だけ' })
     expect(res.ok).toBe(true)
-    if (res.ok) expect(res.value).toEqual({ body: '本文だけ' }) // tags/links/images は不在 = 更新しない
+    if (res.ok) expect(res.value).toEqual({ body: '本文だけ' })
   })
-  it('空配列を明示的に送れば「全削除」になる（キーが実在するため value に含まれる）', () => {
-    const res = improvementRequestEditFields({ body: 'x', tags: [], links: [], images: [] })
+  it('空配列・空文字を明示的に送れば「全削除・クリア」になる（キーが実在するため value に含まれる）', () => {
+    const res = improvementRequestEditFields({ body: 'x', tags: [], links: [], images: [], targetSpot: '' })
     expect(res.ok).toBe(true)
-    if (res.ok) expect(res.value).toEqual({ body: 'x', tags: [], links: [], images: [] })
+    if (res.ok) expect(res.value).toEqual({ body: 'x', tags: [], links: [], images: [], targetSpot: '' })
   })
   it('明示的 undefined は「未指定 = 現行値保持」として扱う（mock 経路の { tags: undefined } を API 経路と揃える = R1 MINOR）', () => {
-    const res = improvementRequestEditFields({ body: 'x', tags: undefined, links: undefined, images: undefined })
+    const res = improvementRequestEditFields({ body: 'x', tags: undefined, links: undefined, images: undefined, targetSpot: undefined })
     expect(res.ok).toBe(true)
-    // undefined は空配列（全削除）と異なり value に含めない = 現行の tags/links/images を保持する
     if (res.ok) expect(res.value).toEqual({ body: 'x' })
   })
 })
@@ -520,20 +566,6 @@ describe('normalizeImprovementPagePath / isInternalPagePath（F-42-20 の対象�
   })
 })
 
-describe('対応方針の語彙（運用対応/継続検討 = 改修依頼 2026-08-20）', () => {
-  it('IMPROVEMENT_STATUSES の順序（カンバン列の SoT）に operational / deferred が入る', () => {
-    expect(IMPROVEMENT_STATUSES).toEqual(['triage', 'accepted', 'in_progress', 'operational', 'deferred', 'resolved', 'rejected'])
-  })
-  it('META: accepted=改善対応（info 維持）/ rejected=対応見送り（warn 維持）/ operational=運用対応（ok・決着）/ deferred=継続検討（info・未解決）', () => {
-    expect(IMPROVEMENT_STATUS_META.accepted).toMatchObject({ label: '改善対応', tone: 'info', open: true })
-    expect(IMPROVEMENT_STATUS_META.rejected).toMatchObject({ label: '対応見送り', tone: 'warn', open: false })
-    expect(IMPROVEMENT_STATUS_META.operational).toMatchObject({ label: '運用対応', tone: 'ok', open: false })
-    expect(IMPROVEMENT_STATUS_META.deferred).toMatchObject({ label: '継続検討', tone: 'info', open: true })
-    expect(isOpenStatus('operational')).toBe(false)
-    expect(isOpenStatus('deferred')).toBe(true)
-  })
-})
-
 describe('improvementRevisitError（継続検討の再検討日。mock/API 共有の検証 = 原則6）', () => {
   it('deferred への遷移は再検討日が必須・実在日のみ', () => {
     expect(improvementRevisitError('deferred', '')).not.toBeNull()
@@ -543,20 +575,48 @@ describe('improvementRevisitError（継続検討の再検討日。mock/API 共�
     expect(improvementRevisitError('deferred', '9/1')).not.toBeNull() // 形式外
   })
   it('deferred 以外は再検討日なしで通る（渡された場合のみ形式検証。保持 = クリアしないは呼び出し側の責務）', () => {
-    expect(improvementRevisitError('accepted', '')).toBeNull()
-    expect(improvementRevisitError('resolved', '')).toBeNull()
-    expect(improvementRevisitError('accepted', '2026-09-01')).toBeNull()
-    expect(improvementRevisitError('accepted', 'bogus')).not.toBeNull()
+    expect(improvementRevisitError('planned', '')).toBeNull()
+    expect(improvementRevisitError('reviewing', '')).toBeNull()
+    expect(improvementRevisitError('planned', '2026-09-01')).toBeNull()
+    expect(improvementRevisitError('planned', 'bogus')).not.toBeNull()
   })
 })
 
-describe('運用案内の本文・上限（operational 遷移の必須コメント。mock/API 共有 = 原則6・改善要望 2026-08-21）', () => {
-  it('実効上限 = メモ上限 − 接頭辞で、境界とメッセージが一致する', () => {
+describe('運用案内の本文・上限（operational 遷移の必須コメント。mock/API 共有 = 原則6・改修依頼 2026-08-21）', () => {
+  it('実効上限 = コメント/メモ上限 − 接頭辞で、境界とメッセージが一致する', () => {
     expect(OPERATIONAL_NOTE_MAX).toBe(IMPROVEMENT_NOTE_CAP - [...'運用案内: '].length)
     expect(operationalNoteCapError('あ'.repeat(OPERATIONAL_NOTE_MAX))).toBeNull()
     const over = operationalNoteCapError('あ'.repeat(OPERATIONAL_NOTE_MAX + 1))
     expect(over).toContain(String(OPERATIONAL_NOTE_MAX))
-    // 接頭辞込みの記録本文がメモ上限ちょうどに収まる = improvementNoteError と整合
-    expect(improvementNoteError(operationalNoteBody('あ'.repeat(OPERATIONAL_NOTE_MAX)))).toBeNull()
+    // 接頭辞込みの記録本文がコメント上限に収まる（受付箱コメントとして記録できる）
+    expect(improvementCommentError(operationalNoteBody('あ'.repeat(OPERATIONAL_NOTE_MAX)))).toBeNull()
+  })
+})
+
+describe('AI 判定（improvement-assess = 改修依頼 2026-08-21。API フォールバック = mock と同一ロジック）', () => {
+  it('normalizeAssessment: verdict allowlist・reason 必須・docIds は実在 doc のみ', () => {
+    expect(normalizeAssessment(null)).toBeNull()
+    expect(normalizeAssessment({ verdict: 'bogus', reason: 'x' })).toBeNull()
+    expect(normalizeAssessment({ verdict: 'existing', reason: ' ' })).toBeNull()
+    const ok = normalizeAssessment({ verdict: 'existing', reason: '打刻修正の機能があります', docIds: ['kb-ug-001', 'kb-nope'] })
+    expect(ok).not.toBeNull()
+    expect(ok!.verdict).toBe('existing')
+    // 実在しない doc id は落とす（捏造防止）。kb-ug-001 の実在は kb.test が保証
+    expect(ok!.docIds.every(id => id.startsWith('kb-'))).toBe(true)
+    expect(ok!.docIds).not.toContain('kb-nope')
+  })
+  it('heuristicAssessRequest: 決定的（同一入力 → 同一判定）・短文は unknown', () => {
+    const input = { body: '打刻を忘れたときの修正方法を追加してほしい', pageLabel: 'タイムカード' }
+    const a = heuristicAssessRequest(input)
+    const b = heuristicAssessRequest(input)
+    expect(a).toEqual(b)
+    expect(['existing', 'workaround', 'improvement', 'unknown']).toContain(a.verdict)
+    expect(a.reason.length).toBeGreaterThan(0)
+    expect(heuristicAssessRequest({ body: '短い' }).verdict).toBe('unknown')
+  })
+  it('assessRelatedDocs: 対象ページ・対象箇所も検索クエリに含める（決定的）', () => {
+    const hits = assessRelatedDocs({ body: '打刻を忘れた場合の修正がしたい', pageLabel: 'タイムカード' })
+    expect(hits.length).toBeGreaterThan(0)
+    expect(hits.every(h => h.score > 0)).toBe(true)
   })
 })

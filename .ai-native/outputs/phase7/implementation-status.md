@@ -4338,3 +4338,49 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   - R5（最終収束確認）→ **指摘ゼロ（MAJOR 0 / MINOR 0 / NIT 0）で収束**。R4 対応の副作用
     （restore フロー・reject 連鎖・ドロワー再開閉・タブ判定経路・境界テストの実効性）も個別確認済み。
     最終検証: home 単体 484 / api 単体 481 / 統合 306 / 両 typecheck / nuxi generate 全通過
+
+## 103. 改善要望に基づく改修依頼 2026-08-21（4 改修単位 = 受付箱の対象箇所・設定タブ化+監査ログ・AI 知識ベース強化・ステータス管理再編）の完了条件（Definition of Done）
+
+対象: home + api + shared/domain。マイグレーション 0080（ステータス v2 = requests/items の CHECK 差替 + revisit/resolved_at/assignee 列）・0081（audit_logs インデックス）・0082（search_docs 'manual' + ai_assessment）。
+
+### 103-1 受付箱の「対象箇所」表示・編集（単位1）
+- [x] 受付箱一覧（管理者テーブル・一般リスト・モバイルカード）に「対象箇所」列を追加（列順 = 対象ページ → 対象箇所 → 要望。空 = 「—」）。
+- [x] 詳細ドロワーの編集フォーム（`ImprovementsRequestEditForm`）へ対象箇所の編集欄を追加（`improvementRequestEditFields` に targetSpot = 部分更新・上限 `IMPROVEMENT_TARGET_SPOT_CAP`。監査ログの変更項目ラベルに「対象箇所」）。
+- [x] mock 経路の editRequest も targetSpot を適用（API とのパリティ = 原則6。レビューで検出した適用漏れを修正）。
+- [x] 改修プロンプトの要望行に対象箇所を併記（`［ページ / 箇所］`）= AI が改修対象の箇所を特定できる。
+
+### 103-2 設定画面のタブ化 + 監査ログ（単位2）
+- [x] `/settings` を 3 タブへ再編（システム設定 / 運用設定 / 監査ログ = `UiTabBar` + `useRouteTabSync`。`?tab=` ディープリンク可・既存セクションは 2 タブへ再配置 = 機能後退なし）。
+- [x] 監査ログタブ（`SettingsAuditLogPanel`）: 操作日時（秒まで）/操作ユーザー（メンバー名解決）/操作対象ページ/操作対象データ/操作内容の列 + ページング 20 件/頁。
+- [x] フィルタ 5 種 = 期間（date 2 欄）+ ユーザー/ページ/データ/内容の各プルダウン（`UiCombobox` オートコンプリート・allowCreate なし）。適用中件数バッジ + 一括クリア。
+- [x] 語彙カタログ `shared/domain/audit-log` を新設（action 16 種・entity 86 種のラベル + 操作対象ページ対応 = 両モード共通の SoT。mock の camelCase entity は normalizeAuditEntity で正規化 = 原則6）。
+- [x] API: GET /v1/configs/audit-logs をサーバーページング + フィルタへ拡張（limit 既定 20・上限 500 / offset / q / f.actor / f.action / f.entity / f.page〔カタログ展開・other = 否定〕/ f.at.from・to〔JST 日付キー・不正は黙って無視 = 原則4〕。`{data, total}` = 既存呼び出し互換 = 原則7）。0081 で at DESC / actor_id インデックス。
+
+### 103-3 AI 機能の知識ベース強化（単位3）
+- [x] ナレッジベース `shared/domain/kb` を新設（アプリ仕様 spec / 操作マニュアル user-guide / 運用マニュアル ops-guide / FAQ = 計 50 ドキュメントの TS データモジュール。KB_DOCUMENT_FORMAT メタ + keywords = AI が利用しやすい構造化データ。コードと同期してデプロイで更新 = 手動運用なし〔原則1〕）。
+- [x] 決定的字句検索 `kbFindRelated`（タイトル 0.5 / キーワード 0.3 / 本文 bigram 0.2 の重み・閾値 KB_MIN_SCORE）= mock/API 共通の照合ロジック（原則6）。
+- [x] チャットボットの RAG 接続: API = search_docs へ source_kind 'manual' として取込（0082。埋め込み + 字句の両検索が効く・`app_manual` ツール + 使い方系キーワードの文脈ブロック）/ mock = answerManual（kbFindRelated 直照合）。使い方・操作系の質問にマニュアルを根拠として回答。
+- [x] 受付箱の AI 判定: 要望ごとに「既存機能で対応可 / 運用の工夫で対応可 / 改修が必要 / 判定不能」を判定（POST /requests/:id/assess = Vertex `generateJson` → `normalizeAssessment`〔verdict allowlist・docIds 実在検証〕→ 決定的ヒューリスティックへフォールバック。ai_assessment jsonb へ保管 = 再判定で上書き）。
+- [x] UI: 一覧の AI 判定列（バッジ/未判定）+ ドロワーの判定カード（根拠・参照ドキュメント名・推奨アクション +「推奨アクションを適用」= 状態機械の遷移へ接続。運用対応は判定根拠を運用案内の下書きへ）+ 一括変更バーの「まとめて AI 判定」（逐次・部分成功報告 = 原則4）。
+
+### 103-4 受付箱・改修案件のステータス管理再編（単位4）
+- [x] 受付箱: 選別（採用/不採用）+ 進捗タグを 1 本の状態機械へ再編（保存値 = unconfirmed/reviewing/planned/operational/deferred/dismissed の基底 6 値 + 表示専用の 対応済み〔item 連動導出〕・解決済み〔resolvedAt オーバーレイ〕= `improvementInboxStatusOf`。0080 で CHECK 差替・投稿初期値 = 未確認）。
+- [x] 遷移 = 未確認 → 検討中 → 改善対応/運用対応/継続検討/対応見送り・各終端 → 検討中の戻り（`IMPROVEMENT_INBOX_NEXT`・機械外 AKO-REQ-006・集約済み AKO-REQ-013・解決済み AKO-REQ-025 = 先に取消）。
+- [x] 運用対応 = 運用案内必須（AKO-REQ-024）→ コメントへ「運用案内: 」記録 + 起票者へ全文通知（?req= ディープリンク）。継続検討 = 再検討日必須（AKO-REQ-023）+ 到来で管理者リマインド（要望 + 旧 deferred 案件の両方を走査 = 原則7。revisit_notified_on で冪等 = 原則2）。
+- [x] 解決済み = 起票者本人の確認操作（運用対応/対応済みのみ = AKO-REQ-026・管理者は代行可）。resolvedAt オーバーレイ = 基底ステータスを上書きせず取消で戻る（原則9.5）。旧 status='resolved' は unresolve 時のみ新語彙へ書換（唯一の保存値変更 = 設計判断を docblock 化）。
+- [x] 改修案件: 未対応 → 対応中（担当者アサイン・一覧/カンバン/ガントに表示）→ 対応済 の 3 状態へ再編（`IMPROVEMENT_ITEM_NEXT`・reopen 可。旧 7 値は `improvementItemViewOf` で読み替え = 保存値不変・原則7。旧語彙の投入は AKO-REQ-005 = 受付箱へ移管）。担当者はステータスと独立に変更・解除可（editItem assigneeMemberId・AKO-REQ-027）。
+- [x] 対応済 → 紐づく要望を「対応済み」へ導出（GET /requests の linkedItemStatus JOIN = 非管理者も自分の要望の完了を判別）+ 起票者へ通知。AI 集約対象 = 「改善対応」のみ（旧 adopted も対象 = 原則7）・プロンプト既定 = 未対応のみ。
+- [x] カンバン/ガント: 受付箱 = 8 列の受付箱ステータス軸（継続検討カードに再検討日バッジ）/ 改修案件 = 3 列 + 担当者バッジ・ガント 3 色 + 担当者名併記。サマリーカード = 受付箱 8 + 案件 3。
+- [x] 一括変更（旧一括選別の後継 = 検討中/改善対応/対応見送り/未確認に戻す。運用対応・継続検討は行ごと入力のため対象外 = AKO-REQ-028）+ まとめて AI 判定。
+- [x] 下位互換（原則7）: 0080 は CHECK 差替のみ = 既存行の書換なし（0073 の前例に整合）。旧 adoption/open/resolved・旧 item 7 値は読み時正規化。デモシード（seed/misc.ts）は新語彙の全ステータスを網羅するデモへ刷新。
+
+### 103-5 検証（受入基準）
+- [x] `npm run build`（home nuxt generate / api tsc）・`npx nuxi typecheck`・api `tsc --noEmit` 全通過
+- [x] 単体: home vitest / api vitest（improvement 新モデル・audit-log・kb・assess のテストを新規/書換）
+- [x] 統合（実 PostgreSQL）: 改善要望 describe を新モデルへ全面書換（状態機械・resolve/assess・3 状態 items・リマインド・監査ログの paging/filter 追加）+ 旧テスト（プロンプト既定/対応方針/本人 resolved）を新仕様・移管検証へ更新
+- [x] モックモード E2E（run-mock-stack.sh = PR テストゲートと同一）: 既存 6 スイートを新 UI へ追随更新 + 新規 batch4-e2e（対象箇所・設定 3 タブ+監査ログフィルタ・AI 判定・チャットボットのマニュアル回答・受付箱/案件の状態機械と取消フロー・モバイル 375px）= 全スイート green
+- [x] モバイル 375px: /improvements・/settings で横スクロールなし（E2E で自動検証）
+- [x] ドキュメント: data-design / api-design / screen-design / CONVENTIONS（早見表 + 部品在庫）/ 本ファイル §103
+
+### 103-6 反復レビュー（原則9 = SP-8）
+- 反復記録:

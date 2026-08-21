@@ -10,7 +10,7 @@ async function main() {
   await withPage(async (page) => {
     console.log('suite: 改修依頼 2026-08-18 第 2 弾（8 件）')
 
-    // 1) 改善要望: サマリーカード 6 枚（対応中）+ カンバン「対応中」列 + シードのデモ案件
+    // 1) 改善要望: サマリーカード（受付箱 8 + 改修案件 3 = 2026-08-21 再編）+ カンバン 3 列 + シードのデモ案件
     await page.goto(`${BASE}/#/improvements`)
     await page.getByRole('main').getByRole('heading', { level: 1, name: '改善要望' }).waitFor()
     await page.getByRole('button', { name: /対応中/ }).first().waitFor()
@@ -18,29 +18,39 @@ async function main() {
     // タブ再編（2026-08-20: 受付箱/改修案件 + 表示切替）に追随: 改修案件タブ → カンバン表示
     await page.getByRole('tab', { name: '改修案件' }).click()
     await page.getByRole('tab', { name: 'カンバン' }).click()
-    check('カンバン: 「対応中」列が「改善対応」と「解決済み」の間にある', await page.evaluate(() => {
-      const heads = [...document.querySelectorAll('main h3, main h4, main [class*="font-semibold"]')]
+    // ステータス再編（2026-08-21）: 改修案件は 未対応 → 対応中 → 対応済 の 3 状態。
+    // 列見出しはカンバン列（section > header のバッジ）だけを見る（サマリーカードの「対応済み」等と混同しない）
+    await page.getByText('「シフト表」の確定シフト CSV ダウンロード').first().waitFor()
+    check('カンバン: 「未対応」「対応中」「対応済」の 3 列がこの順で並ぶ', await page.evaluate(() => {
+      const heads = [...document.querySelectorAll('main section > header')]
         .map(el => el.textContent?.trim() ?? '')
-      const a = heads.findIndex(t => t.startsWith('改善対応'))
+      const a = heads.findIndex(t => t.startsWith('未対応'))
       const p = heads.findIndex(t => t.startsWith('対応中'))
-      const r = heads.findIndex(t => t.startsWith('解決済み'))
+      const r = heads.findIndex(t => t.startsWith('対応済'))
       return a !== -1 && p !== -1 && r !== -1 && a < p && p < r
     }))
     await page.getByText('「シフト表」の確定シフト CSV ダウンロード').first().waitFor()
     check('カンバン: 対応中のデモ案件（imp-0003）が表示される', true)
+    check('カンバン: 対応中のデモ案件に担当者バッジが出る（2026-08-21 アサイン）',
+      (await page.getByText('葛西 大輔').count()) >= 1)
 
-    // 2) 改修プロンプト: 対象 = 「対応する」のみ + ナビゲーター定型文
+    // 2) 改修プロンプト: 対象 = 「未対応」のみ（2026-08-21 再編）+ ナビゲーター定型文
     await page.getByRole('button', { name: '改修プロンプトを出力' }).click()
-    await page.getByText('「改善対応」ステータスの改修単位のみを').waitFor()
-    check('プロンプト: 対象が「改善対応」のみである説明が出る', true)
+    await page.getByText('「未対応」ステータスの改修案件のみを').waitFor()
+    check('プロンプト: 対象が「未対応」のみである説明が出る', true)
     const promptText = await page.locator('textarea[readonly]').inputValue()
     check('プロンプト: 冒頭にナビゲーター定型文が入る',
       promptText.startsWith('あなたはナビゲーターです。')
       && promptText.includes('コードレビューとシステム監査を繰り返してください'))
-    check('プロンプト: 未判定の案件（ヘッダーの通知一覧改善）を含まない', !promptText.includes('imp-0002'))
+    check('プロンプト: 未対応の案件（タイムカードの打刻取消）を含む',
+      promptText.includes('「タイムカード」の打刻取消を可能にする'))
+    check('プロンプト: 対応中の案件（シフト表 CSV）を含まない',
+      !promptText.includes('「シフト表」の確定シフト CSV ダウンロード'))
+    check('プロンプト: 対応済の案件（通知の一括既読）を含まない',
+      !promptText.includes('「通知」の一括既読'))
     await page.keyboard.press('Escape')
 
-    // 3) 受付箱: 添付列 + 対象ページのリンク化
+    // 3) 受付箱: 添付列 + 対象箇所列 + 対象ページのリンク化
     await page.getByRole('tab', { name: /受付箱/ }).click()
     // 表示切替はタブ間で共有されるため、直前のカンバン表示から「一覧」へ戻す（2026-08-20 タブ再編）
     await page.getByRole('tab', { name: '一覧' }).click()
@@ -48,9 +58,14 @@ async function main() {
     await page.getByRole('tablist', { name: '投稿者で絞り込み' }).getByRole('tab', { name: '全員' }).click()
     await page.getByRole('columnheader', { name: '添付' }).waitFor()
     check('受付箱: 一覧に「添付」列がある', true)
-    // 既定フィルタ = 未選別（imreq-0005 = メンバー管理）。対象ページ列がリンクとして出る
+    check('受付箱: 一覧に「対象箇所」列がある（2026-08-21）',
+      (await page.getByRole('columnheader', { name: '対象箇所' }).count()) >= 1)
+    // 既定フィルタ = 未確認（2026-08-21 再編）。「すべて」へ切り替えて全ステータスの行を出す
+    await page.getByRole('tab', { name: 'すべて' }).click()
     await page.getByRole('link', { name: '対象ページ（メンバー管理）を開く' }).first().waitFor()
     check('受付箱: 対象ページが当該ページへのリンクになっている', true)
+    check('受付箱: 対象箇所が一覧セルに表示される（imreq-0001 = 一覧の合計欄）',
+      (await page.getByText('一覧の合計欄').count()) >= 1)
 
     // 4) 稟議: 区分の説明付きカード型ラジオ選択
     await page.goto(`${BASE}/#/workflow`)

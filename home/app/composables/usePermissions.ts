@@ -44,7 +44,7 @@ export function usePermissions() {
     // メニュー・ページ表示も attendance との AND で判定し UI と API の挙動を一致させる
     if (key === 'timecard') return can('timecard') && can('attendance')
     // 改善要望は認証済み全員が閲覧できる（改修依頼 2026-08-19 第4弾: 全要望を閲覧可）。
-    // ページ内の管理系操作（選別・ステータス変更・AI 集約・改修案件）は canManageImprovements で個別ガードする。
+    // ページ内の管理系操作（ステータス変更・AI 集約・AI 判定・改修案件）は canManageImprovements で個別ガードする。
     if (key === 'improvements') return true
     return can(key)
   }

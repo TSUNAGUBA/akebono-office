@@ -922,10 +922,98 @@ describe('設定・監査', () => {
 
   it('監査ログにマスタ操作が記録されている（管理者のみ参照可）', async () => {
     expect((await api('GET', '/v1/configs/audit-logs', { as: MEMBER })).status).toBe(403)
-    const r = await api('GET', '/v1/configs/audit-logs', { as: ADMIN })
+    expect((await api('GET', '/v1/configs/audit-logs?f.actor=x', { as: MEMBER })).status).toBe(403)
+    const r = await api('GET', '/v1/configs/audit-logs?limit=500', { as: ADMIN })
     const logs = r.json.data as { action: string; entity: string }[]
     expect(logs.some(l => l.entity === 'departments' && l.action === 'create')).toBe(true)
     expect(logs.some(l => l.entity === 'company_relations' && l.action === 'delete')).toBe(true)
+  })
+
+  it('監査ログのページング: limit/offset + total 兄弟キー。limit のみの既存呼び出しとも互換', async () => {
+    const all = await api('GET', '/v1/configs/audit-logs?limit=500', { as: ADMIN })
+    const total = (all.json as { total: number }).total
+    expect(total).toBeGreaterThan(2)
+    expect((all.json.data as unknown[]).length).toBe(Math.min(total, 500))
+
+    const p1 = await api('GET', '/v1/configs/audit-logs?limit=2&offset=0', { as: ADMIN })
+    const p2 = await api('GET', '/v1/configs/audit-logs?limit=2&offset=2', { as: ADMIN })
+    const rows1 = p1.json.data as { id: number }[]
+    const rows2 = p2.json.data as { id: number }[]
+    expect(rows1.length).toBe(2)
+    expect((p1.json as { total: number }).total).toBe(total) // total はフィルタ後全件数（ページに依存しない）
+    expect(rows2.length).toBe(2)
+    // ORDER BY id DESC の連続ページ: 重複せず、後ページの id はすべて前ページより小さい
+    const ids1 = rows1.map(r2 => r2.id)
+    expect(rows2.every(r2 => ids1.every(id => r2.id < id))).toBe(true)
+
+    // 不正な limit/offset は黙って既定へ（原則4）
+    const bad = await api('GET', '/v1/configs/audit-logs?limit=abc&offset=-5', { as: ADMIN })
+    expect(bad.status).toBe(200)
+    expect((bad.json.data as unknown[]).length).toBe(Math.min(total, 20)) // 既定 limit 20
+  })
+
+  it('監査ログのフィルタ: f.actor / f.action / f.entity は完全一致で絞り込む', async () => {
+    const byActor = await api('GET', `/v1/configs/audit-logs?limit=500&f.actor=${ADMIN}`, { as: ADMIN })
+    const actorRows = byActor.json.data as { actorId: string }[]
+    expect(actorRows.length).toBeGreaterThan(0)
+    expect(actorRows.every(l => l.actorId === ADMIN)).toBe(true)
+    if (actorRows.length < 500) expect((byActor.json as { total: number }).total).toBe(actorRows.length) // limit 未満なら total = 件数
+
+    const byAction = await api('GET', '/v1/configs/audit-logs?limit=500&f.action=delete', { as: ADMIN })
+    const actionRows = byAction.json.data as { action: string }[]
+    expect(actionRows.length).toBeGreaterThan(0)
+    expect(actionRows.every(l => l.action === 'delete')).toBe(true)
+
+    const byEntity = await api('GET', '/v1/configs/audit-logs?limit=500&f.entity=departments', { as: ADMIN })
+    const entityRows = byEntity.json.data as { entity: string }[]
+    expect(entityRows.length).toBeGreaterThan(0)
+    expect(entityRows.every(l => l.entity === 'departments')).toBe(true)
+  })
+
+  it('監査ログのフィルタ: f.page はカタログの entity 集合へ展開。other はページ特定可能 entity の否定', async () => {
+    // departments は '/masters/departments' ページ配下（shared/domain/audit-log のカタログが SoT）
+    const byPage = await api('GET', `/v1/configs/audit-logs?limit=500&f.page=${encodeURIComponent('/masters/departments')}`, { as: ADMIN })
+    const pageRows = byPage.json.data as { entity: string }[]
+    expect(pageRows.length).toBeGreaterThan(0)
+    expect(pageRows.some(l => l.entity === 'departments')).toBe(true)
+    expect(pageRows.every(l => l.entity !== 'company_relations')).toBe(true) // 別ページの entity は含まれない
+
+    // 「その他」にはページ特定可能な entity（departments 等）は現れない
+    const other = await api('GET', '/v1/configs/audit-logs?limit=500&f.page=other', { as: ADMIN })
+    const otherRows = other.json.data as { entity: string }[]
+    expect(otherRows.every(l => l.entity !== 'departments' && l.entity !== 'company_relations')).toBe(true)
+
+    // カタログ外の未知ページは黙って無視（フィルタなしと同じ結果件数）
+    const unknown = await api('GET', '/v1/configs/audit-logs?limit=500&f.page=%2Fno-such-page', { as: ADMIN })
+    const allTotal = ((await api('GET', '/v1/configs/audit-logs?limit=1', { as: ADMIN })).json as { total: number }).total
+    expect((unknown.json as { total: number }).total).toBe(allTotal)
+  })
+
+  it('監査ログのフィルタ: f.at.from/to は JST 日付キー範囲。不正・非実在日は黙って無視', async () => {
+    const jstToday = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tokyo' }).format(new Date())
+    const allTotal = ((await api('GET', '/v1/configs/audit-logs?limit=1', { as: ADMIN })).json as { total: number }).total
+
+    // テスト実行は全て今日: 今日を含む範囲は全件、明日以降は 0 件
+    const today = await api('GET', `/v1/configs/audit-logs?limit=1&f.at.from=${jstToday}&f.at.to=${jstToday}`, { as: ADMIN })
+    expect((today.json as { total: number }).total).toBe(allTotal)
+    const future = await api('GET', '/v1/configs/audit-logs?limit=1&f.at.from=2099-01-01', { as: ADMIN })
+    expect((future.json as { total: number }).total).toBe(0)
+    const past = await api('GET', '/v1/configs/audit-logs?limit=1&f.at.to=2000-01-01', { as: ADMIN })
+    expect((past.json as { total: number }).total).toBe(0)
+
+    // 不正値・非実在日（2026-02-30）は 500 にせず黙って無視（原則4）
+    const invalid = await api('GET', '/v1/configs/audit-logs?limit=1&f.at.from=not-a-date&f.at.to=2026-02-30', { as: ADMIN })
+    expect(invalid.status).toBe(200)
+    expect((invalid.json as { total: number }).total).toBe(allTotal)
+  })
+
+  it('監査ログの q 検索: actor/entity/entityId/detail を横断して部分一致', async () => {
+    const r = await api('GET', '/v1/configs/audit-logs?limit=500&q=department', { as: ADMIN })
+    const rows = r.json.data as { actorId: string; entity: string; entityId: string; detail: string | null }[]
+    expect(rows.length).toBeGreaterThan(0)
+    expect(rows.every(l =>
+      [l.actorId, l.entity, l.entityId, l.detail ?? ''].some(v => v.toLowerCase().includes('department')),
+    )).toBe(true)
   })
 })
 
@@ -6782,15 +6870,29 @@ describe('サーバーページング + 検索（q/limit/offset/total）と在�
   })
 })
 
-describe('改善要望（F-42）', () => {
-  interface Item { id: string; title: string; status: string; pagePaths: string[]; sourceRequestIds: string[]; archivedAt: string | null }
+describe('改善要望（F-42 → ステータス管理の再編 = 改修依頼 2026-08-21）', () => {
+  interface Item { id: string; title: string; status: string; pagePaths: string[]; sourceRequestIds: string[]; archivedAt: string | null; assigneeMemberId: string | null; assigneeName: string | null }
+  interface ReqRow2 {
+    id: string; status: string; itemId: string | null; archivedAt: string | null
+    revisitOn: string | null; resolvedAt: string | null; linkedItemStatus: string | null
+  }
 
-  it('投稿は全員可・管理系は権限を持つ人のみ（deny-by-default）', async () => {
-    // 投稿（各ページから。認証済み全員可）
+  /** 受付箱ステータスの遷移ヘルパ（管理者操作） */
+  const setInbox = (id: string, status: string, extra: Record<string, unknown> = {}) =>
+    api('POST', `/v1/improvements/requests/${id}/status`, { as: ADMIN, body: { status, ...extra } })
+  /** 未確認 → 検討中 → 改善対応（AI 集約対象へ進める定型フロー） */
+  const toPlanned = async (id: string): Promise<void> => {
+    expect((await setInbox(id, 'reviewing')).status).toBe(200)
+    expect((await setInbox(id, 'planned')).status).toBe(200)
+  }
+
+  it('投稿は全員可（初期 = 未確認）・管理系は権限を持つ人のみ（deny-by-default）', async () => {
+    // 投稿（各ページから。認証済み全員可）。初期ステータス = 未確認（改修依頼 2026-08-21）
     const posted = await api('POST', '/v1/improvements/requests', {
       as: MEMBER, body: { body: '売上一覧で合計金額を大きく表示してほしい', pagePath: '/akebono/sales', pageLabel: 'AKEBONO 売上' },
     })
     expect(posted.status).toBe(201)
+    expect((posted.json.data as { status: string }).status).toBe('unconfirmed')
     // 時刻は JST ウォールクロック文字列（+09:00）で返す（生 UTC "…Z" を返さない = 日付ずれ防止）
     expect((posted.json.data as { createdAt: string }).createdAt).toMatch(/\+09:00$/)
     // 未入力は AKO-REQ-001
@@ -6801,9 +6903,12 @@ describe('改善要望（F-42）', () => {
     expect(reqList.status).toBe(200)
     const reqRows = reqList.json.data as Record<string, unknown>[]
     expect(reqRows.some(r => r.id === (posted.json.data as { id: string }).id)).toBe(true)
-    // 選別（adoption）・集約解除履歴（excludedItemIds）は一般には返さない（トリアージ状態 = 管理者のみ。R1 監査反映）
-    expect(reqRows.every(r => !('adoption' in r) && !('excludedItemIds' in r))).toBe(true)
-    // 管理者には adoption を返す（選別 UI の SoT）
+    // 旧・選別（adoption）・集約解除履歴（excludedItemIds）・AI 判定（aiAssessment）は一般には返さない
+    // （トリアージ状態 = 管理者のみ。R1 監査反映 + 改修依頼 2026-08-21）
+    expect(reqRows.every(r => !('adoption' in r) && !('excludedItemIds' in r) && !('aiAssessment' in r))).toBe(true)
+    // 受付箱ステータスの導出材料（status / resolvedAt / linkedItemStatus）は全員に返す（対応済みの判別 = 原則6 導出）
+    expect(reqRows.every(r => 'status' in r && 'resolvedAt' in r && 'linkedItemStatus' in r)).toBe(true)
+    // 管理者には adoption（旧データ読替え用）も返す
     const adminReqRows = (await api('GET', '/v1/improvements/requests', { as: ADMIN })).json.data as Record<string, unknown>[]
     expect(adminReqRows.every(r => 'adoption' in r)).toBe(true)
     // 一般利用者は自分の取消済み要望を閲覧・復元できる（原則9.5・R1 レビュー反映）。他者の取消済みは見えない
@@ -6816,9 +6921,8 @@ describe('改善要望（F-42）', () => {
     expect((((await api('GET', '/v1/improvements/requests', { as: HR })).json.data) as { id: string }[]).some(r => r.id === ownReqId)).toBe(false)
     // 本人が復元できる（取消の取消 = 原則9.5）→ 後続テストへ影響させないため元に戻す
     expect((await api('POST', `/v1/improvements/requests/${ownReqId}/restore`, { as: MEMBER })).status).toBe(200)
-    // 管理系の操作は一般不可（AKO-PRM-001）。要望ステータスは 2026-08-21 から本人の resolved/open のみ可の
-    // ため、管理者専用のまま残る dismissed で検証する（本人の resolved 可は専用 describe が担う）
-    expect((await api('POST', `/v1/improvements/requests/${(posted.json.data as { id: string }).id}/status`, { as: MEMBER, body: { status: 'dismissed' } })).status).toBe(403)
+    // 受付箱ステータスの遷移は管理権限者のみ（AKO-PRM-001）
+    expect((await api('POST', `/v1/improvements/requests/${ownReqId}/status`, { as: MEMBER, body: { status: 'reviewing' } })).status).toBe(403)
     // 改修案件（/items）は引き続き管理権限者のみ（AKO-PRM-001）・管理者は可
     const memberList = await api('GET', '/v1/improvements/items', { as: MEMBER })
     expect(memberList.status).toBe(403)
@@ -6833,6 +6937,64 @@ describe('改善要望（F-42）', () => {
     expect((await api('GET', '/v1/improvements/items', { as: MEMBER })).status).toBe(200)
     // 後片付け（他テストへ影響させない）
     await api('POST', `/v1/masters/permission-rules/${(grant.json.data as { id: string }).id}/archive`, { as: ADMIN })
+  })
+
+  it('受付箱ステータスの遷移（状態機械・運用対応の案内 + 通知・継続検討の再検討日・解決の記録）', async () => {
+    const posted = await api('POST', '/v1/improvements/requests', {
+      as: MEMBER, body: { body: 'ステータス遷移テスト用の要望', pagePath: '/inbox-status-test', pageLabel: 'ステータステスト' },
+    })
+    const reqId = (posted.json.data as { id: string }).id
+    // 不正値は AKO-REQ-011・機械外の遷移（未確認 → 改善対応）は AKO-REQ-006（検討を経る）
+    expect((await setInbox(reqId, 'bogus')).json.error?.code).toBe('AKO-REQ-011')
+    const skip = await setInbox(reqId, 'planned')
+    expect(skip.status).toBe(409)
+    expect(skip.json.error?.code).toBe('AKO-REQ-006')
+    // 未確認 → 検討中
+    expect(((await setInbox(reqId, 'reviewing')).json.data as { status: string }).status).toBe('reviewing')
+    // 同一ステータスの再送は no-op（200 = 冪等・原則2）
+    expect((await setInbox(reqId, 'reviewing')).status).toBe(200)
+    // 継続検討は再検討日が必須（AKO-REQ-023）・設定すると revisitOn が返る
+    expect((await setInbox(reqId, 'deferred')).json.error?.code).toBe('AKO-REQ-023')
+    const deferred = await setInbox(reqId, 'deferred', { revisitOn: '2026-09-01' })
+    expect(deferred.status).toBe(200)
+    expect((deferred.json.data as { status: string; revisitOn: string }).revisitOn).toBe('2026-09-01')
+    // deferred → deferred は再検討日の変更として受理（リスケジュール = 原則9.5）
+    expect(((await setInbox(reqId, 'deferred', { revisitOn: '2026-10-01' })).json.data as { revisitOn: string }).revisitOn).toBe('2026-10-01')
+    // 継続検討 → 運用対応: 運用案内（note）必須（AKO-REQ-024）。設定するとコメントに記録 + 起票者へ通知
+    expect((await setInbox(reqId, 'operational')).json.error?.code).toBe('AKO-REQ-024')
+    const ops = await setInbox(reqId, 'operational', { note: '設定 > 外部リンクから同じ導線を追加できます' })
+    expect(ops.status).toBe(200)
+    // 運用案内はコメント（時系列・記録系）に「運用案内: 」接頭辞付きで残る（記録 = SoT と通知の同一本文）
+    const comments = (await api('GET', `/v1/improvements/request-comments?requestId=${reqId}`, { as: ADMIN }))
+      .json.data as { body: string }[]
+    expect(comments.some(cm => cm.body === '運用案内: 設定 > 外部リンクから同じ導線を追加できます')).toBe(true)
+    // 起票者（MEMBER）へ全文が通知され、リンクは要望詳細のディープリンク（?req=）
+    const notes = (await api('GET', '/v1/notifications', { as: MEMBER })).json.data as { title: string; body: string; link: string }[]
+    const opsNote = notes.find(n => n.title === '改善要望が「運用対応」になりました' && n.link === `/improvements?req=${reqId}`)
+    expect(opsNote?.body).toBe('運用案内: 設定 > 外部リンクから同じ導線を追加できます')
+    // 解決の記録（resolve）: 起票者本人が「解決済み」にできる（運用対応の確認）
+    const resolved = await api('POST', `/v1/improvements/requests/${reqId}/resolve`, { as: MEMBER, body: { resolved: true } })
+    expect(resolved.status).toBe(200)
+    expect((resolved.json.data as { resolvedAt: string | null }).resolvedAt).toMatch(/\+09:00$/)
+    // 解決済みの要望は基底ステータスを変更できない（AKO-REQ-025 = 先に解決の取消）
+    const locked = await setInbox(reqId, 'reviewing')
+    expect(locked.status).toBe(409)
+    expect(locked.json.error?.code).toBe('AKO-REQ-025')
+    // 解決の取消（unresolve）で元の表示（運用対応）へ戻る（原則9.5）
+    const unresolved = await api('POST', `/v1/improvements/requests/${reqId}/resolve`, { as: MEMBER, body: { resolved: false } })
+    expect((unresolved.json.data as { resolvedAt: string | null; status: string }).resolvedAt).toBeNull()
+    expect((unresolved.json.data as { status: string }).status).toBe('operational')
+    // 第三者（HR = 本人でも管理でもない）は解決の記録を操作できない（403）
+    expect((await api('POST', `/v1/improvements/requests/${reqId}/resolve`, { as: HR, body: { resolved: true } })).status).toBe(403)
+    // 運用対応 → 検討中（見直し）→ 対応見送り
+    expect((await setInbox(reqId, 'reviewing')).status).toBe(200)
+    // 未完了（検討中）の要望は解決できない（AKO-REQ-026）
+    const noResolve = await api('POST', `/v1/improvements/requests/${reqId}/resolve`, { as: MEMBER, body: { resolved: true } })
+    expect(noResolve.status).toBe(409)
+    expect(noResolve.json.error?.code).toBe('AKO-REQ-026')
+    expect(((await setInbox(reqId, 'dismissed')).json.data as { status: string }).status).toBe('dismissed')
+    // 存在しない要望は 404
+    expect((await api('POST', '/v1/improvements/requests/nope/status', { as: ADMIN, body: { status: 'reviewing' } })).status).toBe(404)
   })
 
   it('添付（URL リンク・画像）の投稿・往復・検証・プロンプト加味（0061・2026-08-17）', async () => {
@@ -6876,13 +7038,15 @@ describe('改善要望（F-42）', () => {
     const archivedRows = (await api('GET', '/v1/improvements/requests?unclustered=1&includeArchived=1', { as: ADMIN })).json.data as ReqRow[]
     expect(archivedRows.find(r => r.id === postedId)!.images[0]).toMatchObject({ dataUrl: png })
     await api('POST', `/v1/improvements/requests/${postedId}/restore`, { as: MEMBER })
-    // 選別（採用）→ 集約 → プロンプトに参考リンク・添付画像の件数が加味される（採用のみ集約対象 = 2026-08-17 第 2 弾）
-    await api('POST', `/v1/improvements/requests/${postedId}/adoption`, { as: ADMIN, body: { adoption: 'adopted' } })
-    await api('POST', `/v1/improvements/requests/${(plain.json.data as { id: string }).id}/adoption`, { as: ADMIN, body: { adoption: 'adopted' } })
+    // 改善対応にする → 集約 → プロンプトに参考リンク・添付画像の件数が加味される（改善対応のみ集約対象 = 2026-08-21）
+    await toPlanned(postedId)
+    await toPlanned((plain.json.data as { id: string }).id)
     await api('POST', '/v1/improvements/generate', { as: ADMIN })
     const prompt = (await api('POST', '/v1/improvements/prompt', { as: ADMIN, body: { filter: 'open' } })).json.data as { prompt: string }
     expect(prompt.prompt).toContain('参考リンク: https://ref.example/manual')
     expect(prompt.prompt).toContain('添付画像 1 件')
+    // 対象箇所は対象ページに併記される（改修依頼 2026-08-21）
+    expect(prompt.prompt).toContain('［添付テスト / 一覧の合計欄］')
     // 一覧 GET は画像の実体を返さない（転送量削減）。itemId 指定 GET でのみ実体を返す（ドロワーの遅延ロード）
     const listed = (await api('GET', '/v1/improvements/requests?includeArchived=1', { as: ADMIN })).json.data as ReqRow[]
     const mine = listed.find(r => r.id === postedId)!
@@ -6892,18 +7056,17 @@ describe('改善要望（F-42）', () => {
     expect(byItem.find(r => r.id === postedId)!.images[0]).toMatchObject({ dataUrl: png })
   })
 
-  it('AI 集約 → ステータス（状態機械・reopen）→ プロンプト出力', async () => {
-    // 集約対象の要望を投稿（既定 = 未選別）
+  it('AI 集約 → 改修案件の 3 状態（担当者アサイン・対応済み通知・reopen）→ プロンプト出力', async () => {
+    // 集約対象の要望を投稿（初期 = 未確認）
     const posted = await api('POST', '/v1/improvements/requests', {
       as: MEMBER, body: { body: '打刻を取り消せるようにしてほしい', pagePath: '/timecard', pageLabel: 'タイムカード' },
     })
-    // 未選別のままでは集約されない（採用済みのみ AI 集約対象 = 2026-08-17 第 2 弾）
+    const reqId = (posted.json.data as { id: string }).id
+    // 未確認のままでは集約されない（「改善対応」のみ AI 集約対象 = 改修依頼 2026-08-21）
     expect((await api('POST', '/v1/improvements/generate', { as: ADMIN })).json.data as { clustered: number })
       .toMatchObject({ clustered: 0 })
-    await api('POST', `/v1/improvements/requests/${(posted.json.data as { id: string }).id}/adoption`, {
-      as: ADMIN, body: { adoption: 'adopted' },
-    })
-    // 集約（採用済み・未集約の要望のみ処理・冪等）
+    await toPlanned(reqId)
+    // 集約（改善対応・未集約の要望のみ処理・冪等）
     const gen = await api('POST', '/v1/improvements/generate', { as: ADMIN })
     expect(gen.status).toBe(200)
     expect((gen.json.data as { clustered: number }).clustered).toBeGreaterThan(0)
@@ -6913,68 +7076,101 @@ describe('改善要望（F-42）', () => {
 
     const items = (await api('GET', '/v1/improvements/items', { as: ADMIN })).json.data as Item[]
     const tc = items.find(it => it.pagePaths.includes('/timecard'))!
-    expect(tc.status).toBe('triage')
+    expect(tc.status).toBe('todo') // AI 集約直後 = 未対応
 
-    // 不正遷移（triage → resolved）は 409
-    const bad = await api('POST', `/v1/improvements/items/${tc.id}/status`, { as: ADMIN, body: { status: 'resolved' } })
+    // 集約済み要望のステータスは案件連動 = 直接変更できない（AKO-REQ-013）。linkedItemStatus が導出材料
+    const lockedReq = await setInbox(reqId, 'reviewing')
+    expect(lockedReq.status).toBe(409)
+    expect(lockedReq.json.error?.code).toBe('AKO-REQ-013')
+    const rows1 = (await api('GET', '/v1/improvements/requests', { as: MEMBER })).json.data as ReqRow2[]
+    expect(rows1.find(r => r.id === reqId)!.linkedItemStatus).toBe('todo')
+
+    // 不正値は AKO-REQ-005（新語彙のみ受理）
+    const badValue = await api('POST', `/v1/improvements/items/${tc.id}/status`, { as: ADMIN, body: { status: 'accepted' } })
+    expect(badValue.status).toBe(400)
+    expect(badValue.json.error?.code).toBe('AKO-REQ-005')
+
+    // 対応中への遷移で担当者をアサインできる（改修依頼 2026-08-21）。無効メンバーは AKO-REQ-027
+    expect((await api('POST', `/v1/improvements/items/${tc.id}/status`, {
+      as: ADMIN, body: { status: 'in_progress', assigneeMemberId: 'm-nope' },
+    })).json.error?.code).toBe('AKO-REQ-027')
+    const started = await api('POST', `/v1/improvements/items/${tc.id}/status`, {
+      as: ADMIN, body: { status: 'in_progress', assigneeMemberId: MEMBER },
+    })
+    expect(started.status).toBe(200)
+    expect((started.json.data as Item).status).toBe('in_progress')
+    expect((started.json.data as Item).assigneeMemberId).toBe(MEMBER)
+    expect((started.json.data as Item).assigneeName).toBeTruthy() // スナップショット名
+
+    // 対応済へ遷移 → resolvedAt 記録・紐づく要望の起票者へ「対応済み」通知（?req= ディープリンク）
+    const done = await api('POST', `/v1/improvements/items/${tc.id}/status`, { as: ADMIN, body: { status: 'done' } })
+    expect(done.status).toBe(200)
+    expect((done.json.data as { status: string; resolvedAt: string | null }).status).toBe('done')
+    expect((done.json.data as { resolvedAt: string | null }).resolvedAt).not.toBeNull()
+    const memberNotes = (await api('GET', '/v1/notifications', { as: MEMBER })).json.data as { title: string; link: string }[]
+    expect(memberNotes.some(n => n.title === '改善要望が「対応済み」になりました' && n.link === `/improvements?req=${reqId}`)).toBe(true)
+    // 要望側は「対応済み」を判別できる（linkedItemStatus = done）→ 起票者が解決の記録を付けられる
+    const rows2 = (await api('GET', '/v1/improvements/requests', { as: MEMBER })).json.data as ReqRow2[]
+    expect(rows2.find(r => r.id === reqId)!.linkedItemStatus).toBe('done')
+    expect((await api('POST', `/v1/improvements/requests/${reqId}/resolve`, { as: MEMBER, body: { resolved: true } })).status).toBe(200)
+    expect((await api('POST', `/v1/improvements/requests/${reqId}/resolve`, { as: MEMBER, body: { resolved: false } })).status).toBe(200)
+
+    // 機械外の遷移（対応済 → 未対応）は 409。reopen（対応済 → 対応中）で resolvedAt が消える（原則9.5）
+    const bad = await api('POST', `/v1/improvements/items/${tc.id}/status`, { as: ADMIN, body: { status: 'todo' } })
     expect(bad.status).toBe(409)
     expect(bad.json.error?.code).toBe('AKO-REQ-006')
-
-    // 正常遷移: triage → accepted → resolved
-    expect((await api('POST', `/v1/improvements/items/${tc.id}/status`, { as: ADMIN, body: { status: 'accepted' } })).status).toBe(200)
-    const resolved = await api('POST', `/v1/improvements/items/${tc.id}/status`, { as: ADMIN, body: { status: 'resolved' } })
-    expect(resolved.status).toBe(200)
-    expect((resolved.json.data as { status: string; resolvedAt: string | null }).status).toBe('resolved')
-    expect((resolved.json.data as { resolvedAt: string | null }).resolvedAt).not.toBeNull()
-
-    // reopen（解決 → 対応する。取消可能性 = 原則9.5）で resolvedAt が消える
-    const reopened = await api('POST', `/v1/improvements/items/${tc.id}/status`, { as: ADMIN, body: { status: 'accepted' } })
+    const reopened = await api('POST', `/v1/improvements/items/${tc.id}/status`, { as: ADMIN, body: { status: 'in_progress' } })
     expect((reopened.json.data as { resolvedAt: string | null }).resolvedAt).toBeNull()
+    // 担当者はステータス遷移と独立に編集・解除できる（原則9.5）
+    const cleared = await api('POST', `/v1/improvements/items/${tc.id}`, { as: ADMIN, body: { assigneeMemberId: '' } })
+    expect((cleared.json.data as Item).assigneeMemberId).toBeNull()
+    // 差し戻し（対応中 → 未対応）してプロンプト出力の対象へ戻す
+    expect((await api('POST', `/v1/improvements/items/${tc.id}/status`, { as: ADMIN, body: { status: 'todo' } })).status).toBe(200)
 
-    // 集約済みの要望は再集約で二重登録されない（item_id が付き未集約から外れる）
-    // プロンプト出力（未解決フィルター）に対象ページが含まれる
-    const prompt = await api('POST', '/v1/improvements/prompt', { as: ADMIN, body: { filter: 'open' } })
+    // プロンプト出力（既定 = 未対応のみ）に対象ページが含まれる
+    const prompt = await api('POST', '/v1/improvements/prompt', { as: ADMIN, body: {} })
     expect(prompt.status).toBe(200)
     expect((prompt.json.data as { prompt: string }).prompt).toContain('/timecard')
+    expect((prompt.json.data as { prompt: string }).prompt).toContain('- **現在の状態:** 未対応')
     // 一般はプロンプト出力も不可
-    expect((await api('POST', '/v1/improvements/prompt', { as: MEMBER, body: { filter: 'open' } })).status).toBe(403)
+    expect((await api('POST', '/v1/improvements/prompt', { as: MEMBER, body: {} })).status).toBe(403)
   })
 
-  it('要望ステータス（open/resolved/dismissed）の変更とプロンプト再生成への反映（0062・2026-08-17）', async () => {
-    // 対象要望を投稿 → 集約（ユニークなページ = 新規 item）
+  it('AI 判定（/assess）: ナレッジベース照合の判定を保管・再判定で上書き（改修依頼 2026-08-21）', async () => {
     const posted = await api('POST', '/v1/improvements/requests', {
-      as: MEMBER, body: { body: 'ステータス管理テスト用の要望', pagePath: '/req-status-test', pageLabel: 'ステータステスト' },
+      as: MEMBER, body: { body: '打刻を忘れたときに後から修正したい', pagePath: '/timecard', pageLabel: 'タイムカード', targetSpot: '打刻ボタン' },
     })
-    const reqId = (posted.json.data as { id: string; status: string }).id
-    expect((posted.json.data as { status: string }).status).toBe('open') // 既定 = 未対応
-    await api('POST', `/v1/improvements/requests/${reqId}/adoption`, { as: ADMIN, body: { adoption: 'adopted' } })
-    await api('POST', '/v1/improvements/generate', { as: ADMIN })
-
-    // 不正値は AKO-REQ-011・非本人かつ管理権限なし（HR）は 403
-    // （投稿者本人 = MEMBER は 2026-08-21 から resolved/open へ変更可 = 専用 describe が担う）
-    expect((await api('POST', `/v1/improvements/requests/${reqId}/status`, { as: ADMIN, body: { status: 'bogus' } }))
-      .json.error?.code).toBe('AKO-REQ-011')
-    expect((await api('POST', `/v1/improvements/requests/${reqId}/status`, { as: HR, body: { status: 'resolved' } })).status).toBe(403)
-
-    // 変更（resolved）→ 一覧に反映・プロンプト再生成で【対応済み】が明記される
-    const set = await api('POST', `/v1/improvements/requests/${reqId}/status`, { as: ADMIN, body: { status: 'resolved' } })
-    expect(set.status).toBe(200)
-    expect((set.json.data as { status: string }).status).toBe('resolved')
-    const prompt1 = (await api('POST', '/v1/improvements/prompt', { as: ADMIN, body: { filter: 'open' } })).json.data as { prompt: string }
-    expect(prompt1.prompt).toContain('【対応済み】 ステータス管理テスト用の要望')
-    expect(prompt1.prompt).toContain('再改修しないこと')
-
-    // 戻せる（resolved → open。遷移自由 = 原則9.5）→ 再生成でタグが消える
-    expect((await api('POST', `/v1/improvements/requests/${reqId}/status`, { as: ADMIN, body: { status: 'open' } })).status).toBe(200)
-    const prompt2 = (await api('POST', '/v1/improvements/prompt', { as: ADMIN, body: { filter: 'open' } })).json.data as { prompt: string }
-    expect(prompt2.prompt).not.toContain('【対応済み】 ステータス管理テスト用の要望')
+    const reqId = (posted.json.data as { id: string }).id
+    // 一般（管理権限なし）は 403・存在しない要望は 404
+    expect((await api('POST', `/v1/improvements/requests/${reqId}/assess`, { as: MEMBER })).status).toBe(403)
+    expect((await api('POST', '/v1/improvements/requests/nope/assess', { as: ADMIN })).status).toBe(404)
+    // 判定（テスト環境は LLM 無効 = 決定的ヒューリスティック）
+    interface Assessment { verdict: string; reason: string; docIds: string[]; llm: boolean; assessedAt: string }
+    const assessed = await api('POST', `/v1/improvements/requests/${reqId}/assess`, { as: ADMIN })
+    expect(assessed.status).toBe(200)
+    const a = (assessed.json.data as { aiAssessment: Assessment }).aiAssessment
+    expect(['existing', 'workaround', 'improvement', 'unknown']).toContain(a.verdict)
+    expect(a.reason.length).toBeGreaterThan(0)
+    expect(a.llm).toBe(false)
+    expect(a.assessedAt).toMatch(/\+09:00$/)
+    // 再判定は上書き（生成→保管→再判定 = 冪等に近い決定的判定のため同じ verdict）
+    const again = await api('POST', `/v1/improvements/requests/${reqId}/assess`, { as: ADMIN })
+    expect((again.json.data as { aiAssessment: Assessment }).aiAssessment.verdict).toBe(a.verdict)
+    // 管理者の一覧には aiAssessment が返る（一般には返らない = 上の投稿テストで検証済み）
+    const adminRows = (await api('GET', '/v1/improvements/requests', { as: ADMIN })).json.data as { id: string; aiAssessment: Assessment | null }[]
+    expect(adminRows.find(r => r.id === reqId)!.aiAssessment?.verdict).toBe(a.verdict)
+    // 取消済みは判定不可（AKO-REQ-019 = 先に復元）
+    await api('POST', `/v1/improvements/requests/${reqId}/archive`, { as: MEMBER })
+    expect((await api('POST', `/v1/improvements/requests/${reqId}/assess`, { as: ADMIN })).json.error?.code).toBe('AKO-REQ-019')
+    await api('POST', `/v1/improvements/requests/${reqId}/restore`, { as: MEMBER })
   })
 
-  it('要望本文の編集（本人/管理者可・editedAt 記録・取消済みは不可。0064・2026-08-18）', async () => {
+  it('要望本文の編集（本人/管理者可・editedAt 記録・対象箇所の編集・取消済みは不可。0064・2026-08-18 → 2026-08-21）', async () => {
     const posted = await api('POST', '/v1/improvements/requests', {
       as: MEMBER,
       body: {
         body: '編集前の本文', pagePath: '/req-edit-test', pageLabel: '編集テスト',
+        targetSpot: '編集前の箇所',
         links: ['https://example.com/edit-ref'],
       },
     })
@@ -6983,45 +7179,55 @@ describe('改善要望（F-42）', () => {
     expect((posted.json.data as { editedAt: string | null }).editedAt).toBeNull() // 未編集 = null
 
     // 本人が編集できる（body 更新 + editedAt 記録 = 「編集済み」の明示）。
-    // 部分更新の鉄則: 送っていないフィールド（投稿元・添付・選別・ステータス・集約先）が保持されることもアサートする
+    // 部分更新の鉄則: 送っていないフィールド（投稿元・添付・対象箇所・ステータス・集約先）が保持されることもアサートする
     const edited = await api('POST', `/v1/improvements/requests/${reqId}/edit`, { as: MEMBER, body: { body: '編集後の本文（本人）' } })
     expect(edited.status).toBe(200)
     expect(edited.json.data as Record<string, unknown>).toMatchObject({
       body: '編集後の本文（本人）',
       pagePath: '/req-edit-test',
       pageLabel: '編集テスト',
+      targetSpot: '編集前の箇所',
       links: ['https://example.com/edit-ref'],
-      status: 'open',
-      adoption: 'pending',
+      status: 'unconfirmed',
       itemId: null,
       memberId: MEMBER,
     })
     expect((edited.json.data as { editedAt: string | null }).editedAt).toMatch(/\+09:00$/)
+
+    // 対象箇所の編集（改修依頼 2026-08-21: 受付箱の詳細で編集可能に。trim + 上限。'' = クリア）
+    const spotEdit = await api('POST', `/v1/improvements/requests/${reqId}/edit`, {
+      as: MEMBER, body: { body: '編集後の本文（本人）', targetSpot: ' 一覧のステータス列 ' },
+    })
+    expect((spotEdit.json.data as { targetSpot: string }).targetSpot).toBe('一覧のステータス列')
+    // targetSpot を送らない編集では保持される（部分更新の鉄則）
+    const keepSpot = await api('POST', `/v1/improvements/requests/${reqId}/edit`, { as: MEMBER, body: { body: '本文のみ再編集' } })
+    expect((keepSpot.json.data as { targetSpot: string }).targetSpot).toBe('一覧のステータス列')
 
     // 管理権限者も編集できる・本人でも管理権限者でもない第三者は 403（deny-by-default）
     expect((await api('POST', `/v1/improvements/requests/${reqId}/edit`, { as: ADMIN, body: { body: '編集後の本文（管理者）' } })).status).toBe(200)
     expect((await api('POST', `/v1/improvements/requests/${reqId}/edit`, { as: HR, body: { body: '第三者の編集' } })).status).toBe(403)
 
     // 改修依頼 2026-08-19: タグ・リンク・画像も編集できる（全項目の編集）。送ったキーは置き換わる
-    const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+    const png = 'data:image/png;base64,iVBORw0KGgoAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
     const fullEdit = await api('POST', `/v1/improvements/requests/${reqId}/edit`, {
       as: MEMBER,
       body: {
         body: '全項目を編集', tags: ['entrust', 'bogus'],
         links: ['https://example.com/new-ref'],
         images: [{ filename: 'a.png', mime: 'image/png', dataUrl: png }],
+        targetSpot: '全項目編集後の箇所',
       },
     })
     expect(fullEdit.status).toBe(200)
     expect(fullEdit.json.data as Record<string, unknown>).toMatchObject({
-      body: '全項目を編集', tags: ['entrust'], links: ['https://example.com/new-ref'],
+      body: '全項目を編集', tags: ['entrust'], links: ['https://example.com/new-ref'], targetSpot: '全項目編集後の箇所',
     })
     expect((fullEdit.json.data as { images: { dataUrl: string }[] }).images[0]).toMatchObject({ dataUrl: png })
     // 監査ログは変更項目と変更前本文を残す（添付変更を後から追える = R1。画像実体は肥大するため detail に残さない）。
     // 全項目編集の直後なので「画像」を変更項目に含む更新ログが 1 件ある（本文だけの編集ログは含まない）
-    const auditLogs = (await api('GET', '/v1/configs/audit-logs', { as: ADMIN })).json.data as { entity: string; entityId: string; action: string; detail: string }[]
+    const auditLogs = (await api('GET', '/v1/configs/audit-logs?limit=500', { as: ADMIN })).json.data as { entity: string; entityId: string; action: string; detail: string }[]
     const fullEditLog = auditLogs.find(l => l.entity === 'improvement_requests' && l.entityId === reqId && l.action === 'update' && l.detail.includes('画像'))
-    expect(fullEditLog?.detail).toContain('変更項目: 本文・タグ・リンク・画像')
+    expect(fullEditLog?.detail).toContain('変更項目: 本文・タグ・リンク・画像・対象箇所')
     expect(fullEditLog?.detail).toContain('変更前本文:')
     // 部分更新: 本文だけ送ると tags/links/images は保持される（CLAUDE.md 部分更新の鉄則 = 現行値保護）。
     // 画像の保持は特に重要（一覧 GET が images:[] スタブを返すため、未ロードのまま保存すると添付を消す危険 = R1 CRIT）。
@@ -7032,11 +7238,11 @@ describe('改善要望（F-42）', () => {
     })
     expect((bodyOnly.json.data as { images: { dataUrl: string }[] }).images).toHaveLength(1) // 画像が消えていない
     expect((bodyOnly.json.data as { images: { dataUrl: string }[] }).images[0]).toMatchObject({ dataUrl: png })
-    // 空配列を明示的に送れば「全削除」になる
+    // 空配列・空文字を明示的に送れば「全削除・クリア」になる
     const cleared = await api('POST', `/v1/improvements/requests/${reqId}/edit`, {
-      as: MEMBER, body: { body: '添付を全削除', tags: [], links: [], images: [] },
+      as: MEMBER, body: { body: '添付を全削除', tags: [], links: [], images: [], targetSpot: '' },
     })
-    expect(cleared.json.data as Record<string, unknown>).toMatchObject({ tags: [], links: [], images: [] })
+    expect(cleared.json.data as Record<string, unknown>).toMatchObject({ tags: [], links: [], images: [], targetSpot: '' })
     // 不正なリンク/画像は AKO-REQ-009 / AKO-REQ-010
     expect((await api('POST', `/v1/improvements/requests/${reqId}/edit`, { as: MEMBER, body: { body: 'x', links: ['ftp://a'] } })).json.error?.code).toBe('AKO-REQ-009')
 
@@ -7056,9 +7262,9 @@ describe('改善要望（F-42）', () => {
       as: MEMBER, body: { body: 'コメント反映テストの要望', pagePath: '/comment-prompt', pageLabel: 'コメント反映' },
     })
     const reqId = (posted.json.data as { id: string }).id
-    // 受付箱で要望へコメントを追記（管理権限者）→ 採用 → 集約
+    // 受付箱で要望へコメントを追記（管理権限者）→ 改善対応 → 集約
     await api('POST', `/v1/improvements/requests/${reqId}/comments`, { as: ADMIN, body: { body: '対象は一覧のみで良いか確認したい' } })
-    await api('POST', `/v1/improvements/requests/${reqId}/adoption`, { as: ADMIN, body: { adoption: 'adopted' } })
+    await toPlanned(reqId)
     await api('POST', '/v1/improvements/generate', { as: ADMIN })
     const prompt = (await api('POST', '/v1/improvements/prompt', { as: ADMIN, body: { filter: 'open' } })).json.data as { prompt: string }
     // 要望本文とコメントが時系列統合され【要望】【コメント】で明示される（投稿 → コメントの順）
@@ -7073,41 +7279,34 @@ describe('改善要望（F-42）', () => {
     expect(prompt2.prompt).not.toContain('対象は一覧のみで良いか確認したい')
   })
 
-  it('生要望の選別（採用/不採用）: 採用のみ集約対象・集約済みは変更不可（0063・2026-08-17 第 2 弾）', async () => {
-    // 2 件投稿（ユニークなページ）→ A = 採用 / B = 不採用 に選別する
+  it('「改善対応」のみが集約対象・対応見送りは集約されない・集約済みは案件連動（改修依頼 2026-08-21）', async () => {
+    // 2 件投稿（ユニークなページ）→ A = 改善対応 / B = 対応見送り にする
     const a = await api('POST', '/v1/improvements/requests', {
-      as: MEMBER, body: { body: '選別テスト A（採用する要望）', pagePath: '/triage-a', pageLabel: '選別A' },
+      as: MEMBER, body: { body: '選別テスト A（改善対応にする要望）', pagePath: '/triage-a', pageLabel: '選別A' },
     })
     const b = await api('POST', '/v1/improvements/requests', {
-      as: MEMBER, body: { body: '選別テスト B（不採用にする要望）', pagePath: '/triage-b', pageLabel: '選別B' },
+      as: MEMBER, body: { body: '選別テスト B（見送りにする要望）', pagePath: '/triage-b', pageLabel: '選別B' },
     })
     const aId = (a.json.data as { id: string }).id
     const bId = (b.json.data as { id: string }).id
-    // 既定は未選別（pending）
-    expect((a.json.data as { adoption: string }).adoption).toBe('pending')
-    // 不正値は AKO-REQ-012・一般（管理権限なし）は 403・存在しない要望は 404
-    expect((await api('POST', `/v1/improvements/requests/${aId}/adoption`, { as: ADMIN, body: { adoption: 'bogus' } }))
-      .json.error?.code).toBe('AKO-REQ-012')
-    expect((await api('POST', `/v1/improvements/requests/${aId}/adoption`, { as: MEMBER, body: { adoption: 'adopted' } })).status).toBe(403)
-    expect((await api('POST', '/v1/improvements/requests/nope/adoption', { as: ADMIN, body: { adoption: 'adopted' } })).status).toBe(404)
-    // 選別（A = 採用 / B = 不採用）
-    expect(((await api('POST', `/v1/improvements/requests/${aId}/adoption`, { as: ADMIN, body: { adoption: 'adopted' } }))
-      .json.data as { adoption: string }).adoption).toBe('adopted')
-    expect(((await api('POST', `/v1/improvements/requests/${bId}/adoption`, { as: ADMIN, body: { adoption: 'declined' } }))
-      .json.data as { adoption: string }).adoption).toBe('declined')
-    // 集約 → 採用のみ item_id が付き、不採用は未集約のまま残る（不採用を勝手にまとめない）
+    // 既定は未確認（unconfirmed）
+    expect((a.json.data as { status: string }).status).toBe('unconfirmed')
+    // A = 改善対応 / B = 対応見送り
+    await toPlanned(aId)
+    expect((await setInbox(bId, 'reviewing')).status).toBe(200)
+    expect((await setInbox(bId, 'dismissed')).status).toBe(200)
+    // 集約 → 改善対応のみ item_id が付き、見送りは未集約のまま残る（見送りを勝手にまとめない）
     await api('POST', '/v1/improvements/generate', { as: ADMIN })
-    type Row = { id: string; itemId: string | null; adoption: string }
-    const listed = (await api('GET', '/v1/improvements/requests', { as: ADMIN })).json.data as Row[]
+    const listed = (await api('GET', '/v1/improvements/requests', { as: ADMIN })).json.data as ReqRow2[]
     expect(listed.find(r => r.id === aId)!.itemId).not.toBeNull()
-    expect(listed.find(r => r.id === bId)!).toMatchObject({ itemId: null, adoption: 'declined' })
-    // 集約済み要望の選別変更は 409（改修単位へ取り込み済みの記録を保護 = 原則2。外すには要望の取消を使う）
-    const locked = await api('POST', `/v1/improvements/requests/${aId}/adoption`, { as: ADMIN, body: { adoption: 'declined' } })
+    expect(listed.find(r => r.id === bId)!).toMatchObject({ itemId: null, status: 'dismissed' })
+    // 集約済み要望のステータス変更は 409（案件連動 = 原則2。外すには「集約の解除」または要望の取消を使う）
+    const locked = await setInbox(aId, 'reviewing')
     expect(locked.status).toBe(409)
     expect(locked.json.error?.code).toBe('AKO-REQ-013')
   })
 
-  it('要望タグ（壁打ち/お任せ）の投稿・往復・プロンプト明記 + 集約の解除（0065・F-42-17/19・2026-08-18）', async () => {
+  it('要望タグ（壁打ち/お任せ）の投稿・往復・プロンプト除外 + 集約の解除（0065・F-42-17/19・2026-08-18）', async () => {
     // タグ付きで投稿 → allowlist 正規化で往復（未知値・重複は落とす）
     const posted = await api('POST', '/v1/improvements/requests', {
       as: MEMBER,
@@ -7120,24 +7319,23 @@ describe('改善要望（F-42）', () => {
     const plain = await api('POST', '/v1/improvements/requests', { as: MEMBER, body: { body: 'タグなし', pagePath: '/tag-test-plain', pageLabel: 'タグなし' } })
     expect((plain.json.data as { tags: string[] }).tags).toEqual([])
 
-    // 採用 → 集約 → タグは人間運用用のためプロンプトに含めない（改修依頼 2026-08-19）。本文自体は出る
-    await api('POST', `/v1/improvements/requests/${reqId}/adoption`, { as: ADMIN, body: { adoption: 'adopted' } })
+    // 改善対応 → 集約 → タグは人間運用用のためプロンプトに含めない（改修依頼 2026-08-19）。本文自体は出る
+    await toPlanned(reqId)
     await api('POST', '/v1/improvements/generate', { as: ADMIN })
     const prompt = (await api('POST', '/v1/improvements/prompt', { as: ADMIN, body: { filter: 'open' } })).json.data as { prompt: string }
     expect(prompt.prompt).toContain('タグテスト用の要望')
     expect(prompt.prompt).not.toContain('〔お任せ〕')
     expect(prompt.prompt).not.toContain('タグの読み方')
 
-    // 集約の解除（F-42-19）: 改修単位から外れ「採用済み（集約待ち）」へ戻る = 再度 AI 集約の対象
-    type Row = { id: string; itemId: string | null; adoption: string }
-    const before = (await api('GET', '/v1/improvements/requests', { as: ADMIN })).json.data as Row[]
+    // 集約の解除（F-42-19）: 改修案件から外れ「改善対応（集約待ち）」へ戻る = 再度 AI 集約の対象
+    const before = (await api('GET', '/v1/improvements/requests', { as: ADMIN })).json.data as ReqRow2[]
     const itemId = before.find(r => r.id === reqId)!.itemId!
     // 一般（管理権限なし）は 403
     expect((await api('POST', `/v1/improvements/requests/${reqId}/uncluster`, { as: MEMBER })).status).toBe(403)
     const un = await api('POST', `/v1/improvements/requests/${reqId}/uncluster`, { as: ADMIN })
     expect(un.status).toBe(200)
-    // excludedItemIds へ元 item を追記（解除の履歴 = 次回以降の集約でそこへは再追記しない）
-    expect(un.json.data as Record<string, unknown>).toMatchObject({ itemId: null, adoption: 'adopted', excludedItemIds: [itemId] })
+    // status='planned'（改善対応）へ明示的に戻し、excludedItemIds へ元 item を追記（解除の履歴 = 再追記しない）
+    expect(un.json.data as Record<string, unknown>).toMatchObject({ itemId: null, status: 'planned', excludedItemIds: [itemId] })
     // 未集約の要望への再解除は AKO-REQ-017（409）・存在しない要望は 404
     const again = await api('POST', `/v1/improvements/requests/${reqId}/uncluster`, { as: ADMIN })
     expect(again.status).toBe(409)
@@ -7154,35 +7352,34 @@ describe('改善要望（F-42）', () => {
     expect(notes.some(n => n.body.includes('【集約の解除】') && n.body.includes('実装対象に含めないこと'))).toBe(true)
     const promptAfter = (await api('POST', '/v1/improvements/prompt', { as: ADMIN, body: { filter: 'open' } })).json.data as { prompt: string }
     expect(promptAfter.prompt).toContain('【集約の解除】')
-    // 解除後は再度 AI 集約の対象になるが、**解除した元 item へは戻らず新しい改修単位が作られる**
+    // 解除後は再度 AI 集約の対象になるが、**解除した元 item へは戻らず新しい改修案件が作られる**
     // （同じ単位への往復 + detail 重複の防止 = レビュー指摘 2026-08-18。解除履歴は蓄積 = 集約後もクリアしない）
     await api('POST', '/v1/improvements/generate', { as: ADMIN })
-    const relisted = (await api('GET', '/v1/improvements/requests', { as: ADMIN })).json.data as (Row & { excludedItemIds: string[] })[]
+    const relisted = (await api('GET', '/v1/improvements/requests', { as: ADMIN })).json.data as (ReqRow2 & { excludedItemIds: string[] })[]
     const reclustered = relisted.find(r => r.id === reqId)!
     expect(reclustered.itemId).not.toBeNull()
     expect(reclustered.itemId).not.toBe(itemId)
     expect(reclustered.excludedItemIds).toContain(itemId) // 解除の履歴は蓄積（クリアしない = 過去の単位へ戻らない）
-    // 取消済みは解除不可（AKO-REQ-018）・選別変更も不可（AKO-REQ-019 = 先に復元）
+    // 取消済みは解除不可（AKO-REQ-018 = 先に復元）
     await api('POST', `/v1/improvements/requests/${reqId}/archive`, { as: MEMBER })
     const archivedRes = await api('POST', `/v1/improvements/requests/${reqId}/uncluster`, { as: ADMIN })
     expect(archivedRes.status).toBe(409)
     expect(archivedRes.json.error?.code).toBe('AKO-REQ-018')
     await api('POST', `/v1/improvements/requests/${reqId}/restore`, { as: MEMBER })
 
-    // 決着済み（resolved）の改修単位からは解除できない（AKO-REQ-021 = 記録保護・先に reopen。レビュー R18）
+    // 対応済（決着）の改修案件からは解除できない（AKO-REQ-021 = 記録保護・先にステータスを戻す。レビュー R18）
     const newItemId = reclustered.itemId!
-    await api('POST', `/v1/improvements/items/${newItemId}/status`, { as: ADMIN, body: { status: 'accepted' } })
-    await api('POST', `/v1/improvements/items/${newItemId}/status`, { as: ADMIN, body: { status: 'resolved' } })
+    await api('POST', `/v1/improvements/items/${newItemId}/status`, { as: ADMIN, body: { status: 'done' } })
     const decidedRes = await api('POST', `/v1/improvements/requests/${reqId}/uncluster`, { as: ADMIN })
     expect(decidedRes.status).toBe(409)
     expect(decidedRes.json.error?.code).toBe('AKO-REQ-021')
-    // reopen（resolved → accepted）すれば解除できる（導線は残る = 原則9.5）
-    await api('POST', `/v1/improvements/items/${newItemId}/status`, { as: ADMIN, body: { status: 'accepted' } })
+    // reopen（done → in_progress）すれば解除できる（導線は残る = 原則9.5）
+    await api('POST', `/v1/improvements/items/${newItemId}/status`, { as: ADMIN, body: { status: 'in_progress' } })
     expect((await api('POST', `/v1/improvements/requests/${reqId}/uncluster`, { as: ADMIN })).status).toBe(200)
 
-    // 取消済みの改修単位からも解除できない（AKO-REQ-022 = 先に item を復元。レビュー R24）
+    // 取消済みの改修案件からも解除できない（AKO-REQ-022 = 先に item を復元。レビュー R24）
     await api('POST', '/v1/improvements/generate', { as: ADMIN }) // 解除済み要望を再集約（除外により新規 item）
-    const relisted3 = (await api('GET', '/v1/improvements/requests', { as: ADMIN })).json.data as Row[]
+    const relisted3 = (await api('GET', '/v1/improvements/requests', { as: ADMIN })).json.data as ReqRow2[]
     const zId = relisted3.find(r => r.id === reqId)!.itemId!
     await api('POST', `/v1/improvements/items/${zId}/archive`, { as: ADMIN })
     const archivedItemRes = await api('POST', `/v1/improvements/requests/${reqId}/uncluster`, { as: ADMIN })
@@ -7192,18 +7389,18 @@ describe('改善要望（F-42）', () => {
     expect((await api('POST', `/v1/improvements/requests/${reqId}/uncluster`, { as: ADMIN })).status).toBe(200)
   })
 
-  it('取消済みの要望は選別を変更できない（AKO-REQ-019。一括選別の古い選択が取消直後の行を書き換えない = 2026-08-18）', async () => {
+  it('取消済みの要望はステータスを変更できない（AKO-REQ-019。一括変更の古い選択が取消直後の行を書き換えない = 2026-08-18）', async () => {
     const posted = await api('POST', '/v1/improvements/requests', {
-      as: MEMBER, body: { body: '取消済み選別ガードのテスト', pagePath: '/archived-adoption-test', pageLabel: '取消選別テスト' },
+      as: MEMBER, body: { body: '取消済みガードのテスト', pagePath: '/archived-status-test', pageLabel: '取消ガードテスト' },
     })
     const reqId = (posted.json.data as { id: string }).id
     await api('POST', `/v1/improvements/requests/${reqId}/archive`, { as: MEMBER })
-    const res = await api('POST', `/v1/improvements/requests/${reqId}/adoption`, { as: ADMIN, body: { adoption: 'adopted' } })
+    const res = await setInbox(reqId, 'reviewing')
     expect(res.status).toBe(409)
     expect(res.json.error?.code).toBe('AKO-REQ-019')
-    // 復元すれば選別できる（取消フロー = 原則9.5）
+    // 復元すれば変更できる（取消フロー = 原則9.5）
     await api('POST', `/v1/improvements/requests/${reqId}/restore`, { as: MEMBER })
-    expect((await api('POST', `/v1/improvements/requests/${reqId}/adoption`, { as: ADMIN, body: { adoption: 'declined' } })).status).toBe(200)
+    expect((await setInbox(reqId, 'reviewing')).status).toBe(200)
   })
 
   it('生要望へのコメント: 追加・一覧・権限・取消/復元（0063・2026-08-17 第 2 弾）', async () => {
@@ -7220,7 +7417,7 @@ describe('改善要望（F-42）', () => {
     expect((mine.json.data as Comment).createdAt).toMatch(/\+09:00$/) // JST ウォールクロック
     // 管理権限者もコメント可
     expect((await api('POST', `/v1/improvements/requests/${reqId}/comments`, {
-      as: ADMIN, body: { body: '承知しました。採用の方向で検討します' },
+      as: ADMIN, body: { body: '承知しました。改善対応の方向で検討します' },
     })).status).toBe(201)
     // 本人でも管理でもない人は 403・空本文は AKO-REQ-014・存在しない要望は 404
     expect((await api('POST', `/v1/improvements/requests/${reqId}/comments`, { as: HR, body: { body: 'x' } })).status).toBe(403)
@@ -7230,7 +7427,7 @@ describe('改善要望（F-42）', () => {
     // 一覧は管理のみ（403 = deny-by-default）。時系列（古い順）で返る
     expect((await api('GET', '/v1/improvements/request-comments', { as: MEMBER })).status).toBe(403)
     const listed = (await api('GET', `/v1/improvements/request-comments?requestId=${reqId}`, { as: ADMIN })).json.data as Comment[]
-    expect(listed.map(cm => cm.body)).toEqual(['補足: 対象は一覧画面だけで OK です', '承知しました。採用の方向で検討します'])
+    expect(listed.map(cm => cm.body)).toEqual(['補足: 対象は一覧画面だけで OK です', '承知しました。改善対応の方向で検討します'])
     // 取消（記入者本人）→ 既定一覧から消える → includeArchived=1 では見える → 復元で戻る（原則9.5）
     const target = listed[0]!
     expect((await api('POST', `/v1/improvements/request-comments/${target.id}/archive`, { as: MEMBER })).status).toBe(200)
@@ -7278,13 +7475,11 @@ describe('改善要望（F-42）', () => {
 
   it('改修単位の時系列メモ: 追加・一覧・reject 理由・プロンプト加味・取消/復元・権限（0059）', async () => {
     interface Note { id: string; body: string; kind: string; createdAt: string }
-    // 集約して改修単位を 1 つ用意（採用 → 集約。ユニークなページ = 新規 item になる）
+    // 集約して改修単位を 1 つ用意（改善対応 → 集約。ユニークなページ = 新規 item になる）
     const memoReq = await api('POST', '/v1/improvements/requests', {
       as: MEMBER, body: { body: 'メモ機能テスト用の要望', pagePath: '/memo-test', pageLabel: 'メモテスト' },
     })
-    await api('POST', `/v1/improvements/requests/${(memoReq.json.data as { id: string }).id}/adoption`, {
-      as: ADMIN, body: { adoption: 'adopted' },
-    })
+    await toPlanned((memoReq.json.data as { id: string }).id)
     await api('POST', '/v1/improvements/generate', { as: ADMIN })
     const items = (await api('GET', '/v1/improvements/items', { as: ADMIN })).json.data as Item[]
     const id = items.find(it => it.pagePaths.includes('/memo-test'))!.id
@@ -7305,9 +7500,8 @@ describe('改善要望（F-42）', () => {
     const notes = (await api('GET', `/v1/improvements/notes?itemId=${id}`, { as: ADMIN })).json.data as Note[]
     expect(notes.map(n => n.kind)).toEqual(['note', 'reject'])
 
-    // プロンプトにメモが加味される（対象を未解決にして filter=open）
-    await api('POST', `/v1/improvements/items/${id}/status`, { as: ADMIN, body: { status: 'accepted' } })
-    const prompt = (await api('POST', '/v1/improvements/prompt', { as: ADMIN, body: { filter: 'open' } })).json.data as { prompt: string }
+    // プロンプトにメモが加味される（AI 集約直後 = 未対応のため既定フィルタの対象）
+    const prompt = (await api('POST', '/v1/improvements/prompt', { as: ADMIN, body: {} })).json.data as { prompt: string }
     expect(prompt.prompt).toContain('担当者メモ')
     expect(prompt.prompt).toContain('既存部品を流用する方針')
     expect(prompt.prompt).toContain('［対応しない理由］ 影響大のため見送り')
@@ -7764,11 +7958,12 @@ describe('権限設定の拡張（改修依頼 2026-08-18: 項目の更新権限
   })
 })
 
-describe('改修プロンプト出力の既定（改修依頼 2026-08-18: filter 省略 = 「対応する」のみ）', () => {
-  it('filter 省略で accepted のみ出力・未判定/対応中は含めない。冒頭はナビゲーター定型文', async () => {
+describe('改修プロンプト出力の既定（改修依頼 2026-08-21: filter 省略 = 「未対応」のみ）', () => {
+  it('filter 省略で未対応のみ出力・対応中は含めない。旧語彙 triage/accepted も未対応として含む（原則7）', async () => {
     await pool.query(
       `INSERT INTO improvement_items (id, title, status, page_paths, source_request_ids)
        VALUES
+         ('imp-t-todo', 'プロンプト既定検証Todo',     'todo',        '["/x"]'::jsonb, '[]'::jsonb),
          ('imp-t-acc',  'プロンプト既定検証Accepted', 'accepted',    '["/x"]'::jsonb, '[]'::jsonb),
          ('imp-t-tri',  'プロンプト既定検証Triage',   'triage',      '["/x"]'::jsonb, '[]'::jsonb),
          ('imp-t-prog', 'プロンプト既定検証Progress', 'in_progress', '["/x"]'::jsonb, '[]'::jsonb)
@@ -7778,142 +7973,79 @@ describe('改修プロンプト出力の既定（改修依頼 2026-08-18: filter
       expect(res.status).toBe(200)
       const { prompt } = res.json.data as { prompt: string; count: number }
       expect(prompt.startsWith('あなたはナビゲーターです。')).toBe(true)
-      expect(prompt).toContain('プロンプト既定検証Accepted')
-      expect(prompt).not.toContain('プロンプト既定検証Triage')
+      expect(prompt).toContain('プロンプト既定検証Todo')
+      expect(prompt).toContain('プロンプト既定検証Accepted') // 旧保存値は 3 状態視点へ正規化して判定
+      expect(prompt).toContain('プロンプト既定検証Triage')
       expect(prompt).not.toContain('プロンプト既定検証Progress')
-      // filter 指定は下位互換で受理（open = 未判定・対応する・対応中）
+      // filter 指定は下位互換で受理（open = 未完了 = 未対応 + 対応中）
       const open = await api('POST', '/v1/improvements/prompt', { as: ADMIN, body: { filter: 'open' } })
       const openPrompt = (open.json.data as { prompt: string }).prompt
-      expect(openPrompt).toContain('プロンプト既定検証Triage')
+      expect(openPrompt).toContain('プロンプト既定検証Todo')
       expect(openPrompt).toContain('プロンプト既定検証Progress')
     } finally {
-      await pool.query(`DELETE FROM improvement_items WHERE id IN ('imp-t-acc', 'imp-t-tri', 'imp-t-prog')`)
+      await pool.query(`DELETE FROM improvement_items WHERE id IN ('imp-t-todo', 'imp-t-acc', 'imp-t-tri', 'imp-t-prog')`)
     }
   })
 })
 
-describe('対応方針ステータス（運用対応/継続検討 = 改修依頼 2026-08-20・0073）', () => {
-  interface ItemRow { id: string; status: string; revisitOn: string | null }
-
-  it('継続検討は再検討日必須（AKO-REQ-023）・遷移/リスケジュール/運用対応の状態機械', async () => {
+describe('対応方針ステータスの移管（item → 受付箱 = 改修依頼 2026-08-21・原則7）', () => {
+  it('改修案件の status へ旧語彙（operational/deferred 等）は投入できない（AKO-REQ-005 = 受付箱側の状態機械へ移管）', async () => {
     await pool.query(
       `INSERT INTO improvement_items (id, title, status, page_paths, source_request_ids)
-       VALUES ('imp-t-defer', '対応方針検証Defer', 'triage', '["/x"]'::jsonb, '[]'::jsonb)
+       VALUES ('imp-t-mig', '移管検証', 'todo', '["/x"]'::jsonb, '[]'::jsonb)
        ON CONFLICT (id) DO NOTHING`)
     try {
-      // 再検討日なしの deferred は 400（AKO-REQ-023）・不正な日付も 400
-      const noDate = await api('POST', '/v1/improvements/items/imp-t-defer/status', { as: ADMIN, body: { status: 'deferred' } })
-      expect(noDate.status).toBe(400)
-      expect(noDate.json.error?.code).toBe('AKO-REQ-023')
-      expect((await api('POST', '/v1/improvements/items/imp-t-defer/status', {
-        as: ADMIN, body: { status: 'deferred', revisitOn: '2026-02-30' },
-      })).json.error?.code).toBe('AKO-REQ-023')
-      // 再検討日つきの deferred は成功し revisitOn が往復する
-      const deferred = await api('POST', '/v1/improvements/items/imp-t-defer/status', {
-        as: ADMIN, body: { status: 'deferred', revisitOn: '2026-09-01' },
-      })
-      expect(deferred.status).toBe(200)
-      expect((deferred.json.data as ItemRow)).toMatchObject({ status: 'deferred', revisitOn: '2026-09-01' })
-      // 一覧 GET にも revisitOn が載る
-      const listed = (await api('GET', '/v1/improvements/items', { as: ADMIN })).json.data as ItemRow[]
-      expect(listed.find(r => r.id === 'imp-t-defer')?.revisitOn).toBe('2026-09-01')
-      // deferred → deferred は再検討日の変更（リスケジュール）として受理する（原則9.5）
-      const resched = await api('POST', '/v1/improvements/items/imp-t-defer/status', {
-        as: ADMIN, body: { status: 'deferred', revisitOn: '2026-10-01' },
-      })
-      expect((resched.json.data as ItemRow).revisitOn).toBe('2026-10-01')
-      // 運用対応は運用案内コメント必須（AKO-REQ-024 = 改善要望 2026-08-21）・上限超過は AKO-REQ-008
-      // （黙って切り詰めない = 記録と通知の本文乖離を作らない。上限は接頭辞「運用案内: 」込みで
-      // メモ上限に収まる実効値 1994 字 = メッセージとも一致。R2 監査 + R3 レビュー）
-      expect((await api('POST', '/v1/improvements/items/imp-t-defer/status', { as: ADMIN, body: { status: 'operational' } })).json.error?.code)
-        .toBe('AKO-REQ-024')
-      const overCap = await api('POST', '/v1/improvements/items/imp-t-defer/status', {
-        as: ADMIN, body: { status: 'operational', note: 'あ'.repeat(1995) }, // 素の 2000 字以内でも接頭辞込みで超過
-      })
-      expect(overCap.json.error?.code).toBe('AKO-REQ-008')
-      expect(overCap.json.error?.message).toContain('1994')
-      // 継続検討 → 運用対応（結論）は可・deferred 以外への遷移でも revisit_on は保持（履歴保全 = クリアしない）
-      const toOps = await api('POST', '/v1/improvements/items/imp-t-defer/status', {
-        as: ADMIN, body: { status: 'operational', note: '設定画面から手動で変更できます' },
-      })
-      expect((toOps.json.data as ItemRow)).toMatchObject({ status: 'operational', revisitOn: '2026-10-01' })
-      // 運用案内はメモ（時系列・kind=note）へ「運用案内: 」接頭辞つきで同一 Tx 記録される
-      const opsNotes = (await api('GET', '/v1/improvements/notes?itemId=imp-t-defer', { as: ADMIN })).json.data as { body: string }[]
-      expect(opsNotes.some(n => n.body === '運用案内: 設定画面から手動で変更できます')).toBe(true)
-      // 運用対応 → 解決済み は不可（AKO-REQ-006）・運用対応 → 改善対応（見直し）は可
-      expect((await api('POST', '/v1/improvements/items/imp-t-defer/status', { as: ADMIN, body: { status: 'resolved' } })).json.error?.code)
-        .toBe('AKO-REQ-006')
-      expect((await api('POST', '/v1/improvements/items/imp-t-defer/status', { as: ADMIN, body: { status: 'accepted' } })).status).toBe(200)
+      for (const status of ['operational', 'deferred', 'resolved', 'rejected', 'triage']) {
+        const res = await api('POST', '/v1/improvements/items/imp-t-mig/status', { as: ADMIN, body: { status } })
+        expect(res.status).toBe(400)
+        expect(res.json.error?.code).toBe('AKO-REQ-005')
+      }
     } finally {
-      await pool.query(`DELETE FROM improvement_notes WHERE item_id = 'imp-t-defer'`)
-      await pool.query(`DELETE FROM improvement_items WHERE id = 'imp-t-defer'`)
+      await pool.query(`DELETE FROM improvement_items WHERE id = 'imp-t-mig'`)
     }
   })
 
-  it('運用対応への変更は起票者へ運用案内を全文通知し、同一ステータスの再送では再通知もメモ追記もしない（R2 = 原則2）', async () => {
-    // 起票者（MEMBER）の要望を改修単位へ紐づけ → operational 遷移で通知・メモが 1 回だけ作られること
-    const req = await api('POST', '/v1/improvements/requests', {
-      as: MEMBER, body: { body: '要望：運用案内の通知テスト', pagePath: '/reports' },
-    })
-    const opsReqId = (req.json.data as { id: string }).id
-    await pool.query(
-      `INSERT INTO improvement_items (id, title, status, page_paths, source_request_ids)
-       VALUES ('imp-t-ops', '運用案内通知検証', 'triage', '["/x"]'::jsonb, '[]'::jsonb)`)
-    await pool.query(`UPDATE improvement_requests SET item_id = 'imp-t-ops' WHERE id = $1`, [opsReqId])
-    const opsNotices = async () =>
-      ((await api('GET', '/v1/notifications', { as: MEMBER })).json.data as { kind: string; title: string; body: string }[])
-        .filter(n => n.kind === 'system' && n.title === '改善要望が「運用対応」になりました')
-    try {
-      const before = (await opsNotices()).length
-      expect((await api('POST', '/v1/improvements/items/imp-t-ops/status', {
-        as: ADMIN, body: { status: 'operational', note: '設定画面から変更できます' },
-      })).status).toBe(200)
-      const after = await opsNotices()
-      expect(after.length).toBe(before + 1)
-      expect(after[after.length - 1]!.body).toBe('運用案内: 設定画面から変更できます') // 通知本文 = メモ本文（全文）
-      // 同一ステータスの再送（クライアントの二重送信・リトライ）は 200 だが再通知もメモ追記もしない
-      expect((await api('POST', '/v1/improvements/items/imp-t-ops/status', {
-        as: ADMIN, body: { status: 'operational', note: '再送されるべきでない案内' },
-      })).status).toBe(200)
-      expect((await opsNotices()).length).toBe(before + 1)
-      const notes = await pool.query(`SELECT body FROM improvement_notes WHERE item_id = 'imp-t-ops'`)
-      expect(notes.rows.length).toBe(1)
-    } finally {
-      await pool.query(`DELETE FROM improvement_notes WHERE item_id = 'imp-t-ops'`)
-      await pool.query(`UPDATE improvement_requests SET item_id = NULL, archived_at = now() WHERE id = $1`, [opsReqId])
-      await pool.query(`DELETE FROM improvement_items WHERE id = 'imp-t-ops'`)
-    }
-  })
-
-  it('runImprovementRevisitReminders: 再検討日到来で管理者へ reminder 通知・多重通知しない（revisit_notified_on）', async () => {
+  it('runImprovementRevisitReminders: 再検討日到来で管理者へ通知・冪等・リスケで再通知（受付箱 + 旧 deferred 案件の両方）', async () => {
     const { runImprovementRevisitReminders } = await import('../../src/routes/improvements')
+    // 受付箱: 継続検討の要望（今日が再検討日）
+    const created = await api('POST', '/v1/improvements/requests', {
+      as: MEMBER, body: { body: '要望：リマインド検証（受付箱）', pagePath: '/reports' },
+    })
+    const remReqId = (created.json.data as { id: string }).id
+    await api('POST', `/v1/improvements/requests/${remReqId}/status`, { as: ADMIN, body: { status: 'reviewing' } })
+    expect((await api('POST', `/v1/improvements/requests/${remReqId}/status`, {
+      as: ADMIN, body: { status: 'deferred', revisitOn: todayJst() },
+    })).status).toBe(200)
+    // 旧データ: deferred のまま残る改修単位（API からは作れない旧状態を SQL で再現 = 原則7 の期日保証）
     await pool.query(
       `INSERT INTO improvement_items (id, title, status, page_paths, source_request_ids, revisit_on)
-       VALUES ('imp-t-remind', 'リマインド検証', 'deferred', '["/x"]'::jsonb, '[]'::jsonb, (now() AT TIME ZONE 'Asia/Tokyo')::date)
+       VALUES ('imp-t-remind', 'リマインド検証（旧）', 'deferred', '["/x"]'::jsonb, '[]'::jsonb, (now() AT TIME ZONE 'Asia/Tokyo')::date)
        ON CONFLICT (id) DO NOTHING`)
     try {
-      const countReminders = async (): Promise<number> => {
+      const countBy = async (needle: string): Promise<number> => {
         const notes = (await api('GET', '/v1/notifications', { as: ADMIN })).json.data as { kind: string; title: string; link: string }[]
-        return notes.filter(n => n.kind === 'reminder' && n.title === '継続検討の再検討日です' && n.link.includes('imp-t-remind')).length
+        return notes.filter(n => n.kind === 'reminder' && n.title === '継続検討の再検討日です' && n.link.includes(needle)).length
       }
-      const before = await countReminders()
+      const beforeReq = await countBy(remReqId)
+      const beforeItem = await countBy('imp-t-remind')
       const first = await runImprovementRevisitReminders(pool)
-      expect(first.notified).toBeGreaterThanOrEqual(1)
-      const afterFirst = await countReminders()
-      expect(afterFirst).toBe(before + 1) // 管理者へ 1 通・link は改修案件タブ + 対象ディープリンク
+      expect(first.notified).toBeGreaterThanOrEqual(2)
+      expect(await countBy(remReqId)).toBe(beforeReq + 1) // 受付箱: /improvements?req= ディープリンク
+      expect(await countBy('imp-t-remind')).toBe(beforeItem + 1) // 旧案件: 改修案件タブへのリンク
       // 再実行は冪等（revisit_notified_on マーカーで同じ再検討日には再通知しない = 原則2）
       await runImprovementRevisitReminders(pool)
-      expect(await countReminders()).toBe(afterFirst)
-      // deferred へ再遷移して期日を更新するとマーカーがリセットされ、新しい期日で再通知される
-      await api('POST', '/v1/improvements/items/imp-t-remind/status', { as: ADMIN, body: { status: 'accepted' } })
-      await api('POST', '/v1/improvements/items/imp-t-remind/status', {
+      expect(await countBy(remReqId)).toBe(beforeReq + 1)
+      expect(await countBy('imp-t-remind')).toBe(beforeItem + 1)
+      // 受付箱のリスケジュール（deferred → deferred の期日変更）でマーカーがリセットされ、新期日で再通知
+      await api('POST', `/v1/improvements/requests/${remReqId}/status`, {
         as: ADMIN, body: { status: 'deferred', revisitOn: todayJst() },
       })
       await runImprovementRevisitReminders(pool)
-      expect(await countReminders()).toBe(afterFirst + 1)
+      expect(await countBy(remReqId)).toBe(beforeReq + 2)
     } finally {
       await pool.query(`DELETE FROM improvement_items WHERE id = 'imp-t-remind'`)
-      await pool.query(`DELETE FROM notifications WHERE link LIKE '%imp-t-remind%'`)
+      await pool.query(`DELETE FROM notifications WHERE link LIKE '%imp-t-remind%' OR link LIKE $1`, [`%${remReqId}%`])
+      await api('POST', `/v1/improvements/requests/${remReqId}/archive`, { as: MEMBER })
     }
   })
 })
@@ -8526,47 +8658,6 @@ describe('0078: 週報・月報権限ルールの旧 reports キーからの移�
 // ---------- 改善要望: 起票者本人の解決フラグ（改善要望 2026-08-21） ----------
 // 「運用対応」の案内を確認した起票者が自分の要望を「解決済み」へ移し、「未対応」へ戻せる（原則9.5）。
 // dismissed（見送り）の付与・他人の要望の変更は従来どおり管理権限者のみ
-describe('改善要望: 要望ステータスの本人操作（resolved ⇄ open）', () => {
-  let reqId = ''
-
-  it('起票者本人は自分の要望を resolved にでき、open へ戻せる', async () => {
-    const created = await api('POST', '/v1/improvements/requests', {
-      as: MEMBER, body: { body: '要望：本人解決フローのテスト', pagePath: '/reports' },
-    })
-    expect(created.status).toBe(201)
-    reqId = (created.json.data as { id: string }).id
-
-    const resolved = await api('POST', `/v1/improvements/requests/${reqId}/status`, {
-      as: MEMBER, body: { status: 'resolved' },
-    })
-    expect(resolved.status).toBe(200)
-    expect((resolved.json.data as { status: string }).status).toBe('resolved')
-
-    const reopened = await api('POST', `/v1/improvements/requests/${reqId}/status`, {
-      as: MEMBER, body: { status: 'open' },
-    })
-    expect(reopened.status).toBe(200)
-    expect((reopened.json.data as { status: string }).status).toBe('open')
-  })
-
-  it('本人でも dismissed へは変更できず、他人（非管理者）の要望も変更できない', async () => {
-    const dismissed = await api('POST', `/v1/improvements/requests/${reqId}/status`, {
-      as: MEMBER, body: { status: 'dismissed' },
-    })
-    expect(dismissed.status).toBe(403)
-    expect(dismissed.json.error?.code).toBe('AKO-PRM-001')
-
-    // HR（非管理者・非本人）は 403。管理者は従来どおり任意に変更できる
-    const byOther = await api('POST', `/v1/improvements/requests/${reqId}/status`, {
-      as: HR, body: { status: 'resolved' },
-    })
-    expect(byOther.status).toBe(403)
-    const byAdmin = await api('POST', `/v1/improvements/requests/${reqId}/status`, {
-      as: ADMIN, body: { status: 'dismissed' },
-    })
-    expect(byAdmin.status).toBe(200)
-    // 後片付け（open へ戻して取消）
-    await api('POST', `/v1/improvements/requests/${reqId}/status`, { as: ADMIN, body: { status: 'open' } })
-    await api('POST', `/v1/improvements/requests/${reqId}/archive`, { as: MEMBER })
-  })
-})
+// 「要望ステータスの本人操作（resolved ⇄ open）」の旧テストは、改修依頼 2026-08-21 の
+// 解決フロー再編（/requests/:id/resolve = resolvedAt オーバーレイ）へ移行済み。
+// 新モデルの本人解決/取消・第三者 403 は「改善要望（F-42 → ステータス管理の再編）」の describe が担う。

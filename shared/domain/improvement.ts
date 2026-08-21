@@ -1,198 +1,371 @@
 /**
  * 改善要望（F-42）のドメイン純関数（フロント/API 共有 = パリティの SoT）。
  *
- * 概要（オペレーター指示 2026-08-11）:
- * - 各ページから改善・改修の要望を記録する（investRequest = 追記系。SoT）。
- * - 要望は AI が「改修単位（ImprovementItem）」へ集約する（既存要望も含めて分解・まとめ）。
- *   AI は Vertex AI（api/src/lib/llm）を一次に使い、失敗時は本モジュールの決定的
+ * 概要（オペレーター指示 2026-08-11 → ステータス管理の再編 = 改修依頼 2026-08-21）:
+ * - 各ページから改善・改修の要望を記録する（improvement_requests = 追記系。SoT）。
+ * - **受付箱（生要望）のステータス**が一次のライフサイクルを持つ:
+ *   未確認（初期）→ 検討中 →（改善対応 / 運用対応 / 継続検討 / 対応見送り）。
+ *   「改善対応」の要望のみが AI 集約の対象になり、集約後は改修案件（item）の進捗に連動して
+ *   「対応済み」→（起票者確認 or 手動で）「解決済み」となる。
+ * - **改修案件（改修単位）のステータス**は 未対応 → 対応中（担当者アサイン可）→ 対応済 の 3 状態
+ *   （従来の 7 値語彙は保存値として下位互換で受理し、表示・遷移は 3 状態へ正規化 = 原則7。0073 と同方式）。
+ * - AI は Vertex AI（api/src/lib/llm）を一次に使い、失敗時は本モジュールの決定的
  *   ヒューリスティック（heuristicClusterRequests）へフォールバックする（モックは常にこちら）。
- * - 改修単位は単一ステータス（未判定 → 改善対応/運用対応/継続検討 → 解決済み／対応見送り）で管理し、
- *   解決済/未解決・対応方針でフィルターできる（語彙の再編 = 改修依頼 2026-08-20）。
  * - フィルター結果を、コーディング AI エージェント向けの詳細プロンプト（buildCodingPrompt）へ出力する。
  *
  * データフロー整合性（原則6）:
  * - SoT = improvement_requests（生の要望・追記のみ・巻き戻さない）。
  * - improvement_items は要望から導出する集約キャッシュだが、**人手で付与したステータスは記録系**であり
  *   再集約で巻き戻してはならない（原則2）。このため集約は「未集約の要望のみ」を対象にし、
- *   既存 item は status='triage'（未判定・人手未対応）のものにのみ追記する。判定済み item は不変。
+ *   既存 item は未対応（todo。旧 triage 含む = 着手・決着前）のものにのみ追記する。着手済み item は不変。
+ * - 集約済み要望の「改善対応/対応済み」は**保存せず item から導出**する（improvementInboxStatusOf）。
+ *   同期パスを持たない = 二重管理によるズレを作らない（原則6）。
  */
 
 import { isRealDateKey } from './jst'
 import type { Result } from './types'
 
-// ---------- ステータス（単一ステータスで一元管理。原則: 状態機械で活性と遷移検証を一致させる） ----------
+// ---------- 改修案件（item）のステータス（改修依頼 2026-08-21: 未対応/対応中/対応済 の 3 状態へ再編） ----------
 
 /**
- * 改修単位の状態（改修依頼 2026-08-20: ステータスを「対応方針」の語彙へ再編）。
- * - triage      未判定（AI 集約直後。対応方針を人手で判定する前）
- * - accepted    改善対応（コード改修で対応する・未着手。旧ラベル「対応する」）
- * - in_progress 対応中（着手済み・未解決。改修依頼 2026-08-18 で追加）
- * - operational 運用対応（改修せず運用でカバーする = 決着済み。改修依頼 2026-08-20 で追加）
- * - deferred    継続検討（今は判断せず再検討日を決めて持ち越す = 未解決。改修依頼 2026-08-20 で追加。
- *               deferred への遷移は revisitOn（再検討日）が必須 = improvementRevisitError）
- * - resolved    解決済み（改修完了）
- * - rejected    対応見送り（対応不可・見送り。旧ラベル「対応しない」）
+ * 改修単位（改修案件）の**保存値**。新規の書込は 'todo' | 'in_progress' | 'done' のみを使う。
+ * 旧語彙（triage/accepted/operational/deferred/resolved/rejected = 〜2026-08-20 の対応方針語彙）は
+ * 既存データの保存値として受理し、表示・遷移判定は improvementItemViewOf で 3 状態へ正規化する
+ * （保存値は書き換えない = 原則7。運用対応・継続検討・対応見送りの判断は受付箱ステータスへ移管）。
  */
-export type ImprovementStatus = 'triage' | 'accepted' | 'in_progress' | 'operational' | 'deferred' | 'resolved' | 'rejected'
+export type ImprovementStatus =
+  | 'todo' | 'in_progress' | 'done'
+  | 'triage' | 'accepted' | 'operational' | 'deferred' | 'resolved' | 'rejected'
 
-export const IMPROVEMENT_STATUSES: ImprovementStatus[] = ['triage', 'accepted', 'in_progress', 'operational', 'deferred', 'resolved', 'rejected']
+/** 改修案件の表示・遷移ステータス（3 状態）。実施が決定し AI 集約が完了した案件に適用する */
+export type ImprovementItemView = 'todo' | 'in_progress' | 'done'
 
-/** ステータスの表示メタ（label・トーン・「未解決か」）。ラベルの SoT はここ。tone は UI の Tone 値と対応 */
-export const IMPROVEMENT_STATUS_META: Record<
-  ImprovementStatus,
-  { label: string; tone: 'neutral' | 'info' | 'ok' | 'warn' | 'brand'; open: boolean }
+export const IMPROVEMENT_ITEM_VIEWS: ImprovementItemView[] = ['todo', 'in_progress', 'done']
+
+/** 改修案件ステータスの表示メタ。ラベルの SoT はここ。tone は UI の Tone 値と対応 */
+export const IMPROVEMENT_ITEM_STATUS_META: Record<
+  ImprovementItemView,
+  { label: string; tone: 'neutral' | 'info' | 'ok' | 'warn' | 'brand' }
 > = {
-  triage: { label: '未判定', tone: 'neutral', open: true },
-  accepted: { label: '改善対応', tone: 'info', open: true },
-  in_progress: { label: '対応中', tone: 'brand', open: true },
-  operational: { label: '運用対応', tone: 'ok', open: false },
-  deferred: { label: '継続検討', tone: 'info', open: true },
-  resolved: { label: '解決済み', tone: 'ok', open: false },
-  rejected: { label: '対応見送り', tone: 'warn', open: false },
-}
-
-/** 「未解決」= まだ判断・改修が必要な状態（未判定・改善対応・対応中・継続検討）。運用対応/解決済み/対応見送りは決着済み */
-export function isOpenStatus(status: ImprovementStatus): boolean {
-  return IMPROVEMENT_STATUS_META[status]?.open ?? false
+  todo: { label: '未対応', tone: 'warn' },
+  in_progress: { label: '対応中', tone: 'brand' },
+  done: { label: '対応済', tone: 'ok' },
 }
 
 /**
- * 状態遷移（フロントのボタン活性と API の遷移検証を一致させる）。
- * 取消可能性（原則9.5）: 解決済み → 改善対応（解決の取消 = reopen）、対応見送り → 未判定/改善対応
- * （見送りの撤回）、対応中 → 改善対応（着手の取消 = 差し戻し）、運用対応 → 改善対応（運用判断の見直し）、
- * 継続検討 → 未判定/改善対応/運用対応/対応見送り（再検討の結論）を許可し、
- * 「誤ってどれかの決着にしたら詰む」導線を作らない。
- * 対応中の追加（2026-08-18）: 改善対応 → 対応中 → 解決済み が主経路。従来の 改善対応 → 解決済み の
- * 直行も許可する（着手記録を経ない小さな改修の下位互換 = 原則7）。
- * 運用対応/継続検討の追加（2026-08-20）: 未判定・改善対応・継続検討から選べる対応方針。
+ * 保存値 → 3 状態への正規化（旧語彙の読替え = 原則7）。
+ * - triage（未判定）/ accepted（改善対応 = 実施決定・未着手）/ deferred（継続検討）→ 未対応
+ * - in_progress → 対応中
+ * - resolved（解決済み）/ operational（運用対応で決着）/ rejected（見送りで決着）→ 対応済（決着済み）
+ * 旧 operational/rejected の要望側の見え方は inboxStatusFromItem が個別に写像する（運用対応/対応見送り）。
  */
-export const IMPROVEMENT_STATUS_NEXT: Record<ImprovementStatus, ImprovementStatus[]> = {
-  triage: ['accepted', 'operational', 'deferred', 'rejected'],
-  accepted: ['in_progress', 'deferred', 'resolved', 'rejected', 'triage'],
-  in_progress: ['resolved', 'accepted', 'rejected'],
-  deferred: ['accepted', 'operational', 'rejected', 'triage'],
-  operational: ['accepted'],
-  resolved: ['accepted'],
-  rejected: ['triage', 'accepted'],
+export function improvementItemViewOf(status: ImprovementStatus): ImprovementItemView {
+  if (status === 'in_progress') return 'in_progress'
+  if (status === 'done' || status === 'resolved' || status === 'operational' || status === 'rejected') return 'done'
+  return 'todo'
 }
 
-/** 遷移が許可されているか */
-export function canTransition(from: ImprovementStatus, to: ImprovementStatus): boolean {
-  return (IMPROVEMENT_STATUS_NEXT[from] ?? []).includes(to)
+/** 未決着（対応済でない）か。集約解除の可否・「未完了」フィルタの判定に使う */
+export function isOpenItemStatus(status: ImprovementStatus): boolean {
+  return improvementItemViewOf(status) !== 'done'
 }
 
-// ---------- 一覧フィルター（解決済/未解決 + 対応可否を 1 つの選択で束ねる） ----------
+/**
+ * AI 集約の追記先にできる item か = 未対応（todo。旧 triage/accepted/deferred の読替え含む）。
+ * 着手済み（対応中）・決着済み（対応済）には追記しない = 人手の進捗・記録を汚さない（原則2）。
+ * mock（heuristicClusterRequests / normalizeClusterPlan）と API（generate の SQL・LLM への
+ * openItems 提示）で共有する単一の判定点（原則6）。
+ */
+export function isClusterAppendTarget(status: ImprovementStatus): boolean {
+  return improvementItemViewOf(status) === 'todo'
+}
 
-export type ImprovementFilter = 'all' | 'open' | 'committed' | 'triage' | 'accepted' | 'in_progress' | 'operational' | 'deferred' | 'resolved' | 'rejected'
+/**
+ * 改修案件の状態遷移（3 状態。フロントのボタン活性と API の遷移検証を一致させる）。
+ * 取消可能性（原則9.5）: 対応中 → 未対応（着手の取消）、対応済 → 対応中（reopen）を許可し、
+ * 「誤って決着にしたら詰む」導線を作らない。未対応 → 対応済 の直行も許可する
+ * （着手記録を経ない小さな改修の下位互換 = 旧 accepted → resolved 直行と同じ意図 = 原則7）。
+ */
+export const IMPROVEMENT_ITEM_NEXT: Record<ImprovementItemView, ImprovementItemView[]> = {
+  todo: ['in_progress', 'done'],
+  in_progress: ['done', 'todo'],
+  done: ['in_progress'],
+}
 
-/** フィルターの選択肢（UI と共有。all = すべて / open = 未解決 / committed = 実装決定・未完了 = 改善対応 + 対応中。
- *  個別ステータスのラベルは IMPROVEMENT_STATUS_META（SoT）から引き、語彙のズレを作らない = 原則5） */
+/** 改修案件の遷移が許可されているか（保存値は正規化してから判定する） */
+export function canTransition(from: ImprovementStatus, to: ImprovementItemView): boolean {
+  return (IMPROVEMENT_ITEM_NEXT[improvementItemViewOf(from)] ?? []).includes(to)
+}
+
+// ---------- 一覧フィルター（改修案件。3 状態 + 未完了/すべて） ----------
+
+export type ImprovementFilter = 'all' | 'open' | ImprovementItemView
+
+/** フィルターの選択肢（UI と共有。all = すべて / open = 未完了 = 未対応 + 対応中。
+ *  個別ステータスのラベルは IMPROVEMENT_ITEM_STATUS_META（SoT）から引き、語彙のズレを作らない = 原則5） */
 export const IMPROVEMENT_FILTER_OPTIONS: { value: ImprovementFilter; label: string }[] = [
   { value: 'all', label: 'すべて' },
-  { value: 'open', label: '未解決' },
-  { value: 'committed', label: `${IMPROVEMENT_STATUS_META.accepted.label}・${IMPROVEMENT_STATUS_META.in_progress.label}` },
-  ...IMPROVEMENT_STATUSES.map(s => ({ value: s, label: IMPROVEMENT_STATUS_META[s].label })),
+  { value: 'open', label: '未完了' },
+  ...IMPROVEMENT_ITEM_VIEWS.map(s => ({ value: s, label: IMPROVEMENT_ITEM_STATUS_META[s].label })),
 ]
 
-/** 改修単位がフィルターに一致するか */
+/** 改修単位がフィルターに一致するか（保存値は 3 状態へ正規化して判定 = 旧語彙にも効く） */
 export function matchesImprovementFilter(status: ImprovementStatus, filter: ImprovementFilter): boolean {
   if (filter === 'all') return true
-  if (filter === 'open') return isOpenStatus(status)
-  // committed = 「実装が決まっていて未完了」（対応中の追加 2026-08-18 で accepted 単独から拡張。ガント既定の意図を維持）
-  if (filter === 'committed') return status === 'accepted' || status === 'in_progress'
-  return status === filter
+  if (filter === 'open') return isOpenItemStatus(status)
+  return improvementItemViewOf(status) === filter
 }
 
-// ---------- 継続検討（deferred）の再検討日（改修依頼 2026-08-20） ----------
+// ---------- 型 ----------
+
+// ---------- 受付箱（request）のステータス（改修依頼 2026-08-21: 選別〔採用/不採用〕+ 進捗タグを一本化） ----------
 
 /**
- * 再検討日（revisitOn）の検証。deferred への遷移は再検討日が必須（実在日）。
- * deferred 以外への遷移では revisitOn を要求しない（渡された場合のみ形式検証。保存値は保持 =
- * クリアしない = 履歴保全）。mock（useImprovements.setStatus）と API（POST /items/:id/status）の
- * 双方で使い、判定のパリティを保つ（原則6）。エラーメッセージ | null。
+ * 生要望（受付箱）ステータスの**保存値**。新規の書込は新語彙（unconfirmed〜dismissed）のみを使う。
+ * - unconfirmed 未確認（起票時に自動設定される初期ステータス）
+ * - reviewing   検討中（未確認から手動遷移）
+ * - planned     改善対応（検討中から手動遷移。**AI 集約の対象**）
+ * - operational 運用対応（検討中から手動遷移。遷移時に運用対応方法を起票者へ自動通知）
+ * - deferred    継続検討（検討中から手動遷移。再検討日必須・到来でリマインド通知）
+ * - dismissed   対応見送り（検討中から手動遷移。旧「見送り」進捗タグと同値 = 原則7）
+ * 旧語彙（open = 進捗タグ未対応 / resolved = 起票者の解決フラグ）は既存データの保存値として受理し、
+ * improvementInboxStatusOf が新語彙へ読み替える（保存値は書き換えない = 原則7）。
+ * 「対応済み（addressed）」「解決済み（resolved）」は表示ステータスであり、addressed は保存しない
+ * （集約先 item の進捗から導出 = 原則6）。解決済みは resolvedAt（解決の記録）で表す。
  */
-export function improvementRevisitError(status: ImprovementStatus, revisitOn: string): string | null {
+export type ImprovementRequestStatus =
+  | 'unconfirmed' | 'reviewing' | 'planned' | 'operational' | 'deferred' | 'dismissed'
+  | 'open' | 'resolved'
+
+/** 保存してよい新語彙の基底ステータス（addressed/resolved は保存しない = 導出・記録） */
+export const IMPROVEMENT_INBOX_BASES = ['unconfirmed', 'reviewing', 'planned', 'operational', 'deferred', 'dismissed'] as const
+export type ImprovementInboxBase = (typeof IMPROVEMENT_INBOX_BASES)[number]
+
+/** 受付箱の表示ステータス（基底 + 導出の 対応済み/解決済み）。カンバン列・フィルタ・バッジの軸 */
+export type ImprovementInboxStatus = ImprovementInboxBase | 'addressed' | 'resolved'
+
+export const IMPROVEMENT_INBOX_STATUSES: ImprovementInboxStatus[] = [
+  'unconfirmed', 'reviewing', 'planned', 'operational', 'deferred', 'dismissed', 'addressed', 'resolved',
+]
+
+/** 受付箱ステータスの表示メタ。ラベルの SoT はここ。tone は UI の Tone 値と対応 */
+export const IMPROVEMENT_INBOX_STATUS_META: Record<
+  ImprovementInboxStatus,
+  { label: string; tone: 'neutral' | 'info' | 'ok' | 'warn' | 'brand' }
+> = {
+  unconfirmed: { label: '未確認', tone: 'neutral' },
+  reviewing: { label: '検討中', tone: 'info' },
+  planned: { label: '改善対応', tone: 'brand' },
+  operational: { label: '運用対応', tone: 'ok' },
+  deferred: { label: '継続検討', tone: 'info' },
+  dismissed: { label: '対応見送り', tone: 'warn' },
+  addressed: { label: '対応済み', tone: 'ok' },
+  resolved: { label: '解決済み', tone: 'neutral' },
+}
+
+/**
+ * 受付箱の状態遷移（基底ステータスのみ。管理権限者の操作）。
+ * 取消可能性（原則9.5）: 各決着（改善対応/運用対応/対応見送り）→ 検討中（判断の見直し）、
+ * 検討中 → 未確認（差し戻し）を許可し、「誤操作したら詰む」導線を作らない。
+ * 継続検討 → 継続検討（再検討日の変更 = リスケジュール）は遷移検証側で個別に許可する。
+ * 改善対応（planned）は未集約の間だけ戻せる（集約済みは「集約の解除」= uncluster が先 = 記録保護）。
+ * 解決済み（resolvedAt）は別の記録系操作（resolve/unresolve）で扱い、この機械には含めない。
+ */
+export const IMPROVEMENT_INBOX_NEXT: Record<ImprovementInboxBase, ImprovementInboxBase[]> = {
+  unconfirmed: ['reviewing'],
+  reviewing: ['planned', 'operational', 'deferred', 'dismissed', 'unconfirmed'],
+  planned: ['reviewing'],
+  operational: ['reviewing'],
+  deferred: ['reviewing', 'planned', 'operational', 'dismissed'],
+  dismissed: ['reviewing'],
+}
+
+/** 受付箱の一覧・カンバン・ガント共通のステータス絞り込み（all + 表示ステータス。UI と共有 = 原則3/5） */
+export type ImprovementInboxFilter = 'all' | ImprovementInboxStatus
+
+export const IMPROVEMENT_INBOX_FILTER_OPTIONS: { value: ImprovementInboxFilter; label: string }[] = [
+  { value: 'all', label: 'すべて' },
+  ...IMPROVEMENT_INBOX_STATUSES.map(s => ({ value: s, label: IMPROVEMENT_INBOX_STATUS_META[s].label })),
+]
+
+/** 要望（表示ステータス解決済み）が受付箱フィルタに一致するか */
+export function matchesInboxFilter(status: ImprovementInboxStatus, filter: ImprovementInboxFilter): boolean {
+  return filter === 'all' || status === filter
+}
+
+/** 受付箱の遷移が許可されているか（deferred → deferred は再検討日の変更として許可） */
+export function canInboxTransition(from: ImprovementInboxStatus, to: ImprovementInboxBase): boolean {
+  if (from === 'deferred' && to === 'deferred') return true
+  return ((IMPROVEMENT_INBOX_NEXT as Record<string, ImprovementInboxBase[]>)[from] ?? []).includes(to)
+}
+
+/**
+ * 集約先 item の保存ステータス → 要望の表示ステータス（連動 = 導出。原則6）。
+ * - done/resolved（対応済・解決済み）→ 対応済み（addressed。起票者確認 → 解決済みへ）
+ * - 旧 operational / deferred / rejected（item 側で決着していた旧データ）→ 対応する受付箱語彙へ読替え（原則7）
+ * - それ以外（todo/in_progress/triage/accepted）→ 改善対応（改修案件として進行中）
+ */
+export function inboxStatusFromItem(itemStatus: ImprovementStatus): ImprovementInboxStatus {
+  if (itemStatus === 'done' || itemStatus === 'resolved') return 'addressed'
+  if (itemStatus === 'operational') return 'operational'
+  if (itemStatus === 'deferred') return 'deferred'
+  if (itemStatus === 'rejected') return 'dismissed'
+  return 'planned'
+}
+
+// ---------- 旧・選別（採用/不採用）の読替え（〜2026-08-20 のデータ互換。原則7） ----------
+
+/** 旧・選別状態（保存値の互換のためだけに残す型。新規の書込は行わない） */
+export type ImprovementRequestAdoption = 'pending' | 'adopted' | 'declined'
+
+/**
+ * 旧データの選別状態の解決（下位互換 = 原則7）。adoption 未定義は、
+ * 集約済み（itemId あり）= 採用相当 / 未集約 = 未選別 として扱う。
+ * improvementInboxStatusOf が旧 status（open）+ 選別状態を新語彙へ写像するために使う。
+ */
+export function requestAdoptionOf(r: { adoption?: ImprovementRequestAdoption | null; itemId?: string | null }): ImprovementRequestAdoption {
+  if (r.adoption === 'pending' || r.adoption === 'adopted' || r.adoption === 'declined') return r.adoption
+  return r.itemId ? 'adopted' : 'pending'
+}
+
+/** improvementInboxStatusOf に渡す構造的最小型（mock 行・DB 行・API 応答行のどれでも渡せる） */
+export interface InboxStatusInput {
+  status?: ImprovementRequestStatus | null
+  adoption?: ImprovementRequestAdoption | null
+  itemId?: string | null
+  /** 解決済みにした時刻（新語彙の解決記録）。null/未定義 = 未解決 */
+  resolvedAt?: string | null
+  /** 集約先 item の保存ステータス（API 応答の linkedItemStatus / mock はローカル items から解決して渡す） */
+  linkedItemStatus?: ImprovementStatus | null
+}
+
+/**
+ * 受付箱の表示ステータスの解決（**唯一の判定点** = 原則6。一覧・カンバン・ガント・遷移検証で共有）。
+ * 優先順:
+ * 1. 解決済み（resolvedAt あり / 旧 status='resolved'）= 最終状態（連動より優先。起票者の確認記録）
+ * 2. 旧 status='dismissed'（見送り進捗タグ）= 対応見送り
+ * 3. 集約済み（itemId あり）= 集約先 item から導出（inboxStatusFromItem。item 不明時は改善対応）
+ * 4. 新語彙の保存値はそのまま
+ * 5. 旧データ（open/未定義）は旧・選別状態から読替え（採用 = 改善対応 / 不採用 = 対応見送り / 未選別 = 未確認）
+ */
+export function improvementInboxStatusOf(r: InboxStatusInput, linkedItemStatus?: ImprovementStatus | null): ImprovementInboxStatus {
+  if (r.resolvedAt || r.status === 'resolved') return 'resolved'
+  if (r.status === 'dismissed') return 'dismissed'
+  if (r.itemId) {
+    const item = linkedItemStatus ?? r.linkedItemStatus
+    return item ? inboxStatusFromItem(item) : 'planned'
+  }
+  if (r.status && (IMPROVEMENT_INBOX_BASES as readonly string[]).includes(r.status)) {
+    return r.status as ImprovementInboxBase
+  }
+  // 旧データ（status='open' / 未定義）: 選別状態から読替え（原則7）
+  const adoption = requestAdoptionOf(r)
+  if (adoption === 'adopted') return 'planned'
+  if (adoption === 'declined') return 'dismissed'
+  return 'unconfirmed'
+}
+
+/**
+ * AI 集約の対象要望（未集約・有効・**改善対応**）を選ぶ（改修依頼 2026-08-21:
+ * 集約対象は「改善対応」ステータスの要望のみ。旧データは 採用済み+open = 改善対応 と読替え）。
+ * mock の集約と API の generate SQL
+ * （`item_id IS NULL AND archived_at IS NULL AND (status='planned' OR (status='open' AND adoption='adopted'))`）の
+ * 条件を共有する定義（両モード同挙動 = 原則6。「改善対応のみ集約」フローの単一の判定点）。
+ */
+export function clusterTargetRequests<T extends InboxStatusInput & { archivedAt?: string | null }>(requests: T[]): T[] {
+  return requests.filter(r => !r.itemId && !r.archivedAt && improvementInboxStatusOf(r) === 'planned')
+}
+
+// ---------- 継続検討（deferred）の再検討日（改修依頼 2026-08-20 → 受付箱へ移管 2026-08-21） ----------
+
+/**
+ * 再検討日（revisitOn）の検証。継続検討（deferred）への遷移は再検討日が必須（実在日）。
+ * deferred 以外への遷移では revisitOn を要求しない（渡された場合のみ形式検証。保存値は保持 =
+ * クリアしない = 履歴保全）。mock（useImprovements.setRequestStatus）と API
+ * （POST /requests/:id/status）の双方で使い、判定のパリティを保つ（原則6）。エラーメッセージ | null。
+ */
+export function improvementRevisitError(status: ImprovementInboxStatus, revisitOn: string): string | null {
   const v = revisitOn.trim()
   if (status === 'deferred' && !v) return '継続検討にするには再検討日を設定してください'
   if (v && !isRealDateKey(v)) return '再検討日が正しくありません（YYYY-MM-DD の実在日で指定してください）'
   return null
 }
 
-// ---------- 型 ----------
-
-// ---------- 要望（request）単位のステータス（2026-08-17。改修単位のステータスとは独立） ----------
-
 /**
- * 生要望のステータス。改修単位（item）のステータスが「改修 1 件」の進捗を表すのに対し、
- * こちらは**元となった要望 1 件ずつ**の対応状況を表す（部分的に対応済みの改修単位を表現できる）。
- * - open      未対応（既定。旧データ = status 未定義も open として扱う）
- * - resolved  対応済み（この要望の内容は反映済み）
- * - dismissed 見送り（この要望の内容は対応しない）
- * 遷移は自由（軽量な進捗タグ。誤操作はいつでも戻せる = 原則9.5）。
+ * 受付箱ステータス変更（基底遷移）の可否ガード（1 件）。判定順 = 存在（404）→ 取消済み（409）→
+ * 集約済み（409。集約済みの進捗は item 連動 = 直接変更しない。外すには「集約の解除」が先）→
+ * 解決済み（409。解決の取消 = unresolve が先）→ 遷移検証（409）。
+ * mock の setRequestStatus・一括変更（planInboxStatusBulk）・API ルートの 3 か所で共有し、
+ * ガード条件とメッセージの分散コピーを作らない（原則3/6）。
  */
-export type ImprovementRequestStatus = 'open' | 'resolved' | 'dismissed'
-
-export const IMPROVEMENT_REQUEST_STATUSES: ImprovementRequestStatus[] = ['open', 'resolved', 'dismissed']
-
-/** 要望ステータスの表示メタ（label・トーン）。tone は UI の Tone 値と対応 */
-export const IMPROVEMENT_REQUEST_STATUS_META: Record<
-  ImprovementRequestStatus,
-  { label: string; tone: 'neutral' | 'info' | 'ok' | 'warn' }
-> = {
-  open: { label: '未対応', tone: 'info' },
-  resolved: { label: '対応済み', tone: 'ok' },
-  dismissed: { label: '見送り', tone: 'warn' },
-}
-
-/** 要望のステータス（未定義 = 旧データは open。下位互換 = 原則7） */
-export function requestStatusOf(r: { status?: ImprovementRequestStatus | null }): ImprovementRequestStatus {
-  return r.status ?? 'open'
-}
-
-// ---------- 要望の選別（採用/不採用。AI 集約前の取捨選択 = 改善要望 2026-08-17 第 2 弾） ----------
-
-/**
- * 生要望の選別状態。投稿された要望はまず管理者が一覧で確認・取捨選択し、
- * **採用（adopted）された要望のみが AI 集約の対象**になる（未選別・不採用は集約されない）。
- * - pending  未選別（投稿直後。管理者の確認待ち）
- * - adopted  採用（AI 集約の対象）
- * - declined 不採用（集約対象外。理由はコメントで残せる）
- * 遷移は自由（選び直しはいつでも可 = 原則9.5）。ただし集約済み（itemId あり）の要望は選別対象外
- * （既に改修単位へ取り込まれた記録 = 巻き戻さない。外すときは「集約の解除」（F-42-19・uncluster）
- * または要望の取消 = archive を使う）。
- */
-export type ImprovementRequestAdoption = 'pending' | 'adopted' | 'declined'
-
-export const IMPROVEMENT_REQUEST_ADOPTIONS: ImprovementRequestAdoption[] = ['pending', 'adopted', 'declined']
-
-/** 選別状態の表示メタ（label・トーン）。tone は UI の Tone 値と対応 */
-export const IMPROVEMENT_REQUEST_ADOPTION_META: Record<
-  ImprovementRequestAdoption,
-  { label: string; tone: 'neutral' | 'info' | 'ok' | 'warn' }
-> = {
-  pending: { label: '未選別', tone: 'neutral' },
-  adopted: { label: '採用', tone: 'ok' },
-  declined: { label: '不採用', tone: 'warn' },
+export function improvementInboxStatusError(
+  target: InboxStatusInput & { archivedAt?: string | null } | undefined,
+  to: ImprovementInboxBase,
+): { code: string; message: string } | null {
+  if (!target) return { code: 'AKO-REQ-002', message: '対象の要望が見つかりません' }
+  if (target.archivedAt) return { code: 'AKO-REQ-019', message: '取消済みの要望はステータスを変更できません（先に復元してください）' }
+  if (target.itemId) {
+    return { code: 'AKO-REQ-013', message: '集約済みの要望のステータスは改修案件に連動します（対象から外す場合は「集約の解除」または要望の取消を使ってください）' }
+  }
+  const from = improvementInboxStatusOf(target)
+  if (from === 'resolved') {
+    return { code: 'AKO-REQ-025', message: '解決済みの要望はステータスを変更できません（先に「解決済みを取り消す」で戻してください）' }
+  }
+  if (from !== to && !canInboxTransition(from, to)) {
+    return {
+      code: 'AKO-REQ-006',
+      message: `「${IMPROVEMENT_INBOX_STATUS_META[from].label}」から「${IMPROVEMENT_INBOX_STATUS_META[to].label}」へは変更できません`,
+    }
+  }
+  return null
 }
 
 /**
- * 要望の選別状態（下位互換 = 原則7）。旧データ（adoption 未定義）は、
- * 集約済み（itemId あり）= 採用相当 / 未集約 = 未選別 として扱う。
+ * 受付箱ステータスの一括変更（複数選択 → まとめて遷移 = 旧・一括選別の後継）の対象仕分け（純関数）。
+ * ids を重複除去し、「適用できる id」と「適用できない件数の最後の理由」へ仕分ける。
+ * 判定は improvementInboxStatusError を 1 件ずつ適用（機械外の遷移・集約済み・取消済みは失敗に数える）。
+ * 同一ステータスの行は no-op として適用可に含める（冪等 = 原則2。deferred → deferred は
+ * 一括では再検討日を変えないため対象外 = noop に含める）。
+ * mock の一括更新と単体テストで共有する（API モードは既存 1 件エンドポイントの逐次呼びで
+ * サーバー側が同じ判定を行う = 原則6）。
  */
-export function requestAdoptionOf(r: { adoption?: ImprovementRequestAdoption | null; itemId?: string | null }): ImprovementRequestAdoption {
-  if (r.adoption && IMPROVEMENT_REQUEST_ADOPTIONS.includes(r.adoption)) return r.adoption
-  return r.itemId ? 'adopted' : 'pending'
+export function planInboxStatusBulk(
+  ids: string[],
+  requests: (InboxStatusInput & { id: string; archivedAt?: string | null })[],
+  to: ImprovementInboxBase,
+): { targets: string[]; applicable: string[]; lastError: { code: string; message: string } | null } {
+  const targets = [...new Set(ids)]
+  const byId = new Map(requests.map(r => [r.id, r]))
+  const applicable: string[] = []
+  let lastError: { code: string; message: string } | null = null
+  for (const id of targets) {
+    const guard = improvementInboxStatusError(byId.get(id), to)
+    if (guard) {
+      lastError = guard
+      continue
+    }
+    applicable.push(id)
+  }
+  return { targets, applicable, lastError }
 }
 
 /**
- * AI 集約の対象要望（未集約・有効・採用済み）を選ぶ。
- * mock の集約と API の generate SQL（`item_id IS NULL AND archived_at IS NULL AND adoption='adopted'`）の
- * 条件を共有する定義（両モード同挙動 = 原則6。「採用のみ集約」フローの単一の判定点）。
+ * 解決済み（resolve）の可否ガード。解決済みにできるのは表示ステータスが
+ * 「運用対応」（起票者が運用案内を確認して解決）または「対応済み」（改修完了を確認して解決）のときのみ。
+ * 権限（起票者本人 or 管理権限者）の判定は呼び出し側（API/mock UI ゲート）。
  */
-export function clusterTargetRequests<T extends { itemId?: string | null; archivedAt?: string | null; adoption?: ImprovementRequestAdoption | null }>(
-  requests: T[],
-): T[] {
-  return requests.filter(r => !r.itemId && !r.archivedAt && requestAdoptionOf(r) === 'adopted')
+export function improvementResolveError(
+  target: (InboxStatusInput & { archivedAt?: string | null }) | undefined,
+  linkedItemStatus?: ImprovementStatus | null,
+): { code: string; message: string } | null {
+  if (!target) return { code: 'AKO-REQ-002', message: '対象の要望が見つかりません' }
+  if (target.archivedAt) return { code: 'AKO-REQ-019', message: '取消済みの要望は解決済みにできません（先に復元してください）' }
+  const from = improvementInboxStatusOf(target, linkedItemStatus)
+  if (from === 'resolved') return null // 冪等（再実行しても壊れない = 原則2）
+  if (from !== 'operational' && from !== 'addressed') {
+    return { code: 'AKO-REQ-026', message: '解決済みにできるのは「運用対応」または「対応済み」の要望のみです' }
+  }
+  return null
 }
 
 // ---------- 要望のタグ（壁打ち/お任せ。投稿時の任意の意思表示 = 改修依頼 2026-08-18） ----------
@@ -229,6 +402,44 @@ export function normalizeImprovementTags(raw: unknown): ImprovementRequestTag[] 
     if (IMPROVEMENT_REQUEST_TAGS.includes(s) && !out.includes(s)) out.push(s)
   }
   return out
+}
+
+// ---------- AI 判定（受付箱の要望ごとの 既存機能/運用工夫/改修要 判定 = 改修依頼 2026-08-21） ----------
+
+/**
+ * AI 判定の区分。ナレッジベース（shared/domain/kb = アプリ仕様・運用/操作マニュアル）を RAG として
+ * 「既存機能に備わっているか？」「使い方の工夫で要望を叶えられるか？」「改修が必要か？」を判定する。
+ * - existing    既存機能で対応可能（該当機能の案内 → 推奨 = 運用対応）
+ * - workaround  使い方の工夫で対応可能（運用での回避策あり → 推奨 = 運用対応）
+ * - improvement 改修が必要（→ 推奨 = 改善対応）
+ * - unknown     判定できず（情報不足 → 推奨 = 検討中で人手判断）
+ */
+export type ImprovementAssessVerdict = 'existing' | 'workaround' | 'improvement' | 'unknown'
+
+export const IMPROVEMENT_ASSESS_VERDICTS: ImprovementAssessVerdict[] = ['existing', 'workaround', 'improvement', 'unknown']
+
+/** AI 判定の表示メタ + 推奨アクション（受付箱の基底ステータス）。ラベルの SoT はここ */
+export const IMPROVEMENT_ASSESS_META: Record<
+  ImprovementAssessVerdict,
+  { label: string; tone: 'neutral' | 'info' | 'ok' | 'warn' | 'brand'; recommended: ImprovementInboxBase }
+> = {
+  existing: { label: '既存機能で対応可', tone: 'ok', recommended: 'operational' },
+  workaround: { label: '運用の工夫で対応可', tone: 'info', recommended: 'operational' },
+  improvement: { label: '改修が必要', tone: 'brand', recommended: 'planned' },
+  unknown: { label: '判定不能（人手判断）', tone: 'neutral', recommended: 'reviewing' },
+}
+
+/** 保管する AI 判定（生成→保管→再判定で上書き。要望本文の編集後は再判定を促す表示に使う） */
+export interface ImprovementRequestAssessment {
+  verdict: ImprovementAssessVerdict
+  /** 判定の根拠・説明（マニュアルの該当箇所への言及を含む） */
+  reason: string
+  /** 参照したナレッジベース doc id（根拠の提示・追跡用） */
+  docIds: string[]
+  /** LLM による判定か（false = 決定的ヒューリスティック = モック/フォールバック） */
+  llm: boolean
+  /** 判定時刻（JST ISO） */
+  assessedAt: string
 }
 
 /** 要望への添付画像（縮小済み data URI。参照時は押下で拡大表示） */
@@ -278,10 +489,22 @@ export interface ImprovementRequest {
   targetSpot?: string
   /** 要望本文 */
   body: string
-  /** 要望単位のステータス（未定義 = open。改修単位のステータスとは独立の進捗タグ = 原則7） */
+  /** 受付箱ステータス（保存値。表示は improvementInboxStatusOf で解決。旧値 open/resolved も受理 = 原則7） */
   status?: ImprovementRequestStatus
-  /** 選別状態（未定義 = 旧データ = requestAdoptionOf が補完。採用のみ AI 集約対象 = 原則7） */
+  /** 旧・選別状態（〜2026-08-20 のデータ互換のためだけに保持。新規の書込なし = 原則7） */
   adoption?: ImprovementRequestAdoption
+  /** 継続検討（deferred）の再検討日（YYYY-MM-DD。deferred への遷移で必須・到来でリマインド通知）。
+   *  deferred 以外へ戻してもクリアしない（履歴保全）。旧データは未定義 = 無し（原則7） */
+  revisitOn?: string | null
+  /** 解決済みにした時刻（起票者確認 or 管理者操作の記録）。null/未定義 = 未解決。
+   *  解決の取消（unresolve）で null へ戻せる（原則9.5） */
+  resolvedAt?: string | null
+  /** 集約先 item の保存ステータス（API の GET /requests が JOIN で返す導出値。mock は未定義 =
+   *  ローカル items から解決する。一般利用者も自分の要望の「対応済み」を判別できる = 原則6 導出） */
+  linkedItemStatus?: ImprovementStatus | null
+  /** AI 判定（既存機能/運用工夫/改修要 の判定と根拠・推奨アクション = 改修依頼 2026-08-21。
+   *  生成→保管→再判定で上書き。null/未定義 = 未判定 */
+  aiAssessment?: ImprovementRequestAssessment | null
   /** 任意タグ（壁打ち/お任せ。投稿時の意思表示 = 改修依頼 2026-08-18）。旧データは未定義 = 無し（原則7） */
   tags?: ImprovementRequestTag[]
   /**
@@ -315,7 +538,13 @@ export interface ImprovementItem {
   summary: string
   /** 改修内容の詳細（対象ページ・機能名・改修方針。マークダウン） */
   detail: string
+  /** 保存ステータス（新規書込は todo/in_progress/done。旧 7 値語彙も受理し表示は 3 状態へ正規化 = 原則7） */
   status: ImprovementStatus
+  /** 担当者（対応中への遷移時にアサイン可 = 改修依頼 2026-08-21。null/未定義 = 未アサイン。
+   *  変更・解除はいつでも可（原則9.5）。一覧・カンバン・ドロワーに表示する */
+  assigneeMemberId?: string | null
+  /** 担当者名（スナップショット。閲覧時のマスタ参照を避ける） */
+  assigneeName?: string | null
   /** 対象ページのパス（集約元の要望から集約。重複なし） */
   pagePaths: string[]
   /** 集約元の要望 id（トレーサビリティ） */
@@ -437,15 +666,18 @@ export function improvementEditError(
   return null
 }
 
-/** 要望編集で更新できる項目（改修依頼 2026-08-19: 登録時の項目をすべて編集可能に）。
+/** 要望編集で更新できる項目（改修依頼 2026-08-19: 登録時の項目をすべて編集可能に →
+ *  2026-08-21: 対象箇所（targetSpot）も編集可能に〔受付箱の一覧・詳細で表示/編集する改修〕）。
  *  投稿元（pagePath/pageLabel）は記録として不変・編集対象外。
- *  **部分更新**: body は常に必須だが tags/links/images はリクエストに実在するキーのみ返す
+ *  **部分更新**: body は常に必須だが tags/links/images/targetSpot はリクエストに実在するキーのみ返す
  *  （送っていない項目は呼び出し側で保持する = CLAUDE.md「部分更新で未指定列を保持する」原則）。 */
 export interface ImprovementRequestEditFields {
   body: string
   tags?: ImprovementRequestTag[]
   links?: string[]
   images?: ImprovementRequestImage[]
+  /** 対象箇所（自由入力・任意。'' = クリア） */
+  targetSpot?: string
 }
 
 /**
@@ -459,7 +691,7 @@ export interface ImprovementRequestEditFields {
  * 添付が消える事故は起きない。空配列を明示的に送れば「全削除」になる（キーが実在するため）。
  */
 export function improvementRequestEditFields(
-  raw: { body?: unknown; tags?: unknown; links?: unknown; images?: unknown },
+  raw: { body?: unknown; tags?: unknown; links?: unknown; images?: unknown; targetSpot?: unknown },
 ): { ok: true; value: ImprovementRequestEditFields } | { ok: false; error: { code: string; message: string } } {
   const text = String(raw.body ?? '').trim()
   const bodyMsg = improvementBodyError(text)
@@ -481,6 +713,10 @@ export function improvementRequestEditFields(
     if (imagesMsg) return { ok: false, error: { code: 'AKO-REQ-010', message: imagesMsg } }
     value.images = images
   }
+  // 対象箇所（任意・上限のみ。空文字 = クリア。投稿時 improvementRequestInputOf と同じ正規化 = 原則6）
+  if (Object.hasOwn(raw, 'targetSpot') && raw.targetSpot !== undefined) {
+    value.targetSpot = capCodePoints(String(raw.targetSpot ?? '').trim(), IMPROVEMENT_TARGET_SPOT_CAP)
+  }
   return { ok: true, value }
 }
 
@@ -493,50 +729,8 @@ export function improvementEditChangedLabel(fields: ImprovementRequestEditFields
   return ['本文',
     ...(fields.tags !== undefined ? ['タグ'] : []),
     ...(fields.links !== undefined ? ['リンク'] : []),
-    ...(fields.images !== undefined ? ['画像'] : [])].join('・')
-}
-
-/**
- * 選別変更の可否ガード（1 件。F-42-14/18/19）。判定順 = 存在（404）→ **取消済み（409）→ 集約済み（409）**。
- * 取消済みを先に判定する: 取消済み + 集約済みの行で「集約の解除」を案内すると、解除も取消済みで
- * AKO-REQ-018 になり案内が行き止まりになる（正しい最初の一手 = 復元 を先に伝える = レビュー R10）。
- * mock の setRequestAdoption・planAdoptionBulk（一括仕分け）・API ルートの 3 か所で共有し、
- * ガード条件とメッセージの分散コピーを作らない（原則3/6。レビュー R2）。
- */
-export function improvementAdoptionError(
-  target: { itemId?: string | null; archivedAt?: string | null } | undefined,
-): { code: string; message: string } | null {
-  if (!target) return { code: 'AKO-REQ-002', message: '対象の要望が見つかりません' }
-  if (target.archivedAt) return { code: 'AKO-REQ-019', message: '取消済みの要望は選別を変更できません（先に復元してください）' }
-  if (target.itemId) return { code: 'AKO-REQ-013', message: '集約済みの要望は選別を変更できません（対象から外す場合は「集約の解除」または要望の取消を使ってください）' }
-  return null
-}
-
-/**
- * 一括選別（F-42-18・改修依頼 2026-08-18）の対象仕分け（純関数）。ids を重複除去し、
- * 「適用できる id」と「適用できない件数の最後の理由」へ仕分ける。判定は improvementAdoptionError
- * （存在 AKO-REQ-002・取消済み AKO-REQ-019・集約済み AKO-REQ-013）を 1 件ずつ適用。
- * mock の一括更新と単体テストで共有する（API モードは既存 1 件エンドポイントの逐次呼びで
- * サーバー側が同じ判定を行う = 原則6）。done/failed の算定は
- * done = applicable.length / failed = targets.length - done。
- */
-export function planAdoptionBulk(
-  ids: string[],
-  requests: { id: string; itemId?: string | null; archivedAt?: string | null }[],
-): { targets: string[]; applicable: string[]; lastError: { code: string; message: string } | null } {
-  const targets = [...new Set(ids)]
-  const byId = new Map(requests.map(r => [r.id, r]))
-  const applicable: string[] = []
-  let lastError: { code: string; message: string } | null = null
-  for (const id of targets) {
-    const guard = improvementAdoptionError(byId.get(id))
-    if (guard) {
-      lastError = guard
-      continue
-    }
-    applicable.push(id)
-  }
-  return { targets, applicable, lastError }
+    ...(fields.images !== undefined ? ['画像'] : []),
+    ...(fields.targetSpot !== undefined ? ['対象箇所'] : [])].join('・')
 }
 
 /**
@@ -559,10 +753,12 @@ export function improvementUnclusterError(
   if (target.archivedAt) return { code: 'AKO-REQ-018', message: '取消済みの要望は集約を解除できません（先に復元してください）' }
   // 取消済みの item からも解除しない（論理削除中の記録のトレースを黙って書き換えない = レビュー R24。先に復元）
   if (item?.archivedAt) {
-    return { code: 'AKO-REQ-022', message: '取消済みの改修単位からは解除できません（先に改修単位を復元してください）' }
+    return { code: 'AKO-REQ-022', message: '取消済みの改修案件からは解除できません（先に改修案件を復元してください）' }
   }
-  if (item && !isOpenStatus(item.status)) {
-    return { code: 'AKO-REQ-021', message: '決着済み（運用対応/解決済み/対応見送り）の改修単位からは解除できません（先に改修単位のステータスを戻してから解除してください）' }
+  // 対応済（決着 = 旧語彙の 運用対応/解決済み/対応見送り 含む）の item からは解除しない（実装済み内容を
+  // 再集約プールへ戻さない = 原則2）。解除したい場合は先に item のステータスを戻す（導線は残る = 原則9.5）
+  if (item && !isOpenItemStatus(item.status)) {
+    return { code: 'AKO-REQ-021', message: '対応済（決着済み）の改修案件からは解除できません（先に改修案件のステータスを戻してから解除してください）' }
   }
   return null
 }
@@ -757,17 +953,17 @@ export function buildItemDetail(reqs: ClusterRequestInput[]): string {
 
 /**
  * 決定的な集約（LLM 無効・失敗時のフォールバック / モックの唯一のロジック）。
- * 未集約の要望を投稿元ページ単位でまとめ、同じページを対象にした既存の **未判定（triage）** item が
- * あればそこへ追記、無ければ新しい改修単位を作る。判定済み（triage 以外 = 改善対応/対応中/運用対応/
- * 継続検討/解決済み/対応見送り）item には触れない = 人手のステータス・編集を巻き戻さない（原則2）。
+ * 未集約の要望を投稿元ページ単位でまとめ、同じページを対象にした既存の **未対応（todo）** item が
+ * あればそこへ追記、無ければ新しい改修単位を作る。着手済み・決着済み（対応中/対応済）item には
+ * 触れない = 人手のステータス・編集を巻き戻さない（原則2。判定は isClusterAppendTarget = 原則6）。
  */
 export function heuristicClusterRequests(
   openItems: ClusterOpenItem[],
   requests: ClusterRequestInput[],
 ): ClusterPlan {
   const plan: ClusterPlan = { appends: [], creates: [] }
-  // 追記先にできるのは未判定の item のみ（判定済みは不変）
-  const triageItems = openItems.filter(it => it.status === 'triage')
+  // 追記先にできるのは未対応の item のみ（着手済み・決着済みは不変）
+  const triageItems = openItems.filter(it => isClusterAppendTarget(it.status))
 
   // ページ単位にグルーピング（安定順 = requests の登場順）
   const groups = new Map<string, ClusterRequestInput[]>()
@@ -863,7 +1059,7 @@ export function normalizeClusterPlan(
 ): ClusterPlan | null {
   if (!raw || typeof raw !== 'object') return null
   const reqById = new Map(requests.map(r => [r.id, r]))
-  const triageIds = new Set(openItems.filter(it => it.status === 'triage').map(it => it.id))
+  const triageIds = new Set(openItems.filter(it => isClusterAppendTarget(it.status)).map(it => it.id))
   const used = new Set<string>()
   const plan: ClusterPlan = { appends: [], creates: [] }
 
@@ -885,7 +1081,7 @@ export function normalizeClusterPlan(
   for (const a of Array.isArray(rawObj.appends) ? rawObj.appends : []) {
     if (!a || typeof a !== 'object') continue
     const itemId = String((a as { itemId?: unknown }).itemId ?? '')
-    if (!triageIds.has(itemId)) continue // 追記先は未判定 item のみ（判定済みは保護）
+    if (!triageIds.has(itemId)) continue // 追記先は未対応 item のみ（着手済み・決着済みは保護）
     const reqs = takeReqs((a as { requestIds?: unknown }).requestIds)
     // 「集約の解除」で外した item（履歴）への再追記は LLM 出力でも禁止（F-42-19）。
     // 除外に当たった要望は未割当へ戻し、末尾のヒューリスティック補完（除外対応済み）で拾う
@@ -935,14 +1131,19 @@ export interface PromptItemInput {
   status: ImprovementStatus
   pagePaths: string[]
   /** links / imageCount は要望の添付（省略可 = 旧呼び出しの下位互換。リンクはプロンプトに列挙・画像は件数のみ言及）。
-   *  status は要望単位のステータス（省略/open 以外は【対応済み】【見送り】として明記 = プロンプト再生成に反映）。
+   *  status / resolvedAt は要望の受付箱ステータス（解決済み・対応見送りは【解決済み】【対応見送り】として
+   *  明記 = プロンプト再生成に反映。判定は promptRequestTag = 原則6）。
+   *  targetSpot は対象箇所（ページ内のどこか。省略可 = 旧呼び出しの下位互換。あれば対象ページに併記 =
+   *  改修依頼 2026-08-21: 受付箱で表示・編集する対象箇所を改修指示にも反映する）。
    *  createdAt / comments[].createdAt は要望とコメントを 1 本の時系列へ統合するための投稿時刻（省略可 = 下位互換。
    *  省略時は投入順を保持する = 時刻が揃わない旧呼び出しでも決定的。改修依頼 2026-08-19 第4弾）。
    *  comments は受付箱で記録した要望への時系列コメント（省略/空可。要望本文と時系列統合してプロンプトへ反映）。
    *  注: 投稿時の任意タグ（壁打ち/お任せ）は人間運用の意思表示のためプロンプトには含めない（改修依頼 2026-08-19）。 */
   requests: {
     pageLabel: string; pagePath: string; body: string
-    status?: ImprovementRequestStatus; links?: string[]; imageCount?: number
+    targetSpot?: string
+    status?: ImprovementRequestStatus | null; resolvedAt?: string | null
+    links?: string[]; imageCount?: number
     createdAt?: string
     comments?: { body: string; createdAt?: string }[]
   }[]
@@ -958,6 +1159,17 @@ export const PROMPT_NAVIGATOR_PREAMBLE =
   'あなたはナビゲーターです。\n'
   + '最適なロールを必要なだけ招集して以下のタスクを進めてください。\n'
   + '改修後は指摘事項がなくなるまでコードレビューとシステム監査を繰り返してください。'
+
+/**
+ * プロンプト上の要望注記（受付箱ステータスの反映 = 原則6。ラベルは IMPROVEMENT_INBOX_STATUS_META が SoT）。
+ * 解決済み（resolvedAt / 旧 status='resolved'）= 反映済みのため再改修しない ／
+ * 対応見送り（status='dismissed'）= 実装しない ／ それ以外 = 無印（通常の要望）。
+ */
+export function promptRequestTag(r: { status?: ImprovementRequestStatus | null; resolvedAt?: string | null }): string {
+  if (r.resolvedAt || r.status === 'resolved') return IMPROVEMENT_INBOX_STATUS_META.resolved.label
+  if (r.status === 'dismissed') return IMPROVEMENT_INBOX_STATUS_META.dismissed.label
+  return ''
+}
 
 const DEFAULT_PROMPT_INTRO =
   'あなたは本リポジトリ（Nuxt 4 SPA = `home/` + Hono/PostgreSQL API = `api/` + 共有ドメイン = `shared/domain/`）を'
@@ -992,7 +1204,7 @@ export function buildCodingPrompt(items: PromptItemInput[], opts?: { intro?: str
     out.push('')
     out.push(`- **対象ページ / 機能:** ${label}`)
     if (it.pagePaths.length) out.push(`- **対象パス:** ${it.pagePaths.map(p => `\`${p}\``).join(' , ')}`)
-    out.push(`- **現在の状態:** ${IMPROVEMENT_STATUS_META[it.status]?.label ?? it.status}`)
+    out.push(`- **現在の状態:** ${IMPROVEMENT_ITEM_STATUS_META[improvementItemViewOf(it.status)].label}`)
     if (it.summary.trim()) {
       out.push('')
       out.push(`**概要:** ${it.summary.trim()}`)
@@ -1006,8 +1218,8 @@ export function buildCodingPrompt(items: PromptItemInput[], opts?: { intro?: str
     if (it.requests.length) {
       out.push('')
       out.push('**根拠となった利用者の要望（時系列・要望とコメントを統合）:**')
-      if (it.requests.some(r => requestStatusOf(r) !== 'open')) {
-        out.push('（【対応済み】の要望は反映済みのため再改修しないこと・【見送り】の要望は実装しないこと）')
+      if (it.requests.some(r => promptRequestTag(r) !== '')) {
+        out.push(`（【${IMPROVEMENT_INBOX_STATUS_META.resolved.label}】の要望は反映済みのため再改修しないこと・【${IMPROVEMENT_INBOX_STATUS_META.dismissed.label}】の要望は実装しないこと）`)
       }
       // 要望本文とコメントを 1 本の時系列に統合する（改修依頼 2026-08-19 第4弾）。
       // 従来は「要望（親）＞コメント（子）」の親子構造だったが、要望とコメントを createdAt 昇順で
@@ -1017,10 +1229,13 @@ export function buildCodingPrompt(items: PromptItemInput[], opts?: { intro?: str
       const timeline: TimelineEntry[] = []
       let seq = 0
       it.requests.forEach((r) => {
-        const where = r.pageLabel.trim() || r.pagePath.trim()
-        // 要望単位のステータス（open 以外は明記 = 対応済み分の再改修・見送り分の実装を防ぐ）
-        const status = requestStatusOf(r)
-        const statusTag = status === 'open' ? '' : `【${IMPROVEMENT_REQUEST_STATUS_META[status].label}】 `
+        // 対象ページに対象箇所（targetSpot）を併記（改修対象の特定を助ける = 改修依頼 2026-08-21）
+        const page = r.pageLabel.trim() || r.pagePath.trim()
+        const spot = (r.targetSpot ?? '').trim()
+        const where = [page, spot].filter(Boolean).join(' / ')
+        // 受付箱ステータス（解決済み・対応見送りは明記 = 反映済み分の再改修・見送り分の実装を防ぐ）
+        const tag = promptRequestTag(r)
+        const statusTag = tag ? `【${tag}】 ` : ''
         // 添付（リンクは参照先として列挙・画像はアプリ内参照のため件数のみ言及）は該当要望行に付随
         const subs: string[] = []
         for (const link of (r.links ?? []).map(l => l.trim()).filter(Boolean)) subs.push(`  - 参考リンク: ${link}`)

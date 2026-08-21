@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /**
- * 要望の編集フォーム（本文 + タグ + 参考リンク + 画像。改修依頼 2026-08-19）。
+ * 要望の編集フォーム（本文 + タグ + 参考リンク + 画像 + 対象箇所。改修依頼 2026-08-19 →
+ * 対象箇所の編集追加 = 改修依頼 2026-08-21〔受付箱の一覧・詳細で表示/編集する改修〕）。
  * 登録時に入力できる項目をすべて編集できるようにする（F-42-16 の本文のみ編集を拡張）。
  * /improvements の生要望ドロワーと ImprovementSubmit の送信直後修正で共用する（原則3）。
  * 本文と画像添付は一体型の ImprovementsBodyImageInput（枠内左下の「+」/貼り付けで添付）、参考リンクは
@@ -9,6 +10,7 @@
  */
 import {
   IMPROVEMENT_BODY_CAP,
+  IMPROVEMENT_TARGET_SPOT_CAP,
   type ImprovementRequestImage,
 } from '~/types/improvement'
 
@@ -18,6 +20,8 @@ const props = withDefaults(defineProps<{
   initialTags?: string[]
   initialLinks?: string[]
   initialImages?: ImprovementRequestImage[]
+  /** 対象箇所（ページ内のどこか = 自由入力・任意。'' = 未設定） */
+  initialTargetSpot?: string
   /** 保存中（ボタン無効化・ラベル差し替え） */
   busy?: boolean
   /** ウィンドウ全体のドロップ抑止を有効にするか（表示中のみ true = BodyImageInput へ委譲） */
@@ -25,14 +29,15 @@ const props = withDefaults(defineProps<{
   /** 画像の編集を許可するか（既定 true）。API モードで既存画像の遅延ロードに失敗した編集では false =
    *  画像編集 UI を隠し現行添付を保持する（追加の無言喪失を防ぐ = レビュー R2 MINOR。呼び出し側が判定して渡す） */
   imagesEditable?: boolean
-}>(), { active: true, imagesEditable: true })
+}>(), { active: true, imagesEditable: true, initialTargetSpot: '' })
 
 const emit = defineEmits<{
-  save: [payload: { body: string; tags: string[]; links: string[]; images: ImprovementRequestImage[] }]
+  save: [payload: { body: string; tags: string[]; links: string[]; images: ImprovementRequestImage[]; targetSpot: string }]
   cancel: []
 }>()
 
 const body = ref(props.initialBody)
+const targetSpot = ref(props.initialTargetSpot)
 const tags = ref<string[]>([...(props.initialTags ?? [])])
 const links = ref<string[]>([...(props.initialLinks ?? [])])
 const images = ref<ImprovementRequestImage[]>([...(props.initialImages ?? [])])
@@ -51,6 +56,7 @@ function onSave(): void {
     tags: tags.value,
     links: links.value.map(l => l.trim()).filter(Boolean),
     images: images.value,
+    targetSpot: targetSpot.value.trim(),
   })
 }
 </script>
@@ -72,6 +78,18 @@ function onSave(): void {
         {{ length }} / {{ IMPROVEMENT_BODY_CAP }}<template v-if="over">（上限を超えています）</template>
       </p>
     </div>
+
+    <!-- 対象箇所（ページ内のどこか = 自由入力・任意。登録時と同じ = 改修依頼 2026-08-21 で編集可能に） -->
+    <UiFormField label="対象箇所" hint="ページ内のどの箇所についての要望かを補足できます（任意。例: 一覧のステータス列）">
+      <input
+        v-model="targetSpot"
+        type="text"
+        class="input"
+        :maxlength="IMPROVEMENT_TARGET_SPOT_CAP"
+        placeholder="例: 一覧のステータス列"
+        aria-label="対象箇所"
+      >
+    </UiFormField>
 
     <!-- タグ（壁打ち/お任せ = F-42-17。登録時と同じ・改修依頼 2026-08-20: どちらか 1 つのみのトグル） -->
     <UiFormField

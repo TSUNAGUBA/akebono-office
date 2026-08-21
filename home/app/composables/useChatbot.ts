@@ -10,6 +10,7 @@
  *   応答する = 無関係な定型応答が出る経路を作らない（レビュー R1 で通信断経路も塞いだ）
  * - 擬似ストリーミング: 30-50 文字ずつ setInterval で流す。unmount 時は finalize() で確定保存
  */
+import { kbFindRelated } from '../../../shared/domain/kb'
 import { findCompanyIn, SELF_COMPANY_PATTERN } from '../../../shared/domain/name-match'
 import { bigramCoverage } from '../../../shared/domain/text-match'
 import type { ChatMessage, ChatSession, Company, Industry, Result } from '~/types/domain'
@@ -365,8 +366,34 @@ export function useChatbot() {
     if (/稼働|障害|システム/.test(corpus)) return answerStatus()
     if (/規程|ルール|就業/.test(corpus)) return answerRules(subText)
     if (/稟議|申請|承認/.test(corpus)) return answerWorkflow()
-    // 最後の砦: ナレッジ全文の字句照合（解釈型の質問を蓄積ナレッジで補足。該当なしは null）
-    return answerKnowledgeSearch(subText)
+    // アプリの使い方・仕様の質問はマニュアル（shared/domain/kb = API の RAG と同一知識・原則6）で回答
+    // （改修依頼 2026-08-21。キーワードゲートは API の manual ブロックと同じ語彙）
+    if (/使い方|操作|手順|マニュアル|やり方|どうやって|どこから|方法|仕様/.test(corpus)) {
+      const manual = answerManual(subText)
+      if (manual) return manual
+    }
+    // 最後の砦: ナレッジ全文の字句照合（解釈型の質問を蓄積ナレッジで補足）→ マニュアル照合（該当なしは null）
+    return answerKnowledgeSearch(subText) ?? answerManual(subText)
+  }
+
+  /**
+   * アプリ利用マニュアル・仕様の照合（改修依頼 2026-08-21）。ナレッジベース（shared/domain/kb）を
+   * kbFindRelated（決定的字句検索 = API の manual ブロックと同一ロジック）で照合し、
+   * 該当ドキュメントの本文を根拠として回答する。該当なしは null（呼び出し側が次の手へ）
+   */
+  function answerManual(text: string): BotAnswer | null {
+    const hits = kbFindRelated(text, 2)
+    if (hits.length === 0) return null
+    const lines = ['アプリのマニュアル・仕様に該当する記載が見つかりました。']
+    for (const { doc } of hits) {
+      const body = [...doc.body]
+      lines.push(`## ${doc.title}\n${body.length > 800 ? `${body.slice(0, 800).join('')}…` : doc.body}`)
+    }
+    return {
+      content: lines.join('\n'),
+      sources: hits.map(({ doc }) => `マニュアル ${doc.id}（${doc.title}）`),
+      suggestions: INITIAL_SUGGESTIONS.slice(0, 2),
+    }
   }
 
   function unknownAnswer(): BotAnswer {

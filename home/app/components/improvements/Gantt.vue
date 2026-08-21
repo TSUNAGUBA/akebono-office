@@ -12,9 +12,9 @@ import {
   type GanttScale,
 } from '~/types/gantt'
 import {
-  IMPROVEMENT_FILTER_OPTIONS, IMPROVEMENT_STATUS_META, IMPROVEMENT_STATUSES,
-  type ImprovementFilter, type ImprovementItem, type ImprovementStatus,
-  matchesImprovementFilter,
+  IMPROVEMENT_FILTER_OPTIONS, IMPROVEMENT_ITEM_STATUS_META, IMPROVEMENT_ITEM_VIEWS,
+  type ImprovementFilter, type ImprovementItem, type ImprovementItemView,
+  improvementItemViewOf, matchesImprovementFilter,
 } from '~/types/improvement'
 import { fmtDate } from '~/utils/format'
 import { pageDisplay } from '~/utils/page-label'
@@ -26,29 +26,25 @@ const today = todayJst()
 const scale = ref<GanttScale>('month')
 const anchor = ref<string>(ganttAnchorForToday('month', today))
 
-// ステータスフィルタ（既定 = committed = 実装が決まっていて未完了の案件 = 対応する + 対応中。
-// オペレーター指示 2026-08-12 の「既定 = accepted」は対応中の追加（改修依頼 2026-08-18）に伴い、
-// 同じ意図〔実装決定・未完了〕を保つ committed へ更新 = 着手した案件がガントから消えない）。
+// ステータスフィルタ（既定 = open = 未完了 = 未対応 + 対応中。改修依頼 2026-08-21 の 3 状態再編で
+// 旧 committed〔実装決定・未完了〕と同じ意図を新語彙で保つ = 着手した案件がガントから消えない）。
 // 一覧ビューと同じ選択肢・判定（IMPROVEMENT_FILTER_OPTIONS / matchesImprovementFilter）を共用する（原則3）。
-const statusFilter = ref<ImprovementFilter>('committed')
+const statusFilter = ref<ImprovementFilter>('open')
 const filteredItems = computed(() =>
   props.items.filter(it => matchesImprovementFilter(it.status, statusFilter.value)))
 
 /**
- * ガントのバー色（ステータス別・凡例と一致）。完了（解決済み）はグレーで区別し、他は色分けする（オペレーター指示 2026-08-12）。
- * 一覧のバッジ（IMPROVEMENT_STATUS_META.tone）とは目的が異なる（ガントは「完了 = 退色グレー」を優先）ため専用マップ。
+ * ガントのバー色（3 状態・凡例と一致 = 改修依頼 2026-08-21 のステータス定義に合わせた色分け）。
+ * 旧 7 値語彙の保存値は improvementItemViewOf で正規化してから引く（原則7）。
+ * 一覧のバッジ（IMPROVEMENT_ITEM_STATUS_META.tone）とは目的が異なる（ガントは「完了 = 退色グレー」を優先）ため専用マップ。
  */
-const GANTT_BAR_CLASS: Record<ImprovementStatus, string> = {
-  triage: 'bg-warn', // 未判定 = 要判定（アンバー）
-  accepted: 'bg-brand', // 改善対応 = 予定（ブランド青。既定フィルタの主対象）
-  in_progress: 'bg-info', // 対応中 = 着手済み（改修依頼 2026-08-18 で追加。予定の青と区別する）
-  operational: 'bg-ok', // 運用対応 = 改修せず運用でカバー（グリーン = 決着。2026-08-20 で追加）
-  deferred: 'bg-serious', // 継続検討 = 再検討待ち（オレンジ = 未判定のアンバーと区別。2026-08-20 で追加）
-  resolved: 'bg-muted', // 解決済み = 完了（グレーで退色）
-  rejected: 'bg-crit', // 対応見送り（レッド）
+const GANTT_BAR_CLASS: Record<ImprovementItemView, string> = {
+  todo: 'bg-warn', // 未対応 = 着手待ち（アンバー）
+  in_progress: 'bg-brand', // 対応中 = 着手済み（ブランド青）
+  done: 'bg-muted', // 対応済 = 完了（グレーで退色）
 }
-/** 決着済み（運用対応・完了・見送り = META.open が false のもの）は退色させて「終わった案件」を視覚的に沈める */
-const CLOSED_STATUSES: ImprovementStatus[] = ['operational', 'resolved', 'rejected']
+/** 決着済み（対応済）は退色させて「終わった案件」を視覚的に沈める */
+const CLOSED_STATUSES: ImprovementItemView[] = ['done']
 
 /** 列の最小幅（px）。画面が広ければ flex で等分に伸び、狭ければこの幅で横スクロール */
 const MIN_COL_W: Record<GanttScale, number> = { month: 56, week: 44, day: 30 }
@@ -67,8 +63,8 @@ const scheduled = computed(() =>
 const unscheduled = computed(() => filteredItems.value.filter(it => !it.planStart))
 
 /** 凡例（実際にバーとして表示中のステータスのみ = バーの色と厳密に一致。未定チップは別バッジのため対象外） */
-const legendStatuses = computed<ImprovementStatus[]>(() =>
-  IMPROVEMENT_STATUSES.filter(s => scheduled.value.some(it => it.status === s)))
+const legendStatuses = computed<ImprovementItemView[]>(() =>
+  IMPROVEMENT_ITEM_VIEWS.filter(s => scheduled.value.some(it => improvementItemViewOf(it.status) === s)))
 
 /** 予定期間バーの位置（トラック幅に対する割合。列の等分伸縮に追従する） */
 function barOf(it: ImprovementItem): { left: number; width: number } | null {
@@ -78,10 +74,17 @@ function barOf(it: ImprovementItem): { left: number; width: number } | null {
   return { left: (span.startIdx / n) * 100, width: ((span.endIdx - span.startIdx + 1) / n) * 100 }
 }
 function barTone(it: ImprovementItem): string {
-  return GANTT_BAR_CLASS[it.status] ?? 'bg-muted'
+  return GANTT_BAR_CLASS[improvementItemViewOf(it.status)] ?? 'bg-muted'
 }
 function isClosed(it: ImprovementItem): boolean {
-  return CLOSED_STATUSES.includes(it.status)
+  return CLOSED_STATUSES.includes(improvementItemViewOf(it.status))
+}
+/** ステータスラベル（3 状態へ正規化。旧語彙の保存値にも効く = 原則7） */
+function statusLabelOf(it: ImprovementItem): string {
+  return IMPROVEMENT_ITEM_STATUS_META[improvementItemViewOf(it.status)].label
+}
+function statusToneOf(it: ImprovementItem): 'neutral' | 'info' | 'ok' | 'warn' | 'brand' {
+  return IMPROVEMENT_ITEM_STATUS_META[improvementItemViewOf(it.status)].tone
 }
 function setStatusFilter(v: string): void { statusFilter.value = v as ImprovementFilter }
 function planText(it: ImprovementItem): string {
@@ -130,7 +133,7 @@ const nowLabel = computed(() => GANTT_SCALES.find(s => s.value === scale.value)?
       </div>
     </div>
 
-    <!-- ステータスで絞り込み（既定 = 対応する・対応中 = 実装が決まっていて未完了。一覧ビューと同じ選択肢） -->
+    <!-- ステータスで絞り込み（既定 = 未完了 = 未対応 + 対応中。一覧ビューと同じ選択肢） -->
     <UiChipTabs
       :model-value="statusFilter"
       :options="IMPROVEMENT_FILTER_OPTIONS"
@@ -148,7 +151,7 @@ const nowLabel = computed(() => GANTT_SCALES.find(s => s.value === scale.value)?
             :class="[GANTT_BAR_CLASS[s], CLOSED_STATUSES.includes(s) ? 'opacity-80' : '']"
             aria-hidden="true"
           />
-          {{ IMPROVEMENT_STATUS_META[s].label }}
+          {{ IMPROVEMENT_ITEM_STATUS_META[s].label }}
         </span>
       </div>
     </div>
@@ -185,6 +188,8 @@ const nowLabel = computed(() => GANTT_SCALES.find(s => s.value === scale.value)?
           >
             <span class="block truncate text-[12px] font-semibold text-ink hover:text-brand">{{ it.title }}</span>
             <span v-if="pagesText(it)" class="block truncate text-[10px] text-muted">{{ pagesText(it) }}</span>
+            <!-- 担当者（対応中でアサイン = 関連画面に表示する要件。改修依頼 2026-08-21） -->
+            <span v-if="it.assigneeName" class="block truncate text-[10px] text-sub">担当: {{ it.assigneeName }}</span>
           </button>
 
           <div class="relative flex flex-1">
@@ -201,7 +206,7 @@ const nowLabel = computed(() => GANTT_SCALES.find(s => s.value === scale.value)?
               class="absolute top-1/2 flex h-5 -translate-y-1/2 items-center overflow-hidden rounded px-1.5 text-[10px] font-semibold text-white"
               :class="[barTone(it), isClosed(it) ? 'opacity-80' : '']"
               :style="{ left: `calc(${barOf(it)!.left}% + 2px)`, width: `calc(${barOf(it)!.width}% - 4px)` }"
-              :title="`${it.title}（${planText(it)}・${IMPROVEMENT_STATUS_META[it.status].label}）`"
+              :title="`${it.title}（${planText(it)}・${statusLabelOf(it)}${it.assigneeName ? `・担当 ${it.assigneeName}` : ''}）`"
               @click="emit('open', it)"
             >
               <span class="truncate">{{ planText(it) }}</span>
@@ -231,7 +236,7 @@ const nowLabel = computed(() => GANTT_SCALES.find(s => s.value === scale.value)?
           :title="`${it.title}｜${pagesText(it)}`"
           @click="emit('open', it)"
         >
-          <UiStatusBadge :tone="IMPROVEMENT_STATUS_META[it.status].tone" :label="IMPROVEMENT_STATUS_META[it.status].label" dot />
+          <UiStatusBadge :tone="statusToneOf(it)" :label="statusLabelOf(it)" dot />
           <span class="ml-1.5">{{ it.title }}</span>
         </button>
       </div>

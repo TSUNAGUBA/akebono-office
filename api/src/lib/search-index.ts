@@ -14,6 +14,7 @@
  */
 import { createHash } from 'node:crypto'
 import type pg from 'pg'
+import { KB_DOCS, kbSearchText } from '../../../shared/domain/kb'
 import { bigramCoverage } from '../../../shared/domain/text-match'
 import type { Env } from '../env'
 import { capCp } from './text'
@@ -32,7 +33,7 @@ export interface SearchSegment {
 }
 
 export interface SearchDocInput {
-  sourceKind: 'company' | 'contact' | 'industry' | 'knowledge' | 'project' | 'note' | 'document' | 'customer-log'
+  sourceKind: 'company' | 'contact' | 'industry' | 'knowledge' | 'project' | 'note' | 'document' | 'customer-log' | 'manual'
   sourceId: string
   title: string
   aliases: string[]
@@ -59,6 +60,9 @@ export const TITLE_CHECKS: Record<SearchDocInput['sourceKind'], SegmentCheck> = 
   knowledge: { entity: 'knowledge', field: 'title' },
   project: { entity: 'projects', field: 'name' },
   'customer-log': { entity: 'customer_logs', field: 'title' },
+  // アプリ利用マニュアル・仕様（shared/domain/kb = 改修依頼 2026-08-21）は全員が参照できる公開情報 =
+  // 権限チェック対象の実エンティティを持たない（renderer は manual を permission チェックの対象外にする）
+  manual: { entity: '', field: '' },
 }
 
 const seg = (text: string, ...checks: SegmentCheck[]): SearchSegment => ({ text, checks })
@@ -342,6 +346,21 @@ export async function buildSearchDocs(pool: pg.Pool): Promise<SearchDocInput[]> 
     if (d.extractedText) segments.push(seg(capCp(d.extractedText, 1500), c('documents', 'summary')))
     docs.push({
       sourceKind: 'document', sourceId: d.id, title: d.name, aliases: [], segments,
+      ownerMemberId: null,
+    })
+  }
+
+  // ---- アプリ利用マニュアル・仕様（shared/domain/kb = コード内 SoT。改修依頼 2026-08-21） ----
+  // AI チャットボットが「アプリの使い方・仕様」の質問へ根拠付きで回答するための RAG 素材。
+  // 全員が参照できる公開情報（ownerMemberId = null・segments に権限チェックなし）。
+  // KB_DOCS の変更はデプロイ時の再生成（起動時 rebuild = 原則1）で body_hash 差分だけが upsert される
+  for (const kb of KB_DOCS) {
+    docs.push({
+      sourceKind: 'manual',
+      sourceId: kb.id,
+      title: kb.title,
+      aliases: kb.keywords,
+      segments: [seg(capCp(kbSearchText(kb), 4000))],
       ownerMemberId: null,
     })
   }

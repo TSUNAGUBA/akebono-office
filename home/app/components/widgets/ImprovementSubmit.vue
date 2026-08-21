@@ -165,7 +165,7 @@ function again(): void {
 const editingSent = ref(false)
 const editBusy = ref(false)
 
-async function saveEditSent(payload: { body: string; tags: string[]; links: string[]; images: ImprovementRequestImage[] }): Promise<void> {
+async function saveEditSent(payload: { body: string; tags: string[]; links: string[]; images: ImprovementRequestImage[]; targetSpot: string }): Promise<void> {
   if (!lastId.value || editBusy.value) return
   editBusy.value = true
   try {
@@ -176,6 +176,7 @@ async function saveEditSent(payload: { body: string; tags: string[]; links: stri
       tags.value = payload.tags
       links.value = payload.links
       images.value = payload.images
+      targetSpot.value = payload.targetSpot
       editingSent.value = false
       if (res.persisted === false) {
         // mock の localStorage 容量超過（submit と同型の警告 = 消える編集を黙認しない）
@@ -285,6 +286,7 @@ async function undo(): Promise<void> {
         :initial-tags="tags"
         :initial-links="links"
         :initial-images="images"
+        :initial-target-spot="targetSpot"
         :busy="editBusy"
         :active="editingSent"
         @save="saveEditSent"
