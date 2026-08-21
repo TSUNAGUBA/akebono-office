@@ -7813,14 +7813,23 @@ describe('対応方針ステータス（運用対応/継続検討 = 改修依頼
         as: ADMIN, body: { status: 'deferred', revisitOn: '2026-10-01' },
       })
       expect((resched.json.data as ItemRow).revisitOn).toBe('2026-10-01')
+      // 運用対応は運用案内コメント必須（AKO-REQ-024 = 改善要望 2026-08-21）
+      expect((await api('POST', '/v1/improvements/items/imp-t-defer/status', { as: ADMIN, body: { status: 'operational' } })).json.error?.code)
+        .toBe('AKO-REQ-024')
       // 継続検討 → 運用対応（結論）は可・deferred 以外への遷移でも revisit_on は保持（履歴保全 = クリアしない）
-      const toOps = await api('POST', '/v1/improvements/items/imp-t-defer/status', { as: ADMIN, body: { status: 'operational' } })
+      const toOps = await api('POST', '/v1/improvements/items/imp-t-defer/status', {
+        as: ADMIN, body: { status: 'operational', note: '設定画面から手動で変更できます' },
+      })
       expect((toOps.json.data as ItemRow)).toMatchObject({ status: 'operational', revisitOn: '2026-10-01' })
+      // 運用案内はメモ（時系列・kind=note）へ「運用案内: 」接頭辞つきで同一 Tx 記録される
+      const opsNotes = (await api('GET', '/v1/improvements/notes?itemId=imp-t-defer', { as: ADMIN })).json.data as { body: string }[]
+      expect(opsNotes.some(n => n.body === '運用案内: 設定画面から手動で変更できます')).toBe(true)
       // 運用対応 → 解決済み は不可（AKO-REQ-006）・運用対応 → 改善対応（見直し）は可
       expect((await api('POST', '/v1/improvements/items/imp-t-defer/status', { as: ADMIN, body: { status: 'resolved' } })).json.error?.code)
         .toBe('AKO-REQ-006')
       expect((await api('POST', '/v1/improvements/items/imp-t-defer/status', { as: ADMIN, body: { status: 'accepted' } })).status).toBe(200)
     } finally {
+      await pool.query(`DELETE FROM improvement_notes WHERE item_id = 'imp-t-defer'`)
       await pool.query(`DELETE FROM improvement_items WHERE id = 'imp-t-defer'`)
     }
   })
@@ -8388,6 +8397,21 @@ describe('0078: 週報・月報権限ルールの旧 reports キーからの移�
     const n = await pool.query(`SELECT count(*)::int AS n FROM permission_rules WHERE id LIKE 't78-%'`)
     expect(n.rows[0].n).toBe(5)
     await pool.query(`DELETE FROM permission_rules WHERE id LIKE 't78-%'`)
+  })
+
+  it('同一対象が新キーのルール（タブでも）を持つ場合、機能レベル deny は複製されない（deny 強化しない）', async () => {
+    await pool.query(`
+      INSERT INTO permission_rules (id, subject_kind, subject_id, resource, field, effect, active) VALUES
+        ('t78c-f', 'role', 'member', 'reports', NULL, 'deny', true),
+        ('t78c-new', 'role', 'member', 'weekly-report', 'tab:mine', 'deny', true)`)
+    const sql = readFileSync(new URL('../../db/migrations/0078_report_split_rule_migration.sql', import.meta.url), 'utf8')
+    await pool.query(sql)
+    // weekly-report はタブルール保持者 = 明示管理中 → 機能 deny を複製しない / monthly-report は複製される
+    const wr = await pool.query(`SELECT 1 FROM permission_rules WHERE id = 't78c-f:wr'`)
+    expect(wr.rows.length).toBe(0)
+    const mr = await pool.query(`SELECT effect FROM permission_rules WHERE id = 't78c-f:mr'`)
+    expect(mr.rows[0]).toMatchObject({ effect: 'deny' })
+    await pool.query(`DELETE FROM permission_rules WHERE id LIKE 't78c-%'`)
   })
 
   it('新キー側に同一対象のルールが既にあれば旧行は無効化される（管理者の新設定を上書きしない）', async () => {

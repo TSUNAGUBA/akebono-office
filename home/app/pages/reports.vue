@@ -7,7 +7,7 @@
  *   replace リダイレクトする = 旧リンク・通知・ブックマーク互換〔原則7〕）
  * - 参照権限は権限表の「日報・週報の参照対象」（F-16-6 canViewMemberReports）で管理する
  * - 自分の日報: 週/月の表示モード（月は横スクロール・カレンダーの 2 ビュー）+ テーブル形式の通常入力 +
- *   明日の予定（最大 3 件。翌営業日の日報へ自動反映）
+ *   明日の予定（自由テキスト。改修依頼 2026-08-21 でリスト形式＋翌営業日エントリへの自動反映を廃止）
  * - 全員の日報・チーム: 部署・メンバーで絞り込み
  * - チーム: 週/月の表示モード（月は横スクロールマトリクス・カレンダーの 2 ビュー）
  * 参照 = 基本ビュー・入力 = ボタン押下で表示（バッチ7h・オペレーター指示 2026-07-19 #10 ④）
@@ -21,6 +21,7 @@ import { DAILY_ISSUE_CATEGORY_PRESETS } from '../../../shared/domain/types'
 import { REPORT_STATUS_LABELS } from '~/composables/useReports'
 import { hhmmToMin } from '../../../shared/domain/jst'
 import { toQuarterHours } from '../../../shared/domain/report-draft'
+import { capCodePoints } from '../../../shared/domain/improvement'
 import { addDays, daysInMonth, fmtDate, fmtDateLong, fmtMinutes, fmtTime, weekdayOf } from '~/utils/format'
 import { EMPLOYMENT_TYPE_LABELS, EMPLOYMENT_TYPE_TONES } from '~/utils/labels'
 import { parseTeamVisibleIds } from '~/utils/team-visibility'
@@ -462,9 +463,9 @@ async function importCalendarEvents(): Promise<void> {
     }
     const existing = new Set(editEntries.value.map(e => entryTheme(e).trim()).filter(Boolean))
     const rows: ReportEntry[] = events
-      .filter(e => !existing.has([...e.title.trim()].slice(0, 100).join('')))
+      .filter(e => !existing.has(capCodePoints(e.title.trim(), 100)))
       .map(e => ({
-        theme: [...e.title.trim()].slice(0, 100).join(''), projectId: '', task: '',
+        theme: capCodePoints(e.title.trim(), 100), projectId: '', task: '',
         hours: toQuarterHours(Math.max(0, hhmmToMin(e.to) - hhmmToMin(e.from))), progress: 0,
       }))
     if (rows.length === 0) {
@@ -474,7 +475,7 @@ async function importCalendarEvents(): Promise<void> {
     // 未入力の初期行（空行）は取り込んだ行で置き換える（空行が先頭に残らない）
     const nonEmpty = editEntries.value.filter(e => e.task.trim() || (e.theme ?? '').trim())
     editEntries.value = [...nonEmpty, ...rows]
-    show(`カレンダーから ${rows.length} 件の予定を取り込みました`)
+    show(`カレンダーから ${rows.length} 件の予定を取り込みました（内容欄に実施した作業を記入してください）`)
   }, { message: 'カレンダーの予定を読み込んでいます…' })
 }
 

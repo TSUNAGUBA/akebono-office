@@ -65,8 +65,10 @@ describe('parseReminderLastSent（種別ごとの最終送信日）', () => {
       .toEqual({ daily: '2026-08-20', weekly: '2026-08-18' })
   })
 
-  it('旧形状（単一日付の JSON 文字列 = 種別化前の日報記録）は daily として読み替える（原則7）', () => {
-    expect(parseReminderLastSent('"2026-08-20"')).toEqual({ daily: '2026-08-20' })
+  it('旧形状は daily として読み替える（原則7。API = jsonb デコード済みの素の日付 / mock = JSON 文字列）', () => {
+    expect(parseReminderLastSent('2026-08-20')).toEqual({ daily: '2026-08-20' }) // jsonb 経由（監査 R1 MAJOR-1）
+    expect(parseReminderLastSent('"2026-08-20"')).toEqual({ daily: '2026-08-20' }) // JSON 文字列経由
+    expect(parseReminderLastSent('not-a-date')).toEqual({}) // 日付でない文字列は未送信扱い
   })
 
   it('未設定・壊れは空（= 未送信扱い。誤抑制しない）', () => {

@@ -12,6 +12,7 @@ import { WEEKLY_TEAM_SHARE_DEFAULT, WEEKLY_TEAM_SHARE_KINDS } from '../../../../
 import { REPORT_STATUS_LABELS } from '~/composables/useReports'
 import { addDays, todayJst } from '~/utils/format'
 import { weekRangeLabel } from '~/utils/report-weeks'
+import { isRealDateKey } from '../../../../shared/domain/jst'
 import { WEEKLY_REPORT_EXAMPLE } from '~/utils/weekly-report-templates'
 
 const reports = useReports()
@@ -20,8 +21,10 @@ const { show } = useToast()
 const { ask } = useConfirm()
 const { isRunning, run } = useAsyncAction()
 
-// 参照する週を選択できる（オペレーター指示 2026-07-21 #2）。既定 = 今週（月曜始まり）
-const selWeekStart = ref(reports.weekStartOf(todayJst()))
+// 参照する週を選択できる（オペレーター指示 2026-07-21 #2）。既定 = 今週（月曜始まり）。
+// 通知ディープリンクの `?week=`（週報リマインド F-48-3）は実在日なら weekStartOf で正規化して初期選択
+const qWeek = (() => { const q = useRoute().query.week; return typeof q === 'string' ? q : '' })()
+const selWeekStart = ref(reports.weekStartOf(isRealDateKey(qWeek) ? qWeek : todayJst()))
 const selWeekly = computed(() => reports.myWeeklyOn(selWeekStart.value))
 const isThisWeek = computed(() => selWeekStart.value === reports.weekStartOf(todayJst()))
 

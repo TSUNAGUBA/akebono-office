@@ -1088,9 +1088,12 @@ export interface DailyReport {
    * 旧データは未設定（原則7 = 表示・保存とも空扱い）
    */
   issueCategory?: string
-  /** 旧形式の明日の予定（自由記述）。新規入力は tomorrowPlans が正（原則7 = 既存データの表示のため保持） */
+  /** 明日の予定（自由テキスト。改修依頼 2026-08-21 でテキスト入力へ回帰 = 新規保存はこちらが正） */
   tomorrow: string
-  /** 明日の予定（構造化・最大 TOMORROW_PLANS_MAX 件）。旧データは未設定 */
+  /**
+   * 旧形式の明日の予定（構造化リスト。2026-08-21 廃止）。既存データの表示互換のため保持し、
+   * 編集開始時にテキストへ変換・保存時は空配列で送る（原則7）
+   */
   tomorrowPlans?: TomorrowPlan[]
   status: 'draft' | 'submitted'
   submittedAt: string | null

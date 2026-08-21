@@ -15,7 +15,7 @@
  * - 実行主体はサーバー cron（POST /jobs/report-reminders → api/src/routes/reports.ts runReportReminders）。
  *   モックモードは plugins/report-reminder.client.ts がデモ用にアプリ起動時 1 回だけ判定する
  */
-import { addDays, weekdayOf } from './jst'
+import { addDays, isRealDateKey, weekdayOf } from './jst'
 
 export type ReportReminderKind = 'daily' | 'weekly' | 'monthly'
 export const REPORT_REMINDER_KINDS: ReportReminderKind[] = ['daily', 'weekly', 'monthly']
@@ -100,19 +100,24 @@ export function parseReportReminderConfig(raw: unknown): ReportReminderConfig {
 export type ReminderLastSent = Partial<Record<ReportReminderKind, string>>
 
 /**
- * 最終送信日のパース。旧形状（単一の日付文字列 = 種別化前の日報送信記録）は daily として読み替える（原則7）
+ * 最終送信日のパース。旧形状（単一の日付文字列 = 種別化前の日報送信記録）は daily として読み替える（原則7）。
+ * 旧値は保存経路により 2 形で届く: API モード = app_configs jsonb の自動デコード済み**素の日付文字列**
+ * （'2026-08-20'。JSON.parse すると SyntaxError）/ モック = JSON 文字列（'"2026-08-20"'）。
+ * どちらも { daily } へ読み替えないと、デプロイ当日に日報リマインドが重複送信される（監査 R1 MAJOR-1）
  */
 export function parseReminderLastSent(raw: unknown): ReminderLastSent {
   let v: unknown = raw
   if (typeof v === 'string') {
-    if (!v.trim()) return {}
+    const s = v.trim()
+    if (!s) return {}
     try {
-      v = JSON.parse(v)
+      v = JSON.parse(s)
     } catch {
-      return {}
+      // JSON でない文字列 = jsonb 経由の旧形状（素の日付キー）。日付でなければ未送信扱い（誤抑制しない）
+      return isRealDateKey(s) ? { daily: s } : {}
     }
   }
-  if (typeof v === 'string') return v ? { daily: v } : {} // JSON.parse 後も文字列（= 旧形状 '"2026-08-20"'）
+  if (typeof v === 'string') return isRealDateKey(v) ? { daily: v } : {} // JSON.parse 後も文字列（= '"2026-08-20"'）
   if (!v || typeof v !== 'object' || Array.isArray(v)) return {}
   const o = v as Record<string, unknown>
   const out: ReminderLastSent = {}

@@ -1109,6 +1109,15 @@ export async function runReportReminders(pool: pg.Pool): Promise<{ notified: num
     }
     if (!fire.daily && !fire.weekly && !fire.monthly) return { notified: 0 }
 
+    // 送信済み記録は**種別の送信完了直後**に upsert する（後続種別の失敗で先行種別の記録が失われて
+    // 次回に再送される事故を防ぐ = 原則2・監査 R1 MINOR-3）
+    const persistLastSent = async (): Promise<void> => {
+      await pool.query(
+        `INSERT INTO app_configs (key, value) VALUES ('report-reminder-last-sent', $1)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+        [JSON.stringify(lastSent)])
+    }
+
     const membersQ = await pool.query<{ id: string }>(`SELECT id FROM members WHERE active = true`)
 
     if (fire.daily) {
@@ -1132,6 +1141,7 @@ export async function runReportReminders(pool: pg.Pool): Promise<{ notified: num
         notified++
       }
       lastSent.daily = today
+      await persistLastSent()
     }
 
     if (fire.weekly) {
@@ -1148,6 +1158,7 @@ export async function runReportReminders(pool: pg.Pool): Promise<{ notified: num
         notified++
       }
       lastSent.weekly = today
+      await persistLastSent()
     }
 
     if (fire.monthly) {
@@ -1164,13 +1175,9 @@ export async function runReportReminders(pool: pg.Pool): Promise<{ notified: num
         notified++
       }
       lastSent.monthly = today
+      await persistLastSent()
     }
 
-    // 送信済みの記録は通知発行後に upsert（種別ごとの最終送信日。設定系のみ更新・記録系は追記済み = 原則2）
-    await pool.query(
-      `INSERT INTO app_configs (key, value) VALUES ('report-reminder-last-sent', $1)
-       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-      [JSON.stringify(lastSent)])
   } catch (e) {
     console.warn('runReportReminders failed (non-blocking):', (e as Error).message)
   } finally {

@@ -30,6 +30,13 @@ const error = ref('')
 /** 反映済みの取消用スナップショット（反映のたびに更新。再生成・別提案で破棄） */
 const undoSource = ref<ActivityDigestProposal | null>(null)
 
+// 表示対象の活動が切り替わったら前の活動のスナップショット・エラーを破棄する
+// （残したまま「取消」すると別活動の before を新活動へ書き込んでしまう）
+watch(() => props.activityId, () => {
+  undoSource.value = null
+  error.value = ''
+})
+
 async function generate(): Promise<void> {
   if (generating.value) return
   generating.value = true
@@ -89,6 +96,7 @@ async function applyProposal(): Promise<void> {
   // 現在値と差のあるフィールドだけを反映する（表示している差分と反映内容を一致させる）
   const target: ActivityDigestProposal = {}
   for (const row of proposalRows.value) target[row.key] = proposal[row.key] as never
+  if (Object.keys(target).length === 0) return // 全フィールドが現在値と同値 = 反映するものがない
   applying.value = true
   error.value = ''
   try {

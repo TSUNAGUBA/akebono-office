@@ -299,8 +299,9 @@ Phase B（設定系）・Phase C（記録系 + 売上軸）に続く**最終フ�
   active な各業態（`business_segments`）を実行時に `MenuCard`（安定 id = `akebono-seg:<segmentId>`）へ写像し
   （`useAkebonoAppCards` / 純関数 `akebonoSegmentCard`）、セクション定義の `cardIds` にはこの安定 id を保持する。
   業態は動的（増減）のため、`cardIds` に残った未存在業態の id は `categorizeCards` が単に無視する（既存挙動）。
-  二重表示防止: セクションへ割当済みの業態はセクション配置側に、未割当業態は専用「AKEBONO 業務（業態別）」
-  セクションに出す（`planDashboardCards`。純関数・テスト済み）。
+  配置は他メニューカードと完全に同一（`categorizeCards`）: セクションへ割当済みの業態はその位置に、
+  未割当業態は「その他」セクション（`showOther` 設定で表示制御）に出す。最上段の固定「AKEBONO 業務」
+  セクションと専用純関数 `planDashboardCards` は改善要望 2026-08-21 で廃止（セクション設定へ統合）。
 
 ### 1.11 顧客コンテキスト（`customer_contexts` / `customer_context_notes`。0076 = 改修依頼 2026-08-20）
 

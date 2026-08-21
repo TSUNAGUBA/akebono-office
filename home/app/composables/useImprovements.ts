@@ -378,13 +378,25 @@ export function useImprovements() {
    * deferred 以外への遷移では revisitOn を保持する（クリアしない = 履歴保全）。
    * deferred → deferred は再検討日の変更（リスケジュール）として受理する（原則9.5 の選び直し導線）。
    */
-  async function setStatus(id: string, status: ImprovementStatus, revisitOn?: string): Promise<Result> {
+  /** ステータス変更。deferred は revisitOn 必須・operational は運用案内 note 必須（改善要望 2026-08-21。
+   *  API/mock とも同一検証 = パリティ。メモ追記とステータス変更は 1 コール = 非原子な 2 コールを作らない） */
+  async function setStatus(
+    id: string, status: ImprovementStatus, revisitOn?: string, note?: string,
+  ): Promise<Result> {
     const revisit = status === 'deferred' ? (revisitOn ?? '').trim() : ''
     const revisitMsg = improvementRevisitError(status, revisit)
     if (revisitMsg) return { ok: false, error: { code: 'AKO-REQ-023', message: revisitMsg } }
+    const opsNote = status === 'operational' ? (note ?? '').trim() : ''
+    if (status === 'operational' && !opsNote) {
+      return { ok: false, error: { code: 'AKO-REQ-024', message: '運用対応にする場合は、運用方法の案内を記載してください' } }
+    }
     if (isApi) {
       const res = await apiWrite(`/v1/improvements/items/${id}/status`, {
-        body: { status, ...(status === 'deferred' ? { revisitOn: revisit } : {}) },
+        body: {
+          status,
+          ...(status === 'deferred' ? { revisitOn: revisit } : {}),
+          ...(status === 'operational' ? { note: opsNote } : {}),
+        },
       })
       if (res.ok) await refresh()
       return res.ok ? { ok: true, id } : res
@@ -398,6 +410,28 @@ export function useImprovements() {
       return { ok: false, error: { code: 'AKO-REQ-006', message: `「${cur.status}」から「${status}」へは変更できません` } }
     }
     const now = nowJstIso()
+    // 運用案内はメモ（時系列）へ追記してからステータス変更（API と同一の記録形）
+    if (status === 'operational') {
+      const notesRef = tbl('improvementNotes')
+      notesRef.value = [...notesRef.value, {
+        id: nextId('improvementNotes', 'imnote'),
+        itemId: id,
+        memberId: currentUser.value.id,
+        memberName: currentUser.value.name,
+        body: capCodePoints(`運用案内: ${opsNote}`, IMPROVEMENT_NOTE_CAP),
+        kind: 'note' as const,
+        archivedAt: null,
+        createdAt: now,
+      }]
+      // 紐づく要望の起票者へ運用案内を通知（API と同一挙動 = レビュー R1 M-3。非ブロッキング）
+      const authors = [...new Set(tbl('improvementRequests').value
+        .filter(r => r.itemId === id && !r.archivedAt)
+        .map(r => r.memberId)
+        .filter((m): m is string => !!m))]
+      for (const m of authors) {
+        notifications?.notify(m, 'system', '改善要望が「運用対応」になりました', `運用案内: ${opsNote}`, '/improvements')
+      }
+    }
     itemsRef.value = itemsRef.value.map(it => (it.id === id
       ? {
           ...it,

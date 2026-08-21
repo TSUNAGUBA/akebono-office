@@ -14,6 +14,7 @@ import { WEEKLY_TEAM_SHARE_DEFAULT, WEEKLY_TEAM_SHARE_KINDS } from '../../../../
 import type { MonthlyReportInput, WeeklyReportInput } from '~/composables/useReports'
 import { MONTHLY_REPORT_EXAMPLE, WEEKLY_REPORT_EXAMPLE } from '~/utils/weekly-report-templates'
 import { addDays } from '~/utils/format'
+import { isRealDateKey } from '../../../../shared/domain/jst'
 
 type PeriodReport = WeeklyReport | MonthlyReport
 
@@ -90,7 +91,14 @@ const teamShareKindOptions = WEEKLY_TEAM_SHARE_KINDS.map(k => ({ value: k, label
 
 // ---------- 期間選択 ----------
 
-const selStart = ref(periodStartOf(todayJst()))
+/** 通知ディープリンクの期間クエリ（週報 `?week=` / 月報 `?month=` = リマインド F-48-3/4）。
+ *  実在日なら periodStartOf で期間開始日へ正規化して初期選択・無効値は既定（今週/今月）へフォールバック */
+function initialStart(): string {
+  const q = useRoute().query[isWeekly.value ? 'week' : 'month']
+  const v = typeof q === 'string' ? q : ''
+  return isRealDateKey(v) ? periodStartOf(v) : periodStartOf(todayJst())
+}
+const selStart = ref(initialStart())
 const isCurrent = computed(() => selStart.value === periodStartOf(todayJst()))
 function movePeriod(delta: number): void { selStart.value = stepPeriod(selStart.value, delta) }
 function toCurrent(): void { selStart.value = periodStartOf(todayJst()) }

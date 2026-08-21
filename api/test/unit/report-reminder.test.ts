@@ -32,7 +32,8 @@ describe('parseReportReminderConfig（種別設定の両形対応）', () => {
 })
 
 describe('parseReminderLastSent（送信済み記録の両形対応）', () => {
-  it('旧形状（単一日付の JSON 文字列）は daily・新形状は種別ごとに読む', () => {
+  it('旧形状（素の日付 = jsonb 経由 / JSON 文字列 = mock 経由）は daily・新形状は種別ごとに読む', () => {
+    expect(parseReminderLastSent('2026-08-20')).toEqual({ daily: '2026-08-20' }) // 監査 R1 MAJOR-1
     expect(parseReminderLastSent('"2026-08-20"')).toEqual({ daily: '2026-08-20' })
     expect(parseReminderLastSent({ weekly: '2026-08-18' })).toEqual({ weekly: '2026-08-18' })
     expect(parseReminderLastSent(undefined)).toEqual({})

@@ -672,7 +672,8 @@ const operationalNote = ref('')
 const operationalError = ref('')
 const operationalBusy = ref(false)
 
-/** 運用対応にする（運用案内コメント必須 = メモへ記録してからステータス変更。起票者の解決判断の材料） */
+/** 運用対応にする（運用案内コメント必須。メモ記録 + ステータス変更 + 起票者への通知は setStatus が
+ *  単一処理で行う = 非原子な 2 コールを作らない。レビュー R1 m-2/m-3/M-3） */
 async function confirmOperational(): Promise<void> {
   if (!selected.value || operationalBusy.value) return
   const note = operationalNote.value.trim()
@@ -682,11 +683,9 @@ async function confirmOperational(): Promise<void> {
   }
   operationalBusy.value = true
   try {
-    const nr = await imp.addNote(selected.value.id, `運用案内: ${note}`)
-    if (!nr.ok) { toast.show(`${nr.error.code}: ${nr.error.message}`, 'crit'); return }
-    const res = await imp.setStatus(selected.value.id, 'operational')
+    const res = await imp.setStatus(selected.value.id, 'operational', undefined, note)
     if (res.ok) {
-      toast.show(`「${statusLabel('operational')}」にしました（運用案内をメモに記録）`, 'ok')
+      toast.show(`「${statusLabel('operational')}」にしました（運用案内をメモに記録し、起票者へ通知）`, 'ok')
       operationalMode.value = false
       operationalNote.value = ''
       operationalError.value = ''
@@ -1431,8 +1430,8 @@ async function copyAndClose(): Promise<void> {
               <button type="button" class="btn btn-primary btn-sm" :disabled="rejectBusy" @click="confirmReject">「対応見送り」にする</button>
             </div>
           </div>
-          <!-- 「運用対応」への変更: 運用案内コメント必須（改善要望 2026-08-21。起票者はこの案内を見て
-               自分の要望を「解決済み」へ移す = メモ〔時系列〕に「運用案内: …」として記録される） -->
+          <!-- 「運用対応」への変更: 運用案内コメント必須（改善要望 2026-08-21）。メモ〔時系列〕へ記録され、
+               紐づく要望の起票者へ全文が通知される（起票者はこれを確認して「解決済み」へ移す = R1 M-3） -->
           <div v-if="operationalMode" class="grid gap-2 rounded-lg border border-line bg-surface-soft p-2.5">
             <UiFormField label="運用方法の案内（必須・メモに記録されます）" required>
               <textarea
@@ -1718,7 +1717,7 @@ async function copyAndClose(): Promise<void> {
                 <Check class="h-3.5 w-3.5" aria-hidden="true" />
                 解決済みにする
               </button>
-              <span class="text-[11px] text-muted">対応内容・運用案内を確認できたら「解決済み」にしてください</span>
+              <span class="text-[11px] text-muted">対応内容・運用案内（通知でお知らせします）を確認できたら「解決済み」にしてください</span>
             </template>
             <template v-else>
               <UiStatusBadge :tone="IMPROVEMENT_REQUEST_STATUS_META.resolved.tone" label="解決済み" dot />

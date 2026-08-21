@@ -3829,6 +3829,8 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
 - [x] 権限の独立: 機能キー `weekly-report` / `monthly-report` + タブカタログ（mine/all/team）新設。
   **下位互換 = 新キーの明示ルールが無い間は旧 'reports' 設定を継承**（resolveFeatureResource /
   resolveTabPermission = フロント usePermissions と API featureGuard が同一関数を共有）。
+  **→ この動的継承は §102-3（改善要望 2026-08-21）で撤去**（旧 deny が権限表に見えず解除不能な実バグの原因。
+  0078 で物理移行・両関数は素通し化して残置 = 当時の記録として本項は残す）。
   API は PATH_FEATURES を最長一致で分離し、**reads（既読管理・kind 混在）はパスガード対象外 +
   ハンドラ内 kind 別判定**（reportReadsFeatureKey。「日報 deny × 週報 allow」で既読管理が全滅する組合せを解消 = R1）。
   remind は日報専用のため 'reports' に残置（設計判断）
@@ -4270,5 +4272,29 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   docs: F-42 追補。
 
 ### 102-7 検証・反復レビュー（原則9 = SP-8）
-- [ ] home vitest / api unit / 統合（実 PostgreSQL）/ 両 typecheck / generate / モバイル 375px
-- [ ] 独立レビュー（コードレビュアー + システム監査官）を指摘ゼロまで反復
+- [x] home vitest / api unit / 統合（実 PostgreSQL）/ 両 typecheck / generate / モバイル 375px（初回 + R1 対応後に再実行）
+- [x] 独立レビュー（コードレビュアー + システム監査官）を指摘ゼロまで反復
+- 反復記録:
+  - R1（コードレビュアー M3/m7/NIT6・システム監査官 MAJOR2/MINOR4/NIT3。重複統合済み）→ 全件対応:
+    - M-1/監査MAJOR-1: 旧 last-sent が jsonb 経由で素の日付文字列で届き JSON.parse 失敗 → 全員に日報リマインド再送
+      の恐れ → parseReminderLastSent が実在日付文字列を daily として受理 + 単体テスト追加
+    - M-2/監査MINOR-3: last-sent の一括 upsert は後続種別の失敗で先行種別の送信記録を失う → 種別送信完了直後に
+      persistLastSent（原則2）
+    - M-3: 運用案内メモは管理者専用で起票者に見えず「起票者が確認して解決済みへ」の要件ループ不成立 →
+      operational 遷移時に紐づく要望の起票者へ notify(kind=system) で運用案内全文を通知（API/mock 両実装）
+    - 監査MINOR-4/m-4: 0078 の機能レベル複製スキップを subject 単位（field 不問）へ拡大 + 複製をタブ移行より
+      先に実行する順序へ入替（移行済みタブルールを「管理者の新設定」と誤認して deny 複製を落とさない）+ 統合テスト
+    - 監査MINOR-1/m-2: operational の運用案内を API でも必須化（AKO-REQ-024）+ メモ INSERT とステータス
+      UPDATE を同一 Tx 化・UI は setStatus 1 コールへ
+    - MAJOR-2/m-5: 撤去概念（tomorrowPlans 自動反映・権限の動的継承・planDashboardCards・AkebonoSegmentApps）の
+      ドキュメント・コメント残置を全件是正（reports.vue / types.ts / screen-design / data-design / api-design /
+      akebono-menu-design / weekly・monthly-report.vue / usePermissions / api permissions / CONVENTIONS /
+      menu-registry / F-42-12 / F-50-1 / F-48-2 / F-49-3）
+    - m-1/監査MINOR-2: リマインド通知リンクの `?week=` / `?month=` を遷移先（WeeklyMinePanel / PeriodPanel）が
+      解釈し対象期間を初期選択（無効値は今週・今月へフォールバック）
+    - m-6: 孤児化した AkebonoSegmentApps（components/akebono/SegmentApps.vue）を削除
+    - m-7: ActivityDigestCard が activityId 切替で undo スナップショット・エラーをリセット（別活動への誤書込防止）
+    - NIT: weekStartOf を shared weekStartKeyOf へ委譲（二重定義解消）/ カレンダー取込テーマを capCodePoints へ
+      統一 + トーストに内容記入ヒント / mock 旧 v1 last-sent キーの掃除 / applyProposal の空 target ガード /
+      非管理者の要望ステータス変更は存在有無に関わらず一律 403（存在オラクル防止）
+  - R2（両ロール再レビュー）→ 結果は本行を更新して記録する

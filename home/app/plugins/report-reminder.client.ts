@@ -73,8 +73,10 @@ export default defineNuxtPlugin(() => {
       lastSent.monthly = today
     }
 
-    // 送信済みの記録は通知発行後（進捗の巻き戻し・再送を防ぐ = 原則2）
+    // 送信済みの記録は通知発行後（進捗の巻き戻し・再送を防ぐ = 原則2）。
+    // v2 保存が成立したら役目を終えた旧 v1 キーを掃除する（読み替え済みのため情報は失わない）
     localStorage.setItem(LAST_SENT_KEY, JSON.stringify(lastSent))
+    localStorage.removeItem(LEGACY_LAST_SENT_KEY)
   } catch {
     // リマインドは補助処理。失敗は握りつぶしてアプリ起動を止めない（原則4）
   }
