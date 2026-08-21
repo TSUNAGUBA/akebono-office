@@ -167,9 +167,11 @@ const { lookupCompany, createCompany } = useCompanyResolve()
 // Memo/リサーチ履歴 = 追記 + 論理取消〔customer_context_notes〕。AI リサーチ = 候補リスト化（API = grounded search /
 // mock = 決定的デモ。候補リンクは新規タブで開ける）→ 採用（title + uri + 抜粋 snippet = 第3弾）→
 // AI 構築（LLM → shared/domain/customer-context のヒューリスティックへフォールバック。事業メモも提案。
-// 電話番号 phone は情報源の抜粋に実在する記載のみ提案 = 創作禁止・第3弾）→ 反映（payload.before 保存。
-// phone 非空かつ現在値と異なる場合のみ companies.phone も更新 = before.companyPhone に変更前を保存）→
-// 「反映を取り消す」で復元 = 原則9.5（companyPhone キーがあるノートは電話番号も復元）。
+// 電話番号 phone は情報源の抜粋に実在する記載のみ提案 = 創作禁止・LLM は groundResearchPhone で事後検証・第3弾）→
+// 反映（payload.before 保存。phone 非空かつ現在値と異なる場合のみ companies.phone も更新 =
+// before.companyPhone に変更前を保存。更新・復元は「管理者 + 項目権限」= canReflectPhone = マスタ更新と同じ強度）→
+// 「反映を取り消す」で復元 = 原則9.5（companyPhone キーがあるノートは電話番号も生値で復元。
+// phone 参照 deny の閲覧者にはメモの companyPhone を伏せる = 項目権限の迂回防止）。
 // 旧 research ノート（before.businessNotes キーなし）の取消は現在の事業メモを保持（原則7）。機能キー customer-context）
 const ctx = useCustomerContext()  // contextOf / notesOf / archivedNotesOf / saveContext / addNote / archiveNote / restoreNote / research / buildProposal / applyResearch / revertResearch / refresh
 

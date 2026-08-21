@@ -16,6 +16,7 @@
  */
 import {
   CUSTOMER_CONTEXT_NOTE_CAP as NOTE_CAP,
+  cleanResearchSources,
   type CustomerContextInput,
   type CustomerContextBuildProposal,
   customerContextError, customerContextNoteError,
@@ -55,9 +56,16 @@ type BuildResult
 export function useCustomerContext() {
   const { tbl, commit, nextId } = useMockDb()
   const { currentUser } = useCurrentUser()
+  const perms = usePermissions()
   const isApi = useApiMode()
   const ctxRows = tbl('customerContexts')
   const noteRows = tbl('customerContextNotes')
+
+  /** AI 反映で companies.phone を更新・復元できるか（API の canReflectCompanyPhone と同一規則 = 原則6。
+   *  マスタ更新経路と同じ「管理者 + 項目権限」。不許可は電話番号だけスキップし反映/取消は続行 = 原則4） */
+  function canReflectPhone(): boolean {
+    return currentUser.value.role === 'admin' && perms.canEditField('companies', 'phone')
+  }
 
   function companyNameOf(companyId: string): string {
     return (tbl('companies').value as Company[]).find(c => c.id === companyId)?.name ?? companyId
@@ -68,11 +76,22 @@ export function useCustomerContext() {
     return (ctxRows.value as CustomerContext[]).find(r => r.companyId === companyId && r.active !== false) ?? null
   }
 
+  /** companies.phone の参照 deny ユーザーには payload.before.companyPhone を伏せる
+   *  （API の GET /notes と同一規則 = ノート経由で項目権限を迂回させない。原則6） */
+  function stripPhoneForViewer(rows: CustomerContextNote[]): CustomerContextNote[] {
+    if (perms.canField('companies', 'phone')) return rows
+    return rows.map((r) => {
+      if (r.payload?.before?.companyPhone === undefined) return r
+      const { companyPhone: _companyPhone, ...rest } = r.payload.before
+      return { ...r, payload: { ...r.payload, before: rest } }
+    })
+  }
+
   /** 有効なメモ一覧（新しい順） */
   function notesOf(companyId: string): CustomerContextNote[] {
-    return (noteRows.value as CustomerContextNote[])
+    return stripPhoneForViewer((noteRows.value as CustomerContextNote[])
       .filter(r => r.companyId === companyId && !r.archivedAt)
-      .sort(byCreatedDesc)
+      .sort(byCreatedDesc))
   }
 
   /** 取消済みメモ（復元 UI 用） */
@@ -272,13 +291,14 @@ export function useCustomerContext() {
     const prevCtx = ctxRows.value
     const prevNotes = noteRows.value
     const now = nowJstIso()
-    // 電話番号の反映（API と同一規則 = 原則6）: 非空かつ現在値と異なる場合のみ会社マスタを更新し、
-    // 変更前の値を before.companyPhone に保存（取消で復元 = 原則9.5）。失敗時ロールバック対象
+    // 電話番号の反映（API と同一規則 = 原則6）: 管理者 + 項目権限（canReflectPhone）が条件で、
+    // 非空かつ現在値と異なる場合のみ会社マスタを更新し、変更前の値を before.companyPhone に保存
+    // （取消で復元 = 原則9.5。不許可は電話番号だけスキップ = 原則4）。失敗時ロールバック対象
     const companiesTbl = tbl('companies')
     const prevCompanies = companiesTbl.value
     const companyRow = (companiesTbl.value as Company[]).find(r => r.id === companyId)
     const curPhone = companyRow?.phone ?? ''
-    if (proposedPhone && companyRow && proposedPhone !== curPhone) {
+    if (proposedPhone && companyRow && proposedPhone !== curPhone && canReflectPhone()) {
       before.companyPhone = curPhone
       companiesTbl.value = (companiesTbl.value as Company[]).map(r =>
         r.id === companyId ? { ...r, phone: proposedPhone } : r)
@@ -309,7 +329,8 @@ export function useCustomerContext() {
       memberName: currentUser.value.name,
       kind: 'research',
       body: `AI リサーチの結果を反映（採用 ${sources.length} 件: ${sources.map(s => s.title).join(' / ')}）`,
-      payload: { sources, before },
+      // 保存形は shared cleanResearchSources（title/uri/snippet cap = API と同一 = 原則6）
+      payload: { sources: cleanResearchSources(sources), before },
       archivedAt: null,
       createdAt: now,
     } satisfies CustomerContextNote]
@@ -348,11 +369,13 @@ export function useCustomerContext() {
     const prevCtx = ctxRows.value
     const prevNotes = noteRows.value
     const now = nowJstIso()
-    // 電話番号の復元（API と同一規則 = 原則6）: 反映で変更したノート（companyPhone キーあり）だけが対象
+    // 電話番号の復元（API と同一規則 = 原則6）: 反映で変更したノート（companyPhone キーあり）だけが対象。
+    // 復元も「管理者 + 項目権限」が条件（更新と対称）。保存時の生値をそのまま書き戻す
+    // （正規化 cap で反映前の値を壊さない = 原則9.5）
     const companiesTbl = tbl('companies')
     const prevCompanies = companiesTbl.value
-    if (note.payload.before.companyPhone !== undefined) {
-      const restorePhone = normalizeContextPhone(note.payload.before.companyPhone)
+    if (note.payload.before.companyPhone !== undefined && canReflectPhone()) {
+      const restorePhone = String(note.payload.before.companyPhone ?? '')
       companiesTbl.value = (companiesTbl.value as Company[]).map(r =>
         r.id === companyId && (r.phone ?? '') !== restorePhone ? { ...r, phone: restorePhone } : r)
     }

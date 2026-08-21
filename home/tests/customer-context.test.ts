@@ -13,6 +13,7 @@ import {
   CUSTOMER_CONTEXT_TEXT_CAP,
   customerContextError, customerContextNoteError, customerContextSourcesError,
   extractPhoneFromSnippets,
+  groundResearchPhone,
   heuristicContextBuild, heuristicResearchCandidates,
   normalizeContextPhone,
   normalizeCustomerContext, restoreContextFromSnapshot,
@@ -142,16 +143,39 @@ describe('heuristicContextBuild（決定的な定性情報の構築）', () => {
 })
 
 describe('電話番号の抽出・正規化（第3弾 = AI 反映の材料）', () => {
-  it('extractPhoneFromSnippets: 日本の電話番号らしい並びを最初の 1 件だけ返す・全角ハイフンも受ける', () => {
+  it('extractPhoneFromSnippets: 日本の電話番号らしい並びを最初の 1 件だけ返す・全角ハイフン/長音符も受ける', () => {
     expect(extractPhoneFromSnippets(['代表電話: 03-1234-5678。FAX: 03-1234-5679'])).toBe('03-1234-5678')
     expect(extractPhoneFromSnippets([undefined, 'TEL 011ー000ー0040（代表）'])).toBe('011-000-0040')
+    expect(extractPhoneFromSnippets(['TEL 03－1234－5678（全角ハイフン）'])).toBe('03-1234-5678')
     expect(extractPhoneFromSnippets(['電話番号の記載なし', ''])).toBe('')
     expect(extractPhoneFromSnippets([])).toBe('')
+  })
+  it('extractPhoneFromSnippets: 日付範囲の部分一致を電話番号と誤認しない（前後の数字・区切りを除外）', () => {
+    expect(extractPhoneFromSnippets(['受付期間 2026-08-01-2026-08-31'])).toBe('')
+    expect(extractPhoneFromSnippets(['注文番号 12303-1234-5678 の件'])).toBe('')
   })
   it('normalizeContextPhone: trim + 上限 cap・非文字列は空へ', () => {
     expect(normalizeContextPhone('  03-1111-2222 ')).toBe('03-1111-2222')
     expect(normalizeContextPhone(undefined)).toBe('')
     expect([...normalizeContextPhone('0'.repeat(100))].length).toBe(40)
+  })
+})
+
+describe('groundResearchPhone（LLM 提案の事後検証 = 創作防止の構造的担保。レビュー R1）', () => {
+  const sources = [
+    { title: '会社概要', uri: 'https://example.com/about', snippet: '会社概要ページ。代表電話: 03-1234-5678。' },
+    { title: 'ニュース', uri: 'https://example.com/news' },
+  ]
+  it('LLM の値が採用ソースの title/抜粋に実在する場合のみ採用する', () => {
+    expect(groundResearchPhone('03-1234-5678', sources)).toBe('03-1234-5678')
+  })
+  it('実在しない値（幻覚の可能性）は抜粋からの抽出へフォールバック → 実在する記載を返す', () => {
+    expect(groundResearchPhone('06-9999-0000', sources)).toBe('03-1234-5678')
+  })
+  it('抜粋にも記載がなければ空（電話番号を創作しない）', () => {
+    const noPhone = [{ title: 'ニュース', uri: 'https://example.com/news', snippet: '記事本文' }]
+    expect(groundResearchPhone('06-9999-0000', noPhone)).toBe('')
+    expect(groundResearchPhone('', noPhone)).toBe('')
   })
 })
 

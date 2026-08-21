@@ -4577,7 +4577,7 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
 - [x] スキーマ: 0085 = `companies.phone text NOT NULL DEFAULT ''`（IF NOT EXISTS = 冪等・既存行無変更 = 原則2/7）。`Company.phone?: string`（旧データ未定義 = '' 扱い）。masters registry の companies スキーマ + 項目権限カタログ（permission-catalog）にも登録。
 - [x] UI: 顧客コンテキストの基本情報カードに電話番号の表示行 + 編集モーダルに入力欄。/masters/customers の詳細・フォームにも追加（同一マスタの一貫性）。シード c-01/c-02 に demo 電話番号（03-0000-XXXX 系 = contacts と同一慣行）+ SEED_VERSION 28。
 - [x] AI 調査での取得・反映: 採用ソースに抜粋（snippet・300cp cap・任意 = 旧形式互換）を追加し、AI 構築が電話番号を提案（**LLM = 情報源の記載・抜粋に明記がある場合のみ転記・創作禁止をプロンプトで明示 / ヒューリスティック = snippet からの正規表現抽出 `extractPhoneFromSnippets` = 実在する記載のみ**。モックデモは調査ヒントの電話番号が会社概要候補の抜粋に載る経路 = 番号を創作しない）。
-- [x] 反映と取消（原則9.5 × 原則7）: 差分確認に「電話番号（基本情報）」行（'' = 「取得できませんでした = 変更しません」を明示）。反映は **phone 非空かつ現在値と異なる場合のみ** companies.phone を同一トランザクションで更新し **before.companyPhone に変更前を保存**（+ companies の監査ログ）。取消は companyPhone キーがあるノートだけ電話番号を復元（キーなし = 旧ノート・変更しなかった反映は触らない）。mock も同一規則（コレクション横断ロールバック込み = 原則6）。
+- [x] 反映と取消（原則9.5 × 原則7）: 差分確認に「電話番号（基本情報）」行（'' = 「取得できませんでした = 変更しません」を明示）。反映は **phone 非空かつ現在値と異なる場合のみ** companies.phone を同一トランザクションで更新し **before.companyPhone に変更前を保存**（+ companies の監査ログ）。取消は companyPhone キーがあるノートだけ電話番号を生値で復元（キーなし = 旧ノート・変更しなかった反映は触らない）。**更新・復元とも「管理者 + 項目権限」= マスタ更新経路と同じ強度（R1 レビューで条件化）**。mock も同一規則（コレクション横断ロールバック込み = 原則6）。
 - [x] テスト: shared 単体（抽出・正規化・ヒューリスティック提案・創作なし）を home/api 両側で固定。統合 = 反映 → マスタ更新 → before 保存 → 取消復元・空提案/同一提案は before に companyPhone を保存しない・取消でも触らない（+2 件 = 314）。
 
 ### 105-2 「AIで整形」の RAG 対応（単位2）
@@ -4597,4 +4597,38 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
 
 ### 105-5 反復レビュー（原則9 = SP-8）
 - 反復記録:
-  - （レビュー実施後にラウンドごと追記）
+  - R1（コードレビュアー MAJOR1/MINOR2/NIT4・システム監査官 MINOR3/NIT3。権限バイパス・LLM 構造検証・
+    mock ソース正規化・正規表現は重複統合 = 計 MAJOR1/MINOR4/NIT5）→ 全件対応:
+    - レビュー MAJOR（= 監査 MINOR）: AI 反映/取消の companies.phone 書込がマスタ更新経路の権限
+      （requireAdmin + stripMasterWriteKeys = 項目権限）を完全バイパス = 非管理者が body の任意 phone で
+      会社マスタを直接書き換え可能・同コミットで項目権限カタログへ登録したのに効かない自己矛盾。
+      さらにメモ一覧の payload.before.companyPhone が phone 参照 deny ユーザーへ素通し →
+      apply/revert とも「管理者 + 項目権限（canEditField companies.phone）」を条件化
+      （API = canReflectCompanyPhone / mock = canReflectPhone = 同一規則・原則6。不許可は電話番号だけ
+      スキップし反映/取消は続行 = 原則4）。GET /notes と mock notesOf は参照 deny ユーザーへ
+      companyPhone を伏せる（項目権限の迂回防止）。UI は権限がない場合の差分行に
+      「反映には管理者権限が必要なため変更しません」を明示（表示と挙動の一致）。
+      統合テスト 3 件追加（非管理者 apply でマスタ不変・非管理者 revert で復元しない/管理者は復元・
+      参照 deny で伏せる）
+    - 両 MINOR: LLM 構築の phone が無検証（創作防止がプロンプト依存）→ shared `groundResearchPhone` で
+      事後検証 = 採用ソースの title/抜粋に実在する場合のみ採用・幻覚は抽出フォールバック → ''
+      （ヒューリスティックと同じ安全性水準。home/api 両側の単体テストで固定）
+    - 監査 MINOR: 調査プロンプトが電話番号の収集を指示しておらず LLM 経路の実効性が低い →
+      「会社概要の基本情報（代表電話番号・所在地・従業員数等）も要点に含める」を調査プロンプトへ追加
+      （= グラウンディング済み調査メモ → 抜粋に電話番号が載る経路を確保）
+    - レビュー MINOR: revert の電話番号復元が normalizeContextPhone（trim + 40cp cap）を通り
+      40cp 超の既存値（注記付き等）が壊れた形で復元される → 保存時の生値をそのまま書き戻す（API/mock）
+    - 両 NIT: mock の research ノート保存が API cleanSources と非共有（snippet cap なし）→ shared
+      `cleanResearchSources`（title 300 / uri 2000 / snippet 300 cap）を新設し API/mock 双方から使用（原則3/6）
+    - 両 NIT: PHONE_RE の「全角ハイフン」対応が長音符のみ + 日付範囲「2026-08-01-2026-08-31」の部分一致を
+      誤検出 → 文字クラスへ 全角ハイフン（U+FF0D）・マイナス記号（U+2212）を追加 + 前後の数字・区切りを
+      除外する lookaround（単独の日付形式との完全判別は不可能 = 差分確認で人が確定する前提を明文化）。
+      単体テストを追補
+    - レビュー NIT: 反映取消の確認ダイアログに電話番号の復元が含まれない → 文言へ追記
+    - 監査 NIT: F-46-1 の「編集ドロワー」表記が実装（UiModal）と不一致 → 「編集モーダル」へ訂正
+    - ドキュメント追随: api-design（権限・事後検証・notes の伏せ・cleanResearchSources）/
+      functional-requirements / screen-design / data-design / CONVENTIONS / KB kb-sp-010（反映は管理者のみ +
+      実在検証の明記）
+    - R1 後検証: home 単体 544 / api 単体 509（非統合全件）/ 統合 317（権限 3 テスト追加。既存の復元テストは
+      取消実行者を管理者へ変更 = 新権限規則で正しく失敗した回帰を修正）/ 両 typecheck /
+      モック E2E 全 9 スイート green

@@ -8672,8 +8672,8 @@ describe('顧客コンテキスト（customer_contexts + notes + AI リサーチ
     const noteId = (applied.json.data as { id: string }).id
     const note = (applied.json.data as { note: NoteRow }).note
     expect(note.payload?.before?.companyPhone).toBe(basePhone) // 変更前の値を保存
-    // 取消 = 定性情報とあわせて電話番号も反映前へ復元される
-    const reverted = await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/research/${noteId}/revert`, { as: MEMBER })
+    // 取消 = 定性情報とあわせて電話番号も反映前へ復元される（電話番号の復元は管理者 = R1 で権限条件化）
+    const reverted = await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/research/${noteId}/revert`, { as: ADMIN })
     expect(reverted.status).toBe(200)
     expect(await phoneOf()).toBe(basePhone)
   })
@@ -8705,6 +8705,68 @@ describe('顧客コンテキスト（customer_contexts + notes + AI リサーチ
     expect(sameApply.status).toBe(201)
     const note2 = (sameApply.json.data as { note: NoteRow }).note
     expect(note2.payload?.before && 'companyPhone' in note2.payload.before).toBe(false)
+  })
+
+  it('反映の電話番号: 非管理者はマスタを更新できない（電話番号だけスキップ・定性情報の反映は続行 = レビュー R1/原則4）', async () => {
+    await pool.query(`UPDATE companies SET phone = '03-7777-0003' WHERE id = $1`, [CCTX_COMPANY])
+    const applied = await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/research/apply`, {
+      as: MEMBER,
+      body: { vision: '非管理者の反映', challenges: '', strategyNotes: '', businessNotes: '', phone: '03-6666-0004',
+        sources: [{ title: '会社概要（デモ）', uri: 'https://example.com/member-apply/', snippet: '代表電話: 03-6666-0004' }] },
+    })
+    expect(applied.status).toBe(201) // 定性情報の反映は成功する
+    const { rows: [r] } = await pool.query<{ phone: string }>(`SELECT phone FROM companies WHERE id = $1`, [CCTX_COMPANY])
+    expect(r!.phone).toBe('03-7777-0003') // マスタは不変
+    const note = (applied.json.data as { note: NoteRow }).note
+    expect(note.payload?.before && 'companyPhone' in note.payload.before).toBe(false)
+  })
+
+  it('取消の電話番号: 非管理者の取消は電話番号を復元しない（更新と対称の権限）・管理者の取消は復元する', async () => {
+    await pool.query(`UPDATE companies SET phone = '03-5555-0005' WHERE id = $1`, [CCTX_COMPANY])
+    // 管理者が電話番号込みで反映（変更前 03-5555-0005 が before.companyPhone に入る）
+    const applied = await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/research/apply`, {
+      as: ADMIN,
+      body: { vision: '権限対称性の検証', challenges: '', strategyNotes: '', businessNotes: '', phone: '03-4444-0006',
+        sources: [{ title: '会社概要（デモ）', uri: 'https://example.com/perm-apply/', snippet: '代表電話: 03-4444-0006' }] },
+    })
+    const noteId = (applied.json.data as { id: string }).id
+    // 非管理者の取消: 定性情報は復元されるが電話番号は復元されない（電話番号だけスキップ = 原則4）
+    const memberRevert = await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/research/${noteId}/revert`, { as: MEMBER })
+    expect(memberRevert.status).toBe(200)
+    const { rows: [r1] } = await pool.query<{ phone: string }>(`SELECT phone FROM companies WHERE id = $1`, [CCTX_COMPANY])
+    expect(r1!.phone).toBe('03-4444-0006') // 反映後の値のまま
+    // 管理者が反映し直し → 管理者の取消では復元される（既存テストと同型の対照）
+    const applied2 = await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/research/apply`, {
+      as: ADMIN,
+      body: { vision: '権限対称性の検証2', challenges: '', strategyNotes: '', businessNotes: '', phone: '03-3333-0007',
+        sources: [{ title: '会社概要（デモ）', uri: 'https://example.com/perm-apply2/', snippet: '代表電話: 03-3333-0007' }] },
+    })
+    const noteId2 = (applied2.json.data as { id: string }).id
+    await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/research/${noteId2}/revert`, { as: ADMIN })
+    const { rows: [r2] } = await pool.query<{ phone: string }>(`SELECT phone FROM companies WHERE id = $1`, [CCTX_COMPANY])
+    expect(r2!.phone).toBe('03-4444-0006') // 反映前（= applied2 直前）の値へ復元
+  })
+
+  it('メモ一覧: companies.phone の参照 deny ユーザーには before.companyPhone を伏せる（項目権限の迂回防止）', async () => {
+    // 直前テストで companyPhone つきノートが存在する。deny ルールを入れて MEMBER で取得
+    await pool.query(
+      `INSERT INTO permission_rules (id, subject_kind, subject_id, resource, field, effect, active)
+       VALUES ('pr-test-cctx-phone', 'role', 'member', 'companies', 'phone', 'deny', true)
+       ON CONFLICT (id) DO UPDATE SET active = true`)
+    clearPermissionCache()
+    try {
+      const denied = await cctxApi('GET', `/v1/customer-contexts/notes?f.companyId=${CCTX_COMPANY}`, { as: MEMBER })
+      const deniedRows = (denied.json.data as NoteRow[]) ?? []
+      expect(deniedRows.length).toBeGreaterThan(0)
+      expect(deniedRows.every(n => !(n.payload?.before && 'companyPhone' in n.payload.before))).toBe(true)
+      // 管理者にはそのまま見える（deny は role=member のみ）
+      const allowed = await cctxApi('GET', `/v1/customer-contexts/notes?f.companyId=${CCTX_COMPANY}`, { as: ADMIN })
+      const allowedRows = (allowed.json.data as NoteRow[]) ?? []
+      expect(allowedRows.some(n => n.payload?.before && 'companyPhone' in n.payload.before)).toBe(true)
+    } finally {
+      await pool.query(`DELETE FROM permission_rules WHERE id = 'pr-test-cctx-phone'`)
+      clearPermissionCache()
+    }
   })
 })
 

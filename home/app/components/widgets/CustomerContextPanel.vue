@@ -30,7 +30,11 @@ const companyCrud = useMasterCrudAsync('companies', 'c')
 const { tbl } = useMockDb()
 const { show } = useToast()
 const confirm = useConfirm()
-const { currentUserId } = useCurrentUser()
+const { currentUserId, currentUser } = useCurrentUser()
+const perms = usePermissions()
+/** AI 反映で基本情報の電話番号を更新できるか（管理者 + 項目権限 = useCustomerContext / API と同一規則） */
+const canReflectPhone = computed(() =>
+  currentUser.value.role === 'admin' && perms.canEditField('companies', 'phone'))
 const route = useRoute()
 const router = useRouter()
 const isApi = useApiMode()
@@ -432,15 +436,20 @@ const diffRows = computed(() => {
     changed: (cur?.[f.key] ?? '') !== proposal.value![f.key],
   }))
   // 電話番号（基本情報 = 会社マスタ）の提案行（改修依頼 2026-08-21 第3弾）。
-  // 取得なし（''）= 基本情報を変更しない（マスタを AI で消さない安全側）ため changed は常に false
+  // 取得なし（''）= 基本情報を変更しない（マスタを AI で消さない安全側）。
+  // 反映は管理者 + 項目権限が条件（canReflectPhone = マスタ更新経路と同一の強度）= 権限がない場合も変更しない
   const proposedPhone = proposal.value.phone
   const curPhone = company.value?.phone ?? ''
   rows.push({
     key: 'phone',
     label: '電話番号（基本情報）',
     current: curPhone,
-    proposed: proposedPhone || '（情報源から取得できませんでした。基本情報の電話番号は変更しません）',
-    changed: !!proposedPhone && proposedPhone !== curPhone,
+    proposed: !proposedPhone
+      ? '（情報源から取得できませんでした。基本情報の電話番号は変更しません）'
+      : canReflectPhone.value
+        ? proposedPhone
+        : `（取得: ${proposedPhone}。基本情報への反映には管理者権限が必要なため変更しません）`,
+    changed: !!proposedPhone && proposedPhone !== curPhone && canReflectPhone.value,
   })
   return rows
 })
@@ -465,7 +474,8 @@ async function applyProposal(): Promise<void> {
 async function onRevert(noteId: string): Promise<void> {
   const ok = await confirm.ask(
     '反映の取消',
-    'AI リサーチで反映した内容を取り消し、反映前の定性情報へ戻しますか？（リサーチノートは監査のため残ります）',
+    'AI リサーチで反映した内容を取り消し、反映前の定性情報へ戻しますか？'
+    + '（基本情報の電話番号を反映していた場合はそれも反映前へ戻ります。リサーチノートは監査のため残ります）',
     { danger: true, confirmLabel: '反映を取り消す' },
   )
   if (!ok) return
@@ -925,7 +935,7 @@ async function onRevert(noteId: string): Promise<void> {
         <p class="text-[12px] text-sub">
           採用した {{ adoptedSources.length }} 件の情報から構築した提案値です。「反映」すると定性情報が更新され、
           採用ソースと反映前の値がリサーチノートに自動追記されます（あとから取り消せます）。
-          <template v-if="proposal?.phone">電話番号が取得できたため、反映すると基本情報の電話番号も更新されます（取消で元に戻ります）。</template>
+          <template v-if="proposal?.phone && canReflectPhone">電話番号が取得できたため、反映すると基本情報の電話番号も更新されます（取消で元に戻ります）。</template>
           <span v-if="!researchLlm" class="text-warn">現在はデモ生成（決定的ヒューリスティック）です。</span>
         </p>
         <div v-for="row in diffRows" :key="row.key" class="grid gap-1.5 sm:grid-cols-2">

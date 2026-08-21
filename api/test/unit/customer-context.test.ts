@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest'
 import {
   customerContextError, customerContextNoteError, customerContextSourcesError,
   extractPhoneFromSnippets,
+  groundResearchPhone,
   heuristicContextBuild, heuristicResearchCandidates,
   normalizeCustomerContext, restoreContextFromSnapshot,
 } from '../../../shared/domain/customer-context'
@@ -75,6 +76,13 @@ describe('AI リサーチのヒューリスティック（LLM 無効時のフォ
     const withSnippet = [{ title: 'A', uri: 'https://example.com/a', snippet: '代表電話: 052-000-1234' }]
     expect(heuristicContextBuild('テクノパーツ工業', withSnippet, empty).phone).toBe('052-000-1234')
     expect(extractPhoneFromSnippets(['本文に番号なし'])).toBe('')
+  })
+
+  it('groundResearchPhone（LLM 事後検証・レビュー R1）: ソースに実在する値のみ採用・幻覚は抽出 → 空へ', () => {
+    const src = [{ title: '会社概要', uri: 'https://example.com/a', snippet: '代表電話: 052-000-1234' }]
+    expect(groundResearchPhone('052-000-1234', src)).toBe('052-000-1234')
+    expect(groundResearchPhone('090-9999-9999', src)).toBe('052-000-1234') // 幻覚 → 実在記載へフォールバック
+    expect(groundResearchPhone('090-9999-9999', [{ title: 'A', uri: 'https://example.com/b' }])).toBe('')
   })
 })
 
