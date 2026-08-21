@@ -571,7 +571,7 @@ export interface ImprovementItem {
 
 /**
  * 生要望へのコメント（記録系・追記のみ = 改善要望 2026-08-17 第 2 弾）。
- * 採用/不採用の検討過程・不採用理由・確認事項などのやり取りを要望単位で時系列に残す。
+ * 対応方針の検討過程・見送り理由・確認事項・運用案内などのやり取りを要望単位で時系列に残す。
  * 一覧参照は改善要望の管理権限者のみ / 追加・取消は管理権限者 + 投稿者本人（本人向けの閲覧導線は
  * 未提供 = implementation-status の残課題。現状は管理ページ内の記録）。取消は archivedAt（論理削除 = 原則9.5）。
  */
@@ -735,8 +735,11 @@ export function improvementEditChangedLabel(fields: ImprovementRequestEditFields
 
 /**
  * 集約解除の可否ガード（F-42-19・改修依頼 2026-08-18）。集約済みの要望を改修単位から外し、
- * 「採用済み（集約待ち）」へ戻す = 再度 AI 集約の対象にする操作の共通判定。
- * 判定順 = 存在（404）→ 未集約（409）→ 取消済み（409）→ **取消済み item（409）→ 決着済み item（409）**。
+ * 「改善対応（集約待ち）」へ戻す = 再度 AI 集約の対象にする操作の共通判定。
+ * 判定順 = 存在（404）→ 未集約（409）→ 取消済み（409）→ **解決済み（409）→ 取消済み item（409）→ 決着済み item（409）**。
+ * 解決済み（resolvedAt / 旧 status='resolved'）の要望は解除しない（解除しても generate の
+ * resolved_at IS NULL 条件で再集約対象にならず「集約待ちに戻る」の案内が嘘になる = R1 レビュー
+ * 2026-08-21。先に「解決済み」を取り消してから解除する = 導線は残る〔原則9.5〕）。
  * item（任意）を渡すと、集約先が取消済み（AKO-REQ-022 = 先に復元）または決着済み
  * （解決済み/対応しない）の場合に AKO-REQ-021 を返す:
  * 判定済み item の元要望トレースを黙って書き換えず、実装済み内容を再集約プールへ戻さない（原則2 =
@@ -745,12 +748,19 @@ export function improvementEditChangedLabel(fields: ImprovementRequestEditFields
  * mock（useImprovements.unclusterRequest）と API ルートで共有し、単体テストで固定する（parity = 原則6）。
  */
 export function improvementUnclusterError(
-  target: { itemId: string | null; archivedAt: string | null } | undefined,
+  target: {
+    itemId: string | null; archivedAt: string | null
+    status?: ImprovementRequestStatus | null; resolvedAt?: string | null
+  } | undefined,
   item?: { status: ImprovementStatus; archivedAt?: string | null } | null,
 ): { code: string; message: string } | null {
   if (!target) return { code: 'AKO-REQ-002', message: '対象の要望が見つかりません' }
   if (!target.itemId) return { code: 'AKO-REQ-017', message: 'この要望は集約されていません（解除は不要です）' }
   if (target.archivedAt) return { code: 'AKO-REQ-018', message: '取消済みの要望は集約を解除できません（先に復元してください）' }
+  // 解決済みの要望は解除しない（AKO-REQ-025 = ステータス変更ガードと同じ「先に解決の取消」を案内）
+  if (target.resolvedAt || target.status === 'resolved') {
+    return { code: 'AKO-REQ-025', message: '解決済みの要望は集約を解除できません（先に「解決済み」を取り消してください）' }
+  }
   // 取消済みの item からも解除しない（論理削除中の記録のトレースを黙って書き換えない = レビュー R24。先に復元）
   if (item?.archivedAt) {
     return { code: 'AKO-REQ-022', message: '取消済みの改修案件からは解除できません（先に改修案件を復元してください）' }

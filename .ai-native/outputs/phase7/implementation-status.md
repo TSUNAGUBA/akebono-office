@@ -4384,3 +4384,31 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
 
 ### 103-6 反復レビュー（原則9 = SP-8）
 - 反復記録:
+  - R1（コードレビュアー MINOR3/NIT4・システム監査官 MINOR3/NIT2。重複 2 件を統合 = 計 MINOR4/NIT5）→ 全件対応:
+    - 両 MINOR: 投稿者本人（非管理者）が呼べる単一行エンドポイント（投稿 201 / edit / archive / restore /
+      resolve の RETURNING）に管理系トリアージ状態（aiAssessment・adoption・excludedItemIds）が載り、
+      一覧 GET で伏せた情報が本人操作の応答から漏れる → `stripTriageFields` + `requireOwnerOrManage`
+      ヘルパーを新設し全該当応答へ適用（管理者は従来どおり）。統合テストで本人応答の非含有・管理者応答の
+      含有を固定
+    - 両 MINOR: useImprovements.editRequest（API 分岐）が /edit の RETURNING（JOIN なし）で行を丸ごと
+      置換し `linkedItemStatus` を喪失 → 非管理者（refresh しない）の集約済み要望が編集直後に
+      「対応済み」→「改善対応」へ退行 → resolve/assess と同じく既存キャッシュから引き継ぐマージへ
+    - レビュー MINOR: AI 社員のドキュメント材料（searchDocsFor 上位 6 件 → document 絞り込み）が
+      新設の 'manual' 50 件に上位を占められ空になる → searchDocsFor に kinds（SQL 段の種別絞り込み）を
+      追加し ai-company は ['document'] を指定
+    - 監査 MINOR: 集約解除の確認ダイアログ・トースト・docblock が旧語彙（「採用済み（集約待ち）」
+      「採用済みを AI で集約」）のまま = 存在しないボタン名の案内 → 「改善対応（集約待ち）」へ改稿
+    - レビュー NIT → ガード化: 解決済み（resolvedAt / 旧 status='resolved'）の要望の集約解除は
+      「集約待ちに戻る」案内が嘘になる（generate の resolved_at IS NULL 条件で対象外）→
+      `improvementUnclusterError` に AKO-REQ-025（先に解決の取消）を追加（判定順 = 取消済みの後・
+      item ガードの前。単体 + 統合テストで固定）
+    - レビュー NIT: 推奨アクション適用ボタンが「すでに推奨状態」でも表示され押しても無反応 →
+      canApplyRecommended から同状態を除外（非表示化）
+    - レビュー NIT: mock の継続検討リマインドが「同じ再検討日の再設定」で再通知しない（API は
+      revisit_notified_on リセットで再通知 = パリティ欠け）→ mock の deferred 遷移で通知済みマーカーを削除
+    - レビュー NIT: mock の editItem が見出し（title）を検証せず空見出しを黙って保存（API は AKO-REQ-003）→
+      shared `improvementTitleError` を mock 分岐でも適用
+    - 監査 NIT: 担当者のみ変更（遷移なし）の監査 detail が「ステータス → 対応中」と遷移があったように
+      読める → 「担当者を変更（担当者: X）」へ分岐
+    - 監査 NIT: 内部コメントの旧・選別語彙残置（useImprovements / shared / usePermissions）→ 新語彙へ更新
+    - R1 後検証: home 単体 530 / api 単体 503 / 統合 309 / 両 typecheck / モック E2E 全スイート green

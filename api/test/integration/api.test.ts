@@ -6976,6 +6976,8 @@ describe('改善要望（F-42 → ステータス管理の再編 = 改修依頼 
     const resolved = await api('POST', `/v1/improvements/requests/${reqId}/resolve`, { as: MEMBER, body: { resolved: true } })
     expect(resolved.status).toBe(200)
     expect((resolved.json.data as { resolvedAt: string | null }).resolvedAt).toMatch(/\+09:00$/)
+    // 非管理者（本人）の resolve 応答にも管理系のトリアージ状態は載らない（一覧 GET と同一方針 = R1）
+    expect('aiAssessment' in (resolved.json.data as Record<string, unknown>)).toBe(false)
     // 解決済みの要望は基底ステータスを変更できない（AKO-REQ-025 = 先に解決の取消）
     const locked = await setInbox(reqId, 'reviewing')
     expect(locked.status).toBe(409)
@@ -7113,6 +7115,10 @@ describe('改善要望（F-42 → ステータス管理の再編 = 改修依頼 
     const rows2 = (await api('GET', '/v1/improvements/requests', { as: MEMBER })).json.data as ReqRow2[]
     expect(rows2.find(r => r.id === reqId)!.linkedItemStatus).toBe('done')
     expect((await api('POST', `/v1/improvements/requests/${reqId}/resolve`, { as: MEMBER, body: { resolved: true } })).status).toBe(200)
+    // 解決済みの要望は集約解除できない（AKO-REQ-025 = 先に解決の取消。解除しても再集約対象にならないため = R1）
+    const unResolved = await api('POST', `/v1/improvements/requests/${reqId}/uncluster`, { as: ADMIN })
+    expect(unResolved.status).toBe(409)
+    expect(unResolved.json.error?.code).toBe('AKO-REQ-025')
     expect((await api('POST', `/v1/improvements/requests/${reqId}/resolve`, { as: MEMBER, body: { resolved: false } })).status).toBe(200)
 
     // 機械外の遷移（対応済 → 未対応）は 409。reopen（対応済 → 対応中）で resolvedAt が消える（原則9.5）
@@ -7193,6 +7199,11 @@ describe('改善要望（F-42 → ステータス管理の再編 = 改修依頼 
       memberId: MEMBER,
     })
     expect((edited.json.data as { editedAt: string | null }).editedAt).toMatch(/\+09:00$/)
+    // 非管理者（本人）の単一行応答には管理系のトリアージ状態を含めない（一覧 GET と同一の情報開示方針 = R1）
+    expect('aiAssessment' in (edited.json.data as Record<string, unknown>)).toBe(false)
+    expect('adoption' in (edited.json.data as Record<string, unknown>)).toBe(false)
+    expect('excludedItemIds' in (edited.json.data as Record<string, unknown>)).toBe(false)
+    expect('aiAssessment' in (posted.json.data as Record<string, unknown>)).toBe(false) // 投稿 201 応答も同様
 
     // 対象箇所の編集（改修依頼 2026-08-21: 受付箱の詳細で編集可能に。trim + 上限。'' = クリア）
     const spotEdit = await api('POST', `/v1/improvements/requests/${reqId}/edit`, {
@@ -7203,8 +7214,11 @@ describe('改善要望（F-42 → ステータス管理の再編 = 改修依頼 
     const keepSpot = await api('POST', `/v1/improvements/requests/${reqId}/edit`, { as: MEMBER, body: { body: '本文のみ再編集' } })
     expect((keepSpot.json.data as { targetSpot: string }).targetSpot).toBe('一覧のステータス列')
 
-    // 管理権限者も編集できる・本人でも管理権限者でもない第三者は 403（deny-by-default）
-    expect((await api('POST', `/v1/improvements/requests/${reqId}/edit`, { as: ADMIN, body: { body: '編集後の本文（管理者）' } })).status).toBe(200)
+    // 管理権限者も編集できる（応答にはトリアージ状態が載る = 管理者は絞り込まない）・
+    // 本人でも管理権限者でもない第三者は 403（deny-by-default）
+    const adminEdit = await api('POST', `/v1/improvements/requests/${reqId}/edit`, { as: ADMIN, body: { body: '編集後の本文（管理者）' } })
+    expect(adminEdit.status).toBe(200)
+    expect('aiAssessment' in (adminEdit.json.data as Record<string, unknown>)).toBe(true)
     expect((await api('POST', `/v1/improvements/requests/${reqId}/edit`, { as: HR, body: { body: '第三者の編集' } })).status).toBe(403)
 
     // 改修依頼 2026-08-19: タグ・リンク・画像も編集できる（全項目の編集）。送ったキーは置き換わる

@@ -520,6 +520,10 @@ export async function searchDocsFor(
   forMemberId: string,
   limit = 4,
   noteOwnerIds: string[] = [],
+  // 照合対象の source_kind を限定する（省略 = 全種別）。AI 社員のドキュメント材料のように特定種別だけ
+  // 欲しい呼び出しが、字句一致の強い他種別（例: 'manual' = アプリマニュアル 50 件）に上位を占められて
+  // 「取得後の絞り込みで 0 件」にならないための SQL 段の絞り込み（R1 レビュー 2026-08-21）
+  kinds?: SearchDocInput['sourceKind'][],
 ): Promise<SearchHit[]> {
   const { rows } = await pool.query<{
     sourceKind: SearchDocInput['sourceKind']; sourceId: string; title: string
@@ -529,9 +533,10 @@ export async function searchDocsFor(
     `SELECT source_kind AS "sourceKind", source_id AS "sourceId", title, aliases, body, segments, embedding,
             owner_member_id AS "ownerMemberId", links
      FROM search_docs
-     WHERE owner_member_id IS NULL OR owner_member_id = $1
-        OR (source_kind = 'note' AND owner_member_id = ANY($2::text[]))
-     ORDER BY id LIMIT 3000`, [forMemberId, noteOwnerIds])
+     WHERE (owner_member_id IS NULL OR owner_member_id = $1
+        OR (source_kind = 'note' AND owner_member_id = ANY($2::text[])))
+       AND ($3::text[] IS NULL OR source_kind = ANY($3::text[]))
+     ORDER BY id LIMIT 3000`, [forMemberId, noteOwnerIds, kinds && kinds.length > 0 ? kinds : null])
   // 全件を都度メモリへ載せる設計は SME 規模（〜数千件）前提。上限超過時も ORDER BY id で
   // 決定的な部分集合になる。件数がこの規模を超える場合は pgvector 等への移行を検討する
   if (rows.length === 0) return []

@@ -59,6 +59,7 @@ import {
   improvementLinksError,
   improvementNoteError,
   improvementPlanError,
+  improvementTitleError,
   improvementRequestEditFields,
   improvementRevisitError,
   isClusterAppendTarget,
@@ -149,7 +150,7 @@ export function useImprovements() {
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
   }
 
-  /** ある生要望のコメント（有効なもの・古い順。選別のやり取り = 改善要望 2026-08-17 第 2 弾） */
+  /** ある生要望のコメント（有効なもの・古い順。対応方針検討のやり取り = 改善要望 2026-08-17 第 2 弾） */
   function commentsForRequest(requestId: string): ImprovementRequestComment[] {
     return allComments.value
       .filter(cm => cm.requestId === requestId && !cm.archivedAt)
@@ -476,6 +477,11 @@ export function useImprovements() {
     id: string,
     patch: { title?: string; summary?: string; detail?: string; planStart?: string; planEnd?: string; assigneeMemberId?: string },
   ): Promise<Result> {
+    // 見出しの検証（両モード。API の AKO-REQ-003 とパリティ = 空見出しを黙って保存しない。R1 レビュー 2026-08-21）
+    if (patch.title !== undefined) {
+      const titleMsg = improvementTitleError(patch.title)
+      if (titleMsg) return { ok: false, error: { code: 'AKO-REQ-003', message: titleMsg } }
+    }
     // 対応予定期間の検証（両モード。実在日・終了>=開始）
     const hasPlan = patch.planStart !== undefined || patch.planEnd !== undefined
     if (hasPlan) {
@@ -615,6 +621,18 @@ export function useImprovements() {
           ...(to === 'deferred' ? { revisitOn: revisit } : {}),
         }
       : r))
+    // deferred（設定・リスケジュール）は通知済みマーカーを消す = 同じ再検討日の再設定でも到来日に
+    // 再通知される（API の revisit_notified_on = NULL リセットと同一規則 = 原則6。R1 レビュー 2026-08-21）
+    if (to === 'deferred') {
+      try {
+        const REQ_KEY = 'ako.improvement-request-revisit-notified.v1'
+        const marks = JSON.parse(localStorage.getItem(REQ_KEY) ?? '{}') as Record<string, string>
+        if (marks[id] !== undefined) {
+          delete marks[id]
+          localStorage.setItem(REQ_KEY, JSON.stringify(marks))
+        }
+      } catch { /* マーカー掃除は補助処理（失敗しても遷移は成立 = 原則4） */ }
+    }
     // 永続化可否を返し UI が警告できるようにする（submit と同型 = 容量超過の変更消失を黙認しない）
     const persisted = commit()
     // 運用対応: 起票者へ運用案内を全文通知（API と同一挙動。記録 = SoT と通知の乖離を作らない。
@@ -736,11 +754,11 @@ export function useImprovements() {
   }
 
   /**
-   * 集約の解除（F-42-19・改修依頼 2026-08-18）。集約済みの要望を改修単位から外し、
-   * 「採用済み（集約待ち）」へ明示的に戻す = 次回の「AI で集約」の対象になる（取消 archive と違い
+   * 集約の解除（F-42-19・改修依頼 2026-08-18 → ステータス再編 2026-08-21）。集約済みの要望を改修単位から外し、
+   * 「改善対応（集約待ち）」へ明示的に戻す = 次回の「改善対応を AI で集約」の対象になる（取消 archive と違い
    * 要望は生きたまま）。item のステータス・本文には触れない（人手の記録は不変 = 原則2）が、
    * sourceRequestIds のトレースからは除去して導出値を整合させる（原則6）。ガードは共有の
-   * improvementUnclusterError（存在 → 未集約 → 取消済み = API ルートと同一判定・単体テストで固定）。
+   * improvementUnclusterError（存在 → 未集約 → 取消済み → 解決済み = API ルートと同一判定・単体テストで固定）。
    */
   async function unclusterRequest(id: string): Promise<Result & { persisted?: boolean }> {
     if (isApi) {
@@ -790,7 +808,7 @@ export function useImprovements() {
     return { ok: true, id, persisted }
   }
 
-  // ---------- 生要望へのコメント（選別のやり取り。記録系・追記のみ = 2026-08-17 第 2 弾） ----------
+  // ---------- 生要望へのコメント（対応方針検討のやり取り。記録系・追記のみ = 2026-08-17 第 2 弾） ----------
 
   /** コメントを追加（管理権限者 + 投稿者本人。API 側で権限判定） */
   async function addRequestComment(requestId: string, body: string): Promise<Result> {
@@ -855,8 +873,11 @@ export function useImprovements() {
       // 応答は画像の実体を含む（API は reqColsOf(true) で返す）。キャッシュへ上書きマージする（レビュー R1 MAJOR）:
       // マージしないと refresh() の prevImages 再注入が「削除された画像を復活」「追加した画像を取りこぼし」する
       // （一覧 GET は images:[] スタブのため）。削除/追加/保持の正しさはこの map 上書きだけで成立する。
+      // linkedItemStatus（JOIN 導出）は単一行 RETURNING に載らないため既存キャッシュから引き継ぐ
+      // （resolveRequest / assessRequest と同じ。欠くと非管理者〔refresh しない〕の集約済み要望が
+      // 編集直後に「対応済み」→「改善対応」へ化ける = R1 レビュー 2026-08-21）
       const row = res.data
-      apiRequests.value = apiRequests.value.map(r => (r.id === id ? row : r))
+      apiRequests.value = apiRequests.value.map(r => (r.id === id ? { ...row, linkedItemStatus: r.linkedItemStatus } : r))
       // 集約済み（itemId あり）は imagesLoadedFor（item 単位フラグ）へマークしない（レビュー R2 CRITICAL）:
       // このマークは「その item の全要望が画像込みでロード済み」を意味し、正当なセッタは全要望を取得する
       // loadRequestImages(itemId) だけ。1 件の編集応答で item 全体を loaded 詐称すると、item 画像ロードが

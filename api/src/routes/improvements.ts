@@ -185,6 +185,29 @@ async function canManage(pool: pg.Pool, user: AuthUser): Promise<boolean> {
   return canManageImprovements(rules, subjectOf(user))
 }
 
+/** 本人 or 管理の複合ガード。戻り値 = 管理権限の有無（単一行応答の絞り込み〔stripTriageFields〕に使う） */
+async function requireOwnerOrManage(pool: pg.Pool, user: AuthUser, ownerId: string): Promise<boolean> {
+  const manage = await canManage(pool, user)
+  if (ownerId !== user.id && !manage) {
+    throw err('AKO-PRM-001', '改善要望を閲覧・管理する権限がありません（管理者にお問い合わせください）', 403)
+  }
+  return manage
+}
+
+/**
+ * 管理系のトリアージ状態（旧・選別 adoption / 集約解除履歴 excludedItemIds / AI 判定 aiAssessment）を
+ * 非管理者への応答から剥がす。一覧 GET と同一の情報開示方針（R1 監査）を、投稿者本人が呼べる
+ * 単一行エンドポイント（投稿 201 / edit / archive / restore / resolve の RETURNING）にも適用する =
+ * 一覧で伏せた情報が本人操作の応答から漏れない（R1 レビュー 2026-08-21）
+ */
+function stripTriageFields<T>(row: T, manage: boolean): T {
+  if (row && !manage) {
+    const r = row as Record<string, unknown>
+    delete r.adoption; delete r.excludedItemIds; delete r.aiAssessment
+  }
+  return row
+}
+
 /** LLM 集約（Vertex → 正規化）。無効環境・失敗・空出力は null（呼び出し側でヒューリスティックへ） */
 async function llmCluster(
   env: Env, openItems: ClusterOpenItem[], requests: ClusterRequestInput[],
@@ -223,7 +246,7 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING ${reqColsOf(false)}`,
       [id, user.id, user.name, input.pagePath, input.pageLabel, input.targetSpot, input.body,
         JSON.stringify(input.tags), JSON.stringify(input.links), JSON.stringify(input.images)])
-    return c.json({ data: rows[0] }, 201)
+    return c.json({ data: stripTriageFields(rows[0], await canManage(pool, user)) }, 201)
   })
 
   // ---- 要望一覧。認証済み全員が閲覧できる（改修依頼 2026-08-19 第4弾: 全要望を閲覧可）。
@@ -274,11 +297,11 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
     const { rows } = await pool.query<{ memberId: string }>(
       `SELECT member_id AS "memberId" FROM improvement_requests WHERE id = $1`, [id])
     if (rows.length === 0) throw err('AKO-REQ-002', '対象の要望が見つかりません', 404)
-    if (rows[0]!.memberId !== user.id) await requireManage(c, pool)
+    const manage = await requireOwnerOrManage(pool, user, rows[0]!.memberId)
     const { rows: out } = await pool.query(
       `UPDATE improvement_requests SET archived_at = now() WHERE id = $1 RETURNING ${reqColsOf(false)}`, [id])
     await audit(pool, { actorId: user.id, action: 'archive', entity: 'improvement_requests', entityId: id, detail: '要望を取消' })
-    return c.json({ data: out[0] })
+    return c.json({ data: stripTriageFields(out[0], manage) })
   })
 
   app.post('/requests/:id/restore', async (c) => {
@@ -287,11 +310,11 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
     const { rows } = await pool.query<{ memberId: string }>(
       `SELECT member_id AS "memberId" FROM improvement_requests WHERE id = $1`, [id])
     if (rows.length === 0) throw err('AKO-REQ-002', '対象の要望が見つかりません', 404)
-    if (rows[0]!.memberId !== user.id) await requireManage(c, pool)
+    const manage = await requireOwnerOrManage(pool, user, rows[0]!.memberId)
     const { rows: out } = await pool.query(
       `UPDATE improvement_requests SET archived_at = NULL WHERE id = $1 RETURNING ${reqColsOf(false)}`, [id])
     await audit(pool, { actorId: user.id, action: 'restore', entity: 'improvement_requests', entityId: id, detail: '要望の取消を戻す' })
-    return c.json({ data: out[0] })
+    return c.json({ data: stripTriageFields(out[0], manage) })
   })
 
   // ---- 要望本文の編集（投稿者本人または管理権限者。改修依頼 2026-08-18） ----
@@ -311,7 +334,7 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
     const { rows: reqRows } = await pool.query<{ memberId: string }>(
       `SELECT member_id AS "memberId" FROM improvement_requests WHERE id = $1`, [id])
     if (reqRows.length === 0) throw err('AKO-REQ-002', '対象の要望が見つかりません', 404)
-    if (reqRows[0]!.memberId !== user.id) await requireManage(c, pool)
+    const manage = await requireOwnerOrManage(pool, user, reqRows[0]!.memberId)
     // 変更前本文の捕捉 → 上書き → 監査記録を同一トランザクション（FOR UPDATE 直列化）で原子的に行う:
     // 並行編集でも各監査行が「直前の本文」を正しく残し（レビュー R4）、取消との競合も締め出す。
     // 記録系（原則2）の本文上書きでは監査記録の全文保存が復元可能性の担保 = 主フローの一部のため、
@@ -344,7 +367,7 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
         `INSERT INTO audit_logs (actor_id, action, entity, entity_id, detail) VALUES ($1, 'update', 'improvement_requests', $2, $3)`,
         [user.id, id, `要望を編集（変更項目: ${improvementEditChangedLabel(fields)}／変更前本文: ${prev[0]!.body}）`])
       await client.query('COMMIT')
-      return c.json({ data: rows[0] })
+      return c.json({ data: stripTriageFields(rows[0], manage) })
     } catch (e) {
       await client.query('ROLLBACK')
       throw e
@@ -459,7 +482,7 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
     // 存在しない id も本人以外は一律 403 側へ倒さない: まず存在で 404（管理者・本人とも同じ挙動 =
     // 要望 id は全員閲覧可のため存在オラクルにならない。改修依頼 2026-08-19 第4弾で全要望が閲覧可）
     if (own.length === 0) throw err('AKO-REQ-002', '対象の要望が見つかりません', 404)
-    if (own[0]!.memberId !== user.id) await requireManage(c, pool)
+    const manage = await requireOwnerOrManage(pool, user, own[0]!.memberId)
     const updated = await inTxn(pool, async (db) => {
       const { rows } = await db.query<{
         status: ImprovementRequestStatus
@@ -495,7 +518,7 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
       actorId: user.id, action: 'update', entity: 'improvement_requests', entityId: id,
       detail: resolved ? '要望を解決済みに記録' : '要望の解決済みを取消',
     })
-    return c.json({ data: updated })
+    return c.json({ data: stripTriageFields(updated, manage) })
   })
 
   // ---- AI 判定（管理。改修依頼 2026-08-21）。ナレッジベース（shared/domain/kb = アプリ仕様・
@@ -552,8 +575,8 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
     return c.json({ data: out[0] })
   })
 
-  // ---- 集約の解除（F-42-19・改修依頼 2026-08-18。管理）。要望を改修単位から外し、
-  //      「採用済み（集約待ち）」へ戻す = 再度 AI 集約の対象にする（取消 archive と違い要望は生きたまま）。
+  // ---- 集約の解除（F-42-19・改修依頼 2026-08-18 → ステータス再編 2026-08-21。管理）。要望を改修単位から外し、
+  //      「改善対応（集約待ち）」へ戻す = 再度 AI 集約の対象にする（取消 archive と違い要望は生きたまま）。
   //      item のステータス・本文には触れない（人手の記録は不変 = 原則2。表示・プロンプトの元要望は
   //      request.item_id が SoT のため解除だけで外れる）。source_request_ids のトレースも除去して整合（原則6） ----
   app.post('/requests/:id/uncluster', async (c) => {
@@ -574,10 +597,14 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
            FROM improvement_items WHERE id = $1 FOR UPDATE`, [peekItemId])
         lockedItem = itemRows[0] ?? null
       }
-      const { rows } = await db.query<{ itemId: string | null; archivedAt: string | null; body: string }>(
-        `SELECT item_id AS "itemId", to_char(archived_at ${JST}) AS "archivedAt", body
+      const { rows } = await db.query<{
+        itemId: string | null; archivedAt: string | null; body: string
+        status: ImprovementRequestStatus | null; resolvedAt: string | null
+      }>(
+        `SELECT item_id AS "itemId", to_char(archived_at ${JST}) AS "archivedAt", body,
+           status, to_char(resolved_at ${JST}) AS "resolvedAt"
          FROM improvement_requests WHERE id = $1 FOR UPDATE`, [id])
-      // 要望側のガード（存在/未集約/取消済み）→ 競合（020）→ item 側のガード（取消済み = 022・
+      // 要望側のガード（存在/未集約/取消済み/解決済み）→ 競合（020）→ item 側のガード（取消済み = 022・
       // 決着済み = 021。item 情報は peekItemId のものと確定した後に適用する）の順で判定
       const requestGuard = improvementUnclusterError(rows[0])
       if (requestGuard) throw err(requestGuard.code, requestGuard.message, requestGuard.code === 'AKO-REQ-002' ? 404 : 409)
@@ -907,11 +934,15 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
         `UPDATE improvement_items SET ${sets.join(', ')} WHERE id = $1 RETURNING ${ITEM_COLS}`, params)
       return out[0]
     })
-    // 監査ログは実変更時のみ（担当者のみの更新も記録する）
+    // 監査ログは実変更時のみ（担当者のみの更新も記録する。遷移なし = 「ステータス →」と書かない =
+    // 監査証跡に無かった遷移を残さない。R1 監査 2026-08-21）
     if (transitioned || hasAssignee) {
+      const assigneeNote = hasAssignee ? `担当者: ${assigneeName || '解除'}` : ''
       await audit(pool, {
         actorId: user.id, action: 'update', entity: 'improvement_items', entityId: id,
-        detail: `ステータス → ${IMPROVEMENT_ITEM_STATUS_META[to].label}${hasAssignee ? `（担当者: ${assigneeName || '解除'}）` : ''}`,
+        detail: transitioned
+          ? `ステータス → ${IMPROVEMENT_ITEM_STATUS_META[to].label}${assigneeNote ? `（${assigneeNote}）` : ''}`
+          : `担当者を変更（${assigneeNote}）`,
       })
     }
     // 対応済: 紐づく要望の起票者へ「対応済み」を通知する（改修依頼 2026-08-21: 要望の「対応済み」は

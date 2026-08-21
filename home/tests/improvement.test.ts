@@ -471,6 +471,16 @@ describe('improvementUnclusterError（集約解除の可否。F-42-19・追加�
     expect(improvementUnclusterError({ itemId: 'imp-1', archivedAt: '2026-08-18T10:00:00+09:00' })?.code).toBe('AKO-REQ-018')
     expect(improvementUnclusterError({ itemId: null, archivedAt: '2026-08-18T10:00:00+09:00' })?.code).toBe('AKO-REQ-017')
   })
+  it('解決済み（resolvedAt / 旧 status=resolved）の要望は AKO-REQ-025（先に解決を取消。R1 レビュー 2026-08-21）', () => {
+    // 解除しても generate の resolved_at IS NULL 条件で再集約対象にならないため「集約待ちに戻る」案内が嘘になる
+    expect(improvementUnclusterError({ itemId: 'imp-1', archivedAt: null, resolvedAt: '2026-08-21T10:00:00+09:00' })?.code).toBe('AKO-REQ-025')
+    expect(improvementUnclusterError({ itemId: 'imp-1', archivedAt: null, status: 'resolved' })?.code).toBe('AKO-REQ-025')
+    // 判定順: 取消済みが先（AKO-REQ-018）・item ガードより前（解決済みなら item の状態に依らず 025）
+    expect(improvementUnclusterError({ itemId: 'imp-1', archivedAt: '2026-08-18T10:00:00+09:00', resolvedAt: '2026-08-21T10:00:00+09:00' })?.code).toBe('AKO-REQ-018')
+    expect(improvementUnclusterError({ itemId: 'imp-1', archivedAt: null, resolvedAt: '2026-08-21T10:00:00+09:00' }, { status: 'todo' })?.code).toBe('AKO-REQ-025')
+    // 未解決（resolvedAt null・新語彙 status）は従来どおり許可
+    expect(improvementUnclusterError({ itemId: 'imp-1', archivedAt: null, resolvedAt: null, status: 'planned' })).toBeNull()
+  })
   it('対応済（決着 = 旧 解決済み/対応見送り/運用対応 含む）item の元要望は AKO-REQ-021（記録保護）', () => {
     const active = { itemId: 'imp-1', archivedAt: null }
     expect(improvementUnclusterError(active, { status: 'done' })?.code).toBe('AKO-REQ-021')

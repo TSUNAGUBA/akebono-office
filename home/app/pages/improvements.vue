@@ -515,8 +515,8 @@ async function restoreSelectedRequest(): Promise<void> {
 }
 
 /**
- * 集約の解除（F-42-19・追加指示 2026-08-18）。集約済みの要望を改修単位から外し、
- * 「採用済み（集約待ち）」へ戻す = 次回の「採用済みを AI で集約」で再度整理の対象になる。
+ * 集約の解除（F-42-19・追加指示 2026-08-18 → ステータス再編 2026-08-21）。集約済みの要望を改修単位から外し、
+ * 「改善対応（集約待ち）」へ戻す = 次回の「改善対応を AI で集約」で再度整理の対象になる。
  * 受付箱ドロワー（集約済み表示）と改修単位ドロワーの元要望カードの両方から呼ぶ。
  */
 const unclusterBusy = ref(false)
@@ -526,7 +526,7 @@ async function unclusterRequestWithConfirm(id: string): Promise<void> {
   try {
     const ok = await confirm.ask(
       '集約の解除',
-      'この要望を改修単位から外し、「採用済み（集約待ち）」に戻します。次回の「採用済みを AI で集約」で再度整理の対象になります。'
+      'この要望を改修単位から外し、「改善対応（集約待ち）」に戻します。次回の「改善対応を AI で集約」で再度整理の対象になります。'
       + 'なお、解除した要望が AI 集約で元の改修単位へ戻ることはありません（別の単位として整理されます）。',
     )
     if (!ok) return
@@ -536,7 +536,7 @@ async function unclusterRequestWithConfirm(id: string): Promise<void> {
         // mock の localStorage 容量超過（submit と同型の警告 = 消える変更を黙認しない。レビュー R7）
         toast.show('集約を解除しましたが、保存容量が上限に達したため再読込時に失われる可能性があります', 'warn')
       } else {
-        toast.show('集約を解除しました（採用済み・集約待ちに戻りました）', 'ok')
+        toast.show('集約を解除しました（改善対応・集約待ちに戻りました）', 'ok')
       }
     } else {
       toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
@@ -769,12 +769,13 @@ function assessDocTitles(docIds: string[] | undefined): string[] {
   return (docIds ?? []).map(id => kbDocById(id)?.title ?? '').filter(Boolean)
 }
 
-/** 推奨アクションが現在の状態から適用可能か（遷移機械と一致 = ボタン活性と検証の一致） */
+/** 推奨アクションが現在の状態から適用可能か（遷移機械と一致 = ボタン活性と検証の一致。
+ *  すでに推奨状態のときは非表示 = 押しても何も起きないボタンを出さない〔R1 レビュー 2026-08-21〕） */
 function canApplyRecommended(r: ImprovementRequest): boolean {
   const v = r.aiAssessment?.verdict
   if (!v) return false
   const to = IMPROVEMENT_ASSESS_META[v].recommended
-  return isTriageable(r) && (nextInboxOf(r).includes(to) || imp.inboxStatusOf(r) === to)
+  return isTriageable(r) && imp.inboxStatusOf(r) !== to && nextInboxOf(r).includes(to)
 }
 
 /** 推奨アクションの適用（運用対応 = 案内入力を開き判定理由を下書きに / 他 = 即時遷移） */
