@@ -8600,12 +8600,12 @@ describe('顧客コンテキスト（customer_contexts + notes + AI リサーチ
   it('旧スナップショット（businessNotes なし）の反映取消は現在の事業メモを保持する（原則7）', async () => {
     // 現在値: 事業メモあり
     await cctxApi('PUT', `/v1/customer-contexts/${CCTX_COMPANY}`, {
-      as: MEMBER, body: { vision: '現行ビジョン', challenges: '現行課題', strategyNotes: '現行補足', businessNotes: '保持されるべき事業メモ' },
+      as: MEMBER, body: { vision: '現行ビジョン', challenges: '現行課題', strategyNotes: '現行補足', businessNotes: '反映前の事業メモ' },
     })
     // 反映（before には businessNotes 込みで保存される）→ SQL で旧形式（businessNotes キーなし）へ書き換えて再現
     const applied = await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/research/apply`, {
       as: ADMIN,
-      body: { vision: '新ビジョン', challenges: '・新課題', strategyNotes: '新補足', businessNotes: '新事業メモ',
+      body: { vision: '新ビジョン', challenges: '・新課題', strategyNotes: '新補足', businessNotes: '取消時点の現在値（保持される事業メモ）',
         sources: [{ title: '旧スナップショット検証（デモ）', uri: 'https://example.com/legacy-before/' }] },
     })
     const noteId = (applied.json.data as { id: string }).id
@@ -8616,7 +8616,23 @@ describe('顧客コンテキスト（customer_contexts + notes + AI リサーチ
     expect(reverted.status).toBe(200)
     const ctx2 = (reverted.json.data as { context: CtxRow }).context
     expect(ctx2.vision).toBe('現行ビジョン')
-    expect(ctx2.businessNotes).toBe('新事業メモ') // 反映で入った現在値を旧スナップショットが消さない
+    // 取消時点の現在値（= 直前の反映で入った事業メモ）を旧スナップショットが消さない
+    expect(ctx2.businessNotes).toBe('取消時点の現在値（保持される事業メモ）')
+  })
+
+  it('反映 body に businessNotes キーが無い場合（旧クライアント = 配信窓）は現在の事業メモを保持する（原則7 = PUT と同一規則）', async () => {
+    await cctxApi('PUT', `/v1/customer-contexts/${CCTX_COMPANY}`, {
+      as: MEMBER, body: { businessNotes: '旧クライアント互換で保持される事業メモ' },
+    })
+    const applied = await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/research/apply`, {
+      as: ADMIN,
+      body: { vision: '旧クライアントの反映', challenges: '・課題', strategyNotes: '補足',
+        sources: [{ title: '旧クライアント互換検証（デモ）', uri: 'https://example.com/legacy-apply/' }] },
+    })
+    expect(applied.status).toBe(201)
+    const ctx = (applied.json.data as { context: CtxRow }).context
+    expect(ctx.vision).toBe('旧クライアントの反映')
+    expect(ctx.businessNotes).toBe('旧クライアント互換で保持される事業メモ')
   })
 })
 

@@ -2,7 +2,8 @@
  * 顧客コンテキスト（改修依頼 2026-08-20）の単体テスト。
  * shared/domain/customer-context は API（routes/customer-contexts.ts）とモック（useCustomerContext）の
  * **パリティの SoT**。ここでの検証が両者の挙動を同時に固定する。
- * - 入力検証: 定性情報（3 項目すべて空は不可）・メモ本文・採用ソース
+ * - 入力検証: 定性情報（4 項目すべて空は不可。事業メモ = 2026-08-21 追加）・メモ本文・採用ソース
+ * - 反映取消の復元値構築（restoreContextFromSnapshot = 旧スナップショットは現在の事業メモを保持）
  * - AI リサーチの決定的ヒューリスティック: 候補リスト生成（3〜4 件・example.com のデモ URL・
  *   「デモ」明記・ヒント反映）と定性情報の構築（同一入力 = 同一出力・採用順に依存しない）
  */
@@ -12,7 +13,7 @@ import {
   CUSTOMER_CONTEXT_TEXT_CAP,
   customerContextError, customerContextNoteError, customerContextSourcesError,
   heuristicContextBuild, heuristicResearchCandidates,
-  normalizeCustomerContext,
+  normalizeCustomerContext, restoreContextFromSnapshot,
 } from '../../shared/domain/customer-context'
 
 describe('customerContextError（定性情報の検証）', () => {
@@ -124,5 +125,27 @@ describe('heuristicContextBuild（決定的な定性情報の構築）', () => {
   it('既存の登録値がある場合は補足メモで復元可能性（リサーチノート）を案内する', () => {
     const withCurrent = heuristicContextBuild('アケボノ商事', sources, { ...empty, vision: '既存ビジョン' })
     expect(withCurrent.strategyNotes).toContain('復元')
+  })
+})
+
+describe('restoreContextFromSnapshot（反映取消の復元値 = API/mock 共通の単一実装）', () => {
+  it('スナップショットの値をそのまま復元する（通常の取消）', () => {
+    const r = restoreContextFromSnapshot(
+      { vision: 'v', challenges: 'c', strategyNotes: 's', businessNotes: 'b' }, '現在の事業メモ')
+    expect(r).toEqual({ vision: 'v', challenges: 'c', strategyNotes: 's', businessNotes: 'b' })
+  })
+  it('旧スナップショット（businessNotes キーなし = 0084 以前）は現在の事業メモを保持する（原則7）', () => {
+    const r = restoreContextFromSnapshot({ vision: 'v', challenges: '', strategyNotes: '' }, '現在の事業メモ')
+    expect(r.businessNotes).toBe('現在の事業メモ')
+    expect(r.vision).toBe('v')
+  })
+  it('新スナップショットの businessNotes: \'\' は \'\' へ復元する（キー有無で判定 = 空文字は保持しない）', () => {
+    const r = restoreContextFromSnapshot(
+      { vision: 'v', challenges: '', strategyNotes: '', businessNotes: '' }, '現在の事業メモ')
+    expect(r.businessNotes).toBe('')
+  })
+  it('欠落した他項目は空へ・値は正規化（trim）される', () => {
+    const r = restoreContextFromSnapshot({ vision: '  v  ' }, '')
+    expect(r).toEqual({ vision: 'v', challenges: '', strategyNotes: '', businessNotes: '' })
   })
 })

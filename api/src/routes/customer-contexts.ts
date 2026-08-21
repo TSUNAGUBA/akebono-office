@@ -30,7 +30,7 @@ import {
   customerContextSourcesError,
   type CustomerResearchCandidate, type CustomerResearchHints,
   heuristicContextBuild, heuristicResearchCandidates,
-  normalizeCustomerContext,
+  normalizeCustomerContext, restoreContextFromSnapshot,
 } from '../../../shared/domain/customer-context'
 import { capCodePoints } from '../../../shared/domain/customer-log'
 import type { CustomerContextNotePayload, CustomerContextResearchSource } from '../../../shared/domain/types'
@@ -374,19 +374,22 @@ export function customerContextsRoutes(pool: pg.Pool, env: Env): Hono {
     const b = await c.req.json().catch(() => ({})) as Record<string, unknown>
     const sources = cleanSources(b.sources)
     assertValid(customerContextSourcesError(sources))
-    const values = normalizeCustomerContext({
-      vision: String(b.vision ?? ''),
-      challenges: String(b.challenges ?? ''),
-      strategyNotes: String(b.strategyNotes ?? ''),
-      businessNotes: String(b.businessNotes ?? ''),
-    })
-    assertValid(customerContextError(values))
     const noteId = newId('cnote')
     const actorName = await memberNameOf(pool, user.id)
     const client = await pool.connect()
     try {
       await client.query('BEGIN')
       const before = await currentContextOf(client, companyId)
+      // 反映 body は提案の全 4 項目を送る想定だが、キーが無い項目は現在値を保持する
+      // （事業メモを知らない旧クライアント〔配信窓〕の反映で '' 上書きしない = PUT と同一規則・原則7。
+      //  現在値の読取は Tx 内 = 反映と原子的）
+      const values = normalizeCustomerContext({
+        vision: Object.hasOwn(b, 'vision') ? String(b.vision ?? '') : before.vision,
+        challenges: Object.hasOwn(b, 'challenges') ? String(b.challenges ?? '') : before.challenges,
+        strategyNotes: Object.hasOwn(b, 'strategyNotes') ? String(b.strategyNotes ?? '') : before.strategyNotes,
+        businessNotes: Object.hasOwn(b, 'businessNotes') ? String(b.businessNotes ?? '') : before.businessNotes,
+      })
+      assertValid(customerContextError(values))
       const payload: CustomerContextNotePayload = { sources, before }
       await upsertContext(client, companyId, values, { memberId: user.id, name: actorName })
       await client.query(
@@ -431,17 +434,10 @@ export function customerContextsRoutes(pool: pg.Pool, env: Env): Hono {
     const client = await pool.connect()
     try {
       await client.query('BEGIN')
-      // 事業メモ（2026-08-21 追加）が無い旧スナップショットの復元は現在値を保持する
-      // （旧ノートの取消で新項目を消さない = 原則7。現在値の読取は Tx 内 = 復元と原子的）
+      // 復元値の構築は shared の単一実装（旧スナップショット = businessNotes キーなしは現在値を保持 =
+      // 原則7。判定の SoT を API/mock で共有 = 原則3/6。現在値の読取は Tx 内 = 復元と原子的）
       const cur = await currentContextOf(client, companyId)
-      const before = normalizeCustomerContext({
-        vision: String(note.payload.before.vision ?? ''),
-        challenges: String(note.payload.before.challenges ?? ''),
-        strategyNotes: String(note.payload.before.strategyNotes ?? ''),
-        businessNotes: note.payload.before.businessNotes === undefined
-          ? cur.businessNotes
-          : String(note.payload.before.businessNotes ?? ''),
-      })
+      const before = restoreContextFromSnapshot(note.payload.before, cur.businessNotes)
       // 反映前が全項目空（新規作成の反映だった）の場合も「空へ戻す」= 復元として upsert する
       // （行の物理削除はしない = 監査・再反映の起点を残す設計判断）
       await upsertContext(client, companyId, before, { memberId: user.id, name: actorName })

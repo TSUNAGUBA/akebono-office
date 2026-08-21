@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest'
 import {
   customerContextError, customerContextNoteError, customerContextSourcesError,
   heuristicContextBuild, heuristicResearchCandidates,
-  normalizeCustomerContext,
+  normalizeCustomerContext, restoreContextFromSnapshot,
 } from '../../../shared/domain/customer-context'
 
 describe('顧客コンテキストの入力検証（API パリティ）', () => {
@@ -65,5 +65,15 @@ describe('AI リサーチのヒューリスティック（LLM 無効時のフォ
     // 事業メモ（2026-08-21）: デモは実数値を創作しない定型ファクト（「デモ」明記）を決定的に返す
     expect(x.businessNotes.length).toBeGreaterThan(0)
     expect(x.businessNotes).toContain('デモ')
+  })
+})
+
+describe('restoreContextFromSnapshot（反映取消の復元値 = API/mock 共通の単一実装）', () => {
+  it('旧スナップショット（businessNotes キーなし）は現在の事業メモを保持・新スナップショットの \'\' は \'\' へ復元（原則7）', () => {
+    const legacy = restoreContextFromSnapshot({ vision: 'v', challenges: 'c', strategyNotes: '' }, '現在の事業メモ')
+    expect(legacy).toEqual({ vision: 'v', challenges: 'c', strategyNotes: '', businessNotes: '現在の事業メモ' })
+    const explicit = restoreContextFromSnapshot(
+      { vision: 'v', challenges: '', strategyNotes: '', businessNotes: '' }, '現在の事業メモ')
+    expect(explicit.businessNotes).toBe('')
   })
 })

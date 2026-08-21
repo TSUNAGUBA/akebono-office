@@ -53,6 +53,26 @@ export function customerContextError(input: Parameters<typeof normalizeCustomerC
   return null
 }
 
+/**
+ * 反映取消（revert）の復元値を構築する（API/モック共通の単一実装 = 原則3/6）。
+ * 事業メモ（0084 = 2026-08-21 追加）が無い旧スナップショット（before に businessNotes キーなし）の
+ * 復元は現在の事業メモを保持する（旧ノートの取消で新項目を消さない = 原則7）。
+ * before に businessNotes: '' が保存された新ノートは '' へ復元する（キー有無で判定 = undefined のみ保持）。
+ */
+export function restoreContextFromSnapshot(
+  before: { vision?: unknown; challenges?: unknown; strategyNotes?: unknown; businessNotes?: unknown },
+  currentBusinessNotes: string,
+): CustomerContextInput {
+  return normalizeCustomerContext({
+    vision: String(before.vision ?? ''),
+    challenges: String(before.challenges ?? ''),
+    strategyNotes: String(before.strategyNotes ?? ''),
+    businessNotes: before.businessNotes === undefined
+      ? currentBusinessNotes
+      : String(before.businessNotes ?? ''),
+  })
+}
+
 /** Memo（時系列メモ）の検証（本文必須。cap 後判定） */
 export function customerContextNoteError(body: string): string | null {
   if (!capCodePoints(body.trim(), CUSTOMER_CONTEXT_NOTE_CAP)) return 'メモ本文を入力してください'

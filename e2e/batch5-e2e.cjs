@@ -61,8 +61,16 @@ async function main() {
     check('AI 調査: リンクは target=_blank + rel=noopener noreferrer',
       await links.first().getAttribute('target') === '_blank'
       && ((await links.first().getAttribute('rel')) ?? '').includes('noopener'))
-    // リンククリックでチェックボックスがトグルされない（@click.stop）: 件数表示が 0 件のまま
+    // リンクを実クリックして新規タブ（popup）を受け、採用チェックがトグルされないこと（@click.stop）を検証
+    // （現在のページは遷移せず、件数表示が 0 件のまま）
     await page.getByText('（0件選択中）').waitFor()
+    const [popup] = await Promise.all([
+      page.context().waitForEvent('page'),
+      links.first().click(),
+    ])
+    await popup.close()
+    check('AI 調査: リンクをクリックしても採用チェックはトグルされず元ページに留まる（@click.stop + 新規タブ）',
+      (await page.getByText('（0件選択中）').count()) === 1)
     // 採用 → 構築 → 差分確認に「事業メモ」行が出る（単位4 の AI 反映経路）
     await page.getByRole('checkbox').first().check()
     await page.getByRole('button', { name: /採用した情報で構築/ }).click()

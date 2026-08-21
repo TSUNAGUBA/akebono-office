@@ -20,7 +20,7 @@ import {
   customerContextError, customerContextNoteError,
   type CustomerResearchCandidate, type CustomerResearchHints,
   heuristicContextBuild, heuristicResearchCandidates,
-  normalizeCustomerContext,
+  normalizeCustomerContext, restoreContextFromSnapshot,
 } from '../../../shared/domain/customer-context'
 import { capCodePoints as capCp } from '../../../shared/domain/customer-log'
 import type {
@@ -321,15 +321,9 @@ export function useCustomerContext() {
       return { ok: false, error: { code: 'AKO-CTX-004', message: 'このメモには復元できる反映前の情報がありません' } }
     }
     if (note.payload.revertedAt) return { ok: true, id: noteId } // すでに取消済み = no-op（冪等）
-    const before = normalizeCustomerContext({
-      vision: note.payload.before.vision ?? '',
-      challenges: note.payload.before.challenges ?? '',
-      strategyNotes: note.payload.before.strategyNotes ?? '',
-      // 事業メモ（2026-08-21 追加）が無い旧スナップショットの復元は現在値を保持（原則7 = API と同一判定）
-      businessNotes: note.payload.before.businessNotes === undefined
-        ? (contextOf(companyId)?.businessNotes ?? '')
-        : note.payload.before.businessNotes,
-    })
+    // 復元値の構築は shared の単一実装（旧スナップショット = businessNotes キーなしは現在値を保持 =
+    // 原則7。判定の SoT を API と共有 = 原則3/6）
+    const before = restoreContextFromSnapshot(note.payload.before, contextOf(companyId)?.businessNotes ?? '')
     const prevCtx = ctxRows.value
     const prevNotes = noteRows.value
     const now = nowJstIso()
