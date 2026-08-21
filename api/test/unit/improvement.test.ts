@@ -34,6 +34,7 @@ import {
   isInternalPagePath,
   isOpenItemStatus,
   matchesImprovementFilter,
+  normalizeImprovementFilter,
   IMPROVEMENT_REQUEST_TAG_META,
   normalizeClusterPlan,
   normalizeImprovementPagePath,
@@ -104,6 +105,14 @@ describe('matchesImprovementFilter（3 状態 + open = 未完了）', () => {
     expect(matchesImprovementFilter('resolved', 'done')).toBe(true)
     expect(matchesImprovementFilter('accepted', 'todo')).toBe(true)
     expect(matchesImprovementFilter('in_progress', 'todo')).toBe(false)
+  })
+  it('normalizeImprovementFilter: 旧語彙のフィルタ値（API の filter パラメータ経由）を正規化（原則7・R2）', () => {
+    expect(normalizeImprovementFilter('accepted')).toBe('todo')
+    expect(normalizeImprovementFilter('deferred')).toBe('todo')
+    expect(normalizeImprovementFilter('operational')).toBe('done')
+    expect(normalizeImprovementFilter('committed')).toBe('open')
+    expect(normalizeImprovementFilter('done')).toBe('done')
+    expect(normalizeImprovementFilter('bogus')).toBe('bogus' as never) // 未知値 = 0 件のまま（安全側）
   })
 })
 

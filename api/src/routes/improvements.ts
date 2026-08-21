@@ -65,9 +65,11 @@ import {
   improvementTitleError,
   improvementUnclusterError,
   isClusterAppendTarget,
+  OPERATIONAL_NOTE_PREFIX,
   operationalNoteBody,
   operationalNoteCapError,
   matchesImprovementFilter,
+  normalizeImprovementFilter,
   normalizeClusterPlan,
   normalizeImprovementImages,
   normalizeImprovementLinks,
@@ -198,12 +200,18 @@ async function requireOwnerOrManage(pool: pg.Pool, user: AuthUser, ownerId: stri
  * 管理系のトリアージ状態（旧・選別 adoption / 集約解除履歴 excludedItemIds / AI 判定 aiAssessment）を
  * 非管理者への応答から剥がす。一覧 GET と同一の情報開示方針（R1 監査）を、投稿者本人が呼べる
  * 単一行エンドポイント（投稿 201 / edit / archive / restore / resolve の RETURNING）にも適用する =
- * 一覧で伏せた情報が本人操作の応答から漏れない（R1 レビュー 2026-08-21）
+ * 一覧で伏せた情報が本人操作の応答から漏れない（R1 レビュー 2026-08-21）。
+ * 例外: 旧データ（status='open'）の adoption は残す。旧行の表示ステータスは adoption から導出する
+ * （improvementInboxStatusOf の読替え = 原則7）ため、剥がすと同じ要望が閲覧者・モードで別ステータスに
+ * 見える（例: 旧・不採用の要望が起票者にだけ「未確認」）。新モデルでは選別相当の判断
+ * （改善対応/対応見送り）は基底ステータスとして全員公開のため、旧行の adoption 開示は方針と矛盾しない
+ * （R2 レビュー 2026-08-21）
  */
 function stripTriageFields<T>(row: T, manage: boolean): T {
   if (row && !manage) {
     const r = row as Record<string, unknown>
-    delete r.adoption; delete r.excludedItemIds; delete r.aiAssessment
+    if (r.status !== 'open') delete r.adoption
+    delete r.excludedItemIds; delete r.aiAssessment
   }
   return row
 }
@@ -281,12 +289,10 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
       + (where.length ? ` WHERE ${where.join(' AND ')}` : '')
       + ' ORDER BY r.created_at DESC, r.id'
     const { rows } = await pool.query(sql, params)
-    // 旧・選別（adoption）・集約解除履歴（excludedItemIds）は管理系のトリアージ状態のため一般利用者へは返さない
-    // （UI でも管理者のみ表示 = 情報開示の一貫性。R1 監査反映・改修依頼 2026-08-19 第4弾）。
+    // 管理系のトリアージ状態は一般利用者へは返さない（stripTriageFields = 単一行応答と同一方針・同一実装 =
+    // 原則3。旧データ〔status='open'〕の adoption は表示ステータスの導出材料のため残す = 原則7）。
     // 要望本文・投稿者・受付箱ステータス（status/resolvedAt/linkedItemStatus）は全員可（受付箱・カンバンで参照）。
-    if (!canManage) {
-      for (const r of rows as Record<string, unknown>[]) { delete r.adoption; delete r.excludedItemIds; delete r.aiAssessment }
-    }
+    for (const r of rows) stripTriageFields(r, canManage)
     return c.json({ data: rows })
   })
 
@@ -643,13 +649,31 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
   })
 
   // ---- 生要望へのコメント（やり取り。記録系・追記のみ = 改善要望 2026-08-17 第 2 弾） ----
-  // 一覧: requestId 指定でその要望のコメント / 未指定は全件（管理ページの一括ロード用）。既定は有効のみ
+  // 一覧: requestId 指定でその要望のコメント / 未指定は全件（管理ページの一括ロード用）。既定は有効のみ。
+  // 非管理者は「自分の要望」+ requestId 指定に限り、運用案内（「運用案内: 」接頭辞 = 起票者向けに
+  // 通知した本文と同一の記録）だけを取得できる（R2 監査 2026-08-21: 運用案内の本人到達を system 通知
+  // だけに依存させない = 通知を OFF にしていても要望ドロワーで案内を読める。管理検討のコメントは
+  // 従来どおり管理権限者のみ = 情報開示方針は不変）
   app.get('/request-comments', async (c) => {
-    await requireManage(c, pool)
+    const user = c.get('user')
+    const manage = await canManage(pool, user)
     const requestId = String(c.req.query('requestId') ?? '').trim()
-    const includeArchived = c.req.query('includeArchived') === '1'
+    const includeArchived = manage && c.req.query('includeArchived') === '1'
     const where: string[] = []
     const params: unknown[] = []
+    if (!manage) {
+      if (!requestId) {
+        throw err('AKO-PRM-001', '改善要望を閲覧・管理する権限がありません（管理者にお問い合わせください）', 403)
+      }
+      const { rows: own } = await pool.query<{ memberId: string }>(
+        `SELECT member_id AS "memberId" FROM improvement_requests WHERE id = $1`, [requestId])
+      if (own.length === 0) throw err('AKO-REQ-002', '対象の要望が見つかりません', 404)
+      if (own[0]!.memberId !== user.id) {
+        throw err('AKO-PRM-001', '改善要望を閲覧・管理する権限がありません（管理者にお問い合わせください）', 403)
+      }
+      params.push(`${OPERATIONAL_NOTE_PREFIX}%`)
+      where.push(`body LIKE $${params.length}`)
+    }
     if (requestId) { params.push(requestId); where.push(`request_id = $${params.length}`) }
     if (!includeArchived) where.push('archived_at IS NULL')
     const sql = `SELECT ${COMMENT_COLS} FROM improvement_request_comments`
@@ -714,7 +738,8 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
       + (includeArchived ? '' : ' WHERE archived_at IS NULL')
       + ' ORDER BY updated_at DESC, id'
     const { rows } = await pool.query(sql)
-    const filter = (String(c.req.query('filter') ?? 'all') as ImprovementFilter)
+    // 旧語彙のフィルター値は正規化して受理（下位互換 = 原則7。R2 レビュー: 旧値が常に 0 件になるのを防ぐ）
+    const filter = normalizeImprovementFilter(String(c.req.query('filter') ?? 'all'))
     const data = rows.filter(r => matchesImprovementFilter((r as { status: ImprovementStatus }).status, filter))
     return c.json({ data })
   })
@@ -857,17 +882,21 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
     }
     // 担当者の変更・解除（改修依頼 2026-08-21。対応中への遷移時のアサインとは別に、いつでも変更できる = 原則9.5。
     // '' = 解除。名前はスナップショット保存 = 閲覧時のマスタ参照を避ける）
+    const contentSetCount = sets.length // 担当者以外の編集項目数（監査 detail の分岐用）
+    let assigneeNote = ''
     if (Object.hasOwn(body, 'assigneeMemberId')) {
       const mid = String(body.assigneeMemberId ?? '').trim()
       if (!mid) {
         params.push(null); sets.push(`assignee_member_id = $${params.length}`)
         params.push(''); sets.push(`assignee_name = $${params.length}`)
+        assigneeNote = '担当者: 解除'
       } else {
         const { rows: mem } = await pool.query<{ name: string }>(
           `SELECT name FROM members WHERE id = $1 AND active = true`, [mid])
         if (mem.length === 0) throw err('AKO-REQ-027', '担当者が見つかりません（有効なメンバーを指定してください）', 400)
         params.push(mid); sets.push(`assignee_member_id = $${params.length}`)
         params.push(mem[0]!.name); sets.push(`assignee_name = $${params.length}`)
+        assigneeNote = `担当者: ${mem[0]!.name}`
       }
     }
     if (sets.length === 0) throw err('AKO-REQ-004', '更新する項目がありません', 400)
@@ -875,7 +904,12 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
       `UPDATE improvement_items SET ${sets.join(', ')}, updated_at = now()
        WHERE id = $1 AND archived_at IS NULL RETURNING ${ITEM_COLS}`, params)
     if (rows.length === 0) throw err('AKO-REQ-002', '対象の改修単位が見つかりません', 404)
-    await audit(pool, { actorId: user.id, action: 'update', entity: 'improvement_items', entityId: id, detail: '改修単位を編集' })
+    // 監査 detail: 担当者のみの更新は「担当者を変更」= status ルートの担当者分岐と同型（誰に変わったかを
+    // 監査から追える。編集と同時の場合は編集の detail に付記 = R2 レビュー 2026-08-21）
+    const detail = assigneeNote && contentSetCount === 0
+      ? `担当者を変更（${assigneeNote}）`
+      : `改修単位を編集${assigneeNote ? `（${assigneeNote}）` : ''}`
+    await audit(pool, { actorId: user.id, action: 'update', entity: 'improvement_items', entityId: id, detail })
     return c.json({ data: rows[0] })
   })
 
@@ -1061,7 +1095,8 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
     // 既定 = todo（改修依頼 2026-08-21: プロンプト出力の対象は「未対応」= 実施決定・未着手の案件のみ。
     // 旧語彙 triage/accepted/deferred も未対応へ正規化されて対象になる = 原則7。
     // filter パラメータ自体は下位互換のため維持 = 呼び出し側 UI は常に todo を送る）
-    const filter = (String(body.filter ?? 'todo') as ImprovementFilter)
+    // 旧語彙のフィルター値は正規化して受理（下位互換 = 原則7。R2 レビュー: 旧値が常に 0 件になるのを防ぐ）
+    const filter = normalizeImprovementFilter(String(body.filter ?? 'todo'))
     const { rows: itemRows } = await pool.query<{
       id: string; title: string; summary: string; detail: string;
       status: ImprovementStatus; pagePaths: string[]

@@ -116,6 +116,22 @@ export function matchesImprovementFilter(status: ImprovementStatus, filter: Impr
   return improvementItemViewOf(status) === filter
 }
 
+/**
+ * フィルター値の正規化（下位互換 = 原則7。改修依頼 2026-08-21 の 3 状態化で旧語彙のフィルター値
+ * 〔外部スクリプト・ブックマーク経由〕が常に 0 件になるのを防ぐ）。旧ステータス値は保存値と同じ
+ * 読み替え（improvementItemViewOf）で 3 状態視点へ・旧 committed（改善対応+対応中 = 未完了）は open へ。
+ * 未知値はそのまま返す（matchesImprovementFilter が 0 件を返す = 従来と同じ安全側）。
+ */
+export function normalizeImprovementFilter(raw: string): ImprovementFilter {
+  if (raw === 'all' || raw === 'open' || (IMPROVEMENT_ITEM_VIEWS as readonly string[]).includes(raw)) {
+    return raw as ImprovementFilter
+  }
+  if (raw === 'committed') return 'open'
+  const legacy: readonly string[] = ['triage', 'accepted', 'operational', 'deferred', 'resolved', 'rejected']
+  if (legacy.includes(raw)) return improvementItemViewOf(raw as ImprovementStatus)
+  return raw as ImprovementFilter
+}
+
 // ---------- 型 ----------
 
 // ---------- 受付箱（request）のステータス（改修依頼 2026-08-21: 選別〔採用/不採用〕+ 進捗タグを一本化） ----------

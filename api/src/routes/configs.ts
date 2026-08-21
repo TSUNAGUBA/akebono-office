@@ -83,11 +83,14 @@ export function configsRoutes(pool: pg.Pool): Hono {
       // 未知ページ（カタログ外の値）は黙って無視（原則4 = list-query の不正値と同じ扱い）
       if (entities.length > 0) push('entity = ANY($P)', entities)
     }
-    // 期間は JST の日付キー（YYYY-MM-DD）。不正・非実在日は黙って無視（isRealDateKey = 22008 の 500 化を防ぐ）
+    // 期間は JST の日付キー（YYYY-MM-DD）。不正・非実在日は黙って無視（isRealDateKey = 22008 の 500 化を防ぐ）。
+    // 述語は at 列そのままの範囲比較にする（JST 0 時を timestamptz 化して比較 = 0081 の (at) インデックスが
+    // 効く sargable 形。列へ式を適用する `(at AT TIME ZONE ...)::date >= $P` は索引が使えず、追記で単調増大する
+    // audit_logs では期間絞り込みが全表走査になる = R2 レビュー 2026-08-21）
     const atFrom = (c.req.query('f.at.from') ?? '').trim()
-    if (isRealDateKey(atFrom)) push(`(at AT TIME ZONE 'Asia/Tokyo')::date >= $P`, atFrom)
+    if (isRealDateKey(atFrom)) push(`at >= ($P::date::timestamp AT TIME ZONE 'Asia/Tokyo')`, atFrom)
     const atTo = (c.req.query('f.at.to') ?? '').trim()
-    if (isRealDateKey(atTo)) push(`(at AT TIME ZONE 'Asia/Tokyo')::date <= $P`, atTo)
+    if (isRealDateKey(atTo)) push(`at < (($P::date + 1)::timestamp AT TIME ZONE 'Asia/Tokyo')`, atTo)
 
     const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''
     const countRes = await pool.query<{ n: number }>(

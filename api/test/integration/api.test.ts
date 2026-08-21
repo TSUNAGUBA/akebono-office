@@ -6911,6 +6911,14 @@ describe('改善要望（F-42 → ステータス管理の再編 = 改修依頼 
     // 管理者には adoption（旧データ読替え用）も返す
     const adminReqRows = (await api('GET', '/v1/improvements/requests', { as: ADMIN })).json.data as Record<string, unknown>[]
     expect(adminReqRows.every(r => 'adoption' in r)).toBe(true)
+    // 旧データ（status='open'）の adoption は一般利用者にも返す = 表示ステータスの導出材料（原則7。
+    // 剥がすと旧・不採用の要望が起票者にだけ「未確認」に見える閲覧者間のズレが生じる = R2 レビュー）
+    const legacyId = (posted.json.data as { id: string }).id
+    await pool.query(`UPDATE improvement_requests SET status = 'open', adoption = 'declined' WHERE id = $1`, [legacyId])
+    const legacyRows = (await api('GET', '/v1/improvements/requests', { as: MEMBER })).json.data as Record<string, unknown>[]
+    const legacyRow = legacyRows.find(r => r.id === legacyId)
+    expect(legacyRow?.adoption).toBe('declined') // 旧行のみ adoption を保持（新語彙行は上のアサートどおり非含有）
+    await pool.query(`UPDATE improvement_requests SET status = 'unconfirmed', adoption = 'pending' WHERE id = $1`, [legacyId]) // 後続へ影響させない
     // 一般利用者は自分の取消済み要望を閲覧・復元できる（原則9.5・R1 レビュー反映）。他者の取消済みは見えない
     const ownReqId = (posted.json.data as { id: string }).id
     expect((await api('POST', `/v1/improvements/requests/${ownReqId}/archive`, { as: MEMBER })).status).toBe(200)
@@ -6972,6 +6980,16 @@ describe('改善要望（F-42 → ステータス管理の再編 = 改修依頼 
     const notes = (await api('GET', '/v1/notifications', { as: MEMBER })).json.data as { title: string; body: string; link: string }[]
     const opsNote = notes.find(n => n.title === '改善要望が「運用対応」になりました' && n.link === `/improvements?req=${reqId}`)
     expect(opsNote?.body).toBe('運用案内: 設定 > 外部リンクから同じ導線を追加できます')
+    // 起票者本人は自分の要望の「運用案内」コメントだけを取得できる（通知 OFF でもアプリ内で読める = R2 監査。
+    // 管理検討のコメントは含めない・requestId 必須・他人の要望は 403）
+    await api('POST', `/v1/improvements/requests/${reqId}/comments`, { as: ADMIN, body: { body: '内部の検討メモ（管理者向け）' } })
+    const ownComments = await api('GET', `/v1/improvements/request-comments?requestId=${reqId}`, { as: MEMBER })
+    expect(ownComments.status).toBe(200)
+    const ownRows = ownComments.json.data as { body: string }[]
+    expect(ownRows.length).toBe(1)
+    expect(ownRows[0]!.body).toBe('運用案内: 設定 > 外部リンクから同じ導線を追加できます')
+    expect((await api('GET', '/v1/improvements/request-comments', { as: MEMBER })).status).toBe(403) // requestId なしは不可
+    expect((await api('GET', `/v1/improvements/request-comments?requestId=${reqId}`, { as: HR })).status).toBe(403) // 他人の要望は不可
     // 解決の記録（resolve）: 起票者本人が「解決済み」にできる（運用対応の確認）
     const resolved = await api('POST', `/v1/improvements/requests/${reqId}/resolve`, { as: MEMBER, body: { resolved: true } })
     expect(resolved.status).toBe(200)
@@ -7996,6 +8014,11 @@ describe('改修プロンプト出力の既定（改修依頼 2026-08-21: filter
       const openPrompt = (open.json.data as { prompt: string }).prompt
       expect(openPrompt).toContain('プロンプト既定検証Todo')
       expect(openPrompt).toContain('プロンプト既定検証Progress')
+      // 旧語彙の filter 値も正規化して受理（accepted → todo 視点 = 0 件にならない。原則7・R2 レビュー）
+      const legacyFilter = await api('POST', '/v1/improvements/prompt', { as: ADMIN, body: { filter: 'accepted' } })
+      const legacyPrompt = (legacyFilter.json.data as { prompt: string }).prompt
+      expect(legacyPrompt).toContain('プロンプト既定検証Accepted')
+      expect(legacyPrompt).not.toContain('プロンプト既定検証Progress')
     } finally {
       await pool.query(`DELETE FROM improvement_items WHERE id IN ('imp-t-todo', 'imp-t-acc', 'imp-t-tri', 'imp-t-prog')`)
     }

@@ -27,7 +27,7 @@ import {
   inboxStatusFromItem,
   isClusterAppendTarget,
   isOpenItemStatus,
-  matchesImprovementFilter, matchesInboxFilter, normalizeImprovementLinks, normalizeImprovementTags,
+  matchesImprovementFilter, matchesInboxFilter, normalizeImprovementFilter, normalizeImprovementLinks, normalizeImprovementTags,
   planInboxStatusBulk, PROMPT_NAVIGATOR_PREAMBLE, promptRequestTag, requestAdoptionOf,
   improvementEditChangedLabel,
   improvementEditError,
@@ -116,6 +116,23 @@ describe('改修案件の 3 状態（未対応/対応中/対応済 = 改修依�
     expect(isOpenItemStatus('done')).toBe(false)
     expect(isOpenItemStatus('operational')).toBe(false)
     expect(isOpenItemStatus('rejected')).toBe(false)
+  })
+  it('normalizeImprovementFilter: 旧語彙のフィルタ値を 3 状態視点へ正規化（下位互換 = 原則7。R2 レビュー）', () => {
+    // 現行値は素通し
+    expect(normalizeImprovementFilter('all')).toBe('all')
+    expect(normalizeImprovementFilter('open')).toBe('open')
+    expect(normalizeImprovementFilter('todo')).toBe('todo')
+    // 旧ステータス値は保存値と同じ読み替え（improvementItemViewOf）
+    expect(normalizeImprovementFilter('triage')).toBe('todo')
+    expect(normalizeImprovementFilter('accepted')).toBe('todo')
+    expect(normalizeImprovementFilter('deferred')).toBe('todo')
+    expect(normalizeImprovementFilter('resolved')).toBe('done')
+    expect(normalizeImprovementFilter('operational')).toBe('done')
+    expect(normalizeImprovementFilter('rejected')).toBe('done')
+    // 旧 committed（改善対応 + 対応中）= 未完了
+    expect(normalizeImprovementFilter('committed')).toBe('open')
+    // 未知値はそのまま（matchesImprovementFilter が 0 件 = 従来と同じ安全側）
+    expect(normalizeImprovementFilter('bogus')).toBe('bogus' as never)
   })
 })
 

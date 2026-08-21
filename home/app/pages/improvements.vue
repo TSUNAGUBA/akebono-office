@@ -230,6 +230,11 @@ const commentBusy = ref(false)
 
 /** 選択中の要望が自分の投稿か（一般利用者は自分の要望のみ編集・コメント・取消できる = 改修依頼 2026-08-19 第4弾） */
 const isOwnSelectedRequest = computed(() => !!selectedRequest.value && selectedRequest.value.memberId === currentUserId.value)
+/** 自分の要望の運用案内（「運用案内: 」コメント = 通知と同一本文の記録）。通知を OFF にしていても
+ *  ドロワーで案内を読める = 解決確認フローが通知設定に依存しない（R2 監査 2026-08-21） */
+const ownGuidance = computed(() => (selectedRequest.value && isOwnSelectedRequest.value
+  ? imp.operationalGuidanceFor(selectedRequest.value.id)
+  : []))
 /** 選択中の要望に書込（編集・コメント・取消）できるか（本人または管理権限者。ステータス変更は管理者のみ = 別ゲート） */
 const canWriteSelectedRequest = computed(() => isOwnSelectedRequest.value || canManageImprovements.value)
 
@@ -238,7 +243,12 @@ function openRequestDrawer(row: Record<string, unknown>): void {
   commentInput.value = ''
   requestEditing.value = false
   const r = imp.allRequests.value.find(x => x.id === selectedRequestId.value)
-  if (r) void imp.loadRequestImagesFor(r) // 添付画像の遅延ロード（非ブロッキング）
+  if (r) {
+    void imp.loadRequestImagesFor(r) // 添付画像の遅延ロード（非ブロッキング）
+    // 運用案内の遅延ロード（API モードの非管理者のみ実フェッチ = 自分の要望の運用案内を表示する材料。
+    // 通知 OFF でもアプリ内で案内を読める = R2 監査 2026-08-21。失敗しても表示は続行 = 原則4）
+    if (r.memberId === currentUserId.value) void imp.loadOperationalGuidance(r.id)
+  }
 }
 /** 生要望カンバン/ガント・一般の受付箱一覧から詳細ドロワーを開く（改修依頼 2026-08-19 第4弾） */
 function openRequestDetail(r: ImprovementRequest): void {
@@ -1731,9 +1741,10 @@ async function copyAndClose(): Promise<void> {
                 </div>
                 <div class="flex shrink-0 flex-col items-stretch gap-1">
                   <!-- 集約解除 = 改修案件から外して「改善対応（集約待ち）」へ戻す（再度 AI 集約の対象 = F-42-19）。
-                       対応済 item = AKO-REQ-021（先にステータスを戻す）・取消済み item = AKO-REQ-022（先に復元）は不可 = 記録保護 -->
+                       対応済 item = AKO-REQ-021（先にステータスを戻す）・取消済み item = AKO-REQ-022（先に復元）・
+                       解決済みの要望 = AKO-REQ-025（先に解決の取消）は不可 = 記録保護・ボタン表示と検証の一致（R2） -->
                   <button
-                    v-if="!selected.archivedAt && isOpenItemStatus(selected.status)"
+                    v-if="!selected.archivedAt && isOpenItemStatus(selected.status) && imp.inboxStatusOf(r) !== 'resolved'"
                     type="button"
                     class="btn btn-ghost btn-sm"
                     title="この要望の集約を解除（改善対応・集約待ちへ戻して再度 AI 集約の対象にする)"
@@ -1891,6 +1902,11 @@ async function copyAndClose(): Promise<void> {
           class="grid gap-2"
         >
           <p class="label">解決の記録（自分の要望）</p>
+          <!-- 運用案内（起票者向け。通知と同一本文の記録 = 通知を OFF にしていてもここで読める。R2 監査 2026-08-21） -->
+          <div v-for="g in ownGuidance" :key="g.id" class="rounded-lg border border-line bg-surface-soft p-2.5">
+            <p class="whitespace-pre-wrap break-words text-[13px] text-ink">{{ g.body }}</p>
+            <p class="num mt-1 text-[11px] text-muted">{{ fmtDateTimeSec(g.createdAt) }}</p>
+          </div>
           <div class="flex flex-wrap items-center gap-2">
             <template v-if="imp.inboxStatusOf(selectedRequest) !== 'resolved'">
               <button type="button" class="btn btn-sm" :disabled="ownResolveBusy" @click="resolveSelectedRequest(true)">
@@ -1899,7 +1915,7 @@ async function copyAndClose(): Promise<void> {
               </button>
               <span class="text-[11px] text-muted">
                 {{ imp.inboxStatusOf(selectedRequest) === 'operational'
-                  ? '運用対応の案内（通知でお知らせしています）を確認できたら「解決済み」にしてください'
+                  ? '運用対応の案内（上記。通知でもお知らせしています）を確認できたら「解決済み」にしてください'
                   : '改修が完了しています。内容を確認できたら「解決済み」にしてください' }}
               </span>
             </template>
@@ -1984,10 +2000,14 @@ async function copyAndClose(): Promise<void> {
             <p v-if="selectedRequestItemDecided" class="text-[12px] text-warn">
               集約先の改修案件が対応済（決着）または取消済みのため解除できません。解除するには、先に改修案件のステータスを戻す／復元してください。
             </p>
+            <!-- 解決済みの要望も解除不可（AKO-REQ-025 = 解除しても再集約対象にならないため。ボタン表示と検証の一致 = R2） -->
+            <p v-else-if="imp.inboxStatusOf(selectedRequest) === 'resolved'" class="text-[12px] text-warn">
+              解決済みの要望は集約を解除できません。解除するには、先に「解決済み」を取り消してください。
+            </p>
             <div class="flex flex-wrap gap-2">
               <button type="button" class="btn btn-sm" @click="openItemOfRequest">集約先の改修案件を開く</button>
               <button
-                v-if="!selectedRequestItemDecided"
+                v-if="!selectedRequestItemDecided && imp.inboxStatusOf(selectedRequest) !== 'resolved'"
                 type="button"
                 class="btn btn-ghost btn-sm"
                 :disabled="unclusterBusy"

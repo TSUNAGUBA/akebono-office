@@ -4412,3 +4412,32 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
       読める → 「担当者を変更（担当者: X）」へ分岐
     - 監査 NIT: 内部コメントの旧・選別語彙残置（useImprovements / shared / usePermissions）→ 新語彙へ更新
     - R1 後検証: home 単体 530 / api 単体 503 / 統合 309 / 両 typecheck / モック E2E 全スイート green
+  - R2（両ロール再レビュー。コードレビュアー MINOR3/NIT2・システム監査官 MINOR2/NIT3。監査ログ索引は重複統合 =
+    計 MINOR4/NIT4）→ 全件対応:
+    - 両指摘 MINOR/NIT: 監査ログの期間絞り込みが列への式適用（`(at AT TIME ZONE …)::date >= $P`）のため
+      0081 の (at) インデックスが効かず、追記で単調増大する audit_logs で全表走査になる →
+      JST 0 時を timestamptz 化した範囲比較（`at >= $P::date::timestamp AT TIME ZONE …` /
+      `at < ($P::date + 1)::…`）へ書き換え（sargable = 既存インデックスが効く。意味は同一 = 統合テスト green）
+    - レビュー MINOR: R1 の AKO-REQ-025（解決済みは集約解除不可）がボタン表示条件に未反映 =
+      解決済み + reopen 済み item の要望で解除ボタンが出て確認後に 409 → 受付箱ドロワー・改修案件
+      ドロワー元要望カードの両ボタンを resolved 非表示化 + 「先に解決済みを取り消す」案内を表示
+      （ボタン表示と検証の一致）
+    - レビュー MINOR: 旧データ（status='open'）の adoption を非管理者応答から剥がすと、表示ステータスの
+      導出材料が欠けて同じ要望が閲覧者・モードで別ステータスに見える（旧・不採用が起票者にだけ「未確認」）→
+      stripTriageFields は旧行（status='open'）の adoption を残す例外を追加（新モデルでは選別相当の判断は
+      基底ステータスとして全員公開のため方針と矛盾しない）。一覧 GET も同ヘルパーへ一本化（原則3）+ 統合テスト
+    - 監査 MINOR: 運用案内の本人到達が system 通知のみに依存（通知マトリクスで OFF にした起票者は案内を
+      読む手段がなく解決確認フローを完遂できない）→ GET /request-comments に「自分の要望 + requestId 指定」の
+      非管理者分岐を追加（「運用案内: 」接頭辞のコメントのみ返す = 管理検討コメントの開示方針は不変）。
+      要望ドロワーの「解決の記録」に運用案内を表示（mock = ローカル照合 / API = ドロワー表示時の遅延ロード。
+      案内文の「通知でお知らせしています」断定も改稿）+ 統合テスト（本人 = 運用案内のみ・requestId なし
+      403・他人 403）
+    - 監査 MINOR: api-design のチャットボット供給網羅に app_manual ツール / manual 文脈ブロックの記述漏れ →
+      追記（data-design・§103-3 との不整合解消）
+    - レビュー NIT: 旧語彙の filter 値（accepted/committed 等）が受理されるが常に 0 件（「下位互換で受理」の
+      記述と乖離）→ shared `normalizeImprovementFilter` を新設し /items・/prompt で正規化（単体 + 統合テスト）
+    - レビュー NIT: editItem（assigneeMemberId のみの更新）の監査 detail が「改修単位を編集」の汎用文言 →
+      「担当者を変更（担当者: X／解除）」へ分岐（status ルートの R1 分岐と同型）
+    - 監査 NIT: 配信窓（API 先行 → 旧フロント）で旧「選別」操作が一時的に失敗する旨を deploy-guide の
+      配信順序注記へ追記（読み取り互換・データ破壊なし = 現状容認の記録）
+    - R2 後検証: home 単体 531 / api 単体 504 / 統合 309 / 両 typecheck / モック E2E 全スイート green

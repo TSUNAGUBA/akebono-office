@@ -68,6 +68,7 @@ import {
   normalizeImprovementLinks,
   normalizeImprovementPagePath,
   normalizeImprovementTags,
+  OPERATIONAL_NOTE_PREFIX,
   operationalNoteBody,
   operationalNoteCapError,
   planInboxStatusBulk,
@@ -155,6 +156,31 @@ export function useImprovements() {
     return allComments.value
       .filter(cm => cm.requestId === requestId && !cm.archivedAt)
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+  }
+
+  /**
+   * ある生要望の運用案内（「運用案内: 」接頭辞のコメント = 運用対応への遷移時に記録・起票者へ通知した本文）。
+   * 起票者本人の要望ドロワーで表示する（R2 監査 2026-08-21: system 通知を OFF にしていても
+   * アプリ内で案内を読めるようにする = 解決確認フローの成立）。管理検討のコメントは含めない。
+   */
+  function operationalGuidanceFor(requestId: string): ImprovementRequestComment[] {
+    return commentsForRequest(requestId).filter(cm => cm.body.startsWith(OPERATIONAL_NOTE_PREFIX))
+  }
+
+  /**
+   * 運用案内の遅延ロード（API モードの非管理者のみ）。管理者は refresh() の全件 GET が担い、
+   * mock はローカルデータを直接読むため no-op。API は requestId 指定 + 本人ガードの
+   * GET /request-comments が運用案内のみを返す。失敗は非ブロッキング（原則4 = ドロワー表示は続行）
+   */
+  async function loadOperationalGuidance(requestId: string): Promise<void> {
+    if (!isApi || canManageImprovements.value || !requestId) return
+    try {
+      const rows = await apiFetch<ImprovementRequestComment[]>('/v1/improvements/request-comments', {
+        query: { requestId } })
+      // 既存キャッシュと id でマージ（同一要望の再取得は置き換え・他要望の分は保持）
+      const ids = new Set(rows.map(r => r.id))
+      apiComments.value = [...apiComments.value.filter(cm => cm.requestId !== requestId && !ids.has(cm.id)), ...rows]
+    } catch { /* 補助情報（失敗しても本文・解決操作は使える） */ }
   }
 
   /** 要望 id → 有効コメント件数（一覧セル用。行ごとの全件フィルタを避け 1 パスで集計 = レビュー R9） */
@@ -1110,7 +1136,8 @@ export function useImprovements() {
     // データ
     activeItems, archivedItems, unclusteredRequests, plannedUnclustered, unconfirmedRequests, allRequests,
     inboxStatusOf,
-    requestsForItem, notesForItem, commentsForRequest, commentCountByRequest, refresh, loadRequestImages, loadRequestImagesFor,
+    requestsForItem, notesForItem, commentsForRequest, commentCountByRequest, operationalGuidanceFor, loadOperationalGuidance,
+    refresh, loadRequestImages, loadRequestImagesFor,
     imagesLoadedForRequest,
     // 操作
     submit, generate, setStatus, editItem, setItemArchived, setRequestArchived, setRequestStatus,
