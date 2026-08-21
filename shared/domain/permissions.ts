@@ -35,10 +35,13 @@ export const FEATURE_PERMISSION_KEYS: { key: string; label: string }[] = [
   { key: 'weekly-report', label: '週報' },
   { key: 'monthly-report', label: '月報' },
   { key: 'ai-assistant', label: 'AI業務アシスタント（カレンダー連携含む）' },
-  { key: 'poipoi', label: '改善のタネ' },
+  { key: 'poipoi', label: 'ぽいぽいポスト（改善のタネ）' },
   { key: 'minutes', label: '議事録' },
   { key: 'customer-log', label: '顧客活動' },
   { key: 'customer-context', label: '顧客コンテキスト' },
+  // 営業管理（改善要望 2026-08-21・F-53/F-54）
+  { key: 'sales-approach', label: '営業アプローチリスト' },
+  { key: 'customer-dashboard', label: '顧客別ダッシュボード' },
   { key: 'support-activity', label: 'サポート活動' },
   { key: 'sales-activity', label: '営業活動' },
   { key: 'partner-activity', label: 'ビジネスパートナー活動' },
@@ -70,6 +73,7 @@ export function featureKeyOfPath(pathWithQuery: string): string | null {
     'ai-assistant', 'workflow', 'decision', 'ai-company',
     'akebono', 'support', 'sales', 'status', 'inbox', 'masters', 'settings', 'poipoi', 'minutes', 'customer-log',
     'customer-context', 'improvements', 'support-activity', 'sales-activity', 'partner-activity',
+    'sales-approach', 'customer-dashboard',
   ]
   return known.includes(seg) ? seg : null
 }
@@ -221,7 +225,7 @@ export const AI_SCOPE_FIELD = 'ai-scope'
  * 勤怠・タスク計画/カレンダーは「自分のみ」（C3 = 安全側。管理職等へは権限設定で「すべて」を付与する運用）
  */
 export const AI_SCOPE_FEATURES: { key: string; label: string; defaultScope: 'all' | 'own' }[] = [
-  { key: 'poipoi', label: '改善のタネ', defaultScope: 'all' },
+  { key: 'poipoi', label: 'ぽいぽいポスト（改善のタネ）', defaultScope: 'all' },
   { key: 'attendance', label: '勤怠（労働時間・有給）', defaultScope: 'own' },
   // 'all' で供給されるのはチームのタスク計画のみ（カレンダー予定は本人分に限る）。ラベルは実挙動に合わせる
   { key: 'ai-assistant', label: 'タスク計画', defaultScope: 'own' },
@@ -423,7 +427,7 @@ export const AI_SCOPE_TARGET_ALL_FIELD = 'ai-scope:*'
  * aiReferenceOwnerDefault が権限表の参照権限から導出する
  */
 export const AI_REFERENCE_DATATYPES: { key: string; label: string }[] = [
-  { key: 'poipoi', label: '改善のタネ' },
+  { key: 'poipoi', label: 'ぽいぽいポスト（改善のタネ）' },
   { key: 'attendance', label: '勤怠（労働時間・有給）' },
   { key: 'ai-assistant', label: 'タスク計画' },
   { key: 'reports', label: '日報・週報' },

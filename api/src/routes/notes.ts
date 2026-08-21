@@ -14,9 +14,10 @@
  */
 import { Hono } from 'hono'
 import type pg from 'pg'
-import { parseNotifyRecipients, resolveNotifyRecipientIds } from '../../../shared/domain/notify-recipients'
+import type { NotifyRecipientTarget } from '../../../shared/domain/notify-recipients'
+import { addedNotifyRecipientIds, parseNotifyRecipients, resolveNotifyRecipientIds } from '../../../shared/domain/notify-recipients'
 import { canUseFeature } from '../../../shared/domain/permissions'
-import type { NoteKind } from '../../../shared/domain/types'
+import type { NoteKind, NoteOrigin } from '../../../shared/domain/types'
 import type { AuthUser } from '../auth'
 import type { Env } from '../env'
 import { audit } from '../lib/audit'
@@ -31,22 +32,31 @@ import { googleOauthEnabled } from './calendar'
 // Google Meet 連携（議事録）は Drive 連携（カレンダー OAuth + drive.readonly）を共用（原則3）
 import { driveForbiddenHint, driveTokenState, DRIVE_FILES_URL, googleErrorDetail, requireDriveToken } from './documents'
 
-/** ぽいぽいポスト登録時に、設定（app_configs 'poipoi-notify-recipients'）の宛先へ原文を通知する。
- *  宛先は「ロール/役職/個人」指定を解決した在籍メンバー（投稿者本人は除外）。非ブロッキング（原則4）。
- *  オペレーター指示 2026-08-03。API モードのみサーバー発火（mock は useNotes が発火）。 */
+/** テナント既定の通知先（app_configs 'poipoi-notify-recipients'）を取得する。壊れは空扱い（原則4） */
+async function tenantPoipoiTargets(db: pg.Pool): Promise<NotifyRecipientTarget[]> {
+  const { rows: cfg } = await db.query<{ value: unknown }>(
+    `SELECT value FROM app_configs WHERE key = 'poipoi-notify-recipients'`)
+  // configs は JSON.stringify した値を jsonb 保存するため、文字列で保存された設定は文字列で返る。
+  // parseNotifyRecipients は文字列・配列の両方を受ける（原則4: 壊れていても空扱いで主フローを止めない）
+  return parseNotifyRecipients(cfg[0]?.value ?? '')
+}
+
+/** ぽいぽいポスト登録・通知先編集時に、宛先メンバーへ原文を通知する。
+ *  宛先 = ポスト単位の上書き（notify_targets）があればそれ・無ければテナント設定（改善要望 2026-08-21）。
+ *  「ロール/役職/個人」指定を解決した在籍メンバー（投稿者本人は除外）。非ブロッキング（原則4）。
+ *  オペレーター指示 2026-08-03。API モードのみサーバー発火（mock は useNotes が発火）。
+ *  onlyMemberIds 指定時はその id のみへ配信（通知先編集で追加された宛先だけへ届ける = 再通知の重複防止）。 */
 async function notifyPoipoiRecipients(
-  db: pg.Pool, author: AuthUser, body: string, noteId: string,
+  db: pg.Pool, author: { id: string; name: string }, body: string, noteId: string,
+  targetsOverride?: NotifyRecipientTarget[] | null, onlyMemberIds?: string[],
 ): Promise<void> {
   try {
-    const { rows: cfg } = await db.query<{ value: unknown }>(
-      `SELECT value FROM app_configs WHERE key = 'poipoi-notify-recipients'`)
-    // configs は JSON.stringify した値を jsonb 保存するため、文字列で保存された設定は文字列で返る。
-    // parseNotifyRecipients は文字列・配列の両方を受ける（原則4: 壊れていても空扱いで主フローを止めない）
-    const targets = parseNotifyRecipients(cfg[0]?.value ?? '')
+    const targets = targetsOverride ?? await tenantPoipoiTargets(db)
     if (targets.length === 0) return
     const { rows: members } = await db.query<{ id: string; role: string; title: string; active: boolean }>(
       `SELECT id, role, title, active FROM members`)
-    const recipientIds = resolveNotifyRecipientIds(targets, members, author.id)
+    let recipientIds = resolveNotifyRecipientIds(targets, members, author.id)
+    if (onlyMemberIds) recipientIds = recipientIds.filter(id => onlyMemberIds.includes(id))
     if (recipientIds.length === 0) return
     const title = `新しい改善のタネ（${author.name}）`
     const preview = capCp(body, 140)
@@ -70,8 +80,15 @@ const BODY_CAP = 20_000
 // フロントは文字列を直接パースするため UTC の "Z" ISO を返すと日付キー比較・表示が最大 9 時間ずれる）
 const NOTE_COLS = `id, member_id AS "memberId", kind, title, body, project_id AS "projectId",
   company_id AS "companyId", work_category_id AS "workCategoryId", source, active,
+  origin, notify_targets AS "notifyTargets",
   meet_file_id AS "meetFileId", meet_file_name AS "meetFileName", meet_web_link AS "meetWebLink",
   to_char(created_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD"T"HH24:MI:SS"+09:00"') AS "createdAt"`
+
+/** 登録経路（poipoi のみ。改善要望 2026-08-21）。'report' 明示のみ日報経路・それ以外は直接投稿。議事録は null */
+function originOf(kind: NoteKind, v: unknown): NoteOrigin | null {
+  if (kind !== 'poipoi') return null
+  return v === 'report' ? 'report' : 'direct'
+}
 
 /** Meet 連携ファイル（Drive 参照）の正規化。id が空なら全て null（不整合を持ち込まない）。
  *  webViewLink は https の *.google.com のみ受理（不正 URL を保存しない）。オペレーター指示 2026-08-03 ③b */
@@ -185,14 +202,19 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
     const id = newId('nt')
     // Meet 連携は議事録専用（poipoi に手製リクエストでリンクを持ち込ませない = レビュー NIT）
     const meet = kind === 'minutes' ? meetLinkOf(b) : { id: null, name: null, webLink: null }
+    // 登録経路 + ポスト単位の通知先上書き（poipoi のみ。改善要望 2026-08-21。
+    // notifyTargets 未指定 = null = テナント設定を使う / 配列指定 = このポストの宛先で上書き）
+    const origin = originOf(kind, b.origin)
+    const notifyTargets = kind === 'poipoi' && Array.isArray(b.notifyTargets)
+      ? parseNotifyRecipients(b.notifyTargets) : null
     try {
       await pool.query(
         `INSERT INTO notes (id, member_id, kind, title, body, project_id, company_id, work_category_id, source,
-           meet_file_id, meet_file_name, meet_web_link)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'text', $9, $10, $11)`,
+           meet_file_id, meet_file_name, meet_web_link, origin, notify_targets)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'text', $9, $10, $11, $12, $13)`,
         [id, user.id, kind, titleFrom(b.title, body), body,
           refOrNull(b.projectId), refOrNull(b.companyId), refOrNull(b.workCategoryId),
-          meet.id, meet.name, meet.webLink])
+          meet.id, meet.name, meet.webLink, origin, notifyTargets ? JSON.stringify(notifyTargets) : null])
     } catch (e) {
       if ((e as { code?: string }).code === '23503') {
         throw err('AKO-GEN-001', '紐付け先（プロジェクト・顧客・業務種別）が見つかりません', 400)
@@ -203,8 +225,8 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
       actorId: user.id, action: 'create', entity: 'notes', entityId: id,
       detail: kind === 'poipoi' ? '改善のタネを登録' : '議事録を登録',
     })
-    // ぽいぽいポストは設定された宛先へ原文を通知（非ブロッキング。オペレーター指示 2026-08-03）
-    if (kind === 'poipoi') await notifyPoipoiRecipients(pool, user, body, id)
+    // ぽいぽいポストは宛先（ポスト単位の上書き > テナント設定）へ原文を通知（非ブロッキング。オペレーター指示 2026-08-03）
+    if (kind === 'poipoi') await notifyPoipoiRecipients(pool, user, body, id, notifyTargets)
     scheduleSearchRebuild(pool, env, `notes:${kind}`)
     const { rows } = await pool.query(`SELECT ${NOTE_COLS} FROM notes WHERE id = $1`, [id])
     return c.json({ data: rows[0] }, 201)
@@ -242,13 +264,14 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
     const client = await pool.connect()
     try {
       await client.query('BEGIN')
+      // 取込は /poipoi ページからの直接操作のため origin='direct'（poipoi のみ。改善要望 2026-08-21）
       await client.query(
         `INSERT INTO notes (id, member_id, kind, title, body, project_id, company_id, work_category_id, source,
-           meet_file_id, meet_file_name, meet_web_link)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'upload', $9, $10, $11)`,
+           meet_file_id, meet_file_name, meet_web_link, origin)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'upload', $9, $10, $11, $12)`,
         [id, user.id, kind, title, capCp(text, BODY_CAP),
           refOrNull(b.projectId), refOrNull(b.companyId), refOrNull(b.workCategoryId),
-          meet.id, meet.name, meet.webLink])
+          meet.id, meet.name, meet.webLink, originOf(kind, null)])
       await client.query(
         `INSERT INTO note_files (id, note_id, filename, mime, size_bytes, bytes, uploaded_by)
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
@@ -390,6 +413,60 @@ export function notesRoutes(pool: pg.Pool, env: Env): Hono {
       detail: id ? `Meet 既定保管フォルダを設定（${name || id}）` : 'Meet 既定保管フォルダをクリア',
     })
     return c.json({ data: await meetDefaultFolder(pool) })
+  })
+
+  // ポスト単位の通知先の編集（poipoi のみ・投稿者本人または管理者。改善要望 2026-08-21）。
+  // 登録後にロール/役職/個人の宛先を変更できる。保存後、変更前の宛先に**含まれていなかった**解決済み
+  // メンバーへだけ原文を再通知する（既存宛先への重複通知を作らない = 冪等性・原則2）。通知は非ブロッキング（原則4）。
+  // body.targets = NotifyRecipientTarget[]（空配列 = このポストは通知しない / null = テナント設定へ戻す〔取消フロー = 原則9.5〕）
+  app.put('/:noteId/notify-targets', async (c) => {
+    const user = c.get('user')
+    const noteId = c.req.param('noteId')
+    const { rows } = await pool.query<{
+      kind: NoteKind; memberId: string; body: string; active: boolean; notifyTargets: unknown
+    }>(
+      `SELECT kind, member_id AS "memberId", body, active, notify_targets AS "notifyTargets"
+       FROM notes WHERE id = $1`, [noteId])
+    const note = rows[0]
+    if (!note) throw err('AKO-GEN-002', 'ノートが見つかりません', 404)
+    if (note.kind !== 'poipoi') throw err('AKO-GEN-001', '通知先の編集は改善のタネ（ぽいぽいポスト）のみです', 400)
+    await guardFeature(pool, user, 'poipoi')
+    if (note.memberId !== user.id && user.role !== 'admin') {
+      throw err('AKO-PRM-001', '通知先の編集は投稿者本人または管理者のみです', 403)
+    }
+    const b = await c.req.json().catch(() => ({})) as Record<string, unknown>
+    // targets キーの欠落（JSON 破損含む）は 400: 契約は「配列 = 上書き（空 = 通知しない）/ null = 既定へ戻す」の
+    // 2 値であり、欠落を空配列に読み替えると最も強い「通知しない」へ黙って倒れる（レビュー R1 N-2）
+    if (!Object.hasOwn(b, 'targets')) throw err('AKO-GEN-001', 'targets を指定してください（配列 or null）', 400)
+    const next = b.targets === null ? null : parseNotifyRecipients(b.targets)
+    // 変更前の実効宛先（上書きがあればそれ・無ければテナント設定）を解決し、追加分だけ再通知する
+    const prevTargets = note.notifyTargets != null
+      ? parseNotifyRecipients(note.notifyTargets)
+      : await tenantPoipoiTargets(pool)
+    const { rows: members } = await pool.query<{ id: string; role: string; title: string; active: boolean }>(
+      `SELECT id, role, title, active FROM members`)
+    await pool.query(
+      `UPDATE notes SET notify_targets = $2 WHERE id = $1`,
+      [noteId, next ? JSON.stringify(next) : null])
+    await audit(pool, {
+      actorId: user.id, action: 'update', entity: 'notes', entityId: noteId,
+      detail: next === null
+        ? '改善のタネの通知先をテナント設定へ戻した'
+        : `改善のタネの通知先を編集（宛先 ${next.length} 件）`,
+    })
+    // 追加された宛先へだけ原文を通知（取消済みポストは再通知しない）
+    if (note.active) {
+      const nextEffective = next ?? await tenantPoipoiTargets(pool)
+      const addedIds = addedNotifyRecipientIds(prevTargets, nextEffective, members, note.memberId)
+      if (addedIds.length > 0) {
+        const { rows: nameRows } = await pool.query<{ name: string }>(
+          `SELECT name FROM members WHERE id = $1`, [note.memberId])
+        await notifyPoipoiRecipients(pool, { id: note.memberId, name: nameRows[0]?.name ?? note.memberId },
+          note.body, noteId, nextEffective, addedIds)
+      }
+    }
+    const { rows: out } = await pool.query(`SELECT ${NOTE_COLS} FROM notes WHERE id = $1`, [noteId])
+    return c.json({ data: out[0] })
   })
 
   // 取消（論理削除。本アプリ共通原則: 操作の取消可能性 = オペレーター指示 2026-07-19 #5）。

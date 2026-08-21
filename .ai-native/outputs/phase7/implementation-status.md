@@ -4667,3 +4667,90 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
     監査ログ・0085 冪等・下位互換・RAG の全メカニズムが設計書・KB と整合し、R1〜R3 の全指摘対応が
     維持されていることを確認。最終検証: home 単体 544 / api 単体 509 / 統合 317 / 両 typecheck /
     モック E2E 全 9 スイート green
+
+## 106. 改善要望に基づく改修依頼 2026-08-21（4 改修単位 = 顧客活動フォーム配置・ぽいぽいポスト再編・営業管理新設・メディア AIレポート/改善施策）の完了条件（Definition of Done）
+
+対象: home + api + shared/domain。マイグレーション 0086（notes の origin/notify_targets）・0087（sales_approaches）・0088（media_weekly_reports / media_measures）。
+
+### 106-1 顧客活動: 記録フォームの項目配置（単位1 = /customer-log）
+- [x] 並び順の変更（改善要望のとおり）: **自社の担当者（最上部）** → 日付/開始/終了 → 活動手段 → **顧客(会社) + 担当者(人)（同一行 = sm 以上 2 列・モバイル縦積み）** → 件名 → 担当者メモ → **活動目的（旧「属性タグ」= 2026-08-18 改称済み。最下部）**。テンプレート移動のみ = ロジック・保存形は不変（担当者(人)の会社依存 disabled/hint も従来どおり）。
+- [x] KB（原則5）: kb-sp-009（項目の並び）・kb-ug-011（手順の入力順）を更新。設計書: screen-design /customer-log・functional-requirements F-18-1 に並び順を追記。
+
+### 106-2 ぽいぽいポスト（改善のタネ）再編（単位2 = /poipoi。3 要望）
+- [x] 登録経路の判別（0086 = notes.origin）: 'report'（日報提出時 = reports.vue の同時登録）/ 'direct'（ページ・ヘッダー・取込）。一覧・管理者一覧・詳細に経路バッジ（「日報から」info / 「直接投稿」neutral）。**旧データは NULL = バッジ非表示（経路不明に事実を作らない = 原則7）**。判定は API originOf / mock add の同一規則（原則6）。
+- [x] 通知先の登録後編集（0086 = notes.notify_targets）: ポスト詳細モーダルの「通知先を編集」（投稿者本人 or 管理者）→ SettingsNotifyRecipientsEditor（ロール/役職/個人）。解決 = **ポスト上書き > テナント設定（configs poipoi-notify-recipients = 既定値へ位置づけ直し）**。保存時は**変更前の実効宛先に含まれなかった解決済みメンバーへだけ**原文を再通知（共有純関数 `addedNotifyRecipientIds` = API/mock 同一・重複通知なし = 原則2）。空配列 = 通知しない・「既定に戻す」= 上書き解除（原則9.5）。API = `PUT /v1/notes/:id/notify-targets`（監査ログ）。
+- [x] 名称・並び順: 独立ページ（/poipoi）とクイックアクセスを**「ぽいぽいポスト」へ再改称**（labels/menu-registry/nav-map/header-quick-access/permissions/audit-log の表示ラベル。キー・ルートは不変 = 原則7。**日報内の「改善のタネ欄」は現状維持**）。投稿フォーム（ページ + ヘッダーのクイック投稿）は**「内容（本文）→ 任意項目（プロジェクト/顧客/業務種別）」**の順へ（議事録は従来順のまま = kind 条件分岐）。
+- [x] テスト: addedNotifyRecipientIds の 4 ケース（追加分のみ・削減は空・本人除外・同一解決は空 = 冪等）。E2E プローブの参照ラベル追随（improvements6/batch2）。
+- [x] KB: kb-ug-012（改称・入力順・経路バッジ・通知先編集）/ spec・ops-guide・faq の関連記述。設計書: F-06b（見出し・F-06b-1/9）・F-12-5/F-13-10・screen-design（クイックアクセス・入力順表）・api-design useNotes 行。
+
+### 106-3 営業管理の新設（単位3 = ダッシュボード「営業管理」セクション + 2 ページ）
+- [x] メインダッシュボード: カード型メニューに**「営業管理」セクション（sales-mgmt）を新設**し「営業アプローチリスト」「顧客別ダッシュボード」カードを配置（menu-registry 既定カテゴリ + 6 テンプレート〔operations/sales/executive はセクション/カード追加・default/notify-first/focus は既定から自動反映〕）。
+- [x] 営業アプローチリスト（/sales-approach = F-53・0087）: **1社1行**（company_id UNIQUE・重複 AKO-SAP-003・取消済みは復元で再開）のチーム共有 CRUD。状態（候補/アプローチ中/商談化/受注/見送り/休眠）・優先度（高/中/低）・担当・次のアクション（+日付）・方針メモ。一覧 = 検索 + 状態チップ + 優先度/担当フィルタ・優先度→次アクション日順・20 件ページング（X-7）。詳細ドロワー = **顧客基本情報/属性・顧客コンテキスト・活動実績（最終接点・進行中案件）を各 SoT からライブ参照**（本エンティティへ複製しない = 原則6）+ ドリルダウン導線。検証 SoT = shared/domain/sales-approach（API/mock パリティ）。機能キー sales-approach。
+- [x] 顧客別ダッシュボード（/customer-dashboard = F-54）: 会社セレクタ（?company= URL 同期 = customer-context と同型）+ KPI 4 枚（直近 90 日活動〔前の 90 日比〕・進行中商談・未解決サポート・最終接点）+ 基本情報/コンテキストカード + **AI 分析（shared/domain/customer-insight.buildCustomerInsight = 決定的な常時ライブ導出・保存しない。サマリー/活動目的上位/リスク/推奨アクション）** + 月次活動チャート + 直近の顧客活動 5 件 + 各詳細へのドリルダウン。機能キー customer-dashboard。
+- [x] 登録全件: nav-map/navigation/menu-registry/dashboard-layout/permissions（FEATURE_PERMISSION_KEYS + featureKeyOfPath + API PATH_FEATURES）/audit-log/e2e ルート/CUSTOM_COLLECTION_ENDPOINTS/MockDbShape。
+- [x] テスト: buildCustomerInsight 11 件（決定性・trend・未来日除外・フォロー切れ閾値・商談/サポート集計・タグ上位・コンテキスト有無・月次集計・年跨ぎ）+ salesApproachError 5 件。
+- [x] KB: kb-sp-019 / kb-ug-013 新設。設計書: F-53/F-54・screen-design 2 ページ・api-design useSalesApproaches 行・data-design 1.13・CONVENTIONS（早見表 + 部品在庫）。
+- [x] 壁打ち要望（「顧客コンテキスト → Intelligence：顧客」構想）: 本改修では具体要望（F-53/F-54）を実装。構想の壁打ちは残課題へ（§106-6）。
+
+### 106-4 メディア分析: サマリー比較値 + AIレポート + 改善施策（単位4 = /media。3 要望）
+- [x] サマリー比較値: /media ハブと /media/analytics の主要 4 カード（セッション/ユーザー/CV/CVR）を **MediaKpiCompareCard**（前週比 / 4週平均比 / 前年同期比。直近 7 日の値に対する比較 = shared `weeklyCompareOf`）へ。**前年同期 = MediaMetrics.yoyWeek**（API = 単独 runReport で前年同 7 日を日別取得 → 合算〔当年側と同じ「延べ」尺度〕。失敗・旧キャッシュは「—」= 原則4/7。mock = deriveMediaMetrics の 1 段再帰導出）。fetchMediaMetrics に asOfOverride（基準日指定 + キャッシュキー分離）。
+- [x] AIレポート（/media/reports = F-55・0088）: チャンネル × 週開始（月曜 = weekStartKeyOf 共有・原則3）で一意の週次レポートを**自動生成**（①一覧表示時の冪等生成〔原則1〕②Cloud Scheduler 週次ジョブ /jobs/media-weekly-reports〔チャンネル単位の失敗は非ブロッキング = 原則4〕③mock = 直近 8 完了週の決定的遅延生成）。**生成済み週は再生成しない**（判断が巻き戻らない = 原則2）。一覧 = 先頭に前週サマリー（重要変化/推奨アクション/未判断の件数）+ 20 件ページング → 詳細 = 5 構成（エグゼクティブサマリー/重要な変化/原因仮説/コンテンツ評価〔◎○△×・↗ー↘〕/推奨アクション）。生成 = shared `heuristicWeeklyMediaReport`（決定的。LLM は将来拡張と明記）。
+- [x] 推奨アクションの判断 → 改善施策: 「実行する/継続検討/対象外」をレポート内へ記録（判断者・日時）。**「実行する」は改善施策を自動起票**（`measureDraftFromAction` = レポート内容から詳細を AI 生成 → 全項目編集可。(source_report_id, source_action_index) 部分一意 index で二重起票なし = 冪等）。
+- [x] 改善施策一覧/詳細（/media/measures = F-56）: ステータス別サマリー（実施予定/実施中/効果観測中/評価待ち/完了 = 押下絞り込み）+ フィルタ（**ステータス/効果判定 = チップ表現〔受付箱と同型〕・対象メディア/担当 = UiCombobox のオートコンプリート・期間 = date 範囲**）+ 20 件ページング。詳細 = 「改善施策」+「効果検証」（実施日/比較期間/KPI 実施前→実施後→変化→目標/AI評価/人の最終評価〔効果あり/判断保留/効果なし〕/学び/Next Action）**全項目編集可** + **「AIで評価」= 実施日前後の各 7 日比較の決定的生成（`heuristicMeasureEvaluation`・窓外は代替比較を明記）** + 取消/復元（原則9.5）。
+- [x] メニュー再編（オペレーターコメント「この要望を正として役割が重複するメニューは廃止」）: ハブの機能カードに「AIレポート」「改善施策一覧」を追加し、**「業務 × メディア PDCA」カードを廃止**（改善ループ〔レポート→改善施策→実行→効果検証〕の役割は新 2 メニューが担う。**統合分析タブ自体は /media/analytics?tab=pdca に残置** = 売上×流入の統合指標は別役割のため機能は破壊しない = 原則7。設計判断として文書化）。
+- [x] テスト: media-weekly-report 16 件（週キー・週合計・比較・yoyWeek 決定性・レポート生成の決定性/語彙/件数・施策ドラフト/検証/AI 評価）+ media-fetch の呼び出し回数追随（前年同期 runReport 分）。
+- [x] KB: kb-sp-012 を全面更新（比較値・AIレポート・改善施策・メニュー再編）。設計書: F-40-1 追記・F-55/F-56 新設・screen-design 4 ページ・api-design useMediaReports 行・data-design 1.14・deploy-guide 1-7f（週次ジョブ）・CONVENTIONS（早見表 + MediaKpiCompareCard）。
+- [x] 壁打ち要望（フィードバックループの壁打ち）: ループの実装（F-55/F-56）で対応。さらなる設計壁打ちは残課題へ（§106-6）。
+
+### 106-5 検証（受入基準）
+- [x] home `npx nuxi typecheck` / api `tsc --noEmit` / home 単体 580 / api 単体 509（非統合全件）
+- [x] home `npm run build`
+- [x] モバイル 375px: 新設 4 ページ + 改修フォームはグリッド縦積み（sm ブレークポイント）・一覧は UiDataTable の自動カード化（原則8）
+- [x] 主要操作のフィードバック: 保存/取消/復元/判断のトースト + 生成中/保存中のボタン状態
+
+### 106-6 残課題（宣言だけにしない = 原則9.5 注記と同じ扱い）
+- [ ] 壁打ち（タグ「壁打ち」の要望 2 件）: ①「顧客コンテキスト → Intelligence：顧客」構想（活用シーン・データ構成の再設計。参考 Miro ボードあり）②メディア分析フィードバックループのさらなる設計。→ 本改修で具体要望は実装済み。構想部分はオペレーターとの壁打ちを経て案件化する。
+- [ ] AI 週次レポートの LLM 生成（現状 = 決定的ヒューリスティックのみ。media-insight の Vertex 経路と同型で拡張可能な構造にしてある）。
+- [ ] 改善施策の手動起票（現状 = AIレポートの「実行する」からのみ。運用で必要になったら POST /v1/media/measures を追加）。
+
+### 106-7 反復レビュー（原則9 = SP-8）
+- 反復記録:
+  - R1（コードレビュアー MAJOR1/MINOR7/NIT8・システム監査官 MINOR8/NIT8。重複を除き実質 MAJOR1/MINOR10/NIT10）→ 全件対応:
+    - MAJOR: 営業アプローチの会社候補が kind='customer' に絞られておらず自社を登録できる（登録後のドリルダウンも解決不能）
+      → フロント候補絞り込み + API `requireCustomerCompany`（POST/PATCH）+ mock save の同一検証（AKO-SAP-001）。
+    - MINOR: ①daily 内訳欠落時に前年同期比が -100% と誤表示（weeklyCompareOf = 直近 7 日が無い場合は全比較を「—」へ）
+      ②GA 部分失敗（warning）の劣化集計から週次レポートが恒久生成される（AKO-MREP-004 で生成せず次回試行へ）
+      ③アクション判断の content 全文 read-modify-write で同時判断が巻き戻る（jsonb_set の要素更新へ）
+      ④audit-log 語彙に media_weekly_reports / media_measures / ページ名 2 件が未登録（追加）
+      ⑤改善施策詳細に単件フェッチ・ロード表示なし = API 直リンクで誤った「見つかりません」（fetchMeasure + loading）
+      ⑥「AIで評価」が未保存編集を破棄（先にドラフト全体を保存 persistDraft）
+      ⑦GA 連携直後の自動生成がセッション中再試行されない（connected watch で force 再試行）
+      ⑧取り逃した週の回復パスなし（generate backfill=true = 直近 4 完了週・週次ジョブも 4 週バックフィル）
+      ⑨「実行する」再判断・施策取消後のトースト誤り + 未判断へ戻せない（measureCreated で文言出し分け・「未判断に戻す」チップ = 原則9.5）
+      ⑩useApi コメント「サーバーページング基本」と実装（全量 + クライアントページング）の乖離（コメントを実態へ・切替条件を明記）。
+    - NIT: 旧名称「改善のタネ」のページ名残り 4 箇所・PUT notify-targets の targets キー欠落を 400 に・
+      OPEN_PHASES 複製 → 共有 isOpenDealPhase・fmtRatio 重複 → shared import・mock updateNotifyTargets の
+      commit 検査 + ロールバック（AKO-NOTE-090）・前年同期を 365 日 → 52 週（364 日 = 曜日整合・閏年でずれない）へ・
+      基準日つきメトリクスキャッシュの機会的掃除・4週平均が当該週を含む定義の明記（コード/KB/画面注記）・
+      kb-sp-019 の括弧不整合・通知先を既定と同値で保存したとき不要なポスト上書きを作らない。
+    - 対応後の検証: home/api typecheck・対象単体 60 件 green。ドキュメント（KB spec/functional-requirements/api-design/
+      deploy-guide/CONVENTIONS/画面注記）を挙動変更へ追随。
+  - R2（検証レビュー = R1 修正 13 項目の照合 + 全体再点検。MAJOR1/NIT2）→ 全件対応:
+    - MAJOR: R1 ①の「daily 欠落 → 全比較 —」ガードが実質デッドコード（API/モックとも daily はゼロ埋めで
+      全長生成されるため weekTotalsOf が null にならず、unavailable('daily') 時に前年同期比 -100% が再現）
+      → 二重防御へ再設計: ①サーバー = unavailable に 'daily' があれば yoyWeek を外す
+      ②フロント（/media・/media/analytics）= unavailable('daily') のとき compare=null とし、比較なしの
+      従来 UiKpiCard + 前期比表示へフォールバック（注記文も条件表示）。shared のガードは「系列 7 日未満の防御」
+      として実効条件をコメントで明記。
+    - NIT: ①weeklyCompareOf の入力契約から未使用の days を除去 + doc コメントを実態（daily 2 週以上）へ
+      ②deploy-guide 1-7f に GA 日次集計の確定遅延（24〜48h）と実行時刻のトレードオフを設計判断として文書化。
+    - 対応後の検証: api tsc / home typecheck / media-weekly-report 16 件 green。
+  - R3（R2 修正の最終照合 + UI 網羅プローブ。MAJOR/MINOR 0・NIT1 + プローブ検出 1）→ 全件対応・収束:
+    - NIT: F-40-1 / KB spec の「日別内訳の欠落時は「—」」記述を R2 再設計後の実挙動
+      （比較カードを出さず従来の前期比カードへフォールバック）へ正確化。
+    - UI プローブ: probe-ui-sweep で /media/measures がモバイル 375px で 284px 横はみ出し
+      （UiFilterBar の #trailing = nowrap にコンボ 2 + 期間 2 欄を配置していたのが原因）
+      → フィルタを折返す主スロットへ移動 + 期間欄は min-w-0 の内包 flex + w-36 固定。
+      再プローブ = 新設・改修 8 ルートで probe-ui-sweep / probe-truncate-break とも CLEAN。
+    - 検証: home typecheck green・モックモード E2E 9 スイート green（run-mock-stack.sh = PR ゲート同一）。
+  - R4: 収束確認（R3 対応後の残指摘ゼロ = 反復レビュー完了。原則9 = SP-8）

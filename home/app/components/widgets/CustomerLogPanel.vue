@@ -414,7 +414,15 @@ const showArchived = ref(false)
       width="620px"
       @close="composeOpen = false"
     >
+      <!-- 項目の並び: 自社の担当者を最上部・活動目的（旧 属性タグ）を最下部・会社/担当者(人)は同一行（改善要望 2026-08-21） -->
       <div class="grid gap-3">
+        <UiFormField label="自社の担当者" required hint="既定はログインユーザー">
+          <UiSelect
+            v-model="form.staffMemberId"
+            :options="staffOptions"
+            aria-label="自社の担当者"
+          />
+        </UiFormField>
         <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <UiFormField label="日付" required>
             <input v-model="form.logDate" type="date" class="input" aria-label="日付" required>
@@ -436,6 +444,48 @@ const showArchived = ref(false)
             />
           </UiFormField>
         </div>
+        <UiFormField label="活動手段" hint="訪問・Web会議・電話など">
+          <UiChipTabs v-model="form.method" :options="methodOptions" aria-label="活動手段" />
+        </UiFormField>
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <UiFormField label="顧客（会社）" required hint="未登録の会社名を入力すると、保存時にマスタへ新規登録されます">
+            <UiCombobox
+              v-model="form.companyId"
+              v-model:text="form.companyText"
+              :options="companyOptions"
+              placeholder="会社名で検索・入力"
+              aria-label="顧客（会社）"
+              create-hint="保存時にマスタへ新規登録されます"
+            />
+          </UiFormField>
+          <UiFormField
+            label="担当者（人）"
+            :hint="hasCompanyInput
+              ? '未登録の担当者名を入力すると、保存時にマスタへ新規登録されます'
+              : '先に会社を選択・入力してください'"
+          >
+            <UiCombobox
+              v-model="form.contactId"
+              v-model:text="form.contactText"
+              :options="contactOptions"
+              :disabled="!hasCompanyInput"
+              placeholder="担当者名で検索・入力"
+              aria-label="担当者（人）"
+              create-hint="保存時にマスタへ新規登録されます"
+            />
+          </UiFormField>
+        </div>
+        <UiFormField label="件名">
+          <input v-model="form.title" type="text" class="input" placeholder="例）SCM 追加提案の打診" aria-label="件名">
+        </UiFormField>
+        <UiFormField label="担当者メモ" required>
+          <textarea
+            v-model="form.body"
+            class="textarea min-h-24"
+            placeholder="担当者としての所感・要点・次アクションなど"
+            aria-label="担当者メモ"
+          />
+        </UiFormField>
         <UiFormField label="活動目的" hint="商談・取材・イベントなど。自由入力でも追加できます">
           <div class="grid gap-1.5">
             <UiChipSelect :model-value="form.tags" :options="tagOptions" aria-label="活動目的" @update:model-value="applyTags" />
@@ -454,53 +504,6 @@ const showArchived = ref(false)
               </button>
             </div>
           </div>
-        </UiFormField>
-        <UiFormField label="活動手段" hint="訪問・Web会議・電話など">
-          <UiChipTabs v-model="form.method" :options="methodOptions" aria-label="活動手段" />
-        </UiFormField>
-        <UiFormField label="顧客（会社）" required hint="未登録の会社名を入力すると、保存時にマスタへ新規登録されます">
-          <UiCombobox
-            v-model="form.companyId"
-            v-model:text="form.companyText"
-            :options="companyOptions"
-            placeholder="会社名で検索・入力"
-            aria-label="顧客（会社）"
-            create-hint="保存時にマスタへ新規登録されます"
-          />
-        </UiFormField>
-        <UiFormField
-          label="担当者（人）"
-          :hint="hasCompanyInput
-            ? '未登録の担当者名を入力すると、保存時にマスタへ新規登録されます'
-            : '先に会社を選択・入力してください'"
-        >
-          <UiCombobox
-            v-model="form.contactId"
-            v-model:text="form.contactText"
-            :options="contactOptions"
-            :disabled="!hasCompanyInput"
-            placeholder="担当者名で検索・入力"
-            aria-label="担当者（人）"
-            create-hint="保存時にマスタへ新規登録されます"
-          />
-        </UiFormField>
-        <UiFormField label="自社の担当者" required hint="既定はログインユーザー">
-          <UiSelect
-            v-model="form.staffMemberId"
-            :options="staffOptions"
-            aria-label="自社の担当者"
-          />
-        </UiFormField>
-        <UiFormField label="件名">
-          <input v-model="form.title" type="text" class="input" placeholder="例）SCM 追加提案の打診" aria-label="件名">
-        </UiFormField>
-        <UiFormField label="担当者メモ" required>
-          <textarea
-            v-model="form.body"
-            class="textarea min-h-24"
-            placeholder="担当者としての所感・要点・次アクションなど"
-            aria-label="担当者メモ"
-          />
         </UiFormField>
       </div>
       <template #footer>

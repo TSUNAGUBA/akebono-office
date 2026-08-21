@@ -175,6 +175,12 @@ const { lookupCompany, createCompany } = useCompanyResolve()
 // 旧 research ノート（before.businessNotes キーなし）の取消は現在の事業メモを保持（原則7）。機能キー customer-context）
 const ctx = useCustomerContext()  // contextOf / notesOf / archivedNotesOf / saveContext / addNote / archiveNote / restoreNote / research / buildProposal / applyResearch / revertResearch / refresh
 
+// 営業アプローチリスト（/sales-approach。改善要望 2026-08-21・F-53。チーム共有・1社1行 = companyId UNIQUE。
+// 検証 SoT = shared/domain/sales-approach。API = /v1/sales-approaches〔0087〕/ mock = salesApproaches）
+const sap = useSalesApproaches()   // list / archivedList / save(id|null, input) / archive / restore / refresh
+// 顧客別ダッシュボードの AI 分析（/customer-dashboard。F-54。保存しない常時ライブ導出 =
+// shared/domain/customer-insight の純関数。buildCustomerInsight / customerActivityMonthly / hasContextInfo）
+
 // 休暇（F-04-5/9。種別別残数。付与は管理者/人事のみ・同日同種別はスキップ=冪等）
 const leave = useLeave()   // balance(memberId, leaveTypeId?) / request / decide / grant / bulkGrant / activeLeaveTypes
 
@@ -187,6 +193,11 @@ const mx = useMediaExternalArticles() // listFor(channelId) / add / update / arc
 const ma = useMediaAnalytics()   // metricsFor(channelId,28)（API はロード中 null）/ integratedMetricsFor(channelId,6) / metricsReady / metricsWarningFor / refreshMetrics / integratedReady・integratedFailed・refreshMonthly（GA 月次の失敗表示 + 再試行）/ ensureIntegratedLoaded（false = 生成禁止）
 const mi = useMediaInsight()     // loadMedia/generateMedia / loadIntegrated/generateIntegrated（async。生成→保管→再生成で上書き。API = Vertex AI → ヒューリスティック）/ storedMedia
 const art = useMediaArticles()   // generate（async。API = Vertex AI → 決定的フォールバック）/ suggestionFromInsight / adopt / unadopt / remove / restore（取消可能）
+// AI 週次レポート・改善施策（/media/reports・/media/measures。改善要望 2026-08-21・F-55/F-56。
+// 純ロジック SoT = shared/domain/media-weekly-report〔決定的生成・週次比較 weeklyCompareOf・検証〕。
+// レポートは自動生成（表示時の冪等生成 + API 週次ジョブ /jobs/media-weekly-reports・生成済み週は再生成しない = 原則2）。
+// 「実行する」判断で改善施策を自動起票（二重起票なし）。施策はチーム共有・取消/復元 = 原則9.5）
+const mrp = useMediaReports()    // reportsFor / fetchReport / ensureGenerated / decideAction / measuresList / saveMeasure / aiEvaluate / archiveMeasure / restoreMeasure
 
 // 業態別/会社全体ダッシュボード（F-41。業務×メディアを統合したサマリー+AIレポート+AIインサイト。純ロジック SoT = shared/domain/portfolio-insight）
 const di = useDashboardInsight() // buildSegmentSummary/buildCompanySummary（常時ライブ集計）/ loadSegment・generateSegment / loadCompany・generateCompany（生成→保管→再生成で上書き）
@@ -248,6 +259,8 @@ const imp = useImprovements()  // submit（body + 対象ページ〔既定=開�
 | `ChartsLineChartCard` / `ChartsBarChartCard` / `ChartsDonutChartCard` | title, labels/series or items, yFormatter |
 | `WidgetsPunchClock` | 打刻 = タイムカード（flat: モーダル内等でカード枠を外す） |
 | `WidgetsCustomerLogPanel` | props なし。顧客活動（/customer-log）の実体（一覧 20 件ページング + 検索/顧客/記録者フィルタ・登録/編集モーダル〔活動目的チップ + 活動手段 UiChipTabs + 会社/担当者コンボボックス〕・詳細モーダル・取消/復元。全メンバー閲覧可・編集は本人のみ。2026-08-18 改修） |
+| `WidgetsSalesApproachPanel` | props なし。営業アプローチリスト（/sales-approach）の実体（一覧 20 件ページング + 検索/状態チップ/優先度/担当フィルタ・登録/編集モーダル〔会社 = UiCombobox 既存選択のみ・1社1行〕・詳細ドロワー〔基本情報/コンテキスト/活動実績のライブ参照 + ドリルダウン導線〕・取消/復元。改善要望 2026-08-21・F-53） |
+| `WidgetsCustomerDashboardPanel` | props なし。顧客別ダッシュボード（/customer-dashboard）の実体（?company= 同期の会社セレクタ + KPI 4 枚 + 基本情報/コンテキストカード + AI 分析〔shared/domain/customer-insight のライブ導出〕+ 月次チャート + 直近の顧客活動。改善要望 2026-08-21・F-54） |
 | `WidgetsSupportActivityPanel` | props なし。サポート活動（/support-activity）の実体（一覧 20 件ページング〔API = サーバーページング〕+ 検索/ステータス/種別フィルタ・詳細ドロワー view/edit/create・取消/復元。F-43・2026-08-18） |
 | `WidgetsSalesActivityPanel` | props なし。営業活動の**案件一覧**（/sales-activity。2026-08-20 で案件ヘッダー + 活動ログ構造へ再編）。行クリック → `/sales-activity/<id>` 案件詳細ページへ遷移。AI集約サマリー列 + フェーズバッジ・新規登録 = `WidgetsSalesActivityFormDrawer`。F-44 |
 | `WidgetsPartnerActivityPanel` | props なし。BP活動の**案件一覧**（/partner-activity。同 2026-08-20 再編・「背景・目的」+「取組内容」）。行クリック → `/partner-activity/<id>` 詳細。新規登録 = `WidgetsPartnerActivityFormDrawer`。F-45 |
@@ -276,8 +289,9 @@ const imp = useImprovements()  // submit（body + 対象ページ〔既定=開�
 | `MediaChannelBar` | props なし。メディア分析の対象チャンネル切替バー（現在チャンネル + 連携業態バッジ + GA 連携バッジ + 設定導線）。全メディア画面の先頭に置く（F-40。2026-08-03 で MediaSegmentBar から改称・チャンネル化） |
 | `MediaGaConnect` | channelId?（未指定=現在チャンネル）, variant（'gate'/'bar'）。Google Analytics 連携ゲート（モック = 擬似 OAuth / API = Google OAuth 2.0 リダイレクト + 復帰クエリ `?ga=` 処理 + GA4 プロパティ選択モーダル。needsProperty の中間状態も再開可）。連携済みは状態バー + 解除（F-40。CalendarConnectGate と同型） |
 | `MediaFunnel` | stages（{label,value}[]）。流入→受注の簡易ファネル（幅バー + 前段比。Chart.js 不使用。F-40） |
+| `MediaKpiCompareCard` | label, value, sub, icon, to, wow, fourWeekAvg, yoy（null = 「—」）。**前週比 / 4週平均比 / 前年同期比つき KPI カード**（改善要望 2026-08-21。比較は直近 7 日の値 = shared/domain/media-weekly-report.weeklyCompareOf。/media ハブと /media/analytics の主要 4 指標で使用） |
 | `WidgetsImprovementSubmit` | props なし。全ページ共通ヘッダーの「要望を送る」導線（F-42）。**対象ページを選択可（既定 = 開いているページ。「全体」「新設ページ」+ 全ページ = `listKnownPages`。2026-08-17。改修依頼 2026-08-20 で `UiCombobox` による手入力検索オートコンプリート化 = allowCreate=false + showValue=false・空送信は開いているページを既定にする）**。投稿は認証済み全員可（layouts/default.vue に 1 つ設置で全ページに出る）。**添付（F-42-11・2026-08-17）: 参考リンク（複数・行削除可）+ 画像（複数・`imageToDataUri` 縮小・プレビュー/個別削除）。画像はファイル選択に加え、ドロップエリアへのドラッグ&ドロップとクリップボード貼り付け（Ctrl+V / ⌘V。入力ビュー全体で受ける）でも添付可（2026-08-18）。参照はリンク=別タブ・画像=押下で拡大（/improvements ドロワー）。**タグ（F-42-17）: 「お任せ」（開発側の解釈で進めてよい・既定）「壁打ち」（壁打ちを経て案件化したい）を `ImprovementsTagToggle` で二者択一（どちらか 1 つのみ・改修依頼 2026-08-20。従来の UiChipSelect 複数選択から変更）**。**対象箇所（targetSpot = ページ内のどこか。自由入力・任意 = 改修依頼 2026-08-19 第4弾。送信後も保持され「内容を修正する」で編集可）**。**送信後ビューに「内容を修正する」= 投稿者本人の全項目編集（本文 + タグ + リンク + 画像 + 対象箇所。F-42-16・`ImprovementsRequestEditForm`。2026-08-18 → 全項目化 2026-08-19 → 対象箇所 2026-08-21）** |
-| `WidgetsPoipoiSubmit` | props なし。ヘッダーの「改善のタネ」クイックアクセス導線（改修依頼 2026-08-20）。押下で `/poipoi` へ遷移せずモーダルで即投稿（改善要望の投稿導線と操作統一）。本文 + 任意の紐付け（プロジェクト/顧客/業務種別）。実データ経路は `/poipoi` と共通の `useNotes('poipoi')`（原則3）。送信後に取消導線（notes.archive = 原則9.5）。layouts/default.vue が poipoi をクイックアクセスに含み `/poipoi` 閲覧可のとき描画（`hidden md:inline-flex`。ファイル取込・プレビュー・Meet 連携等はページ側に残す） |
+| `WidgetsPoipoiSubmit` | props なし。ヘッダーの「ぽいぽいポスト」クイックアクセス導線（改修依頼 2026-08-20・改善要望 2026-08-21 で改称 + 項目順 = 内容 → 任意項目）。押下で `/poipoi` へ遷移せずモーダルで即投稿（改善要望の投稿導線と操作統一）。本文 + 任意の紐付け（プロジェクト/顧客/業務種別）。実データ経路は `/poipoi` と共通の `useNotes('poipoi')`（原則3）。送信後に取消導線（notes.archive = 原則9.5）。layouts/default.vue が poipoi をクイックアクセスに含み `/poipoi` 閲覧可のとき描画（`hidden md:inline-flex`。ファイル取込・プレビュー・Meet 連携等はページ側に残す） |
 | `ImprovementsAttachmentList` | links, images。要望添付の表示共通部品（参考リンク = 別タブ・画像サムネイル = @preview で拡大 emit。F-42-11。/improvements の改修単位ドロワー元要望と生要望ドロワーで共用 = 原則3・2026-08-18） |
 | `ImprovementsTagBadges` | tags（ImprovementRequestTag[]・省略可）, wrapperClass（タグがあるときだけ描画する外枠クラス。未指定 = contents = 素通し）。要望タグ（壁打ち/お任せ = F-42-17）のバッジ列（title で意味表示。SoT = IMPROVEMENT_REQUEST_TAG_META。空判定・normalize は部品側 = 未知値は落とす）。受付箱一覧・要望詳細・改修単位ドロワーの元要望で共用（原則3・2026-08-18） |
 | `ImprovementsTagToggle` | v-model（ImprovementRequestTag[]・常に要素数 1）, ariaLabel。要望タグ（お任せ/壁打ち）の**二者択一セグメント型トグル**（改修依頼 2026-08-20。role=radiogroup/radio + aria-checked + roving tabindex + 矢印キー移動 = UiRadioCards と同作法・原則3）。片方を選ぶと他方が自動で外れ、常にどちらか 1 つを保つ。既定 = お任せ。既存データ（0 件/2 件）はマウント時に 1 件へ正規化（原則7）。SoT = IMPROVEMENT_REQUEST_TAG_META。ImprovementSubmit と ImprovementsRequestEditForm で共用 |

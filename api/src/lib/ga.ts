@@ -135,6 +135,8 @@ export interface GaReportSet {
   topPages: GaReport | null
   /** 前期の pagePath 別 screenPageViews（前期比の突合用） */
   prevPages: GaReport | null
+  /** 前年同期（直近 7 日と同じ日付範囲の前年）の日別。改善要望 2026-08-21。取得失敗/未対応は null = yoyWeek 未設定 */
+  yoyWeekDaily?: GaReport | null
 }
 
 export interface BuildMetricsOptions {
@@ -280,6 +282,19 @@ export function buildMediaMetrics(reports: GaReportSet, opts: BuildMetricsOption
     convRate: v.userSum > 0 ? round4(v.convSum / v.userSum) : 0,
   })).sort((a, b) => b.pageviews - a.pageviews)
 
+  // 前年同期（直近 7 日と同じ日付範囲の前年。改善要望 2026-08-21）。日別行を合算する
+  // （当年側の週合計 = daily の合算〔延べユーザー〕と同じ尺度）。レポート未取得（null/undefined）は
+  // yoyWeek を作らない = フロントは「—」表示（原則7）。取得済みでデータ 0 は 0 として返す（事実）
+  let yoyWeek: MediaMetrics['yoyWeek']
+  if (reports.yoyWeekDaily) {
+    const rows = gaRows(reports.yoyWeekDaily)
+    yoyWeek = {
+      sessions: rows.reduce((s, r) => s + Math.round(r.met.sessions ?? 0), 0),
+      users: rows.reduce((s, r) => s + Math.round(r.met.totalUsers ?? 0), 0),
+      conversions: rows.reduce((s, r) => s + Math.round(r.met.keyEvents ?? 0), 0),
+    }
+  }
+
   return {
     segmentId: opts.segmentId,
     siteName: opts.siteName,
@@ -299,6 +314,7 @@ export function buildMediaMetrics(reports: GaReportSet, opts: BuildMetricsOption
     prevUsers: Math.round(prevTotals.totalUsers ?? 0),
     prevPageviews: Math.round(prevTotals.screenPageViews ?? 0),
     prevConversions: Math.round(prevTotals.keyEvents ?? 0),
+    yoyWeek,
     channels,
     devices,
     daily,

@@ -5,10 +5,12 @@
  * サマリー一覧（押下で詳細モーダル = 全文をマークダウン描画）。
  * ぽいぽいポストは管理者が全メンバーのオリジナルを閲覧できる（フィードバック・チーム改善用途。バッチ7e）
  */
-import { Eye, FileText, FileUp, Film, Link2, Pencil, RefreshCw, RotateCcw, Send, Trash2, Video, X } from 'lucide-vue-next'
-import type { Company, Note, NoteKind, Project, WorkCategory } from '~/types/domain'
+import { BellRing, Eye, FileText, FileUp, Film, Link2, Pencil, RefreshCw, RotateCcw, Send, Trash2, Video, X } from 'lucide-vue-next'
+import type { Company, Note, NoteKind, NoteOrigin, Project, WorkCategory } from '~/types/domain'
 import type { MeetFile, MeetFolder } from '~/composables/useMeetLink'
 import { fmtDateLong } from '~/utils/format'
+import type { NotifyRecipientTarget } from '~/utils/notify-recipients'
+import { parseNotifyRecipients } from '~/utils/notify-recipients'
 
 const props = defineProps<{
   kind: NoteKind
@@ -299,6 +301,87 @@ function linkLabels(n: Note): string[] {
 function authorOf(n: Note): string {
   return members.value.find(m => m.id === n.memberId)?.name ?? n.memberId
 }
+
+// ---------- 登録経路バッジ（ぽいぽいポストのみ。改善要望 2026-08-21） ----------
+// 旧データ（origin 未設定）はバッジ非表示 = 経路不明に事実を作らない（原則7）
+const ORIGIN_LABELS: Record<NoteOrigin, string> = { report: '日報から', direct: '直接投稿' }
+
+function originLabel(n: Note): string | null {
+  if (props.kind !== 'poipoi' || !n.origin) return null
+  return ORIGIN_LABELS[n.origin] ?? null
+}
+
+// ---------- ポスト単位の通知先の編集（ぽいぽいポストのみ・投稿者本人または管理者。改善要望 2026-08-21） ----------
+const appSettings = useAppSettings()
+const notifyEditOpen = ref(false)
+const notifyEditNote = ref<Note | null>(null)
+const notifyDraft = ref<NotifyRecipientTarget[]>([])
+const notifySaving = ref(false)
+
+/** 通知先を編集できるか（poipoi + 投稿者本人 or 管理者） */
+function canEditNotify(n: Note): boolean {
+  return props.kind === 'poipoi' && (n.memberId === currentUser.value.id || isAdmin.value)
+}
+
+/** ポストの実効通知先（上書きがあればそれ・無ければテナント設定 'poipoi-notify-recipients'） */
+function effectiveTargetsOf(n: Note): NotifyRecipientTarget[] {
+  if (n.notifyTargets != null) return parseNotifyRecipients(n.notifyTargets)
+  return parseNotifyRecipients(appSettings.getConfig('poipoi-notify-recipients', ''))
+}
+
+function openNotifyEdit(n: Note): void {
+  notifyEditNote.value = n
+  notifyDraft.value = effectiveTargetsOf(n)
+  notifyEditOpen.value = true
+}
+
+async function saveNotifyTargets(): Promise<void> {
+  const target = notifyEditNote.value
+  if (!target || notifySaving.value) return
+  // 上書きが無いポストで既定（テナント設定）と同じ内容のまま保存 → 何も書かない
+  // （不要なポスト専用上書きを作ると、以後のテナント設定変更が反映されなくなる = レビュー R1 N-8）
+  if (target.notifyTargets == null) {
+    const tenantDefault = parseNotifyRecipients(appSettings.getConfig('poipoi-notify-recipients', ''))
+    if (JSON.stringify(notifyDraft.value) === JSON.stringify(tenantDefault)) {
+      show('既定（テナント設定）の宛先から変更がないため、このポスト専用の設定は保存しませんでした')
+      notifyEditOpen.value = false
+      return
+    }
+  }
+  notifySaving.value = true
+  try {
+    const res = await notes.updateNotifyTargets(target.id, notifyDraft.value)
+    if (!res.ok) { show(`${res.error.code}: ${res.error.message}`, 'crit'); return }
+    show('通知先を保存しました（追加された宛先には原文を通知します）')
+    notifyEditOpen.value = false
+    // 詳細モーダルを開いたままの場合に表示中データも更新（mock は list が再計算されるが detailNote は参照保持のため）
+    syncDetailNote(target.id)
+  } finally { notifySaving.value = false }
+}
+
+/** テナント設定（既定の通知先）へ戻す = ポスト単位の上書きを解除する取消フロー（原則9.5） */
+async function resetNotifyTargets(): Promise<void> {
+  const target = notifyEditNote.value
+  if (!target || notifySaving.value) return
+  notifySaving.value = true
+  try {
+    const res = await notes.updateNotifyTargets(target.id, null)
+    if (!res.ok) { show(`${res.error.code}: ${res.error.message}`, 'crit'); return }
+    show('通知先を既定（テナント設定）へ戻しました')
+    notifyEditOpen.value = false
+    syncDetailNote(target.id)
+  } finally { notifySaving.value = false }
+}
+
+/** 保存後に一覧の最新データで詳細モーダル・編集対象を同期する */
+function syncDetailNote(noteId: string): void {
+  const latest = notes.list.value.find(n => n.id === noteId)
+    ?? notes.adminList.value.find(n => n.id === noteId) ?? null
+  if (latest) {
+    if (detailNote.value?.id === noteId) detailNote.value = latest
+    notifyEditNote.value = latest
+  }
+}
 </script>
 
 <template>
@@ -331,6 +414,12 @@ function authorOf(n: Note): string {
           >
             <span class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
               <span class="text-[13px] font-bold">{{ n.title }}</span>
+              <!-- 登録経路（日報から / 直接投稿。旧データは経路不明のため非表示 = 原則7。改善要望 2026-08-21） -->
+              <span
+                v-if="originLabel(n)"
+                class="rounded-full px-2 text-[10px]"
+                :class="n.origin === 'report' ? 'bg-info-soft border border-info/40 text-info' : 'bg-surface-soft border border-line text-sub'"
+              >{{ originLabel(n) }}</span>
               <span v-if="n.source === 'upload'" class="rounded-full bg-surface-soft border border-line px-2 text-[10px] text-sub">取込</span>
               <span v-if="n.meetFileId" class="inline-flex items-center gap-0.5 rounded-full bg-surface-soft border border-line px-2 text-[10px] text-sub"><Video class="h-3 w-3" aria-hidden="true" />Meet</span>
               <span class="num ml-auto text-[11px] text-muted">{{ fmtDateLong(n.createdAt) }}</span>
@@ -388,8 +477,9 @@ function authorOf(n: Note): string {
             ? '思いついたこと・気づき・改善アイデアをそのまま。日報ドラフトの材料になり、AI の参照対象になります。管理者はフィードバック・チーム改善のためオリジナルを閲覧できます'
             : '会議の記録を蓄積します。全員が参照でき、AI チャットボット・AI業務アシスタントの参照対象になります' }}
         </p>
-        <!-- プロジェクト/顧客/業務種別（フォーム上部 = オペレーター指示 2026-08-03。プロジェクト選択で顧客を補完） -->
-        <div class="flex flex-wrap items-center gap-2">
+        <!-- 議事録: プロジェクト/顧客/業務種別はフォーム上部（オペレーター指示 2026-08-03。プロジェクト選択で顧客を補完）。
+             ぽいぽいポストは「内容（本文）→ 任意項目」の順（改善要望 2026-08-21）のため本文の下に配置する -->
+        <div v-if="kind === 'minutes'" class="flex flex-wrap items-center gap-2">
           <UiSelect v-model="form.projectId" :options="projects.map(p => ({ value: p.id, label: p.name }))" empty-label="プロジェクト" aria-label="プロジェクト" class="w-auto" />
           <UiSelect v-model="form.companyId" :options="companies.map(c => ({ value: c.id, label: c.name }))" empty-label="顧客" aria-label="顧客" class="w-auto" />
           <UiSelect v-model="form.workCategoryId" :options="workCategories.map(w => ({ value: w.id, label: w.name }))" empty-label="業務種別" aria-label="業務種別" class="w-auto" />
@@ -483,6 +573,14 @@ function authorOf(n: Note): string {
             :aria-label="kind === 'poipoi' ? 'タネ本文' : '議事録本文'"
           />
         </UiFormField>
+        <!-- ぽいぽいポスト: 任意項目（プロジェクト/顧客/業務種別）は本文の下（改善要望 2026-08-21。プロジェクト選択で顧客を補完） -->
+        <UiFormField v-if="kind === 'poipoi'" label="任意項目" hint="プロジェクト・顧客・業務種別を紐付けできます">
+          <div class="flex flex-wrap items-center gap-2">
+            <UiSelect v-model="form.projectId" :options="projects.map(p => ({ value: p.id, label: p.name }))" empty-label="プロジェクト" aria-label="プロジェクト" class="w-auto" />
+            <UiSelect v-model="form.companyId" :options="companies.map(c => ({ value: c.id, label: c.name }))" empty-label="顧客" aria-label="顧客" class="w-auto" />
+            <UiSelect v-model="form.workCategoryId" :options="workCategories.map(w => ({ value: w.id, label: w.name }))" empty-label="業務種別" aria-label="業務種別" class="w-auto" />
+          </div>
+        </UiFormField>
         <div class="flex flex-wrap items-center justify-end gap-2">
           <button type="button" class="btn btn-sm" :aria-pressed="previewing" @click="previewing = !previewing">
             <component :is="previewing ? Pencil : Eye" class="h-3.5 w-3.5" aria-hidden="true" />
@@ -544,6 +642,11 @@ function authorOf(n: Note): string {
             <span class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
               <span class="text-[12px] font-semibold text-sub">{{ authorOf(n) }}</span>
               <span class="text-[13px] font-bold">{{ n.title }}</span>
+              <span
+                v-if="originLabel(n)"
+                class="rounded-full px-2 text-[10px]"
+                :class="n.origin === 'report' ? 'bg-info-soft border border-info/40 text-info' : 'bg-surface-soft border border-line text-sub'"
+              >{{ originLabel(n) }}</span>
               <span class="num ml-auto text-[11px] text-muted">{{ fmtDateLong(n.createdAt) }}</span>
             </span>
             <span class="mt-0.5 block text-[12px] leading-relaxed text-sub">{{ summaryOf(n) }}</span>
@@ -559,12 +662,27 @@ function authorOf(n: Note): string {
         <div class="flex flex-wrap items-center gap-2 text-[11px] text-muted">
           <span v-if="detailWithAuthor" class="font-semibold text-sub">{{ authorOf(detailNote) }}</span>
           <span class="num">{{ fmtDateLong(detailNote.createdAt) }}</span>
+          <span
+            v-if="originLabel(detailNote)"
+            class="rounded-full px-2 text-[10px]"
+            :class="detailNote.origin === 'report' ? 'bg-info-soft border border-info/40 text-info' : 'bg-surface-soft border border-line text-sub'"
+          >{{ originLabel(detailNote) }}</span>
           <span v-if="detailNote.source === 'upload'" class="rounded-full bg-surface-soft border border-line px-2 text-[10px] text-sub">取込</span>
           <span
             v-for="l in linkLabels(detailNote)"
             :key="l"
             class="rounded-full bg-surface-soft border border-line px-2 py-0.5"
           >{{ l }}</span>
+          <!-- 通知先の登録後編集（poipoi・投稿者本人または管理者。改善要望 2026-08-21） -->
+          <button
+            v-if="canEditNotify(detailNote)"
+            type="button"
+            class="btn btn-ghost btn-sm ml-auto"
+            @click="openNotifyEdit(detailNote)"
+          >
+            <BellRing class="h-3.5 w-3.5" aria-hidden="true" />
+            通知先を編集
+          </button>
         </div>
         <a
           v-if="detailNote.meetFileId"
@@ -579,6 +697,42 @@ function authorOf(n: Note): string {
         </a>
         <UiMarkdown :source="detailNote.body" />
       </div>
+    </UiModal>
+
+    <!-- 通知先の編集モーダル（poipoi・登録後の編集 = 改善要望 2026-08-21。詳細モーダルの前面に出す = topmost） -->
+    <UiModal
+      :open="notifyEditOpen"
+      title="このポストの通知先を編集"
+      width="560px"
+      topmost
+      @close="notifyEditOpen = false"
+    >
+      <div class="grid gap-3">
+        <p class="text-[12px] text-muted">
+          このポストの通知先をロール・役職・個人で指定できます（投稿者本人は除外）。
+          保存すると、これまでの宛先に含まれていなかったメンバーへ原文を通知します。
+          {{ notifyEditNote?.notifyTargets != null ? '現在はこのポスト専用の宛先が設定されています。' : '現在は既定（設定 > 改善のタネの通知先）の宛先が適用されています。' }}
+        </p>
+        <SettingsNotifyRecipientsEditor v-model="notifyDraft" />
+        <p class="text-[11px] text-muted">宛先を空にして保存すると、このポストは通知されません。「既定に戻す」でテナント設定の宛先へ戻せます。</p>
+      </div>
+      <template #footer>
+        <div class="flex w-full flex-wrap items-center justify-end gap-2">
+          <button
+            v-if="notifyEditNote?.notifyTargets != null"
+            type="button"
+            class="btn btn-ghost mr-auto"
+            :disabled="notifySaving"
+            @click="resetNotifyTargets"
+          >
+            既定に戻す
+          </button>
+          <button type="button" class="btn" :disabled="notifySaving" @click="notifyEditOpen = false">キャンセル</button>
+          <button type="button" class="btn btn-primary" :disabled="notifySaving" @click="saveNotifyTargets">
+            {{ notifySaving ? '保存中…' : '保存' }}
+          </button>
+        </div>
+      </template>
     </UiModal>
   </div>
 </template>

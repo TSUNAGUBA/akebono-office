@@ -274,6 +274,28 @@ gcloud scheduler jobs create http improvement-revisit-reminders \
 多重実行しても二重通知されない（冪等）。継続検討へ再遷移して期日を更新するとマーカーが
 クリアされ、新しい期日で再度通知される。
 
+## 1-7f. メディア分析 AI 週次レポートの自動生成（Cloud Scheduler・任意。改善要望 2026-08-21）
+
+GA 連携済みの全メディアチャンネルについて、直近 4 完了週（月曜始まり）の AI 週次レポートをバックフィル生成する
+（F-55。生成済みの週はスキップ = 冪等・チャンネル×週単位の失敗は他を止めない・GA 部分障害の週は生成せず次回に回復）。
+週次実行（月曜朝推奨）を 1-7 と同じ `CRON_SECRET` で:
+
+```bash
+gcloud scheduler jobs create http media-weekly-reports \
+  --schedule "0 6 * * 1" --time-zone "Asia/Tokyo" \
+  --uri "https://<cloud-run-url>/jobs/media-weekly-reports" \
+  --http-method POST --headers "x-cron-key=<CRON_SECRET と同じ値>"
+```
+
+ジョブが無くても、AIレポート一覧（/media/reports）を開いたときに直近 4 完了週を冪等バックフィル生成する
+フォールバックがある（原則1 = 手動ステップを残さない。ジョブは「誰も開かなくても揃う」ための補助）。
+
+> **実行時刻の注記（設計判断）:** GA4 の日次集計は確定まで最大 24〜48 時間かかることがある。
+> レポートは「生成済みの週を再生成しない」設計（判断の巻き戻り防止 = 原則2）のため、月曜早朝に生成すると
+> 直前の日曜分が未確定の値のまま固定されうる。確定値を優先するなら `--schedule "0 6 * * 2"`（火曜朝）等へ
+> 後ろ倒しする（例の月曜朝は「速報性優先」のトレードオフ。リクエスト失敗・部分欠落〔warning〕時は
+> 生成せず次回に回るガードはある = AKO-MREP-004）。
+
 ## 1-8. AI 機能（Vertex AI）
 
 AI 機能（日報 AI アシスト・タスク計画の AI コメント等）は **Vertex AI**（オペレーター決定 2026-07-17）を

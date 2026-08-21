@@ -94,6 +94,8 @@ const PATH_FEATURES: [string, string][] = [
   ['/v1/customer-contexts', 'customer-context'],
   ['/v1/support-activities', 'support-activity'],
   ['/v1/sales-activities', 'sales-activity'],
+  // 営業アプローチリスト（改善要望 2026-08-21・F-53）
+  ['/v1/sales-approaches', 'sales-approach'],
   ['/v1/partner-activities', 'partner-activity'],
 ]
 

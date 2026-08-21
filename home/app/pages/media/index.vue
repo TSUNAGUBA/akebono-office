@@ -1,17 +1,18 @@
 <script setup lang="ts">
 /**
  * メディア分析ハブ（F-40-1）。独立したメディアチャンネルの入口。
- * チャンネル一覧（連携済み/単体を区別表示）・チャンネル追加・各機能（分析 / 記事生成 / PDCA / 設定）への導線。
+ * チャンネル一覧（連携済み/単体を区別表示）・チャンネル追加・各機能（分析 / AIレポート / 改善施策 / 記事生成 / 設定）への導線。
  * メディア分析は業態と 1:1 ではなく、任意で連携する（連携は必須でない）。
  */
 import { Link2, Plus, Radio } from 'lucide-vue-next'
 import { INDUSTRY_TYPE_LABELS } from '~/utils/akebono'
 import { fmtInt, fmtPct } from '~/utils/format'
+import { weeklyCompareOf } from '../../../../shared/domain/media-weekly-report'
 import type { MenuCard } from '~/types/ui'
 
 const { activeChannels, effectiveChannelId, currentChannel, switchChannel } = useCurrentChannel()
 const { settingFor, createChannel } = useMediaChannels()
-const { metricsFor, metricsReady } = useMediaAnalytics()
+const { metricsFor, metricsReady, metricsUnavailableFor } = useMediaAnalytics()
 const { activeSegments, segmentById } = useCurrentSegment()
 const { isAdmin } = useCurrentUser()
 const { show } = useToast()
@@ -27,25 +28,31 @@ const setting = computed(() => settingFor(effectiveChannelId.value))
 const connected = computed(() => setting.value?.gaConnected === true)
 const metrics = computed(() => (connected.value ? metricsFor(effectiveChannelId.value, 28) : null))
 
+// メニュー構成（改善要望 2026-08-21）: 「AIレポート」「改善施策一覧」を追加し、役割が重複する
+// 「業務 × メディア PDCA」メニューカードは廃止（レポート → 改善施策 → 実行 → 効果検証のループは
+// AIレポート + 改善施策一覧が担う。業態連携の統合分析タブ自体は /media/analytics?tab=pdca に残置 =
+// 売上×流入の統合指標は別役割のため。オペレーターコメント「役割が重複するメニューは廃止」への対応）
 const featureCards = computed<MenuCard[]>(() => {
-  const linked = currentChannel.value?.segmentId != null
   const cards: MenuCard[] = [
     { id: 'analytics', title: 'メディア分析（GA × AI）', description: 'アクセス指標の可視化と、サイト構成・記事へのインサイト + 次アクション提案', icon: 'LineChart', to: '/media/analytics' },
+    { id: 'reports', title: 'AIレポート', description: '週次の AI 分析レポート（重要変化・原因仮説・コンテンツ評価・推奨アクション）を自動生成', icon: 'FileChartColumn', to: '/media/reports' },
+    { id: 'measures', title: '改善施策一覧', description: 'AIレポートで「実行する」と判断した施策の実行・効果検証を管理', icon: 'ClipboardCheck', to: '/media/measures' },
     { id: 'articles', title: 'AI 記事生成スタジオ', description: '目的・質・雰囲気を指定して記事を生成。過去の分析からお題も提案', icon: 'PenLine', to: '/media/articles' },
-    {
-      id: 'pdca',
-      title: '業務 × メディア PDCA',
-      description: linked
-        ? '売上と流入を突き合わせ、相関・PDCA・次アクションを AI が提示'
-        : '業態と連携すると、売上と流入の統合 PDCA が使えます',
-      icon: 'RefreshCw',
-      to: linked ? '/media/analytics?tab=pdca' : '/media/settings',
-    },
   ]
   if (isAdmin.value) {
     cards.push({ id: 'settings', title: 'チャンネル設定', description: 'GA 連携・連携業態・AI 分析設定・外部投稿記事の管理（画面操作で完結）', icon: 'Settings2', to: '/media/settings' })
   }
   return cards
+})
+
+/** サマリーカードの比較値（前週比 / 4週平均比 / 前年同期比。改善要望 2026-08-21。直近 7 日の値に対する比較）。
+ *  日別内訳が取得できていないとき（unavailable 'daily' = ゼロ埋め系列）は null = 比較なしの従来カードへ
+ *  フォールバック（ゼロ埋め値での誤比較を作らない = レビュー R2） */
+const compare = computed(() => {
+  const m = metrics.value
+  if (!m) return null
+  if (metricsUnavailableFor(effectiveChannelId.value, 28).includes('daily')) return null
+  return weeklyCompareOf(m)
 })
 
 /** 全チャンネルの状況（一覧サマリー） */
@@ -133,9 +140,36 @@ const segmentOptions = computed(() => [
         </p>
       </template>
 
-      <!-- 連携済み: サマリー KPI -->
+      <!-- 連携済み: サマリー KPI（前週比 / 4週平均比 / 前年同期比 = 改善要望 2026-08-21。
+           比較値が算出できないとき〔daily 内訳の取得失敗〕は従来カードへフォールバック = ゼロ埋め比較を出さない -->
       <template v-else-if="metrics">
-        <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <div v-if="compare" class="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <MediaKpiCompareCard
+            label="セッション（28日）" :value="fmtInt(metrics.sessions)"
+            :sub="`直近7日 ${fmtInt(compare.current.sessions)}`"
+            :wow="compare.wow.sessions" :four-week-avg="compare.fourWeekAvg.sessions" :yoy="compare.yoy.sessions"
+            icon="MousePointerClick" to="/media/analytics"
+          />
+          <MediaKpiCompareCard
+            label="ユーザー（28日）" :value="fmtInt(metrics.users)"
+            :sub="`直近7日 ${fmtInt(compare.current.users)}・新規 ${fmtInt(metrics.newUsers)}`"
+            :wow="compare.wow.users" :four-week-avg="compare.fourWeekAvg.users" :yoy="compare.yoy.users"
+            icon="Users" to="/media/analytics"
+          />
+          <MediaKpiCompareCard
+            label="コンバージョン（28日）" :value="fmtInt(metrics.conversions)"
+            :sub="`直近7日 ${fmtInt(compare.current.conversions)}`"
+            :wow="compare.wow.conversions" :four-week-avg="compare.fourWeekAvg.conversions" :yoy="compare.yoy.conversions"
+            icon="Target" to="/media/analytics"
+          />
+          <MediaKpiCompareCard
+            label="CVR（28日）" :value="fmtPct(metrics.conversionRate)"
+            :sub="compare.current.cvr !== null ? `直近7日 ${fmtPct(compare.current.cvr)}` : `直帰率 ${fmtPct(metrics.bounceRate)}`"
+            :wow="compare.wow.cvr" :four-week-avg="compare.fourWeekAvg.cvr" :yoy="compare.yoy.cvr"
+            icon="Percent" to="/media/analytics"
+          />
+        </div>
+        <div v-else class="grid grid-cols-2 gap-3 md:grid-cols-4">
           <UiKpiCard
             label="セッション（28日）" :value="fmtInt(metrics.sessions)"
             :delta="metrics.prevSessions > 0 ? (metrics.sessions - metrics.prevSessions) / metrics.prevSessions : null"
@@ -155,6 +189,7 @@ const segmentOptions = computed(() => [
             :sub="`直帰率 ${fmtPct(metrics.bounceRate)}`" icon="Percent" to="/media/analytics"
           />
         </div>
+        <p v-if="compare" class="text-[11px] text-muted">前週比・4週平均比・前年同期比は直近 7 日の値に対する比較です（前年同期 = 52 週前の同じ曜日並びの 7 日間・4週平均 = 当該週を含む直近 4 週。データが無い期間は「—」）。</p>
       </template>
 
       <!-- 機能カード -->

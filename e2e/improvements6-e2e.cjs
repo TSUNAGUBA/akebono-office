@@ -30,7 +30,7 @@ async function main() {
 
     // ---- 1) 改善のタネ: ヘッダーボタン押下で遷移せずモーダル ----
     const beforeUrl = page.url()
-    await page.getByRole('button', { name: '改善のタネを投げ込む' }).click()
+    await page.getByRole('button', { name: 'ぽいぽいポストを投げ込む' }).click()
     await page.getByRole('heading', { name: 'タネを投げ込む' }).waitFor()
     check('1 改善のタネ: ヘッダー押下で遷移せずモーダルが開く', page.url() === beforeUrl)
     // 投稿できる

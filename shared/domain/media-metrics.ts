@@ -86,6 +86,12 @@ export interface MediaMetrics {
   prevUsers: number
   prevPageviews: number
   prevConversions: number
+  /**
+   * 前年同期（直近 7 日の 52 週〔364 日〕前 = 前年の同じ曜日並びの 7 日間の総計。
+   * 改善要望 2026-08-21 = サマリーカードの前年同期比。曜日整合のため 365 日でなく 52 週で取る）。
+   * API = GA へ追加取得 / モック = 決定的導出。旧キャッシュ・取得不可は未設定/null（「—」表示 = 原則7）
+   */
+  yoyWeek?: { sessions: number; users: number; conversions: number } | null
   // 内訳
   channels: MediaChannelStat[]
   devices: MediaDeviceStat[]
@@ -190,8 +196,9 @@ const DEVICES: { key: string; base: number }[] = [
 /**
  * サイトの記事インベントリから GA 風メトリクスを決定的に導出する（モック/デモ環境の SoT）。
  * API は GA4 batchRunReports の実データを同じ型へ整形する（api/src/lib/ga.ts。同じインサイト生成を通す）。
+ * withYoy=false は前年同期（yoyWeek）の再帰導出を行わない（内部再帰用。既定 true）。
  */
-export function deriveMediaMetrics(articles: MediaArticleInput[], opts: DeriveOptions): MediaMetrics {
+export function deriveMediaMetrics(articles: MediaArticleInput[], opts: DeriveOptions, withYoy = true): MediaMetrics {
   const days = Math.max(1, opts.days)
   const periodTo = opts.asOf
   const periodFrom = addDays(periodTo, -(days - 1))
@@ -280,6 +287,15 @@ export function deriveMediaMetrics(articles: MediaArticleInput[], opts: DeriveOp
     convRate: v.userSum > 0 ? Math.round(v.convSum / v.userSum * 10000) / 10000 : 0,
   })).sort((a, b) => b.pageviews - a.pageviews)
 
+  // 前年同期（直近 7 日の 52 週（364 日）前 = 前年の同じ曜日並びの 7 日間。改善要望 2026-08-21。
+  // 365 日固定だと閏年跨ぎで 1 日ずれ・曜日も揃わないため 52 週で取る = 週次トラフィックの比較に適する）。
+  // 前年の同 7 日間を同じ導出ロジックで再帰計算し、総計だけを採る（再帰は withYoy=false で 1 段のみ）
+  let yoyWeek: MediaMetrics['yoyWeek']
+  if (withYoy) {
+    const yoy = deriveMediaMetrics(articles, { ...opts, asOf: addDays(periodTo, -364), days: 7 }, false)
+    yoyWeek = { sessions: yoy.sessions, users: yoy.users, conversions: yoy.conversions }
+  }
+
   return {
     segmentId: opts.segmentId,
     siteName: opts.siteName,
@@ -287,6 +303,7 @@ export function deriveMediaMetrics(articles: MediaArticleInput[], opts: DeriveOp
     sessions, users, newUsers, pageviews, avgEngagementSec, engagementRate, bounceRate,
     conversions, conversionRate,
     prevSessions, prevUsers, prevPageviews, prevConversions,
+    yoyWeek,
     channels, devices, daily,
     topPages: pages.slice(0, 12),
     sections,

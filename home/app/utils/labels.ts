@@ -179,7 +179,7 @@ export const NOTIFICATION_KIND_LABELS: Record<NotificationKind, string> = {
   ai_report: 'AI報告',
   system: 'システム',
   escalation: 'エスカレーション',
-  poipoi: '改善のタネ', // 旧称: ぽいぽいポスト（2026-08-17 改称。キーは不変）
+  poipoi: 'ぽいぽいポスト', // 旧称: 改善のタネ（改善要望 2026-08-21 で再改称。キーは不変。日報内の「改善のタネ欄」の名称は現状維持）
 }
 
 export const ESCALATION_REASON_LABELS: Record<EscalationReason, string> = {

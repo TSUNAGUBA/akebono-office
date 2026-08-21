@@ -85,8 +85,10 @@ describe('fetchMediaMetrics の GA 障害時挙動（P1/P2）', () => {
     expect(result.warning).toContain('総計のみ表示')
     expect(result.warning).toContain('クォータ上限')
     expect(result.warning).toContain('GA 応答:')
-    // fetch は 総計バッチ + 内訳バッチ の 2 回のみ（枯渇プロパティへの 5 本ファンアウトをしない）
-    expect(fetchMock).toHaveBeenCalledTimes(2)
+    // fetch は 総計バッチ + 内訳バッチ + 前年同期 runReport（改善要望 2026-08-21）の 3 回のみ
+    // （枯渇プロパティへの 5 本ファンアウトをしない。前年同期の失敗は yoyWeek 未設定に倒れるだけ = 原則4）
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(result.metrics.yoyWeek).toBeUndefined()
   })
 
   it('P1: バッチ失敗 → per-report リトライで一部のみ失敗した場合、失敗キーだけが unavailable としてレスポンスへ貫通する', async () => {
@@ -121,7 +123,7 @@ describe('fetchMediaMetrics の GA 障害時挙動（P1/P2）', () => {
     expect(result.warning).toContain('一部の内訳（日別）')
     expect(result.warning).toContain('GA 応答:')
     expect(result.metrics.channels).toEqual([{ channel: '直接', sessions: 42, conversions: 2 }])
-    // 総計バッチ + 内訳バッチ + 個別リトライ 5 本 = 7 回（切り分け可能な失敗ではファンアウトする）
-    expect(fetchMock).toHaveBeenCalledTimes(7)
+    // 総計バッチ + 内訳バッチ + 前年同期 runReport + 個別リトライ 5 本 = 8 回（切り分け可能な失敗ではファンアウトする）
+    expect(fetchMock).toHaveBeenCalledTimes(8)
   })
 })

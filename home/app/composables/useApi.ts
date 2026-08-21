@@ -325,6 +325,15 @@ const CUSTOM_COLLECTION_ENDPOINTS: Record<string, string> = {
   // useActivityLogs と同じ会社単位の遅延フェッチへ切替える）。書込は useCustomerContext の専用経路
   customerContexts: '/v1/customer-contexts',
   customerContextNotes: '/v1/customer-contexts/notes',
+  // 営業アプローチリスト（0087。改善要望 2026-08-21・F-53）: 1社1行 = 件数上限は顧客数のため
+  // 全量ハイドレーション。書込は useSalesApproaches の専用経路（apiWrite）
+  salesApproaches: '/v1/sales-approaches',
+  // メディア分析の AI 週次レポート・改善施策（0088。改善要望 2026-08-21・F-55/F-56）:
+  // 全量ハイドレーション（bare 配列・maxLimit 1000）+ クライアントページング。週 1 ×チャンネル数の
+  // 増加ペースのため当面は全量で足りる（API はサーバーページング〔q/limit/offset/f.*〕にも対応済み =
+  // 件数が増えたら useListView の fetch = apiListPage へ切替える）。書込は useMediaReports の専用経路（apiWrite）
+  mediaWeeklyReports: '/v1/media/weekly-reports',
+  mediaMeasures: '/v1/media/measures',
 }
 
 /**

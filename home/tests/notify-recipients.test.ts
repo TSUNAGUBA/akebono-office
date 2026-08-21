@@ -2,10 +2,12 @@
  * 通知宛先の解決（shared/domain/notify-recipients。オペレーター指示 2026-08-03）。
  * - parseNotifyRecipients: JSON 文字列 / オブジェクト配列の正規化・不正要素の除去
  * - resolveNotifyRecipientIds: 役職/ロール/個人 → 在籍メンバー id（重複排除・投稿者除外・id 昇順）
+ * - addedNotifyRecipientIds: 通知先編集の追加分だけを返す（重複通知の防止。改善要望 2026-08-21）
  */
 import { describe, expect, it } from 'vitest'
 import {
   type NotifyRecipientTarget,
+  addedNotifyRecipientIds,
   parseNotifyRecipients,
   resolveNotifyRecipientIds,
 } from '~/utils/notify-recipients'
@@ -87,5 +89,37 @@ describe('resolveNotifyRecipientIds', () => {
 
   it('空の宛先指定は空配列', () => {
     expect(resolveNotifyRecipientIds([], members)).toEqual([])
+  })
+})
+
+describe('addedNotifyRecipientIds（ぽいぽいポストの通知先編集 = 追加分だけ再通知）', () => {
+  it('変更前の宛先に含まれていなかった解決済みメンバーだけを返す', () => {
+    const prev: NotifyRecipientTarget[] = [{ type: 'role', role: 'admin' }] // m-01
+    const next: NotifyRecipientTarget[] = [
+      { type: 'role', role: 'admin' }, // m-01（既存 = 再通知しない）
+      { type: 'title', title: '課長' }, // m-02, m-03（追加）
+    ]
+    expect(addedNotifyRecipientIds(prev, next, members)).toEqual(['m-02', 'm-03'])
+  })
+
+  it('宛先を減らしただけの変更は空配列（誰にも再通知しない）', () => {
+    const prev: NotifyRecipientTarget[] = [{ type: 'role', role: 'admin' }, { type: 'title', title: '課長' }]
+    const next: NotifyRecipientTarget[] = [{ type: 'role', role: 'admin' }]
+    expect(addedNotifyRecipientIds(prev, next, members)).toEqual([])
+  })
+
+  it('投稿者本人は追加分にも現れない', () => {
+    const prev: NotifyRecipientTarget[] = []
+    const next: NotifyRecipientTarget[] = [{ type: 'member', memberId: 'm-03' }]
+    expect(addedNotifyRecipientIds(prev, next, members, 'm-03')).toEqual([])
+  })
+
+  it('同じ宛先集合に解決される変更（指定方法の変更のみ）は空配列 = 冪等', () => {
+    const prev: NotifyRecipientTarget[] = [{ type: 'title', title: '課長' }]
+    const next: NotifyRecipientTarget[] = [
+      { type: 'member', memberId: 'm-02' },
+      { type: 'member', memberId: 'm-03' },
+    ]
+    expect(addedNotifyRecipientIds(prev, next, members)).toEqual([])
   })
 })

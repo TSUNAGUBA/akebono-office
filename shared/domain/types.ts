@@ -73,6 +73,9 @@ export interface WorkCategory {
 
 export type NoteKind = 'poipoi' | 'minutes'
 
+/** ぽいぽいポスト（改善のタネ）の登録経路（改善要望 2026-08-21）。report = 日報提出時 / direct = ページ・ヘッダーからの直接投稿 */
+export type NoteOrigin = 'report' | 'direct'
+
 /** ノート（ぽいぽいポスト = 本人 + 管理者閲覧 / 議事録 = 全員参照。記録系 = 追記 + 取消/復元。バッチ7c/7e） */
 export interface Note {
   id: string
@@ -87,6 +90,14 @@ export interface Note {
   createdAt: string
   /** 取消（論理削除）済みは false。既存データ・モック旧データは未設定 = 有効（原則7） */
   active?: boolean
+  /** 登録経路（poipoi のみ。改善要望 2026-08-21）。旧データは null/未設定 = 不明（バッジ非表示 = 事実を作らない・原則7） */
+  origin?: NoteOrigin | null
+  /**
+   * ポスト単位の通知先の上書き（poipoi のみ。改善要望 2026-08-21 = 登録後の通知先編集）。
+   * null/未設定 = テナント設定（configs 'poipoi-notify-recipients'）を使う / 配列 = このポストの宛先（空配列 = 通知しない）。
+   * 形式は NotifyRecipientTarget[]（notify-recipients.ts。型は循環回避のため unknown[] で持ち parse で正規化）
+   */
+  notifyTargets?: unknown[] | null
   /** 議事録の Google Meet 連携（AI メモ/録画の Drive 参照。2026-08-03 ③b。未連携は null/未設定 = 原則7） */
   meetFileId?: string | null
   meetFileName?: string | null
@@ -400,6 +411,45 @@ export interface PartnerActivity {
   links?: string[]
   /** AI集約（活動ログの時系列集約・導出キャッシュ。改修依頼 2026-08-20）。未生成は未定義/null（原則7） */
   aiDigest?: ActivityAiDigest | null
+  createdAt: string
+  updatedAt?: string
+  /** 取消（論理削除）済みは false */
+  active?: boolean
+}
+
+// ---------- 営業アプローチリスト（改善要望 2026-08-21・F-53。ダッシュボードの「営業管理」セクション） ----------
+// 顧客基本情報・顧客属性・顧客コンテキストを基に「これからアプローチする / している顧客」を
+// 1社1行で管理するリスト。チーム共有（全員が閲覧・登録・編集可）・取消 = 論理削除 + 復元（原則9.5）。
+// 基本情報・属性・コンテキスト・活動実績は各 SoT（companies / customer_contexts / customer_logs 等）
+// からのライブ参照で表示し、本エンティティはアプローチの状態・方針のみを持つ（SoT の重複を作らない = 原則6）。
+
+/** 営業アプローチの状態（値=ラベル方式） */
+export const SALES_APPROACH_STATUSES = ['候補', 'アプローチ中', '商談化', '受注', '見送り', '休眠'] as const
+/** 営業アプローチの優先度（値=ラベル方式） */
+export const SALES_APPROACH_PRIORITIES = ['高', '中', '低'] as const
+
+/**
+ * 営業アプローチリストの 1 行（1社1行 = companyId ユニーク。改善要望 2026-08-21）。
+ * 顧客(会社)を対象に、アプローチ状態・優先度・担当・次アクション・方針メモを管理する。
+ */
+export interface SalesApproach {
+  id: string
+  /** 登録者（表示用。編集は全員可 = チーム共有） */
+  memberId: string
+  /** 対象の顧客(会社)（必須・1社1行） */
+  companyId: string
+  /** アプローチ状態（SALES_APPROACH_STATUSES） */
+  status: string
+  /** 優先度（SALES_APPROACH_PRIORITIES） */
+  priority: string
+  /** 担当（Member 参照。既定 = ログインユーザー） */
+  assigneeMemberId: string
+  /** 次のアクション（自由入力・任意） */
+  nextAction: string
+  /** 次のアクション日（YYYY-MM-DD・任意） */
+  nextActionDate: string | null
+  /** アプローチ方針・メモ（任意） */
+  note: string
   createdAt: string
   updatedAt?: string
   /** 取消（論理削除）済みは false */

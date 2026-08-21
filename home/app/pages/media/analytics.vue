@@ -10,6 +10,7 @@
  */
 import { RefreshCw, Sparkles, Target, TriangleAlert } from 'lucide-vue-next'
 import { fmtDate, fmtDateTime, fmtInt, fmtPct, fmtYenCompact } from '~/utils/format'
+import { weeklyCompareOf } from '../../../../shared/domain/media-weekly-report'
 import { FINDING_KIND_LABELS, PRIORITY_LABELS, findingTone, priorityTone } from '~/utils/media'
 import type { TabItem, TableColumn } from '~/types/ui'
 import type { MediaInsightView, IntegratedInsightView } from '~/composables/useMediaInsight'
@@ -39,6 +40,15 @@ const connected = computed(() => setting.value?.gaConnected === true)
 const linked = computed(() => currentChannel.value?.segmentId != null)
 const metrics = computed(() => (connected.value ? metricsFor(effectiveChannelId.value, 28) : null))
 const integrated = computed(() => (connected.value && linked.value ? integratedMetricsFor(effectiveChannelId.value, 6) : null))
+/** サマリーカードの比較値（前週比 / 4週平均比 / 前年同期比。改善要望 2026-08-21。直近 7 日の値に対する比較）。
+ *  日別内訳が取得できていないとき（unavailable 'daily' = ゼロ埋め系列）は null = 比較カードを出さず
+ *  従来の KPI カードへフォールバック（ゼロ埋め値での誤比較を作らない = レビュー R2） */
+const compare = computed(() => {
+  const m = metrics.value
+  if (!m) return null
+  if (metricsUnavailableFor(effectiveChannelId.value, 28).includes('daily')) return null
+  return weeklyCompareOf(m)
+})
 
 // API モードのロード状態（モックは常にロード済み）。null かつロード完了 = 取得失敗（再試行導線を出す）
 const metricsLoading = computed(() => isApi && connected.value && !metricsReady(effectiveChannelId.value, 28))
@@ -263,32 +273,64 @@ const SEVERITY_META: Record<string, { label: string; tone: 'crit' | 'warn' | 'in
           <button type="button" class="link ml-auto text-[11px]" @click="retryMetrics">再試行</button>
         </p>
 
-        <!-- KPI -->
+        <!-- KPI（主要 4 指標は前週比 / 4週平均比 / 前年同期比つき = 改善要望 2026-08-21） -->
         <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <!-- 比較値が算出できないとき（daily 内訳の取得失敗）は従来カードへフォールバック（ゼロ埋め比較を出さない） -->
+          <MediaKpiCompareCard
+            v-if="compare"
+            label="セッション" :value="fmtInt(metrics.sessions)"
+            :sub="`直近7日 ${fmtInt(compare.current.sessions)}`"
+            :wow="compare.wow.sessions" :four-week-avg="compare.fourWeekAvg.sessions" :yoy="compare.yoy.sessions"
+            icon="MousePointerClick"
+          />
           <UiKpiCard
+            v-else
             label="セッション" :value="fmtInt(metrics.sessions)"
             :delta="metrics.prevSessions > 0 ? (metrics.sessions - metrics.prevSessions) / metrics.prevSessions : null"
             sub="前期比" icon="MousePointerClick"
           />
+          <MediaKpiCompareCard
+            v-if="compare"
+            label="ユーザー" :value="fmtInt(metrics.users)"
+            :sub="`直近7日 ${fmtInt(compare.current.users)}・新規 ${fmtInt(metrics.newUsers)}`"
+            :wow="compare.wow.users" :four-week-avg="compare.fourWeekAvg.users" :yoy="compare.yoy.users"
+            icon="Users"
+          />
           <UiKpiCard
+            v-else
             label="ユーザー" :value="fmtInt(metrics.users)"
             :delta="metrics.prevUsers > 0 ? (metrics.users - metrics.prevUsers) / metrics.prevUsers : null"
             :sub="`新規 ${fmtInt(metrics.newUsers)}`" icon="Users"
           />
-          <UiKpiCard label="ページビュー" :value="fmtInt(metrics.pageviews)" :sub="`記事 ${metrics.articleCount} 本`" icon="FileText" />
+          <MediaKpiCompareCard
+            v-if="compare"
+            label="コンバージョン" :value="fmtInt(metrics.conversions)"
+            :sub="`直近7日 ${fmtInt(compare.current.conversions)}`"
+            :wow="compare.wow.conversions" :four-week-avg="compare.fourWeekAvg.conversions" :yoy="compare.yoy.conversions"
+            icon="Target"
+          />
           <UiKpiCard
+            v-else
             label="コンバージョン" :value="fmtInt(metrics.conversions)"
             :delta="metrics.prevConversions > 0 ? (metrics.conversions - metrics.prevConversions) / metrics.prevConversions : null"
             sub="前期比" icon="Target"
           />
-          <UiKpiCard label="CVR" :value="fmtPct(metrics.conversionRate)" sub="コンバージョン率" icon="Percent" />
+          <MediaKpiCompareCard
+            v-if="compare"
+            label="CVR" :value="fmtPct(metrics.conversionRate)"
+            :sub="compare.current.cvr !== null ? `直近7日 ${fmtPct(compare.current.cvr)}` : 'コンバージョン率'"
+            :wow="compare.wow.cvr" :four-week-avg="compare.fourWeekAvg.cvr" :yoy="compare.yoy.cvr"
+            icon="Percent"
+          />
+          <UiKpiCard v-else label="CVR" :value="fmtPct(metrics.conversionRate)" sub="コンバージョン率" icon="Percent" />
+          <UiKpiCard label="ページビュー" :value="fmtInt(metrics.pageviews)" :sub="`記事 ${metrics.articleCount} 本`" icon="FileText" />
           <UiKpiCard label="平均エンゲージ時間" :value="`${metrics.avgEngagementSec}s`" sub="1 ページあたり" icon="Clock" />
           <UiKpiCard label="直帰率" :value="fmtPct(metrics.bounceRate)" :delta="null" :inverse="true" sub="低いほど良い" icon="LogOut" />
           <UiKpiCard label="エンゲージ率" :value="fmtPct(metrics.engagementRate)" sub="関与セッション率" icon="Activity" />
         </div>
 
         <p class="text-[11px] text-muted">
-          集計期間 {{ fmtDate(metrics.periodFrom) }}〜{{ fmtDate(metrics.periodTo) }}（前日基準・{{ metrics.days }} 日間）。前期比は直前の同日数期間との比較です。
+          集計期間 {{ fmtDate(metrics.periodFrom) }}〜{{ fmtDate(metrics.periodTo) }}（前日基準・{{ metrics.days }} 日間）。<template v-if="compare">前週比・4週平均比・前年同期比は直近 7 日の値に対する比較です（前年同期 = 52 週前の同じ曜日並びの 7 日間・4週平均 = 当該週を含む直近 4 週。データが無い期間は「—」）。</template><template v-else>前期比は直前の同日数期間との比較です。</template>
         </p>
 
         <ChartsLineChartCard v-if="!na('daily')" title="日別セッション・ユーザー" :labels="dailyChart.labels" :series="dailyChart.series" />
