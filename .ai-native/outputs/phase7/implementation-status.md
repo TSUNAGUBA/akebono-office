@@ -4335,4 +4335,6 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
     - NIT: リマインドフィルタのタブ判定を resolveTabPermission 経由へ対称化（API/mock。将来の解決層
       復活時も UI とずれない）/ maxlength（UTF-16）と検証（コードポイント）の数え方差を安全側と注記 /
       operationalNote 系純関数の境界単体テスト（1994 通過・1995 拒否 + メッセージ整合）を home/api 両方へ追加
-  - R5（収束確認）→ 結果は本行を更新して記録する
+  - R5（最終収束確認）→ **指摘ゼロ（MAJOR 0 / MINOR 0 / NIT 0）で収束**。R4 対応の副作用
+    （restore フロー・reject 連鎖・ドロワー再開閉・タブ判定経路・境界テストの実効性）も個別確認済み。
+    最終検証: home 単体 484 / api 単体 481 / 統合 306 / 両 typecheck / nuxi generate 全通過
