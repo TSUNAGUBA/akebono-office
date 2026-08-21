@@ -1439,6 +1439,8 @@ async function copyAndClose(): Promise<void> {
               required
               hint="メモに記録され、この案件に紐づく要望の起票者へ全文がそのまま通知されます。起票者に見せる前提の文章で記載してください"
             >
+              <!-- maxlength は UTF-16 コードユニット数（検証はコードポイント数）のため、サロゲートペア
+                   （絵文字等）混在時は maxlength の方が先に効く = 上限突破しない安全側の差のみ -->
               <textarea
                 v-model="operationalNote"
                 class="textarea"

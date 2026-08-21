@@ -12,7 +12,7 @@ import { Hono } from 'hono'
 import type pg from 'pg'
 import { DEFAULT_WORKING_DAY_RULE, isWorkingDay } from '../../../shared/domain/business-day'
 import { addDays, isRealDateKey, jstClock, nowJstIso, todayJst } from '../../../shared/domain/jst'
-import { canUseFeature, canUseTab, canViewMemberReports, type PermissionSubject, reportReadsFeatureKey, resolveFeatureResource } from '../../../shared/domain/permissions'
+import { canUseFeature, canUseTab, canViewMemberReports, type PermissionSubject, reportReadsFeatureKey, resolveFeatureResource, resolveTabPermission } from '../../../shared/domain/permissions'
 import {
   buildMonthlyReminderMessage, buildReminderMessage, buildWeeklyReminderMessage, hasSubmittedPeriodReport,
   lastCompletedWeekStart, lastMonthStart, missingReportDates, parseReminderLastSent, parseReportReminderConfig,
@@ -1131,8 +1131,11 @@ export async function runReportReminders(pool: pg.Pool): Promise<{ notified: num
     const canUseReportFeature = (m: { id: string; title: string | null; role: PermissionSubject['role'] }, feature: string): boolean => {
       if (permRules.length === 0) return true
       const subject = { memberId: m.id, title: m.title ?? '', role: m.role }
+      // タブ側も usePermissions.canTab と同じく resolveTabPermission を経由する（現在は素通しだが、
+      // 解決層に写像が復活しても UI と判定がずれない対称性を保つ = R4）
+      const eff = resolveTabPermission(permRules, feature, 'mine')
       return canUseFeature(permRules, subject, resolveFeatureResource(permRules, feature))
-        && canUseTab(permRules, subject, feature, 'mine')
+        && canUseTab(permRules, subject, eff.resource, eff.tabKey)
     }
 
     if (fire.daily) {

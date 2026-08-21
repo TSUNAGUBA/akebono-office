@@ -413,6 +413,10 @@ export function useImprovements() {
     const itemsRef = tbl('improvementItems')
     const cur = itemsRef.value.find(it => it.id === id)
     if (!cur) return { ok: false, error: { code: 'AKO-REQ-002', message: '対象の改修単位が見つかりません' } }
+    // 取消済みはステータスを動かさない（API の archived_at IS NULL ガードとパリティ = 原則6。R4）
+    if (cur.archivedAt) {
+      return { ok: false, error: { code: 'AKO-REQ-002', message: '取消済みの改修単位はステータスを変更できません（先に復元してください）' } }
+    }
     // 同一ステータスは no-op（再スタンプしない）。例外: deferred → deferred は再検討日の変更として通す
     if (cur.status === status && status !== 'deferred') return { ok: true, id }
     if (cur.status !== status && !canTransition(cur.status, status)) {
@@ -472,8 +476,11 @@ export function useImprovements() {
       return res.ok ? { ok: true, id } : res
     }
     const itemsRef = tbl('improvementItems')
-    if (!itemsRef.value.some(it => it.id === id)) {
-      return { ok: false, error: { code: 'AKO-REQ-002', message: '対象の改修単位が見つかりません' } }
+    const target = itemsRef.value.find(it => it.id === id)
+    if (!target) return { ok: false, error: { code: 'AKO-REQ-002', message: '対象の改修単位が見つかりません' } }
+    // 取消済みは編集不可（API の archived_at IS NULL ガードとパリティ = 原則6。R4）
+    if (target.archivedAt) {
+      return { ok: false, error: { code: 'AKO-REQ-002', message: '取消済みの改修単位は編集できません（先に復元してください）' } }
     }
     const now = nowJstIso()
     itemsRef.value = itemsRef.value.map(it => (it.id === id

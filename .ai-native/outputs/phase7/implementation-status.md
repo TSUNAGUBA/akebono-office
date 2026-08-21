@@ -4329,4 +4329,10 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
     - レビュー/監査 NIT: mock setRequestStatus に取消済みガード追加（API の archived_at IS NULL とパリティ）/
       runReportReminders docblock の「全メンバー」旧記述を是正 / 手動リマインド（/remind）はフィルタ対象外の
       設計判断をコメント + F-48-2 に明記
-  - R4（両ロール再レビュー）→ 結果は本行を更新して記録する
+  - R4（収束確認レビュー。MAJOR 0・MINOR 1・NIT 3）→ 全件対応:
+    - MINOR: 取消済みガードの同型ギャップ（mock の setStatus / editItem が archived な改修単位を素通し）→
+      両関数へ archivedAt 早期 return を水平展開（API の archived_at IS NULL とパリティ）
+    - NIT: リマインドフィルタのタブ判定を resolveTabPermission 経由へ対称化（API/mock。将来の解決層
+      復活時も UI とずれない）/ maxlength（UTF-16）と検証（コードポイント）の数え方差を安全側と注記 /
+      operationalNote 系純関数の境界単体テスト（1994 通過・1995 拒否 + メッセージ整合）を home/api 両方へ追加
+  - R5（収束確認）→ 結果は本行を更新して記録する

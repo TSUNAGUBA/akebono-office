@@ -11,7 +11,7 @@
  * - 判定・本文の純ロジックはサーバーと共有（shared/domain/report-reminder.ts）
  * - 失敗してもアプリ起動をブロックしない（原則4）
  */
-import { canUseFeature, canUseTab, resolveFeatureResource } from '../../../shared/domain/permissions'
+import { canUseFeature, canUseTab, resolveFeatureResource, resolveTabPermission } from '../../../shared/domain/permissions'
 import {
   buildMonthlyReminderMessage, buildReminderMessage, buildWeeklyReminderMessage, hasSubmittedPeriodReport,
   lastCompletedWeekStart, lastMonthStart, missingReportDates, parseReminderLastSent,
@@ -43,8 +43,10 @@ export default defineNuxtPlugin(() => {
     const canUseReportFeature = (m: Member, feature: string): boolean => {
       if (permRules.length === 0) return true
       const subject = { memberId: m.id, title: m.title, role: m.role }
+      // タブ側も usePermissions.canTab と同じ resolveTabPermission 経由（API と同一 = R4 対称性）
+      const eff = resolveTabPermission(permRules, feature, 'mine')
       return canUseFeature(permRules, subject, resolveFeatureResource(permRules, feature))
-        && canUseTab(permRules, subject, feature, 'mine')
+        && canUseTab(permRules, subject, eff.resource, eff.tabKey)
     }
 
     if (shouldFireReminder(config.daily, now, lastSent.daily ?? '', today)) {
