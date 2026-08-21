@@ -4568,3 +4568,33 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
     contextOf（active フィルタ付き）のままで revert（行直接参照）と書き分けが残る =
     基点以前からの既存コードで active=false の到達経路がなく実挙動差ゼロ。customer_contexts の
     論理削除を実装する改修の際に revert と同様に揃える（原則9.5 の遡及方針と同じ扱い）
+
+## 105. 改修依頼 2026-08-21 第3弾（2 改修単位 = 顧客基本情報の電話番号 + AI 調査反映・「AIで整形」の RAG 対応）の完了条件（Definition of Done）
+
+対象: home + api + shared/domain。マイグレーション 0085（companies.phone）。
+
+### 105-1 顧客基本情報の電話番号 + AI 調査での反映（単位1）
+- [x] スキーマ: 0085 = `companies.phone text NOT NULL DEFAULT ''`（IF NOT EXISTS = 冪等・既存行無変更 = 原則2/7）。`Company.phone?: string`（旧データ未定義 = '' 扱い）。masters registry の companies スキーマ + 項目権限カタログ（permission-catalog）にも登録。
+- [x] UI: 顧客コンテキストの基本情報カードに電話番号の表示行 + 編集モーダルに入力欄。/masters/customers の詳細・フォームにも追加（同一マスタの一貫性）。シード c-01/c-02 に demo 電話番号（03-0000-XXXX 系 = contacts と同一慣行）+ SEED_VERSION 28。
+- [x] AI 調査での取得・反映: 採用ソースに抜粋（snippet・300cp cap・任意 = 旧形式互換）を追加し、AI 構築が電話番号を提案（**LLM = 情報源の記載・抜粋に明記がある場合のみ転記・創作禁止をプロンプトで明示 / ヒューリスティック = snippet からの正規表現抽出 `extractPhoneFromSnippets` = 実在する記載のみ**。モックデモは調査ヒントの電話番号が会社概要候補の抜粋に載る経路 = 番号を創作しない）。
+- [x] 反映と取消（原則9.5 × 原則7）: 差分確認に「電話番号（基本情報）」行（'' = 「取得できませんでした = 変更しません」を明示）。反映は **phone 非空かつ現在値と異なる場合のみ** companies.phone を同一トランザクションで更新し **before.companyPhone に変更前を保存**（+ companies の監査ログ）。取消は companyPhone キーがあるノートだけ電話番号を復元（キーなし = 旧ノート・変更しなかった反映は触らない）。mock も同一規則（コレクション横断ロールバック込み = 原則6）。
+- [x] テスト: shared 単体（抽出・正規化・ヒューリスティック提案・創作なし）を home/api 両側で固定。統合 = 反映 → マスタ更新 → before 保存 → 取消復元・空提案/同一提案は before に companyPhone を保存しない・取消でも触らない（+2 件 = 314）。
+
+### 105-2 「AIで整形」の RAG 対応（単位2）
+- [x] RAG: `formatTextKbRefs`（shared/domain/text-assist 新設）= AI 知識ベース（shared/domain/kb = アプリ仕様書・操作/運用マニュアル・FAQ 50 docs）から kbFindRelated（チャットボットのモック照合と同一の決定的字句検索 = 原則3/6）で関連上位 3 件を選定。関連ゼロでも整形は実行（RAG は補助 = 原則4）。
+- [x] API: format-text の LLM プロンプトへ参照資料ブロック（title + 本文 1200cp cap）を供給し、「画面名・機能名・操作名を資料の正式呼称へ統一 / 資料にあるだけで本文に無い機能への言及は禁止」を明示。応答 `{ text, llm, refs }`（refs = LLM 整形時のみ id+title・ルールベースは空 = 資料を使わないため。旧クライアントは refs を無視するだけ = 原則7）。
+- [x] UI: LLM 整形時に「参照した資料: ◯◯ / △△」を入力欄下へ表示（aria-live。再編集・「整形前に戻す」でクリア = 誤帰属を残さない）。mock はルールベース整形のまま（refs 空）= トーストのフィードバック維持。
+- [x] テスト: formatTextKbRefs の決定性・上限・関連ゼロ時の空配列（home 単体）。統合 = ルールベース応答の refs 空を固定。
+
+### 105-3 KB・ドキュメント（原則5 = KB 含む）
+- [x] KB: kb-sp-008（顧客(会社)マスタの項目に電話番号）・kb-sp-010（基本情報の項目・AI リサーチの電話番号取得/反映/取消・創作しない旨）・kb-sp-013 + kb-ug-007（「AIで整形」の RAG = 参照資料と表示・フォールバック挙動）。
+- [x] 設計書: functional-requirements（F-46-1/2・F-50-1）/ data-design（Company.phone・notes payload の companyPhone/snippet）/ api-design（useCustomerContext 行・useTextAssist 行を新設）/ screen-design（/customer-context 基本情報・リサーチモーダル・AIで整形の RAG）/ CONVENTIONS（useCustomerContext 早見表・ImprovementsBodyImageInput 部品在庫）/ 本ファイル §105。
+
+### 105-4 検証（受入基準）
+- [x] home `npx nuxi typecheck` / api `tsc --noEmit` / home 単体 540 / api 単体 508（非統合全件）/ 統合 314
+- [x] モックモード E2E（run-mock-stack.sh = PR テストゲートと同一）: 既存 8 スイート green + 新規 batch6-e2e（電話番号の表示/編集・AI 調査ヒント経由の取得 → 差分行 → 反映 → 取消・マスタ画面の電話番号・AIで整形のフィードバックと整形前に戻す・モバイル 375px）
+- [x] モバイル 375px: /customer-context（電話番号行あり）で横スクロールなし（E2E で自動検証）
+
+### 105-5 反復レビュー（原則9 = SP-8）
+- 反復記録:
+  - （レビュー実施後にラウンドごと追記）

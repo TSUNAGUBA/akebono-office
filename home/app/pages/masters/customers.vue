@@ -140,6 +140,8 @@ const formFields = computed<FieldDef[]>(() => [
   },
   { key: 'size', label: '規模', type: 'select', options: itemsOf('companySize') },
   { key: 'location', label: '所在地', type: 'text' },
+  // 電話番号（0085 = 改修依頼 2026-08-21 第3弾。顧客コンテキストの AI リサーチ反映でも更新される）
+  { key: 'phone', label: '電話番号', type: 'text', hint: '例）03-1234-5678' },
   { key: 'description', label: '事業内容', type: 'textarea' },
   { key: 'ownerMemberId', label: '担当メンバー', type: 'select', options: memberOptions.value },
   {
@@ -161,6 +163,7 @@ const detailRows = computed(() => {
     { label: '主業界', value: industryName(c.primaryIndustryId) },
     { label: '規模', value: c.size || '—' },
     { label: '所在地', value: c.location || '—' },
+    { label: '電話番号', value: c.phone || '—' },
     { label: '事業内容', value: c.description || '—' },
     { label: '担当', value: memberName(c.ownerMemberId) },
     { label: '取引ロール', value: rolesLabel(c) },
@@ -182,7 +185,7 @@ function openCreate(): void {
   selectedId.value = null
   form.value = {
     name: '', aliasesText: '', industryIds: [], primaryIndustryId: '', size: '',
-    location: '', description: '', ownerMemberId: '', partnerRoles: ['customer'], billingTermId: '', paymentTermId: '', custom: {},
+    location: '', phone: '', description: '', ownerMemberId: '', partnerRoles: ['customer'], billingTermId: '', paymentTermId: '', custom: {},
   }
   errors.value = {}
   mode.value = 'create'
@@ -197,6 +200,7 @@ async function openEdit(): Promise<void> {
     ...clone,
     aliasesText: s.aliases.join(', '),
     primaryIndustryId: s.primaryIndustryId ?? '',
+    phone: s.phone ?? '', // 旧データ（phone 未定義 = 0085 以前）も空欄で編集できる（原則7）
     ownerMemberId: s.ownerMemberId ?? '',
     partnerRoles: partnerRolesOf(s),
     billingTermId: s.billingTermId ?? '',
@@ -240,6 +244,7 @@ async function save(): Promise<void> {
     primaryIndustryId: primary || null,
     size: String(form.value.size ?? ''),
     location: String(form.value.location ?? ''),
+    phone: String(form.value.phone ?? '').trim(),
     description: String(form.value.description ?? ''),
     ownerMemberId: String(form.value.ownerMemberId ?? '') || null,
     fiscalStartMonth: null,

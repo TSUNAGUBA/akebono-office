@@ -158,6 +158,8 @@ const schemas = {
     size: z.string().default(''),
     location: z.string().default(''),
     description: z.string().default(''),
+    // 代表電話番号（0085 = 改修依頼 2026-08-21 第3弾。contacts.phone と同じ自由入力）
+    phone: z.string().default(''),
     ownerMemberId: z.string().default(''),
     fiscalStartMonth: z.number().int().min(1).max(12).nullable().default(null),
     // Akebono 拡張（F-30-1 = Phase C 0032 で物理列化。空 = customer は ['customer'] 相当のアプリ層互換）。

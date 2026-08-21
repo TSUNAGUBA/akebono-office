@@ -13,7 +13,7 @@ import { nowJstIso, todayJst } from '../../../shared/domain/jst'
 import { canViewMemberTaskPlans } from '../../../shared/domain/permissions'
 import type { DraftContext, ReportDraft } from '../../../shared/domain/report-draft'
 import { heuristicReportDraft, toQuarterHours } from '../../../shared/domain/report-draft'
-import { FORMAT_TEXT_CAP, heuristicFormatRequestText } from '../../../shared/domain/text-assist'
+import { FORMAT_TEXT_CAP, formatTextKbRefs, heuristicFormatRequestText } from '../../../shared/domain/text-assist'
 import type { HearingLog, TaskPlan } from '../../../shared/domain/types'
 import type { Env } from '../env'
 import { err } from '../lib/errors'
@@ -174,7 +174,14 @@ export function assistRoutes(pool: pg.Pool, env: Env): Hono {
       throw err('AKO-RAS-003', `整形できるテキストは ${FORMAT_TEXT_CAP} 文字までです`, 400)
     }
     // 空入力はそのまま返す（heuristicFormatRequestText と同じ規約 = 両モード parity。エラーにしない）
-    if (!text.trim()) return c.json({ data: { text, llm: false } })
+    if (!text.trim()) return c.json({ data: { text, llm: false, refs: [] } })
+    // RAG（改修依頼 2026-08-21 第3弾）: AI 知識ベース（shared/domain/kb = アプリ仕様書・操作/運用マニュアル・FAQ）
+    // から要望テキストに関連する上位ドキュメントを選び、LLM の参照資料として渡す。
+    // 選定は kbFindRelated（チャットボットのモック照合と同一の決定的字句検索 = 原則3/6）。
+    // 関連ドキュメントが無くても整形は止めない（RAG は補助 = 原則4）
+    const refDocs = formatTextKbRefs(text)
+    const refsBlock = refDocs.length === 0 ? '' : '\n\n# 参照資料（本アプリの仕様書・マニュアル抜粋。表記の正規化にのみ使用）\n'
+      + refDocs.map(d => `## ${d.title}\n${capCp(d.body, 1200)}`).join('\n\n')
     const llmOut = await generateJson<{ formatted?: unknown }>(env, {
       // 改善要望 2026-08-21: 改行・インデントの整形だけでなく「後工程（改修プロンプト生成・開発者の読解）で
       // 誤解を生まない文章への補完」を行う。事実の創作は禁止のまま、表現の明確化は許可する
@@ -182,13 +189,14 @@ export function assistRoutes(pool: pg.Pool, env: Env): Hono {
         + '事実関係・固有名詞・要望の意図を一切変えずに、開発者が誤解なく読める要望文へ清書して'
         + ' JSON（formatted）で返します。次を行うこと: 誤字脱字の修正 / 口語・あいまいな言い回しを'
         + '具体的で明確な表現へ補正（例:「なんか変」→ 症状の言い換え）/ 省略された主語・目的語を文脈から'
-        + '補って明示 / 画面名・操作名は本文中の呼称を保ちつつ表記ゆれを統一。'
-        + '次はしないこと: 本文に無い事実・原因・要望の創作 / 内容の省略や要約 / 過度な敬語化。'
-        + '文脈から補えない箇所は元の表現を残すこと。'
+        + '補って明示 / 画面名・機能名・操作名は「参照資料」（本アプリの仕様書・マニュアル）にある'
+        + '正式な呼称へ表記を揃える（参照資料が無い・該当しない場合は本文中の呼称を保ちつつ表記ゆれを統一）。'
+        + '次はしないこと: 本文に無い事実・原因・要望の創作 / 参照資料にあるだけで本文に無い機能・仕様への言及 / '
+        + '内容の省略や要約 / 過度な敬語化。文脈から補えない箇所は元の表現を残すこと。'
         + '「要望：」「現状：」「改善：」のラベル行がある場合はその節構造を保つこと。無い場合もこの 3 見出しへの'
         + '整理を推奨するが、内容が読み取れないときは無理に当てはめないこと。箇条書きは「- 」に統一し、'
         + '段落の間は空行 1 行にすること。',
-      prompt: text,
+      prompt: `# 清書対象の要望テキスト\n${text}${refsBlock}`,
       schema: {
         type: 'object',
         properties: { formatted: { type: 'string' } },
@@ -197,8 +205,11 @@ export function assistRoutes(pool: pg.Pool, env: Env): Hono {
       maxTokens: 4000,
     })
     const formatted = typeof llmOut?.formatted === 'string' ? llmOut.formatted.trim() : ''
-    if (formatted) return c.json({ data: { text: formatted, llm: true } })
-    return c.json({ data: { text: heuristicFormatRequestText(text), llm: false } })
+    // refs は LLM 整形時のみ返す（フォールバック = ルールベースは資料を使わないため空。UI の参照表示用）
+    if (formatted) {
+      return c.json({ data: { text: formatted, llm: true, refs: refDocs.map(d => ({ id: d.id, title: d.title })) } })
+    }
+    return c.json({ data: { text: heuristicFormatRequestText(text), llm: false, refs: [] } })
   })
 
   return app

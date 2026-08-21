@@ -12,7 +12,9 @@ import {
   CUSTOMER_CONTEXT_SOURCES_MAX,
   CUSTOMER_CONTEXT_TEXT_CAP,
   customerContextError, customerContextNoteError, customerContextSourcesError,
+  extractPhoneFromSnippets,
   heuristicContextBuild, heuristicResearchCandidates,
+  normalizeContextPhone,
   normalizeCustomerContext, restoreContextFromSnapshot,
 } from '../../shared/domain/customer-context'
 
@@ -125,6 +127,31 @@ describe('heuristicContextBuild（決定的な定性情報の構築）', () => {
   it('既存の登録値がある場合は補足メモで復元可能性（リサーチノート）を案内する', () => {
     const withCurrent = heuristicContextBuild('アケボノ商事', sources, { ...empty, vision: '既存ビジョン' })
     expect(withCurrent.strategyNotes).toContain('復元')
+  })
+
+  it('電話番号（第3弾）: 採用ソースの抜粋に実在する記載だけを提案し、無ければ空（創作しない）', () => {
+    // 抜粋なし = 電話番号は提案しない（LLM フォールバックでも架空の番号をマスタへ書かない安全側）
+    expect(heuristicContextBuild('アケボノ商事', sources, empty).phone).toBe('')
+    // 会社概要の抜粋に代表電話がある（= 調査ヒントに電話番号を入れたデモ経路）→ そのまま抽出
+    const withPhone = [
+      { title: '公式サイト', uri: 'https://example.com/company/a/' },
+      { title: '会社概要', uri: 'https://example.com/company/a/about', snippet: '会社概要ページ（デモ）。代表電話: 03-0000-0100。' },
+    ]
+    expect(heuristicContextBuild('アケボノ商事', withPhone, empty).phone).toBe('03-0000-0100')
+  })
+})
+
+describe('電話番号の抽出・正規化（第3弾 = AI 反映の材料）', () => {
+  it('extractPhoneFromSnippets: 日本の電話番号らしい並びを最初の 1 件だけ返す・全角ハイフンも受ける', () => {
+    expect(extractPhoneFromSnippets(['代表電話: 03-1234-5678。FAX: 03-1234-5679'])).toBe('03-1234-5678')
+    expect(extractPhoneFromSnippets([undefined, 'TEL 011ー000ー0040（代表）'])).toBe('011-000-0040')
+    expect(extractPhoneFromSnippets(['電話番号の記載なし', ''])).toBe('')
+    expect(extractPhoneFromSnippets([])).toBe('')
+  })
+  it('normalizeContextPhone: trim + 上限 cap・非文字列は空へ', () => {
+    expect(normalizeContextPhone('  03-1111-2222 ')).toBe('03-1111-2222')
+    expect(normalizeContextPhone(undefined)).toBe('')
+    expect([...normalizeContextPhone('0'.repeat(100))].length).toBe(40)
   })
 })
 

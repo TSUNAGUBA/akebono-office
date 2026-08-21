@@ -12,14 +12,14 @@
  * モバイル（375px）はカードが縦積みになるレスポンシブ構成（原則8）。
  */
 import {
-  BookUser, Building2, ExternalLink, Network, Pencil, Plus, RefreshCw, RotateCcw, Search,
+  BookUser, Building2, ExternalLink, Network, Pencil, Phone, Plus, RefreshCw, RotateCcw, Search,
   Sparkles, Trash2, Undo2, Users,
 } from 'lucide-vue-next'
 import type {
   ActivityLog, Company, CompanyRelation, Contact, CustomerContextNote,
   CustomerContextResearchSource, Industry, Member, RelationType,
 } from '~/types/domain'
-import type { CustomerContextInput, CustomerResearchCandidate } from '~/composables/useCustomerContext'
+import type { CustomerContextBuildProposal, CustomerContextInput, CustomerResearchCandidate } from '~/composables/useCustomerContext'
 import { fmtDateLong } from '~/utils/format'
 
 const ctx = useCustomerContext()
@@ -96,6 +96,7 @@ const companyForm = ref({
   primaryIndustryId: '',
   size: '',
   location: '',
+  phone: '',
   description: '',
   ownerMemberId: '',
 })
@@ -114,6 +115,7 @@ function openCompanyEdit(): void {
     primaryIndustryId: company.value.primaryIndustryId ?? '',
     size: company.value.size,
     location: company.value.location,
+    phone: company.value.phone ?? '',
     description: company.value.description,
     ownerMemberId: company.value.ownerMemberId ?? '',
   }
@@ -143,6 +145,7 @@ async function saveCompany(): Promise<void> {
       industryIds,
       size: companyForm.value.size.trim(),
       location: companyForm.value.location.trim(),
+      phone: companyForm.value.phone.trim(),
       description: companyForm.value.description.trim(),
       ownerMemberId: companyForm.value.ownerMemberId || null,
     })
@@ -337,7 +340,7 @@ const hintForm = ref({ address: '', phone: '', keywords: '' })
 const candidates = ref<CustomerResearchCandidate[]>([])
 const adoptedUris = ref<string[]>([])
 const researchLlm = ref(false)
-const proposal = ref<CustomerContextInput | null>(null)
+const proposal = ref<CustomerContextBuildProposal | null>(null)
 const applying = ref(false)
 /** 反映直後の「反映を取り消す」導線（定性情報カードのバナー。会社切替でクリア） */
 const lastAppliedNoteId = ref('')
@@ -387,7 +390,9 @@ function isHttpUrl(uri: string): boolean {
 }
 
 const adoptedSources = computed<CustomerContextResearchSource[]>(() =>
-  candidates.value.filter(c => adoptedUris.value.includes(c.uri)).map(c => ({ title: c.title, uri: c.uri })))
+  candidates.value.filter(c => adoptedUris.value.includes(c.uri))
+    // snippet も渡す = AI 構築が抜粋から事実（電話番号等）を抽出する材料（改修依頼 2026-08-21 第3弾）
+    .map(c => ({ title: c.title, uri: c.uri, ...(c.snippet ? { snippet: c.snippet } : {}) })))
 
 async function runBuild(): Promise<void> {
   if (!selectedId.value || researchLoading.value) return
@@ -420,12 +425,24 @@ const diffRows = computed(() => {
     { key: 'strategyNotes', label: '補足メモ' },
     { key: 'businessNotes', label: '事業メモ' },
   ]
-  return fields.map(f => ({
+  const rows: { key: string; label: string; current: string; proposed: string; changed: boolean }[] = fields.map(f => ({
     ...f,
     current: cur?.[f.key] ?? '',
     proposed: proposal.value![f.key],
     changed: (cur?.[f.key] ?? '') !== proposal.value![f.key],
   }))
+  // 電話番号（基本情報 = 会社マスタ）の提案行（改修依頼 2026-08-21 第3弾）。
+  // 取得なし（''）= 基本情報を変更しない（マスタを AI で消さない安全側）ため changed は常に false
+  const proposedPhone = proposal.value.phone
+  const curPhone = company.value?.phone ?? ''
+  rows.push({
+    key: 'phone',
+    label: '電話番号（基本情報）',
+    current: curPhone,
+    proposed: proposedPhone || '（情報源から取得できませんでした。基本情報の電話番号は変更しません）',
+    changed: !!proposedPhone && proposedPhone !== curPhone,
+  })
+  return rows
 })
 
 async function applyProposal(): Promise<void> {
@@ -529,6 +546,13 @@ async function onRevert(noteId: string): Promise<void> {
             <div class="flex items-start gap-2">
               <dt class="w-20 shrink-0 text-[11px] font-semibold text-muted">所在地</dt>
               <dd class="min-w-0">{{ company.location || '未設定' }}</dd>
+            </div>
+            <!-- 電話番号（改修依頼 2026-08-21 第3弾。AI リサーチの反映でも更新される） -->
+            <div class="flex items-start gap-2">
+              <dt class="w-20 shrink-0 text-[11px] font-semibold text-muted">電話番号</dt>
+              <dd class="min-w-0">
+                <Phone class="mr-1 inline h-3.5 w-3.5 text-muted" aria-hidden="true" />{{ company.phone || '未設定' }}
+              </dd>
             </div>
             <div class="flex items-start gap-2">
               <dt class="w-20 shrink-0 text-[11px] font-semibold text-muted">説明</dt>
@@ -808,9 +832,14 @@ async function onRevert(noteId: string): Promise<void> {
             <input v-model="companyForm.size" type="text" class="input" placeholder="例）100-300名" aria-label="規模">
           </UiFormField>
         </div>
-        <UiFormField label="所在地">
-          <input v-model="companyForm.location" type="text" class="input" placeholder="例）東京都" aria-label="所在地">
-        </UiFormField>
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <UiFormField label="所在地">
+            <input v-model="companyForm.location" type="text" class="input" placeholder="例）東京都" aria-label="所在地">
+          </UiFormField>
+          <UiFormField label="電話番号">
+            <input v-model="companyForm.phone" type="tel" class="input" placeholder="例）03-1234-5678" aria-label="電話番号">
+          </UiFormField>
+        </div>
         <UiFormField label="説明">
           <textarea v-model="companyForm.description" class="textarea min-h-20" aria-label="説明" />
         </UiFormField>
@@ -896,6 +925,7 @@ async function onRevert(noteId: string): Promise<void> {
         <p class="text-[12px] text-sub">
           採用した {{ adoptedSources.length }} 件の情報から構築した提案値です。「反映」すると定性情報が更新され、
           採用ソースと反映前の値がリサーチノートに自動追記されます（あとから取り消せます）。
+          <template v-if="proposal?.phone">電話番号が取得できたため、反映すると基本情報の電話番号も更新されます（取消で元に戻ります）。</template>
           <span v-if="!researchLlm" class="text-warn">現在はデモ生成（決定的ヒューリスティック）です。</span>
         </p>
         <div v-for="row in diffRows" :key="row.key" class="grid gap-1.5 sm:grid-cols-2">

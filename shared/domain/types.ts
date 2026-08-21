@@ -447,10 +447,13 @@ export interface CustomerContext {
 export const CUSTOMER_CONTEXT_NOTE_KINDS = ['note', 'research'] as const
 export type CustomerContextNoteKind = (typeof CUSTOMER_CONTEXT_NOTE_KINDS)[number]
 
-/** AI リサーチの採用ソース（タイトル + URL） */
+/** AI リサーチの採用ソース（タイトル + URL + 抜粋）。
+ *  snippet は調査結果の抜粋（改修依頼 2026-08-21 第3弾 = AI 構築が電話番号等の事実を抽出する材料。
+ *  旧データ・旧クライアントは未定義 = 原則7） */
 export interface CustomerContextResearchSource {
   title: string
   uri: string
+  snippet?: string
 }
 
 /**
@@ -461,8 +464,10 @@ export interface CustomerContextResearchSource {
 export interface CustomerContextNotePayload {
   sources?: CustomerContextResearchSource[]
   /** 反映前の定性情報スナップショット（businessNotes は 2026-08-21 追加 = 旧ノートは未定義。
-   *  復元時は未定義を「現在値を保持」として扱う = 旧スナップショットが新項目を消さない〔原則7〕） */
-  before?: { vision: string; challenges: string; strategyNotes: string; businessNotes?: string }
+   *  復元時は未定義を「現在値を保持」として扱う = 旧スナップショットが新項目を消さない〔原則7〕。
+   *  companyPhone = 反映で会社マスタの電話番号を**変更した場合のみ**保存する変更前の値
+   *  （改修依頼 2026-08-21 第3弾。キーなし = 電話番号は変更していない → 取消でも触らない） */
+  before?: { vision: string; challenges: string; strategyNotes: string; businessNotes?: string; companyPhone?: string }
   revertedAt?: string
 }
 
@@ -521,6 +526,9 @@ export interface Company {
   size: string
   location: string
   description: string
+  /** 代表電話番号（改修依頼 2026-08-21 第3弾 = 0085。旧データ未定義 = '' 扱い〔原則7〕。
+   *  形式は自由入力（contacts.phone と同様）。AI リサーチの反映でも更新できる */
+  phone?: string
   ownerMemberId: string | null
   fiscalStartMonth: number | null // 自社のみ使用
   active: boolean

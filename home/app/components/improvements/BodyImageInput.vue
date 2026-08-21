@@ -12,6 +12,7 @@
  * 直後は「整形前に戻す」で取り消せる（再編集したら undo は破棄 = 原則9.5）。
  */
 import { ImagePlus, Loader2, Undo2, Wand2, X } from 'lucide-vue-next'
+import type { TextAssistRef } from '~/composables/useTextAssist'
 import {
   IMPROVEMENT_IMAGE_MAX_CHARS, IMPROVEMENT_IMAGES_MAX,
   type ImprovementRequestImage,
@@ -67,9 +68,14 @@ watch([imageBusy, aiBusy], ([img, ai]) => emit('update:busy', img || ai))
 const undoSource = ref<string | null>(null)
 /** 整形で反映したテキスト（modelValue がこれ以外へ変わったら = 再編集されたら undo を破棄） */
 const formattedResult = ref('')
+/** LLM 整形が参照した資料（RAG = 改修依頼 2026-08-21 第3弾。再編集で表示をクリア） */
+const formatRefs = ref<TextAssistRef[]>([])
 
 watch(() => props.modelValue, (v) => {
-  if (undoSource.value !== null && v !== formattedResult.value) undoSource.value = null
+  if (undoSource.value !== null && v !== formattedResult.value) {
+    undoSource.value = null
+    formatRefs.value = []
+  }
 })
 
 /** AI で整形（mock = 決定的ヒューリスティック即時 / API = /v1/assist/format-text）。整形前を保持して戻せる */
@@ -93,6 +99,7 @@ async function runAiFormat(): Promise<void> {
     }
     undoSource.value = current
     formattedResult.value = res.text
+    formatRefs.value = res.refs
     emit('update:modelValue', res.text)
     showToast(`AIで整形しました（${res.llm ? 'LLM' : 'ルールベース'}）`, 'ok')
   } finally {
@@ -105,6 +112,7 @@ function undoAiFormat(): void {
   if (undoSource.value === null) return
   const prev = undoSource.value
   undoSource.value = null
+  formatRefs.value = []
   emit('update:modelValue', prev)
   showToast('整形前に戻しました', 'ok')
 }
@@ -284,6 +292,10 @@ onBeforeUnmount(() => {
         </button>
         <span v-if="imagesEditable" class="text-[11px] text-muted">貼り付け（Ctrl+V / ⌘V）でも添付できます</span>
       </div>
+      <!-- LLM 整形が参照した資料（RAG = 改修依頼 2026-08-21 第3弾）。再編集・undo で消える -->
+      <p v-if="formatRefs.length > 0" class="mt-1 text-[11px] text-muted" aria-live="polite">
+        参照した資料: {{ formatRefs.map(r => r.title).join(' / ') }}（本アプリの仕様書・マニュアル）
+      </p>
       <input
         ref="imageInput"
         type="file"

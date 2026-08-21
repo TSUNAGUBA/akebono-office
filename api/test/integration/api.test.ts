@@ -8096,10 +8096,12 @@ describe('AIで整形（POST /v1/assist/format-text = 改修依頼 2026-08-20）
       as: MEMBER, body: { text: '要望: ボタンを大きくしたい\n現状：小さい\n\n\n改善：\n・+2px にする' },
     })
     expect(res.status).toBe(200)
-    const data = res.json.data as { text: string; llm: boolean }
+    const data = res.json.data as { text: string; llm: boolean; refs: unknown[] }
     expect(data.llm).toBe(false) // 統合テスト環境は vertexProjectId='' = ヒューリスティック
     // 節整形（半角コロン → 全角・節の前に空行・連続空行の圧縮）+ 箇条書きの統一（・ → - ）
     expect(data.text).toBe('要望：ボタンを大きくしたい\n\n現状：小さい\n\n改善：\n- +2px にする')
+    // RAG 参照（第3弾）はルールベース時は空（資料を使わないため。LLM 整形時のみ id+title が入る）
+    expect(data.refs).toEqual([])
   })
   it('未認証は 401・空入力はそのまま返す・上限超過は AKO-RAS-003', async () => {
     expect((await api('POST', '/v1/assist/format-text', { body: { text: 'x' } })).status).toBe(401)
@@ -8432,7 +8434,7 @@ describe('顧客コンテキスト（customer_contexts + notes + AI リサーチ
   interface CtxRow { id: string; companyId: string; vision: string; challenges: string; strategyNotes: string; businessNotes: string; updatedByMemberId: string; updatedByName: string }
   interface NoteRow {
     id: string; companyId: string; kind: string; body: string; memberName: string; archivedAt: string | null
-    payload: { sources?: { title: string; uri: string }[]; before?: { vision: string; challenges: string; strategyNotes: string; businessNotes?: string }; revertedAt?: string } | null
+    payload: { sources?: { title: string; uri: string; snippet?: string }[]; before?: { vision: string; challenges: string; strategyNotes: string; businessNotes?: string; companyPhone?: string }; revertedAt?: string } | null
   }
 
   it('定性情報の upsert: 新規作成 → 部分更新（送っていないフィールドが保持される = Zod v4 回帰の教訓）', async () => {
@@ -8651,6 +8653,58 @@ describe('顧客コンテキスト（customer_contexts + notes + AI リサーチ
     const { rows: [cnt2] } = await pool.query(
       `SELECT count(*)::int AS n FROM customer_context_notes WHERE company_id = $1`, [CCTX_COMPANY])
     expect(cnt2.n).toBe(cnt.n) // research ノートも作られない
+  })
+
+  it('反映の電話番号: 非空提案は会社マスタを更新し before.companyPhone に変更前を保存 → 取消で復元（第3弾・原則9.5）', async () => {
+    const phoneOf = async (): Promise<string> => {
+      const { rows } = await pool.query<{ phone: string }>(`SELECT phone FROM companies WHERE id = $1`, [CCTX_COMPANY])
+      return rows[0]!.phone
+    }
+    const basePhone = await phoneOf() // 直前のテスト状態に依存しないよう現在値を基準に検証する
+    const applied = await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/research/apply`, {
+      as: ADMIN,
+      body: { vision: '電話番号つき反映', challenges: '・課題', strategyNotes: '補足', businessNotes: '',
+        phone: '03-9999-0001',
+        sources: [{ title: '会社概要（デモ）', uri: 'https://example.com/phone-apply/', snippet: '代表電話: 03-9999-0001' }] },
+    })
+    expect(applied.status).toBe(201)
+    expect(await phoneOf()).toBe('03-9999-0001')
+    const noteId = (applied.json.data as { id: string }).id
+    const note = (applied.json.data as { note: NoteRow }).note
+    expect(note.payload?.before?.companyPhone).toBe(basePhone) // 変更前の値を保存
+    // 取消 = 定性情報とあわせて電話番号も反映前へ復元される
+    const reverted = await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/research/${noteId}/revert`, { as: MEMBER })
+    expect(reverted.status).toBe(200)
+    expect(await phoneOf()).toBe(basePhone)
+  })
+
+  it('反映の電話番号: 空提案（取得なし）・現在値と同一の提案は会社マスタを変更せず before に companyPhone を保存しない', async () => {
+    await pool.query(`UPDATE companies SET phone = '03-8888-0002' WHERE id = $1`, [CCTX_COMPANY])
+    // 空提案 = マスタを消さない
+    const emptyApply = await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/research/apply`, {
+      as: ADMIN,
+      body: { vision: '電話番号なし反映', challenges: '', strategyNotes: '', businessNotes: '', phone: '',
+        sources: [{ title: 'ニュース（デモ）', uri: 'https://example.com/no-phone/' }] },
+    })
+    expect(emptyApply.status).toBe(201)
+    const { rows: [r1] } = await pool.query<{ phone: string }>(`SELECT phone FROM companies WHERE id = $1`, [CCTX_COMPANY])
+    expect(r1!.phone).toBe('03-8888-0002')
+    const note1 = (emptyApply.json.data as { note: NoteRow }).note
+    expect(note1.payload?.before && 'companyPhone' in note1.payload.before).toBe(false)
+    // 取消しても電話番号は触らない（companyPhone キーなし = 変更していないノート）
+    const noteId1 = (emptyApply.json.data as { id: string }).id
+    await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/research/${noteId1}/revert`, { as: MEMBER })
+    const { rows: [r2] } = await pool.query<{ phone: string }>(`SELECT phone FROM companies WHERE id = $1`, [CCTX_COMPANY])
+    expect(r2!.phone).toBe('03-8888-0002')
+    // 現在値と同一の提案 = 変更なし → companyPhone キーなし
+    const sameApply = await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/research/apply`, {
+      as: ADMIN,
+      body: { vision: '同一電話番号の反映', challenges: '', strategyNotes: '', businessNotes: '', phone: '03-8888-0002',
+        sources: [{ title: '会社概要（デモ）', uri: 'https://example.com/same-phone/' }] },
+    })
+    expect(sameApply.status).toBe(201)
+    const note2 = (sameApply.json.data as { note: NoteRow }).note
+    expect(note2.payload?.before && 'companyPhone' in note2.payload.before).toBe(false)
   })
 })
 

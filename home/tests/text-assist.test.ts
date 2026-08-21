@@ -1,9 +1,10 @@
 /**
- * 「AIで整形」（改修依頼 2026-08-20）の決定的整形（shared/domain/text-assist）。
- * mock モードの唯一のロジックであり、API モードの LLM 失敗時フォールバックでもある（両モード parity）。
+ * 「AIで整形」（改修依頼 2026-08-20 → RAG 対応 2026-08-21 第3弾）の決定的ロジック（shared/domain/text-assist）。
+ * - heuristicFormatRequestText = mock モードの唯一の整形であり、API モードの LLM 失敗時フォールバック（両モード parity）
+ * - formatTextKbRefs = LLM 整形時の RAG 参照ドキュメント選定（AI 知識ベース = kbFindRelated の決定的字句検索）
  */
 import { describe, expect, it } from 'vitest'
-import { FORMAT_TEXT_CAP, heuristicFormatRequestText } from '../../shared/domain/text-assist'
+import { FORMAT_KB_REFS_MAX, FORMAT_TEXT_CAP, formatTextKbRefs, heuristicFormatRequestText } from '../../shared/domain/text-assist'
 
 describe('heuristicFormatRequestText（決定的整形）', () => {
   it('空・空白のみの入力はそのまま返す', () => {
@@ -48,5 +49,21 @@ describe('heuristicFormatRequestText（決定的整形）', () => {
 
   it('CRLF 改行も LF として扱う', () => {
     expect(heuristicFormatRequestText('要望：A\r\n現状：B')).toBe('要望：A\n\n現状：B')
+  })
+})
+
+describe('formatTextKbRefs（「AIで整形」の RAG 参照選定 = 改修依頼 2026-08-21 第3弾）', () => {
+  it('関連する KB ドキュメントを上限件数まで決定的に返す（同一入力 = 同一出力）', () => {
+    const query = '週報の提出画面で、チームタブのマトリクス表示が見づらいので改善したい'
+    const a = formatTextKbRefs(query)
+    const b = formatTextKbRefs(query)
+    expect(a.map(d => d.id)).toEqual(b.map(d => d.id))
+    expect(a.length).toBeGreaterThan(0)
+    expect(a.length).toBeLessThanOrEqual(FORMAT_KB_REFS_MAX)
+    // 週報に関する要望 → 週報関連ドキュメントが参照に入る（表記の正規化材料）
+    expect(a.some(d => d.title.includes('週報') || d.keywords.includes('週報'))).toBe(true)
+  })
+  it('関連ドキュメントが無い入力は空配列（RAG は補助 = 整形自体は止めない・原則4）', () => {
+    expect(formatTextKbRefs('qzxwvu')).toEqual([])
   })
 })

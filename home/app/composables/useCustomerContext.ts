@@ -17,17 +17,20 @@
 import {
   CUSTOMER_CONTEXT_NOTE_CAP as NOTE_CAP,
   type CustomerContextInput,
+  type CustomerContextBuildProposal,
   customerContextError, customerContextNoteError,
   type CustomerResearchCandidate, type CustomerResearchHints,
+  normalizeContextPhone,
   heuristicContextBuild, heuristicResearchCandidates,
   normalizeCustomerContext, restoreContextFromSnapshot,
 } from '../../../shared/domain/customer-context'
 import { capCodePoints as capCp } from '../../../shared/domain/customer-log'
 import type {
-  Company, CustomerContext, CustomerContextNote, CustomerContextResearchSource, Result,
+  Company, CustomerContext, CustomerContextNote, CustomerContextNotePayload,
+  CustomerContextResearchSource, Result,
 } from '~/types/domain'
 
-export type { CustomerContextInput, CustomerResearchCandidate, CustomerResearchHints }
+export type { CustomerContextBuildProposal, CustomerContextInput, CustomerResearchCandidate, CustomerResearchHints }
 
 /** commit() 失敗（localStorage 容量超過等）の共通エラー（storageCommitError の AKO-CTX 版） */
 const COMMIT_ERROR = {
@@ -46,7 +49,7 @@ type ResearchResult
   = { ok: true; candidates: CustomerResearchCandidate[]; llm: boolean }
     | { ok: false; error: { code: string; message: string } }
 type BuildResult
-  = { ok: true; proposal: CustomerContextInput; llm: boolean }
+  = { ok: true; proposal: CustomerContextBuildProposal; llm: boolean }
     | { ok: false; error: { code: string; message: string } }
 
 export function useCustomerContext() {
@@ -219,7 +222,7 @@ export function useCustomerContext() {
   ): Promise<BuildResult> {
     if (isApi) {
       try {
-        const data = await apiFetch<{ proposal: CustomerContextInput; llm: boolean }>(
+        const data = await apiFetch<{ proposal: CustomerContextBuildProposal; llm: boolean }>(
           `/v1/customer-contexts/${encodeURIComponent(companyId)}/research/build`,
           { method: 'POST', body: { sources }, timeoutMs: 60_000 })
         return { ok: true, proposal: data.proposal, llm: data.llm === true }
@@ -242,7 +245,7 @@ export function useCustomerContext() {
    * モックは 1 回の commit にまとめ、失敗時は両コレクションをロールバックする（片肺の反映を作らない）
    */
   async function applyResearch(
-    companyId: string, proposal: CustomerContextInput, sources: CustomerContextResearchSource[],
+    companyId: string, proposal: CustomerContextBuildProposal, sources: CustomerContextResearchSource[],
   ): Promise<Result> {
     const n = normalizeCustomerContext(proposal)
     const message = customerContextError(n)
@@ -250,14 +253,17 @@ export function useCustomerContext() {
     if (sources.length === 0) {
       return { ok: false, error: { code: 'AKO-CTX-001', message: '採用する情報源を 1 件以上選択してください' } }
     }
+    // 電話番号の提案（第3弾）。'' = 取得なし → 会社マスタの電話番号は変更しない
+    const proposedPhone = normalizeContextPhone(proposal.phone)
     if (isApi) {
       const res = await apiWrite<{ id?: string }>(
         `/v1/customer-contexts/${encodeURIComponent(companyId)}/research/apply`,
-        { body: { ...n, sources }, reload: ['customerContexts', 'customerContextNotes'] })
+        // companies も再取得 = 電話番号の反映を基本情報表示へ即時反映（SoT → キャッシュ）
+        { body: { ...n, phone: proposedPhone, sources }, reload: ['customerContexts', 'customerContextNotes', 'companies'] })
       return res.ok ? { ok: true, id: res.data?.id } : res
     }
     const cur = contextOf(companyId)
-    const before = {
+    const before: NonNullable<CustomerContextNotePayload['before']> = {
       vision: cur?.vision ?? '',
       challenges: cur?.challenges ?? '',
       strategyNotes: cur?.strategyNotes ?? '',
@@ -266,6 +272,17 @@ export function useCustomerContext() {
     const prevCtx = ctxRows.value
     const prevNotes = noteRows.value
     const now = nowJstIso()
+    // 電話番号の反映（API と同一規則 = 原則6）: 非空かつ現在値と異なる場合のみ会社マスタを更新し、
+    // 変更前の値を before.companyPhone に保存（取消で復元 = 原則9.5）。失敗時ロールバック対象
+    const companiesTbl = tbl('companies')
+    const prevCompanies = companiesTbl.value
+    const companyRow = (companiesTbl.value as Company[]).find(r => r.id === companyId)
+    const curPhone = companyRow?.phone ?? ''
+    if (proposedPhone && companyRow && proposedPhone !== curPhone) {
+      before.companyPhone = curPhone
+      companiesTbl.value = (companiesTbl.value as Company[]).map(r =>
+        r.id === companyId ? { ...r, phone: proposedPhone } : r)
+    }
     // 定性情報の upsert（commit は最後に 1 回 = ノートと合わせて原子的に永続化）
     const all = ctxRows.value as CustomerContext[]
     if (cur) {
@@ -299,6 +316,7 @@ export function useCustomerContext() {
     if (!commit()) {
       ctxRows.value = prevCtx
       noteRows.value = prevNotes
+      companiesTbl.value = prevCompanies // 電話番号の反映もロールバック（片肺の反映を作らない）
       return { ok: false, error: COMMIT_ERROR }
     }
     return { ok: true, id: noteId }
@@ -312,7 +330,8 @@ export function useCustomerContext() {
     if (isApi) {
       const res = await apiWrite(
         `/v1/customer-contexts/${encodeURIComponent(companyId)}/research/${encodeURIComponent(noteId)}/revert`,
-        { reload: ['customerContexts', 'customerContextNotes'], idempotent: true })
+        // companies も再取得 = 電話番号の復元を基本情報表示へ即時反映（SoT → キャッシュ）
+        { reload: ['customerContexts', 'customerContextNotes', 'companies'], idempotent: true })
       return res.ok ? { ok: true, id: noteId } : res
     }
     const note = (noteRows.value as CustomerContextNote[]).find(r => r.id === noteId && r.companyId === companyId)
@@ -329,6 +348,14 @@ export function useCustomerContext() {
     const prevCtx = ctxRows.value
     const prevNotes = noteRows.value
     const now = nowJstIso()
+    // 電話番号の復元（API と同一規則 = 原則6）: 反映で変更したノート（companyPhone キーあり）だけが対象
+    const companiesTbl = tbl('companies')
+    const prevCompanies = companiesTbl.value
+    if (note.payload.before.companyPhone !== undefined) {
+      const restorePhone = normalizeContextPhone(note.payload.before.companyPhone)
+      companiesTbl.value = (companiesTbl.value as Company[]).map(r =>
+        r.id === companyId && (r.phone ?? '') !== restorePhone ? { ...r, phone: restorePhone } : r)
+    }
     const all = ctxRows.value as CustomerContext[]
     // 反映前が全項目空（新規登録の反映だった）でも「空へ戻す」= 復元として行を保持する（API と同じ設計判断）
     ctxRows.value = all.some(r => r.companyId === companyId)
@@ -342,6 +369,7 @@ export function useCustomerContext() {
     if (!commit()) {
       ctxRows.value = prevCtx
       noteRows.value = prevNotes
+      companiesTbl.value = prevCompanies // 電話番号の復元もロールバック
       return { ok: false, error: COMMIT_ERROR }
     }
     return { ok: true, id: noteId }

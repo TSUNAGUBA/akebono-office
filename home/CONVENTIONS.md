@@ -165,8 +165,11 @@ const { lookupCompany, createCompany } = useCompanyResolve()
 // 顧客コンテキスト（/customer-context。改修依頼 2026-08-20。定性情報 = 1社1行 upsert〔customer_contexts 0076。
 // ビジョン/経営課題/補足メモ + 事業メモ businessNotes = 0084・改修依頼 2026-08-21 第2弾〕・
 // Memo/リサーチ履歴 = 追記 + 論理取消〔customer_context_notes〕。AI リサーチ = 候補リスト化（API = grounded search /
-// mock = 決定的デモ。候補リンクは新規タブで開ける）→ 採用 → AI 構築（LLM → shared/domain/customer-context の
-// ヒューリスティックへフォールバック。事業メモも提案）→ 反映（payload.before 保存）→ 「反映を取り消す」で復元 = 原則9.5。
+// mock = 決定的デモ。候補リンクは新規タブで開ける）→ 採用（title + uri + 抜粋 snippet = 第3弾）→
+// AI 構築（LLM → shared/domain/customer-context のヒューリスティックへフォールバック。事業メモも提案。
+// 電話番号 phone は情報源の抜粋に実在する記載のみ提案 = 創作禁止・第3弾）→ 反映（payload.before 保存。
+// phone 非空かつ現在値と異なる場合のみ companies.phone も更新 = before.companyPhone に変更前を保存）→
+// 「反映を取り消す」で復元 = 原則9.5（companyPhone キーがあるノートは電話番号も復元）。
 // 旧 research ノート（before.businessNotes キーなし）の取消は現在の事業メモを保持（原則7）。機能キー customer-context）
 const ctx = useCustomerContext()  // contextOf / notesOf / archivedNotesOf / saveContext / addNote / archiveNote / restoreNote / research / buildProposal / applyResearch / revertResearch / refresh
 
@@ -277,7 +280,7 @@ const imp = useImprovements()  // submit（body + 対象ページ〔既定=開�
 | `ImprovementsTagBadges` | tags（ImprovementRequestTag[]・省略可）, wrapperClass（タグがあるときだけ描画する外枠クラス。未指定 = contents = 素通し）。要望タグ（壁打ち/お任せ = F-42-17）のバッジ列（title で意味表示。SoT = IMPROVEMENT_REQUEST_TAG_META。空判定・normalize は部品側 = 未知値は落とす）。受付箱一覧・要望詳細・改修単位ドロワーの元要望で共用（原則3・2026-08-18） |
 | `ImprovementsTagToggle` | v-model（ImprovementRequestTag[]・常に要素数 1）, ariaLabel。要望タグ（お任せ/壁打ち）の**二者択一セグメント型トグル**（改修依頼 2026-08-20。role=radiogroup/radio + aria-checked + roving tabindex + 矢印キー移動 = UiRadioCards と同作法・原則3）。片方を選ぶと他方が自動で外れ、常にどちらか 1 つを保つ。既定 = お任せ。既存データ（0 件/2 件）はマウント時に 1 件へ正規化（原則7）。SoT = IMPROVEMENT_REQUEST_TAG_META。ImprovementSubmit と ImprovementsRequestEditForm で共用 |
 | `ImprovementsRequestEditForm` | initialBody / initialTags / initialLinks / initialImages / **initialTargetSpot（対象箇所 = 改修依頼 2026-08-21 で編集欄を追加）** / busy / active。要望の編集フォーム共通部品（本文＋画像〔ImprovementsBodyImageInput〕+ タグ〔ImprovementsTagToggle = 二者択一トグル・改修依頼 2026-08-20〕+ 参考リンク〔ImprovementsLinkEditor〕+ **対象箇所 input〔上限 IMPROVEMENT_TARGET_SPOT_CAP〕**。保存は `{body,tags,links,images,targetSpot}` を emit・キャンセル emit。F-42-16 の本文のみ編集を全項目編集へ拡張 = 改修依頼 2026-08-19。/improvements の生要望ドロワーと ImprovementSubmit の送信直後修正で共用 = 原則3）。旧 `ImprovementsBodyEditForm`（本文のみ）は本部品へ統合し廃止 |
-| `ImprovementsBodyImageInput` | v-model（本文 string）/ v-model:images（ImprovementRequestImage[]）/ v-model:busy / rows / placeholder / bodyAriaLabel / imagesEditable / active。**要望本文の入力 + 画像添付を一体化した共通部品**（テキストエリアと画像添付ツールバー〔「画像」ボタン + 貼り付けヒント〕を 1 つの枠に見せつつ、ツールバーはテキストエリアの「下」に別要素として積む = 長文スクロール時もテキストが重ならない〔改修依頼 2026-08-20 で absolute 重ね + pb-11 を是正〕。テキストエリア内の貼り付け〔テキストはそのまま・画像はファイルとして添付〕・D&D。縮小・上限・種別チェックは共通。改修依頼 2026-08-19 第4弾。旧 `ImprovementsAttachmentEditor`〔独立の添付フォーム〕を廃止し本部品 + LinkEditor に分割）。ImprovementSubmit と ImprovementsRequestEditForm で共用 |
+| `ImprovementsBodyImageInput` | v-model（本文 string）/ v-model:images（ImprovementRequestImage[]）/ v-model:busy / rows / placeholder / bodyAriaLabel / imagesEditable / active。**要望本文の入力 + 画像添付を一体化した共通部品**（テキストエリアと画像添付ツールバー〔「画像」ボタン + 貼り付けヒント〕を 1 つの枠に見せつつ、ツールバーはテキストエリアの「下」に別要素として積む = 長文スクロール時もテキストが重ならない〔改修依頼 2026-08-20 で absolute 重ね + pb-11 を是正〕。テキストエリア内の貼り付け〔テキストはそのまま・画像はファイルとして添付〕・D&D。縮小・上限・種別チェックは共通。改修依頼 2026-08-19 第4弾。旧 `ImprovementsAttachmentEditor`〔独立の添付フォーム〕を廃止し本部品 + LinkEditor に分割）。**ツールバーの「AIで整形」= useTextAssist（LLM 整形時は AI 知識ベースの RAG 参照 = 改修依頼 2026-08-21 第3弾。「参照した資料: ◯◯」を入力欄下に表示・再編集/undo でクリア。「整形前に戻す」= 原則9.5）**。ImprovementSubmit と ImprovementsRequestEditForm で共用 |
 | `ImprovementsLinkEditor` | v-model:links（string[]）。**参考リンク（URL 配列）の編集共通部品**（追加/削除/編集。改善要望の投稿・編集と活動記録 3 種で共用 = 原則3。改修依頼 2026-08-19 第4弾。旧 AttachmentEditor のリンク編集部分を抽出） |
 | `ImprovementsRequestKanban` | requests（ImprovementRequest[]）・statusOf（r → ImprovementInboxStatus = 必須 prop。表示ステータスの導出は親の `imp.inboxStatusOf` に一元化 = 原則6）。**生要望の受付箱ステータス別カンバン**（未確認/検討中/改善対応/運用対応/継続検討/対応見送り/対応済み/解決済み = IMPROVEMENT_INBOX_STATUSES の 8 列・改修依頼 2026-08-21。**継続検討カードに再検討日バッジ**。参照専用・カード押下で `open` emit。全員閲覧可） |
 | `ImprovementsRequestGantt` | requests（ImprovementRequest[]）・statusOf（同上）。**生要望の投稿タイムライン**（投稿日 createdAt に 1 目盛りバー・受付箱ステータス色〔未確認 warn/検討中 info/改善対応 brand/運用対応 ok/継続検討 serious/対応見送り crit/対応済み ok/解決済み muted = 改修依頼 2026-08-21〕・スケール月/週/日切替 = shared/domain/gantt 共用 = 原則3。参照専用・`open` emit。全員閲覧可） |
