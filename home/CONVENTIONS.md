@@ -162,10 +162,12 @@ const alog = useActivityLogs('sales' /* or 'partner' */)  // logsOf / archivedOf
 // 顧客(会社)コンボボックスの名寄せ・新規登録（モック側の共通実装。API 側は api/src/lib/company-resolve）
 const { lookupCompany, createCompany } = useCompanyResolve()
 
-// 顧客コンテキスト（/customer-context。改修依頼 2026-08-20。定性情報 = 1社1行 upsert〔customer_contexts 0076〕・
+// 顧客コンテキスト（/customer-context。改修依頼 2026-08-20。定性情報 = 1社1行 upsert〔customer_contexts 0076。
+// ビジョン/経営課題/補足メモ + 事業メモ businessNotes = 0084・改修依頼 2026-08-21 第2弾〕・
 // Memo/リサーチ履歴 = 追記 + 論理取消〔customer_context_notes〕。AI リサーチ = 候補リスト化（API = grounded search /
-// mock = 決定的デモ）→ 採用 → AI 構築（LLM → shared/domain/customer-context のヒューリスティックへフォールバック）→
-// 反映（payload.before 保存）→ 「反映を取り消す」で復元 = 原則9.5。機能キー customer-context）
+// mock = 決定的デモ。候補リンクは新規タブで開ける）→ 採用 → AI 構築（LLM → shared/domain/customer-context の
+// ヒューリスティックへフォールバック。事業メモも提案）→ 反映（payload.before 保存）→ 「反映を取り消す」で復元 = 原則9.5。
+// 旧 research ノート（before.businessNotes キーなし）の取消は現在の事業メモを保持（原則7）。機能キー customer-context）
 const ctx = useCustomerContext()  // contextOf / notesOf / archivedNotesOf / saveContext / addNote / archiveNote / restoreNote / research / buildProposal / applyResearch / revertResearch / refresh
 
 // 休暇（F-04-5/9。種別別残数。付与は管理者/人事のみ・同日同種別はスキップ=冪等）
@@ -219,7 +221,7 @@ const imp = useImprovements()  // submit（body + 対象ページ〔既定=開�
 | コンポーネント | 用途 / 主要 props |
 |---|---|
 | `UiPageHeader` | title, description + #actions |
-| `UiSectionCard` | title, description, flush + #actions |
+| `UiSectionCard` | title, description, flush, fill, overflowVisible + #actions。overflowVisible = カードの `overflow-hidden`（角丸クリップ）を `overflow-visible` に切替（既定 false。コンボボックス等の絶対配置ドロップダウンをカード内に置くとき候補リストが下端でクリップされないように = 改修依頼 2026-08-21 第2弾・顧客コンテキストの会社セレクタ） |
 | `UiKpiCard` | label, value, sub, delta, inverse, icon(lucide名), to |
 | `UiDataTable` | columns(TableColumn[]), rows, clickable, maxHeight + `#cell-<key>`。`@row-click`。TableColumn.sortable:false = 行データにキーの無い仮想列（選択・操作等）を非ソート描画（2026-08-18） |
 | `UiDrawer` | open, title, width + #footer。`@close` |
@@ -230,7 +232,7 @@ const imp = useImprovements()  // submit（body + 対象ページ〔既定=開�
 | `UiChipTabs` | v-model(string), options({value,label}[])。単一選択のチップ行（カードメニューのカテゴリ切替等。バッチ7h） |
 | `UiRadioCards` | v-model(string), options({value,label,description?}[]), ariaLabel。**説明文を併記したカード型ラジオ選択**（role=radiogroup/radio + aria-checked・sm 2 列・タップ領域 min-h-44px。稟議の区分 = 説明を確認しながら選択 = 改修依頼 2026-08-18） |
 | `UiMultiCombobox` | v-model(string[]), options({value,label,tag?,tagTone?}[]), single（単一選択モード）。論理名で検索する複数選択オートコンプリート（権限設定の項目指定等）。tag/tagTone は候補行・選択チップの区分バッジ（雇用区分等。バッチ7k）。候補リストの開閉方向・最大高は `useDropdownDirection` 共通ロジック（UiCombobox と共有 = 2026-07-31）で下に収まらないとき上方向に開く（モバイルのボトムシートモーダル対応） |
-| `UiCombobox` | v-model(string = 選択 id・'' = 未選択/自由入力), v-model:text(string = 入力表示文字列), options({value,label}[]), allowCreate（自由入力の許可。既定 true）, createHint, disabled, showValue（候補右端に value を薄字併記。既定 true = id が意味を持つ用途。ラベルが識別情報を含む用途〔対象ページ =「名称（パス）」〕は false で重複表示抑止 = 改修依頼 2026-08-20）。**単一選択 + 自由入力**のオートコンプリート（顧客活動・サポート/営業活動の会社 = 未登録名を「新規登録名」として呼び出し側へ渡す。2026-07-31。改善要望の対象ページ選択 = allowCreate=false + showValue=false のオートコンプリート = 改修依頼 2026-08-20）。ラベル完全一致は自動選択（重複マスタ防止）。開閉方向は `useDropdownDirection`（UiMultiCombobox と共有） |
+| `UiCombobox` | v-model(string = 選択 id・'' = 未選択/自由入力), v-model:text(string = 入力表示文字列), options({value,label}[]), allowCreate（自由入力の許可。既定 true）, createHint, disabled, showValue（候補右端に value を薄字併記。既定 true = id が意味を持つ用途。ラベルが識別情報を含む用途〔対象ページ =「名称（パス）」〕は false で重複表示抑止 = 改修依頼 2026-08-20）。**単一選択 + 自由入力**のオートコンプリート（顧客活動・サポート/営業活動の会社 = 未登録名を「新規登録名」として呼び出し側へ渡す。2026-07-31。改善要望の対象ページ選択 = allowCreate=false + showValue=false のオートコンプリート = 改修依頼 2026-08-20）。ラベル完全一致は自動選択（重複マスタ防止）。開閉方向は `useDropdownDirection`（UiMultiCombobox と共有）。候補リストは絶対配置（z-20）のため **`overflow-hidden` な親（UiSectionCard 等）に置くとクリップされる** → 親カードに `overflowVisible` を指定する（改修依頼 2026-08-21 第2弾の知見） |
 | `UiFormField` | label, required, error, hint |
 | `UiSchemaForm` | fields(FieldDef[]), v-model(Record), errors |
 | `UiStatusBadge` | tone, label, dot |

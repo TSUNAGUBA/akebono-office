@@ -5,7 +5,7 @@
  * 会社を選ぶと、以下を 1 画面で可視化し、この画面から登録・修正できる:
  *  1. 基本情報（companies マスタ。編集ドロワー = useMasterCrudAsync('companies') の save）
  *  2. 関係（companyRelations の当該会社エッジ + 担当者(人)一覧。マスタ画面への導線付き）
- *  3. 定性情報（customerContexts: ビジョン/経営課題/補足メモ。1社1行の upsert・更新者/更新日時表示）
+ *  3. 定性情報（customerContexts: ビジョン/経営課題/補足メモ/事業メモ〔2026-08-21〕。1社1行の upsert・更新者/更新日時表示）
  *  4. 定量情報（ライブ導出・保存しない: 案件/活動ログ/顧客活動/サポート活動の件数と直近活動日）
  *  5. Memo（customerContextNotes の時系列メモ。20件ページング + 取消/復元 = 原則9.5）
  *  6. AI リサーチ（Web 調査 → 候補の採用 → 構築 → 差分確認 → 反映 → 取消。useCustomerContext 経由）
@@ -185,13 +185,14 @@ const companyContacts = computed(() => (tbl('contacts').value as Contact[])
 const currentContext = computed(() => (selectedId.value ? ctx.contextOf(selectedId.value) : null))
 const ctxEditing = ref(false)
 const ctxSaving = ref(false)
-const ctxForm = ref<CustomerContextInput>({ vision: '', challenges: '', strategyNotes: '' })
+const ctxForm = ref<CustomerContextInput>({ vision: '', challenges: '', strategyNotes: '', businessNotes: '' })
 
 function openCtxEdit(): void {
   ctxForm.value = {
     vision: currentContext.value?.vision ?? '',
     challenges: currentContext.value?.challenges ?? '',
     strategyNotes: currentContext.value?.strategyNotes ?? '',
+    businessNotes: currentContext.value?.businessNotes ?? '',
   }
   ctxEditing.value = true
 }
@@ -380,6 +381,11 @@ function toggleAdopt(uri: string): void {
     : [...adoptedUris.value, uri]
 }
 
+/** 候補リンクを新規タブで開けるか（http/https のみリンク化 = 外部誘導の安全側。改修依頼 2026-08-21） */
+function isHttpUrl(uri: string): boolean {
+  return /^https?:\/\/.+/.test(uri)
+}
+
 const adoptedSources = computed<CustomerContextResearchSource[]>(() =>
   candidates.value.filter(c => adoptedUris.value.includes(c.uri)).map(c => ({ title: c.title, uri: c.uri })))
 
@@ -412,6 +418,7 @@ const diffRows = computed(() => {
     { key: 'vision', label: 'ビジョン' },
     { key: 'challenges', label: '経営課題' },
     { key: 'strategyNotes', label: '補足メモ' },
+    { key: 'businessNotes', label: '事業メモ' },
   ]
   return fields.map(f => ({
     ...f,
@@ -457,8 +464,12 @@ async function onRevert(noteId: string): Promise<void> {
 
 <template>
   <div class="grid gap-3">
-    <!-- 顧客セレクタ -->
-    <UiSectionCard title="対象の顧客(会社)" description="会社を選ぶと基本情報・関係・定性/定量情報・メモを 1 画面で確認できます">
+    <!-- 顧客セレクタ（overflow-visible = 会社の候補リストがカード下端で切れない。改修依頼 2026-08-21） -->
+    <UiSectionCard
+      title="対象の顧客(会社)"
+      description="会社を選ぶと基本情報・関係・定性/定量情報・メモを 1 画面で確認できます"
+      overflow-visible
+    >
       <template #actions>
         <button type="button" class="btn btn-ghost btn-sm" aria-label="再読み込み" @click="ctx.refresh()">
           <RefreshCw class="h-3.5 w-3.5" aria-hidden="true" />
@@ -572,7 +583,7 @@ async function onRevert(noteId: string): Promise<void> {
       </div>
 
       <!-- 3. 定性情報 -->
-      <UiSectionCard title="定性情報" description="ビジョン・経営課題・補足メモ（チーム共有。上書き更新はチーム全員可）">
+      <UiSectionCard title="定性情報" description="ビジョン・経営課題・補足メモ・事業メモ（チーム共有。上書き更新はチーム全員可）">
         <template #actions>
           <div class="flex flex-wrap items-center gap-2">
             <button type="button" class="btn btn-sm" aria-label="AI の Web 調査で定性情報を更新" @click="openResearch">
@@ -615,6 +626,15 @@ async function onRevert(noteId: string): Promise<void> {
           <UiFormField label="補足メモ" hint="戦略メモなどの任意の定性情報">
             <textarea v-model="ctxForm.strategyNotes" class="textarea min-h-20" aria-label="補足メモ" />
           </UiFormField>
+          <!-- 事業メモ（改修依頼 2026-08-21）: 事業に関する事実を扱うフリーテキスト。AI 調査でも反映される -->
+          <UiFormField label="事業メモ" hint="昨季売上高・社員数・店舗数・配送センター（自社/他社・地域）等の事業に関する事実">
+            <textarea
+              v-model="ctxForm.businessNotes"
+              class="textarea min-h-20"
+              placeholder="例）・昨季売上高: 120 億円&#10;・従業員数: 850 名&#10;・店舗数: 34 店舗&#10;・配送センター: 自社 2 拠点（関東・関西）"
+              aria-label="事業メモ"
+            />
+          </UiFormField>
           <div class="flex items-center justify-end gap-2">
             <button type="button" class="btn" @click="ctxEditing = false">キャンセル</button>
             <button type="button" class="btn btn-primary" :disabled="ctxSaving" @click="saveCtx">
@@ -642,6 +662,10 @@ async function onRevert(noteId: string): Promise<void> {
           <div v-if="currentContext.strategyNotes">
             <p class="label">補足メモ</p>
             <p class="whitespace-pre-wrap text-[13px] leading-relaxed text-sub">{{ currentContext.strategyNotes }}</p>
+          </div>
+          <div v-if="currentContext.businessNotes">
+            <p class="label">事業メモ</p>
+            <p class="whitespace-pre-wrap text-[13px] leading-relaxed">{{ currentContext.businessNotes }}</p>
           </div>
           <p class="text-[11px] text-muted">
             最終更新: {{ currentContext.updatedByName || memberName(currentContext.updatedByMemberId) }} ・ {{ fmtDateLong(currentContext.updatedAt) }}
@@ -848,7 +872,18 @@ async function onRevert(noteId: string): Promise<void> {
               >
               <span class="min-w-0">
                 <span class="block text-[13px] font-semibold">{{ cand.title }}</span>
-                <span class="block truncate text-[11px] text-brand">{{ cand.uri }}</span>
+                <!-- リンク先を新規タブで開いて内容を確認できる（改修依頼 2026-08-21。クリックで
+                     チェックボックスをトグルさせない = @click.stop。http(s) 以外はテキストのまま = 安全側） -->
+                <a
+                  v-if="isHttpUrl(cand.uri)"
+                  :href="cand.uri"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="block truncate text-[11px] text-brand hover:underline"
+                  :aria-label="`「${cand.title}」を新規タブで開く`"
+                  @click.stop
+                ><ExternalLink class="mr-0.5 inline h-3 w-3" aria-hidden="true" />{{ cand.uri }}</a>
+                <span v-else class="block truncate text-[11px] text-brand">{{ cand.uri }}</span>
                 <span class="block text-[12px] leading-relaxed text-sub">{{ cand.snippet }}</span>
               </span>
             </label>

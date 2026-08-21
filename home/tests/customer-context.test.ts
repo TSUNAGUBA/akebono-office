@@ -16,20 +16,25 @@ import {
 } from '../../shared/domain/customer-context'
 
 describe('customerContextError（定性情報の検証）', () => {
-  it('いずれかの項目があれば null', () => {
+  it('いずれかの項目があれば null（事業メモ = 2026-08-21 追加も対象）', () => {
     expect(customerContextError({ vision: 'ビジョン', challenges: '', strategyNotes: '' })).toBeNull()
     expect(customerContextError({ vision: '', challenges: '課題', strategyNotes: '' })).toBeNull()
     expect(customerContextError({ vision: '', challenges: '', strategyNotes: 'メモ' })).toBeNull()
+    expect(customerContextError({ vision: '', challenges: '', strategyNotes: '', businessNotes: '昨季売上高: 10 億円' })).toBeNull()
   })
-  it('3 項目すべて空（空白のみ含む）はエラー', () => {
-    expect(customerContextError({ vision: '', challenges: '', strategyNotes: '' })).not.toBeNull()
-    expect(customerContextError({ vision: '  ', challenges: '\n', strategyNotes: ' ' })).not.toBeNull()
+  it('4 項目すべて空（空白のみ含む）はエラー（メッセージに事業メモを含む）', () => {
+    expect(customerContextError({ vision: '', challenges: '', strategyNotes: '' }))
+      .toBe('ビジョン・経営課題・補足メモ・事業メモのいずれかを入力してください')
+    expect(customerContextError({ vision: '  ', challenges: '\n', strategyNotes: ' ', businessNotes: ' ' })).not.toBeNull()
   })
-  it('normalizeCustomerContext は trim + コードポイント cap', () => {
+  it('normalizeCustomerContext は trim + コードポイント cap。businessNotes 未定義 = ""（旧データ互換 = 原則7）', () => {
     const long = 'あ'.repeat(CUSTOMER_CONTEXT_TEXT_CAP + 10)
     const n = normalizeCustomerContext({ vision: `  ${long}  `, challenges: ' x ', strategyNotes: '' })
     expect([...n.vision].length).toBe(CUSTOMER_CONTEXT_TEXT_CAP)
     expect(n.challenges).toBe('x')
+    expect(n.businessNotes).toBe('') // 未定義（旧データ・旧クライアント）は '' へ
+    expect(normalizeCustomerContext({ vision: '', challenges: '', strategyNotes: '', businessNotes: ` ${long} ` }).businessNotes.length)
+      .toBe(CUSTOMER_CONTEXT_TEXT_CAP)
   })
 })
 
@@ -91,7 +96,7 @@ describe('heuristicContextBuild（決定的な定性情報の構築）', () => {
     { title: '公式サイト', uri: 'https://example.com/company/a/' },
     { title: 'ニュース記事', uri: 'https://news.example.com/articles/b' },
   ]
-  const empty = { vision: '', challenges: '', strategyNotes: '' }
+  const empty = { vision: '', challenges: '', strategyNotes: '', businessNotes: '' }
 
   it('決定性: 同一入力は常に同一出力・採用ソースの並び順に依存しない', () => {
     const a = heuristicContextBuild('アケボノ商事', sources, empty)
@@ -101,7 +106,7 @@ describe('heuristicContextBuild（決定的な定性情報の構築）', () => {
     expect(a).toEqual(reversed)
   })
 
-  it('3 項目とも空でない値を構築し、補足メモに採用ソース名を含める', () => {
+  it('4 項目とも空でない値を構築し、補足メモに採用ソース名を含める', () => {
     const built = heuristicContextBuild('アケボノ商事', sources, empty)
     expect(built.vision.length).toBeGreaterThan(0)
     expect(built.challenges.length).toBeGreaterThan(0)
@@ -110,6 +115,10 @@ describe('heuristicContextBuild（決定的な定性情報の構築）', () => {
     expect(built.strategyNotes).toContain('ニュース記事')
     // 経営課題は箇条書き（行頭「・」）
     for (const line of built.challenges.split('\n')) expect(line.startsWith('・')).toBe(true)
+    // 事業メモ（2026-08-21）: 実数値を創作しない定型ファクト（「デモ」明記）の箇条書き
+    expect(built.businessNotes.length).toBeGreaterThan(0)
+    expect(built.businessNotes).toContain('デモ')
+    for (const line of built.businessNotes.split('\n')) expect(line.startsWith('・')).toBe(true)
   })
 
   it('既存の登録値がある場合は補足メモで復元可能性（リサーチノート）を案内する', () => {

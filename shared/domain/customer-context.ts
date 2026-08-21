@@ -10,7 +10,7 @@
 import { hashStrShared } from './ai-tasks'
 import { capCodePoints } from './customer-log'
 
-/** 定性情報 3 項目（ビジョン・経営課題・補足メモ）それぞれの上限（コードポイント） */
+/** 定性情報 4 項目（ビジョン・経営課題・補足メモ・事業メモ）それぞれの上限（コードポイント） */
 export const CUSTOMER_CONTEXT_TEXT_CAP = 4000
 /** Memo（時系列メモ）本文の上限（顧客活動 BODY_CAP と同値） */
 export const CUSTOMER_CONTEXT_NOTE_CAP = 20_000
@@ -19,30 +19,36 @@ export const CUSTOMER_CONTEXT_HINT_CAP = 200
 /** AI リサーチで一度に採用できる情報源の上限 */
 export const CUSTOMER_CONTEXT_SOURCES_MAX = 8
 
-/** 定性情報の入力（customer_contexts の更新対象 3 項目） */
+/** 定性情報の入力（customer_contexts の更新対象 4 項目。事業メモは改修依頼 2026-08-21 で追加） */
 export interface CustomerContextInput {
   vision: string
   challenges: string
   strategyNotes: string
+  /** 事業メモ（昨季売上高・社員数・店舗数・配送センター〔自社/他社・地域〕等の事業に関する事実） */
+  businessNotes: string
 }
 
-/** 定性情報の正規化（trim + コードポイント cap = 保存形。API/モック共通） */
-export function normalizeCustomerContext(input: CustomerContextInput): CustomerContextInput {
+/** 定性情報の正規化（trim + コードポイント cap = 保存形。API/モック共通。
+ *  businessNotes は旧データ（未定義）を '' として受ける = 原則7） */
+export function normalizeCustomerContext(
+  input: Omit<CustomerContextInput, 'businessNotes'> & { businessNotes?: string },
+): CustomerContextInput {
   return {
     vision: capCodePoints(input.vision.trim(), CUSTOMER_CONTEXT_TEXT_CAP),
     challenges: capCodePoints(input.challenges.trim(), CUSTOMER_CONTEXT_TEXT_CAP),
     strategyNotes: capCodePoints(input.strategyNotes.trim(), CUSTOMER_CONTEXT_TEXT_CAP),
+    businessNotes: capCodePoints((input.businessNotes ?? '').trim(), CUSTOMER_CONTEXT_TEXT_CAP),
   }
 }
 
 /**
  * 定性情報の検証（正規化後の値で判定 = 空白のみの通過を防ぐ）。
- * 3 項目すべて空の保存は不可（「空の行」を作らない。項目単位の削除は他項目が残っていれば可能）
+ * 4 項目すべて空の保存は不可（「空の行」を作らない。項目単位の削除は他項目が残っていれば可能）
  */
-export function customerContextError(input: CustomerContextInput): string | null {
+export function customerContextError(input: Parameters<typeof normalizeCustomerContext>[0]): string | null {
   const n = normalizeCustomerContext(input)
-  if (!n.vision && !n.challenges && !n.strategyNotes) {
-    return 'ビジョン・経営課題・補足メモのいずれかを入力してください'
+  if (!n.vision && !n.challenges && !n.strategyNotes && !n.businessNotes) {
+    return 'ビジョン・経営課題・補足メモ・事業メモのいずれかを入力してください'
   }
   return null
 }
@@ -113,6 +119,15 @@ const NEWS_TOPICS = [
   'DX 推進体制の強化に関する報道',
 ] as const
 
+/** 事業メモのデモ用ファクト（決定的に 2 件選ぶ。実数値を創作しない = 「デモ」明記の定型文） */
+const BUSINESS_FACT_POOL = [
+  '昨季売上高: 情報源に記載なし（デモ）',
+  '従業員数: 会社概要ページに記載あり（デモ・数値は原文を参照）',
+  '店舗・拠点: 主要拠点の一覧が公式サイトに掲載（デモ）',
+  '物流: 配送センターの利用形態（自社/他社）は記事中に言及あり（デモ）',
+  '主要取引先: 会社概要ページに記載あり（デモ）',
+] as const
+
 /**
  * リサーチ候補の決定的生成（モックモード / LLM 無効・失敗時のフォールバック = 原則4）。
  * 会社名から 3〜4 件の候補を生成する。URL は example.com 系のダミーで、タイトルに「デモ」を明記
@@ -177,12 +192,18 @@ export function heuristicContextBuild(
   const n = 2 + (hashStrShared(`build-ch-count:${seed}`) % 2)
   const start = hashStrShared(`build-ch-start:${seed}`) % CHALLENGE_POOL.length
   const challenges = Array.from({ length: n }, (_, i) => CHALLENGE_POOL[(start + i) % CHALLENGE_POOL.length]!)
+  // 事業メモ（改修依頼 2026-08-21）: 売上高・社員数・店舗数・配送センター等の「事業の事実」欄。
+  // デモは実数値を創作せず「情報源に記載あり」の定型ファクトを決定的に 2 件選ぶ
+  const factStart = hashStrShared(`build-biz-start:${seed}`) % BUSINESS_FACT_POOL.length
+  const facts = Array.from({ length: 2 }, (_, i) => BUSINESS_FACT_POOL[(factStart + i) % BUSINESS_FACT_POOL.length]!)
   const titles = sorted.map(s => String(s.title ?? s.uri))
+  const hasCurrent = current.vision || current.challenges || current.strategyNotes || current.businessNotes
   return normalizeCustomerContext({
     vision: `「${theme}」を掲げ、中期的な事業発展を目指す（採用した ${sorted.length} 件の情報から構築）。`,
     challenges: challenges.map(c => `・${c}`).join('\n'),
     strategyNotes: `参考にした情報源: ${titles.join(' / ')}`
-      + (current.vision || current.challenges || current.strategyNotes ? '（反映前の値は自動追記されるリサーチノートから復元できます）' : ''),
+      + (hasCurrent ? '（反映前の値は自動追記されるリサーチノートから復元できます）' : ''),
+    businessNotes: facts.map(f => `・${f}`).join('\n'),
   })
 }
 

@@ -47,7 +47,8 @@ function jstStamp(col: string, alias: string): string {
 }
 
 const CTX_COLS = `cc.id, cc.company_id AS "companyId", cc.vision, cc.challenges,
-  cc.strategy_notes AS "strategyNotes", cc.updated_by_member_id AS "updatedByMemberId",
+  cc.strategy_notes AS "strategyNotes", cc.business_notes AS "businessNotes",
+  cc.updated_by_member_id AS "updatedByMemberId",
   cc.updated_by_name AS "updatedByName", cc.active,
   ${jstStamp('cc.created_at', 'createdAt')}, ${jstStamp('cc.updated_at', 'updatedAt')}`
 
@@ -84,9 +85,9 @@ async function currentContextOf(
   db: pg.Pool | pg.PoolClient, companyId: string,
 ): Promise<CustomerContextInput> {
   const { rows } = await db.query<CustomerContextInput>(
-    `SELECT vision, challenges, strategy_notes AS "strategyNotes"
+    `SELECT vision, challenges, strategy_notes AS "strategyNotes", business_notes AS "businessNotes"
      FROM customer_contexts WHERE company_id = $1`, [companyId])
-  return rows[0] ?? { vision: '', challenges: '', strategyNotes: '' }
+  return rows[0] ?? { vision: '', challenges: '', strategyNotes: '', businessNotes: '' }
 }
 
 /** メンバー名スナップショット（表示用。不在は空 = 非ブロッキング） */
@@ -104,17 +105,19 @@ async function upsertContext(
 ): Promise<void> {
   await db.query(
     `INSERT INTO customer_contexts
-       (id, company_id, vision, challenges, strategy_notes, updated_by_member_id, updated_by_name)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+       (id, company_id, vision, challenges, strategy_notes, business_notes, updated_by_member_id, updated_by_name)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      ON CONFLICT (company_id) DO UPDATE SET
        vision = EXCLUDED.vision,
        challenges = EXCLUDED.challenges,
        strategy_notes = EXCLUDED.strategy_notes,
+       business_notes = EXCLUDED.business_notes,
        updated_by_member_id = EXCLUDED.updated_by_member_id,
        updated_by_name = EXCLUDED.updated_by_name,
        active = true,
        updated_at = now()`,
-    [newId('cctx'), companyId, values.vision, values.challenges, values.strategyNotes, by.memberId, by.name])
+    [newId('cctx'), companyId, values.vision, values.challenges, values.strategyNotes, values.businessNotes,
+      by.memberId, by.name])
 }
 
 /** 採用ソースの正規化（title/uri のみに絞る。検証は customerContextSourcesError が済ませている前提） */
@@ -178,8 +181,9 @@ const BUILD_SCHEMA = {
     vision: { type: 'string' },
     challenges: { type: 'string' },
     strategyNotes: { type: 'string' },
+    businessNotes: { type: 'string' },
   },
-  required: ['vision', 'challenges', 'strategyNotes'],
+  required: ['vision', 'challenges', 'strategyNotes', 'businessNotes'],
 }
 
 /** LLM による定性情報の構築（採用ソース → 提案値）。失敗・全項目空は null（ヒューリスティックへ = 原則4） */
@@ -189,10 +193,12 @@ async function llmContextBuild(
   sources: CustomerContextResearchSource[],
   current: CustomerContextInput,
 ): Promise<CustomerContextInput | null> {
-  const raw = await generateJson<{ vision?: unknown; challenges?: unknown; strategyNotes?: unknown }>(env, {
+  const raw = await generateJson<{ vision?: unknown; challenges?: unknown; strategyNotes?: unknown; businessNotes?: unknown }>(env, {
     system: 'あなたは企業リサーチアシスタントです。採用された Web 情報源に基づき、対象企業の'
-      + '「ビジョン（vision）」「経営課題（challenges = 改行区切りの箇条書き）」「補足メモ（strategyNotes）」を'
-      + '日本語で構築します。情報源にある事実のみを根拠にし、推測で事実を作らないこと。'
+      + '「ビジョン（vision）」「経営課題（challenges = 改行区切りの箇条書き）」「補足メモ（strategyNotes）」'
+      + '「事業メモ（businessNotes = 昨季売上高・社員数・店舗数・配送センター〔自社/他社・地域〕等の'
+      + '事業に関する事実。改行区切りの箇条書き。該当情報が情報源になければ空文字）」を'
+      + '日本語で構築します。情報源にある事実のみを根拠にし、推測で事実（数値含む）を作らないこと。'
       + '現在の登録値がある場合は、情報源で裏付けられる内容を優先しつつ有用な既存記述を残すこと。'
       + 'strategyNotes の末尾に参考にした情報源のタイトルを記載すること。',
     prompt: `# 対象企業\n${companyName}\n\n# 採用された情報源\n`
@@ -206,8 +212,9 @@ async function llmContextBuild(
     vision: String(raw.vision ?? ''),
     challenges: String(raw.challenges ?? ''),
     strategyNotes: String(raw.strategyNotes ?? ''),
+    businessNotes: String(raw.businessNotes ?? ''),
   })
-  if (!built.vision && !built.challenges && !built.strategyNotes) return null
+  if (!built.vision && !built.challenges && !built.strategyNotes && !built.businessNotes) return null
   return built
 }
 
@@ -222,7 +229,7 @@ export function customerContextsRoutes(pool: pg.Pool, env: Env): Hono {
       orderBy: 'cc.updated_at DESC, cc.id DESC',
       maxLimit: 1000,
       defaultLimit: 20,
-      searchCols: ['co.name', 'cc.vision', 'cc.challenges', 'cc.strategy_notes'],
+      searchCols: ['co.name', 'cc.vision', 'cc.challenges', 'cc.strategy_notes', 'cc.business_notes'],
       filterCols: {
         companyId: { col: 'cc.company_id', kind: 'eq' },
       },
@@ -270,6 +277,8 @@ export function customerContextsRoutes(pool: pg.Pool, env: Env): Hono {
       vision: has('vision') ? String(b.vision ?? '') : cur.vision,
       challenges: has('challenges') ? String(b.challenges ?? '') : cur.challenges,
       strategyNotes: has('strategyNotes') ? String(b.strategyNotes ?? '') : cur.strategyNotes,
+      // 事業メモ（改修依頼 2026-08-21）。旧クライアント（未送信）は既存値を保持（部分更新の鉄則 = 原則7）
+      businessNotes: has('businessNotes') ? String(b.businessNotes ?? '') : cur.businessNotes,
     })
     assertValid(customerContextError(merged))
     await upsertContext(pool, companyId, merged, { memberId: user.id, name: await memberNameOf(pool, user.id) })
@@ -369,6 +378,7 @@ export function customerContextsRoutes(pool: pg.Pool, env: Env): Hono {
       vision: String(b.vision ?? ''),
       challenges: String(b.challenges ?? ''),
       strategyNotes: String(b.strategyNotes ?? ''),
+      businessNotes: String(b.businessNotes ?? ''),
     })
     assertValid(customerContextError(values))
     const noteId = newId('cnote')
@@ -417,15 +427,21 @@ export function customerContextsRoutes(pool: pg.Pool, env: Env): Hono {
     if (note.payload.revertedAt) {
       return c.json({ data: { id: noteId, warning: 'すでに取消済みです' } })
     }
-    const before = normalizeCustomerContext({
-      vision: String(note.payload.before.vision ?? ''),
-      challenges: String(note.payload.before.challenges ?? ''),
-      strategyNotes: String(note.payload.before.strategyNotes ?? ''),
-    })
     const actorName = await memberNameOf(pool, user.id)
     const client = await pool.connect()
     try {
       await client.query('BEGIN')
+      // 事業メモ（2026-08-21 追加）が無い旧スナップショットの復元は現在値を保持する
+      // （旧ノートの取消で新項目を消さない = 原則7。現在値の読取は Tx 内 = 復元と原子的）
+      const cur = await currentContextOf(client, companyId)
+      const before = normalizeCustomerContext({
+        vision: String(note.payload.before.vision ?? ''),
+        challenges: String(note.payload.before.challenges ?? ''),
+        strategyNotes: String(note.payload.before.strategyNotes ?? ''),
+        businessNotes: note.payload.before.businessNotes === undefined
+          ? cur.businessNotes
+          : String(note.payload.before.businessNotes ?? ''),
+      })
       // 反映前が全項目空（新規作成の反映だった）の場合も「空へ戻す」= 復元として upsert する
       // （行の物理削除はしない = 監査・再反映の起点を残す設計判断）
       await upsertContext(client, companyId, before, { memberId: user.id, name: actorName })

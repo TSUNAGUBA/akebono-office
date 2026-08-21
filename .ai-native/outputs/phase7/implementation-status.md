@@ -4472,3 +4472,45 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
     ドキュメント/記録整合）の副作用なしを個別確認。4 ラウンド累積 diff の俯瞰でも状態機械・ガード・
     集約条件の shared/API/mock 三者一致、0080 CHECK の全書込パス包含、旧 /adoption 参照の残置なしを確認。
     最終検証: home 単体 531 / api 単体 506 / 統合 309 / 両 typecheck / モック E2E 全スイート green
+
+## 104. 改修依頼 2026-08-21 第2弾（4 改修単位 = AI 調査リンク新規タブ・通知バッジ・会社検索リストの重なり・事業メモ）の完了条件（Definition of Done）
+
+対象: home + api + shared/domain（顧客コンテキスト中心）。マイグレーション 0084（customer_contexts.business_notes）。
+あわせてオペレーター指示 2 件を実施: ① AI 知識ベース（shared/domain/kb）の追随更新・②「改修のたびに KB を含む関連ドキュメントを指示なしで更新する」運用の開発手法（CLAUDE.md 原則5）への組み込み。
+
+### 104-1 AI 調査の結果リンクを新規タブで開ける（単位1）
+- [x] 顧客コンテキストの AI リサーチ候補リストで、各情報源のタイトル横に外部リンク（`target=_blank` + `rel="noopener noreferrer"` + ExternalLink アイコン + aria-label「◯◯を新規タブで開く」）を追加。
+- [x] `@click.stop` でリンククリックが「採用」チェックのトグルへ波及しない（E2E で 0 件選択のまま維持を固定）。
+- [x] http(s) 以外の URI（不正・空）はリンク化せずテキスト表示のみ（`isHttpUrl` ガード = 安全側）。
+
+### 104-2 通知バッジの未読件数表示（単位2）
+- [x] 調査の結果 **main で実装済み**を確認（ヘッダー通知ベルの未読合計バッジ = e1a4ed8〔2026-08-18〕・/inbox「すべて」タブの未読合計バッジ = 601c5c9〔2026-08-12〕。いずれも unreadCount = カテゴリ「その他」込みの全未読合計・99+ 丸め）。ビルド済みモックアプリの実機プローブ（Playwright）でベル「通知 7」+「すべて 7」の表示を確認 = 再実装なし（原則3 = 重複実装を作らない）。
+- [x] 回帰固定: batch5-e2e に「すべて」タブのバッジ数字 + ベル aria-label の未読件数チェックを追加（今後の退行を PR ゲートで検出）。
+
+### 104-3 会社検索・選択リストが他要素に隠れる問題の修正（単位3）
+- [x] 真因特定: z-index ではなく親カード `UiSectionCard` の `overflow-hidden`（角丸クリップ）が絶対配置（z-20）の候補リストをカード下端で切っていた。
+- [x] `UiSectionCard` に `overflowVisible` prop（既定 false = 既存カードの角丸クリップは不変 = 影響範囲最小）を新設し、顧客セレクタのカードにのみ指定。
+- [x] E2E: 候補リストが入力欄の下（カード枠外方向）に表示され、候補をクリックで選択できることを固定（クリップされていると Playwright のアクション判定が失敗する性質を利用）。
+
+### 104-4 定性情報「事業メモ」の追加（単位4）
+- [x] スキーマ: 0084 = `customer_contexts.business_notes text NOT NULL DEFAULT ''`（ADD COLUMN IF NOT EXISTS = 冪等・既存行の書換なし・旧行は空 = 原則7）。
+- [x] shared（SoT）: `CustomerContextInput.businessNotes` + `normalizeCustomerContext`（undefined → '' = 旧呼び出し互換・上限 cap）+ `customerContextError` = 4 項目すべて空の保存は不可（メッセージも 4 項目へ改稿）。
+- [x] API: CTX_COLS / currentContextOf / upsert（8 パラメータ）/ 一覧検索対象列 / PUT 部分更新（`Object.hasOwn` = 送られたキーのみ）へ businessNotes を追加。
+- [x] UI: 表示ブロック + 編集フォーム textarea（ヒント = 昨季売上高・社員数・店舗数・配送センター〔自社/他社・地域〕等・プレースホルダ例付き）+ AI 差分確認の「事業メモ（現在/提案）」行。セクション説明も 4 項目へ。
+- [x] AI 調査への反映: BUILD_SCHEMA（LLM 構築）+ システムプロンプトへ事業メモを追加（Web 調査で該当情報があれば提案へ反映）。ヒューリスティックフォールバックも決定的な事業メモ（「デモ」明記の BUSINESS_FACT_POOL = 事実の捏造なし）を生成 = mock/API パリティ（原則6）。
+- [x] 反映の取消（原則9.5 × 原則7）: research ノート payload.before に businessNotes を保存。**旧スナップショット（before に businessNotes キーなし）の取消は現在の事業メモを保持**（undefined = 復元対象外。API はトランザクション内で現在値を読んでマージ・mock も同一規則。統合テストで jsonb `#-` により旧 payload を再現して固定）。
+- [x] シード: cctx-0001 / cctx-0002 に「デモ」明記の事業メモを追加（E2E・デモの材料）。
+
+### 104-5 AI 知識ベースの更新 + 開発手法への組み込み（オペレーター指示）
+- [x] KB 更新: kb-sp-010（顧客コンテキストの仕様 = 4 項目・事業メモの説明・候補リンク新規タブ・AI 構築の事業メモ反映）+ kb-ug-009（通知の確認 = ベルの全カテゴリ未読合計・「すべて」タブ合計・カテゴリタブ個別件数・合計 ≥ タブ内訳和の理由）。
+- [x] 手法への組み込み: CLAUDE.md 原則5 に「AI ナレッジベース（shared/domain/kb/）もドキュメントに含める」節を新設（Grep〔pagePaths/keywords/本文〕→ 本文更新/新設検討 → ビルド + kb.test.ts + search_docs 自動再取込 = 手動作業なし、の 3 手順）+ Push 前セルフチェック項目 5 に KB 確認を明記。以後の改修は指示がなくても KB 追随が手順に乗る（SoT 配置 = CLAUDE.md は Claude Code 固有ルールの SoT・methodology 側はツール非依存を維持）。
+
+### 104-6 検証（受入基準）
+- [x] home `npx nuxi typecheck` / home 単体 531 / api `tsc --noEmit` / api 単体 506（非統合全件）/ 統合 310（businessNotes の往復・部分更新保持・旧スナップショット取消の保持テストを含む）
+- [x] モックモード E2E（run-mock-stack.sh = PR テストゲートと同一）: 既存 7 スイート green + 新規 batch5-e2e（通知バッジ回帰・候補リストのクリップなし・事業メモの表示/編集/AI 差分行・候補リンクの新規タブ属性と click.stop・モバイル 375px）= 10/10 green
+- [x] モバイル 375px: /customer-context で横スクロールなし（E2E で自動検証）
+- [x] ドキュメント: functional-requirements（F-46）/ data-design / screen-design / CONVENTIONS（早見表 + 部品在庫）/ KB（kb-sp-010・kb-ug-009）/ CLAUDE.md / 本ファイル §104
+
+### 104-7 反復レビュー（原則9 = SP-8）
+- 反復記録:
+  - （レビュー実施後にラウンドごと追記）
