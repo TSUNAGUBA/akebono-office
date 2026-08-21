@@ -73,6 +73,8 @@ const detailRows = computed(() => {
     { label: '現在状況', value: s.currentState || '—' },
     { label: 'Next Action', value: s.nextAction || '—' },
     { label: 'Next Action日', value: fmtDateKey(s.nextActionDate) },
+    // Next Action メモ（改善要望 2026-08-21 = BP のみの項目）
+    { label: 'Next Action メモ', value: s.nextActionNote || '—' },
     { label: '自社担当者', value: memberName(s.staffMemberId) },
     { label: '関連MTG', value: s.relatedMeeting || '—' },
     { label: '参考リンク', value: (s.links ?? []).join('\n') || '—' },

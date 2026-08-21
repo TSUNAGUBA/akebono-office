@@ -9,6 +9,7 @@
 import { capCodePoints, customerLogCompanyError } from './customer-log'
 import { improvementLinksError, normalizeImprovementLinks } from './improvement'
 import { isRealDateKey } from './jst'
+import type { ActivityDigestProposal } from './types'
 import {
   ACTIVITY_LOG_KINDS,
   PARTNER_ACTIVITY_STATUSES, PARTNER_ACTIVITY_TYPES,
@@ -208,6 +209,8 @@ export interface PartnerActivityInput {
   currentState: string
   nextAction: string
   nextActionDate: string | null
+  /** Next Action メモ（自由入力・任意。改善要望 2026-08-21 = BP のみの項目） */
+  nextActionNote: string
   staffMemberId: string
   relatedMeeting: string
   relatedSalesActivityId: string | null
@@ -273,6 +276,10 @@ export interface ActivityDigestHeader {
   /** 案件ヘッダーの Next Action（任意。ログ側に無いときのフォールバック） */
   nextAction?: string
   nextActionDate?: string | null
+  /** 現在状況（BP のみ。基本情報の更新提案の現在値比較・LLM 材料に使う。改善要望 2026-08-21） */
+  currentState?: string
+  /** Next Action メモ（BP のみ。同上） */
+  nextActionNote?: string
 }
 
 /** 集約対象のログ材料（ActivityLog のサブセット。API 行 / モック行の両方が満たす） */
@@ -289,6 +296,11 @@ export interface ActivityDigestLog {
 export interface ActivityDigestResult {
   summary: string
   highlights: string[]
+  /**
+   * 基本情報の更新提案（BP 活動のみ = 呼び出し側が opts.propose で有効化。改善要望 2026-08-21）。
+   * 現在値と異なる抽出値のみを持つ。提案なし・無効時は undefined
+   */
+  proposal?: ActivityDigestProposal
 }
 
 const fmtDate = (s: string): string => s.replace(/-/g, '/')
@@ -309,6 +321,12 @@ export function sortLogsChronologically<T extends ActivityDigestLog>(logs: reado
  */
 export function heuristicActivityDigest(
   header: ActivityDigestHeader, logs: readonly ActivityDigestLog[],
+  opts?: {
+    /** true = 基本情報の更新提案（proposal）も生成する（BP 活動のみ。改善要望 2026-08-21）。
+     *  ヒューリスティックの提案は「最新ログの Next Action / Next Action日が現在値と異なる」場合のみ
+     *  （確実に写像できるフィールドに限定。現在状況・ステータス等の推測は LLM の責務） */
+    propose?: boolean
+  },
 ): ActivityDigestResult {
   if (logs.length === 0) {
     return {
@@ -352,5 +370,14 @@ export function heuristicActivityDigest(
     nextAction ? `次のアクション: ${nextAction}${nextActionDate ? `（${fmtDate(nextActionDate)}）` : ''}` : '',
   ].filter(Boolean).slice(0, 5)
 
-  return { summary, highlights }
+  const result: ActivityDigestResult = { summary, highlights }
+  if (opts?.propose && latestNext) {
+    const proposal: ActivityDigestProposal = {}
+    const pn = (latestNext.nextAction ?? '').trim()
+    if (pn && pn !== (header.nextAction ?? '').trim()) proposal.nextAction = pn
+    const pd = latestNext.nextActionDate ?? null
+    if (pd && pd !== (header.nextActionDate ?? null)) proposal.nextActionDate = pd
+    if (Object.keys(proposal).length > 0) result.proposal = proposal
+  }
+  return result
 }

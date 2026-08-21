@@ -1,10 +1,12 @@
 /**
- * 週報・月報の機能キー独立と旧 'reports' キー互換フォールバック（改修依頼 2026-08-20 第2バッチ）。
+ * 週報・月報の機能キー独立（改修依頼 2026-08-20 第2バッチ → 旧キー継承の撤去 2026-08-21）。
  * shared/domain/permissions.ts の resolveFeatureResource / resolveTabPermission が SoT
  * （フロント usePermissions.can / canTab と API featureGuard の両方が同じ関数を通る）。
- * - 新キー（weekly-report / monthly-report）の明示ルールが 1 件も無い間は旧 'reports' 設定を継承
- * - 新キーのルールを設定した時点で独立制御（旧 reports ルールは以後参照しない）
- * - タブ権限も同様（旧 reports の tab:weekly-mine 等 → 新リソース/tab:mine へ写像）
+ *
+ * 当初あった「新キーの明示ルールが無い間は旧 'reports' 設定を継承する」動的フォールバックは、
+ * 旧キーの deny が権限管理画面に見えず解除もできない実バグ（権限表は ✓ なのに週報のタブが出ない）
+ * の原因となったため撤去した。旧ルールはマイグレーション 0078 で新キーへ物理移行される。
+ * 本テストは「旧 'reports' ルールが新キーの判定へ漏れ出さない = 権限表に見えるものが実効」を固定する。
  */
 import { describe, expect, it } from 'vitest'
 import {
@@ -50,46 +52,26 @@ describe('featureKeyOfPath: 週報・月報の独立パス', () => {
   })
 })
 
-describe('resolveFeatureResource: 機能キーのフォールバック', () => {
-  it('新キーのルールが無ければ旧 reports へフォールバックする', () => {
-    expect(resolveFeatureResource([], 'weekly-report')).toBe('reports')
-    expect(resolveFeatureResource([], 'monthly-report')).toBe('reports')
-  })
-
-  it('新キーの active なルールが 1 件でもあれば独立制御（タブルールでも切り替わる）', () => {
-    const rules = [rule({ resource: 'weekly-report', field: 'tab:mine', effect: 'deny' })]
-    expect(resolveFeatureResource(rules, 'weekly-report')).toBe('weekly-report')
-    // monthly は別リソース = 引き続き旧 reports を継承
-    expect(resolveFeatureResource(rules, 'monthly-report')).toBe('reports')
-  })
-
-  it('inactive なルールは切替条件に数えない', () => {
-    const rules = [rule({ resource: 'weekly-report', active: false })]
-    expect(resolveFeatureResource(rules, 'weekly-report')).toBe('reports')
-  })
-
-  it('対象外のキーはそのまま返す', () => {
+describe('resolveFeatureResource / resolveTabPermission: 旧キー継承の撤去（素通し）', () => {
+  it('ルールの有無にかかわらずキーをそのまま返す（0078 で物理移行済みの前提）', () => {
+    expect(resolveFeatureResource([], 'weekly-report')).toBe('weekly-report')
+    expect(resolveFeatureResource([], 'monthly-report')).toBe('monthly-report')
+    expect(resolveFeatureResource([rule({ resource: 'reports' })], 'weekly-report')).toBe('weekly-report')
     expect(resolveFeatureResource([], 'reports')).toBe('reports')
     expect(resolveFeatureResource([], 'attendance')).toBe('attendance')
+    expect(resolveTabPermission([], 'weekly-report', 'mine'))
+      .toEqual({ resource: 'weekly-report', tabKey: 'mine' })
+    expect(resolveTabPermission([rule({ resource: 'reports', field: 'tab:weekly-mine' })], 'weekly-report', 'mine'))
+      .toEqual({ resource: 'weekly-report', tabKey: 'mine' })
   })
 })
 
-describe('機能利用可否: 旧 reports 設定の継承と独立', () => {
-  it('旧 reports の deny が新キー未設定の間は週報・月報にも効く（下位互換）', () => {
+describe('機能利用可否: 週報・月報は独立制御（旧 reports ルールは漏れ出さない）', () => {
+  it('旧 reports の機能 deny は日報のみに効く（週報・月報へは 0078 が複製済みの前提）', () => {
     const rules = [rule({ resource: 'reports', effect: 'deny' })]
     expect(canFeature(rules, 'reports')).toBe(false)
-    expect(canFeature(rules, 'weekly-report')).toBe(false)
-    expect(canFeature(rules, 'monthly-report')).toBe(false)
-  })
-
-  it('新キーの allow を設定すると独立制御になる（旧 reports の deny を引き継がない）', () => {
-    const rules = [
-      rule({ id: 'r1', resource: 'reports', effect: 'deny' }),
-      rule({ id: 'r2', resource: 'weekly-report', effect: 'allow' }),
-    ]
     expect(canFeature(rules, 'weekly-report')).toBe(true)
-    expect(canFeature(rules, 'reports')).toBe(false)
-    expect(canFeature(rules, 'monthly-report')).toBe(false) // monthly は継承のまま
+    expect(canFeature(rules, 'monthly-report')).toBe(true)
   })
 
   it('新キーの deny で週報だけを止められる（日報は従来どおり）', () => {
@@ -99,43 +81,35 @@ describe('機能利用可否: 旧 reports 設定の継承と独立', () => {
     expect(canFeature(rules, 'monthly-report')).toBe(true)
   })
 
-  it('ルールが無ければ既定 allow（下位互換）', () => {
+  it('ルールが無ければ既定 allow', () => {
     expect(canFeature([], 'weekly-report')).toBe(true)
     expect(canFeature([], 'monthly-report')).toBe(true)
   })
 })
 
-describe('タブ権限: 旧 reports の tab:weekly-* / tab:monthly-* の継承と独立', () => {
-  it('旧 reports の tab:weekly-mine deny が新 weekly-report/tab:mine として効く', () => {
-    const rules = [rule({ resource: 'reports', field: 'tab:weekly-mine', effect: 'deny' })]
-    expect(resolveTabPermission(rules, 'weekly-report', 'mine'))
-      .toEqual({ resource: 'reports', tabKey: 'weekly-mine' })
-    expect(canTab(rules, 'weekly-report', 'mine')).toBe(false)
+describe('タブ権限: 週報・月報のタブは新キーのルールだけで決まる', () => {
+  it('旧 reports の tab:weekly-* deny が残っていても週報のタブには効かない（バグの再発防止）', () => {
+    // 権限表に表示されない旧形式ルール。0078 移行後は存在しないが、万一残っていても判定を汚さない
+    const rules = [
+      rule({ id: 'r1', resource: 'reports', field: 'tab:weekly-all', effect: 'deny' }),
+      rule({ id: 'r2', resource: 'reports', field: 'tab:monthly-team', effect: 'deny' }),
+    ]
     expect(canTab(rules, 'weekly-report', 'all')).toBe(true)
-    // 日報側のタブキーは衝突しない（reports/tab:mine は別キー）
+    expect(canTab(rules, 'monthly-report', 'team')).toBe(true)
+    // 日報側のタブキーは別キーのため従来どおり影響なし
     expect(canTab(rules, 'reports', 'mine')).toBe(true)
   })
 
-  it('旧 reports の tab:monthly-team deny が新 monthly-report/tab:team として効く', () => {
-    const rules = [rule({ resource: 'reports', field: 'tab:monthly-team', effect: 'deny' })]
-    expect(canTab(rules, 'monthly-report', 'team')).toBe(false)
-    expect(canTab(rules, 'monthly-report', 'mine')).toBe(true)
+  it('新キーのタブ deny が効く（権限表で見える・解除できるルールと実効が一致）', () => {
+    const rules = [rule({ resource: 'weekly-report', field: 'tab:team', effect: 'deny' })]
+    expect(canTab(rules, 'weekly-report', 'team')).toBe(false)
+    expect(canTab(rules, 'weekly-report', 'mine')).toBe(true)
+    expect(canTab(rules, 'weekly-report', 'all')).toBe(true)
   })
 
-  it('新キーのルールを設定した時点でタブも独立制御（旧 reports のタブ deny は引き継がない）', () => {
-    const rules = [
-      rule({ id: 'r1', resource: 'reports', field: 'tab:weekly-mine', effect: 'deny' }),
-      rule({ id: 'r2', resource: 'weekly-report', field: 'tab:team', effect: 'deny' }),
-    ]
-    expect(resolveTabPermission(rules, 'weekly-report', 'mine'))
-      .toEqual({ resource: 'weekly-report', tabKey: 'mine' })
-    expect(canTab(rules, 'weekly-report', 'mine')).toBe(true) // 旧 deny は参照しない
-    expect(canTab(rules, 'weekly-report', 'team')).toBe(false) // 新キーの deny が効く
-  })
-
-  it('旧 reports の機能全体 deny は新キー未設定の間タブにも効く（field=null フォールバック）', () => {
-    const rules = [rule({ resource: 'reports', field: null, effect: 'deny' })]
-    expect(canTab(rules, 'weekly-report', 'mine')).toBe(false)
+  it('新キーの機能全体 deny はタブにも効く（field=null フォールバックは機能キー内で維持）', () => {
+    const rules = [rule({ resource: 'monthly-report', field: null, effect: 'deny' })]
+    expect(canTab(rules, 'monthly-report', 'mine')).toBe(false)
     expect(canTab(rules, 'monthly-report', 'all')).toBe(false)
   })
 })

@@ -150,11 +150,16 @@ export function improvementRequestInputOf(body: Record<string, unknown>): {
 /** 管理ガード（閲覧・集約・ステータス操作）。deny は AKO-PRM-001 403 */
 async function requireManage(c: Context, pool: pg.Pool): Promise<AuthUser> {
   const user = c.get('user')
-  const rules = await activePermissionRules(pool)
-  if (!canManageImprovements(rules, subjectOf(user))) {
+  if (!(await canManage(pool, user))) {
     throw err('AKO-PRM-001', '改善要望を閲覧・管理する権限がありません（管理者にお問い合わせください）', 403)
   }
   return user
+}
+
+/** 管理権限の判定のみ（throw しない版。本人操作との複合ガードで使う） */
+async function canManage(pool: pg.Pool, user: AuthUser): Promise<boolean> {
+  const rules = await activePermissionRules(pool)
+  return canManageImprovements(rules, subjectOf(user))
 }
 
 /** LLM 集約（Vertex → 正規化）。無効環境・失敗・空出力は null（呼び出し側でヒューリスティックへ） */
@@ -476,12 +481,23 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
   })
 
   // ---- 要望ステータス変更（管理）。要望 1 件ずつの対応状況タグ（open/resolved/dismissed。遷移自由 = 原則9.5） ----
+  // 要望ステータス変更。管理者 = 任意の遷移 / 起票者本人 = 自分の要望の resolved ⇄ open のみ
+  // （改善要望 2026-08-21: 「運用対応」になった要望を起票者が「解決済み」へ移す運用。open へ戻せる =
+  //   誤操作の取消フロー = 原則9.5。dismissed の付与・解除は従来どおり管理者のみ）
   app.post('/requests/:id/status', async (c) => {
-    const user = await requireManage(c, pool)
+    const user = c.get('user')
     const id = c.req.param('id')
     const status = String(((await c.req.json().catch(() => ({}))) as { status?: unknown }).status ?? '')
     if (!IMPROVEMENT_REQUEST_STATUSES.includes(status as ImprovementRequestStatus)) {
       throw err('AKO-REQ-011', 'status が不正です（open / resolved / dismissed）', 400)
+    }
+    if (!(await canManage(pool, user))) {
+      const { rows: own } = await pool.query<{ memberId: string }>(
+        `SELECT member_id AS "memberId" FROM improvement_requests WHERE id = $1`, [id])
+      if (own.length === 0) throw err('AKO-REQ-002', '対象の要望が見つかりません', 404)
+      if (own[0]!.memberId !== user.id || (status !== 'resolved' && status !== 'open')) {
+        throw err('AKO-PRM-001', 'この操作の権限がありません（自分の要望の解決済み/未対応の切替のみ可能です）', 403)
+      }
     }
     const { rows } = await pool.query(
       `UPDATE improvement_requests SET status = $2 WHERE id = $1 RETURNING ${reqColsOf(false)}`, [id, status])

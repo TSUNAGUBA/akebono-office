@@ -12,7 +12,10 @@ import type {
 import type { TableColumn } from '~/types/ui'
 import type { NotifyRecipientTarget } from '~/utils/notify-recipients'
 import { parseNotifyRecipients } from '~/utils/notify-recipients'
-import { parseReportReminderConfig } from '../../../shared/domain/report-reminder'
+import {
+  parseReportReminderConfig, type ReminderKindConfig, REPORT_REMINDER_KIND_LABELS, REPORT_REMINDER_KINDS,
+  type ReportReminderKind,
+} from '../../../shared/domain/report-reminder'
 import { fmtDateTime } from '~/utils/format'
 
 const { isAdmin } = useCurrentUser()
@@ -121,27 +124,41 @@ const poipoiNotifyRecipients = computed<NotifyRecipientTarget[]>({
   },
 })
 
-// ---------- 日報リマインド（改修要望: 設定時刻に前日まで未提出のメンバーへ通知） ----------
-// SoT = configs 'report-reminder'（{ enabled, time } の JSON。パースは shared/domain/report-reminder が両形対応）。
-// 実行はサーバー cron（/jobs/report-reminders）。モックモードは plugins/report-reminder.client.ts がデモ簡易実行
+// ---------- リマインド（種別 = 日報/週報/月報ごとに有効・時刻・外部通知。改善要望 2026-08-21） ----------
+// SoT = configs 'report-reminder'（種別ごとの { enabled, time, external }。旧形状 { enabled, time } は
+// 日報設定として parse が読み替える = 原則7）。実行はサーバー cron（/jobs/report-reminders）。
+// モックモードは plugins/report-reminder.client.ts がデモ簡易実行
 
 const REMINDER_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/
 
 const reportReminder = computed(() => parseReportReminderConfig(getConfig('report-reminder', '')))
 
-function onToggleReportReminder(): void {
-  const next = { ...reportReminder.value, enabled: !reportReminder.value.enabled }
-  setConfig('report-reminder', JSON.stringify(next))
-  toast.show(next.enabled
-    ? `日報リマインドを有効にしました（毎日 ${next.time} 以降に通知します）`
-    : '日報リマインドを無効にしました')
+function saveReminder(kind: ReportReminderKind, patch: Partial<ReminderKindConfig>, message: string): void {
+  const cur = reportReminder.value
+  setConfig('report-reminder', JSON.stringify({ ...cur, [kind]: { ...cur[kind], ...patch } }))
+  toast.show(message)
 }
 
-function onReportReminderTime(e: Event): void {
+function onToggleReminder(kind: ReportReminderKind): void {
+  const label = REPORT_REMINDER_KIND_LABELS[kind]
+  const enabled = !reportReminder.value[kind].enabled
+  saveReminder(kind, { enabled }, enabled
+    ? `${label}リマインドを有効にしました（毎日 ${reportReminder.value[kind].time} 以降に通知します）`
+    : `${label}リマインドを無効にしました`)
+}
+
+function onReminderTime(kind: ReportReminderKind, e: Event): void {
   const v = (e.target as HTMLInputElement).value
   if (!REMINDER_TIME_RE.test(v)) return
-  setConfig('report-reminder', JSON.stringify({ ...reportReminder.value, time: v }))
-  toast.show(`日報リマインドの時刻を ${v} に変更しました`)
+  saveReminder(kind, { time: v }, `${REPORT_REMINDER_KIND_LABELS[kind]}リマインドの時刻を ${v} に変更しました`)
+}
+
+function onToggleReminderExternal(kind: ReportReminderKind): void {
+  const label = REPORT_REMINDER_KIND_LABELS[kind]
+  const external = !reportReminder.value[kind].external
+  saveReminder(kind, { external }, external
+    ? `${label}リマインドを外部チャネル（Slack / Google Chat）にも配信します`
+    : `${label}リマインドをアプリ内通知のみにしました`)
 }
 
 function onToggleFeature(t: FeatureToggle): void {
@@ -488,43 +505,59 @@ async function onResetDemo(): Promise<void> {
           <SettingsNotifyRecipientsEditor v-model="poipoiNotifyRecipients" />
         </UiSectionCard>
 
-        <!-- b4) 日報リマインド（改修要望: 設定時刻に前日まで未提出のメンバーへ自動通知） -->
+        <!-- b4) リマインド（種別 = 日報/週報/月報ごとに有効・時刻・外部通知 = 改善要望 2026-08-21。
+             行構成はエスカレーションルールと同型 = 機能単位の設定リスト） -->
         <UiSectionCard
-          title="日報リマインド"
-          description="設定時刻に、前日までの日報に未記載（未提出）があるメンバーへ通知します（各メンバーの通知設定に従って配信されます）"
+          title="リマインド"
+          description="種別ごとに、未提出のメンバーへ設定時刻に自動通知します（配信先は各メンバーの通知設定に従います）"
         >
-          <div class="flex flex-wrap items-center gap-x-5 gap-y-2">
-            <div class="flex items-center gap-2">
+          <ul class="grid gap-1.5">
+            <li
+              v-for="k in REPORT_REMINDER_KINDS"
+              :key="k"
+              class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-line px-2.5 py-2"
+            >
               <button
                 type="button"
                 role="switch"
-                :aria-checked="reportReminder.enabled"
-                aria-label="日報リマインド"
+                :aria-checked="reportReminder[k].enabled"
+                :aria-label="`${REPORT_REMINDER_KIND_LABELS[k]}リマインド`"
                 class="relative h-6 w-11 shrink-0 rounded-full transition-colors"
-                :class="reportReminder.enabled ? 'bg-brand' : 'bg-line-strong'"
-                @click="onToggleReportReminder"
+                :class="reportReminder[k].enabled ? 'bg-brand' : 'bg-line-strong'"
+                @click="onToggleReminder(k)"
               >
                 <span
                   class="absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-all"
-                  :class="reportReminder.enabled ? 'left-[22px]' : 'left-0.5'"
+                  :class="reportReminder[k].enabled ? 'left-[22px]' : 'left-0.5'"
                   aria-hidden="true"
                 />
               </button>
-              <span class="text-[13px] font-medium">{{ reportReminder.enabled ? '有効' : '無効' }}</span>
-            </div>
-            <label class="flex items-center gap-1.5 text-[13px] text-sub">
-              通知時刻
-              <input
-                type="time"
-                class="input num w-28"
-                :value="reportReminder.time"
-                aria-label="日報リマインドの通知時刻"
-                @change="onReportReminderTime"
-              >
-            </label>
-          </div>
+              <span class="min-w-0 flex-1 text-[13px] font-medium">{{ REPORT_REMINDER_KIND_LABELS[k] }}</span>
+              <label class="flex items-center gap-1.5 whitespace-nowrap text-[11px] text-sub">
+                通知時刻
+                <input
+                  type="time"
+                  class="input num w-28"
+                  :value="reportReminder[k].time"
+                  :aria-label="`${REPORT_REMINDER_KIND_LABELS[k]}リマインドの通知時刻`"
+                  @change="onReminderTime(k, $event)"
+                >
+              </label>
+              <label class="flex items-center gap-1.5 whitespace-nowrap text-[11px] text-sub">
+                <input
+                  type="checkbox"
+                  :checked="reportReminder[k].external"
+                  :aria-label="`${REPORT_REMINDER_KIND_LABELS[k]}リマインドの外部通知（Slack / Google Chat）`"
+                  @change="onToggleReminderExternal(k)"
+                >
+                外部通知
+              </label>
+            </li>
+          </ul>
           <p class="mt-2 text-[11px] text-muted">
-            対象は前日までの直近 5 営業日（土日を除く・祝日は考慮しません）。提出済み以外（未作成・下書き）を未提出として扱い、送信は 1 日 1 回です
+            対象: 日報 = 前日までの直近 5 営業日（土日を除く・祝日は考慮しません）/ 週報 = 先週分 / 月報 = 先月分。
+            提出済み以外（未作成・下書き）を未提出として扱い、送信は種別ごとに 1 日 1 回です。
+            「外部通知」をオフにすると、その種別は Slack / Google Chat へ配信せずアプリ内通知のみになります
           </p>
         </UiSectionCard>
 

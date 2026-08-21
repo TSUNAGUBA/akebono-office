@@ -17,9 +17,7 @@ import {
 } from 'lucide-vue-next'
 import type { LocationQueryRaw } from 'vue-router'
 import type { DailyReport, ReportEntry, TomorrowPlan } from '~/types/domain'
-import {
-  DAILY_ISSUE_CATEGORY_PRESETS, TOMORROW_PLANS_MAX,
-} from '../../../shared/domain/types'
+import { DAILY_ISSUE_CATEGORY_PRESETS } from '../../../shared/domain/types'
 import { REPORT_STATUS_LABELS } from '~/composables/useReports'
 import { hhmmToMin } from '../../../shared/domain/jst'
 import { toQuarterHours } from '../../../shared/domain/report-draft'
@@ -211,7 +209,6 @@ const mineCalendarWeeks = computed(() => {
 })
 
 const editEntries = ref<ReportEntry[]>([])
-const editPlans = ref<TomorrowPlan[]>([])
 // フリー入力欄のマークダウンプレビュー（バッチ7e。入力はプレーンな textarea のまま = 記法をそのまま保存）
 const dailyMdPreview = ref(false)
 const wkMdPreview = ref(false)
@@ -221,43 +218,30 @@ const editIssues = ref('')
 const editIssueCategory = ref('')
 /** 課題種別の選択肢（値=ラベル。空選択肢「未選択」は UiSelect の empty-label で提示） */
 const issueCategoryOptions = DAILY_ISSUE_CATEGORY_PRESETS.map(c => ({ value: c, label: c }))
-/** 旧形式の明日の予定（自由記述）。編集 UI は持たず保存時にそのまま保持する（原則7） */
+/** 明日の予定（自由記述テキスト。行形式からテキスト入力へ回帰 = 改善要望 2026-08-21） */
 const editTomorrow = ref('')
 
-/** 前営業日の「明日の予定」を自動反映した場合の反映元（バナー表示用） */
-const reflected = ref<{ fromDate: string; plans: TomorrowPlan[] } | null>(null)
-
 /**
- * 選択日へ自動反映すべき前営業日の「明日の予定」（未作成日のみ）。
- * computed にすることで API モードの遅延ロード到着（dailyReports の変化）にも追従する
- * （loadEditor の watch は myReport が undefined のままだと発火しないため、下の watch が補完する）
+ * 旧形式（行構造 tomorrowPlans）をテキストへ変換する（編集開始時のみ。
+ * 保存でテキストへ一本化されるが、変換テキストとして情報は保持される = 原則7。
+ * 未編集の既存日報は行構造のまま参照表示される = データ自体は書き換えない）
  */
-const autoPlans = computed(() =>
-  myReport.value ? null : reports.tomorrowPlansFor(selDate.value))
-
-/** エディタが未入力（= 空行の既定値のみ。自動反映で上書きしてよい状態）か */
-function isPristineEditor(): boolean {
-  return editEntries.value.every(e =>
-    !(e.theme ?? '').trim() && !e.task.trim() && e.hours === 1 && e.progress === 0)
-    && !editReflection.value.trim() && !editIssues.value.trim() && editPlans.value.length === 0
+function plansToText(plans: TomorrowPlan[]): string {
+  return plans.map((p) => {
+    const label = [p.theme, p.purpose, p.task].map(s => s.trim()).filter(Boolean).join(' / ')
+    return `- ${label || '—'}（${p.hours}h）`
+  }).join('\n')
 }
 
-// API モード: 前営業日の日報（明日の予定入り）が非同期到着した時点で未入力エディタへ反映する
-watch(autoPlans, (v) => {
-  if (!v || v.plans.length === 0) return
-  if (myReport.value || editingSubmitted.value) return
-  if (reflected.value?.fromDate === v.fromDate) return // 反映済み（二重適用しない）
-  if (!isPristineEditor()) return // 入力中の内容を黙って上書きしない
-  editEntries.value = v.plans.map(p => ({ theme: p.theme, projectId: '', task: p.task, hours: p.hours, progress: 0 }))
-  reflected.value = v
-})
+/** 編集初期値: 自由記述があればそれ、無ければ旧形式の変換。両方あれば結合（情報を落とさない） */
+function tomorrowTextOf(r: DailyReport): string {
+  const plans = r.tomorrowPlans ?? []
+  if (r.tomorrow.trim() && plans.length > 0) return `${r.tomorrow}\n${plansToText(plans)}`
+  return r.tomorrow.trim() ? r.tomorrow : (plans.length > 0 ? plansToText(plans) : '')
+}
 
 function blankEntry(): ReportEntry {
   return { theme: '', projectId: '', task: '', hours: 1, progress: 0 }
-}
-
-function blankPlan(): TomorrowPlan {
-  return { theme: '', purpose: '', task: '', hours: 1 }
 }
 
 /** エディタへ読み込む形へ整える（旧データの theme をプロジェクト名で補完してから編集させる） */
@@ -280,24 +264,14 @@ function loadEditor(): void {
     editReflection.value = r.reflection
     editIssues.value = r.issues
     editIssueCategory.value = r.issueCategory ?? ''
-    editTomorrow.value = r.tomorrow
-    editPlans.value = (r.tomorrowPlans ?? []).map(p => ({ ...p }))
-    reflected.value = null
+    editTomorrow.value = tomorrowTextOf(r)
   } else {
-    // 未作成日は前営業日に登録した「明日の予定」をエントリへ自動反映する（オペレーター指示 2026-07-22）
-    const auto = autoPlans.value
-    if (auto && auto.plans.length > 0) {
-      editEntries.value = auto.plans.map(p => ({ theme: p.theme, projectId: '', task: p.task, hours: p.hours, progress: 0 }))
-      reflected.value = auto
-    } else {
-      editEntries.value = [blankEntry()]
-      reflected.value = null
-    }
+    // 前営業日の「明日の予定」の自動反映は廃止（改善要望 2026-08-21: テキスト入力形式化とあわせて除外）
+    editEntries.value = [blankEntry()]
     editReflection.value = ''
     editIssues.value = ''
     editIssueCategory.value = ''
     editTomorrow.value = ''
-    editPlans.value = []
   }
 }
 // 日付・ユーザーが変わったら提出済み編集モードを終了する。
@@ -315,9 +289,7 @@ function startEditSubmitted(): void {
   editReflection.value = r.reflection
   editIssues.value = r.issues
   editIssueCategory.value = r.issueCategory ?? ''
-  editTomorrow.value = r.tomorrow
-  editPlans.value = (r.tomorrowPlans ?? []).map(p => ({ ...p }))
-  reflected.value = null
+  editTomorrow.value = tomorrowTextOf(r)
   editingSubmitted.value = true
   scrollToEditor()
 }
@@ -356,24 +328,6 @@ function stepHours(i: number, delta: number): void {
   if (!e) return
   const cur = Number.isFinite(e.hours) ? e.hours : 0
   e.hours = Math.max(0, Math.round((cur + delta) * 4) / 4)
-}
-
-// 明日の予定（最大 TOMORROW_PLANS_MAX 件）
-
-function addPlan(): void {
-  if (editPlans.value.length >= TOMORROW_PLANS_MAX) return
-  editPlans.value.push(blankPlan())
-}
-
-function removePlan(i: number): void {
-  editPlans.value.splice(i, 1)
-}
-
-function stepPlanHours(i: number, delta: number): void {
-  const p = editPlans.value[i]
-  if (!p) return
-  const cur = Number.isFinite(p.hours) ? p.hours : 0
-  p.hours = Math.max(0, Math.round((cur + delta) * 4) / 4)
 }
 
 const totalHours = computed(() =>
@@ -415,7 +369,9 @@ function payload() {
     issues: editIssues.value,
     issueCategory: editIssueCategory.value,
     tomorrow: editTomorrow.value,
-    tomorrowPlans: editPlans.value.map(p => ({ ...p })),
+    // テキスト入力へ一本化（改善要望 2026-08-21）。旧行形式は編集開始時にテキストへ変換済みのため
+    // 空で送る（未編集の既存日報はそもそも保存されないので行データは温存される = 原則2）
+    tomorrowPlans: [],
   }
 }
 
@@ -488,7 +444,9 @@ const dayCalEvents = computed(() =>
 
 /**
  * カレンダー予定を日報エントリへ取り込む（同期 → 予定を行へ変換）。
- * 既存エントリと同名（内容一致）の予定はスキップ = 再取込しても増殖しない（冪等 = 原則2）。
+ * 予定タイトルは「テーマ」列へ入れる（改善要望 2026-08-21: 従来は「内容」に入っていた。
+ * 内容 = 実際に行った作業はユーザーが記入する）。テーマは入力欄と同じ 100 字キャップ。
+ * 既存エントリと同名（テーマ一致）の予定はスキップ = 再取込しても増殖しない（冪等 = 原則2）。
  * 取り込んだ行はその後自由に編集・削除できる（取消フロー = 行削除。原則9.5）。
  */
 async function importCalendarEvents(): Promise<void> {
@@ -502,11 +460,11 @@ async function importCalendarEvents(): Promise<void> {
       show('この日のカレンダー予定はありません', 'info')
       return
     }
-    const existing = new Set(editEntries.value.map(e => e.task.trim()).filter(Boolean))
+    const existing = new Set(editEntries.value.map(e => entryTheme(e).trim()).filter(Boolean))
     const rows: ReportEntry[] = events
-      .filter(e => !existing.has(e.title.trim()))
+      .filter(e => !existing.has([...e.title.trim()].slice(0, 100).join('')))
       .map(e => ({
-        theme: '', projectId: '', task: e.title,
+        theme: [...e.title.trim()].slice(0, 100).join(''), projectId: '', task: '',
         hours: toQuarterHours(Math.max(0, hhmmToMin(e.to) - hhmmToMin(e.from))), progress: 0,
       }))
     if (rows.length === 0) {
@@ -587,7 +545,6 @@ async function onGenerateDraft(): Promise<void> {
     editIssues.value = d.issues
     editTomorrow.value = d.tomorrow
     draftBasis.value = d.basis
-    reflected.value = null
     confirmStep.value = true
     mineEditing.value = true
     show('AI ドラフトを生成しました。内容を確認・修正して提出してください')
@@ -1321,18 +1278,6 @@ function openAllRow(row: Record<string, unknown>): void {
             </template>
           </div>
 
-          <!-- 前営業日の明日の予定を自動反映したバナー -->
-          <div v-if="reflected" class="rounded-lg bg-brand-soft p-3">
-            <p class="text-[13px] font-bold text-brand">
-              {{ fmtDateLong(reflected.fromDate) }} に登録した「明日の予定」を反映しました
-            </p>
-            <ul class="mt-1 grid gap-0.5">
-              <li v-for="(p, i) in reflected.plans" :key="i" class="text-xs text-sub">
-                ・{{ p.theme || '—' }}{{ p.purpose ? `（目的: ${p.purpose}）` : '' }}
-              </li>
-            </ul>
-          </div>
-
           <!-- Google カレンダー予定の読込・取込（改善要望 2026-08-17。F-14 と同じ useCalendar。
                未連携時は連携ゲート = WidgetsCalendarConnectGate〔擬似 OAuth / OAuth リダイレクト〕を表示） -->
           <WidgetsCalendarConnectGate v-if="calStatusLoaded && calEnabled && !calConnected" />
@@ -1448,65 +1393,16 @@ function openAllRow(row: Record<string, unknown>): void {
             />
           </UiFormField>
 
-          <!-- 明日の予定（最大 3 件。翌営業日の日報へ自動反映） -->
-          <UiFormField label="明日の予定" :hint="`最大 ${TOMORROW_PLANS_MAX} 件。登録すると翌営業日の日報エントリへ自動反映されます`">
-            <div v-if="editPlans.length > 0" class="overflow-x-auto scroll-slim">
-              <table class="tbl min-w-[640px]">
-                <thead>
-                  <tr>
-                    <th class="w-[22%]">テーマ</th>
-                    <th class="w-[26%]">目的</th>
-                    <th>内容</th>
-                    <th class="w-40 !text-right">時間 (h)</th>
-                    <th class="w-12"><span class="sr-only">操作</span></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="(p, i) in editPlans" :key="i">
-                    <td class="!py-1.5">
-                      <input v-model="p.theme" type="text" maxlength="100" class="input" placeholder="例）○○案件" :aria-label="`明日の予定${i + 1} テーマ`">
-                    </td>
-                    <td class="!py-1.5">
-                      <input v-model="p.purpose" type="text" class="input" placeholder="何のために" :aria-label="`明日の予定${i + 1} 目的`">
-                    </td>
-                    <td class="!py-1.5">
-                      <input v-model="p.task" type="text" class="input min-w-36" placeholder="実施する作業" :aria-label="`明日の予定${i + 1} 内容`">
-                    </td>
-                    <td class="!py-1.5">
-                      <div class="flex items-center justify-end gap-1">
-                        <button type="button" class="btn btn-sm" aria-label="時間を 0.25h 減らす" @click="stepPlanHours(i, -0.25)">
-                          <Minus class="h-3.5 w-3.5" aria-hidden="true" />
-                        </button>
-                        <input v-model.number="p.hours" type="number" min="0" step="0.25" class="input num w-20 text-right" :aria-label="`明日の予定${i + 1} 時間`">
-                        <button type="button" class="btn btn-sm" aria-label="時間を 0.25h 増やす" @click="stepPlanHours(i, 0.25)">
-                          <Plus class="h-3.5 w-3.5" aria-hidden="true" />
-                        </button>
-                      </div>
-                    </td>
-                    <td class="!py-1.5 text-right">
-                      <button type="button" class="btn btn-sm text-crit" :aria-label="`明日の予定${i + 1} を削除`" @click="removePlan(i)">
-                        <Trash2 class="h-3.5 w-3.5" aria-hidden="true" />
-                      </button>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-            <div class="mt-1.5 flex items-center gap-2">
-              <button
-                type="button"
-                class="btn btn-sm"
-                :disabled="editPlans.length >= TOMORROW_PLANS_MAX"
-                @click="addPlan"
-              >
-                <Plus class="h-3.5 w-3.5" aria-hidden="true" />
-                予定を追加
-              </button>
-              <span v-if="editPlans.length >= TOMORROW_PLANS_MAX" class="text-[11px] text-muted">上限 {{ TOMORROW_PLANS_MAX }} 件に達しています</span>
-            </div>
-            <p v-if="editTomorrow" class="mt-1.5 text-[11px] text-muted">
-              旧形式の明日の予定（自由記述）が保存されています: 「{{ editTomorrow }}」（保存時にそのまま保持されます）
-            </p>
+          <!-- 明日の予定（テキスト入力形式 = 改善要望 2026-08-21。行追加形式と翌営業日への自動反映は廃止。
+               旧行形式のデータは編集開始時にテキストへ変換されて引き継がれる = 原則7） -->
+          <UiFormField label="明日の予定">
+            <textarea
+              v-model="editTomorrow"
+              class="textarea"
+              rows="3"
+              placeholder="例）○○案件の実装続き、△△の定例 MTG"
+              aria-label="明日の予定"
+            />
           </UiFormField>
 
           <div class="flex flex-wrap items-center justify-end gap-2">

@@ -347,7 +347,8 @@ graph TD
 - **型・テンプレート（SoT = `home/app/utils/dashboard-layout.ts`）**: `DashboardLayout`
   = `{ templateId, sections: MenuCategoryDef[], options: { notifications: 'top'|'side'|'bottom'|'hidden',
   notificationsInherit?: boolean（true = 配置は専用キーへ委譲。分離後の保存が立てる = 2026-08-18）,
-  showAkebono: boolean, density: 'comfortable'|'compact' } }`。テンプレートは 6 種
+  showOther?: boolean, density: 'comfortable'|'compact' } }`（showAkebono は 2026-08-21 の
+  固定セクション廃止で撤去 = 保存済みの値は無視）。テンプレートは 6 種
   （**通知の配置はテンプレートでは変更されない = 2026-08-18 分離。options.notifications はキー未設定時のフォールバック値**）:
   - `default`（標準）= 現行構成（DEFAULT_MENU_CATEGORIES.dashboard 流用）
   - `operations`（現場オペレーション）= 毎日の業務（打刻/勤怠/シフト/日報/AIアシスタント）を最上部・フィールド業務アプリ風
@@ -410,11 +411,10 @@ graph TD
     カテゴリ/デフォルトへ）。レスポンシブ（原則8）= テンプレートは 1 → 2 列・セクション編集の行操作は flex-wrap。
 - **反映（`pages/index.vue`）**: `effectiveLayout` に従いセクション（categorize）・通知位置（side = 右カラム /
   bottom = メニュー下 / hidden = 非表示）・AKEBONO 表示・密度（UiCardMenu の dense）を描画。
-  **AKEBONO 業態アプリのカテゴリ配置（#24）**: 業態カードプールと専用「AKEBONO 業務（業態別）」セクションの
-  振り分けは純関数 `planDashboardCards` が担い**二重表示を防ぐ** — akebonoAccessible（isEnabled('akebono') ∧ 権限
-  ∧ 業態数）が true かつ options.showAkebono が true のとき、セクションへ割当済みの業態はセクション配置側に、未割当
-  業態のみを専用セクション（`AkebonoSegmentApps :segment-ids`）に表示（全業態割当済みなら専用セクションは出さない）。
-  showAkebono が false（focus 等）のときは業態カードを通常メニューへ混ぜ未割当は「その他」へ。akebonoAccessible が
+  **AKEBONO 業態アプリのカテゴリ配置（#24 → トップ固定セクション廃止 2026-08-21）**: 業態カードは
+  他メニューカードと同様に categorizeCards がセクション配置し、未割当は「その他」セクションに出る
+  （専用「AKEBONO 業務（業態別）」固定セクションと planDashboardCards の振り分けロジックは廃止 =
+  全カードがセクション設定の制御下）。akebonoAccessible（機能トグル ∧ 権限 ∧ 業態数）が
   false のときは業態カードをどこにも出さない。既存のカテゴリチップ絞り込み・外部リンク合流・通知の未読フィルタ/
   カテゴリタブは不変。通知欄は `OfficeDashboardNotifications` に分離し配置を切替可能にした。
 - **通知欄 side の追従（フィードバック 2026-08-11）**: side 配置の通知カードは sticky をアプリヘッダー（`sticky top-0`・

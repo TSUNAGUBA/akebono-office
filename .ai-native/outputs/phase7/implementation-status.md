@@ -4207,3 +4207,68 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   BarChartCard の company/intel 複製版は horizontal 未使用（縦棒・短ラベルのみ）のため省略ロジックの
   同期は見送り = 次回チャート改修時に同期する（複製 drift の認識記録）。
   最終スイープ: R1 対応後ビルドで 3 アプリ全ルート（74/8/6 + 動的詳細）× 両プローブ全 CLEAN。
+
+## 102. 改修依頼 2026-08-21（6 改修単位 = 日報テーマ/明日の予定・リマインド種別化・週報タブ権限バグ・BP Next Action メモ + AI 反映・ダッシュボード AKEBONO 統合・改善要望 Ver2）の完了条件（Definition of Done）
+
+対象: home + api + shared/domain。マイグレーション 0078（権限移行）・0079（BP 列追加）。
+
+### 102-1 日報（/reports）: カレンダー取込のテーマ反映 + 明日の予定のテキスト化（#1）
+- [x] カレンダー取込: 予定タイトルを「内容」→「**テーマ**」列へ（100 字キャップ・冪等キーもテーマ一致へ変更。
+  内容 = 実施した作業はユーザーが記入する = 日報の意味論）。
+- [x] 明日の予定: 行追加形式（テーマ/目的/内容/時間・最大 3 件）→ **自由記述テキスト**へ回帰 +
+  **翌営業日エントリへの自動反映を廃止**（要望の明示指示。useReports.tomorrowPlansFor / autoPlans /
+  反映バナー撤去）。旧行形式データは参照表示互換 + 編集開始時にテキストへ変換して引き継ぐ
+  （`- テーマ / 目的 / 内容（Xh）` 行。保存時のみデータ形が変わる = 原則2/7。DB 変更なし = 既存 tomorrow 列を再利用）。
+
+### 102-2 設定: リマインドの種別（日報/週報/月報）単位化（#2）
+- [x] configs 'report-reminder' を種別ごとの { enabled, time, external } へ（旧形状 = 日報として読替え・
+  壊れた種別のみ disabled = 原則7）。last-sent も種別ごとの日付キーへ（旧 = 単一日付 → daily）。
+- [x] runReportReminders: 3 種別を単一ジョブで処理（週報 = 先週・月報 = 先月の未提出者。
+  週/月キー計算は shared/domain/report-reminder に実装〔weekStartKeyOf = report-weeks.ts と同一定義〕）。
+- [x] **種別ごとの外部通知設定**: external=false は notify の新オプション inAppOnly で外部チャネル
+  （Slack/Google Chat）への配信を抑制（本人の通知マトリクスより優先）。
+- [x] 設定 UI: 「日報リマインド」カード →「リマインド」カード（種別 3 行 = エスカレーションルールと同型）。
+- [x] mock パリティ: plugins/report-reminder.client.ts を 3 種別対応（localStorage v2・旧 v1 は daily として読替え）。
+- [x] docs: F-48 / deploy-guide 1-7d / CONVENTIONS。テスト: home 21 / api 8 / 統合（週報・月報の実発火 + last-sent 形状）。
+
+### 102-3 週報/月報: 権限を付与してもタブが出ないバグの恒久対応（#3）
+- [x] **根本原因**: 独立化（§93）の「新キーのルールが無い間は旧 'reports' 設定を継承」する動的フォールバックが、
+  カタログから外れた旧 `reports/tab:weekly-*` deny を**権限表に見えない・解除できない実効ルール**として残した
+  （権限表は ✓ なのにタブが出ない）。
+- [x] **0078**: 旧タブルールを新キーへ物理移行（`tab:weekly-all` → `weekly-report/tab:all` 等。新キー側に同一対象の
+  ルールがあれば旧行を無効化 = 管理者の新設定を上書きしない）+ 機能レベル（field=null）ルールを新キーへ複製
+  （分割前の「reports 全体」の意図を保存）。冪等（統合テストで再適用を検証）。deny は勝手に緩めず移行 =
+  権限表から通常操作で解除できる状態を回復（取消可能性）。
+- [x] 動的継承の撤去（resolveFeatureResource / resolveTabPermission = 素通し化）。モックは日次再シードのため
+  移行処理不要。テスト（home 9 / api 7）を新仕様（旧ルールが漏れ出さない）へ書き換え。docs: F-06-12 / permissions docblock。
+
+### 102-4 BP 活動: Next Action メモ + AI 集約の基本情報反映（#4）
+- [x] **nextActionNote**（自由記述・任意・BP のみ = 0079。currentState 等の BP 固有フィールドの前例に整合。
+  営業活動へは非追加 = 要望範囲・docblock に明記）。フォーム・詳細・検索対象（searchCols）・mock・seed へ反映。
+- [x] **AI集約の更新提案**: digest 生成に proposal（currentState/status/nextAction/nextActionDate/nextActionNote）を
+  追加（BP のみ = spec.propose。LLM = スキーマ強制 + 正規化〔列挙・日付検証・現在値と同値の除去〕/
+  ヒューリスティック = 最新ログの Next Action 系のみ = 決定的）。AI集約カードが現在値との差分を表示 →
+  「基本情報へ反映」（差分フィールドのみの部分更新）→「反映を取り消す」で復元（原則9.5 =
+  applyDigestProposal が before を返す）。**自動反映はしない**（AI 入力 → 確認・判断 = 要望の指定フロー）。
+
+### 102-5 ダッシュボード: AKEBONO 業務のトップ固定表示廃止（#5）
+- [x] 業態カード（akebono-seg:*）を他メニューと同様に categorizeCards が配置（未割当 = 「その他」へ。
+  showOther で表示制御可）。専用固定セクション・planDashboardCards / assignedAkebonoSegmentIds・
+  options.showAkebono を撤去（保存済みの showAkebono 値は normalizeOptions が無視 = 無害）。
+  会社全体ダッシュボードへの導線は /akebono ハブ内に既存（機能後退なし）。
+  docs: F-01-5 / F-13-9 / screen-design。テスト 71 件 green（配置・includeOther の新テストへ書換え）。
+
+### 102-6 改善要望: AI 整形の文章補完化 + 起票者の解決フラグ + ステータス統一 + 運用対応コメント（#6）
+- [x] **AIで整形**: プロンプトを文章補完型へ（誤字修正・曖昧表現の明確化・主語/目的語の補完・表記ゆれ統一。
+  事実の創作は禁止のまま。フォールバックのヒューリスティックは従来どおり整形のみ = 設計判断を文書化）。
+- [x] **起票者の解決フラグ**: 本人が自分の要望を resolved ⇄ open に切替（要望詳細ドロワー「解決の記録」。
+  API = 本人は resolved/open のみ・dismissed と他人の要望は管理権限者のみ〔canManage 複合ガード〕。統合テスト追加）。
+- [x] **受付箱一覧のステータス列**: 紐づく改修単位のステータス（itemStatusOf = カンバン/ガントと同じ軸）を
+  バッジ表示（「一覧とカンバンの不一致」の解消。導出値のためソート不可）。
+- [x] **運用対応の案内コメント必須**: operational への変更は「運用方法の案内」を入力 → メモ（時系列）へ
+  「運用案内: …」として記録してからステータス変更（カンバンからはドロワーへ誘導 = 継続検討と同型）。
+  docs: F-42 追補。
+
+### 102-7 検証・反復レビュー（原則9 = SP-8）
+- [ ] home vitest / api unit / 統合（実 PostgreSQL）/ 両 typecheck / generate / モバイル 375px
+- [ ] 独立レビュー（コードレビュアー + システム監査官）を指摘ゼロまで反復

@@ -20,8 +20,9 @@ import {
   partnerActivityError, type PartnerActivityInput,
 } from '../../../shared/domain/activity'
 import { capCodePoints as capCp } from '../../../shared/domain/customer-log'
+import { PARTNER_ACTIVITY_STATUSES } from '../../../shared/domain/types'
 import { storageCommitError } from '~/composables/useActivityLogs'
-import type { ActivityLog, Company, PartnerActivity, Result, SalesActivity } from '~/types/domain'
+import type { ActivityDigestProposal, ActivityLog, Company, PartnerActivity, Result, SalesActivity } from '~/types/domain'
 import type { Tone } from '~/types/ui'
 
 export type { PartnerActivityInput }
@@ -47,6 +48,7 @@ function normalized(input: PartnerActivityInput): PartnerActivityInput {
     initiatives: capCp(input.initiatives.trim(), BODY_CAP),
     currentState: capCp(input.currentState.trim(), BODY_CAP),
     nextAction: capCp(input.nextAction.trim(), BODY_CAP),
+    nextActionNote: capCp(input.nextActionNote.trim(), BODY_CAP),
     relatedMeeting: capCp(input.relatedMeeting.trim(), NAME_CAP),
     memo: capCp(input.memo.trim(), BODY_CAP),
     nextActionDate: input.nextActionDate || null,
@@ -157,6 +159,7 @@ export function usePartnerActivities() {
         currentState: n.currentState,
         nextAction: n.nextAction,
         nextActionDate: n.nextActionDate,
+        nextActionNote: n.nextActionNote,
         staffMemberId: n.staffMemberId || currentUser.value.id,
         relatedMeeting: n.relatedMeeting,
         relatedSalesActivityId: n.relatedSalesActivityId,
@@ -189,6 +192,7 @@ export function usePartnerActivities() {
       currentState: n.currentState,
       nextAction: n.nextAction,
       nextActionDate: n.nextActionDate,
+      nextActionNote: n.nextActionNote,
       staffMemberId: n.staffMemberId || currentUser.value.id,
       relatedMeeting: n.relatedMeeting,
       relatedSalesActivityId: n.relatedSalesActivityId,
@@ -250,8 +254,13 @@ export function usePartnerActivities() {
     if (!target) return { ok: false, error: { code: 'AKO-PTN-002', message: 'ビジネスパートナー活動が見つかりません' } }
     const logs = (logRows.value as ActivityLog[]).filter(l => l.activityId === id && l.active !== false)
     const digest = heuristicActivityDigest(
-      { title: target.theme, status: target.status, nextAction: target.nextAction, nextActionDate: target.nextActionDate },
+      {
+        title: target.theme, status: target.status, nextAction: target.nextAction,
+        nextActionDate: target.nextActionDate, currentState: target.currentState,
+        nextActionNote: target.nextActionNote ?? '',
+      },
       logs,
+      { propose: true }, // 基本情報の更新提案（改善要望 2026-08-21。ヒューリスティックは Next Action 系のみ提案）
     )
     const prev = rows.value
     // 導出キャッシュの上書きのみ（updatedAt は動かさない = 記録の編集と区別。API と同一挙動）
@@ -265,10 +274,56 @@ export function usePartnerActivities() {
     return { ok: true, id }
   }
 
+  /**
+   * AI集約の基本情報更新提案を反映する（改善要望 2026-08-21 = AI 入力 → 確認 → 反映）。
+   * 返り値 before = 反映前の値（同じ関数で再反映すると元へ戻る = 取消フロー・原則9.5）。
+   * API = PATCH の部分更新（proposal に含まれるフィールドのみ）/ mock = 行の部分更新。
+   */
+  async function applyDigestProposal(
+    id: string, proposal: ActivityDigestProposal,
+  ): Promise<Result & { before?: ActivityDigestProposal }> {
+    const patch: Record<string, unknown> = {}
+    if (proposal.currentState !== undefined) patch.currentState = capCp(proposal.currentState.trim(), BODY_CAP)
+    if (proposal.status !== undefined) {
+      if (!(PARTNER_ACTIVITY_STATUSES as readonly string[]).includes(proposal.status)) {
+        return { ok: false, error: { code: 'AKO-PTN-001', message: 'ステータスの値が正しくありません' } }
+      }
+      patch.status = proposal.status
+    }
+    if (proposal.nextAction !== undefined) patch.nextAction = capCp(proposal.nextAction.trim(), BODY_CAP)
+    if (proposal.nextActionDate !== undefined) patch.nextActionDate = proposal.nextActionDate
+    if (proposal.nextActionNote !== undefined) patch.nextActionNote = capCp(proposal.nextActionNote.trim(), BODY_CAP)
+    if (Object.keys(patch).length === 0) return { ok: true, id }
+    const cur = byId(id)
+    if (!cur) return { ok: false, error: { code: 'AKO-PTN-002', message: 'ビジネスパートナー活動が見つかりません' } }
+    const before: ActivityDigestProposal = {}
+    if (proposal.currentState !== undefined) before.currentState = cur.currentState
+    if (proposal.status !== undefined) before.status = cur.status
+    if (proposal.nextAction !== undefined) before.nextAction = cur.nextAction
+    if (proposal.nextActionDate !== undefined) before.nextActionDate = cur.nextActionDate
+    if (proposal.nextActionNote !== undefined) before.nextActionNote = cur.nextActionNote ?? ''
+    if (isApi) {
+      const res = await apiWrite<PartnerActivity>(`/v1/partner-activities/${encodeURIComponent(id)}`, {
+        method: 'PATCH', body: patch,
+      })
+      if (!res.ok) return res
+      setApiRow('partnerActivities', res.data)
+      return { ok: true, id, before }
+    }
+    const all = rows.value as PartnerActivity[]
+    const prev = rows.value
+    rows.value = all.map(r => r.id === id ? { ...r, ...patch, updatedAt: nowJstIso() } : r)
+    if (!commit()) {
+      rows.value = prev
+      return { ok: false, error: storageCommitError('AKO-PTN') }
+    }
+    return { ok: true, id, before }
+  }
+
   /** サーバーキャッシュの再取得（API モードのみ） */
   async function refresh(): Promise<void> {
     if (isApi) await loadApiCollection('partnerActivities', true)
   }
 
-  return { list, archivedList, byId, save, archive, restore, generateDigest, refresh }
+  return { list, archivedList, byId, save, archive, restore, generateDigest, applyDigestProposal, refresh }
 }

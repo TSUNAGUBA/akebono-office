@@ -235,10 +235,11 @@ gcloud scheduler jobs create http uptime-rollup \
 再計算は窓内 DELETE→INSERT のトランザクションで冪等。手動回復は管理者 API
 `POST /v1/status/uptime/recompute`（直近 90 日・serviceId 指定可）でいつでも実行できる。
 
-## 1-7d. 日報の自動リマインド（Cloud Scheduler・任意。改修依頼 2026-08-20）
+## 1-7d. 日報・週報・月報の自動リマインド（Cloud Scheduler・任意。改修依頼 2026-08-20 → 種別単位化 2026-08-21）
 
-管理者が設定画面（/settings「日報リマインド」= 有効トグル + 通知時刻）を有効にすると、設定時刻以降の
-最初の実行タイミングで、前日まで直近 5 営業日に未提出の日報があるメンバーへ通知する（F-48）。
+管理者が設定画面（/settings「リマインド」= 種別〔日報/週報/月報〕ごとの 有効トグル + 通知時刻 + 外部通知）を
+有効にすると、種別ごとに設定時刻以降の最初の実行タイミングで未提出のメンバーへ通知する（F-48。
+日報 = 前日まで直近 5 営業日 / 週報 = 先週分 / 月報 = 先月分。3 種別とも下記の単一ジョブが処理する）。
 1-7 と同じ `CRON_SECRET` を使い:
 
 ```bash
@@ -249,8 +250,8 @@ gcloud scheduler jobs create http report-reminders \
 ```
 
 **推奨周期は 5〜15 分毎**（例は 10 分毎。設定時刻からの通知遅延がこの周期の分だけ生じる）。
-「設定時刻を過ぎたか」「今日すでに送ったか」の判定は**ジョブ内部で自己制御**する
-（configs `report-reminder-last-sent` の日次 1 回 + `pg_try_advisory_lock` の advisory lock =
+「設定時刻を過ぎたか」「今日すでに送ったか」の判定は**種別ごとにジョブ内部で自己制御**する
+（configs `report-reminder-last-sent`〔種別ごとの日付キー〕の日次 1 回 + `pg_try_advisory_lock` の advisory lock =
 重複起動・リトライでも二重通知しない）ため、**どの周期で叩いても安全**（冪等）。
 リマインドが無効（既定）の間は何もしないので、ジョブを先に作っておいても害はない。
 

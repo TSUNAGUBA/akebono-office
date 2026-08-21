@@ -36,14 +36,6 @@ const showOther = computed(() => props.layout.options.showOther !== false)
         <Monitor class="h-2.5 w-2.5" /> PC
       </p>
 
-      <!-- AKEBONO 業務バンド（表示時のみ） -->
-      <div
-        v-if="layout.options.showAkebono"
-        class="mb-1.5 rounded bg-brand-soft px-1.5 py-1 text-[9px] font-bold text-brand"
-      >
-        AKEBONO 業務
-      </div>
-
       <!-- side: 左にセクション・右に通知バー / top: 通知バーを先頭に / それ以外: セクションを縦積み -->
       <div class="flex gap-1.5" :class="notif === 'side' ? '' : 'flex-col'">
         <!-- 通知バー（top = 最上段に全幅配置。改善要望 2026-08-17） -->
@@ -107,14 +99,6 @@ const showOther = computed(() => props.layout.options.showOther !== false)
           <span class="absolute -right-0.5 -top-0.5 h-1 w-1 rounded-full bg-crit" />
         </span>
       </p>
-
-      <!-- AKEBONO 業務バンド（表示条件は PC と共通） -->
-      <div
-        v-if="layout.options.showAkebono"
-        class="mb-1 rounded bg-brand-soft px-1.5 py-0.5 text-[9px] font-bold text-brand"
-      >
-        AKEBONO 業務
-      </div>
 
       <!-- メニューを縦積みで最優先（通知欄はここに出さない = 毎回スクロールしない） -->
       <div class="grid gap-0.5">

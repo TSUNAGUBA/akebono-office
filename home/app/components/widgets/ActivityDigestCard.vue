@@ -5,10 +5,12 @@
  * - 保存済み digest（活動ログの時系列集約）を表示し、「AIで集約」で生成 → 保管 → 再生成で上書き。
  * - モック = 決定的ヒューリスティック / API = LLM → 失敗時ヒューリスティック（原則4。生成は失敗しない設計）。
  * - 生成失敗（通信断・保存容量超過等）はカード内のインライン領域（role="alert"）へ表示（トースト任せにしない）。
+ * - 基本情報の更新提案（BP のみ・改善要望 2026-08-21）: digest.proposal を現在値との差分で表示し、
+ *   「基本情報へ反映」で確認 → 反映。反映後は「反映を取り消す」で元の値へ戻せる（原則9.5）。
  */
-import { AlertCircle, Sparkles } from 'lucide-vue-next'
-import type { ActivityAiDigest } from '~/types/domain'
-import { fmtDateTime } from '~/utils/format'
+import { AlertCircle, Sparkles, Undo2 } from 'lucide-vue-next'
+import type { ActivityAiDigest, ActivityDigestProposal } from '~/types/domain'
+import { fmtDate, fmtDateTime } from '~/utils/format'
 
 const props = defineProps<{
   kind: 'sales' | 'partner'
@@ -23,7 +25,10 @@ const pact = usePartnerActivities()
 const { show } = useToast()
 
 const generating = ref(false)
+const applying = ref(false)
 const error = ref('')
+/** 反映済みの取消用スナップショット（反映のたびに更新。再生成・別提案で破棄） */
+const undoSource = ref<ActivityDigestProposal | null>(null)
 
 async function generate(): Promise<void> {
   if (generating.value) return
@@ -37,9 +42,82 @@ async function generate(): Promise<void> {
       error.value = `${res.error.code}: ${res.error.message}`
       return
     }
+    undoSource.value = null // 新しい集約 = 過去の反映取消スナップショットは無効
     show('AI集約を生成しました')
   } finally {
     generating.value = false
+  }
+}
+
+// ---------- 基本情報の更新提案（BP のみ。現在値との差分表示 → 反映 → 取消） ----------
+
+const PROPOSAL_LABELS: Record<keyof ActivityDigestProposal, string> = {
+  currentState: '現在状況',
+  status: 'ステータス',
+  nextAction: 'Next Action',
+  nextActionDate: 'Next Action日',
+  nextActionNote: 'Next Action メモ',
+}
+
+const current = computed(() => (props.kind === 'partner' ? pact.byId(props.activityId) : null))
+
+/** 表示する差分行（提案があり、かつ現在値と異なるフィールドのみ。反映後は自然に消える） */
+const proposalRows = computed(() => {
+  const proposal = props.digest?.proposal
+  const cur = current.value
+  if (props.kind !== 'partner' || !proposal || !cur) return []
+  const currentOf: Record<keyof ActivityDigestProposal, string> = {
+    currentState: cur.currentState,
+    status: cur.status,
+    nextAction: cur.nextAction,
+    nextActionDate: cur.nextActionDate ?? '',
+    nextActionNote: cur.nextActionNote ?? '',
+  }
+  return (Object.keys(PROPOSAL_LABELS) as (keyof ActivityDigestProposal)[])
+    .filter(k => proposal[k] !== undefined && String(proposal[k] ?? '') !== currentOf[k])
+    .map(k => ({
+      key: k,
+      label: PROPOSAL_LABELS[k],
+      from: k === 'nextActionDate' ? (currentOf[k] ? fmtDate(currentOf[k]) : '—') : (currentOf[k] || '—'),
+      to: k === 'nextActionDate' ? fmtDate(String(proposal[k])) : String(proposal[k]),
+    }))
+})
+
+async function applyProposal(): Promise<void> {
+  const proposal = props.digest?.proposal
+  if (!proposal || applying.value) return
+  // 現在値と差のあるフィールドだけを反映する（表示している差分と反映内容を一致させる）
+  const target: ActivityDigestProposal = {}
+  for (const row of proposalRows.value) target[row.key] = proposal[row.key] as never
+  applying.value = true
+  error.value = ''
+  try {
+    const res = await pact.applyDigestProposal(props.activityId, target)
+    if (!res.ok) {
+      error.value = `${res.error.code}: ${res.error.message}`
+      return
+    }
+    undoSource.value = res.before ?? null
+    show('AI集約の提案を基本情報へ反映しました')
+  } finally {
+    applying.value = false
+  }
+}
+
+async function undoApply(): Promise<void> {
+  if (!undoSource.value || applying.value) return
+  applying.value = true
+  error.value = ''
+  try {
+    const res = await pact.applyDigestProposal(props.activityId, undoSource.value)
+    if (!res.ok) {
+      error.value = `${res.error.code}: ${res.error.message}`
+      return
+    }
+    undoSource.value = null
+    show('基本情報への反映を取り消しました')
+  } finally {
+    applying.value = false
   }
 }
 </script>
@@ -65,6 +143,35 @@ async function generate(): Promise<void> {
         {{ fmtDateTime(digest.generatedAt) }} 生成・ログ {{ digest.logCount }} 件時点
         <UiStatusBadge class="ml-1" :label="digest.llm ? 'AI生成' : '簡易集約'" :tone="digest.llm ? 'brand' : 'neutral'" />
       </p>
+
+      <!-- 基本情報の更新提案（BP のみ。AI 入力 → 確認 → 反映 = 改善要望 2026-08-21。
+           反映は差分フィールドのみの部分更新で、「反映を取り消す」で元の値へ戻せる = 原則9.5） -->
+      <div v-if="proposalRows.length > 0" class="rounded-lg border border-brand bg-brand-soft p-3">
+        <p class="text-[12px] font-bold text-brand">活動ログから読み取った基本情報の更新案</p>
+        <ul class="mt-1.5 grid gap-1">
+          <li v-for="row in proposalRows" :key="row.key" class="grid gap-0.5 text-xs">
+            <span class="font-semibold">{{ row.label }}</span>
+            <span class="min-w-0 text-sub">
+              <span class="line-through opacity-70">{{ row.from }}</span>
+              <span class="mx-1" aria-hidden="true">→</span>
+              <span class="font-medium text-ink">{{ row.to }}</span>
+            </span>
+          </li>
+        </ul>
+        <div class="mt-2 flex items-center gap-2">
+          <button type="button" class="btn btn-sm btn-primary" :disabled="applying" @click="applyProposal">
+            {{ applying ? '反映中…' : '基本情報へ反映' }}
+          </button>
+          <span class="text-[11px] text-muted">内容を確認してから反映してください</span>
+        </div>
+      </div>
+      <div v-else-if="undoSource" class="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-brand-soft px-3 py-2">
+        <p class="text-[12px] font-medium text-brand">提案を基本情報へ反映しました</p>
+        <button type="button" class="btn btn-sm" :disabled="applying" @click="undoApply">
+          <Undo2 class="h-3.5 w-3.5" aria-hidden="true" />
+          反映を取り消す
+        </button>
+      </div>
     </div>
     <UiEmptyState
       v-else

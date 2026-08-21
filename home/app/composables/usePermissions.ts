@@ -32,7 +32,7 @@ export function usePermissions() {
 
   function can(resource: string): boolean {
     // weekly-report / monthly-report は新キーのルール未設定の間、旧 'reports' 設定を継承する
-    // （resolveFeatureResource = API featureGuard と共通のフォールバック解決。改修依頼 2026-08-20 第2バッチ）
+    // （resolveFeatureResource = API featureGuard と共通の解決。旧 'reports' 継承は 0078 で撤去済み = 素通し）
     return canUseFeature(rules.value, subject.value, resolveFeatureResource(rules.value, resource))
   }
 

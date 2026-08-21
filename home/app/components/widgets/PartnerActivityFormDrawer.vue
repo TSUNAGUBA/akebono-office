@@ -72,6 +72,7 @@ const form = ref({
   currentState: '',
   nextAction: '',
   nextActionDate: '',
+  nextActionNote: '',
   staffMemberId: '',
   relatedMeeting: '',
   relatedSalesActivityId: '',
@@ -141,6 +142,7 @@ watch(() => props.open, (open) => {
       currentState: s.currentState,
       nextAction: s.nextAction,
       nextActionDate: s.nextActionDate ?? '',
+      nextActionNote: s.nextActionNote ?? '',
       staffMemberId: s.staffMemberId,
       relatedMeeting: s.relatedMeeting,
       relatedSalesActivityId: s.relatedSalesActivityId ?? '',
@@ -166,6 +168,7 @@ watch(() => props.open, (open) => {
       currentState: '',
       nextAction: '',
       nextActionDate: '',
+      nextActionNote: '',
       staffMemberId: currentUserId.value,
       relatedMeeting: '',
       relatedSalesActivityId: '',
@@ -199,6 +202,7 @@ async function save(): Promise<void> {
       currentState: form.value.currentState,
       nextAction: form.value.nextAction,
       nextActionDate: form.value.nextActionDate || null,
+      nextActionNote: form.value.nextActionNote,
       staffMemberId: form.value.staffMemberId || currentUserId.value,
       relatedMeeting: form.value.relatedMeeting,
       relatedSalesActivityId: form.value.relatedSalesActivityId || null,
@@ -314,6 +318,16 @@ async function save(): Promise<void> {
           <input v-model="form.nextActionDate" type="date" class="input" aria-label="Next Action日">
         </UiFormField>
       </div>
+      <!-- Next Action メモ（改善要望 2026-08-21。Next Action の補足を自由記述） -->
+      <UiFormField label="Next Action メモ">
+        <textarea
+          v-model="form.nextActionNote"
+          class="textarea"
+          rows="2"
+          placeholder="例）参画条件の合意点・持ち帰り事項など"
+          aria-label="Next Action メモ"
+        />
+      </UiFormField>
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <UiFormField label="関連MTG">
           <input v-model="form.relatedMeeting" type="text" class="input" placeholder="例）9/7 フローラMTG" aria-label="関連MTG">

@@ -667,7 +667,9 @@ export function useImprovements() {
     return { ok: true, id }
   }
 
-  /** 要望 1 件ずつのステータス変更（open/resolved/dismissed。遷移自由 = 誤操作はいつでも戻せる = 原則9.5） */
+  /** 要望 1 件ずつのステータス変更（open/resolved/dismissed。遷移自由 = 誤操作はいつでも戻せる = 原則9.5）。
+   *  権限: 管理者 = 任意 / 起票者本人 = 自分の要望の resolved ⇄ open（改善要望 2026-08-21。
+   *  API 側が同ガードを実装。mock は UI 側の表示ゲート〔本人ブロック・管理 select〕が同条件を担う） */
   async function setRequestStatus(id: string, status: ImprovementRequestStatus): Promise<Result> {
     if (!IMPROVEMENT_REQUEST_STATUSES.includes(status)) {
       return { ok: false, error: { code: 'AKO-REQ-011', message: 'status が不正です（open / resolved / dismissed）' } }

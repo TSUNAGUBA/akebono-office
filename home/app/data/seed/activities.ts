@@ -268,6 +268,7 @@ export function buildPartnerActivities(): PartnerActivity[] {
       summary: 'フローラ社との花き流通データ連携について協業の可能性を検討',
       currentState: '先方担当者と初回協議済み。データ提供範囲を調整中',
       nextAction: '3者MTG', nextActionDate: f(20),
+      nextActionNote: '流通データの提供範囲と守秘条件を先に固めてから臨む',
       staffMemberId: 'm-03', relatedMeeting: `${f(20).slice(5).replace('-', '/')} フローラMTG`,
       relatedSalesActivityId: null, memo: '案件化したら商談へリンクする',
     },

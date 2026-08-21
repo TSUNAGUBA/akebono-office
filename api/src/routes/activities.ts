@@ -25,8 +25,9 @@ import {
   supportActivityError, type SupportActivityInput,
 } from '../../../shared/domain/activity'
 import { capCodePoints } from '../../../shared/domain/customer-log'
-import { nowJstIso } from '../../../shared/domain/jst'
-import type { ActivityAiDigest } from '../../../shared/domain/types'
+import { isRealDateKey, nowJstIso } from '../../../shared/domain/jst'
+import type { ActivityAiDigest, ActivityDigestProposal } from '../../../shared/domain/types'
+import { PARTNER_ACTIVITY_STATUSES } from '../../../shared/domain/types'
 import type { AuthUser } from '../auth'
 import type { Env } from '../env'
 import { audit } from '../lib/audit'
@@ -71,7 +72,8 @@ function partnerColsFor(t: string): string {
   ${t}.approach_company_id AS "approachCompanyId", ${t}.approach_group AS "approachGroup", ${t}.theme,
   ${t}.related_company AS "relatedCompany", ${t}.activity_type AS "activityType", ${t}.status, ${t}.summary,
   ${t}.initiatives, ${t}.current_state AS "currentState", ${t}.next_action AS "nextAction",
-  ${t}.next_action_date::text AS "nextActionDate", ${t}.staff_member_id AS "staffMemberId",
+  ${t}.next_action_date::text AS "nextActionDate", ${t}.next_action_note AS "nextActionNote",
+  ${t}.staff_member_id AS "staffMemberId",
   ${t}.related_meeting AS "relatedMeeting", ${t}.related_sales_activity_id AS "relatedSalesActivityId",
   ${t}.memo, ${t}.links, ${t}.ai_digest AS "aiDigest", ${t}.active, ${jstStampsFor(t)}`
 }
@@ -220,6 +222,8 @@ interface ActivityLogSpec {
   idPrefix: string
   /** 親案件行 → digest 材料のヘッダー（商談名/フェーズ・テーマ名/ステータスの写像） */
   headerOf: (row: Record<string, unknown>) => ActivityDigestHeader
+  /** true = digest に基本情報の更新提案（proposal）を含める（BP 活動のみ。改善要望 2026-08-21） */
+  propose?: boolean
 }
 
 const LOG_COLS = `al.id, al.activity_id AS "activityId", al.member_id AS "memberId", al.member_name AS "memberName",
@@ -259,23 +263,71 @@ const DIGEST_SCHEMA = {
   required: ['summary'],
 }
 
+/** BP 活動用: 基本情報の更新提案つきスキーマ（改善要望 2026-08-21 = AI 入力 → 確認・判断） */
+const DIGEST_SCHEMA_WITH_PROPOSAL = {
+  type: 'object',
+  properties: {
+    summary: { type: 'string' },
+    highlights: { type: 'array', items: { type: 'string' } },
+    proposal: {
+      type: 'object',
+      properties: {
+        currentState: { type: 'string' },
+        status: { type: 'string', enum: [...PARTNER_ACTIVITY_STATUSES] },
+        nextAction: { type: 'string' },
+        nextActionDate: { type: 'string' },
+        nextActionNote: { type: 'string' },
+      },
+    },
+  },
+  required: ['summary'],
+}
+
+/**
+ * LLM の基本情報更新提案を正規化する（列挙・日付検証・cap・**現在値と同値の除去**）。
+ * 提案が残らなければ undefined（= 差分カードを出さない）。バリデーション兜 = LLM 出力は信用しない
+ */
+function normalizeDigestProposal(raw: unknown, header: ActivityDigestHeader): ActivityDigestProposal | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const o = raw as Record<string, unknown>
+  const out: ActivityDigestProposal = {}
+  const txt = (v: unknown): string => capCodePoints(String(v ?? '').trim(), BODY_CAP)
+  const cs = txt(o.currentState)
+  if (cs && cs !== (header.currentState ?? '').trim()) out.currentState = cs
+  const st = String(o.status ?? '').trim()
+  if (st && (PARTNER_ACTIVITY_STATUSES as readonly string[]).includes(st) && st !== header.status) out.status = st
+  const na = txt(o.nextAction)
+  if (na && na !== (header.nextAction ?? '').trim()) out.nextAction = na
+  const nd = String(o.nextActionDate ?? '').trim()
+  if (nd && isRealDateKey(nd) && nd !== (header.nextActionDate ?? '')) out.nextActionDate = nd
+  const nn = txt(o.nextActionNote)
+  if (nn && nn !== (header.nextActionNote ?? '').trim()) out.nextActionNote = nn
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
 /** LLM 集約（Vertex → 正規化）。無効環境・失敗・空出力は null（呼び出し側でヒューリスティックへ = 原則4） */
 async function llmActivityDigest(
-  env: Env, header: ActivityDigestHeader, logs: ActivityDigestLog[],
-): Promise<{ summary: string; highlights: string[] } | null> {
+  env: Env, header: ActivityDigestHeader, logs: ActivityDigestLog[], propose: boolean,
+): Promise<{ summary: string; highlights: string[]; proposal?: ActivityDigestProposal } | null> {
   if (!env.vertexProjectId) return null
   const material = logs.map(l => ({
     loggedOn: l.loggedOn, kind: l.kind, title: l.title,
     body: capCodePoints(l.body, 400),
     ...(l.nextAction ? { nextAction: l.nextAction, nextActionDate: l.nextActionDate ?? null } : {}),
   }))
-  const raw = await generateJson<{ summary?: unknown; highlights?: unknown }>(env, {
+  const raw = await generateJson<{ summary?: unknown; highlights?: unknown; proposal?: unknown }>(env, {
     system: 'あなたは営業・パートナー連携の案件アシスタント AI です。案件の活動ログ（時系列・古い順）を読み、'
       + '経緯と現在地がひと目でわかる要約を日本語で出力します。ログ・案件情報にある事実のみを根拠にし、'
       + '推測で事実や数値を作らないこと。summary は 3〜5 文で「経緯 → 現在地 → 次のアクション」の順。'
-      + 'highlights は要点の箇条書き（最大 5 件・各 60 字以内）。',
+      + 'highlights は要点の箇条書き（最大 5 件・各 60 字以内）。'
+      + (propose
+        ? '加えて、ログから読み取れる基本情報の更新案を proposal に含めること'
+          + '（currentState = 現在状況の最新の実態を 1〜2 文で・status = 現在に最も合うステータス・'
+          + 'nextAction / nextActionDate = 直近ログの次アクション・nextActionNote = 次アクションの補足メモ）。'
+          + '現在値（# 案件）から変える必要がないフィールドは省略すること。'
+        : ''),
     prompt: `# 案件\n${JSON.stringify(header, null, 1)}\n\n# 活動ログ（古い順・全${logs.length}件）\n${JSON.stringify(material, null, 1)}`,
-    schema: DIGEST_SCHEMA,
+    schema: propose ? DIGEST_SCHEMA_WITH_PROPOSAL : DIGEST_SCHEMA,
     maxTokens: 2048,
   })
   const summary = capCodePoints(String((raw as { summary?: unknown } | null)?.summary ?? '').trim(), 4000)
@@ -284,7 +336,8 @@ async function llmActivityDigest(
     ? ((raw as { highlights: unknown[] }).highlights)
         .map(h => capCodePoints(String(h ?? '').trim(), 200)).filter(Boolean).slice(0, 5)
     : []
-  return { summary, highlights }
+  const proposal = propose ? normalizeDigestProposal((raw as { proposal?: unknown } | null)?.proposal, header) : undefined
+  return { summary, highlights, ...(proposal ? { proposal } : {}) }
 }
 
 /**
@@ -405,8 +458,8 @@ function activityLogRoutes(app: Hono, pool: pg.Pool, env: Env, spec: ActivityLog
        FROM ${spec.logTable} WHERE activity_id = $1 AND active = true
        ORDER BY logged_on ASC, created_at ASC, id ASC`, [id])
     const header = spec.headerOf(parent)
-    const llm = await llmActivityDigest(env, header, logRows)
-    const result = llm ?? heuristicActivityDigest(header, logRows)
+    const llm = await llmActivityDigest(env, header, logRows, spec.propose === true)
+    const result = llm ?? heuristicActivityDigest(header, logRows, { propose: spec.propose === true })
     const digest: ActivityAiDigest = { ...result, generatedAt: nowJstIso(), logCount: logRows.length, llm: llm !== null }
     // 導出キャッシュの上書きのみ（updated_at は動かさない = 記録の編集と区別）
     await pool.query(`UPDATE ${spec.parentTable} SET ai_digest = $2 WHERE id = $1`, [id, JSON.stringify(digest)])
@@ -750,6 +803,7 @@ function partnerInputOf(b: Record<string, unknown>, userId: string): PartnerActi
     currentState: str(b.currentState, BODY_CAP),
     nextAction: str(b.nextAction, BODY_CAP),
     nextActionDate: strOrNull(b.nextActionDate),
+    nextActionNote: str(b.nextActionNote, BODY_CAP),
     staffMemberId: String(b.staffMemberId ?? '').trim() || userId,
     relatedMeeting: str(b.relatedMeeting, NAME_CAP),
     relatedSalesActivityId: strOrNull(b.relatedSalesActivityId),
@@ -796,7 +850,7 @@ export function partnerActivitiesRoutes(pool: pg.Pool, env: Env): Hono {
       orderBy: 'created_at DESC, id DESC',
       maxLimit: 1000,
       defaultLimit: 20,
-      searchCols: ['partner_name', 'theme', 'related_company', 'summary', 'initiatives', 'current_state', 'next_action', 'memo'],
+      searchCols: ['partner_name', 'theme', 'related_company', 'summary', 'initiatives', 'current_state', 'next_action', 'next_action_note', 'memo'],
       filterCols: {
         status: { col: 'status', kind: 'enum' },
         activityType: { col: 'activity_type', kind: 'enum' },
@@ -818,13 +872,13 @@ export function partnerActivitiesRoutes(pool: pg.Pool, env: Env): Hono {
         `INSERT INTO partner_activities
            (id, member_id, village_id, partner_company_id, partner_contact_id, approach_company_id,
             approach_group, partner_name, theme, related_company, activity_type, status, summary, initiatives,
-            current_state, next_action, next_action_date, staff_member_id, related_meeting,
+            current_state, next_action, next_action_date, next_action_note, staff_member_id, related_meeting,
             related_sales_activity_id, memo, links)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::date, $18, $19, $20, $21, $22)`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::date, $18, $19, $20, $21, $22, $23)`,
         [id, user.id, refs.villageId, refs.partnerCompanyId, refs.partnerContactId, refs.approachCompanyId,
           input.approachGroup, refs.partnerName, input.theme, refs.relatedCompany, input.activityType,
           input.status, input.summary, input.initiatives, input.currentState, input.nextAction, input.nextActionDate,
-          input.staffMemberId, input.relatedMeeting, input.relatedSalesActivityId, input.memo, linksJson(input.links)])
+          input.nextActionNote, input.staffMemberId, input.relatedMeeting, input.relatedSalesActivityId, input.memo, linksJson(input.links)])
       return refs.audits
     })
     await audit(pool, { actorId: user.id, action: 'create', entity: 'partner_activities', entityId: id, detail: 'ビジネスパートナー活動を登録' })
@@ -863,6 +917,7 @@ export function partnerActivitiesRoutes(pool: pg.Pool, env: Env): Hono {
       currentState: has('currentState') ? str(b.currentState, BODY_CAP) : cur.currentState,
       nextAction: has('nextAction') ? str(b.nextAction, BODY_CAP) : cur.nextAction,
       nextActionDate: has('nextActionDate') ? strOrNull(b.nextActionDate) : cur.nextActionDate,
+      nextActionNote: has('nextActionNote') ? str(b.nextActionNote, BODY_CAP) : (cur.nextActionNote ?? ''),
       staffMemberId: has('staffMemberId') ? (String(b.staffMemberId ?? '').trim() || user.id) : cur.staffMemberId,
       relatedMeeting: has('relatedMeeting') ? str(b.relatedMeeting, NAME_CAP) : cur.relatedMeeting,
       relatedSalesActivityId: has('relatedSalesActivityId') ? strOrNull(b.relatedSalesActivityId) : cur.relatedSalesActivityId,
@@ -880,13 +935,13 @@ export function partnerActivitiesRoutes(pool: pg.Pool, env: Env): Hono {
          SET village_id = $2, partner_company_id = $3, partner_contact_id = $4, approach_company_id = $5,
              approach_group = $6, partner_name = $7, theme = $8, related_company = $9, activity_type = $10,
              status = $11, summary = $12, initiatives = $13, current_state = $14, next_action = $15,
-             next_action_date = $16::date, staff_member_id = $17, related_meeting = $18,
-             related_sales_activity_id = $19, memo = $20, links = $21, updated_at = now()
+             next_action_date = $16::date, next_action_note = $17, staff_member_id = $18, related_meeting = $19,
+             related_sales_activity_id = $20, memo = $21, links = $22, updated_at = now()
          WHERE id = $1`,
         [id, refs.villageId, refs.partnerCompanyId, refs.partnerContactId, refs.approachCompanyId,
           merged.approachGroup, refs.partnerName, merged.theme, relatedCompany, merged.activityType,
           merged.status, merged.summary, merged.initiatives, merged.currentState, merged.nextAction,
-          merged.nextActionDate, merged.staffMemberId, merged.relatedMeeting, merged.relatedSalesActivityId,
+          merged.nextActionDate, merged.nextActionNote, merged.staffMemberId, merged.relatedMeeting, merged.relatedSalesActivityId,
           merged.memo, linksJson(merged.links)])
       return refs.audits
     })
@@ -909,7 +964,10 @@ export function partnerActivitiesRoutes(pool: pg.Pool, env: Env): Hono {
       status: String(row.status ?? ''),
       nextAction: String(row.nextAction ?? ''),
       nextActionDate: (row.nextActionDate as string | null) ?? null,
+      currentState: String(row.currentState ?? ''),
+      nextActionNote: String(row.nextActionNote ?? ''),
     }),
+    propose: true, // 基本情報の更新提案（改善要望 2026-08-21 = BP のみ）
   })
 
   archiveRestoreRoutes(app, pool, 'partner_activities', 'partner_activities pa', 'partner_activities', 'ビジネスパートナー活動', 'AKO-PTN', PARTNER_COLS)
