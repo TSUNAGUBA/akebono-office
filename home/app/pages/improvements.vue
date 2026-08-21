@@ -230,8 +230,8 @@ const commentBusy = ref(false)
 
 /** 選択中の要望が自分の投稿か（一般利用者は自分の要望のみ編集・コメント・取消できる = 改修依頼 2026-08-19 第4弾） */
 const isOwnSelectedRequest = computed(() => !!selectedRequest.value && selectedRequest.value.memberId === currentUserId.value)
-/** 自分の要望の運用案内（「運用案内: 」コメント = 通知と同一本文の記録）。通知を OFF にしていても
- *  ドロワーで案内を読める = 解決確認フローが通知設定に依存しない（R2 監査 2026-08-21） */
+/** 自分の要望の運用案内（kind='ops' コメント = 通知と同一本文の記録。判別の SoT = operationalGuidanceFor）。
+ *  通知を OFF にしていてもドロワーで案内を読める = 解決確認フローが通知設定に依存しない（R2 監査 2026-08-21） */
 const ownGuidance = computed(() => (selectedRequest.value && isOwnSelectedRequest.value
   ? imp.operationalGuidanceFor(selectedRequest.value.id)
   : []))
