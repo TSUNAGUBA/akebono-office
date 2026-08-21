@@ -40,6 +40,8 @@ export const FIELD_CATALOG: Record<string, { value: string; label: string }[]> =
     { value: 'primaryIndustryId', label: '主業界' },
     { value: 'size', label: '規模' },
     { value: 'location', label: '所在地' },
+    // 電話番号（0085 = 改修依頼 2026-08-21 第3弾。項目権限で表示/更新を制御できる対象に含める）
+    { value: 'phone', label: '電話番号' },
     { value: 'description', label: '概要' },
     { value: 'ownerMemberId', label: '自社担当' },
     { value: 'fiscalStartMonth', label: '会計年度開始月' },

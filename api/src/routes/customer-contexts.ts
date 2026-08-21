@@ -26,13 +26,18 @@ import {
   CUSTOMER_CONTEXT_HINT_CAP as HINT_CAP,
   CUSTOMER_CONTEXT_NOTE_CAP as NOTE_CAP,
   CUSTOMER_CONTEXT_SOURCES_MAX as SOURCES_MAX,
+  cleanResearchSources,
+  type CustomerContextBuildProposal,
   type CustomerContextInput, customerContextError, customerContextNoteError,
   customerContextSourcesError,
+  groundResearchPhone,
+  normalizeContextPhone,
   type CustomerResearchCandidate, type CustomerResearchHints,
   heuristicContextBuild, heuristicResearchCandidates,
   normalizeCustomerContext, restoreContextFromSnapshot,
 } from '../../../shared/domain/customer-context'
 import { capCodePoints } from '../../../shared/domain/customer-log'
+import { canEditField, canViewField } from '../../../shared/domain/permissions'
 import type { CustomerContextNotePayload, CustomerContextResearchSource } from '../../../shared/domain/types'
 import type { Env } from '../env'
 import { audit } from '../lib/audit'
@@ -40,6 +45,7 @@ import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
 import { generateGroundedText, generateJson } from '../lib/llm'
 import { runListQuery } from '../lib/list-query'
+import { activePermissionRules, subjectOf } from '../lib/permissions'
 
 // created_at/updated_at は JST ウォールクロック文字列で返す（activities / customer-logs と同一規約）
 function jstStamp(col: string, alias: string): string {
@@ -120,13 +126,24 @@ async function upsertContext(
       by.memberId, by.name])
 }
 
-/** 採用ソースの正規化（title/uri のみに絞る。検証は customerContextSourcesError が済ませている前提） */
+/** 採用ソースの正規化（保存形の SoT = shared cleanResearchSources。mock と共用 = 原則3/6。
+ *  snippet は AI 構築の材料（電話番号等の事実抽出 = 第3弾）。空は含めない = 旧形式ノートと同形を保つ */
 function cleanSources(raw: unknown): CustomerContextResearchSource[] {
-  if (!Array.isArray(raw)) return []
-  return raw.slice(0, SOURCES_MAX).map(s => ({
-    title: capCodePoints(String((s as { title?: unknown })?.title ?? '').trim(), 300),
-    uri: capCodePoints(String((s as { uri?: unknown })?.uri ?? '').trim(), 2000),
-  }))
+  return cleanResearchSources(raw)
+}
+
+/**
+ * AI 反映で companies.phone を更新・復元できるか（レビュー R1 = 権限バイパスの是正）。
+ * マスタ更新経路（masters PATCH = requireAdmin + stripMasterWriteKeys）と同じ
+ * 「管理者 + 項目権限（companies.phone:write が deny でない）」を要求する。
+ * 不許可は電話番号だけスキップして定性情報の反映/取消は続行（原則4）。
+ */
+async function canReflectCompanyPhone(
+  pool: pg.Pool, user: Parameters<typeof subjectOf>[0],
+): Promise<boolean> {
+  if (user.role !== 'admin') return false
+  const rules = await activePermissionRules(pool)
+  return canEditField(rules, subjectOf(user), 'companies', 'phone')
 }
 
 /** リサーチヒントの正規化（cap。空は undefined へ落とす） */
@@ -164,6 +181,7 @@ async function llmResearchCandidates(
       + '同名の別企業と混同しないよう、ヒント（所在地・電話番号等）との一致を必ず確認すること。',
     prompt: `対象企業「${companyName}」のホームページ・会社情報・関連記事を調査し、`
       + `ビジョン（理念）・経営課題・事業の近況がわかる要点をまとめてください。`
+      + `会社概要の基本情報（代表電話番号・所在地・従業員数等）も見つかれば要点に含めてください。`
       + (hintText ? `\nヒント: ${hintText}` : ''),
     maxTokens: 2048,
   })
@@ -182,8 +200,9 @@ const BUILD_SCHEMA = {
     challenges: { type: 'string' },
     strategyNotes: { type: 'string' },
     businessNotes: { type: 'string' },
+    phone: { type: 'string' },
   },
-  required: ['vision', 'challenges', 'strategyNotes', 'businessNotes'],
+  required: ['vision', 'challenges', 'strategyNotes', 'businessNotes', 'phone'],
 }
 
 /** LLM による定性情報の構築（採用ソース → 提案値）。失敗・全項目空は null（ヒューリスティックへ = 原則4） */
@@ -192,17 +211,19 @@ async function llmContextBuild(
   companyName: string,
   sources: CustomerContextResearchSource[],
   current: CustomerContextInput,
-): Promise<CustomerContextInput | null> {
-  const raw = await generateJson<{ vision?: unknown; challenges?: unknown; strategyNotes?: unknown; businessNotes?: unknown }>(env, {
+): Promise<CustomerContextBuildProposal | null> {
+  const raw = await generateJson<{ vision?: unknown; challenges?: unknown; strategyNotes?: unknown; businessNotes?: unknown; phone?: unknown }>(env, {
     system: 'あなたは企業リサーチアシスタントです。採用された Web 情報源に基づき、対象企業の'
       + '「ビジョン（vision）」「経営課題（challenges = 改行区切りの箇条書き）」「補足メモ（strategyNotes）」'
       + '「事業メモ（businessNotes = 昨季売上高・社員数・店舗数・配送センター〔自社/他社・地域〕等の'
-      + '事業に関する事実。改行区切りの箇条書き。該当情報が情報源になければ空文字）」を'
+      + '事業に関する事実。改行区切りの箇条書き。該当情報が情報源になければ空文字）」'
+      + '「代表電話番号（phone = 情報源のタイトル・抜粋に明記がある場合のみそのまま転記。'
+      + '無ければ空文字。**電話番号の推測・創作は絶対にしないこと**〔会社マスタへ反映されるため〕）」を'
       + '日本語で構築します。情報源にある事実のみを根拠にし、推測で事実（数値含む）を作らないこと。'
       + '現在の登録値がある場合は、情報源で裏付けられる内容を優先しつつ有用な既存記述を残すこと。'
       + 'strategyNotes の末尾に参考にした情報源のタイトルを記載すること。',
     prompt: `# 対象企業\n${companyName}\n\n# 採用された情報源\n`
-      + sources.map(s => `- ${s.title}: ${s.uri}`).join('\n')
+      + sources.map(s => `- ${s.title}: ${s.uri}` + (s.snippet ? `\n  抜粋: ${s.snippet}` : '')).join('\n')
       + `\n\n# 現在の登録値\n${JSON.stringify(current, null, 1)}`,
     schema: BUILD_SCHEMA,
     maxTokens: 2048,
@@ -215,7 +236,9 @@ async function llmContextBuild(
     businessNotes: String(raw.businessNotes ?? ''),
   })
   if (!built.vision && !built.challenges && !built.strategyNotes && !built.businessNotes) return null
-  return built
+  // 電話番号は LLM 出力を無検証で採用しない（レビュー R1 = 創作防止の構造的担保）:
+  // 採用ソースの title + 抜粋に実在する場合のみ採用・無ければ抜粋からの正規表現抽出 → ''（shared 共通）
+  return { ...built, phone: groundResearchPhone(raw.phone, sources) }
 }
 
 export function customerContextsRoutes(pool: pg.Pool, env: Env): Hono {
@@ -252,6 +275,19 @@ export function customerContextsRoutes(pool: pg.Pool, env: Env): Hono {
         active: { col: '(cn.archived_at IS NULL)::text', kind: 'eq' },
       },
     })
+    // companies.phone の参照 deny ユーザーには payload.before.companyPhone を伏せる
+    // （マスタ GET の stripDeniedFields と対称 = ノート経由で項目権限を迂回させない。レビュー R1）
+    const user = c.get('user')
+    const rules = await activePermissionRules(pool)
+    if (!canViewField(rules, subjectOf(user), 'companies', 'phone')) {
+      const strip = (row: unknown): unknown => {
+        const r = row as { payload?: CustomerContextNotePayload | null }
+        if (r?.payload?.before?.companyPhone === undefined) return row
+        const { companyPhone: _companyPhone, ...rest } = r.payload.before
+        return { ...r, payload: { ...r.payload, before: rest } }
+      }
+      return c.json({ ...res, data: res.data.map(strip) })
+    }
     return c.json(res)
   })
 
@@ -377,6 +413,10 @@ export function customerContextsRoutes(pool: pg.Pool, env: Env): Hono {
     assertValid(customerContextSourcesError(sources))
     const noteId = newId('cnote')
     const actorName = await memberNameOf(pool, user.id)
+    // 電話番号の更新可否（管理者 + 項目権限）。Tx 外で先に解決する（Tx 内の外部照会を減らす）
+    const phoneEditable = await canReflectCompanyPhone(pool, user)
+    // 電話番号を実際に変更した場合のみ値が入る（コミット後の監査ログ用）
+    let phoneChanged: { from: string; to: string } | null = null
     const client = await pool.connect()
     try {
       await client.query('BEGIN')
@@ -392,6 +432,23 @@ export function customerContextsRoutes(pool: pg.Pool, env: Env): Hono {
       })
       assertValid(customerContextError(values))
       const payload: CustomerContextNotePayload = { sources, before }
+      // 電話番号の反映（第3弾）: 提案 phone が非空かつ現在の会社マスタと異なる場合のみ更新する
+      // （'' = 取得なし → マスタを消さない。変更時だけ before.companyPhone を保存 = 取消で復元・原則9.5。
+      //  マスタ側 SoT = companies.phone。同一トランザクション = 片肺の反映を作らない・原則6。
+      //  更新は管理者 + 項目権限が条件 = マスタ更新経路と同じ強度〔canReflectCompanyPhone・レビュー R1〕。
+      //  不許可は電話番号だけスキップ = 定性情報の反映は続行・原則4）
+      const proposedPhone = has('phone') && phoneEditable ? normalizeContextPhone(b.phone) : ''
+      if (proposedPhone) {
+        const { rows: phoneRows } = await client.query<{ phone: string }>(
+          `SELECT phone FROM companies WHERE id = $1`, [companyId])
+        const curPhone = String(phoneRows[0]?.phone ?? '')
+        if (proposedPhone !== curPhone) {
+          payload.before = { ...payload.before!, companyPhone: curPhone }
+          await client.query(
+            `UPDATE companies SET phone = $2, updated_at = now() WHERE id = $1`, [companyId, proposedPhone])
+          phoneChanged = { from: curPhone, to: proposedPhone }
+        }
+      }
       await upsertContext(client, companyId, values, { memberId: user.id, name: actorName })
       await client.query(
         `INSERT INTO customer_context_notes (id, company_id, member_id, member_name, kind, body, payload)
@@ -410,6 +467,12 @@ export function customerContextsRoutes(pool: pg.Pool, env: Env): Hono {
       actorId: user.id, action: 'update', entity: 'customer_contexts', entityId: companyId,
       detail: `AI リサーチを反映（${company.name}・採用 ${sources.length} 件。取消は research ノートから）`,
     })
+    if (phoneChanged) {
+      await audit(pool, {
+        actorId: user.id, action: 'update', entity: 'companies', entityId: companyId,
+        detail: `AI リサーチの反映で電話番号を更新（${company.name}: ${phoneChanged.from || '未設定'} → ${phoneChanged.to}）`,
+      })
+    }
     const { rows: ctxRows } = await pool.query(
       `SELECT ${CTX_COLS} FROM customer_contexts cc WHERE cc.company_id = $1`, [companyId])
     const { rows: noteRows } = await pool.query(
@@ -432,6 +495,10 @@ export function customerContextsRoutes(pool: pg.Pool, env: Env): Hono {
       return c.json({ data: { id: noteId, warning: 'すでに取消済みです' } })
     }
     const actorName = await memberNameOf(pool, user.id)
+    // 電話番号の復元可否（管理者 + 項目権限 = 更新と対称）。不許可は電話番号だけスキップし取消は続行（原則4）
+    const phoneEditable = await canReflectCompanyPhone(pool, user)
+    // 電話番号を実際に復元した場合のみ値が入る（コミット後の監査ログ用）
+    let phoneReverted: { from: string; to: string } | null = null
     const client = await pool.connect()
     try {
       await client.query('BEGIN')
@@ -439,6 +506,21 @@ export function customerContextsRoutes(pool: pg.Pool, env: Env): Hono {
       // 原則7。判定の SoT を API/mock で共有 = 原則3/6。現在値の読取は Tx 内 = 復元と原子的）
       const cur = await currentContextOf(client, companyId)
       const before = restoreContextFromSnapshot(note.payload.before, cur.businessNotes)
+      // 電話番号の復元（第3弾）: 反映で電話番号を変更したノート（companyPhone キーあり）だけが対象。
+      // キーなし（旧ノート・電話番号を変更しなかった反映）は会社マスタを触らない（原則7 = businessNotes と同型）。
+      // 復元も更新と同じ「管理者 + 項目権限」が条件（canReflectCompanyPhone・レビュー R1 = 権限の対称性）。
+      // 保存時の生値をそのまま書き戻す（正規化 cap で反映前の値を壊さない = レビュー R1・原則9.5）
+      if (note.payload.before.companyPhone !== undefined && phoneEditable) {
+        const restorePhone = String(note.payload.before.companyPhone ?? '')
+        const { rows: phoneRows } = await client.query<{ phone: string }>(
+          `SELECT phone FROM companies WHERE id = $1`, [companyId])
+        const curPhone = String(phoneRows[0]?.phone ?? '')
+        if (restorePhone !== curPhone) {
+          await client.query(
+            `UPDATE companies SET phone = $2, updated_at = now() WHERE id = $1`, [companyId, restorePhone])
+          phoneReverted = { from: curPhone, to: restorePhone }
+        }
+      }
       // 反映前が全項目空（新規作成の反映だった）の場合も「空へ戻す」= 復元として upsert する
       // （行の物理削除はしない = 監査・再反映の起点を残す設計判断）
       await upsertContext(client, companyId, before, { memberId: user.id, name: actorName })
@@ -457,6 +539,12 @@ export function customerContextsRoutes(pool: pg.Pool, env: Env): Hono {
       actorId: user.id, action: 'update', entity: 'customer_contexts', entityId: companyId,
       detail: 'AI リサーチの反映を取り消し（反映前の値へ復元）',
     })
+    if (phoneReverted) {
+      await audit(pool, {
+        actorId: user.id, action: 'update', entity: 'companies', entityId: companyId,
+        detail: `AI リサーチの反映取消で電話番号を復元（${phoneReverted.from || '未設定'} → ${phoneReverted.to || '未設定'}）`,
+      })
+    }
     const { rows } = await pool.query(
       `SELECT ${CTX_COLS} FROM customer_contexts cc WHERE cc.company_id = $1`, [companyId])
     return c.json({ data: { id: noteId, context: rows[0] } })

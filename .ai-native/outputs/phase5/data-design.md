@@ -15,7 +15,7 @@
 | `LeaveType`（F-10-10） | id, name, grantMethod(`periodic`=周期自動付与/`manual`=権限者の手動付与), expiryMonths（付与からの使用期限月数。null=期限なし）, isStatutory（法定有給か。true はシード固定・編集/無効化不可）, description, displayOrder, active | C1 |
 | `Industry` | id, name, displayOrder, active（直交軸・複合値禁止） | C1 |
 | `Village`（事業区分） | id, name, displayOrder, active（`villages` 0070 = 改修依頼 2026-08-19 第4弾。社内事業の区分の最小マスタ。活動記録 3 種の最上段でコンボボックス参照し、自由入力で新規登録もできる = lib/village-resolve〔照合 → なければ INSERT・重複を作らない〕。masters registry・masters ページは industries と同型） | C1 |
-| `Company` | id, kind(`self`/`customer`), name, aliases[], industryIds[], primaryIndustryId, size, location, description, ownerMemberId, fiscalStartMonth(自社), active, custom | C2 |
+| `Company` | id, kind(`self`/`customer`), name, aliases[], industryIds[], primaryIndustryId, size, location, **phone（代表電話番号 = 0085・改修依頼 2026-08-21 第3弾。`NOT NULL DEFAULT ''` = 旧行は空・型は optional〔原則7〕。contacts.phone と同じ自由入力。顧客コンテキストの AI リサーチ反映でも更新可 = 変更前は research ノート before.companyPhone に保存）**, description, ownerMemberId, fiscalStartMonth(自社), active, custom | C2 |
 | `Contact` | id, companyId, name, dept, title, keyPerson(1-3), email, phone, notes, active, custom | C2 |
 | `RelationType` | id(code), label, direction(`directed`/`mutual`), appliesTo(`company`/`contact`), active | C1 |
 | `CompanyRelation` | fromCompanyId, toCompanyId, relationTypeId, notes（有向エッジ。from≠to）※物理削除可（下記設計判断） | C2 |
@@ -308,7 +308,7 @@ Phase B（設定系）・Phase C（記録系 + 売上軸）に続く**最終フ�
 | テーブル | 区分 | 主な列 | 備考 |
 |---|---|---|---|
 | `customer_contexts` | 設定系（1社1行 upsert・**定性情報の SoT**） | `id`／`company_id`（UNIQUE REFERENCES companies）／`vision`（ビジョン）／`challenges`（経営課題）／`strategy_notes`（補足）／`business_notes`（事業メモ。**0084 = 改修依頼 2026-08-21 第2弾**: 昨季売上高・社員数・店舗数・配送センター等のフリーテキスト。`NOT NULL DEFAULT ''` で旧行は空 = 下位互換〔原則7〕）／`updated_by_member_id`・`updated_by_name`（更新者スナップショット）／`active`／`created_at`・`updated_at` | チーム共有（全員閲覧・編集可）。**集計済み定量情報は保存しない = 各記録系（案件/活動ログ/顧客活動/サポート活動）からのライブ導出**という設計判断（事業メモは「導出できない外部事実」を人が書き留めるフリーテキストであり集計値のキャッシュではない）。AI リサーチの反映は upsert + research ノート自動追記の同一トランザクション |
-| `customer_context_notes` | 記録系（追記 + 論理取消） | `id`／`company_id`／`member_id`・`member_name`（スナップショット）／`kind`（`note`/`research`）／`body`／`payload` jsonb（research: `{ sources, before, revertedAt? }` = **反映前の値を保存し「反映を取り消す」で復元・取消済みは revertedAt 追記でノートは archive しない = 監査可能な取消（原則9.5）**。`before.businessNotes` は 0084 以降のノートのみ保持 = **旧スナップショットの取消は現在の事業メモを保持**〔キー欠落 = 復元対象外。原則7〕）／`archived_at`（メモの論理取消）／`created_at` | Memo（時系列・20件ページング）と AI リサーチ履歴を兼ねる |
+| `customer_context_notes` | 記録系（追記 + 論理取消） | `id`／`company_id`／`member_id`・`member_name`（スナップショット）／`kind`（`note`/`research`）／`body`／`payload` jsonb（research: `{ sources, before, revertedAt? }` = **反映前の値を保存し「反映を取り消す」で復元・取消済みは revertedAt 追記でノートは archive しない = 監査可能な取消（原則9.5）**。`before.businessNotes` は 0084 以降のノートのみ保持 = **旧スナップショットの取消は現在の事業メモを保持**〔キー欠落 = 復元対象外。原則7〕。`before.companyPhone`〔0085 = 第3弾〕= **反映で companies.phone を変更した場合のみ**変更前を保存 = 取消で復元・キーなしは電話番号を触らない〔更新・復元とも管理者 + 項目権限が条件。**phone 参照 deny のユーザーへはメモ一覧応答で伏せる** = 項目権限の迂回防止・R1 レビュー〕。`sources[].snippet`〔第3弾・任意〕= 採用時の抜粋 = AI 構築の事実抽出材料の監査証跡）／`archived_at`（メモの論理取消）／`created_at` | Memo（時系列・20件ページング）と AI リサーチ履歴を兼ねる |
 
 ### 1.12 個人別チャット連携（`user_chat_links` / `chat_oauth_states`。0075 = 改修依頼 2026-08-20）
 

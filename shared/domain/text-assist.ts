@@ -7,8 +7,25 @@
  * - 決定的（同じ入力 → 同じ出力。乱数・時刻に依存しない）。意味は変えず「読みやすさ」だけを整える。
  */
 
+import type { KbDoc } from './kb'
+import { kbFindRelated } from './kb'
+
 /** 整形対象テキストの入力上限（API は超過を 400 AKO-RAS-003 で弾く。要望本文 4,000 字の余裕を持った上限） */
 export const FORMAT_TEXT_CAP = 8_000
+
+/** 「AIで整形」の RAG 参照ドキュメント数の上限（改修依頼 2026-08-21 第3弾） */
+export const FORMAT_KB_REFS_MAX = 3
+
+/**
+ * 「AIで整形」の RAG 参照ドキュメントを選ぶ（改修依頼 2026-08-21 第3弾）。
+ * 参照元 = AI 知識ベース（shared/domain/kb = アプリ仕様書・操作マニュアル・運用マニュアル・FAQ）。
+ * kbFindRelated（決定的字句検索 = チャットボットのモック照合と同一ロジック・原則3/6）で
+ * 要望テキストに関連する上位 FORMAT_KB_REFS_MAX 件を返す。関連ドキュメントが無ければ空配列
+ * （LLM は参照なしで整形 = RAG は補助であり整形自体を止めない・原則4）。
+ */
+export function formatTextKbRefs(text: string): KbDoc[] {
+  return kbFindRelated(text, FORMAT_KB_REFS_MAX).map(r => r.doc)
+}
 
 /** 節ラベル（要望テンプレ IMPROVEMENT_BODY_TEMPLATE の見出し。全角/半角コロンの両方を受ける） */
 const SECTION_LABEL_RE = /^(要望|現状|改善)[：:]\s*(.*)$/

@@ -79,6 +79,83 @@ export function customerContextNoteError(body: string): string | null {
   return null
 }
 
+// ---------- 電話番号（会社マスタへの AI 反映 = 改修依頼 2026-08-21 第3弾） ----------
+
+/** 電話番号の入力上限（companies.phone / contacts.phone と同じ自由入力。過大入力だけ抑止） */
+export const CUSTOMER_CONTEXT_PHONE_CAP = 40
+
+/** 電話番号の正規化（trim + cap。形式検証はしない = マスタの自由入力と同じ扱い） */
+export function normalizeContextPhone(v: unknown): string {
+  return capCodePoints(String(v ?? '').trim(), CUSTOMER_CONTEXT_PHONE_CAP)
+}
+
+/** 日本の電話番号らしい並び（0 始まり + ハイフン区切り。区切りは半角/全角ハイフン・長音符・マイナス記号）。
+ *  前後が数字・区切り記号の場合は除外（日付範囲「2026-08-01-2026-08-31」の部分一致を防ぐ）。
+ *  ハイフンなし（0312345678）・括弧表記・国際表記は対象外の意図的な最小実装
+ *  （単独の日付「05-01-2026」等との完全な判別は不可能 = 差分確認で人が確定する前提） */
+const PHONE_RE = /(?<![\dー－−-])0\d{1,4}[ー－−-]\d{1,4}[ー－−-]\d{3,4}(?!\d)/
+
+/**
+ * 採用ソースの抜粋（snippet）から電話番号を抽出する（決定的。最初に見つかった 1 件）。
+ * **抜粋に実在する記載だけを返し、無ければ ''**（電話番号の創作は絶対にしない =
+ * LLM フォールバック時でも会社マスタへ架空の番号を書かない安全側の設計）。
+ */
+export function extractPhoneFromSnippets(snippets: readonly (string | undefined)[]): string {
+  for (const s of snippets) {
+    const m = PHONE_RE.exec(String(s ?? ''))
+    if (m) return normalizeContextPhone(m[0].replace(/[ー－−]/g, '-'))
+  }
+  return ''
+}
+
+/**
+ * LLM が構築した電話番号の事後検証（改修レビュー R1 = 創作防止をプロンプト依存にしない構造的担保）。
+ * 採用ソースの title + 抜粋に**そのまま実在する場合のみ** LLM の値を採用し、
+ * 実在しない（= 幻覚の可能性）場合は抜粋からの正規表現抽出（実在する記載のみ）へフォールバック、
+ * それも無ければ ''（決定的。ヒューリスティック経路と同じ安全性水準）。
+ */
+export function groundResearchPhone(
+  rawPhone: unknown,
+  sources: readonly CustomerContextResearchSourceLike[],
+): string {
+  const phone = normalizeContextPhone(rawPhone)
+  const texts = sources.map(s => `${String(s.title ?? '')}\n${String(s.snippet ?? '')}`)
+  if (phone && texts.some(t => t.includes(phone))) return phone
+  return extractPhoneFromSnippets(texts)
+}
+
+// ---------- 採用ソースの正規化（API/モック共通の保存形 = 原則3/6） ----------
+
+/** 採用ソースの保存時上限（title / snippet。uri は URL 長を考慮して別値） */
+export const CUSTOMER_CONTEXT_SOURCE_TITLE_CAP = 300
+export const CUSTOMER_CONTEXT_SOURCE_URI_CAP = 2000
+export const CUSTOMER_CONTEXT_SOURCE_SNIPPET_CAP = 300
+
+/**
+ * 採用ソースの正規化（title/uri/抜粋に絞る + cap。research ノート payload の保存形の SoT）。
+ * snippet は AI 構築の事実抽出材料（空は含めない = 旧形式ノートと同形を保つ）。
+ * 検証は customerContextSourcesError が済ませている前提。
+ */
+export function cleanResearchSources(raw: unknown): { title: string; uri: string; snippet?: string }[] {
+  if (!Array.isArray(raw)) return []
+  return raw.slice(0, CUSTOMER_CONTEXT_SOURCES_MAX).map((s) => {
+    const snippet = capCodePoints(String((s as { snippet?: unknown })?.snippet ?? '').trim(), CUSTOMER_CONTEXT_SOURCE_SNIPPET_CAP)
+    return {
+      title: capCodePoints(String((s as { title?: unknown })?.title ?? '').trim(), CUSTOMER_CONTEXT_SOURCE_TITLE_CAP),
+      uri: capCodePoints(String((s as { uri?: unknown })?.uri ?? '').trim(), CUSTOMER_CONTEXT_SOURCE_URI_CAP),
+      ...(snippet ? { snippet } : {}),
+    }
+  })
+}
+
+/**
+ * AI 構築の提案値（定性情報 4 項目 + 会社マスタへの電話番号提案）。
+ * phone = 情報源から取得できた代表電話（'' = 取得なし → 反映しても会社マスタの電話番号は変更しない）
+ */
+export interface CustomerContextBuildProposal extends CustomerContextInput {
+  phone: string
+}
+
 /** AI リサーチの検索ヒント（社名は自動 = 呼び出し側が付与。住所/電話/キーワードは任意） */
 export interface CustomerResearchHints {
   address?: string
@@ -203,7 +280,7 @@ export function heuristicContextBuild(
   companyName: string,
   sources: readonly CustomerContextResearchSourceLike[],
   current: CustomerContextInput,
-): CustomerContextInput {
+): CustomerContextBuildProposal {
   const name = companyName.trim() || '対象企業'
   const sorted = [...sources].sort((a, b) => String(a.uri).localeCompare(String(b.uri)))
   const seed = `${name}|${sorted.map(s => s.uri).join(',')}`
@@ -218,17 +295,23 @@ export function heuristicContextBuild(
   const facts = Array.from({ length: 2 }, (_, i) => BUSINESS_FACT_POOL[(factStart + i) % BUSINESS_FACT_POOL.length]!)
   const titles = sorted.map(s => String(s.title ?? s.uri))
   const hasCurrent = current.vision || current.challenges || current.strategyNotes || current.businessNotes
-  return normalizeCustomerContext({
-    vision: `「${theme}」を掲げ、中期的な事業発展を目指す（採用した ${sorted.length} 件の情報から構築）。`,
-    challenges: challenges.map(c => `・${c}`).join('\n'),
-    strategyNotes: `参考にした情報源: ${titles.join(' / ')}`
-      + (hasCurrent ? '（反映前の値は自動追記されるリサーチノートから復元できます）' : ''),
-    businessNotes: facts.map(f => `・${f}`).join('\n'),
-  })
+  return {
+    ...normalizeCustomerContext({
+      vision: `「${theme}」を掲げ、中期的な事業発展を目指す（採用した ${sorted.length} 件の情報から構築）。`,
+      challenges: challenges.map(c => `・${c}`).join('\n'),
+      strategyNotes: `参考にした情報源: ${titles.join(' / ')}`
+        + (hasCurrent ? '（反映前の値は自動追記されるリサーチノートから復元できます）' : ''),
+      businessNotes: facts.map(f => `・${f}`).join('\n'),
+    }),
+    // 電話番号は採用ソースの抜粋に実在する記載だけを抽出（創作しない。改修依頼 2026-08-21 第3弾。
+    // モックデモは調査ヒントに電話番号を入れると会社概要候補の抜粋へ載る → ここで拾える）
+    phone: extractPhoneFromSnippets(sorted.map(s => s.snippet)),
+  }
 }
 
-/** heuristicContextBuild が受け取る採用ソースの最小形（title + uri） */
+/** heuristicContextBuild が受け取る採用ソースの最小形（title + uri + 任意の抜粋） */
 export interface CustomerContextResearchSourceLike {
   title: string
   uri: string
+  snippet?: string
 }

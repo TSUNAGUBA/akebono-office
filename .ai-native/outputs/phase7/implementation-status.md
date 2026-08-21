@@ -4568,3 +4568,102 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
     contextOf（active フィルタ付き）のままで revert（行直接参照）と書き分けが残る =
     基点以前からの既存コードで active=false の到達経路がなく実挙動差ゼロ。customer_contexts の
     論理削除を実装する改修の際に revert と同様に揃える（原則9.5 の遡及方針と同じ扱い）
+
+## 105. 改修依頼 2026-08-21 第3弾（2 改修単位 = 顧客基本情報の電話番号 + AI 調査反映・「AIで整形」の RAG 対応）の完了条件（Definition of Done）
+
+対象: home + api + shared/domain。マイグレーション 0085（companies.phone）。
+
+### 105-1 顧客基本情報の電話番号 + AI 調査での反映（単位1）
+- [x] スキーマ: 0085 = `companies.phone text NOT NULL DEFAULT ''`（IF NOT EXISTS = 冪等・既存行無変更 = 原則2/7）。`Company.phone?: string`（旧データ未定義 = '' 扱い）。masters registry の companies スキーマ + 項目権限カタログ（permission-catalog）にも登録。
+- [x] UI: 顧客コンテキストの基本情報カードに電話番号の表示行 + 編集モーダルに入力欄。/masters/customers の詳細・フォームにも追加（同一マスタの一貫性）。シード c-01/c-02 に demo 電話番号（03-0000-XXXX 系 = contacts と同一慣行）+ SEED_VERSION 28。
+- [x] AI 調査での取得・反映: 採用ソースに抜粋（snippet・300cp cap・任意 = 旧形式互換）を追加し、AI 構築が電話番号を提案（**LLM = 情報源の記載・抜粋に明記がある場合のみ転記・創作禁止をプロンプトで明示 / ヒューリスティック = snippet からの正規表現抽出 `extractPhoneFromSnippets` = 実在する記載のみ**。モックデモは調査ヒントの電話番号が会社概要候補の抜粋に載る経路 = 番号を創作しない）。
+- [x] 反映と取消（原則9.5 × 原則7）: 差分確認に「電話番号（基本情報）」行（'' = 「取得できませんでした = 変更しません」を明示）。反映は **phone 非空かつ現在値と異なる場合のみ** companies.phone を同一トランザクションで更新し **before.companyPhone に変更前を保存**（+ companies の監査ログ）。取消は companyPhone キーがあるノートだけ電話番号を生値で復元（キーなし = 旧ノート・変更しなかった反映は触らない）。**更新・復元とも「管理者 + 項目権限」= マスタ更新経路と同じ強度（R1 レビューで条件化）**。mock も同一規則（コレクション横断ロールバック込み = 原則6）。
+- [x] テスト: shared 単体（抽出・正規化・ヒューリスティック提案・創作なし）を home/api 両側で固定。統合 = 反映 → マスタ更新 → before 保存 → 取消復元・空提案/同一提案は before に companyPhone を保存しない・取消でも触らない（+2 件 = 314）。
+
+### 105-2 「AIで整形」の RAG 対応（単位2）
+- [x] RAG: `formatTextKbRefs`（shared/domain/text-assist 新設）= AI 知識ベース（shared/domain/kb = アプリ仕様書・操作/運用マニュアル・FAQ 50 docs）から kbFindRelated（チャットボットのモック照合と同一の決定的字句検索 = 原則3/6）で関連上位 3 件を選定。関連ゼロでも整形は実行（RAG は補助 = 原則4）。
+- [x] API: format-text の LLM プロンプトへ参照資料ブロック（title + 本文 1200cp cap）を供給し、「画面名・機能名・操作名を資料の正式呼称へ統一 / 資料にあるだけで本文に無い機能への言及は禁止」を明示。応答 `{ text, llm, refs }`（refs = LLM 整形時のみ id+title・ルールベースは空 = 資料を使わないため。旧クライアントは refs を無視するだけ = 原則7）。
+- [x] UI: LLM 整形時に「参照した資料: ◯◯ / △△」を入力欄下へ表示（aria-live。再編集・「整形前に戻す」でクリア = 誤帰属を残さない）。mock はルールベース整形のまま（refs 空）= トーストのフィードバック維持。
+- [x] テスト: formatTextKbRefs の決定性・上限・関連ゼロ時の空配列（home 単体）。統合 = ルールベース応答の refs 空を固定。
+
+### 105-3 KB・ドキュメント（原則5 = KB 含む）
+- [x] KB: kb-sp-008（顧客(会社)マスタの項目に電話番号）・kb-sp-010（基本情報の項目・AI リサーチの電話番号取得/反映/取消・創作しない旨）・kb-sp-013 + kb-ug-007（「AIで整形」の RAG = 参照資料と表示・フォールバック挙動）。
+- [x] 設計書: functional-requirements（F-46-1/2・F-50-1）/ data-design（Company.phone・notes payload の companyPhone/snippet）/ api-design（useCustomerContext 行・useTextAssist 行を新設）/ screen-design（/customer-context 基本情報・リサーチモーダル・AIで整形の RAG）/ CONVENTIONS（useCustomerContext 早見表・ImprovementsBodyImageInput 部品在庫）/ 本ファイル §105。
+
+### 105-4 検証（受入基準）
+- [x] home `npx nuxi typecheck` / api `tsc --noEmit` / home 単体 540 / api 単体 508（非統合全件）/ 統合 314
+- [x] モックモード E2E（run-mock-stack.sh = PR テストゲートと同一）: 既存 8 スイート green + 新規 batch6-e2e（電話番号の表示/編集・AI 調査ヒント経由の取得 → 差分行 → 反映 → 取消・マスタ画面の電話番号・AIで整形のフィードバックと整形前に戻す・モバイル 375px）
+- [x] モバイル 375px: /customer-context（電話番号行あり）で横スクロールなし（E2E で自動検証）
+
+### 105-5 反復レビュー（原則9 = SP-8）
+- 反復記録:
+  - R1（コードレビュアー MAJOR1/MINOR2/NIT4・システム監査官 MINOR3/NIT3。権限バイパス・LLM 構造検証・
+    mock ソース正規化・正規表現は重複統合 = 計 MAJOR1/MINOR4/NIT5）→ 全件対応:
+    - レビュー MAJOR（= 監査 MINOR）: AI 反映/取消の companies.phone 書込がマスタ更新経路の権限
+      （requireAdmin + stripMasterWriteKeys = 項目権限）を完全バイパス = 非管理者が body の任意 phone で
+      会社マスタを直接書き換え可能・同コミットで項目権限カタログへ登録したのに効かない自己矛盾。
+      さらにメモ一覧の payload.before.companyPhone が phone 参照 deny ユーザーへ素通し →
+      apply/revert とも「管理者 + 項目権限（canEditField companies.phone）」を条件化
+      （API = canReflectCompanyPhone / mock = canReflectPhone = 同一規則・原則6。不許可は電話番号だけ
+      スキップし反映/取消は続行 = 原則4）。GET /notes と mock notesOf は参照 deny ユーザーへ
+      companyPhone を伏せる（項目権限の迂回防止）。UI は権限がない場合の差分行に
+      「反映には管理者権限が必要なため変更しません」を明示（表示と挙動の一致）。
+      統合テスト 3 件追加（非管理者 apply でマスタ不変・非管理者 revert で復元しない/管理者は復元・
+      参照 deny で伏せる）
+    - 両 MINOR: LLM 構築の phone が無検証（創作防止がプロンプト依存）→ shared `groundResearchPhone` で
+      事後検証 = 採用ソースの title/抜粋に実在する場合のみ採用・幻覚は抽出フォールバック → ''
+      （ヒューリスティックと同じ安全性水準。home/api 両側の単体テストで固定）
+    - 監査 MINOR: 調査プロンプトが電話番号の収集を指示しておらず LLM 経路の実効性が低い →
+      「会社概要の基本情報（代表電話番号・所在地・従業員数等）も要点に含める」を調査プロンプトへ追加
+      （= グラウンディング済み調査メモ → 抜粋に電話番号が載る経路を確保）
+    - レビュー MINOR: revert の電話番号復元が normalizeContextPhone（trim + 40cp cap）を通り
+      40cp 超の既存値（注記付き等）が壊れた形で復元される → 保存時の生値をそのまま書き戻す（API/mock）
+    - 両 NIT: mock の research ノート保存が API cleanSources と非共有（snippet cap なし）→ shared
+      `cleanResearchSources`（title 300 / uri 2000 / snippet 300 cap）を新設し API/mock 双方から使用（原則3/6）
+    - 両 NIT: PHONE_RE の「全角ハイフン」対応が長音符のみ + 日付範囲「2026-08-01-2026-08-31」の部分一致を
+      誤検出 → 文字クラスへ 全角ハイフン（U+FF0D）・マイナス記号（U+2212）を追加 + 前後の数字・区切りを
+      除外する lookaround（単独の日付形式との完全判別は不可能 = 差分確認で人が確定する前提を明文化）。
+      単体テストを追補
+    - レビュー NIT: 反映取消の確認ダイアログに電話番号の復元が含まれない → 文言へ追記
+    - 監査 NIT: F-46-1 の「編集ドロワー」表記が実装（UiModal）と不一致 → 「編集モーダル」へ訂正
+    - ドキュメント追随: api-design（権限・事後検証・notes の伏せ・cleanResearchSources）/
+      functional-requirements / screen-design / data-design / CONVENTIONS / KB kb-sp-010（反映は管理者のみ +
+      実在検証の明記）
+    - R1 後検証: home 単体 544 / api 単体 509（非統合全件）/ 統合 317（権限 3 テスト追加。既存の復元テストは
+      取消実行者を管理者へ変更 = 新権限規則で正しく失敗した回帰を修正）/ 両 typecheck /
+      モック E2E 全 9 スイート green
+  - R2（両ロール再レビュー。コードレビュアー = MAJOR/MINOR 0・NIT2・システム監査官 = MINOR1/NIT1。
+    取消ダイアログ文言は重複統合 = 計 MINOR1/NIT2）→ 全件対応:
+    - 監査 MINOR（= レビュー NIT）: R1 で追記した取消確認ダイアログの「電話番号もそれも反映前へ戻ります」が
+      無条件表示で、権限のない実行者（非管理者等）の実挙動（電話番号はスキップして取消続行 +
+      revertedAt で以後この経路の復元機会が失われる）と不一致 = R1 MAJOR 対応が掲げた
+      「表示と挙動の一致」の取り残し → canReflectPhone で文言を出し分け（権限なしは
+      「復元には管理者権限が必要なため基本情報の電話番号は変更されません」を取消前に明示）。
+      あわせて差分行の理由表記も「管理者 + 電話番号の項目権限」へ正確化（管理者だが項目権限 deny の
+      ケースを含む）
+    - レビュー NIT: mock の archivedNotesOf に stripPhoneForViewer が未適用（API の GET /notes は
+      取消済み含む全ノートを伏せる = パリティの不徹底。UI に描画箇所はなく実害なし）→ 有効メモと
+      同一規則で伏せる
+    - 監査 NIT: CustomerContextPanel ヘッダーコメントの「編集ドロワー」旧表記残置（F-46-1 等は R1 で
+      訂正済み・発生源のコメントのみ漏れ）→「編集モーダル」へ訂正
+    - R2 後検証: home 単体 544 / api 単体 509 / 統合 317 / 両 typecheck / モック E2E 全 9 スイート green
+  - R3（両ロール再レビュー。コードレビュアー = MAJOR/MINOR 0・NIT1・システム監査官 = MINOR 0・NIT2。
+    screen-design の旧文言引用は重複統合 = 計 NIT2）→ 全件対応:
+    - 両 NIT: screen-design が R2 で正確化する前の差分行 UI 文言（「反映には管理者権限が必要なため
+      変更しません」）を引用したまま = コードに存在しない文字列（原則5）→ 新文言へ差し替え +
+      取消ダイアログの権限別出し分けも同箇条へ追記（「表示と挙動の一致」の記述を完結）
+    - 監査 NIT: 取消ダイアログの権限なし文言が「管理者権限が必要」のみで、R2 が差分行で行った
+      「管理者 + 電話番号の項目権限」への正確化が未適用（項目権限 deny の管理者には理由が不正確。
+      結果の記述は正しく実害軽微）→ 差分行と同型の「復元権限〔管理者 + 電話番号の項目権限〕がないため」へ統一
+    - R3 のレビュアー検証（記録）: R2 対応 3 件の趣旨適合・文言と実挙動の一致（両モード・権限マトリクス
+      〔管理者 × 項目権限 deny 含む〕）・mock⇔API パリティ（strip = 取消済み含む全ノート・復元は生 noteRows
+      参照で伏せの影響なし）・E2E の文言非依存・canEditField の参照＞更新階層により「復元できるのに表示は
+      伏せられる」矛盾が構造上発生しないことを確認
+    - R3 後検証: home 単体 544 / api 単体 509 / 統合 317 / 両 typecheck / モック E2E 全 9 スイート green
+  - R4（最終収束確認）→ **指摘ゼロ（MAJOR 0 / MINOR 0 / NIT 0）で収束**。R3 の 2 対応の逐語一致
+    （screen-design の引用 = 実装の実文言・ダイアログ文言 = 差分行と同型）と新規不整合なしを確認。
+    旧文言の残存は反復記録内のみ（追記型ログとして正当）。累積 diff 全 29 ファイルの最終俯瞰でも
+    権限ゲートの三者同一規則（API/mock/UI）・LLM 事後検証・伏せのパリティ・生値復元・同一 Tx +
+    監査ログ・0085 冪等・下位互換・RAG の全メカニズムが設計書・KB と整合し、R1〜R3 の全指摘対応が
+    維持されていることを確認。最終検証: home 単体 544 / api 単体 509 / 統合 317 / 両 typecheck /
+    モック E2E 全 9 スイート green
