@@ -1556,6 +1556,8 @@
 - [x] **既知の制約**:
   - akebono 業態カードのアイコンはカテゴリ配置では業種タイプ別 lucide（INDUSTRY_CARD_ICON）で統一。トップの
     専用セクション（AkebonoSegmentApps）は従来どおり AkebonoSegmentIcon（画像 or lucide）で描画 = 意図的な二系統。
+    **→ トップ専用セクション・AkebonoSegmentApps・planDashboardCards は §102-5（改善要望 2026-08-21）で廃止**
+    （業態カードは categorizeCards の通常配置へ統合 = 当時の記録として本項は残す）。
   - セクション編集のドラフト初期値・保存時に引き継ぐ options は「**保存先スコープ自身の層**」を土台にする
     （純関数 `pickBaseLayout`。user→user〔無ければ tenant→アプリ既定〕/ tenant→tenant〔無ければアプリ既定。**user 層には
     フォールバックしない**〕）。これにより管理者が全社（tenant）を編集しても、自分の user 設定の options/sections が
@@ -4297,4 +4299,21 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
     - NIT: weekStartOf を shared weekStartKeyOf へ委譲（二重定義解消）/ カレンダー取込テーマを capCodePoints へ
       統一 + トーストに内容記入ヒント / mock 旧 v1 last-sent キーの掃除 / applyProposal の空 target ガード /
       非管理者の要望ステータス変更は存在有無に関わらず一律 403（存在オラクル防止）
-  - R2（両ロール再レビュー）→ 結果は本行を更新して記録する
+  - R2（両ロール再レビュー。MAJOR 0・MINOR 計 4〔重複 2 を統合〕・NIT 計 6）→ 全件対応:
+    - レビュー M-1: operational の同一ステータス再送で「メモに残らない運用案内」が起票者へ再通知される →
+      Tx が実遷移フラグを返し、遷移時のみ通知（no-op = 通知もメモも作らない。統合テストで固定）
+    - レビュー M-2/監査 M-1: 週報・月報（+ 日報）リマインドが機能 deny のメンバーへも届く（提出手段が無く
+      リンク先 403 の恒久ナグ）→ runReportReminders / mock プラグインとも canUseFeature で通知対象を
+      フィルタ（ルール未設定 = 従来どおり全員）。F-48-2 追記 + 統合テスト（deny 種別のみ止まる）
+    - 監査 M-2: opsNote が長さ非検証でメモは黙って切り詰め・通知は全文（記録 = SoT と通知の乖離）→
+      接頭辞込み本文を手動メモと同じ improvementNoteError で検証（AKO-REQ-008。API/mock）+
+      通知本文はメモに記録した本文と同一に
+    - 監査 M-3: 運用案内入力 UI に「起票者へ全文通知される」の事前明示が無い（内部メモのつもりの文言が
+      流出する導線）→ UiFormField の hint で事前明示
+    - レビュー m-1/監査 NIT: nextActionNote の POST→GET 往復 + 「送っていない PATCH での保持」アサート追加
+    - レビュー NIT: useReports.ReportInput の docblock 逆転是正 / settings saveReminder をドラフト基点の
+      直列保存化（PUT 未解決中の連続操作で先の変更が失われない）/ applyDigestProposal の before を
+      サーバー最新値基点に（API モードは refresh 後に採取）
+    - 監査 NIT: screen-design のステータス列「未集約 = 未判定」へ実装追随 / §52 に廃止注記 /
+      /requests/:id/status に archived_at IS NULL ガード（取消済み要望のステータスを API 直叩きで動かさない）
+  - R3（両ロール再レビュー）→ 結果は本行を更新して記録する

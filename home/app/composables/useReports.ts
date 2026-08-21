@@ -138,9 +138,9 @@ export interface DailyReportInput {
   issues: string
   /** 本日の課題の種別（DAILY_ISSUE_CATEGORY_PRESETS のいずれか。空 = 未選択。オペレーター指示 2026-08-03） */
   issueCategory: string
-  /** 旧形式の明日の予定（自由記述。既存データの保持用パススルー） */
+  /** 明日の予定（自由テキスト。改修依頼 2026-08-21 でテキスト入力へ回帰 = 新規保存はこちらが正） */
   tomorrow: string
-  /** 明日の予定（構造化・最大 TOMORROW_PLANS_MAX 件。翌営業日の日報へ自動反映） */
+  /** 旧形式の明日の予定（構造化リスト。2026-08-21 廃止 = 新規保存は常に空配列。旧データ表示互換のため型は維持） */
   tomorrowPlans: TomorrowPlan[]
 }
 

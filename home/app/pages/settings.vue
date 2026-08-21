@@ -14,7 +14,7 @@ import type { NotifyRecipientTarget } from '~/utils/notify-recipients'
 import { parseNotifyRecipients } from '~/utils/notify-recipients'
 import {
   parseReportReminderConfig, type ReminderKindConfig, REPORT_REMINDER_KIND_LABELS, REPORT_REMINDER_KINDS,
-  type ReportReminderKind,
+  type ReportReminderConfig, type ReportReminderKind,
 } from '../../../shared/domain/report-reminder'
 import { fmtDateTime } from '~/utils/format'
 
@@ -131,11 +131,21 @@ const poipoiNotifyRecipients = computed<NotifyRecipientTarget[]>({
 
 const REMINDER_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/
 
-const reportReminder = computed(() => parseReportReminderConfig(getConfig('report-reminder', '')))
+// 3 種別 × 3 項目が同一キーに同居するため、保存はドラフト（最新の全体像）を基点に直列化する。
+// API モードで PUT 未解決中に別種別を操作しても、古いスナップショットの read-modify-write で
+// 先の変更が失われない（R2 レビュー指摘）。ドラフトは最後の保存が反映された時点で解除
+const savedReminder = computed(() => parseReportReminderConfig(getConfig('report-reminder', '')))
+const reminderDraft = ref<ReportReminderConfig | null>(null)
+const reportReminder = computed(() => reminderDraft.value ?? savedReminder.value)
+let reminderQueue: Promise<unknown> = Promise.resolve()
 
 function saveReminder(kind: ReportReminderKind, patch: Partial<ReminderKindConfig>, message: string): void {
   const cur = reportReminder.value
-  setConfig('report-reminder', JSON.stringify({ ...cur, [kind]: { ...cur[kind], ...patch } }))
+  const next: ReportReminderConfig = { ...cur, [kind]: { ...cur[kind], ...patch } }
+  reminderDraft.value = next
+  reminderQueue = reminderQueue
+    .then(() => Promise.resolve(setConfig('report-reminder', JSON.stringify(next))))
+    .then(() => { if (reminderDraft.value === next) reminderDraft.value = null }) // 最終保存の反映後は保存値へ復帰（失敗時も保存値へ戻す = 視覚的ロールバック）
   toast.show(message)
 }
 

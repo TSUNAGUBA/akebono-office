@@ -493,14 +493,16 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
     }
     if (!(await canManage(pool, user))) {
       const { rows: own } = await pool.query<{ memberId: string }>(
-        `SELECT member_id AS "memberId" FROM improvement_requests WHERE id = $1`, [id])
-      // 存在しない id も一律 403（非管理者へ他人の要望 id の存在有無を漏らさない = 存在オラクル防止）
+        `SELECT member_id AS "memberId" FROM improvement_requests WHERE id = $1 AND archived_at IS NULL`, [id])
+      // 存在しない・取消済みの id も一律 403（非管理者へ他人の要望 id の存在有無を漏らさない = 存在オラクル防止）
       if (own.length === 0 || own[0]!.memberId !== user.id || (status !== 'resolved' && status !== 'open')) {
         throw err('AKO-PRM-001', 'この操作の権限がありません（自分の要望の解決済み/未対応の切替のみ可能です）', 403)
       }
     }
+    // 取消済み（論理削除）の要望はステータスを動かさない（UI 同様。復元してから操作する = 原則9.5 の導線）
     const { rows } = await pool.query(
-      `UPDATE improvement_requests SET status = $2 WHERE id = $1 RETURNING ${reqColsOf(false)}`, [id, status])
+      `UPDATE improvement_requests SET status = $2 WHERE id = $1 AND archived_at IS NULL
+       RETURNING ${reqColsOf(false)}`, [id, status])
     if (rows.length === 0) throw err('AKO-REQ-002', '対象の要望が見つかりません', 404)
     await audit(pool, { actorId: user.id, action: 'update', entity: 'improvement_requests', entityId: id, detail: `要望ステータス → ${status}` })
     return c.json({ data: rows[0] })
@@ -677,6 +679,16 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
     if (to === 'operational' && !opsNote) {
       throw err('AKO-REQ-024', '運用対応にする場合は、運用方法の案内（note）を記載してください', 400)
     }
+    // メモ本文（接頭辞込み）は手動メモ追加と同じ上限検証（黙って切り詰めると
+    // 記録 = SoT と起票者への通知本文が乖離する。R2 監査 MINOR-2）
+    const opsNoteBody = to === 'operational' ? `運用案内: ${opsNote}` : ''
+    if (to === 'operational') {
+      const noteMsg = improvementNoteError(opsNoteBody)
+      if (noteMsg) throw err('AKO-REQ-008', noteMsg, 400)
+    }
+    // 実際に遷移した（= operational ならメモを記録した）ときだけ Tx 後の起票者通知を行う
+    // （同一ステータス再送の no-op で「メモに残らない運用案内」が再通知されるのを防ぐ = R2 レビュー MINOR-1・原則2）
+    let transitioned = false
     const updated = await inTxn(pool, async (db) => {
       const { rows } = await db.query<{ status: ImprovementStatus }>(
         `SELECT status FROM improvement_items WHERE id = $1 AND archived_at IS NULL FOR UPDATE`, [id])
@@ -689,6 +701,7 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
         const { rows: same } = await db.query(`SELECT ${ITEM_COLS} FROM improvement_items WHERE id = $1`, [id])
         return same[0]
       }
+      transitioned = true
       if (from !== to && !canTransition(from, to)) {
         throw err('AKO-REQ-006', `「${from}」から「${to}」へは変更できません`, 409)
       }
@@ -706,7 +719,7 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
         await db.query(
           `INSERT INTO improvement_notes (id, item_id, member_id, member_name, body, kind)
            VALUES ($1, $2, $3, $4, $5, 'note')`,
-          [newId('imnote'), id, user.id, user.name, capCodePoints(`運用案内: ${opsNote}`, IMPROVEMENT_NOTE_CAP)])
+          [newId('imnote'), id, user.id, user.name, opsNoteBody])
       }
       const { rows: out } = await db.query(
         `UPDATE improvement_items SET status = $2, resolved_at = ${resolvedExpr}, updated_at = now()
@@ -720,14 +733,15 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
     // 運用対応: 紐づく要望の起票者へ運用案内を通知する（改善要望 2026-08-21・レビュー R1 M-3。
     // メモ・要望コメントは管理者内の記録で起票者から見えないため、本人の通知（全文）で届ける =
     // 起票者はこれを確認して自分の要望を「解決済み」へ移す。主フロー成立後の補助処理 = 非ブロッキング（原則4）
-    if (to === 'operational') {
+    if (to === 'operational' && transitioned) {
       try {
         const { rows: authors } = await pool.query<{ memberId: string }>(
           `SELECT DISTINCT member_id AS "memberId" FROM improvement_requests
            WHERE item_id = $1 AND archived_at IS NULL AND member_id IS NOT NULL`, [id])
         for (const a of authors) {
+          // 通知本文はメモに記録した本文と同一（記録 = SoT と通知の乖離を作らない）
           await notify(pool, a.memberId, 'system', '改善要望が「運用対応」になりました',
-            `運用案内: ${opsNote}`, '/improvements')
+            opsNoteBody, '/improvements')
         }
       } catch (e) {
         console.warn('operational notify failed (non-blocking):', (e as Error).message)

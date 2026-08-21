@@ -294,6 +294,9 @@ export function usePartnerActivities() {
     if (proposal.nextActionDate !== undefined) patch.nextActionDate = proposal.nextActionDate
     if (proposal.nextActionNote !== undefined) patch.nextActionNote = capCp(proposal.nextActionNote.trim(), BODY_CAP)
     if (Object.keys(patch).length === 0) return { ok: true, id }
+    // before はサーバーの最新値を基点に取る（キャッシュ由来だと他ユーザーの並行編集後の
+    // 「反映を取り消す」で古い値へ巻き戻す = R2 レビュー指摘。mock はローカル表が SoT のため不要）
+    if (isApi) await refresh()
     const cur = byId(id)
     if (!cur) return { ok: false, error: { code: 'AKO-PTN-002', message: 'ビジネスパートナー活動が見つかりません' } }
     const before: ActivityDigestProposal = {}

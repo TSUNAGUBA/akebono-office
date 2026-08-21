@@ -11,11 +11,13 @@
  * - 判定・本文の純ロジックはサーバーと共有（shared/domain/report-reminder.ts）
  * - 失敗してもアプリ起動をブロックしない（原則4）
  */
+import { canUseFeature, resolveFeatureResource } from '../../../shared/domain/permissions'
 import {
   buildMonthlyReminderMessage, buildReminderMessage, buildWeeklyReminderMessage, hasSubmittedPeriodReport,
   lastCompletedWeekStart, lastMonthStart, missingReportDates, parseReminderLastSent,
   parseReportReminderConfig, type ReminderLastSent, shouldFireReminder,
 } from '../../../shared/domain/report-reminder'
+import type { Member } from '../../../shared/domain/types'
 
 const LAST_SENT_KEY = 'ako.report-reminder-last.v2'
 const LEGACY_LAST_SENT_KEY = 'ako.report-reminder-last.v1'
@@ -35,10 +37,17 @@ export default defineNuxtPlugin(() => {
     const { tbl } = useMockDb()
     const activeMembers = tbl('members').value.filter(m => m.active)
     const { notify } = useNotifications()
+    // 機能 deny のメンバーへは送らない（deny 対象者には提出手段が無い = API runReportReminders と同一判定。
+    // ルール未設定は全員へ = 既定 allow）
+    const permRules = tbl('permissionRules').value.filter(r => r.active)
+    const canUseReportFeature = (m: Member, feature: string): boolean =>
+      permRules.length === 0 || canUseFeature(
+        permRules, { memberId: m.id, title: m.title, role: m.role }, resolveFeatureResource(permRules, feature))
 
     if (shouldFireReminder(config.daily, now, lastSent.daily ?? '', today)) {
       const dailyReports = tbl('dailyReports').value
       for (const member of activeMembers) {
+        if (!canUseReportFeature(member, 'reports')) continue
         const missing = missingReportDates(member.id, dailyReports, today)
         const latest = missing[missing.length - 1]
         if (!latest) continue
@@ -55,6 +64,7 @@ export default defineNuxtPlugin(() => {
         ({ memberId: r.memberId, periodStart: r.weekStart, status: r.status }))
       const { title, body } = buildWeeklyReminderMessage(weekStart)
       for (const member of activeMembers) {
+        if (!canUseReportFeature(member, 'weekly-report')) continue
         if (hasSubmittedPeriodReport(member.id, rows, weekStart)) continue
         notify(member.id, 'reminder', title, body, `/weekly-report?week=${weekStart}`)
       }
@@ -67,6 +77,7 @@ export default defineNuxtPlugin(() => {
         ({ memberId: r.memberId, periodStart: r.monthStart, status: r.status }))
       const { title, body } = buildMonthlyReminderMessage(monthStart)
       for (const member of activeMembers) {
+        if (!canUseReportFeature(member, 'monthly-report')) continue
         if (hasSubmittedPeriodReport(member.id, rows, monthStart)) continue
         notify(member.id, 'reminder', title, body, `/monthly-report?month=${monthStart}`)
       }

@@ -7447,7 +7447,8 @@ describe('活動記録 3 種（サポート/営業/ビジネスパートナー�
         partnerCompanyId: companyId, newPartnerContactName: '川上 太郎',
         newApproachCompanyName: 'アプローチ企業テスト', approachGroup: '紹介ルートA',
         theme: 'フローラ協業', activityType: '共創', status: '進行中', summary: '協業テーマの検討',
-        nextAction: '3者MTG', nextActionDate: '2026-09-07', relatedSalesActivityId: dealId,
+        nextAction: '3者MTG', nextActionDate: '2026-09-07', nextActionNote: '議題は先方の体制確認から',
+        relatedSalesActivityId: dealId,
         memo: '案件化したら商談へリンク', links: ['https://example.com/partner'],
       },
     })
@@ -7456,7 +7457,10 @@ describe('活動記録 3 種（サポート/営業/ビジネスパートナー�
     const createdRow = created.json.data as {
       relatedSalesActivityId: string; partnerCompanyId: string; partnerContactId: string
       approachCompanyId: string; partnerName: string; relatedCompany: string; approachGroup: string; links: string[]
+      nextActionNote: string
     }
+    // Next Action メモ（0079 = 改善要望 2026-08-21）は POST → GET で往復する
+    expect(createdRow.nextActionNote).toBe('議題は先方の体制確認から')
     expect(createdRow.relatedSalesActivityId).toBe(dealId)
     expect(createdRow.partnerCompanyId).toBe(companyId)
     // partner_name/related_company は会社名スナップショット（表示・検索の下位互換）
@@ -7474,13 +7478,18 @@ describe('活動記録 3 種（サポート/営業/ビジネスパートナー�
     expect((await api('POST', '/v1/partner-activities', {
       as: MEMBER, body: { partnerCompanyId: companyId, partnerContactId: 'p-nope', theme: 'x', activityType: '紹介', status: '検討' },
     })).json.error?.code).toBe('AKO-PTN-003')
-    // 部分更新でリンク解除（null 化）できる・他フィールドは保持（パートナー会社・担当・テーマ）
+    // 部分更新でリンク解除（null 化）できる・他フィールドは保持（パートナー会社・担当・テーマ・
+    // Next Action メモ = 「送っていないフィールドの保持」の回帰アサート〔CLAUDE.md 部分更新原則〕）
     const upd = await api('PATCH', `/v1/partner-activities/${pactId}`, { as: HR, body: { relatedSalesActivityId: '' } })
-    const updated = upd.json.data as { relatedSalesActivityId: string | null; theme: string; partnerCompanyId: string; partnerContactId: string }
+    const updated = upd.json.data as {
+      relatedSalesActivityId: string | null; theme: string; partnerCompanyId: string; partnerContactId: string
+      nextActionNote: string
+    }
     expect(updated.relatedSalesActivityId).toBeNull()
     expect(updated.theme).toBe('フローラ協業')
     expect(updated.partnerCompanyId).toBe(companyId)
     expect(updated.partnerContactId).toBe(createdRow.partnerContactId)
+    expect(updated.nextActionNote).toBe('議題は先方の体制確認から')
     // 取消 → 一覧（f.active=true）から外れる → 復元で戻る
     expect((await api('POST', `/v1/partner-activities/${pactId}/archive`, { as: MEMBER })).status).toBe(200)
     const activeOnly = await api('GET', '/v1/partner-activities?f.active=true&limit=50', { as: MEMBER })
@@ -7813,9 +7822,13 @@ describe('対応方針ステータス（運用対応/継続検討 = 改修依頼
         as: ADMIN, body: { status: 'deferred', revisitOn: '2026-10-01' },
       })
       expect((resched.json.data as ItemRow).revisitOn).toBe('2026-10-01')
-      // 運用対応は運用案内コメント必須（AKO-REQ-024 = 改善要望 2026-08-21）
+      // 運用対応は運用案内コメント必須（AKO-REQ-024 = 改善要望 2026-08-21）・上限超過は手動メモと同じ
+      // AKO-REQ-008（黙って切り詰めない = 記録と通知の本文乖離を作らない。R2 監査）
       expect((await api('POST', '/v1/improvements/items/imp-t-defer/status', { as: ADMIN, body: { status: 'operational' } })).json.error?.code)
         .toBe('AKO-REQ-024')
+      expect((await api('POST', '/v1/improvements/items/imp-t-defer/status', {
+        as: ADMIN, body: { status: 'operational', note: 'あ'.repeat(2001) },
+      })).json.error?.code).toBe('AKO-REQ-008')
       // 継続検討 → 運用対応（結論）は可・deferred 以外への遷移でも revisit_on は保持（履歴保全 = クリアしない）
       const toOps = await api('POST', '/v1/improvements/items/imp-t-defer/status', {
         as: ADMIN, body: { status: 'operational', note: '設定画面から手動で変更できます' },
@@ -7831,6 +7844,41 @@ describe('対応方針ステータス（運用対応/継続検討 = 改修依頼
     } finally {
       await pool.query(`DELETE FROM improvement_notes WHERE item_id = 'imp-t-defer'`)
       await pool.query(`DELETE FROM improvement_items WHERE id = 'imp-t-defer'`)
+    }
+  })
+
+  it('運用対応への変更は起票者へ運用案内を全文通知し、同一ステータスの再送では再通知もメモ追記もしない（R2 = 原則2）', async () => {
+    // 起票者（MEMBER）の要望を改修単位へ紐づけ → operational 遷移で通知・メモが 1 回だけ作られること
+    const req = await api('POST', '/v1/improvements/requests', {
+      as: MEMBER, body: { body: '要望：運用案内の通知テスト', pagePath: '/reports' },
+    })
+    const opsReqId = (req.json.data as { id: string }).id
+    await pool.query(
+      `INSERT INTO improvement_items (id, title, status, page_paths, source_request_ids)
+       VALUES ('imp-t-ops', '運用案内通知検証', 'triage', '["/x"]'::jsonb, '[]'::jsonb)`)
+    await pool.query(`UPDATE improvement_requests SET item_id = 'imp-t-ops' WHERE id = $1`, [opsReqId])
+    const opsNotices = async () =>
+      ((await api('GET', '/v1/notifications', { as: MEMBER })).json.data as { kind: string; title: string; body: string }[])
+        .filter(n => n.kind === 'system' && n.title === '改善要望が「運用対応」になりました')
+    try {
+      const before = (await opsNotices()).length
+      expect((await api('POST', '/v1/improvements/items/imp-t-ops/status', {
+        as: ADMIN, body: { status: 'operational', note: '設定画面から変更できます' },
+      })).status).toBe(200)
+      const after = await opsNotices()
+      expect(after.length).toBe(before + 1)
+      expect(after[after.length - 1]!.body).toBe('運用案内: 設定画面から変更できます') // 通知本文 = メモ本文（全文）
+      // 同一ステータスの再送（クライアントの二重送信・リトライ）は 200 だが再通知もメモ追記もしない
+      expect((await api('POST', '/v1/improvements/items/imp-t-ops/status', {
+        as: ADMIN, body: { status: 'operational', note: '再送されるべきでない案内' },
+      })).status).toBe(200)
+      expect((await opsNotices()).length).toBe(before + 1)
+      const notes = await pool.query(`SELECT body FROM improvement_notes WHERE item_id = 'imp-t-ops'`)
+      expect(notes.rows.length).toBe(1)
+    } finally {
+      await pool.query(`DELETE FROM improvement_notes WHERE item_id = 'imp-t-ops'`)
+      await pool.query(`UPDATE improvement_requests SET item_id = NULL, archived_at = now() WHERE id = $1`, [opsReqId])
+      await pool.query(`DELETE FROM improvement_items WHERE id = 'imp-t-ops'`)
     }
   })
 
@@ -7964,6 +8012,40 @@ describe('日報の自動リマインド（runReportReminders = /jobs/report-rem
 
     await pool.query(`DELETE FROM app_configs WHERE key IN ('report-reminder', 'report-reminder-last-sent')`)
     await pool.query(`UPDATE members SET active = false WHERE id = 'm-rmd-target'`)
+  })
+
+  it('機能 deny のメンバーには当該種別のリマインドを送らない（R2 = 0078 で実効化された deny と整合）', async () => {
+    // 週報 deny のメンバー: 提出手段が無くリンク先も 403 になるため週報リマインドは送らない。
+    // deny の無い月報は通常どおり届く（フィルタが種別単位で効いている確認）
+    const DNY = 'm-rmd-deny'
+    await pool.query(`
+      INSERT INTO members (id, name, email, role, employment_type)
+      VALUES ('${DNY}', 'リマインド 権限外', 'rmd-deny@example.com', 'member', 'employee')
+      ON CONFLICT (id) DO UPDATE SET active = true`)
+    await pool.query(`
+      INSERT INTO permission_rules (id, subject_kind, subject_id, resource, field, effect, active)
+      VALUES ('pr-test-rmd-deny', 'member', '${DNY}', 'weekly-report', NULL, 'deny', true)
+      ON CONFLICT (id) DO UPDATE SET active = true`)
+    clearPermissionCache()
+    expect((await api('PUT', '/v1/configs/report-reminder', {
+      as: ADMIN, body: { value: JSON.stringify({
+        weekly: { enabled: true, time: '00:00', external: false },
+        monthly: { enabled: true, time: '00:00', external: false },
+      }) },
+    })).status).toBe(200)
+    await pool.query(`DELETE FROM app_configs WHERE key = 'report-reminder-last-sent'`)
+    try {
+      const res = await runReportReminders(pool)
+      expect(res.notified).toBeGreaterThan(0)
+      const mine = (await api('GET', '/v1/notifications', { as: DNY })).json.data as { kind: string; title: string }[]
+      expect(mine.filter(n => n.kind === 'reminder' && n.title === '週報リマインド').length).toBe(0)
+      expect(mine.filter(n => n.kind === 'reminder' && n.title === '月報リマインド').length).toBe(1)
+    } finally {
+      await pool.query(`UPDATE permission_rules SET active = false WHERE id = 'pr-test-rmd-deny'`)
+      clearPermissionCache()
+      await pool.query(`DELETE FROM app_configs WHERE key IN ('report-reminder', 'report-reminder-last-sent')`)
+      await pool.query(`UPDATE members SET active = false WHERE id = '${DNY}'`)
+    }
   })
 })
 

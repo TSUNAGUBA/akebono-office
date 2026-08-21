@@ -1433,7 +1433,11 @@ async function copyAndClose(): Promise<void> {
           <!-- 「運用対応」への変更: 運用案内コメント必須（改善要望 2026-08-21）。メモ〔時系列〕へ記録され、
                紐づく要望の起票者へ全文が通知される（起票者はこれを確認して「解決済み」へ移す = R1 M-3） -->
           <div v-if="operationalMode" class="grid gap-2 rounded-lg border border-line bg-surface-soft p-2.5">
-            <UiFormField label="運用方法の案内（必須・メモに記録されます）" required>
+            <UiFormField
+              label="運用方法の案内（必須）"
+              required
+              hint="メモに記録され、この案件に紐づく要望の起票者へ全文がそのまま通知されます。起票者に見せる前提の文章で記載してください"
+            >
               <textarea
                 v-model="operationalNote"
                 class="textarea"

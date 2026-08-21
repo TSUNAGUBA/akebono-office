@@ -390,6 +390,12 @@ export function useImprovements() {
     if (status === 'operational' && !opsNote) {
       return { ok: false, error: { code: 'AKO-REQ-024', message: '運用対応にする場合は、運用方法の案内を記載してください' } }
     }
+    // メモ本文（接頭辞込み）は手動メモ追加と同じ上限検証（黙って切り詰めない = API と同一。R2 監査 MINOR-2）
+    const opsNoteBody = status === 'operational' ? `運用案内: ${opsNote}` : ''
+    if (status === 'operational') {
+      const noteMsg = improvementNoteError(opsNoteBody)
+      if (noteMsg) return { ok: false, error: { code: 'AKO-REQ-008', message: noteMsg } }
+    }
     if (isApi) {
       const res = await apiWrite(`/v1/improvements/items/${id}/status`, {
         body: {
@@ -418,7 +424,7 @@ export function useImprovements() {
         itemId: id,
         memberId: currentUser.value.id,
         memberName: currentUser.value.name,
-        body: capCodePoints(`運用案内: ${opsNote}`, IMPROVEMENT_NOTE_CAP),
+        body: opsNoteBody,
         kind: 'note' as const,
         archivedAt: null,
         createdAt: now,
@@ -429,7 +435,8 @@ export function useImprovements() {
         .map(r => r.memberId)
         .filter((m): m is string => !!m))]
       for (const m of authors) {
-        notifications?.notify(m, 'system', '改善要望が「運用対応」になりました', `運用案内: ${opsNote}`, '/improvements')
+        // 通知本文はメモに記録した本文と同一（記録 = SoT と通知の乖離を作らない）
+        notifications?.notify(m, 'system', '改善要望が「運用対応」になりました', opsNoteBody, '/improvements')
       }
     }
     itemsRef.value = itemsRef.value.map(it => (it.id === id

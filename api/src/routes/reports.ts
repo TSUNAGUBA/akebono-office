@@ -1118,7 +1118,15 @@ export async function runReportReminders(pool: pg.Pool): Promise<{ notified: num
         [JSON.stringify(lastSent)])
     }
 
-    const membersQ = await pool.query<{ id: string }>(`SELECT id FROM members WHERE active = true`)
+    const membersQ = await pool.query<{ id: string; title: string | null; role: PermissionSubject['role'] }>(
+      `SELECT id, title, role FROM members WHERE active = true`)
+    // 機能 deny のメンバーへは送らない（deny 対象者には提出手段が無く、リンク先も AKO-PRM-001 403 の
+    // 行き止まりになる = R2 レビュー。判定は featureGuard と同じ resolveFeatureResource + canUseFeature。
+    // ルール未設定は従来どおり全員へ = 既定 allow）
+    const permRules = await activePermissionRules(pool)
+    const canUseReportFeature = (m: { id: string; title: string | null; role: PermissionSubject['role'] }, feature: string): boolean =>
+      permRules.length === 0 || canUseFeature(
+        permRules, { memberId: m.id, title: m.title ?? '', role: m.role }, resolveFeatureResource(permRules, feature))
 
     if (fire.daily) {
       const window = reminderWindowDates(today)
@@ -1131,6 +1139,7 @@ export async function runReportReminders(pool: pg.Pool): Promise<{ notified: num
       const submitted = reportsQ.rows.map(r =>
         ({ authorKind: 'human', memberId: r.memberId, date: r.date, status: 'submitted' }))
       for (const m of membersQ.rows) {
+        if (!canUseReportFeature(m, 'reports')) continue // 日報 deny のメンバーには送らない
         const missing = missingReportDates(m.id, submitted, today)
         const latest = missing[missing.length - 1]
         if (!latest) continue
@@ -1152,6 +1161,7 @@ export async function runReportReminders(pool: pg.Pool): Promise<{ notified: num
       const rows = weeklyQ.rows.map(r => ({ ...r, status: 'submitted' }))
       const { title, body } = buildWeeklyReminderMessage(weekStart)
       for (const m of membersQ.rows) {
+        if (!canUseReportFeature(m, 'weekly-report')) continue // 週報 deny のメンバーには送らない
         if (hasSubmittedPeriodReport(m.id, rows, weekStart)) continue
         await notify(pool, m.id, 'reminder', title, body, `/weekly-report?week=${weekStart}`,
           { inAppOnly: !config.weekly.external })
@@ -1169,6 +1179,7 @@ export async function runReportReminders(pool: pg.Pool): Promise<{ notified: num
       const rows = monthlyQ.rows.map(r => ({ ...r, status: 'submitted' }))
       const { title, body } = buildMonthlyReminderMessage(monthStart)
       for (const m of membersQ.rows) {
+        if (!canUseReportFeature(m, 'monthly-report')) continue // 月報 deny のメンバーには送らない
         if (hasSubmittedPeriodReport(m.id, rows, monthStart)) continue
         await notify(pool, m.id, 'reminder', title, body, `/monthly-report?month=${monthStart}`,
           { inAppOnly: !config.monthly.external })
