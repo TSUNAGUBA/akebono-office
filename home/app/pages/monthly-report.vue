@@ -3,8 +3,8 @@
  * 月報（F-06。改修依頼 2026-08-20 第2バッチ）
  * 日報（/reports）配下の ?kind=monthly から独立したトップレベルページ。
  * - タブ: 自分の月報（mine）/ 全員の月報（all）/ チーム（team）。各ビューは ReportsPeriodPanel（週報と同型）
- * - タブ権限 = 権限表の機能キー 'monthly-report' × `tab:<key>`（新キーのルール未設定の間は
- *   旧 'reports' の `tab:monthly-*` ルールを継承 = usePermissions.canTab のフォールバック。原則7）
+ * - タブ権限 = 権限表の機能キー 'monthly-report' × `tab:<key>`（旧 'reports' からの動的継承は撤去 =
+ *   改善要望 2026-08-21。旧ルールは migration 0078 で新キーへ物理移行済み = 権限表に見えるルールが実効ルール）
  * - 旧 URL（/reports?kind=monthly・?tab=monthly-*）は reports.vue が本ページへ replace リダイレクトする
  * - パンくずの親はホーム（nav-map。日報を親に出さない = 本改修の眼目）
  */

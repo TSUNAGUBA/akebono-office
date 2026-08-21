@@ -6816,8 +6816,9 @@ describe('改善要望（F-42）', () => {
     expect((((await api('GET', '/v1/improvements/requests', { as: HR })).json.data) as { id: string }[]).some(r => r.id === ownReqId)).toBe(false)
     // 本人が復元できる（取消の取消 = 原則9.5）→ 後続テストへ影響させないため元に戻す
     expect((await api('POST', `/v1/improvements/requests/${ownReqId}/restore`, { as: MEMBER })).status).toBe(200)
-    // ステータス変更・選別など管理系の操作は一般不可（AKO-PRM-001）
-    expect((await api('POST', `/v1/improvements/requests/${(posted.json.data as { id: string }).id}/status`, { as: MEMBER, body: { status: 'resolved' } })).status).toBe(403)
+    // 管理系の操作は一般不可（AKO-PRM-001）。要望ステータスは 2026-08-21 から本人の resolved/open のみ可の
+    // ため、管理者専用のまま残る dismissed で検証する（本人の resolved 可は専用 describe が担う）
+    expect((await api('POST', `/v1/improvements/requests/${(posted.json.data as { id: string }).id}/status`, { as: MEMBER, body: { status: 'dismissed' } })).status).toBe(403)
     // 改修案件（/items）は引き続き管理権限者のみ（AKO-PRM-001）・管理者は可
     const memberList = await api('GET', '/v1/improvements/items', { as: MEMBER })
     expect(memberList.status).toBe(403)
@@ -6949,10 +6950,11 @@ describe('改善要望（F-42）', () => {
     await api('POST', `/v1/improvements/requests/${reqId}/adoption`, { as: ADMIN, body: { adoption: 'adopted' } })
     await api('POST', '/v1/improvements/generate', { as: ADMIN })
 
-    // 不正値は AKO-REQ-011・一般（管理権限なし）は 403
+    // 不正値は AKO-REQ-011・非本人かつ管理権限なし（HR）は 403
+    // （投稿者本人 = MEMBER は 2026-08-21 から resolved/open へ変更可 = 専用 describe が担う）
     expect((await api('POST', `/v1/improvements/requests/${reqId}/status`, { as: ADMIN, body: { status: 'bogus' } }))
       .json.error?.code).toBe('AKO-REQ-011')
-    expect((await api('POST', `/v1/improvements/requests/${reqId}/status`, { as: MEMBER, body: { status: 'resolved' } })).status).toBe(403)
+    expect((await api('POST', `/v1/improvements/requests/${reqId}/status`, { as: HR, body: { status: 'resolved' } })).status).toBe(403)
 
     // 変更（resolved）→ 一覧に反映・プロンプト再生成で【対応済み】が明記される
     const set = await api('POST', `/v1/improvements/requests/${reqId}/status`, { as: ADMIN, body: { status: 'resolved' } })
@@ -7445,7 +7447,8 @@ describe('活動記録 3 種（サポート/営業/ビジネスパートナー�
         partnerCompanyId: companyId, newPartnerContactName: '川上 太郎',
         newApproachCompanyName: 'アプローチ企業テスト', approachGroup: '紹介ルートA',
         theme: 'フローラ協業', activityType: '共創', status: '進行中', summary: '協業テーマの検討',
-        nextAction: '3者MTG', nextActionDate: '2026-09-07', relatedSalesActivityId: dealId,
+        nextAction: '3者MTG', nextActionDate: '2026-09-07', nextActionNote: '議題は先方の体制確認から',
+        relatedSalesActivityId: dealId,
         memo: '案件化したら商談へリンク', links: ['https://example.com/partner'],
       },
     })
@@ -7454,7 +7457,10 @@ describe('活動記録 3 種（サポート/営業/ビジネスパートナー�
     const createdRow = created.json.data as {
       relatedSalesActivityId: string; partnerCompanyId: string; partnerContactId: string
       approachCompanyId: string; partnerName: string; relatedCompany: string; approachGroup: string; links: string[]
+      nextActionNote: string
     }
+    // Next Action メモ（0079 = 改善要望 2026-08-21）は POST → GET で往復する
+    expect(createdRow.nextActionNote).toBe('議題は先方の体制確認から')
     expect(createdRow.relatedSalesActivityId).toBe(dealId)
     expect(createdRow.partnerCompanyId).toBe(companyId)
     // partner_name/related_company は会社名スナップショット（表示・検索の下位互換）
@@ -7472,13 +7478,18 @@ describe('活動記録 3 種（サポート/営業/ビジネスパートナー�
     expect((await api('POST', '/v1/partner-activities', {
       as: MEMBER, body: { partnerCompanyId: companyId, partnerContactId: 'p-nope', theme: 'x', activityType: '紹介', status: '検討' },
     })).json.error?.code).toBe('AKO-PTN-003')
-    // 部分更新でリンク解除（null 化）できる・他フィールドは保持（パートナー会社・担当・テーマ）
+    // 部分更新でリンク解除（null 化）できる・他フィールドは保持（パートナー会社・担当・テーマ・
+    // Next Action メモ = 「送っていないフィールドの保持」の回帰アサート〔CLAUDE.md 部分更新原則〕）
     const upd = await api('PATCH', `/v1/partner-activities/${pactId}`, { as: HR, body: { relatedSalesActivityId: '' } })
-    const updated = upd.json.data as { relatedSalesActivityId: string | null; theme: string; partnerCompanyId: string; partnerContactId: string }
+    const updated = upd.json.data as {
+      relatedSalesActivityId: string | null; theme: string; partnerCompanyId: string; partnerContactId: string
+      nextActionNote: string
+    }
     expect(updated.relatedSalesActivityId).toBeNull()
     expect(updated.theme).toBe('フローラ協業')
     expect(updated.partnerCompanyId).toBe(companyId)
     expect(updated.partnerContactId).toBe(createdRow.partnerContactId)
+    expect(updated.nextActionNote).toBe('議題は先方の体制確認から')
     // 取消 → 一覧（f.active=true）から外れる → 復元で戻る
     expect((await api('POST', `/v1/partner-activities/${pactId}/archive`, { as: MEMBER })).status).toBe(200)
     const activeOnly = await api('GET', '/v1/partner-activities?f.active=true&limit=50', { as: MEMBER })
@@ -7811,15 +7822,66 @@ describe('対応方針ステータス（運用対応/継続検討 = 改修依頼
         as: ADMIN, body: { status: 'deferred', revisitOn: '2026-10-01' },
       })
       expect((resched.json.data as ItemRow).revisitOn).toBe('2026-10-01')
+      // 運用対応は運用案内コメント必須（AKO-REQ-024 = 改善要望 2026-08-21）・上限超過は AKO-REQ-008
+      // （黙って切り詰めない = 記録と通知の本文乖離を作らない。上限は接頭辞「運用案内: 」込みで
+      // メモ上限に収まる実効値 1994 字 = メッセージとも一致。R2 監査 + R3 レビュー）
+      expect((await api('POST', '/v1/improvements/items/imp-t-defer/status', { as: ADMIN, body: { status: 'operational' } })).json.error?.code)
+        .toBe('AKO-REQ-024')
+      const overCap = await api('POST', '/v1/improvements/items/imp-t-defer/status', {
+        as: ADMIN, body: { status: 'operational', note: 'あ'.repeat(1995) }, // 素の 2000 字以内でも接頭辞込みで超過
+      })
+      expect(overCap.json.error?.code).toBe('AKO-REQ-008')
+      expect(overCap.json.error?.message).toContain('1994')
       // 継続検討 → 運用対応（結論）は可・deferred 以外への遷移でも revisit_on は保持（履歴保全 = クリアしない）
-      const toOps = await api('POST', '/v1/improvements/items/imp-t-defer/status', { as: ADMIN, body: { status: 'operational' } })
+      const toOps = await api('POST', '/v1/improvements/items/imp-t-defer/status', {
+        as: ADMIN, body: { status: 'operational', note: '設定画面から手動で変更できます' },
+      })
       expect((toOps.json.data as ItemRow)).toMatchObject({ status: 'operational', revisitOn: '2026-10-01' })
+      // 運用案内はメモ（時系列・kind=note）へ「運用案内: 」接頭辞つきで同一 Tx 記録される
+      const opsNotes = (await api('GET', '/v1/improvements/notes?itemId=imp-t-defer', { as: ADMIN })).json.data as { body: string }[]
+      expect(opsNotes.some(n => n.body === '運用案内: 設定画面から手動で変更できます')).toBe(true)
       // 運用対応 → 解決済み は不可（AKO-REQ-006）・運用対応 → 改善対応（見直し）は可
       expect((await api('POST', '/v1/improvements/items/imp-t-defer/status', { as: ADMIN, body: { status: 'resolved' } })).json.error?.code)
         .toBe('AKO-REQ-006')
       expect((await api('POST', '/v1/improvements/items/imp-t-defer/status', { as: ADMIN, body: { status: 'accepted' } })).status).toBe(200)
     } finally {
+      await pool.query(`DELETE FROM improvement_notes WHERE item_id = 'imp-t-defer'`)
       await pool.query(`DELETE FROM improvement_items WHERE id = 'imp-t-defer'`)
+    }
+  })
+
+  it('運用対応への変更は起票者へ運用案内を全文通知し、同一ステータスの再送では再通知もメモ追記もしない（R2 = 原則2）', async () => {
+    // 起票者（MEMBER）の要望を改修単位へ紐づけ → operational 遷移で通知・メモが 1 回だけ作られること
+    const req = await api('POST', '/v1/improvements/requests', {
+      as: MEMBER, body: { body: '要望：運用案内の通知テスト', pagePath: '/reports' },
+    })
+    const opsReqId = (req.json.data as { id: string }).id
+    await pool.query(
+      `INSERT INTO improvement_items (id, title, status, page_paths, source_request_ids)
+       VALUES ('imp-t-ops', '運用案内通知検証', 'triage', '["/x"]'::jsonb, '[]'::jsonb)`)
+    await pool.query(`UPDATE improvement_requests SET item_id = 'imp-t-ops' WHERE id = $1`, [opsReqId])
+    const opsNotices = async () =>
+      ((await api('GET', '/v1/notifications', { as: MEMBER })).json.data as { kind: string; title: string; body: string }[])
+        .filter(n => n.kind === 'system' && n.title === '改善要望が「運用対応」になりました')
+    try {
+      const before = (await opsNotices()).length
+      expect((await api('POST', '/v1/improvements/items/imp-t-ops/status', {
+        as: ADMIN, body: { status: 'operational', note: '設定画面から変更できます' },
+      })).status).toBe(200)
+      const after = await opsNotices()
+      expect(after.length).toBe(before + 1)
+      expect(after[after.length - 1]!.body).toBe('運用案内: 設定画面から変更できます') // 通知本文 = メモ本文（全文）
+      // 同一ステータスの再送（クライアントの二重送信・リトライ）は 200 だが再通知もメモ追記もしない
+      expect((await api('POST', '/v1/improvements/items/imp-t-ops/status', {
+        as: ADMIN, body: { status: 'operational', note: '再送されるべきでない案内' },
+      })).status).toBe(200)
+      expect((await opsNotices()).length).toBe(before + 1)
+      const notes = await pool.query(`SELECT body FROM improvement_notes WHERE item_id = 'imp-t-ops'`)
+      expect(notes.rows.length).toBe(1)
+    } finally {
+      await pool.query(`DELETE FROM improvement_notes WHERE item_id = 'imp-t-ops'`)
+      await pool.query(`UPDATE improvement_requests SET item_id = NULL, archived_at = now() WHERE id = $1`, [opsReqId])
+      await pool.query(`DELETE FROM improvement_items WHERE id = 'imp-t-ops'`)
     }
   })
 
@@ -7910,6 +7972,92 @@ describe('日報の自動リマインド（runReportReminders = /jobs/report-rem
 
     // 後続テストへ影響させない（設定・送信済みの後片付け）
     await pool.query(`DELETE FROM app_configs WHERE key IN ('report-reminder', 'report-reminder-last-sent')`)
+  })
+
+  it('種別設定: 週報・月報リマインドは対象期間（先週・先月）の未提出者へ通知する（種別ごとに日次 1 回）', async () => {
+    // 検証対象は専用メンバー（他テストが先週・先月分の週報/月報を提出していても影響を受けない = 独立性）
+    const RMD = 'm-rmd-target'
+    await pool.query(`
+      INSERT INTO members (id, name, email, role, employment_type)
+      VALUES ('${RMD}', 'リマインド 対象', 'rmd-target@example.com', 'member', 'employee')
+      ON CONFLICT (id) DO NOTHING`)
+    // 新形状（種別ごと）で週報・月報のみ有効（日報は無効のまま）
+    expect((await api('PUT', '/v1/configs/report-reminder', {
+      as: ADMIN, body: { value: JSON.stringify({
+        daily: { enabled: false, time: '00:00', external: true },
+        weekly: { enabled: true, time: '00:00', external: false },
+        monthly: { enabled: true, time: '00:00', external: true },
+      }) },
+    })).status).toBe(200)
+    await pool.query(`DELETE FROM app_configs WHERE key = 'report-reminder-last-sent'`)
+
+    const remindersOf = async (title: string) =>
+      ((await api('GET', '/v1/notifications', { as: RMD })).json.data as { kind: string; title: string }[])
+        .filter(n => n.kind === 'reminder' && n.title === title)
+
+    const first = await runReportReminders(pool)
+    // RMD は先週の週報・先月の月報とも未提出のため両方の通知対象になる
+    expect(first.notified).toBeGreaterThan(0)
+    expect((await remindersOf('週報リマインド')).length).toBe(1)
+    expect((await remindersOf('月報リマインド')).length).toBe(1)
+    expect((await remindersOf('日報リマインド')).length).toBe(0) // 日報は無効のまま
+
+    // 同日の再実行は種別ごとの last-sent により送信 0（冪等・原則2）
+    expect((await runReportReminders(pool)).notified).toBe(0)
+
+    // last-sent は種別ごとのオブジェクトで保存されている
+    const last = await pool.query<{ value: unknown }>(
+      `SELECT value FROM app_configs WHERE key = 'report-reminder-last-sent'`)
+    const parsed = last.rows[0]?.value as { weekly?: string; monthly?: string; daily?: string }
+    expect(typeof parsed.weekly).toBe('string')
+    expect(typeof parsed.monthly).toBe('string')
+    expect(parsed.daily).toBeUndefined()
+
+    await pool.query(`DELETE FROM app_configs WHERE key IN ('report-reminder', 'report-reminder-last-sent')`)
+    await pool.query(`UPDATE members SET active = false WHERE id = 'm-rmd-target'`)
+  })
+
+  it('機能 deny・提出（mine）タブ deny のメンバーには当該種別のリマインドを送らない（R2/R3 = 0078 で実効化された deny と整合）', async () => {
+    // DNY = 週報の機能 deny（提出手段が無くリンク先も 403）/ DNT = 月報の提出タブ deny（提出タブが出ない）。
+    // deny の無い種別は通常どおり届く = フィルタが種別・粒度単位で効いている確認
+    const DNY = 'm-rmd-deny'
+    const DNT = 'm-rmd-deny-tab'
+    await pool.query(`
+      INSERT INTO members (id, name, email, role, employment_type) VALUES
+        ('${DNY}', 'リマインド 権限外', 'rmd-deny@example.com', 'member', 'employee'),
+        ('${DNT}', 'リマインド タブ権限外', 'rmd-deny-tab@example.com', 'member', 'employee')
+      ON CONFLICT (id) DO UPDATE SET active = true`)
+    await pool.query(`
+      INSERT INTO permission_rules (id, subject_kind, subject_id, resource, field, effect, active) VALUES
+        ('pr-test-rmd-deny', 'member', '${DNY}', 'weekly-report', NULL, 'deny', true),
+        ('pr-test-rmd-deny-tab', 'member', '${DNT}', 'monthly-report', 'tab:mine', 'deny', true)
+      ON CONFLICT (id) DO UPDATE SET active = true`)
+    clearPermissionCache()
+    expect((await api('PUT', '/v1/configs/report-reminder', {
+      as: ADMIN, body: { value: JSON.stringify({
+        weekly: { enabled: true, time: '00:00', external: false },
+        monthly: { enabled: true, time: '00:00', external: false },
+      }) },
+    })).status).toBe(200)
+    await pool.query(`DELETE FROM app_configs WHERE key = 'report-reminder-last-sent'`)
+    try {
+      const res = await runReportReminders(pool)
+      expect(res.notified).toBeGreaterThan(0)
+      const remindersOf = async (memberId: string) =>
+        ((await api('GET', '/v1/notifications', { as: memberId })).json.data as { kind: string; title: string }[])
+          .filter(n => n.kind === 'reminder')
+      const dny = await remindersOf(DNY)
+      expect(dny.filter(n => n.title === '週報リマインド').length).toBe(0) // 機能 deny の種別は届かない
+      expect(dny.filter(n => n.title === '月報リマインド').length).toBe(1) // deny の無い種別は届く
+      const dnt = await remindersOf(DNT)
+      expect(dnt.filter(n => n.title === '月報リマインド').length).toBe(0) // 提出タブ deny の種別は届かない
+      expect(dnt.filter(n => n.title === '週報リマインド').length).toBe(1)
+    } finally {
+      await pool.query(`UPDATE permission_rules SET active = false WHERE id IN ('pr-test-rmd-deny', 'pr-test-rmd-deny-tab')`)
+      clearPermissionCache()
+      await pool.query(`DELETE FROM app_configs WHERE key IN ('report-reminder', 'report-reminder-last-sent')`)
+      await pool.query(`UPDATE members SET active = false WHERE id IN ('${DNY}', '${DNT}')`)
+    }
   })
 })
 
@@ -8308,5 +8456,117 @@ describe('エージェント型チャット（buildContext の only 指定 = ツ
     const r = splitSuggestions('回答本文です。\n提案: 次の質問A | 次の質問B')
     expect(r.content).toBe('回答本文です。')
     expect(r.suggestions).toEqual(['次の質問A', '次の質問B'])
+  })
+})
+
+// ---------- 0078: 週報・月報権限ルールの物理移行（改善要望 2026-08-21） ----------
+// 旧 'reports' キーの weekly-*/monthly-* タブルールが権限管理画面から見えない deny として
+// 生き続けるバグの恒久対応。移行 SQL は冪等（再適用しても増殖・巻き戻りなし = 原則2）
+describe('0078: 週報・月報権限ルールの旧 reports キーからの移行', () => {
+  async function apply0078(): Promise<void> {
+    const sql = readFileSync(new URL('../../db/migrations/0078_report_split_rule_migration.sql', import.meta.url), 'utf8')
+    await pool.query(sql)
+  }
+
+  it('タブルールは新キーへ書き換え・機能レベルは複製される（再適用は冪等）', async () => {
+    await pool.query(`
+      INSERT INTO permission_rules (id, subject_kind, subject_id, resource, field, effect, active) VALUES
+        ('t78-w', 'role', 'member', 'reports', 'tab:weekly-all', 'deny', true),
+        ('t78-m', 'role', 'member', 'reports', 'tab:monthly-team', 'deny', true),
+        ('t78-f', 'role', 'member', 'reports', NULL, 'deny', true)`)
+    await apply0078()
+    const w = await pool.query(`SELECT resource, field, active FROM permission_rules WHERE id = 't78-w'`)
+    expect(w.rows[0]).toMatchObject({ resource: 'weekly-report', field: 'tab:all', active: true })
+    const m = await pool.query(`SELECT resource, field, active FROM permission_rules WHERE id = 't78-m'`)
+    expect(m.rows[0]).toMatchObject({ resource: 'monthly-report', field: 'tab:team', active: true })
+    // 機能レベル deny は weekly/monthly へ複製され、旧行は日報用として残る
+    const wr = await pool.query(`SELECT resource, field, effect, active FROM permission_rules WHERE id = 't78-f:wr'`)
+    expect(wr.rows[0]).toMatchObject({ resource: 'weekly-report', field: null, effect: 'deny', active: true })
+    const mr = await pool.query(`SELECT resource FROM permission_rules WHERE id = 't78-f:mr'`)
+    expect(mr.rows[0]).toMatchObject({ resource: 'monthly-report' })
+    const orig = await pool.query(`SELECT resource, active FROM permission_rules WHERE id = 't78-f'`)
+    expect(orig.rows[0]).toMatchObject({ resource: 'reports', active: true })
+    // 再適用しても行数は変わらない（冪等）
+    await apply0078()
+    const n = await pool.query(`SELECT count(*)::int AS n FROM permission_rules WHERE id LIKE 't78-%'`)
+    expect(n.rows[0].n).toBe(5)
+    await pool.query(`DELETE FROM permission_rules WHERE id LIKE 't78-%'`)
+  })
+
+  it('同一対象が新キーのルール（タブでも）を持つ場合、機能レベル deny は複製されない（deny 強化しない）', async () => {
+    await pool.query(`
+      INSERT INTO permission_rules (id, subject_kind, subject_id, resource, field, effect, active) VALUES
+        ('t78c-f', 'role', 'member', 'reports', NULL, 'deny', true),
+        ('t78c-new', 'role', 'member', 'weekly-report', 'tab:mine', 'deny', true)`)
+    const sql = readFileSync(new URL('../../db/migrations/0078_report_split_rule_migration.sql', import.meta.url), 'utf8')
+    await pool.query(sql)
+    // weekly-report はタブルール保持者 = 明示管理中 → 機能 deny を複製しない / monthly-report は複製される
+    const wr = await pool.query(`SELECT 1 FROM permission_rules WHERE id = 't78c-f:wr'`)
+    expect(wr.rows.length).toBe(0)
+    const mr = await pool.query(`SELECT effect FROM permission_rules WHERE id = 't78c-f:mr'`)
+    expect(mr.rows[0]).toMatchObject({ effect: 'deny' })
+    await pool.query(`DELETE FROM permission_rules WHERE id LIKE 't78c-%'`)
+  })
+
+  it('新キー側に同一対象のルールが既にあれば旧行は無効化される（管理者の新設定を上書きしない）', async () => {
+    await pool.query(`
+      INSERT INTO permission_rules (id, subject_kind, subject_id, resource, field, effect, active) VALUES
+        ('t78b-old', 'role', 'member', 'reports', 'tab:weekly-all', 'deny', true),
+        ('t78b-new', 'role', 'member', 'weekly-report', 'tab:all', 'allow', true)`)
+    const sql = readFileSync(new URL('../../db/migrations/0078_report_split_rule_migration.sql', import.meta.url), 'utf8')
+    await pool.query(sql)
+    const old = await pool.query(`SELECT resource, field, active FROM permission_rules WHERE id = 't78b-old'`)
+    expect(old.rows[0]).toMatchObject({ resource: 'reports', field: 'tab:weekly-all', active: false })
+    const kept = await pool.query(`SELECT effect, active FROM permission_rules WHERE id = 't78b-new'`)
+    expect(kept.rows[0]).toMatchObject({ effect: 'allow', active: true })
+    await pool.query(`DELETE FROM permission_rules WHERE id LIKE 't78b-%'`)
+  })
+})
+
+// ---------- 改善要望: 起票者本人の解決フラグ（改善要望 2026-08-21） ----------
+// 「運用対応」の案内を確認した起票者が自分の要望を「解決済み」へ移し、「未対応」へ戻せる（原則9.5）。
+// dismissed（見送り）の付与・他人の要望の変更は従来どおり管理権限者のみ
+describe('改善要望: 要望ステータスの本人操作（resolved ⇄ open）', () => {
+  let reqId = ''
+
+  it('起票者本人は自分の要望を resolved にでき、open へ戻せる', async () => {
+    const created = await api('POST', '/v1/improvements/requests', {
+      as: MEMBER, body: { body: '要望：本人解決フローのテスト', pagePath: '/reports' },
+    })
+    expect(created.status).toBe(201)
+    reqId = (created.json.data as { id: string }).id
+
+    const resolved = await api('POST', `/v1/improvements/requests/${reqId}/status`, {
+      as: MEMBER, body: { status: 'resolved' },
+    })
+    expect(resolved.status).toBe(200)
+    expect((resolved.json.data as { status: string }).status).toBe('resolved')
+
+    const reopened = await api('POST', `/v1/improvements/requests/${reqId}/status`, {
+      as: MEMBER, body: { status: 'open' },
+    })
+    expect(reopened.status).toBe(200)
+    expect((reopened.json.data as { status: string }).status).toBe('open')
+  })
+
+  it('本人でも dismissed へは変更できず、他人（非管理者）の要望も変更できない', async () => {
+    const dismissed = await api('POST', `/v1/improvements/requests/${reqId}/status`, {
+      as: MEMBER, body: { status: 'dismissed' },
+    })
+    expect(dismissed.status).toBe(403)
+    expect(dismissed.json.error?.code).toBe('AKO-PRM-001')
+
+    // HR（非管理者・非本人）は 403。管理者は従来どおり任意に変更できる
+    const byOther = await api('POST', `/v1/improvements/requests/${reqId}/status`, {
+      as: HR, body: { status: 'resolved' },
+    })
+    expect(byOther.status).toBe(403)
+    const byAdmin = await api('POST', `/v1/improvements/requests/${reqId}/status`, {
+      as: ADMIN, body: { status: 'dismissed' },
+    })
+    expect(byAdmin.status).toBe(200)
+    // 後片付け（open へ戻して取消）
+    await api('POST', `/v1/improvements/requests/${reqId}/status`, { as: ADMIN, body: { status: 'open' } })
+    await api('POST', `/v1/improvements/requests/${reqId}/archive`, { as: MEMBER })
   })
 })

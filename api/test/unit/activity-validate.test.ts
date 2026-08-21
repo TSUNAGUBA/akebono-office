@@ -81,6 +81,7 @@ const partnerBase: PartnerActivityInput = {
   initiatives: '',
   currentState: '',
   nextAction: '3者MTG',
+  nextActionNote: '',
   nextActionDate: '2026-09-07',
   staffMemberId: 'm-03',
   relatedMeeting: '',
@@ -251,5 +252,22 @@ describe('heuristicActivityDigest（AI集約のフォールバック = LLM 無�
     const d = heuristicActivityDigest(header, [])
     expect(d.summary).toContain('まだ登録されていません')
     expect(d.highlights).toEqual([])
+  })
+
+  it('propose: 最新ログの Next Action 系が現在値と異なるときのみ更新提案を返す（改善要望 2026-08-21）', () => {
+    const logs = [
+      mk({ loggedOn: '2026-08-01', title: '初回訪問' }),
+      mk({ loggedOn: '2026-08-10', title: 'デモ実施', nextAction: '見積書の提出', nextActionDate: '2026-08-25' }),
+    ]
+    // 現在値と異なる → 提案あり
+    const p1 = heuristicActivityDigest(
+      { ...header, nextAction: 'デモ準備', nextActionDate: '2026-08-08' }, logs, { propose: true })
+    expect(p1.proposal).toEqual({ nextAction: '見積書の提出', nextActionDate: '2026-08-25' })
+    // 現在値と同じ → 提案なし
+    const p2 = heuristicActivityDigest(
+      { ...header, nextAction: '見積書の提出', nextActionDate: '2026-08-25' }, logs, { propose: true })
+    expect(p2.proposal).toBeUndefined()
+    // propose なし（営業活動 = 既定）は従来どおり proposal を含まない
+    expect(heuristicActivityDigest(header, logs).proposal).toBeUndefined()
   })
 })

@@ -138,9 +138,9 @@ export interface DailyReportInput {
   issues: string
   /** 本日の課題の種別（DAILY_ISSUE_CATEGORY_PRESETS のいずれか。空 = 未選択。オペレーター指示 2026-08-03） */
   issueCategory: string
-  /** 旧形式の明日の予定（自由記述。既存データの保持用パススルー） */
+  /** 明日の予定（自由テキスト。改修依頼 2026-08-21 でテキスト入力へ回帰 = 新規保存はこちらが正） */
   tomorrow: string
-  /** 明日の予定（構造化・最大 TOMORROW_PLANS_MAX 件。翌営業日の日報へ自動反映） */
+  /** 旧形式の明日の予定（構造化リスト。2026-08-21 廃止 = 新規保存は常に空配列。旧データ表示互換のため型は維持） */
   tomorrowPlans: TomorrowPlan[]
 }
 
@@ -369,25 +369,8 @@ export function useReports() {
         || (b.submittedAt ?? '').localeCompare(a.submittedAt ?? ''))
   }
 
-  /**
-   * 指定日の日報エディタへ自動反映する「明日の予定」（オペレーター指示 2026-07-22）。
-   * 直近の自分の日報のうち、その日報の日付の翌営業日（本人の勤怠ルール基準）が指定日に一致し、
-   * かつ明日の予定が登録されているものを返す（該当なし = null）。
-   */
-  function tomorrowPlansFor(date: string): { fromDate: string; plans: TomorrowPlan[] } | null {
-    // 週明け・連休明けに備えて前月分もロードしておく（API モードの遅延ロード）
-    touchMineMonth(date)
-    touchMineMonth(addDays(date, -14))
-    const me = currentUser.value.id
-    const latest = dailyReports.value
-      .filter(r => r.authorKind === 'human' && r.memberId === me && r.date < date
-        && (r.tomorrowPlans?.length ?? 0) > 0)
-      .sort((a, b) => b.date.localeCompare(a.date))[0]
-    if (!latest) return null
-    // 予定の反映先は「登録した日の翌営業日」のみ（それ以外の日に古い予定を出さない）
-    if (useBusinessDay().nextWorkingDayFor(me, latest.date) !== date) return null
-    return { fromDate: latest.date, plans: latest.tomorrowPlans ?? [] }
-  }
+  // 「明日の予定」の翌営業日エディタへの自動反映（tomorrowPlansFor）は廃止
+  // （改善要望 2026-08-21: 明日の予定のテキスト入力形式化とあわせて除外）
 
   // ---------- 工数乖離チェック ----------
 
@@ -941,7 +924,6 @@ export function useReports() {
     myWeeklies,
     weeklyById,
     allSubmittedWeeklies,
-    tomorrowPlansFor,
     saveWeekly,
     draftFromDailies,
     monthlyReports,

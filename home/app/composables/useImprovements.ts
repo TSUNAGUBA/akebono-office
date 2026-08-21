@@ -57,6 +57,8 @@ import {
   normalizeImprovementLinks,
   normalizeImprovementPagePath,
   normalizeImprovementTags,
+  operationalNoteBody,
+  operationalNoteCapError,
   planAdoptionBulk,
   clusterTargetRequests,
   requestAdoptionOf,
@@ -378,13 +380,32 @@ export function useImprovements() {
    * deferred 以外への遷移では revisitOn を保持する（クリアしない = 履歴保全）。
    * deferred → deferred は再検討日の変更（リスケジュール）として受理する（原則9.5 の選び直し導線）。
    */
-  async function setStatus(id: string, status: ImprovementStatus, revisitOn?: string): Promise<Result> {
+  /** ステータス変更。deferred は revisitOn 必須・operational は運用案内 note 必須（改善要望 2026-08-21。
+   *  API/mock とも同一検証 = パリティ。メモ追記とステータス変更は 1 コール = 非原子な 2 コールを作らない） */
+  async function setStatus(
+    id: string, status: ImprovementStatus, revisitOn?: string, note?: string,
+  ): Promise<Result> {
     const revisit = status === 'deferred' ? (revisitOn ?? '').trim() : ''
     const revisitMsg = improvementRevisitError(status, revisit)
     if (revisitMsg) return { ok: false, error: { code: 'AKO-REQ-023', message: revisitMsg } }
+    const opsNote = status === 'operational' ? (note ?? '').trim() : ''
+    if (status === 'operational' && !opsNote) {
+      return { ok: false, error: { code: 'AKO-REQ-024', message: '運用対応にする場合は、運用方法の案内を記載してください' } }
+    }
+    // 上限は接頭辞込みでメモ上限に収まる実効値で検証（shared 共通関数 = API と同一挙動・
+    // メッセージも実効上限と一致。R2 監査 / R3 レビュー）
+    const opsNoteBody = status === 'operational' ? operationalNoteBody(opsNote) : ''
+    if (status === 'operational') {
+      const capMsg = operationalNoteCapError(opsNote)
+      if (capMsg) return { ok: false, error: { code: 'AKO-REQ-008', message: capMsg } }
+    }
     if (isApi) {
       const res = await apiWrite(`/v1/improvements/items/${id}/status`, {
-        body: { status, ...(status === 'deferred' ? { revisitOn: revisit } : {}) },
+        body: {
+          status,
+          ...(status === 'deferred' ? { revisitOn: revisit } : {}),
+          ...(status === 'operational' ? { note: opsNote } : {}),
+        },
       })
       if (res.ok) await refresh()
       return res.ok ? { ok: true, id } : res
@@ -392,12 +413,39 @@ export function useImprovements() {
     const itemsRef = tbl('improvementItems')
     const cur = itemsRef.value.find(it => it.id === id)
     if (!cur) return { ok: false, error: { code: 'AKO-REQ-002', message: '対象の改修単位が見つかりません' } }
+    // 取消済みはステータスを動かさない（API の archived_at IS NULL ガードとパリティ = 原則6。R4）
+    if (cur.archivedAt) {
+      return { ok: false, error: { code: 'AKO-REQ-002', message: '取消済みの改修単位はステータスを変更できません（先に復元してください）' } }
+    }
     // 同一ステータスは no-op（再スタンプしない）。例外: deferred → deferred は再検討日の変更として通す
     if (cur.status === status && status !== 'deferred') return { ok: true, id }
     if (cur.status !== status && !canTransition(cur.status, status)) {
       return { ok: false, error: { code: 'AKO-REQ-006', message: `「${cur.status}」から「${status}」へは変更できません` } }
     }
     const now = nowJstIso()
+    // 運用案内はメモ（時系列）へ追記してからステータス変更（API と同一の記録形）
+    if (status === 'operational') {
+      const notesRef = tbl('improvementNotes')
+      notesRef.value = [...notesRef.value, {
+        id: nextId('improvementNotes', 'imnote'),
+        itemId: id,
+        memberId: currentUser.value.id,
+        memberName: currentUser.value.name,
+        body: opsNoteBody,
+        kind: 'note' as const,
+        archivedAt: null,
+        createdAt: now,
+      }]
+      // 紐づく要望の起票者へ運用案内を通知（API と同一挙動 = レビュー R1 M-3。非ブロッキング）
+      const authors = [...new Set(tbl('improvementRequests').value
+        .filter(r => r.itemId === id && !r.archivedAt)
+        .map(r => r.memberId)
+        .filter((m): m is string => !!m))]
+      for (const m of authors) {
+        // 通知本文はメモに記録した本文と同一（記録 = SoT と通知の乖離を作らない）
+        notifications?.notify(m, 'system', '改善要望が「運用対応」になりました', opsNoteBody, '/improvements')
+      }
+    }
     itemsRef.value = itemsRef.value.map(it => (it.id === id
       ? {
           ...it,
@@ -428,8 +476,11 @@ export function useImprovements() {
       return res.ok ? { ok: true, id } : res
     }
     const itemsRef = tbl('improvementItems')
-    if (!itemsRef.value.some(it => it.id === id)) {
-      return { ok: false, error: { code: 'AKO-REQ-002', message: '対象の改修単位が見つかりません' } }
+    const target = itemsRef.value.find(it => it.id === id)
+    if (!target) return { ok: false, error: { code: 'AKO-REQ-002', message: '対象の改修単位が見つかりません' } }
+    // 取消済みは編集不可（API の archived_at IS NULL ガードとパリティ = 原則6。R4）
+    if (target.archivedAt) {
+      return { ok: false, error: { code: 'AKO-REQ-002', message: '取消済みの改修単位は編集できません（先に復元してください）' } }
     }
     const now = nowJstIso()
     itemsRef.value = itemsRef.value.map(it => (it.id === id
@@ -667,7 +718,9 @@ export function useImprovements() {
     return { ok: true, id }
   }
 
-  /** 要望 1 件ずつのステータス変更（open/resolved/dismissed。遷移自由 = 誤操作はいつでも戻せる = 原則9.5） */
+  /** 要望 1 件ずつのステータス変更（open/resolved/dismissed。遷移自由 = 誤操作はいつでも戻せる = 原則9.5）。
+   *  権限: 管理者 = 任意 / 起票者本人 = 自分の要望の resolved ⇄ open（改善要望 2026-08-21。
+   *  API 側が同ガードを実装。mock は UI 側の表示ゲート〔本人ブロック・管理 select〕が同条件を担う） */
   async function setRequestStatus(id: string, status: ImprovementRequestStatus): Promise<Result> {
     if (!IMPROVEMENT_REQUEST_STATUSES.includes(status)) {
       return { ok: false, error: { code: 'AKO-REQ-011', message: 'status が不正です（open / resolved / dismissed）' } }
@@ -678,8 +731,13 @@ export function useImprovements() {
       return res.ok ? { ok: true, id } : res
     }
     const reqsRef = tbl('improvementRequests')
-    if (!reqsRef.value.some(r => r.id === id)) {
+    const target = reqsRef.value.find(r => r.id === id)
+    if (!target) {
       return { ok: false, error: { code: 'AKO-REQ-002', message: '対象の要望が見つかりません' } }
+    }
+    // 取消済み（論理削除）はステータスを動かさない（API の archived_at IS NULL ガードとパリティ = 原則6）
+    if (target.archivedAt) {
+      return { ok: false, error: { code: 'AKO-REQ-002', message: '取消済みの要望はステータスを変更できません（先に復元してください）' } }
     }
     reqsRef.value = reqsRef.value.map(r => (r.id === id ? { ...r, status } : r))
     commit()

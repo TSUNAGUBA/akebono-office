@@ -11,7 +11,7 @@
  */
 import { Clock3, LayoutTemplate } from 'lucide-vue-next'
 import type { MenuCard } from '~/types/ui'
-import { categorizeCards, planDashboardCards } from '~/utils/dashboard-layout'
+import { categorizeCards } from '~/utils/dashboard-layout'
 import { fmtDateLong } from '~/utils/format'
 import { MENU_CARDS } from '~/utils/menu-registry'
 
@@ -30,8 +30,7 @@ const greeting = computed(() => {
 })
 const todayLong = computed(() => fmtDateLong(nowJstIso()))
 
-const { canPath, can } = usePermissions()
-const canCompanyDashboard = computed(() => can('sales'))
+const { canPath } = usePermissions()
 
 // ---------- レイアウト（表示・配置カスタマイズ。ユーザー > テナント > デフォルトで解決） ----------
 const { effectiveLayout } = useDashboardLayout()
@@ -44,16 +43,14 @@ const notifPlacement = computed(() => effectiveLayout.value.options.notification
 /** カード密度（compact = 余白を詰める） */
 const dense = computed(() => effectiveLayout.value.options.density === 'compact')
 
-// ---------- AKEBONO 業務（業態別アプリをトップに配置。2026-07-28 / カテゴリ配置対応 2026-08-03 #24） ----------
+// ---------- AKEBONO 業務（業態別アプリ。トップ固定表示の廃止 = 改善要望 2026-08-21） ----------
 // akebonoAccessible = そもそも AKEBONO が使えるか（機能トグル + 権限 + 業態 1 件以上）。
 // これが false のときは業態カードをどこにも出さない（プールにも入れない）。
+// 業態カードは他のメニューカードと同様にセクション設定で配置でき、未割当は「その他」へ入る
+// （旧: 未割当カードは最上段の専用固定セクションに表示され、表示制御・配置ができなかった）。
 const { activeSegments } = useCurrentSegment()
 const akebonoAccessible = computed(() =>
   isEnabled('akebono') && canPath('/akebono') && activeSegments.value.length > 0)
-// showAkebono = 専用「AKEBONO 業務（業態別）」セクションを出すか（利用可能 AND レイアウトで表示 ON）。
-// false（focus テンプレート等）のときは業態カードを通常メニューのプールへ混ぜる（未割当は「その他」へ）。
-const showAkebono = computed(() =>
-  akebonoAccessible.value && effectiveLayout.value.options.showAkebono)
 
 // ---------- 承認待ち件数（useWorkflow.pendingFor が SoT。代理承認・個人指定も考慮済み） ----------
 const pendingApprovals = computed(() => pendingFor(currentUserId.value).length)
@@ -80,18 +77,12 @@ const internalCards = computed<MenuCard[]>(() =>
 const { externalCards } = useExternalLinkCards()
 const { akebonoCards } = useAkebonoAppCards()
 
-// カードプールと専用 AKEBONO セクションの振り分け（二重表示防止 = planDashboardCards）。
-// AKEBONO 利用不可時は akebonoCards を空で渡す（= どこにも出さない）。
-const cardPlan = computed(() => planDashboardCards({
-  internalCards: internalCards.value,
-  externalCards: externalCards.value,
-  akebonoCards: akebonoAccessible.value ? akebonoCards.value : [],
-  sections: effectiveLayout.value.sections,
-  showAkebono: showAkebono.value,
-}))
-const visibleCards = computed<MenuCard[]>(() => cardPlan.value.pool)
-// 専用「AKEBONO 業務（業態別）」セクションが担当する未割当業態 id（割当済み業態はセクション配置側で表示）
-const unassignedAkebonoIds = computed(() => cardPlan.value.unassignedAkebonoSegmentIds)
+// カードプール = 基本メニュー + 外部リンク + 業態カード（AKEBONO 利用不可時は業態カードを含めない）
+const visibleCards = computed<MenuCard[]>(() => [
+  ...internalCards.value,
+  ...externalCards.value,
+  ...(akebonoAccessible.value ? akebonoCards.value : []),
+])
 
 // レイアウトのセクション構成でグループ化（未割当カードは「その他」・空セクションは除去）。
 // options.showOther=false（改修依頼 2026-08-20）のときは「その他」を出さない = 未配置メニューはトップに表示しない
@@ -156,19 +147,8 @@ const shownSections = computed(() =>
           <OfficeDashboardNotifications />
         </div>
 
-        <!-- AKEBONO 業務（業態別アプリ。押下でその業態の業務へ入る = ヘッダ切替に依存しない導線）。
-             メニューカテゴリへ割り当てた業態はセクション配置側に出るため、ここは未割当業態のみを表示する
-             （= 二重表示を防ぐ。全業態が割当済みなら専用セクションごと出さない。2026-08-03 #24） -->
-        <section v-if="showAkebono && unassignedAkebonoIds.length > 0" class="grid gap-1.5" aria-label="AKEBONO 業務">
-          <div class="flex items-center justify-between gap-2">
-            <p class="text-[11px] font-bold text-muted">AKEBONO 業務（業態別）</p>
-            <span class="flex items-center gap-3">
-              <NuxtLink v-if="canCompanyDashboard" to="/akebono/company" class="link text-[11px] font-semibold">会社全体ダッシュボード</NuxtLink>
-              <NuxtLink to="/akebono" class="link text-[11px] font-semibold">ハブを開く</NuxtLink>
-            </span>
-          </div>
-          <AkebonoSegmentApps :segment-ids="unassignedAkebonoIds" />
-        </section>
+        <!-- AKEBONO 業務のトップ固定セクションは廃止（改善要望 2026-08-21）。業態カードは
+             他メニューと同様にセクション設定で配置でき、未割当は「その他」セクションに出る -->
 
         <!-- カード型メニュー（カテゴリチップで絞り込み） -->
         <section class="grid gap-3" aria-label="メニュー">

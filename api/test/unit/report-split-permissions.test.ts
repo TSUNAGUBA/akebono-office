@@ -1,10 +1,10 @@
 /**
- * 週報・月報の機能キー独立と旧 'reports' キー互換フォールバック（改修依頼 2026-08-20 第2バッチ）。
+ * 週報・月報の機能キー独立（改修依頼 2026-08-20 第2バッチ → 旧キー継承の撤去 2026-08-21）。
  * API 側の観点: featureGuard は PATH_FEATURES（/v1/reports/weekly → weekly-report 等）で機能キーを
- * 引いたあと、resolveFeatureResource（shared/domain/permissions.ts = フロント usePermissions と共通）で
- * 実効リソースへ解決してから canUseFeature を評価する。
- * - 新キーの明示ルールが 1 件も無い間は旧 'reports' 設定を継承（既存テナントの下位互換）
- * - 新キーのルールを設定した時点で独立制御
+ * 引いたあと、resolveFeatureResource（shared/domain/permissions.ts = フロント usePermissions と共通）を
+ * 通してから canUseFeature を評価する。旧 'reports' の動的継承は権限管理画面から見えない deny を
+ * 生む実バグの原因だったため撤去され、旧ルールはマイグレーション 0078 で新キーへ物理移行された。
+ * 本テストは「旧 'reports' ルールが週報・月報の API 判定へ漏れ出さない」ことを固定する。
  */
 import { describe, expect, it } from 'vitest'
 import {
@@ -31,22 +31,12 @@ function guardAllows(rules: PermissionRule[], featureKey: string): boolean {
   return canUseFeature(rules, subject, resolveFeatureResource(rules, featureKey))
 }
 
-describe('featureGuard の実効リソース解決（週報・月報 → 旧 reports 互換）', () => {
-  it('新キーのルールが無ければ旧 reports の deny を継承する（既存テナント互換）', () => {
+describe('featureGuard の実効リソース解決（週報・月報の独立制御）', () => {
+  it('旧 reports の deny は日報 API のみに効く（週報・月報へは 0078 が複製済みの前提）', () => {
     const rules = [rule({ resource: 'reports', effect: 'deny' })]
-    expect(guardAllows(rules, 'weekly-report')).toBe(false) // GET/PUT /v1/reports/weekly・weekly-insight
-    expect(guardAllows(rules, 'monthly-report')).toBe(false) // GET/PUT /v1/reports/monthly
     expect(guardAllows(rules, 'reports')).toBe(false) // /v1/reports/daily・reads・remind
-  })
-
-  it('新キーの明示ルールを設定した時点で独立制御になる', () => {
-    const rules = [
-      rule({ id: 'r1', resource: 'reports', effect: 'deny' }),
-      rule({ id: 'r2', resource: 'monthly-report', effect: 'allow' }),
-    ]
-    expect(guardAllows(rules, 'monthly-report')).toBe(true) // 独立（旧 deny を引き継がない）
-    expect(guardAllows(rules, 'weekly-report')).toBe(false) // weekly は継承のまま
-    expect(guardAllows(rules, 'reports')).toBe(false)
+    expect(guardAllows(rules, 'weekly-report')).toBe(true) // GET/PUT /v1/reports/weekly・weekly-insight
+    expect(guardAllows(rules, 'monthly-report')).toBe(true) // GET/PUT /v1/reports/monthly
   })
 
   it('新キーの deny で週報 API だけを止められる（日報 API は従来どおり）', () => {
@@ -62,33 +52,29 @@ describe('featureGuard の実効リソース解決（週報・月報 → 旧 rep
   })
 })
 
-describe('タブ権限のフォールバック（resolveTabPermission）', () => {
-  it('旧 reports の tab:weekly-* / tab:monthly-* を新リソース/tab:* へ写像して継承する', () => {
+describe('タブ権限（resolveTabPermission = 素通し）', () => {
+  it('旧 reports の tab:weekly-* / tab:monthly-* は週報・月報のタブ判定に影響しない', () => {
     const rules = [
       rule({ id: 'r1', resource: 'reports', field: 'tab:weekly-all', effect: 'deny' }),
       rule({ id: 'r2', resource: 'reports', field: 'tab:monthly-mine', effect: 'deny' }),
     ]
     const wk = resolveTabPermission(rules, 'weekly-report', 'all')
-    expect(wk).toEqual({ resource: 'reports', tabKey: 'weekly-all' })
-    expect(canUseTab(rules, subject, wk.resource, wk.tabKey)).toBe(false)
+    expect(wk).toEqual({ resource: 'weekly-report', tabKey: 'all' })
+    expect(canUseTab(rules, subject, wk.resource, wk.tabKey)).toBe(true)
     const mo = resolveTabPermission(rules, 'monthly-report', 'mine')
-    expect(canUseTab(rules, subject, mo.resource, mo.tabKey)).toBe(false)
-    // 写像されないタブは既定 allow
-    const ok = resolveTabPermission(rules, 'weekly-report', 'mine')
-    expect(canUseTab(rules, subject, ok.resource, ok.tabKey)).toBe(true)
+    expect(canUseTab(rules, subject, mo.resource, mo.tabKey)).toBe(true)
   })
 
-  it('新キーのルールがあれば写像しない（独立制御）', () => {
+  it('新キーのタブ deny が効く（権限表に見えるルール = 実効ルール）', () => {
     const rules = [rule({ resource: 'weekly-report', field: 'tab:mine', effect: 'deny' })]
-    expect(resolveTabPermission(rules, 'weekly-report', 'mine'))
-      .toEqual({ resource: 'weekly-report', tabKey: 'mine' })
-    expect(resolveTabPermission(rules, 'monthly-report', 'mine'))
-      .toEqual({ resource: 'reports', tabKey: 'monthly-mine' }) // monthly は継承のまま
+    const eff = resolveTabPermission(rules, 'weekly-report', 'mine')
+    expect(eff).toEqual({ resource: 'weekly-report', tabKey: 'mine' })
+    expect(canUseTab(rules, subject, eff.resource, eff.tabKey)).toBe(false)
   })
 })
 
 // reads（既読管理）の kind 別機能キー（レビュー R1: /v1/reports/reads はパスガード対象外にし
-// ハンドラ内で kind 単位に判定する。resolveFeatureResource との併用で旧 'reports' 継承も同一規則）
+// ハンドラ内で kind 単位に判定する）
 describe('reportReadsFeatureKey', () => {
   it('kind 別に独立後の機能キーへ写像する', () => {
     expect(reportReadsFeatureKey('daily')).toBe('reports')
@@ -96,10 +82,10 @@ describe('reportReadsFeatureKey', () => {
     expect(reportReadsFeatureKey('monthly')).toBe('monthly-report')
   })
 
-  it('resolveFeatureResource との併用: 新キー未設定なら旧 reports を継承・設定後は独立', () => {
+  it('旧 reports の deny は weekly/monthly の reads を止めない（独立制御）', () => {
     const legacyOnly = [rule({ resource: 'reports', effect: 'deny' })]
-    expect(resolveFeatureResource(legacyOnly, reportReadsFeatureKey('weekly'))).toBe('reports')
-    const withOwn = [...legacyOnly, rule({ id: 'r2', resource: 'weekly-report', effect: 'allow' })]
-    expect(resolveFeatureResource(withOwn, reportReadsFeatureKey('weekly'))).toBe('weekly-report')
+    expect(resolveFeatureResource(legacyOnly, reportReadsFeatureKey('weekly'))).toBe('weekly-report')
+    expect(guardAllows(legacyOnly, reportReadsFeatureKey('weekly'))).toBe(true)
+    expect(guardAllows(legacyOnly, reportReadsFeatureKey('daily'))).toBe(false)
   })
 })

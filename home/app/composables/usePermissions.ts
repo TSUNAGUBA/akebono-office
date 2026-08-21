@@ -31,8 +31,8 @@ export function usePermissions() {
   }))
 
   function can(resource: string): boolean {
-    // weekly-report / monthly-report は新キーのルール未設定の間、旧 'reports' 設定を継承する
-    // （resolveFeatureResource = API featureGuard と共通のフォールバック解決。改修依頼 2026-08-20 第2バッチ）
+    // resolveFeatureResource = API featureGuard と共通の解決（旧 'reports' からの動的継承は
+    // 改善要望 2026-08-21 で撤去・migration 0078 で物理移行済み = 現在は素通し。I/F 互換のため経由を維持）
     return canUseFeature(rules.value, subject.value, resolveFeatureResource(rules.value, resource))
   }
 
@@ -58,8 +58,8 @@ export function usePermissions() {
   }
 
   /** ページ内タブの利用可否（`tab:<key>` 擬似フィールド。既定 allow・改修依頼 2026-08-18）。
-   *  weekly-report / monthly-report は新キーのルール未設定の間、旧 `reports` の
-   *  `tab:weekly-mine` 等の保存済みルールへ写像してフォールバックする（原則7） */
+   *  resolveTabPermission = API と共通の解決（旧 `reports` の `tab:weekly-*` への写像フォールバックは
+   *  改善要望 2026-08-21 で撤去・migration 0078 で物理移行済み = 現在は素通し。I/F 互換のため経由を維持） */
   function canTab(feature: string, tabKey: string): boolean {
     const eff = resolveTabPermission(rules.value, feature, tabKey)
     return canUseTabShared(rules.value, subject.value, eff.resource, eff.tabKey)

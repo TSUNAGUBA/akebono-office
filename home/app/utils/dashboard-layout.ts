@@ -1,8 +1,8 @@
 /**
  * ダッシュボード（F-01）の表示・配置カスタマイズ（オペレーター指示 2026-08-03。SoT = 本ファイル）。
  *
- * 「どのメニュー要素をどのセクションに・どの順で置くか（sections）」と「通知欄の位置・AKEBONO
- * 業務セクションの表示・カード密度（options）」をまとめて DashboardLayout で表す。
+ * 「どのメニュー要素をどのセクションに・どの順で置くか（sections）」と「通知欄の位置・
+ * カード密度（options）」をまとめて DashboardLayout で表す。
  * カスタマイズは 5 種のテンプレート（世の中の業務アプリを参考）から選択でき、
  * ユーザー層（この端末/アカウント）とテナント層（全社既定）の 2 階層で保存する。
  *
@@ -15,11 +15,10 @@
  * 本ファイルは純関数のみ（Nuxt 依存なし）。副作用を伴う保存・読込は useDashboardLayout が担う。
  * カード → セクションのグルーピング（categorizeCards）は useMenuCategories と共有する（原則3）。
  *
- * AKEBONO 業態アプリのカテゴリ配置（2026-08-03 #24）: planDashboardCards が「専用セクション（未割当業態）」と
- * 「セクション配置（割当済み業態）」を振り分け、二重表示を防ぐ。業態カードの写像は utils/akebono が SoT。
+ * AKEBONO 業態アプリのカード（akebono-seg:*）も他メニューと同様に categorizeCards が配置する
+ * （トップ固定セクションは 2026-08-21 に廃止。未割当は「その他」へ。業態カードの写像は utils/akebono が SoT）。
  */
 import type { MenuCard } from '~/types/ui'
-import { parseAkebonoSegmentCardId } from '~/utils/akebono'
 import {
   DEFAULT_MENU_CATEGORIES, MENU_CARDS,
   type MenuCategoryDef, OTHER_CATEGORY_ID, OTHER_CATEGORY_LABEL,
@@ -45,8 +44,6 @@ export interface DashboardLayoutOptions {
    * 以後のテナント配置変更・自分の配置解除が効かなくなる（レビュー R5）。
    */
   notificationsInherit?: boolean
-  /** AKEBONO 業務（業態別）セクションを表示するか（実表示は権限・業態数と AND で判定） */
-  showAkebono: boolean
   /**
    * セクション「その他」（どのセクションにも配置していないメニューの自動セクション）を表示するか
    * （改修依頼 2026-08-20）。未定義 or true = 表示（既存保存値・テンプレートは未定義 = 従来挙動 = 原則7）
@@ -63,7 +60,7 @@ export interface DashboardLayout {
   templateId: string
   /** セクション構成（id,label,cardIds）= メニュー要素の配置。cardIds は MENU_CARDS.dashboard の id */
   sections: MenuCategoryDef[]
-  /** 表示オプション（通知位置・AKEBONO 表示・密度） */
+  /** 表示オプション（通知位置・密度・「その他」表示） */
   options: DashboardLayoutOptions
 }
 
@@ -176,7 +173,6 @@ export function resolveNotificationPlacement(inputs: {
 /** テンプレート未指定時のオプション既定値 */
 export const DEFAULT_LAYOUT_OPTIONS: DashboardLayoutOptions = {
   notifications: 'side',
-  showAkebono: true,
   density: 'comfortable',
 }
 
@@ -203,7 +199,7 @@ export const DASHBOARD_TEMPLATES: DashboardTemplate[] = [
       templateId: 'default',
       // 現行構成（menu-registry の既定カテゴリ）を流用
       sections: cloneSections(DEFAULT_MENU_CATEGORIES.dashboard),
-      options: { notifications: 'side', showAkebono: true, density: 'comfortable' },
+      options: { notifications: 'side', density: 'comfortable' },
     },
   },
   {
@@ -220,7 +216,7 @@ export const DASHBOARD_TEMPLATES: DashboardTemplate[] = [
         { id: 'support', label: '業務支援', cardIds: ['support', 'inbox'] },
         { id: 'admin', label: '管理', cardIds: ['masters', 'settings'] },
       ],
-      options: { notifications: 'side', showAkebono: true, density: 'comfortable' },
+      options: { notifications: 'side', density: 'comfortable' },
     },
   },
   {
@@ -238,7 +234,7 @@ export const DASHBOARD_TEMPLATES: DashboardTemplate[] = [
         { id: 'support', label: '業務支援', cardIds: ['support', 'inbox'] },
         { id: 'admin', label: '管理', cardIds: ['masters', 'settings'] },
       ],
-      options: { notifications: 'side', showAkebono: true, density: 'comfortable' },
+      options: { notifications: 'side', density: 'comfortable' },
     },
   },
   {
@@ -254,19 +250,19 @@ export const DASHBOARD_TEMPLATES: DashboardTemplate[] = [
         { id: 'support', label: '業務支援', cardIds: ['support', 'inbox'] },
         { id: 'admin', label: '管理', cardIds: ['masters', 'settings'] },
       ],
-      options: { notifications: 'bottom', showAkebono: true, density: 'comfortable' },
+      options: { notifications: 'bottom', density: 'comfortable' },
     },
   },
   {
     id: 'focus',
     name: '集中（ミニマル）',
-    description: '全メニューを 1 つのリストにまとめ、余白を抑えたミニマル表示。AKEBONO 業務セクションは非表示。',
+    description: '全メニューを 1 つのリストにまとめ、余白を抑えたミニマル表示。',
     layout: {
       templateId: 'focus',
       sections: [
         { id: 'menu', label: 'メニュー', cardIds: [...ALL_DASHBOARD_CARD_IDS] },
       ],
-      options: { notifications: 'bottom', showAkebono: false, density: 'compact' },
+      options: { notifications: 'bottom', density: 'compact' },
     },
   },
   {
@@ -276,7 +272,7 @@ export const DASHBOARD_TEMPLATES: DashboardTemplate[] = [
     layout: {
       templateId: 'notify-first',
       sections: cloneSections(DEFAULT_MENU_CATEGORIES.dashboard),
-      options: { notifications: 'top', showAkebono: true, density: 'comfortable' },
+      options: { notifications: 'top', density: 'comfortable' },
     },
   },
 ]
@@ -361,7 +357,6 @@ function normalizeOptions(raw: unknown): DashboardLayoutOptions {
     notifications: NOTIFICATION_PLACEMENTS.includes(rec.notifications as NotificationPlacement)
       ? rec.notifications as NotificationPlacement
       : DEFAULT_LAYOUT_OPTIONS.notifications,
-    showAkebono: typeof rec.showAkebono === 'boolean' ? rec.showAkebono : DEFAULT_LAYOUT_OPTIONS.showAkebono,
     density: LAYOUT_DENSITIES.includes(rec.density as LayoutDensity)
       ? rec.density as LayoutDensity
       : DEFAULT_LAYOUT_OPTIONS.density,
@@ -454,60 +449,9 @@ export function categorizeCards(
   return groups
 }
 
-/** セクション定義群の cardIds から、セクションへ割当済みの AKEBONO 業態 id の集合を返す（純関数） */
-export function assignedAkebonoSegmentIds(sections: MenuCategoryDef[]): Set<string> {
-  const ids = new Set<string>()
-  for (const sec of sections) {
-    for (const cardId of sec.cardIds) {
-      const segId = parseAkebonoSegmentCardId(cardId)
-      if (segId !== null) ids.add(segId)
-    }
-  }
-  return ids
-}
-
-/** planDashboardCards の結果（categorize へ渡すプール + 専用セクションが担当する未割当業態） */
-export interface DashboardCardPlan {
-  /** categorize に渡すカードプール（基本メニュー + 外部リンク + 条件付き AKEBONO カード） */
-  pool: MenuCard[]
-  /** 専用「AKEBONO 業務（業態別）」セクションに表示する未割当業態 id（showAkebono=false 時は空） */
-  unassignedAkebonoSegmentIds: string[]
-}
-
-/**
- * ダッシュボードのカードプールと専用 AKEBONO セクションの割り振りを決める（純関数・単体テスト対象）。
- * AKEBONO カードの二重表示を防ぐための中核ロジック（オペレーター指示 2026-08-03 #24）:
- *  - showAkebono=true（専用セクションを出す）: セクションへ割当済みの業態カードだけをプールへ入れ
- *    （categorize が指定セクションへ配置）、未割当の業態は専用セクションが担当する
- *    （= 未割当が「その他」へ落ちて二重に見えるのを防ぐ）。
- *  - showAkebono=false（専用セクションを出さない。focus テンプレート等）: 全業態カードをプールへ入れる
- *    （未割当は「その他」へ = 消えない）。専用セクションは出さない。
- * ※ AKEBONO そのものが利用不可（機能トグル OFF・権限なし・業態なし）のときは、呼び出し側が
- *    akebonoCards に空配列を渡す（= どこにも出さない）。本関数は渡されたカードのみを扱う。
- */
-export function planDashboardCards(input: {
-  internalCards: MenuCard[]
-  externalCards: MenuCard[]
-  akebonoCards: MenuCard[]
-  sections: MenuCategoryDef[]
-  showAkebono: boolean
-}): DashboardCardPlan {
-  const { internalCards, externalCards, akebonoCards, sections, showAkebono } = input
-  const base = [...internalCards, ...externalCards]
-  if (!showAkebono) {
-    return { pool: [...base, ...akebonoCards], unassignedAkebonoSegmentIds: [] }
-  }
-  const assigned = assignedAkebonoSegmentIds(sections)
-  const assignedCards: MenuCard[] = []
-  const unassigned: string[] = []
-  for (const c of akebonoCards) {
-    const segId = parseAkebonoSegmentCardId(String(c.id))
-    if (segId === null) continue
-    if (assigned.has(segId)) assignedCards.push(c)
-    else unassigned.push(segId)
-  }
-  return { pool: [...base, ...assignedCards], unassignedAkebonoSegmentIds: unassigned }
-}
+// AKEBONO 業態カードの専用固定セクション（planDashboardCards / assignedAkebonoSegmentIds）は
+// 廃止（改善要望 2026-08-21: トップ固定表示をやめ、業態カードは他メニューと同様に categorizeCards が
+// セクション配置・未割当は「その他」として扱う。二重表示防止の振り分けロジック自体が不要になった）
 
 // ---------- セクション構成のお気に入り（自由設定の保存・呼び出し。改修依頼 2026-08-18） ----------
 

@@ -64,8 +64,7 @@ const PATH_FEATURES: [string, string][] = [
   ['/v1/attendance', 'attendance'],
   ['/v1/leave', 'attendance'],
   // 週報・月報は独立機能キー（改修依頼 2026-08-20 第2バッチ）。/v1/reports より前に置き最長一致
-  // （first-match）で解決する。判定時は resolveFeatureResource が旧 'reports' ルールへの互換
-  // フォールバックを解決する（新キーのルール未設定の間は従来の reports 設定を継承）。
+  // （first-match）で解決する。旧 'reports' ルールの継承は 0078 の物理移行で撤去済み。
   // 設計判断: /v1/reports/remind（日報リマインド専用）は従来どおり 'reports' に残す。
   // /v1/reports/reads は下記のとおりパスガード対象外 + ハンドラ内 kind 別判定（レビュー R1 で変更）。
   ['/v1/reports/weekly-insight', 'weekly-report'],
@@ -107,8 +106,8 @@ export function featureGuard(pool: pg.Pool): MiddlewareHandler {
     const rules = await activePermissionRules(pool)
     if (rules.length === 0) return next() // ルール未設定 = 既定 allow（下位互換）
     const user = c.get('user')
-    // weekly-report / monthly-report は新キーのルール未設定の間、旧 'reports' 設定を継承する
-    // （resolveFeatureResource = フロント usePermissions.can と共通のフォールバック解決。原則7）
+    // resolveFeatureResource = フロント usePermissions.can と共通の解決（旧 'reports' からの動的継承は
+    // 改善要望 2026-08-21 で撤去・migration 0078 で物理移行済み = 現在は素通し。I/F 互換のため経由を維持）
     const resource = resolveFeatureResource(rules, hit[1])
     if (!canUseFeature(rules, subjectOf(user), resource)) {
       throw err('AKO-PRM-001', 'この機能を利用する権限がありません（管理者にお問い合わせください）', 403)

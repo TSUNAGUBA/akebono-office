@@ -1556,6 +1556,8 @@
 - [x] **既知の制約**:
   - akebono 業態カードのアイコンはカテゴリ配置では業種タイプ別 lucide（INDUSTRY_CARD_ICON）で統一。トップの
     専用セクション（AkebonoSegmentApps）は従来どおり AkebonoSegmentIcon（画像 or lucide）で描画 = 意図的な二系統。
+    **→ トップ専用セクション・AkebonoSegmentApps・planDashboardCards は §102-5（改善要望 2026-08-21）で廃止**
+    （業態カードは categorizeCards の通常配置へ統合 = 当時の記録として本項は残す）。
   - セクション編集のドラフト初期値・保存時に引き継ぐ options は「**保存先スコープ自身の層**」を土台にする
     （純関数 `pickBaseLayout`。user→user〔無ければ tenant→アプリ既定〕/ tenant→tenant〔無ければアプリ既定。**user 層には
     フォールバックしない**〕）。これにより管理者が全社（tenant）を編集しても、自分の user 設定の options/sections が
@@ -3829,6 +3831,8 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
 - [x] 権限の独立: 機能キー `weekly-report` / `monthly-report` + タブカタログ（mine/all/team）新設。
   **下位互換 = 新キーの明示ルールが無い間は旧 'reports' 設定を継承**（resolveFeatureResource /
   resolveTabPermission = フロント usePermissions と API featureGuard が同一関数を共有）。
+  **→ この動的継承は §102-3（改善要望 2026-08-21）で撤去**（旧 deny が権限表に見えず解除不能な実バグの原因。
+  0078 で物理移行・両関数は素通し化して残置 = 当時の記録として本項は残す）。
   API は PATH_FEATURES を最長一致で分離し、**reads（既読管理・kind 混在）はパスガード対象外 +
   ハンドラ内 kind 別判定**（reportReadsFeatureKey。「日報 deny × 週報 allow」で既読管理が全滅する組合せを解消 = R1）。
   remind は日報専用のため 'reports' に残置（設計判断）
@@ -4207,3 +4211,130 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   BarChartCard の company/intel 複製版は horizontal 未使用（縦棒・短ラベルのみ）のため省略ロジックの
   同期は見送り = 次回チャート改修時に同期する（複製 drift の認識記録）。
   最終スイープ: R1 対応後ビルドで 3 アプリ全ルート（74/8/6 + 動的詳細）× 両プローブ全 CLEAN。
+
+## 102. 改修依頼 2026-08-21（6 改修単位 = 日報テーマ/明日の予定・リマインド種別化・週報タブ権限バグ・BP Next Action メモ + AI 反映・ダッシュボード AKEBONO 統合・改善要望 Ver2）の完了条件（Definition of Done）
+
+対象: home + api + shared/domain。マイグレーション 0078（権限移行）・0079（BP 列追加）。
+
+### 102-1 日報（/reports）: カレンダー取込のテーマ反映 + 明日の予定のテキスト化（#1）
+- [x] カレンダー取込: 予定タイトルを「内容」→「**テーマ**」列へ（100 字キャップ・冪等キーもテーマ一致へ変更。
+  内容 = 実施した作業はユーザーが記入する = 日報の意味論）。
+- [x] 明日の予定: 行追加形式（テーマ/目的/内容/時間・最大 3 件）→ **自由記述テキスト**へ回帰 +
+  **翌営業日エントリへの自動反映を廃止**（要望の明示指示。useReports.tomorrowPlansFor / autoPlans /
+  反映バナー撤去）。旧行形式データは参照表示互換 + 編集開始時にテキストへ変換して引き継ぐ
+  （`- テーマ / 目的 / 内容（Xh）` 行。保存時のみデータ形が変わる = 原則2/7。DB 変更なし = 既存 tomorrow 列を再利用）。
+
+### 102-2 設定: リマインドの種別（日報/週報/月報）単位化（#2）
+- [x] configs 'report-reminder' を種別ごとの { enabled, time, external } へ（旧形状 = 日報として読替え・
+  壊れた種別のみ disabled = 原則7）。last-sent も種別ごとの日付キーへ（旧 = 単一日付 → daily）。
+- [x] runReportReminders: 3 種別を単一ジョブで処理（週報 = 先週・月報 = 先月の未提出者。
+  週/月キー計算は shared/domain/report-reminder に実装〔weekStartKeyOf = report-weeks.ts と同一定義〕）。
+- [x] **種別ごとの外部通知設定**: external=false は notify の新オプション inAppOnly で外部チャネル
+  （Slack/Google Chat）への配信を抑制（本人の通知マトリクスより優先）。
+- [x] 設定 UI: 「日報リマインド」カード →「リマインド」カード（種別 3 行 = エスカレーションルールと同型）。
+- [x] mock パリティ: plugins/report-reminder.client.ts を 3 種別対応（localStorage v2・旧 v1 は daily として読替え）。
+- [x] docs: F-48 / deploy-guide 1-7d / CONVENTIONS。テスト: home 21 / api 8 / 統合（週報・月報の実発火 + last-sent 形状）。
+
+### 102-3 週報/月報: 権限を付与してもタブが出ないバグの恒久対応（#3）
+- [x] **根本原因**: 独立化（§93）の「新キーのルールが無い間は旧 'reports' 設定を継承」する動的フォールバックが、
+  カタログから外れた旧 `reports/tab:weekly-*` deny を**権限表に見えない・解除できない実効ルール**として残した
+  （権限表は ✓ なのにタブが出ない）。
+- [x] **0078**: 旧タブルールを新キーへ物理移行（`tab:weekly-all` → `weekly-report/tab:all` 等。新キー側に同一対象の
+  ルールがあれば旧行を無効化 = 管理者の新設定を上書きしない）+ 機能レベル（field=null）ルールを新キーへ複製
+  （分割前の「reports 全体」の意図を保存）。冪等（統合テストで再適用を検証）。deny は勝手に緩めず移行 =
+  権限表から通常操作で解除できる状態を回復（取消可能性）。
+- [x] 動的継承の撤去（resolveFeatureResource / resolveTabPermission = 素通し化）。モックは日次再シードのため
+  移行処理不要。テスト（home 9 / api 7）を新仕様（旧ルールが漏れ出さない）へ書き換え。docs: F-06-12 / permissions docblock。
+
+### 102-4 BP 活動: Next Action メモ + AI 集約の基本情報反映（#4）
+- [x] **nextActionNote**（自由記述・任意・BP のみ = 0079。currentState 等の BP 固有フィールドの前例に整合。
+  営業活動へは非追加 = 要望範囲・docblock に明記）。フォーム・詳細・検索対象（searchCols）・mock・seed へ反映。
+- [x] **AI集約の更新提案**: digest 生成に proposal（currentState/status/nextAction/nextActionDate/nextActionNote）を
+  追加（BP のみ = spec.propose。LLM = スキーマ強制 + 正規化〔列挙・日付検証・現在値と同値の除去〕/
+  ヒューリスティック = 最新ログの Next Action 系のみ = 決定的）。AI集約カードが現在値との差分を表示 →
+  「基本情報へ反映」（差分フィールドのみの部分更新）→「反映を取り消す」で復元（原則9.5 =
+  applyDigestProposal が before を返す）。**自動反映はしない**（AI 入力 → 確認・判断 = 要望の指定フロー）。
+
+### 102-5 ダッシュボード: AKEBONO 業務のトップ固定表示廃止（#5）
+- [x] 業態カード（akebono-seg:*）を他メニューと同様に categorizeCards が配置（未割当 = 「その他」へ。
+  showOther で表示制御可）。専用固定セクション・planDashboardCards / assignedAkebonoSegmentIds・
+  options.showAkebono を撤去（保存済みの showAkebono 値は normalizeOptions が無視 = 無害）。
+  会社全体ダッシュボードへの導線は /akebono ハブ内に既存（機能後退なし）。
+  docs: F-01-5 / F-13-9 / screen-design。テスト 71 件 green（配置・includeOther の新テストへ書換え）。
+
+### 102-6 改善要望: AI 整形の文章補完化 + 起票者の解決フラグ + ステータス統一 + 運用対応コメント（#6）
+- [x] **AIで整形**: プロンプトを文章補完型へ（誤字修正・曖昧表現の明確化・主語/目的語の補完・表記ゆれ統一。
+  事実の創作は禁止のまま。フォールバックのヒューリスティックは従来どおり整形のみ = 設計判断を文書化）。
+- [x] **起票者の解決フラグ**: 本人が自分の要望を resolved ⇄ open に切替（要望詳細ドロワー「解決の記録」。
+  API = 本人は resolved/open のみ・dismissed と他人の要望は管理権限者のみ〔canManage 複合ガード〕。統合テスト追加）。
+- [x] **受付箱一覧のステータス列**: 紐づく改修単位のステータス（itemStatusOf = カンバン/ガントと同じ軸）を
+  バッジ表示（「一覧とカンバンの不一致」の解消。導出値のためソート不可）。
+- [x] **運用対応の案内コメント必須**: operational への変更は「運用方法の案内」を入力 → メモ（時系列）へ
+  「運用案内: …」として記録してからステータス変更（カンバンからはドロワーへ誘導 = 継続検討と同型）。
+  docs: F-42 追補。
+
+### 102-7 検証・反復レビュー（原則9 = SP-8）
+- [x] home vitest / api unit / 統合（実 PostgreSQL）/ 両 typecheck / generate / モバイル 375px（初回 + R1 対応後に再実行）
+- [x] 独立レビュー（コードレビュアー + システム監査官）を指摘ゼロまで反復
+- 反復記録:
+  - R1（コードレビュアー M3/m7/NIT6・システム監査官 MAJOR2/MINOR4/NIT3。重複統合済み）→ 全件対応:
+    - M-1/監査MAJOR-1: 旧 last-sent が jsonb 経由で素の日付文字列で届き JSON.parse 失敗 → 全員に日報リマインド再送
+      の恐れ → parseReminderLastSent が実在日付文字列を daily として受理 + 単体テスト追加
+    - M-2/監査MINOR-3: last-sent の一括 upsert は後続種別の失敗で先行種別の送信記録を失う → 種別送信完了直後に
+      persistLastSent（原則2）
+    - M-3: 運用案内メモは管理者専用で起票者に見えず「起票者が確認して解決済みへ」の要件ループ不成立 →
+      operational 遷移時に紐づく要望の起票者へ notify(kind=system) で運用案内全文を通知（API/mock 両実装）
+    - 監査MINOR-4/m-4: 0078 の機能レベル複製スキップを subject 単位（field 不問）へ拡大 + 複製をタブ移行より
+      先に実行する順序へ入替（移行済みタブルールを「管理者の新設定」と誤認して deny 複製を落とさない）+ 統合テスト
+    - 監査MINOR-1/m-2: operational の運用案内を API でも必須化（AKO-REQ-024）+ メモ INSERT とステータス
+      UPDATE を同一 Tx 化・UI は setStatus 1 コールへ
+    - MAJOR-2/m-5: 撤去概念（tomorrowPlans 自動反映・権限の動的継承・planDashboardCards・AkebonoSegmentApps）の
+      ドキュメント・コメント残置を全件是正（reports.vue / types.ts / screen-design / data-design / api-design /
+      akebono-menu-design / weekly・monthly-report.vue / usePermissions / api permissions / CONVENTIONS /
+      menu-registry / F-42-12 / F-50-1 / F-48-2 / F-49-3）
+    - m-1/監査MINOR-2: リマインド通知リンクの `?week=` / `?month=` を遷移先（WeeklyMinePanel / PeriodPanel）が
+      解釈し対象期間を初期選択（無効値は今週・今月へフォールバック）
+    - m-6: 孤児化した AkebonoSegmentApps（components/akebono/SegmentApps.vue）を削除
+    - m-7: ActivityDigestCard が activityId 切替で undo スナップショット・エラーをリセット（別活動への誤書込防止）
+    - NIT: weekStartOf を shared weekStartKeyOf へ委譲（二重定義解消）/ カレンダー取込テーマを capCodePoints へ
+      統一 + トーストに内容記入ヒント / mock 旧 v1 last-sent キーの掃除 / applyProposal の空 target ガード /
+      非管理者の要望ステータス変更は存在有無に関わらず一律 403（存在オラクル防止）
+  - R2（両ロール再レビュー。MAJOR 0・MINOR 計 4〔重複 2 を統合〕・NIT 計 6）→ 全件対応:
+    - レビュー M-1: operational の同一ステータス再送で「メモに残らない運用案内」が起票者へ再通知される →
+      Tx が実遷移フラグを返し、遷移時のみ通知（no-op = 通知もメモも作らない。統合テストで固定）
+    - レビュー M-2/監査 M-1: 週報・月報（+ 日報）リマインドが機能 deny のメンバーへも届く（提出手段が無く
+      リンク先 403 の恒久ナグ）→ runReportReminders / mock プラグインとも canUseFeature で通知対象を
+      フィルタ（ルール未設定 = 従来どおり全員）。F-48-2 追記 + 統合テスト（deny 種別のみ止まる）
+    - 監査 M-2: opsNote が長さ非検証でメモは黙って切り詰め・通知は全文（記録 = SoT と通知の乖離）→
+      接頭辞込み本文を手動メモと同じ improvementNoteError で検証（AKO-REQ-008。API/mock）+
+      通知本文はメモに記録した本文と同一に
+    - 監査 M-3: 運用案内入力 UI に「起票者へ全文通知される」の事前明示が無い（内部メモのつもりの文言が
+      流出する導線）→ UiFormField の hint で事前明示
+    - レビュー m-1/監査 NIT: nextActionNote の POST→GET 往復 + 「送っていない PATCH での保持」アサート追加
+    - レビュー NIT: useReports.ReportInput の docblock 逆転是正 / settings saveReminder をドラフト基点の
+      直列保存化（PUT 未解決中の連続操作で先の変更が失われない）/ applyDigestProposal の before を
+      サーバー最新値基点に（API モードは refresh 後に採取）
+    - 監査 NIT: screen-design のステータス列「未集約 = 未判定」へ実装追随 / §52 に廃止注記 /
+      /requests/:id/status に archived_at IS NULL ガード（取消済み要望のステータスを API 直叩きで動かさない）
+  - R3（両ロール再レビュー。MAJOR 1・MINOR 2・NIT 5〔重複統合後〕）→ 全件対応:
+    - レビュー MAJOR: settings.vue の reminderDraft が深い ref のため「=== next」同一性比較が常に false
+      （ドラフト永久残留 = 失敗時ロールバック不能・以後のサーバー側変更もマスク）→ shallowRef 化
+    - レビュー MINOR/監査 NIT: 運用案内の実効上限（2000 − 接頭辞 6 = 1994 字）とエラーメッセージの乖離 →
+      shared に OPERATIONAL_NOTE_PREFIX / OPERATIONAL_NOTE_MAX / operationalNoteBody /
+      operationalNoteCapError を新設し API/mock/UI（maxlength）で共有・メッセージを実効上限と一致
+    - 監査 MINOR: 提出（mine）タブ deny のメンバーに R2 フィルタが効かない同型ギャップ →
+      canUseTab(feature, 'mine') を API/mock のフィルタへ追加 + F-48-2 追記 + 統合テスト（タブ deny 種別のみ止まる）
+    - レビュー NIT: no-op 再送でも audit が「変更」を記録 → transitioned でゲート / no-op で異なる note が
+      無言破棄される仕様を設計判断としてコメント化（案内の更新はメモ追加を使う）
+    - レビュー/監査 NIT: mock setRequestStatus に取消済みガード追加（API の archived_at IS NULL とパリティ）/
+      runReportReminders docblock の「全メンバー」旧記述を是正 / 手動リマインド（/remind）はフィルタ対象外の
+      設計判断をコメント + F-48-2 に明記
+  - R4（収束確認レビュー。MAJOR 0・MINOR 1・NIT 3）→ 全件対応:
+    - MINOR: 取消済みガードの同型ギャップ（mock の setStatus / editItem が archived な改修単位を素通し）→
+      両関数へ archivedAt 早期 return を水平展開（API の archived_at IS NULL とパリティ）
+    - NIT: リマインドフィルタのタブ判定を resolveTabPermission 経由へ対称化（API/mock。将来の解決層
+      復活時も UI とずれない）/ maxlength（UTF-16）と検証（コードポイント）の数え方差を安全側と注記 /
+      operationalNote 系純関数の境界単体テスト（1994 通過・1995 拒否 + メッセージ整合）を home/api 両方へ追加
+  - R5（最終収束確認）→ **指摘ゼロ（MAJOR 0 / MINOR 0 / NIT 0）で収束**。R4 対応の副作用
+    （restore フロー・reject 連鎖・ドロワー再開閉・タブ判定経路・境界テストの実効性）も個別確認済み。
+    最終検証: home 単体 484 / api 単体 481 / 統合 306 / 両 typecheck / nuxi generate 全通過

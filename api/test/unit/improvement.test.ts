@@ -32,6 +32,9 @@ import {
   normalizeImprovementImages,
   normalizeImprovementLinks,
   normalizeImprovementTags,
+  OPERATIONAL_NOTE_MAX,
+  operationalNoteBody,
+  operationalNoteCapError,
   requestAdoptionOf,
   requestStatusOf,
 } from '../../../shared/domain/improvement'
@@ -544,5 +547,16 @@ describe('improvementRevisitError（継続検討の再検討日。mock/API 共�
     expect(improvementRevisitError('resolved', '')).toBeNull()
     expect(improvementRevisitError('accepted', '2026-09-01')).toBeNull()
     expect(improvementRevisitError('accepted', 'bogus')).not.toBeNull()
+  })
+})
+
+describe('運用案内の本文・上限（operational 遷移の必須コメント。mock/API 共有 = 原則6・改善要望 2026-08-21）', () => {
+  it('実効上限 = メモ上限 − 接頭辞で、境界とメッセージが一致する', () => {
+    expect(OPERATIONAL_NOTE_MAX).toBe(IMPROVEMENT_NOTE_CAP - [...'運用案内: '].length)
+    expect(operationalNoteCapError('あ'.repeat(OPERATIONAL_NOTE_MAX))).toBeNull()
+    const over = operationalNoteCapError('あ'.repeat(OPERATIONAL_NOTE_MAX + 1))
+    expect(over).toContain(String(OPERATIONAL_NOTE_MAX))
+    // 接頭辞込みの記録本文がメモ上限ちょうどに収まる = improvementNoteError と整合
+    expect(improvementNoteError(operationalNoteBody('あ'.repeat(OPERATIONAL_NOTE_MAX)))).toBeNull()
   })
 })

@@ -9,7 +9,7 @@
  *   各タブ内の表示は 一覧 / カンバン / ガント の切替（?view=）。旧 ?tab=（req-kanban 等）も読み替える（原則7）。
  * - フィルター結果を、コーディング AI エージェント向けの詳細プロンプトとして出力する。
  */
-import { ClipboardCopy, Pencil, RefreshCw, Sparkles, Undo2, Wand2 } from 'lucide-vue-next'
+import { Check, ClipboardCopy, Pencil, RefreshCw, Sparkles, Undo2, Wand2 } from 'lucide-vue-next'
 import type { TabItem, TableColumn, Tone } from '~/types/ui'
 import {
   IMPROVEMENT_FILTER_OPTIONS,
@@ -30,6 +30,7 @@ import {
   isInternalPagePath,
   isOpenStatus,
   matchesImprovementFilter,
+  OPERATIONAL_NOTE_MAX,
   requestAdoptionOf,
   requestStatusOf,
 } from '~/types/improvement'
@@ -179,6 +180,9 @@ const RAW_COLUMNS: TableColumn[] = [
   { key: 'memberName', label: '投稿者', width: '110px' },
   // attachments は行データにキーの無い仮想列（添付の直接確認 = 改修依頼 2026-08-18。リンク = 別タブ・画像 = 押下で拡大）
   { key: 'attachments', label: '添付', width: '170px', primary: true, sortable: false },
+  // status は紐づく改修単位のステータス（導出値 = カンバン/ガントと同じ軸。改善要望 2026-08-21:
+  // 「一覧のステータスがカンバンと一致していない」の解消）。導出値のためソート不可
+  { key: 'status', label: 'ステータス', width: '110px', primary: true, sortable: false },
   // adoption は表示値（集約済みバッジ・未定義の補完）が保存値と異なるためソート不可（並びが表示と矛盾しない = R10）
   { key: 'adoption', label: '選別', width: '90px', primary: true, sortable: false },
   { key: 'ops', label: '選別操作', width: '150px', primary: true, sortable: false },
@@ -597,22 +601,32 @@ async function changeStatus(to: ImprovementStatus): Promise<void> {
   else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
 }
 
-// 「対応見送り」への変更は理由メモ（任意）を、「継続検討」への変更は再検討日（必須）を添える。
-// 他のステータスは即時変更（インライン入力は閉じる）
+// 「対応見送り」への変更は理由メモ（任意）を、「継続検討」への変更は再検討日（必須）を、
+// 「運用対応」への変更は運用案内コメント（必須 = 改善要望 2026-08-21: 起票者が運用手順を知って
+// 「解決済み」へ移せるように）を添える。他のステータスは即時変更（インライン入力は閉じる）
 function onStatusClick(to: ImprovementStatus): void {
   if (to === 'rejected') {
     rejectMode.value = true
     rejectReason.value = ''
     deferMode.value = false
+    operationalMode.value = false
   } else if (to === 'deferred') {
     // 継続検討は再検討日が必須（improvementRevisitError）。既存の再検討日があれば初期値にする
     deferMode.value = true
     deferDate.value = selected.value?.revisitOn ?? ''
     deferError.value = ''
     rejectMode.value = false
+    operationalMode.value = false
+  } else if (to === 'operational') {
+    operationalMode.value = true
+    operationalNote.value = ''
+    operationalError.value = ''
+    rejectMode.value = false
+    deferMode.value = false
   } else {
     rejectMode.value = false
     deferMode.value = false
+    operationalMode.value = false
     void changeStatus(to)
   }
 }
@@ -636,6 +650,51 @@ async function confirmReject(): Promise<void> {
     else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
   } finally {
     rejectBusy.value = false
+  }
+}
+
+// ---------- 起票者の解決フラグ（改善要望 2026-08-21: 運用対応の案内を確認したら本人が解決済みへ） ----------
+const ownResolveBusy = ref(false)
+async function resolveOwnRequest(to: 'resolved' | 'open'): Promise<void> {
+  if (!selectedRequest.value || ownResolveBusy.value) return
+  ownResolveBusy.value = true
+  try {
+    const res = await imp.setRequestStatus(selectedRequest.value.id, to)
+    if (res.ok) toast.show(to === 'resolved' ? '要望を「解決済み」にしました' : '要望を「未対応」に戻しました', 'ok')
+    else toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
+  } finally {
+    ownResolveBusy.value = false
+  }
+}
+
+// ---------- 運用対応（operational）への変更（改善要望 2026-08-21: 運用案内コメント必須） ----------
+const operationalMode = ref(false)
+const operationalNote = ref('')
+const operationalError = ref('')
+const operationalBusy = ref(false)
+
+/** 運用対応にする（運用案内コメント必須。メモ記録 + ステータス変更 + 起票者への通知は setStatus が
+ *  単一処理で行う = 非原子な 2 コールを作らない。レビュー R1 m-2/m-3/M-3） */
+async function confirmOperational(): Promise<void> {
+  if (!selected.value || operationalBusy.value) return
+  const note = operationalNote.value.trim()
+  if (!note) {
+    operationalError.value = '運用対応にする場合は、運用方法の案内をコメントに記載してください'
+    return
+  }
+  operationalBusy.value = true
+  try {
+    const res = await imp.setStatus(selected.value.id, 'operational', undefined, note)
+    if (res.ok) {
+      toast.show(`「${statusLabel('operational')}」にしました（運用案内をメモに記録し、起票者へ通知）`, 'ok')
+      operationalMode.value = false
+      operationalNote.value = ''
+      operationalError.value = ''
+    } else {
+      toast.show(`${res.error.code}: ${res.error.message}`, 'crit')
+    }
+  } finally {
+    operationalBusy.value = false
   }
 }
 
@@ -848,14 +907,15 @@ function openDrawerItem(it: ImprovementItem): void {
   editing.value = false
   void imp.loadRequestImages(it.id)
 }
-/** カンバンのクイック操作（id 指定のステータス変更）。継続検討は再検討日が必須のためドロワーの入力へ誘導 */
+/** カンバンのクイック操作（id 指定のステータス変更）。継続検討（再検討日必須）と
+ *  運用対応（運用案内コメント必須 = 改善要望 2026-08-21）はドロワーの入力へ誘導 */
 async function onKanbanStatus(id: string, to: ImprovementStatus): Promise<void> {
-  if (to === 'deferred') {
+  if (to === 'deferred' || to === 'operational') {
     const it = imp.activeItems.value.find(x => x.id === id)
     if (!it) return
     openDrawerItem(it)
-    // ドロワー切替の watch（rejectMode/deferMode リセット）より後に日付入力を開く
-    void nextTick(() => onStatusClick('deferred'))
+    // ドロワー切替の watch（rejectMode/deferMode/operationalMode リセット）より後に入力を開く
+    void nextTick(() => onStatusClick(to))
     return
   }
   const res = await imp.setStatus(id, to)
@@ -889,6 +949,9 @@ watch(() => selected.value?.id, () => {
   deferMode.value = false
   deferDate.value = ''
   deferError.value = ''
+  operationalMode.value = false
+  operationalNote.value = ''
+  operationalError.value = ''
   previewImage.value = null
 }, { immediate: true })
 
@@ -1109,6 +1172,14 @@ async function copyAndClose(): Promise<void> {
               />
             </div>
             <span v-else class="text-[11px] text-muted">—</span>
+          </template>
+          <!-- ステータス（カンバン/ガントと同じ改修単位軸 = itemStatusOf。要望側の open/resolved とは別軸） -->
+          <template #cell-status="{ row }">
+            <UiStatusBadge
+              :tone="IMPROVEMENT_STATUS_META[itemStatusOf(reqOf(row))].tone"
+              :label="statusLabel(itemStatusOf(reqOf(row)))"
+              dot
+            />
           </template>
           <template #cell-adoption="{ row }">
             <UiStatusBadge
@@ -1358,6 +1429,30 @@ async function copyAndClose(): Promise<void> {
             <div class="flex justify-end gap-2">
               <button type="button" class="btn btn-ghost btn-sm" :disabled="rejectBusy" @click="rejectMode = false">キャンセル</button>
               <button type="button" class="btn btn-primary btn-sm" :disabled="rejectBusy" @click="confirmReject">「対応見送り」にする</button>
+            </div>
+          </div>
+          <!-- 「運用対応」への変更: 運用案内コメント必須（改善要望 2026-08-21）。メモ〔時系列〕へ記録され、
+               紐づく要望の起票者へ全文が通知される（起票者はこれを確認して「解決済み」へ移す = R1 M-3） -->
+          <div v-if="operationalMode" class="grid gap-2 rounded-lg border border-line bg-surface-soft p-2.5">
+            <UiFormField
+              label="運用方法の案内（必須）"
+              required
+              hint="メモに記録され、この案件に紐づく要望の起票者へ全文がそのまま通知されます。起票者に見せる前提の文章で記載してください"
+            >
+              <!-- maxlength は UTF-16 コードユニット数（検証はコードポイント数）のため、サロゲートペア
+                   （絵文字等）混在時は maxlength の方が先に効く = 上限突破しない安全側の差のみ -->
+              <textarea
+                v-model="operationalNote"
+                class="textarea"
+                rows="3"
+                :maxlength="OPERATIONAL_NOTE_MAX"
+                placeholder="例: 設定 > 外部リンクから同じ導線を追加できます。手順: …"
+              />
+            </UiFormField>
+            <p v-if="operationalError" class="text-[12px] text-crit" role="alert">{{ operationalError }}</p>
+            <div class="flex justify-end gap-2">
+              <button type="button" class="btn btn-ghost btn-sm" :disabled="operationalBusy" @click="operationalMode = false">キャンセル</button>
+              <button type="button" class="btn btn-primary btn-sm" :disabled="operationalBusy" @click="confirmOperational">「運用対応」にする</button>
             </div>
           </div>
           <!-- 「継続検討」への変更・再検討日の変更: 再検討日（必須）。到来すると管理者へリマインド通知が届く -->
@@ -1618,6 +1713,28 @@ async function copyAndClose(): Promise<void> {
               @preview="(img) => { previewImage = img }"
             />
           </template>
+        </div>
+
+        <!-- 起票者の解決フラグ（改善要望 2026-08-21: 「運用対応」の運用案内を確認したら本人が「解決済み」へ移す。
+             「未対応に戻す」で取り消せる = 原則9.5。見送り（dismissed）は管理者判断のため本人操作は出さない） -->
+        <div v-if="!selectedRequest.archivedAt && isOwnSelectedRequest && requestStatusOf(selectedRequest) !== 'dismissed'" class="grid gap-2">
+          <p class="label">解決の記録（自分の要望）</p>
+          <div class="flex flex-wrap items-center gap-2">
+            <template v-if="requestStatusOf(selectedRequest) !== 'resolved'">
+              <button type="button" class="btn btn-sm" :disabled="ownResolveBusy" @click="resolveOwnRequest('resolved')">
+                <Check class="h-3.5 w-3.5" aria-hidden="true" />
+                解決済みにする
+              </button>
+              <span class="text-[11px] text-muted">対応内容・運用案内（通知でお知らせします）を確認できたら「解決済み」にしてください</span>
+            </template>
+            <template v-else>
+              <UiStatusBadge :tone="IMPROVEMENT_REQUEST_STATUS_META.resolved.tone" label="解決済み" dot />
+              <button type="button" class="btn btn-ghost btn-sm" :disabled="ownResolveBusy" @click="resolveOwnRequest('open')">
+                <Undo2 class="h-3.5 w-3.5" aria-hidden="true" />
+                未対応に戻す
+              </button>
+            </template>
+          </div>
         </div>
 
         <!-- 選別（採用/不採用。集約済みは変更不可 = 記録保護。取消可能性 = いつでも選び直せる）。管理権限者のみ（改修依頼 2026-08-19 第4弾） -->

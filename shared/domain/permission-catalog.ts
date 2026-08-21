@@ -97,10 +97,8 @@ export const FIELD_CATALOG: Record<string, { value: string; label: string }[]> =
 export const TAB_PERMISSION_CATALOG: Record<string, { key: string; label: string }[]> = {
   // 改修依頼 2026-08-20 第2バッチ: 週報・月報を独立機能キー（weekly-report / monthly-report）へ分離
   // （旧: 単一キー reports に weekly-*/monthly-* タブキーを内包 = 2026-08-19 第4弾）。
-  // 旧 reports の weekly-*/monthly-* タブキーはカタログから外すが、**保存済みルール**
-  // （resource='reports'・field='tab:weekly-mine' 等）は shared/domain/permissions.ts の
-  // resolveTabPermission が「新キーのルール未設定の間は旧 reports 設定を継承」する形で
-  // 参照し続けるため無効化しない（原則7。設計判断: カタログ = 新規設定の語彙・互換 = 解決層で担保）。
+  // 旧 reports の weekly-*/monthly-* タブキーの保存済みルールは、当初は解決層の動的継承で互換を
+  // 取っていたが権限表から見えない deny を生むため、0078 で新キーへ物理移行した（2026-08-21）。
   reports: [
     { key: 'mine', label: '自分の日報' },
     { key: 'all', label: '全員の日報' },
@@ -146,8 +144,7 @@ export const TAB_PERMISSION_CATALOG: Record<string, { key: string; label: string
 export function tabLabel(feature: string, tabKey: string): string {
   const hit = TAB_PERMISSION_CATALOG[feature]?.find(t => t.key === tabKey)?.label
   if (hit) return hit
-  // 旧 reports リソースの週報・月報タブキー（保存済みルールの表示互換 = 原則7。
-  // 判定側は resolveTabPermission が新キーへ写像して参照し続ける）
+  // 旧 reports リソースの週報・月報タブキー（0078 移行前の inactive 履歴行の表示互換 = 原則7）
   if (feature === 'reports') {
     const m = /^(weekly|monthly)-(mine|all|team)$/.exec(tabKey)
     if (m) {

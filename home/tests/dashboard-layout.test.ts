@@ -10,7 +10,6 @@ import { describe, expect, it } from 'vitest'
 import type { MenuCard } from '~/types/ui'
 import { akebonoSegmentCardId } from '~/utils/akebono'
 import {
-  assignedAkebonoSegmentIds,
   buildCustomLayout,
   categorizeCards,
   DASHBOARD_TEMPLATES,
@@ -25,7 +24,6 @@ import {
   parseNotificationPlacement,
   parseSectionFavorites,
   pickBaseLayout,
-  planDashboardCards,
   removeSectionFavorite,
   resolveDashboardLayout,
   resolveNotificationPlacement,
@@ -46,12 +44,12 @@ const akCard = (segId: string): MenuCard => ({
 const VALID_USER_LAYOUT = JSON.stringify({
   templateId: 'focus',
   sections: [{ id: 'menu', label: 'メニュー', cardIds: ['sales'] }],
-  options: { notifications: 'bottom', showAkebono: false, density: 'compact' },
+  options: { notifications: 'bottom', density: 'compact' },
 })
 const VALID_TENANT_LAYOUT = JSON.stringify({
   templateId: 'executive',
   sections: [{ id: 'cockpit', label: '経営', cardIds: ['sales'] }],
-  options: { notifications: 'bottom', showAkebono: true, density: 'comfortable' },
+  options: { notifications: 'bottom', density: 'comfortable' },
 })
 const LEGACY_CATEGORIES = JSON.stringify([
   { id: 'work', label: '業務', cardIds: ['timecard', 'reports'] },
@@ -142,7 +140,7 @@ describe('parseDashboardLayout', () => {
   it('options の不正値・欠落は既定へ正規化する（将来のフィールド追加に耐える）', () => {
     const layout = parseDashboardLayout(JSON.stringify({
       sections: [],
-      options: { notifications: 'weird', density: 'huge', showAkebono: 'yes' },
+      options: { notifications: 'weird', density: 'huge' },
     }))
     expect(layout?.options).toEqual(DEFAULT_LAYOUT_OPTIONS)
   })
@@ -235,14 +233,13 @@ describe('テンプレート定義の健全性', () => {
       expect(t.description.length).toBeGreaterThan(0)
       expect(['side', 'bottom', 'top', 'hidden']).toContain(t.layout.options.notifications)
       expect(['comfortable', 'compact']).toContain(t.layout.options.density)
-      expect(typeof t.layout.options.showAkebono).toBe('boolean')
     }
   })
 
   it('default テンプレートは現行構成（DEFAULT_MENU_CATEGORIES）+ 通知 side', () => {
     const def = templateById('default')!
     expect(def.layout.sections).toEqual(DEFAULT_MENU_CATEGORIES.dashboard)
-    expect(def.layout.options).toEqual({ notifications: 'side', showAkebono: true, density: 'comfortable' })
+    expect(def.layout.options).toEqual({ notifications: 'side', density: 'comfortable' })
   })
 
   it('focus テンプレートは単一「メニュー」に全カード + 通知 bottom + density compact', () => {
@@ -251,7 +248,6 @@ describe('テンプレート定義の健全性', () => {
     expect(focus.layout.sections[0]?.cardIds).toEqual(MENU_CARDS.dashboard.map(c => c.id))
     expect(focus.layout.options.notifications).toBe('bottom')
     expect(focus.layout.options.density).toBe('compact')
-    expect(focus.layout.options.showAkebono).toBe(false)
   })
 
   it('executive テンプレートは通知 bottom（エグゼクティブ・コックピット）', () => {
@@ -301,82 +297,37 @@ describe('layoutFromLegacyCategories', () => {
   })
 })
 
-// ---------- AKEBONO 業態アプリのカテゴリ配置（#24。二重表示防止の中核ロジック） ----------
+// ---------- AKEBONO 業態カードのセクション配置（トップ固定セクション廃止 = 改善要望 2026-08-21） ----------
 
-describe('assignedAkebonoSegmentIds（セクションに割当済みの業態 id 抽出）', () => {
-  it('cardIds 中の akebono-seg:* だけを集める（基本メニュー・外部リンクは無視）', () => {
-    const sections = [
-      { id: 's1', label: 'S1', cardIds: ['timecard', akebonoSegmentCardId('seg-01'), 'el-1'] },
-      { id: 's2', label: 'S2', cardIds: [akebonoSegmentCardId('seg-02')] },
-    ]
-    expect(assignedAkebonoSegmentIds(sections)).toEqual(new Set(['seg-01', 'seg-02']))
-  })
-
-  it('akebono カードが無ければ空集合', () => {
-    expect(assignedAkebonoSegmentIds([{ id: 's', label: 'S', cardIds: ['sales', 'media'] }])).toEqual(new Set())
-  })
-})
-
-describe('planDashboardCards（プール振り分けと専用セクションの担当）', () => {
+describe('AKEBONO 業態カードは他メニューと同様に categorizeCards が扱う', () => {
   const internal = [card('timecard'), card('sales')]
   const external = [card('el-1')]
   const akebono = [akCard('seg-01'), akCard('seg-02'), akCard('seg-03')]
+  const pool = [...internal, ...external, ...akebono]
 
-  it('showAkebono=true: 割当済み業態のみプールへ・未割当は専用セクションが担当（二重表示なし）', () => {
+  it('セクションへ割当済みの業態はそのセクションへ・未割当は「その他」へ（二重表示なし）', () => {
     const sections = [{ id: 's1', label: 'S1', cardIds: ['timecard', akebonoSegmentCardId('seg-01')] }]
-    const plan = planDashboardCards({
-      internalCards: internal, externalCards: external, akebonoCards: akebono, sections, showAkebono: true,
-    })
-    // プール = 基本 + 外部 + 割当済み akebono（seg-01）のみ
-    expect(plan.pool.map(c => String(c.id))).toEqual([
-      'timecard', 'sales', 'el-1', akebonoSegmentCardId('seg-01'),
-    ])
-    // 未割当（seg-02, seg-03）は専用セクションへ
-    expect(plan.unassignedAkebonoSegmentIds).toEqual(['seg-02', 'seg-03'])
-  })
-
-  it('showAkebono=true かつ全業態割当済み: 専用セクションは空（= 出さない）', () => {
-    const sections = [{
-      id: 's1', label: 'S1',
-      cardIds: [akebonoSegmentCardId('seg-01'), akebonoSegmentCardId('seg-02'), akebonoSegmentCardId('seg-03')],
-    }]
-    const plan = planDashboardCards({
-      internalCards: internal, externalCards: external, akebonoCards: akebono, sections, showAkebono: true,
-    })
-    expect(plan.unassignedAkebonoSegmentIds).toEqual([])
-    // 全 akebono がプールに入る（割当済みなので categorize がセクションへ配置する）
-    expect(plan.pool.filter(c => String(c.id).startsWith('akebono-seg:')).length).toBe(3)
-  })
-
-  it('showAkebono=false（focus 等）: 全業態カードをプールへ・専用セクションは出さない（未割当は「その他」へ）', () => {
-    const sections = [{ id: 's1', label: 'S1', cardIds: ['timecard'] }]
-    const plan = planDashboardCards({
-      internalCards: internal, externalCards: external, akebonoCards: akebono, sections, showAkebono: false,
-    })
-    expect(plan.unassignedAkebonoSegmentIds).toEqual([])
-    expect(plan.pool.filter(c => String(c.id).startsWith('akebono-seg:')).length).toBe(3)
-    // categorize に通すと未割当 akebono は「その他」へ落ちる（消えない）
-    const groups = categorizeCards(plan.pool, sections)
+    const groups = categorizeCards(pool, sections)
+    expect(groups.find(g => g.id === 's1')?.cards.map(c => String(c.id)))
+      .toEqual(['timecard', akebonoSegmentCardId('seg-01')])
     const other = groups.find(g => g.id === OTHER_CATEGORY_ID)
     expect(other?.cards.map(c => String(c.id))).toEqual([
-      'sales', 'el-1', akebonoSegmentCardId('seg-01'), akebonoSegmentCardId('seg-02'), akebonoSegmentCardId('seg-03'),
+      'sales', 'el-1', akebonoSegmentCardId('seg-02'), akebonoSegmentCardId('seg-03'),
     ])
   })
 
-  it('akebonoCards が空（利用不可時に呼び出し側が空を渡す）: akebono はどこにも出ない', () => {
-    const sections = [{ id: 's1', label: 'S1', cardIds: ['timecard', akebonoSegmentCardId('seg-01')] }]
-    const plan = planDashboardCards({
-      internalCards: internal, externalCards: external, akebonoCards: [], sections, showAkebono: true,
-    })
-    expect(plan.unassignedAkebonoSegmentIds).toEqual([])
-    expect(plan.pool.some(c => String(c.id).startsWith('akebono-seg:'))).toBe(false)
+  it('showOther=false 相当（includeOther: false）では未割当の業態も出ない（他メニューと同じ表示制御）', () => {
+    const sections = [{ id: 's1', label: 'S1', cardIds: ['timecard'] }]
+    const groups = categorizeCards(pool, sections, { includeOther: false })
+    expect(groups.some(g => g.id === OTHER_CATEGORY_ID)).toBe(false)
+    expect(groups.flatMap(g => g.cards.map(c => String(c.id)))).toEqual(['timecard'])
   })
 })
 
 // ---------- セクション構成の 3 階層保存（#25。saveSections の中核 = buildCustomLayout） ----------
 
 describe('buildCustomLayout（saveSections が保存する DashboardLayout の組み立て）', () => {
-  const options = { notifications: 'bottom', showAkebono: false, density: 'compact' } as const
+  const options = { notifications: 'bottom', density: 'compact' } as const
   const sections = [{ id: 's1', label: 'S1', cardIds: ['sales'] }]
 
   it('templateId=custom・現行 options を維持・sections をディープコピー', () => {
@@ -421,9 +372,9 @@ describe('buildCustomLayout（saveSections が保存する DashboardLayout の�
 // ---------- 保存先スコープ自身の層を土台にする（#25。レビュー MAJOR の回帰テスト） ----------
 
 describe('pickBaseLayout（保存先スコープ自身の層を土台にする。他層の設定を漏らさない）', () => {
-  // user 個人設定: focus 由来（options = bottom / showAkebono=false / compact）
+  // user 個人設定: focus 由来（options = bottom / compact）
   const userLayout = parseDashboardLayout(VALID_USER_LAYOUT)!
-  // 全社設定: executive 由来（options = bottom / showAkebono=true / comfortable）
+  // 全社設定: executive 由来（options = bottom / comfortable）
   const tenantLayout = parseDashboardLayout(VALID_TENANT_LAYOUT)!
 
   it('tenant 編集はテナント層自身（options・sections）を土台にする', () => {
@@ -476,7 +427,6 @@ describe('NOTIFICATION_PLACEMENT_OPTIONS / withNotificationPlacement（通知配
     const base = materializeLayout('executive') // notifications: 'bottom'
     const next = withNotificationPlacement(base, 'top')
     expect(next.options.notifications).toBe('top')
-    expect(next.options.showAkebono).toBe(base.options.showAkebono)
     expect(next.options.density).toBe(base.options.density)
     expect(next.templateId).toBe(base.templateId)
     expect(next.sections).toEqual(base.sections)
@@ -656,11 +606,11 @@ describe('通知配置の専用キー（parseNotificationPlacement / resolveNoti
     })).toEqual({ placement: 'bottom', source: 'layout' })
     // parse は inherit マーカーを保持する（未指定 = 分離前の保存値 = 立てない）
     const withInherit = parseDashboardLayout(JSON.stringify({
-      sections: [], options: { notifications: 'top', notificationsInherit: true, showAkebono: true, density: 'comfortable' },
+      sections: [], options: { notifications: 'top', notificationsInherit: true, density: 'comfortable' },
     }))
     expect(withInherit?.options.notificationsInherit).toBe(true)
     const legacy = parseDashboardLayout(JSON.stringify({
-      sections: [], options: { notifications: 'top', showAkebono: true, density: 'comfortable' },
+      sections: [], options: { notifications: 'top', density: 'comfortable' },
     }))
     expect(legacy?.options.notificationsInherit).toBeUndefined()
   })
@@ -730,7 +680,7 @@ describe('options.showOther の永続化（false のときだけ書く = 原則7
 
   it('showOther:false はパース → 保存（JSON）→ 再パースのラウンドトリップで保持される', () => {
     const parsed = parseDashboardLayout(layoutJson({
-      notifications: 'side', showAkebono: true, density: 'comfortable', showOther: false,
+      notifications: 'side', density: 'comfortable', showOther: false,
     }))!
     expect(parsed.options.showOther).toBe(false)
     // normalizeOptions が未知フィールドとして落とさない（落とすと保存のたびに設定が消える）

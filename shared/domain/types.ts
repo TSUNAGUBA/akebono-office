@@ -318,6 +318,26 @@ export interface ActivityAiDigest {
   logCount: number
   /** true = LLM 生成 / false = 決定的ヒューリスティック */
   llm: boolean
+  /**
+   * 活動ログから抽出した基本情報の更新提案（BP 活動のみ。改善要望 2026-08-21 = AI 入力 → 確認・判断）。
+   * **生成するだけで自動反映はしない**（ユーザーが差分を確認し「反映」した時点で基本情報を更新 = 原則9.5
+   * の取消つき）。値が現在値と同じ・抽出できないフィールドは undefined。旧 digest は未定義（原則7）
+   */
+  proposal?: ActivityDigestProposal | null
+}
+
+/** AI集約の基本情報更新提案（ActivityAiDigest.proposal。キーは PartnerActivity のフィールドに対応） */
+export interface ActivityDigestProposal {
+  /** 現在状況の更新案 */
+  currentState?: string
+  /** ステータスの更新案（PARTNER_ACTIVITY_STATUSES のいずれか） */
+  status?: string
+  /** Next Action の更新案 */
+  nextAction?: string
+  /** Next Action日の更新案（YYYY-MM-DD） */
+  nextActionDate?: string | null
+  /** Next Action メモの更新案 */
+  nextActionNote?: string
 }
 
 /** ビジネスパートナー活動の活動区分 */
@@ -366,6 +386,8 @@ export interface PartnerActivity {
   nextAction: string
   /** Next Action日（YYYY-MM-DD・任意） */
   nextActionDate: string | null
+  /** Next Action メモ（自由入力・任意。改善要望 2026-08-21 = BP のみの項目。旧データは未定義 = 原則7） */
+  nextActionNote?: string
   /** 自社担当者（Member 参照。既定 = ログインユーザー） */
   staffMemberId: string
   /** 関連MTG（自由入力・任意） */
@@ -1066,9 +1088,12 @@ export interface DailyReport {
    * 旧データは未設定（原則7 = 表示・保存とも空扱い）
    */
   issueCategory?: string
-  /** 旧形式の明日の予定（自由記述）。新規入力は tomorrowPlans が正（原則7 = 既存データの表示のため保持） */
+  /** 明日の予定（自由テキスト。改修依頼 2026-08-21 でテキスト入力へ回帰 = 新規保存はこちらが正） */
   tomorrow: string
-  /** 明日の予定（構造化・最大 TOMORROW_PLANS_MAX 件）。旧データは未設定 */
+  /**
+   * 旧形式の明日の予定（構造化リスト。2026-08-21 廃止）。既存データの表示互換のため保持し、
+   * 編集開始時にテキストへ変換・保存時は空配列で送る（原則7）
+   */
   tomorrowPlans?: TomorrowPlan[]
   status: 'draft' | 'submitted'
   submittedAt: string | null

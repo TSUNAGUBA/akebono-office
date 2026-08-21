@@ -61,6 +61,11 @@ export async function notify(
   title: string,
   body: string,
   link: string,
+  opts?: {
+    /** true = 外部チャネル（Slack / Google Chat）へ配信しない（アプリ内通知のみ）。
+     *  リマインドの種別ごとの外部通知設定（改善要望 2026-08-21）が本人の通知マトリクスより優先して抑制する */
+    inAppOnly?: boolean
+  },
 ): Promise<void> {
   // 宛先ユーザーの通知マトリクス（取得失敗 = null → in_app へ送る fail-open / 外部へは送らない fail-closed）
   let matrix: NotificationMatrix | null = null
@@ -85,7 +90,7 @@ export async function notify(
   }
   // 外部配信は fire-and-forget（登録済み Pool を使用。呼び出し元の db が PoolClient でも安全）
   const ctx = dispatchCtx
-  if (matrix && ctx) {
+  if (matrix && ctx && !opts?.inAppOnly) {
     const services = enabledExternalServices(matrix, kind)
     if (services.length > 0) {
       void dispatchExternal(ctx, memberId, services, title, body, link)

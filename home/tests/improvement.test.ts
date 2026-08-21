@@ -18,6 +18,9 @@ import {
   improvementRequestEditFields,
   improvementRevisitError,
   improvementUnclusterError,
+  OPERATIONAL_NOTE_MAX,
+  operationalNoteBody,
+  operationalNoteCapError,
 } from '../../shared/domain/improvement'
 import { fmtDateTimeSec } from '~/utils/format'
 
@@ -396,6 +399,17 @@ describe('対応方針の語彙 + 継続検討の再検討日（改修依頼 202
     expect(improvementRevisitError('deferred', '2026-09-01')).toBeNull()
     expect(improvementRevisitError('deferred', '2026-02-30')).not.toBeNull()
     expect(improvementRevisitError('accepted', '')).toBeNull()
+  })
+  it('運用案内（operational の必須コメント = 改善要望 2026-08-21）: 本文組み立てと実効上限の境界', () => {
+    // 実効上限 = メモ上限 2000 − 接頭辞「運用案内: 」6 コードポイント（メッセージ・UI maxlength と一致）
+    expect(OPERATIONAL_NOTE_MAX).toBe(1994)
+    expect(operationalNoteBody('設定から変更できます')).toBe('運用案内: 設定から変更できます')
+    expect(operationalNoteCapError('あ'.repeat(1994))).toBeNull() // 境界 OK 側
+    const over = operationalNoteCapError('あ'.repeat(1995))
+    expect(over).not.toBeNull()
+    expect(over).toContain('1994') // メッセージが実効上限を示す（「2000 字以内なのに拒否」の矛盾を作らない）
+    // 接頭辞込みの記録本文がメモ上限に収まる（改修単位メモの検証と整合）
+    expect([...operationalNoteBody('あ'.repeat(1994))].length).toBe(2000)
   })
 })
 

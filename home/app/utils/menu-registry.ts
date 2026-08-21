@@ -37,8 +37,9 @@ export const OTHER_CATEGORY_LABEL = 'その他'
 export const MENU_CARDS: Record<MenuArea, MenuCardDef[]> = {
   dashboard: [
     { id: 'decision', title: '意思決定支援', description: 'AI が意味・関係・制約を整理し、選択肢と根拠を提示', icon: 'Scale', to: '/decision', featureToggle: 'decision' },
-    // AKEBONO 業務は業態別アプリとしてダッシュボード上部に専用セクション表示（pages/index.vue + AkebonoSegmentApps）。
-    // 単一カードは廃止し、業態ごとの業務アプリへ直接入場する導線へ置き換えた（2026-07-28）。
+    // AKEBONO 業務の単一カードは廃止し、業態ごとの業務アプリカード（useAkebonoAppCards が実行時に生成 =
+    // MENU_CARDS には載らない）へ置き換えた（2026-07-28）。カードは他メニューと同じセクション配置
+    // （旧・最上段の固定専用セクションは改善要望 2026-08-21 で廃止）。
     { id: 'timecard', title: 'タイムカード', description: '自分の打刻と出退勤・労働時間の一覧', icon: 'Clock3', to: '/timecard' },
     { id: 'attendance', title: '勤怠管理', description: '打刻・月次集計・36 協定アラート・休暇', icon: 'Clock', to: '/attendance' },
     { id: 'shift', title: 'シフト表', description: '希望提出・調整・確定シフトの確認', icon: 'CalendarRange', to: '/shift', featureToggle: 'shift' },
@@ -58,7 +59,7 @@ export const MENU_CARDS: Record<MenuArea, MenuCardDef[]> = {
     { id: 'workflow', title: '稟議', description: '稟議の申請・承認（職務権限マトリクス準拠）', icon: 'GitPullRequestArrow', to: '/workflow' },
     { id: 'ai-company', title: 'AIネイティブカンパニー', description: 'AI 社員の執務室。タスク依頼と活動モニタリング', icon: 'Building2', to: '/ai-company', featureToggle: 'aiCompany' },
     // メディア分析（media）は独立したメディアチャンネル（任意で業態連携）としてトップメニュー化（2026-08-03）。
-    // 従来は業態配下の AKEBONO 業務アプリ（AkebonoSegmentApps 経由）だったが、業態と 1:1 の結合を解消し独立させた。
+    // 従来は業態配下の AKEBONO 業務アプリだったが、業態と 1:1 の結合を解消し独立させた。
     { id: 'media', title: 'メディア分析', description: 'GA × AI でサイト・記事のインサイトと次アクション、業務との PDCA、AI 記事生成（任意で業態と連携）', icon: 'LineChart', to: '/media', featureToggle: 'media' },
     { id: 'sales', title: '売上管理', description: '月次売上の推移・前年比・事業種別/顧客別の内訳', icon: 'TrendingUp', to: '/sales' },
     { id: 'status', title: '提供システム稼働状況', description: '提供システムの現在状態・稼働率・インシデント履歴', icon: 'Activity', to: '/status', featureToggle: 'status' },

@@ -54,6 +54,8 @@ import {
   improvementRevisitError,
   improvementTitleError,
   improvementUnclusterError,
+  operationalNoteBody,
+  operationalNoteCapError,
   matchesImprovementFilter,
   normalizeClusterPlan,
   normalizeImprovementImages,
@@ -71,7 +73,7 @@ import { audit } from '../lib/audit'
 import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
 import { generateJson } from '../lib/llm'
-import { notifyAdmins } from '../lib/notify'
+import { notify, notifyAdmins } from '../lib/notify'
 
 // 時刻は JST ウォールクロック文字列で返す（customer-logs / akebono-trade と同一規約。
 // フロントの fmtDate は文字列をそのまま表示するため、生 timestamptz（UTC "…Z"）を返すと
@@ -150,11 +152,16 @@ export function improvementRequestInputOf(body: Record<string, unknown>): {
 /** 管理ガード（閲覧・集約・ステータス操作）。deny は AKO-PRM-001 403 */
 async function requireManage(c: Context, pool: pg.Pool): Promise<AuthUser> {
   const user = c.get('user')
-  const rules = await activePermissionRules(pool)
-  if (!canManageImprovements(rules, subjectOf(user))) {
+  if (!(await canManage(pool, user))) {
     throw err('AKO-PRM-001', '改善要望を閲覧・管理する権限がありません（管理者にお問い合わせください）', 403)
   }
   return user
+}
+
+/** 管理権限の判定のみ（throw しない版。本人操作との複合ガードで使う） */
+async function canManage(pool: pg.Pool, user: AuthUser): Promise<boolean> {
+  const rules = await activePermissionRules(pool)
+  return canManageImprovements(rules, subjectOf(user))
 }
 
 /** LLM 集約（Vertex → 正規化）。無効環境・失敗・空出力は null（呼び出し側でヒューリスティックへ） */
@@ -476,15 +483,28 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
   })
 
   // ---- 要望ステータス変更（管理）。要望 1 件ずつの対応状況タグ（open/resolved/dismissed。遷移自由 = 原則9.5） ----
+  // 要望ステータス変更。管理者 = 任意の遷移 / 起票者本人 = 自分の要望の resolved ⇄ open のみ
+  // （改善要望 2026-08-21: 「運用対応」になった要望を起票者が「解決済み」へ移す運用。open へ戻せる =
+  //   誤操作の取消フロー = 原則9.5。dismissed の付与・解除は従来どおり管理者のみ）
   app.post('/requests/:id/status', async (c) => {
-    const user = await requireManage(c, pool)
+    const user = c.get('user')
     const id = c.req.param('id')
     const status = String(((await c.req.json().catch(() => ({}))) as { status?: unknown }).status ?? '')
     if (!IMPROVEMENT_REQUEST_STATUSES.includes(status as ImprovementRequestStatus)) {
       throw err('AKO-REQ-011', 'status が不正です（open / resolved / dismissed）', 400)
     }
+    if (!(await canManage(pool, user))) {
+      const { rows: own } = await pool.query<{ memberId: string }>(
+        `SELECT member_id AS "memberId" FROM improvement_requests WHERE id = $1 AND archived_at IS NULL`, [id])
+      // 存在しない・取消済みの id も一律 403（非管理者へ他人の要望 id の存在有無を漏らさない = 存在オラクル防止）
+      if (own.length === 0 || own[0]!.memberId !== user.id || (status !== 'resolved' && status !== 'open')) {
+        throw err('AKO-PRM-001', 'この操作の権限がありません（自分の要望の解決済み/未対応の切替のみ可能です）', 403)
+      }
+    }
+    // 取消済み（論理削除）の要望はステータスを動かさない（UI 同様。復元してから操作する = 原則9.5 の導線）
     const { rows } = await pool.query(
-      `UPDATE improvement_requests SET status = $2 WHERE id = $1 RETURNING ${reqColsOf(false)}`, [id, status])
+      `UPDATE improvement_requests SET status = $2 WHERE id = $1 AND archived_at IS NULL
+       RETURNING ${reqColsOf(false)}`, [id, status])
     if (rows.length === 0) throw err('AKO-REQ-002', '対象の要望が見つかりません', 404)
     await audit(pool, { actorId: user.id, action: 'update', entity: 'improvement_requests', entityId: id, detail: `要望ステータス → ${status}` })
     return c.json({ data: rows[0] })
@@ -640,11 +660,13 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
 
   // ---- ステータス変更（状態機械で検証。解決 → 改善対応等の reopen 可 = 原則9.5）。
   //      継続検討（deferred）への遷移は再検討日（revisitOn）が必須（改修依頼 2026-08-20）。
+  //      運用対応（operational）への遷移は運用案内コメント（note）が必須（改善要望 2026-08-21 =
+  //      起票者が案内を確認して「解決済み」へ移すための情報。メモ追記とステータス変更は同一 Tx = 原子）。
   //      deferred 以外への遷移では revisit_on を保持する（クリアしない = 履歴保全） ----
   app.post('/items/:id/status', async (c) => {
     const user = await requireManage(c, pool)
     const id = c.req.param('id')
-    const body = (await c.req.json().catch(() => ({}))) as { status?: unknown; revisitOn?: unknown }
+    const body = (await c.req.json().catch(() => ({}))) as { status?: unknown; revisitOn?: unknown; note?: unknown }
     const status = String(body.status ?? '')
     if (!IMPROVEMENT_STATUSES.includes(status as ImprovementStatus)) {
       throw err('AKO-REQ-005', 'status が不正です', 400)
@@ -654,6 +676,22 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
     const revisitOn = to === 'deferred' ? String(body.revisitOn ?? '').trim() : ''
     const revisitMsg = improvementRevisitError(to, revisitOn)
     if (revisitMsg) throw err('AKO-REQ-023', revisitMsg, 400)
+    // 運用案内コメントは operational のときだけ読む（他遷移での誤送信でメモを汚さない）
+    const opsNote = to === 'operational' ? String(body.note ?? '').trim() : ''
+    if (to === 'operational' && !opsNote) {
+      throw err('AKO-REQ-024', '運用対応にする場合は、運用方法の案内（note）を記載してください', 400)
+    }
+    // 上限は接頭辞込みでメモ上限に収まる実効値で検証する（黙って切り詰めると記録 = SoT と
+    // 起票者への通知本文が乖離し〔R2 監査〕、メモ上限そのままのメッセージだと実効上限との
+    // 矛盾に見える〔R3 レビュー〕。検証・本文組み立てとも shared の共通関数 = mock と同一挙動）
+    const opsNoteBody = to === 'operational' ? operationalNoteBody(opsNote) : ''
+    if (to === 'operational') {
+      const capMsg = operationalNoteCapError(opsNote)
+      if (capMsg) throw err('AKO-REQ-008', capMsg, 400)
+    }
+    // 実際に遷移した（= operational ならメモを記録した）ときだけ Tx 後の起票者通知を行う
+    // （同一ステータス再送の no-op で「メモに残らない運用案内」が再通知されるのを防ぐ = R2 レビュー MINOR-1・原則2）
+    let transitioned = false
     const updated = await inTxn(pool, async (db) => {
       const { rows } = await db.query<{ status: ImprovementStatus }>(
         `SELECT status FROM improvement_items WHERE id = $1 AND archived_at IS NULL FOR UPDATE`, [id])
@@ -661,11 +699,14 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
       const from = rows[0]!.status
       // 同一ステータスの再送は no-op（resolved_at・updated_at を無用に上書きしない）。
       // 例外: deferred → deferred は再検討日の変更（リスケジュール）として受理し、
-      // 通知マーカーもリセットする（新しい期日で再通知 = 原則9.5 の選び直し導線）
+      // 通知マーカーもリセットする（新しい期日で再通知 = 原則9.5 の選び直し導線）。
+      // operational → operational で異なる note が添えられても破棄する（リトライ冪等を優先。
+      // 案内を更新したい場合は通常のメモ追加（POST /items/:id/notes）を使う = 設計判断）
       if (from === to && to !== 'deferred') {
         const { rows: same } = await db.query(`SELECT ${ITEM_COLS} FROM improvement_items WHERE id = $1`, [id])
         return same[0]
       }
+      transitioned = true
       if (from !== to && !canTransition(from, to)) {
         throw err('AKO-REQ-006', `「${from}」から「${to}」へは変更できません`, 409)
       }
@@ -677,15 +718,43 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
         return out[0]
       }
       const resolvedExpr = to === 'resolved' ? 'now()' : 'NULL'
+      // 運用案内コメントをメモ（時系列・kind='note'）へ追記してからステータス変更（同一 Tx = 原子。
+      // メモだけ残ってステータスが変わらない/その逆、を作らない）
+      if (to === 'operational') {
+        await db.query(
+          `INSERT INTO improvement_notes (id, item_id, member_id, member_name, body, kind)
+           VALUES ($1, $2, $3, $4, $5, 'note')`,
+          [newId('imnote'), id, user.id, user.name, opsNoteBody])
+      }
       const { rows: out } = await db.query(
         `UPDATE improvement_items SET status = $2, resolved_at = ${resolvedExpr}, updated_at = now()
          WHERE id = $1 RETURNING ${ITEM_COLS}`, [id, to])
       return out[0]
     })
-    await audit(pool, {
-      actorId: user.id, action: 'update', entity: 'improvement_items', entityId: id,
-      detail: `ステータス → ${status}${to === 'deferred' ? `（再検討日 ${revisitOn}）` : ''}`,
-    })
+    // 監査ログも実遷移時のみ（no-op 再送で「変更」の監査行を積まない = R3 レビュー）
+    if (transitioned) {
+      await audit(pool, {
+        actorId: user.id, action: 'update', entity: 'improvement_items', entityId: id,
+        detail: `ステータス → ${status}${to === 'deferred' ? `（再検討日 ${revisitOn}）` : ''}`,
+      })
+    }
+    // 運用対応: 紐づく要望の起票者へ運用案内を通知する（改善要望 2026-08-21・レビュー R1 M-3。
+    // メモ・要望コメントは管理者内の記録で起票者から見えないため、本人の通知（全文）で届ける =
+    // 起票者はこれを確認して自分の要望を「解決済み」へ移す。主フロー成立後の補助処理 = 非ブロッキング（原則4）
+    if (to === 'operational' && transitioned) {
+      try {
+        const { rows: authors } = await pool.query<{ memberId: string }>(
+          `SELECT DISTINCT member_id AS "memberId" FROM improvement_requests
+           WHERE item_id = $1 AND archived_at IS NULL AND member_id IS NOT NULL`, [id])
+        for (const a of authors) {
+          // 通知本文はメモに記録した本文と同一（記録 = SoT と通知の乖離を作らない）
+          await notify(pool, a.memberId, 'system', '改善要望が「運用対応」になりました',
+            opsNoteBody, '/improvements')
+        }
+      } catch (e) {
+        console.warn('operational notify failed (non-blocking):', (e as Error).message)
+      }
+    }
     return c.json({ data: updated })
   })
 

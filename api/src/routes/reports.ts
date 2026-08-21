@@ -12,9 +12,11 @@ import { Hono } from 'hono'
 import type pg from 'pg'
 import { DEFAULT_WORKING_DAY_RULE, isWorkingDay } from '../../../shared/domain/business-day'
 import { addDays, isRealDateKey, jstClock, nowJstIso, todayJst } from '../../../shared/domain/jst'
-import { canUseFeature, canViewMemberReports, type PermissionSubject, reportReadsFeatureKey, resolveFeatureResource } from '../../../shared/domain/permissions'
+import { canUseFeature, canUseTab, canViewMemberReports, type PermissionSubject, reportReadsFeatureKey, resolveFeatureResource, resolveTabPermission } from '../../../shared/domain/permissions'
 import {
-  buildReminderMessage, missingReportDates, parseReportReminderConfig, reminderWindowDates, shouldFireReminder,
+  buildMonthlyReminderMessage, buildReminderMessage, buildWeeklyReminderMessage, hasSubmittedPeriodReport,
+  lastCompletedWeekStart, lastMonthStart, missingReportDates, parseReminderLastSent, parseReportReminderConfig,
+  reminderWindowDates, type ReportReminderKind, shouldFireReminder,
 } from '../../../shared/domain/report-reminder'
 import {
   DAILY_ISSUE_CATEGORY_PRESETS, TOMORROW_PLANS_MAX, WEEKLY_TEAM_SHARE_KINDS,
@@ -524,7 +526,10 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
     return c.json({ data: { id, status } })
   })
 
-  // 日報リマインド（管理者 → 未提出メンバーへ通知。home useReports.remind と同一挙動）
+  // 日報リマインド（管理者 → 未提出メンバーへ通知。home useReports.remind と同一挙動）。
+  // 自動リマインド（runReportReminders）の権限フィルタは適用しない = 設計判断: 管理者が対象を
+  // 選んで送る単発操作であり、deny メンバーへの誤送信は運用（権限表の確認）で気づける。
+  // 恒久ナグ化する cron 経路とはリスクが異なる（R3 監査 NIT で経路差を明示）
   app.post('/remind', async (c) => {
     requireAdmin(c)
     const body = await c.req.json().catch(() => ({})) as { memberId?: string; date?: string }
@@ -664,7 +669,7 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
 
   /**
    * reads の kind 別機能ガード（/v1/reports/reads はパスガード対象外 = kind 混在のため。レビュー R1）。
-   * 判定は featureGuard と同一規則（ルール未設定 = 既定 allow・resolveFeatureResource で旧 'reports' 継承）
+   * 判定は featureGuard と同一規則（ルール未設定 = 既定 allow。旧 'reports' 継承は 0078 で撤去済み）
    */
   async function requireReadsFeature(user: AuthUser, kind: 'daily' | 'weekly' | 'monthly'): Promise<void> {
     const rules = await activePermissionRules(pool)
@@ -1069,13 +1074,16 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
 }
 
 /**
- * 日報の自動リマインド実行（Cloud Scheduler → POST /jobs/report-reminders から呼ぶ。app.ts で配線）。
- * - 設定 SoT = app_configs 'report-reminder'（{ enabled, time }。JSON 文字列/オブジェクト両形を
- *   shared/domain/report-reminder の parse が受理する = 原則7）
- * - 送信済み管理 = app_configs 'report-reminder-last-sent'（日付キーの upsert）。
- *   shouldFireReminder が「設定時刻以降 & 今日未送信」を判定 = 日次 1 回・再実行は再送しない（原則2）
- * - 対象 = 在籍中（active）の全メンバー。前日までの直近 5 営業日（月〜金・祝日は考慮しない）に
- *   提出済みの日報が無い日があれば通知（各メンバーの通知設定に従って配信 = notifications ドメインの責務）
+ * 日報・週報・月報の自動リマインド実行（Cloud Scheduler → POST /jobs/report-reminders から呼ぶ。app.ts で配線）。
+ * - 設定 SoT = app_configs 'report-reminder'（種別ごとの { enabled, time, external }。旧形状
+ *   { enabled, time } は日報設定として shared/domain/report-reminder の parse が受理する = 原則7）
+ * - 送信済み管理 = app_configs 'report-reminder-last-sent'（種別ごとの最終送信日の upsert。旧形状 =
+ *   単一日付は daily として読む）。shouldFireReminder が「設定時刻以降 & 今日未送信」を種別ごとに判定
+ *   = 種別ごとに日次 1 回・再実行は再送しない（原則2）
+ * - 対象 = 在籍中（active）かつ当該機能・提出（mine）タブが deny でないメンバー（F-48-2 = 2026-08-21 R2/R3。
+ *   ルール未設定は全員）。日報 = 前日までの直近 5 営業日（月〜金・祝日は考慮しない）に
+ *   提出済みが無い日 / 週報 = 先週（直近の完了週）未提出 / 月報 = 先月未提出
+ * - external=false の種別はアプリ内通知のみ（notify の inAppOnly。種別ごとの外部通知設定 = 2026-08-21）
  * - notify は内部で失敗を握りつぶし、実行全体も try/catch（リマインドの失敗が cron を落とさない = 原則4）
  */
 export async function runReportReminders(pool: pg.Pool): Promise<{ notified: number }> {
@@ -1094,38 +1102,103 @@ export async function runReportReminders(pool: pg.Pool): Promise<{ notified: num
     const { rows: cfgRows } = await pool.query<{ key: string; value: unknown }>(
       `SELECT key, value FROM app_configs WHERE key IN ('report-reminder', 'report-reminder-last-sent')`)
     const config = parseReportReminderConfig(cfgRows.find(r => r.key === 'report-reminder')?.value)
-    const lastRaw = cfgRows.find(r => r.key === 'report-reminder-last-sent')?.value
-    const lastSent = typeof lastRaw === 'string' ? lastRaw : ''
+    const lastSent = parseReminderLastSent(cfgRows.find(r => r.key === 'report-reminder-last-sent')?.value)
     const today = todayJst()
     const clock = jstClock()
-    if (!shouldFireReminder(config, `${clock.h}:${clock.m}`, lastSent, today)) return { notified: 0 }
+    const now = `${clock.h}:${clock.m}`
+    const fire: Record<ReportReminderKind, boolean> = {
+      daily: shouldFireReminder(config.daily, now, lastSent.daily ?? '', today),
+      weekly: shouldFireReminder(config.weekly, now, lastSent.weekly ?? '', today),
+      monthly: shouldFireReminder(config.monthly, now, lastSent.monthly ?? '', today),
+    }
+    if (!fire.daily && !fire.weekly && !fire.monthly) return { notified: 0 }
 
-    const window = reminderWindowDates(today)
-    const from = window[0] ?? today
-    const to = window[window.length - 1] ?? today
-    const [membersQ, reportsQ] = await Promise.all([
-      pool.query<{ id: string }>(`SELECT id FROM members WHERE active = true`),
-      pool.query<{ memberId: string | null; date: string }>(
+    // 送信済み記録は**種別の送信完了直後**に upsert する（後続種別の失敗で先行種別の記録が失われて
+    // 次回に再送される事故を防ぐ = 原則2・監査 R1 MINOR-3）
+    const persistLastSent = async (): Promise<void> => {
+      await pool.query(
+        `INSERT INTO app_configs (key, value) VALUES ('report-reminder-last-sent', $1)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+        [JSON.stringify(lastSent)])
+    }
+
+    const membersQ = await pool.query<{ id: string; title: string | null; role: PermissionSubject['role'] }>(
+      `SELECT id, title, role FROM members WHERE active = true`)
+    // 機能 deny・提出（mine）タブ deny のメンバーへは送らない（deny 対象者には提出手段が無く、
+    // リンク先も 403 / タブ非表示の行き止まりになる = R2/R3 レビュー。判定は featureGuard /
+    // usePermissions.canTab と同じ共有関数。ルール未設定は従来どおり全員へ = 既定 allow）
+    const permRules = await activePermissionRules(pool)
+    const canUseReportFeature = (m: { id: string; title: string | null; role: PermissionSubject['role'] }, feature: string): boolean => {
+      if (permRules.length === 0) return true
+      const subject = { memberId: m.id, title: m.title ?? '', role: m.role }
+      // タブ側も usePermissions.canTab と同じく resolveTabPermission を経由する（現在は素通しだが、
+      // 解決層に写像が復活しても UI と判定がずれない対称性を保つ = R4）
+      const eff = resolveTabPermission(permRules, feature, 'mine')
+      return canUseFeature(permRules, subject, resolveFeatureResource(permRules, feature))
+        && canUseTab(permRules, subject, eff.resource, eff.tabKey)
+    }
+
+    if (fire.daily) {
+      const window = reminderWindowDates(today)
+      const from = window[0] ?? today
+      const to = window[window.length - 1] ?? today
+      const reportsQ = await pool.query<{ memberId: string | null; date: string }>(
         `SELECT member_id AS "memberId", date::text AS date FROM daily_reports
          WHERE author_kind = 'human' AND status = 'submitted' AND date BETWEEN $1::date AND $2::date`,
-        [from, to]),
-    ])
-    const submitted = reportsQ.rows.map(r =>
-      ({ authorKind: 'human', memberId: r.memberId, date: r.date, status: 'submitted' }))
-    for (const m of membersQ.rows) {
-      const missing = missingReportDates(m.id, submitted, today)
-      const latest = missing[missing.length - 1]
-      if (!latest) continue
-      const { title, body } = buildReminderMessage(missing)
-      // リンクは最新の未提出日の日報へのディープリンク（?date= = 手動リマインド /remind と同型）
-      await notify(pool, m.id, 'reminder', title, body, `/reports?date=${latest}`)
-      notified++
+        [from, to])
+      const submitted = reportsQ.rows.map(r =>
+        ({ authorKind: 'human', memberId: r.memberId, date: r.date, status: 'submitted' }))
+      for (const m of membersQ.rows) {
+        if (!canUseReportFeature(m, 'reports')) continue // 日報 deny のメンバーには送らない
+        const missing = missingReportDates(m.id, submitted, today)
+        const latest = missing[missing.length - 1]
+        if (!latest) continue
+        const { title, body } = buildReminderMessage(missing)
+        // リンクは最新の未提出日の日報へのディープリンク（?date= = 手動リマインド /remind と同型）
+        await notify(pool, m.id, 'reminder', title, body, `/reports?date=${latest}`,
+          { inAppOnly: !config.daily.external })
+        notified++
+      }
+      lastSent.daily = today
+      await persistLastSent()
     }
-    // 送信済みの記録は通知発行後に upsert（設定系のみ更新・記録系は追記済み = 原則2）
-    await pool.query(
-      `INSERT INTO app_configs (key, value) VALUES ('report-reminder-last-sent', $1)
-       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-      [JSON.stringify(today)])
+
+    if (fire.weekly) {
+      const weekStart = lastCompletedWeekStart(today)
+      const weeklyQ = await pool.query<{ memberId: string | null; periodStart: string }>(
+        `SELECT member_id AS "memberId", week_start::text AS "periodStart" FROM weekly_reports
+         WHERE status = 'submitted' AND week_start = $1::date`, [weekStart])
+      const rows = weeklyQ.rows.map(r => ({ ...r, status: 'submitted' }))
+      const { title, body } = buildWeeklyReminderMessage(weekStart)
+      for (const m of membersQ.rows) {
+        if (!canUseReportFeature(m, 'weekly-report')) continue // 週報 deny のメンバーには送らない
+        if (hasSubmittedPeriodReport(m.id, rows, weekStart)) continue
+        await notify(pool, m.id, 'reminder', title, body, `/weekly-report?week=${weekStart}`,
+          { inAppOnly: !config.weekly.external })
+        notified++
+      }
+      lastSent.weekly = today
+      await persistLastSent()
+    }
+
+    if (fire.monthly) {
+      const monthStart = lastMonthStart(today)
+      const monthlyQ = await pool.query<{ memberId: string | null; periodStart: string }>(
+        `SELECT member_id AS "memberId", month_start::text AS "periodStart" FROM monthly_reports
+         WHERE status = 'submitted' AND month_start = $1::date`, [monthStart])
+      const rows = monthlyQ.rows.map(r => ({ ...r, status: 'submitted' }))
+      const { title, body } = buildMonthlyReminderMessage(monthStart)
+      for (const m of membersQ.rows) {
+        if (!canUseReportFeature(m, 'monthly-report')) continue // 月報 deny のメンバーには送らない
+        if (hasSubmittedPeriodReport(m.id, rows, monthStart)) continue
+        await notify(pool, m.id, 'reminder', title, body, `/monthly-report?month=${monthStart}`,
+          { inAppOnly: !config.monthly.external })
+        notified++
+      }
+      lastSent.monthly = today
+      await persistLastSent()
+    }
+
   } catch (e) {
     console.warn('runReportReminders failed (non-blocking):', (e as Error).message)
   } finally {

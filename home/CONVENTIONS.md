@@ -114,7 +114,8 @@ const nt = useNotificationTabs()  // effectiveIds / resolvedScope / userIds / te
 // カードメニュー写像（ダッシュボードのメニューカテゴリ配置用。基本メニュー MENU_CARDS.dashboard と同じ MenuCard 形へ）
 const { externalCards } = useExternalLinkCards()  // F-13-3 の外部リンク → MenuCard（id=`el-*`・href で別タブ）
 const { akebonoCards } = useAkebonoAppCards()      // #24 の active 業態 → MenuCard（id=`akebono-seg:<segmentId>`。写像純関数 = utils/akebono.akebonoSegmentCard）
-// 二重表示防止は純関数 planDashboardCards（utils/dashboard-layout.ts）: 割当済み業態=セクション配置 / 未割当=専用「AKEBONO 業務」セクション
+// 業態カードは他メニューと同じく categorizeCards で通常配置（未割当は「その他」= showOther 設定で制御。
+// 最上段の固定「AKEBONO 業務」セクションと planDashboardCards は改善要望 2026-08-21 で廃止）
 
 // カレンダー連携（F-06-8。google 発の SoT は Google・アプリ発の SoT は本アプリ）
 const cal = useCalendar()   // isConnected / connect / syncFromGoogle / addTask / pushToGoogle
@@ -131,10 +132,13 @@ const depts = useDepartments()   // nameOf / options / membersOf / tree
 // 週報マトリクスの週列（改修依頼 2026-08-20。月曜始まり weekStartOf の SoT = utils/report-weeks.ts）
 const weeks = recentWeekStarts(todayJst(), 4)   // 直近 N 週の週開始（昇順・右端 = 今週）
 
-// 日報の自動リマインド（改修依頼 2026-08-20。純ロジック SoT = shared/domain/report-reminder.ts。
-// configs 'report-reminder'（{enabled,time} JSON）/ 'report-reminder-last-sent'（日次 1 回の冪等マーカー = 原則2）。
-// 本実装 = API の runReportReminders（/jobs/report-reminders・Cloud Scheduler）/ mock = 起動時のデモ簡易版
-// （plugins/report-reminder.client.ts・localStorage 'ako.report-reminder-last.v1'・非ブロッキング = 原則4）
+// 日報・週報・月報の自動リマインド（改修依頼 2026-08-20 → 種別単位化 2026-08-21。
+// 純ロジック SoT = shared/domain/report-reminder.ts。configs 'report-reminder'（種別ごとの
+// {enabled,time,external} JSON。旧 {enabled,time} は日報として読替え = 原則7）/
+// 'report-reminder-last-sent'（種別ごとの日次 1 回の冪等マーカー = 原則2）。external=false の種別は
+// アプリ内通知のみ（notify の inAppOnly）。本実装 = API の runReportReminders（/jobs/report-reminders・
+// Cloud Scheduler・3 種別を単一ジョブで処理）/ mock = 起動時のデモ簡易版
+// （plugins/report-reminder.client.ts・localStorage 'ako.report-reminder-last.v2'・非ブロッキング = 原則4）
 
 // 個人別マルチチャネル通知連携（Slack / Google Chat。改修依頼 2026-08-20 → AKEBONO Home 名義化 2026-08-20。
 // 純ロジック SoT = shared/domain/notification-channels.ts）
