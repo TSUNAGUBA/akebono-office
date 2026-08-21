@@ -8634,6 +8634,24 @@ describe('顧客コンテキスト（customer_contexts + notes + AI リサーチ
     expect(ctx.vision).toBe('旧クライアントの反映')
     expect(ctx.businessNotes).toBe('旧クライアント互換で保持される事業メモ')
   })
+
+  it('反映 body の全項目が空はトランザクション内の検証で 400 になり、定性情報も research ノートも変化しない（原子性）', async () => {
+    const ctxBefore = await cctxApi('GET', `/v1/customer-contexts/${CCTX_COMPANY}`, { as: MEMBER })
+    const { rows: [cnt] } = await pool.query(
+      `SELECT count(*)::int AS n FROM customer_context_notes WHERE company_id = $1`, [CCTX_COMPANY])
+    const bad = await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/research/apply`, {
+      as: ADMIN,
+      body: { vision: '', challenges: '', strategyNotes: '', businessNotes: '',
+        sources: [{ title: '空反映の検証（デモ）', uri: 'https://example.com/empty-apply/' }] },
+    })
+    expect(bad.status).toBe(400)
+    expect(bad.json.error?.code).toBe('AKO-CTX-001')
+    const ctxAfter = await cctxApi('GET', `/v1/customer-contexts/${CCTX_COMPANY}`, { as: MEMBER })
+    expect(ctxAfter.json.data).toEqual(ctxBefore.json.data) // ROLLBACK = upsert が残らない
+    const { rows: [cnt2] } = await pool.query(
+      `SELECT count(*)::int AS n FROM customer_context_notes WHERE company_id = $1`, [CCTX_COMPANY])
+    expect(cnt2.n).toBe(cnt.n) // research ノートも作られない
+  })
 })
 
 // ---------- エージェント型チャット（改修依頼 2026-08-20。追記） ----------

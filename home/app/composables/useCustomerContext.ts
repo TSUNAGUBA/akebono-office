@@ -322,8 +322,10 @@ export function useCustomerContext() {
     }
     if (note.payload.revertedAt) return { ok: true, id: noteId } // すでに取消済み = no-op（冪等）
     // 復元値の構築は shared の単一実装（旧スナップショット = businessNotes キーなしは現在値を保持 =
-    // 原則7。判定の SoT を API と共有 = 原則3/6）
-    const before = restoreContextFromSnapshot(note.payload.before, contextOf(companyId)?.businessNotes ?? '')
+    // 原則7。判定の SoT を API と共有 = 原則3/6）。現在値は active に依らず行から読む
+    // （API の currentContextOf と同一の参照 = パリティ。contextOf は active フィルタ付きのため使わない）
+    const curRow = (ctxRows.value as CustomerContext[]).find(r => r.companyId === companyId)
+    const before = restoreContextFromSnapshot(note.payload.before, curRow?.businessNotes ?? '')
     const prevCtx = ctxRows.value
     const prevNotes = noteRows.value
     const now = nowJstIso()

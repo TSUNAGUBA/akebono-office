@@ -372,6 +372,7 @@ export function customerContextsRoutes(pool: pg.Pool, env: Env): Hono {
     const companyId = c.req.param('companyId')
     const company = await findCompany(pool, companyId)
     const b = await c.req.json().catch(() => ({})) as Record<string, unknown>
+    const has = (k: string) => Object.hasOwn(b, k)
     const sources = cleanSources(b.sources)
     assertValid(customerContextSourcesError(sources))
     const noteId = newId('cnote')
@@ -384,10 +385,10 @@ export function customerContextsRoutes(pool: pg.Pool, env: Env): Hono {
       // （事業メモを知らない旧クライアント〔配信窓〕の反映で '' 上書きしない = PUT と同一規則・原則7。
       //  現在値の読取は Tx 内 = 反映と原子的）
       const values = normalizeCustomerContext({
-        vision: Object.hasOwn(b, 'vision') ? String(b.vision ?? '') : before.vision,
-        challenges: Object.hasOwn(b, 'challenges') ? String(b.challenges ?? '') : before.challenges,
-        strategyNotes: Object.hasOwn(b, 'strategyNotes') ? String(b.strategyNotes ?? '') : before.strategyNotes,
-        businessNotes: Object.hasOwn(b, 'businessNotes') ? String(b.businessNotes ?? '') : before.businessNotes,
+        vision: has('vision') ? String(b.vision ?? '') : before.vision,
+        challenges: has('challenges') ? String(b.challenges ?? '') : before.challenges,
+        strategyNotes: has('strategyNotes') ? String(b.strategyNotes ?? '') : before.strategyNotes,
+        businessNotes: has('businessNotes') ? String(b.businessNotes ?? '') : before.businessNotes,
       })
       assertValid(customerContextError(values))
       const payload: CustomerContextNotePayload = { sources, before }

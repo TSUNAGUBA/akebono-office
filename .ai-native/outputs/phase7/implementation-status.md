@@ -4542,3 +4542,19 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
       いて誤読の火種 → 「反映前の事業メモ」/「取消時点の現在値（保持される事業メモ）」へ改名
     - R1 後検証: home 単体 535 / api 単体 507（非統合全件）/ 統合 311 / 両 typecheck /
       モック E2E 全 8 スイート green（batch5 = 11 チェック）
+  - R2（両ロール再レビュー。システム監査官 = **指摘ゼロ**〔R1 全 10 件の対応完了・新規不整合なしを
+    実行再現込みで確認〕・コードレビュアー = MAJOR/MINOR 0・NIT3）→ NIT 全件対応:
+    - レビュー NIT: R1 で検証を Tx 内へ移した apply の「検証 400 → ROLLBACK = 定性情報・ノートとも
+      変化しない」経路に直接の回帰テストがない → 統合テスト追加（全項目 '' の反映 = 400 AKO-CTX-001 +
+      コンテキスト不変 + ノート件数不変）
+    - レビュー NIT: revert の現在値の参照が mock = contextOf（active フィルタ付き）/ API =
+      currentContextOf（active 無視）と微差（現状 active=false になる経路がなく実挙動差なし = 潜在）→
+      mock を行の直接参照へ揃えてパリティを構造化
+    - レビュー NIT: apply の `Object.hasOwn` インライン 4 連が PUT の `has()` ヘルパーと書き分け →
+      同型へ統一（原則3）
+    - R2 のレビュアー検証（記録）: apply の Tx 内検証移動はエラー経路（ApiError → onError）・
+      レスポンス形状・HTTP 400 とも移動前と同一・client.release() は finally で漏れなし。
+      restoreContextFromSnapshot は置換前実装と文字単位で同値（typecheck 両通過）。batch5 の popup
+      ハンドリングはリンク先ナビゲーション失敗環境でも安定（page イベントは生成時発火）。
+      SEED_VERSION 27 の参照は home の useMockDb のみ
+    - R2 後検証: home 単体 535 / api 単体 507 / 統合 312 / 両 typecheck / モック E2E 全 8 スイート green
