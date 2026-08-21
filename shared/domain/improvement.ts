@@ -660,6 +660,22 @@ export function improvementNoteError(body: string): string | null {
   return null
 }
 
+/** 運用案内（「運用対応」遷移時の必須コメント）のメモ・通知共通の接頭辞（改善要望 2026-08-21） */
+export const OPERATIONAL_NOTE_PREFIX = '運用案内: '
+/** 運用案内の入力上限（メモ上限から接頭辞分を差し引いた実効値。UI の maxlength・検証メッセージと一致させる） */
+export const OPERATIONAL_NOTE_MAX = IMPROVEMENT_NOTE_CAP - [...OPERATIONAL_NOTE_PREFIX].length
+/** 運用案内のメモ・通知本文（接頭辞込み。記録 = SoT と通知の本文を常に同一にする） */
+export function operationalNoteBody(note: string): string {
+  return `${OPERATIONAL_NOTE_PREFIX}${note}`
+}
+/** 運用案内の上限検証（実効上限でメッセージを出す = 「2000 字以内なのに拒否」の矛盾を作らない）。エラーメッセージ | null */
+export function operationalNoteCapError(note: string): string | null {
+  if ([...note].length > OPERATIONAL_NOTE_MAX) {
+    return `運用案内は ${OPERATIONAL_NOTE_MAX} 文字までで入力してください（メモには「${OPERATIONAL_NOTE_PREFIX.trim()}」の接頭辞込みで記録されます）`
+  }
+  return null
+}
+
 export const IMPROVEMENT_COMMENT_CAP = 2_000
 
 /** 生要望コメント本文の検証（追加時。必須・上限）。エラーメッセージ | null */

@@ -30,6 +30,7 @@ import {
   isInternalPagePath,
   isOpenStatus,
   matchesImprovementFilter,
+  OPERATIONAL_NOTE_MAX,
   requestAdoptionOf,
   requestStatusOf,
 } from '~/types/improvement'
@@ -1442,6 +1443,7 @@ async function copyAndClose(): Promise<void> {
                 v-model="operationalNote"
                 class="textarea"
                 rows="3"
+                :maxlength="OPERATIONAL_NOTE_MAX"
                 placeholder="例: 設定 > 外部リンクから同じ導線を追加できます。手順: …"
               />
             </UiFormField>

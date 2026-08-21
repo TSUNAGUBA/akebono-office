@@ -54,6 +54,8 @@ import {
   improvementRevisitError,
   improvementTitleError,
   improvementUnclusterError,
+  operationalNoteBody,
+  operationalNoteCapError,
   matchesImprovementFilter,
   normalizeClusterPlan,
   normalizeImprovementImages,
@@ -679,12 +681,13 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
     if (to === 'operational' && !opsNote) {
       throw err('AKO-REQ-024', '運用対応にする場合は、運用方法の案内（note）を記載してください', 400)
     }
-    // メモ本文（接頭辞込み）は手動メモ追加と同じ上限検証（黙って切り詰めると
-    // 記録 = SoT と起票者への通知本文が乖離する。R2 監査 MINOR-2）
-    const opsNoteBody = to === 'operational' ? `運用案内: ${opsNote}` : ''
+    // 上限は接頭辞込みでメモ上限に収まる実効値で検証する（黙って切り詰めると記録 = SoT と
+    // 起票者への通知本文が乖離し〔R2 監査〕、メモ上限そのままのメッセージだと実効上限との
+    // 矛盾に見える〔R3 レビュー〕。検証・本文組み立てとも shared の共通関数 = mock と同一挙動）
+    const opsNoteBody = to === 'operational' ? operationalNoteBody(opsNote) : ''
     if (to === 'operational') {
-      const noteMsg = improvementNoteError(opsNoteBody)
-      if (noteMsg) throw err('AKO-REQ-008', noteMsg, 400)
+      const capMsg = operationalNoteCapError(opsNote)
+      if (capMsg) throw err('AKO-REQ-008', capMsg, 400)
     }
     // 実際に遷移した（= operational ならメモを記録した）ときだけ Tx 後の起票者通知を行う
     // （同一ステータス再送の no-op で「メモに残らない運用案内」が再通知されるのを防ぐ = R2 レビュー MINOR-1・原則2）
@@ -696,7 +699,9 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
       const from = rows[0]!.status
       // 同一ステータスの再送は no-op（resolved_at・updated_at を無用に上書きしない）。
       // 例外: deferred → deferred は再検討日の変更（リスケジュール）として受理し、
-      // 通知マーカーもリセットする（新しい期日で再通知 = 原則9.5 の選び直し導線）
+      // 通知マーカーもリセットする（新しい期日で再通知 = 原則9.5 の選び直し導線）。
+      // operational → operational で異なる note が添えられても破棄する（リトライ冪等を優先。
+      // 案内を更新したい場合は通常のメモ追加（POST /items/:id/notes）を使う = 設計判断）
       if (from === to && to !== 'deferred') {
         const { rows: same } = await db.query(`SELECT ${ITEM_COLS} FROM improvement_items WHERE id = $1`, [id])
         return same[0]
@@ -726,10 +731,13 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
          WHERE id = $1 RETURNING ${ITEM_COLS}`, [id, to])
       return out[0]
     })
-    await audit(pool, {
-      actorId: user.id, action: 'update', entity: 'improvement_items', entityId: id,
-      detail: `ステータス → ${status}${to === 'deferred' ? `（再検討日 ${revisitOn}）` : ''}`,
-    })
+    // 監査ログも実遷移時のみ（no-op 再送で「変更」の監査行を積まない = R3 レビュー）
+    if (transitioned) {
+      await audit(pool, {
+        actorId: user.id, action: 'update', entity: 'improvement_items', entityId: id,
+        detail: `ステータス → ${status}${to === 'deferred' ? `（再検討日 ${revisitOn}）` : ''}`,
+      })
+    }
     // 運用対応: 紐づく要望の起票者へ運用案内を通知する（改善要望 2026-08-21・レビュー R1 M-3。
     // メモ・要望コメントは管理者内の記録で起票者から見えないため、本人の通知（全文）で届ける =
     // 起票者はこれを確認して自分の要望を「解決済み」へ移す。主フロー成立後の補助処理 = 非ブロッキング（原則4）

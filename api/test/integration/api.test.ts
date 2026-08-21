@@ -7822,13 +7822,16 @@ describe('対応方針ステータス（運用対応/継続検討 = 改修依頼
         as: ADMIN, body: { status: 'deferred', revisitOn: '2026-10-01' },
       })
       expect((resched.json.data as ItemRow).revisitOn).toBe('2026-10-01')
-      // 運用対応は運用案内コメント必須（AKO-REQ-024 = 改善要望 2026-08-21）・上限超過は手動メモと同じ
-      // AKO-REQ-008（黙って切り詰めない = 記録と通知の本文乖離を作らない。R2 監査）
+      // 運用対応は運用案内コメント必須（AKO-REQ-024 = 改善要望 2026-08-21）・上限超過は AKO-REQ-008
+      // （黙って切り詰めない = 記録と通知の本文乖離を作らない。上限は接頭辞「運用案内: 」込みで
+      // メモ上限に収まる実効値 1994 字 = メッセージとも一致。R2 監査 + R3 レビュー）
       expect((await api('POST', '/v1/improvements/items/imp-t-defer/status', { as: ADMIN, body: { status: 'operational' } })).json.error?.code)
         .toBe('AKO-REQ-024')
-      expect((await api('POST', '/v1/improvements/items/imp-t-defer/status', {
-        as: ADMIN, body: { status: 'operational', note: 'あ'.repeat(2001) },
-      })).json.error?.code).toBe('AKO-REQ-008')
+      const overCap = await api('POST', '/v1/improvements/items/imp-t-defer/status', {
+        as: ADMIN, body: { status: 'operational', note: 'あ'.repeat(1995) }, // 素の 2000 字以内でも接頭辞込みで超過
+      })
+      expect(overCap.json.error?.code).toBe('AKO-REQ-008')
+      expect(overCap.json.error?.message).toContain('1994')
       // 継続検討 → 運用対応（結論）は可・deferred 以外への遷移でも revisit_on は保持（履歴保全 = クリアしない）
       const toOps = await api('POST', '/v1/improvements/items/imp-t-defer/status', {
         as: ADMIN, body: { status: 'operational', note: '設定画面から手動で変更できます' },
@@ -8014,17 +8017,20 @@ describe('日報の自動リマインド（runReportReminders = /jobs/report-rem
     await pool.query(`UPDATE members SET active = false WHERE id = 'm-rmd-target'`)
   })
 
-  it('機能 deny のメンバーには当該種別のリマインドを送らない（R2 = 0078 で実効化された deny と整合）', async () => {
-    // 週報 deny のメンバー: 提出手段が無くリンク先も 403 になるため週報リマインドは送らない。
-    // deny の無い月報は通常どおり届く（フィルタが種別単位で効いている確認）
+  it('機能 deny・提出（mine）タブ deny のメンバーには当該種別のリマインドを送らない（R2/R3 = 0078 で実効化された deny と整合）', async () => {
+    // DNY = 週報の機能 deny（提出手段が無くリンク先も 403）/ DNT = 月報の提出タブ deny（提出タブが出ない）。
+    // deny の無い種別は通常どおり届く = フィルタが種別・粒度単位で効いている確認
     const DNY = 'm-rmd-deny'
+    const DNT = 'm-rmd-deny-tab'
     await pool.query(`
-      INSERT INTO members (id, name, email, role, employment_type)
-      VALUES ('${DNY}', 'リマインド 権限外', 'rmd-deny@example.com', 'member', 'employee')
+      INSERT INTO members (id, name, email, role, employment_type) VALUES
+        ('${DNY}', 'リマインド 権限外', 'rmd-deny@example.com', 'member', 'employee'),
+        ('${DNT}', 'リマインド タブ権限外', 'rmd-deny-tab@example.com', 'member', 'employee')
       ON CONFLICT (id) DO UPDATE SET active = true`)
     await pool.query(`
-      INSERT INTO permission_rules (id, subject_kind, subject_id, resource, field, effect, active)
-      VALUES ('pr-test-rmd-deny', 'member', '${DNY}', 'weekly-report', NULL, 'deny', true)
+      INSERT INTO permission_rules (id, subject_kind, subject_id, resource, field, effect, active) VALUES
+        ('pr-test-rmd-deny', 'member', '${DNY}', 'weekly-report', NULL, 'deny', true),
+        ('pr-test-rmd-deny-tab', 'member', '${DNT}', 'monthly-report', 'tab:mine', 'deny', true)
       ON CONFLICT (id) DO UPDATE SET active = true`)
     clearPermissionCache()
     expect((await api('PUT', '/v1/configs/report-reminder', {
@@ -8037,14 +8043,20 @@ describe('日報の自動リマインド（runReportReminders = /jobs/report-rem
     try {
       const res = await runReportReminders(pool)
       expect(res.notified).toBeGreaterThan(0)
-      const mine = (await api('GET', '/v1/notifications', { as: DNY })).json.data as { kind: string; title: string }[]
-      expect(mine.filter(n => n.kind === 'reminder' && n.title === '週報リマインド').length).toBe(0)
-      expect(mine.filter(n => n.kind === 'reminder' && n.title === '月報リマインド').length).toBe(1)
+      const remindersOf = async (memberId: string) =>
+        ((await api('GET', '/v1/notifications', { as: memberId })).json.data as { kind: string; title: string }[])
+          .filter(n => n.kind === 'reminder')
+      const dny = await remindersOf(DNY)
+      expect(dny.filter(n => n.title === '週報リマインド').length).toBe(0) // 機能 deny の種別は届かない
+      expect(dny.filter(n => n.title === '月報リマインド').length).toBe(1) // deny の無い種別は届く
+      const dnt = await remindersOf(DNT)
+      expect(dnt.filter(n => n.title === '月報リマインド').length).toBe(0) // 提出タブ deny の種別は届かない
+      expect(dnt.filter(n => n.title === '週報リマインド').length).toBe(1)
     } finally {
-      await pool.query(`UPDATE permission_rules SET active = false WHERE id = 'pr-test-rmd-deny'`)
+      await pool.query(`UPDATE permission_rules SET active = false WHERE id IN ('pr-test-rmd-deny', 'pr-test-rmd-deny-tab')`)
       clearPermissionCache()
       await pool.query(`DELETE FROM app_configs WHERE key IN ('report-reminder', 'report-reminder-last-sent')`)
-      await pool.query(`UPDATE members SET active = false WHERE id = '${DNY}'`)
+      await pool.query(`UPDATE members SET active = false WHERE id IN ('${DNY}', '${DNT}')`)
     }
   })
 })

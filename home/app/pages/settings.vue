@@ -135,7 +135,9 @@ const REMINDER_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/
 // API モードで PUT 未解決中に別種別を操作しても、古いスナップショットの read-modify-write で
 // 先の変更が失われない（R2 レビュー指摘）。ドラフトは最後の保存が反映された時点で解除
 const savedReminder = computed(() => parseReportReminderConfig(getConfig('report-reminder', '')))
-const reminderDraft = ref<ReportReminderConfig | null>(null)
+// shallowRef 必須: 深い ref は読み返しが reactive Proxy になり、下の「=== next」同一性比較が
+// 常に false（ドラフトが永久残留 = 失敗時ロールバック不能）になる（R3 レビュー MAJOR）
+const reminderDraft = shallowRef<ReportReminderConfig | null>(null)
 const reportReminder = computed(() => reminderDraft.value ?? savedReminder.value)
 let reminderQueue: Promise<unknown> = Promise.resolve()
 

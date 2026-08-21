@@ -4316,4 +4316,17 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
       サーバー最新値基点に（API モードは refresh 後に採取）
     - 監査 NIT: screen-design のステータス列「未集約 = 未判定」へ実装追随 / §52 に廃止注記 /
       /requests/:id/status に archived_at IS NULL ガード（取消済み要望のステータスを API 直叩きで動かさない）
-  - R3（両ロール再レビュー）→ 結果は本行を更新して記録する
+  - R3（両ロール再レビュー。MAJOR 1・MINOR 2・NIT 5〔重複統合後〕）→ 全件対応:
+    - レビュー MAJOR: settings.vue の reminderDraft が深い ref のため「=== next」同一性比較が常に false
+      （ドラフト永久残留 = 失敗時ロールバック不能・以後のサーバー側変更もマスク）→ shallowRef 化
+    - レビュー MINOR/監査 NIT: 運用案内の実効上限（2000 − 接頭辞 6 = 1994 字）とエラーメッセージの乖離 →
+      shared に OPERATIONAL_NOTE_PREFIX / OPERATIONAL_NOTE_MAX / operationalNoteBody /
+      operationalNoteCapError を新設し API/mock/UI（maxlength）で共有・メッセージを実効上限と一致
+    - 監査 MINOR: 提出（mine）タブ deny のメンバーに R2 フィルタが効かない同型ギャップ →
+      canUseTab(feature, 'mine') を API/mock のフィルタへ追加 + F-48-2 追記 + 統合テスト（タブ deny 種別のみ止まる）
+    - レビュー NIT: no-op 再送でも audit が「変更」を記録 → transitioned でゲート / no-op で異なる note が
+      無言破棄される仕様を設計判断としてコメント化（案内の更新はメモ追加を使う）
+    - レビュー/監査 NIT: mock setRequestStatus に取消済みガード追加（API の archived_at IS NULL とパリティ）/
+      runReportReminders docblock の「全メンバー」旧記述を是正 / 手動リマインド（/remind）はフィルタ対象外の
+      設計判断をコメント + F-48-2 に明記
+  - R4（両ロール再レビュー）→ 結果は本行を更新して記録する

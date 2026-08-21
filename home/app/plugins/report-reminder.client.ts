@@ -11,7 +11,7 @@
  * - 判定・本文の純ロジックはサーバーと共有（shared/domain/report-reminder.ts）
  * - 失敗してもアプリ起動をブロックしない（原則4）
  */
-import { canUseFeature, resolveFeatureResource } from '../../../shared/domain/permissions'
+import { canUseFeature, canUseTab, resolveFeatureResource } from '../../../shared/domain/permissions'
 import {
   buildMonthlyReminderMessage, buildReminderMessage, buildWeeklyReminderMessage, hasSubmittedPeriodReport,
   lastCompletedWeekStart, lastMonthStart, missingReportDates, parseReminderLastSent,
@@ -37,12 +37,15 @@ export default defineNuxtPlugin(() => {
     const { tbl } = useMockDb()
     const activeMembers = tbl('members').value.filter(m => m.active)
     const { notify } = useNotifications()
-    // 機能 deny のメンバーへは送らない（deny 対象者には提出手段が無い = API runReportReminders と同一判定。
-    // ルール未設定は全員へ = 既定 allow）
+    // 機能 deny・提出（mine）タブ deny のメンバーへは送らない（deny 対象者には提出手段が無い =
+    // API runReportReminders と同一判定。ルール未設定は全員へ = 既定 allow）
     const permRules = tbl('permissionRules').value.filter(r => r.active)
-    const canUseReportFeature = (m: Member, feature: string): boolean =>
-      permRules.length === 0 || canUseFeature(
-        permRules, { memberId: m.id, title: m.title, role: m.role }, resolveFeatureResource(permRules, feature))
+    const canUseReportFeature = (m: Member, feature: string): boolean => {
+      if (permRules.length === 0) return true
+      const subject = { memberId: m.id, title: m.title, role: m.role }
+      return canUseFeature(permRules, subject, resolveFeatureResource(permRules, feature))
+        && canUseTab(permRules, subject, feature, 'mine')
+    }
 
     if (shouldFireReminder(config.daily, now, lastSent.daily ?? '', today)) {
       const dailyReports = tbl('dailyReports').value

@@ -57,6 +57,8 @@ import {
   normalizeImprovementLinks,
   normalizeImprovementPagePath,
   normalizeImprovementTags,
+  operationalNoteBody,
+  operationalNoteCapError,
   planAdoptionBulk,
   clusterTargetRequests,
   requestAdoptionOf,
@@ -390,11 +392,12 @@ export function useImprovements() {
     if (status === 'operational' && !opsNote) {
       return { ok: false, error: { code: 'AKO-REQ-024', message: '運用対応にする場合は、運用方法の案内を記載してください' } }
     }
-    // メモ本文（接頭辞込み）は手動メモ追加と同じ上限検証（黙って切り詰めない = API と同一。R2 監査 MINOR-2）
-    const opsNoteBody = status === 'operational' ? `運用案内: ${opsNote}` : ''
+    // 上限は接頭辞込みでメモ上限に収まる実効値で検証（shared 共通関数 = API と同一挙動・
+    // メッセージも実効上限と一致。R2 監査 / R3 レビュー）
+    const opsNoteBody = status === 'operational' ? operationalNoteBody(opsNote) : ''
     if (status === 'operational') {
-      const noteMsg = improvementNoteError(opsNoteBody)
-      if (noteMsg) return { ok: false, error: { code: 'AKO-REQ-008', message: noteMsg } }
+      const capMsg = operationalNoteCapError(opsNote)
+      if (capMsg) return { ok: false, error: { code: 'AKO-REQ-008', message: capMsg } }
     }
     if (isApi) {
       const res = await apiWrite(`/v1/improvements/items/${id}/status`, {
@@ -721,8 +724,13 @@ export function useImprovements() {
       return res.ok ? { ok: true, id } : res
     }
     const reqsRef = tbl('improvementRequests')
-    if (!reqsRef.value.some(r => r.id === id)) {
+    const target = reqsRef.value.find(r => r.id === id)
+    if (!target) {
       return { ok: false, error: { code: 'AKO-REQ-002', message: '対象の要望が見つかりません' } }
+    }
+    // 取消済み（論理削除）はステータスを動かさない（API の archived_at IS NULL ガードとパリティ = 原則6）
+    if (target.archivedAt) {
+      return { ok: false, error: { code: 'AKO-REQ-002', message: '取消済みの要望はステータスを変更できません（先に復元してください）' } }
     }
     reqsRef.value = reqsRef.value.map(r => (r.id === id ? { ...r, status } : r))
     commit()

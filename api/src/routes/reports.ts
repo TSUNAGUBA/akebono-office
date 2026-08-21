@@ -12,7 +12,7 @@ import { Hono } from 'hono'
 import type pg from 'pg'
 import { DEFAULT_WORKING_DAY_RULE, isWorkingDay } from '../../../shared/domain/business-day'
 import { addDays, isRealDateKey, jstClock, nowJstIso, todayJst } from '../../../shared/domain/jst'
-import { canUseFeature, canViewMemberReports, type PermissionSubject, reportReadsFeatureKey, resolveFeatureResource } from '../../../shared/domain/permissions'
+import { canUseFeature, canUseTab, canViewMemberReports, type PermissionSubject, reportReadsFeatureKey, resolveFeatureResource } from '../../../shared/domain/permissions'
 import {
   buildMonthlyReminderMessage, buildReminderMessage, buildWeeklyReminderMessage, hasSubmittedPeriodReport,
   lastCompletedWeekStart, lastMonthStart, missingReportDates, parseReminderLastSent, parseReportReminderConfig,
@@ -526,7 +526,10 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
     return c.json({ data: { id, status } })
   })
 
-  // 日報リマインド（管理者 → 未提出メンバーへ通知。home useReports.remind と同一挙動）
+  // 日報リマインド（管理者 → 未提出メンバーへ通知。home useReports.remind と同一挙動）。
+  // 自動リマインド（runReportReminders）の権限フィルタは適用しない = 設計判断: 管理者が対象を
+  // 選んで送る単発操作であり、deny メンバーへの誤送信は運用（権限表の確認）で気づける。
+  // 恒久ナグ化する cron 経路とはリスクが異なる（R3 監査 NIT で経路差を明示）
   app.post('/remind', async (c) => {
     requireAdmin(c)
     const body = await c.req.json().catch(() => ({})) as { memberId?: string; date?: string }
@@ -1077,7 +1080,8 @@ export function reportsRoutes(pool: pg.Pool, env?: Env): Hono {
  * - 送信済み管理 = app_configs 'report-reminder-last-sent'（種別ごとの最終送信日の upsert。旧形状 =
  *   単一日付は daily として読む）。shouldFireReminder が「設定時刻以降 & 今日未送信」を種別ごとに判定
  *   = 種別ごとに日次 1 回・再実行は再送しない（原則2）
- * - 対象 = 在籍中（active）の全メンバー。日報 = 前日までの直近 5 営業日（月〜金・祝日は考慮しない）に
+ * - 対象 = 在籍中（active）かつ当該機能・提出（mine）タブが deny でないメンバー（F-48-2 = 2026-08-21 R2/R3。
+ *   ルール未設定は全員）。日報 = 前日までの直近 5 営業日（月〜金・祝日は考慮しない）に
  *   提出済みが無い日 / 週報 = 先週（直近の完了週）未提出 / 月報 = 先月未提出
  * - external=false の種別はアプリ内通知のみ（notify の inAppOnly。種別ごとの外部通知設定 = 2026-08-21）
  * - notify は内部で失敗を握りつぶし、実行全体も try/catch（リマインドの失敗が cron を落とさない = 原則4）
@@ -1120,13 +1124,16 @@ export async function runReportReminders(pool: pg.Pool): Promise<{ notified: num
 
     const membersQ = await pool.query<{ id: string; title: string | null; role: PermissionSubject['role'] }>(
       `SELECT id, title, role FROM members WHERE active = true`)
-    // 機能 deny のメンバーへは送らない（deny 対象者には提出手段が無く、リンク先も AKO-PRM-001 403 の
-    // 行き止まりになる = R2 レビュー。判定は featureGuard と同じ resolveFeatureResource + canUseFeature。
-    // ルール未設定は従来どおり全員へ = 既定 allow）
+    // 機能 deny・提出（mine）タブ deny のメンバーへは送らない（deny 対象者には提出手段が無く、
+    // リンク先も 403 / タブ非表示の行き止まりになる = R2/R3 レビュー。判定は featureGuard /
+    // usePermissions.canTab と同じ共有関数。ルール未設定は従来どおり全員へ = 既定 allow）
     const permRules = await activePermissionRules(pool)
-    const canUseReportFeature = (m: { id: string; title: string | null; role: PermissionSubject['role'] }, feature: string): boolean =>
-      permRules.length === 0 || canUseFeature(
-        permRules, { memberId: m.id, title: m.title ?? '', role: m.role }, resolveFeatureResource(permRules, feature))
+    const canUseReportFeature = (m: { id: string; title: string | null; role: PermissionSubject['role'] }, feature: string): boolean => {
+      if (permRules.length === 0) return true
+      const subject = { memberId: m.id, title: m.title ?? '', role: m.role }
+      return canUseFeature(permRules, subject, resolveFeatureResource(permRules, feature))
+        && canUseTab(permRules, subject, feature, 'mine')
+    }
 
     if (fire.daily) {
       const window = reminderWindowDates(today)
