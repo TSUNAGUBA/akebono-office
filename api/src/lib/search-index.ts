@@ -14,6 +14,7 @@
  */
 import { createHash } from 'node:crypto'
 import type pg from 'pg'
+import { KB_DOCS, kbSearchText } from '../../../shared/domain/kb'
 import { bigramCoverage } from '../../../shared/domain/text-match'
 import type { Env } from '../env'
 import { capCp } from './text'
@@ -32,7 +33,7 @@ export interface SearchSegment {
 }
 
 export interface SearchDocInput {
-  sourceKind: 'company' | 'contact' | 'industry' | 'knowledge' | 'project' | 'note' | 'document' | 'customer-log'
+  sourceKind: 'company' | 'contact' | 'industry' | 'knowledge' | 'project' | 'note' | 'document' | 'customer-log' | 'manual'
   sourceId: string
   title: string
   aliases: string[]
@@ -59,6 +60,9 @@ export const TITLE_CHECKS: Record<SearchDocInput['sourceKind'], SegmentCheck> = 
   knowledge: { entity: 'knowledge', field: 'title' },
   project: { entity: 'projects', field: 'name' },
   'customer-log': { entity: 'customer_logs', field: 'title' },
+  // アプリ利用マニュアル・仕様（shared/domain/kb = 改修依頼 2026-08-21）は全員が参照できる公開情報 =
+  // 権限チェック対象の実エンティティを持たない（renderer は manual を permission チェックの対象外にする）
+  manual: { entity: '', field: '' },
 }
 
 const seg = (text: string, ...checks: SegmentCheck[]): SearchSegment => ({ text, checks })
@@ -346,6 +350,21 @@ export async function buildSearchDocs(pool: pg.Pool): Promise<SearchDocInput[]> 
     })
   }
 
+  // ---- アプリ利用マニュアル・仕様（shared/domain/kb = コード内 SoT。改修依頼 2026-08-21） ----
+  // AI チャットボットが「アプリの使い方・仕様」の質問へ根拠付きで回答するための RAG 素材。
+  // 全員が参照できる公開情報（ownerMemberId = null・segments に権限チェックなし）。
+  // KB_DOCS の変更はデプロイ時の再生成（起動時 rebuild = 原則1）で body_hash 差分だけが upsert される
+  for (const kb of KB_DOCS) {
+    docs.push({
+      sourceKind: 'manual',
+      sourceId: kb.id,
+      title: kb.title,
+      aliases: kb.keywords,
+      segments: [seg(capCp(kbSearchText(kb), 4000))],
+      ownerMemberId: null,
+    })
+  }
+
   return docs
 }
 
@@ -501,6 +520,10 @@ export async function searchDocsFor(
   forMemberId: string,
   limit = 4,
   noteOwnerIds: string[] = [],
+  // 照合対象の source_kind を限定する（省略 = 全種別）。AI 社員のドキュメント材料のように特定種別だけ
+  // 欲しい呼び出しが、字句一致の強い他種別（例: 'manual' = アプリマニュアル 50 件）に上位を占められて
+  // 「取得後の絞り込みで 0 件」にならないための SQL 段の絞り込み（R1 レビュー 2026-08-21）
+  kinds?: SearchDocInput['sourceKind'][],
 ): Promise<SearchHit[]> {
   const { rows } = await pool.query<{
     sourceKind: SearchDocInput['sourceKind']; sourceId: string; title: string
@@ -510,9 +533,10 @@ export async function searchDocsFor(
     `SELECT source_kind AS "sourceKind", source_id AS "sourceId", title, aliases, body, segments, embedding,
             owner_member_id AS "ownerMemberId", links
      FROM search_docs
-     WHERE owner_member_id IS NULL OR owner_member_id = $1
-        OR (source_kind = 'note' AND owner_member_id = ANY($2::text[]))
-     ORDER BY id LIMIT 3000`, [forMemberId, noteOwnerIds])
+     WHERE (owner_member_id IS NULL OR owner_member_id = $1
+        OR (source_kind = 'note' AND owner_member_id = ANY($2::text[])))
+       AND ($3::text[] IS NULL OR source_kind = ANY($3::text[]))
+     ORDER BY id LIMIT 3000`, [forMemberId, noteOwnerIds, kinds && kinds.length > 0 ? kinds : null])
   // 全件を都度メモリへ載せる設計は SME 規模（〜数千件）前提。上限超過時も ORDER BY id で
   // 決定的な部分集合になる。件数がこの規模を超える場合は pgvector 等への移行を検討する
   if (rows.length === 0) return []

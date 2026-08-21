@@ -4338,3 +4338,137 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
   - R5（最終収束確認）→ **指摘ゼロ（MAJOR 0 / MINOR 0 / NIT 0）で収束**。R4 対応の副作用
     （restore フロー・reject 連鎖・ドロワー再開閉・タブ判定経路・境界テストの実効性）も個別確認済み。
     最終検証: home 単体 484 / api 単体 481 / 統合 306 / 両 typecheck / nuxi generate 全通過
+
+## 103. 改善要望に基づく改修依頼 2026-08-21（4 改修単位 = 受付箱の対象箇所・設定タブ化+監査ログ・AI 知識ベース強化・ステータス管理再編）の完了条件（Definition of Done）
+
+対象: home + api + shared/domain。マイグレーション 0080（ステータス v2 = requests/items の CHECK 差替 + revisit/resolved_at/assignee 列）・0081（audit_logs インデックス）・0082（search_docs 'manual' + ai_assessment）。
+
+### 103-1 受付箱の「対象箇所」表示・編集（単位1）
+- [x] 受付箱一覧（管理者テーブル・一般リスト・モバイルカード）に「対象箇所」列を追加（列順 = 対象ページ → 対象箇所 → 要望。空 = 「—」）。
+- [x] 詳細ドロワーの編集フォーム（`ImprovementsRequestEditForm`）へ対象箇所の編集欄を追加（`improvementRequestEditFields` に targetSpot = 部分更新・上限 `IMPROVEMENT_TARGET_SPOT_CAP`。監査ログの変更項目ラベルに「対象箇所」）。
+- [x] mock 経路の editRequest も targetSpot を適用（API とのパリティ = 原則6。レビューで検出した適用漏れを修正）。
+- [x] 改修プロンプトの要望行に対象箇所を併記（`［ページ / 箇所］`）= AI が改修対象の箇所を特定できる。
+
+### 103-2 設定画面のタブ化 + 監査ログ（単位2）
+- [x] `/settings` を 3 タブへ再編（システム設定 / 運用設定 / 監査ログ = `UiTabBar` + `useRouteTabSync`。`?tab=` ディープリンク可・既存セクションは 2 タブへ再配置 = 機能後退なし）。
+- [x] 監査ログタブ（`SettingsAuditLogPanel`）: 操作日時（秒まで）/操作ユーザー（メンバー名解決）/操作対象ページ/操作対象データ/操作内容の列 + ページング 20 件/頁。
+- [x] フィルタ 5 種 = 期間（date 2 欄）+ ユーザー/ページ/データ/内容の各プルダウン（`UiCombobox` オートコンプリート・allowCreate なし）。適用中件数バッジ + 一括クリア。
+- [x] 語彙カタログ `shared/domain/audit-log` を新設（action 16 種・entity 86 種のラベル + 操作対象ページ対応 = 両モード共通の SoT。mock の camelCase entity は normalizeAuditEntity で正規化 = 原則6）。
+- [x] API: GET /v1/configs/audit-logs をサーバーページング + フィルタへ拡張（limit 既定 20・上限 500 / offset / q / f.actor / f.action / f.entity / f.page〔カタログ展開・other = 否定〕/ f.at.from・to〔JST 日付キー・不正は黙って無視 = 原則4〕。`{data, total}` = 既存呼び出し互換 = 原則7）。0081 で at DESC / actor_id インデックス。
+
+### 103-3 AI 機能の知識ベース強化（単位3）
+- [x] ナレッジベース `shared/domain/kb` を新設（アプリ仕様 spec / 操作マニュアル user-guide / 運用マニュアル ops-guide / FAQ = 計 50 ドキュメントの TS データモジュール。KB_DOCUMENT_FORMAT メタ + keywords = AI が利用しやすい構造化データ。コードと同期してデプロイで更新 = 手動運用なし〔原則1〕）。
+- [x] 決定的字句検索 `kbFindRelated`（タイトル 0.5 / キーワード 0.3 / 本文 bigram 0.2 の重み・閾値 KB_MIN_SCORE）= mock/API 共通の照合ロジック（原則6）。
+- [x] チャットボットの RAG 接続: API = search_docs へ source_kind 'manual' として取込（0082。埋め込み + 字句の両検索が効く・`app_manual` ツール + 使い方系キーワードの文脈ブロック）/ mock = answerManual（kbFindRelated 直照合）。使い方・操作系の質問にマニュアルを根拠として回答。
+- [x] 受付箱の AI 判定: 要望ごとに「既存機能で対応可 / 運用の工夫で対応可 / 改修が必要 / 判定不能」を判定（POST /requests/:id/assess = Vertex `generateJson` → `normalizeAssessment`〔verdict allowlist・docIds 実在検証〕→ 決定的ヒューリスティックへフォールバック。ai_assessment jsonb へ保管 = 再判定で上書き）。
+- [x] UI: 一覧の AI 判定列（バッジ/未判定）+ ドロワーの判定カード（根拠・参照ドキュメント名・推奨アクション +「推奨アクションを適用」= 状態機械の遷移へ接続。運用対応は判定根拠を運用案内の下書きへ）+ 一括変更バーの「まとめて AI 判定」（逐次・部分成功報告 = 原則4）。
+
+### 103-4 受付箱・改修案件のステータス管理再編（単位4）
+- [x] 受付箱: 選別（採用/不採用）+ 進捗タグを 1 本の状態機械へ再編（保存値 = unconfirmed/reviewing/planned/operational/deferred/dismissed の基底 6 値 + 表示専用の 対応済み〔item 連動導出〕・解決済み〔resolvedAt オーバーレイ〕= `improvementInboxStatusOf`。0080 で CHECK 差替・投稿初期値 = 未確認）。
+- [x] 遷移 = 未確認 → 検討中 → 改善対応/運用対応/継続検討/対応見送り・各終端 → 検討中の戻り（`IMPROVEMENT_INBOX_NEXT`・機械外 AKO-REQ-006・集約済み AKO-REQ-013・解決済み AKO-REQ-025 = 先に取消）。
+- [x] 運用対応 = 運用案内必須（AKO-REQ-024）→ コメントへ「運用案内: 」記録 + 起票者へ全文通知（?req= ディープリンク）。継続検討 = 再検討日必須（AKO-REQ-023）+ 到来で管理者リマインド（要望 + 旧 deferred 案件の両方を走査 = 原則7。revisit_notified_on で冪等 = 原則2）。
+- [x] 解決済み = 起票者本人の確認操作（運用対応/対応済みのみ = AKO-REQ-026・管理者は代行可）。resolvedAt オーバーレイ = 基底ステータスを上書きせず取消で戻る（原則9.5）。旧 status='resolved' は unresolve 時のみ新語彙へ書換（唯一の保存値変更 = 設計判断を docblock 化）。
+- [x] 改修案件: 未対応 → 対応中（担当者アサイン・一覧/カンバン/ガントに表示）→ 対応済 の 3 状態へ再編（`IMPROVEMENT_ITEM_NEXT`・reopen 可。旧 7 値は `improvementItemViewOf` で読み替え = 保存値不変・原則7。旧語彙の投入は AKO-REQ-005 = 受付箱へ移管）。担当者はステータスと独立に変更・解除可（editItem assigneeMemberId・AKO-REQ-027）。
+- [x] 対応済 → 紐づく要望を「対応済み」へ導出（GET /requests の linkedItemStatus JOIN = 非管理者も自分の要望の完了を判別）+ 起票者へ通知。AI 集約対象 = 「改善対応」のみ（旧 adopted も対象 = 原則7）・プロンプト既定 = 未対応のみ。
+- [x] カンバン/ガント: 受付箱 = 8 列の受付箱ステータス軸（継続検討カードに再検討日バッジ）/ 改修案件 = 3 列 + 担当者バッジ・ガント 3 色 + 担当者名併記。サマリーカード = 受付箱 8 + 案件 3。
+- [x] 一括変更（旧一括選別の後継 = 検討中/改善対応/対応見送り/未確認に戻す。運用対応・継続検討は行ごと入力のため対象外 = AKO-REQ-028）+ まとめて AI 判定。
+- [x] 下位互換（原則7）: 0080 は CHECK 差替のみ = 既存行の書換なし（0073 の前例に整合）。旧 adoption/open/resolved・旧 item 7 値は読み時正規化。デモシード（seed/misc.ts）は新語彙の全ステータスを網羅するデモへ刷新。
+
+### 103-5 検証（受入基準）
+- [x] `npm run build`（home nuxt generate / api tsc）・`npx nuxi typecheck`・api `tsc --noEmit` 全通過
+- [x] 単体: home vitest / api vitest（improvement 新モデル・audit-log・kb・assess のテストを新規/書換）
+- [x] 統合（実 PostgreSQL）: 改善要望 describe を新モデルへ全面書換（状態機械・resolve/assess・3 状態 items・リマインド・監査ログの paging/filter 追加）+ 旧テスト（プロンプト既定/対応方針/本人 resolved）を新仕様・移管検証へ更新
+- [x] モックモード E2E（run-mock-stack.sh = PR テストゲートと同一）: 既存 6 スイートを新 UI へ追随更新 + 新規 batch4-e2e（対象箇所・設定 3 タブ+監査ログフィルタ・AI 判定・チャットボットのマニュアル回答・受付箱/案件の状態機械と取消フロー・モバイル 375px）= 全スイート green
+- [x] モバイル 375px: /improvements・/settings で横スクロールなし（E2E で自動検証）
+- [x] ドキュメント: data-design / api-design / screen-design / CONVENTIONS（早見表 + 部品在庫）/ 本ファイル §103
+
+### 103-6 反復レビュー（原則9 = SP-8）
+- 反復記録:
+  - R1（コードレビュアー MINOR3/NIT4・システム監査官 MINOR3/NIT2。重複 2 件を統合 = 計 MINOR4/NIT5）→ 全件対応:
+    - 両 MINOR: 投稿者本人（非管理者）が呼べる単一行エンドポイント（投稿 201 / edit / archive / restore /
+      resolve の RETURNING）に管理系トリアージ状態（aiAssessment・adoption・excludedItemIds）が載り、
+      一覧 GET で伏せた情報が本人操作の応答から漏れる → `stripTriageFields` + `requireOwnerOrManage`
+      ヘルパーを新設し全該当応答へ適用（管理者は従来どおり）。統合テストで本人応答の非含有・管理者応答の
+      含有を固定
+    - 両 MINOR: useImprovements.editRequest（API 分岐）が /edit の RETURNING（JOIN なし）で行を丸ごと
+      置換し `linkedItemStatus` を喪失 → 非管理者（refresh しない）の集約済み要望が編集直後に
+      「対応済み」→「改善対応」へ退行 → resolve/assess と同じく既存キャッシュから引き継ぐマージへ
+    - レビュー MINOR: AI 社員のドキュメント材料（searchDocsFor 上位 6 件 → document 絞り込み）が
+      新設の 'manual' 50 件に上位を占められ空になる → searchDocsFor に kinds（SQL 段の種別絞り込み）を
+      追加し ai-company は ['document'] を指定
+    - 監査 MINOR: 集約解除の確認ダイアログ・トースト・docblock が旧語彙（「採用済み（集約待ち）」
+      「採用済みを AI で集約」）のまま = 存在しないボタン名の案内 → 「改善対応（集約待ち）」へ改稿
+    - レビュー NIT → ガード化: 解決済み（resolvedAt / 旧 status='resolved'）の要望の集約解除は
+      「集約待ちに戻る」案内が嘘になる（generate の resolved_at IS NULL 条件で対象外）→
+      `improvementUnclusterError` に AKO-REQ-025（先に解決の取消）を追加（判定順 = 取消済みの後・
+      item ガードの前。単体 + 統合テストで固定）
+    - レビュー NIT: 推奨アクション適用ボタンが「すでに推奨状態」でも表示され押しても無反応 →
+      canApplyRecommended から同状態を除外（非表示化）
+    - レビュー NIT: mock の継続検討リマインドが「同じ再検討日の再設定」で再通知しない（API は
+      revisit_notified_on リセットで再通知 = パリティ欠け）→ mock の deferred 遷移で通知済みマーカーを削除
+    - レビュー NIT: mock の editItem が見出し（title）を検証せず空見出しを黙って保存（API は AKO-REQ-003）→
+      shared `improvementTitleError` を mock 分岐でも適用
+    - 監査 NIT: 担当者のみ変更（遷移なし）の監査 detail が「ステータス → 対応中」と遷移があったように
+      読める → 「担当者を変更（担当者: X）」へ分岐
+    - 監査 NIT: 内部コメントの旧・選別語彙残置（useImprovements / shared / usePermissions）→ 新語彙へ更新
+    - R1 後検証: home 単体 530 / api 単体 505（`vitest run test/unit` は 503 = `test/crypto.test.ts` の 2 件が
+      unit ディレクトリ外。以後の記録は非統合全件〔`--exclude test/integration`〕で数える = R3 監査の指摘で
+      スコープを明記・訂正）/ 統合 309 / 両 typecheck / モック E2E 全スイート green
+  - R2（両ロール再レビュー。コードレビュアー MINOR3/NIT2・システム監査官 MINOR2/NIT3。監査ログ索引は重複統合 =
+    計 MINOR4/NIT4）→ 全件対応:
+    - 両指摘 MINOR/NIT: 監査ログの期間絞り込みが列への式適用（`(at AT TIME ZONE …)::date >= $P`）のため
+      0081 の (at) インデックスが効かず、追記で単調増大する audit_logs で全表走査になる →
+      JST 0 時を timestamptz 化した範囲比較（`at >= $P::date::timestamp AT TIME ZONE …` /
+      `at < ($P::date + 1)::…`）へ書き換え（sargable = 既存インデックスが効く。意味は同一 = 統合テスト green）
+    - レビュー MINOR: R1 の AKO-REQ-025（解決済みは集約解除不可）がボタン表示条件に未反映 =
+      解決済み + reopen 済み item の要望で解除ボタンが出て確認後に 409 → 受付箱ドロワー・改修案件
+      ドロワー元要望カードの両ボタンを resolved 非表示化 + 「先に解決済みを取り消す」案内を表示
+      （ボタン表示と検証の一致）
+    - レビュー MINOR: 旧データ（status='open'）の adoption を非管理者応答から剥がすと、表示ステータスの
+      導出材料が欠けて同じ要望が閲覧者・モードで別ステータスに見える（旧・不採用が起票者にだけ「未確認」）→
+      stripTriageFields は旧行（status='open'）の adoption を残す例外を追加（新モデルでは選別相当の判断は
+      基底ステータスとして全員公開のため方針と矛盾しない）。一覧 GET も同ヘルパーへ一本化（原則3）+ 統合テスト
+    - 監査 MINOR: 運用案内の本人到達が system 通知のみに依存（通知マトリクスで OFF にした起票者は案内を
+      読む手段がなく解決確認フローを完遂できない）→ GET /request-comments に「自分の要望 + requestId 指定」の
+      非管理者分岐を追加（「運用案内: 」接頭辞のコメントのみ返す = 管理検討コメントの開示方針は不変）。
+      要望ドロワーの「解決の記録」に運用案内を表示（mock = ローカル照合 / API = ドロワー表示時の遅延ロード。
+      案内文の「通知でお知らせしています」断定も改稿）+ 統合テスト（本人 = 運用案内のみ・requestId なし
+      403・他人 403）
+    - 監査 MINOR: api-design のチャットボット供給網羅に app_manual ツール / manual 文脈ブロックの記述漏れ →
+      追記（data-design・§103-3 との不整合解消）
+    - レビュー NIT: 旧語彙の filter 値（accepted/committed 等）が受理されるが常に 0 件（「下位互換で受理」の
+      記述と乖離）→ shared `normalizeImprovementFilter` を新設し /items・/prompt で正規化（単体 + 統合テスト）
+    - レビュー NIT: editItem（assigneeMemberId のみの更新）の監査 detail が「改修単位を編集」の汎用文言 →
+      「担当者を変更（担当者: X／解除）」へ分岐（status ルートの R1 分岐と同型）
+    - 監査 NIT: 配信窓（API 先行 → 旧フロント）で旧「選別」操作が一時的に失敗する旨を deploy-guide の
+      配信順序注記へ追記（読み取り互換・データ破壊なし = 現状容認の記録）
+    - R2 後検証: home 単体 531 / api 単体 506（非統合全件。R3 監査の指摘でスコープ訂正）/ 統合 309 /
+      両 typecheck / モック E2E 全スイート green
+  - R3（収束確認。コードレビュアー = MAJOR/MINOR 0・NIT1〔持ち越し事象〕・システム監査官 = MINOR3/NIT2）→ 全件対応:
+    - 監査 MINOR → 恒久化: 運用案内の本人開示が「運用案内: 」接頭辞照合のため、管理者が同接頭辞で始まる
+      手動コメント（既存案内をコピーした改訂草稿の検討等）を書くと未確定の草稿が起票者へ開示される →
+      **0083** で `improvement_request_comments.kind`（'ops'/'comment'・既定 'comment'）を追加し、
+      operational 遷移の自動記録のみ kind='ops'・本人分岐は kind='ops' に限定（運用案内の自動記録は
+      本改修で新設 = 旧データに ops 相当行はなくバックフィル不要）。mock・seed も kind を保存 +
+      統合テスト（接頭辞つき手動コメントが本人へ返らないこと）で固定
+    - 監査 MINOR: R2 挙動変更のドキュメント追随漏れ（data-design の improvement_request_comments 認可
+      記述「本人向け閲覧導線は残課題」+ 旧・選別語彙、shared 型 docstring の同記述）→ R2 後の実態
+      （本人 = 運用案内のみ取得可・一般コメントは意図的に未開示）へ改稿
+    - 監査 MINOR: §103-6 の api 単体件数がテスト実行スコープの取り違えで実測と不一致（記録 503/504 vs
+      非統合全件 505/506 = unit ディレクトリ外の crypto.test.ts 2 件）→ R1/R2 の記録をスコープ明記のうえ訂正
+    - 監査 NIT: CONVENTIONS 早見表の setRequestStatus シグネチャ誤記（named オプション風 → 実体は
+      positional `(id, base, revisitOn?, note?)`）→ 訂正
+    - 監査 NIT: 解決の記録の案内文が運用案内 0 件（取消直後・ロード失敗）でも「上記」を指す → 表示有無で
+      文言を出し分け + screen-design に「案内の訂正は検討中へ戻して再度運用対応」の運用を明記
+    - レビュー NIT（持ち越し事象）: `isRealDateKey` が年 0000 を許容し PostgreSQL の ::date が
+      out of range → 500（旧述語でも同挙動 = 本改修の回帰ではない・全利用箇所共通）→ shared ヘルパーに
+      下限（0001-01-01）を追加 + 単体テスト
+    - R3 のレビュアー検証（記録）: 監査ログ期間述語の新旧同値性を実機で確認（JST 0 時境界 + 30 年範囲の
+      ランダム 20,000 件で不一致 0・EXPLAIN で Index Cond 適合）
+    - R3 後検証: home 単体 531 / api 単体 506（非統合全件）/ 統合 309（0080〜0083 適用込み）/
+      両 typecheck / モック E2E 全スイート green
+  - R4（最終収束確認）→ **指摘ゼロ（MAJOR 0 / MINOR 0 / NIT 0）で収束**。R3 の 6 修正
+    （0083 kind 判別の冪等性・配信窓の両方向互換・mock 旧データ互換・isRealDateKey 下限の影響範囲・
+    ドキュメント/記録整合）の副作用なしを個別確認。4 ラウンド累積 diff の俯瞰でも状態機械・ガード・
+    集約条件の shared/API/mock 三者一致、0080 CHECK の全書込パス包含、旧 /adoption 参照の残置なしを確認。
+    最終検証: home 単体 531 / api 単体 506 / 統合 309 / 両 typecheck / モック E2E 全スイート green

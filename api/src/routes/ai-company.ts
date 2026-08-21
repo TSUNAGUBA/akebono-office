@@ -272,7 +272,9 @@ async function prepareStepExecution(
     const allow = (check: () => boolean): boolean => rules.length === 0 || (subject !== null && check())
     if (allow(() => canUseFeature(rules, subject!, 'documents'))) {
       const titleCheck = TITLE_CHECKS.document
-      const docHits = (await searchDocsFor(pool, env, `${task.title} ${step.title}`, task.requesterId, 6))
+      // kinds=['document'] で SQL 段から保管ドキュメントに限定する（'manual'〔アプリマニュアル〕等の
+      // 字句一致が強い他種別が上位 6 件を占めて材料が空になるのを防ぐ = R1 レビュー 2026-08-21）
+      const docHits = (await searchDocsFor(pool, env, `${task.title} ${step.title}`, task.requesterId, 6, [], ['document']))
         .filter(h => h.sourceKind === 'document')
         .filter(() => allow(() => canViewField(rules, subject!, titleCheck.entity, titleCheck.field)))
         .slice(0, 3)

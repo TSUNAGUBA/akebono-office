@@ -28,6 +28,7 @@ import { Hono } from 'hono'
 import type pg from 'pg'
 import { fiscalMonthsOf, fiscalYearOf } from '../../../shared/domain/fiscal'
 import { nowJstIso, todayJst } from '../../../shared/domain/jst'
+import { kbFindRelated } from '../../../shared/domain/kb'
 import { findCompanyIn, SELF_COMPANY_PATTERN } from '../../../shared/domain/name-match'
 import {
   aiAllowedOwnerIds, canAiReferenceOwner, canUseFeature, canViewField,
@@ -99,7 +100,7 @@ function findMentionedIn<T extends { name: string; aliases?: string[] | null }>(
 export type ContextBlockKey =
   | 'attendance' | 'reports' | 'member' | 'workflow' | 'shift' | 'decision' | 'tasks'
   | 'escalation' | 'ai-company' | 'sales' | 'status' | 'akebono' | 'company' | 'industry'
-  | 'department' | 'contact' | 'projects' | 'links' | 'knowledge' | 'search'
+  | 'department' | 'contact' | 'projects' | 'links' | 'knowledge' | 'search' | 'manual'
 
 export async function buildContext(
   pool: pg.Pool,
@@ -701,6 +702,18 @@ export async function buildContext(
     })
   }
 
+  // アプリ利用マニュアル・仕様（shared/domain/kb = RAG。改修依頼 2026-08-21）。
+  // 「使い方・操作手順・仕様」の質問へマニュアルを根拠に回答する。検索は決定的な字句検索
+  // （kbFindRelated = mock チャットボットと同一ロジック・原則6）。全員が参照できる公開情報のため
+  // 権限ガードなし。キーワードゲートは利用方法系の語のみ（エージェントは app_manual ツールで明示要求）
+  if (wants('manual', /使い方|操作|手順|マニュアル|やり方|どうやって|どこから|方法|仕様/.test(topic))) await block(async () => {
+    const hits = kbFindRelated(question.trim() || topic, 3)
+    if (hits.length === 0) return
+    for (const h of hits) renderedKeys.add(`manual:${h.doc.id}`)
+    parts.push(`## アプリのマニュアル・仕様（AKEBONO Home 公式ドキュメント）\n${hits.map(h =>
+      `### ${h.doc.title}（${h.doc.id}）\n${capCp(h.doc.body, 1600)}`).join('\n')}`)
+  })
+
   // ナレッジ全文検索（タイトル・本文の部分一致。上位 3 件。% _ はリテラル扱いにエスケープ）
   if (wants('knowledge', true)) await block(async () => {
     const terms = topic.replace(/[？?。、！!]/g, ' ').split(/\s+/).filter(t => t.length >= 2).slice(0, 5)
@@ -766,10 +779,14 @@ export async function buildContext(
       // 顧客活動の混入防止（会社紐付けのみ）: 今回の顧客に解決されたら別顧客の記録を除外
       if (h.sourceKind === 'customer-log'
         && mentionedCompanyId && h.links.companyId && h.links.companyId !== mentionedCompanyId) continue
-      const titleCheck = TITLE_CHECKS[h.sourceKind]
-      if (!canField(titleCheck.entity, titleCheck.field)) continue
+      // マニュアル（manual）は全員が参照できる公開情報 = 権限チェック対象外（TITLE_CHECKS はダミー値）
+      if (h.sourceKind !== 'manual') {
+        const titleCheck = TITLE_CHECKS[h.sourceKind]
+        if (!canField(titleCheck.entity, titleCheck.field)) continue
+      }
       const segLines = (h.segments ?? [])
-        .filter(s => (s.checks ?? []).every(ch => canField(ch.entity, ch.field)))
+        .filter(s => h.sourceKind === 'manual'
+          || (s.checks ?? []).every(ch => canField(ch.entity, ch.field)))
         .map(s => s.text)
       if (h.sourceKind === 'document') docHitIds.push(h.sourceId)
       lines.push(`### ${h.title}\n${capCp(segLines.join('\n'), 600)}`)
@@ -840,6 +857,22 @@ const AGENT_TOOLS: AgentToolDef[] = [
     },
     only: ['knowledge', 'search'],
     label: a => `社内データ検索（${capCp(argStr(a, 'query'), 20)}）`,
+    questionOf: a => argStr(a, 'query'),
+    requiredArg: 'query',
+  },
+  {
+    decl: {
+      name: 'app_manual',
+      description: 'AKEBONO Home（このアプリ）の公式マニュアル・仕様の検索（操作手順・使い方・機能の有無・'
+        + '運用方法・設定方法・トラブルシューティング）。アプリの使い方や仕様に関する質問はまずこれを使う',
+      parameters: {
+        type: 'object',
+        properties: { query: { type: 'string', description: '検索語（知りたい操作・機能・症状）' } },
+        required: ['query'],
+      },
+    },
+    only: ['manual'],
+    label: a => `アプリのマニュアル（${capCp(argStr(a, 'query'), 20)}）`,
     questionOf: a => argStr(a, 'query'),
     requiredArg: 'query',
   },
@@ -982,6 +1015,8 @@ const AGENT_SYSTEM = (userName: string, today: string): string =>
   + '- 会話の流れ（履歴）から質問の意図を解釈し、回答に必要な社内データをツールで取得してから回答する。'
   + '複数ツールの組み合わせ・結果を踏まえた追加取得（深掘り）も積極的に行う\n'
   + '- 社内の事実はツールで取得した内容だけを根拠にする（推測や一般知識で社内の事実を述べない）\n'
+  + '- このアプリ（AKEBONO Home）の使い方・操作手順・機能の有無・仕様に関する質問は、まず app_manual で'
+  + '公式マニュアル・仕様を検索し、その内容を根拠に回答する（画面パスもマニュアル記載のものを案内できる）\n'
   + '- 見つからない場合は、何をどう探したかを添えて「見つからなかった」と正直に伝える'
   + '（無関係な情報で埋め合わせない）\n'
   + '- 日本語の丁寧語で簡潔に回答する。画面パス（/attendance 等）の案内はツール結果に含まれるもののみ使う\n'

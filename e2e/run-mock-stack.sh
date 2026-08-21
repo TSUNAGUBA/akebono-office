@@ -16,6 +16,7 @@ MOCK_SUITES=(
   "activity-pages-e2e.cjs"
   "batch2-e2e.cjs"
   "batch3-e2e.cjs"
+  "batch4-e2e.cjs"
   "improvements6-e2e.cjs"
   "activity-cases-e2e.cjs"
 )

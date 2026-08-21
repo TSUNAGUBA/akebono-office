@@ -1,28 +1,29 @@
 <script setup lang="ts">
 /**
- * 改善要望のカンバン表示（F-42）。ステータス別の列に改修単位カードを並べ、進捗・状況を一望する。
+ * 改修案件のカンバン表示（F-42 → 3 状態再編 = 改修依頼 2026-08-21）。
+ * ステータス別（未対応/対応中/対応済 = IMPROVEMENT_ITEM_VIEWS の 3 列）に改修案件カードを並べ、
+ * 進捗を一望する。旧 7 値語彙の保存値は improvementItemViewOf で正規化して列に置く（原則7）。
  * カードクリックで詳細ドロワー（open）、許可された遷移先へのクイック操作（status）を親へ通知する。
- * 列は IMPROVEMENT_STATUSES（SoT）から自動生成 = ステータス追加（運用対応/継続検討 = 2026-08-20 で 7 列）に
- * 自動追随する。列は横スクロール（原則8: モバイル 375px でも自身の overflow-x コンテナ内でスクロール）。
- * 継続検討（deferred）のカードには再検討日（revisitOn）を併記する。
- * 注: 継続検討への遷移は再検討日の入力が必須のため、親（improvements.vue）は status イベントの
- * to='deferred' をドロワーの日付入力へ誘導する（このコンポーネントは遷移先の列挙のみ）。
+ * 注: 対応中への遷移は担当者アサインを伴うため、親（improvements.vue）は status イベントの
+ * to='in_progress' をドロワーの担当者入力へ誘導する（このコンポーネントは遷移先の列挙のみ）。
+ * カードには担当者（assigneeName）を表示する（対応中アサインの関連画面表示 = 改修依頼 2026-08-21）。
+ * 列は横スクロール（原則8: モバイル 375px でも自身の overflow-x コンテナ内でスクロール）。
  */
-import { Calendar } from 'lucide-vue-next'
+import { Calendar, UserRound } from 'lucide-vue-next'
 import {
-  IMPROVEMENT_STATUS_META, IMPROVEMENT_STATUS_NEXT, IMPROVEMENT_STATUSES,
-  type ImprovementItem, type ImprovementStatus,
+  IMPROVEMENT_ITEM_NEXT, IMPROVEMENT_ITEM_STATUS_META, IMPROVEMENT_ITEM_VIEWS,
+  type ImprovementItem, type ImprovementItemView, improvementItemViewOf,
 } from '~/types/improvement'
 import { fmtDate } from '~/utils/format'
 import { pageDisplay } from '~/utils/page-label'
 
 const props = defineProps<{ items: ImprovementItem[]; reqCount: (id: string) => number }>()
-const emit = defineEmits<{ open: [item: ImprovementItem]; status: [id: string, to: ImprovementStatus] }>()
+const emit = defineEmits<{ open: [item: ImprovementItem]; status: [id: string, to: ImprovementItemView] }>()
 
-const columns = computed(() => IMPROVEMENT_STATUSES.map(status => ({
+const columns = computed(() => IMPROVEMENT_ITEM_VIEWS.map(status => ({
   status,
-  meta: IMPROVEMENT_STATUS_META[status],
-  items: props.items.filter(it => it.status === status),
+  meta: IMPROVEMENT_ITEM_STATUS_META[status],
+  items: props.items.filter(it => improvementItemViewOf(it.status) === status),
 })))
 
 function planLabel(it: ImprovementItem): string {
@@ -31,7 +32,11 @@ function planLabel(it: ImprovementItem): string {
     ? `${fmtDate(it.planStart)}〜${fmtDate(it.planEnd)}`
     : fmtDate(it.planStart)
 }
-function statusLabel(s: ImprovementStatus): string { return IMPROVEMENT_STATUS_META[s]?.label ?? s }
+function statusLabel(s: ImprovementItemView): string { return IMPROVEMENT_ITEM_STATUS_META[s].label }
+/** 遷移先（保存値を 3 状態へ正規化して状態機械から列挙 = ボタン活性と API 検証の一致・原則6） */
+function nextOf(it: ImprovementItem): ImprovementItemView[] {
+  return IMPROVEMENT_ITEM_NEXT[improvementItemViewOf(it.status)] ?? []
+}
 </script>
 
 <template>
@@ -63,18 +68,18 @@ function statusLabel(s: ImprovementStatus): string { return IMPROVEMENT_STATUS_M
             <span v-if="it.pagePaths.length" class="min-w-0 max-w-full truncate" :title="it.pagePaths.map(pageDisplay).join(' / ')">{{ it.pagePaths.map(pageDisplay).join(' / ') }}</span>
             <span class="num">要望 {{ reqCount(it.id) }}</span>
           </div>
+          <!-- 担当者（対応中でアサイン = 関連画面に表示する要件。改修依頼 2026-08-21） -->
+          <p v-if="it.assigneeName" class="mt-1 inline-flex items-center gap-1 rounded bg-surface px-1.5 py-0.5 text-[11px] text-sub">
+            <UserRound class="h-3 w-3" aria-hidden="true" />
+            {{ it.assigneeName }}
+          </p>
           <p v-if="it.planStart" class="mt-1 inline-flex items-center gap-1 rounded bg-brand-soft px-1.5 py-0.5 text-[11px] text-brand">
             <Calendar class="h-3 w-3" aria-hidden="true" />
             <span class="num">{{ planLabel(it) }}</span>
           </p>
-          <!-- 継続検討の再検討日（改修依頼 2026-08-20。バッジに revisitOn を併記） -->
-          <p v-if="it.status === 'deferred' && it.revisitOn" class="mt-1 inline-flex items-center gap-1 rounded bg-info-soft px-1.5 py-0.5 text-[11px] text-info">
-            <Calendar class="h-3 w-3" aria-hidden="true" />
-            <span class="num">{{ fmtDate(it.revisitOn) }} 再検討</span>
-          </p>
-          <div v-if="IMPROVEMENT_STATUS_NEXT[it.status].length" class="mt-2 flex flex-wrap gap-1">
+          <div v-if="nextOf(it).length" class="mt-2 flex flex-wrap gap-1">
             <button
-              v-for="to in IMPROVEMENT_STATUS_NEXT[it.status]"
+              v-for="to in nextOf(it)"
               :key="to"
               type="button"
               class="btn btn-ghost btn-sm"

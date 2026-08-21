@@ -1,32 +1,38 @@
 <script setup lang="ts">
 /**
- * F-13 設定・汎用化基盤（管理者専用）
- * a) 外部リンク b) 機能トグル c) カスタム項目 d) 汎用区分マスタ
- * e) エスカレーションルール f) 勤怠ルール/承認経路への導線 g) 監査ログ h) デモデータリセット
- * i) メニューカテゴリ（F-13-8・バッチ7h = SettingsMenuCategoryEditor）
+ * F-13 設定・汎用化基盤（管理者専用）。3 タブ構成（改修 2026-08-21）:
+ * - システム設定: a) 外部リンク b) 機能トグル c) カスタム項目 d) 汎用区分マスタ
+ *   i) メニューカテゴリ（F-13-8）h) デモデータリセット（モックのみ）
+ * - 運用設定: b2) 日報の入力方式 b3) 改善のタネの通知先 b4) リマインド
+ *   e) エスカレーションルール f) 勤怠ルール/承認経路への導線
+ * - 監査ログ: g) SettingsAuditLogPanel（デュアルモード・カタログ SoT = shared/domain/audit-log）
  */
 import { ArrowRight, Plus } from 'lucide-vue-next'
 import type {
   CustomFieldDef, CustomFieldType, EscalationRule, ExternalLink, FeatureToggle,
 } from '~/types/domain'
-import type { TableColumn } from '~/types/ui'
+import type { TabItem } from '~/types/ui'
 import type { NotifyRecipientTarget } from '~/utils/notify-recipients'
 import { parseNotifyRecipients } from '~/utils/notify-recipients'
 import {
   parseReportReminderConfig, type ReminderKindConfig, REPORT_REMINDER_KIND_LABELS, REPORT_REMINDER_KINDS,
   type ReportReminderConfig, type ReportReminderKind,
 } from '../../../shared/domain/report-reminder'
-import { fmtDateTime } from '~/utils/format'
 
 const { isAdmin } = useCurrentUser()
 const toast = useToast()
 const confirm = useConfirm()
-const { tbl, commit } = useMockDb()
-const members = tbl('members')
+const { commit } = useMockDb()
 
-function memberName(id: string): string {
-  return members.value.find(m => m.id === id)?.name ?? id
-}
+// ---------- タブ（システム設定 / 運用設定 / 監査ログ。?tab= で直接遷移可） ----------
+const TAB_KEYS = ['system', 'operations', 'audit'] as const
+const tab = ref<string>('system')
+useRouteTabSync(tab, { valid: TAB_KEYS })
+const tabs: TabItem[] = [
+  { key: 'system', label: 'システム設定' },
+  { key: 'operations', label: '運用設定' },
+  { key: 'audit', label: '監査ログ' },
+]
 
 // ---------- a) 外部リンク ----------
 const linkCrud = useMasterCrudAsync('externalLinks', 'el')
@@ -370,35 +376,7 @@ async function saveCategory(): Promise<void> {
   toast.show(`カテゴリ「${category}」を作成しました`)
 }
 
-// ---------- g) 監査ログ ----------
-const AUDIT_ACTION_LABELS: Record<string, string> = {
-  create: '追加',
-  update: '更新',
-  archive: '無効化',
-  restore: '再有効化',
-}
-const auditLogs = tbl('auditLogs')
-const auditColumns: TableColumn[] = [
-  { key: 'at', label: '日時', width: '130px', primary: true },
-  { key: 'actor', label: '操作者', width: '110px', primary: true },
-  { key: 'action', label: '操作', width: '90px', primary: true },
-  { key: 'target', label: '対象' },
-]
-const auditRows = computed(() =>
-  [...auditLogs.value]
-    .sort((a, b) => b.at.localeCompare(a.at))
-    .map(l => ({
-      id: l.id,
-      at: fmtDateTime(l.at),
-      actor: memberName(l.actorId),
-      action: AUDIT_ACTION_LABELS[l.action] ?? l.action,
-      target: `${l.entity}: ${l.entityId}`,
-      detail: l.detail,
-    })))
-
-// 監査ログのページング（1 ページ 20 件 = 改修依頼 2026-08-18。max-height の内部スクロールを廃止して置換。
-// ページ独自フィルタはないため page リセット watch は不要）
-const { page: auditPage, pageSize: auditPageSize, rows: pagedAuditRows, total: auditTotal } = useListView({ source: auditRows })
+// ---------- g) 監査ログは SettingsAuditLogPanel（監査ログタブ）へ移設（改修 2026-08-21） ----------
 
 // ---------- h) デモデータ ----------
 async function onResetDemo(): Promise<void> {
@@ -428,9 +406,15 @@ async function onResetDemo(): Promise<void> {
     </UiEmptyState>
 
     <template v-else>
-      <UiPageHeader title="設定" description="他社展開を見据えた汎用化基盤（カスタム項目・区分・リンク・トグル）" />
+      <UiPageHeader title="設定" description="システム設定（項目・区分・リンク・トグル）/ 運用設定（日報・通知・リマインド）/ 監査ログをタブで切り替えます" />
 
-      <div class="grid items-start gap-3 lg:grid-cols-2">
+      <!-- min-w-0: タブ列は nowrap のため、素の親 div で包んでページ横スクロールを作らない（min-w-0 規則） -->
+      <div class="min-w-0">
+        <UiTabBar v-model="tab" :tabs="tabs" class="mb-3" />
+      </div>
+
+      <!-- システム設定タブ -->
+      <div v-if="tab === 'system'" class="grid items-start gap-3 lg:grid-cols-2">
         <!-- a) 外部リンク -->
         <UiSectionCard title="外部リンク" description="業務支援ツールのカードメニューに表示されます">
           <template #actions>
@@ -494,83 +478,6 @@ async function onResetDemo(): Promise<void> {
               </button>
             </li>
           </ul>
-        </UiSectionCard>
-
-        <!-- b2) 日報の入力方式（F-13-7） -->
-        <UiSectionCard
-          title="日報の入力方式"
-          description="AI アシスト入力はオプション機能です。カレンダー予定・改善のタネ・AI ヒアリングから日報ドラフトを生成し、本人が確認・修正してから提出します"
-        >
-          <div class="max-w-xs">
-            <UiSelect v-model="reportInputMode" :options="REPORT_INPUT_MODE_OPTIONS" aria-label="日報の入力方式" />
-          </div>
-          <p class="mt-2 text-[11px] text-muted">
-            「AI アシスト入力のみ」でも、生成されたドラフトの確認・修正は通常フォームで行います（AI の出力をそのまま提出することはありません）
-          </p>
-        </UiSectionCard>
-
-        <!-- b3) ぽいぽいポストの通知先（ロール/役職/個人。オペレーター指示 2026-08-03） -->
-        <UiSectionCard
-          title="改善のタネの通知先"
-          description="改善のタネが登録されると、原文を下記の宛先へ通知します。宛先はロール・役職・個人で指定できます（投稿者本人は除外）。未設定の場合は通知しません"
-        >
-          <SettingsNotifyRecipientsEditor v-model="poipoiNotifyRecipients" />
-        </UiSectionCard>
-
-        <!-- b4) リマインド（種別 = 日報/週報/月報ごとに有効・時刻・外部通知 = 改善要望 2026-08-21。
-             行構成はエスカレーションルールと同型 = 機能単位の設定リスト） -->
-        <UiSectionCard
-          title="リマインド"
-          description="種別ごとに、未提出のメンバーへ設定時刻に自動通知します（配信先は各メンバーの通知設定に従います）"
-        >
-          <ul class="grid gap-1.5">
-            <li
-              v-for="k in REPORT_REMINDER_KINDS"
-              :key="k"
-              class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-line px-2.5 py-2"
-            >
-              <button
-                type="button"
-                role="switch"
-                :aria-checked="reportReminder[k].enabled"
-                :aria-label="`${REPORT_REMINDER_KIND_LABELS[k]}リマインド`"
-                class="relative h-6 w-11 shrink-0 rounded-full transition-colors"
-                :class="reportReminder[k].enabled ? 'bg-brand' : 'bg-line-strong'"
-                @click="onToggleReminder(k)"
-              >
-                <span
-                  class="absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-all"
-                  :class="reportReminder[k].enabled ? 'left-[22px]' : 'left-0.5'"
-                  aria-hidden="true"
-                />
-              </button>
-              <span class="min-w-0 flex-1 text-[13px] font-medium">{{ REPORT_REMINDER_KIND_LABELS[k] }}</span>
-              <label class="flex items-center gap-1.5 whitespace-nowrap text-[11px] text-sub">
-                通知時刻
-                <input
-                  type="time"
-                  class="input num w-28"
-                  :value="reportReminder[k].time"
-                  :aria-label="`${REPORT_REMINDER_KIND_LABELS[k]}リマインドの通知時刻`"
-                  @change="onReminderTime(k, $event)"
-                >
-              </label>
-              <label class="flex items-center gap-1.5 whitespace-nowrap text-[11px] text-sub">
-                <input
-                  type="checkbox"
-                  :checked="reportReminder[k].external"
-                  :aria-label="`${REPORT_REMINDER_KIND_LABELS[k]}リマインドの外部通知（Slack / Google Chat）`"
-                  @change="onToggleReminderExternal(k)"
-                >
-                外部通知
-              </label>
-            </li>
-          </ul>
-          <p class="mt-2 text-[11px] text-muted">
-            対象: 日報 = 前日までの直近 5 営業日（土日を除く・祝日は考慮しません）/ 週報 = 先週分 / 月報 = 先月分。
-            提出済み以外（未作成・下書き）を未提出として扱い、送信は種別ごとに 1 日 1 回です。
-            「外部通知」をオフにすると、その種別は Slack / Google Chat へ配信せずアプリ内通知のみになります
-          </p>
         </UiSectionCard>
 
         <!-- c) カスタム項目 -->
@@ -649,6 +556,99 @@ async function onResetDemo(): Promise<void> {
             </li>
           </ul>
           <UiEmptyState v-if="cmItems.length === 0" title="このカテゴリに項目はありません" hint="「追加」から登録できます" />
+        </UiSectionCard>
+
+        <!-- i) メニューカテゴリ（バッチ7h。カードメニューのカテゴリカスタマイズ） -->
+        <SettingsMenuCategoryEditor class="lg:col-span-2" />
+
+        <!-- h) デモデータ（モックモード専用。API モードでは SoT が PostgreSQL のため非表示） -->
+        <UiSectionCard
+          v-if="!apiMode"
+          class="lg:col-span-2"
+          title="デモデータ"
+          description="モックアップのデータをシード状態に戻します（打刻・申請・設定変更など全てが初期化されます）"
+        >
+          <button type="button" class="btn btn-danger" @click="onResetDemo">デモデータをリセット</button>
+        </UiSectionCard>
+      </div>
+
+      <!-- 運用設定タブ -->
+      <div v-else-if="tab === 'operations'" class="grid items-start gap-3 lg:grid-cols-2">
+        <!-- b2) 日報の入力方式（F-13-7） -->
+        <UiSectionCard
+          title="日報の入力方式"
+          description="AI アシスト入力はオプション機能です。カレンダー予定・改善のタネ・AI ヒアリングから日報ドラフトを生成し、本人が確認・修正してから提出します"
+        >
+          <div class="max-w-xs">
+            <UiSelect v-model="reportInputMode" :options="REPORT_INPUT_MODE_OPTIONS" aria-label="日報の入力方式" />
+          </div>
+          <p class="mt-2 text-[11px] text-muted">
+            「AI アシスト入力のみ」でも、生成されたドラフトの確認・修正は通常フォームで行います（AI の出力をそのまま提出することはありません）
+          </p>
+        </UiSectionCard>
+
+        <!-- b3) ぽいぽいポストの通知先（ロール/役職/個人。オペレーター指示 2026-08-03） -->
+        <UiSectionCard
+          title="改善のタネの通知先"
+          description="改善のタネが登録されると、原文を下記の宛先へ通知します。宛先はロール・役職・個人で指定できます（投稿者本人は除外）。未設定の場合は通知しません"
+        >
+          <SettingsNotifyRecipientsEditor v-model="poipoiNotifyRecipients" />
+        </UiSectionCard>
+
+        <!-- b4) リマインド（種別 = 日報/週報/月報ごとに有効・時刻・外部通知 = 改善要望 2026-08-21。
+             行構成はエスカレーションルールと同型 = 機能単位の設定リスト） -->
+        <UiSectionCard
+          title="リマインド"
+          description="種別ごとに、未提出のメンバーへ設定時刻に自動通知します（配信先は各メンバーの通知設定に従います）"
+        >
+          <ul class="grid gap-1.5">
+            <li
+              v-for="k in REPORT_REMINDER_KINDS"
+              :key="k"
+              class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-line px-2.5 py-2"
+            >
+              <button
+                type="button"
+                role="switch"
+                :aria-checked="reportReminder[k].enabled"
+                :aria-label="`${REPORT_REMINDER_KIND_LABELS[k]}リマインド`"
+                class="relative h-6 w-11 shrink-0 rounded-full transition-colors"
+                :class="reportReminder[k].enabled ? 'bg-brand' : 'bg-line-strong'"
+                @click="onToggleReminder(k)"
+              >
+                <span
+                  class="absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-all"
+                  :class="reportReminder[k].enabled ? 'left-[22px]' : 'left-0.5'"
+                  aria-hidden="true"
+                />
+              </button>
+              <span class="min-w-0 flex-1 text-[13px] font-medium">{{ REPORT_REMINDER_KIND_LABELS[k] }}</span>
+              <label class="flex items-center gap-1.5 whitespace-nowrap text-[11px] text-sub">
+                通知時刻
+                <input
+                  type="time"
+                  class="input num w-28"
+                  :value="reportReminder[k].time"
+                  :aria-label="`${REPORT_REMINDER_KIND_LABELS[k]}リマインドの通知時刻`"
+                  @change="onReminderTime(k, $event)"
+                >
+              </label>
+              <label class="flex items-center gap-1.5 whitespace-nowrap text-[11px] text-sub">
+                <input
+                  type="checkbox"
+                  :checked="reportReminder[k].external"
+                  :aria-label="`${REPORT_REMINDER_KIND_LABELS[k]}リマインドの外部通知（Slack / Google Chat）`"
+                  @change="onToggleReminderExternal(k)"
+                >
+                外部通知
+              </label>
+            </li>
+          </ul>
+          <p class="mt-2 text-[11px] text-muted">
+            対象: 日報 = 前日までの直近 5 営業日（土日を除く・祝日は考慮しません）/ 週報 = 先週分 / 月報 = 先月分。
+            提出済み以外（未作成・下書き）を未提出として扱い、送信は種別ごとに 1 日 1 回です。
+            「外部通知」をオフにすると、その種別は Slack / Google Chat へ配信せずアプリ内通知のみになります
+          </p>
         </UiSectionCard>
 
         <!-- e) エスカレーションルール -->
@@ -731,40 +731,11 @@ async function onResetDemo(): Promise<void> {
             </NuxtLink>
           </div>
         </UiSectionCard>
+      </div>
 
-        <!-- i) メニューカテゴリ（バッチ7h。カードメニューのカテゴリカスタマイズ） -->
-        <SettingsMenuCategoryEditor class="lg:col-span-2" />
-
-        <!-- g) 監査ログ -->
-        <UiSectionCard
-          class="lg:col-span-2"
-          title="監査ログ"
-          description="マスタ・設定変更の操作履歴（読み取り専用）"
-          flush
-        >
-          <UiDataTable
-            :columns="auditColumns"
-            :rows="pagedAuditRows"
-            empty-title="操作履歴はまだありません"
-            empty-hint="マスタや設定を変更すると記録されます"
-          >
-            <template #cell-target="{ row }">
-              <span class="block">{{ row.target }}</span>
-              <span class="block text-[11px] text-muted">{{ row.detail }}</span>
-            </template>
-          </UiDataTable>
-          <UiPagination v-model:page="auditPage" v-model:page-size="auditPageSize" :total="auditTotal" />
-        </UiSectionCard>
-
-        <!-- h) デモデータ（モックモード専用。API モードでは SoT が PostgreSQL のため非表示） -->
-        <UiSectionCard
-          v-if="!apiMode"
-          class="lg:col-span-2"
-          title="デモデータ"
-          description="モックアップのデータをシード状態に戻します（打刻・申請・設定変更など全てが初期化されます）"
-        >
-          <button type="button" class="btn btn-danger" @click="onResetDemo">デモデータをリセット</button>
-        </UiSectionCard>
+      <!-- 監査ログタブ（g。実装 = SettingsAuditLogPanel・カタログ SoT = shared/domain/audit-log） -->
+      <div v-else class="grid items-start gap-3">
+        <SettingsAuditLogPanel />
       </div>
 
       <!-- 外部リンク 追加/編集モーダル -->

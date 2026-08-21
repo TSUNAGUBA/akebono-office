@@ -1,16 +1,21 @@
 /**
  * 改善要望（F-42）の composable。デュアルモード（mock = useMockDb + 決定的集約 / API = /v1/improvements）。
  *
- * - submit(): 各ページの「要望を送る」から生要望を追記（認証済み全員可・読み取りしない）。
+ * - submit(): 各ページの「要望を送る」から生要望を追記（認証済み全員可・読み取りしない）。初期 = 未確認。
  * - 生要望の閲覧（GET /requests）は認証済み全員可（改修依頼 2026-08-19 第4弾: 全要望を閲覧可）。
- *   編集は投稿者本人のみ・ステータス変更/選別/集約は管理権限者のみ（improvementEditError + サーバー 403）。
- * - 管理系（items / generate / setStatus / archive / buildPrompt）は管理権限者専用。
+ *   編集は投稿者本人のみ・受付箱ステータスの遷移/集約は管理権限者のみ（improvementEditError + サーバー 403）。
+ * - 受付箱ステータス（改修依頼 2026-08-21）: 未確認 → 検討中 → 改善対応/運用対応/継続検討/対応見送り。
+ *   集約済みの表示は item 連動（inboxStatusOf = improvementInboxStatusOf。原則6 導出）。
+ *   解決済みは resolveRequest（起票者本人 or 管理者・resolvedAt の記録 = 取消可 = 原則9.5）。
+ * - 管理系（items / generate / setRequestStatus / archive / buildPrompt）は管理権限者専用。
  *   API モードでは GET /items が管理権限者のみ（canManageImprovements）のため、非管理者の refresh() は
- *   items だけ 403 → catch で握り潰し requests のみ反映する（改修案件は管理者のみ到達）。
+ *   items だけ 403 → catch で握り潰し requests のみ反映する（改修案件は管理者のみ到達。
+ *   集約済み要望の表示ステータスは GET /requests の linkedItemStatus が導出材料を届ける）。
  * - 集約は shared/domain/improvement の決定的ヒューリスティックを使う（API は Vertex → 同関数へフォールバック）。
- *   未集約の要望のみ処理し、判定済み item のステータス・編集は巻き戻さない（原則2）。
+ *   **「改善対応」の未集約要望のみ**処理し、着手済み item のステータス・編集は巻き戻さない（原則2）。
  */
 import type { Result } from '~/types/domain'
+import { heuristicAssessRequest } from '~/types/improvement-assess'
 import {
   buildCodingPrompt,
   buildItemDetail,
@@ -27,22 +32,26 @@ import {
   IMPROVEMENT_SUMMARY_CAP,
   IMPROVEMENT_TITLE_CAP,
   IMPROVEMENT_COMMENT_CAP,
-  IMPROVEMENT_REQUEST_ADOPTIONS,
-  IMPROVEMENT_REQUEST_STATUSES,
+  IMPROVEMENT_INBOX_BASES,
+  IMPROVEMENT_ITEM_STATUS_META,
   type ImprovementFilter,
+  type ImprovementInboxBase,
+  type ImprovementInboxStatus,
   type ImprovementItem,
+  type ImprovementItemView,
   type ImprovementNote,
   type ImprovementNoteKind,
   type ImprovementRequest,
-  type ImprovementRequestAdoption,
   type ImprovementRequestComment,
   type ImprovementRequestImage,
-  type ImprovementRequestStatus,
   type ImprovementRequestTag,
   type ImprovementStatus,
-  improvementAdoptionError,
   improvementBodyError,
   improvementEditError,
+  improvementInboxStatusError,
+  improvementInboxStatusOf,
+  improvementItemViewOf,
+  improvementResolveError,
   improvementUnclusterError,
   improvementCommentError,
   improvementEditChangedLabel,
@@ -50,8 +59,10 @@ import {
   improvementLinksError,
   improvementNoteError,
   improvementPlanError,
+  improvementTitleError,
   improvementRequestEditFields,
   improvementRevisitError,
+  isClusterAppendTarget,
   matchesImprovementFilter,
   normalizeImprovementImages,
   normalizeImprovementLinks,
@@ -59,9 +70,8 @@ import {
   normalizeImprovementTags,
   operationalNoteBody,
   operationalNoteCapError,
-  planAdoptionBulk,
+  planInboxStatusBulk,
   clusterTargetRequests,
-  requestAdoptionOf,
   type PromptItemInput,
 } from '~/types/improvement'
 
@@ -105,12 +115,28 @@ export function useImprovements() {
   const archivedItems = computed(() => allItems.value.filter(it => it.archivedAt))
   /** 未集約かつ有効な生要望 */
   const unclusteredRequests = computed(() => allRequests.value.filter(r => !r.itemId && !r.archivedAt))
-  /** 採用済み・未集約の生要望（「AI で集約」の対象 = 件数バッジ。改善要望 2026-08-17 第 2 弾）。
-   *  判定は shared の clusterTargetRequests（API generate の SQL 条件と同一 = 原則6） */
-  const adoptedUnclustered = computed(() => clusterTargetRequests(allRequests.value))
-  /** 未選別の生要望（管理者の確認待ち = 受付箱バッジ） */
-  const pendingRequests = computed(() =>
-    unclusteredRequests.value.filter(r => requestAdoptionOf(r) === 'pending'))
+  /** 改善対応・未集約の生要望（「AI で集約」の対象 = 件数バッジ。改修依頼 2026-08-21: 集約対象は
+   *  「改善対応」のみ）。判定は shared の clusterTargetRequests（API generate の SQL 条件と同一 = 原則6） */
+  const plannedUnclustered = computed(() => clusterTargetRequests(allRequests.value))
+  /** 未確認の生要望（起票直後・管理者の確認待ち = 受付箱バッジ） */
+  const unconfirmedRequests = computed(() =>
+    allRequests.value.filter(r => !r.archivedAt && inboxStatusOf(r) === 'unconfirmed'))
+
+  /** item id → 保存ステータス（受付箱表示の導出材料。取消済み item も含める = 参照が生きている間の表示用） */
+  const itemStatusById = computed<Map<string, ImprovementStatus>>(() => {
+    const m = new Map<string, ImprovementStatus>()
+    for (const it of allItems.value) m.set(it.id, it.status)
+    return m
+  })
+
+  /**
+   * 要望の受付箱表示ステータス（**唯一の判定点** = shared improvementInboxStatusOf。原則6）。
+   * 集約済みは item から導出: mock/管理者はローカルの items・API モードの一般利用者は
+   * GET /requests が返す linkedItemStatus を材料にする（items を取得できなくても対応済みが分かる）。
+   */
+  function inboxStatusOf(r: ImprovementRequest): ImprovementInboxStatus {
+    return improvementInboxStatusOf(r, r.itemId ? itemStatusById.value.get(r.itemId) ?? r.linkedItemStatus : null)
+  }
 
   /** ある改修単位の元要望（有効なもの） */
   function requestsForItem(itemId: string): ImprovementRequest[] {
@@ -124,11 +150,37 @@ export function useImprovements() {
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
   }
 
-  /** ある生要望のコメント（有効なもの・古い順。選別のやり取り = 改善要望 2026-08-17 第 2 弾） */
+  /** ある生要望のコメント（有効なもの・古い順。対応方針検討のやり取り = 改善要望 2026-08-17 第 2 弾） */
   function commentsForRequest(requestId: string): ImprovementRequestComment[] {
     return allComments.value
       .filter(cm => cm.requestId === requestId && !cm.archivedAt)
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+  }
+
+  /**
+   * ある生要望の運用案内（kind='ops' = 運用対応への遷移時に自動記録・起票者へ通知した本文と同一）。
+   * 起票者本人の要望ドロワーで表示する（R2 監査 2026-08-21: system 通知を OFF にしていても
+   * アプリ内で案内を読めるようにする = 解決確認フローの成立）。判別は kind（0083・R3 監査）=
+   * 管理者が「運用案内: 」で始まる手動コメントを書いても本人向けには含めない。
+   */
+  function operationalGuidanceFor(requestId: string): ImprovementRequestComment[] {
+    return commentsForRequest(requestId).filter(cm => cm.kind === 'ops')
+  }
+
+  /**
+   * 運用案内の遅延ロード（API モードの非管理者のみ）。管理者は refresh() の全件 GET が担い、
+   * mock はローカルデータを直接読むため no-op。API は requestId 指定 + 本人ガードの
+   * GET /request-comments が運用案内のみを返す。失敗は非ブロッキング（原則4 = ドロワー表示は続行）
+   */
+  async function loadOperationalGuidance(requestId: string): Promise<void> {
+    if (!isApi || canManageImprovements.value || !requestId) return
+    try {
+      const rows = await apiFetch<ImprovementRequestComment[]>('/v1/improvements/request-comments', {
+        query: { requestId } })
+      // 既存キャッシュと id でマージ（同一要望の再取得は置き換え・他要望の分は保持）
+      const ids = new Set(rows.map(r => r.id))
+      apiComments.value = [...apiComments.value.filter(cm => cm.requestId !== requestId && !ids.has(cm.id)), ...rows]
+    } catch { /* 補助情報（失敗しても本文・解決操作は使える） */ }
   }
 
   /** 要望 id → 有効コメント件数（一覧セル用。行ごとの全件フィルタを避け 1 パスで集計 = レビュー R9） */
@@ -181,7 +233,7 @@ export function useImprovements() {
       pageLabel,
       targetSpot,
       body: capCodePoints(body, IMPROVEMENT_BODY_CAP),
-      adoption: 'pending', // 投稿直後は未選別（管理者の取捨選択が先 = 改善要望 2026-08-17 第 2 弾）
+      status: 'unconfirmed', // 起票時の初期ステータス = 未確認（改修依頼 2026-08-21。API の DB 既定値と同じ）
       tags,
       links,
       images,
@@ -303,7 +355,8 @@ export function useImprovements() {
   // ---------- AI 集約（生成・再生成） ----------
 
   /** mock モードの決定的集約（API の Vertex→ヒューリスティックのフォールバックと同一ロジック）。
-   *  対象は**採用（adopted）済み**の未集約要望のみ（未選別・不採用は集約しない = 2026-08-17 第 2 弾） */
+   *  対象は**「改善対応（planned）」**の未集約要望のみ（未確認・検討中・運用対応・継続検討・対応見送りは
+   *  集約しない = 改修依頼 2026-08-21。判定は shared clusterTargetRequests = API とパリティ） */
   function mockGenerate(): GenerateResult {
     const reqsRef = tbl('improvementRequests')
     const itemsRef = tbl('improvementItems')
@@ -311,8 +364,10 @@ export function useImprovements() {
       // excludeItemIds = 「集約の解除」の履歴（そこへは再追記しない = F-42-19）
       .map(r => ({ id: r.id, pagePath: r.pagePath, pageLabel: r.pageLabel, body: r.body, excludeItemIds: r.excludedItemIds ?? [] }))
     if (unclustered.length === 0) return { ok: true, created: 0, appended: 0, clustered: 0, llm: false }
+    // 追記先候補 = 未対応（旧 triage/accepted/deferred の読替え含む）。絞り込みは
+    // heuristicClusterRequests 側の isClusterAppendTarget が行う（API の SQL と同一判定 = 原則6）
     const openItems = itemsRef.value
-      .filter(it => it.status === 'triage' && !it.archivedAt)
+      .filter(it => !it.archivedAt)
       .map(it => ({ id: it.id, status: it.status, pagePaths: it.pagePaths }))
     const plan = heuristicClusterRequests(openItems, unclustered)
     const now = nowJstIso()
@@ -326,16 +381,17 @@ export function useImprovements() {
       const id = `imp-${String(nextItemNum).padStart(4, '0')}`
       nextItemNum += 1
       newItems.push({
-        id, title: cr.title, summary: cr.summary, detail: cr.detail, status: 'triage',
+        id, title: cr.title, summary: cr.summary, detail: cr.detail, status: 'todo',
         pagePaths: cr.pagePaths, sourceRequestIds: cr.requestIds, llm: false,
         archivedAt: null, createdAt: now, updatedAt: now, resolvedAt: null,
         planStart: null, planEnd: null,
       })
       cr.requestIds.forEach(rid => reqPatch.set(rid, id))
     }
+    // 追記の適用先も isClusterAppendTarget で再確認（heuristic の計画と適用の間の整合 = API の SQL 条件と同じ）
     let itemsVal = [...itemsRef.value]
     for (const ap of plan.appends) {
-      const idx = itemsVal.findIndex(it => it.id === ap.itemId && it.status === 'triage' && !it.archivedAt)
+      const idx = itemsVal.findIndex(it => it.id === ap.itemId && isClusterAppendTarget(it.status) && !it.archivedAt)
       if (idx < 0) continue
       const cur = itemsVal[idx]!
       const newReqs = ap.requestIds
@@ -375,36 +431,20 @@ export function useImprovements() {
   // ---------- ステータス・編集・取消 ----------
 
   /**
-   * ステータス変更（状態機械で検証。API ルートと同一判定 = 原則6）。
-   * 継続検討（deferred）への遷移は revisitOn（再検討日 YYYY-MM-DD）が必須（improvementRevisitError）。
-   * deferred 以外への遷移では revisitOn を保持する（クリアしない = 履歴保全）。
-   * deferred → deferred は再検討日の変更（リスケジュール）として受理する（原則9.5 の選び直し導線）。
+   * 改修案件のステータス変更（3 状態機械で検証。API ルートと同一判定 = 原則6。改修依頼 2026-08-21）。
+   * 対応中（in_progress）への遷移では assigneeMemberId で担当者をアサインできる（任意。undefined =
+   * 現状維持・'' = 解除 = 部分更新の鉄則）。対応済（done）への遷移で、紐づく要望の起票者へ
+   * 「対応済み」を通知する（起票者確認 → 解決済みの導線。非ブロッキング = 原則4）。
+   * 旧語彙（triage/accepted 等）の保存値は正規化して判定し、書換えは新語彙で行う（原則7）。
    */
-  /** ステータス変更。deferred は revisitOn 必須・operational は運用案内 note 必須（改善要望 2026-08-21。
-   *  API/mock とも同一検証 = パリティ。メモ追記とステータス変更は 1 コール = 非原子な 2 コールを作らない） */
   async function setStatus(
-    id: string, status: ImprovementStatus, revisitOn?: string, note?: string,
+    id: string, status: ImprovementItemView, assigneeMemberId?: string,
   ): Promise<Result> {
-    const revisit = status === 'deferred' ? (revisitOn ?? '').trim() : ''
-    const revisitMsg = improvementRevisitError(status, revisit)
-    if (revisitMsg) return { ok: false, error: { code: 'AKO-REQ-023', message: revisitMsg } }
-    const opsNote = status === 'operational' ? (note ?? '').trim() : ''
-    if (status === 'operational' && !opsNote) {
-      return { ok: false, error: { code: 'AKO-REQ-024', message: '運用対応にする場合は、運用方法の案内を記載してください' } }
-    }
-    // 上限は接頭辞込みでメモ上限に収まる実効値で検証（shared 共通関数 = API と同一挙動・
-    // メッセージも実効上限と一致。R2 監査 / R3 レビュー）
-    const opsNoteBody = status === 'operational' ? operationalNoteBody(opsNote) : ''
-    if (status === 'operational') {
-      const capMsg = operationalNoteCapError(opsNote)
-      if (capMsg) return { ok: false, error: { code: 'AKO-REQ-008', message: capMsg } }
-    }
     if (isApi) {
       const res = await apiWrite(`/v1/improvements/items/${id}/status`, {
         body: {
           status,
-          ...(status === 'deferred' ? { revisitOn: revisit } : {}),
-          ...(status === 'operational' ? { note: opsNote } : {}),
+          ...(status === 'in_progress' && assigneeMemberId !== undefined ? { assigneeMemberId } : {}),
         },
       })
       if (res.ok) await refresh()
@@ -412,63 +452,74 @@ export function useImprovements() {
     }
     const itemsRef = tbl('improvementItems')
     const cur = itemsRef.value.find(it => it.id === id)
-    if (!cur) return { ok: false, error: { code: 'AKO-REQ-002', message: '対象の改修単位が見つかりません' } }
-    // 取消済みはステータスを動かさない（API の archived_at IS NULL ガードとパリティ = 原則6。R4）
+    if (!cur) return { ok: false, error: { code: 'AKO-REQ-002', message: '対象の改修案件が見つかりません' } }
+    // 取消済みはステータスを動かさない（API の archived_at IS NULL ガードとパリティ = 原則6）
     if (cur.archivedAt) {
-      return { ok: false, error: { code: 'AKO-REQ-002', message: '取消済みの改修単位はステータスを変更できません（先に復元してください）' } }
+      return { ok: false, error: { code: 'AKO-REQ-002', message: '取消済みの改修案件はステータスを変更できません（先に復元してください）' } }
     }
-    // 同一ステータスは no-op（再スタンプしない）。例外: deferred → deferred は再検討日の変更として通す
-    if (cur.status === status && status !== 'deferred') return { ok: true, id }
-    if (cur.status !== status && !canTransition(cur.status, status)) {
-      return { ok: false, error: { code: 'AKO-REQ-006', message: `「${cur.status}」から「${status}」へは変更できません` } }
+    const fromView = improvementItemViewOf(cur.status)
+    // 担当者はアサイン付きの対応中遷移・再送でのみ更新（undefined = 現状維持 = 部分更新の鉄則）
+    const hasAssignee = status === 'in_progress' && assigneeMemberId !== undefined
+    let assigneeName = ''
+    if (hasAssignee && assigneeMemberId) {
+      const mem = tbl('members').value.find(m => m.id === assigneeMemberId && m.active)
+      if (!mem) return { ok: false, error: { code: 'AKO-REQ-027', message: '担当者が見つかりません（有効なメンバーを指定してください）' } }
+      assigneeName = mem.name
     }
-    const now = nowJstIso()
-    // 運用案内はメモ（時系列）へ追記してからステータス変更（API と同一の記録形）
-    if (status === 'operational') {
-      const notesRef = tbl('improvementNotes')
-      notesRef.value = [...notesRef.value, {
-        id: nextId('improvementNotes', 'imnote'),
-        itemId: id,
-        memberId: currentUser.value.id,
-        memberName: currentUser.value.name,
-        body: opsNoteBody,
-        kind: 'note' as const,
-        archivedAt: null,
-        createdAt: now,
-      }]
-      // 紐づく要望の起票者へ運用案内を通知（API と同一挙動 = レビュー R1 M-3。非ブロッキング）
-      const authors = [...new Set(tbl('improvementRequests').value
-        .filter(r => r.itemId === id && !r.archivedAt)
-        .map(r => r.memberId)
-        .filter((m): m is string => !!m))]
-      for (const m of authors) {
-        // 通知本文はメモに記録した本文と同一（記録 = SoT と通知の乖離を作らない）
-        notifications?.notify(m, 'system', '改善要望が「運用対応」になりました', opsNoteBody, '/improvements')
+    // 同一ステータス（正規化後）の再送は no-op。ただし担当者付きの再送は担当者だけ差し替える（原則9.5）
+    if (fromView === status && !hasAssignee) return { ok: true, id }
+    if (fromView !== status && !canTransition(cur.status, status)) {
+      return {
+        ok: false,
+        error: { code: 'AKO-REQ-006', message: `「${IMPROVEMENT_ITEM_STATUS_META[fromView].label}」から「${IMPROVEMENT_ITEM_STATUS_META[status].label}」へは変更できません` },
       }
     }
+    const transitioned = fromView !== status
+    const now = nowJstIso()
     itemsRef.value = itemsRef.value.map(it => (it.id === id
       ? {
           ...it,
           status,
-          resolvedAt: status === 'resolved' ? now : null,
-          // 再検討日は deferred のときのみ更新（それ以外は保持 = 履歴保全）
-          ...(status === 'deferred' ? { revisitOn: revisit } : {}),
+          resolvedAt: status === 'done' ? now : null,
+          ...(hasAssignee ? { assigneeMemberId: assigneeMemberId || null, assigneeName } : {}),
           updatedAt: now,
         }
       : it))
     commit()
+    // 対応済: 紐づく要望の起票者へ「対応済み」を通知（API と同一挙動。要望ごとの詳細ディープリンク付き。
+    // 主フロー成立後の補助処理 = 非ブロッキング = 原則4）
+    if (transitioned && status === 'done') {
+      const reqs = tbl('improvementRequests').value.filter(r => r.itemId === id && !r.archivedAt && r.memberId)
+      for (const r of reqs) {
+        notifications?.notify(r.memberId, 'system', '改善要望が「対応済み」になりました',
+          '要望への対応が完了しました。内容をご確認のうえ、問題なければ要望を「解決済み」にしてください。',
+          `/improvements?req=${r.id}`)
+      }
+    }
     return { ok: true, id }
   }
 
   async function editItem(
     id: string,
-    patch: { title?: string; summary?: string; detail?: string; planStart?: string; planEnd?: string },
+    patch: { title?: string; summary?: string; detail?: string; planStart?: string; planEnd?: string; assigneeMemberId?: string },
   ): Promise<Result> {
+    // 見出しの検証（両モード。API の AKO-REQ-003 とパリティ = 空見出しを黙って保存しない。R1 レビュー 2026-08-21）
+    if (patch.title !== undefined) {
+      const titleMsg = improvementTitleError(patch.title)
+      if (titleMsg) return { ok: false, error: { code: 'AKO-REQ-003', message: titleMsg } }
+    }
     // 対応予定期間の検証（両モード。実在日・終了>=開始）
     const hasPlan = patch.planStart !== undefined || patch.planEnd !== undefined
     if (hasPlan) {
       const msg = improvementPlanError(patch.planStart ?? '', patch.planEnd ?? '')
       if (msg) return { ok: false, error: { code: 'AKO-REQ-007', message: msg } }
+    }
+    // 担当者の変更・解除（'' = 解除。対応中への遷移時のアサインとは別に、いつでも変更できる = 原則9.5）
+    let assigneeName = ''
+    if (!isApi && patch.assigneeMemberId !== undefined && patch.assigneeMemberId) {
+      const mem = tbl('members').value.find(m => m.id === patch.assigneeMemberId && m.active)
+      if (!mem) return { ok: false, error: { code: 'AKO-REQ-027', message: '担当者が見つかりません（有効なメンバーを指定してください）' } }
+      assigneeName = mem.name
     }
     if (isApi) {
       const res = await apiWrite(`/v1/improvements/items/${id}`, { body: patch })
@@ -492,6 +543,9 @@ export function useImprovements() {
           // 予定期間は開始/終了をまとめて更新（空 = クリア = null。API と同じ挙動）
           ...(hasPlan
             ? { planStart: (patch.planStart ?? '').trim() || null, planEnd: (patch.planEnd ?? '').trim() || null }
+            : {}),
+          ...(patch.assigneeMemberId !== undefined
+            ? { assigneeMemberId: patch.assigneeMemberId || null, assigneeName }
             : {}),
           updatedAt: now,
         }
@@ -519,55 +573,124 @@ export function useImprovements() {
   }
 
   /**
-   * 要望の選別（採用/不採用/未選別へ戻す。遷移自由 = 選び直しはいつでも可 = 原則9.5）。
-   * 採用のみ AI 集約対象。集約済み（itemId あり）の要望は変更不可（API は AKO-REQ-013 = 記録保護）。
+   * 受付箱ステータスの変更（管理。改修依頼 2026-08-21: 選別〔採用/不採用〕を置き換える一次フロー）。
+   * 遷移は IMPROVEMENT_INBOX_NEXT（戻り遷移込み = 原則9.5）。ガード・遷移検証は共有の
+   * improvementInboxStatusError（API ルートと同一判定 = 原則6）。
+   * - 継続検討（deferred）は revisitOn（再検討日）必須。deferred → deferred は再検討日の変更として受理。
+   * - 運用対応（operational）は運用案内 note 必須 = コメントへ記録 + 起票者へ全文通知（API と同一の記録形）。
    */
-  async function setRequestAdoption(id: string, adoption: ImprovementRequestAdoption): Promise<Result & { persisted?: boolean }> {
-    if (!IMPROVEMENT_REQUEST_ADOPTIONS.includes(adoption)) {
-      return { ok: false, error: { code: 'AKO-REQ-012', message: 'adoption が不正です（pending / adopted / declined）' } }
+  async function setRequestStatus(
+    id: string, to: ImprovementInboxBase, revisitOn?: string, note?: string,
+  ): Promise<Result & { persisted?: boolean }> {
+    if (!(IMPROVEMENT_INBOX_BASES as readonly string[]).includes(to)) {
+      return { ok: false, error: { code: 'AKO-REQ-011', message: 'status が不正です（unconfirmed / reviewing / planned / operational / deferred / dismissed）' } }
+    }
+    const revisit = to === 'deferred' ? (revisitOn ?? '').trim() : ''
+    const revisitMsg = improvementRevisitError(to, revisit)
+    if (revisitMsg) return { ok: false, error: { code: 'AKO-REQ-023', message: revisitMsg } }
+    const opsNote = to === 'operational' ? (note ?? '').trim() : ''
+    if (to === 'operational' && !opsNote) {
+      return { ok: false, error: { code: 'AKO-REQ-024', message: '運用対応にする場合は、運用対応方法の案内を記載してください' } }
+    }
+    // 上限は接頭辞込みでコメント上限に収まる実効値で検証（shared 共通関数 = API と同一挙動）
+    const opsNoteBody = to === 'operational' ? operationalNoteBody(opsNote) : ''
+    if (to === 'operational') {
+      const capMsg = operationalNoteCapError(opsNote)
+      if (capMsg) return { ok: false, error: { code: 'AKO-REQ-008', message: capMsg } }
     }
     if (isApi) {
-      const res = await apiWrite<ImprovementRequest>(`/v1/improvements/requests/${id}/adoption`, { body: { adoption } })
+      const res = await apiWrite<ImprovementRequest>(`/v1/improvements/requests/${id}/status`, {
+        body: {
+          status: to,
+          ...(to === 'deferred' ? { revisitOn: revisit } : {}),
+          ...(to === 'operational' ? { note: opsNote } : {}),
+        },
+      })
       if (!res.ok) return res
-      // 応答行（RETURNING）をキャッシュへ差し込む: 行内 採用/不採用 は選別のホットパスのため、
-      // 1 クリックごとの 4 コレクション全再取得（refresh）を避ける（レビュー R22）。
-      // 一覧応答は images を '[]' で伏せるため、遅延ロード済みの画像は既存キャッシュから引き継ぐ
+      // 応答行（RETURNING）をキャッシュへ差し込む: ステータス変更は受付箱のホットパスのため、
+      // 1 クリックごとの 4 コレクション全再取得（refresh）を避ける（旧・選別と同方式 = レビュー R22）。
+      // 一覧応答は images を '[]' で伏せるため、遅延ロード済みの画像は既存キャッシュから引き継ぐ。
+      // 運用対応はコメントも増えるため refresh で全体を最新化する（記録の表示漏れを作らない）
       const updated = res.data
       apiRequests.value = apiRequests.value.map(r => (r.id === id
         ? { ...updated, images: (updated.images ?? []).length > 0 ? updated.images : r.images }
         : r))
+      if (to === 'operational') await refresh()
       return { ok: true, id }
     }
     const reqsRef = tbl('improvementRequests')
-    // ガード（存在 → 取消済み → 集約済み）は共有の improvementAdoptionError（API・一括仕分けと同一判定 = 原則6）
-    const guard = improvementAdoptionError(reqsRef.value.find(r => r.id === id))
+    const target = reqsRef.value.find(r => r.id === id)
+    // ガード（存在 → 取消済み → 集約済み → 解決済み → 遷移検証）は共有関数（API と同一判定 = 原則6）
+    const guard = improvementInboxStatusError(target, to)
     if (guard) return { ok: false, error: guard }
-    reqsRef.value = reqsRef.value.map(r => (r.id === id ? { ...r, adoption } : r))
-    // 永続化可否を返し UI が警告できるようにする（submit / 一括選別と同型 = 容量超過の変更消失を黙認しない。レビュー R16）
+    // 同一ステータスの再送は no-op（例外: deferred → deferred は再検討日の変更として通す = API と同一）
+    if (improvementInboxStatusOf(target!) === to && to !== 'deferred') return { ok: true, id }
+    const now = nowJstIso()
+    // 運用案内はコメント（時系列・記録系）へ記録してからステータス変更（API と同一の記録形。
+    // kind='ops' = 起票者本人へ開示する行の判別キー〔0083〕）
+    if (to === 'operational') {
+      const commentsRef = tbl('improvementRequestComments')
+      commentsRef.value = [...commentsRef.value, {
+        id: nextId('improvementRequestComments', 'imcmt'),
+        requestId: id,
+        memberId: currentUser.value.id,
+        memberName: currentUser.value.name,
+        body: opsNoteBody,
+        kind: 'ops',
+        archivedAt: null,
+        createdAt: now,
+      }]
+    }
+    reqsRef.value = reqsRef.value.map(r => (r.id === id
+      ? {
+          ...r,
+          status: to,
+          // 再検討日は deferred のときのみ更新（それ以外は保持 = 履歴保全）
+          ...(to === 'deferred' ? { revisitOn: revisit } : {}),
+        }
+      : r))
+    // deferred（設定・リスケジュール）は通知済みマーカーを消す = 同じ再検討日の再設定でも到来日に
+    // 再通知される（API の revisit_notified_on = NULL リセットと同一規則 = 原則6。R1 レビュー 2026-08-21）
+    if (to === 'deferred') {
+      try {
+        const REQ_KEY = 'ako.improvement-request-revisit-notified.v1'
+        const marks = JSON.parse(localStorage.getItem(REQ_KEY) ?? '{}') as Record<string, string>
+        if (marks[id] !== undefined) {
+          delete marks[id]
+          localStorage.setItem(REQ_KEY, JSON.stringify(marks))
+        }
+      } catch { /* マーカー掃除は補助処理（失敗しても遷移は成立 = 原則4） */ }
+    }
+    // 永続化可否を返し UI が警告できるようにする（submit と同型 = 容量超過の変更消失を黙認しない）
     const persisted = commit()
+    // 運用対応: 起票者へ運用案内を全文通知（API と同一挙動。記録 = SoT と通知の乖離を作らない。
+    // 主フロー成立後の補助処理 = 非ブロッキング = 原則4）
+    if (to === 'operational' && target!.memberId) {
+      notifications?.notify(target!.memberId, 'system', '改善要望が「運用対応」になりました', opsNoteBody, `/improvements?req=${id}`)
+    }
     return { ok: true, id, persisted }
   }
 
   /**
-   * 要望の選別の一括変更（受付箱の複数選択 → まとめて採用/不採用 = 改修依頼 2026-08-18）。
-   * setRequestAdoption と同じ検証・ガード（集約済みは変更不可）を通し、一部が失敗しても
-   * 処理できた分は確定して done/failed で報告する（グレースフルデグラデーション = 原則4）。
-   * API モードは既存の 1 件エンドポイントを逐次呼び、再取得（refresh）は最後に 1 回だけ行う。
-   * 選別は遷移自由のため何度実行しても同じ結果（冪等 = 原則2）。
+   * 受付箱ステータスの一括変更（複数選択 → まとめて遷移 = 旧・一括選別の後継。改修依頼 2026-08-21）。
+   * setRequestStatus と同じ検証・ガードを通し、一部が失敗しても処理できた分は確定して done/failed で
+   * 報告する（グレースフルデグラデーション = 原則4）。継続検討・運用対応は行ごとの入力
+   * （再検討日・運用案内）が必要なため一括対象外 = 1 件ずつドロワーから設定する。
+   * API モードは 1 件エンドポイントを逐次呼び、再取得（refresh）は失敗時に 1 回だけ行う。
    */
-  async function setRequestAdoptionBulk(
-    ids: string[], adoption: ImprovementRequestAdoption,
+  async function setRequestStatusBulk(
+    ids: string[], to: ImprovementInboxBase,
   ): Promise<{
     ok: boolean; done: number; failed: number; failedIds: string[]
     error?: { code: string; message: string }; persisted?: boolean
   }> {
     // 重複除去は全経路で 1 回だけ行う（同一入力で failed 件数が揺れない = レビュー R14/R20）
     const targets = [...new Set(ids)]
-    if (!IMPROVEMENT_REQUEST_ADOPTIONS.includes(adoption)) {
-      return { ok: false, done: 0, failed: targets.length, failedIds: targets, error: { code: 'AKO-REQ-012', message: 'adoption が不正です（pending / adopted / declined）' } }
+    if (to === 'deferred' || to === 'operational') {
+      return { ok: false, done: 0, failed: targets.length, failedIds: targets, error: { code: 'AKO-REQ-028', message: '継続検討・運用対応は 1 件ずつ設定してください（再検討日・運用案内の入力が必要です）' } }
     }
     if (targets.length === 0) {
-      return { ok: false, done: 0, failed: 0, failedIds: [], error: { code: 'AKO-REQ-016', message: '選別する要望が選択されていません' } }
+      return { ok: false, done: 0, failed: 0, failedIds: [], error: { code: 'AKO-REQ-016', message: '変更する要望が選択されていません' } }
     }
     let done = 0
     let lastError: { code: string; message: string } | undefined
@@ -580,9 +703,9 @@ export function useImprovements() {
     if (isApi) {
       for (let i = 0; i < targets.length; i += 1) {
         const id = targets[i]!
-        // 1 件 API（setRequestAdoption = 成功時に応答行をキャッシュへ即反映）を再利用する:
+        // 1 件 API（setRequestStatus = 成功時に応答行をキャッシュへ即反映）を再利用する:
         // 途中で打ち切られても成功分の表示が正しく残る（原則3・レビュー R24）
-        const res = await setRequestAdoption(id, adoption)
+        const res = await setRequestStatus(id, to)
         if (res.ok) {
           done += 1
           continue
@@ -594,18 +717,17 @@ export function useImprovements() {
           break
         }
       }
-      // 成功分は setRequestAdoption がキャッシュへ反映済み。失敗があった場合のみ、他端末の先行変更
-      // （409 の原因 = 集約・取消済み）を取り込むため 1 回だけ refresh する（レビュー R2/R24）。
+      // 成功分は setRequestStatus がキャッシュへ反映済み。失敗があった場合のみ、他端末の先行変更
+      // （409 の原因 = 集約・取消済み・遷移競合）を取り込むため 1 回だけ refresh する（レビュー R2/R24）。
       // 認可断・認証断・ネットワーク断は refresh の全 GET も失敗が確定しているため呼ばない
-      // （refresh 自体も失敗時は最後のデータを保持するが、無駄な 4 GET を避ける = レビュー R17/R18/R19）
       if (failedIds.length > 0 && !(lastError && isFatalBulkError(lastError.code))) await refresh()
     } else {
       const reqsRef = tbl('improvementRequests')
-      // 仕分け（存在・集約済み・取消済み）は共有純関数（API 側の 1 件判定と同一 = 原則6。単体テストで固定）
-      const plan = planAdoptionBulk(targets, reqsRef.value)
+      // 仕分け（存在・取消済み・集約済み・解決済み・遷移可否）は共有純関数（API 側の 1 件判定と同一 = 原則6）
+      const plan = planInboxStatusBulk(targets, reqsRef.value, to)
       const applicableSet = new Set(plan.applicable)
       if (applicableSet.size > 0) {
-        reqsRef.value = reqsRef.value.map(r => (applicableSet.has(r.id) ? { ...r, adoption } : r))
+        reqsRef.value = reqsRef.value.map(r => (applicableSet.has(r.id) ? { ...r, status: to } : r))
         // 永続化可否を返し UI が警告できるようにする（submit と同型 = 容量超過の変更消失を黙認しない。レビュー R7）
         persisted = commit()
       }
@@ -621,11 +743,50 @@ export function useImprovements() {
   }
 
   /**
-   * 集約の解除（F-42-19・改修依頼 2026-08-18）。集約済みの要望を改修単位から外し、
-   * 「採用済み（集約待ち）」へ明示的に戻す = 次回の「AI で集約」の対象になる（取消 archive と違い
+   * 解決済みの記録（resolve）/ 取消（unresolve）。起票者本人または管理権限者（API 側で権限判定。
+   * mock は UI 側の表示ゲートが同条件を担う）。解決済みにできるのは「運用対応」（案内を確認した）
+   * または「対応済み」（改修完了を確認した）の要望のみ = improvementResolveError（API と同一判定 = 原則6）。
+   * 取消で元の表示ステータスへ戻る（resolvedAt の記録 = 基底を上書きしない = 原則9.5）。
+   */
+  async function resolveRequest(id: string, resolved: boolean): Promise<Result & { persisted?: boolean }> {
+    if (isApi) {
+      const res = await apiWrite<ImprovementRequest>(`/v1/improvements/requests/${id}/resolve`, { body: { resolved } })
+      if (!res.ok) return res
+      const updated = res.data
+      apiRequests.value = apiRequests.value.map(r => (r.id === id
+        ? { ...updated, images: (updated.images ?? []).length > 0 ? updated.images : r.images, linkedItemStatus: r.linkedItemStatus }
+        : r))
+      return { ok: true, id }
+    }
+    const reqsRef = tbl('improvementRequests')
+    const target = reqsRef.value.find(r => r.id === id)
+    if (resolved) {
+      const guard = improvementResolveError(target, target?.itemId ? itemStatusById.value.get(target.itemId) : null)
+      if (guard) return { ok: false, error: guard }
+      reqsRef.value = reqsRef.value.map(r => (r.id === id ? { ...r, resolvedAt: r.resolvedAt ?? nowJstIso() } : r))
+    } else {
+      if (!target) return { ok: false, error: { code: 'AKO-REQ-002', message: '対象の要望が見つかりません' } }
+      if (target.archivedAt) return { ok: false, error: { code: 'AKO-REQ-019', message: '取消済みの要望は変更できません（先に復元してください）' } }
+      // 旧データ（status='resolved' が解決を表す行）は基底へ書き戻す（集約済み = planned〔表示は item 連動〕/
+      // 未集約 = reviewing〔検討中へ戻して人手判断〕= API と同一の読替え = 原則7/9.5）
+      reqsRef.value = reqsRef.value.map(r => (r.id === id
+        ? {
+            ...r,
+            resolvedAt: null,
+            ...(r.status === 'resolved' ? { status: (r.itemId ? 'planned' : 'reviewing') as ImprovementInboxBase } : {}),
+          }
+        : r))
+    }
+    const persisted = commit()
+    return { ok: true, id, persisted }
+  }
+
+  /**
+   * 集約の解除（F-42-19・改修依頼 2026-08-18 → ステータス再編 2026-08-21）。集約済みの要望を改修単位から外し、
+   * 「改善対応（集約待ち）」へ明示的に戻す = 次回の「改善対応を AI で集約」の対象になる（取消 archive と違い
    * 要望は生きたまま）。item のステータス・本文には触れない（人手の記録は不変 = 原則2）が、
    * sourceRequestIds のトレースからは除去して導出値を整合させる（原則6）。ガードは共有の
-   * improvementUnclusterError（存在 → 未集約 → 取消済み = API ルートと同一判定・単体テストで固定）。
+   * improvementUnclusterError（存在 → 未集約 → 取消済み → 解決済み = API ルートと同一判定・単体テストで固定）。
    */
   async function unclusterRequest(id: string): Promise<Result & { persisted?: boolean }> {
     if (isApi) {
@@ -643,12 +804,13 @@ export function useImprovements() {
     )
     if (guard) return { ok: false, error: guard }
     const itemId = target!.itemId!
+    // 解除後は「改善対応（集約待ち）」へ明示的に戻す（status='planned' = 再度 AI 集約の対象。API と同一）。
     // excludedItemIds へ元 item を追記（解除の履歴 = 蓄積・クリアしない。次回以降の集約でそこへは再追記しない）
     reqsRef.value = reqsRef.value.map(r => (r.id === id
       ? {
           ...r,
           itemId: null,
-          adoption: 'adopted' as const,
+          status: 'planned' as const,
           excludedItemIds: [...new Set([...(r.excludedItemIds ?? []), itemId])],
         }
       : r))
@@ -674,7 +836,7 @@ export function useImprovements() {
     return { ok: true, id, persisted }
   }
 
-  // ---------- 生要望へのコメント（選別のやり取り。記録系・追記のみ = 2026-08-17 第 2 弾） ----------
+  // ---------- 生要望へのコメント（対応方針検討のやり取り。記録系・追記のみ = 2026-08-17 第 2 弾） ----------
 
   /** コメントを追加（管理権限者 + 投稿者本人。API 側で権限判定） */
   async function addRequestComment(requestId: string, body: string): Promise<Result> {
@@ -718,32 +880,6 @@ export function useImprovements() {
     return { ok: true, id }
   }
 
-  /** 要望 1 件ずつのステータス変更（open/resolved/dismissed。遷移自由 = 誤操作はいつでも戻せる = 原則9.5）。
-   *  権限: 管理者 = 任意 / 起票者本人 = 自分の要望の resolved ⇄ open（改善要望 2026-08-21。
-   *  API 側が同ガードを実装。mock は UI 側の表示ゲート〔本人ブロック・管理 select〕が同条件を担う） */
-  async function setRequestStatus(id: string, status: ImprovementRequestStatus): Promise<Result> {
-    if (!IMPROVEMENT_REQUEST_STATUSES.includes(status)) {
-      return { ok: false, error: { code: 'AKO-REQ-011', message: 'status が不正です（open / resolved / dismissed）' } }
-    }
-    if (isApi) {
-      const res = await apiWrite(`/v1/improvements/requests/${id}/status`, { body: { status } })
-      if (res.ok) await refresh()
-      return res.ok ? { ok: true, id } : res
-    }
-    const reqsRef = tbl('improvementRequests')
-    const target = reqsRef.value.find(r => r.id === id)
-    if (!target) {
-      return { ok: false, error: { code: 'AKO-REQ-002', message: '対象の要望が見つかりません' } }
-    }
-    // 取消済み（論理削除）はステータスを動かさない（API の archived_at IS NULL ガードとパリティ = 原則6）
-    if (target.archivedAt) {
-      return { ok: false, error: { code: 'AKO-REQ-002', message: '取消済みの要望はステータスを変更できません（先に復元してください）' } }
-    }
-    reqsRef.value = reqsRef.value.map(r => (r.id === id ? { ...r, status } : r))
-    commit()
-    return { ok: true, id }
-  }
-
   /**
    * 要望の編集（改修依頼 2026-08-18 で新設 → 2026-08-19 で本文以外の項目〔タグ・リンク・画像〕も編集可能に）。
    * 投稿者本人または管理権限者（API 側ガードと同一）。編集は全項目の上書きだが editedAt を記録して
@@ -754,7 +890,7 @@ export function useImprovements() {
   async function editRequest(
     id: string,
     // tags は UiChipSelect の string[] をそのまま受ける（shared 検証が allowlist 正規化する = 未知値は落とす）
-    patch: { body: string; tags?: string[]; links?: string[]; images?: ImprovementRequestImage[] },
+    patch: { body: string; tags?: string[]; links?: string[]; images?: ImprovementRequestImage[]; targetSpot?: string },
   ): Promise<Result & { persisted?: boolean }> {
     const parsed = improvementRequestEditFields(patch)
     if (!parsed.ok) return { ok: false, error: parsed.error }
@@ -765,8 +901,11 @@ export function useImprovements() {
       // 応答は画像の実体を含む（API は reqColsOf(true) で返す）。キャッシュへ上書きマージする（レビュー R1 MAJOR）:
       // マージしないと refresh() の prevImages 再注入が「削除された画像を復活」「追加した画像を取りこぼし」する
       // （一覧 GET は images:[] スタブのため）。削除/追加/保持の正しさはこの map 上書きだけで成立する。
+      // linkedItemStatus（JOIN 導出）は単一行 RETURNING に載らないため既存キャッシュから引き継ぐ
+      // （resolveRequest / assessRequest と同じ。欠くと非管理者〔refresh しない〕の集約済み要望が
+      // 編集直後に「対応済み」→「改善対応」へ化ける = R1 レビュー 2026-08-21）
       const row = res.data
-      apiRequests.value = apiRequests.value.map(r => (r.id === id ? row : r))
+      apiRequests.value = apiRequests.value.map(r => (r.id === id ? { ...row, linkedItemStatus: r.linkedItemStatus } : r))
       // 集約済み（itemId あり）は imagesLoadedFor（item 単位フラグ）へマークしない（レビュー R2 CRITICAL）:
       // このマークは「その item の全要望が画像込みでロード済み」を意味し、正当なセッタは全要望を取得する
       // loadRequestImages(itemId) だけ。1 件の編集応答で item 全体を loaded 詐称すると、item 画像ロードが
@@ -785,7 +924,7 @@ export function useImprovements() {
     const guard = improvementEditError(target, currentUser.value.id, canManageImprovements.value)
     if (guard) return { ok: false, error: guard }
     if (!target) return { ok: false, error: { code: 'AKO-REQ-002', message: '対象の要望が見つかりません' } } // 型ナローイング用（guard が先に返る）
-    // 部分更新: fields に実在するキーのみ上書き（未指定の tags/links/images は現行値を保持 = API と同一）
+    // 部分更新: fields に実在するキーのみ上書き（未指定の tags/links/images/targetSpot は現行値を保持 = API と同一）
     reqsRef.value = reqsRef.value.map(r => (r.id === id
       ? {
           ...r,
@@ -793,6 +932,7 @@ export function useImprovements() {
           ...(fields.tags !== undefined ? { tags: fields.tags } : {}),
           ...(fields.links !== undefined ? { links: fields.links } : {}),
           ...(fields.images !== undefined ? { images: fields.images } : {}),
+          ...(fields.targetSpot !== undefined ? { targetSpot: fields.targetSpot } : {}),
           editedAt: nowJstIso(),
         }
       : r))
@@ -809,6 +949,37 @@ export function useImprovements() {
       at: nowJstIso(),
     }]
     // 永続化可否を返し UI が警告できるようにする（submit と同型 = localStorage 容量超過で編集が消える事故を黙認しない）
+    const persisted = commit()
+    return { ok: true, id, persisted }
+  }
+
+  /**
+   * 受付箱の AI 判定（管理。改修依頼 2026-08-21）。ナレッジベース（shared/domain/kb）を RAG に
+   * 「既存機能で対応可 / 運用の工夫で対応可 / 改修が必要」を判定し、根拠・参照ドキュメント・
+   * 推奨アクションを保管する（生成→保管→再判定で上書き）。
+   * API = Vertex AI → ヒューリスティックへフォールバック / mock = 常に決定的ヒューリスティック
+   * （heuristicAssessRequest = API のフォールバックと同一ロジック = 原則6）。
+   */
+  async function assessRequest(id: string): Promise<Result & { persisted?: boolean }> {
+    if (isApi) {
+      const res = await apiWrite<ImprovementRequest>(`/v1/improvements/requests/${id}/assess`, { timeoutMs: 60_000 })
+      if (!res.ok) return res
+      const updated = res.data
+      apiRequests.value = apiRequests.value.map(r => (r.id === id
+        ? { ...updated, images: (updated.images ?? []).length > 0 ? updated.images : r.images, linkedItemStatus: r.linkedItemStatus }
+        : r))
+      return { ok: true, id }
+    }
+    const reqsRef = tbl('improvementRequests')
+    const target = reqsRef.value.find(r => r.id === id)
+    if (!target) return { ok: false, error: { code: 'AKO-REQ-002', message: '対象の要望が見つかりません' } }
+    if (target.archivedAt) {
+      return { ok: false, error: { code: 'AKO-REQ-019', message: '取消済みの要望は AI 判定できません（先に復元してください）' } }
+    }
+    const result = heuristicAssessRequest({ body: target.body, pageLabel: target.pageLabel, targetSpot: target.targetSpot })
+    reqsRef.value = reqsRef.value.map(r => (r.id === id
+      ? { ...r, aiAssessment: { ...result, llm: false, assessedAt: nowJstIso() } }
+      : r))
     const persisted = commit()
     return { ok: true, id, persisted }
   }
@@ -875,10 +1046,12 @@ export function useImprovements() {
   // ---------- 継続検討の再検討日リマインド（改修依頼 2026-08-20。mock モードのみ） ----------
 
   /**
-   * 再検討日（revisitOn）が到来した継続検討（deferred）の改修単位を管理者へ通知する。
+   * 再検討日（revisitOn）が到来した継続検討（deferred）の要望・旧改修単位を管理者へ通知する。
    * API 版 runImprovementRevisitReminders（日次ジョブ）の mock 相当で、改善要望ページの表示時に呼ぶ。
    * - 管理者権限（canManageImprovements）のみ・API モードは no-op（サーバーのジョブが担う）。
-   * - 多重通知防止: localStorage に item ごとの「通知済みの再検討日」を持ち、同じ再検討日では 1 回だけ通知する
+   * - 対象: 受付箱の要望（status='deferred' = 改修依頼 2026-08-21 の一次フロー）+ 旧データの
+   *   改修単位（〜2026-08-20 に deferred となった item = 原則7。API 版と同じ二本立て）。
+   * - 多重通知防止: localStorage に対象ごとの「通知済みの再検討日」を持ち、同じ再検討日では 1 回だけ通知する
    *   （期日を**どの方向へ**変更しても再通知される = API 版 revisit_notified_on のリセットと同じ規則。レビュー R1）。
    * - 補助処理: 失敗しても表示フローを止めない（try/catch で握りつぶす = 原則4）。
    */
@@ -886,6 +1059,26 @@ export function useImprovements() {
     if (isApi || !canManageImprovements.value || !notifications) return
     try {
       const today = todayJst()
+      // 受付箱の要望（新キー。要望と item でキー空間を分ける = 旧マークとの衝突なし）
+      const REQ_KEY = 'ako.improvement-request-revisit-notified.v1'
+      let reqMarks: Record<string, string> = {}
+      try {
+        reqMarks = JSON.parse(localStorage.getItem(REQ_KEY) ?? '{}') as Record<string, string>
+      } catch { reqMarks = {} }
+      let reqChanged = false
+      for (const r of tbl('improvementRequests').value) {
+        const revisit = r.revisitOn ?? ''
+        if (inboxStatusOf(r) !== 'deferred' || r.archivedAt || !revisit || revisit > today) continue
+        if (reqMarks[r.id] === revisit) continue
+        const head = capCodePoints(r.body.trim().replace(/\s*\n\s*/g, ' '), 60)
+        notifications.notifyAdmins('reminder', '継続検討の再検討日です',
+          `継続検討の再検討日です: ${head}（再検討日 ${revisit}）`,
+          `/improvements?req=${r.id}`)
+        reqMarks[r.id] = revisit
+        reqChanged = true
+      }
+      if (reqChanged) localStorage.setItem(REQ_KEY, JSON.stringify(reqMarks))
+      // 旧データの改修単位（従来キーを維持 = 既存マークを失わない）
       const KEY = 'ako.improvement-revisit-notified.v1'
       let marks: Record<string, string> = {}
       try {
@@ -927,10 +1120,11 @@ export function useImprovements() {
       requests: [...requestsForItem(it.id)]
         .sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : (a.id < b.id ? -1 : 1)))
         .map(r => ({
-          pageLabel: r.pageLabel, pagePath: r.pagePath, body: r.body,
-          // 要望ステータス + 添付（リンクは列挙・画像は件数のみ）+ 受付箱のコメント（API /prompt と同じ内容 =
-          // 両モード parity）。改修依頼 2026-08-19 第4弾: 要望とコメントを createdAt で時系列統合するため双方に時刻を渡す
-          status: r.status, links: r.links ?? [], imageCount: (r.images ?? []).length,
+          pageLabel: r.pageLabel, pagePath: r.pagePath, targetSpot: r.targetSpot, body: r.body,
+          // 受付箱ステータス（解決済み・対応見送りの注記）+ 添付（リンクは列挙・画像は件数のみ）+
+          // 受付箱のコメント（API /prompt と同じ内容 = 両モード parity）。
+          // 改修依頼 2026-08-19 第4弾: 要望とコメントを createdAt で時系列統合するため双方に時刻を渡す
+          status: r.status, resolvedAt: r.resolvedAt, links: r.links ?? [], imageCount: (r.images ?? []).length,
           createdAt: r.createdAt,
           comments: commentsForRequest(r.id).map(cm => ({ body: cm.body, createdAt: cm.createdAt })),
         })),
@@ -942,12 +1136,14 @@ export function useImprovements() {
 
   return {
     // データ
-    activeItems, archivedItems, unclusteredRequests, adoptedUnclustered, pendingRequests, allRequests,
-    requestsForItem, notesForItem, commentsForRequest, commentCountByRequest, refresh, loadRequestImages, loadRequestImagesFor,
+    activeItems, archivedItems, unclusteredRequests, plannedUnclustered, unconfirmedRequests, allRequests,
+    inboxStatusOf,
+    requestsForItem, notesForItem, commentsForRequest, commentCountByRequest, operationalGuidanceFor, loadOperationalGuidance,
+    refresh, loadRequestImages, loadRequestImagesFor,
     imagesLoadedForRequest,
     // 操作
     submit, generate, setStatus, editItem, setItemArchived, setRequestArchived, setRequestStatus,
-    setRequestAdoption, setRequestAdoptionBulk, unclusterRequest, editRequest, addRequestComment, setRequestCommentArchived,
+    setRequestStatusBulk, resolveRequest, assessRequest, unclusterRequest, editRequest, addRequestComment, setRequestCommentArchived,
     addNote, setNoteArchived, buildPrompt, checkRevisitReminders,
   }
 }
