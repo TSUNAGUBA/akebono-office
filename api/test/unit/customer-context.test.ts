@@ -8,14 +8,16 @@ import { describe, expect, it } from 'vitest'
 import {
   customerContextError, customerContextNoteError, customerContextSourcesError,
   heuristicContextBuild, heuristicResearchCandidates,
-  normalizeCustomerContext,
+  normalizeCustomerContext, restoreContextFromSnapshot,
 } from '../../../shared/domain/customer-context'
 
 describe('顧客コンテキストの入力検証（API パリティ）', () => {
-  it('定性情報: いずれかの項目があれば null・すべて空はエラー', () => {
+  it('定性情報: いずれかの項目があれば null・すべて空はエラー（事業メモ = 2026-08-21 追加も対象）', () => {
     expect(customerContextError({ vision: 'v', challenges: '', strategyNotes: '' })).toBeNull()
+    // 事業メモのみでも保存できる（4 項目のいずれか）
+    expect(customerContextError({ vision: '', challenges: '', strategyNotes: '', businessNotes: '昨季売上高: 10 億円' })).toBeNull()
     expect(customerContextError({ vision: ' ', challenges: '', strategyNotes: '' }))
-      .toBe('ビジョン・経営課題・補足メモのいずれかを入力してください')
+      .toBe('ビジョン・経営課題・補足メモ・事業メモのいずれかを入力してください')
   })
   it('メモ本文は必須', () => {
     expect(customerContextNoteError('本文')).toBeNull()
@@ -27,8 +29,11 @@ describe('顧客コンテキストの入力検証（API パリティ）', () => 
     expect(customerContextSourcesError([{ title: 't', uri: 'javascript:alert(1)' }]))
       .toBe('情報源の URL が正しくありません（http/https のみ）')
   })
-  it('正規化は trim（部分更新のマージ値にも適用される = 空白だけの上書きを防ぐ）', () => {
+  it('正規化は trim（部分更新のマージ値にも適用される = 空白だけの上書きを防ぐ）。businessNotes 未定義 = ""（原則7）', () => {
     expect(normalizeCustomerContext({ vision: ' v ', challenges: '', strategyNotes: '' }).vision).toBe('v')
+    // 旧データ（businessNotes 未定義）は '' へ正規化（下位互換 = 原則7）
+    expect(normalizeCustomerContext({ vision: 'v', challenges: '', strategyNotes: '' }).businessNotes).toBe('')
+    expect(normalizeCustomerContext({ vision: '', challenges: '', strategyNotes: '', businessNotes: ' b ' }).businessNotes).toBe('b')
   })
 })
 
@@ -49,7 +54,7 @@ describe('AI リサーチのヒューリスティック（LLM 無効時のフォ
       { title: 'B', uri: 'https://example.com/b' },
       { title: 'A', uri: 'https://example.com/a' },
     ]
-    const empty = { vision: '', challenges: '', strategyNotes: '' }
+    const empty = { vision: '', challenges: '', strategyNotes: '', businessNotes: '' }
     const x = heuristicContextBuild('テクノパーツ工業', sources, empty)
     const y = heuristicContextBuild('テクノパーツ工業', [...sources].reverse(), empty)
     expect(x).toEqual(y)
@@ -57,5 +62,18 @@ describe('AI リサーチのヒューリスティック（LLM 無効時のフォ
     expect(x.challenges.length).toBeGreaterThan(0)
     expect(x.strategyNotes).toContain('A')
     expect(x.strategyNotes).toContain('B')
+    // 事業メモ（2026-08-21）: デモは実数値を創作しない定型ファクト（「デモ」明記）を決定的に返す
+    expect(x.businessNotes.length).toBeGreaterThan(0)
+    expect(x.businessNotes).toContain('デモ')
+  })
+})
+
+describe('restoreContextFromSnapshot（反映取消の復元値 = API/mock 共通の単一実装）', () => {
+  it('旧スナップショット（businessNotes キーなし）は現在の事業メモを保持・新スナップショットの \'\' は \'\' へ復元（原則7）', () => {
+    const legacy = restoreContextFromSnapshot({ vision: 'v', challenges: 'c', strategyNotes: '' }, '現在の事業メモ')
+    expect(legacy).toEqual({ vision: 'v', challenges: 'c', strategyNotes: '', businessNotes: '現在の事業メモ' })
+    const explicit = restoreContextFromSnapshot(
+      { vision: 'v', challenges: '', strategyNotes: '', businessNotes: '' }, '現在の事業メモ')
+    expect(explicit.businessNotes).toBe('')
   })
 })

@@ -4472,3 +4472,99 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
     ドキュメント/記録整合）の副作用なしを個別確認。4 ラウンド累積 diff の俯瞰でも状態機械・ガード・
     集約条件の shared/API/mock 三者一致、0080 CHECK の全書込パス包含、旧 /adoption 参照の残置なしを確認。
     最終検証: home 単体 531 / api 単体 506 / 統合 309 / 両 typecheck / モック E2E 全スイート green
+
+## 104. 改修依頼 2026-08-21 第2弾（4 改修単位 = AI 調査リンク新規タブ・通知バッジ・会社検索リストの重なり・事業メモ）の完了条件（Definition of Done）
+
+対象: home + api + shared/domain（顧客コンテキスト中心）。マイグレーション 0084（customer_contexts.business_notes）。
+あわせてオペレーター指示 2 件を実施: ① AI 知識ベース（shared/domain/kb）の追随更新・②「改修のたびに KB を含む関連ドキュメントを指示なしで更新する」運用の開発手法（CLAUDE.md 原則5）への組み込み。
+
+### 104-1 AI 調査の結果リンクを新規タブで開ける（単位1）
+- [x] 顧客コンテキストの AI リサーチ候補リストで、各情報源のタイトル下の URI 行を外部リンク化（`target=_blank` + `rel="noopener noreferrer"` + ExternalLink アイコン + aria-label「◯◯を新規タブで開く」）。
+- [x] `@click.stop` でリンククリックが「採用」チェックのトグルへ波及しない（E2E がリンクを実クリックして popup を受け、0 件選択のまま維持されることを固定 = R1 指摘で属性検証のみ → 実クリック検証へ補強）。
+- [x] http(s) 以外の URI（不正・空）はリンク化せずテキスト表示のみ（`isHttpUrl` ガード = 安全側）。
+
+### 104-2 通知バッジの未読件数表示（単位2）
+- [x] 調査の結果 **main で実装済み**を確認（ヘッダー通知ベルの未読合計バッジ = e1a4ed8〔2026-08-18〕で追加・/inbox「すべて」タブの未読合計バッジ = 従前から存在し 601c5c9〔2026-08-12〕で notificationTabViews へ共通化移設。いずれも unreadCount = カテゴリ「その他」込みの全未読合計。**99+ 丸めはベル/モバイル下部ナビのみ・タブバッジは生の数値** = UiTabBar は丸めない）。ビルド済みモックアプリの実機プローブ（Playwright）でベル「通知 7」+「すべて 7」の表示を確認 = 再実装なし（原則3 = 重複実装を作らない）。
+- [x] 回帰固定: batch5-e2e に「すべて」タブのバッジ数字 + ベル aria-label の未読件数チェックを追加（今後の退行を PR ゲートで検出）。
+
+### 104-3 会社検索・選択リストが他要素に隠れる問題の修正（単位3）
+- [x] 真因特定: z-index ではなく親カード `UiSectionCard` の `overflow-hidden`（角丸クリップ）が絶対配置（z-20）の候補リストをカード下端で切っていた。
+- [x] `UiSectionCard` に `overflowVisible` prop（既定 false = 既存カードの角丸クリップは不変 = 影響範囲最小）を新設し、顧客セレクタのカードにのみ指定。
+- [x] E2E: 候補リストが入力欄の下（カード枠外方向）に表示され、候補をクリックで選択できることを固定（クリップされていると Playwright のアクション判定が失敗する性質を利用）。
+
+### 104-4 定性情報「事業メモ」の追加（単位4）
+- [x] スキーマ: 0084 = `customer_contexts.business_notes text NOT NULL DEFAULT ''`（ADD COLUMN IF NOT EXISTS = 冪等・既存行の書換なし・旧行は空 = 原則7）。
+- [x] shared（SoT）: `CustomerContextInput.businessNotes` + `normalizeCustomerContext`（undefined → '' = 旧呼び出し互換・上限 cap）+ `customerContextError` = 4 項目すべて空の保存は不可（メッセージも 4 項目へ改稿）。
+- [x] API: CTX_COLS / currentContextOf / upsert（8 パラメータ）/ 一覧検索対象列 / PUT 部分更新（`Object.hasOwn` = 送られたキーのみ）へ businessNotes を追加。
+- [x] UI: 表示ブロック + 編集フォーム textarea（ヒント = 昨季売上高・社員数・店舗数・配送センター〔自社/他社・地域〕等・プレースホルダ例付き）+ AI 差分確認の「事業メモ（現在/提案）」行。セクション説明も 4 項目へ。
+- [x] AI 調査への反映: BUILD_SCHEMA（LLM 構築）+ システムプロンプトへ事業メモを追加（Web 調査で該当情報があれば提案へ反映）。ヒューリスティックフォールバックも決定的な事業メモ（「デモ」明記の BUSINESS_FACT_POOL = 事実の捏造なし）を生成 = mock/API パリティ（原則6）。
+- [x] 反映の取消（原則9.5 × 原則7）: research ノート payload.before に businessNotes を保存。**旧スナップショット（before に businessNotes キーなし）の取消は現在の事業メモを保持**（undefined = 復元対象外。API はトランザクション内で現在値を読んでマージ・mock も同一規則。統合テストで jsonb `#-` により旧 payload を再現して固定）。
+- [x] シード: cctx-0001 / cctx-0002 に「デモ」明記の事業メモを追加（E2E・デモの材料）。
+
+### 104-5 AI 知識ベースの更新 + 開発手法への組み込み（オペレーター指示）
+- [x] KB 更新: kb-sp-010（顧客コンテキストの仕様 = 4 項目・事業メモの説明・候補リンク新規タブ・AI 構築の事業メモ反映）+ kb-ug-009（通知の確認 = ベルの全カテゴリ未読合計・「すべて」タブ合計・カテゴリタブ個別件数・合計 ≥ タブ内訳和の理由）。
+- [x] 手法への組み込み: CLAUDE.md 原則5 に「AI ナレッジベース（shared/domain/kb/）もドキュメントに含める」節を新設（Grep〔pagePaths/keywords/本文〕→ 本文更新/新設検討 → ビルド + kb.test.ts + search_docs 自動再取込 = 手動作業なし、の 3 手順）+ Push 前セルフチェック項目 5 に KB 確認を明記。以後の改修は指示がなくても KB 追随が手順に乗る（SoT 配置 = CLAUDE.md は Claude Code 固有ルールの SoT・methodology 側はツール非依存を維持）。
+
+### 104-6 検証（受入基準）
+- [x] home `npx nuxi typecheck` / home 単体 531 / api `tsc --noEmit` / api 単体 506（非統合全件）/ 統合 310（businessNotes の往復・部分更新保持・旧スナップショット取消の保持テストを含む）
+- [x] モックモード E2E（run-mock-stack.sh = PR テストゲートと同一）: 既存 7 スイート green + 新規 batch5-e2e（通知バッジ回帰・候補リストのクリップなし・事業メモの表示/編集/AI 差分行・候補リンクの新規タブ属性と click.stop・モバイル 375px）= 10/10 green
+- [x] モバイル 375px: /customer-context で横スクロールなし（E2E で自動検証）
+- [x] ドキュメント: functional-requirements（F-46）/ data-design / screen-design / CONVENTIONS（早見表 + 部品在庫）/ KB（kb-sp-010・kb-ug-009）/ CLAUDE.md / 本ファイル §104
+
+### 104-7 反復レビュー（原則9 = SP-8）
+- 反復記録:
+  - R1（コードレビュアー MINOR3/NIT4・システム監査官 MAJOR1/MINOR2/NIT3。api-design 記載誤りと E2E 空アサーションは重複統合 = 計 MAJOR1/MINOR4/NIT5）→ 全件対応:
+    - 監査 MAJOR（= レビュー MINOR）: 本ラウンドで新設した api-design の useCustomerContext 行に
+      実装と異なる記載が複数（メモ一覧は `GET /notes`〔`f.companyId`〕であって `GET /:companyId/notes`
+      ではない・build/apply/revert の実パスは `/research/build`・`/research/apply`・`/research/:noteId/revert`・
+      build は `{ proposal, llm }` のみで current を返さない・実在する `GET /:companyId` 単件の記載漏れ）→
+      実ルート定義（customer-contexts.ts）と突き合わせて全面修正（原則5 = AI が API を呼ぶ際の参照元）
+    - レビュー MINOR: `research/apply` が businessNotes を固定マージ（`String(b.businessNotes ?? '')`）
+      するため、配信窓の旧クライアント（キー未送信）の反映で現在の事業メモを '' 上書きする
+      （PUT だけに原則7 対策がある非対称）→ apply も `Object.hasOwn` でキー欠落項目は Tx 内で読む
+      現在値を保持（PUT と同一規則）。統合テスト追加（キーなし反映で事業メモが保持されること）
+    - レビュー MINOR: revert の「旧スナップショットは現在値を保持」判定が API/mock に手書きで
+      二重化され将来ドリフトを構造的に防げない + mock 側は無テスト → shared に
+      `restoreContextFromSnapshot(before, currentBusinessNotes)` を抽出して両者から呼ぶ
+      （原則3/6）+ home/api 両方の単体テストで固定（キーなし = 保持・'' = '' へ復元・正規化）
+    - 監査 MINOR（= レビュー NIT）: batch5-e2e の「@click.stop でトグルされない」チェックが
+      リンクを一度もクリックしない空アサーション（§104-1 の記録も過大）→ リンクを実クリックして
+      popup を受けて閉じ、0 件選択のまま維持されることを検証する形へ補強 + §104-1 を実態へ改稿
+    - 監査 MINOR: §104-2 の記録 2 点が不正確（99+ 丸めはベル/モバイル下部ナビのみで「すべて」タブは
+      生数値・601c5c9 はバッジ新設ではなく既存バッジの共通化移設）→ 訂正
+    - 監査 NIT: 「タイトル横のリンク」表現が実装（タイトル下の URI 行全体がリンク）とずれ →
+      screen-design と §104-1 を訂正
+    - 監査 NIT: 旧「3 項目」時代の省略コメント残置（shared/domain/types.ts・pages/customer-context.vue の
+      「定性情報（ビジョン・経営課題）」）→ 4 項目へ更新（home/tests のヘッダーコメントも同様 = レビュー NIT）
+    - レビュー NIT: シードに businessNotes を足したのに SEED_VERSION 未更新（当日中の旧シード利用者は
+      翌日の日次リシードまでデモ値が見えない）→ v27 へインクリメント
+    - レビュー NIT: 統合テストの変数値「保持されるべき事業メモ」が実際には保持されない値に付いて
+      いて誤読の火種 → 「反映前の事業メモ」/「取消時点の現在値（保持される事業メモ）」へ改名
+    - R1 後検証: home 単体 535 / api 単体 507（非統合全件）/ 統合 311 / 両 typecheck /
+      モック E2E 全 8 スイート green（batch5 = 11 チェック）
+  - R2（両ロール再レビュー。システム監査官 = **指摘ゼロ**〔R1 全 10 件の対応完了・新規不整合なしを
+    実行再現込みで確認〕・コードレビュアー = MAJOR/MINOR 0・NIT3）→ NIT 全件対応:
+    - レビュー NIT: R1 で検証を Tx 内へ移した apply の「検証 400 → ROLLBACK = 定性情報・ノートとも
+      変化しない」経路に直接の回帰テストがない → 統合テスト追加（全項目 '' の反映 = 400 AKO-CTX-001 +
+      コンテキスト不変 + ノート件数不変）
+    - レビュー NIT: revert の現在値の参照が mock = contextOf（active フィルタ付き）/ API =
+      currentContextOf（active 無視）と微差（現状 active=false になる経路がなく実挙動差なし = 潜在）→
+      mock を行の直接参照へ揃えてパリティを構造化
+    - レビュー NIT: apply の `Object.hasOwn` インライン 4 連が PUT の `has()` ヘルパーと書き分け →
+      同型へ統一（原則3）
+    - R2 のレビュアー検証（記録）: apply の Tx 内検証移動はエラー経路（ApiError → onError）・
+      レスポンス形状・HTTP 400 とも移動前と同一・client.release() は finally で漏れなし。
+      restoreContextFromSnapshot は置換前実装と文字単位で同値（typecheck 両通過）。batch5 の popup
+      ハンドリングはリンク先ナビゲーション失敗環境でも安定（page イベントは生成時発火）。
+      SEED_VERSION 27 の参照は home の useMockDb のみ
+    - R2 後検証: home 単体 535 / api 単体 507 / 統合 312 / 両 typecheck / モック E2E 全 8 スイート green
+  - R3（収束確認）→ **両ロールとも指摘ゼロ（MAJOR 0 / MINOR 0 / NIT 0）で収束**。
+    R2 の 3 対応の副作用なしを個別確認（新統合テストは実質 read-only で後続テストの状態を壊さない・
+    mock 行直接参照は API currentContextOf と同一参照かつ active=false の到達経路なしを Grep で網羅確認・
+    has() 統一は純リファクタ）。累積 diff 全 24 ファイルの最終俯瞰でもドキュメント・KB・記録の
+    矛盾なし。検証数値は両ロールが独立に再実行して再現（home 単体 535 / api 単体 507 / 統合 312 /
+    両 typecheck / モック E2E 全 8 スイート green〔batch5 11/11〕）。
+    参考観察（非指摘・次回改修時の候補）: mock の buildProposal/applyResearch の現在値参照は
+    contextOf（active フィルタ付き）のままで revert（行直接参照）と書き分けが残る =
+    基点以前からの既存コードで active=false の到達経路がなく実挙動差ゼロ。customer_contexts の
+    論理削除を実装する改修の際に revert と同様に揃える（原則9.5 の遡及方針と同じ扱い）

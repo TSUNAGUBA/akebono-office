@@ -1,7 +1,7 @@
 /**
  * 顧客コンテキスト（改修依頼 2026-08-20: トップ層メニュー「顧客コンテキスト」）
- * 顧客ごとの定性情報（ビジョン・経営課題・補足メモ = 1社1行の設定系）と時系列メモ（記録系）、
- * AI リサーチ（Web 調査 → 構築 → 反映 → 取消）を扱う。
+ * 顧客ごとの定性情報（ビジョン・経営課題・補足メモ・事業メモ〔2026-08-21 追加〕= 1社1行の設定系）と
+ * 時系列メモ（記録系）、AI リサーチ（Web 調査 → 構築 → 反映 → 取消）を扱う。
  * - 検証は shared/domain/customer-context（API と同一関数・同一順 = パリティの SoT）。
  * - デュアルモード:
  *   - モック = customerContexts / customerContextNotes コレクション。AI リサーチは shared の
@@ -20,7 +20,7 @@ import {
   customerContextError, customerContextNoteError,
   type CustomerResearchCandidate, type CustomerResearchHints,
   heuristicContextBuild, heuristicResearchCandidates,
-  normalizeCustomerContext,
+  normalizeCustomerContext, restoreContextFromSnapshot,
 } from '../../../shared/domain/customer-context'
 import { capCodePoints as capCp } from '../../../shared/domain/customer-log'
 import type {
@@ -232,6 +232,7 @@ export function useCustomerContext() {
       vision: current?.vision ?? '',
       challenges: current?.challenges ?? '',
       strategyNotes: current?.strategyNotes ?? '',
+      businessNotes: current?.businessNotes ?? '',
     })
     return { ok: true, proposal, llm: false }
   }
@@ -260,6 +261,7 @@ export function useCustomerContext() {
       vision: cur?.vision ?? '',
       challenges: cur?.challenges ?? '',
       strategyNotes: cur?.strategyNotes ?? '',
+      businessNotes: cur?.businessNotes ?? '',
     }
     const prevCtx = ctxRows.value
     const prevNotes = noteRows.value
@@ -319,11 +321,11 @@ export function useCustomerContext() {
       return { ok: false, error: { code: 'AKO-CTX-004', message: 'このメモには復元できる反映前の情報がありません' } }
     }
     if (note.payload.revertedAt) return { ok: true, id: noteId } // すでに取消済み = no-op（冪等）
-    const before = normalizeCustomerContext({
-      vision: note.payload.before.vision ?? '',
-      challenges: note.payload.before.challenges ?? '',
-      strategyNotes: note.payload.before.strategyNotes ?? '',
-    })
+    // 復元値の構築は shared の単一実装（旧スナップショット = businessNotes キーなしは現在値を保持 =
+    // 原則7。判定の SoT を API と共有 = 原則3/6）。現在値は active に依らず行から読む
+    // （API の currentContextOf と同一の参照 = パリティ。contextOf は active フィルタ付きのため使わない）
+    const curRow = (ctxRows.value as CustomerContext[]).find(r => r.companyId === companyId)
+    const before = restoreContextFromSnapshot(note.payload.before, curRow?.businessNotes ?? '')
     const prevCtx = ctxRows.value
     const prevNotes = noteRows.value
     const now = nowJstIso()

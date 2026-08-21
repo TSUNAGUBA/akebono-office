@@ -2,7 +2,7 @@
  * 顧客コンテキストのシード（改修依頼 2026-08-20: トップ層メニュー「顧客コンテキスト」）。
  * デモ用・決定的・今日基準の相対日付（Math.random 禁止 = ~/utils/rng の決定的乱数のみ）。
  * 会社（c-01/c-02/c-03）・記録者（m-03/m-04/m-05）は core シードの id を参照する。
- * - customerContexts: 定性情報（1社1行。ビジョン・経営課題・補足メモ）
+ * - customerContexts: 定性情報（1社1行。ビジョン・経営課題・補足メモ・事業メモ〔2026-08-21〕）
  * - customerContextNotes: 時系列メモ（note）+ AI リサーチ反映の自動追記例（research =
  *   payload に採用ソース〔example.com のデモ URL〕と反映前の値を保持 = 「反映を取り消す」の体験用）
  */
@@ -21,6 +21,8 @@ export function buildCustomerContexts(): CustomerContext[] {
       vision: '「全国の店舗網とデジタルをつなぎ、地域の暮らしを支える小売プラットフォームになる」を中期ビジョンに掲げる。',
       challenges: '・店舗網拡大に伴う SCM の複雑化と在庫最適化\n・本部と店舗の情報連携（週次 CSV 運用からの脱却）\n・データ活用人材の育成',
       strategyNotes: '2026 年度は物流（北都物流との連携含む）とデータ基盤への投資を優先する方針。SCM プラットフォームの追加提案の余地が大きい。',
+      // 事業メモ（改修依頼 2026-08-21）: 売上高・社員数・店舗数・配送センター等の事業の事実のデモ
+      businessNotes: '・昨季売上高: 240 億円（デモ）\n・従業員数: 1,200 名（デモ）\n・店舗数: 58 店舗（デモ）\n・配送センター: 自社 2 拠点（関東・東北）+ 他社委託 1 拠点（関西）（デモ）',
       updatedByMemberId: 'm-03',
       updatedByName: '葛西 大輔',
       active: true,
@@ -33,6 +35,7 @@ export function buildCustomerContexts(): CustomerContext[] {
       vision: '「作り手の想いが届く婦人服ブランドとして、店舗と EC の垣根をなくす」ことを目指す。',
       challenges: '・EC 比率向上に向けた在庫の一元管理\n・前年比較・週次分析の手作業依存',
       strategyNotes: '売上分析スイートの更新商談が進行中。分析の自動化が刺さっている。',
+      businessNotes: '・昨季売上高: 36 億円（デモ）\n・従業員数: 180 名（デモ）\n・店舗数: 12 店舗 + EC（デモ）',
       updatedByMemberId: 'm-04',
       updatedByName: '三浦 彩',
       active: true,

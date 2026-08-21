@@ -8429,10 +8429,10 @@ describe('顧客コンテキスト（customer_contexts + notes + AI リサーチ
     return { status: res.status, json: await res.json() as never }
   }
 
-  interface CtxRow { id: string; companyId: string; vision: string; challenges: string; strategyNotes: string; updatedByMemberId: string; updatedByName: string }
+  interface CtxRow { id: string; companyId: string; vision: string; challenges: string; strategyNotes: string; businessNotes: string; updatedByMemberId: string; updatedByName: string }
   interface NoteRow {
     id: string; companyId: string; kind: string; body: string; memberName: string; archivedAt: string | null
-    payload: { sources?: { title: string; uri: string }[]; before?: { vision: string; challenges: string; strategyNotes: string }; revertedAt?: string } | null
+    payload: { sources?: { title: string; uri: string }[]; before?: { vision: string; challenges: string; strategyNotes: string; businessNotes?: string }; revertedAt?: string } | null
   }
 
   it('定性情報の upsert: 新規作成 → 部分更新（送っていないフィールドが保持される = Zod v4 回帰の教訓）', async () => {
@@ -8441,16 +8441,17 @@ describe('顧客コンテキスト（customer_contexts + notes + AI リサーチ
     expect(empty.status).toBe(200)
     expect(empty.json.data).toBeNull()
 
-    // 新規作成（upsert）
+    // 新規作成（upsert）。事業メモ（businessNotes = 改修依頼 2026-08-21）も往復する
     const created = await cctxApi('PUT', `/v1/customer-contexts/${CCTX_COMPANY}`, {
       as: MEMBER,
-      body: { vision: '初期ビジョン', challenges: '・課題A', strategyNotes: '補足' },
+      body: { vision: '初期ビジョン', challenges: '・課題A', strategyNotes: '補足', businessNotes: '・昨季売上高: 10 億円' },
     })
     expect(created.status).toBe(200)
     expect((created.json.data as CtxRow).vision).toBe('初期ビジョン')
+    expect((created.json.data as CtxRow).businessNotes).toBe('・昨季売上高: 10 億円')
     expect((created.json.data as CtxRow).updatedByMemberId).toBe(MEMBER)
 
-    // 部分更新: vision のみ送信 → challenges / strategyNotes は**保持される**（Object.hasOwn フィルタ）
+    // 部分更新: vision のみ送信 → challenges / strategyNotes / businessNotes は**保持される**（Object.hasOwn フィルタ）
     const patched = await cctxApi('PUT', `/v1/customer-contexts/${CCTX_COMPANY}`, {
       as: ADMIN, body: { vision: '更新後ビジョン' },
     })
@@ -8459,7 +8460,15 @@ describe('顧客コンテキスト（customer_contexts + notes + AI リサーチ
     expect(row.vision).toBe('更新後ビジョン')
     expect(row.challenges).toBe('・課題A') // 送っていないフィールドの保持
     expect(row.strategyNotes).toBe('補足')
+    expect(row.businessNotes).toBe('・昨季売上高: 10 億円') // 旧クライアント（未送信）でも事業メモは保持
     expect(row.updatedByMemberId).toBe(ADMIN) // 最終更新者スナップショット
+
+    // 事業メモのみの行も保存できる（4 項目のいずれか = AKO-CTX-001 にならない）
+    const bizOnly = await cctxApi('PUT', `/v1/customer-contexts/${CCTX_COMPANY}`, {
+      as: MEMBER, body: { vision: '', challenges: '', strategyNotes: '', businessNotes: '・従業員数: 100 名' },
+    })
+    expect(bizOnly.status).toBe(200)
+    expect((bizOnly.json.data as CtxRow).businessNotes).toBe('・従業員数: 100 名')
 
     // 1社1行: 一覧に同一会社の行は 1 件だけ（upsert = 冪等・原則2）
     const list = await cctxApi('GET', `/v1/customer-contexts?f.companyId=${CCTX_COMPANY}`, { as: MEMBER })
@@ -8467,7 +8476,7 @@ describe('顧客コンテキスト（customer_contexts + notes + AI リサーチ
 
     // 全項目空にする更新は AKO-CTX-001・不在会社は AKO-CTX-002
     const emptied = await cctxApi('PUT', `/v1/customer-contexts/${CCTX_COMPANY}`, {
-      as: MEMBER, body: { vision: '', challenges: '', strategyNotes: '' },
+      as: MEMBER, body: { vision: '', challenges: '', strategyNotes: '', businessNotes: '' },
     })
     expect(emptied.status).toBe(400)
     expect(emptied.json.error?.code).toBe('AKO-CTX-001')
@@ -8529,30 +8538,33 @@ describe('顧客コンテキスト（customer_contexts + notes + AI リサーチ
       as: MEMBER, body: { sources: r.candidates.slice(0, 2).map(x => ({ title: x.title, uri: x.uri })) },
     })
     expect(build.status).toBe(200)
-    const b = build.json.data as { proposal: { vision: string; challenges: string; strategyNotes: string }; llm: boolean }
+    const b = build.json.data as { proposal: { vision: string; challenges: string; strategyNotes: string; businessNotes: string }; llm: boolean }
     expect(b.llm).toBe(false)
     expect(b.proposal.vision.length).toBeGreaterThan(0)
     expect(b.proposal.challenges.length).toBeGreaterThan(0)
+    expect(b.proposal.businessNotes.length).toBeGreaterThan(0) // 事業メモ（2026-08-21）もヒューリスティックが構築
   })
 
   it('反映 → research ノート自動追記（採用ソース + 反映前の値）→ 反映の取消（payload.before から復元・原則9.5）', async () => {
     // 反映前の値を確定させる（前テストの部分更新の続きでも良いが、独立性のため明示 upsert）
     await cctxApi('PUT', `/v1/customer-contexts/${CCTX_COMPANY}`, {
-      as: MEMBER, body: { vision: '反映前ビジョン', challenges: '反映前課題', strategyNotes: '反映前補足' },
+      as: MEMBER, body: { vision: '反映前ビジョン', challenges: '反映前課題', strategyNotes: '反映前補足', businessNotes: '反映前事業メモ' },
     })
     const sources = [{ title: '公式サイト（デモ）', uri: 'https://example.com/company/x/' }]
 
-    // ③ 反映: upsert + research ノート（同一トランザクション）
+    // ③ 反映: upsert + research ノート（同一トランザクション）。事業メモも反映・before 保存の対象
     const applied = await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/research/apply`, {
       as: ADMIN,
-      body: { vision: 'AI 構築ビジョン', challenges: '・AI 構築課題', strategyNotes: 'AI 補足', sources },
+      body: { vision: 'AI 構築ビジョン', challenges: '・AI 構築課題', strategyNotes: 'AI 補足', businessNotes: '・AI 事業メモ', sources },
     })
     expect(applied.status).toBe(201)
     const appliedData = applied.json.data as { context: CtxRow; note: NoteRow; id: string }
     expect(appliedData.context.vision).toBe('AI 構築ビジョン')
+    expect(appliedData.context.businessNotes).toBe('・AI 事業メモ')
     expect(appliedData.note.kind).toBe('research')
     expect(appliedData.note.payload?.sources).toEqual(sources)
     expect(appliedData.note.payload?.before?.vision).toBe('反映前ビジョン') // 反映前の値を payload に保存
+    expect(appliedData.note.payload?.before?.businessNotes).toBe('反映前事業メモ')
     expect(appliedData.note.payload?.revertedAt).toBeUndefined()
 
     // 採用ソースなしの反映は 400（リサーチノートの証跡なしで上書きさせない）
@@ -8567,6 +8579,7 @@ describe('顧客コンテキスト（customer_contexts + notes + AI リサーチ
     const revertedCtx = (reverted.json.data as { context: CtxRow }).context
     expect(revertedCtx.vision).toBe('反映前ビジョン')
     expect(revertedCtx.challenges).toBe('反映前課題')
+    expect(revertedCtx.businessNotes).toBe('反映前事業メモ') // 事業メモも before から復元
     const noteAfter = await cctxApi('GET', `/v1/customer-contexts/notes?f.companyId=${CCTX_COMPANY}&f.kind=research`, { as: MEMBER })
     const revertedNote = (noteAfter.json.data as NoteRow[]).find(n => n.id === appliedData.id)
     expect(revertedNote?.archivedAt).toBeNull() // archive されない
@@ -8582,6 +8595,62 @@ describe('顧客コンテキスト（customer_contexts + notes + AI リサーチ
     const badRevert = await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/research/${plainId}/revert`, { as: MEMBER })
     expect(badRevert.status).toBe(400)
     expect(badRevert.json.error?.code).toBe('AKO-CTX-004')
+  })
+
+  it('旧スナップショット（businessNotes なし）の反映取消は現在の事業メモを保持する（原則7）', async () => {
+    // 現在値: 事業メモあり
+    await cctxApi('PUT', `/v1/customer-contexts/${CCTX_COMPANY}`, {
+      as: MEMBER, body: { vision: '現行ビジョン', challenges: '現行課題', strategyNotes: '現行補足', businessNotes: '反映前の事業メモ' },
+    })
+    // 反映（before には businessNotes 込みで保存される）→ SQL で旧形式（businessNotes キーなし）へ書き換えて再現
+    const applied = await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/research/apply`, {
+      as: ADMIN,
+      body: { vision: '新ビジョン', challenges: '・新課題', strategyNotes: '新補足', businessNotes: '取消時点の現在値（保持される事業メモ）',
+        sources: [{ title: '旧スナップショット検証（デモ）', uri: 'https://example.com/legacy-before/' }] },
+    })
+    const noteId = (applied.json.data as { id: string }).id
+    await pool.query(
+      `UPDATE customer_context_notes SET payload = payload #- '{before,businessNotes}' WHERE id = $1`, [noteId])
+    // 取消: vision 等は before から復元・事業メモは旧スナップショットに無いため「取消前の現在値」を保持
+    const reverted = await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/research/${noteId}/revert`, { as: MEMBER })
+    expect(reverted.status).toBe(200)
+    const ctx2 = (reverted.json.data as { context: CtxRow }).context
+    expect(ctx2.vision).toBe('現行ビジョン')
+    // 取消時点の現在値（= 直前の反映で入った事業メモ）を旧スナップショットが消さない
+    expect(ctx2.businessNotes).toBe('取消時点の現在値（保持される事業メモ）')
+  })
+
+  it('反映 body に businessNotes キーが無い場合（旧クライアント = 配信窓）は現在の事業メモを保持する（原則7 = PUT と同一規則）', async () => {
+    await cctxApi('PUT', `/v1/customer-contexts/${CCTX_COMPANY}`, {
+      as: MEMBER, body: { businessNotes: '旧クライアント互換で保持される事業メモ' },
+    })
+    const applied = await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/research/apply`, {
+      as: ADMIN,
+      body: { vision: '旧クライアントの反映', challenges: '・課題', strategyNotes: '補足',
+        sources: [{ title: '旧クライアント互換検証（デモ）', uri: 'https://example.com/legacy-apply/' }] },
+    })
+    expect(applied.status).toBe(201)
+    const ctx = (applied.json.data as { context: CtxRow }).context
+    expect(ctx.vision).toBe('旧クライアントの反映')
+    expect(ctx.businessNotes).toBe('旧クライアント互換で保持される事業メモ')
+  })
+
+  it('反映 body の全項目が空はトランザクション内の検証で 400 になり、定性情報も research ノートも変化しない（原子性）', async () => {
+    const ctxBefore = await cctxApi('GET', `/v1/customer-contexts/${CCTX_COMPANY}`, { as: MEMBER })
+    const { rows: [cnt] } = await pool.query(
+      `SELECT count(*)::int AS n FROM customer_context_notes WHERE company_id = $1`, [CCTX_COMPANY])
+    const bad = await cctxApi('POST', `/v1/customer-contexts/${CCTX_COMPANY}/research/apply`, {
+      as: ADMIN,
+      body: { vision: '', challenges: '', strategyNotes: '', businessNotes: '',
+        sources: [{ title: '空反映の検証（デモ）', uri: 'https://example.com/empty-apply/' }] },
+    })
+    expect(bad.status).toBe(400)
+    expect(bad.json.error?.code).toBe('AKO-CTX-001')
+    const ctxAfter = await cctxApi('GET', `/v1/customer-contexts/${CCTX_COMPANY}`, { as: MEMBER })
+    expect(ctxAfter.json.data).toEqual(ctxBefore.json.data) // ROLLBACK = upsert が残らない
+    const { rows: [cnt2] } = await pool.query(
+      `SELECT count(*)::int AS n FROM customer_context_notes WHERE company_id = $1`, [CCTX_COMPANY])
+    expect(cnt2.n).toBe(cnt.n) // research ノートも作られない
   })
 })
 

@@ -407,8 +407,9 @@ export interface PartnerActivity {
 }
 
 // ---------- 顧客コンテキスト（改修依頼 2026-08-20: トップ層メニュー「顧客コンテキスト」） ----------
-// 顧客(会社)を軸に、マスタの基本情報・関係に加えて定性情報（ビジョン・経営課題）と時系列メモを
-// 1 画面で可視化・編集する。定量情報（案件件数等）はライブ導出のみで保存しない（SoT = 各記録系）。
+// 顧客(会社)を軸に、マスタの基本情報・関係に加えて定性情報（ビジョン・経営課題・補足メモ・
+// 事業メモ〔2026-08-21 追加〕）と時系列メモを 1 画面で可視化・編集する。
+// 定量情報（案件件数等）はライブ導出のみで保存しない（SoT = 各記録系）。
 
 /**
  * 顧客コンテキスト（定性情報。1社1行 = companyId ユニークの upsert）。
@@ -430,6 +431,9 @@ export interface CustomerContext {
   challenges: string
   /** 補足メモ（戦略メモ等の任意の定性情報） */
   strategyNotes: string
+  /** 事業メモ（昨季売上高・社員数・店舗数・配送センター〔自社/他社・地域〕等の事業に関する事実。
+   *  改修依頼 2026-08-21。旧データは未定義 = ''（原則7） */
+  businessNotes?: string
   /** 最終更新者（Member 参照。表示用スナップショットは updatedByName） */
   updatedByMemberId: string
   /** 最終更新者名スナップショット（members 未ロードの画面でも表示できる） */
@@ -456,7 +460,9 @@ export interface CustomerContextResearchSource {
  */
 export interface CustomerContextNotePayload {
   sources?: CustomerContextResearchSource[]
-  before?: { vision: string; challenges: string; strategyNotes: string }
+  /** 反映前の定性情報スナップショット（businessNotes は 2026-08-21 追加 = 旧ノートは未定義。
+   *  復元時は未定義を「現在値を保持」として扱う = 旧スナップショットが新項目を消さない〔原則7〕） */
+  before?: { vision: string; challenges: string; strategyNotes: string; businessNotes?: string }
   revertedAt?: string
 }
 
