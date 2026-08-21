@@ -4558,3 +4558,13 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
       ハンドリングはリンク先ナビゲーション失敗環境でも安定（page イベントは生成時発火）。
       SEED_VERSION 27 の参照は home の useMockDb のみ
     - R2 後検証: home 単体 535 / api 単体 507 / 統合 312 / 両 typecheck / モック E2E 全 8 スイート green
+  - R3（収束確認）→ **両ロールとも指摘ゼロ（MAJOR 0 / MINOR 0 / NIT 0）で収束**。
+    R2 の 3 対応の副作用なしを個別確認（新統合テストは実質 read-only で後続テストの状態を壊さない・
+    mock 行直接参照は API currentContextOf と同一参照かつ active=false の到達経路なしを Grep で網羅確認・
+    has() 統一は純リファクタ）。累積 diff 全 24 ファイルの最終俯瞰でもドキュメント・KB・記録の
+    矛盾なし。検証数値は両ロールが独立に再実行して再現（home 単体 535 / api 単体 507 / 統合 312 /
+    両 typecheck / モック E2E 全 8 スイート green〔batch5 11/11〕）。
+    参考観察（非指摘・次回改修時の候補）: mock の buildProposal/applyResearch の現在値参照は
+    contextOf（active フィルタ付き）のままで revert（行直接参照）と書き分けが残る =
+    基点以前からの既存コードで active=false の到達経路がなく実挙動差ゼロ。customer_contexts の
+    論理削除を実装する改修の際に revert と同様に揃える（原則9.5 の遡及方針と同じ扱い）
