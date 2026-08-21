@@ -6980,14 +6980,17 @@ describe('改善要望（F-42 → ステータス管理の再編 = 改修依頼 
     const notes = (await api('GET', '/v1/notifications', { as: MEMBER })).json.data as { title: string; body: string; link: string }[]
     const opsNote = notes.find(n => n.title === '改善要望が「運用対応」になりました' && n.link === `/improvements?req=${reqId}`)
     expect(opsNote?.body).toBe('運用案内: 設定 > 外部リンクから同じ導線を追加できます')
-    // 起票者本人は自分の要望の「運用案内」コメントだけを取得できる（通知 OFF でもアプリ内で読める = R2 監査。
-    // 管理検討のコメントは含めない・requestId 必須・他人の要望は 403）
+    // 起票者本人は自分の要望の「運用案内」（kind='ops' = 遷移時の自動記録）だけを取得できる
+    // （通知 OFF でもアプリ内で読める = R2 監査。管理検討のコメントは含めない・requestId 必須・他人の要望は 403）。
+    // 「運用案内: 」で始まる手動コメント（草稿のコピペ等）も kind='comment' のため本人へは返らない（0083 = R3 監査）
     await api('POST', `/v1/improvements/requests/${reqId}/comments`, { as: ADMIN, body: { body: '内部の検討メモ（管理者向け）' } })
+    await api('POST', `/v1/improvements/requests/${reqId}/comments`, { as: ADMIN, body: { body: '運用案内: 改訂草稿（検討中・未確定）' } })
     const ownComments = await api('GET', `/v1/improvements/request-comments?requestId=${reqId}`, { as: MEMBER })
     expect(ownComments.status).toBe(200)
-    const ownRows = ownComments.json.data as { body: string }[]
+    const ownRows = ownComments.json.data as { body: string; kind: string }[]
     expect(ownRows.length).toBe(1)
     expect(ownRows[0]!.body).toBe('運用案内: 設定 > 外部リンクから同じ導線を追加できます')
+    expect(ownRows[0]!.kind).toBe('ops')
     expect((await api('GET', '/v1/improvements/request-comments', { as: MEMBER })).status).toBe(403) // requestId なしは不可
     expect((await api('GET', `/v1/improvements/request-comments?requestId=${reqId}`, { as: HR })).status).toBe(403) // 他人の要望は不可
     // 解決の記録（resolve）: 起票者本人が「解決済み」にできる（運用対応の確認）

@@ -46,8 +46,9 @@ export const seedImprovementRequests: ImprovementRequest[] = [
 export const seedImprovementRequestComments: ImprovementRequestComment[] = [
   { id: 'imcmt-0001', requestId: 'imreq-0006', memberId: 'm-01', memberName: '山下 誠', body: 'ブランド統一のため配色の完全カスタマイズは見送ります（ダッシュボードのレイアウト・密度設定で近いことは可能です）。', archivedAt: null, createdAt: `${addDays(today, -1)}T17:10:00+09:00` },
   { id: 'imcmt-0002', requestId: 'imreq-0005', memberId: 'm-01', memberName: '山下 誠', body: '対象は「全員のタイムカード」の絞り込みと同じ部署セレクトの想定で良いですか？', archivedAt: null, createdAt: `${addDays(today, 0)}T09:20:00+09:00` },
-  // 運用対応（operational）への遷移で自動記録される運用案内のデモ（実操作では遷移時に必須入力 + 起票者へ通知）
-  { id: 'imcmt-0003', requestId: 'imreq-0009', memberId: 'm-01', memberName: '山下 誠', body: '運用案内: 週報の一覧で対象週を表示し、ブラウザの印刷（Ctrl+P）で PDF 保存・印刷できます。', archivedAt: null, createdAt: `${addDays(today, -2)}T11:00:00+09:00` },
+  // 運用対応（operational）への遷移で自動記録される運用案内のデモ（実操作では遷移時に必須入力 + 起票者へ通知。
+  // kind='ops' = 起票者本人の「解決の記録」にも表示される行の判別キー = 0083）
+  { id: 'imcmt-0003', requestId: 'imreq-0009', memberId: 'm-01', memberName: '山下 誠', body: '運用案内: 週報の一覧で対象週を表示し、ブラウザの印刷（Ctrl+P）で PDF 保存・印刷できます。', kind: 'ops', archivedAt: null, createdAt: `${addDays(today, -2)}T11:00:00+09:00` },
 ]
 
 /**

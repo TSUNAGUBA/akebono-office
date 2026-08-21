@@ -588,8 +588,10 @@ export interface ImprovementItem {
 /**
  * 生要望へのコメント（記録系・追記のみ = 改善要望 2026-08-17 第 2 弾）。
  * 対応方針の検討過程・見送り理由・確認事項・運用案内などのやり取りを要望単位で時系列に残す。
- * 一覧参照は改善要望の管理権限者のみ / 追加・取消は管理権限者 + 投稿者本人（本人向けの閲覧導線は
- * 未提供 = implementation-status の残課題。現状は管理ページ内の記録）。取消は archivedAt（論理削除 = 原則9.5）。
+ * 一覧参照は改善要望の管理権限者のみ。**例外: 投稿者本人は「自分の要望 + requestId 指定」で
+ * 運用案内（kind='ops'）のみ取得できる**（R2 監査 2026-08-21 = 通知 OFF でも案内を読める到達経路。
+ * 一般コメント〔kind='comment'〕の本人向け閲覧は引き続き未提供 = 意図的な情報開示方針）。
+ * 追加・取消は管理権限者 + 投稿者本人。取消は archivedAt（論理削除 = 原則9.5）。
  */
 export interface ImprovementRequestComment {
   id: string
@@ -601,6 +603,12 @@ export interface ImprovementRequestComment {
   memberName: string
   /** コメント本文 */
   body: string
+  /**
+   * コメント種別（0083・R3 監査 2026-08-21）: 'ops' = 運用対応遷移の自動記録（運用案内 = 起票者本人へ
+   * 開示する行の判別キー）/ 'comment'（未定義含む = 旧データ互換〔原則7〕）= 手動コメント（管理検討）。
+   * 判別を kind で行うため、管理者が「運用案内: 」で始まる手動コメントを書いても本人へは開示されない
+   */
+  kind?: 'ops' | 'comment'
   /** 取消（論理削除）時刻。null = 有効（原則9.5） */
   archivedAt: string | null
   createdAt: string

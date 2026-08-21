@@ -4411,7 +4411,9 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
     - 監査 NIT: 担当者のみ変更（遷移なし）の監査 detail が「ステータス → 対応中」と遷移があったように
       読める → 「担当者を変更（担当者: X）」へ分岐
     - 監査 NIT: 内部コメントの旧・選別語彙残置（useImprovements / shared / usePermissions）→ 新語彙へ更新
-    - R1 後検証: home 単体 530 / api 単体 503 / 統合 309 / 両 typecheck / モック E2E 全スイート green
+    - R1 後検証: home 単体 530 / api 単体 505（`vitest run test/unit` は 503 = `test/crypto.test.ts` の 2 件が
+      unit ディレクトリ外。以後の記録は非統合全件〔`--exclude test/integration`〕で数える = R3 監査の指摘で
+      スコープを明記・訂正）/ 統合 309 / 両 typecheck / モック E2E 全スイート green
   - R2（両ロール再レビュー。コードレビュアー MINOR3/NIT2・システム監査官 MINOR2/NIT3。監査ログ索引は重複統合 =
     計 MINOR4/NIT4）→ 全件対応:
     - 両指摘 MINOR/NIT: 監査ログの期間絞り込みが列への式適用（`(at AT TIME ZONE …)::date >= $P`）のため
@@ -4440,4 +4442,26 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
       「担当者を変更（担当者: X／解除）」へ分岐（status ルートの R1 分岐と同型）
     - 監査 NIT: 配信窓（API 先行 → 旧フロント）で旧「選別」操作が一時的に失敗する旨を deploy-guide の
       配信順序注記へ追記（読み取り互換・データ破壊なし = 現状容認の記録）
-    - R2 後検証: home 単体 531 / api 単体 504 / 統合 309 / 両 typecheck / モック E2E 全スイート green
+    - R2 後検証: home 単体 531 / api 単体 506（非統合全件。R3 監査の指摘でスコープ訂正）/ 統合 309 /
+      両 typecheck / モック E2E 全スイート green
+  - R3（収束確認。コードレビュアー = MAJOR/MINOR 0・NIT1〔持ち越し事象〕・システム監査官 = MINOR3/NIT2）→ 全件対応:
+    - 監査 MINOR → 恒久化: 運用案内の本人開示が「運用案内: 」接頭辞照合のため、管理者が同接頭辞で始まる
+      手動コメント（既存案内をコピーした改訂草稿の検討等）を書くと未確定の草稿が起票者へ開示される →
+      **0083** で `improvement_request_comments.kind`（'ops'/'comment'・既定 'comment'）を追加し、
+      operational 遷移の自動記録のみ kind='ops'・本人分岐は kind='ops' に限定（運用案内の自動記録は
+      本改修で新設 = 旧データに ops 相当行はなくバックフィル不要）。mock・seed も kind を保存 +
+      統合テスト（接頭辞つき手動コメントが本人へ返らないこと）で固定
+    - 監査 MINOR: R2 挙動変更のドキュメント追随漏れ（data-design の improvement_request_comments 認可
+      記述「本人向け閲覧導線は残課題」+ 旧・選別語彙、shared 型 docstring の同記述）→ R2 後の実態
+      （本人 = 運用案内のみ取得可・一般コメントは意図的に未開示）へ改稿
+    - 監査 MINOR: §103-6 の api 単体件数がテスト実行スコープの取り違えで実測と不一致（記録 503/504 vs
+      非統合全件 505/506 = unit ディレクトリ外の crypto.test.ts 2 件）→ R1/R2 の記録をスコープ明記のうえ訂正
+    - 監査 NIT: CONVENTIONS 早見表の setRequestStatus シグネチャ誤記（named オプション風 → 実体は
+      positional `(id, base, revisitOn?, note?)`）→ 訂正
+    - 監査 NIT: 解決の記録の案内文が運用案内 0 件（取消直後・ロード失敗）でも「上記」を指す → 表示有無で
+      文言を出し分け + screen-design に「案内の訂正は検討中へ戻して再度運用対応」の運用を明記
+    - レビュー NIT（持ち越し事象）: `isRealDateKey` が年 0000 を許容し PostgreSQL の ::date が
+      out of range → 500（旧述語でも同挙動 = 本改修の回帰ではない・全利用箇所共通）→ shared ヘルパーに
+      下限（0001-01-01）を追加 + 単体テスト
+    - R3 のレビュアー検証（記録）: 監査ログ期間述語の新旧同値性を実機で確認（JST 0 時境界 + 30 年範囲の
+      ランダム 20,000 件で不一致 0・EXPLAIN で Index Cond 適合）

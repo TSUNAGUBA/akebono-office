@@ -65,7 +65,6 @@ import {
   improvementTitleError,
   improvementUnclusterError,
   isClusterAppendTarget,
-  OPERATIONAL_NOTE_PREFIX,
   operationalNoteBody,
   operationalNoteCapError,
   matchesImprovementFilter,
@@ -121,7 +120,7 @@ const ITEM_COLS = `id, title, summary, detail, status, page_paths AS "pagePaths"
 const NOTE_COLS = `id, item_id AS "itemId", member_id AS "memberId", member_name AS "memberName",
   body, kind, to_char(archived_at ${JST}) AS "archivedAt", to_char(created_at ${JST}) AS "createdAt"`
 const COMMENT_COLS = `id, request_id AS "requestId", member_id AS "memberId", member_name AS "memberName",
-  body, to_char(archived_at ${JST}) AS "archivedAt", to_char(created_at ${JST}) AS "createdAt"`
+  body, kind, to_char(archived_at ${JST}) AS "archivedAt", to_char(created_at ${JST}) AS "createdAt"`
 
 /** トランザクション補助（akebono-trade と同型 = 原則3） */
 async function inTxn<T>(pool: pg.Pool, fn: (db: pg.PoolClient) => Promise<T>): Promise<T> {
@@ -448,9 +447,10 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
       // 運用案内はコメント（時系列・記録系）へ記録してからステータス変更（同一 Tx = 原子。
       // コメントだけ残って遷移しない/その逆、を作らない。本文は通知と同一 = 記録と通知の乖離を作らない）
       if (to === 'operational') {
+        // kind='ops' = 運用案内の自動記録（起票者本人へ開示する行の判別キー = 0083。手動コメントは 'comment'）
         await db.query(
-          `INSERT INTO improvement_request_comments (id, request_id, member_id, member_name, body)
-           VALUES ($1, $2, $3, $4, $5)`,
+          `INSERT INTO improvement_request_comments (id, request_id, member_id, member_name, body, kind)
+           VALUES ($1, $2, $3, $4, $5, 'ops')`,
           [newId('imcmt'), id, user.id, user.name, opsNoteBody])
       }
       const { rows: out } = await db.query(
@@ -650,10 +650,11 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
 
   // ---- 生要望へのコメント（やり取り。記録系・追記のみ = 改善要望 2026-08-17 第 2 弾） ----
   // 一覧: requestId 指定でその要望のコメント / 未指定は全件（管理ページの一括ロード用）。既定は有効のみ。
-  // 非管理者は「自分の要望」+ requestId 指定に限り、運用案内（「運用案内: 」接頭辞 = 起票者向けに
-  // 通知した本文と同一の記録）だけを取得できる（R2 監査 2026-08-21: 運用案内の本人到達を system 通知
-  // だけに依存させない = 通知を OFF にしていても要望ドロワーで案内を読める。管理検討のコメントは
-  // 従来どおり管理権限者のみ = 情報開示方針は不変）
+  // 非管理者は「自分の要望」+ requestId 指定に限り、運用案内（kind='ops' = operational 遷移の自動記録で、
+  // 起票者へ通知した本文と同一）だけを取得できる（R2 監査 2026-08-21: 運用案内の本人到達を system 通知
+  // だけに依存させない = 通知を OFF にしていても要望ドロワーで案内を読める。判別は kind = 0083・R3 監査:
+  // 管理者が「運用案内: 」で始まる手動コメント〔草稿のコピペ等〕を書いても本人へ漏れない。
+  // 管理検討のコメント〔kind='comment'〕は従来どおり管理権限者のみ = 情報開示方針は不変）
   app.get('/request-comments', async (c) => {
     const user = c.get('user')
     const manage = await canManage(pool, user)
@@ -671,8 +672,7 @@ export function improvementsRoutes(pool: pg.Pool, env: Env): Hono {
       if (own[0]!.memberId !== user.id) {
         throw err('AKO-PRM-001', '改善要望を閲覧・管理する権限がありません（管理者にお問い合わせください）', 403)
       }
-      params.push(`${OPERATIONAL_NOTE_PREFIX}%`)
-      where.push(`body LIKE $${params.length}`)
+      where.push(`kind = 'ops'`)
     }
     if (requestId) { params.push(requestId); where.push(`request_id = $${params.length}`) }
     if (!includeArchived) where.push('archived_at IS NULL')

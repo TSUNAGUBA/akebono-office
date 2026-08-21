@@ -68,7 +68,6 @@ import {
   normalizeImprovementLinks,
   normalizeImprovementPagePath,
   normalizeImprovementTags,
-  OPERATIONAL_NOTE_PREFIX,
   operationalNoteBody,
   operationalNoteCapError,
   planInboxStatusBulk,
@@ -159,12 +158,13 @@ export function useImprovements() {
   }
 
   /**
-   * ある生要望の運用案内（「運用案内: 」接頭辞のコメント = 運用対応への遷移時に記録・起票者へ通知した本文）。
+   * ある生要望の運用案内（kind='ops' = 運用対応への遷移時に自動記録・起票者へ通知した本文と同一）。
    * 起票者本人の要望ドロワーで表示する（R2 監査 2026-08-21: system 通知を OFF にしていても
-   * アプリ内で案内を読めるようにする = 解決確認フローの成立）。管理検討のコメントは含めない。
+   * アプリ内で案内を読めるようにする = 解決確認フローの成立）。判別は kind（0083・R3 監査）=
+   * 管理者が「運用案内: 」で始まる手動コメントを書いても本人向けには含めない。
    */
   function operationalGuidanceFor(requestId: string): ImprovementRequestComment[] {
-    return commentsForRequest(requestId).filter(cm => cm.body.startsWith(OPERATIONAL_NOTE_PREFIX))
+    return commentsForRequest(requestId).filter(cm => cm.kind === 'ops')
   }
 
   /**
@@ -626,7 +626,8 @@ export function useImprovements() {
     // 同一ステータスの再送は no-op（例外: deferred → deferred は再検討日の変更として通す = API と同一）
     if (improvementInboxStatusOf(target!) === to && to !== 'deferred') return { ok: true, id }
     const now = nowJstIso()
-    // 運用案内はコメント（時系列・記録系）へ記録してからステータス変更（API と同一の記録形）
+    // 運用案内はコメント（時系列・記録系）へ記録してからステータス変更（API と同一の記録形。
+    // kind='ops' = 起票者本人へ開示する行の判別キー〔0083〕）
     if (to === 'operational') {
       const commentsRef = tbl('improvementRequestComments')
       commentsRef.value = [...commentsRef.value, {
@@ -635,6 +636,7 @@ export function useImprovements() {
         memberId: currentUser.value.id,
         memberName: currentUser.value.name,
         body: opsNoteBody,
+        kind: 'ops',
         archivedAt: null,
         createdAt: now,
       }]

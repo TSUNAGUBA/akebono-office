@@ -1913,10 +1913,13 @@ async function copyAndClose(): Promise<void> {
                 <Check class="h-3.5 w-3.5" aria-hidden="true" />
                 解決済みにする
               </button>
+              <!-- 案内文は運用案内の表示有無で出し分け（0 件 = 取消・ロード失敗時に存在しない「上記」を指さない = R3 監査） -->
               <span class="text-[11px] text-muted">
-                {{ imp.inboxStatusOf(selectedRequest) === 'operational'
-                  ? '運用対応の案内（上記。通知でもお知らせしています）を確認できたら「解決済み」にしてください'
-                  : '改修が完了しています。内容を確認できたら「解決済み」にしてください' }}
+                {{ imp.inboxStatusOf(selectedRequest) !== 'operational'
+                  ? '改修が完了しています。内容を確認できたら「解決済み」にしてください'
+                  : ownGuidance.length > 0
+                    ? '運用対応の案内（上記。通知でもお知らせしています）を確認できたら「解決済み」にしてください'
+                    : '運用対応の案内は通知でお知らせしています。案内が表示されない場合は管理者にお問い合わせください' }}
               </span>
             </template>
             <template v-else>

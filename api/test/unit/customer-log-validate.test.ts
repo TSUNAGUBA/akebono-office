@@ -24,6 +24,9 @@ describe('customerLogDateError（日付・実在日）', () => {
     expect(customerLogDateError('2026-02-30')).toBe('日付が正しくありません')
     expect(isRealDateKey('2026-02-30')).toBe(false)
     expect(isRealDateKey('2028-02-29')).toBe(true) // うるう年は実在
+    // 年 0000 は JS の Date は許容するが PostgreSQL の date は拒否（out of range → 500）するため弾く（R3 レビュー）
+    expect(isRealDateKey('0000-01-01')).toBe(false)
+    expect(isRealDateKey('0001-01-01')).toBe(true)
   })
 })
 
