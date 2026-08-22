@@ -355,19 +355,22 @@ export interface MetricsResult {
 // export はモック fetch による回帰テスト用（429 でファンアウトしない・unavailable の貫通 = P1/P2）
 export async function fetchMediaMetrics(
   pool: pg.Pool, env: Env, channelId: string, days: number, force: boolean,
+  asOfOverride?: string,
 ): Promise<MetricsResult> {
   requireEnabled(env)
   const access = await gaAccess(pool, env, channelId)
   if (!access?.token || !access.propertyId) {
     throw err('AKO-MEDIA-003', 'Google Analytics が未連携です。メディア設定から連携してください', 409)
   }
-  const cacheKey = `metrics:${days}`
+  // asOfOverride = 基準日の指定（AI 週次レポート = 週の終了日基準。改善要望 2026-08-21）。
+  // 既定は従来どおり前日基準。キャッシュキーへ基準日を含め、既定キー（metrics:N）と混線させない
+  const cacheKey = asOfOverride ? `metrics:${days}:${asOfOverride}` : `metrics:${days}`
   if (!force) {
     const cached = await cachedPayload<MetricsResult>(pool, channelId, cacheKey)
     if (cached) return cached
   }
 
-  const asOf = addDays(todayJst(), -1)
+  const asOf = asOfOverride ?? addDays(todayJst(), -1)
   const periodTo = asOf
   const periodFrom = addDays(periodTo, -(days - 1))
   const prevTo = addDays(periodFrom, -1)
@@ -458,7 +461,22 @@ export async function fetchMediaMetrics(
       },
     },
   ]
-  const detailBatch = await runBatch(access.token, access.propertyId, detailDefs.map(d => d.request), DETAIL_TIMEOUT_MS)
+  // 前年同期（直近 7 日の 52 週〔364 日〕前 = 前年の同じ曜日並びの 7 日間。改善要望 2026-08-21 =
+  // サマリーの前年同期比。365 日固定は閏年跨ぎで 1 日ずれ・曜日不整合のため 52 週で取る = モックと同一規則）。
+  // batchRunReports は最大 5 リクエスト/バッチのため単独 runReport で取得する。
+  // 日別次元で取得し合算する（当年側の週合計 = daily の合算〔延べユーザー〕と同じ尺度で比較するため）。
+  // 取得失敗は yoyWeek 未設定 = 「—」表示のグレースフルデグラデーション（原則4・警告には載せない =
+  // 補助指標の失敗で本体の集計表示を警告色にしない設計判断）
+  const yoyRequest = {
+    dateRanges: [dateRange(addDays(periodTo, -370), addDays(periodTo, -364))],
+    dimensions: [dimension('date')],
+    metrics: ['sessions', 'totalUsers', 'keyEvents'].map(metric),
+    limit: '10',
+  }
+  const [detailBatch, yoySingle] = await Promise.all([
+    runBatch(access.token, access.propertyId, detailDefs.map(d => d.request), DETAIL_TIMEOUT_MS),
+    runReport(access.token, access.propertyId, yoyRequest, DETAIL_TIMEOUT_MS),
+  ])
   let detailReports: (GaReport | null)[]
   const failedLabels: string[] = []
   const unavailable: DetailKey[] = []
@@ -505,6 +523,7 @@ export async function fetchMediaMetrics(
     devices: detailReports[2] ?? null,
     topPages: detailReports[3] ?? null,
     prevPages: detailReports[4] ?? null,
+    yoyWeekDaily: yoySingle.ok ? yoySingle.report : null,
   }, { segmentId: channelId, siteName, periodFrom, periodTo, days, articles })
 
   // 失敗した内訳のみを名指しで報告（全滅は「総計のみ」・一部なら取れた内訳は表示している旨が伝わる文言）
@@ -514,9 +533,23 @@ export async function fetchMediaMetrics(
     : failedLabels.length === detailDefs.length
       ? `内訳（日別・チャネル・デバイス・記事別）の取得に失敗したため、総計のみ表示しています${detailSuffix}`
       : `一部の内訳（${failedLabels.join('・')}）の取得に失敗しました${detailSuffix}`
+  // 日別内訳が取得できなかったとき（unavailable に 'daily'）は前年同期（yoyWeek）を付けない:
+  // daily はゼロ埋めで全長生成されるため、yoyWeek だけ実値が載ると「直近 7 日 0 vs 前年実値 = -100%」の
+  // 誤比較が成立してしまう（レビュー R2 MAJOR。フロントも daily 欠落時は比較カードを出さない = 二重防御）
+  if (unavailable.includes('daily')) metrics.yoyWeek = undefined
   const result: MetricsResult = { metrics, warning, unavailable }
   // 部分失敗の結果は 30 分固定化しない（次回リクエストで再試行させる）
-  if (!result.warning) await putCache(pool, channelId, cacheKey, result)
+  if (!result.warning) {
+    await putCache(pool, channelId, cacheKey, result)
+    // 基準日つきキー（metrics:{days}:{asOf} = 週次レポート生成用）は使い捨てのため、
+    // 古い行を機会的に掃除する（無期限蓄積の防止 = レビュー R1 N-7。失敗しても主フローは止めない = 原則4）
+    if (asOfOverride) {
+      await pool.query(
+        `DELETE FROM media_metrics_cache
+         WHERE channel_id = $1 AND cache_key LIKE 'metrics:%:____-__-__' AND fetched_at < now() - interval '7 days'`,
+        [channelId]).catch((e: unknown) => console.warn('metrics cache cleanup failed (non-blocking):', (e as Error).message))
+    }
+  }
   return result
 }
 

@@ -6,8 +6,9 @@
  * - デュアルモード: API = /v1/notes（SoT。AI 検索インデックスへ自動反映）/ モック = notes コレクション
  * - アップロード（.md/.txt/.pdf/.docx）は API モードのみ（抽出はサーバー。モックは .md/.txt をクライアント読取）
  */
-import type { Member, Note, NoteKind, Result } from '~/types/domain'
-import { parseNotifyRecipients, resolveNotifyRecipientIds } from '~/utils/notify-recipients'
+import type { Member, Note, NoteKind, NoteOrigin, Result } from '~/types/domain'
+import type { NotifyRecipientTarget } from '~/utils/notify-recipients'
+import { addedNotifyRecipientIds, parseNotifyRecipients, resolveNotifyRecipientIds } from '~/utils/notify-recipients'
 
 const apiNotes = ref<Record<string, Note[]>>({})
 
@@ -40,6 +41,8 @@ export interface NoteInput {
   projectId: string | null
   companyId: string | null
   workCategoryId: string | null
+  /** 登録経路（poipoi のみ。改善要望 2026-08-21）。'report' = 日報提出時 / 未指定 = 'direct'（直接投稿） */
+  origin?: NoteOrigin
   /** 議事録の Google Meet 連携（AI メモ/録画の Drive 参照。API モードのみ設定される。2026-08-03 ③b） */
   meetFileId?: string | null
   meetFileName?: string | null
@@ -54,19 +57,32 @@ export function useNotes(kind: NoteKind) {
   const notifications = useNotifications()
   const mockNotes = tbl('notes')
 
+  /** テナント既定の通知先（configs 'poipoi-notify-recipients'）。壊れは空扱い（原則4） */
+  function tenantPoipoiTargets(): NotifyRecipientTarget[] {
+    return parseNotifyRecipients(appSettings.getConfig('poipoi-notify-recipients', ''))
+  }
+
   /**
-   * ぽいぽいポスト登録時に、設定（'poipoi-notify-recipients'）の宛先へ原文を通知する（mock のみ）。
-   * 宛先は「ロール/役職/個人」指定を解決した在籍メンバー（投稿者本人は除外）。非ブロッキング（原則4）。
-   * API モードはサーバー（POST /v1/notes）が発火するため呼ばない（useNotifications.notify も API では no-op）。
+   * ぽいぽいポスト登録・通知先編集時に、宛先へ原文を通知する（mock のみ）。
+   * 宛先 = ポスト単位の上書き（targetsOverride）> テナント設定（'poipoi-notify-recipients'）。
+   * 「ロール/役職/個人」指定を解決した在籍メンバー（投稿者本人は除外）。非ブロッキング（原則4）。
+   * API モードはサーバー（POST /v1/notes・PUT /v1/notes/:id/notify-targets）が発火するため呼ばない。
+   * onlyMemberIds 指定時はその id のみへ配信（通知先編集の追加分だけへ届ける = 重複通知の防止・原則2）。
    */
-  function firePoipoiNotify(body: string, noteId: string): void {
+  function firePoipoiNotify(
+    body: string, noteId: string,
+    targetsOverride?: NotifyRecipientTarget[] | null, onlyMemberIds?: string[],
+    author?: { id: string; name: string },
+  ): void {
     try {
-      const targets = parseNotifyRecipients(appSettings.getConfig('poipoi-notify-recipients', ''))
+      const poster = author ?? { id: currentUser.value.id, name: currentUser.value.name }
+      const targets = targetsOverride ?? tenantPoipoiTargets()
       if (targets.length === 0) return
       const members = tbl('members').value as Member[]
-      const recipientIds = resolveNotifyRecipientIds(targets, members, currentUser.value.id)
+      let recipientIds = resolveNotifyRecipientIds(targets, members, poster.id)
+      if (onlyMemberIds) recipientIds = recipientIds.filter(id => onlyMemberIds.includes(id))
       if (recipientIds.length === 0) return
-      const title = `新しい改善のタネ（${currentUser.value.name}）`
+      const title = `新しい改善のタネ（${poster.name}）`
       const preview = [...body].slice(0, 140).join('')
       // リンクは対象ポストの詳細モーダルへのディープリンク（改修依頼 2026-08-18）。
       // 他人のポスト詳細を開けるのは管理者のみ（/poipoi の参照モデル）のため、
@@ -142,6 +158,9 @@ export function useNotes(kind: NoteKind) {
       workCategoryId: input.workCategoryId,
       source: 'text',
       createdAt: nowJstIso(),
+      // 登録経路（poipoi のみ。'report' 明示以外は直接投稿 = API の originOf と同一判定。改善要望 2026-08-21）
+      origin: kind === 'poipoi' ? (input.origin === 'report' ? 'report' : 'direct') : null,
+      notifyTargets: null,
       meetFileId: input.meetFileId ?? null,
       meetFileName: input.meetFileName ?? null,
       meetWebLink: input.meetWebLink ?? null,
@@ -205,6 +224,50 @@ export function useNotes(kind: NoteKind) {
     return { ok: true, id: noteId }
   }
 
+  /**
+   * ポスト単位の通知先の編集（poipoi のみ・投稿者本人または管理者。改善要望 2026-08-21 = 登録後の通知先編集）。
+   * targets = 宛先配列（空配列 = このポストは通知しない）/ null = テナント設定へ戻す（取消フロー = 原則9.5）。
+   * 保存後、変更前の実効宛先に含まれていなかった解決済みメンバーへだけ原文を再通知する（重複通知を作らない = 原則2）。
+   */
+  async function updateNotifyTargets(noteId: string, targets: NotifyRecipientTarget[] | null): Promise<Result> {
+    if (isApi) {
+      const res = await apiResult(() => apiFetch(`/v1/notes/${noteId}/notify-targets`, {
+        method: 'PUT', body: { targets },
+      }))
+      if (res.ok) await refresh()
+      return res
+    }
+    const target = (mockNotes.value as Note[]).find(n => n.id === noteId)
+    if (!target) return { ok: false, error: { code: 'AKO-GEN-002', message: 'ノートが見つかりません' } }
+    if (target.kind !== 'poipoi') {
+      return { ok: false, error: { code: 'AKO-GEN-001', message: '通知先の編集は改善のタネ（ぽいぽいポスト）のみです' } }
+    }
+    if (target.memberId !== currentUser.value.id && !isAdmin.value) {
+      return { ok: false, error: { code: 'AKO-PRM-001', message: '通知先の編集は投稿者本人または管理者のみです' } }
+    }
+    const next = targets === null ? null : parseNotifyRecipients(targets)
+    // 変更前の実効宛先（上書き > テナント設定）を解決し、追加分だけ再通知する（共有純関数 addedNotifyRecipientIds = API と同一判定）
+    const members = tbl('members').value as Member[]
+    const prevEffective = target.notifyTargets != null
+      ? parseNotifyRecipients(target.notifyTargets) : tenantPoipoiTargets()
+    const prevRows = mockNotes.value as Note[]
+    mockNotes.value = prevRows.map(n => n.id === noteId ? { ...n, notifyTargets: next } : n)
+    if (!commit()) {
+      mockNotes.value = prevRows // 容量不足はロールバック（無反応の成功を返さない）
+      return { ok: false, error: { code: 'AKO-NOTE-090', message: '保存容量が不足しています' } }
+    }
+    if (target.active !== false) {
+      const nextEffective = next ?? tenantPoipoiTargets()
+      const addedIds = addedNotifyRecipientIds(prevEffective, nextEffective, members, target.memberId)
+      if (addedIds.length > 0) {
+        const author = members.find(m => m.id === target.memberId)
+        firePoipoiNotify(target.body, noteId, nextEffective, addedIds,
+          { id: target.memberId, name: author?.name ?? target.memberId })
+      }
+    }
+    return { ok: true, id: noteId }
+  }
+
   async function refresh(): Promise<void> {
     if (isApi) {
       await loadNotes(kind, true)
@@ -212,5 +275,5 @@ export function useNotes(kind: NoteKind) {
     }
   }
 
-  return { list, adminList, archived, add, importFile, archive, restore, refresh }
+  return { list, adminList, archived, add, importFile, archive, restore, updateNotifyTargets, refresh }
 }

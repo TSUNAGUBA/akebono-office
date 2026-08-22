@@ -96,7 +96,7 @@ async function main() {
       (await page.getByRole('tab', { name: '改善のタネ' }).count()) >= 1
       && (await page.getByRole('tab', { name: '日報・週報' }).count()) >= 1)
     // セルの三値循環: 既定（−）→ 参照可 → 参照不可 → 既定
-    const cell = page.getByRole('button', { name: /一般 × 改善のタネ × 全メンバー（一括）/ })
+    const cell = page.getByRole('button', { name: /一般 × ぽいぽいポスト（改善のタネ） × 全メンバー（一括）/ })
     check('AIの参照範囲: セルの初期状態は「既定」', (await cell.getAttribute('title'))?.includes('既定') === true)
     await cell.click()
     check('AIの参照範囲: クリックで「参照可（明示設定）」になる',

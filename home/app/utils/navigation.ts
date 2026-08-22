@@ -50,6 +50,9 @@ export const NAV_GROUPS: NavGroup[] = [
       // 案件詳細（/sales-activity/<id> 等）でもアクティブ表示する（案件ヘッダー + 活動ログ構造 = 2026-08-20）
       { path: '/sales-activity', label: '営業活動', icon: 'Handshake', matchPrefix: true },
       { path: '/partner-activity', label: 'ビジネスパートナー活動', icon: 'Users', matchPrefix: true },
+      // 営業管理（改善要望 2026-08-21・F-53/F-54）
+      { path: '/sales-approach', label: '営業アプローチリスト', icon: 'ListChecks' },
+      { path: '/customer-dashboard', label: '顧客別ダッシュボード', icon: 'LayoutDashboard' },
       { path: '/workflow', label: '稟議', icon: 'GitPullRequestArrow' },
     ],
   },

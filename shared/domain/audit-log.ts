@@ -89,9 +89,11 @@ export const AUDIT_PAGE_NAMES: Record<string, string> = {
   '/workflow': '稟議',
   '/reports': '日報',
   '/ai-assistant': 'AI業務アシスタント',
-  '/poipoi': '改善のタネ・議事録',
+  '/poipoi': 'ぽいぽいポスト・議事録',
   '/customer-log': '顧客活動',
   '/customer-context': '顧客コンテキスト',
+  '/sales-approach': '営業アプローチリスト',
+  '/customer-dashboard': '顧客別ダッシュボード',
   '/support-activity': 'サポート活動',
   '/sales-activity': '営業活動',
   '/partner-activity': 'ビジネスパートナー活動',
@@ -100,6 +102,8 @@ export const AUDIT_PAGE_NAMES: Record<string, string> = {
   '/ai-company/roles': 'ロール設定',
   '/ai-company/employees': 'AI 社員の管理',
   '/media': 'メディア分析',
+  '/media/reports': 'メディア AIレポート',
+  '/media/measures': 'メディア改善施策',
   '/media/articles': 'AI 記事生成',
   '/media/settings': 'チャンネル設定',
   '/profile': 'プロフィール',
@@ -177,12 +181,13 @@ export const AUDIT_ENTITY_META: Record<string, AuditEntityMeta> = {
   // ---- 日報・AI・ノート ----
   daily_reports: { label: '日報', page: '/reports' },
   task_plan: { label: 'AI業務アシスタントの計画', page: '/ai-assistant' },
-  // ノート（改善のタネ / 議事録）は同一 entity のため主画面 = 改善のタネへ寄せる（設計判断）
-  notes: { label: 'ノート（改善のタネ・議事録）', page: '/poipoi' },
+  // ノート（ぽいぽいポスト / 議事録）は同一 entity のため主画面 = ぽいぽいポストへ寄せる（設計判断）
+  notes: { label: 'ノート（ぽいぽいポスト・議事録）', page: '/poipoi' },
   // ---- 顧客・活動記録 ----
   customer_logs: { label: '顧客活動', page: '/customer-log' },
   customer_contexts: { label: '顧客コンテキスト', page: '/customer-context' },
   customer_context_notes: { label: '顧客コンテキストのメモ', page: '/customer-context' },
+  sales_approaches: { label: '営業アプローチ', page: '/sales-approach' },
   support_activities: { label: 'サポート活動', page: '/support-activity' },
   sales_activities: { label: '営業活動（案件）', page: '/sales-activity' },
   sales_activity_logs: { label: '営業活動ログ', page: '/sales-activity' },
@@ -202,6 +207,9 @@ export const AUDIT_ENTITY_META: Record<string, AuditEntityMeta> = {
   media_articles: { label: 'メディア記事', page: '/media/articles' },
   media_generated_articles: { label: 'AI 生成記事', page: '/media/articles' },
   media_external_articles: { label: '外部投稿記事', page: '/media' },
+  // AI 週次レポート・改善施策（改善要望 2026-08-21・F-55/F-56）
+  media_weekly_reports: { label: 'AI週次レポート', page: '/media/reports' },
+  media_measures: { label: 'メディア改善施策', page: '/media/measures' },
   // ---- 売上・個人設定・検索 ----
   sales_monthly: { label: '月次売上', page: '/sales' },
   mart_load_runs: { label: '売上データ更新', page: '/sales' },

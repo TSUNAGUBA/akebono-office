@@ -211,6 +211,8 @@ export const DASHBOARD_TEMPLATES: DashboardTemplate[] = [
       sections: [
         { id: 'daily', label: '毎日の業務', cardIds: ['timecard', 'attendance', 'shift', 'reports', 'ai-assistant'] },
         { id: 'record', label: '記録・共有', cardIds: ['customer-log', 'poipoi', 'minutes', 'workflow'] },
+        // 営業管理（改善要望 2026-08-21）
+        { id: 'sales-mgmt', label: '営業管理', cardIds: ['sales-approach', 'customer-dashboard'] },
         { id: 'decision', label: 'AI・意思決定', cardIds: ['decision', 'ai-company'] },
         { id: 'insights', label: '経営・状況', cardIds: ['sales', 'media', 'status'] },
         { id: 'support', label: '業務支援', cardIds: ['support', 'inbox'] },
@@ -226,7 +228,7 @@ export const DASHBOARD_TEMPLATES: DashboardTemplate[] = [
     layout: {
       templateId: 'sales',
       sections: [
-        { id: 'sales', label: '営業', cardIds: ['customer-log', 'sales', 'media', 'workflow'] },
+        { id: 'sales', label: '営業', cardIds: ['sales-approach', 'customer-dashboard', 'customer-log', 'sales', 'media', 'workflow'] },
         { id: 'analysis', label: '状況・判断', cardIds: ['status', 'decision'] },
         { id: 'daily', label: '日々の業務', cardIds: ['timecard', 'attendance', 'shift', 'reports', 'ai-assistant'] },
         { id: 'record', label: '記録・共有', cardIds: ['poipoi', 'minutes'] },
@@ -245,7 +247,7 @@ export const DASHBOARD_TEMPLATES: DashboardTemplate[] = [
       templateId: 'executive',
       sections: [
         { id: 'cockpit', label: '経営・状況', cardIds: ['sales', 'status', 'ai-company', 'decision'] },
-        { id: 'crm', label: '営業・顧客', cardIds: ['customer-log', 'media', 'workflow'] },
+        { id: 'crm', label: '営業・顧客', cardIds: ['sales-approach', 'customer-dashboard', 'customer-log', 'media', 'workflow'] },
         { id: 'ops', label: '業務', cardIds: ['timecard', 'attendance', 'shift', 'reports', 'ai-assistant', 'poipoi', 'minutes'] },
         { id: 'support', label: '業務支援', cardIds: ['support', 'inbox'] },
         { id: 'admin', label: '管理', cardIds: ['masters', 'settings'] },

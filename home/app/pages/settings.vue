@@ -590,7 +590,7 @@ async function onResetDemo(): Promise<void> {
         <!-- b3) ぽいぽいポストの通知先（ロール/役職/個人。オペレーター指示 2026-08-03） -->
         <UiSectionCard
           title="改善のタネの通知先"
-          description="改善のタネが登録されると、原文を下記の宛先へ通知します。宛先はロール・役職・個人で指定できます（投稿者本人は除外）。未設定の場合は通知しません"
+          description="改善のタネ（ぽいぽいポスト）が登録されると、原文を下記の宛先へ通知します。宛先はロール・役職・個人で指定できます（投稿者本人は除外）。未設定の場合は通知しません。ここでの設定は既定値で、各ポストの詳細（通知先を編集）からポスト単位で上書きできます"
         >
           <SettingsNotifyRecipientsEditor v-model="poipoiNotifyRecipients" />
         </UiSectionCard>

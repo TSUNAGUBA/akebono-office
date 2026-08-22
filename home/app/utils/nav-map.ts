@@ -67,7 +67,7 @@ export const NAV_MAP: Record<string, NavMapEntry> = {
       { to: '/weekly-report', label: '週報' },
       { to: '/monthly-report', label: '月報' },
       { to: '/ai-assistant', label: 'AI業務アシスタント' },
-      { to: '/poipoi', label: '改善のタネ' },
+      { to: '/poipoi', label: 'ぽいぽいポスト' },
       WORK_CATEGORIES,
       PROJECTS,
       PERMISSIONS,
@@ -111,7 +111,7 @@ export const NAV_MAP: Record<string, NavMapEntry> = {
   '/minutes': {
     parent: HOME,
     related: [
-      { to: '/poipoi', label: '改善のタネ' },
+      { to: '/poipoi', label: 'ぽいぽいポスト' },
       WORK_CATEGORIES,
       CUSTOMERS,
       PROJECTS,
@@ -136,6 +136,25 @@ export const NAV_MAP: Record<string, NavMapEntry> = {
       { to: '/support-activity', label: 'サポート活動' },
       CUSTOMERS,
       { to: '/masters/relations-company', label: '顧客関係(会社)マスタ', adminOnly: true },
+    ],
+  },
+  // 営業管理（改善要望 2026-08-21・F-53/F-54）: 顧客軸の営業管理ビュー
+  '/sales-approach': {
+    parent: HOME,
+    related: [
+      { to: '/customer-dashboard', label: '顧客別ダッシュボード' },
+      { to: '/customer-context', label: '顧客コンテキスト' },
+      { to: '/sales-activity', label: '営業活動' },
+      CUSTOMERS,
+    ],
+  },
+  '/customer-dashboard': {
+    parent: HOME,
+    related: [
+      { to: '/sales-approach', label: '営業アプローチリスト' },
+      { to: '/customer-context', label: '顧客コンテキスト' },
+      { to: '/customer-log', label: '顧客活動' },
+      CUSTOMERS,
     ],
   },
   '/support-activity': {
@@ -219,8 +238,13 @@ export const NAV_MAP: Record<string, NavMapEntry> = {
   '/akebono/dashboard': { parent: { to: '/akebono', label: 'AKEBONO 業務' }, related: [{ to: '/media', label: 'メディア分析' }, { to: '/akebono/sales', label: '売上管理' }] },
   '/akebono/company': { parent: { to: '/akebono', label: 'AKEBONO 業務' }, related: [{ to: '/akebono/dashboard', label: '業態別ダッシュボード' }, { to: '/sales', label: '売上管理' }] },
   // メディア分析は独立チャンネル化しトップメニュー化（2026-08-03）= HOME 直下（旧 AKEBONO 業務配下から移動）
-  '/media': { parent: HOME, related: [{ to: '/media/analytics', label: 'メディア分析' }, { to: '/media/articles', label: 'AI 記事生成' }, { to: '/media/settings', label: 'チャンネル設定', adminOnly: true }] },
-  '/media/analytics': { parent: { to: '/media', label: 'メディア分析' }, related: [{ to: '/media/articles', label: 'AI 記事生成' }, { to: '/media/settings', label: 'チャンネル設定', adminOnly: true }] },
+  '/media': { parent: HOME, related: [{ to: '/media/analytics', label: 'メディア分析' }, { to: '/media/reports', label: 'AIレポート' }, { to: '/media/measures', label: '改善施策一覧' }, { to: '/media/articles', label: 'AI 記事生成' }, { to: '/media/settings', label: 'チャンネル設定', adminOnly: true }] },
+  '/media/analytics': { parent: { to: '/media', label: 'メディア分析' }, related: [{ to: '/media/reports', label: 'AIレポート' }, { to: '/media/articles', label: 'AI 記事生成' }, { to: '/media/settings', label: 'チャンネル設定', adminOnly: true }] },
+  // AIレポート・改善施策（改善要望 2026-08-21・F-55/F-56）
+  '/media/reports': { parent: { to: '/media', label: 'メディア分析' }, related: [{ to: '/media/measures', label: '改善施策一覧' }, { to: '/media/analytics', label: 'メディア分析' }] },
+  '/media/reports/': { prefix: true, parent: { to: '/media/reports', label: 'AIレポート' } },
+  '/media/measures': { parent: { to: '/media', label: 'メディア分析' }, related: [{ to: '/media/reports', label: 'AIレポート' }, { to: '/media/analytics', label: 'メディア分析' }] },
+  '/media/measures/': { prefix: true, parent: { to: '/media/measures', label: '改善施策一覧' } },
   '/media/articles': { parent: { to: '/media', label: 'メディア分析' }, related: [{ to: '/media/analytics', label: 'メディア分析' }, { to: '/media/settings', label: 'チャンネル設定', adminOnly: true }] },
   '/media/settings': { parent: { to: '/media', label: 'メディア分析' }, related: [{ to: '/media/analytics', label: 'メディア分析' }, { to: '/media/articles', label: 'AI 記事生成' }] },
   '/akebono/products': { parent: { to: '/akebono', label: 'AKEBONO 業務' }, related: [{ to: '/akebono/inventory', label: '在庫管理' }, { to: '/akebono/settings/segments', label: '業態アプリ設定', adminOnly: true }, { to: '/akebono/masters', label: '共通マスタ', adminOnly: true }, { to: '/akebono/settings/items', label: '項目カスタマイズ', adminOnly: true }] },
@@ -282,7 +306,7 @@ export const NAV_MAP: Record<string, NavMapEntry> = {
   '/masters/work-categories': {
     parent: MASTERS,
     related: [
-      { to: '/poipoi', label: '改善のタネ' },
+      { to: '/poipoi', label: 'ぽいぽいポスト' },
       { to: '/minutes', label: '議事録' },
     ],
   },

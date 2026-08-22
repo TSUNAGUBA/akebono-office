@@ -423,7 +423,8 @@ watch([selDate, currentUserId], () => { poipoiDraft.value = '' })
 async function submitPoipoiIfAny(): Promise<void> {
   const text = poipoiDraft.value.trim()
   if (!text) return
-  const res = await poipoiNotes.add({ title: '', body: text, projectId: null, companyId: null, workCategoryId: null })
+  // origin='report' = 日報提出時の登録経路（ぽいぽいポスト一覧の経路バッジに使う。改善要望 2026-08-21）
+  const res = await poipoiNotes.add({ title: '', body: text, projectId: null, companyId: null, workCategoryId: null, origin: 'report' })
   if (res.ok) {
     poipoiDraft.value = ''
     show('改善のタネを登録しました')

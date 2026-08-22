@@ -81,3 +81,18 @@ export function resolveNotifyRecipientIds<M extends RecipientCandidate>(
   if (excludeMemberId) ids.delete(excludeMemberId)
   return [...ids].sort((a, b) => a.localeCompare(b))
 }
+
+/**
+ * 通知先の変更で**新たに追加された**宛先メンバー id を返す（改善要望 2026-08-21 = ぽいぽいポストの
+ * 登録後の通知先編集）。変更前の実効宛先（prev）に含まれていたメンバーへは再通知しない = 重複通知の防止（原則2）。
+ * API（PUT /v1/notes/:id/notify-targets）とモック（useNotes.updateNotifyTargets）で共有する純粋関数。
+ */
+export function addedNotifyRecipientIds<M extends RecipientCandidate>(
+  prevTargets: NotifyRecipientTarget[],
+  nextTargets: NotifyRecipientTarget[],
+  members: M[],
+  excludeMemberId?: string | null,
+): string[] {
+  const prev = new Set(resolveNotifyRecipientIds(prevTargets, members, excludeMemberId))
+  return resolveNotifyRecipientIds(nextTargets, members, excludeMemberId).filter(id => !prev.has(id))
+}

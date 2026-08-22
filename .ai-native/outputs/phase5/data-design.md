@@ -317,6 +317,19 @@ Phase B（設定系）・Phase C（記録系 + 売上軸）に続く**最終フ�
 | `user_chat_links` | 設定系（宛先キャッシュ。**AKEBONO Home 名義化 2026-08-20 = 0077 でトークン保管を廃止**） | `member_id`(FK members ON DELETE CASCADE) + `service`(`slack`/`google_chat`) = PK／`external_user_id`（Slack = ユーザー id / Google = users/{...} 識別子〔旧行 = sub・新行 = email〕）／`display_name`／`dm_target`（**0077 追加**: 解決済み DM 宛先。Slack = チャンネル id / Google = スペース名。空 = 送信時に自己修復）／`status`（`connected` のみ運用。`reauth_required` は旧方式の残置値 = 0077 で全行 connected へ戻し・新規書込なし）／`access_token_enc`・`refresh_token_enc`・`expires_at`（**旧方式の残置列 = 0077 で全行クリア・未使用**）／`created_at`・`updated_at` | 連携解除 = 行 DELETE（再連携 = 1 クリックで復元可のため物理削除。取消フロー = 原則9.5）。通知マトリクスは user_preferences `notificationChannels` を再利用（新テーブルなし = 設計判断）。SoT 注記: 宛先はテナント資格情報でいつでも再解決できるキャッシュ（バックアップ対象外） |
 | `chat_oauth_states` | 一時（ノンス） | `state` PK／`member_id`／`service`／`created_at` | **使用停止**（AKEBONO Home 名義化 2026-08-20 で OAuth フロー廃止。テーブルは残置 = 破壊しない。旧行は最大 10 分で陳腐化する一時データのみ） |
 
+### 1.13 営業アプローチリスト（`sales_approaches`。0087 = 改善要望 2026-08-21・F-53）
+
+| テーブル | 区分 | 主な列 | 備考 |
+|---|---|---|---|
+| `sales_approaches` | 業務データ（チーム共有・更新可・論理削除） | `id`／`member_id`（登録者 FK members）／`company_id`（**UNIQUE** FK companies = 1社1行）／`status`（候補/アプローチ中/商談化/受注/見送り/休眠）／`priority`（高/中/低）／`assignee_member_id`（担当 FK members）／`next_action`・`next_action_date`／`note`（方針メモ）／`active`／`created_at`・`updated_at` | 取消済みも 1 行に数える（復元で再開 = 重複行を作らない）。**表示用の基本情報・属性・コンテキスト・活動実績は保存しない = companies / customer_contexts / customer_logs / sales_activities からのライブ参照**（SoT の重複を作らない = 原則6）。区分値の SoT = shared/domain/types（SALES_APPROACH_STATUSES / PRIORITIES） |
+
+### 1.14 メディア AI 週次レポート・改善施策（`media_weekly_reports` / `media_measures`。0088 = 改善要望 2026-08-21・F-55/F-56）
+
+| テーブル | 区分 | 主な列 | 備考 |
+|---|---|---|---|
+| `media_weekly_reports` | 導出 + 判断記録（**UNIQUE(channel_id, week_start)**） | `id`／`channel_id`（FK media_channels CASCADE）／`week_start`（月曜）／`period_from`・`period_to`／`content` jsonb（エグゼクティブサマリー・重要な変化・原因仮説・コンテンツ評価・**推奨アクション〔判断 decision / decidedAt / decidedByMemberId を含む〕**）／`llm`／`generated_at` | 生成は決定的ヒューリスティック（shared/domain/media-weekly-report）・**生成済み週は再生成しない**（判断が巻き戻らない = 原則2）。judgement を含むため純粋な導出キャッシュではない（media_insights と異なり上書き不可） |
+| `media_measures` | 業務データ（チーム共有・更新可・論理削除） | `id`／`channel_id`（FK CASCADE）／`member_id`（起票者）／`name`（施策名）／`background`・`content`・`target`・`expected_change`／`assignee_member_id`・`due_date`／`status`（実施予定/実施中/効果観測中/評価待ち/完了）／`source_report_id`（FK weekly_reports ON DELETE SET NULL）・`source_action_index`・`source_label`／`verification` jsonb（実施日・比較期間・KPI 実施前後・AI評価・人の最終評価・学び・Next Action）／`active`／`created_at`・`updated_at` | **(source_report_id, source_action_index) の部分一意 index** = 同一アクションの二重起票防止（冪等 = 原則2）。効果検証の AI 評価は決定的ヒューリスティック + 全項目ユーザー編集可 |
+
 ## 2. スタースキーマ接続（akebono-scm-platform `mart` 規約準拠）
 
 ### 2.1 接続方針

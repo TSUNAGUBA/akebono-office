@@ -22,6 +22,7 @@ import { partnerActivitiesRoutes, salesActivitiesRoutes, supportActivitiesRoutes
 import { attendanceRoutes } from './routes/attendance'
 import { configsRoutes } from './routes/configs'
 import { customerContextsRoutes } from './routes/customer-contexts'
+import { salesApproachesRoutes } from './routes/sales-approaches'
 import { customerLogsRoutes } from './routes/customer-logs'
 import { escalationsRoutes } from './routes/escalations'
 import { holidaysRoutes } from './routes/holidays'
@@ -39,6 +40,7 @@ import { runUptimeRollup, statusRoutes } from './routes/status'
 import { assistRoutes } from './routes/assist'
 import { calendarOauthCallback, calendarRoutes } from './routes/calendar'
 import { mediaOauthCallback, mediaRoutes } from './routes/media'
+import { mediaReportsRoutes, runMediaWeeklyReports } from './routes/media-reports'
 import { chatbotRoutes } from './routes/chatbot'
 import { decisionsRoutes } from './routes/decisions'
 import { documentsRoutes } from './routes/documents'
@@ -117,6 +119,17 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
       throw err('AKO-AUTH-001', 'ジョブ実行キーが無効です', 401)
     }
     const result = await runReportReminders(pool)
+    return c.json({ data: result })
+  })
+
+  // メディア分析の AI 週次レポート（Cloud Scheduler 週次〔月曜朝推奨〕→ 共有鍵。改善要望 2026-08-21。
+  // GA 連携済み全チャンネルの直前完了週を冪等生成 = 任意の周期で安全。生成済み週はスキップ）
+  app.post('/jobs/media-weekly-reports', async (c) => {
+    const secret = process.env.CRON_SECRET ?? ''
+    if (!secret || c.req.header('x-cron-key') !== secret) {
+      throw err('AKO-AUTH-001', 'ジョブ実行キーが無効です', 401)
+    }
+    const result = await runMediaWeeklyReports(pool, env)
     return c.json({ data: result })
   })
 
@@ -244,11 +257,15 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
   app.route('/v1/customer-contexts', customerContextsRoutes(pool, env))
   // 活動記録 3 種（0067）: サポート/営業/ビジネスパートナー活動（チーム共有の記録系。改修依頼 2026-08-18）
   app.route('/v1/support-activities', supportActivitiesRoutes(pool))
+  // 営業アプローチリスト（0087。改善要望 2026-08-21・F-53。チーム共有・1社1行）
+  app.route('/v1/sales-approaches', salesApproachesRoutes(pool))
   app.route('/v1/sales-activities', salesActivitiesRoutes(pool, env))
   app.route('/v1/partner-activities', partnerActivitiesRoutes(pool, env))
   app.route('/v1/knowledge', knowledgeRoutes(pool, env))
   app.route('/v1/documents', documentsRoutes(pool, env))
   app.route('/v1/media', mediaRoutes(pool, env))
+  // AI 週次レポート・改善施策（0088。改善要望 2026-08-21・F-55/F-56。/v1/media 配下へ追加マウント）
+  app.route('/v1/media', mediaReportsRoutes(pool, env))
   // F-42（0057）: 改善要望。投稿は全員可・管理系はルート内で canManageImprovements ガード（featureGuard 非対象）
   app.route('/v1/improvements', improvementsRoutes(pool, env))
 

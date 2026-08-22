@@ -49,7 +49,7 @@ export const MENU_CARDS: Record<MenuArea, MenuCardDef[]> = {
     { id: 'reports-weekly', title: '週報', description: '週次のふりかえり（成果・課題・来週の最重要テーマ）', icon: 'CalendarDays', to: '/weekly-report' },
     { id: 'reports-monthly', title: '月報', description: '月次のふりかえり（成果・課題・来月の最重要テーマ）', icon: 'CalendarClock', to: '/monthly-report' },
     { id: 'ai-assistant', title: 'AI業務アシスタント', description: '明日の計画と当日の振り返りを AI と。日報へ自動反映', icon: 'Sparkles', to: '/ai-assistant' },
-    { id: 'poipoi', title: '改善のタネ', description: '気づき・改善アイデアを投げ込む改善のタネ。AI の参照対象・管理者はチーム改善のため閲覧可', icon: 'StickyNote', to: '/poipoi' },
+    { id: 'poipoi', title: 'ぽいぽいポスト', description: '気づき・改善アイデア（改善のタネ）を投げ込むぽいぽいポスト。AI の参照対象・管理者はチーム改善のため閲覧可', icon: 'StickyNote', to: '/poipoi' },
     { id: 'minutes', title: '議事録', description: '会議の記録を蓄積。全員が参照でき AI の参照対象', icon: 'NotebookPen', to: '/minutes' },
     { id: 'customer-log', title: '顧客活動', description: 'いつ・どの顧客と・どんな活動をしたかを記録（全員の記録を閲覧可）。AI の参照対象（自分の記録）', icon: 'MessageSquare', to: '/customer-log' },
     { id: 'customer-context', title: '顧客コンテキスト', description: '顧客の基本情報・関係・定性/定量情報・メモを 1 画面で可視化。AI の Web 調査で定性情報を更新', icon: 'BookUser', to: '/customer-context' },
@@ -57,6 +57,9 @@ export const MENU_CARDS: Record<MenuArea, MenuCardDef[]> = {
     { id: 'sales-activity', title: '営業活動', description: '商談を案件として管理し活動ログを記録。AI集約でフェーズ・金額・Next Action と経緯を確認', icon: 'Handshake', to: '/sales-activity' },
     { id: 'partner-activity', title: 'ビジネスパートナー活動', description: 'パートナー連携テーマを案件として管理し活動ログを記録。案件化したら商談へリンク', icon: 'Users', to: '/partner-activity' },
     { id: 'workflow', title: '稟議', description: '稟議の申請・承認（職務権限マトリクス準拠）', icon: 'GitPullRequestArrow', to: '/workflow' },
+    // 営業管理（改善要望 2026-08-21・F-53/F-54。専用セクション 'sales-mgmt' に配置）
+    { id: 'sales-approach', title: '営業アプローチリスト', description: '顧客基本情報・属性・顧客コンテキストを基にアプローチ状況（状態・優先度・担当・次のアクション）を管理', icon: 'ListChecks', to: '/sales-approach' },
+    { id: 'customer-dashboard', title: '顧客別ダッシュボード', description: '顧客ごとに基本情報・顧客コンテキスト・活動実績と AI 分析を可視化し、詳細へドリルダウン', icon: 'LayoutDashboard', to: '/customer-dashboard' },
     { id: 'ai-company', title: 'AIネイティブカンパニー', description: 'AI 社員の執務室。タスク依頼と活動モニタリング', icon: 'Building2', to: '/ai-company', featureToggle: 'aiCompany' },
     // メディア分析（media）は独立したメディアチャンネル（任意で業態連携）としてトップメニュー化（2026-08-03）。
     // 従来は業態配下の AKEBONO 業務アプリだったが、業態と 1:1 の結合を解消し独立させた。
@@ -87,7 +90,7 @@ export const MENU_CARDS: Record<MenuArea, MenuCardDef[]> = {
     { id: 'villages', title: '事業区分（Village）', description: '社内事業の区分。活動記録の最上段で参照・自由入力で新規登録可', icon: 'Building2', to: '/masters/villages' },
     { id: 'projects', title: 'プロジェクト', description: 'PJ 名・顧客・種別・状態・担当・期間・予算・目的', icon: 'FolderKanban', to: '/masters/projects' },
     { id: 'decision-themes', title: '判断テーマ', description: '意思決定支援のテーマ（意味・関係・制約と打ち手・選択肢）', icon: 'Scale', to: '/masters/decision-themes' },
-    { id: 'work-categories', title: '業務種別', description: '改善のタネ・議事録の分類。名称と表示順', icon: 'Tags', to: '/masters/work-categories' },
+    { id: 'work-categories', title: '業務種別', description: 'ぽいぽいポスト（改善のタネ）・議事録の分類。名称と表示順', icon: 'Tags', to: '/masters/work-categories' },
     { id: 'knowledge', title: 'ナレッジ', description: '5 ドメイン（業界/会社/人/関係/PJ）に紐付く記事と裁定還流', icon: 'BookOpen', to: '/masters/knowledge' },
     { id: 'settings', title: 'カスタム項目・区分値', description: 'カスタム項目・区分値の定義は設定画面で管理します', icon: 'Settings2', to: '/settings' },
   ],
@@ -99,6 +102,8 @@ export const DEFAULT_MENU_CATEGORIES: Record<MenuArea, MenuCategoryDef[]> = {
     { id: 'decision', label: '意思決定支援', cardIds: ['decision'] },
     { id: 'work', label: '業務ツール', cardIds: ['timecard', 'attendance', 'shift', 'reports', 'reports-weekly', 'reports-monthly', 'ai-assistant', 'poipoi', 'minutes', 'customer-log', 'customer-context', 'support-activity', 'sales-activity', 'partner-activity', 'workflow'] },
     { id: 'ai-company', label: 'AIネイティブカンパニー', cardIds: ['ai-company'] },
+    // 営業管理（改善要望 2026-08-21: メインダッシュボードのカード型メニューに「営業管理」セクションを新設）
+    { id: 'sales-mgmt', label: '営業管理', cardIds: ['sales-approach', 'customer-dashboard'] },
     { id: 'insights', label: '経営・状況', cardIds: ['sales', 'media', 'status'] },
     { id: 'support', label: '業務支援', cardIds: ['support', 'inbox'] },
     { id: 'admin', label: '管理', cardIds: ['improvements', 'masters', 'settings'] },

@@ -11,12 +11,13 @@ import type {
   CustomerLog, CustomFieldDef, DailyReport, DecisionLog, DecisionTheme, DelegateSetting, Department,
   DocumentNode, Escalation, EscalationRule, ExternalLink, FeatureToggle, HearingLog, Holiday,
   Industry, KnowledgeArticle, LeaveGrant, LeaveRequest, LeaveType, Member, MonthlyReport, Project,
-  PartnerActivity, PunchRecord, RelationType, ReportComment, ReportRead, SalesActivity, SalesMonthly, ServiceIncident,
+  PartnerActivity, PunchRecord, RelationType, ReportComment, ReportRead, SalesActivity, SalesApproach, SalesMonthly, ServiceIncident,
   ShiftAssignment, ShiftDemand, ShiftPeriod, ShiftWish, SupportActivity, SystemService,
   TaskPlan, UptimeDaily, Village, WeeklyReport, WorkflowRequest, WorkflowRoute, WorkCategory, Note,
 } from '~/types/domain'
 import type { WeeklyInsightRecord } from '../../../../shared/domain/weekly-insight'
 import type { MediaInsightRecord } from '../../../../shared/domain/media-insight'
+import type { MediaMeasure, MediaWeeklyReport } from '../../../../shared/domain/media-weekly-report'
 import type { DashboardInsightRecord } from '../../../../shared/domain/portfolio-insight'
 import type { ImprovementItem, ImprovementNote, ImprovementRequest, ImprovementRequestComment } from '../../../../shared/domain/improvement'
 import type {
@@ -72,6 +73,18 @@ export interface MockDbShape {
    */
   customerContexts: CustomerContext[]
   customerContextNotes: CustomerContextNote[]
+  /**
+   * 営業アプローチリスト（改善要望 2026-08-21・F-53）: 顧客ごとのアプローチ状態・方針（1社1行）。
+   * チーム共有。API モードは /v1/sales-approaches の全量ハイドレーション（CUSTOM_COLLECTION_ENDPOINTS）
+   */
+  salesApproaches: SalesApproach[]
+  /**
+   * メディア分析の AI 週次レポート・改善施策（改善要望 2026-08-21・F-55/F-56）。
+   * モックはレポートを訪問時に決定的へ遅延生成する（useMediaReports.ensureMockReports）。
+   * API モードは /v1/media/weekly-reports・/v1/media/measures が SoT
+   */
+  mediaWeeklyReports: MediaWeeklyReport[]
+  mediaMeasures: MediaMeasure[]
   companies: Company[]
   contacts: Contact[]
   relationTypes: RelationType[]
@@ -210,6 +223,10 @@ export function buildSeed(): MockDbShape {
     partnerActivityLogs: buildPartnerActivityLogs(),
     customerContexts: buildCustomerContexts(),
     customerContextNotes: buildCustomerContextNotes(),
+    salesApproaches: [], // デモは空（UI から登録。API モードはサーバー SoT）
+    mediaWeeklyReports: [], // 訪問時に直近週分を決定的へ遅延生成（useMediaReports）
+    mediaMeasures: [],
+
     companies: [...core.seedCompanies, ...akebono.seedAkebonoCompanies],
     contacts: core.seedContacts,
     relationTypes: core.seedRelationTypes,
