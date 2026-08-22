@@ -5,7 +5,7 @@
  * 記録者（member）・会社（company）は core シードの id を参照する。
  * チーム共有の記録系（全員が閲覧・編集できる）のため、記録者は m-03/m-04/m-05 に分散させる。
  */
-import { ACTIVITY_LOG_KINDS, type ActivityLog, type PartnerActivity, type SalesActivity, type SupportActivity } from '~/types/domain'
+import { ACTIVITY_LOG_KINDS, type ActivityLog, type InternalSupport, type PartnerActivity, type SalesActivity, type SupportActivity } from '~/types/domain'
 import { addDays } from '~/utils/format'
 import { pick } from '~/utils/rng'
 
@@ -68,6 +68,55 @@ export function buildSupportActivities(): SupportActivity[] {
       priority: '通常', status: '未対応', staffMemberId: 'm-05',
       response: '', cause: '', resolution: '', completedDate: null, completedTime: null,
       knowledgeNote: '',
+    },
+  ]
+
+  return rows.map(r => ({
+    ...r,
+    createdAt: iso(r.back, r.at),
+    updatedAt: iso(r.back, r.at),
+    active: true,
+  }))
+}
+
+/**
+ * 社内サポート活動のシード（改善要望 2026-08-22・F-57）。
+ * メンバー間フォローアップのデモ（決定的・今日基準の相対日付）。
+ * AKEBONO Intelligence のナレッジカテゴリ「社内サポート」の AI 分析材料になる。
+ */
+export function buildInternalSupports(): InternalSupport[] {
+  const today = todayJst()
+  const d = (back: number): string => addDays(today, -back)
+  const iso = (back: number, time: string): string => `${d(back)}T${time}:00+09:00`
+
+  const rows: Array<Omit<InternalSupport, 'createdAt' | 'updatedAt' | 'active'> & { back: number; at: string }> = [
+    {
+      id: 'isp-0001', memberId: 'm-03', back: 1, at: '15:30',
+      activityDate: d(1), activityTime: '15:00', performerMemberId: 'm-03', targetMemberId: 'm-06',
+      taskDescription: '顧客向け提案資料の構成づくり。論点整理と根拠データの見せ方に迷いがあったため、構成レビューと肉付けを一緒に実施。',
+      method: 'ペアワーク',
+      feedback: '構成テンプレート（課題→打ち手→効果試算）を共有。次回の提案からは自走できる見込み。',
+    },
+    {
+      id: 'isp-0002', memberId: 'm-05', back: 3, at: '10:15',
+      activityDate: d(3), activityTime: '10:00', performerMemberId: 'm-05', targetMemberId: 'm-08',
+      taskDescription: '深夜バッチ障害の一次対応手順。アラート受信からエスカレーション判断までの流れが未習得だったため、実際のログを使って手順を確認。',
+      method: 'Web会議',
+      feedback: '一次対応チェックリストを整備。翌週のオンコール当番から一人で対応予定。',
+    },
+    {
+      id: 'isp-0003', memberId: 'm-04', back: 5, at: '17:00',
+      activityDate: d(5), activityTime: null, performerMemberId: 'm-04', targetMemberId: 'm-07',
+      taskDescription: 'サポート問い合わせの記録の書き方（内容・状況・対応の 3 区分）。記録粒度がばらついていたため、過去の良い記録例を使って説明。',
+      method: 'チャット',
+      feedback: '',
+    },
+    {
+      id: 'isp-0004', memberId: 'm-03', back: 9, at: '13:30',
+      activityDate: d(9), activityTime: '13:00', performerMemberId: 'm-03', targetMemberId: 'm-04',
+      taskDescription: '月次の売上集計レポート作成。集計クエリの条件設定と前年比較の考え方を勉強会形式でレクチャー。',
+      method: '勉強会',
+      feedback: '手順書を作成しナレッジへ登録。他メンバーにも展開予定。',
     },
   ]
 

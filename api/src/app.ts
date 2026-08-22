@@ -23,6 +23,8 @@ import { attendanceRoutes } from './routes/attendance'
 import { configsRoutes } from './routes/configs'
 import { customerContextsRoutes } from './routes/customer-contexts'
 import { salesApproachesRoutes } from './routes/sales-approaches'
+import { internalSupportsRoutes } from './routes/internal-supports'
+import { intelligenceRoutes } from './routes/intelligence'
 import { customerLogsRoutes } from './routes/customer-logs'
 import { escalationsRoutes } from './routes/escalations'
 import { holidaysRoutes } from './routes/holidays'
@@ -259,6 +261,10 @@ export function createApp(env: Env, pool: pg.Pool): Hono {
   app.route('/v1/support-activities', supportActivitiesRoutes(pool))
   // 営業アプローチリスト（0087。改善要望 2026-08-21・F-53。チーム共有・1社1行）
   app.route('/v1/sales-approaches', salesApproachesRoutes(pool))
+  // 社内サポート活動（0089。改善要望 2026-08-22・F-57。チーム共有 = メンバー間フォローアップの記録）
+  app.route('/v1/internal-supports', internalSupportsRoutes(pool))
+  // AKEBONO Intelligence（0090。改善要望 2026-08-22 = モック境界の本実装: サーバー側の記録ストア + AI 分析生成）
+  app.route('/v1/intelligence', intelligenceRoutes(pool, env))
   app.route('/v1/sales-activities', salesActivitiesRoutes(pool, env))
   app.route('/v1/partner-activities', partnerActivitiesRoutes(pool, env))
   app.route('/v1/knowledge', knowledgeRoutes(pool, env))

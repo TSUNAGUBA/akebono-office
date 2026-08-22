@@ -4754,3 +4754,50 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
       再プローブ = 新設・改修 8 ルートで probe-ui-sweep / probe-truncate-break とも CLEAN。
     - 検証: home typecheck green・モックモード E2E 9 スイート green（run-mock-stack.sh = PR ゲート同一）。
   - R4: 収束確認（R3 対応後の残指摘ゼロ = 反復レビュー完了。原則9 = SP-8）
+
+## 107. 改善要望に基づく改修依頼 2026-08-22（2 改修単位 = AKEBONO Intelligence 基盤定義と共通UI構造の本実装・AKEBONO Home 社内サポート活動機能追加）の完了条件（Definition of Done）
+
+対象: home + api + shared/domain + intelligence。マイグレーション 0089（internal_supports）・0090（intel_cycles / intel_insights / intel_actions）。
+
+### 107-1 社内サポート活動（単位2 = AKEBONO Home /internal-support・F-57）
+
+- [x] 記録項目（改善要望のとおり）: 活動日時（活動日必須・時刻任意）/ フォローアップ実施者（Member 選択・既定 = ログインユーザー）/ フォローアップ対象者（Member 選択・必須。**実施者と同一は検証で拒否**）/ 対象業務内容（必須）/ フォローアップ方法（対面・Web会議・チャット・電話・ペアワーク・勉強会・その他 = 値=ラベル `INTERNAL_SUPPORT_METHODS`）/ 活動結果および効果に関するフィードバック（任意・後から編集で追記可 = 「未記録」表示で追記を促す）。
+- [x] 所有モデル: チーム共有（全員が閲覧・登録・編集可）・取消 = 論理削除 + 復元（原則9.5・冪等）・訂正履歴は監査ログ。検証 SoT = `shared/domain/internal-support.internalSupportError`（API/モック同一関数・同一順 = パリティ）。部分更新 = Object.hasOwn → マージ後に全体検証。
+- [x] 画面（/internal-support）: 検索 + 方法チップ + 実施者/対象者フィルタ・20 件ページング（X-7）・行押下で詳細ドロワー（全文 + 編集/取消/復元）・登録/編集モーダル。モックシード（buildInternalSupports = 決定的 4 件）。
+- [x] 登録全件: menu-registry（業務ツール）+ navigation + nav-map + permissions（FEATURE_PERMISSION_KEYS / featureKeyOfPath / API PATH_FEATURES）+ audit-log（entity + ページ名）+ e2e home.json + CUSTOM_COLLECTION_ENDPOINTS + MockDbShape/シード + app.ts マウント。
+- [x] Intelligence 連携: 記録は AKEBONO Intelligence のナレッジカテゴリ「社内サポート」（/data/internal-supports）の参照ソース。画面・KB に AI 分析材料である旨を明記。
+- [x] テスト: internalSupportError 単体 6 件 + 統合テスト（登録検証順・実施者既定・FK・部分更新の未送信フィールド保持・同一メンバー拒否・取消/復元の冪等）。
+- [x] KB（原則5）: kb-sp-020 / kb-ug-014 新設。設計書: functional-requirements F-57・screen-design /internal-support・api-design useInternalSupports 行・data-design 1.15。
+
+### 107-2 AKEBONO Intelligence 基盤定義と共通UI構造の本実装（単位1）
+
+- [x] **モック境界の本実装（担当者メモ「モックアップ箇所はすべて本実装」= requirements §5 の 2 宣言を解消）**:
+  - 分析エンジン: API モードは `POST /v1/intelligence/generate` のサーバー実行 = サーバーが DB からスナップショット収集（SELECT は shared の EngineData Pick 宣言と同列 = 型が乖離を検出）→ **Vertex AI（generateJson）で生成 → 失敗・無効環境は決定的ヒューリスティックへフォールバック**（llm フラグで区別 = akebono-dashboard と同型・原則4）。決定的エンジンは `shared/domain/intelligence.ts` へ移設し、モックモードと API フォールバックが**同一関数**を共有（パリティ。intelligence 側の旧 import パスはシムで維持 = 既存テスト 11 件がそのまま green）。
+  - 記録ストア: SoT を localStorage（`aki.store.v1.<memberId>`）→ **サーバー（0090 intel_* テーブル + /v1/intelligence/* CRUD。メンバー単位の所有 = 旧ローカルと同じ可視性 = 原則7）**へ移行。**旧ローカル記録は初回ロードで自動移行**（POST /import = サーバー空のときのみ取込・id 再採番 + 参照張り替え・migratedAt 刻印でバックアップ残置 = 原則1/2）。アクション状態遷移の SoT = `INTEL_ACTION_STATUS_FLOW`（API/モック共通）。
+  - 画面: /insights・/actions・/cycles の「モック実装」注記・MOCK_PAGE_PATHS を解消（モックモードのみデモ注記を残す）。インサイトに「AI生成」バッジ（llm=true）。
+- [x] **データ基盤の 3 カテゴリ定義**（定義 SoT = `intelligence/app/utils/data-foundation.ts`）:
+  - 自社コンテキスト = 会社（自社）・プロジェクト・メンバー。**「文化」は Home に該当データが存在しないため対象外**（担当者メモ「Home にデータが存在しないものは実装から省く」= カテゴリ注記・要件・README に明示。存在しないデータをモックで作らない）。
+  - ナレッジ = メディアレポート（/v1/media/weekly-reports）・ECレポート（AKEBONO ダッシュボード AI レポート = **新設 GET /v1/akebono/dashboard-insights/list**〔company スコープは売上権限で絞る = 単体 GET と同一判定〕）・委託販売レポート（支払通知書 = /v1/akebono/payment-notices）・社内サポート（/v1/internal-supports = 単位2）・月報。
+  - ログ = 議事録（/v1/notes?kind=minutes）・日報・週報・月報（月報は要件どおりナレッジ・ログ両所属）。
+- [x] **共通 UI 構造「データ項目 → 一覧 → 詳細」を全 11 項目へ一律適用**: /data = 3 カテゴリのデータ項目カード（件数 + 最新日）→ /data/<item> = 検索 + 20 件ページング（X-7）の一覧（UiDataTable = PC テーブル / モバイル カード自動切替）→ 行押下 = 詳細ドロワー（全文・明細）。読み取り専用（編集は各 SoT の Home 画面 = 導線注記）。新規ソースの読み取り層 = useFoundationData（403 は空 = 原則4）。モックシード（seed/foundation.ts = 決定的）。
+- [x] ドキュメント: requirements（FI-02 再編・FI-03 本実装・API 使用マップ・§5 打ち消し）・company-intelligence-design（前提の制約解除・§2/§3/§4/§5/§7）・api-design（/v1/intelligence・dashboard-insights/list）・data-design 1.16・deploy-guide §1-11 補足（API デプロイ先行の注記）・intelligence/README（画面・カテゴリ表・モック境界の解消）。
+- [x] テスト: 統合テスト 7 件（生成 = LLM 無効環境のフォールバック + サイクル追記 + メンバー単位の可視性 / アクション遷移フロー・部分更新の保持・フィードバック → 次生成への reinforce 反映 / 移行取込の再採番・参照張り替え・再実行スキップ / アーカイブ・復元の冪等 + 他人 404）。intelligence 既存単体 11 件 green（エンジン移設のシム互換）。E2E: intelligence-mock-e2e へ 3 カテゴリ表示・日報カード件数・ドリルダウン（一覧 → 詳細ドロワー）の検査を追加・intel.json スイープへ /data/<item> 11 ルート追加。
+
+### 107-3 検証（受入基準）
+
+- [x] home `npx nuxi typecheck` / `npm run build`・api `tsc --noEmit` / `npm run build`・intelligence `nuxt typecheck` / `npm run generate`
+- [x] 単体: home 586 / api 非統合 509 / intelligence 11
+- [x] 統合（実 PostgreSQL・全マイグレーション適用）: 324 件 green（新規 13 件含む）
+- [ ] E2E: home モックスタック 9 スイート + intelligence/company スイート + UI スイープ（375px）
+- [ ] モバイル 375px: 新設ページ（/internal-support・/data/*）の横はみ出しなし（probe-ui-sweep）
+- [x] 主要操作のフィードバック: 保存/取消/復元/生成/移行のトースト + 保存中・生成中のボタン状態
+
+### 107-4 残課題
+
+- [ ] Intelligence 分析の WebSearch グラウンディング併用（generateGroundedText 基盤は既存。生成品質の要望が出たら 2 段生成へ拡張）。
+- [ ] intel_* 記録のチーム共有オプション（現状 = メンバー単位の所有〔旧ローカルと同じ可視性を維持 = 原則7〕。組織で共有したい要望が出たら可視性フラグを追加）。
+- [ ] ECレポートのソース拡張（現状 = AKEBONO ダッシュボード AI レポート。EC 売上明細ベースの専用レポートが必要になったら定義を追加）。
+
+### 107-5 反復レビュー（原則9 = SP-8）
+
+- 反復記録: （実施中）

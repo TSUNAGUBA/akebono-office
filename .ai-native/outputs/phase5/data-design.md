@@ -330,6 +330,20 @@ Phase B（設定系）・Phase C（記録系 + 売上軸）に続く**最終フ�
 | `media_weekly_reports` | 導出 + 判断記録（**UNIQUE(channel_id, week_start)**） | `id`／`channel_id`（FK media_channels CASCADE）／`week_start`（月曜）／`period_from`・`period_to`／`content` jsonb（エグゼクティブサマリー・重要な変化・原因仮説・コンテンツ評価・**推奨アクション〔判断 decision / decidedAt / decidedByMemberId を含む〕**）／`llm`／`generated_at` | 生成は決定的ヒューリスティック（shared/domain/media-weekly-report）・**生成済み週は再生成しない**（判断が巻き戻らない = 原則2）。judgement を含むため純粋な導出キャッシュではない（media_insights と異なり上書き不可） |
 | `media_measures` | 業務データ（チーム共有・更新可・論理削除） | `id`／`channel_id`（FK CASCADE）／`member_id`（起票者）／`name`（施策名）／`background`・`content`・`target`・`expected_change`／`assignee_member_id`・`due_date`／`status`（実施予定/実施中/効果観測中/評価待ち/完了）／`source_report_id`（FK weekly_reports ON DELETE SET NULL）・`source_action_index`・`source_label`／`verification` jsonb（実施日・比較期間・KPI 実施前後・AI評価・人の最終評価・学び・Next Action）／`active`／`created_at`・`updated_at` | **(source_report_id, source_action_index) の部分一意 index** = 同一アクションの二重起票防止（冪等 = 原則2）。効果検証の AI 評価は決定的ヒューリスティック + 全項目ユーザー編集可 |
 
+### 1.15 社内サポート活動（`internal_supports`。0089 = 改善要望 2026-08-22・F-57）
+
+| テーブル | 区分 | 主な列 | 備考 |
+|---|---|---|---|
+| `internal_supports` | 業務データ（チーム共有・更新可・論理削除） | `id`／`member_id`（登録者 FK members）／`activity_date`（date 必須）・`activity_time`（HH:MM 任意）／`performer_member_id`（実施者 FK members）／`target_member_id`（対象者 FK members）／`task_description`（対象業務内容）／`method`（対面/Web会議/チャット/電話/ペアワーク/勉強会/その他）／`feedback`（活動結果・効果）／`active`／`created_at`・`updated_at` | 社内メンバー間フォローアップの記録（顧客向け support_activities とは別テーブル = 対象が Member 参照）。実施者 = 対象者は検証で拒否（shared/domain/internal-support）。AKEBONO Intelligence のナレッジ「社内サポート」の AI 分析材料。区分値の SoT = shared/domain/types（INTERNAL_SUPPORT_METHODS） |
+
+### 1.16 AKEBONO Intelligence 記録ストア（`intel_cycles` / `intel_insights` / `intel_actions`。0090 = 改善要望 2026-08-22 の本実装）
+
+| テーブル | 区分 | 主な列 | 備考 |
+|---|---|---|---|
+| `intel_cycles` | 記録系（**追記のみ** = 編集 API なし） | `id`／`member_id`（所有者 FK members）／`theme`（management/customer/project）・`target_id`・`target_name`／`at`／`input_snapshot` jsonb（参照データ件数）／`feedback_considered` jsonb（反映したアクション・効果の明細）／`insight_ids` jsonb／`active` | 旧 localStorage（`aki.store.v1.<memberId>`）からの移行先。所有はメンバー単位（旧ローカル記録と同じ可視性 = 原則7） |
+| `intel_insights` | 記録系（論理削除 + 復元 = 原則9.5） | `id`／`member_id`／`cycle_id`（FK intel_cycles）／`theme`・`target_id`・`target_name`／`title`・`summary`／`findings`・`evidence`・`proposals`・`feedback_considered` jsonb／`confidence`／`llm`（true = Vertex AI 生成 / false = 決定的ヒューリスティック）／`active`／`created_at` | 生成 = 1 サイクル + 1 インサイト（トランザクション）。エンジンの SoT = shared/domain/intelligence（API フォールバック / モックで同一関数） |
+| `intel_actions` | 記録系（更新可・論理削除 + 復元） | `id`／`member_id`（所有者 = ownerId）／`insight_id`（FK・手動登録は NULL）・`proposal_id`／`theme`・`target_id`・`target_name`／`title`・`description`・`status`（planned/in_progress/done/cancelled = INTEL_ACTION_STATUS_FLOW で遷移制御）・`due_date`／`result`／`feedback_rating`（1〜5）・`feedback_note`・`feedback_next`／`active`／`created_at`・`updated_at` | フィードバック（高評価 → reinforce / 低評価 → alternative / 実行中 → dedupe）が次の生成（同テーマ・同対象）へ反映される（FI-05） |
+
 ## 2. スタースキーマ接続（akebono-scm-platform `mart` 規約準拠）
 
 ### 2.1 接続方針

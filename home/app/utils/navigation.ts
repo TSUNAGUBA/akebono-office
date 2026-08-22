@@ -47,6 +47,8 @@ export const NAV_GROUPS: NavGroup[] = [
       { path: '/customer-log', label: '顧客活動', icon: 'MessageSquare' },
       { path: '/customer-context', label: '顧客コンテキスト', icon: 'BookUser' },
       { path: '/support-activity', label: 'サポート活動', icon: 'Headset' },
+      // 社内サポート活動（改善要望 2026-08-22・F-57）
+      { path: '/internal-support', label: '社内サポート活動', icon: 'HeartHandshake' },
       // 案件詳細（/sales-activity/<id> 等）でもアクティブ表示する（案件ヘッダー + 活動ログ構造 = 2026-08-20）
       { path: '/sales-activity', label: '営業活動', icon: 'Handshake', matchPrefix: true },
       { path: '/partner-activity', label: 'ビジネスパートナー活動', icon: 'Users', matchPrefix: true },

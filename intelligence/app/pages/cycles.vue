@@ -13,6 +13,7 @@ import { fmtDateTime, fmtInt } from '~/utils/format'
 
 const { cycles, insights, actions } = useIntelStore()
 const data = useIntelligenceData()
+const isApi = useApiMode()
 
 const sorted = computed(() =>
   [...cycles.value].filter(c => c.active).sort((a, b) => b.at.localeCompare(a.at)))
@@ -36,12 +37,11 @@ function actionsOf(c: IntelCycle) {
       description="分析のたびにサイクルを記録します（データ → 分析 → アクション → フィードバック → 次の分析）"
     />
 
-    <!-- モック境界の明示（N-4。R1 監査指摘: 記録の保存先と制約を画面で伝える） -->
-    <div class="mb-3 flex items-start gap-2 rounded-lg border border-info/40 bg-info-soft p-3 text-xs leading-relaxed">
+    <!-- 保存先の明示（N-4）。モックモードのみデモ制約を案内する（API モードは本実装 = サーバー保存 2026-08-22） -->
+    <div v-if="!isApi" class="mb-3 flex items-start gap-2 rounded-lg border border-info/40 bg-info-soft p-3 text-xs leading-relaxed">
       <Info class="mt-0.5 h-4 w-4 shrink-0 text-info" aria-hidden="true" />
       <p class="text-sub">
-        サイクル履歴は<span class="font-semibold">このブラウザに保存されます（端末間同期なし。ブラウザデータの消去で失われます）。</span>
-        共通 API での本実装（サーバー保存）までの暫定機能です。
+        モックモードで動作中です。サイクル履歴は<span class="font-semibold">このブラウザに保存されます（デモ用。日付が変わると再シードされます）。</span>
       </p>
     </div>
 

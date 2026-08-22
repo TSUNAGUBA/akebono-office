@@ -225,6 +225,23 @@ export function akebonoDashboardRoutes(pool: pg.Pool, env: Env): Hono {
     return c.json({ data: rows[0] ?? null })
   })
 
+  // ---- 保管済みインサイトの一覧（AKEBONO Intelligence のナレッジ「ECレポート」参照用。改善要望 2026-08-22） ----
+  // scope=company の行は全社売上を含む C3 のため、売上権限が無いユーザーには返さない
+  // （単体 GET の requireCompanyDashboardAccess と同一判定を一覧にも適用 = 権限の抜け道を作らない）
+  app.get('/dashboard-insights/list', async (c) => {
+    const user = c.get('user')
+    const rules = await activePermissionRules(pool)
+    const companyOk = rules.length === 0 || canUseFeature(rules, subjectOf(user), 'sales')
+    const { rows } = await pool.query(
+      `SELECT di.scope, di.segment_id AS "segmentId", bs.name AS "segmentName", ${INSIGHT_COLS}
+       FROM dashboard_insights di
+       LEFT JOIN members m ON m.id = di.generated_by
+       LEFT JOIN business_segments bs ON bs.id = di.segment_id
+       WHERE $1 OR di.scope = 'segment'
+       ORDER BY di.generated_at DESC`, [companyOk])
+    return c.json({ data: rows })
+  })
+
   // ---- 生成・再生成（生成 → 保管 → 再生成で upsert 上書き = media_insights と同型） ----
   app.post('/dashboard-insights/generate', async (c) => {
     const user = c.get('user')

@@ -93,6 +93,7 @@ export const AUDIT_PAGE_NAMES: Record<string, string> = {
   '/customer-log': '顧客活動',
   '/customer-context': '顧客コンテキスト',
   '/sales-approach': '営業アプローチリスト',
+  '/internal-support': '社内サポート活動',
   '/customer-dashboard': '顧客別ダッシュボード',
   '/support-activity': 'サポート活動',
   '/sales-activity': '営業活動',
@@ -188,6 +189,7 @@ export const AUDIT_ENTITY_META: Record<string, AuditEntityMeta> = {
   customer_contexts: { label: '顧客コンテキスト', page: '/customer-context' },
   customer_context_notes: { label: '顧客コンテキストのメモ', page: '/customer-context' },
   sales_approaches: { label: '営業アプローチ', page: '/sales-approach' },
+  internal_supports: { label: '社内サポート活動', page: '/internal-support' },
   support_activities: { label: 'サポート活動', page: '/support-activity' },
   sales_activities: { label: '営業活動（案件）', page: '/sales-activity' },
   sales_activity_logs: { label: '営業活動ログ', page: '/sales-activity' },
@@ -210,6 +212,10 @@ export const AUDIT_ENTITY_META: Record<string, AuditEntityMeta> = {
   // AI 週次レポート・改善施策（改善要望 2026-08-21・F-55/F-56）
   media_weekly_reports: { label: 'AI週次レポート', page: '/media/reports' },
   media_measures: { label: 'メディア改善施策', page: '/media/measures' },
+  // ---- AKEBONO Intelligence（0090。改善要望 2026-08-22 = 記録ストアの本実装。別アプリのため page 遷移なし） ----
+  intel_insights: { label: 'Intelligence インサイト', page: '' },
+  intel_actions: { label: 'Intelligence アクション', page: '' },
+  intel_cycles: { label: 'Intelligence 分析サイクル', page: '' },
   // ---- 売上・個人設定・検索 ----
   sales_monthly: { label: '月次売上', page: '/sales' },
   mart_load_runs: { label: '売上データ更新', page: '/sales' },

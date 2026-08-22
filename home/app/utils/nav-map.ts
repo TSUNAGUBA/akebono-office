@@ -165,6 +165,15 @@ export const NAV_MAP: Record<string, NavMapEntry> = {
       CUSTOMERS,
     ],
   },
+  // 社内サポート活動（改善要望 2026-08-22・F-57）: メンバー間フォローアップの記録
+  '/internal-support': {
+    parent: HOME,
+    related: [
+      { to: '/support-activity', label: 'サポート活動' },
+      { to: '/reports', label: '日報' },
+      MEMBERS,
+    ],
+  },
   '/sales-activity': {
     parent: HOME,
     related: [

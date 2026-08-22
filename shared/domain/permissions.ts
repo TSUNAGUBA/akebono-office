@@ -43,6 +43,8 @@ export const FEATURE_PERMISSION_KEYS: { key: string; label: string }[] = [
   { key: 'sales-approach', label: '営業アプローチリスト' },
   { key: 'customer-dashboard', label: '顧客別ダッシュボード' },
   { key: 'support-activity', label: 'サポート活動' },
+  // 社内サポート活動（改善要望 2026-08-22・F-57）
+  { key: 'internal-support', label: '社内サポート活動' },
   { key: 'sales-activity', label: '営業活動' },
   { key: 'partner-activity', label: 'ビジネスパートナー活動' },
   { key: 'workflow', label: '稟議' },
@@ -73,7 +75,7 @@ export function featureKeyOfPath(pathWithQuery: string): string | null {
     'ai-assistant', 'workflow', 'decision', 'ai-company',
     'akebono', 'support', 'sales', 'status', 'inbox', 'masters', 'settings', 'poipoi', 'minutes', 'customer-log',
     'customer-context', 'improvements', 'support-activity', 'sales-activity', 'partner-activity',
-    'sales-approach', 'customer-dashboard',
+    'sales-approach', 'customer-dashboard', 'internal-support',
   ]
   return known.includes(seg) ? seg : null
 }

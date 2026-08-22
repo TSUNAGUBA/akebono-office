@@ -16,6 +16,7 @@ const {
 } = useIntelStore()
 const { show } = useToast()
 const { ask } = useConfirm()
+const isApi = useApiMode()
 
 // ---------- 一覧・フィルタ ----------
 
@@ -61,12 +62,12 @@ function targetNameOf(theme: InsightTheme, targetId: string): string {
   return data.projectName(targetId) || '未選択'
 }
 
-function submitCreate(): void {
+async function submitCreate(): Promise<void> {
   if (createForm.value.theme !== 'management' && !createForm.value.targetId) {
     show('対象を選択してください', 'warn')
     return
   }
-  const res = addAction({
+  const res = await addAction({
     insightId: null,
     proposalId: null,
     theme: createForm.value.theme,
@@ -102,9 +103,9 @@ function openDetail(a: IntelAction): void {
   fbForm.value = { rating: a.feedbackRating ?? 0, note: a.feedbackNote, next: a.feedbackNext }
 }
 
-function saveEdit(): void {
+async function saveEdit(): Promise<void> {
   if (!detailId.value) return
-  const res = updateAction(detailId.value, {
+  const res = await updateAction(detailId.value, {
     title: editForm.value.title,
     description: editForm.value.description,
     dueDate: editForm.value.dueDate || null,
@@ -120,9 +121,9 @@ const TRANSITIONS: Record<IntelAction['status'], { to: IntelAction['status']; la
   cancelled: [{ to: 'planned', label: '中止を取り消す（計画へ戻す）' }],
 }
 
-function onTransition(next: IntelAction['status']): void {
+async function onTransition(next: IntelAction['status']): Promise<void> {
   if (!detailId.value) return
-  const res = transitionAction(detailId.value, next)
+  const res = await transitionAction(detailId.value, next)
   if (!res.ok) {
     show(`${res.error.code}: ${res.error.message}`, 'warn')
     return
@@ -133,19 +134,19 @@ function onTransition(next: IntelAction['status']): void {
   }
 }
 
-function saveResult(): void {
+async function saveResult(): Promise<void> {
   if (!detailId.value) return
-  const res = recordResult(detailId.value, resultText.value)
+  const res = await recordResult(detailId.value, resultText.value)
   show(res.ok ? '結果を記録しました（再記録で上書きできます）' : `${res.error.code}: ${res.error.message}`, res.ok ? 'ok' : 'warn')
 }
 
-function saveFeedback(): void {
+async function saveFeedback(): Promise<void> {
   if (!detailId.value) return
   if (!fbForm.value.rating) {
     show('評価（1〜5）を選択してください', 'warn')
     return
   }
-  const res = recordFeedback(detailId.value, fbForm.value.rating, fbForm.value.note, fbForm.value.next)
+  const res = await recordFeedback(detailId.value, fbForm.value.rating, fbForm.value.note, fbForm.value.next)
   if (!res.ok) {
     show(`${res.error.code}: ${res.error.message}`, 'warn')
     return
@@ -156,13 +157,13 @@ function saveFeedback(): void {
 async function onArchive(a: IntelAction): Promise<void> {
   const ok = await ask('アクションのアーカイブ', `「${a.title}」をアーカイブしますか？（復元できます）`, { confirmLabel: 'アーカイブ' })
   if (!ok) return
-  const res = setActionActive(a.id, false)
+  const res = await setActionActive(a.id, false)
   if (res.ok) detailId.value = null
   show(res.ok ? 'アーカイブしました（「アーカイブも表示」で復元できます）' : res.error.message, res.ok ? 'ok' : 'warn')
 }
 
-function onRestore(a: IntelAction): void {
-  const res = setActionActive(a.id, true)
+async function onRestore(a: IntelAction): Promise<void> {
+  const res = await setActionActive(a.id, true)
   show(res.ok ? '復元しました' : res.error.message, res.ok ? 'ok' : 'warn')
 }
 </script>
@@ -178,13 +179,12 @@ function onRestore(a: IntelAction): void {
       </template>
     </UiPageHeader>
 
-    <!-- モック境界の明示（N-4。R1 監査指摘: 記録の保存先と制約を画面で伝える） -->
-    <div class="mb-3 flex items-start gap-2 rounded-lg border border-info/40 bg-info-soft p-3 text-xs leading-relaxed">
+    <!-- 保存先の明示（N-4）。モックモードのみデモ制約を案内する（API モードは本実装 = サーバー保存 2026-08-22） -->
+    <div v-if="!isApi" class="mb-3 flex items-start gap-2 rounded-lg border border-info/40 bg-info-soft p-3 text-xs leading-relaxed">
       <Info class="mt-0.5 h-4 w-4 shrink-0 text-info" aria-hidden="true" />
       <p class="text-sub">
-        アクション・結果・フィードバックの記録は
-        <span class="font-semibold">このブラウザに保存されます（端末間同期なし。ブラウザデータの消去で失われます）。</span>
-        共通 API での本実装（サーバー保存）までの暫定機能です。
+        モックモードで動作中です。アクション・結果・フィードバックの記録は
+        <span class="font-semibold">このブラウザに保存されます（デモ用。日付が変わると再シードされます）。</span>
       </p>
     </div>
 

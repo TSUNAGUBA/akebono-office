@@ -60,16 +60,20 @@
 - フィードバックループ概況（データ → 分析 → アクション → フィードバックの 4 ステップと件数）
 - 最新分析サイクルの概要 / 未完了アクション / 最新インサイト
 
-### FI-02 データソース（`/data`）
-- 参照データの状況一覧: 日報・週報・月報・サポート活動・営業活動・ビジネスパートナー活動・顧客活動・月次売上
-- 各ソースの件数・期間・月別件数チャート・再読込
-- **API モード:** 既存 API（`/v1/reports/*` `/v1/support-activities` `/v1/sales-activities` `/v1/partner-activities` `/v1/customer-logs` `/v1/sales` `/v1/masters/*`）から読み取り専用で取得。権限（F-16）によるサーバー側フィルタをそのまま尊重し、403 は空データとして扱う（原則4）
+### FI-02 データソース = 3 カテゴリのデータ基盤（`/data`。改善要望 2026-08-22 で再編）
+- 参照データを **3 カテゴリ**で定義し（定義 SoT = `intelligence/app/utils/data-foundation.ts`）、
+  全項目に共通 UI 構造「**データ項目 → 一覧（`/data/<item>`・検索 + 20 件/ページ）→ 詳細（ドロワー）**」を適用する:
+  - **自社コンテキスト:** 会社（自社）・プロジェクト・メンバー。※「文化」は AKEBONO Home に該当データが存在しないため対象外（担当者メモ 2026-08-22 = Home に無いものは実装から省く）
+  - **ナレッジ:** メディアレポート（AI 週次レポート）・ECレポート（AKEBONO ダッシュボード AI レポート）・委託販売レポート（支払通知書）・社内サポート（F-57）・月報
+  - **ログ:** 議事録・日報・週報・月報
+- 各項目カードに件数・最新日、下部に月別件数チャート・再読込
+- **API モード:** 既存 API（`/v1/reports/*` `/v1/support-activities` `/v1/sales-activities` `/v1/partner-activities` `/v1/customer-logs` `/v1/sales` `/v1/masters/*` `/v1/notes?kind=minutes` `/v1/media/weekly-reports` `/v1/akebono/dashboard-insights/list` `/v1/akebono/payment-notices` `/v1/internal-supports`）から読み取り専用で取得。権限（F-16）によるサーバー側フィルタをそのまま尊重し、403 は空データとして扱う（原則4）
 
 ### FI-03 インサイト生成（`/insights`）
 - テーマ選択（経営 / 顧客 / 案件）+ 対象（顧客・案件）選択で分析を実行
 - 生成結果: 要約 / 根拠（参照したデータソースと件数）/ 発見事項 / 提案（各提案は「アクション化」可能）/ 確信度 / **今回の分析に反映した過去アクション・フィードバックの明細**
 - インサイトのアーカイブ・復元（原則9.5）
-- **モック宣言:** 分析エンジンはフロントエンド内の決定的ヒューリスティック（**後日、共通 API の AI 推論 + RAG + WebSearch で本実装**）。参照データは API モードでは実データ。生成物の SoT はフロントエンド（localStorage）
+- **本実装（改善要望 2026-08-22。旧モック宣言を解消）:** API モードの分析は `POST /v1/intelligence/generate` のサーバー実行（サーバーが DB からスナップショットを収集し Vertex AI で生成 → 失敗・無効環境は `shared/domain/intelligence.ts` の決定的ヒューリスティックへフォールバック。`llm` フラグで区別）。生成物の SoT はサーバー（`intel_*` テーブル）。モックモードは同じ決定的エンジンをクライアント実行する（パリティ）
 
 ### FI-04 アクション管理（`/actions`）
 - 提案からのアクション化・手動登録 / ステータス管理（計画 / 実行中 / 完了 / 中止）
@@ -100,7 +104,10 @@
 | アプリ | 使用エンドポイント（すべて既存・無変更） |
 |--------|------------------------------------------|
 | Company | `/v1/me` `/v1/ai-company/tasks` `/v1/ai-company/tasks/:id/{approve,progress,block,cancel}` `/v1/ai-company/tasks/:id/answer` `/v1/ai-company/logs` `/v1/ai-company/files/:id` `/v1/ai-company/daily-reports` `/v1/ai-company/workload-check` `/v1/reports/daily?scope=all` `/v1/masters/{ai-roles,ai-employees,members}` `/v1/escalations`（POST・GET は admin） `/v1/notifications` |
-| Intelligence | `/v1/me` `/v1/reports/daily?scope=all&month=` `/v1/reports/weekly?scope=all` `/v1/reports/monthly?scope=all` `/v1/support-activities` `/v1/sales-activities` `/v1/partner-activities` `/v1/customer-logs?scope=all` `/v1/sales` `/v1/masters/{members,companies,projects}` |
+| Intelligence | `/v1/me` `/v1/reports/daily?scope=all&month=` `/v1/reports/weekly?scope=all` `/v1/reports/monthly?scope=all` `/v1/support-activities` `/v1/sales-activities` `/v1/partner-activities` `/v1/customer-logs?scope=all` `/v1/sales` `/v1/masters/{members,companies,projects}` + データ基盤（2026-08-22）: `/v1/notes?kind=minutes` `/v1/media/weekly-reports` `/v1/media/channels` `/v1/akebono/dashboard-insights/list` `/v1/akebono/payment-notices` `/v1/internal-supports` + 記録・生成（本実装）: `/v1/intelligence/*` |
+
+> **注:** 当初の「API 変更禁止」制約は改善要望 2026-08-22 の本実装指示で解除され、Intelligence 専用の
+> `/v1/intelligence/*`（0090）と `GET /v1/akebono/dashboard-insights/list` を新設した。
 
 > **制約（既存 API 仕様）:** `GET /v1/ai-company/logs` は直近 200 件打ち切りのため、Company のトークン集計・
 > 予測・予算判定は月間ログが 200 件を超えると過小になり得る（画面に注記。サーバー側の月次集計 API が本実装課題 = §5）。
@@ -111,5 +118,5 @@
 |------|-----------|-------------------|
 | Company: トークン予算・制限設定 | フロント localStorage（`akc.tokenBudget.v1`） | 共通 API へ予算テーブル + 実測トークン集計（月次集計エンドポイント = 200 件打ち切りの解消）を新設し、サーバー側で依頼受付を制御 |
 | Company: トークン実測値 | 既存 `ai_activity_logs` の決定的モック値 | LLM 呼び出しの実測トークン数を記録するよう API 改修 |
-| Intelligence: インサイト生成 | フロント内決定的ヒューリスティック | 共通 API に分析エンドポイント新設（Vertex AI + RAG + WebSearch。`/v1/chatbot/ask` の RAG 基盤を拡張） |
-| Intelligence: インサイト・アクション・サイクル記録 | フロント localStorage（`aki.store.v1.<メンバーID>` = API モードはユーザー別に名前空間化。端末間同期なし・記録件数の上限なし〔肥大時の案内が残課題〕） | 共通 API にテーブル + CRUD 新設・localStorage からの移行手順を提供 |
+| ~~Intelligence: インサイト生成~~ | **本実装済み（改善要望 2026-08-22）**: `POST /v1/intelligence/generate`（サーバーで DB スナップショット収集 + Vertex AI 生成 → 決定的ヒューリスティック〔`shared/domain/intelligence.ts`〕へフォールバック） | — WebSearch グラウンディングの併用は将来拡張（`generateGroundedText` 基盤は既存） |
+| ~~Intelligence: インサイト・アクション・サイクル記録~~ | **本実装済み（改善要望 2026-08-22）**: サーバー SoT（0090 `intel_*` テーブル + `/v1/intelligence/*` CRUD。メンバー単位の所有）。旧 localStorage（`aki.store.v1.<メンバーID>`）は初回ロード時に自動移行（サーバー空のときのみ = 冪等。移行後はローカルへ `migratedAt` を刻みバックアップとして残置） | — |

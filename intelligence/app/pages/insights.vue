@@ -1,12 +1,12 @@
 <script setup lang="ts">
 /**
  * インサイト（FI-03）: 分析の実行（テーマ・対象選択）と生成結果の一覧・アーカイブ。
- * 分析エンジンは決定的ヒューリスティック（モック。後日 AI 推論 + RAG + WebSearch で本実装）。
+ * 分析は本実装（改善要望 2026-08-22）: API モードはサーバー実行（Vertex AI → 決定的ヒューリスティックへ
+ * フォールバック）+ サーバー保存、モックモードは共有エンジン（shared/domain/intelligence）をクライアント実行。
  * 生成のたびにサイクル（FI-05）を追記し、反映したフィードバックを明細で残す。
  */
 import { Globe, Info, Plus, Sparkles } from 'lucide-vue-next'
 import type { EngineData } from '~/utils/insight-engine'
-import { generateInsightDraft } from '~/utils/insight-engine'
 import type { InsightTheme, IntelInsight } from '~/types/intelligence'
 import {
   ACTION_STATUS_LABELS, CONFIDENCE_LABELS, CONFIDENCE_TONES, FEEDBACK_EFFECT_LABELS,
@@ -15,9 +15,10 @@ import {
 import { fmtDateTime, fmtInt } from '~/utils/format'
 
 const data = useIntelligenceData()
-const { insights, actions, recordGeneration, setInsightActive } = useIntelStore()
+const { insights, actions, generate, setInsightActive, addAction } = useIntelStore()
 const { show } = useToast()
 const { ask } = useConfirm()
+const isApi = useApiMode()
 
 // ---------- 一覧・フィルタ ----------
 
@@ -73,6 +74,22 @@ function openGenerate(): void {
   genOpen.value = true
 }
 
+/** モックモードの分析入力（API モードはサーバーが DB からスナップショットを収集するため使わない） */
+function mockEngineData(): EngineData {
+  return {
+    daily: data.daily.value,
+    weekly: data.weekly.value,
+    monthly: data.monthly.value,
+    support: data.support.value,
+    sales: data.sales.value,
+    partner: data.partner.value,
+    customerLogs: data.customerLogs.value,
+    salesMonthly: data.salesMonthly.value,
+    companies: data.companies.value,
+    projects: data.projects.value,
+  }
+}
+
 async function runGenerate(): Promise<void> {
   if (generating.value) return
   if (genTheme.value !== 'management' && !genTargetId.value) {
@@ -81,41 +98,10 @@ async function runGenerate(): Promise<void> {
   }
   generating.value = true
   try {
-    const engineData: EngineData = {
-      daily: data.daily.value,
-      weekly: data.weekly.value,
-      monthly: data.monthly.value,
-      support: data.support.value,
-      sales: data.sales.value,
-      partner: data.partner.value,
-      customerLogs: data.customerLogs.value,
-      salesMonthly: data.salesMonthly.value,
-      companies: data.companies.value,
-      projects: data.projects.value,
-      members: data.members.value,
-    }
-    const draft = generateInsightDraft(engineData, {
+    const res = await generate({
       theme: genTheme.value,
       targetId: genTheme.value === 'management' ? null : genTargetId.value,
-      today: todayJst(),
-      pastActions: actions.value.filter(a => a.active),
-    })
-    if (!draft.ok) {
-      show(`${draft.error.code}: ${draft.error.message}`, 'warn')
-      return
-    }
-    const res = recordGeneration({
-      theme: genTheme.value,
-      targetId: genTheme.value === 'management' ? null : genTargetId.value,
-      targetName: draft.targetName,
-      title: draft.title,
-      summary: draft.summary,
-      findings: draft.findings,
-      evidence: draft.evidence,
-      proposals: draft.proposals,
-      confidence: draft.confidence,
-      feedbackConsidered: draft.feedbackConsidered,
-    })
+    }, mockEngineData)
     if (!res.ok) {
       show(`${res.error.code}: ${res.error.message}`, 'warn')
       return
@@ -125,8 +111,8 @@ async function runGenerate(): Promise<void> {
     showArchived.value = false
     page.value = 1
     show(
-      draft.feedbackConsidered.length > 0
-        ? `インサイトを生成しました（過去アクションのフィードバック ${draft.feedbackConsidered.length} 件を反映）`
+      (res.feedbackConsidered ?? 0) > 0
+        ? `インサイトを生成しました（過去アクションのフィードバック ${res.feedbackConsidered} 件を反映）`
         : 'インサイトを生成しました',
       'ok',
       { label: 'サイクル履歴を見る', to: '/cycles' },
@@ -143,8 +129,6 @@ const actInsight = ref<IntelInsight | null>(null)
 const actProposalId = ref<string | null>(null)
 const actForm = ref({ title: '', description: '', dueDate: '' })
 
-const { addAction } = useIntelStore()
-
 function openActionize(ins: IntelInsight, proposalId: string): void {
   const p = ins.proposals.find(x => x.id === proposalId)
   if (!p) return
@@ -156,7 +140,7 @@ function openActionize(ins: IntelInsight, proposalId: string): void {
 
 async function submitActionize(): Promise<void> {
   if (!actInsight.value) return
-  const res = addAction({
+  const res = await addAction({
     insightId: actInsight.value.id,
     proposalId: actProposalId.value,
     theme: actInsight.value.theme,
@@ -184,12 +168,12 @@ function actionOf(insightId: string, proposalId: string) {
 async function onArchive(ins: IntelInsight): Promise<void> {
   const ok = await ask('インサイトのアーカイブ', `「${ins.title}」をアーカイブしますか？（復元できます）`, { confirmLabel: 'アーカイブ' })
   if (!ok) return
-  const res = setInsightActive(ins.id, false)
+  const res = await setInsightActive(ins.id, false)
   show(res.ok ? 'アーカイブしました（「アーカイブも表示」で復元できます）' : res.error.message, res.ok ? 'ok' : 'warn')
 }
 
-function onRestore(ins: IntelInsight): void {
-  const res = setInsightActive(ins.id, true)
+async function onRestore(ins: IntelInsight): Promise<void> {
+  const res = await setInsightActive(ins.id, true)
   show(res.ok ? '復元しました' : res.error.message, res.ok ? 'ok' : 'warn')
 }
 </script>
@@ -205,13 +189,12 @@ function onRestore(ins: IntelInsight): void {
       </template>
     </UiPageHeader>
 
-    <!-- モック境界の明示（N-4。R1 監査指摘: 記録の保存先と制約を画面で伝える） -->
-    <div class="mb-3 flex items-start gap-2 rounded-lg border border-info/40 bg-info-soft p-3 text-xs leading-relaxed">
+    <!-- 保存先の明示（N-4）。モックモードのみデモ制約を案内する（API モードは本実装 = サーバー保存 2026-08-22） -->
+    <div v-if="!isApi" class="mb-3 flex items-start gap-2 rounded-lg border border-info/40 bg-info-soft p-3 text-xs leading-relaxed">
       <Info class="mt-0.5 h-4 w-4 shrink-0 text-info" aria-hidden="true" />
       <p class="text-sub">
-        分析エンジンは現在モック（決定的ヒューリスティック）です。生成したインサイト・アクション・サイクルは
-        <span class="font-semibold">このブラウザに保存されます（端末間同期なし。ブラウザデータの消去で失われます）。</span>
-        共通 API での本実装（AI 推論 + サーバー保存）までの暫定機能です。
+        モックモードで動作中です。分析は決定的エンジン（API モードと共通のフォールバック実装）で、
+        生成したインサイト・アクション・サイクルは<span class="font-semibold">このブラウザに保存されます（デモ用。日付が変わると再シードされます）。</span>
       </p>
     </div>
 
@@ -242,6 +225,7 @@ function onRestore(ins: IntelInsight): void {
         <template #actions>
           <UiStatusBadge :label="INSIGHT_THEME_LABELS[ins.theme]" :tone="INSIGHT_THEME_TONES[ins.theme]" />
           <UiStatusBadge :label="CONFIDENCE_LABELS[ins.confidence]" :tone="CONFIDENCE_TONES[ins.confidence]" />
+          <UiStatusBadge v-if="ins.llm" label="AI生成" tone="brand" />
           <UiStatusBadge v-if="!ins.active" label="アーカイブ済み" tone="neutral" />
           <button v-if="ins.active" type="button" class="btn btn-ghost btn-sm" @click="onArchive(ins)">アーカイブ</button>
           <button v-else type="button" class="btn btn-sm" @click="onRestore(ins)">復元</button>
@@ -361,7 +345,9 @@ function onRestore(ins: IntelInsight): void {
           </p>
           <p class="mt-2 flex items-center gap-1.5 text-[11px] text-muted">
             <Globe class="h-3.5 w-3.5" aria-hidden="true" />
-            Web 検索の併用は共通 API での本実装時に有効化されます（現在はモック分析エンジン）
+            {{ isApi
+              ? 'サーバーが最新データを収集し AI（Vertex AI）が生成します（AI 無効環境は決定的エンジンで代替）'
+              : 'モックモードは決定的エンジンで生成します（API モードではサーバー + AI が生成）' }}
           </p>
         </div>
       </div>

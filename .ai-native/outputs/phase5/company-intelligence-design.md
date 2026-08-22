@@ -1,8 +1,9 @@
 # AKEBONO Company / AKEBONO Intelligence 基本設計
 
-> **作成日:** 2026-08-20
+> **作成日:** 2026-08-20（最終更新 2026-08-22）
 > **SoT:** 新設 2 アプリの構成・データフロー・デプロイ設計の SoT。機能要件は `../phase3/company-intelligence-requirements.md`。
-> **前提:** Database / API は共通・無変更（既存 API の範囲で実現。超える機能はフロント内モック）。
+> **前提:** Database / API は共通。当初の「API 無変更」制約は改善要望 2026-08-22 の本実装指示で解除され、
+> Intelligence のモック境界（分析エンジン・記録ストア）は共通 API（`/v1/intelligence/*` = 0090）で本実装済み。
 
 ## 1. 全体構成
 
@@ -48,13 +49,17 @@ intelligence/                # AKEBONO Intelligence（独立 Nuxt 4 SPA。構成
 ├── app/
 │   ├── assets/css/main.css  # ブランド色 = ティール系
 │   ├── components/{ui,charts}/
-│   ├── composables/         # useApi / useMockDb / useIntelligenceData / useInsights / useActions ほか
-│   ├── utils/insight-engine.ts  # 決定的分析エンジン（モック。後日 API 本実装）
+│   ├── composables/         # useApi / useMockDb / useIntelligenceData / useFoundationData / useIntelStore ほか
+│   ├── utils/insight-engine.ts  # 分析エンジンのシム（SoT = shared/domain/intelligence.ts。2026-08-22 本実装）
+│   ├── utils/data-foundation.ts # データ基盤 3 カテゴリの定義 SoT（2026-08-22）
 │   └── …（同型）
 ```
 
 **設計判断:**
 - 両アプリは `home/` から UI 基盤（CSS トークン・`Ui*` コンポーネント・`useApi`/`useMockDb` パターン・認証 3 点セット）を**複製**して自己完結させる。`shared/` へのフロント共通コード追加は行わない（`shared/**` は API のデプロイトリガ・ビルド対象であり、API 無変更の制約と衝突するため）。「フロントエンドのプロジェクトレベルで別物として扱う」という要件にも一致する。
+  - **2026-08-22 更新:** API 無変更の制約解除に伴い、Intelligence の分析エンジン + ドメイン型は
+    `shared/domain/intelligence.ts` へ移設した（API のフォールバックとモックモードが同一関数を共有する
+    パリティの SoT。`intelligence/app/{utils/insight-engine.ts,types/intelligence.ts}` は再エクスポートのシム）。
 - `shared/domain/`（型・`ai-tasks` ほか純粋ロジック）は既存ファイルを**読み取り専用で相対 import** する（home と同一パターン。`shared/` への変更は行わない）。
 - localStorage キーはアプリ別に分離: Home = `ako.*`（既存。プレフィクスは識別子のため不変） / Company = `akc.*` / Intelligence = `aki.*`。同一オリジンで配信されるプレビュー時も衝突しない。
 
@@ -71,9 +76,9 @@ intelligence/                # AKEBONO Intelligence（独立 Nuxt 4 SPA。構成
 | データ | 保存先 | 取消フロー | 表示 |
 |--------|--------|-----------|------|
 | Company: トークン予算設定 | `akc.tokenBudget.v1` | 編集上書き + 既定値へリセット | 「モック（ローカル保存）」注記 |
-| Intelligence: インサイト/アクション/サイクル | `aki.store.v1.<メンバーID>`（API モード。ユーザー別に名前空間化 = 同一端末の別アカウントから見えない。R1 監査反映） | 論理削除（アーカイブ）+ 復元 | 同上 |
+| ~~Intelligence: インサイト/アクション/サイクル~~ | **本実装済み（2026-08-22）**: サーバー SoT（0090 `intel_*`。メンバー単位の所有 = 旧ユーザー別 localStorage と同じ可視性）。旧 `aki.store.v1.<メンバーID>` は初回ロードで自動移行（サーバー空のときのみ = 冪等。移行後は `migratedAt` を刻みバックアップ残置） | 論理削除（アーカイブ）+ 復元 | モックモードのみデモ注記 |
 
-- モック境界データは**ブラウザローカル**であり端末間同期されない。この制約は画面と README に明記する（後日 API 本実装で解消）。
+- Company のモック境界データは**ブラウザローカル**であり端末間同期されない。この制約は画面と README に明記する（後日 API 本実装で解消）。
 - 記録系（サイクル履歴・フィードバック）は追記保護とし、アーカイブは監査可能な論理削除で行う（原則2・9.5）。
 
 ## 4. データフロー（SoT 宣言）
@@ -83,9 +88,10 @@ intelligence/                # AKEBONO Intelligence（独立 Nuxt 4 SPA。構成
 | AI タスク・活動ログ・AI 日次報告 | API（PostgreSQL）※モックモードはアプリ内 DB | Company の `apiLoadOnce` キャッシュ |
 | AI ロール・AI 社員・メンバー等マスタ | API `/v1/masters/*` | `tbl()` ハイドレーションキャッシュ |
 | 日報・週報・月報・活動 4 種・月次売上 | API（読み取り専用） | Intelligence のデータキャッシュ（`useIntelligenceData`） |
+| データ基盤の追加ソース（議事録・メディア/EC/委託販売レポート・社内サポート。2026-08-22） | API（読み取り専用） | Intelligence の `useFoundationData` キャッシュ |
 | トークン予算設定 | フロント localStorage（モック） | — |
 | トークン消費実績 | API 活動ログの `tokens`/`costUsd`（決定的モック値） | `useTokenBudget` が当月集計・予測を導出 |
-| インサイト・アクション・サイクル | フロント localStorage（モック） | 画面はストア経由で参照 |
+| インサイト・アクション・サイクル | **API（0090 `intel_*`。2026-08-22 本実装）** ※モックモードはアプリ内 DB | `useIntelStore` のサーバーストアキャッシュ（書込 → 再取得） |
 
 書込順序は常に SoT → キャッシュ（原則6）。API モードの書込は `apiWrite` / `apiResult` 経由で行い、成功後に影響キャッシュを再取得する。
 
@@ -93,7 +99,7 @@ intelligence/                # AKEBONO Intelligence（独立 Nuxt 4 SPA。構成
 
 ```mermaid
 flowchart LR
-    Data["共通基盤データ<br/>日報/週報/月報/活動ログ/売上"] --> Engine["分析エンジン<br/>（決定的モック→後日 AI 本実装）"]
+    Data["共通基盤データ<br/>日報/週報/月報/活動ログ/売上"] --> Engine["分析エンジン（2026-08-22 本実装）<br/>API = サーバー実行: Vertex AI →<br/>決定的エンジンへフォールバック"]
     Feedback["アクション実績 +<br/>フィードバック"] --> Engine
     Engine --> Insight["インサイト<br/>要約/根拠/提案/確信度"]
     Insight -->|アクション化| Action["アクション<br/>計画→実行→完了"]
@@ -136,7 +142,8 @@ flowchart LR
 | Company | `/employees` `/roles` | AI 社員・ロール管理 | admin |
 | Company | `/login` | サインイン（API モード） | — |
 | Intelligence | `/` | ダッシュボード | 全員 |
-| Intelligence | `/data` | データソース状況 | 全員 |
+| Intelligence | `/data` | データソース = 3 カテゴリのデータ基盤（2026-08-22 再編） | 全員 |
+| Intelligence | `/data/<item>` | データ項目の一覧 → 詳細ドロワー（共通 UI 構造） | 全員 |
 | Intelligence | `/insights` | インサイト生成・一覧 | 全員 |
 | Intelligence | `/actions` | アクション管理・フィードバック | 全員 |
 | Intelligence | `/cycles` | フィードバックループ履歴 | 全員 |

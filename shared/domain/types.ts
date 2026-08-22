@@ -456,6 +456,42 @@ export interface SalesApproach {
   active?: boolean
 }
 
+// ---------- 社内サポート活動（改善要望 2026-08-22・F-57） ----------
+// 社内メンバーどうしのフォローアップ（業務支援・技術支援・教育等）を時系列で記録する。
+// チーム共有（全員が閲覧・登録・編集可）・取消 = 論理削除 + 復元（原則9.5）。
+// 記録は AKEBONO Intelligence の AI 分析（ナレッジカテゴリ「社内サポート」）の材料になる。
+
+/** 社内サポートのフォローアップ方法（値=ラベル方式） */
+export const INTERNAL_SUPPORT_METHODS = ['対面', 'Web会議', 'チャット', '電話', 'ペアワーク', '勉強会', 'その他'] as const
+
+/**
+ * 社内サポート活動の 1 件（社内メンバー間のフォローアップ記録。改善要望 2026-08-22）。
+ * 実施者・対象者はともにメンバーマスタ参照（社外の顧客は対象外 = サポート活動 F-43 と役割分担）。
+ */
+export interface InternalSupport {
+  id: string
+  /** 登録者（表示用。編集は全員可 = チーム共有） */
+  memberId: string
+  /** 活動日（YYYY-MM-DD・必須） */
+  activityDate: string
+  /** 活動時刻（HH:MM・任意） */
+  activityTime: string | null
+  /** フォローアップ実施者（Member 参照。既定 = ログインユーザー） */
+  performerMemberId: string
+  /** フォローアップ対象者（Member 参照・必須。実施者と同一は不可） */
+  targetMemberId: string
+  /** 対象業務内容（必須） */
+  taskDescription: string
+  /** フォローアップ方法（INTERNAL_SUPPORT_METHODS） */
+  method: string
+  /** 活動結果および効果に関するフィードバック（任意） */
+  feedback: string
+  createdAt: string
+  updatedAt?: string
+  /** 取消（論理削除）済みは false */
+  active?: boolean
+}
+
 // ---------- 顧客コンテキスト（改修依頼 2026-08-20: トップ層メニュー「顧客コンテキスト」） ----------
 // 顧客(会社)を軸に、マスタの基本情報・関係に加えて定性情報（ビジョン・経営課題・補足メモ・
 // 事業メモ〔2026-08-21 追加〕）と時系列メモを 1 画面で可視化・編集する。

@@ -25,7 +25,9 @@ export const MOBILE_NAV: NavItem[] = [
   { to: '/data', label: 'データ', icon: 'Database' },
 ]
 
-/** 現在パスがナビ項目に一致するか（完全一致。クエリは無視） */
+/** 現在パスがナビ項目に一致するか（クエリは無視）。
+ *  /data はデータ項目の一覧・詳細（/data/<item> = 改善要望 2026-08-22）でもアクティブ表示する */
 export function isActivePath(current: string, to: string): boolean {
+  if (to === '/data') return current === '/data' || current.startsWith('/data/')
   return current === to
 }

@@ -54,6 +54,8 @@ export const MENU_CARDS: Record<MenuArea, MenuCardDef[]> = {
     { id: 'customer-log', title: '顧客活動', description: 'いつ・どの顧客と・どんな活動をしたかを記録（全員の記録を閲覧可）。AI の参照対象（自分の記録）', icon: 'MessageSquare', to: '/customer-log' },
     { id: 'customer-context', title: '顧客コンテキスト', description: '顧客の基本情報・関係・定性/定量情報・メモを 1 画面で可視化。AI の Web 調査で定性情報を更新', icon: 'BookUser', to: '/customer-context' },
     { id: 'support-activity', title: 'サポート活動', description: '顧客サポートの受付〜解決の記録。対応・原因・解決と改善ナレッジのタネ', icon: 'Headset', to: '/support-activity' },
+    // 社内サポート活動（改善要望 2026-08-22・F-57。AKEBONO Intelligence の AI 分析材料）
+    { id: 'internal-support', title: '社内サポート活動', description: 'メンバーへのフォローアップ（業務支援・技術支援・教育）の記録。AKEBONO Intelligence の AI 分析材料', icon: 'HeartHandshake', to: '/internal-support' },
     { id: 'sales-activity', title: '営業活動', description: '商談を案件として管理し活動ログを記録。AI集約でフェーズ・金額・Next Action と経緯を確認', icon: 'Handshake', to: '/sales-activity' },
     { id: 'partner-activity', title: 'ビジネスパートナー活動', description: 'パートナー連携テーマを案件として管理し活動ログを記録。案件化したら商談へリンク', icon: 'Users', to: '/partner-activity' },
     { id: 'workflow', title: '稟議', description: '稟議の申請・承認（職務権限マトリクス準拠）', icon: 'GitPullRequestArrow', to: '/workflow' },
@@ -100,7 +102,7 @@ export const MENU_CARDS: Record<MenuArea, MenuCardDef[]> = {
 export const DEFAULT_MENU_CATEGORIES: Record<MenuArea, MenuCategoryDef[]> = {
   dashboard: [
     { id: 'decision', label: '意思決定支援', cardIds: ['decision'] },
-    { id: 'work', label: '業務ツール', cardIds: ['timecard', 'attendance', 'shift', 'reports', 'reports-weekly', 'reports-monthly', 'ai-assistant', 'poipoi', 'minutes', 'customer-log', 'customer-context', 'support-activity', 'sales-activity', 'partner-activity', 'workflow'] },
+    { id: 'work', label: '業務ツール', cardIds: ['timecard', 'attendance', 'shift', 'reports', 'reports-weekly', 'reports-monthly', 'ai-assistant', 'poipoi', 'minutes', 'customer-log', 'customer-context', 'support-activity', 'internal-support', 'sales-activity', 'partner-activity', 'workflow'] },
     { id: 'ai-company', label: 'AIネイティブカンパニー', cardIds: ['ai-company'] },
     // 営業管理（改善要望 2026-08-21: メインダッシュボードのカード型メニューに「営業管理」セクションを新設）
     { id: 'sales-mgmt', label: '営業管理', cardIds: ['sales-approach', 'customer-dashboard'] },

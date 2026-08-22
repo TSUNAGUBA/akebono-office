@@ -4,10 +4,12 @@
  * 本マップはその表示用ミラー。共通 API で本実装したらここから削除する（原則5）。
  * ページヘッダーのモックバッジ表示に使う。
  *
- * - /insights /actions /cycles: 分析エンジンが決定的ヒューリスティック（後日 AI 推論 + RAG + WebSearch）で、
- *   生成物・アクション・サイクル記録の SoT が localStorage（端末間同期なし）
+ * 2026-08-22（改善要望）: /insights /actions /cycles を削除 = 本実装済み。
+ * 分析生成はサーバー実行（Vertex AI → 決定的ヒューリスティックへフォールバック）、
+ * 記録ストアはサーバー保存（/v1/intelligence/* = intel_* テーブル）となり、モック境界は解消した。
+ * 現在、API モードでモック動作のページはない（空集合。将来のモック機能追加時に再利用する）。
  */
-const MOCK_PAGE_PATHS = new Set<string>(['/insights', '/actions', '/cycles'])
+const MOCK_PAGE_PATHS = new Set<string>([])
 
 /** このパスのページが API モードでもモック動作か（バッジ表示判定） */
 export function isMockPage(path: string): boolean {

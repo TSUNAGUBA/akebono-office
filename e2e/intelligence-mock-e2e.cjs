@@ -20,17 +20,32 @@ async function main() {
     check('ダッシュボード: 未完了アクションが表示される（シードの実行中 1 件）',
       (await page.getByText('操作系 FAQ の整備').count()) >= 1)
 
-    // ===== データソース =====
+    // ===== データソース（3 カテゴリのデータ基盤 = 改善要望 2026-08-22） =====
     await page.goto(`${BASE}/#/data`)
     await page.getByRole('main').getByRole('heading', { level: 1, name: 'データソース' }).waitFor()
+    check('データソース: 3 カテゴリ（自社コンテキスト / ナレッジ / ログ）が表示される',
+      (await page.getByText('自社コンテキスト').count()) >= 1
+      && (await page.getByText('ナレッジ', { exact: true }).count()) >= 1
+      && (await page.getByText('ログ', { exact: true }).count()) >= 1)
     const dailyCount = await page.evaluate(() => {
-      const row = [...document.querySelectorAll('main table tbody tr')]
-        .find(r => r.textContent.includes('日報'))
-      return row ? Number(row.querySelectorAll('td')[1].textContent.replace(/,/g, '')) : 0
+      const card = document.querySelector('main a[href="#/data/daily-reports"]')
+      const m = card ? card.textContent.match(/([\d,]+)件/) : null
+      return m ? Number(m[1].replace(/,/g, '')) : 0
     })
-    check('データソース: 日報の件数が 0 より大きい（決定的シード）', dailyCount > 0)
+    check('データソース: 日報カードの件数が 0 より大きい（決定的シード）', dailyCount > 0)
     check('データソース: 月別チャートカードがある',
       (await page.getByText('月別 活動件数（直近 6 ヶ月）').count()) >= 1)
+
+    // ===== データ項目 → 一覧 → 詳細（共通 UI 構造のドリルダウン） =====
+    await page.goto(`${BASE}/#/data/internal-supports`)
+    await page.getByRole('main').getByRole('heading', { level: 1, name: '社内サポート' }).waitFor()
+    check('データ一覧: 社内サポートの行が表示される（シード）',
+      (await page.getByText('ペアワーク').count()) >= 1)
+    await page.getByText('ペアワーク').first().click()
+    await page.getByText('フォローアップ実施者').waitFor()
+    check('データ詳細: ドロワーに記録の全文が表示される',
+      (await page.getByText('対象業務内容').count()) >= 1)
+    await page.keyboard.press('Escape')
 
     // ===== インサイト生成（経営テーマ = フィードバックループの反映を確認） =====
     await page.goto(`${BASE}/#/insights`)
@@ -40,8 +55,8 @@ async function main() {
     check('生成モーダル: RAG 入力のプレビューが表示される', true)
     check('生成モーダル: 過去アクションの反映予告が表示される',
       (await page.getByText(/過去アクション \d+ 件.*ループ入力として反映/).count()) === 1)
-    check('生成モーダル: Web 検索は本実装時有効化の注記（モック明示）',
-      (await page.getByText(/Web 検索の併用は共通 API での本実装時に有効化/).count()) === 1)
+    check('生成モーダル: 生成方式の注記（モックモード = 決定的エンジン）',
+      (await page.getByText(/モックモードは決定的エンジンで生成します/).count()) === 1)
     // モーダルのフッター側の実行ボタンを押す
     await page.getByRole('dialog').getByRole('button', { name: '分析を実行' }).click()
     await page.getByText(/フィードバック \d+ 件を反映/).waitFor()

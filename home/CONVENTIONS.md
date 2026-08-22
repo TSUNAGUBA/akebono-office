@@ -181,6 +181,11 @@ const sap = useSalesApproaches()   // list / archivedList / save(id|null, input)
 // 顧客別ダッシュボードの AI 分析（/customer-dashboard。F-54。保存しない常時ライブ導出 =
 // shared/domain/customer-insight の純関数。buildCustomerInsight / customerActivityMonthly / hasContextInfo）
 
+// 社内サポート活動（/internal-support。改善要望 2026-08-22・F-57。チーム共有 = メンバー間フォローアップの記録。
+// 検証 SoT = shared/domain/internal-support〔実施者≠対象者を含む宣言順検証〕。API = /v1/internal-supports〔0089〕/
+// mock = internalSupports。AKEBONO Intelligence のナレッジ「社内サポート」の AI 分析材料）
+const isp = useInternalSupports()  // list / archivedList / save(id|null, input) / archive / restore / refresh
+
 // 休暇（F-04-5/9。種別別残数。付与は管理者/人事のみ・同日同種別はスキップ=冪等）
 const leave = useLeave()   // balance(memberId, leaveTypeId?) / request / decide / grant / bulkGrant / activeLeaveTypes
 
@@ -262,6 +267,7 @@ const imp = useImprovements()  // submit（body + 対象ページ〔既定=開�
 | `WidgetsSalesApproachPanel` | props なし。営業アプローチリスト（/sales-approach）の実体（一覧 20 件ページング + 検索/状態チップ/優先度/担当フィルタ・登録/編集モーダル〔会社 = UiCombobox 既存選択のみ・1社1行〕・詳細ドロワー〔基本情報/コンテキスト/活動実績のライブ参照 + ドリルダウン導線〕・取消/復元。改善要望 2026-08-21・F-53） |
 | `WidgetsCustomerDashboardPanel` | props なし。顧客別ダッシュボード（/customer-dashboard）の実体（?company= 同期の会社セレクタ + KPI 4 枚 + 基本情報/コンテキストカード + AI 分析〔shared/domain/customer-insight のライブ導出〕+ 月次チャート + 直近の顧客活動。改善要望 2026-08-21・F-54） |
 | `WidgetsSupportActivityPanel` | props なし。サポート活動（/support-activity）の実体（一覧 20 件ページング〔API = サーバーページング〕+ 検索/ステータス/種別フィルタ・詳細ドロワー view/edit/create・取消/復元。F-43・2026-08-18） |
+| `WidgetsInternalSupportPanel` | props なし。社内サポート活動（/internal-support）の実体（一覧 20 件ページング + 検索/方法チップ/実施者・対象者フィルタ・登録/編集モーダル〔実施者既定 = 自分・対象者は別メンバー必須〕・詳細ドロワー・取消/復元。改善要望 2026-08-22・F-57） |
 | `WidgetsSalesActivityPanel` | props なし。営業活動の**案件一覧**（/sales-activity。2026-08-20 で案件ヘッダー + 活動ログ構造へ再編）。行クリック → `/sales-activity/<id>` 案件詳細ページへ遷移。AI集約サマリー列 + フェーズバッジ・新規登録 = `WidgetsSalesActivityFormDrawer`。F-44 |
 | `WidgetsPartnerActivityPanel` | props なし。BP活動の**案件一覧**（/partner-activity。同 2026-08-20 再編・「背景・目的」+「取組内容」）。行クリック → `/partner-activity/<id>` 詳細。新規登録 = `WidgetsPartnerActivityFormDrawer`。F-45 |
 | `WidgetsSalesActivityFormDrawer` / `WidgetsPartnerActivityFormDrawer` | open, mode('create'/'edit'), activity? + `@close` `@saved`。案件ヘッダーの登録/編集ドロワー（フッター直上に role="alert" のインラインエラー常設 = トースト非依存。BP は背景・目的/取組内容/活動区分のフィールド単位エラー。2026-08-20） |

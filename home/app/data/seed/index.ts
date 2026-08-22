@@ -10,7 +10,7 @@ import type {
   CustomerContext, CustomerContextNote,
   CustomerLog, CustomFieldDef, DailyReport, DecisionLog, DecisionTheme, DelegateSetting, Department,
   DocumentNode, Escalation, EscalationRule, ExternalLink, FeatureToggle, HearingLog, Holiday,
-  Industry, KnowledgeArticle, LeaveGrant, LeaveRequest, LeaveType, Member, MonthlyReport, Project,
+  Industry, InternalSupport, KnowledgeArticle, LeaveGrant, LeaveRequest, LeaveType, Member, MonthlyReport, Project,
   PartnerActivity, PunchRecord, RelationType, ReportComment, ReportRead, SalesActivity, SalesApproach, SalesMonthly, ServiceIncident,
   ShiftAssignment, ShiftDemand, ShiftPeriod, ShiftWish, SupportActivity, SystemService,
   TaskPlan, UptimeDaily, Village, WeeklyReport, WorkflowRequest, WorkflowRoute, WorkCategory, Note,
@@ -42,7 +42,7 @@ import * as support from './support'
 import * as misc from './misc'
 import { buildCustomerLogs } from './customer-logs'
 import { buildCustomerContextNotes, buildCustomerContexts } from './customer-context'
-import { buildPartnerActivities, buildPartnerActivityLogs, buildSalesActivities, buildSalesActivityLogs, buildSupportActivities } from './activities'
+import { buildInternalSupports, buildPartnerActivities, buildPartnerActivityLogs, buildSalesActivities, buildSalesActivityLogs, buildSupportActivities } from './activities'
 import * as media from './media'
 import { buildCalendarEvents, buildLeaveGrants, buildPunchHistory, buildSalesMonthly, buildSpecialLeaveGrants, buildTaskPlans, buildUptimeDaily } from './history'
 
@@ -57,6 +57,12 @@ export interface MockDbShape {
   customerLogs: CustomerLog[]
   // ---- 活動記録 3 種（チーム共有の記録系。改修依頼 2026-08-18・F-43/F-44/F-45） ----
   supportActivities: SupportActivity[]
+  /**
+   * 社内サポート活動（改善要望 2026-08-22・F-57）: メンバー間フォローアップの記録（チーム共有）。
+   * API モードは /v1/internal-supports の全量ハイドレーション（CUSTOM_COLLECTION_ENDPOINTS）。
+   * AKEBONO Intelligence のナレッジカテゴリ「社内サポート」の AI 分析材料になる
+   */
+  internalSupports: InternalSupport[]
   salesActivities: SalesActivity[]
   partnerActivities: PartnerActivity[]
   /**
@@ -217,6 +223,7 @@ export function buildSeed(): MockDbShape {
     notes: [],
     customerLogs: buildCustomerLogs(),
     supportActivities: buildSupportActivities(),
+    internalSupports: buildInternalSupports(),
     salesActivities: buildSalesActivities(),
     partnerActivities: buildPartnerActivities(),
     salesActivityLogs: buildSalesActivityLogs(),

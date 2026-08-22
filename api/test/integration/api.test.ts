@@ -8886,3 +8886,234 @@ describe('0078: 週報・月報権限ルールの旧 reports キーからの移�
 // 「要望ステータスの本人操作（resolved ⇄ open）」の旧テストは、改修依頼 2026-08-21 の
 // 解決フロー再編（/requests/:id/resolve = resolvedAt オーバーレイ）へ移行済み。
 // 新モデルの本人解決/取消・第三者 403 は「改善要望（F-42 → ステータス管理の再編）」の describe が担う。
+
+// ---------- 社内サポート活動（F-57 = 改善要望 2026-08-22。/v1/internal-supports） ----------
+
+describe('社内サポート活動（F-57: internal_supports = メンバー間フォローアップ）', () => {
+  let ispId = ''
+
+  it('登録: 検証（shared 宣言順）→ 作成。実施者の既定 = ログインユーザー', async () => {
+    // 検証順: 活動日 → 時刻 → 実施者 → 対象者 → 同一チェック → 業務内容 → 方法
+    const bad1 = await api('POST', '/v1/internal-supports', { as: MEMBER, body: {} })
+    expect(bad1.status).toBe(400)
+    expect(bad1.json.error?.code).toBe('AKO-ISP-001')
+    expect(bad1.json.error?.message).toContain('活動日')
+
+    const same = await api('POST', '/v1/internal-supports', {
+      as: MEMBER,
+      body: { activityDate: todayJst(), targetMemberId: MEMBER, taskDescription: 'x', method: '対面' },
+    })
+    expect(same.status).toBe(400)
+    expect(same.json.error?.message).toContain('別のメンバー')
+
+    const badMethod = await api('POST', '/v1/internal-supports', {
+      as: MEMBER,
+      body: { activityDate: todayJst(), targetMemberId: HR, taskDescription: 'x', method: 'テレパシー' },
+    })
+    expect(badMethod.status).toBe(400)
+    expect(badMethod.json.error?.message).toContain('フォローアップ方法')
+
+    // 対象者の実在は FK（23503 → AKO-ISP-001）
+    const badTarget = await api('POST', '/v1/internal-supports', {
+      as: MEMBER,
+      body: { activityDate: todayJst(), targetMemberId: 'm-ghost', taskDescription: 'x', method: '対面' },
+    })
+    expect(badTarget.status).toBe(400)
+    expect(badTarget.json.error?.message).toContain('紐付け先')
+
+    const ok = await api('POST', '/v1/internal-supports', {
+      as: MEMBER,
+      body: {
+        activityDate: todayJst(), activityTime: '15:00', targetMemberId: HR,
+        taskDescription: '月次請求処理の締め作業のフォロー', method: 'ペアワーク', feedback: '',
+      },
+    })
+    expect(ok.status).toBe(201)
+    const row = ok.json.data as { id: string; performerMemberId: string; activityTime: string }
+    ispId = row.id
+    expect(row.performerMemberId).toBe(MEMBER) // 既定 = ログインユーザー
+    expect(row.activityTime).toBe('15:00')
+  })
+
+  it('編集: 送ったキーのみ更新（未送信フィールドが保持される = 部分更新の回帰）', async () => {
+    const patch = await api('PATCH', `/v1/internal-supports/${ispId}`, {
+      as: HR, // チーム共有 = 登録者以外も編集可
+      body: { feedback: 'チェックリスト化した。翌月からは自走できる見込み' },
+    })
+    expect(patch.status).toBe(200)
+    const row = patch.json.data as {
+      feedback: string; taskDescription: string; method: string; activityTime: string; targetMemberId: string
+    }
+    expect(row.feedback).toContain('チェックリスト化')
+    // 送っていないフィールドが保持されること（Zod v4 .partial() 既定値注入と同型の事故の回帰ガード）
+    expect(row.taskDescription).toBe('月次請求処理の締め作業のフォロー')
+    expect(row.method).toBe('ペアワーク')
+    expect(row.activityTime).toBe('15:00')
+    expect(row.targetMemberId).toBe(HR)
+
+    // マージ後の全体検証: 対象者を実施者と同一へ変える部分更新は拒否
+    const bad = await api('PATCH', `/v1/internal-supports/${ispId}`, {
+      as: MEMBER, body: { targetMemberId: MEMBER },
+    })
+    expect(bad.status).toBe(400)
+    expect(bad.json.error?.message).toContain('別のメンバー')
+  })
+
+  it('一覧: 活動日降順で取消済み込みの全量。取消/復元は冪等（原則9.5）', async () => {
+    const list = await api('GET', '/v1/internal-supports', { as: HR })
+    expect(list.status).toBe(200)
+    expect((list.json.data as { id: string }[]).some(r => r.id === ispId)).toBe(true)
+
+    const arch = await api('POST', `/v1/internal-supports/${ispId}/archive`, { as: MEMBER })
+    expect(arch.status).toBe(200)
+    // 二重取消は警告 no-op（監査ログは 1 回だけ）
+    const arch2 = await api('POST', `/v1/internal-supports/${ispId}/archive`, { as: MEMBER })
+    expect((arch2.json.data as { warning?: string }).warning).toContain('取消済み')
+
+    const rest = await api('POST', `/v1/internal-supports/${ispId}/restore`, { as: MEMBER })
+    expect(rest.status).toBe(200)
+    const after = await api('GET', '/v1/internal-supports', { as: MEMBER })
+    const row = (after.json.data as { id: string; active: boolean }[]).find(r => r.id === ispId)
+    expect(row?.active).toBe(true)
+  })
+})
+
+// ---------- AKEBONO Intelligence（改善要望 2026-08-22 = モック境界の本実装。/v1/intelligence） ----------
+
+describe('AKEBONO Intelligence（0090: サーバー記録ストア + 分析生成 + ローカル記録の移行）', () => {
+  let insightId = ''
+  let actionId = ''
+
+  it('生成: サーバーがスナップショット収集 → LLM 無効環境は決定的エンジン（llm=false）で保存', async () => {
+    // 分析対象データを保証（サポート活動 1 件 = evidence が 0 件だと AKI-INS-001）
+    await api('POST', '/v1/support-activities', {
+      as: MEMBER,
+      body: {
+        receivedDate: todayJst(), newCompanyName: 'インテリテスト商事', inquirerName: 'テスト様',
+        category: '操作', title: 'レポート出力の手順', body: '週次レポートの出力方法の問い合わせ',
+        priority: '通常', status: '対応中',
+      },
+    })
+
+    const bad = await api('POST', '/v1/intelligence/generate', { as: MEMBER, body: { theme: 'customer' } })
+    expect(bad.status).toBe(400) // 対象未選択
+    expect(bad.json.error?.code).toBe('AKO-ITL-001')
+
+    const gen = await api('POST', '/v1/intelligence/generate', { as: MEMBER, body: { theme: 'management' } })
+    expect(gen.status).toBe(201)
+    const data = gen.json.data as { insight: { id: string; llm: boolean; cycleId: string; evidence: unknown[] }; llm: boolean }
+    insightId = data.insight.id
+    expect(data.llm).toBe(false) // vertexProjectId 未設定 = ヒューリスティックフォールバック
+    expect(data.insight.evidence.length).toBeGreaterThan(0)
+
+    // 生成 = 1 サイクル + 1 インサイト（サイクルは追記のみの記録系）
+    const store = await api('GET', '/v1/intelligence/store', { as: MEMBER })
+    const s = store.json.data as { insights: { id: string }[]; cycles: { insightIds: string[] }[] }
+    expect(s.insights.some(i => i.id === insightId)).toBe(true)
+    expect(s.cycles.some(cy => cy.insightIds.includes(insightId))).toBe(true)
+
+    // 所有はメンバー単位（旧ユーザー別 localStorage と同じ可視性）: 他人のストアには見えない
+    const other = await api('GET', '/v1/intelligence/store', { as: ADMIN })
+    const os = other.json.data as { insights: { id: string }[] }
+    expect(os.insights.some(i => i.id === insightId)).toBe(false)
+  })
+
+  it('アクション: 登録 → 状態遷移（フロー外は AKO-ITL-003）→ 結果・フィードバック → 次の生成に反映', async () => {
+    const add = await api('POST', '/v1/intelligence/actions', {
+      as: MEMBER,
+      body: { theme: 'management', targetName: '全社', title: 'サポート FAQ の整備', description: '', insightId },
+    })
+    expect(add.status).toBe(201)
+    actionId = (add.json.data as { id: string }).id
+
+    // planned → done はフロー外（planned は in_progress / cancelled のみ）
+    const badTr = await api('POST', `/v1/intelligence/actions/${actionId}/transition`, {
+      as: MEMBER, body: { status: 'done' },
+    })
+    expect(badTr.status).toBe(400)
+    expect(badTr.json.error?.code).toBe('AKO-ITL-003')
+
+    expect((await api('POST', `/v1/intelligence/actions/${actionId}/transition`, {
+      as: MEMBER, body: { status: 'in_progress' },
+    })).status).toBe(200)
+    expect((await api('POST', `/v1/intelligence/actions/${actionId}/transition`, {
+      as: MEMBER, body: { status: 'done' },
+    })).status).toBe(200)
+
+    // 部分更新: dueDate のみ送信 → title は保持
+    const patched = await api('PATCH', `/v1/intelligence/actions/${actionId}`, {
+      as: MEMBER, body: { dueDate: addDays(todayJst(), 7) },
+    })
+    expect((patched.json.data as { title: string }).title).toBe('サポート FAQ の整備')
+
+    await api('POST', `/v1/intelligence/actions/${actionId}/result`, { as: MEMBER, body: { result: 'FAQ を 12 件公開' } })
+    const fb = await api('POST', `/v1/intelligence/actions/${actionId}/feedback`, {
+      as: MEMBER, body: { rating: 5, note: '問い合わせが減少', next: '' },
+    })
+    expect(fb.status).toBe(200)
+
+    // フィードバックループ: 高評価完了アクションが次の生成へ reinforce として反映される
+    const gen2 = await api('POST', '/v1/intelligence/generate', { as: MEMBER, body: { theme: 'management' } })
+    const ins2 = (gen2.json.data as { insight: { feedbackConsidered: { actionId: string; effect: string }[] } }).insight
+    const considered = ins2.feedbackConsidered.find(f => f.actionId === actionId)
+    expect(considered?.effect).toBe('reinforce')
+  })
+
+  it('移行取込: 旧ローカル記録を id 再採番 + 参照張り替えで取込む。既存記録ありのユーザーは冪等スキップ', async () => {
+    const legacy = {
+      cycles: [{
+        id: 'cy-0001', theme: 'management', targetId: null, targetName: '全社',
+        at: '2026-08-20T10:00:00+09:00', inputSnapshot: [], feedbackConsidered: [],
+        insightIds: ['ins-0001'], createdBy: HR, active: true,
+      }],
+      insights: [{
+        id: 'ins-0001', cycleId: 'cy-0001', theme: 'management', targetId: null, targetName: '全社',
+        title: '移行テストのインサイト', summary: '概要', findings: ['発見'],
+        evidence: [{ source: 'daily', label: '日報', count: 3 }],
+        proposals: [{ id: 'ins-0001-p1', title: '提案1', description: '', priority: 'high' }],
+        confidence: 'mid', feedbackConsidered: [], createdAt: '2026-08-20T10:00:00+09:00',
+        createdBy: HR, active: true,
+      }],
+      actions: [{
+        id: 'act-0001', insightId: 'ins-0001', proposalId: 'ins-0001-p1', theme: 'management',
+        targetId: null, targetName: '全社', title: '移行テストのアクション', description: '',
+        status: 'planned', dueDate: null, ownerId: HR, result: '', feedbackRating: null,
+        feedbackNote: '', feedbackNext: '', createdAt: '2026-08-20T10:05:00+09:00',
+        updatedAt: '2026-08-20T10:05:00+09:00', active: true,
+      }],
+    }
+    const imp = await api('POST', '/v1/intelligence/import', { as: HR, body: legacy })
+    expect(imp.status).toBe(201)
+    expect((imp.json.data as { imported: number }).imported).toBe(3)
+
+    const store = await api('GET', '/v1/intelligence/store', { as: HR })
+    const s = store.json.data as {
+      insights: { id: string; cycleId: string; title: string; proposals: { id: string }[] }[]
+      actions: { insightId: string | null; proposalId: string | null }[]
+      cycles: { id: string; insightIds: string[] }[]
+    }
+    const ins = s.insights.find(i => i.title === '移行テストのインサイト')!
+    expect(ins.id).not.toBe('ins-0001') // サーバー id へ再採番（ユーザー間の衝突回避）
+    expect(s.cycles.find(cy => cy.id === ins.cycleId)?.insightIds).toContain(ins.id) // 参照の張り替え
+    expect(s.actions[0]?.insightId).toBe(ins.id)
+    expect(s.actions[0]?.proposalId).toBe(ins.proposals[0]?.id) // proposalId も新 id 系へ
+
+    // 既存記録があるユーザーへの再取込はスキップ（原則2: 再実行で重複しない）
+    const again = await api('POST', '/v1/intelligence/import', { as: HR, body: legacy })
+    expect((again.json.data as { imported: number; warning?: string }).imported).toBe(0)
+    expect((again.json.data as { warning?: string }).warning).toContain('スキップ')
+  })
+
+  it('インサイト・アクションのアーカイブ/復元は本人のみ・冪等（原則9.5）', async () => {
+    // 他人の記録は 404（member_id スコープ）
+    expect((await api('POST', `/v1/intelligence/insights/${insightId}/archive`, { as: ADMIN })).status).toBe(404)
+
+    expect((await api('POST', `/v1/intelligence/insights/${insightId}/archive`, { as: MEMBER })).status).toBe(200)
+    const again = await api('POST', `/v1/intelligence/insights/${insightId}/archive`, { as: MEMBER })
+    expect((again.json.data as { warning?: string }).warning).toContain('アーカイブ済み')
+    expect((await api('POST', `/v1/intelligence/insights/${insightId}/restore`, { as: MEMBER })).status).toBe(200)
+
+    expect((await api('POST', `/v1/intelligence/actions/${actionId}/archive`, { as: MEMBER })).status).toBe(200)
+    expect((await api('POST', `/v1/intelligence/actions/${actionId}/restore`, { as: MEMBER })).status).toBe(200)
+  })
+})

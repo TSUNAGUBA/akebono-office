@@ -465,7 +465,12 @@ AKEBONO Company（`company/`）と AKEBONO Intelligence（`intelligence/`）は�
 
 > **補足:**
 > - 認証は 3 アプリ共通（同一 Firebase Auth・同一 `members` マスタ）。メンバー登録（§1-6 手順 4）は共用される。
-> - 使用 API はすべて既存エンドポイント（今回の切り出しで API / DB の変更はない）。
+> - ~~使用 API はすべて既存エンドポイント（今回の切り出しで API / DB の変更はない）~~ →
+>   **2026-08-22 更新:** Intelligence のモック境界の本実装で `/v1/intelligence/*`（マイグレーション 0090 =
+>   起動時自動適用）と `GET /v1/akebono/dashboard-insights/list` を新設した。**Intelligence を API 接続で
+>   使う場合は api のデプロイ（`shared/**` の変更でも自動トリガ）が先に必要**。追加の secrets・手動手順はない
+>   （AI 生成は既存の Vertex AI 設定〔§1-8〕をそのまま使い、無効環境は決定的エンジンで動く = 原則4）。
+>   旧ブラウザ保存の記録（`aki.store.v1.*`）は各ユーザーの初回ロード時に自動でサーバーへ移行される（原則1）。
 > - `firebase.json` の `hosting.target`（`company` / `intelligence`）は静的な論理名で、サイト ID との
 >   紐付け（`.firebaserc`）はデプロイ時に CI が secrets から生成する（リポジトリへ固有値を持たない方針）。
 
