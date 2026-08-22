@@ -52,6 +52,8 @@ ECレポート（`/v1/akebono/dashboard-insights/list`）・委託販売レポ�
 
 - **分析エンジン**: API モードはサーバー実行（`POST /v1/intelligence/generate` = サーバーが DB から
   スナップショットを収集し Vertex AI で生成 → 失敗・無効環境は決定的ヒューリスティックへフォールバック）。
+  スナップショット収集には**呼び出しユーザーの F-16 権限を適用**する（deny された機能キーのソースは
+  分析材料から除外・日報/週報/月報は参照対象ルールでも絞る = 「見えるデータの範囲で分析」をサーバーでも強制）。
   決定的エンジンは `shared/domain/intelligence.ts` へ移設し、モックモードと API のフォールバックが
   同一関数を共有する（`app/utils/insight-engine.ts` はシム）。
 - **インサイト・アクション・サイクルの記録**: SoT はサーバー（`/v1/intelligence/*` = `intel_*` テーブル。

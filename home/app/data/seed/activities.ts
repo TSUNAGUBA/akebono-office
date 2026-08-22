@@ -120,10 +120,11 @@ export function buildInternalSupports(): InternalSupport[] {
     },
   ]
 
-  return rows.map(r => ({
+  // 補助キー（back/at）は保存形へ残さない（シード形 = API 返却形。レビュー R1）
+  return rows.map(({ back, at, ...r }) => ({
     ...r,
-    createdAt: iso(r.back, r.at),
-    updatedAt: iso(r.back, r.at),
+    createdAt: iso(back, at),
+    updatedAt: iso(back, at),
     active: true,
   }))
 }

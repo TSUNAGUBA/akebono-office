@@ -9059,6 +9059,35 @@ describe('AKEBONO Intelligence（0090: サーバー記録ストア + 分析生�
     expect(considered?.effect).toBe('reinforce')
   })
 
+  it('生成の F-16 適用: 売上 deny のユーザーには月次売上を分析材料に含めない（R1 MAJOR-1 の回帰）', async () => {
+    // 月次売上を投入（許可ユーザーには evidence に載る前提データ）
+    await pool.query(`INSERT INTO companies (id, name) VALUES ('c-itl', 'インテリ売上テスト') ON CONFLICT (id) DO NOTHING`)
+    await pool.query(`INSERT INTO sales_monthly (id, month, company_id, project_type, amount, cost)
+      VALUES ('sm-itl-1', '2026-07', 'c-itl', 'development', 1000000, 0),
+             ('sm-itl-2', '2026-08', 'c-itl', 'development', 1200000, 0)
+      ON CONFLICT (id) DO NOTHING`)
+    await pool.query(`INSERT INTO permission_rules (id, subject_kind, subject_id, resource, effect, active)
+      VALUES ('pr-itl-sales-deny', 'member', '${MEMBER}', 'sales', 'deny', true)`)
+    clearPermissionCache()
+    try {
+      const gen = await api('POST', '/v1/intelligence/generate', { as: MEMBER, body: { theme: 'management' } })
+      expect(gen.status).toBe(201)
+      const ins = (gen.json.data as { insight: { evidence: { source: string; count: number }[]; findings: string[] } }).insight
+      // 売上ソースは空（evidence 0 件）・findings に売上額の文章が載らない
+      expect(ins.evidence.find(e => e.source === 'salesMonthly')?.count ?? 0).toBe(0)
+      expect(ins.findings.some(f => f.includes('月次売上'))).toBe(false)
+
+      // 許可ユーザー（ルールなし = 既定 allow）には従来どおり載る
+      const genAdmin = await api('POST', '/v1/intelligence/generate', { as: ADMIN, body: { theme: 'management' } })
+      const insAdmin = (genAdmin.json.data as { insight: { evidence: { source: string; count: number }[] } }).insight
+      expect(insAdmin.evidence.find(e => e.source === 'salesMonthly')?.count ?? 0).toBeGreaterThan(0)
+    } finally {
+      await pool.query(`DELETE FROM permission_rules WHERE id = 'pr-itl-sales-deny'`)
+      await pool.query(`DELETE FROM sales_monthly WHERE id LIKE 'sm-itl-%'`)
+      clearPermissionCache()
+    }
+  })
+
   it('移行取込: 旧ローカル記録を id 再採番 + 参照張り替えで取込む。既存記録ありのユーザーは冪等スキップ', async () => {
     const legacy = {
       cycles: [{

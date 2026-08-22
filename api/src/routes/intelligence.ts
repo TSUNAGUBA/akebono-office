@@ -15,15 +15,19 @@
 import { Hono } from 'hono'
 import type pg from 'pg'
 import type { Env } from '../env'
+import type { AuthUser } from '../auth'
 import {
-  generateInsightDraft, INTEL_ACTION_STATUS_FLOW,
+  generateInsightDraft, INTEL_ACTION_STATUS_FLOW, INTEL_TEXT_CAP, INTEL_TITLE_CAP,
   type EngineData, type EngineInsightDraft, type InsightProposal, type IntelAction,
   type IntelActionStatus, type IntelCycle, type IntelInsight, type InsightTheme,
 } from '../../../shared/domain/intelligence'
+import { canUseFeature, canViewMemberReports } from '../../../shared/domain/permissions'
+import { capCodePoints } from '../../../shared/domain/customer-log'
 import { todayJst } from '../../../shared/domain/jst'
 import { audit } from '../lib/audit'
 import { err } from '../lib/errors'
 import { newId } from '../lib/ids'
+import { activePermissionRules, subjectOf } from '../lib/permissions'
 import { generateJson } from '../lib/llm'
 
 const jstOf = (col: string, alias: string): string =>
@@ -63,36 +67,72 @@ function dailySinceMonth(today: string): string {
   return `${Math.floor(idx / 12)}-${String((idx % 12) + 1).padStart(2, '0')}-01`
 }
 
-async function gatherEngineData(pool: pg.Pool, today: string): Promise<EngineData> {
+/**
+ * スナップショット収集に呼び出しユーザーの F-16 権限を適用する（レビュー R1 MAJOR-1）。
+ * - 機能 deny のソースは空配列 = フロント読み取り層の「403 → 空」と同じ縮退（見えるデータの範囲で分析）。
+ *   機能キーは各エンドポイントのガード（PATH_FEATURES / reads）と同一: reports / weekly-report /
+ *   monthly-report / support-activity / sales-activity / partner-activity / customer-log / sales（月次売上）。
+ * - 日報・週報・月報は F-16-6「参照対象」（canViewMemberReports = /v1/reports の filterViewable と同一判定）で
+ *   対象メンバー単位にも絞る（deny された他人の日報 issues 抜粋等が findings に載らない）。
+ * - ルール未設定（rules.length === 0）は全許可 = featureGuard と同じ既定（下位互換）。
+ */
+async function gatherEngineData(pool: pg.Pool, today: string, user: AuthUser): Promise<EngineData> {
+  const rules = await activePermissionRules(pool)
+  const subject = subjectOf(user)
+  const allow = (key: string): boolean => rules.length === 0 || canUseFeature(rules, subject, key)
+  const viewableMember = (memberId: string | null): boolean =>
+    rules.length === 0 || !memberId || canViewMemberReports(rules, subject, memberId)
+
   const [daily, weekly, monthly, support, sales, partner, customerLogs, salesMonthly, companies, projects]
     = await Promise.all([
-      pool.query(
-        `SELECT member_id AS "memberId", date::text AS date, entries, issues, status
-         FROM daily_reports WHERE status = 'submitted' AND date >= $1::date`, [dailySinceMonth(today)]),
+      allow('reports')
+        ? pool.query(
+          `SELECT member_id AS "memberId", author_kind AS "authorKind", date::text AS date, entries, issues, status
+           FROM daily_reports WHERE status = 'submitted' AND date >= $1::date`, [dailySinceMonth(today)])
+        : Promise.resolve({ rows: [] }),
       // 週報・月報は提出済みのみ（エンジンは件数のみを根拠として使う）
-      pool.query(`SELECT week_start::text AS "weekStart" FROM weekly_reports WHERE status = 'submitted'`),
-      pool.query(`SELECT month_start::text AS "monthStart" FROM monthly_reports WHERE status = 'submitted'`),
-      pool.query(
-        `SELECT company_id AS "companyId", received_date::text AS "receivedDate", category, status, active
-         FROM support_activities`),
-      pool.query(
-        `SELECT company_id AS "companyId", title, phase, amount::float8 AS amount,
-           next_action_date::text AS "nextActionDate", customer_issue AS "customerIssue",
-           ${jstOf('created_at', 'createdAt')}, ${jstOf('updated_at', 'updatedAt')}, active
-         FROM sales_activities`),
-      pool.query(
-        `SELECT partner_company_id AS "partnerCompanyId", approach_company_id AS "approachCompanyId",
-           status, ${jstOf('created_at', 'createdAt')}, active
-         FROM partner_activities`),
-      pool.query(`SELECT company_id AS "companyId", log_date::text AS "logDate", active FROM customer_logs`),
-      pool.query(`SELECT month, amount::float8 AS amount FROM sales_monthly`),
+      allow('weekly-report')
+        ? pool.query(`SELECT member_id AS "memberId", week_start::text AS "weekStart"
+                      FROM weekly_reports WHERE status = 'submitted'`)
+        : Promise.resolve({ rows: [] }),
+      allow('monthly-report')
+        ? pool.query(`SELECT member_id AS "memberId", month_start::text AS "monthStart"
+                      FROM monthly_reports WHERE status = 'submitted'`)
+        : Promise.resolve({ rows: [] }),
+      allow('support-activity')
+        ? pool.query(
+          `SELECT company_id AS "companyId", received_date::text AS "receivedDate", category, status, active
+           FROM support_activities`)
+        : Promise.resolve({ rows: [] }),
+      allow('sales-activity')
+        ? pool.query(
+          `SELECT company_id AS "companyId", title, phase, amount::float8 AS amount,
+             next_action_date::text AS "nextActionDate", customer_issue AS "customerIssue",
+             ${jstOf('created_at', 'createdAt')}, ${jstOf('updated_at', 'updatedAt')}, active
+           FROM sales_activities`)
+        : Promise.resolve({ rows: [] }),
+      allow('partner-activity')
+        ? pool.query(
+          `SELECT partner_company_id AS "partnerCompanyId", approach_company_id AS "approachCompanyId",
+             status, ${jstOf('created_at', 'createdAt')}, active
+           FROM partner_activities`)
+        : Promise.resolve({ rows: [] }),
+      allow('customer-log')
+        ? pool.query(`SELECT company_id AS "companyId", log_date::text AS "logDate", active FROM customer_logs`)
+        : Promise.resolve({ rows: [] }),
+      allow('sales')
+        ? pool.query(`SELECT month, amount::float8 AS amount FROM sales_monthly`)
+        : Promise.resolve({ rows: [] }),
       pool.query(`SELECT id, name FROM companies`),
       pool.query(`SELECT id, name, status, end_date::text AS "endDate" FROM projects`),
     ])
+  type Authored = { memberId: string | null; authorKind?: string }
+  const byViewable = <T>(rows: T[]): T[] =>
+    (rows as (T & Authored)[]).filter(r => r.authorKind === 'ai' ? true : viewableMember(r.memberId))
   return {
-    daily: daily.rows,
-    weekly: weekly.rows,
-    monthly: monthly.rows,
+    daily: byViewable(daily.rows),
+    weekly: byViewable(weekly.rows),
+    monthly: byViewable(monthly.rows),
     support: support.rows,
     sales: sales.rows,
     partner: partner.rows,
@@ -195,6 +235,14 @@ function strOf(v: unknown): string {
   return String(v ?? '').trim()
 }
 
+/** 短文（タイトル・対象名等）/ 長文（説明・結果・フィードバック等）の cap（モックと同値 = パリティ） */
+function shortOf(v: unknown): string {
+  return capCodePoints(strOf(v), INTEL_TITLE_CAP)
+}
+function longOf(v: unknown): string {
+  return capCodePoints(strOf(v), INTEL_TEXT_CAP)
+}
+
 export function intelligenceRoutes(pool: pg.Pool, env: Env): Hono {
   const app = new Hono()
 
@@ -219,7 +267,7 @@ export function intelligenceRoutes(pool: pg.Pool, env: Env): Hono {
 
     const today = todayJst()
     const [data, pastActionsRes] = await Promise.all([
-      gatherEngineData(pool, today),
+      gatherEngineData(pool, today, user),
       pool.query(
         `SELECT ${ACTION_COLS} FROM intel_actions WHERE member_id = $1 AND active = true`, [user.id]),
     ])
@@ -301,7 +349,7 @@ export function intelligenceRoutes(pool: pg.Pool, env: Env): Hono {
   app.post('/actions', async (c) => {
     const user = c.get('user')
     const b = await c.req.json().catch(() => ({})) as Record<string, unknown>
-    const title = strOf(b.title)
+    const title = shortOf(b.title)
     if (!title) throw err('AKO-ITL-001', 'タイトルを入力してください', 400)
     const theme = themeOf(b.theme)
     const insightId = strOf(b.insightId) || null
@@ -313,7 +361,7 @@ export function intelligenceRoutes(pool: pg.Pool, env: Env): Hono {
          (id, member_id, insight_id, proposal_id, theme, target_id, target_name, title, description, due_date)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::date)`,
       [id, user.id, insightId, strOf(b.proposalId) || null, theme,
-        strOf(b.targetId) || null, strOf(b.targetName), title, strOf(b.description), strOf(b.dueDate) || null])
+        strOf(b.targetId) || null, shortOf(b.targetName), title, longOf(b.description), strOf(b.dueDate) || null])
     await audit(pool, { actorId: user.id, action: 'create', entity: 'intel_actions', entityId: id, detail: 'アクションを登録' })
     return c.json({ data: await findOwnRow(pool, 'intel_actions', ACTION_COLS, id, user.id) }, 201)
   })
@@ -332,8 +380,8 @@ export function intelligenceRoutes(pool: pg.Pool, env: Env): Hono {
       params.push(value)
       sets.push(`${col} = $${params.length}${cast}`)
     }
-    if (has('title')) add('title', strOf(b.title))
-    if (has('description')) add('description', strOf(b.description))
+    if (has('title')) add('title', shortOf(b.title))
+    if (has('description')) add('description', longOf(b.description))
     if (has('dueDate')) add('due_date', strOf(b.dueDate) || null, '::date')
     if (sets.length === 0) throw err('AKO-ITL-001', '更新する項目がありません', 400)
     await pool.query(
@@ -364,7 +412,7 @@ export function intelligenceRoutes(pool: pg.Pool, env: Env): Hono {
     await findOwnRow(pool, 'intel_actions', 'id', id, user.id)
     await pool.query(
       `UPDATE intel_actions SET result = $3, updated_at = now() WHERE id = $1 AND member_id = $2`,
-      [id, user.id, strOf(b.result)])
+      [id, user.id, longOf(b.result)])
     await audit(pool, { actorId: user.id, action: 'update', entity: 'intel_actions', entityId: id, detail: 'アクションの結果を記録' })
     return c.json({ data: await findOwnRow(pool, 'intel_actions', ACTION_COLS, id, user.id) })
   })
@@ -381,7 +429,7 @@ export function intelligenceRoutes(pool: pg.Pool, env: Env): Hono {
     await pool.query(
       `UPDATE intel_actions SET feedback_rating = $3, feedback_note = $4, feedback_next = $5, updated_at = now()
        WHERE id = $1 AND member_id = $2`,
-      [id, user.id, rating, strOf(b.note), strOf(b.next)])
+      [id, user.id, rating, longOf(b.note), longOf(b.next)])
     await audit(pool, { actorId: user.id, action: 'update', entity: 'intel_actions', entityId: id, detail: 'アクションのフィードバックを記録' })
     return c.json({ data: await findOwnRow(pool, 'intel_actions', ACTION_COLS, id, user.id) })
   })
@@ -429,12 +477,11 @@ export function intelligenceRoutes(pool: pg.Pool, env: Env): Hono {
     if (insights.length === 0 && actions.length === 0 && cycles.length === 0) {
       return c.json({ data: { imported: 0 } })
     }
-    const existing = await pool.query(
-      `SELECT (SELECT count(*) FROM intel_insights WHERE member_id = $1)
-            + (SELECT count(*) FROM intel_actions WHERE member_id = $1)
-            + (SELECT count(*) FROM intel_cycles WHERE member_id = $1) AS n`, [user.id])
-    if (Number(existing.rows[0]?.n ?? 0) > 0) {
-      return c.json({ data: { imported: 0, warning: 'サーバーに既存の記録があるため取込をスキップしました' } })
+    // 取込前の妥当性検証（他ルートと同水準。テーマ不正・評価の範囲外を DB へ持ち込まない = レビュー R1）
+    for (const r of [...cycles, ...insights, ...actions]) {
+      if (!THEMES.has(String((r as { theme?: unknown }).theme))) {
+        throw err('AKO-ITL-001', 'テーマが不正な記録が含まれるため取込できません', 400)
+      }
     }
 
     // id 再採番マップ（参照整合を保って張り替える）
@@ -454,12 +501,23 @@ export function intelligenceRoutes(pool: pg.Pool, env: Env): Hono {
     const client = await pool.connect()
     try {
       await client.query('BEGIN')
+      // 同一ユーザーの並行取込（2 端末・2 タブの初回ロード競合）を直列化し、「空なら取込」判定を
+      // トランザクション内で行う（TOCTOU による二重取込の防止 = 原則2。レビュー R1）
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext('intel-import:' || $1)::bigint)`, [user.id])
+      const existing = await client.query(
+        `SELECT (SELECT count(*) FROM intel_insights WHERE member_id = $1)
+              + (SELECT count(*) FROM intel_actions WHERE member_id = $1)
+              + (SELECT count(*) FROM intel_cycles WHERE member_id = $1) AS n`, [user.id])
+      if (Number(existing.rows[0]?.n ?? 0) > 0) {
+        await client.query('ROLLBACK')
+        return c.json({ data: { imported: 0, warning: 'サーバーに既存の記録があるため取込をスキップしました' } })
+      }
       for (const cy of cycles) {
         await client.query(
           `INSERT INTO intel_cycles
              (id, member_id, theme, target_id, target_name, at, input_snapshot, feedback_considered, insight_ids, active)
            VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7::jsonb, $8::jsonb, $9::jsonb, $10)`,
-          [cycleIdMap.get(cy.id), user.id, cy.theme, cy.targetId, strOf(cy.targetName), cy.at,
+          [cycleIdMap.get(cy.id), user.id, cy.theme, cy.targetId, shortOf(cy.targetName), cy.at,
             JSON.stringify(cy.inputSnapshot ?? []), JSON.stringify(cy.feedbackConsidered ?? []),
             JSON.stringify((cy.insightIds ?? []).map(i => insightIdMap.get(i) ?? i)), cy.active !== false])
         imported++
@@ -473,7 +531,7 @@ export function intelligenceRoutes(pool: pg.Pool, env: Env): Hono {
           await client.query(
             `INSERT INTO intel_cycles (id, member_id, theme, target_id, target_name, at, insight_ids)
              VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7::jsonb)`,
-            [cid, user.id, ins.theme, ins.targetId, strOf(ins.targetName), ins.createdAt,
+            [cid, user.id, ins.theme, ins.targetId, shortOf(ins.targetName), ins.createdAt,
               JSON.stringify([insightIdMap.get(ins.id)])])
         }
         await client.query(
@@ -481,8 +539,8 @@ export function intelligenceRoutes(pool: pg.Pool, env: Env): Hono {
              (id, member_id, cycle_id, theme, target_id, target_name, title, summary,
               findings, evidence, proposals, confidence, feedback_considered, active, created_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12, $13::jsonb, $14, $15::timestamptz)`,
-          [insightIdMap.get(ins.id), user.id, cid, ins.theme, ins.targetId, strOf(ins.targetName),
-            strOf(ins.title) || '(無題)', strOf(ins.summary),
+          [insightIdMap.get(ins.id), user.id, cid, ins.theme, ins.targetId, shortOf(ins.targetName),
+            shortOf(ins.title) || '(無題)', longOf(ins.summary),
             JSON.stringify(ins.findings ?? []), JSON.stringify(ins.evidence ?? []),
             JSON.stringify((ins.proposals ?? []).map(p => ({ ...p, id: remapProposalId(p.id) }))),
             ins.confidence ?? 'low', JSON.stringify(ins.feedbackConsidered ?? []),
@@ -496,22 +554,26 @@ export function intelligenceRoutes(pool: pg.Pool, env: Env): Hono {
               status, due_date, result, feedback_rating, feedback_note, feedback_next, active, created_at, updated_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::date, $12, $13, $14, $15, $16, $17::timestamptz, $18::timestamptz)`,
           [newId('act'), user.id, a.insightId ? (insightIdMap.get(a.insightId) ?? null) : null,
-            remapProposalId(a.proposalId), a.theme, a.targetId, strOf(a.targetName),
-            strOf(a.title) || '(無題)', strOf(a.description),
-            INTEL_ACTION_STATUS_FLOW[a.status] ? a.status : 'planned', a.dueDate || null, strOf(a.result),
-            Number.isInteger(a.feedbackRating) ? a.feedbackRating : null,
-            strOf(a.feedbackNote), strOf(a.feedbackNext), a.active !== false, a.createdAt, a.updatedAt || a.createdAt])
+            remapProposalId(a.proposalId), a.theme, a.targetId, shortOf(a.targetName),
+            shortOf(a.title) || '(無題)', longOf(a.description),
+            INTEL_ACTION_STATUS_FLOW[a.status] ? a.status : 'planned', a.dueDate || null, longOf(a.result),
+            // 評価は 1〜5 のみ受理（範囲外はフィードバックループの判定へ流入させない = null 扱い）
+            Number.isInteger(a.feedbackRating) && (a.feedbackRating as number) >= 1 && (a.feedbackRating as number) <= 5
+              ? a.feedbackRating : null,
+            longOf(a.feedbackNote), longOf(a.feedbackNext), a.active !== false, a.createdAt, a.updatedAt || a.createdAt])
         imported++
       }
       await client.query('COMMIT')
     } catch (e) {
       await client.query('ROLLBACK')
-      throw err('AKO-ITL-001', `ローカル記録の取込に失敗しました（${(e as Error).message}）`, 400)
+      // 生の DB エラー文（列名等の内部情報）は応答へ載せない（詳細はサーバーログのみ）
+      console.warn('intelligence import failed:', (e as Error).message)
+      throw err('AKO-ITL-001', 'ローカル記録の取込に失敗しました（記録の形式を確認してください）', 400)
     } finally {
       client.release()
     }
     await audit(pool, {
-      actorId: user.id, action: 'create', entity: 'intel_insights', entityId: user.id,
+      actorId: user.id, action: 'create', entity: 'intel_store', entityId: user.id,
       detail: `ローカル記録をサーバーへ移行（${imported} 件）`,
     })
     return c.json({ data: { imported } }, 201)

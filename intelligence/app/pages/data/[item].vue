@@ -364,7 +364,7 @@ const view = computed<{ columns: TableColumn[]; rows: RowVm[] }>(() => {
 })
 
 const source = computed(() => view.value.rows)
-const { query, page, pageSize, rows: paged, total } = useListView<RowVm>({
+const { query, page, pageSize, rows: paged, total, reset } = useListView<RowVm>({
   source,
   match: (row, q) => Object.entries(row)
     .filter(([k]) => !k.startsWith('_'))
@@ -375,6 +375,12 @@ const { query, page, pageSize, rows: paged, total } = useListView<RowVm>({
 
 // ---------- 詳細ドロワー ----------
 const detailId = ref<string | null>(null)
+
+// 項目切替時は検索語・開いていた詳細を持ち越さない（同一コンポーネントの再利用対策。レビュー R1）
+watch(itemKey, () => {
+  reset()
+  detailId.value = null
+})
 const detail = computed(() => view.value.rows.find(r => r.id === detailId.value) ?? null)
 
 function openDetail(rowId: unknown): void {

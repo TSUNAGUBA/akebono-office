@@ -4787,9 +4787,10 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
 
 - [x] home `npx nuxi typecheck` / `npm run build`・api `tsc --noEmit` / `npm run build`・intelligence `nuxt typecheck` / `npm run generate`
 - [x] 単体: home 586 / api 非統合 509 / intelligence 11
-- [x] 統合（実 PostgreSQL・全マイグレーション適用）: 324 件 green（新規 13 件含む）
-- [ ] E2E: home モックスタック 9 スイート + intelligence/company スイート + UI スイープ（375px）
-- [ ] モバイル 375px: 新設ページ（/internal-support・/data/*）の横はみ出しなし（probe-ui-sweep）
+- [x] 統合（実 PostgreSQL・全マイグレーション適用）: 325 件 green（新規 14 件含む）
+- [x] E2E: home モックスタック 9 スイート（157 検査）+ company 20 + intelligence 23（3 カテゴリ + ドリルダウン検査を追加）
+- [x] モバイル 375px: probe-ui-sweep / probe-truncate-break とも home・intelligence 全ルート CLEAN
+  （/data カード説明文の truncate 検出 1 件は折返し表示へ修正して再プローブ CLEAN）
 - [x] 主要操作のフィードバック: 保存/取消/復元/生成/移行のトースト + 保存中・生成中のボタン状態
 
 ### 107-4 残課題
@@ -4800,4 +4801,36 @@ placeholder を指定の例文へ ⑦日報月横スクロールの選択中青�
 
 ### 107-5 反復レビュー（原則9 = SP-8）
 
-- 反復記録: （実施中）
+- 反復記録:
+  - R1（コードレビュアー MAJOR1/MINOR4/NIT5・システム監査官 MAJOR1/MINOR5/NIT3。重複を除き実質 MAJOR1/MINOR7/NIT7）→ 全件対応:
+    - MAJOR: **/v1/intelligence/generate のサーバー側スナップショット収集が F-16 権限を迂回**
+      （'sales' deny のメンバーにも月次売上額が findings に載る・他人日報 issues 抜粋の露出。
+      旧クライアント生成は「403 → 空」で権限準拠だったため認可の後退 + README「見える範囲で分析」と矛盾）
+      → gatherEngineData に呼び出しユーザーの canUseFeature（reports/weekly-report/monthly-report/
+      support-activity/sales-activity/partner-activity/customer-log/sales）を適用し deny ソースは空配列、
+      日報・週報・月報は F-16-6（canViewMemberReports = /v1/reports の filterViewable と同一判定）でも絞る。
+      ルール未設定は全許可（featureGuard と同じ既定 = 下位互換）。統合テストで回帰固定
+      （sales deny → salesMonthly evidence 0 / findings に売上文なし・許可ユーザーは従来どおり）。
+      README・api-design へ「サーバーでも見える範囲で分析を強制」を明記。
+    - MINOR: ①API モードの書込成功後のキャッシュ再取得失敗を書込失敗として返し再実行で二重登録
+      （apiCall / generate を書込と再取得へ分離。再取得失敗は非ブロッキング = 原則4）
+      ②/import の「サーバー空」判定がトランザクション外 = 2 端末同時初回ロードで二重取込（TOCTOU）
+      （pg_advisory_xact_lock でユーザー単位に直列化 + 判定をトランザクション内へ = 原則2）
+      ③/import の 500 件 cap が無音切り捨て + migratedAt 刻印で残りが永久未移行
+      （上限 2000 の明示エラーへ。コミット前に対応済み）
+      ④/import の入力検証不足（theme 未検証・feedbackRating 範囲外・生 DB エラー文の露出）
+      （THEMES 事前検証・1〜5 範囲外は null・応答は汎用文 + 詳細はサーバーログのみ）
+      ⑤移行失敗が完全無音で「端末を替えたら記録が無い」に見える（warn トースト + ローカル残置と再試行の案内）
+      ⑥deploy-guide の「api デプロイが先に必要」が並行パイプラインの実態と乖離
+      （並行デプロイ + 過渡期は空表示で縮退・個別配信時のみ順序指定、へ正確化）
+      ⑦intelligence seed/index.ts ヘッダの旧モック境界記述の残り（本実装後の実態へ更新 = 原則5）。
+    - NIT: ①/import 監査ログの entity/entityId 変則（専用 entity 'intel_store' を語彙へ追加）
+      ②0090 の FK 列 index 欠如（cycle_id / insight_id を追加）
+      ③intel アクションの title/description/result/feedback に cap なし
+      （shared INTEL_TITLE_CAP 200 / INTEL_TEXT_CAP 20,000 を新設し API・モック両方へ適用 = パリティ）
+      ④モックシード buildConsignmentReports の前月導出が 1 月に年を繰り下げない（共有 addMonths へ = 原則3）
+      ⑤home シード buildInternalSupports の補助キー back/at が保存形に残留（destructure で除去）
+      ⑥/data/[item] の項目切替時に検索語・詳細ドロワーが持ち越される（watch で reset）
+      ⑦README の F-16 記述（MAJOR 対応で実態と一致 + 明文化）。
+    - 対応後の検証: api tsc / home・intelligence typecheck / 単体（home 586・api 509・intelligence 11）/
+      統合 325（F-16 回帰含む）/ E2E（home 9 スイート・company 20・intelligence 23）/ 375px プローブ CLEAN。

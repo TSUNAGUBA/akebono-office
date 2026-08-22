@@ -19,7 +19,8 @@ import type { Ref } from 'vue'
 import type { IntelAction, IntelCycle, IntelInsight, InsightTheme } from '~/types/intelligence'
 import type { EngineData } from '~/utils/insight-engine'
 import { generateInsightDraft } from '~/utils/insight-engine'
-import { INTEL_ACTION_STATUS_FLOW } from '../../../shared/domain/intelligence'
+import { INTEL_ACTION_STATUS_FLOW, INTEL_TEXT_CAP, INTEL_TITLE_CAP } from '../../../shared/domain/intelligence'
+import { capCodePoints } from '../../../shared/domain/customer-log'
 import type { Result } from '~/types/domain'
 
 /** 旧ローカル記録（バックアップとして残置。migratedAt 付与後は再移行しない） */
@@ -81,7 +82,7 @@ async function fetchServerStore(): Promise<void> {
  * サーバーストアのロード + 旧ローカル記録の自動移行。
  * 移行条件: サーバーが空 / ローカルに記録あり / migratedAt 未付与。取込後に取り直して反映する。
  */
-async function loadServerStore(notify?: (message: string) => void, force = false): Promise<void> {
+async function loadServerStore(notify?: (message: string, tone: 'ok' | 'warn') => void, force = false): Promise<void> {
   await apiLoadOnce('intel:store', async () => {
     await fetchServerStore()
     const uid = useApiMe().value?.id
@@ -99,10 +100,12 @@ async function loadServerStore(notify?: (message: string) => void, force = false
       markLegacyMigrated(uid, legacy)
       if (res.imported > 0) {
         await fetchServerStore()
-        notify?.(`このブラウザに保存されていた記録 ${res.imported} 件をサーバーへ移行しました（今後は端末間で同期されます）`)
+        notify?.(`このブラウザに保存されていた記録 ${res.imported} 件をサーバーへ移行しました（今後は端末間で同期されます）`, 'ok')
       }
-    } catch {
-      // 移行失敗は非ブロッキング（原則4）。次回ロードで再試行される（migratedAt を刻んでいないため）
+    } catch (e) {
+      // 移行失敗は非ブロッキング（原則4）だが無音にはしない（レビュー R1: 「端末を替えたら記録が無い」に
+      // 見えてしまう）。ローカル記録は残っており、次回ロードで再試行される（migratedAt を刻んでいないため）
+      notify?.(`以前のブラウザ保存の記録の移行に失敗しました（${apiErrorOf(e).message}。記録はこのブラウザに残っています。次回表示時に再試行します）`, 'warn')
     }
   }, force)
 }
@@ -159,22 +162,27 @@ export function useIntelStore() {
   const { show } = useToast()
   const isApi = useApiMode()
   if (isApi && useApiMe().value) {
-    void loadServerStore(message => show(message, 'ok'))
+    void loadServerStore((message, tone) => show(message, tone))
   }
 
   const insights = isApi ? (apiInsights as Ref<IntelInsight[]>) : tbl('insights')
   const actions = isApi ? (apiActions as Ref<IntelAction[]>) : tbl('actions')
   const cycles = isApi ? (apiCycles as Ref<IntelCycle[]>) : tbl('cycles')
 
-  /** API モードのサーバー書込 → ストア再取得（SoT 書込が先・キャッシュ反映が後 = 原則6） */
+  /** API モードのサーバー書込 → ストア再取得（SoT 書込が先・キャッシュ反映が後 = 原則6）。
+   *  再取得の失敗は書込失敗として返さない（失敗トースト → 再実行で非冪等な登録が二重化するのを防ぐ =
+   *  レビュー R1。キャッシュは次回ロード・次の操作で追いつく = 原則4） */
   async function apiCall(path: string, body?: unknown, method: 'POST' | 'PATCH' = 'POST'): Promise<Result> {
+    let data: { id?: string } | undefined
     try {
-      const data = await apiFetch<{ id?: string }>(path, { method, body })
-      await fetchServerStore()
-      return { ok: true, id: data?.id }
+      data = await apiFetch<{ id?: string }>(path, { method, body })
     } catch (e) {
       return { ok: false, error: apiErrorOf(e) }
     }
+    try {
+      await fetchServerStore()
+    } catch { /* 書込は成功している。再取得失敗は非ブロッキング */ }
+    return { ok: true, id: data?.id }
   }
 
   function save(): boolean {
@@ -194,15 +202,19 @@ export function useIntelStore() {
     mockData: () => EngineData,
   ): Promise<Result & { feedbackConsidered?: number }> {
     if (isApi) {
+      let data: { insight: IntelInsight }
       try {
-        const data = await apiFetch<{ insight: IntelInsight }>('/v1/intelligence/generate', {
+        data = await apiFetch<{ insight: IntelInsight }>('/v1/intelligence/generate', {
           method: 'POST', body: { theme: input.theme, targetId: input.targetId },
         })
-        await fetchServerStore()
-        return { ok: true, id: data.insight.id, feedbackConsidered: data.insight.feedbackConsidered.length }
       } catch (e) {
         return { ok: false, error: apiErrorOf(e) }
       }
+      // 生成（サーバー記録）は成功している。再取得失敗を失敗扱いにしない（再実行の二重生成防止 = R1）
+      try {
+        await fetchServerStore()
+      } catch { /* 次回ロードで追いつく */ }
+      return { ok: true, id: data.insight.id, feedbackConsidered: data.insight.feedbackConsidered.length }
     }
     const draft = generateInsightDraft(mockData(), {
       theme: input.theme,
@@ -292,7 +304,8 @@ export function useIntelStore() {
   // ---------- アクション（登録・状態・結果・フィードバック） ----------
 
   async function addAction(input: NewActionInput): Promise<Result> {
-    const title = input.title.trim()
+    // cap は API と同値（INTEL_TITLE_CAP / INTEL_TEXT_CAP = パリティ）
+    const title = capCodePoints(input.title.trim(), INTEL_TITLE_CAP)
     if (!title) return { ok: false, error: { code: 'AKI-ACT-001', message: 'タイトルを入力してください' } }
     if (isApi) {
       return apiCall('/v1/intelligence/actions', {
@@ -314,9 +327,9 @@ export function useIntelStore() {
       proposalId: input.proposalId,
       theme: input.theme,
       targetId: input.targetId,
-      targetName: input.targetName,
+      targetName: capCodePoints(input.targetName, INTEL_TITLE_CAP),
       title,
-      description: input.description.trim(),
+      description: capCodePoints(input.description.trim(), INTEL_TEXT_CAP),
       status: 'planned',
       dueDate: input.dueDate,
       ownerId: currentUser.value.id,
@@ -343,8 +356,8 @@ export function useIntelStore() {
     actions.value = actions.value.map(a => a.id === id
       ? {
           ...a,
-          ...(patch.title !== undefined ? { title: patch.title.trim() } : {}),
-          ...(patch.description !== undefined ? { description: patch.description.trim() } : {}),
+          ...(patch.title !== undefined ? { title: capCodePoints(patch.title.trim(), INTEL_TITLE_CAP) } : {}),
+          ...(patch.description !== undefined ? { description: capCodePoints(patch.description.trim(), INTEL_TEXT_CAP) } : {}),
           ...(patch.dueDate !== undefined ? { dueDate: patch.dueDate } : {}),
           updatedAt: nowJstIso(),
         }
@@ -370,7 +383,8 @@ export function useIntelStore() {
     if (isApi) return apiCall(`/v1/intelligence/actions/${id}/result`, { result: result.trim() })
     const target = actions.value.find(a => a.id === id)
     if (!target) return ERR_NOT_FOUND
-    actions.value = actions.value.map(a => a.id === id ? { ...a, result: result.trim(), updatedAt: nowJstIso() } : a)
+    actions.value = actions.value.map(a => a.id === id
+      ? { ...a, result: capCodePoints(result.trim(), INTEL_TEXT_CAP), updatedAt: nowJstIso() } : a)
     if (!save()) return ERR_SAVE_FAILED
     return { ok: true, id }
   }
@@ -384,7 +398,13 @@ export function useIntelStore() {
     const target = actions.value.find(a => a.id === id)
     if (!target) return ERR_NOT_FOUND
     actions.value = actions.value.map(a => a.id === id
-      ? { ...a, feedbackRating: rating, feedbackNote: note.trim(), feedbackNext: next.trim(), updatedAt: nowJstIso() }
+      ? {
+          ...a,
+          feedbackRating: rating,
+          feedbackNote: capCodePoints(note.trim(), INTEL_TEXT_CAP),
+          feedbackNext: capCodePoints(next.trim(), INTEL_TEXT_CAP),
+          updatedAt: nowJstIso(),
+        }
       : a)
     if (!save()) return ERR_SAVE_FAILED
     return { ok: true, id }

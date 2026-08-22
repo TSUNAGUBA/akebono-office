@@ -117,6 +117,11 @@ export interface IntelCycle {
   active: boolean
 }
 
+/** タイトル・対象名等の短文上限（コードポイント。活動記録 TITLE_CAP と同値。API/モック共通） */
+export const INTEL_TITLE_CAP = 200
+/** 説明・結果・フィードバック等の長文上限（コードポイント。活動記録 BODY_CAP と同値） */
+export const INTEL_TEXT_CAP = 20_000
+
 /** アクションの状態遷移（完了・中止の取消 = 差し戻しを許す = 原則9.5）。API/モック共通の SoT */
 export const INTEL_ACTION_STATUS_FLOW: Record<IntelActionStatus, IntelActionStatus[]> = {
   planned: ['in_progress', 'cancelled'],

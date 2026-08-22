@@ -65,3 +65,6 @@ CREATE TABLE IF NOT EXISTS intel_actions (
 CREATE INDEX IF NOT EXISTS idx_intel_cycles_member ON intel_cycles (member_id, at DESC);
 CREATE INDEX IF NOT EXISTS idx_intel_insights_member ON intel_insights (member_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_intel_actions_member ON intel_actions (member_id, created_at DESC);
+-- FK 参照列（サイクル別・由来インサイト別の参照に備える）
+CREATE INDEX IF NOT EXISTS idx_intel_insights_cycle ON intel_insights (cycle_id);
+CREATE INDEX IF NOT EXISTS idx_intel_actions_insight ON intel_actions (insight_id);

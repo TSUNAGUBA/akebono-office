@@ -1,9 +1,10 @@
 /**
  * AKEBONO Intelligence モック DB の形と決定的シード（デモ・体感検証用）。
  * API モードでは members / companies / projects は API ハイドレーション、
- * 業務データ（日報・週報・月報・活動 4 種・月次売上）は共通 API が SoT となり、
+ * 業務データ（日報・週報・月報・活動 4 種・月次売上・データ基盤の追加ソース）は共通 API が SoT となり、
  * ここは完全モック動作（NUXT_PUBLIC_API_BASE 未設定）のときのみ使われる。
- * インサイト・アクション・サイクルは API モードでも localStorage（モック境界 = requirements §5）。
+ * インサイト・アクション・サイクルも API モードはサーバー SoT（/v1/intelligence/* = 0090。
+ * 改善要望 2026-08-22 の本実装で旧 localStorage 境界を解消）。
  */
 import type {
   Company, CustomerLog, DailyReport, InternalSupport, Member, MonthlyReport, Note, PartnerActivity, Project,

@@ -216,6 +216,8 @@ export const AUDIT_ENTITY_META: Record<string, AuditEntityMeta> = {
   intel_insights: { label: 'Intelligence インサイト', page: '' },
   intel_actions: { label: 'Intelligence アクション', page: '' },
   intel_cycles: { label: 'Intelligence 分析サイクル', page: '' },
+  // 旧ローカル記録の一括移行（entityId = 対象メンバー id。個別行 id ではない = バッチ操作）
+  intel_store: { label: 'Intelligence 記録ストア（移行）', page: '' },
   // ---- 売上・個人設定・検索 ----
   sales_monthly: { label: '月次売上', page: '/sales' },
   mart_load_runs: { label: '売上データ更新', page: '/sales' },

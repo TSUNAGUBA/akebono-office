@@ -6,6 +6,7 @@
  */
 import type { InternalSupport, Note } from '~/types/domain'
 import { mediaWeekStartOf, type MediaWeeklyReport } from '../../../../shared/domain/media-weekly-report'
+import { addMonths } from '../../../../shared/domain/intelligence'
 import type { ConsignmentReport, EcReport } from '~/types/foundation'
 import { addDays, todayJst } from '~/utils/format'
 
@@ -99,7 +100,8 @@ export function buildEcReports(): EcReport[] {
 export function buildConsignmentReports(): ConsignmentReport[] {
   const today = todayJst()
   const month = today.slice(0, 7)
-  const prev = `${month.slice(0, 4)}-${String(Number(month.slice(5, 7)) - 1 || 12).padStart(2, '0')}`
+  // 前月は共有 addMonths で導出（1 月の年繰り下がりを正しく扱う = 原則3。レビュー R1）
+  const prev = addMonths(month, -1)
   return [
     {
       id: 'pn-0001', code: 'PN-2026-0012', companyId: 'c-02', segmentId: 'seg-consign',
